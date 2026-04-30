@@ -141,6 +141,6 @@ Both adapters live in this crate (`anthropic.rs`, `openai.rs`).
 ## Cross-references
 
 - `mod:translator` — primary consumer.
-- Future ADR — `LlmProvider` trait shape, error taxonomy, retry policy.
+- [adr:0004](../adr/0004-llm-router-architecture.md) — `LlmProvider` trait shape, error taxonomy, retry policy, cache key, ledger schema, consensus tie-breaking.
 - `cobrust.toml.example` — public configuration shape.
 - Constitution `CLAUDE.md` §4.3.
