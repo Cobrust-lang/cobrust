@@ -14,3 +14,5 @@ description = "Cobrust HIR (high-level IR) — desugared, name-resolved tree."
 workspace = true
 
 [dependencies]
+cobrust-frontend = { path = "../cobrust-frontend" }
+thiserror = { workspace = true }

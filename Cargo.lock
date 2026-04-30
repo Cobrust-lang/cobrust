@@ -158,6 +158,10 @@ dependencies = [
 [[package]]
 name = "cobrust-hir"
 version = "0.0.1"
+dependencies = [
+ "cobrust-frontend",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "cobrust-llm-router"
