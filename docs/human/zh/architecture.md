@@ -41,6 +41,48 @@ flowchart TD
 | `cobrust-llm-router` | LLM Router | M3 |
 | `cobrust-translator` | AI 翻译子系统 | M4+ |
 
+## 前端（M1 — 已交付）
+
+`cobrust-frontend` 已经把"30 forms"落地。给一个能直观感受的例子：
+
+```python
+fn fib(n: i64) -> i64:
+    if (n < 2):
+        return n
+    return (fib((n - 1)) + fib((n - 2)))
+```
+
+把它喂给前端：
+
+```rust
+use cobrust_frontend::{parse_str, unparse, FileId};
+
+let src = std::fs::read_to_string("fib.cb")?;
+let module = parse_str(&src, FileId(0))?;
+println!("{}", unparse(&module));
+```
+
+### 公共 API
+
+- `lex(source, file_id) -> Result<Vec<Token>, LexError>` — UTF-8 → token 流
+- `lex_bytes(bytes, file_id) -> Result<Vec<Token>, LexError>` — 任意字节 → token 流（非 UTF-8 报错不 panic）
+- `parse(tokens) -> Result<ast::Module, ParseError>` — token → AST
+- `parse_str(source, file_id) -> Result<ast::Module, FrontendError>` — 一步完成
+- `unparse(module) -> String` — AST → 规范化源码（用于 round-trip 验证）
+
+### 设计约束
+
+- **递归下降 + Pratt**：表达式优先级表见 `crates/cobrust-frontend/src/parser.rs` 顶部注释；不引入第三方语法生成器。
+- **Span 全程在 AST 上**：每个节点带 `(file_id, byte_start, byte_end)`，给后续阶段的诊断提供精确位置。
+- **30 forms 闭口**：`adr:0003` 把表面的句法形式定死，超出列表的 Python 形式（`is` / `del` / `global` / `nonlocal` / `async def` / 多重继承 / 可变默认参数）直接拒绝并报 `DroppedByConstitution`。
+- **Panic-free**：任何字节输入都不会让 lexer/parser panic — 只会返回结构化错误。该不变量由 proptest fuzz harness（默认 5×4 096 cases，长跑 5×100 000 cases）守住。
+
+### 验证
+
+- 30 个 round-trip 集成测试，每个 form 一个：`tests/round_trip.rs`。
+- proptest fuzz harness：`tests/fuzz_proptest.rs`；过去抓到的 panic 输入永久写入 `tests/fuzz_proptest.proptest-regressions`，每次跑都会先复跑这些 reproducer。
+- 方法学和首次抓到的 bug 写在 `docs/agent/findings/m1-fuzz-method.md`。
+
 ## AI 翻译子系统：四级闭环
 
 每一级都有显式 gate，**没有任何一级是可选的**。

@@ -34,5 +34,6 @@ valuable as capturing what does.
 
 ## Index
 
-_(empty — M0 has not produced any findings yet. The first ones are
-expected during M1 fuzz testing.)_
+| Finding ID | File | Status |
+|---|---|---|
+| `m1-fuzz-method` | [`m1-fuzz-method.md`](m1-fuzz-method.md) | M1 fuzz gate satisfied via proptest; one panic shrunk and fixed |
