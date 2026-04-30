@@ -55,7 +55,8 @@ pub use error::LoweringError;
 pub use lower::{Session, lower};
 pub use scope::{DefId, DefKind, ResolvedName};
 pub use tree::{
-    BinOp, Block, CaptureSpec, Comp, CompClause, CompElem, CompKind, DictEntry, ExceptHandler,
-    Expr, ExprKind, FormatPart, IndexKind, Item, ItemKind, Lit, LoopKind, MatchArm, Module, Param,
-    Params, Pattern, PatternKind, Stmt, StmtKind, Type, TypeKind, UnaryOp, WithItem,
+    BinOp, Block, CallArg, CaptureSpec, ClassBody, Comp, CompClause, CompElem, CompKind, DictEntry,
+    ExceptHandler, Expr, ExprKind, FnBody, FormatPart, IndexKind, Item, ItemKind, LetBody, Lit,
+    LoopKind, MatchArm, Module, Param, Params, Pattern, PatternKind, Stmt, StmtKind, Type,
+    TypeAliasBody, TypeKind, UnaryOp, WithItem,
 };

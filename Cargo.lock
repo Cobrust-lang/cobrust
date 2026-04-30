@@ -197,6 +197,11 @@ version = "0.0.1"
 [[package]]
 name = "cobrust-types"
 version = "0.0.1"
+dependencies = [
+ "cobrust-frontend",
+ "cobrust-hir",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "constant_time_eq"

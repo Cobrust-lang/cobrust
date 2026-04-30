@@ -133,4 +133,69 @@ if ! grep -q -F "m1-fuzz-method" "$findings_index"; then
     fail "findings/README.md must index m1-fuzz-method (M1 fuzz gate evidence)"
 fi
 
-echo "doc-coverage: M0 + M1 checks passed"
+# --- 6. M2 HIR surface coverage --------------------------------------------
+# Once M2 lands, mod:hir / mod:types must cite the canonical entrypoint
+# names in the agent module spec and in both human-tree architecture
+# docs. We skip while the module specs still declare M0/M2-stub.
+
+m2_hir_terms=(
+    "lower"
+    "Session"
+    "DefId"
+    "ResolvedName"
+    "LoweringError"
+    "Module"
+)
+
+m2_hir_files=(
+    "docs/agent/modules/hir.md"
+    "docs/human/en/architecture.md"
+    "docs/human/zh/architecture.md"
+)
+
+if grep -q '^- \*\*M2 — delivered.\*\*' "docs/agent/modules/hir.md"; then
+    for term in "${m2_hir_terms[@]}"; do
+        for f in "${m2_hir_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M2 hir surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+    adr_five="docs/agent/adr/0005-hir-shape.md"
+    [[ -f "$adr_five" ]] || fail "ADR-0005 (HIR shape) is required for M2"
+    if ! grep -q '^status: accepted$' "$adr_five"; then
+        fail "ADR-0005 must be 'status: accepted' for M2 to be done"
+    fi
+fi
+
+# --- 7. M2 type-checker surface coverage -----------------------------------
+
+m2_types_terms=(
+    "check"
+    "Ty"
+    "TypeError"
+    "TypedModule"
+)
+
+m2_types_files=(
+    "docs/agent/modules/types.md"
+    "docs/human/en/architecture.md"
+    "docs/human/zh/architecture.md"
+)
+
+if grep -q '^- \*\*M2 — delivered.\*\*' "docs/agent/modules/types.md"; then
+    for term in "${m2_types_terms[@]}"; do
+        for f in "${m2_types_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M2 types surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+    adr_six="docs/agent/adr/0006-type-system.md"
+    [[ -f "$adr_six" ]] || fail "ADR-0006 (type system) is required for M2"
+    if ! grep -q '^status: accepted$' "$adr_six"; then
+        fail "ADR-0006 must be 'status: accepted' for M2 to be done"
+    fi
+fi
+
+echo "doc-coverage: M0 + M1 + M2 checks passed"

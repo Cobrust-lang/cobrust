@@ -83,6 +83,56 @@ println!("{}", unparse(&module));
 - proptest fuzz harness：`tests/fuzz_proptest.rs`；过去抓到的 panic 输入永久写入 `tests/fuzz_proptest.proptest-regressions`，每次跑都会先复跑这些 reproducer。
 - 方法学和首次抓到的 bug 写在 `docs/agent/findings/m1-fuzz-method.md`。
 
+## HIR + 类型检查器（M2 — 已交付）
+
+`cobrust-hir` 把 30 forms 全部 lower 成"小核心"——糖收掉、名字解析完、span 沿用——给类型检查器消费。`cobrust-types` 跑双向（bidirectional）类型检查，**没有 `dyn`、没有隐式真值、没有静默强制转换**。
+
+### 一个端到端的小例子
+
+源码：
+
+```python
+fn add(x: i64, y: i64) -> i64:
+    return (x + y)
+```
+
+经过 frontend → AST，再经过 `cobrust_hir::lower(&ast, &mut Session::new())` → HIR：所有名字带 `DefId`，参数 `x`、`y` 与 return 中的引用绑定到同一对 `DefId`。最后 `cobrust_types::check(&hir)` → `TypedModule { def_types, hir }`，`def_types` 把每个 `DefId` 映射到具体 `Ty`：
+
+| DefId | 名字 | 类型 |
+|---|---|---|
+| 0 | `add` | `(i64, i64) -> i64` |
+| 1 | `x` | `i64` |
+| 2 | `y` | `i64` |
+
+### 公共 API（HIR + types）
+
+- `cobrust_hir::lower(&ast::Module, &mut Session) -> Result<Module, LoweringError>` — 全量 lowering，每个名字使用变成 `ResolvedName { name, def_id, kind }`，带 `DefId`。
+- `cobrust_types::check(&hir::Module) -> Result<TypedModule, TypeError>` — 双向类型检查，成功返回 `TypedModule { def_types, hir }`，失败按 `TypeError` 分类。
+
+### Lowering 规则（关键 5 条，完整表见 [ADR-0005](../../agent/adr/0005-hir-shape.md)）
+
+- 解构（comprehension）→ `Expr::Comp { kind, element, clauses }`
+- 多绑定 `with a as x, b as y: ...` → 左折叠成嵌套 `With`
+- f-string → `Expr::Format(Vec<FormatPart>)`，模板 + 洞分离
+- 增量赋值 `x += e` → desugar 成 `x = x + e`
+- 名字解析失败立即 `LoweringError::UnknownName`，不会继续往下走
+
+### 类型规则（关键 6 条，完整表见 [ADR-0006](../../agent/adr/0006-type-system.md)）
+
+- `if x:` 要求 `x: bool`，否则 `TypeError::ImplicitTruthiness`
+- `match` 必须穷尽（对 `bool` / `None` 严格枚举，对其它类型要求 wildcard）
+- `int + str` 直接拒——**没有静默强制**
+- 调用必须实参数量精确匹配；多余/缺失关键字参数报 `KeywordArgMismatch` / `MissingArgument`
+- `let x = e` 推断；`let x: T = e` 检查 `e ⇐ T`
+- 函数类型用 `Fn { positional, named, var_positional, var_keyword, return_ty }`，**Lambda 没有 annotation 时无法 synthesize**（必须给上下文）
+
+### 验证
+
+- 34 条 lowering 黄金测试：每个 form 一条 + 跨切不变量（`crates/cobrust-hir/tests/lower_forms.rs`）
+- 54 条 well-typed + 54 条 ill-typed 程序套件（`crates/cobrust-types/tests/`）。每条 ill-typed 都断言**正确的 `TypeError` 范畴**。
+- 健全性证明义务在 [ADR-0006](../../agent/adr/0006-type-system.md) §"Soundness proof obligation list" 中已枚举（9 条），实际证明留到后续 finding 落地。
+
+
 ## AI 翻译子系统：四级闭环
 
 每一级都有显式 gate，**没有任何一级是可选的**。
