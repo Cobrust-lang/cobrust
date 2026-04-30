@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: TBD
+last_verified_commit: afe26db
 ---
 
 # Architecture Decision Records

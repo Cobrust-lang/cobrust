@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:types
 crate: cobrust-types
-last_verified_commit: TBD
+last_verified_commit: afe26db
 dependencies: [mod:hir, adr:0006]
 ---
 

@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:hir
 crate: cobrust-hir
-last_verified_commit: TBD
+last_verified_commit: afe26db
 dependencies: [mod:frontend, adr:0005]
 ---
 

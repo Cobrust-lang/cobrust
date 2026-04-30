@@ -4,7 +4,7 @@ adr_id: 0005
 title: HIR shape and AST→HIR lowering tables for the static core
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: afe26db
 supersedes: []
 superseded_by: []
 dependencies: [adr:0003]
