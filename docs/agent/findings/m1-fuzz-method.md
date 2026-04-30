@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: m1-fuzz-method
-last_verified_commit: TBD
+last_verified_commit: 62ef6bd
 dependencies: [adr:0003, mod:frontend]
 ---
 

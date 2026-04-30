@@ -4,7 +4,7 @@ adr_id: 0003
 title: Cobrust core 30 syntactic forms (M1 frontend scope)
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: 62ef6bd
 supersedes: []
 superseded_by: []
 dependencies: [adr:0001, adr:0002]

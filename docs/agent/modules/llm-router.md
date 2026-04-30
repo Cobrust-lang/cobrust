@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:llm_router
 crate: cobrust-llm-router
-last_verified_commit: TBD
+last_verified_commit: 62ef6bd
 dependencies: [adr:0004]
 ---
 

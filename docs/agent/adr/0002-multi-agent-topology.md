@@ -4,7 +4,7 @@ adr_id: 0002
 title: Multi-agent topology and milestone sequencing for autonomous delivery
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: 62ef6bd
 supersedes: []
 superseded_by: []
 ---

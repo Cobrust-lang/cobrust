@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:cli
 crate: cobrust-cli
-last_verified_commit: TBD
+last_verified_commit: 62ef6bd
 dependencies: []
 ---
 

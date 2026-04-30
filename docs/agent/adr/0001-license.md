@@ -4,7 +4,7 @@ adr_id: 0001
 title: Apache-2.0 OR MIT dual license
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: 62ef6bd
 supersedes: []
 superseded_by: []
 ---

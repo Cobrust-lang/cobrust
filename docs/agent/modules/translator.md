@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:translator
 crate: cobrust-translator
-last_verified_commit: TBD
+last_verified_commit: 62ef6bd
 dependencies: [mod:llm_router, mod:frontend, mod:types]
 ---
 
