@@ -112,16 +112,19 @@ Failure at any gate → diagnostic feeds back to L1 → re-translate → re-veri
 
 `cobrust-llm-router` is **not a tool**, it's a **compiler subsystem**. It is treated as seriously as the type checker. It does **not** live in `tools/`.
 
-### Capabilities
+**M3 delivered.** All invariants are pinned by [ADR-0004](../../agent/adr/0004-llm-router-architecture.md); see [`docs/agent/modules/llm-router.md`](../../agent/modules/llm-router.md) for the full agent-facing spec.
 
-- Provider-agnostic interface; concrete adapters for **OpenAI-compatible** and **Anthropic-compatible** APIs
+### Capabilities (implemented)
+
+- Provider-agnostic `LlmProvider` async trait; concrete adapters for **OpenAI-compatible** and **Anthropic-compatible** APIs
 - Custom `base_url` and custom model names per provider (DeepSeek, Qwen, local vLLM, Together, OpenRouter, etc. all just work)
 - Per-task routing: `{ task, strategy: "cost" | "quality" | "latency" | "consensus", n? }`
-- Streaming support for both formats
-- Token accounting per task, per library, per session — written to `.cobrust/ledger.jsonl`
-- Retry with exponential backoff; failure isolation per provider (one provider down ≠ pipeline halt)
-- Caching layer keyed by `(prompt_hash, model, params)` — content-addressed, on-disk, optional remote cache
-- Consensus mode: query N models, take majority / structured-diff / best-of-N (judged by a verifier model or by gate pass-rate)
+- Streaming for both formats; exactly one `Chunk::Done` frame at end-of-stream
+- Token accounting per task, per provider, per attempt — written to `.cobrust/ledger.jsonl`, append-only
+- Exponential-backoff retry (default: 5 attempts / 30 s cap / full jitter / honours `Retry-After`)
+- Provider failure isolation: a permanent fault on one provider auto-falls-through to the next entry in `preferred`
+- Cache key = `BLAKE3(canonical_request_bytes)`, cross-machine reproducible, two-level sharded layout under `.cobrust/llm_cache/`
+- Consensus mode: `n` parallel calls, group on `BLAKE3(NFC(response_text))`, deterministic tie-breaking per ADR-0004
 
 ### Configuration example
 
