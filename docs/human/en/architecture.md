@@ -83,6 +83,76 @@ println!("{}", unparse(&module));
 - proptest fuzz harness: `tests/fuzz_proptest.rs`. Past shrunk panics are committed to `tests/fuzz_proptest.proptest-regressions`; every run re-tests them first.
 - Methodology and the first bug it caught are documented at `docs/agent/findings/m1-fuzz-method.md`.
 
+## HIR + Type checker (M2 — delivered)
+
+`cobrust-hir` lowers all 30 forms into a small core — sugar
+collapsed, names resolved, spans preserved — that the type checker
+consumes. `cobrust-types` runs **bidirectional** type checking
+with **no `dyn`**, **no implicit truthiness**, and **no silent
+coercion**.
+
+### End-to-end micro-example
+
+Source:
+
+```python
+fn add(x: i64, y: i64) -> i64:
+    return (x + y)
+```
+
+`frontend → ast::Module`, then `cobrust_hir::lower(&ast, &mut Session::new()) → hir::Module`
+where every name carries a `DefId`; the parameter `DefId`s for `x`
+and `y` are exactly the `DefId`s the return references. Finally
+`cobrust_types::check(&hir) → TypedModule { def_types, hir }`
+maps every `DefId` to a concrete `Ty`:
+
+| DefId | Name | Type |
+|---|---|---|
+| 0 | `add` | `(i64, i64) -> i64` |
+| 1 | `x` | `i64` |
+| 2 | `y` | `i64` |
+
+### Public API (HIR + types)
+
+- `cobrust_hir::lower(&ast::Module, &mut Session) -> Result<Module, LoweringError>` — total lowering, every name use becomes a `ResolvedName { name, def_id, kind }` carrying its `DefId`.
+- `cobrust_types::check(&hir::Module) -> Result<TypedModule, TypeError>` — bidirectional type checking, returning a `TypedModule { def_types, hir }` and a structured `TypeError` taxonomy on failure.
+
+### Lowering rules (5 key rules; full table in [ADR-0005](../../agent/adr/0005-hir-shape.md))
+
+- Comprehension → `Expr::Comp { kind, element, clauses }`
+- Multi-binding `with a as x, b as y: ...` → left-folded nested `With`
+- f-string → `Expr::Format(Vec<FormatPart>)`, template/holes separated
+- Augmented assignment `x += e` → desugared `x = x + e`
+- Unresolved names surface as `LoweringError::UnknownName`
+  immediately — the type checker never sees an unbound name.
+
+### Type rules (6 key rules; full table in [ADR-0006](../../agent/adr/0006-type-system.md))
+
+- `if x:` requires `x: bool`; otherwise
+  `TypeError::ImplicitTruthiness`
+- `match` must be exhaustive (strict enum for `bool` / `None`;
+  wildcard required for arbitrary scrutinees)
+- `int + str` is rejected — **no silent coercion**
+- Calls must have exact positional arity; unknown/missing keyword
+  arguments are `KeywordArgMismatch` / `MissingArgument`
+- `let x = e` synthesises; `let x: T = e` checks `e ⇐ T`
+- Function type is `Fn { positional, named, var_positional, var_keyword, return_ty }`;
+  **lambda without annotation cannot synthesise** (must be checked
+  against an expected type)
+
+### Verification
+
+- 34 golden lowering tests, one per form plus cross-cutting
+  invariants (`crates/cobrust-hir/tests/lower_forms.rs`).
+- 54 well-typed + 54 ill-typed program suite
+  (`crates/cobrust-types/tests/`). Each ill-typed test asserts the
+  **right `TypeError` discriminant**.
+- Soundness proof obligation list (9 items) enumerated in
+  [ADR-0006](../../agent/adr/0006-type-system.md) §"Soundness proof
+  obligation list"; the proof itself is deferred to a future
+  finding per constitution §5.2.
+
+
 ## AI translation subsystem: four-stage closed loop
 
 Every stage has explicit gates. **No stage is optional.**

@@ -14,3 +14,6 @@ description = "Cobrust type system and type checker (static structural typing)."
 workspace = true
 
 [dependencies]
+cobrust-frontend = { path = "../cobrust-frontend" }
+cobrust-hir = { path = "../cobrust-hir" }
+thiserror = { workspace = true }
