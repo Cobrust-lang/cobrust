@@ -1,0 +1,63 @@
+# Example LLM Router configuration.
+# Copy to `cobrust.toml` at your project root and customize.
+#
+# This file documents the *target* shape of the router config.
+# Implementation lands at M3 — see `docs/agent/modules/llm-router.md`.
+
+[router]
+default_strategy = "quality"
+cache_dir = ".cobrust/llm_cache"
+ledger_path = ".cobrust/ledger.jsonl"
+
+# ---- Providers ------------------------------------------------------------
+# Each provider declares an API kind ("anthropic" | "openai") and a base_url.
+# Any OpenAI-compatible endpoint (DeepSeek, vLLM, Together, OpenRouter, ...)
+# fits under kind = "openai".
+
+[providers.anthropic_official]
+kind = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+models = ["claude-opus-4-7", "claude-sonnet-4-6"]
+
+[providers.openai_official]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+models = ["gpt-5", "gpt-5-mini"]
+
+[providers.deepseek]
+kind = "openai"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+models = ["deepseek-v3"]
+
+[providers.local_vllm]
+kind = "openai"
+base_url = "http://localhost:8000/v1"
+api_key_env = "LOCAL_LLM_KEY"
+models = ["qwen3-coder-480b"]
+
+# ---- Routing table --------------------------------------------------------
+# Each task picks a strategy and an ordered list of preferred provider:model
+# pairs. `consensus` requires `n` and combines results per the strategy
+# (majority / structured-diff / verifier-judged best-of-N).
+
+[routing.spec_extract]
+strategy = "quality"
+preferred = ["anthropic_official:claude-opus-4-7"]
+
+[routing.translate]
+strategy = "consensus"
+n = 2
+preferred = [
+    "anthropic_official:claude-opus-4-7",
+    "deepseek:deepseek-v3",
+]
+
+[routing.repair]
+strategy = "cost"
+preferred = [
+    "openai_official:gpt-5-mini",
+    "deepseek:deepseek-v3",
+]

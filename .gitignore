@@ -1,0 +1,19 @@
+# Rust build output
+/target
+**/*.rs.bk
+
+# Cobrust workspace artifacts
+/.cobrust
+*.log
+
+# OS / editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local-only env files
+.env
+.env.local
+.env.*.local

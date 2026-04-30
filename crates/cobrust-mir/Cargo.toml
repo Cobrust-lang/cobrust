@@ -1,0 +1,16 @@
+[package]
+name = "cobrust-mir"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Cobrust MIR (mid-level IR) — control-flow-explicit form for codegen."
+
+[lints]
+workspace = true
+
+[dependencies]

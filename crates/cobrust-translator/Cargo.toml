@@ -1,0 +1,16 @@
+[package]
+name = "cobrust-translator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Cobrust AI translation subsystem — L0..L3 closed-loop translator."
+
+[lints]
+workspace = true
+
+[dependencies]

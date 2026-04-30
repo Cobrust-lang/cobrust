@@ -1,0 +1,16 @@
+[package]
+name = "cobrust-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Cobrust type system and type checker (static structural typing)."
+
+[lints]
+workspace = true
+
+[dependencies]

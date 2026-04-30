@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cobrust-cli",
+    "crates/cobrust-frontend",
+    "crates/cobrust-hir",
+    "crates/cobrust-mir",
+    "crates/cobrust-types",
+    "crates/cobrust-codegen",
+    "crates/cobrust-llm-router",
+    "crates/cobrust-translator",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0 OR MIT"
+authors = ["The Cobrust Project"]
+repository = "https://github.com/cobrust/cobrust"
+homepage = "https://github.com/cobrust/cobrust"
+readme = "README.md"
+
+# Workspace-wide rustc lints.
+# Strict by intent: M0 skeleton compiles clean; new code stays clean.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unused_must_use = "deny"
+
+# Workspace-wide clippy lints.
+# pedantic at priority -1 so individual overrides win.
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+todo = "warn"
+dbg_macro = "warn"
+# Disable lints that produce noise on legitimate domain vocabulary.
+doc_markdown = "allow"
+module_name_repetitions = "allow"
+
+# Shared dependency versions. Members opt in with `dep.workspace = true`.
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1.0"
+anyhow = "1.0"
+async-trait = "0.1"
+tokio = { version = "1.40", features = [
+    "macros",
+    "rt-multi-thread",
+    "fs",
+    "io-util",
+    "sync",
+    "time",
+] }
+futures = "0.3"
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+sha2 = "0.10"
+blake3 = "1.5"
+hex = "0.4"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = "debuginfo"
