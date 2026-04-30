@@ -112,16 +112,19 @@ stateDiagram-v2
 
 `cobrust-llm-router` 不是工具，是**编译器子系统**。它和类型检查器同等重要，**不**住在 `tools/` 里。
 
-### 关键能力
+**M3 已交付**：所有不变量由 [ADR-0004](../../agent/adr/0004-llm-router-architecture.md) 钉死；详见 [`docs/agent/modules/llm-router.md`](../../agent/modules/llm-router.md)。
+
+### 关键能力（已实现）
 
 - Provider 抽象；具体 adapter 覆盖 **OpenAI 兼容** 与 **Anthropic 兼容**
 - 每个 provider 可配 `base_url` 和模型名（DeepSeek、Qwen、本地 vLLM、Together、OpenRouter 都通用）
 - 按任务路由：`{ task, strategy: "cost" | "quality" | "latency" | "consensus", n? }`
-- 流式返回（两种格式都支持）
-- Token 账本：按任务、按库、按会话写入 `.cobrust/ledger.jsonl`
-- 指数退避重试；provider 之间故障隔离（一家挂掉 ≠ 流水线挂掉）
-- 缓存层：`(prompt_hash, model, params)` 内容寻址，本地 + 可选远端共享
-- Consensus 模式：N 个模型并发，按多数 / 结构化 diff / verifier 评判 / gate 通过率取最优
+- 流式返回（两种格式都支持，end-of-stream 恰好一个 `Done` 帧）
+- Token 账本：按任务、按 provider、按 attempt 写入 `.cobrust/ledger.jsonl`，append-only
+- 指数退避重试（默认 5 次 / 30 s 上限 / 全 jitter / 尊重 `Retry-After`）
+- Provider 之间故障隔离：一家挂掉自动 fallthrough 到 `preferred` 列表里下一家
+- 缓存层：键 = `BLAKE3(canonical_request_bytes)`，跨机可重现，两级 sharding 写入 `.cobrust/llm_cache/`
+- Consensus 模式：`n` 个模型并发，按 NFC 归一化文本的 BLAKE3 群组多数取胜，确定性 tie-break
 
 ### 配置示例
 
