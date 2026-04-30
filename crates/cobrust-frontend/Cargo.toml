@@ -14,3 +14,9 @@ description = "Cobrust frontend: lexer, parser, and AST."
 workspace = true
 
 [dependencies]
+thiserror = { workspace = true }
+unicode-xid = "0.2"
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+proptest = "1.5"
