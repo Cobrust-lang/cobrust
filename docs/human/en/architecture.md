@@ -41,6 +41,48 @@ flowchart TD
 | `cobrust-llm-router` | LLM Router | M3 |
 | `cobrust-translator` | AI translation subsystem | M4+ |
 
+## Frontend (M1 — delivered)
+
+`cobrust-frontend` ships the 30 syntactic forms. A concrete example:
+
+```python
+fn fib(n: i64) -> i64:
+    if (n < 2):
+        return n
+    return (fib((n - 1)) + fib((n - 2)))
+```
+
+Drive the frontend:
+
+```rust
+use cobrust_frontend::{parse_str, unparse, FileId};
+
+let src = std::fs::read_to_string("fib.cb")?;
+let module = parse_str(&src, FileId(0))?;
+println!("{}", unparse(&module));
+```
+
+### Public API
+
+- `lex(source, file_id) -> Result<Vec<Token>, LexError>` — UTF-8 → token stream
+- `lex_bytes(bytes, file_id) -> Result<Vec<Token>, LexError>` — arbitrary bytes → token stream (invalid UTF-8 is reported, never panics)
+- `parse(tokens) -> Result<ast::Module, ParseError>` — token stream → AST
+- `parse_str(source, file_id) -> Result<ast::Module, FrontendError>` — one-shot composition
+- `unparse(module) -> String` — AST → canonical source (round-trip oracle)
+
+### Design constraints
+
+- **Recursive descent + Pratt** for expressions; full operator table at the top of `crates/cobrust-frontend/src/parser.rs`. No external parser generator.
+- **Spans everywhere**: every AST node carries `(file_id, byte_start, byte_end)` so downstream phases can produce precise diagnostics.
+- **Closed 30-form surface**: `adr:0003` fixes the list. Python forms outside the list (`is`, `del`, `global`, `nonlocal`, `async def`, multiple inheritance, mutable defaults) are rejected with `ParseError::DroppedByConstitution`.
+- **Panic-free**: no byte input can panic the lexer or parser; failures surface as structured errors. The invariant is held by a proptest fuzz harness (default 5 × 4 096 cases; long run 5 × 100 000 cases under `COBRUST_M1_FUZZ_LONG=1`).
+
+### Verification
+
+- 30 round-trip integration tests, one per form: `tests/round_trip.rs`.
+- proptest fuzz harness: `tests/fuzz_proptest.rs`. Past shrunk panics are committed to `tests/fuzz_proptest.proptest-regressions`; every run re-tests them first.
+- Methodology and the first bug it caught are documented at `docs/agent/findings/m1-fuzz-method.md`.
+
 ## AI translation subsystem: four-stage closed loop
 
 Every stage has explicit gates. **No stage is optional.**

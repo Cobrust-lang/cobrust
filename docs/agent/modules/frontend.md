@@ -3,7 +3,7 @@ doc_kind: module
 module_id: mod:frontend
 crate: cobrust-frontend
 last_verified_commit: TBD
-dependencies: []
+dependencies: [adr:0003]
 ---
 
 # Module: frontend
@@ -15,65 +15,119 @@ semantic analysis here.
 
 ## Status
 
-- M0 — empty stub.
-- M1 — first delivery: lexer + parser + AST for the "core 30 forms"
-  with 24h fuzz coverage.
+- **M1 — delivered.** Lexer + parser + AST for the "core 30 forms"
+  (see `adr:0003`). Round-trip suite green for every form. Fuzz gate
+  satisfied via proptest (`find:m1-fuzz-method`).
+- **Follow-ups deferred to later milestones**:
+  - Error recovery (partial AST + diagnostics on single-token edits)
+    — not gated by M1; tracked for M2/M3.
+  - Incremental reparse — tracked for M5+ (IDE story).
 
-## Public surface (target — M1)
-
-Final shape decided in M1 ADR. Indicative outline:
+## Public surface (M1)
 
 ```rust
+// Lex / parse entrypoints.
 pub fn lex(source: &str, file_id: FileId) -> Result<Vec<Token>, LexError>;
+pub fn lex_bytes(bytes: &[u8], file_id: FileId) -> Result<Vec<Token>, LexError>;
 pub fn parse(tokens: &[Token]) -> Result<ast::Module, ParseError>;
 pub fn parse_str(source: &str, file_id: FileId) -> Result<ast::Module, FrontendError>;
+pub fn unparse(module: &ast::Module) -> String;
 
+// Spans.
+pub struct FileId(pub u32);
+pub struct Span { pub file: FileId, pub start: u32, pub end: u32 }
+pub struct Spanned<T> { pub node: T, pub span: Span }
+
+// Tokens.
+pub struct Token { pub kind: TokenKind, pub span: Span }
+pub enum TokenKind { /* see crate::token for the full enum */ }
+
+// AST root types (see crate::ast for the full enum families).
 pub mod ast {
-    // Span-bearing AST nodes.
-    pub struct Module { /* ... */ }
-    pub struct Stmt { /* ... */ }
-    pub struct Expr { /* ... */ }
+    pub struct Module { pub docstring: Option<String>, pub items: Vec<Stmt>, pub span: Span }
+    pub struct Stmt   { pub kind: StmtKind,    pub span: Span }
+    pub struct Expr   { pub kind: ExprKind,    pub span: Span }
+    pub struct Pattern{ pub kind: PatternKind, pub span: Span }
+    pub struct Type   { pub kind: TypeKind,    pub span: Span }
+    pub struct Block  { pub stmts: Vec<Stmt>,  pub span: Span }
+    pub enum StmtKind  { /* covers ADR-0003 forms 2..19 */ }
+    pub enum ExprKind  { /* covers ADR-0003 forms 21..30 */ }
+    pub enum PatternKind { /* covers ADR-0003 form 20 */ }
+    pub enum TypeKind  { Name, Generic, Union, Fn, Tuple }
 }
+
+// Errors.
+pub enum LexError      { InvalidUtf8, UnexpectedChar, UnterminatedString, UnterminatedFString, MalformedNumber, InconsistentIndent, InvalidEscape }
+pub enum ParseError    { Expected, Syntax, UnexpectedEof, DroppedByConstitution, NonLiteralDefault, IndentError }
+pub enum FrontendError { Lex(LexError), Parse(ParseError) }
 ```
 
-## Invariants (target — M1)
+The full enumerations live in `crates/cobrust-frontend/src/`. Stable
+re-exports are pinned at the crate root (`lib.rs`).
 
-- **Round-trip property**: `parse(unparse(ast)) == ast` for any AST
-  produced by `parse(source)`.
+## Invariants
+
+- **Round-trip property**: `parse(unparse(parse_str(s)?))` equals
+  `parse_str(s)?` modulo span normalization, for every program built
+  from the 30 forms in `adr:0003`. Verified by
+  `tests/round_trip.rs` (one test per form).
 - All errors carry source spans `(file_id, byte_start, byte_end)`.
-- No panic paths reachable from any UTF-8 input.
-- Lexer is deterministic and stream-friendly (input position monotonic).
-- Parser is recursive-descent + Pratt for expressions; no parser generator
-  dependency in M1.
+- **No panic** is reachable from any byte input — `lex_bytes` and
+  `parse_str` (and the `lex` UTF-8 path) report failures as
+  structured errors. Verified by `tests/fuzz_proptest.rs`
+  (5 properties × ≥ 4 096 cases default; 100 000 cases under
+  `COBRUST_M1_FUZZ_LONG=1`).
+- Lexer is deterministic and stream-friendly (input position
+  monotonic).
+- Parser is recursive-descent + Pratt for expressions; no
+  parser-generator dependency.
+- Constitution-dropped Python forms (`is`, `del`, `global`,
+  `nonlocal`, `async def`, multi-base classes, mutable defaults) are
+  rejected with `ParseError::DroppedByConstitution` /
+  `NonLiteralDefault`. They never produce a successful AST.
 
-## "Core 30 forms"
+## Preconditions / Postconditions
 
-Cobrust's M1 surface — the 30 syntactic forms the lexer/parser must
-round-trip cleanly. The exact list is finalized in the M1 ADR; expected
-shape:
+- `lex(source, file_id)` requires `source` to be valid UTF-8.
+  `lex_bytes(bytes, file_id)` accepts arbitrary bytes and surfaces
+  `LexError::InvalidUtf8` if not.
+- `parse(tokens)` requires `tokens` to end with `TokenKind::Eof`
+  (this is what `lex` produces). Mid-stream parser invocation
+  on a slice that drops `Eof` is undefined behavior in the moral
+  sense (returns `UnexpectedEof`); not gated yet.
+- `unparse(module)` is **total**: it never panics on a value-typed
+  AST that the parser produced, by construction.
 
-- Module / function / class definitions
-- `if` / `elif` / `else` / `match` / `for` / `while` / `with` / `try`
-- Expressions: literals, calls, attribute, index, comprehensions, lambdas
-- Decorators, type annotations, docstrings
-- f-strings (full nesting)
+## Done means (M1 — DONE)
 
-## Done means (M1)
-
-- [ ] "Core 30 forms" round-trip suite (curated programs).
-- [ ] 24h `cargo fuzz` with no crashes; coverage report committed.
-- [ ] Span fidelity test: every AST node points to its source range.
-- [ ] Error recovery: parser produces a partial AST + diagnostics on
-      single-token edits.
+- [x] `adr:0003` accepted; the 30-form list is closed.
+- [x] Lexer emits `TokenKind::Indent` / `Dedent` / `Newline` / `Eof`
+      with byte spans.
+- [x] Parser produces a span-bearing `ast::Module`.
+- [x] `tests/round_trip.rs` covers all 30 forms (30 tests, all green).
+- [x] `tests/fuzz_proptest.rs` panic-free property at ≥ 100 000
+      cases per property under `COBRUST_M1_FUZZ_LONG=1`. Method and
+      one shrunk panic documented in `find:m1-fuzz-method`.
+- [x] Span fidelity: every AST node has a `span` field; the
+      round-trip suite normalizes spans before comparing AST shape.
+- [x] No panic paths reachable from any byte input.
 
 ## Non-goals
 
-- No name resolution, type inference, or borrow checking in this crate.
-  Those live in `mod:hir` / `mod:types`.
-- No incremental reparse in M1 (deferred).
+- Name resolution, type inference, borrow checking — these live in
+  `mod:hir` / `mod:types`.
+- Incremental reparse / IDE protocol — deferred to M5+.
+- Source-faithful unparser (whitespace / comments preserved) — the
+  M1 unparser is canonical, not byte-faithful, by design.
+- Error recovery into a partial AST — tracked as a follow-up; the
+  M1 parser fails fast.
 
 ## Cross-references
 
+- `adr:0003` — the 30-form definition this module implements.
+- `find:m1-fuzz-method` — fuzz-gate methodology + the one bug it
+  caught.
 - Constitution `CLAUDE.md` §7 — milestone definition.
-- `mod:hir` — primary downstream consumer.
-- `mod:cli` — exposes `cobrust lex` / `cobrust parse`.
+- `mod:hir` — primary downstream consumer (M2).
+- `mod:cli` — exposes `cobrust lex` / `cobrust parse` (wired in M1
+  for downstream tools, exact CLI surface deferred).

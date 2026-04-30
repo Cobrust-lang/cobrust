@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # Cobrust documentation coverage check.
 #
-# M0 placeholder: enforces that the three documentation trees exist with
-# the expected README anchors and that ADR-0001 has landed. Future
-# milestones extend this to a real "public-item ↔ triple-doc" mapping.
+# Enforces the doc-coverage rule (constitution §3.3): every public
+# item that we promise in the agent-tree module spec must also be
+# discussed in the zh and en human-tree docs.
+#
+# M0 added the directory + ADR-0001 baseline.
+# M1 (this revision) adds public-surface coverage for the frontend
+# crate by checking that the canonical entrypoint names appear in
+# every doc tree.
+#
+# Future milestones extend the `m_<milestone>_checks` block.
 #
 # See `docs/agent/conventions.md` and constitution `CLAUDE.md` §3.
 
@@ -57,7 +64,6 @@ for mod in "${expected_modules[@]}"; do
 done
 
 # Reverse check: every workspace member crate has a matching module spec.
-# (Matches `cobrust-<name>` directory under `crates/` against module file.)
 if [[ -d crates ]]; then
     while IFS= read -r crate_dir; do
         crate_name="$(basename "$crate_dir")"
@@ -75,4 +81,56 @@ if ! grep -q '^status: accepted$' "$adr_one"; then
     fail "ADR-0001 must be 'status: accepted' for M0 to be done"
 fi
 
-echo "doc-coverage: M0 checks passed"
+# --- 5. M1 frontend surface coverage -----------------------------------------
+# Every named public entrypoint of `cobrust-frontend` must appear in
+# the agent-tree module spec, the en-tree architecture doc, and the
+# zh-tree architecture doc.
+#
+# This is the §3.3 sync rule, mechanized.
+
+m1_frontend_terms=(
+    "lex"
+    "lex_bytes"
+    "parse"
+    "parse_str"
+    "unparse"
+    "FileId"
+    "Span"
+)
+
+m1_frontend_files=(
+    "docs/agent/modules/frontend.md"
+    "docs/human/en/architecture.md"
+    "docs/human/zh/architecture.md"
+)
+
+# Skip the strict M1 coverage gate when the frontend module spec
+# still declares "M0 — empty stub" — that means M1 has not been
+# delivered yet on this branch.
+if grep -q '^- M0 — empty stub.$' "docs/agent/modules/frontend.md"; then
+    echo "doc-coverage: M0 baseline checks passed (M1 surface check skipped)"
+    exit 0
+fi
+
+for term in "${m1_frontend_terms[@]}"; do
+    for f in "${m1_frontend_files[@]}"; do
+        if ! grep -q -F "${term}" "$f"; then
+            fail "M1 frontend surface term '${term}' missing from ${f}"
+        fi
+    done
+done
+
+# ADR-0003 must be accepted now that M1 has landed.
+adr_three="docs/agent/adr/0003-core-30-forms.md"
+[[ -f "$adr_three" ]] || fail "ADR-0003 (core 30 forms) is required for M1"
+if ! grep -q '^status: accepted$' "$adr_three"; then
+    fail "ADR-0003 must be 'status: accepted' for M1 to be done"
+fi
+
+# Findings index must reference m1-fuzz-method since the gate uses it.
+findings_index="docs/agent/findings/README.md"
+if ! grep -q -F "m1-fuzz-method" "$findings_index"; then
+    fail "findings/README.md must index m1-fuzz-method (M1 fuzz gate evidence)"
+fi
+
+echo "doc-coverage: M0 + M1 checks passed"
