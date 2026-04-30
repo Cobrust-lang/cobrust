@@ -30,3 +30,4 @@ same atomic commit as the change it justifies.
 | ADR | Title | Status | Date |
 |---|---|---|---|
 | [0001](0001-license.md) | Apache-2.0 OR MIT dual license | accepted | 2026-04-30 |
+| [0002](0002-multi-agent-topology.md) | Multi-agent topology and milestone sequencing for autonomous delivery | accepted | 2026-04-30 |
