@@ -15,6 +15,23 @@ Fortran) libraries into Cobrust, with full provenance.
 
 ## Status
 
+- **M7.0 — delivered.** First sub-milestone of the M7 numpy core
+  (per ADR-0012 + ADR-0013). The strategic principle is **"translate the surface, bind the core"** — cobrust-numpy translates numpy's
+  Python API (dtype strings, error taxonomy, constructor signatures)
+  and binds the numerical core to Rust's `ndarray` crate. New
+  `cobrust-numpy` parent crate (see `mod:numpy`) translates the M7.0
+  ndarray foundation: 8 functions (4 public constructors + 4
+  helpers) via the synthetic-LLM pipeline, backed by
+  `ndarray = "0.16"`. Pipeline emits
+  numpy-aware `lib.rs` doc header + `gates.dependents` entries
+  (`scipy / pandas / matplotlib` deferred to M7.6+). The L0
+  differential gate runs against upstream numpy 2.0.2 via subprocess
+  (bytes-identical for int/bool, `rtol=1e-12` for float; ≥ 1024
+  fuzz inputs verified). The corpus at `corpus/numpy/M7.0/` ships
+  the canned-LLM table that drives the pipeline integration test
+  at `crates/cobrust-numpy/tests/numpy_pipeline.rs`. Synthetic
+  task value stays `translate` (M7.1+ may extend if numpy's C-core
+  surface needs a new prompt template).
 - **M6 — delivered.** Native-extension translation milestone.
   Cython lexical shim (`crate::cython`) routes `.pyx` sources via
   `task = "translate_cython"`. `PerfVerifier` trait + perf-repair

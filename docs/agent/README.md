@@ -45,6 +45,8 @@ All cross-references use stable IDs, never page positions:
 | `mod:translator` | [`modules/translator.md`](modules/translator.md) | `cobrust-translator` | M4+ |
 | `mod:tomli` | [`modules/tomli.md`](modules/tomli.md) | `cobrust-tomli` | M4 |
 | `mod:dateutil` | [`modules/dateutil.md`](modules/dateutil.md) | `cobrust-dateutil` | M5 |
+| `mod:msgpack` | [`modules/msgpack.md`](modules/msgpack.md) | `cobrust-msgpack` | M6 |
+| `mod:numpy` | [`modules/numpy.md`](modules/numpy.md) | `cobrust-numpy` | M7.0 |
 
 ## ADR index
 

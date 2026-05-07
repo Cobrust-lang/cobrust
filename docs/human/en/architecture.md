@@ -578,3 +578,112 @@ pub enum MsgValue {
 See [ADR-0010](../../agent/adr/0010-native-ext-translation.md) and
 [ADR-0011](../../agent/adr/0011-pyo3-build-path.md) for the
 load-bearing decisions.
+
+## numpy translation (M7.0 — delivered)
+
+### Strategic principle: translate the surface, bind the core
+
+Per [ADR-0012](../../agent/adr/0012-m7-numpy-plan.md), upstream
+numpy's core is hand-tuned C with SIMD/BLAS — **not** a viable
+pure-Rust reimplementation target. Instead, cobrust-numpy
+**translates the public Python surface** (dtype strings, error
+taxonomy, Python-shaped signatures) and **binds the numerical
+core** to Rust's [`ndarray = "0.16"`](https://crates.io/crates/ndarray)
+crate. Per [ADR-0013](../../agent/adr/0013-m7-0-ndarray-foundation.md)
+this is the M7.0..M7.5 default; later sub-milestones extend it:
+
+- M7.4 linalg → bind `ndarray-linalg` (BLAS / LAPACK).
+- M7.5 random → bind `rand` + `rand_distr`.
+- M7.6 FFT → bind `rustfft`.
+
+A concrete example from M7.0:
+
+```rust
+// User-facing call: cobrust_numpy::zeros(&[3, 4], Dtype::Float64)
+//
+// 1. cobrust-numpy dispatches on dtype:
+match dtype {
+    Dtype::Float64 => Array::Float64(
+        // 2. ndarray actually allocates + zero-fills the buffer:
+        ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[3, 4]))
+    ),
+    // ... other dtypes ...
+}
+```
+
+We do not reimplement `zeros`. We call it. cobrust-numpy owns the
+**Python contract**; ndarray owns the **storage layout**.
+
+### M7.0 ndarray foundation
+
+cobrust-numpy's M7.0 surface (per ADR-0013):
+
+```rust
+// Closed dtype tier — adding Int8 / Float16 etc. is an explicit ADR
+// decision, never silent accretion.
+pub enum Dtype {
+    Int32,
+    Int64,
+    Float32,
+    Float64,
+    Bool,
+}
+
+// Tagged-union over ndarray::ArrayD<T>. No `dyn` in the public API
+// (constitution §2.2).
+pub enum Array {
+    Int32(ndarray::ArrayD<i32>),
+    Int64(ndarray::ArrayD<i64>),
+    Float32(ndarray::ArrayD<f32>),
+    Float64(ndarray::ArrayD<f64>),
+    Bool(ndarray::ArrayD<bool>),
+}
+
+// Constructors mirror numpy's Python signatures.
+pub fn array(values: &[f64], shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError>;
+pub fn zeros(shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError>;
+pub fn ones(shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError>;
+pub fn arange(start: f64, stop: f64, step: f64, dtype: Dtype) -> Result<Array, NumpyError>;
+
+// Observers.
+impl Array {
+    pub fn dtype(&self) -> Dtype;
+    pub fn shape(&self) -> Vec<usize>;
+    pub fn ndim(&self) -> usize;
+    pub fn size(&self) -> usize;
+    pub fn repr(&self) -> String;
+    pub fn to_json(&self) -> serde_json::Value;
+}
+```
+
+### M7.0 dtype tier
+
+| Python string(s) | Rust type | Notes |
+|---|---|---|
+| `"int32"` / `"i4"` | `i32` | exact 32-bit signed |
+| `"int64"` / `"i8"` | `i64` | M7.0 default integer dtype |
+| `"float32"` / `"f4"` | `f32` | exact single-precision |
+| `"float64"` / `"f8"` | `f64` | M7.0 default float dtype |
+| `"bool"` / `"?"` | `bool` | numpy's 1-byte form |
+
+### M7.0 verification
+
+- L0 spec at `corpus/numpy/M7.0/spec.toml` + harness at
+  `corpus/numpy/M7.0/harness/h_array.py`.
+- L1 emission committed at `crates/cobrust-numpy/src/`.
+- L2.build green; L2.behavior:
+  - 55 well-typed + 56 ill-typed programs (`tests/well_typed.rs`,
+    `tests/ill_typed.rs`).
+  - 4200 panic-free fuzz inputs (`tests/numpy_fuzz.rs`).
+  - 1024+ differential-vs-numpy fuzz inputs
+    (`tests/numpy_differential.rs`) — bytes-identical for int/bool,
+    `rtol=1e-12` for float.
+- L2.perf is informational at M7.0 (constructors are O(n) memory
+  ops; perf becomes a real gate at M7.1 ufuncs).
+- L3.pyo3 differential gate via subprocess CPython numpy.
+- L3.dependents deferred to M7.6+ (numpy is the foundation; the
+  ecosystem ports lift after M7.5).
+
+See [ADR-0012](../../agent/adr/0012-m7-numpy-plan.md) and
+[ADR-0013](../../agent/adr/0013-m7-0-ndarray-foundation.md) for the
+load-bearing decisions.

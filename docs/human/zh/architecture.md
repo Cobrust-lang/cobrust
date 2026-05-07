@@ -528,3 +528,110 @@ pub enum MsgValue {
 
 载具决策见 [ADR-0010](../../agent/adr/0010-native-ext-translation.md)
 与 [ADR-0011](../../agent/adr/0011-pyo3-build-path.md)。
+
+## numpy 翻译（M7.0 — 已交付）
+
+### 战略原则：翻译表面，绑定内核（"translate the surface, bind the core"）
+
+按 [ADR-0012](../../agent/adr/0012-m7-numpy-plan.md)，上游 numpy
+的内核是手工 SIMD/BLAS C 代码——**纯 Rust 重写不切实际**。
+cobrust-numpy 转而 **翻译 numpy 的公开 Python 表面**（dtype
+字符串、错误分类、Python 风格的签名），并 **把数值内核绑定**
+到 Rust 的 [`ndarray = "0.16"`](https://crates.io/crates/ndarray)
+crate。按 [ADR-0013](../../agent/adr/0013-m7-0-ndarray-foundation.md)，
+这是 M7.0..M7.5 的默认策略；后续子里程碑沿用：
+
+- M7.4 linalg → 绑定 `ndarray-linalg`（BLAS / LAPACK）。
+- M7.5 random → 绑定 `rand` + `rand_distr`。
+- M7.6 FFT → 绑定 `rustfft`。
+
+M7.0 的具体例子：
+
+```rust
+// 用户调用：cobrust_numpy::zeros(&[3, 4], Dtype::Float64)
+//
+// 1. cobrust-numpy 按 dtype 分发：
+match dtype {
+    Dtype::Float64 => Array::Float64(
+        // 2. ndarray 真正分配 + 零填充缓冲：
+        ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[3, 4]))
+    ),
+    // ... 其他 dtype ...
+}
+```
+
+我们不重写 `zeros`，我们调用它。cobrust-numpy 拥有
+**Python 契约**；ndarray 拥有 **存储布局**。
+
+### M7.0 ndarray 基础层
+
+cobrust-numpy 在 M7.0 的公共表面（按 ADR-0013）：
+
+```rust
+// 闭合 dtype 集合——添加 Int8 / Float16 等是显式 ADR 决定，
+// 不允许悄无声息地累加。
+pub enum Dtype {
+    Int32,
+    Int64,
+    Float32,
+    Float64,
+    Bool,
+}
+
+// 在 ndarray::ArrayD<T> 上的标签联合。公共 API 不暴露 `dyn`
+// （宪法 §2.2）。
+pub enum Array {
+    Int32(ndarray::ArrayD<i32>),
+    Int64(ndarray::ArrayD<i64>),
+    Float32(ndarray::ArrayD<f32>),
+    Float64(ndarray::ArrayD<f64>),
+    Bool(ndarray::ArrayD<bool>),
+}
+
+// 构造器与 numpy Python 签名一一对应。
+pub fn array(values: &[f64], shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError>;
+pub fn zeros(shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError>;
+pub fn ones(shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError>;
+pub fn arange(start: f64, stop: f64, step: f64, dtype: Dtype) -> Result<Array, NumpyError>;
+
+// 观测面。
+impl Array {
+    pub fn dtype(&self) -> Dtype;
+    pub fn shape(&self) -> Vec<usize>;
+    pub fn ndim(&self) -> usize;
+    pub fn size(&self) -> usize;
+    pub fn repr(&self) -> String;
+    pub fn to_json(&self) -> serde_json::Value;
+}
+```
+
+### M7.0 dtype 分层
+
+| Python 字符串 | Rust 类型 | 说明 |
+|---|---|---|
+| `"int32"` / `"i4"` | `i32` | 精确 32-bit 有符号 |
+| `"int64"` / `"i8"` | `i64` | M7.0 默认整型 dtype |
+| `"float32"` / `"f4"` | `f32` | 精确单精度 |
+| `"float64"` / `"f8"` | `f64` | M7.0 默认浮点 dtype |
+| `"bool"` / `"?"` | `bool` | numpy 的 1 字节 bool |
+
+### M7.0 验证
+
+- L0 spec 在 `corpus/numpy/M7.0/spec.toml` + harness 在
+  `corpus/numpy/M7.0/harness/h_array.py`。
+- L1 emission 已提交到 `crates/cobrust-numpy/src/`。
+- L2.build 通过；L2.behavior：
+  - 55 个良类型 + 56 个病类型程序（`tests/well_typed.rs`,
+    `tests/ill_typed.rs`）。
+  - 4200 个 panic-free fuzz 输入（`tests/numpy_fuzz.rs`）。
+  - 1024+ 个差分 vs numpy fuzz 输入
+    （`tests/numpy_differential.rs`）——int/bool 字节级、float
+    `rtol=1e-12`。
+- L2.perf 在 M7.0 仅记录不强制（构造器是 O(n) 内存操作；
+  M7.1 ufuncs 时 perf 才成为真实门禁）。
+- L3.pyo3 差分门禁通过子进程跑 CPython numpy。
+- L3.dependents 推迟到 M7.6+（numpy 是基础；生态库迁移在 M7.5
+  之后）。
+
+详见 [ADR-0012](../../agent/adr/0012-m7-numpy-plan.md) 和
+[ADR-0013](../../agent/adr/0013-m7-0-ndarray-foundation.md)。
