@@ -764,3 +764,111 @@ M7.1 的 ufunc 分发是**单态化**：`Array::add` 在公开 API 上做一次
   操作的失败结果与 numpy 一致，失败的"形状"是 Cobrust 原生的。
 
 详见 [ADR-0014](../../agent/adr/0014-m7-1-ufuncs-broadcasting.md)。
+
+## numpy 索引（M7.2 — 已交付）
+
+M7.2 落地索引层——基本切片、单整数、整数数组、布尔掩码、`np.where`，
+以及视图——按 ADR-0015。这关闭了 ADR-0012 M7 子里程碑计划中的
+索引部分；归约（M7.3）会消费它。
+
+### M7.2 公共面
+
+```rust
+// 闭合的索引种类分类（不引入 `dyn`，符合宪法 §2.2）。
+pub enum Index {
+    Single(i64),                 // a[i]; 支持负索引
+    Slice(SliceSpec),            // a[start:stop:step]
+    IntArray(Vec<i64>),          // a[[0, 2, 5]]; 高级索引 -> 拷贝
+    BoolMask(Array),             // a[a > 0]; 高级索引 -> 拷贝
+    NewAxis,                     // a[np.newaxis]
+}
+
+pub struct SliceSpec {
+    pub start: Option<i64>,
+    pub stop: Option<i64>,
+    pub step: Option<i64>,
+}
+
+// 视图——按 dtype 闭合的 enum（各 5 个变体）；
+// 生命周期编码所有权，将视图绑定到父数组的借用。
+pub enum ArrayView<'a>    { Int32(...), Int64(...), Float32(...), Float64(...), Bool(...) }
+pub enum ArrayViewMut<'a> { Int32(...), Int64(...), Float32(...), Float64(...), Bool(...) }
+
+impl Array {
+    // 基本切片 -> 视图（不拷贝）。
+    pub fn slice(&self, spec: SliceSpec) -> Result<ArrayView<'_>, NumpyError>;
+    pub fn slice_mut(&mut self, spec: SliceSpec) -> Result<ArrayViewMut<'_>, NumpyError>;
+
+    // 单整数索引 -> 少一个轴的视图。
+    pub fn index_single(&self, i: i64) -> Result<ArrayView<'_>, NumpyError>;
+
+    // 高级索引 -> 拷贝（始终物化）。
+    pub fn take(&self, indices: &[i64]) -> Result<Array, NumpyError>;
+    pub fn mask(&self, mask: &Array) -> Result<Array, NumpyError>;
+
+    // 多轴分发器；结果始终物化。
+    pub fn index_get(&self, indices: &[Index]) -> Result<Array, NumpyError>;
+
+    // np.where 便捷形式：cond.where_(x, y)。
+    pub fn where_(&self, x: &Array, y: &Array) -> Result<Array, NumpyError>;
+}
+
+// 顶层 np.where(cond, x, y)——按广播规则处理 cond/x/y；始终拷贝。
+pub fn np_where(cond: &Array, x: &Array, y: &Array) -> Result<Array, NumpyError>;
+pub fn index_get(arr: &Array, indices: &[Index]) -> Result<Array, NumpyError>;
+```
+
+### 视图 vs 拷贝约定（与 numpy 一致）
+
+用户最常遇到的具体例子：
+
+- **`a[1:3]` 返回视图。** `Array::slice(SliceSpec::range(1, 3))`
+  返回的 `ArrayView<'a>` 与 `a` 的存储别名同一块内存。通过
+  `slice_mut` 修改会传播到 `a`——Rust 的借用检查器在编译期保证安全。
+- **`a[[0, 2]]` 返回拷贝。** `Array::take(&[0, 2])` 返回独立存储的
+  `Array`。修改结果不影响 `a`。
+
+两条规则都在 `tests/index_views_corpus.rs` 中通过副作用断言验证。
+
+### M7.2 错误变体（闭合枚举扩展）
+
+`NumpyErrorKind` 按 ADR-0015 §4 新增 4 个变体：
+
+| 变体 | 触发条件 | numpy 2.0.2 对应行为 |
+|---|---|---|
+| `IndexError` | 未被更具体变体覆盖的索引错误的伞型 | `IndexError` |
+| `OutOfBoundsIndex` | 单整数 / 整数数组索引超出 `[-len, len)` | `IndexError` |
+| `BoolMaskShapeMismatch` | `mask` 的 shape 与 self.shape() 不匹配 | `IndexError` |
+| `IndexDtypeNotInteger` | 整数数组 dtype 不是 Int32/Int64；或 `mask` 参数 dtype 不是 Bool | `IndexError` |
+
+边界检查语义：操作失败的"结果"与 numpy 一致（出界即报错），失败
+的"形状"是 Cobrust 原生（`Result::Err`），符合宪法 §2.2。
+
+### M7.2 验证
+
+- L0 spec 在 `corpus/numpy/M7.2/spec.toml`，差分 harness 在
+  `corpus/numpy/M7.2/harness/h_index.py`。
+- L2.behavior：
+  - 55 个良类型索引程序（`tests/index_well_typed.rs`）。
+  - 55 个病类型索引程序（`tests/index_ill_typed.rs`）。
+  - 14 个视图 vs 拷贝语义测试
+    （`tests/index_views_corpus.rs`）。
+  - 6 个差分测试，每种索引方式 ≥ 1024 fuzz 输入，int/bool 字节级、
+    float `rtol=1e-7`（`tests/index_differential.rs`）。
+- L2.perf 继承 M7.1 的"强制"状态：`corpus/numpy/M7.2/perf.toml`
+  threshold = 0.5x；流水线测试
+  `index_pipeline_escalates_when_perf_always_fails` 演示
+  perf-fail → repair → `EscalationExceeded`。
+- L3.pyo3：与 M7.1 一致（子进程 CPython numpy oracle）。
+- L3.dependents：仍推迟到 M7.6+。
+
+### 不在 M7.2 范围（M7.x 延后）
+
+- Ellipsis 索引（`a[...]`）——M7.x。
+- 多轴 mixed-kind 索引中部分轴为视图、部分为拷贝的混合场景——
+  M7.2 在这些情况下统一物化；M7.x 优化。
+- 赋值（`a[1:3] = ...`）的人体工程学 API——`slice_mut` 提供了基础
+  面；M7.x 加上隐式赋值 API。
+- 单参数 `np.where(cond)` 返回索引——M7.x。
+
+详见 [ADR-0015](../../agent/adr/0015-m7-2-indexing.md)。

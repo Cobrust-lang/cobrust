@@ -13,15 +13,18 @@
 //! etc. is an ADR-bumpable decision.
 
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_lossless)]
 #![allow(clippy::missing_errors_doc)]
 
-use ndarray::ArrayD;
+use ndarray::{ArrayD, ArrayViewD, ArrayViewMutD};
 
 use crate::dtype::Dtype;
-use crate::error::NumpyError;
+use crate::error::{NumpyError, NumpyErrorKind};
+use crate::index::{self, Index, SliceSpec};
 use crate::ufunc;
+use crate::view::{ArrayView, ArrayViewMut};
 
 /// Owned N-dimensional array. Each variant wraps an
 /// `ndarray::ArrayD<T>` (heap-allocated dynamic-rank tensor).
@@ -274,5 +277,122 @@ impl Array {
     /// Currently total — `sqrt(< 0)` returns `NaN` per IEEE 754.
     pub fn sqrt(&self) -> Result<Array, NumpyError> {
         ufunc::sqrt(self)
+    }
+
+    // ---- M7.2 indexing surface (per ADR-0015) --------------------------
+
+    /// Basic slicing on the first axis (`a[start:stop:step]`). Returns a
+    /// **view** per ADR-0015 §3 — does not copy.
+    ///
+    /// # Errors
+    /// - `NumpyError::IndexError` if `self` is 0-d.
+    /// - `NumpyError::ZeroStep` if `spec.step == Some(0)`.
+    pub fn slice(&self, spec: SliceSpec) -> Result<ArrayView<'_>, NumpyError> {
+        index::slice_view(self, spec)
+    }
+
+    /// Mutable basic-slice view. Mutating through the view is
+    /// observable on the parent (per ADR-0015 §"View ownership model").
+    ///
+    /// # Errors
+    /// Mirrors `slice`.
+    pub fn slice_mut(&mut self, spec: SliceSpec) -> Result<ArrayViewMut<'_>, NumpyError> {
+        if self.ndim() == 0 {
+            return Err(NumpyError {
+                kind: NumpyErrorKind::IndexError,
+                message: "cannot slice a 0-d array".into(),
+            });
+        }
+        let length = self.shape()[0] as i64;
+        let (begin, end, step) = index::resolve_slice(spec.start, spec.stop, spec.step, length)?;
+        let nd_slice = index::to_nd_slice_pub(begin, end, step, length);
+        Ok(match self {
+            Self::Int32(a) => {
+                let v: ArrayViewMutD<'_, i32> = a.slice_axis_mut(ndarray::Axis(0), nd_slice);
+                ArrayViewMut::Int32(v)
+            }
+            Self::Int64(a) => {
+                let v: ArrayViewMutD<'_, i64> = a.slice_axis_mut(ndarray::Axis(0), nd_slice);
+                ArrayViewMut::Int64(v)
+            }
+            Self::Float32(a) => {
+                let v: ArrayViewMutD<'_, f32> = a.slice_axis_mut(ndarray::Axis(0), nd_slice);
+                ArrayViewMut::Float32(v)
+            }
+            Self::Float64(a) => {
+                let v: ArrayViewMutD<'_, f64> = a.slice_axis_mut(ndarray::Axis(0), nd_slice);
+                ArrayViewMut::Float64(v)
+            }
+            Self::Bool(a) => {
+                let v: ArrayViewMutD<'_, bool> = a.slice_axis_mut(ndarray::Axis(0), nd_slice);
+                ArrayViewMut::Bool(v)
+            }
+        })
+    }
+
+    /// Single-int indexing on the first axis (`a[i]`). Returns a
+    /// **view** with one fewer axis per ADR-0015 §3.
+    ///
+    /// # Errors
+    /// - `NumpyError::IndexError` if `self` is 0-d.
+    /// - `NumpyError::OutOfBoundsIndex` if `i` is outside `[-len, len)`.
+    pub fn index_single(&self, i: i64) -> Result<ArrayView<'_>, NumpyError> {
+        index::single_view(self, i)
+    }
+
+    /// Integer-array indexing on the first axis (`a[[i0, i1, ...]]`).
+    /// Always returns a **copy** per ADR-0015 §3.
+    ///
+    /// # Errors
+    /// - `NumpyError::IndexError` if `self` is 0-d.
+    /// - `NumpyError::OutOfBoundsIndex` if any `i` is outside `[-len,
+    ///   len)`.
+    pub fn take(&self, indices: &[i64]) -> Result<Array, NumpyError> {
+        index::take_impl(self, indices)
+    }
+
+    /// Boolean-mask indexing (`a[mask]`). Returns a 1-D **copy** per
+    /// ADR-0015 §3.
+    ///
+    /// # Errors
+    /// - `NumpyError::IndexDtypeNotInteger` if `mask.dtype() !=
+    ///   Dtype::Bool` (the "not integer" name is shared with int-array
+    ///   dtype validation; the mask-dtype check pre-empts it).
+    /// - `NumpyError::BoolMaskShapeMismatch` if `mask.shape() !=
+    ///   self.shape()`.
+    pub fn mask(&self, mask: &Array) -> Result<Array, NumpyError> {
+        index::mask_impl(self, mask)
+    }
+
+    /// Multi-axis indexing (`a[i, :, [0, 2, 5]]` — but M7.2 only
+    /// supports per-axis chains; the result is always materialised).
+    /// Per ADR-0015 §1.
+    ///
+    /// # Errors
+    /// Forwarded from the per-axis dispatch.
+    pub fn index_get(&self, indices: &[Index]) -> Result<Array, NumpyError> {
+        index::index_get(self, indices)
+    }
+
+    /// Convenience for `np.where(self, x, y)` — element-wise selection
+    /// using `self` as the condition mask. Per ADR-0015 §"Public surface".
+    ///
+    /// # Errors
+    /// Forwarded from `np_where`.
+    pub fn where_(&self, x: &Array, y: &Array) -> Result<Array, NumpyError> {
+        index::np_where(self, x, y)
+    }
+
+    /// Borrow this Array as an `ArrayView<'_>`. Useful for callers that
+    /// want a view-shaped representation without re-deriving via slice.
+    #[must_use]
+    pub fn as_view(&self) -> ArrayView<'_> {
+        match self {
+            Self::Int32(a) => ArrayView::Int32(<ArrayViewD<'_, i32>>::from(a)),
+            Self::Int64(a) => ArrayView::Int64(<ArrayViewD<'_, i64>>::from(a)),
+            Self::Float32(a) => ArrayView::Float32(<ArrayViewD<'_, f32>>::from(a)),
+            Self::Float64(a) => ArrayView::Float64(<ArrayViewD<'_, f64>>::from(a)),
+            Self::Bool(a) => ArrayView::Bool(<ArrayViewD<'_, bool>>::from(a)),
+        }
     }
 }

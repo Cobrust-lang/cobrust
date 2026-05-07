@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:numpy
 crate: cobrust-numpy
-last_verified_commit: 1f34acd
+last_verified_commit: bcff3c3
 dependencies: [mod:translator]
 ---
 
@@ -53,8 +53,22 @@ We do not reimplement `ArrayD::zeros` in Rust; we call it.
   (tagged-union -> monomorphic dispatch; typed constructors;
   L2.perf flip to enforced; multi-D nested-list parsing).
 
-- **M7.2 — pending.** Indexing (basic, advanced, boolean masks) per
-  ADR-0012.
+- **M7.2 — delivered.** Indexing surface (basic slicing, single-int,
+  integer-array, boolean masks), `np.where`, view-vs-copy semantics
+  per ADR-0015. cobrust-numpy now ships closed `Index` enum (5
+  variants — `Single` / `Slice(SliceSpec)` / `IntArray` / `BoolMask`
+  / `NewAxis`), `SliceSpec` struct, `Array::slice / slice_mut`
+  (basic slicing → view), `Array::index_single` (single-int →
+  view), `Array::take` (integer-array → copy), `Array::mask`
+  (boolean-mask → copy), `Array::index_get` (top-level multi-axis
+  dispatcher), `np_where(cond, x, y)` (ternary selection with
+  broadcasting), and the closed `ArrayView<'a>` / `ArrayViewMut<'a>`
+  enums (5 variants each — no `dyn`, lifetime-encoded ownership).
+  Four new error variants land: `IndexError`, `OutOfBoundsIndex`,
+  `BoolMaskShapeMismatch`, `IndexDtypeNotInteger`. Differential gate
+  verifies ≥ 1024 fuzz inputs per indexing kind against upstream
+  numpy 2.0.2 (bit-identical for int/bool, `rtol=1e-7` for float).
+  L2.perf inherits ENFORCED state from M7.1.
 
 ## Public surface (M7.0)
 
@@ -291,10 +305,181 @@ M7.0 reuses the M4/M5/M6 task value; no new task is introduced.
 - [x] Tagged-union -> monomorphic dispatch (closes ADR-0013
       follow-up #1).
 
-## Done means (M7.2 — PENDING)
+## Done means (M7.2 — DONE)
 
-- [ ] Indexing: basic slicing, integer-array, boolean masks.
-- [ ] `np.where`, view vs copy semantics.
+- [x] Closed `Index` enum (5 variants) + `SliceSpec` struct.
+- [x] Closed `ArrayView<'a>` / `ArrayViewMut<'a>` enums (5 variants
+      each); lifetime-encoded ownership; no `dyn`.
+- [x] `Array::slice` / `slice_mut` (basic slicing → view).
+- [x] `Array::index_single` (single-int → view).
+- [x] `Array::take` (integer-array → copy).
+- [x] `Array::mask` (boolean-mask → copy).
+- [x] `Array::index_get` + top-level `index_get` (multi-axis
+      dispatcher).
+- [x] `np_where(cond, x, y)` + `Array::where_` (ternary selection
+      with broadcasting).
+- [x] Four new `NumpyErrorKind` variants: `IndexError`,
+      `OutOfBoundsIndex`, `BoolMaskShapeMismatch`,
+      `IndexDtypeNotInteger`.
+- [x] Negative-index normalisation matches numpy; slice bounds
+      clamp; `step == 0` → `ZeroStep`.
+- [x] ≥ 50 well-typed indexing programs (actual: 55).
+- [x] ≥ 50 ill-typed indexing programs (actual: 55).
+- [x] 14 view-vs-copy semantics tests (mutate-through-view +
+      advanced-indexing-copy assertions).
+- [x] ≥ 1024 fuzz inputs per indexing kind (basic slice, single
+      int, take, mask, np.where) against upstream numpy 2.0.2:
+      bit-identical for int/bool, `rtol=1e-7` for float.
+- [x] L2.perf inherits ENFORCED state from M7.1; perf-fail
+      escalation test wired
+      (`index_pipeline_escalates_when_perf_always_fails`).
+- [x] ADR-0015 lands; doc tree updated; doc-coverage extended.
+
+## Public surface (M7.2 — per ADR-0015)
+
+```rust
+// Closed indexing-kind taxonomy (no `dyn` per constitution §2.2).
+pub enum Index {
+    Single(i64),                 // a[i]; negative-index aware
+    Slice(SliceSpec),            // a[start:stop:step]
+    IntArray(Vec<i64>),          // a[[0, 2, 5]]; advanced -> copies
+    BoolMask(Array),             // a[a > 0]; advanced -> copies
+    NewAxis,                     // a[np.newaxis]
+}
+
+pub struct SliceSpec {
+    pub start: Option<i64>,
+    pub stop: Option<i64>,
+    pub step: Option<i64>,
+}
+
+impl SliceSpec {
+    pub const fn full() -> Self;
+    pub const fn from_start(start: i64) -> Self;
+    pub const fn to_stop(stop: i64) -> Self;
+    pub const fn range(start: i64, stop: i64) -> Self;
+    pub const fn stepped(start: i64, stop: i64, step: i64) -> Self;
+    pub const fn step_only(step: i64) -> Self;
+}
+
+// Views — closed enums per dtype (5 variants each); lifetime-encoded
+// ownership ties the view to the parent's borrow.
+pub enum ArrayView<'a> {
+    Int32(ndarray::ArrayViewD<'a, i32>),
+    Int64(ndarray::ArrayViewD<'a, i64>),
+    Float32(ndarray::ArrayViewD<'a, f32>),
+    Float64(ndarray::ArrayViewD<'a, f64>),
+    Bool(ndarray::ArrayViewD<'a, bool>),
+}
+
+pub enum ArrayViewMut<'a> {
+    Int32(ndarray::ArrayViewMutD<'a, i32>),
+    Int64(ndarray::ArrayViewMutD<'a, i64>),
+    Float32(ndarray::ArrayViewMutD<'a, f32>),
+    Float64(ndarray::ArrayViewMutD<'a, f64>),
+    Bool(ndarray::ArrayViewMutD<'a, bool>),
+}
+
+impl Array {
+    // Basic slicing -> VIEW (does not copy).
+    pub fn slice(&self, spec: SliceSpec) -> Result<ArrayView<'_>, NumpyError>;
+    pub fn slice_mut(&mut self, spec: SliceSpec) -> Result<ArrayViewMut<'_>, NumpyError>;
+    // Single-int -> VIEW (one fewer axis).
+    pub fn index_single(&self, i: i64) -> Result<ArrayView<'_>, NumpyError>;
+    // Advanced indexing -> COPY.
+    pub fn take(&self, indices: &[i64]) -> Result<Array, NumpyError>;
+    pub fn mask(&self, mask: &Array) -> Result<Array, NumpyError>;
+    // Multi-axis dispatcher.
+    pub fn index_get(&self, indices: &[Index]) -> Result<Array, NumpyError>;
+    // np.where convenience: cond.where_(x, y).
+    pub fn where_(&self, x: &Array, y: &Array) -> Result<Array, NumpyError>;
+}
+
+// Top-level functions.
+pub fn index_get(arr: &Array, indices: &[Index]) -> Result<Array, NumpyError>;
+pub fn np_where(cond: &Array, x: &Array, y: &Array) -> Result<Array, NumpyError>;
+
+// New error variants (per ADR-0015 §4).
+pub enum NumpyErrorKind {
+    // ... M7.0 + M7.1 variants ...
+    IndexError,                  // umbrella for indexing errors
+    OutOfBoundsIndex,            // single-int / int-array out of [-len, len)
+    BoolMaskShapeMismatch,       // mask.shape() != self.shape()
+    IndexDtypeNotInteger,        // int-array dtype not integer; or mask dtype not bool
+}
+```
+
+## View-vs-copy contract (M7.2 — per ADR-0015 §3)
+
+| Indexing kind | Returns | Mutate-propagates-to-parent? |
+|---|---|---|
+| `Array::slice(SliceSpec)` | `ArrayView<'_>` | yes (via `slice_mut`) |
+| `Array::index_single(i)` | `ArrayView<'_>` (one fewer axis) | yes |
+| `Array::take(indices)` | `Array` (owned copy) | no |
+| `Array::mask(bools)` | `Array` (1-D owned copy) | no |
+| `np_where(cond, x, y)` | `Array` (owned copy) | no |
+
+Concrete example (matches numpy):
+
+```rust
+let mut a = array_i32(&[1, 2, 3, 4, 5], &[5]).unwrap();
+// Basic slicing -> view; mutating through slice_mut propagates.
+{
+    let mut v = a.slice_mut(SliceSpec::range(1, 4)).unwrap();
+    v.fill_f64(99.0);
+}
+// a is now [1, 99, 99, 99, 5].
+
+let mut taken = a.take(&[0, 2, 4]).unwrap();
+// taken is [1, 99, 5] - independent storage.
+if let Array::Int32(arr) = &mut taken { arr[0] = 0; }
+// a is unchanged.
+```
+
+## Differential gate (M7.2)
+
+`crates/cobrust-numpy/tests/index_differential.rs` runs against
+`corpus/numpy/M7.2/harness/h_index.py`:
+
+- 1024 random slice inputs (positive step) — bit-identical.
+- 256 random slice inputs (negative step `[::-1]`/`[::-2]`).
+- 1024 random `take` inputs — bit-identical.
+- 1024 random `mask` inputs — bit-identical.
+- 1024 random single-int inputs — bit-identical.
+- 1024 random `np.where` inputs — `rtol=1e-7` for float.
+
+Total ~5380 differential inputs verified. Skipped with a clear
+message when upstream numpy is unavailable on the host.
+
+## Pipeline integration (M7.2)
+
+`crates/cobrust-numpy/tests/index_pipeline.rs` drives
+`cobrust_translator::translate_with_verifiers` against the M7.2
+corpus and asserts:
+
+- All 8 functions emit (5 public + 3 helpers: `slice_basic`,
+  `single_index`, `take`, `mask`, `np_where`, `normalize_single`,
+  `resolve_slice`, `slice_count`).
+- Every function carries non-empty body + provenance fields
+  (`source_sha16 = "e6b8c37f4ba39b06"`, `router_decision_id =
+  "blake3:..."`).
+- Manifest validates with `gates.l1_files_emitted = 8`.
+- L2.perf escalation wired:
+  `index_pipeline_escalates_when_perf_always_fails` exercises a
+  `PerfVerifier::Reject`-only-on-`slice_basic` verifier; with
+  `cfg.escalation_threshold = 2` the pipeline raises
+  `EscalationExceeded` and writes `failure_report.md`.
+
+## M7.2 known divergences
+
+- `index_get` materialises (returns owned `Array`) for any
+  multi-axis case where one axis is advanced — divergence from
+  numpy's per-axis policy (which can return mixed view+copy
+  chains). M7.x may refine. Documented in ADR-0015 §"Consequences"
+  §"Negative".
+- Multi-axis tuple-of-mixed-kind indexing (`a[i, :, [0, 2, 5]]`)
+  follows the per-axis chain on the leading axis only at M7.2;
+  full numpy-style multi-axis dispatch is M7.x.
 
 ## Non-goals
 

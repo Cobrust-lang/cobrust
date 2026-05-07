@@ -1,0 +1,82 @@
+# numpy L0 spec — M7.2 (per ADR-0015).
+#
+# Schema per ADR-0007 §1. One [function.<name>] per public-or-helper
+# entrypoint translated by the M7.2 cobrust-numpy build. Every entry
+# binds a Python qualified name to a behavior contract that the L1
+# translator is required to satisfy and the L0 differential harness
+# verifies.
+
+schema_version = 1
+library = "numpy"
+upstream_version = "2.0.2"
+oracle_module = "numpy"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+# ---- Indexing surface -----------------------------------------------------
+
+[function.slice_basic]
+qualname = "index_core.slice_basic"
+public = true
+signature = "slice_basic(a_data: list[float], a_shape: list[int], start: int | None, stop: int | None, step: int | None) -> tuple[list[float], list[int]]"
+py_compat = "strict"
+description = "Basic slicing on the first axis (`a[start:stop:step]`). Returns a view in numpy; M7.2 cobrust-numpy returns a view too via `Array::slice` per ADR-0015 §3."
+
+[function.single_index]
+qualname = "index_core.single_index"
+public = true
+signature = "single_index(a_data: list[float], a_shape: list[int], idx: int) -> tuple[list[float], list[int]]"
+py_compat = "strict"
+description = "Single-int indexing on the first axis (`a[i]`). Drops the first axis; keeps trailing axes. Negative-index aware. Out-of-bounds raises IndexError → cobrust returns OutOfBoundsIndex."
+
+[function.take]
+qualname = "index_core.take"
+public = true
+signature = "take(a_data: list[float], a_shape: list[int], indices: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "strict"
+description = "Integer-array indexing on the first axis (`a[[i0, i1, ...]]`). Always returns a copy per numpy's documented contract."
+
+[function.mask]
+qualname = "index_core.mask"
+public = true
+signature = "mask(a_data: list[float], a_shape: list[int], bool_data: list[bool], bool_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "strict"
+description = "Boolean-mask indexing (`a[a > 0]`). mask shape must match a's shape. Returns a 1-D copy of selected elements."
+
+[function.np_where]
+qualname = "index_core.np_where"
+public = true
+signature = "np_where(cond_data: list[bool], cond_shape: list[int], x_data: list[float], x_shape: list[int], y_data: list[float], y_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise selection (np.where(cond, x, y)). Broadcasts cond/x/y per ADR-0014 broadcasting rules. Always materialises (copy)."
+
+# ---- Helper functions in scope --------------------------------------------
+
+[function.normalize_single]
+qualname = "index_core.normalize_single"
+public = false
+signature = "normalize_single(idx: int, length: int) -> int"
+py_compat = "strict"
+description = "Normalise a negative single-int index to non-negative; raise IndexError on out-of-bounds."
+
+[function.resolve_slice]
+qualname = "index_core.resolve_slice"
+public = false
+signature = "resolve_slice(start: int | None, stop: int | None, step: int | None, length: int) -> tuple[int, int, int]"
+py_compat = "strict"
+description = "Resolve numpy-exact slice bounds. Clamps out-of-range bounds; raises ValueError on step=0."
+
+[function.slice_count]
+qualname = "index_core.slice_count"
+public = false
+signature = "slice_count(begin: int, end: int, step: int) -> int"
+py_compat = "strict"
+description = "Count elements produced by a normalised slice."
+
+# ---- Verification budget --------------------------------------------------
+
+[verification]
+seeds = [42, 1337, 0xDEADBEEF]
+fuzz_inputs_per_fn = 1024
+tolerance = "exact for int/bool/strict; rtol=1e-7 for float (per ADR-0015 acceptance gate; np.where carries rtol)"
