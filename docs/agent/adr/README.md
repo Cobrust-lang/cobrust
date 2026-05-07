@@ -43,3 +43,4 @@ same atomic commit as the change it justifies.
 | [0012](0012-m7-numpy-plan.md) | M7 numpy core — sub-milestone plan and backend strategy | accepted | 2026-04-30 |
 | [0013](0013-m7-0-ndarray-foundation.md) | M7.0 ndarray foundation — crate layout, dtype tier, ndarray backend pin, ownership model, differential strategy | accepted | 2026-04-30 |
 | [0014](0014-m7-1-ufuncs-broadcasting.md) | M7.1 universal functions, broadcasting, type promotion — dispatch model + numpy-compat semantics | accepted | 2026-04-30 |
+| [0015](0015-m7-2-indexing.md) | M7.2 indexing — view/copy taxonomy, ArrayView ownership, IndexError, np.where | accepted | 2026-04-30 |

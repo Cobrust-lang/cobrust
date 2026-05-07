@@ -826,3 +826,121 @@ auto-vectorised inner loop satisfies constitution sec.5.3.
 
 See [ADR-0014](../../agent/adr/0014-m7-1-ufuncs-broadcasting.md)
 for the load-bearing decisions.
+
+## numpy indexing (M7.2 — delivered)
+
+M7.2 lands the indexing surface — basic slicing, single-int,
+integer-array, boolean-mask, `np.where`, plus views — per
+ADR-0015. Closes the indexing piece of ADR-0012's M7 sub-milestone
+plan; reductions (M7.3) consume it.
+
+### M7.2 surface
+
+```rust
+// Closed indexing-kind taxonomy (no `dyn` per constitution §2.2).
+pub enum Index {
+    Single(i64),                 // a[i]; negative-index aware
+    Slice(SliceSpec),            // a[start:stop:step]
+    IntArray(Vec<i64>),          // a[[0, 2, 5]]; advanced -> copies
+    BoolMask(Array),             // a[a > 0]; advanced -> copies
+    NewAxis,                     // a[np.newaxis]
+}
+
+pub struct SliceSpec {
+    pub start: Option<i64>,
+    pub stop: Option<i64>,
+    pub step: Option<i64>,
+}
+
+// Views — closed enums per dtype (5 variants each); lifetime-encoded
+// ownership ties the view to the parent's borrow.
+pub enum ArrayView<'a>    { Int32(...), Int64(...), Float32(...), Float64(...), Bool(...) }
+pub enum ArrayViewMut<'a> { Int32(...), Int64(...), Float32(...), Float64(...), Bool(...) }
+
+impl Array {
+    // Basic slicing -> VIEW (does not copy).
+    pub fn slice(&self, spec: SliceSpec) -> Result<ArrayView<'_>, NumpyError>;
+    pub fn slice_mut(&mut self, spec: SliceSpec) -> Result<ArrayViewMut<'_>, NumpyError>;
+
+    // Single-int -> VIEW with one fewer axis.
+    pub fn index_single(&self, i: i64) -> Result<ArrayView<'_>, NumpyError>;
+
+    // Advanced indexing -> COPY (always materialises).
+    pub fn take(&self, indices: &[i64]) -> Result<Array, NumpyError>;
+    pub fn mask(&self, mask: &Array) -> Result<Array, NumpyError>;
+
+    // Multi-axis dispatcher; result always materialised.
+    pub fn index_get(&self, indices: &[Index]) -> Result<Array, NumpyError>;
+
+    // np.where convenience: cond.where_(x, y).
+    pub fn where_(&self, x: &Array, y: &Array) -> Result<Array, NumpyError>;
+}
+
+// Top-level np.where(cond, x, y) — broadcasts cond/x/y; always copies.
+pub fn np_where(cond: &Array, x: &Array, y: &Array) -> Result<Array, NumpyError>;
+pub fn index_get(arr: &Array, indices: &[Index]) -> Result<Array, NumpyError>;
+```
+
+### View-vs-copy contract (matches numpy)
+
+The most concrete example users encounter:
+
+- **`a[1:3]` returns a view.** `Array::slice(SliceSpec::range(1, 3))`
+  returns an `ArrayView<'a>` that aliases `a`'s storage. Mutating
+  through `slice_mut` propagates to `a` — the Rust borrow checker
+  ensures this is sound.
+- **`a[[0, 2]]` returns a copy.** `Array::take(&[0, 2])` returns an
+  owned `Array` with independent storage. Mutating the result leaves
+  `a` untouched.
+
+Both rules are tested in `tests/index_views_corpus.rs` with
+side-effect assertions.
+
+### M7.2 error variants (closed enum extension)
+
+`NumpyErrorKind` gains four variants per ADR-0015 §4:
+
+| Variant | Triggered by | numpy 2.0.2 behaviour |
+|---|---|---|
+| `IndexError` | umbrella for indexing errors not covered by more specific variants | `IndexError` |
+| `OutOfBoundsIndex` | single-int / int-array index outside `[-len, len)` | `IndexError` |
+| `BoolMaskShapeMismatch` | mask passed to `mask` has shape != self.shape() | `IndexError` |
+| `IndexDtypeNotInteger` | int-array dtype is not Int32/Int64; or `mask` arg dtype is not Bool | `IndexError` |
+
+Bound-checking semantics: outcome matches numpy (operation fails on
+out-of-bounds), shape of failure is Cobrust-native (`Result::Err`)
+per constitution sec.2.2.
+
+### M7.2 verification
+
+- L0 spec at `corpus/numpy/M7.2/spec.toml` + harness at
+  `corpus/numpy/M7.2/harness/h_index.py`.
+- L2.behavior:
+  - 55 well-typed indexing programs
+    (`tests/index_well_typed.rs`).
+  - 55 ill-typed indexing programs
+    (`tests/index_ill_typed.rs`).
+  - 14 view-vs-copy semantics tests
+    (`tests/index_views_corpus.rs`).
+  - 6 differential tests with >= 1024 fuzz inputs per indexing kind,
+    bit-identical for int/bool and `rtol=1e-7` for float
+    (`tests/index_differential.rs`).
+- L2.perf inherits ENFORCED from M7.1: `corpus/numpy/M7.2/perf.toml`
+  threshold = 0.5x; pipeline test
+  `index_pipeline_escalates_when_perf_always_fails` demonstrates
+  perf-fail -> repair-loop -> `EscalationExceeded`.
+- L3.pyo3: same as M7.1 (subprocess CPython numpy oracle).
+- L3.dependents: still deferred to M7.6+.
+
+### Out of scope (M7.x deferred)
+
+- Ellipsis indexing (`a[...]`) — M7.x.
+- Multi-axis tuple-of-mixed-kind indexing where some axes are views
+  and others copies — M7.2 always materialises in such cases; M7.x
+  refines.
+- Setitem (`a[1:3] = ...`) ergonomic API — `slice_mut` lands the
+  surface; M7.x adds the implicit-write API.
+- One-arg `np.where(cond)` returning indices — M7.x.
+
+See [ADR-0015](../../agent/adr/0015-m7-2-indexing.md)
+for the load-bearing decisions.

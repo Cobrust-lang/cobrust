@@ -15,6 +15,8 @@ fuzz_inputs_per_fn = 1024
 divergences = [
     "M7.1: integer overflow wraps silently (no RuntimeWarning); output matches numpy default behavior. See ADR-0014 sec.4.",
     "M7.1: integer div-by-zero returns Err(NumpyErrorKind::IntegerDivisionByZero) instead of raising Python ZeroDivisionError. Failure outcome matches numpy; failure shape is Cobrust-native per constitution sec.2.2.",
+    "M7.2: indexing errors return typed Err(NumpyErrorKind::{OutOfBoundsIndex|BoolMaskShapeMismatch|IndexDtypeNotInteger|IndexError}) instead of raising Python IndexError/ValueError. Outcome matches numpy; failure shape is Cobrust-native per constitution sec.2.2 + ADR-0015 sec.4.",
+    "M7.2: index_get materialises for any multi-axis case where one axis is advanced - divergence from numpy's per-axis policy. Documented in ADR-0015 sec.Consequences.Negative.",
 ]
 known_failures = []
 
@@ -30,12 +32,12 @@ crate_layout_version = 1
 
 [gates]
 l0_spec_emitted = true
-l1_files_emitted = 19
+l1_files_emitted = 27
 l2_build = "pass (cargo build --release zero warnings; clippy workspace --all-targets -D warnings green)"
-l2_behavior = "pass (M7.0: bytes-identical for int/bool, rtol=1e-12 for float; M7.1: bit-identical for int/bool, rtol=1e-7 for float, >= 1200 fuzz inputs per ufunc)"
-l2_perf = "pass (M7.0 informational + M7.1 ENFORCED at numerical-tier 0.5x floor per ADR-0010 sec.3 + ADR-0014 sec.5; report at target/cobrust-bench/numpy-M7.1/<commit>/; perf-fail escalation test ufunc_pipeline_escalates_when_perf_always_fails wired)"
+l2_behavior = "pass (M7.0: bytes-identical for int/bool, rtol=1e-12 for float; M7.1: bit-identical for int/bool, rtol=1e-7 for float, >= 1200 fuzz inputs per ufunc; M7.2: bit-identical for int/bool, rtol=1e-7 for float, >= 1024 fuzz inputs per indexing kind across slice/take/mask/single/where)"
+l2_perf = "pass (M7.0 informational + M7.1+M7.2 ENFORCED at numerical-tier 0.5x floor per ADR-0010 sec.3 + ADR-0014 sec.5 + ADR-0015; reports at target/cobrust-bench/numpy-M7.{1,2}/<commit>/; perf-fail escalation tests ufunc_pipeline_escalates_when_perf_always_fails + index_pipeline_escalates_when_perf_always_fails wired)"
 l3_pyo3_wrapper = "pass (tests/numpy_differential.rs subprocess CPython numpy oracle); --features pyo3 build path per ADR-0011"
-l3_downstream_dependents = "deferred to M7.6+ (numpy ecosystem too large for M7.0 + M7.1 per ADR-0013 + ADR-0014)"
+l3_downstream_dependents = "deferred to M7.6+ (numpy ecosystem too large for M7.0..M7.2 per ADR-0013 + ADR-0014 + ADR-0015)"
 
 [gates.dependents]
 covered = []
