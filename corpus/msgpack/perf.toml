@@ -1,0 +1,21 @@
+# Per-library performance gate override (per ADR-0008 §2 + ADR-0010 §3).
+#
+# msgpack is the M6 native-extension library. Constitution §4.2 default
+# is 0.8x; ADR-0010 §3 documents the relaxation to 0.7x for native-ext
+# tier (pure Rust against hand-tuned C is harder than against pure
+# Python). We do not relax pass_ratio below 1.0 — every public function
+# must clear the 0.7x bar. If any single function falls below, the
+# pipeline's L2.perf gate fails, repair loop fires, and a corrected
+# attempt is produced.
+
+threshold = 0.7
+pass_ratio = 1.0
+n_iters = 100
+n_inputs = 32
+
+# Notes:
+#   - Native-ext tier (per ADR-0010 §3): 0.7x floor.
+#   - The benchmark harness pairs each public function (`pack`,
+#     `unpack`) against the canonical CPython msgpack package via
+#     subprocess; bytes-identical output is the L2.behavior contract,
+#     speed is the L2.perf contract.

@@ -483,9 +483,9 @@ the first end-to-end exercise of the closed loop.
 |---|---|---|
 | croniter | Pass | 5 |
 | freezegun | Pass | 5 |
-| pandas | Deferred (M6) | — |
-| sqlalchemy | Deferred (M6) | — |
-| pendulum | Deferred (M6) | — |
+| pandas | Pass (M6 widening) | 3 |
+| sqlalchemy | Pass (M6 widening) | 3 |
+| pendulum | Skipped (tz out of scope; M7+ per ADR-0010 §5) | 0 |
 
 ### Verification
 
@@ -500,4 +500,81 @@ the first end-to-end exercise of the closed loop.
 
 See [ADR-0008](../../agent/adr/0008-l2-perf-and-repair-loop.md) and
 [ADR-0009](../../agent/adr/0009-downstream-validation.md) for the
+load-bearing decisions.
+
+## Translator M6 — native-extension translation
+
+The M6 milestone (constitution §7) closes the loop on libraries
+that use a Cython accelerator alongside a pure-Python fallback. The
+deliverables:
+
+- New module `mod:msgpack` (crate `cobrust-msgpack`) translating
+  `msgpack-python` 1.0.8 (17 pure-Python + 2 Cython-typed entrypoints).
+- Cython lexical shim at `crate::cython` exposing
+  `parse_cython(...)` + `CythonSource`, `CythonFunction`,
+  `CythonFunctionKind`, `CythonParam`, `CythonType`,
+  `CythonShimError`. Maps `cdef int` / `cdef inline` / `cpdef` to
+  Rust types per ADR-0010 §2.
+- `task = "translate_cython"` extends the synthetic provider's
+  `(task, function, attempt)` lookup key (M5 added attempt; M6 adds
+  task). Backward-compatible: M4 tomli + M5 dateutil specs
+  default `task = "translate"`.
+- `PerfVerifier` trait + `PerfVerdict` + `AcceptAllPerf` +
+  `translate_with_verifiers` extend the pipeline so L2.perf failure
+  routes through the same diagnostic + repair-loop path as
+  L2.behavior (per ADR-0010 §4). The msgpack canned table ships a
+  deliberately perf-broken `pack_uint` attempt-1 + a corrected
+  attempt-2; the integration test asserts the loop lands at
+  attempt-2 within the escalation budget.
+- dateutil L3 widened from 2/5 to 4/5 + 1 skipped per ADR-0010 §5
+  (pandas + sqlalchemy added; pendulum tz out of scope skip).
+- `--features pyo3` build path lit up for both `cobrust-dateutil`
+  and `cobrust-msgpack` per ADR-0011: the crate compiles to a
+  `cdylib` and exposes a `cobrust_msgpack` / `cobrust_dateutil`
+  Python module.
+
+### msgpack public surface
+
+```rust
+pub use cobrust_msgpack::{
+    pack, pack_to_vec, unpack, MsgValue, MsgError, MsgErrorKind,
+    pack_array, pack_bin, pack_float, pack_int, pack_map,
+    pack_str, pack_uint, pack_uint_cython,
+    unpack_array, unpack_bin, unpack_float, unpack_int,
+    unpack_map, unpack_one, unpack_str, unpack_uint,
+    unpack_uint_cython,
+};
+
+pub enum MsgValue {
+    Nil, Bool(bool), Int(i64), UInt(u64), Float(f64),
+    Str(String), Bin(Vec<u8>),
+    Array(Vec<MsgValue>),
+    Map(Vec<(String, MsgValue)>),
+}
+```
+
+### msgpack L3 dependents
+
+| Dependent | Status | Tests |
+|---|---|---|
+| redis-py | Pass | 4 |
+| msgpack-numpy | Pass | 3 |
+| pyspark | Deferred (M7+; needs JVM) | — |
+
+### Verification
+
+- L0 spec at `corpus/msgpack/spec.toml` + harness/.
+- L1 emission committed at `crates/cobrust-msgpack/src/parser.rs`.
+- L2.build green; L2.behavior bytes-identical fuzz green
+  (≥ 1000 inputs across 3 seeds; round-trip pack→unpack identity).
+- L2.perf at native-ext tier (0.7×) per ADR-0010 §3; report at
+  `target/cobrust-bench/msgpack/<commit>/report.json`.
+- L3.pyo3 differential gate via subprocess CPython `msgpack`.
+- L3.dependents 2/3 driven; pyspark deferred per ADR-0010.
+- `--features pyo3` build path tested by
+  `tests/msgpack_pyo3_compiles.rs` (`tests/dateutil_pyo3_compiles.rs`
+  for the dateutil widening).
+
+See [ADR-0010](../../agent/adr/0010-native-ext-translation.md) and
+[ADR-0011](../../agent/adr/0011-pyo3-build-path.md) for the
 load-bearing decisions.

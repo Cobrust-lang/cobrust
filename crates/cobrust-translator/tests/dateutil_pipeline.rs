@@ -137,19 +137,26 @@ async fn dateutil_pipeline_repair_loop_recovers_on_attempt_2() {
         .path()
         .join("out/dateutil/diagnostics/parse_iso__2.toml");
     assert!(diag.exists(), "diagnostic blob not persisted at {diag:?}");
-    // Manifest validates and records the dependents split per ADR-0009.
+    // Manifest validates and records the dependents split per ADR-0009/0010.
+    // M6 widened from 2/5 to 4/5 covered + 1/5 skipped (pendulum tz).
     result.manifest.validate().unwrap();
     assert_eq!(
         result.manifest.gates.dependents.covered,
-        vec!["croniter".to_string(), "freezegun".to_string()]
+        vec![
+            "croniter".to_string(),
+            "freezegun".to_string(),
+            "pandas".to_string(),
+            "sqlalchemy".to_string(),
+        ]
     );
-    assert_eq!(result.manifest.gates.dependents.deferred.len(), 3);
+    assert_eq!(result.manifest.gates.dependents.skipped, vec!["pendulum"]);
+    assert_eq!(result.manifest.gates.dependents.deferred.len(), 0);
     assert!(
         result
             .manifest
             .gates
             .l3_downstream_dependents
-            .contains("ADR-0009")
+            .contains("ADR-0010")
     );
 }
 

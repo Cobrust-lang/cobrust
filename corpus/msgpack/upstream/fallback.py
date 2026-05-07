@@ -1,0 +1,369 @@
+"""msgpack-python fallback.py — pure-Python implementation.
+
+Vendored subset of msgpack-python 1.0.8 (Apache-2.0; license-compatible
+per ADR-0001). Scope: nil/bool/int/float/str/bytes/array/map. See
+corpus/msgpack/README.md §"Scope window".
+
+This file is the L0 oracle: every input that pack() accepts must
+produce the same bytes the Cython _packer.pyx form produces, and vice
+versa. The L2.behavior fuzz harness asserts this invariant on ≥ 1000
+random inputs per public function (constitution §4.2 floor).
+"""
+
+# msgpack format prefix bytes — verbatim from the spec.
+# Source: https://github.com/msgpack/msgpack/blob/master/spec.md
+
+NIL = 0xc0
+FALSE = 0xc2
+TRUE = 0xc3
+BIN_8 = 0xc4
+BIN_16 = 0xc5
+BIN_32 = 0xc6
+FLOAT_32 = 0xca
+FLOAT_64 = 0xcb
+UINT_8 = 0xcc
+UINT_16 = 0xcd
+UINT_32 = 0xce
+UINT_64 = 0xcf
+INT_8 = 0xd0
+INT_16 = 0xd1
+INT_32 = 0xd2
+INT_64 = 0xd3
+STR_8 = 0xd9
+STR_16 = 0xda
+STR_32 = 0xdb
+ARRAY_16 = 0xdc
+ARRAY_32 = 0xdd
+MAP_16 = 0xde
+MAP_32 = 0xdf
+
+POSITIVE_FIXINT_MAX = 0x7f
+FIXMAP_PREFIX = 0x80
+FIXARRAY_PREFIX = 0x90
+FIXSTR_PREFIX = 0xa0
+
+
+class PackException(Exception):
+    """Raised on pack input that exceeds the M6 scope (e.g. ext types)."""
+
+
+class UnpackException(Exception):
+    """Raised on bytes that don't form a valid msgpack message."""
+
+
+def pack_uint(value, out):
+    """Pack a non-negative integer into out (a bytearray)."""
+    if value < 0:
+        raise PackException("pack_uint requires non-negative value")
+    if value <= 0x7f:
+        out.append(value)
+    elif value <= 0xff:
+        out.append(UINT_8)
+        out.append(value)
+    elif value <= 0xffff:
+        out.append(UINT_16)
+        out.append((value >> 8) & 0xff)
+        out.append(value & 0xff)
+    elif value <= 0xffffffff:
+        out.append(UINT_32)
+        for shift in (24, 16, 8, 0):
+            out.append((value >> shift) & 0xff)
+    else:
+        out.append(UINT_64)
+        for shift in (56, 48, 40, 32, 24, 16, 8, 0):
+            out.append((value >> shift) & 0xff)
+
+
+def pack_int(value, out):
+    """Pack a (possibly negative) integer into out."""
+    if value >= 0:
+        return pack_uint(value, out)
+    # Negative path
+    if value >= -0x20:
+        # Negative fixint
+        out.append(0xe0 | (value & 0x1f))
+    elif value >= -0x80:
+        out.append(INT_8)
+        out.append(value & 0xff)
+    elif value >= -0x8000:
+        out.append(INT_16)
+        out.append((value >> 8) & 0xff)
+        out.append(value & 0xff)
+    elif value >= -0x80000000:
+        out.append(INT_32)
+        for shift in (24, 16, 8, 0):
+            out.append((value >> shift) & 0xff)
+    else:
+        out.append(INT_64)
+        for shift in (56, 48, 40, 32, 24, 16, 8, 0):
+            out.append((value >> shift) & 0xff)
+
+
+def pack_float(value, out):
+    """Pack a 64-bit float (msgpack uses big-endian IEEE 754)."""
+    import struct
+
+    out.append(FLOAT_64)
+    out.extend(struct.pack(">d", float(value)))
+
+
+def pack_str(value, out):
+    """Pack a Python str as msgpack str (utf-8 bytes)."""
+    body = value.encode("utf-8")
+    n = len(body)
+    if n <= 0x1f:
+        out.append(FIXSTR_PREFIX | n)
+    elif n <= 0xff:
+        out.append(STR_8)
+        out.append(n)
+    elif n <= 0xffff:
+        out.append(STR_16)
+        out.append((n >> 8) & 0xff)
+        out.append(n & 0xff)
+    else:
+        out.append(STR_32)
+        for shift in (24, 16, 8, 0):
+            out.append((n >> shift) & 0xff)
+    out.extend(body)
+
+
+def pack_bin(value, out):
+    """Pack Python bytes as msgpack bin."""
+    n = len(value)
+    if n <= 0xff:
+        out.append(BIN_8)
+        out.append(n)
+    elif n <= 0xffff:
+        out.append(BIN_16)
+        out.append((n >> 8) & 0xff)
+        out.append(n & 0xff)
+    else:
+        out.append(BIN_32)
+        for shift in (24, 16, 8, 0):
+            out.append((n >> shift) & 0xff)
+    out.extend(value)
+
+
+def pack_array(value, out):
+    """Pack a list/tuple as msgpack array, recursing on each element."""
+    n = len(value)
+    if n <= 0x0f:
+        out.append(FIXARRAY_PREFIX | n)
+    elif n <= 0xffff:
+        out.append(ARRAY_16)
+        out.append((n >> 8) & 0xff)
+        out.append(n & 0xff)
+    else:
+        out.append(ARRAY_32)
+        for shift in (24, 16, 8, 0):
+            out.append((n >> shift) & 0xff)
+    for elem in value:
+        pack(elem, out)
+
+
+def pack_map(value, out):
+    """Pack a dict as msgpack map (str keys only in M6 scope)."""
+    n = len(value)
+    if n <= 0x0f:
+        out.append(FIXMAP_PREFIX | n)
+    elif n <= 0xffff:
+        out.append(MAP_16)
+        out.append((n >> 8) & 0xff)
+        out.append(n & 0xff)
+    else:
+        out.append(MAP_32)
+        for shift in (24, 16, 8, 0):
+            out.append((n >> shift) & 0xff)
+    # Iteration order: sorted str keys for determinism (M6 contract).
+    for k in sorted(value.keys()):
+        if not isinstance(k, str):
+            raise PackException("M6 only supports str keys")
+        pack_str(k, out)
+        pack(value[k], out)
+
+
+def pack(value, out=None):
+    """Top-level pack dispatcher. Returns bytes when out is None."""
+    if out is None:
+        buffer = bytearray()
+        pack(value, buffer)
+        return bytes(buffer)
+    if value is None:
+        out.append(NIL)
+    elif value is True:
+        out.append(TRUE)
+    elif value is False:
+        out.append(FALSE)
+    elif isinstance(value, int):
+        pack_int(value, out)
+    elif isinstance(value, float):
+        pack_float(value, out)
+    elif isinstance(value, str):
+        pack_str(value, out)
+    elif isinstance(value, (bytes, bytearray)):
+        pack_bin(value, out)
+    elif isinstance(value, (list, tuple)):
+        pack_array(value, out)
+    elif isinstance(value, dict):
+        pack_map(value, out)
+    else:
+        raise PackException("M6 scope: unsupported type " + type(value).__name__)
+    return None
+
+
+# -----------------------------------------------------------------------
+# Unpack
+# -----------------------------------------------------------------------
+
+
+def unpack_uint(data, pos, n_bytes):
+    """Read n_bytes of big-endian unsigned int from data starting at pos."""
+    if pos + n_bytes > len(data):
+        raise UnpackException("truncated uint")
+    value = 0
+    for i in range(n_bytes):
+        value = (value << 8) | data[pos + i]
+    return value, pos + n_bytes
+
+
+def unpack_int(data, pos, n_bytes):
+    """Read n_bytes of big-endian signed int from data starting at pos."""
+    value, new_pos = unpack_uint(data, pos, n_bytes)
+    sign_bit = 1 << (8 * n_bytes - 1)
+    if value & sign_bit:
+        value -= 1 << (8 * n_bytes)
+    return value, new_pos
+
+
+def unpack_float(data, pos, n_bytes):
+    """Read 4 or 8 bytes of big-endian IEEE 754 float."""
+    import struct
+
+    if pos + n_bytes > len(data):
+        raise UnpackException("truncated float")
+    fmt = ">f" if n_bytes == 4 else ">d"
+    (value,) = struct.unpack(fmt, bytes(data[pos:pos + n_bytes]))
+    return value, pos + n_bytes
+
+
+def unpack_str(data, pos, length):
+    """Read `length` bytes of utf-8 string."""
+    if pos + length > len(data):
+        raise UnpackException("truncated str")
+    body = bytes(data[pos:pos + length])
+    return body.decode("utf-8"), pos + length
+
+
+def unpack_bin(data, pos, length):
+    """Read `length` bytes of binary."""
+    if pos + length > len(data):
+        raise UnpackException("truncated bin")
+    return bytes(data[pos:pos + length]), pos + length
+
+
+def unpack_array(data, pos, length):
+    """Read `length` msgpack values into a list."""
+    out = []
+    cursor = pos
+    for _ in range(length):
+        value, cursor = _unpack_one(data, cursor)
+        out.append(value)
+    return out, cursor
+
+
+def unpack_map(data, pos, length):
+    """Read `length` (key, value) pairs into a dict."""
+    out = {}
+    cursor = pos
+    for _ in range(length):
+        key, cursor = _unpack_one(data, cursor)
+        value, cursor = _unpack_one(data, cursor)
+        out[key] = value
+    return out, cursor
+
+
+def _unpack_one(data, pos):
+    """Dispatch one msgpack value starting at pos. Returns (value, new_pos)."""
+    if pos >= len(data):
+        raise UnpackException("EOF before value")
+    marker = data[pos]
+    if marker <= 0x7f:
+        # Positive fixint
+        return marker, pos + 1
+    if marker >= 0xe0:
+        # Negative fixint
+        return marker - 0x100, pos + 1
+    if marker == NIL:
+        return None, pos + 1
+    if marker == TRUE:
+        return True, pos + 1
+    if marker == FALSE:
+        return False, pos + 1
+    if marker == UINT_8:
+        return unpack_uint(data, pos + 1, 1)
+    if marker == UINT_16:
+        return unpack_uint(data, pos + 1, 2)
+    if marker == UINT_32:
+        return unpack_uint(data, pos + 1, 4)
+    if marker == UINT_64:
+        return unpack_uint(data, pos + 1, 8)
+    if marker == INT_8:
+        return unpack_int(data, pos + 1, 1)
+    if marker == INT_16:
+        return unpack_int(data, pos + 1, 2)
+    if marker == INT_32:
+        return unpack_int(data, pos + 1, 4)
+    if marker == INT_64:
+        return unpack_int(data, pos + 1, 8)
+    if marker == FLOAT_32:
+        return unpack_float(data, pos + 1, 4)
+    if marker == FLOAT_64:
+        return unpack_float(data, pos + 1, 8)
+    if FIXSTR_PREFIX <= marker < FIXSTR_PREFIX | 0x20:
+        length = marker & 0x1f
+        return unpack_str(data, pos + 1, length)
+    if marker == STR_8:
+        length, p2 = unpack_uint(data, pos + 1, 1)
+        return unpack_str(data, p2, length)
+    if marker == STR_16:
+        length, p2 = unpack_uint(data, pos + 1, 2)
+        return unpack_str(data, p2, length)
+    if marker == STR_32:
+        length, p2 = unpack_uint(data, pos + 1, 4)
+        return unpack_str(data, p2, length)
+    if marker == BIN_8:
+        length, p2 = unpack_uint(data, pos + 1, 1)
+        return unpack_bin(data, p2, length)
+    if marker == BIN_16:
+        length, p2 = unpack_uint(data, pos + 1, 2)
+        return unpack_bin(data, p2, length)
+    if marker == BIN_32:
+        length, p2 = unpack_uint(data, pos + 1, 4)
+        return unpack_bin(data, p2, length)
+    if FIXARRAY_PREFIX <= marker < FIXMAP_PREFIX:
+        length = marker & 0x0f
+        return unpack_array(data, pos + 1, length)
+    if marker == ARRAY_16:
+        length, p2 = unpack_uint(data, pos + 1, 2)
+        return unpack_array(data, p2, length)
+    if marker == ARRAY_32:
+        length, p2 = unpack_uint(data, pos + 1, 4)
+        return unpack_array(data, p2, length)
+    if FIXMAP_PREFIX <= marker < FIXARRAY_PREFIX:
+        length = marker & 0x0f
+        return unpack_map(data, pos + 1, length)
+    if marker == MAP_16:
+        length, p2 = unpack_uint(data, pos + 1, 2)
+        return unpack_map(data, p2, length)
+    if marker == MAP_32:
+        length, p2 = unpack_uint(data, pos + 1, 4)
+        return unpack_map(data, p2, length)
+    raise UnpackException("M6 scope: unknown marker 0x%02x" % marker)
+
+
+def unpack(data):
+    """Top-level unpack: parse data as one msgpack value, return Python value."""
+    value, pos = _unpack_one(data, 0)
+    if pos != len(data):
+        raise UnpackException("trailing bytes after value")
+    return value

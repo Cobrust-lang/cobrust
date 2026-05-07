@@ -1,0 +1,162 @@
+# msgpack L0 spec — M6
+#
+# Schema per ADR-0007 §1, extended for ADR-0010's native-extension
+# methodology. One [function.<name>] table per public-or-helper
+# function in scope. Each entry binds a Python qualified name to a
+# behavior contract that the L1 translator is required to satisfy
+# and the L0 differential harness verifies.
+
+schema_version = 1
+library = "msgpack"
+upstream_version = "1.0.8"
+oracle_module = "msgpack"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+# ---- Public surface (pure-Python) -----------------------------------------
+
+[function.pack]
+qualname = "msgpack_core.pack"
+public = true
+signature = "pack(obj) -> bytes"
+py_compat = "strict"
+description = "Top-level pack: dispatch on Python type and emit the msgpack byte sequence per the M6 value scope (nil/bool/int/float/str/bytes/array/map). Bytes-identical with both fallback.py and the Cython _packer.pyx for every M6-scope input."
+
+[function.unpack]
+qualname = "msgpack_core.unpack"
+public = true
+signature = "unpack(data: bytes) -> object"
+py_compat = "strict"
+description = "Top-level unpack: parse `data` as one msgpack value. Raises UnpackException on trailing bytes. Bytes-identical round-trip with pack() per ADR-0010."
+
+# ---- Helper functions in scope (pure-Python) ------------------------------
+
+[function.pack_uint]
+qualname = "msgpack_core.pack_uint"
+public = false
+signature = "pack_uint(value: int, out: bytearray) -> None"
+py_compat = "strict"
+description = "Pack a non-negative integer using the smallest fitting msgpack uint marker (positive fixint / uint8 / uint16 / uint32 / uint64)."
+
+[function.pack_int]
+qualname = "msgpack_core.pack_int"
+public = false
+signature = "pack_int(value: int, out: bytearray) -> None"
+py_compat = "strict"
+description = "Pack any signed integer; defers to pack_uint for non-negatives, otherwise picks negative fixint / int8 / int16 / int32 / int64."
+
+[function.pack_float]
+qualname = "msgpack_core.pack_float"
+public = false
+signature = "pack_float(value: float, out: bytearray) -> None"
+py_compat = "strict"
+description = "Pack a 64-bit big-endian IEEE 754 float (FLOAT_64 marker)."
+
+[function.pack_str]
+qualname = "msgpack_core.pack_str"
+public = false
+signature = "pack_str(value: str, out: bytearray) -> None"
+py_compat = "strict"
+description = "Encode utf-8 and pack with fixstr / str8 / str16 / str32 markers."
+
+[function.pack_bin]
+qualname = "msgpack_core.pack_bin"
+public = false
+signature = "pack_bin(value: bytes, out: bytearray) -> None"
+py_compat = "strict"
+description = "Pack Python bytes with bin8 / bin16 / bin32 markers."
+
+[function.pack_array]
+qualname = "msgpack_core.pack_array"
+public = false
+signature = "pack_array(value: list, out: bytearray) -> None"
+py_compat = "strict"
+description = "Pack a list/tuple recursively as a msgpack array; M6 supports fixarray / array16 / array32."
+
+[function.pack_map]
+qualname = "msgpack_core.pack_map"
+public = false
+signature = "pack_map(value: dict, out: bytearray) -> None"
+py_compat = "strict"
+description = "Pack a dict (str keys only at M6) with sorted-key iteration so emission is deterministic."
+
+[function.unpack_uint]
+qualname = "msgpack_core.unpack_uint"
+public = false
+signature = "unpack_uint(data: bytes, pos: int, n_bytes: int) -> tuple[int, int]"
+py_compat = "strict"
+description = "Read n_bytes of big-endian unsigned int starting at pos; returns (value, new_pos)."
+
+[function.unpack_int]
+qualname = "msgpack_core.unpack_int"
+public = false
+signature = "unpack_int(data: bytes, pos: int, n_bytes: int) -> tuple[int, int]"
+py_compat = "strict"
+description = "Read n_bytes of big-endian signed int (two's complement); returns (value, new_pos)."
+
+[function.unpack_float]
+qualname = "msgpack_core.unpack_float"
+public = false
+signature = "unpack_float(data: bytes, pos: int, n_bytes: int) -> tuple[float, int]"
+py_compat = "strict"
+description = "Read 4 or 8 bytes of big-endian IEEE 754 float; returns (value, new_pos)."
+
+[function.unpack_str]
+qualname = "msgpack_core.unpack_str"
+public = false
+signature = "unpack_str(data: bytes, pos: int, length: int) -> tuple[str, int]"
+py_compat = "strict"
+description = "Read `length` bytes of utf-8 and decode."
+
+[function.unpack_bin]
+qualname = "msgpack_core.unpack_bin"
+public = false
+signature = "unpack_bin(data: bytes, pos: int, length: int) -> tuple[bytes, int]"
+py_compat = "strict"
+description = "Read `length` bytes of binary."
+
+[function.unpack_array]
+qualname = "msgpack_core.unpack_array"
+public = false
+signature = "unpack_array(data: bytes, pos: int, length: int) -> tuple[list, int]"
+py_compat = "strict"
+description = "Read `length` msgpack values and accumulate into a list."
+
+[function.unpack_map]
+qualname = "msgpack_core.unpack_map"
+public = false
+signature = "unpack_map(data: bytes, pos: int, length: int) -> tuple[dict, int]"
+py_compat = "strict"
+description = "Read `length` (key, value) pairs and accumulate into a dict."
+
+[function.unpack_one]
+qualname = "msgpack_core._unpack_one"
+public = false
+signature = "_unpack_one(data: bytes, pos: int) -> tuple[object, int]"
+py_compat = "strict"
+description = "Dispatch one msgpack value starting at pos; returns (value, new_pos)."
+
+# ---- Cython-typed entrypoints (translated via the M6 Cython shim) ---------
+
+[function.pack_uint_cython]
+qualname = "_packer.pack_uint_cython"
+public = false
+signature = "pack_uint_cython(value: u64, out: bytearray) -> None"
+py_compat = "strict"
+description = "Cython-typed pack_uint: takes an `unsigned long` (Rust u64) directly, avoiding the dynamic-int dispatch of the pure-Python form. Emits the same bytes as pack_uint."
+task = "translate_cython"
+
+[function.unpack_uint_cython]
+qualname = "_unpacker.unpack_uint_cython"
+public = false
+signature = "unpack_uint_cython(data: bytes, pos: usize, n_bytes: i32) -> u64"
+py_compat = "strict"
+description = "Cython-typed unpack_uint: returns just the value (not a tuple), for use in tight inner loops where the new position is reconstructed externally."
+task = "translate_cython"
+
+# ---- Verification budget --------------------------------------------------
+
+[verification]
+seeds = [42, 1337, 0xDEADBEEF]
+fuzz_inputs_per_fn = 1024
+tolerance = "exact"

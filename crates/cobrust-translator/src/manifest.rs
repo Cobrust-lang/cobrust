@@ -98,6 +98,16 @@ pub struct DependentsSection {
     /// One-line ADR-anchored reason for the deferral.
     #[serde(default)]
     pub deferred_reason: String,
+    /// M6 (per ADR-0010 §5): dependent libraries whose tests ran but
+    /// resolved to `Skipped { reason }` because the exercised API is
+    /// out of the current milestone's scope (e.g. dateutil's `tz`
+    /// module under pendulum). Distinct from `deferred` (those didn't
+    /// run at all). Defaults to empty for M4/M5 manifests.
+    #[serde(default)]
+    pub skipped: Vec<String>,
+    /// M6 (per ADR-0010 §5): one-line ADR-anchored reason for the skip.
+    #[serde(default)]
+    pub skipped_reason: String,
 }
 
 impl ProvenanceManifest {
@@ -258,12 +268,43 @@ mod tests {
             covered: vec!["croniter".into(), "freezegun".into()],
             deferred: vec!["pandas".into(), "sqlalchemy".into(), "pendulum".into()],
             deferred_reason: "M5 budget; M6 widens per ADR-0009".into(),
+            skipped: vec![],
+            skipped_reason: String::new(),
         };
         let s = m.to_toml().unwrap();
         let read_back: ProvenanceManifest = toml::from_str(&s).unwrap();
         assert_eq!(m, read_back);
         assert_eq!(read_back.gates.dependents.covered.len(), 2);
         assert_eq!(read_back.gates.dependents.deferred.len(), 3);
+    }
+
+    #[test]
+    fn dependents_section_round_trips_with_skipped() {
+        // M6 — pendulum is skipped because tz module is out of scope.
+        let mut m = sample();
+        m.gates.dependents = DependentsSection {
+            covered: vec![
+                "croniter".into(),
+                "freezegun".into(),
+                "pandas".into(),
+                "sqlalchemy".into(),
+            ],
+            deferred: vec![],
+            deferred_reason: String::new(),
+            skipped: vec!["pendulum".into()],
+            skipped_reason: "tz module out of M5/M6 scope per ADR-0010 §5".into(),
+        };
+        let s = m.to_toml().unwrap();
+        let read_back: ProvenanceManifest = toml::from_str(&s).unwrap();
+        assert_eq!(m, read_back);
+        assert_eq!(read_back.gates.dependents.skipped, vec!["pendulum"]);
+        assert!(
+            read_back
+                .gates
+                .dependents
+                .skipped_reason
+                .contains("ADR-0010")
+        );
     }
 
     #[test]
