@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: 1f34acd
+last_verified_commit: bcff3c3
 ---
 
 # Architecture Decision Records

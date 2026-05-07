@@ -4,7 +4,7 @@ adr_id: 0015
 title: M7.2 indexing — view/copy taxonomy, ArrayView ownership, IndexError, np.where
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: bcff3c3
 supersedes: []
 superseded_by: []
 ---
