@@ -4,7 +4,7 @@ adr_id: 0017
 title: M7.4 linalg subset — ops surface, backend strategy, error semantics, rtol gate
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: e7aff1de92cd5e6251e452721f0b4a83f173d102
 supersedes: []
 superseded_by: []
 ---
