@@ -13,7 +13,7 @@
 
 ## 当前状态
 
-我们在 **M0**。当你看到这份文档时，仓库骨架已经搭好——`cargo build` 跑通、三棵文档树齐活、ADR-0001 已落地。
+**M0..M4 已交付。** 仓库骨架已就位；词法/语法/AST（M1）、HIR + 双向类型检查器（M2）、provider-agnostic LLM Router（M3）均已上线；**M4** 端到端跑通 L0+L1 翻译流水线，目标 `tomli`，由 27+5 用例对照 CPython `tomllib` 差分 + 1024 个 panic-free 模糊输入构成验收 gate。生成的 `cobrust-tomli` crate 已提交以保障 gate 稳定。
 
 ## 开发纪律（适用于所有里程碑）
 

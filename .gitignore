@@ -4,6 +4,9 @@
 
 # Cobrust workspace artifacts
 /.cobrust
+# Translator integration tests may write transient .cobrust under any
+# subdirectory (cache + ledger). Ignore everywhere.
+**/.cobrust
 *.log
 
 # OS / editor noise

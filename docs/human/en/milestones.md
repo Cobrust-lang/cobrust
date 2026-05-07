@@ -13,7 +13,7 @@
 
 ## Current status
 
-We are at **M0**. By the time you read this, the repo skeleton is in place — `cargo build` works, all three doc trees exist, ADR-0001 has landed.
+**M0..M4 delivered.** The repo skeleton is in place; the lexer/parser/AST (M1), HIR + bidirectional type checker (M2), and provider-agnostic LLM Router (M3) all ship; **M4** lands the L0+L1 translator pipeline end-to-end against `tomli`, gated by a 27+5-case differential against CPython `tomllib` and 1024 panic-free fuzzed inputs. The generated `cobrust-tomli` crate is committed for gate stability.
 
 ## Engineering discipline (applies to all milestones)
 

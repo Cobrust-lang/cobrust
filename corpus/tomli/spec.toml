@@ -1,0 +1,118 @@
+# tomli L0 spec — M4
+#
+# Schema per ADR-0007 §1 ("L0 spec format"). One [function.<name>]
+# table per public-or-helper function in scope. Each entry binds a
+# Python qualified name to a behavior contract that the L1 translator
+# is required to satisfy and the L0 differential harness verifies.
+
+schema_version = 1
+library = "tomli"
+upstream_version = "2.0.1"
+oracle_module = "tomllib"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+# ---- Public surface ---------------------------------------------------------
+
+[function.loads]
+qualname = "tomli_loads.loads"
+public = true
+signature = "loads(src: str) -> dict"
+py_compat = "strict"
+description = "Parse a TOML string into a dict per the M4 scope window."
+exemplars = [
+    { input = "",                         output = {} },
+    { input = "x = 1\n",                  output = { x = 1 } },
+    { input = "[a]\nx = 1\n",             output = { a = { x = 1 } } },
+]
+errors_on = [
+    "x = \"abc\n",        # unterminated string
+    "= 1\n",              # bare value
+    "x = [1, 2\n",        # unclosed array
+]
+
+# ---- Helper functions in scope ---------------------------------------------
+
+[function.skip_whitespace]
+qualname = "tomli_loads._skip_whitespace"
+public = false
+signature = "_skip_whitespace(state: _State) -> None"
+py_compat = "strict"
+description = "Advance past spaces, tabs, CR/LF, and # line comments."
+
+[function.parse_basic_string]
+qualname = "tomli_loads._parse_basic_string"
+public = false
+signature = "_parse_basic_string(state: _State) -> str"
+py_compat = "strict"
+description = "Parse \"...\" with backslash escapes \\n \\t \\r \\\\ \\\" only."
+
+[function.parse_literal_string]
+qualname = "tomli_loads._parse_literal_string"
+public = false
+signature = "_parse_literal_string(state: _State) -> str"
+py_compat = "strict"
+description = "Parse '...' with no escapes."
+
+[function.parse_int]
+qualname = "tomli_loads._parse_int"
+public = false
+signature = "_parse_int(state: _State) -> int"
+py_compat = "strict"
+description = "Parse decimal int with optional + or - sign."
+
+[function.parse_bool]
+qualname = "tomli_loads._parse_bool"
+public = false
+signature = "_parse_bool(state: _State) -> bool"
+py_compat = "strict"
+description = "Parse the literal 'true' or 'false'."
+
+[function.parse_value]
+qualname = "tomli_loads._parse_value"
+public = false
+signature = "_parse_value(state: _State) -> Any"
+py_compat = "strict"
+description = "Dispatch on first non-whitespace char to a value parser."
+
+[function.parse_array]
+qualname = "tomli_loads._parse_array"
+public = false
+signature = "_parse_array(state: _State) -> list"
+py_compat = "strict"
+description = "Parse [v1, v2, ...] with optional trailing comma."
+
+[function.parse_key]
+qualname = "tomli_loads._parse_key"
+public = false
+signature = "_parse_key(state: _State) -> str"
+py_compat = "strict"
+description = "Parse a bare key (a-zA-Z0-9_-)."
+
+[function.parse_inline_table]
+qualname = "tomli_loads._parse_inline_table"
+public = false
+signature = "_parse_inline_table(state: _State) -> dict"
+py_compat = "strict"
+description = "Parse { k1 = v1, k2 = v2 }; trailing comma rejected per TOML 1.0."
+
+[function.parse_table_header]
+qualname = "tomli_loads._parse_table_header"
+public = false
+signature = "_parse_table_header(state: _State) -> list[str]"
+py_compat = "strict"
+description = "Parse [a.b.c] and return ['a', 'b', 'c']."
+
+[function.parse_kv]
+qualname = "tomli_loads._parse_kv"
+public = false
+signature = "_parse_kv(state: _State, dest: dict) -> None"
+py_compat = "strict"
+description = "Parse `key = value` and write into dest."
+
+# ---- Verification budget ---------------------------------------------------
+
+[verification]
+seeds = [42, 1337, 0xDEADBEEF]
+fuzz_inputs_per_fn = 1024     # M4 default; per-fn override allowed
+tolerance = "exact"           # all functions are py_compat=strict

@@ -264,6 +264,123 @@ preferred = ["anthropic_official:claude-opus-4-7", "deepseek:deepseek-v3"]
 - **Not** a long-running agent loop driver (translation subsystem owns that)
 - **Not** a prompt template store; templates live next to the consumer
 
+## Translator (M4 — delivered)
+
+`cobrust-translator` is the orchestrator for the AI translation
+subsystem. M4 ships the L0 (spec extraction) + L1 (translation)
+pipeline end-to-end against the `tomli` library, with synthetic-LLM
+mode as the default gate path. Real-LLM mode is reachable behind the
+`real-llm` Cargo feature for M5+ smoke-testing.
+
+### Worked example
+
+```bash
+# Regenerate the cobrust-tomli crate from the corpus.
+COBRUST_REGENERATE_TOMLI=1 cargo test \
+    -p cobrust-translator --test tomli_pipeline \
+    pipeline_regenerates_cobrust_tomli_when_env_set
+```
+
+The pipeline reads:
+
+- `corpus/tomli/upstream/tomli_loads.py` — the vendored Python source
+- `corpus/tomli/spec.toml` — the L0 behavior contract
+- `corpus/tomli/canned_llm_responses.toml` — the synthetic-mode response table
+
+…and writes:
+
+- `crates/cobrust-tomli/Cargo.toml`
+- `crates/cobrust-tomli/src/{lib.rs, parser.rs}` — every file carries a provenance header
+- `crates/cobrust-tomli/PROVENANCE.toml` — the manifest
+- `crates/cobrust-tomli/python/{tomli_init.py, setup.py}` — PyO3-shaped wrapper scaffolding
+- `crates/cobrust-tomli/tests/upstream_tests/test_loads.py` — verbatim copy of the upstream tests
+
+### Public API
+
+- `translate(library: &PyLibrary, cfg: &TranslatorConfig) -> Result<TranslatedCrate, TranslatorError>` — async entrypoint
+- `PyLibrary` — describes one library to translate (paths, version, seeds)
+- `TranslatorConfig` — runtime knobs: router, out_dir, oracle, escalation_threshold, synthetic_only flag
+- `TranslatedCrate` — outcome: `{ manifest: ProvenanceManifest, crate_dir, pyo3_wrapper_dir, functions: Vec<FunctionTranslation> }`
+- `TranslatorError` — taxonomy: `SpecExtraction`, `Translation { function, message }`, `BuildGate`, `BehaviorGate`, `DownstreamGate`, `SyntheticMiss { task, function }`, `Io`, `Router`, `Manifest`, `Config`, `Decode`
+- `SyntheticProvider` — `LlmProvider` impl backed by canned TOML responses keyed by `(task, function, source_sha16)`
+- `deterministic_id(source_sha256_hex, toolchain, router_decision_ids)` — `blake3:<hex>` reproducibility token
+
+### Synthetic-LLM mode contract
+
+The synthetic provider serves pre-recorded responses from
+`corpus/<lib>/canned_llm_responses.toml`, keyed by `(task, function)`
+with a `source_sha16` staleness check. The translator stamps every
+prompt with a stable header so the synthetic provider can route the
+request without parsing the body:
+
+```text
+cobrust-translator/v1
+task: <task>
+function: <function>
+source-sha256: <16-hex>
+---
+<prompt body>
+```
+
+Lookup outcomes:
+
+- **Match** — return the canned `response_text`.
+- **No entry** — `LlmError::Provider { code: "synthetic-miss" }`. Permanent (caller must add or switch to real-LLM).
+- **`source_sha16` mismatch** — `LlmError::Provider { code: "synthetic-stale" }`. Permanent (curator must re-record).
+
+This is the constitution §2.4 promise ("no silent translations,
+ever") made enforceable.
+
+### Provenance manifest
+
+Every translation produces `PROVENANCE.toml` next to the generated
+crate's `Cargo.toml`. Top-level sections:
+
+- `[source]` — library, version, sha256 (full 64-hex), file_count
+- `[oracle]` — runtime, runtime_version, oracle_module
+- `[verification]` — seeds, fuzz_inputs_per_fn, divergences, known_failures
+- `[router]` — strategy (`synthetic` / `real-llm`), models_used, ledger_entries
+- `[build]` — toolchain, deterministic_id (`blake3:<hex>`), crate_layout_version
+- `[gates]` — l0_spec_emitted, l1_files_emitted, l2_build, l2_behavior, l2_perf, l3_pyo3_wrapper, l3_downstream_dependents
+
+`build.deterministic_id = blake3(source_sha256_hex || "\n" || toolchain || "\n" || sorted_join(router_decision_ids))`. Same inputs ⇒ byte-identical id.
+
+## tomli (M4 — delivered)
+
+`cobrust-tomli` is the first crate emitted by the translator pipeline.
+Pure-Rust subset of `tomli`/CPython `tomllib`'s `loads()`. Auto-generated
+— do not hand-edit.
+
+### Public API
+
+```rust
+use cobrust_tomli::{loads, table_to_json, to_json, TomliError, Value};
+use std::collections::BTreeMap;
+
+let parsed: BTreeMap<String, Value> = loads("x = 1\n").expect("parse");
+let json: serde_json::Value = table_to_json(&parsed);
+```
+
+`Value` is a five-variant enum: `Bool`, `Int`, `Str`, `Array`, `Table`.
+`TomliError` carries `{ message: String, pos: usize }`. `to_json` and
+`table_to_json` are JSON conversion helpers used by the L3
+differential gate.
+
+### Verification
+
+- 27 positive + 5 negative cases match CPython `tomllib` (`tests/tomli_downstream.rs`).
+- 1024 panic-free fuzzed inputs (`tests/tomli_fuzz.rs::l2_behavior_fuzz_loads_panic_free`).
+- 1050 differential cases vs CPython (`tests/tomli_fuzz.rs::l2_behavior_fuzz_differential_agreement_with_cpython`).
+- `PROVENANCE.toml` validates and is byte-stable across independent runs.
+
+### Scope window
+
+In scope (matches CPython exactly): integers, booleans, basic + literal strings,
+arrays, inline tables, dotted table headers, comments, CRLF endings.
+
+Out of scope (M5 widens): multi-line strings, hex/oct/bin ints, floats,
+datetimes, array-of-tables, inline-table key paths.
+
 ## Self-hosting roadmap
 
 The compiler is initially in Rust. Once Cobrust reaches sufficient maturity (post-M5), begin self-hosting non-performance-critical compiler stages — **type checker and AST printer first**.

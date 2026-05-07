@@ -8,6 +8,7 @@ members = [
     "crates/cobrust-types",
     "crates/cobrust-codegen",
     "crates/cobrust-llm-router",
+    "crates/cobrust-tomli",
     "crates/cobrust-translator",
 ]
 
