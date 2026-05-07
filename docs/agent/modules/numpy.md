@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:numpy
 crate: cobrust-numpy
-last_verified_commit: def4b42
+last_verified_commit: d035d9d
 dependencies: [mod:translator]
 ---
 
