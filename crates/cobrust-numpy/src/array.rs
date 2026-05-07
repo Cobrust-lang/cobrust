@@ -3,7 +3,7 @@
 // source-library: numpy 2.0.2
 // oracle: cpython 3.11 (module: numpy)
 // scope: M7.0 ndarray foundation per ADR-0013 + M7.1 ufunc methods per ADR-0014
-//   + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016.
+//   + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016 + M7.4 linalg per ADR-0017.
 // see PROVENANCE.toml for the full manifest.
 
 //! Tagged-union `Array` over `ndarray::ArrayD<T>` per ADR-0013 §4.
@@ -24,6 +24,7 @@ use ndarray::{ArrayD, ArrayViewD, ArrayViewMutD};
 use crate::dtype::Dtype;
 use crate::error::{NumpyError, NumpyErrorKind};
 use crate::index::{self, Index, SliceSpec};
+use crate::linalg;
 use crate::reduce;
 use crate::ufunc;
 use crate::view::{ArrayView, ArrayViewMut};
@@ -468,6 +469,27 @@ impl Array {
     /// Mirrors `min`.
     pub fn argmax(&self, axis: Option<i64>) -> Result<Array, NumpyError> {
         reduce::argmax(self, axis)
+    }
+
+    // ---- M7.4 linalg surface (per ADR-0017) -----------------------------
+
+    /// Matrix multiplication. Defers to `linalg::matmul` per ADR-0017.
+    /// Float-only; mixed-dtype promotes to `Float64`.
+    ///
+    /// # Errors
+    /// `NumpyError::LinalgShapeError` on shape mismatch;
+    /// `NumpyError::LinalgDtypeUnsupported` on int / bool inputs.
+    pub fn matmul(&self, other: &Array) -> Result<Array, NumpyError> {
+        linalg::matmul(self, other)
+    }
+
+    /// Dot product. 1-D × 1-D → scalar; 2-D × 2-D → matmul. Per
+    /// ADR-0017 §1, M7.4 defers `dot` to `matmul`.
+    ///
+    /// # Errors
+    /// Mirrors `matmul`.
+    pub fn dot(&self, other: &Array) -> Result<Array, NumpyError> {
+        linalg::dot(self, other)
     }
 
     /// Borrow this Array as an `ArrayView<'_>`. Useful for callers that

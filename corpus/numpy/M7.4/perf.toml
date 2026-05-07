@@ -1,0 +1,16 @@
+# Per-library performance gate override for M7.4 (per ADR-0008 §2 +
+# ADR-0010 §3 + ADR-0014 §5 + ADR-0017).
+#
+# Numerical tier per ADR-0010 §3: 0.5x upper-bound floor. M7.4 linalg
+# surface uses pure-Rust LU / Jacobi on top of ndarray (with optional
+# ndarray-linalg via the linalg-backend feature).
+
+threshold = 0.5
+pass_ratio = 1.0
+n_iters = 50
+n_inputs = 16
+
+# Notes:
+#   - Numerical tier: 0.5x (per ADR-0010 §3).
+#   - M7.4 inherits the ENFORCED gate from M7.1/M7.2/M7.3 (per ADR-0014 §5 + ADR-0017).
+#   - Smaller batches (n_iters=50, n_inputs=16) for O(N^3) linalg ops.

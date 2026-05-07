@@ -1,0 +1,116 @@
+# numpy L0 spec — M7.4 (per ADR-0017).
+#
+# Schema per ADR-0007 §1. One [function.<name>] per public-or-helper
+# entrypoint translated by the M7.4 cobrust-numpy build. Every entry
+# binds a Python qualified name to a behavior contract that the L1
+# translator is required to satisfy and the L0 differential harness
+# verifies.
+
+schema_version = 1
+library = "numpy"
+upstream_version = "2.0.2"
+oracle_module = "numpy"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+# ---- Linalg surface -------------------------------------------------------
+
+[function.matmul]
+qualname = "linalg_core.matmul"
+public = true
+signature = "matmul(a_data: list[float], a_shape: list[int], b_data: list[float], b_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-6
+description = "matrix multiplication; rank-1/2 inputs only at M7.4."
+
+[function.dot]
+qualname = "linalg_core.dot"
+public = true
+signature = "dot(a_data: list[float], a_shape: list[int], b_data: list[float], b_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-6
+description = "1-D inner product or 2-D matmul; defers to matmul."
+
+[function.det]
+qualname = "linalg_core.det"
+public = true
+signature = "det(a_data: list[float], a_shape: list[int]) -> float"
+py_compat = "numerical"
+py_compat_rtol = 1e-6
+description = "determinant via LU; near-singular returns 0.0."
+
+[function.solve]
+qualname = "linalg_core.solve"
+public = true
+signature = "solve(a_data: list[float], a_shape: list[int], b_data: list[float], b_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-6
+description = "solve A·x = b via LU partial pivot; rank-1/2 b."
+
+[function.inv]
+qualname = "linalg_core.inv"
+public = true
+signature = "inv(a_data: list[float], a_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-6
+description = "matrix inverse; raises on singular."
+
+[function.svd]
+qualname = "linalg_core.svd"
+public = true
+signature = "svd(a_data: list[float], a_shape: list[int]) -> tuple[list[float], list[int], list[float], list[int], list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-6
+description = "singular value decomposition; full_matrices=True."
+
+[function.eigh]
+qualname = "linalg_core.eigh"
+public = true
+signature = "eigh(a_data: list[float], a_shape: list[int]) -> tuple[list[float], list[int], list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-6
+description = "symmetric eigendecomposition via Jacobi; sorted ascending."
+
+[function.cholesky]
+qualname = "linalg_core.cholesky"
+public = true
+signature = "cholesky(a_data: list[float], a_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-6
+description = "lower-triangular Cholesky factor; raises on non-PSD."
+
+# ---- Helper functions in scope --------------------------------------------
+
+[function.lu_decompose]
+qualname = "linalg_core._lu_decompose"
+public = false
+signature = "_lu_decompose(a_data: list[float], n: int) -> tuple[list[float], list[int], int]"
+py_compat = "strict"
+description = "LU with partial pivoting; helper for det/solve/inv."
+
+[function.lu_solve]
+qualname = "linalg_core._lu_solve"
+public = false
+signature = "_lu_solve(lu: list[float], pivot: list[int], n: int, b: list[float]) -> list[float]"
+py_compat = "strict"
+description = "Forward + back substitution given LU factors."
+
+[function.shape_size]
+qualname = "linalg_core._shape_size"
+public = false
+signature = "_shape_size(shape: list[int]) -> int"
+py_compat = "strict"
+description = "Product of shape dimensions."
+
+[function.identity]
+qualname = "linalg_core._identity"
+public = false
+signature = "_identity(n: int) -> list[float]"
+py_compat = "strict"
+description = "Flat row-major n x n identity matrix."
+
+# ---- Verification config --------------------------------------------------
+
+[verification]
+fuzz_inputs_per_function = 1024
+fuzz_seeds = [42, 1337, 0xDEAD_BEEF]

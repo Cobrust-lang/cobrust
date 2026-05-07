@@ -2,7 +2,7 @@
 // Translated by cobrust-translator (synthetic-LLM mode).
 // source-library: numpy 2.0.2
 // oracle: cpython 3.11 (module: numpy)
-// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016.
+// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016 + M7.4 linalg per ADR-0017.
 // see PROVENANCE.toml for the full manifest.
 
 //! Single error type for cobrust-numpy.
@@ -15,7 +15,8 @@
 //! M7.0 (per ADR-0013) shipped six variants. M7.1 (per ADR-0014 §4)
 //! added three more. M7.2 (per ADR-0015 §4) adds four more for the
 //! indexing surface. M7.3 (per ADR-0016 §5) adds one more for the
-//! reduction surface.
+//! reduction surface. M7.4 (per ADR-0017 §4) adds four more for the
+//! linalg surface.
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -89,6 +90,23 @@ pub enum NumpyErrorKind {
     /// an empty sequence` cousin); cobrust-native shape is
     /// `Result::Err` per constitution §2.2.
     ReductionEmptyArray,
+
+    // ---- M7.4 (per ADR-0017 §4) ----
+    /// LU pivot zero / `det == 0` on `solve` / `inv` paths. Matches
+    /// numpy's `LinAlgError("Singular matrix")`.
+    SingularMatrix,
+    /// Cholesky on a non-PSD matrix. Matches numpy's
+    /// `LinAlgError("Matrix is not positive definite")`.
+    NotPositiveDefinite,
+    /// `matmul` shape mismatch, non-square `det / inv / solve / eigh
+    /// / cholesky`, batch-rank > 2, non-symmetric `eigh` input,
+    /// or solve `b` rank > 2. Umbrella for shape-related linalg
+    /// errors. Matches numpy's `ValueError` / `LinAlgError` shape
+    /// messages.
+    LinalgShapeError,
+    /// Linalg op invoked with non-float dtype (`Int32 / Int64 /
+    /// Bool`). Per ADR-0017 §3 — strict M7.4 contract.
+    LinalgDtypeUnsupported,
 }
 
 impl fmt::Display for NumpyError {
@@ -108,6 +126,10 @@ impl fmt::Display for NumpyError {
             NumpyErrorKind::BoolMaskShapeMismatch => "bool_mask_shape_mismatch",
             NumpyErrorKind::IndexDtypeNotInteger => "index_dtype_not_integer",
             NumpyErrorKind::ReductionEmptyArray => "reduction_empty_array",
+            NumpyErrorKind::SingularMatrix => "singular_matrix",
+            NumpyErrorKind::NotPositiveDefinite => "not_positive_definite",
+            NumpyErrorKind::LinalgShapeError => "linalg_shape_error",
+            NumpyErrorKind::LinalgDtypeUnsupported => "linalg_dtype_unsupported",
         };
         write!(f, "NumpyError({kind_name}): {}", self.message)
     }
