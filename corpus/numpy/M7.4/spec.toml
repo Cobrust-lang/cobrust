@@ -109,8 +109,9 @@ signature = "_identity(n: int) -> list[float]"
 py_compat = "strict"
 description = "Flat row-major n x n identity matrix."
 
-# ---- Verification config --------------------------------------------------
+# ---- Verification budget --------------------------------------------------
 
 [verification]
-fuzz_inputs_per_function = 1024
-fuzz_seeds = [42, 1337, 0xDEAD_BEEF]
+seeds = [42, 1337, 0xDEADBEEF]
+fuzz_inputs_per_fn = 1024
+tolerance = "rtol=1e-6 vs numpy 2.0.2 on cond ≤ 100 inputs (per ADR-0017 §5)" 

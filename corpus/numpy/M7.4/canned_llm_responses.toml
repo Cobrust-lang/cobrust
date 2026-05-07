@@ -219,3 +219,26 @@ pub fn svd(_a: &[f64], _shape: &[usize]) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>
     Ok((Vec::new(), Vec::new(), Vec::new()))
 }
 '''
+
+# ---- matmul (attempt=2 — for the perf-fail escalation test) -------------
+#
+# Per ADR-0014 §5 + ADR-0017: M7.4 keeps L2.perf at numerical-tier
+# 0.5x floor (enforced). The pipeline test
+# `linalg_pipeline_escalates_when_perf_always_fails` injects a perf
+# verifier that rejects every attempt of `matmul`, so the repair
+# loop bumps to attempt=2. This canned entry covers attempt=2 so the
+# loop can re-dispatch (otherwise the loop would hit SyntheticMiss
+# before reaching the escalation threshold). The verifier still
+# rejects attempt=2 → EscalationExceeded fires.
+
+[[entry]]
+task = "translate"
+function = "matmul"
+attempt = 2
+source_sha16 = "2e5a978821dffc1e"
+response_text = '''
+/// matmul (attempt=2 retry — still synthetic stub).
+pub fn matmul(_a: &[f64], _shape_a: &[usize], _b: &[f64], _shape_b: &[usize]) -> Result<Vec<f64>, NumpyError> {
+    Ok(Vec::new())
+}
+'''
