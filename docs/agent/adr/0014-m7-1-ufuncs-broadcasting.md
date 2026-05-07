@@ -4,7 +4,7 @@ adr_id: 0014
 title: M7.1 universal functions, broadcasting, type promotion — dispatch model + numpy-compat semantics
 status: accepted
 date: 2026-04-30
-last_verified_commit: deba7d6
+last_verified_commit: 1f34acd
 supersedes: []
 superseded_by: []
 ---
