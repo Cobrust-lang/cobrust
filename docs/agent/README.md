@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: 62ef6bd
+last_verified_commit: 8c477b4
 ---
 
 # Cobrust Agent Documentation
@@ -43,6 +43,8 @@ All cross-references use stable IDs, never page positions:
 | `mod:codegen` | [`modules/codegen.md`](modules/codegen.md) | `cobrust-codegen` | M3+ |
 | `mod:llm_router` | [`modules/llm-router.md`](modules/llm-router.md) | `cobrust-llm-router` | M3 |
 | `mod:translator` | [`modules/translator.md`](modules/translator.md) | `cobrust-translator` | M4+ |
+| `mod:tomli` | [`modules/tomli.md`](modules/tomli.md) | `cobrust-tomli` | M4 |
+| `mod:dateutil` | [`modules/dateutil.md`](modules/dateutil.md) | `cobrust-dateutil` | M5 |
 
 ## ADR index
 

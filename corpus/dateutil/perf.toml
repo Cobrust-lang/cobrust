@@ -1,0 +1,20 @@
+# Per-library performance gate override (per ADR-0008 §2).
+#
+# `threshold` is the per-function ratio bound (cobrust_ns_median /
+# cpython_ns_median <= 1/threshold ⇒ pass). Default 0.8 means
+# "cobrust must be ≥ 0.8× as fast as cpython".
+#
+# `pass_ratio` is the fraction of public functions that must meet
+# `threshold`. Default 1.0 (all). Lower this for libraries where the
+# synthetic-mode response is intentionally placeholder-quality.
+
+threshold = 0.8
+pass_ratio = 0.5    # M5 synthetic-mode placeholder; M6+ tightens
+n_iters = 100
+n_inputs = 32
+
+# Notes:
+#   - `n_iters` is the number of timer rounds per input; we report the
+#     median across rounds.
+#   - `n_inputs` is the number of distinct inputs the harness fuzzes
+#     against the public function.

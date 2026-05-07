@@ -1,8 +1,13 @@
 //! Provenance manifest: schema, builder, writer, verifier.
 //!
-//! Pinned by ADR-0007 §3 ("Provenance manifest schema"). The on-disk
-//! form lives at `<crate_dir>/PROVENANCE.toml` next to the generated
-//! crate's `Cargo.toml`.
+//! Pinned by ADR-0007 §3 ("Provenance manifest schema") and extended
+//! by ADR-0009 §5 ("Manifest representation of partial coverage")
+//! which adds a structured `gates.dependents` sub-section so machines
+//! can audit downstream-dependents coverage without parsing the
+//! human-readable string.
+//!
+//! The on-disk form lives at `<crate_dir>/PROVENANCE.toml` next to
+//! the generated crate's `Cargo.toml`.
 //!
 //! Every field is load-bearing; missing fields are a constitutional
 //! violation (§2.4 "no silent translations, ever").
@@ -71,6 +76,28 @@ pub struct GatesSection {
     pub l2_perf: String,
     pub l3_pyo3_wrapper: String,
     pub l3_downstream_dependents: String,
+    /// Structured downstream-dependents coverage per ADR-0009 §5.
+    /// Defaults to empty arrays for backward compatibility with M4
+    /// tomli manifests that predate ADR-0009.
+    #[serde(default)]
+    pub dependents: DependentsSection,
+}
+
+/// Per ADR-0009 §5: structured manifest of which dependent libraries
+/// were validated by the L3 driver and which were deliberately
+/// deferred to a future milestone.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependentsSection {
+    /// Dependent libraries whose vendored test subset ran and passed.
+    #[serde(default)]
+    pub covered: Vec<String>,
+    /// Dependent libraries explicitly deferred (not run in this gate
+    /// pass) — must be matched by an ADR.
+    #[serde(default)]
+    pub deferred: Vec<String>,
+    /// One-line ADR-anchored reason for the deferral.
+    #[serde(default)]
+    pub deferred_reason: String,
 }
 
 impl ProvenanceManifest {
@@ -178,6 +205,7 @@ mod tests {
                 l2_perf: "skipped".into(),
                 l3_pyo3_wrapper: "pass".into(),
                 l3_downstream_dependents: "deferred to M5".into(),
+                dependents: DependentsSection::default(),
             },
         }
     }
@@ -221,5 +249,33 @@ mod tests {
         let mut m = sample();
         m.gates.l0_spec_emitted = false;
         assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn dependents_section_round_trips() {
+        let mut m = sample();
+        m.gates.dependents = DependentsSection {
+            covered: vec!["croniter".into(), "freezegun".into()],
+            deferred: vec!["pandas".into(), "sqlalchemy".into(), "pendulum".into()],
+            deferred_reason: "M5 budget; M6 widens per ADR-0009".into(),
+        };
+        let s = m.to_toml().unwrap();
+        let read_back: ProvenanceManifest = toml::from_str(&s).unwrap();
+        assert_eq!(m, read_back);
+        assert_eq!(read_back.gates.dependents.covered.len(), 2);
+        assert_eq!(read_back.gates.dependents.deferred.len(), 3);
+    }
+
+    #[test]
+    fn dependents_section_defaults_empty_for_backwards_compat() {
+        // Synthesise a TOML missing the [gates.dependents] table — must
+        // round-trip to an empty `DependentsSection`.
+        let mut m = sample();
+        // Force the field to a known default.
+        m.gates.dependents = DependentsSection::default();
+        let toml = m.to_toml().unwrap();
+        let read_back: ProvenanceManifest = toml::from_str(&toml).unwrap();
+        assert!(read_back.gates.dependents.covered.is_empty());
+        assert!(read_back.gates.dependents.deferred.is_empty());
     }
 }

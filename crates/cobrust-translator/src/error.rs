@@ -1,4 +1,5 @@
-//! Translator error taxonomy. Pinned by `adr:0007` §"Public surface".
+//! Translator error taxonomy. Pinned by `adr:0007` §"Public surface"
+//! and extended by `adr:0008` §"`TranslatorError` extension".
 
 use cobrust_llm_router::RouterError;
 
@@ -26,6 +27,10 @@ pub enum TranslatorError {
     #[error("L2 behavior gate failed: {0}")]
     BehaviorGate(String),
 
+    /// L2 performance gate failed (per ADR-0008 §2).
+    #[error("L2 perf gate failed: {0}")]
+    PerfGate(String),
+
     /// L3 downstream gate failed.
     #[error("L3 downstream gate failed: {0}")]
     DownstreamGate(String),
@@ -34,6 +39,18 @@ pub enum TranslatorError {
     /// for. The pipeline must add the response or run real-LLM mode.
     #[error("synthetic-miss for task {task} function {function}: no canned response")]
     SyntheticMiss { task: String, function: String },
+
+    /// Repair-loop hit `escalation_threshold` retries on one function
+    /// (per ADR-0008 §3 / constitution §4.2). `failure_report.md` is
+    /// written next to the manifest before this error is raised.
+    #[error(
+        "escalation: {function} hit {attempts} repair attempts on gate {failed_gate}; failure_report.md written"
+    )]
+    EscalationExceeded {
+        function: String,
+        attempts: u32,
+        failed_gate: String,
+    },
 
     /// I/O failure (file read/write, mkdir).
     #[error("io: {0}")]
@@ -99,5 +116,27 @@ mod tests {
         };
         assert!(e.to_string().contains("parse_int"));
         assert!(e.to_string().contains("expected i64"));
+    }
+
+    #[test]
+    fn escalation_exceeded_message_names_function_and_gate() {
+        let e = TranslatorError::EscalationExceeded {
+            function: "parse_iso".into(),
+            attempts: 50,
+            failed_gate: "l2_behavior".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("parse_iso"));
+        assert!(msg.contains("50"));
+        assert!(msg.contains("l2_behavior"));
+        assert!(msg.contains("failure_report.md"));
+    }
+
+    #[test]
+    fn perf_gate_carries_message() {
+        let e = TranslatorError::PerfGate("3/12 below 0.8x threshold".into());
+        let msg = e.to_string();
+        assert!(msg.contains("perf"));
+        assert!(msg.contains("3/12"));
     }
 }

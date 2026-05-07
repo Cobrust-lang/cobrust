@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:tomli
 crate: cobrust-tomli
-last_verified_commit: TBD
+last_verified_commit: 8c477b4
 dependencies: [mod:translator]
 ---
 

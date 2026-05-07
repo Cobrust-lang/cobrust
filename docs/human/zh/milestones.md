@@ -13,7 +13,7 @@
 
 ## 当前状态
 
-**M0..M4 已交付。** 仓库骨架已就位；词法/语法/AST（M1）、HIR + 双向类型检查器（M2）、provider-agnostic LLM Router（M3）均已上线；**M4** 端到端跑通 L0+L1 翻译流水线，目标 `tomli`，由 27+5 用例对照 CPython `tomllib` 差分 + 1024 个 panic-free 模糊输入构成验收 gate。生成的 `cobrust-tomli` crate 已提交以保障 gate 稳定。
+**M0..M5 已交付。** 仓库骨架已就位；词法/语法/AST（M1）、HIR + 双向类型检查器（M2）、provider-agnostic LLM Router（M3）均已上线；**M4** 端到端跑通 L0+L1 翻译流水线，目标 `tomli`，由 27+5 用例对照 CPython `tomllib` 差分 + 1024 个 panic-free 模糊输入构成验收 gate。生成的 `cobrust-tomli` crate 已提交以保障 gate 稳定。**M5** 完成闭环合龙：L2.perf 基准压测器、L2.behavior 修复循环（`BehaviorVerifier` 钩子 + 按 attempt 路由的合成提供商）、L3 下游依赖驱动器。第二个翻译库 `python-dateutil`（核心：`parse_iso` + `relativedelta_add`）作为 M5 交付物落地；2/5 依赖（croniter, freezegun）通过 L3 门禁，剩余 3/5（pandas, sqlalchemy, pendulum）按 ADR-0009 显式推迟到 M6。测试总数：342（M4 时 294）。
 
 ## 开发纪律（适用于所有里程碑）
 

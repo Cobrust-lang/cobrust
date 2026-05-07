@@ -4,7 +4,7 @@ adr_id: 0007
 title: Translator pipeline — L0 spec, L1 translation, provenance manifest, synthetic-LLM mode, PyO3 wrapper
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: 8c477b4
 supersedes: []
 superseded_by: []
 ---

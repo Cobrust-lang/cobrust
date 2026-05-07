@@ -1,0 +1,8 @@
+croniter — MIT License
+SPDX-License-Identifier: MIT
+
+Copyright (c) 2010-2024 croniter contributors
+
+The full upstream license text lives at
+https://github.com/kiorky/croniter/blob/master/LICENSE.
+This vendored test subset is included verbatim under the MIT terms.

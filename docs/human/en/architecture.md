@@ -389,3 +389,115 @@ The compiler is initially in Rust. Once Cobrust reaches sufficient maturity (pos
 
 - [Agent-facing module specs](../../agent/modules/)
 - [Milestones](milestones.md)
+
+
+## Translator M5 — closed loop completed
+
+The M5 milestone (constitution §7) completed the four-stage closed
+loop the constitution mandates:
+
+- **L2.perf gate** — benchmark harness with per-library threshold
+  override (see ADR-0008).
+- **L2.behavior repair loop** — gate failure ships a diagnostic blob
+  back into L1, which re-dispatches with `attempt: N+1`. Drives down
+  to a corrected response or escalates with a `failure_report.md`
+  after `escalation_threshold` retries.
+- **L3 downstream-dependents driver** — runs vendored test subsets
+  of dependent libraries against the translated crate (see
+  ADR-0009).
+
+### Repair loop
+
+The pipeline added a [`BehaviorVerifier`] hook + [`VerifierVerdict`]
+enum + [`GateFailure`] diagnostic blob. Callers register a verifier;
+on `Reject(failure)` the pipeline persists the diagnostic to disk
+and re-dispatches the function via [`repair_translation`] with an
+incremented `attempt` field in the prompt header. After
+`cfg.escalation_threshold` (default 50, per constitution §4.2) the
+pipeline writes `failure_report.md` and raises
+`TranslatorError::EscalationExceeded`. The default no-op verifier
+[`AcceptAll`] preserves M4 callers; [`translate_with_verifier`] is
+the new entrypoint when the closed loop matters. The
+`SyntheticProvider` was extended with per-attempt routing — the same
+`(task, function)` can carry multiple canned responses keyed by
+`attempt` (see ADR-0008 §5).
+
+### L2.perf benchmark harness
+
+`crates/cobrust-translator/src/bench.rs` ships a hand-rolled timing
+stack that pairs Rust closures against subprocess CPython. Reports
+land at `target/cobrust-bench/<library>/<commit>/report.json` with
+per-function `{cobrust_ns_median, cpython_ns_median, ratio, pass}`.
+[`PerfTarget`] (read from `corpus/<lib>/perf.toml`) tunes
+`threshold` (default 0.8 = "≥ 0.8× of CPython speed") and
+`pass_ratio` (default 1.0; dateutil overrides to 0.5 because
+synthetic responses are placeholder-quality, see ADR-0008 §2). The
+[`BenchmarkReport`] struct is the gate-day audit artefact.
+
+### L3 downstream dependents
+
+`crates/cobrust-translator/src/downstream.rs` runs vendored test
+subsets via subprocess `python3`. M5 dateutil ships
+[`dateutil_m5_dependents`] (croniter + freezegun, Pass) and
+[`dateutil_m5_deferred`] (pandas, sqlalchemy, pendulum, Deferred to
+M6 per ADR-0009 §3). The manifest's
+[`DependentsSection`] encodes both `covered` and `deferred` arrays
+so machines can audit partial coverage without parsing the
+human-readable summary string. The [`DownstreamReport`] +
+[`DependentResult`] structs are the runtime artefacts.
+
+## dateutil (M5 — delivered)
+
+Second translated library. Crate name `cobrust-dateutil`. Vendored
+upstream subset under `corpus/dateutil/upstream/`.
+
+### Public API
+
+```rust
+pub use cobrust_dateutil::{
+    parse_iso, relativedelta_add, DateTuple, ParserError,
+    days_in_month, is_leap_year, normalize_datetime, is_digit,
+};
+
+pub fn parse_iso(src: &str) -> Result<DateTuple, ParserError>;
+```
+
+`parse_iso` accepts strict ISO-8601 dates and datetimes with optional
+Zulu / offset suffix. `relativedelta_add` mirrors
+`dateutil.relativedelta.relativedelta.__add__` arithmetic with
+day-of-month clamping. The full surface lives in `mod:dateutil` —
+see `docs/agent/modules/dateutil.md`.
+
+### Repair-loop demo
+
+The dateutil corpus carries TWO canned responses for `parse_iso`:
+attempt-1 is deliberately broken (swapped year/month) and attempt-2
+is correct. The integration test
+`crates/cobrust-translator/tests/dateutil_pipeline.rs::dateutil_pipeline_repair_loop_recovers_on_attempt_2`
+asserts the pipeline retries exactly once and lands on attempt-2 —
+the first end-to-end exercise of the closed loop.
+
+### L3 dependents (per ADR-0009)
+
+| Dependent | Status | Tests |
+|---|---|---|
+| croniter | Pass | 5 |
+| freezegun | Pass | 5 |
+| pandas | Deferred (M6) | — |
+| sqlalchemy | Deferred (M6) | — |
+| pendulum | Deferred (M6) | — |
+
+### Verification
+
+- L0 spec at `corpus/dateutil/spec.toml`.
+- L1 emission committed at `crates/cobrust-dateutil/src/parser.rs`.
+- L2.build green; L2.behavior 9 + 5 + 6 cases green; 3072-input
+  fuzz panic-free.
+- L2.perf report at `target/cobrust-bench/dateutil/<commit>/report.json`.
+- L3.pyo3 differential gate against CPython
+  `datetime.fromisoformat`.
+- L3.dependents per the table above.
+
+See [ADR-0008](../../agent/adr/0008-l2-perf-and-repair-loop.md) and
+[ADR-0009](../../agent/adr/0009-downstream-validation.md) for the
+load-bearing decisions.

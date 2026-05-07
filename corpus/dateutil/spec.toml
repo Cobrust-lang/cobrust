@@ -1,0 +1,80 @@
+# dateutil L0 spec — M5
+#
+# Schema per ADR-0007 §1 ("L0 spec format"). One [function.<name>]
+# table per public-or-helper function in scope. Each entry binds a
+# Python qualified name to a behavior contract that the L1 translator
+# is required to satisfy and the L0 differential harness verifies.
+
+schema_version = 1
+library = "dateutil"
+upstream_version = "2.9.0.post0"
+oracle_module = "dateutil"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+# ---- Public surface ---------------------------------------------------------
+
+[function.parse_iso]
+qualname = "parser_core.parse_iso"
+public = true
+signature = "parse_iso(src: str) -> tuple"
+py_compat = "strict"
+description = "Parse a strict ISO-8601 date or datetime; return a 9-tuple (year, month, day, hour, minute, second, has_tz, tz_offset_minutes, src_consumed)."
+
+[function.relativedelta_add]
+qualname = "relativedelta_core.relativedelta_add"
+public = true
+signature = "relativedelta_add(y, m, d, hh, mm, ss, ay, am, aw, ad, ah, an, as_) -> tuple"
+py_compat = "strict"
+description = "Add a relative delta (years/months/weeks/days/hours/minutes/seconds) to a base date; return a normalised 9-tuple matching parse_iso's shape."
+
+# ---- Helper functions in scope ---------------------------------------------
+
+[function.is_leap_year]
+qualname = "relativedelta_core._is_leap_year"
+public = false
+signature = "_is_leap_year(year: int) -> bool"
+py_compat = "strict"
+description = "Gregorian leap-year predicate."
+
+[function.days_in_month]
+qualname = "relativedelta_core._days_in_month"
+public = false
+signature = "_days_in_month(year: int, month: int) -> int"
+py_compat = "strict"
+description = "Days-in-month accounting for leap years."
+
+[function.normalize_datetime]
+qualname = "relativedelta_core._normalize"
+public = false
+signature = "_normalize(y, m, d, hh, mm, ss) -> tuple"
+py_compat = "strict"
+description = "Cascade overflow / underflow upward through datetime fields until each field is in range."
+
+[function.is_digit]
+qualname = "parser_core._is_digit"
+public = false
+signature = "_is_digit(ch: str) -> bool"
+py_compat = "strict"
+description = "ASCII digit predicate (mirrors char.is_ascii_digit())."
+
+[function.take_digits]
+qualname = "parser_core._take_digits"
+public = false
+signature = "_take_digits(s: str, pos: int, count: int) -> tuple[int, int]"
+py_compat = "strict"
+description = "Read exactly `count` ASCII digits from `s` starting at `pos`; return (parsed_value, new_pos)."
+
+[function.expect_char]
+qualname = "parser_core._expect"
+public = false
+signature = "_expect(s: str, pos: int, ch: str) -> int"
+py_compat = "strict"
+description = "Assert s[pos] == ch and advance, raising ParserError otherwise."
+
+# ---- Verification budget ---------------------------------------------------
+
+[verification]
+seeds = [42, 1337, 0xDEADBEEF]
+fuzz_inputs_per_fn = 1024
+tolerance = "exact"

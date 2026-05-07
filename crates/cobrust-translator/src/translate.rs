@@ -112,15 +112,12 @@ pub async fn run_l1(
     let mut translations = Vec::with_capacity(plan.functions.len());
     let mut decision_ids = Vec::with_capacity(plan.functions.len());
     for unit in &plan.functions {
-        let header = PromptHeader {
-            task: "translate".into(),
-            function: unit.name.clone(),
-            source_sha16: plan.source_sha16.clone(),
-        };
+        let header =
+            PromptHeader::first_attempt("translate", unit.name.clone(), plan.source_sha16.clone());
         let body = build_translation_prompt(unit);
         let prompt = format_prompt_body(&header, &body);
         let req = CompletionRequest {
-            model: "tomli-canned-v1".into(),
+            model: format!("{}-canned-v1", plan.library),
             messages: vec![Message {
                 role: Role::User,
                 content: prompt,
@@ -140,7 +137,7 @@ pub async fn run_l1(
             "blake3:{}",
             cobrust_llm_router::CacheKey::compute(
                 &resp.provider,
-                &router_request_for_id(&unit.name, &plan.source_sha16),
+                &router_request_for_id(&plan.library, &unit.name, &plan.source_sha16),
             )
             .hex()
         ));
@@ -183,15 +180,12 @@ fn build_translation_prompt(unit: &FunctionUnit) -> String {
 /// Build the canonical "what the cache key would be for this function"
 /// request, used solely for `router_decision_id` computation. The body
 /// is empty (we do not want the cache key to depend on the prompt
-/// template, only on the (function, source SHA) tuple).
-fn router_request_for_id(function: &str, source_sha16: &str) -> CompletionRequest {
-    let header = PromptHeader {
-        task: "translate".into(),
-        function: function.into(),
-        source_sha16: source_sha16.into(),
-    };
+/// template, only on the (function, source SHA) tuple). The library
+/// parameter feeds into the model name so determinism stays per-library.
+fn router_request_for_id(library: &str, function: &str, source_sha16: &str) -> CompletionRequest {
+    let header = PromptHeader::first_attempt("translate", function, source_sha16);
     CompletionRequest {
-        model: "tomli-canned-v1".into(),
+        model: format!("{library}-canned-v1"),
         messages: vec![Message {
             role: Role::User,
             content: format_prompt_body(&header, ""),
@@ -273,8 +267,8 @@ tolerance = "exact"
 
     #[test]
     fn router_request_for_id_is_deterministic() {
-        let r1 = router_request_for_id("loads", "abc123");
-        let r2 = router_request_for_id("loads", "abc123");
+        let r1 = router_request_for_id("tomli", "loads", "abc123");
+        let r2 = router_request_for_id("tomli", "loads", "abc123");
         assert_eq!(r1, r2);
     }
 }

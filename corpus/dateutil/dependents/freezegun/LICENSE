@@ -1,0 +1,8 @@
+freezegun — Apache-2.0 License
+SPDX-License-Identifier: Apache-2.0
+
+Copyright (c) 2012-2024 Steve Pulec and contributors
+
+The full upstream license text lives at
+https://github.com/spulec/freezegun/blob/master/LICENSE.
+This vendored test subset is included verbatim under the Apache-2.0 terms.
