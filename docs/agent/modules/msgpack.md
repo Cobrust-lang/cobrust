@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:msgpack
 crate: cobrust-msgpack
-last_verified_commit: TBD
+last_verified_commit: 908f67c
 dependencies: [mod:translator]
 ---
 

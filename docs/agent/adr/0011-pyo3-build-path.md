@@ -4,7 +4,7 @@ adr_id: 0011
 title: PyO3 build path for translated crates — `--features pyo3`, cdylib emission, dual-mode test harness
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: 908f67c
 supersedes: []
 superseded_by: []
 ---

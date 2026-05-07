@@ -4,7 +4,7 @@ adr_id: 0010
 title: Native-extension translation methodology — msgpack-python, Cython sources, perf threshold relaxation, perf-gate fail-on-threshold-miss routing, downstream widening
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: 908f67c
 supersedes: []
 superseded_by: []
 ---

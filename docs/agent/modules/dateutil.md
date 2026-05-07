@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:dateutil
 crate: cobrust-dateutil
-last_verified_commit: 8c477b4
+last_verified_commit: 908f67c
 dependencies: [mod:translator]
 ---
 
