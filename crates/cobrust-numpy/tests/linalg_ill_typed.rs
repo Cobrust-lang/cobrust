@@ -29,6 +29,9 @@
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::similar_names)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::many_single_char_names)]
+#![allow(clippy::unreadable_literal)]
 
 use cobrust_numpy::{
     Dtype, NumpyErrorKind, arange, array_bool, array_f32, array_f64, array_i32, array_i64,

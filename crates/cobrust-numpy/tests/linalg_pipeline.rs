@@ -33,6 +33,9 @@
 #![allow(clippy::redundant_clone)]
 #![allow(clippy::needless_lifetimes)]
 #![allow(clippy::uninlined_format_args)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::many_single_char_names)]
+#![allow(clippy::unreadable_literal)]
 
 use cobrust_translator::{
     AcceptAll, AcceptAllPerf, FunctionTranslation, GateFailure, PerfVerdict, PerfVerifier,

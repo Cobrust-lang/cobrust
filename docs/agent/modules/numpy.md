@@ -19,7 +19,9 @@ over `ndarray::ArrayD<T>`, four constructors (`array` / `zeros` /
 reduction surface: nine reductions (`sum / prod / mean / std / var /
 min / max / argmin / argmax`) with `axis: Option<i64>`, pairwise
 summation for floats, `ddof` for std/var, numpy-exact empty-array
-semantics.
+semantics. M7.4 (per ADR-0017) lands the linalg subset: 8 ops
+(`matmul / dot / det / solve / inv / svd / eigh / cholesky`) with
+float-only inputs and `rtol=1e-6` agreement on cond ≤ 100 matrices.
 
 Per ADR-0012 §"Backend strategy: translate the surface, bind the
 core", cobrust-numpy translates numpy's **public Python surface**
@@ -98,6 +100,30 @@ We do not reimplement `ArrayD::zeros` in Rust; we call it.
   2.0.2 (bit-identical for int/bool, `rtol=1e-7` for float;
   argmin/argmax exact match). L2.perf inherits ENFORCED state
   from M7.1/M7.2.
+
+- **M7.4 — delivered.** Linalg subset (`matmul / dot / det / solve
+  / inv / svd / eigh / cholesky`) per ADR-0017. cobrust-numpy now
+  ships eight linalg ops exposed as both free functions and (for
+  `matmul / dot`) `Array::*` methods. Inputs are float-only at
+  M7.4 (`Float32 / Float64`); int / bool dtypes raise
+  `LinalgDtypeUnsupported`. Mixed `f32 / f64` promotes to `f64`.
+  Backend strategy is **pure-Rust kernels** by default on top of
+  `ndarray = "0.16"` (LU partial pivot for det/solve/inv; Jacobi
+  for eigh/svd; classic factor loop for cholesky); `cargo build`
+  cold-rebuild on stock toolchains works without any system BLAS
+  / LAPACK / Fortran. The opt-in `linalg-backend` cargo feature
+  (with sub-features `linalg-openblas-static` and
+  `linalg-intel-mkl-static`) wires `ndarray-linalg = "0.16"` for
+  BLAS-accelerated paths. Four new error variants land:
+  `SingularMatrix`, `NotPositiveDefinite`, `LinalgShapeError`,
+  `LinalgDtypeUnsupported`. `SvdResult { u, s, vt }` and
+  `EighResult { w, v }` bundle multi-array returns. The
+  differential gate verifies ≥ 1024 fuzz inputs per linalg op (8
+  fuzz tests) against upstream numpy 2.0.2 at `rtol=1e-6` on cond
+  ≤ 100 inputs (well-conditioned random matrices generated via
+  Box-Muller noise + diagonal dominance). Documented unstable
+  cases: cond > 1e8, N > 64 for svd/eigh, complex dtypes.
+  L2.perf inherits ENFORCED state from M7.1/M7.2/M7.3.
 
 ## Public surface (M7.0)
 
@@ -643,6 +669,139 @@ corpus and asserts:
   follows the per-axis chain on the leading axis only at M7.2;
   full numpy-style multi-axis dispatch is M7.x.
 
+
+
+## Public surface (M7.4 — per ADR-0017)
+
+```rust
+// M7.4 linalg — closed 8-op surface per ADR-0017 §1.
+pub fn matmul(a: &Array, b: &Array) -> Result<Array, NumpyError>;
+pub fn dot(a: &Array, b: &Array) -> Result<Array, NumpyError>;
+pub fn det(a: &Array) -> Result<Array, NumpyError>;
+pub fn solve(a: &Array, b: &Array) -> Result<Array, NumpyError>;
+pub fn inv(a: &Array) -> Result<Array, NumpyError>;
+pub fn svd(a: &Array) -> Result<SvdResult, NumpyError>;
+pub fn eigh(a: &Array) -> Result<EighResult, NumpyError>;
+pub fn cholesky(a: &Array) -> Result<Array, NumpyError>;
+
+pub struct SvdResult {
+    pub u: Array,
+    pub s: Array,
+    pub vt: Array,
+}
+
+pub struct EighResult {
+    pub w: Array,
+    pub v: Array,
+}
+
+// Method-style API on Array.
+impl Array {
+    pub fn matmul(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn dot(&self, other: &Array) -> Result<Array, NumpyError>;
+}
+
+// New error variants (per ADR-0017 §4).
+pub enum NumpyErrorKind {
+    // ... M7.0 + M7.1 + M7.2 + M7.3 variants ...
+    SingularMatrix,
+    NotPositiveDefinite,
+    LinalgShapeError,
+    LinalgDtypeUnsupported,
+}
+```
+
+## Linalg dtype rules (M7.4 — per ADR-0017 §3)
+
+| Input dtype | Behavior |
+|---|---|
+| `Float64` / `Float32` | accepted, preserved |
+| `Int32` / `Int64` / `Bool` | `Err(LinalgDtypeUnsupported)` |
+| Mixed `f32` + `f64` | promote to `f64`, preserve `f64` |
+
+## Linalg ops surface (M7.4 — per ADR-0017 §1)
+
+| Op | Result | Algorithm |
+|---|---|---|
+| `matmul` | new Array | `ndarray::Array2::dot` (Rust matrixmultiply) |
+| `dot` | new Array | defers to `matmul` |
+| `det` | 0-d Array | LU partial pivot, sign × Π(diag(U)) |
+| `solve` | new Array | LU then forward + back substitution |
+| `inv` | new Array | `solve(a, I)` |
+| `svd` | `SvdResult` | one-sided Jacobi via `eigh(AᵀA)` |
+| `eigh` | `EighResult` | cyclic Jacobi sweeps; eigenvalues ascending |
+| `cholesky` | new Array | classic factor loop; lower-triangular |
+
+## Backend feature selection (M7.4 — per ADR-0017 §2)
+
+| Cargo feature | Backend | Notes |
+|---|---|---|
+| (default — none) | pure-Rust on `ndarray` | works on any host |
+| `linalg-backend` | `ndarray-linalg = "0.16"` | requires a sub-feature |
+| `linalg-openblas-static` | OpenBLAS via ndarray-linalg | needs Fortran |
+| `linalg-intel-mkl-static` | Intel MKL via ndarray-linalg | downloads vendor blob |
+
+## Differential gate (M7.4)
+
+`crates/cobrust-numpy/tests/linalg_differential.rs` runs against
+`corpus/numpy/M7.4/harness/h_linalg.py`:
+
+- 1024+ random matmul inputs — `rtol=1e-6`.
+- 1024+ random dot 1-D inputs — `rtol=1e-6`.
+- 1024+ random det inputs (cond ≤ 100) — `rtol=1e-6`.
+- 1024+ random solve `(A, b)` (cond ≤ 100) — `rtol=1e-6`.
+- 1024+ random inv inputs (cond ≤ 100) — `rtol=1e-6`.
+- 1024+ random svd inputs (compares singular values only) — `rtol=1e-6`.
+- 1024+ random eigh inputs (compares eigenvalues only) — `rtol=1e-6`.
+- 1024+ random cholesky inputs (PSD via `LLᵀ`) — `rtol=1e-6`.
+
+Total ≥ 8200 differential inputs verified. Skipped with a clear
+message when upstream numpy is unavailable on the host.
+
+## Pipeline integration (M7.4)
+
+`crates/cobrust-numpy/tests/linalg_pipeline.rs` drives
+`cobrust_translator::translate_with_verifiers` against the M7.4
+corpus and asserts:
+
+- All 12 functions emit (8 public ops + 4 helpers: `cholesky`,
+  `det`, `dot`, `eigh`, `identity`, `inv`, `lu_decompose`,
+  `lu_solve`, `matmul`, `shape_size`, `solve`, `svd`).
+- Every function carries non-empty body + provenance fields
+  (`source_sha16 = "2e5a978821dffc1e"`, `router_decision_id =
+  "blake3:..."`).
+- Manifest validates with `gates.l1_files_emitted = 12`.
+- L2.perf escalation wired:
+  `linalg_pipeline_escalates_when_perf_always_fails` exercises a
+  `PerfVerifier::Reject`-only-on-`matmul` verifier; with
+  `cfg.escalation_threshold = 2` the pipeline raises
+  `EscalationExceeded` and writes `failure_report.md`.
+
+## Done means (M7.4 — DONE)
+
+- [x] Eight linalg ops: `matmul / dot / det / solve / inv / svd /
+      eigh / cholesky` (free functions and `Array::*` methods for
+      matmul/dot).
+- [x] Float-only contract; int / bool inputs raise
+      `LinalgDtypeUnsupported`.
+- [x] Pure-Rust default backend on `ndarray = "0.16"`; opt-in
+      `linalg-backend` cargo feature for `ndarray-linalg`.
+- [x] Four new `NumpyErrorKind` variants: `SingularMatrix`,
+      `NotPositiveDefinite`, `LinalgShapeError`,
+      `LinalgDtypeUnsupported`.
+- [x] `SvdResult` / `EighResult` structs for multi-array returns.
+- [x] ≥ 50 well-typed linalg programs (actual: 59).
+- [x] ≥ 50 ill-typed linalg programs (actual: 63).
+- [x] 25 corpus-correctness table-driven tests against
+      hand-computed expected values.
+- [x] ≥ 1024 fuzz inputs per linalg op (8 differential gates)
+      against upstream numpy 2.0.2 at `rtol=1e-6` on cond ≤ 100
+      inputs.
+- [x] L2.perf inherits ENFORCED state from M7.1/M7.2/M7.3;
+      perf-fail escalation test wired
+      (`linalg_pipeline_escalates_when_perf_always_fails`).
+- [x] ADR-0017 lands; doc tree updated; doc-coverage extended.
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend
@@ -669,6 +828,10 @@ corpus and asserts:
 - [adr:0016](../adr/0016-m7-3-reductions.md) — M7.3 reductions
   (kind taxonomy, axis semantics, pairwise summation, ddof,
   empty-array behavior).
+- [adr:0017](../adr/0017-m7-4-linalg.md) — M7.4 linalg
+  (ops surface, pure-Rust default backend with opt-in
+  `ndarray-linalg`, float-only dtypes, error semantics, rtol=1e-6
+  gate).
 - [adr:0007](../adr/0007-translator-pipeline.md) — pipeline.
 - [adr:0010](../adr/0010-native-ext-translation.md) — native-ext
   methodology M7.0 inherits.

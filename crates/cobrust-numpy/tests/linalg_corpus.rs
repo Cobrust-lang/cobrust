@@ -26,6 +26,9 @@
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::similar_names)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::many_single_char_names)]
+#![allow(clippy::unreadable_literal)]
 
 use cobrust_numpy::{
     Array, EighResult, SvdResult, array_f64, cholesky, det, dot, eigh, inv, matmul, solve, svd,

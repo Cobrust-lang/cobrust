@@ -23,6 +23,8 @@
 #![allow(clippy::imprecise_flops)]
 #![allow(clippy::suboptimal_flops)]
 #![allow(clippy::excessive_precision)]
+#![allow(clippy::many_single_char_names)]
+#![allow(clippy::unreadable_literal)]
 
 use cobrust_numpy::{array_f64, cholesky, det, dot, eigh, inv, matmul, solve, svd};
 use std::time::Instant;

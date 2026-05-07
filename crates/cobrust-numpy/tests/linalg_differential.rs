@@ -39,6 +39,7 @@
 #![allow(clippy::manual_is_multiple_of)]
 #![allow(clippy::manual_range_contains)]
 #![allow(clippy::too_many_lines)]
+#![allow(clippy::many_single_char_names)]
 
 use cobrust_numpy::{
     Array, EighResult, SvdResult, array_f64, cholesky, det, dot, eigh, inv, matmul, solve, svd,

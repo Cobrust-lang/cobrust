@@ -985,3 +985,121 @@ pub enum NumpyErrorKind {
 - `dtype=` 参数（强制结果 dtype） —— M7.x。
 
 详见 [ADR-0016](../../agent/adr/0016-m7-3-reductions.md)。
+
+## numpy 线性代数（M7.4 — 已交付）
+
+M7.4 在 M7.0（基础）+ M7.1（ufunc）+ M7.2（索引）+ M7.3（归约）之上落地线性代数子集。
+依据 ADR-0017：
+
+> 线性代数子集：`matmul / dot / det / solve / inv / svd / eigh /
+> cholesky`。后端：`ndarray-linalg`（OpenBLAS / Accelerate）。
+> 验收门禁：条件良好矩阵上 `rtol=1e-6` 一致；记录不稳定 case。
+
+### M7.4 表面
+
+```rust
+// 自由函数：
+cobrust_numpy::matmul(&a, &b)?
+cobrust_numpy::dot(&a, &b)?
+cobrust_numpy::det(&a)?
+cobrust_numpy::solve(&a, &b)?
+cobrust_numpy::inv(&a)?
+cobrust_numpy::cholesky(&a)?
+let SvdResult { u, s, vt } = cobrust_numpy::svd(&a)?;
+let EighResult { w, v } = cobrust_numpy::eigh(&a)?;
+
+// Array 方法风格 API：
+a.matmul(&b)?
+a.dot(&b)?
+```
+
+### M7.4 八个 op
+
+| Op | 形参 | 晋升 | 备注 |
+|---|---|---|---|
+| `matmul(a, b)` | rank 1 / 2 输入 | f32 保留；其他 → f64 | 严格 2-D + 1-D；M7.4 不支持批量堆叠 |
+| `dot(a, b)` | 1-D × 1-D 标量；2-D × 2-D 矩阵乘 | 同 `matmul` | 与 numpy.dot 语义一致 |
+| `det(a)` | 方阵 N × N | 保留 dtype | LU 部分主元；近奇异返回 0.0 |
+| `solve(a, b)` | 方阵 A；rank-1 / 2 b | 保留 dtype | LU + 回代 |
+| `inv(a)` | 方阵 N × N | 保留 dtype | `solve(a, I)` |
+| `svd(a)` | rank-2 M × N | 保留 dtype | 单边 Jacobi 经 `eigh(AᵀA)` |
+| `eigh(a)` | 对称 N × N | 保留 dtype | 循环 Jacobi 扫描；特征值升序 |
+| `cholesky(a)` | PSD 方阵 | 保留 dtype | 下三角因子（numpy 默认） |
+
+### M7.4 后端策略
+
+- **默认**：在 `ndarray = "0.16"` 之上的纯 Rust 内核。`cargo build`
+  冷重建在标准工具链上无须系统 BLAS / LAPACK / Fortran（按 ADR-0017
+  §2）。
+- **可选**：`linalg-backend` cargo feature 接入
+  `ndarray-linalg = "0.16"` 提供 BLAS 加速。子 feature
+  `linalg-openblas-static`、`linalg-intel-mkl-static` 转发到对应的
+  `ndarray-linalg` BLAS feature。
+- **M7.4 仅浮点**：`Float32 / Float64` 接受；`Int32 / Int64 / Bool`
+  返回 `LinalgDtypeUnsupported`。M7.x 可通过 Python 侧晋升包装放宽。
+
+### M7.4 错误变体
+
+```rust
+pub enum NumpyErrorKind {
+    // ... M7.0 + M7.1 + M7.2 + M7.3 变体 ...
+    SingularMatrix,         // LU 主元为零 / 接近零
+    NotPositiveDefinite,    // cholesky 非 PSD
+    LinalgShapeError,       // matmul 形状不匹配、非方阵、rank > 2、
+                            // eigh 非对称输入
+    LinalgDtypeUnsupported, // 非浮点 dtype
+}
+```
+
+### M7.4 多数组返回
+
+```rust
+pub struct SvdResult {
+    pub u: Array,    // (M, M)
+    pub s: Array,    // (min(M, N),)
+    pub vt: Array,   // (N, N)
+}
+
+pub struct EighResult {
+    pub w: Array,    // (N,) — 升序
+    pub v: Array,    // (N, N) — 列特征向量
+}
+```
+
+### M7.4 验证
+
+- L0 spec 在 `corpus/numpy/M7.4/spec.toml`，harness 在
+  `corpus/numpy/M7.4/harness/h_linalg.py`。
+- L1：synthetic-LLM 模式发出 12 个条目（8 个公共 op + 4 个 helper），
+  在 `corpus/numpy/M7.4/canned_llm_responses.toml`。
+- L2.behavior：
+  - 59 个良类型 linalg 程序（`tests/linalg_well_typed.rs`）。
+  - 63 个病类型 linalg 程序（`tests/linalg_ill_typed.rs`）。
+  - 25 个 corpus 正确性表驱动测试，期望值手算
+    （`tests/linalg_corpus.rs`）。
+  - 8 个差分测试，每个 op ≥ 1024 fuzz 输入对比 upstream numpy 2.0.2
+    在 cond ≤ 100 输入上 `rtol=1e-6`（`tests/linalg_differential.rs`）。
+- L2.perf 继承 M7.1/M7.2/M7.3 的"强制"：
+  `corpus/numpy/M7.4/perf.toml` 阈值 0.5x；pipeline 测试
+  `linalg_pipeline_escalates_when_perf_always_fails` 演示
+  perf-fail → repair-loop → `EscalationExceeded`。
+- L3.pyo3：同 M7.0..M7.3（子进程 CPython numpy oracle）。
+- L3.dependents：仍然推迟到 M7.6+。
+
+### M7.4 不稳定 case 记录
+
+- `cond(A) > 1e8` —— 纯 Rust LU 与 numpy BLAS LAPACK 在近奇异条件下
+  舍入模式不同。
+- N > 64 当 `svd / eigh` —— Jacobi 收敛 O(N²)；M7.x 用 Householder
+  + 三对角 QR 提升上限。
+- 复数 dtype —— M7.4 不在范围内（Cobrust dtype tier 仅实数）。
+
+### 不在范围内（推迟到 M7.x）
+
+- 批量线代（rank-3+ 堆叠矩阵）。
+- 复数 dtype。
+- `qr / lstsq / pinv / norm / matrix_rank`。
+- Householder + 三对角 QR `svd / eigh`（解除 N ≤ 64 上限）。
+- 上三角 `cholesky`（`lower=False` 参数）。
+
+详见 [ADR-0017](../../agent/adr/0017-m7-4-linalg.md)。
