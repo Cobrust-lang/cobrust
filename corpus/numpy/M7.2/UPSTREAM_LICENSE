@@ -1,0 +1,7 @@
+NumPy is licensed under BSD-3-Clause. See:
+https://github.com/numpy/numpy/blob/main/LICENSE.txt
+
+The vendored M7.1 reference subset (`upstream/ufunc_core.py`) is a
+pure-Python reimplementation of selected ufunc + broadcasting +
+element-wise math behaviours, written by the cobrust authors against
+the numpy 2.0.2 documentation. License-compatible per ADR-0001.

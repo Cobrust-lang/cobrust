@@ -1,0 +1,208 @@
+# Canned LLM responses for numpy M7.2 — synthetic-LLM mode.
+#
+# Schema per ADR-0007 §"Synthetic-LLM mode contract" + ADR-0008 §5
+# (per-attempt routing) + ADR-0015. Lookup key:
+# (task, function, attempt). When `attempt` is omitted both sides
+# default to 1.
+#
+# Source-SHA staleness check:
+#   sha256(corpus/numpy/M7.2/upstream/index_core.py)[..16] = "e6b8c37f4ba39b06"
+#
+# These canned responses describe a flat-file equivalent of the
+# multi-file cobrust-numpy crate; the pipeline integration test
+# (`crates/cobrust-numpy/tests/index_pipeline.rs`) drives this corpus
+# end-to-end and asserts (a) every function is emitted, (b) every
+# function carries a provenance header, and (c) the assembled
+# parser.rs string is non-empty per function. The production
+# multi-file crate at `crates/cobrust-numpy/src/` is the gate-stable
+# byte snapshot; canned responses here cover the **translator path**
+# itself.
+#
+# MODULE PREAMBLE: alphabetically-first function (`mask`) carries the
+# preamble. Subsequent entries emit only their function bodies.
+
+schema_version = 1
+oracle_runtime = "cpython 3.11"
+
+# ---- mask (alphabetic-first; carries module preamble) --------------------
+
+[[entry]]
+task = "translate"
+function = "mask"
+source_sha16 = "e6b8c37f4ba39b06"
+response_text = '''
+// Module preamble for M7.2 indexing (synthetic-LLM mode).
+// Per ADR-0015 §"Crate layout" the production cobrust-numpy is
+// multi-file; the canned-response path emits a flat-file equivalent
+// so the M7.2 pipeline integration test can assert end-to-end
+// emission without extending the pipeline's hardcoded per-library
+// file layout.
+
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(dead_code)]
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Dtype { Int32, Int64, Float32, Float64, Bool }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumpyError { pub kind: NumpyErrorKind, pub message: String }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NumpyErrorKind {
+    IndexError,
+    OutOfBoundsIndex,
+    BoolMaskShapeMismatch,
+    IndexDtypeNotInteger,
+    UnsupportedDtype,
+    ZeroStep,
+}
+
+/// Boolean-mask indexing (`a[mask]`). Returns a 1-D copy of selected
+/// elements. Translated from `index_core.mask`.
+pub fn mask(_a: &[f64], _a_shape: &[usize], _bools: &[bool], _bool_shape: &[usize]) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    // Stub body: production lives in crates/cobrust-numpy/src/index.rs.
+    Err(NumpyError { kind: NumpyErrorKind::IndexError, message: "synthetic stub".into() })
+}
+'''
+
+# ---- normalize_single ----------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "normalize_single"
+source_sha16 = "e6b8c37f4ba39b06"
+response_text = '''
+/// Normalise a negative single-int index to non-negative; error on
+/// out-of-bounds. Translated from `index_core.normalize_single`.
+pub fn normalize_single(idx: i64, length: i64) -> Result<i64, NumpyError> {
+    let norm = if idx < 0 { idx + length } else { idx };
+    if norm < 0 || norm >= length {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::OutOfBoundsIndex,
+            message: format!("index {idx} is out of bounds for axis with length {length}"),
+        });
+    }
+    Ok(norm)
+}
+'''
+
+# ---- np_where ------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "np_where"
+source_sha16 = "e6b8c37f4ba39b06"
+response_text = '''
+/// np.where(cond, x, y) — element-wise selection. Translated from
+/// `index_core.np_where`. Broadcasts cond/x/y per ADR-0014.
+pub fn np_where(_cond: &[bool], _cs: &[usize], _x: &[f64], _xs: &[usize], _y: &[f64], _ys: &[usize]) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::IndexError, message: "synthetic stub".into() })
+}
+'''
+
+# ---- resolve_slice -------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "resolve_slice"
+source_sha16 = "e6b8c37f4ba39b06"
+response_text = '''
+/// Resolve numpy-exact slice bounds (clamp + sign normalisation +
+/// ZeroStep error). Translated from `index_core.resolve_slice`.
+pub fn resolve_slice(_start: Option<i64>, _stop: Option<i64>, _step: Option<i64>, _length: i64) -> Result<(i64, i64, i64), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::IndexError, message: "synthetic stub".into() })
+}
+'''
+
+# ---- single_index --------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "single_index"
+source_sha16 = "e6b8c37f4ba39b06"
+response_text = '''
+/// Single-int indexing on the first axis. Translated from
+/// `index_core.single_index`.
+pub fn single_index(_a: &[f64], _a_shape: &[usize], _idx: i64) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::IndexError, message: "synthetic stub".into() })
+}
+'''
+
+# ---- slice_basic ---------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "slice_basic"
+source_sha16 = "e6b8c37f4ba39b06"
+response_text = '''
+/// Basic slicing on the first axis (`a[start:stop:step]`). Translated
+/// from `index_core.slice_basic`. Returns a view in numpy / cobrust;
+/// canned response materialises the data here for the synthetic test.
+pub fn slice_basic(_a: &[f64], _a_shape: &[usize], _start: Option<i64>, _stop: Option<i64>, _step: Option<i64>) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::IndexError, message: "synthetic stub".into() })
+}
+'''
+
+# ---- slice_count ---------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "slice_count"
+source_sha16 = "e6b8c37f4ba39b06"
+response_text = '''
+/// Count elements produced by a normalised slice. Translated from
+/// `index_core.slice_count`.
+pub fn slice_count(begin: i64, end: i64, step: i64) -> i64 {
+    if step > 0 {
+        if end <= begin { 0 } else { (end - begin + step - 1) / step }
+    } else {
+        if end >= begin { 0 } else { (begin - end + (-step) - 1) / (-step) }
+    }
+}
+'''
+
+# ---- take ----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "take"
+source_sha16 = "e6b8c37f4ba39b06"
+response_text = '''
+/// Integer-array indexing on the first axis. Translated from
+/// `index_core.take`. Always returns a copy per ADR-0015 §3.
+pub fn take(_a: &[f64], _a_shape: &[usize], _indices: &[i64]) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::IndexError, message: "synthetic stub".into() })
+}
+'''
+
+# ---- slice_basic (attempt=2 — for the perf-fail escalation test) ---------
+#
+# Per ADR-0014 §5 + ADR-0015: M7.2 keeps L2.perf at numerical-tier 0.5x
+# floor (enforced). The pipeline test
+# `index_pipeline_escalates_when_perf_always_fails` injects a perf
+# verifier that rejects every attempt of `slice_basic`, so the repair
+# loop bumps to attempt=2. This canned entry covers attempt=2 so the
+# loop can re-dispatch (otherwise the loop would hit SyntheticMiss
+# before reaching the escalation threshold). The verifier still
+# rejects attempt=2 → EscalationExceeded fires.
+
+[[entry]]
+task = "translate"
+function = "slice_basic"
+attempt = 2
+source_sha16 = "e6b8c37f4ba39b06"
+response_text = '''
+/// Basic slicing (attempt=2 retry — still synthetic stub).
+pub fn slice_basic(_a: &[f64], _a_shape: &[usize], _start: Option<i64>, _stop: Option<i64>, _step: Option<i64>) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::IndexError, message: "synthetic stub attempt=2".into() })
+}
+'''

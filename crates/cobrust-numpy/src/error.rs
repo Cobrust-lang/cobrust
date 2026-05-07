@@ -2,7 +2,7 @@
 // Translated by cobrust-translator (synthetic-LLM mode).
 // source-library: numpy 2.0.2
 // oracle: cpython 3.11 (module: numpy)
-// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014.
+// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015.
 // see PROVENANCE.toml for the full manifest.
 
 //! Single error type for cobrust-numpy.
@@ -13,7 +13,8 @@
 //! match on it cleanly rather than parsing the message.
 //!
 //! M7.0 (per ADR-0013) shipped six variants. M7.1 (per ADR-0014 §4)
-//! adds three more for the ufunc surface.
+//! added three more. M7.2 (per ADR-0015 §4) adds four more for the
+//! indexing surface.
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -38,7 +39,8 @@ pub enum NumpyErrorKind {
     /// Negative dimension supplied to `zeros` / `ones` / `array`.
     NegativeDimension,
     /// `arange(start, stop, step, dtype)` with `step == 0` (matches
-    /// numpy's `ZeroDivisionError`).
+    /// numpy's `ZeroDivisionError`). Reused by M7.2 `slice` for
+    /// `step == 0` per ADR-0015 §5.
     ZeroStep,
     /// `arange(...)` invoked with `dtype=bool` (matches numpy's
     /// `TypeError`).
@@ -63,6 +65,21 @@ pub enum NumpyErrorKind {
     /// is total, so this is not raised by the M7.1 closed set — kept
     /// to keep the surface stable across M7.x.
     TypePromotionFailure,
+
+    // ---- M7.2 (per ADR-0015 §4) ----
+    /// Umbrella for indexing errors not covered by more specific
+    /// variants below — for example, applying multi-axis `index_get`
+    /// with more axes than the array has.
+    IndexError,
+    /// Single-int or int-array index out of `[-len, len)`. Matches
+    /// numpy's `IndexError`.
+    OutOfBoundsIndex,
+    /// Boolean mask passed to `mask` has shape != self.shape().
+    /// Matches numpy's `IndexError`.
+    BoolMaskShapeMismatch,
+    /// Index array passed to `take` / `Index::IntArray` is not
+    /// integer-dtype (must be `Int32` or `Int64`).
+    IndexDtypeNotInteger,
 }
 
 impl fmt::Display for NumpyError {
@@ -77,6 +94,10 @@ impl fmt::Display for NumpyError {
             NumpyErrorKind::IntegerDivisionByZero => "integer_division_by_zero",
             NumpyErrorKind::BroadcastShapeMismatch => "broadcast_shape_mismatch",
             NumpyErrorKind::TypePromotionFailure => "type_promotion_failure",
+            NumpyErrorKind::IndexError => "index_error",
+            NumpyErrorKind::OutOfBoundsIndex => "out_of_bounds_index",
+            NumpyErrorKind::BoolMaskShapeMismatch => "bool_mask_shape_mismatch",
+            NumpyErrorKind::IndexDtypeNotInteger => "index_dtype_not_integer",
         };
         write!(f, "NumpyError({kind_name}): {}", self.message)
     }
