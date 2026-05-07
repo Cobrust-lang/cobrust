@@ -4,7 +4,7 @@ adr_id: 0013
 title: M7.0 ndarray foundation — crate layout, dtype tier, ndarray backend pin, ownership model, differential strategy
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: def4b42
 supersedes: []
 superseded_by: []
 ---
