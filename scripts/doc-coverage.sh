@@ -5,12 +5,12 @@
 # item that we promise in the agent-tree module spec must also be
 # discussed in the zh and en human-tree docs.
 #
-# M0 added the directory + ADR-0001 baseline.
-# M1 (this revision) adds public-surface coverage for the frontend
-# crate by checking that the canonical entrypoint names appear in
-# every doc tree.
-#
-# Future milestones extend the `m_<milestone>_checks` block.
+# - M0 added the directory + ADR-0001 baseline.
+# - M1 added public-surface coverage for the frontend crate.
+# - M2 extended to mod:hir and mod:types.
+# - M3 extended to mod:llm_router.
+# - M4 (this revision) extends to mod:translator and mod:tomli, plus
+#   ADR-0007 acceptance + the synthetic-mode contract terms.
 #
 # See `docs/agent/conventions.md` and constitution `CLAUDE.md` §3.
 
@@ -55,6 +55,7 @@ expected_modules=(
     mir
     codegen
     llm-router
+    tomli
     translator
 )
 
@@ -67,6 +68,8 @@ done
 if [[ -d crates ]]; then
     while IFS= read -r crate_dir; do
         crate_name="$(basename "$crate_dir")"
+        # Skip dotfiles (e.g. transient .cobrust cache from integration tests).
+        [[ "$crate_name" == .* ]] && continue
         mod_name="${crate_name#cobrust-}"
         if [[ ! -f "docs/agent/modules/${mod_name}.md" ]]; then
             fail "crate ${crate_name} has no docs/agent/modules/${mod_name}.md"
@@ -82,12 +85,6 @@ if ! grep -q '^status: accepted$' "$adr_one"; then
 fi
 
 # --- 5. M1 frontend surface coverage -----------------------------------------
-# Every named public entrypoint of `cobrust-frontend` must appear in
-# the agent-tree module spec, the en-tree architecture doc, and the
-# zh-tree architecture doc.
-#
-# This is the §3.3 sync rule, mechanized.
-
 m1_frontend_terms=(
     "lex"
     "lex_bytes"
@@ -134,10 +131,6 @@ if ! grep -q -F "m1-fuzz-method" "$findings_index"; then
 fi
 
 # --- 6. M2 HIR surface coverage --------------------------------------------
-# Once M2 lands, mod:hir / mod:types must cite the canonical entrypoint
-# names in the agent module spec and in both human-tree architecture
-# docs. We skip while the module specs still declare M0/M2-stub.
-
 m2_hir_terms=(
     "lower"
     "Session"
@@ -169,7 +162,6 @@ if grep -q '^- \*\*M2 — delivered.\*\*' "docs/agent/modules/hir.md"; then
 fi
 
 # --- 7. M2 type-checker surface coverage -----------------------------------
-
 m2_types_terms=(
     "check"
     "Ty"
@@ -198,4 +190,78 @@ if grep -q '^- \*\*M2 — delivered.\*\*' "docs/agent/modules/types.md"; then
     fi
 fi
 
-echo "doc-coverage: M0 + M1 + M2 checks passed"
+# --- 8. M4 translator + tomli surface coverage -----------------------------
+# When the translator module declares M4 delivered, every public surface
+# term + the synthetic-mode contract + the manifest schema must appear in
+# all three doc trees.
+
+m4_translator_terms=(
+    "translate"
+    "PyLibrary"
+    "TranslatedCrate"
+    "TranslatorConfig"
+    "TranslatorError"
+    "ProvenanceManifest"
+    "SyntheticProvider"
+    "deterministic_id"
+    "synthetic-miss"
+    "synthetic-stale"
+    "source_sha16"
+    "PROVENANCE.toml"
+)
+
+m4_translator_files=(
+    "docs/agent/modules/translator.md"
+    "docs/human/en/architecture.md"
+    "docs/human/zh/architecture.md"
+)
+
+if grep -q '^- \*\*M4 — delivered.\*\*' "docs/agent/modules/translator.md"; then
+    for term in "${m4_translator_terms[@]}"; do
+        for f in "${m4_translator_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M4 translator surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    m4_tomli_terms=(
+        "loads"
+        "Value"
+        "TomliError"
+        "table_to_json"
+        "to_json"
+    )
+    m4_tomli_files=(
+        "docs/agent/modules/tomli.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m4_tomli_terms[@]}"; do
+        for f in "${m4_tomli_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M4 tomli surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_seven="docs/agent/adr/0007-translator-pipeline.md"
+    [[ -f "$adr_seven" ]] || fail "ADR-0007 (translator pipeline) is required for M4"
+    if ! grep -q '^status: accepted$' "$adr_seven"; then
+        fail "ADR-0007 must be 'status: accepted' for M4 to be done"
+    fi
+
+    # PROVENANCE.toml must exist on the generated crate.
+    if [[ -d crates/cobrust-tomli ]]; then
+        [[ -f crates/cobrust-tomli/PROVENANCE.toml ]] \
+            || fail "crates/cobrust-tomli/PROVENANCE.toml missing — regenerate via COBRUST_REGENERATE_TOMLI=1"
+    fi
+
+    # Corpus directory layout per ADR-0007.
+    [[ -f corpus/tomli/spec.toml ]] || fail "corpus/tomli/spec.toml missing"
+    [[ -f corpus/tomli/canned_llm_responses.toml ]] || fail "corpus/tomli/canned_llm_responses.toml missing"
+    [[ -d corpus/tomli/upstream ]] || fail "corpus/tomli/upstream missing"
+    [[ -d corpus/tomli/upstream_tests ]] || fail "corpus/tomli/upstream_tests missing"
+fi
+
+echo "doc-coverage: M0 + M1 + M2 + M4 checks passed"

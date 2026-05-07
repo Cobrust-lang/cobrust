@@ -244,6 +244,116 @@ preferred = ["anthropic_official:claude-opus-4-7", "deepseek:deepseek-v3"]
 - **不**承担长链 agent 循环（那是翻译子系统的活）
 - **不**内嵌 prompt 模板（模板和消费者放一起）
 
+## 翻译器（M4 — 已交付）
+
+`cobrust-translator` 是 AI 翻译子系统的编排器。M4 端到端实现了
+L0（spec 提取）+ L1（翻译）流水线，目标库为 `tomli`，默认走合成
+LLM 模式以保证 gate 可复现。真实 LLM 路径由 `real-llm` cargo
+feature 控制，留给 M5+ 做 smoke test。
+
+### 实例
+
+```bash
+# 从 corpus 重新生成 cobrust-tomli。
+COBRUST_REGENERATE_TOMLI=1 cargo test \
+    -p cobrust-translator --test tomli_pipeline \
+    pipeline_regenerates_cobrust_tomli_when_env_set
+```
+
+流水线读取：
+
+- `corpus/tomli/upstream/tomli_loads.py` — vendor 的 Python 源码
+- `corpus/tomli/spec.toml` — L0 行为契约
+- `corpus/tomli/canned_llm_responses.toml` — 合成模式响应表
+
+输出：
+
+- `crates/cobrust-tomli/Cargo.toml`
+- `crates/cobrust-tomli/src/{lib.rs, parser.rs}` — 每个文件携带 provenance 头
+- `crates/cobrust-tomli/PROVENANCE.toml` — 完整 manifest
+- `crates/cobrust-tomli/python/{tomli_init.py, setup.py}` — PyO3 形 wrapper 占位
+- `crates/cobrust-tomli/tests/upstream_tests/test_loads.py` — 上游测试原样拷贝
+
+### 公共 API
+
+- `translate(library: &PyLibrary, cfg: &TranslatorConfig) -> Result<TranslatedCrate, TranslatorError>` — 异步入口
+- `PyLibrary` — 一个待翻译库的描述（路径、版本、seeds）
+- `TranslatorConfig` — 运行时旋钮：router、out_dir、oracle、escalation_threshold、synthetic_only 标志
+- `TranslatedCrate` — 输出：`{ manifest: ProvenanceManifest, crate_dir, pyo3_wrapper_dir, functions }`
+- `TranslatorError` — 错误分类：`SpecExtraction`、`Translation { function, message }`、`BuildGate`、`BehaviorGate`、`DownstreamGate`、`SyntheticMiss { task, function }`、`Io`、`Router`、`Manifest`、`Config`、`Decode`
+- `SyntheticProvider` — `LlmProvider` 实现，以 `(task, function, source_sha16)` 为 key 服务 canned TOML 响应
+- `deterministic_id(source_sha256_hex, toolchain, router_decision_ids)` — `blake3:<hex>` 复现 token
+
+### 合成 LLM 模式契约
+
+合成 provider 从 `corpus/<lib>/canned_llm_responses.toml` 读取预录响应，
+以 `(task, function)` 为 key、`source_sha16` 做新鲜度校验。翻译器在
+每个 prompt 上加固定头部，让合成 provider 不需要解析 body 即可路由：
+
+```text
+cobrust-translator/v1
+task: <task>
+function: <function>
+source-sha256: <16-hex>
+---
+<prompt body>
+```
+
+查找结果：
+
+- **命中** — 返回 canned `response_text`。
+- **缺项** — `LlmError::Provider { code: "synthetic-miss" }`。永久错误（调用方必须新增条目或切换到真实 LLM）。
+- **`source_sha16` 不匹配** — `LlmError::Provider { code: "synthetic-stale" }`。永久错误（维护者必须重新录制）。
+
+这把宪法 §2.4 那句"no silent translations, ever"变成了**强制可验证**。
+
+### Provenance manifest
+
+每次翻译都会在生成 crate 的 `Cargo.toml` 旁产出 `PROVENANCE.toml`。
+顶层 section：
+
+- `[source]` — library, version, sha256（完整 64-hex）, file_count
+- `[oracle]` — runtime, runtime_version, oracle_module
+- `[verification]` — seeds, fuzz_inputs_per_fn, divergences, known_failures
+- `[router]` — strategy (`synthetic` / `real-llm`), models_used, ledger_entries
+- `[build]` — toolchain, deterministic_id (`blake3:<hex>`), crate_layout_version
+- `[gates]` — l0_spec_emitted, l1_files_emitted, l2_build, l2_behavior, l2_perf, l3_pyo3_wrapper, l3_downstream_dependents
+
+`build.deterministic_id = blake3(source_sha256_hex || "\n" || toolchain || "\n" || sorted_join(router_decision_ids))`。
+相同输入 ⇒ 字节相同的 id。
+
+## tomli（M4 — 已交付）
+
+`cobrust-tomli` 是翻译器流水线产出的第一个 crate。纯 Rust 实现的
+`tomli`/CPython `tomllib` 的 `loads()` 子集。**自动生成 — 禁止手动编辑。**
+
+### 公共 API
+
+```rust
+use cobrust_tomli::{loads, table_to_json, to_json, TomliError, Value};
+use std::collections::BTreeMap;
+
+let parsed: BTreeMap<String, Value> = loads("x = 1\n").expect("parse");
+let json: serde_json::Value = table_to_json(&parsed);
+```
+
+`Value` 五个变体：`Bool`、`Int`、`Str`、`Array`、`Table`。
+`TomliError` 携带 `{ message: String, pos: usize }`。`to_json` /
+`table_to_json` 是 L3 差分 gate 用的 JSON 转换 helper。
+
+### 验证
+
+- 27 正例 + 5 负例与 CPython `tomllib` 一致（`tests/tomli_downstream.rs`）。
+- 1024 个 panic-free 模糊输入（`tests/tomli_fuzz.rs::l2_behavior_fuzz_loads_panic_free`）。
+- 1050 个差分用例对照 CPython（`tests/tomli_fuzz.rs::l2_behavior_fuzz_differential_agreement_with_cpython`）。
+- `PROVENANCE.toml` 通过验证，跨独立运行字节稳定。
+
+### 范围窗口
+
+在 scope（与 CPython 完全一致）：整数、布尔、基础+字面字符串、数组、内联表、点分表头、注释、CRLF 行尾。
+
+不在 scope（M5 扩展）：多行字符串、hex/oct/bin 整数、浮点、日期时间、表数组、内联表 key path。
+
 ## 自举路线
 
 编译器初版用 Rust 写。Cobrust 成熟后（M5 之后），开始自举非性能关键的编译器阶段，**类型检查器和 AST printer 优先**。

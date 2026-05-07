@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: afe26db
+last_verified_commit: TBD
 ---
 
 # Architecture Decision Records
@@ -35,3 +35,4 @@ same atomic commit as the change it justifies.
 | [0004](0004-llm-router-architecture.md) | LLM Router architecture — provider trait, error taxonomy, retry, cache key, ledger schema, consensus tie-breaking | accepted | 2026-04-30 |
 | [0005](0005-hir-shape.md) | HIR shape and AST→HIR lowering tables for the static core | accepted | 2026-04-30 |
 | [0006](0006-type-system.md) | Type system shape, inference algorithm, and proof obligations for the static core | accepted | 2026-04-30 |
+| [0007](0007-translator-pipeline.md) | Translator pipeline — L0 spec, L1 translation, provenance manifest, synthetic-LLM mode, PyO3 wrapper | accepted | 2026-04-30 |

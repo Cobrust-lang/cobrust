@@ -1,0 +1,39 @@
+[source]
+library = "tomli"
+version = "2.0.1"
+sha256 = "9a1adcc278853b5e2a732cb28272200103b497c69e9c1e7895641e1e32f3071e"
+file_count = 1
+
+[oracle]
+runtime = "cpython"
+runtime_version = "3.11"
+oracle_module = "tomllib"
+
+[verification]
+seeds = [
+    42,
+    1337,
+    3735928559,
+]
+fuzz_inputs_per_fn = 1024
+divergences = []
+known_failures = []
+
+[router]
+strategy = "synthetic"
+models_used = ["synthetic:tomli-canned-v1"]
+ledger_entries = 24
+
+[build]
+toolchain = "rustc 1.94.1"
+deterministic_id = "blake3:39e9e2d346da36c0e16ae86252e30cf0420de52063f0b106a95b1004bd2f0069"
+crate_layout_version = 1
+
+[gates]
+l0_spec_emitted = true
+l1_files_emitted = 12
+l2_build = "pass (cargo build --release zero warnings)"
+l2_behavior = "pass (tests/tomli_downstream.rs + tests/tomli_fuzz.rs)"
+l2_perf = "skipped (M4 records, M5 gates per ADR-0007)"
+l3_pyo3_wrapper = "pass (tests/tomli_downstream.rs subprocess CPython oracle)"
+l3_downstream_dependents = "deferred to M5 per ADR-0007"
