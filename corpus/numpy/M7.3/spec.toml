@@ -1,0 +1,116 @@
+# numpy L0 spec — M7.3 (per ADR-0016).
+#
+# Schema per ADR-0007 §1. One [function.<name>] per public-or-helper
+# entrypoint translated by the M7.3 cobrust-numpy build. Every entry
+# binds a Python qualified name to a behavior contract that the L1
+# translator is required to satisfy and the L0 differential harness
+# verifies.
+
+schema_version = 1
+library = "numpy"
+upstream_version = "2.0.2"
+oracle_module = "numpy"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+# ---- Reduction surface ----------------------------------------------------
+
+[function.sum_all]
+qualname = "reduction_core.sum_all"
+public = true
+signature = "sum_all(a_data: list[float], a_shape: list[int]) -> float"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "sum(a) over all axes; pairwise summation for floats per ADR-0016 §3."
+
+[function.sum_axis]
+qualname = "reduction_core.sum_axis"
+public = true
+signature = "sum_axis(a_data: list[float], a_shape: list[int], axis: int) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "sum(a, axis=k); pairwise summation per group."
+
+[function.prod_all]
+qualname = "reduction_core.prod_all"
+public = true
+signature = "prod_all(a_data: list[float], a_shape: list[int]) -> float"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "prod(a) — multiplicative identity 1 for empty arrays."
+
+[function.mean_all]
+qualname = "reduction_core.mean_all"
+public = true
+signature = "mean_all(a_data: list[float], a_shape: list[int]) -> float"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "mean(a); empty-array → NaN per numpy."
+
+[function.var_all]
+qualname = "reduction_core.var_all"
+public = true
+signature = "var_all(a_data: list[float], a_shape: list[int], ddof: int) -> float"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "var(a, ddof); ddof default 0 (population variance); ddof=1 → sample (Bessel)."
+
+[function.std_all]
+qualname = "reduction_core.std_all"
+public = true
+signature = "std_all(a_data: list[float], a_shape: list[int], ddof: int) -> float"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "std(a, ddof) = sqrt(var(a, ddof))."
+
+[function.min_all]
+qualname = "reduction_core.min_all"
+public = true
+signature = "min_all(a_data: list[float], a_shape: list[int]) -> float"
+py_compat = "strict"
+description = "min(a); empty-array → ValueError → ReductionEmptyArray."
+
+[function.max_all]
+qualname = "reduction_core.max_all"
+public = true
+signature = "max_all(a_data: list[float], a_shape: list[int]) -> float"
+py_compat = "strict"
+description = "max(a); empty-array → ValueError → ReductionEmptyArray."
+
+[function.argmin_all]
+qualname = "reduction_core.argmin_all"
+public = true
+signature = "argmin_all(a_data: list[float], a_shape: list[int]) -> int"
+py_compat = "strict"
+description = "argmin(a); first-occurrence tie-breaking; empty-array → ValueError."
+
+[function.argmax_all]
+qualname = "reduction_core.argmax_all"
+public = true
+signature = "argmax_all(a_data: list[float], a_shape: list[int]) -> int"
+py_compat = "strict"
+description = "argmax(a); first-occurrence tie-breaking; empty-array → ValueError."
+
+# ---- Helper functions in scope --------------------------------------------
+
+[function.normalize_axis]
+qualname = "reduction_core._normalize_axis"
+public = false
+signature = "_normalize_axis(axis: int | None, ndim: int) -> int | None"
+py_compat = "strict"
+description = "Normalise a negative axis index. None → reduce-all. Out-of-bounds raises IndexError → IndexError(NumpyError)."
+
+[function.pairwise_sum]
+qualname = "reduction_core._pairwise_sum"
+public = false
+signature = "_pairwise_sum(values: list[float]) -> float"
+py_compat = "numerical"
+py_compat_rtol = 1e-12
+description = "Pairwise summation per ADR-0016 §3 (chunk size 8). O(log n × eps) error matches numpy."
+
+# ---- Verification budget --------------------------------------------------
+
+[verification]
+seeds = [42, 1337, 0xDEADBEEF]
+fuzz_inputs_per_fn = 1024
+tolerance = "exact for int/strict; rtol=1e-7 for float (per ADR-0016 acceptance gate); rtol=1e-12 for pairwise_sum precision test"

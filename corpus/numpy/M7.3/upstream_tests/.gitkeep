@@ -1,0 +1,6 @@
+# Placeholder — M7.3 uses the differential harness as the primary
+# L2.behavior gate. Vendored numpy pytest subset is not required for
+# this sub-milestone (the upstream tests for reductions are tightly
+# coupled to numpy's internal C extensions; the differential harness
+# at `harness/h_reduction.py` provides the equivalent behavioral
+# coverage with simpler tooling).

@@ -1,0 +1,268 @@
+# Canned LLM responses for numpy M7.3 — synthetic-LLM mode.
+#
+# Schema per ADR-0007 §"Synthetic-LLM mode contract" + ADR-0008 §5
+# (per-attempt routing) + ADR-0016. Lookup key:
+# (task, function, attempt). When `attempt` is omitted both sides
+# default to 1.
+#
+# Source-SHA staleness check:
+#   sha256(corpus/numpy/M7.3/upstream/reduction_core.py)[..16] = "091d4078fed10b8a"
+#
+# These canned responses describe a flat-file equivalent of the
+# multi-file cobrust-numpy crate; the pipeline integration test
+# (`crates/cobrust-numpy/tests/reduce_pipeline.rs`) drives this corpus
+# end-to-end and asserts (a) every function is emitted, (b) every
+# function carries a provenance header, and (c) the assembled
+# parser.rs string is non-empty per function. The production
+# multi-file crate at `crates/cobrust-numpy/src/` is the gate-stable
+# byte snapshot; canned responses here cover the **translator path**
+# itself.
+#
+# MODULE PREAMBLE: alphabetically-first function (`argmax_all`)
+# carries the preamble. Subsequent entries emit only their function
+# bodies.
+
+schema_version = 1
+oracle_runtime = "cpython 3.11"
+
+# ---- argmax_all (alphabetic-first; carries module preamble) --------------
+
+[[entry]]
+task = "translate"
+function = "argmax_all"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+// Module preamble for M7.3 reductions (synthetic-LLM mode).
+// Per ADR-0016 §"Crate layout" the production cobrust-numpy is
+// multi-file; the canned-response path emits a flat-file equivalent
+// so the M7.3 pipeline integration test can assert end-to-end
+// emission without extending the pipeline's hardcoded per-library
+// file layout.
+
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::imprecise_flops)]
+#![allow(clippy::suboptimal_flops)]
+#![allow(clippy::excessive_precision)]
+#![allow(dead_code)]
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumpyError { pub kind: NumpyErrorKind, pub message: String }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NumpyErrorKind {
+    ReductionEmptyArray,
+    IndexError,
+}
+
+/// argmax(a) — first-occurrence tie-breaking. Translated from
+/// reduction_core.argmax_all.
+pub fn argmax_all(_a: &[f64], _shape: &[usize]) -> Result<i64, NumpyError> {
+    // Stub body: production lives in crates/cobrust-numpy/src/reduce.rs.
+    Err(NumpyError { kind: NumpyErrorKind::ReductionEmptyArray, message: "synthetic stub".into() })
+}
+'''
+
+# ---- argmin_all -----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "argmin_all"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// argmin(a) — first-occurrence tie-breaking. Translated from
+/// reduction_core.argmin_all.
+pub fn argmin_all(_a: &[f64], _shape: &[usize]) -> Result<i64, NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::ReductionEmptyArray, message: "synthetic stub".into() })
+}
+'''
+
+# ---- max_all --------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "max_all"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// max(a). Translated from reduction_core.max_all.
+pub fn max_all(_a: &[f64], _shape: &[usize]) -> Result<f64, NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::ReductionEmptyArray, message: "synthetic stub".into() })
+}
+'''
+
+# ---- mean_all -------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "mean_all"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// mean(a) — pairwise summation per ADR-0016 §3. Translated from
+/// reduction_core.mean_all.
+pub fn mean_all(a: &[f64], _shape: &[usize]) -> Result<f64, NumpyError> {
+    if a.is_empty() {
+        return Ok(f64::NAN);
+    }
+    let s: f64 = a.iter().sum();
+    Ok(s / a.len() as f64)
+}
+'''
+
+# ---- min_all --------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "min_all"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// min(a). Translated from reduction_core.min_all.
+pub fn min_all(_a: &[f64], _shape: &[usize]) -> Result<f64, NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::ReductionEmptyArray, message: "synthetic stub".into() })
+}
+'''
+
+# ---- normalize_axis -------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "normalize_axis"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// Normalise a negative axis index. None → reduce-all. Translated
+/// from reduction_core._normalize_axis.
+pub fn normalize_axis(axis: Option<i64>, ndim: usize) -> Result<Option<usize>, NumpyError> {
+    let Some(mut a) = axis else { return Ok(None); };
+    let n = ndim as i64;
+    if a < 0 { a += n; }
+    if a < 0 || a >= n {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::IndexError,
+            message: format!("axis {axis:?} is out of bounds for array of dimension {ndim}"),
+        });
+    }
+    Ok(Some(a as usize))
+}
+'''
+
+# ---- pairwise_sum ---------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "pairwise_sum"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// Pairwise summation per ADR-0016 §3 (chunk size 8). Translated
+/// from reduction_core._pairwise_sum.
+pub fn pairwise_sum(values: &[f64]) -> f64 {
+    let n = values.len();
+    if n == 0 { return 0.0; }
+    if n <= 8 {
+        let mut s = 0.0_f64;
+        for v in values { s += *v; }
+        return s;
+    }
+    let mid = n / 2;
+    pairwise_sum(&values[..mid]) + pairwise_sum(&values[mid..])
+}
+'''
+
+# ---- prod_all -------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "prod_all"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// prod(a) — multiplicative identity 1 for empty arrays. Translated
+/// from reduction_core.prod_all.
+pub fn prod_all(a: &[f64], _shape: &[usize]) -> Result<f64, NumpyError> {
+    let mut p = 1.0_f64;
+    for v in a { p *= *v; }
+    Ok(p)
+}
+'''
+
+# ---- std_all --------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "std_all"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// std(a, ddof) = sqrt(var(a, ddof)). Translated from reduction_core.std_all.
+pub fn std_all(_a: &[f64], _shape: &[usize], _ddof: u32) -> Result<f64, NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::ReductionEmptyArray, message: "synthetic stub".into() })
+}
+'''
+
+# ---- sum_all --------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "sum_all"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// sum(a) — pairwise summation for floats per ADR-0016 §3. Translated
+/// from reduction_core.sum_all.
+pub fn sum_all(a: &[f64], _shape: &[usize]) -> Result<f64, NumpyError> {
+    Ok(a.iter().sum())
+}
+'''
+
+# ---- sum_axis -------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "sum_axis"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// sum(a, axis=k); pairwise summation per group. Translated from
+/// reduction_core.sum_axis.
+pub fn sum_axis(_a: &[f64], _shape: &[usize], _axis: i64) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::IndexError, message: "synthetic stub".into() })
+}
+'''
+
+# ---- var_all --------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "var_all"
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// var(a, ddof). Translated from reduction_core.var_all.
+pub fn var_all(_a: &[f64], _shape: &[usize], _ddof: u32) -> Result<f64, NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::ReductionEmptyArray, message: "synthetic stub".into() })
+}
+'''
+
+# ---- sum_all (attempt=2 — for the perf-fail escalation test) -------------
+#
+# Per ADR-0014 §5 + ADR-0015 + ADR-0016: M7.3 keeps L2.perf at numerical-tier
+# 0.5x floor (enforced). The pipeline test
+# `reduce_pipeline_escalates_when_perf_always_fails` injects a perf
+# verifier that rejects every attempt of `sum_all`, so the repair
+# loop bumps to attempt=2. This canned entry covers attempt=2 so the
+# loop can re-dispatch (otherwise the loop would hit SyntheticMiss
+# before reaching the escalation threshold). The verifier still
+# rejects attempt=2 → EscalationExceeded fires.
+
+[[entry]]
+task = "translate"
+function = "sum_all"
+attempt = 2
+source_sha16 = "091d4078fed10b8a"
+response_text = '''
+/// sum(a) (attempt=2 retry — still synthetic stub).
+pub fn sum_all(a: &[f64], _shape: &[usize]) -> Result<f64, NumpyError> {
+    Ok(a.iter().sum())
+}
+'''
