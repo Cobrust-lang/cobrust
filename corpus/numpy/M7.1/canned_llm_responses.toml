@@ -1,0 +1,314 @@
+# Canned LLM responses for numpy M7.1 — synthetic-LLM mode.
+#
+# Schema per ADR-0007 §"Synthetic-LLM mode contract" + ADR-0008 §5
+# (per-attempt routing) + ADR-0014. Lookup key:
+# (task, function, attempt). When `attempt` is omitted both sides
+# default to 1.
+#
+# Source-SHA staleness check:
+#   sha256(corpus/numpy/M7.1/upstream/ufunc_core.py)[..16] = "d9407aa94ead71f4"
+#
+# These canned responses describe a flat-file equivalent of the
+# multi-file cobrust-numpy crate; the pipeline integration test
+# (`crates/cobrust-numpy/tests/ufunc_pipeline.rs`) drives this corpus
+# end-to-end and asserts (a) every function is emitted, (b) every
+# function carries a provenance header, and (c) the assembled
+# parser.rs string is non-empty per function. The production
+# multi-file crate at `crates/cobrust-numpy/src/` is the gate-stable
+# byte snapshot; canned responses here cover the **translator path**
+# itself.
+#
+# MODULE PREAMBLE: alphabetically-first function (`add`) carries the
+# preamble. Subsequent entries emit only their function bodies.
+
+schema_version = 1
+oracle_runtime = "cpython 3.11"
+
+# ---- add (alphabetic-first; carries module preamble) ---------------------
+
+[[entry]]
+task = "translate"
+function = "add"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+// Module preamble for M7.1 ufuncs (synthetic-LLM mode).
+// Per ADR-0014 §"Crate layout" the production cobrust-numpy is
+// multi-file; the canned-response path emits a flat-file equivalent
+// so the M7.1 pipeline integration test can assert end-to-end
+// emission without extending the pipeline's hardcoded per-library
+// file layout.
+
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(dead_code)]
+
+use ndarray::{ArrayD, IxDyn};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Dtype {
+    Int32,
+    Int64,
+    Float32,
+    Float64,
+    Bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumpyError {
+    pub kind: NumpyErrorKind,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NumpyErrorKind {
+    BroadcastShapeMismatch,
+    IntegerDivisionByZero,
+    TypePromotionFailure,
+    ShapeMismatch,
+    UnsupportedDtype,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Array {
+    Int32(ArrayD<i32>),
+    Int64(ArrayD<i64>),
+    Float32(ArrayD<f32>),
+    Float64(ArrayD<f64>),
+    Bool(ArrayD<bool>),
+}
+
+pub fn result_type(a: Dtype, b: Dtype) -> Dtype {
+    use Dtype::{Bool, Float32, Float64, Int32, Int64};
+    match (a, b) {
+        (Bool, Bool) => Bool,
+        (Bool, Int32) | (Int32, Bool) => Int32,
+        (Bool, Int64) | (Int64, Bool) => Int64,
+        (Bool, Float32) | (Float32, Bool) => Float32,
+        (Bool, Float64) | (Float64, Bool) => Float64,
+        (Int32, Int32) => Int32,
+        (Int32, Int64) | (Int64, Int32) => Int64,
+        (Int32, Float32) | (Float32, Int32) => Float64,
+        (Int32, Float64) | (Float64, Int32) => Float64,
+        (Int64, Int64) => Int64,
+        (Int64, Float32) | (Float32, Int64) => Float64,
+        (Int64, Float64) | (Float64, Int64) => Float64,
+        (Float32, Float32) => Float32,
+        (Float32, Float64) | (Float64, Float32) => Float64,
+        (Float64, Float64) => Float64,
+    }
+}
+
+pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>, NumpyError> {
+    let n = a.len().max(b.len());
+    let mut out = Vec::with_capacity(n);
+    for k in 0..n {
+        let a_dim = if k < a.len() { a[a.len() - 1 - k] } else { 1 };
+        let b_dim = if k < b.len() { b[b.len() - 1 - k] } else { 1 };
+        let dim = if a_dim == b_dim {
+            a_dim
+        } else if a_dim == 1 {
+            b_dim
+        } else if b_dim == 1 {
+            a_dim
+        } else {
+            return Err(NumpyError {
+                kind: NumpyErrorKind::BroadcastShapeMismatch,
+                message: format!("operands could not be broadcast together with shapes {a:?} {b:?}"),
+            });
+        };
+        out.push(dim);
+    }
+    out.reverse();
+    Ok(out)
+}
+
+/// Element-wise add (`a + b`). Translated from `ufunc_core.add`.
+pub fn add(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    // Stub body: production lives in crates/cobrust-numpy/src/ufunc.rs.
+    let _ = (a, b);
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub".into() })
+}
+'''
+
+# ---- broadcast_shape (helper, carries no preamble) -----------------------
+
+[[entry]]
+task = "translate"
+function = "broadcast_shape"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Helper: numpy-exact broadcast shape (alias of preamble fn).
+pub fn broadcast_shape_helper(a: &[usize], b: &[usize]) -> Result<Vec<usize>, NumpyError> {
+    broadcast_shape(a, b)
+}
+'''
+
+# ---- cos -----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "cos"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Element-wise cos. Translated from `ufunc_core.cos`.
+pub fn cos(a: &Array) -> Result<Array, NumpyError> {
+    let _ = a;
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub".into() })
+}
+'''
+
+# ---- divide --------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "divide"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Element-wise divide. Translated from `ufunc_core.divide`.
+pub fn divide(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    let _ = (a, b);
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub".into() })
+}
+'''
+
+# ---- exp -----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "exp"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Element-wise exp. Translated from `ufunc_core.exp`.
+pub fn exp(a: &Array) -> Result<Array, NumpyError> {
+    let _ = a;
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub".into() })
+}
+'''
+
+# ---- log -----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "log"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Element-wise log. Translated from `ufunc_core.log`.
+pub fn log(a: &Array) -> Result<Array, NumpyError> {
+    let _ = a;
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub".into() })
+}
+'''
+
+# ---- multiply ------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "multiply"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Element-wise multiply. Translated from `ufunc_core.multiply`.
+pub fn multiply(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    let _ = (a, b);
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub".into() })
+}
+'''
+
+# ---- power ---------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "power"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Element-wise power. Translated from `ufunc_core.power`.
+pub fn power(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    let _ = (a, b);
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub".into() })
+}
+'''
+
+# ---- result_type ---------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "result_type"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// NumPy 2.x NEP 50 promotion alias for the helper.
+pub fn result_type_helper(a: Dtype, b: Dtype) -> Dtype {
+    result_type(a, b)
+}
+'''
+
+# ---- sin -----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "sin"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Element-wise sin. Translated from `ufunc_core.sin`.
+pub fn sin(a: &Array) -> Result<Array, NumpyError> {
+    let _ = a;
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub".into() })
+}
+'''
+
+# ---- sqrt ----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "sqrt"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Element-wise sqrt. Translated from `ufunc_core.sqrt`.
+pub fn sqrt(a: &Array) -> Result<Array, NumpyError> {
+    let _ = a;
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub".into() })
+}
+'''
+
+# ---- subtract ------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "subtract"
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Element-wise subtract. Translated from `ufunc_core.subtract`.
+pub fn subtract(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    let _ = (a, b);
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub".into() })
+}
+'''
+
+# ---- add (attempt=2 — for the perf-fail escalation test) -----------------
+#
+# Per ADR-0014 §5: M7.1 flips L2.perf to ENFORCED. The pipeline test
+# `ufunc_pipeline_escalates_when_perf_always_fails` injects a perf
+# verifier that rejects every attempt of `add`, so the repair loop
+# bumps to attempt=2. This canned entry covers attempt=2 so the loop
+# can re-dispatch (otherwise the loop would hit SyntheticMiss before
+# reaching the escalation threshold). The verifier still rejects
+# attempt=2 → EscalationExceeded fires.
+
+[[entry]]
+task = "translate"
+function = "add"
+attempt = 2
+source_sha16 = "d9407aa94ead71f4"
+response_text = '''
+/// Element-wise add (attempt=2 retry — still synthetic stub).
+pub fn add(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    let _ = (a, b);
+    Err(NumpyError { kind: NumpyErrorKind::UnsupportedDtype, message: "synthetic stub attempt=2".into() })
+}
+'''

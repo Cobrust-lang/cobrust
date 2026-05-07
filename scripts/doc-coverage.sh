@@ -508,4 +508,59 @@ if grep -q '^- \*\*M7.0 — delivered.\*\*' "docs/agent/modules/translator.md"; 
     [[ -f corpus/numpy/M7.0/perf.toml ]] || fail "corpus/numpy/M7.0/perf.toml missing"
 fi
 
-echo "doc-coverage: M0 + M1 + M2 + M4 + M5 + M6 + M7.0 checks passed"
+echo "doc-coverage: M0 + M1 + M2 + M4 + M5 + M6 + M7.0 + M7.1 checks passed"
+
+# --- 12. M7.1 ufunc + broadcasting + promotion surface coverage -----------
+# When the numpy module declares M7.1 delivered, the ufunc + broadcasting
+# + promotion surface terms + ADR-0014 anchors must appear in all three
+# doc trees.
+
+if grep -q '^- \*\*M7.1 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
+    m7_1_numpy_terms=(
+        "add"
+        "sub"
+        "mul"
+        "div"
+        "broadcast_shape"
+        "result_type"
+        "sin"
+        "cos"
+        "exp"
+        "log"
+        "sqrt"
+        "BroadcastShapeMismatch"
+        "IntegerDivisionByZero"
+        "NestedList"
+        "array_i32"
+        "array_f64"
+        "ADR-0014"
+    )
+    m7_1_numpy_files=(
+        "docs/agent/modules/numpy.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m7_1_numpy_terms[@]}"; do
+        for f in "${m7_1_numpy_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M7.1 numpy surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_fourteen="docs/agent/adr/0014-m7-1-ufuncs-broadcasting.md"
+    [[ -f "$adr_fourteen" ]] || fail "ADR-0014 (M7.1 ufuncs + broadcasting) is required for M7.1"
+    if ! grep -q '^status: accepted$' "$adr_fourteen"; then
+        fail "ADR-0014 must be 'status: accepted' for M7.1 to be done"
+    fi
+
+    # Corpus directory layout per ADR-0014.
+    [[ -f corpus/numpy/M7.1/spec.toml ]] || fail "corpus/numpy/M7.1/spec.toml missing"
+    [[ -f corpus/numpy/M7.1/canned_llm_responses.toml ]] || fail "corpus/numpy/M7.1/canned_llm_responses.toml missing"
+    [[ -d corpus/numpy/M7.1/upstream ]] || fail "corpus/numpy/M7.1/upstream missing"
+    [[ -d corpus/numpy/M7.1/upstream_tests ]] || fail "corpus/numpy/M7.1/upstream_tests missing"
+    [[ -d corpus/numpy/M7.1/harness ]] || fail "corpus/numpy/M7.1/harness missing"
+    [[ -f corpus/numpy/M7.1/perf.toml ]] || fail "corpus/numpy/M7.1/perf.toml missing"
+fi
+
+echo "doc-coverage: M7.1 ufunc surface checks passed"

@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:numpy
 crate: cobrust-numpy
-last_verified_commit: d035d9d
+last_verified_commit: 1f34acd
 dependencies: [mod:translator]
 ---
 
@@ -36,8 +36,25 @@ We do not reimplement `ArrayD::zeros` in Rust; we call it.
   panic-free fuzz inputs across the four constructors. The
   `--features pyo3` build path is wired per ADR-0011.
 
-- **M7.1 — pending.** Universal functions + broadcasting; lands the
-  next sub-milestone per ADR-0012.
+- **M7.1 — delivered.** Universal functions + broadcasting + NEP 50
+  type promotion landed per ADR-0014. The cobrust-numpy crate now
+  ships binary ufuncs (`add` / `sub` / `mul` / `div` / `pow`),
+  comparison ufuncs (`eq` / `ne` / `lt` / `le` / `gt` / `ge` — all
+  return `Dtype::Bool`), element-wise math (`sin` / `cos` / `exp` /
+  `log` / `sqrt`), broadcasting (`broadcast_shape`), type promotion
+  (`result_type`), typed constructors (`array_i32` / `array_i64` /
+  `array_f32` / `array_f64` / `array_bool`), and nested-list parsing
+  (`NestedList`, `array_from_nested`). Three new error variants
+  (`IntegerDivisionByZero`, `BroadcastShapeMismatch`,
+  `TypePromotionFailure`) cover the new failure paths. The L0
+  differential gate compares each ufunc against upstream numpy 2.0.2
+  with bit-identical for int/bool and `rtol=1e-7` for float — >= 1200
+  fuzz inputs per ufunc verified. Closes M7.0 follow-ups 1-4
+  (tagged-union -> monomorphic dispatch; typed constructors;
+  L2.perf flip to enforced; multi-D nested-list parsing).
+
+- **M7.2 — pending.** Indexing (basic, advanced, boolean masks) per
+  ADR-0012.
 
 ## Public surface (M7.0)
 
@@ -85,18 +102,64 @@ pub fn arange(start: f64, stop: f64, step: f64, dtype: Dtype) -> Result<Array, N
 pub fn arange_count(start: f64, stop: f64, step: f64) -> usize;
 pub fn array_repr(arr: &Array) -> String;
 
+// M7.1 typed constructors (per ADR-0014; closes M7.0 follow-up #2).
+pub fn array_i32(values: &[i32], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_i64(values: &[i64], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_f32(values: &[f32], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_f64(values: &[f64], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_bool(values: &[bool], shape: &[usize]) -> Result<Array, NumpyError>;
+
+// M7.1 nested-list parsing (per ADR-0014; closes M7.0 follow-up #4).
+pub enum NestedList {
+    Scalar(f64),
+    List(Vec<NestedList>),
+}
+pub fn array_from_nested(nested: &NestedList, dtype: Dtype) -> Result<Array, NumpyError>;
+
+// M7.1 ufuncs (per ADR-0014).
+impl Array {
+    // Binary ops — promote per result_type, broadcast, dispatch.
+    pub fn add(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn sub(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn mul(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn div(&self, other: &Array) -> Result<Array, NumpyError>;  // int /0 → IntegerDivisionByZero
+    pub fn pow(&self, other: &Array) -> Result<Array, NumpyError>;
+    // Comparison ops — always return Dtype::Bool.
+    pub fn eq_(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn ne_(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn lt(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn le(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn gt(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn ge(&self, other: &Array) -> Result<Array, NumpyError>;
+    // Element-wise math — int inputs promoted to Float64, float preserved.
+    pub fn sin(&self) -> Result<Array, NumpyError>;
+    pub fn cos(&self) -> Result<Array, NumpyError>;
+    pub fn exp(&self) -> Result<Array, NumpyError>;
+    pub fn log(&self) -> Result<Array, NumpyError>;
+    pub fn sqrt(&self) -> Result<Array, NumpyError>;
+}
+
+// M7.1 helpers (per ADR-0014).
+pub fn result_type(a: Dtype, b: Dtype) -> Dtype;          // NEP 50 promotion table
+pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>, NumpyError>;
+
 // Closed error taxonomy.
 pub struct NumpyError {
     pub kind: NumpyErrorKind,
     pub message: String,
 }
 pub enum NumpyErrorKind {
+    // M7.0 (per ADR-0013):
     UnsupportedDtype,
     ShapeMismatch,
     NegativeDimension,
     ZeroStep,
     BoolArangeUnsupported,
     CastFailed,
+    // M7.1 additions (per ADR-0014):
+    IntegerDivisionByZero,
+    BroadcastShapeMismatch,
+    TypePromotionFailure,
 }
 ```
 
@@ -205,13 +268,33 @@ M7.0 reuses the M4/M5/M6 task value; no new task is introduced.
 - [x] PROVENANCE.toml validates with `gates.l1_files_emitted = 8`.
 - [x] ADR-0013 lands; doc tree updated; doc-coverage extended.
 
-## Done means (M7.1 — PENDING)
+## Done means (M7.1 — DONE)
 
-- [ ] Universal functions: `+ - * / **`, `np.add/subtract/...`.
-- [ ] Element-wise math (`sin`, `cos`, `exp`, `log`, `sqrt`).
-- [ ] Broadcasting rules implemented per numpy.
-- [ ] Bit-identical for int dtypes; `rtol=1e-7` for float; 1000+
-      input differential corpus per ufunc.
+- [x] Universal functions: `+ - * / **` (`Array::add / sub / mul /
+      div / pow`).
+- [x] Comparison ufuncs (`eq_ / ne_ / lt / le / gt / ge`) -- always
+      return `Dtype::Bool`.
+- [x] Element-wise math (`sin / cos / exp / log / sqrt`) -- integer
+      inputs promote to `Float64`, float preserved.
+- [x] Broadcasting per numpy 2.x rules (`broadcast_shape`).
+- [x] Type promotion per NumPy 2.x NEP 50 (`result_type`, 25-entry
+      table).
+- [x] Bit-identical for int dtypes; `rtol=1e-7` for float; >= 1200
+      fuzz inputs per ufunc verified vs upstream numpy 2.0.2.
+- [x] Typed constructors `array_i32 / i64 / f32 / f64 / bool`
+      (closes ADR-0013 follow-up #2).
+- [x] Nested-list parsing `array_from_nested(NestedList, Dtype)`
+      (closes ADR-0013 follow-up #4).
+- [x] L2.perf flipped to enforced -- `corpus/numpy/M7.1/perf.toml`
+      threshold = 0.5x; perf-fail escalation test wired (closes
+      ADR-0013 follow-up #3).
+- [x] Tagged-union -> monomorphic dispatch (closes ADR-0013
+      follow-up #1).
+
+## Done means (M7.2 — PENDING)
+
+- [ ] Indexing: basic slicing, integer-array, boolean masks.
+- [ ] `np.where`, view vs copy semantics.
 
 ## Non-goals
 
@@ -232,6 +315,8 @@ M7.0 reuses the M4/M5/M6 task value; no new task is introduced.
 - [adr:0013](../adr/0013-m7-0-ndarray-foundation.md) — M7.0
   binding decisions (crate layout, dtype tier, ndarray pin,
   ownership model, differential strategy).
+- [adr:0014](../adr/0014-m7-1-ufuncs-broadcasting.md) — M7.1
+  ufuncs + broadcasting + NEP 50 type promotion + L2.perf flip.
 - [adr:0007](../adr/0007-translator-pipeline.md) — pipeline.
 - [adr:0010](../adr/0010-native-ext-translation.md) — native-ext
   methodology M7.0 inherits.
