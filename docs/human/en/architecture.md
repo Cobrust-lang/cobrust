@@ -944,3 +944,120 @@ per constitution sec.2.2.
 
 See [ADR-0015](../../agent/adr/0015-m7-2-indexing.md)
 for the load-bearing decisions.
+
+## numpy reductions (M7.3 — delivered)
+
+M7.3 lands the reduction surface on top of M7.0 (foundation) +
+M7.1 (ufuncs) + M7.2 (indexing). Per ADR-0016:
+
+> Reductions: `sum / prod / mean / std / var / min / max / argmin /
+> argmax` with `axis=None` and `axis=k`. Backend: `ndarray::Zip` +
+> `fold_axis`. Acceptance gate: numerical agreement; pairwise
+> summation for floats.
+
+### M7.3 surface
+
+```rust
+// Free functions (idiomatic Rust):
+cobrust_numpy::sum(&arr, Some(0))
+cobrust_numpy::mean(&arr, None)
+cobrust_numpy::var(&arr, Some(1), 1)   // axis=1, ddof=1 (Bessel)
+cobrust_numpy::argmax(&arr, Some(-1))   // last axis (negative-axis aware)
+
+// Method-style API (mirrors numpy idiom a.sum(axis=k)):
+arr.sum(None)             // reduce all
+arr.mean(Some(0))         // reduce axis 0
+arr.std(None, 0)          // population std
+arr.std(None, 1)          // sample std (Bessel)
+arr.argmin(Some(-1))      // first occurrence per lane
+
+// Pairwise summation helpers — match numpy's accuracy floor:
+cobrust_numpy::pairwise_sum_f64(&values)
+cobrust_numpy::pairwise_sum_f32(&values)
+```
+
+### M7.3 nine reductions
+
+| Reduction | What it does | Empty-array behavior |
+|---|---|---|
+| `sum` | Σ over axis (pairwise for floats) | identity 0 |
+| `prod` | Π over axis | identity 1 |
+| `mean` | Σ / N (int → f64) | NaN |
+| `std` | sqrt(var) (population if ddof=0) | NaN |
+| `var` | sum((x-mean)²) / (N-ddof) | NaN |
+| `min` | smallest element (NaN propagates) | `Err(ReductionEmptyArray)` |
+| `max` | largest element (NaN propagates) | `Err(ReductionEmptyArray)` |
+| `argmin` | index of first min | `Err(ReductionEmptyArray)` |
+| `argmax` | index of first max | `Err(ReductionEmptyArray)` |
+
+### M7.3 axis semantics
+
+- `axis: Option<i64>` — `None` reduces every axis; `Some(k)` reduces
+  along axis `k` only.
+- Negative axes normalise: `axis=-1` is the last axis, `axis=-2` the
+  second-to-last, etc. Out-of-bounds raises `IndexError`.
+- Tuple-axis (`axis=(0, 2)`) is **out of scope** at M7.3 — deferred
+  to M7.x.
+
+### M7.3 ddof for std/var
+
+- `ddof: u32` — divisor offset; default 0 (population).
+- Bessel correction: pass `ddof=1` for sample variance / std.
+- When `N - ddof <= 0`, result is `NaN` (matches numpy's
+  RuntimeWarning behavior).
+
+### M7.3 pairwise summation
+
+- For float `sum / mean / std / var`, M7.3 uses pairwise summation
+  with chunk size 8 (matches numpy's algorithm).
+- Asymptotic accuracy: O(log n × eps) instead of naive
+  O(n × eps).
+- Pairwise precision test verifies that summing 10⁶ floats of
+  magnitude `1e-9` yields a result within `rtol=1e-12` of the
+  expected `1e-3` — matching numpy's accuracy floor.
+
+### M7.3 error variant
+
+```rust
+pub enum NumpyErrorKind {
+    // ... M7.0 + M7.1 + M7.2 variants ...
+    ReductionEmptyArray,
+}
+```
+
+### M7.3 verification
+
+- L0 spec at `corpus/numpy/M7.3/spec.toml` + harness at
+  `corpus/numpy/M7.3/harness/h_reduction.py`.
+- L1: synthetic-LLM mode emits 12 entries (10 public reductions + 2
+  helpers) per `corpus/numpy/M7.3/canned_llm_responses.toml`.
+- L2.behavior:
+  - 55 well-typed reduction programs
+    (`tests/reduce_well_typed.rs`).
+  - 51 ill-typed reduction programs
+    (`tests/reduce_ill_typed.rs`).
+  - 25 corpus-correctness table-driven tests
+    (`tests/reduce_corpus.rs`).
+  - 12 differential tests with >= 1024 fuzz inputs per reduction
+    against upstream numpy 2.0.2 (bit-identical for int/bool,
+    `rtol=1e-7` for float; argmin/argmax exact match)
+    (`tests/reduce_differential.rs`).
+- L2.perf inherits ENFORCED from M7.1/M7.2:
+  `corpus/numpy/M7.3/perf.toml` threshold = 0.5x; pipeline test
+  `reduce_pipeline_escalates_when_perf_always_fails` demonstrates
+  perf-fail -> repair-loop -> `EscalationExceeded`.
+- L3.pyo3: same as M7.0..M7.2 (subprocess CPython numpy oracle).
+- L3.dependents: still deferred to M7.6+.
+
+### Out of scope (M7.x deferred)
+
+- Tuple-axis reduction (`axis=(0, 2)`) — M7.x.
+- `keepdims=True` — M7.x.
+- `out=` parameter — M7.x.
+- `where=` parameter (selective reduction) — M7.x.
+- `cumsum / cumprod / median / percentile / nanmin / nanmax /
+  nansum / nanmean` — M7.x.
+- `dtype=` parameter (forced result dtype) — M7.x.
+
+See [ADR-0016](../../agent/adr/0016-m7-3-reductions.md)
+for the load-bearing decisions.

@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: bcff3c3
+last_verified_commit: TBD
 ---
 
 # Architecture Decision Records
@@ -44,3 +44,4 @@ same atomic commit as the change it justifies.
 | [0013](0013-m7-0-ndarray-foundation.md) | M7.0 ndarray foundation — crate layout, dtype tier, ndarray backend pin, ownership model, differential strategy | accepted | 2026-04-30 |
 | [0014](0014-m7-1-ufuncs-broadcasting.md) | M7.1 universal functions, broadcasting, type promotion — dispatch model + numpy-compat semantics | accepted | 2026-04-30 |
 | [0015](0015-m7-2-indexing.md) | M7.2 indexing — view/copy taxonomy, ArrayView ownership, IndexError, np.where | accepted | 2026-04-30 |
+| [0016](0016-m7-3-reductions.md) | M7.3 reductions — kind taxonomy, axis semantics, pairwise summation, ddof, empty-array behavior | accepted | 2026-04-30 |

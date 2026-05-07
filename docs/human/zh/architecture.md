@@ -872,3 +872,116 @@ pub fn index_get(arr: &Array, indices: &[Index]) -> Result<Array, NumpyError>;
 - 单参数 `np.where(cond)` 返回索引——M7.x。
 
 详见 [ADR-0015](../../agent/adr/0015-m7-2-indexing.md)。
+
+## numpy 归约 (M7.3 — 已交付)
+
+M7.3 在 M7.0（基础）+ M7.1（ufunc）+ M7.2（索引）之上落地归约表面。
+依据 ADR-0016：
+
+> 归约：`sum / prod / mean / std / var / min / max / argmin /
+> argmax` 支持 `axis=None` 与 `axis=k`。后端：`ndarray::Zip` +
+> `fold_axis`。验收门禁：数值一致；浮点用成对求和（pairwise
+> summation）。
+
+### M7.3 表面
+
+```rust
+// 自由函数（地道 Rust 风格）：
+cobrust_numpy::sum(&arr, Some(0))
+cobrust_numpy::mean(&arr, None)
+cobrust_numpy::var(&arr, Some(1), 1)   // axis=1, ddof=1 (Bessel 校正)
+cobrust_numpy::argmax(&arr, Some(-1))   // 末轴（支持负轴）
+
+// 方法风格 API（贴近 numpy `a.sum(axis=k)` 写法）：
+arr.sum(None)             // 全轴归约
+arr.mean(Some(0))         // 沿轴 0 归约
+arr.std(None, 0)          // 总体标准差
+arr.std(None, 1)          // 样本标准差（Bessel）
+arr.argmin(Some(-1))      // 每行/列首次出现的最小值索引
+
+// 成对求和辅助函数 —— 与 numpy 精度持平：
+cobrust_numpy::pairwise_sum_f64(&values)
+cobrust_numpy::pairwise_sum_f32(&values)
+```
+
+### M7.3 九个归约
+
+| 归约 | 含义 | 空数组行为 |
+|---|---|---|
+| `sum` | 轴上求和（浮点用成对） | 加法单位元 0 |
+| `prod` | 轴上求积 | 乘法单位元 1 |
+| `mean` | 求和 / N（int → f64） | NaN |
+| `std` | sqrt(var)（ddof=0 为总体） | NaN |
+| `var` | sum((x-mean)²) / (N-ddof) | NaN |
+| `min` | 最小元素（NaN 传播） | `Err(ReductionEmptyArray)` |
+| `max` | 最大元素（NaN 传播） | `Err(ReductionEmptyArray)` |
+| `argmin` | 首次出现的最小值索引 | `Err(ReductionEmptyArray)` |
+| `argmax` | 首次出现的最大值索引 | `Err(ReductionEmptyArray)` |
+
+### M7.3 轴语义
+
+- `axis: Option<i64>` —— `None` 在所有轴上归约；`Some(k)` 仅沿 `k`
+  轴归约。
+- 负轴自动规范化：`axis=-1` 是最后一轴，`axis=-2` 倒数第二轴，
+  以此类推。越界时抛 `IndexError`。
+- 多轴元组（`axis=(0, 2)`）**不在 M7.3 范围内** —— 推迟到 M7.x。
+
+### M7.3 std/var 的 ddof
+
+- `ddof: u32` —— 自由度修正；默认 0（总体）。
+- Bessel 校正：传入 `ddof=1` 得到样本方差/标准差。
+- 当 `N - ddof <= 0` 时，结果为 `NaN`（与 numpy 的
+  RuntimeWarning 一致）。
+
+### M7.3 成对求和
+
+- 对浮点 `sum / mean / std / var`，M7.3 使用块大小 8 的成对求和
+  （与 numpy 算法一致）。
+- 渐近精度：`O(log n × eps)`，优于朴素累加的 `O(n × eps)`。
+- 成对精度测试：将 10⁶ 个量级 `1e-9` 的浮点求和，结果与
+  期望值 `1e-3` 在 `rtol=1e-12` 内一致 —— 与 numpy 的精度
+  下限持平。
+
+### M7.3 错误变体
+
+```rust
+pub enum NumpyErrorKind {
+    // ... M7.0 + M7.1 + M7.2 已有变体 ...
+    ReductionEmptyArray,
+}
+```
+
+### M7.3 验证
+
+- L0 spec：`corpus/numpy/M7.3/spec.toml`，差分 harness：
+  `corpus/numpy/M7.3/harness/h_reduction.py`。
+- L1：合成 LLM 模式发出 12 条记录（10 个公共归约 + 2 个辅助），
+  见 `corpus/numpy/M7.3/canned_llm_responses.toml`。
+- L2.behavior：
+  - 55 个 well-typed 归约程序
+    （`tests/reduce_well_typed.rs`）。
+  - 51 个 ill-typed 归约程序
+    （`tests/reduce_ill_typed.rs`）。
+  - 25 个 corpus 正确性逐表测试
+    （`tests/reduce_corpus.rs`）。
+  - 12 个差分测试（每个 ≥ 1024 个 fuzz 输入），与 numpy
+    2.0.2 对比（int/bool 字节级一致，浮点 `rtol=1e-7`，
+    argmin/argmax 完全一致）（`tests/reduce_differential.rs`）。
+- L2.perf 继承 M7.1/M7.2 的 ENFORCED：
+  `corpus/numpy/M7.3/perf.toml` 阈值 = 0.5x；pipeline 测试
+  `reduce_pipeline_escalates_when_perf_always_fails` 演示
+  perf 失败 → 修复循环 → `EscalationExceeded`。
+- L3.pyo3：同 M7.0..M7.2（子进程调用 CPython numpy oracle）。
+- L3.dependents：仍推迟到 M7.6+。
+
+### 不在范围内（推迟到 M7.x）
+
+- 多轴元组归约（`axis=(0, 2)`） —— M7.x。
+- `keepdims=True` —— M7.x。
+- `out=` 参数 —— M7.x。
+- `where=` 参数（选择性归约） —— M7.x。
+- `cumsum / cumprod / median / percentile / nanmin / nanmax /
+  nansum / nanmean` —— 全部 M7.x。
+- `dtype=` 参数（强制结果 dtype） —— M7.x。
+
+详见 [ADR-0016](../../agent/adr/0016-m7-3-reductions.md)。
