@@ -1,0 +1,2 @@
+# Placeholder for vendored upstream pytest subset.
+# M7.5 uses the differential KS-test harness as the primary L2.behavior gate.

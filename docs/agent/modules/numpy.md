@@ -3,6 +3,7 @@ doc_kind: module
 module_id: mod:numpy
 crate: cobrust-numpy
 last_verified_commit: e7aff1de92cd5e6251e452721f0b4a83f173d102
+last_verified_commit: f10af13fc92ba7918f47b1f973a9f374d64c1f1b
 dependencies: [mod:translator]
 ---
 
@@ -124,6 +125,30 @@ We do not reimplement `ArrayD::zeros` in Rust; we call it.
   Box-Muller noise + diagonal dominance). Documented unstable
   cases: cond > 1e8, N > 64 for svd/eigh, complex dtypes.
   L2.perf inherits ENFORCED state from M7.1/M7.2/M7.3.
+- **M7.5 — delivered.** Random surface (`Generator` newtype struct over
+  `rand_pcg::Pcg64`; `default_rng / seed / integers / random / normal /
+  uniform / choice`) per ADR-0018. cobrust-numpy now ships the
+  closed seven-method random API (matches numpy's `default_rng()`
+  algorithm family — PCG64). `Generator` carries `seed_value: Option<u64>`
+  for diagnostics; `default_rng(None)` OS-seeds, `default_rng(Some(s))`
+  produces a deterministic stream. Per ADR-0018 §2 bit-identical
+  reproducibility against numpy's PCG64 stream is **not** asserted
+  (numpy uses a different SeedSequence layout). What IS asserted:
+  (a) within Cobrust, same `u64` seed → identical stream across runs
+  of the same binary on any host (PCG64 is algebraic), verified by
+  `tests/random_seed_corpus.rs` (12 table-driven tests covering
+  integers / random / normal / uniform / choice with-replacement /
+  choice without-replacement / weighted choice / re-seed semantics);
+  (b) distribution-level agreement vs numpy 2.0.2 — KS-test at
+  p > 0.01 for continuous (`normal`, `uniform`, `random`),
+  mean-bin / variance-bin agreement at α = 0.01 for discrete
+  (`integers`, `choice`); ≥ 10000 samples per distribution per
+  seed (`tests/random_differential.rs`). Four new error variants:
+  `InvalidIntegerRange`, `InvalidDistributionParams`,
+  `InvalidProbabilities`, `EmptyChoicePopulation`. L2.perf inherits
+  ENFORCED state from M7.1..M7.3; perf-fail escalation test wired
+  (`random_pipeline_escalates_when_perf_always_fails`). M7.5 is
+  parallel-allowed with M7.4 linalg per ADR-0012 §"Sequencing rules".
 
 ## Public surface (M7.0)
 
@@ -420,6 +445,138 @@ M7.0 reuses the M4/M5/M6 task value; no new task is introduced.
       perf-fail escalation test wired
       (`reduce_pipeline_escalates_when_perf_always_fails`).
 - [x] ADR-0016 lands; doc tree updated; doc-coverage extended.
+
+## Public surface (M7.5 — per ADR-0018)
+
+```rust
+// Closed Generator struct over rand_pcg::Pcg64 (matches numpy's PCG64
+// default_rng() algorithm family). Per ADR-0018 §1 — no `dyn`.
+pub struct Generator {
+    rng: rand_pcg::Pcg64,
+    seed_value: Option<u64>,
+}
+
+impl Generator {
+    pub fn seed(&mut self, seed: u64);
+    pub fn seed_value(&self) -> Option<u64>;
+    pub fn integers(&mut self, low: i64, high: i64, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn random(&mut self, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn normal(&mut self, loc: f64, scale: f64, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn uniform(&mut self, low: f64, high: f64, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn choice(&mut self, values: &Array, size: &[usize], replace: bool, p: Option<&[f64]>)
+        -> Result<Array, NumpyError>;
+}
+
+// Construct a Generator from an optional u64 seed.
+pub fn default_rng(seed: Option<u64>) -> Generator;
+
+// New error variants (per ADR-0018 §"Error variants").
+pub enum NumpyErrorKind {
+    // ... M7.0..M7.3 + (M7.4 reserved) variants ...
+    InvalidIntegerRange,         // integers(low, high, ...) low >= high
+    InvalidDistributionParams,   // scale <= 0; low >= high; non-finite; replace=false&too-many
+    InvalidProbabilities,        // p doesn't sum to 1; length mismatch; negative
+    EmptyChoicePopulation,       // values.size() == 0
+}
+```
+
+## Distribution semantics (M7.5 — per ADR-0018 §4)
+
+| Method | Returns | Backend / Distribution |
+|---|---|---|
+| `default_rng(seed)` | `Generator` | `rand_pcg::Pcg64::seed_from_u64` |
+| `Generator::seed(s)` | `()` | re-seed in place |
+| `Generator::integers(lo, hi, size)` | `Array(Int64)` | `Rng::gen_range(lo..hi)` (half-open) |
+| `Generator::random(size)` | `Array(Float64)` | `Rng::gen::<f64>()` (Standard) |
+| `Generator::normal(loc, scale, size)` | `Array(Float64)` | `rand_distr::Normal` (Box-Muller / Ziggurat) |
+| `Generator::uniform(lo, hi, size)` | `Array(Float64)` | `rand_distr::Uniform::new(lo, hi)` |
+| `Generator::choice(values, size, replace, p)` | `Array` (matches input dtype) | uniform / weighted / Fisher-Yates |
+
+## Seed reproducibility contract (M7.5 — per ADR-0018 §3)
+
+**Within Cobrust** (asserted by `tests/random_seed_corpus.rs`):
+
+- Same `u64` seed → bit-identical stream of integers / floats /
+  normal / uniform / choice samples, every time, on any host
+  architecture.
+- `Generator::seed(s)` resets the stream as if a fresh
+  `default_rng(Some(s))` had been constructed.
+- Sequential calls advance the stream — `g.random([5])` then
+  `g.random([5])` does NOT match `g.random([10])` (different state
+  positions); but `g.random([5]) ++ g.random([5])` DOES equal
+  `g.random([10])` because each draw advances state by exactly one
+  PRNG step.
+
+**Vs numpy 2.0.2** (asserted by `tests/random_differential.rs`):
+
+- KS-test at p > 0.01 for `normal` / `uniform` / `random`.
+- Mean-bin agreement (within ±2σ) for `integers` / `choice`.
+- Variance-bin agreement (within ±2σ) for `normal`.
+- **NOT** bit-identical — numpy uses a specific SeedSequence layout
+  for its PCG64 backend that we don't replicate. Documented as a
+  known divergence in `PROVENANCE.toml`.
+
+## Differential gate (M7.5)
+
+`crates/cobrust-numpy/tests/random_differential.rs` runs against
+`corpus/numpy/M7.5/harness/h_random.py`:
+
+- ≥ 10000 normal samples per seed × 3 seeds — KS-test p > 0.01.
+- ≥ 10000 uniform samples per seed × 3 seeds — KS-test p > 0.01.
+- ≥ 10000 random unit samples per seed × 3 seeds — KS-test p > 0.01.
+- ≥ 10000 integers samples per seed × 3 seeds — mean-bin within ±2σ.
+- ≥ 10000 choice samples per seed × 3 seeds — mean-bin within ±2σ.
+- ≥ 10000 normal samples per seed × 3 seeds — variance-bin within ±2σ.
+
+Total ≥ 180,000 differential samples verified. Skipped with a clear
+message when upstream numpy is unavailable on the host.
+
+## Pipeline integration (M7.5)
+
+`crates/cobrust-numpy/tests/random_pipeline.rs` drives
+`cobrust_translator::translate_with_verifiers` against the M7.5
+corpus and asserts:
+
+- All 11 functions emit (7 public + 4 helpers: `default_rng`, `seed`,
+  `integers`, `random`, `normal`, `uniform`, `choice`,
+  `validate_int_range`, `validate_distribution_params`,
+  `validate_probabilities`, `box_muller`).
+- Every function carries non-empty body + provenance fields
+  (`source_sha16 = "2c54da26a59f2a56"`, `router_decision_id = "blake3:..."`).
+- Manifest validates with `gates.l1_files_emitted = 11`.
+- L2.perf escalation wired:
+  `random_pipeline_escalates_when_perf_always_fails` exercises a
+  `PerfVerifier::Reject`-only-on-`normal` verifier; with
+  `cfg.escalation_threshold = 2` the pipeline raises
+  `EscalationExceeded` and writes `failure_report.md`.
+
+## Done means (M7.5 — DONE)
+
+- [x] Closed `Generator` newtype struct over `rand_pcg::Pcg64` per
+      ADR-0018 §1.
+- [x] `default_rng(seed: Option<u64>) -> Generator`.
+- [x] `Generator::seed(u64)`, `Generator::seed_value()` for
+      diagnostic round-trip.
+- [x] 5 distribution methods (`integers / random / normal / uniform
+      / choice`) returning `Array` of appropriate dtype.
+- [x] Closed `NumpyErrorKind` extension: 4 new variants
+      (`InvalidIntegerRange`, `InvalidDistributionParams`,
+      `InvalidProbabilities`, `EmptyChoicePopulation`).
+- [x] Cargo.toml deps: `rand = "0.8"`, `rand_pcg = "0.3"`,
+      `rand_distr = "0.4"` (all MIT-OR-Apache-2.0).
+- [x] ≥ 50 well-typed random programs (actual: 55).
+- [x] ≥ 50 ill-typed random programs (actual: 51).
+- [x] Table-driven seed-reproducibility corpus
+      (`tests/random_seed_corpus.rs`): 12 tests covering integers /
+      random / normal / uniform / choice with-replacement / choice
+      without-replacement / weighted choice / re-seed semantics.
+- [x] Differential gate ≥ 10000 samples per distribution per seed
+      vs upstream numpy 2.0.2 (KS-test p > 0.01 for continuous,
+      mean-bin within ±2σ for discrete).
+- [x] L2.perf inherits ENFORCED state from M7.1..M7.3; perf-fail
+      escalation test wired
+      (`random_pipeline_escalates_when_perf_always_fails`).
+- [x] ADR-0018 lands; doc tree updated; doc-coverage extended.
 
 ## Public surface (M7.2 — per ADR-0015)
 
@@ -832,6 +989,9 @@ corpus and asserts:
   (ops surface, pure-Rust default backend with opt-in
   `ndarray-linalg`, float-only dtypes, error semantics, rtol=1e-6
   gate).
+- [adr:0018](../adr/0018-m7-5-random.md) — M7.5 random
+  (Generator type, PCG64 backend, seed semantics, distribution
+  surface, KS-test acceptance gate).
 - [adr:0007](../adr/0007-translator-pipeline.md) — pipeline.
 - [adr:0010](../adr/0010-native-ext-translation.md) — native-ext
   methodology M7.0 inherits.

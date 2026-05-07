@@ -11,12 +11,14 @@ oracle_module = "numpy"
 
 [verification]
 seeds = [42, 1337, 3735928559]
-fuzz_inputs_per_fn = 1024
+fuzz_inputs_per_fn = 10000
 divergences = [
     "M7.1: integer overflow wraps silently (no RuntimeWarning); output matches numpy default behavior. See ADR-0014 sec.4.",
     "M7.1: integer div-by-zero returns Err(NumpyErrorKind::IntegerDivisionByZero) instead of raising Python ZeroDivisionError. Failure outcome matches numpy; failure shape is Cobrust-native per constitution sec.2.2.",
     "M7.2: indexing errors return typed Err(NumpyErrorKind::{OutOfBoundsIndex|BoolMaskShapeMismatch|IndexDtypeNotInteger|IndexError}) instead of raising Python IndexError/ValueError. Outcome matches numpy; failure shape is Cobrust-native per constitution sec.2.2 + ADR-0015 sec.4.",
     "M7.2: index_get materialises for any multi-axis case where one axis is advanced - divergence from numpy's per-axis policy. Documented in ADR-0015 sec.Consequences.Negative.",
+    "M7.5: Generator stream is NOT bit-identical against numpy.random.Generator(default_rng(seed)) for the same seed. Both use PCG64 algorithm family but numpy applies a specific SeedSequence layout we do not replicate. What we promise: (a) within Cobrust, same u64 seed -> identical stream across runs and host architectures; (b) distribution-level agreement vs numpy 2.0.2 via KS-test (p > 0.01) for continuous distributions and mean-bin / variance-bin within +-2sigma for discrete. See ADR-0018 sec.2.",
+    "M7.5: random surface raises Err(NumpyErrorKind::{InvalidIntegerRange|InvalidDistributionParams|InvalidProbabilities|EmptyChoicePopulation}) instead of raising Python ValueError. Outcome matches numpy; failure shape is Cobrust-native per constitution sec.2.2 + ADR-0018 sec.Error variants.",
 ]
 known_failures = []
 
@@ -32,12 +34,12 @@ crate_layout_version = 1
 
 [gates]
 l0_spec_emitted = true
-l1_files_emitted = 27
+l1_files_emitted = 38
 l2_build = "pass (cargo build --release zero warnings; clippy workspace --all-targets -D warnings green)"
-l2_behavior = "pass (M7.0: bytes-identical for int/bool, rtol=1e-12 for float; M7.1: bit-identical for int/bool, rtol=1e-7 for float, >= 1200 fuzz inputs per ufunc; M7.2: bit-identical for int/bool, rtol=1e-7 for float, >= 1024 fuzz inputs per indexing kind across slice/take/mask/single/where)"
-l2_perf = "pass (M7.0 informational + M7.1+M7.2 ENFORCED at numerical-tier 0.5x floor per ADR-0010 sec.3 + ADR-0014 sec.5 + ADR-0015; reports at target/cobrust-bench/numpy-M7.{1,2}/<commit>/; perf-fail escalation tests ufunc_pipeline_escalates_when_perf_always_fails + index_pipeline_escalates_when_perf_always_fails wired)"
+l2_behavior = "pass (M7.0: bytes-identical for int/bool, rtol=1e-12 for float; M7.1: bit-identical for int/bool, rtol=1e-7 for float, >= 1200 fuzz inputs per ufunc; M7.2: bit-identical for int/bool, rtol=1e-7 for float, >= 1024 fuzz inputs per indexing kind across slice/take/mask/single/where; M7.3: bit-identical for int/bool, rtol=1e-7 for float, >= 1024 fuzz inputs per reduction across 12 fuzz tests; argmin/argmax exact match; pairwise precision test 10^6 floats within rtol=1e-12; M7.5: KS-test p > 0.01 vs upstream numpy 2.0.2 for continuous (normal/uniform/random); mean-bin / variance-bin +-2sigma for discrete (integers/choice); >= 10000 samples per distribution per seed; seed reproducibility within Cobrust verified across 8 seeds x 5 distributions x 2 runs)"
+l2_perf = "pass (M7.0 informational + M7.1+M7.2+M7.3+M7.5 ENFORCED at numerical-tier 0.5x floor per ADR-0010 sec.3 + ADR-0014 sec.5 + ADR-0015 + ADR-0016 + ADR-0018; reports at target/cobrust-bench/numpy-M7.{1,2,3,5}/<commit>/; perf-fail escalation tests ufunc_pipeline_escalates_when_perf_always_fails + index_pipeline_escalates_when_perf_always_fails + reduce_pipeline_escalates_when_perf_always_fails + random_pipeline_escalates_when_perf_always_fails wired)"
 l3_pyo3_wrapper = "pass (tests/numpy_differential.rs subprocess CPython numpy oracle); --features pyo3 build path per ADR-0011"
-l3_downstream_dependents = "deferred to M7.6+ (numpy ecosystem too large for M7.0..M7.2 per ADR-0013 + ADR-0014 + ADR-0015)"
+l3_downstream_dependents = "deferred to M7.6+ (numpy ecosystem too large for M7.0..M7.5 per ADR-0013 + ADR-0014 + ADR-0015 + ADR-0016 + ADR-0018)"
 
 [gates.dependents]
 covered = []

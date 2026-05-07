@@ -2,7 +2,7 @@
 // Translated by cobrust-translator (synthetic-LLM mode).
 // source-library: numpy 2.0.2
 // oracle: cpython 3.11 (module: numpy)
-// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016 + M7.4 linalg per ADR-0017.
+// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016 + M7.4 linalg per ADR-0017 + M7.5 random per ADR-0018.
 // see PROVENANCE.toml for the full manifest.
 
 //! Single error type for cobrust-numpy.
@@ -13,10 +13,11 @@
 //! match on it cleanly rather than parsing the message.
 //!
 //! M7.0 (per ADR-0013) shipped six variants. M7.1 (per ADR-0014 §4)
-//! added three more. M7.2 (per ADR-0015 §4) adds four more for the
-//! indexing surface. M7.3 (per ADR-0016 §5) adds one more for the
+//! added three more. M7.2 (per ADR-0015 §4) added four more for the
+//! indexing surface. M7.3 (per ADR-0016 §5) added one more for the
 //! reduction surface. M7.4 (per ADR-0017 §4) adds four more for the
-//! linalg surface.
+//! linalg surface. M7.5 (per ADR-0018) adds four more for the
+//! random surface. Merge order: M7.3 → M7.4 → M7.5.
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -107,6 +108,23 @@ pub enum NumpyErrorKind {
     /// Linalg op invoked with non-float dtype (`Int32 / Int64 /
     /// Bool`). Per ADR-0017 §3 — strict M7.4 contract.
     LinalgDtypeUnsupported,
+
+    // ---- M7.5 (per ADR-0018 §"Error variants") ----
+    /// `integers(low, high, ...)` with `low >= high`. Matches numpy's
+    /// `ValueError: low >= high`.
+    InvalidIntegerRange,
+    /// `uniform(low, high, ...)` with `low >= high` or non-finite
+    /// bounds; or `normal(loc, scale, ...)` with `scale <= 0` or
+    /// non-finite parameters; or `choice` with `replace=false` and
+    /// `size.product() > values.size()`. Matches numpy's `ValueError`.
+    InvalidDistributionParams,
+    /// `choice(p=...)` with `p` not summing to 1, length mismatch
+    /// against `values`, or negative entries. Matches numpy's
+    /// `ValueError`.
+    InvalidProbabilities,
+    /// `choice(values, ...)` with `values.size() == 0`. Matches
+    /// numpy's `ValueError: a must be non-empty`.
+    EmptyChoicePopulation,
 }
 
 impl fmt::Display for NumpyError {
@@ -130,6 +148,10 @@ impl fmt::Display for NumpyError {
             NumpyErrorKind::NotPositiveDefinite => "not_positive_definite",
             NumpyErrorKind::LinalgShapeError => "linalg_shape_error",
             NumpyErrorKind::LinalgDtypeUnsupported => "linalg_dtype_unsupported",
+            NumpyErrorKind::InvalidIntegerRange => "invalid_integer_range",
+            NumpyErrorKind::InvalidDistributionParams => "invalid_distribution_params",
+            NumpyErrorKind::InvalidProbabilities => "invalid_probabilities",
+            NumpyErrorKind::EmptyChoicePopulation => "empty_choice_population",
         };
         write!(f, "NumpyError({kind_name}): {}", self.message)
     }
