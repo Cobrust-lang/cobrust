@@ -2,7 +2,8 @@
 // Translated by cobrust-translator (synthetic-LLM mode).
 // source-library: numpy 2.0.2
 // oracle: cpython 3.11 (module: numpy)
-// scope: M7.0 ndarray foundation per ADR-0013 + M7.1 ufunc methods per ADR-0014.
+// scope: M7.0 ndarray foundation per ADR-0013 + M7.1 ufunc methods per ADR-0014
+//   + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016.
 // see PROVENANCE.toml for the full manifest.
 
 //! Tagged-union `Array` over `ndarray::ArrayD<T>` per ADR-0013 §4.
@@ -23,6 +24,7 @@ use ndarray::{ArrayD, ArrayViewD, ArrayViewMutD};
 use crate::dtype::Dtype;
 use crate::error::{NumpyError, NumpyErrorKind};
 use crate::index::{self, Index, SliceSpec};
+use crate::reduce;
 use crate::ufunc;
 use crate::view::{ArrayView, ArrayViewMut};
 
@@ -381,6 +383,91 @@ impl Array {
     /// Forwarded from `np_where`.
     pub fn where_(&self, x: &Array, y: &Array) -> Result<Array, NumpyError> {
         index::np_where(self, x, y)
+    }
+
+    // ---- M7.3 reductions (per ADR-0016) ---------------------------------
+
+    /// Sum over `axis` (or all axes when `axis=None`). Pairwise
+    /// summation for floats per ADR-0016 §3; integer reductions wrap.
+    /// Bool inputs return `Int64` count of `true`.
+    ///
+    /// # Errors
+    /// `NumpyError::IndexError` if `axis` is out of bounds.
+    pub fn sum(&self, axis: Option<i64>) -> Result<Array, NumpyError> {
+        reduce::sum(self, axis)
+    }
+
+    /// Product over `axis`. Multiplicative identity 1 for empty arrays.
+    ///
+    /// # Errors
+    /// Mirrors `sum`.
+    pub fn prod(&self, axis: Option<i64>) -> Result<Array, NumpyError> {
+        reduce::prod(self, axis)
+    }
+
+    /// Arithmetic mean over `axis`. Empty-array → NaN per numpy. Float
+    /// dtypes preserve width (`f32` → `f32`, `f64` → `f64`); int / bool
+    /// promote to `Float64`.
+    ///
+    /// # Errors
+    /// Mirrors `sum`.
+    pub fn mean(&self, axis: Option<i64>) -> Result<Array, NumpyError> {
+        reduce::mean(self, axis)
+    }
+
+    /// Standard deviation over `axis`. `ddof` is the divisor offset:
+    /// `denom = N - ddof`; `denom <= 0` → NaN. Default behavior:
+    /// `ddof=0` (population). Use `ddof=1` for sample (Bessel).
+    ///
+    /// # Errors
+    /// Mirrors `sum`.
+    pub fn std(&self, axis: Option<i64>, ddof: u32) -> Result<Array, NumpyError> {
+        reduce::std(self, axis, ddof)
+    }
+
+    /// Variance over `axis`. See `std` for `ddof` semantics.
+    ///
+    /// # Errors
+    /// Mirrors `sum`.
+    pub fn var(&self, axis: Option<i64>, ddof: u32) -> Result<Array, NumpyError> {
+        reduce::var(self, axis, ddof)
+    }
+
+    /// Minimum over `axis`. NaN propagates per IEEE 754 (any NaN in the
+    /// reduction lane → NaN result). Empty-array →
+    /// `NumpyError::ReductionEmptyArray`.
+    ///
+    /// # Errors
+    /// `NumpyError::ReductionEmptyArray` if the array (or reduced lane)
+    /// is empty; `NumpyError::IndexError` if `axis` is out of bounds.
+    pub fn min(&self, axis: Option<i64>) -> Result<Array, NumpyError> {
+        reduce::min(self, axis)
+    }
+
+    /// Maximum over `axis`. Mirrors `min`.
+    ///
+    /// # Errors
+    /// Mirrors `min`.
+    pub fn max(&self, axis: Option<i64>) -> Result<Array, NumpyError> {
+        reduce::max(self, axis)
+    }
+
+    /// Index of minimum over `axis`. First-occurrence tie-breaking per
+    /// numpy. Result is `Int64` (matches numpy's `intp` on 64-bit hosts).
+    /// NaN inputs return the index of the first NaN encountered.
+    ///
+    /// # Errors
+    /// Mirrors `min`.
+    pub fn argmin(&self, axis: Option<i64>) -> Result<Array, NumpyError> {
+        reduce::argmin(self, axis)
+    }
+
+    /// Index of maximum over `axis`. Mirrors `argmin` semantics.
+    ///
+    /// # Errors
+    /// Mirrors `min`.
+    pub fn argmax(&self, axis: Option<i64>) -> Result<Array, NumpyError> {
+        reduce::argmax(self, axis)
     }
 
     /// Borrow this Array as an `ArrayView<'_>`. Useful for callers that

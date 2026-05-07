@@ -2,7 +2,7 @@
 // Translated by cobrust-translator (synthetic-LLM mode).
 // source-library: numpy 2.0.2
 // oracle: cpython 3.11 (module: numpy)
-// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015.
+// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016.
 // see PROVENANCE.toml for the full manifest.
 
 //! Single error type for cobrust-numpy.
@@ -14,7 +14,8 @@
 //!
 //! M7.0 (per ADR-0013) shipped six variants. M7.1 (per ADR-0014 §4)
 //! added three more. M7.2 (per ADR-0015 §4) adds four more for the
-//! indexing surface.
+//! indexing surface. M7.3 (per ADR-0016 §5) adds one more for the
+//! reduction surface.
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -80,6 +81,14 @@ pub enum NumpyErrorKind {
     /// Index array passed to `take` / `Index::IntArray` is not
     /// integer-dtype (must be `Int32` or `Int64`).
     IndexDtypeNotInteger,
+
+    // ---- M7.3 (per ADR-0016 §5) ----
+    /// Empty-array passed to `min` / `max` / `argmin` / `argmax`.
+    /// Matches numpy's `ValueError: zero-size array to reduction
+    /// operation` (and its argmin/argmax `attempt to get argmin of
+    /// an empty sequence` cousin); cobrust-native shape is
+    /// `Result::Err` per constitution §2.2.
+    ReductionEmptyArray,
 }
 
 impl fmt::Display for NumpyError {
@@ -98,6 +107,7 @@ impl fmt::Display for NumpyError {
             NumpyErrorKind::OutOfBoundsIndex => "out_of_bounds_index",
             NumpyErrorKind::BoolMaskShapeMismatch => "bool_mask_shape_mismatch",
             NumpyErrorKind::IndexDtypeNotInteger => "index_dtype_not_integer",
+            NumpyErrorKind::ReductionEmptyArray => "reduction_empty_array",
         };
         write!(f, "NumpyError({kind_name}): {}", self.message)
     }
