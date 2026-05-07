@@ -1,0 +1,25 @@
+# Per-library performance gate override for M7.1 (per ADR-0008 §2 +
+# ADR-0010 §3 + ADR-0014 §5).
+#
+# M7.0 left perf informational. M7.1 flips it ON.
+#
+# Numerical tier per ADR-0010 §3: 0.5x upper-bound floor (numpy's
+# hand-tuned C+SIMD core is the upstream baseline; pure-Rust + ndarray
+# element-wise on the inner loop is the cobrust-numpy implementation).
+#
+# Threshold semantics: cobrust-numpy must not be slower than 1/0.5 = 2x
+# upstream numpy on any individual ufunc benchmark. Reports persisted
+# under target/cobrust-bench/numpy-M7.1/<commit>/.
+
+threshold = 0.5
+pass_ratio = 1.0
+n_iters = 100
+n_inputs = 32
+
+# Notes:
+#   - Numerical tier: 0.5x (per ADR-0010 §3).
+#   - M7.1 is when the gate flips on (per ADR-0014 §5 + ADR-0013
+#     follow-up #3); future M7.x sub-milestones may tighten if the
+#     achieved ratio sustains better than 0.5x in CI.
+#   - Real-LLM mode bench: tests/ufunc_bench.rs drives criterion vs
+#     numpy oracle subprocess.

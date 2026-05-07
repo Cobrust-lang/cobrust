@@ -1,0 +1,121 @@
+# numpy L0 spec — M7.1 (per ADR-0014).
+#
+# Schema per ADR-0007 §1. One [function.<name>] per public-or-helper
+# entrypoint translated by the M7.1 cobrust-numpy build. Every entry
+# binds a Python qualified name to a behavior contract that the L1
+# translator is required to satisfy and the L0 differential harness
+# verifies.
+
+schema_version = 1
+library = "numpy"
+upstream_version = "2.0.2"
+oracle_module = "numpy"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+# ---- Binary ufuncs --------------------------------------------------------
+
+[function.add]
+qualname = "ufunc_core.add"
+public = true
+signature = "add(a_data: list[float], a_shape: list[int], b_data: list[float], b_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise add. Promotes per result_type (NEP 50), broadcasts per numpy rules. Mirrors numpy.add."
+
+[function.subtract]
+qualname = "ufunc_core.subtract"
+public = true
+signature = "subtract(a_data: list[float], a_shape: list[int], b_data: list[float], b_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise subtract. Mirrors numpy.subtract."
+
+[function.multiply]
+qualname = "ufunc_core.multiply"
+public = true
+signature = "multiply(a_data: list[float], a_shape: list[int], b_data: list[float], b_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise multiply. Mirrors numpy.multiply."
+
+[function.divide]
+qualname = "ufunc_core.divide"
+public = true
+signature = "divide(a_data: list[float], a_shape: list[int], b_data: list[float], b_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise divide. Integer dtypes raise IntegerDivisionByZero on b==0; floats follow IEEE 754. Mirrors numpy.divide."
+
+[function.power]
+qualname = "ufunc_core.power"
+public = true
+signature = "power(a_data: list[float], a_shape: list[int], b_data: list[float], b_shape: list[int]) -> tuple[list[float], list[int]]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise power. Integer**negative truncates to 0 (numpy). Mirrors numpy.power."
+
+# ---- Element-wise math ----------------------------------------------------
+
+[function.sin]
+qualname = "ufunc_core.sin"
+public = true
+signature = "sin(a_data: list[float]) -> list[float]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise sine. Integer inputs promoted to Float64 first. Mirrors numpy.sin."
+
+[function.cos]
+qualname = "ufunc_core.cos"
+public = true
+signature = "cos(a_data: list[float]) -> list[float]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise cosine. Integer inputs promoted to Float64 first. Mirrors numpy.cos."
+
+[function.exp]
+qualname = "ufunc_core.exp"
+public = true
+signature = "exp(a_data: list[float]) -> list[float]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise exponential. Mirrors numpy.exp."
+
+[function.log]
+qualname = "ufunc_core.log"
+public = true
+signature = "log(a_data: list[float]) -> list[float]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise natural log. log(0) → -inf, log(<0) → NaN per IEEE 754. Mirrors numpy.log."
+
+[function.sqrt]
+qualname = "ufunc_core.sqrt"
+public = true
+signature = "sqrt(a_data: list[float]) -> list[float]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Element-wise square root. sqrt(<0) → NaN per IEEE 754. Mirrors numpy.sqrt."
+
+# ---- Helper functions in scope --------------------------------------------
+
+[function.result_type]
+qualname = "ufunc_core.result_type"
+public = false
+signature = "result_type(a: str, b: str) -> str"
+py_compat = "strict"
+description = "NumPy 2.x NEP 50 promotion table for the M7.0 5-dtype tier."
+
+[function.broadcast_shape]
+qualname = "ufunc_core.broadcast_shape"
+public = false
+signature = "broadcast_shape(a: list[int], b: list[int]) -> list[int]"
+py_compat = "strict"
+description = "Compute the broadcast shape of two input shapes per numpy rules."
+
+# ---- Verification budget --------------------------------------------------
+
+[verification]
+seeds = [42, 1337, 0xDEADBEEF]
+fuzz_inputs_per_fn = 1024
+tolerance = "exact-int-bool; rtol=1e-7-float (per ADR-0014 acceptance gate)"
