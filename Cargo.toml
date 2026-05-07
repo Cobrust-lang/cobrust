@@ -11,6 +11,7 @@ members = [
     "crates/cobrust-llm-router",
     "crates/cobrust-msgpack",
     "crates/cobrust-tomli",
+    "crates/cobrust-numpy",
     "crates/cobrust-translator",
 ]
 

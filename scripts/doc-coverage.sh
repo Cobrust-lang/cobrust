@@ -434,4 +434,78 @@ if grep -q '^- \*\*M6 — delivered.\*\*' "docs/agent/modules/translator.md"; th
     [[ -d corpus/dateutil/dependents/pendulum ]] || fail "corpus/dateutil/dependents/pendulum missing (M6 widening)"
 fi
 
-echo "doc-coverage: M0 + M1 + M2 + M4 + M5 + M6 checks passed"
+# --- 11. M7.0 translator + numpy surface coverage ---------------------------
+# When the translator module declares M7.0 delivered, the cobrust-numpy
+# surface terms + ADR-0012 + ADR-0013 anchors must appear in all three
+# doc trees.
+
+m7_0_translator_terms=(
+    "translate the surface, bind the core"
+    "ADR-0012"
+    "ADR-0013"
+)
+
+m7_0_translator_files=(
+    "docs/agent/modules/translator.md"
+    "docs/human/en/architecture.md"
+    "docs/human/zh/architecture.md"
+)
+
+if grep -q '^- \*\*M7.0 — delivered.\*\*' "docs/agent/modules/translator.md"; then
+    for term in "${m7_0_translator_terms[@]}"; do
+        for f in "${m7_0_translator_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M7.0 translator surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    m7_0_numpy_terms=(
+        "Array"
+        "Dtype"
+        "array"
+        "zeros"
+        "ones"
+        "arange"
+        "ndarray"
+    )
+    m7_0_numpy_files=(
+        "docs/agent/modules/numpy.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m7_0_numpy_terms[@]}"; do
+        for f in "${m7_0_numpy_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M7.0 numpy surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_twelve="docs/agent/adr/0012-m7-numpy-plan.md"
+    [[ -f "$adr_twelve" ]] || fail "ADR-0012 (M7 numpy plan) is required for M7.0"
+    if ! grep -q '^status: accepted$' "$adr_twelve"; then
+        fail "ADR-0012 must be 'status: accepted' for M7.0 to be done"
+    fi
+    adr_thirteen="docs/agent/adr/0013-m7-0-ndarray-foundation.md"
+    [[ -f "$adr_thirteen" ]] || fail "ADR-0013 (M7.0 ndarray foundation) is required for M7.0"
+    if ! grep -q '^status: accepted$' "$adr_thirteen"; then
+        fail "ADR-0013 must be 'status: accepted' for M7.0 to be done"
+    fi
+
+    # PROVENANCE.toml must exist on the generated numpy crate.
+    if [[ -d crates/cobrust-numpy ]]; then
+        [[ -f crates/cobrust-numpy/PROVENANCE.toml ]] \
+            || fail "crates/cobrust-numpy/PROVENANCE.toml missing"
+    fi
+
+    # Corpus directory layout per ADR-0013.
+    [[ -f corpus/numpy/M7.0/spec.toml ]] || fail "corpus/numpy/M7.0/spec.toml missing"
+    [[ -f corpus/numpy/M7.0/canned_llm_responses.toml ]] || fail "corpus/numpy/M7.0/canned_llm_responses.toml missing"
+    [[ -d corpus/numpy/M7.0/upstream ]] || fail "corpus/numpy/M7.0/upstream missing"
+    [[ -d corpus/numpy/M7.0/upstream_tests ]] || fail "corpus/numpy/M7.0/upstream_tests missing"
+    [[ -d corpus/numpy/M7.0/harness ]] || fail "corpus/numpy/M7.0/harness missing"
+    [[ -f corpus/numpy/M7.0/perf.toml ]] || fail "corpus/numpy/M7.0/perf.toml missing"
+fi
+
+echo "doc-coverage: M0 + M1 + M2 + M4 + M5 + M6 + M7.0 checks passed"
