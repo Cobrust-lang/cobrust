@@ -4,7 +4,7 @@ adr_id: 0016
 title: M7.3 reductions — kind taxonomy, axis semantics, pairwise summation, ddof, empty-array behavior
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: 18c5c1d93dbf5b5a4f9d8015aa64b96805bdcc38
 supersedes: []
 superseded_by: []
 ---
