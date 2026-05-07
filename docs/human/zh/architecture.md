@@ -635,3 +635,132 @@ impl Array {
 
 详见 [ADR-0012](../../agent/adr/0012-m7-numpy-plan.md) 和
 [ADR-0013](../../agent/adr/0013-m7-0-ndarray-foundation.md)。
+
+## numpy ufuncs + 广播（M7.1 — 已交付）
+
+M7.1 在 M7.0 ndarray 基础层之上落地通用函数、广播、NEP 50 类型晋升
+（详见 [ADR-0014](../../agent/adr/0014-m7-1-ufuncs-broadcasting.md)），
+同时关闭 ADR-0013 的 4 个 follow-up（tagged-union → 单态化分发；
+typed constructors；L2.perf flip；多维 nested-list 解析）。
+
+### M7.1 公共表面
+
+```rust
+// 二元 ufuncs（按 result_type 晋升后逐元素分发）。
+impl Array {
+    pub fn add(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn sub(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn mul(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn div(&self, other: &Array) -> Result<Array, NumpyError>;  // int /0 → IntegerDivisionByZero
+    pub fn pow(&self, other: &Array) -> Result<Array, NumpyError>;
+    // 比较 ufuncs（结果一律 Dtype::Bool，匹配 numpy）。
+    pub fn eq_(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn ne_(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn lt(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn le(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn gt(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn ge(&self, other: &Array) -> Result<Array, NumpyError>;
+    // 逐元素数学（整型输入晋升到 Float64；浮点保留）。
+    pub fn sin(&self) -> Result<Array, NumpyError>;
+    pub fn cos(&self) -> Result<Array, NumpyError>;
+    pub fn exp(&self) -> Result<Array, NumpyError>;
+    pub fn log(&self) -> Result<Array, NumpyError>;
+    pub fn sqrt(&self) -> Result<Array, NumpyError>;
+}
+
+// 类型晋升 + 广播形状计算。
+pub fn result_type(a: Dtype, b: Dtype) -> Dtype;        // NEP 50 25 条目表
+pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>, NumpyError>;
+
+// 类型化构造器（关闭 ADR-0013 follow-up #2 — 不再强制 caller f64-cast）。
+pub fn array_i32(values: &[i32], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_i64(values: &[i64], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_f32(values: &[f32], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_f64(values: &[f64], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_bool(values: &[bool], shape: &[usize]) -> Result<Array, NumpyError>;
+
+// 多维 nested-list 解析（关闭 ADR-0013 follow-up #4 —
+// `np.array([[1, 2], [3, 4]])` 之类的输入直接落地）。
+pub enum NestedList {
+    Scalar(f64),
+    List(Vec<NestedList>),
+}
+pub fn array_from_nested(nested: &NestedList, dtype: Dtype) -> Result<Array, NumpyError>;
+```
+
+### 一个端到端的小例子
+
+```rust
+use cobrust_numpy::{Array, Dtype, array_i32, array_f32};
+
+let a = array_i32(&[1, 2, 3], &[3]).unwrap();        // dtype=int32
+let b = array_f32(&[0.5, 1.5, 2.5], &[3]).unwrap();  // dtype=float32
+let c = a.add(&b).unwrap();                          // result_type 晋升 → dtype=float64
+assert_eq!(c.dtype(), Dtype::Float64);
+// c = [1.5, 3.5, 5.5]，跟 numpy 2.x 的 NEP 50 完全一致。
+```
+
+`int32 + float32 → float64` 是 NEP 50 的关键规则之一：i32 的尾数
+不能完整放进 f32，所以晋升到 f64 才不丢精度。整数 +/-/x 溢出按
+Rust 默认的 wrapping 语义（与 numpy 默认 RuntimeWarning 行为对齐
+但不产生警告）；浮点遵循 IEEE 754（NaN 传播、`x/0.0 → ±inf`、
+`0.0/0.0 → NaN`）；整数 div by zero 返回
+`Err(NumpyErrorKind::IntegerDivisionByZero)`。
+
+### 广播规则（按 numpy 2.x）
+
+`broadcast_shape(a, b)` 实现 numpy 标准规则
+（[文档](https://numpy.org/doc/stable/user/basics.broadcasting.html)）：
+
+1. 右对齐两个 shape，短的左侧补 1。
+2. 逐 axis：相等 → 结果取该值；其中一个是 1 → 取另一个；否则
+   `Err(NumpyErrorKind::BroadcastShapeMismatch)`。
+3. 空 shape `[]`（标量）与任意 shape 兼容（每 axis 视为 1）。
+
+例：`[3, 1] + [1, 4] → [3, 4]`（外积），`[8, 1, 6, 1] + [7, 1, 5] →
+[8, 7, 6, 5]`。
+
+### 单态化分发模型
+
+按 [ADR-0014 §1](../../agent/adr/0014-m7-1-ufuncs-broadcasting.md)，
+M7.1 的 ufunc 分发是**单态化**：`Array::add` 在公开 API 上做一次
+`match (self.dtype(), other.dtype())`，按 `result_type` 选定
+晋升 dtype，把两个操作数都 cast 到这个 dtype，然后调用按 dtype
+单态化的内部循环（`ndarray::Zip::from(...).and(...).for_each(...)`）。
+内部循环跑在具体的 `ArrayD<T>` 上，LLVM 会内联 + 自动向量化。
+没有 `dyn`，符合宪法 §2.2；自动向量化让 SIMD 路径走通，符合
+宪法 §5.3。
+
+### M7.1 验证
+
+- L0 spec 在 `corpus/numpy/M7.1/spec.toml` + harness 在
+  `corpus/numpy/M7.1/harness/h_ufunc.py`。
+- L1 emission 在 `crates/cobrust-numpy/src/{ufunc,broadcast,promote}.rs`。
+- L2.build：workspace clippy 零警告通过。
+- L2.behavior：
+  - 50 个良类型 + 50 个病类型 ufunc 程序（`tests/ufunc_well_typed.rs`,
+    `tests/ufunc_ill_typed.rs`）。
+  - 22 个广播表项测试（`tests/broadcast_corpus.rs`）。
+  - 14 个差分 vs upstream numpy 2.0.2 测试，>= 1200 个 fuzz 输入
+    每个 ufunc，int/bool 字节级、float `rtol=1e-7`
+    （`tests/ufunc_differential.rs`）。
+- **L2.perf flipped to enforced**（关闭 ADR-0013 follow-up #3）：
+  `corpus/numpy/M7.1/perf.toml` threshold = 0.5x（数值层 floor，
+  按 ADR-0010 §3）；流水线测试
+  `ufunc_pipeline_escalates_when_perf_always_fails` 演示
+  perf-fail → repair-loop → `EscalationExceeded`，与 M6 的 msgpack
+  perf-fail 测试同构。
+- L3.pyo3：与 M7.0 一致（子进程跑 CPython numpy oracle）。
+- L3.dependents：仍推迟到 M7.6+。
+
+### 已知偏差
+
+- 整数 +/-/x 溢出**静默 wrapping**（无 RuntimeWarning），与 numpy
+  默认行为输出一致但不带警告。文档化在
+  [`docs/agent/modules/numpy.md`](../../agent/modules/numpy.md)
+  "Known divergences" 段。
+- 整数 div-by-zero 返回 `Err(NumpyErrorKind::IntegerDivisionByZero)`
+  而不是抛 Python `ZeroDivisionError`（宪法 §2.2 — Result 默认）；
+  操作的失败结果与 numpy 一致，失败的"形状"是 Cobrust 原生的。
+
+详见 [ADR-0014](../../agent/adr/0014-m7-1-ufuncs-broadcasting.md)。

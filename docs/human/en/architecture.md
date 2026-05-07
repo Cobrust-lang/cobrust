@@ -687,3 +687,142 @@ impl Array {
 See [ADR-0012](../../agent/adr/0012-m7-numpy-plan.md) and
 [ADR-0013](../../agent/adr/0013-m7-0-ndarray-foundation.md) for the
 load-bearing decisions.
+
+## numpy ufuncs + broadcasting (M7.1 — delivered)
+
+M7.1 lands universal functions, broadcasting, and NEP 50 type
+promotion on top of the M7.0 ndarray foundation (per
+[ADR-0014](../../agent/adr/0014-m7-1-ufuncs-broadcasting.md)). It
+also closes all four ADR-0013 follow-ups: tagged-union ->
+monomorphic dispatch; typed constructors; L2.perf flip to enforced;
+multi-D nested-list parsing.
+
+### M7.1 public surface
+
+```rust
+// Binary ufuncs (promote per result_type, broadcast, dispatch).
+impl Array {
+    pub fn add(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn sub(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn mul(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn div(&self, other: &Array) -> Result<Array, NumpyError>;  // int /0 -> IntegerDivisionByZero
+    pub fn pow(&self, other: &Array) -> Result<Array, NumpyError>;
+    // Comparison ufuncs (always return Dtype::Bool, matches numpy).
+    pub fn eq_(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn ne_(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn lt(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn le(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn gt(&self, other: &Array) -> Result<Array, NumpyError>;
+    pub fn ge(&self, other: &Array) -> Result<Array, NumpyError>;
+    // Element-wise math (int promoted to Float64; float preserved).
+    pub fn sin(&self) -> Result<Array, NumpyError>;
+    pub fn cos(&self) -> Result<Array, NumpyError>;
+    pub fn exp(&self) -> Result<Array, NumpyError>;
+    pub fn log(&self) -> Result<Array, NumpyError>;
+    pub fn sqrt(&self) -> Result<Array, NumpyError>;
+}
+
+// Promotion + broadcasting helpers.
+pub fn result_type(a: Dtype, b: Dtype) -> Dtype;        // NEP 50 25-entry table
+pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>, NumpyError>;
+
+// Typed constructors (closes ADR-0013 follow-up #2 - no f64 round-trip).
+pub fn array_i32(values: &[i32], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_i64(values: &[i64], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_f32(values: &[f32], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_f64(values: &[f64], shape: &[usize]) -> Result<Array, NumpyError>;
+pub fn array_bool(values: &[bool], shape: &[usize]) -> Result<Array, NumpyError>;
+
+// Multi-D nested-list parsing (closes ADR-0013 follow-up #4 -
+// `np.array([[1, 2], [3, 4]])`-style inputs land directly).
+pub enum NestedList {
+    Scalar(f64),
+    List(Vec<NestedList>),
+}
+pub fn array_from_nested(nested: &NestedList, dtype: Dtype) -> Result<Array, NumpyError>;
+```
+
+### A concrete end-to-end example
+
+```rust
+use cobrust_numpy::{Array, Dtype, array_i32, array_f32};
+
+let a = array_i32(&[1, 2, 3], &[3]).unwrap();        // dtype=int32
+let b = array_f32(&[0.5, 1.5, 2.5], &[3]).unwrap();  // dtype=float32
+let c = a.add(&b).unwrap();                          // result_type promotes to float64
+assert_eq!(c.dtype(), Dtype::Float64);
+// c == [1.5, 3.5, 5.5], matching numpy 2.x NEP 50 exactly.
+```
+
+`int32 + float32 -> float64` is a key NEP 50 rule: i32's mantissa
+does not fit in f32, so promotion targets f64 to avoid precision
+loss. Integer +/-/x overflow uses Rust wrapping semantics (matches
+numpy default behaviour but without a RuntimeWarning); float
+follows IEEE 754 (NaN propagation; `x/0.0 -> +/-inf`; `0.0/0.0 ->
+NaN`); integer div-by-zero returns
+`Err(NumpyErrorKind::IntegerDivisionByZero)`.
+
+### Broadcasting rules (numpy 2.x exact)
+
+`broadcast_shape(a, b)` implements numpy's standard rules
+(see https://numpy.org/doc/stable/user/basics.broadcasting.html):
+
+1. Right-align the two shapes; pad the shorter on the LEFT with 1s.
+2. Per axis: equal -> output is that value; one is 1 -> output is
+   the other; otherwise
+   `Err(NumpyErrorKind::BroadcastShapeMismatch)`.
+3. Empty shape `[]` (scalar) broadcasts against any shape (each
+   axis treated as 1).
+
+Examples: `[3, 1] + [1, 4] -> [3, 4]` (outer product),
+`[8, 1, 6, 1] + [7, 1, 5] -> [8, 7, 6, 5]`.
+
+### Monomorphic dispatch model
+
+Per [ADR-0014 sec.1](../../agent/adr/0014-m7-1-ufuncs-broadcasting.md),
+M7.1 ufunc dispatch is **monomorphic**: `Array::add` matches once
+on `(self.dtype(), other.dtype())` at the public-API boundary,
+picks the promoted dtype via `result_type`, casts both operands,
+and dispatches into a per-dtype monomorphic helper. The inner
+helper calls `ndarray::Zip::from(...).and(...).for_each(...)` on a
+concrete `ArrayD<T>`; LLVM inlines and the Zip iterator
+auto-vectorises. No `dyn` (constitution sec.2.2); the
+auto-vectorised inner loop satisfies constitution sec.5.3.
+
+### M7.1 verification
+
+- L0 spec at `corpus/numpy/M7.1/spec.toml` + harness at
+  `corpus/numpy/M7.1/harness/h_ufunc.py`.
+- L1 emission at `crates/cobrust-numpy/src/{ufunc,broadcast,promote}.rs`.
+- L2.build: workspace clippy zero warnings.
+- L2.behavior:
+  - 50 well-typed + 50 ill-typed ufunc programs
+    (`tests/ufunc_well_typed.rs`, `tests/ufunc_ill_typed.rs`).
+  - 22 broadcasting table cases (`tests/broadcast_corpus.rs`).
+  - 14 differential-vs-upstream tests with >= 1200 fuzz inputs per
+    ufunc, bit-identical for int/bool and `rtol=1e-7` for float
+    (`tests/ufunc_differential.rs`).
+- **L2.perf flipped to enforced** (closes ADR-0013 follow-up #3):
+  `corpus/numpy/M7.1/perf.toml` threshold = 0.5x (numerical-tier
+  floor per ADR-0010 sec.3); pipeline test
+  `ufunc_pipeline_escalates_when_perf_always_fails` demonstrates
+  perf-fail -> repair-loop -> `EscalationExceeded`, isomorphic to
+  M6 msgpack's perf-fail escalation test.
+- L3.pyo3: same as M7.0 (subprocess CPython numpy oracle).
+- L3.dependents: still deferred to M7.6+.
+
+### Known divergences
+
+- Integer +/-/x overflow **silently wraps** (no RuntimeWarning) -
+  output matches numpy default behaviour but without warning.
+  Documented in
+  [`docs/agent/modules/numpy.md`](../../agent/modules/numpy.md)
+  "Known divergences" section.
+- Integer div-by-zero returns
+  `Err(NumpyErrorKind::IntegerDivisionByZero)` rather than raising
+  Python `ZeroDivisionError` (constitution sec.2.2 - Result default);
+  the operation's failure outcome matches numpy, the **shape** of
+  failure is Cobrust-native.
+
+See [ADR-0014](../../agent/adr/0014-m7-1-ufuncs-broadcasting.md)
+for the load-bearing decisions.
