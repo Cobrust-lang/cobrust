@@ -1,0 +1,104 @@
+# numpy L0 spec — M7.5 (per ADR-0018).
+#
+# Schema per ADR-0007 §1. One [function.<name>] per public-or-helper
+# entrypoint translated by the M7.5 cobrust-numpy build. Every entry
+# binds a Python qualified name to a behavior contract that the L1
+# translator is required to satisfy and the L0 differential harness
+# verifies.
+
+schema_version = 1
+library = "numpy"
+upstream_version = "2.0.2"
+oracle_module = "numpy.random"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+# ---- Random surface -------------------------------------------------------
+
+[function.default_rng]
+qualname = "random_core.default_rng"
+public = true
+signature = "default_rng(seed: int | None) -> Generator"
+py_compat = "semantic"
+description = "Construct a Generator from an optional u64 seed; None → OS-seeded; Some(s) → deterministic. Per ADR-0018 §3."
+
+[function.seed]
+qualname = "random_core.seed"
+public = true
+signature = "seed(gen, seed: int) -> None"
+py_compat = "semantic"
+description = "Re-seed an existing Generator in place. Stream is reproducible across runs of the same binary."
+
+[function.integers]
+qualname = "random_core.integers"
+public = true
+signature = "integers(gen, low: int, high: int, size: list[int]) -> list[int], shape"
+py_compat = "semantic"
+description = "Uniform integers in [low, high). Returns Int64-dtype Array. Per ADR-0018 §4."
+
+[function.random]
+qualname = "random_core.random"
+public = true
+signature = "random(gen, size: list[int]) -> list[float], shape"
+py_compat = "semantic"
+description = "Uniform floats in [0, 1). Returns Float64-dtype Array. Per ADR-0018 §4."
+
+[function.normal]
+qualname = "random_core.normal"
+public = true
+signature = "normal(gen, loc: float, scale: float, size: list[int]) -> list[float], shape"
+py_compat = "semantic"
+description = "Gaussian N(loc, scale²). Returns Float64-dtype Array. KS-test agreement vs numpy at p > 0.01 (per ADR-0018 §5)."
+
+[function.uniform]
+qualname = "random_core.uniform"
+public = true
+signature = "uniform(gen, low: float, high: float, size: list[int]) -> list[float], shape"
+py_compat = "semantic"
+description = "Uniform floats in [low, high). Returns Float64-dtype Array. KS-test agreement vs numpy at p > 0.01."
+
+[function.choice]
+qualname = "random_core.choice"
+public = true
+signature = "choice(gen, values: list, size: list[int], replace: bool, p: list[float] | None) -> list, shape"
+py_compat = "semantic"
+description = "Uniform / weighted selection from values. Per ADR-0018 §4 'choice constraints'."
+
+# ---- Helper functions in scope --------------------------------------------
+
+[function.validate_int_range]
+qualname = "random_core._validate_int_range"
+public = false
+signature = "_validate_int_range(low: int, high: int) -> None"
+py_compat = "strict"
+description = "Validate low < high; raise InvalidIntegerRange otherwise. Matches numpy's ValueError."
+
+[function.validate_distribution_params]
+qualname = "random_core._validate_distribution_params"
+public = false
+signature = "_validate_distribution_params(scale: float | None, low: float | None, high: float | None) -> None"
+py_compat = "strict"
+description = "Validate scale > 0 / low < high / finite. Matches numpy's ValueError."
+
+[function.validate_probabilities]
+qualname = "random_core._validate_probabilities"
+public = false
+signature = "_validate_probabilities(p: list[float], n: int) -> None"
+py_compat = "numerical"
+py_compat_rtol = 1e-8
+description = "Validate p sums to 1 (rtol 1e-8), no negative entries, length matches n."
+
+[function.box_muller]
+qualname = "random_core._box_muller"
+public = false
+signature = "_box_muller(u1: float, u2: float) -> tuple[float, float]"
+py_compat = "numerical"
+py_compat_rtol = 1e-12
+description = "Box-Muller transform for normal sampling reference (used in pure-python harness; rand_distr::StandardNormal is the production path)."
+
+# ---- Verification budget --------------------------------------------------
+
+[verification]
+seeds = [42, 1337, 0xDEADBEEF]
+fuzz_inputs_per_fn = 10000
+tolerance = "Cobrust seed reproducibility: bit-identical stream within Cobrust. KS-test p > 0.01 vs numpy 2.0.2 for continuous distributions; mean-bin χ² at α = 0.01 for discrete (per ADR-0018 §5)."

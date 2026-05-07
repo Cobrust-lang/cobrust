@@ -1,0 +1,253 @@
+# Canned LLM responses for numpy M7.5 — synthetic-LLM mode.
+#
+# Schema per ADR-0007 §"Synthetic-LLM mode contract" + ADR-0008 §5
+# (per-attempt routing) + ADR-0018. Lookup key:
+# (task, function, attempt). When `attempt` is omitted both sides
+# default to 1.
+#
+# Source-SHA staleness check:
+#   sha256(corpus/numpy/M7.5/upstream/random_core.py)[..16] = "2c54da26a59f2a56"
+#
+# These canned responses describe a flat-file equivalent of the
+# multi-file cobrust-numpy crate; the pipeline integration test
+# (`crates/cobrust-numpy/tests/random_pipeline.rs`) drives this corpus
+# end-to-end and asserts (a) every function is emitted, (b) every
+# function carries a provenance header, and (c) the assembled
+# parser.rs string is non-empty per function. The production
+# multi-file crate at `crates/cobrust-numpy/src/` is the gate-stable
+# byte snapshot; canned responses here cover the **translator path**
+# itself.
+#
+# MODULE PREAMBLE: alphabetically-first function (`box_muller`) carries
+# the preamble. Subsequent entries emit only their function bodies.
+
+schema_version = 1
+oracle_runtime = "cpython 3.11"
+
+# ---- box_muller (alphabetic-first; carries module preamble) ---------------
+
+[[entry]]
+task = "translate"
+function = "box_muller"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+// Module preamble for M7.5 random (synthetic-LLM mode).
+// Per ADR-0018 §"Crate layout" the production cobrust-numpy is
+// multi-file; the canned-response path emits a flat-file equivalent
+// so the M7.5 pipeline integration test can assert end-to-end
+// emission without extending the pipeline's hardcoded per-library
+// file layout.
+
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::imprecise_flops)]
+#![allow(clippy::suboptimal_flops)]
+#![allow(clippy::excessive_precision)]
+#![allow(dead_code)]
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumpyError { pub kind: NumpyErrorKind, pub message: String }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NumpyErrorKind {
+    InvalidIntegerRange,
+    InvalidDistributionParams,
+    InvalidProbabilities,
+    EmptyChoicePopulation,
+}
+
+/// Box-Muller transform reference. Translated from random_core._box_muller.
+pub fn box_muller(u1: f64, u2: f64) -> (f64, f64) {
+    let r = (-2.0_f64 * u1.ln()).sqrt();
+    let theta = 2.0_f64 * std::f64::consts::PI * u2;
+    (r * theta.cos(), r * theta.sin())
+}
+'''
+
+# ---- choice ---------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "choice"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// choice(values, size, replace, p) — translated from random_core.choice.
+pub fn choice(_values: &[f64], _size: &[usize], _replace: bool, _p: Option<&[f64]>) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::EmptyChoicePopulation, message: "synthetic stub".into() })
+}
+'''
+
+# ---- default_rng ----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "default_rng"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// default_rng(seed) — Generator construction. Translated from random_core.default_rng.
+pub fn default_rng(_seed: Option<u64>) -> Result<u64, NumpyError> {
+    // Stub: production type is the Generator newtype struct.
+    Ok(0)
+}
+'''
+
+# ---- integers -------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "integers"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// integers(low, high, size) — uniform integers in [low, high). Translated from random_core.integers.
+pub fn integers(_low: i64, _high: i64, _size: &[usize]) -> Result<(Vec<i64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::InvalidIntegerRange, message: "synthetic stub".into() })
+}
+'''
+
+# ---- normal ---------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "normal"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// normal(loc, scale, size) — Gaussian. Translated from random_core.normal.
+pub fn normal(_loc: f64, _scale: f64, _size: &[usize]) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::InvalidDistributionParams, message: "synthetic stub".into() })
+}
+'''
+
+# ---- random ---------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "random"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// random(size) — uniform [0, 1). Translated from random_core.random.
+pub fn random(_size: &[usize]) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Ok((Vec::new(), Vec::new()))
+}
+'''
+
+# ---- seed -----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "seed"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// seed(s) — re-seed in place. Translated from random_core.seed.
+pub fn seed(_s: u64) {}
+'''
+
+# ---- uniform --------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "uniform"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// uniform(low, high, size) — uniform [low, high). Translated from random_core.uniform.
+pub fn uniform(_low: f64, _high: f64, _size: &[usize]) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::InvalidDistributionParams, message: "synthetic stub".into() })
+}
+'''
+
+# ---- validate_distribution_params -----------------------------------------
+
+[[entry]]
+task = "translate"
+function = "validate_distribution_params"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// Validate scale > 0 / low < high / finite. Translated from
+/// random_core._validate_distribution_params.
+pub fn validate_distribution_params(scale: Option<f64>, low: Option<f64>, high: Option<f64>) -> Result<(), NumpyError> {
+    if let Some(s) = scale {
+        if !s.is_finite() || s <= 0.0 {
+            return Err(NumpyError { kind: NumpyErrorKind::InvalidDistributionParams, message: format!("scale must be > 0 and finite, got {s}") });
+        }
+    }
+    if let (Some(lo), Some(hi)) = (low, high) {
+        if !lo.is_finite() || !hi.is_finite() || lo >= hi {
+            return Err(NumpyError { kind: NumpyErrorKind::InvalidDistributionParams, message: format!("low/high invalid: low={lo}, high={hi}") });
+        }
+    }
+    Ok(())
+}
+'''
+
+# ---- validate_int_range ---------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "validate_int_range"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// Validate low < high. Translated from random_core._validate_int_range.
+pub fn validate_int_range(low: i64, high: i64) -> Result<(), NumpyError> {
+    if low >= high {
+        return Err(NumpyError { kind: NumpyErrorKind::InvalidIntegerRange, message: format!("low >= high (low={low}, high={high})") });
+    }
+    Ok(())
+}
+'''
+
+# ---- validate_probabilities ------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "validate_probabilities"
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// Validate p sums to 1 (rtol 1e-8), no negatives, length matches n.
+/// Translated from random_core._validate_probabilities.
+pub fn validate_probabilities(p: &[f64], n: usize) -> Result<(), NumpyError> {
+    if p.len() != n {
+        return Err(NumpyError { kind: NumpyErrorKind::InvalidProbabilities, message: format!("p length {} != values length {}", p.len(), n) });
+    }
+    let mut s = 0.0_f64;
+    for v in p {
+        if !v.is_finite() || *v < 0.0 {
+            return Err(NumpyError { kind: NumpyErrorKind::InvalidProbabilities, message: format!("p contains invalid value {v}") });
+        }
+        s += v;
+    }
+    if (s - 1.0).abs() > 1e-8 {
+        return Err(NumpyError { kind: NumpyErrorKind::InvalidProbabilities, message: format!("probabilities do not sum to 1 (sum={s})") });
+    }
+    Ok(())
+}
+'''
+
+# ---- normal (attempt=2 — for the perf-fail escalation test) ---------------
+#
+# Per ADR-0014 §5 + ADR-0015 + ADR-0016 + ADR-0018: M7.5 keeps L2.perf at
+# numerical-tier 0.5x floor (enforced). The pipeline test
+# `random_pipeline_escalates_when_perf_always_fails` injects a perf
+# verifier that rejects every attempt of `normal`, so the repair loop
+# bumps to attempt=2. This canned entry covers attempt=2 so the loop can
+# re-dispatch (otherwise the loop would hit SyntheticMiss before reaching
+# the escalation threshold). The verifier still rejects attempt=2 →
+# EscalationExceeded fires.
+
+[[entry]]
+task = "translate"
+function = "normal"
+attempt = 2
+source_sha16 = "2c54da26a59f2a56"
+response_text = '''
+/// normal(loc, scale, size) (attempt=2 retry — still synthetic stub).
+pub fn normal(_loc: f64, _scale: f64, _size: &[usize]) -> Result<(Vec<f64>, Vec<usize>), NumpyError> {
+    Err(NumpyError { kind: NumpyErrorKind::InvalidDistributionParams, message: "synthetic stub retry".into() })
+}
+'''
