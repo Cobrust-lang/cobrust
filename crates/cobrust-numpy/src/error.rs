@@ -2,7 +2,7 @@
 // Translated by cobrust-translator (synthetic-LLM mode).
 // source-library: numpy 2.0.2
 // oracle: cpython 3.11 (module: numpy)
-// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016.
+// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016 + M7.5 random per ADR-0018.
 // see PROVENANCE.toml for the full manifest.
 
 //! Single error type for cobrust-numpy.
@@ -13,9 +13,13 @@
 //! match on it cleanly rather than parsing the message.
 //!
 //! M7.0 (per ADR-0013) shipped six variants. M7.1 (per ADR-0014 §4)
-//! added three more. M7.2 (per ADR-0015 §4) adds four more for the
-//! indexing surface. M7.3 (per ADR-0016 §5) adds one more for the
-//! reduction surface.
+//! added three more. M7.2 (per ADR-0015 §4) added four more for the
+//! indexing surface. M7.3 (per ADR-0016 §5) added one more for the
+//! reduction surface. M7.5 (per ADR-0018) adds four more for the
+//! random surface. M7.4 (per ADR-0017, parallel branch) will land
+//! linalg variants after M7.3's `ReductionEmptyArray` and before
+//! M7.5's variants — merge-time the order will be:
+//! M7.3 → M7.4 → M7.5.
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -89,6 +93,27 @@ pub enum NumpyErrorKind {
     /// an empty sequence` cousin); cobrust-native shape is
     /// `Result::Err` per constitution §2.2.
     ReductionEmptyArray,
+
+    // ---- M7.4 reserved (per ADR-0017, parallel branch) ----
+    // M7.4 P9 will append `LinalgError` / `SingularMatrix` / etc.
+    // here at merge time. Order at merge: M7.3 → M7.4 → M7.5.
+
+    // ---- M7.5 (per ADR-0018 §"Error variants") ----
+    /// `integers(low, high, ...)` with `low >= high`. Matches numpy's
+    /// `ValueError: low >= high`.
+    InvalidIntegerRange,
+    /// `uniform(low, high, ...)` with `low >= high` or non-finite
+    /// bounds; or `normal(loc, scale, ...)` with `scale <= 0` or
+    /// non-finite parameters; or `choice` with `replace=false` and
+    /// `size.product() > values.size()`. Matches numpy's `ValueError`.
+    InvalidDistributionParams,
+    /// `choice(p=...)` with `p` not summing to 1, length mismatch
+    /// against `values`, or negative entries. Matches numpy's
+    /// `ValueError`.
+    InvalidProbabilities,
+    /// `choice(values, ...)` with `values.size() == 0`. Matches
+    /// numpy's `ValueError: a must be non-empty`.
+    EmptyChoicePopulation,
 }
 
 impl fmt::Display for NumpyError {
@@ -108,6 +133,10 @@ impl fmt::Display for NumpyError {
             NumpyErrorKind::BoolMaskShapeMismatch => "bool_mask_shape_mismatch",
             NumpyErrorKind::IndexDtypeNotInteger => "index_dtype_not_integer",
             NumpyErrorKind::ReductionEmptyArray => "reduction_empty_array",
+            NumpyErrorKind::InvalidIntegerRange => "invalid_integer_range",
+            NumpyErrorKind::InvalidDistributionParams => "invalid_distribution_params",
+            NumpyErrorKind::InvalidProbabilities => "invalid_probabilities",
+            NumpyErrorKind::EmptyChoicePopulation => "empty_choice_population",
         };
         write!(f, "NumpyError({kind_name}): {}", self.message)
     }
