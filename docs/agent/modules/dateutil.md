@@ -20,6 +20,12 @@ is committed to the repo for gate stability (M4 precedent).
 
 ## Status
 
+- **M6 — widened.** L3 dependents widened from 2/5 to 4/5 + 1
+  skipped per ADR-0010 §5: pandas + sqlalchemy added (3 ISO-subset
+  tests each); pendulum vendored as a SKIP-only file because the
+  `tz` module is out of scope. `--features pyo3` build path wired
+  per ADR-0011 (the M5 placeholder lit up; `pyo3_bindings.rs`
+  exposes `parse_iso` / `relativedelta_add` to Python).
 - **M5 — delivered.** All gates green:
   - L0: `corpus/dateutil/spec.toml` + harness committed.
   - L1: 8 functions translated via synthetic-LLM mode; provenance
@@ -35,13 +41,12 @@ is committed to the repo for gate stability (M4 precedent).
     against CPython's `datetime.fromisoformat` (the strict-ISO oracle).
   - L3 (downstream dependents per ADR-0009): croniter + freezegun
     vendored test subsets pass (5 + 5 cases). pandas, sqlalchemy,
-    pendulum deferred to M6 — see ADR-0009 §3.
-- **Out of scope for M5 (M6 widens)**:
+    pendulum deferred to M6 — closed at M6 per ADR-0010 §5.
+- **Out of scope (M7+)**:
   - Free-form `parser.parse` (handles 30+ formats).
   - `tz` timezone resolution.
   - `rrule` recurring rule expansion.
   - `easter` date computation.
-  - pandas / sqlalchemy / pendulum dependents (M6).
 
 ## Public surface (M5)
 

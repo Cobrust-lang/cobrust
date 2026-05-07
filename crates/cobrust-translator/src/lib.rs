@@ -43,6 +43,7 @@
 
 pub mod bench;
 pub mod config;
+pub mod cython;
 pub mod deterministic;
 pub mod downstream;
 pub mod error;
@@ -59,10 +60,15 @@ pub use crate::bench::{
     time_median,
 };
 pub use crate::config::TranslatorConfig;
+pub use crate::cython::{
+    CythonFunction, CythonFunctionKind, CythonParam, CythonSource, CythonType,
+    ShimError as CythonShimError, parse as parse_cython,
+};
 pub use crate::deterministic::deterministic_id;
 pub use crate::downstream::{
     DependentResult, DependentSpec, DependentStatus, DownstreamReport, dateutil_m5_deferred,
-    dateutil_m5_dependents, run_dependent,
+    dateutil_m5_dependents, dateutil_m6_dependents, msgpack_m6_deferred, msgpack_m6_dependents,
+    run_dependent,
 };
 pub use crate::error::TranslatorError;
 pub use crate::manifest::{
@@ -70,10 +76,12 @@ pub use crate::manifest::{
     RouterSection, SourceSection, VerificationSection,
 };
 pub use crate::pipeline::{
-    AcceptAll, BehaviorVerifier, PyLibrary, TranslatedCrate, VerifierVerdict, translate,
-    translate_with_verifier,
+    AcceptAll, AcceptAllPerf, BehaviorVerifier, PerfVerdict, PerfVerifier, PyLibrary,
+    TranslatedCrate, VerifierVerdict, translate, translate_with_verifier, translate_with_verifiers,
 };
-pub use crate::repair::{GateFailure, repair_translation, write_failure_report};
+pub use crate::repair::{
+    GateFailure, repair_translation, repair_translation_with_task, write_failure_report,
+};
 pub use crate::spec::{FunctionSpec, SpecError, SpecToml};
 pub use crate::synthetic::{CannedResponse, CannedTable, PromptHeader, SyntheticProvider};
 pub use crate::translate::{EmittedFile, FunctionTranslation, TranslationOutput, TranslationPlan};

@@ -1,0 +1,46 @@
+//! Cython translation prompt template — M6 (per ADR-0010 §2).
+//!
+//! This is the **prompt body** the translator embeds when dispatching
+//! a `task = translate_cython` request. The synthetic provider serves
+//! a canned response per `(task, function, attempt)`; real-LLM mode
+//! uses the same prompt body so the prompt template is the same in
+//! both modes.
+//!
+//! The body is constructed at runtime in `translate.rs` from the
+//! Cython AST (parsed via `cython::parse(...)`) — this file is
+//! **reference text** for the prompt instructions, not Rust code.
+//! `include_str!` is used where the prompt template is embedded.
+
+CYTHON TRANSLATION REQUEST
+
+Translate the following Cython function to idiomatic Rust using
+only stable std crate types + serde_json::Value for `object`-typed
+arguments. The output must compile under the workspace lints
+(deny clippy::pedantic).
+
+Cython type → Rust type mappings (per ADR-0010 §2):
+- int / long / Py_ssize_t  → i64
+- unsigned int / unsigned long → u64
+- bint                      → bool
+- float / double            → f64
+- str / unicode             → &str (read) or String (owned)
+- bytes                     → &[u8]
+- object                    → serde_json::Value
+- list                      → Vec<serde_json::Value>
+- dict                      → serde_json::Map<String, serde_json::Value>
+
+Cython qualifier → Rust attribute mappings:
+- cdef inline               → #[inline]
+- cpdef                     → pub fn (no Python-call wrapper at this layer)
+- cdef                      → pub(crate) fn
+- def                       → pub fn
+
+Constraints:
+- The emitted body must produce **byte-identical output** to the
+  pure-Python `fallback.py` form for every input in scope. A
+  divergence on any input is a translation bug, not an
+  optimisation difference.
+- No #[allow(...)] attributes inside the function body.
+- No use of unsafe, raw pointers, or std::mem::transmute.
+- No std::env or std::fs reads; the function must be deterministic
+  given its arguments.

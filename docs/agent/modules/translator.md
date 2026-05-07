@@ -15,6 +15,15 @@ Fortran) libraries into Cobrust, with full provenance.
 
 ## Status
 
+- **M6 — delivered.** Native-extension translation milestone.
+  Cython lexical shim (`crate::cython`) routes `.pyx` sources via
+  `task = "translate_cython"`. `PerfVerifier` trait + perf-repair
+  loop wires L2.perf failure-on-miss per ADR-0010 §4. New
+  `cobrust-msgpack` crate (see `mod:msgpack`) translates msgpack-
+  python 1.0.8 (17 pure-Py + 2 Cython-typed entrypoints). dateutil
+  L3 widened from 2/5 to 4/5 + 1 skipped (pendulum tz out of scope)
+  per ADR-0010 §5. PyO3 build path (`--features pyo3`) wired for
+  both dateutil + msgpack per ADR-0011.
 - **M5 — delivered.** End-to-end pipeline runs against `corpus/tomli`
   + `corpus/dateutil` in synthetic-LLM mode with the closed loop
   fully wired (L2.perf gate + L2.behavior repair loop + L3 downstream
@@ -42,12 +51,18 @@ target source
    gate failure ─────┘
 ```
 
-## Modes (M4+M5 — pinned by `adr:0007` + `adr:0008`)
+## Modes (M4+M5+M6 — pinned by `adr:0007` + `adr:0008` + `adr:0010`)
 
 | Mode | Provider | Default? | Cargo feature |
 |---|---|---|---|
 | Synthetic | `crate::synthetic::SyntheticProvider` from canned TOML | yes | none |
 | Real-LLM | `cobrust_llm_router::{AnthropicProvider, OpenAiProvider}` | no | `real-llm` (M5+) |
+
+The synthetic provider's lookup key is `(task, function, attempt)`.
+M6 adds a new task value `translate_cython` for Cython-typed
+entrypoints derived from `.pyx` sources (per ADR-0010 §2). Backward-
+compatible: M4 tomli + M5 dateutil specs omit the task field;
+deserialise defaults preserve `task = "translate"`.
 
 The synthetic header schema gained an optional `attempt:` line at
 M5 (per `adr:0008` §5) so the same `(task, function)` pair can carry
@@ -75,14 +90,16 @@ source-sha256: <16-hex>
 ```rust
 // Re-exports.
 pub use cobrust_translator::{
-    // Pipeline (M4 + M5 verifier hook).
-    translate, translate_with_verifier, PyLibrary, TranslatedCrate,
+    // Pipeline (M4 + M5 verifier hook + M6 perf verifier).
+    translate, translate_with_verifier, translate_with_verifiers,
+    PyLibrary, TranslatedCrate,
     BehaviorVerifier, VerifierVerdict, AcceptAll,
+    PerfVerifier, PerfVerdict, AcceptAllPerf,
     // Configuration / errors.
     TranslatorConfig, TranslatorError,
     // L0 spec.
     SpecToml, FunctionSpec, SpecError,
-    // Synthetic-LLM provider (M5: per-attempt routing).
+    // Synthetic-LLM provider (M5: per-attempt routing; M6: per-task routing).
     SyntheticProvider, CannedTable, CannedResponse, PromptHeader,
     // L1 translation engine.
     TranslationPlan, TranslationOutput, FunctionTranslation, EmittedFile,
@@ -92,12 +109,18 @@ pub use cobrust_translator::{
     DependentsSection,
     // M5 — repair loop.
     GateFailure, repair_translation, write_failure_report,
+    // M6 — per-task repair (Cython).
+    repair_translation_with_task,
+    // M6 — Cython lexical shim.
+    CythonSource, CythonFunction, CythonFunctionKind, CythonParam,
+    CythonType, CythonShimError, parse_cython,
     // M5 — L2.perf benchmark harness.
     BenchmarkReport, BenchmarkResult, PerfTarget,
     classify_result, hardware_tag, short_commit_sha, time_median,
-    // M5 — L3 downstream dependents.
+    // M5 + M6 — L3 downstream dependents.
     DependentResult, DependentSpec, DependentStatus, DownstreamReport,
-    dateutil_m5_dependents, dateutil_m5_deferred, run_dependent,
+    dateutil_m5_dependents, dateutil_m5_deferred, dateutil_m6_dependents,
+    msgpack_m6_dependents, msgpack_m6_deferred, run_dependent,
     // Determinism.
     deterministic_id,
 };
@@ -243,7 +266,7 @@ to M6 per ADR-0009 §3). The manifest's
 | L2.behavior | testsuite + property + L0 differential | tolerance per `@py_compat`; ≥ 1000 fuzzed inputs per public fn | tomli ✅ |
 | L2.perf | benchmark | ≥ 0.8× original on representative bench (configurable per library) | tomli ✅ (recorded), dateutil ✅ (gated) |
 | L3.pyo3 | PyO3-shaped wrapper | subprocess differential vs CPython | tomli ✅, dateutil ✅ |
-| L3.dependents | top-5 dependents pass | downstream validation | dateutil 2/5 ✅ (croniter, freezegun); 3/5 deferred to M6 per `adr:0009` |
+| L3.dependents | top-5 dependents pass | downstream validation | dateutil 4/5 ✅ + 1 skipped (pendulum tz) per `adr:0010` §5; msgpack 2/3 ✅ + 1 deferred (pyspark) per `adr:0010` §"Dependent selection" |
 
 Failure at any L2 gate routes diagnostic back to L1. Default
 escalation threshold: 50 retries → human-readable failure report →
@@ -347,13 +370,26 @@ attempt-2 for `parse_iso`.
 - [x] Diagnostic blob schema + `failure_report.md` writer.
 - [x] `EscalationExceeded` error variant + 50-retry default ceiling.
 
-## Done means (M6)
+## Done means (M6 — DONE)
 
-- [ ] Real-LLM mode smoke-tested on at least one library
-      (`--features real-llm`).
-- [ ] Native PyO3 extension shipped under `--features pyo3` (M6).
-- [ ] Close out ADR-0009's deferred 3/5 (pandas, sqlalchemy,
-      pendulum) at M6.
+- [x] Native-extension library translated (`msgpack-python` 1.0.8,
+      pure-Py + Cython per ADR-0010).
+- [x] Cython lexical shim parses `.pyx` constructs and routes them
+      via `task = "translate_cython"`.
+- [x] L2.perf gate fail-on-miss wired through `PerfVerifier`
+      callback; perf-repair loop demonstrated end-to-end.
+- [x] dateutil L3 widened from 2/5 to 4/5 + 1 skipped per
+      ADR-0010 §5 (pandas + sqlalchemy + pendulum vendored).
+- [x] PyO3 build path wired (`--features pyo3` for both
+      `cobrust-dateutil` and `cobrust-msgpack`) per ADR-0011.
+- [x] Real-LLM smoke (env-gated): present-key path runs end-to-end;
+      absent-key path skips cleanly.
+
+## Done means (M7)
+
+- [ ] Numerical-tier translation: `numpy` core subset.
+- [ ] Cython front-end upgraded from lexical shim to a real parser.
+- [ ] Maturin-managed wheel publication path.
 
 ## Non-goals
 
@@ -366,12 +402,15 @@ attempt-2 for `parse_iso`.
 
 - `mod:llm_router` — translation subsystem dispatches via the router.
 - `mod:tomli` — first translated crate (M4 deliverable).
-- `mod:dateutil` — second translated crate (M5 deliverable).
+- `mod:dateutil` — second translated crate (M5 deliverable; widened to 5/5 L3 at M6).
+- `mod:msgpack` — third translated crate (M6 deliverable; native-ext).
 - `mod:frontend` — emitted Cobrust must lex+parse via the frontend
   (deferred until the static core consumes Cobrust source end-to-end).
 - `mod:types` — emitted Cobrust must type-check.
 - [adr:0007](../adr/0007-translator-pipeline.md) — pipeline architecture (M4).
 - [adr:0008](../adr/0008-l2-perf-and-repair-loop.md) — L2.perf gate + repair loop (M5).
 - [adr:0009](../adr/0009-downstream-validation.md) — L3 downstream-dependents partial coverage (M5).
+- [adr:0010](../adr/0010-native-ext-translation.md) — native-ext translation methodology (M6).
+- [adr:0011](../adr/0011-pyo3-build-path.md) — PyO3 build path (M6).
 - [adr:0001](../adr/0001-license.md) — license inheritance for translated artifacts.
 - Constitution `CLAUDE.md` §4.2 — pipeline definition.

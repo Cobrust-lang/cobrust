@@ -9,8 +9,11 @@
 # - M1 added public-surface coverage for the frontend crate.
 # - M2 extended to mod:hir and mod:types.
 # - M3 extended to mod:llm_router.
-# - M4 (this revision) extends to mod:translator and mod:tomli, plus
-#   ADR-0007 acceptance + the synthetic-mode contract terms.
+# - M4 extends to mod:translator and mod:tomli, plus ADR-0007
+#   acceptance + the synthetic-mode contract terms.
+# - M5 extends to mod:dateutil + ADR-0008 + ADR-0009.
+# - M6 (this revision) extends to mod:msgpack + ADR-0010 + ADR-0011 +
+#   the Cython shim + PerfVerifier surface + dateutil L3 widening.
 #
 # See `docs/agent/conventions.md` and constitution `CLAUDE.md` §3.
 
@@ -58,6 +61,7 @@ expected_modules=(
     tomli
     translator
     dateutil
+    msgpack
 )
 
 for mod in "${expected_modules[@]}"; do
@@ -347,4 +351,87 @@ if grep -q '^- \*\*M5 — delivered.\*\*' "docs/agent/modules/translator.md"; th
     [[ -f corpus/dateutil/perf.toml ]] || fail "corpus/dateutil/perf.toml missing"
 fi
 
-echo "doc-coverage: M0 + M1 + M2 + M4 + M5 checks passed"
+# --- 10. M6 translator + msgpack surface coverage --------------------------
+# When the translator module declares M6 delivered, every public surface
+# term + the Cython shim contract + the perf-verifier trait + ADR-0010
+# anchors must appear in all three doc trees.
+
+m6_translator_terms=(
+    "translate_with_verifiers"
+    "PerfVerifier"
+    "PerfVerdict"
+    "AcceptAllPerf"
+    "translate_cython"
+    "CythonSource"
+    "CythonType"
+    "ADR-0010"
+    "ADR-0011"
+)
+
+m6_translator_files=(
+    "docs/agent/modules/translator.md"
+    "docs/human/en/architecture.md"
+    "docs/human/zh/architecture.md"
+)
+
+if grep -q '^- \*\*M6 — delivered.\*\*' "docs/agent/modules/translator.md"; then
+    for term in "${m6_translator_terms[@]}"; do
+        for f in "${m6_translator_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M6 translator surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    m6_msgpack_terms=(
+        "pack_to_vec"
+        "MsgValue"
+        "MsgError"
+        "pack_uint_cython"
+        "unpack_uint_cython"
+    )
+    m6_msgpack_files=(
+        "docs/agent/modules/msgpack.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m6_msgpack_terms[@]}"; do
+        for f in "${m6_msgpack_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M6 msgpack surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_ten="docs/agent/adr/0010-native-ext-translation.md"
+    [[ -f "$adr_ten" ]] || fail "ADR-0010 (native-ext translation) is required for M6"
+    if ! grep -q '^status: accepted$' "$adr_ten"; then
+        fail "ADR-0010 must be 'status: accepted' for M6 to be done"
+    fi
+    adr_eleven="docs/agent/adr/0011-pyo3-build-path.md"
+    [[ -f "$adr_eleven" ]] || fail "ADR-0011 (PyO3 build path) is required for M6"
+    if ! grep -q '^status: accepted$' "$adr_eleven"; then
+        fail "ADR-0011 must be 'status: accepted' for M6 to be done"
+    fi
+
+    # PROVENANCE.toml must exist on the generated msgpack crate.
+    if [[ -d crates/cobrust-msgpack ]]; then
+        [[ -f crates/cobrust-msgpack/PROVENANCE.toml ]]             || fail "crates/cobrust-msgpack/PROVENANCE.toml missing"
+    fi
+
+    # Corpus directory layout per ADR-0010.
+    [[ -f corpus/msgpack/spec.toml ]] || fail "corpus/msgpack/spec.toml missing"
+    [[ -f corpus/msgpack/canned_llm_responses.toml ]] || fail "corpus/msgpack/canned_llm_responses.toml missing"
+    [[ -d corpus/msgpack/upstream ]] || fail "corpus/msgpack/upstream missing"
+    [[ -d corpus/msgpack/upstream_tests ]] || fail "corpus/msgpack/upstream_tests missing"
+    [[ -d corpus/msgpack/dependents/redis-py ]] || fail "corpus/msgpack/dependents/redis-py missing"
+    [[ -d corpus/msgpack/dependents/msgpack-numpy ]] || fail "corpus/msgpack/dependents/msgpack-numpy missing"
+    [[ -f corpus/msgpack/perf.toml ]] || fail "corpus/msgpack/perf.toml missing"
+
+    # M6 dateutil widening: pandas + sqlalchemy + pendulum subsets.
+    [[ -d corpus/dateutil/dependents/pandas ]] || fail "corpus/dateutil/dependents/pandas missing (M6 widening)"
+    [[ -d corpus/dateutil/dependents/sqlalchemy ]] || fail "corpus/dateutil/dependents/sqlalchemy missing (M6 widening)"
+    [[ -d corpus/dateutil/dependents/pendulum ]] || fail "corpus/dateutil/dependents/pendulum missing (M6 widening)"
+fi
+
+echo "doc-coverage: M0 + M1 + M2 + M4 + M5 + M6 checks passed"

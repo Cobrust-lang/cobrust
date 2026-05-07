@@ -128,8 +128,26 @@ pub async fn repair_translation(
     source_sha16: &str,
     failure: &GateFailure,
 ) -> Result<FunctionTranslation, TranslatorError> {
+    repair_translation_with_task(router, library, "translate", source_sha16, failure).await
+}
+
+/// M6: per-function-task variant. Used when the failed function was
+/// translated under `task = "translate_cython"` so the repair prompt
+/// routes to the matching synthetic entry. The default
+/// [`repair_translation`] forwards here with `task = "translate"`,
+/// preserving M5 behaviour.
+///
+/// # Errors
+/// As [`repair_translation`].
+pub async fn repair_translation_with_task(
+    router: &Router,
+    library: &str,
+    task: &str,
+    source_sha16: &str,
+    failure: &GateFailure,
+) -> Result<FunctionTranslation, TranslatorError> {
     let header = PromptHeader {
-        task: "translate".into(),
+        task: task.into(),
         function: failure.function.clone(),
         source_sha16: source_sha16.into(),
         attempt: failure.attempt,
@@ -152,7 +170,7 @@ pub async fn repair_translation(
     let resp = router
         .dispatch(Task::Translate, req.clone())
         .await
-        .map_err(|e| classify_router_error(&failure.function, e))?;
+        .map_err(|e| classify_router_error(task, &failure.function, e))?;
     let decision_id = format!(
         "blake3:{}",
         cobrust_llm_router::CacheKey::compute(&resp.provider, &req).hex()
@@ -165,17 +183,22 @@ pub async fn repair_translation(
         cache_hit: resp.cache_hit,
         router_decision_id: decision_id,
         emitted_text: resp.response.text,
+        task: task.into(),
     })
 }
 
-fn classify_router_error(function: &str, e: cobrust_llm_router::RouterError) -> TranslatorError {
+fn classify_router_error(
+    task: &str,
+    function: &str,
+    e: cobrust_llm_router::RouterError,
+) -> TranslatorError {
     if let cobrust_llm_router::RouterError::AllFailed(ref pairs) = e {
         for (_, llm_err) in pairs {
             if let cobrust_llm_router::LlmError::Provider { code, .. } = llm_err
                 && code == "synthetic-miss"
             {
                 return TranslatorError::SyntheticMiss {
-                    task: "translate".into(),
+                    task: task.into(),
                     function: function.into(),
                 };
             }

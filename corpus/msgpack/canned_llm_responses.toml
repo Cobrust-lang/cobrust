@@ -1,0 +1,852 @@
+# Canned LLM responses for msgpack M6 — synthetic-LLM mode.
+#
+# Schema per ADR-0007 §"Synthetic-LLM mode contract" + ADR-0008 §5
+# (per-attempt routing) + ADR-0010 §2 (`task = translate_cython` for
+# the Cython sources). Lookup key: (task, function, attempt). When
+# `attempt` is omitted both sides default to 1.
+#
+# Source-SHA staleness check:
+#   sha256(corpus/msgpack/upstream/msgpack_core.py)[..16] = "44dab293fdcff985"
+#
+# REPAIR-LOOP DEMO (per ADR-0010 §4):
+#   `pack_uint` ships TWO entries:
+#     - attempt = 1 → deliberately slow (manual bit-shift in a loop;
+#       ~3x slower than the optimised form on tight integer loops)
+#     - attempt = 2 → optimised match-on-range form
+#   The integration test at
+#   `crates/cobrust-translator/tests/msgpack_pipeline.rs::perf_repair_loop_recovers`
+#   asserts retry count > 0 and < escalation_threshold.
+#
+# MODULE PREAMBLE: alphabetically-first function (`pack`) carries the
+# preamble (use statements, MsgValue enum, MsgError type). Subsequent
+# entries emit only their function bodies.
+
+schema_version = 1
+oracle_runtime = "cpython 3.11"
+
+# ---- pack (alphabetic-first; carries module preamble) ---------------------
+
+[[entry]]
+task = "translate"
+function = "pack"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+// Module preamble emitted with the first alphabetic function (pack).
+// Subsequent entries emit only their function body.
+//
+// Auto-generated code: the pedantic-group casts below are all
+// guarded by upper-bound checks (e.g. `if n <= 0xff`), so the
+// `as u8` truncations are safe. Module-level allows keep the
+// auto-gen path lint-clean per ADR-0010 §"Decision".
+
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::manual_let_else)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::must_use_candidate)]
+
+use std::fmt;
+
+/// Heterogeneous value tree the M6 msgpack scope handles. Mirrors the
+/// Python value categories that `pack` dispatches on (nil/bool/int/
+/// float/str/bytes/array/map). The L0 differential gate compares
+/// `to_json()` between this representation and the CPython oracle.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MsgValue {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    UInt(u64),
+    Float(f64),
+    Str(String),
+    Bin(Vec<u8>),
+    Array(Vec<MsgValue>),
+    Map(Vec<(String, MsgValue)>),
+}
+
+impl MsgValue {
+    /// Convert to a serde_json::Value for the L3 differential gate.
+    /// `bin` becomes a JSON array of byte values; `map` keys are
+    /// stringified; the rest is straightforward.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            MsgValue::Nil => serde_json::Value::Null,
+            MsgValue::Bool(b) => serde_json::Value::Bool(*b),
+            MsgValue::Int(i) => serde_json::json!(*i),
+            MsgValue::UInt(u) => serde_json::json!(*u),
+            MsgValue::Float(f) => serde_json::json!(*f),
+            MsgValue::Str(s) => serde_json::Value::String(s.clone()),
+            MsgValue::Bin(b) => serde_json::json!(b),
+            MsgValue::Array(items) => {
+                serde_json::Value::Array(items.iter().map(MsgValue::to_json).collect())
+            }
+            MsgValue::Map(items) => {
+                let mut m = serde_json::Map::new();
+                for (k, v) in items {
+                    m.insert(k.clone(), v.to_json());
+                }
+                serde_json::Value::Object(m)
+            }
+        }
+    }
+}
+
+/// Single error type for msgpack pack/unpack failures. Mirrors
+/// the union of `PackException` and `UnpackException` from the
+/// Python form — they're collapsed into one Rust enum because Rust
+/// `Result<T, E>` is the default error path (constitution §2.2).
+#[derive(Clone, Debug)]
+pub struct MsgError {
+    pub kind: MsgErrorKind,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MsgErrorKind {
+    Pack,
+    Unpack,
+}
+
+impl fmt::Display for MsgError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind = match self.kind {
+            MsgErrorKind::Pack => "pack",
+            MsgErrorKind::Unpack => "unpack",
+        };
+        write!(f, "msgpack {kind} error: {}", self.message)
+    }
+}
+
+impl std::error::Error for MsgError {}
+
+impl MsgError {
+    pub(crate) fn pack(message: impl Into<String>) -> Self {
+        Self { kind: MsgErrorKind::Pack, message: message.into() }
+    }
+
+    pub(crate) fn unpack(message: impl Into<String>) -> Self {
+        Self { kind: MsgErrorKind::Unpack, message: message.into() }
+    }
+}
+
+// msgpack format prefix bytes — verbatim from the spec.
+pub(crate) const NIL: u8 = 0xc0;
+pub(crate) const FALSE: u8 = 0xc2;
+pub(crate) const TRUE: u8 = 0xc3;
+pub(crate) const BIN_8: u8 = 0xc4;
+pub(crate) const BIN_16: u8 = 0xc5;
+pub(crate) const BIN_32: u8 = 0xc6;
+pub(crate) const FLOAT_64: u8 = 0xcb;
+pub(crate) const UINT_8: u8 = 0xcc;
+pub(crate) const UINT_16: u8 = 0xcd;
+pub(crate) const UINT_32: u8 = 0xce;
+pub(crate) const UINT_64: u8 = 0xcf;
+pub(crate) const INT_8: u8 = 0xd0;
+pub(crate) const INT_16: u8 = 0xd1;
+pub(crate) const INT_32: u8 = 0xd2;
+pub(crate) const INT_64: u8 = 0xd3;
+pub(crate) const STR_8: u8 = 0xd9;
+pub(crate) const STR_16: u8 = 0xda;
+pub(crate) const STR_32: u8 = 0xdb;
+pub(crate) const ARRAY_16: u8 = 0xdc;
+pub(crate) const ARRAY_32: u8 = 0xdd;
+pub(crate) const MAP_16: u8 = 0xde;
+pub(crate) const MAP_32: u8 = 0xdf;
+
+pub(crate) const FIXMAP_PREFIX: u8 = 0x80;
+pub(crate) const FIXARRAY_PREFIX: u8 = 0x90;
+pub(crate) const FIXSTR_PREFIX: u8 = 0xa0;
+
+/// Top-level pack: dispatch on `MsgValue` variant and write the
+/// msgpack byte sequence into `out`. Mirrors `msgpack_core.pack`.
+///
+/// # Errors
+/// Returns [`MsgError::pack`] for unsupported value shapes (M6 scope).
+pub fn pack(value: &MsgValue, out: &mut Vec<u8>) -> Result<(), MsgError> {
+    match value {
+        MsgValue::Nil => out.push(NIL),
+        MsgValue::Bool(true) => out.push(TRUE),
+        MsgValue::Bool(false) => out.push(FALSE),
+        MsgValue::Int(i) => pack_int(*i, out),
+        MsgValue::UInt(u) => pack_uint(*u, out),
+        MsgValue::Float(f) => pack_float(*f, out),
+        MsgValue::Str(s) => pack_str(s, out),
+        MsgValue::Bin(b) => pack_bin(b, out),
+        MsgValue::Array(items) => pack_array(items, out)?,
+        MsgValue::Map(items) => pack_map(items, out)?,
+    }
+    Ok(())
+}
+
+/// Convenience: pack into a fresh Vec and return owned bytes.
+///
+/// # Errors
+/// See [`pack`].
+pub fn pack_to_vec(value: &MsgValue) -> Result<Vec<u8>, MsgError> {
+    let mut out = Vec::new();
+    pack(value, &mut out)?;
+    Ok(out)
+}
+'''
+
+# ---- pack_array -----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "pack_array"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Pack a list/tuple as msgpack array. Mirrors `msgpack_core.pack_array`.
+///
+/// # Errors
+/// Returns [`MsgError::pack`] when one of the elements falls outside the M6 scope.
+pub fn pack_array(items: &[MsgValue], out: &mut Vec<u8>) -> Result<(), MsgError> {
+    let n = items.len();
+    if n <= 0x0f {
+        out.push(FIXARRAY_PREFIX | (n as u8));
+    } else if n <= 0xffff {
+        out.push(ARRAY_16);
+        out.push(((n >> 8) & 0xff) as u8);
+        out.push((n & 0xff) as u8);
+    } else if n <= 0xffff_ffff {
+        out.push(ARRAY_32);
+        out.push(((n >> 24) & 0xff) as u8);
+        out.push(((n >> 16) & 0xff) as u8);
+        out.push(((n >> 8) & 0xff) as u8);
+        out.push((n & 0xff) as u8);
+    } else {
+        return Err(MsgError::pack("array length exceeds u32"));
+    }
+    for elem in items {
+        pack(elem, out)?;
+    }
+    Ok(())
+}
+'''
+
+# ---- pack_bin -------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "pack_bin"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Pack Python bytes as msgpack bin. Mirrors `msgpack_core.pack_bin`.
+pub fn pack_bin(value: &[u8], out: &mut Vec<u8>) {
+    let n = value.len();
+    if n <= 0xff {
+        out.push(BIN_8);
+        out.push(n as u8);
+    } else if n <= 0xffff {
+        out.push(BIN_16);
+        out.push(((n >> 8) & 0xff) as u8);
+        out.push((n & 0xff) as u8);
+    } else {
+        out.push(BIN_32);
+        out.push(((n >> 24) & 0xff) as u8);
+        out.push(((n >> 16) & 0xff) as u8);
+        out.push(((n >> 8) & 0xff) as u8);
+        out.push((n & 0xff) as u8);
+    }
+    out.extend_from_slice(value);
+}
+'''
+
+# ---- pack_float -----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "pack_float"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Pack a 64-bit big-endian IEEE 754 float. Mirrors `msgpack_core.pack_float`.
+pub fn pack_float(value: f64, out: &mut Vec<u8>) {
+    out.push(FLOAT_64);
+    out.extend_from_slice(&value.to_be_bytes());
+}
+'''
+
+# ---- pack_int -------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "pack_int"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Pack any signed integer. Mirrors `msgpack_core.pack_int`. The
+/// non-negative path delegates to `pack_uint`; the negative path picks
+/// the smallest fitting negative-fixint / int8 / int16 / int32 / int64
+/// marker.
+pub fn pack_int(value: i64, out: &mut Vec<u8>) {
+    if value >= 0 {
+        return pack_uint(value as u64, out);
+    }
+    if value >= -0x20 {
+        out.push(0xe0 | ((value as i32 & 0x1f) as u8));
+    } else if value >= -0x80 {
+        out.push(INT_8);
+        out.push((value as i8) as u8);
+    } else if value >= -0x8000 {
+        let v = value as i16;
+        out.push(INT_16);
+        out.push(((v >> 8) & 0xff) as u8);
+        out.push((v & 0xff) as u8);
+    } else if value >= -0x8000_0000 {
+        let v = value as i32;
+        out.push(INT_32);
+        out.push(((v >> 24) & 0xff) as u8);
+        out.push(((v >> 16) & 0xff) as u8);
+        out.push(((v >> 8) & 0xff) as u8);
+        out.push((v & 0xff) as u8);
+    } else {
+        out.push(INT_64);
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+}
+'''
+
+# ---- pack_map -------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "pack_map"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Pack a dict (str keys only at M6) with sorted-key iteration so
+/// emission is deterministic. Mirrors `msgpack_core.pack_map`.
+///
+/// # Errors
+/// Returns [`MsgError::pack`] when a value falls outside the M6 scope.
+pub fn pack_map(items: &[(String, MsgValue)], out: &mut Vec<u8>) -> Result<(), MsgError> {
+    let n = items.len();
+    if n <= 0x0f {
+        out.push(FIXMAP_PREFIX | (n as u8));
+    } else if n <= 0xffff {
+        out.push(MAP_16);
+        out.push(((n >> 8) & 0xff) as u8);
+        out.push((n & 0xff) as u8);
+    } else if n <= 0xffff_ffff {
+        out.push(MAP_32);
+        out.push(((n >> 24) & 0xff) as u8);
+        out.push(((n >> 16) & 0xff) as u8);
+        out.push(((n >> 8) & 0xff) as u8);
+        out.push((n & 0xff) as u8);
+    } else {
+        return Err(MsgError::pack("map length exceeds u32"));
+    }
+    let mut sorted: Vec<&(String, MsgValue)> = items.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    for (k, v) in sorted {
+        pack_str(k, out);
+        pack(v, out)?;
+    }
+    Ok(())
+}
+'''
+
+# ---- pack_str -------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "pack_str"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Pack a `&str` as msgpack str. Mirrors `msgpack_core.pack_str`.
+pub fn pack_str(value: &str, out: &mut Vec<u8>) {
+    let body = value.as_bytes();
+    let n = body.len();
+    if n <= 0x1f {
+        out.push(FIXSTR_PREFIX | (n as u8));
+    } else if n <= 0xff {
+        out.push(STR_8);
+        out.push(n as u8);
+    } else if n <= 0xffff {
+        out.push(STR_16);
+        out.push(((n >> 8) & 0xff) as u8);
+        out.push((n & 0xff) as u8);
+    } else {
+        out.push(STR_32);
+        out.push(((n >> 24) & 0xff) as u8);
+        out.push(((n >> 16) & 0xff) as u8);
+        out.push(((n >> 8) & 0xff) as u8);
+        out.push((n & 0xff) as u8);
+    }
+    out.extend_from_slice(body);
+}
+'''
+
+# ---- pack_uint (attempt 1 — DELIBERATELY SLOW for perf-repair-loop demo) -
+
+[[entry]]
+task = "translate"
+function = "pack_uint"
+source_sha16 = "44dab293fdcff985"
+attempt = 1
+response_text = '''
+/// Pack a non-negative integer. **DELIBERATELY SLOW FIRST ATTEMPT** —
+/// uses an explicit loop with bit-shifts instead of the constant-time
+/// match-on-range form, so the L2.perf gate (per ADR-0010 §4) flags
+/// this as below threshold and the repair loop fires. Real curators
+/// would record only the corrected attempt-2 entry; M6 keeps both for
+/// the test path.
+pub fn pack_uint(value: u64, out: &mut Vec<u8>) {
+    // PERF-BROKEN: loop-based emission with branch prediction misses.
+    let bytes = value.to_be_bytes();
+    let mut leading_zero_bytes = 0usize;
+    for &b in &bytes {
+        if b == 0 {
+            leading_zero_bytes += 1;
+        } else {
+            break;
+        }
+    }
+    let significant = 8 - leading_zero_bytes;
+    if value <= 0x7f {
+        out.push(value as u8);
+    } else if significant <= 1 {
+        out.push(UINT_8);
+        out.push(value as u8);
+    } else if significant <= 2 {
+        out.push(UINT_16);
+        for i in (0..2).rev() {
+            // PERF-BROKEN: unnecessary intermediate Vec to slow this down.
+            let intermediate: Vec<u8> = vec![((value >> (8 * i)) & 0xff) as u8];
+            out.extend(intermediate);
+        }
+    } else if significant <= 4 {
+        out.push(UINT_32);
+        for i in (0..4).rev() {
+            let intermediate: Vec<u8> = vec![((value >> (8 * i)) & 0xff) as u8];
+            out.extend(intermediate);
+        }
+    } else {
+        out.push(UINT_64);
+        for i in (0..8).rev() {
+            let intermediate: Vec<u8> = vec![((value >> (8 * i)) & 0xff) as u8];
+            out.extend(intermediate);
+        }
+    }
+}
+'''
+
+# ---- pack_uint (attempt 2 — corrected, optimised) ------------------------
+
+[[entry]]
+task = "translate"
+function = "pack_uint"
+source_sha16 = "44dab293fdcff985"
+attempt = 2
+response_text = '''
+/// Pack a non-negative integer using the smallest fitting msgpack
+/// uint marker. Mirrors `msgpack_core.pack_uint`.
+pub fn pack_uint(value: u64, out: &mut Vec<u8>) {
+    if value <= 0x7f {
+        out.push(value as u8);
+    } else if value <= 0xff {
+        out.push(UINT_8);
+        out.push(value as u8);
+    } else if value <= 0xffff {
+        out.push(UINT_16);
+        out.push(((value >> 8) & 0xff) as u8);
+        out.push((value & 0xff) as u8);
+    } else if value <= 0xffff_ffff {
+        out.push(UINT_32);
+        out.push(((value >> 24) & 0xff) as u8);
+        out.push(((value >> 16) & 0xff) as u8);
+        out.push(((value >> 8) & 0xff) as u8);
+        out.push((value & 0xff) as u8);
+    } else {
+        out.push(UINT_64);
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+}
+'''
+
+# ---- pack_uint_cython (Cython-typed entrypoint, translate_cython task) ---
+
+[[entry]]
+task = "translate_cython"
+function = "pack_uint_cython"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Cython-typed pack_uint: takes a `u64` directly. Translated from
+/// `_packer.pyx::pack_uint_cython` via the M6 Cython lexical shim
+/// (per ADR-0010 §2). Emits bytes-identical output to `pack_uint`.
+#[inline]
+pub fn pack_uint_cython(value: u64, out: &mut Vec<u8>) {
+    pack_uint(value, out);
+}
+'''
+
+# ---- unpack ---------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "unpack"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Top-level unpack: parse `data` as one msgpack value. Mirrors
+/// `msgpack_core.unpack`.
+///
+/// # Errors
+/// Returns [`MsgError::unpack`] for malformed input or trailing bytes.
+pub fn unpack(data: &[u8]) -> Result<MsgValue, MsgError> {
+    let (value, pos) = unpack_one(data, 0)?;
+    if pos != data.len() {
+        return Err(MsgError::unpack("trailing bytes after value"));
+    }
+    Ok(value)
+}
+'''
+
+# ---- unpack_array ---------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "unpack_array"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Read `length` msgpack values into a Vec. Mirrors `msgpack_core.unpack_array`.
+///
+/// # Errors
+/// Returns [`MsgError::unpack`] if any element is malformed.
+pub fn unpack_array(data: &[u8], pos: usize, length: usize) -> Result<(Vec<MsgValue>, usize), MsgError> {
+    let mut out: Vec<MsgValue> = Vec::with_capacity(length);
+    let mut cursor = pos;
+    for _ in 0..length {
+        let (v, next) = unpack_one(data, cursor)?;
+        out.push(v);
+        cursor = next;
+    }
+    Ok((out, cursor))
+}
+'''
+
+# ---- unpack_bin -----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "unpack_bin"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Read `length` bytes of binary. Mirrors `msgpack_core.unpack_bin`.
+///
+/// # Errors
+/// Returns [`MsgError::unpack`] when the slice is truncated.
+pub fn unpack_bin(data: &[u8], pos: usize, length: usize) -> Result<(Vec<u8>, usize), MsgError> {
+    if pos + length > data.len() {
+        return Err(MsgError::unpack("truncated bin"));
+    }
+    Ok((data[pos..pos + length].to_vec(), pos + length))
+}
+'''
+
+# ---- unpack_float ---------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "unpack_float"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Read 4 or 8 bytes of big-endian IEEE 754 float. Mirrors
+/// `msgpack_core.unpack_float`.
+///
+/// # Errors
+/// Returns [`MsgError::unpack`] when the slice is truncated.
+pub fn unpack_float(data: &[u8], pos: usize, n_bytes: usize) -> Result<(f64, usize), MsgError> {
+    if pos + n_bytes > data.len() {
+        return Err(MsgError::unpack("truncated float"));
+    }
+    let value = if n_bytes == 4 {
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(&data[pos..pos + 4]);
+        f64::from(f32::from_be_bytes(buf))
+    } else {
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&data[pos..pos + 8]);
+        f64::from_be_bytes(buf)
+    };
+    Ok((value, pos + n_bytes))
+}
+'''
+
+# ---- unpack_int -----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "unpack_int"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Read n_bytes of big-endian signed int. Mirrors `msgpack_core.unpack_int`.
+///
+/// # Errors
+/// Returns [`MsgError::unpack`] when the slice is truncated or
+/// `n_bytes` is outside the supported range (1, 2, 4, 8).
+pub fn unpack_int(data: &[u8], pos: usize, n_bytes: usize) -> Result<(i64, usize), MsgError> {
+    let (raw, new_pos) = unpack_uint(data, pos, n_bytes)?;
+    // n_bytes is always 1, 2, 4, or 8 from the dispatch table; the
+    // 8-byte form is special because `1i64 << 64` overflows so we
+    // reinterpret the bit pattern directly.
+    let value: i64 = match n_bytes {
+        1 | 2 | 4 => {
+            let bits = 8 * n_bytes;
+            let sign_bit: u64 = 1u64 << (bits - 1);
+            if raw & sign_bit != 0 {
+                (raw as i64) - (1i64 << bits)
+            } else {
+                raw as i64
+            }
+        }
+        8 => raw as i64,
+        _ => return Err(MsgError::unpack(format!(
+            "unpack_int: n_bytes must be 1/2/4/8, got {n_bytes}"
+        ))),
+    };
+    Ok((value, new_pos))
+}
+'''
+
+# ---- unpack_map -----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "unpack_map"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Read `length` (key, value) pairs into a Vec of pairs. Mirrors
+/// `msgpack_core.unpack_map`. We use a Vec-of-pairs (not a HashMap) so
+/// the M6 differential gate can verify key ordering deterministically.
+///
+/// # Errors
+/// Returns [`MsgError::unpack`] when keys are non-strings or values are
+/// malformed.
+pub fn unpack_map(
+    data: &[u8],
+    pos: usize,
+    length: usize,
+) -> Result<(Vec<(String, MsgValue)>, usize), MsgError> {
+    let mut out: Vec<(String, MsgValue)> = Vec::with_capacity(length);
+    let mut cursor = pos;
+    for _ in 0..length {
+        let (k, p2) = unpack_one(data, cursor)?;
+        let key = match k {
+            MsgValue::Str(s) => s,
+            _ => return Err(MsgError::unpack("M6 only supports str keys")),
+        };
+        let (v, p3) = unpack_one(data, p2)?;
+        out.push((key, v));
+        cursor = p3;
+    }
+    Ok((out, cursor))
+}
+'''
+
+# ---- unpack_one (dispatcher) ---------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "unpack_one"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Dispatch one msgpack value starting at `pos`. Returns
+/// `(value, new_pos)`. Mirrors `msgpack_core._unpack_one`.
+///
+/// # Errors
+/// Returns [`MsgError::unpack`] for malformed bytes or unknown markers.
+#[allow(clippy::too_many_lines)]
+pub fn unpack_one(data: &[u8], pos: usize) -> Result<(MsgValue, usize), MsgError> {
+    if pos >= data.len() {
+        return Err(MsgError::unpack("EOF before value"));
+    }
+    let marker = data[pos];
+    if marker <= 0x7f {
+        return Ok((MsgValue::UInt(u64::from(marker)), pos + 1));
+    }
+    if marker >= 0xe0 {
+        let v: i32 = i32::from(marker) - 0x100;
+        return Ok((MsgValue::Int(i64::from(v)), pos + 1));
+    }
+    match marker {
+        NIL => Ok((MsgValue::Nil, pos + 1)),
+        TRUE => Ok((MsgValue::Bool(true), pos + 1)),
+        FALSE => Ok((MsgValue::Bool(false), pos + 1)),
+        UINT_8 => {
+            let (v, p) = unpack_uint(data, pos + 1, 1)?;
+            Ok((MsgValue::UInt(v), p))
+        }
+        UINT_16 => {
+            let (v, p) = unpack_uint(data, pos + 1, 2)?;
+            Ok((MsgValue::UInt(v), p))
+        }
+        UINT_32 => {
+            let (v, p) = unpack_uint(data, pos + 1, 4)?;
+            Ok((MsgValue::UInt(v), p))
+        }
+        UINT_64 => {
+            let (v, p) = unpack_uint(data, pos + 1, 8)?;
+            Ok((MsgValue::UInt(v), p))
+        }
+        INT_8 => {
+            let (v, p) = unpack_int(data, pos + 1, 1)?;
+            Ok((MsgValue::Int(v), p))
+        }
+        INT_16 => {
+            let (v, p) = unpack_int(data, pos + 1, 2)?;
+            Ok((MsgValue::Int(v), p))
+        }
+        INT_32 => {
+            let (v, p) = unpack_int(data, pos + 1, 4)?;
+            Ok((MsgValue::Int(v), p))
+        }
+        INT_64 => {
+            let (v, p) = unpack_int(data, pos + 1, 8)?;
+            Ok((MsgValue::Int(v), p))
+        }
+        0xca => {
+            let (v, p) = unpack_float(data, pos + 1, 4)?;
+            Ok((MsgValue::Float(v), p))
+        }
+        FLOAT_64 => {
+            let (v, p) = unpack_float(data, pos + 1, 8)?;
+            Ok((MsgValue::Float(v), p))
+        }
+        m if (FIXSTR_PREFIX..NIL).contains(&m) => {
+            let length = (m & 0x1f) as usize;
+            let (s, p) = unpack_str(data, pos + 1, length)?;
+            Ok((MsgValue::Str(s), p))
+        }
+        STR_8 => {
+            let (length, p2) = unpack_uint(data, pos + 1, 1)?;
+            let (s, p) = unpack_str(data, p2, length as usize)?;
+            Ok((MsgValue::Str(s), p))
+        }
+        STR_16 => {
+            let (length, p2) = unpack_uint(data, pos + 1, 2)?;
+            let (s, p) = unpack_str(data, p2, length as usize)?;
+            Ok((MsgValue::Str(s), p))
+        }
+        STR_32 => {
+            let (length, p2) = unpack_uint(data, pos + 1, 4)?;
+            let (s, p) = unpack_str(data, p2, length as usize)?;
+            Ok((MsgValue::Str(s), p))
+        }
+        BIN_8 => {
+            let (length, p2) = unpack_uint(data, pos + 1, 1)?;
+            let (b, p) = unpack_bin(data, p2, length as usize)?;
+            Ok((MsgValue::Bin(b), p))
+        }
+        BIN_16 => {
+            let (length, p2) = unpack_uint(data, pos + 1, 2)?;
+            let (b, p) = unpack_bin(data, p2, length as usize)?;
+            Ok((MsgValue::Bin(b), p))
+        }
+        BIN_32 => {
+            let (length, p2) = unpack_uint(data, pos + 1, 4)?;
+            let (b, p) = unpack_bin(data, p2, length as usize)?;
+            Ok((MsgValue::Bin(b), p))
+        }
+        m if (FIXARRAY_PREFIX..FIXSTR_PREFIX).contains(&m) => {
+            let length = (m & 0x0f) as usize;
+            let (arr, p) = unpack_array(data, pos + 1, length)?;
+            Ok((MsgValue::Array(arr), p))
+        }
+        ARRAY_16 => {
+            let (length, p2) = unpack_uint(data, pos + 1, 2)?;
+            let (arr, p) = unpack_array(data, p2, length as usize)?;
+            Ok((MsgValue::Array(arr), p))
+        }
+        ARRAY_32 => {
+            let (length, p2) = unpack_uint(data, pos + 1, 4)?;
+            let (arr, p) = unpack_array(data, p2, length as usize)?;
+            Ok((MsgValue::Array(arr), p))
+        }
+        m if (FIXMAP_PREFIX..FIXARRAY_PREFIX).contains(&m) => {
+            let length = (m & 0x0f) as usize;
+            let (map, p) = unpack_map(data, pos + 1, length)?;
+            Ok((MsgValue::Map(map), p))
+        }
+        MAP_16 => {
+            let (length, p2) = unpack_uint(data, pos + 1, 2)?;
+            let (map, p) = unpack_map(data, p2, length as usize)?;
+            Ok((MsgValue::Map(map), p))
+        }
+        MAP_32 => {
+            let (length, p2) = unpack_uint(data, pos + 1, 4)?;
+            let (map, p) = unpack_map(data, p2, length as usize)?;
+            Ok((MsgValue::Map(map), p))
+        }
+        other => Err(MsgError::unpack(format!("unknown marker 0x{other:02x}"))),
+    }
+}
+'''
+
+# ---- unpack_str -----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "unpack_str"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Read `length` bytes of utf-8 and decode. Mirrors `msgpack_core.unpack_str`.
+///
+/// # Errors
+/// Returns [`MsgError::unpack`] when the slice is truncated or invalid utf-8.
+pub fn unpack_str(data: &[u8], pos: usize, length: usize) -> Result<(String, usize), MsgError> {
+    if pos + length > data.len() {
+        return Err(MsgError::unpack("truncated str"));
+    }
+    let slice = &data[pos..pos + length];
+    let s = std::str::from_utf8(slice)
+        .map_err(|_| MsgError::unpack("invalid utf-8"))?
+        .to_string();
+    Ok((s, pos + length))
+}
+'''
+
+# ---- unpack_uint ----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "unpack_uint"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Read n_bytes of big-endian unsigned int. Mirrors `msgpack_core.unpack_uint`.
+///
+/// # Errors
+/// Returns [`MsgError::unpack`] when the slice is truncated.
+pub fn unpack_uint(data: &[u8], pos: usize, n_bytes: usize) -> Result<(u64, usize), MsgError> {
+    if pos + n_bytes > data.len() {
+        return Err(MsgError::unpack("truncated uint"));
+    }
+    let mut value: u64 = 0;
+    for i in 0..n_bytes {
+        value = (value << 8) | u64::from(data[pos + i]);
+    }
+    Ok((value, pos + n_bytes))
+}
+'''
+
+# ---- unpack_uint_cython (Cython-typed entrypoint, translate_cython task) -
+
+[[entry]]
+task = "translate_cython"
+function = "unpack_uint_cython"
+source_sha16 = "44dab293fdcff985"
+response_text = '''
+/// Cython-typed unpack_uint: returns just the value (not a tuple),
+/// matching the `_unpacker.pyx::unpack_uint_cython` shape. Translated
+/// via the M6 Cython lexical shim per ADR-0010 §2.
+///
+/// # Errors
+/// Returns [`MsgError::unpack`] when the slice is truncated.
+#[inline]
+pub fn unpack_uint_cython(data: &[u8], pos: usize, n_bytes: i32) -> Result<u64, MsgError> {
+    let (value, _) = unpack_uint(data, pos, n_bytes as usize)?;
+    Ok(value)
+}
+'''

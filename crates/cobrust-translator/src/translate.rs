@@ -86,6 +86,16 @@ pub struct FunctionTranslation {
     /// for deterministic-id input.
     pub router_decision_id: String,
     pub emitted_text: String,
+    /// M6 (per ADR-0010 §2): translation task this entry was served
+    /// under (`"translate"` for pure-Python, `"translate_cython"` for
+    /// Cython). Defaults to `"translate"` when deserialised from M4/M5
+    /// vintage data.
+    #[serde(default = "default_translation_task")]
+    pub task: String,
+}
+
+fn default_translation_task() -> String {
+    "translate".to_string()
 }
 
 /// One file the L1 engine writes into the translated crate. M4 emits
@@ -112,8 +122,9 @@ pub async fn run_l1(
     let mut translations = Vec::with_capacity(plan.functions.len());
     let mut decision_ids = Vec::with_capacity(plan.functions.len());
     for unit in &plan.functions {
+        let task = unit.spec.task.clone();
         let header =
-            PromptHeader::first_attempt("translate", unit.name.clone(), plan.source_sha16.clone());
+            PromptHeader::first_attempt(task.clone(), unit.name.clone(), plan.source_sha16.clone());
         let body = build_translation_prompt(unit);
         let prompt = format_prompt_body(&header, &body);
         let req = CompletionRequest {
@@ -131,13 +142,13 @@ pub async fn run_l1(
         };
         let resp = router.dispatch(Task::Translate, req).await.map_err(|e| {
             // Lift synthetic-miss into a structured TranslatorError.
-            translate_router_err(&unit.name, e)
+            translate_router_err(&task, &unit.name, e)
         })?;
         decision_ids.push(format!(
             "blake3:{}",
             cobrust_llm_router::CacheKey::compute(
                 &resp.provider,
-                &router_request_for_id(&plan.library, &unit.name, &plan.source_sha16),
+                &router_request_for_id(&plan.library, &task, &unit.name, &plan.source_sha16),
             )
             .hex()
         ));
@@ -149,6 +160,7 @@ pub async fn run_l1(
             cache_hit: resp.cache_hit,
             router_decision_id: decision_ids.last().cloned().unwrap_or_default(),
             emitted_text: resp.response.text,
+            task: task.clone(),
         });
     }
     Ok(TranslationOutput {
@@ -182,8 +194,13 @@ fn build_translation_prompt(unit: &FunctionUnit) -> String {
 /// is empty (we do not want the cache key to depend on the prompt
 /// template, only on the (function, source SHA) tuple). The library
 /// parameter feeds into the model name so determinism stays per-library.
-fn router_request_for_id(library: &str, function: &str, source_sha16: &str) -> CompletionRequest {
-    let header = PromptHeader::first_attempt("translate", function, source_sha16);
+fn router_request_for_id(
+    library: &str,
+    task: &str,
+    function: &str,
+    source_sha16: &str,
+) -> CompletionRequest {
+    let header = PromptHeader::first_attempt(task, function, source_sha16);
     CompletionRequest {
         model: format!("{library}-canned-v1"),
         messages: vec![Message {
@@ -194,14 +211,18 @@ fn router_request_for_id(library: &str, function: &str, source_sha16: &str) -> C
     }
 }
 
-fn translate_router_err(function: &str, e: cobrust_llm_router::RouterError) -> TranslatorError {
+fn translate_router_err(
+    task: &str,
+    function: &str,
+    e: cobrust_llm_router::RouterError,
+) -> TranslatorError {
     if let cobrust_llm_router::RouterError::AllFailed(ref pairs) = e {
         for (_, llm_err) in pairs {
             if let cobrust_llm_router::LlmError::Provider { code, .. } = llm_err
                 && code == "synthetic-miss"
             {
                 return TranslatorError::SyntheticMiss {
-                    task: "translate".into(),
+                    task: task.into(),
                     function: function.into(),
                 };
             }
@@ -267,8 +288,15 @@ tolerance = "exact"
 
     #[test]
     fn router_request_for_id_is_deterministic() {
-        let r1 = router_request_for_id("tomli", "loads", "abc123");
-        let r2 = router_request_for_id("tomli", "loads", "abc123");
+        let r1 = router_request_for_id("tomli", "translate", "loads", "abc123");
+        let r2 = router_request_for_id("tomli", "translate", "loads", "abc123");
         assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn router_request_for_id_distinguishes_translate_from_translate_cython() {
+        let pure = router_request_for_id("msgpack", "translate", "pack", "abc123");
+        let cy = router_request_for_id("msgpack", "translate_cython", "pack", "abc123");
+        assert_ne!(pure, cy, "task must change request canonical form");
     }
 }

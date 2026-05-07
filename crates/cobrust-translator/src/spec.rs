@@ -51,6 +51,17 @@ pub struct FunctionSpec {
     pub exemplars: Vec<Exemplar>,
     #[serde(default)]
     pub errors_on: Vec<String>,
+    /// M6 (per ADR-0010 §2): translation task this function uses.
+    /// Defaults to "translate" (pure-Python). Set to
+    /// "translate_cython" for entries derived from .pyx sources.
+    /// Backward-compatible: M4 tomli + M5 dateutil specs omit the
+    /// field; serde defaults preserve their behaviour.
+    #[serde(default = "default_task")]
+    pub task: String,
+}
+
+fn default_task() -> String {
+    "translate".to_string()
 }
 
 /// One exemplar input/output pair as recorded in the spec.

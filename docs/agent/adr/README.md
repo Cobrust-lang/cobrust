@@ -38,3 +38,5 @@ same atomic commit as the change it justifies.
 | [0007](0007-translator-pipeline.md) | Translator pipeline — L0 spec, L1 translation, provenance manifest, synthetic-LLM mode, PyO3 wrapper | accepted | 2026-04-30 |
 | [0008](0008-l2-perf-and-repair-loop.md) | L2.perf benchmark harness, repair loop, and L2/L3 escalation pipeline | accepted | 2026-04-30 |
 | [0009](0009-downstream-validation.md) | L3 downstream-dependents validation — corpus, scope, and partial coverage policy | accepted | 2026-04-30 |
+| [0010](0010-native-ext-translation.md) | Native-extension translation methodology — msgpack-python, Cython sources, perf threshold relaxation, perf-gate fail-on-threshold-miss routing, downstream widening | accepted | 2026-04-30 |
+| [0011](0011-pyo3-build-path.md) | PyO3 build path for translated crates — `--features pyo3`, cdylib emission, dual-mode test harness | accepted | 2026-04-30 |

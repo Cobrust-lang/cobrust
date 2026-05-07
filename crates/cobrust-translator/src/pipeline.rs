@@ -35,7 +35,7 @@ use crate::manifest::{
     BuildSection, DependentsSection, GatesSection, OracleSection, ProvenanceManifest,
     RouterSection, SourceSection, VerificationSection,
 };
-use crate::repair::{GateFailure, repair_translation, write_failure_report};
+use crate::repair::{GateFailure, write_failure_report};
 use crate::spec::SpecToml;
 use crate::synthetic::{CannedTable, SyntheticProvider};
 use crate::translate::{FunctionTranslation, TranslationOutput, TranslationPlan, run_l1};
@@ -92,6 +92,39 @@ pub trait BehaviorVerifier: Send + Sync {
     fn verify(&self, function: &FunctionTranslation, attempt: u32) -> VerifierVerdict;
 }
 
+/// Result of one perf-verifier check on a [`crate::bench::BenchmarkReport`].
+pub enum PerfVerdict {
+    /// Report meets the threshold; pipeline proceeds.
+    Accept,
+    /// Report fails; pipeline ships `GateFailure { failed_gate:
+    /// "l2_perf", ... }` to the repair loop and re-dispatches the
+    /// failing function with `attempt += 1`.
+    Reject(GateFailure),
+}
+
+/// M6 (per ADR-0010 §4): caller-supplied verifier executed after each
+/// L2.behavior pass. The pipeline calls `verify` once per
+/// (function, attempt) pair until the verifier accepts or the
+/// escalation threshold is hit.
+///
+/// The default [`AcceptAllPerf`] preserves M4/M5 behaviour (perf gate
+/// is recorded but does not fire). The msgpack M6 integration test
+/// injects a `PerfVerifier` that flags the deliberately-broken
+/// `pack_uint` attempt-1 emission and exercises the repair loop end-
+/// to-end without real LLM keys.
+pub trait PerfVerifier: Send + Sync {
+    fn verify(&self, function: &FunctionTranslation, attempt: u32) -> PerfVerdict;
+}
+
+/// No-op perf verifier — accepts every emission. The M4/M5 default.
+pub struct AcceptAllPerf;
+
+impl PerfVerifier for AcceptAllPerf {
+    fn verify(&self, _function: &FunctionTranslation, _attempt: u32) -> PerfVerdict {
+        PerfVerdict::Accept
+    }
+}
+
 /// No-op verifier — accepts every emission. The default for M4 tomli
 /// pipelines that don't exercise the repair loop.
 pub struct AcceptAll;
@@ -113,7 +146,7 @@ pub async fn translate(
     library: &PyLibrary,
     cfg: &TranslatorConfig,
 ) -> Result<TranslatedCrate, TranslatorError> {
-    translate_with_verifier(library, cfg, &AcceptAll).await
+    translate_with_verifiers(library, cfg, &AcceptAll, &AcceptAllPerf).await
 }
 
 /// Run the pipeline with a custom [`BehaviorVerifier`]. The integration
@@ -129,6 +162,25 @@ pub async fn translate_with_verifier(
     library: &PyLibrary,
     cfg: &TranslatorConfig,
     verifier: &dyn BehaviorVerifier,
+) -> Result<TranslatedCrate, TranslatorError> {
+    translate_with_verifiers(library, cfg, verifier, &AcceptAllPerf).await
+}
+
+/// M6 (per ADR-0010 §4) — the orchestrator entrypoint that runs both
+/// the L2.behavior repair loop **and** the L2.perf gate. The behavior
+/// loop always runs first; on perf rejection the same function is
+/// re-dispatched with `attempt += 1` and re-verified through both
+/// gates, mirroring the M5 pattern.
+///
+/// # Errors
+/// `TranslatorError::EscalationExceeded` when one function exhausts
+/// `cfg.escalation_threshold` repair attempts; other variants per
+/// [`translate`].
+pub async fn translate_with_verifiers(
+    library: &PyLibrary,
+    cfg: &TranslatorConfig,
+    behavior_verifier: &dyn BehaviorVerifier,
+    perf_verifier: &dyn PerfVerifier,
 ) -> Result<TranslatedCrate, TranslatorError> {
     // ---- L0: read spec ------------------------------------------------------
     let spec = SpecToml::read(&library.spec_file)
@@ -149,16 +201,18 @@ pub async fn translate_with_verifier(
     let plan = TranslationPlan::from_spec(&spec, source_sha16.clone());
     let initial = run_l1(&router, &plan).await?;
 
-    // ---- L2.behavior + repair loop -----------------------------------------
-    // For each function, ask the verifier; on Reject, ship the
-    // diagnostic to repair.rs and re-dispatch with attempt += 1.
+    // ---- L2.behavior + L2.perf repair loop --------------------------------
+    // For each function, run behavior verifier; on accept, run perf
+    // verifier; on either Reject, ship the diagnostic to repair.rs and
+    // re-dispatch with attempt += 1.
     let crate_dir_for_diag = cfg.out_dir.clone();
     let (translation, repair_attempts) = run_repair_loop(
         &router,
         &library.library,
         &source_sha16,
         initial,
-        verifier,
+        behavior_verifier,
+        perf_verifier,
         cfg.escalation_threshold,
         &crate_dir_for_diag,
     )
@@ -199,9 +253,26 @@ fn build_manifest(
     let ledger_entries = count_ledger_entries(&cfg.router.router.ledger_path);
     let dependents = match library.library.as_str() {
         "dateutil" => DependentsSection {
-            covered: vec!["croniter".into(), "freezegun".into()],
-            deferred: crate::downstream::dateutil_m5_deferred(),
-            deferred_reason: "M5 budget; M6 widens per ADR-0009".into(),
+            // M6: per ADR-0010 §5, widened from M5's 2/5 to 4/5 + 1
+            // skipped (pendulum tz out of scope). The L3 driver records
+            // the skip with a reason; see DependentsSection.skipped.
+            covered: vec![
+                "croniter".into(),
+                "freezegun".into(),
+                "pandas".into(),
+                "sqlalchemy".into(),
+            ],
+            skipped: vec!["pendulum".into()],
+            skipped_reason: "tz module out of M5/M6 scope; M7+ per ADR-0010 §5".into(),
+            deferred: vec![],
+            deferred_reason: String::new(),
+        },
+        "msgpack" => DependentsSection {
+            covered: vec!["redis-py".into(), "msgpack-numpy".into()],
+            skipped: vec![],
+            skipped_reason: String::new(),
+            deferred: crate::downstream::msgpack_m6_deferred(),
+            deferred_reason: "M6 budget; pyspark needs JVM; M7+ widens".into(),
         },
         _ => DependentsSection::default(),
     };
@@ -264,12 +335,14 @@ fn build_manifest(
 /// Run the verifier across every function; on rejection re-dispatch
 /// the failing function with attempt += 1 and re-verify, until either
 /// the verifier accepts or the escalation threshold is hit.
+#[allow(clippy::too_many_arguments)]
 async fn run_repair_loop(
     router: &Router,
     library: &str,
     source_sha16: &str,
     mut translation: TranslationOutput,
     verifier: &dyn BehaviorVerifier,
+    perf_verifier: &dyn PerfVerifier,
     escalation_threshold: u32,
     out_dir: &std::path::Path,
 ) -> Result<(TranslationOutput, u32), TranslatorError> {
@@ -286,7 +359,18 @@ async fn run_repair_loop(
         loop {
             // Borrow check: clone the current emission before deciding.
             let snapshot = translation.functions[idx].clone();
-            match verifier.verify(&snapshot, attempt) {
+            // L2.behavior gate.
+            let behavior_outcome = verifier.verify(&snapshot, attempt);
+            // L2.perf gate (only consulted if behavior accepts; otherwise
+            // perf is irrelevant — a wrong impl can't beat the bar).
+            let merged = match behavior_outcome {
+                VerifierVerdict::Accept => match perf_verifier.verify(&snapshot, attempt) {
+                    PerfVerdict::Accept => VerifierVerdict::Accept,
+                    PerfVerdict::Reject(f) => VerifierVerdict::Reject(f),
+                },
+                rejected @ VerifierVerdict::Reject(_) => rejected,
+            };
+            match merged {
                 VerifierVerdict::Accept => break,
                 VerifierVerdict::Reject(failure) => {
                     last_failed_gate = failure.failed_gate.clone();
@@ -318,8 +402,18 @@ async fn run_repair_loop(
                     let next_attempt = attempt + 1;
                     let mut next_failure = failure;
                     next_failure.attempt = next_attempt;
-                    let new_translation =
-                        repair_translation(router, library, source_sha16, &next_failure).await?;
+                    // M6: thread the per-function task through repair so
+                    // Cython-translated functions route to the matching
+                    // synthetic entry on retry.
+                    let task_for_repair = translation.functions[idx].task.clone();
+                    let new_translation = crate::repair::repair_translation_with_task(
+                        router,
+                        library,
+                        &task_for_repair,
+                        source_sha16,
+                        &next_failure,
+                    )
+                    .await?;
                     translation.functions[idx] = new_translation;
                     // Update the decision ids vec in lockstep so the
                     // determinism hash reflects the repair.
@@ -356,6 +450,11 @@ fn l2_behavior_summary(library: &PyLibrary, repair_attempts: u32) -> String {
         "dateutil" => {
             format!("pass (tests/dateutil_downstream.rs + tests/dateutil_fuzz.rs){suffix}")
         }
+        "msgpack" => {
+            format!(
+                "pass (tests/msgpack_downstream.rs + tests/msgpack_fuzz.rs bytes-identical){suffix}"
+            )
+        }
         _ => format!("pass{suffix}"),
     }
 }
@@ -364,6 +463,7 @@ fn l2_perf_summary(library: &PyLibrary) -> String {
     match library.library.as_str() {
         "tomli" => "skipped (M4 records, M5 gates per ADR-0007); see target/cobrust-bench/tomli/<commit>/report.json".into(),
         "dateutil" => "pass (per-library threshold per ADR-0008 §2; report at target/cobrust-bench/dateutil/<commit>/report.json)".into(),
+        "msgpack" => "pass (native-ext tier ≥ 0.70× per ADR-0010 §3; report at target/cobrust-bench/msgpack/<commit>/report.json; perf-gate fail-on-miss wired per ADR-0010 §4)".into(),
         _ => "skipped".into(),
     }
 }
@@ -371,7 +471,8 @@ fn l2_perf_summary(library: &PyLibrary) -> String {
 fn l3_pyo3_summary(library: &PyLibrary) -> String {
     match library.library.as_str() {
         "tomli" => "pass (tests/tomli_downstream.rs subprocess CPython oracle)".into(),
-        "dateutil" => "pass (tests/dateutil_downstream.rs subprocess CPython oracle)".into(),
+        "dateutil" => "pass (tests/dateutil_downstream.rs subprocess CPython oracle); --features pyo3 build path per ADR-0011".into(),
+        "msgpack" => "pass (tests/msgpack_downstream.rs subprocess CPython oracle); --features pyo3 build path per ADR-0011".into(),
         _ => "pass".into(),
     }
 }
@@ -380,7 +481,11 @@ fn l3_downstream_summary(library: &PyLibrary) -> String {
     match library.library.as_str() {
         "tomli" => "deferred to M5 per ADR-0007".into(),
         "dateutil" => {
-            "pass 2/5 (croniter, freezegun); deferred 3/5 (pandas, sqlalchemy, pendulum) to M6 per ADR-0009".into()
+            // M6 widening per ADR-0010 §5: 4 covered + 1 skipped (pendulum tz).
+            "pass 4/5 (croniter, freezegun, pandas, sqlalchemy); skipped 1/5 (pendulum tz out of scope per ADR-0010 §5)".into()
+        }
+        "msgpack" => {
+            "pass 2/3 (redis-py, msgpack-numpy); deferred 1/3 (pyspark) to M7 per ADR-0010".into()
         }
         _ => "n/a".into(),
     }
@@ -609,6 +714,31 @@ pub use crate::parser::{{\n\
             header = lib_header,
             version = library.version,
         ),
+        "msgpack" => format!(
+            "{header}//! Cobrust translation of `msgpack-python` {version} (M6 native-ext scope window).\n\
+//!\n\
+//! Generated by `cobrust-translator` in synthetic-LLM mode; see\n\
+//! `PROVENANCE.toml` for the full manifest and `corpus/msgpack/README.md`\n\
+//! for the M6 scope window.\n\
+//!\n\
+//! Public surface:\n\
+//! - `pack(value: &MsgValue, out: &mut Vec<u8>) -> Result<(), MsgError>` — encode.\n\
+//! - `pack_to_vec(value: &MsgValue) -> Result<Vec<u8>, MsgError>` — encode owned.\n\
+//! - `unpack(data: &[u8]) -> Result<MsgValue, MsgError>` — decode.\n\
+//! - `MsgValue` — heterogeneous value tree (nil/bool/int/float/str/bytes/array/map).\n\
+//! - `MsgError` / `MsgErrorKind` — single error type.\n\
+\n\
+mod parser;\n\
+\n\
+pub use crate::parser::{{\n\
+    pack, pack_array, pack_bin, pack_float, pack_int, pack_map, pack_str, pack_to_vec,\n\
+    pack_uint, pack_uint_cython, unpack, unpack_array, unpack_bin, unpack_float,\n\
+    unpack_int, unpack_map, unpack_one, unpack_str, unpack_uint, unpack_uint_cython,\n\
+    MsgError, MsgErrorKind, MsgValue,\n\
+}};\n",
+            header = lib_header,
+            version = library.version,
+        ),
         _ => format!(
             "{header}//! Cobrust translation of `{lib}` {version}.\n\nmod parser;\n\npub use crate::parser::*;\n",
             header = lib_header,
@@ -667,6 +797,14 @@ fn write_test_harnesses(
             std::fs::write(crate_dir.join("tests/dateutil_downstream.rs"), downstream)?;
             std::fs::write(crate_dir.join("tests/dateutil_fuzz.rs"), fuzz)?;
             std::fs::write(crate_dir.join("tests/dateutil_bench.rs"), bench)?;
+        }
+        "msgpack" => {
+            let downstream = include_str!("templates/msgpack_downstream.rs.tmpl");
+            let fuzz = include_str!("templates/msgpack_fuzz.rs.tmpl");
+            let bench = include_str!("templates/msgpack_bench.rs.tmpl");
+            std::fs::write(crate_dir.join("tests/msgpack_downstream.rs"), downstream)?;
+            std::fs::write(crate_dir.join("tests/msgpack_fuzz.rs"), fuzz)?;
+            std::fs::write(crate_dir.join("tests/msgpack_bench.rs"), bench)?;
         }
         _ => {}
     }

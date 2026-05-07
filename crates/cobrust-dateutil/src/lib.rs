@@ -23,3 +23,9 @@ pub use crate::parser::{
     DateTuple, ParserError, days_in_month, is_digit, is_leap_year, normalize_datetime, parse_iso,
     relativedelta_add,
 };
+
+#[cfg(feature = "pyo3")]
+mod pyo3_bindings;
+
+#[cfg(feature = "pyo3")]
+pub use pyo3_bindings::*;

@@ -139,6 +139,7 @@ pub fn run_dependent(
     let mut tests_run = 0u32;
     let mut tests_passed = 0u32;
     let mut failures: Vec<String> = Vec::new();
+    let mut skip_reasons: Vec<String> = Vec::new();
     for line in stdout.lines() {
         if let Some(rest) = line.strip_prefix("PASS ") {
             tests_run += 1;
@@ -147,9 +148,13 @@ pub fn run_dependent(
         } else if let Some(rest) = line.strip_prefix("FAIL ") {
             tests_run += 1;
             failures.push(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("SKIP ") {
+            // M6 (per ADR-0010 §5): a SKIP line is recorded as a
+            // Skipped { reason } status with the trailing text.
+            skip_reasons.push(rest.to_string());
         }
     }
-    let status = if !output.status.success() && tests_run == 0 {
+    let status = if !output.status.success() && tests_run == 0 && skip_reasons.is_empty() {
         DependentStatus::Skipped {
             reason: format!(
                 "python script exit {} (likely import failure): {}",
@@ -158,6 +163,13 @@ pub fn run_dependent(
         }
     } else if !failures.is_empty() {
         DependentStatus::Failed { failures }
+    } else if !skip_reasons.is_empty() && tests_run == 0 {
+        // The script emitted only SKIP lines — surface the first as
+        // the dependent-level reason. The L3 driver records this as
+        // "ran with reason" in the manifest's dependents.skipped.
+        DependentStatus::Skipped {
+            reason: skip_reasons.join("; "),
+        }
     } else {
         DependentStatus::Pass
     };
@@ -189,6 +201,60 @@ pub fn dateutil_m5_dependents(corpus_root: &Path) -> Vec<DependentSpec> {
 #[must_use]
 pub fn dateutil_m5_deferred() -> Vec<String> {
     vec!["pandas".into(), "sqlalchemy".into(), "pendulum".into()]
+}
+
+/// M6 widening per ADR-0010 §5: the 5 dependents the M6 dateutil L3
+/// gate drives (croniter + freezegun + pandas + sqlalchemy + pendulum).
+/// pendulum's vendored subset emits SKIP rather than PASS because the
+/// tz module is out of M5/M6 scope; the driver records the skip
+/// without failing the gate.
+#[must_use]
+pub fn dateutil_m6_dependents(corpus_root: &Path) -> Vec<DependentSpec> {
+    vec![
+        DependentSpec {
+            name: "croniter".into(),
+            test_script: corpus_root.join("dependents/croniter/test_croniter_subset.py"),
+        },
+        DependentSpec {
+            name: "freezegun".into(),
+            test_script: corpus_root.join("dependents/freezegun/test_freezegun_subset.py"),
+        },
+        DependentSpec {
+            name: "pandas".into(),
+            test_script: corpus_root.join("dependents/pandas/test_pandas_subset.py"),
+        },
+        DependentSpec {
+            name: "sqlalchemy".into(),
+            test_script: corpus_root.join("dependents/sqlalchemy/test_sqlalchemy_subset.py"),
+        },
+        DependentSpec {
+            name: "pendulum".into(),
+            test_script: corpus_root.join("dependents/pendulum/test_pendulum_subset.py"),
+        },
+    ]
+}
+
+/// M6 msgpack dependents per ADR-0010 §1: redis-py + msgpack-numpy.
+/// Ordered alphabetically for manifest determinism.
+#[must_use]
+pub fn msgpack_m6_dependents(corpus_root: &Path) -> Vec<DependentSpec> {
+    vec![
+        DependentSpec {
+            name: "msgpack-numpy".into(),
+            test_script: corpus_root.join("dependents/msgpack-numpy/test_msgpack_numpy_subset.py"),
+        },
+        DependentSpec {
+            name: "redis-py".into(),
+            test_script: corpus_root.join("dependents/redis-py/test_redis_subset.py"),
+        },
+    ]
+}
+
+/// M6 msgpack-deferred dependents per ADR-0010: pyspark needs JVM, so
+/// we vendor at M7+ when the cross-language tooling is in place.
+#[must_use]
+pub fn msgpack_m6_deferred() -> Vec<String> {
+    vec!["pyspark".into()]
 }
 
 #[cfg(test)]
@@ -280,6 +346,37 @@ mod tests {
         assert!(d.contains(&"pandas".to_string()));
         assert!(d.contains(&"sqlalchemy".to_string()));
         assert!(d.contains(&"pendulum".to_string()));
+    }
+
+    #[test]
+    fn dateutil_m6_dependents_widens_to_five() {
+        let deps = dateutil_m6_dependents(Path::new("/x"));
+        assert_eq!(deps.len(), 5);
+        let names: Vec<_> = deps.iter().map(|d| d.name.clone()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "croniter".to_string(),
+                "freezegun".to_string(),
+                "pandas".to_string(),
+                "sqlalchemy".to_string(),
+                "pendulum".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn msgpack_m6_dependents_alphabetical() {
+        let deps = msgpack_m6_dependents(Path::new("/x"));
+        assert_eq!(deps.len(), 2);
+        assert_eq!(deps[0].name, "msgpack-numpy");
+        assert_eq!(deps[1].name, "redis-py");
+    }
+
+    #[test]
+    fn msgpack_m6_deferred_lists_pyspark() {
+        let d = msgpack_m6_deferred();
+        assert_eq!(d, vec!["pyspark".to_string()]);
     }
 
     #[test]
