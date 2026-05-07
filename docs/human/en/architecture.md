@@ -1061,3 +1061,128 @@ pub enum NumpyErrorKind {
 
 See [ADR-0016](../../agent/adr/0016-m7-3-reductions.md)
 for the load-bearing decisions.
+
+## numpy linalg (M7.4 — delivered)
+
+M7.4 lands the linalg subset on top of M7.0 (foundation) +
+M7.1 (ufuncs) + M7.2 (indexing) + M7.3 (reductions). Per ADR-0017:
+
+> linalg subset: `matmul / dot / det / solve / inv / svd / eigh /
+> cholesky`. Backend: `ndarray-linalg` (OpenBLAS / Accelerate).
+> Acceptance gate: `rtol=1e-6` agreement on conditioned matrices;
+> documented unstable cases.
+
+### M7.4 surface
+
+```rust
+// Free functions:
+cobrust_numpy::matmul(&a, &b)?
+cobrust_numpy::dot(&a, &b)?
+cobrust_numpy::det(&a)?
+cobrust_numpy::solve(&a, &b)?
+cobrust_numpy::inv(&a)?
+cobrust_numpy::cholesky(&a)?
+let SvdResult { u, s, vt } = cobrust_numpy::svd(&a)?;
+let EighResult { w, v } = cobrust_numpy::eigh(&a)?;
+
+// Method-style API on Array:
+a.matmul(&b)?
+a.dot(&b)?
+```
+
+### M7.4 eight ops
+
+| Op | Signature | Promotion | Notes |
+|---|---|---|---|
+| `matmul(a, b)` | rank 1 / 2 inputs | preserve `f32`; else `f64` | strict 2-D + 1-D; no batched stack at M7.4 |
+| `dot(a, b)` | 1-D × 1-D scalar; 2-D × 2-D matmul | same as `matmul` | numpy.dot semantics |
+| `det(a)` | square N × N | preserve dtype | LU partial pivot; near-singular returns 0.0 |
+| `solve(a, b)` | square A; rank-1 / 2 b | preserve dtype | LU then back-substitute |
+| `inv(a)` | square N × N | preserve dtype | `solve(a, I)` |
+| `svd(a)` | rank-2 M × N | preserve dtype | one-sided Jacobi via `eigh(AᵀA)` |
+| `eigh(a)` | symmetric N × N | preserve dtype | cyclic Jacobi sweeps; eigenvalues ascending |
+| `cholesky(a)` | PSD square | preserve dtype | lower-triangular factor (numpy default) |
+
+### M7.4 backend strategy
+
+- **Default**: pure-Rust kernels on top of `ndarray = "0.16"`. `cargo
+  build` cold-rebuild on stock toolchains works without any system
+  BLAS / LAPACK / Fortran (per the ADR-0017 §2 directive).
+- **Opt-in** `linalg-backend` cargo feature: wires
+  `ndarray-linalg = "0.16"` for BLAS-accelerated paths. Sub-features
+  `linalg-openblas-static` and `linalg-intel-mkl-static` forward to
+  the corresponding `ndarray-linalg` BLAS feature.
+- **Float-only at M7.4**: `Float32 / Float64` accepted; `Int32 /
+  Int64 / Bool` raise `LinalgDtypeUnsupported`. M7.x may relax via a
+  Python-side promotion wrapper.
+
+### M7.4 error variants
+
+```rust
+pub enum NumpyErrorKind {
+    // ... M7.0 + M7.1 + M7.2 + M7.3 variants ...
+    SingularMatrix,         // LU pivot zero / near-zero
+    NotPositiveDefinite,    // cholesky on non-PSD
+    LinalgShapeError,       // matmul shape mismatch, non-square,
+                            // rank > 2, non-symmetric eigh input
+    LinalgDtypeUnsupported, // non-float dtype
+}
+```
+
+### M7.4 multi-array results
+
+```rust
+pub struct SvdResult {
+    pub u: Array,    // (M, M)
+    pub s: Array,    // (min(M, N),)
+    pub vt: Array,   // (N, N)
+}
+
+pub struct EighResult {
+    pub w: Array,    // (N,) — sorted ascending
+    pub v: Array,    // (N, N) — column eigenvectors
+}
+```
+
+### M7.4 verification
+
+- L0 spec at `corpus/numpy/M7.4/spec.toml` + harness at
+  `corpus/numpy/M7.4/harness/h_linalg.py`.
+- L1: synthetic-LLM mode emits 12 entries (8 public ops + 4
+  helpers) per `corpus/numpy/M7.4/canned_llm_responses.toml`.
+- L2.behavior:
+  - 59 well-typed linalg programs
+    (`tests/linalg_well_typed.rs`).
+  - 63 ill-typed linalg programs
+    (`tests/linalg_ill_typed.rs`).
+  - 25 corpus-correctness table-driven tests with hand-computed
+    expected values (`tests/linalg_corpus.rs`).
+  - 8 differential tests with ≥ 1024 fuzz inputs per linalg op
+    against upstream numpy 2.0.2 at `rtol=1e-6` on cond ≤ 100
+    inputs (`tests/linalg_differential.rs`).
+- L2.perf inherits ENFORCED from M7.1/M7.2/M7.3:
+  `corpus/numpy/M7.4/perf.toml` threshold = 0.5x; pipeline test
+  `linalg_pipeline_escalates_when_perf_always_fails` demonstrates
+  perf-fail → repair-loop → `EscalationExceeded`.
+- L3.pyo3: same as M7.0..M7.3 (subprocess CPython numpy oracle).
+- L3.dependents: still deferred to M7.6+.
+
+### M7.4 documented unstable cases
+
+- `cond(A) > 1e8` — pure-Rust LU vs numpy's BLAS LAPACK have
+  different roundoff patterns at near-singular conditioning.
+- N > 64 for `svd / eigh` — Jacobi convergence is O(N²); M7.x
+  lifts via Householder + tridiagonal QR.
+- Complex dtypes — out of scope at M7.4 (Cobrust dtype tier is
+  real-only).
+
+### Out of scope (M7.x deferred)
+
+- Batched linalg over rank-3+ stacked matrices.
+- Complex dtypes.
+- `qr / lstsq / pinv / norm / matrix_rank`.
+- Householder + tridiagonal-QR `svd / eigh` (lift the N ≤ 64 cap).
+- Upper-triangular `cholesky` (`lower=False` parameter).
+
+See [ADR-0017](../../agent/adr/0017-m7-4-linalg.md)
+for the load-bearing decisions.

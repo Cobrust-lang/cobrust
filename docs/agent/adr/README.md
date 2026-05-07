@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: 18c5c1d93dbf5b5a4f9d8015aa64b96805bdcc38
+last_verified_commit: e7aff1de92cd5e6251e452721f0b4a83f173d102
 ---
 
 # Architecture Decision Records
@@ -45,3 +45,4 @@ same atomic commit as the change it justifies.
 | [0014](0014-m7-1-ufuncs-broadcasting.md) | M7.1 universal functions, broadcasting, type promotion — dispatch model + numpy-compat semantics | accepted | 2026-04-30 |
 | [0015](0015-m7-2-indexing.md) | M7.2 indexing — view/copy taxonomy, ArrayView ownership, IndexError, np.where | accepted | 2026-04-30 |
 | [0016](0016-m7-3-reductions.md) | M7.3 reductions — kind taxonomy, axis semantics, pairwise summation, ddof, empty-array behavior | accepted | 2026-04-30 |
+| [0017](0017-m7-4-linalg.md) | M7.4 linalg subset — ops surface, backend strategy, error semantics, rtol gate | accepted | 2026-04-30 |
