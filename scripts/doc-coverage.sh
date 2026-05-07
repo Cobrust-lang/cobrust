@@ -508,7 +508,7 @@ if grep -q '^- \*\*M7.0 — delivered.\*\*' "docs/agent/modules/translator.md"; 
     [[ -f corpus/numpy/M7.0/perf.toml ]] || fail "corpus/numpy/M7.0/perf.toml missing"
 fi
 
-echo "doc-coverage: M0 + M1 + M2 + M4 + M5 + M6 + M7.0 + M7.1 + M7.2 + M7.3 checks passed"
+echo "doc-coverage: M0 + M1 + M2 + M4 + M5 + M6 + M7.0 + M7.1 + M7.2 + M7.3 + M7.5 checks passed"
 
 # --- 12. M7.1 ufunc + broadcasting + promotion surface coverage -----------
 # When the numpy module declares M7.1 delivered, the ufunc + broadcasting
@@ -661,3 +661,51 @@ if grep -q '^- \*\*M7.3 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
 fi
 
 echo "doc-coverage: M7.3 reduction surface checks passed"
+
+# --- 15. M7.5 random surface coverage --------------------------------------
+# When the numpy module declares M7.5 delivered, the random surface
+# terms + ADR-0018 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M7.5 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
+    m7_5_numpy_terms=(
+        "Generator"
+        "default_rng"
+        "integers"
+        "normal"
+        "uniform"
+        "choice"
+        "InvalidIntegerRange"
+        "InvalidDistributionParams"
+        "InvalidProbabilities"
+        "EmptyChoicePopulation"
+        "rand_pcg::Pcg64"
+        "ADR-0018"
+    )
+    m7_5_numpy_files=(
+        "docs/agent/modules/numpy.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m7_5_numpy_terms[@]}"; do
+        for f in "${m7_5_numpy_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M7.5 numpy surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_eighteen="docs/agent/adr/0018-m7-5-random.md"
+    [[ -f "$adr_eighteen" ]] || fail "ADR-0018 (M7.5 random) is required for M7.5"
+    if ! grep -q '^status: accepted$' "$adr_eighteen"; then
+        fail "ADR-0018 must be 'status: accepted' for M7.5 to be done"
+    fi
+
+    # Corpus directory layout per ADR-0018.
+    [[ -f corpus/numpy/M7.5/spec.toml ]] || fail "corpus/numpy/M7.5/spec.toml missing"
+    [[ -f corpus/numpy/M7.5/canned_llm_responses.toml ]] || fail "corpus/numpy/M7.5/canned_llm_responses.toml missing"
+    [[ -d corpus/numpy/M7.5/upstream ]] || fail "corpus/numpy/M7.5/upstream missing"
+    [[ -d corpus/numpy/M7.5/harness ]] || fail "corpus/numpy/M7.5/harness missing"
+    [[ -f corpus/numpy/M7.5/perf.toml ]] || fail "corpus/numpy/M7.5/perf.toml missing"
+fi
+
+echo "doc-coverage: M7.5 random surface checks passed"

@@ -985,3 +985,132 @@ pub enum NumpyErrorKind {
 - `dtype=` 参数（强制结果 dtype） —— M7.x。
 
 详见 [ADR-0016](../../agent/adr/0016-m7-3-reductions.md)。
+
+## numpy 随机 (M7.5 — 已交付)
+
+M7.5 在 M7.0（基础）+ M7.1（ufunc）+ M7.2（索引）+ M7.3（归约）之上
+落地随机表面。按
+[ADR-0012](../../agent/adr/0012-m7-numpy-plan.md) §"Sequencing rules"
+M7.5 与 M7.4（linalg）并行交付。承重决策在
+[ADR-0018](../../agent/adr/0018-m7-5-random.md) 中。
+
+### 为什么绑定 `rand_pcg::Pcg64` 而不是自写 PRNG
+
+NumPy 的 `default_rng()` 由 PCG64（PCG-XSL-RR-128/64）支持。Rust
+`rand_pcg = "0.3"` crate 提供了同样代数转移函数的 PCG64。按 ADR-0012
+§"Backend strategy"，我们绑定：
+
+- `rand_pcg::Pcg64`——状态机 + 转移。
+- `rand_distr::{Normal, Uniform}`——分布形状（Box-Muller / Ziggurat
+  / 反 CDF——均已经过 Rust 社区验证）。
+- `rand 0.8`——`Rng` / `SeedableRng` trait + `gen_range` 半开区间
+  语义。
+
+我们不重写 PCG64。我们构造它（`Pcg64::seed_from_u64(s)`）并消费它
+（`rng.gen_range`）。
+
+### M7.5 表面
+
+```rust
+pub struct Generator {
+    rng: rand_pcg::Pcg64,
+    seed_value: Option<u64>,
+}
+
+impl Generator {
+    pub fn seed(&mut self, seed: u64);
+    pub fn seed_value(&self) -> Option<u64>;
+    pub fn integers(&mut self, low: i64, high: i64, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn random(&mut self, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn normal(&mut self, loc: f64, scale: f64, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn uniform(&mut self, low: f64, high: f64, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn choice(&mut self, values: &Array, size: &[usize], replace: bool, p: Option<&[f64]>)
+        -> Result<Array, NumpyError>;
+}
+
+pub fn default_rng(seed: Option<u64>) -> Generator;
+```
+
+按 ADR-0018 §1，`Generator` 是闭合 newtype struct——满足宪法 §2.2
+（公共 API 不暴露 `dyn`）。
+
+### M7.5 分布
+
+| 方法 | 返回 | 后端 |
+|---|---|---|
+| `default_rng(seed)` | `Generator` | `rand_pcg::Pcg64::seed_from_u64` |
+| `Generator::seed(s)` | `()` | 原地重新种子 |
+| `Generator::integers(lo, hi, size)` | `Array(Int64)` | `Rng::gen_range(lo..hi)`（半开区间） |
+| `Generator::random(size)` | `Array(Float64)` | `Rng::gen::<f64>()`（Standard） |
+| `Generator::normal(loc, scale, size)` | `Array(Float64)` | `rand_distr::Normal` |
+| `Generator::uniform(lo, hi, size)` | `Array(Float64)` | `rand_distr::Uniform` |
+| `Generator::choice(values, size, replace, p)` | `Array`（匹配输入 dtype） | uniform / 加权 / Fisher-Yates |
+
+### M7.5 种子可复现性契约
+
+**Cobrust 内部**（由 `tests/random_seed_corpus.rs` 断言）：
+
+- 相同 `u64` 种子 → 在任何主机架构（x86_64、aarch64……）、Cobrust
+  内位级一致的 integers / floats / normal / uniform / choice 样本流。
+- `Generator::seed(s)` 重置流，与新构造的
+  `default_rng(Some(s))` 等价。
+- 顺序调用推进流——`g.random([5])` 后 `g.random([5])` 与
+  `g.random([10])` 不匹配；但 `g.random([5]) ++ g.random([5])` 与
+  `g.random([10])` 一致。
+
+**与 numpy 2.0.2 对比**（由 `tests/random_differential.rs` 断言）：
+
+- 连续分布 `normal` / `uniform` / `random` KS-test 在 p > 0.01。
+- 离散分布 `integers` / `choice` 均值/方差箱在 ±2σ 内。
+- **不是字节级一致**——numpy 对其 PCG64 后端使用特定的 SeedSequence
+  布局，我们不复刻该布局。作为已知差异记录在 `PROVENANCE.toml` 中。
+
+### M7.5 错误变体（按 ADR-0018 §"Error variants"）
+
+```rust
+pub enum NumpyErrorKind {
+    // ... M7.0..M7.3 + M7.4（保留）变体 ...
+    InvalidIntegerRange,
+    InvalidDistributionParams,
+    InvalidProbabilities,
+    EmptyChoicePopulation,
+}
+```
+
+### M7.5 验证
+
+- L0 spec 在 `corpus/numpy/M7.5/spec.toml`，harness 在
+  `corpus/numpy/M7.5/harness/h_random.py`。
+- L1：合成-LLM 模式按 `corpus/numpy/M7.5/canned_llm_responses.toml`
+  发出 11 个条目（7 个公共 + 4 个 helper）。
+- L2.behavior：
+  - 55 个良类型随机程序（`tests/random_well_typed.rs`）。
+  - 51 个病类型随机程序（`tests/random_ill_typed.rs`）。
+  - 12 个种子可复现性表驱动测试（`tests/random_seed_corpus.rs`）。
+  - 7 个差分测试，每分布 ≥ 10000 个样本对比 upstream numpy 2.0.2
+    （连续 KS-test、离散均值/方差箱）（`tests/random_differential.rs`）。
+- L2.perf 继承 M7.1/M7.2/M7.3 的"强制"状态：
+  `corpus/numpy/M7.5/perf.toml` threshold = 0.5x；pipeline test
+  `random_pipeline_escalates_when_perf_always_fails` 演示 perf-fail
+  → repair-loop → `EscalationExceeded`。
+- L3.pyo3：与 M7.0..M7.3 相同（子进程 CPython numpy oracle）。
+- L3.dependents：仍延期到 M7.6+。
+
+### 不在范围内（推迟到 M7.x）
+
+- 其他分布：`binomial`, `poisson`, `exponential`, `gamma`, `beta`,
+  `dirichlet`, `multivariate_normal`, `multinomial`, `chi_square`,
+  `f`, `t`, `lognormal`, `pareto`, `triangular`, `weibull`,
+  `geometric`, `hypergeometric`, `vonmises`, `wald`, `zipf`——M7.x。
+- `permutation` / `shuffle`（原地 + 非原地）——M7.x。
+- `BitGenerator` 多态（M7.5 只支持 PCG64；ChaCha / Philox / SFC64
+  ——M7.x）。
+- `SeedSequence` 多种子初始化——M7.x。
+- `Generator.bit_generator.state` 状态保存/加载——M7.x。
+- 流推进（`.advance(n)` / `.jumped()`）——M7.x。
+- `integers` 的 `endpoint=True`——M7.x。
+- 与 numpy PCG64 流字节级一致（numpy 使用不同的 SeedSequence
+  布局——明确非目标）。
+
+按 [ADR-0018](../../agent/adr/0018-m7-5-random.md)
+查看承重决策。

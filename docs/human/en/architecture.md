@@ -1061,3 +1061,140 @@ pub enum NumpyErrorKind {
 
 See [ADR-0016](../../agent/adr/0016-m7-3-reductions.md)
 for the load-bearing decisions.
+
+## numpy random (M7.5 — delivered)
+
+M7.5 lands the random surface on top of M7.0 (foundation) +
+M7.1 (ufuncs) + M7.2 (indexing) + M7.3 (reductions). M7.5 is
+parallel-allowed with M7.4 (linalg) per
+[ADR-0012](../../agent/adr/0012-m7-numpy-plan.md) §"Sequencing rules".
+The load-bearing decisions are in
+[ADR-0018](../../agent/adr/0018-m7-5-random.md).
+
+### Why bind `rand_pcg::Pcg64` instead of writing a PRNG
+
+NumPy's `default_rng()` is backed by PCG64 (PCG-XSL-RR-128/64). The
+Rust `rand_pcg = "0.3"` crate provides PCG64 with the same algebraic
+transition function. Per ADR-0012 §"Backend strategy", we bind:
+
+- `rand_pcg::Pcg64` for state machine + transition.
+- `rand_distr::{Normal, Uniform}` for distribution shape (Box-Muller
+  / Ziggurat / inverse-CDF — all already validated by the Rust
+  community).
+- `rand 0.8` for the `Rng` / `SeedableRng` traits + `gen_range`
+  half-open semantics.
+
+We do not reimplement PCG64. We construct it (`Pcg64::seed_from_u64(s)`)
+and consume it (`rng.gen_range`).
+
+### M7.5 surface
+
+```rust
+pub struct Generator {
+    rng: rand_pcg::Pcg64,
+    seed_value: Option<u64>,
+}
+
+impl Generator {
+    pub fn seed(&mut self, seed: u64);
+    pub fn seed_value(&self) -> Option<u64>;
+    pub fn integers(&mut self, low: i64, high: i64, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn random(&mut self, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn normal(&mut self, loc: f64, scale: f64, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn uniform(&mut self, low: f64, high: f64, size: &[usize]) -> Result<Array, NumpyError>;
+    pub fn choice(&mut self, values: &Array, size: &[usize], replace: bool, p: Option<&[f64]>)
+        -> Result<Array, NumpyError>;
+}
+
+pub fn default_rng(seed: Option<u64>) -> Generator;
+```
+
+Per ADR-0018 §1, `Generator` is a closed newtype struct — constitution
+§2.2 (no `dyn` in public API) is satisfied.
+
+### M7.5 distributions
+
+| Method | Returns | Backend |
+|---|---|---|
+| `default_rng(seed)` | `Generator` | `rand_pcg::Pcg64::seed_from_u64` |
+| `Generator::seed(s)` | `()` | re-seed in place |
+| `Generator::integers(lo, hi, size)` | `Array(Int64)` | `Rng::gen_range(lo..hi)` (half-open) |
+| `Generator::random(size)` | `Array(Float64)` | `Rng::gen::<f64>()` (Standard) |
+| `Generator::normal(loc, scale, size)` | `Array(Float64)` | `rand_distr::Normal` |
+| `Generator::uniform(lo, hi, size)` | `Array(Float64)` | `rand_distr::Uniform` |
+| `Generator::choice(values, size, replace, p)` | `Array` (matches input dtype) | uniform / weighted / Fisher-Yates |
+
+### M7.5 seed reproducibility contract
+
+**Within Cobrust** (asserted by `tests/random_seed_corpus.rs`):
+
+- Same `u64` seed → bit-identical stream of integers / floats /
+  normal / uniform / choice samples, every time, on any host
+  architecture (x86_64, aarch64, …).
+- `Generator::seed(s)` resets the stream as if a fresh
+  `default_rng(Some(s))` had been constructed.
+- Sequential calls advance the stream — `g.random([5])` then
+  `g.random([5])` does NOT match `g.random([10])`; but
+  `g.random([5]) ++ g.random([5])` DOES equal `g.random([10])`.
+
+**Vs numpy 2.0.2** (asserted by `tests/random_differential.rs`):
+
+- KS-test at p > 0.01 for `normal` / `uniform` / `random`.
+- Mean-bin / variance-bin within ±2σ for `integers` / `choice`.
+- **NOT bit-identical** — numpy uses a specific SeedSequence layout
+  for its PCG64 backend that we don't replicate. Documented as a
+  known divergence in `PROVENANCE.toml`.
+
+### M7.5 error variants (per ADR-0018 §"Error variants")
+
+```rust
+pub enum NumpyErrorKind {
+    // ... M7.0..M7.3 + M7.4 (reserved) variants ...
+    InvalidIntegerRange,
+    InvalidDistributionParams,
+    InvalidProbabilities,
+    EmptyChoicePopulation,
+}
+```
+
+### M7.5 verification
+
+- L0 spec at `corpus/numpy/M7.5/spec.toml` + harness at
+  `corpus/numpy/M7.5/harness/h_random.py`.
+- L1: synthetic-LLM mode emits 11 entries (7 public + 4 helpers) per
+  `corpus/numpy/M7.5/canned_llm_responses.toml`.
+- L2.behavior:
+  - 55 well-typed random programs (`tests/random_well_typed.rs`).
+  - 51 ill-typed random programs (`tests/random_ill_typed.rs`).
+  - 12 seed-reproducibility table-driven tests
+    (`tests/random_seed_corpus.rs`).
+  - 7 differential tests with ≥ 10000 samples per distribution
+    against upstream numpy 2.0.2 (KS-test for continuous,
+    mean-bin / variance-bin for discrete)
+    (`tests/random_differential.rs`).
+- L2.perf inherits ENFORCED from M7.1/M7.2/M7.3:
+  `corpus/numpy/M7.5/perf.toml` threshold = 0.5x; pipeline test
+  `random_pipeline_escalates_when_perf_always_fails` demonstrates
+  perf-fail → repair-loop → `EscalationExceeded`.
+- L3.pyo3: same as M7.0..M7.3 (subprocess CPython numpy oracle).
+- L3.dependents: still deferred to M7.6+.
+
+### Out of scope (M7.x deferred)
+
+- Other distributions: `binomial`, `poisson`, `exponential`,
+  `gamma`, `beta`, `dirichlet`, `multivariate_normal`,
+  `multinomial`, `chi_square`, `f`, `t`, `lognormal`, `pareto`,
+  `triangular`, `weibull`, `geometric`, `hypergeometric`,
+  `vonmises`, `wald`, `zipf` — M7.x.
+- `permutation` / `shuffle` (in-place + out-of-place) — M7.x.
+- `BitGenerator` polymorphism (PCG64 only at M7.5; ChaCha / Philox /
+  SFC64 — M7.x).
+- `SeedSequence` multi-seed initialisation — M7.x.
+- `Generator.bit_generator.state` round-trip (state save/load) — M7.x.
+- Stream advancement (`.advance(n)` / `.jumped()`) — M7.x.
+- `endpoint=True` for `integers` — M7.x.
+- Bit-identical reproducibility against numpy's PCG64 stream
+  (numpy uses a different SeedSequence layout — explicit non-goal).
+
+See [ADR-0018](../../agent/adr/0018-m7-5-random.md)
+for the load-bearing decisions.
