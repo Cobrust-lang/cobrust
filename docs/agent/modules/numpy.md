@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:numpy
 crate: cobrust-numpy
-last_verified_commit: bcff3c3
+last_verified_commit: 18c5c1d93dbf5b5a4f9d8015aa64b96805bdcc38
 dependencies: [mod:translator]
 ---
 
@@ -15,7 +15,11 @@ milestone family (constitution §7). M7.0 lands the foundation layer
 per ADR-0012 + ADR-0013: closed dtype tier, tagged-union `Array`
 over `ndarray::ArrayD<T>`, four constructors (`array` / `zeros` /
 `ones` / `arange`), observer surface (`shape` / `ndim` / `size` /
-`dtype` / `repr` / `to_json`).
+`dtype` / `repr` / `to_json`). M7.3 (per ADR-0016) lands the
+reduction surface: nine reductions (`sum / prod / mean / std / var /
+min / max / argmin / argmax`) with `axis: Option<i64>`, pairwise
+summation for floats, `ddof` for std/var, numpy-exact empty-array
+semantics.
 
 Per ADR-0012 §"Backend strategy: translate the surface, bind the
 core", cobrust-numpy translates numpy's **public Python surface**
@@ -69,6 +73,31 @@ We do not reimplement `ArrayD::zeros` in Rust; we call it.
   verifies ≥ 1024 fuzz inputs per indexing kind against upstream
   numpy 2.0.2 (bit-identical for int/bool, `rtol=1e-7` for float).
   L2.perf inherits ENFORCED state from M7.1.
+
+- **M7.3 — delivered.** Reduction surface (`sum / prod / mean / std
+  / var / min / max / argmin / argmax`) per ADR-0016. cobrust-numpy
+  now ships nine reductions exposed as both free functions
+  (`cobrust_numpy::sum / prod / mean / std / var / min / max /
+  argmin / argmax`) and method-style API on `Array`
+  (`a.sum(axis) / a.mean(axis) / a.std(axis, ddof) /
+  a.argmax(axis)` …). Axis semantics: `axis: Option<i64>` —
+  `None` reduces all axes, `Some(k)` reduces axis k
+  (negative-axis aware). `ddof: u32` for `std` / `var` (default
+  population variance with `ddof=0`; sample variance with
+  `ddof=1`). Pairwise summation for float `sum / mean / std /
+  var` per ADR-0016 §3 (chunk size 8; `pairwise_sum_f64 / f32`
+  helpers exposed; matches numpy's accuracy floor — pairwise
+  precision test holds 10⁶ tiny floats within `rtol=1e-12`).
+  Empty-array semantics match numpy: identity for `sum` (= 0)
+  and `prod` (= 1); `NaN` for `mean / std / var`;
+  `ReductionEmptyArray` error for `min / max / argmin / argmax`.
+  Argmin/argmax use first-occurrence tie-breaking and return
+  `Int64` (matches numpy's `intp`). One new error variant lands:
+  `ReductionEmptyArray`. Differential gate verifies ≥ 1024 fuzz
+  inputs per reduction (12 fuzz tests) against upstream numpy
+  2.0.2 (bit-identical for int/bool, `rtol=1e-7` for float;
+  argmin/argmax exact match). L2.perf inherits ENFORCED state
+  from M7.1/M7.2.
 
 ## Public surface (M7.0)
 
@@ -335,6 +364,37 @@ M7.0 reuses the M4/M5/M6 task value; no new task is introduced.
       (`index_pipeline_escalates_when_perf_always_fails`).
 - [x] ADR-0015 lands; doc tree updated; doc-coverage extended.
 
+## Done means (M7.3 — DONE)
+
+- [x] Nine reductions: `sum / prod / mean / std / var / min / max
+      / argmin / argmax` (free functions and `Array::*` methods).
+- [x] `axis: Option<i64>` parameter — `None` reduces all;
+      `Some(k)` reduces along axis k; negative-axis aware.
+- [x] `ddof: u32` for `std / var` (default 0).
+- [x] Pairwise summation for float `sum / mean / std / var`
+      (chunk size 8; `pairwise_sum_f32 / f64` helpers exposed);
+      pairwise precision test verifies 10⁶ tiny floats within
+      `rtol=1e-12`.
+- [x] Empty-array semantics: identity for `sum` (= 0) / `prod`
+      (= 1); `NaN` for `mean / std / var`; `ReductionEmptyArray`
+      error for `min / max / argmin / argmax`.
+- [x] One new `NumpyErrorKind` variant: `ReductionEmptyArray`.
+- [x] Argmin/argmax: first-occurrence tie-breaking; result dtype
+      `Int64` (matches numpy's `intp`); NaN inputs return index of
+      first NaN.
+- [x] NaN propagation in `min / max` (any NaN in lane → NaN).
+- [x] ≥ 50 well-typed reduction programs (actual: 55).
+- [x] ≥ 50 ill-typed reduction programs (actual: 51).
+- [x] 25 corpus-correctness table-driven tests against
+      hand-computed expected values.
+- [x] ≥ 1024 fuzz inputs per reduction (12 differential gates)
+      against upstream numpy 2.0.2: bit-identical for int/bool,
+      `rtol=1e-7` for float; argmin/argmax exact match.
+- [x] L2.perf inherits ENFORCED state from M7.1/M7.2;
+      perf-fail escalation test wired
+      (`reduce_pipeline_escalates_when_perf_always_fails`).
+- [x] ADR-0016 lands; doc tree updated; doc-coverage extended.
+
 ## Public surface (M7.2 — per ADR-0015)
 
 ```rust
@@ -408,6 +468,108 @@ pub enum NumpyErrorKind {
     IndexDtypeNotInteger,        // int-array dtype not integer; or mask dtype not bool
 }
 ```
+
+## Public surface (M7.3 — per ADR-0016)
+
+```rust
+// M7.3 reductions — closed nine-reduction set per ADR-0016 §1.
+// Axis semantics: `axis: Option<i64>` — None reduces all axes;
+// Some(k) reduces along axis k (negative-axis aware).
+pub fn sum(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+pub fn prod(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+pub fn mean(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+pub fn std(arr: &Array, axis: Option<i64>, ddof: u32) -> Result<Array, NumpyError>;
+pub fn var(arr: &Array, axis: Option<i64>, ddof: u32) -> Result<Array, NumpyError>;
+pub fn min(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+pub fn max(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+pub fn argmin(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+pub fn argmax(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+
+// Pairwise summation helpers (chunk size 8 per ADR-0016 §3).
+pub fn pairwise_sum_f32(values: &[f32]) -> f32;
+pub fn pairwise_sum_f64(values: &[f64]) -> f64;
+
+// Method-style API mirrors numpy idiom (`a.sum(axis=k)`).
+impl Array {
+    pub fn sum(&self, axis: Option<i64>) -> Result<Array, NumpyError>;
+    pub fn prod(&self, axis: Option<i64>) -> Result<Array, NumpyError>;
+    pub fn mean(&self, axis: Option<i64>) -> Result<Array, NumpyError>;
+    pub fn std(&self, axis: Option<i64>, ddof: u32) -> Result<Array, NumpyError>;
+    pub fn var(&self, axis: Option<i64>, ddof: u32) -> Result<Array, NumpyError>;
+    pub fn min(&self, axis: Option<i64>) -> Result<Array, NumpyError>;
+    pub fn max(&self, axis: Option<i64>) -> Result<Array, NumpyError>;
+    pub fn argmin(&self, axis: Option<i64>) -> Result<Array, NumpyError>;
+    pub fn argmax(&self, axis: Option<i64>) -> Result<Array, NumpyError>;
+}
+
+// New error variant (per ADR-0016 §5).
+pub enum NumpyErrorKind {
+    // ... M7.0 + M7.1 + M7.2 variants ...
+    ReductionEmptyArray,         // min/max/argmin/argmax on empty array
+}
+```
+
+## Reduction promotion rules (M7.3 — per ADR-0016 §1)
+
+| Reduction | Result dtype | Promotion notes |
+|---|---|---|
+| `sum / prod` | dtype preserved | int wraps; bool → Int64 |
+| `mean / std / var` | float-preserved | `f32 → f32`; `f64 → f64`; int/bool → `f64` |
+| `min / max` | dtype preserved | NaN propagates (any NaN → NaN) |
+| `argmin / argmax` | `Int64` | matches numpy's intp; first-occurrence tie-breaking; first NaN wins |
+
+## Empty-array behavior (M7.3 — per ADR-0016 §5)
+
+| op | Empty-array behavior |
+|---|---|
+| `sum([])` | additive identity (0) |
+| `prod([])` | multiplicative identity (1) |
+| `mean([])` | NaN |
+| `std([], ddof)` | NaN |
+| `var([], ddof)` | NaN; also NaN when `N - ddof <= 0` |
+| `min([])` | `Err(ReductionEmptyArray)` |
+| `max([])` | `Err(ReductionEmptyArray)` |
+| `argmin([])` | `Err(ReductionEmptyArray)` |
+| `argmax([])` | `Err(ReductionEmptyArray)` |
+
+## Differential gate (M7.3)
+
+`crates/cobrust-numpy/tests/reduce_differential.rs` runs against
+`corpus/numpy/M7.3/harness/h_reduction.py`:
+
+- 1024 random sum int inputs — bit-identical.
+- 1024 random sum float inputs — `rtol=1e-7`.
+- 1024 random prod float inputs — `rtol=1e-7`.
+- 1024 random mean float inputs — `rtol=1e-7`.
+- 1024 random var float inputs (`ddof=0|1`) — `rtol=1e-7`.
+- 1024 random std float inputs — `rtol=1e-7`.
+- 1024 random min/max int inputs — bit-identical.
+- 1024 random argmin/argmax int inputs — bit-identical.
+- 1024 random sum 2D axis=0|1 inputs — bit-identical.
+- 100+ random bool sum inputs — bit-identical.
+
+Total ≥ 11000 differential inputs verified. Skipped with a clear
+message when upstream numpy is unavailable on the host.
+
+## Pipeline integration (M7.3)
+
+`crates/cobrust-numpy/tests/reduce_pipeline.rs` drives
+`cobrust_translator::translate_with_verifiers` against the M7.3
+corpus and asserts:
+
+- All 12 functions emit (10 public + 2 helpers: `sum_all`,
+  `sum_axis`, `prod_all`, `mean_all`, `var_all`, `std_all`,
+  `min_all`, `max_all`, `argmin_all`, `argmax_all`,
+  `normalize_axis`, `pairwise_sum`).
+- Every function carries non-empty body + provenance fields
+  (`source_sha16 = "091d4078fed10b8a"`, `router_decision_id =
+  "blake3:..."`).
+- Manifest validates with `gates.l1_files_emitted = 12`.
+- L2.perf escalation wired:
+  `reduce_pipeline_escalates_when_perf_always_fails` exercises a
+  `PerfVerifier::Reject`-only-on-`sum_all` verifier; with
+  `cfg.escalation_threshold = 2` the pipeline raises
+  `EscalationExceeded` and writes `failure_report.md`.
 
 ## View-vs-copy contract (M7.2 — per ADR-0015 §3)
 
@@ -502,6 +664,11 @@ corpus and asserts:
   ownership model, differential strategy).
 - [adr:0014](../adr/0014-m7-1-ufuncs-broadcasting.md) — M7.1
   ufuncs + broadcasting + NEP 50 type promotion + L2.perf flip.
+- [adr:0015](../adr/0015-m7-2-indexing.md) — M7.2 indexing
+  (Index enum, SliceSpec, ArrayView, np.where).
+- [adr:0016](../adr/0016-m7-3-reductions.md) — M7.3 reductions
+  (kind taxonomy, axis semantics, pairwise summation, ddof,
+  empty-array behavior).
 - [adr:0007](../adr/0007-translator-pipeline.md) — pipeline.
 - [adr:0010](../adr/0010-native-ext-translation.md) — native-ext
   methodology M7.0 inherits.

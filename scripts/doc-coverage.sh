@@ -508,7 +508,7 @@ if grep -q '^- \*\*M7.0 — delivered.\*\*' "docs/agent/modules/translator.md"; 
     [[ -f corpus/numpy/M7.0/perf.toml ]] || fail "corpus/numpy/M7.0/perf.toml missing"
 fi
 
-echo "doc-coverage: M0 + M1 + M2 + M4 + M5 + M6 + M7.0 + M7.1 + M7.2 checks passed"
+echo "doc-coverage: M0 + M1 + M2 + M4 + M5 + M6 + M7.0 + M7.1 + M7.2 + M7.3 checks passed"
 
 # --- 12. M7.1 ufunc + broadcasting + promotion surface coverage -----------
 # When the numpy module declares M7.1 delivered, the ufunc + broadcasting
@@ -612,3 +612,52 @@ if grep -q '^- \*\*M7.2 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
 fi
 
 echo "doc-coverage: M7.2 indexing surface checks passed"
+
+# --- 14. M7.3 reduction surface coverage ----------------------------------
+# When the numpy module declares M7.3 delivered, the reduction surface
+# terms + ADR-0016 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M7.3 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
+    m7_3_numpy_terms=(
+        "sum"
+        "prod"
+        "mean"
+        "std"
+        "var"
+        "min"
+        "max"
+        "argmin"
+        "argmax"
+        "ReductionEmptyArray"
+        "pairwise_sum"
+        "ddof"
+        "ADR-0016"
+    )
+    m7_3_numpy_files=(
+        "docs/agent/modules/numpy.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m7_3_numpy_terms[@]}"; do
+        for f in "${m7_3_numpy_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M7.3 numpy surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_sixteen="docs/agent/adr/0016-m7-3-reductions.md"
+    [[ -f "$adr_sixteen" ]] || fail "ADR-0016 (M7.3 reductions) is required for M7.3"
+    if ! grep -q '^status: accepted$' "$adr_sixteen"; then
+        fail "ADR-0016 must be 'status: accepted' for M7.3 to be done"
+    fi
+
+    # Corpus directory layout per ADR-0016.
+    [[ -f corpus/numpy/M7.3/spec.toml ]] || fail "corpus/numpy/M7.3/spec.toml missing"
+    [[ -f corpus/numpy/M7.3/canned_llm_responses.toml ]] || fail "corpus/numpy/M7.3/canned_llm_responses.toml missing"
+    [[ -d corpus/numpy/M7.3/upstream ]] || fail "corpus/numpy/M7.3/upstream missing"
+    [[ -d corpus/numpy/M7.3/harness ]] || fail "corpus/numpy/M7.3/harness missing"
+    [[ -f corpus/numpy/M7.3/perf.toml ]] || fail "corpus/numpy/M7.3/perf.toml missing"
+fi
+
+echo "doc-coverage: M7.3 reduction surface checks passed"

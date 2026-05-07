@@ -1,0 +1,22 @@
+# Per-library performance gate override for M7.3 (per ADR-0008 §2 +
+# ADR-0010 §3 + ADR-0014 §5 + ADR-0016).
+#
+# Numerical tier per ADR-0010 §3: 0.5x upper-bound floor. M7.3
+# reduction surface uses ndarray::Zip + fold_axis for axis reductions
+# and pairwise summation for floats; pure-Rust + ndarray competes
+# against numpy's hand-tuned C+SIMD reduction kernels.
+#
+# Threshold semantics: cobrust-numpy must not be slower than 1/0.5 = 2x
+# upstream numpy on any individual reduction benchmark. Reports
+# persisted under target/cobrust-bench/numpy-M7.3/<commit>/.
+
+threshold = 0.5
+pass_ratio = 1.0
+n_iters = 100
+n_inputs = 32
+
+# Notes:
+#   - Numerical tier: 0.5x (per ADR-0010 §3).
+#   - M7.3 inherits the ENFORCED gate from M7.1/M7.2 (per ADR-0014 §5 + ADR-0015).
+#   - Real-LLM mode bench: tests/reduce_bench.rs drives in-process
+#     timing harness vs numpy oracle subprocess.
