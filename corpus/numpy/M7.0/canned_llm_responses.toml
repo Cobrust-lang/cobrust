@@ -1,0 +1,372 @@
+# Canned LLM responses for numpy M7.0 — synthetic-LLM mode.
+#
+# Schema per ADR-0007 §"Synthetic-LLM mode contract" + ADR-0008 §5
+# (per-attempt routing) + ADR-0013 §"Synthetic provider — task field
+# stays `translate`". Lookup key: (task, function, attempt). When
+# `attempt` is omitted both sides default to 1.
+#
+# Source-SHA staleness check:
+#   sha256(corpus/numpy/M7.0/upstream/array_core.py)[..16] = "a445a74f03a0570c"
+#
+# These canned responses describe a flat-file equivalent of the
+# multi-file cobrust-numpy crate; the pipeline integration test
+# (`crates/cobrust-numpy/tests/numpy_pipeline.rs`) drives this corpus
+# end-to-end and asserts (a) every function is emitted, (b) every
+# function carries a provenance header, and (c) the assembled
+# parser.rs string is non-empty per function. The production
+# multi-file crate at `crates/cobrust-numpy/src/` is the gate-stable
+# byte snapshot; canned responses here cover the **translator path**
+# itself.
+#
+# MODULE PREAMBLE: alphabetically-first function (`arange`) carries
+# the preamble (use statements + Dtype enum + NumpyError type +
+# Array tagged-union). Subsequent entries emit only their function
+# bodies.
+
+schema_version = 1
+oracle_runtime = "cpython 3.11"
+
+# ---- arange (alphabetic-first; carries module preamble) -------------------
+
+[[entry]]
+task = "translate"
+function = "arange"
+source_sha16 = "a445a74f03a0570c"
+response_text = '''
+// Module preamble emitted with the first alphabetic function (arange).
+// Subsequent entries emit only their function body. Per ADR-0013 §
+// "Decision" the production cobrust-numpy is multi-file
+// (dtype.rs / error.rs / array.rs / constructors.rs / print.rs);
+// the canned-response path emits a flat-file equivalent so the M7.0
+// pipeline integration test can assert end-to-end emission without
+// extending the pipeline's hardcoded per-library file layout.
+
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(dead_code)]
+
+use ndarray::{ArrayD, IxDyn};
+use std::fmt;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Dtype {
+    Int32,
+    Int64,
+    Float32,
+    Float64,
+    Bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumpyError {
+    pub kind: NumpyErrorKind,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NumpyErrorKind {
+    UnsupportedDtype,
+    ShapeMismatch,
+    NegativeDimension,
+    ZeroStep,
+    BoolArangeUnsupported,
+    CastFailed,
+}
+
+impl fmt::Display for NumpyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NumpyError: {}", self.message)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Array {
+    Int32(ArrayD<i32>),
+    Int64(ArrayD<i64>),
+    Float32(ArrayD<f32>),
+    Float64(ArrayD<f64>),
+    Bool(ArrayD<bool>),
+}
+
+impl Array {
+    #[must_use]
+    pub fn dtype(&self) -> Dtype {
+        match self {
+            Self::Int32(_) => Dtype::Int32,
+            Self::Int64(_) => Dtype::Int64,
+            Self::Float32(_) => Dtype::Float32,
+            Self::Float64(_) => Dtype::Float64,
+            Self::Bool(_) => Dtype::Bool,
+        }
+    }
+}
+
+/// `numpy.arange(start, stop, step, dtype=...)`-equivalent. Half-open
+/// range constructor. Translated from `array_core.arange`.
+///
+/// # Errors
+/// - `NumpyError::ZeroStep` if `step == 0`.
+/// - `NumpyError::BoolArangeUnsupported` if `dtype == Dtype::Bool`.
+pub fn arange(start: f64, stop: f64, step: f64, dtype: Dtype) -> Result<Array, NumpyError> {
+    if step == 0.0 {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ZeroStep,
+            message: "arange: step must be nonzero".into(),
+        });
+    }
+    if matches!(dtype, Dtype::Bool) {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::BoolArangeUnsupported,
+            message: "arange: dtype=bool not supported".into(),
+        });
+    }
+    let count = arange_count(start, stop, step);
+    let raw: Vec<f64> = (0..count).map(|i| start + (i as f64) * step).collect();
+    array(&raw, &[count], dtype)
+}
+
+#[must_use]
+pub fn arange_count(start: f64, stop: f64, step: f64) -> usize {
+    if step == 0.0 {
+        return 0;
+    }
+    let delta = stop - start;
+    if step > 0.0 && delta <= 0.0 {
+        return 0;
+    }
+    if step < 0.0 && delta >= 0.0 {
+        return 0;
+    }
+    let raw = (delta / step).ceil();
+    if raw <= 0.0 {
+        0
+    } else if raw.is_finite() {
+        raw as usize
+    } else {
+        0
+    }
+}
+'''
+
+# ---- array ----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "array"
+source_sha16 = "a445a74f03a0570c"
+response_text = '''
+/// `numpy.array(values).reshape(shape).astype(dtype)`-equivalent. Takes
+/// a flat `f64` buffer plus shape + dtype. Translated from
+/// `array_core.array`.
+///
+/// # Errors
+/// `NumpyError::ShapeMismatch` if `values.len() != shape_size(shape)`.
+pub fn array(values: &[f64], shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError> {
+    let expected = shape_size(shape);
+    if values.len() != expected {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: format!(
+                "values length {} does not match shape product {} for shape={:?}",
+                values.len(),
+                expected,
+                shape
+            ),
+        });
+    }
+    let dim = IxDyn(shape);
+    match dtype {
+        Dtype::Int32 => {
+            let casted: Vec<i32> = values.iter().map(|v| *v as i32).collect();
+            ArrayD::<i32>::from_shape_vec(dim, casted)
+                .map(Array::Int32)
+                .map_err(|e| NumpyError {
+                    kind: NumpyErrorKind::ShapeMismatch,
+                    message: format!("ndarray from_shape_vec: {e}"),
+                })
+        }
+        Dtype::Int64 => {
+            let casted: Vec<i64> = values.iter().map(|v| *v as i64).collect();
+            ArrayD::<i64>::from_shape_vec(dim, casted)
+                .map(Array::Int64)
+                .map_err(|e| NumpyError {
+                    kind: NumpyErrorKind::ShapeMismatch,
+                    message: format!("ndarray from_shape_vec: {e}"),
+                })
+        }
+        Dtype::Float32 => {
+            let casted: Vec<f32> = values.iter().map(|v| *v as f32).collect();
+            ArrayD::<f32>::from_shape_vec(dim, casted)
+                .map(Array::Float32)
+                .map_err(|e| NumpyError {
+                    kind: NumpyErrorKind::ShapeMismatch,
+                    message: format!("ndarray from_shape_vec: {e}"),
+                })
+        }
+        Dtype::Float64 => ArrayD::<f64>::from_shape_vec(dim, values.to_vec())
+            .map(Array::Float64)
+            .map_err(|e| NumpyError {
+                kind: NumpyErrorKind::ShapeMismatch,
+                message: format!("ndarray from_shape_vec: {e}"),
+            }),
+        Dtype::Bool => {
+            let casted: Vec<bool> = values.iter().map(|v| *v != 0.0).collect();
+            ArrayD::<bool>::from_shape_vec(dim, casted)
+                .map(Array::Bool)
+                .map_err(|e| NumpyError {
+                    kind: NumpyErrorKind::ShapeMismatch,
+                    message: format!("ndarray from_shape_vec: {e}"),
+                })
+        }
+    }
+}
+'''
+
+# ---- array_repr -----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "array_repr"
+source_sha16 = "a445a74f03a0570c"
+response_text = '''
+/// numpy-compatible `repr()` per ADR-0013 §4. Translated from
+/// `array_core.array_repr`.
+#[must_use]
+pub fn array_repr(arr: &Array) -> String {
+    let dtype_name = match arr {
+        Array::Int32(_) => "int32",
+        Array::Int64(_) => "int64",
+        Array::Float32(_) => "float32",
+        Array::Float64(_) => "float64",
+        Array::Bool(_) => "bool",
+    };
+    format!("array(<elided>, dtype={dtype_name})")
+}
+'''
+
+# ---- cast_to_dtype --------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "cast_to_dtype"
+source_sha16 = "a445a74f03a0570c"
+response_text = '''
+/// Cast a Python float to the canonical Rust representation of a
+/// `Dtype`. Float32 path uses IEEE 754 single-precision round-trip.
+/// Translated from `array_core.cast_to_dtype`.
+#[must_use]
+pub fn cast_to_dtype(value: f64, dtype: Dtype) -> serde_json::Value {
+    match dtype {
+        Dtype::Int32 => serde_json::json!(value as i32),
+        Dtype::Int64 => serde_json::json!(value as i64),
+        Dtype::Float32 => serde_json::json!(value as f32 as f64),
+        Dtype::Float64 => serde_json::json!(value),
+        Dtype::Bool => serde_json::json!(value != 0.0),
+    }
+}
+'''
+
+# ---- ones -----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "ones"
+source_sha16 = "a445a74f03a0570c"
+response_text = '''
+/// `numpy.ones(shape, dtype=...)`-equivalent. Translated from
+/// `array_core.ones`.
+///
+/// # Errors
+/// Currently never returns Err; future widening may surface
+/// allocation failures.
+pub fn ones(shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError> {
+    let dim = IxDyn(shape);
+    Ok(match dtype {
+        Dtype::Int32 => Array::Int32(ArrayD::<i32>::from_elem(dim, 1_i32)),
+        Dtype::Int64 => Array::Int64(ArrayD::<i64>::from_elem(dim, 1_i64)),
+        Dtype::Float32 => Array::Float32(ArrayD::<f32>::from_elem(dim, 1.0_f32)),
+        Dtype::Float64 => Array::Float64(ArrayD::<f64>::from_elem(dim, 1.0_f64)),
+        Dtype::Bool => Array::Bool(ArrayD::<bool>::from_elem(dim, true)),
+    })
+}
+'''
+
+# ---- parse_dtype ----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "parse_dtype"
+source_sha16 = "a445a74f03a0570c"
+response_text = '''
+/// Map a Python dtype string to the canonical Rust `Dtype` variant.
+/// Translated from `array_core.parse_dtype`.
+///
+/// # Errors
+/// `NumpyError::UnsupportedDtype` for any string outside the M7.0
+/// closed set per ADR-0013 §3.
+pub fn parse_dtype(s: &str) -> Result<Dtype, NumpyError> {
+    match s {
+        "int32" | "i4" => Ok(Dtype::Int32),
+        "int64" | "i8" => Ok(Dtype::Int64),
+        "float32" | "f4" => Ok(Dtype::Float32),
+        "float64" | "f8" => Ok(Dtype::Float64),
+        "bool" | "?" => Ok(Dtype::Bool),
+        other => Err(NumpyError {
+            kind: NumpyErrorKind::UnsupportedDtype,
+            message: format!("unsupported dtype string: {other:?}"),
+        }),
+    }
+}
+'''
+
+# ---- shape_size -----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "shape_size"
+source_sha16 = "a445a74f03a0570c"
+response_text = '''
+/// Compute the flat element count for a shape vector. Helper used
+/// by constructors. Translated from `array_core.shape_size`.
+#[must_use]
+pub fn shape_size(shape: &[usize]) -> usize {
+    let mut n: usize = 1;
+    for &d in shape {
+        n = n.saturating_mul(d);
+    }
+    n
+}
+'''
+
+# ---- zeros ----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "zeros"
+source_sha16 = "a445a74f03a0570c"
+response_text = '''
+/// `numpy.zeros(shape, dtype=...)`-equivalent. Allocates a zero-
+/// filled array of the given shape and dtype. Translated from
+/// `array_core.zeros`.
+///
+/// # Errors
+/// Currently never returns Err; future widening may surface
+/// allocation failures.
+pub fn zeros(shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError> {
+    let dim = IxDyn(shape);
+    Ok(match dtype {
+        Dtype::Int32 => Array::Int32(ArrayD::<i32>::zeros(dim)),
+        Dtype::Int64 => Array::Int64(ArrayD::<i64>::zeros(dim)),
+        Dtype::Float32 => Array::Float32(ArrayD::<f32>::zeros(dim)),
+        Dtype::Float64 => Array::Float64(ArrayD::<f64>::zeros(dim)),
+        Dtype::Bool => Array::Bool(ArrayD::<bool>::from_elem(dim, false)),
+    })
+}
+'''

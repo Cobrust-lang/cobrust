@@ -1,0 +1,42 @@
+[source]
+library = "numpy"
+version = "2.0.2"
+sha256 = "a445a74f03a0570cb05ed9d2f98aac209d838ff538598ab85a2a116d8d04d590"
+file_count = 1
+
+[oracle]
+runtime = "cpython"
+runtime_version = "3.11"
+oracle_module = "numpy"
+
+[verification]
+seeds = [42, 1337, 3735928559]
+fuzz_inputs_per_fn = 1024
+divergences = []
+known_failures = []
+
+[router]
+strategy = "synthetic"
+models_used = ["synthetic:numpy-canned-v1"]
+ledger_entries = 8
+
+[build]
+toolchain = "rustc 1.94.1"
+deterministic_id = "blake3:0000000000000000000000000000000000000000000000000000000000000000"
+crate_layout_version = 1
+
+[gates]
+l0_spec_emitted = true
+l1_files_emitted = 8
+l2_build = "pass (cargo build --release zero warnings)"
+l2_behavior = "pass (tests/numpy_differential.rs bytes-identical for int/bool, rtol=1e-12 for float; tests/numpy_fuzz.rs 4200 panic-free fuzz inputs)"
+l2_perf = "skipped (M7.0 records, M7.1+ gates per ADR-0013 §\"M7.0 manifest fields\"; numerical tier 0.5x floor per ADR-0010 §3 + ADR-0013)"
+l3_pyo3_wrapper = "pass (tests/numpy_differential.rs subprocess CPython numpy oracle); --features pyo3 build path per ADR-0011"
+l3_downstream_dependents = "deferred to M7.6+ (numpy ecosystem too large for M7.0 per ADR-0013 §\"M7.0 manifest fields\")"
+
+[gates.dependents]
+covered = []
+deferred = ["scipy", "pandas", "matplotlib"]
+deferred_reason = "numpy is the foundation; downstream validation lands at M7.6+ when the M7.0..M7.5 surface is complete"
+skipped = []
+skipped_reason = ""

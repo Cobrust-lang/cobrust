@@ -1,0 +1,24 @@
+# Per-library performance gate override (per ADR-0008 §2 + ADR-0010 §3 +
+# ADR-0013 §"M7.0 manifest fields").
+#
+# numpy is the M7.0 numerical-tier library. Constitution §4.2 default is
+# 0.8x; ADR-0010 §3 documents the relaxation tiers:
+#   - native-ext tier: 0.7x (msgpack)
+#   - heavily-vectorised C/Fortran (numpy SIMD/BLAS): 0.5x upper bound
+#
+# For M7.0 (constructors), perf is **informational only** (per ADR-0013
+# §"M7.0 manifest fields"): zero-fill / arange are O(n) memory ops where
+# pure-Rust easily competes against numpy's C path. We record the bench
+# numbers but do not gate. M7.1 ufuncs is where perf becomes a real gate
+# (and where the 0.5x floor will be exercised against SIMD).
+
+threshold = 0.5
+pass_ratio = 1.0
+n_iters = 100
+n_inputs = 32
+
+# Notes:
+#   - Numerical tier (per ADR-0010 §3): 0.5x upper-bound floor.
+#   - At M7.0 the gate is informational; pipeline records the report
+#     but does not raise PerfGate. M7.1 will flip the gate on once
+#     ufuncs land (where SIMD competition is real).

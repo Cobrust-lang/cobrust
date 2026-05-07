@@ -1,0 +1,83 @@
+# numpy L0 spec — M7.0 (per ADR-0013).
+#
+# Schema per ADR-0007 §1. One [function.<name>] per public-or-helper
+# entrypoint translated by the M7.0 cobrust-numpy build. Every entry
+# binds a Python qualified name to a behavior contract that the L1
+# translator is required to satisfy and the L0 differential harness
+# verifies.
+
+schema_version = 1
+library = "numpy"
+upstream_version = "2.0.2"
+oracle_module = "numpy"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+# ---- Public surface (constructors) ----------------------------------------
+
+[function.array]
+qualname = "array_core.array"
+public = true
+signature = "array(values: list[float], shape: list[int], dtype: str) -> dict"
+py_compat = "strict"
+description = "Construct an Array from a flat values buffer + shape + dtype string. Mirrors np.array(values).reshape(shape).astype(dtype)."
+
+[function.zeros]
+qualname = "array_core.zeros"
+public = true
+signature = "zeros(shape: list[int], dtype: str) -> dict"
+py_compat = "strict"
+description = "Construct a zero-filled Array of the given shape + dtype. Mirrors np.zeros(shape, dtype=dtype)."
+
+[function.ones]
+qualname = "array_core.ones"
+public = true
+signature = "ones(shape: list[int], dtype: str) -> dict"
+py_compat = "strict"
+description = "Construct a one-filled Array of the given shape + dtype. Mirrors np.ones(shape, dtype=dtype)."
+
+[function.arange]
+qualname = "array_core.arange"
+public = true
+signature = "arange(start: float, stop: float, step: float, dtype: str) -> dict"
+py_compat = "numerical"
+py_compat_rtol = 1e-12
+description = "Half-open range constructor. Mirrors np.arange(start, stop, step, dtype=dtype). Bool dtype unsupported (matches numpy)."
+
+# ---- Helper functions in scope --------------------------------------------
+
+[function.parse_dtype]
+qualname = "array_core.parse_dtype"
+public = false
+signature = "parse_dtype(s: str) -> str"
+py_compat = "strict"
+description = "Map a Python dtype string to the canonical Rust Dtype variant name. Raises on unsupported."
+
+[function.shape_size]
+qualname = "array_core.shape_size"
+public = false
+signature = "shape_size(shape: list[int]) -> int"
+py_compat = "strict"
+description = "Compute total element count from a shape vector; 0-D scalar yields 1; raises on negative dimension."
+
+[function.cast_to_dtype]
+qualname = "array_core.cast_to_dtype"
+public = false
+signature = "cast_to_dtype(value: float, dtype_variant: str) -> object"
+py_compat = "numerical"
+py_compat_rtol = 1e-12
+description = "Cast a Python float to the canonical Python representation of a Rust Dtype variant. Float32 path uses IEEE 754 single-precision round-trip."
+
+[function.array_repr]
+qualname = "array_core.array_repr"
+public = true
+signature = "array_repr(arr: dict) -> str"
+py_compat = "semantic"
+description = "numpy-style repr() of an Array dict. Format: array([nested_data], dtype=<py_name>). M7.0 accepts a stable cobrust-flavored repr that is informationally equivalent to numpy's repr but does not match numpy's column-aligned multi-line layout (deferred per ADR-0013 differential strategy)."
+
+# ---- Verification budget --------------------------------------------------
+
+[verification]
+seeds = [42, 1337, 0xDEADBEEF]
+fuzz_inputs_per_fn = 1024
+tolerance = "exact-int-bool; rtol=1e-12-float"
