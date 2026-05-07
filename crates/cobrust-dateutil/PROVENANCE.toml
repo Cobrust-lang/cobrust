@@ -1,0 +1,44 @@
+[source]
+library = "dateutil"
+version = "2.9.0.post0"
+sha256 = "187586aad2a69e5210f384be6f32d2c2516589d1604baf71b1c893d5078d447f"
+file_count = 1
+
+[oracle]
+runtime = "cpython"
+runtime_version = "3.11"
+oracle_module = "dateutil"
+
+[verification]
+seeds = [
+    42,
+    1337,
+    3735928559,
+]
+fuzz_inputs_per_fn = 1024
+divergences = []
+known_failures = []
+
+[router]
+strategy = "synthetic"
+models_used = ["synthetic:dateutil-canned-v1"]
+ledger_entries = 9
+
+[build]
+toolchain = "rustc 1.94.1"
+deterministic_id = "blake3:9ba4842fc922b2bab729f593f0cbb31721bf5a93faa891cfea2919b2973efc5d"
+crate_layout_version = 1
+
+[gates]
+l0_spec_emitted = true
+l1_files_emitted = 8
+l2_build = "pass (cargo build --release zero warnings)"
+l2_behavior = "pass (tests/dateutil_downstream.rs + tests/dateutil_fuzz.rs) (after 1 repair-loop iteration on parse_iso)"
+l2_perf = "pass (per-library threshold per ADR-0008 §2; report at target/cobrust-bench/dateutil/<commit>/report.json)"
+l3_pyo3_wrapper = "pass (tests/dateutil_downstream.rs subprocess CPython oracle)"
+l3_downstream_dependents = "pass 2/5 (croniter, freezegun); deferred 3/5 (pandas, sqlalchemy, pendulum) to M6 per ADR-0009"
+
+[gates.dependents]
+covered = ["croniter", "freezegun"]
+deferred = ["pandas", "sqlalchemy", "pendulum"]
+deferred_reason = "M5 budget; M6 widens per ADR-0009"

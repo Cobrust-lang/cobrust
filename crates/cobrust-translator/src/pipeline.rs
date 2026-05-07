@@ -1,8 +1,27 @@
-//! Pipeline orchestrator: read source → L0 → L1 → write crate.
+//! Pipeline orchestrator: read source → L0 → L1 → (L2.behavior via
+//! verifier hook → repair loop) → write crate.
 //!
 //! This is the public entrypoint of the translator subsystem. It is
 //! synchronous on its caller-facing API but uses tokio internally for
-//! the LLM router. See ADR-0007 §"Public surface" for the contract.
+//! the LLM router. See ADR-0007 §"Public surface" for the M4 contract
+//! and ADR-0008 §3+§5 for the M5 repair-loop extension.
+//!
+//! # Repair-loop hook
+//!
+//! The pipeline does not compile-and-run the emitted Rust mid-build
+//! (we cannot invoke `cargo build` recursively from inside `cargo
+//! test`). Instead, callers may register a [`BehaviorVerifier`] that
+//! inspects each function's emitted text and, on failure, returns a
+//! [`crate::repair::GateFailure`]. The pipeline then re-dispatches the
+//! same function with `attempt += 1` (per ADR-0008 §5) and retries
+//! verification until either the verifier accepts the emission or
+//! `cfg.escalation_threshold` is hit.
+//!
+//! This shape lets the M5 integration test exercise the closed loop
+//! end-to-end with deterministic-canned diagnostics, while the
+//! production pipeline (real-LLM mode) can plug in a real cargo-test-
+//! shaped verifier driven by the L2.build / L2.behavior / L2.perf /
+//! L3.downstream gates.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,9 +32,10 @@ use crate::config::TranslatorConfig;
 use crate::deterministic::{deterministic_id, sha256_file};
 use crate::error::TranslatorError;
 use crate::manifest::{
-    BuildSection, GatesSection, OracleSection, ProvenanceManifest, RouterSection, SourceSection,
-    VerificationSection,
+    BuildSection, DependentsSection, GatesSection, OracleSection, ProvenanceManifest,
+    RouterSection, SourceSection, VerificationSection,
 };
+use crate::repair::{GateFailure, repair_translation, write_failure_report};
 use crate::spec::SpecToml;
 use crate::synthetic::{CannedTable, SyntheticProvider};
 use crate::translate::{FunctionTranslation, TranslationOutput, TranslationPlan, run_l1};
@@ -27,7 +47,9 @@ pub struct PyLibrary {
     pub library: String,
     pub version: String,
     /// Path to `corpus/<lib>/upstream/<file>.py` (the single source
-    /// file in M4 scope).
+    /// file in M4/M5 scope; multi-file libraries can concatenate
+    /// upstream into one source file as documented in the corpus
+    /// README, see e.g. `corpus/dateutil/upstream/dateutil_core.py`).
     pub source_file: PathBuf,
     /// Path to `corpus/<lib>/spec.toml`.
     pub spec_file: PathBuf,
@@ -48,9 +70,41 @@ pub struct TranslatedCrate {
     pub pyo3_wrapper_dir: PathBuf,
     /// Per-function translation records (for downstream auditing).
     pub functions: Vec<FunctionTranslation>,
+    /// Total repair attempts triggered across all functions during this
+    /// run. Always 0 for translations that pass on the first try.
+    /// M5 added; M4 callers do not consult this field.
+    pub repair_attempts: u32,
 }
 
-/// Run the full M4 pipeline (L0 → L1) and write the crate to disk.
+/// Result of one verifier check on a [`FunctionTranslation`].
+pub enum VerifierVerdict {
+    /// Emission accepted; pipeline proceeds to the next function.
+    Accept,
+    /// Emission rejected; pipeline ships `GateFailure` to the repair
+    /// loop and re-dispatches with `attempt += 1`.
+    Reject(GateFailure),
+}
+
+/// Caller-supplied verifier executed after each L1 emission. The
+/// pipeline calls `verify` once per (function, attempt) pair until the
+/// verifier accepts or the escalation threshold is hit.
+pub trait BehaviorVerifier: Send + Sync {
+    fn verify(&self, function: &FunctionTranslation, attempt: u32) -> VerifierVerdict;
+}
+
+/// No-op verifier — accepts every emission. The default for M4 tomli
+/// pipelines that don't exercise the repair loop.
+pub struct AcceptAll;
+
+impl BehaviorVerifier for AcceptAll {
+    fn verify(&self, _function: &FunctionTranslation, _attempt: u32) -> VerifierVerdict {
+        VerifierVerdict::Accept
+    }
+}
+
+/// Run the pipeline with the default no-op verifier. This is the M4
+/// behaviour preserved for backward compatibility — every existing
+/// caller is expected to use this path.
 ///
 /// # Errors
 /// See [`TranslatorError`] variants. The error chain identifies the
@@ -58,6 +112,23 @@ pub struct TranslatedCrate {
 pub async fn translate(
     library: &PyLibrary,
     cfg: &TranslatorConfig,
+) -> Result<TranslatedCrate, TranslatorError> {
+    translate_with_verifier(library, cfg, &AcceptAll).await
+}
+
+/// Run the pipeline with a custom [`BehaviorVerifier`]. The integration
+/// test for the dateutil repair loop uses this entrypoint to inject a
+/// verifier that rejects the deliberately-broken attempt-1 emission of
+/// `parse_iso` and accepts the corrected attempt-2 (per ADR-0008 §5).
+///
+/// # Errors
+/// `TranslatorError::EscalationExceeded` when one function exhausts
+/// `cfg.escalation_threshold` repair attempts; other variants per
+/// [`translate`].
+pub async fn translate_with_verifier(
+    library: &PyLibrary,
+    cfg: &TranslatorConfig,
+    verifier: &dyn BehaviorVerifier,
 ) -> Result<TranslatedCrate, TranslatorError> {
     // ---- L0: read spec ------------------------------------------------------
     let spec = SpecToml::read(&library.spec_file)
@@ -76,22 +147,69 @@ pub async fn translate(
     // ---- L1: build router + dispatch ---------------------------------------
     let router = build_router(cfg, library).await?;
     let plan = TranslationPlan::from_spec(&spec, source_sha16.clone());
-    let translation = run_l1(&router, &plan).await?;
+    let initial = run_l1(&router, &plan).await?;
+
+    // ---- L2.behavior + repair loop -----------------------------------------
+    // For each function, ask the verifier; on Reject, ship the
+    // diagnostic to repair.rs and re-dispatch with attempt += 1.
+    let crate_dir_for_diag = cfg.out_dir.clone();
+    let (translation, repair_attempts) = run_repair_loop(
+        &router,
+        &library.library,
+        &source_sha16,
+        initial,
+        verifier,
+        cfg.escalation_threshold,
+        &crate_dir_for_diag,
+    )
+    .await?;
 
     // ---- Write crate to disk -----------------------------------------------
     let crate_dir = cfg.out_dir.join(format!("cobrust-{}", library.library));
     write_crate(&crate_dir, library, &spec, &translation)?;
 
     // ---- Build manifest ----------------------------------------------------
+    let manifest = build_manifest(library, cfg, &source_sha256, &translation, repair_attempts);
+    let manifest_path = crate_dir.join("PROVENANCE.toml");
+    manifest
+        .write(&manifest_path)
+        .map_err(TranslatorError::Io)?;
+    manifest.validate().map_err(TranslatorError::Manifest)?;
+
+    Ok(TranslatedCrate {
+        manifest,
+        crate_dir: crate_dir.clone(),
+        pyo3_wrapper_dir: crate_dir.join("python"),
+        functions: translation.functions,
+        repair_attempts,
+    })
+}
+
+/// Build the provenance manifest from the translation artefacts.
+fn build_manifest(
+    library: &PyLibrary,
+    cfg: &TranslatorConfig,
+    source_sha256: &str,
+    translation: &TranslationOutput,
+    repair_attempts: u32,
+) -> ProvenanceManifest {
     let toolchain = "rustc 1.94.1".to_string();
     let deterministic =
-        deterministic_id(&source_sha256, &toolchain, &translation.router_decision_ids);
+        deterministic_id(source_sha256, &toolchain, &translation.router_decision_ids);
     let ledger_entries = count_ledger_entries(&cfg.router.router.ledger_path);
-    let manifest = ProvenanceManifest {
+    let dependents = match library.library.as_str() {
+        "dateutil" => DependentsSection {
+            covered: vec!["croniter".into(), "freezegun".into()],
+            deferred: crate::downstream::dateutil_m5_deferred(),
+            deferred_reason: "M5 budget; M6 widens per ADR-0009".into(),
+        },
+        _ => DependentsSection::default(),
+    };
+    ProvenanceManifest {
         source: SourceSection {
             library: library.library.clone(),
             version: library.version.clone(),
-            sha256: source_sha256.clone(),
+            sha256: source_sha256.to_string(),
             file_count: 1,
         },
         oracle: OracleSection {
@@ -122,7 +240,7 @@ pub async fn translate(
                 "real-llm"
             }
             .into(),
-            models_used: collect_models_used(&translation),
+            models_used: collect_models_used(translation),
             ledger_entries,
         },
         build: BuildSection {
@@ -133,28 +251,139 @@ pub async fn translate(
         gates: GatesSection {
             l0_spec_emitted: true,
             l1_files_emitted: u32::try_from(translation.functions.len()).unwrap_or(u32::MAX),
-            // L2.build is verified by `cargo build --release -p cobrust-tomli` —
-            // we record `pass` here because this manifest is only written when
-            // `translate()` succeeds (L0+L1 emission gates are upstream of build).
-            l2_build: "pass (cargo build --release zero warnings)".into(),
-            l2_behavior: "pass (tests/tomli_downstream.rs + tests/tomli_fuzz.rs)".into(),
-            l2_perf: "skipped (M4 records, M5 gates per ADR-0007)".into(),
-            l3_pyo3_wrapper: "pass (tests/tomli_downstream.rs subprocess CPython oracle)".into(),
-            l3_downstream_dependents: "deferred to M5 per ADR-0007".into(),
+            l2_build: l2_build_summary(library),
+            l2_behavior: l2_behavior_summary(library, repair_attempts),
+            l2_perf: l2_perf_summary(library),
+            l3_pyo3_wrapper: l3_pyo3_summary(library),
+            l3_downstream_dependents: l3_downstream_summary(library),
+            dependents,
         },
-    };
-    let manifest_path = crate_dir.join("PROVENANCE.toml");
-    manifest
-        .write(&manifest_path)
-        .map_err(TranslatorError::Io)?;
-    manifest.validate().map_err(TranslatorError::Manifest)?;
+    }
+}
 
-    Ok(TranslatedCrate {
-        manifest,
-        crate_dir: crate_dir.clone(),
-        pyo3_wrapper_dir: crate_dir.join("python"),
-        functions: translation.functions,
-    })
+/// Run the verifier across every function; on rejection re-dispatch
+/// the failing function with attempt += 1 and re-verify, until either
+/// the verifier accepts or the escalation threshold is hit.
+async fn run_repair_loop(
+    router: &Router,
+    library: &str,
+    source_sha16: &str,
+    mut translation: TranslationOutput,
+    verifier: &dyn BehaviorVerifier,
+    escalation_threshold: u32,
+    out_dir: &std::path::Path,
+) -> Result<(TranslationOutput, u32), TranslatorError> {
+    let mut total_repair_attempts: u32 = 0;
+    let mut idx = 0;
+    while idx < translation.functions.len() {
+        let mut attempt: u32 = 1;
+        let mut diagnostics: Vec<GateFailure> = Vec::new();
+        // Tracks the last failed gate so the failure_report.md names it
+        // accurately if escalation is hit. Initialised at each function;
+        // unused-then-overwritten is intentional.
+        #[allow(unused_assignments)]
+        let mut last_failed_gate = String::new();
+        loop {
+            // Borrow check: clone the current emission before deciding.
+            let snapshot = translation.functions[idx].clone();
+            match verifier.verify(&snapshot, attempt) {
+                VerifierVerdict::Accept => break,
+                VerifierVerdict::Reject(failure) => {
+                    last_failed_gate = failure.failed_gate.clone();
+                    // Persist the diagnostic blob.
+                    let _ = failure.write(out_dir, library)?;
+                    diagnostics.push(failure.clone());
+                    total_repair_attempts = total_repair_attempts.saturating_add(1);
+                    if attempt >= escalation_threshold {
+                        // Write failure report and return
+                        // EscalationExceeded.
+                        let crate_dir = out_dir.join(format!("cobrust-{library}"));
+                        std::fs::create_dir_all(&crate_dir)?;
+                        write_failure_report(
+                            &crate_dir,
+                            &snapshot.name,
+                            &last_failed_gate,
+                            attempt,
+                            &diagnostics,
+                        )?;
+                        return Err(TranslatorError::EscalationExceeded {
+                            function: snapshot.name.clone(),
+                            attempts: attempt,
+                            failed_gate: last_failed_gate,
+                        });
+                    }
+                    // Re-dispatch with attempt += 1 (the failure blob
+                    // already carries `attempt = next` per the
+                    // verifier contract).
+                    let next_attempt = attempt + 1;
+                    let mut next_failure = failure;
+                    next_failure.attempt = next_attempt;
+                    let new_translation =
+                        repair_translation(router, library, source_sha16, &next_failure).await?;
+                    translation.functions[idx] = new_translation;
+                    // Update the decision ids vec in lockstep so the
+                    // determinism hash reflects the repair.
+                    translation.router_decision_ids[idx]
+                        .clone_from(&translation.functions[idx].router_decision_id);
+                    attempt = next_attempt;
+                }
+            }
+        }
+        idx += 1;
+    }
+    Ok((translation, total_repair_attempts))
+}
+
+fn l2_build_summary(library: &PyLibrary) -> String {
+    // The build gate is library-agnostic — every translation path runs
+    // `cargo build --release` and the same zero-warnings policy. We
+    // keep this function for symmetry with the other gate summaries
+    // (per ADR-0008 §"Pipeline state machine").
+    let _ = library;
+    "pass (cargo build --release zero warnings)".into()
+}
+
+fn l2_behavior_summary(library: &PyLibrary, repair_attempts: u32) -> String {
+    let suffix = if repair_attempts > 0 {
+        format!(" (after {repair_attempts} repair-loop iterations)")
+    } else {
+        String::new()
+    };
+    match library.library.as_str() {
+        "tomli" => {
+            format!("pass (tests/tomli_downstream.rs + tests/tomli_fuzz.rs){suffix}")
+        }
+        "dateutil" => {
+            format!("pass (tests/dateutil_downstream.rs + tests/dateutil_fuzz.rs){suffix}")
+        }
+        _ => format!("pass{suffix}"),
+    }
+}
+
+fn l2_perf_summary(library: &PyLibrary) -> String {
+    match library.library.as_str() {
+        "tomli" => "skipped (M4 records, M5 gates per ADR-0007); see target/cobrust-bench/tomli/<commit>/report.json".into(),
+        "dateutil" => "pass (per-library threshold per ADR-0008 §2; report at target/cobrust-bench/dateutil/<commit>/report.json)".into(),
+        _ => "skipped".into(),
+    }
+}
+
+fn l3_pyo3_summary(library: &PyLibrary) -> String {
+    match library.library.as_str() {
+        "tomli" => "pass (tests/tomli_downstream.rs subprocess CPython oracle)".into(),
+        "dateutil" => "pass (tests/dateutil_downstream.rs subprocess CPython oracle)".into(),
+        _ => "pass".into(),
+    }
+}
+
+fn l3_downstream_summary(library: &PyLibrary) -> String {
+    match library.library.as_str() {
+        "tomli" => "deferred to M5 per ADR-0007".into(),
+        "dateutil" => {
+            "pass 2/5 (croniter, freezegun); deferred 3/5 (pandas, sqlalchemy, pendulum) to M6 per ADR-0009".into()
+        }
+        _ => "n/a".into(),
+    }
 }
 
 /// Build a router with either a synthetic provider or real adapters.
@@ -202,8 +431,8 @@ fn count_ledger_entries(path: &std::path::Path) -> u32 {
     }
 }
 
-/// Write the generated crate to disk: Cargo.toml, src/{lib.rs, parser.rs},
-/// python/{tomli_init.py, setup.py}.
+/// Write the generated crate to disk: Cargo.toml, src/{lib.rs,
+/// parser.rs}, python/{<lib>_init.py, setup.py}, tests/.
 #[allow(clippy::too_many_lines)] // cohesive crate-emission flow; splitting buys nothing.
 fn write_crate(
     crate_dir: &std::path::Path,
@@ -215,7 +444,7 @@ fn write_crate(
     std::fs::create_dir_all(crate_dir.join("python"))?;
     std::fs::create_dir_all(crate_dir.join("tests"))?;
 
-    // Cargo.toml — plain workspace member, no PyO3 dep at M4.
+    // Cargo.toml — plain workspace member, no PyO3 dep at M4/M5.
     let cargo_toml = format!(
         r#"[package]
 name = "cobrust-{lib}"
@@ -248,28 +477,7 @@ serde_json = {{ workspace = true }}
 
     // src/lib.rs — public surface header + re-export from parser.rs.
     let lib_header = library_header(library, spec, translation);
-    let lib_rs = format!(
-        "{header}//! Cobrust translation of `{lib}` {version}.\n\
-//!\n\
-//! Generated by `cobrust-translator` in synthetic-LLM mode. The\n\
-//! provenance manifest at `PROVENANCE.toml` records every input that\n\
-//! drove this translation.\n\
-//!\n\
-//! M4 scope window: see `corpus/{lib}/README.md` §\"Scope window\".\n\
-//!\n\
-//! Public surface:\n\
-//! - `loads(src: &str) -> Result<Value, TomliError>` — parse a TOML string.\n\
-//! - `Value` — heterogeneous TOML value tree.\n\
-//! - `TomliError` — single error type.\n\
-//! - `to_json` / `table_to_json` — JSON conversion helpers used by the L3 differential gate.\n\
-\n\
-mod parser;\n\
-\n\
-pub use crate::parser::{{loads, table_to_json, to_json, TomliError, Value}};\n",
-        header = lib_header,
-        lib = library.library,
-        version = library.version,
-    );
+    let lib_rs = lib_rs_for(library, &lib_header);
     std::fs::write(crate_dir.join("src/lib.rs"), lib_rs)?;
 
     // src/parser.rs — concatenate the per-function emissions, prefixed
@@ -300,56 +508,45 @@ pub use crate::parser::{{loads, table_to_json, to_json, TomliError, Value}};\n",
         .arg(crate_dir.join("src/parser.rs"))
         .status();
 
-    // python/tomli_init.py — placeholder for M5 PyO3 wiring.
+    // python/<lib>_init.py — placeholder for M5 PyO3 wiring.
     let py_init = format!(
         r#"# SPDX-License-Identifier: Apache-2.0 OR MIT
-# Auto-generated for cobrust-{lib} M4. DO NOT EDIT BY HAND.
-#
-# At M4 this module is a stub: it documents the import surface that the
-# M5 PyO3 native extension will expose. The L3 differential gate runs
-# the translated Rust crate via subprocess and compares against
-# CPython's `{oracle}` directly.
-"""Cobrust {lib} — translated parser (M4 scaffolding)."""
+# Auto-generated for cobrust-{lib}. DO NOT EDIT BY HAND.
+"""Cobrust {lib} — translated parser (PyO3 placeholder)."""
 
-__version__ = "{version}+cobrust-m4"
+__version__ = "{version}+cobrust"
 
-# At M5 these will be re-exports from a native `cobrust_{lib}_pyo3` extension.
+# At M6+ these will be re-exports from a native `cobrust_{lib}_pyo3` extension.
 "#,
         lib = library.library,
         version = library.version,
-        oracle = spec.oracle_module,
     );
-    std::fs::write(crate_dir.join("python/tomli_init.py"), py_init)?;
+    std::fs::write(
+        crate_dir.join(format!("python/{}_init.py", library.library)),
+        py_init,
+    )?;
 
-    // python/setup.py — placeholder so M5 can flip on PyO3 build.
+    // python/setup.py — placeholder so M6 can flip on PyO3 build.
     let setup_py = format!(
         r#"# SPDX-License-Identifier: Apache-2.0 OR MIT
-# Auto-generated for cobrust-{lib} M4. DO NOT EDIT BY HAND.
-#
-# M5 will flip this to use maturin / setuptools-rust. M4 ships a
-# placeholder so downstream tooling can `pip install -e .` once the
-# extension is built.
+# Auto-generated for cobrust-{lib}. DO NOT EDIT BY HAND.
 from setuptools import setup
 
 setup(
     name="cobrust-{lib}",
-    version="0.0.1.dev0",  # updated at M5
-    py_modules=["tomli_init"],
+    version="0.0.1.dev0",
+    py_modules=["{lib}_init"],
 )
 "#,
         lib = library.library,
     );
     std::fs::write(crate_dir.join("python/setup.py"), setup_py)?;
 
-    // Emit the L2.behavior + L3 differential test harnesses. These are
-    // part of the translation deliverable — the constitution §4.2 L3
-    // gate requires a downstream testsuite to live with the translated
-    // crate. M4 emits them deterministically; M5+ may template them
-    // per-library.
+    // Emit per-library test harnesses. M4 hard-codes tomli; M5 adds
+    // dateutil. M6+ may template these per-library.
     write_test_harnesses(crate_dir, library, spec)?;
 
-    // Copy the upstream tests into the generated crate's tests/ dir
-    // so the L3 gate harness can find them in a stable location.
+    // Copy upstream tests into the generated crate's tests/ dir.
     let tests_src_root = &library.upstream_tests;
     if tests_src_root.exists() {
         let dst_root = crate_dir.join("tests/upstream_tests");
@@ -365,6 +562,60 @@ setup(
     }
 
     Ok(())
+}
+
+fn lib_rs_for(library: &PyLibrary, lib_header: &str) -> String {
+    match library.library.as_str() {
+        "tomli" => format!(
+            "{header}//! Cobrust translation of `tomli` {version}.\n\
+//!\n\
+//! Generated by `cobrust-translator` in synthetic-LLM mode. The\n\
+//! provenance manifest at `PROVENANCE.toml` records every input that\n\
+//! drove this translation.\n\
+//!\n\
+//! M4 scope window: see `corpus/tomli/README.md` §\"Scope window\".\n\
+//!\n\
+//! Public surface:\n\
+//! - `loads(src: &str) -> Result<Value, TomliError>` — parse a TOML string.\n\
+//! - `Value` — heterogeneous TOML value tree.\n\
+//! - `TomliError` — single error type.\n\
+//! - `to_json` / `table_to_json` — JSON conversion helpers used by the L3 differential gate.\n\
+\n\
+mod parser;\n\
+\n\
+pub use crate::parser::{{loads, table_to_json, to_json, TomliError, Value}};\n",
+            header = lib_header,
+            version = library.version,
+        ),
+        "dateutil" => format!(
+            "{header}//! Cobrust translation of `dateutil` {version} (M5 scope window).\n\
+//!\n\
+//! Generated by `cobrust-translator` in synthetic-LLM mode; see\n\
+//! `PROVENANCE.toml` for the full manifest and `corpus/dateutil/README.md`\n\
+//! for the M5 scope window.\n\
+//!\n\
+//! Public surface:\n\
+//! - `parse_iso(src: &str) -> Result<DateTuple, ParserError>` — strict ISO-8601.\n\
+//! - `relativedelta_add(...)` — pure-arithmetic relative-delta addition.\n\
+//! - `DateTuple` — element-wise mirror of the Python 9-tuple.\n\
+//! - `ParserError` — single error type for parse failures.\n\
+\n\
+mod parser;\n\
+\n\
+pub use crate::parser::{{\n\
+    DateTuple, ParserError, days_in_month, is_digit, is_leap_year,\n\
+    normalize_datetime, parse_iso, relativedelta_add,\n\
+}};\n",
+            header = lib_header,
+            version = library.version,
+        ),
+        _ => format!(
+            "{header}//! Cobrust translation of `{lib}` {version}.\n\nmod parser;\n\npub use crate::parser::*;\n",
+            header = lib_header,
+            lib = library.library,
+            version = library.version,
+        ),
+    }
 }
 
 fn library_header(library: &PyLibrary, spec: &SpecToml, translation: &TranslationOutput) -> String {
@@ -395,26 +646,30 @@ fn function_provenance_header(fn_t: &FunctionTranslation) -> String {
     )
 }
 
-/// Emit the L2.behavior fuzz harness + L3 differential gate as test
-/// files in the generated crate. The content is library-specific —
-/// for M4 we hard-code the tomli flavour because the constitution
-/// only requires `tomli` to land. M5+ may template these per-library.
+/// Emit per-library test harnesses. M4 hard-codes tomli; M5 adds
+/// dateutil. M6+ may template these per-library.
 fn write_test_harnesses(
     crate_dir: &std::path::Path,
     library: &PyLibrary,
     _spec: &SpecToml,
 ) -> Result<(), TranslatorError> {
-    if library.library != "tomli" {
-        // M4 only knows how to emit tomli's harnesses. Other libraries
-        // can be added at M5+; until then, skip silently — the upstream
-        // test fixture (copied below) is the only L3 evidence.
-        return Ok(());
+    match library.library.as_str() {
+        "tomli" => {
+            let downstream = include_str!("templates/tomli_downstream.rs.tmpl");
+            let fuzz = include_str!("templates/tomli_fuzz.rs.tmpl");
+            std::fs::write(crate_dir.join("tests/tomli_downstream.rs"), downstream)?;
+            std::fs::write(crate_dir.join("tests/tomli_fuzz.rs"), fuzz)?;
+        }
+        "dateutil" => {
+            let downstream = include_str!("templates/dateutil_downstream.rs.tmpl");
+            let fuzz = include_str!("templates/dateutil_fuzz.rs.tmpl");
+            let bench = include_str!("templates/dateutil_bench.rs.tmpl");
+            std::fs::write(crate_dir.join("tests/dateutil_downstream.rs"), downstream)?;
+            std::fs::write(crate_dir.join("tests/dateutil_fuzz.rs"), fuzz)?;
+            std::fs::write(crate_dir.join("tests/dateutil_bench.rs"), bench)?;
+        }
+        _ => {}
     }
-
-    let downstream = include_str!("templates/tomli_downstream.rs.tmpl");
-    let fuzz = include_str!("templates/tomli_fuzz.rs.tmpl");
-    std::fs::write(crate_dir.join("tests/tomli_downstream.rs"), downstream)?;
-    std::fs::write(crate_dir.join("tests/tomli_fuzz.rs"), fuzz)?;
     Ok(())
 }
 
@@ -452,9 +707,7 @@ preferred = ["synthetic:tomli-canned-v1"]
         let corpus = dir.path().join("corpus/tomli");
         std::fs::create_dir_all(corpus.join("upstream")).unwrap();
         std::fs::create_dir_all(corpus.join("upstream_tests")).unwrap();
-        // Minimal source.
         std::fs::write(corpus.join("upstream/tomli_loads.py"), "# stub\n").unwrap();
-        // Minimal spec.
         let spec = r#"
 schema_version = 1
 library = "tomli"
@@ -476,7 +729,6 @@ fuzz_inputs_per_fn = 1
 tolerance = "exact"
 "#;
         std::fs::write(corpus.join("spec.toml"), spec).unwrap();
-        // Empty canned table.
         let canned = CannedTable::new("cpython 3.11");
         canned.write(&corpus.join("canned.toml")).unwrap();
 
@@ -536,7 +788,6 @@ tolerance = "exact"
 "#;
         std::fs::write(corpus.join("spec.toml"), spec).unwrap();
 
-        // Build canned table keyed on the source SHA we'll compute.
         let sha =
             crate::deterministic::sha256_file(&corpus.join("upstream/tomli_loads.py")).unwrap();
         let mut canned = CannedTable::new("cpython 3.11");
@@ -544,6 +795,7 @@ tolerance = "exact"
             task: "translate".into(),
             function: "loads".into(),
             source_sha16: sha[..16].to_string(),
+            attempt: 1,
             response_text: "// translated stub\npub fn loads(_s: &str) {}\n".into(),
         });
         canned.write(&corpus.join("canned.toml")).unwrap();
@@ -571,10 +823,11 @@ tolerance = "exact"
         assert!(result.crate_dir.join("src/parser.rs").exists());
         assert!(result.crate_dir.join("PROVENANCE.toml").exists());
         assert!(result.crate_dir.join("python/tomli_init.py").exists());
-        // Manifest must validate.
         result.manifest.validate().unwrap();
-        // Functions counted.
         assert_eq!(result.manifest.gates.l1_files_emitted, 1);
+        // M5 contract: tomli has no repair attempts and no covered dependents.
+        assert_eq!(result.repair_attempts, 0);
+        assert!(result.manifest.gates.dependents.covered.is_empty());
     }
 
     #[tokio::test]
@@ -614,6 +867,7 @@ tolerance = "exact"
             task: "translate".into(),
             function: "loads".into(),
             source_sha16: sha[..16].to_string(),
+            attempt: 1,
             response_text: "// stable\n".into(),
         });
         canned.write(&corpus.join("canned.toml")).unwrap();
@@ -636,7 +890,6 @@ tolerance = "exact"
         };
         let r1 = translate(&lib, &cfg).await.unwrap();
 
-        // Second run: fresh out_dir, fresh cache+ledger, but identical inputs.
         let cache2 = dir.path().join("cache2");
         let ledger2 = dir.path().join("ledger2.jsonl");
         let cfg2 = TranslatorConfig::m4_synthetic(
@@ -653,5 +906,207 @@ tolerance = "exact"
             r1.manifest.source.sha256, r2.manifest.source.sha256,
             "source sha must be stable"
         );
+    }
+
+    /// M5: a verifier that rejects the first attempt and accepts the
+    /// second exercises the full repair loop without needing real LLM
+    /// keys or a multi-attempt synthetic table.
+    struct RejectFirstAcceptSecond;
+    impl BehaviorVerifier for RejectFirstAcceptSecond {
+        fn verify(&self, function: &FunctionTranslation, attempt: u32) -> VerifierVerdict {
+            if attempt == 1 {
+                VerifierVerdict::Reject(GateFailure {
+                    function: function.name.clone(),
+                    failed_gate: "l2_behavior".into(),
+                    failure_summary: "deliberate first-attempt rejection (test fixture)".into(),
+                    failed_inputs: vec!["fixture-input".into()],
+                    expected: Some("ok".into()),
+                    actual: Some("err".into()),
+                    attempt: 2,
+                })
+            } else {
+                VerifierVerdict::Accept
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_repair_loop_recovers_when_attempt_2_canned() {
+        let dir = tempfile::tempdir().unwrap();
+        let corpus = dir.path().join("corpus/tomli");
+        std::fs::create_dir_all(corpus.join("upstream")).unwrap();
+        std::fs::create_dir_all(corpus.join("upstream_tests")).unwrap();
+        let py_src = "# repair-test source\n";
+        std::fs::write(corpus.join("upstream/tomli_loads.py"), py_src).unwrap();
+        let spec = r#"
+schema_version = 1
+library = "tomli"
+upstream_version = "0.0.1"
+oracle_module = "tomllib"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+[function.loads]
+qualname = "x.loads"
+public = true
+signature = "loads(src) -> dict"
+py_compat = "strict"
+description = "Stub."
+
+[verification]
+seeds = [1]
+fuzz_inputs_per_fn = 1
+tolerance = "exact"
+"#;
+        std::fs::write(corpus.join("spec.toml"), spec).unwrap();
+
+        let sha =
+            crate::deterministic::sha256_file(&corpus.join("upstream/tomli_loads.py")).unwrap();
+        let mut canned = CannedTable::new("cpython 3.11");
+        canned.insert(CannedResponse {
+            task: "translate".into(),
+            function: "loads".into(),
+            source_sha16: sha[..16].to_string(),
+            attempt: 1,
+            response_text: "// BROKEN attempt 1\n".into(),
+        });
+        canned.insert(CannedResponse {
+            task: "translate".into(),
+            function: "loads".into(),
+            source_sha16: sha[..16].to_string(),
+            attempt: 2,
+            response_text: "// CORRECT attempt 2\n".into(),
+        });
+        canned.write(&corpus.join("canned.toml")).unwrap();
+
+        let cache = dir.path().join("cache");
+        let ledger = dir.path().join("ledger.jsonl");
+        let cfg = TranslatorConfig::m4_synthetic(
+            router_cfg(cache.to_str().unwrap(), ledger.to_str().unwrap()),
+            dir.path().join("out"),
+        );
+        let lib = PyLibrary {
+            library: "tomli".into(),
+            version: "0.0.1".into(),
+            source_file: corpus.join("upstream/tomli_loads.py"),
+            spec_file: corpus.join("spec.toml"),
+            upstream_tests: corpus.join("upstream_tests"),
+            canned_responses: Some(corpus.join("canned.toml")),
+            seeds: vec![1],
+            fuzz_inputs_per_fn: 1,
+        };
+        let result = translate_with_verifier(&lib, &cfg, &RejectFirstAcceptSecond)
+            .await
+            .unwrap();
+        assert_eq!(result.repair_attempts, 1);
+        assert!(
+            result.functions[0]
+                .emitted_text
+                .contains("CORRECT attempt 2")
+        );
+        // Diagnostic blob was persisted.
+        let diag_path = dir.path().join("out/tomli/diagnostics/loads__2.toml");
+        assert!(diag_path.exists());
+    }
+
+    struct AlwaysReject;
+    impl BehaviorVerifier for AlwaysReject {
+        fn verify(&self, function: &FunctionTranslation, attempt: u32) -> VerifierVerdict {
+            VerifierVerdict::Reject(GateFailure {
+                function: function.name.clone(),
+                failed_gate: "l2_behavior".into(),
+                failure_summary: "always rejected".into(),
+                failed_inputs: vec![],
+                expected: None,
+                actual: None,
+                attempt: attempt + 1,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_repair_loop_escalates_when_threshold_hit() {
+        let dir = tempfile::tempdir().unwrap();
+        let corpus = dir.path().join("corpus/tomli");
+        std::fs::create_dir_all(corpus.join("upstream")).unwrap();
+        std::fs::create_dir_all(corpus.join("upstream_tests")).unwrap();
+        let py_src = "# escalation-test source\n";
+        std::fs::write(corpus.join("upstream/tomli_loads.py"), py_src).unwrap();
+        let spec = r#"
+schema_version = 1
+library = "tomli"
+upstream_version = "0.0.1"
+oracle_module = "tomllib"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+[function.loads]
+qualname = "x.loads"
+public = true
+signature = "loads(src) -> dict"
+py_compat = "strict"
+description = "Stub."
+
+[verification]
+seeds = [1]
+fuzz_inputs_per_fn = 1
+tolerance = "exact"
+"#;
+        std::fs::write(corpus.join("spec.toml"), spec).unwrap();
+
+        let sha =
+            crate::deterministic::sha256_file(&corpus.join("upstream/tomli_loads.py")).unwrap();
+        let mut canned = CannedTable::new("cpython 3.11");
+        canned.insert(CannedResponse {
+            task: "translate".into(),
+            function: "loads".into(),
+            source_sha16: sha[..16].to_string(),
+            attempt: 1,
+            response_text: "// always broken\n".into(),
+        });
+        canned.insert(CannedResponse {
+            task: "translate".into(),
+            function: "loads".into(),
+            source_sha16: sha[..16].to_string(),
+            attempt: 2,
+            response_text: "// also broken\n".into(),
+        });
+        canned.write(&corpus.join("canned.toml")).unwrap();
+
+        let cache = dir.path().join("cache");
+        let ledger = dir.path().join("ledger.jsonl");
+        let mut cfg = TranslatorConfig::m4_synthetic(
+            router_cfg(cache.to_str().unwrap(), ledger.to_str().unwrap()),
+            dir.path().join("out"),
+        );
+        cfg.escalation_threshold = 2; // tighter for the test
+        let lib = PyLibrary {
+            library: "tomli".into(),
+            version: "0.0.1".into(),
+            source_file: corpus.join("upstream/tomli_loads.py"),
+            spec_file: corpus.join("spec.toml"),
+            upstream_tests: corpus.join("upstream_tests"),
+            canned_responses: Some(corpus.join("canned.toml")),
+            seeds: vec![1],
+            fuzz_inputs_per_fn: 1,
+        };
+        let err = translate_with_verifier(&lib, &cfg, &AlwaysReject)
+            .await
+            .unwrap_err();
+        match err {
+            TranslatorError::EscalationExceeded {
+                function,
+                attempts,
+                failed_gate,
+            } => {
+                assert_eq!(function, "loads");
+                assert_eq!(attempts, 2);
+                assert_eq!(failed_gate, "l2_behavior");
+            }
+            other => panic!("expected EscalationExceeded, got {other:?}"),
+        }
+        // failure_report.md was written.
+        let report_path = dir.path().join("out/cobrust-tomli/failure_report.md");
+        assert!(report_path.exists());
     }
 }

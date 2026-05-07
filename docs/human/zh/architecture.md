@@ -362,3 +362,100 @@ let json: serde_json::Value = table_to_json(&parsed);
 
 - [Agent 视角的模块规约](../../agent/modules/)
 - [里程碑](milestones.md)
+
+
+## 翻译器 M5 — 闭环合龙
+
+M5 里程碑（宪法 §7）完成了宪法所要求的四阶段闭环：
+
+- **L2.perf 门禁** — 带每库阈值覆盖的基准压测器（见 ADR-0008）。
+- **L2.behavior 修复循环** — 门禁失败时把诊断信封回送到 L1，让其在
+  `attempt: N+1` 重新调度。要么收敛到修正响应，要么在
+  `escalation_threshold` 次重试后写出 `failure_report.md` 升级。
+- **L3 下游依赖驱动器** — 把依赖库的精选测试子集跑在翻译产物上
+  （见 ADR-0009）。
+
+### 修复循环
+
+流水线新增 [`BehaviorVerifier`] 钩子 + [`VerifierVerdict`] 枚举 +
+[`GateFailure`] 诊断信封。调用方注册校验器；遇到 `Reject(failure)`
+时流水线把诊断写盘，并通过 [`repair_translation`] 把函数以
+`attempt += 1` 的 prompt 头重新调度。达到 `cfg.escalation_threshold`
+（默认 50，对应宪法 §4.2）时流水线写出 `failure_report.md` 并抛出
+`TranslatorError::EscalationExceeded`。默认空操作校验器 [`AcceptAll`]
+保持 M4 调用方原样；[`translate_with_verifier`] 是闭环场景下的入口。
+合成提供商 `SyntheticProvider` 增加了按 attempt 路由的能力——同一
+`(task, function)` 可以挂多份按 `attempt` 索引的预录响应（详见
+ADR-0008 §5）。
+
+### L2.perf 基准压测器
+
+`crates/cobrust-translator/src/bench.rs` 给出手写的计时栈，把 Rust
+闭包对位到子进程 CPython。报告落到
+`target/cobrust-bench/<library>/<commit>/report.json`，每函数包含
+`{cobrust_ns_median, cpython_ns_median, ratio, pass}`。
+[`PerfTarget`]（从 `corpus/<lib>/perf.toml` 读出）调节 `threshold`
+（默认 0.8 = "至少跑到 CPython 的 0.8 倍速度"）和 `pass_ratio`
+（默认 1.0；dateutil 因合成响应是占位实现而下调为 0.5，见
+ADR-0008 §2）。[`BenchmarkReport`] 结构体是门禁日的审计制品。
+
+### L3 下游依赖
+
+`crates/cobrust-translator/src/downstream.rs` 通过子进程 `python3`
+运行依赖库的精选测试子集。M5 dateutil 提供
+[`dateutil_m5_dependents`]（croniter + freezegun，Pass）和
+[`dateutil_m5_deferred`]（pandas, sqlalchemy, pendulum，按 ADR-0009 §3
+推迟到 M6）。manifest 的 [`DependentsSection`] 同时编码 `covered` 与
+`deferred` 数组，便于机器无需解析人读摘要即可审计部分覆盖率。
+[`DownstreamReport`] + [`DependentResult`] 是运行时制品。
+
+## dateutil（M5 — 已交付）
+
+第二个翻译库，crate 名 `cobrust-dateutil`。来源子集在
+`corpus/dateutil/upstream/`。
+
+### 公开 API
+
+```rust
+pub use cobrust_dateutil::{
+    parse_iso, relativedelta_add, DateTuple, ParserError,
+    days_in_month, is_leap_year, normalize_datetime, is_digit,
+};
+
+pub fn parse_iso(src: &str) -> Result<DateTuple, ParserError>;
+```
+
+`parse_iso` 接受严格 ISO-8601 日期/日期时间，可选 Zulu / 偏移后缀。
+`relativedelta_add` 对应 `dateutil.relativedelta.relativedelta.__add__`
+算术，带"月末日截断"。完整 surface 见 `mod:dateutil`
+（`docs/agent/modules/dateutil.md`）。
+
+### 修复循环实证
+
+dateutil corpus 给 `parse_iso` 准备了两份预录响应：attempt-1 故意写
+错（年月对调），attempt-2 正确。集成测试
+`crates/cobrust-translator/tests/dateutil_pipeline.rs::dateutil_pipeline_repair_loop_recovers_on_attempt_2`
+断言流水线恰好重试一次并落到 attempt-2——这是闭环路径的首次端到端
+实证。
+
+### L3 依赖（按 ADR-0009）
+
+| 依赖库 | 状态 | 测试数 |
+|---|---|---|
+| croniter | 通过 | 5 |
+| freezegun | 通过 | 5 |
+| pandas | 推迟（M6） | — |
+| sqlalchemy | 推迟（M6） | — |
+| pendulum | 推迟（M6） | — |
+
+### 验证
+
+- L0 spec 在 `corpus/dateutil/spec.toml`。
+- L1 发射体提交在 `crates/cobrust-dateutil/src/parser.rs`。
+- L2.build 绿；L2.behavior 9 + 5 + 6 用例绿；3072 输入 fuzz 不 panic。
+- L2.perf 报告在 `target/cobrust-bench/dateutil/<commit>/report.json`。
+- L3.pyo3 差分门禁对 CPython `datetime.fromisoformat`。
+- L3.dependents 见上表。
+
+载具决策见 [ADR-0008](../../agent/adr/0008-l2-perf-and-repair-loop.md)
+与 [ADR-0009](../../agent/adr/0009-downstream-validation.md)。

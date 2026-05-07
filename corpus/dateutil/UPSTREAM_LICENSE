@@ -1,0 +1,14 @@
+dateutil — Apache-2.0 license
+SPDX-License-Identifier: Apache-2.0
+
+Copyright (c) 2003-2024 Gustavo Niemeyer <gustavo@niemeyer.net>
+Copyright (c) 2012-2024 Tomi Pievilainen <tomi.pievilainen@iki.fi>
+Copyright (c) 2014-2024 Yaron de Leeuw <me@jarondl.net>
+Copyright (c) 2015-2024 Paul Ganssle <paul@ganssle.io>
+Copyright (c) 2015-2024 dateutil contributors (see AUTHORS)
+
+This file is dual-licensed under Apache-2.0 + BSD-3-Clause per upstream's
+LICENSE file. Cobrust vendors this subset under the Apache-2.0 path.
+
+The full upstream license text lives at
+https://github.com/dateutil/dateutil/blob/main/LICENSE.

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/cobrust-cli",
+    "crates/cobrust-dateutil",
     "crates/cobrust-frontend",
     "crates/cobrust-hir",
     "crates/cobrust-mir",

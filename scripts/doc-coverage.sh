@@ -57,6 +57,7 @@ expected_modules=(
     llm-router
     tomli
     translator
+    dateutil
 )
 
 for mod in "${expected_modules[@]}"; do
@@ -264,4 +265,86 @@ if grep -q '^- \*\*M4 — delivered.\*\*' "docs/agent/modules/translator.md"; th
     [[ -d corpus/tomli/upstream_tests ]] || fail "corpus/tomli/upstream_tests missing"
 fi
 
-echo "doc-coverage: M0 + M1 + M2 + M4 checks passed"
+# --- 9. M5 translator + dateutil surface coverage ---------------------------
+# When the translator module declares M5 delivered, every public surface
+# term + the repair-loop contract + the perf-gate contract + the
+# downstream-dependents contract must appear in all three doc trees.
+
+m5_translator_terms=(
+    "translate_with_verifier"
+    "BehaviorVerifier"
+    "VerifierVerdict"
+    "GateFailure"
+    "EscalationExceeded"
+    "BenchmarkReport"
+    "PerfTarget"
+    "DownstreamReport"
+    "DependentsSection"
+    "repair_translation"
+    "failure_report.md"
+    "ADR-0008"
+    "ADR-0009"
+)
+
+m5_translator_files=(
+    "docs/agent/modules/translator.md"
+    "docs/human/en/architecture.md"
+    "docs/human/zh/architecture.md"
+)
+
+if grep -q '^- \*\*M5 — delivered.\*\*' "docs/agent/modules/translator.md"; then
+    for term in "${m5_translator_terms[@]}"; do
+        for f in "${m5_translator_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M5 translator surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    m5_dateutil_terms=(
+        "parse_iso"
+        "relativedelta_add"
+        "DateTuple"
+        "ParserError"
+    )
+    m5_dateutil_files=(
+        "docs/agent/modules/dateutil.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m5_dateutil_terms[@]}"; do
+        for f in "${m5_dateutil_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M5 dateutil surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_eight="docs/agent/adr/0008-l2-perf-and-repair-loop.md"
+    [[ -f "$adr_eight" ]] || fail "ADR-0008 (L2.perf + repair loop) is required for M5"
+    if ! grep -q '^status: accepted$' "$adr_eight"; then
+        fail "ADR-0008 must be 'status: accepted' for M5 to be done"
+    fi
+    adr_nine="docs/agent/adr/0009-downstream-validation.md"
+    [[ -f "$adr_nine" ]] || fail "ADR-0009 (downstream validation) is required for M5"
+    if ! grep -q '^status: accepted$' "$adr_nine"; then
+        fail "ADR-0009 must be 'status: accepted' for M5 to be done"
+    fi
+
+    # PROVENANCE.toml must exist on the generated dateutil crate.
+    if [[ -d crates/cobrust-dateutil ]]; then
+        [[ -f crates/cobrust-dateutil/PROVENANCE.toml ]] \
+            || fail "crates/cobrust-dateutil/PROVENANCE.toml missing"
+    fi
+
+    # Corpus directory layout per ADR-0007 (extended for M5 dependents).
+    [[ -f corpus/dateutil/spec.toml ]] || fail "corpus/dateutil/spec.toml missing"
+    [[ -f corpus/dateutil/canned_llm_responses.toml ]] || fail "corpus/dateutil/canned_llm_responses.toml missing"
+    [[ -d corpus/dateutil/upstream ]] || fail "corpus/dateutil/upstream missing"
+    [[ -d corpus/dateutil/upstream_tests ]] || fail "corpus/dateutil/upstream_tests missing"
+    [[ -d corpus/dateutil/dependents/croniter ]] || fail "corpus/dateutil/dependents/croniter missing"
+    [[ -d corpus/dateutil/dependents/freezegun ]] || fail "corpus/dateutil/dependents/freezegun missing"
+    [[ -f corpus/dateutil/perf.toml ]] || fail "corpus/dateutil/perf.toml missing"
+fi
+
+echo "doc-coverage: M0 + M1 + M2 + M4 + M5 checks passed"
