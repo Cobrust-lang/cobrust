@@ -4,7 +4,7 @@ adr_id: 0018
 title: M7.5 random — Generator type, PCG64 backend, seed semantics, distribution surface, KS-test acceptance gate
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: f10af13fc92ba7918f47b1f973a9f374d64c1f1b
 supersedes: []
 superseded_by: []
 ---

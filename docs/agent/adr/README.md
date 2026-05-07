@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: TBD
+last_verified_commit: f10af13fc92ba7918f47b1f973a9f374d64c1f1b
 ---
 
 # Architecture Decision Records
