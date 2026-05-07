@@ -4,7 +4,7 @@ adr_id: 0009
 title: L3 downstream-dependents validation — corpus, scope, and partial coverage policy
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: 8c477b4
 supersedes: []
 superseded_by: []
 ---
