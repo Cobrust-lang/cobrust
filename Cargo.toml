@@ -10,6 +10,7 @@ members = [
     "crates/cobrust-codegen",
     "crates/cobrust-llm-router",
     "crates/cobrust-msgpack",
+    "crates/cobrust-pkg",
     "crates/cobrust-tomli",
     "crates/cobrust-numpy",
     "crates/cobrust-stdlib",
@@ -68,6 +69,9 @@ reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], defau
 sha2 = "0.10"
 blake3 = "1.5"
 hex = "0.4"
+semver = "1"
+flate2 = "1"
+tar = "0.4"
 
 [profile.release]
 lto = "thin"

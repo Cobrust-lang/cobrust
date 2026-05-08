@@ -138,8 +138,8 @@ enum RawDependency {
 impl Manifest {
     /// Parse + validate a `cobrust.toml` string.
     pub fn parse_str(contents: &str) -> Result<Self, PkgError> {
-        let raw: RawManifest = toml::from_str(contents)
-            .map_err(|e| ManifestError::TomlParse(format!("{e}")))?;
+        let raw: RawManifest =
+            toml::from_str(contents).map_err(|e| ManifestError::TomlParse(format!("{e}")))?;
 
         // Reject if this looks like an LLM-router config (M3 ADR-0004).
         // Per ADR-0026 §B (Option C namespace collision).
@@ -209,7 +209,10 @@ impl Manifest {
                     out.push_str(", ");
                 }
                 first = false;
-                out.push_str(&format!("\"{}\"", a.replace('\\', "\\\\").replace('"', "\\\"")));
+                out.push_str(&format!(
+                    "\"{}\"",
+                    a.replace('\\', "\\\\").replace('"', "\\\"")
+                ));
             }
             out.push_str("]\n");
         }
@@ -236,10 +239,16 @@ impl Manifest {
             }
         }
         if let Some(b) = &self.bin {
-            out.push_str(&format!("\n[bin]\nname = \"{}\"\npath = \"{}\"\n", b.name, b.path));
+            out.push_str(&format!(
+                "\n[bin]\nname = \"{}\"\npath = \"{}\"\n",
+                b.name, b.path
+            ));
         }
         if let Some(l) = &self.lib {
-            out.push_str(&format!("\n[lib]\nname = \"{}\"\npath = \"{}\"\n", l.name, l.path));
+            out.push_str(&format!(
+                "\n[lib]\nname = \"{}\"\npath = \"{}\"\n",
+                l.name, l.path
+            ));
         }
         for t in &self.tests {
             out.push_str(&format!(
@@ -317,10 +326,10 @@ fn lower_dependency(name: &str, raw: RawDependency) -> Result<Dependency, PkgErr
                 }));
             }
             if let Some(p) = path {
-                if version.is_some() || git.is_some() {
+                if version.is_some() || git.is_some() || registry.is_some() {
                     return Err(PkgError::Manifest(ManifestError::InvalidDependency {
                         name: name.to_string(),
-                        reason: "path source cannot be combined with version/git".into(),
+                        reason: "path source cannot be combined with version/git/registry".into(),
                     }));
                 }
                 DependencySpec::Path {
@@ -333,7 +342,7 @@ fn lower_dependency(name: &str, raw: RawDependency) -> Result<Dependency, PkgErr
                 })?;
                 DependencySpec::Git { url: g, rev: r }
             } else {
-                let v = version.unwrap();
+                let v = version.expect("checked: at least one of version/path/git is set");
                 let req = VersionReq::parse(&v).map_err(|e| ManifestError::InvalidDependency {
                     name: name.to_string(),
                     reason: format!("invalid semver req `{v}`: {e}"),
@@ -377,6 +386,7 @@ fn validate_version(name: &str, version: &str) -> Result<(), PkgError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -439,7 +449,10 @@ cache_dir = ".cobrust/llm_cache"
 kind = "anthropic"
 "#;
         let err = Manifest::parse_str(toml_str).unwrap_err();
-        assert!(matches!(err, PkgError::Manifest(ManifestError::IsRouterConfig)));
+        assert!(matches!(
+            err,
+            PkgError::Manifest(ManifestError::IsRouterConfig)
+        ));
     }
 
     #[test]
@@ -466,7 +479,10 @@ name = "1bad"
 path = "src/main.cb"
 "#;
         let err = Manifest::parse_str(toml_str).unwrap_err();
-        assert!(matches!(err, PkgError::Manifest(ManifestError::InvalidName(_))));
+        assert!(matches!(
+            err,
+            PkgError::Manifest(ManifestError::InvalidName(_))
+        ));
     }
 
     #[test]
@@ -481,7 +497,10 @@ name = "ok"
 path = "src/main.cb"
 "#;
         let err = Manifest::parse_str(toml_str).unwrap_err();
-        assert!(matches!(err, PkgError::Manifest(ManifestError::InvalidVersion { .. })));
+        assert!(matches!(
+            err,
+            PkgError::Manifest(ManifestError::InvalidVersion { .. })
+        ));
     }
 
     #[test]
@@ -513,7 +532,9 @@ path = "src/main.cb"
 
     #[test]
     fn looks_like_user_crate_no() {
-        assert!(!Manifest::looks_like_user_crate("[router]\ndefault_strategy=\"x\""));
+        assert!(!Manifest::looks_like_user_crate(
+            "[router]\ndefault_strategy=\"x\""
+        ));
     }
 
     #[test]
@@ -577,7 +598,10 @@ name = "c_lib"
 path = "src/lib.cb"
 "#;
         let err = Manifest::parse_str(toml_str).unwrap_err();
-        assert!(matches!(err, PkgError::Manifest(ManifestError::ConflictingPaths { .. })));
+        assert!(matches!(
+            err,
+            PkgError::Manifest(ManifestError::ConflictingPaths { .. })
+        ));
     }
 
     #[test]
