@@ -832,6 +832,32 @@ if grep -q '^- \*\*M7.6 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
         for f in "${m7_6_numpy_files[@]}"; do
             if ! grep -q -F "${term}" "$f"; then
                 fail "M7.6 numpy surface term '${term}' missing from ${f}"
+
+# --- 17. M8 MIR surface coverage --------------------------------------------
+# When the mir module declares M8 delivered, the MIR surface terms +
+# ADR-0020 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M8 — delivered.\*\*' "docs/agent/modules/mir.md"; then
+    m8_mir_terms=(
+        "lower"
+        "Module"
+        "Body"
+        "BasicBlock"
+        "Terminator"
+        "Place"
+        "Rvalue"
+        "Operand"
+        "MirError"
+    )
+    m8_mir_files=(
+        "docs/agent/modules/mir.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m8_mir_terms[@]}"; do
+        for f in "${m8_mir_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M8 mir surface term '${term}' missing from ${f}"
             fi
         done
     done
@@ -913,3 +939,14 @@ if [[ -f "docs/agent/adr/0021-m7-6-numpy-expansion.md" ]]; then
 fi
 
 echo "doc-coverage: M7.6 expansion surface checks passed"
+
+# --- M8 MIR shape (ADR-0020) -------------------------------------------------
+if [[ -f "docs/agent/adr/0020-m8-mir-shape.md" ]]; then
+    adr_twenty="docs/agent/adr/0020-m8-mir-shape.md"
+    if ! grep -q '^status: accepted$' "$adr_twenty"; then
+        fail "ADR-0020 must be 'status: accepted' for M8 to be done"
+    fi
+fi
+
+echo "doc-coverage: M8 MIR surface checks passed"
+

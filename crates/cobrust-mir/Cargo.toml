@@ -14,3 +14,10 @@ description = "Cobrust MIR (mid-level IR) — control-flow-explicit form for cod
 workspace = true
 
 [dependencies]
+cobrust-frontend = { path = "../cobrust-frontend" }
+cobrust-hir = { path = "../cobrust-hir" }
+cobrust-types = { path = "../cobrust-types" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = "1.5"
