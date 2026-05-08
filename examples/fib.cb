@@ -1,0 +1,21 @@
+# Fibonacci — M11 example.
+#
+# Source-level intent (the algorithm, what the user writes):
+#
+#   fn fib(n: i64) -> i64:
+#       if n < 2:
+#           return n
+#       return fib(n - 1) + fib(n - 2)
+#
+#   fn main() -> i64:
+#       print(std.fmt.format_int(fib(10)))
+#       return 0
+#
+# At M11 codegen end-to-end recursion (Constant::FnRef Call lowering)
+# is M11.x scope per ADR-0025 §"Codegen amendments" Constant::FnRef
+# row; this .cb prints the canonical fib(10) result as a literal so
+# the example demonstrates the M11 codegen surface (Constant::Str
+# materialization through the runtime ABI).
+fn main() -> i64:
+    print("fib(10) = 55")
+    return 0

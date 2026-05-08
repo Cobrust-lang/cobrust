@@ -1,0 +1,17 @@
+# cat — M11 example (concatenate stdin to stdout).
+#
+# Source-level intent:
+#
+#   import std.io
+#
+#   fn main() -> i64:
+#       contents = std.io.read_file(std.env.args().get(1))
+#       print(contents)
+#       return 0
+#
+# Per ADR-0025 §"Examples (binding)" cat.cb leans on the runtime
+# ABI; the .cb source is the M11 stub. Integration test exercises
+# std.io.read_file end-to-end.
+fn main() -> i64:
+    print("cat M11 stub — see stdlib_examples integration test")
+    return 0

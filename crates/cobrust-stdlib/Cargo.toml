@@ -1,0 +1,30 @@
+[package]
+name = "cobrust-stdlib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Cobrust standard library — io / collections / string / math / panic / env / fmt + runtime ABI per ADR-0025."
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+
+[lints]
+workspace = true
+
+[features]
+default = ["mimalloc-alloc"]
+# Default: mimalloc as the global allocator (per ADR-0025 §G).
+mimalloc-alloc = ["dep:mimalloc"]
+# Opt-out: use the system allocator (libc malloc on Linux/macOS).
+system-alloc = []
+
+[dependencies]
+mimalloc = { version = "0.1", optional = true, default-features = false }
+
+[dev-dependencies]
+tempfile = "3"

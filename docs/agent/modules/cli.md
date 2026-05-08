@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:cli
 crate: cobrust-cli
-last_verified_commit: 39941cf
+last_verified_commit: f758260
 dependencies: [mod:frontend, mod:hir, mod:types, mod:mir, mod:codegen, mod:translator]
 ---
 
@@ -54,9 +54,9 @@ pub const TRANSLATOR_BASE: u8 = 100;
 pub const TRANSLATOR_MAX: u8 = 127;
 ```
 
-### Hello-world contract
+### Hello-world contract (M10 → M11 supersession)
 
-`examples/hello.cb` is the canonical M10 program:
+`examples/hello.cb` remains the canonical hello-world:
 
 ```cobrust
 fn main() -> i64:
@@ -64,28 +64,37 @@ fn main() -> i64:
     return 0
 ```
 
-Per ADR-0024 §"Hello-world contract":
+**M11 status (ADR-0025 §"Print-intrinsic lift")**: the M10 narrowing
+to the literal `"hello, world"` is **lifted**. The CLI's
+`build::intrinsics::rewrite_print` pass now accepts any string-literal
+argument; the runtime symbol is `__cobrust_println` (provided by
+`cobrust-stdlib::io`); codegen materializes the literal payload via
+the `.rodata` interning path (ADR-0025 §"Codegen amendments"
+Constant::Str row).
 
-1. The CLI prepends a synthetic prelude declaring `fn print(s: str) -> i64`
-   so the source type-checks.
-2. After `mir_lower`, the CLI's `build::intrinsics::rewrite_print` pass:
-   - finds Call terminators whose callee local-name is `"print"`,
-   - validates the literal argument is exactly `"hello, world"` (M11 widens),
-   - rewrites the `func` operand to `Constant::Str("__cobrust_println_static")`,
-   - clears the args (the runtime helper is zero-arg at M10),
-   - drops the print stub Body from the module.
-3. `cobrust_codegen::emit` (with the M10 amendment in
-   `cranelift_backend.rs`) declares `__cobrust_println_static` as an
-   imported symbol and emits a real Cranelift `call` to it.
-4. The CLI's link step invokes `cc <user>.o <runtime>.o -o <out>`,
-   linking the object emitted from `crates/cobrust-cli/runtime/m10_runtime.c`.
-5. Running the linked executable prints `hello, world\n` to stdout
-   and exits 0.
+The end-to-end pipeline at M11:
 
-The runtime helper at `crates/cobrust-cli/runtime/m10_runtime.c`
-implements `void __cobrust_println_static(void)` via `write(2)`. M11
-stdlib (`std.io.println`) supersedes by lifting string emission into
-codegen with a real `(*const u8, usize)` runtime ABI.
+1. The CLI prepends `fn print(s: str) -> i64` so the source type-checks.
+2. After `mir_lower`, `build::intrinsics::rewrite_print`:
+   - finds Call terminators whose callee resolves to a `print` Body,
+   - rewrites the `func` operand to `Constant::Str("__cobrust_println")`,
+   - **preserves** the literal arg so codegen can extract it,
+   - drops the prelude `print` stub Body.
+3. `cobrust_codegen::emit` declares `__cobrust_println` as an imported
+   symbol with `(*const u8, usize)` signature, interns the literal
+   payload as a `.rodata` data symbol, and emits a real Cranelift call
+   passing `(ptr, len)`.
+4. Codegen exports the user's `main` as `_cobrust_user_main`; the
+   linker step pulls in the C runtime shim
+   (`crates/cobrust-cli/runtime/cobrust_main.c`) which provides the
+   platform `int main(int, char**)`, captures argv into the stdlib
+   runtime, and dispatches to `_cobrust_user_main`.
+5. The link step invokes
+   `cc <user>.o <cobrust_main>.o <libcobrust_stdlib.a> -o <out>`
+   (plus `-lpthread -ldl -lm` on Linux for std + mimalloc).
+6. Running the linked executable prints `hello, world\n` to stdout
+   and exits 0. The same pipeline accepts any `print(<literal>)`
+   callsite — `examples/fizzbuzz.cb` exercises this.
 
 ### Package config skeleton
 

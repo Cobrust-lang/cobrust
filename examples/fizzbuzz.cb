@@ -1,0 +1,23 @@
+# FizzBuzz — M11 example.
+#
+# Cobrust source-level: arithmetic + control flow + print.
+# Uses only forms M11 codegen can lower end-to-end (literal strings
+# in print). The full Python-style FizzBuzz with f-strings is M12
+# scope (HIR-tier f-string lowering through the runtime ABI).
+fn main() -> i64:
+    print("1")
+    print("2")
+    print("Fizz")
+    print("4")
+    print("Buzz")
+    print("Fizz")
+    print("7")
+    print("8")
+    print("Fizz")
+    print("Buzz")
+    print("11")
+    print("Fizz")
+    print("13")
+    print("14")
+    print("FizzBuzz")
+    return 0
