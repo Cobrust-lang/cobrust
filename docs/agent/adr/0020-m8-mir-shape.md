@@ -4,7 +4,7 @@ adr_id: 0020
 title: M8 MIR — node families, terminator taxonomy, drop schedule, borrow-check obligations
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: ed07cf0
 supersedes: []
 superseded_by: []
 dependencies: [adr:0003, adr:0005, adr:0006, adr:0019]

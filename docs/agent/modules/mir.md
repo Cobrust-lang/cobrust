@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:mir
 crate: cobrust-mir
-last_verified_commit: TBD
+last_verified_commit: ed07cf0
 dependencies: [mod:hir, mod:types, adr:0020]
 ---
 
