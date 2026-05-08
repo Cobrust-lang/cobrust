@@ -1,0 +1,4 @@
+# L2.perf threshold for cobrust-click, per ADR-0022 §6 (surface-
+# translate / Rust-binding tier — 0.8× default).
+threshold = 0.8
+pass_ratio = 1.0

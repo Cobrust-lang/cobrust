@@ -1,0 +1,69 @@
+# L0 spec for cobrust-requests, per ADR-0007 §1 + ADR-0022 §1.
+# Pinned upstream: requests 2.31.0 (Apache-2.0).
+# Oracle runtime: cpython 3.11 + the corpus upstream subset at
+# `corpus/requests/upstream/requests_subset.py`.
+
+schema_version = 1
+library = "requests"
+upstream_version = "2.31.0"
+oracle_runtime = "cpython 3.11"
+oracle_module = "requests"
+
+[function.get]
+signature = "fn(url: &str) -> Result<Response, HttpError>"
+py_compat = "semantic"
+notes = "Stateless GET. Routes invalid-URL errors to HttpErrorKind::InvalidUrl; reqwest::blocking::Client failures route to Network/Timeout/DecodeBody."
+
+[function.post]
+signature = "fn(url: &str, body: &[u8]) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[function.put]
+signature = "fn(url: &str, body: &[u8]) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[function.patch]
+signature = "fn(url: &str, body: &[u8]) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[function.delete]
+signature = "fn(url: &str) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[function.head]
+signature = "fn(url: &str) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[function."Session::new"]
+signature = "fn() -> Session"
+py_compat = "semantic"
+notes = "Persistent connection pool via reqwest::blocking::Client::builder()."
+
+[function."Session::get"]
+signature = "fn(&self, url: &str) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[function."Session::post"]
+signature = "fn(&self, url: &str, body: &[u8]) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[function."Session::put"]
+signature = "fn(&self, url: &str, body: &[u8]) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[function."Session::patch"]
+signature = "fn(&self, url: &str, body: &[u8]) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[function."Session::delete"]
+signature = "fn(&self, url: &str) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[function."Session::head"]
+signature = "fn(&self, url: &str) -> Result<Response, HttpError>"
+py_compat = "semantic"
+
+[invariants]
+url_parse_routes_to_invalid_url = "any URL that fails reqwest::Url::parse must produce HttpErrorKind::InvalidUrl"
+non_http_scheme_is_invalid = "schemes other than http/https are rejected (no FTP/file/etc fallback)"
+ok_method_is_2xx = "Response::ok() == (200..300).contains(status_code)"

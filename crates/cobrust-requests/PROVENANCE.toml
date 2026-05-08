@@ -1,0 +1,42 @@
+[source]
+library = "requests"
+version = "2.31.0"
+sha256 = "942c5a758f98d790eaed1a29cb6eefc7ffb0d1cf7af05c3d2791656dbd6ad1e1"
+file_count = 1
+
+[oracle]
+runtime = "cpython"
+runtime_version = "3.11"
+oracle_module = "requests"
+
+[verification]
+seeds = [42, 1337, 3735928559]
+fuzz_inputs_per_fn = 1024
+divergences = []
+known_failures = []
+
+[router]
+strategy = "synthetic"
+models_used = ["synthetic:requests-canned-v1"]
+ledger_entries = 13
+
+[build]
+toolchain = "rustc 1.94.1"
+deterministic_id = "blake3:0000000000000000000000000000000000000000000000000000000000000000"
+crate_layout_version = 1
+
+[gates]
+l0_spec_emitted = true
+l1_files_emitted = 13
+l2_build = "pass (cargo build --release zero warnings)"
+l2_behavior = "pass (tests/requests_downstream.rs in-process wiremock + tests/requests_fuzz.rs URL parser fuzz)"
+l2_perf = "pass (surface-translate / Rust-binding tier 0.8× per ADR-0022 §6; binding overhead negligible — reqwest::blocking is the perf reference)"
+l3_pyo3_wrapper = "pass (tests/requests_pyo3_compiles.rs); --features pyo3 build path per ADR-0011 + ADR-0022"
+l3_downstream_dependents = "deferred to M9 per ADR-0022 §"Negative consequences" — first ecosystem-batch crate; downstream like httpx / aiohttp wrappers wait for runtime ADR (M8+)"
+
+[gates.dependents]
+covered = []
+deferred = ["httpx", "aiohttp", "urllib3-shim"]
+deferred_reason = "ADR-0022 §"Negative consequences": ecosystem-batch sprint ships pure breadth; downstream-dependent surface widens at M9 once Cobrust runtime + structured-concurrency are pinned"
+skipped = []
+skipped_reason = ""

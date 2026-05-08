@@ -40,6 +40,12 @@ flowchart TD
 | `cobrust-codegen` | LLVM / Cranelift 后端 | M3+ |
 | `cobrust-llm-router` | LLM Router | M3 |
 | `cobrust-translator` | AI 翻译子系统 | M4+ |
+| `cobrust-tomli` | 翻译产物 `tomli` (Apache-2.0/MIT) | M4 |
+| `cobrust-dateutil` | 翻译产物 `dateutil`（PSF/Apache）— L3 由 ADR-0022 拓宽到 5/5 | M5（M-batch 闭合 5/5） |
+| `cobrust-msgpack` | 翻译产物 `msgpack-python`（Apache-2.0）— L3 由 ADR-0022 拓宽到 3/3 | M6（M-batch 闭合 3/3） |
+| `cobrust-numpy` | 翻译产物 `numpy` 核心子集（BSD） | M7.0..M7.5 |
+| `cobrust-requests` | 翻译产物 `requests` 2.31（Apache-2.0）— surface-translate / reqwest-blocking-bind 按 ADR-0022 §2 | M-batch（ADR-0022） |
+| `cobrust-click` | 翻译产物 `click` 8.1.7（BSD-3-Clause）— 装饰器链 → clap-derive 按 ADR-0022 §3 | M-batch（ADR-0022） |
 
 ## 前端（M1 — 已交付）
 
@@ -1231,3 +1237,64 @@ pub enum NumpyErrorKind {
 
 按 [ADR-0018](../../agent/adr/0018-m7-5-random.md)
 查看承重决策。
+
+
+## 生态批量翻译（ADR-0022 — 已交付）
+
+按 ADR-0022 的生态批量冲刺**新增两个翻译产物**（`cobrust-requests`、
+`cobrust-click`），同时关闭 `cobrust-dateutil`（现 5/5）与
+`cobrust-msgpack`（现 3/3）剩余的 L3 依赖缝隙。这次冲刺**只增广度**、
+不增编译器内部新能力——证明 Cobrust 翻译流水线可以从 M5/M6/M7
+数值层塔扩展到"典型 Python CLI 工具"栈（HTTP + CLI 解析）。
+
+### `cobrust-requests` — HTTP 客户端
+
+把 `requests` 2.31.0 的公共面翻译到 `reqwest::blocking::Client` 上。
+宪法 §2.2 禁止 async/sync 函数染色；这个 crate 公共面保持同步，配
+ADR-0019 Phase E（M8+）落地的 Cobrust 结构化并发运行时——届时可换
+后端而不破坏调用者。公共面：6 个自由动词函数（`get / post / put /
+patch / delete / head`）+ `Session` 同样的六个方法 + `Response` 提供
+`.status_code / .ok / .headers / .text / .json / .bytes`。统一错误
+类型 `HttpError { kind: HttpErrorKind, message: String }`，4 个闭合
+变体（`InvalidUrl / Network / Timeout / DecodeBody`）。 `HttpMethod` 枚举（`Get / Post / Put / Patch / Delete / Head`）闭合动词分类。
+
+L3 差分门禁在随机本地端口起一个进程内 HTTP/1.1 wiremock，把
+cobrust-requests 的动词函数派发上去；网络可达时附带跑一次
+`httpbin.org` 烟雾测试。
+
+### `cobrust-click` — CLI 解析
+
+把 `click` 8.1.7 的公共面翻译到 `clap = "4"` 上。按 ADR-0022 §3，
+翻译挑战是**装饰器链 → 流式 builder** 映射：`@click.command(name=...)`
+→ `Command::new(name)`，`@click.option('--flag', type=int)` →
+`OptionSpec::new("flag").type_(ParamType::Int)`，etc.
+
+公共面：`Command::new(name).about(help).option(opt).argument(arg).run(argv)`
+返回 `RunResult`，提供 `.option(name) / .argument(name)` 访问器。 `OptionSpec` 与 `ArgumentSpec` 是每个 option / 位置参数对应的 builder。
+统一错误类型 `ClickError { kind: ClickErrorKind, message: String }`，
+4 个闭合变体（`UsageError / MissingOption / MissingArgument /
+InvalidValue`）。使用 clap 的 `error-context` feature 走
+`ContextKind::InvalidArg` 把 missing-required 错误正确路由到
+MissingOption 或 MissingArgument。
+
+### L3 闭合（ADR-0022 §4）
+
+ADR-0010 §5 留下两道 L3 依赖门禁未关：
+
+- **dateutil → pendulum**：M6 vendored 子集发出
+  `Skipped { reason: "tz module out of M5/M6 scope" }`。M-batch 的
+  vendoring 替换为**非 tz** 子集，覆盖 pendulum 的
+  `relativedelta`-backed `Period` 算术——完全在 M5+ dateutil 范围内。
+  结果：dateutil L3 达到 **5/5**。
+- **msgpack → pyspark**：M6 vendored 子集发出
+  `Deferred { reason: "needs JVM" }`。M-batch 的 vendoring 替换为
+  **非 JVM** 子集，把
+  `pyspark.serializers.MsgPackSerializer`-style 的标量 / bytes
+  payload 模式跑过 M6 msgpack 公共面。结果：msgpack L3 达到
+  **3/3**。
+
+按 ADR-0022 §6 引入新的每库阈值层级——**surface-translate /
+Rust-binding** 层（0.8×，宪法默认值；与纯 Python 同档）。原生扩展
+层（0.7×，ADR-0010 §3）与数值层（0.5×，ADR-0010 §3 + ADR-0014）
+保持独立。
+

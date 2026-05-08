@@ -1,0 +1,216 @@
+# Synthetic-LLM canned response table for cobrust-click.
+# Per ADR-0007 §4 + ADR-0022 §5 + ADR-0010 §"Synthetic provider".
+
+schema_version = 1
+oracle_runtime = "cpython 3.11"
+
+[[entry]]
+task = "translate"
+function = "Command::new"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl Command {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), about: None, options: Vec::new(), arguments: Vec::new() }
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Command::about"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl Command {
+    pub fn about(mut self, help: impl Into<String>) -> Self {
+        self.about = Some(help.into());
+        self
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Command::option"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl Command {
+    pub fn option(mut self, opt: OptionSpec) -> Self {
+        self.options.push(opt);
+        self
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Command::argument"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl Command {
+    pub fn argument(mut self, arg: ArgumentSpec) -> Self {
+        self.arguments.push(arg);
+        self
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Command::run"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+// Lowers the recorded decorator-stack to clap = "4" + dispatches.
+// Fluent builder names are leaked to satisfy clap's &'static str
+// bound (CLI names live for program lifetime).
+'''
+
+[[entry]]
+task = "translate"
+function = "OptionSpec::new"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl OptionSpec {
+    pub fn new(long: impl Into<String>) -> Self {
+        let raw = long.into();
+        let stripped = raw.trim_start_matches('-').to_string();
+        Self {
+            name: stripped,
+            short: None,
+            param_type: ParamType::Str,
+            default: None,
+            help: None,
+            required: false,
+        }
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "OptionSpec::short"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl OptionSpec {
+    pub fn short(mut self, short: impl Into<String>) -> Self {
+        let raw = short.into();
+        let stripped = raw.trim_start_matches('-').to_string();
+        self.short = Some(format!("-{stripped}"));
+        self
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "OptionSpec::type_"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl OptionSpec {
+    pub fn type_(mut self, p: ParamType) -> Self {
+        self.param_type = p;
+        self
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "OptionSpec::default"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl OptionSpec {
+    pub fn default(mut self, value: impl Into<String>) -> Self {
+        self.default = Some(value.into());
+        self
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "OptionSpec::help"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl OptionSpec {
+    pub fn help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "OptionSpec::required"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl OptionSpec {
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "ArgumentSpec::new"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl ArgumentSpec {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), param_type: ParamType::Str, required: true }
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "ArgumentSpec::type_"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl ArgumentSpec {
+    pub fn type_(mut self, p: ParamType) -> Self {
+        self.param_type = p;
+        self
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "ArgumentSpec::optional"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl ArgumentSpec {
+    pub fn optional(mut self) -> Self {
+        self.required = false;
+        self
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "RunResult::option"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl RunResult {
+    pub fn option(&self, name: &str) -> Option<&str> {
+        self.options.get(name).map(String::as_str)
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "RunResult::argument"
+source_sha16 = "ca9853ad459e787e"
+response_text = '''
+impl RunResult {
+    pub fn argument(&self, name: &str) -> Option<&str> {
+        self.arguments.get(name).map(String::as_str)
+    }
+}
+'''

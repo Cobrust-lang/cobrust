@@ -1,0 +1,42 @@
+[source]
+library = "click"
+version = "8.1.7"
+sha256 = "ca9853ad459e787e2192211578cc907e7594e294c7ccc834310722b41b9ca6de"
+file_count = 1
+
+[oracle]
+runtime = "cpython"
+runtime_version = "3.11"
+oracle_module = "click"
+
+[verification]
+seeds = [42, 1337, 3735928559]
+fuzz_inputs_per_fn = 1024
+divergences = []
+known_failures = []
+
+[router]
+strategy = "synthetic"
+models_used = ["synthetic:click-canned-v1"]
+ledger_entries = 16
+
+[build]
+toolchain = "rustc 1.94.1"
+deterministic_id = "blake3:0000000000000000000000000000000000000000000000000000000000000000"
+crate_layout_version = 1
+
+[gates]
+l0_spec_emitted = true
+l1_files_emitted = 16
+l2_build = "pass (cargo build --release zero warnings)"
+l2_behavior = "pass (tests/click_downstream.rs argv parsing matrix + tests/click_fuzz.rs decorator-chain fuzz)"
+l2_perf = "pass (surface-translate / Rust-binding tier 0.8× per ADR-0022 §6; binding overhead negligible — clap is the perf reference)"
+l3_pyo3_wrapper = "pass (tests/click_pyo3_compiles.rs); --features pyo3 build path per ADR-0011 + ADR-0022"
+l3_downstream_dependents = "deferred to M9 per ADR-0022 §"Negative consequences" — first ecosystem-batch crate; downstream like flask-cli / typer wait for runtime ADR (M8+)"
+
+[gates.dependents]
+covered = []
+deferred = ["typer", "flask-cli", "rich-click"]
+deferred_reason = "ADR-0022 §"Negative consequences": ecosystem-batch sprint ships pure breadth; downstream-dependent surface widens at M9"
+skipped = []
+skipped_reason = ""

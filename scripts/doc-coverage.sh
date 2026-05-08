@@ -14,6 +14,9 @@
 # - M5 extends to mod:dateutil + ADR-0008 + ADR-0009.
 # - M6 (this revision) extends to mod:msgpack + ADR-0010 + ADR-0011 +
 #   the Cython shim + PerfVerifier surface + dateutil L3 widening.
+# - ADR-0022 (M-batch) extends to mod:requests + mod:click + the
+#   surface-translate / Rust-binding tier (0.8x) + dateutil L3 5/5
+#   + msgpack L3 3/3 closures.
 #
 # See `docs/agent/conventions.md` and constitution `CLAUDE.md` §3.
 
@@ -62,6 +65,8 @@ expected_modules=(
     translator
     dateutil
     msgpack
+    requests
+    click
 )
 
 for mod in "${expected_modules[@]}"; do
@@ -761,3 +766,92 @@ if grep -q '^- \*\*M7.5 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
 fi
 
 echo "doc-coverage: M7.5 random surface checks passed"
+# --- 17. ADR-0022 ecosystem-batch coverage --------------------------------
+# When the requests module declares M-batch delivered, the public-surface
+# terms + ADR-0022 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M-batch — delivered.\*\*' "docs/agent/modules/requests.md"; then
+    mb_requests_terms=(
+        "Session"
+        "Response"
+        "HttpError"
+        "HttpErrorKind"
+        "HttpMethod"
+        "reqwest"
+        "ADR-0022"
+    )
+    mb_requests_files=(
+        "docs/agent/modules/requests.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${mb_requests_terms[@]}"; do
+        for f in "${mb_requests_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M-batch requests surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_22="docs/agent/adr/0022-translation-ecosystem-batch.md"
+    [[ -f "$adr_22" ]] || fail "ADR-0022 (translation ecosystem batch) is required for M-batch"
+    if ! grep -q '^status: accepted$' "$adr_22"; then
+        fail "ADR-0022 must be 'status: accepted' for M-batch to be done"
+    fi
+
+    [[ -f corpus/requests/spec.toml ]] || fail "corpus/requests/spec.toml missing"
+    [[ -f corpus/requests/canned_llm_responses.toml ]] || fail "corpus/requests/canned_llm_responses.toml missing"
+    [[ -d corpus/requests/upstream ]] || fail "corpus/requests/upstream missing"
+    [[ -d corpus/requests/upstream_tests ]] || fail "corpus/requests/upstream_tests missing"
+    [[ -d corpus/requests/harness ]] || fail "corpus/requests/harness missing"
+    [[ -f corpus/requests/perf.toml ]] || fail "corpus/requests/perf.toml missing"
+
+    if [[ -d crates/cobrust-requests ]]; then
+        [[ -f crates/cobrust-requests/PROVENANCE.toml ]]             || fail "crates/cobrust-requests/PROVENANCE.toml missing"
+    fi
+fi
+
+if grep -q '^- \*\*M-batch — delivered.\*\*' "docs/agent/modules/click.md"; then
+    mb_click_terms=(
+        "Command"
+        "OptionSpec"
+        "ArgumentSpec"
+        "RunResult"
+        "ClickError"
+        "ParamType"
+        "clap"
+        "ADR-0022"
+    )
+    mb_click_files=(
+        "docs/agent/modules/click.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${mb_click_terms[@]}"; do
+        for f in "${mb_click_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M-batch click surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    [[ -f corpus/click/spec.toml ]] || fail "corpus/click/spec.toml missing"
+    [[ -f corpus/click/canned_llm_responses.toml ]] || fail "corpus/click/canned_llm_responses.toml missing"
+    [[ -d corpus/click/upstream ]] || fail "corpus/click/upstream missing"
+    [[ -d corpus/click/upstream_tests ]] || fail "corpus/click/upstream_tests missing"
+    [[ -d corpus/click/harness ]] || fail "corpus/click/harness missing"
+    [[ -f corpus/click/perf.toml ]] || fail "corpus/click/perf.toml missing"
+
+    if [[ -d crates/cobrust-click ]]; then
+        [[ -f crates/cobrust-click/PROVENANCE.toml ]]             || fail "crates/cobrust-click/PROVENANCE.toml missing"
+    fi
+
+    # Verify the L3 closure files exist with non-skipped pendulum + non-deferred pyspark.
+    [[ -d corpus/dateutil/dependents/pendulum ]] || fail "corpus/dateutil/dependents/pendulum missing"
+    [[ -f corpus/dateutil/dependents/pendulum/test_pendulum_subset.py ]]         || fail "pendulum subset missing"
+    [[ -d corpus/msgpack/dependents/pyspark ]] || fail "corpus/msgpack/dependents/pyspark missing (M-batch closure)"
+    [[ -f corpus/msgpack/dependents/pyspark/test_pyspark_subset.py ]]         || fail "pyspark subset missing (M-batch closure)"
+fi
+
+echo "doc-coverage: ADR-0022 ecosystem-batch surface checks passed"
+

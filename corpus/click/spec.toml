@@ -1,0 +1,83 @@
+# L0 spec for cobrust-click, per ADR-0007 §1 + ADR-0022 §1.
+# Pinned upstream: click 8.1.7 (BSD-3-Clause).
+# Oracle runtime: cpython 3.11 + the corpus upstream subset at
+# `corpus/click/upstream/click_subset.py`.
+
+schema_version = 1
+library = "click"
+upstream_version = "8.1.7"
+oracle_runtime = "cpython 3.11"
+oracle_module = "click"
+
+[function."Command::new"]
+signature = "fn(name: impl Into<String>) -> Self"
+py_compat = "semantic"
+notes = "Mirrors @click.command(name=...). Decorator chain → fluent builder per ADR-0022 §3."
+
+[function."Command::about"]
+signature = "fn(self, help: impl Into<String>) -> Self"
+py_compat = "semantic"
+
+[function."Command::option"]
+signature = "fn(self, opt: OptionSpec) -> Self"
+py_compat = "semantic"
+
+[function."Command::argument"]
+signature = "fn(self, arg: ArgumentSpec) -> Self"
+py_compat = "semantic"
+
+[function."Command::run"]
+signature = "fn(&self, argv: I) -> Result<RunResult, ClickError>"
+py_compat = "semantic"
+notes = "Lowers the recorded decorator-stack to clap = \"4\" + dispatches; first argv element is program name."
+
+[function."OptionSpec::new"]
+signature = "fn(long: impl Into<String>) -> Self"
+py_compat = "semantic"
+
+[function."OptionSpec::short"]
+signature = "fn(self, short: impl Into<String>) -> Self"
+py_compat = "semantic"
+
+[function."OptionSpec::type_"]
+signature = "fn(self, p: ParamType) -> Self"
+py_compat = "semantic"
+
+[function."OptionSpec::default"]
+signature = "fn(self, value: impl Into<String>) -> Self"
+py_compat = "semantic"
+
+[function."OptionSpec::help"]
+signature = "fn(self, help: impl Into<String>) -> Self"
+py_compat = "semantic"
+
+[function."OptionSpec::required"]
+signature = "fn(self) -> Self"
+py_compat = "semantic"
+
+[function."ArgumentSpec::new"]
+signature = "fn(name: impl Into<String>) -> Self"
+py_compat = "semantic"
+
+[function."ArgumentSpec::type_"]
+signature = "fn(self, p: ParamType) -> Self"
+py_compat = "semantic"
+
+[function."ArgumentSpec::optional"]
+signature = "fn(self) -> Self"
+py_compat = "semantic"
+
+[function."RunResult::option"]
+signature = "fn(&self, name: &str) -> Option<&str>"
+py_compat = "semantic"
+
+[function."RunResult::argument"]
+signature = "fn(&self, name: &str) -> Option<&str>"
+py_compat = "semantic"
+
+[invariants]
+unknown_option_is_usage_error = "argv with --foo where foo is not a registered option produces ClickErrorKind::UsageError"
+required_missing_routes_to_missing = "missing required option/argument routes to ClickErrorKind::MissingOption or ::MissingArgument"
+type_mismatch_routes_to_invalid_value = "values that fail Int/Float parsing route to ClickErrorKind::InvalidValue"
+default_resolves_when_omitted = "an option with a default value returns that default when omitted from argv"
+short_long_are_equivalent = "OptionSpec::short(\"v\") + omitted long → -v sets the same value as the long form"
