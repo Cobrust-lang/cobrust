@@ -27,6 +27,7 @@ cobrust-mir = { path = "../cobrust-mir" }
 cobrust-pkg = { path = "../cobrust-pkg" }
 cobrust-translator = { path = "../cobrust-translator" }
 cobrust-types = { path = "../cobrust-types" }
+rustyline = "14"
 target-lexicon = "0.13"
 thiserror = { workspace = true }
 tokio = { workspace = true }
