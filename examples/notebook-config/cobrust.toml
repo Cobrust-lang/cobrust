@@ -1,0 +1,11 @@
+[package]
+name = "cobrust-notebook-config"
+version = "0.1.0"
+cobrust-version = "0.0.1"
+description = "Tiny TOML-flavored config helper used by the M12 notebook example. Translated-library-shaped: ships a PROVENANCE.toml that the M12 lockfile pipeline picks up as `provenance_hash`."
+license = "Apache-2.0 OR MIT"
+authors = ["The Cobrust Project"]
+
+[lib]
+name = "cobrust_notebook_config"
+path = "src/lib.cb"

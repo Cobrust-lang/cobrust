@@ -68,6 +68,7 @@ expected_modules=(
     requests
     click
     stdlib
+    pkg
 )
 
 for mod in "${expected_modules[@]}"; do
@@ -1097,3 +1098,61 @@ if grep -q '^- \*\*M11 — delivered.\*\*' "docs/agent/modules/stdlib.md"; then
 fi
 
 echo "doc-coverage: M11 stdlib + runtime surface checks passed"
+
+# --- 22. M12 package format surface coverage -------------------------------
+# When the pkg module declares M12 delivered, the M12 binding surface
+# terms + ADR-0026 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M12 — delivered.\*\*' "docs/agent/modules/pkg.md"; then
+    m12_pkg_terms=(
+        "cobrust.toml"
+        "cobrust.lock"
+        "[package]"
+        "[dependencies]"
+        "[bin]"
+        "[lib]"
+        "[[test]]"
+        "blake3"
+        "content-addressed"
+        "manifest_hash"
+        "lockfile_version"
+        "provenance_hash"
+        "ADR-0026"
+    )
+    m12_pkg_files=(
+        "docs/agent/modules/pkg.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m12_pkg_terms[@]}"; do
+        for f in "${m12_pkg_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M12 pkg surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_26="docs/agent/adr/0026-m12-package-format.md"
+    [[ -f "$adr_26" ]] || fail "ADR-0026 (M12 package format) is required for M12"
+    if ! grep -q '^status: accepted$' "$adr_26"; then
+        fail "ADR-0026 must be 'status: accepted' for M12 to be done"
+    fi
+
+    # M12 binding done-means: pkg crate exists with the seven binding modules.
+    [[ -d crates/cobrust-pkg ]] || fail "crates/cobrust-pkg missing"
+    for mod in error manifest lockfile resolver registry sources tarball; do
+        [[ -f "crates/cobrust-pkg/src/${mod}.rs" ]] \
+            || fail "crates/cobrust-pkg/src/${mod}.rs missing"
+    done
+
+    # M12 binding done-means: notebook example exists + has ≥ 3 modules.
+    [[ -d examples/notebook ]] || fail "examples/notebook missing (ADR-0019 line 3)"
+    [[ -f examples/notebook/cobrust.toml ]] || fail "examples/notebook/cobrust.toml missing"
+    [[ -f examples/notebook/src/main.cb ]] || fail "examples/notebook/src/main.cb missing"
+    notebook_module_count=$(find examples/notebook/src -name '*.cb' | wc -l | tr -d ' ')
+    if [[ "$notebook_module_count" -lt 3 ]]; then
+        fail "examples/notebook/src has only ${notebook_module_count} .cb modules; ADR-0019 requires ≥ 3"
+    fi
+fi
+
+echo "doc-coverage: M12 package format surface checks passed"

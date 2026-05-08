@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:cli
 crate: cobrust-cli
-last_verified_commit: f758260
-dependencies: [mod:frontend, mod:hir, mod:types, mod:mir, mod:codegen, mod:translator]
+last_verified_commit: b0b69d0
+dependencies: [mod:frontend, mod:hir, mod:types, mod:mir, mod:codegen, mod:translator, mod:pkg]
 ---
 
 # Module: cli
@@ -19,6 +19,12 @@ end-to-end driver and ships the M10 hello-world contract.
 - **M10 — delivered.** ADR-0024 binds the subcommand registry, exit-code
   scheme, runtime-helper contract for hello-world, and `[package]`
   placeholder for the `cobrust.toml` collision deferred to ADR-0025 (M12).
+- **M11 — delivered.** ADR-0025 lifts the print-intrinsic to accept any
+  string literal (via `cobrust-stdlib::io::println` runtime helper).
+- **M12 — delivered.** ADR-0026 wires `cobrust build` / `cobrust test`
+  to a manifest-aware package-mode driver (`mod:cli::pkg_build`) and
+  adds `cobrust add <dep>` for in-place manifest editing. `cobrust new`
+  scaffolds the full ADR-0026 schema (not the M10 placeholder).
 
 ## Public surface (M10)
 
@@ -31,13 +37,14 @@ ADR-0024 §"Subcommand contracts":
 
 | Subcommand | Argv shape | Outputs (success) | Exit codes |
 |---|---|---|---|
-| `cobrust build <file.cb> [-o <out>] [--emit obj\|exe] [--release] [--target <triple>]` | one input file | object or executable | 0/1/2/3 |
+| `cobrust build [<file-or-dir>] [-o <out>] [--emit obj\|exe] [--release] [--target <triple>]` | optional input path | object or executable | 0/1/2/3 |
 | `cobrust run <file.cb> [--release] [--target <triple>]` | one input file | invokes the linked exe | 0/1/2/3/4 |
 | `cobrust check <file.cb>` | one input file | "ok" on success | 0/1/2 |
 | `cobrust fmt <file.cb> [--check]` | one input file | rewrite or diff exit | 0/1/2/5 |
 | `cobrust translate <library> [--out-dir <dir>]` | a library name (under `corpus/<lib>/`) | `cobrust-<lib>` crate | 0/1/100..127 |
-| `cobrust new <name> [--path <dir>]` | a package name | scaffolds package | 0/1 |
-| `cobrust test [--quiet]` | (none) | summary + per-test verdict | 0/1/2/3/6 |
+| `cobrust new <name> [--path <dir>]` | a package name | scaffolds full ADR-0026 package | 0/1 |
+| `cobrust test [--quiet]` | (none) | summary + per-test verdict (manifest-aware) | 0/1/2/3/6 |
+| `cobrust add <name> [--path PATH \| --git URL --rev REV \| --version REQ] [--dev]` | a dep name + source | appends to nearest `cobrust.toml` | 0/1 |
 | `cobrust repl` | (none) | M14 stub message | 1 |
 
 ### Exit-code constants
@@ -98,7 +105,7 @@ The end-to-end pipeline at M11:
 
 ### Package config skeleton
 
-`cobrust new my_app` writes:
+**M12 (ADR-0026)**: `cobrust new my_app` writes the full schema:
 
 ```toml
 # my_app/cobrust.toml
@@ -106,12 +113,47 @@ The end-to-end pipeline at M11:
 name = "my_app"
 version = "0.1.0"
 cobrust-version = "0.0.1"
+description = "A Cobrust package."
+license = "Apache-2.0 OR MIT"
+
+[dependencies]
+
+[bin]
+name = "my_app"
+path = "src/main.cb"
+
+[[test]]
+name = "smoke"
+path = "tests/smoke.cb"
 ```
 
-The `[package]` table is the only schema M10 owns. ADR-0025 (M12) adds
-`[dependencies]`, `[bin]/[lib]/[test]`. The namespace is disjoint from
-the M3 LLM-router config (`[router]`, `[providers.*]`, `[routing.*]`),
-so the shared filename does not collide today.
+The namespace is disjoint from the M3 LLM-router config (`[router]`,
+`[providers.*]`, `[routing.*]`); ADR-0026 §B Option C closes the
+ambiguity by rejecting on cross-load (a `[router]`-only file rejects
+as `ManifestError::IsRouterConfig`; a `[package]`-bearing file is a
+user crate).
+
+### Package-mode build / test (M12)
+
+`cobrust build` (no `.cb` argument, or a directory argument) walks up
+to the nearest `cobrust.toml` and dispatches to
+`mod:cli::pkg_build::run_build`:
+
+1. `cobrust_pkg::find_manifest(cwd)` — walk up.
+2. `cobrust_pkg::load_manifest(path)` — parse + validate.
+3. `cobrust_pkg::Registry::open_default()` — open
+   `~/.cobrust/registry/`.
+4. `cobrust_pkg::resolve_and_lock(&manifest, &workspace_root, &registry)`
+   — resolve deps + emit canonical lockfile.
+5. `cobrust_pkg::save_lockfile(&lock, &workspace_root.join("cobrust.lock"))`
+   — atomic write.
+6. `mod:cli::build::build(&[bin].path, ...)` — invoke the M11 single-file
+   pipeline on the bin (or lib) source.
+
+`cobrust test` (any cwd with a manifest reachable upward) walks the
+manifest's `[[test]]` array, builds + invokes each entry, and
+collates pass/fail counts. The M11 dir-walking fallback engages only
+when no manifest is reachable.
 
 ## Invariants
 

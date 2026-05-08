@@ -331,6 +331,7 @@ dependencies = [
  "cobrust-hir",
  "cobrust-llm-router",
  "cobrust-mir",
+ "cobrust-pkg",
  "cobrust-translator",
  "cobrust-types",
  "target-lexicon 0.13.5",
@@ -451,6 +452,22 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "cobrust-pkg"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "flate2",
+ "hex",
+ "semver",
+ "serde",
+ "tar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

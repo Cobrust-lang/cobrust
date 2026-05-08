@@ -35,11 +35,13 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+mod add;
 mod build;
 mod check;
 mod exit_codes;
 mod fmt;
 mod new;
+mod pkg_build;
 mod repl;
 mod run;
 mod test_runner;
@@ -59,10 +61,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Compile a `.cb` source file to an object or executable.
+    /// Compile a `.cb` source file or a package (when omitted, walks up to the
+    /// nearest `cobrust.toml`) to an object or executable.
     Build {
-        /// Input `.cb` file.
-        file: PathBuf,
+        /// Input `.cb` file or package directory. Omit to detect a package
+        /// from the current working directory.
+        file: Option<PathBuf>,
         /// Output path (defaults to `target/cobrust/<basename>{,.o}`).
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -131,6 +135,26 @@ enum Command {
     },
     /// Interactive REPL (M14 stub).
     Repl,
+    /// Add a dependency to the nearest `cobrust.toml` (M12).
+    Add {
+        /// Dependency name (must match the manifest schema).
+        name: String,
+        /// Path source: `cobrust add <name> --path ../foo`.
+        #[arg(long, conflicts_with_all = ["git", "version"])]
+        path: Option<PathBuf>,
+        /// Git source: `cobrust add <name> --git URL --rev REV`.
+        #[arg(long, requires = "rev", conflicts_with_all = ["path", "version"])]
+        git: Option<String>,
+        /// Git revision (used with --git).
+        #[arg(long)]
+        rev: Option<String>,
+        /// Registry version: `cobrust add <name> --version 1.2`.
+        #[arg(long, conflicts_with_all = ["path", "git"])]
+        version: Option<String>,
+        /// Add to `[dev-dependencies]` instead of `[dependencies]`.
+        #[arg(long)]
+        dev: bool,
+    },
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -158,14 +182,26 @@ fn main() -> ExitCode {
             release,
             target,
             quiet,
-        } => build::run(
-            &file,
-            output.as_deref(),
-            emit.into(),
-            release,
-            target.as_deref(),
-            quiet,
-        ),
+        } => match file {
+            // M11 single-file mode: explicit `.cb` argument.
+            Some(p) if p.is_file() && p.extension().is_some_and(|e| e == "cb") => build::run(
+                &p,
+                output.as_deref(),
+                emit.into(),
+                release,
+                target.as_deref(),
+                quiet,
+            ),
+            // M12 package mode: directory or no argument → walk for cobrust.toml.
+            other => pkg_build::run_build(
+                other.as_deref(),
+                output.as_deref(),
+                emit.into(),
+                release,
+                target.as_deref(),
+                quiet,
+            ),
+        },
         Command::Run {
             file,
             release,
@@ -182,6 +218,21 @@ fn main() -> ExitCode {
         Command::New { name, path } => new::run(&name, path.as_deref()),
         Command::Test { quiet } => test_runner::run(quiet),
         Command::Repl => repl::run(),
+        Command::Add {
+            name,
+            path,
+            git,
+            rev,
+            version,
+            dev,
+        } => add::run(
+            &name,
+            path.as_deref(),
+            git.as_deref(),
+            rev.as_deref(),
+            version.as_deref(),
+            dev,
+        ),
     };
     ExitCode::from(code)
 }

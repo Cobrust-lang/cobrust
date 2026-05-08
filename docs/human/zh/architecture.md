@@ -1614,3 +1614,167 @@ ADR-0019 §"Definition of usable for most projects" 钉住了三行验收线：
 
 
 **M11 源级路径（M12+ 用户撰写的表面）**：`std.io.println`、`std.io.print`、`std.io.read_line`、`std.io.read_file`、`std.io.write_file`、`std.collections.List`、`std.collections.Dict`、`std.collections.Set`、`std.string.format`、`std.string.split`、`std.string.find`、`std.string.replace`、`std.string.lower`、`std.string.upper`、`std.math.sqrt`、`std.math.pow`、`std.math.PI`、`std.math.E`、`std.panic.panic`、`std.panic.assert`、`std.env.args`、`std.env.var`、`std.fmt.format_int`、`std.fmt.format_float`、`std.fmt.format_bool`、`std.fmt.format_str`。
+
+### M12 — 包格式 + 依赖解析 + 内容寻址注册表（依据 ADR-0026）
+
+`cobrust-pkg` crate（M12）落地宪法 §2.2 的绑定交付物的包格式部分：
+
+> `__init__.py` / sys.path / packaging chaos → **单一规范包格式，content-addressed，统一工具**
+
+ADR-0019 §"M12" 钉住了里程碑范围：用户 crate 拥有 `cobrust.toml` 声明 `name`、`version`、`dependencies`、`[bin]` / `[lib]`、`[[test]]`。`cobrust build` 将 `dependencies` 解析为 `~/.cobrust/registry/blake3/<hash>/` 下的 content-addressed 缓存。确定性：相同输入 → 同一份 `cobrust.lock` 字节级一致。
+
+#### Manifest schema（绑定）
+
+```toml
+[package]
+name = "my_app"                          # 必填；[a-zA-Z][a-zA-Z0-9_-]*
+version = "0.1.0"                        # 必填；semver
+cobrust-version = "0.0.1"                # 必填；M12 锁定为 0.0.1
+authors = ["Alice <alice@example.com>"]  # 可选
+license = "Apache-2.0 OR MIT"            # 可选
+description = "Short description"        # 可选
+
+[dependencies]
+cobrust-tomli = { path = "../cobrust-tomli" }                     # 路径源
+my_lib       = { git = "https://...", rev = "abc123" }            # git 源
+serde-like   = "1.2"                                              # 注册表源（M12 stub）
+
+[dev-dependencies]
+test_helpers = { path = "./test_helpers" }
+
+[bin]
+name = "my_app"
+path = "src/main.cb"
+
+[lib]
+name = "my_app_lib"
+path = "src/lib.cb"
+
+[[test]]
+name = "smoke"
+path = "tests/smoke.cb"
+```
+
+**校验规则**（由 `cobrust_pkg::Manifest::parse_str` 执行）：
+
+- `package.name` 匹配 `^[a-zA-Z][a-zA-Z0-9_-]*$`，≤ 64 字符。
+- `package.version` 是有效 semver（`semver::Version::parse`）。
+- `package.cobrust-version` 在 M12 必填，锁定为 `0.0.1`。
+- 依赖值是以下之一：bare-string semver `"X.Y.Z"`；表 `{ path = ... }`；表 `{ git = ..., rev = ... }`；表 `{ version = ..., registry = ... }`。互斥。
+- `[bin]` / `[lib]` 至少一个（ADR-0026 §A.1：M12 单 bin / 单 lib）。
+- `[bin].path == [lib].path` 拒绝（`ConflictingPaths`）。
+- 仅有 `[router]` 而无 `[package]` → `IsRouterConfig`（Option C 命名空间处理）。
+
+#### Lockfile schema（绑定）
+
+```toml
+# cobrust.lock — 由 `cobrust build` 自动生成。请勿编辑。
+# 确定性契约：ADR-0026 §C。
+
+[metadata]
+manifest_hash = "blake3:<hex>"
+lockfile_version = 1
+
+[[package]]
+name = "cobrust-tomli"
+version = "2.0.1"
+source = "path+file:///abs/path/to/cobrust-tomli"
+hash = "blake3:39e9e2d3..."
+provenance_hash = "blake3:39e9e2d3..."     # ADR-0007 chain-of-custody
+dependencies = ["serde-like 1.2.3"]
+
+[[package]]
+name = "my_app"
+version = "0.1.0"
+source = "path+file:///abs/path/to/my_app"
+hash = "blake3:root"
+dependencies = ["cobrust-tomli 2.0.1"]
+```
+
+**确定性契约**（ADR-0026 §C）：
+
+- 一切由 BTreeMap 支撑（Rust 的 BTreeMap 按 key 排序迭代；HashMap 不会）。
+- `[[package]]` 项按 `(name, version)` ASCII 字典序排序。
+- `dependencies = [...]` 按字典序排序。
+- `[[package]]` 内字段顺序：`name, version, source, hash, provenance_hash, dependencies`。
+- 仅 LF 行尾；末尾换行。
+- 同 `(manifest, registry-state)` → 字节级一致的 lockfile 字节。
+
+#### Content-addressed 注册表布局
+
+```text
+~/.cobrust/registry/
+├── blake3/
+│   ├── 39e9e2d3...0069/      # cobrust-tomli 2.0.1
+│   │   ├── cobrust.toml
+│   │   ├── PROVENANCE.toml   # ADR-0007 chain-of-custody
+│   │   └── src/...
+│   └── deadbeef.../          # ...
+└── index/
+    └── name-to-versions.toml  # 缓存索引（M12 stub；空）
+```
+
+`Registry::insert_source_tree` 流程：
+
+1. `Tarball::build(source_dir)` — 排序条目、零化 mtime/uid/gid、规范权限位 0o644 / 0o755、gzip 等级 6。
+2. `blake3(gzipped tarball bytes)` 作为缓存目录键。
+3. 原子解压：在 `<root>/blake3/.staging-<hex>` 暂存，成功后 rename。
+4. 幂等：若 `<root>/blake3/<hex>/` 已存在，no-op。
+
+tarball 永远排除：`target/`、`cobrust.lock`、`.git/`、`.cobrust/`、symlinks。
+
+#### 源解析器（ADR-0026 §E）
+
+| 源 | 行为 |
+|---|---|
+| `Path { path }` | 相对 manifest 目录解析；插入注册表 |
+| `Git { url, rev }` | 调用系统 `git clone --depth=1 --branch=rev`；回退到普通 clone + `checkout rev`；插入注册表 |
+| `Registry { name, version }` | M12 stub：未缓存时返回 `RegistryError::Offline` |
+
+#### 解析算法（ADR-0026 §D）
+
+M12 采用 **max-compatible greedy**：对依赖图中每个唯一包名，挑选满足所有针对该包请求的最高版本。策略以 trait 形态（`ResolutionStrategy`）发布；未来 Phase F 的 PubGrub 求解器可在不破坏公开表面的前提下替换策略。
+
+失败模式：`Conflict`（兄弟节点版本不一致）、`Cycle`（图中有 SCC）、`MissingPackage`、`Offline`（M12 注册表 stub）、`PathMissing`。
+
+#### CLI 表面影响
+
+`cobrust build`（无 `.cb` 参数或目录参数）：
+
+1. `cobrust_pkg::find_manifest(cwd)` — 向上查找最近的 `cobrust.toml`。
+2. `cobrust_pkg::load_manifest` — 解析 + 校验。
+3. `cobrust_pkg::Registry::open_default()` — `~/.cobrust/registry/`。
+4. `cobrust_pkg::resolve_and_lock(&manifest, &workspace_root, &registry)`。
+5. `cobrust_pkg::save_lockfile` — 原子写入 `<workspace>/cobrust.lock`。
+6. `cobrust_cli::build::build(&[bin].path, ...)` — 调用 M11 单文件流水线。
+
+`cobrust test` 遍历 manifest 的 `[[test]]` 数组，构建 + 调用每一项，汇总通过/失败计数。
+
+`cobrust new <name>` 写入**完整**的 ADR-0026 schema（`[package]` + `[dependencies]` + `[bin]` + `[[test]]`），不再是 M10 占位符。
+
+`cobrust add <name> [--path PATH | --git URL --rev REV | --version REQ] [--dev]` 在最近的 `cobrust.toml` 中追加行，尽可能保留注释。
+
+#### Notebook 示例（≥ 1000 LOC，≥ 3 模块）
+
+ADR-0019 §"Definition of usable" 第 3 行钉住：至少一个中等规模程序端到端构建 + 运行。M12 发布 `examples/notebook/`：
+
+- `examples/notebook/cobrust.toml` 声明对 `cobrust-notebook-config`（携带自身 `PROVENANCE.toml` 的被翻译库形态兄弟）的路径依赖。
+- `examples/notebook/src/{main,pages,runner,meta}.cb` — 4 个 Cobrust 侧模块（第 3 行要求 ≥ 3）。
+- `examples/notebook/tests/smoke.cb` — `[[test]]` 项，由 `cobrust test` 触发。
+- 源 LOC 总计：≥ 1000。
+- 示例的输出脚本是确定性的；CI 按字节比较实际 stdout 与 `expected.txt`。
+
+#### 跨里程碑 non-goal（M12）
+
+- 远程注册表的 HTTP 拉取。M12 对未缓存的注册表源依赖返回 `Offline`；Phase F 在独立 ADR 下落地完整注册表。
+- 多 `[bin]` / 多 `[lib]` crate。M12 按 ADR-0026 §A.1 ship 单 `[bin]` + 单 `[lib]`；未来 Phase F 视多 bin crate 物化情况升级到 `[[bin]]`。
+- `import` 语句 → 多源文件链接。M12 构建编译单一 `[bin].path` 源文件。多源文件编排是 M12.x 范畴。
+
+### M12 — "适用于多数项目" 的定义（ADR-0019 第 2 行）
+
+ADR-0019 §"Definition of usable for most projects" 钉住三行：
+
+1. M11 done means 满足（`hello.cb` + 10 示例编译 + 运行）。**通过**（M11）。
+2. **M12 done means 满足**（带非平凡依赖的用户 crate 解析 + 构建 + 测试通过）。**通过**（本里程碑——`examples/notebook/` 走完整路径）。
+3. 至少一个中等规模程序（≥ 1000 LOC、≥ 3 模块、使用 stdlib + 至少一个被翻译的库）端到端构建 + 运行。**通过**（`examples/notebook/`）。
+

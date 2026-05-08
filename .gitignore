@@ -2,6 +2,10 @@
 /target
 **/*.rs.bk
 
+# Cobrust per-package build output — `cobrust build` emits under
+# <workspace>/target/cobrust/ when invoked in package mode (M12).
+examples/*/target/
+
 # Cobrust workspace artifacts
 /.cobrust
 # Translator integration tests may write transient .cobrust under any
