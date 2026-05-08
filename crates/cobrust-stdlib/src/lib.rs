@@ -14,12 +14,20 @@
 //!   constitution §2.2 binds `Result<T, E>` as the default error
 //!   path.
 //!
+//! M13 amendment (ADR-0028): adds `task` and `sync` modules behind
+//! the default-on `tokio-runtime` Cargo feature — structured
+//! concurrency primitives (`spawn / JoinHandle / scope / cancel`) +
+//! bounded MPSC channels. Constitution §2.2's "no async/sync
+//! coloring" is honored: every public function in `task` and `sync`
+//! is `fn`, not `async fn`.
+//!
 //! Constitution `CLAUDE.md` §2.2 requirements reflected here:
 //!
 //! - No implicit truthiness — `List::is_empty` exists; users write
 //!   `if list.is_empty()` not `if list`.
 //! - No `dyn` in the public surface (constitution §5.1).
 //! - Result<T, E> over exceptions.
+//! - No async/sync coloring (M13/ADR-0028).
 //!
 //! Public surface:
 //!
@@ -36,9 +44,15 @@
 //! - [`fmt`] — f-string formatting helpers.
 //! - [`runtime`] — heap allocator selection + main shim + error
 //!   taxonomy.
+//! - [`task`] (M13) — `spawn / JoinHandle / scope / cancel`. Gated
+//!   by `tokio-runtime` (default-on).
+//! - [`sync`] (M13) — bounded MPSC `channel`. Gated by
+//!   `tokio-runtime` (default-on).
 //!
 //! See `docs/agent/modules/stdlib.md` for the full agent-facing spec
-//! and `docs/agent/adr/0025-m11-stdlib-runtime.md` for the design.
+//! and `docs/agent/adr/0025-m11-stdlib-runtime.md` (M11) +
+//! `docs/agent/adr/0028-m13-concurrency-runtime.md` (M13) for the
+//! design.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::module_name_repetitions)]
@@ -96,4 +110,20 @@ pub use runtime::{Error, ErrorKind};
 // convenience. Cobrust source-level `import std.X` will project
 // onto these paths.
 pub use collections::{Dict, List, Set};
+<<<<<<< HEAD
 pub use iter::{DictIter, Iterator, ListIter, RangeIter, SetIter};
+=======
+
+// =====================================================================
+// M13 — structured-concurrency runtime (ADR-0028)
+// =====================================================================
+// Append-only re-exports per the M13 dispatch protocol; M12.x parallel
+// edits target a different region of this file (the seven M11 module
+// declarations above), so the M13 cut sits at the END to minimize
+// merge-time conflict surface.
+
+#[cfg(feature = "tokio-runtime")]
+pub mod sync;
+#[cfg(feature = "tokio-runtime")]
+pub mod task;
+>>>>>>> feature/m13-concurrency

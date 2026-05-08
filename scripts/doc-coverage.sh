@@ -1205,3 +1205,63 @@ if [[ -f "$adr_27" ]] && grep -q '^status: accepted$' "$adr_27"; then
 
     echo "doc-coverage: M12.x codegen + stdlib amendments surface checks passed"
 fi
+
+# --- 24. M13 stdlib::task + ::sync surface coverage (ADR-0028) -------------
+# When the stdlib module declares M13 delivered, the M13 binding surface
+# terms + ADR-0028 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M13 — delivered.\*\*' "docs/agent/modules/stdlib.md"; then
+    m13_stdlib_terms=(
+        "std.task.spawn"
+        "std.task.scope"
+        "std.task.cancel"
+        "JoinHandle"
+        "JoinError"
+        "std.sync.channel"
+        "Sender"
+        "Receiver"
+        "SendError"
+        "TrySendError"
+        "TryRecvError"
+        "tokio-runtime"
+        "ADR-0028"
+    )
+    m13_stdlib_files=(
+        "docs/agent/modules/stdlib.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m13_stdlib_terms[@]}"; do
+        for f in "${m13_stdlib_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M13 stdlib surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+fi
+
+# --- M13 stdlib::task + ::sync surface coverage (ADR-0028) ----------------
+if [[ -f "docs/agent/adr/0028-m13-concurrency-runtime.md" ]]; then
+    adr_28="docs/agent/adr/0028-m13-concurrency-runtime.md"
+    if ! grep -q '^status: accepted$' "$adr_28"; then
+        fail "ADR-0028 must be 'status: accepted' for M13 to be done"
+    fi
+
+    # M13 binding done-means: task + sync sources exist.
+    [[ -f "crates/cobrust-stdlib/src/task.rs" ]] \
+        || fail "crates/cobrust-stdlib/src/task.rs missing (M13 ADR-0028 §C)"
+    [[ -f "crates/cobrust-stdlib/src/sync.rs" ]] \
+        || fail "crates/cobrust-stdlib/src/sync.rs missing (M13 ADR-0028 §C)"
+
+    # M13 binding done-means: 4 test files exist.
+    for tf in task_well_typed task_ill_typed task_corpus task_perf; do
+        [[ -f "crates/cobrust-stdlib/tests/${tf}.rs" ]] \
+            || fail "crates/cobrust-stdlib/tests/${tf}.rs missing (M13 ADR-0028 §F)"
+    done
+
+    # M13 finding doc must exist.
+    [[ -f "docs/agent/findings/m13-sync-bridge-cost.md" ]] \
+        || fail "docs/agent/findings/m13-sync-bridge-cost.md missing (ADR-0028 §F)"
+fi
+
+echo "doc-coverage: M13 stdlib task + sync surface checks passed"
