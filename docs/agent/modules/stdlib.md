@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:stdlib
 crate: cobrust-stdlib
-last_verified_commit: TBD
+last_verified_commit: b42391f
 dependencies: [mod:codegen, mod:mir, mod:hir]
 ---
 

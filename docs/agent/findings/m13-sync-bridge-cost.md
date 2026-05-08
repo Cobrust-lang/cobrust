@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: m13-sync-bridge-cost
-last_verified_commit: TBD
+last_verified_commit: b42391f
 dependencies: [adr:0028, adr:0019, mod:stdlib]
 ---
 
