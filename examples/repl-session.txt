@@ -1,0 +1,234 @@
+# Cobrust REPL session corpus (M14, ADR-0029)
+#
+# Each session is a `===` separator followed by a header line, then
+# alternating `>` (input) and `=` (expected stdout substring) lines.
+# `e` lines are expected stderr substrings. Comments (starting with `#`)
+# and blank lines outside a session are ignored.
+#
+# This file is the canonical golden corpus consumed by
+# `tests/repl_session_corpus.rs`. It documents 30 representative
+# real-world REPL sessions per ADR-0029 §"Public surface".
+
+=== 01-integer-literal
+> 42
+= 42
+
+=== 02-arithmetic
+> 1 + 2 * 3
+= 7
+
+=== 03-let-binding-and-recall
+> let x = 100
+> x
+= 100
+
+=== 04-string-concat
+> "hello, " + "world"
+= "hello, world"
+
+=== 05-comparison-true
+> 5 > 3
+= True
+
+=== 06-comparison-false
+> 5 < 3
+= False
+
+=== 07-boolean-and
+> True and True
+= True
+
+=== 08-boolean-or-short-circuits
+> True or False
+= True
+
+=== 09-not-true
+> not True
+= False
+
+=== 10-unary-negation
+> -(2 + 3)
+= -5
+
+=== 11-float-add
+> 1.5 + 2.5
+= 4.0
+
+=== 12-float-mul
+> 2.0 * 3.0
+= 6.0
+
+=== 13-let-then-arithmetic
+> let n = 5
+> n * n
+= 25
+
+=== 14-rebind-overwrites
+> let v = 1
+> let v = 99
+> v
+= 99
+
+=== 15-type-int
+> :type 1 + 2
+= i64
+
+=== 16-type-bool
+> :type 1 < 2
+= bool
+
+=== 17-type-str
+> :type "hi"
+= str
+
+=== 18-type-float
+> :type 1.0 + 2.0
+= f64
+
+=== 19-ast-binary
+> :ast 1 + 2
+= Binary
+= Add
+
+=== 20-hir-binary
+> :hir 1 + 2
+= Bin
+
+=== 21-mir-body
+> :mir 1 + 2
+= BasicBlock
+
+=== 22-help-lists-directives
+> :help
+= :type
+= :ast
+= :hir
+= :mir
+= :clear
+= :quit
+
+=== 23-clear-bindings
+> let z = 7
+> :clear
+> z
+e session
+e not bound
+
+=== 24-unknown-directive-errors
+> :bogus
+e unknown directive
+
+=== 25-type-no-arg-errors
+> :type
+e requires an expression
+
+=== 26-divide-by-zero
+> 1 / 0
+e division by zero
+
+=== 27-mod-by-zero
+> 1 % 0
+e modulo by zero
+
+=== 28-equality-of-ints
+> 5 == 5
+= True
+
+=== 29-inequality-of-strs
+> "a" != "b"
+= True
+
+=== 30-quit-via-q-alias
+> :q
+
+=== 31-empty-input-noop
+>
+= 
+
+=== 32-bool-comparison-eq
+> True == True
+= True
+
+=== 33-none-equality
+> None == None
+= True
+
+=== 34-let-bool
+> let flag = True
+> flag
+= True
+
+=== 35-let-str
+> let greeting = "hi"
+> greeting
+= "hi"
+
+=== 36-let-float
+> let pi = 3.14
+> pi
+= 3.14
+
+=== 37-arithmetic-of-binding
+> let a = 10
+> let b = 20
+> a + b
+= 30
+
+=== 38-mod-arithmetic
+> 17 % 5
+= 2
+
+=== 39-int-division-truncates
+> 7 / 2
+= 3
+
+=== 40-comparison-le
+> 3 <= 3
+= True
+
+=== 41-comparison-ge
+> 3 >= 5
+= False
+
+=== 42-not-eq
+> 5 != 5
+= False
+
+=== 43-type-of-comparison-result
+> :type 1 == 1
+= bool
+
+=== 44-type-of-and
+> :type True and False
+= bool
+
+=== 45-let-then-clear-then-rebind
+> let saved = 42
+> :clear
+> let saved = 99
+> saved
+= 99
+
+=== 46-multi-let-chain
+> let x = 1
+> let y = 2
+> let z = 3
+> x + y + z
+= 6
+
+=== 47-nested-arithmetic
+> (2 + 3) * (4 - 1)
+= 15
+
+=== 48-mir-shows-blocks-key
+> :mir 7
+= blocks
+
+=== 49-ast-name-reference
+> let myname = 1
+> :ast myname
+= Name
+
+=== 50-help-includes-help-itself
+> :help
+= :help
