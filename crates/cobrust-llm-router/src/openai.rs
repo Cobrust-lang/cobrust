@@ -115,6 +115,10 @@ impl LlmProvider for OpenAiProvider {
         &self.name
     }
 
+    fn kind(&self) -> crate::config::ProviderKind {
+        crate::config::ProviderKind::Openai
+    }
+
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
         let body = Self::build_body(&req, false);
         let resp = self

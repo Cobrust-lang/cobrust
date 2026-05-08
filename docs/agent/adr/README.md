@@ -59,3 +59,4 @@ same atomic commit as the change it justifies.
 | [0028](0028-m13-concurrency-runtime.md) | M13 structured-concurrency runtime — tokio binding, JoinHandle/channel/scope/cancel surface, no async/sync coloring | accepted | 2026-04-30 |
 | [0029](0029-m14-repl.md) | M14 REPL — interactive shell, directives, multi-line input, evaluation strategy | accepted | 2026-04-30 |
 | [0030](0030-m11-1-while-if-codegen-fix.md) | M11.1 — fix while-loop-with-leading-if codegen regression + close audit-#2 (real fizzbuzz / fib) | accepted | 2026-05-09 |
+| [0031](0031-audit-5-ledger-provider-kind-field.md) | Audit #5 — bump ledger schema to carry `provider_kind` (anthropic/openai/synthetic) | accepted | 2026-05-09 |

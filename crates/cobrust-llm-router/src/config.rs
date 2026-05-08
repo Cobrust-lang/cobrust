@@ -19,11 +19,17 @@ pub enum DefaultStrategy {
 }
 
 /// Provider-API kind.
+///
+/// Bound by `adr:0031` — `Synthetic` exists for in-process mock providers
+/// (canned-response translator fixture, deterministic test doubles); it never
+/// appears in user-on-disk `cobrust.toml` because no wire protocol matches it.
+/// Recorded in `LedgerEntry::provider_kind` for honest provenance.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
     Anthropic,
     Openai,
+    Synthetic,
 }
 
 /// `[providers.<name>]` section.

@@ -1,11 +1,12 @@
 //! Append-only JSONL token ledger.
 //!
-//! Schema (per `adr:0004`):
+//! Schema (per `adr:0004`, amended by `adr:0031`):
 //! ```json
 //! {
 //!   "ts":               "2026-04-30T01:23:45.678Z",
 //!   "task":             "translate",
 //!   "provider":         "anthropic_official",
+//!   "provider_kind":    "anthropic",
 //!   "model":            "claude-opus-4-7",
 //!   "cache_key":        "blake3:<hex>",
 //!   "cache_hit":        false,
@@ -20,6 +21,10 @@
 //! }
 //! ```
 //!
+//! `provider_kind` is `"anthropic"` | `"openai"` | `"synthetic"`. Pre-ADR-0031
+//! ledger lines lacked this field; readers tolerate its absence by deserialising
+//! such entries with `provider_kind: None`.
+//!
 //! Writes go through a single `tokio::sync::Mutex<File>` opened with
 //! `O_APPEND`, ensuring no two writers tear a line. Each line is terminated
 //! by `\n`. Readers must tolerate at most one trailing partial line in case
@@ -33,6 +38,7 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
+use crate::config::ProviderKind;
 use crate::provider::TokenUsage;
 
 /// Outcome label for a completion attempt.
@@ -50,6 +56,10 @@ pub struct LedgerEntry {
     pub ts: String,
     pub task: String,
     pub provider: String,
+    /// Wire-protocol kind. Added in `adr:0031`. Legacy ledger lines without
+    /// this field deserialise to `None` thanks to `#[serde(default)]`.
+    #[serde(default)]
+    pub provider_kind: Option<ProviderKind>,
     pub model: String,
     pub cache_key: String,
     pub cache_hit: bool,
@@ -71,6 +81,7 @@ impl LedgerEntry {
         ts: String,
         task: impl Into<String>,
         provider: impl Into<String>,
+        provider_kind: Option<ProviderKind>,
         model: impl Into<String>,
         cache_key: impl Into<String>,
         cache_hit: bool,
@@ -83,6 +94,7 @@ impl LedgerEntry {
             ts,
             task: task.into(),
             provider: provider.into(),
+            provider_kind,
             model: model.into(),
             cache_key: cache_key.into(),
             cache_hit,
@@ -105,6 +117,7 @@ impl LedgerEntry {
         ts: String,
         task: impl Into<String>,
         provider: impl Into<String>,
+        provider_kind: Option<ProviderKind>,
         model: impl Into<String>,
         cache_key: impl Into<String>,
         latency_ms: u32,
@@ -117,6 +130,7 @@ impl LedgerEntry {
             ts,
             task: task.into(),
             provider: provider.into(),
+            provider_kind,
             model: model.into(),
             cache_key: cache_key.into(),
             cache_hit: false,
@@ -206,6 +220,7 @@ mod tests {
             "2026-04-30T01:23:45.678Z".to_string(),
             "translate",
             "anthropic_official",
+            Some(ProviderKind::Anthropic),
             "claude-opus-4-7",
             "blake3:abcd",
             false,
@@ -232,6 +247,7 @@ mod tests {
             "ts".into(),
             "translate",
             "p",
+            Some(ProviderKind::Openai),
             "m",
             "blake3:00",
             5,
@@ -245,6 +261,7 @@ mod tests {
             "ts".into(),
             "translate",
             "p",
+            Some(ProviderKind::Openai),
             "m",
             "blake3:00",
             5,
@@ -312,6 +329,87 @@ mod tests {
         for line in lines {
             let _: LedgerEntry = serde_json::from_str(line).expect("every line must be valid JSON");
         }
+    }
+
+    // ADR-0031: provider_kind field round-trip + legacy compatibility.
+
+    #[test]
+    fn entry_round_trips_provider_kind_anthropic() {
+        let e = make_ok();
+        assert_eq!(e.provider_kind, Some(ProviderKind::Anthropic));
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(
+            json.contains(r#""provider_kind":"anthropic""#),
+            "must serialise as `anthropic`: {json}"
+        );
+        let back: LedgerEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.provider_kind, Some(ProviderKind::Anthropic));
+    }
+
+    #[test]
+    fn entry_round_trips_provider_kind_openai() {
+        let e = LedgerEntry::ok(
+            "ts".into(),
+            "translate",
+            "deepseek",
+            Some(ProviderKind::Openai),
+            "deepseek-v3",
+            "blake3:00",
+            false,
+            TokenUsage::default(),
+            10,
+            1,
+            None,
+        );
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains(r#""provider_kind":"openai""#));
+        let back: LedgerEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.provider_kind, Some(ProviderKind::Openai));
+    }
+
+    #[test]
+    fn entry_round_trips_provider_kind_synthetic() {
+        let e = LedgerEntry::ok(
+            "ts".into(),
+            "translate",
+            "synthetic",
+            Some(ProviderKind::Synthetic),
+            "fixture",
+            "blake3:00",
+            false,
+            TokenUsage::default(),
+            0,
+            1,
+            None,
+        );
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains(r#""provider_kind":"synthetic""#));
+        let back: LedgerEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.provider_kind, Some(ProviderKind::Synthetic));
+    }
+
+    #[test]
+    fn legacy_entry_without_provider_kind_deserialises_as_none() {
+        // Pre-ADR-0031 ledger line — no provider_kind field.
+        let legacy = r#"{
+            "ts":"2026-04-30T01:23:45.678Z",
+            "task":"translate",
+            "provider":"anthropic_official",
+            "model":"claude-opus-4-7",
+            "cache_key":"blake3:abcd",
+            "cache_hit":false,
+            "prompt_tokens":100,
+            "completion_tokens":200,
+            "total_tokens":300,
+            "latency_ms":1234,
+            "attempt":1,
+            "outcome":"ok",
+            "error_code":null,
+            "consensus_group":null
+        }"#;
+        let parsed: LedgerEntry = serde_json::from_str(legacy).expect("legacy parse");
+        assert_eq!(parsed.provider_kind, None);
+        assert_eq!(parsed.provider, "anthropic_official");
     }
 
     #[test]
