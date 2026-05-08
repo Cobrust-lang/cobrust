@@ -12,6 +12,7 @@ members = [
     "crates/cobrust-msgpack",
     "crates/cobrust-tomli",
     "crates/cobrust-numpy",
+    "crates/cobrust-stdlib",
     "crates/cobrust-translator",
     "crates/cobrust-requests",
     "crates/cobrust-click",
