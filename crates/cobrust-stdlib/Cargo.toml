@@ -9,6 +9,9 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 description = "Cobrust standard library — io / collections / string / math / panic / env / fmt + runtime ABI per ADR-0025."
+[lib]
+crate-type = ["rlib", "staticlib"]
+
 
 [lints]
 workspace = true

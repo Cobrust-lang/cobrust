@@ -1,37 +1,43 @@
-//! M10 print-intrinsic rewrite (per ADR-0024 §"Hello-world contract" option 3).
+//! Print-intrinsic rewrite — M11 supersedes M10's narrowed contract.
 //!
-//! Walks every `Body`'s terminators. When a `Terminator::Call` references
-//! a callee whose resolved Body name is `print`, validate the literal
-//! argument is exactly `"hello, world"` and rewrite the `func` operand
-//! from `Operand::Constant(Constant::FnRef(_))` to
-//! `Operand::Constant(Constant::Str("__cobrust_println_static".into()))`,
-//! clearing the args.
+//! Per ADR-0024 §"Hello-world contract" (M10) the rewrite was narrowed
+//! to the literal `"hello, world"` only; ADR-0025 §"Print-intrinsic
+//! lift" lifts that narrowing — any `print(<string-literal>)` callsite
+//! is rewritten to a runtime call into `__cobrust_println`, with the
+//! literal argument preserved so codegen can emit a
+//! `(*const u8, usize)` C-ABI call (per ADR-0025 §"Codegen amendments"
+//! Constant::Str row + ADR-0025 §"Runtime ABI").
 //!
-//! Any other shape — different literal, multiple args, runtime-string
-//! argument — returns [`IntrinsicError::M10ScopeNarrowed`] with an
-//! M11-deferral diagnostic.
+//! The diagnostic `IntrinsicError::M10ScopeNarrowed` from M10 is
+//! deleted; M11 accepts any string-literal argument. Non-literal
+//! arguments emit `IntrinsicError::PrintArgUnsupported` — they are
+//! M11.x scope (full HIR-tier dispatch through stdlib FnRefs).
+//!
+//! Body removal: the prelude's `print` stub Body is dropped from the
+//! MIR after the rewrite. Per ADR-0024 §"Consequences" the M8 drop
+//! schedule for an unmoved `s: str` parameter is unsound; ADR-0025
+//! §"Drop-schedule fix" notes that the drop_eligible filter exempts
+//! parameters (cobrust-mir/src/drop.rs:45) so the prelude body would
+//! lower fine — but the body still has zero statements (a `return 0`
+//! prelude that lowers to a stub) which produces a well-formed but
+//! useless MIR Body. Dropping it is cleaner.
 
 use std::collections::HashSet;
 
 use cobrust_mir::{Constant, Module, Operand, Terminator};
 
-/// External symbol provided by `crates/cobrust-cli/runtime/m10_runtime.c`.
-pub const PRINTLN_STATIC_SYMBOL: &str = "__cobrust_println_static";
-
-/// The only literal `print` argument M10 supports.
-pub const SUPPORTED_LITERAL: &str = "hello, world";
+/// Runtime symbol providing `__cobrust_println(*const u8, usize)`.
+/// Per ADR-0025 §"Runtime ABI" this is exported by `cobrust-stdlib`.
+pub const PRINTLN_RUNTIME_SYMBOL: &str = "__cobrust_println";
 
 /// Errors from the print-intrinsic rewrite.
 #[derive(Debug, thiserror::Error)]
 pub enum IntrinsicError {
     #[error(
-        "M10 narrowing: `print` accepts exactly the literal {expected:?} at this milestone; \
-         got {found}. Arbitrary `print(s: str)` lowering is M11 stdlib scope (see ADR-0024)."
+        "M11: `print` accepts a string literal at this milestone; got {found}. \
+         Non-literal arguments require full stdlib FnRef dispatch (M11.x scope, ADR-0025)."
     )]
-    M10ScopeNarrowed {
-        expected: &'static str,
-        found: String,
-    },
+    PrintArgUnsupported { found: String },
 }
 
 /// Identify Body def_ids that name a `print` function.
@@ -49,40 +55,37 @@ fn collect_print_def_ids(module: &Module) -> HashSet<u32> {
         .collect()
 }
 
-/// Rewrite every `print(...)` callsite in `module` to the M10 runtime helper.
+/// Rewrite every `print(...)` callsite in `module` to the M11 runtime
+/// helper `__cobrust_println`.
+///
+/// Per ADR-0025 §"Print-intrinsic lift": the rewrite preserves the
+/// literal string argument so codegen can lower to a
+/// `(*const u8, usize)` C-ABI call. The M10 narrowing to
+/// `"hello, world"` is removed.
 ///
 /// # Errors
 ///
-/// Returns [`IntrinsicError::M10ScopeNarrowed`] if any `print` callsite
-/// has an argument shape M10 doesn't support.
+/// Returns [`IntrinsicError::PrintArgUnsupported`] if any `print`
+/// callsite has a non-literal argument or a wrong arg count.
 pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
     let print_ids = collect_print_def_ids(module);
     if print_ids.is_empty() {
         return Ok(());
     }
 
-    // Names of the print stub Bodies. The MIR `lookup_local_for_resolved`
-    // path registers a synthetic local per name reference; identifying
-    // those locals by `LocalDecl::name == "print"` is the most robust
-    // dataflow proxy available without re-running HIR resolution.
-    let print_names: std::collections::HashSet<String> = module
+    let print_names: HashSet<String> = module
         .bodies
         .iter()
         .filter(|b| print_ids.contains(&b.def_id.0))
         .map(|b| b.name.clone())
         .collect();
 
-    // First pass: rewrite every Call callsite whose `func` operand
-    // resolves to a local whose name is in `print_names`.
     for body in &mut module.bodies {
-        // Skip the prelude body itself — its callsites (none) needn't
-        // be rewritten and removing it later requires it to remain
-        // unmodified.
         if print_ids.contains(&body.def_id.0) {
             continue;
         }
 
-        // Build local-id → name map.
+        // Build local-id → name map for this body.
         let mut local_name: std::collections::HashMap<u32, String> =
             std::collections::HashMap::new();
         for decl in &body.locals {
@@ -117,47 +120,34 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     continue;
                 }
 
-                // Validate the M10-narrowed argument shape.
+                // M11 contract: exactly one string-literal argument.
                 if args.len() != 1 {
-                    return Err(IntrinsicError::M10ScopeNarrowed {
-                        expected: SUPPORTED_LITERAL,
+                    return Err(IntrinsicError::PrintArgUnsupported {
                         found: format!("{} arg(s)", args.len()),
                     });
                 }
                 let s_lit = match &args[0] {
-                    Operand::Constant(Constant::Str(s)) => Some(s.clone()),
-                    _ => None,
-                };
-                let s_lit = match s_lit {
-                    Some(s) => s,
-                    None => {
-                        return Err(IntrinsicError::M10ScopeNarrowed {
-                            expected: SUPPORTED_LITERAL,
-                            found: format!("non-literal arg {:?}", &args[0]),
+                    Operand::Constant(Constant::Str(s)) => s.clone(),
+                    other => {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("non-literal arg {other:?}"),
                         });
                     }
                 };
-                if s_lit != SUPPORTED_LITERAL {
-                    return Err(IntrinsicError::M10ScopeNarrowed {
-                        expected: SUPPORTED_LITERAL,
-                        found: format!("literal {s_lit:?}"),
-                    });
-                }
 
-                // Rewrite: callee → external runtime symbol; args → empty.
-                *func = Operand::Constant(Constant::Str(PRINTLN_STATIC_SYMBOL.to_string()));
+                // Rewrite: callee → runtime symbol; preserve the
+                // literal arg. Codegen reads `args[0] = Constant::Str(s)`
+                // to emit the (*const u8, usize) C-ABI call.
+                *func = Operand::Constant(Constant::Str(PRINTLN_RUNTIME_SYMBOL.to_string()));
                 args.clear();
+                args.push(Operand::Constant(Constant::Str(s_lit)));
             }
         }
     }
 
-    // Second pass: drop the M10 prelude `print` stub Body entirely.
-    // After the rewrite, no callsite references it; keeping it would
-    // force codegen to lower the trivial stub, and the M8 drop schedule
-    // for `s: str` parameters in a body that doesn't move them produces
-    // dangling drop-chain blocks targeting the entry block — a known
-    // M8 issue tracked separately. Removing the body sidesteps the issue
-    // cleanly because the intrinsic call now goes to an imported symbol.
+    // Drop the prelude `print` stub Body. After rewrite no callsite
+    // references it; keeping it would force codegen to lower a
+    // useless stub (the prelude prints nothing on its own).
     module
         .bodies
         .retain(|body| !print_ids.contains(&body.def_id.0));
