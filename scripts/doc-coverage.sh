@@ -1156,3 +1156,52 @@ if grep -q '^- \*\*M12 — delivered.\*\*' "docs/agent/modules/pkg.md"; then
 fi
 
 echo "doc-coverage: M12 package format surface checks passed"
+
+# --- 23. M12.x codegen + stdlib amendments surface coverage ----------------
+# When ADR-0027 is accepted, the M12.x amendments surface terms must
+# appear in the relevant doc trees.
+
+adr_27="docs/agent/adr/0027-m12-x-codegen-stdlib-amendments.md"
+if [[ -f "$adr_27" ]] && grep -q '^status: accepted$' "$adr_27"; then
+    m12x_terms=(
+        "Iterator"
+        "__cobrust_alloc"
+        "__cobrust_fmt_int"
+        "__cobrust_iter_init"
+        "__cobrust_str_new"
+        "ADR-0027"
+        "for-protocol"
+    )
+    m12x_files=(
+        "docs/agent/modules/stdlib.md"
+        "docs/agent/modules/codegen.md"
+        "docs/agent/modules/mir.md"
+    )
+    for term in "${m12x_terms[@]}"; do
+        for f in "${m12x_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M12.x surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    # M12.x binding done-means: iter module exists + 8 examples have
+    # the M12.x docstring banner + 11 #[ignore] markers gone.
+    [[ -f crates/cobrust-stdlib/src/iter.rs ]] || fail "crates/cobrust-stdlib/src/iter.rs missing (M12.x ADR-0027 §4)"
+
+    # All 8 example bodies must compile + run; the doc-coverage script
+    # only checks the source presence + the no-ignore property.
+    for ex in wc cat echo sort unique_lines regex_grep csv_sum json_pretty; do
+        [[ -f "examples/${ex}.cb" ]] || fail "examples/${ex}.cb missing"
+        if grep -q "M11 stub" "examples/${ex}.cb"; then
+            fail "examples/${ex}.cb still contains 'M11 stub' (M12.x rewrite incomplete)"
+        fi
+    done
+
+    if grep -q '#\[ignore = "requires staticlib + cli binary; gated under --ignored"\]' \
+        crates/cobrust-stdlib/tests/stdlib_examples.rs; then
+        fail "stdlib_examples still gates 11 tests behind #[ignore]; M12.x must lift them"
+    fi
+
+    echo "doc-coverage: M12.x codegen + stdlib amendments surface checks passed"
+fi
