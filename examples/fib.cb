@@ -1,21 +1,29 @@
-# Fibonacci — M11 example.
+# Fibonacci — M11.1 example (ADR-0030).
 #
-# Source-level intent (the algorithm, what the user writes):
+# Iterative algorithm for fib(10) = 55.
+# Uses while loop + mutation (a, b carry the Fibonacci state).
+#
+# Note: the intended recursive form `fn fib(n: i64) -> i64: ...`
+# requires `Constant::FnRef` Call lowering for user-defined functions,
+# which is M11.x scope per ADR-0025 §"Codegen amendments". Until then
+# the iterative form below demonstrates the same algorithm in Cobrust.
+#
+# Canonical recursive definition (for reference; builds once FnRef
+# Call lowering lands):
 #
 #   fn fib(n: i64) -> i64:
 #       if n < 2:
 #           return n
 #       return fib(n - 1) + fib(n - 2)
-#
-#   fn main() -> i64:
-#       print(std.fmt.format_int(fib(10)))
-#       return 0
-#
-# At M11 codegen end-to-end recursion (Constant::FnRef Call lowering)
-# is M11.x scope per ADR-0025 §"Codegen amendments" Constant::FnRef
-# row; this .cb prints the canonical fib(10) result as a literal so
-# the example demonstrates the M11 codegen surface (Constant::Str
-# materialization through the runtime ABI).
 fn main() -> i64:
-    print("fib(10) = 55")
+    print("fib(10) =")
+    let a: i64 = 0
+    let b: i64 = 1
+    let i: i64 = 0
+    while i < 10:
+        let c: i64 = a + b
+        a = b
+        b = c
+        i = i + 1
+    print_int(a)
     return 0

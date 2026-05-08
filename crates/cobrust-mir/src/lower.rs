@@ -567,22 +567,22 @@ impl<'a> BodyBuilder<'a> {
         arms: &[(Expr, HirBlock)],
         else_block: Option<&HirBlock>,
     ) -> Result<(), MirError> {
-        // Pre-allocate the merge block (where all arms join).
-        let merge_block = self.start_new_block();
-        // We're now sitting in the merge block; that's not where we
-        // want to emit. Create the continuation chain in a separate
-        // sub-routine.
-        // Backtrack: we want merge to be allocated *but* not the
-        // currently-emitted-into block. We achieve that by making
-        // merge an explicit allocation post-arm.
-        // Simpler approach: keep the previous current_block as the
-        // first arm-cond evaluator, allocate arm bodies + merge fresh.
+        // Capture the caller's current block BEFORE allocating merge_block.
+        // The old code used `(merge_block.0).saturating_sub(1)` to recover
+        // the caller's block, but that assumed merge_block was allocated
+        // immediately after the caller's block. When called from inside a
+        // while-loop body (where `exit_block` was allocated after `body_block`
+        // before `lower_block` is called), the saturating_sub erroneously
+        // resolved to the exit_block instead of body_block, routing all
+        // conditional logic into the exit_block and leaving body_block as
+        // `Unreachable`. Fix: capture the caller's block id first, then
+        // allocate merge_block without clobbering it. (ADR-0030 §Diagnosis)
+        let caller_block = self.current_block_id();
 
-        // Discard the merge_block we just opened — it would corrupt
-        // the flow. We need the arm-evaluator pattern instead.
-        // Actually since BodyBuilder always has a current block, we
-        // emit arm chain from it directly.
-        self.cur_block = Some((merge_block.0 as usize).saturating_sub(1));
+        // Pre-allocate the merge block (where all arms join).
+        // start_new_block() sets cur_block = merge_block; restore to caller.
+        let merge_block = self.start_new_block();
+        self.cur_block = Some(caller_block.0 as usize);
 
         // Strategy: for each arm, in current block evaluate cond,
         // emit `SwitchInt cond -> [(true, body), (false, next_arm)]`,
@@ -591,9 +591,16 @@ impl<'a> BodyBuilder<'a> {
         let mut cur = self.current_block_id();
         let mut arm_bodies: Vec<BlockId> = Vec::new();
         for (cond, body) in arms {
-            // Evaluate cond in `cur`.
+            // Evaluate cond starting from `cur`. `lower_expr` may emit
+            // auxiliary blocks (e.g. div-assert for `%`), so after it
+            // returns `self.current_block_id()` is the block that holds
+            // the final cond operand and where the SwitchInt must land.
             self.cur_block = Some(cur.0 as usize);
             let cond_op = self.lower_expr(cond)?;
+            // Capture the block that lower_expr finished in — this is
+            // where the branch instruction belongs, NOT the starting `cur`
+            // (which may have been terminated by a div-assert etc.).
+            let cond_end_block = self.current_block_id();
             // Allocate body block.
             let body_block = self.start_new_block();
             arm_bodies.push(body_block);
@@ -604,9 +611,10 @@ impl<'a> BodyBuilder<'a> {
             }
             // Allocate next-arm block (for falsy edge).
             let next_block = self.start_new_block();
-            // Terminate `cur` with switch.
-            let prev_cur = cur;
-            self.cur_block = Some(prev_cur.0 as usize);
+            // Terminate the cond-end block (not the original `cur`) with
+            // the branch. Using `cond_end_block` is correct when
+            // `lower_expr(cond)` emitted extra blocks (div-assert, etc.).
+            self.cur_block = Some(cond_end_block.0 as usize);
             self.terminate(Terminator::SwitchInt {
                 operand: cond_op,
                 cases: vec![(SwitchValue::Bool(true), body_block)],

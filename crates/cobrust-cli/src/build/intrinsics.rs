@@ -8,19 +8,26 @@
 //! `(*const u8, usize)` C-ABI call (per ADR-0025 §"Codegen amendments"
 //! Constant::Str row + ADR-0025 §"Runtime ABI").
 //!
+//! ADR-0030 §Decision step 5 adds `print_int(n: i64)` — any
+//! `print_int(<i64-operand>)` callsite is rewritten to
+//! `__cobrust_println_int`, which takes the integer directly. This
+//! avoids the string-formatting overhead for the bare-number FizzBuzz
+//! `else` branch.
+//!
 //! The diagnostic `IntrinsicError::M10ScopeNarrowed` from M10 is
 //! deleted; M11 accepts any string-literal argument. Non-literal
-//! arguments emit `IntrinsicError::PrintArgUnsupported` — they are
-//! M11.x scope (full HIR-tier dispatch through stdlib FnRefs).
+//! arguments to `print` (other than via `print_int`) emit
+//! `IntrinsicError::PrintArgUnsupported` — they are M11.x scope (full
+//! HIR-tier dispatch through stdlib FnRefs).
 //!
-//! Body removal: the prelude's `print` stub Body is dropped from the
-//! MIR after the rewrite. Per ADR-0024 §"Consequences" the M8 drop
-//! schedule for an unmoved `s: str` parameter is unsound; ADR-0025
-//! §"Drop-schedule fix" notes that the drop_eligible filter exempts
-//! parameters (cobrust-mir/src/drop.rs:45) so the prelude body would
-//! lower fine — but the body still has zero statements (a `return 0`
-//! prelude that lowers to a stub) which produces a well-formed but
-//! useless MIR Body. Dropping it is cleaner.
+//! Body removal: the prelude's `print` / `print_int` stub Bodies are
+//! dropped from the MIR after the rewrite. Per ADR-0024 §"Consequences"
+//! the M8 drop schedule for an unmoved `s: str` parameter is unsound;
+//! ADR-0025 §"Drop-schedule fix" notes that the drop_eligible filter
+//! exempts parameters (cobrust-mir/src/drop.rs:45) so the prelude body
+//! would lower fine — but the body still has zero statements (a
+//! `return 0` prelude that lowers to a stub) which produces a well-formed
+//! but useless MIR Body. Dropping it is cleaner.
 
 use std::collections::HashSet;
 
@@ -29,6 +36,10 @@ use cobrust_mir::{Constant, Module, Operand, Terminator};
 /// Runtime symbol providing `__cobrust_println(*const u8, usize)`.
 /// Per ADR-0025 §"Runtime ABI" this is exported by `cobrust-stdlib`.
 pub const PRINTLN_RUNTIME_SYMBOL: &str = "__cobrust_println";
+
+/// Runtime symbol providing `__cobrust_println_int(i64)`.
+/// Per ADR-0030 §Decision step 5 — exported by `cobrust-stdlib`.
+pub const PRINTLN_INT_RUNTIME_SYMBOL: &str = "__cobrust_println_int";
 
 /// Errors from the print-intrinsic rewrite.
 #[derive(Debug, thiserror::Error)]
@@ -40,36 +51,45 @@ pub enum IntrinsicError {
     PrintArgUnsupported { found: String },
 }
 
-/// Identify Body def_ids that name a `print` function.
-fn collect_print_def_ids(module: &Module) -> HashSet<u32> {
-    module
-        .bodies
-        .iter()
-        .filter_map(|body| {
-            if body.name == "print" {
-                Some(body.def_id.0)
-            } else {
-                None
-            }
-        })
-        .collect()
+/// Identify Body def_ids whose name matches a recognized print intrinsic.
+/// Returns `(print_ids, print_int_ids)`.
+fn collect_print_def_ids(module: &Module) -> (HashSet<u32>, HashSet<u32>) {
+    let mut print_ids = HashSet::new();
+    let mut print_int_ids = HashSet::new();
+    for body in &module.bodies {
+        if body.name == "print" {
+            print_ids.insert(body.def_id.0);
+        } else if body.name == "print_int" {
+            print_int_ids.insert(body.def_id.0);
+        }
+    }
+    (print_ids, print_int_ids)
 }
 
-/// Rewrite every `print(...)` callsite in `module` to the M11 runtime
-/// helper `__cobrust_println`.
+/// Rewrite every `print(...)` and `print_int(...)` callsite in `module`
+/// to the appropriate runtime helpers.
 ///
-/// Per ADR-0025 §"Print-intrinsic lift": the rewrite preserves the
-/// literal string argument so codegen can lower to a
+/// - `print(s: str)` → `__cobrust_println(ptr, len)` (string-literal path)
+/// - `print_int(n: i64)` → `__cobrust_println_int(n)` (integer path)
+///
+/// Per ADR-0025 §"Print-intrinsic lift": the `print` rewrite preserves
+/// the literal string argument so codegen can lower to a
 /// `(*const u8, usize)` C-ABI call. The M10 narrowing to
 /// `"hello, world"` is removed.
+///
+/// Per ADR-0030 §Decision step 5: the `print_int` rewrite passes the
+/// integer operand directly; codegen lowers it to `i64` via the
+/// `runtime_funcs` table.
 ///
 /// # Errors
 ///
 /// Returns [`IntrinsicError::PrintArgUnsupported`] if any `print`
 /// callsite has a non-literal argument or a wrong arg count.
 pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
-    let print_ids = collect_print_def_ids(module);
-    if print_ids.is_empty() {
+    let (print_ids, print_int_ids) = collect_print_def_ids(module);
+    let all_stub_ids: HashSet<u32> = print_ids.union(&print_int_ids).copied().collect();
+
+    if all_stub_ids.is_empty() {
         return Ok(());
     }
 
@@ -80,8 +100,15 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
         .map(|b| b.name.clone())
         .collect();
 
+    let print_int_names: HashSet<String> = module
+        .bodies
+        .iter()
+        .filter(|b| print_int_ids.contains(&b.def_id.0))
+        .map(|b| b.name.clone())
+        .collect();
+
     for body in &mut module.bodies {
-        if print_ids.contains(&body.def_id.0) {
+        if all_stub_ids.contains(&body.def_id.0) {
             continue;
         }
 
@@ -102,55 +129,83 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                 unwind: _,
             } = term
             {
-                let is_print_callsite = match func {
+                // Identify callsite kind.
+                let is_print = match func {
                     Operand::Copy(p) | Operand::Move(p) => {
-                        if !p.projections.is_empty() {
-                            false
+                        if p.projections.is_empty() {
+                            local_name
+                                .get(&p.local.0)
+                                .is_some_and(|n| print_names.contains(n))
                         } else {
-                            match local_name.get(&p.local.0) {
-                                Some(n) => print_names.contains(n),
-                                None => false,
-                            }
+                            false
                         }
                     }
                     Operand::Constant(Constant::FnRef(d)) => print_ids.contains(d),
                     Operand::Constant(_) => false,
                 };
-                if !is_print_callsite {
-                    continue;
-                }
-
-                // M11 contract: exactly one string-literal argument.
-                if args.len() != 1 {
-                    return Err(IntrinsicError::PrintArgUnsupported {
-                        found: format!("{} arg(s)", args.len()),
-                    });
-                }
-                let s_lit = match &args[0] {
-                    Operand::Constant(Constant::Str(s)) => s.clone(),
-                    other => {
-                        return Err(IntrinsicError::PrintArgUnsupported {
-                            found: format!("non-literal arg {other:?}"),
-                        });
+                let is_print_int = match func {
+                    Operand::Copy(p) | Operand::Move(p) => {
+                        if p.projections.is_empty() {
+                            local_name
+                                .get(&p.local.0)
+                                .is_some_and(|n| print_int_names.contains(n))
+                        } else {
+                            false
+                        }
                     }
+                    Operand::Constant(Constant::FnRef(d)) => print_int_ids.contains(d),
+                    Operand::Constant(_) => false,
                 };
 
-                // Rewrite: callee → runtime symbol; preserve the
-                // literal arg. Codegen reads `args[0] = Constant::Str(s)`
-                // to emit the (*const u8, usize) C-ABI call.
-                *func = Operand::Constant(Constant::Str(PRINTLN_RUNTIME_SYMBOL.to_string()));
-                args.clear();
-                args.push(Operand::Constant(Constant::Str(s_lit)));
+                if is_print {
+                    // M11 contract: exactly one string-literal argument.
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("{} arg(s)", args.len()),
+                        });
+                    }
+                    let s_lit = match &args[0] {
+                        Operand::Constant(Constant::Str(s)) => s.clone(),
+                        other => {
+                            return Err(IntrinsicError::PrintArgUnsupported {
+                                found: format!("non-literal arg {other:?}"),
+                            });
+                        }
+                    };
+
+                    // Rewrite: callee → runtime symbol; preserve the
+                    // literal arg. Codegen reads `args[0] = Constant::Str(s)`
+                    // to emit the (*const u8, usize) C-ABI call.
+                    *func = Operand::Constant(Constant::Str(PRINTLN_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(Operand::Constant(Constant::Str(s_lit)));
+                } else if is_print_int {
+                    // ADR-0030 §Decision step 5: rewrite print_int(n) to
+                    // __cobrust_println_int(n). The integer operand passes
+                    // through unchanged; codegen lowers it as i64 via the
+                    // runtime_funcs table.
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("print_int: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    // Preserve the existing integer operand — just redirect
+                    // the callee to the runtime symbol.
+                    let int_arg = args[0].clone();
+                    *func =
+                        Operand::Constant(Constant::Str(PRINTLN_INT_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(int_arg);
+                }
             }
         }
     }
 
-    // Drop the prelude `print` stub Body. After rewrite no callsite
-    // references it; keeping it would force codegen to lower a
-    // useless stub (the prelude prints nothing on its own).
+    // Drop all prelude stub Bodies (print + print_int). After rewrite no
+    // callsite references them.
     module
         .bodies
-        .retain(|body| !print_ids.contains(&body.def_id.0));
+        .retain(|body| !all_stub_ids.contains(&body.def_id.0));
 
     Ok(())
 }
