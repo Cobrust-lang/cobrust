@@ -676,21 +676,45 @@ impl<'a> BodyBuilder<'a> {
                 else_block,
                 ..
             } => {
-                // Lower iter expression and treat as eager iteration:
-                // pre → header → body, with the binding allocated as
-                // a fresh local.
+                // ADR-0027 §4 for-protocol lowering:
+                //   let it = iter_expr.iter();
+                //   loop:
+                //     let opt = it.next();
+                //     if opt.is_none() { break }
+                //     let var = opt.unwrap();
+                //     body
+                //     goto loop
+                //
+                // The iter / next calls land as MIR `Terminator::Call`
+                // edges so the codegen runtime can dispatch to the
+                // `cobrust_stdlib::iter::ListIter / DictIter / SetIter
+                // / RangeIter` types.
                 self.ensure_open_block();
-                let _iter_op = self.lower_expr(iter)?;
-                let pre = self.current_block_id();
-                let header = self.start_new_block();
-                self.cur_block = Some(pre.0 as usize);
-                self.terminate(Terminator::Goto(header));
+                // Step 1: evaluate iter expression and bind to `_iter`.
+                let iter_val_op = self.lower_expr(iter)?;
+                let iter_local =
+                    self.declare_local("_iter".to_string(), Ty::None, span, true);
+                self.emit_assign(Place::local(iter_local), Rvalue::Use(iter_val_op), span);
 
-                // Binding allocation — bind the pattern to a fresh
-                // operand of element type.
-                if let PatternKind::Binding(name, def_id) = &pattern.kind {
+                // Step 2: call __cobrust_iter_init(iter_local) → it_local.
+                let it_local =
+                    self.declare_local("_iter_handle".to_string(), Ty::None, span, true);
+                let cur = self.current_block_id();
+                let init_target = self.start_new_block();
+                self.cur_block = Some(cur.0 as usize);
+                self.terminate(Terminator::Call {
+                    func: Operand::Constant(Constant::Str("__cobrust_iter_init".to_string())),
+                    args: vec![Operand::Copy(Place::local(iter_local))],
+                    destination: Place::local(it_local),
+                    target: init_target,
+                    unwind: None,
+                });
+                self.cur_block = Some(init_target.0 as usize);
+
+                // Binding allocation.
+                let var_local = if let PatternKind::Binding(name, def_id) = &pattern.kind {
                     let ty = self.ctx.lookup_ty(*def_id);
-                    self.declare_local_for_def(*def_id, name.clone(), ty, span, true);
+                    Some(self.declare_local_for_def(*def_id, name.clone(), ty, span, true))
                 } else {
                     for did in binding_def_ids {
                         let ty = self.ctx.lookup_ty(*did);
@@ -702,22 +726,49 @@ impl<'a> BodyBuilder<'a> {
                             true,
                         );
                     }
+                    None
+                };
+
+                // Step 3: header — call __cobrust_iter_next(it) → opt_local.
+                //         opt_local==0 means exhausted (Option::None convention).
+                let pre = self.current_block_id();
+                let header = self.start_new_block();
+                let opt_local =
+                    self.declare_local("_iter_opt".to_string(), Ty::None, span, true);
+                self.cur_block = Some(pre.0 as usize);
+                self.terminate(Terminator::Goto(header));
+                self.cur_block = Some(header.0 as usize);
+
+                // Inside header: call next, then SwitchInt on opt.
+                let after_next = self.start_new_block();
+                self.cur_block = Some(header.0 as usize);
+                self.terminate(Terminator::Call {
+                    func: Operand::Constant(Constant::Str("__cobrust_iter_next".to_string())),
+                    args: vec![Operand::Copy(Place::local(it_local))],
+                    destination: Place::local(opt_local),
+                    target: after_next,
+                    unwind: None,
+                });
+                self.cur_block = Some(after_next.0 as usize);
+
+                // Bind var = opt (the operand pointer; codegen unwraps).
+                if let Some(vl) = var_local {
+                    self.emit_assign(
+                        Place::local(vl),
+                        Rvalue::Use(Operand::Copy(Place::local(opt_local))),
+                        span,
+                    );
                 }
 
-                // Header continues to body always (M8 placeholder
-                // for iterator protocol — runtime decides exhaustion;
-                // we model it as switch with a synthetic "done" flag).
                 let body_block = self.start_new_block();
                 let exit_block = self.start_new_block();
-                self.cur_block = Some(header.0 as usize);
-                // Synthesize a constant `false` terminator condition — by default,
-                // M8 emits the iteration as a single-pass SwitchInt with otherwise=exit
-                // so that the borrow / drop passes have a complete CFG.
+                self.cur_block = Some(after_next.0 as usize);
                 self.terminate(Terminator::SwitchInt {
-                    operand: Operand::Constant(Constant::Bool(true)),
-                    cases: vec![(SwitchValue::Bool(true), body_block)],
-                    otherwise: exit_block,
+                    operand: Operand::Copy(Place::local(opt_local)),
+                    cases: vec![(SwitchValue::Bool(false), exit_block)],
+                    otherwise: body_block,
                 });
+
                 self.loop_stack.push((header, exit_block));
                 self.cur_block = Some(body_block.0 as usize);
                 self.lower_block(body)?;
