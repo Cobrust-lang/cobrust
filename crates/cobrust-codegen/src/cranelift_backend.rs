@@ -1467,6 +1467,10 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_iter_next", sig(call_conv, &[p], Some(i64))));
     out.push(("__cobrust_iter_drop", sig(call_conv, &[p], None)));
 
+    // -- print_int runtime (ADR-0030 §Decision step 5) ----------------
+    // `print_int(n: i64)` — prints n as decimal + newline.
+    out.push(("__cobrust_println_int", sig(call_conv, &[i64], None)));
+
     // -- f-string runtime ------------------------------------------
     out.push(("__cobrust_str_new", sig(call_conv, &[], Some(p))));
     out.push((

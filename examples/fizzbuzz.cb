@@ -1,23 +1,24 @@
-# FizzBuzz — M11 example.
+# FizzBuzz — M11.1 example (ADR-0030).
 #
-# Cobrust source-level: arithmetic + control flow + print.
-# Uses only forms M11 codegen can lower end-to-end (literal strings
-# in print). The full Python-style FizzBuzz with f-strings is M12
-# scope (HIR-tier f-string lowering through the runtime ABI).
+# Real algorithm: while loop + if/elif/elif/else + modulo arithmetic.
+# Demonstrates:
+#   - while loop with mutation
+#   - if/elif/elif/else with if as the first statement in the loop body
+#   - modulo operator (%)
+#   - print (string) and print_int (integer)
+#
+# The M11 prelude fixes (ADR-0030) enable this after the while-loop-
+# with-leading-if codegen regression was resolved.
 fn main() -> i64:
-    print("1")
-    print("2")
-    print("Fizz")
-    print("4")
-    print("Buzz")
-    print("Fizz")
-    print("7")
-    print("8")
-    print("Fizz")
-    print("Buzz")
-    print("11")
-    print("Fizz")
-    print("13")
-    print("14")
-    print("FizzBuzz")
+    let n: i64 = 1
+    while n <= 15:
+        if n % 15 == 0:
+            print("FizzBuzz")
+        elif n % 3 == 0:
+            print("Fizz")
+        elif n % 5 == 0:
+            print("Buzz")
+        else:
+            print_int(n)
+        n = n + 1
     return 0
