@@ -36,9 +36,11 @@ l2_build = "pass (cargo build --release zero warnings)"
 l2_behavior = "pass (tests/dateutil_downstream.rs + tests/dateutil_fuzz.rs) (after 1 repair-loop iteration on parse_iso)"
 l2_perf = "pass (per-library threshold per ADR-0008 §2; report at target/cobrust-bench/dateutil/<commit>/report.json)"
 l3_pyo3_wrapper = "pass (tests/dateutil_downstream.rs subprocess CPython oracle)"
-l3_downstream_dependents = "pass 2/5 (croniter, freezegun); deferred 3/5 (pandas, sqlalchemy, pendulum) to M6 per ADR-0009"
+l3_downstream_dependents = "pass 5/5 (croniter, freezegun, pandas, sqlalchemy, pendulum) per ADR-0010 + ADR-0022"
 
 [gates.dependents]
-covered = ["croniter", "freezegun"]
-deferred = ["pandas", "sqlalchemy", "pendulum"]
-deferred_reason = "M5 budget; M6 widens per ADR-0009"
+covered = ["croniter", "freezegun", "pandas", "pendulum", "sqlalchemy"]
+deferred = []
+deferred_reason = ""
+skipped = []
+skipped_reason = ""

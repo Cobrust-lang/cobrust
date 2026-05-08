@@ -1,0 +1,10 @@
+# L2.perf threshold for cobrust-requests, per ADR-0022 §6 (surface-
+# translate / Rust-binding tier — 0.8× default).
+threshold = 0.8
+pass_ratio = 1.0
+
+# We don't subprocess-bench HTTP because the network is non-
+# deterministic. Instead, the L2.perf gate measures the cobrust
+# dispatch overhead vs a direct reqwest::blocking call against the
+# same in-process wiremock — the binding overhead is the only knob
+# we control.

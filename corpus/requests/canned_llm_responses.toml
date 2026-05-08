@@ -1,0 +1,168 @@
+# Synthetic-LLM canned response table for cobrust-requests.
+#
+# Per ADR-0007 §4 (synthetic-mode contract) + ADR-0022 §5: the
+# pipeline routes prompt-hash lookups against this table; cache
+# misses raise `synthetic-miss` (caller must add an entry or switch
+# to real-LLM via `--features real-llm`).
+#
+# Lookup key: (task, function, attempt) — per ADR-0008 §5 (M5
+# extension) + ADR-0010 §"Synthetic provider — task field extends".
+#
+# `source_sha16` is the first 16 hex chars of the SHA-256 of the
+# upstream subset. If the upstream SHA changes, every entry's
+# `source_sha16` mismatches and the synthetic provider returns
+# `synthetic-stale` — forcing the curator to re-record.
+
+schema_version = 1
+oracle_runtime = "cpython 3.11"
+
+[[entry]]
+task = "translate"
+function = "get"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+// fn:get translated to a thin wrapper around `default_session().get(url)`
+// that delegates to reqwest::blocking under the hood. Surface stays
+// sync per constitution §2.2.
+pub fn get(url: &str) -> Result<Response, HttpError> {
+    default_session().get(url)
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "post"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+pub fn post(url: &str, body: &[u8]) -> Result<Response, HttpError> {
+    default_session().post(url, body)
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "put"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+pub fn put(url: &str, body: &[u8]) -> Result<Response, HttpError> {
+    default_session().put(url, body)
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "patch"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+pub fn patch(url: &str, body: &[u8]) -> Result<Response, HttpError> {
+    default_session().patch(url, body)
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "delete"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+pub fn delete(url: &str) -> Result<Response, HttpError> {
+    default_session().delete(url)
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "head"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+pub fn head(url: &str) -> Result<Response, HttpError> {
+    default_session().head(url)
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Session::new"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+impl Session {
+    pub fn new() -> Self {
+        let inner = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("reqwest blocking client builder is infallible");
+        Self { inner }
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Session::get"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+impl Session {
+    pub fn get(&self, url: &str) -> Result<Response, HttpError> {
+        self.dispatch(HttpMethod::Get, url, None)
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Session::post"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+impl Session {
+    pub fn post(&self, url: &str, body: &[u8]) -> Result<Response, HttpError> {
+        self.dispatch(HttpMethod::Post, url, Some(body))
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Session::put"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+impl Session {
+    pub fn put(&self, url: &str, body: &[u8]) -> Result<Response, HttpError> {
+        self.dispatch(HttpMethod::Put, url, Some(body))
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Session::patch"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+impl Session {
+    pub fn patch(&self, url: &str, body: &[u8]) -> Result<Response, HttpError> {
+        self.dispatch(HttpMethod::Patch, url, Some(body))
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Session::delete"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+impl Session {
+    pub fn delete(&self, url: &str) -> Result<Response, HttpError> {
+        self.dispatch(HttpMethod::Delete, url, None)
+    }
+}
+'''
+
+[[entry]]
+task = "translate"
+function = "Session::head"
+source_sha16 = "942c5a758f98d790"
+response_text = '''
+impl Session {
+    pub fn head(&self, url: &str) -> Result<Response, HttpError> {
+        self.dispatch(HttpMethod::Head, url, None)
+    }
+}
+'''

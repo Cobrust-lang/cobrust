@@ -40,6 +40,12 @@ flowchart TD
 | `cobrust-codegen` | LLVM / Cranelift backend | M3+ |
 | `cobrust-llm-router` | LLM Router | M3 |
 | `cobrust-translator` | AI translation subsystem | M4+ |
+| `cobrust-tomli` | Translated `tomli` (Apache-2.0/MIT) | M4 |
+| `cobrust-dateutil` | Translated `dateutil` (PSF/Apache) — L3 widened to 5/5 by ADR-0022 | M5 (L3 5/5 at M-batch) |
+| `cobrust-msgpack` | Translated `msgpack-python` (Apache-2.0) — L3 widened to 3/3 by ADR-0022 | M6 (L3 3/3 at M-batch) |
+| `cobrust-numpy` | Translated `numpy` core subset (BSD) | M7.0..M7.5 |
+| `cobrust-requests` | Translated `requests` 2.31 (Apache-2.0) — surface-translate / reqwest-blocking-bind per ADR-0022 §2 | M-batch (ADR-0022) |
+| `cobrust-click` | Translated `click` 8.1.7 (BSD-3-Clause) — decorator-chain → clap-derive per ADR-0022 §3 | M-batch (ADR-0022) |
 
 ## Frontend (M1 — delivered)
 
@@ -1317,3 +1323,70 @@ See [ADR-0017](../../agent/adr/0017-m7-4-linalg.md)
 
 See [ADR-0018](../../agent/adr/0018-m7-5-random.md)
 for the load-bearing decisions.
+
+
+## Ecosystem-batch (ADR-0022 — delivered)
+
+The ecosystem-batch sprint per ADR-0022 ships **two new translated
+crates** (`cobrust-requests`, `cobrust-click`) plus closes the
+remaining L3 dependent gaps for `cobrust-dateutil` (now 5/5) and
+`cobrust-msgpack` (now 3/3). It deliberately adds **breadth** rather
+than new compiler infrastructure — proving Cobrust's translation
+pipeline scales beyond the M5/M6/M7 numerical-tier tower into the
+"typical Python CLI tool" stack (HTTP + CLI parsing).
+
+### `cobrust-requests` — HTTP client
+
+Translates the public surface of `requests` 2.31.0 onto
+`reqwest::blocking::Client`. Constitution §2.2 forbids async / sync
+function coloring; the crate keeps a sync surface, with the Cobrust
+structured-concurrency runtime (per ADR-0019 Phase E, M8+)
+positioned to swap the backend without breaking callers. Public
+surface: 6 free-verb functions (`get / post / put / patch / delete /
+head`) + `Session` with the same six methods + `Response` with
+`.status_code / .ok / .headers / .text / .json / .bytes`. Single
+error type `HttpError { kind: HttpErrorKind, message: String }` with
+4 closed variants (`InvalidUrl / Network / Timeout / DecodeBody`). The `HttpMethod` enum (`Get / Post / Put / Patch / Delete / Head`) closes the verb taxonomy.
+
+The L3 differential gate spins an in-process HTTP/1.1 wiremock on a
+random localhost port and dispatches the cobrust-requests verbs at
+it; an optional `httpbin.org` smoke runs when network is reachable.
+
+### `cobrust-click` — CLI parsing
+
+Translates the public surface of `click` 8.1.7 onto `clap = "4"`. The
+translation challenge per ADR-0022 §3 is the
+**decorator-chain → fluent-builder** mapping: `@click.command(name=...)`
+becomes `Command::new(name)`, `@click.option('--flag', type=int)`
+becomes `OptionSpec::new("flag").type_(ParamType::Int)`, etc.
+
+Public surface: `Command::new(name).about(help).option(opt).argument(arg).run(argv)`
+returning `RunResult` with `.option(name) / .argument(name)` accessors. `OptionSpec` and `ArgumentSpec` are the per-option / per-positional builders.
+Single error type `ClickError { kind: ClickErrorKind, message: String }`
+with 4 closed variants (`UsageError / MissingOption / MissingArgument /
+InvalidValue`). Uses clap's `error-context` feature to walk
+`ContextKind::InvalidArg` and route missing-required errors correctly
+to either MissingOption or MissingArgument.
+
+### L3 closures (ADR-0022 §4)
+
+ADR-0010 §5 left two L3 dependent gates open:
+
+- **dateutil → pendulum**: the M6 vendored subset emitted
+  `Skipped { reason: "tz module out of M5/M6 scope" }`. The M-batch
+  vendoring replaces it with a **non-tz** subset that exercises
+  pendulum's `relativedelta`-backed `Period` arithmetic — fully in
+  scope for M5+ dateutil. Result: dateutil L3 reaches **5/5**.
+- **msgpack → pyspark**: the M6 vendored subset emitted
+  `Deferred { reason: "needs JVM" }`. The M-batch vendoring replaces
+  it with a **non-JVM** subset that drives the
+  `pyspark.serializers.MsgPackSerializer`-style scalar / bytes
+  payload pattern through the M6 msgpack public surface. Result:
+  msgpack L3 reaches **3/3**.
+
+Per-library threshold tier introduced in ADR-0022 §6 — the
+**surface-translate / Rust-binding** tier (0.8×, constitution
+default; same as pure-Python). The native-ext tier (0.7×, ADR-0010
+§3) and numerical tier (0.5×, ADR-0010 §3 + ADR-0014) remain
+distinct.
+
