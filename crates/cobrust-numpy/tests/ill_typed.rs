@@ -29,9 +29,15 @@ use cobrust_numpy::{Dtype, NumpyErrorKind, arange, array, ones, zeros};
 // ---- 1..15 — dtype string rejections (closed set per ADR-0013) ----------
 
 #[test]
-fn i01_dtype_unknown_complex128() {
-    let err = Dtype::from_python_string("complex128").unwrap_err();
-    assert_eq!(err.kind, NumpyErrorKind::UnsupportedDtype);
+fn i01_dtype_complex128_now_supported_at_m76() {
+    // M7.0 (ADR-0013) had complex128 as out-of-scope. M7.6 (ADR-0021 §3)
+    // widens the dtype enum to include `Complex128`. The historical
+    // "ill-typed" test is preserved as a regression marker that the
+    // string is now accepted; the constructor-level surface still
+    // returns `LinalgDtypeUnsupported` until the Array tagged-union
+    // widening lands per ADR-0021 §"Consequences" follow-up.
+    let dt = Dtype::from_python_string("complex128").unwrap();
+    assert_eq!(dt, Dtype::Complex128);
 }
 
 #[test]
@@ -107,9 +113,13 @@ fn i13_dtype_case_sensitive_bool() {
 }
 
 #[test]
-fn i14_dtype_unknown_complex64() {
-    let err = Dtype::from_python_string("complex64").unwrap_err();
-    assert_eq!(err.kind, NumpyErrorKind::UnsupportedDtype);
+fn i14_dtype_complex64_now_supported_at_m76() {
+    // M7.0 (ADR-0013) had complex64 as out-of-scope. M7.6 (ADR-0021 §3)
+    // widens the dtype enum to include `Complex64`. The historical
+    // "ill-typed" test is preserved as a regression marker that the
+    // string is now accepted.
+    let dt = Dtype::from_python_string("complex64").unwrap();
+    assert_eq!(dt, Dtype::Complex64);
 }
 
 #[test]

@@ -1,0 +1,249 @@
+# Canned LLM responses for numpy M7.6 — synthetic-LLM mode.
+#
+# Schema per ADR-0007 §"Synthetic-LLM mode contract" + ADR-0008 §5
+# (per-attempt routing) + ADR-0021. Lookup key:
+# (task, function, attempt). When attempt is omitted both sides
+# default to 1.
+#
+# Source-SHA staleness check:
+#   sha256(corpus/numpy/M7.6/upstream/m76_core.py)[..16] = "ef01b7ce924a1116"
+#
+# These canned responses describe a flat-file equivalent of the
+# multi-file cobrust-numpy crate; the production multi-file crate at
+# crates/cobrust-numpy/src/{fft,poly,reduce}.rs is the gate-stable
+# byte snapshot; canned responses here cover the **translator path**
+# itself.
+#
+# MODULE PREAMBLE: alphabetically-first function (cumprod) carries the
+# preamble. Subsequent entries emit only their function bodies.
+
+schema_version = 1
+oracle_runtime = "cpython 3.11"
+
+# ---- cumprod (alphabetic-first; carries module preamble) ------------------
+
+[[entry]]
+task = "translate"
+function = "cumprod"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+// Module preamble for M7.6 expansion (synthetic-LLM mode).
+// Per ADR-0021 §"Crate layout" the production cobrust-numpy is
+// multi-file; the canned-response path emits a flat-file equivalent
+// so the M7.6 pipeline integration test can assert end-to-end
+// emission without extending the pipeline's hardcoded per-library
+// file layout.
+
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::imprecise_flops)]
+#![allow(clippy::suboptimal_flops)]
+#![allow(clippy::excessive_precision)]
+#![allow(dead_code)]
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumpyError { pub kind: NumpyErrorKind, pub message: String }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NumpyErrorKind {
+    PercentileOutOfRange,
+    EmptyAxisTuple,
+    ComplexNotOrderable,
+    IndexError,
+}
+
+/// cumprod stub. Production lives in crates/cobrust-numpy/src/reduce.rs.
+pub fn cumprod(_arr: &[f64], _shape: &[usize], _axis: Option<i64>) -> Result<Vec<f64>, NumpyError> {
+    Ok(Vec::new())
+}
+'''
+
+# ---- cumsum ---------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "cumsum"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// cumsum stub. Production lives in crates/cobrust-numpy/src/reduce.rs.
+pub fn cumsum(_arr: &[f64], _shape: &[usize], _axis: Option<i64>) -> Result<Vec<f64>, NumpyError> {
+    Ok(Vec::new())
+}
+'''
+
+# ---- fft ------------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "fft"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// fft stub. Production lives in crates/cobrust-numpy/src/fft.rs (rustfft binding).
+pub fn fft(_arr: &[(f64, f64)]) -> Result<Vec<(f64, f64)>, NumpyError> {
+    Ok(Vec::new())
+}
+'''
+
+# ---- ifft -----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "ifft"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// ifft stub. Production lives in crates/cobrust-numpy/src/fft.rs.
+pub fn ifft(_arr: &[(f64, f64)]) -> Result<Vec<(f64, f64)>, NumpyError> {
+    Ok(Vec::new())
+}
+'''
+
+# ---- irfft ----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "irfft"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// irfft stub. Production lives in crates/cobrust-numpy/src/fft.rs.
+pub fn irfft(_arr: &[(f64, f64)], _n: usize) -> Result<Vec<f64>, NumpyError> {
+    Ok(Vec::new())
+}
+'''
+
+# ---- median ---------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "median"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// median stub. Production lives in crates/cobrust-numpy/src/reduce.rs.
+pub fn median(_arr: &[f64], _shape: &[usize], _axis: Option<i64>) -> Result<f64, NumpyError> {
+    Ok(0.0)
+}
+'''
+
+# ---- nanmax ---------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "nanmax"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// nanmax stub. Production lives in crates/cobrust-numpy/src/reduce.rs.
+pub fn nanmax(_arr: &[f64], _shape: &[usize], _axis: Option<i64>) -> Result<f64, NumpyError> {
+    Ok(0.0)
+}
+'''
+
+# ---- nanmean --------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "nanmean"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// nanmean stub. Production lives in crates/cobrust-numpy/src/reduce.rs.
+pub fn nanmean(_arr: &[f64], _shape: &[usize], _axis: Option<i64>) -> Result<f64, NumpyError> {
+    Ok(0.0)
+}
+'''
+
+# ---- nanmin ---------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "nanmin"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// nanmin stub. Production lives in crates/cobrust-numpy/src/reduce.rs.
+pub fn nanmin(_arr: &[f64], _shape: &[usize], _axis: Option<i64>) -> Result<f64, NumpyError> {
+    Ok(0.0)
+}
+'''
+
+# ---- nansum ---------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "nansum"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// nansum stub. Production lives in crates/cobrust-numpy/src/reduce.rs.
+pub fn nansum(_arr: &[f64], _shape: &[usize], _axis: Option<i64>) -> Result<f64, NumpyError> {
+    Ok(0.0)
+}
+'''
+
+# ---- percentile -----------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "percentile"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// percentile stub. Production lives in crates/cobrust-numpy/src/reduce.rs.
+pub fn percentile(_arr: &[f64], _q: f64, _shape: &[usize], _axis: Option<i64>) -> Result<f64, NumpyError> {
+    Ok(0.0)
+}
+'''
+
+# ---- poly -----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "poly"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// poly stub. Production lives in crates/cobrust-numpy/src/poly.rs.
+pub fn poly(_roots: &[f64]) -> Result<Vec<f64>, NumpyError> {
+    Ok(vec![1.0])
+}
+'''
+
+# ---- polyfit --------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "polyfit"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// polyfit stub. Production lives in crates/cobrust-numpy/src/poly.rs.
+pub fn polyfit(_x: &[f64], _y: &[f64], _deg: usize) -> Result<Vec<f64>, NumpyError> {
+    Ok(Vec::new())
+}
+'''
+
+# ---- polyval --------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "polyval"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// polyval stub. Production lives in crates/cobrust-numpy/src/poly.rs.
+pub fn polyval(_coeffs: &[f64], _x: &[f64]) -> Result<Vec<f64>, NumpyError> {
+    Ok(Vec::new())
+}
+'''
+
+# ---- rfft -----------------------------------------------------------------
+
+[[entry]]
+task = "translate"
+function = "rfft"
+source_sha16 = "ef01b7ce924a1116"
+response_text = '''
+/// rfft stub. Production lives in crates/cobrust-numpy/src/fft.rs.
+pub fn rfft(_arr: &[f64]) -> Result<Vec<(f64, f64)>, NumpyError> {
+    Ok(Vec::new())
+}
+'''

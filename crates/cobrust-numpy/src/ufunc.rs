@@ -110,6 +110,18 @@ fn cast_to(arr: &Array, target: Dtype) -> Array {
         Dtype::Float32 => Array::Float32(cast_to_f32(arr)),
         Dtype::Float64 => Array::Float64(cast_to_f64(arr)),
         Dtype::Bool => Array::Bool(cast_to_bool(arr)),
+        Dtype::Complex64 | Dtype::Complex128 => {
+            // Per ADR-0021 §3 + §5 the M7.6 sub-milestone widens `Dtype`
+            // to seven variants but defers the `Array` tagged-union
+            // widening (and therefore complex-cast routing) to a
+            // follow-up sprint. Reaching this arm at M7.6 means a caller
+            // passed a complex target_dtype to a code path that did not
+            // pre-validate it; every consumer in the M7.6 surface filters
+            // complex via `Dtype::is_complex` before calling `cast_to`.
+            unreachable!(
+                "ufunc::cast_to: target Complex dtype routed through real-only path;                  callers must filter via Dtype::is_complex before reaching here                  (M7.6 ADR-0021 §3 + §5)"
+            );
+        }
     }
 }
 

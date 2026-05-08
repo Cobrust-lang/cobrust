@@ -792,6 +792,49 @@ if grep -q '^- \*\*M-batch — delivered.\*\*' "docs/agent/modules/requests.md";
             fi
         done
     done
+fi
+
+echo "doc-coverage: M-batch requests surface checks passed"
+
+# --- 17. M7.6 expansion surface coverage -----------------------------------
+# When the numpy module declares M7.6 delivered, the M7.6 expansion surface
+# terms + ADR-0021 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M7.6 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
+    m7_6_numpy_terms=(
+        "Complex64"
+        "Complex128"
+        "ComplexNotOrderable"
+        "PercentileOutOfRange"
+        "EmptyAxisTuple"
+        "fft"
+        "ifft"
+        "rfft"
+        "irfft"
+        "polyval"
+        "polyfit"
+        "cumsum"
+        "cumprod"
+        "median"
+        "percentile"
+        "nansum"
+        "nanmean"
+        "nanmin"
+        "nanmax"
+        "ADR-0021"
+    )
+    m7_6_numpy_files=(
+        "docs/agent/modules/numpy.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m7_6_numpy_terms[@]}"; do
+        for f in "${m7_6_numpy_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M7.6 numpy surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
 
     adr_22="docs/agent/adr/0022-translation-ecosystem-batch.md"
     [[ -f "$adr_22" ]] || fail "ADR-0022 (translation ecosystem batch) is required for M-batch"
@@ -855,3 +898,18 @@ fi
 
 echo "doc-coverage: ADR-0022 ecosystem-batch surface checks passed"
 
+# --- M7.6 numpy expansion (ADR-0021) -----------------------------------------
+if [[ -f "docs/agent/adr/0021-m7-6-numpy-expansion.md" ]]; then
+    adr_twentyone="docs/agent/adr/0021-m7-6-numpy-expansion.md"
+    if ! grep -q '^status: accepted$' "$adr_twentyone"; then
+        fail "ADR-0021 must be 'status: accepted' for M7.6 to be done"
+    fi
+
+    [[ -f corpus/numpy/M7.6/spec.toml ]] || fail "corpus/numpy/M7.6/spec.toml missing"
+    [[ -f corpus/numpy/M7.6/canned_llm_responses.toml ]] || fail "corpus/numpy/M7.6/canned_llm_responses.toml missing"
+    [[ -d corpus/numpy/M7.6/upstream ]] || fail "corpus/numpy/M7.6/upstream missing"
+    [[ -d corpus/numpy/M7.6/harness ]] || fail "corpus/numpy/M7.6/harness missing"
+    [[ -f corpus/numpy/M7.6/perf.toml ]] || fail "corpus/numpy/M7.6/perf.toml missing"
+fi
+
+echo "doc-coverage: M7.6 expansion surface checks passed"

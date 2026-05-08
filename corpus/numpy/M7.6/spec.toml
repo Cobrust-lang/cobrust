@@ -1,0 +1,153 @@
+# numpy L0 spec — M7.6 (per ADR-0021).
+#
+# Schema per ADR-0007 §1. Three buckets are bound here in one corpus:
+#   - Bucket A (FFT + poly): 4 fft ops + 3 poly ops = 7
+#   - Bucket B (Complex dtype): represented via dtype-tier widening, no
+#     new translate-tier functions — the dtype enum and ufunc routing
+#     are pure-Rust hand-curated and live in
+#     crates/cobrust-numpy/src/{dtype,promote,ufunc,linalg}.rs.
+#     Complex differential gates exercise the existing M7.1 ufunc surface
+#     under the new dtype variants.
+#   - Bucket C (reduction extensions): 8 new reductions + 5 tuple-axis
+#     forms = 13. Counted as 8 entries; tuple-axis forms share the
+#     existing sum/prod/mean/min/max bodies via free-function variants.
+
+schema_version = 1
+library = "numpy"
+upstream_version = "2.0.2"
+oracle_module = "numpy"
+oracle_runtime = "cpython"
+oracle_runtime_version = "3.11"
+
+# ---- Bucket A — FFT (rustfft binding) -------------------------------------
+
+[function.fft]
+qualname = "m76_core.fft"
+public = true
+signature = "fft(arr: list[complex], shape: list[int]) -> list[complex], shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-5
+description = "1-D forward FFT (complex → complex). Per ADR-0021 §1."
+
+[function.ifft]
+qualname = "m76_core.ifft"
+public = true
+signature = "ifft(arr: list[complex], shape: list[int]) -> list[complex], shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-5
+description = "1-D inverse FFT (complex → complex). Per ADR-0021 §1."
+
+[function.rfft]
+qualname = "m76_core.rfft"
+public = true
+signature = "rfft(arr: list[float], shape: list[int]) -> list[complex], shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-5
+description = "1-D forward real FFT (real → complex). Per ADR-0021 §1."
+
+[function.irfft]
+qualname = "m76_core.irfft"
+public = true
+signature = "irfft(arr: list[complex], n: int) -> list[float], shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-5
+description = "1-D inverse real FFT (complex → real). Per ADR-0021 §1."
+
+# ---- Bucket A — polynomial ------------------------------------------------
+
+[function.polyval]
+qualname = "m76_core.polyval"
+public = true
+signature = "polyval(coeffs: list[float], x: list[float]) -> list[float]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Horner's method polynomial evaluation. Per ADR-0021 §2."
+
+[function.polyfit]
+qualname = "m76_core.polyfit"
+public = true
+signature = "polyfit(x: list[float], y: list[float], deg: int) -> list[float]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Least-squares polynomial fit via Vandermonde + M7.4 solve."
+
+[function.poly]
+qualname = "m76_core.poly"
+public = true
+signature = "poly(roots: list[float]) -> list[float]"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Roots → polynomial coefficients via iterative convolution."
+
+# ---- Bucket C — reduction extensions --------------------------------------
+
+[function.cumsum]
+qualname = "m76_core.cumsum"
+public = true
+signature = "cumsum(arr: list, shape: list[int], axis: int | None) -> list, shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Cumulative sum along axis (or flattened when axis=None). Per ADR-0021 §7."
+
+[function.cumprod]
+qualname = "m76_core.cumprod"
+public = true
+signature = "cumprod(arr: list, shape: list[int], axis: int | None) -> list, shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Cumulative product along axis (or flattened when axis=None). Per ADR-0021 §7."
+
+[function.median]
+qualname = "m76_core.median"
+public = true
+signature = "median(arr: list[float], shape: list[int], axis: int | None) -> list[float], shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Median along axis. Linear interpolation for even-length per numpy default. Per ADR-0021 §8."
+
+[function.percentile]
+qualname = "m76_core.percentile"
+public = true
+signature = "percentile(arr: list[float], q: float, shape: list[int], axis: int | None) -> list[float], shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "q-th percentile along axis. q in [0, 100] else PercentileOutOfRange. Per ADR-0021 §8."
+
+[function.nansum]
+qualname = "m76_core.nansum"
+public = true
+signature = "nansum(arr: list[float], shape: list[int], axis: int | None) -> list[float], shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Sum skipping NaN entries. Empty after filter → 0 (additive identity). Per ADR-0021 §9."
+
+[function.nanmean]
+qualname = "m76_core.nanmean"
+public = true
+signature = "nanmean(arr: list[float], shape: list[int], axis: int | None) -> list[float], shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Mean skipping NaN entries. Empty after filter → NaN. Per ADR-0021 §9."
+
+[function.nanmin]
+qualname = "m76_core.nanmin"
+public = true
+signature = "nanmin(arr: list[float], shape: list[int], axis: int | None) -> list[float], shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Min skipping NaN entries. All-NaN lane → NaN (matches numpy). Per ADR-0021 §9."
+
+[function.nanmax]
+qualname = "m76_core.nanmax"
+public = true
+signature = "nanmax(arr: list[float], shape: list[int], axis: int | None) -> list[float], shape"
+py_compat = "numerical"
+py_compat_rtol = 1e-7
+description = "Max skipping NaN entries. All-NaN lane → NaN (matches numpy). Per ADR-0021 §9."
+
+# ---- Verification budget --------------------------------------------------
+
+[verification]
+seeds = [42, 1337, 0xDEADBEEF]
+fuzz_inputs_per_fn = 1000
+tolerance = "Bit-identical for Int32/Int64/Bool. rtol=1e-7 for Float32/Float64. rtol=1e-5 for Complex64/Complex128 (FFT round-trip bound; per ADR-0021 §12). ≥ 200 inputs per new op."

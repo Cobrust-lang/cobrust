@@ -56,6 +56,14 @@ pub fn zeros(shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError> {
         Dtype::Float32 => Array::Float32(ArrayD::<f32>::zeros(dim)),
         Dtype::Float64 => Array::Float64(ArrayD::<f64>::zeros(dim)),
         Dtype::Bool => Array::Bool(ArrayD::<bool>::from_elem(dim, false)),
+        Dtype::Complex64 | Dtype::Complex128 => {
+            return Err(NumpyError {
+                kind: NumpyErrorKind::LinalgDtypeUnsupported,
+                message: format!(
+                    "zeros: complex dtype {dtype} requires Array tagged-union widening; M7.6 ADR-0021 ships dtype tier only"
+                ),
+            });
+        }
     })
 }
 
@@ -72,6 +80,14 @@ pub fn ones(shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError> {
         Dtype::Float32 => Array::Float32(ArrayD::<f32>::from_elem(dim, 1.0_f32)),
         Dtype::Float64 => Array::Float64(ArrayD::<f64>::from_elem(dim, 1.0_f64)),
         Dtype::Bool => Array::Bool(ArrayD::<bool>::from_elem(dim, true)),
+        Dtype::Complex64 | Dtype::Complex128 => {
+            return Err(NumpyError {
+                kind: NumpyErrorKind::LinalgDtypeUnsupported,
+                message: format!(
+                    "ones: complex dtype {dtype} requires Array tagged-union widening; M7.6 ADR-0021 ships dtype tier only"
+                ),
+            });
+        }
     })
 }
 
@@ -147,6 +163,12 @@ pub fn array(values: &[f64], shape: &[usize], dtype: Dtype) -> Result<Array, Num
             })?;
             Ok(Array::Bool(arr))
         }
+        Dtype::Complex64 | Dtype::Complex128 => Err(NumpyError {
+            kind: NumpyErrorKind::LinalgDtypeUnsupported,
+            message: format!(
+                "array: complex dtype {dtype} requires Array tagged-union widening; M7.6 ADR-0021 ships dtype tier only"
+            ),
+        }),
     }
 }
 
