@@ -10,8 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use cobrust_mir::{
-    AssertKind, BasicBlock, BinOp, BlockId, Body, Constant, LocalId, Module, Operand, Place,
-    Projection, Rvalue, Statement, StatementKind, SwitchValue, Terminator, UnOp,
+    AggregateKind, AssertKind, BasicBlock, BinOp, BlockId, Body, CastKind, Constant, LocalId,
+    Module, Operand, Place, Projection, Rvalue, Statement, StatementKind, SwitchValue, Terminator,
+    UnOp,
 };
 
 use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, MemFlags, Signature, UserFuncName};
@@ -310,9 +311,15 @@ impl CraneliftCtx {
         let mut builder_ctx = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut function, &mut builder_ctx);
 
+        // --- compute reachable block set (filters drop-chain dead code) -
+        let reachable_pre = compute_reachable_blocks(body);
+
         // --- create one Cranelift block per MIR block ----------------
         let mut block_map: HashMap<BlockId, ir::Block> = HashMap::new();
         for (idx, mir_block) in body.blocks.iter().enumerate() {
+            if !reachable_pre.contains(&mir_block.id) {
+                continue;
+            }
             let cl_block = builder.create_block();
             if idx == 0 {
                 // entry block — append params (matches body_signature's
@@ -440,6 +447,27 @@ impl CraneliftCtx {
             extern_funcs.insert(name.clone(), func_ref);
         }
 
+        // --- ADR-0027 §1: declare runtime helpers for Aggregate / Cast /
+        //     f-string lowering. The set is fixed; we declare imports
+        //     up-front so per-body lowering can reference any of them
+        //     by name. Unused symbols are stripped at link time.
+        let runtime_helpers = runtime_helper_signatures(self.pointer_type, self.call_conv);
+        let mut runtime_func_ids: HashMap<&'static str, cranelift_module::FuncId> = HashMap::new();
+        for (name, sig) in runtime_helpers.iter() {
+            // Skip if already declared via the Constant::Str path above.
+            if extern_func_ids.contains_key(*name) {
+                continue;
+            }
+            let fid = obj
+                .declare_function(name, Linkage::Import, sig)
+                .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+            runtime_func_ids.insert(*name, fid);
+        }
+        let mut runtime_funcs: HashMap<&'static str, ir::FuncRef> = HashMap::new();
+        for (name, fid) in &runtime_func_ids {
+            runtime_funcs.insert(*name, obj.declare_func_in_func(*fid, builder.func));
+        }
+
         // --- ADR-0025 §"Codegen amendments" Constant::Str row ---------
         // Materialize every Constant::Str payload referenced as a
         // runtime-call argument into a `.rodata` data symbol. The
@@ -488,7 +516,18 @@ impl CraneliftCtx {
         }
 
         // --- lower each block's statements + terminator --------------
-        let mut to_emit: Vec<&BasicBlock> = body.blocks.iter().collect();
+        // ADR-0027 §1 amendment: the drop-schedule pass may emit dead
+        // blocks (drop chains for unreachable Return blocks) when the
+        // entry block itself is a Return. Cranelift's verifier rejects
+        // edges into the entry block, so skip blocks that are not
+        // forward-reachable from BlockId(0).
+        let reachable = compute_reachable_blocks(body);
+        let mut stack_slots: HashMap<LocalId, ir::StackSlot> = HashMap::new();
+        let mut to_emit: Vec<&BasicBlock> = body
+            .blocks
+            .iter()
+            .filter(|b| reachable.contains(&b.id))
+            .collect();
         for mir_block in to_emit.drain(..) {
             let cl_block = block_map[&mir_block.id];
             if mir_block.id != BlockId(0) {
@@ -501,7 +540,9 @@ impl CraneliftCtx {
                 builder: &mut builder,
                 body,
                 extern_funcs: &extern_funcs,
+                runtime_funcs: &runtime_funcs,
                 str_data_globals: &str_data_globals,
+                stack_slots: &mut stack_slots,
             };
             for stmt in &mir_block.statements {
                 emit_ctx.lower_statement(stmt)?;
@@ -548,11 +589,22 @@ struct EmitCtx<'a, 'b> {
     /// the call lowers to a real Cranelift `call` to the FuncRef
     /// stored in this map.
     extern_funcs: &'a HashMap<String, ir::FuncRef>,
+    /// Runtime helper FuncRefs declared at body-define time. ADR-0027
+    /// §1/§3/§5 binds these symbols (`__cobrust_list_new`,
+    /// `__cobrust_str_push_static`, ...) as Linkage::Import imports
+    /// resolved at link time against `cobrust-stdlib`'s C-ABI surface.
+    runtime_funcs: &'a HashMap<&'static str, ir::FuncRef>,
     /// String-payload data globals declared at body-define time.
     /// ADR-0025 §"Codegen amendments" Constant::Str row: the runtime
     /// `(*const u8, usize)` ABI reads the payload pointer from these
     /// globals at call sites.
     str_data_globals: &'a HashMap<String, ir::GlobalValue>,
+    /// ADR-0027 §2: per-local stack-slot allocations created lazily by
+    /// `Rvalue::Ref` lowering. A local that gets `&x`'d once is moved
+    /// onto a Cranelift StackSlot so we can take its address; future
+    /// reads/writes go through the slot. M12.x materializes the slot
+    /// lazily — locals that are never `Ref`'d stay in plain Variables.
+    stack_slots: &'a mut HashMap<LocalId, ir::StackSlot>,
 }
 
 impl<'a, 'b> EmitCtx<'a, 'b> {
@@ -756,23 +808,336 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 let av = self.lower_operand(a)?;
                 self.lower_unop(*op, av)
             }
-            Rvalue::Aggregate(_, _) => {
-                // M9 stub: aggregates lower to a zero pointer; full
-                // materialization belongs in M11 stdlib.
-                Ok(self.builder.ins().iconst(self.pointer_type, 0))
-            }
-            Rvalue::Cast(_, op, _ty) => {
-                // M9 stub: forward the operand without conversion.
-                self.lower_operand(op)
-            }
-            Rvalue::Ref(_, _place) => {
-                // M9 stub: a borrow returns a null pointer placeholder.
-                Ok(self.builder.ins().iconst(self.pointer_type, 0))
-            }
+            Rvalue::Aggregate(kind, ops) => self.lower_aggregate(kind, ops),
+            Rvalue::Cast(kind, op, ty) => self.lower_cast(*kind, op, ty),
+            Rvalue::Ref(_, place) => self.lower_ref(place),
             Rvalue::Discriminant(_) | Rvalue::Len(_) | Rvalue::NullaryOp(_) => {
                 Ok(self.builder.ins().iconst(ir::types::I64, 0))
             }
         }
+    }
+
+    /// ADR-0027 §1: `Rvalue::Aggregate(kind, operands)` →
+    /// heap-allocated value via `__cobrust_<type>_new` +
+    /// element-by-element setters.
+    fn lower_aggregate(
+        &mut self,
+        kind: &AggregateKind,
+        operands: &[Operand],
+    ) -> Result<ir::Value, CodegenError> {
+        match kind {
+            AggregateKind::Tuple => self.lower_aggregate_tuple(operands),
+            AggregateKind::List => self.lower_aggregate_list(operands),
+            AggregateKind::Dict => self.lower_aggregate_dict(operands),
+            AggregateKind::Set => self.lower_aggregate_set(operands),
+            AggregateKind::Record | AggregateKind::Adt(_, _) => {
+                // M12.x: structs lower like tuples. Discriminant
+                // wiring for ADTs is a Phase F follow-up.
+                self.lower_aggregate_tuple(operands)
+            }
+            AggregateKind::FormatString => self.lower_aggregate_format_string(operands),
+        }
+    }
+
+    fn lower_aggregate_tuple(&mut self, operands: &[Operand]) -> Result<ir::Value, CodegenError> {
+        let n = operands.len() as i64;
+        let n_v = self.builder.ins().iconst(ir::types::I64, n);
+        let new_call = self.runtime_funcs.get("__cobrust_tuple_new").copied();
+        let alloc = if let Some(fr) = new_call {
+            let inst = self.builder.ins().call(fr, &[n_v]);
+            self.builder.inst_results(inst)[0]
+        } else {
+            self.builder.ins().iconst(self.pointer_type, 0)
+        };
+        if let Some(set_fr) = self.runtime_funcs.get("__cobrust_tuple_set").copied() {
+            for (i, op) in operands.iter().enumerate() {
+                let idx_v = self.builder.ins().iconst(ir::types::I64, i as i64);
+                let val = self.lower_operand(op)?;
+                let val_i64 = coerce_to_i64(self.builder, val);
+                self.builder.ins().call(set_fr, &[alloc, idx_v, val_i64]);
+            }
+        }
+        Ok(alloc)
+    }
+
+    fn lower_aggregate_list(&mut self, operands: &[Operand]) -> Result<ir::Value, CodegenError> {
+        let elem_size = self.builder.ins().iconst(ir::types::I64, 8);
+        let len_v = self.builder.ins().iconst(ir::types::I64, operands.len() as i64);
+        let alloc = if let Some(fr) = self.runtime_funcs.get("__cobrust_list_new").copied() {
+            let inst = self.builder.ins().call(fr, &[elem_size, len_v]);
+            self.builder.inst_results(inst)[0]
+        } else {
+            self.builder.ins().iconst(self.pointer_type, 0)
+        };
+        if let Some(set_fr) = self.runtime_funcs.get("__cobrust_list_set").copied() {
+            for (i, op) in operands.iter().enumerate() {
+                let idx_v = self.builder.ins().iconst(ir::types::I64, i as i64);
+                let val = self.lower_operand(op)?;
+                let val_i64 = coerce_to_i64(self.builder, val);
+                self.builder.ins().call(set_fr, &[alloc, idx_v, val_i64]);
+            }
+        }
+        Ok(alloc)
+    }
+
+    fn lower_aggregate_dict(&mut self, operands: &[Operand]) -> Result<ir::Value, CodegenError> {
+        // Dict operands come as a flat (k, v, k, v, ...) sequence.
+        let pair_count = (operands.len() / 2) as i64;
+        let k_size = self.builder.ins().iconst(ir::types::I64, 8);
+        let v_size = self.builder.ins().iconst(ir::types::I64, 8);
+        let len_v = self.builder.ins().iconst(ir::types::I64, pair_count);
+        let alloc = if let Some(fr) = self.runtime_funcs.get("__cobrust_dict_new").copied() {
+            let inst = self.builder.ins().call(fr, &[k_size, v_size, len_v]);
+            self.builder.inst_results(inst)[0]
+        } else {
+            self.builder.ins().iconst(self.pointer_type, 0)
+        };
+        if let Some(set_fr) = self.runtime_funcs.get("__cobrust_dict_set").copied() {
+            for chunk in operands.chunks(2) {
+                if chunk.len() == 2 {
+                    let k_val = self.lower_operand(&chunk[0])?;
+                    let v_val = self.lower_operand(&chunk[1])?;
+                    let k_i64 = coerce_to_i64(self.builder, k_val);
+                    let v_i64 = coerce_to_i64(self.builder, v_val);
+                    self.builder.ins().call(set_fr, &[alloc, k_i64, v_i64]);
+                }
+            }
+        }
+        Ok(alloc)
+    }
+
+    fn lower_aggregate_set(&mut self, operands: &[Operand]) -> Result<ir::Value, CodegenError> {
+        let elem_size = self.builder.ins().iconst(ir::types::I64, 8);
+        let len_v = self.builder.ins().iconst(ir::types::I64, operands.len() as i64);
+        let alloc = if let Some(fr) = self.runtime_funcs.get("__cobrust_set_new").copied() {
+            let inst = self.builder.ins().call(fr, &[elem_size, len_v]);
+            self.builder.inst_results(inst)[0]
+        } else {
+            self.builder.ins().iconst(self.pointer_type, 0)
+        };
+        if let Some(insert_fr) = self.runtime_funcs.get("__cobrust_set_insert").copied() {
+            for op in operands {
+                let v = self.lower_operand(op)?;
+                let v_i64 = coerce_to_i64(self.builder, v);
+                self.builder.ins().call(insert_fr, &[alloc, v_i64]);
+            }
+        }
+        Ok(alloc)
+    }
+
+    /// ADR-0027 §5: f-string lowering. Operands alternate as
+    /// `Constant::Str(static_chunk)` and arbitrary expression operands
+    /// for the holes. We allocate a fresh string buffer, push each
+    /// static chunk via `__cobrust_str_push_static`, and dispatch the
+    /// hole formatters by Cranelift value type.
+    fn lower_aggregate_format_string(
+        &mut self,
+        operands: &[Operand],
+    ) -> Result<ir::Value, CodegenError> {
+        // Allocate buffer.
+        let buf = if let Some(fr) = self.runtime_funcs.get("__cobrust_str_new").copied() {
+            let inst = self.builder.ins().call(fr, &[]);
+            self.builder.inst_results(inst)[0]
+        } else {
+            self.builder.ins().iconst(self.pointer_type, 0)
+        };
+
+        for op in operands {
+            // Static string literal? Materialize via `.rodata` symbol.
+            if let Operand::Constant(Constant::Str(payload)) = op {
+                if !payload.is_empty() {
+                    let (ptr, len) = self.materialize_str_data(payload)?;
+                    if let Some(push_fr) =
+                        self.runtime_funcs.get("__cobrust_str_push_static").copied()
+                    {
+                        self.builder.ins().call(push_fr, &[buf, ptr, len]);
+                    }
+                }
+                continue;
+            }
+            // Hole — codegen the value and dispatch by type.
+            let v = self.lower_operand(op)?;
+            let v_ty = self.builder.func.dfg.value_type(v);
+            if v_ty == ir::types::F32 || v_ty == ir::types::F64 {
+                let v_f64 = if v_ty == ir::types::F32 {
+                    self.builder.ins().fpromote(ir::types::F64, v)
+                } else {
+                    v
+                };
+                if let Some(fr) = self.runtime_funcs.get("__cobrust_fmt_float").copied() {
+                    self.builder.ins().call(fr, &[buf, v_f64]);
+                }
+            } else if v_ty == ir::types::I8 {
+                // Bool path — i8 value.
+                let v_i64 = self.builder.ins().uextend(ir::types::I64, v);
+                if let Some(fr) = self.runtime_funcs.get("__cobrust_fmt_bool").copied() {
+                    self.builder.ins().call(fr, &[buf, v_i64]);
+                }
+            } else if v_ty.is_int() {
+                let v_i64 = if v_ty.bits() < 64 {
+                    self.builder.ins().sextend(ir::types::I64, v)
+                } else {
+                    v
+                };
+                if let Some(fr) = self.runtime_funcs.get("__cobrust_fmt_int").copied() {
+                    self.builder.ins().call(fr, &[buf, v_i64]);
+                }
+            } else {
+                // Pointer-typed value — assume List/Dict/Set repr.
+                if let Some(fr) = self.runtime_funcs.get("__cobrust_fmt_repr").copied() {
+                    let type_id = self.builder.ins().iconst(ir::types::I64, 0);
+                    self.builder.ins().call(fr, &[buf, v, type_id]);
+                }
+            }
+        }
+        Ok(buf)
+    }
+
+    /// ADR-0027 §3: `Rvalue::Cast(kind, operand, ty)` per the table.
+    fn lower_cast(
+        &mut self,
+        kind: CastKind,
+        operand: &Operand,
+        ty: &cobrust_types::Ty,
+    ) -> Result<ir::Value, CodegenError> {
+        let val = self.lower_operand(operand)?;
+        let from_ty = self.builder.func.dfg.value_type(val);
+        let to_ty = crate::abi::cranelift_scalar_ty(ty).unwrap_or(self.pointer_type);
+        let result = match kind {
+            CastKind::IntToFloat => {
+                let v_i64 = if from_ty.bits() < 64 && from_ty.is_int() {
+                    self.builder.ins().sextend(ir::types::I64, val)
+                } else {
+                    val
+                };
+                if to_ty == ir::types::F32 || to_ty == ir::types::F64 {
+                    self.builder.ins().fcvt_from_sint(to_ty, v_i64)
+                } else {
+                    val
+                }
+            }
+            CastKind::FloatToInt => {
+                if (from_ty == ir::types::F32 || from_ty == ir::types::F64)
+                    && to_ty.is_int()
+                    && to_ty.bits() >= 8
+                {
+                    self.builder.ins().fcvt_to_sint_sat(to_ty, val)
+                } else {
+                    val
+                }
+            }
+            CastKind::BoolToInt => {
+                // bool is i8; widen to target int.
+                if to_ty.is_int() && to_ty.bits() > from_ty.bits() {
+                    self.builder.ins().uextend(to_ty, val)
+                } else if to_ty.is_int() && to_ty.bits() < from_ty.bits() {
+                    self.builder.ins().ireduce(to_ty, val)
+                } else {
+                    val
+                }
+            }
+            CastKind::IntToBool => {
+                // x != 0
+                let zero = self.builder.ins().iconst(from_ty, 0);
+                self.builder
+                    .ins()
+                    .icmp(ir::condcodes::IntCC::NotEqual, val, zero)
+            }
+            CastKind::StrToBytes | CastKind::BytesToStr => {
+                // Pointer pass-through; runtime layout is identical.
+                val
+            }
+        };
+        // Also handle generic int-int width conversions when the kind
+        // is one of the kind names but the underlying op needs widen/
+        // narrow — covered by the to/from_ty checks above. Final width
+        // adjust if mismatched and both ints.
+        let result_ty = self.builder.func.dfg.value_type(result);
+        let coerced = if result_ty == to_ty {
+            result
+        } else if result_ty.is_int() && to_ty.is_int() {
+            if to_ty.bits() > result_ty.bits() {
+                self.builder.ins().sextend(to_ty, result)
+            } else if to_ty.bits() < result_ty.bits() {
+                self.builder.ins().ireduce(to_ty, result)
+            } else {
+                result
+            }
+        } else if result_ty.is_float()
+            && to_ty.is_float()
+            && to_ty.bits() != result_ty.bits()
+        {
+            if to_ty.bits() > result_ty.bits() {
+                self.builder.ins().fpromote(to_ty, result)
+            } else {
+                self.builder.ins().fdemote(to_ty, result)
+            }
+        } else {
+            result
+        };
+        Ok(coerced)
+    }
+
+    /// ADR-0027 §2: `Rvalue::Ref(borrow_kind, place)` — address-of.
+    fn lower_ref(&mut self, place: &Place) -> Result<ir::Value, CodegenError> {
+        // For a stack-resident scalar local, materialize a stack slot
+        // (lazily) so we can return its address. Cranelift's
+        // `stack_addr` returns a pointer-typed value into the slot.
+        let local = place.local;
+        // If the local has a Cranelift Variable backing, allocate a
+        // stack slot, copy the current value into it, and return its
+        // address. Subsequent reads of that local should ideally read
+        // from the slot — at M12.x we don't redirect reads, matching
+        // the ADR's "intra-procedural" lifetime tracking.
+        let var = self
+            .var_map
+            .get(&local)
+            .copied()
+            .ok_or_else(|| CodegenError::InvalidMir(format!("&_{}: undeclared", local.0)))?;
+        let cur_val = self.builder.use_var(var);
+        let val_ty = self.builder.func.dfg.value_type(cur_val);
+
+        let slot = if let Some(s) = self.stack_slots.get(&local).copied() {
+            s
+        } else {
+            let size = (val_ty.bits() / 8).max(8);
+            let slot = self.builder.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                size,
+                3,
+            ));
+            self.stack_slots.insert(local, slot);
+            slot
+        };
+        // Write current value into slot.
+        self.builder.ins().stack_store(cur_val, slot, 0);
+        let addr = self.builder.ins().stack_addr(self.pointer_type, slot, 0);
+        // Apply field projections: each Field(i) advances the pointer
+        // by 8 bytes (M12.x scalar tuple layout — Phase F widens).
+        let mut ptr = addr;
+        for proj in &place.projections {
+            match proj {
+                Projection::Field(idx) => {
+                    let off = self
+                        .builder
+                        .ins()
+                        .iconst(self.pointer_type, (*idx as i64) * 8);
+                    ptr = self.builder.ins().iadd(ptr, off);
+                }
+                Projection::Deref => {
+                    // Dereference by loading the pointer at ptr.
+                    ptr = self
+                        .builder
+                        .ins()
+                        .load(self.pointer_type, MemFlags::new(), ptr, 0);
+                }
+                Projection::Index(_) | Projection::Discriminant => {
+                    // Index / discriminant projections require runtime
+                    // helpers; M12.x conservative — pass pointer through.
+                }
+            }
+        }
+        Ok(ptr)
     }
 
     fn lower_binop(
@@ -966,6 +1331,146 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
 /// sufficient for M11; cross-body interning is M12.
 fn str_data_symbol(def_id: u32, idx: usize, _payload: &str) -> String {
     format!("_cobrust_str_{def_id}_{idx}")
+}
+
+/// Compute the set of basic-block ids reachable from the entry
+/// (BlockId(0)) via successor edges. Used to skip dead drop-schedule
+/// chains that target the entry block (which Cranelift's verifier
+/// rejects as "invalid reference to entry block").
+fn compute_reachable_blocks(body: &Body) -> std::collections::HashSet<BlockId> {
+    let mut reachable = std::collections::HashSet::new();
+    if body.blocks.is_empty() {
+        return reachable;
+    }
+    let max_idx = body.blocks.len() as u32;
+    let mut stack = vec![BlockId(0)];
+    while let Some(id) = stack.pop() {
+        // Defensive: ill-formed MIR can reference non-existent block
+        // ids. The ill-formed corpus relies on those surfacing as
+        // CraneliftError later in the lowering, so just skip them
+        // here without panicking.
+        if id.0 >= max_idx {
+            reachable.insert(id);
+            continue;
+        }
+        if !reachable.insert(id) {
+            continue;
+        }
+        for succ in body.successors(id) {
+            if !reachable.contains(&succ) {
+                stack.push(succ);
+            }
+        }
+    }
+    reachable
+}
+
+/// ADR-0027 binding: register the runtime-helper symbol table that
+/// every body's lowering pre-imports. The signatures match the
+/// `cobrust-stdlib` C-ABI surface bit-for-bit.
+fn runtime_helper_signatures(
+    pointer_type: ir::Type,
+    call_conv: cranelift_codegen::isa::CallConv,
+) -> Vec<(&'static str, Signature)> {
+    let mut out = Vec::new();
+    let p = pointer_type;
+    let i64 = ir::types::I64;
+    let f64 = ir::types::F64;
+
+    // -- Aggregate / collection runtime ----------------------------
+    // List<i64>
+    out.push(("__cobrust_list_new", sig(call_conv, &[i64, i64], Some(p))));
+    out.push(("__cobrust_list_set", sig(call_conv, &[p, i64, i64], None)));
+    out.push(("__cobrust_list_get", sig(call_conv, &[p, i64], Some(i64))));
+    out.push(("__cobrust_list_len", sig(call_conv, &[p], Some(i64))));
+    out.push(("__cobrust_list_drop", sig(call_conv, &[p], None)));
+
+    // Dict<i64, i64>
+    out.push((
+        "__cobrust_dict_new",
+        sig(call_conv, &[i64, i64, i64], Some(p)),
+    ));
+    out.push(("__cobrust_dict_set", sig(call_conv, &[p, i64, i64], None)));
+    out.push(("__cobrust_dict_get", sig(call_conv, &[p, i64], Some(i64))));
+    out.push(("__cobrust_dict_len", sig(call_conv, &[p], Some(i64))));
+    out.push(("__cobrust_dict_drop", sig(call_conv, &[p], None)));
+
+    // Set<i64>
+    out.push(("__cobrust_set_new", sig(call_conv, &[i64, i64], Some(p))));
+    out.push(("__cobrust_set_insert", sig(call_conv, &[p, i64], None)));
+    out.push((
+        "__cobrust_set_contains",
+        sig(call_conv, &[p, i64], Some(i64)),
+    ));
+    out.push(("__cobrust_set_len", sig(call_conv, &[p], Some(i64))));
+    out.push(("__cobrust_set_drop", sig(call_conv, &[p], None)));
+
+    // Tuple<i64, ...>
+    out.push(("__cobrust_tuple_new", sig(call_conv, &[i64], Some(p))));
+    out.push(("__cobrust_tuple_set", sig(call_conv, &[p, i64, i64], None)));
+    out.push(("__cobrust_tuple_get", sig(call_conv, &[p, i64], Some(i64))));
+    out.push(("__cobrust_tuple_drop", sig(call_conv, &[p, i64], None)));
+
+    // Heap allocator
+    out.push(("__cobrust_alloc", sig(call_conv, &[i64], Some(p))));
+    out.push(("__cobrust_dealloc", sig(call_conv, &[p, i64], None)));
+
+    // -- f-string runtime ------------------------------------------
+    out.push(("__cobrust_str_new", sig(call_conv, &[], Some(p))));
+    out.push((
+        "__cobrust_str_push_static",
+        sig(call_conv, &[p, p, i64], None),
+    ));
+    out.push(("__cobrust_fmt_int", sig(call_conv, &[p, i64], None)));
+    out.push(("__cobrust_fmt_float", sig(call_conv, &[p, f64], None)));
+    out.push(("__cobrust_fmt_bool", sig(call_conv, &[p, i64], None)));
+    out.push(("__cobrust_fmt_str", sig(call_conv, &[p, p, i64], None)));
+    out.push(("__cobrust_fmt_repr", sig(call_conv, &[p, p, i64], None)));
+    out.push(("__cobrust_str_len", sig(call_conv, &[p], Some(i64))));
+    out.push(("__cobrust_str_ptr", sig(call_conv, &[p], Some(p))));
+    out.push(("__cobrust_str_drop", sig(call_conv, &[p], None)));
+
+    out
+}
+
+fn sig(
+    call_conv: cranelift_codegen::isa::CallConv,
+    params: &[ir::Type],
+    ret: Option<ir::Type>,
+) -> Signature {
+    let mut s = Signature::new(call_conv);
+    for p in params {
+        s.params.push(AbiParam::new(*p));
+    }
+    if let Some(r) = ret {
+        s.returns.push(AbiParam::new(r));
+    }
+    s
+}
+
+/// Coerce a Cranelift value to i64 for runtime-helper calls. Pointers
+/// pass through (they're already 64-bit on supported targets); ints
+/// are sign-extended; bools are zero-extended; floats are bit-cast
+/// (M12.x conservative — float aggregate elements aren't a target
+/// today).
+fn coerce_to_i64(builder: &mut FunctionBuilder<'_>, v: ir::Value) -> ir::Value {
+    let ty = builder.func.dfg.value_type(v);
+    if ty == ir::types::I64 {
+        v
+    } else if ty.is_int() && ty.bits() < 64 {
+        builder.ins().sextend(ir::types::I64, v)
+    } else if ty == ir::types::F32 {
+        let promoted = builder.ins().fpromote(ir::types::F64, v);
+        builder.ins().bitcast(ir::types::I64, MemFlags::new(), promoted)
+    } else if ty == ir::types::F64 {
+        builder.ins().bitcast(ir::types::I64, MemFlags::new(), v)
+    } else if ty.is_int() && ty.bits() > 64 {
+        builder.ins().ireduce(ir::types::I64, v)
+    } else {
+        // Pointer or unknown — Cranelift insists on a typed value, so
+        // bitcast through.
+        builder.ins().bitcast(ir::types::I64, MemFlags::new(), v)
+    }
 }
 
 // keep the Arc import noisy-eliminated (used by isa::OwnedTargetIsa internals).
