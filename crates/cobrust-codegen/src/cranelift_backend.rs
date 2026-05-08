@@ -416,11 +416,26 @@ impl CraneliftCtx {
         // resolves to an external imported symbol declared with
         // `Linkage::Import`. Used today by the hello-world runtime
         // helper `__cobrust_println_static`. M11 stdlib will broaden.
+        // ADR-0027 §4 amendment: a Call to one of the runtime helpers
+        // pre-declared below (`__cobrust_iter_init`, ...) reuses that
+        // signature; only "freeform" Constant::Str callees fall back
+        // to the M10 `(ptr, len)` legacy shape.
+        let runtime_helper_names: std::collections::HashSet<&'static str> =
+            runtime_helper_signatures(self.pointer_type, self.call_conv)
+                .iter()
+                .map(|(n, _)| *n)
+                .collect();
         let mut extern_func_ids: HashMap<String, cranelift_module::FuncId> = HashMap::new();
         for mir_block in &body.blocks {
             if let cobrust_mir::Terminator::Call { func, .. } = &mir_block.terminator {
                 if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(name)) = func {
                     if extern_func_ids.contains_key(name) {
+                        continue;
+                    }
+                    // Skip names handled by the typed runtime-helper
+                    // table (ADR-0027 §4). The signature there is
+                    // authoritative.
+                    if runtime_helper_names.contains(name.as_str()) {
                         continue;
                     }
                     // ADR-0025 §"Runtime ABI" widens M10's void(void)
@@ -726,6 +741,35 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 // M9 stub remains: write a zero placeholder, jump to
                 // continuation. M11 will materialize the FnRef path.
                 if let Operand::Constant(Constant::Str(name)) = func {
+                    // ADR-0027 §4: prefer runtime-helper FuncRef when
+                    // the callee name matches the typed-signature
+                    // table.
+                    if let Some(func_ref) = self.runtime_funcs.get(name.as_str()).copied() {
+                        // Lower each arg. For Constant::Str args we
+                        // materialize the rodata pointer (push_static
+                        // pattern); other operands lower directly.
+                        let mut call_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            if let Operand::Constant(Constant::Str(payload)) = arg {
+                                let (ptr, _len) = self.materialize_str_data(payload)?;
+                                call_args.push(ptr);
+                            } else {
+                                let v = self.lower_operand(arg)?;
+                                call_args.push(v);
+                            }
+                        }
+                        let inst = self.builder.ins().call(func_ref, &call_args);
+                        let results = self.builder.inst_results(inst);
+                        let ret_val = if results.is_empty() {
+                            self.builder.ins().iconst(ir::types::I64, 0)
+                        } else {
+                            results[0]
+                        };
+                        self.write_place(destination, ret_val)?;
+                        let blk = self.block_id(target)?;
+                        self.builder.ins().jump(blk, &[]);
+                        return Ok(());
+                    }
                     if let Some(func_ref) = self.extern_funcs.get(name).copied() {
                         // ADR-0025 §"Runtime ABI" + §"Codegen amendments"
                         // Constant::Str row: when the runtime helper has
@@ -1414,6 +1458,11 @@ fn runtime_helper_signatures(
     // Heap allocator
     out.push(("__cobrust_alloc", sig(call_conv, &[i64], Some(p))));
     out.push(("__cobrust_dealloc", sig(call_conv, &[p, i64], None)));
+
+    // -- iter runtime (ADR-0027 §4) -------------------------------
+    out.push(("__cobrust_iter_init", sig(call_conv, &[i64], Some(p))));
+    out.push(("__cobrust_iter_next", sig(call_conv, &[p], Some(i64))));
+    out.push(("__cobrust_iter_drop", sig(call_conv, &[p], None)));
 
     // -- f-string runtime ------------------------------------------
     out.push(("__cobrust_str_new", sig(call_conv, &[], Some(p))));

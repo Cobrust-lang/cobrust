@@ -226,6 +226,89 @@ impl Iterator for RangeIter {
     }
 }
 
+// =====================================================================
+// C-ABI runtime helpers (ADR-0027 §4 for-protocol lowering)
+// =====================================================================
+//
+// HIR `Stmt::For` lowers to MIR Calls:
+//   __cobrust_iter_init(iter_value) -> *mut IterHandle
+//   __cobrust_iter_next(handle)     -> i64 (0 = None, !=0 = next value)
+//   __cobrust_iter_drop(handle)
+//
+// The handle wraps a polymorphic iterator over `i64` values backed
+// by ListIter / DictIter / SetIter / RangeIter. M12.x i64-only is
+// the conservative width matching the codegen integer type; Phase F
+// widens to per-type dispatch.
+
+/// Internal handle wrapping a Box<dyn>-erased iterator over i64 values.
+pub struct IterHandle {
+    next_fn: Box<dyn FnMut() -> Option<i64>>,
+}
+
+/// Initialize an iterator handle. M12.x interprets `iter_val` as a
+/// pre-built `RangeIter` count for now (so the basic `for i in n:`
+/// loop has codegen-end-to-end coverage). User-typed iter
+/// constructors are Phase F.
+///
+/// # Safety
+///
+/// Caller must eventually pass the result to
+/// [`__cobrust_iter_drop`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_iter_init(iter_val: i64) -> *mut u8 {
+    // M12.x conservative: treat the iter operand as a RangeIter
+    // count when no other type info is available.
+    let mut r = RangeIter::unbounded(iter_val.max(0));
+    let h = IterHandle {
+        next_fn: Box::new(move || r.next()),
+    };
+    Box::into_raw(Box::new(h)).cast::<u8>()
+}
+
+/// Yield the next i64 value, or 0 when exhausted. (Codegen treats
+/// the return as a "loop continuation" boolean — the SwitchInt cases
+/// use 0=None, non-zero=Some(value).)
+///
+/// # Safety
+///
+/// `handle` must be a non-null pointer returned by
+/// [`__cobrust_iter_init`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_iter_next(handle: *mut u8) -> i64 {
+    if handle.is_null() {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let h = unsafe { &mut *handle.cast::<IterHandle>() };
+    match (h.next_fn)() {
+        // Bias non-zero return to "Some"; 0 conflicts with the
+        // exhausted convention. Tweak: shift by +1 to avoid
+        // collision with valid 0 values, then codegen subtracts 1
+        // before binding. (M12.x conservative; cleaner Option
+        // representation is Phase F.)
+        Some(v) => {
+            // Use saturating add so v=i64::MAX still returns non-zero.
+            v.saturating_add(1)
+        }
+        None => 0,
+    }
+}
+
+/// Drop the handle.
+///
+/// # Safety
+///
+/// `handle` must be a pointer returned by [`__cobrust_iter_init`]
+/// and not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_iter_drop(handle: *mut u8) {
+    if handle.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let _ = unsafe { Box::from_raw(handle.cast::<IterHandle>()) };
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -364,5 +447,40 @@ mod tests {
     #[should_panic(expected = "RangeIter step must be non-zero")]
     fn range_iter_stepped_zero_panics() {
         let _ = RangeIter::stepped(0, 5, 0);
+    }
+
+    // -- C-ABI runtime helpers --
+
+    #[test]
+    fn cabi_iter_init_drop_smoke() {
+        // SAFETY: documented contract.
+        unsafe {
+            let h = __cobrust_iter_init(0);
+            assert!(!h.is_null());
+            __cobrust_iter_drop(h);
+        }
+    }
+
+    #[test]
+    fn cabi_iter_next_exhausts() {
+        // SAFETY: contract.
+        unsafe {
+            let h = __cobrust_iter_init(3);
+            // RangeIter yields 0, 1, 2 — biased to 1, 2, 3 by next.
+            assert_eq!(__cobrust_iter_next(h), 1);
+            assert_eq!(__cobrust_iter_next(h), 2);
+            assert_eq!(__cobrust_iter_next(h), 3);
+            assert_eq!(__cobrust_iter_next(h), 0);
+            __cobrust_iter_drop(h);
+        }
+    }
+
+    #[test]
+    fn cabi_iter_next_handles_null() {
+        // SAFETY: documented null path.
+        unsafe {
+            assert_eq!(__cobrust_iter_next(std::ptr::null_mut()), 0);
+            __cobrust_iter_drop(std::ptr::null_mut());
+        }
     }
 }
