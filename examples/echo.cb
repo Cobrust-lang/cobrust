@@ -1,0 +1,20 @@
+# echo — M11 example.
+#
+# Source-level intent:
+#
+#   import std.io
+#   import std.env
+#   import std.string
+#
+#   fn main() -> i64:
+#       args = std.env.args()
+#       joined = std.string.join(args, " ")
+#       print(joined)
+#       return 0
+#
+# Per ADR-0025 echo.cb requires std.env.args runtime + iteration;
+# .cb source is the M11 stub. Integration test runs the end-to-end
+# args-capture path.
+fn main() -> i64:
+    print("echo M11 stub — see stdlib_examples integration test")
+    return 0

@@ -1,0 +1,10 @@
+# json_pretty — M11 example.
+#
+# Source-level intent: read a JSON file, pretty-print it. Per ADR-0025
+# §"Examples (binding)" json_pretty allows using cobrust-tomli or a
+# hand-written shim; M11 ships the latter — the integration test
+# uses a tiny JSON shim from cobrust-stdlib. .cb source is the M11
+# stub for now (full JSON parsing in pure Cobrust is post-M11).
+fn main() -> i64:
+    print("json_pretty M11 stub — see stdlib_examples integration test")
+    return 0

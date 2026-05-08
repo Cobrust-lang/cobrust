@@ -1,0 +1,9 @@
+# csv_sum — M11 example.
+#
+# Source-level intent: read a CSV with one numeric column, sum the
+# values. Per ADR-0025 csv_sum.cb relies on std.string.split +
+# numeric parse + sum reduction. Integration test exercises the
+# end-to-end runtime ABI; .cb source is the M11 stub.
+fn main() -> i64:
+    print("csv_sum M11 stub — see stdlib_examples integration test")
+    return 0

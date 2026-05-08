@@ -1,0 +1,9 @@
+# unique_lines — M11 example.
+#
+# Source-level intent: read lines, dedupe via Set, print uniques.
+# Per ADR-0025 unique_lines.cb requires Set materialization through
+# MIR; .cb source is the M11 stub. Integration test exercises the
+# stdlib Set path end-to-end.
+fn main() -> i64:
+    print("unique_lines M11 stub — see stdlib_examples integration test")
+    return 0
