@@ -956,3 +956,42 @@ fi
 
 echo "doc-coverage: M8 MIR surface checks passed"
 
+
+# --- 19. M9 codegen surface coverage --------------------------------------
+# When the codegen module declares M9 delivered, the codegen surface
+# terms + ADR-0023 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M9 — delivered.\*\*' "docs/agent/modules/codegen.md"; then
+    m9_codegen_terms=(
+        "emit"
+        "TargetSpec"
+        "Artifact"
+        "ArtifactKind"
+        "Backend"
+        "OptLevel"
+        "CodegenError"
+        "Cranelift"
+        "LLVM"
+        "ADR-0023"
+    )
+    m9_codegen_files=(
+        "docs/agent/modules/codegen.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m9_codegen_terms[@]}"; do
+        for f in "${m9_codegen_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M9 codegen surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_23="docs/agent/adr/0023-m9-codegen.md"
+    [[ -f "$adr_23" ]] || fail "ADR-0023 (M9 codegen) is required for M9"
+    if ! grep -q '^status: accepted$' "$adr_23"; then
+        fail "ADR-0023 must be 'status: accepted' for M9 to be done"
+    fi
+fi
+
+echo "doc-coverage: M9 codegen surface checks passed"

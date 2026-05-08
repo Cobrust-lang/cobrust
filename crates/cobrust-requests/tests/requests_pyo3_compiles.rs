@@ -7,7 +7,6 @@
 //! deliverable is "the feature compiles **when** the host has
 //! libpython", not "every CI machine builds the cdylib".
 
-
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_precision_loss)]

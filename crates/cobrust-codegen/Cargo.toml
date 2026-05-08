@@ -8,9 +8,31 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
-description = "Cobrust codegen — LLVM / Cranelift backend."
+description = "Cobrust codegen — Cranelift (default) and LLVM (opt-in) backends per ADR-0023."
 
 [lints]
 workspace = true
 
+[features]
+default = []
+# Optional LLVM backend; pulls in inkwell + system LLVM 18+.
+llvm = ["dep:inkwell"]
+# Use lld via -fuse-ld=lld for the linker delegate.
+lld = []
+
 [dependencies]
+cobrust-mir = { path = "../cobrust-mir" }
+cobrust-types = { path = "../cobrust-types" }
+cobrust-frontend = { path = "../cobrust-frontend" }
+cobrust-hir = { path = "../cobrust-hir" }
+cranelift-codegen = "0.131"
+cranelift-frontend = "0.131"
+cranelift-module = "0.131"
+cranelift-object = "0.131"
+target-lexicon = "0.13"
+inkwell = { version = "0.9", optional = true }
+thiserror = { workspace = true }
+tempfile = "3"
+
+[dev-dependencies]
+object = { version = "0.36", features = ["read"] }

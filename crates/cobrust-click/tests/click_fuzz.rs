@@ -5,7 +5,6 @@
 //! assert panic-freedom. Successful parses must round-trip via the
 //! observer surface (`option(...) / argument(...)`).
 
-
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_precision_loss)]

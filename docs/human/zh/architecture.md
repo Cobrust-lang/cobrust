@@ -1400,3 +1400,87 @@ B1..B5 联合 ADR-0006 的 9 条 type-level 义务，构成静态核心健全性
 
 **M8 是 intra-procedural** — 跨 body 的生命周期多态在 M9 codegen 实现 calling convention 时落地。
 
+
+### M9 — Codegen（按 ADR-0023）
+
+`cobrust-codegen` crate（M9）将 MIR lower 到原生代码，提供两个后端通过 feature flag 切换——Cranelift（`cargo build` 默认）和 LLVM（通过 `--features llvm` 启用，`cargo build --release` 用于 `-O3` 质量代码生成）。
+
+**后端矩阵**：
+
+| 后端 | 默认场景 | 优势 | 劣势 |
+|---|---|---|---|
+| Cranelift（`Backend::Cranelift`） | `cargo build`（dev） | 纯 Rust、编译快、无系统依赖 | 优化成熟度较低 |
+| LLVM（`Backend::Llvm`）—— `--features llvm` | `cargo build --release`（启用 feature 时） | codegen 质量最佳、平台覆盖广 | 编译慢、依赖大、需要系统 LLVM |
+
+**公共接口**（`emit / TargetSpec / Artifact / CodegenError`）：
+
+```rust
+let mir = cobrust_mir::lower(&typed)?;
+let spec = TargetSpec::host_dev(out_dir, "myprog");
+let artifact = cobrust_codegen::emit(&mir, spec)?;
+match artifact {
+    Artifact::Object(p) | Artifact::Executable(p) | Artifact::DynamicLibrary(p) => p,
+};
+```
+
+`TargetSpec` 选择**目标三元组**、**优化级别**（`OptLevel::None / Speed / SpeedAndSize`）、**后端**（`Backend::Cranelift / Llvm`）、**产物种类**（`ArtifactKind::Object / Executable / DynamicLibrary`）、输出目录、模块名。
+
+**lowering 流水线**：
+
+```mermaid
+flowchart TD
+    MIR[MIR Module] --> EMIT["cobrust_codegen::emit(mir, spec)"]
+    EMIT --> SEL{spec.backend}
+    SEL -->|Cranelift| CL[cranelift_backend::emit]
+    SEL -->|Llvm + feature| LLVM[llvm_backend::emit]
+    CL --> OBJ[Relocatable .o file]
+    LLVM --> OBJ
+    OBJ -->|Object| ART_O[Artifact::Object]
+    OBJ -->|Executable / Dylib| LINK["linker::link 通过 cc"]
+    LINK --> ART_E[Artifact::Executable / DynamicLibrary]
+```
+
+**`extern "Cobrust"` ABI** 与主机的标准 C ABI 一致：
+- **System V AMD64** 在 Linux x86_64 上 —— 整数参数走 `rdi rsi rdx rcx r8 r9`、浮点走 `xmm0..xmm7`、返回走 `rax` / `xmm0`。
+- **AAPCS64** 在 macOS arm64 上 —— 整数参数走 `x0..x7`、浮点走 `d0..d7`、返回走 `x0` / `d0`。
+- **栈对齐**：每次调用边界 16 字节。
+
+**链接器委派**：`emit` 调用系统 `cc`（通过 `$CC` 环境变量，默认是 `cc`）；当 `--features lld` 开启时，传入 `-fuse-ld=lld`。M9 从不自带链接器。链接器失败以 `CodegenError::LinkerFailed { exit_code, stderr }` 形式返回。
+
+**目标三元组矩阵（M9 交付范围）**：
+
+| 三元组 | 目标格式 | 状态 |
+|---|---|---|
+| `x86_64-unknown-linux-gnu` | ELF | 已交付 |
+| `aarch64-apple-darwin` | Mach-O | 已交付 |
+| `x86_64-apple-darwin` | Mach-O | 可达 |
+| `aarch64-unknown-linux-gnu` | ELF | 可达 |
+| `wasm32-unknown-unknown` | WASM | 范围外（Phase F） |
+| `x86_64-pc-windows-msvc` | COFF | 范围外（Phase F） |
+
+**对未解析 MIR 局部的类型推断**：MIR 的 `_return` slot 按约定声明为 `Ty::None`（按 ADR-0020 `BodyBuilder::new`），子表达式临时变量也可能携带 `Ty::None`。Cranelift 后端在 lowering 前先扫描整个 `Statement::Assign` 列表；某局部的第一个 rvalue 决定了该局部的有效 Cranelift 类型（算术得 i64、比较得 i8、浮点得 f64 等），无需修改 MIR 就能恢复函数实际返回类型与中间临时变量的位宽。
+
+**差分门禁（验收契约）**：每个"核心 30 形式"被编译后，运行的 `stdout` 必须与一个手写 Rust 参考程序字节级一致。M9 的 in-scope 子集（不含 f-string、集合、闭包）覆盖算术 / 比较 / 分支 / 循环 / 递归。out-of-scope 形式（form 22 f-string、24 collection、25 comprehension、26 lambda、28 access、30 await/yield）作为 `#[ignore]` 测试登记为 M10/M11 后续。
+
+**Per-MIR-form lowering 规则**（节选——完整表见 `docs/agent/modules/codegen.md`）：
+
+| MIR 构件 | Cranelift |
+|---|---|
+| `Body` | `Function` 带 `Signature`（匹配 `extern "Cobrust"`） |
+| `BasicBlock` | `Block` 通过 `FunctionBuilder::create_block` |
+| `Statement::Assign` | RHS lower → `def_var(LHS)` |
+| `Terminator::Goto(b)` | `ins().jump(b, &[])` |
+| `Terminator::SwitchInt` | `brif` 链（bool）/ `br_table`（int） |
+| `Terminator::Return` | `ins().return_(&[ret])` |
+| `Terminator::Drop` | 跳转到目标（M11 落地析构器） |
+| `Rvalue::BinaryOp(Add, ...)` | `ins().iadd / fadd` |
+| `Rvalue::Aggregate / Ref / Cast` | M9 stub：零指针占位 |
+
+**LLVM `-O3` ≥ 30% 二进制更小验收线**（按 ADR-0023 §"LLVM `-O3` ≥ 30% smaller binary"）：在固定样本（`fib_50.cb`、`dotproduct_1k.cb`、`bubble_sort_256.cb`）上测量；Cranelift `-O0` 基线 → LLVM `--release -O3` 目标应至少减少 30% 大小。M9 时 LLVM 后端以 feature-gated stub 形式发布（`CodegenError::LlvmError`），等 inkwell wiring 闭环后才完成——那是 M9.1 后续工作。
+
+**M9 测试总数**：158 个测试，覆盖 5 个套件：
+- `codegen_well_formed.rs` —— 60 个良型程序，覆盖整数 / 浮点 / 布尔的算术、比较、分支、循环、递归、位运算、逻辑运算。
+- `codegen_ill_formed.rs` —— 50 个病型用例，覆盖每个 `CodegenError` 变体：dangling 局部、dangling block target、不支持的目标、不支持的后端、错误 Display 不变量、产物 / kind 扩展矩阵。
+- `codegen_diff_corpus.rs` —— 22 个 in-scope 差分行（编译 + 与参考 Rust 比较）加 6 个 `#[ignore]` 的 M10/M11 后续。
+- `codegen_object_layout.rs` —— 16 个对象布局断言（架构、格式、节、符号、ABI helper）。
+- `codegen_release_smoke.rs` —— 10 个 release 构建冒烟测试（release 默认、Speed / SpeedAndSize opt 等级、递归、分支多的程序、linker 可用性）。

@@ -11,7 +11,6 @@
 //! this is the canonical real-world differential. When offline, the
 //! suite logs a clean skip and the in-process gate alone proves L3.
 
-
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_precision_loss)]

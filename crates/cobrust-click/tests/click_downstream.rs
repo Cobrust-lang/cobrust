@@ -6,7 +6,6 @@
 //! pure-Python parsing and we bind clap — both deterministic — the
 //! L3 path is pure-Rust subprocess-free.
 
-
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_precision_loss)]
