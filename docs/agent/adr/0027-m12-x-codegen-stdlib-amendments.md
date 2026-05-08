@@ -4,7 +4,7 @@ adr_id: 0027
 title: M12.x — codegen + stdlib amendments to lift M11 followups (Aggregate / Ref / Cast / for-protocol / f-string)
 status: accepted
 date: 2026-05-09
-last_verified_commit: TBD
+last_verified_commit: 3a81f90
 supersedes: []
 superseded_by: []
 ---
