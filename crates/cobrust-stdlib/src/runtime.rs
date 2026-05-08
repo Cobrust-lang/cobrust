@@ -194,7 +194,8 @@ pub unsafe extern "C" fn __cobrust_capture_argv(argc: i32, argv: *const *const u
 //
 // At M11 these are emitted as no-ops for `Str` (`.rodata` strings
 // don't need freeing) and as concrete frees for the heap-backed
-// collections. M12+ will widen to user-defined ADTs.
+// collections. M12.x materializes the Aggregate / Drop wiring (per
+// ADR-0027 §1) and adds the heap-side drop handlers.
 
 /// `_cobrust_drop_str(*mut StrLayout)` — drop a Cobrust `str`.
 /// At M11 strings are .rodata only; this is a no-op. M12 widens
@@ -208,6 +209,63 @@ pub unsafe extern "C" fn __cobrust_capture_argv(argc: i32, argv: *const *const u
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _cobrust_drop_str(_place: *mut u8) {
     // No-op: .rodata strings don't own heap state at M11.
+}
+
+// =====================================================================
+// M12.x heap allocator (ADR-0027 §1)
+// =====================================================================
+
+/// Heap allocator entrypoint. Every Aggregate / String runtime
+/// helper routes its allocation here so that mimalloc (when enabled
+/// via the `mimalloc-alloc` feature) is the single allocator of
+/// record. The allocation alignment is always pointer-aligned;
+/// callers requiring stricter alignment must over-allocate.
+///
+/// Returns a `*mut u8` to a fresh, zero-initialized buffer of `size`
+/// bytes. A zero-sized request returns a non-null dangling pointer
+/// (matching Rust's `Vec::new` convention) so callers can still
+/// distinguish allocation failure from zero-sized requests.
+///
+/// # Safety
+///
+/// The returned pointer is valid for `size` bytes of read/write
+/// access until passed to [`__cobrust_dealloc`]. The caller must
+/// not pass a pointer obtained from a different allocator.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_alloc(size: i64) -> *mut u8 {
+    if size <= 0 {
+        return std::ptr::NonNull::<u8>::dangling().as_ptr();
+    }
+    let layout = match std::alloc::Layout::from_size_align(size as usize, 8) {
+        Ok(l) => l,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    // SAFETY: layout is non-zero-sized and 8-byte aligned (always
+    // a valid alignment).
+    let p = unsafe { std::alloc::alloc_zeroed(layout) };
+    if p.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+    p
+}
+
+/// Free a buffer previously returned by [`__cobrust_alloc`].
+///
+/// # Safety
+///
+/// `ptr` must have been returned by [`__cobrust_alloc`] with the
+/// same `size`, and not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dealloc(ptr: *mut u8, size: i64) {
+    if ptr.is_null() || size <= 0 {
+        return;
+    }
+    let layout = match std::alloc::Layout::from_size_align(size as usize, 8) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    // SAFETY: caller-attestation via `# Safety`.
+    unsafe { std::alloc::dealloc(ptr, layout) };
 }
 
 #[cfg(test)]
@@ -267,6 +325,38 @@ mod tests {
         // SAFETY: this is the documented null-arg path.
         unsafe {
             __cobrust_capture_argv(0, std::ptr::null());
+        }
+    }
+
+    #[test]
+    fn alloc_dealloc_round_trip() {
+        // SAFETY: matched alloc/dealloc per `# Safety`.
+        unsafe {
+            let p = __cobrust_alloc(64);
+            assert!(!p.is_null());
+            // Write + read to confirm RW access.
+            *p = 0x42;
+            assert_eq!(*p, 0x42);
+            __cobrust_dealloc(p, 64);
+        }
+    }
+
+    #[test]
+    fn alloc_zero_size_returns_dangling() {
+        // SAFETY: zero-sized request matches Rust's Vec::new convention.
+        unsafe {
+            let p = __cobrust_alloc(0);
+            assert!(!p.is_null());
+            // No dealloc for zero-size dangling pointer.
+        }
+    }
+
+    #[test]
+    fn dealloc_null_safely_noops() {
+        // SAFETY: documented null path.
+        unsafe {
+            __cobrust_dealloc(std::ptr::null_mut(), 0);
+            __cobrust_dealloc(std::ptr::null_mut(), 64);
         }
     }
 }
