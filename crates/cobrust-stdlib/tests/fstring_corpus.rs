@@ -13,6 +13,8 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_lossless)]
+#![allow(clippy::approx_constant)]
+#![allow(clippy::stable_sort_primitive)]
 #![allow(clippy::format_push_string)]
 #![allow(clippy::let_unit_value)]
 #![allow(clippy::ignored_unit_patterns)]
