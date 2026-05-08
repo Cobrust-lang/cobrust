@@ -906,7 +906,10 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
 
     fn lower_aggregate_list(&mut self, operands: &[Operand]) -> Result<ir::Value, CodegenError> {
         let elem_size = self.builder.ins().iconst(ir::types::I64, 8);
-        let len_v = self.builder.ins().iconst(ir::types::I64, operands.len() as i64);
+        let len_v = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, operands.len() as i64);
         let alloc = if let Some(fr) = self.runtime_funcs.get("__cobrust_list_new").copied() {
             let inst = self.builder.ins().call(fr, &[elem_size, len_v]);
             self.builder.inst_results(inst)[0]
@@ -952,7 +955,10 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
 
     fn lower_aggregate_set(&mut self, operands: &[Operand]) -> Result<ir::Value, CodegenError> {
         let elem_size = self.builder.ins().iconst(ir::types::I64, 8);
-        let len_v = self.builder.ins().iconst(ir::types::I64, operands.len() as i64);
+        let len_v = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, operands.len() as i64);
         let alloc = if let Some(fr) = self.runtime_funcs.get("__cobrust_set_new").copied() {
             let inst = self.builder.ins().call(fr, &[elem_size, len_v]);
             self.builder.inst_results(inst)[0]
@@ -1107,10 +1113,7 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
             } else {
                 result
             }
-        } else if result_ty.is_float()
-            && to_ty.is_float()
-            && to_ty.bits() != result_ty.bits()
-        {
+        } else if result_ty.is_float() && to_ty.is_float() && to_ty.bits() != result_ty.bits() {
             if to_ty.bits() > result_ty.bits() {
                 self.builder.ins().fpromote(to_ty, result)
             } else {
@@ -1510,7 +1513,9 @@ fn coerce_to_i64(builder: &mut FunctionBuilder<'_>, v: ir::Value) -> ir::Value {
         builder.ins().sextend(ir::types::I64, v)
     } else if ty == ir::types::F32 {
         let promoted = builder.ins().fpromote(ir::types::F64, v);
-        builder.ins().bitcast(ir::types::I64, MemFlags::new(), promoted)
+        builder
+            .ins()
+            .bitcast(ir::types::I64, MemFlags::new(), promoted)
     } else if ty == ir::types::F64 {
         builder.ins().bitcast(ir::types::I64, MemFlags::new(), v)
     } else if ty.is_int() && ty.bits() > 64 {

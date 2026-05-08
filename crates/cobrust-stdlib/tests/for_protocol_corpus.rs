@@ -27,8 +27,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cobrust_stdlib::iter::{DictIter, Iterator, ListIter, RangeIter, SetIter};
 use cobrust_stdlib::iter::{__cobrust_iter_drop, __cobrust_iter_init, __cobrust_iter_next};
+use cobrust_stdlib::iter::{DictIter, Iterator, ListIter, RangeIter, SetIter};
 
 // =====================================================================
 // ListIter
@@ -95,12 +95,9 @@ fn for_list_iter_after_exhaustion_stays_none() {
 #[test]
 fn for_list_iter_collect_pattern() {
     let it = ListIter::new(vec![10, 20, 30]);
-    let collected: Vec<i64> = std::iter::successors(
-        Some(()),
-        |_| Some(()),
-    )
-    .scan(it, |it, _| it.next())
-    .collect();
+    let collected: Vec<i64> = std::iter::successors(Some(()), |_| Some(()))
+        .scan(it, |it, _| it.next())
+        .collect();
     assert_eq!(collected, vec![10, 20, 30]);
 }
 

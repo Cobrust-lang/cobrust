@@ -232,10 +232,7 @@ fn ref_shared_param_local() {
             local(1, "x", Ty::Int, false),
             local(2, "p", Ty::Int, true),
         ],
-        vec![
-            assign_ref(2, 1, BorrowKind::Shared),
-            assign_int(0, 0),
-        ],
+        vec![assign_ref(2, 1, BorrowKind::Shared), assign_int(0, 0)],
     );
     b.param_count = 1;
     compile("ref06", b);
