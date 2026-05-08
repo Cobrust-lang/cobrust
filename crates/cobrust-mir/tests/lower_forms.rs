@@ -527,4 +527,3 @@ fn form_30_yield_in_fn() {
     let body = body_named(&m, "gen");
     assert!(ends_in_return(body));
 }
-

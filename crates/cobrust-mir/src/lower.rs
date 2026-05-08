@@ -692,13 +692,11 @@ impl<'a> BodyBuilder<'a> {
                 self.ensure_open_block();
                 // Step 1: evaluate iter expression and bind to `_iter`.
                 let iter_val_op = self.lower_expr(iter)?;
-                let iter_local =
-                    self.declare_local("_iter".to_string(), Ty::None, span, true);
+                let iter_local = self.declare_local("_iter".to_string(), Ty::None, span, true);
                 self.emit_assign(Place::local(iter_local), Rvalue::Use(iter_val_op), span);
 
                 // Step 2: call __cobrust_iter_init(iter_local) → it_local.
-                let it_local =
-                    self.declare_local("_iter_handle".to_string(), Ty::None, span, true);
+                let it_local = self.declare_local("_iter_handle".to_string(), Ty::None, span, true);
                 let cur = self.current_block_id();
                 let init_target = self.start_new_block();
                 self.cur_block = Some(cur.0 as usize);
@@ -733,8 +731,7 @@ impl<'a> BodyBuilder<'a> {
                 //         opt_local==0 means exhausted (Option::None convention).
                 let pre = self.current_block_id();
                 let header = self.start_new_block();
-                let opt_local =
-                    self.declare_local("_iter_opt".to_string(), Ty::None, span, true);
+                let opt_local = self.declare_local("_iter_opt".to_string(), Ty::None, span, true);
                 self.cur_block = Some(pre.0 as usize);
                 self.terminate(Terminator::Goto(header));
                 self.cur_block = Some(header.0 as usize);

@@ -31,8 +31,8 @@ use cobrust_codegen::{Artifact, ArtifactKind, Backend, OptLevel, TargetSpec, emi
 use cobrust_frontend::span::{FileId, Span};
 use cobrust_hir::DefId;
 use cobrust_mir::{
-    BasicBlock, BlockId, Body, CastKind, Constant, LocalDecl, LocalId, Module as MirModule, Operand,
-    Place, Rvalue, Statement, StatementKind, Terminator,
+    BasicBlock, BlockId, Body, CastKind, Constant, LocalDecl, LocalId, Module as MirModule,
+    Operand, Place, Rvalue, Statement, StatementKind, Terminator,
 };
 use cobrust_types::Ty;
 use target_lexicon::Triple;
