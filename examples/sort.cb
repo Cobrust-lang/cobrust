@@ -1,0 +1,21 @@
+# sort — M11 example.
+#
+# Source-level intent:
+#
+#   import std.io
+#   import std.collections
+#
+#   fn main() -> i64:
+#       contents = std.io.read_file(std.env.args().get(1))
+#       lines = std.string.split(contents, "\n")
+#       lines.sort()
+#       for line in lines:
+#           print(line)
+#       return 0
+#
+# Per ADR-0025 sort.cb requires List materialization through MIR;
+# .cb source is the M11 stub. Integration test exercises the
+# stdlib List sort path.
+fn main() -> i64:
+    print("sort M11 stub — see stdlib_examples integration test")
+    return 0
