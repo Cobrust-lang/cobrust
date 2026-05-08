@@ -11,6 +11,8 @@
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::must_use_candidate)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::redundant_closure_for_method_calls)]
 
 use std::collections::HashMap;
 use std::sync::OnceLock;

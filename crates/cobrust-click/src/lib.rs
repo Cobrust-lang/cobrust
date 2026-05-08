@@ -32,6 +32,13 @@
 //! - `RunResult` with `.option(name)` / `.argument(name)` accessors
 //! - `ClickError { kind, message }` single error type
 
+// Fluent-builder Self-return pattern is pervasive in this crate; pedantic
+// `must_use_candidate` would require ~10 attributes for ergonomic builders
+// the user is already chaining. The decorator-chain compiler is necessarily
+// long. Both are accepted at module level; mirrors cobrust-numpy's pattern.
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::too_many_lines)]
+
 mod decorators;
 
 pub use crate::decorators::{

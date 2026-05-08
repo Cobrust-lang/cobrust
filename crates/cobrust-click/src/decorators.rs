@@ -12,6 +12,8 @@
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::must_use_candidate)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::return_self_not_must_use)]
 
 use std::collections::HashMap;
 

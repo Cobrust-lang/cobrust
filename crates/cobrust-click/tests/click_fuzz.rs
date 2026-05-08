@@ -5,11 +5,25 @@
 //! assert panic-freedom. Successful parses must round-trip via the
 //! observer surface (`option(...) / argument(...)`).
 
+
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::format_push_string)]
+#![allow(clippy::let_unit_value)]
+#![allow(clippy::ignored_unit_patterns)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::manual_is_multiple_of)]
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::match_same_arms)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::missing_panics_doc)]
 
 use cobrust_click::{ArgumentSpec, Command, OptionSpec, ParamType};
 
