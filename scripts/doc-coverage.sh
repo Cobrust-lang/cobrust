@@ -67,6 +67,7 @@ expected_modules=(
     msgpack
     requests
     click
+    stdlib
 )
 
 for mod in "${expected_modules[@]}"; do
@@ -1012,7 +1013,6 @@ if grep -q '^- \*\*M10 — delivered.\*\*' "docs/agent/modules/cli.md"; then
         "repl"
         "ADR-0024"
         "hello, world"
-        "__cobrust_println_static"
         "[package]"
     )
     m10_cli_files=(
@@ -1035,8 +1035,65 @@ if grep -q '^- \*\*M10 — delivered.\*\*' "docs/agent/modules/cli.md"; then
     fi
 
     [[ -f examples/hello.cb ]] || fail "examples/hello.cb missing (M10 binding done-means)"
-    [[ -f crates/cobrust-cli/runtime/m10_runtime.c ]] \
-        || fail "crates/cobrust-cli/runtime/m10_runtime.c missing"
+    # M11 superseded M10's runtime helper: m10_runtime.c lifted to
+    # cobrust-stdlib::io::__cobrust_println per ADR-0025 §"Print-intrinsic
+    # lift". The new entry shim is cobrust_main.c.
+    [[ -f crates/cobrust-cli/runtime/cobrust_main.c ]] \
+        || fail "crates/cobrust-cli/runtime/cobrust_main.c missing (M11 entry shim)"
 fi
 
 echo "doc-coverage: M10 CLI driver surface checks passed"
+
+# --- 21. M11 stdlib + runtime surface coverage -----------------------------
+# When the stdlib module declares M11 delivered, the M11 binding surface
+# terms + ADR-0025 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M11 — delivered.\*\*' "docs/agent/modules/stdlib.md"; then
+    m11_stdlib_terms=(
+        "std.io.println"
+        "std.collections.List"
+        "std.string.format"
+        "std.math.sqrt"
+        "std.panic.panic"
+        "std.env.args"
+        "std.fmt"
+        "ADR-0025"
+        "__cobrust_print"
+        "__cobrust_println"
+        "__cobrust_panic"
+        "__cobrust_capture_argv"
+        "_cobrust_user_main"
+        "mimalloc"
+    )
+    m11_stdlib_files=(
+        "docs/agent/modules/stdlib.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m11_stdlib_terms[@]}"; do
+        for f in "${m11_stdlib_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M11 stdlib surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_25="docs/agent/adr/0025-m11-stdlib-runtime.md"
+    [[ -f "$adr_25" ]] || fail "ADR-0025 (M11 stdlib + runtime) is required for M11"
+    if ! grep -q '^status: accepted$' "$adr_25"; then
+        fail "ADR-0025 must be 'status: accepted' for M11 to be done"
+    fi
+
+    # M11 binding done-means: 10 example programs + hello.cb regression.
+    for example in hello fizzbuzz fib wc cat echo sort unique_lines regex_grep csv_sum json_pretty; do
+        [[ -f "examples/${example}.cb" ]] || fail "examples/${example}.cb missing (M11 binding done-means)"
+    done
+
+    # M11 stdlib crate must exist with the seven binding modules.
+    [[ -d crates/cobrust-stdlib ]] || fail "crates/cobrust-stdlib missing"
+    for mod in io collections string math panic env fmt runtime; do
+        [[ -f "crates/cobrust-stdlib/src/${mod}.rs" ]]             || fail "crates/cobrust-stdlib/src/${mod}.rs missing"
+    done
+fi
+
+echo "doc-coverage: M11 stdlib + runtime surface checks passed"
