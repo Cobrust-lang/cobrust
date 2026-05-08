@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: m12-x-while-if-codegen-regression
-last_verified_commit: 22c6fae
+last_verified_commit: ea093ef
 dependencies: [adr:0019, adr:0023, adr:0027]
 ---
 
