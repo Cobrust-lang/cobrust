@@ -832,8 +832,14 @@ if grep -q '^- \*\*M7.6 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
         for f in "${m7_6_numpy_files[@]}"; do
             if ! grep -q -F "${term}" "$f"; then
                 fail "M7.6 numpy surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+fi
 
-# --- 17. M8 MIR surface coverage --------------------------------------------
+echo "doc-coverage: M7.6 numpy surface checks passed"
+
+# --- 18. M8 MIR surface coverage --------------------------------------------
 # When the mir module declares M8 delivered, the MIR surface terms +
 # ADR-0020 anchors must appear in all three doc trees.
 
