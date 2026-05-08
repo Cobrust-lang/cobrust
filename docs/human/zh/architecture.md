@@ -1484,3 +1484,56 @@ flowchart TD
 - `codegen_diff_corpus.rs` —— 22 个 in-scope 差分行（编译 + 与参考 Rust 比较）加 6 个 `#[ignore]` 的 M10/M11 后续。
 - `codegen_object_layout.rs` —— 16 个对象布局断言（架构、格式、节、符号、ABI helper）。
 - `codegen_release_smoke.rs` —— 10 个 release 构建冒烟测试（release 默认、Speed / SpeedAndSize opt 等级、递归、分支多的程序、linker 可用性）。
+
+### M10 —— CLI 驱动器（按 ADR-0024）
+
+`cobrust-cli` crate（M10）把前面每个里程碑的 surface（M1 lex/parse、M2 HIR + types、M8 MIR、M9 codegen）串成端到端驱动器 —— `cobrust` 二进制。基于 [clap](https://crates.io/crates/clap) derive parser 提供 8 个子命令：
+
+| 子命令 | 用途 |
+|---|---|
+| `cobrust build <file.cb>` | 编译到可执行 / 对象文件 |
+| `cobrust run <file.cb>` | 编译 + 调用 |
+| `cobrust check <file.cb>` | 仅类型检查 |
+| `cobrust fmt <file.cb> [--check]` | 通过 `mod:frontend` 的 unparser 格式化 |
+| `cobrust translate <library>` | 调用 `mod:translator`（M4..M6 入口） |
+| `cobrust new <name>` | 脚手架一个新包 |
+| `cobrust test` | 编译 + 运行 `tests/` 下所有 `.cb` |
+| `cobrust repl` | M14 —— 独立里程碑，本里程碑发布 stub |
+
+**退出码方案**（按 ADR-0024 §"Exit-code scheme"）是封闭集合：`0` 成功，`1` 用户错误，`2` 类型错误，`3` 内部 panic，`4` 运行时 panic，`5` `cobrust fmt --check` 检测到 diff，`6` 测试失败，`100..127` 翻译流水线失败（对应 ADR-0019 "≥ 100 reserved for translator path"），`200..255` 为 Phase F（debugger / WASM target）保留。
+
+**hello-world 契约** —— M10 绑定 done-means：`examples/hello.cb` 编译 + 运行 + 输出 `hello, world\n`。按 ADR-0024 §"Hello-world contract":
+
+```cobrust
+fn main() -> i64:
+    print("hello, world")
+    return 0
+```
+
+CLI 的 `build` 流水线：
+
+1. 前置合成 prelude（`fn print(s: str) -> i64`），让源码无需已有 stdlib 也能通过类型检查。
+2. `mir_lower` 之后，运行 `build::intrinsics::rewrite_print`：找到 Call 终结子，其 callee 局部名为 `"print"`，验证字面参数恰好是 `"hello, world"`，把 `func` 改写为 `Constant::Str("__cobrust_println_static")`，清空 args，从 Module 中移除 print stub Body。
+3. 调用 `cobrust_codegen::emit`（带 `cranelift_backend.rs` 中的 M10 修订），把 `__cobrust_println_static` 声明为导入符号，发出真正的 Cranelift `call`。
+4. 把用户 object 与 `crates/cobrust-cli/runtime/m10_runtime.c`（提供 `void __cobrust_println_static(void)`，内部用 `write(2)` 实现）链接到一起。
+
+字面值 `"hello, world"` 收窄是刻意为之；M11 stdlib `std.io.println` 把字符串发射上提到 codegen 并使用真实 `(*const u8, usize)` 运行时 ABI 来扩展。ADR-0023 §"Per-MIR-form lowering rules" Call 行的 M10 修订是**累加性**的：当 `func` 为 `Constant::Str(name)` 时，codegen 发出导入符号的真实调用；对 `Constant::FnRef(_)` 仍保留 M9 stub。
+
+**`cobrust new` 包脚手架** —— M10 写出 `<name>/cobrust.toml`，含 `[package]` 占位 table：
+
+```toml
+[package]
+name = "my_app"
+version = "0.1.0"
+cobrust-version = "0.0.1"
+```
+
+这是 M10 唯一拥有的 schema。ADR-0025（M12）会加入 `[dependencies]`、`[bin] / [lib] / [test]`。`[package]` 命名空间与 M3 LLM-router config（`[router]`、`[providers.*]`、`[routing.*]`）互不重叠，所以共用文件名 `cobrust.toml` 在今天不会相撞。
+
+**`cobrust translate` argv 映射** —— 包装 `cobrust_translator::pipeline::translate`。查找 `corpus/<library>/spec.toml`、`upstream/`、`upstream_tests/`、`canned_llm_responses.toml`，按 ADR-0007 构造 `PyLibrary`，注册 `SyntheticProvider`（默认），把翻译产生的 crate 写到 `target/cobrust/crates/cobrust-<library>/`（或 `--out-dir`）。真实 LLM 模式是 Phase F 后续工作。
+
+**M10 测试总数**：17 个测试覆盖 4 个套件加 hello-world 端到端门控：
+- `cli_smoke.rs` —— 2 个测试；绑定的 hello-world 门控（`cobrust build examples/hello.cb` 产生可执行文件并输出 `hello, world\n`）。
+- `cli_subcommands.rs` —— 7 个测试覆盖 build / check（成功 + 错误） / fmt / new / help / run。
+- `cli_exit_codes.rs` —— 6 个测试钉死封闭退出码方案（0、1、2、5、repl=1、translate=1）。
+- `cli_translate_smoke.rs` —— 2 个测试，通过 `corpus/tomli/` 演练 translate CLI surface。

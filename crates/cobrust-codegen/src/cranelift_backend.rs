@@ -397,6 +397,37 @@ impl CraneliftCtx {
             builder.def_var(var, zero);
         }
 
+        // --- ADR-0024: declare external imports for `Constant::Str` callees ---
+        // M10 amends ADR-0023's Call lowering: a `Terminator::Call` whose
+        // `func` operand is `Operand::Constant(Constant::Str(name))`
+        // resolves to an external imported symbol declared with
+        // `Linkage::Import`. Used today by the hello-world runtime
+        // helper `__cobrust_println_static`. M11 stdlib will broaden.
+        let mut extern_func_ids: HashMap<String, cranelift_module::FuncId> = HashMap::new();
+        for mir_block in &body.blocks {
+            if let cobrust_mir::Terminator::Call { func, .. } = &mir_block.terminator {
+                if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(name)) = func {
+                    if extern_func_ids.contains_key(name) {
+                        continue;
+                    }
+                    // M10 runtime-helper signature: void (void). M11
+                    // will widen to `(*const u8, usize)` for general
+                    // `print(s: str)` lowering.
+                    let sig = Signature::new(self.call_conv);
+                    let extern_id = obj
+                        .declare_function(name, Linkage::Import, &sig)
+                        .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+                    extern_func_ids.insert(name.clone(), extern_id);
+                    let _ = sig; // silence unused warning under cfg branches
+                }
+            }
+        }
+        let mut extern_funcs: HashMap<String, ir::FuncRef> = HashMap::new();
+        for (name, fid) in &extern_func_ids {
+            let func_ref = obj.declare_func_in_func(*fid, builder.func);
+            extern_funcs.insert(name.clone(), func_ref);
+        }
+
         // --- lower each block's statements + terminator --------------
         let mut to_emit: Vec<&BasicBlock> = body.blocks.iter().collect();
         for mir_block in to_emit.drain(..) {
@@ -410,6 +441,7 @@ impl CraneliftCtx {
                 block_map: &block_map,
                 builder: &mut builder,
                 body,
+                extern_funcs: &extern_funcs,
             };
             for stmt in &mir_block.statements {
                 emit_ctx.lower_statement(stmt)?;
@@ -450,6 +482,13 @@ struct EmitCtx<'a, 'b> {
     block_map: &'a HashMap<BlockId, ir::Block>,
     builder: &'a mut FunctionBuilder<'b>,
     body: &'a Body,
+    /// External symbols declared via `Linkage::Import` in `define_body`.
+    /// ADR-0024 amends ADR-0023's `Terminator::Call` row: when `func`
+    /// operand resolves to `Operand::Constant(Constant::Str(name))`,
+    /// the call lowers to a real Cranelift `call` to the FuncRef
+    /// stored in this map. Used by the M10 hello-world contract
+    /// (runtime helper `__cobrust_println_static`).
+    extern_funcs: &'a HashMap<String, ir::FuncRef>,
 }
 
 impl<'a, 'b> EmitCtx<'a, 'b> {
@@ -534,14 +573,31 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 Ok(())
             }
             Terminator::Call {
-                func: _,
-                args: _,
+                func,
+                args: _args,
                 destination,
                 target,
                 unwind: _,
             } => {
-                // M9 stub: function-pointer calling convention is wired
-                // by M10 driver; the destination receives a zero placeholder.
+                // ADR-0024 amendment: when `func` is `Constant::Str(name)`,
+                // emit a real Cranelift `call` to the imported symbol.
+                // For all other callee shapes (Constant::FnRef, ...) the
+                // M9 stub remains: write a zero placeholder, jump to
+                // continuation. M11 will materialize the FnRef path.
+                if let Operand::Constant(Constant::Str(name)) = func {
+                    if let Some(func_ref) = self.extern_funcs.get(name) {
+                        // M10 runtime-helper convention: zero args, void
+                        // return. The destination receives a zero (the
+                        // call's return value is unused at the M10 scope).
+                        self.builder.ins().call(*func_ref, &[]);
+                        let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                        self.write_place(destination, zero)?;
+                        let blk = self.block_id(target)?;
+                        self.builder.ins().jump(blk, &[]);
+                        return Ok(());
+                    }
+                }
+                // M9 stub fallthrough.
                 let zero = self.builder.ins().iconst(ir::types::I64, 0);
                 self.write_place(destination, zero)?;
                 let blk = self.block_id(target)?;

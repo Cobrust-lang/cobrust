@@ -1585,3 +1585,56 @@ flowchart TD
 - `codegen_diff_corpus.rs` — 22 in-scope diff rows (compile + reference Rust comparison) plus 6 `#[ignore]`'d M10/M11 follow-ups.
 - `codegen_object_layout.rs` — 16 object-layout assertions (architecture, format, sections, symbols, ABI helpers).
 - `codegen_release_smoke.rs` — 10 release-build smoke tests (release default, Speed / SpeedAndSize opt levels, recursion, branchy programs, linker availability).
+
+### M10 — CLI driver (per ADR-0024)
+
+The `cobrust-cli` crate (M10) stitches every prior milestone's surface (M1 lex/parse, M2 HIR + types, M8 MIR, M9 codegen) into an end-to-end driver — the `cobrust` binary. It ships eight subcommands behind a [clap](https://crates.io/crates/clap)-derived parser:
+
+| Subcommand | Purpose |
+|---|---|
+| `cobrust build <file.cb>` | compile to executable / object |
+| `cobrust run <file.cb>` | compile + invoke |
+| `cobrust check <file.cb>` | type-check only |
+| `cobrust fmt <file.cb> [--check]` | format via `mod:frontend`'s unparser |
+| `cobrust translate <library>` | invoke `mod:translator` (M4..M6 entrypoint) |
+| `cobrust new <name>` | scaffold a new package |
+| `cobrust test` | compile + run every `.cb` under `tests/` |
+| `cobrust repl` | M14 — separate milestone, ships as stub |
+
+**Exit-code scheme** (per ADR-0024 §"Exit-code scheme") is a closed set: `0` success, `1` user error, `2` type error, `3` internal panic, `4` runtime panic, `5` `cobrust fmt --check` diff, `6` test failure, `100..127` translator-pipeline failures (matching ADR-0019's "≥ 100 reserved for translator path"), `200..255` reserved for Phase F (debugger / WASM target).
+
+**Hello-world contract** — the M10 binding done-means: `examples/hello.cb` compiles + runs + prints `hello, world\n`. Per ADR-0024 §"Hello-world contract":
+
+```cobrust
+fn main() -> i64:
+    print("hello, world")
+    return 0
+```
+
+The CLI's `build` pipeline:
+
+1. Prepends a synthetic prelude (`fn print(s: str) -> i64`) so the source type-checks without an existing stdlib.
+2. After `mir_lower`, runs `build::intrinsics::rewrite_print`: finds Call terminators whose callee local-name is `"print"`, validates the literal argument is exactly `"hello, world"`, rewrites `func` to `Constant::Str("__cobrust_println_static")`, clears args, drops the print stub Body.
+3. Calls `cobrust_codegen::emit` (with the M10 amendment in `cranelift_backend.rs`) to declare `__cobrust_println_static` as an imported symbol and emit a real Cranelift `call`.
+4. Links the user object with `crates/cobrust-cli/runtime/m10_runtime.c` (which provides `void __cobrust_println_static(void)` via `write(2)`).
+
+The narrowing to the literal `"hello, world"` is deliberate; M11 stdlib `std.io.println` will widen by lifting string emission into codegen with a real `(*const u8, usize)` runtime ABI. The M10 amendment to ADR-0023 §"Per-MIR-form lowering rules" Call row is **additive**: when `func` is `Constant::Str(name)`, codegen emits a real call to the imported symbol; for `Constant::FnRef(_)` the M9 stub remains.
+
+**`cobrust new` package skeleton** — the M10 scaffolder writes `<name>/cobrust.toml` with a `[package]` placeholder table:
+
+```toml
+[package]
+name = "my_app"
+version = "0.1.0"
+cobrust-version = "0.0.1"
+```
+
+This is the only schema M10 owns. ADR-0025 (M12) will add `[dependencies]`, `[bin] / [lib] / [test]`. The `[package]` namespace is disjoint from the M3 LLM-router config (`[router]`, `[providers.*]`, `[routing.*]`) so the shared `cobrust.toml` filename does not collide today.
+
+**`cobrust translate` argv mapping** — wraps `cobrust_translator::pipeline::translate`. Looks up `corpus/<library>/spec.toml`, `upstream/`, `upstream_tests/`, `canned_llm_responses.toml`, builds a `PyLibrary` per ADR-0007, registers a `SyntheticProvider` (default), and writes the translated crate under `target/cobrust/crates/cobrust-<library>/` (or `--out-dir`). Real-LLM mode is a Phase F follow-up.
+
+**M10 test counts**: 17 tests across 4 suites + a hello-world end-to-end gate:
+- `cli_smoke.rs` — 2 tests; the binding hello-world gate (`cobrust build examples/hello.cb` produces an exe that prints `hello, world\n`).
+- `cli_subcommands.rs` — 7 tests covering build / check (ok + error) / fmt / new / help / run.
+- `cli_exit_codes.rs` — 6 tests pinning the closed exit-code scheme (0, 1, 2, 5, repl=1, translate=1).
+- `cli_translate_smoke.rs` — 2 tests exercising the translate CLI surface against `corpus/tomli/`.

@@ -995,3 +995,48 @@ if grep -q '^- \*\*M9 — delivered.\*\*' "docs/agent/modules/codegen.md"; then
 fi
 
 echo "doc-coverage: M9 codegen surface checks passed"
+
+# --- 20. M10 CLI driver surface coverage ----------------------------------
+# When the cli module declares M10 delivered, the M10 subcommand surface
+# terms + ADR-0024 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M10 — delivered.\*\*' "docs/agent/modules/cli.md"; then
+    m10_cli_terms=(
+        "build"
+        "run"
+        "check"
+        "fmt"
+        "translate"
+        "new"
+        "test"
+        "repl"
+        "ADR-0024"
+        "hello, world"
+        "__cobrust_println_static"
+        "[package]"
+    )
+    m10_cli_files=(
+        "docs/agent/modules/cli.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m10_cli_terms[@]}"; do
+        for f in "${m10_cli_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M10 cli surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_24="docs/agent/adr/0024-m10-cli-driver.md"
+    [[ -f "$adr_24" ]] || fail "ADR-0024 (M10 CLI driver) is required for M10"
+    if ! grep -q '^status: accepted$' "$adr_24"; then
+        fail "ADR-0024 must be 'status: accepted' for M10 to be done"
+    fi
+
+    [[ -f examples/hello.cb ]] || fail "examples/hello.cb missing (M10 binding done-means)"
+    [[ -f crates/cobrust-cli/runtime/m10_runtime.c ]] \
+        || fail "crates/cobrust-cli/runtime/m10_runtime.c missing"
+fi
+
+echo "doc-coverage: M10 CLI driver surface checks passed"
