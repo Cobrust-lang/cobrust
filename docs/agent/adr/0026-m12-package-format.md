@@ -4,7 +4,7 @@ adr_id: 0026
 title: M12 package format — user-crate cobrust.toml schema, lockfile determinism, content-addressed registry, semver resolver, namespace collision (Option C)
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: TBD-m12
 supersedes: []
 superseded_by: []
 dependencies: [adr:0004, adr:0007, adr:0019, adr:0024, adr:0025]
