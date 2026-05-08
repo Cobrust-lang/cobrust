@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: examples-literal-print-debt
-last_verified_commit: TBD-m11-1-fix
+last_verified_commit: ea093ef
 status: closed
 closed_by: M11.1 sprint (ADR-0030)
 dependencies: [adr:0019, adr:0023, adr:0025, adr:0030]

@@ -4,7 +4,7 @@ adr_id: 0030
 title: M11.1 — fix while-loop-with-leading-if codegen regression + close audit-#2 (real fizzbuzz / fib)
 status: accepted
 date: 2026-05-09
-last_verified_commit: TBD
+last_verified_commit: ea093ef
 supersedes: []
 superseded_by: []
 ---
