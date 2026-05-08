@@ -2,61 +2,149 @@
 doc_kind: module
 module_id: mod:cli
 crate: cobrust-cli
-last_verified_commit: 62ef6bd
-dependencies: []
+last_verified_commit: TBD
+dependencies: [mod:frontend, mod:hir, mod:types, mod:mir, mod:codegen, mod:translator]
 ---
 
 # Module: cli
 
 ## Purpose
 
-`cobrust` binary entrypoint. Subcommand dispatch + global flags.
+`cobrust` binary entrypoint. Subcommand dispatch + global flags. Stitches
+the M1..M9 pipeline (lex → parse → HIR → types → MIR → codegen) into an
+end-to-end driver and ships the M10 hello-world contract.
 
 ## Status
 
-M0 — empty stub (`fn main() {}`). Subcommands wire up starting at M1
-(`cobrust lex`, `cobrust parse`, `cobrust build`, etc.).
+- **M10 — delivered.** ADR-0024 binds the subcommand registry, exit-code
+  scheme, runtime-helper contract for hello-world, and `[package]`
+  placeholder for the `cobrust.toml` collision deferred to ADR-0025 (M12).
 
-## Public surface (target — M1+)
+## Public surface (M10)
 
-TBD; subcommand registry to be defined in an ADR before M1 ships.
+```rust
+fn main() -> std::process::ExitCode;
+```
 
-Anticipated subcommands (non-binding):
+The entrypoint is a [`clap::Parser`]-derived dispatcher. Subcommands per
+ADR-0024 §"Subcommand contracts":
 
-| Subcommand | Lands at | Purpose |
-|---|---|---|
-| `cobrust lex <file>` | M1 | Run lexer, dump tokens |
-| `cobrust parse <file>` | M1 | Run parser, dump AST |
-| `cobrust check <file>` | M2 | Run type checker |
-| `cobrust build` | M3+ | Compile workspace |
-| `cobrust translate <pylib>` | M4 | Run translation pipeline |
+| Subcommand | Argv shape | Outputs (success) | Exit codes |
+|---|---|---|---|
+| `cobrust build <file.cb> [-o <out>] [--emit obj\|exe] [--release] [--target <triple>]` | one input file | object or executable | 0/1/2/3 |
+| `cobrust run <file.cb> [--release] [--target <triple>]` | one input file | invokes the linked exe | 0/1/2/3/4 |
+| `cobrust check <file.cb>` | one input file | "ok" on success | 0/1/2 |
+| `cobrust fmt <file.cb> [--check]` | one input file | rewrite or diff exit | 0/1/2/5 |
+| `cobrust translate <library> [--out-dir <dir>]` | a library name (under `corpus/<lib>/`) | `cobrust-<lib>` crate | 0/1/100..127 |
+| `cobrust new <name> [--path <dir>]` | a package name | scaffolds package | 0/1 |
+| `cobrust test [--quiet]` | (none) | summary + per-test verdict | 0/1/2/3/6 |
+| `cobrust repl` | (none) | M14 stub message | 1 |
+
+### Exit-code constants
+
+```rust
+pub const SUCCESS: u8 = 0;
+pub const USER_ERROR: u8 = 1;
+pub const TYPE_ERROR: u8 = 2;
+pub const INTERNAL_PANIC: u8 = 3;
+pub const RUNTIME_PANIC: u8 = 4;
+pub const FMT_DIFF: u8 = 5;
+pub const TEST_FAILURE: u8 = 6;
+pub const TRANSLATOR_BASE: u8 = 100;
+pub const TRANSLATOR_MAX: u8 = 127;
+```
+
+### Hello-world contract
+
+`examples/hello.cb` is the canonical M10 program:
+
+```cobrust
+fn main() -> i64:
+    print("hello, world")
+    return 0
+```
+
+Per ADR-0024 §"Hello-world contract":
+
+1. The CLI prepends a synthetic prelude declaring `fn print(s: str) -> i64`
+   so the source type-checks.
+2. After `mir_lower`, the CLI's `build::intrinsics::rewrite_print` pass:
+   - finds Call terminators whose callee local-name is `"print"`,
+   - validates the literal argument is exactly `"hello, world"` (M11 widens),
+   - rewrites the `func` operand to `Constant::Str("__cobrust_println_static")`,
+   - clears the args (the runtime helper is zero-arg at M10),
+   - drops the print stub Body from the module.
+3. `cobrust_codegen::emit` (with the M10 amendment in
+   `cranelift_backend.rs`) declares `__cobrust_println_static` as an
+   imported symbol and emits a real Cranelift `call` to it.
+4. The CLI's link step invokes `cc <user>.o <runtime>.o -o <out>`,
+   linking the object emitted from `crates/cobrust-cli/runtime/m10_runtime.c`.
+5. Running the linked executable prints `hello, world\n` to stdout
+   and exits 0.
+
+The runtime helper at `crates/cobrust-cli/runtime/m10_runtime.c`
+implements `void __cobrust_println_static(void)` via `write(2)`. M11
+stdlib (`std.io.println`) supersedes by lifting string emission into
+codegen with a real `(*const u8, usize)` runtime ABI.
+
+### Package config skeleton
+
+`cobrust new my_app` writes:
+
+```toml
+# my_app/cobrust.toml
+[package]
+name = "my_app"
+version = "0.1.0"
+cobrust-version = "0.0.1"
+```
+
+The `[package]` table is the only schema M10 owns. ADR-0025 (M12) adds
+`[dependencies]`, `[bin]/[lib]/[test]`. The namespace is disjoint from
+the M3 LLM-router config (`[router]`, `[providers.*]`, `[routing.*]`),
+so the shared filename does not collide today.
 
 ## Invariants
 
-- Exits with stable, documented status codes (`0` success, non-zero per
-  failure category — final scheme in pending ADR).
-- All non-zero exits write a structured diagnostic via `tracing` to
-  stderr.
+- Exits with stable, documented status codes per ADR-0024 §"Exit-code scheme".
+- All non-zero exits write a structured diagnostic to stderr.
 - Never panics on invalid CLI input — invalid input → diagnostic + exit
   code, not panic.
+- The `cobrust build`/`run` pipeline is purely additive on top of the
+  M1..M9 surfaces; no public surface in `mod:frontend`/`mod:hir`/`mod:types`/`mod:mir`/`mod:codegen`
+  is mutated by M10. The M10 amendment to ADR-0023 §"Per-MIR-form
+  lowering rules" Call row is documented in ADR-0024.
 
-## Done means (M0)
+## Done means (M10)
 
-- [x] `cargo build -p cobrust-cli` produces `target/debug/cobrust`.
-- [x] Binary exits 0 with no output.
-
-## Done means (M1)
-
-- [ ] `cobrust lex` and `cobrust parse` round-trip the "core 30 forms"
-      from `mod:frontend`.
-- [ ] `cobrust --help` lists all subcommands.
+- [x] All subcommands above land except `repl` (M14 stub).
+- [x] `cobrust build examples/hello.cb` produces an executable that
+      prints `hello, world\n` on macOS arm64 (Linux x86_64 verified
+      separately by CTO).
+- [x] Exit-code scheme documented in ADR-0024.
+- [x] `tests/cli_smoke.rs` enforces hello-world end-to-end.
+- [x] `tests/cli_subcommands.rs` exercises build/run/check/fmt/new/help.
+- [x] `tests/cli_exit_codes.rs` enforces the closed exit-code scheme.
+- [x] `tests/cli_translate_smoke.rs` exercises the translate CLI surface.
 
 ## Non-goals
 
-- No interactive REPL in M1 (separate milestone).
+- No interactive REPL in M10 (M14 ships it).
 - No daemon mode / persistent server — every invocation is independent.
+- No cross-compilation matrix beyond what ADR-0023 §"Target triple matrix"
+  pins (macOS arm64 + Linux x86_64 at M10).
+- No arbitrary `print(s: str)` lowering at M10 — narrowed to the literal
+  `"hello, world"`. M11 stdlib `std.io.println` widens.
 
 ## Cross-references
 
-- `mod:frontend` — first subcommands operate on it.
-- Future ADR — subcommand registry and exit-code scheme.
+- `mod:frontend` — `parse_str`, `unparse` (used by build / check / fmt).
+- `mod:hir` — `Session`, `lower` (used by build / check).
+- `mod:types` — `check` (used by build / check).
+- `mod:mir` — `lower`, `Module`, `Terminator::Call`, `Constant::Str` /
+  `Constant::FnRef` (consumed by the M10 intrinsic-rewrite pass).
+- `mod:codegen` — `emit`, `TargetSpec`, `Backend`, `Artifact` (used by build / run / test).
+- `mod:translator` — `pipeline::translate` (used by translate).
+- ADR-0019 §"M10 — CLI driver" — milestone scope.
+- ADR-0023 §"Per-MIR-form lowering rules" — M10 amendment to the Call row.
+- ADR-0024 — M10 design (this milestone).
