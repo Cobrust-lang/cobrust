@@ -1,0 +1,7 @@
+NumPy is licensed under the BSD 3-Clause "New" or "Revised" License.
+See https://github.com/numpy/numpy/blob/main/LICENSE.txt for details.
+License-compatible with Cobrust's Apache-2.0 OR MIT dual license per ADR-0001.
+
+For Bucket A (FFT) the rustfft 6.x crate is dual-licensed Apache-2.0 OR MIT;
+for Bucket B (Complex) the num-complex 0.4 crate is dual-licensed
+Apache-2.0 OR MIT. Both license-compatible per ADR-0001.
