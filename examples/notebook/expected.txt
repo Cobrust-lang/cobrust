@@ -1,0 +1,48 @@
+notebook: M12 — package format demo
+notebook: ===============================
+notebook: --- [boot] ---
+notebook: identity = notebook v0.1.0
+notebook: dep cobrust-notebook-config v0.1.0 cached
+notebook: target = bin/notebook
+notebook: --- [pages] ---
+notebook: ===============================
+notebook: page 1 — overview
+notebook: ===============================
+notebook: cobrust packages declare:
+notebook:   * [package] table   — name + version + cobrust-version
+notebook:   * [dependencies]    — path / git / registry sources
+notebook:   * [bin] / [lib]     — build targets
+notebook:   * [[test]]          — test array
+notebook: lockfile is canonical, deterministic, and BLAKE3-hashed
+notebook:   per ADR-0026 §C.
+notebook: ===============================
+notebook: page 2 — registry layout
+notebook: ===============================
+notebook: ~/.cobrust/registry/
+notebook:   blake3/
+notebook:     <64-hex>/                 — extracted source tree
+notebook:       cobrust.toml
+notebook:       PROVENANCE.toml         — translated-lib chain
+notebook:       src/lib.cb
+notebook:   index/
+notebook:     name-to-versions.toml     — M12 stub
+notebook: same source tree → same blake3 hex → same cache dir
+notebook: per ADR-0026 §F.
+notebook: ===============================
+notebook: page 3 — provenance
+notebook: ===============================
+notebook: every translated crate carries PROVENANCE.toml
+notebook:   per ADR-0007. The M12 lockfile preserves the
+notebook:   `deterministic_id` field as `provenance_hash`
+notebook:   so the chain-of-custody round-trips through
+notebook:   user-crate dep graphs.
+notebook: --- [runner] ---
+notebook: scoreboard:
+notebook:   * manifest.parse_str        : ok
+notebook:   * resolver.resolve          : ok
+notebook:   * registry.insert           : ok
+notebook:   * lockfile.to_canonical_toml: ok
+notebook:   * pkg_build.run_build       : ok
+notebook: --- [farewell] ---
+notebook: dep cobrust-notebook-config — see helper module
+notebook: notebook done.

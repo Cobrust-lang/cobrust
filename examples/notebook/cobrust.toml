@@ -1,0 +1,18 @@
+[package]
+name = "notebook"
+version = "0.1.0"
+cobrust-version = "0.0.1"
+description = "M12 notebook example — exercises pkg format + multi-module + path dep on cobrust-notebook-config (a translated-library-shaped sibling) end-to-end."
+license = "Apache-2.0 OR MIT"
+authors = ["The Cobrust Project"]
+
+[dependencies]
+cobrust-notebook-config = { path = "../notebook-config" }
+
+[bin]
+name = "notebook"
+path = "src/main.cb"
+
+[[test]]
+name = "smoke"
+path = "tests/smoke.cb"

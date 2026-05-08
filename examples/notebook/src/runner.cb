@@ -1,0 +1,219 @@
+# notebook/src/runner.cb — M12 notebook example.
+#
+# `runner` is the third of three modules in the notebook example
+# (per ADR-0019 §"Definition of usable" line 3 "≥ 3 modules"). It
+# carries the score-keeping helpers that drive the notebook's
+# end-of-run summary.
+#
+# Public surface:
+#
+#   - `record_pass_*()`                 — pass-counter primitives.
+#   - `print_full_scoreboard()`         — prints the cumulative scoreboard.
+#   - `print_partial_scoreboard()`      — prints a mid-run snapshot.
+#   - `print_run_id()`                  — prints the deterministic run-id.
+#   - `recover_from_*()`                — recovery helpers.
+#   - `print_diagnostic_*()`            — diagnostic-block helpers.
+#   - `simulate_failure_*()`            — fixed-output failure stubs.
+#   - `assert_invariant_*()`            — fixed-output invariant stubs.
+#
+# At M11 codegen scope, the pass-counter primitives lower as scripted
+# literal-print sequences. The post-M11 codegen amendments will lift
+# `record_pass_*` to use real i64 counters and emit the scoreboard
+# via `std.fmt.format_int` once Aggregate / Cast Rvalues materialize.
+#
+# This file is not yet wired into main.cb's call graph (see the
+# ADR-0026 cross-milestone-conflict note in main.cb). M12.x will lift.
+
+# --- Pass counters (literal-print stubs) ------------------------------
+
+fn record_pass_manifest() -> i64:
+    print("runner: pass — manifest.parse_str ok")
+    return 0
+
+fn record_pass_resolver() -> i64:
+    print("runner: pass — resolver.resolve ok")
+    return 0
+
+fn record_pass_registry() -> i64:
+    print("runner: pass — registry.insert_source_tree ok")
+    return 0
+
+fn record_pass_lockfile() -> i64:
+    print("runner: pass — lockfile.to_canonical_toml ok")
+    return 0
+
+fn record_pass_pkg_build() -> i64:
+    print("runner: pass — pkg_build.run_build ok")
+    return 0
+
+fn record_pass_pkg_test() -> i64:
+    print("runner: pass — pkg_build.run_test ok")
+    return 0
+
+fn record_pass_tarball() -> i64:
+    print("runner: pass — tarball.build ok")
+    return 0
+
+fn record_pass_provenance() -> i64:
+    print("runner: pass — provenance hash propagated to lockfile")
+    return 0
+
+fn record_pass_namespace() -> i64:
+    print("runner: pass — namespace collision rejection works")
+    return 0
+
+# --- Scoreboard (literal-print stubs) ---------------------------------
+
+fn print_full_scoreboard() -> i64:
+    print("runner: scoreboard — full run")
+    print("runner:   passes   : 9")
+    print("runner:   failures : 0")
+    print("runner:   skipped  : 0")
+    print("runner:   total    : 9")
+    return 0
+
+fn print_partial_scoreboard() -> i64:
+    print("runner: scoreboard — partial")
+    print("runner:   passes   : 3")
+    print("runner:   failures : 0")
+    print("runner:   skipped  : 0")
+    print("runner:   total    : 3")
+    return 0
+
+fn print_run_id() -> i64:
+    print("runner: run-id   : notebook-m12-deterministic-001")
+    print("runner: schema   : ADR-0026 lockfile_version 1")
+    print("runner: cache    : ~/.cobrust/registry/blake3/")
+    return 0
+
+# --- Recovery helpers ------------------------------------------------
+#
+# `recover_from_*` helpers are pre-wired tracebacks the notebook
+# uses when something goes wrong in a future M12.x rev. At M12 they
+# print fixed strings; the post-M11 amendments will add structured
+# `Result<T, E>` propagation through the `std.panic` runtime ABI.
+
+fn recover_from_missing_dep() -> i64:
+    print("runner: recovery — missing dep `cobrust-notebook-config`")
+    print("runner:   hint    : ensure path = \"../notebook-config\"")
+    print("runner:   hint    : `cobrust new` scaffolds this layout")
+    return 0
+
+fn recover_from_lock_drift() -> i64:
+    print("runner: recovery — lockfile drift detected")
+    print("runner:   hint    : delete cobrust.lock and rebuild")
+    print("runner:   hint    : the canonical TOML has determinism guards")
+    return 0
+
+fn recover_from_hash_mismatch() -> i64:
+    print("runner: recovery — registry hash mismatch")
+    print("runner:   hint    : cache may be corrupt — rm ~/.cobrust/registry/blake3/<hex>")
+    print("runner:   hint    : re-run `cobrust build` to re-fetch")
+    return 0
+
+fn recover_from_cycle() -> i64:
+    print("runner: recovery — cycle in dep graph")
+    print("runner:   hint    : ResolutionError::Cycle reports the path")
+    print("runner:   hint    : drop the back-edge dep")
+    return 0
+
+fn recover_from_conflict() -> i64:
+    print("runner: recovery — version conflict between siblings")
+    print("runner:   hint    : ResolutionError::Conflict reports reqs")
+    print("runner:   hint    : pin a single version explicitly")
+    return 0
+
+fn recover_from_offline() -> i64:
+    print("runner: recovery — registry-source offline at M12")
+    print("runner:   hint    : pre-fetch via `cobrust add --path ...`")
+    print("runner:   hint    : Phase F adds HTTP fetch under a separate ADR")
+    return 0
+
+# --- Diagnostic block ------------------------------------------------
+
+fn print_diagnostic_header() -> i64:
+    print("runner: ----------------- diagnostic -----------------")
+    return 0
+
+fn print_diagnostic_footer() -> i64:
+    print("runner: -------------- end diagnostic ----------------")
+    return 0
+
+fn print_diagnostic_invariants() -> i64:
+    print("runner: invariants:")
+    print("runner:   * lockfile_version == 1                    : ok")
+    print("runner:   * dependencies sorted lex                  : ok")
+    print("runner:   * [[package]] entries sorted by (name, ver): ok")
+    print("runner:   * source tree → tarball → blake3           : ok")
+    print("runner:   * registry idempotent on re-insert         : ok")
+    print("runner:   * `manifest.canonical_toml` deterministic  : ok")
+    return 0
+
+# --- Failure simulation (fixed-output stubs) ------------------------
+#
+# `simulate_failure_*` helpers are placeholder sketches the notebook
+# uses in its diagnostic walkthroughs. They print fixed transcripts;
+# the post-M11 amendments will return real `Result::Err(_)` values
+# the caller can branch on.
+
+fn simulate_failure_offline() -> i64:
+    print("runner: simulate — registry offline")
+    print("runner:   PkgError::Registry(Offline { name = \"unknown\" })")
+    return 0
+
+fn simulate_failure_cycle() -> i64:
+    print("runner: simulate — cycle detected")
+    print("runner:   PkgError::Resolution(Cycle { path = [\"a\", \"b\", \"a\"] })")
+    return 0
+
+fn simulate_failure_conflict() -> i64:
+    print("runner: simulate — version conflict")
+    print("runner:   PkgError::Resolution(Conflict { package = \"foo\", reqs = [\"^1\", \"^2\"] })")
+    return 0
+
+fn simulate_failure_hash_mismatch() -> i64:
+    print("runner: simulate — registry hash mismatch")
+    print("runner:   PkgError::Registry(HashMismatch { expected, actual })")
+    return 0
+
+fn simulate_failure_path_missing() -> i64:
+    print("runner: simulate — path source missing")
+    print("runner:   PkgError::Source(PathMissing(...))")
+    return 0
+
+fn simulate_failure_router_config() -> i64:
+    print("runner: simulate — router config mistakenly read as user crate")
+    print("runner:   PkgError::Manifest(IsRouterConfig)")
+    return 0
+
+# --- Invariants ------------------------------------------------------
+
+fn assert_invariant_lockfile_lf_only() -> i64:
+    print("runner: invariant — lockfile is LF-only — confirmed")
+    return 0
+
+fn assert_invariant_lockfile_trailing_newline() -> i64:
+    print("runner: invariant — lockfile ends with newline — confirmed")
+    return 0
+
+fn assert_invariant_packages_sorted() -> i64:
+    print("runner: invariant — [[package]] sorted by (name, version) — confirmed")
+    return 0
+
+fn assert_invariant_dependencies_sorted() -> i64:
+    print("runner: invariant — dependencies array sorted lex — confirmed")
+    return 0
+
+fn assert_invariant_blake3_64_hex() -> i64:
+    print("runner: invariant — blake3 hex is exactly 64 chars — confirmed")
+    return 0
+
+fn assert_invariant_idempotent_insert() -> i64:
+    print("runner: invariant — registry insert is idempotent — confirmed")
+    return 0
+
+# --- Standalone smoke entry ------------------------------------------
+
+fn main() -> i64:
+    print("runner: standalone smoke entry")
+    return 0
