@@ -36,7 +36,7 @@ flowchart TD
 | `cobrust-frontend` | 词法 + 语法 + AST | M1 |
 | `cobrust-hir` | HIR：去糖、名字解析后的中间形式 | M2 |
 | `cobrust-types` | 类型系统 + 类型检查器 | M2 |
-| `cobrust-mir` | MIR：控制流显式形式 | M3+ |
+| `cobrust-mir` | MIR：控制流显式形式（typed-HIR → CFG，含 drop schedule + borrow check） | M8 ✅ |
 | `cobrust-codegen` | LLVM / Cranelift 后端 | M3+ |
 | `cobrust-llm-router` | LLM Router | M3 |
 | `cobrust-translator` | AI 翻译子系统 | M4+ |
@@ -1231,3 +1231,66 @@ pub enum NumpyErrorKind {
 
 按 [ADR-0018](../../agent/adr/0018-m7-5-random.md)
 查看承重决策。
+
+### M8 — MIR（中级 IR，按 ADR-0020）
+
+`cobrust-mir` crate（M8）实现 typed-HIR → MIR 的 lowering：把 12-family 的 HIR 收敛到 6-family 的 CFG-explicit 形式，作为 M9 codegen 的输入接口。
+
+**6 个核心节点族**：
+
+| 族 | 角色 |
+|---|---|
+| `Module` | top-level 容器；每个 typed-HIR `Item::Fn` 对应一个 `Body`，加上一个合成的 `Body::Init` 用于 module-level 语句 |
+| `Body` | per-function CFG；包含 locals、basic blocks、drop schedule、return-local、param_count |
+| `BasicBlock` | 线性 statement 序列 + 一个 terminator |
+| `Statement` | 副作用的非-终结子语句（assignments、storage live/dead、nop）|
+| `Terminator` | 控制转移；7 个变体的闭合 enum |
+| `Place / Rvalue / Operand` | 数据引用：typed access path / value-producer / leaf |
+
+**7 个 Terminator**：
+
+```
+Goto(BB)
+SwitchInt { operand, cases: Vec<(SwitchValue, BB)>, otherwise: BB }
+Return
+Call { func, args, destination, target, unwind }
+Drop { place, target }
+Unreachable
+Assert { cond, expected, msg, target }
+```
+
+每个 basic block 必须以恰好一个 terminator 结尾（ADR-0020 不变量）。
+
+**Lowering 例子**——`fn div(a: i64, b: i64) -> i64: return a / b` lower 到：
+
+```mermaid
+flowchart TD
+    bb0["bb0: cond = (b ≠ 0)"] -->|cond=true| bb1
+    bb0 -->|cond=false| panic[Assert.DivisionByZero]
+    bb1["bb1: bin = Div(a, b)<br/>_return = bin"] --> bb2[Return]
+```
+
+整数除法发出 `Assert(b != 0)` 是宪法 §2.2 "无静默 NaN" 的具体落地。
+
+**Borrow-check 5 条义务**（按 ADR-0020 §"Borrow-check proof obligation list"）：
+
+| # | 义务 | 错误 |
+|---|------|-----|
+| **B1** | 移动后不读 | `MirError::UseAfterMove` |
+| **B2** | 不并发两个可变借用 | `MirError::ConflictingMutBorrow` |
+| **B3** | 可变与共享借用不重叠 | `MirError::SharedMutOverlap` |
+| **B4** | drop 后不读 | `MirError::UseAfterDrop` |
+| **B5** | 引用不外逃其作用域 | `MirError::EscapingBorrow` |
+
+B1..B5 联合 ADR-0006 的 9 条 type-level 义务，构成静态核心健全性证明的全部条件。
+
+**Drop schedule 5 阶段**（按 ADR-0020）：
+
+1. **Initialization** — 标记非 `Copy` 局部为 drop-pending
+2. **Move tracking** — `Operand::Move(p)` 转移所有权 → 移除 pending 标记
+3. **End-of-scope insertion** — 在 Goto / SwitchInt / Return / Unreachable 边上按 LIFO 顺序插入 `Drop` 终结子
+4. **Divergence skip** — `Unreachable` 块跳过 drop 插入
+5. **Verification** — forward-flow 检查每条 Return 路径上没有 pending 局部、没有 double-drop
+
+**M8 是 intra-procedural** — 跨 body 的生命周期多态在 M9 codegen 实现 calling convention 时落地。
+

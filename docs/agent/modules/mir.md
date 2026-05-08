@@ -2,49 +2,234 @@
 doc_kind: module
 module_id: mod:mir
 crate: cobrust-mir
-last_verified_commit: 62ef6bd
-dependencies: [mod:types]
+last_verified_commit: TBD
+dependencies: [mod:hir, mod:types, adr:0020]
 ---
 
 # Module: mir
 
 ## Purpose
 
-Mid-level IR: control-flow-explicit form fed to `mod:codegen`. Locals,
-basic blocks, terminators.
+Mid-level IR: control-flow-explicit form fed to `mod:codegen`. The
+form `M9` codegen will consume. Locals + basic blocks + terminators
++ drop schedule + discharged borrow-check obligations.
 
 ## Status
 
-M0 — empty stub. First delivery at M3+.
+- **M8 — delivered.** ADR-0020 pinned the shape; implementation
+  matches. 157 tests across `lower_forms / mir_well_formed /
+  mir_ill_formed / mir_fuzz` pass.
 
-## Public surface (target)
+## Public surface (M8)
 
 ```rust
-pub fn lower(typed: &types::TypedModule, sess: &mut Session) -> Result<Module, MirError>;
+// Top-level entry — typed-HIR → MIR.
+pub fn lower(typed: &cobrust_types::TypedModule) -> Result<Module, MirError>;
 
-pub struct Module { /* fns: Vec<Body> */ }
-pub struct Body { /* locals, basic_blocks, terminators */ }
+// Borrow check pass — discharges B1..B5 obligations.
+pub fn borrow_check(body: &Body) -> Result<(), MirError>;
+
+// Drop schedule pass — 5-phase, mutates Body to insert Drop terminators.
+pub fn compute_drop_schedule(body: &mut Body) -> Result<(), MirError>;
+
+// IR shape.
+pub struct Module { pub bodies: Vec<Body> }
+
+pub struct Body {
+    pub def_id: DefId,
+    pub name: String,
+    pub locals: Vec<LocalDecl>,
+    pub blocks: Vec<BasicBlock>,
+    pub return_local: LocalId,
+    pub param_count: usize,
+    pub span: Span,
+}
+
+pub struct LocalDecl { pub id: LocalId, pub name: String, pub ty: Ty,
+                      pub mutable: bool, pub span: Span }
+pub struct LocalId(pub u32);
+pub struct BlockId(pub u32);
+
+pub struct BasicBlock { pub id: BlockId, pub statements: Vec<Statement>,
+                       pub terminator: Terminator, pub span: Span }
+
+pub struct Statement { pub kind: StatementKind, pub span: Span }
+pub enum  StatementKind {
+    Assign { place: Place, rvalue: Rvalue },
+    StorageLive(LocalId),
+    StorageDead(LocalId),
+    Nop,
+}
+
+pub enum Terminator {
+    Goto(BlockId),
+    SwitchInt { operand: Operand, cases: Vec<(SwitchValue, BlockId)>, otherwise: BlockId },
+    Return,
+    Call { func: Operand, args: Vec<Operand>, destination: Place,
+           target: BlockId, unwind: Option<BlockId> },
+    Drop { place: Place, target: BlockId },
+    Unreachable,
+    Assert { cond: Operand, expected: bool, msg: AssertKind, target: BlockId },
+}
+
+pub enum SwitchValue { Bool(bool), Int(i64), Adt(u32) }
+pub enum AssertKind { DivisionByZero, Overflow, BoundsCheck, Unreachable }
+
+pub struct Place { pub local: LocalId, pub projections: Vec<Projection> }
+pub enum  Projection { Field(usize), Index(Operand), Deref, Discriminant }
+
+pub enum Operand { Copy(Place), Move(Place), Constant(Constant) }
+
+pub enum Rvalue {
+    Use(Operand),
+    BinaryOp(BinOp, Operand, Operand),
+    UnaryOp(UnOp, Operand),
+    Aggregate(AggregateKind, Vec<Operand>),
+    Cast(CastKind, Operand, Ty),
+    Ref(BorrowKind, Place),
+    Discriminant(Place),
+    Len(Place),
+    NullaryOp(NullaryOp),
+}
+
+pub enum BorrowKind { Shared, Mut }
+pub enum BinOp { Add, Sub, Mul, Div, FloorDiv, Mod, Pow, MatMul,
+                 Shl, Shr, BitAnd, BitOr, BitXor,
+                 Eq, NotEq, Lt, LtEq, Gt, GtEq, And, Or, In, NotIn }
+pub enum UnOp { Plus, Neg, BitNot, Not }
+pub enum CastKind { IntToFloat, FloatToInt, BoolToInt, IntToBool,
+                    StrToBytes, BytesToStr }
+pub enum AggregateKind {
+    Tuple, List, Set, Dict, Record,
+    Adt(u32, u32),
+    FormatString,
+}
+pub enum NullaryOp { SizeOf, AlignOf }
+
+pub enum Constant {
+    Bool(bool), Int(i64), Float(u64), Imag(u64),
+    Str(String), Bytes(Vec<u8>), None, FnRef(u32),
+}
+
+// Errors — ADR-0020 §"Public surface".
+pub enum MirError {
+    UseAfterMove { local: u32, span: Span },
+    UseAfterDrop { local: u32, span: Span },
+    ConflictingMutBorrow { local: u32, span: Span },
+    SharedMutOverlap { local: u32, span: Span },
+    EscapingBorrow { local: u32, span: Span },
+    DropMissing { local: u32, span: Span },
+    DoubleDrop { local: u32, span: Span },
+    FieldOutOfBounds { place: PlaceDebug, span: Span },
+    UnresolvedDefId { def_id: u32, span: Span },
+    NonExhaustiveSwitch { span: Span },
+    Internal(String),
+}
+
+pub struct PlaceDebug { pub local: u32, pub projection_chain: String }
 ```
 
-## Shape
+## Lowering rules (per ADR-0003 form, per ADR-0020 §"Lowering rules")
 
-- SSA-like, but with explicit basic blocks (closer to `rustc` MIR than
-  classic SSA).
-- Borrow / move semantics are visible at MIR level — drop schedule is
-  computed here.
+Module-level (1–6):
 
-## Invariants (target)
+| Form | Lowering |
+|---|---|
+| 1 `module` | one `Module { bodies }` with one `Body` per fn + synthetic init body |
+| 2 `import_stmt` | `LocalDecl` for the imported `DefId`; M8 emits no MIR-side semantics |
+| 3 `fn_def` | one `Body` per fn; entry block = `BasicBlock(0)` |
+| 4 `class_def` | each method becomes a `Body`; class itself is an ADT registration |
+| 5 `decorator` | unwrap recursively; inner item lowers as if undecorated |
+| 6 `type_alias` | no MIR emission |
 
-- Every basic block ends with a terminator.
-- Every local has a declared type.
-- Borrow checker proof obligations are discharged before lowering to
-  codegen.
+Statement (7–19):
 
-## Done means (M3+)
+| Form | Lowering |
+|---|---|
+| 7 `let_stmt` | `LocalDecl` + `StorageLive` + `Statement::Assign(Place, Rvalue::Use(...))` |
+| 8 `assign_stmt` | `Statement::Assign(target_place, rhs_rvalue)` |
+| 9 `if_stmt` | each arm: `SwitchInt(cond, [(true, body)], otherwise: next)`; arms join at merge block |
+| 10 `while_stmt` | `pre → header → SwitchInt → [body, exit]`; body ends in `Goto(header)` |
+| 11 `for_stmt` | iterator-protocol shaped with synthetic header / body / exit blocks |
+| 12 `match_stmt` | decision tree of `SwitchInt` on discriminants + projections |
+| 13 `with_stmt` | `Call(__enter__) → body → Call(__exit__)`; binding is a `let` |
+| 14 `try_stmt` | each handler = `unwind` target; finally = on every exit edge |
+| 15 `return_stmt` | `Statement::Assign(_return, ...)` then `Terminator::Return` |
+| 16 `break_continue` | `Goto(loop_exit)` / `Goto(loop_header)` |
+| 17 `raise_stmt` | `Terminator::Unreachable` (panic helper materialises at M11) |
+| 18 `pass_stmt` | `StatementKind::Nop` |
+| 19 `expr_stmt` | synthesize `let _tmp = expr` + discard |
 
-TBD; specified together with `mod:codegen` ADR.
+Pattern (20): projection-and-test sequences; binding pattern allocates a local, copies via `Field(idx)` projection.
+
+Expression (21–30):
+
+| Form | Lowering |
+|---|---|
+| 21 `literal_expr` | `Operand::Constant(Constant::*)` |
+| 22 `fstring_expr` | `Rvalue::Aggregate(AggregateKind::FormatString, parts)` |
+| 23 `name_expr` | `Operand::Copy(Place)` for Copy types, `Operand::Move(Place)` for owning types |
+| 24 `collection_expr` | `Rvalue::Aggregate(Tuple|List|Set|Dict, items)` |
+| 25 `comprehension_expr` | desugared to fresh accumulator + loop |
+| 26 `lambda_expr` | new `Body` + parent gets `Operand::Constant(Constant::FnRef(...))` |
+| 27 `call_expr` | `Terminator::Call { func, args, destination, target, unwind }` |
+| 28 `access_expr` | `Place` with `Field(idx)` (attr) or `Index(operand)` (index) projection |
+| 29 `binary_unary_expr` | `Rvalue::BinaryOp` / `Rvalue::UnaryOp`; integer division emits `Assert(rhs != 0)` first |
+| 30 `await_yield_expr` | `await` → placeholder `Call`; `yield` → no-op M8 (M13 binds runtime) |
+
+## Invariants (M8)
+
+- Every `BasicBlock` has exactly one terminator.
+- Every `LocalDecl` carries a fully-resolved `Ty`.
+- Drop-schedule pass is idempotent.
+- Borrow check is terminating (`O(blocks * locals)`).
+- Lowering is total over typed-HIR.
+- `Module::display()` is deterministic — same input, same output.
+
+## Borrow-check obligations (B1..B5 per ADR-0020 §"Borrow-check proof obligation list")
+
+| # | Discharged by | Error |
+|---|---|---|
+| **B1** No use after move | `borrow.rs` move tracker | `UseAfterMove` |
+| **B2** No two simultaneous mutable borrows | `borrow.rs` borrow stack | `ConflictingMutBorrow` |
+| **B3** No mutable + shared overlap | `borrow.rs` borrow stack | `SharedMutOverlap` |
+| **B4** Drop after last use | `drop.rs` verification phase | `UseAfterDrop` |
+| **B5** No escaping borrow past its scope | `borrow.rs` (intra-procedural at M8) | `EscapingBorrow` |
+
+ADR-0006 §"Soundness proof obligation list" enumerates 9 type-level obligations; items 4–9 are discharged at type-check time (M2). Items 1–3 (Progress, Preservation, Lowering preservation) are flow obligations and project onto MIR-time as B1..B5.
+
+## Drop schedule algorithm
+
+ADR-0020 §"Drop schedule algorithm" — 5 phases:
+
+1. **Initialization** — non-`Copy` locals declared in body (params excluded) marked drop-pending.
+2. **Move** — `Operand::Move(place)` references → root local moved out → no longer pending.
+3. **End-of-scope** — at every `Goto`/`SwitchInt`/`Return`/`Unreachable` edge, insert `Drop` blocks for still-pending locals (LIFO order).
+4. **Divergence** — `Unreachable` blocks skip drop insertion.
+5. **Verification** — forward-flow check; pending-on-Return → `DropMissing`; double-drop on path → `DoubleDrop`.
+
+## Done means (M8 — DONE)
+
+- [x] Every form in ADR-0003 has an explicit lowering rule.
+- [x] All 7 terminator variants used.
+- [x] Drop schedule passes verification on every test body.
+- [x] Borrow check terminates within `O(blocks × locals)` on every test body.
+- [x] 46 lower-form golden tests + 55 well-formed + 50 ill-formed + 6 fuzz properties green.
+- [x] `COBRUST_M8_FUZZ_LONG=1` 100k cases / property panic-free.
+- [x] `adr:0020` accepted; implementation matches.
+
+## Non-goals
+
+- Inter-procedural lifetime tracking (M9 codegen).
+- LLVM-style phi nodes (Cobrust uses rustc-style per-block locals).
+- Optimization passes (constant folding, DCE, etc.) — also M9+.
+- Generator state-machine lowering (M13 structured concurrency).
 
 ## Cross-references
 
+- `adr:0020` — MIR shape, terminator taxonomy, drop schedule, borrow obligations (authoritative).
+- `adr:0019` — Phase E roadmap; M8 row.
+- `adr:0006` — type-system obligations 1–9; B1..B5 project onto items 1–3.
 - `mod:types` — input.
 - `mod:codegen` — output consumer.
+- Constitution `CLAUDE.md` §2.2 (drops including GIL/GC), §4.1 (pipeline), §5.1 (elegance), §5.2 (scientific — enumerated obligations), §7 (M2 done means), ADR-0019 (M8..M14 sequencing).

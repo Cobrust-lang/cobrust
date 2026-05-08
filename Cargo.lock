@@ -276,6 +276,13 @@ dependencies = [
 [[package]]
 name = "cobrust-mir"
 version = "0.0.1"
+dependencies = [
+ "cobrust-frontend",
+ "cobrust-hir",
+ "cobrust-types",
+ "proptest",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "cobrust-msgpack"

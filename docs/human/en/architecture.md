@@ -36,7 +36,7 @@ flowchart TD
 | `cobrust-frontend` | Lexer + parser + AST | M1 |
 | `cobrust-hir` | HIR: desugared, name-resolved | M2 |
 | `cobrust-types` | Type system + type checker | M2 |
-| `cobrust-mir` | MIR: control-flow-explicit | M3+ |
+| `cobrust-mir` | MIR: control-flow-explicit (typed-HIR → CFG with drop schedule + borrow check) | M8 ✅ |
 | `cobrust-codegen` | LLVM / Cranelift backend | M3+ |
 | `cobrust-llm-router` | LLM Router | M3 |
 | `cobrust-translator` | AI translation subsystem | M4+ |
@@ -1317,3 +1317,66 @@ See [ADR-0017](../../agent/adr/0017-m7-4-linalg.md)
 
 See [ADR-0018](../../agent/adr/0018-m7-5-random.md)
 for the load-bearing decisions.
+
+### M8 — MIR (mid-level IR, per ADR-0020)
+
+The `cobrust-mir` crate (M8) implements the typed-HIR → MIR lowering: it converges the 12-family HIR into a 6-family CFG-explicit form that serves as the input contract for M9 codegen.
+
+**6 core node families**:
+
+| Family | Role |
+|---|---|
+| `Module` | top-level container; one `Body` per typed-HIR `Item::Fn`, plus a synthetic `Body::Init` for module-level statements |
+| `Body` | per-function CFG: locals, basic blocks, drop schedule, return-local, param_count |
+| `BasicBlock` | linear statement sequence + exactly one terminator |
+| `Statement` | side-effecting non-terminator (assignments, storage live/dead, nop) |
+| `Terminator` | control transfer; closed enum with 7 variants |
+| `Place / Rvalue / Operand` | data references: typed access path / value-producer / leaf |
+
+**7 Terminator variants**:
+
+```
+Goto(BB)
+SwitchInt { operand, cases: Vec<(SwitchValue, BB)>, otherwise: BB }
+Return
+Call { func, args, destination, target, unwind }
+Drop { place, target }
+Unreachable
+Assert { cond, expected, msg, target }
+```
+
+Every basic block ends in exactly one terminator (ADR-0020 invariant).
+
+**Lowering example** — `fn div(a: i64, b: i64) -> i64: return a / b` lowers to:
+
+```mermaid
+flowchart TD
+    bb0["bb0: cond = (b ≠ 0)"] -->|cond=true| bb1
+    bb0 -->|cond=false| panic[Assert.DivisionByZero]
+    bb1["bb1: bin = Div(a, b)<br/>_return = bin"] --> bb2[Return]
+```
+
+The `Assert(b != 0)` on integer division materialises constitution §2.2's "no silent NaN" rule.
+
+**Borrow-check 5 obligations** (per ADR-0020 §"Borrow-check proof obligation list"):
+
+| # | Obligation | Error |
+|---|---|---|
+| **B1** | No use after move | `MirError::UseAfterMove` |
+| **B2** | No two simultaneous mutable borrows | `MirError::ConflictingMutBorrow` |
+| **B3** | No mutable + shared overlap | `MirError::SharedMutOverlap` |
+| **B4** | Drop after last use | `MirError::UseAfterDrop` |
+| **B5** | No escaping borrow past its scope | `MirError::EscapingBorrow` |
+
+B1..B5 compose with ADR-0006's 9 type-level obligations to discharge the full static-core soundness target.
+
+**Drop schedule 5-phase algorithm** (per ADR-0020):
+
+1. **Initialization** — mark non-`Copy` locals as drop-pending
+2. **Move tracking** — `Operand::Move(p)` transfers ownership → clears pending
+3. **End-of-scope insertion** — insert `Drop` terminators in LIFO order on Goto / SwitchInt / Return / Unreachable edges
+4. **Divergence skip** — `Unreachable` blocks skip drop insertion
+5. **Verification** — forward-flow check that no Return path retains a pending local; no double-drop
+
+**M8 is intra-procedural** — cross-body lifetime polymorphism lands at M9 codegen alongside calling convention materialisation.
+
