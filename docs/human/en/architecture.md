@@ -1661,6 +1661,7 @@ The `cobrust-stdlib` crate (M11) lands the runtime half of constitution §1.1's 
 |---|---|---|
 | `__cobrust_print` | `extern "C" fn(*const u8, usize)` | `std.io.print` runtime |
 | `__cobrust_println` | `extern "C" fn(*const u8, usize)` | `std.io.println` runtime |
+| `__cobrust_println_int` | `extern "C" fn(i64)` | `print_int(n)` intrinsic — prints integer + newline (ADR-0030) |
 | `__cobrust_panic` | `extern "C" fn(*const u8, usize) -> !` | exits with code 3 (`INTERNAL_PANIC`) |
 | `__cobrust_assert` | `extern "C" fn(bool, *const u8, usize)` | conditional panic |
 | `__cobrust_capture_argv` | `extern "C" fn(i32, *const *const u8)` | argv capture for `std.env.args` |

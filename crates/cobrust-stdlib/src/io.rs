@@ -83,6 +83,24 @@ pub unsafe extern "C" fn __cobrust_println(ptr: *const u8, len: usize) {
     }
 }
 
+/// C-ABI shim for `print_int(n: i64)` — emitted by the M11.1 print-int
+/// intrinsic rewrite when a `print_int(v)` callsite is lowered.
+/// Formats `v` as a decimal integer followed by a newline on stdout.
+///
+/// ADR-0030 §Decision step 5: required so `examples/fizzbuzz.cb` can
+/// print bare integers in the `else` branch.
+///
+/// # Safety
+///
+/// No pointer argument — always safe to call.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_println_int(v: i64) {
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "{v}");
+    let _ = stdout.flush();
+}
+
 // =====================================================================
 // read_line / read_file / write_file
 // =====================================================================

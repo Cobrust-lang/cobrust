@@ -155,7 +155,18 @@ fn stdlib_examples_fizzbuzz() {
 
 #[test]
 fn stdlib_examples_fib() {
-    assert_example("fib", "fib(10) = 55");
+    // ADR-0030 M11.1: fib.cb now uses an iterative algorithm.
+    // Output is "fib(10) =\n55\n" (two lines); check both substrings.
+    let (stdout, code) = build_and_run("fib");
+    assert_eq!(code, 0, "fib exited with code {code}; stdout={stdout:?}");
+    assert!(
+        stdout.contains("fib(10) ="),
+        "fib stdout {stdout:?} does not contain 'fib(10) ='"
+    );
+    assert!(
+        stdout.contains("55"),
+        "fib stdout {stdout:?} does not contain '55'"
+    );
 }
 
 #[test]
