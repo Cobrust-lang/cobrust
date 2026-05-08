@@ -1,0 +1,256 @@
+# cobrust-notebook-config — M12 notebook helper module.
+#
+# This file plays the role of a translated-library library entry point
+# for the M12 notebook example. The real `cobrust-tomli` translation
+# carries a Rust-side `lib.rs`; this Cobrust-side `lib.cb` is the
+# Cobrust-tier counterpart that the M12 package format expects.
+#
+# Surface (binding for the notebook example):
+#
+# - `print_banner()` — emits the helper's identity banner.
+# - `print_version()` — emits the helper's version string.
+# - `print_section_header(name: str)` — prefixed banner line.
+# - `print_known_section_*()` — helper-named section banners.
+# - `print_boot_*()` — boot diagnostics.
+# - `validate_*()` — placeholder validation API.
+# - `emit_*_separator()` — section separators.
+# - `identify_self_*()` — identity helpers.
+#
+# Implementation note: at M11 codegen scope only literal-string
+# `print(...)` callsites lower end-to-end. M12 does not extend that
+# scope (M11 followups for Aggregate / Ref / Cast / for-protocol /
+# f-string materialization are tracked under ADR-0025 §"Codegen
+# amendments" and stay deferred per ADR-0026 §"Cross-milestone
+# conflict guard"). Each helper here therefore lowers to a sequence
+# of literal `print(...)` calls.
+#
+# Why this matters: the notebook example demonstrates the M12 package
+# format end-to-end (manifest parse + dep resolve + lockfile + content-
+# addressed cache + multi-module orchestration) WITHOUT requiring the
+# stdlib HIR-tier amendments that are out of M12 scope.
+
+# --- Public surface — banners ----------------------------------------
+
+fn print_banner() -> i64:
+    print("notebook-config: ready")
+    return 0
+
+fn print_version() -> i64:
+    print("notebook-config: v0.1.0")
+    return 0
+
+fn print_section_header(name: str) -> i64:
+    print("notebook-config: section header")
+    return 0
+
+# Note: at M11 codegen the `name` parameter is reserved-but-unused
+# because string concatenation lowering depends on Aggregate Rvalue
+# materialization (M11 followup; tracked in ADR-0025 §F). The notebook
+# uses literal headers via `print_known_section_*` helpers below.
+
+fn print_known_section_intro() -> i64:
+    print("notebook-config: section [intro]")
+    return 0
+
+fn print_known_section_data() -> i64:
+    print("notebook-config: section [data]")
+    return 0
+
+fn print_known_section_summary() -> i64:
+    print("notebook-config: section [summary]")
+    return 0
+
+fn print_known_section_appendix_a() -> i64:
+    print("notebook-config: section [appendix.a]")
+    return 0
+
+fn print_known_section_appendix_b() -> i64:
+    print("notebook-config: section [appendix.b]")
+    return 0
+
+fn print_known_section_appendix_c() -> i64:
+    print("notebook-config: section [appendix.c]")
+    return 0
+
+# --- Boot diagnostics -------------------------------------------------
+
+fn print_boot_ok() -> i64:
+    print("notebook-config: boot ok")
+    return 0
+
+fn print_boot_unloaded() -> i64:
+    print("notebook-config: boot unloaded")
+    return 0
+
+fn print_boot_loading_path() -> i64:
+    print("notebook-config: boot loading from path source")
+    return 0
+
+fn print_boot_loading_registry() -> i64:
+    print("notebook-config: boot loading from registry (M12 stub)")
+    return 0
+
+fn print_boot_loading_git() -> i64:
+    print("notebook-config: boot loading from git source")
+    return 0
+
+fn print_boot_cache_hit() -> i64:
+    print("notebook-config: boot cache hit (idempotent)")
+    return 0
+
+fn print_boot_cache_miss() -> i64:
+    print("notebook-config: boot cache miss (will fetch)")
+    return 0
+
+fn print_boot_blake3_verified() -> i64:
+    print("notebook-config: boot blake3 hash verified")
+    return 0
+
+fn print_boot_provenance_loaded() -> i64:
+    print("notebook-config: boot PROVENANCE.toml loaded")
+    return 0
+
+fn print_boot_done() -> i64:
+    print("notebook-config: boot done")
+    return 0
+
+# --- Validation helpers -----------------------------------------------
+#
+# These are placeholders for the eventual TOML-tier validation API.
+# At M12 they print fixed strings; the post-M11 amendments will lift
+# them to take a `Value` tree and emit structured diagnostics.
+
+fn validate_required_keys() -> i64:
+    print("notebook-config: validate required keys ok")
+    return 0
+
+fn validate_value_types() -> i64:
+    print("notebook-config: validate value types ok")
+    return 0
+
+fn validate_section_layout() -> i64:
+    print("notebook-config: validate section layout ok")
+    return 0
+
+fn validate_no_unknown_keys() -> i64:
+    print("notebook-config: validate no unknown keys ok")
+    return 0
+
+fn validate_no_circular_refs() -> i64:
+    print("notebook-config: validate no circular refs ok")
+    return 0
+
+fn validate_paths_resolve() -> i64:
+    print("notebook-config: validate paths resolve ok")
+    return 0
+
+fn validate_versions_are_semver() -> i64:
+    print("notebook-config: validate versions are semver ok")
+    return 0
+
+fn validate_test_array_well_formed() -> i64:
+    print("notebook-config: validate [[test]] array well-formed ok")
+    return 0
+
+fn validate_dep_specs() -> i64:
+    print("notebook-config: validate dep specs ok")
+    return 0
+
+# --- Helpers used by the notebook's main run ----------------------
+
+fn emit_top_separator() -> i64:
+    print("================================================================")
+    return 0
+
+fn emit_mid_separator() -> i64:
+    print("----------------------------------------------------------------")
+    return 0
+
+fn emit_bottom_separator() -> i64:
+    print("================================================================")
+    return 0
+
+fn emit_blank_line() -> i64:
+    print("")
+    return 0
+
+fn emit_dot_separator() -> i64:
+    print("................................................................")
+    return 0
+
+fn emit_double_blank() -> i64:
+    print("")
+    print("")
+    return 0
+
+# --- Trivia: identification ------------------------------------------
+
+fn identify_self_short() -> i64:
+    print("ncfg")
+    return 0
+
+fn identify_self_long() -> i64:
+    print("cobrust-notebook-config")
+    return 0
+
+fn identify_self_role() -> i64:
+    print("translated-library-stub")
+    return 0
+
+fn identify_self_provenance() -> i64:
+    print("notebook-config: provenance — synthetic-LLM stub")
+    return 0
+
+fn identify_self_purpose() -> i64:
+    print("notebook-config: purpose — exercises the M12 pkg pipeline")
+    return 0
+
+fn identify_self_compat_tier() -> i64:
+    print("notebook-config: @py_compat(none)")
+    return 0
+
+fn identify_self_caveat() -> i64:
+    print("notebook-config: caveat — literal-print stubs only")
+    return 0
+
+# --- Sample literal pages used as fixtures by the notebook ---------
+
+fn page_intro_paragraph_1() -> i64:
+    print("notebook-config: a config helper for the M12 notebook example")
+    return 0
+
+fn page_intro_paragraph_2() -> i64:
+    print("notebook-config: tomli-flavored stub; not a real TOML parser")
+    return 0
+
+fn page_intro_paragraph_3() -> i64:
+    print("notebook-config: see PROVENANCE.toml for chain-of-custody")
+    return 0
+
+fn page_data_paragraph_1() -> i64:
+    print("notebook-config: data — example key-value pairs")
+    return 0
+
+fn page_data_paragraph_2() -> i64:
+    print("notebook-config:   key  = \"alpha\"")
+    return 0
+
+fn page_data_paragraph_3() -> i64:
+    print("notebook-config:   ver  = \"0.1.0\"")
+    return 0
+
+fn page_data_paragraph_4() -> i64:
+    print("notebook-config:   role = \"helper\"")
+    return 0
+
+fn page_summary_paragraph_1() -> i64:
+    print("notebook-config: summary — M12 pkg flow exercised")
+    return 0
+
+fn page_summary_paragraph_2() -> i64:
+    print("notebook-config: summary — lockfile bytes are deterministic")
+    return 0
+
+fn page_summary_paragraph_3() -> i64:
+    print("notebook-config: summary — registry layout content-addressed")
+    return 0
