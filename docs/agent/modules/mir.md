@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:mir
 crate: cobrust-mir
-last_verified_commit: ed07cf0
-dependencies: [mod:hir, mod:types, adr:0020]
+last_verified_commit: 078eab9
+dependencies: [mod:hir, mod:types, adr:0020, adr:0027]
 ---
 
 # Module: mir
@@ -150,7 +150,7 @@ Statement (7–19):
 | 8 `assign_stmt` | `Statement::Assign(target_place, rhs_rvalue)` |
 | 9 `if_stmt` | each arm: `SwitchInt(cond, [(true, body)], otherwise: next)`; arms join at merge block |
 | 10 `while_stmt` | `pre → header → SwitchInt → [body, exit]`; body ends in `Goto(header)` |
-| 11 `for_stmt` | iterator-protocol shaped with synthetic header / body / exit blocks |
+| 11 `for_stmt` | **M12.x** (ADR-0027 §4 for-protocol — `Iterator` trait surface backed by the four stdlib iter types): `_iter = iter_expr`; `Call(__cobrust_iter_init, _iter)` → `_handle`; loop header `Call(__cobrust_iter_next, _handle)` → `_opt`; `SwitchInt(_opt, [Bool(false) → exit], body_block)`; body ends in `Goto(header)` |
 | 12 `match_stmt` | decision tree of `SwitchInt` on discriminants + projections |
 | 13 `with_stmt` | `Call(__enter__) → body → Call(__exit__)`; binding is a `let` |
 | 14 `try_stmt` | each handler = `unwind` target; finally = on every exit edge |
@@ -167,7 +167,7 @@ Expression (21–30):
 | Form | Lowering |
 |---|---|
 | 21 `literal_expr` | `Operand::Constant(Constant::*)` |
-| 22 `fstring_expr` | `Rvalue::Aggregate(AggregateKind::FormatString, parts)` |
+| 22 `fstring_expr` | `Rvalue::Aggregate(AggregateKind::FormatString, parts)` — codegen materializes via `__cobrust_str_new` + `__cobrust_fmt_int / fmt_float / ...` per ADR-0027 §5; runtime allocation routed through `__cobrust_alloc` |
 | 23 `name_expr` | `Operand::Copy(Place)` for Copy types, `Operand::Move(Place)` for owning types |
 | 24 `collection_expr` | `Rvalue::Aggregate(Tuple|List|Set|Dict, items)` |
 | 25 `comprehension_expr` | desugared to fresh accumulator + loop |

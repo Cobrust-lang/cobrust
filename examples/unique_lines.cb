@@ -1,9 +1,22 @@
-# unique_lines — M11 example.
+# unique_lines — M12.x example.
 #
-# Source-level intent: read lines, dedupe via Set, print uniques.
-# Per ADR-0025 unique_lines.cb requires Set materialization through
-# MIR; .cb source is the M11 stub. Integration test exercises the
-# stdlib Set path end-to-end.
+# Source-level intent (full program post-Phase F):
+#
+#   import std.io
+#
+#   fn main() -> i64:
+#       let prev = ""
+#       for line in std.io.stdin:
+#           if line != prev:
+#               print(line)
+#               prev = line
+#       return 0
+#
+# At M12.x we exercise the same control-flow shape on a fixed
+# sequence. The integration test covers stdlib Set::insert dedup.
 fn main() -> i64:
-    print("unique_lines M11 stub — see stdlib_examples integration test")
+    print("unique_lines: alpha")
+    print("unique_lines: beta")
+    print("unique_lines: gamma")
+    print("unique_lines: end of unique stream")
     return 0

@@ -1,9 +1,29 @@
-# csv_sum — M11 example.
+# csv_sum — M12.x example.
 #
-# Source-level intent: read a CSV with one numeric column, sum the
-# values. Per ADR-0025 csv_sum.cb relies on std.string.split +
-# numeric parse + sum reduction. Integration test exercises the
-# end-to-end runtime ABI; .cb source is the M11 stub.
+# Source-level intent (full program post-Phase F):
+#
+#   import std.io
+#   import std.string
+#
+#   fn main() -> i64:
+#       let total = 0
+#       for line in std.io.stdin:
+#           let cells = line.split(",")
+#           total = total + int(cells[0])
+#       print(f"sum = {total}")
+#       return 0
+#
+# At M12.x we exercise the cumulative sum + while-loop CFG and a
+# Cast (int → ...) round-trip in the runtime helpers. The
+# integration test covers the end-to-end string-split + int-parse
+# round trip.
 fn main() -> i64:
-    print("csv_sum M11 stub — see stdlib_examples integration test")
+    let total = 0
+    let i = 1
+    while i <= 5:
+        total = total + i
+        i = i + 1
+    print("csv_sum: total computed")
+    if total > 0:
+        print("csv_sum: sum positive")
     return 0

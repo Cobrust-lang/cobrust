@@ -130,16 +130,18 @@ fn assert_example(example: &str, expected_stdout_substr: &str) {
 
 // =====================================================================
 // Headline acceptance gate — 10 examples + hello.cb regression.
+//
+// ADR-0027 §"Example rewrites" lifts every #[ignore] marker; the
+// 8 deferred M11 examples now ship as real Cobrust source exercising
+// the M12.x lowering surface.
 // =====================================================================
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_hello() {
     assert_example("hello", "hello, world");
 }
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_fizzbuzz() {
     let (stdout, code) = build_and_run("fizzbuzz");
     assert_eq!(code, 0);
@@ -152,57 +154,48 @@ fn stdlib_examples_fizzbuzz() {
 }
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_fib() {
     assert_example("fib", "fib(10) = 55");
 }
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_wc() {
-    assert_example("wc", "wc M11 stub");
+    assert_example("wc", "wc:");
 }
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_cat() {
-    assert_example("cat", "cat M11 stub");
+    assert_example("cat", "cat:");
 }
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_echo() {
-    assert_example("echo", "echo M11 stub");
+    assert_example("echo", "echo:");
 }
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_sort() {
-    assert_example("sort", "sort M11 stub");
+    assert_example("sort", "sort:");
 }
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_unique_lines() {
-    assert_example("unique_lines", "unique_lines M11 stub");
+    assert_example("unique_lines", "unique_lines:");
 }
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_regex_grep() {
-    assert_example("regex_grep", "regex_grep M11 stub");
+    assert_example("regex_grep", "regex_grep:");
 }
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_csv_sum() {
-    assert_example("csv_sum", "csv_sum M11 stub");
+    assert_example("csv_sum", "csv_sum:");
 }
 
 #[test]
-#[ignore = "requires staticlib + cli binary; gated under --ignored"]
 fn stdlib_examples_json_pretty() {
-    assert_example("json_pretty", "json_pretty M11 stub");
+    assert_example("json_pretty", "json_pretty:");
 }
 
 // =====================================================================

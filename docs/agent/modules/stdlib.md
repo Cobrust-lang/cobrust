@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:stdlib
 crate: cobrust-stdlib
-last_verified_commit: f758260
-dependencies: [mod:codegen, mod:mir, mod:hir]
+last_verified_commit: 078eab9
+dependencies: [mod:codegen, mod:mir, mod:hir, adr:0027]
 ---
 
 # Module: stdlib
@@ -36,10 +36,91 @@ pub mod math;
 pub mod panic;
 pub mod env;
 pub mod fmt;
+pub mod iter;        // M12.x ADR-0027 §4
 pub mod runtime;
 
 pub use runtime::{Error, ErrorKind};
 pub use collections::{Dict, List, Set};
+pub use iter::{DictIter, Iterator, ListIter, RangeIter, SetIter};  // M12.x
+```
+
+### `std.iter` (M12.x — ADR-0027 §4)
+
+The for-protocol surface. HIR `Stmt::For` lowers to MIR Calls into
+`__cobrust_iter_init` / `__cobrust_iter_next` / `__cobrust_iter_drop`
+which bind to one of the four closed-world types here.
+
+```rust
+pub trait Iterator {
+    type Item;
+    fn next(&mut self) -> Option<Self::Item>;
+}
+
+pub struct ListIter<T> { /* Vec<T>-backed */ }
+pub struct DictIter<K: Eq+Hash, V> { /* HashMap<K,V>-backed */ }
+pub struct SetIter<T: Eq+Hash> { /* HashSet<T>-backed */ }
+pub struct RangeIter { /* arithmetic range; saturating step */ }
+
+// C ABI (codegen targets these — see codegen module's runtime
+// helper signature table):
+pub unsafe extern "C" fn __cobrust_iter_init(iter_val: i64) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_iter_next(handle: *mut u8) -> i64;  // 0 = exhausted; non-zero = Some(v-1)
+pub unsafe extern "C" fn __cobrust_iter_drop(handle: *mut u8);
+```
+
+### Heap allocator + Aggregate runtime (M12.x — ADR-0027 §1)
+
+The codegen Aggregate / Drop lowering routes through these C-ABI
+symbols. M12.x is i64-only at the storage layer; Phase F widens
+to per-type element_size dispatch.
+
+```rust
+// crates/cobrust-stdlib/src/runtime.rs
+pub unsafe extern "C" fn __cobrust_alloc(size: i64) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_dealloc(ptr: *mut u8, size: i64);
+
+// crates/cobrust-stdlib/src/collections.rs
+pub unsafe extern "C" fn __cobrust_list_new(elem_size: i64, len: i64) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_list_set(list: *mut u8, i: i64, v: i64);
+pub unsafe extern "C" fn __cobrust_list_get(list: *mut u8, i: i64) -> i64;
+pub unsafe extern "C" fn __cobrust_list_len(list: *mut u8) -> i64;
+pub unsafe extern "C" fn __cobrust_list_drop(list: *mut u8);
+
+pub unsafe extern "C" fn __cobrust_dict_new(k_size: i64, v_size: i64, len: i64) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_dict_set(dict: *mut u8, k: i64, v: i64);
+pub unsafe extern "C" fn __cobrust_dict_get(dict: *mut u8, k: i64) -> i64;
+pub unsafe extern "C" fn __cobrust_dict_len(dict: *mut u8) -> i64;
+pub unsafe extern "C" fn __cobrust_dict_drop(dict: *mut u8);
+
+pub unsafe extern "C" fn __cobrust_set_new(elem_size: i64, len: i64) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_set_insert(set: *mut u8, v: i64);
+pub unsafe extern "C" fn __cobrust_set_contains(set: *mut u8, v: i64) -> i64;
+pub unsafe extern "C" fn __cobrust_set_len(set: *mut u8) -> i64;
+pub unsafe extern "C" fn __cobrust_set_drop(set: *mut u8);
+
+pub unsafe extern "C" fn __cobrust_tuple_new(n: i64) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_tuple_set(tup: *mut u8, i: i64, v: i64);
+pub unsafe extern "C" fn __cobrust_tuple_get(tup: *mut u8, i: i64) -> i64;
+pub unsafe extern "C" fn __cobrust_tuple_drop(tup: *mut u8, n: i64);
+```
+
+### F-string runtime (M12.x — ADR-0027 §5)
+
+HIR `Expr::Format` lowers to MIR `Aggregate(FormatString, ops)`,
+which the codegen materializes via:
+
+```rust
+// crates/cobrust-stdlib/src/fmt.rs
+pub unsafe extern "C" fn __cobrust_str_new() -> *mut u8;
+pub unsafe extern "C" fn __cobrust_str_push_static(buf: *mut u8, ptr: *const u8, len: i64);
+pub unsafe extern "C" fn __cobrust_fmt_int(buf: *mut u8, v: i64);
+pub unsafe extern "C" fn __cobrust_fmt_float(buf: *mut u8, v: f64);
+pub unsafe extern "C" fn __cobrust_fmt_bool(buf: *mut u8, v: i64);
+pub unsafe extern "C" fn __cobrust_fmt_str(buf: *mut u8, ptr: *const u8, len: i64);
+pub unsafe extern "C" fn __cobrust_fmt_repr(buf: *mut u8, ptr: *mut u8, type_id: i64);
+pub unsafe extern "C" fn __cobrust_str_len(buf: *mut u8) -> i64;
+pub unsafe extern "C" fn __cobrust_str_ptr(buf: *mut u8) -> *const u8;
+pub unsafe extern "C" fn __cobrust_str_drop(buf: *mut u8);
 ```
 
 ### `std.io`
