@@ -4,7 +4,7 @@ adr_id: 0024
 title: M10 CLI driver — subcommand registry, exit-code scheme, runtime-helper contract for hello-world, package config namespacing
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: 39941cf
 supersedes: []
 superseded_by: []
 dependencies: [adr:0007, adr:0019, adr:0020, adr:0023]
