@@ -1,0 +1,337 @@
+//! `cobrust build` — end-to-end driver per ADR-0024 §"Hello-world contract".
+//!
+//! Stitches:
+//!
+//! 1. `parse_str` → `hir_lower` → `type_check` → `mir_lower` (M1..M8).
+//! 2. M10 intrinsic rewrite (`intrinsics::rewrite_print`): recognizes
+//!    `print("hello, world")` callsites and rewrites the MIR `Call`'s
+//!    `func` operand to point at the runtime helper symbol
+//!    `__cobrust_println_static`. Per ADR-0024, M10 narrows the
+//!    intrinsic to the literal `"hello, world"`; M11 stdlib supersedes.
+//! 3. `cobrust_codegen::emit` (M9 surface; the Cranelift backend's
+//!    Call-amendment emits a real call when `func` is `Constant::Str`).
+//! 4. Linker stage: invoke `cc <user>.o <runtime>.o -o <out>` with the
+//!    M10 runtime helper compiled from
+//!    `crates/cobrust-cli/runtime/m10_runtime.c`.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use cobrust_codegen::{Artifact, ArtifactKind, Backend, OptLevel, TargetSpec, emit};
+use cobrust_frontend::{parse_str, span::FileId};
+use cobrust_hir::{Session, lower as hir_lower};
+use cobrust_mir::{Module as MirModule, lower as mir_lower};
+use cobrust_types::check as type_check;
+use target_lexicon::Triple;
+
+use crate::exit_codes;
+
+pub mod intrinsics;
+
+/// M10 prelude prepended to every Cobrust source before parsing.
+/// Declares `print(s: str) -> i64` so user programs can call it; the
+/// intrinsic-rewrite pass (per ADR-0024 §"Hello-world contract") then
+/// retargets the MIR Call from this stub Body to the runtime helper
+/// `__cobrust_println_static`. M11 stdlib supersedes by lifting this
+/// declaration into `std.io`.
+pub const PRELUDE: &str = "fn print(s: str) -> i64:\n    return 0\n\n";
+
+
+/// What `cobrust build` should emit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmitKind {
+    /// Relocatable object file (`.o`); no link step.
+    Object,
+    /// Linked executable (`.exe` on Windows, no extension elsewhere).
+    Executable,
+}
+
+/// Run `cobrust build <file.cb>`.
+#[allow(clippy::too_many_arguments)]
+pub fn run(
+    file: &Path,
+    output: Option<&Path>,
+    emit_kind: EmitKind,
+    release: bool,
+    target: Option<&str>,
+    quiet: bool,
+) -> u8 {
+    match build(file, output, emit_kind, release, target, quiet) {
+        Ok(_) => exit_codes::SUCCESS,
+        Err(e) => {
+            eprintln!("cobrust build: {e}");
+            e.exit_code()
+        }
+    }
+}
+
+/// Underlying `Result`-returning driver. Used by `cobrust run` to grab
+/// the produced artifact path before invoking it.
+pub fn build(
+    file: &Path,
+    output: Option<&Path>,
+    emit_kind: EmitKind,
+    release: bool,
+    target: Option<&str>,
+    quiet: bool,
+) -> Result<Artifact, BuildError> {
+    let user_source = std::fs::read_to_string(file)
+        .map_err(|e| BuildError::User(format!("cannot read {}: {e}", file.display())))?;
+    let source = format!("{PRELUDE}{user_source}");
+
+    let module = parse_str(&source, FileId::SYNTHETIC)
+        .map_err(|e| BuildError::Type(format!("parse error: {e:?}")))?;
+
+    let mut sess = Session::new();
+    let hir = hir_lower(&module, &mut sess)
+        .map_err(|e| BuildError::Type(format!("HIR lower error: {e:?}")))?;
+    let typed = type_check(&hir).map_err(|e| BuildError::Type(format!("type error: {e:?}")))?;
+
+    let mut mir = mir_lower(&typed).map_err(|e| BuildError::Type(format!("MIR error: {e:?}")))?;
+
+    intrinsics::rewrite_print(&mut mir).map_err(|e| BuildError::Type(format!("{e}")))?;
+
+    // --- target spec ----------------------------------------------------
+    let triple = match target {
+        Some(t) => t
+            .parse::<Triple>()
+            .map_err(|e| BuildError::User(format!("invalid target triple `{t}`: {e}")))?,
+        None => Triple::host(),
+    };
+
+    let module_name = file
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map_or_else(|| String::from("a"), String::from);
+
+    let output_dir = match output {
+        Some(p) => p
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(".")),
+        None => PathBuf::from("target/cobrust"),
+    };
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|e| BuildError::Internal(format!("mkdir {}: {e}", output_dir.display())))?;
+
+    // For Executable emit, ask codegen for the Object only; we link
+    // ourselves with the runtime helper. Codegen's own link step would
+    // call `cc <user>.o` without runtime.o, leaving
+    // `__cobrust_println_static` undefined.
+    let artifact_kind = match emit_kind {
+        EmitKind::Object => ArtifactKind::Object,
+        EmitKind::Executable => ArtifactKind::Object,
+    };
+
+    let opt_level = if release {
+        OptLevel::Speed
+    } else {
+        OptLevel::None
+    };
+    let backend = if release {
+        Backend::default_for_release()
+    } else {
+        Backend::default_for_dev()
+    };
+
+    let spec = TargetSpec {
+        triple,
+        opt_level,
+        backend,
+        artifact: artifact_kind,
+        output_dir: output_dir.clone(),
+        module_name: module_name.clone(),
+    };
+
+    // Emit the user's object file.
+    let user_artifact = emit(&mir, spec).map_err(|e| BuildError::Internal(format!("{e}")))?;
+
+    // For Executable kind, the codegen layer already invoked `cc`. But our
+    // M10 hello-world contract requires the runtime helper to be linked
+    // alongside; codegen's link step doesn't know about runtime helpers.
+    // So when `emit_kind == Executable`, we re-link manually with the
+    // runtime helper appended.
+    match emit_kind {
+        EmitKind::Object => {
+            // Caller asked for an `.o` only; the linker isn't invoked.
+            // The runtime helper isn't relevant here.
+            if let Some(target_path) = output {
+                if user_artifact.path() != target_path {
+                    std::fs::copy(user_artifact.path(), target_path).map_err(|e| {
+                        BuildError::Internal(format!(
+                            "cannot copy {} → {}: {e}",
+                            user_artifact.path().display(),
+                            target_path.display()
+                        ))
+                    })?;
+                }
+            }
+            if !quiet {
+                eprintln!("cobrust build: wrote {}", user_artifact.path().display());
+            }
+            Ok(user_artifact)
+        }
+        EmitKind::Executable => {
+            // Codegen emitted an executable, but it lacks the runtime
+            // helper. Re-link: produce a fresh `.o` then link with
+            // runtime/m10_runtime.c.
+            let user_obj_path = output_dir.join(format!("{module_name}.o"));
+            // The previous emit may have left the `.o` next to the exe
+            // (cranelift_backend::emit always writes `<module_name>.o`
+            // first, then links). Confirm + re-link.
+            if !user_obj_path.exists() {
+                return Err(BuildError::Internal(format!(
+                    "expected user object at {} but it was not produced",
+                    user_obj_path.display()
+                )));
+            }
+
+            let runtime_obj = ensure_runtime_object(&output_dir)?;
+            let exe_path = match output {
+                Some(p) => p.to_path_buf(),
+                None => {
+                    let mut p = output_dir.join(&module_name);
+                    let ext = ArtifactKind::Executable.extension(&Triple::host());
+                    if !ext.is_empty() {
+                        p.set_extension(ext);
+                    }
+                    p
+                }
+            };
+
+            let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+            let status = Command::new(&cc)
+                .arg(&user_obj_path)
+                .arg(&runtime_obj)
+                .arg("-o")
+                .arg(&exe_path)
+                .status()
+                .map_err(|e| BuildError::Internal(format!("invoking {cc}: {e}")))?;
+            if !status.success() {
+                return Err(BuildError::Internal(format!(
+                    "linker `{cc}` exited with status {status:?}"
+                )));
+            }
+
+            if !quiet {
+                eprintln!("cobrust build: linked {}", exe_path.display());
+            }
+            Ok(Artifact::Executable(exe_path))
+        }
+    }
+}
+
+/// Compile `runtime/m10_runtime.c` into an object file (idempotent;
+/// caches at `<output_dir>/m10_runtime.o`).
+fn ensure_runtime_object(output_dir: &Path) -> Result<PathBuf, BuildError> {
+    let runtime_obj = output_dir.join("m10_runtime.o");
+    if runtime_obj.exists() {
+        return Ok(runtime_obj);
+    }
+    // Locate the runtime source. Two strategies:
+    //   1. `CARGO_MANIFEST_DIR/runtime/m10_runtime.c` (when building from source).
+    //   2. `<exe_dir>/../runtime/m10_runtime.c` (when shipped).
+    // For M10 we take strategy 1; M12+ packaging will shape strategy 2.
+    let runtime_src = locate_runtime_source()?;
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let status = Command::new(&cc)
+        .arg("-c")
+        .arg(&runtime_src)
+        .arg("-O0")
+        .arg("-o")
+        .arg(&runtime_obj)
+        .status()
+        .map_err(|e| BuildError::Internal(format!("compiling runtime helper: {e}")))?;
+    if !status.success() {
+        return Err(BuildError::Internal(format!(
+            "runtime-helper compilation failed: status {status:?}"
+        )));
+    }
+    Ok(runtime_obj)
+}
+
+fn locate_runtime_source() -> Result<PathBuf, BuildError> {
+    // CARGO_MANIFEST_DIR is set when building from source via cargo. We
+    // bake it in via env! so a stripped runtime still finds the file
+    // **only when tests run from the source tree**.
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let p = Path::new(manifest_dir).join("runtime/m10_runtime.c");
+    if p.exists() {
+        return Ok(p);
+    }
+    // Shipped layout: next to the binary under ../share/cobrust/runtime/.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let q = dir.join("../share/cobrust/runtime/m10_runtime.c");
+            if q.exists() {
+                return Ok(q);
+            }
+        }
+    }
+    Err(BuildError::Internal(format!(
+        "cannot locate runtime/m10_runtime.c (checked {})", p.display()
+    )))
+}
+
+/// Build-stage error taxonomy.
+#[derive(Debug)]
+pub enum BuildError {
+    /// User-facing error (bad path, malformed flag).
+    User(String),
+    /// Type-check-tier error (parse / HIR / types / MIR).
+    Type(String),
+    /// Internal error (codegen / linker / I/O).
+    Internal(String),
+}
+
+impl BuildError {
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            BuildError::User(_) => exit_codes::USER_ERROR,
+            BuildError::Type(_) => exit_codes::TYPE_ERROR,
+            BuildError::Internal(_) => exit_codes::INTERNAL_PANIC,
+        }
+    }
+}
+
+impl std::fmt::Display for BuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuildError::User(s) | BuildError::Type(s) | BuildError::Internal(s) => f.write_str(s),
+        }
+    }
+}
+
+impl std::error::Error for BuildError {}
+
+#[allow(dead_code)] // ADR-0024 public surface; consumed by future LSP / IDE integrations.
+/// Convenience helper for callers that just want a MIR module from a path,
+/// for diagnostics or programmatic use. Used by `cobrust run` to skip the
+/// link step when only the build artifact is needed.
+pub fn lower_to_mir(file: &Path) -> Result<MirModule, BuildError> {
+    let user_source = std::fs::read_to_string(file)
+        .map_err(|e| BuildError::User(format!("cannot read {}: {e}", file.display())))?;
+    let source = format!("{PRELUDE}{user_source}");
+    let module = parse_str(&source, FileId::SYNTHETIC)
+        .map_err(|e| BuildError::Type(format!("parse error: {e:?}")))?;
+    let mut sess = Session::new();
+    let hir = hir_lower(&module, &mut sess)
+        .map_err(|e| BuildError::Type(format!("HIR lower error: {e:?}")))?;
+    let typed = type_check(&hir).map_err(|e| BuildError::Type(format!("type error: {e:?}")))?;
+    let mut mir = mir_lower(&typed).map_err(|e| BuildError::Type(format!("MIR: {e:?}")))?;
+    intrinsics::rewrite_print(&mut mir).map_err(|e| BuildError::Type(format!("{e}")))?;
+    Ok(mir)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn emit_kind_default_executable() {
+        // Smoke: kind enum is correctly compared.
+        assert_ne!(EmitKind::Object, EmitKind::Executable);
+    }
+}
+
