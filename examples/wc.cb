@@ -1,0 +1,26 @@
+# wc — M11 example (word count).
+#
+# Cobrust source-level: read stdin, split on whitespace, count.
+# Per ADR-0025 §"Examples (binding)" wc.cb requires the runtime
+# ABI for stdin + std.string.split — both shipped in M11 stdlib.
+# Codegen end-to-end iteration (for-protocol over List) is M12
+# scope; M11 verifies the runtime ABI via stdlib_examples integration
+# tests rather than .cb codegen.
+#
+# Source-level intent (what the user writes):
+#
+#   import std.io
+#   import std.string
+#
+#   fn main() -> i64:
+#       contents = std.io.read_file("input.txt")
+#       words = std.string.split(contents, " ")
+#       print(std.fmt.format_int(words.len()))
+#       return 0
+#
+# At M11 the import-and-iterate pieces aren't end-to-end through
+# codegen yet; the integration test exercises the runtime ABI. The
+# stub below ensures the file parses + builds.
+fn main() -> i64:
+    print("wc M11 stub — see stdlib_examples integration test")
+    return 0

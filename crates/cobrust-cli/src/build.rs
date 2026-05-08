@@ -198,12 +198,28 @@ pub fn build(
                 }
             };
 
+            let stdlib_archive = locate_stdlib_archive(release)?;
             let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
-            let status = Command::new(&cc)
-                .arg(&user_obj_path)
+            // Per ADR-0025 §"Runtime ABI": link order matters — user
+            // object provides forward references resolved by stdlib
+            // archive (which provides `__cobrust_print`,
+            // `__cobrust_println`, etc.). On macOS the linker resolves
+            // archives lazily; on Linux we use --whole-archive only if
+            // strictly needed (M11 helpers are referenced at every
+            // print/panic callsite, so plain archive resolution
+            // suffices).
+            let mut cmd = Command::new(&cc);
+            cmd.arg(&user_obj_path)
                 .arg(&runtime_obj)
+                .arg(&stdlib_archive)
                 .arg("-o")
-                .arg(&exe_path)
+                .arg(&exe_path);
+            // Platform: macOS doesn't need --no-as-needed; Linux needs
+            // libpthread + libdl + libm pulled in for std + mimalloc.
+            if cfg!(target_os = "linux") {
+                cmd.arg("-lpthread").arg("-ldl").arg("-lm");
+            }
+            let status = cmd
                 .status()
                 .map_err(|e| BuildError::Internal(format!("invoking {cc}: {e}")))?;
             if !status.success() {
@@ -220,17 +236,16 @@ pub fn build(
     }
 }
 
-/// Compile `runtime/m10_runtime.c` into an object file (idempotent;
-/// caches at `<output_dir>/m10_runtime.o`).
+/// Compile `runtime/cobrust_main.c` into an object file (idempotent;
+/// caches at `<output_dir>/cobrust_main.o`). Per ADR-0025 §G this
+/// shim provides the platform `main(argc, argv)` entry, captures
+/// argv via `__cobrust_capture_argv`, then dispatches to the user's
+/// codegen-emitted `_cobrust_user_main`.
 fn ensure_runtime_object(output_dir: &Path) -> Result<PathBuf, BuildError> {
-    let runtime_obj = output_dir.join("m10_runtime.o");
+    let runtime_obj = output_dir.join("cobrust_main.o");
     if runtime_obj.exists() {
         return Ok(runtime_obj);
     }
-    // Locate the runtime source. Two strategies:
-    //   1. `CARGO_MANIFEST_DIR/runtime/m10_runtime.c` (when building from source).
-    //   2. `<exe_dir>/../runtime/m10_runtime.c` (when shipped).
-    // For M10 we take strategy 1; M12+ packaging will shape strategy 2.
     let runtime_src = locate_runtime_source()?;
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
     let status = Command::new(&cc)
@@ -250,26 +265,59 @@ fn ensure_runtime_object(output_dir: &Path) -> Result<PathBuf, BuildError> {
 }
 
 fn locate_runtime_source() -> Result<PathBuf, BuildError> {
-    // CARGO_MANIFEST_DIR is set when building from source via cargo. We
-    // bake it in via env! so a stripped runtime still finds the file
-    // **only when tests run from the source tree**.
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let p = Path::new(manifest_dir).join("runtime/m10_runtime.c");
+    let p = Path::new(manifest_dir).join("runtime/cobrust_main.c");
     if p.exists() {
         return Ok(p);
     }
-    // Shipped layout: next to the binary under ../share/cobrust/runtime/.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let q = dir.join("../share/cobrust/runtime/m10_runtime.c");
+            let q = dir.join("../share/cobrust/runtime/cobrust_main.c");
             if q.exists() {
                 return Ok(q);
             }
         }
     }
     Err(BuildError::Internal(format!(
-        "cannot locate runtime/m10_runtime.c (checked {})",
+        "cannot locate runtime/cobrust_main.c (checked {})",
         p.display()
+    )))
+}
+
+/// Locate the prebuilt `libcobrust_stdlib.a` static archive. ADR-0025
+/// §"Runtime ABI" — every `cobrust build` executable links against
+/// this archive (alongside the cobrust_main.o entry shim).
+///
+/// Strategy: locate via `CARGO_TARGET_DIR` (override) or relative to
+/// the workspace's `target/debug` / `target/release` directory.
+fn locate_stdlib_archive(release: bool) -> Result<PathBuf, BuildError> {
+    // Find the workspace root by walking up from CARGO_MANIFEST_DIR.
+    // The CLI crate lives at <root>/crates/cobrust-cli; <root>/target
+    // holds the build artifacts.
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let workspace = Path::new(manifest_dir)
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            BuildError::Internal("cannot derive workspace root from CARGO_MANIFEST_DIR".into())
+        })?;
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| workspace.join("target"), PathBuf::from);
+    let profile = if release { "release" } else { "debug" };
+    let candidate = target_dir.join(profile).join("libcobrust_stdlib.a");
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+    // Try the other profile as fallback.
+    let other = if release { "debug" } else { "release" };
+    let alt = target_dir.join(other).join("libcobrust_stdlib.a");
+    if alt.exists() {
+        return Ok(alt);
+    }
+    Err(BuildError::Internal(format!(
+        "cannot locate libcobrust_stdlib.a (looked under {} and {});          run `cargo build -p cobrust-stdlib` first",
+        candidate.display(),
+        alt.display()
     )))
 }
 

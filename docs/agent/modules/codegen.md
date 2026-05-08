@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:codegen
 crate: cobrust-codegen
-last_verified_commit: ec680bc
+last_verified_commit: f758260
 dependencies: [mod:mir, mod:types, adr:0023]
 ---
 
@@ -136,9 +136,12 @@ pub mod linker {
 | `Terminator::Unreachable` | `ins().trap(TrapCode::User(1))` | `build_unreachable` |
 | `Terminator::Assert` | conditional jump → trap | conditional jump → call panic |
 | `Rvalue::BinaryOp(Add)` | `iadd / fadd` | `build_int_add / build_float_add` |
-| `Rvalue::Aggregate(Tuple, ...)` | M9 stub: zero-pointer | M9 stub: zero-pointer |
-| `Rvalue::Ref` | M9 stub: zero-pointer | M9 stub: zero-pointer |
+| `Rvalue::Aggregate(Tuple, ...)` | M9 stub: zero-pointer (M12 lifts) | M9 stub: zero-pointer |
+| `Rvalue::Ref` | M9 stub: zero-pointer (M12 lifts) | M9 stub: zero-pointer |
 | `Operand::Constant(Int)` | `iconst.i64` | `i64_type.const_int` |
+| `Operand::Constant(Constant::Str(s))` (in `Terminator::Call` `args[0]` slot whose `func` is `Constant::Str(_)`) | **M11**: intern `s` as `.rodata` data symbol; emit `(ptr, len)` Cranelift values | M11 forward |
+| `Terminator::Call { func: Constant::Str(name), args: [Constant::Str(payload), ...] }` | **M11**: declare `name` as `Linkage::Import` with `(*const u8, usize)` signature; emit real `call` with payload | M11 forward |
+| User `fn main` | **M11**: exported as `_cobrust_user_main`; the C entry shim provides platform `main(argc, argv)` | M11 forward |
 
 ## Type inference for unresolved MIR locals
 
@@ -186,6 +189,26 @@ includes every exported function name (with `_`-prefix on Mach-O).
   aarch64).
 - Backend selection is deterministic given `(spec.backend,
   cfg!(feature = "llvm"))`.
+
+## M11 amendments (per ADR-0025)
+
+Per ADR-0025 §"Codegen amendments":
+
+- **Constant::Str** payloads referenced as the first argument of a
+  `Terminator::Call` whose `func` is `Constant::Str(name)` are interned
+  via `ObjectModule::declare_data` + `define_data` (boxed-slice payload).
+  At the call site, the data symbol is materialized via
+  `declare_data_in_func` + `symbol_value(pointer_type, gv)`, paired with
+  an `iconst.i64` length value, and passed to the runtime helper.
+- The runtime-helper signature widens from M10's `void(void)` to
+  `(*const u8, usize)`. M10 hello-world callsite path remains green
+  via the lifted intrinsic in `cobrust-cli/src/build/intrinsics.rs`
+  passing the literal payload through.
+- The user's top-level `main` Body is emitted as `_cobrust_user_main`
+  (instead of `main`); the C entry shim (`cobrust-cli/runtime/cobrust_main.c`)
+  provides platform `int main(int, char**)` per ADR-0025 §G.
+- All amendments are **additive**; the M9 158-test baseline remains
+  green.
 
 ## Done means (M9 — DONE)
 

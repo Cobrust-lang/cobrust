@@ -266,8 +266,14 @@ impl CraneliftCtx {
 
     fn declare_body(&mut self, obj: &mut ObjectModule, body: &Body) -> Result<(), CodegenError> {
         let sig = self.body_signature(body);
+        // ADR-0025 §G "Runtime requirements": codegen emits the user's
+        // top-level `main` as `_cobrust_user_main`. The C runtime
+        // shim (`cobrust_main.c`) provides the platform `main(argc, argv)`
+        // which captures argv and dispatches here.
         let name = if body.name.is_empty() {
             format!("_cobrust_init_{}", body.def_id.0)
+        } else if body.name == "main" {
+            "_cobrust_user_main".to_string()
         } else {
             body.name.clone()
         };
@@ -410,10 +416,16 @@ impl CraneliftCtx {
                     if extern_func_ids.contains_key(name) {
                         continue;
                     }
-                    // M10 runtime-helper signature: void (void). M11
-                    // will widen to `(*const u8, usize)` for general
-                    // `print(s: str)` lowering.
-                    let sig = Signature::new(self.call_conv);
+                    // ADR-0025 §"Runtime ABI" widens M10's void(void)
+                    // signature to `(*const u8, usize)` for runtime
+                    // helpers consumed by string-literal callsites.
+                    // We always declare as 2-arg `(ptr, len)`; if the
+                    // Call's args list is empty (M10 hello-world legacy
+                    // path), we pass `(NULL, 0)` so the signatures
+                    // match. Runtime helpers tolerate the null path.
+                    let mut sig = Signature::new(self.call_conv);
+                    sig.params.push(AbiParam::new(self.pointer_type));
+                    sig.params.push(AbiParam::new(ir::types::I64));
                     let extern_id = obj
                         .declare_function(name, Linkage::Import, &sig)
                         .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
@@ -426,6 +438,53 @@ impl CraneliftCtx {
         for (name, fid) in &extern_func_ids {
             let func_ref = obj.declare_func_in_func(*fid, builder.func);
             extern_funcs.insert(name.clone(), func_ref);
+        }
+
+        // --- ADR-0025 §"Codegen amendments" Constant::Str row ---------
+        // Materialize every Constant::Str payload referenced as a
+        // runtime-call argument into a `.rodata` data symbol. The
+        // EmitCtx then lowers `materialize_str_data(s)` to a pair of
+        // Cranelift values: pointer to the data symbol + length.
+        //
+        // M11 scope: only payloads on the `args[0]` slot of a
+        // `Terminator::Call` whose `func` is `Constant::Str(_)` are
+        // interned. M12 will widen to all Constant::Str uses
+        // (including local-binding slots).
+        let mut str_data_ids: HashMap<String, cranelift_module::DataId> = HashMap::new();
+        for mir_block in &body.blocks {
+            if let cobrust_mir::Terminator::Call { func, args, .. } = &mir_block.terminator {
+                if !matches!(
+                    func,
+                    cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(_))
+                ) {
+                    continue;
+                }
+                if let Some(cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(payload))) =
+                    args.first()
+                {
+                    if str_data_ids.contains_key(payload) {
+                        continue;
+                    }
+                    // Generate a unique symbol name from a payload hash
+                    // so identical payloads in different bodies share
+                    // the same data symbol (cross-body interning is a
+                    // future tweak; for M11 we scope per-body).
+                    let symbol = str_data_symbol(body.def_id.0, str_data_ids.len(), payload);
+                    let data_id = obj
+                        .declare_data(&symbol, Linkage::Local, false, false)
+                        .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+                    let mut data_desc = cranelift_module::DataDescription::new();
+                    data_desc.define(payload.as_bytes().to_vec().into_boxed_slice());
+                    obj.define_data(data_id, &data_desc)
+                        .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+                    str_data_ids.insert(payload.clone(), data_id);
+                }
+            }
+        }
+        let mut str_data_globals: HashMap<String, ir::GlobalValue> = HashMap::new();
+        for (payload, did) in &str_data_ids {
+            let gv = obj.declare_data_in_func(*did, builder.func);
+            str_data_globals.insert(payload.clone(), gv);
         }
 
         // --- lower each block's statements + terminator --------------
@@ -442,6 +501,7 @@ impl CraneliftCtx {
                 builder: &mut builder,
                 body,
                 extern_funcs: &extern_funcs,
+                str_data_globals: &str_data_globals,
             };
             for stmt in &mir_block.statements {
                 emit_ctx.lower_statement(stmt)?;
@@ -486,12 +546,37 @@ struct EmitCtx<'a, 'b> {
     /// ADR-0024 amends ADR-0023's `Terminator::Call` row: when `func`
     /// operand resolves to `Operand::Constant(Constant::Str(name))`,
     /// the call lowers to a real Cranelift `call` to the FuncRef
-    /// stored in this map. Used by the M10 hello-world contract
-    /// (runtime helper `__cobrust_println_static`).
+    /// stored in this map.
     extern_funcs: &'a HashMap<String, ir::FuncRef>,
+    /// String-payload data globals declared at body-define time.
+    /// ADR-0025 §"Codegen amendments" Constant::Str row: the runtime
+    /// `(*const u8, usize)` ABI reads the payload pointer from these
+    /// globals at call sites.
+    str_data_globals: &'a HashMap<String, ir::GlobalValue>,
 }
 
 impl<'a, 'b> EmitCtx<'a, 'b> {
+    /// ADR-0025 §"Codegen amendments" Constant::Str row: lower a
+    /// string-payload to `(ptr, len)` Cranelift values. The pointer
+    /// is the address of the `.rodata` data symbol declared at
+    /// body-define time; the length is the byte count.
+    fn materialize_str_data(
+        &mut self,
+        payload: &str,
+    ) -> Result<(ir::Value, ir::Value), CodegenError> {
+        let gv = self.str_data_globals.get(payload).copied().ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "str payload {payload:?} not interned; codegen-time bug"
+            ))
+        })?;
+        let ptr = self.builder.ins().symbol_value(self.pointer_type, gv);
+        let len = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, payload.len() as i64);
+        Ok((ptr, len))
+    }
+
     fn lower_statement(&mut self, stmt: &Statement) -> Result<(), CodegenError> {
         match &stmt.kind {
             StatementKind::Nop | StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {
@@ -574,24 +659,39 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
             }
             Terminator::Call {
                 func,
-                args: _args,
+                args,
                 destination,
                 target,
                 unwind: _,
             } => {
+                // (M11) `_args` is read inside the Constant::Str branch
+                // below; keep underscore prefix to match the existing
+                // signature shape but use it via the `args.first()`
+                // lookup.
                 // ADR-0024 amendment: when `func` is `Constant::Str(name)`,
                 // emit a real Cranelift `call` to the imported symbol.
                 // For all other callee shapes (Constant::FnRef, ...) the
                 // M9 stub remains: write a zero placeholder, jump to
                 // continuation. M11 will materialize the FnRef path.
                 if let Operand::Constant(Constant::Str(name)) = func {
-                    if let Some(func_ref) = self.extern_funcs.get(name) {
-                        // M10 runtime-helper convention: zero args, void
-                        // return. The destination receives a zero (the
-                        // call's return value is unused at the M10 scope).
-                        self.builder.ins().call(*func_ref, &[]);
-                        let zero = self.builder.ins().iconst(ir::types::I64, 0);
-                        self.write_place(destination, zero)?;
+                    if let Some(func_ref) = self.extern_funcs.get(name).copied() {
+                        // ADR-0025 §"Runtime ABI" + §"Codegen amendments"
+                        // Constant::Str row: when the runtime helper has
+                        // a `(*const u8, usize)` signature, materialize
+                        // a payload from `_args[0] = Constant::Str(s)` if
+                        // present; pass `(NULL, 0)` otherwise (covers
+                        // the M10 hello-world signature widening path).
+                        let (ptr_val, len_val) =
+                            if let Some(Operand::Constant(Constant::Str(payload))) = args.first() {
+                                self.materialize_str_data(payload)?
+                            } else {
+                                let null = self.builder.ins().iconst(self.pointer_type, 0);
+                                let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                                (null, zero)
+                            };
+                        self.builder.ins().call(func_ref, &[ptr_val, len_val]);
+                        let zero_ret = self.builder.ins().iconst(ir::types::I64, 0);
+                        self.write_place(destination, zero_ret)?;
                         let blk = self.block_id(target)?;
                         self.builder.ins().jump(blk, &[]);
                         return Ok(());
@@ -859,6 +959,13 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
         self.builder.def_var(var, coerced);
         Ok(())
     }
+}
+
+/// Generate a deterministic data-symbol name for a string payload.
+/// Format: `_cobrust_str_<def_id>_<idx>`. Per-body uniqueness is
+/// sufficient for M11; cross-body interning is M12.
+fn str_data_symbol(def_id: u32, idx: usize, _payload: &str) -> String {
+    format!("_cobrust_str_{def_id}_{idx}")
 }
 
 // keep the Arc import noisy-eliminated (used by isa::OwnedTargetIsa internals).
