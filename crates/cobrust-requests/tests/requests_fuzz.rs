@@ -6,7 +6,6 @@
 //! observers — to ensure constitution §5.1 invariants hold under
 //! random input.
 
-
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_precision_loss)]

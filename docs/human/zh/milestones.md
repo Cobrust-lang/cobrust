@@ -23,6 +23,7 @@
 | **M7.4** | linalg 子集（`matmul / dot / det / solve / inv / svd / eigh / cholesky`，按 ADR-0017）；绑定 `ndarray-linalg` | 按 ADR-0017——与 M7.5 并行交付 |
 | **M-batch ✅** | 生态批量冲刺（按 ADR-0022）：`cobrust-requests`（HTTP 客户端；绑定 reqwest::blocking）+ `cobrust-click`（CLI 解析；绑定 clap = "4"）+ L3 闭合（dateutil 5/5 + msgpack 3/3）；引入 surface-translate / Rust-binding 性能档（0.8×，ADR-0022 §6） | 13 + 16 个函数全部翻译；进程内 wiremock + clap derive 覆盖；dateutil pendulum 与 msgpack pyspark 的 L3 依赖从 skipped/deferred 翻为 passing；为两个新模块扩展 doc-coverage 门禁 |
 | **M8 ✅** | MIR（中级 IR）—— 控制流显式形式作为 codegen 的输入；6 个节点族（Module / Body / BasicBlock / Statement / Terminator / Place / Rvalue / Operand），7 个终结子（Goto / SwitchInt / Return / Call / Drop / Unreachable / Assert），drop schedule 5 阶段算法，5 条 borrow-check 证明义务（B1..B5）按 ADR-0020 落地 | typed-HIR 上每个 ADR-0003 形式都 lower 到 MIR；≥ 50 良类型 + ≥ 50 病类型程序被相应 MIR pass 接受/拒绝；fuzz harness 默认 4096 cases × 5 properties，长模式（`COBRUST_M8_FUZZ_LONG=1`）100 000+ cases 0 panic |
+| **M9 ✅** | Codegen —— MIR → 原生代码，提供两个后端通过 feature flag 切换（Cranelift 默认、LLVM 通过 `--features llvm`）；System V AMD64 + AAPCS64 调用约定；通过 `cranelift-object` 发射 ELF / Mach-O 对象；链接器委派给 `cc`（或通过 `--features lld` 用 `lld`）；按 ADR-0023 | ≥ 60 个良型程序编译到非空对象文件；≥ 50 个病型用例归类到正确的 `CodegenError` 变体；≥ 22 个 in-scope 差分行编译并与手写 Rust 参考对照；对象布局断言（架构、格式、节、符号）在 macOS arm64 + Linux x86_64 上匹配预期表；158 个 codegen 测试全绿 |
 | **M7.6+** | 数值层后续：FFT（rustfft）/ polynomial / datetime64 / 结构化数组——开放式 | 各子里程碑独立 ADR；按 ADR-0012 §"Sub-milestones"分阶段推进 |
 
 ## 当前状态

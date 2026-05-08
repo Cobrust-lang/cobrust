@@ -1,6 +1,5 @@
 //! M-batch PyO3 build-path test for cobrust-click.
 
-
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_precision_loss)]

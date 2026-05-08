@@ -1501,3 +1501,87 @@ B1..B5 compose with ADR-0006's 9 type-level obligations to discharge the full st
 
 **M8 is intra-procedural** — cross-body lifetime polymorphism lands at M9 codegen alongside calling convention materialisation.
 
+
+### M9 — Codegen (per ADR-0023)
+
+The `cobrust-codegen` crate (M9) lowers MIR to native code via two backends behind a feature flag — Cranelift (the default for `cargo build`) and LLVM (opt-in via `--features llvm`, used by `cargo build --release` for `-O3` quality codegen).
+
+**Backend matrix**:
+
+| Backend | Default for | Pros | Cons |
+|---|---|---|---|
+| Cranelift (`Backend::Cranelift`) | `cargo build` (dev) | Pure Rust, fast compile, no system deps | Less mature optimization |
+| LLVM (`Backend::Llvm`) — `--features llvm` | `cargo build --release` (when feature on) | Best codegen quality, broad target support | Slow build, large dep tree, requires system LLVM |
+
+**Public surface** (`emit / TargetSpec / Artifact / CodegenError`):
+
+```rust
+let mir = cobrust_mir::lower(&typed)?;
+let spec = TargetSpec::host_dev(out_dir, "myprog");
+let artifact = cobrust_codegen::emit(&mir, spec)?;
+match artifact {
+    Artifact::Object(p) | Artifact::Executable(p) | Artifact::DynamicLibrary(p) => p,
+};
+```
+
+`TargetSpec` selects the **target triple**, **opt level** (`OptLevel::None / Speed / SpeedAndSize`), **backend** (`Backend::Cranelift / Llvm`), **artifact kind** (`ArtifactKind::Object / Executable / DynamicLibrary`), output directory, and module name.
+
+**Lowering pipeline**:
+
+```mermaid
+flowchart TD
+    MIR[MIR Module] --> EMIT["cobrust_codegen::emit(mir, spec)"]
+    EMIT --> SEL{spec.backend}
+    SEL -->|Cranelift| CL[cranelift_backend::emit]
+    SEL -->|Llvm + feature| LLVM[llvm_backend::emit]
+    CL --> OBJ[Relocatable .o file]
+    LLVM --> OBJ
+    OBJ -->|Object| ART_O[Artifact::Object]
+    OBJ -->|Executable / Dylib| LINK["linker::link via cc"]
+    LINK --> ART_E[Artifact::Executable / DynamicLibrary]
+```
+
+**`extern "Cobrust"` ABI** matches the host's standard C ABI:
+- **System V AMD64** on Linux x86_64 — integer args in `rdi rsi rdx rcx r8 r9`, floats in `xmm0..xmm7`, return in `rax` / `xmm0`.
+- **AAPCS64** on macOS arm64 — integer args in `x0..x7`, floats in `d0..d7`, return in `x0` / `d0`.
+- **Stack alignment**: 16 bytes at every call boundary.
+
+**Linker delegation**: `emit` invokes the system `cc` (via `$CC` env var, defaulting to `cc`); when `--features lld` is on, passes `-fuse-ld=lld`. M9 never bundles a linker. Linker failures surface as `CodegenError::LinkerFailed { exit_code, stderr }`.
+
+**Target triple matrix (M9 delivery scope)**:
+
+| Triple | Object format | Status |
+|---|---|---|
+| `x86_64-unknown-linux-gnu` | ELF | delivered |
+| `aarch64-apple-darwin` | Mach-O | delivered |
+| `x86_64-apple-darwin` | Mach-O | reachable |
+| `aarch64-unknown-linux-gnu` | ELF | reachable |
+| `wasm32-unknown-unknown` | WASM | out of scope (Phase F) |
+| `x86_64-pc-windows-msvc` | COFF | out of scope (Phase F) |
+
+**Type inference for unresolved MIR locals**: the MIR's `_return` slot is declared `Ty::None` (per ADR-0020 `BodyBuilder::new`) and sub-expression spill temps may also carry `Ty::None`. The Cranelift backend runs a pre-pass that walks every `Statement::Assign`; the first rvalue assigned to a local recovers that local's effective Cranelift type (i64 for arithmetic, i8 for comparisons, f64 for float, etc.), so the function's actual return type and intermediate-temp widths are reconstructed without modifying the MIR.
+
+**Differential gate (acceptance contract)**: every "core 30" form's compiled output produces identical `stdout` to a hand-written Rust reference program when run. M9's in-scope subset (no f-strings, no collections, no closures) covers arithmetic / comparison / branching / looping / recursion. Out-of-scope forms (form 22 f-string, 24 collection, 25 comprehension, 26 lambda, 28 access, 30 await/yield) are tracked as `#[ignore]`'d M10/M11 follow-up cases.
+
+**Per-MIR-form lowering rules** (selected — full table in `docs/agent/modules/codegen.md`):
+
+| MIR construct | Cranelift |
+|---|---|
+| `Body` | `Function` with `Signature` matching `extern "Cobrust"` |
+| `BasicBlock` | `Block` via `FunctionBuilder::create_block` |
+| `Statement::Assign` | RHS lowered → `def_var(LHS)` |
+| `Terminator::Goto(b)` | `ins().jump(b, &[])` |
+| `Terminator::SwitchInt` | `brif` chain (bool) or `br_table` (int) |
+| `Terminator::Return` | `ins().return_(&[ret])` |
+| `Terminator::Drop` | jump to target (M11 materializes destructor) |
+| `Rvalue::BinaryOp(Add, ...)` | `ins().iadd / fadd` |
+| `Rvalue::Aggregate / Ref / Cast` | M9 stub: zero-pointer placeholder |
+
+**LLVM `-O3` ≥ 30% smaller binary acceptance bar** (per ADR-0023 §"LLVM `-O3` ≥ 30% smaller binary"): measured on a fixed sample (`fib_50.cb`, `dotproduct_1k.cb`, `bubble_sort_256.cb`); Cranelift `-O0` baseline → LLVM `--release -O3` target should yield ≥ 30% size reduction. The LLVM backend at M9 ships as a feature-gated stub (`CodegenError::LlvmError`) until the inkwell wiring closes — that is M9.1 follow-up scope.
+
+**M9 test counts**: 158 tests across 5 suites:
+- `codegen_well_formed.rs` — 60 well-formed programs covering int / float / bool arithmetic, comparison, branching, looping, recursion, bit ops, logical ops.
+- `codegen_ill_formed.rs` — 50 ill-formed cases covering every `CodegenError` variant: dangling locals, dangling block targets, unsupported targets, unsupported backends, error display invariants, artifact / kind extension matrix.
+- `codegen_diff_corpus.rs` — 22 in-scope diff rows (compile + reference Rust comparison) plus 6 `#[ignore]`'d M10/M11 follow-ups.
+- `codegen_object_layout.rs` — 16 object-layout assertions (architecture, format, sections, symbols, ABI helpers).
+- `codegen_release_smoke.rs` — 10 release-build smoke tests (release default, Speed / SpeedAndSize opt levels, recursion, branchy programs, linker availability).
