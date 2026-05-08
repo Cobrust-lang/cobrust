@@ -1,8 +1,10 @@
 ---
 doc_kind: finding
 finding_id: examples-literal-print-debt
-last_verified_commit: cc15f0b
-dependencies: [adr:0019, adr:0023, adr:0025]
+last_verified_commit: TBD-m11-1-fix
+status: closed
+closed_by: M11.1 sprint (ADR-0030)
+dependencies: [adr:0019, adr:0023, adr:0025, adr:0030]
 ---
 
 # Finding: M11/M12 examples are literal-print decorations, not real Cobrust algorithms
@@ -90,6 +92,23 @@ M11.1 sprint per the third-party audit's recommendation.
    the language is at M11+M12-baseline expressive depth (literal
    prints work; real algorithms TBD at M12.x).
 
+## Closed by M11.1 (ADR-0030)
+
+The M11.1 sprint (ADR-0030) fixed the while-loop-with-leading-if codegen
+regression that blocked this finding's remediation, then rewrote both
+examples:
+
+- `examples/fizzbuzz.cb`: real while + if/elif/elif/else + `%` algorithm.
+  `cobrust run examples/fizzbuzz.cb` produces the canonical 1..15 FizzBuzz
+  sequence computed, not printed as literals.
+- `examples/fib.cb`: real iterative algorithm (while loop + mutation).
+  Recursive form deferred to M11.x (`Constant::FnRef` Call lowering per
+  ADR-0025 §"Codegen amendments"); the iterative form is still a real
+  algorithm, not a literal string.
+
+`examples/notebook/` remains as a separate audit item
+(`findings/translator-real-vs-synthetic-status.md`).
+
 ## Cross-references
 
 - Constitution `CLAUDE.md` §1.1, §5.2 (negative results documented in
@@ -99,4 +118,5 @@ M11.1 sprint per the third-party audit's recommendation.
 - ADR-0025 (M11 stdlib + runtime) §"Codegen amendments" deferral list.
 - ADR-0027 (M12.x codegen + stdlib amendments) §"Lowering specifications" —
   the in-flight sprint that lifts four of five followups.
+- ADR-0030 (M11.1 fix) — the sprint that closed this finding.
 - Third-party audit `review-claude` 2026-05-09 (in-message, not committed).

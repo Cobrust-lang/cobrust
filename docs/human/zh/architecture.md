@@ -1560,6 +1560,7 @@ cobrust-version = "0.0.1"
 |---|---|---|
 | `__cobrust_print` | `extern "C" fn(*const u8, usize)` | `std.io.print` 运行时 |
 | `__cobrust_println` | `extern "C" fn(*const u8, usize)` | `std.io.println` 运行时 |
+| `__cobrust_println_int` | `extern "C" fn(i64)` | `print_int(n)` 内建 — 打印整数 + 换行（ADR-0030） |
 | `__cobrust_panic` | `extern "C" fn(*const u8, usize) -> !` | 以代码 3（`INTERNAL_PANIC`）退出 |
 | `__cobrust_assert` | `extern "C" fn(bool, *const u8, usize)` | 条件 panic |
 | `__cobrust_capture_argv` | `extern "C" fn(i32, *const *const u8)` | 为 `std.env.args` 捕获 argv |

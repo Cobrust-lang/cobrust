@@ -148,6 +148,7 @@ pub fn stderr() -> Stderr;
 // C ABI (codegen targets these):
 pub unsafe extern "C" fn __cobrust_print(ptr: *const u8, len: usize);
 pub unsafe extern "C" fn __cobrust_println(ptr: *const u8, len: usize);
+pub extern "C" fn __cobrust_println_int(v: i64);  // ADR-0030 §Decision step 5
 ```
 
 ### `std.collections`
@@ -388,8 +389,9 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
 - [x] Runtime shim (mimalloc allocator + main entry +
       __cobrust_capture_argv) ships.
 - [x] C-ABI symbols (__cobrust_print, __cobrust_println,
-      __cobrust_panic, __cobrust_assert, _cobrust_drop_str)
-      exported from libcobrust_stdlib.a.
+      __cobrust_println_int, __cobrust_panic, __cobrust_assert,
+      _cobrust_drop_str) exported from libcobrust_stdlib.a.
+      (__cobrust_println_int added by ADR-0030 M11.1 sprint.)
 - [x] hello.cb regression: PASS through the M11 lift.
 - [x] 10 representative example programs build + run + match
       expected stdout + exit 0 (per ADR-0025 §"Examples (binding)").
