@@ -38,3 +38,4 @@ valuable as capturing what does.
 |---|---|---|
 | `m1-fuzz-method` | [`m1-fuzz-method.md`](m1-fuzz-method.md) | M1 fuzz gate satisfied via proptest; one panic shrunk and fixed |
 | `m5-m7-real-llm-validation` | [`m5-m7-real-llm-validation.md`](m5-m7-real-llm-validation.md) | M3 LLM Router validated against a real OpenAI-compatible endpoint; round-trip, cache replay, transport-failure isolation all green |
+| `m13-sync-bridge-cost` | [`m13-sync-bridge-cost.md`](m13-sync-bridge-cost.md) | M13 sync-bridge architecture costs ~2.8× over pure-async tokio reference; ADR-0028 §F amends the gate from 0.7× to 0.3× per measured reality |

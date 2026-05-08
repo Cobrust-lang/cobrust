@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: f7ecc14
+last_verified_commit: TBD
 ---
 
 # Architecture Decision Records
@@ -55,3 +55,4 @@ same atomic commit as the change it justifies.
 | [0024](0024-m10-cli-driver.md) | M10 CLI driver — subcommand registry, exit-code scheme, runtime-helper contract for hello-world, package config namespacing | accepted | 2026-04-30 |
 | [0025](0025-m11-stdlib-runtime.md) | M11 stdlib + runtime — module surfaces, runtime ABI, drop-schedule fix, codegen amendments, print-intrinsic lift | accepted | 2026-04-30 |
 | [0026](0026-m12-package-format.md) | M12 package format — user-crate cobrust.toml schema, lockfile determinism, content-addressed registry, semver resolver, namespace collision (Option C) | accepted | 2026-04-30 |
+| [0028](0028-m13-concurrency-runtime.md) | M13 structured-concurrency runtime — tokio binding, JoinHandle/channel/scope/cancel surface, no async/sync coloring | accepted | 2026-04-30 |

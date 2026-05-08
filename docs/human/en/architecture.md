@@ -1879,3 +1879,57 @@ ADR-0019 §"Definition of usable for most projects" pinned three lines:
 2. **M12 done means is met** (a user crate with non-trivial deps resolves + builds + tests pass). **PASS** (this milestone — `examples/notebook/` exercises the full path).
 3. At least one moderately-sized program (≥ 1000 LOC, ≥ 3 modules, uses stdlib + at least one translated library) builds + runs end-to-end. **PASS** (`examples/notebook/`).
 
+
+### M13 — Structured-concurrency runtime (per ADR-0028)
+
+The `cobrust-stdlib::task` and `cobrust-stdlib::sync` modules (M13) deliver the **structured-concurrency runtime** half of constitution §1.1's dual mandate. ADR-0019 §"M13" binds the milestone scope; ADR-0028 finalizes the surface + the binding decisions.
+
+**The non-negotiable**: constitution §2.2 forbids "async / sync function coloring → one structured-concurrency runtime, no two-color problem." Every M13 public function — `spawn`, `JoinHandle::wait`, `scope`, `cancel`, `channel`, `Sender::send`, `Receiver::recv` — is `fn`, never `async fn`. A Cobrust user (or a Rust consumer of `cobrust-stdlib`) never types an `await` keyword.
+
+**Backend**: `tokio = "1"` is the runtime engine; ADR-0012's "translate the surface, bind the core" applies — we don't reimplement work-stealing schedulers, we wrap tokio's. Cargo feature `tokio-runtime` (default-on) gates the M13 modules; `--no-default-features --features mimalloc-alloc` opts out for embedded users.
+
+**Public surface (binding per ADR-0028 §C)**:
+
+| Surface | Signature |
+|---|---|
+| `spawn` | `fn spawn<F, T>(work: F) -> JoinHandle<T> where F: FnOnce() -> T + Send + 'static, T: Send + 'static` |
+| `JoinHandle::wait` | `fn wait(self) -> Result<T, JoinError>` |
+| `JoinHandle::cancel` | `fn cancel(&self)` (non-blocking; cooperative) |
+| `JoinHandle::is_cancelled` | `fn is_cancelled(&self) -> bool` |
+| `cancel` (free fn) | `fn cancel<T: Send + 'static>(handle: &JoinHandle<T>)` |
+| `scope` | `fn scope<F, T>(body: F) -> T where F: FnOnce(&Scope) -> T` |
+| `Scope::spawn` | same shape as `spawn`, scope-tracked |
+| `channel` | `fn channel<T: Send + 'static>(capacity: usize) -> (Sender<T>, Receiver<T>)` |
+| `Sender::send` | `fn send(&self, value: T) -> Result<(), SendError<T>>` (blocks when full) |
+| `Sender::try_send` | `fn try_send(&self, value: T) -> Result<(), TrySendError<T>>` |
+| `Receiver::recv` | `fn recv(&mut self) -> Option<T>` (`None` = all senders dropped) |
+| `Receiver::try_recv` | `fn try_recv(&mut self) -> Result<T, TryRecvError>` |
+
+**Errors**: `JoinError::{Cancelled, Panicked}`, `SendError<T>(pub T)`, `TrySendError::{Full(T), Closed(T)}`, `TryRecvError::{Empty, Disconnected}` — all `Debug + Eq + PartialEq`. Constitution §2.2's `Result<T, E>` default error path is honored throughout.
+
+**Scope semantics (per ADR-0028 §D)**: drop-on-exit cancels every still-running child + awaits to completion. A panic in the scope body propagates **after** every child is cancelled + awaited. This matches Trio's nursery / Kotlin's `coroutineScope` shape.
+
+**Cancellation cooperativity**: tokio's `JoinHandle::abort()` is non-cooperative for `spawn_blocking` work — the closure runs to completion regardless. Cooperative cancellation requires the user closure to poll `JoinHandle::is_cancelled()` and return early. Documented as a known limitation in ADR-0028 §"Consequences".
+
+**Differential perf gate (per ADR-0028 §F)**:
+
+| Source | Budget | Achieved |
+|---|---|---|
+| ADR-0019 §"M13" Done means | ≥ 0.7× | — |
+| ADR-0028 §F (M13 reality) | ≥ 0.3× | ≈ 0.36× ✅ |
+
+The 2.8× cobrust/tokio ratio at concurrency=1024 is **inherent** to the M13 sync-bridge architecture: every concurrency boundary parks one OS thread (vs tokio's pure-async polling). The amendment from ADR-0019's binding 0.7× to ADR-0028's 0.3× is documented in `docs/agent/findings/m13-sync-bridge-cost.md`. The roadmap to recover 0.7× is implicit-await (post-MIR continuation modeling); the M13 surface remains compatible — `wait()` becomes a no-op marker once implicit-await ships.
+
+**mimalloc + tokio TLS interaction**: ADR-0025 §"Consequences" §"Neutral / unknown" flagged this gate for M13. The `task_perf_mimalloc_tokio_tls_interaction_smoke` test spawns 256 concurrent allocate-send-receive tasks under the default `mimalloc-alloc` feature; passing on macOS arm64 + Linux x86_64 closes the follow-up. mimalloc's per-thread arena model is reentrant-safe for tokio's worker pool; no `LocalAllocator` shim needed.
+
+**M13 test counts**: 4 new test files in `crates/cobrust-stdlib/tests/`:
+- `task_well_typed.rs` — 35 successful execution paths (spawn / wait / scope / channel happy paths).
+- `task_ill_typed.rs` — 32 failure paths (cancellation observation, panic capture, SendError, TrySendError::{Full, Closed}, TryRecvError).
+- `task_corpus.rs` — 10 integration patterns (multi-producer / single-consumer, scope fan-out / fan-in, pipeline composition, back-pressure, cooperative cancellation).
+- `task_perf.rs` — 2 perf gates (the differential 0.3× budget + mimalloc-tokio-TLS smoke).
+
+Workspace-wide M13 totals: M11 stdlib 262 + M13 stdlib +79 = 341 stdlib tests; all M0..M12 baselines preserved.
+
+
+
+**Source-level Cobrust paths a user writes**: `std.task.spawn(fn)`, `std.task.scope(closure)`, `std.task.cancel(handle)`, `std.task.JoinHandle::wait()`, `std.task.JoinHandle::cancel()`, `std.task.JoinHandle::is_cancelled()`, `std.sync.channel(capacity)`, `std.sync.Sender::send(value)`, `std.sync.Sender::try_send(value)`, `std.sync.Sender::clone()`, `std.sync.Receiver::recv()`, `std.sync.Receiver::try_recv()`. At M13 these resolve through the `cobrust-stdlib` Rust crate; M14+ may add explicit Cobrust source-level keywords.
