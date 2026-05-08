@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:requests
 crate: cobrust-requests
-last_verified_commit: TBD
+last_verified_commit: f7ecc14
 dependencies: [mod:translator]
 ---
 

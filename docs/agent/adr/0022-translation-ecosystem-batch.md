@@ -4,7 +4,7 @@ adr_id: 0022
 title: Translation ecosystem batch — cobrust-requests + cobrust-click + L3 dependents closure (dateutil 5/5, msgpack 3/3)
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: f7ecc14
 supersedes: []
 superseded_by: []
 ---

@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:click
 crate: cobrust-click
-last_verified_commit: TBD
+last_verified_commit: f7ecc14
 dependencies: [mod:translator]
 ---
 
