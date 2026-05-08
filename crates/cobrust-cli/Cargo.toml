@@ -24,6 +24,7 @@ cobrust-frontend = { path = "../cobrust-frontend" }
 cobrust-hir = { path = "../cobrust-hir" }
 cobrust-llm-router = { path = "../cobrust-llm-router" }
 cobrust-mir = { path = "../cobrust-mir" }
+cobrust-pkg = { path = "../cobrust-pkg" }
 cobrust-translator = { path = "../cobrust-translator" }
 cobrust-types = { path = "../cobrust-types" }
 target-lexicon = "0.13"

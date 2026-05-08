@@ -44,8 +44,27 @@ pub fn run(name: &str, parent_dir: Option<&Path>) -> u8 {
         return exit_codes::INTERNAL_PANIC;
     }
 
-    let cobrust_toml =
-        format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\ncobrust-version = \"0.0.1\"\n");
+    // ADR-0026 schema: full [package] + [dependencies] (empty) + [bin]
+    // + [[test]] row out of the box, so `cobrust build` / `cobrust test`
+    // work immediately.
+    let cobrust_toml = format!(
+        "[package]\n\
+         name = \"{name}\"\n\
+         version = \"0.1.0\"\n\
+         cobrust-version = \"0.0.1\"\n\
+         description = \"A Cobrust package.\"\n\
+         license = \"Apache-2.0 OR MIT\"\n\
+         \n\
+         [dependencies]\n\
+         \n\
+         [bin]\n\
+         name = \"{name}\"\n\
+         path = \"src/main.cb\"\n\
+         \n\
+         [[test]]\n\
+         name = \"smoke\"\n\
+         path = \"tests/smoke.cb\"\n",
+    );
     if let Err(e) = std::fs::write(crate_dir.join("cobrust.toml"), cobrust_toml) {
         eprintln!("cobrust new: cannot write cobrust.toml: {e}");
         return exit_codes::INTERNAL_PANIC;
@@ -54,6 +73,16 @@ pub fn run(name: &str, parent_dir: Option<&Path>) -> u8 {
     let main_cb = "fn main() -> i64:\n    print(\"hello, world\")\n    return 0\n";
     if let Err(e) = std::fs::write(crate_dir.join("src/main.cb"), main_cb) {
         eprintln!("cobrust new: cannot write src/main.cb: {e}");
+        return exit_codes::INTERNAL_PANIC;
+    }
+
+    if let Err(e) = std::fs::create_dir_all(crate_dir.join("tests")) {
+        eprintln!("cobrust new: cannot create tests/: {e}");
+        return exit_codes::INTERNAL_PANIC;
+    }
+    let smoke_cb = "fn main() -> i64:\n    print(\"smoke ok\")\n    return 0\n";
+    if let Err(e) = std::fs::write(crate_dir.join("tests/smoke.cb"), smoke_cb) {
+        eprintln!("cobrust new: cannot write tests/smoke.cb: {e}");
         return exit_codes::INTERNAL_PANIC;
     }
 

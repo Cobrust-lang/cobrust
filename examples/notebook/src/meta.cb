@@ -1,0 +1,127 @@
+# notebook/src/meta.cb — M12 notebook example.
+#
+# `meta` is the fourth module in the notebook example (line 3 of
+# ADR-0019 §"Definition of usable" only requires ≥ 3 modules; we
+# include this fourth to demonstrate that the M12 package format
+# scales beyond the bare minimum).
+#
+# `meta` carries a flat catalog of identifiers + version stamps that
+# the notebook's eventual M12.x M-tier upgrade will consume via
+# `import notebook.meta`. At M12 it ships as a sibling source file
+# whose `main()` is a tiny smoke test.
+#
+# Public surface (literal-print stubs):
+#
+#   - `print_pkg_identity()`        — name + version + cobrust-version.
+#   - `print_dep_identity()`        — direct dep identity.
+#   - `print_lock_identity()`       — lockfile metadata identity.
+#   - `print_target_identity()`     — [bin] / [[test]] target identity.
+#   - `print_artifact_path_*()`     — produced-artifact path stubs.
+#   - `print_compatibility_tier_*()` — @py_compat tier stubs.
+#   - `print_translated_lib_chain()` — chain-of-custody stamp.
+
+# --- Identity stamps -------------------------------------------------
+
+fn print_pkg_identity() -> i64:
+    print("meta: pkg identity")
+    print("meta:   name             = notebook")
+    print("meta:   version          = 0.1.0")
+    print("meta:   cobrust-version  = 0.0.1")
+    print("meta:   description      = M12 notebook example")
+    print("meta:   license          = Apache-2.0 OR MIT")
+    return 0
+
+fn print_dep_identity() -> i64:
+    print("meta: dep identity")
+    print("meta:   cobrust-notebook-config v0.1.0")
+    print("meta:     source        = path+file://../notebook-config")
+    print("meta:     hash          = blake3:<computed-by-resolver>")
+    print("meta:     provenance    = blake3:0000...0001")
+    return 0
+
+fn print_lock_identity() -> i64:
+    print("meta: lockfile identity")
+    print("meta:   manifest_hash    = blake3:<computed-by-manifest_hash()>")
+    print("meta:   lockfile_version = 1")
+    return 0
+
+fn print_target_identity() -> i64:
+    print("meta: target identity")
+    print("meta:   [bin].name       = notebook")
+    print("meta:   [bin].path       = src/main.cb")
+    print("meta:   [[test]] count   = 1")
+    print("meta:   [[test]][0].name = smoke")
+    print("meta:   [[test]][0].path = tests/smoke.cb")
+    return 0
+
+# --- Artifact paths --------------------------------------------------
+
+fn print_artifact_path_bin() -> i64:
+    print("meta: artifact — bin path")
+    print("meta:   target/cobrust/notebook")
+    return 0
+
+fn print_artifact_path_test_smoke() -> i64:
+    print("meta: artifact — test smoke path")
+    print("meta:   target/cobrust/tests/smoke")
+    return 0
+
+fn print_artifact_path_lockfile() -> i64:
+    print("meta: artifact — lockfile path")
+    print("meta:   ./cobrust.lock")
+    return 0
+
+fn print_artifact_path_registry() -> i64:
+    print("meta: artifact — registry path")
+    print("meta:   ~/.cobrust/registry/blake3/<hex>/")
+    return 0
+
+# --- Compatibility tier ----------------------------------------------
+
+fn print_compatibility_tier_strict() -> i64:
+    print("meta: compatibility — @py_compat(strict)")
+    print("meta:   exact byte/identity match against CPython")
+    return 0
+
+fn print_compatibility_tier_numerical() -> i64:
+    print("meta: compatibility — @py_compat(numerical(rtol=1e-7))")
+    print("meta:   numerical match within tolerance")
+    return 0
+
+fn print_compatibility_tier_semantic() -> i64:
+    print("meta: compatibility — @py_compat(semantic)")
+    print("meta:   semantic equivalence; bit-exact not promised")
+    return 0
+
+fn print_compatibility_tier_none() -> i64:
+    print("meta: compatibility — @py_compat(none)")
+    print("meta:   no compatibility promise; Cobrust-native shape only")
+    return 0
+
+# --- Translated-library chain ---------------------------------------
+
+fn print_translated_lib_chain() -> i64:
+    print("meta: translated-lib chain")
+    print("meta:   level 0   — source library (Python / C / Fortran)")
+    print("meta:   level 1   — translation output (Cobrust + Rust)")
+    print("meta:   level 2   — verification gates (build/behavior/perf)")
+    print("meta:   level 3   — integration (PyO3 wrapper + downstream)")
+    print("meta: every level emits a deterministic_id (blake3) that the")
+    print("meta:   M12 pkg pipeline preserves end-to-end as the")
+    print("meta:   `provenance_hash` field of cobrust.lock.")
+    return 0
+
+fn print_translated_lib_legend() -> i64:
+    print("meta: translated-lib legend")
+    print("meta:   PROVENANCE.toml      — manifest of inputs")
+    print("meta:   spec.toml            — L0 behavioral spec")
+    print("meta:   harness/             — differential-test harness")
+    print("meta:   ledger.jsonl         — LLM Router decisions")
+    print("meta:   verification/        — seeds + divergences")
+    return 0
+
+# --- Standalone smoke entry -----------------------------------------
+
+fn main() -> i64:
+    print("meta: standalone smoke entry")
+    return 0

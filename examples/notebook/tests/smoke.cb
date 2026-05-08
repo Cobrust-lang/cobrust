@@ -1,0 +1,27 @@
+# notebook/tests/smoke.cb — M12 notebook example.
+#
+# This is the `[[test]]` target listed in `cobrust.toml`:
+#
+#   [[test]]
+#   name = "smoke"
+#   path = "tests/smoke.cb"
+#
+# `cobrust test` (M12) walks the manifest's `[[test]]` array, builds
+# each entry with `EmitKind::Executable`, and invokes it. Tests pass
+# iff exit code is 0.
+#
+# The smoke test exercises the M12 build path end-to-end:
+#
+# 1. `cobrust test` walks up to `notebook/cobrust.toml`.
+# 2. It resolves the dep graph (`cobrust-notebook-config` via path).
+# 3. It writes a deterministic `cobrust.lock` next to the manifest.
+# 4. It builds this file (`tests/smoke.cb`) into an executable under
+#    `target/cobrust/tests/smoke`.
+# 5. It runs the executable; this file prints "smoke ok" and returns 0.
+#
+# The transcript ("smoke ok") is what `expected.txt` records; CI
+# can do a byte-compare.
+
+fn main() -> i64:
+    print("smoke ok")
+    return 0

@@ -1,0 +1,34 @@
+# PROVENANCE manifest for `cobrust-notebook-config` (ADR-0007).
+#
+# This is a hand-rolled translated-library-shaped helper for the M12
+# notebook example. Real translations carry the full L0..L3 manifest
+# emitted by the AI translation subsystem; this example uses the same
+# shape so the M12 pkg pipeline picks up `deterministic_id` as the
+# lockfile's `provenance_hash` (ADR-0026 §H).
+
+[source]
+library = "tomli-flavored-stub"
+version = "0.1.0"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+file_count = 1
+
+[oracle]
+runtime = "n/a"
+runtime_version = "n/a"
+oracle_module = "n/a"
+
+[verification]
+seeds = []
+fuzz_inputs_per_fn = 0
+divergences = []
+known_failures = []
+
+[router]
+strategy = "synthetic"
+models_used = ["synthetic:notebook-stub-v1"]
+ledger_entries = 0
+
+[build]
+toolchain = "rustc 1.94.1"
+deterministic_id = "blake3:0000000000000000000000000000000000000000000000000000000000000001"
+crate_layout_version = 1
