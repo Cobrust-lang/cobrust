@@ -25,6 +25,15 @@ end-to-end driver and ships the M10 hello-world contract.
   to a manifest-aware package-mode driver (`mod:cli::pkg_build`) and
   adds `cobrust add <dep>` for in-place manifest editing. `cobrust new`
   scaffolds the full ADR-0026 schema (not the M10 placeholder).
+- **M14 — delivered.** ADR-0029 lifts the M10 `cobrust repl` stub to
+  full functionality: line editing via `rustyline = "14"`, multi-line
+  input detection, tab completion against directive + keyword + stdlib
+  + session-binding sources, and seven directives
+  (`:type / :ast / :hir / :mir / :clear / :help / :quit`).
+  Stateful HIR-interpreter evaluation for literals + arithmetic +
+  comparison + boolean + var-lookup + `let`-binding. Cold start <200ms
+  (~10ms release on macOS arm64). 50-session golden corpus at
+  `examples/repl-session.txt`.
 
 ## Public surface (M10)
 
@@ -45,7 +54,7 @@ ADR-0024 §"Subcommand contracts":
 | `cobrust new <name> [--path <dir>]` | a package name | scaffolds full ADR-0026 package | 0/1 |
 | `cobrust test [--quiet]` | (none) | summary + per-test verdict (manifest-aware) | 0/1/2/3/6 |
 | `cobrust add <name> [--path PATH \| --git URL --rev REV \| --version REQ] [--dev]` | a dep name + source | appends to nearest `cobrust.toml` | 0/1 |
-| `cobrust repl` | (none) | M14 stub message | 1 |
+| `cobrust repl` | (none) | interactive shell + directives (M14) | 0 |
 
 ### Exit-code constants
 
@@ -155,6 +164,86 @@ manifest's `[[test]]` array, builds + invokes each entry, and
 collates pass/fail counts. The M11 dir-walking fallback engages only
 when no manifest is reachable.
 
+### Interactive REPL (M14, ADR-0029)
+
+`cobrust repl` is an interactive shell delivered at M14 per ADR-0019
+§"M14 — REPL". The implementation lives entirely in
+`crates/cobrust-cli/src/repl.rs` (`pub fn run() -> u8`).
+
+Directive table (per ADR-0029 §"Directive table (binding)"):
+
+| Directive | Argv | Behaviour |
+|---|---|---|
+| `:type EXPR` | one expression | print inferred type via `mod:types::check` of `fn _t() -> _: return EXPR` |
+| `:ast EXPR` | one expression | pretty-print `ast::Expr` (Debug `{:#?}`) |
+| `:hir EXPR` | one expression | pretty-print `hir::Expr` after lowering |
+| `:mir EXPR` | one expression | pretty-print `mir::Body` of the synthetic `_t` |
+| `:clear` | (none) | drop accumulated session bindings |
+| `:help` | (none) | list directives + brief usage |
+| `:quit` | (none) | exit with `SUCCESS` (aliases: `:q`, `:exit`; or Ctrl-D) |
+
+Multi-line input contract (`is_input_incomplete`):
+
+- unbalanced parens / brackets / braces → continuation
+- unterminated string literal → continuation
+- last non-blank line ends with `:` and no subsequent indented body
+  line → continuation (block opener)
+- otherwise the input is fed to `parse_str` of a synthetic `fn _repl()`
+  wrapper; `ParseError::UnexpectedEof` also triggers continuation
+
+Tab completion sources (in priority order, all merged):
+
+1. **Directives** (`:type / :ast / :hir / :mir / :clear / :help /
+   :quit / :q / :exit`) — only when the cursor is at column 0 and
+   the line begins with `:`.
+2. **Keywords** (28 fixed: `fn / let / if / else / elif / for /
+   while / return / match / case / class / True / False / None /
+   and / or / not / in / pass / break / continue / import / from /
+   as / with / try / except / raise`).
+3. **Stdlib top-level seeded names** (12: `print / panic / assert /
+   args / var / len / print_err / read_line / int / str / float /
+   bool`).
+4. **Session bindings** — every name introduced via `let X = …` in
+   the current session, sorted lexically.
+
+Evaluation surface (M14 binding per ADR-0029 §"Evaluation surface"):
+
+| Form | Status |
+|---|---|
+| Integer / float / bool / string / None literals | ✅ |
+| Binary arithmetic (`+ - * / %`) on numeric types | ✅ |
+| Comparison (`== != < <= > >=`) | ✅ |
+| Boolean (`and / or / not`) | ✅ |
+| Variable read (looks up `bindings.get(name)`) | ✅ |
+| `let X = EXPR` (writes `bindings.insert(name, value)`) | ✅ |
+| Function calls (user-defined) | ❌ — defer to M14.1 |
+| Loops / if-else / match / comprehensions | ❌ — defer to M14.1 |
+| Stdlib calls (e.g. `print(...)`) | ❌ — defer to M14.1 |
+
+Cold-start budget (per ADR-0029 §"Cold-start budget"):
+
+- Target: < 200ms primary-prompt latency.
+- Measured: ~10ms release / ~18ms debug on macOS arm64 (M2 Pro).
+- Asserted in `tests/repl_smoke.rs::cold_start_budget` with 2s CI
+  headroom.
+
+History persistence: `~/.cobrust/repl_history` (1024-entry bound,
+managed by rustyline).
+
+## Done means (M14)
+
+- [x] `cobrust repl` lifts the M10 stub to full functionality.
+- [x] Seven directives delivered: `:type / :ast / :hir / :mir / :clear / :help / :quit`.
+- [x] Multi-line input detection (block-opener + bracket continuation).
+- [x] Tab completion against four sources.
+- [x] Cold start <200ms verified.
+- [x] 50-session golden corpus at `examples/repl-session.txt` replays
+      successfully via `tests/repl_session_corpus.rs`.
+- [x] 26 inline `repl::tests::*` + 22 `repl_smoke.rs` + 3 corpus tests
+      = 51 net new M14 tests; 72 cobrust-cli tests total green.
+- [x] `cli_exit_codes::ec_repl_returns_success_on_eof` updated to the
+      M14 contract (EOF → SUCCESS, was M10 stub returning USER_ERROR).
+
 ## Invariants
 
 - Exits with stable, documented status codes per ADR-0024 §"Exit-code scheme".
@@ -180,8 +269,9 @@ when no manifest is reachable.
 
 ## Non-goals
 
-- No interactive REPL in M10 (M14 ships it).
 - No daemon mode / persistent server — every invocation is independent.
+- No M14.1 evaluation surface (Turing-complete + stdlib calls) yet —
+  per ADR-0029 §"Evaluation surface (M14 binding)".
 - No cross-compilation matrix beyond what ADR-0023 §"Target triple matrix"
   pins (macOS arm64 + Linux x86_64 at M10).
 - No arbitrary `print(s: str)` lowering at M10 — narrowed to the literal
@@ -198,4 +288,5 @@ when no manifest is reachable.
 - `mod:translator` — `pipeline::translate` (used by translate).
 - ADR-0019 §"M10 — CLI driver" — milestone scope.
 - ADR-0023 §"Per-MIR-form lowering rules" — M10 amendment to the Call row.
-- ADR-0024 — M10 design (this milestone).
+- ADR-0024 — M10 design (the stub this M14 supersedes).
+- ADR-0029 — M14 design (interactive REPL).
