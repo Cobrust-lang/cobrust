@@ -7,10 +7,41 @@ closed-loop translates the entire Python ecosystem.
 
 ## Status
 
-**M0 — repository skeleton.** Compiler, runtime, and AI translation
-subsystem are not yet implemented. See
+**M0 → M12 delivered. M12.x / M13 / M14 in flight.** As of
+2026-05-09 (HEAD `cc15f0b`): 100 commits, 26 ADRs accepted,
+2,088 tests passing on cold integrated rebuild. The compiler skeleton
+is end-to-end (`.cb` → AST → HIR → typed-HIR → MIR → Cranelift →
+Mach-O on macOS arm64); the AI translation subsystem ships a synthetic-
+LLM mode pipeline with five translated libraries (`cobrust-tomli`,
+`cobrust-dateutil`, `cobrust-msgpack`, `cobrust-requests`,
+`cobrust-click`) plus the `cobrust-numpy` numerical tier (M7.0..M7.6).
+A 16-module stdlib (`std.{io,collections,string,math,panic,env,fmt}`)
+and a content-addressed package format (`cobrust.toml` +
+`cobrust.lock`) ship at M11 + M12.
+
+**Honest caveats** (per
+[`docs/agent/findings/`](docs/agent/findings/README.md)):
+
+- The four working `.cb` programs (`hello / fizzbuzz / fib / notebook`)
+  use literal-string `print(...)` calls; real Cobrust expression
+  (loops, recursion, arithmetic Rvalues, f-strings) lands at the
+  in-flight M12.x sprint per
+  [`finding:examples-literal-print-debt`](docs/agent/findings/examples-literal-print-debt.md).
+- The translation subsystem's L0 → L1 → L2 → L3 closed loop has
+  been validated synthetically only; a real-LLM end-to-end run on
+  `tomli` is queued per
+  [`finding:translator-real-vs-synthetic-status`](docs/agent/findings/translator-real-vs-synthetic-status.md).
+- The LLM Router's wire protocol (provider, cache, ledger,
+  failure isolation) **is** real-LLM validated against an
+  OpenAI-compatible endpoint per
+  [`finding:m5-m7-real-llm-validation`](docs/agent/findings/m5-m7-real-llm-validation.md);
+  the open question is whether the L1 translation prompt + L2
+  verification gates converge under real diagnostic feedback
+  (vs. canned-response tables).
+
+See
 [milestones (en)](docs/human/en/milestones.md) /
-[里程碑 (zh)](docs/human/zh/milestones.md).
+[里程碑 (zh)](docs/human/zh/milestones.md) for the full roadmap.
 
 ## Documentation
 
