@@ -8,7 +8,7 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
-description = "Cobrust standard library — io / collections / string / math / panic / env / fmt + runtime ABI per ADR-0025."
+description = "Cobrust standard library — io / collections / string / math / panic / env / fmt + task / sync (M13) + runtime ABI per ADR-0025 + ADR-0028."
 [lib]
 crate-type = ["rlib", "staticlib"]
 
@@ -17,14 +17,19 @@ crate-type = ["rlib", "staticlib"]
 workspace = true
 
 [features]
-default = ["mimalloc-alloc"]
-# Default: mimalloc as the global allocator (per ADR-0025 §G).
+default = ["mimalloc-alloc", "tokio-runtime"]
+# M11: mimalloc as the global allocator (per ADR-0025 §G).
 mimalloc-alloc = ["dep:mimalloc"]
-# Opt-out: use the system allocator (libc malloc on Linux/macOS).
+# M11: opt-out of mimalloc; use the system allocator.
 system-alloc = []
+# M13: structured-concurrency runtime (per ADR-0028). When disabled,
+# the `task` and `sync` modules are not compiled. Default-on so the
+# binding ABI is always present for codegen-emitted programs.
+tokio-runtime = ["dep:tokio"]
 
 [dependencies]
 mimalloc = { version = "0.1", optional = true, default-features = false }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"

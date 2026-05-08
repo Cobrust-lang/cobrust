@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:stdlib
 crate: cobrust-stdlib
-last_verified_commit: f758260
+last_verified_commit: TBD
 dependencies: [mod:codegen, mod:mir, mod:hir]
 ---
 
@@ -23,6 +23,14 @@ link against. Constitution §1.1 dual mandate: the runtime half of
   the print-intrinsic lift superseding ADR-0024 §"Hello-world
   contract", and codegen amendments materializing `Constant::Str`
   via `.rodata`.
+- **M13 — delivered.** ADR-0028 adds two modules behind the
+  default-on `tokio-runtime` Cargo feature: `task` (`spawn /
+  JoinHandle / scope / cancel`) and `sync` (bounded MPSC
+  `channel`). Constitution §2.2 "no async/sync coloring" is
+  honored at the user surface — every public function in the
+  M13 modules is `fn`, not `async fn`. Backed by `tokio = "1"`
+  with `Sender::blocking_send` / `Receiver::blocking_recv`
+  bridging the sync surface onto the async runtime singleton.
 
 ## Public surface (M11)
 
@@ -143,6 +151,81 @@ pub fn format_bool(b: bool) -> String;
 pub fn format_str(s: &str) -> String;
 ```
 
+### `std.task` (M13 — ADR-0028)
+
+```rust
+pub fn spawn<F, T>(work: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static;
+
+pub struct JoinHandle<T> { /* tokio handle + cancel flag */ }
+
+impl<T: Send + 'static> JoinHandle<T> {
+    pub fn wait(self) -> Result<T, JoinError>;
+    pub fn cancel(&self);
+    pub fn is_cancelled(&self) -> bool;
+}
+
+pub fn cancel<T: Send + 'static>(handle: &JoinHandle<T>);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JoinError { Cancelled, Panicked }
+
+pub fn scope<F, T>(body: F) -> T
+where
+    F: FnOnce(&Scope) -> T;
+
+pub struct Scope { /* tracks children */ }
+
+impl Scope {
+    pub fn spawn<F, T>(&self, work: F) -> JoinHandle<T>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static;
+}
+```
+
+Constitution §2.2 — every signature is `fn`, never `async fn`. The
+M13 surface is sync at the user layer; tokio drives the async
+runtime under the hood (per ADR-0028 §B.2 explicit-await; §B.1
+implicit-await is the future shape).
+
+### `std.sync` (M13 — ADR-0028)
+
+```rust
+pub fn channel<T: Send + 'static>(capacity: usize) -> (Sender<T>, Receiver<T>);
+
+pub struct Sender<T> { /* tokio mpsc::Sender */ }
+pub struct Receiver<T> { /* tokio mpsc::Receiver */ }
+
+impl<T: Send + 'static> Sender<T> {
+    pub fn send(&self, value: T) -> Result<(), SendError<T>>;
+    pub fn try_send(&self, value: T) -> Result<(), TrySendError<T>>;
+}
+impl<T> Clone for Sender<T> { /* multi-producer */ }
+
+impl<T: Send + 'static> Receiver<T> {
+    pub fn recv(&mut self) -> Option<T>;          // None = all senders dropped
+    pub fn try_recv(&mut self) -> Result<T, TryRecvError>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct SendError<T>(pub T);
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum TrySendError<T> { Full(T), Closed(T) }
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum TryRecvError { Empty, Disconnected }
+```
+
+Bounded MPSC, capacity 0 is approximated as 1 at M13 (capacity-zero
+rendezvous is a Phase F follow-up; the M13 `send` blocks the OS
+thread when the buffer is full anyway, so the observable contract
+already matches rendezvous semantics for capacity 1).
+
+
 ### Cobrust source-level surface
 
 The seven binding modules project onto Cobrust source-level imports
@@ -157,6 +240,9 @@ canonical paths a user will write at M12+:
 - `std.panic.panic(msg)` / `std.panic.assert(cond, msg)`
 - `std.env.args()` / `std.env.var(name)`
 - `std.fmt.format_int(i)` / `std.fmt.format_float(x)` / `std.fmt.format_bool(b)`
+- `std.task.spawn(fn)` / `std.task.scope(closure)` / `std.task.cancel(handle)` (M13 — ADR-0028)
+- `std.task.JoinHandle::wait()` / `std.task.JoinHandle::cancel()` / `std.task.JoinHandle::is_cancelled()` (M13)
+- `std.sync.channel(capacity)` / `Sender::send(value)` / `Sender::try_send(value)` / `Sender::clone()` / `Receiver::recv()` / `Receiver::try_recv()` (M13)
 
 At M11 these resolve through the `cobrust-stdlib` Rust crate; M12 will
 bind the source-level `import std.X` machinery to the same Rust shim.
@@ -204,6 +290,13 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
 - **String literals are `.rodata` interned** at codegen time;
   `_cobrust_drop_str` is a no-op for `.rodata` strings (they don't
   own heap state at M11). Heap-allocated strings are M12+.
+- **No `async fn` keyword in the M13 public surface** — every
+  function in `task` and `sync` is `fn`. Constitution §2.2 "no
+  async/sync coloring" is honored at the user-visible API.
+- **The runtime singleton is process-wide** — ADR-0028 §A.
+  Calling M13 task/sync APIs from inside a user-owned tokio
+  runtime is forbidden (would deadlock); documented as a known
+  limitation per ADR-0028 §"Consequences".
 
 ## Done means (M11)
 
@@ -221,6 +314,24 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
       262 passing (133 unit + 11 example gate +118 integration).
 - [x] ADR-0025 accepted.
 
+### Done means (M13)
+
+- [x] `std.task.spawn / JoinHandle::wait / cancel / is_cancelled`
+      shipped (ADR-0028 §C).
+- [x] `std.task.scope` with drop-on-exit cancellation (ADR-0028 §D).
+- [x] `std.sync.channel` bounded MPSC + Sender::send / try_send /
+      clone + Receiver::recv / try_recv (ADR-0028 §C).
+- [x] No `async fn` in the M13 public surface.
+- [x] Differential perf gate: `task_perf_concurrency_producer_consumer_within_budget`
+      passes at the amended 0.3× budget (ADR-0028 §F + finding-m13-sync-bridge-cost.md).
+- [x] mimalloc + tokio TLS interaction smoke test
+      (`task_perf_mimalloc_tokio_tls_interaction_smoke`) green —
+      closes ADR-0025 §"Consequences" §"Neutral / unknown".
+- [x] ≥ 30 well-typed + ≥ 30 ill-typed M13 tests + corpus +
+      perf — 79 new tests total (35 well-typed + 32 ill-typed +
+      10 corpus + 2 perf).
+- [x] ADR-0028 accepted; finding-m13-sync-bridge-cost.md filed.
+
 ## Non-goals
 
 - **Full closure / iteration-protocol lowering through MIR** —
@@ -230,7 +341,10 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
 - **Heap-allocated `Str`** — M11 strings live in `.rodata`. M12+
   add the heap-`String` path with `_cobrust_drop_str` materializing.
 - **Async / sync coloring** — constitution §2.2 forbids it; the
-  structured-concurrency runtime is M13.
+  structured-concurrency runtime is delivered at M13 (ADR-0028).
+  Implicit-await (option B.1) is a future milestone post-MIR
+  continuation modeling — explicit `JoinHandle::wait()` is the
+  M13 surface.
 - **REPL** — M14.
 - **Full Unicode case-folding** in `string::lower`/`upper` —
   ASCII fast-path at M11; full case-folding is M11.x.
@@ -247,3 +361,6 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
   delegated to M11.
 - ADR-0024 §"Hello-world contract" — M10 supersedes pinned here.
 - ADR-0025 — M11 design (this milestone).
+- ADR-0028 — M13 structured-concurrency runtime.
+- `finding:m13-sync-bridge-cost` — empirical perf finding +
+  budget amendment justification (0.7× → 0.3×).

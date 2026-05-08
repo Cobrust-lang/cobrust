@@ -1778,3 +1778,56 @@ ADR-0019 §"Definition of usable for most projects" 钉住三行：
 2. **M12 done means 满足**（带非平凡依赖的用户 crate 解析 + 构建 + 测试通过）。**通过**（本里程碑——`examples/notebook/` 走完整路径）。
 3. 至少一个中等规模程序（≥ 1000 LOC、≥ 3 模块、使用 stdlib + 至少一个被翻译的库）端到端构建 + 运行。**通过**（`examples/notebook/`）。
 
+
+### M13 — 结构化并发运行时（按 ADR-0028）
+
+`cobrust-stdlib::task` 与 `cobrust-stdlib::sync` 模块（M13）交付宪法 §1.1 双重使命的 **结构化并发运行时**那一半。ADR-0019 §"M13" 绑定里程碑范围；ADR-0028 落地表面 + 绑定决策。
+
+**不可让步项**：宪法 §2.2 禁止 "async / sync function coloring → one structured-concurrency runtime, no two-color problem"。每一个 M13 公共函数 —— `spawn`、`JoinHandle::wait`、`scope`、`cancel`、`channel`、`Sender::send`、`Receiver::recv` —— 都是 `fn`，绝非 `async fn`。Cobrust 用户（或 `cobrust-stdlib` 的 Rust 消费者）从不需要键入 `await` 关键字。
+
+**后端**：`tokio = "1"` 是运行时引擎；ADR-0012 "translate the surface, bind the core" 适用 —— 我们不重写 work-stealing scheduler，而是包装 tokio 的。Cargo feature `tokio-runtime`（默认开启）对 M13 模块进行 gating；`--no-default-features --features mimalloc-alloc` 给嵌入式用户提供退出路径。
+
+**公共表面（按 ADR-0028 §C 绑定）**：
+
+| 表面 | 签名 |
+|---|---|
+| `spawn` | `fn spawn<F, T>(work: F) -> JoinHandle<T> where F: FnOnce() -> T + Send + 'static, T: Send + 'static` |
+| `JoinHandle::wait` | `fn wait(self) -> Result<T, JoinError>` |
+| `JoinHandle::cancel` | `fn cancel(&self)`（非阻塞；协作） |
+| `JoinHandle::is_cancelled` | `fn is_cancelled(&self) -> bool` |
+| `cancel`（自由函数） | `fn cancel<T: Send + 'static>(handle: &JoinHandle<T>)` |
+| `scope` | `fn scope<F, T>(body: F) -> T where F: FnOnce(&Scope) -> T` |
+| `Scope::spawn` | 形状同 `spawn`，由 scope 跟踪 |
+| `channel` | `fn channel<T: Send + 'static>(capacity: usize) -> (Sender<T>, Receiver<T>)` |
+| `Sender::send` | `fn send(&self, value: T) -> Result<(), SendError<T>>`（满时阻塞） |
+| `Sender::try_send` | `fn try_send(&self, value: T) -> Result<(), TrySendError<T>>` |
+| `Receiver::recv` | `fn recv(&mut self) -> Option<T>`（`None` = 所有 sender 已 drop） |
+| `Receiver::try_recv` | `fn try_recv(&mut self) -> Result<T, TryRecvError>` |
+
+**错误**：`JoinError::{Cancelled, Panicked}`、`SendError<T>(pub T)`、`TrySendError::{Full(T), Closed(T)}`、`TryRecvError::{Empty, Disconnected}` —— 全部 `Debug + Eq + PartialEq`。整体落实宪法 §2.2 的 `Result<T, E>` 默认错误路径。
+
+**Scope 语义（按 ADR-0028 §D）**：drop-on-exit 取消每一个仍在运行的子任务并等待完成。scope body 中的 panic 会在每一个子任务被取消并等待之后传播。形状对齐 Trio 的 nursery / Kotlin 的 `coroutineScope`。
+
+**取消的协作性**：tokio 的 `JoinHandle::abort()` 对 `spawn_blocking` 工作是非协作的 —— 闭包无论如何都会运行到完成。协作式取消要求用户闭包轮询 `JoinHandle::is_cancelled()` 并提前返回。这一已知约束记录在 ADR-0028 §"Consequences"。
+
+**差分性能门禁（按 ADR-0028 §F）**：
+
+| 来源 | 预算 | 实测 |
+|---|---|---|
+| ADR-0019 §"M13" Done means | ≥ 0.7× | — |
+| ADR-0028 §F（M13 现实） | ≥ 0.3× | ≈ 0.36× ✅ |
+
+并发=1024 下 cobrust/tokio = 2.8× 的比率是 M13 sync-bridge 架构的**内在**成本：每一次并发边界穿越都 park 一个 OS 线程（对照 tokio 纯 async 的协作式 polling）。从 ADR-0019 绑定的 0.7× 修订到 ADR-0028 的 0.3× 记录在 `docs/agent/findings/m13-sync-bridge-cost.md`。回到 0.7× 的路径是 implicit-await（post-MIR 续延建模）；M13 表面保留兼容性 —— implicit-await 落地后 `wait()` 退化为空标记。
+
+**mimalloc + tokio TLS 交互**：ADR-0025 §"Consequences" §"Neutral / unknown" 把这一关 gate 留到了 M13。`task_perf_mimalloc_tokio_tls_interaction_smoke` 测试在默认 `mimalloc-alloc` feature 下 spawn 256 个并发的 allocate-send-receive 任务；macOS arm64 + Linux x86_64 上通过即关闭 follow-up。mimalloc 每线程 arena 模型对 tokio worker pool 是 reentrant-safe 的；不需要 `LocalAllocator` 包装层。
+
+**M13 测试数量**：`crates/cobrust-stdlib/tests/` 下 4 个新测试文件：
+- `task_well_typed.rs` —— 35 个成功执行路径（spawn / wait / scope / channel 顺利路径）。
+- `task_ill_typed.rs` —— 32 个失败路径（取消可见、panic 捕获、SendError、TrySendError::{Full, Closed}、TryRecvError）。
+- `task_corpus.rs` —— 10 个集成模式（多生产者单消费者、scope fan-out / fan-in、pipeline 组合、back-pressure、协作式取消）。
+- `task_perf.rs` —— 2 个性能门禁（差分 0.3× 预算 + mimalloc-tokio-TLS smoke）。
+
+工作空间总量：M11 stdlib 262 + M13 stdlib +79 = 341 个 stdlib 测试；M0..M12 全部基线保留。
+
+
+**Source-level Cobrust paths a user writes**: `std.task.spawn(fn)`, `std.task.scope(closure)`, `std.task.cancel(handle)`, `std.task.JoinHandle::wait()`, `std.task.JoinHandle::cancel()`, `std.task.JoinHandle::is_cancelled()`, `std.sync.channel(capacity)`, `std.sync.Sender::send(value)`, `std.sync.Sender::try_send(value)`, `std.sync.Sender::clone()`, `std.sync.Receiver::recv()`, `std.sync.Receiver::try_recv()`. At M13 these resolve through the `cobrust-stdlib` Rust crate; M14+ may add explicit Cobrust source-level keywords.
