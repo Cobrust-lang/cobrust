@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: 2af90cc
+last_verified_commit: 7a51f8c
 ---
 
 # Findings
@@ -42,3 +42,4 @@ valuable as capturing what does.
 | `examples-literal-print-debt` | [`examples-literal-print-debt.md`](examples-literal-print-debt.md) | M12.x ADR-0027 omitted fizzbuzz/fib from binding deliverable list — examples still print canned strings rather than executing real algorithms; M11.1 sprint queued |
 | `translator-real-vs-synthetic-status` | [`translator-real-vs-synthetic-status.md`](translator-real-vs-synthetic-status.md) | L0→L1→L2→L3 closed loop never run end-to-end with a real LLM on a real library; remediation sprint queued |
 | `m12-x-while-if-codegen-regression` | [`m12-x-while-if-codegen-regression.md`](m12-x-while-if-codegen-regression.md) | Cranelift backend post-M12.x: `while`-loop with leading `if` produces empty stdout; M11.1 sprint queued to fix before fizzbuzz/fib rewrite |
+| `multi-agent-cobrust-topology` | [`multi-agent-cobrust-topology.md`](multi-agent-cobrust-topology.md) | 6 recurring failure modes + SOPs from 100+ commits of 4-way parallel multi-agent worktree topology — externalised methodology per audit #6 |
