@@ -32,9 +32,7 @@ where
     let port = listener.local_addr().expect("local_addr").port();
     thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .ok();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
         // Read until we see CRLFCRLF — minimal HTTP/1.1 request parser.
         let mut buf = [0u8; 4096];
         let mut total = Vec::with_capacity(1024);
@@ -112,7 +110,11 @@ fn l3_get_against_in_process_wiremock_returns_body() {
     assert_eq!(json.get("hello").and_then(|v| v.as_str()), Some("world"));
     let log = request_log.lock().unwrap();
     assert!(log[0].starts_with("GET "), "request line: {}", log[0]);
-    assert!(log[0].contains("/sentinel"), "expected /sentinel: {}", log[0]);
+    assert!(
+        log[0].contains("/sentinel"),
+        "expected /sentinel: {}",
+        log[0]
+    );
 }
 
 #[test]
@@ -211,9 +213,6 @@ fn l3_optional_httpbin_smoke() {
     let resp = cobrust_get("https://httpbin.org/get").expect("httpbin get");
     assert_eq!(resp.status_code(), 200);
     let json = resp.json().expect("json");
-    let url = json
-        .get("url")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
+    let url = json.get("url").and_then(|v| v.as_str()).unwrap_or_default();
     assert!(url.contains("httpbin.org"), "url field: {url}");
 }

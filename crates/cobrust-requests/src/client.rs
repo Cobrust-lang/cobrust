@@ -356,7 +356,10 @@ mod tests {
         let resp = Response::from_parts(200, headers.clone(), b"{\"x\":1}".to_vec());
         assert_eq!(resp.status_code(), 200);
         assert!(resp.ok());
-        assert_eq!(resp.headers().get("content-type").map(String::as_str), Some("application/json"));
+        assert_eq!(
+            resp.headers().get("content-type").map(String::as_str),
+            Some("application/json")
+        );
     }
 
     #[test]

@@ -47,9 +47,7 @@ fn l3_explicit_option_overrides_default() {
 
 #[test]
 fn l3_short_option_is_recognised() {
-    let result = echo()
-        .run(vec!["echo", "-m", "yo"])
-        .expect("short option");
+    let result = echo().run(vec!["echo", "-m", "yo"]).expect("short option");
     assert_eq!(result.option("message"), Some("yo"));
 }
 
@@ -88,8 +86,8 @@ fn l3_unknown_option_fails_with_usage_kind() {
 
 #[test]
 fn l3_required_option_fails_when_omitted() {
-    let cmd = Command::new("strict")
-        .option(OptionSpec::new("api-key").type_(ParamType::Str).required());
+    let cmd =
+        Command::new("strict").option(OptionSpec::new("api-key").type_(ParamType::Str).required());
     let err = cmd.run(vec!["strict"]).expect_err("missing required");
     assert_eq!(err.kind, ClickErrorKind::MissingOption);
 }

@@ -527,9 +527,7 @@ mod tests {
     #[test]
     fn run_routes_bool_flag_correctly() {
         let c = cmd_say_hello();
-        let result = c
-            .run(vec!["say-hello", "--loud", "1"])
-            .expect("bool flag");
+        let result = c.run(vec!["say-hello", "--loud", "1"]).expect("bool flag");
         assert_eq!(result.option("loud"), Some("true"));
     }
 

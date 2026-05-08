@@ -40,8 +40,8 @@ fn synth_url(rng: &mut Lcg) -> String {
     let scheme = match scheme_pick {
         0 => "http://",
         1 => "https://",
-        2 => "ftp://",                  // unsupported — must error
-        _ => "",                         // missing scheme — must error
+        2 => "ftp://", // unsupported — must error
+        _ => "",       // missing scheme — must error
     };
     let len = (rng.next_u32() % 16) as usize + 1;
     let host: String = (0..len)
@@ -76,12 +76,7 @@ fn url_dispatch_panic_free_on_random_inputs() {
 fn invalid_url_classification_is_stable() {
     // 4 representative invalid URLs that should always route to
     // HttpErrorKind::InvalidUrl regardless of network state.
-    let cases = [
-        "",
-        "  ",
-        "not a url",
-        "://missing-scheme.example",
-    ];
+    let cases = ["", "  ", "not a url", "://missing-scheme.example"];
     let session = Session::new();
     for c in &cases {
         let err = session.get(c).expect_err(c);
@@ -103,7 +98,9 @@ fn response_observers_are_consistent_under_random_status() {
         for _ in 0..400 {
             let status = (rng.next_u32() % 800) as u16; // beyond 5xx still legal as u16
             let body_len = (rng.next_u32() % 256) as usize;
-            let body: Vec<u8> = (0..body_len).map(|_| (rng.next_u32() & 0xff) as u8).collect();
+            let body: Vec<u8> = (0..body_len)
+                .map(|_| (rng.next_u32() & 0xff) as u8)
+                .collect();
             let resp = Response::from_parts(status, HashMap::new(), body.clone());
             assert_eq!(resp.status_code(), status);
             // ok() must equal (200..300).contains(status).
