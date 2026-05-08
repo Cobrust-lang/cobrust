@@ -79,7 +79,10 @@ fn ctrl_d_exits_zero() {
 fn integer_literal_round_trip() {
     let (stdout, _stderr, code) = drive_repl("42\n:quit\n");
     assert_eq!(code, 0);
-    assert!(stdout.contains("42"), "stdout should contain `42`: {stdout:?}");
+    assert!(
+        stdout.contains("42"),
+        "stdout should contain `42`: {stdout:?}"
+    );
 }
 
 #[test]
@@ -100,15 +103,24 @@ fn let_binding_round_trip() {
 fn type_directive_round_trip() {
     let (stdout, _stderr, code) = drive_repl(":type 1 + 2\n:quit\n");
     assert_eq!(code, 0);
-    assert!(stdout.contains("i64"), "expected `i64` in stdout: {stdout:?}");
+    assert!(
+        stdout.contains("i64"),
+        "expected `i64` in stdout: {stdout:?}"
+    );
 }
 
 #[test]
 fn ast_directive_round_trip() {
     let (stdout, _stderr, code) = drive_repl(":ast 1 + 2\n:quit\n");
     assert_eq!(code, 0);
-    assert!(stdout.contains("Binary"), "expected `Binary` in stdout: {stdout:?}");
-    assert!(stdout.contains("Add"), "expected `Add` in stdout: {stdout:?}");
+    assert!(
+        stdout.contains("Binary"),
+        "expected `Binary` in stdout: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("Add"),
+        "expected `Add` in stdout: {stdout:?}"
+    );
 }
 
 #[test]
@@ -149,7 +161,10 @@ fn help_directive_lists_directives() {
     let (stdout, _stderr, code) = drive_repl(":help\n:quit\n");
     assert_eq!(code, 0);
     for d in [":type", ":ast", ":hir", ":mir", ":clear", ":help", ":quit"] {
-        assert!(stdout.contains(d), "expected `{d}` in :help output: {stdout}");
+        assert!(
+            stdout.contains(d),
+            "expected `{d}` in :help output: {stdout}"
+        );
     }
 }
 
@@ -164,8 +179,10 @@ fn unknown_directive_emits_diagnostic() {
 fn parse_error_emits_diagnostic() {
     let (_stdout, stderr, code) = drive_repl("1 +\n\n:quit\n");
     assert_eq!(code, 0);
-    assert!(stderr.contains("parse error") || stderr.contains("incomplete"),
-        "stderr: {stderr:?}");
+    assert!(
+        stderr.contains("parse error") || stderr.contains("incomplete"),
+        "stderr: {stderr:?}"
+    );
 }
 
 #[test]
@@ -213,7 +230,10 @@ fn cold_start_budget() {
 fn comparison_returns_bool_via_type_directive() {
     let (stdout, _stderr, code) = drive_repl(":type 1 < 2\n:quit\n");
     assert_eq!(code, 0);
-    assert!(stdout.contains("bool"), "expected `bool` in stdout: {stdout:?}");
+    assert!(
+        stdout.contains("bool"),
+        "expected `bool` in stdout: {stdout:?}"
+    );
 }
 
 #[test]
@@ -227,14 +247,20 @@ fn boolean_op_evaluates() {
 fn type_directive_str_literal() {
     let (stdout, _stderr, code) = drive_repl(":type \"hi\"\n:quit\n");
     assert_eq!(code, 0);
-    assert!(stdout.contains("str"), "expected `str` in stdout: {stdout:?}");
+    assert!(
+        stdout.contains("str"),
+        "expected `str` in stdout: {stdout:?}"
+    );
 }
 
 #[test]
 fn type_no_arg_errors_to_stderr() {
     let (_stdout, stderr, code) = drive_repl(":type\n:quit\n");
     assert_eq!(code, 0);
-    assert!(stderr.contains("requires an expression"), "stderr: {stderr:?}");
+    assert!(
+        stderr.contains("requires an expression"),
+        "stderr: {stderr:?}"
+    );
 }
 
 #[test]
@@ -248,15 +274,22 @@ fn quit_aliases_all_work() {
 #[test]
 fn banner_printed_on_start() {
     let (stdout, _stderr, _code) = drive_repl(":quit\n");
-    assert!(stdout.contains("cobrust repl"), "expected banner in stdout: {stdout}");
-    assert!(stdout.contains("M14") || stdout.contains("ADR-0029"),
-        "banner should reference M14/ADR-0029: {stdout}");
+    assert!(
+        stdout.contains("cobrust repl"),
+        "expected banner in stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("M14") || stdout.contains("ADR-0029"),
+        "banner should reference M14/ADR-0029: {stdout}"
+    );
 }
 
 #[test]
 fn unbound_name_emits_diagnostic() {
     let (_stdout, stderr, code) = drive_repl("missing_name\n:quit\n");
     assert_eq!(code, 0);
-    assert!(stderr.contains("missing_name") || stderr.contains("not bound"),
-        "stderr: {stderr:?}");
+    assert!(
+        stderr.contains("missing_name") || stderr.contains("not bound"),
+        "stderr: {stderr:?}"
+    );
 }
