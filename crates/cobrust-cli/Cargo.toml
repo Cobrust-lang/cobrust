@@ -18,3 +18,17 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+cobrust-codegen = { path = "../cobrust-codegen" }
+cobrust-frontend = { path = "../cobrust-frontend" }
+cobrust-hir = { path = "../cobrust-hir" }
+cobrust-llm-router = { path = "../cobrust-llm-router" }
+cobrust-mir = { path = "../cobrust-mir" }
+cobrust-translator = { path = "../cobrust-translator" }
+cobrust-types = { path = "../cobrust-types" }
+target-lexicon = "0.13"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
