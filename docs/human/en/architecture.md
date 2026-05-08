@@ -1933,3 +1933,119 @@ Workspace-wide M13 totals: M11 stdlib 262 + M13 stdlib +79 = 341 stdlib tests; a
 
 
 **Source-level Cobrust paths a user writes**: `std.task.spawn(fn)`, `std.task.scope(closure)`, `std.task.cancel(handle)`, `std.task.JoinHandle::wait()`, `std.task.JoinHandle::cancel()`, `std.task.JoinHandle::is_cancelled()`, `std.sync.channel(capacity)`, `std.sync.Sender::send(value)`, `std.sync.Sender::try_send(value)`, `std.sync.Sender::clone()`, `std.sync.Receiver::recv()`, `std.sync.Receiver::try_recv()`. At M13 these resolve through the `cobrust-stdlib` Rust crate; M14+ may add explicit Cobrust source-level keywords.
+### M14 — REPL (per ADR-0029)
+
+The `cobrust repl` subcommand is the headline interactive surface
+delivered at M14 per ADR-0019 §"M14 — REPL" and constitution §2.1
+("REPL-first feel"). It supersedes the M10/ADR-0024 stub (which
+printed "M14 scope; not yet implemented" and exited 1).
+
+#### Why this design?
+
+- **REPL-first feel** is an explicit constitution §2.1 keep-from-Python.
+  The cold-start latency and directive ergonomics gate the perceived
+  quality of the entire compiler — a slow or feature-poor REPL signals
+  a slow or feature-poor language.
+- **No JIT** — the dispatch noted "extend M9 codegen JIT facility" but
+  M9 only ships AOT (`cranelift-object`); pulling in `cranelift-jit`
+  would (a) add ~150KB of dep tree against the <200ms cold-start bar,
+  (b) require modifying `cobrust-codegen` public surface (forbidden by
+  the M14 scope contract), and (c) duplicate state-management work.
+  M14 instead **interprets** typed-HIR directly — sufficient for the
+  directive surface (`:type / :ast / :hir / :mir`) plus literal +
+  arithmetic + bound-variable evaluation. Future ADR may swap to true
+  JIT once the M11 surface stabilises.
+- **Multi-line via structural analysis** (not trial-parse) — robust
+  against indentation edge cases and avoids O(n²) re-parse cost.
+
+#### Directives (binding per ADR-0029 §"Directive table")
+
+| Directive | Argv | Behaviour |
+|---|---|---|
+| `:type EXPR` | one expression | inferred type via `mod:types::check` |
+| `:ast EXPR` | one expression | pretty-print parsed `ast::Expr` |
+| `:hir EXPR` | one expression | pretty-print lowered `hir::Expr` |
+| `:mir EXPR` | one expression | pretty-print MIR `Body` |
+| `:clear` | (none) | drop accumulated session bindings |
+| `:help` | (none) | list directives + brief usage |
+| `:quit` | (none) | exit (aliases: `:q`, `:exit`; or Ctrl-D) |
+
+```mermaid
+flowchart LR
+    line[user line] --> incomplete{is_input_incomplete?}
+    incomplete -->|yes| cont[... continuation prompt]
+    incomplete -->|no| disp{starts with `:`?}
+    disp -->|yes| dir[directive dispatch]
+    disp -->|no| eval[wrap as `fn _repl()` + parse + eval]
+    dir --> ty[`:type`] --> tycheck[mod:types::check]
+    dir --> ast[`:ast`] --> astpp[Debug pretty-print]
+    dir --> hir[`:hir`] --> hirpp[Debug pretty-print]
+    dir --> mir[`:mir`] --> mirpp[mir::lower + Debug]
+    eval --> bindings[update session bindings]
+```
+
+#### Multi-line input contract
+
+The REPL emits a continuation prompt (`...`) when the input is
+structurally incomplete:
+
+- unbalanced parens / brackets / braces
+- unterminated string literal (`"unclosed`)
+- last non-blank line ends with `:` (block opener) and no
+  subsequent line is indented past it
+- the trial-parse of the synthetic `fn _repl(): <input>; return 0`
+  wrapper returns `ParseError::UnexpectedEof`
+
+A blank-line input on the continuation prompt forces a parse
+attempt — matching Python's `>>> def f():\n...     pass\n... \n`
+behaviour.
+
+#### Tab completion sources
+
+Press `<Tab>` for completions from four merged sources:
+
+1. **Directives** (9 entries) — at column 0, prefix `:`.
+2. **Cobrust keywords** (28 fixed) — alphabetic prefix.
+3. **Stdlib top-level seeded names** (12 entries) — alphabetic prefix.
+4. **Session bindings** — every name introduced via `let X = …`.
+
+#### Evaluation surface (M14 binding)
+
+| Form | Status |
+|---|---|
+| Integer / float / bool / string / None literals | ✅ |
+| Binary arithmetic (`+ - * / %`) | ✅ |
+| Comparison (`== != < <= > >=`) | ✅ |
+| Boolean (`and / or / not`) | ✅ |
+| Variable read | ✅ |
+| `let X = EXPR` bindings | ✅ |
+| Function calls / loops / if-else / match / comprehensions | ❌ M14.1 |
+| Stdlib calls (`print(...)`) | ❌ M14.1 |
+
+The 50-session golden corpus at `examples/repl-session.txt` documents
+the binding evaluation surface + every directive + edge cases (parse
+errors, unbound names, division by zero, empty input).
+
+#### Cold-start budget
+
+- Target: <200ms primary-prompt latency.
+- Measured: ~10ms release / ~18ms debug on macOS arm64 (M2 Pro).
+- Asserted: `crates/cobrust-cli/tests/repl_smoke.rs::cold_start_budget`
+  with 2s CI headroom.
+
+#### History persistence
+
+`~/.cobrust/repl_history`, 1024-entry bound, managed by `rustyline`.
+Saved on `:quit` / EOF; loaded on next start.
+
+#### Test gates (binding done-means per ADR-0019 line 3)
+
+- 26 inline `repl::tests::*` unit tests (each directive + each binary op).
+- 22 `tests/repl_smoke.rs` integration tests (drives binary via piped
+  stdin; asserts directive round-trips, error routing, banner,
+  cold-start budget).
+- 3 `tests/repl_session_corpus.rs` tests (50-session golden corpus replay).
+- 1 modified `cli_exit_codes::ec_repl_returns_success_on_eof`
+  (M14 contract: EOF → 0; was M10 stub returning 1).
+
+Total: 51 net new M14 tests; 72 cobrust-cli tests total green.

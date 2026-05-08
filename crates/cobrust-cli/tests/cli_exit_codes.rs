@@ -102,16 +102,24 @@ fn ec_5_fmt_diff_under_check() {
 }
 
 #[test]
-fn ec_repl_returns_user_error() {
+fn ec_repl_returns_success_on_eof() {
+    // M10 behavior: stub returned USER_ERROR (1).
+    // M14 supersession (ADR-0029): the REPL is fully functional;
+    // closing stdin (EOF, equivalent to Ctrl-D) is a graceful exit
+    // and returns SUCCESS (0).
+    use std::process::Stdio;
     let bin = cobrust_binary();
     let out = Command::new(&bin)
         .arg("repl")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .output()
         .expect("invoke repl");
     assert_eq!(
         out.status.code(),
-        Some(1),
-        "expected USER_ERROR (1) for stub"
+        Some(0),
+        "M14 (ADR-0029): REPL EOF → SUCCESS"
     );
 }
 

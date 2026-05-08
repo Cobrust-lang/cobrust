@@ -57,3 +57,4 @@ same atomic commit as the change it justifies.
 | [0026](0026-m12-package-format.md) | M12 package format — user-crate cobrust.toml schema, lockfile determinism, content-addressed registry, semver resolver, namespace collision (Option C) | accepted | 2026-04-30 |
 | [0027](0027-m12-x-codegen-stdlib-amendments.md) | M12.x — codegen + stdlib amendments to lift M11 followups (Aggregate / Ref / Cast / for-protocol / f-string) | accepted | 2026-05-09 |
 | [0028](0028-m13-concurrency-runtime.md) | M13 structured-concurrency runtime — tokio binding, JoinHandle/channel/scope/cancel surface, no async/sync coloring | accepted | 2026-04-30 |
+| [0029](0029-m14-repl.md) | M14 REPL — interactive shell, directives, multi-line input, evaluation strategy | accepted | 2026-04-30 |

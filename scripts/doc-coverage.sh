@@ -1265,3 +1265,50 @@ if [[ -f "docs/agent/adr/0028-m13-concurrency-runtime.md" ]]; then
 fi
 
 echo "doc-coverage: M13 stdlib task + sync surface checks passed"
+# --- 23. M14 REPL surface coverage --------------------------------------
+# When the cli module declares M14 delivered, the M14 binding surface
+# terms + ADR-0029 anchors must appear in all three doc trees.
+
+if grep -q '^- \*\*M14 — delivered.\*\*' "docs/agent/modules/cli.md"; then
+    m14_cli_terms=(
+        ":type"
+        ":ast"
+        ":hir"
+        ":mir"
+        ":clear"
+        ":help"
+        ":quit"
+        "rustyline"
+        "cobrust repl"
+        "ADR-0029"
+    )
+    m14_cli_files=(
+        "docs/agent/modules/cli.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${m14_cli_terms[@]}"; do
+        for f in "${m14_cli_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M14 cli surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    adr_29="docs/agent/adr/0029-m14-repl.md"
+    [[ -f "$adr_29" ]] || fail "ADR-0029 (M14 REPL) is required for M14"
+    if ! grep -q '^status: accepted$' "$adr_29"; then
+        fail "ADR-0029 must be 'status: accepted' for M14 to be done"
+    fi
+
+    # M14 binding done-means: 50-session corpus + at least one bin-tests file.
+    [[ -f examples/repl-session.txt ]] || fail "examples/repl-session.txt missing (M14 binding done-means)"
+    session_count=$(grep -c "^=== " examples/repl-session.txt || true)
+    if [[ "$session_count" -lt 50 ]]; then
+        fail "examples/repl-session.txt has only ${session_count} sessions; ADR-0029 requires ≥ 50"
+    fi
+    [[ -f crates/cobrust-cli/tests/repl_smoke.rs ]] || fail "crates/cobrust-cli/tests/repl_smoke.rs missing"
+    [[ -f crates/cobrust-cli/tests/repl_session_corpus.rs ]] || fail "crates/cobrust-cli/tests/repl_session_corpus.rs missing"
+fi
+
+echo "doc-coverage: M14 REPL surface checks passed"

@@ -1831,3 +1831,109 @@ ADR-0019 §"Definition of usable for most projects" 钉住三行：
 
 
 **Source-level Cobrust paths a user writes**: `std.task.spawn(fn)`, `std.task.scope(closure)`, `std.task.cancel(handle)`, `std.task.JoinHandle::wait()`, `std.task.JoinHandle::cancel()`, `std.task.JoinHandle::is_cancelled()`, `std.sync.channel(capacity)`, `std.sync.Sender::send(value)`, `std.sync.Sender::try_send(value)`, `std.sync.Sender::clone()`, `std.sync.Receiver::recv()`, `std.sync.Receiver::try_recv()`. At M13 these resolve through the `cobrust-stdlib` Rust crate; M14+ may add explicit Cobrust source-level keywords.
+### M14 —— REPL（依据 ADR-0029）
+
+`cobrust repl` 子命令是 M14 交付的头部交互式表面，依据 ADR-0019
+§"M14 — REPL" 与宪法 §2.1（"REPL-first feel"）。它取代了
+M10/ADR-0024 的 stub（仅打印 "M14 scope; not yet implemented" 然后退出 1）。
+
+#### 这个设计为什么？
+
+- **REPL-first feel** 是宪法 §2.1 明示要保留的 Python 特性。
+  冷启动延迟与指令人体工学决定了整个编译器的感知质量——慢或功能贫乏
+  的 REPL 暗示语言本身慢或贫乏。
+- **不上 JIT** —— 调度文件提到 "扩展 M9 codegen JIT 设施"，但 M9
+  只发布了 AOT (`cranelift-object`)；引入 `cranelift-jit` 会
+  (a) 多约 150KB 依赖树压向 <200ms 冷启动门槛，
+  (b) 强制修改 `cobrust-codegen` 公共表面（被 M14 scope 合同禁止），
+  (c) 状态管理重复劳动。M14 改为**直接解释** typed-HIR——
+  对指令表面（`:type / :ast / :hir / :mir`）+ 字面量 + 算术 + 已绑定变量
+  评估足够。后续 ADR 可在 M11 表面稳定后切换到真正的 JIT。
+- **结构化分析判定多行输入**（非试解析）—— 对缩进边界更鲁棒，
+  且避免 O(n²) 重解析成本。
+
+#### 指令（绑定，依据 ADR-0029 §"Directive table"）
+
+| 指令 | 参数 | 行为 |
+|---|---|---|
+| `:type EXPR` | 一个表达式 | 通过 `mod:types::check` 推导类型 |
+| `:ast EXPR` | 一个表达式 | 美化打印解析后的 `ast::Expr` |
+| `:hir EXPR` | 一个表达式 | 美化打印降级后的 `hir::Expr` |
+| `:mir EXPR` | 一个表达式 | 美化打印 MIR `Body` |
+| `:clear` | （无） | 清空累积的会话绑定 |
+| `:help` | （无） | 列出指令 + 简要用法 |
+| `:quit` | （无） | 退出（别名：`:q`、`:exit`；或按 Ctrl-D） |
+
+```mermaid
+flowchart LR
+    line[用户行] --> incomplete{is_input_incomplete?}
+    incomplete -->|是| cont[... 续行提示]
+    incomplete -->|否| disp{以 `:` 开头?}
+    disp -->|是| dir[指令分发]
+    disp -->|否| eval[包装为 `fn _repl()` + 解析 + 评估]
+    dir --> ty[`:type`] --> tycheck[mod:types::check]
+    dir --> ast[`:ast`] --> astpp[Debug 美化打印]
+    dir --> hir[`:hir`] --> hirpp[Debug 美化打印]
+    dir --> mir[`:mir`] --> mirpp[mir::lower + Debug]
+    eval --> bindings[更新会话绑定]
+```
+
+#### 多行输入合同
+
+REPL 在以下情形显示续行提示（`...`）—— 输入结构不完整：
+
+- 括号/方括号/花括号不平衡
+- 字符串字面量未闭合（`"未关闭`）
+- 最后非空行以 `:` 结尾（块开启），且后续无超过其缩进的行
+- 合成 `fn _repl(): <input>; return 0` 包装试解析返回 `ParseError::UnexpectedEof`
+
+续行提示下输入空行强制再次解析—— 与 Python 的
+`>>> def f():\n...     pass\n... \n` 行为一致。
+
+#### Tab 补全来源
+
+按 `<Tab>` 从四类合并源中获取候选：
+
+1. **指令**（9 个）—— 仅在第 0 列，前缀 `:`。
+2. **Cobrust 关键字**（固定 28 个）—— 字母前缀。
+3. **stdlib 顶层种子名**（12 个）—— 字母前缀。
+4. **会话绑定** —— 每个 `let X = …` 引入的名字。
+
+#### 评估表面（M14 绑定）
+
+| 形式 | 状态 |
+|---|---|
+| 整数/浮点/布尔/字符串/None 字面量 | ✅ |
+| 二元算术（`+ - * / %`） | ✅ |
+| 比较（`== != < <= > >=`） | ✅ |
+| 布尔（`and / or / not`） | ✅ |
+| 变量读 | ✅ |
+| `let X = EXPR` 绑定 | ✅ |
+| 函数调用 / 循环 / if-else / match / 推导式 | ❌ M14.1 |
+| stdlib 调用（`print(...)`） | ❌ M14.1 |
+
+`examples/repl-session.txt` 的 50 会话黄金语料库记录了绑定评估表面 +
+所有指令 + 边界情况（解析错误、未绑定名、除零、空输入）。
+
+#### 冷启动预算
+
+- 目标：<200ms 主提示符延迟。
+- 实测：macOS arm64（M2 Pro）release 约 10ms / debug 约 18ms。
+- 断言：`crates/cobrust-cli/tests/repl_smoke.rs::cold_start_budget`
+  CI 余量 2s。
+
+#### 历史持久化
+
+`~/.cobrust/repl_history`，1024 条上限，由 `rustyline` 管理。
+`:quit` / EOF 时保存；下次启动时加载。
+
+#### 测试门（绑定 done-means，依据 ADR-0019 line 3）
+
+- 26 个内联 `repl::tests::*` 单元测试（每个指令 + 每个二元运算）。
+- 22 个 `tests/repl_smoke.rs` 集成测试（通过管道 stdin 驱动二进制；
+  断言指令往返、错误路由、横幅、冷启动预算）。
+- 3 个 `tests/repl_session_corpus.rs` 测试（50 会话黄金语料库重放）。
+- 1 个修改 `cli_exit_codes::ec_repl_returns_success_on_eof`
+  （M14 合同：EOF → 0；曾经 M10 stub 返回 1）。
+
+合计：M14 净增 51 个测试；cobrust-cli 测试合计 72 个全部通过。
