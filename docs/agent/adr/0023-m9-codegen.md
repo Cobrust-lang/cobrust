@@ -4,7 +4,7 @@ adr_id: 0023
 title: M9 codegen — backend feature flags, ABI, calling convention, linker delegation, target matrix
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: ec680bc
 supersedes: []
 superseded_by: []
 dependencies: [adr:0006, adr:0012, adr:0019, adr:0020]
