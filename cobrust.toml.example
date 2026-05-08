@@ -61,3 +61,23 @@ preferred = [
     "openai_official:gpt-5-mini",
     "deepseek:deepseek-v3",
 ]
+
+# ---- User-supplied OpenAI-compatible endpoint (validation harness) -------
+# Mirrors `crates/cobrust-llm-router/tests/real_llm_smoke.rs`. The endpoint
+# is a private deployment exposed by the user; the API key lives in
+# USER_CODEX_API_KEY (never committed). Wire format is OpenAI-compatible:
+# POST /chat/completions, Authorization: Bearer <key>.
+#
+# Validation finding: docs/agent/findings/m5-m7-real-llm-validation.md.
+
+[providers.user_codex]
+kind = "openai"
+base_url = "http://104.244.92.250:8317/v1"
+api_key_env = "USER_CODEX_API_KEY"
+models = ["gpt-5.5"]
+
+# Routing slot used by the smoke harness only. Production tasks
+# (`spec_extract`, `translate`, `repair`) keep their existing routing.
+[routing.real_llm_smoke]
+strategy = "quality"
+preferred = ["user_codex:gpt-5.5"]
