@@ -12,10 +12,17 @@ use crate::build::{self, EmitKind};
 use crate::exit_codes;
 
 /// Run `cobrust test`.
+///
+/// M12 amendment: if a `cobrust.toml` is reachable walking up from cwd,
+/// switch to package mode (use the manifest's `[[test]]` array as the
+/// source of truth). Otherwise fall back to the M11 directory-walk mode.
 pub fn run(quiet: bool) -> u8 {
-    let tests_dir = std::env::current_dir()
-        .map(|c| c.join("tests"))
-        .unwrap_or_else(|_| PathBuf::from("tests"));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if cobrust_pkg::find_manifest(&cwd).is_some() {
+        return crate::pkg_build::run_test(None, false, quiet);
+    }
+
+    let tests_dir = cwd.join("tests");
     if !tests_dir.is_dir() {
         eprintln!("cobrust test: no `tests/` directory in cwd");
         return exit_codes::USER_ERROR;
