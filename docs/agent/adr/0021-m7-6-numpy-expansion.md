@@ -4,7 +4,7 @@ adr_id: 0021
 title: M7.6 numpy expansion — Complex dtype widening, FFT + polynomial bindings, reduction extensions (cumsum/median/percentile/nan*/tuple-axis)
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: 70ac36b88b
 supersedes: []
 superseded_by: []
 ---

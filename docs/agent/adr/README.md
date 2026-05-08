@@ -48,3 +48,4 @@ same atomic commit as the change it justifies.
 | [0017](0017-m7-4-linalg.md) | M7.4 linalg subset — ops surface, backend strategy, error semantics, rtol gate | accepted | 2026-04-30 |
 | [0018](0018-m7-5-random.md) | M7.5 random — Generator type, PCG64 backend, seed semantics, distribution surface, KS-test acceptance gate | accepted | 2026-04-30 |
 | [0019](0019-phase-e-language-runtime-roadmap.md) | Phase E — Language + runtime roadmap (M8..M14) to "usable for most projects" | accepted | 2026-05-08 |
+| [0021](0021-m7-6-numpy-expansion.md) | M7.6 numpy expansion — Complex dtype widening, FFT + polynomial bindings, reduction extensions | accepted | 2026-04-30 |

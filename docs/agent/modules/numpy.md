@@ -4,6 +4,7 @@ module_id: mod:numpy
 crate: cobrust-numpy
 last_verified_commit: e7aff1de92cd5e6251e452721f0b4a83f173d102
 last_verified_commit: f10af13fc92ba7918f47b1f973a9f374d64c1f1b
+last_verified_commit: 70ac36b88b
 dependencies: [mod:translator]
 ---
 
