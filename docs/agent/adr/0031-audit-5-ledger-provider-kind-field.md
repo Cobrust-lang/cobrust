@@ -4,7 +4,7 @@ adr_id: 0031
 title: Audit #5 — bump ledger schema to carry `provider_kind`
 status: accepted
 date: 2026-05-09
-last_verified_commit: TBD
+last_verified_commit: ac5636a
 supersedes: []
 superseded_by: []
 ---
