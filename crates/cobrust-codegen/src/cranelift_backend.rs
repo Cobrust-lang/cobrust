@@ -468,7 +468,7 @@ impl CraneliftCtx {
         //     by name. Unused symbols are stripped at link time.
         let runtime_helpers = runtime_helper_signatures(self.pointer_type, self.call_conv);
         let mut runtime_func_ids: HashMap<&'static str, cranelift_module::FuncId> = HashMap::new();
-        for (name, sig) in runtime_helpers.iter() {
+        for (name, sig) in &runtime_helpers {
             // Skip if already declared via the Constant::Str path above.
             if extern_func_ids.contains_key(*name) {
                 continue;

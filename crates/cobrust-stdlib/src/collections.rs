@@ -652,7 +652,7 @@ pub unsafe extern "C" fn __cobrust_set_contains(set: *mut u8, v: i64) -> i64 {
     }
     // SAFETY: set pointer is owned.
     let s = unsafe { &*layout.set };
-    if s.contains(&v) { 1 } else { 0 }
+    i64::from(s.contains(&v))
 }
 
 /// `set.len()`.
