@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:codegen
 crate: cobrust-codegen
-last_verified_commit: TBD
+last_verified_commit: f758260
 dependencies: [mod:mir, mod:types, adr:0023]
 ---
 
