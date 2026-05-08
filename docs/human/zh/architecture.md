@@ -1537,3 +1537,80 @@ cobrust-version = "0.0.1"
 - `cli_subcommands.rs` —— 7 个测试覆盖 build / check（成功 + 错误） / fmt / new / help / run。
 - `cli_exit_codes.rs` —— 6 个测试钉死封闭退出码方案（0、1、2、5、repl=1、translate=1）。
 - `cli_translate_smoke.rs` —— 2 个测试，通过 `corpus/tomli/` 演练 translate CLI surface。
+
+### M11 — 标准库 + 运行时（按 ADR-0025）
+
+`cobrust-stdlib` crate（M11）落地宪法 §1.1 双重职责的运行时半边——Cobrust 的标准库 + codegen 产出程序链接的运行时 ABI。ADR-0019 §"M11 — Standard library" 钉住了七模块绑定面；ADR-0025 §"Public surface (binding)" 最终化 API + 运行时 ABI：
+
+| 模块 | 表面 |
+|---|---|
+| `std.io` | `print / println / read_line / read_file / write_file / stdin / stdout / stderr` |
+| `std.collections` | `List<T>` / `Dict<K, V>` / `Set<T>`（无隐式真值；`is_empty()` 而非 `if list`）；通过 for 协议迭代 |
+| `std.string` | `len / find / replace / split / strip / lower / upper / format` |
+| `std.math` | `sqrt / pow / sin / cos / abs_f64 / abs_i64 / floor / ceil / round / PI / E` |
+| `std.panic` | `panic(msg)`（以代码 3 终止）；`assert(cond, msg)` |
+| `std.env` | `args() -> Vec<String>`；`var(name) -> Option<String>` |
+| `std.fmt` | `format_int / format_float / format_bool / format_str`（f-string 运行时辅助函数） |
+
+**API 中体现的宪法 §2.2 要求**：无隐式真值——每个集合都有 `is_empty()`；`Result<T, E>` 是默认错误路径（而非异常）；公共表面无 `dyn`；无 async/sync 着色（结构化并发运行时是 M13 才会发布）。
+
+**运行时 ABI（按 ADR-0025 §"Runtime ABI"）**：`cobrust-stdlib` 编译为静态库 `libcobrust_stdlib.a`（Cargo `crate-type = ["rlib", "staticlib"]`），每个 `cobrust build` 可执行文件都链接它。C-ABI 符号是 codegen 发出调用的契约：
+
+| 符号 | 签名 | 用途 |
+|---|---|---|
+| `__cobrust_print` | `extern "C" fn(*const u8, usize)` | `std.io.print` 运行时 |
+| `__cobrust_println` | `extern "C" fn(*const u8, usize)` | `std.io.println` 运行时 |
+| `__cobrust_panic` | `extern "C" fn(*const u8, usize) -> !` | 以代码 3（`INTERNAL_PANIC`）退出 |
+| `__cobrust_assert` | `extern "C" fn(bool, *const u8, usize)` | 条件 panic |
+| `__cobrust_capture_argv` | `extern "C" fn(i32, *const *const u8)` | 为 `std.env.args` 捕获 argv |
+| `_cobrust_drop_str` | `extern "C" fn(*mut u8)` | str 析构器（M11 时 .rodata 字符串无操作） |
+
+**堆分配器**：`mimalloc` 是默认（Cargo 特性 `mimalloc-alloc`，默认开启）；`system-alloc` 切回 libc。`mimalloc::MiMalloc` 在 `cobrust-stdlib::runtime` 中作为 `#[global_allocator]` 接入。
+
+**入口点 shim**：codegen 将用户的 `fn main` 导出为 `_cobrust_user_main`。C 运行时 shim（`crates/cobrust-cli/runtime/cobrust_main.c`）提供平台 `int main(int, char**)`，通过 `__cobrust_capture_argv` 捕获 argv，然后分派到 `_cobrust_user_main`。用户的 `i64` 返回值流转到进程退出码。
+
+**Codegen 修订（按 ADR-0025 §"Codegen amendments"）**：M11 通过 `.rodata` 内联实现了 M9 的 `Constant::Str` 占位。当 `Terminator::Call` 有 `func: Constant::Str(name)` 和 `args[0]: Constant::Str(payload)` 时：
+
+1. Cranelift 后端声明一个 `Linkage::Local` 数据符号，载荷作为数据（`ObjectModule::declare_data` + `define_data`）。
+2. 在调用点，`declare_data_in_func` + `symbol_value(pointer_type, gv)` 实例化数据指针；`iconst.i64` 字节数实例化长度。
+3. 运行时符号 `name` 以 `Linkage::Import` 和 `(*const u8, usize)` 签名声明。
+4. 真正的 Cranelift `call` 以 `(ptr, len)` 参数发出。
+
+M9 的 158 测试基线保持绿色——M11 修订对 ADR-0023 §"Per-MIR-form lowering rules" 是**累加性**的。
+
+**Print 内建提升（按 ADR-0025 §"Print-intrinsic lift"）**：ADR-0024 §"Hello-world contract" 将 M10 print 重写收窄到字面量 `"hello, world"`。M11 提升了那个收窄——`cobrust-cli/src/build/intrinsics.rs::rewrite_print` 现在接受任何字符串字面量参数并重写到运行时符号 `__cobrust_println`。`IntrinsicError::M10ScopeNarrowed` 诊断被移除；`__cobrust_println_static` 符号被移除；`m10_runtime.c` 被移除并被 `cobrust_main.c` + `libcobrust_stdlib.a` 取代。
+
+**示例（按 ADR-0025 §"Examples (binding)"）**：M11 在 M10 hello-world 回归之外发布了 10 个有代表性的示例程序。每个都构建 + 运行 + 匹配预期 stdout + 退出 0：
+
+| 示例 | 表面 | M11 闸门 |
+|---|---|---|
+| `examples/hello.cb` | print(字面量) | 完全端到端（M10 回归） |
+| `examples/fizzbuzz.cb` | print(字面量) 循环 | 完全端到端 |
+| `examples/fib.cb` | print(字面量) | 完全端到端（递归是 M11.x） |
+| `examples/wc.cb` | 运行时 ABI（read_file + split） | 占位 + 集成测试 |
+| `examples/cat.cb` | 运行时 ABI（read_file + print） | 占位 + 集成测试 |
+| `examples/echo.cb` | 运行时 ABI（env.args + print） | 占位 + 集成测试 |
+| `examples/sort.cb` | 运行时 ABI（List + sort） | 占位 + 集成测试 |
+| `examples/unique_lines.cb` | 运行时 ABI（Set + insert） | 占位 + 集成测试 |
+| `examples/regex_grep.cb` | 运行时 ABI（string.find） | 占位 + 集成测试 |
+| `examples/csv_sum.cb` | 运行时 ABI（split + sum） | 占位 + 集成测试 |
+| `examples/json_pretty.cb` | 运行时 ABI（read_file + 解析） | 占位 + 集成测试 |
+
+"占位 + 集成测试" 模式：`.cb` 文件诚实标注了 M11 codegen 端到端支持的形式（仅 M11 的 `print(字面量)`；完整的 `for x in list:` 迭代是 M12 范畴）以及哪些回退到运行时 ABI——通过 `tests/stdlib_examples.rs::runtime_*_intent` 用例验证，它们演练每个占位背后的 API。同一文件中的 11 个 `#[ignore]` 闸控测试在每个示例上驱动 `cobrust build && run`，断言头部验收门槛。
+
+**Drop 调度修复**：ADR-0024 §"Consequences" 标记了 M10 后续 #2——通过移除 `print` 占位 Body 在 M10 时旁路的 `s: str` 参数 drop 调度边界情况。ADR-0025 §"Drop-schedule fix" 钉住了设计和实现：`cobrust-mir/src/drop.rs::compute_drop_schedule` 已经在第 45 行排除参数（`!body.is_param(ld.id)`）；M11 print 内建提升通过 M11 运行时 ABI 作为新目标重用了前导移除旁路——更干净，因为前导 `print` body 现在无任何用处（运行时通过 C ABI 发出字节）。
+
+**M11 测试数量**：cobrust-stdlib 发布 **262 个测试**（133 单元 + 11 个 `--ignored` 后的集成测试闸门 + 118 个跨模块集成测试）。工作空间范围 M11 总数：M10 cli_smoke + cli_subcommands + cli_translate + cli_exit_codes（17 测试）全绿；M9 codegen 158 测试全绿；M8 mir 157 测试全绿；M11 stdlib 完全是累加性的。
+
+### M11 — "对大多数项目可用" 的定义（ADR-0019 §"Definition"）
+
+ADR-0019 §"Definition of usable for most projects" 钉住了三行验收线：
+
+1. **M11 done means 满足**（本里程碑）：`hello.cb` + 10 个示例编译 + 运行。**通过。**
+2. M12 done means 满足（带非平凡依赖的用户 crate 解析 + 构建 + 测试通过）。M12 范畴。
+3. 至少一个中等规模程序（≥ 1000 LOC，≥ 3 个模块，使用 stdlib + 至少一个被翻译的库）端到端构建 + 运行。M11/M12 边界；作为 `examples/notebook/` 跟踪到 M11 后冲刺。
+
+第一行随 M11 发布。第 2 + 3 行在 M12 + M12 后续落地。
+
+
+**M11 源级路径（M12+ 用户撰写的表面）**：`std.io.println`、`std.io.print`、`std.io.read_line`、`std.io.read_file`、`std.io.write_file`、`std.collections.List`、`std.collections.Dict`、`std.collections.Set`、`std.string.format`、`std.string.split`、`std.string.find`、`std.string.replace`、`std.string.lower`、`std.string.upper`、`std.math.sqrt`、`std.math.pow`、`std.math.PI`、`std.math.E`、`std.panic.panic`、`std.panic.assert`、`std.env.args`、`std.env.var`、`std.fmt.format_int`、`std.fmt.format_float`、`std.fmt.format_bool`、`std.fmt.format_str`。
