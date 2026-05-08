@@ -698,6 +698,18 @@ fn cast_to(arr: &Array, target: Dtype) -> Array {
             Array::Float64(a) => a.mapv(|v| v != 0.0),
             Array::Bool(a) => a.clone(),
         }),
+        Dtype::Complex64 | Dtype::Complex128 => {
+            // Per ADR-0021 §3 the M7.6 sub-milestone widens `Dtype` to seven
+            // variants but defers the `Array` tagged-union widening (and
+            // therefore complex-cast routing) to a follow-up sprint.
+            // Reaching this arm at M7.6 means a caller passed a complex
+            // target_dtype to a code path that did not pre-validate it;
+            // every consumer in the M7.6 surface filters complex via
+            // `Dtype::is_complex` before calling `cast_to`.
+            unreachable!(
+                "index::cast_to: target Complex dtype routed through real-only path;                  callers must filter via Dtype::is_complex before reaching here                  (M7.6 ADR-0021 §3)"
+            );
+        }
     }
 }
 

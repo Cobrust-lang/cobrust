@@ -431,7 +431,9 @@ fn t54_arange_count_helper() {
 
 #[test]
 fn t55_no_panic_on_default_dtype_lookup() {
-    // Ensures NumpyError carries a non-empty message.
-    let err: NumpyError = Dtype::from_python_string("complex128").unwrap_err();
+    // Ensures NumpyError carries a non-empty message. M7.6 (ADR-0021)
+    // widened the dtype enum to include `Complex128`; pick an
+    // unsupported sentinel string to keep this regression test live.
+    let err: NumpyError = Dtype::from_python_string("complex32").unwrap_err();
     assert!(!err.message.is_empty());
 }

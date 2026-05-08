@@ -216,6 +216,15 @@ fn run_and_compare(python: &str, op: &str, request: serde_json::Value, dtype: Dt
         Dtype::Float32 | Dtype::Float64 => {
             assert_match_float(&cobrust_payload, &oracle, 1e-12);
         }
+        Dtype::Complex64 | Dtype::Complex128 => {
+            // Per ADR-0021 §3 the M7.6 sub-milestone widens `Dtype` to
+            // seven variants but defers the `Array` tagged-union
+            // widening (and complex differential gates) to a follow-up
+            // sprint. The M7.0 numpy_differential.rs harness only feeds
+            // the M7.0 dtype tier; complex inputs would never reach
+            // this dispatch.
+            unreachable!("M7.0 differential gate filters complex dtypes upstream");
+        }
     }
 }
 
@@ -468,6 +477,11 @@ fn diff_fuzz_1024_plus() {
             }
             Dtype::Float32 | Dtype::Float64 => {
                 assert_match_float(&cobrust_payload, &oracle, 1e-12);
+            }
+            Dtype::Complex64 | Dtype::Complex128 => {
+                // Per ADR-0021 §3 — the M7.0 fuzz pool only enumerates
+                // M7.0 dtypes; complex variants would never reach here.
+                unreachable!("M7.0 fuzz dtype pool excludes complex");
             }
         }
     }

@@ -2,19 +2,29 @@
 // Translated by cobrust-translator (synthetic-LLM mode).
 // source-library: numpy 2.0.2
 // oracle: cpython 3.11 (module: numpy)
-// scope: M7.1 ufuncs per ADR-0014 §3.
-// see PROVENANCE.toml for the full manifest.
+// scope: M7.1 ufuncs per ADR-0014 §3 + M7.6 complex extension per ADR-0021 §4.
 
-//! Type-promotion table for cobrust-numpy ufuncs (per ADR-0014 §3).
+//! Type-promotion table for cobrust-numpy ufuncs (per ADR-0014 §3 +
+//! ADR-0021 §4).
 //!
-//! Implements `result_type(a, b)` for the M7.0 5-dtype tier per
-//! NumPy 2.x NEP 50 (https://numpy.org/neps/nep-0050-scalar-promotion.html).
-//! Hand-coded 25-entry table — explicit, auditable, fast.
+//! Implements `result_type(a, b)` for the seven-dtype tier
+//! (M7.0 5 dtypes + M7.6 Complex64/Complex128) per NumPy 2.x NEP 50
+//! (https://numpy.org/neps/nep-0050-scalar-promotion.html).
+//! Hand-coded match table — explicit, auditable, fast.
 //!
-//! Comparison ops always return `Dtype::Bool`; that is **not** done
-//! through `result_type` — callers in `ufunc.rs` route comparisons
-//! to a separate path. `result_type` reflects arithmetic-op
-//! promotion only.
+//! Per ADR-0021 §4: complex is the "top of the lattice". Notable
+//! NEP 50 corners:
+//!   - `Complex128 + anything` → `Complex128`.
+//!   - `Complex64 + Float64 / Int64 / Int32` → `Complex128` (mantissa
+//!     wider than `f32`).
+//!   - `Complex64 + Float32 / Bool` → `Complex64`.
+//!   - `Complex64 + Complex64` → `Complex64`.
+//!
+//! Comparison ops always return `Dtype::Bool` for non-complex; for
+//! complex `lt/le/gt/ge` raise `ComplexNotOrderable`. That is **not**
+//! done through `result_type` — callers in `ufunc.rs` route
+//! comparisons to a separate path. `result_type` reflects
+//! arithmetic-op promotion only.
 
 #![allow(clippy::match_same_arms)]
 #![allow(clippy::missing_panics_doc)]
@@ -25,7 +35,10 @@ use crate::dtype::Dtype;
 /// Compute the promoted dtype for an arithmetic ufunc on operands of
 /// dtypes `a` and `b`.
 ///
-/// Per ADR-0014 §3:
+/// Per ADR-0014 §3 + ADR-0021 §4. The decision tree:
+/// - Both complex → wider precision wins.
+/// - One complex, other real → upgrade to complex of width sufficient
+///   for the real mantissa (`Complex64 + i64` → `Complex128`).
 /// - Same dtype on both sides → preserve.
 /// - `Bool` is "smaller" than every numeric dtype.
 /// - `Int32 + Float32 → Float64` (NEP 50: i32 mantissa doesn't fit in f32).
@@ -33,15 +46,29 @@ use crate::dtype::Dtype;
 /// - `Float32 + Float64 → Float64` (standard width-up).
 #[must_use]
 pub fn result_type(a: Dtype, b: Dtype) -> Dtype {
-    use Dtype::{Bool, Float32, Float64, Int32, Int64};
+    use Dtype::{Bool, Complex64, Complex128, Float32, Float64, Int32, Int64};
     match (a, b) {
-        // Bool row
+        // ---- Complex128 row (always Complex128) ----
+        (Complex128, _) | (_, Complex128) => Complex128,
+
+        // ---- Complex64 row ----
+        (Complex64, Complex64) => Complex64,
+        // f32/bool stays in single precision complex.
+        (Complex64, Float32) | (Float32, Complex64) => Complex64,
+        (Complex64, Bool) | (Bool, Complex64) => Complex64,
+        // f64/i32/i64 widens to double precision complex.
+        (Complex64, Float64) | (Float64, Complex64) => Complex128,
+        (Complex64, Int32) | (Int32, Complex64) => Complex128,
+        (Complex64, Int64) | (Int64, Complex64) => Complex128,
+
+        // ---- Bool row (M7.1 inherited) ----
         (Bool, Bool) => Bool,
         (Bool, Int32) | (Int32, Bool) => Int32,
         (Bool, Int64) | (Int64, Bool) => Int64,
         (Bool, Float32) | (Float32, Bool) => Float32,
         (Bool, Float64) | (Float64, Bool) => Float64,
-        // Int rows
+
+        // ---- Int rows (M7.1 inherited) ----
         (Int32, Int32) => Int32,
         (Int32, Int64) | (Int64, Int32) => Int64,
         (Int32, Float32) | (Float32, Int32) => Float64,
@@ -49,7 +76,8 @@ pub fn result_type(a: Dtype, b: Dtype) -> Dtype {
         (Int64, Int64) => Int64,
         (Int64, Float32) | (Float32, Int64) => Float64,
         (Int64, Float64) | (Float64, Int64) => Float64,
-        // Float rows
+
+        // ---- Float rows (M7.1 inherited) ----
         (Float32, Float32) => Float32,
         (Float32, Float64) | (Float64, Float32) => Float64,
         (Float64, Float64) => Float64,
@@ -58,13 +86,16 @@ pub fn result_type(a: Dtype, b: Dtype) -> Dtype {
 
 /// Promote integer dtypes to `Float64` for unary math ops
 /// (`sin / cos / exp / log / sqrt`). Float dtypes are preserved
-/// (sin on f32 stays f32 to match numpy).
+/// (sin on f32 stays f32 to match numpy). Complex dtypes are
+/// preserved at their precision tier.
 #[must_use]
 pub fn unary_math_dtype(input: Dtype) -> Dtype {
     match input {
         Dtype::Bool | Dtype::Int32 | Dtype::Int64 => Dtype::Float64,
         Dtype::Float32 => Dtype::Float32,
         Dtype::Float64 => Dtype::Float64,
+        Dtype::Complex64 => Dtype::Complex64,
+        Dtype::Complex128 => Dtype::Complex128,
     }
 }
 
@@ -86,11 +117,11 @@ mod tests {
     #![allow(clippy::approx_constant)]
     #![allow(clippy::uninlined_format_args)]
     use super::*;
-    use Dtype::{Bool, Float32, Float64, Int32, Int64};
+    use Dtype::{Bool, Complex64, Complex128, Float32, Float64, Int32, Int64};
 
     #[test]
     fn same_dtype_preserved() {
-        for d in [Bool, Int32, Int64, Float32, Float64] {
+        for d in [Bool, Int32, Int64, Float32, Float64, Complex64, Complex128] {
             assert_eq!(result_type(d, d), d);
         }
     }
@@ -130,5 +161,70 @@ mod tests {
     fn unary_float_preserves() {
         assert_eq!(unary_math_dtype(Float32), Float32);
         assert_eq!(unary_math_dtype(Float64), Float64);
+    }
+
+    // ---- M7.6 complex tests (per ADR-0021 §4) -------------------------------
+
+    #[test]
+    fn complex128_dominates_anything() {
+        for d in [Bool, Int32, Int64, Float32, Float64, Complex64] {
+            assert_eq!(result_type(Complex128, d), Complex128);
+            assert_eq!(result_type(d, Complex128), Complex128);
+        }
+        assert_eq!(result_type(Complex128, Complex128), Complex128);
+    }
+
+    #[test]
+    fn complex64_with_low_precision_real_stays_c64() {
+        assert_eq!(result_type(Complex64, Float32), Complex64);
+        assert_eq!(result_type(Complex64, Bool), Complex64);
+        assert_eq!(result_type(Complex64, Complex64), Complex64);
+    }
+
+    #[test]
+    fn complex64_with_high_precision_real_widens_to_c128() {
+        assert_eq!(result_type(Complex64, Float64), Complex128);
+        assert_eq!(result_type(Complex64, Int32), Complex128);
+        assert_eq!(result_type(Complex64, Int64), Complex128);
+    }
+
+    #[test]
+    fn complex_promotion_is_symmetric() {
+        for a in [Bool, Int32, Int64, Float32, Float64, Complex64, Complex128] {
+            for b in [Bool, Int32, Int64, Float32, Float64, Complex64, Complex128] {
+                assert_eq!(
+                    result_type(a, b),
+                    result_type(b, a),
+                    "promotion must be symmetric: {:?} + {:?}",
+                    a,
+                    b
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unary_complex_preserves_precision() {
+        assert_eq!(unary_math_dtype(Complex64), Complex64);
+        assert_eq!(unary_math_dtype(Complex128), Complex128);
+    }
+
+    #[test]
+    fn dtype_is_complex_helper() {
+        assert!(Complex64.is_complex());
+        assert!(Complex128.is_complex());
+        for d in [Bool, Int32, Int64, Float32, Float64] {
+            assert!(!d.is_complex());
+        }
+    }
+
+    #[test]
+    fn dtype_is_floating_helper() {
+        for d in [Float32, Float64, Complex64, Complex128] {
+            assert!(d.is_floating());
+        }
+        for d in [Bool, Int32, Int64] {
+            assert!(!d.is_floating());
+        }
     }
 }

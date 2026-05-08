@@ -2,7 +2,7 @@
 // Translated by cobrust-translator (synthetic-LLM mode).
 // source-library: numpy 2.0.2
 // oracle: cpython 3.11 (module: numpy)
-// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016 + M7.4 linalg per ADR-0017 + M7.5 random per ADR-0018.
+// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016 + M7.4 linalg per ADR-0017 + M7.5 random per ADR-0018 + M7.6 expansion per ADR-0021.
 // see PROVENANCE.toml for the full manifest.
 
 //! Single error type for cobrust-numpy.
@@ -17,7 +17,8 @@
 //! indexing surface. M7.3 (per ADR-0016 §5) added one more for the
 //! reduction surface. M7.4 (per ADR-0017 §4) adds four more for the
 //! linalg surface. M7.5 (per ADR-0018) adds four more for the
-//! random surface. Merge order: M7.3 → M7.4 → M7.5.
+//! random surface. M7.6 (per ADR-0021 §11) adds three more for the
+//! expansion surface. Merge order: M7.3 → M7.4 → M7.5 → M7.6.
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -34,7 +35,8 @@ pub struct NumpyError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NumpyErrorKind {
     // ---- M7.0 (per ADR-0013) ----
-    /// Python dtype string not in the M7.0 closed set per ADR-0013 §3.
+    /// Python dtype string not in the closed set per ADR-0013 §3 +
+    /// ADR-0021 §3 (which widened the set to seven dtypes).
     UnsupportedDtype,
     /// `array(values, shape, dtype)`: `values.len()` does not match
     /// `shape_size(shape)`.
@@ -64,9 +66,7 @@ pub enum NumpyErrorKind {
     /// ADR-0014 §2 + https://numpy.org/doc/stable/user/basics.broadcasting.html.
     BroadcastShapeMismatch,
     /// `result_type(a, b)` could not produce a valid promoted dtype.
-    /// Reserved for future widening; the current 5-dtype tier table
-    /// is total, so this is not raised by the M7.1 closed set — kept
-    /// to keep the surface stable across M7.x.
+    /// Reserved for future widening; the current closed set is total.
     TypePromotionFailure,
 
     // ---- M7.2 (per ADR-0015 §4) ----
@@ -106,7 +106,10 @@ pub enum NumpyErrorKind {
     /// messages.
     LinalgShapeError,
     /// Linalg op invoked with non-float dtype (`Int32 / Int64 /
-    /// Bool`). Per ADR-0017 §3 — strict M7.4 contract.
+    /// Bool`). Per ADR-0017 §3 — strict M7.4 contract. M7.6 lifts
+    /// this only for `eigh` (Hermitian path); `matmul / dot / det
+    /// / solve / inv / svd / cholesky` still raise this for complex
+    /// inputs at M7.6.
     LinalgDtypeUnsupported,
 
     // ---- M7.5 (per ADR-0018 §"Error variants") ----
@@ -125,6 +128,22 @@ pub enum NumpyErrorKind {
     /// `choice(values, ...)` with `values.size() == 0`. Matches
     /// numpy's `ValueError: a must be non-empty`.
     EmptyChoicePopulation,
+
+    // ---- M7.6 (per ADR-0021 §11) ----
+    /// `lt / le / gt / ge` invoked on a complex-dtype array. Per
+    /// ADR-0021 §5 — matches numpy's `TypeError: '<' not supported
+    /// between instances of 'complex' and 'complex'`. Cobrust shape:
+    /// `Result::Err` per constitution §2.2.
+    ComplexNotOrderable,
+    /// `percentile(q, ...)` invoked with `q < 0` or `q > 100`.
+    /// Matches numpy's `ValueError: Percentiles must be in the range
+    /// [0, 100]`.
+    PercentileOutOfRange,
+    /// Tuple-axis reduction (`sum_axes / prod_axes / mean_axes /
+    /// min_axes / max_axes`) invoked with an empty axis tuple or a
+    /// tuple containing duplicate axes. Matches numpy's
+    /// `numpy.AxisError`.
+    EmptyAxisTuple,
 }
 
 impl fmt::Display for NumpyError {
@@ -152,6 +171,9 @@ impl fmt::Display for NumpyError {
             NumpyErrorKind::InvalidDistributionParams => "invalid_distribution_params",
             NumpyErrorKind::InvalidProbabilities => "invalid_probabilities",
             NumpyErrorKind::EmptyChoicePopulation => "empty_choice_population",
+            NumpyErrorKind::ComplexNotOrderable => "complex_not_orderable",
+            NumpyErrorKind::PercentileOutOfRange => "percentile_out_of_range",
+            NumpyErrorKind::EmptyAxisTuple => "empty_axis_tuple",
         };
         write!(f, "NumpyError({kind_name}): {}", self.message)
     }

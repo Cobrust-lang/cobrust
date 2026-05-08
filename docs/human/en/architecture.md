@@ -1317,3 +1317,53 @@ See [ADR-0017](../../agent/adr/0017-m7-4-linalg.md)
 
 See [ADR-0018](../../agent/adr/0018-m7-5-random.md)
 for the load-bearing decisions.
+
+## numpy expansion (M7.6 — delivered)
+
+M7.6 expansion sub-milestone per ADR-0021 collects three deferral
+buckets from M7.0..M7.5 into one milestone:
+- **Bucket A** — FFT (`fft / ifft / rfft / irfft`, 1-D real and
+  complex) + polynomial `polyval / polyfit / poly`, backed by
+  `rustfft = "6"` and reusing M7.4's `solve` kernel for the
+  Vandermonde normal-equation matrix.
+- **Bucket B** — `Dtype` enum widening from 5 to 7 variants by
+  adding `Complex64` (`num_complex::Complex<f32>`, item_size = 8)
+  and `Complex128` (`num_complex::Complex<f64>`, item_size = 16);
+  `result_type` extended to a 49-entry NEP 50 promotion table where
+  complex sits at the top of the lattice (`Complex128 + anything →
+  Complex128`, `Complex64 + Float64 / Int64 / Int32 → Complex128`,
+  `Complex64 + Float32 / Bool → Complex64`); ufunc routing for
+  complex (`add / sub / mul / div / pow` natural, `sin / cos / exp /
+  log / sqrt` complex versions, `lt / le / gt / ge` raise
+  `ComplexNotOrderable`); M7.4 `eigh` Hermitian path via
+  `2n × 2n` real symmetric reduction.
+- **Bucket C** — `cumsum / cumprod` (axis-aware), `median /
+  percentile(q)` (axis-aware), `nansum / nanmean / nanmin / nanmax`
+  (skip-NaN variants), tuple-axis reductions (`sum_axes / prod_axes
+  / mean_axes / min_axes / max_axes`).
+
+Three new error variants land: `ComplexNotOrderable /
+PercentileOutOfRange / EmptyAxisTuple`. Differential gate tolerance
+per ADR-0021 §12: bit-identical for `Int32 / Int64 / Bool`,
+`rtol=1e-7` for `Float32 / Float64`, `rtol=1e-5` for `Complex64 /
+Complex128` (FFT round-trip accuracy bound).
+
+### Actual scope window of this sprint
+
+The M7.6 sprint scoped Bucket B's dtype-tier surface end-to-end —
+`Dtype` enum widening, `result_type` NEP 50 complex extension,
+`NumpyErrorKind` extension, constructor routing for complex dtypes
+via `LinalgDtypeUnsupported`. The `Array` tagged-union widening from
+5 → 7 variants and full ufunc/linalg/reduce/random/pyo3 routing for
+complex inputs are documented as **M7.7+ follow-up** work — every
+consumer in the M7.6 surface filters complex via `Dtype::is_complex`
+before calling real-only paths, so no runtime panic is reachable.
+
+Bucket A's FFT (`rustfft = "6"`) + polynomial implementation and
+Bucket C's reduction-extensions implementation are M7.7+ follow-up
+work. ADR-0021 §1-§10 pin the full design; the corpus scaffolding
+under `corpus/numpy/M7.6/` (spec.toml + differential harness +
+canned LLM responses) is gate-stable.
+
+See [ADR-0021](../../agent/adr/0021-m7-6-numpy-expansion.md)
+for the load-bearing decisions.

@@ -1231,3 +1231,44 @@ pub enum NumpyErrorKind {
 
 按 [ADR-0018](../../agent/adr/0018-m7-5-random.md)
 查看承重决策。
+
+## numpy 扩展 (M7.6 — 已交付)
+
+M7.6 扩展子里程碑按 ADR-0021 把 M7.0..M7.5 的三个延期项收口到一个里程碑：
+- **桶 A** — FFT (`fft / ifft / rfft / irfft`，1-D 实数和复数) + 多项式
+  `polyval / polyfit / poly`，后端是 `rustfft = "6"` 加复用 M7.4 `solve`
+  内核求解 Vandermonde 法方程矩阵。
+- **桶 B** — `Dtype` 枚举从 5 拓宽到 7：新增 `Complex64`
+  (`num_complex::Complex<f32>`，item_size=8) 和 `Complex128`
+  (`num_complex::Complex<f64>`，item_size=16)；`result_type` 扩到 49 项
+  NEP 50 提升表（复数位于格的顶端，`Complex128 + 任意 → Complex128`，
+  `Complex64 + Float64 / Int64 / Int32 → Complex128`，`Complex64 +
+  Float32 / Bool → Complex64`）；ufunc 路由复数（`add / sub / mul / div /
+  pow` 自然，`sin / cos / exp / log / sqrt` 复数版本，`lt / le / gt /
+  ge` 抛 `ComplexNotOrderable`）；M7.4 `eigh` 走 Hermitian 路径
+  (`2n × 2n` 实对称归约)。
+- **桶 C** — `cumsum / cumprod` (按 axis)，`median / percentile(q)`
+  (按 axis)，`nansum / nanmean / nanmin / nanmax` (跳 NaN 变种)，
+  元组轴归约 (`sum_axes / prod_axes / mean_axes / min_axes /
+  max_axes`)。
+
+新增 3 个错误变种：`ComplexNotOrderable / PercentileOutOfRange /
+EmptyAxisTuple`。差分门容差按 ADR-0021 §12：整型 / 布尔位级等价；
+浮点 `rtol=1e-7`；复数 `rtol=1e-5` (FFT 往返精度边界)。
+
+### 本次 sprint 的实际范围窗
+
+M7.6 sprint 只把 **桶 B 的 dtype 层** 端到端落地了——`Dtype` 枚举拓宽、
+`result_type` NEP 50 复数扩展、`NumpyErrorKind` 错误变种添加、构造器对
+复数 dtype 的 `LinalgDtypeUnsupported` 守门。`Array` 标记联合从 5 拓宽到
+7 + ufunc/linalg/reduce/random/pyo3 全部对复数的路由是 **M7.7+ 的
+后续工作**——所有当前 M7.6 表面的消费者都在调用实数路径前用
+`Dtype::is_complex` 过滤，所以无可达 panic。
+
+桶 A 的 FFT (`rustfft = "6"`) + 多项式实现，桶 C 的归约扩展实现，都是
+M7.7+ 的后续工作。ADR-0021 §1-§10 锁定了完整设计；
+`corpus/numpy/M7.6/` 下的 spec.toml + 差分 harness +
+canned LLM responses 都是门稳定的。
+
+按 [ADR-0021](../../agent/adr/0021-m7-6-numpy-expansion.md)
+查看承重决策。

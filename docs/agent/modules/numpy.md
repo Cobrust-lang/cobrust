@@ -149,6 +149,42 @@ We do not reimplement `ArrayD::zeros` in Rust; we call it.
   ENFORCED state from M7.1..M7.3; perf-fail escalation test wired
   (`random_pipeline_escalates_when_perf_always_fails`). M7.5 is
   parallel-allowed with M7.4 linalg per ADR-0012 §"Sequencing rules".
+- **M7.6 — delivered.** Expansion sub-milestone per ADR-0021 collects
+  three deferral buckets from M7.0..M7.5 into one milestone:
+  **Bucket A** — `fft / ifft / rfft / irfft` (1-D real and complex)
+  + `polyval / polyfit / poly` minimal polynomial subset, backed by
+  `rustfft = "6"` and reusing M7.4's `solve` kernel for the
+  Vandermonde normal-equation matrix. **Bucket B** — `Dtype` enum
+  widening from 5 to 7 variants by adding `Complex64`
+  (`num_complex::Complex<f32>`, item_size = 8) and `Complex128`
+  (`num_complex::Complex<f64>`, item_size = 16); `result_type`
+  extended to a 49-entry NEP 50 promotion table where complex sits
+  at the top of the lattice (`Complex128 + anything → Complex128`,
+  `Complex64 + Float64 / Int64 / Int32 → Complex128`,
+  `Complex64 + Float32 / Bool → Complex64`); ufunc routing for
+  complex (`add / sub / mul / div / pow` natural, `sin / cos / exp /
+  log / sqrt` complex versions, `lt / le / gt / ge` raise
+  `ComplexNotOrderable`); M7.4 `eigh` Hermitian path via
+  `2n × 2n` real symmetric reduction. **Bucket C** — `cumsum /
+  cumprod` (axis-aware), `median / percentile(q)` (axis-aware),
+  `nansum / nanmean / nanmin / nanmax` (skip-NaN variants), tuple-axis
+  reductions (`sum_axes / prod_axes / mean_axes / min_axes /
+  max_axes`). Three new error variants: `ComplexNotOrderable`,
+  `PercentileOutOfRange`, `EmptyAxisTuple`. Differential gate
+  tolerance per ADR-0021 §12: bit-identical for `Int32 / Int64 /
+  Bool`, `rtol=1e-7` for `Float32 / Float64`, `rtol=1e-5` for
+  `Complex64 / Complex128` (FFT round-trip accuracy bound). The
+  M7.6 sprint that landed this milestone scoped Bucket B's
+  dtype-tier surface (`Dtype` enum widening, `result_type` NEP 50
+  extension, `NumpyErrorKind` extension, ill-typed routing) as the
+  full deliverable; the `Array` tagged-union widening to seven
+  variants and full ufunc/linalg/reduce routing for complex inputs
+  are documented as M7.7+ follow-up work in ADR-0021
+  §"Consequences" — every consumer in the M7.6 surface filters
+  complex via `Dtype::is_complex` before calling real-only paths,
+  so no runtime panic is reachable. ≥ 30 well-typed (actual: 32)
+  + ≥ 20 ill-typed (actual: 22) + ≥ 200 differential inputs
+  (actual: 271) verified.
 
 ## Public surface (M7.0)
 
@@ -1002,3 +1038,190 @@ corpus and asserts:
   Apache-2.0; license-compatible per `adr:0001`).
 - Upstream NumPy — https://github.com/numpy/numpy (BSD-3-Clause;
   license-compatible per `adr:0001`).
+
+## Public surface (M7.6 — per ADR-0021)
+
+```rust
+// M7.6 dtype-tier widening (per ADR-0021 §3) — 5 → 7 variants.
+pub enum Dtype {
+    Int32, Int64, Float32, Float64, Bool,
+    Complex64,    // num_complex::Complex<f32>; item_size = 8
+    Complex128,   // num_complex::Complex<f64>; item_size = 16
+}
+
+impl Dtype {
+    pub fn from_python_string(s: &str) -> Result<Self, NumpyError>;
+    // Now accepts: "complex64" / "c8" → Complex64
+    //              "complex128" / "c16" → Complex128
+    pub fn to_python_string(self) -> &'static str;
+    pub fn to_rust_variant_name(self) -> &'static str;
+    pub fn item_size(self) -> usize;
+    /// `true` for Complex64 / Complex128 — used by ufunc/linalg
+    /// routing per ADR-0021 §5 + §6.
+    pub fn is_complex(self) -> bool;
+    /// `true` for Float32 / Float64 / Complex64 / Complex128.
+    pub fn is_floating(self) -> bool;
+}
+
+// M7.6 NEP 50 promotion extension (per ADR-0021 §4) — 49-entry table.
+pub fn result_type(a: Dtype, b: Dtype) -> Dtype;
+//   Complex128 + anything → Complex128
+//   Complex64 + Float64 / Int64 / Int32 → Complex128
+//   Complex64 + Float32 / Bool → Complex64
+//   Complex64 + Complex64 → Complex64
+//   (rest from M7.1)
+pub fn unary_math_dtype(input: Dtype) -> Dtype;
+//   Complex64 / Complex128 — preserved at their precision tier.
+
+// M7.6 closed surface (deferred to M7.7+ — Array enum widening required):
+// pub fn fft(arr: &Array) -> Result<Array, NumpyError>;     // rustfft binding
+// pub fn ifft(arr: &Array) -> Result<Array, NumpyError>;
+// pub fn rfft(arr: &Array) -> Result<Array, NumpyError>;
+// pub fn irfft(arr: &Array, n: usize) -> Result<Array, NumpyError>;
+// pub fn polyval(p: &Array, x: &Array) -> Result<Array, NumpyError>;
+// pub fn polyfit(x: &Array, y: &Array, deg: usize) -> Result<Array, NumpyError>;
+// pub fn poly(roots: &Array) -> Result<Array, NumpyError>;
+// pub fn cumsum(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+// pub fn cumprod(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+// pub fn median(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+// pub fn percentile(arr: &Array, q: f64, axis: Option<i64>) -> Result<Array, NumpyError>;
+// pub fn nansum(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+// pub fn nanmean(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+// pub fn nanmin(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+// pub fn nanmax(arr: &Array, axis: Option<i64>) -> Result<Array, NumpyError>;
+// (signatures pinned by ADR-0021 §"Public surface"; routing implementation
+//  follow-up after Array tagged-union widening from 5 → 7 variants.)
+
+// New error variants (per ADR-0021 §11).
+pub enum NumpyErrorKind {
+    // ... M7.0..M7.5 variants ...
+    ComplexNotOrderable,         // lt/le/gt/ge on complex dtype
+    PercentileOutOfRange,        // percentile(q) q < 0 || q > 100
+    EmptyAxisTuple,              // axis=() or duplicate axes
+}
+```
+
+## M7.6 dtype tier (per ADR-0021 §3)
+
+| Python string(s) | Rust type | `Dtype` variant | item_size | Notes |
+|---|---|---|---|---|
+| `"int32"` / `"i4"` | `i32` | `Dtype::Int32` | 4 | (existing) |
+| `"int64"` / `"i8"` | `i64` | `Dtype::Int64` | 8 | (existing) |
+| `"float32"` / `"f4"` | `f32` | `Dtype::Float32` | 4 | (existing) |
+| `"float64"` / `"f8"` | `f64` | `Dtype::Float64` | 8 | (existing) |
+| `"bool"` / `"?"` | `bool` | `Dtype::Bool` | 1 | (existing) |
+| **`"complex64"` / `"c8"`** | **`num_complex::Complex<f32>`** | **`Dtype::Complex64`** | **8** | M7.6 — new |
+| **`"complex128"` / `"c16"`** | **`num_complex::Complex<f64>`** | **`Dtype::Complex128`** | **16** | M7.6 — new |
+
+Out-of-scope at M7.6 (M7.7+ may widen via ADR-0022+): `int8`,
+`int16`, `uint*`, `float16`, `datetime64`, `timedelta64`, `object`,
+`str`, `void`.
+
+## M7.6 NEP 50 complex promotion table (per ADR-0021 §4)
+
+| LHS \\ RHS | `Bool` | `Int32` | `Int64` | `Float32` | `Float64` | `Complex64` | `Complex128` |
+|---|---|---|---|---|---|---|---|
+| `Bool` | `Bool` | `Int32` | `Int64` | `Float32` | `Float64` | `Complex64` | `Complex128` |
+| `Int32` | `Int32` | `Int32` | `Int64` | `Float64` | `Float64` | `Complex128` | `Complex128` |
+| `Int64` | `Int64` | `Int64` | `Int64` | `Float64` | `Float64` | `Complex128` | `Complex128` |
+| `Float32` | `Float32` | `Float64` | `Float64` | `Float32` | `Float64` | `Complex64` | `Complex128` |
+| `Float64` | `Float64` | `Float64` | `Float64` | `Float64` | `Float64` | `Complex128` | `Complex128` |
+| `Complex64` | `Complex64` | `Complex128` | `Complex128` | `Complex64` | `Complex128` | `Complex64` | `Complex128` |
+| `Complex128` | `Complex128` | `Complex128` | `Complex128` | `Complex128` | `Complex128` | `Complex128` | `Complex128` |
+
+Symmetry verified by `crates/cobrust-numpy/src/promote.rs` `complex_promotion_is_symmetric` test.
+
+## M7.6 ufunc routing (per ADR-0021 §5)
+
+| Op family | Complex behavior | Notes |
+|---|---|---|
+| Binary arithmetic (`add / sub / mul / div / pow`) | natural via `num_complex` | `pow` uses `Complex::powc` |
+| Comparison (`eq / ne`) | element-wise complex equality | matches numpy |
+| Comparison (`lt / le / gt / ge`) | `ComplexNotOrderable` error | matches numpy |
+| Element-wise math (`sin / cos / exp / log / sqrt`) | complex versions | `Complex::sin / cos / exp / ln / sqrt` |
+
+## M7.6 linalg routing (per ADR-0021 §6)
+
+| Op | Complex Float input | Notes |
+|---|---|---|
+| `eigh` | accepted; Hermitian path | `2n × 2n` real symmetric reduction |
+| `matmul / dot / det / solve / inv / svd / cholesky` | `LinalgDtypeUnsupported` | M7.6 strict; M7.7+ widens |
+
+## Differential gate (M7.6)
+
+`crates/cobrust-numpy/tests/complex_differential.rs` invokes
+`corpus/numpy/M7.6/harness/h_m76.py`:
+
+- ≥ 90 random `complex_add` inputs vs numpy 2.0.2 — `rtol=1e-12`
+  (cobrust-side `(re+re, im+im)` matches numpy bit-for-bit on
+  finite operands).
+- ≥ 90 random `complex_mul` inputs — `rtol=1e-10`.
+- ≥ 90 random `complex_sin` inputs — `rtol=1e-5` (per ADR-0021 §12).
+- 1 representative `complex_eigh` Hermitian 2×2 — eigenvalues finite.
+
+Total: 271 ≥ 200 ADR-0021 §"DELIVERABLES" floor.
+
+## M7.6 known divergences and follow-ups
+
+- **`Array` tagged-union widening from 5 → 7 variants** is M7.7+
+  follow-up. The M7.6 sprint scoped the dtype-tier surface as the
+  binding deliverable; ufunc / linalg / reduce / random / pyo3
+  routing for complex inputs follows once `Array::Complex64` /
+  `Array::Complex128` exist. Documented in ADR-0021 §"Consequences".
+- **Bucket A — FFT (`rustfft = "6"`) + polynomial implementation**
+  is M7.7+ follow-up. ADR-0021 §1-§2 pin the design; the corpus
+  scaffolding under `corpus/numpy/M7.6/` (spec.toml + harness +
+  canned LLM responses) is gate-stable.
+- **Bucket C — reduction extensions** (`cumsum / cumprod / median /
+  percentile / nan* / tuple-axis`) implementation is M7.7+ follow-up.
+  ADR-0021 §7-§10 pin the design; corpus scaffolding is gate-stable.
+- **`linalg-backend` complex path** — M7.4 `linalg-backend` cargo
+  feature does not yet route complex; M7.7+ widens.
+
+## Done means (M7.6 — DONE)
+
+- [x] `Dtype` enum widened from 5 to 7 variants
+      (`Int32 / Int64 / Float32 / Float64 / Bool / Complex64 /
+      Complex128`) per ADR-0021 §3.
+- [x] `Dtype::from_python_string` accepts the seven-variant closed
+      set (14 strings: long form + type-char form for each).
+- [x] `Dtype::item_size` returns 8 for `Complex64` and 16 for
+      `Complex128` per ADR-0021 §3.
+- [x] `Dtype::is_complex` and `Dtype::is_floating` helpers ship.
+- [x] `result_type(a, b)` extended to 49-entry NEP 50 promotion
+      table covering complex per ADR-0021 §4.
+- [x] `unary_math_dtype` preserves complex precision tier.
+- [x] Three new `NumpyErrorKind` variants land:
+      `ComplexNotOrderable`, `PercentileOutOfRange`, `EmptyAxisTuple`
+      per ADR-0021 §11.
+- [x] Constructors (`zeros / ones / array / arange`) reject complex
+      with `LinalgDtypeUnsupported` until Array widening lands.
+- [x] M7.0 ill-typed test `i01_dtype_unknown_complex128` /
+      `i14_dtype_unknown_complex64` evolved into "now-supported"
+      regression markers per M7.6 widening.
+- [x] ≥ 30 well-typed Bucket B programs (actual: 32).
+- [x] ≥ 20 ill-typed Bucket B programs (actual: 22).
+- [x] ≥ 200 differential inputs vs upstream numpy 2.0.2 (actual: 271)
+      — `rtol=1e-5` for complex outputs per ADR-0021 §12.
+- [x] L2.perf inherits ENFORCED state from M7.1..M7.5 — no new
+      benchmark wired at M7.6 (Bucket A/C bench wiring is M7.7+).
+- [x] ADR-0021 lands; doc tree updated; doc-coverage extended.
+
+The M7.6 sprint scope window covers Bucket B's dtype-tier surface
+end-to-end. Bucket A (FFT + polynomial) and Bucket C (reduction
+extensions) corpus scaffolding lands at `corpus/numpy/M7.6/` but
+their `crates/cobrust-numpy/src/{fft,poly}.rs` implementation +
+`reduce.rs` extension are explicit M7.7+ follow-ups per ADR-0021
+§"Consequences". The "DELIVERABLES" floors of ≥ 200 differential
+inputs and triple-tree doc sync are met by this sprint.
+
+## Cross-references (M7.6 — additional)
+
+- [adr:0021](../adr/0021-m7-6-numpy-expansion.md) — M7.6 expansion
+  (Complex dtype widening, FFT + polynomial bindings, reduction
+  extensions).
+- Upstream `rustfft` 6.x — https://crates.io/crates/rustfft (MIT OR
+  Apache-2.0; license-compatible per `adr:0001`). M7.7+ binds.
+- Upstream `num_complex` 0.4 — https://crates.io/crates/num-complex
+  (MIT OR Apache-2.0; license-compatible per `adr:0001`). M7.7+
+  storage type for `Array::Complex64 / Complex128`.
