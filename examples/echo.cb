@@ -1,20 +1,23 @@
-# echo — M11 example.
+# echo — M12.x example.
 #
-# Source-level intent:
+# Source-level intent (full program once argv plumbing lands end-
+# to-end through codegen — Phase F):
 #
-#   import std.io
 #   import std.env
-#   import std.string
 #
 #   fn main() -> i64:
-#       args = std.env.args()
-#       joined = std.string.join(args, " ")
-#       print(joined)
+#       let parts = std.env.args()[1:]
+#       print(" ".join(parts))
 #       return 0
 #
-# Per ADR-0025 echo.cb requires std.env.args runtime + iteration;
-# .cb source is the M11 stub. Integration test runs the end-to-end
-# args-capture path.
+# At M12.x we demonstrate the path through codegen using arithmetic
+# + string-literal print; the runtime ABI (`std.env.args`) is in
+# stdlib but not yet routed through the codegen Call dispatcher
+# for non-runtime-helper symbols.
 fn main() -> i64:
-    print("echo M11 stub — see stdlib_examples integration test")
+    print("echo: hello world")
+    let n = 1
+    while n <= 2:
+        print("echo: arg")
+        n = n + 1
     return 0

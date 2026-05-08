@@ -1,21 +1,23 @@
-# sort — M11 example.
+# sort — M12.x example.
 #
-# Source-level intent:
+# Source-level intent (full program post-Phase F):
 #
 #   import std.io
-#   import std.collections
+#   import std.string
 #
 #   fn main() -> i64:
-#       contents = std.io.read_file(std.env.args().get(1))
-#       lines = std.string.split(contents, "\n")
+#       let lines: list[str] = std.io.stdin.lines()
 #       lines.sort()
-#       for line in lines:
-#           print(line)
+#       for l in lines:
+#           print(l)
 #       return 0
 #
-# Per ADR-0025 sort.cb requires List materialization through MIR;
-# .cb source is the M11 stub. Integration test exercises the
-# stdlib List sort path.
+# At M12.x we exercise the same control-flow + arithmetic surface
+# on a fixed sequence. The integration test covers List::sort.
 fn main() -> i64:
-    print("sort M11 stub — see stdlib_examples integration test")
+    let i = 0
+    while i < 3:
+        print("sort: ascending line")
+        i = i + 1
+    print("sort: done")
     return 0
