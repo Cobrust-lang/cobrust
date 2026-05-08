@@ -218,7 +218,7 @@ stateDiagram-v2
 - 每个 provider 可配 `base_url` 和模型名（DeepSeek、Qwen、本地 vLLM、Together、OpenRouter 都通用）
 - 按任务路由：`{ task, strategy: "cost" | "quality" | "latency" | "consensus", n? }`
 - 流式返回（两种格式都支持，end-of-stream 恰好一个 `Done` 帧）
-- Token 账本：按任务、按 provider、按 attempt 写入 `.cobrust/ledger.jsonl`，append-only
+- Token 账本：按任务、按 provider、按 attempt 写入 `.cobrust/ledger.jsonl`，append-only；按 ADR-0031 每条记录携带 `provider_kind`（`anthropic` / `openai` / `synthetic`）以保留 wire 协议信息
 - 指数退避重试（默认 5 次 / 30 s 上限 / 全 jitter / 尊重 `Retry-After`）
 - Provider 之间故障隔离：一家挂掉自动 fallthrough 到 `preferred` 列表里下一家
 - 缓存层：键 = `BLAKE3(canonical_request_bytes)`，跨机可重现，两级 sharding 写入 `.cobrust/llm_cache/`

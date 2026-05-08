@@ -197,6 +197,12 @@ pub trait LlmProvider: Send + Sync {
     /// entries and to deduplicate consensus shards.
     fn name(&self) -> &str;
 
+    /// Wire-protocol kind. The router records this in each ledger entry so
+    /// historical analysis (cost, incident postmortems, differential
+    /// debugging) can reason about provider protocol without
+    /// cross-referencing `cobrust.toml`. Pinned by `adr:0031`.
+    fn kind(&self) -> crate::config::ProviderKind;
+
     /// Issue a single non-streaming completion.
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError>;
 

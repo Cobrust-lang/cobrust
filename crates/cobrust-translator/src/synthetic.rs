@@ -226,6 +226,10 @@ impl LlmProvider for SyntheticProvider {
         &self.name
     }
 
+    fn kind(&self) -> cobrust_llm_router::ProviderKind {
+        cobrust_llm_router::ProviderKind::Synthetic
+    }
+
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
         let header = extract_header(&req).ok_or_else(|| LlmError::Provider {
             code: "synthetic-no-header".into(),

@@ -238,7 +238,7 @@ Failure at any gate → diagnostic feeds back to L1 → re-translate → re-veri
 - Custom `base_url` and custom model names per provider (DeepSeek, Qwen, local vLLM, Together, OpenRouter, etc. all just work)
 - Per-task routing: `{ task, strategy: "cost" | "quality" | "latency" | "consensus", n? }`
 - Streaming for both formats; exactly one `Chunk::Done` frame at end-of-stream
-- Token accounting per task, per provider, per attempt — written to `.cobrust/ledger.jsonl`, append-only
+- Token accounting per task, per provider, per attempt — written to `.cobrust/ledger.jsonl`, append-only; each entry carries `provider_kind` (`anthropic` / `openai` / `synthetic`) for protocol provenance per ADR-0031
 - Exponential-backoff retry (default: 5 attempts / 30 s cap / full jitter / honours `Retry-After`)
 - Provider failure isolation: a permanent fault on one provider auto-falls-through to the next entry in `preferred`
 - Cache key = `BLAKE3(canonical_request_bytes)`, cross-machine reproducible, two-level sharded layout under `.cobrust/llm_cache/`

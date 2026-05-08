@@ -129,6 +129,7 @@ root. Sections:
 | `ts` | RFC3339 string | UTC timestamp |
 | `task` | string | task name from routing table |
 | `provider` | string | provider key from `cobrust.toml` |
+| `provider_kind` | enum \| null | wire protocol — `anthropic` / `openai` / `synthetic`; null on pre-`adr:0031` legacy entries |
 | `model` | string | model id as sent to provider |
 | `cache_key` | string | `blake3:<hex>` of canonical request |
 | `cache_hit` | bool | true if served from cache |

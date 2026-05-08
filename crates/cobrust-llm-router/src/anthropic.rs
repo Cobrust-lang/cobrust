@@ -117,6 +117,10 @@ impl LlmProvider for AnthropicProvider {
         &self.name
     }
 
+    fn kind(&self) -> crate::config::ProviderKind {
+        crate::config::ProviderKind::Anthropic
+    }
+
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
         let body = Self::build_body(&req, false);
         let resp = self

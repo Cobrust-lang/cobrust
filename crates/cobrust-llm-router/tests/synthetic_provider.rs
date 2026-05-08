@@ -57,6 +57,10 @@ impl LlmProvider for SyntheticProvider {
         &self.name
     }
 
+    fn kind(&self) -> cobrust_llm_router::ProviderKind {
+        cobrust_llm_router::ProviderKind::Synthetic
+    }
+
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let mut script = self.script.lock().expect("synthetic script poisoned");
