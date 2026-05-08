@@ -183,10 +183,7 @@ where
         let _ = flag_clone;
         work()
     });
-    JoinHandle {
-        inner,
-        cancel_flag,
-    }
+    JoinHandle { inner, cancel_flag }
 }
 
 // =====================================================================
@@ -281,10 +278,7 @@ impl Scope {
 
         // The user's handle holds the only owning reference to the
         // tokio handle.
-        JoinHandle {
-            inner,
-            cancel_flag,
-        }
+        JoinHandle { inner, cancel_flag }
     }
 }
 

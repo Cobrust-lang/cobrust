@@ -214,6 +214,8 @@ fn task_perf_mimalloc_tokio_tls_interaction_smoke() {
         rcount += 1;
     }
     assert_eq!(rcount, n);
-    let expected: i64 = (0..n).flat_map(|k| (0..16_i64).map(move |i| k as i64 + i)).sum();
+    let expected: i64 = (0..n)
+        .flat_map(|k| (0..16_i64).map(move |i| k as i64 + i))
+        .sum();
     assert_eq!(total, expected);
 }

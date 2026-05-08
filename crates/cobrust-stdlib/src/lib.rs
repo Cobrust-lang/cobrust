@@ -110,9 +110,7 @@ pub use runtime::{Error, ErrorKind};
 // convenience. Cobrust source-level `import std.X` will project
 // onto these paths.
 pub use collections::{Dict, List, Set};
-<<<<<<< HEAD
 pub use iter::{DictIter, Iterator, ListIter, RangeIter, SetIter};
-=======
 
 // =====================================================================
 // M13 — structured-concurrency runtime (ADR-0028)
@@ -126,4 +124,3 @@ pub use iter::{DictIter, Iterator, ListIter, RangeIter, SetIter};
 pub mod sync;
 #[cfg(feature = "tokio-runtime")]
 pub mod task;
->>>>>>> feature/m13-concurrency

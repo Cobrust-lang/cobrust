@@ -27,11 +27,13 @@ use std::path::PathBuf;
 
 use cobrust_frontend::ast::{self, Module as AstModule};
 use cobrust_frontend::error::{FrontendError, ParseError};
-use cobrust_frontend::span::FileId;
 use cobrust_frontend::parse_str;
-use cobrust_hir::{Session as HirSession, lower as hir_lower, Module as HirModule, Expr as HirExpr};
+use cobrust_frontend::span::FileId;
+use cobrust_hir::{
+    Expr as HirExpr, Module as HirModule, Session as HirSession, lower as hir_lower,
+};
 use cobrust_mir::lower as mir_lower;
-use cobrust_types::{check as type_check, Ty};
+use cobrust_types::{Ty, check as type_check};
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -42,7 +44,8 @@ use rustyline::{Context, Editor, Helper};
 use crate::exit_codes;
 
 /// Banner shown on cold-start (per ADR-0029 §"Public surface").
-const BANNER: &str = "cobrust repl 0.0.1 (M14, ADR-0029) — type :help for directives, :quit to exit.";
+const BANNER: &str =
+    "cobrust repl 0.0.1 (M14, ADR-0029) — type :help for directives, :quit to exit.";
 
 /// Primary prompt.
 const PROMPT_PRIMARY: &str = ">>> ";
@@ -58,16 +61,25 @@ fn history_path() -> Option<PathBuf> {
 
 /// Cobrust keyword set (28 entries per ADR-0029 §"Tab completion sources").
 const KEYWORDS: &[&str] = &[
-    "fn", "let", "if", "else", "elif", "for", "while", "return",
-    "match", "case", "class", "True", "False", "None", "and", "or",
-    "not", "in", "pass", "break", "continue", "import", "from", "as",
+    "fn", "let", "if", "else", "elif", "for", "while", "return", "match", "case", "class", "True",
+    "False", "None", "and", "or", "not", "in", "pass", "break", "continue", "import", "from", "as",
     "with", "try", "except", "raise",
 ];
 
 /// Stdlib top-level seeded names (12 entries per ADR-0029).
 const STDLIB_NAMES: &[&str] = &[
-    "print", "panic", "assert", "args", "var", "len",
-    "print_err", "read_line", "int", "str", "float", "bool",
+    "print",
+    "panic",
+    "assert",
+    "args",
+    "var",
+    "len",
+    "print_err",
+    "read_line",
+    "int",
+    "str",
+    "float",
+    "bool",
 ];
 
 /// Directive names (with aliases).
@@ -217,9 +229,7 @@ impl Session {
                 }
                 self.directive_mir(arg)
             }
-            other => StepResult::Error(format!(
-                "unknown directive `:{other}` (try `:help`)"
-            )),
+            other => StepResult::Error(format!("unknown directive `:{other}` (try `:help`)")),
         }
     }
 
@@ -239,8 +249,8 @@ impl Session {
             Ok(t) => t,
             Err(e) => return StepResult::Error(format!("type error: {e:?}")),
         };
-        let ty = find_synthetic_return_ty(&typed)
-            .map_or_else(|| Ty::None, std::clone::Clone::clone);
+        let ty =
+            find_synthetic_return_ty(&typed).map_or_else(|| Ty::None, std::clone::Clone::clone);
         StepResult::Done(format!("{ty}"))
     }
 
@@ -296,10 +306,7 @@ impl Session {
             .bodies
             .iter()
             .find(|b| b.name == "_t")
-            .map_or_else(
-                || "<no _t body>".to_string(),
-                |b| format!("{b:#?}"),
-            );
+            .map_or_else(|| "<no _t body>".to_string(), |b| format!("{b:#?}"));
         StepResult::Done(body)
     }
 
@@ -335,8 +342,7 @@ impl Session {
                     ast::PatternKind::Binding(n) => n.clone(),
                     _ => {
                         return Err(
-                            "destructuring patterns not yet supported in REPL (M14.1)"
-                                .to_string(),
+                            "destructuring patterns not yet supported in REPL (M14.1)".to_string()
                         );
                     }
                 };
@@ -348,12 +354,12 @@ impl Session {
                 Ok(Some(value.display()))
             }
             ast::StmtKind::Pass => Ok(None),
-            ast::StmtKind::Return(_) => {
-                Err("`return` only valid inside a function (M14 evaluates expressions only)".to_string())
-            }
-            _ => Err(
-                "this statement form is not yet supported in REPL (M14.1 will widen)"
+            ast::StmtKind::Return(_) => Err(
+                "`return` only valid inside a function (M14 evaluates expressions only)"
                     .to_string(),
+            ),
+            _ => Err(
+                "this statement form is not yet supported in REPL (M14.1 will widen)".to_string(),
             ),
         }
     }
@@ -369,10 +375,8 @@ impl Session {
                     match p {
                         ast::FStrPart::Lit(s) => out.push_str(s),
                         ast::FStrPart::Expr { .. } => {
-                            return Err(
-                                "f-string interpolation not yet supported in REPL (M14.1)"
-                                    .to_string(),
-                            );
+                            return Err("f-string interpolation not yet supported in REPL (M14.1)"
+                                .to_string());
                         }
                     }
                 }
@@ -392,9 +396,7 @@ impl Session {
                 let v = self.eval_expr(operand)?;
                 eval_unary(*op, v)
             }
-            _ => Err(
-                "expression form not yet supported in REPL (M14.1 will widen)".to_string(),
-            ),
+            _ => Err("expression form not yet supported in REPL (M14.1 will widen)".to_string()),
         }
     }
 }
@@ -435,7 +437,6 @@ fn wrap_for_eval(input: &str) -> String {
     }
     out
 }
-
 
 /// Detect whether `input` is structurally incomplete. Per ADR-0029
 /// §"Multi-line input contract": the REPL emits a continuation prompt
@@ -565,9 +566,7 @@ fn extract_synthetic_return_expr(hir: &HirModule) -> Option<&HirExpr> {
 }
 
 /// Locate the typed-HIR `_t` function's return type.
-fn find_synthetic_return_ty(
-    typed: &cobrust_types::TypedModule,
-) -> Option<&Ty> {
+fn find_synthetic_return_ty(typed: &cobrust_types::TypedModule) -> Option<&Ty> {
     for item in &typed.hir.items {
         if let cobrust_hir::ItemKind::Fn(fn_body) = &item.kind {
             if fn_body.name == "_t" {
@@ -592,26 +591,42 @@ fn eval_literal(lit: &ast::Literal) -> Result<Value, String> {
         ast::Literal::Int(s) => {
             // Cobrust int literals may be 0xFF, 0o77, 0b101, or plain.
             let stripped = s.replace('_', "");
-            let parsed = if let Some(rest) = stripped.strip_prefix("0x").or_else(|| stripped.strip_prefix("0X")) {
+            let parsed = if let Some(rest) = stripped
+                .strip_prefix("0x")
+                .or_else(|| stripped.strip_prefix("0X"))
+            {
                 i64::from_str_radix(rest, 16)
-            } else if let Some(rest) = stripped.strip_prefix("0o").or_else(|| stripped.strip_prefix("0O")) {
+            } else if let Some(rest) = stripped
+                .strip_prefix("0o")
+                .or_else(|| stripped.strip_prefix("0O"))
+            {
                 i64::from_str_radix(rest, 8)
-            } else if let Some(rest) = stripped.strip_prefix("0b").or_else(|| stripped.strip_prefix("0B")) {
+            } else if let Some(rest) = stripped
+                .strip_prefix("0b")
+                .or_else(|| stripped.strip_prefix("0B"))
+            {
                 i64::from_str_radix(rest, 2)
             } else {
                 stripped.parse::<i64>()
             };
-            parsed.map(Value::Int)
+            parsed
+                .map(Value::Int)
                 .map_err(|e| format!("invalid integer literal `{s}`: {e}"))
         }
-        ast::Literal::Float(s) => s.replace('_', "").parse::<f64>()
+        ast::Literal::Float(s) => s
+            .replace('_', "")
+            .parse::<f64>()
             .map(Value::Float)
             .map_err(|e| format!("invalid float literal `{s}`: {e}")),
         ast::Literal::Str(s) => Ok(Value::Str(s.clone())),
         ast::Literal::Bool(b) => Ok(Value::Bool(*b)),
         ast::Literal::None => Ok(Value::None),
-        ast::Literal::Bytes(_) => Err("bytes literals not yet supported in REPL (M14.1)".to_string()),
-        ast::Literal::Imag(_) => Err("imaginary literals not yet supported in REPL (M14.1)".to_string()),
+        ast::Literal::Bytes(_) => {
+            Err("bytes literals not yet supported in REPL (M14.1)".to_string())
+        }
+        ast::Literal::Imag(_) => {
+            Err("imaginary literals not yet supported in REPL (M14.1)".to_string())
+        }
     }
 }
 
@@ -673,10 +688,7 @@ fn eval_unary(op: ast::UnaryOp, v: Value) -> Result<Value, String> {
         (Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
         (Plus, Value::Int(n)) => Ok(Value::Int(n)),
         (Plus, Value::Float(f)) => Ok(Value::Float(f)),
-        (op, v) => Err(format!(
-            "unsupported unary `{op:?}` for {}",
-            v.type_name(),
-        )),
+        (op, v) => Err(format!("unsupported unary `{op:?}` for {}", v.type_name(),)),
     }
 }
 
@@ -716,7 +728,8 @@ switches to `...` until the block closes.
 
 Tab completion: press <Tab> for directives, keywords, stdlib
 top-level names, or session bindings.
-".to_string()
+"
+    .to_string()
 }
 
 // =====================================================================
@@ -732,7 +745,9 @@ struct ReplHelper {
 
 impl ReplHelper {
     fn new() -> Self {
-        Self { bindings: Vec::new() }
+        Self {
+            bindings: Vec::new(),
+        }
     }
     fn refresh(&mut self, session: &Session) {
         self.bindings = session.bindings.keys().cloned().collect();
@@ -841,7 +856,11 @@ pub fn run() -> u8 {
     let mut pending = String::new();
 
     loop {
-        let prompt = if pending.is_empty() { PROMPT_PRIMARY } else { PROMPT_CONTINUE };
+        let prompt = if pending.is_empty() {
+            PROMPT_PRIMARY
+        } else {
+            PROMPT_CONTINUE
+        };
         match editor.readline(prompt) {
             Ok(line) => {
                 if !pending.is_empty() {
@@ -850,15 +869,14 @@ pub fn run() -> u8 {
                 pending.push_str(&line);
 
                 // A blank-line on continuation forces a parse-attempt.
-                let force_parse = !pending.is_empty()
-                    && line.trim().is_empty()
-                    && pending.lines().count() > 1;
+                let force_parse =
+                    !pending.is_empty() && line.trim().is_empty() && pending.lines().count() > 1;
 
                 let result = if force_parse {
                     let r = session.step(&pending);
                     match r {
                         StepResult::Continue => StepResult::Error(
-                            "statement still incomplete after blank line".to_string()
+                            "statement still incomplete after blank line".to_string(),
                         ),
                         other => other,
                     }

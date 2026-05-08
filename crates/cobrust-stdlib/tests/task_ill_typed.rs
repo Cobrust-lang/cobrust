@@ -39,8 +39,8 @@
 #![allow(clippy::unnested_or_patterns)]
 #![allow(clippy::uninlined_format_args)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use cobrust_stdlib::sync::{SendError, TryRecvError, TrySendError, channel};
