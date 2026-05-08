@@ -36,7 +36,6 @@ pub mod intrinsics;
 /// declaration into `std.io`.
 pub const PRELUDE: &str = "fn print(s: str) -> i64:\n    return 0\n\n";
 
-
 /// What `cobrust build` should emit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EmitKind {
@@ -269,7 +268,8 @@ fn locate_runtime_source() -> Result<PathBuf, BuildError> {
         }
     }
     Err(BuildError::Internal(format!(
-        "cannot locate runtime/m10_runtime.c (checked {})", p.display()
+        "cannot locate runtime/m10_runtime.c (checked {})",
+        p.display()
     )))
 }
 
@@ -334,4 +334,3 @@ mod tests {
         assert_ne!(EmitKind::Object, EmitKind::Executable);
     }
 }
-

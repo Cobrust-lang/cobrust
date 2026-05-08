@@ -162,7 +162,10 @@ fn locate_corpus_root() -> Result<PathBuf, String> {
         }
         p = parent.to_path_buf();
     }
-    Err(format!("corpus/ directory not found from {}", cwd.display()))
+    Err(format!(
+        "corpus/ directory not found from {}",
+        cwd.display()
+    ))
 }
 
 fn find_first_python_file(dir: &Path) -> Result<PathBuf, String> {

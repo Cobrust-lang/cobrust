@@ -44,9 +44,8 @@ pub fn run(name: &str, parent_dir: Option<&Path>) -> u8 {
         return exit_codes::INTERNAL_PANIC;
     }
 
-    let cobrust_toml = format!(
-        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\ncobrust-version = \"0.0.1\"\n"
-    );
+    let cobrust_toml =
+        format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\ncobrust-version = \"0.0.1\"\n");
     if let Err(e) = std::fs::write(crate_dir.join("cobrust.toml"), cobrust_toml) {
         eprintln!("cobrust new: cannot write cobrust.toml: {e}");
         return exit_codes::INTERNAL_PANIC;
@@ -58,7 +57,10 @@ pub fn run(name: &str, parent_dir: Option<&Path>) -> u8 {
         return exit_codes::INTERNAL_PANIC;
     }
 
-    println!("cobrust: created package `{name}` at {}", crate_dir.display());
+    println!(
+        "cobrust: created package `{name}` at {}",
+        crate_dir.display()
+    );
     exit_codes::SUCCESS
 }
 

@@ -38,11 +38,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn write_temp(name: &str, contents: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-m10-sub-{}-{}",
-        name,
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("cobrust-m10-sub-{}-{}", name, std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let p = dir.join(format!("{name}.cb"));
     std::fs::write(&p, contents).expect("write temp .cb");
@@ -95,10 +91,7 @@ fn s02_check_ok() {
 fn s03_check_type_error_exits_2() {
     let bin = cobrust_binary();
     // Mismatch: declared return is i64, body returns a literal float.
-    let src = write_temp(
-        "s03_check_type_error",
-        "fn f() -> i64:\n    return 1.5\n",
-    );
+    let src = write_temp("s03_check_type_error", "fn f() -> i64:\n    return 1.5\n");
     let out = Command::new(&bin)
         .arg("check")
         .arg(&src)
@@ -182,10 +175,22 @@ fn s05_new_scaffolds_package() {
 #[test]
 fn s06_help_lists_subcommands() {
     let bin = cobrust_binary();
-    let out = Command::new(&bin).arg("--help").output().expect("invoke --help");
+    let out = Command::new(&bin)
+        .arg("--help")
+        .output()
+        .expect("invoke --help");
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for sub in ["build", "run", "check", "fmt", "translate", "new", "test", "repl"] {
+    for sub in [
+        "build",
+        "run",
+        "check",
+        "fmt",
+        "translate",
+        "new",
+        "test",
+        "repl",
+    ] {
         assert!(
             stdout.contains(sub),
             "expected '--help' to mention `{sub}`; got {stdout}"

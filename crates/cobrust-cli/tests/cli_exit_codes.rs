@@ -104,8 +104,15 @@ fn ec_5_fmt_diff_under_check() {
 #[test]
 fn ec_repl_returns_user_error() {
     let bin = cobrust_binary();
-    let out = Command::new(&bin).arg("repl").output().expect("invoke repl");
-    assert_eq!(out.status.code(), Some(1), "expected USER_ERROR (1) for stub");
+    let out = Command::new(&bin)
+        .arg("repl")
+        .output()
+        .expect("invoke repl");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "expected USER_ERROR (1) for stub"
+    );
 }
 
 #[test]

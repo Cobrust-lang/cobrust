@@ -403,8 +403,7 @@ impl CraneliftCtx {
         // resolves to an external imported symbol declared with
         // `Linkage::Import`. Used today by the hello-world runtime
         // helper `__cobrust_println_static`. M11 stdlib will broaden.
-        let mut extern_func_ids: HashMap<String, cranelift_module::FuncId> =
-            HashMap::new();
+        let mut extern_func_ids: HashMap<String, cranelift_module::FuncId> = HashMap::new();
         for mir_block in &body.blocks {
             if let cobrust_mir::Terminator::Call { func, .. } = &mir_block.terminator {
                 if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(name)) = func {

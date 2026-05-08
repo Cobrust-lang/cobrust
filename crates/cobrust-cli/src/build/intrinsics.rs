@@ -28,7 +28,10 @@ pub enum IntrinsicError {
         "M10 narrowing: `print` accepts exactly the literal {expected:?} at this milestone; \
          got {found}. Arbitrary `print(s: str)` lowering is M11 stdlib scope (see ADR-0024)."
     )]
-    M10ScopeNarrowed { expected: &'static str, found: String },
+    M10ScopeNarrowed {
+        expected: &'static str,
+        found: String,
+    },
 }
 
 /// Identify Body def_ids that name a `print` function.
@@ -155,7 +158,9 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
     // dangling drop-chain blocks targeting the entry block — a known
     // M8 issue tracked separately. Removing the body sidesteps the issue
     // cleanly because the intrinsic call now goes to an imported symbol.
-    module.bodies.retain(|body| !print_ids.contains(&body.def_id.0));
+    module
+        .bodies
+        .retain(|body| !print_ids.contains(&body.def_id.0));
 
     Ok(())
 }
