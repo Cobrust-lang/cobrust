@@ -175,13 +175,12 @@ fn corpus_replays_all_50_sessions_successfully() {
         }
     }
 
-    if !failures.is_empty() {
-        panic!(
-            "{} session(s) failed:\n{}",
-            failures.len(),
-            failures.join("\n\n")
-        );
-    }
+    assert!(
+        failures.is_empty(),
+        "{} session(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
 }
 
 #[test]

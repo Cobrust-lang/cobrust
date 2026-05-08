@@ -17,6 +17,11 @@
 //!
 //! See `docs/agent/adr/0029-m14-repl.md` for the design rationale.
 
+// `directive_ast/hir/mir` are intentionally `&self` methods so that a
+// future M14.1 widening (which threads session bindings into the
+// synthetic `_t` body for closed-over names) can land additively.
+#![allow(clippy::unused_self)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
