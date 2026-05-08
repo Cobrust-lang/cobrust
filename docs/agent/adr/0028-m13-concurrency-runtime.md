@@ -4,7 +4,7 @@ adr_id: 0028
 title: M13 structured-concurrency runtime — tokio binding, JoinHandle/channel/scope/cancel surface, no async/sync coloring
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: b42391f
 supersedes: []
 superseded_by: []
 dependencies: [adr:0019, adr:0025]
