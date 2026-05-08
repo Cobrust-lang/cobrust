@@ -65,7 +65,9 @@ pub enum LockfileError {
     #[error("incompatible lockfile_version: have {have}, want {want}")]
     IncompatibleVersion { have: u32, want: u32 },
 
-    #[error("manifest hash mismatch: lockfile records {recorded} but manifest hashes to {computed}")]
+    #[error(
+        "manifest hash mismatch: lockfile records {recorded} but manifest hashes to {computed}"
+    )]
     ManifestHashMismatch { recorded: String, computed: String },
 }
 

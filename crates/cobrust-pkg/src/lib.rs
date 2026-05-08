@@ -40,6 +40,10 @@
 #![allow(clippy::unnecessary_wraps)]
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::if_not_else)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::unnecessary_literal_unwrap)]
+#![allow(clippy::manual_strip)]
 
 pub mod error;
 pub mod lockfile;
@@ -49,8 +53,13 @@ pub mod resolver;
 pub mod sources;
 pub mod tarball;
 
-pub use error::{PkgError, ResolutionError, RegistryError, SourceError, ManifestError, LockfileError};
-pub use lockfile::{Lockfile, LockfileMetadata, LockfilePackage};
+pub use error::{
+    LockfileError, ManifestError, PkgError, RegistryError, ResolutionError, SourceError,
+};
+pub use lockfile::{
+    LOCKFILE_VERSION, Lockfile, LockfileMetadata, LockfilePackage, load as load_lockfile,
+    rewrite_dep_strings, save as save_lockfile,
+};
 pub use manifest::{
     BinTable, Dependency, DependencySpec, LibTable, Manifest, PackageTable, TestTable,
 };
@@ -104,7 +113,9 @@ pub fn resolve_and_lock(
 ) -> Result<Lockfile, PkgError> {
     let resolver = Resolver::new(MaxCompatibleStrategy);
     let resolution = resolver.resolve(manifest, workspace_root, registry)?;
-    Lockfile::from_resolution(manifest, &resolution)
+    let mut lock = Lockfile::from_resolution(manifest, &resolution)?;
+    rewrite_dep_strings(&mut lock);
+    Ok(lock)
 }
 
 #[cfg(test)]
