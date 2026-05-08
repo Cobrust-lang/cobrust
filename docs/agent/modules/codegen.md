@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:codegen
 crate: cobrust-codegen
-last_verified_commit: f758260
-dependencies: [mod:mir, mod:types, adr:0023]
+last_verified_commit: 078eab9
+dependencies: [mod:mir, mod:types, adr:0023, adr:0027]
 ---
 
 # Module: codegen
@@ -136,8 +136,19 @@ pub mod linker {
 | `Terminator::Unreachable` | `ins().trap(TrapCode::User(1))` | `build_unreachable` |
 | `Terminator::Assert` | conditional jump → trap | conditional jump → call panic |
 | `Rvalue::BinaryOp(Add)` | `iadd / fadd` | `build_int_add / build_float_add` |
-| `Rvalue::Aggregate(Tuple, ...)` | M9 stub: zero-pointer (M12 lifts) | M9 stub: zero-pointer |
-| `Rvalue::Ref` | M9 stub: zero-pointer (M12 lifts) | M9 stub: zero-pointer |
+| `Rvalue::Aggregate(Tuple)` | **M12.x**: `__cobrust_tuple_new(n)` + per-slot `__cobrust_tuple_set` | M12.x mirror |
+| `Rvalue::Aggregate(List)` | **M12.x**: `__cobrust_list_new(elem_size, len)` + per-elem `__cobrust_list_set` | M12.x mirror |
+| `Rvalue::Aggregate(Dict)` | **M12.x**: `__cobrust_dict_new(k_size, v_size, len)` + per-pair `__cobrust_dict_set` | M12.x mirror |
+| `Rvalue::Aggregate(Set)` | **M12.x**: `__cobrust_set_new(elem_size, len)` + per-elem `__cobrust_set_insert` | M12.x mirror |
+| `Rvalue::Aggregate(FormatString)` | **M12.x**: `__cobrust_str_new` + per-part dispatch (`push_static / fmt_int / fmt_float / fmt_bool / fmt_str / fmt_repr`) | M12.x mirror |
+| `Rvalue::Ref(_, place)` | **M12.x**: lazy stack-slot allocation; `stack_addr` + Field projections via `iadd` constant offset | M12.x mirror |
+| `Rvalue::Cast(IntToFloat)` | **M12.x**: `fcvt_from_sint` | M12.x mirror |
+| `Rvalue::Cast(FloatToInt)` | **M12.x**: `fcvt_to_sint_sat` (saturates per Rust `as`) | M12.x mirror |
+| `Rvalue::Cast(BoolToInt)` | **M12.x**: `uextend` (i8 → i64) | M12.x mirror |
+| `Rvalue::Cast(IntToBool)` | **M12.x**: `icmp NotEqual` against zero | M12.x mirror |
+| `Rvalue::Cast(StrToBytes / BytesToStr)` | **M12.x**: pointer pass-through (layout identical) | M12.x mirror |
+| `Stmt::For` (HIR-resident) | **M12.x** (ADR-0027 §4 for-protocol): MIR Calls dispatch to `__cobrust_iter_init` (iter() bind) → header loop calls `__cobrust_iter_next` (next() pull) against the four closed-world `cobrust-stdlib::iter` types (`ListIter / DictIter / SetIter / RangeIter`) implementing the `Iterator` trait | M12.x mirror |
+| Heap allocation entry (`__cobrust_alloc(size) -> *mut u8`) | **M12.x** (ADR-0027 §1): stdlib runtime fn, mimalloc-backed when feature on; serves Aggregate constructors + f-string buffer + future user heap. The codegen emits `__cobrust_iter_init / __cobrust_fmt_int / __cobrust_str_new` calls that internally route allocations through this entry | M12.x mirror |
 | `Operand::Constant(Int)` | `iconst.i64` | `i64_type.const_int` |
 | `Operand::Constant(Constant::Str(s))` (in `Terminator::Call` `args[0]` slot whose `func` is `Constant::Str(_)`) | **M11**: intern `s` as `.rodata` data symbol; emit `(ptr, len)` Cranelift values | M11 forward |
 | `Terminator::Call { func: Constant::Str(name), args: [Constant::Str(payload), ...] }` | **M11**: declare `name` as `Linkage::Import` with `(*const u8, usize)` signature; emit real `call` with payload | M11 forward |

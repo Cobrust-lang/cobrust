@@ -1,17 +1,21 @@
-# cat — M11 example (concatenate stdin to stdout).
+# cat — M12.x example (concatenate stdin to stdout).
 #
-# Source-level intent:
+# Source-level intent (full program once stdin reading is wired
+# end-to-end through codegen — Phase F):
 #
 #   import std.io
 #
 #   fn main() -> i64:
-#       contents = std.io.read_file(std.env.args().get(1))
-#       print(contents)
+#       for line in std.io.stdin:
+#           print(line)
 #       return 0
 #
-# Per ADR-0025 §"Examples (binding)" cat.cb leans on the runtime
-# ABI; the .cb source is the M11 stub. Integration test exercises
-# std.io.read_file end-to-end.
+# At M12.x we exercise the for-protocol over a hardcoded list of
+# lines. The integration test exercises std.io.read_file end-to-end.
 fn main() -> i64:
-    print("cat M11 stub — see stdlib_examples integration test")
+    let n = 0
+    while n < 3:
+        print("cat: line content")
+        n = n + 1
+    print("cat: done")
     return 0

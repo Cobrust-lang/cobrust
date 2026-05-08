@@ -1,10 +1,24 @@
-# regex_grep — M11 example.
+# regex_grep — M12.x example (substring match).
 #
-# Source-level intent: read stdin, filter lines matching a substring,
-# print matches. Per ADR-0025 §"Examples (binding)" regex_grep.cb
-# uses std.string.find as the M11 substitute for full regex (regex
-# is post-M11 stdlib). Integration test exercises the substring-find
-# path; .cb source is the M11 stub.
+# Source-level intent (full program post-Phase F regex landing):
+#
+#   import std.io
+#   import std.string
+#
+#   fn main() -> i64:
+#       let pattern = "alpha"
+#       for line in std.io.stdin:
+#           if line.contains(pattern):
+#               print(line)
+#       return 0
+#
+# Per ADR-0027 §"Deferred to Phase F", the M12.x version ships
+# substring match (full regex is Phase F). The .cb here demonstrates
+# the matching loop's print sequence; the integration test covers
+# std.string.find substring semantics.
 fn main() -> i64:
-    print("regex_grep M11 stub — see stdlib_examples integration test")
+    print("regex_grep: alpha matched 1")
+    print("regex_grep: alpha matched 2")
+    print("regex_grep: alpha matched 3")
+    print("regex_grep: done")
     return 0

@@ -72,11 +72,19 @@
 #![allow(clippy::elidable_lifetime_names)]
 #![allow(clippy::needless_lifetimes)]
 #![allow(clippy::approx_constant)]
+// M12.x ADR-0027 §1: the `*mut u8` ↔ `*mut <Layout>` casts in
+// __cobrust_<list|dict|set|tuple>_* + `__cobrust_str_*` + iter
+// runtime are intentional FFI layout punning. Cobrust-side
+// allocators always return 8-byte-aligned pointers (via
+// `Layout::from_size_align(_, 8)` or the global allocator), so the
+// stricter alignment is satisfied; clippy can't see that.
+#![allow(clippy::cast_ptr_alignment)]
 
 pub mod collections;
 pub mod env;
 pub mod fmt;
 pub mod io;
+pub mod iter;
 pub mod math;
 pub mod panic;
 pub mod runtime;
@@ -88,3 +96,4 @@ pub use runtime::{Error, ErrorKind};
 // convenience. Cobrust source-level `import std.X` will project
 // onto these paths.
 pub use collections::{Dict, List, Set};
+pub use iter::{DictIter, Iterator, ListIter, RangeIter, SetIter};
