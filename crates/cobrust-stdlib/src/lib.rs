@@ -77,6 +77,7 @@ pub mod collections;
 pub mod env;
 pub mod fmt;
 pub mod io;
+pub mod iter;
 pub mod math;
 pub mod panic;
 pub mod runtime;
@@ -88,3 +89,4 @@ pub use runtime::{Error, ErrorKind};
 // convenience. Cobrust source-level `import std.X` will project
 // onto these paths.
 pub use collections::{Dict, List, Set};
+pub use iter::{DictIter, Iterator, ListIter, RangeIter, SetIter};

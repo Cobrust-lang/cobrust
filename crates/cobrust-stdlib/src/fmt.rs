@@ -41,6 +41,196 @@ pub fn format_str(s: &str) -> String {
     s.to_string()
 }
 
+// =====================================================================
+// C-ABI runtime helpers (ADR-0027 §5: HIR-tier f-string lowering)
+// =====================================================================
+//
+// HIR `Expr::FString { parts }` lowers to MIR via the table below:
+//
+// 1. Allocate an empty `String` at start.
+// 2. For each Static(s):  call __cobrust_str_push_static(buf, s, len)
+// 3. For each Interp(e), depending on type:
+//    - i32/i64 → __cobrust_fmt_int(buf, v)
+//    - f32/f64 → __cobrust_fmt_float(buf, v)
+//    - bool   → __cobrust_fmt_bool(buf, v)
+//    - str    → __cobrust_fmt_str(buf, v_ptr, v_len)
+//    - List/Dict/Set → __cobrust_fmt_repr(buf, v_ptr, type_id)
+// 4. Drop schedule registers buf for __cobrust_str_drop at scope end.
+//
+// The runtime String is a heap-allocated `Vec<u8>` boxed into a
+// fixed-shape opaque pointer the codegen passes around.
+
+#[repr(C)]
+struct StringBuffer {
+    /// Heap-allocated UTF-8 byte buffer.
+    bytes: Vec<u8>,
+}
+
+/// Allocate a fresh empty string buffer for f-string composition.
+///
+/// # Safety
+///
+/// Caller must eventually pass result to [`__cobrust_str_drop`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_new() -> *mut u8 {
+    let buf = Box::new(StringBuffer { bytes: Vec::new() });
+    Box::into_raw(buf).cast::<u8>()
+}
+
+/// Push a static `(*const u8, usize)` payload onto the buffer.
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by [`__cobrust_str_new`] and
+/// not yet dropped. `ptr`/`len` must describe a valid UTF-8 byte
+/// slice; codegen always emits this from `.rodata`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_push_static(buf: *mut u8, ptr: *const u8, len: i64) {
+    if buf.is_null() || ptr.is_null() || len <= 0 {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let b = unsafe { &mut *buf.cast::<StringBuffer>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    b.bytes.extend_from_slice(bytes);
+}
+
+/// Append the decimal representation of an i64 to the buffer.
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by [`__cobrust_str_new`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_fmt_int(buf: *mut u8, v: i64) {
+    if buf.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let b = unsafe { &mut *buf.cast::<StringBuffer>() };
+    let s = format_int(v);
+    b.bytes.extend_from_slice(s.as_bytes());
+}
+
+/// Append the f64 repr to the buffer.
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by [`__cobrust_str_new`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_fmt_float(buf: *mut u8, v: f64) {
+    if buf.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let b = unsafe { &mut *buf.cast::<StringBuffer>() };
+    let s = format_float(v);
+    b.bytes.extend_from_slice(s.as_bytes());
+}
+
+/// Append `True`/`False`.
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by [`__cobrust_str_new`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_fmt_bool(buf: *mut u8, v: i64) {
+    if buf.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let b = unsafe { &mut *buf.cast::<StringBuffer>() };
+    let s = if v != 0 { "True" } else { "False" };
+    b.bytes.extend_from_slice(s.as_bytes());
+}
+
+/// Append a runtime str (`(*const u8, usize)`) to the buffer.
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by [`__cobrust_str_new`].
+/// `ptr`/`len` must describe a valid UTF-8 slice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_fmt_str(buf: *mut u8, ptr: *const u8, len: i64) {
+    if buf.is_null() || ptr.is_null() || len <= 0 {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let b = unsafe { &mut *buf.cast::<StringBuffer>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    b.bytes.extend_from_slice(bytes);
+}
+
+/// Append a debug repr placeholder for List/Dict/Set. M12.x emits
+/// the literal `"<{type_id}>"` token; Phase F widens to real repr.
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by [`__cobrust_str_new`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_fmt_repr(buf: *mut u8, _ptr: *mut u8, type_id: i64) {
+    if buf.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let b = unsafe { &mut *buf.cast::<StringBuffer>() };
+    let s = format!("<{type_id}>");
+    b.bytes.extend_from_slice(s.as_bytes());
+}
+
+/// Read the buffer's UTF-8 length without consuming it.
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by [`__cobrust_str_new`] and
+/// not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_len(buf: *mut u8) -> i64 {
+    if buf.is_null() {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let b = unsafe { &*buf.cast::<StringBuffer>() };
+    b.bytes.len() as i64
+}
+
+/// Read the buffer's bytes pointer without consuming it. Returns
+/// `null` for empty strings.
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by [`__cobrust_str_new`] and
+/// not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_ptr(buf: *mut u8) -> *const u8 {
+    if buf.is_null() {
+        return std::ptr::null();
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let b = unsafe { &*buf.cast::<StringBuffer>() };
+    if b.bytes.is_empty() {
+        std::ptr::null()
+    } else {
+        b.bytes.as_ptr()
+    }
+}
+
+/// Free a string buffer.
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by [`__cobrust_str_new`] and
+/// not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_drop(buf: *mut u8) {
+    if buf.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let _ = unsafe { Box::from_raw(buf.cast::<StringBuffer>()) };
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -129,5 +319,124 @@ mod tests {
     fn format_str_identity() {
         assert_eq!(format_str("hi"), "hi");
         assert_eq!(format_str(""), "");
+    }
+
+    // -- C-ABI runtime helpers (M12.x ADR-0027 §5) -----------------
+
+    #[test]
+    fn cabi_str_new_drop_smoke() {
+        // SAFETY: documented contract.
+        let buf = unsafe { __cobrust_str_new() };
+        assert!(!buf.is_null());
+        // SAFETY: contract.
+        unsafe { __cobrust_str_drop(buf) };
+    }
+
+    #[test]
+    fn cabi_str_push_static_then_read() {
+        // SAFETY: documented contract.
+        unsafe {
+            let buf = __cobrust_str_new();
+            let bytes = b"hello";
+            __cobrust_str_push_static(buf, bytes.as_ptr(), bytes.len() as i64);
+            assert_eq!(__cobrust_str_len(buf), 5);
+            __cobrust_str_drop(buf);
+        }
+    }
+
+    #[test]
+    fn cabi_fmt_int_appends_decimal() {
+        // SAFETY: contract.
+        unsafe {
+            let buf = __cobrust_str_new();
+            __cobrust_fmt_int(buf, 42);
+            assert_eq!(__cobrust_str_len(buf), 2);
+            __cobrust_str_drop(buf);
+        }
+    }
+
+    #[test]
+    fn cabi_fmt_float_appends_repr() {
+        // SAFETY: contract.
+        unsafe {
+            let buf = __cobrust_str_new();
+            __cobrust_fmt_float(buf, 3.14);
+            assert!(__cobrust_str_len(buf) > 0);
+            __cobrust_str_drop(buf);
+        }
+    }
+
+    #[test]
+    fn cabi_fmt_bool_true() {
+        // SAFETY: contract.
+        unsafe {
+            let buf = __cobrust_str_new();
+            __cobrust_fmt_bool(buf, 1);
+            assert_eq!(__cobrust_str_len(buf), 4);
+            __cobrust_str_drop(buf);
+        }
+    }
+
+    #[test]
+    fn cabi_fmt_bool_false() {
+        // SAFETY: contract.
+        unsafe {
+            let buf = __cobrust_str_new();
+            __cobrust_fmt_bool(buf, 0);
+            assert_eq!(__cobrust_str_len(buf), 5);
+            __cobrust_str_drop(buf);
+        }
+    }
+
+    #[test]
+    fn cabi_fmt_str_appends() {
+        // SAFETY: contract.
+        unsafe {
+            let buf = __cobrust_str_new();
+            let bytes = b"world";
+            __cobrust_fmt_str(buf, bytes.as_ptr(), bytes.len() as i64);
+            assert_eq!(__cobrust_str_len(buf), 5);
+            __cobrust_str_drop(buf);
+        }
+    }
+
+    #[test]
+    fn cabi_fmt_repr_format_placeholder() {
+        // SAFETY: contract.
+        unsafe {
+            let buf = __cobrust_str_new();
+            __cobrust_fmt_repr(buf, std::ptr::null_mut(), 7);
+            assert_eq!(__cobrust_str_len(buf), 3); // "<7>"
+            __cobrust_str_drop(buf);
+        }
+    }
+
+    #[test]
+    fn cabi_str_handles_null_safely() {
+        // SAFETY: documented null-arg path on every helper.
+        unsafe {
+            __cobrust_str_drop(std::ptr::null_mut());
+            __cobrust_str_push_static(std::ptr::null_mut(), b"x".as_ptr(), 1);
+            assert_eq!(__cobrust_str_len(std::ptr::null_mut()), 0);
+            __cobrust_fmt_int(std::ptr::null_mut(), 1);
+            __cobrust_fmt_float(std::ptr::null_mut(), 1.0);
+            __cobrust_fmt_bool(std::ptr::null_mut(), 1);
+            __cobrust_fmt_str(std::ptr::null_mut(), b"x".as_ptr(), 1);
+            __cobrust_fmt_repr(std::ptr::null_mut(), std::ptr::null_mut(), 1);
+        }
+    }
+
+    #[test]
+    fn cabi_str_compose_full_fstring() {
+        // SAFETY: contract.
+        unsafe {
+            let buf = __cobrust_str_new();
+            let prefix = b"x = ";
+            __cobrust_str_push_static(buf, prefix.as_ptr(), prefix.len() as i64);
+            __cobrust_fmt_int(buf, 42);
+            // Expect "x = 42" -> 6 bytes.
+            assert_eq!(__cobrust_str_len(buf), 6);
+            __cobrust_str_drop(buf);
+        }
     }
 }

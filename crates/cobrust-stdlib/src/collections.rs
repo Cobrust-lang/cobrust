@@ -354,6 +354,416 @@ where
     }
 }
 
+// =====================================================================
+// C-ABI runtime helpers for codegen Aggregate lowering (ADR-0027 §1)
+// =====================================================================
+//
+// The Cranelift backend's `Rvalue::Aggregate` lowering emits calls
+// to these symbols. The signatures mirror the table in ADR-0027 §1:
+//   __cobrust_list_new(elem_size, len) -> *mut ListLayout
+//   __cobrust_list_set(list, i, v_i64)
+//   __cobrust_list_get(list, i) -> i64
+//   __cobrust_list_len(list) -> i64
+//   __cobrust_list_drop(list)
+//
+// At M12.x the storage element type is fixed at i64 (matches the
+// codegen integer width); Phase F widens to per-type elem_size
+// dispatch.
+
+#[repr(C)]
+struct ListI64Layout {
+    items: *mut i64,
+    len: i64,
+    cap: i64,
+}
+
+/// Allocate a new `List<i64>` with reserved capacity for `len`
+/// elements. Returns an opaque pointer the codegen passes to
+/// `__cobrust_list_set` and `__cobrust_list_get`.
+///
+/// # Safety
+///
+/// The caller must eventually pass the returned pointer to
+/// [`__cobrust_list_drop`] exactly once. `_elem_size` is reserved
+/// for Phase F per-type dispatch; M12.x ignores it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_new(_elem_size: i64, len: i64) -> *mut u8 {
+    let cap = len.max(0);
+    let layout = Box::new(ListI64Layout {
+        items: if cap == 0 {
+            std::ptr::null_mut()
+        } else {
+            // SAFETY: always-zero initialised + 8-byte aligned.
+            let l = std::alloc::Layout::array::<i64>(cap as usize).expect("layout");
+            // SAFETY: layout valid + non-zero.
+            let p = unsafe { std::alloc::alloc_zeroed(l) }.cast::<i64>();
+            if p.is_null() {
+                std::alloc::handle_alloc_error(l);
+            }
+            p
+        },
+        len: cap,
+        cap,
+    });
+    Box::into_raw(layout).cast::<u8>()
+}
+
+/// Set `list[i] = v`. M12.x semantics: `i` must be in
+/// `[0, list.len())`; out-of-bounds writes are silently dropped.
+///
+/// # Safety
+///
+/// `list` must be a non-null pointer returned by
+/// [`__cobrust_list_new`] and not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_set(list: *mut u8, i: i64, v: i64) {
+    if list.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &mut *list.cast::<ListI64Layout>() };
+    if i < 0 || i >= layout.len {
+        return;
+    }
+    // SAFETY: bounds-checked above; items is non-null when len>0.
+    unsafe {
+        *layout.items.add(i as usize) = v;
+    }
+}
+
+/// Read `list[i]`. Returns 0 on out-of-bounds (M12.x conservative).
+///
+/// # Safety
+///
+/// Same as [`__cobrust_list_set`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_get(list: *mut u8, i: i64) -> i64 {
+    if list.is_null() {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*list.cast::<ListI64Layout>() };
+    if i < 0 || i >= layout.len {
+        return 0;
+    }
+    // SAFETY: bounds-checked above.
+    unsafe { *layout.items.add(i as usize) }
+}
+
+/// Read `list.len()`. Returns 0 for null.
+///
+/// # Safety
+///
+/// `list` must be non-null and a valid layout, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_len(list: *mut u8) -> i64 {
+    if list.is_null() {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*list.cast::<ListI64Layout>() };
+    layout.len
+}
+
+/// Drop a list (free items + free the layout box).
+///
+/// # Safety
+///
+/// `list` must be the pointer returned by [`__cobrust_list_new`]
+/// and not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_drop(list: *mut u8) {
+    if list.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let boxed = unsafe { Box::from_raw(list.cast::<ListI64Layout>()) };
+    if !boxed.items.is_null() && boxed.cap > 0 {
+        let l = std::alloc::Layout::array::<i64>(boxed.cap as usize).expect("layout");
+        // SAFETY: items came from `alloc_zeroed` with the same layout.
+        unsafe { std::alloc::dealloc(boxed.items.cast::<u8>(), l) };
+    }
+    drop(boxed);
+}
+
+// --- Dict<i64, i64> ---------------------------------------------------
+
+#[repr(C)]
+struct DictI64Layout {
+    map: *mut std::collections::HashMap<i64, i64>,
+}
+
+/// Allocate a new `Dict<i64, i64>` with reserved capacity for `len`
+/// entries.
+///
+/// # Safety
+///
+/// Caller must eventually pass the result to
+/// [`__cobrust_dict_drop`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_new(_k_size: i64, _v_size: i64, len: i64) -> *mut u8 {
+    let cap = len.max(0) as usize;
+    let m: std::collections::HashMap<i64, i64> = std::collections::HashMap::with_capacity(cap);
+    let layout = Box::new(DictI64Layout {
+        map: Box::into_raw(Box::new(m)),
+    });
+    Box::into_raw(layout).cast::<u8>()
+}
+
+/// Insert / replace `dict[k] = v`.
+///
+/// # Safety
+///
+/// `dict` must be a non-null pointer returned by
+/// [`__cobrust_dict_new`] and not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_set(dict: *mut u8, k: i64, v: i64) {
+    if dict.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*dict.cast::<DictI64Layout>() };
+    if layout.map.is_null() {
+        return;
+    }
+    // SAFETY: map pointer is owned by the layout.
+    let map = unsafe { &mut *layout.map };
+    map.insert(k, v);
+}
+
+/// Read `dict[k]`. Returns 0 if absent.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_dict_set`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_get(dict: *mut u8, k: i64) -> i64 {
+    if dict.is_null() {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*dict.cast::<DictI64Layout>() };
+    if layout.map.is_null() {
+        return 0;
+    }
+    // SAFETY: map pointer is owned.
+    let map = unsafe { &*layout.map };
+    map.get(&k).copied().unwrap_or(0)
+}
+
+/// Read `dict.len()`.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_dict_set`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_len(dict: *mut u8) -> i64 {
+    if dict.is_null() {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*dict.cast::<DictI64Layout>() };
+    if layout.map.is_null() {
+        return 0;
+    }
+    // SAFETY: map pointer is owned.
+    let map = unsafe { &*layout.map };
+    map.len() as i64
+}
+
+/// Drop a dict (free entries + free the layout).
+///
+/// # Safety
+///
+/// Same as [`__cobrust_dict_set`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_drop(dict: *mut u8) {
+    if dict.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { Box::from_raw(dict.cast::<DictI64Layout>()) };
+    if !layout.map.is_null() {
+        // SAFETY: map pointer is owned.
+        let _ = unsafe { Box::from_raw(layout.map) };
+    }
+    drop(layout);
+}
+
+// --- Set<i64> --------------------------------------------------------
+
+#[repr(C)]
+struct SetI64Layout {
+    set: *mut std::collections::HashSet<i64>,
+}
+
+/// Allocate a new `Set<i64>` with reserved capacity for `len`
+/// entries.
+///
+/// # Safety
+///
+/// Caller must eventually pass the result to
+/// [`__cobrust_set_drop`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_set_new(_elem_size: i64, len: i64) -> *mut u8 {
+    let cap = len.max(0) as usize;
+    let s: std::collections::HashSet<i64> = std::collections::HashSet::with_capacity(cap);
+    let layout = Box::new(SetI64Layout {
+        set: Box::into_raw(Box::new(s)),
+    });
+    Box::into_raw(layout).cast::<u8>()
+}
+
+/// `set.insert(v)`. Idempotent for duplicates.
+///
+/// # Safety
+///
+/// `set` must be a non-null pointer returned by
+/// [`__cobrust_set_new`] and not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_set_insert(set: *mut u8, v: i64) {
+    if set.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*set.cast::<SetI64Layout>() };
+    if layout.set.is_null() {
+        return;
+    }
+    // SAFETY: set pointer is owned.
+    let s = unsafe { &mut *layout.set };
+    s.insert(v);
+}
+
+/// `set.contains(v)`. Returns 0 / 1.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_set_insert`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_set_contains(set: *mut u8, v: i64) -> i64 {
+    if set.is_null() {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*set.cast::<SetI64Layout>() };
+    if layout.set.is_null() {
+        return 0;
+    }
+    // SAFETY: set pointer is owned.
+    let s = unsafe { &*layout.set };
+    if s.contains(&v) { 1 } else { 0 }
+}
+
+/// `set.len()`.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_set_insert`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_set_len(set: *mut u8) -> i64 {
+    if set.is_null() {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*set.cast::<SetI64Layout>() };
+    if layout.set.is_null() {
+        return 0;
+    }
+    // SAFETY: set pointer is owned.
+    let s = unsafe { &*layout.set };
+    s.len() as i64
+}
+
+/// Drop a set.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_set_insert`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_set_drop(set: *mut u8) {
+    if set.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { Box::from_raw(set.cast::<SetI64Layout>()) };
+    if !layout.set.is_null() {
+        // SAFETY: set pointer is owned.
+        let _ = unsafe { Box::from_raw(layout.set) };
+    }
+    drop(layout);
+}
+
+// --- Tuple<i64, ...> -------------------------------------------------
+// Tuple uses a flat struct backed by a heap allocation of N i64
+// slots. M12.x is uniform-element only (matches Aggregate kind shape
+// in MIR); Phase F widens to per-element typing.
+
+/// Allocate a tuple slot of `n` i64 elements.
+///
+/// # Safety
+///
+/// Caller must eventually pass result to [`__cobrust_tuple_drop`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_tuple_new(n: i64) -> *mut u8 {
+    if n <= 0 {
+        return std::ptr::NonNull::<u8>::dangling().as_ptr();
+    }
+    let l = std::alloc::Layout::array::<i64>(n as usize).expect("layout");
+    // SAFETY: layout valid + non-zero.
+    let p = unsafe { std::alloc::alloc_zeroed(l) };
+    if p.is_null() {
+        std::alloc::handle_alloc_error(l);
+    }
+    p
+}
+
+/// Set tuple slot `i` to `v`.
+///
+/// # Safety
+///
+/// `tup` must be a non-null pointer returned by
+/// [`__cobrust_tuple_new`] with size at least `i+1`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_tuple_set(tup: *mut u8, i: i64, v: i64) {
+    if tup.is_null() || i < 0 {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    unsafe {
+        *tup.cast::<i64>().add(i as usize) = v;
+    }
+}
+
+/// Read tuple slot `i`.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_tuple_set`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_tuple_get(tup: *mut u8, i: i64) -> i64 {
+    if tup.is_null() || i < 0 {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    unsafe { *tup.cast::<i64>().add(i as usize) }
+}
+
+/// Drop a tuple.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_tuple_set`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_tuple_drop(tup: *mut u8, n: i64) {
+    if tup.is_null() || n <= 0 {
+        return;
+    }
+    let l = std::alloc::Layout::array::<i64>(n as usize).expect("layout");
+    // SAFETY: tup came from alloc_zeroed with same layout.
+    unsafe { std::alloc::dealloc(tup, l) };
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -645,5 +1055,149 @@ mod tests {
         assert!(l.is_empty());
         assert!(d.is_empty());
         assert!(s.is_empty());
+    }
+
+    // -- C-ABI runtime helpers (M12.x ADR-0027 §1) -----------------
+
+    #[test]
+    fn cabi_list_new_set_get_drop() {
+        // SAFETY: documented contract.
+        unsafe {
+            let l = __cobrust_list_new(8, 3);
+            assert!(!l.is_null());
+            __cobrust_list_set(l, 0, 100);
+            __cobrust_list_set(l, 1, 200);
+            __cobrust_list_set(l, 2, 300);
+            assert_eq!(__cobrust_list_get(l, 0), 100);
+            assert_eq!(__cobrust_list_get(l, 1), 200);
+            assert_eq!(__cobrust_list_get(l, 2), 300);
+            assert_eq!(__cobrust_list_len(l), 3);
+            __cobrust_list_drop(l);
+        }
+    }
+
+    #[test]
+    fn cabi_list_zero_len_no_alloc() {
+        // SAFETY: contract.
+        unsafe {
+            let l = __cobrust_list_new(8, 0);
+            assert!(!l.is_null());
+            assert_eq!(__cobrust_list_len(l), 0);
+            __cobrust_list_drop(l);
+        }
+    }
+
+    #[test]
+    fn cabi_list_get_out_of_bounds_returns_zero() {
+        // SAFETY: contract.
+        unsafe {
+            let l = __cobrust_list_new(8, 1);
+            __cobrust_list_set(l, 0, 42);
+            assert_eq!(__cobrust_list_get(l, 99), 0);
+            __cobrust_list_drop(l);
+        }
+    }
+
+    #[test]
+    fn cabi_list_handles_null() {
+        // SAFETY: documented null-arg path.
+        unsafe {
+            __cobrust_list_set(std::ptr::null_mut(), 0, 0);
+            assert_eq!(__cobrust_list_get(std::ptr::null_mut(), 0), 0);
+            assert_eq!(__cobrust_list_len(std::ptr::null_mut()), 0);
+            __cobrust_list_drop(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn cabi_dict_new_set_get_drop() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(8, 8, 4);
+            assert!(!d.is_null());
+            __cobrust_dict_set(d, 1, 10);
+            __cobrust_dict_set(d, 2, 20);
+            __cobrust_dict_set(d, 3, 30);
+            assert_eq!(__cobrust_dict_get(d, 1), 10);
+            assert_eq!(__cobrust_dict_get(d, 2), 20);
+            assert_eq!(__cobrust_dict_get(d, 3), 30);
+            assert_eq!(__cobrust_dict_len(d), 3);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_replace_value() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(8, 8, 1);
+            __cobrust_dict_set(d, 1, 10);
+            __cobrust_dict_set(d, 1, 99);
+            assert_eq!(__cobrust_dict_get(d, 1), 99);
+            assert_eq!(__cobrust_dict_len(d), 1);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_get_missing_returns_zero() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(8, 8, 0);
+            assert_eq!(__cobrust_dict_get(d, 42), 0);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_set_insert_dedups() {
+        // SAFETY: contract.
+        unsafe {
+            let s = __cobrust_set_new(8, 4);
+            __cobrust_set_insert(s, 1);
+            __cobrust_set_insert(s, 2);
+            __cobrust_set_insert(s, 1);
+            assert_eq!(__cobrust_set_len(s), 2);
+            assert_eq!(__cobrust_set_contains(s, 1), 1);
+            assert_eq!(__cobrust_set_contains(s, 2), 1);
+            assert_eq!(__cobrust_set_contains(s, 3), 0);
+            __cobrust_set_drop(s);
+        }
+    }
+
+    #[test]
+    fn cabi_set_handles_null() {
+        // SAFETY: documented null path.
+        unsafe {
+            __cobrust_set_insert(std::ptr::null_mut(), 1);
+            assert_eq!(__cobrust_set_contains(std::ptr::null_mut(), 1), 0);
+            assert_eq!(__cobrust_set_len(std::ptr::null_mut()), 0);
+            __cobrust_set_drop(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn cabi_tuple_new_set_get_drop() {
+        // SAFETY: contract.
+        unsafe {
+            let t = __cobrust_tuple_new(3);
+            __cobrust_tuple_set(t, 0, 11);
+            __cobrust_tuple_set(t, 1, 22);
+            __cobrust_tuple_set(t, 2, 33);
+            assert_eq!(__cobrust_tuple_get(t, 0), 11);
+            assert_eq!(__cobrust_tuple_get(t, 1), 22);
+            assert_eq!(__cobrust_tuple_get(t, 2), 33);
+            __cobrust_tuple_drop(t, 3);
+        }
+    }
+
+    #[test]
+    fn cabi_tuple_zero_size_no_alloc() {
+        // SAFETY: contract — n<=0 returns dangling ptr.
+        unsafe {
+            let t = __cobrust_tuple_new(0);
+            assert!(!t.is_null());
+            __cobrust_tuple_drop(t, 0);
+        }
     }
 }
