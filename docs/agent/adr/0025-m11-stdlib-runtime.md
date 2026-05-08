@@ -4,7 +4,7 @@ adr_id: 0025
 title: M11 stdlib + runtime — module surfaces, runtime ABI, drop-schedule fix, codegen amendments, print-intrinsic lift
 status: accepted
 date: 2026-04-30
-last_verified_commit: TBD
+last_verified_commit: f758260
 supersedes: []
 superseded_by: []
 dependencies: [adr:0019, adr:0020, adr:0023, adr:0024]
