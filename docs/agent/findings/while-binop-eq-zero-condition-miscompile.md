@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: while-binop-eq-zero-condition-miscompile
-last_verified_commit: TBD
+last_verified_commit: cfb7fd0
 discovered_by: review-claude (LeetCode farm Round 1, LC 263 ugly-number)
 severity: P0
 related: m12-x-while-if-codegen-regression (closed by M11.1), codegen-i8-i64-mismatch-at-4-blocks (closed by ADR-0033 Option C)
