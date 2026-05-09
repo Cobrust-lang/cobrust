@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: translator-real-vs-synthetic-status
-last_verified_commit: TBD
+last_verified_commit: 4fabf4c
 dependencies: [adr:0007, adr:0008, adr:0009, adr:0010, adr:0022, adr:0032, adr:0036, finding:audit-1-tomli-real-llm-result, finding:audit-3a-stateful-prompt-design]
 ---
 
