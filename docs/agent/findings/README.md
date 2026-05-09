@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: 7a51f8c
+last_verified_commit: 6753596
 ---
 
 # Findings
@@ -43,3 +43,5 @@ valuable as capturing what does.
 | `translator-real-vs-synthetic-status` | [`translator-real-vs-synthetic-status.md`](translator-real-vs-synthetic-status.md) | L0→L1→L2→L3 closed loop never run end-to-end with a real LLM on a real library; remediation sprint queued |
 | `m12-x-while-if-codegen-regression` | [`m12-x-while-if-codegen-regression.md`](m12-x-while-if-codegen-regression.md) | Cranelift backend post-M12.x: `while`-loop with leading `if` produces empty stdout; M11.1 sprint queued to fix before fizzbuzz/fib rewrite |
 | `multi-agent-cobrust-topology` | [`multi-agent-cobrust-topology.md`](multi-agent-cobrust-topology.md) | 6 recurring failure modes + SOPs from 100+ commits of 4-way parallel multi-agent worktree topology — externalised methodology per audit #6 |
+| `m9-cross-arch-linux-x86_64-validation` | [`m9-cross-arch-linux-x86_64-validation.md`](m9-cross-arch-linux-x86_64-validation.md) | Linux x86_64 surfaced `infer_return_type` Ty::None float bug; macOS arm64 silent-wrong-value latent. P0 fix sprint dispatched (Task #41) |
+| `codegen-i8-i64-mismatch-at-4-blocks` | [`codegen-i8-i64-mismatch-at-4-blocks.md`](codegen-i8-i64-mismatch-at-4-blocks.md) | review-claude Conway-toy stress: 4+ similar inline compute blocks → Cranelift verifier rejects `iadd.i8` with i64 operand; `cobrust build` doesn't exit non-zero → silent miscompile (P0 CLI hardening + P1 codegen narrow-type fix queued) |
