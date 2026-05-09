@@ -63,3 +63,4 @@ same atomic commit as the change it justifies.
 | [0032](0032-audit-1-tomli-real-llm-e2e.md) | Audit #1 — first end-to-end real-LLM translation of `tomli::parse_bool` through L0..L2 with cache discipline (no synthetic, isolated tempdir) | accepted | 2026-05-09 |
 | [0033](0033-codegen-float-return-fix.md) | Codegen Ty::None Option C — root-primitive `inferred_locals` + fixed-point; closed Bug A (Float→I8) + Bug B (Conway-toy 4+ block) | accepted | 2026-05-09 |
 | [0034](0034-m11-2-fnref-call-lowering.md) | M11.2 — `Constant::FnRef` Call lowering via codegen forward-declaration pass (audit #2 closes from 🟡 PARTIAL to ✅ DONE) | accepted | 2026-05-09 |
+| [0035](0035-m11-3-while-condition-lower-primitive.md) | M11.3 — `lower_condition` root primitive shared by `if` + `while` heads (closes review-claude LC 263 P0 + 同 ADR-0033 Option C 精神) | accepted | 2026-05-09 |
