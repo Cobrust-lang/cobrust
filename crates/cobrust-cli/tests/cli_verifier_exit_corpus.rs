@@ -65,6 +65,13 @@
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_panics_doc)]
+// M11.2 sprint clippy fix: this test file pre-existed at HEAD
+// `b4808e0` with a stale `r#"..."#` raw string literal that newer
+// clippy flags as `needless_raw_string_hashes`. Allow at module level
+// per `feedback_p9_clippy_stall_pattern` — touching the literal
+// itself is out of scope for M11.2 (the fixture is from a stale
+// pre-ADR-0033 sibling sprint and the tests are now `#[ignore]`'d).
+#![allow(clippy::needless_raw_string_hashes)]
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -133,6 +140,19 @@ const CLEAN_PROGRAM: &str = "fn main() -> i64:\n    return 0\n";
 ///
 /// If this test fails (exit 0), the verifier error is being swallowed
 /// somewhere between `cranelift_backend::define_body` and the CLI shell.
+///
+/// STALE post-ADR-0033 (commit `3392eb5`): the underlying Bug 1
+/// (codegen-side i8/i64 narrow on 4 similar blocks) was empirically
+/// closed by the Option C root-primitive `inferred_locals` fixed-point
+/// fix. The 4-block repro now COMPILES CLEANLY — there is no longer a
+/// verifier error to assert against. Per
+/// `findings/codegen-i8-i64-mismatch-at-4-blocks.md` §Conclusion, Bug 1
+/// is RESOLVED + Bug 2 was a mis-diagnosis. The CLI exit-3 propagation
+/// path is still correct (verified at HEAD `b4808e0`); we just no
+/// longer have a viable trigger source. M11.2 sprint surfaces this
+/// as a follow-up; the test stays as `#[ignore]` until a NEW
+/// verifier-rejecting fixture is supplied (or the test is retired).
+#[ignore = "ADR-0033 closed the underlying codegen bug; FOUR_BLOCK_REPRO no longer triggers a verifier error. See findings/codegen-i8-i64-mismatch-at-4-blocks.md."]
 #[test]
 fn v01_four_block_repro_exits_non_zero() {
     let bin = cobrust_binary();
@@ -195,6 +215,12 @@ fn v02_clean_program_exits_zero() {
 ///
 /// The `build.rs::run` function uses `eprintln!` (stderr) to emit
 /// `cobrust build: {e}`. This test asserts the discipline holds.
+///
+/// STALE post-ADR-0033 (same as v01): FOUR_BLOCK_REPRO no longer
+/// triggers a verifier error since `inferred_locals` fixed-point
+/// resolves the i8/i64 chain depth ≥ 2 case. See v01's doc comment +
+/// `findings/codegen-i8-i64-mismatch-at-4-blocks.md`.
+#[ignore = "ADR-0033 closed the underlying codegen bug; FOUR_BLOCK_REPRO no longer triggers a verifier error. See findings/codegen-i8-i64-mismatch-at-4-blocks.md."]
 #[test]
 fn v03_verifier_error_on_stderr_not_stdout() {
     let bin = cobrust_binary();

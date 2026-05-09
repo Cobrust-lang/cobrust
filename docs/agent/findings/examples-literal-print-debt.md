@@ -1,10 +1,10 @@
 ---
 doc_kind: finding
 finding_id: examples-literal-print-debt
-last_verified_commit: ea093ef
+last_verified_commit: TBD
 status: closed
-closed_by: M11.1 sprint (ADR-0030)
-dependencies: [adr:0019, adr:0023, adr:0025, adr:0030]
+closed_by: M11.2 sprint (ADR-0034)
+dependencies: [adr:0019, adr:0023, adr:0025, adr:0030, adr:0033, adr:0034]
 ---
 
 # Finding: M11/M12 examples are literal-print decorations, not real Cobrust algorithms
@@ -92,7 +92,7 @@ M11.1 sprint per the third-party audit's recommendation.
    the language is at M11+M12-baseline expressive depth (literal
    prints work; real algorithms TBD at M12.x).
 
-## Closed by M11.1 (ADR-0030)
+## Closed by M11.1 (ADR-0030) — partial; finalized by M11.2 (ADR-0034)
 
 The M11.1 sprint (ADR-0030) fixed the while-loop-with-leading-if codegen
 regression that blocked this finding's remediation, then rewrote both
@@ -101,10 +101,33 @@ examples:
 - `examples/fizzbuzz.cb`: real while + if/elif/elif/else + `%` algorithm.
   `cobrust run examples/fizzbuzz.cb` produces the canonical 1..15 FizzBuzz
   sequence computed, not printed as literals.
-- `examples/fib.cb`: real iterative algorithm (while loop + mutation).
-  Recursive form deferred to M11.x (`Constant::FnRef` Call lowering per
-  ADR-0025 §"Codegen amendments"); the iterative form is still a real
-  algorithm, not a literal string.
+- `examples/fib.cb`: 🟡 PARTIAL post-M11.1 — real *iterative* algorithm
+  (while loop + mutation) only. The recursive form was deferred to
+  M11.2 (`Constant::FnRef` Call lowering per ADR-0025 §"Codegen
+  amendments"); audit-#2 review-claude review item #2 explicitly
+  flagged this as the gap.
+
+The M11.2 sprint (ADR-0034) closed the gap. `examples/fib.cb` now
+implements the canonical recursive form:
+
+```cobrust
+fn fib(n: i64) -> i64:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+fn main() -> i64:
+    print("fib(10) =")
+    print_int(fib(10))
+    return 0
+```
+
+`cobrust build examples/fib.cb && ./target/cobrust/fib` produces stdout
+**bit-identical** to `fib(10) =\n55\n` (verified via `cmp` against an
+explicit expected fixture during M11.2 sprint).
+
+Status: ✅ DONE. Both fizzbuzz and fib now exercise real Cobrust
+algorithms; the audit-#2 spirit-of-usable check is closed.
 
 `examples/notebook/` remains as a separate audit item
 (`findings/translator-real-vs-synthetic-status.md`).
