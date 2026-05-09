@@ -140,6 +140,18 @@ struct CraneliftCtx {
 
 impl CraneliftCtx {
     fn body_signature(&self, body: &Body) -> Signature {
+        // ADR-0033: compute the converged inferred-locals map *first*
+        // so the return-type inference sees fully-resolved chains
+        // through `_un` / `_bin` / `_callret` synthetic temps. Without
+        // this, a body like `fn f() -> f64: return -2.71` resolves
+        // the return type to I8 (because `_un` is declared `Ty::None`)
+        // and Cranelift x86_64's `CvtFloatToSintSeq` panics in
+        // emission.
+        let inferred = self.infer_local_types(body);
+        self.body_signature_with(body, &inferred)
+    }
+
+    fn body_signature_with(&self, body: &Body, inferred: &HashMap<LocalId, ir::Type>) -> Signature {
         let mut sig = Signature::new(self.call_conv);
         // Skip the synthetic return slot at locals[0] when collecting params.
         // MIR convention (lower.rs `BodyBuilder::new`): _0 is the dedicated
@@ -165,7 +177,9 @@ impl CraneliftCtx {
                 cranelift_scalar_ty(&local.ty).unwrap_or(self.pointer_type),
             ));
         }
-        let ret_ty = self.infer_return_type(body).unwrap_or(self.pointer_type);
+        let ret_ty = self
+            .infer_return_type(body, inferred)
+            .unwrap_or(self.pointer_type);
         sig.returns.push(AbiParam::new(ret_ty));
         sig
     }
@@ -174,14 +188,23 @@ impl CraneliftCtx {
     /// last assignment to the return local. The MIR puts `_return:
     /// Ty::None` regardless of the real signature, so codegen has
     /// to reconstruct the type from the dataflow.
-    fn infer_return_type(&self, body: &Body) -> Option<ir::Type> {
+    ///
+    /// ADR-0033: takes the converged inferred-locals map so any
+    /// `_0 = Use(Copy(_un))`-style chain through a `Ty::None`
+    /// synthetic temp resolves to the temp's actual stored type
+    /// (e.g. F64) rather than the bogus I8 from the declared type.
+    fn infer_return_type(
+        &self,
+        body: &Body,
+        inferred: &HashMap<LocalId, ir::Type>,
+    ) -> Option<ir::Type> {
         // Walk every block + statement; the return local's RHS type
         // is what we want.
         for block in &body.blocks {
             for stmt in &block.statements {
                 if let cobrust_mir::StatementKind::Assign { place, rvalue } = &stmt.kind {
                     if place.local == body.return_local && place.projections.is_empty() {
-                        if let Some(ty) = self.rvalue_ty(body, rvalue) {
+                        if let Some(ty) = self.rvalue_ty(body, rvalue, inferred) {
                             return Some(ty);
                         }
                     }
@@ -194,19 +217,31 @@ impl CraneliftCtx {
             .and_then(|l| cranelift_scalar_ty(&l.ty))
     }
 
-    fn rvalue_ty(&self, body: &Body, rvalue: &cobrust_mir::Rvalue) -> Option<ir::Type> {
+    /// ADR-0033: `inferred` is the in-progress (during the
+    /// fixed-point pass) or converged (afterward) map of
+    /// `LocalId → ir::Type` for locals whose declared `Ty` is
+    /// `Ty::None`. Threading the map through here is what closes
+    /// the original gap: `Operand::Copy(_un)` previously resolved
+    /// to the local's declared type (`Ty::None` → `I8`); now it
+    /// consults the inferred type (e.g. `F64`).
+    fn rvalue_ty(
+        &self,
+        body: &Body,
+        rvalue: &cobrust_mir::Rvalue,
+        inferred: &HashMap<LocalId, ir::Type>,
+    ) -> Option<ir::Type> {
         match rvalue {
-            cobrust_mir::Rvalue::Use(op) => self.operand_ty(body, op),
+            cobrust_mir::Rvalue::Use(op) => self.operand_ty(body, op, inferred),
             cobrust_mir::Rvalue::BinaryOp(op, a, _b) => {
                 use cobrust_mir::BinOp::*;
                 match op {
                     Eq | NotEq | Lt | LtEq | Gt | GtEq => Some(ir::types::I8),
                     And | Or => Some(ir::types::I8),
                     In | NotIn => Some(ir::types::I8),
-                    _ => self.operand_ty(body, a),
+                    _ => self.operand_ty(body, a, inferred),
                 }
             }
-            cobrust_mir::Rvalue::UnaryOp(_, a) => self.operand_ty(body, a),
+            cobrust_mir::Rvalue::UnaryOp(_, a) => self.operand_ty(body, a, inferred),
             cobrust_mir::Rvalue::Cast(_, _, ty) => cranelift_scalar_ty(ty),
             cobrust_mir::Rvalue::Aggregate(_, _) | cobrust_mir::Rvalue::Ref(_, _) => {
                 Some(self.pointer_type)
@@ -217,13 +252,30 @@ impl CraneliftCtx {
         }
     }
 
-    fn operand_ty(&self, body: &Body, op: &cobrust_mir::Operand) -> Option<ir::Type> {
+    fn operand_ty(
+        &self,
+        body: &Body,
+        op: &cobrust_mir::Operand,
+        inferred: &HashMap<LocalId, ir::Type>,
+    ) -> Option<ir::Type> {
         use cobrust_mir::{Constant, Operand};
         match op {
-            Operand::Copy(p) | Operand::Move(p) => body
-                .locals
-                .get(p.local.0 as usize)
-                .and_then(|l| cranelift_scalar_ty(&l.ty)),
+            Operand::Copy(p) | Operand::Move(p) => {
+                // ADR-0033 fix: prefer the inferred-locals map when
+                // the local's declared type is `Ty::None` (or any
+                // type that does not yield a scalar Cranelift type
+                // via `cranelift_scalar_ty`). Otherwise fall back to
+                // the declared type. This single-point change closes
+                // the cross-arch float-return bug; the fixed-point
+                // loop in `infer_local_types` ensures `inferred`
+                // contains the right answer for every chain depth.
+                if let Some(ty) = inferred.get(&p.local) {
+                    return Some(*ty);
+                }
+                body.locals
+                    .get(p.local.0 as usize)
+                    .and_then(|l| cranelift_scalar_ty(&l.ty))
+            }
             Operand::Constant(c) => Some(match c {
                 Constant::Bool(_) | Constant::None => ir::types::I8,
                 Constant::Int(_) => ir::types::I64,
@@ -238,28 +290,70 @@ impl CraneliftCtx {
     /// typed synthetic temps introduced by the MIR lowering for sub-
     /// expression spills). Walk every `Statement::Assign`; the first
     /// rvalue assigned to a local gives that local's effective type.
+    ///
+    /// ADR-0033: runs to a fixed-point. Each iteration re-evaluates
+    /// every Ty::None local against its rvalue using the in-progress
+    /// map; an iteration that produces no new bindings ends the loop.
+    /// This closes the chain-depth ≥ 2 case where an outer temp's
+    /// rvalue references an inner temp whose inferred type is not yet
+    /// materialized in iteration 1. Convergence is bounded by the
+    /// length of the longest synthetic-temp chain (typically 2-3
+    /// iterations for arithmetic-heavy bodies).
     fn infer_local_types(&self, body: &Body) -> HashMap<LocalId, ir::Type> {
-        let mut out: HashMap<LocalId, ir::Type> = HashMap::new();
+        // Identify candidate locals: those whose declared `Ty` is
+        // `Ty::None` or otherwise fails to map to a Cranelift scalar.
+        // Locals with a useful declared type are excluded from the
+        // map; their type comes from the declaration directly.
+        let mut candidates: Vec<LocalId> = Vec::new();
         for local in &body.locals {
-            // Only infer for locals where the declared Ty maps unhelpfully
-            // (Ty::None and the like). For Ty::Int, Ty::Float, Ty::Bool
-            // the declared type is authoritative.
-            if cranelift_scalar_ty(&local.ty).is_none() {
-                // Will fill below; keep map sentinel so we know we want it.
-            } else if !matches!(local.ty, cobrust_types::Ty::None) {
-                continue;
+            // Special-case the return local _0: the lowering always
+            // declares it as `Ty::None` (per `BodyBuilder::new`); its
+            // real type comes from whatever value gets assigned to it.
+            // It is allocated as a Variable separately (with type =
+            // `infer_return_type(...)`) but should still appear in the
+            // inferred map so `Operand::Copy(_0)` (rare but possible
+            // in chained bodies) resolves correctly.
+            if matches!(local.ty, cobrust_types::Ty::None)
+                || cranelift_scalar_ty(&local.ty).is_none()
+            {
+                candidates.push(local.id);
             }
-            // For each candidate, scan body statements.
-            for block in &body.blocks {
-                for stmt in &block.statements {
-                    if let cobrust_mir::StatementKind::Assign { place, rvalue } = &stmt.kind {
-                        if place.local == local.id && place.projections.is_empty() {
-                            if let Some(ty) = self.rvalue_ty(body, rvalue) {
-                                out.insert(local.id, ty);
+        }
+
+        let mut out: HashMap<LocalId, ir::Type> = HashMap::new();
+
+        // Fixed-point iteration. The loop terminates because each
+        // iteration only adds entries (never removes), the candidate
+        // set is finite, and an iteration that adds nothing ends the
+        // loop. Bound the iteration count defensively at
+        // `candidates.len() + 1` so a malformed MIR (e.g. a self-
+        // referential `_x = Copy(_x)` chain) cannot spin forever.
+        let max_iters = candidates.len() + 1;
+        for _ in 0..max_iters {
+            let before = out.len();
+            for &local_id in &candidates {
+                // Skip already-resolved locals — they cannot get a
+                // *better* answer from a later iteration.
+                if out.contains_key(&local_id) {
+                    continue;
+                }
+                // Find the first Assign to this local that yields a
+                // resolvable type given the current `out` snapshot.
+                'scan: for block in &body.blocks {
+                    for stmt in &block.statements {
+                        if let cobrust_mir::StatementKind::Assign { place, rvalue } = &stmt.kind {
+                            if place.local == local_id && place.projections.is_empty() {
+                                if let Some(ty) = self.rvalue_ty(body, rvalue, &out) {
+                                    out.insert(local_id, ty);
+                                    break 'scan;
+                                }
                             }
                         }
                     }
                 }
+            }
+            if out.len() == before {
+                break;
             }
         }
         out
@@ -305,7 +399,15 @@ impl CraneliftCtx {
             );
         }
 
-        let sig = self.body_signature(body);
+        // ADR-0033: compute the converged inferred-locals map once so
+        // the same map drives the function signature, the return-type
+        // inference, AND the per-local Variable declarations. Without
+        // this single source of truth the three sites can disagree on
+        // a `Ty::None` local's effective type, which is exactly the
+        // cross-arch float-return bug from the M9 finding.
+        let inferred_locals = self.infer_local_types(body);
+
+        let sig = self.body_signature_with(body, &inferred_locals);
         let mut function = Function::with_name_signature(UserFuncName::user(0, body.def_id.0), sig);
 
         let mut builder_ctx = FunctionBuilderContext::new();
@@ -347,8 +449,9 @@ impl CraneliftCtx {
         // temporary locals to hold sub-expression results. We infer their
         // codegen-time types from the rvalue actually assigned by walking
         // every Assign statement.
-        let inferred_ret = self.infer_return_type(body).unwrap_or(self.pointer_type);
-        let inferred_locals = self.infer_local_types(body);
+        let inferred_ret = self
+            .infer_return_type(body, &inferred_locals)
+            .unwrap_or(self.pointer_type);
         let mut var_map: HashMap<LocalId, Variable> = HashMap::new();
         for local in &body.locals {
             let ty = if local.id == body.return_local {
