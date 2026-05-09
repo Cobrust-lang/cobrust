@@ -1633,6 +1633,26 @@ M11.2 sprint 闭合了 M9 codegen stub 在用户定义 fn 调用 callsite 上的
 
 **审计 #2 闭合**：finding `examples-literal-print-debt.md` 从 🟡 PARTIAL 升级为 ✅ DONE。Constitution §1.1 "syntactically familiar to Python users" 的承诺在 fib + fizzbuzz 上都是真实的——递归是用户定义 fn 的真实语义，不再是 print(字面量) 占位。
 
+### M11.3 — `lower_condition` 共享根原语（按 ADR-0035）
+
+M11.3 sprint 闭合了 24 小时内发现的第三个独立 `while`-头 codegen bug（前两个分别是 M12.x、ADR-0030 M11.1，外加 ADR-0033）。触发面来自 review-claude 的 LeetCode 263（Ugly Number）测试农场：`while n % 2 == 0:` 在 `n = 6` 时 body 永不进入（同样的 `n % 2 == 0` 在 `if` 头中对同一 `n` 值能正确成立）。bug 形状：任何 `while <BinOp> == 0`（或 `!= 0`），其中 LHS 是非平凡 BinOp——这是数论习语中极常见的模式（GCD-via-Euclid、因子约简、位遍历）。
+
+**修复（按 ADR-0035 §"Decision" 选项 2 — 两个头共享同一根原语）**：
+
+- 在 `crates/cobrust-mir/src/lower.rs` 中新增 `BodyBuilder::lower_condition(expr) -> (Operand, BlockId)` helper。返回条件的 Operand 以及 `cond_end_block`（条件值最终就绪的 block）。调用方在 `cond_end_block` 上写入 `SwitchInt`。
+- `lower_if` 与 `lower_loop` 的 While 分支都改写为调用 `lower_condition`。修复前 `lower_if` 已经使用了正确的 `cond_end_block` 模式（按 ADR-0030 M11.1 修复）；`lower_loop` 自己手写了一个等价物，错误地在 `lower_expr(cond)` 返回后把 `cur_block` 重置回循环 `header`，于是 SwitchInt 留在 `header`，而条件的最终 assigns 留在下游的 div-assert 后继 block 中。每次循环迭代因此读到了 stale（零初始化）值，body 永不进入。
+
+**层级修正（ADR-0035 假设 vs 实际）**：ADR §"Context" 假设 bug 在 `crates/cobrust-codegen/src/cranelift_backend.rs`。CLIF + MIR dump 的实证证伪——codegen 路径在两个头上都是正确的；只有 MIR 形状有分歧。修复因此落在 MIR 而非 codegen。同一原语，正确的层。
+
+**与既有 ADR 的交互**：
+
+- **ADR-0033 `inferred_locals` 不动点**（codegen 端 `Ty::None` 解析）：正交。`lower_condition` 操作 block-flow 形状；ADR-0033 操作 operand 类型推断。Verified by 用例 `while_condition_through_inferred_locals_chain`（`while -(n - 5) == 0:` 形状，同时穿过 `_un` Neg 和 `_bin` Eq）。
+- **ADR-0034 `Constant::FnRef` Call 降级**：正交。条件表达式中的函数调用通过 `Terminator::Call` 降级（自带目的地 block）；`lower_condition` 正确捕获调用后的 block 作为 `cond_end_block`。Verified by 用例 `while_binop_with_function_call`。
+
+**测试**：新增 24 个回归用例——12 个 `while` 头（`crates/cobrust-codegen/tests/while_condition_corpus.rs`）+ 12 个 `if` 兄弟（`crates/cobrust-codegen/tests/if_condition_corpus.rs`）。`if` 兄弟测试是确保共享原语不会反向破坏 `if`-头行为的回归保护。每个用例 shell out 调用 `cobrust` 二进制构建 + 运行程序，断言 stdout 字节级一致。
+
+**Finding 闭合**：`findings/while-binop-eq-zero-condition-miscompile.md`（P0，由 review-claude LC 263 农场发现）状态从 `open` 翻为 `closed_by_M11.3`。数论算法类——GCD、因子约简、ugly-number、位遍历——端到端解锁。
+
 ### M12 — 包格式 + 依赖解析 + 内容寻址注册表（依据 ADR-0026）
 
 `cobrust-pkg` crate（M12）落地宪法 §2.2 的绑定交付物的包格式部分：

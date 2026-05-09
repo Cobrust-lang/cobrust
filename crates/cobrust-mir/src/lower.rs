@@ -562,6 +562,37 @@ impl<'a> BodyBuilder<'a> {
     // Control flow lowering
     // -----------------------------------------------------------------
 
+    /// ADR-0035: shared condition-lowering root primitive used by both
+    /// `if` and `while` heads. Lowers the condition expression `expr`
+    /// (which may emit auxiliary blocks for division asserts on `%` /
+    /// `/` / `//`, short-circuit boolean evaluation, etc.) starting
+    /// from `self.cur_block`, and returns the condition `Operand` plus
+    /// the `BlockId` where the operand's value is finally available
+    /// — i.e. the block where any consumer (`Terminator::SwitchInt`)
+    /// must be emitted.
+    ///
+    /// Pre-condition: `self.cur_block` is set to the block where the
+    /// condition evaluation should begin.
+    /// Post-condition: `self.cur_block == Some(cond_end_block)`. The
+    /// caller is responsible for terminating `cond_end_block` with the
+    /// appropriate branch terminator (typically `SwitchInt`).
+    ///
+    /// The bug closed by this primitive (LC 263 `while n % 2 == 0`):
+    /// before extraction, `lower_loop`'s While arm reset `cur_block`
+    /// back to `header` after `lower_expr(cond)` returned, causing
+    /// the SwitchInt to be written into `header` while the actual
+    /// condition assigns lived in a downstream block (the post-divassert
+    /// successor). The header thus read a stale (zero-initialised)
+    /// `_bin` temp every loop iteration and the body never entered.
+    /// `lower_if` already used the correct `cond_end_block` pattern;
+    /// extracting this helper aligns both heads on the same primitive
+    /// per ADR-0035 §"Decision".
+    fn lower_condition(&mut self, expr: &Expr) -> Result<(Operand, BlockId), MirError> {
+        let cond_op = self.lower_expr(expr)?;
+        let cond_end_block = self.current_block_id();
+        Ok((cond_op, cond_end_block))
+    }
+
     fn lower_if(
         &mut self,
         arms: &[(Expr, HirBlock)],
@@ -584,23 +615,22 @@ impl<'a> BodyBuilder<'a> {
         let merge_block = self.start_new_block();
         self.cur_block = Some(caller_block.0 as usize);
 
-        // Strategy: for each arm, in current block evaluate cond,
-        // emit `SwitchInt cond -> [(true, body), (false, next_arm)]`,
+        // Strategy: for each arm, in current block evaluate cond via
+        // `lower_condition` (ADR-0035 root primitive), emit
+        // `SwitchInt cond -> [(true, body), (false, next_arm)]`,
         // body ends with Goto(merge), next becomes current.
 
         let mut cur = self.current_block_id();
         let mut arm_bodies: Vec<BlockId> = Vec::new();
         for (cond, body) in arms {
-            // Evaluate cond starting from `cur`. `lower_expr` may emit
-            // auxiliary blocks (e.g. div-assert for `%`), so after it
-            // returns `self.current_block_id()` is the block that holds
-            // the final cond operand and where the SwitchInt must land.
+            // Evaluate cond starting from `cur` via the shared
+            // `lower_condition` primitive. The primitive returns
+            // `cond_end_block` — the block that holds the final cond
+            // operand and where the SwitchInt must land (NOT the
+            // starting `cur`, which may have been terminated by a
+            // div-assert etc.).
             self.cur_block = Some(cur.0 as usize);
-            let cond_op = self.lower_expr(cond)?;
-            // Capture the block that lower_expr finished in — this is
-            // where the branch instruction belongs, NOT the starting `cur`
-            // (which may have been terminated by a div-assert etc.).
-            let cond_end_block = self.current_block_id();
+            let (cond_op, cond_end_block) = self.lower_condition(cond)?;
             // Allocate body block.
             let body_block = self.start_new_block();
             arm_bodies.push(body_block);
@@ -611,9 +641,7 @@ impl<'a> BodyBuilder<'a> {
             }
             // Allocate next-arm block (for falsy edge).
             let next_block = self.start_new_block();
-            // Terminate the cond-end block (not the original `cur`) with
-            // the branch. Using `cond_end_block` is correct when
-            // `lower_expr(cond)` emitted extra blocks (div-assert, etc.).
+            // Terminate the cond-end block with the branch.
             self.cur_block = Some(cond_end_block.0 as usize);
             self.terminate(Terminator::SwitchInt {
                 operand: cond_op,
@@ -645,7 +673,22 @@ impl<'a> BodyBuilder<'a> {
                 else_block,
                 ..
             } => {
-                // header → SwitchInt(cond) → [body, exit/else]
+                // header → [cond chain] → cond_end_block → SwitchInt → [body, exit/else]
+                //
+                // ADR-0035: condition lowering goes through the shared
+                // `lower_condition` primitive used by both `if` and `while`
+                // heads. The primitive may emit auxiliary blocks (e.g.
+                // div-assert successor for `n % 2`); the SwitchInt must be
+                // emitted in `cond_end_block`, NOT in `header`, otherwise
+                // the cond's final assigns are orphaned in a separate block
+                // and the SwitchInt reads a stale (zero-initialised) value
+                // — the LC 263 `while n % 2 == 0` miscompile shape.
+                //
+                // The body's back-edge `Goto(header)` is correct: jumping to
+                // header re-enters the full cond-eval chain (header still
+                // ends with `Assert(divcond) -> assert_target`, and
+                // assert_target's SwitchInt re-fires) so each iteration
+                // recomputes the condition's value.
                 self.ensure_open_block();
                 let pre = self.current_block_id();
                 let header = self.start_new_block();
@@ -653,10 +696,13 @@ impl<'a> BodyBuilder<'a> {
                 self.cur_block = Some(pre.0 as usize);
                 self.terminate(Terminator::Goto(header));
                 self.cur_block = Some(header.0 as usize);
-                let cond_op = self.lower_expr(cond)?;
+                let (cond_op, cond_end_block) = self.lower_condition(cond)?;
                 let body_block = self.start_new_block();
                 let exit_block = self.start_new_block();
-                self.cur_block = Some(header.0 as usize);
+                // Terminate cond_end_block (where the cond operand is
+                // available) with SwitchInt — NOT header, which may already
+                // be terminated by a div-assert flowing into the cond chain.
+                self.cur_block = Some(cond_end_block.0 as usize);
                 self.terminate(Terminator::SwitchInt {
                     operand: cond_op,
                     cases: vec![(SwitchValue::Bool(true), body_block)],

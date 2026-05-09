@@ -198,6 +198,84 @@ Expression (21–30):
 
 ADR-0006 §"Soundness proof obligation list" enumerates 9 type-level obligations; items 4–9 are discharged at type-check time (M2). Items 1–3 (Progress, Preservation, Lowering preservation) are flow obligations and project onto MIR-time as B1..B5.
 
+## M11.3 lower_condition extraction (per ADR-0035)
+
+`if` and `while` heads share a single MIR-level root primitive,
+`BodyBuilder::lower_condition`, defined in
+`crates/cobrust-mir/src/lower.rs`. The primitive lowers a condition
+expression `expr` (which may emit auxiliary blocks for division
+asserts on `%` / `/` / `//`, short-circuit Boolean evaluation, etc.)
+and returns `(Operand, BlockId)` — the cond's resulting Operand and
+the block where the Operand is finally available
+(`cond_end_block`). The caller is responsible for terminating
+`cond_end_block` with the appropriate branch terminator (typically
+`SwitchInt`); `cur_block` is left set to `cond_end_block`.
+
+Pre-condition: `self.cur_block` is set to the block where condition
+evaluation should begin.
+Post-condition: `self.cur_block == Some(cond_end_block)` and the
+caller terminates that block.
+
+### Why the primitive
+
+Pre-M11.3 `lower_if` and `lower_loop`'s While arm had divergent
+hand-rolled equivalents. `lower_if` correctly captured
+`cond_end_block = current_block_id()` after `lower_expr(cond)`
+returned (ADR-0030 fix). `lower_loop` instead reset
+`self.cur_block` back to the loop `header` block, blindly assuming
+the cond's final assigns lived in `header`. For trivial conds (`n > 0`,
+`n == 5`) that assumption held; for `<BinOp> == 0`-shape conds
+(LC 263 trigger: `while n % 2 == 0`), the inner `Mod` BinOp's
+div-assert chain split cond-evaluation across two blocks
+(header → assert_target). The While arm then wrote `SwitchInt(_eq)`
+into `header` while `_eq`'s assign lived in `assert_target`, so the
+SwitchInt read a stale (zero-initialised) value every iteration and
+the body never entered.
+
+### Block-flow shape after the fix
+
+For `while <cond_expr>:` where `<cond_expr>` lowers via
+`lower_condition` and may emit N >= 0 auxiliary blocks:
+
+```
+pre ──goto──▶ header ──[cond chain across 0..N blocks]──▶ cond_end_block
+                                                              │
+                                              ┌──SwitchInt───┴───┐
+                                              ▼                  ▼
+                                            body              exit/else
+                                              │
+                                              └─goto──▶ header (back-edge)
+```
+
+The body's back-edge `Goto(header)` is correct: jumping to header
+re-enters the full cond-eval chain (header still ends with whatever
+terminator `lower_expr(cond)` placed there — either a `SwitchInt`
+when the cond is trivial enough that no auxiliary blocks were
+emitted, or `Assert(divcond) -> assert_target` flowing into
+`assert_target`'s `SwitchInt` for `<BinOp> == 0` shapes), so each
+iteration recomputes the cond's value.
+
+### Interaction with prior ADRs
+
+- **ADR-0033 `inferred_locals` fixed-point** (codegen-side
+  `Ty::None` resolution): orthogonal. `lower_condition` operates on
+  block-flow shape; ADR-0033 operates on operand-type inference.
+  Both apply to the same MIR temps (e.g. `_bin: Ty::None`); neither
+  affects the other. Verified by corpus case
+  `while_condition_through_inferred_locals_chain` in
+  `crates/cobrust-codegen/tests/while_condition_corpus.rs`.
+- **ADR-0034 `Constant::FnRef` Call lowering**: orthogonal. A
+  function-call inside a condition expression lowers via
+  `Terminator::Call` (with its own destination block); the
+  `lower_condition` helper sees the call's destination as just
+  another part of the cond chain and correctly captures the
+  post-call block as `cond_end_block`. Verified by corpus case
+  `while_binop_with_function_call`.
+- **ADR-0030 M11.1 while-leading-if fix**: sibling. M11.1 fixed
+  `lower_if`'s block-id arithmetic when `if` is invoked from inside
+  a while body. M11.3 ensures both heads route through the same
+  primitive, eliminating the entire class of head-shape drift.
+
 ## Drop schedule algorithm
 
 ADR-0020 §"Drop schedule algorithm" — 5 phases:
