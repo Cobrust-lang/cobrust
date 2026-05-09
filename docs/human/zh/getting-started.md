@@ -7,40 +7,115 @@
 
 `rustup` 会自动按 `rust-toolchain.toml` 安装匹配版本，你**不需要**手动切换。
 
-## 从源码构建
+## 快速开始（5 步）
+
+### 1. 克隆仓库
 
 ```bash
 git clone https://github.com/cobrust/cobrust
 cd cobrust
+```
+
+### 2. 构建
+
+```bash
 cargo build --workspace
 ```
 
-完成后会得到 `target/debug/cobrust` 二进制——当前是 M0 占位，无子命令。
+得到 `target/debug/cobrust` —— Cobrust 编译器 CLI。
 
-## 跑测试
+### 3. Hello world
+
+新建 `hello.cb`：
+
+```cobrust
+fn main() -> i64:
+    print("hello, world")
+    return 0
+```
+
+编译并运行：
+
+```bash
+./target/debug/cobrust build hello.cb
+./hello
+```
+
+### 4. 真正的算法：FizzBuzz
+
+新建 `fizzbuzz.cb`：
+
+```cobrust
+fn main() -> i64:
+    let n: i64 = 1
+    while n <= 15:
+        if n % 15 == 0:
+            print("FizzBuzz")
+        elif n % 3 == 0:
+            print("Fizz")
+        elif n % 5 == 0:
+            print("Buzz")
+        else:
+            print_int(n)
+        n = n + 1
+    return 0
+```
+
+编译并运行：
+
+```bash
+./target/debug/cobrust build fizzbuzz.cb
+./fizzbuzz
+```
+
+这展示了真正的 Cobrust：`while` 循环、`if/elif/else` 分支、取模运算和可变绑定
+（M11.1 启用，ADR-0030）。
+
+### 5. 交互式 REPL
+
+```bash
+./target/debug/cobrust repl
+```
+
+尝试：
+
+```
+> let x: i64 = 42
+> :type x
+> let y: i64 = x + 1
+> print_int(y)
+> :hir let y
+> :quit
+```
+
+指令：`:type <var>`、`:ast`、`:hir <stmt>`、`:mir <stmt>`、`:clear`、`:help`。
+
+## 开发工作流
+
+### 跑测试
 
 ```bash
 cargo test --workspace
 ```
 
-M0 没有测试用例；首批测试在 M1 落地。
+Phase E 完成阶段（M11.1..M14，最近 d178a3f 完整冷构建）有 2,430+ 个通过的测试。
 
-## 跑 lint
+### 跑 lint
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-CI 会以 `-D warnings` 跑 clippy——任何警告都会让 PR 红。
+CI 会以 `-D warnings` 跑 clippy——任何警告都会让 PR 失败。
 
-## 跑文档覆盖检查
+### 跑文档覆盖检查
 
 ```bash
 bash scripts/doc-coverage.sh
 ```
 
-这是 M0 的占位检查——当前只验证三棵文档树的目录结构和 ADR-0001 的存在。M1+ 起会扩展为真正的"public item ↔ 三树文档"双向映射检查。
+验证所有公共项在 `docs/human/zh/`、`docs/human/en/` 和 `docs/agent/` 三棵文档树中都有对应文档。
 
 ## 工作流约束
 

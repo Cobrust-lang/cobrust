@@ -7,41 +7,120 @@ closed-loop translates the entire Python ecosystem.
 
 ## Status
 
-**M0 → M12 delivered. M12.x / M13 / M14 in flight.** As of
-2026-05-09 (HEAD `cc15f0b`): 100 commits, 26 ADRs accepted,
-2,088 tests passing on cold integrated rebuild. The compiler skeleton
-is end-to-end (`.cb` → AST → HIR → typed-HIR → MIR → Cranelift →
-Mach-O on macOS arm64); the AI translation subsystem ships a synthetic-
-LLM mode pipeline with five translated libraries (`cobrust-tomli`,
-`cobrust-dateutil`, `cobrust-msgpack`, `cobrust-requests`,
-`cobrust-click`) plus the `cobrust-numpy` numerical tier (M7.0..M7.6).
-A 16-module stdlib (`std.{io,collections,string,math,panic,env,fmt}`)
-and a content-addressed package format (`cobrust.toml` +
-`cobrust.lock`) ship at M11 + M12.
+**Phase E complete @ d178a3f (M11.1 spirit-met).** As of 2026-05-09
+(HEAD `b83ea80`): 31 ADRs accepted, 2,430+ tests passing on cold
+integrated rebuild. The language + runtime fully compose (`.cb` → AST
+→ HIR → typed-HIR → MIR → Cranelift → Mach-O on macOS arm64). M11.1
+(ADR-0030) restored real algorithmic fizzbuzz via `while` + `if/elif`
++ modulo. M13 (ADR-0028) wired structured concurrency. M14 (ADR-0029)
+shipped the interactive REPL with `:type/:ast/:hir/:mir` directives.
+The AI translation subsystem delivers a synthetic-LLM mode pipeline
+with five translated libraries and the `cobrust-numpy` numerical tier
+(M7.0..M7.6). A 16-module stdlib and a content-addressed package
+format ship at M11 + M12.
 
-**Honest caveats** (per
-[`docs/agent/findings/`](docs/agent/findings/README.md)):
+**Translation pipeline status** (per
+[ADR-0019 §"Three-tier anchor"](docs/agent/adr/0019-phase-e-language-runtime-roadmap.md)):
 
-- The four working `.cb` programs (`hello / fizzbuzz / fib / notebook`)
-  use literal-string `print(...)` calls; real Cobrust expression
-  (loops, recursion, arithmetic Rvalues, f-strings) lands at the
-  in-flight M12.x sprint per
-  [`finding:examples-literal-print-debt`](docs/agent/findings/examples-literal-print-debt.md).
-- The translation subsystem's L0 → L1 → L2 → L3 closed loop has
-  been validated synthetically only; a real-LLM end-to-end run on
-  `tomli` is queued per
+- **Default mode**: synthetic-LLM (hand-authored response tables for
+  determinism); real-LLM end-to-end audit queued per
   [`finding:translator-real-vs-synthetic-status`](docs/agent/findings/translator-real-vs-synthetic-status.md).
-- The LLM Router's wire protocol (provider, cache, ledger,
-  failure isolation) **is** real-LLM validated against an
-  OpenAI-compatible endpoint per
-  [`finding:m5-m7-real-llm-validation`](docs/agent/findings/m5-m7-real-llm-validation.md);
-  the open question is whether the L1 translation prompt + L2
-  verification gates converge under real diagnostic feedback
-  (vs. canned-response tables).
+- **Verified**: LLM Router wire protocol (OpenAI-compatible adapter,
+  cache, ledger, retry isolation) against live endpoint per
+  [`finding:m5-m7-real-llm-validation`](docs/agent/findings/m5-m7-real-llm-validation.md).
+- **Known limitation**: closed-loop L0→L1→L2→L3 verification has never
+  executed on a real Python library. Audit #1 (real-LLM `tomli` E2E)
+  in flight to validate the repair loop under real diagnostic
+  feedback vs. synthetic canned responses.
 
 See
 [milestones (en)](docs/human/en/milestones.md) /
 [里程碑 (zh)](docs/human/zh/milestones.md) for the full roadmap.
+
+## Quick start (5 steps)
+
+### 1. Clone
+
+```bash
+git clone https://github.com/cobrust/cobrust
+cd cobrust
+```
+
+### 2. Build
+
+```bash
+cargo build --workspace
+```
+
+Produces `target/debug/cobrust` — the compiler CLI.
+
+### 3. Hello world
+
+Create `hello.cb`:
+
+```cobrust
+fn main() -> i64:
+    print("hello, world")
+    return 0
+```
+
+Compile and run:
+
+```bash
+./target/debug/cobrust build hello.cb
+./hello
+```
+
+### 4. Real algorithm: FizzBuzz
+
+Create `fizzbuzz.cb`:
+
+```cobrust
+fn main() -> i64:
+    let n: i64 = 1
+    while n <= 15:
+        if n % 15 == 0:
+            print("FizzBuzz")
+        elif n % 3 == 0:
+            print("Fizz")
+        elif n % 5 == 0:
+            print("Buzz")
+        else:
+            print_int(n)
+        n = n + 1
+    return 0
+```
+
+Compile and run:
+
+```bash
+./target/debug/cobrust build fizzbuzz.cb
+./fizzbuzz
+```
+
+This demonstrates real Cobrust: `while` loops, `if/elif/else` branching,
+modulo arithmetic, and mutable bindings (M11.1 enablement, ADR-0030).
+
+### 5. Interactive REPL
+
+```bash
+./target/debug/cobrust repl
+```
+
+Try:
+
+```
+> let x: i64 = 42
+> :type x
+> let y: i64 = x + 1
+> print_int(y)
+> :hir let y
+> :quit
+```
+
+Directives: `:type <var>`, `:ast`, `:hir <stmt>`, `:mir <stmt>`, `:clear`, `:help`.
+
+For more, see [Getting started](docs/human/en/getting-started.md).
 
 ## Documentation
 
@@ -54,17 +133,6 @@ See
 The project's design constitution lives in [`CLAUDE.md`](CLAUDE.md). It
 binds all engineering work and AI-agent contributions. When intuition
 disagrees with the constitution, the constitution wins.
-
-## Building from source
-
-```bash
-git clone https://github.com/cobrust/cobrust
-cd cobrust
-cargo build --workspace
-```
-
-`rustup` reads [`rust-toolchain.toml`](rust-toolchain.toml) and pulls
-the pinned toolchain (1.94.1) automatically.
 
 ## License
 
