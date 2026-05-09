@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: 6753596
+last_verified_commit: TBD-merge-of-audit-1-opus
 ---
 
 # Findings
@@ -44,5 +44,6 @@ valuable as capturing what does.
 | `m12-x-while-if-codegen-regression` | [`m12-x-while-if-codegen-regression.md`](m12-x-while-if-codegen-regression.md) | Cranelift backend post-M12.x: `while`-loop with leading `if` produces empty stdout; M11.1 sprint queued to fix before fizzbuzz/fib rewrite |
 | `multi-agent-cobrust-topology` | [`multi-agent-cobrust-topology.md`](multi-agent-cobrust-topology.md) | 6 recurring failure modes + SOPs from 100+ commits of 4-way parallel multi-agent worktree topology — externalised methodology per audit #6 |
 | `m9-cross-arch-linux-x86_64-validation` | [`m9-cross-arch-linux-x86_64-validation.md`](m9-cross-arch-linux-x86_64-validation.md) | Linux x86_64 surfaced `infer_return_type` Ty::None float bug; macOS arm64 silent-wrong-value latent. P0 fix sprint dispatched (Task #41) |
-| `codegen-i8-i64-mismatch-at-4-blocks` | [`codegen-i8-i64-mismatch-at-4-blocks.md`](codegen-i8-i64-mismatch-at-4-blocks.md) | review-claude Conway-toy stress: 4+ similar inline compute blocks → Cranelift verifier rejects `iadd.i8` with i64 operand; `cobrust build` doesn't exit non-zero → silent miscompile (P0 CLI hardening + P1 codegen narrow-type fix queued) |
+| `codegen-i8-i64-mismatch-at-4-blocks` | [`codegen-i8-i64-mismatch-at-4-blocks.md`](codegen-i8-i64-mismatch-at-4-blocks.md) | review-claude Conway-toy stress: 4+ similar inline compute blocks → Cranelift verifier rejects `iadd.i8` with i64 operand. Bug 1 (narrow-type) real (Task #43); Bug 2 (silent miscompile) was MIS-DIAGNOSIS — CLI already exits 3 correctly (Task #42 closed) |
 | `audit-1-codegen-pollution-quarantine-sop` | [`audit-1-codegen-pollution-quarantine-sop.md`](audit-1-codegen-pollution-quarantine-sop.md) | CTO守闸 fallback for SendMessage absence: in-flight audit #1 sub-agents running on codegen-polluted baselines; merge-time rejection + rerun sprint after fixes land |
+| `audit-1-tomli-real-llm-result` | [`audit-1-tomli-real-llm-result.md`](audit-1-tomli-real-llm-result.md) | **Audit #1 PASS** — Opus authoritative: first end-to-end real-LLM translation of `tomli::parse_bool` (rich-prompt design) PASS 12/12 strict over 5 deterministic runs (ADR-0032). sonnet branch (`feature/audit-1-tomli-real-llm`) held as supplementary scaffolding showing PARTIAL-FAIL with bare-bones prompt — together they pin ADR-0035 (renumbered from 0033) prompt-design strategic decision |
