@@ -38,6 +38,14 @@
 
 **为什么是"翻译表面，绑定内核"**：上游 numpy 的核心是 `numpy/core/src/multiarray/*.c` 的手工 SIMD/BLAS 路径——纯 Rust 重写不切实际。Rust 生态已有 `ndarray` 提供同样的 `(dtype, shape, strides, data)` 模型。M7.0 的工程实践是把 cobrust-numpy 的"表面"（dtype 字符串解析、错误分类、numpy 兼容的 `repr`、Python-shaped 构造器签名）当作翻译目标，把"内核"（`ArrayD::zeros` / `from_shape_vec`）当作绑定目标。**例子**：`cobrust_numpy::zeros(&[3, 4], Dtype::Float64)` 在 cobrust-numpy 这一层做 dtype 路由（`match dtype { Dtype::Float64 => ... }`），最终 `ArrayD::<f64>::zeros(IxDyn(&[3, 4]))` 由 ndarray 实际分配 + 零填充。我们不重写 `zeros`，我们调用它。这条原则贯穿整个 M7+：M7.4 linalg 绑定 `ndarray-linalg`，M7.5 random 绑定 `rand_pcg::Pcg64` + `rand_distr`（按 ADR-0018 已交付），M7.6 FFT 会绑定 `rustfft`。
 
+**P0 CLI 硬化 — 验证器拒绝的退出码（2026-05-09）：** 第三方审计（发现文档
+`cobrust-codegen-i64-i8-mismatch-at-4-blocks`）确认 `cobrust build` 在
+Cranelift 验证器拒绝时已能正确以非零退出（退出码 3），错误信息写入 stderr、
+stdout 保持空白。本冲刺正式固化该行为：新增 3 个测试用例组成的语料库
+（`cli_verifier_exit_corpus.rs`），在 `exit_codes.rs` 中添加具名别名
+`VERIFIER_REJECTED = 3`，并更新 ADR-0024 §"退出码 3" 记录传播路径。底层
+codegen 窄类型 bug（Bug 1，4+ 块时 i8/i64 不匹配）列为 Task #43（P1，延后）。
+
 ## 开发纪律（适用于所有里程碑）
 
 - **测试先行**：编译器内部一律先写失败测试，再写实现
