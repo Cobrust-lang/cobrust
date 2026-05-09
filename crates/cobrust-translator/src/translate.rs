@@ -11,6 +11,7 @@
 //! template, prompt caching by canonical-source hash, and structured
 //! response parsing.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use cobrust_llm_router::{CompletionRequest, Message, Role, Router, SamplingParams, Task};
@@ -171,7 +172,9 @@ pub async fn run_l1(
 }
 
 /// M4 prompt template. Bare-bones — the synthetic provider pattern-
-/// matches on the header (task + function), not the body.
+/// matches on the header (task + function), not the body. Retained as
+/// the no-context fallback per `adr:0036` Option 2; new callers should
+/// prefer [`build_translation_prompt_rich`] with a [`WorkspaceContext`].
 fn build_translation_prompt(unit: &FunctionUnit) -> String {
     let mut s = String::new();
     s.push_str(
@@ -186,6 +189,168 @@ fn build_translation_prompt(unit: &FunctionUnit) -> String {
     s.push_str("\nPy-compat tier: ");
     s.push_str(&unit.spec.py_compat);
     s.push('\n');
+    s
+}
+
+/// Workspace-context bundle the rich prompt builder consumes, per
+/// `adr:0036` Option 2. Library authors construct one of these per
+/// library (e.g. one for tomli, one for dateutil) and pass it on every
+/// L1 dispatch that wants the audit-1-validated rich prompt design.
+///
+/// Per `adr:0036 §"Decision"`, the bundle carries:
+/// - the library's already-translated module preamble (e.g. tomli's
+///   `Value` enum + `TomliError` constructor + `State` struct),
+/// - one or more already-translated functions presented as few-shot
+///   examples of workspace-style,
+/// - the verbatim Python source of the target function (kept here so
+///   `spec.toml`'s schema does not have to grow),
+/// - the Cobrust idiomatic return-type contract for this function,
+/// - the Cobrust idiomatic error-construction contract.
+///
+/// The structural shape of the emitted prompt mirrors the audit-1
+/// authoritative `build_rich_prompt` (test-side) verbatim — that
+/// design has empirical PASS data on `tomli_loads._parse_bool` (12/12
+/// strict tier; see `findings/audit-1-tomli-real-llm-result.md`).
+#[derive(Clone, Debug, Default)]
+pub struct WorkspaceContext {
+    /// Library's already-translated common types. Inserted verbatim
+    /// into the rich prompt's "Workspace API contract" section. The
+    /// LLM is told these are already in scope and MUST NOT be
+    /// redefined.
+    pub module_preamble: String,
+    /// Already-translated functions presented as few-shot examples.
+    /// Each entry is `(function_name, full Rust source)`. N=1 is the
+    /// audit-1-validated baseline; N>1 is supported additively.
+    pub fewshot_examples: Vec<(String, String)>,
+    /// Verbatim Python source of the target function (copied from the
+    /// upstream corpus). Empty string is permitted for the bare-fallback
+    /// case but the rich variant strongly recommends populating it —
+    /// audit-1 PASS data depended on the LLM seeing the source.
+    pub target_python_source: String,
+    /// Cobrust idiomatic return-type contract for the target function,
+    /// e.g. `"Result<bool, TomliError>"`. Inserted as a numbered
+    /// directive in the prompt's "Output requirements" section.
+    pub return_type_contract: String,
+    /// Cobrust idiomatic error-construction contract, e.g.
+    /// `"Err(TomliError::new(\"…\", state.pos))"`. Forbids `panic!()`
+    /// and `unwrap()` per audit-1's failure-mode analysis (sonnet
+    /// branch produced `panic!` without this directive).
+    pub error_construction_contract: String,
+}
+
+impl WorkspaceContext {
+    /// Construct an empty context. Library authors fill in the
+    /// library-specific fields. Never returns `Err`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Rich-prompt builder per `adr:0036` Option 2. Bridges an existing
+/// [`FunctionUnit`] (from `spec.toml`) and a library-specific
+/// [`WorkspaceContext`] into a prompt that carries the audit-1 design
+/// (target Python source → workspace API contract → few-shot example →
+/// numbered output requirements). The structural shape is verbatim
+/// the same as `tests/audit_1_tomli_real_llm.rs::build_rich_prompt`,
+/// which has empirical PASS data on the leaf `parse_bool`.
+///
+/// The bare [`build_translation_prompt`] stays available as the
+/// no-context fallback for M4..M-batch synthetic-mode pipelines.
+#[must_use]
+pub fn build_translation_prompt_rich(unit: &FunctionUnit, ctx: &WorkspaceContext) -> String {
+    let mut s = String::new();
+
+    // Header: identifies the library + target. The LLM understands
+    // this framing best when it appears before any code.
+    s.push_str(
+        "You are translating a Python function into idiomatic Rust\n\
+         for the Cobrust workspace. The output must compile under\n\
+         the workspace lints (deny clippy::pedantic).\n\n",
+    );
+
+    // Section 1: target Python source verbatim (if available). Audit-1
+    // PASS data showed the LLM follows the source's branch shape much
+    // more reliably when given the body, not just the signature.
+    if !ctx.target_python_source.trim().is_empty() {
+        s.push_str("# Target function (Python source, verbatim)\n\n");
+        s.push_str("```python\n");
+        s.push_str(ctx.target_python_source.trim_end());
+        s.push_str("\n```\n\n");
+    }
+
+    // Section 2: workspace API contract — the already-translated types
+    // the emission MUST NOT redefine. This is the load-bearing fix vs
+    // the audit-1 sonnet PARTIAL-FAIL (which hallucinated field names).
+    if !ctx.module_preamble.trim().is_empty() {
+        s.push_str(
+            "# Workspace API contract (already in scope; do NOT redefine)\n\n\
+             The translated function will be glued onto a module that\n\
+             already defines the types below. Use these exact field\n\
+             names and constructor signatures.\n\n",
+        );
+        s.push_str("```rust\n");
+        s.push_str(ctx.module_preamble.trim_end());
+        s.push_str("\n```\n\n");
+    }
+
+    // Section 3: few-shot examples — already-translated workspace
+    // helpers of the same shape. N=1 is audit-1-validated; we emit
+    // every entry caller provides.
+    if !ctx.fewshot_examples.is_empty() {
+        s.push_str("# Few-shot examples: workspace helpers of the same shape\n\n");
+        s.push_str(
+            "Match their style: byte-level operations on `state.bytes`\n\
+             (not `state.src` chars), `Result<T, ErrType>` return,\n\
+             `state.expect(...)?` for required characters, error\n\
+             constructor over `panic!`.\n\n",
+        );
+        for (name, source) in &ctx.fewshot_examples {
+            writeln!(s, "## `{name}`\n").expect("write to String never fails");
+            s.push_str("```rust\n");
+            s.push_str(source.trim_end());
+            s.push_str("\n```\n\n");
+        }
+    }
+
+    // Section 4: output requirements — numbered, explicit, terminal.
+    // This is the directive block the audit-1 sonnet PARTIAL-FAIL
+    // diagnosis identified as missing.
+    s.push_str("# Output requirements\n\n");
+    s.push_str(
+        "Emit ONLY the Rust function body, no module preamble, no\n\
+         imports, no comments outside the function. Specifically:\n\n",
+    );
+    let return_contract = if ctx.return_type_contract.trim().is_empty() {
+        "Result<T, ErrType>"
+    } else {
+        ctx.return_type_contract.trim()
+    };
+    writeln!(s, "1. Function signature MUST return `{return_contract}`.")
+        .expect("write to String never fails");
+    if ctx.error_construction_contract.trim().is_empty() {
+        s.push_str(
+            "2. Use the workspace error constructor for errors. Do NOT\n   use `panic!()` or `unwrap()`.\n",
+        );
+    } else {
+        let err_contract = ctx.error_construction_contract.trim();
+        writeln!(
+            s,
+            "2. Use `{err_contract}` for errors. Do NOT use `panic!()` or\n   `unwrap()`."
+        )
+        .expect("write to String never fails");
+    }
+    s.push_str(
+        "3. Do NOT redefine types in the workspace API contract — they\n   are already in scope.\n\
+         4. Do NOT wrap the output in markdown code fences.\n",
+    );
+    let desc = &unit.spec.description;
+    writeln!(s, "5. Spec description (from L0): {desc}").expect("write to String never fails");
+    let tier = &unit.spec.py_compat;
+    writeln!(s, "6. Py-compat tier: {tier}").expect("write to String never fails");
+    let sig = &unit.spec.signature;
+    writeln!(s, "7. Spec signature (Python): {sig}").expect("write to String never fails");
+
     s
 }
 
@@ -298,5 +463,55 @@ tolerance = "exact"
         let pure = router_request_for_id("msgpack", "translate", "pack", "abc123");
         let cy = router_request_for_id("msgpack", "translate_cython", "pack", "abc123");
         assert_ne!(pure, cy, "task must change request canonical form");
+    }
+
+    #[test]
+    fn rich_prompt_includes_every_workspace_context_section() {
+        // Per `adr:0036` Decision: the rich prompt must reproduce
+        // the audit-1 PASS-validated structural shape.
+        let spec = fixture_spec();
+        let plan = TranslationPlan::from_spec(&spec, "abc".into());
+        let ctx = WorkspaceContext {
+            module_preamble: "pub struct Demo;".to_string(),
+            fewshot_examples: vec![(
+                "demo_helper".to_string(),
+                "fn demo_helper() -> Result<i64, DemoError> { Ok(0) }".to_string(),
+            )],
+            target_python_source: "def alpha():\n    return 0\n".to_string(),
+            return_type_contract: "Result<i64, DemoError>".to_string(),
+            error_construction_contract: "Err(DemoError::new(\"msg\", pos))".to_string(),
+        };
+        let body = build_translation_prompt_rich(&plan.functions[0], &ctx);
+
+        // Every audit-1-validated section anchor must appear.
+        assert!(body.contains("# Target function"));
+        assert!(body.contains("def alpha():"));
+        assert!(body.contains("# Workspace API contract"));
+        assert!(body.contains("pub struct Demo;"));
+        assert!(body.contains("# Few-shot examples"));
+        assert!(body.contains("`demo_helper`"));
+        assert!(body.contains("# Output requirements"));
+        assert!(body.contains("Result<i64, DemoError>"));
+        assert!(body.contains("Err(DemoError::new"));
+        assert!(body.contains("Do NOT use `panic!()`"));
+        assert!(body.contains("First."));
+        assert!(body.contains("strict"));
+    }
+
+    #[test]
+    fn rich_prompt_with_empty_context_still_yields_directive_block() {
+        // Defensive: an empty WorkspaceContext should still produce a
+        // valid prompt (defaults in the directive block) so callers
+        // that haven't fully populated the bundle don't crash.
+        let spec = fixture_spec();
+        let plan = TranslationPlan::from_spec(&spec, "abc".into());
+        let body = build_translation_prompt_rich(&plan.functions[0], &WorkspaceContext::new());
+        assert!(body.contains("# Output requirements"));
+        assert!(body.contains("Result<T, ErrType>"));
+        // No "Target function" / "Workspace API" / "Few-shot" sections
+        // when the context's corresponding fields are empty.
+        assert!(!body.contains("# Target function"));
+        assert!(!body.contains("# Workspace API contract"));
+        assert!(!body.contains("# Few-shot examples"));
     }
 }

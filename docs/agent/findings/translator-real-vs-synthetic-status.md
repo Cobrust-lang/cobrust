@@ -1,11 +1,39 @@
 ---
 doc_kind: finding
 finding_id: translator-real-vs-synthetic-status
-last_verified_commit: cc15f0b
-dependencies: [adr:0007, adr:0008, adr:0009, adr:0010, adr:0022]
+last_verified_commit: 4fabf4c
+dependencies: [adr:0007, adr:0008, adr:0009, adr:0010, adr:0022, adr:0032, adr:0036, finding:audit-1-tomli-real-llm-result, finding:audit-3a-stateful-prompt-design]
 ---
 
-# Finding: Translation subsystem real-LLM end-to-end has never run on a real Python library
+# Finding: Translation subsystem real-LLM end-to-end — closed for tomli leaf + stateful (audit-3a, 2026-05-09)
+
+## Status (post audit-3a)
+
+**CLOSED for the tomli single-function axis** (both leaf and stateful):
+
+- **Leaf axis** — audit-1 (ADR-0032) ran `tomli_loads._parse_bool` end-
+  to-end through a real LLM with a hand-built rich prompt: PASS on
+  12/12 strict tier. See `finding:audit-1-tomli-real-llm-result`.
+- **Stateful axis** — audit-3a (ADR-0036) ran `tomli_loads._parse_int`
+  end-to-end through the **production**
+  `build_translation_prompt_rich` builder: PASS on 14/14 strict tier.
+  The audit-1 hand-built rich prompt was generalised into the
+  production builder; the stateful function (loop-driven state
+  mutation across two phases) confirms the design generalises beyond
+  leaves. See `finding:audit-3a-stateful-prompt-design`.
+
+**Still open**: full-library E2E (12 tomli functions in dependency
+order with cross-function context propagation). Queued post-#3b
+(ADR-0037 `@py_compat` hard-bind), since that anchor needs concrete
+divergence data which neither audit-1 nor audit-3a produced (both
+PASS clean).
+
+The original §"Hypothesis" / §"Method" / §"Result" sections below
+remain as the historical record of the gap pre-audit-1.
+
+---
+
+# Finding (historical): Translation subsystem real-LLM end-to-end has never run on a real Python library
 
 ## Hypothesis
 
