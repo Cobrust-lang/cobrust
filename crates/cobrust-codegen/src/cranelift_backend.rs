@@ -51,6 +51,7 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
         pointer_type,
         call_conv,
         function_ids: HashMap::new(),
+        body_return_types: HashMap::new(),
     };
 
     // --- declare every body's signature first ---------------------------
@@ -136,6 +137,14 @@ struct CraneliftCtx {
     call_conv: cranelift_codegen::isa::CallConv,
     /// Map a MIR body's `def_id` → Cranelift `FuncId`.
     function_ids: HashMap<u32, cranelift_module::FuncId>,
+    /// ADR-0034: cache the inferred return type for every user-defined
+    /// body so a caller can look up the return type of a
+    /// `Constant::FnRef(id)` callee at infer-locals time. Populated in
+    /// `declare_body` from the same signature inference that produces
+    /// the Cranelift `Signature.returns`. Used by `infer_local_types`
+    /// to type the `_callret` destination of `Terminator::Call`
+    /// destinations whose declared `Ty` is `Ty::None`.
+    body_return_types: HashMap<u32, ir::Type>,
 }
 
 impl CraneliftCtx {
@@ -337,6 +346,37 @@ impl CraneliftCtx {
                 if out.contains_key(&local_id) {
                     continue;
                 }
+                // ADR-0034: a `Ty::None`-typed local may be the
+                // destination of a `Terminator::Call` (the lowering's
+                // `_callret` slot) instead of the LHS of an Assign. If
+                // the callee is a `Constant::FnRef(id)` of a known
+                // user-defined body, propagate the body's declared
+                // return type. Without this, `_callret` falls back to
+                // I8 (the default for `Ty::None`) and any caller that
+                // returns it through a chain miscompiles.
+                let mut found = false;
+                'tscan: for block in &body.blocks {
+                    if let cobrust_mir::Terminator::Call {
+                        func, destination, ..
+                    } = &block.terminator
+                    {
+                        if destination.local == local_id && destination.projections.is_empty() {
+                            if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::FnRef(
+                                id,
+                            )) = func
+                            {
+                                if let Some(ty) = self.body_return_types.get(id).copied() {
+                                    out.insert(local_id, ty);
+                                    found = true;
+                                    break 'tscan;
+                                }
+                            }
+                        }
+                    }
+                }
+                if found {
+                    continue;
+                }
                 // Find the first Assign to this local that yields a
                 // resolvable type given the current `out` snapshot.
                 'scan: for block in &body.blocks {
@@ -372,6 +412,18 @@ impl CraneliftCtx {
         } else {
             body.name.clone()
         };
+
+        // ADR-0034: stash the body's declared return type before we hand
+        // the signature to Cranelift. Used by `infer_local_types` to
+        // propagate the return type to `_callret` locals at any caller
+        // site that invokes this body via `Constant::FnRef(def_id)`.
+        // The signature always has exactly one `returns` slot (codegen
+        // convention; `body_signature` pushes one `AbiParam` for the
+        // inferred return type).
+        if let Some(ret_param) = sig.returns.first() {
+            self.body_return_types
+                .insert(body.def_id.0, ret_param.value_type);
+        }
 
         let func_id = obj
             .declare_function(&name, Linkage::Export, &sig)
@@ -565,6 +617,29 @@ impl CraneliftCtx {
             extern_funcs.insert(name.clone(), func_ref);
         }
 
+        // --- ADR-0034 §"Decision" Option 3: user-defined fn FuncRefs ---
+        // `self.function_ids` is the per-CraneliftCtx forward-declaration
+        // table populated in `declare_body` (line 379). The `emit`
+        // entry-point at the top of this file iterates `module.bodies`
+        // twice — first calling `declare_body` for every body, then
+        // calling `define_body`. By the time control reaches this
+        // point, every user-defined fn's FuncId already exists, so any
+        // body in the second pass can reference any other body
+        // (including itself) via the `Constant::FnRef(def_id)` operand
+        // emitted by HIR/MIR.
+        //
+        // We materialize a per-body `user_funcs: HashMap<u32, FuncRef>`
+        // by `declare_func_in_func`-ing every entry. The map's values
+        // are scoped to this `builder.func` — different bodies must
+        // re-declare. EmitCtx consumes this in `lower_call` to convert
+        // `Operand::Constant(Constant::FnRef(id))` callees into real
+        // Cranelift `call` instructions.
+        let mut user_funcs: HashMap<u32, ir::FuncRef> = HashMap::new();
+        for (def_id, fid) in &self.function_ids {
+            let func_ref = obj.declare_func_in_func(*fid, builder.func);
+            user_funcs.insert(*def_id, func_ref);
+        }
+
         // --- ADR-0027 §1: declare runtime helpers for Aggregate / Cast /
         //     f-string lowering. The set is fixed; we declare imports
         //     up-front so per-body lowering can reference any of them
@@ -659,6 +734,7 @@ impl CraneliftCtx {
                 body,
                 extern_funcs: &extern_funcs,
                 runtime_funcs: &runtime_funcs,
+                user_funcs: &user_funcs,
                 str_data_globals: &str_data_globals,
                 stack_slots: &mut stack_slots,
             };
@@ -712,6 +788,15 @@ struct EmitCtx<'a, 'b> {
     /// `__cobrust_str_push_static`, ...) as Linkage::Import imports
     /// resolved at link time against `cobrust-stdlib`'s C-ABI surface.
     runtime_funcs: &'a HashMap<&'static str, ir::FuncRef>,
+    /// User-defined fn FuncRefs (ADR-0034 §"Decision" Option 3). Keyed
+    /// on the MIR `Body.def_id.0` value, which matches the `u32` payload
+    /// of `Constant::FnRef`. Populated in `define_body` from
+    /// `CraneliftCtx.function_ids` after the forward-declaration pass.
+    /// Used by `lower_call` to lower
+    /// `Operand::Constant(Constant::FnRef(id))` callees into real
+    /// Cranelift `call` instructions — closing the M9 stub at the
+    /// recursive / cross-module-fn callsite.
+    user_funcs: &'a HashMap<u32, ir::FuncRef>,
     /// String-payload data globals declared at body-define time.
     /// ADR-0025 §"Codegen amendments" Constant::Str row: the runtime
     /// `(*const u8, usize)` ABI reads the payload pointer from these
@@ -834,15 +919,42 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 target,
                 unwind: _,
             } => {
-                // (M11) `_args` is read inside the Constant::Str branch
-                // below; keep underscore prefix to match the existing
-                // signature shape but use it via the `args.first()`
-                // lookup.
                 // ADR-0024 amendment: when `func` is `Constant::Str(name)`,
-                // emit a real Cranelift `call` to the imported symbol.
-                // For all other callee shapes (Constant::FnRef, ...) the
-                // M9 stub remains: write a zero placeholder, jump to
-                // continuation. M11 will materialize the FnRef path.
+                // emit a real Cranelift `call` to the imported symbol
+                // (extern_funcs / runtime_funcs branches below).
+                //
+                // ADR-0034 amendment: when `func` is `Constant::FnRef(id)`,
+                // look up the user-defined fn's FuncRef in `user_funcs`
+                // (populated from `CraneliftCtx.function_ids` after the
+                // forward-declaration pass) and emit a real Cranelift
+                // `call`. This closes the M9 stub for user-defined fn
+                // calls — recursion + mutual recursion + cross-fn
+                // dispatch all light up here.
+                if let Operand::Constant(Constant::FnRef(id)) = func {
+                    if let Some(func_ref) = self.user_funcs.get(id).copied() {
+                        let mut call_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            let v = self.lower_operand(arg)?;
+                            call_args.push(v);
+                        }
+                        let inst = self.builder.ins().call(func_ref, &call_args);
+                        let results = self.builder.inst_results(inst);
+                        let ret_val = if results.is_empty() {
+                            self.builder.ins().iconst(ir::types::I64, 0)
+                        } else {
+                            results[0]
+                        };
+                        self.write_place(destination, ret_val)?;
+                        let blk = self.block_id(target)?;
+                        self.builder.ins().jump(blk, &[]);
+                        return Ok(());
+                    }
+                    // Falls through to the M9 stub below if the FnRef id
+                    // is unknown (e.g. lambda placeholder `FnRef(0)` or
+                    // await placeholder `FnRef(u32::MAX)` from MIR
+                    // lowering — both are pre-M13 stubs). The M9 stub
+                    // semantics for those callees are unchanged.
+                }
                 if let Operand::Constant(Constant::Str(name)) = func {
                     // ADR-0027 §4: prefer runtime-helper FuncRef when
                     // the callee name matches the typed-signature
