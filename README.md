@@ -8,7 +8,7 @@ closed-loop translates the entire Python ecosystem.
 ## Status
 
 **Phase E complete @ d178a3f (M11.1 spirit-met).** As of 2026-05-09
-(HEAD `b83ea80`): 31 ADRs accepted, 2,088 tests passing on cold
+(HEAD `b83ea80`): 31 ADRs accepted, 2,430+ tests passing on cold
 integrated rebuild. The language + runtime fully compose (`.cb` → AST
 → HIR → typed-HIR → MIR → Cranelift → Mach-O on macOS arm64). M11.1
 (ADR-0030) restored real algorithmic fizzbuzz via `while` + `if/elif`
