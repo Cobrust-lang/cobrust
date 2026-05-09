@@ -98,6 +98,26 @@ The full enumeration:
 verdicts" their own visible exit codes. The 100..127 band matches
 ADR-0019's "≥ 100 reserved for translator path".
 
+**Exit code 3 — Cranelift verifier rejection (P0 CLI hardening, 2026-05-09):**
+The third-party audit (finding `cobrust-codegen-i64-i8-mismatch-at-4-blocks`)
+identified Bug 2: `cobrust build` printed the Cranelift verifier error but
+proceeded to emit a binary, exiting 0. This masked a silent miscompilation
+in `&& ./binary` chains. The P0 CLI hardening sprint
+(`feature/cli-hardening-verifier-exit`) confirms and locks down the
+propagation path:
+
+- `cranelift_backend::define_body` returns `Err(CodegenError::CraneliftError(detail))`
+  for any verifier rejection (the `?` on `obj.define_function` propagates it).
+- `build.rs::build` maps this via `.map_err(|e| BuildError::Internal(format!("{e}")))?`
+  → `BuildError::Internal` → exit code **3** (INTERNAL_PANIC).
+- The error message is written to **stderr** (via `eprintln!`); stdout remains
+  empty, preserving shell-pipeline discipline.
+- No new exit code variant was needed: Cranelift verifier rejection is an
+  internal codegen failure and correctly maps to the existing exit 3 bucket.
+- The corpus in `crates/cobrust-cli/tests/cli_verifier_exit_corpus.rs` gates
+  this behaviour: test `v01` asserts exit non-zero; test `v03` asserts
+  error on stderr and empty stdout.
+
 ### Hello-world mechanism
 
 M9 codegen's `Constant::Str` is a null-pointer stub and
@@ -196,6 +216,7 @@ pub const SUCCESS: u8 = 0;
 pub const USER_ERROR: u8 = 1;
 pub const TYPE_ERROR: u8 = 2;
 pub const INTERNAL_PANIC: u8 = 3;
+pub const VERIFIER_REJECTED: u8 = INTERNAL_PANIC;  // alias; Cranelift verifier rejection
 pub const RUNTIME_PANIC: u8 = 4;
 pub const FMT_DIFF: u8 = 5;
 pub const TEST_FAILURE: u8 = 6;

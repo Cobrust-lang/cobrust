@@ -41,6 +41,15 @@
 
 **Why "translate the surface, bind the core"**: upstream numpy's core is `numpy/core/src/multiarray/*.c` — hand-tuned SIMD/BLAS code paths a pure-Rust port could not realistically match without a multi-year detour. Rust's ecosystem already has `ndarray`, which exposes the same `(dtype, shape, strides, data)` model. The M7.0 engineering practice is to treat cobrust-numpy's **surface** (dtype string parsing, error taxonomy, numpy-compatible `repr`, Python-shaped constructor signatures) as the translation target and the **core** (`ArrayD::zeros` / `from_shape_vec`) as the binding target. **Example**: `cobrust_numpy::zeros(&[3, 4], Dtype::Float64)` does dtype dispatch in cobrust-numpy (`match dtype { Dtype::Float64 => ... }`), then ndarray's `ArrayD::<f64>::zeros(IxDyn(&[3, 4]))` actually allocates and zero-fills the buffer. We do not reimplement `zeros`; we call it. This pattern threads through M7+: M7.4 linalg binds `ndarray-linalg`, M7.5 random binds `rand_pcg::Pcg64` + `rand_distr` (delivered per ADR-0018), M7.6 FFT will bind `rustfft`.
 
+**P0 CLI hardening — verifier-reject exit-code (2026-05-09):** Third-party
+audit (finding `cobrust-codegen-i64-i8-mismatch-at-4-blocks`) confirmed that
+`cobrust build` already exits non-zero (exit 3) on Cranelift verifier rejection,
+sending the error to stderr with empty stdout. The sprint formally locked this
+behaviour down with a 3-test corpus (`cli_verifier_exit_corpus.rs`), added a
+named `VERIFIER_REJECTED = 3` alias to `exit_codes.rs`, and updated ADR-0024
+§"Exit code 3" to document the propagation path. The underlying codegen
+narrow-type bug (Bug 1, i8/i64 mismatch at 4+ blocks) is Task #43 (P1, deferred).
+
 ## Engineering discipline (applies to all milestones)
 
 - **Test-first** for compiler internals: failing test, then implementation
