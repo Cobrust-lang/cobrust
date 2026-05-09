@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: cobrust-codegen-i64-i8-mismatch-at-4-similar-blocks
-last_verified_commit: 78ca779
+last_verified_commit: 3392eb5
 discovered_by: review-claude (third-party audit window)
 discovered_during: Conway-toy external-user stress test (out-of-workspace .cb program)
 related: m12-x-while-if-codegen-regression, m11-1-1-control-flow-corpus
@@ -122,12 +122,27 @@ straight-line code too — eliminating the loop-phi hypothesis (1).
 
 - **Originally claimed two distinct bugs** — actually only ONE real bug confirmed:
 
-  1. **CONFIRMED:** Cranelift verifier rejects an IR where Cobrust
-     codegen has selected mismatched integer types for `iadd`. The
-     verifier correctly catches it. Cobrust narrow-type pass
-     (constant-folding observing `% 2 ∈ {0,1}`?) selects `i8` for
-     an expression typed `: i64`. **Real outstanding bug — Task #43
-     (Opus) blocked on Task #41 merge.**
+  1. **CONFIRMED + RESOLVED at #41 (HEAD `3392eb5`):** Cranelift
+     verifier rejects an IR where Cobrust codegen has selected
+     mismatched integer types for `iadd`. **Empirically resolved
+     by ADR-0033 (Option C root-primitive fix)** for free —
+     Opus hypothesised the bug shared a root-cause family with
+     the Ty::None Float→I8 bug, and CTO post-merge verification
+     confirmed it. Same `Ty::None` local mishandling: depth ≥ 2
+     chain through a `Ty::None` temp got narrow-typed to I8 via
+     the operand_ty fallback default. Once `inferred_locals` is
+     threaded as a root primitive + `infer_local_types` runs to
+     fixed-point, ALL chain depths resolve correctly.
+
+     **Empirical verification at HEAD `3392eb5` (CTO 2026-05-09)**:
+     - `cobrust build /tmp/conway_4cell_repro.cb` → `BUILD_EXIT=0`
+       (was Cranelift verifier reject before)
+     - Binary emitted at expected path (was emitted-with-wrong-code
+       before)
+     - Run output: `3` (expected; was `5` before per finding §Result)
+
+     **Task #43 closes here for free.** ADR-0034 slot is now
+     re-available (since 0033 took the float-fix slot).
 
   2. **CORRECTED 2026-05-09 post-#42 merge (HEAD `78ca779`):**
      This bug as originally described was a MIS-DIAGNOSIS. CTO
