@@ -34,6 +34,18 @@ maintained in CTO memory at
   - P9 dispatch (worktree creation, branch naming, prompt authorship)
   - Merge-time integration (union-merge resolution, doc-coverage repair)
   - Memory + state snapshot for compaction-resilience
+
+**Sub-agent model-tier rule** (added 2026-05-09, user-mandated):
+
+| Tier | Use for |
+|---|---|
+| **Opus** | Hard / strategic / open-ended / novel design — ADR drafting on new domain, real-LLM interaction, differential-fail diagnosis, semantic-equivalence judgments, multi-crate refactors |
+| **sonnet** | Mid / well-scoped / mechanical-with-judgment — milestone sprints with a clear ADR, regression-test corpus generation, cross-arch validation, translation product impl following an existing template |
+| **haiku** | **NEVER**. Empirically writes stale-context numbers (e.g. test counts, SHAs) without re-verifying; trust deficit unacceptable for this codebase |
+
+Always set `Agent.model` explicitly when dispatching. Do NOT rely
+on default. The rule is binding for all sub-agent work in this
+project; exceptions require user authorisation.
 - 1+ P9 Tech Lead agents (Sonnet 4.6 typical) per active milestone.
   Each owns:
   - One worktree at `/Users/hakureirm/codespace/Study/cobrust-<id>`
