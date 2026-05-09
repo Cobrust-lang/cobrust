@@ -258,6 +258,57 @@ indirect-call locals storing fn pointers, lambdas) keep the existing
 expression-lowering path. This is the single MIR change ADR-0034
 requires; everything else lives in codegen.
 
+## M11.3 lower_condition extraction (per ADR-0035)
+
+Per ADR-0035 §"Decision" Option 2, the `if` and `while` heads now route
+through a single shared `lower_condition` root primitive. The primitive
+lives in MIR (`crates/cobrust-mir/src/lower.rs`), not codegen — the
+ADR's hypothesis ("the divergence is in `cranelift_backend.rs`") was
+diagnosed wrong; empirical CLIF + MIR dumps showed the `while` arm of
+`lower_loop` was terminating the wrong block (the `header` block,
+already terminated by a `Mod`-divassert) with `SwitchInt`, leaving the
+condition's final assigns orphaned in a downstream block. The codegen
+path was correct in both heads; only the MIR shape diverged.
+
+**MIR-side change** (this section is informational for codegen
+consumers; see `mod:mir` §"M11.3 lower_condition extraction" for the
+authoritative description):
+
+- New `lower_condition(expr) -> (Operand, BlockId)` helper. Returns
+  the cond Operand and the `cond_end_block` (the block where the
+  Operand's value is finally available). Caller terminates
+  `cond_end_block` with `SwitchInt` (or `Assert` for div-style
+  asserts).
+- `lower_if` and `lower_loop`'s While arm both call `lower_condition`.
+  Pre-fix `lower_if` already used the correct `cond_end_block` pattern
+  inline; M11.3 hoists it into the shared primitive so future
+  divergence cannot recur.
+
+**Codegen impact**: zero. The fix is invisible to the Cranelift
+backend — it just consumes the now-correctly-shaped MIR. Existing
+ADR-0033 (`inferred_locals` fixed-point) and ADR-0034
+(`Constant::FnRef` Call lowering) interactions are orthogonal because
+`lower_condition` operates on block-flow shape, not on operand types
+or fn-call lowering. Verified by corpus cases
+`while_condition_through_inferred_locals_chain` (ADR-0033 cross) and
+`while_binop_with_function_call` (ADR-0034 cross) in
+`crates/cobrust-codegen/tests/while_condition_corpus.rs`.
+
+**Why the bug was specific to `while` heads**: `lower_if` already
+captured `cond_end_block = current_block_id()` after `lower_expr(cond)`
+(see ADR-0030 M11.1 fix). `lower_loop`'s While arm had its own
+hand-rolled equivalent that reset `cur_block` back to the loop
+`header` after `lower_expr` returned, blindly assuming the cond was
+materialised in `header`. For trivial conds (`n > 0`, `n == 5`) that
+assumption held; for `<BinOp> == 0` style conds (LC 263 trigger), the
+divassert chain split the cond eval across two blocks and the SwitchInt
+ended up reading a stale value.
+
+Cross-references: ADR-0035, ADR-0030 (M11.1 sibling fix), ADR-0033
+(`inferred_locals` fixed-point — orthogonal), ADR-0034 (FnRef Call
+— orthogonal), `findings/while-binop-eq-zero-condition-miscompile.md`,
+`findings/two-bugs-one-fix-option-c-pattern.md`.
+
 ## M11 amendments (per ADR-0025)
 
 Per ADR-0025 §"Codegen amendments":
