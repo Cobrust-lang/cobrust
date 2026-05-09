@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: dfba6e9
+last_verified_commit: 974c900
 ---
 
 # Findings
@@ -49,5 +49,5 @@ valuable as capturing what does.
 | `audit-1-tomli-real-llm-result` | [`audit-1-tomli-real-llm-result.md`](audit-1-tomli-real-llm-result.md) | **Audit #1 PASS** — Opus authoritative: first end-to-end real-LLM translation of `tomli::parse_bool` (rich-prompt design) PASS 12/12 strict over 5 deterministic runs (ADR-0032). sonnet branch (`feature/audit-1-tomli-real-llm`) held as supplementary scaffolding showing PARTIAL-FAIL with bare-bones prompt — together they pin ADR-0035 (renumbered from 0033) prompt-design strategic decision |
 | `two-bugs-one-fix-option-c-pattern` | [`two-bugs-one-fix-option-c-pattern.md`](two-bugs-one-fix-option-c-pattern.md) | Reusable codegen methodology: when two surface bugs share root-cause family (`Ty::None` fallback default), upgrading to Option C (root primitive — `inferred_locals` fixed-point) closes both with one fix. Decision criteria for surface-vs-root choice articulated. |
 | `m9-cross-arch-9ff481c-regression` | [`m9-cross-arch-9ff481c-regression.md`](m9-cross-arch-9ff481c-regression.md) | PARTIAL PASS — no new Linux-only regression in ~14 commits since last cross-arch validation. All 4 example binaries + Conway-toy 4-cell/5-cell pass bit-identical on x86_64. Pre-existing 2-test staleness in `cli_verifier_exit_corpus` (both archs equally) needs CTO cleanup. |
-| `while-binop-eq-zero-condition-miscompile` | [`while-binop-eq-zero-condition-miscompile.md`](while-binop-eq-zero-condition-miscompile.md) | 🚨 **P0 NEW** (review-claude LC 263 farm). `while <BinOp> == 0:` head silent-miscompiles — body never entered (works as `if` head). 24 hr 第三个 `while` codegen bug. Suspect: `while`-only fused `not BinOp` shortcut breaking integer-equality semantics. Fix sprint dispatched (ADR-0035 / M11.3 root-primitive `lower_condition`). |
+| `while-binop-eq-zero-condition-miscompile` | [`while-binop-eq-zero-condition-miscompile.md`](while-binop-eq-zero-condition-miscompile.md) | ✅ **closed_by_M11.3** @ `cfb7fd0` — review-claude LC 263 farm. `while <BinOp> == 0:` head silent miscompile; 24-hr 第三个 `while` codegen bug. Empirical fix in MIR (`lower_condition` shared root primitive); cmp-bit-identical stdout verified. ADR-0035 §"Layer correction" addendum records spike-codegen-fix-MIR pattern. |
 | `msgpack-fuzz-190gib-allocation` | [`msgpack-fuzz-190gib-allocation.md`](msgpack-fuzz-190gib-allocation.md) | **P1 open** — `unpack_panic_free_on_random_garbage` crashes with SIGABRT (191 GiB alloc attempt) on Linux x86_64; MAP_32 marker + large 4-byte length triggers `Vec::with_capacity(3_415_857_888)` in `parser.rs:493` before any input-bounds check. macOS arm64 silent (kernel overcommit). Fix: cap prealloc at 64 KiB in `unpack_map` and `unpack_array`. |
