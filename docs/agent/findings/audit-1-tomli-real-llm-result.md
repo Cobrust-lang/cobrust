@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: audit-1-tomli-real-llm-result
-last_verified_commit: TBD
+last_verified_commit: 504ebb1
 dependencies: [adr:0032, adr:0007, adr:0004, finding:translator-real-vs-synthetic-status]
 ---
 
