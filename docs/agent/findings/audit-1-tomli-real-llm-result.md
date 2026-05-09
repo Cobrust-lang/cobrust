@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: audit-1-tomli-real-llm-result
-last_verified_commit: 4f05fe3
+last_verified_commit: c5292fc
 dependencies: [adr:0032, adr:0007, adr:0008, adr:0004, finding:translator-real-vs-synthetic-status, finding:m5-m7-real-llm-validation]
 ---
 
@@ -50,7 +50,7 @@ Ledger entry:
 
 ```json
 {
-  "ts": "2026-05-09T04:02:02.049827Z",
+  "ts": "2026-05-09T04:22:09.112594Z",
   "task": "translate",
   "provider": "user_codex_audit1",
   "provider_kind": "openai",
@@ -58,9 +58,9 @@ Ledger entry:
   "cache_key": "blake3:00b7e20d3720426d3e205f2ba9eb9bdf053ac19fa7a8bb95f425f83b8e5944f9",
   "cache_hit": false,
   "prompt_tokens": 1528,
-  "completion_tokens": 111,
-  "total_tokens": 1639,
-  "latency_ms": 2912,
+  "completion_tokens": 98,
+  "total_tokens": 1626,
+  "latency_ms": 3313,
   "attempt": 1,
   "outcome": "ok",
   "error_code": null,
@@ -114,12 +114,11 @@ PASS — both axes verified:
 
 ```rust
 fn parse_bool(state: &mut State<'_>) -> Result<bool, TomliError> {
-    let rest = &state.bytes[state.pos..];
-    if rest.starts_with(b"true") {
+    if state.bytes[state.pos..].starts_with(b"true") {
         state.pos += 4;
         return Ok(true);
     }
-    if rest.starts_with(b"false") {
+    if state.bytes[state.pos..].starts_with(b"false") {
         state.pos += 5;
         return Ok(false);
     }
@@ -131,12 +130,11 @@ fn parse_bool(state: &mut State<'_>) -> Result<bool, TomliError> {
 
 ```text
 fn parse_bool(state: &mut State<'_>) -> Result<bool, TomliError> {
-    let rest = &state.bytes[state.pos..];
-    if rest.starts_with(b"true") {
+    if state.bytes[state.pos..].starts_with(b"true") {
         state.pos += 4;
         return Ok(true);
     }
-    if rest.starts_with(b"false") {
+    if state.bytes[state.pos..].starts_with(b"false") {
         state.pos += 5;
         return Ok(false);
     }
@@ -163,11 +161,11 @@ contamination.
 
 | Phase | Calls | Tokens billed |
 |-------|-------|---------------|
-| L1 real dispatch | 1 | 1639 |
+| L1 real dispatch | 1 | 1626 |
 | Cache replay | 0 | 0 |
-| **Total** | **1** | **1639** |
+| **Total** | **1** | **1626** |
 
-(prompt: 1528, completion: 111)
+(prompt: 1528, completion: 98)
 
 ## Actionable consequences
 
