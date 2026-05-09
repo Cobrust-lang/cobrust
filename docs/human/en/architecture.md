@@ -1688,7 +1688,7 @@ The M9 158-test baseline remains green — the M11 amendments are **additive** t
 |---|---|---|
 | `examples/hello.cb` | print(literal) | full end-to-end (M10 regression) |
 | `examples/fizzbuzz.cb` | print(literal) loop | full end-to-end |
-| `examples/fib.cb` | print(literal) | full end-to-end (recursion is M11.x) |
+| `examples/fib.cb` | real recursion via `Constant::FnRef` Call | full end-to-end (M11.2 / ADR-0034 lands) |
 | `examples/wc.cb` | runtime ABI (read_file + split) | stub + integration test |
 | `examples/cat.cb` | runtime ABI (read_file + print) | stub + integration test |
 | `examples/echo.cb` | runtime ABI (env.args + print) | stub + integration test |
@@ -1716,6 +1716,23 @@ The first line ships with M11. Lines 2 + 3 land at M12 + M12-followup.
 
 
 **M11 source-level paths (surface a user writes from M12+)**: `std.io.println`, `std.io.print`, `std.io.read_line`, `std.io.read_file`, `std.io.write_file`, `std.collections.List`, `std.collections.Dict`, `std.collections.Set`, `std.string.format`, `std.string.split`, `std.string.find`, `std.string.replace`, `std.string.lower`, `std.string.upper`, `std.math.sqrt`, `std.math.pow`, `std.math.PI`, `std.math.E`, `std.panic.panic`, `std.panic.assert`, `std.env.args`, `std.env.var`, `std.fmt.format_int`, `std.fmt.format_float`, `std.fmt.format_bool`, `std.fmt.format_str`.
+
+### M11.2 — `Constant::FnRef` Call lowering (per ADR-0034)
+
+The M11.2 sprint closes the last M9 codegen-stub gap on user-defined fn callsites. Before ADR-0034 landed, `Operand::Constant(Constant::FnRef(id))` callees (recursion / mutual recursion / arbitrary cross-fn dispatch) hit the M9 stub — emitting `iconst.i64 0` placeholder, writing it to the destination, jumping to the continuation — never producing a real Cranelift `call` instruction. `examples/fib.cb` consequently fell back to an iterative implementation.
+
+**Fix (per ADR-0034 §"Decision" Option 3 — classical forward-declaration two-pass)**:
+
+- **Pass 1 (declare)**: `emit()` already iterates `module.bodies` twice. The first iteration calls `declare_body` for every body, calls `obj.declare_function(name, Linkage::Export, sig)` and records the resulting `FuncId` in `CraneliftCtx.function_ids` keyed on `body.def_id.0`. The same call records the body's declared return type in `CraneliftCtx.body_return_types` so cross-fn return types become queryable when ADR-0033's `inferred_locals` fixed-point pass runs in pass 2.
+- **Pass 2 (define)**: the second iteration calls `define_body` for every body. Inside `define_body`, every entry of `function_ids` is converted into a builder-scoped `FuncRef` via `obj.declare_func_in_func` and stored in a per-body `user_funcs: HashMap<u32, ir::FuncRef>`. The `EmitCtx` carries a borrow of this map. `lower_call` consults `user_funcs` whenever the callee operand is `Constant::FnRef(id)` and emits the real `call` — args, return value, jump-to-continuation — exactly mirroring the existing `extern_funcs` branch.
+
+**Interaction with ADR-0033 inferred_locals fixed-point**: ADR-0033's per-fn `inferred_locals` runs at codegen time to type `Ty::None`-declared locals (synthetic temps `_un` / `_bin` / `_callret`). M11.2's forward-declaration pass operates at the fn-signature boundary; the two layers are orthogonal. When a caller contains `_callret = call FnRef(M)`, `infer_local_types` consults `body_return_types[M]` to type `_callret` directly — closing the interaction surface that would otherwise leave `_callret` defaulting to `I8` and miscompiling any caller chain (e.g. `print_int(fib(10))`). The mandatory regression case `fnref_inferred_locals_recursive_chain` (in `crates/cobrust-codegen/tests/fnref_call_corpus.rs`) exercises this exact path.
+
+**MIR-side amendment**: To make the codegen branch actually fire, MIR's `lower_call` (`crates/cobrust-mir/src/lower.rs`) was extended: a `Name` callee expression whose resolved type is `Ty::Fn(...)` lowers to `Operand::Constant(Constant::FnRef(rn.def_id.0))` instead of the generic `Operand::Move(Place::local(L))`. Non-fn-typed callees (indirect-call locals storing fn pointers, lambdas) keep the existing expression-lowering path. This is the single MIR change ADR-0034 requires; everything else lives in codegen.
+
+**Tests**: `crates/cobrust-codegen/tests/fnref_call_corpus.rs` lands 10 regression cases: single-arg recursion (fib), multi-arg recursion (truncated Ackermann), zero-arg chain (`depth_3 → depth_2 → depth_1 → depth_0`), self-recursion structural variant (sum_to), mutual recursion (`is_even` / `is_odd` — verifies forward declaration enables BOTH directions), chain call (`a → b → c → leaf`, no recursion), `fnref_inferred_locals_recursive_chain` (ADR-0033 + ADR-0034 interaction guard), no-side-effect fn called twice, return-call-of-other (return another fn's result directly), negative-arg recursion (`countdown(n - 1)`, value-checks operand chain through `_bin` Ty::None arithmetic temp). `examples/fib.cb` is rewritten to the canonical recursive form; `cobrust build examples/fib.cb && ./target/cobrust/fib` produces stdout bit-identical to `fib(10) =\n55\n`.
+
+**Audit #2 closure**: finding `examples-literal-print-debt.md` upgrades from 🟡 PARTIAL to ✅ DONE. Constitution §1.1's "syntactically familiar to Python users" promise is now real on both fib and fizzbuzz — recursion is real user-defined fn semantics, no longer a print(literal) stub.
 
 ### M12 — Package format + dep resolution + content-addressed registry (per ADR-0026)
 

@@ -201,6 +201,63 @@ includes every exported function name (with `_`-prefix on Mach-O).
 - Backend selection is deterministic given `(spec.backend,
   cfg!(feature = "llvm"))`.
 
+## M11.2 amendments (per ADR-0034)
+
+Per ADR-0034 §"Decision" Option 3, the Cranelift backend now lowers
+`Operand::Constant(Constant::FnRef(id))` callees in a `Terminator::Call`
+to a real Cranelift `call` instruction. The mechanism is a classical
+two-pass:
+
+- **Pass 1 (declare)** — `emit()` already iterates `module.bodies`
+  twice. The first iteration calls `declare_body` for every body,
+  which calls `obj.declare_function(name, Linkage::Export, sig)` and
+  records the resulting `FuncId` in `CraneliftCtx.function_ids` keyed
+  on `body.def_id.0`. The same call records the body's declared
+  return type in `CraneliftCtx.body_return_types` so cross-fn return
+  types are queryable when the inferred-locals fixed-point runs in
+  pass 2.
+- **Pass 2 (define)** — the second iteration calls `define_body` for
+  every body. Inside `define_body`, every entry of `function_ids` is
+  converted to a `FuncRef` (per-builder scope) via
+  `obj.declare_func_in_func` and stored in a per-body `user_funcs:
+  HashMap<u32, ir::FuncRef>`. The `EmitCtx` carries a borrow of this
+  map. `lower_call` consults `user_funcs` whenever the callee operand
+  is `Constant::FnRef(id)` and emits the real `call` — args, return
+  value, jump-to-continuation — exactly mirroring the existing
+  `extern_funcs` branch.
+
+This closes the M9 stub at `lower_call` line 870-878 (the
+"M11 will materialize the FnRef path" comment) and unlocks recursion
++ mutual recursion + arbitrary user-defined cross-fn dispatch. The
+`Constant::FnRef(_)` fallback in `lower_constant` (zero-pointer for
+first-class FnRef use) is preserved unchanged.
+
+### Interaction with ADR-0033 inferred_locals fixed-point
+
+ADR-0033's per-fn `inferred_locals` runs at codegen time to type
+`Ty::None`-declared locals (synthetic temps `_un` / `_bin` /
+`_callret`). M11.2's forward-declaration pass operates at the
+fn-signature boundary; the two layers are orthogonal. When a caller
+contains `_callret = call FnRef(M)`, `infer_local_types` consults
+`body_return_types[M]` to type `_callret` directly — closing the
+interaction surface that would otherwise leave `_callret` defaulting
+to `I8` and miscompiling any caller chain (e.g.
+`print_int(fib(10))`). The mandatory regression case
+`fnref_inferred_locals_recursive_chain` (in
+`crates/cobrust-codegen/tests/fnref_call_corpus.rs`) exercises this
+exact path.
+
+### MIR-side amendment
+
+To enable the codegen-level branch, MIR's `lower_call`
+(`crates/cobrust-mir/src/lower.rs`) was extended: a `Name` callee
+expression whose resolved type is `Ty::Fn(...)` lowers to
+`Operand::Constant(Constant::FnRef(rn.def_id.0))` instead of the
+generic `Operand::Move(Place::local(L))`. Non-fn-typed callees (e.g.
+indirect-call locals storing fn pointers, lambdas) keep the existing
+expression-lowering path. This is the single MIR change ADR-0034
+requires; everything else lives in codegen.
+
 ## M11 amendments (per ADR-0025)
 
 Per ADR-0025 §"Codegen amendments":
