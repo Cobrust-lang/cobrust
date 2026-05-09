@@ -98,7 +98,7 @@ fn main() -> i64:
 cargo test --workspace
 ```
 
-Phase E 完成阶段（M11.1..M14）有 2,088 个通过的测试。
+Phase E 完成阶段（M11.1..M14，最近 d178a3f 完整冷构建）有 2,430+ 个通过的测试。
 
 ### 跑 lint
 

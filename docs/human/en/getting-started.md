@@ -98,7 +98,7 @@ Directives: `:type <var>`, `:ast`, `:hir <stmt>`, `:mir <stmt>`, `:clear`, `:hel
 cargo test --workspace
 ```
 
-2,088 tests passing on Phase E complete (M11.1..M14).
+2,430+ tests passing on Phase E complete (M11.1..M14, last cold-rebuilt @ d178a3f).
 
 ### Run lints
 
