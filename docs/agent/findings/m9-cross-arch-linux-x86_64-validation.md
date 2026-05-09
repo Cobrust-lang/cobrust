@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: m9-cross-arch-linux-x86_64-validation
-last_verified_commit: TBD
+last_verified_commit: 60243ab
 dependencies: [adr:0023, adr:0033]
 status: closed-by-fix
 ---

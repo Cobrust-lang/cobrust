@@ -4,7 +4,7 @@ adr_id: 0033
 title: Codegen — fix Ty::None inference gap (P0 cross-arch float-return bug)
 status: accepted
 date: 2026-05-09
-last_verified_commit: TBD
+last_verified_commit: 60243ab
 supersedes: []
 superseded_by: []
 dependencies: [adr:0023, adr:0030]
