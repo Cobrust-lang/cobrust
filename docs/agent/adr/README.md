@@ -61,3 +61,5 @@ same atomic commit as the change it justifies.
 | [0030](0030-m11-1-while-if-codegen-fix.md) | M11.1 — fix while-loop-with-leading-if codegen regression + close audit-#2 (real fizzbuzz / fib) | accepted | 2026-05-09 |
 | [0031](0031-audit-5-ledger-provider-kind-field.md) | Audit #5 — bump ledger schema to carry `provider_kind` (anthropic/openai/synthetic) | accepted | 2026-05-09 |
 | [0032](0032-audit-1-tomli-real-llm-e2e.md) | Audit #1 — first end-to-end real-LLM translation of `tomli::parse_bool` through L0..L2 with cache discipline (no synthetic, isolated tempdir) | accepted | 2026-05-09 |
+| [0033](0033-codegen-float-return-fix.md) | Codegen Ty::None Option C — root-primitive `inferred_locals` + fixed-point; closed Bug A (Float→I8) + Bug B (Conway-toy 4+ block) | accepted | 2026-05-09 |
+| [0034](0034-m11-2-fnref-call-lowering.md) | M11.2 — `Constant::FnRef` Call lowering via codegen forward-declaration pass (audit #2 closes from 🟡 PARTIAL to ✅ DONE) | accepted | 2026-05-09 |
