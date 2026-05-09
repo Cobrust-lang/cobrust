@@ -63,12 +63,22 @@ pub const SUCCESS: u8 = 0;
 pub const USER_ERROR: u8 = 1;
 pub const TYPE_ERROR: u8 = 2;
 pub const INTERNAL_PANIC: u8 = 3;
+pub const VERIFIER_REJECTED: u8 = INTERNAL_PANIC;  // alias; Cranelift verifier rejection = 3
 pub const RUNTIME_PANIC: u8 = 4;
 pub const FMT_DIFF: u8 = 5;
 pub const TEST_FAILURE: u8 = 6;
 pub const TRANSLATOR_BASE: u8 = 100;
 pub const TRANSLATOR_MAX: u8 = 127;
 ```
+
+**Cranelift verifier rejection → exit 3** (P0 CLI hardening, 2026-05-09):
+`cobrust build` on a program whose generated IR fails the Cranelift verifier
+exits 3 (INTERNAL_PANIC / VERIFIER_REJECTED). The propagation path:
+`cranelift_backend::define_body` → `obj.define_function(...)?` →
+`CodegenError::CraneliftError(detail)` → `build.rs::build` maps via
+`.map_err(|e| BuildError::Internal(format!("{e}")))?` → exit 3.
+Error message is on stderr; stdout is empty. See ADR-0024 §"Exit code 3 —
+Cranelift verifier rejection" and `tests/cli_verifier_exit_corpus.rs` v01/v03.
 
 ### Hello-world contract (M10 → M11 supersession)
 
