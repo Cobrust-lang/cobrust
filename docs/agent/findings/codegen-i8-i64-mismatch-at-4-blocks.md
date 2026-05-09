@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: cobrust-codegen-i64-i8-mismatch-at-4-similar-blocks
-last_verified_commit: d178a3f
+last_verified_commit: 78ca779
 discovered_by: review-claude (third-party audit window)
 discovered_during: Conway-toy external-user stress test (out-of-workspace .cb program)
 related: m12-x-while-if-codegen-regression, m11-1-1-control-flow-corpus
@@ -120,15 +120,37 @@ straight-line code too — eliminating the loop-phi hypothesis (1).
 
 ## Conclusion
 
-- **Two distinct bugs** exposed:
-  1. Cranelift verifier rejects an IR where Cobrust codegen has
-     selected mismatched integer types for `iadd`. The verifier
-     correctly catches it.
-  2. Cobrust's CLI does not abort on verifier rejection — it
-     proceeds to emit an executable. Linker accepts what Cranelift
-     produced anyway, and the executable runs but with wrong
-     output. This is a **silent miscompilation surface** and is the
-     more dangerous of the two.
+- **Originally claimed two distinct bugs** — actually only ONE real bug confirmed:
+
+  1. **CONFIRMED:** Cranelift verifier rejects an IR where Cobrust
+     codegen has selected mismatched integer types for `iadd`. The
+     verifier correctly catches it. Cobrust narrow-type pass
+     (constant-folding observing `% 2 ∈ {0,1}`?) selects `i8` for
+     an expression typed `: i64`. **Real outstanding bug — Task #43
+     (Opus) blocked on Task #41 merge.**
+
+  2. **CORRECTED 2026-05-09 post-#42 merge (HEAD `78ca779`):**
+     This bug as originally described was a MIS-DIAGNOSIS. CTO
+     verified manually + sub-agent #42 confirmed: the propagation
+     path `cranelift_backend::define_body ? → emit ? → build.rs
+     map_err ? → exit 3` was **already correct at HEAD `82c0e00`**.
+     The original finding-author likely captured the exit code via
+     `cobrust build foo.cb 2>&1 | tail; echo $?` which captures
+     `tail`'s exit code (always 0) — see
+     `~/.claude/.../memory/feedback_pipe_exit_code_capture.md`.
+
+     Reality at HEAD `78ca779` (post-#42):
+     - `cobrust build` on a verifier-rejecting `.cb` produces
+       `EXIT=3`
+     - Verifier error message goes to stderr, stdout is empty
+     - The binary file is NOT written (no silent emit)
+     - Regression-guard corpus `cli_verifier_exit_corpus.rs`
+       (3 tests) locks this behaviour down
+
+     The `cobrust-cli` exit-code path was correct all along. No
+     CLI / codegen source change was needed — only documentation
+     (ADR-0024 §"Exit code 3" + cli.md exit-code table) +
+     regression corpus. Bug 2 is INVALID.
 - **Threshold:** 4 identical 5-line inline compute blocks within one
   `fn main`. 3 blocks pass, 4+ fail.
 - **Independence of `while`:** The bug fires on straight-line code
@@ -137,10 +159,15 @@ straight-line code too — eliminating the loop-phi hypothesis (1).
 
 ## Recommended actions
 
-1. **CLI hardening (P0, mechanical):** make `cobrust build` exit
+1. ~~**CLI hardening (P0, mechanical):** make `cobrust build` exit
    non-zero on Cranelift verifier rejection. Currently it prints the
    error to stdout but proceeds; this masks miscompilation under
-   `&& ./binary` chains.
+   `&& ./binary` chains.~~
+   **STATUS: NOT NEEDED** (Bug 2 was a mis-diagnosis; the CLI
+   already exits 3 with stderr error and no binary emit). Task
+   #42 closed by formalising the regression-guard corpus +
+   ADR-0024 §"Exit code 3" documentation at HEAD `78ca779`. See
+   §Conclusion entry 2 above.
 2. **Codegen investigation (P1):** narrow which Cobrust codegen pass
    selects `i8` for an expression typed `: i64`. Hypothesis: a
    constant-folding pass observing `% 2` values bound to `{0,1}`
