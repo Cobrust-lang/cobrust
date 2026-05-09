@@ -1151,12 +1151,34 @@ fn write_finding_file(content: &str) {
     }
 }
 
+/// Resolve the current commit short SHA so the finding doc's
+/// `last_verified_commit` frontmatter is auto-populated rather than
+/// requiring manual re-stamping after each run. Falls back to "TBD"
+/// if git isn't available (rare; CI environments shouldn't hit this).
+fn current_commit_sha() -> String {
+    let root = workspace_root();
+    std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(&root)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map_or_else(|| "TBD".to_string(), |s| s.trim().to_string())
+}
+
 fn record_finding_skip(reason: &str, prompt: &str) {
+    let commit = current_commit_sha();
     let content = format!(
         r#"---
 doc_kind: finding
 finding_id: audit-1-tomli-real-llm-result
-last_verified_commit: TBD
+last_verified_commit: {commit}
 dependencies: [adr:0032, adr:0007, adr:0004, finding:translator-real-vs-synthetic-status, finding:m5-m7-real-llm-validation]
 ---
 
@@ -1214,11 +1236,12 @@ fn record_finding_synthesize_fail(
     err: &str,
     live_entry: &LedgerEntry,
 ) {
+    let commit = current_commit_sha();
     let content = format!(
         r#"---
 doc_kind: finding
 finding_id: audit-1-tomli-real-llm-result
-last_verified_commit: TBD
+last_verified_commit: {commit}
 dependencies: [adr:0032, adr:0007, adr:0004, finding:translator-real-vs-synthetic-status, finding:m5-m7-real-llm-validation]
 ---
 
@@ -1390,11 +1413,12 @@ The compile error tail above shows the specific failure mode."#
             .to_string(),
     };
 
+    let commit = current_commit_sha();
     let content = format!(
         r#"---
 doc_kind: finding
 finding_id: audit-1-tomli-real-llm-result
-last_verified_commit: TBD
+last_verified_commit: {commit}
 dependencies: [adr:0032, adr:0007, adr:0008, adr:0004, finding:translator-real-vs-synthetic-status, finding:m5-m7-real-llm-validation]
 ---
 

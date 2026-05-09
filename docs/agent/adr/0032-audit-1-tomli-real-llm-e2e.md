@@ -4,7 +4,7 @@ adr_id: "0032"
 title: Audit #1 — tomli real-LLM E2E (first closed-loop translation run)
 status: accepted
 date: 2026-05-09
-last_verified_commit: TBD
+last_verified_commit: 4f05fe3
 supersedes: []
 superseded_by: []
 dependencies: [adr:0007, adr:0008, adr:0004, finding:translator-real-vs-synthetic-status, finding:m5-m7-real-llm-validation]
