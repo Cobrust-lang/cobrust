@@ -169,3 +169,30 @@ full 5-gate verification.
   indirectly cross-arch validated
 - `crates/cobrust-cli/tests/cli_verifier_exit_corpus.rs` lines 136-163 (v01)
   and 199-224 (v03) — stale tests CTO must update
+
+## Resolution addendum (post-merge, 2026-05-09 by CTO)
+
+The 3 staleness items flagged in §"CTO action required" (v01 / v03 stale tests
++ `r#"..."#` clippy hash) were closed in CTO hygiene commit `da74739` (one
+turn after this finding landed):
+
+```
+da74739 fix(cli): retire v01/v03 stale-after-ADR-0033 + drop clippy needless r# hash
+```
+
+CTO retired v01 + v03 entirely (their natural verifier-rejecting input no
+longer exists post-ADR-0033 Option C closure of Bug 1) + removed
+`FOUR_BLOCK_REPRO` const that held the `r#"..."#` raw string. Module
+docstring rewritten to record post-ADR-0033 reality + the original Bug 2
+mis-diagnosis (CLI exit-3 path was always correct; misread came from
+`cmd | tail; echo $?` capturing tail's exit code per
+`feedback_pipe_exit_code_capture.md`). v02 (clean program builds + exits 0)
+retained as the surviving negative control.
+
+Verified at HEAD `243711a` (post-M11.3): `cargo test -p cobrust-cli -p cobrust-codegen --tests`
+exit 0; v02 PASS. The "5-gate workspace exit 101" claim in §"Conclusion"
+was true at HEAD `9ff481c` but **stops being true at `da74739`**. Future
+readers should consult HEAD ≥ `da74739`.
+
+Remaining open: `cobrust-msgpack::msgpack_fuzz` 190 GiB allocation on x86_64
+(still no independent finding; queued P7 sonnet per review-claude handoff §A.5).
