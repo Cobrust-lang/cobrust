@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: TBD-merge-of-audit-1-opus
+last_verified_commit: dfba6e9
 ---
 
 # Findings
