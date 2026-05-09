@@ -1734,6 +1734,26 @@ The M11.2 sprint closes the last M9 codegen-stub gap on user-defined fn callsite
 
 **Audit #2 closure**: finding `examples-literal-print-debt.md` upgrades from 🟡 PARTIAL to ✅ DONE. Constitution §1.1's "syntactically familiar to Python users" promise is now real on both fib and fizzbuzz — recursion is real user-defined fn semantics, no longer a print(literal) stub.
 
+### M11.3 — `lower_condition` shared root primitive (per ADR-0035)
+
+The M11.3 sprint closes the third independent `while`-head codegen bug found in 24 hours (after M12.x, ADR-0030 M11.1, and ADR-0033). The trigger surfaced organically via review-claude's LeetCode 263 (Ugly Number) farm: `while n % 2 == 0:` body never enters when `n = 6` (the same `n % 2 == 0` is correctly truthful in an `if` head with the same value). The bug shape: any `while <BinOp> == 0` (or `!= 0`) where the LHS is a non-trivial BinOp — extremely common in number-theory idioms (GCD-via-Euclid, factor reduction, bit traversal).
+
+**Fix (per ADR-0035 §"Decision" Option 2 — root primitive shared by both heads)**:
+
+- New `BodyBuilder::lower_condition(expr) -> (Operand, BlockId)` helper in `crates/cobrust-mir/src/lower.rs`. Returns the cond Operand AND the `cond_end_block` (the block where the Operand's value is finally available). Caller terminates `cond_end_block` with `SwitchInt`.
+- Both `lower_if` and `lower_loop`'s While arm rewritten to call `lower_condition`. Pre-fix `lower_if` already used the correct `cond_end_block` pattern inline (per ADR-0030 M11.1 fix); `lower_loop` had a hand-rolled equivalent that wrongly reset `cur_block` back to the loop `header` after `lower_expr(cond)` returned, leaving the SwitchInt in `header` while the cond's final assigns lived in a downstream div-assert successor block. Each loop iteration thus read a stale (zero-initialised) value and the body never entered.
+
+**Layer correction (ADR-0035 hypothesis vs reality)**: The ADR's §"Context" hypothesised the bug lived in `crates/cobrust-codegen/src/cranelift_backend.rs`. Empirical CLIF + MIR dumps disproved that — the codegen path was correct in both heads; only the MIR shape diverged. The fix landed in MIR as a result. Same primitive, correct layer.
+
+**Interaction with prior ADRs**:
+
+- **ADR-0033 `inferred_locals` fixed-point** (codegen-side `Ty::None` resolution): orthogonal. `lower_condition` operates on block-flow shape; ADR-0033 operates on operand-type inference. Verified by corpus case `while_condition_through_inferred_locals_chain` (a `while -(n - 5) == 0:` shape that exercises both `_un` Neg and `_bin` Eq through the chain).
+- **ADR-0034 `Constant::FnRef` Call lowering**: orthogonal. A function call inside a condition expression lowers via `Terminator::Call` with its own destination block; `lower_condition` correctly captures the post-call block as `cond_end_block`. Verified by corpus case `while_binop_with_function_call`.
+
+**Tests**: 24 new regression cases land — 12 `while` heads (`crates/cobrust-codegen/tests/while_condition_corpus.rs`) + 12 `if` siblings (`crates/cobrust-codegen/tests/if_condition_corpus.rs`). The `if`-sibling corpus is the regression guard against the shared primitive accidentally regressing `if`-head behaviour. Each case shells out to the `cobrust` binary, builds + runs the program, and asserts stdout cmp-bit-identical against the expected sequence.
+
+**Finding closure**: `findings/while-binop-eq-zero-condition-miscompile.md` (P0, discovered_by review-claude LC 263 farm) status flips from `open` to `closed_by_M11.3`. The number-theory algorithm class — GCD, factor-reduction, ugly-number, bit-traversal — is now unblocked end-to-end.
+
 ### M12 — Package format + dep resolution + content-addressed registry (per ADR-0026)
 
 The `cobrust-pkg` crate (M12) lands the package format half of constitution §2.2's binding deliverable:
