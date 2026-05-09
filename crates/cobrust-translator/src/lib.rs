@@ -84,4 +84,7 @@ pub use crate::repair::{
 };
 pub use crate::spec::{FunctionSpec, SpecError, SpecToml};
 pub use crate::synthetic::{CannedResponse, CannedTable, PromptHeader, SyntheticProvider};
-pub use crate::translate::{EmittedFile, FunctionTranslation, TranslationOutput, TranslationPlan};
+pub use crate::translate::{
+    EmittedFile, FunctionTranslation, TranslationOutput, TranslationPlan, WorkspaceContext,
+    build_translation_prompt_rich,
+};
