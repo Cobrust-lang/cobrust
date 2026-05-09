@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: audit-1-tomli-real-llm-result
-last_verified_commit: TBD
+last_verified_commit: 4f05fe3
 dependencies: [adr:0032, adr:0007, adr:0008, adr:0004, finding:translator-real-vs-synthetic-status, finding:m5-m7-real-llm-validation]
 ---
 
@@ -50,7 +50,7 @@ Ledger entry:
 
 ```json
 {
-  "ts": "2026-05-09T03:37:09.643445Z",
+  "ts": "2026-05-09T04:02:02.049827Z",
   "task": "translate",
   "provider": "user_codex_audit1",
   "provider_kind": "openai",
@@ -60,7 +60,7 @@ Ledger entry:
   "prompt_tokens": 1528,
   "completion_tokens": 111,
   "total_tokens": 1639,
-  "latency_ms": 3942,
+  "latency_ms": 2912,
   "attempt": 1,
   "outcome": "ok",
   "error_code": null,
