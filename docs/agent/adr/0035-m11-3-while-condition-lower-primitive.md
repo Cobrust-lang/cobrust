@@ -4,7 +4,7 @@ adr_id: 0035
 title: M11.3 — `lower_condition` root primitive shared by `if` + `while` heads
 status: accepted
 date: 2026-05-09
-last_verified_commit: TBD
+last_verified_commit: cfb7fd0
 supersedes: []
 superseded_by: []
 ---
@@ -218,6 +218,40 @@ crates/cobrust-codegen/src/cranelift_backend.rs
   M11.1-fixed while-leading-if path or other `if` corner cases.
   Mitigation: keep the M11.1 corpus + M11.1.1 corpus + while-condition
   parallel `if`-sibling corpus all green at every step.
+
+## Layer correction (post-merge addendum, 2026-05-09)
+
+ADR-0035 §"Context" + §"Decision" hypothesised the bug lived in
+`crates/cobrust-codegen/src/cranelift_backend.rs` (an `if`-vs-`while`
+divergence in head IR emission). **The empirical fix landed in
+`crates/cobrust-mir/src/lower.rs`** instead.
+
+Per the M11.3 P9 sub-agent's CLIF + MIR dump diagnosis: the bug
+was `BodyBuilder::lower_loop`'s While arm resetting `cur_block =
+header` before the SwitchInt terminator was written. For
+`<BinOp> == 0` shapes, `lower_bin`'s Mod path emits an Assert(NotEq
+rhs 0) on a div-guard block, advancing `cur_block` to its successor
+where the final `_eq` lives. The While arm's reset overwrote
+`header`'s Assert terminator with SwitchInt(_eq), orphaning `_eq`
+in an unreachable block. Each iteration read `_eq`'s pre-init
+zero (false), body never entered.
+
+The fix's location (MIR not codegen) is a **layer correction**
+relative to ADR-0035 §"Decision" Implementation map. The
+`lower_condition` root primitive is materialised in MIR — the
+helper extracts the post-`lower_expr` block + operand pair and
+both `lower_if` and `lower_loop` consume it identically.
+
+Same pattern as ADR-0034 §"Implementation map" amendment (M11.2 P9
+also found the actual fix needed an MIR-side `lower_call` extension
+beyond the codegen-only constraint). **Lesson for future codegen
+ADRs**: an "if-vs-while" or "call-vs-non-call" divergence
+hypothesis at the codegen layer should default to **also
+checking MIR lowering** before locking the implementation map.
+
+This corrects the audit trail without invalidating §"Decision"'s
+Option-2 root-primitive choice — the choice was correct; the
+layer was wrong.
 
 ## Cross-references
 
