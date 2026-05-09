@@ -209,6 +209,19 @@ Constitution §1 doesn't define this; ADR-0019 binds it as:
 
 M13 + M14 are ergonomics and may land before "usable" or after; non-blocking for the headline definition.
 
+**Anchor migration history** (per review-claude 二次审计 2026-05-09):
+
+| Tier | SHA | Reality |
+|---|---|---|
+| Literal satisfaction | `cc15f0b` (M12 merge) | All three lines "met" in letter; examples used `print("Fizz")` literals as workaround for the Constant::FnRef + control-flow gaps. |
+| Spirit satisfaction | `d178a3f` (M11.1 merge) | `examples/fizzbuzz.cb` runs the real % / if / elif / else algorithm; M12.x lifts for-protocol + f-string + Aggregate/Ref/Cast Rvalue lowering; the 11 `#[ignore]` markers in `stdlib_examples` are removed. The language demonstrates §1.1 (Language & Runtime) is real, not a demo. |
+| Full satisfaction | TBD | Audit #1 (tomli real-LLM E2E, Task #35) clears one Python library through L0..L3 with a real LLM, demonstrating §1.2 (AI-native compiler) is real, not synthetic. ADR-0032 will pin this gate when the sprint dispatches. |
+
+The literal vs spirit distinction was raised by `review-claude` and is
+now constitutional record. Future CTO instances reading this snapshot
+should treat M11.1 (`d178a3f`) as the spirit-satisfaction anchor for
+ADR-0019, NOT M12 (`cc15f0b`).
+
 ### Out of scope for Phase E (defer to Phase F)
 
 - Self-hosting (constitution §4.4): begins after M11; type checker + AST printer first.
