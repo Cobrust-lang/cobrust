@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: audit-3a-stateful-prompt-design
-last_verified_commit: 25dd034
+last_verified_commit: 4fabf4c
 dependencies: [adr:0036, adr:0032, adr:0007, adr:0008, finding:audit-1-tomli-real-llm-result, finding:translator-real-vs-synthetic-status]
 ---
 

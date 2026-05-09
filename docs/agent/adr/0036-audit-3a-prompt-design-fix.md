@@ -4,7 +4,7 @@ adr_id: "0036"
 title: Audit #3a — production prompt-design fix (workspace-context-injection in build_translation_prompt)
 status: accepted
 date: 2026-05-09
-last_verified_commit: TBD
+last_verified_commit: 4fabf4c
 supersedes: []
 superseded_by: []
 dependencies: [adr:0007, adr:0032, adr:0035, finding:audit-1-tomli-real-llm-result, finding:translator-real-vs-synthetic-status]
