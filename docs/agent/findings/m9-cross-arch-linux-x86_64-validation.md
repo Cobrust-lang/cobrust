@@ -1,8 +1,9 @@
 ---
 doc_kind: finding
 finding_id: m9-cross-arch-linux-x86_64-validation
-last_verified_commit: b83ea80
-dependencies: [adr:0023]
+last_verified_commit: TBD
+dependencies: [adr:0023, adr:0033]
+status: closed-by-fix
 ---
 
 # Finding: M9 cross-architecture validation — Linux x86_64
@@ -155,11 +156,36 @@ that covers the observed failure pattern.
 **CTO action required: dispatch a fix sprint for `infer_return_type` /
 `operand_ty` before proceeding with tomli real-LLM E2E (audit #1).**
 
+## Resolution
+
+ADR-0033 (`docs/agent/adr/0033-codegen-float-return-fix.md`) closes
+the bug via Option C — fixed-point inference + threading the
+inferred-locals map through `operand_ty` and `rvalue_ty`.
+
+Verified post-fix on both delivery-scope architectures:
+
+| Arch                  | `cargo test --workspace --locked`     | float corpus (16 cases) | 4 named tests   |
+|-----------------------|---------------------------------------|-------------------------|-----------------|
+| macOS aarch64         | passes (count up by 16 vs 2,430+ baseline) | 16 / 16 pass        | all 4 PASS      |
+| Linux x86_64          | passes (codegen / cli / stdlib gates) | 16 / 16 pass            | all 4 PASS      |
+
+Linux x86_64 verification went through the
+`<self-hosted-runner>` workstation per
+`~/.claude/projects/-Users-hakureirm-codespace-Study-Cobrust/memory/reference_x86_workstation.md`,
+synced via `rsync` of the `feature/codegen-float-return-fix`
+branch tree. The `cobrust-msgpack::msgpack_fuzz` test failed on
+x86_64 with a 190 GiB allocation request — that is a separate,
+pre-existing fuzz-knob issue unrelated to ADR-0033 and not gated
+by this finding.
+
 ## Cross-references
 
 - ADR-0023 (M9 codegen target matrix)
+- ADR-0033 (the fix)
 - `crates/cobrust-codegen/src/cranelift_backend.rs`: `infer_return_type`,
-  `operand_ty`, `infer_local_types`
+  `operand_ty`, `infer_local_types`, `rvalue_ty`
+- `crates/cobrust-codegen/tests/float_return_corpus.rs` — the
+  16-case regression net.
 - Local memory: `reference_x86_workstation.md` (workstation access)
 - review-claude 三轮反馈 ① B (2026-05-09)
 - `cranelift-codegen-0.131.1/src/isa/x64/inst/emit.rs:1057`
