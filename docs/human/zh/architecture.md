@@ -1587,7 +1587,7 @@ M9 的 158 测试基线保持绿色——M11 修订对 ADR-0023 §"Per-MIR-form 
 |---|---|---|
 | `examples/hello.cb` | print(字面量) | 完全端到端（M10 回归） |
 | `examples/fizzbuzz.cb` | print(字面量) 循环 | 完全端到端 |
-| `examples/fib.cb` | print(字面量) | 完全端到端（递归是 M11.x） |
+| `examples/fib.cb` | 真递归 + `Constant::FnRef` Call | 完全端到端（M11.2 / ADR-0034 落地） |
 | `examples/wc.cb` | 运行时 ABI（read_file + split） | 占位 + 集成测试 |
 | `examples/cat.cb` | 运行时 ABI（read_file + print） | 占位 + 集成测试 |
 | `examples/echo.cb` | 运行时 ABI（env.args + print） | 占位 + 集成测试 |
@@ -1615,6 +1615,23 @@ ADR-0019 §"Definition of usable for most projects" 钉住了三行验收线：
 
 
 **M11 源级路径（M12+ 用户撰写的表面）**：`std.io.println`、`std.io.print`、`std.io.read_line`、`std.io.read_file`、`std.io.write_file`、`std.collections.List`、`std.collections.Dict`、`std.collections.Set`、`std.string.format`、`std.string.split`、`std.string.find`、`std.string.replace`、`std.string.lower`、`std.string.upper`、`std.math.sqrt`、`std.math.pow`、`std.math.PI`、`std.math.E`、`std.panic.panic`、`std.panic.assert`、`std.env.args`、`std.env.var`、`std.fmt.format_int`、`std.fmt.format_float`、`std.fmt.format_bool`、`std.fmt.format_str`。
+
+### M11.2 — `Constant::FnRef` Call 降级（按 ADR-0034）
+
+M11.2 sprint 闭合了 M9 codegen stub 在用户定义 fn 调用 callsite 上的最后一个缺口。在 ADR-0034 落地之前，`Operand::Constant(Constant::FnRef(id))` 形式的 callee（递归 fn / 互递归 / 任意跨 fn 派发）走 M9 stub 路径——发出 `iconst.i64 0` 占位、写入目的地、跳转到 continuation——从来不发出真实的 Cranelift `call` 指令。`examples/fib.cb` 因此回退到迭代实现。
+
+**修复（按 ADR-0034 §"Decision" 选项 3 — 经典前向声明双 Pass）**：
+
+- **Pass 1（declare）**：`emit()` 已经迭代 `module.bodies` 两次。第一次迭代为每个 body 调用 `declare_body`，调用 `obj.declare_function(name, Linkage::Export, sig)` 并在 `CraneliftCtx.function_ids` 中按 `body.def_id.0` 记录 `FuncId`。同一调用还把 body 的声明返回类型记录到 `CraneliftCtx.body_return_types` 中，以便 ADR-0033 的 `inferred_locals` 不动点 pass 在 pass 2 跑时能查询跨 fn 返回类型。
+- **Pass 2（define）**：第二次迭代为每个 body 调用 `define_body`。在 `define_body` 内，`function_ids` 的每一项通过 `obj.declare_func_in_func` 转换为 builder 作用域的 `FuncRef` 并存入 per-body `user_funcs: HashMap<u32, ir::FuncRef>`。`EmitCtx` 持有这张 map 的借用。`lower_call` 在 callee 操作数为 `Constant::FnRef(id)` 时查询 `user_funcs` 并发出真实 `call` 指令——参数、返回值、跳转到 continuation——逐字镜像现有的 `extern_funcs` 分支。
+
+**与 ADR-0033 `inferred_locals` 不动点的交互**：ADR-0033 的 per-fn `inferred_locals` 在 codegen 时为 `Ty::None` 声明的 locals（合成 temp `_un` / `_bin` / `_callret`）赋类型。M11.2 的前向声明 pass 在 fn 签名边界上工作；两层是正交的。当 caller 包含 `_callret = call FnRef(M)` 时，`infer_local_types` 查询 `body_return_types[M]` 直接为 `_callret` 赋类型——闭合了交互面，否则 `_callret` 会默认到 `I8` 并使 `print_int(fib(10))` 这样的 caller 链 miscompile。强制回归用例 `fnref_inferred_locals_recursive_chain`（`crates/cobrust-codegen/tests/fnref_call_corpus.rs`）正是踩这条路径。
+
+**MIR 端配套**：要让 codegen 端的分支真的触发，MIR 的 `lower_call`（`crates/cobrust-mir/src/lower.rs`）扩展为：当 callee 是 `Name` 表达式且其解析后类型为 `Ty::Fn(...)` 时，降级为 `Operand::Constant(Constant::FnRef(rn.def_id.0))`，而不是通用的 `Operand::Move(Place::local(L))`。非 fn 类型 callee（间接 call 走的 fn 指针 local、lambda）保留现有表达式降级路径。这是 ADR-0034 要求的唯一 MIR 改动；其他都在 codegen。
+
+**测试**：`crates/cobrust-codegen/tests/fnref_call_corpus.rs` 落地 10 个回归用例：单参数递归（fib）、多参数递归（截断 Ackermann）、零参数链（`depth_3 → depth_2 → depth_1 → depth_0`）、自递归结构变体（sum_to）、互递归（`is_even` / `is_odd`，验证前向声明使 BOTH 方向工作）、链式 call（`a → b → c → leaf`，无递归）、`fnref_inferred_locals_recursive_chain`（ADR-0033 + ADR-0034 交互保护）、无副作用 fn 多次调用、return 另一个 fn 的结果直接、负参数递归（`countdown(n - 1)`，运行时验证经过 `_bin` Ty::None 算术 temp 的 operand 链）。`examples/fib.cb` 重写为真正的递归形式；`cobrust build examples/fib.cb && ./target/cobrust/fib` 字节级输出 `fib(10) =\n55\n`。
+
+**审计 #2 闭合**：finding `examples-literal-print-debt.md` 从 🟡 PARTIAL 升级为 ✅ DONE。Constitution §1.1 "syntactically familiar to Python users" 的承诺在 fib + fizzbuzz 上都是真实的——递归是用户定义 fn 的真实语义，不再是 print(字面量) 占位。
 
 ### M12 — 包格式 + 依赖解析 + 内容寻址注册表（依据 ADR-0026）
 

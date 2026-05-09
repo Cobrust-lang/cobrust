@@ -4,7 +4,7 @@ adr_id: 0034
 title: M11.2 — Constant::FnRef Call lowering for user-defined fns
 status: accepted
 date: 2026-05-09
-last_verified_commit: TBD
+last_verified_commit: ea15683
 supersedes: []
 superseded_by: []
 ---

@@ -30,11 +30,12 @@
 //! Post-ADR-0033 closure (HEAD ≥ `3392eb5`), the original 4-block
 //! `% 2` straight-line program **builds successfully** and produces
 //! correct output. v01 + v03 (which asserted "build must reject") are
-//! retired in favor of v02 alone — the negative control that confirms
-//! the verifier-reject *path* itself is sound when invoked on a
-//! malformed IR. Today we cannot synthesise a malformed IR purely from
-//! a `.cb` source (codegen + ADR-0033 Option C close every known
-//! verifier-trigger pattern), so v01/v03 lose their natural input.
+//! retired (CTO hygiene fix `da74739`) in favor of v02 alone — the
+//! negative control that confirms the build path doesn't falsely fire
+//! any error on valid IR. Today we cannot synthesise a malformed IR
+//! purely from a `.cb` source (codegen + ADR-0033 Option C close every
+//! known verifier-trigger pattern), so v01/v03 lose their natural
+//! input.
 //!
 //! Future sprints that surface a NEW codegen bug producing a verifier
 //! reject can re-introduce a v01-style regression guard at that point.
@@ -90,7 +91,7 @@ const CLEAN_PROGRAM: &str = "fn main() -> i64:\n    return 0\n";
 /// Ensures the build path doesn't falsely fire any error path (verifier
 /// reject, codegen panic, etc.) on valid IR. This is the only test in
 /// the corpus that survives ADR-0033 Option C's closure of the original
-/// 4-block trigger; v01 + v03 retired.
+/// 4-block trigger; v01 + v03 retired (CTO hygiene fix `da74739`).
 #[test]
 fn v02_clean_program_exits_zero() {
     let bin = cobrust_binary();

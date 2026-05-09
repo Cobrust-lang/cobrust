@@ -1175,7 +1175,27 @@ impl<'a> BodyBuilder<'a> {
         args: &[CallArg],
         span: Span,
     ) -> Result<Operand, MirError> {
-        let callee_op = self.lower_expr(callee)?;
+        // ADR-0034 §"Decision" Option 3: when the callee is a `Name`
+        // expression whose resolved type is `Ty::Fn(...)`, emit
+        // `Operand::Constant(Constant::FnRef(rn.def_id.0))` so the
+        // codegen layer can dispatch via the per-module
+        // forward-declaration table (`CraneliftCtx.function_ids`).
+        // Without this, a fn-typed Name lowers via `lower_expr` to
+        // `Operand::Move(Place::local(L))` where L's `Ty::Fn` does not
+        // map to any Cranelift scalar — codegen would then take the
+        // M9 stub `iconst(I64, 0)` path and the call's return value
+        // would be a constant zero (broken for any non-trivial recursion
+        // or cross-fn dispatch).
+        let callee_op = if let ExprKind::Name(rn) = &callee.kind {
+            let ty = self.ctx.lookup_ty(rn.def_id);
+            if matches!(ty, Ty::Fn(_)) {
+                Operand::Constant(Constant::FnRef(rn.def_id.0))
+            } else {
+                self.lower_expr(callee)?
+            }
+        } else {
+            self.lower_expr(callee)?
+        };
         let mut arg_ops = Vec::new();
         for a in args {
             match a {
