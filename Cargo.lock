@@ -535,8 +535,11 @@ dependencies = [
 name = "cobrust-types"
 version = "0.1.0-beta"
 dependencies = [
+ "cobrust-codegen",
  "cobrust-frontend",
  "cobrust-hir",
+ "cobrust-mir",
+ "target-lexicon 0.13.5",
  "thiserror 1.0.69",
 ]
 

@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:codegen
 crate: cobrust-codegen
-last_verified_commit: 078eab9
-dependencies: [mod:mir, mod:types, adr:0023, adr:0027]
+last_verified_commit: e85630f
+dependencies: [mod:mir, mod:types, adr:0023, adr:0027, adr:0041]
 ---
 
 # Module: codegen
@@ -83,6 +83,10 @@ pub enum CodegenError {
     LinkerFailed { exit_code: i32, stderr: String },
     Io(String),
     Internal(String),
+    /// ADR-0041 §H3 — `**`/`@`/`in`/`not in` no longer silently emit
+    /// `iconst(I64, 0)`. Codegen returns this variant; M11.x integer
+    /// pow + container-membership runtime closes the gap.
+    UnimplementedBinOp { op: &'static str, note: &'static str },
 }
 
 // ABI helpers exposed for tests + downstream consumers (M10 driver).

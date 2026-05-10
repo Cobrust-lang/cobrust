@@ -696,9 +696,17 @@ impl Ctx {
                     (Ty::Tuple(items), IndexKind::Expr(e)) => {
                         let it = self.synth_expr(e)?;
                         unify(&Ty::Int, &it, &mut self.subst, e.span)?;
-                        // M2 conservative: each tuple index returns a
-                        // fresh union-like — but we don't track index
-                        // values, so synthesize the head type.
+                        // ADR-0041 §H8: when the index is a literal int
+                        // (positive or Python-style negative), constant-
+                        // fold to the exact element type. Otherwise the
+                        // dynamic-index conservative fallback synthesises
+                        // the head element (matches prior M2 behavior;
+                        // future row polymorphism will widen this to a
+                        // union).
+                        if let Some(idx) = literal_int_value(e) {
+                            let resolved = resolve_tuple_index(items.as_slice(), idx);
+                            return Ok(resolved.unwrap_or(Ty::Never));
+                        }
                         Ok(items.first().cloned().unwrap_or(Ty::Never))
                     }
                     (Ty::Dict(k, v), IndexKind::Expr(e)) => {
@@ -1037,6 +1045,13 @@ impl Ctx {
             ("List", 1) => Ty::List(Box::new(lowered[0].clone())),
             ("Set", 1) => Ty::Set(Box::new(lowered[0].clone())),
             ("Dict", 2) => Ty::Dict(Box::new(lowered[0].clone()), Box::new(lowered[1].clone())),
+            // ADR-0041 §H8: `Tuple[A, B, C]` resolves to a structural
+            // tuple of the same arity. Without this, the generic
+            // fall-through synthesised a fresh inference variable for
+            // every annotated tuple — which made tuple-index test
+            // cases (H8.1-H8.3) surface `AmbiguousType` because the
+            // returned element type referenced the now-erased var.
+            ("Tuple", _) => Ty::Tuple(lowered),
             _ => self.fresh_var(),
         }
     }
@@ -1197,4 +1212,48 @@ fn lit_to_string(lit: &Lit) -> String {
 #[allow(dead_code)]
 fn _dummy() {
     let _ = finalize;
+}
+
+/// ADR-0041 §H8: extract the integer value of an `Expr` that's a
+/// literal int (with optional unary minus). Returns `None` for
+/// anything else.
+fn literal_int_value(e: &Expr) -> Option<i64> {
+    match &e.kind {
+        ExprKind::Lit(Lit::Int(s)) => s.parse::<i64>().ok(),
+        ExprKind::Un {
+            op: UnaryOp::Neg,
+            operand,
+        } => {
+            if let ExprKind::Lit(Lit::Int(s)) = &operand.kind {
+                s.parse::<i64>().ok().map(i64::wrapping_neg)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// ADR-0041 §H8: resolve a constant tuple index to an element type.
+/// Negative indices fold from the right (Python `t[-1]` is the last
+/// element). Out-of-range indices return `None` (caller surfaces as
+/// `Ty::Never` — defense-in-depth; runtime would panic).
+fn resolve_tuple_index(items: &[Ty], idx: i64) -> Option<Ty> {
+    if items.is_empty() {
+        return None;
+    }
+    // Negative indices fold from the right; bounds-check both sides.
+    // We work in `i128` to avoid any wrap-around risk on i64::MIN.
+    let len = i128::try_from(items.len()).ok()?;
+    let idx_i128 = i128::from(idx);
+    let normalized = if idx_i128 < 0 {
+        idx_i128 + len
+    } else {
+        idx_i128
+    };
+    if normalized < 0 || normalized >= len {
+        return None;
+    }
+    let pos = usize::try_from(normalized).ok()?;
+    items.get(pos).cloned()
 }

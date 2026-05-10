@@ -219,6 +219,31 @@ indent chains, malformed UTF-8 sequences). The fuzz target asserts
     + format spec) but evaluates format specs at runtime in M3+.
     The frontend's job is to parse them, not to evaluate them.
 
+## Drift correction (amended by ADR-0041)
+
+claude-desktop external review (review-claude integrated handoff
+2026-05-11 §2 H1-H8) surfaced eight constitution §2.2 promises this
+ADR did NOT enforce in the implementation. The drift correction
+shipped under [ADR-0041](0041-python-semantics-compliance-binding.md):
+
+- **H1** `%` was C remainder → ADR-0041 §H1 ships Python floor mod.
+- **H2** `and`/`or` did not short-circuit → ADR-0041 §H2 ships
+  explicit MIR control flow.
+- **H3** `**`/`@`/`in`/`not in` silent zero → ADR-0041 §H3 ships
+  `CodegenError::UnimplementedBinOp` honest error.
+- **H4** walrus `:=` zero-consume → ADR-0041 §H4 ships explicit
+  `DroppedByConstitution(walrus :=)`.
+- **H5** closure captures empty Vec → ADR-0041 §H5 ships real walker.
+- **H6** comprehensions empty placeholder → ADR-0041 §H6 ships real
+  loop+append.
+- **H7** multi-base class accepted → ADR-0041 §H7 ships parser reject.
+- **H8** tuple index returns `items.first()` → ADR-0041 §H8 ships
+  literal-int constant-fold.
+
+This ADR's typing rules and form list remain authoritative; ADR-0041
+is the **implementation amendment** that reconciled drifted
+behaviour with this ADR's contract.
+
 ## Evidence
 
 - Constitution `CLAUDE.md` §2.1 (keep), §2.2 (drop), §7 (M1 done means).
@@ -227,6 +252,7 @@ indent chains, malformed UTF-8 sequences). The fuzz target asserts
   pipeline diagrams place lexer/parser/AST as the entry path.
 - ADR-0001 — license under which the implementation ships.
 - ADR-0002 — multi-agent topology that delivers M1 via P9 + P8.
+- ADR-0041 — H1-H8 drift correction binding (this PR).
 - PEP 622 (structural pattern matching), PEP 701 (f-strings),
   Python language reference §6 (expressions) — used as form-count
   cross-checks. Cobrust intentionally diverges from CPython where
