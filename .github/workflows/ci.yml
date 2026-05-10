@@ -70,11 +70,43 @@ jobs:
         with:
           toolchain: 1.94.1
       - uses: Swatinem/rust-cache@v2
+      # Probe Python 3 availability for full_pipeline_corpus differential gate.
+      # On ubuntu-latest the runner ships python3 but not necessarily python3.11;
+      # apt-install provides it. On macos-latest Homebrew's python3 is on PATH.
+      # The install step is best-effort (|| true) so CI never fails here.
+      - name: Install python3.11 (corpus oracle — Ubuntu only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y python3.11 python3.11-distutils 2>/dev/null || true
+      - name: Verify python3 oracle version (informational)
+        run: |
+          for py in python3.11 python3 python; do
+            if command -v "$py" >/dev/null 2>&1 && "$py" -c "import tomllib" 2>/dev/null; then
+              echo "corpus oracle: $py $(${py} --version 2>&1)"
+              echo "## corpus oracle" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              echo "| key | value |" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              echo "| --- | --- |" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              echo "| binary | \`$py\` |" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              echo "| version | $($py --version 2>&1) |" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              echo "| os | ${{ matrix.os }} |" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              break
+            fi
+          done
       - run: cargo test --workspace --locked
         # Note: per `findings/m9-cross-arch-9ff481c-regression.md`,
         # Linux x86_64 is the gold-standard cross-arch validator;
         # macOS arm64 was the dev host. As of 2026-05-09 both archs
         # pass cargo test --workspace --locked at HEAD 1419d21.
+        # full_pipeline_corpus runs when python with tomllib is on PATH;
+        # emits cargo:warning= to job summary when it skips.
+      - name: Surface full_pipeline_corpus skip-warnings to job summary
+        if: always()
+        run: |
+          if cargo test -p cobrust-tomli --test full_pipeline_corpus -- --nocapture 2>&1 \
+               | grep -q "SKIPPED"; then
+            echo "### full_pipeline_corpus status" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            echo ":warning: full_pipeline_corpus SKIPPED on ${{ matrix.os }} — python with tomllib not found" \
+              >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          fi
       - name: Run example binaries (smoke)
         run: |
           cargo run --release -p cobrust-cli -- build examples/hello.cb

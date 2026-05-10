@@ -428,6 +428,64 @@ a partial run.
 
 To run the live gates: `USER_CODEX_API_KEY=<key> cargo test -p cobrust-translator`.
 
+## full_pipeline_corpus CI gate
+
+**File**: `crates/cobrust-tomli/tests/full_pipeline_corpus.rs`
+**Tests**: `t1_1_full_pipeline_corpus_strict_pass_rate`, `t1_1_canonical_fixture_loads`
+**Fixed in**: B3 (`fix(tomli): probe python3 from PATH instead of macOS-only literal`)
+
+### Skip-vs-run matrix
+
+| Condition | Result | Stdout |
+|---|---|---|
+| `python3.11` on PATH with `tomllib` | RUN — differential gate executes | `T1.1 corpus gate: PASS (N/N within tolerance, oracle=python3.11)` |
+| `python3` on PATH with `tomllib` | RUN — differential gate executes | `T1.1 corpus gate: PASS (N/N within tolerance, oracle=python3)` |
+| `python` on PATH with `tomllib` | RUN — differential gate executes | `T1.1 corpus gate: PASS (N/N within tolerance, oracle=python)` |
+| No Python with `tomllib` on PATH | SKIP — exit 0 | `T1.1 corpus gate: skipping — no python3.11/python3/python with tomllib found on PATH` + `cargo:warning=full_pipeline_corpus SKIPPED ...` |
+
+### Root cause of the pre-B3 Linux silent-skip
+
+`PYTHON` was hardcoded to `/opt/homebrew/bin/python3.11` — a macOS
+Homebrew-specific absolute path. On Linux CI runners this path
+does not exist, `python_available()` always returned `false`, and
+both tests returned early with `eprintln!` only (no `cargo:warning`),
+producing a silent green that masked the absence of differential
+testing.
+
+### B3 fix
+
+- Removed `const PYTHON` constant.
+- Added `probe_python() -> Option<&'static str>` that tries
+  `python3.11` → `python3` → `python` via `Command::new` + `import tomllib`
+  probe on PATH, returning the first hit.
+- Both tests call `probe_python()`; on `None` they `eprintln!` + emit
+  `println!("cargo:warning=...")` so the skip surfaces in the CI job
+  summary even without `--nocapture`.
+- On success the test prints `oracle=<binary>` in the pass-rate line
+  and a final `T1.1 corpus gate: PASS (N/N ...)` line confirming
+  real execution.
+
+### CI wiring (`.github/workflows/ci.yml`)
+
+Added to the `test` job (runs on both `ubuntu-latest` and `macos-latest`):
+
+1. **Install python3.11** (Ubuntu only, `apt-get install -y python3.11`; `|| true` so it is best-effort and never blocks CI).
+2. **Verify python3 oracle version** — iterates candidates, prints the found binary + version to the job log and writes a `## corpus oracle` table to `$GITHUB_STEP_SUMMARY`.
+3. **Surface full_pipeline_corpus skip-warnings** (`if: always()`) — re-runs the corpus test with `--nocapture`, checks if "SKIPPED" appears in output, and appends a `:warning:` entry to `$GITHUB_STEP_SUMMARY` when no oracle is present.
+
+### Preconditions for RUN (not SKIP)
+
+- On **Linux CI** (`ubuntu-latest`): `sudo apt-get install -y python3.11` must succeed (requires universe apt source; present on GitHub-hosted runners). Fallback: `python3` ships with the runner image and `tomllib` is in stdlib since 3.11+.
+- On **macOS CI** (`macos-latest`): Homebrew Python 3.x is on PATH; `python3.11` is typically available via `brew install python@3.11`.
+- On **local dev**: any `python3` ≥ 3.11 with `tomllib` in stdlib satisfies the probe.
+
+### Done means (B3)
+
+- [x] `cargo test -p cobrust-tomli --test full_pipeline_corpus -- --nocapture` stdout contains `T1.1 corpus gate: PASS` (not "skipping") when Python is available.
+- [x] Same command on a machine without Python exits 0 with `skipping` message + `cargo:warning=` in output.
+- [x] `ci.yml` installs `python3.11` on Ubuntu before the test step.
+- [x] Skip-warning is promoted to GitHub job summary via `$GITHUB_STEP_SUMMARY`.
+
 ## Non-goals
 
 - Not a general-purpose Python-to-Rust transpiler. Targets Cobrust
