@@ -38,11 +38,13 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod add;
 mod build;
 mod check;
+pub mod error_ux;
 mod exit_codes;
 mod fmt;
 mod new;
 mod pkg_build;
 mod repl;
+mod report_bug;
 mod run;
 mod test_runner;
 mod translate;
@@ -155,6 +157,22 @@ enum Command {
         #[arg(long)]
         dev: bool,
     },
+    /// Collect a compiler bug report and print a GitHub issue link.
+    ///
+    /// Run this command immediately after a compiler crash or unexpected
+    /// `error[Internal]` message.  The collected report can be attached
+    /// to a new GitHub issue.
+    ReportBug {
+        /// Include the last MIR dump (`.cobrust/last_mir.txt`) in the report.
+        #[arg(long)]
+        include_mir: bool,
+        /// Attach this Cobrust source file to the report.
+        #[arg(long)]
+        source_file: Option<PathBuf>,
+        /// Write the report tarball to this directory (default: current dir).
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -233,6 +251,11 @@ fn main() -> ExitCode {
             version.as_deref(),
             dev,
         ),
+        Command::ReportBug {
+            include_mir,
+            source_file,
+            out_dir,
+        } => report_bug::run(include_mir, source_file.as_deref(), out_dir.as_deref()),
     };
     ExitCode::from(code)
 }
