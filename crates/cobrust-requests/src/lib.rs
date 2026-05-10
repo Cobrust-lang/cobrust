@@ -29,7 +29,8 @@
 mod client;
 
 pub use crate::client::{
-    HttpError, HttpErrorKind, HttpMethod, Response, Session, delete, get, head, patch, post, put,
+    HttpError, HttpErrorKind, HttpMethod, MAX_BODY_BYTES, Response, Session, delete, get, head,
+    patch, post, put,
 };
 
 #[cfg(feature = "pyo3")]
