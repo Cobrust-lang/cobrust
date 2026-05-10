@@ -398,7 +398,12 @@ pub fn unpack_array(
     pos: usize,
     length: usize,
 ) -> Result<(Vec<MsgValue>, usize), MsgError> {
-    let mut out: Vec<MsgValue> = Vec::with_capacity(length);
+    // Cap prealloc: attacker-controlled `length` (ARRAY_32 = 4-byte big-endian)
+    // could be up to 2^32-1, causing a 190 GiB-class OOM. Apply both bounds:
+    // - information-theoretic: can't have more elements than remaining bytes
+    // - conservative cap: avoid large cold-start allocs for legitimate 1 MB+ arrays
+    let safe_cap = length.min((data.len().saturating_sub(pos)).min(64 * 1024));
+    let mut out: Vec<MsgValue> = Vec::with_capacity(safe_cap);
     let mut cursor = pos;
     for _ in 0..length {
         let (v, next) = unpack_one(data, cursor)?;
@@ -490,7 +495,12 @@ pub fn unpack_map(
     pos: usize,
     length: usize,
 ) -> Result<(Vec<(String, MsgValue)>, usize), MsgError> {
-    let mut out: Vec<(String, MsgValue)> = Vec::with_capacity(length);
+    // Cap prealloc: attacker-controlled `length` (MAP_32 = 4-byte big-endian)
+    // could be up to 2^32-1, causing a 190 GiB-class OOM. Apply both bounds:
+    // - information-theoretic: can't have more k/v pairs than remaining bytes
+    // - conservative cap: avoid large cold-start allocs for legitimate 1 MB+ maps
+    let safe_cap = length.min((data.len().saturating_sub(pos)).min(64 * 1024));
+    let mut out: Vec<(String, MsgValue)> = Vec::with_capacity(safe_cap);
     let mut cursor = pos;
     for _ in 0..length {
         let (k, p2) = unpack_one(data, cursor)?;
