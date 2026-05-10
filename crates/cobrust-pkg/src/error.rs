@@ -117,4 +117,12 @@ pub enum SourceError {
 
     #[error("invalid source spec: {0}")]
     Invalid(String),
+
+    /// (M8) A git ref or URL that starts with `-` would be interpreted as a
+    /// command-line flag by the `git` binary. Reject it unconditionally.
+    #[error(
+        "adversarial git ref/url `{0}`: values starting with `-` are forbidden \
+         (they would be parsed as git CLI flags)"
+    )]
+    AdversarialRef(String),
 }
