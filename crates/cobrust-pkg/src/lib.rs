@@ -55,6 +55,7 @@ pub mod tarball;
 
 pub use error::{
     LockfileError, ManifestError, PkgError, RegistryError, ResolutionError, SourceError,
+    TarballError,
 };
 pub use lockfile::{
     LOCKFILE_VERSION, Lockfile, LockfileMetadata, LockfilePackage, load as load_lockfile,
