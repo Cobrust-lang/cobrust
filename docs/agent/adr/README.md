@@ -68,3 +68,4 @@ same atomic commit as the change it justifies.
 | [0038](0038-phase-f-roadmap.md) | Phase F roadmap — F.1/F.2/F.3 tiers with priority + trigger + done-means + effort matrix; 0.1.0-beta release plan + wedge "AI Python 加速器" | accepted | 2026-05-10 |
 | [0037](0037-py-compat-hard-bind.md) | Reserved — py-compat hard-bind to L2 verifier (Phase F.1.x) | proposed | 2026-05-10 |
 | [0039](0039-tomli-full-translation-result.md) | T1.1 — tomli full-library real-LLM translation 5/5 PASS production milestone | accepted | 2026-05-10 |
+| [0040](0040-honest-gate-verdicts-and-real-llm-wiring.md) | 0.1.0-stable Wave 1A — honest `GateOutcome` verdicts (B2) + production real-LLM router wiring (B1) per claude-desktop integrated handoff §1.B1 + §1.B2 + §10 | accepted | 2026-05-09 |
