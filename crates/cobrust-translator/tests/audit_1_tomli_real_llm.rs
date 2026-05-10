@@ -9,7 +9,7 @@
 //!
 //! 1. **No `SyntheticProvider`**: the only registered provider is
 //!    `OpenAiProvider` pointed at the user-codex endpoint
-//!    (`http://104.244.92.250:8317/v1`).
+//!    (`http://127.0.0.1:1/v1`).
 //! 2. **Isolated LLM disk cache**: `cache_dir = tempfile::tempdir()`,
 //!    fresh per invocation; prior `real_llm_smoke.rs` BLAKE3 entries
 //!    are invisible.
@@ -91,7 +91,7 @@ use cobrust_llm_router::{
 // ---- Constants ---------------------------------------------------------------
 
 const ENV_KEY: &str = "USER_CODEX_API_KEY";
-const BASE_URL: &str = "http://104.244.92.250:8317/v1";
+const BASE_URL: &str = "http://127.0.0.1:1/v1";
 const PROVIDER_KEY: &str = "user_codex_audit1";
 const MODEL: &str = "gpt-5.5";
 const TARGET_FUNCTION: &str = "parse_bool";
@@ -1212,7 +1212,7 @@ endpoint reachable will produce the gated outcome.
 The audit harness is correct (cache discipline verified, provider
 wired). The endpoint or environment is currently unavailable. CTO
 should retry with `https_proxy=http://127.0.0.1:7897` set, or via the
-<self-hosted-runner> per `reference_x86_workstation.md`.
+<internal Linux x86_64 validator host> per `reference_x86_workstation.md`.
 
 ## Cross-references
 
