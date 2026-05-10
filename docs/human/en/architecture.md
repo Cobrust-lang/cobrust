@@ -306,10 +306,64 @@ The pipeline reads:
 - `translate(library: &PyLibrary, cfg: &TranslatorConfig) -> Result<TranslatedCrate, TranslatorError>` — async entrypoint
 - `PyLibrary` — describes one library to translate (paths, version, seeds)
 - `TranslatorConfig` — runtime knobs: router, out_dir, oracle, escalation_threshold, synthetic_only flag
-- `TranslatedCrate` — outcome: `{ manifest: ProvenanceManifest, crate_dir, pyo3_wrapper_dir, functions: Vec<FunctionTranslation> }`
+- `TranslatedCrate` — outcome: `{ manifest: ProvenanceManifest, crate_dir, pyo3_wrapper_dir, functions: Vec<FunctionTranslation>, repair_attempts, gate_outcomes: GateOutcomes }`
+- `GateOutcome { Pass | Fail | Skip }` — ADR-0040 structured per-gate verdict; `as_manifest_str()` produces distinct prefixes (`pass (...)` / `fail: ...` / `skipped (...)`) so callers do not parse manifest strings
+- `GateOutcomes` — aggregate of all five L2/L3 gates; `worst()` returns Fail > Skip > Pass
 - `TranslatorError` — taxonomy: `SpecExtraction`, `Translation { function, message }`, `BuildGate`, `BehaviorGate`, `DownstreamGate`, `SyntheticMiss { task, function }`, `Io`, `Router`, `Manifest`, `Config`, `Decode`
 - `SyntheticProvider` — `LlmProvider` impl backed by canned TOML responses keyed by `(task, function, source_sha16)`
 - `deterministic_id(source_sha256_hex, toolchain, router_decision_ids)` — `blake3:<hex>` reproducibility token
+
+### Real-LLM mode wiring (ADR-0040)
+
+`build_router()` instantiates real adapters when
+`cfg.synthetic_only = false`:
+
+- `kind = "openai"` (covers DeepSeek / vLLM / OpenRouter / Together —
+  per ADR-0004 §"Provider registry") → `OpenAiProvider`.
+- `kind = "anthropic"` → `AnthropicProvider`.
+- `kind = "synthetic"` in real-LLM mode → `TranslatorError::Config`
+  (synthetic providers are in-process mocks per ADR-0031).
+- Missing or empty `api_key_env` for any declared provider →
+  `TranslatorError::Config` naming the env var.
+
+Production callers passing `synthetic_only = false` previously got
+a stub `Err("real-LLM mode is not wired in M4 ...")`; ADR-0040 wires
+the production path so the same router that ADR-0032 / ADR-0036 used
+outside the pipeline now serves `translate()`.
+
+### Honest gate verdicts (ADR-0040)
+
+The orchestrator returns a structured `GateOutcomes` aggregate
+alongside the manifest. Each gate (l2_build / l2_behavior / l2_perf /
+l3_pyo3_wrapper / l3_downstream_dependents) carries one of three
+disjoint variants:
+
+- `Pass { detail }` — verifier accepted; `detail` carries observable
+  evidence (test target names + repair-attempt count).
+- `Fail { reason }` — verifier rejected; surfaces as
+  `TranslatorError::EscalationExceeded` after the repair loop
+  exhausts `cfg.escalation_threshold`.
+- `Skip { reason }` — gate runs out-of-pipeline (e.g.
+  `cargo build --release` is the workspace-level gate, not invoked
+  inside `translate()`); the reason names *which* gate is wired-out.
+
+The `BehaviorVerifier::default_outcome()` and
+`PerfVerifier::default_outcome()` provided methods control the
+success-path verdict. Live verifiers default to `Pass`; the no-op
+`AcceptAll` / `AcceptAllPerf` override to `Skip` so the manifest
+cannot record a fake-pass for an un-wired gate. This is the
+constitution §2.4 honesty contract held at the gate level.
+
+```mermaid
+flowchart LR
+    V[Verifier verify()] --> A{verdict?}
+    A -->|Accept| B{any prior Reject?}
+    A -->|Reject| R[repair loop]
+    R --> V
+    B -->|yes| P[Pass detail]
+    B -->|no, AcceptAll| S[Skip reason]
+    B -->|no, live| P
+```
 
 ### Synthetic-LLM mode contract
 
