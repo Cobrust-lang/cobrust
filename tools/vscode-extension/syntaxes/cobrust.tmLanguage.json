@@ -1,0 +1,358 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Cobrust",
+  "scopeName": "source.cobrust",
+  "fileTypes": ["cb"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#fstrings" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords_control" },
+    { "include": "#keywords_declaration" },
+    { "include": "#keywords_operator" },
+    { "include": "#keywords_literal" },
+    { "include": "#types_builtin" },
+    { "include": "#types_primitive" },
+    { "include": "#decorators" },
+    { "include": "#function_def" },
+    { "include": "#function_call" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "name": "comment.line.number-sign.cobrust",
+      "match": "#.*$"
+    },
+
+    "fstrings": {
+      "comment": "f-strings and rf-strings",
+      "name": "string.interpolated.cobrust",
+      "begin": "\\b([fF]|[rR][fF]|[fF][rR])(\"\"\"|'''|\"|')",
+      "beginCaptures": {
+        "1": { "name": "storage.type.string.cobrust" },
+        "2": { "name": "punctuation.definition.string.begin.cobrust" }
+      },
+      "end": "(\\2)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.string.end.cobrust" }
+      },
+      "patterns": [
+        { "include": "#fstring_interpolation" },
+        { "include": "#string_escapes" }
+      ]
+    },
+
+    "fstring_interpolation": {
+      "name": "meta.interpolation.cobrust",
+      "begin": "(?<!\\{)\\{(?!\\{)",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.interpolation.begin.cobrust" }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.interpolation.end.cobrust" }
+      },
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#keywords_operator" },
+        { "include": "#keywords_literal" },
+        { "include": "#function_call" },
+        { "include": "#operators" }
+      ]
+    },
+
+    "strings": {
+      "patterns": [
+        {
+          "comment": "triple-double-quoted raw bytes",
+          "name": "string.quoted.other.cobrust",
+          "begin": "\\b([rR][bB]|[bB][rR])(\"\"\"|''')",
+          "beginCaptures": {
+            "1": { "name": "storage.type.string.cobrust" },
+            "2": { "name": "punctuation.definition.string.begin.cobrust" }
+          },
+          "end": "(\\2)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.cobrust" }
+          }
+        },
+        {
+          "comment": "triple-double-quoted bytes",
+          "name": "string.quoted.other.cobrust",
+          "begin": "\\b([bB])(\"\"\"|''')",
+          "beginCaptures": {
+            "1": { "name": "storage.type.string.cobrust" },
+            "2": { "name": "punctuation.definition.string.begin.cobrust" }
+          },
+          "end": "(\\2)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.cobrust" }
+          },
+          "patterns": [{ "include": "#string_escapes" }]
+        },
+        {
+          "comment": "triple-double-quoted raw string",
+          "name": "string.quoted.other.cobrust",
+          "begin": "\\b([rR])(\"\"\")",
+          "beginCaptures": {
+            "1": { "name": "storage.type.string.cobrust" },
+            "2": { "name": "punctuation.definition.string.begin.cobrust" }
+          },
+          "end": "(\"\"\")",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.cobrust" }
+          }
+        },
+        {
+          "comment": "triple-single-quoted raw string",
+          "name": "string.quoted.other.cobrust",
+          "begin": "\\b([rR])(''')",
+          "beginCaptures": {
+            "1": { "name": "storage.type.string.cobrust" },
+            "2": { "name": "punctuation.definition.string.begin.cobrust" }
+          },
+          "end": "(''')",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.cobrust" }
+          }
+        },
+        {
+          "comment": "triple-double-quoted string",
+          "name": "string.quoted.triple.cobrust",
+          "begin": "\"\"\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.cobrust" }
+          },
+          "end": "\"\"\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.cobrust" }
+          },
+          "patterns": [{ "include": "#string_escapes" }]
+        },
+        {
+          "comment": "triple-single-quoted string",
+          "name": "string.quoted.triple.cobrust",
+          "begin": "'''",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.cobrust" }
+          },
+          "end": "'''",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.cobrust" }
+          },
+          "patterns": [{ "include": "#string_escapes" }]
+        },
+        {
+          "comment": "single-line double-quoted string",
+          "name": "string.quoted.double.cobrust",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.cobrust" }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.cobrust" }
+          },
+          "patterns": [{ "include": "#string_escapes" }]
+        },
+        {
+          "comment": "single-line single-quoted string",
+          "name": "string.quoted.single.cobrust",
+          "begin": "'",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.cobrust" }
+          },
+          "end": "'",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.cobrust" }
+          },
+          "patterns": [{ "include": "#string_escapes" }]
+        }
+      ]
+    },
+
+    "string_escapes": {
+      "name": "constant.character.escape.cobrust",
+      "match": "\\\\(\\\\|[abfnrtvz\"']|\\n|0|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4})"
+    },
+
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "hexadecimal integer",
+          "name": "constant.numeric.hex.cobrust",
+          "match": "\\b0[xX][0-9A-Fa-f][0-9A-Fa-f_]*\\b"
+        },
+        {
+          "comment": "binary integer",
+          "name": "constant.numeric.binary.cobrust",
+          "match": "\\b0[bB][01][01_]*\\b"
+        },
+        {
+          "comment": "octal integer",
+          "name": "constant.numeric.octal.cobrust",
+          "match": "\\b0[oO][0-7][0-7_]*\\b"
+        },
+        {
+          "comment": "float with exponent",
+          "name": "constant.numeric.float.cobrust",
+          "match": "\\b[0-9][0-9_]*(\\.([0-9][0-9_]*)?)?([eE][+-]?[0-9][0-9_]*)?[jJ]?\\b"
+        },
+        {
+          "comment": "float starting with dot",
+          "name": "constant.numeric.float.cobrust",
+          "match": "\\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?[jJ]?\\b"
+        }
+      ]
+    },
+
+    "keywords_control": {
+      "comment": "Control flow keywords from token.rs KwXxx variants",
+      "name": "keyword.control.cobrust",
+      "match": "\\b(if|elif|else|while|for|match|case|return|break|continue|pass|try|except|finally|raise|with|yield|await)\\b"
+    },
+
+    "keywords_declaration": {
+      "comment": "Declaration keywords",
+      "name": "keyword.declaration.cobrust",
+      "match": "\\b(fn|let|class|lambda|type)\\b"
+    },
+
+    "keywords_operator": {
+      "comment": "Operator keywords",
+      "name": "keyword.operator.word.cobrust",
+      "match": "\\b(and|or|not|in|is|as|from|import)\\b"
+    },
+
+    "keywords_literal": {
+      "comment": "Literal keywords",
+      "patterns": [
+        {
+          "name": "constant.language.true.cobrust",
+          "match": "\\bTrue\\b"
+        },
+        {
+          "name": "constant.language.false.cobrust",
+          "match": "\\bFalse\\b"
+        },
+        {
+          "name": "constant.language.null.cobrust",
+          "match": "\\bNone\\b"
+        }
+      ]
+    },
+
+    "types_builtin": {
+      "comment": "Built-in generic types",
+      "name": "support.type.cobrust",
+      "match": "\\b(List|Dict|Set|Option|Result|Tuple)\\b"
+    },
+
+    "types_primitive": {
+      "comment": "Primitive types from token.rs and constitution §2.2",
+      "name": "storage.type.cobrust",
+      "match": "\\b(i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f32|f64|bool|str|bytes|isize|usize)\\b"
+    },
+
+    "decorators": {
+      "comment": "Decorator expressions (@name or @name(...) )",
+      "name": "meta.decorator.cobrust",
+      "match": "(@)([a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)*)",
+      "captures": {
+        "1": { "name": "punctuation.decorator.cobrust" },
+        "2": { "name": "entity.name.function.decorator.cobrust" }
+      }
+    },
+
+    "function_def": {
+      "comment": "Function name in definition context",
+      "name": "meta.function.cobrust",
+      "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.cobrust" },
+        "2": { "name": "entity.name.function.cobrust" }
+      }
+    },
+
+    "function_call": {
+      "comment": "Function call site",
+      "name": "meta.function-call.cobrust",
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)(?=\\s*\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.cobrust" }
+      }
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "comment": "Augmented assignment operators",
+          "name": "keyword.operator.assignment.augmented.cobrust",
+          "match": "(\\+=|-=|\\*\\*=|\\*=|//=|/=|%=|&=|\\|=|\\^=|<<=|>>=)"
+        },
+        {
+          "comment": "Comparison operators",
+          "name": "keyword.operator.comparison.cobrust",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "comment": "Assignment and walrus operators",
+          "name": "keyword.operator.assignment.cobrust",
+          "match": "(:=|=)"
+        },
+        {
+          "comment": "Arrow return type annotation",
+          "name": "keyword.operator.arrow.cobrust",
+          "match": "->"
+        },
+        {
+          "comment": "Arithmetic operators",
+          "name": "keyword.operator.arithmetic.cobrust",
+          "match": "(\\*\\*|//|[+\\-*/%])"
+        },
+        {
+          "comment": "Bitwise operators",
+          "name": "keyword.operator.bitwise.cobrust",
+          "match": "([&|^~]|<<|>>)"
+        }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.colon.cobrust",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.separator.comma.cobrust",
+          "match": ","
+        },
+        {
+          "name": "punctuation.terminator.semicolon.cobrust",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.accessor.dot.cobrust",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.brackets.round.cobrust",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.brackets.square.cobrust",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.brackets.curly.cobrust",
+          "match": "[{}]"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,137 @@
+# Syntax corpus 05: Advanced patterns — match/case, generators, comprehensions,
+#                   decorators, closures, nested functions
+# Categories covered:
+#   - Structural pattern matching (match / case / _)
+#   - Comprehensions (list, dict, set — Cobrust syntax)
+#   - Generator expressions
+#   - Decorators with arguments: @py_compat(strict), @deprecated(...)
+#   - Nested function definitions
+#   - Lambda expressions
+#   - and / or / not in complex conditions
+#   - Underscore _ as wildcard pattern
+#   - yield keyword
+#   - await / async (lexer emits KwAwait)
+#
+# Visual test: match/case should be keyword-colored; _ should be its own
+# distinct token color. Decorators should appear as preprocessor/annotation.
+
+from std.collections import List, Dict, Set
+
+# ── Pattern matching ────────────────────────────────────────────────────────
+fn classify_value(v: i64) -> str:
+    match v:
+        case 0:
+            return "zero"
+        case 1:
+            return "one"
+        case n if n < 0:
+            return "negative"
+        case _:
+            return "other"
+
+fn match_option(opt: Option[i64]) -> str:
+    match opt:
+        case None:
+            return "absent"
+        case 0:
+            return "zero"
+        case n:
+            return f"value {n}"
+
+fn match_tuple(pair: Tuple[i64, i64]) -> str:
+    match pair:
+        case (0, 0):
+            return "origin"
+        case (x, 0):
+            return f"on x-axis at {x}"
+        case (0, y):
+            return f"on y-axis at {y}"
+        case (x, y):
+            return f"point ({x}, {y})"
+
+# ── Generators and comprehensions ───────────────────────────────────────────
+fn even_squares(n: i64) -> List[i64]:
+    # List comprehension
+    let result: List[i64] = [x * x for x in range(n) if x % 2 == 0]
+    return result
+
+fn invert_dict(d: Dict[str, i64]) -> Dict[i64, str]:
+    # Dict comprehension
+    let inv: Dict[i64, str] = {v: k for k, v in d.items()}
+    return inv
+
+fn unique_evens(items: List[i64]) -> Set[i64]:
+    # Set comprehension
+    let evens: Set[i64] = {x for x in items if x % 2 == 0}
+    return evens
+
+fn count_generator(n: i64):
+    # Generator function (yield keyword)
+    let i: i64 = 0
+    while i < n:
+        yield i
+        i = i + 1
+
+# ── Decorators ──────────────────────────────────────────────────────────────
+@py_compat(strict)
+fn strict_compat() -> i64:
+    return 0
+
+@py_compat(numerical)
+fn numerical_compat() -> f64:
+    return 1.0
+
+@py_compat(semantic)
+fn semantic_compat() -> str:
+    return "ok"
+
+@py_compat(none)
+fn no_compat() -> i64:
+    # This function has no Python compat guarantee
+    return 42
+
+# Chained decorators
+@deprecated("use strict_compat")
+@py_compat(strict)
+fn legacy_fn() -> i64:
+    return 0
+
+# ── Nested functions ────────────────────────────────────────────────────────
+fn outer(x: i64) -> i64:
+    fn inner(y: i64) -> i64:
+        return y * 2
+    return inner(x) + x
+
+# ── Lambda ──────────────────────────────────────────────────────────────────
+fn apply_fn(f: lambda, x: i64) -> i64:
+    return f(x)
+
+fn use_lambda() -> i64:
+    let double = lambda x: x * 2
+    let triple = lambda x: x * 3
+    return apply_fn(double, 5) + apply_fn(triple, 5)
+
+# ── Complex boolean expressions ─────────────────────────────────────────────
+fn complex_condition(a: i64, b: i64, c: bool) -> bool:
+    return (a > 0 and b > 0) or (not c and a != b)
+
+fn in_operator_demo(x: i64, items: List[i64]) -> bool:
+    return x in items and not (x == 0)
+
+# ── Async/await ─────────────────────────────────────────────────────────────
+fn async_demo(x: i64) -> i64:
+    # await keyword (KwAwait from token.rs)
+    let result: i64 = await fetch_value(x)
+    return result
+
+fn fetch_value(x: i64) -> i64:
+    return x
+
+# ── Main ────────────────────────────────────────────────────────────────────
+fn main() -> i64:
+    let classified: str = classify_value(7)
+    let squares: List[i64] = even_squares(10)
+    let nested_result: i64 = outer(5)
+    let lambda_result: i64 = use_lambda()
+    let cond: bool = complex_condition(1, 2, True)
+    return 0

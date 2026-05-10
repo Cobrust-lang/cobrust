@@ -1,0 +1,76 @@
+# Syntax corpus 01: Keywords and control flow
+# Categories covered:
+#   - All control-flow keywords: fn, return, if, elif, else, while, for,
+#                                match, case, break, continue, pass
+#   - Declaration keywords: let, class, type
+#   - Import keywords: import, from, as
+#   - Context manager keyword: with
+#   - Literals: True, False, None
+#
+# Visual test: every keyword should appear in a distinct keyword color.
+# Comments should be dimmed.
+
+import std.io
+from std.collections import List, Dict
+
+fn keyword_showcase(n: i64) -> i64:
+    # Declaration and assignment
+    let result: i64 = 0
+    let flag: bool = True
+    let absent: Option[i64] = None
+
+    # if / elif / else chain
+    if n > 100:
+        result = 100
+    elif n > 50:
+        result = 50
+    elif n > 0:
+        result = n
+    else:
+        result = 0
+
+    # while + break + continue
+    let i: i64 = 0
+    while i < 10:
+        if i == 5:
+            break
+        if i % 2 == 0:
+            i = i + 1
+            continue
+        result = result + i
+        i = i + 1
+
+    # for loop
+    # (Cobrust for iterates over a range or iterable)
+    for x in [1, 2, 3]:
+        result = result + x
+
+    # match / case
+    match n:
+        case 0:
+            pass
+        case 1:
+            result = result + 1
+        case _:
+            result = result + 2
+
+    return result
+
+class Counter:
+    let count: i64 = 0
+
+    fn increment(self) -> i64:
+        self.count = self.count + 1
+        return self.count
+
+# with / as context manager
+fn use_context() -> i64:
+    with open("file.txt") as f:
+        pass
+    return 0
+
+type Alias = i64
+
+fn main() -> i64:
+    let v: i64 = keyword_showcase(42)
+    return v
