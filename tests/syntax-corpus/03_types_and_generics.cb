@@ -1,0 +1,88 @@
+# Syntax corpus 03: Type annotations — primitives, generics, Option, Result
+# Categories covered:
+#   - Primitive types: i64, f64, bool, str, i32, u64, f32, i8, u8, usize, etc.
+#   - Built-in generic types: List, Dict, Set, Option, Result, Tuple
+#   - Composite type annotations in function signatures
+#   - Return type annotation with ->
+#   - Walrus operator :=
+#   - @py_compat and other decorators
+#
+# Visual test: type names should appear in storage/type color;
+# generic type names (List, Dict, Option, Result) should look distinct from
+# user-defined identifiers.
+
+# Built-in types as function parameters and return types
+fn add_integers(a: i64, b: i64) -> i64:
+    return a + b
+
+fn add_floats(x: f64, y: f64) -> f64:
+    return x + y
+
+fn is_positive(n: i64) -> bool:
+    return n > 0
+
+fn greet(name: str) -> str:
+    return f"hello, {name}"
+
+# Option[T] — None is None, not null
+fn safe_head(items: List[i64]) -> Option[i64]:
+    if len(items) == 0:
+        return None
+    return items[0]
+
+# Result[T, E] — error-first return
+fn parse_int(s: str) -> Result[i64, str]:
+    # Stub: in practice, calls stdlib parse
+    return 0
+
+# Nested generics
+fn zip_lists(
+    keys: List[str],
+    values: List[i64],
+) -> Dict[str, i64]:
+    let out: Dict[str, i64] = {}
+    return out
+
+# Tuple types
+fn min_max(items: List[i64]) -> Tuple[i64, i64]:
+    return (0, 0)
+
+# Set
+fn unique(items: List[i64]) -> Set[i64]:
+    let s: Set[i64] = {}
+    for x in items:
+        s.add(x)
+    return s
+
+# Walrus operator (captures in conditional)
+fn scan(data: List[i64]) -> i64:
+    let total: i64 = 0
+    if (n := len(data)) > 0:
+        total = n
+    return total
+
+# Smaller integer/float types
+fn byte_sum(buf: List[u8]) -> u64:
+    let acc: u64 = 0
+    for b in buf:
+        acc = acc + b
+    return acc
+
+fn half(x: f32) -> f32:
+    return x / 2.0
+
+# Decorator — @py_compat from constitution §2.4
+@py_compat(strict)
+fn compat_fn() -> i64:
+    return 0
+
+# Multiple decorators
+@py_compat(numerical)
+@deprecated("use compat_fn instead")
+fn old_fn() -> i64:
+    return 1
+
+fn main() -> i64:
+    let a: i64 = add_integers(1, 2)
+    let b: f64 = add_floats(1.0, 2.0)
+    return 0
