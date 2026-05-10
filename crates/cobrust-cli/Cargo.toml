@@ -21,14 +21,14 @@ workspace = true
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-cobrust-codegen = { path = "../cobrust-codegen" }
-cobrust-frontend = { path = "../cobrust-frontend" }
-cobrust-hir = { path = "../cobrust-hir" }
-cobrust-llm-router = { path = "../cobrust-llm-router" }
-cobrust-mir = { path = "../cobrust-mir" }
-cobrust-pkg = { path = "../cobrust-pkg" }
-cobrust-translator = { path = "../cobrust-translator" }
-cobrust-types = { path = "../cobrust-types" }
+cobrust-codegen = { path = "../cobrust-codegen", version = "=0.1.0-beta" }
+cobrust-frontend = { path = "../cobrust-frontend", version = "=0.1.0-beta" }
+cobrust-hir = { path = "../cobrust-hir", version = "=0.1.0-beta" }
+cobrust-llm-router = { path = "../cobrust-llm-router", version = "=0.1.0-beta" }
+cobrust-mir = { path = "../cobrust-mir", version = "=0.1.0-beta" }
+cobrust-pkg = { path = "../cobrust-pkg", version = "=0.1.0-beta" }
+cobrust-translator = { path = "../cobrust-translator", version = "=0.1.0-beta" }
+cobrust-types = { path = "../cobrust-types", version = "=0.1.0-beta" }
 rustyline = "14"
 target-lexicon = "0.13"
 thiserror = { workspace = true }
