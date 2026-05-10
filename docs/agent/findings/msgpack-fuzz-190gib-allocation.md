@@ -160,7 +160,7 @@ production Linux deployments). This includes any Cobrust application that unpack
 attacker-controlled msgpack data.
 
 The immediate impact on CI/CD is that the `msgpack_fuzz` test fails on the
-DG-Workstation-2x3090 (the project's only Linux x86_64 gate), preventing that test
+<internal Linux x86_64 validator host> (the project's only Linux x86_64 gate), preventing that test
 suite from being green on Linux. The fuzz test's panic-freedom contract is violated.
 
 Not blocking M-batch / current milestone closure since `cobrust-msgpack` is

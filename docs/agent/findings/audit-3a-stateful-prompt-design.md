@@ -28,7 +28,7 @@ those gaps are closed structurally for a stateful function too.
 
 - **Target**: `tomli_loads._parse_int` (11-line Python helper; mutates
   `state.pos` in two phases; non-trivial error path).
-- **Provider**: `OpenAiProvider` at `http://104.244.92.250:8317/v1` (model `gpt-5.5`).
+- **Provider**: `OpenAiProvider` at `<user-codex deployment URL>/v1` (model `gpt-5.5`).
 - **Cache discipline**:
   - `SyntheticProvider` NOT registered.
   - `cache_dir` = isolated `tempdir().join("llm_cache")`, verified
