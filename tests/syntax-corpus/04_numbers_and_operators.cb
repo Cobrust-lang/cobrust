@@ -1,0 +1,100 @@
+# Syntax corpus 04: Numeric literals and operators
+# Categories covered:
+#   - Decimal integers
+#   - Hexadecimal integers (0x...)
+#   - Binary integers (0b...)
+#   - Octal integers (0o...)
+#   - Integers with underscore separators
+#   - Floating-point literals (with decimal, with exponent, starting with dot)
+#   - Imaginary number literals (j suffix)
+#   - All arithmetic operators: + - * / % ** //
+#   - All comparison operators: == != < <= > >=
+#   - Assignment and augmented assignment: = += -= *= /= //= %= **= &= |= ^= <<= >>=
+#   - Bitwise operators: & | ^ ~ << >>
+#   - Arrow operator: ->
+#   - Walrus: :=
+#
+# Visual test: number literals should be colored as constants;
+# operators should be visually distinct from identifiers.
+
+fn number_literals() -> i64:
+    # Decimal
+    let a: i64 = 42
+    let b: i64 = 1_000_000
+    let c: i64 = 0
+
+    # Hexadecimal (0x prefix — from lexer.rs lex_number hex branch)
+    let d: i64 = 0xFF
+    let e: i64 = 0xDEAD_BEEF
+    let f: i64 = 0xFF_FF_FF_FF
+
+    # Binary (0b prefix)
+    let g: i64 = 0b1010_1010
+    let h: i64 = 0b0000_0001
+
+    # Octal (0o prefix)
+    let i: i64 = 0o755
+    let j: i64 = 0o644
+
+    # Floating-point
+    let k: f64 = 3.14
+    let l: f64 = 1.0
+    let m: f64 = 1_000.5
+    let n: f64 = .5        # starting with dot
+    let o: f64 = 1.5e10
+    let p: f64 = 1.5e-3
+    let q: f64 = 1.5E+10
+
+    # Imaginary (j suffix from lexer.rs Imag token)
+    let r: f64 = 3j
+    let s: f64 = 1.5j
+
+    return a
+
+fn arithmetic_operators(a: i64, b: i64) -> i64:
+    let add: i64 = a + b
+    let sub: i64 = a - b
+    let mul: i64 = a * b
+    let div: f64 = a / b       # true division
+    let floordiv: i64 = a // b # floor division (SlashSlash token)
+    let mod: i64 = a % b
+    let pow: i64 = a ** b      # exponentiation (StarStar token)
+    return add
+
+fn comparison_operators(a: i64, b: i64) -> bool:
+    let eq: bool = a == b
+    let ne: bool = a != b
+    let lt: bool = a < b
+    let le: bool = a <= b
+    let gt: bool = a > b
+    let ge: bool = a >= b
+    return eq
+
+fn bitwise_operators(a: i64, b: i64) -> i64:
+    let band: i64 = a & b     # Amp
+    let bor: i64 = a | b      # Pipe
+    let bxor: i64 = a ^ b     # Caret
+    let bnot: i64 = ~a         # Tilde
+    let shl: i64 = a << b     # Shl
+    let shr: i64 = a >> b     # Shr
+    return band
+
+fn augmented_assignment() -> i64:
+    let n: i64 = 10
+    n += 1
+    n -= 2
+    n *= 3
+    n //= 4
+    n %= 5
+    n **= 2
+    n &= 0xFF
+    n |= 0x01
+    n ^= 0x10
+    n <<= 1
+    n >>= 1
+    return n
+
+fn main() -> i64:
+    let result: i64 = arithmetic_operators(10, 3)
+    let ok: bool = comparison_operators(1, 2)
+    return 0

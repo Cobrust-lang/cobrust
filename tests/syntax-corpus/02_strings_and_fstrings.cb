@@ -1,0 +1,63 @@
+# Syntax corpus 02: String literals and f-strings
+# Categories covered:
+#   - Plain double-quoted strings with escape sequences
+#   - Plain single-quoted strings
+#   - Triple-quoted strings (multi-line)
+#   - f-strings with {expr} interpolation
+#   - f-strings with format spec {expr:fmt}
+#   - f-strings with debug-equals form {expr=}
+#   - Raw strings r"..."
+#   - Byte strings b"..."
+#   - String prefix variants
+#
+# Visual test: strings should be colored (e.g. green/orange); interpolation
+# braces and their contents should stand out as special/embedded.
+
+fn string_showcase() -> i64:
+    # Plain strings
+    let a: str = "hello, world"
+    let b: str = 'single quoted'
+
+    # Escape sequences (should highlight the \n, \t, etc.)
+    let c: str = "line1\nline2\ttabbed\\"
+    let d: str = "unicode A hex \x41"
+
+    # Triple-quoted multi-line strings
+    let e: str = """
+    This is a
+    multi-line string
+    in Cobrust.
+    """
+
+    let f: str = '''
+    Another multi-line
+    with single quotes.
+    '''
+
+    # f-strings: basic interpolation
+    let name: str = "Cobrust"
+    let version: i64 = 1
+    let greeting: str = f"hello, {name}!"
+    let info: str = f"version {version} of {name}"
+
+    # f-string with format spec
+    let pi: f64 = 3.14159
+    let formatted: str = f"pi is approximately {pi:.2f}"
+
+    # f-string with nested expression
+    let items: List[i64] = [1, 2, 3]
+    let count_str: str = f"there are {len(items)} items"
+
+    # f-string debug-equals form (lexer supports {x=})
+    let x: i64 = 42
+    let debug: str = f"{x=}"
+
+    # Raw strings (backslash not treated as escape)
+    let raw: str = r"no\nescape\there"
+    let raw_dbl: str = R"also\nraw"
+
+    # Byte strings
+    let bs: bytes = b"raw bytes \x00\xff"
+    let rbs: bytes = rb"raw bytes literal"
+
+    return 0
