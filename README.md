@@ -43,7 +43,9 @@ $ python -c "import tomli; print(tomli.loads('foo=1'))"
 {'foo': 1}    # transparently backed by verified Rust now
 ```
 
-That's it. Existing Python code unchanged, **5–50× faster**, memory-safe.
+That's it. Existing Python code unchanged, **9–14× faster on tomli
+(T1.1 measured vs CPython 3.11 tomllib, see ADR-0039)**, memory-safe.
+Other libraries pending Phase F.1 perf gates.
 
 ---
 
@@ -134,7 +136,7 @@ Every translation carries a **provenance manifest** — source SHA, model finger
 
 **0.1.0-beta** — first public release. Means:
 
-- ✅ Compiler core (lexer / parser / HIR / type checker / MIR / Cranelift codegen) is solid; 768+ tests pass, 0 fail
+- ✅ Compiler core (lexer / parser / HIR / type checker / MIR / Cranelift codegen) is solid; 2,500+ tests pass on `cargo test --workspace --locked`, zero clippy warnings under `-D warnings`
 - ✅ Standard library: io / collections / string / math / panic / env / fmt / iter + structured concurrency runtime (M13)
 - ✅ Package format: `cobrust.toml`, content-addressed registry, deterministic lockfile
 - ✅ AI translation pipeline: production-validated on stateless + stateful tomli functions (real LLM, 12/12 + 14/14 strict deterministic over 5 runs)

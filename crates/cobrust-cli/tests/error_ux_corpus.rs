@@ -123,9 +123,9 @@ fn corpus_02_missing_return() {
     // without checking return completeness — known gap).
     let (code, lines) = check_snippet(
         "c02_missing_return",
-        r#"fn main() -> i64:
+        r"fn main() -> i64:
     pass
-"#,
+",
     );
     // Exit 0 is current behaviour; change to 2 when return-check lands.
     assert_eq!(
@@ -147,10 +147,10 @@ fn corpus_02_missing_return() {
 fn corpus_03_unknown_name() {
     assert_corpus(
         "c03_unknown_name",
-        r#"fn main() -> i64:
+        r"fn main() -> i64:
     print(undefined_name)
     return 0
-"#,
+",
         2,
         "Type",
     );
@@ -177,10 +177,10 @@ fn corpus_04_implicit_truthiness() {
 fn corpus_05_case_as_identifier() {
     assert_corpus(
         "c05_case_identifier",
-        r#"fn main() -> i64:
+        r"fn main() -> i64:
     let case: i64 = 1
     return case
-"#,
+",
         2,
         // `case` is a reserved word in Cobrust's pattern matching; using
         // it as a plain `let` name may be a syntax or type error depending
@@ -194,9 +194,9 @@ fn corpus_05_case_as_identifier() {
 fn corpus_06_def_not_fn() {
     assert_corpus(
         "c06_def_not_fn",
-        r#"def f():
+        r"def f():
     pass
-"#,
+",
         2,
         "Syntax",
     );
@@ -230,10 +230,10 @@ fn corpus_08_list_push() {
     // Current behaviour: exits 0 (List<T> not yet wired — known gap).
     let (code, lines) = check_snippet(
         "c08_list_push",
-        r#"fn main() -> i64:
+        r"fn main() -> i64:
     let xs: i64 = [].push(1)
     return xs
-"#,
+",
     );
     // Exit 0 is current behaviour; change to 2 when List<T> lands.
     assert_eq!(
@@ -255,11 +255,11 @@ fn corpus_08_list_push() {
 fn corpus_09_import_nonexistent() {
     assert_corpus(
         "c09_import_nonexistent",
-        r#"import nonexistent
+        r"import nonexistent
 
 fn main() -> i64:
     return 0
-"#,
+",
         2,
         "[", // Syntax or Type depending on parser
     );
@@ -271,12 +271,12 @@ fn main() -> i64:
 fn corpus_10_chained_assignment() {
     assert_corpus(
         "c10_chained_assignment",
-        r#"fn main() -> i64:
+        r"fn main() -> i64:
     let x: i64 = 0
     let y: i64 = 0
     x = y = 1
     return x
-"#,
+",
         2,
         "[", // Syntax or Type
     );
@@ -296,7 +296,7 @@ fn corpus_10_chained_assignment() {
 /// asserts it directly in unit tests.
 #[test]
 fn corpus_conway_4cell_check_ok() {
-    let source = r#"fn main() -> i64:
+    let source = r"fn main() -> i64:
     let s: i64 = 30
     let m0: i64 = s % 2
     let r0: i64 = (s / 2) % 2
@@ -320,7 +320,7 @@ fn corpus_conway_4cell_check_ok() {
     let result: i64 = n0 + n1 * 2 + n2 * 4 + n3 * 8
     print_int(result)
     return 0
-"#;
+";
 
     let (code, lines) = check_snippet("conway_4cell", source);
 

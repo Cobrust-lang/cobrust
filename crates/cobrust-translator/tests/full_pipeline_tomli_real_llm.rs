@@ -413,6 +413,7 @@ fn error_construction_contract() -> &'static str {
 #[tokio::test]
 async fn t1_1_full_pipeline_tomli_real_llm() {
     let Some(api_key) = lookup_api_key() else {
+        println!("cargo:warning=T1.1 real-LLM gate SKIPPED (USER_CODEX_API_KEY unset)");
         eprintln!(
             "T1.1: {ENV_KEY} unset — skipping real-LLM full pipeline. \
              Set USER_CODEX_API_KEY=<codex-key> to run the live gate."

@@ -6,6 +6,10 @@
 # <workspace>/target/cobrust/ when invoked in package mode (M12).
 examples/*/target/
 
+# Per-crate build artifacts (e.g. crates/cobrust-cli/target/cobrust/v02_clean.o
+# emitted by cli_verifier_exit_corpus integration test).
+crates/*/target/
+
 # Cobrust workspace artifacts
 /.cobrust
 # Translator integration tests may write transient .cobrust under any

@@ -70,6 +70,10 @@ preferred = [
 #
 # Validation finding: docs/agent/findings/m5-m7-real-llm-validation.md.
 
+# WARNING: development-only example. The endpoint below is HTTP (no TLS).
+# Do NOT use this provider configuration in production —
+# `Authorization: Bearer <key>` will go over the wire in plaintext.
+# For production, point base_url at an HTTPS endpoint.
 [providers.user_codex]
 kind = "openai"
 base_url = "http://104.244.92.250:8317/v1"
