@@ -18,8 +18,20 @@
 //!
 //! The provider key is included so two providers serving the same model id
 //! never share a cache entry — auth and rate budgets are per-provider.
+//!
+//! # Security — file permissions
+//!
+//! Cache entries may contain full LLM API responses including prompt text that
+//! can carry PII or secret-adjacent data. On Unix, every cache file is created
+//! with mode **0600** (owner read/write only) and every shard directory with
+//! mode **0700**. On Windows the files inherit the ACL of the cache root; see
+//! `docs/agent/modules/llm-router-cache.md §Windows-ACL` for the recommended
+//! `icacls` setup on shared machines.
 
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use serde::{Deserialize, Serialize};
 
@@ -77,10 +89,20 @@ struct CacheEntry {
 impl Cache {
     /// Create the cache rooted at `root`. The directory is created if missing.
     ///
+    /// On Unix the root directory is created with mode **0700**; existing
+    /// directories are not narrowed (callers must ensure the parent was
+    /// created securely).
+    ///
     /// # Errors
-    /// Returns the underlying I/O error if the root cannot be created.
+    /// Returns the underlying I/O error if the root cannot be created or its
+    /// permissions cannot be set.
     pub async fn new(root: PathBuf) -> std::io::Result<Self> {
         tokio::fs::create_dir_all(&root).await?;
+        #[cfg(unix)]
+        {
+            let perms = std::fs::Permissions::from_mode(0o700);
+            tokio::fs::set_permissions(&root, perms).await?;
+        }
         Ok(Self { root })
     }
 
@@ -122,8 +144,13 @@ impl Cache {
 
     /// Store a completion under the given key.
     ///
+    /// On Unix the cache file is written with mode **0600** (owner read/write
+    /// only) to prevent other users on a shared host from reading API
+    /// responses. The shard directory is created with mode **0700** for the
+    /// same reason.
+    ///
     /// # Errors
-    /// I/O failures (mkdir, write) bubble up.
+    /// I/O failures (mkdir, write, chmod) bubble up.
     pub async fn put(
         &self,
         key: &CacheKey,
@@ -133,6 +160,11 @@ impl Cache {
         let path = self.path_for(key);
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
+            #[cfg(unix)]
+            {
+                let perms = std::fs::Permissions::from_mode(0o700);
+                tokio::fs::set_permissions(parent, perms).await?;
+            }
         }
         let entry = CacheEntry {
             request: request.clone(),
@@ -140,7 +172,17 @@ impl Cache {
         };
         let bytes = serde_json::to_vec(&entry)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        tokio::fs::write(&path, bytes).await
+        // Write atomically via a temp file then rename, so readers never see a
+        // partial file. The temp file is in the same shard dir to keep the
+        // rename cross-device-safe (same mount point).
+        let tmp = path.with_extension("tmp");
+        tokio::fs::write(&tmp, &bytes).await?;
+        #[cfg(unix)]
+        {
+            let perms = std::fs::Permissions::from_mode(0o600);
+            tokio::fs::set_permissions(&tmp, perms).await?;
+        }
+        tokio::fs::rename(&tmp, &path).await
     }
 }
 
@@ -315,5 +357,51 @@ mod tests {
             .join(&hex[2..4])
             .join(format!("{hex}.json"));
         assert!(expected.exists());
+    }
+
+    /// B7: cache files must be 0600 (owner r/w only) on Unix.
+    /// On shared hosts a default 0644 umask exposes LLM API responses
+    /// (potentially containing PII from prompts) to other local users.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cache_file_has_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path().to_path_buf()).await.unwrap();
+        let key = CacheKey::compute("p", &req());
+        cache.put(&key, &req(), &resp()).await.unwrap();
+        let hex = key.hex();
+        let path = dir
+            .path()
+            .join(&hex[..2])
+            .join(&hex[2..4])
+            .join(format!("{hex}.json"));
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "cache file must be 0600 (owner r/w only); got {:04o}",
+            mode & 0o777
+        );
+    }
+
+    /// B7: cache shard directories must be 0700 on Unix.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cache_shard_dir_has_mode_0700() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path().to_path_buf()).await.unwrap();
+        let key = CacheKey::compute("p", &req());
+        cache.put(&key, &req(), &resp()).await.unwrap();
+        let hex = key.hex();
+        let shard = dir.path().join(&hex[..2]).join(&hex[2..4]);
+        let mode = std::fs::metadata(&shard).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o700,
+            "shard dir must be 0700; got {:04o}",
+            mode & 0o777
+        );
     }
 }
