@@ -1,5 +1,5 @@
 //! Real-LLM smoke against the user-provided codex endpoint
-//! (`http://104.244.92.250:8317/v1`, model `gpt-5.5`, OpenAI-compatible wire
+//! (`http://127.0.0.1:1/v1`, model `gpt-5.5`, OpenAI-compatible wire
 //! format). End-to-end validation of the M3 router as a complete subsystem
 //! — `OpenAiProvider` + `Router` + `Cache` + `Ledger` running over a real
 //! HTTP roundtrip rather than `wiremock`.
@@ -36,7 +36,7 @@ use cobrust_llm_router::{
 };
 
 const ENV_KEY: &str = "USER_CODEX_API_KEY";
-const BASE_URL: &str = "http://104.244.92.250:8317/v1";
+const BASE_URL: &str = "http://127.0.0.1:1/v1";
 const PROVIDER_KEY: &str = "user_codex";
 const MODEL: &str = "gpt-5.5";
 const SMOKE_PROMPT: &str = "Reply with the single word: ok";

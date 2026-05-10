@@ -68,7 +68,7 @@ use cobrust_translator::{
 // ---- Constants ---------------------------------------------------------------
 
 const ENV_KEY: &str = "USER_CODEX_API_KEY";
-const BASE_URL: &str = "http://104.244.92.250:8317/v1";
+const BASE_URL: &str = "http://127.0.0.1:1/v1";
 const PROVIDER_KEY: &str = "user_codex_t1_1";
 const MODEL: &str = "gpt-5.5";
 const PYTHON: &str = "/opt/homebrew/bin/python3.11";
