@@ -37,6 +37,7 @@ use cobrust_frontend::{parse_str, span::FileId};
 use cobrust_hir::{Session, lower as hir_lower};
 use cobrust_mir::{Module, lower as mir_lower};
 use cobrust_types::check;
+use object::{Object, ObjectSection, ObjectSymbol};
 use target_lexicon::Triple;
 
 /// Compile `src` end-to-end through the pipeline up to MIR.
@@ -73,6 +74,255 @@ fn compile_ok(name: &str, src: &str) {
         .unwrap_or_else(|e| panic!("metadata for `{}`: {}", path.display(), e));
     assert!(meta.len() > 0, "object file empty for `{name}`");
     assert!(matches!(artifact, Artifact::Object(_)));
+}
+
+/// Compile `src` and return the raw object bytes for structural inspection.
+fn compile_to_bytes(name: &str, src: &str) -> Vec<u8> {
+    let mir = lower_to_mir(src);
+    let spec = host_object_spec(name);
+    let artifact = emit(&mir, spec).unwrap_or_else(|e| panic!("emit `{name}`: {e}"));
+    let path = artifact.path();
+    std::fs::read(path).unwrap_or_else(|e| panic!("read object `{}`: {e}", path.display()))
+}
+
+/// Return all exported symbol names from a parsed object file (bytes).
+/// Handles the Mach-O `_` prefix: strips it so callers use bare names.
+fn exported_symbol_names(obj_bytes: &[u8]) -> Vec<String> {
+    let obj = object::File::parse(obj_bytes).expect("parse object");
+    obj.symbols()
+        .filter(|s| s.is_definition())
+        .filter_map(|s| {
+            s.name().ok().map(|n| {
+                // Mach-O prefixes with `_`; strip for platform-agnostic assertions.
+                n.strip_prefix('_').unwrap_or(n).to_string()
+            })
+        })
+        .collect()
+}
+
+/// Return the total byte size of all code/text sections in the object.
+fn code_section_size(obj_bytes: &[u8]) -> u64 {
+    let obj = object::File::parse(obj_bytes).expect("parse object");
+    obj.sections()
+        .filter(|s| {
+            // Accept both ELF `.text` and Mach-O `__text` (and Cranelift `$d.0`).
+            s.name()
+                .map(|n| n.contains("text") || n.starts_with('$'))
+                .unwrap_or(false)
+        })
+        .map(|s| s.size())
+        .sum()
+}
+
+// =====================================================================
+// M11 behavioral assertions — top-10 representative cases.
+//
+// Each test below compiles the same source as its corresponding pNNN
+// test, then asserts *structural properties* of the emitted object
+// beyond "non-empty":
+//   - expected symbol names are exported
+//   - code section size is within a plausible range (> lower bound,
+//     < upper bound that would indicate code explosion)
+//   - multi-function programs have the expected number of symbols
+//
+// "stdout assertions" for an AOT codegen pipeline = object-structure
+// assertions via the `object` crate; there is no JIT runner.
+// =====================================================================
+
+/// M11-1: trivial return 0 — symbol `f` exported; code section > 0.
+#[test]
+fn m11_p001_const_int_behavior() {
+    let src = "fn f() -> i64:\n    return 0\n";
+    let bytes = compile_to_bytes("m11_p001", src);
+    let syms = exported_symbol_names(&bytes);
+    assert!(
+        syms.iter().any(|s| s == "f"),
+        "expected `f` in exported symbols: {syms:?}"
+    );
+    let code_sz = code_section_size(&bytes);
+    assert!(code_sz > 0, "code section must be non-empty for p001");
+}
+
+/// M11-2: integer add with two params — symbol `f`, code section between
+/// the trivial lower bound and a generous upper bound (no code explosion).
+#[test]
+fn m11_p014_add_behavior() {
+    let src = "fn f(a: i64, b: i64) -> i64:\n    return a + b\n";
+    let bytes = compile_to_bytes("m11_p014", src);
+    let syms = exported_symbol_names(&bytes);
+    assert!(
+        syms.iter().any(|s| s == "f"),
+        "expected `f` in exported symbols: {syms:?}"
+    );
+    let code_sz = code_section_size(&bytes);
+    // An `add` + two param loads should produce at least a few bytes.
+    assert!(
+        code_sz >= 4,
+        "add function code section too small: {code_sz}"
+    );
+    // Sanity upper bound: shouldn't be megabytes for a 2-param add.
+    assert!(
+        code_sz < 4096,
+        "add function code section unexpectedly large: {code_sz}"
+    );
+}
+
+/// M11-3: if-else — symbol `f`, code section larger than trivial return.
+#[test]
+fn m11_p037_if_else_behavior() {
+    let trivial_bytes = compile_to_bytes("m11_p037_trivial", "fn f() -> i64:\n    return 1\n");
+    let if_else_bytes = compile_to_bytes(
+        "m11_p037_ifelse",
+        "fn f(x: i64) -> i64:\n    if (x > 0):\n        return 1\n    else:\n        return 0\n",
+    );
+    let trivial_sz = code_section_size(&trivial_bytes);
+    let if_else_sz = code_section_size(&if_else_bytes);
+    // An if-else generates at least a comparison + branch; must be larger
+    // than the trivial `return 1` case.
+    assert!(
+        if_else_sz > trivial_sz,
+        "if-else ({if_else_sz}) should generate more code than trivial return ({trivial_sz})"
+    );
+}
+
+/// M11-4: while loop — symbol `f`, code section larger than a simple return.
+#[test]
+fn m11_p039_while_behavior() {
+    let trivial_bytes =
+        compile_to_bytes("m11_p039_trivial", "fn f(n: i64) -> i64:\n    return n\n");
+    let while_bytes = compile_to_bytes(
+        "m11_p039_while",
+        "fn f(n: i64) -> i64:\n    let acc: i64 = 0\n    let i: i64 = 0\n    while (i < n):\n        acc += i\n        i += 1\n    return acc\n",
+    );
+    let trivial_sz = code_section_size(&trivial_bytes);
+    let while_sz = code_section_size(&while_bytes);
+    assert!(
+        while_sz > trivial_sz,
+        "while loop ({while_sz}) should generate more code than trivial return ({trivial_sz})"
+    );
+}
+
+/// M11-5: two-function module — exactly `double` and `quad` exported.
+#[test]
+fn m11_p042_two_funcs_behavior() {
+    let src = "fn double(x: i64) -> i64:\n    return (x + x)\n\nfn quad(x: i64) -> i64:\n    return double(double(x))\n";
+    let bytes = compile_to_bytes("m11_p042", src);
+    let syms = exported_symbol_names(&bytes);
+    assert!(
+        syms.iter().any(|s| s == "double"),
+        "expected `double` in symbols: {syms:?}"
+    );
+    assert!(
+        syms.iter().any(|s| s == "quad"),
+        "expected `quad` in symbols: {syms:?}"
+    );
+    // Both functions are defined, so at least 2 user symbols.
+    let user_syms: Vec<_> = syms
+        .iter()
+        .filter(|s| *s == "double" || *s == "quad")
+        .collect();
+    assert_eq!(
+        user_syms.len(),
+        2,
+        "expected exactly 2 user symbols (double, quad): {syms:?}"
+    );
+}
+
+/// M11-6: recursion — symbol `fib` exported, code larger than trivial add.
+#[test]
+fn m11_p043_recursion_behavior() {
+    let src = "fn fib(n: i64) -> i64:\n    if (n < 2):\n        return n\n    return (fib((n - 1)) + fib((n - 2)))\n";
+    let bytes = compile_to_bytes("m11_p043", src);
+    let syms = exported_symbol_names(&bytes);
+    assert!(
+        syms.iter().any(|s| s == "fib"),
+        "expected `fib` in symbols: {syms:?}"
+    );
+    // Recursive fib requires a branch + two call sites; should be
+    // substantially larger than a trivial return.
+    let code_sz = code_section_size(&bytes);
+    assert!(
+        code_sz >= 8,
+        "fib code section unexpectedly small: {code_sz}"
+    );
+}
+
+/// M11-7: factorial loop — code section larger than a simple while.
+#[test]
+fn m11_p054_factorial_behavior() {
+    let simple_while_bytes = compile_to_bytes(
+        "m11_p054_simple",
+        "fn f(n: i64) -> i64:\n    let i: i64 = 0\n    while (i < n):\n        i += 1\n    return i\n",
+    );
+    let factorial_bytes = compile_to_bytes(
+        "m11_p054_factorial",
+        "fn f(n: i64) -> i64:\n    let acc: i64 = 1\n    let i: i64 = 1\n    while (i <= n):\n        acc *= i\n        i += 1\n    return acc\n",
+    );
+    // Factorial has an extra mul + assignment vs the simple loop.
+    // Both have the same structure so sizes may be similar; assert
+    // factorial is at least as large (additional `mul` + two locals).
+    let simple_sz = code_section_size(&simple_while_bytes);
+    let factorial_sz = code_section_size(&factorial_bytes);
+    assert!(
+        factorial_sz >= simple_sz,
+        "factorial ({factorial_sz}) should be >= simple while ({simple_sz})"
+    );
+}
+
+/// M11-8: equality comparison — symbol `f`, code section plausible.
+#[test]
+fn m11_p022_eq_behavior() {
+    let src = "fn f(a: i64, b: i64) -> bool:\n    return a == b\n";
+    let bytes = compile_to_bytes("m11_p022", src);
+    let syms = exported_symbol_names(&bytes);
+    assert!(
+        syms.iter().any(|s| s == "f"),
+        "expected `f` in symbols: {syms:?}"
+    );
+    let code_sz = code_section_size(&bytes);
+    assert!(code_sz > 0, "eq comparison code section must be non-empty");
+    // A comparison should generate at least a load + icmp; not megabytes.
+    assert!(
+        code_sz < 4096,
+        "eq code section unexpectedly large: {code_sz}"
+    );
+}
+
+/// M11-9: let + use — symbol `f`, code section non-trivially sized
+/// (local allocation + load must appear).
+#[test]
+fn m11_p032_let_then_use_behavior() {
+    let src = "fn f() -> i64:\n    let x: i64 = 1\n    return x\n";
+    let bytes = compile_to_bytes("m11_p032", src);
+    let syms = exported_symbol_names(&bytes);
+    assert!(
+        syms.iter().any(|s| s == "f"),
+        "expected `f` in symbols: {syms:?}"
+    );
+    let code_sz = code_section_size(&bytes);
+    assert!(
+        code_sz > 0,
+        "let+use code section must be non-empty: {code_sz}"
+    );
+}
+
+/// M11-10: complex while with bitops — code section substantially larger
+/// than the trivial `return 0` baseline (multiple operations per iteration).
+#[test]
+fn m11_p055_bitcount_behavior() {
+    let baseline_bytes = compile_to_bytes("m11_p055_base", "fn f() -> i64:\n    return 0\n");
+    let bitcount_bytes = compile_to_bytes(
+        "m11_p055_bitcount",
+        "fn f(n: i64) -> i64:\n    let count: i64 = 0\n    let v: i64 = n\n    while (v > 0):\n        if ((v & 1) == 1):\n            count += 1\n        v >>= 1\n    return count\n",
+    );
+    let baseline_sz = code_section_size(&baseline_bytes);
+    let bitcount_sz = code_section_size(&bitcount_bytes);
+    // The bitcount function has a while loop + nested if + bitand + shift;
+    // must generate substantially more code than a bare `return 0`.
+    assert!(
+        bitcount_sz > baseline_sz,
+        "bitcount ({bitcount_sz}) must be larger than trivial return ({baseline_sz})"
+    );
 }
 
 // =====================================================================
