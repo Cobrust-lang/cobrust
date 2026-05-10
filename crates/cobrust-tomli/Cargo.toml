@@ -20,4 +20,12 @@ pyo3 = []
 [dependencies]
 serde_json = { workspace = true }
 
+[[bin]]
+name = "cobrust-tomli-json"
+path = "src/bin/cobrust_tomli_json.rs"
+
+[[bench]]
+name = "vs_cpython"
+harness = false
+
 [dev-dependencies]

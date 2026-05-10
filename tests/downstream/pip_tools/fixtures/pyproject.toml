@@ -1,0 +1,23 @@
+[project]
+name = "example-package"
+version = "0.1.0"
+description = "Example pyproject.toml that pip-tools would parse"
+authors = [
+    { name = "Alice", email = "alice@example.org" },
+]
+requires-python = ">=3.9"
+dependencies = [
+    "click",
+    "rich",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.pip-tools]
+generate-hashes = true
+quiet = false

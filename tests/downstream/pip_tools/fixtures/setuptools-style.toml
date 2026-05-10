@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "setuptools-example"
+version = "1.2.3"
+dependencies = [
+    "requests",
+    "tomli",
+]
+
+[tool.setuptools]
+packages = ["mypkg"]
+
+[tool.setuptools.package-data]
+mypkg = ["data.json"]
