@@ -1,0 +1,30 @@
+# Paste to: Cobrust/.github/ISSUE_TEMPLATE/question.yml
+
+name: Question
+description: Ask how to do something with Cobrust
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Quick questions and "how do I..." topics typically belong in
+        [Discussions Q&A](https://github.com/cobrust/cobrust/discussions/categories/q-a)
+        — that lets the community help and stay searchable. This issue
+        template is fine if you'd rather use issues; a maintainer may
+        convert it to a discussion.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: What you tried
+      description: Help us help you — what have you already attempted?
+    validations:
+      required: false
