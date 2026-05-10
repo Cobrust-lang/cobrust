@@ -91,11 +91,12 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash scripts/doc-coverage.sh
 
-  # Optional: real-LLM smoke (gated on a secret being present)
+  # Optional: real-LLM smoke (gated by step-level env check;
+  # job-level `if: ${{ secrets.X != '' }}` is rejected by GitHub Actions
+  # validation — secrets context is restricted to env/with/run.)
   real-llm-smoke:
     name: real-LLM smoke (gated)
     runs-on: ubuntu-latest
-    if: ${{ secrets.USER_CODEX_API_KEY != '' }}
     needs: [fmt, clippy, build, test]
     steps:
       - uses: actions/checkout@v4
@@ -106,5 +107,9 @@ jobs:
       - env:
           USER_CODEX_API_KEY: ${{ secrets.USER_CODEX_API_KEY }}
         run: |
+          if [ -z "$USER_CODEX_API_KEY" ]; then
+            echo "::warning::USER_CODEX_API_KEY not set — skipping real-LLM smoke"
+            exit 0
+          fi
           cargo test --locked -p cobrust-llm-router \
             --test real_llm_smoke -- --nocapture
