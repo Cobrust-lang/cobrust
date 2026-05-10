@@ -152,20 +152,23 @@ See the [Phase F roadmap (ADR-0038)](docs/agent/adr/0038-phase-f-roadmap.md) for
 
 ## Examples
 
-10 progressive examples in [`examples/`](examples/):
+Progressive examples in [`examples/`](examples/):
 
 | | |
 |---|---|
-| `examples/hello/` | minimal hello world |
-| `examples/fizzbuzz/` | control flow (real `if/elif/else` + `%`) |
-| `examples/fib/` | recursion via `Constant::FnRef` Call lowering |
-| `examples/notebook/` | multi-module package + path dependency |
-| `examples/wc/` | file IO + iteration |
-| `examples/tomli-demo/` | translation showcase ⭐ |
-| `examples/cli-tool/` | what `cobrust new` scaffolds |
-| `examples/tests-demo/` | how `cobrust test` works |
-| `examples/repl-demo/` | REPL session script |
-| `examples/web-server-stub/` | M13 concurrency runtime demo |
+| `examples/hello.cb` | minimal hello world |
+| `examples/fizzbuzz.cb` | control flow (real `if/elif/else` + `%`) |
+| `examples/fib.cb` | recursion via `Constant::FnRef` Call lowering |
+| `examples/wc.cb` | file IO + iteration |
+| `examples/cat.cb` | stream file to stdout |
+| `examples/echo.cb` | argv echo |
+| `examples/sort.cb` | sort lines from stdin |
+| `examples/unique_lines.cb` | deduplicate lines |
+| `examples/regex_grep.cb` | regex filter over stdin |
+| `examples/csv_sum.cb` | aggregate a CSV column |
+| `examples/json_pretty.cb` | pretty-print JSON |
+| `examples/notebook/` | multi-module package |
+| `examples/notebook-config/` | sibling package (path dependency) |
 
 ---
 
