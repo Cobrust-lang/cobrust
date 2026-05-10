@@ -2087,3 +2087,34 @@ Saved on `:quit` / EOF; loaded on next start.
   (M14 contract: EOF → 0; was M10 stub returning 1).
 
 Total: 51 net new M14 tests; 72 cobrust-cli tests total green.
+
+---
+
+## full_pipeline_corpus CI gate (B3 fix)
+
+**Why it matters**: `crates/cobrust-tomli/tests/full_pipeline_corpus.rs` is the
+T1.1 differential regression gate — it drives 1024 deterministic-seeded TOML
+inputs through `cobrust-tomli::loads()` and compares results byte-for-byte
+against CPython `tomllib`. Before B3 the gate silently skipped on Linux because
+the Python binary path was hardcoded to `/opt/homebrew/bin/python3.11` (macOS
+Homebrew only). A silent skip means CI is green even though the differential
+oracle is never consulted — a false green.
+
+**B3 fix**:
+
+- Removed the hardcoded path; added `probe_python()` which tries `python3.11`
+  → `python3` → `python` via PATH.
+- Skip path now emits `cargo:warning=` so the absence of the oracle is visible
+  in CI job summaries.
+- Pass path prints `T1.1 corpus gate: PASS (N/N within tolerance, oracle=<binary>)`
+  confirming real execution.
+- `ci.yml` adds `sudo apt-get install -y python3.11` (Ubuntu only, best-effort)
+  before the test step, and writes the oracle version to the GitHub job summary.
+
+**Skip-vs-run decision**:
+
+| Environment | Expected result |
+|---|---|
+| ubuntu-latest (CI) | RUN — `apt-get install python3.11` provides the oracle |
+| macos-latest (CI) | RUN — Homebrew Python is on PATH |
+| Stripped CI / local (no Python) | SKIP — exit 0, warning emitted |
