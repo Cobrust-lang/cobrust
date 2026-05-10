@@ -93,6 +93,9 @@ pub struct MsgError {
 pub enum MsgErrorKind {
     Pack,
     Unpack,
+    /// Integer overflow in `pos + length` computation (B6 fix).
+    /// Triggered on 32-bit targets or adversarial inputs with large length fields.
+    OverflowSize,
 }
 
 impl fmt::Display for MsgError {
@@ -100,6 +103,7 @@ impl fmt::Display for MsgError {
         let kind = match self.kind {
             MsgErrorKind::Pack => "pack",
             MsgErrorKind::Unpack => "unpack",
+            MsgErrorKind::OverflowSize => "overflow size",
         };
         write!(f, "msgpack {kind} error: {}", self.message)
     }
@@ -119,6 +123,17 @@ impl MsgError {
         Self {
             kind: MsgErrorKind::Unpack,
             message: message.into(),
+        }
+    }
+
+    /// Returned when `pos + length` overflows `usize` (B6 fix).
+    /// Triggered on 32-bit targets with adversarial ARRAY_32 / MAP_32 /
+    /// BIN_32 / STR_32 inputs whose length field, when added to `pos`,
+    /// would wrap around the address space.
+    pub(crate) fn overflow_size() -> Self {
+        Self {
+            kind: MsgErrorKind::OverflowSize,
+            message: "pos + length overflowed usize; possible adversarial input".into(),
         }
     }
 }
@@ -420,10 +435,15 @@ pub fn unpack_array(
 /// # Errors
 /// Returns [`MsgError::unpack`] when the slice is truncated.
 pub fn unpack_bin(data: &[u8], pos: usize, length: usize) -> Result<(Vec<u8>, usize), MsgError> {
-    if pos + length > data.len() {
+    // B6 fix: use checked_add to prevent usize wrap-around on 32-bit targets
+    // or adversarial BIN_32 inputs with large length fields.
+    let end = pos
+        .checked_add(length)
+        .ok_or_else(MsgError::overflow_size)?;
+    if end > data.len() {
         return Err(MsgError::unpack("truncated bin"));
     }
-    Ok((data[pos..pos + length].to_vec(), pos + length))
+    Ok((data[pos..end].to_vec(), end))
 }
 
 // fn:unpack_float provider=synthetic model=msgpack-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
@@ -434,7 +454,11 @@ pub fn unpack_bin(data: &[u8], pos: usize, length: usize) -> Result<(Vec<u8>, us
 /// # Errors
 /// Returns [`MsgError::unpack`] when the slice is truncated.
 pub fn unpack_float(data: &[u8], pos: usize, n_bytes: usize) -> Result<(f64, usize), MsgError> {
-    if pos + n_bytes > data.len() {
+    // B6 fix: checked_add guards against usize overflow on 32-bit targets.
+    let end = pos
+        .checked_add(n_bytes)
+        .ok_or_else(MsgError::overflow_size)?;
+    if end > data.len() {
         return Err(MsgError::unpack("truncated float"));
     }
     let value = if n_bytes == 4 {
@@ -446,7 +470,7 @@ pub fn unpack_float(data: &[u8], pos: usize, n_bytes: usize) -> Result<(f64, usi
         buf.copy_from_slice(&data[pos..pos + 8]);
         f64::from_be_bytes(buf)
     };
-    Ok((value, pos + n_bytes))
+    Ok((value, end))
 }
 
 // fn:unpack_int provider=synthetic model=msgpack-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
@@ -655,14 +679,19 @@ pub fn unpack_one(data: &[u8], pos: usize) -> Result<(MsgValue, usize), MsgError
 /// # Errors
 /// Returns [`MsgError::unpack`] when the slice is truncated or invalid utf-8.
 pub fn unpack_str(data: &[u8], pos: usize, length: usize) -> Result<(String, usize), MsgError> {
-    if pos + length > data.len() {
+    // B6 fix: checked_add guards STR_8/16/32 paths against usize overflow
+    // on 32-bit targets or adversarial length fields.
+    let end = pos
+        .checked_add(length)
+        .ok_or_else(MsgError::overflow_size)?;
+    if end > data.len() {
         return Err(MsgError::unpack("truncated str"));
     }
-    let slice = &data[pos..pos + length];
+    let slice = &data[pos..end];
     let s = std::str::from_utf8(slice)
         .map_err(|_| MsgError::unpack("invalid utf-8"))?
         .to_string();
-    Ok((s, pos + length))
+    Ok((s, end))
 }
 
 // fn:unpack_uint provider=synthetic model=msgpack-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
@@ -672,14 +701,19 @@ pub fn unpack_str(data: &[u8], pos: usize, length: usize) -> Result<(String, usi
 /// # Errors
 /// Returns [`MsgError::unpack`] when the slice is truncated.
 pub fn unpack_uint(data: &[u8], pos: usize, n_bytes: usize) -> Result<(u64, usize), MsgError> {
-    if pos + n_bytes > data.len() {
+    // B6 fix: checked_add guards UINT_8/16/32 and all length-field reads
+    // against usize overflow on 32-bit targets.
+    let end = pos
+        .checked_add(n_bytes)
+        .ok_or_else(MsgError::overflow_size)?;
+    if end > data.len() {
         return Err(MsgError::unpack("truncated uint"));
     }
     let mut value: u64 = 0;
     for i in 0..n_bytes {
         value = (value << 8) | u64::from(data[pos + i]);
     }
-    Ok((value, pos + n_bytes))
+    Ok((value, end))
 }
 
 // fn:unpack_uint_cython provider=synthetic model=msgpack-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate_cython

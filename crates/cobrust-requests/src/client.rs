@@ -18,6 +18,17 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+/// Default maximum size for response bodies read from the network (64 MiB).
+///
+/// Prevents OOM from adversarially large / runaway HTTP responses (B5 fix).
+/// Callers who need larger bodies should build a custom `Session` with
+/// `SessionBuilder::max_body_bytes(n)` (future API, Phase M9+).
+pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
+
+/// Read chunk size used in streaming body reads (B5).
+/// Kept at module level to satisfy `clippy::items_after_statements`.
+const BODY_READ_CHUNK: usize = 8 * 1024; // 8 KiB
+
 /// HTTP method enum — closed (constitution §2.2 forbids open enums).
 /// Mirrors the six verbs `requests` exposes as top-level functions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +74,8 @@ pub enum HttpErrorKind {
     Timeout,
     /// Response body decoding failed (`Response::json` / `text`).
     DecodeBody,
+    /// Response body exceeded [`MAX_BODY_BYTES`] cap (B5 fix).
+    BodyTooLarge,
 }
 
 impl std::fmt::Display for HttpError {
@@ -72,6 +85,7 @@ impl std::fmt::Display for HttpError {
             HttpErrorKind::Network => "network",
             HttpErrorKind::Timeout => "timeout",
             HttpErrorKind::DecodeBody => "decode body",
+            HttpErrorKind::BodyTooLarge => "body too large",
         };
         write!(f, "http {kind} error: {}", self.message)
     }
@@ -105,6 +119,16 @@ impl HttpError {
         Self {
             kind: HttpErrorKind::DecodeBody,
             message: message.into(),
+        }
+    }
+
+    pub(crate) fn body_too_large(limit: usize) -> Self {
+        Self {
+            kind: HttpErrorKind::BodyTooLarge,
+            message: format!(
+                "response body exceeded {limit} byte limit (MAX_BODY_BYTES); \
+                 possible adversarial server response"
+            ),
         }
     }
 
@@ -149,9 +173,23 @@ impl Response {
             let val = value.to_str().unwrap_or("").to_owned();
             headers.insert(key, val);
         }
+        // B5 fix: cap response body at MAX_BODY_BYTES to prevent OOM from
+        // adversarially large / runaway server responses. Read in a streaming
+        // fashion so we bail early without buffering the entire response.
         let mut body: Vec<u8> = Vec::new();
-        if let Err(e) = std::io::Read::read_to_end(&mut resp, &mut body) {
-            return Err(HttpError::network(format!("read body: {e}")));
+        let mut chunk = vec![0u8; BODY_READ_CHUNK];
+        loop {
+            use std::io::Read as _;
+            match resp.read(&mut chunk) {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    if body.len() + n > MAX_BODY_BYTES {
+                        return Err(HttpError::body_too_large(MAX_BODY_BYTES));
+                    }
+                    body.extend_from_slice(&chunk[..n]);
+                }
+                Err(e) => return Err(HttpError::network(format!("read body: {e}"))),
+            }
         }
         Ok(Self {
             status,

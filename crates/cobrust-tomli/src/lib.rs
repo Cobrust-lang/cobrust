@@ -24,4 +24,4 @@
 
 mod parser;
 
-pub use crate::parser::{TomliError, Value, loads, table_to_json, to_json};
+pub use crate::parser::{MAX_DEPTH, TomliError, Value, loads, table_to_json, to_json};

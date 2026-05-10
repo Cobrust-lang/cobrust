@@ -27,7 +27,7 @@
 #![allow(clippy::unreadable_literal)]
 #![allow(clippy::cast_lossless)]
 
-use cobrust_msgpack::{MsgValue, pack_to_vec, unpack};
+use cobrust_msgpack::{MsgErrorKind, MsgValue, pack_to_vec, unpack};
 
 struct Lcg {
     state: u64,
@@ -193,4 +193,107 @@ fn unpack_panic_free_on_random_garbage() {
         }
     }
     assert!(total >= 1000, "fuzz coverage shortfall: {total}");
+}
+
+// ── B6 adversarial corpus ─────────────────────────────────────────────────
+//
+// Each test crafts a hand-crafted adversarial msgpack byte sequence that
+// would trigger `pos + length` overflow on a 32-bit target (or with a
+// crafted length field near usize::MAX). After the B6 fix, every such
+// input returns a structured `MsgError::OverflowSize` or `Unpack` error —
+// not a panic, abort, or SIGSEGV.
+
+/// B6: ARRAY_32 with length = 0xFFFF_FFFF but data is only 5 bytes long.
+///
+/// On a 32-bit target: `pos(1) + length(0xFFFF_FFFF_usize)` would wrap.
+/// After fix: `checked_add` returns None → `MsgError::overflow_size`.
+/// On 64-bit: the data-length check fires first → `MsgError::unpack` truncated.
+/// Either way: structured Err, never panic.
+#[test]
+fn b6_array32_adversarial_length_returns_err() {
+    // ARRAY_32 marker (0xdd) + 4-byte big-endian length (0xFFFFFFFF)
+    let data: Vec<u8> = vec![0xdd, 0xff, 0xff, 0xff, 0xff];
+    let result = unpack(&data);
+    assert!(
+        result.is_err(),
+        "expected Err for adversarial ARRAY_32 length"
+    );
+    let err = result.unwrap_err();
+    // Must be either OverflowSize (32-bit) or Unpack/truncated (64-bit).
+    assert!(
+        err.kind == MsgErrorKind::OverflowSize || err.kind == MsgErrorKind::Unpack,
+        "unexpected error kind {:?}: {:?}",
+        err.kind,
+        err.message
+    );
+}
+
+/// B6: MAP_32 with length = 0xFFFF_FFFF but minimal data.
+#[test]
+fn b6_map32_adversarial_length_returns_err() {
+    let data: Vec<u8> = vec![0xdf, 0xff, 0xff, 0xff, 0xff];
+    let result = unpack(&data);
+    assert!(
+        result.is_err(),
+        "expected Err for adversarial MAP_32 length"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.kind == MsgErrorKind::OverflowSize || err.kind == MsgErrorKind::Unpack,
+        "unexpected error kind {:?}: {:?}",
+        err.kind,
+        err.message
+    );
+}
+
+/// B6: BIN_32 with length = 0xFFFF_FFFF.
+#[test]
+fn b6_bin32_adversarial_length_returns_err() {
+    // BIN_32 marker (0xc6) + 4-byte length (max u32)
+    let data: Vec<u8> = vec![0xc6, 0xff, 0xff, 0xff, 0xff];
+    let result = unpack(&data);
+    assert!(
+        result.is_err(),
+        "expected Err for adversarial BIN_32 length"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.kind == MsgErrorKind::OverflowSize || err.kind == MsgErrorKind::Unpack,
+        "unexpected error kind {:?}: {:?}",
+        err.kind,
+        err.message
+    );
+}
+
+/// B6: STR_32 with length = 0xFFFF_FFFF.
+#[test]
+fn b6_str32_adversarial_length_returns_err() {
+    // STR_32 marker (0xdb) + 4-byte length (max u32)
+    let data: Vec<u8> = vec![0xdb, 0xff, 0xff, 0xff, 0xff];
+    let result = unpack(&data);
+    assert!(
+        result.is_err(),
+        "expected Err for adversarial STR_32 length"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.kind == MsgErrorKind::OverflowSize || err.kind == MsgErrorKind::Unpack,
+        "unexpected error kind {:?}: {:?}",
+        err.kind,
+        err.message
+    );
+}
+
+/// B6: `MsgErrorKind::OverflowSize` Display carries the right substring.
+#[test]
+fn b6_overflow_size_error_display() {
+    let e = cobrust_msgpack::MsgError {
+        kind: MsgErrorKind::OverflowSize,
+        message: "pos + length overflowed usize".into(),
+    };
+    let s = format!("{e}");
+    assert!(
+        s.contains("overflow size"),
+        "expected 'overflow size' in display, got: {s:?}"
+    );
 }

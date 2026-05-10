@@ -230,3 +230,40 @@ error[Internal]: CraneliftError: inst441 has type i64, expected i8
 | 表达式中有 `undefined_name` | `Type` | 2 | 用 `let` 声明 |
 | 程序在运行时 panic | `Runtime` | 4 | 调试程序逻辑 |
 | Cranelift / 链接器错误 | `Internal` | 3 | 运行 `cobrust report-bug` |
+
+---
+
+## 翻译 crate 错误（不可信输入加固）
+
+经翻译的生态系统 crate 对不可信输入强制执行安全限制。这些错误以 `Result::Err` 形式返回——
+不会发生 panic 或进程终止。
+
+### `cobrust-tomli` — `TomliError`
+
+| 条件 | 错误消息 | 原因 |
+|---|---|---|
+| TOML 嵌套深度 > 100 | `"nesting depth exceeds maximum (100); possible adversarial input"` | 对抗性的深度嵌套数组 / 内联表格若无限制会溢出调用栈（B4 修复）。 |
+| 无效语法 | `"unexpected character '…' at pos N"` | 标准解析错误。 |
+| 未关闭的字符串 | `"unterminated string"` | 标准解析错误。 |
+
+**常量**：`cobrust_tomli::MAX_DEPTH = 100`（已导出，调用方可引用）。
+
+### `cobrust-requests` — `HttpError` / `HttpErrorKind`
+
+| `HttpErrorKind` | 含义 | 处理方法 |
+|---|---|---|
+| `InvalidUrl` | URL 解析失败或 scheme 不受支持 | 检查 URL 字符串。 |
+| `Network` | DNS、TCP 或 TLS 层错误 | 检查网络连接 / 证书。 |
+| `Timeout` | 传输超时（默认：30 秒） | 重试或增大超时时间。 |
+| `DecodeBody` | 响应体不是有效 UTF-8 或 JSON | 检查服务器的 `Content-Type`。 |
+| `BodyTooLarge` | 响应体超出 64 MiB 上限 | 服务器发送数据过多；使用流式处理或提高上限（B5 修复）。 |
+
+**常量**：`cobrust_requests::MAX_BODY_BYTES = 64 * 1024 * 1024`（64 MiB）。
+
+### `cobrust-msgpack` — `MsgError` / `MsgErrorKind`
+
+| `MsgErrorKind` | 含义 | 处理方法 |
+|---|---|---|
+| `Pack` | 值无法被编码（超出 M6 范围）。 | 检查 `MsgValue` 变体。 |
+| `Unpack` | msgpack 字节格式错误或被截断。 | 检查输入字节。 |
+| `OverflowSize` | `pos + length` 造成 `usize` 溢出——可能是带有接近 `u32::MAX` 长度字段的对抗性输入。 | 拒绝该输入；这不是有效的 msgpack 数据（B6 修复）。 |
