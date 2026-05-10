@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "poetry-example"
+version = "0.1.0"
+description = "Poetry-style pyproject.toml"
+authors = ["Bob"]
+
+[tool.poetry.dependencies]
+python = "ge_3_9"
+requests = "v2_31_0"
+click = "v8_1_3"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "v7_4_0"
+black = "v23_3_0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
