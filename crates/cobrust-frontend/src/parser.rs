@@ -2002,13 +2002,72 @@ mod tests {
 
     #[test]
     fn rejects_is() {
-        let err = parse_src("x = is\n");
-        // `is` is just an identifier in M1 lexer (not a keyword); the
-        // parser raises on bare `is` at expr position.
-        // For positive failure, we explicitly check that the
-        // statement-leading `is` token would be flagged. The parser
-        // only flags it as a leading statement form, so this test is
-        // representational.
-        let _ = err;
+        // `is` as a *statement-leader* must return ParseError::DroppedByConstitution.
+        // The parse_stmt dispatch at the `Ident("is")` arm (parser.rs §230-244)
+        // fires when `is` is the first token of a statement.
+        //
+        // Note: `"x = is\n"` would NOT exercise this path — the parser would
+        // successfully parse `is` as an identifier expression (ExprKind::Name).
+        // The constitution drops `is` at statement level, not in expressions.
+        // That is intentional: the expression position would be caught later
+        // by the type checker / HIR pass.
+        let err = parse_src("is x\n").expect_err("expected parse error for `is` statement");
+        assert!(
+            matches!(
+                &err,
+                ParseError::DroppedByConstitution {
+                    name: "is",
+                    span: _
+                }
+            ),
+            "expected DroppedByConstitution {{ name: \"is\" }}, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_is_alone_on_line() {
+        // `is` with nothing after it — still DroppedByConstitution, not Eof.
+        let err = parse_src("is\n").expect_err("expected parse error for bare `is`");
+        assert!(
+            matches!(
+                &err,
+                ParseError::DroppedByConstitution {
+                    name: "is",
+                    span: _
+                }
+            ),
+            "expected DroppedByConstitution {{ name: \"is\" }}, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_del_statement() {
+        // `del` is also DroppedByConstitution — shares the same parser arm.
+        let err = parse_src("del x\n").expect_err("expected parse error for `del`");
+        assert!(
+            matches!(
+                &err,
+                ParseError::DroppedByConstitution {
+                    name: "del",
+                    span: _
+                }
+            ),
+            "expected DroppedByConstitution {{ name: \"del\" }}, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_global_statement() {
+        let err = parse_src("global x\n").expect_err("expected parse error for `global`");
+        assert!(
+            matches!(
+                &err,
+                ParseError::DroppedByConstitution {
+                    name: "global",
+                    span: _
+                }
+            ),
+            "expected DroppedByConstitution {{ name: \"global\" }}, got {err:?}"
+        );
     }
 }
