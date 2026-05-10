@@ -26,7 +26,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use cobrust_llm_router::{LlmProvider, Router, RouterBuilder};
+use cobrust_llm_router::{
+    AnthropicProvider, LlmProvider, OpenAiProvider, ProviderKind, Router, RouterBuilder,
+};
 
 use crate::config::TranslatorConfig;
 use crate::deterministic::{deterministic_id, sha256_file};
@@ -74,6 +76,120 @@ pub struct TranslatedCrate {
     /// run. Always 0 for translations that pass on the first try.
     /// M5 added; M4 callers do not consult this field.
     pub repair_attempts: u32,
+    /// Structured per-gate verdicts feeding the manifest's gate fields.
+    /// Pinned by ADR-0040 §"Honest gate verdicts": the manifest stores
+    /// the human-readable string form, but callers needing a typed view
+    /// (CI, tooling, downstream tests) read these directly without
+    /// parsing the string.
+    pub gate_outcomes: GateOutcomes,
+}
+
+/// Structured outcome of one L2 / L3 gate. Pinned by ADR-0040
+/// §"Honest gate verdicts": replaces the literal-string scheme that
+/// returned `"pass (...)"` regardless of verifier verdict (see
+/// claude-desktop integrated handoff §1.B2).
+///
+/// Stored variants:
+///
+/// - `Pass { detail }` — gate accepted; `detail` carries the harness /
+///   evidence string for the manifest (e.g. `"tests/tomli_downstream.rs
+///   + tests/tomli_fuzz.rs (after 2 repair-loop iterations)"`).
+/// - `Fail { reason }` — gate rejected; `reason` is the
+///   verifier-supplied diagnostic. Surfaced unmodified into the
+///   manifest as `"fail: <reason>"`.
+/// - `Skip { reason }` — gate skipped on purpose (e.g. M4 perf gate is
+///   recorded-only, not gated). Distinct from Pass; surfaced as
+///   `"skipped (<reason>)"`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GateOutcome {
+    Pass { detail: String },
+    Fail { reason: String },
+    Skip { reason: String },
+}
+
+impl GateOutcome {
+    /// Human-readable serialization for the manifest's `gates.l2_*`
+    /// string fields. Distinct prefixes for Pass / Fail / Skip so the
+    /// verdict is never confusable with another at parse time.
+    #[must_use]
+    pub fn as_manifest_str(&self) -> String {
+        match self {
+            GateOutcome::Pass { detail } if detail.is_empty() => "pass".into(),
+            GateOutcome::Pass { detail } => format!("pass ({detail})"),
+            GateOutcome::Fail { reason } => format!("fail: {reason}"),
+            GateOutcome::Skip { reason } if reason.is_empty() => "skipped".into(),
+            GateOutcome::Skip { reason } => format!("skipped ({reason})"),
+        }
+    }
+
+    /// True when the gate verdict is `Pass`.
+    #[must_use]
+    pub const fn is_pass(&self) -> bool {
+        matches!(self, GateOutcome::Pass { .. })
+    }
+
+    /// True when the gate verdict is `Fail`.
+    #[must_use]
+    pub const fn is_fail(&self) -> bool {
+        matches!(self, GateOutcome::Fail { .. })
+    }
+
+    /// True when the gate verdict is `Skip`.
+    #[must_use]
+    pub const fn is_skip(&self) -> bool {
+        matches!(self, GateOutcome::Skip { .. })
+    }
+}
+
+impl std::fmt::Display for GateOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.as_manifest_str())
+    }
+}
+
+/// Aggregate of every L2/L3 gate's structured verdict for one
+/// translation run. Pinned by ADR-0040 §"Honest gate verdicts".
+///
+/// `worst()` returns the worst-priority verdict across all gates
+/// (Fail > Skip > Pass), used by integration tests to assert pipeline
+/// honesty without parsing the manifest strings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GateOutcomes {
+    pub l2_build: GateOutcome,
+    pub l2_behavior: GateOutcome,
+    pub l2_perf: GateOutcome,
+    pub l3_pyo3_wrapper: GateOutcome,
+    pub l3_downstream_dependents: GateOutcome,
+}
+
+impl GateOutcomes {
+    /// Worst-priority verdict across all gates (Fail > Skip > Pass).
+    /// Used by callers to compute one aggregate exit signal — distinct
+    /// from the M4-vintage hardcoded `"pass"` string scheme.
+    #[must_use]
+    pub fn worst(&self) -> GateOutcome {
+        let gates = [
+            &self.l2_build,
+            &self.l2_behavior,
+            &self.l2_perf,
+            &self.l3_pyo3_wrapper,
+            &self.l3_downstream_dependents,
+        ];
+        // Fail wins outright.
+        for g in &gates {
+            if g.is_fail() {
+                return (*g).clone();
+            }
+        }
+        // Skip beats Pass when no Fail.
+        for g in &gates {
+            if g.is_skip() {
+                return (*g).clone();
+            }
+        }
+        // Otherwise return the first gate's Pass (l2_build is canonical).
+        self.l2_build.clone()
+    }
 }
 
 /// Result of one verifier check on a [`FunctionTranslation`].
@@ -90,6 +206,21 @@ pub enum VerifierVerdict {
 /// verifier accepts or the escalation threshold is hit.
 pub trait BehaviorVerifier: Send + Sync {
     fn verify(&self, function: &FunctionTranslation, attempt: u32) -> VerifierVerdict;
+
+    /// Verdict to record on the manifest when **every** function is
+    /// accepted by `verify` (= the loop never observed a Reject).
+    /// Pinned by ADR-0040 §"Honest gate verdicts": prevents the
+    /// no-op [`AcceptAll`] from masquerading as a real
+    /// [`GateOutcome::Pass`] in the manifest.
+    ///
+    /// Default = `Pass { detail: "" }`. The [`AcceptAll`] verifier
+    /// overrides this to `Skip` so the manifest honestly records that
+    /// no behavior gate was wired.
+    fn default_outcome(&self) -> GateOutcome {
+        GateOutcome::Pass {
+            detail: String::new(),
+        }
+    }
 }
 
 /// Result of one perf-verifier check on a [`crate::bench::BenchmarkReport`].
@@ -114,6 +245,15 @@ pub enum PerfVerdict {
 /// to-end without real LLM keys.
 pub trait PerfVerifier: Send + Sync {
     fn verify(&self, function: &FunctionTranslation, attempt: u32) -> PerfVerdict;
+
+    /// Verdict to record on the manifest when **every** function is
+    /// accepted by `verify`. Default = `Pass { detail: "" }`. See
+    /// [`BehaviorVerifier::default_outcome`] for the matching contract.
+    fn default_outcome(&self) -> GateOutcome {
+        GateOutcome::Pass {
+            detail: String::new(),
+        }
+    }
 }
 
 /// No-op perf verifier — accepts every emission. The M4/M5 default.
@@ -122,6 +262,12 @@ pub struct AcceptAllPerf;
 impl PerfVerifier for AcceptAllPerf {
     fn verify(&self, _function: &FunctionTranslation, _attempt: u32) -> PerfVerdict {
         PerfVerdict::Accept
+    }
+
+    fn default_outcome(&self) -> GateOutcome {
+        GateOutcome::Skip {
+            reason: "AcceptAllPerf — no L2.perf gate wired".into(),
+        }
     }
 }
 
@@ -132,6 +278,12 @@ pub struct AcceptAll;
 impl BehaviorVerifier for AcceptAll {
     fn verify(&self, _function: &FunctionTranslation, _attempt: u32) -> VerifierVerdict {
         VerifierVerdict::Accept
+    }
+
+    fn default_outcome(&self) -> GateOutcome {
+        GateOutcome::Skip {
+            reason: "AcceptAll — no L2.behavior gate wired".into(),
+        }
     }
 }
 
@@ -206,7 +358,12 @@ pub async fn translate_with_verifiers(
     // verifier; on either Reject, ship the diagnostic to repair.rs and
     // re-dispatch with attempt += 1.
     let crate_dir_for_diag = cfg.out_dir.clone();
-    let (translation, repair_attempts) = run_repair_loop(
+    let RepairLoopResult {
+        translation,
+        repair_attempts,
+        behavior_outcome,
+        perf_outcome,
+    } = run_repair_loop(
         &router,
         &library.library,
         &source_sha16,
@@ -218,12 +375,34 @@ pub async fn translate_with_verifiers(
     )
     .await?;
 
+    // ---- Compose structured gate outcomes ---------------------------------
+    // Per ADR-0040 §"Honest gate verdicts": the manifest's gate strings
+    // come from a typed [`GateOutcome`] verdict, never a hardcoded
+    // literal. The build / pyo3 / downstream gates derive their default
+    // verdict from the per-library policy table (see
+    // `default_l2_build_outcome` etc.); the behavior/perf verdicts come
+    // straight out of the repair loop above.
+    let gate_outcomes = GateOutcomes {
+        l2_build: default_l2_build_outcome(library),
+        l2_behavior: behavior_outcome,
+        l2_perf: perf_outcome,
+        l3_pyo3_wrapper: default_l3_pyo3_outcome(library),
+        l3_downstream_dependents: default_l3_downstream_outcome(library),
+    };
+
     // ---- Write crate to disk -----------------------------------------------
     let crate_dir = cfg.out_dir.join(format!("cobrust-{}", library.library));
     write_crate(&crate_dir, library, &spec, &translation)?;
 
     // ---- Build manifest ----------------------------------------------------
-    let manifest = build_manifest(library, cfg, &source_sha256, &translation, repair_attempts);
+    let manifest = build_manifest(
+        library,
+        cfg,
+        &source_sha256,
+        &translation,
+        repair_attempts,
+        &gate_outcomes,
+    );
     let manifest_path = crate_dir.join("PROVENANCE.toml");
     manifest
         .write(&manifest_path)
@@ -236,17 +415,34 @@ pub async fn translate_with_verifiers(
         pyo3_wrapper_dir: crate_dir.join("python"),
         functions: translation.functions,
         repair_attempts,
+        gate_outcomes,
     })
 }
 
+/// Carries the structured outcome of the repair loop back to the
+/// orchestrator. Pinned by ADR-0040 §"Honest gate verdicts".
+struct RepairLoopResult {
+    translation: TranslationOutput,
+    repair_attempts: u32,
+    behavior_outcome: GateOutcome,
+    perf_outcome: GateOutcome,
+}
+
 /// Build the provenance manifest from the translation artefacts.
+///
+/// The `gate_outcomes` argument carries the structured per-gate verdict
+/// (Pass / Fail / Skip) the orchestrator computed from the verifier
+/// hooks — *not* a hardcoded literal. Pinned by ADR-0040 §"Honest gate
+/// verdicts" (see also claude-desktop integrated handoff §1.B2).
 fn build_manifest(
     library: &PyLibrary,
     cfg: &TranslatorConfig,
     source_sha256: &str,
     translation: &TranslationOutput,
     repair_attempts: u32,
+    gate_outcomes: &GateOutcomes,
 ) -> ProvenanceManifest {
+    let _ = repair_attempts; // detail already baked into the behavior outcome
     let toolchain = "rustc 1.94.1".to_string();
     let deterministic =
         deterministic_id(source_sha256, &toolchain, &translation.router_decision_ids);
@@ -329,11 +525,11 @@ fn build_manifest(
         gates: GatesSection {
             l0_spec_emitted: true,
             l1_files_emitted: u32::try_from(translation.functions.len()).unwrap_or(u32::MAX),
-            l2_build: l2_build_summary(library),
-            l2_behavior: l2_behavior_summary(library, repair_attempts),
-            l2_perf: l2_perf_summary(library),
-            l3_pyo3_wrapper: l3_pyo3_summary(library),
-            l3_downstream_dependents: l3_downstream_summary(library),
+            l2_build: gate_outcomes.l2_build.as_manifest_str(),
+            l2_behavior: gate_outcomes.l2_behavior.as_manifest_str(),
+            l2_perf: gate_outcomes.l2_perf.as_manifest_str(),
+            l3_pyo3_wrapper: gate_outcomes.l3_pyo3_wrapper.as_manifest_str(),
+            l3_downstream_dependents: gate_outcomes.l3_downstream_dependents.as_manifest_str(),
             dependents,
         },
     }
@@ -342,6 +538,15 @@ fn build_manifest(
 /// Run the verifier across every function; on rejection re-dispatch
 /// the failing function with attempt += 1 and re-verify, until either
 /// the verifier accepts or the escalation threshold is hit.
+///
+/// Returns a [`RepairLoopResult`] carrying the final translation
+/// output, total repair attempts, and the structured per-gate
+/// outcomes ([`GateOutcome`]). Pinned by ADR-0040 §"Honest gate
+/// verdicts": the per-gate outcomes are derived from the verifier's
+/// observed verdicts, not a hardcoded literal — so a fake-pass cannot
+/// surface to the manifest. (Note: the loop returns `Err` on
+/// escalation, so the success path always carries Pass-or-Skip
+/// verdicts; Fail propagates as `EscalationExceeded`.)
 #[allow(clippy::too_many_arguments)]
 async fn run_repair_loop(
     router: &Router,
@@ -352,8 +557,16 @@ async fn run_repair_loop(
     perf_verifier: &dyn PerfVerifier,
     escalation_threshold: u32,
     out_dir: &std::path::Path,
-) -> Result<(TranslationOutput, u32), TranslatorError> {
+) -> Result<RepairLoopResult, TranslatorError> {
     let mut total_repair_attempts: u32 = 0;
+    // Track whether the verifier ever produced a non-default verdict.
+    // If any function went through a Reject/repair cycle, we know the
+    // verifier is "live" and the success path is a real Pass; otherwise
+    // we honour the verifier's `default_outcome()` hook so AcceptAll
+    // surfaces as Skip (= the no-op signal) and a real verifier with
+    // zero failures surfaces as Pass.
+    let mut behavior_observed_reject = false;
+    let mut perf_observed_reject = false;
     let mut idx = 0;
     while idx < translation.functions.len() {
         let mut attempt: u32 = 1;
@@ -373,9 +586,15 @@ async fn run_repair_loop(
             let merged = match behavior_outcome {
                 VerifierVerdict::Accept => match perf_verifier.verify(&snapshot, attempt) {
                     PerfVerdict::Accept => VerifierVerdict::Accept,
-                    PerfVerdict::Reject(f) => VerifierVerdict::Reject(f),
+                    PerfVerdict::Reject(f) => {
+                        perf_observed_reject = true;
+                        VerifierVerdict::Reject(f)
+                    }
                 },
-                rejected @ VerifierVerdict::Reject(_) => rejected,
+                VerifierVerdict::Reject(f) => {
+                    behavior_observed_reject = true;
+                    VerifierVerdict::Reject(f)
+                }
             };
             match merged {
                 VerifierVerdict::Accept => break,
@@ -432,81 +651,140 @@ async fn run_repair_loop(
         }
         idx += 1;
     }
-    Ok((translation, total_repair_attempts))
+
+    // Compose per-gate outcomes. If the verifier ever rejected at least
+    // once, we know it is "live" and the resolved success path is a
+    // real `Pass { detail }`. Otherwise we surface the verifier's
+    // `default_outcome()` so a no-op verifier (e.g. [`AcceptAll`]) is
+    // recorded as `Skip` rather than masquerading as `Pass`.
+    let behavior_outcome = if behavior_observed_reject {
+        GateOutcome::Pass {
+            detail: behavior_pass_detail(library, total_repair_attempts),
+        }
+    } else {
+        verifier.default_outcome()
+    };
+    let perf_outcome = if perf_observed_reject {
+        GateOutcome::Pass {
+            detail: perf_pass_detail(library),
+        }
+    } else {
+        perf_verifier.default_outcome()
+    };
+
+    Ok(RepairLoopResult {
+        translation,
+        repair_attempts: total_repair_attempts,
+        behavior_outcome,
+        perf_outcome,
+    })
 }
 
-fn l2_build_summary(library: &PyLibrary) -> String {
-    // The build gate is library-agnostic — every translation path runs
-    // `cargo build --release` and the same zero-warnings policy. We
-    // keep this function for symmetry with the other gate summaries
-    // (per ADR-0008 §"Pipeline state machine").
+/// Default L2.build verdict for a library.
+///
+/// Pinned by ADR-0040 §"Honest gate verdicts": the build gate is
+/// L2-external (real `cargo build` runs against the *generated* crate
+/// at the workspace level, not from inside `translate()`). The
+/// pipeline therefore records the gate as `Skip` carrying the rationale
+/// — never a hardcoded `"pass"`. Real-LLM mode integration tests can
+/// inject their own outcome via a future `BuildVerifier` hook (queued
+/// for ADR-0040.1).
+fn default_l2_build_outcome(library: &PyLibrary) -> GateOutcome {
     let _ = library;
-    "pass (cargo build --release zero warnings)".into()
+    GateOutcome::Skip {
+        reason:
+            "L2.build runs at the workspace `cargo build --release` step, not inside translate() \
+             — see ADR-0040 §\"Honest gate verdicts\""
+                .into(),
+    }
 }
 
-fn l2_behavior_summary(library: &PyLibrary, repair_attempts: u32) -> String {
+/// Default L3.pyo3-wrapper verdict for a library. Today this is
+/// recorded as `Skip` because the PyO3 build path runs out-of-pipeline
+/// (per ADR-0011 the workspace `cargo test --features pyo3` is the
+/// authoritative gate, not anything `translate()` invokes). Same
+/// honesty contract as `default_l2_build_outcome`.
+fn default_l3_pyo3_outcome(library: &PyLibrary) -> GateOutcome {
+    let _ = library;
+    GateOutcome::Skip {
+        reason:
+            "L3.pyo3-wrapper runs at the workspace `cargo test --features pyo3` step per ADR-0011 \
+             — translate() does not invoke PyO3 builds"
+                .into(),
+    }
+}
+
+/// Default L3.downstream-dependents verdict for a library. The L3
+/// driver runs subprocess Python harnesses (per ADR-0009) which is
+/// the authoritative gate; `translate()` records the dependents
+/// section but cannot itself drive the L3 driver synchronously
+/// without dragging the test runtime into the translator. Same
+/// Skip-by-default contract as the build / pyo3 gates.
+fn default_l3_downstream_outcome(library: &PyLibrary) -> GateOutcome {
+    let _ = library;
+    GateOutcome::Skip {
+        reason:
+            "L3.downstream-dependents runs out-of-pipeline (per-library workspace test target) \
+             — see ADR-0009"
+                .into(),
+    }
+}
+
+/// Per-library detail string for `behavior` Pass outcomes. Names the
+/// test targets the verifier exercised so the manifest carries
+/// observable evidence, not a literal.
+fn behavior_pass_detail(library: &str, repair_attempts: u32) -> String {
     let suffix = if repair_attempts > 0 {
         format!(" (after {repair_attempts} repair-loop iterations)")
     } else {
         String::new()
     };
-    match library.library.as_str() {
-        "tomli" => {
-            format!("pass (tests/tomli_downstream.rs + tests/tomli_fuzz.rs){suffix}")
+    match library {
+        "tomli" => format!("tests/tomli_downstream.rs + tests/tomli_fuzz.rs{suffix}"),
+        "dateutil" => format!("tests/dateutil_downstream.rs + tests/dateutil_fuzz.rs{suffix}"),
+        "msgpack" => {
+            format!("tests/msgpack_downstream.rs + tests/msgpack_fuzz.rs bytes-identical{suffix}")
         }
+        "numpy" => format!(
+            "tests/numpy_differential.rs bytes-identical for int/bool, rtol=1e-12 for float; \
+             tests/numpy_fuzz.rs 4200 panic-free{suffix}"
+        ),
+        _ => format!("verifier accepted{suffix}"),
+    }
+}
+
+/// Per-library detail string for `perf` Pass outcomes.
+fn perf_pass_detail(library: &str) -> String {
+    match library {
         "dateutil" => {
-            format!("pass (tests/dateutil_downstream.rs + tests/dateutil_fuzz.rs){suffix}")
+            "per-library threshold per ADR-0008 §2; report at target/cobrust-bench/dateutil/<commit>/report.json".into()
         }
         "msgpack" => {
-            format!(
-                "pass (tests/msgpack_downstream.rs + tests/msgpack_fuzz.rs bytes-identical){suffix}"
-            )
+            "native-ext tier ≥ 0.70× per ADR-0010 §3; report at target/cobrust-bench/msgpack/<commit>/report.json".into()
         }
-        "numpy" => {
-            format!(
-                "pass (tests/numpy_differential.rs bytes-identical for int/bool, rtol=1e-12 for float; tests/numpy_fuzz.rs 4200 panic-free){suffix}"
-            )
-        }
-        _ => format!("pass{suffix}"),
-    }
-}
-
-fn l2_perf_summary(library: &PyLibrary) -> String {
-    match library.library.as_str() {
-        "tomli" => "skipped (M4 records, M5 gates per ADR-0007); see target/cobrust-bench/tomli/<commit>/report.json".into(),
-        "dateutil" => "pass (per-library threshold per ADR-0008 §2; report at target/cobrust-bench/dateutil/<commit>/report.json)".into(),
-        "msgpack" => "pass (native-ext tier ≥ 0.70× per ADR-0010 §3; report at target/cobrust-bench/msgpack/<commit>/report.json; perf-gate fail-on-miss wired per ADR-0010 §4)".into(),
-        "numpy" => "skipped (M7.0 records, M7.1+ gates per ADR-0013; numerical tier 0.5x floor per ADR-0010 §3)".into(),
-        _ => "skipped".into(),
-    }
-}
-
-fn l3_pyo3_summary(library: &PyLibrary) -> String {
-    match library.library.as_str() {
-        "tomli" => "pass (tests/tomli_downstream.rs subprocess CPython oracle)".into(),
-        "dateutil" => "pass (tests/dateutil_downstream.rs subprocess CPython oracle); --features pyo3 build path per ADR-0011".into(),
-        "msgpack" => "pass (tests/msgpack_downstream.rs subprocess CPython oracle); --features pyo3 build path per ADR-0011".into(),
-        "numpy" => "pass (tests/numpy_differential.rs subprocess CPython numpy oracle); --features pyo3 build path per ADR-0011".into(),
-        _ => "pass".into(),
-    }
-}
-
-fn l3_downstream_summary(library: &PyLibrary) -> String {
-    match library.library.as_str() {
-        "tomli" => "deferred to M5 per ADR-0007".into(),
-        "dateutil" => {
-            // M6 widening per ADR-0010 §5: 4 covered + 1 skipped (pendulum tz).
-            "pass 4/5 (croniter, freezegun, pandas, sqlalchemy); skipped 1/5 (pendulum tz out of scope per ADR-0010 §5)".into()
-        }
-        "msgpack" => {
-            "pass 2/3 (redis-py, msgpack-numpy); deferred 1/3 (pyspark) to M7 per ADR-0010".into()
-        }
-        "numpy" => "deferred to M7.6+ (numpy ecosystem too large for M7.0 per ADR-0013)".into(),
-        _ => "n/a".into(),
+        _ => "perf verifier accepted".into(),
     }
 }
 
 /// Build a router with either a synthetic provider or real adapters.
+///
+/// Pinned by ADR-0040 §"Real-LLM mode wiring" (B1 from claude-desktop
+/// integrated handoff §1):
+///
+/// - **Synthetic mode (`cfg.synthetic_only = true`)**: registers one
+///   [`SyntheticProvider`] for every declared provider key in
+///   `cfg.router.providers`, all backed by the canned-response table
+///   at `library.canned_responses`. `canned_responses = None` returns
+///   `Err(TranslatorError::Config)` instead of panicking.
+/// - **Real-LLM mode (`cfg.synthetic_only = false`)**: walks
+///   `cfg.router.providers` and registers a real adapter for each
+///   declared provider — [`OpenAiProvider`] for `kind = "openai"` (also
+///   covers DeepSeek, vLLM, OpenRouter, etc. via the OpenAI-compatible
+///   shape — see ADR-0004), [`AnthropicProvider`] for
+///   `kind = "anthropic"`. The API key is read from each provider's
+///   `api_key_env`. Missing or empty env vars surface as
+///   `TranslatorError::Config` with the env-var name (no panic, no
+///   silent fallback to synthetic).
 async fn build_router(
     cfg: &TranslatorConfig,
     library: &PyLibrary,
@@ -526,11 +804,65 @@ async fn build_router(
             .await
             .map_err(TranslatorError::Router)
     } else {
-        // Real-LLM mode. Wired at M5+ when at least one real provider has a key.
-        Err(TranslatorError::Config(
-            "real-LLM mode is not wired in M4 (deferred to M5 per ADR-0007)".into(),
-        ))
+        build_real_llm_router(cfg).await
     }
+}
+
+/// Real-LLM mode wiring. Pinned by ADR-0040 §"Real-LLM mode wiring"
+/// (B1). Walks `cfg.router.providers`, instantiates the matching
+/// adapter for each provider's `kind`, and registers it under the
+/// declared provider key. The router's routing table validation then
+/// catches any provider-key references that don't have a matching
+/// declaration (defence in depth).
+async fn build_real_llm_router(cfg: &TranslatorConfig) -> Result<Router, TranslatorError> {
+    if cfg.router.providers.is_empty() {
+        return Err(TranslatorError::Config(
+            "real-LLM mode requires at least one [providers.<name>] entry in cobrust.toml".into(),
+        ));
+    }
+    let mut builder = RouterBuilder::new();
+    for (name, provider_cfg) in &cfg.router.providers {
+        let api_key = std::env::var(&provider_cfg.api_key_env)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                TranslatorError::Config(format!(
+                    "real-LLM mode: provider {name:?} requires non-empty env var {:?}",
+                    provider_cfg.api_key_env
+                ))
+            })?;
+        let provider: Arc<dyn LlmProvider> = match provider_cfg.kind {
+            ProviderKind::Openai => Arc::new(
+                OpenAiProvider::new(name.clone(), provider_cfg.base_url.clone(), api_key).map_err(
+                    |e| {
+                        TranslatorError::Config(format!(
+                            "OpenAiProvider for {name:?} failed to construct: {e}"
+                        ))
+                    },
+                )?,
+            ),
+            ProviderKind::Anthropic => Arc::new(
+                AnthropicProvider::new(name.clone(), provider_cfg.base_url.clone(), api_key)
+                    .map_err(|e| {
+                        TranslatorError::Config(format!(
+                            "AnthropicProvider for {name:?} failed to construct: {e}"
+                        ))
+                    })?,
+            ),
+            ProviderKind::Synthetic => {
+                return Err(TranslatorError::Config(format!(
+                    "real-LLM mode: provider {name:?} declares kind=synthetic; \
+                     synthetic providers belong in synthetic_only=true mode \
+                     (no wire protocol matches `synthetic`)"
+                )));
+            }
+        };
+        builder = builder.register_provider(name.clone(), provider);
+    }
+    builder
+        .build(&cfg.router)
+        .await
+        .map_err(TranslatorError::Router)
 }
 
 fn collect_models_used(t: &TranslationOutput) -> Vec<String> {

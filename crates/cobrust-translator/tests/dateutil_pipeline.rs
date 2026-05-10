@@ -151,12 +151,22 @@ async fn dateutil_pipeline_repair_loop_recovers_on_attempt_2() {
     );
     assert_eq!(result.manifest.gates.dependents.skipped, vec!["pendulum"]);
     assert_eq!(result.manifest.gates.dependents.deferred.len(), 0);
+    // Per ADR-0040 §"Honest gate verdicts": l3_downstream_dependents is
+    // a Skip verdict (no in-pipeline driver). The structured covered/
+    // skipped split above is the authoritative source of truth.
+    assert!(
+        result.gate_outcomes.l3_downstream_dependents.is_skip(),
+        "l3_downstream_dependents must be a Skip verdict; got {:?}",
+        result.gate_outcomes.l3_downstream_dependents,
+    );
     assert!(
         result
             .manifest
             .gates
             .l3_downstream_dependents
-            .contains("ADR-0010")
+            .starts_with("skipped"),
+        "manifest l3_downstream_dependents must reflect the Skip verdict; got {:?}",
+        result.manifest.gates.l3_downstream_dependents,
     );
 }
 

@@ -285,10 +285,63 @@ COBRUST_REGENERATE_TOMLI=1 cargo test \
 - `translate(library: &PyLibrary, cfg: &TranslatorConfig) -> Result<TranslatedCrate, TranslatorError>` — 异步入口
 - `PyLibrary` — 一个待翻译库的描述（路径、版本、seeds）
 - `TranslatorConfig` — 运行时旋钮：router、out_dir、oracle、escalation_threshold、synthetic_only 标志
-- `TranslatedCrate` — 输出：`{ manifest: ProvenanceManifest, crate_dir, pyo3_wrapper_dir, functions }`
+- `TranslatedCrate` — 输出：`{ manifest: ProvenanceManifest, crate_dir, pyo3_wrapper_dir, functions, repair_attempts, gate_outcomes: GateOutcomes }`
+- `GateOutcome { Pass | Fail | Skip }` — ADR-0040 结构化逐 gate 判决；`as_manifest_str()` 产出三种不同前缀（`pass (...)` / `fail: ...` / `skipped (...)`），调用方读 typed 视图，不解析 manifest 字符串
+- `GateOutcomes` — 五个 L2/L3 gate 的聚合；`worst()` 返回 Fail > Skip > Pass
 - `TranslatorError` — 错误分类：`SpecExtraction`、`Translation { function, message }`、`BuildGate`、`BehaviorGate`、`DownstreamGate`、`SyntheticMiss { task, function }`、`Io`、`Router`、`Manifest`、`Config`、`Decode`
 - `SyntheticProvider` — `LlmProvider` 实现，以 `(task, function, source_sha16)` 为 key 服务 canned TOML 响应
 - `deterministic_id(source_sha256_hex, toolchain, router_decision_ids)` — `blake3:<hex>` 复现 token
+
+### 真实 LLM 模式接线（ADR-0040）
+
+`build_router()` 在 `cfg.synthetic_only = false` 时会实例化真实
+adapter：
+
+- `kind = "openai"`（按 ADR-0004 §"Provider registry" 也覆盖
+  DeepSeek / vLLM / OpenRouter / Together） → `OpenAiProvider`。
+- `kind = "anthropic"` → `AnthropicProvider`。
+- 真实模式中 `kind = "synthetic"` → `TranslatorError::Config`
+  （按 ADR-0031，synthetic provider 仅用于进程内 mock）。
+- 任一已声明 provider 缺失或为空的 `api_key_env` →
+  `TranslatorError::Config`，错误信息中带上环境变量名。
+
+生产调用方传 `synthetic_only = false` 之前会拿到
+`Err("real-LLM mode is not wired in M4 ...")` 这种 stub；ADR-0040
+把生产路径接通：ADR-0032 / ADR-0036 在流水线外验证过的同一个
+router 现在也服务 `translate()`。
+
+### 诚实的 gate 判决（ADR-0040）
+
+orchestrator 在 manifest 旁返回结构化的 `GateOutcomes` 聚合。每
+个 gate（l2_build / l2_behavior / l2_perf / l3_pyo3_wrapper /
+l3_downstream_dependents）取以下三个不相交变体之一：
+
+- `Pass { detail }` — verifier 接受；`detail` 携带可观测证据（测试
+  目标名 + 修复轮次计数）。
+- `Fail { reason }` — verifier 拒绝；修复循环耗尽
+  `cfg.escalation_threshold` 后会以
+  `TranslatorError::EscalationExceeded` 抛出。
+- `Skip { reason }` — gate 在流水线外运行（例如
+  `cargo build --release` 是 workspace 级 gate，`translate()`
+  不会调用），`reason` 说明*哪个* gate 被外置。
+
+`BehaviorVerifier::default_outcome()` 与
+`PerfVerifier::default_outcome()` 这两个 provided method 控制
+"无 Reject 观测时" 的成功路径判决。活的 verifier 默认 `Pass`；
+no-op 的 `AcceptAll` / `AcceptAllPerf` 覆盖为 `Skip`，避免
+manifest 把未接线的 gate 记成假 Pass。这把宪法 §2.4 的诚实约定
+落实到了 gate 这一层。
+
+```mermaid
+flowchart LR
+    V[Verifier verify()] --> A{verdict?}
+    A -->|Accept| B{有过 Reject 吗?}
+    A -->|Reject| R[修复循环]
+    R --> V
+    B -->|是| P[Pass detail]
+    B -->|否, AcceptAll| S[Skip reason]
+    B -->|否, 活| P
+```
 
 ### 合成 LLM 模式契约
 
