@@ -1,3 +1,8 @@
+# Paste to: Cobrust/.github/workflows/ci.yml
+#
+# Five-gate CI: fmt + clippy + build + test + doc-coverage
+# on macOS arm64 + Linux x86_64.
+
 name: CI
 
 on:
@@ -8,11 +13,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
+  RUSTFLAGS: "-D warnings"
 
 jobs:
   fmt:
-    name: rustfmt
+    name: cargo fmt --check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,8 +28,12 @@ jobs:
       - run: cargo fmt --all -- --check
 
   clippy:
-    name: clippy
-    runs-on: ubuntu-latest
+    name: cargo clippy -D warnings
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -35,8 +44,12 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   build:
-    name: build
-    runs-on: ubuntu-latest
+    name: cargo build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -46,8 +59,12 @@ jobs:
       - run: cargo build --workspace --all-targets --locked
 
   test:
-    name: test
-    runs-on: ubuntu-latest
+    name: cargo test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -55,10 +72,40 @@ jobs:
           toolchain: 1.94.1
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --locked
+        # Note: per `findings/m9-cross-arch-9ff481c-regression.md`,
+        # Linux x86_64 is the gold-standard cross-arch validator;
+        # macOS arm64 was the dev host. As of 2026-05-09 both archs
+        # pass cargo test --workspace --locked at HEAD 1419d21.
+      - name: Run example binaries (smoke)
+        run: |
+          cargo run --release -p cobrust-cli -- build examples/hello.cb
+          ./target/cobrust/hello | grep -q "hello, world"
+          cargo run --release -p cobrust-cli -- build examples/fizzbuzz.cb
+          ./target/cobrust/fizzbuzz | head -15 | tail -1 | grep -q "FizzBuzz"
+          cargo run --release -p cobrust-cli -- build examples/fib.cb
+          ./target/cobrust/fib | tail -1 | grep -q "55"
 
   doc-coverage:
-    name: doc-coverage
+    name: scripts/doc-coverage.sh
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/doc-coverage.sh
+
+  # Optional: real-LLM smoke (gated on a secret being present)
+  real-llm-smoke:
+    name: real-LLM smoke (gated)
+    runs-on: ubuntu-latest
+    if: ${{ secrets.USER_CODEX_API_KEY != '' }}
+    needs: [fmt, clippy, build, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+      - uses: Swatinem/rust-cache@v2
+      - env:
+          USER_CODEX_API_KEY: ${{ secrets.USER_CODEX_API_KEY }}
+        run: |
+          cargo test --locked -p cobrust-llm-router \
+            --test real_llm_smoke -- --nocapture

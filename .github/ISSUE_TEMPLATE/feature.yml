@@ -1,0 +1,66 @@
+# Paste to: Cobrust/.github/ISSUE_TEMPLATE/feature.yml
+
+name: Feature request / RFC
+description: Propose a new feature or behaviour change
+title: "[Feature]: "
+labels: ["feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For larger design discussions, consider opening a [Discussion](https://github.com/cobrust/cobrust/discussions) first.
+        For decisions affecting >1 file, an ADR is typically required — we'll guide.
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation — what problem does this solve?
+      placeholder: |
+        Currently I can't ... because Cobrust does ...
+        This makes it impossible to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      placeholder: |
+        Add a builtin `foo()` that does ...
+        Or change behaviour of `bar` to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: I tried X, but it has Y problem...
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Estimated scope
+      placeholder: |
+        ~ 200 lines change in `crates/cobrust-foo/src/bar.rs` + new tests
+        OR
+        Touches 4+ crates + needs ADR
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: How urgent for you?
+      options:
+        - "Just an idea — happy if it lands eventually"
+        - "I'm using a workaround that's annoying"
+        - "Blocking my use case completely"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow the [Contributor Covenant Code of Conduct](https://github.com/cobrust/cobrust/blob/main/CODE_OF_CONDUCT.md).
+          required: true

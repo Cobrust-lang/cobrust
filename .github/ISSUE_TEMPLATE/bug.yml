@@ -1,0 +1,92 @@
+# Paste to: Cobrust/.github/ISSUE_TEMPLATE/bug.yml
+
+name: Bug report
+description: Cobrust did something wrong (compiler crash, wrong output, build error, etc.)
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing! A good bug report has a **minimum reproducer** — the smallest
+        `.cb` file (or shell command) that shows the problem. We close vague reports
+        rather quickly; a 30-line repro is gold.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What did Cobrust do that you didn't expect?
+      placeholder: |
+        Cobrust built my program but the output was wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimum reproducer
+      description: Smallest possible `.cb` (or shell command sequence). Inline the source.
+      placeholder: |
+        ```cb
+        fn main() -> i64:
+            let x: i64 = 6
+            while x % 2 == 0:
+                x = x / 2
+            print_int(x)
+            return 0
+        ```
+        Build: `cobrust build src/main.cb`
+        Run: `./target/cobrust/main`
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      placeholder: Should print "3" (6 → 3 after one /2 iteration).
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      placeholder: Prints "6" instead — the while body is never entered.
+    validations:
+      required: true
+
+  - type: input
+    id: cobrust-version
+    attributes:
+      label: Cobrust version
+      placeholder: "0.1.0-beta (run `cobrust --version`)"
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "macOS 14.5 arm64 / Ubuntu 22.04 x86_64 / etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: report-bug-output
+    attributes:
+      label: "`cobrust report-bug` output (if available)"
+      description: Run `cobrust report-bug` to collect environment + last MIR. Paste here.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow the [Contributor Covenant Code of Conduct](https://github.com/cobrust/cobrust/blob/main/CODE_OF_CONDUCT.md).
+          required: true
