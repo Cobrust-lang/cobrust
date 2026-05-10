@@ -1212,7 +1212,7 @@ endpoint reachable will produce the gated outcome.
 The audit harness is correct (cache discipline verified, provider
 wired). The endpoint or environment is currently unavailable. CTO
 should retry with `https_proxy=http://127.0.0.1:7897` set, or via the
-<internal Linux x86_64 validator host> per `reference_x86_workstation.md`.
+<internal Linux x86_64 validator host> per internal validator notes (out-of-repo).
 
 ## Cross-references
 

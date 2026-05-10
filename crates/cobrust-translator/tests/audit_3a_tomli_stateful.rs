@@ -1122,8 +1122,8 @@ endpoint reachable will produce the gated outcome.
 
 Harness correct (cache discipline verified, provider wired, production
 builder used). Endpoint unavailable. CTO retries with
-`https_proxy=http://127.0.0.1:7897` set, or via <internal Linux x86_64 validator host> per
-`reference_x86_workstation.md`.
+`https_proxy=http://127.0.0.1:7897` set, or via <internal Linux x86_64
+validator host> per internal validator notes (out-of-repo).
 
 ## Cross-references
 
