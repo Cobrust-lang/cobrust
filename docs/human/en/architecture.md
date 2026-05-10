@@ -157,6 +157,31 @@ maps every `DefId` to a concrete `Ty`:
   [ADR-0006](../../agent/adr/0006-type-system.md) §"Soundness proof
   obligation list"; the proof itself is deferred to a future
   finding per constitution §5.2.
+- **24 Python semantics compliance cases**
+  (`crates/cobrust-types/tests/python_semantics_corpus.rs`). One
+  test per drift fix in
+  [ADR-0041](../../agent/adr/0041-python-semantics-compliance-binding.md)
+  (H1-H8, three cases per `H`).
+
+### Python semantics compliance (ADR-0041)
+
+External audit (claude-desktop integrated handoff 2026-05-11 §2)
+identified eight constitution §2.2 promises the source did not
+honour. This PR closes them in one batch:
+
+| Drift | Symptom (pre-fix) | Fix site |
+|---|---|---|
+| H1 | `(-7) % 3` evaluated to `-1`, not Python's `2` | codegen `cranelift_backend.rs` — `srem` plus floor adjust |
+| H2 | `a and b` always evaluated `b` (no short-circuit) | mir `lower_short_circuit_bool` — explicit CFG |
+| H3 | `**` / `@` / `in` / `not in` silently returned `iconst(I64, 0)` | codegen now returns `CodegenError::UnimplementedBinOp` |
+| H4 | Lexer emitted walrus token; parser zero-consumed | parser raises `DroppedByConstitution(walrus :=)` |
+| H5 | Closure capture analysis returned an empty `Vec` | hir `collect_captures_*` walks body + dedups |
+| H6 | Comprehensions lowered to an empty-list placeholder | mir `lower_comprehension` real iterator-protocol + append |
+| H7 | `class Foo(A, B):` silently accepted | parser rejects both `Comma` and `Tuple` expression base shapes |
+| H8 | Tuple index always returned `items.first()` | types `synth_expr` constant-folds literal-int indices |
+
+Each H ships ≥ 3 corpus cases. The full PR gates on
+`cargo test -p cobrust-types --test python_semantics_corpus`.
 
 
 ## AI translation subsystem: four-stage closed loop

@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:types
 crate: cobrust-types
-last_verified_commit: afe26db
-dependencies: [mod:hir, adr:0006]
+last_verified_commit: e85630f
+dependencies: [mod:hir, adr:0006, adr:0041]
 ---
 
 # Module: types
@@ -101,6 +101,27 @@ bidirectional".
 - `BreakOutsideLoop` / `ContinueOutsideLoop` / `ReturnOutsideFn` /
   `YieldOutsideFn`
 - `Multiple` (composite container for multi-error reporting)
+
+## ADR-0041 §H8 — tuple Index returns indexed element type
+
+Pre-fix: `(Ty::Tuple(items), IndexKind::Expr(_))` returned
+`items.first()` regardless of the index expression. This silently
+typed every tuple index as the first-element type — `t[1]` on
+`Tuple(i64, str, bool)` synthesised `Ty::Int` not `Ty::Str`.
+
+Post-fix: when the index expression is a literal int (with optional
+unary minus), constant-fold via `literal_int_value` +
+`resolve_tuple_index`. Negative indices fold from the right (Python
+semantics: `t[-1]` is the last element). Out-of-range indices
+synthesise `Ty::Never` (defense-in-depth — runtime would panic). For
+non-constant indices (e.g. dynamic `t[i]`), the conservative fallback
+remains `items.first()` — row polymorphism (M3+) widens this to a
+union.
+
+Same ADR landed `Tuple[A, B, C]` annotation handling at
+`lower_generic_type`; pre-fix this fell through to a fresh inference
+variable which surfaced as `AmbiguousType` whenever the tuple
+appeared in a return-type annotation.
 
 ## Invariants (M2)
 

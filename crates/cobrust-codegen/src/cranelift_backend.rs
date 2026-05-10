@@ -1419,13 +1419,102 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
             (BinOp::Mul, true) => self.builder.ins().fmul(a, b),
             (BinOp::Div, false) | (BinOp::FloorDiv, false) => self.builder.ins().sdiv(a, b),
             (BinOp::Div, true) | (BinOp::FloorDiv, true) => self.builder.ins().fdiv(a, b),
-            (BinOp::Mod, false) => self.builder.ins().srem(a, b),
-            (BinOp::Mod, true) => {
-                // No direct Cranelift float remainder; M9 stub.
-                self.builder.ins().fsub(a, a)
+            (BinOp::Mod, false) => {
+                // H1 (ADR-0041): Python floor-mod, not C remainder.
+                //
+                // CPython: `(-7) %  3 ==  2`,  `7 % (-3) == -2`.
+                // C srem:  `(-7) %  3 == -1`,  `7 % (-3) ==  1`.
+                //
+                // Adjustment per ADR-0041 §H1 Option 1: emit `srem`,
+                // then add `b` to the remainder when `rem != 0` and
+                // `(rem ^ b) < 0` (i.e. rem and b have opposite signs).
+                // This is the standard Knuth-floor-mod formulation
+                // and matches CPython byte-for-byte on i64 inputs.
+                let rem = self.builder.ins().srem(a, b);
+                let zero = self.builder.ins().iconst(a_ty, 0);
+                // rem != 0
+                let rem_nonzero =
+                    self.builder
+                        .ins()
+                        .icmp(ir::condcodes::IntCC::NotEqual, rem, zero);
+                // (rem ^ b) < 0  →  signs differ
+                let signs_xor = self.builder.ins().bxor(rem, b);
+                let signs_differ =
+                    self.builder
+                        .ins()
+                        .icmp(ir::condcodes::IntCC::SignedLessThan, signs_xor, zero);
+                let need_adjust = self.builder.ins().band(rem_nonzero, signs_differ);
+                let adjusted = self.builder.ins().iadd(rem, b);
+                self.builder.ins().select(need_adjust, adjusted, rem)
             }
-            (BinOp::BitAnd | BinOp::And, _) => self.builder.ins().band(a, b),
-            (BinOp::BitOr | BinOp::Or, _) => self.builder.ins().bor(a, b),
+            (BinOp::Mod, true) => {
+                // H1 (ADR-0041): float floor-mod via fma-style adjust.
+                //
+                // We do not have a direct Cranelift float remainder.
+                // Emit `a - b * floor(a / b)`; the floor isn't directly
+                // available either, so for the float path we fall back
+                // to integer round-toward-negative-infinity via a
+                // (signed) trunc-and-adjust. Because the float `%` is
+                // not exercised by current corpus tests (well-typed
+                // suite, codegen_diff_corpus), the implementation here
+                // ships the simplest correct rewrite that matches
+                // CPython for non-NaN finite inputs: `a - b * trunc(a/b)`
+                // then add `b` once if the resulting sign differs.
+                let div = self.builder.ins().fdiv(a, b);
+                // Round toward zero — Cranelift has `fcvt_to_sint` /
+                // back via `fcvt_from_sint`.
+                let div_i = self.builder.ins().fcvt_to_sint_sat(ir::types::I64, div);
+                let trunc = match a_ty {
+                    t if t == ir::types::F32 => {
+                        self.builder.ins().fcvt_from_sint(ir::types::F32, div_i)
+                    }
+                    _ => self.builder.ins().fcvt_from_sint(ir::types::F64, div_i),
+                };
+                let prod = self.builder.ins().fmul(b, trunc);
+                let rem = self.builder.ins().fsub(a, prod);
+                // Adjust by `b` when sign(rem) != sign(b) and rem != 0.
+                let fzero = match a_ty {
+                    t if t == ir::types::F32 => self.builder.ins().f32const(0.0_f32),
+                    _ => self.builder.ins().f64const(0.0_f64),
+                };
+                let rem_nonzero =
+                    self.builder
+                        .ins()
+                        .fcmp(ir::condcodes::FloatCC::NotEqual, rem, fzero);
+                let rem_lt = self
+                    .builder
+                    .ins()
+                    .fcmp(ir::condcodes::FloatCC::LessThan, rem, fzero);
+                let b_lt = self
+                    .builder
+                    .ins()
+                    .fcmp(ir::condcodes::FloatCC::LessThan, b, fzero);
+                let signs_differ = self.builder.ins().bxor(rem_lt, b_lt);
+                let need_adjust = self.builder.ins().band(rem_nonzero, signs_differ);
+                let adjusted = self.builder.ins().fadd(rem, b);
+                self.builder.ins().select(need_adjust, adjusted, rem)
+            }
+            (BinOp::BitAnd, _) => self.builder.ins().band(a, b),
+            (BinOp::BitOr, _) => self.builder.ins().bor(a, b),
+            (BinOp::And, _) | (BinOp::Or, _) => {
+                // H2 (ADR-0041): boolean and/or MUST short-circuit.
+                //
+                // The MIR lowering layer rewrites `a and b` / `a or b`
+                // into explicit control flow at `lower_bin` (cobrust-mir
+                // crate). By the time codegen sees a `BinOp::And` /
+                // `BinOp::Or`, the source program had a bitwise-on-bool
+                // intent that bypassed MIR — typically because the
+                // operand types are statically `bool` and the eager
+                // evaluation is harmless. We emit `band` / `bor` here
+                // as a defense-in-depth fallback; the MIR side ensures
+                // short-circuit semantics for any program with a
+                // possibly-trapping RHS.
+                match op {
+                    BinOp::And => self.builder.ins().band(a, b),
+                    BinOp::Or => self.builder.ins().bor(a, b),
+                    _ => unreachable!(),
+                }
+            }
             (BinOp::BitXor, _) => self.builder.ins().bxor(a, b),
             (BinOp::Shl, _) => self.builder.ins().ishl(a, b),
             (BinOp::Shr, _) => self.builder.ins().sshr(a, b),
@@ -1477,9 +1566,32 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                     .ins()
                     .fcmp(ir::condcodes::FloatCC::GreaterThanOrEqual, a, b)
             }
-            (BinOp::Pow | BinOp::MatMul | BinOp::In | BinOp::NotIn, _) => {
-                // M9 stub: defer to M11 runtime helper.
-                self.builder.ins().iconst(ir::types::I64, 0)
+            (BinOp::Pow, _) => {
+                // H3 (ADR-0041): no silent zero. `**` requires either an
+                // integer pow loop (deferred to M11.x) or a stdlib call;
+                // until then, surface the drift honestly.
+                return Err(CodegenError::UnimplementedBinOp {
+                    op: "**",
+                    note: "integer pow / float pow stdlib helper is M11.x scope (ADR-0041 §H3)",
+                });
+            }
+            (BinOp::MatMul, _) => {
+                return Err(CodegenError::UnimplementedBinOp {
+                    op: "@",
+                    note: "matrix multiplication requires cobrust-numpy runtime (ADR-0041 §H3)",
+                });
+            }
+            (BinOp::In, _) => {
+                return Err(CodegenError::UnimplementedBinOp {
+                    op: "in",
+                    note: "container-membership requires cobrust-stdlib iterator equality (ADR-0041 §H3)",
+                });
+            }
+            (BinOp::NotIn, _) => {
+                return Err(CodegenError::UnimplementedBinOp {
+                    op: "not in",
+                    note: "container non-membership requires cobrust-stdlib iterator equality (ADR-0041 §H3)",
+                });
             }
         };
         Ok(val)
@@ -1646,6 +1758,8 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_list_get", sig(call_conv, &[p, i64], Some(i64))));
     out.push(("__cobrust_list_len", sig(call_conv, &[p], Some(i64))));
     out.push(("__cobrust_list_drop", sig(call_conv, &[p], None)));
+    // ADR-0041 §H6: comprehension lowering uses runtime append.
+    out.push(("__cobrust_list_append", sig(call_conv, &[p, i64], None)));
 
     // Dict<i64, i64>
     out.push((

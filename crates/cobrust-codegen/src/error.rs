@@ -59,6 +59,18 @@ pub enum CodegenError {
     /// Internal codegen invariant violated. Bug.
     #[error("internal codegen error: {0}")]
     Internal(String),
+
+    /// A binary operator reached codegen without a lowering rule. Per
+    /// ADR-0041 §H3, `**` / `@` / `in` / `not in` surface this error
+    /// honestly rather than silently emitting `iconst(I64, 0)`. The
+    /// `note` field carries the constitution-tier rationale.
+    #[error("unimplemented binary operator `{op}`: {note}")]
+    UnimplementedBinOp {
+        /// The operator's Python textual form (`**`, `@`, `in`, `not in`).
+        op: &'static str,
+        /// Rationale: which milestone / stdlib piece is required.
+        note: &'static str,
+    },
 }
 
 impl From<std::io::Error> for CodegenError {

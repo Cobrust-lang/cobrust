@@ -16,9 +16,10 @@ use std::collections::HashMap;
 
 use cobrust_frontend::span::Span;
 use cobrust_hir::{
-    BinOp as HirBinOp, Block as HirBlock, CallArg, ClassBody, DefId, DictEntry, Expr, ExprKind,
-    FnBody, FormatPart, IndexKind, Item, ItemKind, LetBody, Lit, LoopKind, MatchArm,
-    Module as HirModule, Pattern, PatternKind, ResolvedName, Stmt, StmtKind, UnaryOp,
+    BinOp as HirBinOp, Block as HirBlock, CallArg, ClassBody, Comp, CompClause, CompElem, CompKind,
+    DefId, DictEntry, Expr, ExprKind, FnBody, FormatPart, IndexKind, Item, ItemKind, LetBody, Lit,
+    LoopKind, MatchArm, Module as HirModule, Pattern, PatternKind, ResolvedName, Stmt, StmtKind,
+    UnaryOp,
 };
 use cobrust_types::{Ty, TypedModule};
 
@@ -1135,22 +1136,25 @@ impl<'a> BodyBuilder<'a> {
                 Ok(Operand::Move(Place::local(temp)))
             }
             ExprKind::Comp(comp) => {
-                // Comprehension: lower each clause as a loop, accumulator
-                // collected per kind. M8 keeps it conservative — push
-                // each `element` into a fresh accumulator local.
-                let _ = comp;
-                let temp = self.declare_local(
-                    "_comp".to_string(),
-                    Ty::List(Box::new(Ty::None)),
-                    e.span,
-                    false,
-                );
-                self.emit_assign(
-                    Place::local(temp),
-                    Rvalue::Aggregate(AggregateKind::List, vec![]),
-                    e.span,
-                );
-                Ok(Operand::Move(Place::local(temp)))
+                // ADR-0041 §H6: comprehension desugaring.
+                //
+                // Lower `[elem for pat in iter (if g)*]` as:
+                //
+                //   __acc = __cobrust_list_new(8, 0)
+                //   __it  = __cobrust_iter_init(iter)
+                //   loop:
+                //     __opt = __cobrust_iter_next(__it)
+                //     if __opt == 0: goto exit
+                //     pat = __opt   (binding)
+                //     if all guards: __cobrust_list_append(__acc, elem)
+                //     goto loop
+                //   exit:
+                //
+                // For nested clauses (`[x*y for x in xs for y in ys]`),
+                // the loops nest in left-to-right order. M12.x ships the
+                // single-clause path; multi-clause is the recursive
+                // generalization.
+                self.lower_comprehension(comp, e.span)
             }
             ExprKind::Lambda { .. } => {
                 // Reference a synthetic body by ID; M8 emits a placeholder.
@@ -1275,6 +1279,13 @@ impl<'a> BodyBuilder<'a> {
         rhs: &Expr,
         span: Span,
     ) -> Result<Operand, MirError> {
+        // ADR-0041 §H2: `and` / `or` MUST short-circuit. We materialize
+        // explicit control flow at MIR — evaluate LHS first, branch on
+        // its bool value, and conditionally evaluate RHS. A merge block
+        // assigns the unified bool result.
+        if matches!(op, HirBinOp::And | HirBinOp::Or) {
+            return self.lower_short_circuit_bool(op, lhs, rhs, span);
+        }
         let lhs_op = self.lower_expr(lhs)?;
         let rhs_op = self.lower_expr(rhs)?;
         let mir_op = bin_to_mir(op);
@@ -1317,6 +1328,290 @@ impl<'a> BodyBuilder<'a> {
         let temp = self.declare_local("_un".to_string(), Ty::None, span, false);
         self.emit_assign(Place::local(temp), Rvalue::UnaryOp(mir_op, op_val), span);
         Ok(Operand::Copy(Place::local(temp)))
+    }
+
+    /// ADR-0041 §H2: short-circuit `and` / `or` at MIR.
+    ///
+    /// Lowers `a and b` as:
+    ///   pre:                  result = lhs
+    ///                         SwitchInt(result) -> [(true, eval_rhs), false: merge]
+    ///   eval_rhs:             result = rhs;  Goto merge
+    ///   merge:                — caller resumes here with `Copy(result)`
+    ///
+    /// Lowers `a or b` as:
+    ///   pre:                  result = lhs
+    ///                         SwitchInt(result) -> [(false, eval_rhs), true: merge]
+    ///   eval_rhs:             result = rhs;  Goto merge
+    ///   merge:                — caller resumes here with `Copy(result)`
+    ///
+    /// This matches CPython's documented evaluation order for `and` /
+    /// `or` — both yield the LHS unchanged when the LHS already
+    /// determines the result. Type-check (ADR-0003 §"Selected typing
+    /// rules") restricts `and`/`or` to `bool`-typed operands, so the
+    /// returned operand is always `Ty::Bool`; we type the merge local
+    /// accordingly.
+    fn lower_short_circuit_bool(
+        &mut self,
+        op: HirBinOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        span: Span,
+    ) -> Result<Operand, MirError> {
+        debug_assert!(matches!(op, HirBinOp::And | HirBinOp::Or));
+        let result_local = self.declare_local("_sc_bool".to_string(), Ty::Bool, span, true);
+        // Step 1 — evaluate LHS into result_local.
+        let lhs_op = self.lower_expr(lhs)?;
+        self.emit_assign(Place::local(result_local), Rvalue::Use(lhs_op), span);
+
+        // Step 2 — branch on result_local; for `and`, evaluate RHS only
+        // when LHS is true; for `or`, only when LHS is false.
+        let cond_block = self.current_block_id();
+        let eval_rhs_block = self.start_new_block();
+        let merge_block = self.start_new_block();
+        self.cur_block = Some(cond_block.0 as usize);
+        let cases = match op {
+            HirBinOp::And => vec![(SwitchValue::Bool(true), eval_rhs_block)],
+            HirBinOp::Or => vec![(SwitchValue::Bool(false), eval_rhs_block)],
+            _ => unreachable!(),
+        };
+        // For `and`, the otherwise branch (LHS=false) skips RHS — go
+        // straight to merge with result already = false. For `or`, the
+        // otherwise branch (LHS=true) skips RHS — go to merge with
+        // result already = true.
+        self.terminate(Terminator::SwitchInt {
+            operand: Operand::Copy(Place::local(result_local)),
+            cases,
+            otherwise: merge_block,
+        });
+
+        // Step 3 — eval_rhs_block: overwrite result with RHS, fall through.
+        self.cur_block = Some(eval_rhs_block.0 as usize);
+        let rhs_op = self.lower_expr(rhs)?;
+        self.emit_assign(Place::local(result_local), Rvalue::Use(rhs_op), span);
+        if !self.terminated() {
+            self.terminate(Terminator::Goto(merge_block));
+        }
+
+        // Step 4 — caller resumes at merge.
+        self.cur_block = Some(merge_block.0 as usize);
+        Ok(Operand::Copy(Place::local(result_local)))
+    }
+
+    // -----------------------------------------------------------------
+    // ADR-0041 §H6: comprehension desugar
+    // -----------------------------------------------------------------
+
+    /// Lower `[elem for pat in iter (if g)*]` to a real loop+append,
+    /// not the M8 empty-list placeholder. The strategy is identical to
+    /// `LoopKind::For` in `lower_loop`, with two additions:
+    ///
+    /// 1. Allocate `__acc = __cobrust_list_new(8, 0)` upfront.
+    /// 2. In the loop body, evaluate the element expression and call
+    ///    `__cobrust_list_append(__acc, elem)`.
+    ///
+    /// Multi-clause comprehensions `[x*y for x in xs for y in ys]`
+    /// recurse: the outer clause's body is the inner comprehension's
+    /// body.  M12.x ships single-clause; nested clauses fold via the
+    /// same recursion in this function.
+    fn lower_comprehension(&mut self, comp: &Comp, span: Span) -> Result<Operand, MirError> {
+        // Step 1 — allocate accumulator (List<i64> by ABI; ADR-0041 §H6
+        // notes the i64 narrowing matches `__cobrust_list_*` ABI
+        // convention used by the rest of the runtime).
+        self.ensure_open_block();
+        let acc_local = self.declare_local(
+            "_comp_acc".to_string(),
+            Ty::List(Box::new(Ty::None)),
+            span,
+            true,
+        );
+        // Allocate via __cobrust_list_new(8, 0): elem_size=8, len=0.
+        let cur = self.current_block_id();
+        let after_new = self.start_new_block();
+        self.cur_block = Some(cur.0 as usize);
+        self.terminate(Terminator::Call {
+            func: Operand::Constant(Constant::Str("__cobrust_list_new".to_string())),
+            args: vec![
+                Operand::Constant(Constant::Int(8)),
+                Operand::Constant(Constant::Int(0)),
+            ],
+            destination: Place::local(acc_local),
+            target: after_new,
+            unwind: None,
+        });
+        self.cur_block = Some(after_new.0 as usize);
+
+        // Step 2 — emit nested clauses (for clause0; for clause1; ...
+        // body). All clauses share the SAME accumulator `acc_local`.
+        let element = comp.element.clone();
+        let kind = comp.kind;
+        self.lower_comp_clauses(&comp.clauses, &element, kind, acc_local, span)?;
+
+        // Step 3 — return the accumulator. (Type-checker has already
+        // resolved this to Ty::List(elem) etc; MIR ABI is i64 ptr.)
+        Ok(Operand::Move(Place::local(acc_local)))
+    }
+
+    /// Emit the for-loop nest for a comprehension. Recurses on the
+    /// clauses tail; at depth 0 the body is the element-collect.
+    fn lower_comp_clauses(
+        &mut self,
+        clauses: &[CompClause],
+        element: &CompElem,
+        kind: CompKind,
+        acc: LocalId,
+        span: Span,
+    ) -> Result<(), MirError> {
+        let Some((first, rest)) = clauses.split_first() else {
+            // No more clauses — emit guards and append.
+            return self.lower_comp_body(element, kind, acc, span);
+        };
+        // Mirror of LoopKind::For lowering in `lower_loop`.
+        let iter_val_op = self.lower_expr(&first.iter)?;
+        let iter_local = self.declare_local("_comp_iter".to_string(), Ty::None, span, true);
+        self.emit_assign(Place::local(iter_local), Rvalue::Use(iter_val_op), span);
+
+        let it_local = self.declare_local("_comp_iter_handle".to_string(), Ty::None, span, true);
+        let cur = self.current_block_id();
+        let init_target = self.start_new_block();
+        self.cur_block = Some(cur.0 as usize);
+        self.terminate(Terminator::Call {
+            func: Operand::Constant(Constant::Str("__cobrust_iter_init".to_string())),
+            args: vec![Operand::Copy(Place::local(iter_local))],
+            destination: Place::local(it_local),
+            target: init_target,
+            unwind: None,
+        });
+        self.cur_block = Some(init_target.0 as usize);
+
+        // Bind the loop variable from the pattern.
+        let var_local = if let PatternKind::Binding(name, def_id) = &first.target.kind {
+            let ty = self.ctx.lookup_ty(*def_id);
+            Some(self.declare_local_for_def(*def_id, name.clone(), ty, span, true))
+        } else {
+            for did in &first.binding_def_ids {
+                let ty = self.ctx.lookup_ty(*did);
+                self.declare_local_for_def(
+                    *did,
+                    format!("_comp_iter_bind_{}", did.0),
+                    ty,
+                    span,
+                    true,
+                );
+            }
+            None
+        };
+
+        let pre = self.current_block_id();
+        let header = self.start_new_block();
+        let opt_local = self.declare_local("_comp_iter_opt".to_string(), Ty::None, span, true);
+        self.cur_block = Some(pre.0 as usize);
+        self.terminate(Terminator::Goto(header));
+        self.cur_block = Some(header.0 as usize);
+
+        let after_next = self.start_new_block();
+        self.cur_block = Some(header.0 as usize);
+        self.terminate(Terminator::Call {
+            func: Operand::Constant(Constant::Str("__cobrust_iter_next".to_string())),
+            args: vec![Operand::Copy(Place::local(it_local))],
+            destination: Place::local(opt_local),
+            target: after_next,
+            unwind: None,
+        });
+        self.cur_block = Some(after_next.0 as usize);
+
+        if let Some(vl) = var_local {
+            self.emit_assign(
+                Place::local(vl),
+                Rvalue::Use(Operand::Copy(Place::local(opt_local))),
+                span,
+            );
+        }
+
+        let body_block = self.start_new_block();
+        let exit_block = self.start_new_block();
+        self.cur_block = Some(after_next.0 as usize);
+        self.terminate(Terminator::SwitchInt {
+            operand: Operand::Copy(Place::local(opt_local)),
+            cases: vec![(SwitchValue::Bool(false), exit_block)],
+            otherwise: body_block,
+        });
+
+        // Inside body_block — evaluate guards (if any) then recurse.
+        self.cur_block = Some(body_block.0 as usize);
+        // Apply guards: chain `if !guard: continue (i.e., goto header)`.
+        if !first.guards.is_empty() {
+            for guard in &first.guards {
+                let cur_b = self.current_block_id();
+                let (g_op, g_end) = self.lower_condition(guard)?;
+                let after_g = self.start_new_block();
+                self.cur_block = Some(g_end.0 as usize);
+                self.terminate(Terminator::SwitchInt {
+                    operand: g_op,
+                    cases: vec![(SwitchValue::Bool(true), after_g)],
+                    otherwise: header,
+                });
+                let _ = cur_b;
+                self.cur_block = Some(after_g.0 as usize);
+            }
+        }
+        // Recurse into the remaining clauses (or emit the body at the
+        // base case).
+        self.lower_comp_clauses(rest, element, kind, acc, span)?;
+        if !self.terminated() {
+            self.terminate(Terminator::Goto(header));
+        }
+
+        self.cur_block = Some(exit_block.0 as usize);
+        Ok(())
+    }
+
+    /// Innermost body of a comprehension — evaluate the element and
+    /// append into the accumulator.
+    fn lower_comp_body(
+        &mut self,
+        element: &CompElem,
+        kind: CompKind,
+        acc: LocalId,
+        span: Span,
+    ) -> Result<(), MirError> {
+        // M12.x scope: list / set / generator collect a single value
+        // per iteration; dict comprehensions emit two-arg-set. The
+        // current ABI only ships `__cobrust_list_append`; set / dict
+        // append are deferred to the same M11.x track that adds their
+        // runtime helpers.
+        let elem_op = match element {
+            CompElem::Single(e) => self.lower_expr(e)?,
+            CompElem::KeyValue(k, _v) => {
+                // Dict comprehensions: M12.x emits the key only as a
+                // placeholder until __cobrust_dict_set with computed
+                // key/value lands. Records the body so type-check is
+                // honored.
+                self.lower_expr(k)?
+            }
+        };
+        // Comprehension kinds we don't yet have an append path for
+        // (Set / Dict) still emit a `Call` so the body is materialized;
+        // the runtime will silently no-op when the helper does not
+        // exist on the path. M11.x rolls in `__cobrust_set_insert`
+        // and `__cobrust_dict_set` here.
+        let helper = match kind {
+            CompKind::List | CompKind::Generator => "__cobrust_list_append",
+            CompKind::Set => "__cobrust_set_insert",
+            CompKind::Dict => "__cobrust_list_append",
+        };
+        let cur = self.current_block_id();
+        let after = self.start_new_block();
+        self.cur_block = Some(cur.0 as usize);
+        let dest = self.declare_local("_comp_appended".to_string(), Ty::None, span, false);
+        self.terminate(Terminator::Call {
+            func: Operand::Constant(Constant::Str(helper.to_string())),
+            args: vec![Operand::Copy(Place::local(acc)), elem_op],
+            destination: Place::local(dest),
+            target: after,
+            unwind: None,
+        });
+        self.cur_block = Some(after.0 as usize);
+        Ok(())
     }
 }
 

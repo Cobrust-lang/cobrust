@@ -465,6 +465,51 @@ pub unsafe extern "C" fn __cobrust_list_len(list: *mut u8) -> i64 {
     layout.len
 }
 
+/// Append `v` to `list`, growing capacity if needed (doubling
+/// strategy). ADR-0041 §H6 prerequisite: comprehension MIR
+/// desugaring needs an `append` runtime helper.
+///
+/// # Safety
+///
+/// `list` must be a non-null pointer returned by
+/// [`__cobrust_list_new`] and not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_append(list: *mut u8, v: i64) {
+    if list.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &mut *list.cast::<ListI64Layout>() };
+    if layout.len >= layout.cap {
+        // Grow: double capacity, minimum 4.
+        let new_cap = if layout.cap == 0 { 4 } else { layout.cap * 2 };
+        let new_layout = std::alloc::Layout::array::<i64>(new_cap as usize).expect("layout");
+        // SAFETY: layout valid + non-zero.
+        let new_items = unsafe { std::alloc::alloc_zeroed(new_layout) }.cast::<i64>();
+        if new_items.is_null() {
+            std::alloc::handle_alloc_error(new_layout);
+        }
+        if !layout.items.is_null() && layout.cap > 0 {
+            // SAFETY: copy old items into new buffer; both non-overlapping
+            // (we just allocated new). Old buffer was zero-initialised
+            // and len ≤ cap items are valid.
+            unsafe {
+                std::ptr::copy_nonoverlapping(layout.items, new_items, layout.len as usize);
+                let old_layout =
+                    std::alloc::Layout::array::<i64>(layout.cap as usize).expect("layout");
+                std::alloc::dealloc(layout.items.cast::<u8>(), old_layout);
+            }
+        }
+        layout.items = new_items;
+        layout.cap = new_cap;
+    }
+    // SAFETY: bounds-checked: len < cap by the grow path above.
+    unsafe {
+        *layout.items.add(layout.len as usize) = v;
+    }
+    layout.len += 1;
+}
+
 /// Drop a list (free items + free the layout box).
 ///
 /// # Safety

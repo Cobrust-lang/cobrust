@@ -137,6 +137,24 @@ fn add(x: i64, y: i64) -> i64:
 - 34 条 lowering 黄金测试：每个 form 一条 + 跨切不变量（`crates/cobrust-hir/tests/lower_forms.rs`）
 - 54 条 well-typed + 54 条 ill-typed 程序套件（`crates/cobrust-types/tests/`）。每条 ill-typed 都断言**正确的 `TypeError` 范畴**。
 - 健全性证明义务在 [ADR-0006](../../agent/adr/0006-type-system.md) §"Soundness proof obligation list" 中已枚举（9 条），实际证明留到后续 finding 落地。
+- **24 条 Python 语义对齐套件**（`crates/cobrust-types/tests/python_semantics_corpus.rs`）。每条对应 [ADR-0041](../../agent/adr/0041-python-semantics-compliance-binding.md) 中的一条漂移修复（H1-H8 各 3 条）。
+
+### Python 语义对齐（ADR-0041）
+
+外部审计（claude-desktop integrated handoff 2026-05-11 §2）指出宪法 §2.2 中的八条承诺没有在源码层兑现。本 PR 一次性闭合：
+
+| 漂移 | 表现 | 修复点 |
+|---|---|---|
+| H1 | `(-7) % 3` 返 `-1` 而不是 Python 的 `2` | codegen `cranelift_backend.rs` `srem` 后加 floor 调整 |
+| H2 | `a and b` 总是先求值 `b`（无短路） | mir `lower_short_circuit_bool` 显式控制流 |
+| H3 | `**`/`@`/`in`/`not in` 在 codegen 静默返 `iconst(I64, 0)` | codegen 改返 `CodegenError::UnimplementedBinOp` |
+| H4 | 词法发出 walrus token 但 parser 零消费 | parser 显式抛 `DroppedByConstitution(walrus :=)` |
+| H5 | 闭包捕获分析返空 vec | hir `collect_captures_*` 真实遍历 + 去重 |
+| H6 | 推导式被降到空 list 占位 | mir `lower_comprehension` 真实迭代器+追加 |
+| H7 | `class Foo(A, B):` 静默接受 | parser 在 `parse_class_def` 拒 `Comma` 与 `Tuple` 表达式两种语法形 |
+| H8 | 元组下标永远返 `items.first()` | types `synth_expr` 在 `Lit::Int` 索引下常量折叠取实际元素 |
+
+每条都有 ≥ 3 条 corpus 测试。`cargo test -p cobrust-types --test python_semantics_corpus` 必须全部 PASS。
 
 
 ## AI 翻译子系统：四级闭环
