@@ -325,11 +325,18 @@ impl<'s> Lowerer<'s> {
     ) -> Result<h::FnBody, LoweringError> {
         let return_type = f.return_type.as_ref().map(|t| self.lower_type(t));
 
-        // Open the function scope and bind parameters there.
+        // ADR-0041 §H5: snapshot the next DefId BEFORE entering the
+        // function scope. Every DefId allocated between this snapshot
+        // and the leave_scope() below is a function-local binding;
+        // names referenced inside the body whose DefId is *strictly
+        // less* than this snapshot — and whose DefKind is not a
+        // module-level item (`Fn` / `Class` / `TypeAlias` /
+        // `ImportAlias`) — are captures.
+        let local_def_id_start = self.sess.defs.count();
         self.enter_scope();
         let params = self.lower_params(&f.params)?;
         let body = self.lower_block(&f.body)?;
-        let captures = self.collect_captures(&body);
+        let captures = self.collect_captures_block(&body, local_def_id_start);
         self.leave_scope();
 
         Ok(h::FnBody {
@@ -1012,10 +1019,16 @@ impl<'s> Lowerer<'s> {
                 }))
             }
             ast::ExprKind::Lambda { params, body } => {
+                // ADR-0041 §H5: same capture-detection scheme as
+                // fn-body — snapshot `next_def_id` before opening the
+                // lambda scope; any DefId allocated for params/locals
+                // is `>= snapshot`. Names referenced whose DefId is
+                // `< snapshot` (and not a module-level global) capture.
+                let local_def_id_start = self.sess.defs.count();
                 self.enter_scope();
                 let params_h = self.lower_params(params)?;
                 let body_h = self.lower_expr(body)?;
-                let captures = self.collect_captures_expr(&body_h);
+                let captures = self.collect_captures_expr(&body_h, local_def_id_start);
                 self.leave_scope();
                 h::ExprKind::Lambda {
                     params: params_h,
@@ -1284,16 +1297,330 @@ impl<'s> Lowerer<'s> {
 
     // -------- captures -------------------------------------------------
 
-    fn collect_captures(&self, _block: &h::Block) -> Vec<h::CaptureSpec> {
-        // M2 placeholder: we don't enforce capture mode — the type
-        // checker treats captures conservatively. The list is empty
-        // until M3 introduces explicit `copy` / `ref` / `move`
-        // capture (constitution §2.2).
-        Vec::new()
+    /// ADR-0041 §H5: collect free-variable captures of a function or
+    /// lambda body.
+    ///
+    /// Algorithm:
+    /// - Every `DefId` allocated *during* this body's lowering is in
+    ///   the half-open range `[local_def_id_start, defs.count())`. We
+    ///   only know `local_def_id_start` here; the upper bound is the
+    ///   current allocator state, but irrelevant to the predicate
+    ///   (captures are determined by `def_id < local_def_id_start`).
+    /// - A `ResolvedName` whose `def_id.0 < local_def_id_start` was
+    ///   bound *before* this body opened. Of those, the ones whose
+    ///   `kind` is a module-level item (`Fn` / `Class` / `TypeAlias`
+    ///   / `ImportAlias`) are global references, NOT captures. The
+    ///   remainder are captures from an enclosing fn / lambda /
+    ///   block scope.
+    /// - The walker dedups by `(name, def_id)` so a captured variable
+    ///   referenced twice yields one `CaptureSpec`.
+    #[allow(clippy::unused_self)]
+    fn collect_captures_block(
+        &self,
+        block: &h::Block,
+        local_def_id_start: u32,
+    ) -> Vec<h::CaptureSpec> {
+        let mut out: Vec<h::CaptureSpec> = Vec::new();
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        walk_block_for_captures(block, local_def_id_start, &mut out, &mut seen);
+        out
     }
 
-    fn collect_captures_expr(&self, _e: &h::Expr) -> Vec<h::CaptureSpec> {
-        Vec::new()
+    /// Same algorithm as [`Self::collect_captures_block`] but for a
+    /// lambda body (which is an `Expr`, not a `Block`).
+    #[allow(clippy::unused_self)]
+    fn collect_captures_expr(&self, e: &h::Expr, local_def_id_start: u32) -> Vec<h::CaptureSpec> {
+        let mut out: Vec<h::CaptureSpec> = Vec::new();
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        walk_expr_for_captures(e, local_def_id_start, &mut out, &mut seen);
+        out
+    }
+}
+
+// ----- ADR-0041 §H5 capture walkers ---------------------------------
+
+fn capture_kind_is_global(k: DefKind) -> bool {
+    matches!(
+        k,
+        DefKind::Fn | DefKind::Class | DefKind::TypeAlias | DefKind::ImportAlias
+    )
+}
+
+fn record_name_capture(
+    rn: &ResolvedName,
+    span: Span,
+    local_def_id_start: u32,
+    out: &mut Vec<h::CaptureSpec>,
+    seen: &mut std::collections::HashSet<u32>,
+) {
+    if rn.def_id.0 >= local_def_id_start {
+        return;
+    }
+    if capture_kind_is_global(rn.kind) {
+        return;
+    }
+    if !seen.insert(rn.def_id.0) {
+        return;
+    }
+    out.push(h::CaptureSpec {
+        name: rn.name.clone(),
+        def_id: rn.def_id,
+        span,
+    });
+}
+
+fn walk_block_for_captures(
+    block: &h::Block,
+    local_def_id_start: u32,
+    out: &mut Vec<h::CaptureSpec>,
+    seen: &mut std::collections::HashSet<u32>,
+) {
+    for stmt in &block.stmts {
+        walk_stmt_for_captures(stmt, local_def_id_start, out, seen);
+    }
+}
+
+fn walk_stmt_for_captures(
+    stmt: &h::Stmt,
+    local_def_id_start: u32,
+    out: &mut Vec<h::CaptureSpec>,
+    seen: &mut std::collections::HashSet<u32>,
+) {
+    match &stmt.kind {
+        h::StmtKind::Let(let_body) => {
+            walk_expr_for_captures(&let_body.value, local_def_id_start, out, seen);
+        }
+        h::StmtKind::Assign { target, value } => {
+            walk_expr_for_captures(target, local_def_id_start, out, seen);
+            walk_expr_for_captures(value, local_def_id_start, out, seen);
+        }
+        h::StmtKind::If { arms, else_block } => {
+            for (cond, body) in arms {
+                walk_expr_for_captures(cond, local_def_id_start, out, seen);
+                walk_block_for_captures(body, local_def_id_start, out, seen);
+            }
+            if let Some(b) = else_block {
+                walk_block_for_captures(b, local_def_id_start, out, seen);
+            }
+        }
+        h::StmtKind::Loop(lk) => match lk {
+            h::LoopKind::While {
+                cond,
+                body,
+                else_block,
+                ..
+            } => {
+                walk_expr_for_captures(cond, local_def_id_start, out, seen);
+                walk_block_for_captures(body, local_def_id_start, out, seen);
+                if let Some(b) = else_block {
+                    walk_block_for_captures(b, local_def_id_start, out, seen);
+                }
+            }
+            h::LoopKind::For {
+                iter,
+                body,
+                else_block,
+                ..
+            } => {
+                walk_expr_for_captures(iter, local_def_id_start, out, seen);
+                walk_block_for_captures(body, local_def_id_start, out, seen);
+                if let Some(b) = else_block {
+                    walk_block_for_captures(b, local_def_id_start, out, seen);
+                }
+            }
+        },
+        h::StmtKind::Match { scrutinee, arms } => {
+            walk_expr_for_captures(scrutinee, local_def_id_start, out, seen);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    walk_expr_for_captures(g, local_def_id_start, out, seen);
+                }
+                walk_block_for_captures(&arm.body, local_def_id_start, out, seen);
+            }
+        }
+        h::StmtKind::With { item, body } => {
+            walk_expr_for_captures(&item.context, local_def_id_start, out, seen);
+            walk_block_for_captures(body, local_def_id_start, out, seen);
+        }
+        h::StmtKind::Try {
+            body,
+            handlers,
+            else_block,
+            finally_block,
+        } => {
+            walk_block_for_captures(body, local_def_id_start, out, seen);
+            for h in handlers {
+                walk_block_for_captures(&h.body, local_def_id_start, out, seen);
+            }
+            if let Some(b) = else_block {
+                walk_block_for_captures(b, local_def_id_start, out, seen);
+            }
+            if let Some(b) = finally_block {
+                walk_block_for_captures(b, local_def_id_start, out, seen);
+            }
+        }
+        h::StmtKind::Return(opt) => {
+            if let Some(e) = opt {
+                walk_expr_for_captures(e, local_def_id_start, out, seen);
+            }
+        }
+        h::StmtKind::Break | h::StmtKind::Continue | h::StmtKind::Pass => {}
+        h::StmtKind::Raise { exc, cause } => {
+            if let Some(e) = exc {
+                walk_expr_for_captures(e, local_def_id_start, out, seen);
+            }
+            if let Some(c) = cause {
+                walk_expr_for_captures(c, local_def_id_start, out, seen);
+            }
+        }
+        h::StmtKind::Expr(e) => walk_expr_for_captures(e, local_def_id_start, out, seen),
+        h::StmtKind::Item(_) => {
+            // Nested fn/class/type-alias items have their own
+            // capture analysis at their own lowering site; skip.
+        }
+    }
+}
+
+fn walk_expr_for_captures(
+    e: &h::Expr,
+    local_def_id_start: u32,
+    out: &mut Vec<h::CaptureSpec>,
+    seen: &mut std::collections::HashSet<u32>,
+) {
+    match &e.kind {
+        h::ExprKind::Lit(_) => {}
+        h::ExprKind::Format(parts) => {
+            for p in parts {
+                if let h::FormatPart::Hole { expr, .. } = p {
+                    walk_expr_for_captures(expr, local_def_id_start, out, seen);
+                }
+            }
+        }
+        h::ExprKind::Name(rn) => {
+            record_name_capture(rn, e.span, local_def_id_start, out, seen);
+        }
+        h::ExprKind::Tuple(items) | h::ExprKind::List(items) | h::ExprKind::Set(items) => {
+            for i in items {
+                walk_expr_for_captures(i, local_def_id_start, out, seen);
+            }
+        }
+        h::ExprKind::Dict(entries) => {
+            for ent in entries {
+                match ent {
+                    h::DictEntry::Pair(k, v) => {
+                        walk_expr_for_captures(k, local_def_id_start, out, seen);
+                        walk_expr_for_captures(v, local_def_id_start, out, seen);
+                    }
+                    h::DictEntry::Spread(s) => {
+                        walk_expr_for_captures(s, local_def_id_start, out, seen);
+                    }
+                }
+            }
+        }
+        h::ExprKind::Comp(comp) => {
+            for clause in &comp.clauses {
+                walk_expr_for_captures(&clause.iter, local_def_id_start, out, seen);
+                for g in &clause.guards {
+                    walk_expr_for_captures(g, local_def_id_start, out, seen);
+                }
+            }
+            match &comp.element {
+                h::CompElem::Single(e) => {
+                    walk_expr_for_captures(e, local_def_id_start, out, seen);
+                }
+                h::CompElem::KeyValue(k, v) => {
+                    walk_expr_for_captures(k, local_def_id_start, out, seen);
+                    walk_expr_for_captures(v, local_def_id_start, out, seen);
+                }
+            }
+        }
+        h::ExprKind::Lambda { body, .. } => {
+            // A nested lambda has its OWN capture analysis at its
+            // construction site (collect_captures_expr); from this
+            // lambda's perspective, names referenced inside the
+            // nested lambda's body are still captures of THIS body
+            // if they were bound before THIS body opened.
+            walk_expr_for_captures(body, local_def_id_start, out, seen);
+        }
+        h::ExprKind::Call { callee, args } => {
+            walk_expr_for_captures(callee, local_def_id_start, out, seen);
+            for a in args {
+                match a {
+                    h::CallArg::Positional(e)
+                    | h::CallArg::Keyword(_, e)
+                    | h::CallArg::StarArgs(e)
+                    | h::CallArg::StarStarKwargs(e) => {
+                        walk_expr_for_captures(e, local_def_id_start, out, seen);
+                    }
+                }
+            }
+        }
+        h::ExprKind::Attr { base, .. } => {
+            walk_expr_for_captures(base, local_def_id_start, out, seen);
+        }
+        h::ExprKind::Index { base, index } => {
+            walk_expr_for_captures(base, local_def_id_start, out, seen);
+            match index.as_ref() {
+                h::IndexKind::Expr(e) => walk_expr_for_captures(e, local_def_id_start, out, seen),
+                h::IndexKind::Slice { start, stop, step } => {
+                    if let Some(e) = start {
+                        walk_expr_for_captures(e, local_def_id_start, out, seen);
+                    }
+                    if let Some(e) = stop {
+                        walk_expr_for_captures(e, local_def_id_start, out, seen);
+                    }
+                    if let Some(e) = step {
+                        walk_expr_for_captures(e, local_def_id_start, out, seen);
+                    }
+                }
+                h::IndexKind::Tuple(items) => {
+                    for i in items {
+                        walk_index_for_captures(i, local_def_id_start, out, seen);
+                    }
+                }
+            }
+        }
+        h::ExprKind::Bin { lhs, rhs, .. } => {
+            walk_expr_for_captures(lhs, local_def_id_start, out, seen);
+            walk_expr_for_captures(rhs, local_def_id_start, out, seen);
+        }
+        h::ExprKind::Un { operand, .. } => {
+            walk_expr_for_captures(operand, local_def_id_start, out, seen);
+        }
+        h::ExprKind::Await(e) => walk_expr_for_captures(e, local_def_id_start, out, seen),
+        h::ExprKind::Yield(opt) => {
+            if let Some(e) = opt {
+                walk_expr_for_captures(e, local_def_id_start, out, seen);
+            }
+        }
+        h::ExprKind::YieldFrom(e) => walk_expr_for_captures(e, local_def_id_start, out, seen),
+    }
+}
+
+fn walk_index_for_captures(
+    idx: &h::IndexKind,
+    local_def_id_start: u32,
+    out: &mut Vec<h::CaptureSpec>,
+    seen: &mut std::collections::HashSet<u32>,
+) {
+    match idx {
+        h::IndexKind::Expr(e) => walk_expr_for_captures(e, local_def_id_start, out, seen),
+        h::IndexKind::Slice { start, stop, step } => {
+            if let Some(e) = start {
+                walk_expr_for_captures(e, local_def_id_start, out, seen);
+            }
+            if let Some(e) = stop {
+                walk_expr_for_captures(e, local_def_id_start, out, seen);
+            }
+            if let Some(e) = step {
+                walk_expr_for_captures(e, local_def_id_start, out, seen);
+            }
+        }
+        h::IndexKind::Tuple(items) => {
+            for i in items {
+                walk_index_for_captures(i, local_def_id_start, out, seen);
+            }
+        }
     }
 }
 

@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:hir
 crate: cobrust-hir
-last_verified_commit: afe26db
-dependencies: [mod:frontend, adr:0005]
+last_verified_commit: e85630f
+dependencies: [mod:frontend, adr:0005, adr:0041]
 ---
 
 # Module: hir
@@ -128,6 +128,30 @@ The condensed list:
 - `_` (when in a pattern position) → canonicalised to `Wildcard`
   regardless of how the parser tokenised the `_` glyph.
 - `from a import x, y` → one `Import` item per target.
+
+## ADR-0041 §H5 — closure capture analysis
+
+Pre-fix: `collect_captures(_block)` and `collect_captures_expr(_e)`
+returned `Vec::new()` — every fn/lambda's `captures` field was empty
+regardless of body. Late-binding bug stayed open for 3 milestones.
+
+Post-fix: a real walker runs over the body. Algorithm —
+
+1. Snapshot `sess.defs.count()` BEFORE entering the fn/lambda scope.
+2. After lowering, walk every `ExprKind::Name` in body.
+3. A `ResolvedName` is a *capture* iff:
+   - `def_id.0 < snapshot` (bound BEFORE this body opened)
+   - AND `kind` is NOT a module-level item (`Fn` / `Class` /
+     `TypeAlias` / `ImportAlias`).
+4. Dedup by `def_id` so two references to the same outer name yield
+   one `CaptureSpec`.
+
+The walker is implemented as free functions
+(`walk_block_for_captures`, `walk_expr_for_captures`,
+`walk_stmt_for_captures`, `walk_index_for_captures`) so the recursion
+does not need access to `Lowerer` state. The capture **mode** (`copy`
+/ `ref` / `move`) is still M3+ work — the list now exists; the
+discipline pass uses default semantics until then.
 
 ## Invariants (M2)
 

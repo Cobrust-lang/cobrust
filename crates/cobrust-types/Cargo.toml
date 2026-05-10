@@ -17,3 +17,10 @@ workspace = true
 cobrust-frontend = { path = "../cobrust-frontend" }
 cobrust-hir = { path = "../cobrust-hir" }
 thiserror = { workspace = true }
+
+# ADR-0041 §H1-H8 acceptance corpus pulls in MIR + codegen at test time
+# only — production type-check has zero runtime dependency on either.
+[dev-dependencies]
+cobrust-mir = { path = "../cobrust-mir" }
+cobrust-codegen = { path = "../cobrust-codegen" }
+target-lexicon = "0.13"
