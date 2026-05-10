@@ -12,11 +12,11 @@ cargo install cobrust-cli
 
 ```bash
 # macOS arm64
-curl -L https://github.com/cobrust/cobrust/releases/latest/download/cobrust-0.1.0-beta-aarch64-apple-darwin.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-0.1.0-beta-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 
 # Linux x86_64
-curl -L https://github.com/cobrust/cobrust/releases/latest/download/cobrust-0.1.0-beta-x86_64-unknown-linux-gnu.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-0.1.0-beta-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 ```
 
@@ -40,13 +40,13 @@ hello, world
 cobrust translate tomli
 ```
 
-See [translate.md](translate.md) for the full translation workflow and verification gates.
+See [ADR-0007 translator pipeline](../../agent/adr/0007-translator-pipeline.md) for the full translation workflow and verification gates.
 
 ## Development workflows (contributor path)
 
 ```bash
 # Clone and build from source
-git clone https://github.com/cobrust/cobrust && cd cobrust
+git clone https://github.com/Cobrust-lang/cobrust && cd cobrust
 cargo build --workspace
 
 # Run all tests

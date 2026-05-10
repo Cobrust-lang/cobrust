@@ -1,5 +1,3 @@
-<!-- Paste to: Cobrust/.github/PULL_REQUEST_TEMPLATE.md -->
-
 ## Summary
 
 <!-- 1-3 bullets: what does this PR do? -->

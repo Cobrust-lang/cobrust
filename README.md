@@ -8,15 +8,15 @@
 
 *Cobra 🐍 + Rust 🦀 — Python ergonomics, Rust safety, zero migration cost.*
 
-[![CI](https://github.com/cobrust/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/cobrust/cobrust/actions/workflows/ci.yml)
+[![CI](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue.svg)](#license)
-[![Stage](https://img.shields.io/badge/stage-0.1.0--beta-orange.svg)](https://github.com/cobrust/cobrust/releases)
+[![Stage](https://img.shields.io/badge/stage-0.1.0--beta-orange.svg)](https://github.com/Cobrust-lang/cobrust/releases)
 
 [**Why Cobrust?**](docs/post/why-cobrust.md) ·
 [**Quick Start**](#quick-start) ·
 [**Examples**](examples/) ·
 [**Roadmap**](docs/agent/adr/0038-phase-f-roadmap.md) ·
-[**Discussions**](https://github.com/cobrust/cobrust/discussions)
+[**Discussions**](https://github.com/Cobrust-lang/cobrust/discussions)
 
 </div>
 
@@ -31,10 +31,10 @@ $ cargo install cobrust-cli
 # Translate a Python library to verified Rust
 $ cobrust translate tomli
 [L0] Spec extracted from tomli 2.0.1
-[L1] Translating with claude-opus-4-7 (consensus n=2)
+[L1] Translating with codex gpt-5.5
 [L2.build]    cargo build:  0 errors, 0 warnings
-[L2.behavior] differential testing 1000 inputs:  1000/1000 strict PASS
-[L2.perf]     0.92x baseline (within 0.8x gate)
+[L2.behavior] differential testing 1024 inputs:  99.71% strict PASS
+[L2.perf]     1KB 13.8x / 100KB 10.8x / 10MB 9.05x faster than CPython tomllib (ADR-0039)
 [L3] Downstream: pip-tools tomli usage compiles + tests pass
 
 # Drop-in replace in Python
@@ -74,7 +74,7 @@ The wedge: **AI translates the existing Python ecosystem into Cobrust automatica
 cargo install cobrust-cli
 
 # Or download a prebuilt binary for macOS arm64 / Linux x86_64
-curl -L https://github.com/cobrust/cobrust/releases/latest/download/cobrust-$(uname -sm | tr ' ' '-').tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-$(uname -sm | tr ' ' '-').tar.gz | tar xz
 mv cobrust /usr/local/bin/
 ```
 
@@ -152,20 +152,23 @@ See the [Phase F roadmap (ADR-0038)](docs/agent/adr/0038-phase-f-roadmap.md) for
 
 ## Examples
 
-10 progressive examples in [`examples/`](examples/):
+Progressive examples in [`examples/`](examples/):
 
 | | |
 |---|---|
-| `examples/hello/` | minimal hello world |
-| `examples/fizzbuzz/` | control flow (real `if/elif/else` + `%`) |
-| `examples/fib/` | recursion via `Constant::FnRef` Call lowering |
-| `examples/notebook/` | multi-module package + path dependency |
-| `examples/wc/` | file IO + iteration |
-| `examples/tomli-demo/` | translation showcase ⭐ |
-| `examples/cli-tool/` | what `cobrust new` scaffolds |
-| `examples/tests-demo/` | how `cobrust test` works |
-| `examples/repl-demo/` | REPL session script |
-| `examples/web-server-stub/` | M13 concurrency runtime demo |
+| `examples/hello.cb` | minimal hello world |
+| `examples/fizzbuzz.cb` | control flow (real `if/elif/else` + `%`) |
+| `examples/fib.cb` | recursion via `Constant::FnRef` Call lowering |
+| `examples/wc.cb` | file IO + iteration |
+| `examples/cat.cb` | stream file to stdout |
+| `examples/echo.cb` | argv echo |
+| `examples/sort.cb` | sort lines from stdin |
+| `examples/unique_lines.cb` | deduplicate lines |
+| `examples/regex_grep.cb` | regex filter over stdin |
+| `examples/csv_sum.cb` | aggregate a CSV column |
+| `examples/json_pretty.cb` | pretty-print JSON |
+| `examples/notebook/` | multi-module package |
+| `examples/notebook-config/` | sibling package (path dependency) |
 
 ---
 
@@ -213,7 +216,7 @@ We need:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Code of Conduct: [Contributor Covenant](CODE_OF_CONDUCT.md).
 
-Joining: [GitHub Discussions](https://github.com/cobrust/cobrust/discussions) for design Qs, [Issues](https://github.com/cobrust/cobrust/issues) for bugs and feature requests.
+Joining: [GitHub Discussions](https://github.com/Cobrust-lang/cobrust/discussions) for design Qs, [Issues](https://github.com/Cobrust-lang/cobrust/issues) for bugs and feature requests.
 
 ---
 

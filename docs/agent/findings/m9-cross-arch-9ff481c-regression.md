@@ -20,7 +20,7 @@ This sprint re-runs the M9 gate on Linux x86_64 to confirm no regression.
 ## Method
 
 - Worktree: `feature/cross-arch-9ff481c-regression`, branched from HEAD `9ff481c`.
-- SSH: `wubingjing@112.74.60.44 -p 10040` (DG-Workstation-2x3090, Ubuntu 22.04,
+- SSH: `<redacted user@host -p port>` (<internal Linux x86_64 validator host>, Ubuntu 22.04,
   kernel 5.15.0-176, x86_64).
 - Toolchain on workstation: rustc 1.94.1 / cargo 1.94.1 (matches `rust-toolchain.toml`).
 - Sync: `rsync -avz --delete --exclude='target/' --exclude='.git/'` from worktree
@@ -110,7 +110,7 @@ on Linux x86_64 and macOS arm64.
 
 ### Audit #1 network check
 
-Codex API endpoint `http://104.244.92.250:8317` is reachable from the x86
+Codex API endpoint `<user-codex deployment URL>` is reachable from the x86
 workstation (HTTP 400 "Missing API key" confirms TCP+HTTP connectivity).
 Actual audit #1 run not attempted — out of scope for this sprint.
 

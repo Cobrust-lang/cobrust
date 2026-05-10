@@ -1,6 +1,3 @@
-<!-- Paste to: Cobrust/docs/post/why-cobrust.md
-     Crosspost to: HN, r/rust, r/programming, lobste.rs, dev.to -->
-
 # Why Cobrust — an AI-native compiler that translates Python libraries into verified Rust
 
 > *Cobrust 0.1.0-beta · 2026-05-10 · Built in public, by AI agents working with humans*
@@ -18,10 +15,10 @@ You don't rewrite your Python code. You don't annotate. You point Cobrust at a l
 ```bash
 $ cobrust translate tomli
 [L0] Spec extracted from tomli 2.0.1
-[L1] Translating with claude-opus-4-7 (consensus n=2)
+[L1] Translating with codex gpt-5.5
 [L2.build]    cargo build:  0 errors, 0 warnings
-[L2.behavior] differential testing 1000 inputs:  1000/1000 strict PASS
-[L2.perf]     0.92x baseline (within 0.8x gate)
+[L2.behavior] differential testing 1024 inputs:  99.71% strict PASS
+[L2.perf]     1KB 13.8x / 100KB 10.8x / 10MB 9.05x faster than CPython tomllib (ADR-0039)
 [L3] Downstream: pip-tools tomli usage compiles + tests pass
 
 $ pip install ./cobrust-tomli
@@ -37,7 +34,7 @@ Three things, in combination, that no prior project does:
 
 **2. Translation is verified, not trusted.** Every translated function is differentially tested against the CPython oracle on 1000+ fuzzed inputs. Numerical tolerances are explicit (`@py_compat(numerical(rtol=1e-7))`). Behavioral divergences must be tagged or fixed. Failed gates trigger a repair loop with diagnostic feedback, not silent acceptance. Provenance manifests pin the source SHA, the model fingerprint, the exact prompts used.
 
-**3. The output ecosystem replaces the input transparently.** A Cobrust-translated library is a Rust crate plus a PyO3 wrapper. `pip install ./cobrust-tomli` and Python imports work as before — but the parser is verified Rust, 5-50× faster, memory-safe.
+**3. The output ecosystem replaces the input transparently.** A Cobrust-translated library is a Rust crate plus a PyO3 wrapper. `pip install ./cobrust-tomli` and Python imports work as before — but the parser is verified Rust, **9-14× faster on tomli (T1.1 measured vs CPython 3.11 tomllib, see ADR-0039)**, memory-safe. Other libraries pending Phase F.1 perf gates.
 
 ## Compared to the prior art
 
@@ -65,7 +62,7 @@ We have:
 - A working language: lexer, parser, HIR, type checker, MIR, Cranelift codegen, package format, REPL stub, structured-concurrency runtime
 - A working translator: L0..L3 closed-loop with consensus mode and provenance manifests
 - One library translated end-to-end with real LLMs: `tomli`. Full L0..L3 PASS, downstream-dep validation PASS, benchmark within 0.8× of CPython
-- 768+ tests, 0 fail, on macOS arm64 + Linux x86_64
+- 2,545+ tests, 0 fail, on macOS arm64 + Linux x86_64
 
 We do not have:
 - LSP (yet — see [F.1.8 in the roadmap](docs/agent/adr/0038-phase-f-roadmap.md))
@@ -113,8 +110,8 @@ Things we'd love help with right now:
 - **Cross-arch validation.** We test on macOS arm64 + Linux x86_64. Windows, Linux aarch64, FreeBSD all need volunteers.
 - **AI router adapters.** More providers, more latency engineering, better consensus-aggregation algorithms.
 
-GitHub: <https://github.com/cobrust/cobrust>
-Discussions: <https://github.com/cobrust/cobrust/discussions>
+GitHub: <https://github.com/Cobrust-lang/cobrust>
+Discussions: <https://github.com/Cobrust-lang/cobrust/discussions>
 First-time contributor: tag `good-first-issue` on Issues
 
 ## What I want from you, the reader
@@ -123,9 +120,9 @@ If you tried Cobrust on a Python library and it broke — file an issue with a m
 
 If you have feedback on the wedge ("AI Python accelerator" framing) — please tell us. We chose this position deliberately, but the opinions of Mojo / PyO3 / Cython users matter for whether the framing serves the community or just us.
 
-If you want to write a translated library — start with the [`good-first-issue`](https://github.com/cobrust/cobrust/labels/good-first-issue) tag.
+If you want to write a translated library — start with the [`good-first-issue`](https://github.com/Cobrust-lang/cobrust/labels/good-first-issue) tag.
 
 ---
 
 *Cobrust is open source under Apache-2.0 OR MIT. Built in public.*
-*Want to discuss? [GitHub Discussions](https://github.com/cobrust/cobrust/discussions) or HN comments on this post.*
+*Want to discuss? [GitHub Discussions](https://github.com/Cobrust-lang/cobrust/discussions) or HN comments on this post.*

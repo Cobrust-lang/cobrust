@@ -1,7 +1,7 @@
 //! `cobrust-frontend` — lexer, parser, and AST for Cobrust source.
 //!
 //! Delivered at M1 (the "core 30 forms"). See
-//! [`docs/agent/modules/frontend.md`](https://github.com/cobrust/cobrust)
+//! [`docs/agent/modules/frontend.md`](https://github.com/Cobrust-lang/cobrust)
 //! for the agent-facing spec and `docs/agent/adr/0003-core-30-forms.md`
 //! for the syntactic surface this crate accepts.
 //!

@@ -66,3 +66,5 @@ same atomic commit as the change it justifies.
 | [0035](0035-m11-3-while-condition-lower-primitive.md) | M11.3 — `lower_condition` root primitive shared by `if` + `while` heads (closes review-claude LC 263 P0 + 同 ADR-0033 Option C 精神) | accepted | 2026-05-09 |
 | [0036](0036-audit-3a-prompt-design-fix.md) | Audit #3a — production `build_translation_prompt_rich` builder + stateful PASS (§1.2 production-validated) | accepted | 2026-05-09 |
 | [0038](0038-phase-f-roadmap.md) | Phase F roadmap — F.1/F.2/F.3 tiers with priority + trigger + done-means + effort matrix; 0.1.0-beta release plan + wedge "AI Python 加速器" | accepted | 2026-05-10 |
+| [0037](0037-py-compat-hard-bind.md) | Reserved — py-compat hard-bind to L2 verifier (Phase F.1.x) | proposed | 2026-05-10 |
+| [0039](0039-tomli-full-translation-result.md) | T1.1 — tomli full-library real-LLM translation 5/5 PASS production milestone | accepted | 2026-05-10 |

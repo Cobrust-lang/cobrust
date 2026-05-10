@@ -4,7 +4,7 @@ adr_id: 0038
 title: "Phase F roadmap with timetable + external success criteria"
 status: accepted
 date: 2026-05-10
-last_verified_commit: TBD-handoff-pack-commit
+last_verified_commit: 0c72958
 supersedes: []
 superseded_by: []
 relates_to: [adr:0019]
@@ -97,7 +97,7 @@ libraries.
 | F.2.3 Debugger (`cobrust debug`) | P1 | F.2.2 done | breakpoint + stack trace + variable inspection in vscode | 2-3 weeks |
 | F.2.4 WASM target | P1 | F.1.7 done | hello.cb compiles + runs in browser via wasmtime | 1-2 weeks |
 | F.2.5 Self-hosting type checker subset | P1 | F.1.7 done | `cobrust check` for non-generic functions implemented in `.cb` | 3-4 weeks |
-| F.2.6 cobrust-registry online | P2 | F.2.1 done | `cobrust install <lib>` fetches from cobrust.dev/registry | 1-2 weeks |
+| F.2.6 cobrust-registry online | P2 | F.2.1 done | `cobrust install <lib>` fetches from github.com/Cobrust-lang/cobrust/registry | 1-2 weeks |
 | F.2.7 Consensus-mode multi-provider | P2 | Now-ish | 3-provider consensus reduces translation error rate measurably (paper-quality finding) | 1 week |
 
 ### F.3 — Five years (1.0+)

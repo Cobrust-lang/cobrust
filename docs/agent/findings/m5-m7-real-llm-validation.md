@@ -26,7 +26,7 @@ contract, not the wire:
    panicking and with bounded wall-clock.
 
 The hypothesis was that **all three contracts hold against a private
-OpenAI-compatible deployment** ("user_codex", `http://104.244.92.250:8317/v1`,
+OpenAI-compatible deployment** ("user_codex", `<user-codex deployment URL>/v1`,
 model `gpt-5.5`) operated by the user — the same kind of endpoint the
 production translation pipeline (M4–M7) will dispatch against.
 
@@ -45,7 +45,7 @@ already-pinned contracts hold over the wire. No new ADR is required.
 
 ### Endpoint
 
-- Base URL: `http://104.244.92.250:8317/v1`
+- Base URL: `<user-codex deployment URL>/v1`
 - Model: `gpt-5.5`
 - Wire format: OpenAI-compatible (`POST /v1/chat/completions`,
   `Authorization: Bearer …`, `usage` object on response)
