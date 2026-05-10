@@ -40,7 +40,7 @@ hello, world
 cobrust translate tomli
 ```
 
-See [translate.md](translate.md) for the full translation workflow and verification gates.
+See [ADR-0007 translator pipeline](../../agent/adr/0007-translator-pipeline.md) for the full translation workflow and verification gates.
 
 ## Development workflows (contributor path)
 

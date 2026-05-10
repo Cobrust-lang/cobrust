@@ -29,7 +29,7 @@ We tag entry points with these labels:
    ```bash
    git clone https://github.com/<you>/cobrust && cd cobrust
    cargo build --workspace --locked     # ~50-60s on Apple Silicon
-   cargo test --workspace --locked      # 768+ tests, ~30s
+   cargo test --workspace --locked      # 2,545+ tests, ~30s
    ```
 4. **Make your change** — see "What touches what" below
 5. **5-gate locally** before pushing:

@@ -7,7 +7,7 @@
 //! - `<name>/src/main.cb` — canonical `print("hello, world")` hello-world
 //! - `<name>/tests/smoke.cb` — smoke test skeleton
 //! - `<name>/.gitignore` — ignores `target/` and lock files
-//! - `<name>/README.md` — one-liner with link to cobrust.dev
+//! - `<name>/README.md` — one-liner with link to github.com/Cobrust-lang/cobrust
 
 use std::path::{Path, PathBuf};
 
@@ -101,7 +101,7 @@ pub fn run(name: &str, parent_dir: Option<&Path>) -> u8 {
     let readme = format!(
         "# {name}\n\
          \n\
-         A [Cobrust](https://cobrust.dev) package.\n\
+         A [Cobrust](https://github.com/Cobrust-lang/cobrust) package.\n\
          \n\
          ```bash\n\
          cobrust run src/main.cb\n\
