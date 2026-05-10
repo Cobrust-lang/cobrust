@@ -113,8 +113,8 @@ Things we'd love help with right now:
 - **Cross-arch validation.** We test on macOS arm64 + Linux x86_64. Windows, Linux aarch64, FreeBSD all need volunteers.
 - **AI router adapters.** More providers, more latency engineering, better consensus-aggregation algorithms.
 
-GitHub: <https://github.com/cobrust/cobrust>
-Discussions: <https://github.com/cobrust/cobrust/discussions>
+GitHub: <https://github.com/Cobrust-lang/cobrust>
+Discussions: <https://github.com/Cobrust-lang/cobrust/discussions>
 First-time contributor: tag `good-first-issue` on Issues
 
 ## What I want from you, the reader
@@ -123,9 +123,9 @@ If you tried Cobrust on a Python library and it broke — file an issue with a m
 
 If you have feedback on the wedge ("AI Python accelerator" framing) — please tell us. We chose this position deliberately, but the opinions of Mojo / PyO3 / Cython users matter for whether the framing serves the community or just us.
 
-If you want to write a translated library — start with the [`good-first-issue`](https://github.com/cobrust/cobrust/labels/good-first-issue) tag.
+If you want to write a translated library — start with the [`good-first-issue`](https://github.com/Cobrust-lang/cobrust/labels/good-first-issue) tag.
 
 ---
 
 *Cobrust is open source under Apache-2.0 OR MIT. Built in public.*
-*Want to discuss? [GitHub Discussions](https://github.com/cobrust/cobrust/discussions) or HN comments on this post.*
+*Want to discuss? [GitHub Discussions](https://github.com/Cobrust-lang/cobrust/discussions) or HN comments on this post.*

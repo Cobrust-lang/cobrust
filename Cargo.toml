@@ -25,8 +25,8 @@ edition = "2024"
 rust-version = "1.94"
 license = "Apache-2.0 OR MIT"
 authors = ["The Cobrust Project"]
-repository = "https://github.com/cobrust/cobrust"
-homepage = "https://github.com/cobrust/cobrust"
+repository = "https://github.com/Cobrust-lang/cobrust"
+homepage = "https://github.com/Cobrust-lang/cobrust"
 readme = "README.md"
 
 # Workspace-wide rustc lints.

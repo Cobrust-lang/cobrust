@@ -5,9 +5,9 @@ Contributions of any size are welcome.
 
 ## Quick map
 
-- **Bug reports** → [GitHub Issues](https://github.com/cobrust/cobrust/issues/new?template=bug.yml)
-- **Feature requests / RFCs** → [Discussions](https://github.com/cobrust/cobrust/discussions/categories/ideas)
-- **Question?** → [Discussions Q&A](https://github.com/cobrust/cobrust/discussions/categories/q-a)
+- **Bug reports** → [GitHub Issues](https://github.com/Cobrust-lang/cobrust/issues/new?template=bug.yml)
+- **Feature requests / RFCs** → [Discussions](https://github.com/Cobrust-lang/cobrust/discussions/categories/ideas)
+- **Question?** → [Discussions Q&A](https://github.com/Cobrust-lang/cobrust/discussions/categories/q-a)
 - **Translated library proposals** → see "Translation contributions" below
 - **Code contributions** → fork, branch, PR; see "Workflow" below
 
@@ -23,7 +23,7 @@ We tag entry points with these labels:
 
 ## Code workflow
 
-1. **Fork** `github.com/cobrust/cobrust` (or your namespace)
+1. **Fork** `github.com/Cobrust-lang/cobrust` (or your namespace)
 2. **Branch**: `feature/<short-description>` or `fix/<issue-number>`
 3. **Local setup**:
    ```bash
@@ -44,7 +44,7 @@ We tag entry points with these labels:
    `fix(scope): subject`, `docs(scope): subject`. Co-author lines welcome.
 7. **PR** against `main`. CI runs the 5 gates on macOS arm64 + Linux x86_64.
 8. A maintainer will review within 5 working days. If you hear nothing
-   in 7, ping in [Discussions](https://github.com/cobrust/cobrust/discussions).
+   in 7, ping in [Discussions](https://github.com/Cobrust-lang/cobrust/discussions).
 
 ## Architecture in one minute
 
@@ -98,7 +98,7 @@ Any code change that affects user-visible behavior or public API must update **b
 
 If you want to propose a Python library for translation:
 
-1. Open a discussion in [Translation Targets](https://github.com/cobrust/cobrust/discussions/categories/translation-targets)
+1. Open a discussion in [Translation Targets](https://github.com/Cobrust-lang/cobrust/discussions/categories/translation-targets)
 2. Include: PyPI url, license (must be permissive), LOC count, downstream-dep count (`pipdeptree --reverse`)
 3. Maintainers tag with priority + score against the [F.1 / F.2 backlog](docs/agent/adr/0038-phase-f-roadmap.md)
 4. Approved libraries get a `translate-target` issue with a dispatch prompt for the next P9 sprint

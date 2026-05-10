@@ -9,7 +9,7 @@ body:
     attributes:
       value: |
         Quick questions and "how do I..." topics typically belong in
-        [Discussions Q&A](https://github.com/cobrust/cobrust/discussions/categories/q-a)
+        [Discussions Q&A](https://github.com/Cobrust-lang/cobrust/discussions/categories/q-a)
         — that lets the community help and stay searchable. This issue
         template is fine if you'd rather use issues; a maintainer may
         convert it to a discussion.
