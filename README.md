@@ -8,15 +8,15 @@
 
 *Cobra 🐍 + Rust 🦀 — Python ergonomics, Rust safety, zero migration cost.*
 
-[![CI](https://github.com/cobrust/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/cobrust/cobrust/actions/workflows/ci.yml)
+[![CI](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue.svg)](#license)
-[![Stage](https://img.shields.io/badge/stage-0.1.0--beta-orange.svg)](https://github.com/cobrust/cobrust/releases)
+[![Stage](https://img.shields.io/badge/stage-0.1.0--beta-orange.svg)](https://github.com/Cobrust-lang/cobrust/releases)
 
 [**Why Cobrust?**](docs/post/why-cobrust.md) ·
 [**Quick Start**](#quick-start) ·
 [**Examples**](examples/) ·
 [**Roadmap**](docs/agent/adr/0038-phase-f-roadmap.md) ·
-[**Discussions**](https://github.com/cobrust/cobrust/discussions)
+[**Discussions**](https://github.com/Cobrust-lang/cobrust/discussions)
 
 </div>
 
@@ -74,7 +74,7 @@ The wedge: **AI translates the existing Python ecosystem into Cobrust automatica
 cargo install cobrust-cli
 
 # Or download a prebuilt binary for macOS arm64 / Linux x86_64
-curl -L https://github.com/cobrust/cobrust/releases/latest/download/cobrust-$(uname -sm | tr ' ' '-').tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-$(uname -sm | tr ' ' '-').tar.gz | tar xz
 mv cobrust /usr/local/bin/
 ```
 
@@ -213,7 +213,7 @@ We need:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Code of Conduct: [Contributor Covenant](CODE_OF_CONDUCT.md).
 
-Joining: [GitHub Discussions](https://github.com/cobrust/cobrust/discussions) for design Qs, [Issues](https://github.com/cobrust/cobrust/issues) for bugs and feature requests.
+Joining: [GitHub Discussions](https://github.com/Cobrust-lang/cobrust/discussions) for design Qs, [Issues](https://github.com/Cobrust-lang/cobrust/issues) for bugs and feature requests.
 
 ---
 

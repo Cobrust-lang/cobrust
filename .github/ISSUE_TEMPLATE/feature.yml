@@ -8,7 +8,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        For larger design discussions, consider opening a [Discussion](https://github.com/cobrust/cobrust/discussions) first.
+        For larger design discussions, consider opening a [Discussion](https://github.com/Cobrust-lang/cobrust/discussions) first.
         For decisions affecting >1 file, an ADR is typically required — we'll guide.
 
   - type: textarea
@@ -62,5 +62,5 @@ body:
     attributes:
       label: Code of Conduct
       options:
-        - label: I agree to follow the [Contributor Covenant Code of Conduct](https://github.com/cobrust/cobrust/blob/main/CODE_OF_CONDUCT.md).
+        - label: I agree to follow the [Contributor Covenant Code of Conduct](https://github.com/Cobrust-lang/cobrust/blob/main/CODE_OF_CONDUCT.md).
           required: true
