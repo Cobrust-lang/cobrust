@@ -1975,3 +1975,30 @@ REPL 在以下情形显示续行提示（`...`）—— 输入结构不完整：
   （M14 合同：EOF → 0；曾经 M10 stub 返回 1）。
 
 合计：M14 净增 51 个测试；cobrust-cli 测试合计 72 个全部通过。
+
+---
+
+## full_pipeline_corpus CI 闸门（B3 修复）
+
+**背景**：`crates/cobrust-tomli/tests/full_pipeline_corpus.rs` 是 T1.1 差分回归闸门——
+用 1024 个确定性种子 TOML 输入驱动 `cobrust-tomli::loads()`，并将结果与 CPython
+`tomllib` 字节级比对。B3 之前，该测试在 Linux 上永远静默跳过，原因是 Python 二进制路径
+被硬编码为 `/opt/homebrew/bin/python3.11`（仅适用于 macOS Homebrew）。静默跳过意味着
+CI 全绿但差分 oracle 从未被调用——这是一个假绿。
+
+**B3 修复**：
+
+- 移除硬编码路径；新增 `probe_python()`，依次尝试 `python3.11` → `python3` → `python`（PATH 探测）。
+- 跳过路径现在会发出 `cargo:warning=`，使 oracle 缺失在 CI 任务摘要中可见。
+- 通过路径打印 `T1.1 corpus gate: PASS (N/N within tolerance, oracle=<binary>)`，
+  确认真实执行。
+- `ci.yml` 在测试步骤前增加 `sudo apt-get install -y python3.11`（仅 Ubuntu，尽力安装），
+  并将 oracle 版本写入 GitHub 任务摘要。
+
+**跳过 vs 运行决策矩阵**：
+
+| 环境 | 预期结果 |
+|---|---|
+| ubuntu-latest（CI） | 运行——`apt-get install python3.11` 提供 oracle |
+| macos-latest（CI） | 运行——Homebrew Python 在 PATH 上 |
+| 精简 CI / 本地（无 Python） | 跳过——退出 0，发出 warning |

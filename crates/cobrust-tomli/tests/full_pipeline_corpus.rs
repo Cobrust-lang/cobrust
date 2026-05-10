@@ -48,26 +48,39 @@ use std::process::{Command, Stdio};
 
 use cobrust_tomli::{loads, table_to_json};
 
-const PYTHON: &str = "/opt/homebrew/bin/python3.11";
 const FUZZ_ITERATIONS: u32 = 1024;
 const PASS_RATE_FLOOR: f64 = 0.95; // T1.1 measured 99.51%; 95% is the strict floor
 // accommodating sampling jitter.
 
-fn python_available() -> bool {
-    Command::new(PYTHON)
-        .arg("-c")
-        .arg("import tomllib")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+/// Probe PATH for a Python 3.x interpreter that ships `tomllib`.
+///
+/// Search order: `python3.11` → `python3` → `python`.
+/// Returns `Some(binary_name)` on the first hit, `None` if none found.
+/// This replaces the previous macOS-only hardcoded `/opt/homebrew/bin/python3.11`
+/// so that CI on Linux (and any PATH-based Python install) works without change.
+fn probe_python() -> Option<&'static str> {
+    for candidate in &["python3.11", "python3", "python"] {
+        let ok = Command::new(candidate)
+            .arg("-c")
+            .arg("import tomllib")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
-fn cpython_oracle(src: &str) -> Result<serde_json::Value, ()> {
-    let Ok(mut py) = Command::new(PYTHON)
+fn cpython_oracle(python: &str, src: &str) -> Result<serde_json::Value, ()> {
+    let Ok(mut py) = Command::new(python)
         .arg("-c")
-        .arg("import json,sys,tomllib\nsrc=sys.stdin.read()\ntry:\n print(json.dumps(tomllib.loads(src)))\nexcept Exception:\n sys.exit(1)")
+        .arg(
+            "import json,sys,tomllib\nsrc=sys.stdin.read()\ntry:\n print(json.dumps(tomllib.loads(src)))\nexcept Exception:\n sys.exit(1)",
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -182,10 +195,19 @@ fn synth_input(rng: &mut Lcg) -> String {
 
 #[test]
 fn t1_1_full_pipeline_corpus_strict_pass_rate() {
-    if !python_available() {
-        eprintln!("T1.1 corpus gate: skipping — python3.11 with tomllib not on PATH ({PYTHON})");
-        return;
-    }
+    let python = match probe_python() {
+        Some(p) => p,
+        None => {
+            let msg = "T1.1 corpus gate: skipping — no python3.11/python3/python with tomllib found on PATH";
+            eprintln!("{msg}");
+            // Surface the skip as a cargo warning so it is visible in CI
+            // job summaries even without --nocapture.
+            println!(
+                "cargo:warning=full_pipeline_corpus SKIPPED — python with tomllib not on PATH"
+            );
+            return;
+        }
+    };
     let seeds: &[u64] = &[42, 1337, 0xDEAD_BEEF];
     let per_seed = FUZZ_ITERATIONS / seeds.len() as u32 + 1;
     let mut total = 0u32;
@@ -206,7 +228,7 @@ fn t1_1_full_pipeline_corpus_strict_pass_rate() {
                     None
                 }
             };
-            let oracle_ok = cpython_oracle(&input).ok();
+            let oracle_ok = cpython_oracle(python, &input).ok();
             match (&cobrust_ok, &oracle_ok) {
                 (Some(a), Some(b)) if a != b => divergences += 1,
                 (Some(_), None) | (None, Some(_)) => divergences += 1,
@@ -223,7 +245,7 @@ fn t1_1_full_pipeline_corpus_strict_pass_rate() {
     let pass_rate =
         (f64::from(total) - f64::from(divergences) - f64::from(panics)) / f64::from(total);
     println!(
-        "T1.1 corpus gate: total={total} divergences={divergences} panics={panics} pass_rate={pass_rate:.4}"
+        "T1.1 corpus gate: oracle={python} total={total} divergences={divergences} panics={panics} pass_rate={pass_rate:.4}"
     );
     assert!(
         pass_rate >= PASS_RATE_FLOOR,
@@ -234,14 +256,22 @@ fn t1_1_full_pipeline_corpus_strict_pass_rate() {
         panics,
         total
     );
+    println!("T1.1 corpus gate: PASS ({total}/{total} within tolerance, oracle={python})");
 }
 
 #[test]
 fn t1_1_canonical_fixture_loads() {
-    if !python_available() {
-        eprintln!("T1.1 canonical-fixture: skipping — python3.11 with tomllib not on PATH");
-        return;
-    }
+    let python = match probe_python() {
+        Some(p) => p,
+        None => {
+            let msg = "T1.1 canonical-fixture: skipping — no python3.11/python3/python with tomllib found on PATH";
+            eprintln!("{msg}");
+            println!(
+                "cargo:warning=full_pipeline_corpus canonical-fixture SKIPPED — python with tomllib not on PATH"
+            );
+            return;
+        }
+    };
     // Five canonical fixtures, each chosen to exercise one of the
     // five canonical entrypoints distinctly.
     let cases: &[(&str, &str)] = &[
@@ -270,7 +300,7 @@ fn t1_1_canonical_fixture_loads() {
                 continue;
             }
         };
-        let oracle = match cpython_oracle(src) {
+        let oracle = match cpython_oracle(python, src) {
             Ok(v) => v,
             Err(()) => {
                 failed.push(format!("{label}: oracle err"));
