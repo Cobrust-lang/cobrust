@@ -287,6 +287,94 @@ managed by rustyline).
 - No arbitrary `print(s: str)` lowering at M10 — narrowed to the literal
   `"hello, world"`. M11 stdlib `std.io.println` widens.
 
+## User-facing error pipeline (T1.4 — 0.1.0-beta)
+
+Added at T1.4. Every internal error is mapped through `error_ux::UserError`
+before reaching stderr. Raw Cranelift IR, debug `{:#?}` dumps, and
+multi-thousand-line verifier output never reach the terminal.
+
+### Four-class taxonomy
+
+| Variant | Exit | Source | Rendered lines |
+|---|---|---|---|
+| `Syntax` | 2 | Lex / parse (`FrontendError`, `LexError`, `ParseError`) | ≤ 3 |
+| `Type` | 2 | HIR lower (`LoweringError`), type check (`TypeError`), MIR (`MirError`) | ≤ 3 |
+| `Runtime` | 4 | `cobrust run` process exit | ≤ 2 |
+| `Internal` | 3 | Codegen (`CodegenError`), linker, invariant violations | ≤ 7 |
+
+### Public API (`crates/cobrust-cli/src/error_ux.rs`)
+
+```rust
+pub enum UserError {
+    Syntax    { file: PathBuf, line: u32, col: u32, msg: String, hint: Option<String> },
+    Type      { file: PathBuf, line: u32, col: u32, msg: String, hint: Option<String> },
+    Runtime   { msg: String, location: String },
+    Internal  { internal_kind: String, repro_cmd: String },
+}
+
+impl UserError {
+    pub fn exit_code(&self) -> u8;
+    pub fn category(&self) -> Category;
+    pub fn report_and_exit_code(&self) -> u8;  // eprintln + return exit_code
+    // Convenience constructors: syntax, syntax_with_hint, type_err,
+    //   type_err_with_hint, internal
+}
+
+impl Display for UserError { /* ≤ 30 lines guaranteed */ }
+
+// From impls for every internal error type:
+impl From<FrontendError> for UserError { ... }
+impl From<LexError>      for UserError { ... }
+impl From<ParseError>    for UserError { ... }
+impl From<LoweringError> for UserError { ... }
+impl From<TypeError>     for UserError { ... }
+impl From<MirError>      for UserError { ... }
+impl From<CodegenError>  for UserError { ... }
+impl From<BuildError>    for UserError { ... }
+```
+
+### `cobrust report-bug` subcommand (`crates/cobrust-cli/src/report_bug.rs`)
+
+```
+cobrust report-bug [--include-mir] [--source-file <path>] [--out-dir <dir>]
+```
+
+- Collects: version, OS, arch, optional MIR dump (first 500 lines, paths
+  stripped), optional source file.
+- Writes a `cobrust-bug-<timestamp>.txt` to `--out-dir` (default: cwd).
+- Prints a GitHub issue URL and a `curl` upload command.
+- Exit codes: 0 on success, 1 on I/O failure.
+
+### Wiring
+
+`check.rs` (`cobrust check`) uses `UserError::from(e)` + `set_ue_file()` for
+all error paths. `build.rs` retains `BuildError` (which has a
+`From<BuildError> for UserError` impl) so that `cobrust build` can also
+route through the UX layer when callers opt in.
+
+`Internal` errors produced from `CodegenError` truncate the raw Cranelift /
+LLVM message to the first line only — preventing 3000-line IR dumps.
+
+### Invariants
+
+- `rendered_line_count(e) <= MAX_LINES` (30) for every `UserError` variant.
+- Every `Syntax` / `Type` render includes a `file:line:col` pointer (`-->`).
+- Every `Internal` render includes the text `cobrust report-bug --include-mir`.
+- Exit codes are stable per ADR-0024.
+
+### Known gaps (as of 2026-05-09)
+
+- Missing-return-path not enforced by type checker (corpus case 2 exits 0).
+- `List<T>` not wired; `[].push(1)` type error not surfaced (corpus case 8 exits 0).
+- Line/col from spans are byte-offset approximations until full source-map
+  lands (M15).
+
+### Test coverage
+
+- Unit: `error_ux.rs` inline tests (4 cases).
+- Integration: `tests/error_ux_corpus.rs` (11 cases — 10 corpus + Conway 4-cell).
+- Existing: `tests/cli_exit_codes.rs` (6 cases) all green.
+
 ## Cross-references
 
 - `mod:frontend` — `parse_str`, `unparse` (used by build / check / fmt).
@@ -300,3 +388,4 @@ managed by rustyline).
 - ADR-0023 §"Per-MIR-form lowering rules" — M10 amendment to the Call row.
 - ADR-0024 — M10 design (the stub this M14 supersedes).
 - ADR-0029 — M14 design (interactive REPL).
+- T1.4 — error UX rewrite for 0.1.0-beta release.
