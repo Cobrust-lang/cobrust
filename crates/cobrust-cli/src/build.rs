@@ -242,7 +242,30 @@ pub fn build(
 /// shim provides the platform `main(argc, argv)` entry, captures
 /// argv via `__cobrust_capture_argv`, then dispatches to the user's
 /// codegen-emitted `_cobrust_user_main`.
+///
+/// T1.3: checks the compile-time baked `COBRUST_RUNTIME_OBJ_PATH` env
+/// (set by `build.rs`) before falling back to compiling from source.
 fn ensure_runtime_object(output_dir: &Path) -> Result<PathBuf, BuildError> {
+    // T1.3: use the pre-compiled object baked in at build time (set by build.rs).
+    // Uses option_env! so the crate compiles even without the build script having run.
+    if let Some(baked) = option_env!("COBRUST_RUNTIME_OBJ_PATH") {
+        if !baked.is_empty() {
+            let p = PathBuf::from(baked);
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+    }
+
+    // Fallback: runtime env override (CI / test harness).
+    if let Ok(p) = std::env::var("COBRUST_RUNTIME_OBJ") {
+        let p = PathBuf::from(p);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    // Development fallback: compile from source.
     let runtime_obj = output_dir.join("cobrust_main.o");
     if runtime_obj.exists() {
         return Ok(runtime_obj);
@@ -285,16 +308,40 @@ fn locate_runtime_source() -> Result<PathBuf, BuildError> {
     )))
 }
 
-/// Locate the prebuilt `libcobrust_stdlib.a` static archive. ADR-0025
-/// §"Runtime ABI" — every `cobrust build` executable links against
-/// this archive (alongside the cobrust_main.o entry shim).
+/// Locate the prebuilt `libcobrust_stdlib.a` static archive.
 ///
-/// Strategy: locate via `CARGO_TARGET_DIR` (override) or relative to
-/// the workspace's `target/debug` / `target/release` directory.
+/// T1.3 (install-path): the `build.rs` build script bakes the archive path
+/// into the binary via `COBRUST_STDLIB_ARCHIVE_PATH` at compile time so
+/// `cargo install cobrust-cli` produces a self-contained binary that never
+/// needs a separate `cargo build -p cobrust-stdlib` step.
+///
+/// Fallback chain (for development builds where `build.rs` may not have run
+/// or the baked-in path no longer exists):
+///
+/// 1. `COBRUST_STDLIB_ARCHIVE_PATH` compile-time env var (baked in by `build.rs`).
+/// 2. `COBRUST_STDLIB_ARCHIVE` runtime env var override (for CI / test harness).
+/// 3. Walk workspace `target/{release,debug}/libcobrust_stdlib.a`.
 fn locate_stdlib_archive(release: bool) -> Result<PathBuf, BuildError> {
-    // Find the workspace root by walking up from CARGO_MANIFEST_DIR.
-    // The CLI crate lives at <root>/crates/cobrust-cli; <root>/target
-    // holds the build artifacts.
+    // 1. Compile-time baked-in path from build.rs (preferred — works after
+    //    `cargo install`). Uses option_env! so the crate compiles without build.rs.
+    if let Some(baked) = option_env!("COBRUST_STDLIB_ARCHIVE_PATH") {
+        if !baked.is_empty() {
+            let p = PathBuf::from(baked);
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+    }
+
+    // 2. Runtime override (useful for tests / CI that swap the archive).
+    if let Ok(p) = std::env::var("COBRUST_STDLIB_ARCHIVE") {
+        let p = PathBuf::from(p);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    // 3. Workspace-relative fallback for development builds.
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let workspace = Path::new(manifest_dir)
         .parent()
@@ -309,16 +356,18 @@ fn locate_stdlib_archive(release: bool) -> Result<PathBuf, BuildError> {
     if candidate.exists() {
         return Ok(candidate);
     }
-    // Try the other profile as fallback.
     let other = if release { "debug" } else { "release" };
     let alt = target_dir.join(other).join("libcobrust_stdlib.a");
     if alt.exists() {
         return Ok(alt);
     }
     Err(BuildError::Internal(format!(
-        "cannot locate libcobrust_stdlib.a (looked under {} and {});          run `cargo build -p cobrust-stdlib` first",
-        candidate.display(),
-        alt.display()
+        "cannot locate libcobrust_stdlib.a \
+         (looked under {cand} and {alt_}); \
+         install via `cargo install cobrust-cli` \
+         or run `cargo build -p cobrust-stdlib` in the workspace first",
+        cand = candidate.display(),
+        alt_ = alt.display(),
     )))
 }
 

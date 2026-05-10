@@ -1,131 +1,64 @@
-# Getting started
+# Getting started — 30-second install
 
-## Prerequisites
+## Step 1: install
 
-- **Rust 1.94.1** — pinned via [`rust-toolchain.toml`](../../../rust-toolchain.toml)
-- **Git**
-
-`rustup` honors `rust-toolchain.toml` automatically — you do **not** need to switch toolchains by hand.
-
-## Quick start (5 steps)
-
-### 1. Clone
+**Option A — cargo install** (requires Rust toolchain):
 
 ```bash
-git clone https://github.com/cobrust/cobrust
-cd cobrust
+cargo install cobrust-cli
 ```
 
-### 2. Build
+**Option B — prebuilt binary** (no Rust needed):
 
 ```bash
+# macOS arm64
+curl -L https://github.com/cobrust/cobrust/releases/latest/download/cobrust-0.1.0-beta-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv cobrust /usr/local/bin/
+
+# Linux x86_64
+curl -L https://github.com/cobrust/cobrust/releases/latest/download/cobrust-0.1.0-beta-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv cobrust /usr/local/bin/
+```
+
+Verify: `cobrust --version` → `cobrust 0.1.0-beta`
+
+## Step 2: hello, world
+
+```bash
+cobrust new hello && cd hello && cobrust run src/main.cb
+```
+
+Expected output:
+
+```
+hello, world
+```
+
+## Step 3: translate a Python library (optional)
+
+```bash
+cobrust translate tomli
+```
+
+See [translate.md](translate.md) for the full translation workflow and verification gates.
+
+## Development workflows (contributor path)
+
+```bash
+# Clone and build from source
+git clone https://github.com/cobrust/cobrust && cd cobrust
 cargo build --workspace
-```
 
-Produces `target/debug/cobrust` — the compiler CLI.
-
-### 3. Hello world
-
-Create `hello.cb`:
-
-```cobrust
-fn main() -> i64:
-    print("hello, world")
-    return 0
-```
-
-Compile and run:
-
-```bash
-./target/debug/cobrust build hello.cb
-./hello
-```
-
-### 4. Real algorithm: FizzBuzz
-
-Create `fizzbuzz.cb`:
-
-```cobrust
-fn main() -> i64:
-    let n: i64 = 1
-    while n <= 15:
-        if n % 15 == 0:
-            print("FizzBuzz")
-        elif n % 3 == 0:
-            print("Fizz")
-        elif n % 5 == 0:
-            print("Buzz")
-        else:
-            print_int(n)
-        n = n + 1
-    return 0
-```
-
-Compile and run:
-
-```bash
-./target/debug/cobrust build fizzbuzz.cb
-./fizzbuzz
-```
-
-This demonstrates real Cobrust: `while` loops, `if/elif/else` branching,
-modulo arithmetic, and mutable bindings (M11.1 enablement, ADR-0030).
-
-### 5. Interactive REPL
-
-```bash
-./target/debug/cobrust repl
-```
-
-Try:
-
-```
-> let x: i64 = 42
-> :type x
-> let y: i64 = x + 1
-> print_int(y)
-> :hir let y
-> :quit
-```
-
-Directives: `:type <var>`, `:ast`, `:hir <stmt>`, `:mir <stmt>`, `:clear`, `:help`.
-
-## Development workflows
-
-### Run tests
-
-```bash
+# Run all tests
 cargo test --workspace
-```
 
-2,430+ tests passing on Phase E complete (M11.1..M14, last cold-rebuilt @ d178a3f).
-
-### Run lints
-
-```bash
+# Run lints
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-```
 
-CI runs clippy with `-D warnings` — any warning fails the PR.
-
-### Run doc-coverage
-
-```bash
+# Run doc-coverage
 bash scripts/doc-coverage.sh
 ```
-
-Verifies all public items have documentation in `docs/human/zh/`, `docs/human/en/`, and `docs/agent/` trees.
-
-## Workflow checklist
-
-Before you push:
-
-- [ ] Public items exist in `docs/human/zh/`, `docs/human/en/`, `docs/agent/` simultaneously
-- [ ] Decisions affecting two or more files have an ADR (`docs/agent/adr/NNNN-*.md`)
-- [ ] `cargo fmt`, `cargo clippy`, `cargo test`, `bash scripts/doc-coverage.sh` all pass
-- [ ] Each commit is atomic (code + tests + docs + ADR shipped together)
-- [ ] Commit messages follow [conventional commits](https://www.conventionalcommits.org/) with crate-scoped tags (e.g. `feat(router): add anthropic adapter`)
 
 ## Further reading
 
@@ -133,4 +66,4 @@ Before you push:
 - [Design philosophy](design-philosophy.md)
 - [Architecture](architecture.md)
 - [Milestones](milestones.md)
-- Project constitution [`CLAUDE.md`](../../../CLAUDE.md) (repo root)
+- Project constitution [`CLAUDE.md`](../../../CLAUDE.md)

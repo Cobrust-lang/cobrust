@@ -1,131 +1,64 @@
-# 入门
+# 入门 — 30 秒安装
 
-## 前置依赖
+## 第一步：安装 Cobrust
 
-- **Rust 1.94.1** — 项目通过 [`rust-toolchain.toml`](../../../rust-toolchain.toml) 锁定
-- **Git**
-
-`rustup` 会自动按 `rust-toolchain.toml` 安装匹配版本，你**不需要**手动切换。
-
-## 快速开始（5 步）
-
-### 1. 克隆仓库
+**方式 A — cargo install**（需要 Rust 工具链）：
 
 ```bash
-git clone https://github.com/cobrust/cobrust
-cd cobrust
+cargo install cobrust-cli
 ```
 
-### 2. 构建
+**方式 B — 预编译二进制**（无需 Rust）：
 
 ```bash
+# macOS arm64
+curl -L https://github.com/cobrust/cobrust/releases/latest/download/cobrust-0.1.0-beta-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv cobrust /usr/local/bin/
+
+# Linux x86_64
+curl -L https://github.com/cobrust/cobrust/releases/latest/download/cobrust-0.1.0-beta-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv cobrust /usr/local/bin/
+```
+
+验证：`cobrust --version` → `cobrust 0.1.0-beta`
+
+## 第二步：Hello, world
+
+```bash
+cobrust new hello && cd hello && cobrust run src/main.cb
+```
+
+预期输出：
+
+```
+hello, world
+```
+
+## 第三步：翻译 Python 库（可选）
+
+```bash
+cobrust translate tomli
+```
+
+完整的翻译工作流和验证门控见 [translate.md](translate.md)。
+
+## 开发工作流（贡献者路径）
+
+```bash
+# 克隆并从源码构建
+git clone https://github.com/cobrust/cobrust && cd cobrust
 cargo build --workspace
-```
 
-得到 `target/debug/cobrust` —— Cobrust 编译器 CLI。
-
-### 3. Hello world
-
-新建 `hello.cb`：
-
-```cobrust
-fn main() -> i64:
-    print("hello, world")
-    return 0
-```
-
-编译并运行：
-
-```bash
-./target/debug/cobrust build hello.cb
-./hello
-```
-
-### 4. 真正的算法：FizzBuzz
-
-新建 `fizzbuzz.cb`：
-
-```cobrust
-fn main() -> i64:
-    let n: i64 = 1
-    while n <= 15:
-        if n % 15 == 0:
-            print("FizzBuzz")
-        elif n % 3 == 0:
-            print("Fizz")
-        elif n % 5 == 0:
-            print("Buzz")
-        else:
-            print_int(n)
-        n = n + 1
-    return 0
-```
-
-编译并运行：
-
-```bash
-./target/debug/cobrust build fizzbuzz.cb
-./fizzbuzz
-```
-
-这展示了真正的 Cobrust：`while` 循环、`if/elif/else` 分支、取模运算和可变绑定
-（M11.1 启用，ADR-0030）。
-
-### 5. 交互式 REPL
-
-```bash
-./target/debug/cobrust repl
-```
-
-尝试：
-
-```
-> let x: i64 = 42
-> :type x
-> let y: i64 = x + 1
-> print_int(y)
-> :hir let y
-> :quit
-```
-
-指令：`:type <var>`、`:ast`、`:hir <stmt>`、`:mir <stmt>`、`:clear`、`:help`。
-
-## 开发工作流
-
-### 跑测试
-
-```bash
+# 运行所有测试
 cargo test --workspace
-```
 
-Phase E 完成阶段（M11.1..M14，最近 d178a3f 完整冷构建）有 2,430+ 个通过的测试。
-
-### 跑 lint
-
-```bash
+# 运行代码检查
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-```
 
-CI 会以 `-D warnings` 跑 clippy——任何警告都会让 PR 失败。
-
-### 跑文档覆盖检查
-
-```bash
+# 运行文档覆盖检查
 bash scripts/doc-coverage.sh
 ```
-
-验证所有公共项在 `docs/human/zh/`、`docs/human/en/` 和 `docs/agent/` 三棵文档树中都有对应文档。
-
-## 工作流约束
-
-提交代码前请确认：
-
-- [ ] 公共条目同时存在于 `docs/human/zh/`、`docs/human/en/`、`docs/agent/` 三棵树
-- [ ] 影响两个及以上文件的决定写了 ADR（`docs/agent/adr/NNNN-*.md`）
-- [ ] `cargo fmt`、`cargo clippy`、`cargo test`、`bash scripts/doc-coverage.sh` 全过
-- [ ] 单次提交是原子的（代码 + 测试 + 文档 + ADR 同步）
-- [ ] commit 信息符合 [conventional commits](https://www.conventionalcommits.org/)，scope 用 crate 名（如 `feat(router): add anthropic adapter`）
 
 ## 进一步阅读
 
@@ -133,4 +66,4 @@ bash scripts/doc-coverage.sh
 - [设计哲学](design-philosophy.md)
 - [架构](architecture.md)
 - [里程碑](milestones.md)
-- 项目宪章 [`CLAUDE.md`](../../../CLAUDE.md)（仓库根目录）
+- 项目宪章 [`CLAUDE.md`](../../../CLAUDE.md)
