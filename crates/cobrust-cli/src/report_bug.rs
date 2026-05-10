@@ -177,7 +177,7 @@ fn print_instructions(report: &Path) {
     println!("To file a GitHub issue, open:");
     println!();
     println!(
-        "  https://github.com/cobrust-lang/cobrust/issues/new\
+        "  https://github.com/Cobrust-lang/cobrust/issues/new\
          ?template=bug_report.md\
          &title=compiler+bug+report"
     );
@@ -186,7 +186,7 @@ fn print_instructions(report: &Path) {
     println!();
     println!(
         "  curl -F 'report=@{}' \
-         https://github.com/cobrust-lang/cobrust/issues/new",
+         https://github.com/Cobrust-lang/cobrust/issues/new",
         report.display()
     );
 }
