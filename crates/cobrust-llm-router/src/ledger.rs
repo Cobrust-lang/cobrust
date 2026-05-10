@@ -38,7 +38,6 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
-
 use crate::config::ProviderKind;
 use crate::provider::TokenUsage;
 
