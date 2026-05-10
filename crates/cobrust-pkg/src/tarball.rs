@@ -17,9 +17,9 @@
 
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-use crate::error::{PkgError, RegistryError};
+use crate::error::{PkgError, RegistryError, TarballError};
 
 /// A tarball ready for hashing + extraction.
 #[derive(Clone)]
@@ -121,9 +121,53 @@ impl Tarball {
     }
 
     /// Extract the tarball into `dest`. Creates `dest` if missing.
+    ///
+    /// # Security (M9)
+    ///
+    /// Before extracting, every entry path is validated:
+    /// - Absolute paths are rejected.
+    /// - Any path component equal to `..` is rejected.
+    /// - Symlink entries are rejected (Cobrust tarballs never contain
+    ///   symlinks; any symlink in an externally-sourced tarball is
+    ///   treated as adversarial).
+    ///
+    /// This prevents a "zip-slip" / "symlink escape" attack where a
+    /// crafted tarball writes outside the extraction directory.
     pub fn extract(&self, dest: &Path) -> Result<(), PkgError> {
         std::fs::create_dir_all(dest)
             .map_err(|e| PkgError::Io(format!("mkdir {}: {e}", dest.display())))?;
+
+        // --- Pass 1: validate every entry before touching the filesystem. ---
+        {
+            let decoder = flate2::read::GzDecoder::new(&self.bytes[..]);
+            let mut archive = tar::Archive::new(decoder);
+            for entry in archive
+                .entries()
+                .map_err(|e| PkgError::Tarball(TarballError::ReadEntries(e.to_string())))?
+            {
+                let entry = entry
+                    .map_err(|e| PkgError::Tarball(TarballError::ReadEntries(e.to_string())))?;
+                let header = entry.header();
+
+                // Reject symlinks and hard-links.
+                let entry_type = header.entry_type();
+                if entry_type.is_symlink() || entry_type.is_hard_link() {
+                    let path = entry
+                        .path()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| "<non-utf8>".into());
+                    return Err(PkgError::Tarball(TarballError::SymlinkEntry(path)));
+                }
+
+                // Reject absolute paths and `..` components.
+                let raw_path = entry
+                    .path()
+                    .map_err(|e| PkgError::Tarball(TarballError::BadEntryPath(e.to_string())))?;
+                validate_entry_path(&raw_path)?;
+            }
+        }
+
+        // --- Pass 2: extract (all entries are safe). ---
         let decoder = flate2::read::GzDecoder::new(&self.bytes[..]);
         let mut archive = tar::Archive::new(decoder);
         archive
@@ -174,6 +218,27 @@ struct TarEntry {
 enum TarKind {
     Dir,
     File(Vec<u8>),
+}
+
+/// (M9) Validate that a tarball entry path cannot escape the extraction root.
+///
+/// Rejects:
+/// - Absolute paths (`/etc/passwd`, `C:\Windows\…`)
+/// - Any `..` component in the path
+fn validate_entry_path(path: &Path) -> Result<(), PkgError> {
+    if path.is_absolute() {
+        return Err(PkgError::Tarball(TarballError::PathEscape(
+            path.to_string_lossy().into_owned(),
+        )));
+    }
+    for component in path.components() {
+        if matches!(component, Component::ParentDir) {
+            return Err(PkgError::Tarball(TarballError::PathEscape(
+                path.to_string_lossy().into_owned(),
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Names that should NEVER appear in a deterministic source tarball.
@@ -332,5 +397,156 @@ mod tests {
         let h = ta.hash().to_string();
         assert!(ta.verify_hash(&h).is_ok());
         assert!(ta.verify_hash("blake3:0000").is_err());
+    }
+
+    // ----------------------------------------------------------------
+    // M9 adversarial corpus — tarball path-traversal + symlink attacks
+    // ----------------------------------------------------------------
+
+    /// Build a gzipped tarball at the raw byte level with a single entry
+    /// at `entry_path` (as a regular file with content `"x"`).
+    ///
+    /// We write the POSIX tar header manually rather than via `tar::Builder`
+    /// because `tar::Header::set_path` refuses `..` components — exactly what
+    /// we need to craft adversarial fixtures.  The format is a 512-byte POSIX
+    /// header block followed by 512-byte data block(s) then two 512-byte EOF
+    /// blocks of NUL.
+    fn build_raw_tarball_with_path(entry_path: &str) -> Vec<u8> {
+        let mut header = [0u8; 512];
+        // name field: bytes 0..100
+        let name_bytes = entry_path.as_bytes();
+        let name_len = name_bytes.len().min(100);
+        header[..name_len].copy_from_slice(&name_bytes[..name_len]);
+        // mode: bytes 100..108
+        header[100..107].copy_from_slice(b"0000644");
+        // uid/gid: bytes 108..116 / 116..124
+        header[108..115].copy_from_slice(b"0000000");
+        header[116..123].copy_from_slice(b"0000000");
+        // size: 1 byte content "x", bytes 124..136
+        header[124..135].copy_from_slice(b"00000000001");
+        // mtime: bytes 136..148
+        header[136..147].copy_from_slice(b"00000000000");
+        // checksum placeholder: 8 spaces bytes 148..156
+        header[148..156].copy_from_slice(b"        ");
+        // typeflag: bytes 156 — '0' = regular file
+        header[156] = b'0';
+        // magic: bytes 257..263 "ustar\0"
+        header[257..263].copy_from_slice(b"ustar\0");
+        // version: bytes 263..265 "00"
+        header[263..265].copy_from_slice(b"00");
+        // Compute checksum (sum of all bytes as unsigned, stored in field 148..156).
+        let sum: u32 = header.iter().map(|&b| u32::from(b)).sum();
+        // Write octal checksum (6 digits + NUL + space).
+        let cksum = format!("{sum:06o}\0 ");
+        header[148..156].copy_from_slice(cksum.as_bytes());
+
+        let mut tar_bytes: Vec<u8> = Vec::new();
+        tar_bytes.extend_from_slice(&header);
+        // Data block for "x" (padded to 512 bytes).
+        let mut data_block = [0u8; 512];
+        data_block[0] = b'x';
+        tar_bytes.extend_from_slice(&data_block);
+        // Two EOF blocks.
+        tar_bytes.extend_from_slice(&[0u8; 512]);
+        tar_bytes.extend_from_slice(&[0u8; 512]);
+
+        let mut gz_bytes: Vec<u8> = Vec::new();
+        let mut encoder = flate2::write::GzEncoder::new(&mut gz_bytes, flate2::Compression::new(6));
+        encoder.write_all(&tar_bytes).unwrap();
+        encoder.finish().unwrap();
+        gz_bytes
+    }
+
+    /// Build a gzipped tarball with a symlink entry pointing at `link_target`.
+    fn build_raw_tarball_with_symlink(link_name: &str, link_target: &str) -> Vec<u8> {
+        let mut tar_bytes: Vec<u8> = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_mode(0o777);
+            header.set_size(0);
+            header.set_mtime(0);
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_path(link_name).unwrap();
+            header.set_link_name(link_target).unwrap();
+            header.set_cksum();
+            builder.append(&header, std::io::empty()).unwrap();
+            builder.finish().unwrap();
+        }
+        let mut gz_bytes: Vec<u8> = Vec::new();
+        let mut encoder = flate2::write::GzEncoder::new(&mut gz_bytes, flate2::Compression::new(6));
+        encoder.write_all(&tar_bytes).unwrap();
+        encoder.finish().unwrap();
+        gz_bytes
+    }
+
+    #[test]
+    fn adversarial_path_traversal_dotdot() {
+        // `../etc/passwd` must be rejected before extraction.
+        let raw = build_raw_tarball_with_path("../etc/passwd");
+        let tb = Tarball::from_bytes(raw);
+        let dest = tempdir().unwrap();
+        let err = tb.extract(dest.path()).unwrap_err();
+        assert!(
+            matches!(err, PkgError::Tarball(TarballError::PathEscape(_))),
+            "expected PathEscape, got {err:?}"
+        );
+        // Confirm the file was NOT written.
+        assert!(!dest.path().join("etc/passwd").exists());
+    }
+
+    #[test]
+    fn adversarial_path_traversal_nested_dotdot() {
+        // `safe/../../etc/secret` contains a `..` component after safe prefix.
+        let raw = build_raw_tarball_with_path("safe/../../etc/secret");
+        let tb = Tarball::from_bytes(raw);
+        let dest = tempdir().unwrap();
+        let err = tb.extract(dest.path()).unwrap_err();
+        assert!(
+            matches!(err, PkgError::Tarball(TarballError::PathEscape(_))),
+            "expected PathEscape, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn adversarial_symlink_escape() {
+        // A symlink `link -> ../../../../tmp/evil` must be rejected.
+        let raw = build_raw_tarball_with_symlink("link", "../../../../tmp/evil");
+        let tb = Tarball::from_bytes(raw);
+        let dest = tempdir().unwrap();
+        let err = tb.extract(dest.path()).unwrap_err();
+        assert!(
+            matches!(err, PkgError::Tarball(TarballError::SymlinkEntry(_))),
+            "expected SymlinkEntry, got {err:?}"
+        );
+        assert!(!dest.path().join("link").exists());
+    }
+
+    #[test]
+    fn adversarial_symlink_same_dir() {
+        // Even a symlink within the archive (not escaping) is rejected —
+        // Cobrust tarballs never contain symlinks.
+        let raw = build_raw_tarball_with_symlink("a_link", "a_target");
+        let tb = Tarball::from_bytes(raw);
+        let dest = tempdir().unwrap();
+        let err = tb.extract(dest.path()).unwrap_err();
+        assert!(
+            matches!(err, PkgError::Tarball(TarballError::SymlinkEntry(_))),
+            "expected SymlinkEntry, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn safe_tarball_still_extracts() {
+        // Sanity-check: a well-formed tarball with only normal files extracts OK.
+        let a = tempdir().unwrap();
+        fs::create_dir(a.path().join("src")).unwrap();
+        fs::write(a.path().join("src/main.cb"), "fn main():\n    pass\n").unwrap();
+        let ta = Tarball::build(a.path()).unwrap();
+        let dest = tempdir().unwrap();
+        ta.extract(dest.path()).unwrap();
+        assert!(dest.path().join("src/main.cb").is_file());
     }
 }
