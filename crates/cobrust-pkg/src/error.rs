@@ -20,6 +20,10 @@ pub enum PkgError {
     #[error("source error: {0}")]
     Source(#[from] SourceError),
 
+    /// (M9) Tarball validation failure — adversarial entry detected.
+    #[error("tarball error: {0}")]
+    Tarball(#[from] TarballError),
+
     #[error("io error: {0}")]
     Io(String),
 }
@@ -125,4 +129,33 @@ pub enum SourceError {
          (they would be parsed as git CLI flags)"
     )]
     AdversarialRef(String),
+}
+
+/// (M9) Errors arising from tarball security validation.
+#[derive(Debug, Error)]
+pub enum TarballError {
+    /// An entry whose path contains `..` or is absolute would escape the
+    /// extraction directory ("zip-slip" / path traversal attack).
+    #[error(
+        "tarball entry `{0}` contains a path-traversal component (`..` or \
+         absolute path) — extraction aborted"
+    )]
+    PathEscape(String),
+
+    /// A symlink or hard-link entry was found. Cobrust tarballs never
+    /// contain symlinks; any such entry in an external tarball is suspect.
+    #[error(
+        "tarball entry `{0}` is a symlink or hard-link — extraction aborted \
+         (symlinks can redirect writes outside the extraction directory)"
+    )]
+    SymlinkEntry(String),
+
+    /// An I/O error while iterating tarball entries during pre-extraction
+    /// validation.
+    #[error("failed to read tarball entries during validation: {0}")]
+    ReadEntries(String),
+
+    /// An entry path could not be decoded (non-UTF-8 in path components).
+    #[error("tarball entry has an undecodable path: {0}")]
+    BadEntryPath(String),
 }
