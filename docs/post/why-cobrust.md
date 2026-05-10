@@ -1,6 +1,3 @@
-<!-- Paste to: Cobrust/docs/post/why-cobrust.md
-     Crosspost to: HN, r/rust, r/programming, lobste.rs, dev.to -->
-
 # Why Cobrust — an AI-native compiler that translates Python libraries into verified Rust
 
 > *Cobrust 0.1.0-beta · 2026-05-10 · Built in public, by AI agents working with humans*
@@ -65,7 +62,7 @@ We have:
 - A working language: lexer, parser, HIR, type checker, MIR, Cranelift codegen, package format, REPL stub, structured-concurrency runtime
 - A working translator: L0..L3 closed-loop with consensus mode and provenance manifests
 - One library translated end-to-end with real LLMs: `tomli`. Full L0..L3 PASS, downstream-dep validation PASS, benchmark within 0.8× of CPython
-- 768+ tests, 0 fail, on macOS arm64 + Linux x86_64
+- 2,545+ tests, 0 fail, on macOS arm64 + Linux x86_64
 
 We do not have:
 - LSP (yet — see [F.1.8 in the roadmap](docs/agent/adr/0038-phase-f-roadmap.md))

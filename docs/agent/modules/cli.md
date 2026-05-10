@@ -313,7 +313,7 @@ gone — `build.rs` handles it at install time.
 `cobrust new <name>` now scaffolds two additional files:
 
 - `.gitignore` — contents: `/target/\n*.lock\n`
-- `README.md` — one-liner referencing `cobrust.dev`
+- `README.md` — one-liner referencing `github.com/Cobrust-lang/cobrust`
 
 The success message was updated to print the `cd <name> && cobrust run
 src/main.cb` hint.

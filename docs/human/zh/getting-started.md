@@ -40,7 +40,7 @@ hello, world
 cobrust translate tomli
 ```
 
-完整的翻译工作流和验证门控见 [translate.md](translate.md)。
+完整的翻译工作流和验证门控见 [ADR-0007 translator pipeline](../../agent/adr/0007-translator-pipeline.md)。
 
 ## 开发工作流（贡献者路径）
 
