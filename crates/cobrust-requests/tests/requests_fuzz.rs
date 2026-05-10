@@ -25,7 +25,7 @@
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_panics_doc)]
 
-use cobrust_requests::{HttpErrorKind, Response, Session};
+use cobrust_requests::{HttpErrorKind, MAX_BODY_BYTES, Response, Session};
 use std::collections::HashMap;
 
 struct Lcg {
@@ -124,4 +124,42 @@ fn response_observers_are_consistent_under_random_status() {
         }
     }
     assert!(total >= 1000, "fuzz coverage shortfall: {total}");
+}
+
+// ── B5 adversarial corpus ─────────────────────────────────────────────────
+
+/// B5: `Response::from_parts` with a body exactly at MAX_BODY_BYTES must
+/// pass through (the cap is exclusive: > MAX_BODY_BYTES triggers the error).
+///
+/// This test validates the in-process path via `from_parts`. The live
+/// network path (from_reqwest) is covered by the integration gate in
+/// `requests_downstream.rs`.
+#[test]
+fn b5_body_at_limit_is_accepted() {
+    // Build a body exactly MAX_BODY_BYTES long.
+    let body = vec![0u8; MAX_BODY_BYTES];
+    let resp = Response::from_parts(200, HashMap::new(), body.clone());
+    assert_eq!(resp.bytes(), body);
+}
+
+/// B5: body just below limit must pass through.
+#[test]
+fn b5_body_just_below_limit_is_accepted() {
+    let body = vec![0xABu8; MAX_BODY_BYTES - 1];
+    let resp = Response::from_parts(200, HashMap::new(), body.clone());
+    assert_eq!(resp.bytes().len(), MAX_BODY_BYTES - 1);
+}
+
+/// B5: `HttpErrorKind::BodyTooLarge` Display carries the right substring.
+#[test]
+fn b5_body_too_large_error_display() {
+    let e = cobrust_requests::HttpError {
+        kind: HttpErrorKind::BodyTooLarge,
+        message: format!("response body exceeded {MAX_BODY_BYTES} byte limit"),
+    };
+    let s = format!("{e}");
+    assert!(
+        s.contains("body too large"),
+        "expected 'body too large' in display, got: {s:?}"
+    );
 }
