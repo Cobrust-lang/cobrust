@@ -408,6 +408,26 @@ attempt-2 for `parse_iso`.
 - [ ] Cython front-end upgraded from lexical shim to a real parser.
 - [ ] Maturin-managed wheel publication path.
 
+## Real-LLM gates in CI
+
+Three integration tests exercise the real-LLM path (live API call);
+all three skip cleanly when `USER_CODEX_API_KEY` is unset.
+
+| Test file | Test name | Skip condition | When really runs |
+|---|---|---|---|
+| `tests/full_pipeline_tomli_real_llm.rs` | `t1_1_full_pipeline_tomli_real_llm` | `USER_CODEX_API_KEY` unset | T1.1 validation gate |
+| `tests/audit_1_tomli_real_llm.rs` | `audit_1_parse_bool_real_llm_e2e` | `USER_CODEX_API_KEY` unset | Audit #1 re-run |
+| `tests/audit_3a_tomli_stateful.rs` | `audit_3a_parse_int_real_llm_e2e` | `USER_CODEX_API_KEY` unset | Audit #3a re-run |
+
+All three emit `cargo:warning=<gate> real-LLM gate SKIPPED ...` when
+skipping, so the skip is visible in CI build summary even without
+`--nocapture`. In the default `cargo test --workspace` environment
+(no API key), these three tests are SKIP (exit 0 / ok). They are
+NOT flaky: skip ≠ fail; absent-key path is a defined code path, not
+a partial run.
+
+To run the live gates: `USER_CODEX_API_KEY=<key> cargo test -p cobrust-translator`.
+
 ## Non-goals
 
 - Not a general-purpose Python-to-Rust transpiler. Targets Cobrust

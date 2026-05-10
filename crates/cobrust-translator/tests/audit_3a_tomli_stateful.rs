@@ -761,6 +761,7 @@ fn classify_divergence(expected: &serde_json::Value, actual: &serde_json::Value)
 #[tokio::test]
 async fn audit_3a_parse_int_real_llm_e2e() {
     let Some(api_key) = lookup_api_key() else {
+        println!("cargo:warning=audit-3a real-LLM gate SKIPPED (USER_CODEX_API_KEY unset)");
         eprintln!(
             "audit-3a: {ENV_KEY} unset — skipping real-LLM audit. \
              Set USER_CODEX_API_KEY=<codex-key> to run the live gate."
