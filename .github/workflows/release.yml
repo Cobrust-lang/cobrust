@@ -1,0 +1,210 @@
+# .github/workflows/release.yml
+#
+# On git tag v* — build release binaries for all tier-1 targets and
+# upload them to a GitHub Release as tar.gz archives.
+#
+# File naming convention: cobrust-{version}-{target_triple}.tar.gz
+# Binary inside archive: cobrust  (or cobrust.exe on Windows)
+#
+# Tier-1 targets (required, fail CI on error):
+#   - aarch64-apple-darwin    (macOS arm64)
+#   - x86_64-unknown-linux-gnu (Linux x86_64)
+#
+# Best-effort targets (continue on error, skip if runner unavailable):
+#   - aarch64-unknown-linux-gnu (Linux arm64, ubuntu-latest + cross)
+#   - x86_64-pc-windows-msvc   (Windows x86_64)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Build tier-1 targets
+  # -------------------------------------------------------------------------
+  build-tier1:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: |
+          cargo build --release --locked -p cobrust-cli --target ${{ matrix.target }}
+
+      - name: Package tar.gz
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARGET="${{ matrix.target }}"
+          ARCHIVE="cobrust-${VERSION}-${TARGET}.tar.gz"
+          BINARY="target/${TARGET}/release/cobrust"
+          tar czf "${ARCHIVE}" -C "$(dirname ${BINARY})" "$(basename ${BINARY})"
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobrust-${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          retention-days: 1
+
+  # -------------------------------------------------------------------------
+  # Build best-effort targets (non-blocking)
+  # -------------------------------------------------------------------------
+  build-best-effort:
+    name: Build ${{ matrix.target }} (best-effort)
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross (Linux arm64)
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build release binary (cross)
+        if: matrix.use_cross
+        run: |
+          cross build --release --locked -p cobrust-cli --target ${{ matrix.target }}
+
+      - name: Build release binary (native)
+        if: ${{ !matrix.use_cross }}
+        run: |
+          cargo build --release --locked -p cobrust-cli --target ${{ matrix.target }}
+
+      - name: Package tar.gz (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARGET="${{ matrix.target }}"
+          ARCHIVE="cobrust-${VERSION}-${TARGET}.tar.gz"
+          BINARY="target/${TARGET}/release/cobrust"
+          tar czf "${ARCHIVE}" -C "$(dirname ${BINARY})" "$(basename ${BINARY})"
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Package tar.gz (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v',''
+          $target = "${{ matrix.target }}"
+          $archive = "cobrust-${version}-${target}.tar.gz"
+          $binary = "target\${target}\release\cobrust.exe"
+          tar czf $archive -C (Split-Path $binary) (Split-Path $binary -Leaf)
+          echo "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobrust-${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          retention-days: 1
+
+  # -------------------------------------------------------------------------
+  # Create GitHub Release and upload all artifacts
+  # -------------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-tier1]
+    # Run after best-effort too when available; but don't gate on it.
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Cobrust ${{ github.ref_name }}"
+          body: |
+            ## Installation
+
+            ### Option A — cargo install (requires Rust toolchain)
+
+            ```bash
+            cargo install cobrust-cli
+            ```
+
+            ### Option B — prebuilt binary (no Rust needed)
+
+            ```bash
+            # macOS arm64
+            curl -L https://github.com/cobrust/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz | tar xz
+            sudo mv cobrust /usr/local/bin/
+
+            # Linux x86_64
+            curl -L https://github.com/cobrust/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz | tar xz
+            sudo mv cobrust /usr/local/bin/
+            ```
+
+            ### Quick start
+
+            ```bash
+            cobrust new hello && cd hello && cobrust run src/main.cb
+            # → hello, world
+            ```
+
+            See [Getting Started](https://github.com/cobrust/cobrust/blob/main/docs/human/en/getting-started.md) for the full guide.
+          files: dist/*.tar.gz
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

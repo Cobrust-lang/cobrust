@@ -1,10 +1,13 @@
 //! `cobrust new <name>` — scaffold a Cobrust user crate per ADR-0024
 //! §"Package config skeleton (M10)".
 //!
-//! Produces:
+//! Produces (T1.3 enhanced):
 //!
-//! - `<name>/cobrust.toml` with the placeholder `[package]` table
-//! - `<name>/src/main.cb` with the canonical `print("hello, world")` body
+//! - `<name>/cobrust.toml` — full `[package]` + `[bin]` + `[[test]]` manifest
+//! - `<name>/src/main.cb` — canonical `print("hello, world")` hello-world
+//! - `<name>/tests/smoke.cb` — smoke test skeleton
+//! - `<name>/.gitignore` — ignores `target/` and lock files
+//! - `<name>/README.md` — one-liner with link to cobrust.dev
 
 use std::path::{Path, PathBuf};
 
@@ -86,8 +89,35 @@ pub fn run(name: &str, parent_dir: Option<&Path>) -> u8 {
         return exit_codes::INTERNAL_PANIC;
     }
 
+    // T1.3: .gitignore so `git init` + `cobrust run` works without stray
+    // build artifacts being staged accidentally.
+    let gitignore = "/target/\n*.lock\n";
+    if let Err(e) = std::fs::write(crate_dir.join(".gitignore"), gitignore) {
+        eprintln!("cobrust new: cannot write .gitignore: {e}");
+        return exit_codes::INTERNAL_PANIC;
+    }
+
+    // T1.3: README stub so the project is immediately shareable.
+    let readme = format!(
+        "# {name}\n\
+         \n\
+         A [Cobrust](https://cobrust.dev) package.\n\
+         \n\
+         ```bash\n\
+         cobrust run src/main.cb\n\
+         ```\n"
+    );
+    if let Err(e) = std::fs::write(crate_dir.join("README.md"), readme) {
+        eprintln!("cobrust new: cannot write README.md: {e}");
+        return exit_codes::INTERNAL_PANIC;
+    }
+
     println!(
-        "cobrust: created package `{name}` at {}",
+        "cobrust: created package `{name}` at {}\n\
+         \n\
+         Run your project:\n\
+         \n\
+         \tcd {name} && cobrust run src/main.cb",
         crate_dir.display()
     );
     exit_codes::SUCCESS

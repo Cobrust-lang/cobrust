@@ -287,6 +287,64 @@ managed by rustyline).
 - No arbitrary `print(s: str)` lowering at M10 — narrowed to the literal
   `"hello, world"`. M11 stdlib `std.io.println` widens.
 
+## T1.3 — Install-path zero-friction (0.1.0-beta)
+
+### build.rs static-lib embedding
+
+`crates/cobrust-cli/build.rs` (new, T1.3) builds `cobrust-stdlib` as a
+static archive at compile time and bakes the resulting paths into the
+binary via `rustc-env`:
+
+- `COBRUST_STDLIB_ARCHIVE_PATH` — absolute path to `libcobrust_stdlib.a`
+  compiled during `cargo install`.
+- `COBRUST_RUNTIME_OBJ_PATH` — absolute path to pre-compiled
+  `cobrust_main.o` (the C shim).
+
+Both are read in `src/build.rs` via `option_env!` with two fallback
+levels: a runtime env-var override (`COBRUST_STDLIB_ARCHIVE` /
+`COBRUST_RUNTIME_OBJ`), then the workspace `target/{profile}/` walk.
+
+**Precondition (now removed)**: previously `locate_stdlib_archive`
+emitted `"run cargo build -p cobrust-stdlib first"`. That error is
+gone — `build.rs` handles it at install time.
+
+### cobrust new — T1.3 additions
+
+`cobrust new <name>` now scaffolds two additional files:
+
+- `.gitignore` — contents: `/target/\n*.lock\n`
+- `README.md` — one-liner referencing `cobrust.dev`
+
+The success message was updated to print the `cd <name> && cobrust run
+src/main.cb` hint.
+
+### cobrust run — wraps build + exec
+
+`cobrust run <file.cb>` has always done build + exec in one shot (since
+M10). No change in T1.3. The getting-started docs now expose this as the
+primary entry point (`cobrust new hello && cobrust run src/main.cb`).
+
+### install_smoke integration test
+
+`crates/cobrust-cli/tests/install_smoke.rs` — gated by
+`COBRUST_INSTALL_SMOKE=1` + `#[ignore]`. Run with:
+
+```bash
+COBRUST_INSTALL_SMOKE=1 cargo test -p cobrust-cli \
+  --test install_smoke -- --ignored
+```
+
+Validates: `cargo install` → `--version` → `cobrust new testpkg` →
+`cobrust run src/main.cb` → stdout = `hello, world\n` within 5 s.
+
+### release.yml
+
+`.github/workflows/release.yml` fires on `v*` tags. Tier-1 targets
+(required): `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`.
+Best-effort: `aarch64-unknown-linux-gnu` (via `cross`),
+`x86_64-pc-windows-msvc`. Archive naming:
+`cobrust-{version}-{target_triple}.tar.gz`.
+
 ## Cross-references
 
 - `mod:frontend` — `parse_str`, `unparse` (used by build / check / fmt).
