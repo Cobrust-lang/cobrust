@@ -21,8 +21,8 @@ SSH into 2×3090 workstation (Linux x86_64, Ubuntu 22.04, kernel
 run the 5-gate workspace tests + the 4 canonical example binaries.
 
 ```
-workstation: <self-hosted-runner>
-ssh: <runner-user>@<runner-ip> port <runner-port>
+workstation: <internal Linux x86_64 validator host>
+ssh: <redacted user@host -p port>
 toolchain: rustc 1.94.1 / cargo 1.94.1 (bootstrapped, matches rust-toolchain.toml)
 arch: x86_64-unknown-linux-gnu
 ```
@@ -170,7 +170,7 @@ Verified post-fix on both delivery-scope architectures:
 | Linux x86_64          | passes (codegen / cli / stdlib gates) | 16 / 16 pass            | all 4 PASS      |
 
 Linux x86_64 verification went through the
-`<self-hosted-runner>` workstation per
+`<internal Linux x86_64 validator host>` workstation per
 `~/.claude/projects/-Users-hakureirm-codespace-Study-Cobrust/memory/reference_x86_workstation.md`,
 synced via `rsync` of the `feature/codegen-float-return-fix`
 branch tree. The `cobrust-msgpack::msgpack_fuzz` test failed on

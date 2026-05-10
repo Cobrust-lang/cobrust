@@ -19,7 +19,7 @@ a few-shot example produces a port of `tomli_loads._parse_bool` that:
 ## Method
 
 - **Target**: `tomli_loads._parse_bool` (8-line Python leaf).
-- **Provider**: `OpenAiProvider` at `http://104.244.92.250:8317/v1` (model `gpt-5.5`).
+- **Provider**: `OpenAiProvider` at `<user-codex deployment URL>/v1` (model `gpt-5.5`).
 - **Cache discipline**:
   - `SyntheticProvider` NOT registered (review-claude #1).
   - `cache_dir` = isolated `tempdir().join("llm_cache")`, verified

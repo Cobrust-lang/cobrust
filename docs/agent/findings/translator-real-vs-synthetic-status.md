@@ -93,7 +93,7 @@ docs/agent/findings/m5-m7-real-llm-validation.md
    succeeds because the canned Cobrust source is a hand-written
    port of the Python source, by definition behaviorally equivalent.
 
-5. **The user-codex endpoint at `http://104.244.92.250:8317/v1`
+5. **The user-codex endpoint at `<user-codex deployment URL>/v1`
    (per `reference_codex_api.md`) has been live + reachable since
    2026-05-08 with `gpt-5.5` model exposed.** No translation pipeline
    run has been dispatched against it.

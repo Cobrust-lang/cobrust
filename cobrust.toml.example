@@ -76,7 +76,7 @@ preferred = [
 # For production, point base_url at an HTTPS endpoint.
 [providers.user_codex]
 kind = "openai"
-base_url = "http://104.244.92.250:8317/v1"
+base_url = "<user-codex deployment URL>/v1"
 api_key_env = "USER_CODEX_API_KEY"
 models = ["gpt-5.5"]
 
