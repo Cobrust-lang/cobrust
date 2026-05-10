@@ -22,8 +22,7 @@ causing the OS allocator to abort the process with SIGABRT.
 
 ## Method
 
-- **SSH target**: `wubingjing@112.74.60.44 -p 10040` (DG-Workstation-2x3090,
-  Ubuntu 22.04, kernel 5.15.0-176, x86_64, 40 cores / 62 GiB RAM).
+- **SSH target**: &lt;internal validator host — Ubuntu 22.04 x86_64, 40 cores / 62 GiB RAM&gt;.
 - **Toolchain**: rustc 1.94.1 / cargo 1.94.1 (matches `rust-toolchain.toml`).
 - **Sync**: `rsync` of HEAD `25dd034` to `~/cobrust-msgpack-orphan/`.
 - **Command run**:
