@@ -107,11 +107,12 @@ source-sha256: <16-hex>
 ```rust
 // Re-exports.
 pub use cobrust_translator::{
-    // Pipeline (M4 + M5 verifier hook + M6 perf verifier).
+    // Pipeline (M4 + M5 verifier hook + M6 perf verifier + ADR-0040 honest gate verdicts).
     translate, translate_with_verifier, translate_with_verifiers,
     PyLibrary, TranslatedCrate,
     BehaviorVerifier, VerifierVerdict, AcceptAll,
     PerfVerifier, PerfVerdict, AcceptAllPerf,
+    GateOutcome, GateOutcomes,
     // Configuration / errors.
     TranslatorConfig, TranslatorError,
     // L0 spec.
@@ -174,10 +175,36 @@ pub struct TranslatedCrate {
     pub functions: Vec<FunctionTranslation>,
     /// M5: total repair attempts that fired during this run.
     pub repair_attempts: u32,
+    /// ADR-0040: structured per-gate verdicts feeding the manifest's
+    /// gate fields. Read this instead of parsing the manifest strings.
+    pub gate_outcomes: GateOutcomes,
+}
+
+/// ADR-0040: structured outcome of one L2 / L3 gate. Distinct prefixes
+/// per variant in `as_manifest_str()`: `"pass (...)"` / `"fail: ..."` /
+/// `"skipped (...)"`. Replaces the M4-vintage hardcoded literals.
+pub enum GateOutcome {
+    Pass { detail: String },
+    Fail { reason: String },
+    Skip { reason: String },
+}
+
+/// ADR-0040: aggregate of every L2 / L3 gate's structured verdict for
+/// one translation run. `worst()` returns Fail > Skip > Pass.
+pub struct GateOutcomes {
+    pub l2_build: GateOutcome,
+    pub l2_behavior: GateOutcome,
+    pub l2_perf: GateOutcome,
+    pub l3_pyo3_wrapper: GateOutcome,
+    pub l3_downstream_dependents: GateOutcome,
 }
 
 pub trait BehaviorVerifier: Send + Sync {
     fn verify(&self, function: &FunctionTranslation, attempt: u32) -> VerifierVerdict;
+
+    /// ADR-0040: verdict to record on the manifest when no Reject is
+    /// observed. Default = `Pass`. `AcceptAll` overrides to `Skip`.
+    fn default_outcome(&self) -> GateOutcome { /* … */ }
 }
 
 pub enum VerifierVerdict {
@@ -230,6 +257,72 @@ failed_gate }`.
 The default no-op verifier `AcceptAll` preserves the M4 behaviour
 for callers that don't need closed-loop validation; `translate(...)`
 is shorthand for `translate_with_verifier(..., &AcceptAll)`.
+
+## Honest gate verdicts (ADR-0040 — pinned by `adr:0040`)
+
+The orchestrator returns a structured [`GateOutcomes`] aggregate
+alongside the manifest. Each gate (l2_build / l2_behavior / l2_perf /
+l3_pyo3_wrapper / l3_downstream_dependents) carries one of three
+disjoint variants:
+
+- `Pass { detail }` — verifier accepted; `detail` carries the
+  observable evidence shipped to the manifest (test target names +
+  repair-attempt count).
+- `Fail { reason }` — verifier rejected; surfaces as
+  `TranslatorError::EscalationExceeded` after the repair loop
+  exhausts `cfg.escalation_threshold`.
+- `Skip { reason }` — gate runs out-of-pipeline (e.g.
+  `cargo build --release` is the workspace-level gate, not invoked
+  inside `translate()`); the reason names *which* gate is wired-out.
+
+The `BehaviorVerifier::default_outcome()` and
+`PerfVerifier::default_outcome()` provided methods control the success-
+path verdict when no Reject is observed. Live verifiers (the trait
+default) surface as `Pass`; the no-op `AcceptAll` / `AcceptAllPerf`
+override to `Skip` so the manifest cannot record a fake-pass for an
+un-wired gate.
+
+Manifest serialization uses `GateOutcome::as_manifest_str()` which
+produces three distinct prefixes:
+
+```text
+"pass (...)"        # Pass with detail
+"pass"              # Pass with empty detail
+"fail: ..."         # Fail (only reachable via separate Err path)
+"skipped (...)"     # Skip with reason
+"skipped"           # Skip with empty reason
+```
+
+A downstream consumer can disambiguate the variant by prefix without
+parsing the inner detail string. Callers needing the typed view read
+`TranslatedCrate::gate_outcomes` directly.
+
+`GateOutcomes::worst()` returns the worst-priority verdict (Fail >
+Skip > Pass) — used by integration tests that need one aggregate exit
+signal.
+
+## Real-LLM mode wiring (ADR-0040 — pinned by `adr:0040`)
+
+`pipeline::build_router()` instantiates real adapters when
+`cfg.synthetic_only = false`:
+
+- `kind = "openai"` (covers DeepSeek / vLLM / OpenRouter / Together
+  per ADR-0004 §"Provider registry") → [`OpenAiProvider`].
+- `kind = "anthropic"` → [`AnthropicProvider`].
+- `kind = "synthetic"` in real-LLM mode → `TranslatorError::Config`
+  (per ADR-0031 §"Provider kind semantics").
+- Missing or empty `api_key_env` for any declared provider →
+  `TranslatorError::Config` naming the env var.
+
+The router's routing-table validation runs after registration so
+malformed `provider:model` references in `[routing.<task>]` surface
+as `TranslatorError::Router` not panic.
+
+Production callers passing `synthetic_only = false` previously hit
+`Err(TranslatorError::Config("real-LLM mode is not wired in M4 ..."))`;
+this short-circuit is gone. The router from ADR-0004 is exercised
+end-to-end by production translate(), reusing the real-LLM patterns
+ADR-0032 + ADR-0036 validated outside the pipeline.
 
 ## L2.perf benchmark harness (M5 — pinned by `adr:0008`)
 
