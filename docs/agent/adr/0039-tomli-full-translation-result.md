@@ -4,7 +4,7 @@ adr_id: "0039"
 title: T1.1 — tomli full-library real-LLM translation (0.1.0-beta headline demo)
 status: accepted
 date: 2026-05-10
-last_verified_commit: TBD
+last_verified_commit: 3b5ec14
 supersedes: []
 superseded_by: []
 dependencies: [adr:0007, adr:0032, adr:0036, finding:audit-1-tomli-real-llm-result, finding:audit-3a-stateful-prompt-design, finding:0.1.0-beta-tomli-full-translation]
