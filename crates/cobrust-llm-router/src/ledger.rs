@@ -38,6 +38,7 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
+
 use crate::config::ProviderKind;
 use crate::provider::TokenUsage;
 
@@ -162,12 +163,25 @@ impl Ledger {
     /// Open or create the JSONL file at `path` for append-only writes.
     /// The parent directory is created if missing.
     ///
+    /// On Unix the ledger file is created with mode **0600** (owner read/write
+    /// only). The ledger records every LLM prompt dispatch including cache
+    /// keys derived from prompt content; restricting access prevents other
+    /// local users from harvesting usage metadata on shared hosts.
+    ///
     /// # Errors
     /// I/O failures bubble up.
     pub async fn open(path: PathBuf) -> std::io::Result<Self> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
+        #[cfg(unix)]
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&path)
+            .await?;
+        #[cfg(not(unix))]
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -418,5 +432,26 @@ mod tests {
         // Must end with Z (UTC) and contain a date-time delimiter.
         assert!(s.ends_with('Z'), "{s}");
         assert!(s.contains('T'), "{s}");
+    }
+
+    /// B7: ledger file must be created with mode 0600 on Unix.
+    /// The ledger records every LLM prompt dispatch; restricting to owner-only
+    /// prevents other local users from reading usage metadata on shared hosts.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ledger_file_has_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let ledger = Ledger::open(path.clone()).await.unwrap();
+        ledger.append(&make_ok()).await.unwrap();
+        drop(ledger);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "ledger file must be 0600 (owner r/w only); got {:04o}",
+            mode & 0o777
+        );
     }
 }
