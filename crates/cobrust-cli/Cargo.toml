@@ -1,6 +1,6 @@
 [package]
 name = "cobrust-cli"
-version.workspace = true
+version = "0.1.0-beta"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,7 +8,9 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
-description = "Cobrust command-line interface."
+description = "Cobrust — Python ergonomics + Rust safety + AI-native compiler (CLI)"
+keywords = ["cobrust", "compiler", "language", "python", "cli"]
+categories = ["command-line-utilities", "development-tools", "compilers"]
 
 [[bin]]
 name = "cobrust"
