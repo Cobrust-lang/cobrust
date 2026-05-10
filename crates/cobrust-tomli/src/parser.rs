@@ -46,10 +46,26 @@ impl fmt::Display for TomliError {
 
 impl std::error::Error for TomliError {}
 
+/// Maximum nesting depth for TOML values (arrays / inline tables).
+/// Exceeding this limit returns `TomliError` instead of overflowing the
+/// call stack on adversarial input (B4 / P1 stack-OOM fix).
+pub const MAX_DEPTH: u32 = 100;
+
 impl TomliError {
     pub fn new(message: impl Into<String>, pos: usize) -> Self {
         Self {
             message: message.into(),
+            pos,
+        }
+    }
+
+    /// Returned when nesting depth exceeds [`MAX_DEPTH`].
+    #[must_use]
+    pub fn too_deep(pos: usize) -> Self {
+        Self {
+            message: format!(
+                "nesting depth exceeds maximum ({MAX_DEPTH}); possible adversarial input"
+            ),
             pos,
         }
     }
@@ -60,6 +76,11 @@ pub struct State<'a> {
     pub src: &'a str,
     pub bytes: &'a [u8],
     pub pos: usize,
+    /// Current recursion depth for nested value parsing.
+    /// Incremented when entering `parse_array` / `parse_inline_table`;
+    /// checked against [`MAX_DEPTH`] to prevent stack overflow on
+    /// adversarial deeply-nested input (B4 fix).
+    pub depth: u32,
 }
 
 impl<'a> State<'a> {
@@ -68,6 +89,7 @@ impl<'a> State<'a> {
             src,
             bytes: src.as_bytes(),
             pos: 0,
+            depth: 0,
         }
     }
 
@@ -180,7 +202,18 @@ pub fn loads(src: &str) -> Result<BTreeMap<String, Value>, TomliError> {
 }
 
 // fn:parse_array provider=user_codex_t1_1 model=gpt-5.5 cache_hit=false prompt_tokens=1960 completion_tokens=574
+// B4 fix: depth-guarded entry point.
 fn parse_array(state: &mut State<'_>) -> Result<Vec<Value>, TomliError> {
+    state.depth += 1;
+    if state.depth > MAX_DEPTH {
+        return Err(TomliError::too_deep(state.pos));
+    }
+    let result = parse_array_inner(state);
+    state.depth -= 1;
+    result
+}
+
+fn parse_array_inner(state: &mut State<'_>) -> Result<Vec<Value>, TomliError> {
     state.expect(b'[')?;
     let mut out = Vec::new();
 
@@ -273,7 +306,18 @@ fn parse_bool(state: &mut State<'_>) -> Result<bool, TomliError> {
 }
 
 // fn:parse_inline_table provider=user_codex_t1_1 model=gpt-5.5 cache_hit=false prompt_tokens=2005 completion_tokens=658
+// B4 fix: depth-guarded entry point.
 fn parse_inline_table(state: &mut State<'_>) -> Result<BTreeMap<String, Value>, TomliError> {
+    state.depth += 1;
+    if state.depth > MAX_DEPTH {
+        return Err(TomliError::too_deep(state.pos));
+    }
+    let result = parse_inline_table_inner(state);
+    state.depth -= 1;
+    result
+}
+
+fn parse_inline_table_inner(state: &mut State<'_>) -> Result<BTreeMap<String, Value>, TomliError> {
     state.expect(b'{')?;
     let mut out = BTreeMap::new();
     skip_whitespace(state);
