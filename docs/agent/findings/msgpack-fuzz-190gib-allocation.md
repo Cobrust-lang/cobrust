@@ -1,11 +1,11 @@
 ---
 doc_kind: finding
 finding_id: msgpack-fuzz-190gib-allocation
-last_verified_commit: 25dd034
+last_verified_commit: 99ebc54
 discovered_by: m9-cross-arch sub-agent (af85fad72157d2dcf, sonnet) on 2026-05-09 — promoted to independent finding by review-claude handoff §A.5; independently reproduced by P7 sonnet sprint 2026-05-09
 severity: P1 (denial-of-service via attacker-controlled msgpack input; not silent miscompile)
 related: [m9-cross-arch-linux-x86_64-validation, m9-cross-arch-9ff481c-regression]
-status: open
+status: closed-by-fix
 ---
 
 # Finding: cobrust-msgpack fuzz harness allocates 190 GiB on adversarial input

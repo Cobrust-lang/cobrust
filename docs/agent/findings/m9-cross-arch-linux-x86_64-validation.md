@@ -171,8 +171,7 @@ Verified post-fix on both delivery-scope architectures:
 
 Linux x86_64 verification went through the
 `<internal Linux x86_64 validator host>` workstation per
-`~/.claude/projects/-Users-hakureirm-codespace-Study-Cobrust/memory/reference_x86_workstation.md`,
-synced via `rsync` of the `feature/codegen-float-return-fix`
+<internal validator notes (out-of-repo)>synced via `rsync` of the `feature/codegen-float-return-fix`
 branch tree. The `cobrust-msgpack::msgpack_fuzz` test failed on
 x86_64 with a 190 GiB allocation request — that is a separate,
 pre-existing fuzz-knob issue unrelated to ADR-0033 and not gated
@@ -186,7 +185,6 @@ by this finding.
   `operand_ty`, `infer_local_types`, `rvalue_ty`
 - `crates/cobrust-codegen/tests/float_return_corpus.rs` — the
   16-case regression net.
-- Local memory: `reference_x86_workstation.md` (workstation access)
 - review-claude 三轮反馈 ① B (2026-05-09)
 - `cranelift-codegen-0.131.1/src/isa/x64/inst/emit.rs:1057`
   (`CvtFloatToSintSeq` closure)
