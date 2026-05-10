@@ -862,6 +862,9 @@ impl From<CodegenError> for UserError {
                 let first_line = m.lines().next().unwrap_or("(no detail)");
                 format!("Internal: {first_line}")
             }
+            CodegenError::UnimplementedBinOp { op, note } => {
+                format!("UnimplementedBinOp(`{op}`): {note}")
+            }
         };
         Self::internal(kind, "cobrust build <file>")
     }

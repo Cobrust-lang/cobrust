@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:mir
 crate: cobrust-mir
-last_verified_commit: 078eab9
-dependencies: [mod:hir, mod:types, adr:0020, adr:0027]
+last_verified_commit: e85630f
+dependencies: [mod:hir, mod:types, adr:0020, adr:0027, adr:0041]
 ---
 
 # Module: mir
@@ -285,6 +285,28 @@ ADR-0020 §"Drop schedule algorithm" — 5 phases:
 3. **End-of-scope** — at every `Goto`/`SwitchInt`/`Return`/`Unreachable` edge, insert `Drop` blocks for still-pending locals (LIFO order).
 4. **Divergence** — `Unreachable` blocks skip drop insertion.
 5. **Verification** — forward-flow check; pending-on-Return → `DropMissing`; double-drop on path → `DoubleDrop`.
+
+## ADR-0041 §H2 + §H6 — semantic compliance amendments
+
+Two MIR-level lowering paths were corrected to match Python semantics
+(per claude-desktop integrated handoff §2):
+
+- **§H2 — short-circuit `and` / `or`** (`lower_short_circuit_bool`).
+  Pre-fix: `lower_bin` emitted `BinaryOp(And/Or, lhs, rhs)` which
+  codegen lowered to `band` / `bor` — both LHS and RHS are eagerly
+  evaluated. Post-fix: when `op ∈ {And, Or}`, MIR allocates a result
+  local, evaluates LHS, branches on the result, and *conditionally*
+  evaluates RHS only when the LHS does not yet determine the answer.
+  CFG shape: `pre → SwitchInt(lhs) → [eval_rhs, merge]; eval_rhs →
+  merge`.
+- **§H6 — comprehension desugar** (`lower_comprehension`,
+  `lower_comp_clauses`, `lower_comp_body`). Pre-fix: `ExprKind::Comp`
+  lowered to a fresh empty list, body never emitted. Post-fix: real
+  loop+append, mirroring the `LoopKind::For` lowering. Calls
+  `__cobrust_list_new(8, 0)` upfront, runs the for-protocol on the
+  iterator, evaluates guards inline (continue on falsy), and pushes
+  each element via `__cobrust_list_append`. Multi-clause
+  comprehensions nest via recursion in `lower_comp_clauses`.
 
 ## Done means (M8 — DONE)
 

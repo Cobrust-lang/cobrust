@@ -395,7 +395,40 @@ impl<'a> Parser<'a> {
         if self.eat(&TokenKind::LParen) {
             // Allow `class Foo()` (empty) or `class Foo(Base)` (single).
             if !matches!(self.peek_kind(), TokenKind::RParen) {
-                base = Some(self.parse_expr()?);
+                let parsed_base = self.parse_expr()?;
+                // ADR-0041 §H7: reject multi-base classes (no MRO).
+                //
+                // Two parser shapes can produce a multi-base form:
+                //   1. `class Foo(A, B):` — Pratt returns `A`; the
+                //      comma stays unconsumed, so we observe Comma
+                //      next in the class-def parser.
+                //   2. `class Foo((A, B)):` — the inner parens force
+                //      the Pratt parser to build a tuple expression
+                //      whose `kind` is `Collection(Tuple(_))`.
+                //
+                // Both surface here. Constitution §2.2 drops multi-
+                // inheritance.
+                if matches!(self.peek_kind(), TokenKind::Comma) {
+                    let span = self.peek().span;
+                    return Err(ParseError::Syntax {
+                        message:
+                            "multi-base class is forbidden (constitution §2.2: composition + traits, no MRO; ADR-0041 §H7)"
+                                .to_string(),
+                        span: parsed_base.span.merge(span),
+                    });
+                }
+                if matches!(
+                    &parsed_base.kind,
+                    ExprKind::Collection(CollectionLit::Tuple(_))
+                ) {
+                    return Err(ParseError::Syntax {
+                        message:
+                            "multi-base class is forbidden (constitution §2.2: composition + traits, no MRO; ADR-0041 §H7)"
+                                .to_string(),
+                        span: parsed_base.span,
+                    });
+                }
+                base = Some(parsed_base);
             }
             self.expect(&TokenKind::RParen)?;
         }
@@ -1274,6 +1307,20 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Ident(name) => {
                 self.bump();
+                // ADR-0041 §H4: walrus operator is reserved-not-implemented.
+                // The lexer emits `Walrus` for `:=`; rather than silently
+                // dropping it (the prior behavior — parser zero-consumes
+                // walrus → opaque "expected EOS" error far downstream),
+                // raise an explicit `DroppedByConstitution` so the user
+                // knows.  A future ADR will adopt walrus as part of
+                // expression-binding; until then it's not part of Cobrust.
+                if matches!(self.peek_kind(), TokenKind::Walrus) {
+                    let walrus_span = self.peek().span;
+                    return Err(ParseError::DroppedByConstitution {
+                        name: "walrus :=",
+                        span: tok.span.merge(walrus_span),
+                    });
+                }
                 Ok(Expr {
                     kind: ExprKind::Name(name.clone()),
                     span: tok.span,
