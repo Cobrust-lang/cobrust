@@ -149,7 +149,7 @@ the P0 first.
 3. ✅ `cargo test --workspace --locked` exit 0 on macOS aarch64.
 4. ✅ Linux x86_64 cross-arch verification: 60 / 60
    `codegen_well_formed` + 16 / 16 `float_return_corpus` pass on
-   `<self-hosted-runner>` (per `reference_x86_workstation.md`).
+   `<internal Linux x86_64 validator host>` (per internal validator notes (out-of-repo)).
    `cobrust-msgpack::msgpack_fuzz` failed with a 190 GiB allocation
    request — pre-existing, unrelated, not gated.
 5. ✅ All 5 gates green on macOS aarch64: `cargo fmt --check`,

@@ -25,7 +25,7 @@ cross-architecture behavioral differences, but the x86 box was the only place wi
 pyo3 >= 0.22 installed, exposing the API mismatch that T1.C then fixed.
 
 This finding documents the cross-arch validation of these changes on Ubuntu 22.04
-x86_64 (<self-hosted-runner>, &lt;internal validator host&gt;).
+x86_64 (<internal Linux x86_64 validator host>, &lt;internal validator host&gt;).
 
 ## Method
 

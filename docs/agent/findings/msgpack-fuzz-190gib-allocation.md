@@ -1,11 +1,11 @@
 ---
 doc_kind: finding
 finding_id: msgpack-fuzz-190gib-allocation
-last_verified_commit: 25dd034
+last_verified_commit: 99ebc54
 discovered_by: m9-cross-arch sub-agent (af85fad72157d2dcf, sonnet) on 2026-05-09 — promoted to independent finding by review-claude handoff §A.5; independently reproduced by P7 sonnet sprint 2026-05-09
 severity: P1 (denial-of-service via attacker-controlled msgpack input; not silent miscompile)
 related: [m9-cross-arch-linux-x86_64-validation, m9-cross-arch-9ff481c-regression]
-status: open
+status: closed-by-fix
 ---
 
 # Finding: cobrust-msgpack fuzz harness allocates 190 GiB on adversarial input
@@ -160,7 +160,7 @@ production Linux deployments). This includes any Cobrust application that unpack
 attacker-controlled msgpack data.
 
 The immediate impact on CI/CD is that the `msgpack_fuzz` test fails on the
-<self-hosted-runner> (the project's only Linux x86_64 gate), preventing that test
+<internal Linux x86_64 validator host> (the project's only Linux x86_64 gate), preventing that test
 suite from being green on Linux. The fuzz test's panic-freedom contract is violated.
 
 Not blocking M-batch / current milestone closure since `cobrust-msgpack` is

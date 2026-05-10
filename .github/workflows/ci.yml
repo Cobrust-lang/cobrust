@@ -1,4 +1,3 @@
-# Paste to: Cobrust/.github/workflows/ci.yml
 #
 # Five-gate CI: fmt + clippy + build + test + doc-coverage
 # on macOS arm64 + Linux x86_64.

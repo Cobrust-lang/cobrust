@@ -89,7 +89,7 @@ use cobrust_translator::{
 // ---- Constants ---------------------------------------------------------------
 
 const ENV_KEY: &str = "USER_CODEX_API_KEY";
-const BASE_URL: &str = "http://104.244.92.250:8317/v1";
+const BASE_URL: &str = "http://127.0.0.1:1/v1";
 const PROVIDER_KEY: &str = "user_codex_audit3a";
 const MODEL: &str = "gpt-5.5";
 const TARGET_FUNCTION: &str = "parse_int";
@@ -1122,8 +1122,8 @@ endpoint reachable will produce the gated outcome.
 
 Harness correct (cache discipline verified, provider wired, production
 builder used). Endpoint unavailable. CTO retries with
-`https_proxy=http://127.0.0.1:7897` set, or via <self-hosted-runner> per
-`reference_x86_workstation.md`.
+`https_proxy=http://127.0.0.1:7897` set, or via <internal Linux x86_64
+validator host> per internal validator notes (out-of-repo).
 
 ## Cross-references
 

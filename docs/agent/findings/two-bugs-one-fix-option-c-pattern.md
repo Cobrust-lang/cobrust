@@ -29,7 +29,7 @@ bugs with one ~30-50 LOC change and no MIR-layer rewiring.
    - macOS arm64: 4 float tests (`p008`, `p017`, `p018`, `p019`) compile and
      produce wrong values silently (AAPCS64 truncation path tolerates the bogus
      type pair).
-   - Linux x86_64 (<self-hosted-runner>): same 4 tests panic inside Cranelift
+   - Linux x86_64 (<internal Linux x86_64 validator host>): same 4 tests panic inside Cranelift
      `CvtFloatToSintSeq::cvtt_op` — `(Size64, Size8)` not handled.
 2. **Root-cause trace**:
    - MIR lowering assigns `Ty::None` to synthetic temps `_un` / `_bin` /
