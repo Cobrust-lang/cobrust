@@ -232,3 +232,40 @@ with a `cobrust report-bug` hint instead of the raw IR dump.
 | `undefined_name` in expression | `Type` | 2 | Declare with `let` |
 | Program panics at runtime | `Runtime` | 4 | Debug program logic |
 | Cranelift / linker failure | `Internal` | 3 | Run `cobrust report-bug` |
+
+---
+
+## Translated-crate errors (untrusted-input hardening)
+
+The translated ecosystem crates enforce safety limits on untrusted input. These
+errors are returned as `Result::Err` — they never panic or abort the process.
+
+### `cobrust-tomli` — `TomliError`
+
+| Condition | Error message | Why |
+|---|---|---|
+| TOML nesting depth > 100 | `"nesting depth exceeds maximum (100); possible adversarial input"` | Adversarial deeply-nested arrays / inline tables would overflow the call stack without this cap (B4 fix). |
+| Invalid syntax | `"unexpected character '…' at pos N"` | Standard parse error. |
+| Unterminated string | `"unterminated string"` | Standard parse error. |
+
+**Constant**: `cobrust_tomli::MAX_DEPTH = 100` (exported; callers can reference it).
+
+### `cobrust-requests` — `HttpError` / `HttpErrorKind`
+
+| `HttpErrorKind` | Meaning | Action |
+|---|---|---|
+| `InvalidUrl` | URL did not parse or scheme is unsupported | Check the URL string. |
+| `Network` | DNS, TCP, or TLS failure | Check connectivity / certificates. |
+| `Timeout` | Transport timed out (default: 30 s) | Retry or increase timeout. |
+| `DecodeBody` | Response body is not valid UTF-8 or JSON | Check server's `Content-Type`. |
+| `BodyTooLarge` | Response body exceeded 64 MiB cap | The server sent too much data; use streaming or raise the cap (B5 fix). |
+
+**Constant**: `cobrust_requests::MAX_BODY_BYTES = 64 * 1024 * 1024` (64 MiB).
+
+### `cobrust-msgpack` — `MsgError` / `MsgErrorKind`
+
+| `MsgErrorKind` | Meaning | Action |
+|---|---|---|
+| `Pack` | Value could not be encoded (out of M6 scope). | Check the `MsgValue` variant. |
+| `Unpack` | Malformed or truncated msgpack bytes. | Check the input bytes. |
+| `OverflowSize` | `pos + length` overflowed `usize` — likely adversarial input with a crafted length field near `u32::MAX`. | Reject the input; it is not a valid msgpack payload (B6 fix). |

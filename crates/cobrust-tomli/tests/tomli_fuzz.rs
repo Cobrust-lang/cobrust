@@ -18,7 +18,7 @@
 #![allow(clippy::let_unit_value)]
 #![allow(clippy::ignored_unit_patterns)]
 
-use cobrust_tomli::{loads, table_to_json};
+use cobrust_tomli::{MAX_DEPTH, loads, table_to_json};
 use std::process::{Command, Stdio};
 
 const PYTHON: &str = "/opt/homebrew/bin/python3.11";
@@ -208,4 +208,90 @@ fn l2_behavior_fuzz_differential_agreement_with_cpython() {
         divergences <= cap,
         "{divergences}/{total} divergences exceed scope-window allowance ({cap})"
     );
+}
+
+// ── B4 adversarial corpus ─────────────────────────────────────────────────
+
+/// B4: adversarial input — deeply nested arrays exceeding MAX_DEPTH.
+///
+/// Before B4 fix: `loads()` would overflow the call stack (SIGSEGV or
+/// platform stack-guard signal) on inputs like `[[[[...` repeated hundreds
+/// of times. After fix: returns `TomliError::too_deep`, never panics.
+#[test]
+fn b4_deep_array_returns_err_not_stack_overflow() {
+    // Build an array nested MAX_DEPTH + 50 levels deep.
+    let depth = (MAX_DEPTH + 50) as usize;
+    let mut input = String::with_capacity(depth * 2 + 10);
+    input.push_str("x = ");
+    for _ in 0..depth {
+        input.push('[');
+    }
+    input.push('1');
+    for _ in 0..depth {
+        input.push(']');
+    }
+    input.push('\n');
+
+    let result = loads(&input);
+    assert!(
+        result.is_err(),
+        "expected Err for depth-{depth} array, got Ok"
+    );
+    let err = result.expect_err("depth array must fail");
+    assert!(
+        err.message.contains("nesting depth"),
+        "expected 'nesting depth' in error message, got: {:?}",
+        err.message
+    );
+}
+
+/// B4: adversarial input — deeply nested inline tables exceeding MAX_DEPTH.
+///
+/// `{{ k = {{ k = {{ ... }} }} }}` repeated hundreds of times would previously
+/// blow the stack. After fix: graceful `TomliError`.
+#[test]
+fn b4_deep_inline_table_returns_err_not_stack_overflow() {
+    let depth = (MAX_DEPTH + 50) as usize;
+    // Build: x = { k = { k = { ... 1 ... } } }
+    let mut input = String::with_capacity(depth * 8 + 20);
+    input.push_str("x = ");
+    for _ in 0..depth {
+        input.push_str("{ k = ");
+    }
+    input.push('1');
+    for _ in 0..depth {
+        input.push_str(" }");
+    }
+    input.push('\n');
+
+    let result = loads(&input);
+    assert!(
+        result.is_err(),
+        "expected Err for depth-{depth} inline table, got Ok"
+    );
+    let err = result.expect_err("depth inline table must fail");
+    assert!(
+        err.message.contains("nesting depth"),
+        "expected 'nesting depth' in error message, got: {:?}",
+        err.message
+    );
+}
+
+/// B4: boundary — exactly MAX_DEPTH levels must be accepted.
+#[test]
+fn b4_exactly_max_depth_is_accepted() {
+    let depth = MAX_DEPTH as usize;
+    let mut input = String::with_capacity(depth * 2 + 10);
+    input.push_str("x = ");
+    for _ in 0..depth {
+        input.push('[');
+    }
+    input.push('1');
+    for _ in 0..depth {
+        input.push(']');
+    }
+    input.push('\n');
+
+    // Must either succeed or fail with a parse error — but must NOT panic.
+    let _ = loads(&input);
 }
