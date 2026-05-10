@@ -89,9 +89,28 @@ fn fetch_path(
 }
 
 fn fetch_git(url: &str, rev: &str, registry: &Registry) -> Result<SourceFetchOutput, PkgError> {
+    // M8 security fix: validate that url and rev cannot be mistaken for flags.
+    // A branch/tag name like `--upload-pack=evil` would be passed directly to
+    // `git clone --branch <rev>`, letting an attacker inject arbitrary git
+    // options via a crafted dependency spec. Reject any rev or url that starts
+    // with `-`.
+    if rev.starts_with('-') {
+        return Err(PkgError::Source(SourceError::AdversarialRef(
+            rev.to_string(),
+        )));
+    }
+    if url.starts_with('-') {
+        return Err(PkgError::Source(SourceError::AdversarialRef(
+            url.to_string(),
+        )));
+    }
+
     let staging = tempdir_for_git(rev)?;
     let staging_path = staging.path();
 
+    // `--` separates git options from positional arguments. Without it, a URL
+    // or rev that looks like a flag (e.g. `--upload-pack=evil`) would be parsed
+    // as a git option even after the checks above (e.g. via path components).
     // Try the shallow + branched form first; some refs are SHAs and will
     // fail this. Fall back to plain clone + checkout.
     let shallow = Command::new("git")
@@ -99,6 +118,7 @@ fn fetch_git(url: &str, rev: &str, registry: &Registry) -> Result<SourceFetchOut
         .arg("--depth=1")
         .arg("--branch")
         .arg(rev)
+        .arg("--")
         .arg(url)
         .arg(staging_path)
         .status();
@@ -109,6 +129,7 @@ fn fetch_git(url: &str, rev: &str, registry: &Registry) -> Result<SourceFetchOut
         let _ = std::fs::remove_dir_all(staging_path);
         let plain = Command::new("git")
             .arg("clone")
+            .arg("--")
             .arg(url)
             .arg(staging_path)
             .status()
@@ -122,6 +143,7 @@ fn fetch_git(url: &str, rev: &str, registry: &Registry) -> Result<SourceFetchOut
             .arg("-C")
             .arg(staging_path)
             .arg("checkout")
+            .arg("--")
             .arg(rev)
             .status()
             .map_err(|e| PkgError::Source(SourceError::Git(format!("git checkout {rev}: {e}"))))?;
@@ -317,5 +339,58 @@ mod tests {
             rev: "master".into(),
         };
         let _ = s.fetch(&r, workspace.path());
+    }
+
+    // ----------------------------------------------------------------
+    // M8 adversarial corpus — git ref/url injection via flag-like values
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn git_adversarial_rev_upload_pack() {
+        // A rev starting with `--` must be rejected before any process spawn.
+        let registry_dir = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let r = Registry::open_at(registry_dir.path()).unwrap();
+        let s = Source::Git {
+            url: "https://example.com/repo.git".into(),
+            rev: "--upload-pack=evil".into(),
+        };
+        let err = s.fetch(&r, workspace.path()).unwrap_err();
+        assert!(
+            matches!(err, PkgError::Source(SourceError::AdversarialRef(_))),
+            "expected AdversarialRef, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn git_adversarial_rev_single_dash() {
+        let registry_dir = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let r = Registry::open_at(registry_dir.path()).unwrap();
+        let s = Source::Git {
+            url: "https://example.com/repo.git".into(),
+            rev: "-b".into(),
+        };
+        let err = s.fetch(&r, workspace.path()).unwrap_err();
+        assert!(
+            matches!(err, PkgError::Source(SourceError::AdversarialRef(_))),
+            "expected AdversarialRef, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn git_adversarial_url_flag_like() {
+        let registry_dir = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let r = Registry::open_at(registry_dir.path()).unwrap();
+        let s = Source::Git {
+            url: "--config=core.hookspath=/evil".into(),
+            rev: "main".into(),
+        };
+        let err = s.fetch(&r, workspace.path()).unwrap_err();
+        assert!(
+            matches!(err, PkgError::Source(SourceError::AdversarialRef(_))),
+            "expected AdversarialRef, got {err:?}"
+        );
     }
 }
