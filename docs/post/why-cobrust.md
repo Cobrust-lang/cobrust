@@ -18,10 +18,10 @@ You don't rewrite your Python code. You don't annotate. You point Cobrust at a l
 ```bash
 $ cobrust translate tomli
 [L0] Spec extracted from tomli 2.0.1
-[L1] Translating with claude-opus-4-7 (consensus n=2)
+[L1] Translating with codex gpt-5.5
 [L2.build]    cargo build:  0 errors, 0 warnings
-[L2.behavior] differential testing 1000 inputs:  1000/1000 strict PASS
-[L2.perf]     0.92x baseline (within 0.8x gate)
+[L2.behavior] differential testing 1024 inputs:  99.71% strict PASS
+[L2.perf]     1KB 13.8x / 100KB 10.8x / 10MB 9.05x faster than CPython tomllib (ADR-0039)
 [L3] Downstream: pip-tools tomli usage compiles + tests pass
 
 $ pip install ./cobrust-tomli
@@ -37,7 +37,7 @@ Three things, in combination, that no prior project does:
 
 **2. Translation is verified, not trusted.** Every translated function is differentially tested against the CPython oracle on 1000+ fuzzed inputs. Numerical tolerances are explicit (`@py_compat(numerical(rtol=1e-7))`). Behavioral divergences must be tagged or fixed. Failed gates trigger a repair loop with diagnostic feedback, not silent acceptance. Provenance manifests pin the source SHA, the model fingerprint, the exact prompts used.
 
-**3. The output ecosystem replaces the input transparently.** A Cobrust-translated library is a Rust crate plus a PyO3 wrapper. `pip install ./cobrust-tomli` and Python imports work as before — but the parser is verified Rust, 5-50× faster, memory-safe.
+**3. The output ecosystem replaces the input transparently.** A Cobrust-translated library is a Rust crate plus a PyO3 wrapper. `pip install ./cobrust-tomli` and Python imports work as before — but the parser is verified Rust, **9-14× faster on tomli (T1.1 measured vs CPython 3.11 tomllib, see ADR-0039)**, memory-safe. Other libraries pending Phase F.1 perf gates.
 
 ## Compared to the prior art
 

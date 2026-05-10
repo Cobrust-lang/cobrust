@@ -31,10 +31,10 @@ $ cargo install cobrust-cli
 # Translate a Python library to verified Rust
 $ cobrust translate tomli
 [L0] Spec extracted from tomli 2.0.1
-[L1] Translating with claude-opus-4-7 (consensus n=2)
+[L1] Translating with codex gpt-5.5
 [L2.build]    cargo build:  0 errors, 0 warnings
-[L2.behavior] differential testing 1000 inputs:  1000/1000 strict PASS
-[L2.perf]     0.92x baseline (within 0.8x gate)
+[L2.behavior] differential testing 1024 inputs:  99.71% strict PASS
+[L2.perf]     1KB 13.8x / 100KB 10.8x / 10MB 9.05x faster than CPython tomllib (ADR-0039)
 [L3] Downstream: pip-tools tomli usage compiles + tests pass
 
 # Drop-in replace in Python
