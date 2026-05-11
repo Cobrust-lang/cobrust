@@ -1,0 +1,27 @@
+# LC-011 twoptr-reverse-in-place (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated integers
+# Output: elements in reversed order, one per line
+# Algorithm: two-pointer swap from both ends toward center
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let nums = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(nums, i, parse_int_tok(line, i))
+        i = i + 1
+    let lo: i64 = 0
+    let hi: i64 = n - 1
+    while lo < hi:
+        let tmp = list_get(nums, lo)
+        list_set(nums, lo, list_get(nums, hi))
+        list_set(nums, hi, tmp)
+        lo = lo + 1
+        hi = hi - 1
+    let j: i64 = 0
+    while j < n:
+        print_int(list_get(nums, j))
+        j = j + 1
+    return 0

@@ -1,0 +1,25 @@
+# LC-002 array-contains-duplicate (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated integers
+# Output: "true" if any value appears more than once, else "false"
+# Algorithm: O(N^2) nested scan; for each i check remaining elements j > i
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let nums = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(nums, i, parse_int_tok(line, i))
+        i = i + 1
+    let a: i64 = 0
+    while a < n:
+        let b: i64 = a + 1
+        while b < n:
+            if list_get(nums, a) == list_get(nums, b):
+                print("true")
+                return 0
+            b = b + 1
+        a = a + 1
+    print("false")
+    return 0

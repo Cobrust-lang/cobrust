@@ -1,0 +1,43 @@
+# LC-029 hashmap-subarray-sum-k (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N ints; Line 3: target K
+# Output: count of subarrays summing to exactly K
+# Algorithm: prefix-sum with frequency table emulated via parallel lists
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let k = parse_int(input(""))
+    let ps_vals = list_new(n + 1)
+    let ps_cnts = list_new(n + 1)
+    list_set(ps_vals, 0, 0)
+    list_set(ps_cnts, 0, 1)
+    let table_sz: i64 = 1
+    let prefix: i64 = 0
+    let ans: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        let v = parse_int_tok(line, i)
+        prefix = prefix + v
+        let need = prefix - k
+        let j: i64 = 0
+        while j < table_sz:
+            if list_get(ps_vals, j) == need:
+                ans = ans + list_get(ps_cnts, j)
+            j = j + 1
+        let found: i64 = 0
+        let m: i64 = 0
+        while m < table_sz:
+            if list_get(ps_vals, m) == prefix:
+                list_set(ps_cnts, m, list_get(ps_cnts, m) + 1)
+                found = 1
+                m = table_sz
+            else:
+                m = m + 1
+        if found == 0:
+            list_set(ps_vals, table_sz, prefix)
+            list_set(ps_cnts, table_sz, 1)
+            table_sz = table_sz + 1
+        i = i + 1
+    print_int(ans)
+    return 0
