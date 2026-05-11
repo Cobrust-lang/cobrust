@@ -2,13 +2,14 @@
 doc_kind: adr
 adr_id: 0047
 title: "LeetCode coverage strategy — Tier A discovery + B/C ramp decision gate"
-status: proposed
+status: accepted
 date: 2026-05-11
-last_verified_commit: TBD
+last_verified_commit: 14fdcd4
 supersedes: []
 superseded_by: []
 relates_to: [adr:0019, adr:0038, adr:0044, adr:0045, adr:0046]
 discovered_by_review: review-claude session 4bb35f43 LC-100 stress sweep dispatch
+ratified_by: P10 CTO 2026-05-11 ([P10-RATIFY-0047] accept all defaults, Q1-Q5 ACCEPT P9 recommendations)
 ---
 
 # ADR-0047: LeetCode coverage strategy — Tier A discovery + B/C ramp decision gate
