@@ -1,0 +1,38 @@
+# LC-067 partition-equal-subset (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated positive integers
+# Output: "true" if the array can be split into two equal-sum subsets
+# Algorithm: 0/1 knapsack DP; dp[s]=1 if sum s is achievable
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let total: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        total = total + parse_int_tok(line, i)
+        i = i + 1
+    if total % 2 == 1:
+        print("false")
+        return 0
+    let half = total / 2
+    let dp = list_new(half + 1)
+    let j: i64 = 0
+    while j <= half:
+        list_set(dp, j, 0)
+        j = j + 1
+    list_set(dp, 0, 1)
+    let ci: i64 = 0
+    while ci < n:
+        let v = parse_int_tok(line, ci)
+        let s: i64 = half
+        while s >= v:
+            if list_get(dp, s - v) == 1:
+                list_set(dp, s, 1)
+            s = s - 1
+        ci = ci + 1
+    if list_get(dp, half) == 1:
+        print("true")
+    else:
+        print("false")
+    return 0

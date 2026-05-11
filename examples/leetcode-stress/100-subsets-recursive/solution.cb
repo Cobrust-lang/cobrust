@@ -1,0 +1,79 @@
+# LC-100 subsets-recursive (ADR-0047 LC-100 Tier A bucket B4).
+#
+# Input  (stdin):
+#   Line 1: N
+#   Line 2: N space-separated integers (sorted, distinct)
+# Output: all 2^N subsets in DFS include/skip order, one per line.
+#         Elements within a subset are space-separated. Empty subset = blank line.
+#
+# Algorithm: recursive DFS include/skip backtracking (ADR-0034 FnRef Call lowering).
+# At each index: include element first (recurse size+1), then skip (recurse same size).
+
+fn print_int_no_nl(n: i64):
+    if n == 0:
+        print_no_nl("0")
+        return
+    let digits = list_new(20)
+    let d: i64 = 0
+    let v = n
+    if v < 0:
+        v = 0 - v
+    while v > 0:
+        list_set(digits, d, v % 10)
+        v = v / 10
+        d = d + 1
+    let k = d - 1
+    while k >= 0:
+        let dv = list_get(digits, k)
+        if dv == 0:
+            print_no_nl("0")
+        elif dv == 1:
+            print_no_nl("1")
+        elif dv == 2:
+            print_no_nl("2")
+        elif dv == 3:
+            print_no_nl("3")
+        elif dv == 4:
+            print_no_nl("4")
+        elif dv == 5:
+            print_no_nl("5")
+        elif dv == 6:
+            print_no_nl("6")
+        elif dv == 7:
+            print_no_nl("7")
+        elif dv == 8:
+            print_no_nl("8")
+        else:
+            print_no_nl("9")
+        k = k - 1
+
+fn print_subset(nums: list[i64], chosen: list[i64], size: i64) -> i64:
+    let i: i64 = 0
+    while i < size:
+        if i > 0:
+            print_no_nl(" ")
+        print_int_no_nl(list_get(nums, list_get(chosen, i)))
+        i = i + 1
+    print("")
+    return 0
+
+fn gen(nums: list[i64], chosen: list[i64], idx: i64, n: i64, size: i64) -> i64:
+    if idx == n:
+        print_subset(nums, chosen, size)
+        return 0
+    list_set(chosen, size, idx)
+    gen(nums, chosen, idx + 1, n, size + 1)
+    gen(nums, chosen, idx + 1, n, size)
+    return 0
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let nums = list_new(n)
+    let chosen = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(nums, i, parse_int_tok(line, i))
+        i = i + 1
+    gen(nums, chosen, 0, n, 0)
+    return 0

@@ -1,0 +1,19 @@
+[[cases]]
+input = "4\n1 2 3 1\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "4\n1 2 3 4\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1\n5\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "3\n7 7 7\n"
+expected_stdout = "true\n"
+expected_exit_code = 0

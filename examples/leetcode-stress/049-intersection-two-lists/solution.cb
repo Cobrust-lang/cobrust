@@ -1,0 +1,22 @@
+# LC-049 intersection-two-lists (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): "pre1 pre2 shared" on line 1; then pre1 unique nodes, pre2 unique nodes, then shared nodes
+# Output: value at first shared node (-1 if no intersection)
+# Algorithm: read all values; shared segment starts at index pre1+pre2; if shared==0 print -1
+
+fn main() -> i64:
+    let nm_line = input("")
+    let pre1 = parse_int_tok(nm_line, 0)
+    let pre2 = parse_int_tok(nm_line, 1)
+    let shared = parse_int_tok(nm_line, 2)
+    let total = pre1 + pre2 + shared
+    let vals = list_new(total + 1)
+    let i: i64 = 0
+    while i < total:
+        list_set(vals, i, parse_int(input("")))
+        i = i + 1
+    if shared == 0:
+        print_int(-1)
+    else:
+        print_int(list_get(vals, pre1 + pre2))
+    return 0

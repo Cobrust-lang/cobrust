@@ -1,0 +1,19 @@
+[[cases]]
+input = "abcabcbb\n"
+expected_stdout = "3\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "bbbbb\n"
+expected_stdout = "1\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "pwwkew\n"
+expected_stdout = "3\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "a\n"
+expected_stdout = "1\n"
+expected_exit_code = 0

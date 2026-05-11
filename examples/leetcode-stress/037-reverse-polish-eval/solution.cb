@@ -1,0 +1,52 @@
+# LC-037 reverse-polish-eval (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N tokens one per line (integer or +/-*/)
+# Output: integer result of the RPN expression
+# Algorithm: operand-stack; push numbers, pop two on operator and push result
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let stk = list_new(n + 1)
+    let top: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        let tok = input("")
+        let c0 = str_at(tok, 0)
+        let o0 = str_ord(c0)
+        let tlen = str_len(tok)
+        let is_num: i64 = 0
+        if tlen == 1:
+            if o0 == 43:
+                let b = list_get(stk, top - 1)
+                let a = list_get(stk, top - 2)
+                top = top - 2
+                list_set(stk, top, a + b)
+                top = top + 1
+                is_num = 1
+            elif o0 == 45:
+                let b = list_get(stk, top - 1)
+                let a = list_get(stk, top - 2)
+                top = top - 2
+                list_set(stk, top, a - b)
+                top = top + 1
+                is_num = 1
+            elif o0 == 42:
+                let b = list_get(stk, top - 1)
+                let a = list_get(stk, top - 2)
+                top = top - 2
+                list_set(stk, top, a * b)
+                top = top + 1
+                is_num = 1
+            elif o0 == 47:
+                let b = list_get(stk, top - 1)
+                let a = list_get(stk, top - 2)
+                top = top - 2
+                list_set(stk, top, a / b)
+                top = top + 1
+                is_num = 1
+        if is_num == 0:
+            list_set(stk, top, parse_int(tok))
+            top = top + 1
+        i = i + 1
+    print_int(list_get(stk, 0))
+    return 0

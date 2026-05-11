@@ -1,0 +1,28 @@
+# LC-045 linked-list-palindrome (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N values one per line
+# Output: "true" if the list is a palindrome, "false" otherwise
+# Algorithm: store all values in an array, then two-pointer compare from both ends
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let vals = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(vals, i, parse_int(input("")))
+        i = i + 1
+    let lo: i64 = 0
+    let hi: i64 = n - 1
+    let ok: i64 = 1
+    while lo < hi:
+        if list_get(vals, lo) != list_get(vals, hi):
+            ok = 0
+            lo = hi
+        else:
+            lo = lo + 1
+            hi = hi - 1
+    if ok == 1:
+        print("true")
+    else:
+        print("false")
+    return 0

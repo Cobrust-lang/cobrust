@@ -1,0 +1,64 @@
+# LC-031 bracket-balancer-extended (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): one line with bracket string using ()[]{}< >
+# Output: "true" if all brackets are properly balanced, "false" otherwise
+# Algorithm: stack-based; encode each open bracket as ASCII code, push/pop on open/close
+
+fn main() -> i64:
+    let s = input("")
+    let n = str_len(s)
+    let stack = list_new(n + 1)
+    let top: i64 = 0
+    let ok: i64 = 1
+    let i: i64 = 0
+    while i < n:
+        let c = str_at(s, i)
+        let o = str_ord(c)
+        if o == 40:
+            list_set(stack, top, 40)
+            top = top + 1
+        elif o == 91:
+            list_set(stack, top, 91)
+            top = top + 1
+        elif o == 123:
+            list_set(stack, top, 123)
+            top = top + 1
+        elif o == 60:
+            list_set(stack, top, 60)
+            top = top + 1
+        elif o == 41:
+            if top == 0:
+                ok = 0
+            else:
+                top = top - 1
+                if list_get(stack, top) != 40:
+                    ok = 0
+        elif o == 93:
+            if top == 0:
+                ok = 0
+            else:
+                top = top - 1
+                if list_get(stack, top) != 91:
+                    ok = 0
+        elif o == 125:
+            if top == 0:
+                ok = 0
+            else:
+                top = top - 1
+                if list_get(stack, top) != 123:
+                    ok = 0
+        elif o == 62:
+            if top == 0:
+                ok = 0
+            else:
+                top = top - 1
+                if list_get(stack, top) != 60:
+                    ok = 0
+        i = i + 1
+    if top != 0:
+        ok = 0
+    if ok == 1:
+        print("true")
+    else:
+        print("false")
+    return 0

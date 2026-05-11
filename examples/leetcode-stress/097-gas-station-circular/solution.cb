@@ -1,0 +1,41 @@
+# LC-097 gas-station-circular (ADR-0047 LC-100 Tier A bucket B4).
+#
+# Input  (stdin):
+#   Line 1: N (number of stations)
+#   Line 2: N space-separated gas amounts
+#   Line 3: N space-separated cost amounts
+# Output: starting station index (0-based) that completes the circuit,
+#         or -1 if impossible
+#
+# Algorithm: single-pass greedy.
+# If total gas >= total cost, a solution exists.
+# Track running tank; when it goes negative, reset start to next station.
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let gline = input("")
+    let cline = input("")
+    let gas = list_new(n)
+    let cost = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(gas, i, parse_int_tok(gline, i))
+        list_set(cost, i, parse_int_tok(cline, i))
+        i = i + 1
+    let total: i64 = 0
+    let tank: i64 = 0
+    let start: i64 = 0
+    let j: i64 = 0
+    while j < n:
+        let diff = list_get(gas, j) - list_get(cost, j)
+        total = total + diff
+        tank = tank + diff
+        if tank < 0:
+            start = j + 1
+            tank = 0
+        j = j + 1
+    if total < 0:
+        print_int(-1)
+    else:
+        print_int(start)
+    return 0

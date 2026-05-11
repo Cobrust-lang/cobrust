@@ -1,0 +1,48 @@
+# LC-042 linked-list-cycle-detect (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): "N tail_connect_idx" on line 1; N lines each with one value
+# Output: "true" if cycle exists, "false" otherwise
+# Algorithm: Floyd's tortoise-and-hare; fast pointer moves 2, slow moves 1
+
+fn main() -> i64:
+    let nm_line = input("")
+    let n = parse_int_tok(nm_line, 0)
+    let tail_to = parse_int_tok(nm_line, 1)
+    let nxt = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let line = input("")
+        if i < n - 1:
+            list_set(nxt, i, i + 1)
+        else:
+            list_set(nxt, i, tail_to)
+        i = i + 1
+    if tail_to == -1:
+        print("false")
+        return 0
+    let slow: i64 = 0
+    let fast: i64 = 0
+    let found: i64 = 0
+    let steps: i64 = 0
+    while steps < n + n + 2:
+        if fast == -1:
+            found = 0
+            steps = n + n + 10
+        else:
+            let nxt_fast = list_get(nxt, fast)
+            if nxt_fast == -1:
+                found = 0
+                steps = n + n + 10
+            else:
+                fast = list_get(nxt, nxt_fast)
+                slow = list_get(nxt, slow)
+                if slow == fast:
+                    found = 1
+                    steps = n + n + 10
+                else:
+                    steps = steps + 1
+    if found == 1:
+        print("true")
+    else:
+        print("false")
+    return 0

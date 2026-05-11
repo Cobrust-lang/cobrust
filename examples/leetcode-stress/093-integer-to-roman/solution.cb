@@ -1,0 +1,106 @@
+# LC-093 integer-to-roman (ADR-0047 LC-100 Tier A bucket B4).
+#
+# Input  (stdin): one integer N (1 <= N <= 3999)
+# Output: Roman numeral representation as string
+#
+# Algorithm: greedy - subtract largest Roman value that fits, append symbol.
+# Symbol table: values + two-char codes stored in i64 lists.
+# Printing uses direct literal strings (str_at on literals is broken per failure.md).
+
+fn print_roman_sym(s1: i64, s2: i64):
+    if s1 == 77:
+        print_no_nl("M")
+    elif s1 == 67:
+        if s2 == 77:
+            print_no_nl("C")
+            print_no_nl("M")
+            return
+        elif s2 == 68:
+            print_no_nl("C")
+            print_no_nl("D")
+            return
+        else:
+            print_no_nl("C")
+    elif s1 == 68:
+        print_no_nl("D")
+    elif s1 == 88:
+        if s2 == 67:
+            print_no_nl("X")
+            print_no_nl("C")
+            return
+        elif s2 == 76:
+            print_no_nl("X")
+            print_no_nl("L")
+            return
+        else:
+            print_no_nl("X")
+    elif s1 == 76:
+        print_no_nl("L")
+    elif s1 == 73:
+        if s2 == 88:
+            print_no_nl("I")
+            print_no_nl("X")
+            return
+        elif s2 == 86:
+            print_no_nl("I")
+            print_no_nl("V")
+            return
+        else:
+            print_no_nl("I")
+    elif s1 == 86:
+        print_no_nl("V")
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let vals = list_new(13)
+    list_set(vals, 0, 1000)
+    list_set(vals, 1, 900)
+    list_set(vals, 2, 500)
+    list_set(vals, 3, 400)
+    list_set(vals, 4, 100)
+    list_set(vals, 5, 90)
+    list_set(vals, 6, 50)
+    list_set(vals, 7, 40)
+    list_set(vals, 8, 10)
+    list_set(vals, 9, 9)
+    list_set(vals, 10, 5)
+    list_set(vals, 11, 4)
+    list_set(vals, 12, 1)
+    let sym1 = list_new(13)
+    list_set(sym1, 0, 77)
+    list_set(sym1, 1, 67)
+    list_set(sym1, 2, 68)
+    list_set(sym1, 3, 67)
+    list_set(sym1, 4, 67)
+    list_set(sym1, 5, 88)
+    list_set(sym1, 6, 76)
+    list_set(sym1, 7, 88)
+    list_set(sym1, 8, 88)
+    list_set(sym1, 9, 73)
+    list_set(sym1, 10, 86)
+    list_set(sym1, 11, 73)
+    list_set(sym1, 12, 73)
+    let sym2 = list_new(13)
+    list_set(sym2, 0, -1)
+    list_set(sym2, 1, 77)
+    list_set(sym2, 2, -1)
+    list_set(sym2, 3, 68)
+    list_set(sym2, 4, -1)
+    list_set(sym2, 5, 67)
+    list_set(sym2, 6, -1)
+    list_set(sym2, 7, 76)
+    list_set(sym2, 8, -1)
+    list_set(sym2, 9, 88)
+    list_set(sym2, 10, -1)
+    list_set(sym2, 11, 86)
+    list_set(sym2, 12, -1)
+    let rem = n
+    let i: i64 = 0
+    while i < 13:
+        let v = list_get(vals, i)
+        while rem >= v:
+            print_roman_sym(list_get(sym1, i), list_get(sym2, i))
+            rem = rem - v
+        i = i + 1
+    print("")
+    return 0

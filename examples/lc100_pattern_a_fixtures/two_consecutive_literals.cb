@@ -1,0 +1,12 @@
+# LC-100 Pattern A repro fixture #2 — two consecutive print_no_nl literals.
+#
+# Each literal is a separate .rodata pointer; the cast at fmt.rs:194 fires on
+# whichever pointer happens to land mis-aligned (typically both). Today this
+# crashes on the FIRST print_no_nl call. After Sprint 2 DEV ships: prints
+# "hihi\n" exit 0.
+
+fn main() -> i64:
+    print_no_nl("hi")
+    print_no_nl("hi")
+    print("")
+    return 0

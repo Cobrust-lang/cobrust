@@ -1,0 +1,26 @@
+# LC-043 remove-nth-from-end (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): "N K" on line 1; N values one per line
+# Output: list after removing K-th node from end, one value per line; empty list prints blank line
+# Algorithm: compute removal index as N-K, skip that index; empty result yields one blank line
+
+fn main() -> i64:
+    let nm_line = input("")
+    let n = parse_int_tok(nm_line, 0)
+    let k = parse_int_tok(nm_line, 1)
+    let vals = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(vals, i, parse_int(input("")))
+        i = i + 1
+    let remove_idx: i64 = n - k
+    let printed: i64 = 0
+    i = 0
+    while i < n:
+        if i != remove_idx:
+            print_int(list_get(vals, i))
+            printed = printed + 1
+        i = i + 1
+    if printed == 0:
+        print("")
+    return 0

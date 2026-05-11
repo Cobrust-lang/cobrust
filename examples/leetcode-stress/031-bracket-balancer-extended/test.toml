@@ -1,0 +1,24 @@
+[[cases]]
+input = "({[<>]})\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "({[}])\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "<<<>>>\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "(<)>\n"
+expected_stdout = "false\n"
+expected_exit_code = 0

@@ -1,0 +1,32 @@
+# LC-016 twoptr-container-water (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated bar heights
+# Output: maximum water volume between any two bars
+# Algorithm: two-pointer inward sweep; always move the shorter bar
+
+fn min_val(a: i64, b: i64) -> i64:
+    if a < b:
+        return a
+    return b
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let h = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(h, i, parse_int_tok(line, i))
+        i = i + 1
+    let lo: i64 = 0
+    let hi: i64 = n - 1
+    let best: i64 = 0
+    while lo < hi:
+        let water = (hi - lo) * min_val(list_get(h, lo), list_get(h, hi))
+        if water > best:
+            best = water
+        if list_get(h, lo) <= list_get(h, hi):
+            lo = lo + 1
+        else:
+            hi = hi - 1
+    print_int(best)
+    return 0

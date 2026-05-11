@@ -1,0 +1,29 @@
+[[cases]]
+input = "48 18\n"
+expected_stdout = "6\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "100 75\n"
+expected_stdout = "25\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "0 5\n"
+expected_stdout = "5\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "7 7\n"
+expected_stdout = "7\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1 1\n"
+expected_stdout = "1\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "13 17\n"
+expected_stdout = "1\n"
+expected_exit_code = 0

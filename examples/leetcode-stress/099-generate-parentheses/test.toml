@@ -1,0 +1,14 @@
+[[cases]]
+input = "1\n"
+expected_stdout = "()\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "2\n"
+expected_stdout = "(())\n()()\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "3\n"
+expected_stdout = "((()))\n(()())\n(())()\n()(())\n()()()\n"
+expected_exit_code = 0

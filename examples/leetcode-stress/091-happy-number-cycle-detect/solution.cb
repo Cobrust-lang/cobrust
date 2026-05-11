@@ -1,0 +1,30 @@
+# LC-091 happy-number-cycle-detect (ADR-0047 LC-100 Tier A bucket B4).
+#
+# Input  (stdin): one integer N
+# Output: "true" if N is a happy number, "false" otherwise
+#
+# A happy number: repeatedly replace N with sum of squares of its digits.
+# If the sequence reaches 1, it is happy.
+# Algorithm: Floyd cycle detection on the digit-square-sum sequence.
+
+fn digit_sq_sum(n: i64) -> i64:
+    let s: i64 = 0
+    let x = n
+    while x > 0:
+        let d = x % 10
+        s = s + d * d
+        x = x / 10
+    return s
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let slow = n
+    let fast = digit_sq_sum(n)
+    while fast != 1:
+        if fast == slow:
+            print("false")
+            return 0
+        slow = digit_sq_sum(slow)
+        fast = digit_sq_sum(digit_sq_sum(fast))
+    print("true")
+    return 0

@@ -1,0 +1,24 @@
+[[cases]]
+input = "9\n5\n1\n2\n+\n4\n*\n+\n3\n-\n"
+expected_stdout = "14\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "3\n3\n4\n+\n"
+expected_stdout = "7\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "5\n2\n1\n+\n3\n*\n"
+expected_stdout = "9\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "5\n2\n3\n4\n*\n+\n"
+expected_stdout = "14\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "5\n4\n13\n5\n/\n+\n"
+expected_stdout = "6\n"
+expected_exit_code = 0

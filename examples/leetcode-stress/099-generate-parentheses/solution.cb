@@ -1,0 +1,36 @@
+# LC-099 generate-parentheses (ADR-0047 LC-100 Tier A bucket B4).
+#
+# Input  (stdin): one integer N
+# Output: all valid combinations of N pairs of parentheses, one per line,
+#         in lexicographic order (( before ))
+#
+# Algorithm: recursive backtracking (ADR-0034 FnRef Call lowering).
+# Track open and close counts; at each position try ( (if open < n), then ) (if close < open).
+# Store current string as list: 0=open paren, 1=close paren.
+# Print using direct literal strings (str_at on literals is broken per failure.md).
+
+fn gen(buf: list[i64], pos: i64, n: i64, open: i64, close: i64) -> i64:
+    if pos == n * 2:
+        let k: i64 = 0
+        while k < pos:
+            let code = list_get(buf, k)
+            if code == 0:
+                print_no_nl("(")
+            else:
+                print_no_nl(")")
+            k = k + 1
+        print("")
+        return 0
+    if open < n:
+        list_set(buf, pos, 0)
+        gen(buf, pos + 1, n, open + 1, close)
+    if close < open:
+        list_set(buf, pos, 1)
+        gen(buf, pos + 1, n, open, close + 1)
+    return 0
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let buf = list_new(n * 2)
+    gen(buf, 0, n, 0, 0)
+    return 0

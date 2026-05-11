@@ -1,0 +1,25 @@
+# LC-021 hashmap-contains-dup-set (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated integers
+# Output: "true" if any duplicate exists, else "false"
+# Algorithm: emulate set with sorted seen-list; O(N^2) linear search
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let seen = list_new(n)
+    let seen_count: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        let v = parse_int_tok(line, i)
+        let j: i64 = 0
+        while j < seen_count:
+            if list_get(seen, j) == v:
+                print("true")
+                return 0
+            j = j + 1
+        list_set(seen, seen_count, v)
+        seen_count = seen_count + 1
+        i = i + 1
+    print("false")
+    return 0

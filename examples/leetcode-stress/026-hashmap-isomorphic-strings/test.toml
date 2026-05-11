@@ -1,0 +1,19 @@
+[[cases]]
+input = "egg\nadd\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "foo\nbar\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "paper\ntitle\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "ab\naa\n"
+expected_stdout = "false\n"
+expected_exit_code = 0

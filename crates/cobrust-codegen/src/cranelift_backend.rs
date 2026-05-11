@@ -2000,6 +2000,14 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_count_toks", sig(call_conv, &[p], Some(i64))));
     // `print_no_nl(s: str)` — print Str buffer without trailing newline.
     out.push(("__cobrust_print_no_nl", sig(call_conv, &[p], None)));
+    // ADR-0047 Option H / LC-100 Pattern A fix: raw-bytes variant for
+    // `print_no_nl(<string literal>)` callsites — codegen routes
+    // `Constant::Str` arguments here via the single-arg-Str-to-(ptr, len)
+    // expansion in `lower_terminator` (analogous to `__cobrust_println`).
+    // Closes the `.rodata` misalignment defect in `__cobrust_print_no_nl`'s
+    // `StringBuffer` cast. Runtime-str callsites continue to use the
+    // existing single-pointer entry.
+    out.push(("__cobrust_print_no_nl_lit", sig(call_conv, &[p, i64], None)));
 
     out
 }

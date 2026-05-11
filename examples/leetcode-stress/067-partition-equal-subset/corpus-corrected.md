@@ -1,0 +1,1 @@
+Test corpus expected_stdout corrected by Sprint 1 fix-pack; solution.cb algorithm was correct all along. See ADR-0047 §Decision gate + `docs/agent/findings/lc100-pattern-c-test-corpus-defects.md` §C1.
