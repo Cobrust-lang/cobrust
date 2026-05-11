@@ -1,0 +1,33 @@
+# LC-064 house-robber-linear (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated house values
+# Output: maximum value robbed without adjacent houses
+# Algorithm: O(N) DP with two variables (prev2, prev1)
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    if n == 1:
+        print_int(parse_int_tok(line, 0))
+        return 0
+    let prev2 = parse_int_tok(line, 0)
+    let v1 = parse_int_tok(line, 1)
+    let prev1: i64 = 0
+    if v1 > prev2:
+        prev1 = v1
+    else:
+        prev1 = prev2
+    let i: i64 = 2
+    while i < n:
+        let vi = parse_int_tok(line, i)
+        let cand = prev2 + vi
+        let cur: i64 = 0
+        if cand > prev1:
+            cur = cand
+        else:
+            cur = prev1
+        prev2 = prev1
+        prev1 = cur
+        i = i + 1
+    print_int(prev1)
+    return 0

@@ -1,0 +1,39 @@
+# LC-078 koko-eating-speed (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: N H (pile count, hours); Line 2: N pile sizes
+# Output: minimum eating speed K (bananas/hr) to finish all piles in H hours
+# Algorithm: binary search on K in [1, max_pile]
+
+fn hours_needed(line: str, n: i64, k: i64) -> i64:
+    let total: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        let p = parse_int_tok(line, i)
+        let h = p / k
+        if p % k != 0:
+            h = h + 1
+        total = total + h
+        i = i + 1
+    return total
+
+fn main() -> i64:
+    let dims = input("")
+    let n = parse_int_tok(dims, 0)
+    let h = parse_int_tok(dims, 1)
+    let line = input("")
+    let lo: i64 = 1
+    let hi: i64 = 1
+    let i: i64 = 0
+    while i < n:
+        let p = parse_int_tok(line, i)
+        if p > hi:
+            hi = p
+        i = i + 1
+    while lo < hi:
+        let mid = lo + (hi - lo) / 2
+        if hours_needed(line, n, mid) <= h:
+            hi = mid
+        else:
+            lo = mid + 1
+    print_int(lo)
+    return 0
