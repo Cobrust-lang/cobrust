@@ -766,25 +766,25 @@ impl CraneliftCtx {
                 ) {
                     continue;
                 }
-                if let Some(cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(payload))) =
-                    args.first()
-                {
-                    if str_data_ids.contains_key(payload) {
-                        continue;
+                // ADR-0044 W2 Phase 3 amendment: intern ALL string-constant
+                // args, not just args[0]. This covers str_eq(c, "lit") where
+                // the literal is the second argument.
+                for arg in args {
+                    if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(payload)) = arg
+                    {
+                        if str_data_ids.contains_key(payload) {
+                            continue;
+                        }
+                        let symbol = str_data_symbol(body.def_id.0, str_data_ids.len(), payload);
+                        let data_id = obj
+                            .declare_data(&symbol, Linkage::Local, false, false)
+                            .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+                        let mut data_desc = cranelift_module::DataDescription::new();
+                        data_desc.define(payload.as_bytes().to_vec().into_boxed_slice());
+                        obj.define_data(data_id, &data_desc)
+                            .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+                        str_data_ids.insert(payload.clone(), data_id);
                     }
-                    // Generate a unique symbol name from a payload hash
-                    // so identical payloads in different bodies share
-                    // the same data symbol (cross-body interning is a
-                    // future tweak; for M11 we scope per-body).
-                    let symbol = str_data_symbol(body.def_id.0, str_data_ids.len(), payload);
-                    let data_id = obj
-                        .declare_data(&symbol, Linkage::Local, false, false)
-                        .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
-                    let mut data_desc = cranelift_module::DataDescription::new();
-                    data_desc.define(payload.as_bytes().to_vec().into_boxed_slice());
-                    obj.define_data(data_id, &data_desc)
-                        .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
-                    str_data_ids.insert(payload.clone(), data_id);
                 }
             }
         }
@@ -1074,11 +1074,20 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                         let expand_str_to_ptr_len = args.len() == 1
                             && sig_param_count == 2
                             && matches!(args.first(), Some(Operand::Constant(Constant::Str(_))));
-                        for arg in args {
+                        // ADR-0044 W2 Phase 3: detect trailing Constant::Str
+                        // expansion for calls where the last source arg is a
+                        // string literal and the C signature has one extra
+                        // param for the `len` (e.g. __cobrust_str_eq_lit with
+                        // 2 source args but 3 C params).
+                        let expand_trailing_str_len = !expand_str_to_ptr_len
+                            && args.len() + 1 == sig_param_count
+                            && matches!(args.last(), Some(Operand::Constant(Constant::Str(_))));
+                        for (idx, arg) in args.iter().enumerate() {
                             if let Operand::Constant(Constant::Str(payload)) = arg {
                                 let (ptr, len) = self.materialize_str_data(payload)?;
                                 call_args.push(ptr);
-                                if expand_str_to_ptr_len {
+                                let is_last = idx + 1 == args.len();
+                                if expand_str_to_ptr_len || (expand_trailing_str_len && is_last) {
                                     call_args.push(len);
                                 }
                             } else {
@@ -1964,6 +1973,33 @@ fn runtime_helper_signatures(
     // `argv() -> list[str]` — materializes CAPTURED_ARGS into a
     // List<Str>; each element is a heap-allocated Str pointer.
     out.push(("__cobrust_argv", sig(call_conv, &[], Some(p))));
+
+    // -- ADR-0044 W2 Phase 3: parse_int / str_len / str_at / str_eq ----
+    // `parse_int(s: str) -> i64` — parses decimal integer from Str buf.
+    out.push(("__cobrust_parse_int", sig(call_conv, &[p], Some(i64))));
+    // `str_len(s: str) -> i64` — byte length of Str buf.
+    out.push(("__cobrust_str_len_src", sig(call_conv, &[p], Some(i64))));
+    // `str_at(s: str, i: i64) -> str` — single-byte Str at position i.
+    out.push(("__cobrust_str_at", sig(call_conv, &[p, i64], Some(p))));
+    // `str_eq(a: str, b: str) -> i64` — content equality (1 or 0).
+    out.push(("__cobrust_str_eq", sig(call_conv, &[p, p], Some(i64))));
+    // `str_eq_lit(s: str, lit: str) -> i64` — compare runtime str against
+    // static literal; 3-param C ABI (buf_ptr, lit_ptr, lit_len).
+    out.push((
+        "__cobrust_str_eq_lit",
+        sig(call_conv, &[p, p, i64], Some(i64)),
+    ));
+    // `str_ord(s: str) -> i64` — ASCII byte value of first byte.
+    out.push(("__cobrust_str_ord", sig(call_conv, &[p], Some(i64))));
+    // `parse_int_tok(line: str, i: i64) -> i64` — i-th space-separated int.
+    out.push((
+        "__cobrust_parse_int_tok",
+        sig(call_conv, &[p, i64], Some(i64)),
+    ));
+    // `count_toks(line: str) -> i64` — count of whitespace-separated tokens.
+    out.push(("__cobrust_count_toks", sig(call_conv, &[p], Some(i64))));
+    // `print_no_nl(s: str)` — print Str buffer without trailing newline.
+    out.push(("__cobrust_print_no_nl", sig(call_conv, &[p], None)));
 
     out
 }

@@ -1,0 +1,45 @@
+# LC-05 Merge Two Sorted Lists (ADR-0044 W2 Phase 3).
+#
+# Input  (stdin):
+#   Line 1: N M   (counts for list1, list2; space-separated)
+#   Line 2: N space-separated ints (sorted ascending)
+#   Line 3: M space-separated ints (sorted ascending)
+#
+# Output: merged sorted ints, one per line.
+#
+# Algorithm: two-pointer merge — O(N+M).
+
+fn main() -> i64:
+    let nm_line = input("")
+    let n = parse_int_tok(nm_line, 0)
+    let m = parse_int_tok(nm_line, 1)
+    let list1 = list_new(n)
+    let list2 = list_new(m)
+    let line1 = input("")
+    let line2 = input("")
+    let i: i64 = 0
+    while i < n:
+        list_set(list1, i, parse_int_tok(line1, i))
+        i = i + 1
+    let j: i64 = 0
+    while j < m:
+        list_set(list2, j, parse_int_tok(line2, j))
+        j = j + 1
+    let pi: i64 = 0
+    let pj: i64 = 0
+    while pi < n and pj < m:
+        let va = list_get(list1, pi)
+        let vb = list_get(list2, pj)
+        if va <= vb:
+            print_int(va)
+            pi = pi + 1
+        else:
+            print_int(vb)
+            pj = pj + 1
+    while pi < n:
+        print_int(list_get(list1, pi))
+        pi = pi + 1
+    while pj < m:
+        print_int(list_get(list2, pj))
+        pj = pj + 1
+    return 0

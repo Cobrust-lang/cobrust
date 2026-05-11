@@ -388,6 +388,221 @@ pub fn stderr() -> Stderr {
     }
 }
 
+// =====================================================================
+// ADR-0044 W2 Phase 3 runtime helpers — parse_int / str_len / str_at /
+// str_eq. These are the minimal extensions that make the Phase 3
+// LeetCode .cb programs work end-to-end (integer parsing + character
+// access + string content comparison).
+//
+// Deviation note: Phase 3 corpus requires integer parsing from stdin.
+// These helpers follow the exact PRELUDE+intrinsic-rewrite+C-ABI
+// pattern established in Phase 2 for input/argv.
+// =====================================================================
+
+/// C-ABI shim for source-level `parse_int(s: str) -> i64`.
+/// Parses the decimal integer (with optional leading '-') from the
+/// heap-allocated Str buffer. Leading/trailing whitespace is ignored.
+/// Returns 0 on empty string or parse failure.
+///
+/// # Safety
+///
+/// `buf` must be a Str pointer returned by `__cobrust_input`,
+/// `__cobrust_read_line`, or `__cobrust_str_new`. Null → 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_parse_int(buf: *mut u8) -> i64 {
+    if buf.is_null() {
+        return 0;
+    }
+    // SAFETY: buf is non-null, checked above.
+    let s = unsafe { str_buf_as_str_phase3(buf) };
+    s.trim().parse::<i64>().unwrap_or(0)
+}
+
+/// C-ABI shim for source-level `str_len(s: str) -> i64`.
+/// Returns the byte length of the heap-allocated Str buffer.
+///
+/// # Safety
+///
+/// `buf` must be a Str pointer. Null → 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_len_src(buf: *mut u8) -> i64 {
+    if buf.is_null() {
+        return 0;
+    }
+    // Delegate to the fmt-crate public C-ABI (same StringBuffer layout).
+    unsafe { crate::fmt::__cobrust_str_len(buf) }
+}
+
+/// C-ABI shim for source-level `str_at(s: str, i: i64) -> str`.
+/// Returns a new heap-allocated Str containing the single byte at
+/// position `i` (zero-based). Out-of-bounds → empty string.
+///
+/// # Safety
+///
+/// `buf` must be a Str pointer. The returned pointer must be freed via
+/// `__cobrust_str_drop` when no longer needed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_at(buf: *mut u8, i: i64) -> *mut u8 {
+    if buf.is_null() || i < 0 {
+        return alloc_str_buffer("");
+    }
+    // SAFETY: buf is non-null, checked above.
+    let s = unsafe { str_buf_as_str_phase3(buf) };
+    let idx = i as usize;
+    if idx >= s.len() {
+        return alloc_str_buffer("");
+    }
+    alloc_str_buffer(&s[idx..=idx])
+}
+
+/// C-ABI shim for source-level `str_eq(a: str, b: str) -> i64`.
+/// Returns 1 if byte content of `a` and `b` are identical, 0 otherwise.
+/// Returns i64 (not bool) so it integrates with SwitchInt codegen.
+///
+/// # Safety
+///
+/// Both `a` and `b` must be Str pointers returned by `__cobrust_str_at`
+/// or `__cobrust_input`/`__cobrust_read_line`. Null → treated as "".
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_eq(a: *mut u8, b: *mut u8) -> i64 {
+    // SAFETY: null-check happens inline.
+    let sa = if a.is_null() {
+        ""
+    } else {
+        unsafe { str_buf_as_str_phase3(a) }
+    };
+    let sb = if b.is_null() {
+        ""
+    } else {
+        unsafe { str_buf_as_str_phase3(b) }
+    };
+    i64::from(sa == sb)
+}
+
+/// C-ABI shim for source-level `str_eq_lit(s: str, lit: str) -> i64`.
+/// Compares a runtime Str buffer (from `str_at`) against a compile-time
+/// static string literal. The second arg arrives as a `(*const u8, len)`
+/// via codegen's expand-str-to-ptr-len pass — but since `expand_str_to_ptr_len`
+/// only fires for 1-arg calls (codegen heuristic), we use a dedicated
+/// 3-param C ABI: `(buf: *mut u8, lit_ptr: *const u8, lit_len: i64) -> i64`.
+///
+/// # Safety
+///
+/// `buf` must be a valid Str pointer. `lit_ptr` must point to `lit_len`
+/// bytes of valid UTF-8.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_eq_lit(
+    buf: *mut u8,
+    lit_ptr: *const u8,
+    lit_len: i64,
+) -> i64 {
+    if buf.is_null() || lit_ptr.is_null() || lit_len <= 0 {
+        return i64::from(buf.is_null() && (lit_ptr.is_null() || lit_len == 0));
+    }
+    // SAFETY: buf is non-null.
+    let sa = unsafe { str_buf_as_str_phase3(buf) };
+    // SAFETY: caller attestation.
+    let lit_bytes = unsafe { std::slice::from_raw_parts(lit_ptr, lit_len as usize) };
+    let sb = std::str::from_utf8(lit_bytes).unwrap_or("");
+    i64::from(sa == sb)
+}
+
+/// C-ABI shim for source-level `str_ord(s: str) -> i64`.
+/// Returns the ASCII/byte value of the first byte in the Str buffer.
+/// Empty string or null → 0.
+///
+/// # Safety
+///
+/// `buf` must be a valid Str pointer (or null).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_ord(buf: *mut u8) -> i64 {
+    if buf.is_null() {
+        return 0;
+    }
+    // SAFETY: buf is non-null.
+    let s = unsafe { str_buf_as_str_phase3(buf) };
+    s.bytes().next().map_or(0, |b| b as i64)
+}
+
+/// Read the Str buffer bytes as a `&str` using the public C-ABI
+/// `__cobrust_str_ptr` / `__cobrust_str_len` accessors.
+///
+/// # Safety
+///
+/// `buf` must be a valid non-null Str pointer.
+unsafe fn str_buf_as_str_phase3(buf: *mut u8) -> &'static str {
+    // SAFETY: caller guarantees buf is a valid Str pointer.
+    let len = unsafe { crate::fmt::__cobrust_str_len(buf) } as usize;
+    if len == 0 {
+        return "";
+    }
+    let ptr = unsafe { crate::fmt::__cobrust_str_ptr(buf) };
+    if ptr.is_null() {
+        return "";
+    }
+    // SAFETY: ptr points to `len` bytes of UTF-8 maintained by all
+    // write paths (alloc_str_buffer, __cobrust_str_push_static, etc.).
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    std::str::from_utf8(bytes).unwrap_or("")
+}
+
+/// C-ABI shim for source-level `parse_int_tok(line: str, i: i64) -> i64`.
+/// Splits `line` on whitespace and returns the i-th integer token (0-based).
+/// Returns 0 if the index is out of range or the token is not a valid integer.
+///
+/// # Safety
+///
+/// `buf` must be a valid non-null Str pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_parse_int_tok(buf: *mut u8, i: i64) -> i64 {
+    if buf.is_null() || i < 0 {
+        return 0;
+    }
+    let s = unsafe { str_buf_as_str_phase3(buf) };
+    for (idx, tok) in s.split_whitespace().enumerate() {
+        if idx as i64 == i {
+            return tok.trim().parse::<i64>().unwrap_or(0);
+        }
+    }
+    0
+}
+
+/// C-ABI shim for source-level `count_toks(line: str) -> i64`.
+/// Returns the number of whitespace-separated tokens in `line`.
+///
+/// # Safety
+///
+/// `buf` must be a valid non-null Str pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_count_toks(buf: *mut u8) -> i64 {
+    if buf.is_null() {
+        return 0;
+    }
+    let s = unsafe { str_buf_as_str_phase3(buf) };
+    s.split_whitespace().count() as i64
+}
+
+/// C-ABI shim for source-level `print_no_nl(s: str)`.
+/// Prints the Str buffer contents WITHOUT a trailing newline.
+/// Used when building output character-by-character.
+///
+/// # Safety
+///
+/// `buf` must be a valid Str pointer returned by `__cobrust_str_at`
+/// or similar. Null → no-op.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_print_no_nl(buf: *mut u8) {
+    if buf.is_null() {
+        return;
+    }
+    // SAFETY: buf is non-null.
+    let s = unsafe { str_buf_as_str_phase3(buf) };
+    print!("{s}");
+    // Flush so output is visible immediately (matches prompt flushing
+    // behavior of __cobrust_input).
+    let _ = <std::io::Stdout as std::io::Write>::flush(&mut std::io::stdout());
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,

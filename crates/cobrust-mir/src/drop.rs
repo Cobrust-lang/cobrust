@@ -122,7 +122,9 @@ pub fn compute_drop_schedule(body: &mut Body) -> Result<(), MirError> {
 fn is_copy(ty: &Ty) -> bool {
     matches!(
         ty,
-        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never
+        // ADR-0044 W2 Phase 3: Str and List are non-drop-eligible (same
+        // rationale as lower.rs is_copy_type — runtime Drop is a no-op jump).
+        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never | Ty::Str | Ty::List(_)
     )
 }
 

@@ -1,0 +1,64 @@
+# LC-04 Valid Parentheses (ADR-0044 W2 Phase 3).
+#
+# Input  (stdin): one line with bracket string using ()[]{}
+# Output: "true" if valid balanced, "false" otherwise.
+#
+# Algorithm: stack-based — encode each open bracket as an integer,
+# push on open, pop and verify match on close. Use a list as stack.
+#
+# Bracket encoding (ASCII-based):
+#   '(' = 40, ')' = 41
+#   '[' = 91, ']' = 93
+#   '{' = 123, '}' = 125
+
+fn main() -> i64:
+    let s = input("")
+    let n = str_len(s)
+    let stack = list_new(n)
+    let top: i64 = 0
+    let ok: i64 = 1
+    let i: i64 = 0
+    while i < n:
+        let c = str_at(s, i)
+        let o = str_ord(c)
+        if o == 40:
+            list_set(stack, top, 40)
+            top = top + 1
+        elif o == 91:
+            list_set(stack, top, 91)
+            top = top + 1
+        elif o == 123:
+            list_set(stack, top, 123)
+            top = top + 1
+        elif o == 41:
+            if top == 0:
+                ok = 0
+            else:
+                top = top - 1
+                let expected = list_get(stack, top)
+                if expected != 40:
+                    ok = 0
+        elif o == 93:
+            if top == 0:
+                ok = 0
+            else:
+                top = top - 1
+                let expected = list_get(stack, top)
+                if expected != 91:
+                    ok = 0
+        elif o == 125:
+            if top == 0:
+                ok = 0
+            else:
+                top = top - 1
+                let expected = list_get(stack, top)
+                if expected != 123:
+                    ok = 0
+        i = i + 1
+    if top != 0:
+        ok = 0
+    if ok == 1:
+        print("true")
+    else:
+        print("false")
+    return 0
