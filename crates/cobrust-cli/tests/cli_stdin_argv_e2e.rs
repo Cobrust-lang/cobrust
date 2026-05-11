@@ -69,6 +69,16 @@ fn fixture_path(name: &str) -> PathBuf {
 }
 
 /// Build a fixture `.cb` file into a unique tmp-exe and return its path.
+// Monotonic per-process counter so parallel tests in the same cargo
+// test process don't collide on the same `exe_dir` path (the previous
+// `line!()` tiebreaker always returned the same constant since it was
+// the line where `build_fixture` is defined, not where it's called).
+fn build_fixture_seq() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
 fn build_fixture(name: &str) -> (PathBuf, String) {
     let bin = cobrust_binary();
     let src = fixture_path(name);
@@ -82,7 +92,7 @@ fn build_fixture(name: &str) -> (PathBuf, String) {
         "cobrust-adr0044-e2e-{}-{}-{}",
         name,
         std::process::id(),
-        line!()
+        build_fixture_seq()
     ));
     let _ = std::fs::create_dir_all(&exe_dir);
     let exe = exe_dir.join(src.file_stem().unwrap());
