@@ -73,3 +73,5 @@ same atomic commit as the change it justifies.
 | [0042](0042-snapshot-lint-enforcement.md) | snapshot-lint enforcement — close F1.1 for snapshot schema (pre-commit hook + CI-mode script) | accepted | 2026-05-11 |
 | [0043](0043-pyo3-023-upgrade.md) | pyo3 0.22 → 0.23+ workspace upgrade — spike + migration plan | proposed | 2026-05-11 |
 | [0044](0044-stdin-argv-source-binding.md) | Source-level stdin + argv binding for Cobrust user programs (W2 LeetCode wedge) — `input()` + `read_line()` + `argv()` via PRELUDE + intrinsic-rewrite + 4 new runtime helpers (W2 Phase 2 scope cap: `read_line() -> str`; typed-Result deferred to ADR-0044a) | accepted | 2026-05-11 |
+| [0045](0045-user-traction-milestone-gate.md) | User-traction milestone gate — each release binds to ≥1 user-scenario done-means (systemic F19 closure) | accepted | 2026-05-11 |
+| [0046](0046-release-asset-consolidation.md) | release.yml asset consolidation + tier-1 platform contract (codifies F19 prevention) | accepted | 2026-05-11 |
