@@ -4,7 +4,7 @@ adr_id: 0044
 title: "Source-level stdin + argv binding for Cobrust user programs (W2 LeetCode wedge)"
 status: accepted
 date: 2026-05-11
-last_verified_commit: TBD
+last_verified_commit: 9caef99
 supersedes: []
 superseded_by: []
 relates_to: [adr:0019, adr:0024, adr:0025, adr:0027, adr:0030, adr:0034, adr:0038]
