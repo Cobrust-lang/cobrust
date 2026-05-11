@@ -1,0 +1,34 @@
+[[cases]]
+input = "3\n"
+expected_stdout = "III\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "4\n"
+expected_stdout = "IV\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "9\n"
+expected_stdout = "IX\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "58\n"
+expected_stdout = "LVIII\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1994\n"
+expected_stdout = "MCMXCIV\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "3999\n"
+expected_stdout = "MMMCMXCIX\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1\n"
+expected_stdout = "I\n"
+expected_exit_code = 0

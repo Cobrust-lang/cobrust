@@ -1,0 +1,29 @@
+[[cases]]
+input = "5\n2 3 1 1 4\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "5\n3 2 1 0 4\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1\n0\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "3\n0 1 0\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "4\n1 1 1 0\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "2\n0 1\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
