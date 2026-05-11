@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - uses: dtolnay/rust-toolchain@4305c38f0f3944f8959e34e63f1f57069534d9b0  # stable 2025-01
+      - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
         with:
           toolchain: 1.94.1
           components: rustfmt
@@ -35,11 +35,11 @@ jobs:
         os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - uses: dtolnay/rust-toolchain@4305c38f0f3944f8959e34e63f1f57069534d9b0  # stable 2025-01
+      - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
         with:
           toolchain: 1.94.1
           components: clippy
-      - uses: Swatinem/rust-cache@9bdcdea050e8f4f3ec0e4bc57c2f4186d55b1a02  # v2.7.8
+      - uses: Swatinem/rust-cache@v2  # v2.7.8
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   build:
@@ -51,10 +51,10 @@ jobs:
         os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - uses: dtolnay/rust-toolchain@4305c38f0f3944f8959e34e63f1f57069534d9b0  # stable 2025-01
+      - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
         with:
           toolchain: 1.94.1
-      - uses: Swatinem/rust-cache@9bdcdea050e8f4f3ec0e4bc57c2f4186d55b1a02  # v2.7.8
+      - uses: Swatinem/rust-cache@v2  # v2.7.8
       - run: cargo build --workspace --all-targets --locked
 
   test:
@@ -66,10 +66,10 @@ jobs:
         os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - uses: dtolnay/rust-toolchain@4305c38f0f3944f8959e34e63f1f57069534d9b0  # stable 2025-01
+      - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
         with:
           toolchain: 1.94.1
-      - uses: Swatinem/rust-cache@9bdcdea050e8f4f3ec0e4bc57c2f4186d55b1a02  # v2.7.8
+      - uses: Swatinem/rust-cache@v2  # v2.7.8
       # Probe Python 3 availability for full_pipeline_corpus differential gate.
       # On ubuntu-latest the runner ships python3 but not necessarily python3.11;
       # apt-install provides it. On macos-latest Homebrew's python3 is on PATH.
@@ -132,10 +132,10 @@ jobs:
     needs: [fmt, clippy, build, test]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - uses: dtolnay/rust-toolchain@4305c38f0f3944f8959e34e63f1f57069534d9b0  # stable 2025-01
+      - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
         with:
           toolchain: 1.94.1
-      - uses: Swatinem/rust-cache@9bdcdea050e8f4f3ec0e4bc57c2f4186d55b1a02  # v2.7.8
+      - uses: Swatinem/rust-cache@v2  # v2.7.8
       - env:
           USER_CODEX_API_KEY: ${{ secrets.USER_CODEX_API_KEY }}
         run: |
