@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: 974c900
+last_verified_commit: e91caed
 ---
 
 # Findings
@@ -57,3 +57,8 @@ valuable as capturing what does.
 | `B5-requests-body-cap` | [`B5-requests-body-cap.md`](B5-requests-body-cap.md) | **P0 closed** — `cobrust-requests` `from_reqwest` had no body size cap; `read_to_end` on adversarial server → OOM; fixed via `MAX_BODY_BYTES=64MiB` streaming cap + `HttpErrorKind::BodyTooLarge`. |
 | `B6-msgpack-pos-overflow` | [`B6-msgpack-pos-overflow.md`](B6-msgpack-pos-overflow.md) | **P0 closed** — `cobrust-msgpack` `unpack_bin/float/str/uint` used plain `pos + length` without overflow check; 32-bit wrap-around bypasses bounds check; fixed via `checked_add` + `MsgErrorKind::OverflowSize`. |
 | `m10-sha-pin-hallucination` | [`m10-sha-pin-hallucination.md`](m10-sha-pin-hallucination.md) | **CI hot-fix closed** — M10 Wave 2 sub-agent emitted 4 fake 40-char SHA pins for 3rd-party GitHub Actions; 13/14 CI jobs red on v0.1.0 tag; reverted at `4186c8e`; ADR-0042 closes F1.1 enforcement path. |
+| `lc100-tier-a-summary` | [`lc100-tier-a-summary.md`](lc100-tier-a-summary.md) | **LC-100 Tier A Phase 3 triage** — 77/100 pass rate; 0 compile-fail; 3 distinct failure patterns (A: 8 misalignment / B: 1 list[str] gap / C: 15 corpus defects). Fix-pack potential: 99/100 with Pattern A + C closure (5-8 hr). Ramp recommendation: HOLD fix-pack then GO Tier B. ADR-0047 Phase 3 deliverable. |
+| `lc100-pattern-a-rodata-literal-misalignment` | [`lc100-pattern-a-rodata-literal-misalignment.md`](lc100-pattern-a-rodata-literal-misalignment.md) | **8 LC-100 failures** — `print_no_nl(literal)` / `str_at(literal_var, i)` panic at `fmt.rs:194` because Cranelift passes raw `.rodata` byte pointer where runtime expects 8-byte aligned `*mut StringBuffer`. Fix candidates: F1 (raw-bytes runtime variant, preferred, 2-4 hr); F3 (`print_int_no_nl` intrinsic, complementary). |
+| `lc100-pattern-b-list-of-str-gap` | [`lc100-pattern-b-list-of-str-gap.md`](lc100-pattern-b-list-of-str-gap.md) | **1 LC-100 failure (024 group-anagrams)** — `list[str]` type missing from Cobrust language surface; only `list[i64]` exists. BLOCK-severity for string-storing algorithms. Estimated ≥ 1 day opus-grade work; ADR-0048 proposal candidate. Defer to forward-looking ADR sprint, not LC-100 fix-pack. |
+| `lc100-pattern-c-test-corpus-defects` | [`lc100-pattern-c-test-corpus-defects.md`](lc100-pattern-c-test-corpus-defects.md) | **15 LC-100 failures** — test.toml oracles mathematically inconsistent with algorithm description; .cb implementations are correct. 6 sub-classes (arithmetic miscount / algorithm contradiction / tree encoding / ambiguous spec / constraint violation / balance miscount). Fix: 1-2 hr corpus correction. F23 ADSD candidate (oracle authorship without independent verification). |
+| `lc100-adsd-f-pattern-candidates` | [`lc100-adsd-f-pattern-candidates.md`](lc100-adsd-f-pattern-candidates.md) | **ADSD F22 + F23-A codification text** — F22 (coverage drive without bug-fix cadence) prevented by ADR-0047's time-cap + decision-gate; F23-A (oracle authorship without independent verification) primary precedent. F23-B (synthetic-distribution-drift) remains candidate pending audit-3a follow-up real-Python translation. Handoff to review-claude for ADSD repo codification. |
