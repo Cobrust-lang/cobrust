@@ -6,13 +6,12 @@
 # File naming convention: cobrust-v{version}-{target_triple}.tar.gz
 # Binary inside archive: cobrust  (or cobrust.exe on Windows)
 #
-# Tier-1 targets (required, fail CI on error):
-#   - aarch64-apple-darwin    (macOS arm64)
-#   - x86_64-unknown-linux-gnu (Linux x86_64)
-#
-# Best-effort targets (continue on error, skip if runner unavailable):
-#   - aarch64-unknown-linux-gnu (Linux arm64, ubuntu-latest + cross)
-#   - x86_64-pc-windows-msvc   (Windows x86_64)
+# ADR-0046 tier-1 platform contract (must build, must appear in release notes):
+#   - aarch64-apple-darwin
+#   - aarch64-unknown-linux-gnu
+#   - x86_64-unknown-linux-gnu
+# Tier-2 (best-effort, may fail without blocking release): (none currently)
+# Queued (documented as cargo install --git path, not built): x86_64-apple-darwin, windows-*
 
 name: Release
 
@@ -38,8 +37,13 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            use_cross: false
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -53,7 +57,17 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Build release binary
+      - name: Install cross (Linux arm64)
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build release binary (cross)
+        if: matrix.use_cross
+        run: |
+          cross build --release --locked -p cobrust-cli --target ${{ matrix.target }}
+
+      - name: Build release binary (native)
+        if: ${{ !matrix.use_cross }}
         run: |
           cargo build --release --locked -p cobrust-cli --target ${{ matrix.target }}
 
@@ -85,9 +99,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             use_cross: false
@@ -189,11 +200,15 @@ jobs:
             ### Option B — prebuilt binary (no Rust needed)
 
             ```bash
-            # macOS arm64
+            # macOS arm64 (tier-1)
             curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz | tar xz
             sudo mv cobrust /usr/local/bin/
 
-            # Linux x86_64
+            # Linux arm64 (tier-1)
+            curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz | tar xz
+            sudo mv cobrust /usr/local/bin/
+
+            # Linux x86_64 (tier-1)
             curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz | tar xz
             sudo mv cobrust /usr/local/bin/
             ```
