@@ -1,0 +1,54 @@
+# LC-095 assign-cookies (ADR-0047 LC-100 Tier A bucket B4).
+#
+# Input  (stdin):
+#   Line 1: G (number of children)
+#   Line 2: G space-separated greed factors
+#   Line 3: S (number of cookie sizes)
+#   Line 4: S space-separated cookie sizes
+# Output: maximum number of content children
+#
+# Algorithm: greedy - sort both arrays, use two cursors.
+# Smallest cookie that satisfies smallest greed wins.
+# Sort with bubble sort (simpler loop structure, no early-exit needed).
+
+fn bubble_sort(arr: list[i64], n: i64) -> i64:
+    let i: i64 = 0
+    while i < n:
+        let j: i64 = 0
+        while j < n - 1 - i:
+            if list_get(arr, j) > list_get(arr, j + 1):
+                let tmp = list_get(arr, j)
+                list_set(arr, j, list_get(arr, j + 1))
+                list_set(arr, j + 1, tmp)
+            j = j + 1
+        i = i + 1
+    return 0
+
+fn main() -> i64:
+    let g = parse_int(input(""))
+    let gline = input("")
+    let s = parse_int(input(""))
+    let sline = input("")
+    let greed = list_new(g)
+    let cookies = list_new(s)
+    let i: i64 = 0
+    while i < g:
+        list_set(greed, i, parse_int_tok(gline, i))
+        i = i + 1
+    let j: i64 = 0
+    while j < s:
+        list_set(cookies, j, parse_int_tok(sline, j))
+        j = j + 1
+    bubble_sort(greed, g)
+    bubble_sort(cookies, s)
+    let ci: i64 = 0
+    let gi: i64 = 0
+    let count: i64 = 0
+    while ci < s:
+        if gi < g:
+            if list_get(cookies, ci) >= list_get(greed, gi):
+                count = count + 1
+                gi = gi + 1
+        ci = ci + 1
+    print_int(count)
+    return 0
