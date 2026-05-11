@@ -1,0 +1,13 @@
+# LC-100 Pattern A repro fixture #6 — non-ASCII UTF-8 literal in print_no_nl.
+#
+# The 9-byte "日本語" payload lowers to a 9-byte .rodata sequence with
+# alignment 1. The StringBuffer cast at fmt.rs:194 still triggers — multi-byte
+# codepoints are not a free pass for alignment.
+#
+# Today: FAILS at runtime.
+# After Sprint 2 DEV: stdout = "日本語\n", exit 0.
+
+fn main() -> i64:
+    print_no_nl("日本語")
+    print("")
+    return 0
