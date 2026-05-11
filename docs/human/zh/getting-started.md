@@ -5,22 +5,23 @@
 **方式 A — cargo install**（需要 Rust 工具链）：
 
 ```bash
-cargo install cobrust-cli
+cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
+# （crates.io 发布计划在 v0.2.0）
 ```
 
 **方式 B — 预编译二进制**（无需 Rust）：
 
 ```bash
 # macOS arm64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-0.1.0-beta-aarch64-apple-darwin.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.1-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 
 # Linux x86_64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-0.1.0-beta-x86_64-unknown-linux-gnu.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.1-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 ```
 
-验证：`cobrust --version` → `cobrust 0.1.0-beta`
+验证：`cobrust --version` → `cobrust 0.1.1`
 
 ## 第二步：Hello, world
 
