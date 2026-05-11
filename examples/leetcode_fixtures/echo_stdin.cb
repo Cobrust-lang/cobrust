@@ -1,0 +1,6 @@
+# echo_stdin — reads one line via input() and prints it back.
+# Used by W2 Phase 2 cli_stdin_argv_e2e.rs tests (per ADR-0044 Test plan).
+fn main() -> i64:
+    let s = input("")
+    print(s)
+    return 0
