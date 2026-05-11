@@ -1615,7 +1615,7 @@ cobrust-version = "0.0.1"
 
 | 模块 | 表面 |
 |---|---|
-| `std.io` | `print / println / read_line / read_file / write_file / stdin / stdout / stderr` |
+| `std.io` | `print / println / read_line / read_file / write_file / stdin / stdout / stderr`；**ADR-0044 W2 Phase 2**：`input(prompt) -> str`、`input_no_prompt() -> str`、`read_line() -> str` 源码层绑定（W2 cap，类型化 `Result[str, IoError]` 推迟至 ADR-0044a） |
 | `std.collections` | `List<T>` / `Dict<K, V>` / `Set<T>`（无隐式真值；`is_empty()` 而非 `if list`）；通过 for 协议迭代 |
 | `std.string` | `len / find / replace / split / strip / lower / upper / format` |
 | `std.math` | `sqrt / pow / sin / cos / abs_f64 / abs_i64 / floor / ceil / round / PI / E` |
@@ -1636,6 +1636,11 @@ cobrust-version = "0.0.1"
 | `__cobrust_assert` | `extern "C" fn(bool, *const u8, usize)` | 条件 panic |
 | `__cobrust_capture_argv` | `extern "C" fn(i32, *const *const u8)` | 为 `std.env.args` 捕获 argv |
 | `_cobrust_drop_str` | `extern "C" fn(*mut u8)` | str 析构器（M11 时 .rodata 字符串无操作） |
+| `__cobrust_input` | `extern "C" fn(*const u8, usize) -> *mut u8` | ADR-0044 W2 Phase 2 — 源码层 `input(prompt)` 运行时；写 prompt 到 stdout，读一行 stdin（去除尾部 `\n`），返回 owned Str 指针 |
+| `__cobrust_input_no_prompt` | `extern "C" fn() -> *mut u8` | ADR-0044 — `input()` 无 prompt 重载 |
+| `__cobrust_read_line` | `extern "C" fn() -> *mut u8` | ADR-0044 — `read_line()` 保留尾部 `\n`（W2 cap；类型化 Result 推迟至 ADR-0044a） |
+| `__cobrust_argv` | `extern "C" fn() -> *mut u8` | ADR-0044 — `argv()` 把 `CAPTURED_ARGS` 物化成 Cobrust `List<Str>` |
+| `__cobrust_println_str_buf` | `extern "C" fn(*mut u8)` | ADR-0044 — `print(s)` 堆缓冲路径（从 `__cobrust_str_*` buffer 提取 ptr+len 后转发到 `__cobrust_println`） |
 
 **堆分配器**：`mimalloc` 是默认（Cargo 特性 `mimalloc-alloc`，默认开启）；`system-alloc` 切回 libc。`mimalloc::MiMalloc` 在 `cobrust-stdlib::runtime` 中作为 `#[global_allocator]` 接入。
 

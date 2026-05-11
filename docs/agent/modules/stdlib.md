@@ -145,10 +145,34 @@ pub fn stdin() -> Stdin;
 pub fn stdout() -> Stdout;
 pub fn stderr() -> Stderr;
 
+// ADR-0044 W2 Phase 2 — source-level stdin binding (Cobrust-source
+// callers: `input(prompt)`, `input_no_prompt()`, `read_line()`).
+// Returns plain `String` under the W2 scope cap (Decision 1D);
+// typed `Result[str, IoError]` deferred to ADR-0044a.
+pub fn input_from<R: BufRead>(prompt: &str, reader: &mut R) -> String;
+pub fn read_line_from<R: BufRead>(reader: &mut R) -> String;
+
 // C ABI (codegen targets these):
 pub unsafe extern "C" fn __cobrust_print(ptr: *const u8, len: usize);
 pub unsafe extern "C" fn __cobrust_println(ptr: *const u8, len: usize);
 pub extern "C" fn __cobrust_println_int(v: i64);  // ADR-0030 §Decision step 5
+// ADR-0044 W2 Phase 2 — heap-buffer print + stdin/argv runtime shims.
+pub unsafe extern "C" fn __cobrust_println_str_buf(buf: *mut u8);
+pub unsafe extern "C" fn __cobrust_input(ptr: *const u8, len: usize) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_input_no_prompt() -> *mut u8;
+pub unsafe extern "C" fn __cobrust_read_line() -> *mut u8;
+```
+
+### `std.env` — ADR-0044 W2 Phase 2 amendment
+
+```rust
+pub fn args() -> Vec<String>;
+pub fn argv_list() -> Vec<String>;          // ADR-0044 alias for source-level `argv()`
+pub fn var(name: &str) -> Option<String>;
+
+// C ABI (codegen targets this):
+pub unsafe extern "C" fn __cobrust_capture_argv(argc: i32, argv: *const *const u8);
+pub unsafe extern "C" fn __cobrust_argv() -> *mut u8;   // returns *mut List_Str
 ```
 
 ### `std.collections`

@@ -26,6 +26,65 @@ pub fn args() -> Vec<String> {
 }
 
 // =====================================================================
+// ADR-0044 W2 Phase 2 — source-level `argv()` plumbing
+// =====================================================================
+
+/// Rust-side helper materializing `CAPTURED_ARGS` (or
+/// `std::env::args()` fallback for tests) into a flat `Vec<String>`.
+///
+/// Per ADR-0044 §"Implementation map", this is the unit-testable
+/// counterpart to the `__cobrust_argv` C-ABI shim: tests can hit
+/// `argv_list()` directly; codegen-emitted `argv()` callsites land on
+/// the shim which materializes a Cobrust `List<Str>` via the existing
+/// `__cobrust_list_new` / `__cobrust_str_new` / `__cobrust_list_set`
+/// runtime helpers.
+pub fn argv_list() -> Vec<String> {
+    args()
+}
+
+/// C-ABI shim for source-level `argv() -> list[str]`. Materializes a
+/// Cobrust `List<Str>` whose i64 slots store heap-allocated Str
+/// pointers (one per captured argv element). The list pointer is
+/// returned as `*mut u8`; codegen treats it as the same opaque
+/// pointer shape that `__cobrust_list_new` produces.
+///
+/// Per ADR-0044 §"New runtime C-ABI surface", each list element is
+/// constructed via `__cobrust_str_new` + `__cobrust_str_push_static`
+/// so it shares the heap allocation contract with f-string buffers
+/// (drop via `__cobrust_str_drop`).
+///
+/// # Safety
+///
+/// No pointer arguments — always safe to call. The returned list and
+/// its element Strs must be freed via `__cobrust_list_drop` (which
+/// frees the i64 slots; the Str payloads each need
+/// `__cobrust_str_drop`). M12.x convention: codegen owns the drop
+/// schedule.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_argv() -> *mut u8 {
+    let captured = argv_list();
+    // SAFETY: `__cobrust_list_new(8, len)` returns a valid List<i64>
+    // pointer with `len` zeroed slots; `__cobrust_list_set(list, i, v)`
+    // writes the i64 slot at index `i` (bounds-checked). `__cobrust_str_new`
+    // returns a valid Str buffer pointer that survives until
+    // `__cobrust_str_drop`.
+    unsafe {
+        let list = crate::collections::__cobrust_list_new(8, captured.len() as i64);
+        for (i, s) in captured.iter().enumerate() {
+            let buf = crate::fmt::__cobrust_str_new();
+            if !s.is_empty() {
+                crate::fmt::__cobrust_str_push_static(buf, s.as_ptr(), s.len() as i64);
+            }
+            // Slot stores the Str pointer as an i64 (8 bytes on every
+            // supported 64-bit target — ADR-0023 §"Calling convention
+            // details" pins the M9 delivery to x86_64 + aarch64).
+            crate::collections::__cobrust_list_set(list, i as i64, buf as i64);
+        }
+        list
+    }
+}
+
+// =====================================================================
 // var — environment variable
 // =====================================================================
 

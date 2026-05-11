@@ -41,6 +41,29 @@ pub const PRINTLN_RUNTIME_SYMBOL: &str = "__cobrust_println";
 /// Per ADR-0030 §Decision step 5 — exported by `cobrust-stdlib`.
 pub const PRINTLN_INT_RUNTIME_SYMBOL: &str = "__cobrust_println_int";
 
+/// Runtime symbol providing `__cobrust_println_str_buf(*mut Str)` —
+/// ADR-0044 W2 Phase 2 fallback for `print(s)` when `s` is a non-
+/// literal heap-buffer str. Extracts (ptr, len) at runtime and
+/// dispatches to `__cobrust_println`.
+pub const PRINTLN_STR_BUF_RUNTIME_SYMBOL: &str = "__cobrust_println_str_buf";
+
+/// Runtime symbol for source-level `input(prompt: str) -> str`.
+/// ADR-0044 W2 Phase 2 — exported by `cobrust-stdlib::io`.
+pub const INPUT_RUNTIME_SYMBOL: &str = "__cobrust_input";
+
+/// Runtime symbol for source-level `input_no_prompt() -> str`.
+/// ADR-0044 W2 Phase 2 — exported by `cobrust-stdlib::io`.
+pub const INPUT_NO_PROMPT_RUNTIME_SYMBOL: &str = "__cobrust_input_no_prompt";
+
+/// Runtime symbol for source-level `read_line() -> str` (W2 cap;
+/// typed `Result[str, IoError]` deferred to ADR-0044a). Exported by
+/// `cobrust-stdlib::io`.
+pub const READ_LINE_RUNTIME_SYMBOL: &str = "__cobrust_read_line";
+
+/// Runtime symbol for source-level `argv() -> list[str]`.
+/// ADR-0044 W2 Phase 2 — exported by `cobrust-stdlib::env`.
+pub const ARGV_RUNTIME_SYMBOL: &str = "__cobrust_argv";
+
 /// Errors from the print-intrinsic rewrite.
 #[derive(Debug, thiserror::Error)]
 pub enum IntrinsicError {
@@ -51,68 +74,163 @@ pub enum IntrinsicError {
     PrintArgUnsupported { found: String },
 }
 
-/// Identify Body def_ids whose name matches a recognized print intrinsic.
-/// Returns `(print_ids, print_int_ids)`.
-fn collect_print_def_ids(module: &Module) -> (HashSet<u32>, HashSet<u32>) {
-    let mut print_ids = HashSet::new();
-    let mut print_int_ids = HashSet::new();
-    for body in &module.bodies {
-        if body.name == "print" {
-            print_ids.insert(body.def_id.0);
-        } else if body.name == "print_int" {
-            print_int_ids.insert(body.def_id.0);
-        }
-    }
-    (print_ids, print_int_ids)
+/// Recognized prelude intrinsics by name. Collected from `Module.bodies`
+/// so the rewrite pass can both (a) identify FnRef callees that should
+/// be redirected to runtime symbols and (b) drop the stub bodies after
+/// rewrite (since no callsite references them anymore).
+struct IntrinsicDefIds {
+    print: HashSet<u32>,
+    print_int: HashSet<u32>,
+    /// ADR-0044 W2 Phase 2.
+    input: HashSet<u32>,
+    /// ADR-0044 W2 Phase 2.
+    input_no_prompt: HashSet<u32>,
+    /// ADR-0044 W2 Phase 2.
+    read_line: HashSet<u32>,
+    /// ADR-0044 W2 Phase 2.
+    argv: HashSet<u32>,
 }
 
-/// Rewrite every `print(...)` and `print_int(...)` callsite in `module`
-/// to the appropriate runtime helpers.
+impl IntrinsicDefIds {
+    fn all(&self) -> HashSet<u32> {
+        let mut out = HashSet::new();
+        out.extend(&self.print);
+        out.extend(&self.print_int);
+        out.extend(&self.input);
+        out.extend(&self.input_no_prompt);
+        out.extend(&self.read_line);
+        out.extend(&self.argv);
+        out
+    }
+
+    fn is_empty(&self) -> bool {
+        self.print.is_empty()
+            && self.print_int.is_empty()
+            && self.input.is_empty()
+            && self.input_no_prompt.is_empty()
+            && self.read_line.is_empty()
+            && self.argv.is_empty()
+    }
+}
+
+/// Identify Body def_ids whose name matches a recognized prelude
+/// intrinsic — print / print_int (M11) + ADR-0044 W2 Phase 2 stdin/argv
+/// surface (input / input_no_prompt / read_line / argv).
+fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
+    let mut ids = IntrinsicDefIds {
+        print: HashSet::new(),
+        print_int: HashSet::new(),
+        input: HashSet::new(),
+        input_no_prompt: HashSet::new(),
+        read_line: HashSet::new(),
+        argv: HashSet::new(),
+    };
+    for body in &module.bodies {
+        match body.name.as_str() {
+            "print" => {
+                ids.print.insert(body.def_id.0);
+            }
+            "print_int" => {
+                ids.print_int.insert(body.def_id.0);
+            }
+            "input" => {
+                ids.input.insert(body.def_id.0);
+            }
+            "input_no_prompt" => {
+                ids.input_no_prompt.insert(body.def_id.0);
+            }
+            "read_line" => {
+                ids.read_line.insert(body.def_id.0);
+            }
+            "argv" => {
+                ids.argv.insert(body.def_id.0);
+            }
+            _ => {}
+        }
+    }
+    ids
+}
+
+/// Rewrite every prelude-intrinsic callsite (print / print_int +
+/// ADR-0044 W2 Phase 2 input / input_no_prompt / read_line / argv) to
+/// the appropriate runtime helpers.
 ///
-/// - `print(s: str)` → `__cobrust_println(ptr, len)` (string-literal path)
-/// - `print_int(n: i64)` → `__cobrust_println_int(n)` (integer path)
-///
-/// Per ADR-0025 §"Print-intrinsic lift": the `print` rewrite preserves
-/// the literal string argument so codegen can lower to a
-/// `(*const u8, usize)` C-ABI call. The M10 narrowing to
-/// `"hello, world"` is removed.
-///
-/// Per ADR-0030 §Decision step 5: the `print_int` rewrite passes the
-/// integer operand directly; codegen lowers it to `i64` via the
-/// `runtime_funcs` table.
+/// - `print(s: str)` — string-literal arg → `__cobrust_println(ptr, len)`
+///   via the M11 extern_funcs path.
+/// - `print(s: str)` — non-literal arg → `__cobrust_println(ptr, len)`
+///   with the runtime-helper `(ptr, len)` expansion handled by codegen
+///   (heap-buffer pointer source → buffer ptr/len extracted at runtime).
+///   *(Today this path errors via `PrintArgUnsupported`; future work
+///   adds a `__cobrust_println_str_buf` shim or amends codegen's
+///   runtime_funcs lowering.)*
+/// - `print_int(n: i64)` → `__cobrust_println_int(n)`.
+/// - `input(prompt: str)` → `__cobrust_input(prompt_ptr, prompt_len)`
+///   via the runtime_funcs `(ptr, len)` expansion (ADR-0044).
+/// - `input_no_prompt()` → `__cobrust_input_no_prompt()`.
+/// - `read_line()` → `__cobrust_read_line()` (W2 cap; typed `Result`
+///   surface deferred to ADR-0044a).
+/// - `argv()` → `__cobrust_argv()`.
 ///
 /// # Errors
 ///
-/// Returns [`IntrinsicError::PrintArgUnsupported`] if any `print`
-/// callsite has a non-literal argument or a wrong arg count.
-pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
-    let (print_ids, print_int_ids) = collect_print_def_ids(module);
-    let all_stub_ids: HashSet<u32> = print_ids.union(&print_int_ids).copied().collect();
+/// Returns [`IntrinsicError::PrintArgUnsupported`] if any callsite has
+/// a wrong arg count or a non-supported argument shape.
+/// ADR-0044 W2 Phase 2: dispatch category for each intrinsic
+/// callsite. Hoisted to module scope (out of `rewrite_print`'s body)
+/// to satisfy clippy::items_after_statements.
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum Kind {
+    Print,
+    PrintInt,
+    Input,
+    InputNoPrompt,
+    ReadLine,
+    Argv,
+}
 
-    if all_stub_ids.is_empty() {
+fn kind_for_name(name: &str) -> Option<Kind> {
+    match name {
+        "print" => Some(Kind::Print),
+        "print_int" => Some(Kind::PrintInt),
+        "input" => Some(Kind::Input),
+        "input_no_prompt" => Some(Kind::InputNoPrompt),
+        "read_line" => Some(Kind::ReadLine),
+        "argv" => Some(Kind::Argv),
+        _ => None,
+    }
+}
+
+fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
+    if ids.print.contains(&id) {
+        Some(Kind::Print)
+    } else if ids.print_int.contains(&id) {
+        Some(Kind::PrintInt)
+    } else if ids.input.contains(&id) {
+        Some(Kind::Input)
+    } else if ids.input_no_prompt.contains(&id) {
+        Some(Kind::InputNoPrompt)
+    } else if ids.read_line.contains(&id) {
+        Some(Kind::ReadLine)
+    } else if ids.argv.contains(&id) {
+        Some(Kind::Argv)
+    } else {
+        None
+    }
+}
+
+pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
+    let ids = collect_print_def_ids(module);
+    if ids.is_empty() {
         return Ok(());
     }
-
-    let print_names: HashSet<String> = module
-        .bodies
-        .iter()
-        .filter(|b| print_ids.contains(&b.def_id.0))
-        .map(|b| b.name.clone())
-        .collect();
-
-    let print_int_names: HashSet<String> = module
-        .bodies
-        .iter()
-        .filter(|b| print_int_ids.contains(&b.def_id.0))
-        .map(|b| b.name.clone())
-        .collect();
+    let all_stub_ids = ids.all();
 
     for body in &mut module.bodies {
         if all_stub_ids.contains(&body.def_id.0) {
             continue;
         }
-
-        // Build local-id → name map for this body.
+        // Build local-id → name map for this body (used to detect Place-
+        // variant callees that point at a prelude stub by name).
         let mut local_name: std::collections::HashMap<u32, String> =
             std::collections::HashMap::new();
         for decl in &body.locals {
@@ -121,88 +239,126 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
 
         for block in &mut body.blocks {
             let term = &mut block.terminator;
-            if let Terminator::Call {
+            let Terminator::Call {
                 func,
                 args,
                 destination: _,
                 target: _,
                 unwind: _,
             } = term
-            {
-                // Identify callsite kind.
-                let is_print = match func {
-                    Operand::Copy(p) | Operand::Move(p) => {
-                        if p.projections.is_empty() {
-                            local_name
-                                .get(&p.local.0)
-                                .is_some_and(|n| print_names.contains(n))
-                        } else {
-                            false
-                        }
-                    }
-                    Operand::Constant(Constant::FnRef(d)) => print_ids.contains(d),
-                    Operand::Constant(_) => false,
-                };
-                let is_print_int = match func {
-                    Operand::Copy(p) | Operand::Move(p) => {
-                        if p.projections.is_empty() {
-                            local_name
-                                .get(&p.local.0)
-                                .is_some_and(|n| print_int_names.contains(n))
-                        } else {
-                            false
-                        }
-                    }
-                    Operand::Constant(Constant::FnRef(d)) => print_int_ids.contains(d),
-                    Operand::Constant(_) => false,
-                };
+            else {
+                continue;
+            };
+            let kind = match func {
+                Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                    local_name.get(&p.local.0).and_then(|n| kind_for_name(n))
+                }
+                Operand::Constant(Constant::FnRef(d)) => kind_for_def_id(&ids, *d),
+                _ => None,
+            };
+            let Some(kind) = kind else { continue };
 
-                if is_print {
-                    // M11 contract: exactly one string-literal argument.
+            match kind {
+                Kind::Print => {
                     if args.len() != 1 {
                         return Err(IntrinsicError::PrintArgUnsupported {
                             found: format!("{} arg(s)", args.len()),
                         });
                     }
-                    let s_lit = match &args[0] {
-                        Operand::Constant(Constant::Str(s)) => s.clone(),
-                        other => {
-                            return Err(IntrinsicError::PrintArgUnsupported {
-                                found: format!("non-literal arg {other:?}"),
-                            });
+                    match &args[0] {
+                        Operand::Constant(Constant::Str(s)) => {
+                            // Literal path: codegen materialises (ptr, len)
+                            // from the runtime helper's `(*const u8, usize)`
+                            // signature via the runtime_funcs single-Str-to-
+                            // (ptr, len) expansion (ADR-0044 codegen
+                            // amendment).
+                            let lit = s.clone();
+                            *func = Operand::Constant(Constant::Str(
+                                PRINTLN_RUNTIME_SYMBOL.to_string(),
+                            ));
+                            args.clear();
+                            args.push(Operand::Constant(Constant::Str(lit)));
                         }
-                    };
-
-                    // Rewrite: callee → runtime symbol; preserve the
-                    // literal arg. Codegen reads `args[0] = Constant::Str(s)`
-                    // to emit the (*const u8, usize) C-ABI call.
-                    *func = Operand::Constant(Constant::Str(PRINTLN_RUNTIME_SYMBOL.to_string()));
-                    args.clear();
-                    args.push(Operand::Constant(Constant::Str(s_lit)));
-                } else if is_print_int {
-                    // ADR-0030 §Decision step 5: rewrite print_int(n) to
-                    // __cobrust_println_int(n). The integer operand passes
-                    // through unchanged; codegen lowers it as i64 via the
-                    // runtime_funcs table.
+                        _ => {
+                            // Non-literal path (ADR-0044 W2 Phase 2 wedge):
+                            // route to `__cobrust_println_str_buf` which
+                            // takes the heap Str buffer pointer directly.
+                            let arg = args[0].clone();
+                            *func = Operand::Constant(Constant::Str(
+                                PRINTLN_STR_BUF_RUNTIME_SYMBOL.to_string(),
+                            ));
+                            args.clear();
+                            args.push(arg);
+                        }
+                    }
+                }
+                Kind::PrintInt => {
                     if args.len() != 1 {
                         return Err(IntrinsicError::PrintArgUnsupported {
                             found: format!("print_int: expected 1 arg, got {}", args.len()),
                         });
                     }
-                    // Preserve the existing integer operand — just redirect
-                    // the callee to the runtime symbol.
                     let int_arg = args[0].clone();
                     *func =
                         Operand::Constant(Constant::Str(PRINTLN_INT_RUNTIME_SYMBOL.to_string()));
                     args.clear();
                     args.push(int_arg);
                 }
+                Kind::Input => {
+                    // input(prompt: str) → __cobrust_input(ptr, len)
+                    // Codegen's runtime_funcs (ptr, len) expansion kicks
+                    // in when args[0] is Constant::Str — see
+                    // cranelift_backend.rs lower_terminator. For non-
+                    // literal prompts the arg is a heap-buffer Place;
+                    // codegen reads it as a pointer (no len expansion
+                    // — runtime helper sees the buffer ptr as `ptr`
+                    // and a zeroed `len`, prompting it to skip the
+                    // prompt write. The semantics match `input("")`.
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("input: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let prompt = args[0].clone();
+                    *func = Operand::Constant(Constant::Str(INPUT_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(prompt);
+                }
+                Kind::InputNoPrompt => {
+                    if !args.is_empty() {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("input_no_prompt: expected 0 args, got {}", args.len()),
+                        });
+                    }
+                    *func = Operand::Constant(Constant::Str(
+                        INPUT_NO_PROMPT_RUNTIME_SYMBOL.to_string(),
+                    ));
+                    args.clear();
+                }
+                Kind::ReadLine => {
+                    if !args.is_empty() {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("read_line: expected 0 args, got {}", args.len()),
+                        });
+                    }
+                    *func = Operand::Constant(Constant::Str(READ_LINE_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                }
+                Kind::Argv => {
+                    if !args.is_empty() {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("argv: expected 0 args, got {}", args.len()),
+                        });
+                    }
+                    *func = Operand::Constant(Constant::Str(ARGV_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                }
             }
         }
     }
 
-    // Drop all prelude stub Bodies (print + print_int). After rewrite no
-    // callsite references them.
+    // Drop all prelude stub Bodies. After rewrite no callsite
+    // references them.
     module
         .bodies
         .retain(|body| !all_stub_ids.contains(&body.def_id.0));

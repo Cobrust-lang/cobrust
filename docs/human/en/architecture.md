@@ -1724,12 +1724,12 @@ The `cobrust-stdlib` crate (M11) lands the runtime half of constitution §1.1's 
 
 | Module | Surface |
 |---|---|
-| `std.io` | `print / println / read_line / read_file / write_file / stdin / stdout / stderr` |
+| `std.io` | `print / println / read_line / read_file / write_file / stdin / stdout / stderr`; **ADR-0044 W2 Phase 2**: `input(prompt) -> str`, `input_no_prompt() -> str`, `read_line() -> str` source-level bindings (typed `Result[str, IoError]` deferred to ADR-0044a) |
 | `std.collections` | `List<T>` / `Dict<K, V>` / `Set<T>` (no implicit truthiness; `is_empty()` not `if list`); iteration via for-protocol |
 | `std.string` | `len / find / replace / split / strip / lower / upper / format` |
 | `std.math` | `sqrt / pow / sin / cos / abs_f64 / abs_i64 / floor / ceil / round / PI / E` |
 | `std.panic` | `panic(msg)` (terminates with code 3); `assert(cond, msg)` |
-| `std.env` | `args() -> Vec<String>` ; `var(name) -> Option<String>` |
+| `std.env` | `args() -> Vec<String>` ; `var(name) -> Option<String>`; **ADR-0044 W2 Phase 2**: `argv() -> list[str]` source-level binding (alias surface that materializes the same `CAPTURED_ARGS` as `args()`) |
 | `std.fmt` | `format_int / format_float / format_bool / format_str` (f-string runtime helpers) |
 
 **Constitution §2.2 requirements reflected in the API**: no implicit truthiness — every collection has `is_empty()`; `Result<T, E>` is the default error path (not exceptions); no `dyn` in the public surface; no async/sync coloring (M13 ships the structured-concurrency runtime).
@@ -1745,6 +1745,11 @@ The `cobrust-stdlib` crate (M11) lands the runtime half of constitution §1.1's 
 | `__cobrust_assert` | `extern "C" fn(bool, *const u8, usize)` | conditional panic |
 | `__cobrust_capture_argv` | `extern "C" fn(i32, *const *const u8)` | argv capture for `std.env.args` |
 | `_cobrust_drop_str` | `extern "C" fn(*mut u8)` | str destructor (no-op for .rodata at M11) |
+| `__cobrust_input` | `extern "C" fn(*const u8, usize) -> *mut u8` | ADR-0044 W2 Phase 2 — source-level `input(prompt)` runtime; writes prompt to stdout, reads one line from stdin (strip trailing `\n`), returns owned Str pointer |
+| `__cobrust_input_no_prompt` | `extern "C" fn() -> *mut u8` | ADR-0044 — `input()` no-prompt overload |
+| `__cobrust_read_line` | `extern "C" fn() -> *mut u8` | ADR-0044 — `read_line()` preserves trailing `\n` (W2 cap; typed Result deferred to ADR-0044a) |
+| `__cobrust_argv` | `extern "C" fn() -> *mut u8` | ADR-0044 — `argv()` materializes `CAPTURED_ARGS` into a Cobrust `List<Str>` |
+| `__cobrust_println_str_buf` | `extern "C" fn(*mut u8)` | ADR-0044 — `print(s)` heap-buffer path (extracts ptr+len from `__cobrust_str_*` buffer and dispatches to `__cobrust_println`) |
 
 **Heap allocator**: `mimalloc` is the default (Cargo feature `mimalloc-alloc`, on by default); `system-alloc` opts back to libc. `mimalloc::MiMalloc` is wired as `#[global_allocator]` in `cobrust-stdlib::runtime`.
 

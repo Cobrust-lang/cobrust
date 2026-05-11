@@ -45,6 +45,9 @@
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_panics_doc)]
+#![allow(clippy::assertions_on_constants)]
+#![allow(clippy::no_effect_underscore_binding)]
+#![allow(clippy::manual_repeat_n)]
 
 // =====================================================================
 // Marker: when the dev agent's impl lands, flip this to `true`. Each
@@ -53,7 +56,7 @@
 // doesn't exist.
 // =====================================================================
 
-const ADR0044_IMPL_LANDED: bool = false;
+const ADR0044_IMPL_LANDED: bool = true;
 
 fn require_impl(test_name: &str) {
     assert!(
@@ -76,10 +79,9 @@ fn require_impl(test_name: &str) {
 #[test]
 fn test_io_input_from_empty_reader_returns_empty() {
     require_impl("test_io_input_from_empty_reader_returns_empty");
-    // Once impl lands, dev replaces this body with:
-    //   let mut r = std::io::BufReader::new(std::io::Cursor::new(Vec::<u8>::new()));
-    //   let s = io::input_from("", &mut r);
-    //   assert_eq!(s, "");
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(Vec::<u8>::new()));
+    let s = cobrust_stdlib::io::input_from("", &mut r);
+    assert_eq!(s, "");
 }
 
 // ----- Tier 1 #3 — input strips trailing \n ------------------------
@@ -87,7 +89,9 @@ fn test_io_input_from_empty_reader_returns_empty() {
 #[test]
 fn test_io_input_from_strips_trailing_lf() {
     require_impl("test_io_input_from_strips_trailing_lf");
-    // Expected post-impl: input_from("", BufReader<Cursor<b"hello\n">>) → "hello"
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(b"hello\n".to_vec()));
+    let s = cobrust_stdlib::io::input_from("", &mut r);
+    assert_eq!(s, "hello");
 }
 
 // ----- Tier 1 #4 — input keeps \r, strips only \n ------------------
@@ -95,7 +99,9 @@ fn test_io_input_from_strips_trailing_lf() {
 #[test]
 fn test_io_input_from_keeps_cr_strips_only_lf() {
     require_impl("test_io_input_from_keeps_cr_strips_only_lf");
-    // Expected post-impl: input_from on b"hello\r\n" → "hello\r"
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(b"hello\r\n".to_vec()));
+    let s = cobrust_stdlib::io::input_from("", &mut r);
+    assert_eq!(s, "hello\r");
 }
 
 // ----- Tier 1 — input on no-trailing-\n bytes ---------------------
@@ -103,9 +109,13 @@ fn test_io_input_from_keeps_cr_strips_only_lf() {
 #[test]
 fn test_io_input_from_no_trailing_newline_returns_what_was_read() {
     require_impl("test_io_input_from_no_trailing_newline_returns_what_was_read");
-    // Expected post-impl: input_from on b"abc" (no \n, then EOF) → "abc"
-    // (or "" if dev chooses strict-EOF-required convention; either is valid
-    // per W2 doc — dev must document the choice).
+    // ADR-0044 W2 Phase 2 convention: `read_until` returns whatever
+    // bytes are available up to + including the delimiter (or EOF).
+    // No-trailing-\n input is returned as-is (no strip happens — the
+    // strip path only fires when the last byte is \n).
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(b"abc".to_vec()));
+    let s = cobrust_stdlib::io::input_from("", &mut r);
+    assert_eq!(s, "abc");
 }
 
 // ----- Tier 1 — repeated input drains reader -----------------------
@@ -113,19 +123,26 @@ fn test_io_input_from_no_trailing_newline_returns_what_was_read() {
 #[test]
 fn test_io_input_from_repeated_drains_lines() {
     require_impl("test_io_input_from_repeated_drains_lines");
-    // Expected post-impl: 3× input_from on b"one\ntwo\nthree\n" → "one","two","three"
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(b"one\ntwo\nthree\n".to_vec()));
+    assert_eq!(cobrust_stdlib::io::input_from("", &mut r), "one");
+    assert_eq!(cobrust_stdlib::io::input_from("", &mut r), "two");
+    assert_eq!(cobrust_stdlib::io::input_from("", &mut r), "three");
 }
 
 #[test]
 fn test_io_input_from_repeated_then_eof_returns_empty() {
     require_impl("test_io_input_from_repeated_then_eof_returns_empty");
-    // Expected post-impl: input drains the line, next call hits EOF → ""
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(b"only\n".to_vec()));
+    assert_eq!(cobrust_stdlib::io::input_from("", &mut r), "only");
+    assert_eq!(cobrust_stdlib::io::input_from("", &mut r), "");
 }
 
 #[test]
 fn test_io_input_from_with_prompt_does_not_panic() {
     require_impl("test_io_input_from_with_prompt_does_not_panic");
-    // Expected post-impl: input_from(">> ", reader) returns the read line; no panic.
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(b"value\n".to_vec()));
+    let s = cobrust_stdlib::io::input_from(">> ", &mut r);
+    assert_eq!(s, "value");
 }
 
 // ----- Tier 1 #12 — UTF-8 multi-byte round-trip --------------------
@@ -133,7 +150,9 @@ fn test_io_input_from_with_prompt_does_not_panic() {
 #[test]
 fn test_io_input_from_utf8_multibyte_round_trip() {
     require_impl("test_io_input_from_utf8_multibyte_round_trip");
-    // Expected post-impl: input on "你好\n" → "你好"
+    let mut r = std::io::BufReader::new(std::io::Cursor::new("你好\n".as_bytes().to_vec()));
+    let s = cobrust_stdlib::io::input_from("", &mut r);
+    assert_eq!(s, "你好");
 }
 
 // ----- Tier 1 #13 — invalid UTF-8 lossy ----------------------------
@@ -141,7 +160,12 @@ fn test_io_input_from_utf8_multibyte_round_trip() {
 #[test]
 fn test_io_input_from_invalid_utf8_lossy_replacement() {
     require_impl("test_io_input_from_invalid_utf8_lossy_replacement");
-    // Expected post-impl: input on [0xff, 0x0a] → contains U+FFFD, no panic.
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(vec![0xffu8, 0x0a]));
+    let s = cobrust_stdlib::io::input_from("", &mut r);
+    assert!(
+        s.contains('\u{fffd}'),
+        "expected U+FFFD replacement, got {s:?}"
+    );
 }
 
 // ----- Tier 1 #6 — read_line preserves \n (W2 cap) -----------------
@@ -149,9 +173,9 @@ fn test_io_input_from_invalid_utf8_lossy_replacement() {
 #[test]
 fn test_io_read_line_w2_preserves_trailing_lf() {
     require_impl("test_io_read_line_w2_preserves_trailing_lf");
-    // POST-AMENDMENT: read_line W2 cap returns plain String.
-    // Expected post-impl: read_line_from(b"hello\n") → "hello\n"
-    // (NOT the Result-typed Ok-shape — that's ADR-0044a future.)
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(b"hello\n".to_vec()));
+    let s = cobrust_stdlib::io::read_line_from(&mut r);
+    assert_eq!(s, "hello\n");
 }
 
 // ----- Tier 1 #7 — read_line EOF → "" (W2 cap) ---------------------
@@ -159,8 +183,9 @@ fn test_io_read_line_w2_preserves_trailing_lf() {
 #[test]
 fn test_io_read_line_w2_eof_returns_empty_string() {
     require_impl("test_io_read_line_w2_eof_returns_empty_string");
-    // Expected post-impl: read_line_from(empty) → ""
-    // (NOT the Result-typed Err-shape — that's ADR-0044a future.)
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(Vec::<u8>::new()));
+    let s = cobrust_stdlib::io::read_line_from(&mut r);
+    assert_eq!(s, "");
 }
 
 // ----- Tier 1 — read_line drains lines -----------------------------
@@ -168,7 +193,11 @@ fn test_io_read_line_w2_eof_returns_empty_string() {
 #[test]
 fn test_io_read_line_w2_drains_lines() {
     require_impl("test_io_read_line_w2_drains_lines");
-    // Expected post-impl: read_line × 4 on b"a\nb\nc\n" → "a\n","b\n","c\n",""
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(b"a\nb\nc\n".to_vec()));
+    assert_eq!(cobrust_stdlib::io::read_line_from(&mut r), "a\n");
+    assert_eq!(cobrust_stdlib::io::read_line_from(&mut r), "b\n");
+    assert_eq!(cobrust_stdlib::io::read_line_from(&mut r), "c\n");
+    assert_eq!(cobrust_stdlib::io::read_line_from(&mut r), "");
 }
 
 // ----- Tier 1 — input + read_line interleaved ---------------------
@@ -176,7 +205,10 @@ fn test_io_read_line_w2_drains_lines() {
 #[test]
 fn test_io_input_and_read_line_interleaved() {
     require_impl("test_io_input_and_read_line_interleaved");
-    // Expected post-impl: alternating input/read_line preserves stream order.
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(b"a\nb\nc\n".to_vec()));
+    assert_eq!(cobrust_stdlib::io::input_from("", &mut r), "a");
+    assert_eq!(cobrust_stdlib::io::read_line_from(&mut r), "b\n");
+    assert_eq!(cobrust_stdlib::io::input_from("", &mut r), "c");
 }
 
 // =====================================================================
@@ -186,26 +218,26 @@ fn test_io_input_and_read_line_interleaved() {
 #[test]
 fn test_cabi_input_no_prompt_symbol_exists() {
     require_impl("test_cabi_input_no_prompt_symbol_exists");
-    // Post-impl: take a fn-pointer to cobrust_stdlib::io::__cobrust_input_no_prompt.
-    // Symbol existence is the contract.
+    // Symbol existence is the contract — take an unsafe fn pointer.
+    let _f: unsafe extern "C" fn() -> *mut u8 = cobrust_stdlib::io::__cobrust_input_no_prompt;
 }
 
 #[test]
 fn test_cabi_input_with_prompt_symbol_exists() {
     require_impl("test_cabi_input_with_prompt_symbol_exists");
-    // Post-impl: __cobrust_input(*const u8, usize) -> *mut Str.
+    let _f: unsafe extern "C" fn(*const u8, usize) -> *mut u8 = cobrust_stdlib::io::__cobrust_input;
 }
 
 #[test]
 fn test_cabi_read_line_symbol_exists() {
     require_impl("test_cabi_read_line_symbol_exists");
-    // Post-impl (W2 cap): __cobrust_read_line() -> *mut Str (NOT *mut Result_StrIo).
+    let _f: unsafe extern "C" fn() -> *mut u8 = cobrust_stdlib::io::__cobrust_read_line;
 }
 
 #[test]
 fn test_cabi_argv_symbol_exists() {
     require_impl("test_cabi_argv_symbol_exists");
-    // Post-impl: __cobrust_argv() -> *mut List_Str.
+    let _f: unsafe extern "C" fn() -> *mut u8 = cobrust_stdlib::env::__cobrust_argv;
 }
 
 // =====================================================================
@@ -215,7 +247,10 @@ fn test_cabi_argv_symbol_exists() {
 #[test]
 fn test_argv_materialize_reads_captured_args() {
     require_impl("test_argv_materialize_reads_captured_args");
-    // Post-impl: env::argv_list() returns Vec<String> matching CAPTURED_ARGS.
+    // argv_list() falls back to std::env::args() when CAPTURED_ARGS is
+    // not initialised; in the cargo-test runner argv[0] is always present.
+    let v = cobrust_stdlib::env::argv_list();
+    assert!(!v.is_empty(), "argv must have at least argv[0]");
 }
 
 // =====================================================================
@@ -225,13 +260,22 @@ fn test_argv_materialize_reads_captured_args() {
 #[test]
 fn test_io_input_from_large_4kib_input() {
     require_impl("test_io_input_from_large_4kib_input");
-    // Post-impl: 4 KiB input round-trips intact.
+    let payload: Vec<u8> = std::iter::repeat(b'a')
+        .take(4096)
+        .chain(std::iter::once(b'\n'))
+        .collect();
+    let mut r = std::io::BufReader::new(std::io::Cursor::new(payload));
+    let s = cobrust_stdlib::io::input_from("", &mut r);
+    assert_eq!(s.len(), 4096);
 }
 
 #[test]
 fn test_io_input_from_empty_and_nonempty_prompt() {
     require_impl("test_io_input_from_empty_and_nonempty_prompt");
-    // Post-impl: both empty and non-empty prompt strings work.
+    let mut r1 = std::io::BufReader::new(std::io::Cursor::new(b"a\n".to_vec()));
+    assert_eq!(cobrust_stdlib::io::input_from("", &mut r1), "a");
+    let mut r2 = std::io::BufReader::new(std::io::Cursor::new(b"b\n".to_vec()));
+    assert_eq!(cobrust_stdlib::io::input_from("> ", &mut r2), "b");
 }
 
 // =====================================================================

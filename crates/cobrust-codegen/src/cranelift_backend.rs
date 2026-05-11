@@ -47,11 +47,17 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
     .map_err(|e| CodegenError::ObjectEmission(e.to_string()))?;
     let mut obj_module = ObjectModule::new(object_builder);
 
+    let runtime_helper_return_types: HashMap<&'static str, ir::Type> =
+        runtime_helper_signatures(pointer_type, call_conv)
+            .into_iter()
+            .filter_map(|(name, sig)| sig.returns.first().map(|p| (name, p.value_type)))
+            .collect();
     let mut ctx = CraneliftCtx {
         pointer_type,
         call_conv,
         function_ids: HashMap::new(),
         body_return_types: HashMap::new(),
+        runtime_helper_return_types,
     };
 
     // --- declare every body's signature first ---------------------------
@@ -145,6 +151,14 @@ struct CraneliftCtx {
     /// to type the `_callret` destination of `Terminator::Call`
     /// destinations whose declared `Ty` is `Ty::None`.
     body_return_types: HashMap<u32, ir::Type>,
+    /// ADR-0044: cache the runtime-helper return types so
+    /// `infer_local_types` can propagate them through post-rewrite
+    /// `Terminator::Call { func: Constant::Str(name), .. }` callsites
+    /// (where `name` is a runtime symbol, e.g. `__cobrust_argv`).
+    /// Populated once at ctx construction from
+    /// `runtime_helper_signatures`. Missing keys default to None,
+    /// matching the pre-ADR-0044 behavior.
+    runtime_helper_return_types: HashMap<&'static str, ir::Type>,
 }
 
 impl CraneliftCtx {
@@ -331,6 +345,45 @@ impl CraneliftCtx {
 
         let mut out: HashMap<LocalId, ir::Type> = HashMap::new();
 
+        // ADR-0044: pre-pass that resolves every runtime-call destination
+        // (Terminator::Call whose func is Constant::FnRef(known body) or
+        // Constant::Str(known runtime helper)) into `out` before the
+        // scan-based fixed-point begins. Without this, the scan path
+        // can read a partially-populated `out` and resolve a Copy(opt)
+        // rvalue to I8 (Ty::None default for opt) just because the
+        // tscan iteration order put opt's resolution after the user
+        // binding's resolution. Once that wrong type is in `out`, the
+        // `if out.contains_key(&local_id) { continue }` guard pins it
+        // for the rest of the fixed-point, so the user binding's var is
+        // allocated as I8 and Cranelift `ireduce`s a runtime i64 to i8
+        // on def_var — verifier-fatal.
+        for &local_id in &candidates {
+            for block in &body.blocks {
+                if let cobrust_mir::Terminator::Call {
+                    func, destination, ..
+                } = &block.terminator
+                {
+                    if destination.local != local_id || !destination.projections.is_empty() {
+                        continue;
+                    }
+                    if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::FnRef(id)) = func {
+                        if let Some(ty) = self.body_return_types.get(id).copied() {
+                            out.insert(local_id, ty);
+                            break;
+                        }
+                    }
+                    if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(name)) = func {
+                        if let Some(ty) =
+                            self.runtime_helper_return_types.get(name.as_str()).copied()
+                        {
+                            out.insert(local_id, ty);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         // Fixed-point iteration. The loop terminates because each
         // iteration only adds entries (never removes), the candidate
         // set is finite, and an iteration that adds nothing ends the
@@ -366,6 +419,31 @@ impl CraneliftCtx {
                             )) = func
                             {
                                 if let Some(ty) = self.body_return_types.get(id).copied() {
+                                    out.insert(local_id, ty);
+                                    found = true;
+                                    break 'tscan;
+                                }
+                            }
+                            // ADR-0044 (post-intrinsic-rewrite path): when
+                            // the callee is a `Constant::Str(name)` — i.e.
+                            // a runtime-helper symbol after the M11
+                            // print-intrinsic / ADR-0044 input/argv rewrite
+                            // — propagate the helper's declared return type
+                            // from `runtime_helper_signatures`. Without
+                            // this, post-rewrite `_xs = __cobrust_argv()`
+                            // destinations fall back to I8 (Ty::None
+                            // default) and any downstream use (e.g.
+                            // `for x in xs:` lowering's `_iter` copy of
+                            // the list pointer) triggers a Cranelift
+                            // `ireduce.i8` that the verifier rejects when
+                            // the iter_init expects an I64 pointer arg.
+                            if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(
+                                name,
+                            )) = func
+                            {
+                                if let Some(ty) =
+                                    self.runtime_helper_return_types.get(name.as_str()).copied()
+                                {
                                     out.insert(local_id, ty);
                                     found = true;
                                     break 'tscan;
@@ -660,6 +738,14 @@ impl CraneliftCtx {
         for (name, fid) in &runtime_func_ids {
             runtime_funcs.insert(*name, obj.declare_func_in_func(*fid, builder.func));
         }
+        // ADR-0044: parallel param-count map for the runtime helpers.
+        // Consumed by `lower_terminator` to detect the
+        // `(*const u8, usize)` expansion case (1 source Str arg → 2 ir
+        // params).
+        let runtime_helper_param_counts: HashMap<&'static str, usize> = runtime_helpers
+            .iter()
+            .map(|(name, sig)| (*name, sig.params.len()))
+            .collect();
 
         // --- ADR-0025 §"Codegen amendments" Constant::Str row ---------
         // Materialize every Constant::Str payload referenced as a
@@ -734,6 +820,7 @@ impl CraneliftCtx {
                 body,
                 extern_funcs: &extern_funcs,
                 runtime_funcs: &runtime_funcs,
+                runtime_helper_param_counts: &runtime_helper_param_counts,
                 user_funcs: &user_funcs,
                 str_data_globals: &str_data_globals,
                 stack_slots: &mut stack_slots,
@@ -788,6 +875,13 @@ struct EmitCtx<'a, 'b> {
     /// `__cobrust_str_push_static`, ...) as Linkage::Import imports
     /// resolved at link time against `cobrust-stdlib`'s C-ABI surface.
     runtime_funcs: &'a HashMap<&'static str, ir::FuncRef>,
+    /// ADR-0044: param-count lookup for runtime helpers, used by
+    /// `lower_terminator` to detect the `(*const u8, usize)` expansion
+    /// case — a runtime helper whose signature has 2 params (typically
+    /// the (ptr, len) shape) being called with a single source
+    /// `Constant::Str` arg. Without this expansion the verifier
+    /// rejects the call (1 ir value supplied for 2 sig params).
+    runtime_helper_param_counts: &'a HashMap<&'static str, usize>,
     /// User-defined fn FuncRefs (ADR-0034 §"Decision" Option 3). Keyed
     /// on the MIR `Body.def_id.0` value, which matches the `u32` payload
     /// of `Constant::FnRef`. Populated in `define_body` from
@@ -963,11 +1057,30 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                         // Lower each arg. For Constant::Str args we
                         // materialize the rodata pointer (push_static
                         // pattern); other operands lower directly.
-                        let mut call_args = Vec::with_capacity(args.len());
+                        //
+                        // ADR-0044: detect the `(*const u8, usize)`
+                        // expansion case — when the source has a single
+                        // `Constant::Str` arg but the runtime helper's
+                        // signature expects two params, we emit ptr+len
+                        // pair (same shape the M11 `__cobrust_println`
+                        // extern_funcs path uses). This covers
+                        // `input("prompt")` post-rewrite.
+                        let sig_param_count = self
+                            .runtime_helper_param_counts
+                            .get(name.as_str())
+                            .copied()
+                            .unwrap_or(args.len());
+                        let mut call_args = Vec::with_capacity(sig_param_count);
+                        let expand_str_to_ptr_len = args.len() == 1
+                            && sig_param_count == 2
+                            && matches!(args.first(), Some(Operand::Constant(Constant::Str(_))));
                         for arg in args {
                             if let Operand::Constant(Constant::Str(payload)) = arg {
-                                let (ptr, _len) = self.materialize_str_data(payload)?;
+                                let (ptr, len) = self.materialize_str_data(payload)?;
                                 call_args.push(ptr);
+                                if expand_str_to_ptr_len {
+                                    call_args.push(len);
+                                }
                             } else {
                                 let v = self.lower_operand(arg)?;
                                 call_args.push(v);
@@ -1029,13 +1142,32 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
             self.builder.ins().jump(otherwise_blk, &[]);
             return Ok(());
         }
+        // ADR-0044 codegen amendment: align the case-value iconst type
+        // with the scrutinee's value type. Previously a `SwitchValue::Bool`
+        // case would emit `iconst.i8 0` against an i64 scrutinee
+        // (typical when scrutinee is the for-protocol's `opt_local`
+        // typed by ADR-0044's runtime-helper return-type inference),
+        // tripping Cranelift's `icmp` verifier on the arg-type mismatch.
+        let scrutinee_ty = self.builder.func.dfg.value_type(scrutinee);
         let mut current_otherwise = otherwise_blk;
         for (i, (val, target)) in cases.iter().enumerate().rev() {
             let case_blk = self.block_id(target)?;
-            let test_val = match val {
-                SwitchValue::Bool(b) => self.builder.ins().iconst(ir::types::I8, *b as i64),
-                SwitchValue::Int(v) => self.builder.ins().iconst(ir::types::I64, *v),
-                SwitchValue::Adt(d) => self.builder.ins().iconst(ir::types::I32, *d as i64),
+            // Compute the test value at the scrutinee's int type. For
+            // non-int scrutinees fall back to the legacy widths.
+            let payload = match val {
+                SwitchValue::Bool(b) => i64::from(*b),
+                SwitchValue::Int(v) => *v,
+                SwitchValue::Adt(d) => i64::from(*d),
+            };
+            let test_val = if scrutinee_ty.is_int() {
+                self.builder.ins().iconst(scrutinee_ty, payload)
+            } else {
+                let legacy_ty = match val {
+                    SwitchValue::Bool(_) => ir::types::I8,
+                    SwitchValue::Int(_) => ir::types::I64,
+                    SwitchValue::Adt(_) => ir::types::I32,
+                };
+                self.builder.ins().iconst(legacy_ty, payload)
             };
             let cmp = self
                 .builder
@@ -1814,6 +1946,24 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_str_len", sig(call_conv, &[p], Some(i64))));
     out.push(("__cobrust_str_ptr", sig(call_conv, &[p], Some(p))));
     out.push(("__cobrust_str_drop", sig(call_conv, &[p], None)));
+
+    // -- ADR-0044 W2 Phase 2: stdin + argv source-level binding ---
+    // `input(prompt: str) -> str` — writes prompt to stdout, reads one
+    // line from stdin (strip trailing \n), returns owned Str pointer.
+    // `print(s)` heap-buffer path — ADR-0044 W2 Phase 2 codegen
+    // amendment so non-literal `print(s)` callsites round-trip through
+    // a single C-ABI dispatch (no per-callsite (ptr, len) extraction).
+    out.push(("__cobrust_println_str_buf", sig(call_conv, &[p], None)));
+    out.push(("__cobrust_input", sig(call_conv, &[p, i64], Some(p))));
+    // `input_no_prompt() -> str` — empty-prompt overload.
+    out.push(("__cobrust_input_no_prompt", sig(call_conv, &[], Some(p))));
+    // `read_line() -> str` (W2 Phase 2 scope cap per ADR-0044
+    // Decision 1D; typed `Result[str, IoError]` deferred to ADR-0044a).
+    // Returns the line preserving its trailing \n; EOF returns empty Str.
+    out.push(("__cobrust_read_line", sig(call_conv, &[], Some(p))));
+    // `argv() -> list[str]` — materializes CAPTURED_ARGS into a
+    // List<Str>; each element is a heap-allocated Str pointer.
+    out.push(("__cobrust_argv", sig(call_conv, &[], Some(p))));
 
     out
 }
