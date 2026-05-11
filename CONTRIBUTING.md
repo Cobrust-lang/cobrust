@@ -40,6 +40,12 @@ We tag entry points with these labels:
    cargo test --workspace --locked
    bash scripts/doc-coverage.sh
    ```
+5a. **Install the pre-commit snapshot-lint hook** (one-time, optional but recommended):
+   ```bash
+   git config core.hooksPath .githooks
+   chmod +x .githooks/pre-commit-snapshot-lint
+   ```
+   This hook checks project state invariants before each commit.
 6. **Commit** with conventional-commits: `feat(scope): subject`,
    `fix(scope): subject`, `docs(scope): subject`. Co-author lines welcome.
 7. **PR** against `main`. CI runs the 5 gates on macOS arm64 + Linux x86_64.
