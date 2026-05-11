@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue.svg)](#license)
-[![Stage](https://img.shields.io/badge/stage-0.1.0--beta-orange.svg)](https://github.com/Cobrust-lang/cobrust/releases)
+[![Stage](https://img.shields.io/badge/stage-0.1.1-orange.svg)](https://github.com/Cobrust-lang/cobrust/releases)
 
 [**Why Cobrust?**](docs/post/why-cobrust.md) ·
 [**Quick Start**](#quick-start) ·
@@ -25,8 +25,8 @@
 ## ⚡ 30-second demo
 
 ```bash
-# Install
-$ cargo install cobrust-cli
+# Install (build from source)
+$ cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
 # Translate a Python library to verified Rust
 $ cobrust translate tomli
@@ -71,11 +71,16 @@ The wedge: **AI translates the existing Python ecosystem into Cobrust automatica
 
 ```bash
 # Via cargo (Rust toolchain required, 1.94+)
-cargo install cobrust-cli
+cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
+# (crates.io publish queued for v0.2.0)
 
 # Or download a prebuilt binary for macOS arm64 / Linux x86_64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-$(uname -sm | tr ' ' '-').tar.gz | tar xz
-mv cobrust /usr/local/bin/
+# macOS arm64
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.1-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv cobrust /usr/local/bin/
+# Linux x86_64
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.1-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv cobrust /usr/local/bin/
 ```
 
 ### Hello world
