@@ -1,0 +1,36 @@
+# LC-007 array-sorted-intersection (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: M N; Line 2: M sorted ints; Line 3: N sorted ints
+# Output: intersection values in non-decreasing order (min count from both)
+# Algorithm: two-pointer merge on sorted arrays; emit when equal
+
+fn main() -> i64:
+    let mn_line = input("")
+    let m = parse_int_tok(mn_line, 0)
+    let n = parse_int_tok(mn_line, 1)
+    let arr1 = list_new(m)
+    let arr2 = list_new(n)
+    let line1 = input("")
+    let line2 = input("")
+    let i: i64 = 0
+    while i < m:
+        list_set(arr1, i, parse_int_tok(line1, i))
+        i = i + 1
+    let j: i64 = 0
+    while j < n:
+        list_set(arr2, j, parse_int_tok(line2, j))
+        j = j + 1
+    let pi: i64 = 0
+    let pj: i64 = 0
+    while pi < m and pj < n:
+        let va = list_get(arr1, pi)
+        let vb = list_get(arr2, pj)
+        if va == vb:
+            print_int(va)
+            pi = pi + 1
+            pj = pj + 1
+        elif va < vb:
+            pi = pi + 1
+        else:
+            pj = pj + 1
+    return 0

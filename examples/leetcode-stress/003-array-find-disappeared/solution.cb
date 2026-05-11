@@ -1,0 +1,25 @@
+# LC-003 array-find-disappeared (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated integers each in [1,N]
+# Output: all integers from 1..N not present in the input, ascending order
+# Algorithm: boolean presence array of size N+1, two-pass scan
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let seen = list_new(n + 1)
+    let i: i64 = 0
+    while i <= n:
+        list_set(seen, i, 0)
+        i = i + 1
+    let j: i64 = 0
+    while j < n:
+        let v = parse_int_tok(line, j)
+        list_set(seen, v, 1)
+        j = j + 1
+    let k: i64 = 1
+    while k <= n:
+        if list_get(seen, k) == 0:
+            print_int(k)
+        k = k + 1
+    return 0

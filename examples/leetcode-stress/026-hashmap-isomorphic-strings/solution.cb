@@ -1,0 +1,36 @@
+# LC-026 hashmap-isomorphic-strings (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: string s; Line 2: string t (equal length)
+# Output: "true" if isomorphic (consistent 1-to-1 char mapping), else "false"
+# Algorithm: two 128-slot arrays for bidirectional ASCII mapping; -1 = unmapped
+
+fn main() -> i64:
+    let s = input("")
+    let t = input("")
+    let sn = str_len(s)
+    let tn = str_len(t)
+    if sn != tn:
+        print("false")
+        return 0
+    let s2t = list_new(128)
+    let t2s = list_new(128)
+    let i: i64 = 0
+    while i < 128:
+        list_set(s2t, i, -1)
+        list_set(t2s, i, -1)
+        i = i + 1
+    let j: i64 = 0
+    while j < sn:
+        let sc = str_ord(str_at(s, j))
+        let tc = str_ord(str_at(t, j))
+        let mapped_s = list_get(s2t, sc)
+        let mapped_t = list_get(t2s, tc)
+        if mapped_s == -1 and mapped_t == -1:
+            list_set(s2t, sc, tc)
+            list_set(t2s, tc, sc)
+        elif mapped_s != tc or mapped_t != sc:
+            print("false")
+            return 0
+        j = j + 1
+    print("true")
+    return 0

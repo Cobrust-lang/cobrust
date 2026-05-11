@@ -1,0 +1,82 @@
+# LC-024 hashmap-group-anagrams (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: M; Lines 2..M+1: one word per line (lowercase)
+# Output: anagram groups, words one per line, groups separated by blank lines
+# Algorithm: store words as char-codes in flat i64 list, 26-sig grouping O(M^2)
+
+fn get_char(words: list[i64], word_idx: i64, char_idx: i64) -> i64:
+    return list_get(words, word_idx * 32 + char_idx)
+
+fn get_len(lens: list[i64], word_idx: i64) -> i64:
+    return list_get(lens, word_idx)
+
+fn same_sig(sig: list[i64], a: i64, b: i64) -> i64:
+    let i: i64 = 0
+    while i < 26:
+        let va = list_get(sig, a * 26 + i)
+        let vb = list_get(sig, b * 26 + i)
+        if va != vb:
+            return 0
+        i = i + 1
+    return 1
+
+fn print_word(words: list[i64], lens: list[i64], idx: i64) -> i64:
+    let len = get_len(lens, idx)
+    let j: i64 = 0
+    while j < len:
+        let code = get_char(words, idx, j)
+        let c = str_at("abcdefghijklmnopqrstuvwxyz", code - 97)
+        print_no_nl(c)
+        j = j + 1
+    print("")
+    return 0
+
+fn main() -> i64:
+    let m = parse_int(input(""))
+    let words = list_new(m * 32)
+    let lens = list_new(m)
+    let sig = list_new(m * 26)
+    let i: i64 = 0
+    while i < m * 32:
+        list_set(words, i, 0)
+        i = i + 1
+    let si: i64 = 0
+    while si < m * 26:
+        list_set(sig, si, 0)
+        si = si + 1
+    let wi: i64 = 0
+    while wi < m:
+        let word = input("")
+        let wlen = str_len(word)
+        list_set(lens, wi, wlen)
+        let ci: i64 = 0
+        while ci < wlen:
+            let code = str_ord(str_at(word, ci))
+            list_set(words, wi * 32 + ci, code)
+            let freq_idx = wi * 26 + (code - 97)
+            list_set(sig, freq_idx, list_get(sig, freq_idx) + 1)
+            ci = ci + 1
+        wi = wi + 1
+    let grouped = list_new(m)
+    let gi: i64 = 0
+    while gi < m:
+        list_set(grouped, gi, 0)
+        gi = gi + 1
+    let first_group: i64 = 1
+    let g: i64 = 0
+    while g < m:
+        if list_get(grouped, g) == 0:
+            if first_group == 0:
+                print("")
+            first_group = 0
+            list_set(grouped, g, 1)
+            print_word(words, lens, g)
+            let h: i64 = g + 1
+            while h < m:
+                if list_get(grouped, h) == 0:
+                    if same_sig(sig, g, h) == 1:
+                        list_set(grouped, h, 1)
+                        print_word(words, lens, h)
+                h = h + 1
+        g = g + 1
+    return 0

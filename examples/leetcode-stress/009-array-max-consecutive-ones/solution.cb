@@ -1,0 +1,23 @@
+# LC-009 array-max-consecutive-ones (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated 0s and 1s
+# Output: length of the longest consecutive run of 1s
+# Algorithm: single scan with current-run and best-run counters
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let best: i64 = 0
+    let cur: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        let v = parse_int_tok(line, i)
+        if v == 1:
+            cur = cur + 1
+            if cur > best:
+                best = cur
+        else:
+            cur = 0
+        i = i + 1
+    print_int(best)
+    return 0

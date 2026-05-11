@@ -1,0 +1,29 @@
+# LC-027 hashmap-longest-no-repeat (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): one line with the string
+# Output: length of longest substring with no repeated characters
+# Algorithm: sliding window with 128-slot last-seen position array
+
+fn main() -> i64:
+    let s = input("")
+    let n = str_len(s)
+    let last_seen = list_new(128)
+    let i: i64 = 0
+    while i < 128:
+        list_set(last_seen, i, -1)
+        i = i + 1
+    let left: i64 = 0
+    let best: i64 = 0
+    let j: i64 = 0
+    while j < n:
+        let code = str_ord(str_at(s, j))
+        let prev = list_get(last_seen, code)
+        if prev >= left:
+            left = prev + 1
+        list_set(last_seen, code, j)
+        let window = j - left + 1
+        if window > best:
+            best = window
+        j = j + 1
+    print_int(best)
+    return 0

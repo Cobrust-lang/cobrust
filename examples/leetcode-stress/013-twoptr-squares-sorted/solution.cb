@@ -1,0 +1,38 @@
+# LC-013 twoptr-squares-sorted (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N sorted integers (may be negative)
+# Output: squares of each element in non-decreasing order, one per line
+# Algorithm: two-pointer from both ends, fill result from largest to smallest
+
+fn abs_val(x: i64) -> i64:
+    if x < 0:
+        return 0 - x
+    return x
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let nums = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(nums, i, parse_int_tok(line, i))
+        i = i + 1
+    let result = list_new(n)
+    let lo: i64 = 0
+    let hi: i64 = n - 1
+    let pos: i64 = n - 1
+    while lo <= hi:
+        let al = abs_val(list_get(nums, lo))
+        let ah = abs_val(list_get(nums, hi))
+        if al >= ah:
+            list_set(result, pos, al * al)
+            lo = lo + 1
+        else:
+            list_set(result, pos, ah * ah)
+            hi = hi - 1
+        pos = pos - 1
+    let j: i64 = 0
+    while j < n:
+        print_int(list_get(result, j))
+        j = j + 1
+    return 0

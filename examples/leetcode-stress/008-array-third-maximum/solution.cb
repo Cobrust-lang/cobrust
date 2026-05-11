@@ -1,0 +1,42 @@
+# LC-008 array-third-maximum (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated integers
+# Output: third distinct max, or overall max if fewer than 3 distinct values
+# Algorithm: track top-3 distinct values with sentinel -9999999999
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let nums = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(nums, i, parse_int_tok(line, i))
+        i = i + 1
+    let sentinel: i64 = -9999999999
+    let first: i64 = sentinel
+    let second: i64 = sentinel
+    let third: i64 = sentinel
+    let j: i64 = 0
+    while j < n:
+        let v = list_get(nums, j)
+        if v == first or v == second or v == third:
+            j = j + 1
+        elif v > first or first == sentinel:
+            third = second
+            second = first
+            first = v
+            j = j + 1
+        elif v > second or second == sentinel:
+            third = second
+            second = v
+            j = j + 1
+        elif v > third or third == sentinel:
+            third = v
+            j = j + 1
+        else:
+            j = j + 1
+    if third == sentinel:
+        print_int(first)
+    else:
+        print_int(third)
+    return 0
