@@ -501,6 +501,7 @@ name = "cobrust-stdlib"
 version = "0.1.0-beta"
 dependencies = [
  "mimalloc",
+ "proptest",
  "tempfile",
  "tokio",
 ]

@@ -1,0 +1,8 @@
+# argv_dump — prints each argv element on its own line via for-protocol.
+# Used by W2 Phase 2 cli_stdin_argv_e2e.rs tests for argv ordering.
+# Per ADR-0044 §"Cobrust source-level surface": argv() -> list[str].
+fn main() -> i64:
+    let args = argv()
+    for a in args:
+        print(a)
+    return 0

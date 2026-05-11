@@ -33,3 +33,6 @@ tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+# ADR-0044 W2 Phase 2: proptest 1024-fuzz harness for input()/read_line()
+# (tests/io_input_fuzz.rs).
+proptest = "1.5"

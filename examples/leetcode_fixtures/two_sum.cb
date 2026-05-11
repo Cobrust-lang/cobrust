@@ -1,0 +1,7 @@
+# two_sum — wedge example using input() to read greeting line.
+# Used by W2 Phase 2 cli_stdin_argv_e2e.rs test #1 / #2.
+# Minimal stub — Phase 3 fills full leetcode logic.
+fn main() -> i64:
+    let line = input("")
+    print(line)
+    return 0
