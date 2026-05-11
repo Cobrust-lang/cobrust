@@ -1,0 +1,33 @@
+# LC-034 stack-sort-ascending (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N space-separated ints on line 2
+# Output: same ints sorted ascending, one per line
+# Algorithm: insertion-sort via auxiliary stack; for each element, pop larger items to temp, insert, restore
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let sorted = list_new(n + 1)
+    let tmp = list_new(n + 1)
+    let s_top: i64 = 0
+    let t_top: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        let val = parse_int_tok(line, i)
+        t_top = 0
+        while s_top > 0 and list_get(sorted, s_top - 1) > val:
+            s_top = s_top - 1
+            list_set(tmp, t_top, list_get(sorted, s_top))
+            t_top = t_top + 1
+        list_set(sorted, s_top, val)
+        s_top = s_top + 1
+        while t_top > 0:
+            t_top = t_top - 1
+            list_set(sorted, s_top, list_get(tmp, t_top))
+            s_top = s_top + 1
+        i = i + 1
+    i = 0
+    while i < s_top:
+        print_int(list_get(sorted, i))
+        i = i + 1
+    return 0

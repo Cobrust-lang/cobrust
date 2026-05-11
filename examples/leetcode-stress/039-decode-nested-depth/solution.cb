@@ -1,0 +1,32 @@
+# LC-039 decode-nested-depth (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): one line of nested bracket string using only '[' and ']'
+# Output: integer score where empty [] at depth D contributes 2^D, via stack algorithm
+# Algorithm: push 0 on '['; on ']' pop v, add max(2*v, 1) to new stack top
+
+fn main() -> i64:
+    let s = input("")
+    let n = str_len(s)
+    let stk = list_new(n + 2)
+    let top: i64 = 0
+    list_set(stk, top, 0)
+    top = top + 1
+    let i: i64 = 0
+    while i < n:
+        let c = str_at(s, i)
+        let o = str_ord(c)
+        if o == 91:
+            list_set(stk, top, 0)
+            top = top + 1
+        elif o == 93:
+            top = top - 1
+            let v = list_get(stk, top)
+            let add: i64 = 0
+            if v == 0:
+                add = 1
+            else:
+                add = 2 * v
+            list_set(stk, top - 1, list_get(stk, top - 1) + add)
+        i = i + 1
+    print_int(list_get(stk, 0))
+    return 0

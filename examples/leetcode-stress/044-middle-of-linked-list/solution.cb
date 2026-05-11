@@ -1,0 +1,19 @@
+# LC-044 middle-of-linked-list (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N values one per line
+# Output: values from middle node to end, one per line (for even N, second middle)
+# Algorithm: compute middle index as N/2, print from that index
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let vals = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(vals, i, parse_int(input("")))
+        i = i + 1
+    let mid: i64 = n / 2
+    i = mid
+    while i < n:
+        print_int(list_get(vals, i))
+        i = i + 1
+    return 0

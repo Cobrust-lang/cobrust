@@ -1,0 +1,55 @@
+# LC-058 diameter-of-tree (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N lines each "val left_idx right_idx" (0-based, -1=null), root=node 0
+# Output: length of the longest path between any two nodes (number of edges)
+# Algorithm: iterative post-order DFS; for each node compute height, diameter through node = lh+rh
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let val = list_new(n)
+    let lft = list_new(n)
+    let rgt = list_new(n)
+    let ht = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let line = input("")
+        list_set(val, i, parse_int_tok(line, 0))
+        list_set(lft, i, parse_int_tok(line, 1))
+        list_set(rgt, i, parse_int_tok(line, 2))
+        list_set(ht, i, 0)
+        i = i + 1
+    let stk = list_new(n + 1)
+    let vis = list_new(n)
+    let top: i64 = 0
+    list_set(stk, top, 0)
+    top = top + 1
+    let best: i64 = 0
+    while top > 0:
+        let node = list_get(stk, top - 1)
+        let l = list_get(lft, node)
+        let r = list_get(rgt, node)
+        if list_get(vis, node) == 0:
+            list_set(vis, node, 1)
+            if r != -1:
+                list_set(stk, top, r)
+                top = top + 1
+            if l != -1:
+                list_set(stk, top, l)
+                top = top + 1
+        else:
+            top = top - 1
+            let lh: i64 = 0
+            let rh: i64 = 0
+            if l != -1:
+                lh = list_get(ht, l) + 1
+            if r != -1:
+                rh = list_get(ht, r) + 1
+            let diam = lh + rh
+            if diam > best:
+                best = diam
+            if lh > rh:
+                list_set(ht, node, lh)
+            else:
+                list_set(ht, node, rh)
+    print_int(best)
+    return 0

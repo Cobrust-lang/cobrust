@@ -1,0 +1,33 @@
+# LC-036 daily-temperatures (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N space-separated daily temperatures on line 2
+# Output: for each day, how many days until a warmer temperature (0 if none)
+# Algorithm: monotonic stack of indices; pop when a warmer day is found
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let temps = list_new(n)
+    let ans = list_new(n)
+    let stk = list_new(n)
+    let top: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        list_set(temps, i, parse_int_tok(line, i))
+        list_set(ans, i, 0)
+        i = i + 1
+    i = 0
+    while i < n:
+        let t = list_get(temps, i)
+        while top > 0 and list_get(temps, list_get(stk, top - 1)) < t:
+            top = top - 1
+            let idx = list_get(stk, top)
+            list_set(ans, idx, i - idx)
+        list_set(stk, top, i)
+        top = top + 1
+        i = i + 1
+    i = 0
+    while i < n:
+        print_int(list_get(ans, i))
+        i = i + 1
+    return 0

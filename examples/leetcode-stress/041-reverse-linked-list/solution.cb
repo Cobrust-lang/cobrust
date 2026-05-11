@@ -1,0 +1,29 @@
+# LC-041 reverse-linked-list (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N lines each "val next_idx" (0-based, -1=null)
+# Output: values of reversed list in order, one per line
+# Algorithm: iterative reversal by re-pointing next[] pointers via parallel arrays
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let val = list_new(n)
+    let nxt = list_new(n)
+    let head: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        let line = input("")
+        list_set(val, i, parse_int_tok(line, 0))
+        list_set(nxt, i, parse_int_tok(line, 1))
+        i = i + 1
+    let prev: i64 = -1
+    let cur: i64 = head
+    while cur != -1:
+        let next_node = list_get(nxt, cur)
+        list_set(nxt, cur, prev)
+        prev = cur
+        cur = next_node
+    let node: i64 = prev
+    while node != -1:
+        print_int(list_get(val, node))
+        node = list_get(nxt, node)
+    return 0
