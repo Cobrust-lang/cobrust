@@ -1,0 +1,17 @@
+# LC-089 bitwise-and-range (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): one line with two space-separated non-negative integers M N (M <= N)
+# Output: bitwise AND of all integers in [M, N] inclusive
+# Algorithm: right-shift both until equal; shift back — common prefix of bits
+
+fn main() -> i64:
+    let line = input("")
+    let m = parse_int_tok(line, 0)
+    let n = parse_int_tok(line, 1)
+    let shift: i64 = 0
+    while m != n:
+        m = m >> 1
+        n = n >> 1
+        shift = shift + 1
+    print_int(m << shift)
+    return 0

@@ -1,0 +1,29 @@
+# LC-080 count-negative-sorted-matrix (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: M N; M lines each with N ints (non-increasing rows and cols)
+# Output: total count of negative numbers in the matrix
+# Algorithm: staircase from top-right; binary search per row for efficiency
+
+fn count_neg_in_row(line: str, n: i64) -> i64:
+    let lo: i64 = 0
+    let hi: i64 = n
+    while lo < hi:
+        let mid = lo + (hi - lo) / 2
+        if parse_int_tok(line, mid) < 0:
+            hi = mid
+        else:
+            lo = mid + 1
+    return n - lo
+
+fn main() -> i64:
+    let dims = input("")
+    let m = parse_int_tok(dims, 0)
+    let n = parse_int_tok(dims, 1)
+    let total: i64 = 0
+    let r: i64 = 0
+    while r < m:
+        let rline = input("")
+        total = total + count_neg_in_row(rline, n)
+        r = r + 1
+    print_int(total)
+    return 0

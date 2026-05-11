@@ -1,0 +1,21 @@
+# LC-079 minimum-in-rotated-sorted (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: N; Line 2: N ints (rotated sorted, all unique)
+# Output: minimum value in the array
+# Algorithm: binary search — compare mid with right boundary
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let lo: i64 = 0
+    let hi: i64 = n - 1
+    while lo < hi:
+        let mid = lo + (hi - lo) / 2
+        let mv = parse_int_tok(line, mid)
+        let hv = parse_int_tok(line, hi)
+        if mv > hv:
+            lo = mid + 1
+        else:
+            hi = mid
+    print_int(parse_int_tok(line, lo))
+    return 0

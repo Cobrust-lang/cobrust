@@ -1,0 +1,44 @@
+# LC-077 capacity-ship-binary-search (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: N D (package count, days); Line 2: N package weights
+# Output: minimum ship capacity to deliver all packages in D days
+# Algorithm: binary search on capacity in [max_weight, total_weight]
+
+fn can_ship(line: str, n: i64, cap: i64, days: i64) -> i64:
+    let cur: i64 = 0
+    let d: i64 = 1
+    let i: i64 = 0
+    while i < n:
+        let w = parse_int_tok(line, i)
+        if cur + w > cap:
+            d = d + 1
+            cur = w
+        else:
+            cur = cur + w
+        i = i + 1
+    if d <= days:
+        return 1
+    return 0
+
+fn main() -> i64:
+    let dims = input("")
+    let n = parse_int_tok(dims, 0)
+    let days = parse_int_tok(dims, 1)
+    let line = input("")
+    let lo: i64 = 0
+    let hi: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        let w = parse_int_tok(line, i)
+        if w > lo:
+            lo = w
+        hi = hi + w
+        i = i + 1
+    while lo < hi:
+        let mid = lo + (hi - lo) / 2
+        if can_ship(line, n, mid, days) == 1:
+            hi = mid
+        else:
+            lo = mid + 1
+    print_int(lo)
+    return 0

@@ -1,0 +1,15 @@
+# LC-082 count-set-bits (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): one non-negative integer N
+# Output: number of 1-bits (popcount) in N
+# Algorithm: Brian Kernighan's method — n & (n-1) clears the lowest set bit
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let count: i64 = 0
+    let v = n
+    while v != 0:
+        v = v & (v - 1)
+        count = count + 1
+    print_int(count)
+    return 0

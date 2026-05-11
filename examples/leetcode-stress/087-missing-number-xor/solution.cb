@@ -1,0 +1,18 @@
+# LC-087 missing-number-xor (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: N; Line 2: N distinct ints from [0, N]
+# Output: the single missing number in [0, N]
+# Algorithm: XOR all indices 0..N with all array values; missing XOR-cancels
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let acc: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        acc = acc ^ i
+        acc = acc ^ parse_int_tok(line, i)
+        i = i + 1
+    acc = acc ^ n
+    print_int(acc)
+    return 0

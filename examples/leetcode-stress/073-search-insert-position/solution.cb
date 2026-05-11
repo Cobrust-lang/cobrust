@@ -1,0 +1,20 @@
+# LC-073 search-insert-position (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: N; Line 2: N sorted ints; Line 3: target
+# Output: index where target is found or would be inserted
+# Algorithm: binary search lower bound
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let target = parse_int(input(""))
+    let lo: i64 = 0
+    let hi: i64 = n
+    while lo < hi:
+        let mid = lo + (hi - lo) / 2
+        if parse_int_tok(line, mid) < target:
+            lo = mid + 1
+        else:
+            hi = mid
+    print_int(lo)
+    return 0

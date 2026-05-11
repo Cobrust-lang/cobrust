@@ -1,0 +1,17 @@
+# LC-085 hamming-distance (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): one line with two space-separated non-negative integers
+# Output: number of bit positions where they differ (Hamming distance)
+# Algorithm: XOR, then count set bits
+
+fn main() -> i64:
+    let line = input("")
+    let x = parse_int_tok(line, 0)
+    let y = parse_int_tok(line, 1)
+    let v = x ^ y
+    let count: i64 = 0
+    while v != 0:
+        v = v & (v - 1)
+        count = count + 1
+    print_int(count)
+    return 0

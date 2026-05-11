@@ -1,0 +1,17 @@
+# LC-084 reverse-bits-32 (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): one non-negative 32-bit integer N
+# Output: the integer formed by reversing all 32 bits of N
+# Algorithm: shift result left, shift N right, 32 iterations
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let result: i64 = 0
+    let i: i64 = 0
+    while i < 32:
+        result = result << 1
+        result = result | (n & 1)
+        n = n >> 1
+        i = i + 1
+    print_int(result)
+    return 0
