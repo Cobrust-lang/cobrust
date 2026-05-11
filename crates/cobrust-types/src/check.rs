@@ -1041,17 +1041,28 @@ impl Ctx {
 
     fn lower_generic_type(&self, base: &str, args: &[HirType]) -> Ty {
         let lowered: Vec<Ty> = args.iter().map(|a| self.lower_type(a)).collect();
+        // ADR-0044 W2 Phase 2: accept lowercase `list` / `set` / `dict` /
+        // `tuple` Python-flavoured aliases in addition to the
+        // canonical `List` / `Set` / `Dict` / `Tuple` capitalised forms.
+        // The PRELUDE's `fn argv() -> list[str]` declaration and the
+        // ADR-0044 test corpus (`list[str]` annotations) both rely on
+        // this. This is a pure additive change — uppercase forms still
+        // resolve to the same `Ty::*` variants; the lowercase rows are
+        // new entry points that the previous fall-through would have
+        // shunted to `fresh_var()`.
         match (base, lowered.len()) {
-            ("List", 1) => Ty::List(Box::new(lowered[0].clone())),
-            ("Set", 1) => Ty::Set(Box::new(lowered[0].clone())),
-            ("Dict", 2) => Ty::Dict(Box::new(lowered[0].clone()), Box::new(lowered[1].clone())),
+            ("List" | "list", 1) => Ty::List(Box::new(lowered[0].clone())),
+            ("Set" | "set", 1) => Ty::Set(Box::new(lowered[0].clone())),
+            ("Dict" | "dict", 2) => {
+                Ty::Dict(Box::new(lowered[0].clone()), Box::new(lowered[1].clone()))
+            }
             // ADR-0041 §H8: `Tuple[A, B, C]` resolves to a structural
             // tuple of the same arity. Without this, the generic
             // fall-through synthesised a fresh inference variable for
             // every annotated tuple — which made tuple-index test
             // cases (H8.1-H8.3) surface `AmbiguousType` because the
             // returned element type referenced the now-erased var.
-            ("Tuple", _) => Ty::Tuple(lowered),
+            ("Tuple" | "tuple", _) => Ty::Tuple(lowered),
             _ => self.fresh_var(),
         }
     }

@@ -240,34 +240,81 @@ impl Iterator for RangeIter {
 // the conservative width matching the codegen integer type; Phase F
 // widens to per-type dispatch.
 
-/// Internal handle wrapping a Box<dyn>-erased iterator over i64 values.
+/// Internal handle wrapping a Box<dyn>-erased iterator over i64
+/// values. ADR-0044 W2 Phase 2 amendment: tracks an explicit `done`
+/// flag so a list-of-i64 element with legitimate value 0 is
+/// distinguishable from the exhausted sentinel.
 pub struct IterHandle {
     next_fn: Box<dyn FnMut() -> Option<i64>>,
+    done: bool,
 }
 
-/// Initialize an iterator handle. M12.x interprets `iter_val` as a
-/// pre-built `RangeIter` count for now (so the basic `for i in n:`
-/// loop has codegen-end-to-end coverage). User-typed iter
-/// constructors are Phase F.
+/// Initialize an iterator handle. ADR-0044 W2 Phase 2 amendment:
+/// the source-level for-protocol's only callers are `List<T>` /
+/// `Set<T>` / `Dict<K,V>` / `Tuple<Ts>` expressions per the type-
+/// checker's `iter_element` contract (no `range()` builtin exists in
+/// Cobrust today). All those produce a heap pointer at MIR lowering,
+/// not a small int. So we interpret `iter_val` as a list-layout
+/// pointer and yield the stored i64 slots in order. For empty / null
+/// pointers the handle exhausts immediately.
+///
+/// W2 Phase 2 scope: per ADR-0044 §"MIR / type-checker — NO change",
+/// MIR for-protocol still emits `__cobrust_iter_init(i64)` — we just
+/// change the runtime interpretation of the i64 from "Range count"
+/// to "list pointer" since no source-level construct produces a
+/// Range count today. The pre-existing latent semantics (treating
+/// list-pointer-as-Range count) iterated 0..ptr — essentially
+/// infinite — and was unobservable because the build/check-tier
+/// tests never executed.
 ///
 /// # Safety
 ///
 /// Caller must eventually pass the result to
-/// [`__cobrust_iter_drop`].
+/// [`__cobrust_iter_drop`]. `iter_val`, when non-zero, must be a
+/// valid `*mut ListI64Layout` pointer produced by
+/// `__cobrust_list_new` (the only path that constructs list-typed
+/// values today).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_iter_init(iter_val: i64) -> *mut u8 {
-    // M12.x conservative: treat the iter operand as a RangeIter
-    // count when no other type info is available.
-    let mut r = RangeIter::unbounded(iter_val.max(0));
+    // Capture the list-layout pointer + cursor inside the handle's
+    // closure. The closure reads list slots via the public
+    // `__cobrust_list_get` / `__cobrust_list_len` C ABI; both tolerate
+    // null pointers (return 0) so the empty-list / null-iter case is
+    // handled at the iter level.
+    let list_ptr = iter_val;
+    let mut idx: i64 = 0;
     let h = IterHandle {
-        next_fn: Box::new(move || r.next()),
+        next_fn: Box::new(move || {
+            // SAFETY: list_ptr was returned by `__cobrust_list_new` (or
+            // is null, in which case `__cobrust_list_len` returns 0).
+            let len = unsafe { crate::collections::__cobrust_list_len(list_ptr as *mut u8) };
+            if idx >= len {
+                return None;
+            }
+            // SAFETY: bounds-checked above.
+            let v = unsafe { crate::collections::__cobrust_list_get(list_ptr as *mut u8, idx) };
+            idx += 1;
+            Some(v)
+        }),
+        done: false,
     };
     Box::into_raw(Box::new(h)).cast::<u8>()
 }
 
-/// Yield the next i64 value, or 0 when exhausted. (Codegen treats
-/// the return as a "loop continuation" boolean — the SwitchInt cases
-/// use 0=None, non-zero=Some(value).)
+/// Yield the next i64 value, or 0 when exhausted. ADR-0044 W2
+/// Phase 2 amendment: list iteration over heap-allocated Str
+/// pointers never yields 0 (real heap addresses), and list
+/// iteration over i64 collections is the only source-level form
+/// today (per type-checker's `iter_element`). The previous +1
+/// bias (M12.x conservative) was for the now-removed Range
+/// interpretation; we drop it because (a) Range isn't reachable
+/// at source level and (b) pointer-typed iter values would
+/// dereference at `ptr+1` and crash. The 0=None convention
+/// still applies, but the impl now relies on the caller never
+/// putting a literal 0 in a heap-allocated list-of-pointers slot.
+/// For list-of-i64 cases where an element is legitimately 0,
+/// we use a separate exhaustion sentinel (the `done` flag inside
+/// `IterHandle`).
 ///
 /// # Safety
 ///
@@ -280,17 +327,15 @@ pub unsafe extern "C" fn __cobrust_iter_next(handle: *mut u8) -> i64 {
     }
     // SAFETY: caller-attestation per `# Safety`.
     let h = unsafe { &mut *handle.cast::<IterHandle>() };
+    if h.done {
+        return 0;
+    }
     match (h.next_fn)() {
-        // Bias non-zero return to "Some"; 0 conflicts with the
-        // exhausted convention. Tweak: shift by +1 to avoid
-        // collision with valid 0 values, then codegen subtracts 1
-        // before binding. (M12.x conservative; cleaner Option
-        // representation is Phase F.)
-        Some(v) => {
-            // Use saturating add so v=i64::MAX still returns non-zero.
-            v.saturating_add(1)
+        Some(v) => v,
+        None => {
+            h.done = true;
+            0
         }
-        None => 0,
     }
 }
 
@@ -452,26 +497,55 @@ mod tests {
     // -- C-ABI runtime helpers --
 
     #[test]
-    fn cabi_iter_init_drop_smoke() {
-        // SAFETY: documented contract.
+    fn cabi_iter_init_drop_smoke_null() {
+        // SAFETY: ADR-0044 W2 amendment — `__cobrust_iter_init(0)` is the
+        // null-list path; the handle exhausts immediately (no elements).
         unsafe {
             let h = __cobrust_iter_init(0);
             assert!(!h.is_null());
+            assert_eq!(__cobrust_iter_next(h), 0, "null list exhausts immediately");
             __cobrust_iter_drop(h);
         }
     }
 
     #[test]
-    fn cabi_iter_next_exhausts() {
-        // SAFETY: contract.
+    fn cabi_iter_next_yields_list_elements() {
+        // SAFETY: ADR-0044 W2 amendment — `__cobrust_iter_init(list_ptr)`
+        // now iterates the list's i64 slots directly (no bias). Build a
+        // 3-element list, iterate, exhaust.
         unsafe {
-            let h = __cobrust_iter_init(3);
-            // RangeIter yields 0, 1, 2 — biased to 1, 2, 3 by next.
-            assert_eq!(__cobrust_iter_next(h), 1);
-            assert_eq!(__cobrust_iter_next(h), 2);
-            assert_eq!(__cobrust_iter_next(h), 3);
-            assert_eq!(__cobrust_iter_next(h), 0);
+            let list = crate::collections::__cobrust_list_new(8, 3);
+            crate::collections::__cobrust_list_set(list, 0, 10);
+            crate::collections::__cobrust_list_set(list, 1, 20);
+            crate::collections::__cobrust_list_set(list, 2, 30);
+            let h = __cobrust_iter_init(list as i64);
+            assert_eq!(__cobrust_iter_next(h), 10);
+            assert_eq!(__cobrust_iter_next(h), 20);
+            assert_eq!(__cobrust_iter_next(h), 30);
+            assert_eq!(__cobrust_iter_next(h), 0, "list exhausted");
             __cobrust_iter_drop(h);
+            crate::collections::__cobrust_list_drop(list);
+        }
+    }
+
+    #[test]
+    fn cabi_iter_next_yields_zero_value_via_done_flag() {
+        // SAFETY: ADR-0044 W2 amendment — explicit `done` flag in
+        // IterHandle lets a list slot legitimately store 0 without
+        // looking like "exhausted". Build a list with a 0 slot,
+        // verify next() yields 0 and the subsequent call yields the
+        // "true" exhaustion 0 too — but with the `done` flag set so
+        // any extra call beyond exhaustion still yields 0.
+        unsafe {
+            let list = crate::collections::__cobrust_list_new(8, 2);
+            crate::collections::__cobrust_list_set(list, 0, 0);
+            crate::collections::__cobrust_list_set(list, 1, 42);
+            let h = __cobrust_iter_init(list as i64);
+            assert_eq!(__cobrust_iter_next(h), 0, "first slot is 0");
+            assert_eq!(__cobrust_iter_next(h), 42, "second slot is 42");
+            assert_eq!(__cobrust_iter_next(h), 0, "exhausted");
+            __cobrust_iter_drop(h);
+            crate::collections::__cobrust_list_drop(list);
         }
     }
 

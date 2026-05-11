@@ -324,28 +324,43 @@ fn for_range_overflow_safe() {
 // C-ABI iter handle
 // =====================================================================
 
+// ADR-0044 W2 Phase 2: `__cobrust_iter_init` now interprets its arg
+// as a list-layout pointer (not a Range count) since no source-level
+// construct in Cobrust today produces a Range. The previous tests
+// asserted the dead RangeIter semantics; below we exercise the new
+// list-iter contract.
+
 #[test]
 fn for_cabi_iter_runs_to_exhaustion() {
     // SAFETY: documented contract.
     unsafe {
-        let h = __cobrust_iter_init(5);
-        let mut found = Vec::new();
-        loop {
-            let v = __cobrust_iter_next(h);
-            if v == 0 {
-                break;
-            }
-            // Codegen unwraps via -1; here we mimic.
-            found.push(v - 1);
+        let list = cobrust_stdlib::collections::__cobrust_list_new(8, 5);
+        for i in 0..5 {
+            cobrust_stdlib::collections::__cobrust_list_set(list, i, i);
         }
+        let h = __cobrust_iter_init(list as i64);
+        let mut found = Vec::new();
+        // Iter contract: yields slot values; 0 = exhaustion sentinel
+        // (with `done` flag in IterHandle distinguishing a legit-0 slot).
+        // For this test the list has values 0..5; the first call yields
+        // 0 (slot[0]), then the iter handle's `done` flag is NOT set yet
+        // since the source had more slots. Subsequent calls yield 1..4.
+        // The exhaustion call after slot[4] returns 0 with `done` set.
+        for _ in 0..5 {
+            found.push(__cobrust_iter_next(h));
+        }
+        // Final call after all 5 slots → exhausted.
+        assert_eq!(__cobrust_iter_next(h), 0);
         assert_eq!(found, vec![0, 1, 2, 3, 4]);
         __cobrust_iter_drop(h);
+        cobrust_stdlib::collections::__cobrust_list_drop(list);
     }
 }
 
 #[test]
 fn for_cabi_iter_zero_count_immediate_exhaust() {
-    // SAFETY: contract.
+    // SAFETY: ADR-0044 amendment — a null list pointer exhausts
+    // immediately (__cobrust_list_len returns 0 for null).
     unsafe {
         let h = __cobrust_iter_init(0);
         assert_eq!(__cobrust_iter_next(h), 0);
@@ -354,11 +369,16 @@ fn for_cabi_iter_zero_count_immediate_exhaust() {
 }
 
 #[test]
-fn for_cabi_iter_negative_treated_as_zero() {
-    // SAFETY: contract.
+fn for_cabi_iter_empty_list_immediate_exhaust() {
+    // SAFETY: ADR-0044 amendment — an empty list exhausts on the
+    // first __cobrust_iter_next call (len == 0). Replaces the now-
+    // dead `negative_treated_as_zero` test that asserted RangeIter
+    // semantics (which never reached source level).
     unsafe {
-        let h = __cobrust_iter_init(-3);
+        let list = cobrust_stdlib::collections::__cobrust_list_new(8, 0);
+        let h = __cobrust_iter_init(list as i64);
         assert_eq!(__cobrust_iter_next(h), 0);
         __cobrust_iter_drop(h);
+        cobrust_stdlib::collections::__cobrust_list_drop(list);
     }
 }

@@ -1,0 +1,30 @@
+# LC-07 Binary Search (ADR-0044 W2 Phase 3).
+#
+# Input  (stdin):
+#   Line 1: N
+#   Line 2: N sorted space-separated ints (ascending)
+#   Line 3: target
+#
+# Output: 0-based index of target, or -1 if not found.
+#
+# Algorithm: classic binary search O(log N).
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let target = parse_int(input(""))
+    let lo: i64 = 0
+    let hi: i64 = n - 1
+    let result: i64 = -1
+    while lo <= hi:
+        let mid: i64 = lo + (hi - lo) / 2
+        let val = parse_int_tok(line, mid)
+        if val == target:
+            result = mid
+            lo = hi + 1
+        elif val < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    print_int(result)
+    return 0

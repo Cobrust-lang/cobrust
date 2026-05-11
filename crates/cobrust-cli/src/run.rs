@@ -7,8 +7,17 @@ use std::process::Command;
 use crate::build::{self, BuildError, EmitKind};
 use crate::exit_codes;
 
-/// Run `cobrust run <file.cb>`.
-pub fn run(file: &Path, release: bool, target: Option<&str>, quiet: bool) -> u8 {
+/// Run `cobrust run <file.cb> [-- <program_args>...]`. The
+/// `program_args` slice (W2 Phase 2 amendment per ADR-0044) is
+/// forwarded to the produced executable verbatim, so `argv()` inside
+/// the user program sees them.
+pub fn run(
+    file: &Path,
+    release: bool,
+    target: Option<&str>,
+    quiet: bool,
+    program_args: &[String],
+) -> u8 {
     let artifact = match build::build(file, None, EmitKind::Executable, release, target, quiet) {
         Ok(a) => a,
         Err(e) => {
@@ -23,7 +32,7 @@ pub fn run(file: &Path, release: bool, target: Option<&str>, quiet: bool) -> u8 
         return BuildError::Internal("non-executable build artifact".into()).exit_code();
     }
 
-    let status = Command::new(exe).status();
+    let status = Command::new(exe).args(program_args).status();
     match status {
         Ok(s) if s.success() => exit_codes::SUCCESS,
         Ok(s) => {

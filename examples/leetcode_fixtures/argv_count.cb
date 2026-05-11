@@ -1,0 +1,10 @@
+# argv_count — counts argv entries via for-protocol, prints the count.
+# Used by W2 Phase 2 cli_stdin_argv_e2e.rs test #9 (10 args + argv[0] = 11).
+# Per ADR-0044 §"Cobrust source-level surface": argv() -> list[str].
+fn main() -> i64:
+    let args = argv()
+    let count: i64 = 0
+    for a in args:
+        count = count + 1
+    print_int(count)
+    return 0

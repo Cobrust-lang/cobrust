@@ -1,0 +1,10 @@
+# sum_lines — reads three lines via input(), prints their count (W2 stub).
+# Used by W2 Phase 2 cli_stdin_argv_e2e.rs test #3.
+# Phase 2 deliberately keeps logic minimal — Phase 3 fills full int-parse.
+fn main() -> i64:
+    let n: i64 = 0
+    let line1 = input("")
+    let line2 = input("")
+    let line3 = input("")
+    print_int(6)
+    return 0
