@@ -254,12 +254,10 @@ fn test_lc007_array_sorted_intersection() {
 
 // =====================================================================
 // LC-008 — Array Third Maximum
-// NOTE: test case C4 in test.toml has an incorrect expected_stdout;
-//       see failure.md for analysis. Cases C1-C3 pass.
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-008 array-third-maximum: RUNTIME-FAIL; see failure.md (test-corpus C4 expected wrong value for [5,2,5,1,3])"]
 fn test_lc008_array_third_maximum() {
     let out = build_and_run_stress("008-array-third-maximum", b"3\n3 2 1\n");
     assert_eq!(out, "1\n");
@@ -268,7 +266,7 @@ fn test_lc008_array_third_maximum() {
     let out3 = build_and_run_stress("008-array-third-maximum", b"2\n1 2\n");
     assert_eq!(out3, "2\n");
     let out4 = build_and_run_stress("008-array-third-maximum", b"5\n5 2 5 1 3\n");
-    assert_eq!(out4, "1\n");
+    assert_eq!(out4, "2\n");
 }
 
 // =====================================================================
@@ -655,12 +653,10 @@ fn test_lc029_hashmap_subarray_sum_k() {
 
 // =====================================================================
 // LC-030 — Hash Map Two Sum with Index Tracking
-// NOTE: test case C4 in test.toml has two valid answers but test expects
-//       specific ordering; see failure.md.
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-030 hashmap-two-sum-indices: RUNTIME-FAIL; see failure.md (test C4 violates uniqueness: [1,3,5,7] target=8 has two valid pairs)"]
 fn test_lc030_hashmap_two_sum_indices() {
     let out = build_and_run_stress("030-hashmap-two-sum-indices", b"4\n2 7 11 15\n9\n");
     assert_eq!(out, "0\n1\n");
@@ -668,6 +664,6 @@ fn test_lc030_hashmap_two_sum_indices() {
     assert_eq!(out2, "1\n2\n");
     let out3 = build_and_run_stress("030-hashmap-two-sum-indices", b"2\n3 3\n6\n");
     assert_eq!(out3, "0\n1\n");
-    let out4 = build_and_run_stress("030-hashmap-two-sum-indices", b"4\n1 3 5 7\n8\n");
+    let out4 = build_and_run_stress("030-hashmap-two-sum-indices", b"4\n1 5 7 10\n11\n");
     assert_eq!(out4, "0\n3\n");
 }

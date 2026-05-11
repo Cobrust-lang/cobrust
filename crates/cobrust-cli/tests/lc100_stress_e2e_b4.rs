@@ -272,19 +272,15 @@ fn test_lc096_jump_game_can_reach() {
 
 // =====================================================================
 // LC-097 — Gas Station Circular (Greedy)
-// NOTE: RUNTIME-FAIL on test case C2; see failure.md for analysis.
-// Test C2 has incorrect expected_stdout (oracle error: total gas < total
-// cost but expected station 2, correct answer is -1).
-// Cases C1, C3, C4, C5 pass correctly.
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-097 gas-station-circular: test corpus C2 wrong expected output (total gas < total cost but oracle says 2, correct is -1); see failure.md"]
 fn test_lc097_gas_station_circular() {
     let out = build_and_run_stress("097-gas-station-circular", b"5\n1 2 3 4 5\n3 4 5 1 2\n");
     assert_eq!(out, "3\n", "gas station case 1");
     let out2 = build_and_run_stress("097-gas-station-circular", b"3\n2 3 4\n3 4 3\n");
-    assert_eq!(out2, "2\n", "gas station case 2 (oracle bug: should be -1)");
+    assert_eq!(out2, "-1\n", "gas station case 2");
     let out3 = build_and_run_stress("097-gas-station-circular", b"3\n1 2 3\n3 4 5\n");
     assert_eq!(out3, "-1\n", "gas station case 3 impossible");
     let out4 = build_and_run_stress("097-gas-station-circular", b"1\n5\n5\n");

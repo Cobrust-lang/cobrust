@@ -1,5 +1,5 @@
 [[cases]]
-input = "6\n1 1 2\n2 3 4\n5 -1 -1\n3 -1 -1\n4 -1 -1\n6 -1 -1\n"
+input = "6\n1 1 2\n2 3 4\n5 -1 5\n3 -1 -1\n4 -1 -1\n6 -1 -1\n"
 expected_stdout = "1\n2\n3\n4\n5\n6\n"
 expected_exit_code = 0
 

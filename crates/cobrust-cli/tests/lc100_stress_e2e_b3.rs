@@ -138,11 +138,10 @@ fn build_and_run_stress(slug: &str, stdin_bytes: &[u8]) -> String {
 // LC-061 — Coin Change Minimum
 // Input: K on line 1; K coin values on line 2; amount on line 3
 // Oracle: minimum coins to make amount, or -1 if impossible
-// NOTE: test case 5 has incorrect expected; see failure.md
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-061 coin-change-min: RUNTIME-FAIL; see failure.md (test corpus C5 incorrect: expected 4, correct answer 5 for coins {1,5,10} amount 27)"]
 fn test_lc061_coin_change_min() {
     let out = build_and_run_stress("061-coin-change-min", b"3\n1 5 11\n15\n");
     assert_eq!(out, "3\n", "case 1");
@@ -153,7 +152,7 @@ fn test_lc061_coin_change_min() {
     let out4 = build_and_run_stress("061-coin-change-min", b"2\n1 2\n11\n");
     assert_eq!(out4, "6\n", "case 4");
     let out5 = build_and_run_stress("061-coin-change-min", b"3\n1 5 10\n27\n");
-    assert_eq!(out5, "4\n", "case 5 (corpus says 4, correct is 5)");
+    assert_eq!(out5, "5\n", "case 5");
 }
 
 // =====================================================================
@@ -200,11 +199,10 @@ fn test_lc063_unique_paths_grid() {
 // LC-064 — House Robber Linear
 // Input: N; N space-separated house values
 // Oracle: max value robbed without adjacent houses
-// NOTE: test case 5 has incorrect expected; see failure.md
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-064 house-robber-linear: RUNTIME-FAIL; see failure.md (test corpus C5 incorrect: expected 19, correct answer 15 for [6,7,1,3,8,2])"]
 fn test_lc064_house_robber_linear() {
     let out = build_and_run_stress("064-house-robber-linear", b"4\n2 7 9 3\n");
     assert_eq!(out, "11\n", "case 1");
@@ -215,7 +213,7 @@ fn test_lc064_house_robber_linear() {
     let out4 = build_and_run_stress("064-house-robber-linear", b"5\n1 2 3 1 4\n");
     assert_eq!(out4, "8\n", "case 4");
     let out5 = build_and_run_stress("064-house-robber-linear", b"6\n6 7 1 3 8 2\n");
-    assert_eq!(out5, "19\n", "case 5 (corpus says 19, correct is 15)");
+    assert_eq!(out5, "15\n", "case 5");
 }
 
 // =====================================================================
@@ -262,11 +260,10 @@ fn test_lc066_edit_distance() {
 // LC-067 — Partition Equal Subset
 // Input: N; N positive ints
 // Oracle: "true" if array can be split into two equal-sum subsets
-// NOTE: test case 5 has incorrect expected; see failure.md
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-067 partition-equal-subset: RUNTIME-FAIL; see failure.md (test corpus C5 incorrect: expected false, correct answer true for [3,3,3,4,5])"]
 fn test_lc067_partition_equal_subset() {
     let out = build_and_run_stress("067-partition-equal-subset", b"4\n1 5 11 5\n");
     assert_eq!(out, "true\n", "case 1");
@@ -277,10 +274,7 @@ fn test_lc067_partition_equal_subset() {
     let out4 = build_and_run_stress("067-partition-equal-subset", b"2\n1 1\n");
     assert_eq!(out4, "true\n", "case 4");
     let out5 = build_and_run_stress("067-partition-equal-subset", b"5\n3 3 3 4 5\n");
-    assert_eq!(
-        out5, "false\n",
-        "case 5 (corpus says false, correct is true)"
-    );
+    assert_eq!(out5, "true\n", "case 5");
 }
 
 // =====================================================================
@@ -412,11 +406,10 @@ fn test_lc073_search_insert_position() {
 // LC-074 — Peak Element Binary Search
 // Input: N; N ints (no two adjacent equal)
 // Oracle: index of any peak element
-// NOTE: test case 4 has non-deterministic expected; see failure.md
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-074 peak-element-binary-search: RUNTIME-FAIL; see failure.md (test corpus C4 expects index 3, algorithm returns valid index 1 for [1,2,1,3])"]
 fn test_lc074_peak_element_binary_search() {
     let out = build_and_run_stress("074-peak-element-binary-search", b"5\n1 2 3 1 0\n");
     assert_eq!(out, "2\n", "case 1");
@@ -425,10 +418,7 @@ fn test_lc074_peak_element_binary_search() {
     let out3 = build_and_run_stress("074-peak-element-binary-search", b"3\n1 3 2\n");
     assert_eq!(out3, "1\n", "case 3");
     let out4 = build_and_run_stress("074-peak-element-binary-search", b"4\n1 2 1 3\n");
-    assert_eq!(
-        out4, "3\n",
-        "case 4 (corpus expects 3, algorithm returns valid 1)"
-    );
+    assert_eq!(out4, "1\n", "case 4");
     let out5 = build_and_run_stress("074-peak-element-binary-search", b"5\n5 4 3 2 1\n");
     assert_eq!(out5, "0\n", "case 5");
 }
@@ -504,16 +494,15 @@ fn test_lc077_capacity_ship_binary_search() {
 
 // =====================================================================
 // LC-078 — Koko Eating Speed
-// NOTE: test cases 1 and 2 have incorrect expected; see failure.md
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-078 koko-eating-speed: RUNTIME-FAIL; see failure.md (test corpus C1 expected 4 but min feasible K=7; C2 expected 23 but min feasible K=15)"]
 fn test_lc078_koko_eating_speed() {
     let out = build_and_run_stress("078-koko-eating-speed", b"4 5\n3 6 7 11\n");
-    assert_eq!(out, "4\n", "case 1 (corpus says 4, correct is 7)");
+    assert_eq!(out, "7\n", "case 1");
     let out2 = build_and_run_stress("078-koko-eating-speed", b"5 8\n30 11 23 4 20\n");
-    assert_eq!(out2, "23\n", "case 2 (corpus says 23, correct is 15)");
+    assert_eq!(out2, "15\n", "case 2");
     let out3 = build_and_run_stress("078-koko-eating-speed", b"1 3\n10\n");
     assert_eq!(out3, "4\n", "case 3");
     let out4 = build_and_run_stress("078-koko-eating-speed", b"3 3\n5 5 5\n");
@@ -546,11 +535,10 @@ fn test_lc079_minimum_in_rotated_sorted() {
 // LC-080 — Count Negatives in Sorted Matrix
 // Input: M N; M rows of N non-increasing ints
 // Oracle: total count of negative numbers
-// NOTE: test case 4 has incorrect expected; see failure.md
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-080 count-negative-sorted-matrix: RUNTIME-FAIL; see failure.md (test corpus C4 expects 7, correct answer is 6 for [5,1,0]/[-1,-1,-1]/[-5,-5,-5])"]
 fn test_lc080_count_negative_sorted_matrix() {
     let out = build_and_run_stress(
         "080-count-negative-sorted-matrix",
@@ -565,7 +553,7 @@ fn test_lc080_count_negative_sorted_matrix() {
         "080-count-negative-sorted-matrix",
         b"3 3\n5 1 0\n-1 -1 -1\n-5 -5 -5\n",
     );
-    assert_eq!(out4, "7\n", "case 4 (corpus says 7, correct is 6)");
+    assert_eq!(out4, "6\n", "case 4");
     let out5 = build_and_run_stress(
         "080-count-negative-sorted-matrix",
         b"2 4\n3 2 -1 -2\n1 0 -1 -3\n",

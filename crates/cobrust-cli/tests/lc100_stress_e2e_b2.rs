@@ -257,12 +257,10 @@ fn test_lc036_daily_temperatures() {
 
 // =====================================================================
 // LC-037 — Reverse Polish Notation Evaluator
-// NOTE: case 4 in test.toml has invalid RPN (5 tokens, 1 operator, leaves 3 values on stack);
-//       see failure.md. Cases 1,2,3,5 pass.
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-037 reverse-polish-eval: RUNTIME-FAIL; see failure.md (case 4 test corpus defect: 5-token sequence not valid complete RPN)"]
 fn test_lc037_reverse_polish_eval() {
     let out = build_and_run_stress("037-reverse-polish-eval", b"9\n5\n1\n2\n+\n4\n*\n+\n3\n-\n");
     assert_eq!(out, "14\n");
@@ -270,8 +268,8 @@ fn test_lc037_reverse_polish_eval() {
     assert_eq!(out2, "7\n");
     let out3 = build_and_run_stress("037-reverse-polish-eval", b"5\n2\n1\n+\n3\n*\n");
     assert_eq!(out3, "9\n");
-    let out4 = build_and_run_stress("037-reverse-polish-eval", b"5\n10\n6\n9\n3\n/\n");
-    assert_eq!(out4, "2\n");
+    let out4 = build_and_run_stress("037-reverse-polish-eval", b"5\n2\n3\n4\n*\n+\n");
+    assert_eq!(out4, "14\n");
     let out5 = build_and_run_stress("037-reverse-polish-eval", b"5\n4\n13\n5\n/\n+\n");
     assert_eq!(out5, "6\n");
 }
@@ -296,19 +294,17 @@ fn test_lc038_sliding_window_max() {
 
 // =====================================================================
 // LC-039 — Decode Nested Score by Depth
-// NOTE: case 3 ([[][]]) gives 4 with README formula but test.toml expects 3;
-//       see failure.md. Cases 1,2,4,5 pass.
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-039 decode-nested-depth: RUNTIME-FAIL; see failure.md (case 3 test corpus inconsistency: no single formula satisfies all 5 cases)"]
 fn test_lc039_decode_nested_depth() {
     let out = build_and_run_stress("039-decode-nested-depth", b"[]\n");
     assert_eq!(out, "1\n");
     let out2 = build_and_run_stress("039-decode-nested-depth", b"[[]]\n");
     assert_eq!(out2, "2\n");
     let out3 = build_and_run_stress("039-decode-nested-depth", b"[[][]]\n");
-    assert_eq!(out3, "3\n");
+    assert_eq!(out3, "4\n");
     let out4 = build_and_run_stress("039-decode-nested-depth", b"[[]][]\n");
     assert_eq!(out4, "3\n");
     let out5 = build_and_run_stress("039-decode-nested-depth", b"[[[]]]\n");
@@ -566,12 +562,10 @@ fn test_lc052_invert_binary_tree() {
 
 // =====================================================================
 // LC-053 — Symmetric Tree Check
-// NOTE: case 2 in test.toml has incorrect expected; see failure.md.
-// The tree IS symmetric but test.toml expects "false".
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-053 symmetric-tree: RUNTIME-FAIL; see failure.md (case 2 test corpus defect: tree IS symmetric but expected false)"]
 fn test_lc053_symmetric_tree() {
     let out = build_and_run_stress(
         "053-symmetric-tree",
@@ -582,7 +576,7 @@ fn test_lc053_symmetric_tree() {
         "053-symmetric-tree",
         b"5\n1 1 2\n2 3 -1\n2 -1 4\n3 -1 -1\n3 -1 -1\n",
     );
-    assert_eq!(out2, "false\n");
+    assert_eq!(out2, "true\n");
     let out3 = build_and_run_stress("053-symmetric-tree", b"1\n5 -1 -1\n");
     assert_eq!(out3, "true\n");
     let out4 = build_and_run_stress("053-symmetric-tree", b"3\n1 1 2\n2 -1 -1\n2 -1 -1\n");
@@ -591,20 +585,19 @@ fn test_lc053_symmetric_tree() {
 
 // =====================================================================
 // LC-054 — Path Sum Exists (root-to-leaf DFS)
-// NOTE: cases 1 and 2 in test.toml have incorrect tree encoding; see failure.md.
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-054 path-sum-exists: RUNTIME-FAIL; see failure.md (cases 1,2 test corpus defect: tree encoding doesn't match intended path-sum-22 example)"]
 fn test_lc054_path_sum_exists() {
     let out = build_and_run_stress(
         "054-path-sum-exists",
-        b"8 22\n5 1 2\n4 3 -1\n8 -1 4\n11 5 6\n13 -1 -1\n4 -1 7\n7 -1 -1\n2 -1 -1\n",
+        b"8 22\n5 1 2\n4 3 -1\n8 4 5\n11 6 7\n13 -1 -1\n4 -1 -1\n7 -1 -1\n2 -1 -1\n",
     );
     assert_eq!(out, "true\n");
     let out2 = build_and_run_stress(
         "054-path-sum-exists",
-        b"8 5\n5 1 2\n4 3 -1\n8 -1 4\n11 5 6\n13 -1 -1\n4 -1 7\n7 -1 -1\n2 -1 -1\n",
+        b"8 5\n5 1 2\n4 3 -1\n8 4 5\n11 6 7\n13 -1 -1\n4 -1 -1\n7 -1 -1\n2 -1 -1\n",
     );
     assert_eq!(out2, "false\n");
     let out3 = build_and_run_stress("054-path-sum-exists", b"1 0\n0 -1 -1\n");
@@ -664,12 +657,10 @@ fn test_lc056_level_order_traversal() {
 
 // =====================================================================
 // LC-057 — Lowest Common Ancestor
-// NOTE: case 2 in test.toml has incorrect expected; see failure.md.
-// When p is an ancestor of q, LCA=p by definition but test expects root.
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-057 lowest-common-ancestor: RUNTIME-FAIL; see failure.md (case 2 test corpus defect: p=1 is direct parent of q=4, LCA=node1 but expected root)"]
 fn test_lc057_lowest_common_ancestor() {
     let out = build_and_run_stress(
         "057-lowest-common-ancestor",
@@ -680,7 +671,7 @@ fn test_lc057_lowest_common_ancestor() {
         "057-lowest-common-ancestor",
         b"7 1 4\n6 1 2\n2 3 4\n8 -1 -1\n0 5 6\n7 -1 -1\n4 -1 -1\n5 -1 -1\n",
     );
-    assert_eq!(out2, "6\n");
+    assert_eq!(out2, "2\n");
     let out3 = build_and_run_stress(
         "057-lowest-common-ancestor",
         b"3 0 2\n1 1 2\n2 -1 -1\n3 -1 -1\n",
@@ -719,15 +710,14 @@ fn test_lc058_diameter_of_tree() {
 
 // =====================================================================
 // LC-059 — Flatten Binary Tree to Linked List (pre-order DFS)
-// NOTE: case 1 in test.toml has node5 unreachable from root; see failure.md.
+// Corpus corrected in Sprint 1; see corpus-corrected.md. All cases pass.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-059 flatten-tree-to-list: RUNTIME-FAIL; see failure.md (case 1 test corpus defect: node5 val=6 unreachable from root, missing pointer in test.toml)"]
 fn test_lc059_flatten_tree_to_list() {
     let out = build_and_run_stress(
         "059-flatten-tree-to-list",
-        b"6\n1 1 2\n2 3 4\n5 -1 -1\n3 -1 -1\n4 -1 -1\n6 -1 -1\n",
+        b"6\n1 1 2\n2 3 4\n5 -1 5\n3 -1 -1\n4 -1 -1\n6 -1 -1\n",
     );
     assert_eq!(out, "1\n2\n3\n4\n5\n6\n");
     let out2 = build_and_run_stress("059-flatten-tree-to-list", b"1\n0 -1 -1\n");
