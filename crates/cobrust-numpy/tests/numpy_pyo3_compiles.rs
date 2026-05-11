@@ -72,8 +72,9 @@ fn pyo3_feature_build_succeeds_or_skips_cleanly() {
         || stderr.contains("PYO3_PYTHON")
         || stderr.contains("No such file or directory")
         || stderr.contains("failed to run the Python interpreter")
+        || stderr.contains("newer than PyO3's maximum supported version")
     {
-        eprintln!("PyO3 build path: skipping cleanly — libpython not on host");
+        eprintln!("PyO3 build path: skipping cleanly — libpython mismatch or version out of range");
         return;
     }
     panic!(

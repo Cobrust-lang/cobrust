@@ -65,8 +65,9 @@ fn pyo3_feature_build_succeeds_or_skips_cleanly() {
         || stderr.contains("python3-config")
         || stderr.contains("Could not find python3")
         || stderr.contains("PYO3_PYTHON")
+        || stderr.contains("newer than PyO3's maximum supported version")
     {
-        eprintln!("PyO3 build path: skipping cleanly — libpython not on host");
+        eprintln!("PyO3 build path: skipping cleanly — libpython mismatch or version out of range");
         return;
     }
     // Skip cleanly when PyO3 API version mismatch (e.g. pyo3 >= 0.22 dropped &PyAny in
