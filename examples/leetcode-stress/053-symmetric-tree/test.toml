@@ -5,7 +5,7 @@ expected_exit_code = 0
 
 [[cases]]
 input = "5\n1 1 2\n2 3 -1\n2 -1 4\n3 -1 -1\n3 -1 -1\n"
-expected_stdout = "false\n"
+expected_stdout = "true\n"
 expected_exit_code = 0
 
 [[cases]]

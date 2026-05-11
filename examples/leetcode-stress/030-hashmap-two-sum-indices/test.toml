@@ -14,6 +14,6 @@ expected_stdout = "0\n1\n"
 expected_exit_code = 0
 
 [[cases]]
-input = "4\n1 3 5 7\n8\n"
+input = "4\n1 5 7 10\n11\n"
 expected_stdout = "0\n3\n"
 expected_exit_code = 0

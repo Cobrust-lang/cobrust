@@ -14,8 +14,8 @@ expected_stdout = "9\n"
 expected_exit_code = 0
 
 [[cases]]
-input = "5\n10\n6\n9\n3\n/\n"
-expected_stdout = "2\n"
+input = "5\n2\n3\n4\n*\n+\n"
+expected_stdout = "14\n"
 expected_exit_code = 0
 
 [[cases]]

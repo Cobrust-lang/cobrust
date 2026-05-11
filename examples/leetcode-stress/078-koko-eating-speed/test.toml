@@ -1,11 +1,11 @@
 [[cases]]
 input = "4 5\n3 6 7 11\n"
-expected_stdout = "4\n"
+expected_stdout = "7\n"
 expected_exit_code = 0
 
 [[cases]]
 input = "5 8\n30 11 23 4 20\n"
-expected_stdout = "23\n"
+expected_stdout = "15\n"
 expected_exit_code = 0
 
 [[cases]]

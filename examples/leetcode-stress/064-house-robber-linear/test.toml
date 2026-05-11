@@ -20,5 +20,5 @@ expected_exit_code = 0
 
 [[cases]]
 input = "6\n6 7 1 3 8 2\n"
-expected_stdout = "19\n"
+expected_stdout = "15\n"
 expected_exit_code = 0
