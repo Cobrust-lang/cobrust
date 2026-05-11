@@ -1,0 +1,14 @@
+[[cases]]
+input = "5\npush 3\npush 5\nmin\npush 1\nmin\n"
+expected_stdout = "3\n1\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "3\npush 7\npush 2\nmin\n"
+expected_stdout = "2\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "6\npush 4\npush 4\nmin\npop\nmin\nmin\n"
+expected_stdout = "4\n4\n4\n"
+expected_exit_code = 0

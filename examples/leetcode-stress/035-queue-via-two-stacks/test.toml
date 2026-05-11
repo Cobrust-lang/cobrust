@@ -1,0 +1,14 @@
+[[cases]]
+input = "6\nenqueue 1\nenqueue 2\nenqueue 3\ndequeue\npeek\ndequeue\n"
+expected_stdout = "1\n2\n2\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "4\nenqueue 10\nenqueue 20\ndequeue\ndequeue\n"
+expected_stdout = "10\n20\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "5\nenqueue 5\ndequeue\nenqueue 7\nenqueue 3\ndequeue\n"
+expected_stdout = "5\n7\n"
+expected_exit_code = 0

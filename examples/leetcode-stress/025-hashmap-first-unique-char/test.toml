@@ -1,0 +1,19 @@
+[[cases]]
+input = "abcabd\n"
+expected_stdout = "2\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "aabb\n"
+expected_stdout = "-1\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "z\n"
+expected_stdout = "0\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "aabbcc\n"
+expected_stdout = "-1\n"
+expected_exit_code = 0

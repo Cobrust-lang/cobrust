@@ -1,0 +1,24 @@
+[[cases]]
+input = "horse\nros\n"
+expected_stdout = "3\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "abc\nabc\n"
+expected_stdout = "0\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "intention\nexecution\n"
+expected_stdout = "5\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "a\nb\n"
+expected_stdout = "1\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "sunday\nsaturday\n"
+expected_stdout = "3\n"
+expected_exit_code = 0

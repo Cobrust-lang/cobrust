@@ -1,0 +1,19 @@
+[[cases]]
+input = "ab#c\nad#c\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "a##c\n#a#c\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "a#c\nb\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "abc\nabc\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
