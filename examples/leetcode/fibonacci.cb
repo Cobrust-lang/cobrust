@@ -1,0 +1,26 @@
+# LC-03 Fibonacci (ADR-0044 W2 Phase 3).
+#
+# Input  (stdin): one line with integer N (0-based: F(0)=0, F(1)=1).
+# Output: F(N) followed by newline.
+#
+# Algorithm: iterative (O(N) time, O(1) space) — avoids stack overflow
+# and is faster than recursion for large N.
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    if n == 0:
+        print_int(0)
+        return 0
+    if n == 1:
+        print_int(1)
+        return 0
+    let a: i64 = 0
+    let b: i64 = 1
+    let i: i64 = 2
+    while i <= n:
+        let c = a + b
+        a = b
+        b = c
+        i = i + 1
+    print_int(b)
+    return 0

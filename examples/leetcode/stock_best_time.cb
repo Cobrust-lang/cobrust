@@ -1,0 +1,26 @@
+# LC-09 Best Time to Buy and Sell Stock (ADR-0044 W2 Phase 3).
+#
+# Input  (stdin):
+#   Line 1: N
+#   Line 2: N space-separated ints (prices[0..N-1])
+#
+# Output: maximum profit (buy once, sell once; profit ≥ 0).
+#
+# Algorithm: one-pass O(N) — track min price seen so far.
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let min_price = parse_int_tok(line, 0)
+    let max_profit: i64 = 0
+    let i: i64 = 1
+    while i < n:
+        let price = parse_int_tok(line, i)
+        let profit = price - min_price
+        if profit > max_profit:
+            max_profit = profit
+        if price < min_price:
+            min_price = price
+        i = i + 1
+    print_int(max_profit)
+    return 0

@@ -1,0 +1,45 @@
+# LC-10 Roman to Integer (ADR-0044 W2 Phase 3).
+#
+# Input  (stdin): one line with a roman numeral string (e.g. "MCMXCIV").
+# Output: integer value.
+#
+# Roman value table (ASCII):
+#   I=73→1, V=86→5, X=88→10, L=76→50, C=67→100, D=68→500, M=77→1000
+#
+# Algorithm: right-to-left scan; subtract if current < previous.
+
+fn roman_val(c: str) -> i64:
+    let o = str_ord(c)
+    if o == 73:
+        return 1
+    if o == 86:
+        return 5
+    if o == 88:
+        return 10
+    if o == 76:
+        return 50
+    if o == 67:
+        return 100
+    if o == 68:
+        return 500
+    if o == 77:
+        return 1000
+    return 0
+
+fn main() -> i64:
+    let s = input("")
+    let n = str_len(s)
+    let result: i64 = 0
+    let prev: i64 = 0
+    let i: i64 = n - 1
+    while i >= 0:
+        let c = str_at(s, i)
+        let v = roman_val(c)
+        if v < prev:
+            result = result - v
+        else:
+            result = result + v
+        prev = v
+        i = i - 1
+    print_int(result)
+    return 0
