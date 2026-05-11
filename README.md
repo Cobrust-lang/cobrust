@@ -139,7 +139,7 @@ Every translation carries a **provenance manifest** — source SHA, model finger
 
 ## Status
 
-**0.1.0-beta** — first public release. Means:
+**0.1.2** — public patch release (v0.1.1 superseded; binary version-string fix). Full release notes in [docs/releases/](docs/releases/).
 
 - ✅ Compiler core (lexer / parser / HIR / type checker / MIR / Cranelift codegen) is solid; 2,500+ tests pass on `cargo test --workspace --locked`, zero clippy warnings under `-D warnings`
 - ✅ Standard library: io / collections / string / math / panic / env / fmt / iter + structured concurrency runtime (M13)
