@@ -34,8 +34,7 @@ pub mod intrinsics;
 /// retargets the MIR Call from this stub Body to the runtime helper
 /// `__cobrust_println_static`. M11 stdlib supersedes by lifting this
 /// declaration into `std.io`.
-pub const PRELUDE: &str =
-    "fn print(s: str) -> i64:\n    return 0\n\nfn print_int(n: i64) -> i64:\n    return 0\n\n";
+pub const PRELUDE: &str = "fn print(s: str) -> i64:\n    return 0\n\nfn print_int(n: i64) -> i64:\n    return 0\n\nfn input(prompt: str) -> str:\n    return \"\"\n\nfn input_no_prompt() -> str:\n    return \"\"\n\nfn read_line() -> str:\n    return \"\"\n\nfn argv() -> list[str]:\n    let xs: list[str] = []\n    return xs\n\n";
 
 /// What `cobrust build` should emit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

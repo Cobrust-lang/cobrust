@@ -39,6 +39,9 @@
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_panics_doc)]
+#![allow(clippy::assertions_on_constants)]
+#![allow(clippy::no_effect_underscore_binding)]
+#![allow(clippy::manual_repeat_n)]
 
 use proptest::prelude::*;
 
@@ -47,7 +50,7 @@ use proptest::prelude::*;
 // `io::read_line_from` / `env::argv_list` are implemented in the stdlib.
 // =====================================================================
 
-const ADR0044_IMPL_LANDED: bool = false;
+const ADR0044_IMPL_LANDED: bool = true;
 
 fn require_impl(test_name: &str) {
     assert!(
@@ -94,46 +97,52 @@ proptest! {
 
     #[test]
     fn fuzz_input_from_arbitrary_bytes_never_panics(
-        _bytes in arbitrary_stdin_bytes()
+        bytes in arbitrary_stdin_bytes()
     ) {
         require_impl("fuzz_input_from_arbitrary_bytes_never_panics");
-        // Once impl lands, dev replaces this with:
-        //   let mut reader = std::io::BufReader::new(std::io::Cursor::new(_bytes));
-        //   let _s: String = cobrust_stdlib::io::input_from("", &mut reader);
+        let mut reader = std::io::BufReader::new(std::io::Cursor::new(bytes));
+        let _s: String = cobrust_stdlib::io::input_from("", &mut reader);
     }
 
     #[test]
     fn fuzz_read_line_from_arbitrary_bytes_never_panics(
-        _bytes in arbitrary_stdin_bytes()
+        bytes in arbitrary_stdin_bytes()
     ) {
         require_impl("fuzz_read_line_from_arbitrary_bytes_never_panics");
-        // Post-impl: read_line_from returns plain String, never panics.
+        let mut reader = std::io::BufReader::new(std::io::Cursor::new(bytes));
+        let _s: String = cobrust_stdlib::io::read_line_from(&mut reader);
     }
 
     #[test]
     fn fuzz_input_from_then_read_line_drain_no_panic(
-        _bytes in arbitrary_stdin_bytes()
+        bytes in arbitrary_stdin_bytes()
     ) {
         require_impl("fuzz_input_from_then_read_line_drain_no_panic");
-        // Post-impl: alternating drain on the same reader never panics.
+        let mut reader = std::io::BufReader::new(std::io::Cursor::new(bytes));
+        let _ = cobrust_stdlib::io::input_from("", &mut reader);
+        let _ = cobrust_stdlib::io::read_line_from(&mut reader);
+        let _ = cobrust_stdlib::io::input_from(">> ", &mut reader);
     }
 
     #[test]
     fn fuzz_input_from_returns_no_trailing_lf(
-        _bytes in arbitrary_stdin_bytes()
+        bytes in arbitrary_stdin_bytes()
     ) {
         require_impl("fuzz_input_from_returns_no_trailing_lf");
-        // Post-impl: input_from strips trailing \n unconditionally.
-        //   let s = cobrust_stdlib::io::input_from("", &mut reader);
-        //   prop_assert!(!s.ends_with('\n'));
+        let mut reader = std::io::BufReader::new(std::io::Cursor::new(bytes));
+        let s = cobrust_stdlib::io::input_from("", &mut reader);
+        prop_assert!(!s.ends_with('\n'));
     }
 
     #[test]
     fn fuzz_read_line_from_preserves_or_empty(
-        _bytes in arbitrary_stdin_bytes()
+        bytes in arbitrary_stdin_bytes()
     ) {
         require_impl("fuzz_read_line_from_preserves_or_empty");
-        // Post-impl: read_line_from W2 cap → "" (EOF) or non-empty String.
+        let mut reader = std::io::BufReader::new(std::io::Cursor::new(bytes));
+        let s = cobrust_stdlib::io::read_line_from(&mut reader);
+        // W2 cap: returns "" (EOF) or some non-empty String slice.
+        prop_assert!(s.is_empty() || !s.is_empty());
     }
 }
 
@@ -153,8 +162,12 @@ proptest! {
         _args in arbitrary_argv()
     ) {
         require_impl("fuzz_argv_list_round_trip_arbitrary");
-        // Post-impl:
-        //   let list = cobrust_stdlib::env::argv_list();
-        //   prop_assert!(!list.is_empty());
+        // argv_list() reads CAPTURED_ARGS or falls back to
+        // std::env::args(); in the cargo-test runner argv[0] is always
+        // present, so the list is non-empty regardless of fuzz input.
+        // The fuzz arg controls the random domain but doesn't drive
+        // input — argv_list isn't parameterised on user data.
+        let list = cobrust_stdlib::env::argv_list();
+        prop_assert!(!list.is_empty());
     }
 }

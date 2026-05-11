@@ -102,6 +102,186 @@ pub extern "C" fn __cobrust_println_int(v: i64) {
 }
 
 // =====================================================================
+// ADR-0044 W2 Phase 2 — source-level `input()` / `read_line()` plumbing
+// =====================================================================
+//
+// Two Rust-side helpers parameterised over a `BufRead` reader so the
+// behaviour is unit-testable without touching real stdin, plus three
+// C-ABI shims that codegen lowers `input(prompt)` / `input_no_prompt()`
+// / `read_line()` callsites into. The shims always read from
+// `std::io::stdin()`; the helpers split out the reader so the test
+// corpus (`crates/cobrust-stdlib/tests/io_input.rs`) can drive them
+// from `std::io::Cursor<Vec<u8>>` deterministically.
+//
+// Per ADR-0044 Decision 5:
+//   - `input(prompt)` strips a single trailing `\n`; `\r` is preserved.
+//   - `read_line()` returns the line *with* the trailing `\n` (W2 cap;
+//     Result-typed end state lands in ADR-0044a).
+//
+// Per Decision 4: UTF-8 lossy — invalid bytes become `U+FFFD`.
+
+/// Read one line from `reader`, write `prompt` to stdout flushed first
+/// (matching Python's `input(prompt)`), strip a single trailing `\n`
+/// from the result, return UTF-8 lossy. EOF returns empty `String`.
+///
+/// Per ADR-0044 §"Implementation map", this is the unit-testable
+/// helper that the `__cobrust_input` C-ABI shim wraps. Splitting the
+/// reader as a parameter lets the test corpus drive deterministic
+/// `Cursor<Vec<u8>>` inputs.
+pub fn input_from<R: BufRead>(prompt: &str, reader: &mut R) -> String {
+    if !prompt.is_empty() {
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(prompt.as_bytes());
+        let _ = stdout.flush();
+    }
+    let mut buf = Vec::new();
+    let _ = reader.read_until(b'\n', &mut buf);
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// Read one line from `reader`, **preserving** the trailing `\n` if
+/// present. EOF returns empty `String`. UTF-8 lossy per Decision 4.
+///
+/// Per ADR-0044 §"Decision 5", `read_line()` preserves the newline so
+/// downstream consumers can round-trip stdin to stdout byte-perfect
+/// without re-injecting newlines. The Result-typed end state is
+/// deferred to ADR-0044a (W2 Phase 2 scope cap).
+pub fn read_line_from<R: BufRead>(reader: &mut R) -> String {
+    let mut buf = Vec::new();
+    let _ = reader.read_until(b'\n', &mut buf);
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+// ---------- C-ABI shims (ADR-0044 §"New runtime C-ABI surface") -----
+
+/// Heap-allocated Str pointer wrapper. Wraps an owned `String` in the
+/// same shape as the f-string runtime's `StringBuffer` so codegen can
+/// pass the result back into `__cobrust_str_len` / `__cobrust_str_ptr`
+/// / `__cobrust_str_drop` interchangeably.
+///
+/// Constructs a fresh buffer via `__cobrust_str_new()`, appends `s` via
+/// `__cobrust_str_push_static`, and returns the opaque pointer.
+fn alloc_str_buffer(s: &str) -> *mut u8 {
+    // SAFETY: `__cobrust_str_new` returns a valid buffer pointer that
+    // we immediately populate via `__cobrust_str_push_static`. Both
+    // contracts are satisfied — empty strings produce an empty buffer.
+    unsafe {
+        let buf = crate::fmt::__cobrust_str_new();
+        if !s.is_empty() {
+            crate::fmt::__cobrust_str_push_static(buf, s.as_ptr(), s.len() as i64);
+        }
+        buf
+    }
+}
+
+/// C-ABI shim for source-level `input(prompt: str) -> str`. Writes
+/// `prompt` to stdout flushed, reads one line from stdin (stripping
+/// the trailing `\n`), returns an owned Str pointer.
+///
+/// ADR-0044 §"New runtime C-ABI surface": codegen emits a call here
+/// when the intrinsic-rewrite pass redirects `input(...)` callsites.
+///
+/// # Safety
+///
+/// `ptr` must be a valid pointer to `len` bytes of UTF-8-encoded
+/// prompt text (or null + 0 for the no-prompt case). The text need
+/// not be nul-terminated. Codegen emits this call with a `.rodata` or
+/// f-string-buffer pointer + a compile-time-known length, satisfying
+/// the contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_input(ptr: *const u8, len: usize) -> *mut u8 {
+    let prompt: &str = if ptr.is_null() || len == 0 {
+        ""
+    } else {
+        // SAFETY: caller-attestation per the `# Safety` clause.
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+        std::str::from_utf8(bytes).unwrap_or("")
+    };
+    let stdin = std::io::stdin();
+    let mut lock = stdin.lock();
+    let s = input_from(prompt, &mut lock);
+    alloc_str_buffer(&s)
+}
+
+/// C-ABI shim for source-level `input_no_prompt() -> str`. Equivalent
+/// to `__cobrust_input(NULL, 0)` — no prompt write, reads one line
+/// from stdin and strips trailing `\n`. Returns an owned Str pointer.
+///
+/// # Safety
+///
+/// No pointer arguments — always safe to call. The returned Str must
+/// be freed via `__cobrust_str_drop` when no longer needed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_input_no_prompt() -> *mut u8 {
+    let stdin = std::io::stdin();
+    let mut lock = stdin.lock();
+    let s = input_from("", &mut lock);
+    alloc_str_buffer(&s)
+}
+
+/// C-ABI shim for source-level `print(s: str)` when the argument is a
+/// non-literal `str` (a heap-allocated buffer pointer produced by
+/// `__cobrust_input`, `__cobrust_read_line`, `__cobrust_str_new` etc.).
+/// Extracts the buffer's `(ptr, len)` pair via the f-string runtime's
+/// `__cobrust_str_ptr` / `__cobrust_str_len` accessors and dispatches
+/// to `__cobrust_println`. Buffer ownership is unchanged — codegen's
+/// drop schedule still owns the eventual `__cobrust_str_drop`.
+///
+/// ADR-0044 W2 Phase 2: needed so `print(input(...))` / `print(s)`
+/// where `s` came from `read_line()` round-trips end to end without
+/// requiring full stdlib FnRef dispatch (which is M11.x scope).
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by `__cobrust_str_new` (or any
+/// of the W2 shims that wrap it: `__cobrust_input`,
+/// `__cobrust_input_no_prompt`, `__cobrust_read_line`) and not yet
+/// dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_println_str_buf(buf: *mut u8) {
+    if buf.is_null() {
+        println("");
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety` clause. Both
+    // accessors are no-ops on null.
+    unsafe {
+        let ptr = crate::fmt::__cobrust_str_ptr(buf);
+        let len = crate::fmt::__cobrust_str_len(buf);
+        if ptr.is_null() || len <= 0 {
+            println("");
+            return;
+        }
+        // SAFETY: `__cobrust_str_ptr` returns a valid slice for
+        // `len` bytes; the f-string runtime maintains UTF-8 validity.
+        let bytes = std::slice::from_raw_parts(ptr, len as usize);
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            println(s);
+        }
+    }
+}
+
+/// C-ABI shim for source-level `read_line() -> str` (W2 Phase 2 scope
+/// cap per ADR-0044 Decision 1D — typed `Result[str, IoError]` deferred
+/// to ADR-0044a). Reads one line from stdin **preserving** the
+/// trailing `\n`; EOF returns an empty Str.
+///
+/// # Safety
+///
+/// No pointer arguments — always safe to call. The returned Str must
+/// be freed via `__cobrust_str_drop` when no longer needed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_read_line() -> *mut u8 {
+    let stdin = std::io::stdin();
+    let mut lock = stdin.lock();
+    let s = read_line_from(&mut lock);
+    alloc_str_buffer(&s)
+}
+
+// =====================================================================
 // read_line / read_file / write_file
 // =====================================================================
 

@@ -31,6 +31,12 @@
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_panics_doc)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::len_zero)]
+#![allow(clippy::single_char_pattern)]
+#![allow(clippy::assertions_on_constants)]
+#![allow(clippy::no_effect_underscore_binding)]
+#![allow(clippy::unnecessary_debug_formatting)]
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
