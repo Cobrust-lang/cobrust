@@ -1,0 +1,43 @@
+# LC-052 invert-binary-tree (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N lines each "val left_idx right_idx" (0-based, -1=null), root=node 0
+# Output: values in BFS (level-order) traversal after inverting the tree, one per line
+# Algorithm: swap left/right pointers for each node, then BFS to print
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let val = list_new(n)
+    let lft = list_new(n)
+    let rgt = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let line = input("")
+        list_set(val, i, parse_int_tok(line, 0))
+        list_set(lft, i, parse_int_tok(line, 1))
+        list_set(rgt, i, parse_int_tok(line, 2))
+        i = i + 1
+    i = 0
+    while i < n:
+        let l = list_get(lft, i)
+        let r = list_get(rgt, i)
+        list_set(lft, i, r)
+        list_set(rgt, i, l)
+        i = i + 1
+    let q = list_new(n + 1)
+    let qhead: i64 = 0
+    let qtail: i64 = 0
+    list_set(q, qtail, 0)
+    qtail = qtail + 1
+    while qhead < qtail:
+        let node = list_get(q, qhead)
+        qhead = qhead + 1
+        print_int(list_get(val, node))
+        let l = list_get(lft, node)
+        let r = list_get(rgt, node)
+        if l != -1:
+            list_set(q, qtail, l)
+            qtail = qtail + 1
+        if r != -1:
+            list_set(q, qtail, r)
+            qtail = qtail + 1
+    return 0

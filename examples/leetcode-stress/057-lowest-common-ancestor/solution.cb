@@ -1,0 +1,54 @@
+# LC-057 lowest-common-ancestor (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): "N p q" on line 1; N lines each "val left_idx right_idx" (0-based, -1=null), root=node 0
+# Output: value of the lowest common ancestor of node p and node q
+# Algorithm: BFS to build parent array, then trace ancestors of both nodes to find first common one
+
+fn main() -> i64:
+    let nm_line = input("")
+    let n = parse_int_tok(nm_line, 0)
+    let p = parse_int_tok(nm_line, 1)
+    let q = parse_int_tok(nm_line, 2)
+    let val = list_new(n)
+    let lft = list_new(n)
+    let rgt = list_new(n)
+    let par = list_new(n)
+    let depth = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let line = input("")
+        list_set(val, i, parse_int_tok(line, 0))
+        list_set(lft, i, parse_int_tok(line, 1))
+        list_set(rgt, i, parse_int_tok(line, 2))
+        list_set(par, i, -1)
+        list_set(depth, i, 0)
+        i = i + 1
+    let q2 = list_new(n + 1)
+    let qhead: i64 = 0
+    let qtail: i64 = 0
+    list_set(q2, qtail, 0)
+    qtail = qtail + 1
+    while qhead < qtail:
+        let node = list_get(q2, qhead)
+        qhead = qhead + 1
+        let l = list_get(lft, node)
+        let r = list_get(rgt, node)
+        if l != -1:
+            list_set(par, l, node)
+            list_set(depth, l, list_get(depth, node) + 1)
+            list_set(q2, qtail, l)
+            qtail = qtail + 1
+        if r != -1:
+            list_set(par, r, node)
+            list_set(depth, r, list_get(depth, node) + 1)
+            list_set(q2, qtail, r)
+            qtail = qtail + 1
+    let a: i64 = p
+    let b: i64 = q
+    while a != b:
+        if list_get(depth, a) > list_get(depth, b):
+            a = list_get(par, a)
+        else:
+            b = list_get(par, b)
+    print_int(list_get(val, a))
+    return 0

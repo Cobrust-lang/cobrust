@@ -1,0 +1,52 @@
+# LC-053 symmetric-tree (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N lines each "val left_idx right_idx" (0-based, -1=null), root=node 0
+# Output: "true" if the tree is symmetric (mirror of itself), "false" otherwise
+# Algorithm: iterative check using a pair-queue; enqueue (root.left, root.right), compare mirror pairs
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let val = list_new(n)
+    let lft = list_new(n)
+    let rgt = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let line = input("")
+        list_set(val, i, parse_int_tok(line, 0))
+        list_set(lft, i, parse_int_tok(line, 1))
+        list_set(rgt, i, parse_int_tok(line, 2))
+        i = i + 1
+    let qa = list_new(n * 2 + 4)
+    let qb = list_new(n * 2 + 4)
+    let qhead: i64 = 0
+    let qtail: i64 = 0
+    list_set(qa, qtail, list_get(lft, 0))
+    list_set(qb, qtail, list_get(rgt, 0))
+    qtail = qtail + 1
+    let ok: i64 = 1
+    while qhead < qtail and ok == 1:
+        let a = list_get(qa, qhead)
+        let b = list_get(qb, qhead)
+        qhead = qhead + 1
+        if a == -1 and b == -1:
+            i = 0
+        else:
+            if a == -1:
+                ok = 0
+            elif b == -1:
+                ok = 0
+            else:
+                if list_get(val, a) != list_get(val, b):
+                    ok = 0
+                else:
+                    list_set(qa, qtail, list_get(lft, a))
+                    list_set(qb, qtail, list_get(rgt, b))
+                    qtail = qtail + 1
+                    list_set(qa, qtail, list_get(rgt, a))
+                    list_set(qb, qtail, list_get(lft, b))
+                    qtail = qtail + 1
+    if ok == 1:
+        print("true")
+    else:
+        print("false")
+    return 0

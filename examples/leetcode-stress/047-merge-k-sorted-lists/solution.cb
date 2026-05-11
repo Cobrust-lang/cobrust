@@ -1,0 +1,44 @@
+# LC-047 merge-k-sorted-lists (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): K on line 1; K lines each starting with list-count then values
+# Output: all values merged in sorted order, one per line
+# Algorithm: store all lists in a flat array, then selection-sort via K pointers (O(total * K))
+
+fn main() -> i64:
+    let k = parse_int(input(""))
+    let ptrs = list_new(k)
+    let sizes = list_new(k)
+    let total: i64 = 0
+    let flat = list_new(10000)
+    let offsets = list_new(k + 1)
+    let i: i64 = 0
+    while i < k:
+        let line = input("")
+        let sz = parse_int_tok(line, 0)
+        list_set(sizes, i, sz)
+        list_set(offsets, i, total)
+        list_set(ptrs, i, 0)
+        let j: i64 = 0
+        while j < sz:
+            list_set(flat, total, parse_int_tok(line, j + 1))
+            total = total + 1
+            j = j + 1
+        i = i + 1
+    list_set(offsets, k, total)
+    let printed: i64 = 0
+    while printed < total:
+        let best_val: i64 = 2000000000
+        let best_k: i64 = -1
+        let q: i64 = 0
+        while q < k:
+            if list_get(ptrs, q) < list_get(sizes, q):
+                let idx = list_get(offsets, q) + list_get(ptrs, q)
+                let v = list_get(flat, idx)
+                if v < best_val:
+                    best_val = v
+                    best_k = q
+            q = q + 1
+        print_int(best_val)
+        list_set(ptrs, best_k, list_get(ptrs, best_k) + 1)
+        printed = printed + 1
+    return 0
