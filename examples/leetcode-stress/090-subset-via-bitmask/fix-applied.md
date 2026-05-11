@@ -1,4 +1,6 @@
-# failure.md — LC-090 subset-via-bitmask
+# fix-applied.md — LC-090 subset-via-bitmask
+
+> **FIX APPLIED — LC-100 Tier A Sprint 2 (Pattern A `.rodata` literal misalignment closed via `__cobrust_print_no_nl_lit` C-ABI variant + operand-aware intrinsic-rewrite, ADR-0047 Option H). Test re-enabled; no source-level changes to `solution.cb`.**
 
 ## Status
 

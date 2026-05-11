@@ -637,7 +637,6 @@ fn test_lc055_count_nodes() {
 // =====================================================================
 
 #[test]
-#[ignore = "LC-056 level-order-traversal: RUNTIME-FAIL; see failure.md (print_no_nl misaligned pointer dereference on short string literals — codegen/stdlib gap)"]
 fn test_lc056_level_order_traversal() {
     let out = build_and_run_stress(
         "056-level-order-traversal",

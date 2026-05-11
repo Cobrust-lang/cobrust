@@ -185,7 +185,6 @@ fn test_lc092_palindrome_number_integer() {
 // =====================================================================
 
 #[test]
-#[ignore = "LC-093 integer-to-roman: RUNTIME-FAIL; see failure.md (print_no_nl on literal string misaligned pointer — codegen gap)"]
 fn test_lc093_integer_to_roman() {
     let out = build_and_run_stress("093-integer-to-roman", b"3\n");
     assert_eq!(out, "III\n");
@@ -321,7 +320,6 @@ fn test_lc098_power_x_n_recursive() {
 // =====================================================================
 
 #[test]
-#[ignore = "LC-099 generate-parentheses: RUNTIME-FAIL; see failure.md (print_no_nl on literal string misaligned pointer — codegen gap)"]
 fn test_lc099_generate_parentheses() {
     let out = build_and_run_stress("099-generate-parentheses", b"1\n");
     assert_eq!(out, "()\n");
@@ -338,7 +336,6 @@ fn test_lc099_generate_parentheses() {
 // =====================================================================
 
 #[test]
-#[ignore = "LC-100 subsets-recursive: RUNTIME-FAIL; see failure.md (print_no_nl on literal string misaligned pointer — codegen gap)"]
 fn test_lc100_subsets_recursive() {
     let out = build_and_run_stress("100-subsets-recursive", b"2\n1 2\n");
     assert_eq!(out, "1 2\n1\n2\n\n");
