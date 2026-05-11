@@ -1,0 +1,18 @@
+# LC-094 gcd-euclidean (ADR-0047 LC-100 Tier A bucket B4).
+#
+# Input  (stdin): one line with two integers A and B separated by space
+# Output: GCD(A, B) using the Euclidean algorithm
+#
+# Algorithm: iterative Euclidean (avoids stack depth for large inputs).
+# gcd(a, b) = gcd(b, a mod b) until b == 0.
+
+fn main() -> i64:
+    let line = input("")
+    let a = parse_int_tok(line, 0)
+    let b = parse_int_tok(line, 1)
+    while b != 0:
+        let t = b
+        b = a % b
+        a = t
+    print_int(a)
+    return 0

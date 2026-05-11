@@ -1,0 +1,26 @@
+# LC-098 power-x-n-recursive (ADR-0047 LC-100 Tier A bucket B4).
+#
+# Input  (stdin): one line with two integers X and N separated by space
+# Output: X^N (integer exponentiation, N >= 0)
+#
+# Algorithm: recursive fast exponentiation (ADR-0034 FnRef Call lowering).
+# pow(x, 0) = 1
+# pow(x, 1) = x
+# pow(x, n) = pow(x*x, n/2) * (x if n is odd else 1)
+
+fn pow(x: i64, n: i64) -> i64:
+    if n == 0:
+        return 1
+    if n == 1:
+        return x
+    let half = pow(x * x, n / 2)
+    if n % 2 == 1:
+        return x * half
+    return half
+
+fn main() -> i64:
+    let line = input("")
+    let x = parse_int_tok(line, 0)
+    let n = parse_int_tok(line, 1)
+    print_int(pow(x, n))
+    return 0

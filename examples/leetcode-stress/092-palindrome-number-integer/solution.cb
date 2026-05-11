@@ -1,0 +1,31 @@
+# LC-092 palindrome-number-integer (ADR-0047 LC-100 Tier A bucket B4).
+#
+# Input  (stdin): one integer N
+# Output: "true" if N reads the same forwards and backwards, "false" otherwise
+#
+# Algorithm: reverse the second half of N's digits using integer math.
+# Negative numbers and numbers ending in 0 (except 0 itself) are not palindromes.
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    if n < 0:
+        print("false")
+        return 0
+    if n == 0:
+        print("true")
+        return 0
+    if n % 10 == 0:
+        print("false")
+        return 0
+    let rev: i64 = 0
+    let x = n
+    while x > rev:
+        rev = rev * 10 + x % 10
+        x = x / 10
+    if x == rev:
+        print("true")
+    elif x == rev / 10:
+        print("true")
+    else:
+        print("false")
+    return 0
