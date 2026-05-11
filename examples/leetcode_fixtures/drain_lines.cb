@@ -1,0 +1,9 @@
+# drain_lines — reads three input() calls in sequence, prints "done".
+# Used by W2 Phase 2 cli_stdin_argv_e2e.rs test #8.
+# Repeated input() must drain stdin without panic.
+fn main() -> i64:
+    let l1 = input("")
+    let l2 = input("")
+    let l3 = input("")
+    print("done")
+    return 0

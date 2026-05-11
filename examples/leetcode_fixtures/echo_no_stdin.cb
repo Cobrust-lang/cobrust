@@ -1,0 +1,5 @@
+# echo_no_stdin — never calls input(); stdin must be ignored, no hang.
+# Used by W2 Phase 2 cli_stdin_argv_e2e.rs test #10.
+fn main() -> i64:
+    print("no_stdin_used")
+    return 0

@@ -137,6 +137,31 @@ Every translation carries a **provenance manifest** — source SHA, model finger
 
 ---
 
+## Quick Start for LeetCode
+
+Want to solve LeetCode problems in Cobrust? Two steps:
+
+1. Install Cobrust v0.1.2+ (see [Install](#install) above)
+2. Read the guide:
+   - English: [LeetCode with Cobrust](docs/human/en/getting-started-leetcode.md)
+   - 中文: [用 Cobrust 刷 LeetCode](docs/human/zh/getting-started-leetcode.md)
+
+10 ready-to-run example programs in [`examples/leetcode/`](examples/leetcode/), covering:
+hash-map simulation, string reversal, recursion/DP, stack-based parsing, merge sort,
+Kadane's algorithm, binary search, climbing stairs, greedy stock, and Roman numerals.
+
+```bash
+# Try Two Sum right now:
+printf "4\n2\n7\n11\n15\n9\n" | cargo run -p cobrust-cli -- run examples/leetcode/two_sum.cb
+# Expected output:
+# 0
+# 1
+```
+
+Full problem catalog and input formats: [`examples/leetcode/README.md`](examples/leetcode/README.md)
+
+---
+
 ## Status
 
 **0.1.2** — public patch release (v0.1.1 superseded; binary version-string fix). Full release notes in [docs/releases/](docs/releases/).

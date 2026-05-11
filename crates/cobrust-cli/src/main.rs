@@ -98,6 +98,14 @@ enum Command {
         /// Suppress informational stderr.
         #[arg(short, long)]
         quiet: bool,
+        /// Trailing args forwarded to the produced user program (after
+        /// the `--` separator). ADR-0044 W2 Phase 2: lets
+        /// `cobrust run prog.cb -- a b c` end up with `argv() == [exe_path, "a", "b", "c"]`
+        /// inside the user program. `last = true` tells clap to treat
+        /// every argument after `--` as part of this Vec without
+        /// re-parsing as options.
+        #[arg(last = true, allow_hyphen_values = true)]
+        program_args: Vec<String>,
     },
     /// Type-check a `.cb` source file (no codegen).
     Check {
@@ -225,7 +233,8 @@ fn main() -> ExitCode {
             release,
             target,
             quiet,
-        } => run::run(&file, release, target.as_deref(), quiet),
+            program_args,
+        } => run::run(&file, release, target.as_deref(), quiet, &program_args),
         Command::Check { file, quiet } => check::run(&file, quiet),
         Command::Fmt { file, check } => fmt::run(&file, check),
         Command::Translate {

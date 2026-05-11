@@ -1065,6 +1065,14 @@ if grep -q '^- \*\*M11 — delivered.\*\*' "docs/agent/modules/stdlib.md"; then
         "__cobrust_capture_argv"
         "_cobrust_user_main"
         "mimalloc"
+        # ADR-0044 W2 Phase 2 — source-level stdin/argv binding.
+        "input"
+        "read_line"
+        "argv"
+        "__cobrust_input"
+        "__cobrust_read_line"
+        "__cobrust_argv"
+        "ADR-0044"
     )
     m11_stdlib_files=(
         "docs/agent/modules/stdlib.md"
