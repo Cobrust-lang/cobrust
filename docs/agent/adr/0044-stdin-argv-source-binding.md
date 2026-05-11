@@ -2,7 +2,7 @@
 doc_kind: adr
 adr_id: 0044
 title: "Source-level stdin + argv binding for Cobrust user programs (W2 LeetCode wedge)"
-status: proposed
+status: accepted
 date: 2026-05-11
 last_verified_commit: TBD
 supersedes: []
@@ -146,6 +146,21 @@ greenfield design.
 the user-facing canonical for W2; `read_line()` is the
 Result-typed primitive that future translator output can target.
 
+#### W2 Phase 2 scope cap (per [P10-RATIFY-0044], 2026-05-11)
+
+`Result[str, IoError]` typed-HIR is not yet supported by the type
+checker / MIR lowering pipeline. For W2 Phase 2 only, `read_line()`
+ships with the simplified signature `read_line() -> str` and EOF
+surfaces as `""` (matching `input()`'s EOF→"" convention). The
+Result-typed end-state per Decision 3C remains the target; it lands
+in **follow-up ADR-0044a** once typed-Result lowering is in scope
+(Phase F.1.x candidate). `input()` and `argv()` ship as designed in
+W2 Phase 2 (MUST-SHIP).
+
+Trailing newline preservation per Decision 5 still applies:
+`read_line()` returns the line *with* its trailing `\n` (when
+present); `input()` strips it.
+
 ### Decision 2 — Canonical argv API surface
 
 #### Option 2A — Signature-extension `fn main(args: list[str]) -> i64`
@@ -277,9 +292,10 @@ fn input(prompt: str) -> str
 # Same as input("").
 fn input_no_prompt() -> str
 
-# Read one line from stdin as a Result. EOF surfaces as IoError::Eof.
-# Trailing newline preserved.
-fn read_line() -> Result[str, IoError]
+# Read one line from stdin. EOF returns "". Trailing newline preserved.
+# W2 Phase 2 scope cap per ADR-0044 Decision 1D — typed
+# Result[str, IoError] deferred to ADR-0044a.
+fn read_line() -> str
 
 # Process argv as a list of strings. First element is argv[0] (program
 # path). Captured at process start via __cobrust_capture_argv.
@@ -298,13 +314,14 @@ and `crates/cobrust-stdlib/src/env.rs` (`argv`).
 |---|---|---|
 | `__cobrust_input` | `extern "C" fn(*const u8, usize) -> *mut Str` | Writes `prompt` (ptr+len) to stdout (flushed), reads one line from stdin, strips trailing `\n`, returns owned Str pointer. EOF returns empty Str. UTF-8 lossy. |
 | `__cobrust_input_no_prompt` | `extern "C" fn() -> *mut Str` | Same as `__cobrust_input` with empty prompt. |
-| `__cobrust_read_line` | `extern "C" fn() -> *mut Result_StrIo` | Returns owned `Result_StrIo` (tagged union); preserves trailing newline. EOF returns the `Err(Eof)` variant. |
+| `__cobrust_read_line` | `extern "C" fn() -> *mut Str` | Reads one line from stdin, **preserves** trailing `\n` (unlike `__cobrust_input`). EOF returns empty Str. UTF-8 lossy. W2 Phase 2 scope cap per ADR-0044 Decision 1D — typed `Result[str, IoError]` deferred to ADR-0044a. |
 | `__cobrust_argv` | `extern "C" fn() -> *mut List_Str` | Materializes `CAPTURED_ARGS` into a Cobrust List<Str>. Each Str is heap-allocated via `__cobrust_str_new` and populated via `__cobrust_str_push_static`. Returns owned List handle. |
 
 The pointer layout for `*mut Str` matches the M12.x f-string runtime
 (`__cobrust_str_new` at `runtime_helper_signatures` line 1804). The
-`*mut Result_StrIo` and `*mut List_Str` layouts are new — see §
-"Implementation map" for the Aggregate shape.
+`*mut List_Str` layout is new — see § "Implementation map" for the
+Aggregate shape. (`*mut Result_StrIo` deferred to ADR-0044a per
+Decision 1D W2 Phase 2 scope cap.)
 
 ### Codegen amendment
 
@@ -333,8 +350,10 @@ fn input(prompt: str) -> str:
 fn input_no_prompt() -> str:
     return ""
 
-fn read_line() -> Result[str, IoError]:
-    return Err(IoError())
+# W2 Phase 2 scope cap per ADR-0044 Decision 1D — typed
+# Result[str, IoError] deferred to ADR-0044a
+fn read_line() -> str:
+    return ""
 
 fn argv() -> list[str]:
     return []
@@ -358,7 +377,6 @@ This preserves backward-compat with all existing examples.
 |---|---|---|
 | `cobrust-stdlib` | `src/io.rs` | Add `input(prompt) -> String` Rust-side + `__cobrust_input` C-ABI shim + `__cobrust_input_no_prompt` + `__cobrust_read_line` (Result-returning C-ABI). |
 | `cobrust-stdlib` | `src/env.rs` | Add `__cobrust_argv` C-ABI shim that materializes List<Str> from `CAPTURED_ARGS`. |
-| `cobrust-stdlib` | `src/runtime.rs` | Add `Result_StrIo` opaque tagged-union shape (matching the f-string Str ABI) + `__cobrust_io_err_*` accessors if needed. |
 | `cobrust-cli` | `src/build.rs` | Extend `PRELUDE` to declare four new stub fns. |
 | `cobrust-cli` | `src/build/intrinsics.rs` | Extend `rewrite_print` (or split into `rewrite_io_intrinsics`) to recognize + rewrite the four new callsites. Add new `INPUT_RUNTIME_SYMBOL` / `READ_LINE_RUNTIME_SYMBOL` / `ARGV_RUNTIME_SYMBOL` consts. |
 | `cobrust-codegen` | `src/cranelift_backend.rs` | Add four entries to `runtime_helper_signatures`. |
@@ -405,8 +423,11 @@ Per ADR-0019 §M11's testing rubric; lives in
    document the convention (we keep `\r`, strip only `\n`; users
    doing cross-platform should strip themselves).
 5. `input(prompt)` returns `""` on EOF (stdin closed before newline).
-6. `read_line()` returns `Ok("hello\n")` preserving newline.
-7. `read_line()` returns `Err(IoError::Eof)` at EOF.
+6. `read_line()` returns `"hello\n"` preserving newline (W2 Phase 2
+   scope cap per ADR-0044 Decision 1D; ADR-0044a will return
+   `Ok("hello\n")`).
+7. `read_line()` returns `""` at EOF (W2 Phase 2 scope cap; ADR-0044a
+   will return `Err(IoError::Eof)`).
 8. `argv()` returns a list whose length matches `argc`.
 9. `argv()[0]` matches the program path string.
 10. `argv()[1..]` match the user-supplied args.
@@ -460,14 +481,20 @@ Phase 2 P7 sonnet must achieve:
 
 ## Done means (P9 Phase 1 — ADR landed)
 
-- [x] ADR-0044 written, status `proposed`.
-- [ ] CTO ratifies via `[P10-RATIFY-0044]` (or amends).
-- [ ] ADR atomic commit on `feature/w2-leetcode-wedge` includes:
-  - This ADR file.
-  - `docs/agent/adr/README.md` roster row.
+- [x] ADR-0044 written, status `accepted` (was `proposed`; ratified
+      via `[P10-RATIFY-0044-WITH-AMENDMENTS]` 2026-05-11 — see
+      Decision 1D W2 Phase 2 scope cap sub-section + Follow-up
+      ADR-0044a section for the amendment delta).
+- [x] CTO ratified via `[P10-RATIFY-0044-WITH-AMENDMENTS]` with 5
+      amendments folded in (see Decision 1D W2 Phase 2 scope cap,
+      PRELUDE / C-ABI / Tier 1 test plan updates, and Follow-up
+      ADR-0044a section).
+- [x] ADR atomic commits on `feature/w2-leetcode-wedge`:
+  - `0d58cd0` — initial Phase 1 proposed ADR + roster row.
+  - (this commit) — amendments + status flip to `accepted`.
   - No code changes (Phase 2 is impl).
 - [ ] Snapshot memory updated to reference ADR-0044 + W2 sprint in
-  flight.
+  flight (CTO-side; tracked separately from the worktree atomic).
 
 ## Done means (W2 sprint — Phase 2/3/4)
 
@@ -513,10 +540,10 @@ Per `dispatches/w2-leetcode-wedge-sprint.md`:
   syntax may emerge when MIR module-path lowering lands.
 - **EOF semantics divergence from Python** (no `EOFError`). User
   doc must call this out explicitly.
-- **`Result_StrIo` ABI shape** introduces a new tagged-union runtime
-  type. Aligns with the f-string Str ABI but requires careful
-  layout doc in `stdlib.md`. Phase 2 must include the layout
-  table.
+- **`Result_StrIo` ABI shape** deferred to ADR-0044a (W2 Phase 2
+  scope cap per Decision 1D). Under ADR-0044, `read_line()` returns
+  `*mut Str`; the typed-Result tagged-union layout will land with
+  ADR-0044a once typed-`Result[T, E]` lowering is in scope.
 
 ### Neutral / unknown
 
@@ -576,6 +603,50 @@ crates/cobrust-codegen/src/cranelift_backend.rs:1745  # runtime_helper_signature
 crates/cobrust-cli/src/build.rs:37              # PRELUDE
 crates/cobrust-cli/src/build/intrinsics.rs:88   # rewrite_print pattern
 ```
+
+## Follow-up: ADR-0044a (queued)
+
+ADR-0044a is queued as the typed-Result completion of the W2 Phase 2
+scope cap (see Decision 1D W2 Phase 2 scope cap sub-section).
+
+### Trigger
+
+Land ADR-0044a once **typed-`Result[T, E]` lowering** is in scope:
+the type checker and MIR lowering pipeline must recognize generic
+tagged-union `Result[T, E]` end-to-end (Ok / Err variants typed,
+exhaustive `match` lowering, `?`-operator desugar). Today, the
+pipeline only has opaque `IoError` shapes from f-string / runtime
+intrinsics; generic Result lowering is a Phase F.1.x prereq.
+
+### Scope
+
+- Flip `read_line()` source signature `-> str` → `-> Result[str, IoError]`.
+- Re-introduce `Result_StrIo` opaque tagged-union shape in
+  `crates/cobrust-stdlib/src/runtime.rs` (matching f-string Str ABI).
+- Re-introduce `__cobrust_io_err_*` accessor C-ABI helpers if the
+  Result discriminant needs runtime-side branching (otherwise codegen
+  can emit branch directly).
+- Change `__cobrust_read_line` C-ABI signature `() -> *mut Str` →
+  `() -> *mut Result_StrIo`.
+- Update Tier 1 tests #6 / #7 to assert `Ok("hello\n")` /
+  `Err(IoError::Eof)` (was `"hello\n"` / `""` under W2 scope cap).
+- Update PRELUDE stub `fn read_line() -> Result[str, IoError]: return
+  Err(IoError())`.
+- All `input()` / `argv()` surfaces remain unchanged — they ship
+  fully under ADR-0044.
+
+### Phase
+
+Phase F.1.x candidate (post-W2, pre-numerical Phase). Sequencing
+depends on the typed-Result lowering ADR (not yet drafted). When
+that lands, ADR-0044a is a small follow-on (≤ 1 sprint, D2 — single
+crate stdlib API change + codegen ABI shim flip).
+
+### Non-goal of ADR-0044a
+
+ADR-0044a does NOT touch `input()` or `argv()`. Those remain at the
+ADR-0044 W2 Phase 2 design (plain `-> str` / plain `-> list[str]`).
+The Result-typed `read_line()` is the only surface in scope.
 
 ## Why this ADR now
 
