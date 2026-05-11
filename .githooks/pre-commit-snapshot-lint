@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit-snapshot-lint
+#
+# Pre-commit hook: verify project_state_snapshot.md schema invariants before
+# a merge commit lands on main.
+#
+# Install (CTO's local machine only — cannot be auto-installed in CI):
+#   git config core.hooksPath .githooks
+#   chmod +x .githooks/pre-commit-snapshot-lint
+#
+# To bypass in an emergency (leaves a visible --no-verify in git history):
+#   git commit --no-verify -m "..."
+#
+# See ADR-0042 for rationale and full enforcement design.
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SCRIPT="$REPO_ROOT/scripts/snapshot-lint.sh"
+
+if [ ! -f "$SCRIPT" ]; then
+  echo "snapshot-lint: scripts/snapshot-lint.sh not found — skipping hook" >&2
+  exit 0
+fi
+
+if bash "$SCRIPT"; then
+  exit 0
+else
+  echo "" >&2
+  echo "snapshot-lint pre-commit hook FAILED." >&2
+  echo "Update project_state_snapshot.md to match the current repo state, then retry." >&2
+  echo "To bypass: git commit --no-verify (leaves visible record in history)" >&2
+  exit 1
+fi
