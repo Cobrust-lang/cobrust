@@ -1,0 +1,25 @@
+# LC-050 rotate-linked-list (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): "N K" on line 1; N values one per line
+# Output: list rotated right by K positions, one value per line
+# Algorithm: k = k mod N, new start index = N-k, print from that index wrapping around
+
+fn main() -> i64:
+    let nm_line = input("")
+    let n = parse_int_tok(nm_line, 0)
+    let k = parse_int_tok(nm_line, 1)
+    let vals = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(vals, i, parse_int(input("")))
+        i = i + 1
+    let rot: i64 = k - (k / n) * n
+    let start: i64 = n - rot
+    i = 0
+    while i < n:
+        let idx: i64 = start + i
+        if idx >= n:
+            idx = idx - n
+        print_int(list_get(vals, idx))
+        i = i + 1
+    return 0

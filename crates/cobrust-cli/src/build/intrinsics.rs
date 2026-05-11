@@ -119,6 +119,14 @@ pub const LIST_NEW_RUNTIME_SYMBOL: &str = "__cobrust_list_new";
 /// Prints Str buffer without trailing newline. ADR-0044 W2 Phase 3.
 pub const PRINT_NO_NL_RUNTIME_SYMBOL: &str = "__cobrust_print_no_nl";
 
+/// Runtime symbol for source-level `print_no_nl(<string literal>)` —
+/// the raw-bytes `(ptr, len)` variant introduced by ADR-0047 Option H
+/// to close LC-100 Pattern A (`.rodata` literal misalignment in the
+/// `StringBuffer` cast). Intrinsic-rewrite routes
+/// `Constant::Str` arguments here; runtime-str arguments continue
+/// to use [`PRINT_NO_NL_RUNTIME_SYMBOL`].
+pub const PRINT_NO_NL_LIT_RUNTIME_SYMBOL: &str = "__cobrust_print_no_nl_lit";
+
 /// Errors from the print-intrinsic rewrite.
 #[derive(Debug, thiserror::Error)]
 pub enum IntrinsicError {
@@ -720,17 +728,47 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     args.push(lst);
                 }
                 Kind::PrintNoNl => {
-                    // print_no_nl(s: str) → __cobrust_print_no_nl(buf_ptr)
+                    // print_no_nl(s: str) — operand-aware dispatch
+                    // (ADR-0047 Option H / LC-100 Pattern A fix):
+                    //   - `Constant::Str` literal → __cobrust_print_no_nl_lit
+                    //     (raw `(ptr, len)`; codegen's 1-arg-Str-to-(ptr,len)
+                    //     expansion fires because the runtime sig has 2 params).
+                    //   - non-literal runtime str → __cobrust_print_no_nl
+                    //     (existing StringBuffer-pointer entry; safe for
+                    //     heap-allocated str buffers from input/read_line/etc.).
+                    // Mirrors `Kind::Print` (line ~473-505) which already uses
+                    // this two-symbol pattern for `__cobrust_println` vs.
+                    // `__cobrust_println_str_buf`.
                     if args.len() != 1 {
                         return Err(IntrinsicError::PrintArgUnsupported {
                             found: format!("print_no_nl: expected 1 arg, got {}", args.len()),
                         });
                     }
-                    let str_arg = args[0].clone();
-                    *func =
-                        Operand::Constant(Constant::Str(PRINT_NO_NL_RUNTIME_SYMBOL.to_string()));
-                    args.clear();
-                    args.push(str_arg);
+                    match &args[0] {
+                        Operand::Constant(Constant::Str(s)) => {
+                            // Literal path: codegen expands the single
+                            // Constant::Str arg to a `(*const u8, usize)`
+                            // pair against the 2-param sig of
+                            // __cobrust_print_no_nl_lit. No StringBuffer
+                            // cast — closes the `.rodata` alignment defect.
+                            let lit = s.clone();
+                            *func = Operand::Constant(Constant::Str(
+                                PRINT_NO_NL_LIT_RUNTIME_SYMBOL.to_string(),
+                            ));
+                            args.clear();
+                            args.push(Operand::Constant(Constant::Str(lit)));
+                        }
+                        _ => {
+                            // Runtime-str path: forward the heap-buffer
+                            // pointer to the existing single-param entry.
+                            let str_arg = args[0].clone();
+                            *func = Operand::Constant(Constant::Str(
+                                PRINT_NO_NL_RUNTIME_SYMBOL.to_string(),
+                            ));
+                            args.clear();
+                            args.push(str_arg);
+                        }
+                    }
                 }
                 Kind::ListNew => {
                     // list_new(len) → __cobrust_list_new(0, len) -> list_ptr

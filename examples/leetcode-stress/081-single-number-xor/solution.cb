@@ -1,0 +1,17 @@
+# LC-081 single-number-xor (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: N (odd); Line 2: N ints where all except one appear twice
+# Output: the single non-duplicated number
+# Algorithm: XOR all values; pairs cancel out, leaving the single
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let acc: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        let v = parse_int_tok(line, i)
+        acc = acc ^ v
+        i = i + 1
+    print_int(acc)
+    return 0

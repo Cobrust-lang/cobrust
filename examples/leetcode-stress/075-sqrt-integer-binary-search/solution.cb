@@ -1,0 +1,21 @@
+# LC-075 sqrt-integer-binary-search (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): one line with non-negative integer X
+# Output: floor(sqrt(X))
+# Algorithm: binary search on [0, X]
+
+fn main() -> i64:
+    let x = parse_int(input(""))
+    if x == 0:
+        print_int(0)
+        return 0
+    let lo: i64 = 1
+    let hi: i64 = x
+    while lo < hi:
+        let mid = lo + (hi - lo + 1) / 2
+        if mid <= x / mid:
+            lo = mid
+        else:
+            hi = mid - 1
+    print_int(lo)
+    return 0

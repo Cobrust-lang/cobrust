@@ -1,0 +1,23 @@
+# LC-100 Pattern A repro fixture #5 — 10 consecutive single-char literals.
+#
+# Each char is an independent .rodata pointer with alignment 1. At least one
+# of 10 lands mis-aligned for the StringBuffer cast, triggering the panic at
+# fmt.rs:194 on the first failure. Models the LC-093 integer-to-roman
+# worst case (many one-char digit-symbol literals).
+#
+# Today: FAILS at runtime — first print_no_nl call aborts.
+# After Sprint 2 DEV: stdout = "abcdefghij\n", exit 0.
+
+fn main() -> i64:
+    print_no_nl("a")
+    print_no_nl("b")
+    print_no_nl("c")
+    print_no_nl("d")
+    print_no_nl("e")
+    print_no_nl("f")
+    print_no_nl("g")
+    print_no_nl("h")
+    print_no_nl("i")
+    print_no_nl("j")
+    print("")
+    return 0

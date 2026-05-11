@@ -1,0 +1,24 @@
+[[cases]]
+input = "4 4\n4 3 2 -1\n3 2 1 -1\n1 1 -1 -2\n-1 -1 -2 -3\n"
+expected_stdout = "8\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "2 2\n3 2\n1 0\n"
+expected_stdout = "0\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1 1\n-1\n"
+expected_stdout = "1\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "3 3\n5 1 0\n-1 -1 -1\n-5 -5 -5\n"
+expected_stdout = "6\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "2 4\n3 2 -1 -2\n1 0 -1 -3\n"
+expected_stdout = "4\n"
+expected_exit_code = 0

@@ -1,0 +1,71 @@
+# LC-068 word-break-dp (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: string s; Line 2: W (word count);
+#                Lines 3..W+2: one word per line
+# Output: "true" if s can be segmented using words from the dictionary
+# Algorithm: 1D DP; dp[i]=1 if s[0..i] is segmentable
+# Words stored as parallel (start, len) arrays over the concatenated buffer
+# using str_at character comparison
+
+fn words_match(s: str, pos: i64, word: str, wlen: i64) -> i64:
+    let k: i64 = 0
+    while k < wlen:
+        let sc = str_at(s, pos + k)
+        let wc = str_at(word, k)
+        if str_eq(sc, wc) == 0:
+            return 0
+        k = k + 1
+    return 1
+
+fn main() -> i64:
+    let s = input("")
+    let slen = str_len(s)
+    let w = parse_int(input(""))
+    let wstrs_0 = input("")
+    let wstrs_1 = input("")
+    let wstrs_2 = input("")
+    let wstrs_3 = input("")
+    let wstrs_4 = input("")
+    let wlens = list_new(5)
+    let actual_w = w
+    if actual_w > 5:
+        actual_w = 5
+    list_set(wlens, 0, str_len(wstrs_0))
+    list_set(wlens, 1, str_len(wstrs_1))
+    list_set(wlens, 2, str_len(wstrs_2))
+    list_set(wlens, 3, str_len(wstrs_3))
+    list_set(wlens, 4, str_len(wstrs_4))
+    let dp = list_new(slen + 1)
+    let i: i64 = 0
+    while i <= slen:
+        list_set(dp, i, 0)
+        i = i + 1
+    list_set(dp, 0, 1)
+    let pos: i64 = 1
+    while pos <= slen:
+        let wi: i64 = 0
+        while wi < actual_w:
+            let wlen = list_get(wlens, wi)
+            if wlen <= pos:
+                if list_get(dp, pos - wlen) == 1:
+                    let start = pos - wlen
+                    let matched: i64 = 0
+                    if wi == 0:
+                        matched = words_match(s, start, wstrs_0, wlen)
+                    elif wi == 1:
+                        matched = words_match(s, start, wstrs_1, wlen)
+                    elif wi == 2:
+                        matched = words_match(s, start, wstrs_2, wlen)
+                    elif wi == 3:
+                        matched = words_match(s, start, wstrs_3, wlen)
+                    else:
+                        matched = words_match(s, start, wstrs_4, wlen)
+                    if matched == 1:
+                        list_set(dp, pos, 1)
+            wi = wi + 1
+        pos = pos + 1
+    if list_get(dp, slen) == 1:
+        print("true")
+    else:
+        print("false")
+    return 0

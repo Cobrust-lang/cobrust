@@ -1,0 +1,39 @@
+# LC-023 hashmap-majority-element (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated integers
+# Output: the value that appears more than N/2 times
+# Algorithm: emulate frequency map with two parallel lists (values and counts)
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let vals = list_new(n)
+    let cnts = list_new(n)
+    let sz: i64 = 0
+    let i: i64 = 0
+    while i < n:
+        let v = parse_int_tok(line, i)
+        let found: i64 = 0
+        let j: i64 = 0
+        while j < sz:
+            if list_get(vals, j) == v:
+                list_set(cnts, j, list_get(cnts, j) + 1)
+                found = 1
+                j = sz
+            else:
+                j = j + 1
+        if found == 0:
+            list_set(vals, sz, v)
+            list_set(cnts, sz, 1)
+            sz = sz + 1
+        i = i + 1
+    let best_cnt: i64 = 0
+    let best_val: i64 = 0
+    let k: i64 = 0
+    while k < sz:
+        if list_get(cnts, k) > best_cnt:
+            best_cnt = list_get(cnts, k)
+            best_val = list_get(vals, k)
+        k = k + 1
+    print_int(best_val)
+    return 0

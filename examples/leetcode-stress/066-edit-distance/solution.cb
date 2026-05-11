@@ -1,0 +1,44 @@
+# LC-066 edit-distance (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: string s; Line 2: string t
+# Output: minimum edit distance (insert/delete/replace) between s and t
+# Algorithm: 2D DP emulated as 1D rolling array
+
+fn main() -> i64:
+    let s = input("")
+    let t = input("")
+    let m = str_len(s)
+    let n = str_len(t)
+    let dp = list_new(n + 1)
+    let j: i64 = 0
+    while j <= n:
+        list_set(dp, j, j)
+        j = j + 1
+    let i: i64 = 1
+    while i <= m:
+        let prev = i - 1
+        list_set(dp, 0, i)
+        let col: i64 = 1
+        while col <= n:
+            let si = str_at(s, i - 1)
+            let tj = str_at(t, col - 1)
+            let old_diag = prev
+            let ins = list_get(dp, col) + 1
+            let del = list_get(dp, col - 1) + 1
+            let rep_cost: i64 = 0
+            if str_eq(si, tj) == 1:
+                rep_cost = 0
+            else:
+                rep_cost = 1
+            let rep = old_diag + rep_cost
+            prev = list_get(dp, col)
+            let best = ins
+            if del < best:
+                best = del
+            if rep < best:
+                best = rep
+            list_set(dp, col, best)
+            col = col + 1
+        i = i + 1
+    print_int(list_get(dp, n))
+    return 0

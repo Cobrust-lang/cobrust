@@ -1,0 +1,48 @@
+# LC-020 twoptr-backspace-compare (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: string s; Line 2: string t
+# Output: "true" if both strings type out identically after # as backspace
+# Algorithm: simulate each string forward with write-cursor; compare results
+
+fn main() -> i64:
+    let s = input("")
+    let t = input("")
+    let sn = str_len(s)
+    let tn = str_len(t)
+    let sbuf = list_new(sn)
+    let tbuf = list_new(tn)
+    let sw: i64 = 0
+    let i: i64 = 0
+    while i < sn:
+        let c = str_at(s, i)
+        if str_eq_lit(c, "#") == 1:
+            if sw > 0:
+                sw = sw - 1
+        else:
+            let code = str_ord(c)
+            list_set(sbuf, sw, code)
+            sw = sw + 1
+        i = i + 1
+    let tw: i64 = 0
+    let j: i64 = 0
+    while j < tn:
+        let c2 = str_at(t, j)
+        if str_eq_lit(c2, "#") == 1:
+            if tw > 0:
+                tw = tw - 1
+        else:
+            let code2 = str_ord(c2)
+            list_set(tbuf, tw, code2)
+            tw = tw + 1
+        j = j + 1
+    if sw != tw:
+        print("false")
+        return 0
+    let k: i64 = 0
+    while k < sw:
+        if list_get(sbuf, k) != list_get(tbuf, k):
+            print("false")
+            return 0
+        k = k + 1
+    print("true")
+    return 0

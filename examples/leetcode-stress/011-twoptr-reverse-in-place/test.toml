@@ -1,0 +1,19 @@
+[[cases]]
+input = "5\n1 2 3 4 5\n"
+expected_stdout = "5\n4\n3\n2\n1\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "4\n10 20 30 40\n"
+expected_stdout = "40\n30\n20\n10\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1\n42\n"
+expected_stdout = "42\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "2\n7 3\n"
+expected_stdout = "3\n7\n"
+expected_exit_code = 0

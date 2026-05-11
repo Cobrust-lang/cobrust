@@ -603,6 +603,44 @@ pub unsafe extern "C" fn __cobrust_print_no_nl(buf: *mut u8) {
     let _ = <std::io::Stdout as std::io::Write>::flush(&mut std::io::stdout());
 }
 
+/// C-ABI shim for source-level `print_no_nl(literal)` where the argument is
+/// a compile-time-known string literal lowered to a `.rodata` byte pointer.
+///
+/// Unlike [`__cobrust_print_no_nl`] which casts `buf` to `*StringBuffer`
+/// (requires 8-byte alignment), this shim takes the raw `(ptr, len)` pair
+/// — exactly the shape of [`__cobrust_println`] — and writes the bytes to
+/// stdout without a trailing newline. Closes LC-100 Pattern A
+/// (`.rodata` literal misalignment) per ADR-0047 Option H + finding
+/// `lc100-pattern-a-rodata-literal-misalignment.md`.
+///
+/// The intrinsic-rewrite pass in `cobrust-cli/src/build/intrinsics.rs`
+/// detects `print_no_nl(Operand::Constant(Constant::Str(_)))` callsites
+/// and routes them here; runtime-str callsites continue to use
+/// [`__cobrust_print_no_nl`].
+///
+/// # Safety
+///
+/// `ptr` must point to `len` valid UTF-8 bytes for the duration of the
+/// call. `ptr` may be null iff `len == 0` (handled as a no-op, matching
+/// [`__cobrust_println`]'s null-input semantics).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_print_no_nl_lit(ptr: *const u8, len: usize) {
+    if ptr.is_null() || len == 0 {
+        // Null + zero-length is a clean no-op; mirrors __cobrust_print.
+        // Empty literal `""` is uninteresting — no bytes to emit and no
+        // newline to append (the explicit `print("")` follow-up still
+        // emits the trailing newline downstream).
+        return;
+    }
+    // SAFETY: caller-attestation per the `# Safety` clause. Codegen emits
+    // this call with a `.rodata` pointer + compile-time-known length from
+    // the `Constant::Str` payload, satisfying the contract.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        print(s);
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,

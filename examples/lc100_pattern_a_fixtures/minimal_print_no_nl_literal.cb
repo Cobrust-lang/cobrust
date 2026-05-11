@@ -1,0 +1,19 @@
+# LC-100 Pattern A repro fixture #1 — minimal print_no_nl on a single string literal.
+#
+# Today (Sprint 2 TEST authoring, HEAD 9f8ebc4): this program crashes at runtime with
+#   thread '<unnamed>' panicked at crates/cobrust-stdlib/src/fmt.rs:194:22:
+#   misaligned pointer dereference: address must be a multiple of 0x8 but is 0x...
+# because Cranelift codegen lowers the literal "hello" to a .rodata byte pointer
+# with alignment 1, and the `__cobrust_print_no_nl(buf: *mut u8)` shim casts that
+# pointer to `*StringBuffer` which requires alignment 8.
+#
+# After Sprint 2 DEV ships (Candidate F1 from finding lc100-pattern-a-rodata-literal-misalignment.md):
+# the codegen rewrites print_no_nl(Constant::Str) callsites to invoke a new
+# `__cobrust_print_no_nl_lit(ptr: *const u8, len: usize)` C-ABI variant that
+# takes raw (ptr, len) — no StringBuffer cast. This program then prints "hello\n"
+# exit 0.
+
+fn main() -> i64:
+    print_no_nl("hello")
+    print("")
+    return 0

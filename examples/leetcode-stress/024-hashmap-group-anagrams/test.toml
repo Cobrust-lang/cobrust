@@ -1,0 +1,14 @@
+[[cases]]
+input = "6\neat\ntea\ntan\nate\nnat\nbat\n"
+expected_stdout = "eat\ntea\nate\n\ntan\nnat\n\nbat\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1\nabc\n"
+expected_stdout = "abc\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "2\nab\nba\n"
+expected_stdout = "ab\nba\n"
+expected_exit_code = 0

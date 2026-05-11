@@ -1,0 +1,24 @@
+[[cases]]
+input = "11\n"
+expected_stdout = "3\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "128\n"
+expected_stdout = "1\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "0\n"
+expected_stdout = "0\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "255\n"
+expected_stdout = "8\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1023\n"
+expected_stdout = "10\n"
+expected_exit_code = 0

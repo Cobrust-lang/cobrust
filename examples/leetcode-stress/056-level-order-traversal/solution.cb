@@ -1,0 +1,87 @@
+# LC-056 level-order-traversal (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N lines each "val left_idx right_idx" (0-based, -1=null), root=node 0
+# Output: values level by level; same level space-separated, levels separated by newlines
+# Algorithm: BFS with level-end pointer; print space before non-first nodes in level, newline at level end
+
+fn print_int_no_nl(v: i64) -> i64:
+    let digits = list_new(20)
+    let d: i64 = 0
+    if v == 0:
+        print_no_nl("0")
+        return 0
+    let neg: i64 = 0
+    if v < 0:
+        neg = 1
+        v = 0 - v
+    while v > 0:
+        list_set(digits, d, v - (v / 10) * 10)
+        v = v / 10
+        d = d + 1
+    if neg == 1:
+        print_no_nl("-")
+    let j: i64 = d - 1
+    while j >= 0:
+        let digit = list_get(digits, j)
+        if digit == 0:
+            print_no_nl("0")
+        elif digit == 1:
+            print_no_nl("1")
+        elif digit == 2:
+            print_no_nl("2")
+        elif digit == 3:
+            print_no_nl("3")
+        elif digit == 4:
+            print_no_nl("4")
+        elif digit == 5:
+            print_no_nl("5")
+        elif digit == 6:
+            print_no_nl("6")
+        elif digit == 7:
+            print_no_nl("7")
+        elif digit == 8:
+            print_no_nl("8")
+        else:
+            print_no_nl("9")
+        j = j - 1
+    return 0
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let val = list_new(n)
+    let lft = list_new(n)
+    let rgt = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let line = input("")
+        list_set(val, i, parse_int_tok(line, 0))
+        list_set(lft, i, parse_int_tok(line, 1))
+        list_set(rgt, i, parse_int_tok(line, 2))
+        i = i + 1
+    let q = list_new(n + 2)
+    let qhead: i64 = 0
+    let qtail: i64 = 0
+    list_set(q, qtail, 0)
+    qtail = qtail + 1
+    let level_end: i64 = 1
+    let first_in_level: i64 = 1
+    while qhead < qtail:
+        let node = list_get(q, qhead)
+        qhead = qhead + 1
+        if first_in_level == 0:
+            print_no_nl(" ")
+        print_int_no_nl(list_get(val, node))
+        first_in_level = 0
+        let l = list_get(lft, node)
+        let r = list_get(rgt, node)
+        if l != -1:
+            list_set(q, qtail, l)
+            qtail = qtail + 1
+        if r != -1:
+            list_set(q, qtail, r)
+            qtail = qtail + 1
+        if qhead == level_end:
+            print("")
+            level_end = qtail
+            first_in_level = 1
+    return 0

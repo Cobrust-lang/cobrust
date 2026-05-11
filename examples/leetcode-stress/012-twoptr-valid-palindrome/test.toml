@@ -1,0 +1,24 @@
+[[cases]]
+input = "A man a plan a canal Panama\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "race a car\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = " \n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "abcba\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "abcd\n"
+expected_stdout = "false\n"
+expected_exit_code = 0

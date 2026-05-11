@@ -1,0 +1,25 @@
+# LC-063 unique-paths-grid (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): one line with M and N (rows cols) space-separated
+# Output: number of unique paths from top-left to bottom-right
+# Algorithm: 1D DP rolling row; dp[j] = paths to current cell
+
+fn main() -> i64:
+    let line = input("")
+    let m = parse_int_tok(line, 0)
+    let n = parse_int_tok(line, 1)
+    let dp = list_new(n)
+    let j: i64 = 0
+    while j < n:
+        list_set(dp, j, 1)
+        j = j + 1
+    let i: i64 = 1
+    while i < m:
+        let col: i64 = 1
+        while col < n:
+            let prev = list_get(dp, col - 1) + list_get(dp, col)
+            list_set(dp, col, prev)
+            col = col + 1
+        i = i + 1
+    print_int(list_get(dp, n - 1))
+    return 0

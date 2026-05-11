@@ -1,0 +1,50 @@
+# LC-054 path-sum-exists (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): "N target" on line 1; N lines each "val left_idx right_idx" (0-based, -1=null), root=node 0
+# Output: "true" if any root-to-leaf path sums to target, "false" otherwise
+# Algorithm: iterative DFS with explicit stack of (node_idx, accumulated_sum) pairs
+
+fn main() -> i64:
+    let nm_line = input("")
+    let n = parse_int_tok(nm_line, 0)
+    let target = parse_int_tok(nm_line, 1)
+    let val = list_new(n)
+    let lft = list_new(n)
+    let rgt = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let line = input("")
+        list_set(val, i, parse_int_tok(line, 0))
+        list_set(lft, i, parse_int_tok(line, 1))
+        list_set(rgt, i, parse_int_tok(line, 2))
+        i = i + 1
+    let stk_node = list_new(n + 1)
+    let stk_sum = list_new(n + 1)
+    let top: i64 = 0
+    list_set(stk_node, top, 0)
+    list_set(stk_sum, top, list_get(val, 0))
+    top = top + 1
+    let found: i64 = 0
+    while top > 0 and found == 0:
+        top = top - 1
+        let node = list_get(stk_node, top)
+        let s = list_get(stk_sum, top)
+        let l = list_get(lft, node)
+        let r = list_get(rgt, node)
+        if l == -1 and r == -1:
+            if s == target:
+                found = 1
+        else:
+            if l != -1:
+                list_set(stk_node, top, l)
+                list_set(stk_sum, top, s + list_get(val, l))
+                top = top + 1
+            if r != -1:
+                list_set(stk_node, top, r)
+                list_set(stk_sum, top, s + list_get(val, r))
+                top = top + 1
+    if found == 1:
+        print("true")
+    else:
+        print("false")
+    return 0

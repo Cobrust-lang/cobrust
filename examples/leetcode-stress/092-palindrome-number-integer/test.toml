@@ -1,0 +1,29 @@
+[[cases]]
+input = "121\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "-121\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "10\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "0\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1221\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "12321\n"
+expected_stdout = "true\n"
+expected_exit_code = 0

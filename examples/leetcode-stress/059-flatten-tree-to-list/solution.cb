@@ -1,0 +1,35 @@
+# LC-059 flatten-tree-to-list (ADR-0047 LC-100 Tier A bucket B2).
+#
+# Input  (stdin): N on line 1; N lines each "val left_idx right_idx" (0-based, -1=null), root=node 0
+# Output: values in pre-order traversal, one per line (matches flattened linked list order)
+# Algorithm: iterative pre-order DFS using an explicit stack; push right then left
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let val = list_new(n)
+    let lft = list_new(n)
+    let rgt = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let line = input("")
+        list_set(val, i, parse_int_tok(line, 0))
+        list_set(lft, i, parse_int_tok(line, 1))
+        list_set(rgt, i, parse_int_tok(line, 2))
+        i = i + 1
+    let stk = list_new(n + 1)
+    let top: i64 = 0
+    list_set(stk, top, 0)
+    top = top + 1
+    while top > 0:
+        top = top - 1
+        let node = list_get(stk, top)
+        print_int(list_get(val, node))
+        let r = list_get(rgt, node)
+        let l = list_get(lft, node)
+        if r != -1:
+            list_set(stk, top, r)
+            top = top + 1
+        if l != -1:
+            list_set(stk, top, l)
+            top = top + 1
+    return 0

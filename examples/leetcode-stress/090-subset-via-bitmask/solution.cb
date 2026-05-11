@@ -1,0 +1,66 @@
+# LC-090 subset-via-bitmask (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: N; Line 2: N space-separated integers
+# Output: all non-empty subsets listed in bitmask order (mask 1..2^N-1);
+#         each subset printed as space-separated elements, one subset per line
+# Algorithm: iterate masks 1..(2^N-1); for each bit set, print element
+
+fn print_int_no_nl(n: i64):
+    if n == 0:
+        print_no_nl("0")
+        return
+    let digits = list_new(20)
+    let d: i64 = 0
+    let v = n
+    while v > 0:
+        list_set(digits, d, v % 10)
+        v = v / 10
+        d = d + 1
+    let k = d - 1
+    while k >= 0:
+        let dv = list_get(digits, k)
+        if dv == 0:
+            print_no_nl("0")
+        elif dv == 1:
+            print_no_nl("1")
+        elif dv == 2:
+            print_no_nl("2")
+        elif dv == 3:
+            print_no_nl("3")
+        elif dv == 4:
+            print_no_nl("4")
+        elif dv == 5:
+            print_no_nl("5")
+        elif dv == 6:
+            print_no_nl("6")
+        elif dv == 7:
+            print_no_nl("7")
+        elif dv == 8:
+            print_no_nl("8")
+        else:
+            print_no_nl("9")
+        k = k - 1
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let elems = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(elems, i, parse_int_tok(line, i))
+        i = i + 1
+    let total = 1 << n
+    let mask: i64 = 1
+    while mask < total:
+        let first: i64 = 1
+        let j: i64 = 0
+        while j < n:
+            if (mask >> j) & 1 == 1:
+                if first == 0:
+                    print_no_nl(" ")
+                print_int_no_nl(list_get(elems, j))
+                first = 0
+            j = j + 1
+        print("")
+        mask = mask + 1
+    return 0

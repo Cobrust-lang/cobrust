@@ -1,0 +1,14 @@
+# LC-086 power-of-two-check (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): one integer N
+# Output: "true" if N is a power of 2, "false" otherwise
+# Algorithm: N > 0 and N & (N-1) == 0
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    if n > 0:
+        if (n & (n - 1)) == 0:
+            print("true")
+            return 0
+    print("false")
+    return 0

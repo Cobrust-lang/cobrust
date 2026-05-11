@@ -1,0 +1,24 @@
+[[cases]]
+input = "applepenapple\n2\napple\npen\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "catsandog\n5\ncats\ndog\nsand\nand\ncat\n"
+expected_stdout = "false\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "abc\n2\nab\nc\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "leetcode\n2\nleet\ncode\n"
+expected_stdout = "true\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "a\n1\na\n"
+expected_stdout = "true\n"
+expected_exit_code = 0

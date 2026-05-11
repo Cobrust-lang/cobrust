@@ -1,0 +1,18 @@
+# LC-100 Pattern A repro fixture #3 — print_no_nl on a runtime str (from input).
+#
+# This program tests the OPPOSITE direction: when print_no_nl receives a
+# StringBuffer-allocated pointer (from `input("")`), the original
+# `__cobrust_print_no_nl` code path is CORRECT — the StringBuffer cast at
+# fmt.rs:194 is safe because input() returns an 8-byte-aligned heap-allocated
+# StringBuffer (via `alloc_str_buffer`).
+#
+# This program PASSES today and MUST CONTINUE to pass after Sprint 2 DEV ships.
+# It guards against DEV accidentally removing the existing __cobrust_print_no_nl
+# code path or changing the intrinsic-rewrite logic to always route to the new
+# _lit variant.
+
+fn main() -> i64:
+    let line = input("")
+    print_no_nl(line)
+    print("")
+    return 0

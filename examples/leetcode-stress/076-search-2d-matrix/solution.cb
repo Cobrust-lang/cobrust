@@ -1,0 +1,41 @@
+# LC-076 search-2d-matrix (ADR-0047 LC-100 Tier A bucket B3).
+#
+# Input  (stdin): Line 1: M N (rows cols); M lines each with N ints; last line: target
+# Output: "true" if target is in the matrix, "false" otherwise
+# Algorithm: treat M*N matrix as 1D sorted array; binary search on virtual index
+
+fn main() -> i64:
+    let dims = input("")
+    let m = parse_int_tok(dims, 0)
+    let n = parse_int_tok(dims, 1)
+    let cells = list_new(m * n)
+    let r: i64 = 0
+    while r < m:
+        let rline = input("")
+        let c: i64 = 0
+        while c < n:
+            let v = parse_int_tok(rline, c)
+            list_set(cells, r * n + c, v)
+            c = c + 1
+        r = r + 1
+    let target = parse_int(input(""))
+    let lo: i64 = 0
+    let hi: i64 = m * n - 1
+    let found: i64 = 0
+    while lo <= hi:
+        let mid = lo + (hi - lo) / 2
+        let row = mid / n
+        let col = mid % n
+        let mv = list_get(cells, row * n + col)
+        if mv == target:
+            found = 1
+            lo = hi + 1
+        elif mv < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    if found == 1:
+        print("true")
+    else:
+        print("false")
+    return 0

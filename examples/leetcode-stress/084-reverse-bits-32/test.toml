@@ -1,0 +1,24 @@
+[[cases]]
+input = "43261596\n"
+expected_stdout = "964176192\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "0\n"
+expected_stdout = "0\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "1\n"
+expected_stdout = "2147483648\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "4294967295\n"
+expected_stdout = "4294967295\n"
+expected_exit_code = 0
+
+[[cases]]
+input = "2\n"
+expected_stdout = "1073741824\n"
+expected_exit_code = 0

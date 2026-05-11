@@ -1,0 +1,31 @@
+# LC-096 jump-game-can-reach (ADR-0047 LC-100 Tier A bucket B4).
+#
+# Input  (stdin):
+#   Line 1: N
+#   Line 2: N space-separated non-negative integers (jump lengths)
+# Output: "true" if index N-1 is reachable from index 0, "false" otherwise
+#
+# Algorithm: greedy max-reach scan.
+# Track the furthest index reachable at each step.
+# If current index exceeds max_reach, we are stuck.
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let nums = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(nums, i, parse_int_tok(line, i))
+        i = i + 1
+    let max_reach: i64 = 0
+    let j: i64 = 0
+    while j < n:
+        if j > max_reach:
+            print("false")
+            return 0
+        let reach = j + list_get(nums, j)
+        if reach > max_reach:
+            max_reach = reach
+        j = j + 1
+    print("true")
+    return 0

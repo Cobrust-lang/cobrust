@@ -1,0 +1,27 @@
+# LC-014 twoptr-remove-duplicates (ADR-0047 LC-100 Tier A bucket B1).
+#
+# Input  (stdin): Line 1: N; Line 2: N sorted space-separated integers
+# Output: count K of unique values, then K unique values in sorted order
+# Algorithm: write-cursor advances only when element differs from previous
+
+fn main() -> i64:
+    let n = parse_int(input(""))
+    let line = input("")
+    let nums = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        list_set(nums, i, parse_int_tok(line, i))
+        i = i + 1
+    let write: i64 = 1
+    let j: i64 = 1
+    while j < n:
+        if list_get(nums, j) != list_get(nums, j - 1):
+            list_set(nums, write, list_get(nums, j))
+            write = write + 1
+        j = j + 1
+    print_int(write)
+    let k: i64 = 0
+    while k < write:
+        print_int(list_get(nums, k))
+        k = k + 1
+    return 0
