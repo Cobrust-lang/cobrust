@@ -78,7 +78,7 @@ The bound user-scenario MUST be one of:
 
 | Tier | Scenario type | Examples |
 |---|---|---|
-| **Install** | `cargo install --git <repo> <crate>` or `curl <tarball> | tar xz && ./binary --version` succeeds + binary reports the tag version | v0.1.1 / v0.1.2 had this scenario |
+| **Install** | `cargo install --git <repo> <crate>` or `curl <tarball> &#124; tar xz && ./binary --version` succeeds + binary reports the tag version | v0.1.1 / v0.1.2 had this scenario |
 | **Capability** | A representative `.cb` program compiles + runs with expected stdout given documented stdin | W2 wedge's `examples/leetcode/two_sum.cb` is the canonical post-W2 scenario |
 | **Library translation** | A `cobrust-<lib>` PyO3-wrapped library passes its CPython differential gate | post-T1.1: `cobrust-tomli` parses real-world TOML matching CPython's tomllib output |
 
@@ -120,7 +120,7 @@ The scenario tier is recorded in the release notes under `## What v0.X delivers 
 - ADR-0044 — W2 wedge binding; ADR-0045 ensures future releases that touch user-facing surface get verified the same way.
 - ADR-0046 — release.yml asset consolidation; ADR-0045 ensures the bound user-scenario's URLs are tier-1 contract-protected.
 - Memory `feedback_p10_post_compaction_identity_recovery.md` — same family of "declared without independent verification" anti-pattern at the agent-identity level.
-- ADSD `failure-modes-catalogue.md` F19 candidate — review-claude is codifying this entry in parallel.
+- ADSD `failure-modes-catalogue.md` F19 confirmed entry — `Cobrust-lang/agent-driven-development` commit `60dd769` (ADSD catalogue 第 21 entry; review-claude promoted from candidate to confirmed 2026-05-11 post §A.3→§A.5 empirical cycle).
 
 ## Why this ADR now
 

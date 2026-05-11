@@ -4,7 +4,7 @@ adr_id: 0046
 title: "release.yml asset consolidation + tier-1 platform contract"
 status: accepted
 date: 2026-05-11
-last_verified_commit: TBD
+last_verified_commit: 03c70f2
 supersedes: []
 superseded_by: []
 relates_to: [adr:0044, finding:m10-sha-pin-hallucination, finding:f19]
