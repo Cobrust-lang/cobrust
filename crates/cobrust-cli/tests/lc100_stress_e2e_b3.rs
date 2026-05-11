@@ -307,7 +307,6 @@ fn test_lc068_word_break_dp() {
 // =====================================================================
 
 #[test]
-#[ignore = "LC-069 pascal-triangle-row: RUNTIME-FAIL; see failure.md (print_no_nl multi-literal misalignment gap — space-separated integer output not supported)"]
 fn test_lc069_pascal_triangle_row() {
     let out = build_and_run_stress("069-pascal-triangle-row", b"0\n");
     assert_eq!(out, "1\n", "case 1");
@@ -368,7 +367,6 @@ fn test_lc071_search_rotated_sorted() {
 // =====================================================================
 
 #[test]
-#[ignore = "LC-072 find-first-last-position: RUNTIME-FAIL; see failure.md (print_no_nl multi-literal misalignment gap — space-separated output not supported)"]
 fn test_lc072_find_first_last_position() {
     let out = build_and_run_stress("072-find-first-last-position", b"6\n5 7 7 8 8 10\n8\n");
     assert_eq!(out, "3 4\n", "case 1");
@@ -748,7 +746,6 @@ fn test_lc089_bitwise_and_range() {
 // =====================================================================
 
 #[test]
-#[ignore = "LC-090 subset-via-bitmask: RUNTIME-FAIL; see failure.md (print_no_nl multi-literal misalignment gap — space-separated integer output not supported)"]
 fn test_lc090_subset_via_bitmask() {
     let out = build_and_run_stress("090-subset-via-bitmask", b"1\n5\n");
     assert_eq!(out, "5\n", "case 1");

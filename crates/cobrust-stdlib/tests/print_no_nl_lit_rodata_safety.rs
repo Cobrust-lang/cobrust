@@ -95,8 +95,9 @@
 //       per the comments in each test.
 // =====================================================================
 
-const SPRINT_2_DEV_IMPL_LANDED: bool = false;
+const SPRINT_2_DEV_IMPL_LANDED: bool = true;
 
+#[allow(dead_code)]
 fn require_impl(test_name: &str) {
     assert!(
         SPRINT_2_DEV_IMPL_LANDED,
@@ -129,18 +130,16 @@ fn require_impl(test_name: &str) {
 
 #[test]
 fn test_print_no_nl_lit_writes_rodata_literal_to_stdout() {
-    require_impl("test_print_no_nl_lit_writes_rodata_literal_to_stdout");
-
-    // POST-IMPL body (DEV agent replaces require_impl above with this):
-    //
-    // let bytes = b"hello";
-    // unsafe {
-    //     cobrust_stdlib::io::__cobrust_print_no_nl_lit(bytes.as_ptr(), bytes.len());
-    // }
-    // // No panic = pass. Stdout side effect is not asserted here
-    // // (would require process-level capture). The e2e test corpus
-    // // `crates/cobrust-cli/tests/lc100_pattern_a_repro_e2e.rs` covers
-    // // the stdout-content assertion via subprocess.
+    let bytes = b"hello";
+    // SAFETY: bytes points to 5 valid UTF-8 bytes for the duration of the
+    // call; the shim never retains the pointer beyond the call.
+    unsafe {
+        cobrust_stdlib::io::__cobrust_print_no_nl_lit(bytes.as_ptr(), bytes.len());
+    }
+    // No panic = pass. Stdout side effect verified by the e2e corpus
+    // `crates/cobrust-cli/tests/lc100_pattern_a_repro_e2e.rs` (subprocess
+    // capture). For the misalignment-defect repro, "did not panic" is
+    // the load-bearing invariant.
 }
 
 // =====================================================================
@@ -154,18 +153,18 @@ fn test_print_no_nl_lit_writes_rodata_literal_to_stdout() {
 
 #[test]
 fn test_print_no_nl_lit_empty_literal_is_noop() {
-    require_impl("test_print_no_nl_lit_empty_literal_is_noop");
-
-    // POST-IMPL body:
-    //
-    // let bytes = b"";
-    // unsafe {
-    //     cobrust_stdlib::io::__cobrust_print_no_nl_lit(bytes.as_ptr(), 0);
-    // }
-    // // Also assert null-ptr + zero-len is safe (paralleling __cobrust_println):
-    // unsafe {
-    //     cobrust_stdlib::io::__cobrust_print_no_nl_lit(std::ptr::null(), 0);
-    // }
+    let bytes = b"";
+    // SAFETY: empty slice; the shim's null/zero-len guard returns early
+    // without dereferencing the pointer.
+    unsafe {
+        cobrust_stdlib::io::__cobrust_print_no_nl_lit(bytes.as_ptr(), 0);
+    }
+    // Null + zero-len must also be safe (parallels __cobrust_println's
+    // null-input semantics at io.rs:73-77).
+    // SAFETY: documented null-with-zero-length path.
+    unsafe {
+        cobrust_stdlib::io::__cobrust_print_no_nl_lit(std::ptr::null(), 0);
+    }
 }
 
 // =====================================================================
@@ -180,15 +179,13 @@ fn test_print_no_nl_lit_empty_literal_is_noop() {
 
 #[test]
 fn test_print_no_nl_lit_non_ascii_utf8_literal() {
-    require_impl("test_print_no_nl_lit_non_ascii_utf8_literal");
-
-    // POST-IMPL body:
-    //
-    // let s = "日本語";
-    // assert_eq!(s.len(), 9, "sanity: 3 codepoints × 3 bytes each");
-    // unsafe {
-    //     cobrust_stdlib::io::__cobrust_print_no_nl_lit(s.as_ptr(), s.len());
-    // }
+    let s = "日本語";
+    assert_eq!(s.len(), 9, "sanity: 3 codepoints × 3 bytes each");
+    // SAFETY: `s` is a valid `&str` (compiler-validated UTF-8); the shim
+    // writes the bytes without re-validating.
+    unsafe {
+        cobrust_stdlib::io::__cobrust_print_no_nl_lit(s.as_ptr(), s.len());
+    }
 }
 
 // =====================================================================
@@ -203,20 +200,21 @@ fn test_print_no_nl_lit_non_ascii_utf8_literal() {
 
 #[test]
 fn test_print_no_nl_lit_multiple_sequential_calls() {
-    require_impl("test_print_no_nl_lit_multiple_sequential_calls");
-
-    // POST-IMPL body:
-    //
-    // let parts: &[&[u8]] = &[b"hi", b" ", b"world"];
-    // for p in parts {
-    //     unsafe {
-    //         cobrust_stdlib::io::__cobrust_print_no_nl_lit(p.as_ptr(), p.len());
-    //     }
-    // }
-    // // Followed by a final newline via the existing __cobrust_println:
-    // unsafe {
-    //     cobrust_stdlib::io::__cobrust_println(std::ptr::null(), 0);
-    // }
+    let parts: &[&[u8]] = &[b"hi", b" ", b"world"];
+    for part in parts {
+        // SAFETY: each `part` is a valid byte slice for its lifetime;
+        // the shim does not retain the pointer.
+        unsafe {
+            cobrust_stdlib::io::__cobrust_print_no_nl_lit(part.as_ptr(), part.len());
+        }
+    }
+    // Followed by a final newline via the existing __cobrust_println —
+    // mirrors the source-level `print_no_nl(...); print_no_nl(...); print("")`
+    // pattern used by LC-093 integer-to-roman and siblings.
+    // SAFETY: documented null-with-zero-length path emits a newline.
+    unsafe {
+        cobrust_stdlib::io::__cobrust_println(std::ptr::null(), 0);
+    }
 }
 
 // =====================================================================
