@@ -3,7 +3,7 @@
 # On git tag v* — build release binaries for all tier-1 targets and
 # upload them to a GitHub Release as tar.gz archives.
 #
-# File naming convention: cobrust-{version}-{target_triple}.tar.gz
+# File naming convention: cobrust-v{version}-{target_triple}.tar.gz
 # Binary inside archive: cobrust  (or cobrust.exe on Windows)
 #
 # Tier-1 targets (required, fail CI on error):
@@ -62,7 +62,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           TARGET="${{ matrix.target }}"
-          ARCHIVE="cobrust-${VERSION}-${TARGET}.tar.gz"
+          ARCHIVE="cobrust-v${VERSION}-${TARGET}.tar.gz"
           BINARY="target/${TARGET}/release/cobrust"
           tar czf "${ARCHIVE}" -C "$(dirname ${BINARY})" "$(basename ${BINARY})"
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
@@ -124,7 +124,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           TARGET="${{ matrix.target }}"
-          ARCHIVE="cobrust-${VERSION}-${TARGET}.tar.gz"
+          ARCHIVE="cobrust-v${VERSION}-${TARGET}.tar.gz"
           BINARY="target/${TARGET}/release/cobrust"
           tar czf "${ARCHIVE}" -C "$(dirname ${BINARY})" "$(basename ${BINARY})"
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
@@ -135,7 +135,7 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v',''
           $target = "${{ matrix.target }}"
-          $archive = "cobrust-${version}-${target}.tar.gz"
+          $archive = "cobrust-v${version}-${target}.tar.gz"
           $binary = "target\${target}\release\cobrust.exe"
           tar czf $archive -C (Split-Path $binary) (Split-Path $binary -Leaf)
           echo "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -182,7 +182,8 @@ jobs:
             ### Option A — cargo install (requires Rust toolchain)
 
             ```bash
-            cargo install cobrust-cli
+            cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
+            # (crates.io publish queued for v0.2.0)
             ```
 
             ### Option B — prebuilt binary (no Rust needed)
