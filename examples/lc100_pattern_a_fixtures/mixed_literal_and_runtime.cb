@@ -1,0 +1,16 @@
+# LC-100 Pattern A repro fixture #4 — print_no_nl interleaving literal + runtime str.
+#
+# Tests that within a single program both code paths coexist correctly. The
+# Sprint 2 DEV intrinsic-rewrite must distinguish at the AST/MIR level
+# whether the argument to print_no_nl is a `Constant::Str` (route to _lit
+# variant) vs. a runtime str expression (keep original variant).
+#
+# Today: crashes on the FIRST print_no_nl("prefix=") call.
+# After Sprint 2 DEV: outputs "prefix=<stdin_line>\n" exit 0.
+
+fn main() -> i64:
+    let line = input("")
+    print_no_nl("prefix=")
+    print_no_nl(line)
+    print("")
+    return 0
