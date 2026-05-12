@@ -8,7 +8,7 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
-description = "Cobrust — Python ergonomics + Rust safety + AI-native compiler (CLI)"
+description = "AI-friendly Python successor in Rust with LLM-driven translation pipeline and AI-native stdlib in development (Phase F.2)."
 keywords = ["cobrust", "compiler", "language", "python", "cli"]
 categories = ["command-line-utilities", "development-tools", "compilers"]
 
