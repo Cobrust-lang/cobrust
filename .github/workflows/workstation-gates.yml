@@ -1,0 +1,71 @@
+name: Workstation Gates
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to test
+        required: true
+        default: feature/alpha-ai-native
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workstation-gates-${{ github.event.inputs.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  gates:
+    name: <self-hosted-runner> heavy gates
+    runs-on: [self-hosted, dg-workstation, cobrust-heavy, linux, x64]
+    timeout-minutes: 180
+    steps:
+      - name: Checkout requested ref
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Show runner resources
+        run: |
+          set -euo pipefail
+          uname -a
+          nproc
+          free -h || true
+          command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi || true
+          command -v mamba >/dev/null 2>&1 && mamba --version || true
+          rustc --version
+          cargo --version
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets --locked
+
+      - name: cargo test with paired gate
+        run: |
+          set +e
+          LOG="${RUNNER_TEMP}/cobrust-workspace-test.log"
+          cargo test --workspace --locked --no-fail-fast >"${LOG}" 2>&1
+          EXIT=$?
+          FAILED=$(grep -c '^test result: FAILED' "${LOG}" || true)
+          cat "${LOG}"
+          echo "cargo_test_exit=${EXIT}"
+          echo "failed_grep=${FAILED}"
+          if [ "${EXIT}" -ne 0 ]; then
+            exit "${EXIT}"
+          fi
+          if [ "${FAILED}" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: doc coverage
+        run: bash scripts/doc-coverage.sh
