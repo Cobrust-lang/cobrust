@@ -1,6 +1,6 @@
 # Cobrust 中文文档
 
-> Cobra 🐍 + Rust 🦀 — 用 Rust 实现的 Python 继任者，自带 AI 原生编译器闭环翻译整个 Python 生态。
+> Cobra 🐍 + Rust 🦀 — 用 Rust 实现的 Python 继任者，配备 LLM 驱动的翻译流水线闭环将 Python 库翻译成经过验证的 Rust。AI 原生标准库正在 v0.2.0-alpha 开发中。
 
 ## 文档地图
 

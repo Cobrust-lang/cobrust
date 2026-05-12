@@ -2,7 +2,7 @@
 
 ## One-sentence positioning
 
-Cobrust is a next-generation, statically-typed language **implemented in Rust** for the **Python ecosystem**, shipped with an **AI-native compiler that treats LLMs as first-class components**.
+Cobrust is a next-generation, statically-typed language **implemented in Rust** for the **Python ecosystem**, shipped with an **LLM-driven translation pipeline that treats LLMs as first-class components**, and a Phase F.2 AI-native stdlib in development.
 
 ## The problem we solve
 

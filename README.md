@@ -4,7 +4,7 @@
 
 # Cobrust
 
-**AI-native compiler that auto-translates Python libraries into verified Rust.**
+**AI-friendly Python successor in Rust, with LLM-driven translation pipeline and AI-native stdlib (in development).**
 
 *Cobra 🐍 + Rust 🦀 — Python ergonomics, Rust safety, zero migration cost.*
 
@@ -55,7 +55,7 @@ Cobrust is **two halves co-designed**:
 
 1. **A statically-typed language** — Python ergonomics (indentation, comprehensions, f-strings, decorators, structural pattern matching), Rust semantics (ownership, `Result<T, E>`, no GIL, no implicit truthiness, no mutable defaults). Compiles via Cranelift to native binaries.
 
-2. **An AI-native compiler** — closed-loop translation pipeline: spec extraction → consensus translation → build/behavior/perf gates → downstream-dep validation. Uses LLMs as a first-class compiler component.
+2. **An LLM-driven translation subsystem** — closed-loop pipeline: spec extraction → consensus translation → build/behavior/perf gates → downstream-dep validation. Uses LLMs as a first-class compiler component.
 
 The wedge: **AI translates the existing Python ecosystem into Cobrust automatically.** No rewrite, no annotations, no manual port. Drop-in `pip install` of a verified Rust replacement.
 

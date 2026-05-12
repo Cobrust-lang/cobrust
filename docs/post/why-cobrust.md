@@ -1,4 +1,4 @@
-# Why Cobrust — an AI-native compiler that translates Python libraries into verified Rust
+# Why Cobrust — an AI-friendly Python successor with LLM-driven translation pipeline
 
 > *Cobrust 0.1.0-beta · 2026-05-10 · Built in public, by AI agents working with humans*
 
