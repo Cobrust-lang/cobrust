@@ -34,6 +34,19 @@ end-to-end driver and ships the M10 hello-world contract.
   comparison + boolean + var-lookup + `let`-binding. Cold start <200ms
   (~10ms release on macOS arm64). 50-session golden corpus at
   `examples/repl-session.txt`.
+- **M-AI.0 — delivered.** ADR-0048 + spike
+  `docs/agent/spike/m-ai-0-cobrust-llm-spike.md` (SHA 705f592)
+  extends `PRELUDE` with three new flat-fn stubs
+  (`llm_complete` / `llm_dispatch` / `llm_stream`) and the
+  intrinsic-rewrite pass (`crates/cobrust-cli/src/build/intrinsics.rs`)
+  with three matching `Kind` variants + match arms. Each rewrite
+  rewrites the MIR `Call`'s `func` operand to a runtime symbol
+  (`__cobrust_llm_complete` / `__cobrust_llm_dispatch` /
+  `__cobrust_llm_stream`) exported by `cobrust-stdlib::llm`. All three
+  arms preserve the operand list unchanged (Str args remain pointer-
+  only at the C ABI). Codegen amends `runtime_helper_signatures` with
+  three new entries (`(p, p, p) -> p` for complete/stream; `(p, p) -> p`
+  for dispatch).
 
 ## Public surface (M10)
 

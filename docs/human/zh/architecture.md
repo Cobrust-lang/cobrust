@@ -2078,3 +2078,62 @@ CI 全绿但差分 oracle 从未被调用——这是一个假绿。
 | ubuntu-latest（CI） | 运行——`apt-get install python3.11` 提供 oracle |
 | macos-latest（CI） | 运行——Homebrew Python 在 PATH 上 |
 | 精简 CI / 本地（无 Python） | 跳过——退出 0，发出 warning |
+
+## AI 原生 stdlib：cobrust.llm（M-AI.0 — 已交付）
+
+ADR-0048 + spike `docs/agent/spike/m-ai-0-cobrust-llm-spike.md`（SHA 705f592）
+为 Cobrust 增加了对 `crates/cobrust-llm-router` 的 source-level 绑定。在 α
+Phase 2 完成，提供三个 PRELUDE 内置函数：
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `llm_complete(provider, model, prompt) -> str` | 三参数皆为 `str` | 直接以指定的 `(provider, model)` 派发一次 completion 请求；任何错误返回 `""`（Decision 7） |
+| `llm_dispatch(task, prompt) -> str` | 两参数皆为 `str` | 通过 `cobrust.toml` 中的 `[routing.<task>]` 路由表选择 provider+model；未声明的任务返回 `""` |
+| `llm_stream(provider, model, prompt) -> list[str]` | 三参数皆为 `str` | 收集所有 Delta chunk（Decision 3B），按顺序返回；失败返回空列表 |
+
+**架构选择（OQ ratification）**：
+
+- **OQ-1A 平铺命名**：α 阶段使用 `llm_complete` / `llm_dispatch` / `llm_stream` 平铺命名（与 ADR-0044 `input` / `argv` 同构），不引入 `cobrust.X.Y` 模块路径降级（待 follow-up spike）。
+- **OQ-2B 收集所有 chunk**：`llm_stream` 不暴露真异步流，而是先把所有 chunk 收集进 `list[str]`，再交给 for 循环迭代。真异步流需要 iter 协议升级（M12.x 仍是 i64-only），延后到 M-AI.0.x。
+- **OQ-3 WRAP**：通过在 `RouterConfigBundle` 初始化时**合成** routing-table entries（每个声明的 `(provider, model)` 对生成一条 `[routing.llm_complete_<p>_<m>]` + `[routing.llm_stream_<p>_<m>]`）实现 `(provider, model)` 直接定位，不修改 `crates/cobrust-llm-router` 源码。Router 在 `try_provider` 里强制 `request.model = pm.model.clone()`（router.rs:462-465），从而保证合成 entry 的 `(provider, model)` 被字节级遵守。
+
+**配置示例**（`cobrust.toml`）：
+
+```toml
+[router]
+default_strategy = "quality"
+ledger_path = ".cobrust/ledger.jsonl"
+
+[providers.anthropic_official]
+kind = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+models = ["claude-opus-4-7"]
+
+# llm_dispatch 用户自定义任务路由：
+[routing.summarize_doc]
+strategy = "quality"
+preferred = ["anthropic_official:claude-opus-4-7"]
+
+# llm_complete / llm_stream 的 (provider, model) 直达路由由 stdlib 自动合成，
+# 无需用户手写 [routing.llm_complete_*] 条目（合成行为见 OQ-3 WRAP）。
+```
+
+**Cobrust 源码用法**：
+
+```cobrust
+fn main() -> i64:
+    # 直接定位 provider + model
+    let r: str = llm_complete("anthropic_official", "claude-opus-4-7", "讲个冷笑话")
+    print(r)
+    # 路由表派发
+    let s: str = llm_dispatch("summarize_doc", "TLDR 这一段")
+    print(s)
+    # 流式聚合
+    let chunks: list[str] = llm_stream("anthropic_official", "claude-opus-4-7", "Hi")
+    for chunk in chunks:
+        print(chunk)
+    return 0
+```
+
+**错误模式**：所有三个函数遵循 ADR-0044 W2 的"无 try-catch"接口规范——失败一律返回 `""` 或空列表，错误细节由 router 的 ledger（`.cobrust/ledger.jsonl`）持久化捕获。源码侧的类型化 `Result[str, LlmError]` 是 M-AI.0.x 候选（配合 ADR-0044a 的类型化 Result 降级）。

@@ -2009,6 +2009,21 @@ fn runtime_helper_signatures(
     // existing single-pointer entry.
     out.push(("__cobrust_print_no_nl_lit", sig(call_conv, &[p, i64], None)));
 
+    // -- M-AI.0 (α Phase 2): cobrust.llm source-level binding ---------
+    // `llm_complete(provider, model, prompt) -> str`. All three args are
+    // heap-Str pointers (or .rodata-static-literal pointers). Returns an
+    // owned Str pointer (Decision 7: empty Str on any failure).
+    out.push((
+        "__cobrust_llm_complete",
+        sig(call_conv, &[p, p, p], Some(p)),
+    ));
+    // `llm_dispatch(task, prompt) -> str`. Both args are Str pointers.
+    out.push(("__cobrust_llm_dispatch", sig(call_conv, &[p, p], Some(p))));
+    // `llm_stream(provider, model, prompt) -> list[str]`. Returns a list
+    // pointer (Decision 3B collect-all-chunks form). Element i64 slots
+    // store heap-Str pointers per the `__cobrust_argv` precedent.
+    out.push(("__cobrust_llm_stream", sig(call_conv, &[p, p, p], Some(p))));
+
     out
 }
 

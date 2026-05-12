@@ -318,7 +318,7 @@ fn task_channel_concurrent_producer_consumer() {
         sum += rx.recv().unwrap();
     }
     handle.wait().unwrap();
-    assert_eq!(sum, (0..20).sum());
+    assert_eq!(sum, (0..20_i64).sum::<i64>());
 }
 
 #[test]

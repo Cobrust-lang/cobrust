@@ -33,6 +33,15 @@ link against. Constitution §1.1 dual mandate: the runtime half of
   M13 modules is `fn`, not `async fn`. Backed by `tokio = "1"`
   with `Sender::blocking_send` / `Receiver::blocking_recv`
   bridging the sync surface onto the async runtime singleton.
+- **M-AI.0 — delivered.** ADR-0048 + spike
+  `docs/agent/spike/m-ai-0-cobrust-llm-spike.md` (SHA 705f592)
+  add `llm` module behind a default-on `llm-router` Cargo
+  feature. Three flat-fn source-level intrinsics
+  (`llm_complete` / `llm_dispatch` / `llm_stream`) lower to
+  C-ABI shims wrapping `crates/cobrust-llm-router` via a lazy
+  process-global tokio runtime. Synthesizes routing-table
+  entries per declared `(provider, model)` per OQ-3 WRAP
+  ratification (router crate frozen).
 
 ## Public surface (M11)
 
@@ -48,6 +57,8 @@ pub mod env;
 pub mod fmt;
 pub mod iter;        // M12.x ADR-0027 §4
 pub mod runtime;
+#[cfg(feature = "llm-router")]
+pub mod llm;         // M-AI.0 (α Phase 2 ADR-0048 + spike 705f592)
 
 pub use runtime::{Error, ErrorKind};
 pub use collections::{Dict, List, Set};
@@ -174,6 +185,27 @@ pub fn var(name: &str) -> Option<String>;
 pub unsafe extern "C" fn __cobrust_capture_argv(argc: i32, argv: *const *const u8);
 pub unsafe extern "C" fn __cobrust_argv() -> *mut u8;   // returns *mut List_Str
 ```
+
+### `std.llm` (M-AI.0 — ADR-0048 + spike 705f592)
+
+```rust
+// Rust-side blocking helpers (unit-testable counterparts to the C-ABI shims):
+pub fn llm_complete_blocking(provider: &str, model: &str, prompt: &str) -> String;
+pub fn llm_dispatch_blocking(task: &str, prompt: &str) -> String;
+pub fn llm_stream_blocking(provider: &str, model: &str, prompt: &str) -> Vec<String>;
+
+// C ABI (codegen targets these via the cobrust-cli intrinsic-rewrite pass):
+pub unsafe extern "C" fn __cobrust_llm_complete(provider: *mut u8, model: *mut u8, prompt: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_llm_dispatch(task: *mut u8, prompt: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_llm_stream(provider: *mut u8, model: *mut u8, prompt: *mut u8) -> *mut u8;  // returns *mut List_Str
+```
+
+Decision references:
+
+- **OQ-1A flat-fn**: source-level names are `llm_complete` / `llm_dispatch` / `llm_stream`; no `cobrust.llm.*` module-path syntax at α (deferred to a follow-up spike when module-path lowering ships).
+- **OQ-2B collect-all-chunks**: `llm_stream` returns `list[str]`; for-protocol iteration walks the collected chunks. True async streaming requires iter-protocol widening — out of M-AI.0 scope.
+- **OQ-3 WRAP**: target-by-(provider, model) is implemented via routing-table entry synthesis at `RouterConfigBundle` init — the router crate is frozen for M-AI.0. For each declared `[providers.<p>]` × `models = [m_i, ...]`, the bundle adds two synthesized entries: `[routing.llm_complete_<p>_<m_i>]` + `[routing.llm_stream_<p>_<m_i>]`, each with `preferred = ["<p>:<m_i>"]`. The router's `try_provider` enforces `request.model = pm.model.clone()` (router.rs:462-465), so the synthesized `(provider, model)` is honored bit-for-bit.
+- **Decision 7 error surface**: all three helpers return `""` / empty `Vec` on any failure (missing `cobrust.toml`, malformed config, unknown provider/model, auth failure, transport error, etc.). The ledger captures the actual `LlmError` for post-mortem.
 
 ### `std.collections`
 

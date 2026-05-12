@@ -72,6 +72,8 @@ hex = "0.4"
 semver = "1"
 flate2 = "1"
 tar = "0.4"
+# M-AI.0: cobrust-stdlib consumes the router via the optional llm-router feature.
+cobrust-llm-router = { path = "crates/cobrust-llm-router" }
 
 [profile.release]
 lto = "thin"

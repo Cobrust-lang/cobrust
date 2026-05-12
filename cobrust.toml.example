@@ -85,3 +85,43 @@ models = ["gpt-5.5"]
 [routing.real_llm_smoke]
 strategy = "quality"
 preferred = ["user_codex:gpt-5.5"]
+
+# ---- M-AI.0 (α Phase 2): cobrust.llm source-level binding ---------------
+# ADR-0048 + spike docs/agent/spike/m-ai-0-cobrust-llm-spike.md (705f592)
+# expose three flat-fn intrinsics to Cobrust source:
+#
+#   llm_complete(provider, model, prompt) -> str
+#   llm_dispatch(task, prompt) -> str
+#   llm_stream(provider, model, prompt) -> list[str]
+#
+# `llm_dispatch` walks user-declared `[routing.<task>]` entries (e.g. the
+# existing `spec_extract` / `translate` / `repair` rows above). Sample
+# user-defined dispatch routes for the AI-native stdlib:
+
+[routing.summarize_doc]
+strategy = "quality"
+preferred = ["anthropic_official:claude-opus-4-7"]
+
+[routing.transform_code]
+strategy = "consensus"
+n = 2
+preferred = [
+    "anthropic_official:claude-opus-4-7",
+    "deepseek:deepseek-v3",
+]
+
+# `llm_complete` / `llm_stream` accept a `(provider, model)` pair directly
+# (OQ-3 WRAP) — the stdlib synthesizes `[routing.llm_complete_<provider>_<model>]`
+# and `[routing.llm_stream_<provider>_<model>]` entries at bundle-init
+# time per declared `(provider, model)` pair, so users do NOT write these
+# entries by hand. If you want to specialize the strategy for a given
+# direct route, override below (manual entries take precedence over the
+# synthesized defaults). Example:
+#
+#   [routing.llm_complete_anthropic_official_claude-opus-4-7]
+#   strategy = "latency"
+#   preferred = ["anthropic_official:claude-opus-4-7"]
+#
+#   [routing.llm_stream_anthropic_official_claude-opus-4-7]
+#   strategy = "quality"
+#   preferred = ["anthropic_official:claude-opus-4-7"]

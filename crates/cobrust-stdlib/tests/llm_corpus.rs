@@ -65,7 +65,7 @@
 // are landed in `crates/cobrust-stdlib/src/llm.rs`.
 // =====================================================================
 
-const ADR_M_AI_0_IMPL_LANDED: bool = false;
+const ADR_M_AI_0_IMPL_LANDED: bool = true;
 
 fn require_impl(test_name: &str) {
     assert!(

@@ -127,6 +127,18 @@ pub const PRINT_NO_NL_RUNTIME_SYMBOL: &str = "__cobrust_print_no_nl";
 /// to use [`PRINT_NO_NL_RUNTIME_SYMBOL`].
 pub const PRINT_NO_NL_LIT_RUNTIME_SYMBOL: &str = "__cobrust_print_no_nl_lit";
 
+/// Runtime symbol for source-level `llm_complete(provider, model, prompt) -> str`.
+/// M-AI.0 (α Phase 2 ADR-0048 + spike 705f592) — exported by `cobrust-stdlib::llm`.
+pub const LLM_COMPLETE_RUNTIME_SYMBOL: &str = "__cobrust_llm_complete";
+
+/// Runtime symbol for source-level `llm_dispatch(task, prompt) -> str`.
+/// M-AI.0 (α Phase 2) — exported by `cobrust-stdlib::llm`.
+pub const LLM_DISPATCH_RUNTIME_SYMBOL: &str = "__cobrust_llm_dispatch";
+
+/// Runtime symbol for source-level `llm_stream(provider, model, prompt) -> list[str]`.
+/// M-AI.0 (α Phase 2) — exported by `cobrust-stdlib::llm`.
+pub const LLM_STREAM_RUNTIME_SYMBOL: &str = "__cobrust_llm_stream";
+
 /// Errors from the print-intrinsic rewrite.
 #[derive(Debug, thiserror::Error)]
 pub enum IntrinsicError {
@@ -178,6 +190,12 @@ struct IntrinsicDefIds {
     list_new: HashSet<u32>,
     /// ADR-0044 W2 Phase 3.
     print_no_nl: HashSet<u32>,
+    /// M-AI.0 (α Phase 2).
+    llm_complete: HashSet<u32>,
+    /// M-AI.0 (α Phase 2).
+    llm_dispatch: HashSet<u32>,
+    /// M-AI.0 (α Phase 2).
+    llm_stream: HashSet<u32>,
 }
 
 impl IntrinsicDefIds {
@@ -202,6 +220,9 @@ impl IntrinsicDefIds {
         out.extend(&self.list_len);
         out.extend(&self.list_new);
         out.extend(&self.print_no_nl);
+        out.extend(&self.llm_complete);
+        out.extend(&self.llm_dispatch);
+        out.extend(&self.llm_stream);
         out
     }
 
@@ -225,6 +246,9 @@ impl IntrinsicDefIds {
             && self.list_len.is_empty()
             && self.list_new.is_empty()
             && self.print_no_nl.is_empty()
+            && self.llm_complete.is_empty()
+            && self.llm_dispatch.is_empty()
+            && self.llm_stream.is_empty()
     }
 }
 
@@ -252,6 +276,9 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         list_len: HashSet::new(),
         list_new: HashSet::new(),
         print_no_nl: HashSet::new(),
+        llm_complete: HashSet::new(),
+        llm_dispatch: HashSet::new(),
+        llm_stream: HashSet::new(),
     };
     for body in &module.bodies {
         match body.name.as_str() {
@@ -312,6 +339,15 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
             "print_no_nl" => {
                 ids.print_no_nl.insert(body.def_id.0);
             }
+            "llm_complete" => {
+                ids.llm_complete.insert(body.def_id.0);
+            }
+            "llm_dispatch" => {
+                ids.llm_dispatch.insert(body.def_id.0);
+            }
+            "llm_stream" => {
+                ids.llm_stream.insert(body.def_id.0);
+            }
             _ => {}
         }
     }
@@ -366,6 +402,9 @@ enum Kind {
     ListLen,
     ListNew,
     PrintNoNl,
+    LlmComplete,
+    LlmDispatch,
+    LlmStream,
 }
 
 fn kind_for_name(name: &str) -> Option<Kind> {
@@ -389,6 +428,9 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "list_len" => Some(Kind::ListLen),
         "list_new" => Some(Kind::ListNew),
         "print_no_nl" => Some(Kind::PrintNoNl),
+        "llm_complete" => Some(Kind::LlmComplete),
+        "llm_dispatch" => Some(Kind::LlmDispatch),
+        "llm_stream" => Some(Kind::LlmStream),
         _ => None,
     }
 }
@@ -432,6 +474,12 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::ListNew)
     } else if ids.print_no_nl.contains(&id) {
         Some(Kind::PrintNoNl)
+    } else if ids.llm_complete.contains(&id) {
+        Some(Kind::LlmComplete)
+    } else if ids.llm_dispatch.contains(&id) {
+        Some(Kind::LlmDispatch)
+    } else if ids.llm_stream.contains(&id) {
+        Some(Kind::LlmStream)
     } else {
         None
     }
@@ -786,6 +834,58 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     // First arg is _elem_size (0 = ignored), second is len.
                     args.push(Operand::Constant(Constant::Int(0)));
                     args.push(len);
+                }
+                Kind::LlmComplete => {
+                    // llm_complete(provider, model, prompt) -> str
+                    // → __cobrust_llm_complete(p_ptr, m_ptr, q_ptr) -> *mut u8
+                    // All three Str args remain pointer-only; no expansion.
+                    if args.len() != 3 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("llm_complete: expected 3 args, got {}", args.len()),
+                        });
+                    }
+                    let p = args[0].clone();
+                    let m = args[1].clone();
+                    let q = args[2].clone();
+                    *func =
+                        Operand::Constant(Constant::Str(LLM_COMPLETE_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(p);
+                    args.push(m);
+                    args.push(q);
+                }
+                Kind::LlmDispatch => {
+                    // llm_dispatch(task, prompt) -> str
+                    // → __cobrust_llm_dispatch(t_ptr, q_ptr) -> *mut u8
+                    if args.len() != 2 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("llm_dispatch: expected 2 args, got {}", args.len()),
+                        });
+                    }
+                    let t = args[0].clone();
+                    let q = args[1].clone();
+                    *func =
+                        Operand::Constant(Constant::Str(LLM_DISPATCH_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(t);
+                    args.push(q);
+                }
+                Kind::LlmStream => {
+                    // llm_stream(provider, model, prompt) -> list[str]
+                    // → __cobrust_llm_stream(p_ptr, m_ptr, q_ptr) -> *mut u8
+                    if args.len() != 3 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("llm_stream: expected 3 args, got {}", args.len()),
+                        });
+                    }
+                    let p = args[0].clone();
+                    let m = args[1].clone();
+                    let q = args[2].clone();
+                    *func = Operand::Constant(Constant::Str(LLM_STREAM_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(p);
+                    args.push(m);
+                    args.push(q);
                 }
             }
         }

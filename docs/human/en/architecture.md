@@ -2202,3 +2202,64 @@ oracle is never consulted — a false green.
 | ubuntu-latest (CI) | RUN — `apt-get install python3.11` provides the oracle |
 | macos-latest (CI) | RUN — Homebrew Python is on PATH |
 | Stripped CI / local (no Python) | SKIP — exit 0, warning emitted |
+
+## AI-native stdlib: cobrust.llm (M-AI.0 — delivered)
+
+ADR-0048 + spike `docs/agent/spike/m-ai-0-cobrust-llm-spike.md`
+(SHA 705f592) adds a source-level binding from Cobrust to
+`crates/cobrust-llm-router`. Delivered in α Phase 2 via three new
+PRELUDE flat-fns:
+
+| Function | Signature | Behavior |
+|----------|-----------|----------|
+| `llm_complete(provider, model, prompt) -> str` | three `str` args | Direct one-shot completion targeting the specified `(provider, model)`; returns `""` on any failure (Decision 7) |
+| `llm_dispatch(task, prompt) -> str` | two `str` args | Resolves the (provider, model) via `[routing.<task>]` in `cobrust.toml`; unknown task returns `""` |
+| `llm_stream(provider, model, prompt) -> list[str]` | three `str` args | Collect-all-chunks form (Decision 3B): drains the stream into an ordered `list[str]`, returns empty list on failure |
+
+**Architecture choices (ratified open questions)**:
+
+- **OQ-1A flat-fn naming**: α uses flat `llm_complete` / `llm_dispatch` / `llm_stream` (mirrors ADR-0044 `input` / `argv` precedent). No `cobrust.X.Y` module-path lowering — deferred to a follow-up spike.
+- **OQ-2B collect-all-chunks**: `llm_stream` does not expose true async streaming. The shim drains chunks into a `list[str]` first, then user code iterates via the for-protocol. True async iter would require widening the iter protocol beyond i64-only (M12.x cap) — deferred to M-AI.0.x.
+- **OQ-3 WRAP**: targeting a specific `(provider, model)` is implemented by **synthesizing** routing-table entries at `RouterConfigBundle` init: for every declared `[providers.<p>]` with `models = [m_i, ...]`, the bundle adds `[routing.llm_complete_<p>_<m_i>]` + `[routing.llm_stream_<p>_<m_i>]` entries with `preferred = ["<p>:<m_i>"]`. The router crate (`crates/cobrust-llm-router`) is frozen for M-AI.0 — zero source modifications. The router's `try_provider` enforces `request.model = pm.model.clone()` (router.rs:462-465), so the synthesized `(provider, model)` is honored bit-for-bit.
+
+**Configuration example** (`cobrust.toml`):
+
+```toml
+[router]
+default_strategy = "quality"
+ledger_path = ".cobrust/ledger.jsonl"
+
+[providers.anthropic_official]
+kind = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+models = ["claude-opus-4-7"]
+
+# llm_dispatch routes:
+[routing.summarize_doc]
+strategy = "quality"
+preferred = ["anthropic_official:claude-opus-4-7"]
+
+# llm_complete / llm_stream direct (provider, model) routes are
+# synthesized by stdlib at bundle-init time; users do not write
+# [routing.llm_complete_*] entries by hand.
+```
+
+**Cobrust source usage**:
+
+```cobrust
+fn main() -> i64:
+    # Direct (provider, model) target:
+    let r: str = llm_complete("anthropic_official", "claude-opus-4-7", "tell me a joke")
+    print(r)
+    # Routing table dispatch:
+    let s: str = llm_dispatch("summarize_doc", "TLDR this paragraph")
+    print(s)
+    # Streaming (collect-all-chunks form):
+    let chunks: list[str] = llm_stream("anthropic_official", "claude-opus-4-7", "Hi")
+    for chunk in chunks:
+        print(chunk)
+    return 0
+```
+
+**Error mode**: all three helpers follow the ADR-0044 W2 "no try-catch" interface — failures collapse to `""` / empty list and the router's ledger (`.cobrust/ledger.jsonl`) captures the actual `LlmError`. Typed `Result[str, LlmError]` at the source level is queued for M-AI.0.x (paired with ADR-0044a's typed-Result lowering).
