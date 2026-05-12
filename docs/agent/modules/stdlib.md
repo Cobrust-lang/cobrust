@@ -42,6 +42,16 @@ link against. Constitution §1.1 dual mandate: the runtime half of
   process-global tokio runtime. Synthesizes routing-table
   entries per declared `(provider, model)` per OQ-3 WRAP
   ratification (router crate frozen).
+- **M-AI.1 — delivered.** ADR-0048 §M-AI.1 + spike
+  `docs/agent/spike/m-ai-1-cobrust-prompt-spike.md` (α Phase 3)
+  add `prompt` module unconditionally (no Cargo feature). Five
+  flat-fn source-level intrinsics (`prompt_render` /
+  `prompt_format_few_shot` / `prompt_format_system_user` /
+  `prompt_escape_braces` / `llm_complete_structured`) lower to
+  C-ABI shims wrapping pure-Rust string-formatting helpers.
+  `llm_complete_structured` gated by the existing `llm-router`
+  feature; the other four are always present. D2 sonnet pair per
+  ADR-0048 §M-AI.1.
 
 ## Public surface (M11)
 
@@ -59,6 +69,7 @@ pub mod iter;        // M12.x ADR-0027 §4
 pub mod runtime;
 #[cfg(feature = "llm-router")]
 pub mod llm;         // M-AI.0 (α Phase 2 ADR-0048 + spike 705f592)
+pub mod prompt;      // M-AI.1 (α Phase 3 ADR-0048 + spike m-ai-1) — unconditional
 
 pub use runtime::{Error, ErrorKind};
 pub use collections::{Dict, List, Set};
@@ -206,6 +217,70 @@ Decision references:
 - **OQ-2B collect-all-chunks**: `llm_stream` returns `list[str]`; for-protocol iteration walks the collected chunks. True async streaming requires iter-protocol widening — out of M-AI.0 scope.
 - **OQ-3 WRAP**: target-by-(provider, model) is implemented via routing-table entry synthesis at `RouterConfigBundle` init — the router crate is frozen for M-AI.0. For each declared `[providers.<p>]` × `models = [m_i, ...]`, the bundle adds two synthesized entries: `[routing.llm_complete_<p>_<m_i>]` + `[routing.llm_stream_<p>_<m_i>]`, each with `preferred = ["<p>:<m_i>"]`. The router's `try_provider` enforces `request.model = pm.model.clone()` (router.rs:462-465), so the synthesized `(provider, model)` is honored bit-for-bit.
 - **Decision 7 error surface**: all three helpers return `""` / empty `Vec` on any failure (missing `cobrust.toml`, malformed config, unknown provider/model, auth failure, transport error, etc.). The ledger captures the actual `LlmError` for post-mortem.
+
+### `std.prompt` (M-AI.1 — ADR-0048 §M-AI.1 + spike m-ai-1)
+
+Five source-level intrinsics for prompt composition. Pure-Rust
+string manipulation; no Cargo feature gate (unconditional). The
+fifth function (`llm_complete_structured`) gated by `llm-router`.
+
+```rust
+// Rust-side blocking helpers (unit-testable; spike Decision 7: failures → ""):
+
+// Variable interpolation: builds BTreeMap from even-indexed `vars`
+// [k1, v1, k2, v2, ...] pairs; substitutes `{k}` in combined
+// system + "\n" + user template. `{{`/`}}` → `{`/`}` escapes.
+// Unknown keys remain literal. Returns `"<system>\n<user>"` on
+// empty vars.
+#[must_use]
+pub fn prompt_render_helper(system: &str, user: &str, vars: &[String]) -> String;
+
+// Canonical few-shot format: emits "Input: <in_i>\nOutput: <out_i>\n\n"
+// for min(len(examples_in), len(examples_out)) pairs, then appends
+// "Input: <current_input>\nOutput:" (no trailing newline).
+// Empty examples → just the trailer. Mismatched lengths → truncate to min.
+#[must_use]
+pub fn prompt_format_few_shot_helper(
+    examples_in: &[String],
+    examples_out: &[String],
+    current_input: &str,
+) -> String;
+
+// Simple system+user concatenator. Returns `"<system>\n\n<user>"`.
+// Always succeeds; no interpolation.
+#[must_use]
+pub fn prompt_format_system_user_helper(system: &str, user: &str) -> String;
+
+// Escape `{` → `{{` and `}` → `}}`. Symmetric pre-pass for
+// prompt_render_helper when values contain literal braces.
+#[must_use]
+pub fn prompt_escape_braces_helper(text: &str) -> String;
+
+// Structured-output convenience (gated by `llm-router`). Augments
+// `prompt` with "Respond with valid JSON matching this schema:\n<schema_json>",
+// then routes through `llm_dispatch_blocking("structured", augmented)`.
+// Returns raw response text; caller parses JSON. Failure → "".
+#[cfg(feature = "llm-router")]
+#[must_use]
+pub fn llm_complete_structured_helper(prompt: &str, schema_json: &str) -> String;
+
+// C ABI (codegen targets these via the cobrust-cli intrinsic-rewrite pass):
+pub unsafe extern "C" fn __cobrust_prompt_render(system: *mut u8, user: *mut u8, vars: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_prompt_format_few_shot(examples_in: *mut u8, examples_out: *mut u8, current_input: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_prompt_format_system_user(system: *mut u8, user: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_prompt_escape_braces(text: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_llm_complete_structured(prompt: *mut u8, schema_json: *mut u8) -> *mut u8;
+```
+
+Decision references (spike `m-ai-1-cobrust-prompt-spike.md` + ADR-0048 §M-AI.1):
+
+- **Decision 1B flat-fn**: same α naming convention as M-AI.0 — no module-path lowering. Five PRELUDE stubs; intrinsic-rewrite redirects callsites.
+- **Decision 3C even-indexed list[str]**: `vars` for `prompt_render` is a `list[str]` of `[k1, v1, k2, v2, ...]` pairs — reuses `argv()` / `llm_stream()` ABI; odd-length input drops trailing key silently.
+- **Decision 4 `{key}` interpolation**: `{k}` placeholders substituted from vars map; `{{`/`}}` → `{`/`}` escape; unknown keys remain literal; single-pass (no recursive substitution).
+- **Decision 5 canonical few-shot**: "Input: <in>\nOutput: <out>\n\n" loop + "Input: <current>\nOutput:" trailer; locked format for α stability.
+- **Decision 6 structured-output**: `llm_complete_structured` appends a JSON-schema instruction then routes via `llm_dispatch(task="structured", ...)`. Caller parses the returned JSON string.
+- **Decision 7 error surface**: all five helpers return `""` on any failure — exact mirror of M-AI.0 OQ-2 Decision 7.
+- **Decision 8 zero new deps**: pure-Rust string manipulation for four fns; fifth reuses `crate::llm::llm_dispatch_blocking` — no new workspace deps.
 
 ### `std.collections`
 

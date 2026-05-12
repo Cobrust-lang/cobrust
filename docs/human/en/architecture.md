@@ -2263,3 +2263,57 @@ fn main() -> i64:
 ```
 
 **Error mode**: all three helpers follow the ADR-0044 W2 "no try-catch" interface — failures collapse to `""` / empty list and the router's ledger (`.cobrust/ledger.jsonl`) captures the actual `LlmError`. Typed `Result[str, LlmError]` at the source level is queued for M-AI.0.x (paired with ADR-0044a's typed-Result lowering).
+
+## AI-native stdlib: cobrust.prompt (M-AI.1 — delivered)
+
+ADR-0048 §M-AI.1 + spike `docs/agent/spike/m-ai-1-cobrust-prompt-spike.md` (α Phase 3)
+add five prompt-composition primitives to Cobrust. Implemented in
+`crates/cobrust-stdlib/src/prompt.rs`, exposed as PRELUDE flat-fns —
+no new Cargo feature required. Pure-Rust string manipulation for four
+of the five; `llm_complete_structured` gated by the existing
+`llm-router` feature.
+
+| Function | Signature | Behavior |
+|---|---|---|
+| `prompt_render(system, user, vars) -> str` | `system`, `user`: `str`; `vars`: `list[str]` (even-indexed key-value pairs) | Single-pass `{key}` substitution in combined `"{system}\n{user}"` template; `{{`/`}}` escape to literal `{`/`}`; unknown keys kept literal |
+| `prompt_format_few_shot(examples_in, examples_out, current_input) -> str` | three args: two `list[str]` + one `str` | Canonical "Input: <in_i>\nOutput: <out_i>\n\n" loop for min(len(in), len(out)) pairs, then "Input: <current>\nOutput:" trailer (no trailing newline) |
+| `prompt_format_system_user(system, user) -> str` | two `str` args | Returns `"<system>\n\n<user>"` — no interpolation; useful for hand-built prompts |
+| `prompt_escape_braces(text) -> str` | one `str` arg | `{` → `{{`, `}` → `}}` — symmetric pre-pass to protect literal braces from `prompt_render`'s interpolation |
+| `llm_complete_structured(prompt, schema_json) -> str` | two `str` args | Appends "Respond with valid JSON matching this schema:\n<schema_json>" then routes via `llm_dispatch(task="structured", ...)`; caller parses returned JSON |
+
+**Architecture choices (spike Decision references):**
+
+- **Flat-fn naming (Decision 1B)**: same α convention as M-AI.0 `llm_*`. No module-path lowering. Five PRELUDE stubs; intrinsic-rewrite redirects callsites.
+- **`vars` shape (Decision 3C)**: single `list[str]` even-indexed `[k1, v1, k2, v2, ...]` pairs — reuses the `argv()` / `llm_stream()` ABI. Odd-length input drops trailing key silently.
+- **Interpolation syntax (Decision 4)**: `{key}` curly-brace placeholder; `{{`/`}}` escape to literals; unknown keys remain literal; single-pass scan (no recursive substitution).
+- **Few-shot format (Decision 5)**: canonical "Input/Output" pair format locked at stdlib level; downstream wrappers can re-format if needed.
+- **Structured output (Decision 6)**: `llm_complete_structured` routes via `cobrust.toml`'s `[routing.structured]` entry (gated by `llm-router` feature). Caller receives raw response text and parses JSON themselves.
+- **Error surface (Decision 7)**: all five fns return `""` on any failure — exact mirror of M-AI.0 OQ-2 Decision 7. No `Result[str, E]` at α.
+
+**Cobrust source usage:**
+
+```cobrust
+fn main() -> i64:
+    # Variable interpolation
+    let rendered: str = prompt_render(
+        "You are a Cobrust expert.",
+        "Translate this Python to Cobrust: {code}",
+        ["code", "def foo(): pass"],
+    )
+    print(rendered)
+
+    # Few-shot format
+    let fs: str = prompt_format_few_shot(
+        ["x = 1", "y = 2"],
+        ["let x: i64 = 1", "let y: i64 = 2"],
+        "z = 3",
+    )
+    print(fs)
+
+    # Escape literal braces (before prompt_render)
+    let escaped: str = prompt_escape_braces("value: {raw}")
+    print(escaped)  # outputs "value: {{raw}}"
+
+    return 0
+```
+

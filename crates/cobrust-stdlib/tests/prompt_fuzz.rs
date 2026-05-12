@@ -54,7 +54,7 @@ use proptest::prelude::*;
 // lands and the five helpers are callable.
 // =====================================================================
 
-const ADR_M_AI_1_IMPL_LANDED: bool = false;
+const ADR_M_AI_1_IMPL_LANDED: bool = true;
 
 fn require_impl(test_name: &str) {
     assert!(
@@ -103,7 +103,6 @@ proptest! {
         vars in prop::collection::vec(arbitrary_utf8_string_up_to_4k(), 0..=16),
     ) {
         require_impl("fuzz_prompt_render_helper_never_panics");
-        // Once impl lands, DEV uncomments:
         //
         //   use cobrust_stdlib::prompt::prompt_render_helper;
         //   // Property: any (system, user, vars) must not panic.
@@ -129,7 +128,6 @@ proptest! {
         current_input in arbitrary_utf8_string_up_to_4k(),
     ) {
         require_impl("fuzz_prompt_format_few_shot_helper_never_panics");
-        // Once impl lands, DEV uncomments:
         //
         //   use cobrust_stdlib::prompt::prompt_format_few_shot_helper;
         //   // Property: any (examples_in, examples_out, current_input) must not panic.
@@ -158,7 +156,6 @@ proptest! {
         text in arbitrary_utf8_string_up_to_4k(),
     ) {
         require_impl("fuzz_prompt_escape_braces_render_round_trip_preserves_suffix");
-        // Once impl lands, DEV uncomments:
         //
         //   use cobrust_stdlib::prompt::{prompt_escape_braces_helper, prompt_render_helper};
         //   let escaped = prompt_escape_braces_helper(&text);

@@ -2024,6 +2024,36 @@ fn runtime_helper_signatures(
     // store heap-Str pointers per the `__cobrust_argv` precedent.
     out.push(("__cobrust_llm_stream", sig(call_conv, &[p, p, p], Some(p))));
 
+    // -- M-AI.1 (α Phase 3): cobrust.prompt source-level binding ------
+    // `prompt_render(system: str, user: str, vars: list[str]) -> str`.
+    // system + user are Str pointers; vars is a list pointer (heap List
+    // whose i64 slots store heap-Str pointers — same shape `__cobrust_argv`
+    // returns + `llm_stream` returns).
+    out.push(("__cobrust_prompt_render", sig(call_conv, &[p, p, p], Some(p))));
+
+    // `prompt_format_few_shot(examples_in: list[str], examples_out: list[str],
+    //                         current_input: str) -> str`.
+    // All three are pointers.
+    out.push((
+        "__cobrust_prompt_format_few_shot",
+        sig(call_conv, &[p, p, p], Some(p)),
+    ));
+
+    // `prompt_format_system_user(system: str, user: str) -> str`.
+    out.push((
+        "__cobrust_prompt_format_system_user",
+        sig(call_conv, &[p, p], Some(p)),
+    ));
+
+    // `prompt_escape_braces(text: str) -> str`.
+    out.push(("__cobrust_prompt_escape_braces", sig(call_conv, &[p], Some(p))));
+
+    // `llm_complete_structured(prompt: str, schema_json: str) -> str`.
+    out.push((
+        "__cobrust_llm_complete_structured",
+        sig(call_conv, &[p, p], Some(p)),
+    ));
+
     out
 }
 

@@ -125,3 +125,20 @@ preferred = [
 #   [routing.llm_stream_anthropic_official_claude-opus-4-7]
 #   strategy = "quality"
 #   preferred = ["anthropic_official:claude-opus-4-7"]
+
+# ---- M-AI.1 (α Phase 3): cobrust.prompt source-level binding ---------------
+# ADR-0048 §M-AI.1 + spike docs/agent/spike/m-ai-1-cobrust-prompt-spike.md
+# adds `llm_complete_structured(prompt, schema_json) -> str` which routes
+# through `llm_dispatch(task="structured", augmented_prompt)`. Declare the
+# `[routing.structured]` entry to activate it. Users pick the model they
+# want for structured JSON outputs (e.g. a model with native JSON mode).
+#
+# If [routing.structured] is absent, `llm_complete_structured` returns ""
+# (Decision 7 empty-on-failure mirror of M-AI.0).
+
+[routing.structured]
+strategy = "quality"
+preferred = ["anthropic_official:claude-opus-4-7"]
+# Alternative: use a model with native JSON mode for more reliable output:
+# preferred = ["openai_official:gpt-5"]
+# preferred = ["deepseek:deepseek-v3"]

@@ -2137,3 +2137,57 @@ fn main() -> i64:
 ```
 
 **错误模式**：所有三个函数遵循 ADR-0044 W2 的"无 try-catch"接口规范——失败一律返回 `""` 或空列表，错误细节由 router 的 ledger（`.cobrust/ledger.jsonl`）持久化捕获。源码侧的类型化 `Result[str, LlmError]` 是 M-AI.0.x 候选（配合 ADR-0044a 的类型化 Result 降级）。
+
+## AI 原生 stdlib：cobrust.prompt（M-AI.1 — 已交付）
+
+ADR-0048 §M-AI.1 + spike `docs/agent/spike/m-ai-1-cobrust-prompt-spike.md`（α Phase 3）
+为 Cobrust 增加了 5 个 prompt 组合原语。在 `crates/cobrust-stdlib/src/prompt.rs`
+实现，通过 PRELUDE 平铺命名暴露，无需新 Cargo feature。
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `prompt_render(system, user, vars) -> str` | `system`, `user`：`str`；`vars`：`list[str]`（偶数索引键值对） | 对 `"{system}
+{user}"` 做单趟 `{key}` 占位替换；`{{`/`}}` 转义为字面量 `{`/`}`；未知 key 原样保留 |
+| `prompt_format_few_shot(examples_in, examples_out, current_input) -> str` | 三参数均为 `str` 或 `list[str]` | 渲染标准 few-shot 格式："Input: <in_i>\nOutput: <out_i>\n\n" 逐对循环 + "Input: <current>\nOutput:" 末尾（无换行） |
+| `prompt_format_system_user(system, user) -> str` | 两参数均为 `str` | 直接拼接 `"<system>
+
+<user>"`，不做变量替换 |
+| `prompt_escape_braces(text) -> str` | 一参数 `str` | `{` → `{{`，`}` → `}}`；用于保护 `prompt_render` 前的字面量大括号 |
+| `llm_complete_structured(prompt, schema_json) -> str` | 两参数均为 `str` | 追加 "Respond with valid JSON..." 指令后调用 `llm_dispatch(task="structured", ...)`；调用者自行解析返回 JSON |
+
+**架构选择**：
+
+- **平铺命名**：与 M-AI.0 `llm_*` 同构；无模块路径降级。
+- **vars 形状**（Decision 3C）：`list[str]` 偶数索引 `[k1, v1, k2, v2, ...]`——与 `argv()` / `llm_stream()` ABI 相同；奇数长度静默丢弃尾 key。
+- **插值语法**（Decision 4）：`{key}` 占位；`{{` / `}}` 转义；未知 key 原样，单趟扫描不递归。
+- **Few-shot 格式**（Decision 5）：标准 "Input/Output" 对格式，锁定在标准库层；下游 wrapper 可在此基础上二次包装。
+- **结构化输出**（Decision 6）：`llm_complete_structured` 通过 `cobrust.toml` 的 `[routing.structured]` 路由——由 `llm-router` feature 门控。
+- **错误模式**（Decision 7）：所有五个函数在任何失败时返回 `""`，与 M-AI.0 保持一致。
+
+**Cobrust 源码用法**：
+
+```cobrust
+fn main() -> i64:
+    # 变量插值
+    let rendered: str = prompt_render(
+        "你是 Cobrust 专家。",
+        "请翻译以下 Python：{code}",
+        ["code", "def foo(): pass"],
+    )
+    print(rendered)
+
+    # Few-shot 格式
+    let fs: str = prompt_format_few_shot(
+        ["x = 1", "y = 2"],
+        ["let x: i64 = 1", "let y: i64 = 2"],
+        "z = 3",
+    )
+    print(fs)
+
+    # 转义字面量大括号
+    let escaped: str = prompt_escape_braces("值：{raw}")
+    print(escaped)  # 输出 "值：{{raw}}"
+
+    return 0
+```
+

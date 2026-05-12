@@ -62,7 +62,7 @@
 //   - `crates/cobrust-stdlib/src/prompt.rs` (module + helpers + shims)
 // =====================================================================
 
-const ADR_M_AI_1_IMPL_LANDED: bool = false;
+const ADR_M_AI_1_IMPL_LANDED: bool = true;
 
 fn require_impl(test_name: &str) {
     assert!(

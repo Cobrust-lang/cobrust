@@ -139,6 +139,26 @@ pub const LLM_DISPATCH_RUNTIME_SYMBOL: &str = "__cobrust_llm_dispatch";
 /// M-AI.0 (α Phase 2) — exported by `cobrust-stdlib::llm`.
 pub const LLM_STREAM_RUNTIME_SYMBOL: &str = "__cobrust_llm_stream";
 
+/// Runtime symbol for source-level `prompt_render(system, user, vars) -> str`.
+/// M-AI.1 (α Phase 3 ADR-0048 + spike m-ai-1) — exported by `cobrust-stdlib::prompt`.
+pub const PROMPT_RENDER_RUNTIME_SYMBOL: &str = "__cobrust_prompt_render";
+
+/// Runtime symbol for source-level `prompt_format_few_shot(examples_in, examples_out, current_input) -> str`.
+/// M-AI.1 (α Phase 3) — exported by `cobrust-stdlib::prompt`.
+pub const PROMPT_FORMAT_FEW_SHOT_RUNTIME_SYMBOL: &str = "__cobrust_prompt_format_few_shot";
+
+/// Runtime symbol for source-level `prompt_format_system_user(system, user) -> str`.
+/// M-AI.1 (α Phase 3) — exported by `cobrust-stdlib::prompt`.
+pub const PROMPT_FORMAT_SYSTEM_USER_RUNTIME_SYMBOL: &str = "__cobrust_prompt_format_system_user";
+
+/// Runtime symbol for source-level `prompt_escape_braces(text) -> str`.
+/// M-AI.1 (α Phase 3) — exported by `cobrust-stdlib::prompt`.
+pub const PROMPT_ESCAPE_BRACES_RUNTIME_SYMBOL: &str = "__cobrust_prompt_escape_braces";
+
+/// Runtime symbol for source-level `llm_complete_structured(prompt, schema_json) -> str`.
+/// M-AI.1 (α Phase 3) — exported by `cobrust-stdlib::prompt` (gated by `llm-router` feature).
+pub const LLM_COMPLETE_STRUCTURED_RUNTIME_SYMBOL: &str = "__cobrust_llm_complete_structured";
+
 /// Errors from the print-intrinsic rewrite.
 #[derive(Debug, thiserror::Error)]
 pub enum IntrinsicError {
@@ -196,6 +216,16 @@ struct IntrinsicDefIds {
     llm_dispatch: HashSet<u32>,
     /// M-AI.0 (α Phase 2).
     llm_stream: HashSet<u32>,
+    /// M-AI.1 (α Phase 3).
+    prompt_render: HashSet<u32>,
+    /// M-AI.1 (α Phase 3).
+    prompt_format_few_shot: HashSet<u32>,
+    /// M-AI.1 (α Phase 3).
+    prompt_format_system_user: HashSet<u32>,
+    /// M-AI.1 (α Phase 3).
+    prompt_escape_braces: HashSet<u32>,
+    /// M-AI.1 (α Phase 3).
+    llm_complete_structured: HashSet<u32>,
 }
 
 impl IntrinsicDefIds {
@@ -223,6 +253,11 @@ impl IntrinsicDefIds {
         out.extend(&self.llm_complete);
         out.extend(&self.llm_dispatch);
         out.extend(&self.llm_stream);
+        out.extend(&self.prompt_render);
+        out.extend(&self.prompt_format_few_shot);
+        out.extend(&self.prompt_format_system_user);
+        out.extend(&self.prompt_escape_braces);
+        out.extend(&self.llm_complete_structured);
         out
     }
 
@@ -249,6 +284,11 @@ impl IntrinsicDefIds {
             && self.llm_complete.is_empty()
             && self.llm_dispatch.is_empty()
             && self.llm_stream.is_empty()
+            && self.prompt_render.is_empty()
+            && self.prompt_format_few_shot.is_empty()
+            && self.prompt_format_system_user.is_empty()
+            && self.prompt_escape_braces.is_empty()
+            && self.llm_complete_structured.is_empty()
     }
 }
 
@@ -279,6 +319,11 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         llm_complete: HashSet::new(),
         llm_dispatch: HashSet::new(),
         llm_stream: HashSet::new(),
+        prompt_render: HashSet::new(),
+        prompt_format_few_shot: HashSet::new(),
+        prompt_format_system_user: HashSet::new(),
+        prompt_escape_braces: HashSet::new(),
+        llm_complete_structured: HashSet::new(),
     };
     for body in &module.bodies {
         match body.name.as_str() {
@@ -348,6 +393,21 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
             "llm_stream" => {
                 ids.llm_stream.insert(body.def_id.0);
             }
+            "prompt_render" => {
+                ids.prompt_render.insert(body.def_id.0);
+            }
+            "prompt_format_few_shot" => {
+                ids.prompt_format_few_shot.insert(body.def_id.0);
+            }
+            "prompt_format_system_user" => {
+                ids.prompt_format_system_user.insert(body.def_id.0);
+            }
+            "prompt_escape_braces" => {
+                ids.prompt_escape_braces.insert(body.def_id.0);
+            }
+            "llm_complete_structured" => {
+                ids.llm_complete_structured.insert(body.def_id.0);
+            }
             _ => {}
         }
     }
@@ -405,6 +465,11 @@ enum Kind {
     LlmComplete,
     LlmDispatch,
     LlmStream,
+    PromptRender,
+    PromptFormatFewShot,
+    PromptFormatSystemUser,
+    PromptEscapeBraces,
+    LlmCompleteStructured,
 }
 
 fn kind_for_name(name: &str) -> Option<Kind> {
@@ -431,6 +496,11 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "llm_complete" => Some(Kind::LlmComplete),
         "llm_dispatch" => Some(Kind::LlmDispatch),
         "llm_stream" => Some(Kind::LlmStream),
+        "prompt_render" => Some(Kind::PromptRender),
+        "prompt_format_few_shot" => Some(Kind::PromptFormatFewShot),
+        "prompt_format_system_user" => Some(Kind::PromptFormatSystemUser),
+        "prompt_escape_braces" => Some(Kind::PromptEscapeBraces),
+        "llm_complete_structured" => Some(Kind::LlmCompleteStructured),
         _ => None,
     }
 }
@@ -480,6 +550,16 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::LlmDispatch)
     } else if ids.llm_stream.contains(&id) {
         Some(Kind::LlmStream)
+    } else if ids.prompt_render.contains(&id) {
+        Some(Kind::PromptRender)
+    } else if ids.prompt_format_few_shot.contains(&id) {
+        Some(Kind::PromptFormatFewShot)
+    } else if ids.prompt_format_system_user.contains(&id) {
+        Some(Kind::PromptFormatSystemUser)
+    } else if ids.prompt_escape_braces.contains(&id) {
+        Some(Kind::PromptEscapeBraces)
+    } else if ids.llm_complete_structured.contains(&id) {
+        Some(Kind::LlmCompleteStructured)
     } else {
         None
     }
@@ -886,6 +966,94 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     args.push(p);
                     args.push(m);
                     args.push(q);
+                }
+                Kind::PromptRender => {
+                    // prompt_render(system, user, vars) -> str
+                    // → __cobrust_prompt_render(sys_ptr, usr_ptr, vars_list_ptr) -> *mut u8
+                    // All three args remain pointer-only (Str + List<Str>).
+                    if args.len() != 3 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("prompt_render: expected 3 args, got {}", args.len()),
+                        });
+                    }
+                    let sys = args[0].clone();
+                    let usr = args[1].clone();
+                    let vars = args[2].clone();
+                    *func = Operand::Constant(Constant::Str(
+                        PROMPT_RENDER_RUNTIME_SYMBOL.to_string(),
+                    ));
+                    args.clear();
+                    args.push(sys);
+                    args.push(usr);
+                    args.push(vars);
+                }
+                Kind::PromptFormatFewShot => {
+                    // prompt_format_few_shot(examples_in, examples_out, current_input) -> str
+                    // → __cobrust_prompt_format_few_shot(in_ptr, out_ptr, cur_ptr) -> *mut u8
+                    if args.len() != 3 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("prompt_format_few_shot: expected 3 args, got {}", args.len()),
+                        });
+                    }
+                    let xin = args[0].clone();
+                    let xout = args[1].clone();
+                    let cur = args[2].clone();
+                    *func = Operand::Constant(Constant::Str(
+                        PROMPT_FORMAT_FEW_SHOT_RUNTIME_SYMBOL.to_string(),
+                    ));
+                    args.clear();
+                    args.push(xin);
+                    args.push(xout);
+                    args.push(cur);
+                }
+                Kind::PromptFormatSystemUser => {
+                    // prompt_format_system_user(system, user) -> str
+                    // → __cobrust_prompt_format_system_user(sys_ptr, usr_ptr) -> *mut u8
+                    if args.len() != 2 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("prompt_format_system_user: expected 2 args, got {}", args.len()),
+                        });
+                    }
+                    let sys = args[0].clone();
+                    let usr = args[1].clone();
+                    *func = Operand::Constant(Constant::Str(
+                        PROMPT_FORMAT_SYSTEM_USER_RUNTIME_SYMBOL.to_string(),
+                    ));
+                    args.clear();
+                    args.push(sys);
+                    args.push(usr);
+                }
+                Kind::PromptEscapeBraces => {
+                    // prompt_escape_braces(text) -> str
+                    // → __cobrust_prompt_escape_braces(text_ptr) -> *mut u8
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("prompt_escape_braces: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let text = args[0].clone();
+                    *func = Operand::Constant(Constant::Str(
+                        PROMPT_ESCAPE_BRACES_RUNTIME_SYMBOL.to_string(),
+                    ));
+                    args.clear();
+                    args.push(text);
+                }
+                Kind::LlmCompleteStructured => {
+                    // llm_complete_structured(prompt, schema_json) -> str
+                    // → __cobrust_llm_complete_structured(prompt_ptr, schema_ptr) -> *mut u8
+                    if args.len() != 2 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("llm_complete_structured: expected 2 args, got {}", args.len()),
+                        });
+                    }
+                    let p = args[0].clone();
+                    let s = args[1].clone();
+                    *func = Operand::Constant(Constant::Str(
+                        LLM_COMPLETE_STRUCTURED_RUNTIME_SYMBOL.to_string(),
+                    ));
+                    args.clear();
+                    args.push(p);
+                    args.push(s);
                 }
             }
         }
