@@ -7,7 +7,7 @@ date: 2026-05-12
 last_verified_commit: TBD
 supersedes: []
 superseded_by: []
-relates_to: [adr:0019, adr:0038, adr:0044, adr:0045, adr:0047]
+relates_to: [adr:0019, adr:0038, adr:0044, adr:0045, adr:0046, adr:0047, adr:0047a]
 discovered_by: review-claude strategic eval 2026-05-12 + user reframe dialogue
 ratification_path: review-claude third-party review (mirrors ADR-0045 pattern)
 ---
@@ -81,7 +81,7 @@ Adopt **Option B**. Concretely:
 
 1. **README + `docs/post/why-cobrust.md`** updated with reframe language (1-2 paragraph diff per file, NOT a full rewrite). The headline becomes "AI-friendly Python successor with AI-native stdlib in development."
 2. **Phase F.2 stdlib batch** (7 milestones, M-AI.0 through M-AI.6) per §Implementation map below.
-3. **v0.2.0-alpha tag** binds to "M-AI.0..M-AI.6 closed + framing reframe shipped + release-readiness verify GO per ADR-0045". The `-alpha` suffix signals "AI-native stdlib direction, not yet stable surface."
+3. **v0.2.0-alpha tag** binds to "M-AI.0..M-AI.6 closed + **TD-Recursive-Types Phase 7.5 closed** (per finding `2026-05-12-lc100-primitive-simulation-tech-debt.md` + ADSD F24) + framing reframe shipped + release-readiness verify GO per ADR-0045". The `-alpha` suffix signals "AI-native stdlib direction + recursive-types capability surface, not yet stable."
 4. **Async M-AI.7 partnership outreach** (training-data corpus contribution agreements with model providers) starts post-v0.2.0-alpha. Months-scale, NOT in this sprint.
 
 ## Implementation map
@@ -183,6 +183,29 @@ Estimated: 4-6 hr. Parallel with M-AI.3.
 
 100-200 program samples covering core syntax + stdlib surface. Ongoing: monthly increments. Target: 1000+ programs by v0.3.0, ready for fine-tune partnership outreach (M-AI.7 async). Estimated: 4 hr initial.
 
+### TD-Recursive-Types — pre-v0.2.0-alpha blocker (Phase 7.5, D3 P9 opus + opus pair)
+
+**Surfaced by**: finding `/Users/hakureirm/codespace/Study/review-claude-handoff/findings/2026-05-12-lc100-primitive-simulation-tech-debt.md` (ADSD F24 — primitive-as-everything-simulation). LC-100 Tier A's 99/100 pass rate was achieved by linked-list and binary-tree programs falling back to flat `list[i64]` simulation rather than using true recursive types. The simulation hides a structural language gap: no source-level `struct ListNode { value: i64, next: ref ListNode }` form exists.
+
+**Goal**: ADR-0049 design + recursive struct codegen support + stdlib `LinkedList<T>` / `TreeNode<T>` / `Set<T>` generic surfaces + LC-100 retrofit (3-5 programs per affected category — linked list (041-050) + binary tree (051-060)) to verify the new types lower + run identically to the existing flat-array simulations.
+
+**Scope**:
+- New ADR-0049 ratifies the recursive-struct + generic-container design (P9 opus solo authoring, ~2 hr)
+- Codegen: `Ty::Struct { fields: [(Ident, Ty)] }` with `ref` field for self-reference (P7 opus DEV)
+- Stdlib: `crates/cobrust-stdlib/src/collections/` exposes `LinkedList<T>` / `TreeNode<T>` / `Set<T>` source-level
+- LC-100 retrofit: 3-5 programs from `examples/leetcode-stress/04[1-5]` and `examples/leetcode-stress/05[1-5]` rewritten to use the new types as canonical examples (the rest of the corpus stays as flat-array control programs)
+
+**Estimated**: 6-10 hr P9 opus + opus pair (D3 multi-crate refactor: types + codegen + stdlib + examples retrofit).
+
+**Done means**:
+- ADR-0049 accepted
+- Recursive-struct + generic-container compile via `cobrust build`
+- 3-5 retrofit programs pass identically to flat-array originals
+- 5-gate green on integrated branch
+- CTO 守闸 + release-readiness verify before any v0.2.0-alpha tag attempt
+
+This milestone is a **v0.2.0-alpha P0 blocker**. Shipping v0.2.0-alpha without it would mean shipping an "AI-friendly Python successor" whose linked-list and tree types are flat-array simulations — exactly the credibility-loss vector the framing reframe is trying to avoid.
+
 ## Backward compatibility
 
 - All v0.1.x programs continue to compile. The new `cobrust.{llm,prompt,tool,eval,ast}` modules are additive — no existing identifier shadowed.
@@ -222,6 +245,7 @@ Estimated: 4-6 hr. Parallel with M-AI.3.
 
 - review-claude strategic eval 2026-05-12 turn (post LC-100 Tier A close)
 - LC-100 Tier A 99/100 stable @ HEAD `459b820` (ADR-0047 SKIP-back-to-W1 logic empirically fired)
+- review-claude finding `/Users/hakureirm/codespace/Study/review-claude-handoff/findings/2026-05-12-lc100-primitive-simulation-tech-debt.md` (ADSD F24 — primitive-as-everything-simulation; P0 v0.2.0 blocker driving the TD-Recursive-Types Phase 7.5 milestone)
 - ADR-0036 production-validated prompt builder (M-AI.1 has existing precedent)
 - ADR-0044 source-level binding pattern (M-AI.0..M-AI.4 reuse the same PRELUDE + intrinsic-rewrite mechanism)
 - ADR-0047a verify.py mandate (Phase 2-7 sprints inherit)
