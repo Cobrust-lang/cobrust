@@ -20,7 +20,7 @@ You are building two things, and they co-evolve. Neither ships without the other
 ### 1.1 The Language & Runtime
 A statically-typed language implemented in Rust, syntactically familiar to Python users, semantically purified.
 
-### 1.2 The AI-Native Compiler
+### 1.2 The AI-Native Compiler (framing reframed in ADR-0048)
 The compiler is not just `frontend → IR → backend`. It has a **translation subsystem** that uses LLMs as a first-class component to convert Python libraries into Cobrust under closed-loop verification (differential testing + property-based testing + downstream-library validation).
 
 **Token cost is not a constraint. Correctness, elegance, and reproducibility are.**
