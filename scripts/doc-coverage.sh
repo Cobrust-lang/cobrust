@@ -1272,6 +1272,42 @@ if [[ -f "docs/agent/adr/0028-m13-concurrency-runtime.md" ]]; then
         || fail "docs/agent/findings/m13-sync-bridge-cost.md missing (ADR-0028 §F)"
 fi
 
+# --- M-AI.2 stdlib::tool surface coverage (ADR-0048) -----------------------
+if grep -q '^- \*\*M-AI.2 — delivered\.\*\*' "docs/agent/modules/stdlib.md"; then
+    mai2_tool_terms=(
+        "tool_schema"
+        "tool_registry_new"
+        "tool_registry_register"
+        "tool_invoke"
+        "llm_complete_with_tools"
+        "closed-world"
+        "add_i64"
+        "@cobrust.tool.expose"
+        "Registry"
+        "native provider tool-call"
+    )
+    mai2_tool_files=(
+        "docs/agent/modules/stdlib.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${mai2_tool_terms[@]}"; do
+        for f in "${mai2_tool_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M-AI.2 tool surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    [[ -f "crates/cobrust-stdlib/src/tool.rs" ]] \
+        || fail "crates/cobrust-stdlib/src/tool.rs missing (M-AI.2 ADR-0048)"
+    [[ -f "crates/cobrust-stdlib/tests/tool_corpus.rs" ]] \
+        || fail "crates/cobrust-stdlib/tests/tool_corpus.rs missing (M-AI.2 tests)"
+    [[ -f "crates/cobrust-cli/tests/intrinsics_tool.rs" ]] \
+        || fail "crates/cobrust-cli/tests/intrinsics_tool.rs missing (M-AI.2 E2E tests)"
+    echo "doc-coverage: M-AI.2 tool surface checks passed"
+fi
+
 echo "doc-coverage: M13 stdlib task + sync surface checks passed"
 # --- 23. M14 REPL surface coverage --------------------------------------
 # When the cli module declares M14 delivered, the M14 binding surface

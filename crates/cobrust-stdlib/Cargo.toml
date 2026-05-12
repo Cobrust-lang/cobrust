@@ -34,6 +34,8 @@ llm-router = ["dep:cobrust-llm-router"]
 mimalloc = { version = "0.1", optional = true, default-features = false }
 tokio = { workspace = true, optional = true }
 cobrust-llm-router = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

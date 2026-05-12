@@ -503,6 +503,8 @@ dependencies = [
  "cobrust-llm-router",
  "mimalloc",
  "proptest",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

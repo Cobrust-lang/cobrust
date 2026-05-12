@@ -2316,3 +2316,43 @@ fn main() -> i64:
 
     return 0
 ```
+
+## AI-native stdlib: cobrust.tool (M-AI.2 — delivered)
+
+ADR-0048 §M-AI.2 + spike `docs/agent/spike/m-ai-2-cobrust-tool-spike.md`
+(α Phase 4) add a deliberately flat tool surface. This is **not** the future
+`@cobrust.tool.expose` decorator/method/reflection surface; M-AI.2 α exposes
+five PRELUDE flat-fns that work on JSON strings.
+
+| Function | Signature | Behavior |
+|---|---|---|
+| `tool_schema(name, description, parameters_json, return_type) -> str` | four `str` args | Validates `name`, `return_type`, and a JSON parameter array, then returns compact canonical schema JSON |
+| `tool_registry_new() -> str` | no args | Returns `{"tools":[]}` |
+| `tool_registry_register(registry_json, schema_json) -> str` | two `str` args | Validates both JSON strings, replaces any same-name schema, appends the new schema; duplicate names are last-schema-wins |
+| `tool_invoke(tool_name, args_json) -> str` | two `str` args | closed-world α dispatcher. Supports only `add_i64`; unknown/malformed/overflow returns `""` |
+| `llm_complete_with_tools(prompt, registry_json) -> str` | two `str` args | Prompt-augments with the registry and routes through `llm_dispatch(task="tools", ...)`; native provider tool-call APIs are deferred |
+
+**Deferred future surface:** `@cobrust.tool.expose`, function `.schema()`,
+`cobrust.tool.Registry`, `registry.register(...)`, arbitrary user-function
+reflection/invocation, dict-literal args, and JSON-to-typed-Cobrust decoding
+are not implemented in α. The shipped `tool_invoke` exemplar exists only to
+exercise JSON argument parsing and end-to-end `.cb` compile/run plumbing.
+
+```cobrust
+fn main() -> i64:
+    let schema: str = tool_schema(
+        "add_i64",
+        "Add two integers",
+        "[{\"name\":\"a\",\"type\":\"i64\"},{\"name\":\"b\",\"type\":\"i64\"}]",
+        "i64",
+    )
+    let registry: str = tool_registry_register(tool_registry_new(), schema)
+    let result: str = tool_invoke("add_i64", "{\"a\":1,\"b\":2}")
+    print(result)  # prints 3
+    let response: str = llm_complete_with_tools("What is 1 + 2?", registry)
+    print(response)
+    return 0
+```
+
+**Error mode:** all five functions return `""` on malformed JSON, invalid
+schema, unknown tool, router failure, or unavailable `llm-router` feature.

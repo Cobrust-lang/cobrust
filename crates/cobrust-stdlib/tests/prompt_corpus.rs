@@ -106,11 +106,7 @@ fn test_prompt_render_helper_single_key_value_substitutes_correctly() {
 
     use cobrust_stdlib::prompt::prompt_render_helper;
     let vars = vec!["code".to_string(), "def foo(): pass".to_string()];
-    let result = prompt_render_helper(
-        "You are an expert.",
-        "Translate: {code}",
-        &vars,
-    );
+    let result = prompt_render_helper("You are an expert.", "Translate: {code}", &vars);
     assert_eq!(result, "You are an expert.\nTranslate: def foo(): pass");
 }
 
@@ -125,14 +121,12 @@ fn test_prompt_render_helper_multiple_pairs_substitutes_all() {
 
     use cobrust_stdlib::prompt::prompt_render_helper;
     let vars = vec![
-        "lang".to_string(), "python".to_string(),
-        "code".to_string(), "x = 1".to_string(),
+        "lang".to_string(),
+        "python".to_string(),
+        "code".to_string(),
+        "x = 1".to_string(),
     ];
-    let result = prompt_render_helper(
-        "Convert {lang} code.",
-        "Input: {code}",
-        &vars,
-    );
+    let result = prompt_render_helper("Convert {lang} code.", "Input: {code}", &vars);
     assert_eq!(result, "Convert python code.\nInput: x = 1");
 }
 
@@ -175,9 +169,7 @@ fn test_prompt_render_helper_odd_length_vars_drops_trailing_key_silently() {
 
     use cobrust_stdlib::prompt::prompt_render_helper;
     // 3 elements: ["key1", "val1", "orphan"] — "orphan" has no value.
-    let vars = vec![
-        "key1".to_string(), "val1".to_string(), "orphan".to_string(),
-    ];
+    let vars = vec!["key1".to_string(), "val1".to_string(), "orphan".to_string()];
     let result = prompt_render_helper("sys", "Value: {key1} orphan: {orphan}", &vars);
     // {key1} gets substituted; {orphan} remains literal (no value).
     assert_eq!(result, "sys\nValue: val1 orphan: {orphan}");
@@ -210,11 +202,7 @@ fn test_prompt_render_helper_utf8_multibyte_substitutes_correctly() {
 
     use cobrust_stdlib::prompt::prompt_render_helper;
     let vars = vec!["greeting".to_string(), "こんにちは".to_string()];
-    let result = prompt_render_helper(
-        "你好",
-        "Say: {greeting}",
-        &vars,
-    );
+    let result = prompt_render_helper("你好", "Say: {greeting}", &vars);
     assert_eq!(result, "你好\nSay: こんにちは");
 }
 
@@ -229,12 +217,16 @@ fn test_prompt_render_helper_same_key_later_binding_overrides_earlier() {
 
     use cobrust_stdlib::prompt::prompt_render_helper;
     let vars = vec![
-        "k".to_string(), "first".to_string(),
-        "k".to_string(), "second".to_string(),
+        "k".to_string(),
+        "first".to_string(),
+        "k".to_string(),
+        "second".to_string(),
     ];
     let result = prompt_render_helper("sys", "Val: {k}", &vars);
-    assert_eq!(result, "sys\nVal: second",
-        "later same-key binding must override earlier one (BTreeMap insert)");
+    assert_eq!(
+        result, "sys\nVal: second",
+        "later same-key binding must override earlier one (BTreeMap insert)"
+    );
 }
 
 // =====================================================================
@@ -248,7 +240,7 @@ fn test_prompt_format_few_shot_helper_one_example_produces_canonical_format() {
     require_impl("test_prompt_format_few_shot_helper_one_example_produces_canonical_format");
 
     use cobrust_stdlib::prompt::prompt_format_few_shot_helper;
-    let xin  = vec!["x = 1".to_string()];
+    let xin = vec!["x = 1".to_string()];
     let xout = vec!["let x: i64 = 1".to_string()];
     let result = prompt_format_few_shot_helper(&xin, &xout, "y = 2");
     let expected = "Input: x = 1\nOutput: let x: i64 = 1\n\nInput: y = 2\nOutput:";
@@ -262,10 +254,12 @@ fn test_prompt_format_few_shot_helper_one_example_produces_canonical_format() {
 
 #[test]
 fn test_prompt_format_few_shot_helper_multiple_examples_emits_n_blocks_plus_trailer() {
-    require_impl("test_prompt_format_few_shot_helper_multiple_examples_emits_n_blocks_plus_trailer");
+    require_impl(
+        "test_prompt_format_few_shot_helper_multiple_examples_emits_n_blocks_plus_trailer",
+    );
 
     use cobrust_stdlib::prompt::prompt_format_few_shot_helper;
-    let xin  = vec!["x = 1".to_string(), "y = 2".to_string()];
+    let xin = vec!["x = 1".to_string(), "y = 2".to_string()];
     let xout = vec!["let x: i64 = 1".to_string(), "let y: i64 = 2".to_string()];
     let result = prompt_format_few_shot_helper(&xin, &xout, "z = 3");
     let expected = concat!(
@@ -302,7 +296,7 @@ fn test_prompt_format_few_shot_helper_mismatched_lengths_truncates_to_min() {
 
     use cobrust_stdlib::prompt::prompt_format_few_shot_helper;
     // 3 inputs, 2 outputs — only 2 pairs should appear.
-    let xin  = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let xin = vec!["a".to_string(), "b".to_string(), "c".to_string()];
     let xout = vec!["A".to_string(), "B".to_string()];
     let result = prompt_format_few_shot_helper(&xin, &xout, "d");
     // "c" has no matching output — truncated.
@@ -320,7 +314,7 @@ fn test_prompt_format_few_shot_helper_utf8_multibyte_content_preserved() {
     require_impl("test_prompt_format_few_shot_helper_utf8_multibyte_content_preserved");
 
     use cobrust_stdlib::prompt::prompt_format_few_shot_helper;
-    let xin  = vec!["你好".to_string()];
+    let xin = vec!["你好".to_string()];
     let xout = vec!["こんにちは".to_string()];
     let result = prompt_format_few_shot_helper(&xin, &xout, "안녕");
     let expected = "Input: 你好\nOutput: こんにちは\n\nInput: 안녕\nOutput:";
@@ -337,10 +331,8 @@ fn test_prompt_format_system_user_helper_produces_canonical_format() {
     require_impl("test_prompt_format_system_user_helper_produces_canonical_format");
 
     use cobrust_stdlib::prompt::prompt_format_system_user_helper;
-    let result = prompt_format_system_user_helper(
-        "You are a Cobrust expert.",
-        "Translate this code.",
-    );
+    let result =
+        prompt_format_system_user_helper("You are a Cobrust expert.", "Translate this code.");
     assert_eq!(result, "You are a Cobrust expert.\n\nTranslate this code.");
 }
 
@@ -376,8 +368,10 @@ fn test_prompt_escape_braces_helper_round_trips_through_render() {
     // After rendering with an empty vars map, the output must equal original.
     let rendered = prompt_render_helper("", &escaped, &[]);
     // rendered = "\n" + "value: {x}"
-    assert!(rendered.ends_with(original),
-        "escape → render round-trip must restore original literal text");
+    assert!(
+        rendered.ends_with(original),
+        "escape → render round-trip must restore original literal text"
+    );
 }
 
 // =====================================================================
@@ -443,16 +437,17 @@ fn test_verify_py_oracle_matches_prompt_render_helper_output() {
         .arg("test_prompt_render_helper_single_key_value_substitutes_correctly")
         .output()
         .unwrap();
-    assert!(out.status.success(), "verify.py exited non-zero: {:?}",
-        String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "verify.py exited non-zero: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let py_text = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
     // Compare to Rust-side prompt_render_helper output for the same fixture.
     let vars = vec!["code".to_string(), "def foo(): pass".to_string()];
-    let cb_out = prompt_render_helper(
-        "You are an expert.",
-        "Translate: {code}",
-        &vars,
+    let cb_out = prompt_render_helper("You are an expert.", "Translate: {code}", &vars);
+    assert_eq!(
+        cb_out, py_text,
+        "Cobrust prompt_render_helper must match verify.py oracle for fixture case"
     );
-    assert_eq!(cb_out, py_text,
-        "Cobrust prompt_render_helper must match verify.py oracle for fixture case");
 }

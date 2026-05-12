@@ -2187,3 +2187,38 @@ fn main() -> i64:
 
     return 0
 ```
+
+## AI 原生 stdlib：cobrust.tool（M-AI.2 — 已交付）
+
+ADR-0048 §M-AI.2 + spike `docs/agent/spike/m-ai-2-cobrust-tool-spike.md`（α Phase 4）
+交付的是刻意收窄的平铺函数工具面。它**不是**未来的
+`@cobrust.tool.expose` 装饰器 / 方法 / 反射面；M-AI.2 α 只暴露 5 个处理 JSON 字符串的 PRELUDE 函数。
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `tool_schema(name, description, parameters_json, return_type) -> str` | 四参数均为 `str` | 校验工具名、返回类型、参数 JSON 数组，返回紧凑规范 schema JSON |
+| `tool_registry_new() -> str` | 无参数 | 返回 `{"tools":[]}` |
+| `tool_registry_register(registry_json, schema_json) -> str` | 两参数均为 `str` | 校验 registry/schema JSON，替换同名 schema 后追加；重复名采用 last-schema-wins |
+| `tool_invoke(tool_name, args_json) -> str` | 两参数均为 `str` | closed-world α dispatcher（闭世界）；仅支持 `add_i64`，未知 / malformed / 溢出返回 `""` |
+| `llm_complete_with_tools(prompt, registry_json) -> str` | 两参数均为 `str` | 把工具 registry 注入 prompt 后通过 `llm_dispatch(task="tools", ...)` 路由；native provider tool-call API 延后 |
+
+**明确延后的未来面**：`@cobrust.tool.expose`、函数 `.schema()`、
+`cobrust.tool.Registry`、`registry.register(...)`、任意用户函数反射/调用、dict-literal args、JSON 到 typed Cobrust 的解码均未在 α 实现。当前 `tool_invoke` 示例只用于验证 JSON 参数解析与 `.cb` 编译运行链路。
+
+```cobrust
+fn main() -> i64:
+    let schema: str = tool_schema(
+        "add_i64",
+        "Add two integers",
+        "[{\"name\":\"a\",\"type\":\"i64\"},{\"name\":\"b\",\"type\":\"i64\"}]",
+        "i64",
+    )
+    let registry: str = tool_registry_register(tool_registry_new(), schema)
+    let result: str = tool_invoke("add_i64", "{\"a\":1,\"b\":2}")
+    print(result)  # 输出 3
+    let response: str = llm_complete_with_tools("What is 1 + 2?", registry)
+    print(response)
+    return 0
+```
+
+**错误模式**：五个函数在 malformed JSON、非法 schema、未知工具、router 失败或 `llm-router` feature 不可用时均返回 `""`。

@@ -52,6 +52,16 @@ link against. Constitution §1.1 dual mandate: the runtime half of
   `llm_complete_structured` gated by the existing `llm-router`
   feature; the other four are always present. D2 sonnet pair per
   ADR-0048 §M-AI.1.
+- **M-AI.2 — delivered.** ADR-0048 §M-AI.2 + spike
+  `docs/agent/spike/m-ai-2-cobrust-tool-spike.md` (α Phase 4)
+  add `tool` module unconditionally. Five flat-fn source-level
+  intrinsics (`tool_schema` / `tool_registry_new` /
+  `tool_registry_register` / `tool_invoke` /
+  `llm_complete_with_tools`) lower to C-ABI shims wrapping
+  deterministic JSON schema/registry helpers. `tool_invoke` is a
+  closed-world α dispatcher with only the `add_i64` exemplar;
+  arbitrary user-function invocation, decorators, `.schema()`,
+  `Registry`, and native provider tool-calling APIs are deferred.
 
 ## Public surface (M11)
 
@@ -70,6 +80,7 @@ pub mod runtime;
 #[cfg(feature = "llm-router")]
 pub mod llm;         // M-AI.0 (α Phase 2 ADR-0048 + spike 705f592)
 pub mod prompt;      // M-AI.1 (α Phase 3 ADR-0048 + spike m-ai-1) — unconditional
+pub mod tool;        // M-AI.2 (α Phase 4 ADR-0048 + spike m-ai-2) — unconditional
 
 pub use runtime::{Error, ErrorKind};
 pub use collections::{Dict, List, Set};
@@ -281,6 +292,43 @@ Decision references (spike `m-ai-1-cobrust-prompt-spike.md` + ADR-0048 §M-AI.1)
 - **Decision 6 structured-output**: `llm_complete_structured` appends a JSON-schema instruction then routes via `llm_dispatch(task="structured", ...)`. Caller parses the returned JSON string.
 - **Decision 7 error surface**: all five helpers return `""` on any failure — exact mirror of M-AI.0 OQ-2 Decision 7.
 - **Decision 8 zero new deps**: pure-Rust string manipulation for four fns; fifth reuses `crate::llm::llm_dispatch_blocking` — no new workspace deps.
+
+### `std.tool` (M-AI.2 — ADR-0048 §M-AI.2 + spike m-ai-2)
+
+Five source-level intrinsics for tool schema/registry construction and the α
+closed-world invocation exemplar. JSON is canonical compact serde_json output.
+
+```rust
+// Rust-side helpers:
+pub fn tool_schema_helper(
+    name: &str,
+    description: &str,
+    parameters_json: &str,
+    return_type: &str,
+) -> String;
+pub fn tool_registry_new_helper() -> String;
+pub fn tool_registry_register_helper(registry_json: &str, schema_json: &str) -> String;
+pub fn tool_invoke_helper(tool_name: &str, args_json: &str) -> String;
+pub fn augment_prompt_with_tools_helper(prompt: &str, registry_json: &str) -> String;
+pub fn llm_complete_with_tools_helper(prompt: &str, registry_json: &str) -> String;
+
+// C ABI (codegen targets these via the cobrust-cli intrinsic-rewrite pass):
+pub unsafe extern "C" fn __cobrust_tool_schema(name: *mut u8, description: *mut u8, parameters_json: *mut u8, return_type: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_tool_registry_new() -> *mut u8;
+pub unsafe extern "C" fn __cobrust_tool_registry_register(registry_json: *mut u8, schema_json: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_tool_invoke(tool_name: *mut u8, args_json: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_llm_complete_with_tools(prompt: *mut u8, registry_json: *mut u8) -> *mut u8;
+```
+
+Decision references (spike `m-ai-2-cobrust-tool-spike.md` + ADR-0048 §M-AI.2):
+
+- **Flat-fn naming**: `tool_schema`, `tool_registry_new`, `tool_registry_register`, `tool_invoke`, `llm_complete_with_tools`; no `cobrust.tool.*` module-path lowering at α.
+- **Schema JSON**: `tool_schema` validates `name`, `return_type`, and an array of `{name,type}` parameter objects, then returns compact JSON with field order `name`, `description`, `parameters`, `returns`.
+- **Registry JSON**: `tool_registry_new()` returns `{"tools":[]}`; `tool_registry_register` validates inputs, removes any existing same-name schema, appends the new schema, and serializes compact JSON. Duplicate names are last-schema-wins.
+- **Closed-world invoke**: `tool_invoke` supports only `add_i64` with args `{"a":1,"b":2}` style JSON and returns the numeric result as `str`; unknown tools, malformed args, missing fields, non-integers, and overflow return `""`.
+- **LLM tool calling**: `llm_complete_with_tools` prompt-augments with the registry and routes via `llm_dispatch_blocking("tools", augmented)` when `llm-router` is enabled. Native provider tool-call API fields are deferred.
+- **Deferred future surface**: `@cobrust.tool.expose`, function `.schema()`, `cobrust.tool.Registry`, `registry.register(...)`, arbitrary user-function reflection/invocation, dict-literal args, and JSON-to-typed-Cobrust decoding are not implemented in M-AI.2 α.
+- **Error surface**: all five helpers return `""` on malformed JSON, invalid schema, unknown tool, router failure, or unavailable feature, matching M-AI.0/M-AI.1 α convention.
 
 ### `std.collections`
 

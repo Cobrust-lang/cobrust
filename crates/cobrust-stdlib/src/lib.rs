@@ -101,10 +101,10 @@ pub mod io;
 pub mod iter;
 pub mod math;
 pub mod panic;
+pub mod prompt;
 pub mod runtime;
 pub mod string;
-pub mod prompt;
-
+pub mod tool;
 
 // =====================================================================
 // M-AI.0 — cobrust.llm source-level binding (ADR-0048 + spike 705f592)

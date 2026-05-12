@@ -125,8 +125,8 @@ unsafe fn read_cstr_buf(buf: *mut u8) -> String {
 fn test_cabi_prompt_render_with_valid_buffers_returns_interpolated_text() {
     require_impl("test_cabi_prompt_render_with_valid_buffers_returns_interpolated_text");
 
-    use cobrust_stdlib::fmt::__cobrust_str_drop;
     use cobrust_stdlib::collections::{__cobrust_list_new, __cobrust_list_set};
+    use cobrust_stdlib::fmt::__cobrust_str_drop;
     unsafe {
         let sys_buf = alloc_str_via_static("You are an expert.");
         let usr_buf = alloc_str_via_static("Translate: {code}");
@@ -136,14 +136,17 @@ fn test_cabi_prompt_render_with_valid_buffers_returns_interpolated_text() {
         let vars_list = __cobrust_list_new(8, 2);
         __cobrust_list_set(vars_list, 0, key_buf as i64);
         __cobrust_list_set(vars_list, 1, val_buf as i64);
-        let out = cobrust_stdlib::prompt::__cobrust_prompt_render(
-            sys_buf, usr_buf, vars_list,
-        );
+        let out = cobrust_stdlib::prompt::__cobrust_prompt_render(sys_buf, usr_buf, vars_list);
         assert!(!out.is_null());
-        assert_eq!(read_cstr_buf(out), "You are an expert.\nTranslate: def foo(): pass");
+        assert_eq!(
+            read_cstr_buf(out),
+            "You are an expert.\nTranslate: def foo(): pass"
+        );
         __cobrust_str_drop(out);
-        __cobrust_str_drop(sys_buf); __cobrust_str_drop(usr_buf);
-        __cobrust_str_drop(key_buf); __cobrust_str_drop(val_buf);
+        __cobrust_str_drop(sys_buf);
+        __cobrust_str_drop(usr_buf);
+        __cobrust_str_drop(key_buf);
+        __cobrust_str_drop(val_buf);
     }
 }
 
@@ -156,18 +159,21 @@ fn test_cabi_prompt_render_with_valid_buffers_returns_interpolated_text() {
 fn test_cabi_prompt_render_null_vars_list_treats_as_empty() {
     require_impl("test_cabi_prompt_render_null_vars_list_treats_as_empty");
 
-    use cobrust_stdlib::fmt::{__cobrust_str_drop};
+    use cobrust_stdlib::fmt::__cobrust_str_drop;
     unsafe {
         let sys_buf = alloc_str_via_static("sys");
         let usr_buf = alloc_str_via_static("usr");
         // null vars list → treated as empty, returns "sys\nusr".
-        let out = cobrust_stdlib::prompt::__cobrust_prompt_render(
-            sys_buf, usr_buf, std::ptr::null_mut(),
+        let out =
+            cobrust_stdlib::prompt::__cobrust_prompt_render(sys_buf, usr_buf, std::ptr::null_mut());
+        assert!(
+            !out.is_null(),
+            "null vars list must not produce null result"
         );
-        assert!(!out.is_null(), "null vars list must not produce null result");
         assert_eq!(read_cstr_buf(out), "sys\nusr");
         __cobrust_str_drop(out);
-        __cobrust_str_drop(sys_buf); __cobrust_str_drop(usr_buf);
+        __cobrust_str_drop(sys_buf);
+        __cobrust_str_drop(usr_buf);
     }
 }
 
@@ -186,9 +192,14 @@ fn test_cabi_prompt_render_null_system_pointer_returns_nonnull_result() {
         let usr_buf = alloc_str_via_static("usr");
         // null system pointer — treated as empty string.
         let out = cobrust_stdlib::prompt::__cobrust_prompt_render(
-            std::ptr::null_mut(), usr_buf, std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            usr_buf,
+            std::ptr::null_mut(),
         );
-        assert!(!out.is_null(), "null system arg must produce non-null result");
+        assert!(
+            !out.is_null(),
+            "null system arg must produce non-null result"
+        );
         // result should be "\nusr" (empty system + "\n" + user).
         assert_eq!(read_cstr_buf(out), "\nusr");
         __cobrust_str_drop(out);
@@ -205,24 +216,25 @@ fn test_cabi_prompt_render_null_system_pointer_returns_nonnull_result() {
 fn test_cabi_prompt_format_few_shot_with_lists_builds_correct_format() {
     require_impl("test_cabi_prompt_format_few_shot_with_lists_builds_correct_format");
 
-    use cobrust_stdlib::fmt::__cobrust_str_drop;
     use cobrust_stdlib::collections::{__cobrust_list_new, __cobrust_list_set};
+    use cobrust_stdlib::fmt::__cobrust_str_drop;
     unsafe {
         let in0 = alloc_str_via_static("x = 1");
         let out0 = alloc_str_via_static("let x: i64 = 1");
-        let in_list  = __cobrust_list_new(8, 1);
+        let in_list = __cobrust_list_new(8, 1);
         let out_list = __cobrust_list_new(8, 1);
-        __cobrust_list_set(in_list,  0, in0  as i64);
+        __cobrust_list_set(in_list, 0, in0 as i64);
         __cobrust_list_set(out_list, 0, out0 as i64);
         let cur_buf = alloc_str_via_static("y = 2");
-        let result = cobrust_stdlib::prompt::__cobrust_prompt_format_few_shot(
-            in_list, out_list, cur_buf,
-        );
+        let result =
+            cobrust_stdlib::prompt::__cobrust_prompt_format_few_shot(in_list, out_list, cur_buf);
         assert!(!result.is_null());
         let expected = "Input: x = 1\nOutput: let x: i64 = 1\n\nInput: y = 2\nOutput:";
         assert_eq!(read_cstr_buf(result), expected);
         __cobrust_str_drop(result);
-        __cobrust_str_drop(in0); __cobrust_str_drop(out0); __cobrust_str_drop(cur_buf);
+        __cobrust_str_drop(in0);
+        __cobrust_str_drop(out0);
+        __cobrust_str_drop(cur_buf);
     }
 }
 
@@ -235,18 +247,18 @@ fn test_cabi_prompt_format_few_shot_with_lists_builds_correct_format() {
 fn test_cabi_prompt_format_few_shot_empty_lists_builds_trailer_only() {
     require_impl("test_cabi_prompt_format_few_shot_empty_lists_builds_trailer_only");
 
-    use cobrust_stdlib::fmt::__cobrust_str_drop;
     use cobrust_stdlib::collections::__cobrust_list_new;
+    use cobrust_stdlib::fmt::__cobrust_str_drop;
     unsafe {
-        let in_list  = __cobrust_list_new(8, 0);
+        let in_list = __cobrust_list_new(8, 0);
         let out_list = __cobrust_list_new(8, 0);
-        let cur_buf  = alloc_str_via_static("z = 3");
-        let result = cobrust_stdlib::prompt::__cobrust_prompt_format_few_shot(
-            in_list, out_list, cur_buf,
-        );
+        let cur_buf = alloc_str_via_static("z = 3");
+        let result =
+            cobrust_stdlib::prompt::__cobrust_prompt_format_few_shot(in_list, out_list, cur_buf);
         assert!(!result.is_null());
         assert_eq!(read_cstr_buf(result), "Input: z = 3\nOutput:");
-        __cobrust_str_drop(result); __cobrust_str_drop(cur_buf);
+        __cobrust_str_drop(result);
+        __cobrust_str_drop(cur_buf);
     }
 }
 
@@ -263,16 +275,15 @@ fn test_cabi_prompt_format_system_user_simple_concat_works() {
     unsafe {
         let sys_buf = alloc_str_via_static("You are a Cobrust expert.");
         let usr_buf = alloc_str_via_static("Translate this code.");
-        let result = cobrust_stdlib::prompt::__cobrust_prompt_format_system_user(
-            sys_buf, usr_buf,
-        );
+        let result = cobrust_stdlib::prompt::__cobrust_prompt_format_system_user(sys_buf, usr_buf);
         assert!(!result.is_null());
         assert_eq!(
             read_cstr_buf(result),
             "You are a Cobrust expert.\n\nTranslate this code.",
         );
         __cobrust_str_drop(result);
-        __cobrust_str_drop(sys_buf); __cobrust_str_drop(usr_buf);
+        __cobrust_str_drop(sys_buf);
+        __cobrust_str_drop(usr_buf);
     }
 }
 
@@ -291,7 +302,8 @@ fn test_cabi_prompt_escape_braces_escapes_literal_braces() {
         let result = cobrust_stdlib::prompt::__cobrust_prompt_escape_braces(text_buf);
         assert!(!result.is_null());
         assert_eq!(read_cstr_buf(result), "hello {{world}}");
-        __cobrust_str_drop(result); __cobrust_str_drop(text_buf);
+        __cobrust_str_drop(result);
+        __cobrust_str_drop(text_buf);
     }
 }
 
@@ -390,13 +402,13 @@ fn test_cabi_prompt_shims_utf8_round_trip_byte_identical() {
             __cobrust_list_set(lst, 1, val_buf as i64);
             lst
         };
-        let result = cobrust_stdlib::prompt::__cobrust_prompt_render(
-            sys_buf, usr_buf, vars_list,
-        );
+        let result = cobrust_stdlib::prompt::__cobrust_prompt_render(sys_buf, usr_buf, vars_list);
         assert!(!result.is_null());
         assert_eq!(read_cstr_buf(result), "你好\nSay: こんにちは");
         __cobrust_str_drop(result);
-        __cobrust_str_drop(sys_buf); __cobrust_str_drop(usr_buf);
-        __cobrust_str_drop(key_buf); __cobrust_str_drop(val_buf);
+        __cobrust_str_drop(sys_buf);
+        __cobrust_str_drop(usr_buf);
+        __cobrust_str_drop(key_buf);
+        __cobrust_str_drop(val_buf);
     }
 }

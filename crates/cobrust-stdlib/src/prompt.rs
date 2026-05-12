@@ -155,9 +155,8 @@ pub fn prompt_escape_braces_helper(text: &str) -> String {
 #[cfg(feature = "llm-router")]
 #[must_use]
 pub fn llm_complete_structured_helper(prompt: &str, schema_json: &str) -> String {
-    let augmented = format!(
-        "{prompt}\n\nRespond with valid JSON matching this schema:\n{schema_json}"
-    );
+    let augmented =
+        format!("{prompt}\n\nRespond with valid JSON matching this schema:\n{schema_json}");
     crate::llm::llm_dispatch_blocking("structured", &augmented)
 }
 
