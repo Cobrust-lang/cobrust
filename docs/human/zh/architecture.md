@@ -2146,12 +2146,9 @@ ADR-0048 §M-AI.1 + spike `docs/agent/spike/m-ai-1-cobrust-prompt-spike.md`（α
 
 | 函数 | 签名 | 行为 |
 |------|------|------|
-| `prompt_render(system, user, vars) -> str` | `system`, `user`：`str`；`vars`：`list[str]`（偶数索引键值对） | 对 `"{system}
-{user}"` 做单趟 `{key}` 占位替换；`{{`/`}}` 转义为字面量 `{`/`}`；未知 key 原样保留 |
+| `prompt_render(system, user, vars) -> str` | `system`, `user`：`str`；`vars`：`list[str]`（偶数索引键值对） | 对 `"{system}\n{user}"` 做单趟 `{key}` 占位替换；`{{`/`}}` 转义为字面量 `{`/`}`；未知 key 原样保留 |
 | `prompt_format_few_shot(examples_in, examples_out, current_input) -> str` | 三参数均为 `str` 或 `list[str]` | 渲染标准 few-shot 格式："Input: <in_i>\nOutput: <out_i>\n\n" 逐对循环 + "Input: <current>\nOutput:" 末尾（无换行） |
-| `prompt_format_system_user(system, user) -> str` | 两参数均为 `str` | 直接拼接 `"<system>
-
-<user>"`，不做变量替换 |
+| `prompt_format_system_user(system, user) -> str` | 两参数均为 `str` | 直接拼接 `"<system>\n\n<user>"`，不做变量替换 |
 | `prompt_escape_braces(text) -> str` | 一参数 `str` | `{` → `{{`，`}` → `}}`；用于保护 `prompt_render` 前的字面量大括号 |
 | `llm_complete_structured(prompt, schema_json) -> str` | 两参数均为 `str` | 追加 "Respond with valid JSON..." 指令后调用 `llm_dispatch(task="structured", ...)`；调用者自行解析返回 JSON |
 

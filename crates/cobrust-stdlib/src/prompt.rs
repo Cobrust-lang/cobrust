@@ -2,7 +2,7 @@
 //! primitives.
 //!
 //! ADR-0048 §"M-AI.1 — cobrust.prompt" pins this module; refined by
-//! `docs/agent/spike/m-ai-1-cobrust-prompt-spike.md` (SHA TBD) and
+//! `docs/agent/spike/m-ai-1-cobrust-prompt-spike.md` (commit e225131) and
 //! ratified by `[P10-ALPHA-PHASE-3-RATIFY]`.
 //!
 //! Five source-level intrinsics live in `PRELUDE`:
