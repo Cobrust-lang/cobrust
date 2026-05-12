@@ -2,9 +2,10 @@
 doc_kind: adr
 adr_id: 0048
 title: "Cobrust framing: AI-friendly Python successor with AI-native stdlib direction (Phase F.2)"
-status: proposed
+status: accepted
 date: 2026-05-12
-last_verified_commit: TBD
+last_verified_commit: 8d1ef28
+ratified_by: P10 CTO 2026-05-12 post review-claude APPROVE-WITH-1-BLOCKING (TD-Recursive-Types P0 + 3 P2 nits) all closed at 8d1ef28
 supersedes: []
 superseded_by: []
 relates_to: [adr:0019, adr:0038, adr:0044, adr:0045, adr:0046, adr:0047, adr:0047a]
