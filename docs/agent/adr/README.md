@@ -77,3 +77,4 @@ same atomic commit as the change it justifies.
 | [0046](0046-release-asset-consolidation.md) | release.yml asset consolidation + tier-1 platform contract (codifies F19 prevention) | accepted | 2026-05-11 |
 | [0047](0047-leetcode-coverage-strategy.md) | LeetCode coverage strategy — Tier A discovery (100 programs, 10 categories × 10) + B/C ramp decision gate (≥90% SKIP / 70-89% conditional GO / <70% HOLD); evidence-driven ramp policy + IP-boundary discipline | accepted | 2026-05-11 |
 | [0047a](0047a-verify-py-mandate.md) | Tier B P7-TEST mandate — verify.py independent oracle for every program (closes F23-A oracle-authoring defect after Tier A 65% rate) | accepted | 2026-05-12 |
+| [0048](0048-ai-native-framing-reframe.md) | Cobrust framing reframe — "AI-friendly Python successor with AI-native stdlib in development" (Phase F.2 M-AI.0..M-AI.6 batch) + v0.2.0-alpha tag binding | proposed | 2026-05-12 |
