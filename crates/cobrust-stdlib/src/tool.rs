@@ -21,7 +21,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ToolParam {
@@ -157,8 +156,7 @@ mod tests {
 
     #[test]
     fn augment_prompt_with_tools_is_prompt_only() {
-        let registry =
-            r#"{"tools":[{"name":"add_i64","description":"Add two integers","parameters":[{"name":"a","type":"i64"},{"name":"b","type":"i64"}],"returns":"i64"}]}"#;
+        let registry = r#"{"tools":[{"name":"add_i64","description":"Add two integers","parameters":[{"name":"a","type":"i64"},{"name":"b","type":"i64"}],"returns":"i64"}]}"#;
         let augmented = augment_prompt_with_tools_helper("What is 1+2?", registry);
         assert!(augmented.contains("What is 1+2?"));
         assert!(augmented.contains("Available tools:"));

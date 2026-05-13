@@ -1102,7 +1102,10 @@ fn test_t61b_input_runtime_prompt_prints_prompt_and_value() {
         stdout.contains("please enter: "),
         "expected runtime prompt in stdout, got {stdout:?}"
     );
-    assert!(stdout.contains("hello"), "expected echoed input, got {stdout:?}");
+    assert!(
+        stdout.contains("hello"),
+        "expected echoed input, got {stdout:?}"
+    );
 }
 
 // ----- #62 argv() in fn body after declarations ---------------------
