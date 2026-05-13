@@ -88,7 +88,9 @@ preferred = ["user_codex:gpt-5.5"]
 
 # ---- M-AI.0 (α Phase 2): cobrust.llm source-level binding ---------------
 # ADR-0048 + spike docs/agent/spike/m-ai-0-cobrust-llm-spike.md (705f592)
-# expose three flat-fn intrinsics to Cobrust source:
+# expose three flat-fn intrinsics to Cobrust source.
+# These are called as prelude functions in user code today — not as
+# `cobrust.llm.*` module-path syntax:
 #
 #   llm_complete(provider, model, prompt) -> str
 #   llm_dispatch(task, prompt) -> str
@@ -134,7 +136,9 @@ preferred = [
 # want for structured JSON outputs (e.g. a model with native JSON mode).
 #
 # If [routing.structured] is absent, `llm_complete_structured` returns ""
-# (Decision 7 empty-on-failure mirror of M-AI.0).
+# (Decision 7 empty-on-failure mirror of M-AI.0). In user-facing terms:
+# missing route/provider setup currently looks like an empty result, not a
+# rich runtime diagnostic.
 
 [routing.structured]
 strategy = "quality"
@@ -151,7 +155,8 @@ preferred = ["anthropic_official:claude-opus-4-7"]
 # tool-assisted flow should declare `[routing.tools]` explicitly.
 #
 # If [routing.tools] is absent, `llm_complete_with_tools` returns ""
-# (same empty-on-failure α convention as M-AI.0/M-AI.1).
+# (same empty-on-failure α convention as M-AI.0/M-AI.1). In other words,
+# a setup failure currently shows up as an empty string result.
 
 [routing.tools]
 strategy = "quality"
