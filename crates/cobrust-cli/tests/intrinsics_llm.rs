@@ -169,8 +169,9 @@ fn test_e2e_llm_complete_prints_canned_response_via_wiremock() {
 //   for x in xs:
 //       print(x)
 //   ```
-// Exercises stream → list-iter → print-loop wiring (spike Decision 3B
-// collect-all-chunks form).
+// Exercises the current alpha collect-all shim: today `llm_stream`
+// returns either `[]` or a single full-response chunk, not provider
+// delta frames.
 // =====================================================================
 
 #[test]
@@ -178,24 +179,19 @@ fn test_e2e_llm_stream_for_loop_prints_each_chunk() {
     require_impl("test_e2e_llm_stream_for_loop_prints_each_chunk");
     // Once impl lands, DEV uncomments:
     //
-    //   // SSE response that emits two `data:` frames (deltas) then [DONE].
-    //   // Matches the OpenAI streaming convention; per spike Decision 3B
-    //   // the shim collects all Delta frames into Vec<String>.
-    //   let sse_body =
-    //       "data: {\"choices\":[{\"delta\":{\"content\":\"foo\"}}]}\n\n\
-    //        data: {\"choices\":[{\"delta\":{\"content\":\"-bar\"}}]}\n\n\
-    //        data: [DONE]\n\n";
-    //   // ... wiremock setup as in test #1 returning this body for
-    //   //     POST /chat/completions with content-type text/event-stream ...
+    //   // Non-streaming completion response. Current alpha contract wraps
+    //   // the full response in a single list element instead of surfacing
+    //   // provider delta frames.
+    //   // ... wiremock setup as in test #1 returning a standard
+    //   //     /chat/completions payload with assistant content "foo-bar" ...
     //   //
     //   // .cb program:
     //   //   let xs: list[str] = llm_stream("syn", "m1", "hi")
     //   //   for x in xs: print(x)
     //   //
-    //   // Expected stdout: contains "foo" AND contains "-bar".
+    //   // Expected stdout: contains "foo-bar" exactly once.
     //   //
-    //   // ... cobrust build + invoke exe, assert stdout.contains("foo") &&
-    //   //     stdout.contains("-bar") ...
+    //   // ... cobrust build + invoke exe, assert stdout.contains("foo-bar") ...
 }
 
 // =====================================================================

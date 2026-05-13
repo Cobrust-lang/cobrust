@@ -265,8 +265,10 @@ fn test_llm_dispatch_blocking_consensus_strategy_routes_through_consensus_path()
 }
 
 // =====================================================================
-// Tier 1 #10 — llm_stream_blocking returns an ordered Vec<String> of
-// delta chunks from a synthetic stream.
+// Tier 1 #10 — llm_stream_blocking returns an ordered Vec<String>
+// whose concatenation matches the full response text. In the current
+// alpha shim this may be a single full-response chunk rather than true
+// provider deltas.
 // =====================================================================
 
 #[test]
@@ -274,16 +276,17 @@ fn test_llm_stream_blocking_returns_ordered_chunks() {
     require_impl("test_llm_stream_blocking_returns_ordered_chunks");
     // Once impl lands, DEV uncomments:
     //
-    //   // Synthetic double's complete_stream yields Delta("hello-")+Delta("world")+Done.
+    //   // Current alpha contract is collect-all, so the helper may return a
+    //   // single full-response chunk instead of true provider deltas.
     //   let provider = SyntheticDouble::new(vec![Scripted::Ok("hello-world".into())]);
     //   cobrust_stdlib::llm::__test_register_synthetic_provider("syn", provider);
     //   let _guard = set_cobrust_config(&write_synthetic_toml_single("syn"));
     //   let chunks: Vec<String> =
     //       cobrust_stdlib::llm::llm_stream_blocking("syn", "m1", "hi");
-    //   assert!(!chunks.is_empty(), "stream must yield ≥1 delta");
+    //   assert!(!chunks.is_empty(), "stream must yield at least one chunk");
     //   let concatenated: String = chunks.concat();
     //   assert_eq!(concatenated, "hello-world",
-    //       "concatenation of deltas must equal the synthetic completion text");
+    //       "concatenation of chunks must equal the completion text");
 }
 
 // =====================================================================
@@ -307,9 +310,9 @@ fn test_llm_stream_blocking_empty_stream_returns_empty_vec() {
 }
 
 // =====================================================================
-// Tier 1 #12 — llm_stream_blocking on stream-error mid-stream returns
-// the partial Vec collected so far (per spike Decision 3B collect-all-
-// chunks semantics + Decision 7 empty-on-failure convention).
+// Tier 1 #12 — llm_stream_blocking on stream-error mid-stream does not
+// panic. Under the current alpha collect-all shim there is no partial-
+// delta surface; failure collapses to the empty-list convention.
 // =====================================================================
 
 #[test]
@@ -317,7 +320,9 @@ fn test_llm_stream_blocking_mid_stream_error_returns_partial_vec() {
     require_impl("test_llm_stream_blocking_mid_stream_error_returns_partial_vec");
     // Once impl lands, DEV uncomments:
     //
-    //   // Synthetic double's complete_stream errors after yielding "part-".
+    //   // Under the current collect-all shim, stream-specific mid-flight
+    //   // errors are not surfaced as partial chunks. The binding contract is
+    //   // simply that the helper does not panic and may return an empty vec.
     //   let provider = SyntheticDouble::with_stream_script(vec![
     //       StreamScripted::Delta("part-".into()),
     //       StreamScripted::Err(LlmError::Stream("truncated".into())),
@@ -326,9 +331,6 @@ fn test_llm_stream_blocking_mid_stream_error_returns_partial_vec() {
     //   let _guard = set_cobrust_config(&write_synthetic_toml_single("syn"));
     //   let chunks: Vec<String> =
     //       cobrust_stdlib::llm::llm_stream_blocking("syn", "m1", "hi");
-    //   // Decision 7 says "" / empty list signals failure; partial may also be
-    //   // returned. Either is acceptable as long as it does not panic. DEV
-    //   // implements per spike Decision 3B's "Empty list signals failure".
     //   let _ = chunks; // No panic is the binding contract.
 }
 
