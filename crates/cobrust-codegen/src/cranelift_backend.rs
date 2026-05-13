@@ -926,6 +926,24 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
         Ok((ptr, len))
     }
 
+    /// Materialize a source-level string literal as a Cobrust heap `Str`
+    /// buffer for runtime helpers whose C ABI expects pointer-only Str args.
+    fn materialize_str_buffer(&mut self, payload: &str) -> Result<ir::Value, CodegenError> {
+        let buf = if let Some(fr) = self.runtime_funcs.get("__cobrust_str_new").copied() {
+            let inst = self.builder.ins().call(fr, &[]);
+            self.builder.inst_results(inst)[0]
+        } else {
+            self.builder.ins().iconst(self.pointer_type, 0)
+        };
+        if !payload.is_empty() {
+            let (ptr, len) = self.materialize_str_data(payload)?;
+            if let Some(push_fr) = self.runtime_funcs.get("__cobrust_str_push_static").copied() {
+                self.builder.ins().call(push_fr, &[buf, ptr, len]);
+            }
+        }
+        Ok(buf)
+    }
+
     fn lower_statement(&mut self, stmt: &Statement) -> Result<(), CodegenError> {
         match &stmt.kind {
             StatementKind::Nop | StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {
@@ -1084,11 +1102,14 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                             && matches!(args.last(), Some(Operand::Constant(Constant::Str(_))));
                         for (idx, arg) in args.iter().enumerate() {
                             if let Operand::Constant(Constant::Str(payload)) = arg {
-                                let (ptr, len) = self.materialize_str_data(payload)?;
-                                call_args.push(ptr);
                                 let is_last = idx + 1 == args.len();
                                 if expand_str_to_ptr_len || (expand_trailing_str_len && is_last) {
+                                    let (ptr, len) = self.materialize_str_data(payload)?;
+                                    call_args.push(ptr);
                                     call_args.push(len);
+                                } else {
+                                    let buf = self.materialize_str_buffer(payload)?;
+                                    call_args.push(buf);
                                 }
                             } else {
                                 let v = self.lower_operand(arg)?;
@@ -2008,6 +2029,73 @@ fn runtime_helper_signatures(
     // `StringBuffer` cast. Runtime-str callsites continue to use the
     // existing single-pointer entry.
     out.push(("__cobrust_print_no_nl_lit", sig(call_conv, &[p, i64], None)));
+
+    // -- M-AI.0 (α Phase 2): cobrust.llm source-level binding ---------
+    // `llm_complete(provider, model, prompt) -> str`. All three args are
+    // heap-Str pointers (or .rodata-static-literal pointers). Returns an
+    // owned Str pointer (Decision 7: empty Str on any failure).
+    out.push((
+        "__cobrust_llm_complete",
+        sig(call_conv, &[p, p, p], Some(p)),
+    ));
+    // `llm_dispatch(task, prompt) -> str`. Both args are Str pointers.
+    out.push(("__cobrust_llm_dispatch", sig(call_conv, &[p, p], Some(p))));
+    // `llm_stream(provider, model, prompt) -> list[str]`. Returns a list
+    // pointer (Decision 3B collect-all-chunks form). Element i64 slots
+    // store heap-Str pointers per the `__cobrust_argv` precedent.
+    out.push(("__cobrust_llm_stream", sig(call_conv, &[p, p, p], Some(p))));
+
+    // -- M-AI.1 (α Phase 3): cobrust.prompt source-level binding ------
+    // `prompt_render(system: str, user: str, vars: list[str]) -> str`.
+    // system + user are Str pointers; vars is a list pointer (heap List
+    // whose i64 slots store heap-Str pointers — same shape `__cobrust_argv`
+    // returns + `llm_stream` returns).
+    out.push((
+        "__cobrust_prompt_render",
+        sig(call_conv, &[p, p, p], Some(p)),
+    ));
+
+    // `prompt_format_few_shot(examples_in: list[str], examples_out: list[str],
+    //                         current_input: str) -> str`.
+    // All three are pointers.
+    out.push((
+        "__cobrust_prompt_format_few_shot",
+        sig(call_conv, &[p, p, p], Some(p)),
+    ));
+
+    // `prompt_format_system_user(system: str, user: str) -> str`.
+    out.push((
+        "__cobrust_prompt_format_system_user",
+        sig(call_conv, &[p, p], Some(p)),
+    ));
+
+    // `prompt_escape_braces(text: str) -> str`.
+    out.push((
+        "__cobrust_prompt_escape_braces",
+        sig(call_conv, &[p], Some(p)),
+    ));
+
+    // `llm_complete_structured(prompt: str, schema_json: str) -> str`.
+    out.push((
+        "__cobrust_llm_complete_structured",
+        sig(call_conv, &[p, p], Some(p)),
+    ));
+
+    // -- M-AI.2 (α Phase 4): cobrust.tool source-level binding --------
+    out.push((
+        "__cobrust_tool_schema",
+        sig(call_conv, &[p, p, p, p], Some(p)),
+    ));
+    out.push(("__cobrust_tool_registry_new", sig(call_conv, &[], Some(p))));
+    out.push((
+        "__cobrust_tool_registry_register",
+        sig(call_conv, &[p, p], Some(p)),
+    ));
+    out.push(("__cobrust_tool_invoke", sig(call_conv, &[p, p], Some(p))));
+    out.push((
+        "__cobrust_llm_complete_with_tools",
+        sig(call_conv, &[p, p], Some(p)),
+    ));
 
     out
 }

@@ -2078,3 +2078,152 @@ CI 全绿但差分 oracle 从未被调用——这是一个假绿。
 | ubuntu-latest（CI） | 运行——`apt-get install python3.11` 提供 oracle |
 | macos-latest（CI） | 运行——Homebrew Python 在 PATH 上 |
 | 精简 CI / 本地（无 Python） | 跳过——退出 0，发出 warning |
+
+## AI 原生 stdlib：cobrust.llm（M-AI.0 — 已交付）
+
+ADR-0048 + spike `docs/agent/spike/m-ai-0-cobrust-llm-spike.md`（SHA 705f592）
+为 Cobrust 增加了对 `crates/cobrust-llm-router` 的 source-level 绑定。在 α
+Phase 2 完成，提供三个 PRELUDE 内置函数：
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `llm_complete(provider, model, prompt) -> str` | 三参数皆为 `str` | 直接以指定的 `(provider, model)` 派发一次 completion 请求；任何错误返回 `""`（Decision 7） |
+| `llm_dispatch(task, prompt) -> str` | 两参数皆为 `str` | 通过 `cobrust.toml` 中的 `[routing.<task>]` 路由表选择 provider+model；未声明的任务返回 `""` |
+| `llm_stream(provider, model, prompt) -> list[str]` | 三参数皆为 `str` | 收集所有 Delta chunk（Decision 3B），按顺序返回；失败返回空列表 |
+
+**架构选择（OQ ratification）**：
+
+- **OQ-1A 平铺命名**：α 阶段使用 `llm_complete` / `llm_dispatch` / `llm_stream` 平铺命名（与 ADR-0044 `input` / `argv` 同构），不引入 `cobrust.X.Y` 模块路径降级（待 follow-up spike）。
+- **OQ-2B 收集所有 chunk**：`llm_stream` 不暴露真异步流，而是先把所有 chunk 收集进 `list[str]`，再交给 for 循环迭代。真异步流需要 iter 协议升级（M12.x 仍是 i64-only），延后到 M-AI.0.x。
+- **OQ-3 WRAP**：通过在 `RouterConfigBundle` 初始化时**合成** routing-table entries（每个声明的 `(provider, model)` 对生成一条 `[routing.llm_complete_<p>_<m>]` + `[routing.llm_stream_<p>_<m>]`）实现 `(provider, model)` 直接定位，不修改 `crates/cobrust-llm-router` 源码。Router 在 `try_provider` 里强制 `request.model = pm.model.clone()`（router.rs:462-465），从而保证合成 entry 的 `(provider, model)` 被字节级遵守。
+
+**配置示例**（`cobrust.toml`）：
+
+```toml
+[router]
+default_strategy = "quality"
+ledger_path = ".cobrust/ledger.jsonl"
+
+[providers.anthropic_official]
+kind = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+models = ["claude-opus-4-7"]
+
+# llm_dispatch 用户自定义任务路由：
+[routing.summarize_doc]
+strategy = "quality"
+preferred = ["anthropic_official:claude-opus-4-7"]
+
+# llm_complete / llm_stream 的 (provider, model) 直达路由由 stdlib 自动合成，
+# 无需用户手写 [routing.llm_complete_*] 条目（合成行为见 OQ-3 WRAP）。
+```
+
+**Cobrust 源码用法**：
+
+```cobrust
+fn main() -> i64:
+    # 直接定位 provider + model
+    let r: str = llm_complete("anthropic_official", "claude-opus-4-7", "讲个冷笑话")
+    print(r)
+    # 路由表派发
+    let s: str = llm_dispatch("summarize_doc", "TLDR 这一段")
+    print(s)
+    # 流式聚合
+    let chunks: list[str] = llm_stream("anthropic_official", "claude-opus-4-7", "Hi")
+    for chunk in chunks:
+        print(chunk)
+    return 0
+```
+
+**错误模式**：所有三个函数遵循 ADR-0044 W2 的"无 try-catch"接口规范——失败一律返回 `""` 或空列表，错误细节由 router 的 ledger（`.cobrust/ledger.jsonl`）持久化捕获。源码侧的类型化 `Result[str, LlmError]` 是 M-AI.0.x 候选（配合 ADR-0044a 的类型化 Result 降级）。
+
+## AI 原生 stdlib：cobrust.prompt（M-AI.1 — 已交付）
+
+ADR-0048 §M-AI.1 + spike `docs/agent/spike/m-ai-1-cobrust-prompt-spike.md`（α Phase 3）
+为 Cobrust 增加了 5 个 prompt 组合原语。在 `crates/cobrust-stdlib/src/prompt.rs`
+实现，通过 PRELUDE 平铺命名暴露，无需新 Cargo feature。
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `prompt_render(system, user, vars) -> str` | `system`, `user`：`str`；`vars`：`list[str]`（偶数索引键值对） | 对 `"{system}\n{user}"` 做单趟 `{key}` 占位替换；`{{`/`}}` 转义为字面量 `{`/`}`；未知 key 原样保留 |
+| `prompt_format_few_shot(examples_in, examples_out, current_input) -> str` | 三参数均为 `str` 或 `list[str]` | 渲染标准 few-shot 格式："Input: <in_i>\nOutput: <out_i>\n\n" 逐对循环 + "Input: <current>\nOutput:" 末尾（无换行） |
+| `prompt_format_system_user(system, user) -> str` | 两参数均为 `str` | 直接拼接 `"<system>\n\n<user>"`，不做变量替换 |
+| `prompt_escape_braces(text) -> str` | 一参数 `str` | `{` → `{{`，`}` → `}}`；用于保护 `prompt_render` 前的字面量大括号 |
+| `llm_complete_structured(prompt, schema_json) -> str` | 两参数均为 `str` | 追加 "Respond with valid JSON..." 指令后调用 `llm_dispatch(task="structured", ...)`；调用者自行解析返回 JSON |
+
+**架构选择**：
+
+- **平铺命名**：与 M-AI.0 `llm_*` 同构；无模块路径降级。
+- **vars 形状**（Decision 3C）：`list[str]` 偶数索引 `[k1, v1, k2, v2, ...]`——与 `argv()` / `llm_stream()` ABI 相同；奇数长度静默丢弃尾 key。
+- **插值语法**（Decision 4）：`{key}` 占位；`{{` / `}}` 转义；未知 key 原样，单趟扫描不递归。
+- **Few-shot 格式**（Decision 5）：标准 "Input/Output" 对格式，锁定在标准库层；下游 wrapper 可在此基础上二次包装。
+- **结构化输出**（Decision 6）：`llm_complete_structured` 通过 `cobrust.toml` 的 `[routing.structured]` 路由——由 `llm-router` feature 门控。
+- **错误模式**（Decision 7）：所有五个函数在任何失败时返回 `""`，与 M-AI.0 保持一致。
+
+**Cobrust 源码用法**：
+
+```cobrust
+fn main() -> i64:
+    # 变量插值
+    let rendered: str = prompt_render(
+        "你是 Cobrust 专家。",
+        "请翻译以下 Python：{code}",
+        ["code", "def foo(): pass"],
+    )
+    print(rendered)
+
+    # Few-shot 格式
+    let fs: str = prompt_format_few_shot(
+        ["x = 1", "y = 2"],
+        ["let x: i64 = 1", "let y: i64 = 2"],
+        "z = 3",
+    )
+    print(fs)
+
+    # 转义字面量大括号
+    let escaped: str = prompt_escape_braces("值：{raw}")
+    print(escaped)  # 输出 "值：{{raw}}"
+
+    return 0
+```
+
+## AI 原生 stdlib：cobrust.tool（M-AI.2 — 已交付）
+
+ADR-0048 §M-AI.2 + spike `docs/agent/spike/m-ai-2-cobrust-tool-spike.md`（α Phase 4）
+交付的是刻意收窄的平铺函数工具面。它**不是**未来的
+`@cobrust.tool.expose` 装饰器 / 方法 / 反射面；M-AI.2 α 只暴露 5 个处理 JSON 字符串的 PRELUDE 函数。
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `tool_schema(name, description, parameters_json, return_type) -> str` | 四参数均为 `str` | 校验工具名、返回类型、参数 JSON 数组，返回紧凑规范 schema JSON |
+| `tool_registry_new() -> str` | 无参数 | 返回 `{"tools":[]}` |
+| `tool_registry_register(registry_json, schema_json) -> str` | 两参数均为 `str` | 校验 registry/schema JSON，替换同名 schema 后追加；重复名采用 last-schema-wins |
+| `tool_invoke(tool_name, args_json) -> str` | 两参数均为 `str` | closed-world α dispatcher（闭世界）；仅支持 `add_i64`，未知 / malformed / 溢出返回 `""` |
+| `llm_complete_with_tools(prompt, registry_json) -> str` | 两参数均为 `str` | 把工具 registry 注入 prompt 后通过 `llm_dispatch(task="tools", ...)` 路由；native provider tool-call API 延后 |
+
+要启用 tool-assisted LLM 流程，需要在 `cobrust.toml` 里显式声明
+`[routing.tools]`（示例见 `cobrust.toml.example`）。如果缺少
+`[routing.tools]`，`llm_complete_with_tools(...)` 会沿用与
+`llm_complete_structured(...)` 相同的 α 阶段 empty-on-failure 约定，直接返回 `""`。
+
+**明确延后的未来面**：`@cobrust.tool.expose`、函数 `.schema()`、
+`cobrust.tool.Registry`、`registry.register(...)`、任意用户函数反射/调用、dict-literal args、JSON 到 typed Cobrust 的解码均未在 α 实现。当前 `tool_invoke` 示例只用于验证 JSON 参数解析与 `.cb` 编译运行链路。
+
+```cobrust
+fn main() -> i64:
+    let schema: str = tool_schema(
+        "add_i64",
+        "Add two integers",
+        "[{\"name\":\"a\",\"type\":\"i64\"},{\"name\":\"b\",\"type\":\"i64\"}]",
+        "i64",
+    )
+    let registry: str = tool_registry_register(tool_registry_new(), schema)
+    let result: str = tool_invoke("add_i64", "{\"a\":1,\"b\":2}")
+    print(result)  # 输出 3
+    let response: str = llm_complete_with_tools("What is 1 + 2?", registry)
+    print(response)
+    return 0
+```
+
+**错误模式**：五个函数在 malformed JSON、非法 schema、未知工具、router 失败或 `llm-router` feature 不可用时均返回 `""`。

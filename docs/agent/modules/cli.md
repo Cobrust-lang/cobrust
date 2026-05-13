@@ -34,6 +34,36 @@ end-to-end driver and ships the M10 hello-world contract.
   comparison + boolean + var-lookup + `let`-binding. Cold start <200ms
   (~10ms release on macOS arm64). 50-session golden corpus at
   `examples/repl-session.txt`.
+- **M-AI.0 — delivered.** ADR-0048 + spike
+  `docs/agent/spike/m-ai-0-cobrust-llm-spike.md` (SHA 705f592)
+  extends `PRELUDE` with three new flat-fn stubs
+  (`llm_complete` / `llm_dispatch` / `llm_stream`) and the
+  intrinsic-rewrite pass (`crates/cobrust-cli/src/build/intrinsics.rs`)
+  with three matching `Kind` variants + match arms. Each rewrite
+  rewrites the MIR `Call`'s `func` operand to a runtime symbol
+  (`__cobrust_llm_complete` / `__cobrust_llm_dispatch` /
+  `__cobrust_llm_stream`) exported by `cobrust-stdlib::llm`. All three
+  arms preserve the operand list unchanged (Str args remain pointer-
+  only at the C ABI). Codegen amends `runtime_helper_signatures` with
+  three new entries (`(p, p, p) -> p` for complete/stream; `(p, p) -> p`
+  for dispatch).
+- **M-AI.1 — delivered.** ADR-0048 §M-AI.1 + spike
+  `docs/agent/spike/m-ai-1-cobrust-prompt-spike.md` (α Phase 3)
+  extends `PRELUDE` in `crates/cobrust-cli/src/build.rs` with five
+  new flat-fn stubs (`prompt_render` / `prompt_format_few_shot` /
+  `prompt_format_system_user` / `prompt_escape_braces` /
+  `llm_complete_structured`) and the intrinsic-rewrite pass
+  (`crates/cobrust-cli/src/build/intrinsics.rs`) with five new
+  `PROMPT_*_RUNTIME_SYMBOL` + `LLM_COMPLETE_STRUCTURED_RUNTIME_SYMBOL`
+  constants, five new `Kind` variants, and five new match arms in
+  `kind_for_name` / `kind_for_def_id` / `rewrite_print`. Each arm
+  rewrites the MIR `Call`'s `func` operand to the corresponding
+  runtime symbol exported by `cobrust-stdlib::prompt`. All five arms
+  preserve pointer-only operand lists (no `(ptr, len)` expansion).
+  Codegen amends `runtime_helper_signatures` with five new entries:
+  `(p, p, p) -> p` for `prompt_render` / `prompt_format_few_shot`;
+  `(p, p) -> p` for `prompt_format_system_user` / `llm_complete_structured`;
+  `(p,) -> p` for `prompt_escape_braces`.
 
 ## Public surface (M10)
 
@@ -286,6 +316,77 @@ managed by rustyline).
   pins (macOS arm64 + Linux x86_64 at M10).
 - No arbitrary `print(s: str)` lowering at M10 — narrowed to the literal
   `"hello, world"`. M11 stdlib `std.io.println` widens.
+
+## M-AI.1 — cobrust.prompt PRELUDE / intrinsic-rewrite extension
+
+### PRELUDE amendment (α Phase 3)
+
+`crates/cobrust-cli/src/build.rs` — `PRELUDE` constant extended with
+five new flat-fn stubs appended after the M-AI.0 `llm_stream` stub:
+
+```cobrust
+fn prompt_render(system: str, user: str, vars: list[str]) -> str:
+    return ""
+
+fn prompt_format_few_shot(examples_in: list[str], examples_out: list[str], current_input: str) -> str:
+    return ""
+
+fn prompt_format_system_user(system: str, user: str) -> str:
+    return ""
+
+fn prompt_escape_braces(text: str) -> str:
+    return ""
+
+fn llm_complete_structured(prompt: str, schema_json: str) -> str:
+    return ""
+```
+
+All five stubs are unconditional (no `#[cfg(feature = "llm-router")]`
+at the PRELUDE level). The `llm_complete_structured` stub compiles at
+all builds; the actual C-ABI shim body is feature-gated in stdlib.
+
+### Intrinsic-rewrite extension (α Phase 3)
+
+`crates/cobrust-cli/src/build/intrinsics.rs` — mirroring the M-AI.0
+LLM block, five new entries per each prompt intrinsic:
+
+| New symbol constant | Value |
+|---|---|
+| `PROMPT_RENDER_RUNTIME_SYMBOL` | `"__cobrust_prompt_render"` |
+| `PROMPT_FORMAT_FEW_SHOT_RUNTIME_SYMBOL` | `"__cobrust_prompt_format_few_shot"` |
+| `PROMPT_FORMAT_SYSTEM_USER_RUNTIME_SYMBOL` | `"__cobrust_prompt_format_system_user"` |
+| `PROMPT_ESCAPE_BRACES_RUNTIME_SYMBOL` | `"__cobrust_prompt_escape_braces"` |
+| `LLM_COMPLETE_STRUCTURED_RUNTIME_SYMBOL` | `"__cobrust_llm_complete_structured"` |
+
+Five new `IntrinsicDefIds` fields and corresponding `Kind` variants
+(`PromptRender` / `PromptFormatFewShot` / `PromptFormatSystemUser` /
+`PromptEscapeBraces` / `LlmCompleteStructured`). Each `rewrite_print`
+arm preserves the pointer-only operand list (no `(ptr, len)` expansion
+— all args are heap Str / List pointers).
+
+Arg-count rules per arm:
+
+| Intrinsic | Expected args | Error on mismatch |
+|---|---|---|
+| `prompt_render` | 3 (system, user, vars) | `PrintArgUnsupported` |
+| `prompt_format_few_shot` | 3 (in_list, out_list, current_str) | `PrintArgUnsupported` |
+| `prompt_format_system_user` | 2 (system, user) | `PrintArgUnsupported` |
+| `prompt_escape_braces` | 1 (text) | `PrintArgUnsupported` |
+| `llm_complete_structured` | 2 (prompt, schema_json) | `PrintArgUnsupported` |
+
+### Codegen amendment (α Phase 3)
+
+`crates/cobrust-codegen/src/cranelift_backend.rs` —
+`runtime_helper_signatures()` extended with five new entries after
+the M-AI.0 block (before the `out` return):
+
+```rust
+out.push(("__cobrust_prompt_render",           sig(call_conv, &[p, p, p], Some(p))));
+out.push(("__cobrust_prompt_format_few_shot",  sig(call_conv, &[p, p, p], Some(p))));
+out.push(("__cobrust_prompt_format_system_user", sig(call_conv, &[p, p], Some(p))));
+out.push(("__cobrust_prompt_escape_braces",    sig(call_conv, &[p],    Some(p))));
+out.push(("__cobrust_llm_complete_structured", sig(call_conv, &[p, p], Some(p))));
+```
 
 ## T1.3 — Install-path zero-friction (0.1.0-beta)
 

@@ -101,8 +101,18 @@ pub mod io;
 pub mod iter;
 pub mod math;
 pub mod panic;
+pub mod prompt;
 pub mod runtime;
 pub mod string;
+pub mod tool;
+
+// =====================================================================
+// M-AI.0 — cobrust.llm source-level binding (ADR-0048 + spike 705f592)
+// Gated by the default-on `llm-router` Cargo feature, mirroring how
+// M13 modules are gated by `tokio-runtime`.
+// =====================================================================
+#[cfg(feature = "llm-router")]
+pub mod llm;
 
 pub use runtime::{Error, ErrorKind};
 

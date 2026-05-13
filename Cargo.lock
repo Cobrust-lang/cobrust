@@ -500,8 +500,11 @@ dependencies = [
 name = "cobrust-stdlib"
 version = "0.1.2"
 dependencies = [
+ "cobrust-llm-router",
  "mimalloc",
  "proptest",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
 ]
