@@ -74,13 +74,19 @@ fn cobrust_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_cobrust"))
 }
 
-fn write_temp(name: &str, contents: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("cobrust-verifier-{}-{}", name, std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    let p = dir.join(format!("{name}.cb"));
-    std::fs::write(&p, contents).expect("write temp .cb");
-    p
+struct TempSource {
+    _temp_dir: tempfile::TempDir,
+    path: PathBuf,
+}
+
+fn write_temp(name: &str, contents: &str) -> TempSource {
+    let dir = tempfile::tempdir().expect("create temp source dir");
+    let path = dir.path().join(format!("{name}.cb"));
+    std::fs::write(&path, contents).expect("write temp .cb");
+    TempSource {
+        _temp_dir: dir,
+        path,
+    }
 }
 
 /// Negative control: a minimal well-formed program that builds cleanly.
@@ -96,6 +102,7 @@ const CLEAN_PROGRAM: &str = "fn main() -> i64:\n    return 0\n";
 fn v02_clean_program_exits_zero() {
     let bin = cobrust_binary();
     let src = write_temp("v02_clean", CLEAN_PROGRAM);
+    let src = &src.path;
     let out = Command::new(&bin)
         .arg("build")
         .arg(&src)

@@ -105,9 +105,10 @@ fn drive_repl(inputs: &[String]) -> (String, String, i32) {
     }
     script.push_str(":quit\n");
 
+    let home = tempfile::tempdir().expect("create temp repl home");
     let mut child = Command::new(&bin)
         .arg("repl")
-        .env("HOME", "/tmp/cobrust-repl-corpus-home")
+        .env("HOME", home.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
