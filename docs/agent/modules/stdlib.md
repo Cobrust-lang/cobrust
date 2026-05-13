@@ -33,6 +33,35 @@ link against. Constitution §1.1 dual mandate: the runtime half of
   M13 modules is `fn`, not `async fn`. Backed by `tokio = "1"`
   with `Sender::blocking_send` / `Receiver::blocking_recv`
   bridging the sync surface onto the async runtime singleton.
+- **M-AI.0 — delivered.** ADR-0048 + spike
+  `docs/agent/spike/m-ai-0-cobrust-llm-spike.md` (SHA 705f592)
+  add `llm` module behind a default-on `llm-router` Cargo
+  feature. Three flat-fn source-level intrinsics
+  (`llm_complete` / `llm_dispatch` / `llm_stream`) lower to
+  C-ABI shims wrapping `crates/cobrust-llm-router` via a lazy
+  process-global tokio runtime. Synthesizes routing-table
+  entries per declared `(provider, model)` per OQ-3 WRAP
+  ratification (router crate frozen).
+- **M-AI.1 — delivered.** ADR-0048 §M-AI.1 + spike
+  `docs/agent/spike/m-ai-1-cobrust-prompt-spike.md` (α Phase 3)
+  add `prompt` module unconditionally (no Cargo feature). Five
+  flat-fn source-level intrinsics (`prompt_render` /
+  `prompt_format_few_shot` / `prompt_format_system_user` /
+  `prompt_escape_braces` / `llm_complete_structured`) lower to
+  C-ABI shims wrapping pure-Rust string-formatting helpers.
+  `llm_complete_structured` gated by the existing `llm-router`
+  feature; the other four are always present. D2 sonnet pair per
+  ADR-0048 §M-AI.1.
+- **M-AI.2 — delivered.** ADR-0048 §M-AI.2 + spike
+  `docs/agent/spike/m-ai-2-cobrust-tool-spike.md` (α Phase 4)
+  add `tool` module unconditionally. Five flat-fn source-level
+  intrinsics (`tool_schema` / `tool_registry_new` /
+  `tool_registry_register` / `tool_invoke` /
+  `llm_complete_with_tools`) lower to C-ABI shims wrapping
+  deterministic JSON schema/registry helpers. `tool_invoke` is a
+  closed-world α dispatcher with only the `add_i64` exemplar;
+  arbitrary user-function invocation, decorators, `.schema()`,
+  `Registry`, and native provider tool-calling APIs are deferred.
 
 ## Public surface (M11)
 
@@ -48,6 +77,10 @@ pub mod env;
 pub mod fmt;
 pub mod iter;        // M12.x ADR-0027 §4
 pub mod runtime;
+#[cfg(feature = "llm-router")]
+pub mod llm;         // M-AI.0 (α Phase 2 ADR-0048 + spike 705f592)
+pub mod prompt;      // M-AI.1 (α Phase 3 ADR-0048 + spike m-ai-1) — unconditional
+pub mod tool;        // M-AI.2 (α Phase 4 ADR-0048 + spike m-ai-2) — unconditional
 
 pub use runtime::{Error, ErrorKind};
 pub use collections::{Dict, List, Set};
@@ -174,6 +207,128 @@ pub fn var(name: &str) -> Option<String>;
 pub unsafe extern "C" fn __cobrust_capture_argv(argc: i32, argv: *const *const u8);
 pub unsafe extern "C" fn __cobrust_argv() -> *mut u8;   // returns *mut List_Str
 ```
+
+### `std.llm` (M-AI.0 — ADR-0048 + spike 705f592)
+
+```rust
+// Rust-side blocking helpers (unit-testable counterparts to the C-ABI shims):
+pub fn llm_complete_blocking(provider: &str, model: &str, prompt: &str) -> String;
+pub fn llm_dispatch_blocking(task: &str, prompt: &str) -> String;
+pub fn llm_stream_blocking(provider: &str, model: &str, prompt: &str) -> Vec<String>;
+
+// C ABI (codegen targets these via the cobrust-cli intrinsic-rewrite pass):
+pub unsafe extern "C" fn __cobrust_llm_complete(provider: *mut u8, model: *mut u8, prompt: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_llm_dispatch(task: *mut u8, prompt: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_llm_stream(provider: *mut u8, model: *mut u8, prompt: *mut u8) -> *mut u8;  // returns *mut List_Str
+```
+
+Decision references:
+
+- **OQ-1A flat-fn**: source-level names are `llm_complete` / `llm_dispatch` / `llm_stream`; no `cobrust.llm.*` module-path syntax at α (deferred to a follow-up spike when module-path lowering ships).
+- **OQ-2B collect-all-chunks**: `llm_stream` returns `list[str]`; for-protocol iteration walks the collected chunks. True async streaming requires iter-protocol widening — out of M-AI.0 scope.
+- **OQ-3 WRAP**: target-by-(provider, model) is implemented via routing-table entry synthesis at `RouterConfigBundle` init — the router crate is frozen for M-AI.0. For each declared `[providers.<p>]` × `models = [m_i, ...]`, the bundle adds two synthesized entries: `[routing.llm_complete_<p>_<m_i>]` + `[routing.llm_stream_<p>_<m_i>]`, each with `preferred = ["<p>:<m_i>"]`. The router's `try_provider` enforces `request.model = pm.model.clone()` (router.rs:462-465), so the synthesized `(provider, model)` is honored bit-for-bit.
+- **Decision 7 error surface**: all three helpers return `""` / empty `Vec` on any failure (missing `cobrust.toml`, malformed config, unknown provider/model, auth failure, transport error, etc.). The ledger captures the actual `LlmError` for post-mortem.
+
+### `std.prompt` (M-AI.1 — ADR-0048 §M-AI.1 + spike m-ai-1)
+
+Five source-level intrinsics for prompt composition. Pure-Rust
+string manipulation; no Cargo feature gate (unconditional). The
+fifth function (`llm_complete_structured`) gated by `llm-router`.
+
+```rust
+// Rust-side blocking helpers (unit-testable; spike Decision 7: failures → ""):
+
+// Variable interpolation: builds BTreeMap from even-indexed `vars`
+// [k1, v1, k2, v2, ...] pairs; substitutes `{k}` in combined
+// system + "\n" + user template. `{{`/`}}` → `{`/`}` escapes.
+// Unknown keys remain literal. Returns `"<system>\n<user>"` on
+// empty vars.
+#[must_use]
+pub fn prompt_render_helper(system: &str, user: &str, vars: &[String]) -> String;
+
+// Canonical few-shot format: emits "Input: <in_i>\nOutput: <out_i>\n\n"
+// for min(len(examples_in), len(examples_out)) pairs, then appends
+// "Input: <current_input>\nOutput:" (no trailing newline).
+// Empty examples → just the trailer. Mismatched lengths → truncate to min.
+#[must_use]
+pub fn prompt_format_few_shot_helper(
+    examples_in: &[String],
+    examples_out: &[String],
+    current_input: &str,
+) -> String;
+
+// Simple system+user concatenator. Returns `"<system>\n\n<user>"`.
+// Always succeeds; no interpolation.
+#[must_use]
+pub fn prompt_format_system_user_helper(system: &str, user: &str) -> String;
+
+// Escape `{` → `{{` and `}` → `}}`. Symmetric pre-pass for
+// prompt_render_helper when values contain literal braces.
+#[must_use]
+pub fn prompt_escape_braces_helper(text: &str) -> String;
+
+// Structured-output convenience (gated by `llm-router`). Augments
+// `prompt` with "Respond with valid JSON matching this schema:\n<schema_json>",
+// then routes through `llm_dispatch_blocking("structured", augmented)`.
+// Returns raw response text; caller parses JSON. Failure → "".
+#[cfg(feature = "llm-router")]
+#[must_use]
+pub fn llm_complete_structured_helper(prompt: &str, schema_json: &str) -> String;
+
+// C ABI (codegen targets these via the cobrust-cli intrinsic-rewrite pass):
+pub unsafe extern "C" fn __cobrust_prompt_render(system: *mut u8, user: *mut u8, vars: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_prompt_format_few_shot(examples_in: *mut u8, examples_out: *mut u8, current_input: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_prompt_format_system_user(system: *mut u8, user: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_prompt_escape_braces(text: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_llm_complete_structured(prompt: *mut u8, schema_json: *mut u8) -> *mut u8;
+```
+
+Decision references (spike `m-ai-1-cobrust-prompt-spike.md` + ADR-0048 §M-AI.1):
+
+- **Decision 1B flat-fn**: same α naming convention as M-AI.0 — no module-path lowering. Five PRELUDE stubs; intrinsic-rewrite redirects callsites.
+- **Decision 3C even-indexed list[str]**: `vars` for `prompt_render` is a `list[str]` of `[k1, v1, k2, v2, ...]` pairs — reuses `argv()` / `llm_stream()` ABI; odd-length input drops trailing key silently.
+- **Decision 4 `{key}` interpolation**: `{k}` placeholders substituted from vars map; `{{`/`}}` → `{`/`}` escape; unknown keys remain literal; single-pass (no recursive substitution).
+- **Decision 5 canonical few-shot**: "Input: <in>\nOutput: <out>\n\n" loop + "Input: <current>\nOutput:" trailer; locked format for α stability.
+- **Decision 6 structured-output**: `llm_complete_structured` appends a JSON-schema instruction then routes via `llm_dispatch(task="structured", ...)`. Caller parses the returned JSON string.
+- **Decision 7 error surface**: all five helpers return `""` on any failure — exact mirror of M-AI.0 OQ-2 Decision 7.
+- **Decision 8 zero new deps**: pure-Rust string manipulation for four fns; fifth reuses `crate::llm::llm_dispatch_blocking` — no new workspace deps.
+
+### `std.tool` (M-AI.2 — ADR-0048 §M-AI.2 + spike m-ai-2)
+
+Five source-level intrinsics for tool schema/registry construction and the α
+closed-world invocation exemplar. JSON is canonical compact serde_json output.
+
+```rust
+// Rust-side helpers:
+pub fn tool_schema_helper(
+    name: &str,
+    description: &str,
+    parameters_json: &str,
+    return_type: &str,
+) -> String;
+pub fn tool_registry_new_helper() -> String;
+pub fn tool_registry_register_helper(registry_json: &str, schema_json: &str) -> String;
+pub fn tool_invoke_helper(tool_name: &str, args_json: &str) -> String;
+pub fn augment_prompt_with_tools_helper(prompt: &str, registry_json: &str) -> String;
+pub fn llm_complete_with_tools_helper(prompt: &str, registry_json: &str) -> String;
+
+// C ABI (codegen targets these via the cobrust-cli intrinsic-rewrite pass):
+pub unsafe extern "C" fn __cobrust_tool_schema(name: *mut u8, description: *mut u8, parameters_json: *mut u8, return_type: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_tool_registry_new() -> *mut u8;
+pub unsafe extern "C" fn __cobrust_tool_registry_register(registry_json: *mut u8, schema_json: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_tool_invoke(tool_name: *mut u8, args_json: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_llm_complete_with_tools(prompt: *mut u8, registry_json: *mut u8) -> *mut u8;
+```
+
+Decision references (spike `m-ai-2-cobrust-tool-spike.md` + ADR-0048 §M-AI.2):
+
+- **Flat-fn naming**: `tool_schema`, `tool_registry_new`, `tool_registry_register`, `tool_invoke`, `llm_complete_with_tools`; no `cobrust.tool.*` module-path lowering at α.
+- **Schema JSON**: `tool_schema` validates `name`, `return_type`, and an array of `{name,type}` parameter objects, then returns compact JSON with field order `name`, `description`, `parameters`, `returns`.
+- **Registry JSON**: `tool_registry_new()` returns `{"tools":[]}`; `tool_registry_register` validates inputs, removes any existing same-name schema, appends the new schema, and serializes compact JSON. Duplicate names are last-schema-wins.
+- **Closed-world invoke**: `tool_invoke` supports only `add_i64` with args `{"a":1,"b":2}` style JSON and returns the numeric result as `str`; unknown tools, malformed args, missing fields, non-integers, and overflow return `""`.
+- **LLM tool calling**: `llm_complete_with_tools` prompt-augments with the registry and routes via `llm_dispatch_blocking("tools", augmented)` when `llm-router` is enabled. Projects using this flow must declare `[routing.tools]` in `cobrust.toml`; if the route or feature is absent, the helper returns `""`. Native provider tool-call API fields are deferred.
+- **Deferred future surface**: `@cobrust.tool.expose`, function `.schema()`, `cobrust.tool.Registry`, `registry.register(...)`, arbitrary user-function reflection/invocation, dict-literal args, and JSON-to-typed-Cobrust decoding are not implemented in M-AI.2 α.
+- **Error surface**: all five helpers return `""` on malformed JSON, invalid schema, unknown tool, router failure, or unavailable feature, matching M-AI.0/M-AI.1 α convention.
 
 ### `std.collections`
 

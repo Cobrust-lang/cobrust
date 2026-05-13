@@ -85,3 +85,78 @@ models = ["gpt-5.5"]
 [routing.real_llm_smoke]
 strategy = "quality"
 preferred = ["user_codex:gpt-5.5"]
+
+# ---- M-AI.0 (α Phase 2): cobrust.llm source-level binding ---------------
+# ADR-0048 + spike docs/agent/spike/m-ai-0-cobrust-llm-spike.md (705f592)
+# expose three flat-fn intrinsics to Cobrust source:
+#
+#   llm_complete(provider, model, prompt) -> str
+#   llm_dispatch(task, prompt) -> str
+#   llm_stream(provider, model, prompt) -> list[str]
+#
+# `llm_dispatch` walks user-declared `[routing.<task>]` entries (e.g. the
+# existing `spec_extract` / `translate` / `repair` rows above). Sample
+# user-defined dispatch routes for the AI-native stdlib:
+
+[routing.summarize_doc]
+strategy = "quality"
+preferred = ["anthropic_official:claude-opus-4-7"]
+
+[routing.transform_code]
+strategy = "consensus"
+n = 2
+preferred = [
+    "anthropic_official:claude-opus-4-7",
+    "deepseek:deepseek-v3",
+]
+
+# `llm_complete` / `llm_stream` accept a `(provider, model)` pair directly
+# (OQ-3 WRAP) — the stdlib synthesizes `[routing.llm_complete_<provider>_<model>]`
+# and `[routing.llm_stream_<provider>_<model>]` entries at bundle-init
+# time per declared `(provider, model)` pair, so users do NOT write these
+# entries by hand. If you want to specialize the strategy for a given
+# direct route, override below (manual entries take precedence over the
+# synthesized defaults). Example:
+#
+#   [routing.llm_complete_anthropic_official_claude-opus-4-7]
+#   strategy = "latency"
+#   preferred = ["anthropic_official:claude-opus-4-7"]
+#
+#   [routing.llm_stream_anthropic_official_claude-opus-4-7]
+#   strategy = "quality"
+#   preferred = ["anthropic_official:claude-opus-4-7"]
+
+# ---- M-AI.1 (α Phase 3): cobrust.prompt source-level binding ---------------
+# ADR-0048 §M-AI.1 + spike docs/agent/spike/m-ai-1-cobrust-prompt-spike.md
+# adds `llm_complete_structured(prompt, schema_json) -> str` which routes
+# through `llm_dispatch(task="structured", augmented_prompt)`. Declare the
+# `[routing.structured]` entry to activate it. Users pick the model they
+# want for structured JSON outputs (e.g. a model with native JSON mode).
+#
+# If [routing.structured] is absent, `llm_complete_structured` returns ""
+# (Decision 7 empty-on-failure mirror of M-AI.0).
+
+[routing.structured]
+strategy = "quality"
+preferred = ["anthropic_official:claude-opus-4-7"]
+# Alternative: use a model with native JSON mode for more reliable output:
+# preferred = ["openai_official:gpt-5"]
+# preferred = ["deepseek:deepseek-v3"]
+
+# ---- M-AI.2 (α Phase 4): cobrust.tool source-level binding -----------------
+# ADR-0048 §M-AI.2 + spike docs/agent/spike/m-ai-2-cobrust-tool-spike.md
+# add `llm_complete_with_tools(prompt, registry_json) -> str` on top of the
+# flat-function tool schema/registry helpers. It prompt-augments with the tool
+# registry, then calls `llm_dispatch(task="tools", ...)`, so projects using
+# tool-assisted flow should declare `[routing.tools]` explicitly.
+#
+# If [routing.tools] is absent, `llm_complete_with_tools` returns ""
+# (same empty-on-failure α convention as M-AI.0/M-AI.1).
+
+[routing.tools]
+strategy = "quality"
+preferred = ["anthropic_official:claude-opus-4-7"]
+# Alternative: use the same JSON-strong model family as `[routing.structured]`
+# if you want tool-selection and argument formatting to stay aligned.
+# preferred = ["openai_official:gpt-5"]
+# preferred = ["deepseek:deepseek-v3"]

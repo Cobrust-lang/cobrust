@@ -17,7 +17,7 @@ crate-type = ["rlib", "staticlib"]
 workspace = true
 
 [features]
-default = ["mimalloc-alloc", "tokio-runtime"]
+default = ["mimalloc-alloc", "tokio-runtime", "llm-router"]
 # M11: mimalloc as the global allocator (per ADR-0025 §G).
 mimalloc-alloc = ["dep:mimalloc"]
 # M11: opt-out of mimalloc; use the system allocator.
@@ -26,10 +26,16 @@ system-alloc = []
 # the `task` and `sync` modules are not compiled. Default-on so the
 # binding ABI is always present for codegen-emitted programs.
 tokio-runtime = ["dep:tokio"]
+# M-AI.0: source-level binding to crates/cobrust-llm-router. Default-on
+# so codegen-emitted programs always have the C-ABI surface present.
+llm-router = ["dep:cobrust-llm-router"]
 
 [dependencies]
 mimalloc = { version = "0.1", optional = true, default-features = false }
 tokio = { workspace = true, optional = true }
+cobrust-llm-router = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
