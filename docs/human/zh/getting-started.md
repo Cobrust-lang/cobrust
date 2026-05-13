@@ -13,15 +13,15 @@ cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
 ```bash
 # macOS arm64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.1-aarch64-apple-darwin.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.2-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 
 # Linux x86_64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.1-x86_64-unknown-linux-gnu.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.2-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 ```
 
-验证：`cobrust --version` → `cobrust 0.1.1`
+验证：`cobrust --version` → `cobrust 0.1.2`
 
 ## 第二步：Hello, world
 
@@ -35,7 +35,33 @@ cobrust new hello && cd hello && cobrust run src/main.cb
 hello, world
 ```
 
-## 第三步：翻译 Python 库（可选）
+## 第三步：试用 AI alpha 能力（可选）
+
+1. 复制 router 示例配置，并填入你的 provider 凭据：
+
+```bash
+cp cobrust.toml.example cobrust.toml
+```
+
+2. 在 `cobrust.toml` 中声明你需要的路由：
+   - `[routing.structured]`：用于 `llm_complete_structured(prompt, schema_json)`
+   - `[routing.tools]`：用于 `llm_complete_with_tools(prompt, registry_json)`
+   - 任意自定义 `[routing.<task>]`：用于 `llm_dispatch(task, prompt)`
+
+3. 当前 AI 能力以平铺的 prelude 函数形式调用：
+   - `llm_complete(provider, model, prompt)`
+   - `llm_dispatch(task, prompt)`
+   - `llm_stream(provider, model, prompt)`
+   - `llm_complete_structured(prompt, schema_json)`
+   - `llm_complete_with_tools(prompt, registry_json)`
+
+当前 alpha 说明：
+- 这些还不是 `cobrust.llm.*`、`cobrust.prompt.*`、`cobrust.tool.*` 这种模块路径调用。
+- 如果缺少路由或 provider 配置，当前 alpha 会返回 `""`（`llm_stream` 则返回 `[]`），而不是更详细的运行时错误。
+
+配置形状见 [cobrust.toml.example](../../../cobrust.toml.example)，完整设计说明见[架构](architecture.md)。
+
+## 第四步：翻译 Python 库（可选）
 
 ```bash
 cobrust translate tomli

@@ -76,10 +76,10 @@ cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
 # Or download a prebuilt binary for macOS arm64 / Linux x86_64
 # macOS arm64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.1-aarch64-apple-darwin.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.2-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 # Linux x86_64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.1-x86_64-unknown-linux-gnu.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.1.2-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 ```
 
@@ -134,6 +134,21 @@ The translation pipeline gates each phase:
 - **L3 integration** — PyO3 wrapper + downstream-dep validation (libraries that use the translated lib must still pass their tests)
 
 Every translation carries a **provenance manifest** — source SHA, model fingerprints, oracle artifacts, divergences. Reproducible bit-for-bit.
+
+### Try the AI alpha surfaces
+
+If you want to try the merged AI-facing stdlib alpha without reading the full architecture doc first:
+
+- Configure at least one provider in `cobrust.toml` using [`cobrust.toml.example`](cobrust.toml.example).
+- Declare the route you need:
+  - `[routing.structured]` for `llm_complete_structured(...)`
+  - `[routing.tools]` for `llm_complete_with_tools(...)`
+  - any custom `[routing.<task>]` for `llm_dispatch(...)`
+- Call the current surfaces as **flat prelude functions** such as `llm_complete(...)`, `llm_dispatch(...)`, `llm_stream(...)`, `llm_complete_structured(...)`, and `llm_complete_with_tools(...)`.
+- Do not write `cobrust.llm.*`, `cobrust.prompt.*`, or `cobrust.tool.*` module-path syntax yet; that naming is architectural framing, not current source syntax.
+- Current alpha caveat: when routing or provider setup is missing or fails, these helpers currently return `""` (or `[]` for `llm_stream(...)`) instead of rich runtime errors.
+
+See [docs/human/en/getting-started.md](docs/human/en/getting-started.md) for the short setup path and [docs/human/en/architecture.md](docs/human/en/architecture.md) for the full design notes.
 
 ---
 
