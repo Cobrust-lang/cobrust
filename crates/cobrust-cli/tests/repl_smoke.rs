@@ -40,9 +40,10 @@ fn cobrust_binary() -> PathBuf {
 /// Drive the REPL by piping `input` into stdin and capturing stdout/stderr.
 fn drive_repl(input: &str) -> (String, String, i32) {
     let bin = cobrust_binary();
+    let home = tempfile::tempdir().expect("create temp repl home");
     let mut child = Command::new(&bin)
         .arg("repl")
-        .env("HOME", "/tmp/cobrust-repl-test-home")
+        .env("HOME", home.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -205,10 +206,11 @@ fn cold_start_budget() {
     // This is generous: the actual prompt-render time is a strict
     // subset of this measurement.
     let bin = cobrust_binary();
+    let home = tempfile::tempdir().expect("create temp repl home");
     let start = Instant::now();
     let _out = Command::new(&bin)
         .arg("repl")
-        .env("HOME", "/tmp/cobrust-repl-test-home")
+        .env("HOME", home.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

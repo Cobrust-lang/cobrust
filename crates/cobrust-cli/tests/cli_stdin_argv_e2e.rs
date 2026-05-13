@@ -69,17 +69,13 @@ fn fixture_path(name: &str) -> PathBuf {
 }
 
 /// Build a fixture `.cb` file into a unique tmp-exe and return its path.
-// Monotonic per-process counter so parallel tests in the same cargo
-// test process don't collide on the same `exe_dir` path (the previous
-// `line!()` tiebreaker always returned the same constant since it was
-// the line where `build_fixture` is defined, not where it's called).
-fn build_fixture_seq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    COUNTER.fetch_add(1, Ordering::SeqCst)
+struct BuiltFixture {
+    _temp_dir: tempfile::TempDir,
+    exe: PathBuf,
+    stderr: String,
 }
 
-fn build_fixture(name: &str) -> (PathBuf, String) {
+fn build_fixture(name: &str) -> BuiltFixture {
     let bin = cobrust_binary();
     let src = fixture_path(name);
     assert!(
@@ -88,14 +84,8 @@ fn build_fixture(name: &str) -> (PathBuf, String) {
         name,
         src
     );
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-adr0044-e2e-{}-{}-{}",
-        name,
-        std::process::id(),
-        build_fixture_seq()
-    ));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe = exe_dir.join(src.file_stem().unwrap());
+    let exe_dir = tempfile::tempdir().expect("create temp exe dir");
+    let exe = exe_dir.path().join(src.file_stem().unwrap());
     let out = Command::new(&bin)
         .arg("build")
         .arg(&src)
@@ -107,9 +97,17 @@ fn build_fixture(name: &str) -> (PathBuf, String) {
         .expect("invoke cobrust build");
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if !out.status.success() {
-        return (PathBuf::new(), stderr);
+        return BuiltFixture {
+            _temp_dir: exe_dir,
+            exe: PathBuf::new(),
+            stderr,
+        };
     }
-    (exe, stderr)
+    BuiltFixture {
+        _temp_dir: exe_dir,
+        exe,
+        stderr,
+    }
 }
 
 /// Run `exe` with `args` and `stdin_bytes`, return (exit_code, stdout, stderr).
@@ -139,12 +137,13 @@ fn run_with_args_and_stdin(exe: &Path, args: &[&str], stdin_bytes: &[u8]) -> (i3
 
 #[test]
 fn test_e2e_01_two_sum_echo_hello() {
-    let (exe, build_stderr) = build_fixture("two_sum.cb");
+    let built = build_fixture("two_sum.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
-    let (code, stdout, _) = run_with_args_and_stdin(&exe, &[], b"hello\n");
+    let (code, stdout, _) = run_with_args_and_stdin(&built.exe, &[], b"hello\n");
     assert_eq!(code, 0, "exe must exit 0");
     assert!(
         stdout.contains("hello"),
@@ -158,12 +157,13 @@ fn test_e2e_01_two_sum_echo_hello() {
 
 #[test]
 fn test_e2e_02_two_sum_empty_stdin_graceful() {
-    let (exe, build_stderr) = build_fixture("two_sum.cb");
+    let built = build_fixture("two_sum.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
-    let (code, _, stderr) = run_with_args_and_stdin(&exe, &[], b"");
+    let (code, _, stderr) = run_with_args_and_stdin(&built.exe, &[], b"");
     assert_eq!(code, 0, "exe must exit 0 on empty stdin; stderr={stderr}");
 }
 
@@ -173,12 +173,13 @@ fn test_e2e_02_two_sum_empty_stdin_graceful() {
 
 #[test]
 fn test_e2e_03_sum_lines_three_inputs() {
-    let (exe, build_stderr) = build_fixture("sum_lines.cb");
+    let built = build_fixture("sum_lines.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
-    let (code, stdout, _) = run_with_args_and_stdin(&exe, &[], b"1\n2\n3\n");
+    let (code, stdout, _) = run_with_args_and_stdin(&built.exe, &[], b"1\n2\n3\n");
     assert_eq!(code, 0, "exe must exit 0");
     // Fixture deliberately prints `6` (a fixed answer for the W2 stub);
     // Phase 3 fills full int-parse + real sum.
@@ -194,12 +195,13 @@ fn test_e2e_03_sum_lines_three_inputs() {
 
 #[test]
 fn test_e2e_04_argv_dump_with_user_args() {
-    let (exe, build_stderr) = build_fixture("argv_dump.cb");
+    let built = build_fixture("argv_dump.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
-    let (code, stdout, _) = run_with_args_and_stdin(&exe, &["a", "b", "c"], b"");
+    let (code, stdout, _) = run_with_args_and_stdin(&built.exe, &["a", "b", "c"], b"");
     assert_eq!(code, 0, "exe must exit 0");
     assert!(stdout.contains("a"), "missing arg `a`: {stdout:?}");
     assert!(stdout.contains("b"), "missing arg `b`: {stdout:?}");
@@ -214,12 +216,13 @@ fn test_e2e_04_argv_dump_with_user_args() {
 
 #[test]
 fn test_e2e_05_argv_only_argv0_when_no_user_args() {
-    let (exe, build_stderr) = build_fixture("argv_count.cb");
+    let built = build_fixture("argv_count.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
-    let (code, stdout, _) = run_with_args_and_stdin(&exe, &[], b"");
+    let (code, stdout, _) = run_with_args_and_stdin(&built.exe, &[], b"");
     assert_eq!(code, 0, "exe must exit 0");
     assert!(
         stdout.contains('1'),
@@ -233,14 +236,15 @@ fn test_e2e_05_argv_only_argv0_when_no_user_args() {
 
 #[test]
 fn test_e2e_06_two_sum_utf8_multibyte_round_trip() {
-    let (exe, build_stderr) = build_fixture("two_sum.cb");
+    let built = build_fixture("two_sum.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
     // "你好世界" — 4 multi-byte chars, 12 bytes UTF-8.
     let payload = "你好世界\n".as_bytes();
-    let (code, stdout, _) = run_with_args_and_stdin(&exe, &[], payload);
+    let (code, stdout, _) = run_with_args_and_stdin(&built.exe, &[], payload);
     assert_eq!(code, 0, "exe must exit 0");
     assert!(
         stdout.contains("你好世界"),
@@ -254,15 +258,16 @@ fn test_e2e_06_two_sum_utf8_multibyte_round_trip() {
 
 #[test]
 fn test_e2e_07_two_sum_4kib_single_line() {
-    let (exe, build_stderr) = build_fixture("two_sum.cb");
+    let built = build_fixture("two_sum.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
     let big = "x".repeat(4096);
     let mut payload = big.into_bytes();
     payload.push(b'\n');
-    let (code, stdout, _) = run_with_args_and_stdin(&exe, &[], &payload);
+    let (code, stdout, _) = run_with_args_and_stdin(&built.exe, &[], &payload);
     assert_eq!(code, 0, "exe must exit 0 on 4 KiB input");
     assert!(
         !stdout.is_empty(),
@@ -278,13 +283,14 @@ fn test_e2e_07_two_sum_4kib_single_line() {
 fn test_e2e_08_drain_lines_three_calls() {
     // Fixture uses 3 input() calls; we feed 3 lines and assert "done".
     // Per ADR-0044 Test plan Tier 3 #8 — repeated input() drains stdin.
-    let (exe, build_stderr) = build_fixture("drain_lines.cb");
+    let built = build_fixture("drain_lines.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
     let payload = b"alpha\nbeta\ngamma\n";
-    let (code, stdout, _) = run_with_args_and_stdin(&exe, &[], payload);
+    let (code, stdout, _) = run_with_args_and_stdin(&built.exe, &[], payload);
     assert_eq!(code, 0, "exe must exit 0 after 3-line drain");
     assert!(
         stdout.contains("done"),
@@ -298,13 +304,14 @@ fn test_e2e_08_drain_lines_three_calls() {
 
 #[test]
 fn test_e2e_09_argv_count_ten_user_args() {
-    let (exe, build_stderr) = build_fixture("argv_count.cb");
+    let built = build_fixture("argv_count.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
     let (code, stdout, _) = run_with_args_and_stdin(
-        &exe,
+        &built.exe,
         &["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"],
         b"",
     );
@@ -321,15 +328,16 @@ fn test_e2e_09_argv_count_ten_user_args() {
 
 #[test]
 fn test_e2e_10_no_stdin_program_stdin_ignored() {
-    let (exe, build_stderr) = build_fixture("echo_no_stdin.cb");
+    let built = build_fixture("echo_no_stdin.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
     // Pipe some stdin; program ignores it. Run with a timeout-friendly
     // shape: spawn + write + drop stdin + wait. The OS handles SIGPIPE
     // gracefully.
-    let mut child = Command::new(&exe)
+    let mut child = Command::new(&built.exe)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -407,12 +415,13 @@ fn test_e2e_11_cobrust_run_forwards_argv_to_program() {
 
 #[test]
 fn test_e2e_12_echo_stdin_round_trip() {
-    let (exe, build_stderr) = build_fixture("echo_stdin.cb");
+    let built = build_fixture("echo_stdin.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
-    let (code, stdout, _) = run_with_args_and_stdin(&exe, &[], b"echoed-input-line\n");
+    let (code, stdout, _) = run_with_args_and_stdin(&built.exe, &[], b"echoed-input-line\n");
     assert_eq!(code, 0);
     assert!(
         stdout.contains("echoed-input-line"),
@@ -426,13 +435,14 @@ fn test_e2e_12_echo_stdin_round_trip() {
 
 #[test]
 fn test_e2e_13_argv_program_completes_quickly() {
-    let (exe, build_stderr) = build_fixture("argv_dump.cb");
+    let built = build_fixture("argv_dump.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
     let start = std::time::Instant::now();
-    let (code, _, _) = run_with_args_and_stdin(&exe, &["x"], b"");
+    let (code, _, _) = run_with_args_and_stdin(&built.exe, &["x"], b"");
     let elapsed = start.elapsed();
     assert_eq!(code, 0);
     assert!(
@@ -447,12 +457,13 @@ fn test_e2e_13_argv_program_completes_quickly() {
 
 #[test]
 fn test_e2e_14_argv_utf8_round_trip() {
-    let (exe, build_stderr) = build_fixture("argv_dump.cb");
+    let built = build_fixture("argv_dump.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
-    let (code, stdout, _) = run_with_args_and_stdin(&exe, &["你好", "世界"], b"");
+    let (code, stdout, _) = run_with_args_and_stdin(&built.exe, &["你好", "世界"], b"");
     assert_eq!(code, 0);
     assert!(
         stdout.contains("你好") && stdout.contains("世界"),
@@ -466,11 +477,12 @@ fn test_e2e_14_argv_utf8_round_trip() {
 
 #[test]
 fn test_e2e_15_fixture_exit_code_zero() {
-    let (exe, build_stderr) = build_fixture("two_sum.cb");
+    let built = build_fixture("two_sum.cb");
     assert!(
-        exe.as_os_str().len() > 0,
-        "build failed; stderr={build_stderr}"
+        built.exe.as_os_str().len() > 0,
+        "build failed; stderr={}",
+        built.stderr
     );
-    let (code, _, _) = run_with_args_and_stdin(&exe, &[], b"x\n");
+    let (code, _, _) = run_with_args_and_stdin(&built.exe, &[], b"x\n");
     assert_eq!(code, 0, "fixture must exit 0 on normal path");
 }
