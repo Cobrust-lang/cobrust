@@ -142,3 +142,21 @@ preferred = ["anthropic_official:claude-opus-4-7"]
 # Alternative: use a model with native JSON mode for more reliable output:
 # preferred = ["openai_official:gpt-5"]
 # preferred = ["deepseek:deepseek-v3"]
+
+# ---- M-AI.2 (α Phase 4): cobrust.tool source-level binding -----------------
+# ADR-0048 §M-AI.2 + spike docs/agent/spike/m-ai-2-cobrust-tool-spike.md
+# add `llm_complete_with_tools(prompt, registry_json) -> str` on top of the
+# flat-function tool schema/registry helpers. It prompt-augments with the tool
+# registry, then calls `llm_dispatch(task="tools", ...)`, so projects using
+# tool-assisted flow should declare `[routing.tools]` explicitly.
+#
+# If [routing.tools] is absent, `llm_complete_with_tools` returns ""
+# (same empty-on-failure α convention as M-AI.0/M-AI.1).
+
+[routing.tools]
+strategy = "quality"
+preferred = ["anthropic_official:claude-opus-4-7"]
+# Alternative: use the same JSON-strong model family as `[routing.structured]`
+# if you want tool-selection and argument formatting to stay aligned.
+# preferred = ["openai_official:gpt-5"]
+# preferred = ["deepseek:deepseek-v3"]

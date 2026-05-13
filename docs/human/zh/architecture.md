@@ -2202,6 +2202,11 @@ ADR-0048 §M-AI.2 + spike `docs/agent/spike/m-ai-2-cobrust-tool-spike.md`（α P
 | `tool_invoke(tool_name, args_json) -> str` | 两参数均为 `str` | closed-world α dispatcher（闭世界）；仅支持 `add_i64`，未知 / malformed / 溢出返回 `""` |
 | `llm_complete_with_tools(prompt, registry_json) -> str` | 两参数均为 `str` | 把工具 registry 注入 prompt 后通过 `llm_dispatch(task="tools", ...)` 路由；native provider tool-call API 延后 |
 
+要启用 tool-assisted LLM 流程，需要在 `cobrust.toml` 里显式声明
+`[routing.tools]`（示例见 `cobrust.toml.example`）。如果缺少
+`[routing.tools]`，`llm_complete_with_tools(...)` 会沿用与
+`llm_complete_structured(...)` 相同的 α 阶段 empty-on-failure 约定，直接返回 `""`。
+
 **明确延后的未来面**：`@cobrust.tool.expose`、函数 `.schema()`、
 `cobrust.tool.Registry`、`registry.register(...)`、任意用户函数反射/调用、dict-literal args、JSON 到 typed Cobrust 的解码均未在 α 实现。当前 `tool_invoke` 示例只用于验证 JSON 参数解析与 `.cb` 编译运行链路。
 

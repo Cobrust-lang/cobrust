@@ -2332,6 +2332,11 @@ five PRELUDE flat-fns that work on JSON strings.
 | `tool_invoke(tool_name, args_json) -> str` | two `str` args | closed-world α dispatcher. Supports only `add_i64`; unknown/malformed/overflow returns `""` |
 | `llm_complete_with_tools(prompt, registry_json) -> str` | two `str` args | Prompt-augments with the registry and routes through `llm_dispatch(task="tools", ...)`; native provider tool-call APIs are deferred |
 
+To activate the tool-assisted LLM flow, declare a `[routing.tools]` route in
+`cobrust.toml` (see `cobrust.toml.example`). If `[routing.tools]` is absent,
+`llm_complete_with_tools(...)` returns `""` under the same α empty-on-failure
+convention as `llm_complete_structured(...)`.
+
 **Deferred future surface:** `@cobrust.tool.expose`, function `.schema()`,
 `cobrust.tool.Registry`, `registry.register(...)`, arbitrary user-function
 reflection/invocation, dict-literal args, and JSON-to-typed-Cobrust decoding
