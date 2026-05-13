@@ -1985,6 +1985,8 @@ fn runtime_helper_signatures(
     // a single C-ABI dispatch (no per-callsite (ptr, len) extraction).
     out.push(("__cobrust_println_str_buf", sig(call_conv, &[p], None)));
     out.push(("__cobrust_input", sig(call_conv, &[p, i64], Some(p))));
+    // `input(prompt_buf: str) -> str` — runtime Str-buffer prompt path.
+    out.push(("__cobrust_input_str_buf", sig(call_conv, &[p], Some(p))));
     // `input_no_prompt() -> str` — empty-prompt overload.
     out.push(("__cobrust_input_no_prompt", sig(call_conv, &[], Some(p))));
     // `read_line() -> str` (W2 Phase 2 scope cap per ADR-0044

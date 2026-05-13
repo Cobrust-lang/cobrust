@@ -47,9 +47,14 @@ pub const PRINTLN_INT_RUNTIME_SYMBOL: &str = "__cobrust_println_int";
 /// dispatches to `__cobrust_println`.
 pub const PRINTLN_STR_BUF_RUNTIME_SYMBOL: &str = "__cobrust_println_str_buf";
 
-/// Runtime symbol for source-level `input(prompt: str) -> str`.
+/// Runtime symbol for source-level `input(prompt: str) -> str` when the
+/// prompt is lowered as raw `(ptr, len)` bytes.
 /// ADR-0044 W2 Phase 2 — exported by `cobrust-stdlib::io`.
 pub const INPUT_RUNTIME_SYMBOL: &str = "__cobrust_input";
+
+/// Runtime symbol for source-level `input(prompt: str) -> str` when the
+/// prompt is a runtime `Str` buffer.
+pub const INPUT_STR_BUF_RUNTIME_SYMBOL: &str = "__cobrust_input_str_buf";
 
 /// Runtime symbol for source-level `input_no_prompt() -> str`.
 /// ADR-0044 W2 Phase 2 — exported by `cobrust-stdlib::io`.
@@ -487,8 +492,10 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
 ///   adds a `__cobrust_println_str_buf` shim or amends codegen's
 ///   runtime_funcs lowering.)*
 /// - `print_int(n: i64)` → `__cobrust_println_int(n)`.
-/// - `input(prompt: str)` → `__cobrust_input(prompt_ptr, prompt_len)`
-///   via the runtime_funcs `(ptr, len)` expansion (ADR-0044).
+/// - `input(prompt: str)` — string-literal prompt →
+///   `__cobrust_input(prompt_ptr, prompt_len)`.
+/// - `input(prompt: str)` — non-literal prompt buffer →
+///   `__cobrust_input_str_buf(prompt_buf)`.
 /// - `input_no_prompt()` → `__cobrust_input_no_prompt()`.
 /// - `read_line()` → `__cobrust_read_line()` (W2 cap; typed `Result`
 ///   surface deferred to ADR-0044a).
@@ -732,22 +739,23 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     args.push(int_arg);
                 }
                 Kind::Input => {
-                    // input(prompt: str) → __cobrust_input(ptr, len)
-                    // Codegen's runtime_funcs (ptr, len) expansion kicks
-                    // in when args[0] is Constant::Str — see
-                    // cranelift_backend.rs lower_terminator. For non-
-                    // literal prompts the arg is a heap-buffer Place;
-                    // codegen reads it as a pointer (no len expansion
-                    // — runtime helper sees the buffer ptr as `ptr`
-                    // and a zeroed `len`, prompting it to skip the
-                    // prompt write. The semantics match `input("")`.
+                    // input(prompt: str)
+                    //   - string-literal prompt → __cobrust_input(ptr, len)
+                    //   - runtime Str buffer   → __cobrust_input_str_buf(buf)
                     if args.len() != 1 {
                         return Err(IntrinsicError::PrintArgUnsupported {
                             found: format!("input: expected 1 arg, got {}", args.len()),
                         });
                     }
                     let prompt = args[0].clone();
-                    *func = Operand::Constant(Constant::Str(INPUT_RUNTIME_SYMBOL.to_string()));
+                    *func = match &args[0] {
+                        Operand::Constant(Constant::Str(_)) => {
+                            Operand::Constant(Constant::Str(INPUT_RUNTIME_SYMBOL.to_string()))
+                        }
+                        _ => Operand::Constant(Constant::Str(
+                            INPUT_STR_BUF_RUNTIME_SYMBOL.to_string(),
+                        )),
+                    };
                     args.clear();
                     args.push(prompt);
                 }
