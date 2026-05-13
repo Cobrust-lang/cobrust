@@ -51,10 +51,11 @@
 //!
 //! - **Decision 1B** (flat-fn naming): mirrors ADR-0044 `input` /
 //!   `argv` / `read_line` precedent. No module-path lowering.
-//! - **Decision 3B** (collect-all-chunks): `llm_stream` drains the
-//!   provider's `complete_stream` into `Vec<String>` of delta texts,
-//!   materialized as a Cobrust `List<Str>` via the `__cobrust_argv`
-//!   list-of-Str pattern (env.rs:62-85).
+//! - **Decision 3B** (collect-all alpha shim): `llm_stream` currently
+//!   returns a `List<Str>` whose contents preserve call-order but do
+//!   not expose provider delta events. Today the implementation routes
+//!   through non-streaming dispatch and returns either `[]` or a
+//!   single-element list containing the full response text.
 //! - **Decision 4** (process-global runtime): single
 //!   `OnceLock<tokio::runtime::Runtime>` shared across shims —
 //!   avoids per-call TCP/TLS setup.
@@ -310,9 +311,11 @@ pub fn llm_dispatch_blocking(task: &str, prompt: &str) -> String {
         .unwrap_or_default()
 }
 
-/// `llm_stream(provider, model, prompt) -> list[str]`. Decision 3B:
-/// drains the provider's `complete_stream` to completion, collects
-/// every `Chunk::Delta(text)` into a `Vec<String>` preserving order.
+/// `llm_stream(provider, model, prompt) -> list[str]`.
+///
+/// Alpha honesty contract: this is a collect-all shim, not true token
+/// streaming. It uses normal router dispatch and returns either `[]` or
+/// a single ordered chunk containing the full response text.
 /// Returns an empty `Vec` on any failure (per Decision 7).
 #[must_use]
 pub fn llm_stream_blocking(provider: &str, model: &str, prompt: &str) -> Vec<String> {
@@ -328,16 +331,11 @@ pub fn llm_stream_blocking(provider: &str, model: &str, prompt: &str) -> Vec<Str
         params: cobrust_llm_router::SamplingParams::default(),
     };
     let task_key = format!("llm_stream_{provider}_{model}");
-    // The router's public surface dispatches via `dispatch` (non-
-    // streaming). True streaming would require either a public
-    // `dispatch_stream` method (router crate frozen per OQ-3 WRAP)
-    // or per-provider `complete_stream` invocation outside the
-    // router's retry/cache machinery. M-AI.0 §Decision 3B
-    // explicitly accepts the collect-all-chunks form: we dispatch
-    // non-streaming, then synthesize a single Delta chunk wrapping
-    // the full response text. For-protocol iteration over the
-    // returned list still yields ordered chunks (one chunk per
-    // dispatch) — the contract caller sees is unchanged.
+    // The router's public surface exposes only non-streaming dispatch.
+    // Rather than pretend to emit provider deltas, the alpha contract is
+    // explicit: dispatch once, then wrap the full response text as a
+    // single ordered chunk. True delta streaming needs follow-up router
+    // surface work.
     let Ok(resp) = runtime().block_on(
         bundle
             .router
@@ -359,17 +357,11 @@ pub fn llm_stream_blocking(provider: &str, model: &str, prompt: &str) -> Vec<Str
     vec![resp.response.text]
 }
 
-/// Fallback path: when the WRAP-synthesized routing entry isn't
-/// available (the requested `(provider, model)` was not declared in
-/// `cobrust.toml`), attempt a direct provider-level streaming call.
-/// Returns `Vec::new()` if the provider is also undeclared.
+/// Fallback path for undeclared `(provider, model)` requests.
+///
+/// No direct provider streaming is implemented in this alpha shim, so
+/// undeclared routes honestly return `Vec::new()`.
 fn direct_stream_attempt(_provider: &str, _model: &str, _prompt: &str) -> Vec<String> {
-    // M-AI.0 scope cap: without a registered provider in
-    // CONFIG_BUNDLE we can't surface a `dyn LlmProvider` instance
-    // outside the router's encapsulation. Returning an empty Vec
-    // matches Decision 7. True direct-provider streaming surface
-    // is deferred to a follow-up spike paired with the iter-
-    // protocol widening (M-AI.0.x candidate).
     Vec::new()
 }
 
