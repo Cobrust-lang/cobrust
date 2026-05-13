@@ -60,4 +60,3 @@ fn test_e2e_llm_complete_with_tools_without_config_prints_empty_line() {
     ));
     assert_eq!(stdout, "\n");
 }
-
