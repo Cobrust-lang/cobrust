@@ -1272,6 +1272,85 @@ if [[ -f "docs/agent/adr/0028-m13-concurrency-runtime.md" ]]; then
         || fail "docs/agent/findings/m13-sync-bridge-cost.md missing (ADR-0028 §F)"
 fi
 
+# --- M-AI.0 stdlib::llm surface coverage (ADR-0048) ------------------------
+if grep -q '^- \*\*M-AI.0 — delivered\.\*\*' "docs/agent/modules/stdlib.md"; then
+    mai0_llm_terms=(
+        "llm_complete"
+        "llm_dispatch"
+        "llm_stream"
+        "Decision 7"
+        "ledger"
+        "[routing.llm_complete_"
+        "[routing.llm_stream_"
+    )
+    mai0_llm_files=(
+        "docs/agent/modules/stdlib.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${mai0_llm_terms[@]}"; do
+        for f in "${mai0_llm_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M-AI.0 llm surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    [[ -f "crates/cobrust-stdlib/src/llm.rs" ]] \
+        || fail "crates/cobrust-stdlib/src/llm.rs missing (M-AI.0 ADR-0048)"
+    [[ -f "crates/cobrust-stdlib/tests/llm_corpus.rs" ]] \
+        || fail "crates/cobrust-stdlib/tests/llm_corpus.rs missing (M-AI.0 tests)"
+    [[ -f "crates/cobrust-cli/tests/intrinsics_llm.rs" ]] \
+        || fail "crates/cobrust-cli/tests/intrinsics_llm.rs missing (M-AI.0 E2E tests)"
+
+    if grep -q -F 'llm_dispatch(' "docs/human/en/architecture.md"; then
+        grep -q -F '[routing.summarize_doc]' "cobrust.toml.example" \
+            || fail "M-AI.0 dispatch examples are exposed but cobrust.toml.example lacks a sample [routing.<task>] entry"
+    fi
+fi
+
+echo "doc-coverage: M-AI.0 llm surface checks passed"
+
+# --- M-AI.1 stdlib::prompt surface coverage (ADR-0048) ---------------------
+if grep -q '^- \*\*M-AI.1 — delivered\.\*\*' "docs/agent/modules/stdlib.md"; then
+    mai1_prompt_terms=(
+        "prompt_render"
+        "prompt_format_few_shot"
+        "prompt_format_system_user"
+        "prompt_escape_braces"
+        "llm_complete_structured"
+        "task=\"structured\""
+        "Input: <in_i>"
+        "Respond with valid JSON"
+    )
+    mai1_prompt_files=(
+        "docs/agent/modules/stdlib.md"
+        "docs/human/en/architecture.md"
+        "docs/human/zh/architecture.md"
+    )
+    for term in "${mai1_prompt_terms[@]}"; do
+        for f in "${mai1_prompt_files[@]}"; do
+            if ! grep -q -F "${term}" "$f"; then
+                fail "M-AI.1 prompt surface term '${term}' missing from ${f}"
+            fi
+        done
+    done
+
+    [[ -f "crates/cobrust-stdlib/src/prompt.rs" ]] \
+        || fail "crates/cobrust-stdlib/src/prompt.rs missing (M-AI.1 ADR-0048)"
+    [[ -f "crates/cobrust-stdlib/tests/prompt_corpus.rs" ]] \
+        || fail "crates/cobrust-stdlib/tests/prompt_corpus.rs missing (M-AI.1 tests)"
+    [[ -f "crates/cobrust-cli/tests/intrinsics_prompt.rs" ]] \
+        || fail "crates/cobrust-cli/tests/intrinsics_prompt.rs missing (M-AI.1 E2E tests)"
+
+    if grep -q -F 'llm_complete_structured' "crates/cobrust-stdlib/src/prompt.rs"; then
+        grep -q -F '[routing.structured]' "cobrust.toml.example" \
+            || fail "M-AI.1 structured routing is exposed but cobrust.toml.example lacks [routing.structured]"
+    fi
+fi
+
+echo "doc-coverage: M-AI.1 prompt surface checks passed"
+
 # --- M-AI.2 stdlib::tool surface coverage (ADR-0048) -----------------------
 if grep -q '^- \*\*M-AI.2 — delivered\.\*\*' "docs/agent/modules/stdlib.md"; then
     mai2_tool_terms=(
@@ -1310,10 +1389,11 @@ if grep -q '^- \*\*M-AI.2 — delivered\.\*\*' "docs/agent/modules/stdlib.md"; t
         grep -q -F '[routing.tools]' "cobrust.toml.example" \
             || fail "M-AI.2 tool routing is exposed via llm_dispatch(task=\"tools\") but cobrust.toml.example lacks [routing.tools]"
     fi
-    echo "doc-coverage: M-AI.2 tool surface checks passed"
 fi
 
+echo "doc-coverage: M-AI.2 tool surface checks passed"
 echo "doc-coverage: M13 stdlib task + sync surface checks passed"
+
 # --- 23. M14 REPL surface coverage --------------------------------------
 # When the cli module declares M14 delivered, the M14 binding surface
 # terms + ADR-0029 anchors must appear in all three doc trees.

@@ -2,10 +2,8 @@
 doc_kind: module
 module_id: mod:stdlib
 crate: cobrust-stdlib
-last_verified_commit: 078eab9
-dependencies: [mod:codegen, mod:mir, mod:hir, adr:0027]
 last_verified_commit: b42391f
-dependencies: [mod:codegen, mod:mir, mod:hir]
+dependencies: [mod:codegen, mod:mir, mod:hir, adr:0027]
 ---
 
 # Module: stdlib
