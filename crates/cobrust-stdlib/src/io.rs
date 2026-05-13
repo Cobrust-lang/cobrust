@@ -177,20 +177,20 @@ fn alloc_str_buffer(s: &str) -> *mut u8 {
     }
 }
 
-/// C-ABI shim for source-level `input(prompt: str) -> str`. Writes
-/// `prompt` to stdout flushed, reads one line from stdin (stripping
-/// the trailing `\n`), returns an owned Str pointer.
+/// C-ABI shim for source-level `input(prompt: str) -> str` when the
+/// prompt is known as raw bytes at the callsite. Writes `prompt` to
+/// stdout flushed, reads one line from stdin (stripping the trailing
+/// `\n`), returns an owned Str pointer.
 ///
 /// ADR-0044 §"New runtime C-ABI surface": codegen emits a call here
-/// when the intrinsic-rewrite pass redirects `input(...)` callsites.
+/// for string-literal prompt paths. Non-literal prompt buffers route
+/// through [`__cobrust_input_str_buf`].
 ///
 /// # Safety
 ///
 /// `ptr` must be a valid pointer to `len` bytes of UTF-8-encoded
 /// prompt text (or null + 0 for the no-prompt case). The text need
-/// not be nul-terminated. Codegen emits this call with a `.rodata` or
-/// f-string-buffer pointer + a compile-time-known length, satisfying
-/// the contract.
+/// not be nul-terminated.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_input(ptr: *const u8, len: usize) -> *mut u8 {
     let prompt: &str = if ptr.is_null() || len == 0 {
@@ -219,6 +219,41 @@ pub unsafe extern "C" fn __cobrust_input_no_prompt() -> *mut u8 {
     let stdin = std::io::stdin();
     let mut lock = stdin.lock();
     let s = input_from("", &mut lock);
+    alloc_str_buffer(&s)
+}
+
+/// C-ABI shim for source-level `input(prompt: str) -> str` when the
+/// prompt is already a heap `Str` buffer.
+///
+/// Mirrors [`__cobrust_println_str_buf`]: extracts `(ptr, len)` from a
+/// Cobrust `Str` buffer, prints that prompt, then reads one line from
+/// stdin stripping the trailing `\n`. Null or empty buffers behave like
+/// `input("")`.
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by `__cobrust_str_new` (or any W2
+/// shim that wraps it) and not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_input_str_buf(buf: *mut u8) -> *mut u8 {
+    let prompt = if buf.is_null() {
+        ""
+    } else {
+        // SAFETY: caller-attestation per `# Safety` clause.
+        unsafe {
+            let ptr = crate::fmt::__cobrust_str_ptr(buf);
+            let len = crate::fmt::__cobrust_str_len(buf);
+            if ptr.is_null() || len <= 0 {
+                ""
+            } else {
+                let bytes = std::slice::from_raw_parts(ptr, len as usize);
+                std::str::from_utf8(bytes).unwrap_or("")
+            }
+        }
+    };
+    let stdin = std::io::stdin();
+    let mut lock = stdin.lock();
+    let s = input_from(prompt, &mut lock);
     alloc_str_buffer(&s)
 }
 

@@ -12,8 +12,11 @@
 //!
 //! `tool_invoke` is a closed-world α dispatcher. It ships only the
 //! deterministic `add_i64` exemplar and does not call arbitrary user-defined
-//! Cobrust functions. Future decorator / `.schema()` / `Registry` / reflection
-//! surfaces require separate compiler work.
+//! Cobrust functions. `llm_complete_with_tools` is intentionally narrower
+//! than its name suggests: today it only validates the registry, augments
+//! the prompt with tool metadata, and delegates to `llm_dispatch("tools", ...)`.
+//! It does not execute tool calls or run a tool loop. Future decorator /
+//! `.schema()` / `Registry` / reflection surfaces require separate compiler work.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -112,6 +115,9 @@ pub fn tool_invoke_helper(tool_name: &str, args_json: &str) -> String {
 }
 
 /// Build the deterministic prompt text used by `llm_complete_with_tools`.
+///
+/// This helper only serializes tool metadata into the prompt. It does not
+/// execute tools or parse model output.
 #[must_use]
 pub fn augment_prompt_with_tools_helper(prompt: &str, registry_json: &str) -> String {
     format!(
@@ -121,8 +127,12 @@ pub fn augment_prompt_with_tools_helper(prompt: &str, registry_json: &str) -> St
 
 /// Prompt-augment and route through M-AI.0 `llm_dispatch(task="tools", ...)`.
 ///
+/// Honest alpha contract: this helper does not execute tools, inspect model
+/// output, or perform a second LLM round-trip. It only validates the registry,
+/// appends it to the prompt, and dispatches once.
+///
 /// Returns `""` on malformed registry JSON or router failure. Native provider
-/// tool-calling APIs are intentionally deferred.
+/// tool-calling APIs and local tool loops are intentionally deferred.
 #[must_use]
 pub fn llm_complete_with_tools_helper(prompt: &str, registry_json: &str) -> String {
     if parse_registry(registry_json).is_none() {
@@ -317,4 +327,19 @@ pub unsafe extern "C" fn __cobrust_llm_complete_with_tools(
     // SAFETY: same.
     let registry = unsafe { read_str_buf(registry_json) };
     alloc_str_buffer(&llm_complete_with_tools_helper(&p, &registry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn augment_prompt_with_tools_is_prompt_only() {
+        let registry = r#"{"tools":[{"name":"add_i64","description":"Add two integers","parameters":[{"name":"a","type":"i64"},{"name":"b","type":"i64"}],"returns":"i64"}]}"#;
+        let augmented = augment_prompt_with_tools_helper("What is 1+2?", registry);
+        assert!(augmented.contains("What is 1+2?"));
+        assert!(augmented.contains("Available tools:"));
+        assert!(augmented.contains(registry));
+        assert!(augmented.contains("respond with JSON"));
+    }
 }
