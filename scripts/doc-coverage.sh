@@ -1305,6 +1305,11 @@ if grep -q '^- \*\*M-AI.2 — delivered\.\*\*' "docs/agent/modules/stdlib.md"; t
         || fail "crates/cobrust-stdlib/tests/tool_corpus.rs missing (M-AI.2 tests)"
     [[ -f "crates/cobrust-cli/tests/intrinsics_tool.rs" ]] \
         || fail "crates/cobrust-cli/tests/intrinsics_tool.rs missing (M-AI.2 E2E tests)"
+
+    if grep -q -F 'llm_dispatch_blocking("tools"' "crates/cobrust-stdlib/src/tool.rs"; then
+        grep -q -F '[routing.tools]' "cobrust.toml.example" \
+            || fail "M-AI.2 tool routing is exposed via llm_dispatch(task=\"tools\") but cobrust.toml.example lacks [routing.tools]"
+    fi
     echo "doc-coverage: M-AI.2 tool surface checks passed"
 fi
 
