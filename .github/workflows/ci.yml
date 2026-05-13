@@ -123,6 +123,13 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - run: bash scripts/doc-coverage.sh
 
+  cli-tempdir-guard:
+    name: scripts/cli-tempdir-guard.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - run: bash scripts/cli-tempdir-guard.sh
+
   # Optional: real-LLM smoke (gated by step-level env check;
   # job-level `if: ${{ secrets.X != '' }}` is rejected by GitHub Actions
   # validation — secrets context is restricted to env/with/run.)
