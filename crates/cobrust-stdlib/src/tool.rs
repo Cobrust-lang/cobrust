@@ -150,21 +150,6 @@ pub fn llm_complete_with_tools_helper(prompt: &str, registry_json: &str) -> Stri
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn augment_prompt_with_tools_is_prompt_only() {
-        let registry = r#"{"tools":[{"name":"add_i64","description":"Add two integers","parameters":[{"name":"a","type":"i64"},{"name":"b","type":"i64"}],"returns":"i64"}]}"#;
-        let augmented = augment_prompt_with_tools_helper("What is 1+2?", registry);
-        assert!(augmented.contains("What is 1+2?"));
-        assert!(augmented.contains("Available tools:"));
-        assert!(augmented.contains(registry));
-        assert!(augmented.contains("respond with JSON"));
-    }
-}
-
 fn is_valid_tool_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -342,4 +327,19 @@ pub unsafe extern "C" fn __cobrust_llm_complete_with_tools(
     // SAFETY: same.
     let registry = unsafe { read_str_buf(registry_json) };
     alloc_str_buffer(&llm_complete_with_tools_helper(&p, &registry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn augment_prompt_with_tools_is_prompt_only() {
+        let registry = r#"{"tools":[{"name":"add_i64","description":"Add two integers","parameters":[{"name":"a","type":"i64"},{"name":"b","type":"i64"}],"returns":"i64"}]}"#;
+        let augmented = augment_prompt_with_tools_helper("What is 1+2?", registry);
+        assert!(augmented.contains("What is 1+2?"));
+        assert!(augmented.contains("Available tools:"));
+        assert!(augmented.contains(registry));
+        assert!(augmented.contains("respond with JSON"));
+    }
 }
