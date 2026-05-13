@@ -105,7 +105,7 @@ fn v02_clean_program_exits_zero() {
     let src = &src.path;
     let out = Command::new(&bin)
         .arg("build")
-        .arg(&src)
+        .arg(src)
         .arg("--emit")
         .arg("obj")
         .arg("--quiet")

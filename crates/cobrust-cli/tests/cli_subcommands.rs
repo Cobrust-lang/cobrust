@@ -61,7 +61,7 @@ fn s01_build_returns_zero() {
     let src = &src.path;
     let out = Command::new(&bin)
         .arg("build")
-        .arg(&src)
+        .arg(src)
         .arg("--emit")
         .arg("obj")
         .arg("-o")
@@ -84,7 +84,7 @@ fn s02_check_ok() {
     let src = &src.path;
     let out = Command::new(&bin)
         .arg("check")
-        .arg(&src)
+        .arg(src)
         .output()
         .expect("invoke check");
     assert!(
@@ -104,7 +104,7 @@ fn s03_check_type_error_exits_2() {
     let src = &src.path;
     let out = Command::new(&bin)
         .arg("check")
-        .arg(&src)
+        .arg(src)
         .output()
         .expect("invoke check");
     assert!(!out.status.success(), "expected failure for type error");
@@ -127,7 +127,7 @@ fn s04_fmt_check_clean_canonical() {
     // First, fmt rewrites into canonical form.
     let out1 = Command::new(&bin)
         .arg("fmt")
-        .arg(&src_path)
+        .arg(src_path)
         .output()
         .expect("invoke fmt");
     assert!(
@@ -139,7 +139,7 @@ fn s04_fmt_check_clean_canonical() {
     let out2 = Command::new(&bin)
         .arg("fmt")
         .arg("--check")
-        .arg(&src_path)
+        .arg(src_path)
         .output()
         .expect("invoke fmt --check");
     assert!(
@@ -158,7 +158,7 @@ fn s05_new_scaffolds_package() {
         .arg("new")
         .arg("my_app")
         .arg("--path")
-        .arg(&dir)
+        .arg(dir)
         .output()
         .expect("invoke new");
     assert!(
