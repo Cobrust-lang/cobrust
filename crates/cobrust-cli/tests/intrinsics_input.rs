@@ -1088,6 +1088,23 @@ fn test_t61_input_nonempty_prompt_build_obj() {
     assert_eq!(code, 0, "stderr={stderr}");
 }
 
+#[test]
+fn test_t61b_input_runtime_prompt_prints_prompt_and_value() {
+    let src = write_cb(
+        "t61b_input_runtime_prompt",
+        "fn main() -> i64:\n    let prompt = read_line()\n    let s = input(prompt)\n    print(s)\n    return 0\n",
+    );
+    let (build_code, exe, stderr) = run_build_exe(&src);
+    assert_eq!(build_code, 0, "build failed; stderr={stderr}");
+    let (run_code, stdout, _) = run_exe(&exe, &[], b"please enter: \nhello\n");
+    assert_eq!(run_code, 0);
+    assert!(
+        stdout.contains("please enter: "),
+        "expected runtime prompt in stdout, got {stdout:?}"
+    );
+    assert!(stdout.contains("hello"), "expected echoed input, got {stdout:?}");
+}
+
 // ----- #62 argv() in fn body after declarations ---------------------
 
 #[test]
