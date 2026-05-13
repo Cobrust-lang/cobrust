@@ -44,9 +44,7 @@ fn workspace_root() -> PathBuf {
 fn translate_tomli_via_cli_locates_corpus() {
     let bin = cobrust_binary();
     let workspace = workspace_root();
-    let out_dir =
-        std::env::temp_dir().join(format!("cobrust-m10-xlate-tomli-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&out_dir);
+    let out_dir = tempfile::tempdir().expect("create temp translation out dir");
 
     // Skip the test if corpus/tomli isn't present (e.g. in a stripped CI).
     if !workspace.join("corpus/tomli/spec.toml").exists() {
@@ -58,7 +56,7 @@ fn translate_tomli_via_cli_locates_corpus() {
         .arg("translate")
         .arg("tomli")
         .arg("--out-dir")
-        .arg(&out_dir)
+        .arg(out_dir.path())
         .arg("--quiet")
         .current_dir(&workspace)
         .output()

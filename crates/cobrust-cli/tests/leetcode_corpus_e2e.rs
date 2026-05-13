@@ -66,19 +66,17 @@ fn leetcode_src(name: &str) -> PathBuf {
     leetcode_dir().join(name)
 }
 
-/// Monotonic per-process counter so parallel tests don't collide on the
-/// same tmp-dir path.  Do NOT use `line!()` — it is the same constant
-/// across all call-sites (per `feedback_p9_clippy_stall_pattern.md`).
-fn build_seq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    COUNTER.fetch_add(1, Ordering::SeqCst)
+/// Built executable plus its tempdir guard.
+struct BuiltLeetcode {
+    _temp_dir: tempfile::TempDir,
+    exe: PathBuf,
+    stderr: String,
 }
 
 /// Build `examples/leetcode/{name}` into a unique tmp-exe.
 /// Panics with a descriptive message if the source file does not exist
 /// (expected during Phase 3 TDD step 1 — DEV hasn't created the .cb yet).
-fn build_leetcode(name: &str) -> (PathBuf, String) {
+fn build_leetcode(name: &str) -> BuiltLeetcode {
     let src = leetcode_src(name);
     assert!(
         src.exists(),
@@ -87,14 +85,8 @@ fn build_leetcode(name: &str) -> (PathBuf, String) {
         src
     );
     let bin = cobrust_binary();
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-lc-e2e-{}-{}-{}",
-        name,
-        std::process::id(),
-        build_seq()
-    ));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe = exe_dir.join(src.file_stem().unwrap());
+    let exe_dir = tempfile::tempdir().expect("create temp exe dir");
+    let exe = exe_dir.path().join(src.file_stem().unwrap());
     let out = Command::new(&bin)
         .arg("build")
         .arg(&src)
@@ -106,9 +98,17 @@ fn build_leetcode(name: &str) -> (PathBuf, String) {
         .expect("invoke cobrust build");
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if !out.status.success() {
-        return (PathBuf::new(), stderr);
+        return BuiltLeetcode {
+            _temp_dir: exe_dir,
+            exe: PathBuf::new(),
+            stderr,
+        };
     }
-    (exe, stderr)
+    BuiltLeetcode {
+        _temp_dir: exe_dir,
+        exe,
+        stderr,
+    }
 }
 
 /// Run `exe` piping `stdin_bytes` and optional `argv` extras.
@@ -135,14 +135,14 @@ fn run_leetcode(exe: &Path, stdin_bytes: &[u8], argv: &[&str]) -> (i32, String, 
 
 /// Build + run in one call; assert exit 0 and return stdout.
 fn build_and_run_leetcode(name: &str, stdin_bytes: &[u8], argv: &[&str]) -> String {
-    let (exe, build_stderr) = build_leetcode(name);
+    let built = build_leetcode(name);
     assert!(
-        exe.as_os_str().len() > 0,
+        built.exe.as_os_str().len() > 0,
         "cobrust build failed for '{}'; stderr=\n{}",
         name,
-        build_stderr
+        built.stderr
     );
-    let (code, stdout, run_stderr) = run_leetcode(&exe, stdin_bytes, argv);
+    let (code, stdout, run_stderr) = run_leetcode(&built.exe, stdin_bytes, argv);
     assert_eq!(
         code, 0,
         "exe '{}' exited with code {}; stderr=\n{}",
@@ -376,14 +376,8 @@ fn test_lc_all_compile() {
         if path.extension().and_then(|e| e.to_str()) != Some("cb") {
             continue;
         }
-        let exe_dir = std::env::temp_dir().join(format!(
-            "cobrust-lc-compile-gate-{}-{}-{}",
-            path.file_stem().unwrap().to_string_lossy(),
-            std::process::id(),
-            build_seq()
-        ));
-        let _ = std::fs::create_dir_all(&exe_dir);
-        let exe = exe_dir.join(path.file_stem().unwrap());
+        let exe_dir = tempfile::tempdir().expect("create temp exe dir");
+        let exe = exe_dir.path().join(path.file_stem().unwrap());
         let out = Command::new(&bin)
             .arg("build")
             .arg(&path)
