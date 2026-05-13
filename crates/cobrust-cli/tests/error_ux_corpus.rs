@@ -28,11 +28,8 @@ fn cobrust_binary() -> PathBuf {
 /// Write a `.cb` snippet to a temp file and run `cobrust check` on it.
 /// Returns `(exit_code, combined_output_lines)`.
 fn check_snippet(name: &str, source: &str) -> (i32, Vec<String>) {
-    let dir = std::env::temp_dir()
-        .join(format!("cobrust-ux-corpus-{}", std::process::id()))
-        .join(name);
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let file = dir.join(format!("{name}.cb"));
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let file = dir.path().join(format!("{name}.cb"));
     std::fs::write(&file, source).expect("write source");
 
     let out = Command::new(cobrust_binary())

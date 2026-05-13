@@ -80,7 +80,18 @@ Without this reframe + Phase F.2 stdlib work, Cobrust ships v0.2.0 as "Python su
 
 Adopt **Option B**. Concretely:
 
-1. **README + `docs/post/why-cobrust.md`** updated with reframe language (1-2 paragraph diff per file, NOT a full rewrite). The headline becomes "AI-friendly Python successor with AI-native stdlib in development."
+1. **9 public surfaces** reframed per Option B language (review-claude SUPPLEMENT 2026-05-12 enumeration; mirrors ADR-0046 tier-1-contract pattern to prevent F19 overclaim leak). Phase 8 ships all 9 atomically:
+   - **(a)** `README.md` L7 hero — "AI-friendly Python successor in Rust, with LLM-driven translation pipeline and AI-native stdlib (in development)."
+   - **(b)** `README.md` L58 (Two halves §) — drop "AI-native" framing here; keep "uses LLMs as a first-class component" attribution.
+   - **(c)** `docs/post/why-cobrust.md` L1 title — "Why Cobrust — an AI-friendly Python successor with LLM-driven translation pipeline."
+   - **(d)** `docs/human/en/overview.md` L5.
+   - **(e)** `docs/human/en/README.md` L3.
+   - **(f)** `docs/human/zh/README.md` (parallel Chinese, 1-to-1 with (e)).
+   - **(g)** `docs/human/zh/overview.md` (parallel Chinese, 1-to-1 with (d)).
+   - **(h)** `crates/cobrust-cli/Cargo.toml` `description` field (used in `cargo install` metadata + crates.io once published).
+   - **(i)** GitHub repo "About" description — via `gh repo edit Cobrust-lang/cobrust --description "AI-friendly Python successor in Rust with LLM-driven translation pipeline and AI-native stdlib in development (Phase F.2)."`
+   
+   **Internal historic ADRs + findings** (ADR-0007 / 0019 / 0032 / 0039 / 0040 / 0047 / 0048 itself; `findings/audit-1-tomli-real-llm-result.md`; `findings/translator-real-vs-synthetic-status.md`; `CLAUDE.md §1.2`) are **AUDIT TRAIL** — do NOT retroactively rewrite. The single concession is a one-line marker in `CLAUDE.md §1.2` reading "(framing reframed in ADR-0048)" so future readers can navigate.
 2. **Phase F.2 stdlib batch** (7 milestones, M-AI.0 through M-AI.6) per §Implementation map below.
 3. **v0.2.0-alpha tag** binds to "M-AI.0..M-AI.6 closed + **TD-Recursive-Types Phase 7.5 closed** (per finding `2026-05-12-lc100-primitive-simulation-tech-debt.md` + ADSD F24) + framing reframe shipped + release-readiness verify GO per ADR-0045". The `-alpha` suffix signals "AI-native stdlib direction + recursive-types capability surface, not yet stable."
 4. **Async M-AI.7 partnership outreach** (training-data corpus contribution agreements with model providers) starts post-v0.2.0-alpha. Months-scale, NOT in this sprint.

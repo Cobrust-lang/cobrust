@@ -66,18 +66,28 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
-/// Write a `.cb` file to a per-test temp dir and return its absolute path.
-fn write_cb(name: &str, contents: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-adr0044-{}-{}-{}",
-        name,
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    let p = dir.join(format!("{name}.cb"));
-    std::fs::write(&p, contents).expect("write temp .cb");
-    p
+struct TempPath {
+    _temp_dir: tempfile::TempDir,
+    path: PathBuf,
+}
+
+impl std::ops::Deref for TempPath {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
+}
+
+/// Write a `.cb` file to a per-test temp dir and return its guarded absolute path.
+fn write_cb(name: &str, contents: &str) -> TempPath {
+    let dir = tempfile::tempdir().expect("create temp source dir");
+    let path = dir.path().join(format!("{name}.cb"));
+    std::fs::write(&path, contents).expect("write temp .cb");
+    TempPath {
+        _temp_dir: dir,
+        path,
+    }
 }
 
 /// Run `cobrust check` on `src`. Returns (exit_code, stderr).
@@ -112,16 +122,24 @@ fn run_build_obj(src: &Path) -> (i32, String) {
     (code, stderr)
 }
 
-/// Run `cobrust build` (executable) on `src`. Returns (exit_code, exe_path, stderr).
-fn run_build_exe(src: &Path) -> (i32, PathBuf, String) {
+struct BuiltExe {
+    _temp_dir: tempfile::TempDir,
+    path: PathBuf,
+}
+
+impl std::ops::Deref for BuiltExe {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
+}
+
+/// Run `cobrust build` (executable) on `src`. Returns (exit_code, guarded exe path, stderr).
+fn run_build_exe(src: &Path) -> (i32, BuiltExe, String) {
     let bin = cobrust_binary();
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-adr0044-exe-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe = exe_dir.join(src.file_stem().unwrap());
+    let exe_dir = tempfile::tempdir().expect("create temp exe dir");
+    let exe = exe_dir.path().join(src.file_stem().unwrap());
     let out = Command::new(&bin)
         .arg("build")
         .arg(src)
@@ -133,7 +151,14 @@ fn run_build_exe(src: &Path) -> (i32, PathBuf, String) {
         .expect("invoke cobrust build");
     let code = out.status.code().unwrap_or(-1);
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    (code, exe, stderr)
+    (
+        code,
+        BuiltExe {
+            _temp_dir: exe_dir,
+            path: exe,
+        },
+        stderr,
+    )
 }
 
 /// Invoke `exe` with `args` and `stdin_bytes`. Returns (exit_code, stdout, stderr).

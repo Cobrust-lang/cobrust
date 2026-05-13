@@ -1,6 +1,6 @@
 # Cobrust English Documentation
 
-> Cobra 🐍 + Rust 🦀 — A Rust-implemented Python successor with an AI-native compiler that closed-loop translates the entire Python ecosystem.
+> Cobra 🐍 + Rust 🦀 — A Rust-implemented Python successor with an LLM-driven translation pipeline that closed-loop translates Python libraries to verified Rust. AI-native stdlib in development for v0.2.0-alpha.
 
 ## Document map
 
