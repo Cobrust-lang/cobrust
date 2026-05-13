@@ -37,12 +37,19 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
-fn write_temp(name: &str, contents: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("cobrust-m10-sub-{}-{}", name, std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    let p = dir.join(format!("{name}.cb"));
-    std::fs::write(&p, contents).expect("write temp .cb");
-    p
+struct TempSource {
+    _temp_dir: tempfile::TempDir,
+    path: PathBuf,
+}
+
+fn write_temp(name: &str, contents: &str) -> TempSource {
+    let dir = tempfile::tempdir().expect("create temp source dir");
+    let path = dir.path().join(format!("{name}.cb"));
+    std::fs::write(&path, contents).expect("write temp .cb");
+    TempSource {
+        _temp_dir: dir,
+        path,
+    }
 }
 
 #[test]
@@ -51,6 +58,7 @@ fn s01_build_returns_zero() {
     // the M9 codegen stub does not produce real callable behavior.
     let bin = cobrust_binary();
     let src = write_temp("s01_build_zero", "fn main() -> i64:\n    return 0\n");
+    let src = &src.path;
     let out = Command::new(&bin)
         .arg("build")
         .arg(&src)
@@ -73,6 +81,7 @@ fn s01_build_returns_zero() {
 fn s02_check_ok() {
     let bin = cobrust_binary();
     let src = write_temp("s02_check_ok", "fn f(x: i64) -> i64:\n    return x + 1\n");
+    let src = &src.path;
     let out = Command::new(&bin)
         .arg("check")
         .arg(&src)
@@ -92,6 +101,7 @@ fn s03_check_type_error_exits_2() {
     let bin = cobrust_binary();
     // Mismatch: declared return is i64, body returns a literal float.
     let src = write_temp("s03_check_type_error", "fn f() -> i64:\n    return 1.5\n");
+    let src = &src.path;
     let out = Command::new(&bin)
         .arg("check")
         .arg(&src)
@@ -113,6 +123,7 @@ fn s04_fmt_check_clean_canonical() {
     // a fixed point.
     let bin = cobrust_binary();
     let src_path = write_temp("s04_fmt_clean", "fn f() -> i64:\n    return 0\n");
+    let src_path = &src_path.path;
     // First, fmt rewrites into canonical form.
     let out1 = Command::new(&bin)
         .arg("fmt")
@@ -141,8 +152,8 @@ fn s04_fmt_check_clean_canonical() {
 #[test]
 fn s05_new_scaffolds_package() {
     let bin = cobrust_binary();
-    let dir = std::env::temp_dir().join(format!("cobrust-m10-new-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = tempfile::tempdir().expect("create temp package dir");
+    let dir = dir.path();
     let out = Command::new(&bin)
         .arg("new")
         .arg("my_app")

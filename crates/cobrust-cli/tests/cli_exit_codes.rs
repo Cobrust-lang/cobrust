@@ -64,9 +64,8 @@ fn ec_1_user_error_missing_file() {
 #[test]
 fn ec_2_type_error() {
     let bin = cobrust_binary();
-    let dir = std::env::temp_dir().join(format!("cobrust-m10-ec2-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    let bad = dir.join("type_err.cb");
+    let dir = tempfile::tempdir().expect("create temp source dir");
+    let bad = dir.path().join("type_err.cb");
     std::fs::write(&bad, "fn f() -> i64:\n    return 1.5\n").unwrap();
     let out = Command::new(&bin)
         .arg("check")
@@ -83,9 +82,8 @@ fn ec_5_fmt_diff_under_check() {
     // round-trips to "fn f() -> i64:\n    return 0\n" — i.e. the missing
     // space after "->" gets fixed. fmt --check then exits 5.
     let bin = cobrust_binary();
-    let dir = std::env::temp_dir().join(format!("cobrust-m10-ec5-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("nc.cb");
+    let dir = tempfile::tempdir().expect("create temp source dir");
+    let path = dir.path().join("nc.cb");
     std::fs::write(&path, "fn f() ->i64:\n    return 0\n").unwrap();
     let out = Command::new(&bin)
         .arg("fmt")
@@ -126,8 +124,8 @@ fn ec_repl_returns_success_on_eof() {
 #[test]
 fn ec_translate_missing_corpus_returns_user_error() {
     let bin = cobrust_binary();
-    let dir = std::env::temp_dir().join(format!("cobrust-m10-ec_xlate-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = tempfile::tempdir().expect("create temp working dir");
+    let dir = dir.path();
     // Run from a directory with no corpus/ — should map to USER_ERROR (1)
     // because the corpus root cannot be located.
     let out = Command::new(&bin)

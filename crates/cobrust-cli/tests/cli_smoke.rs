@@ -51,12 +51,8 @@ fn hello_world_compiles_and_runs() {
     let hello_cb = workspace.join("examples/hello.cb");
     assert!(hello_cb.exists(), "examples/hello.cb missing");
 
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-m10-hello-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let exe_path = exe_dir.join("hello_smoke");
+    let exe_dir = tempfile::tempdir().expect("create temp exe dir");
+    let exe_path = exe_dir.path().join("hello_smoke");
 
     // 1. Build.
     let build_output = Command::new(&bin)

@@ -88,25 +88,19 @@ fn stress_src(slug: &str) -> PathBuf {
     stress_dir().join(slug).join("solution.cb")
 }
 
-fn build_seq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    COUNTER.fetch_add(1, Ordering::SeqCst)
-}
-
 /// Build a `.cb` source to an exe under a unique temp dir.
 /// Returns `(exe_path_or_empty, build_stderr)`. Empty exe path = build failed.
-fn build_cb(src: &Path, tag: &str) -> (PathBuf, String) {
+struct BuiltProgram {
+    _temp_dir: tempfile::TempDir,
+    exe: PathBuf,
+    stderr: String,
+}
+
+fn build_cb(src: &Path, _tag: &str) -> BuiltProgram {
     assert!(src.exists(), "fixture .cb not found at {:?}", src);
     let bin = cobrust_binary();
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-lc100-patternA-{}-{}-{}",
-        tag,
-        std::process::id(),
-        build_seq()
-    ));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe = exe_dir.join("solution");
+    let exe_dir = tempfile::tempdir().expect("create temp exe dir");
+    let exe = exe_dir.path().join("solution");
     let out = Command::new(&bin)
         .arg("build")
         .arg(src)
@@ -118,9 +112,17 @@ fn build_cb(src: &Path, tag: &str) -> (PathBuf, String) {
         .expect("invoke cobrust build");
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if !out.status.success() {
-        return (PathBuf::new(), stderr);
+        return BuiltProgram {
+            _temp_dir: exe_dir,
+            exe: PathBuf::new(),
+            stderr,
+        };
     }
-    (exe, stderr)
+    BuiltProgram {
+        _temp_dir: exe_dir,
+        exe,
+        stderr,
+    }
 }
 
 /// Run a built exe with stdin and return `(exit_code, stdout, stderr)`.
@@ -146,14 +148,14 @@ fn run_exe(exe: &Path, stdin_bytes: &[u8]) -> (i32, String, String) {
 /// Build + run with required exit-zero + assertable stdout. Panics with
 /// the failing details on either build failure or non-zero exit.
 fn build_and_run_ok(src: &Path, tag: &str, stdin_bytes: &[u8]) -> String {
-    let (exe, build_stderr) = build_cb(src, tag);
+    let built = build_cb(src, tag);
     assert!(
-        !exe.as_os_str().is_empty(),
+        !built.exe.as_os_str().is_empty(),
         "cobrust build failed for '{}'; stderr=\n{}",
         tag,
-        build_stderr
+        built.stderr
     );
-    let (code, stdout, run_stderr) = run_exe(&exe, stdin_bytes);
+    let (code, stdout, run_stderr) = run_exe(&built.exe, stdin_bytes);
     assert_eq!(
         code, 0,
         "exe '{}' exited with code {}; stderr=\n{}",

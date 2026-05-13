@@ -64,24 +64,18 @@ fn stress_src(slug: &str) -> PathBuf {
     stress_dir().join(slug).join("solution.cb")
 }
 
-fn build_seq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    COUNTER.fetch_add(1, Ordering::SeqCst)
+struct BuiltStress {
+    _temp_dir: tempfile::TempDir,
+    exe: PathBuf,
+    stderr: String,
 }
 
-fn build_stress(slug: &str) -> (PathBuf, String) {
+fn build_stress(slug: &str) -> BuiltStress {
     let src = stress_src(slug);
     assert!(src.exists(), "solution.cb not found at {:?}", src);
     let bin = cobrust_binary();
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-lc100-b3-{}-{}-{}",
-        slug,
-        std::process::id(),
-        build_seq()
-    ));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe = exe_dir.join("solution");
+    let exe_dir = tempfile::tempdir().expect("create temp exe dir");
+    let exe = exe_dir.path().join("solution");
     let out = Command::new(&bin)
         .arg("build")
         .arg(&src)
@@ -93,9 +87,17 @@ fn build_stress(slug: &str) -> (PathBuf, String) {
         .expect("invoke cobrust build");
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if !out.status.success() {
-        return (PathBuf::new(), stderr);
+        return BuiltStress {
+            _temp_dir: exe_dir,
+            exe: PathBuf::new(),
+            stderr,
+        };
     }
-    (exe, stderr)
+    BuiltStress {
+        _temp_dir: exe_dir,
+        exe,
+        stderr,
+    }
 }
 
 fn run_stress(exe: &Path, stdin_bytes: &[u8]) -> (i32, String, String) {
@@ -118,14 +120,14 @@ fn run_stress(exe: &Path, stdin_bytes: &[u8]) -> (i32, String, String) {
 }
 
 fn build_and_run_stress(slug: &str, stdin_bytes: &[u8]) -> String {
-    let (exe, build_stderr) = build_stress(slug);
+    let built = build_stress(slug);
     assert!(
-        exe.as_os_str().len() > 0,
+        built.exe.as_os_str().len() > 0,
         "cobrust build failed for '{}'; stderr=\n{}",
         slug,
-        build_stderr
+        built.stderr
     );
-    let (code, stdout, run_stderr) = run_stress(&exe, stdin_bytes);
+    let (code, stdout, run_stderr) = run_stress(&built.exe, stdin_bytes);
     assert_eq!(
         code, 0,
         "exe '{}' exited with code {}; stderr=\n{}",
