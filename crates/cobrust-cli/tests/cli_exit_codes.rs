@@ -131,7 +131,7 @@ fn ec_translate_missing_corpus_returns_user_error() {
     let out = Command::new(&bin)
         .arg("translate")
         .arg("nonexistent_lib")
-        .current_dir(&dir)
+        .current_dir(dir)
         .output()
         .expect("invoke translate");
     assert_eq!(
