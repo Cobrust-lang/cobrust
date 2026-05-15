@@ -308,6 +308,80 @@ Two MIR-level lowering paths were corrected to match Python semantics
   each element via `__cobrust_list_append`. Multi-clause
   comprehensions nest via recursion in `lower_comp_clauses`.
 
+## M-F.3.1 — for-loop length-bound index lowering (per ADR-0050b)
+
+ADR-0050b supersedes the ADR-0027 §4 iter-protocol path for
+`LoopKind::For`. The new lowering performs length-bound index
+iteration directly, without calling `__cobrust_iter_init / next /
+drop`:
+
+```
+pre_block:
+  iter_local := <iter expr>
+  Call __cobrust_list_len(iter_local) -> len_local: i64
+after_len:
+  idx_local: i64 := 0
+  declare var_local (loop-var of element type)
+  Goto(header)
+header:
+  cond_local := BinaryOp(Lt, idx_local, len_local)
+  SwitchInt(cond_local, [(Bool(true), body)], otherwise: exit)
+body:
+  Call __cobrust_list_get(iter_local, idx_local) -> var_local
+  [lower user body block]
+  idx_local := BinaryOp(Add, idx_local, Constant::Int(1))
+  Goto(header)
+exit:
+  [optional else block]
+```
+
+### Why this shape
+
+The ADR-0027 iter-protocol used a `__cobrust_iter_next` runtime helper
+that returned `i64`, with `0` reserved as the "exhausted" sentinel. For
+`list[i64]` iteration this collided with legitimate `0`-valued
+elements — the **first** iteration of `for v in range(0, n):` returned
+`0`, which the caller's `SwitchInt(Bool(false))` interpreted as "stop"
+and exited the loop immediately. The latent bug surfaced under
+M-F.3.1's `range(0, n)` corpus.
+
+The length-bound shape sidesteps the sentinel problem entirely: the
+exhaustion condition is the explicit `idx < len` comparison, and the
+value channel (`__cobrust_list_get`) is free to return any i64
+including 0.
+
+### Composition with Phase G iter-protocol expansion
+
+When Phase G lands user-defined `__iter__` traits, the type checker
+dispatches between this length-bound primitive (for `Ty::List<_>` iter
+sources) and a generic iter-protocol shape (for arbitrary types
+implementing `__iter__`). The two paths coexist; nothing in M-F.3.1
+needs to be torn out.
+
+### Interaction with comprehensions
+
+`lower_comprehension` / `lower_comp_clauses` still emit the ADR-0027
+iter-protocol path (§H6). Comprehensions are a separate desugar
+target and their iter sources today are exclusively list-shaped
+container expressions whose runtime values are heap pointers (never
+the literal 0), so the latent sentinel bug does not surface there.
+Closing comprehensions onto the length-bound primitive is a Phase G
+follow-up (out of M-F.3.1 scope).
+
+### `range(a, b)` prelude binding
+
+`range(start, stop) -> list[i64]` ships as a real Cobrust prelude
+function (not an intrinsic stub) — see `cobrust-cli/src/build.rs::PRELUDE`.
+Its body materialises a `list[i64]` of `stop - start` slots via
+`list_new(n)` + a population `while` loop using `list_set`. Calls
+inside the body to `list_new` / `list_set` are intrinsic-rewritten
+on every callsite per ADR-0044 W2 Phase 3; the `range` body itself
+survives the intrinsic-rewrite pass and is compiled through normal
+MIR / codegen.
+
+3-argument `range_step(start, stop, step)` is deferred to Phase G
+alongside iter-protocol expansion.
+
 ## Done means (M8 — DONE)
 
 - [x] Every form in ADR-0003 has an explicit lowering rule.

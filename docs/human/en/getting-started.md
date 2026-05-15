@@ -35,6 +35,55 @@ Expected output:
 hello, world
 ```
 
+## Step 2.5: for loop (M-F.3.1)
+
+Cobrust ships Python-style `for ... in ...` loops over `list[T]` and the
+prelude `range(start, stop)` helper. Per ADR-0050b, `range(start, stop)`
+materialises a `list[i64]` containing `start, start+1, ..., stop-1`;
+empty ranges (`start >= stop`) skip the body.
+
+```cobrust
+fn main() -> i64:
+    # Forward range: prints 0 1 2 3 4
+    for i in range(0, 5):
+        print_int(i)
+
+    # Empty range: body never executes
+    for i in range(0, 0):
+        print_int(-1)
+
+    # Iteration over a list
+    let xs: list[i64] = list_new(3)
+    let _0 = list_set(xs, 0, 10)
+    let _1 = list_set(xs, 1, 20)
+    let _2 = list_set(xs, 2, 30)
+    for v in xs:
+        print_int(v)        # 10  20  30
+
+    # Iteration over argv (list[str])
+    for arg in argv():
+        print(arg)
+
+    return 0
+```
+
+Phase F.3 ships the 2-argument `range(start, stop)` form. The 3-argument
+`range(start, stop, step)` form is deferred to Phase G alongside the
+full iterator protocol. String iteration (`for c in "hello":`) is also
+Phase G work — see ADR-0050b §"Iter source type checking".
+
+Loop semantics:
+- Loop variables rebind fresh each iteration; closures captured inside
+  the body see the iter-N value when created at iter N (constitution
+  §2.2 — no Python-style late-binding).
+- Nested `for` is legal; var shadowing follows Rust rules.
+- `for x in 42:` and other non-`list[T]` iter sources are rejected at
+  type-check (`TypeError::NotIterable`).
+
+See [examples/for_range.cb](../../../examples/for_range.cb) and
+[examples/for_list.cb](../../../examples/for_list.cb) for runnable
+demos.
+
 ## Step 3: try the AI alpha surfaces (optional)
 
 1. Copy the router example and add your provider credentials:
@@ -65,7 +114,7 @@ See [cobrust.toml.example](../../../cobrust.toml.example) for the config shape a
 
 ### `while` loops
 
-Cobrust ships `while` loops out of the box (the for-loop sprint, M-F.3.1, is queued — see [ADR-0050](../../agent/adr/0050-phase-f3-language-completeness-batch.md)).
+Cobrust ships `while` loops out of the box. For `for` loops over `range(start, stop)` or a `list[i64]`, see [§"for loop (M-F.3.1)"](#step-25-for-loop-m-f31) above.
 
 ```cobrust
 fn main() -> i64:

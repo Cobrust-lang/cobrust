@@ -388,6 +388,59 @@ out.push(("__cobrust_prompt_escape_braces",    sig(call_conv, &[p],    Some(p)))
 out.push(("__cobrust_llm_complete_structured", sig(call_conv, &[p, p], Some(p))));
 ```
 
+## M-F.3.1 — `range(a, b)` PRELUDE extension (ADR-0050b)
+
+### PRELUDE amendment (Phase F.3 Wave 1)
+
+`crates/cobrust-cli/src/build.rs` — `PRELUDE` constant extended with
+one new flat-fn body, appended after the M-AI.0 / M-AI.1 / M-AI.2
+stubs:
+
+```cobrust
+fn range(start: i64, stop: i64) -> list[i64]:
+    let n: i64 = stop - start
+    let xs: list[i64] = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let _ = list_set(xs, i, start + i)
+        i = i + 1
+    return xs
+```
+
+Unlike the other PRELUDE entries (which are stubs that the
+intrinsic-rewrite pass redirects to runtime symbols and then drops),
+`range` is a **real Cobrust function body**. It is not registered as
+an intrinsic and is not dropped by `intrinsics::rewrite`. Its body
+calls `list_new` / `list_set` — both of which **are**
+intrinsic-rewritten on every callsite, including inside `range`'s
+body. The body compiles through normal MIR / codegen.
+
+Once compiled, callsites of `range(a, b)` in user code resolve to a
+regular function call to the prelude body. The returned `list[i64]`
+flows into the for-loop's iter source position, where the M-F.3.1
+length-bound index lowering iterates it via `__cobrust_list_len` +
+`__cobrust_list_get` (see `mod:mir` §"M-F.3.1 — for-loop length-bound
+index lowering" for the exact lowering shape).
+
+### Iter-protocol path retired for `LoopKind::For`
+
+ADR-0050b §"Decision": the ADR-0027 §4 iter-protocol path
+(`__cobrust_iter_init / next / drop`) is no longer emitted from MIR
+for `LoopKind::For`. The runtime shims (`cobrust-stdlib::iter`) stay
+shipped — they are still exercised by the
+`crates/cobrust-stdlib/tests/for_protocol_corpus.rs` unit corpus and
+by comprehension desugar (`lower_comprehension` per ADR-0041 §H6) —
+but `lower_loop / LoopKind::For` no longer references them. Phase G
+will fold comprehensions onto the same length-bound primitive.
+
+### No new C-ABI shim
+
+M-F.3.1 introduces **zero** new runtime symbols. The PRELUDE
+addition (`range`) and the MIR lowering refactor both compose over
+the existing W2 Phase 3 list ABI (`__cobrust_list_new` /
+`__cobrust_list_set` / `__cobrust_list_get` / `__cobrust_list_len`).
+This satisfies ADR-0050b §"Decision" — smallest correct increment.
+
 ## T1.3 — Install-path zero-friction (0.1.0-beta)
 
 ### build.rs static-lib embedding
