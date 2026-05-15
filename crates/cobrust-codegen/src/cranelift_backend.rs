@@ -1920,6 +1920,15 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_list_get", sig(call_conv, &[p, i64], Some(i64))));
     out.push(("__cobrust_list_len", sig(call_conv, &[p], Some(i64))));
     out.push(("__cobrust_list_drop", sig(call_conv, &[p], None)));
+    // ADR-0050c §"Phase 3": drop a list whose i64 slots store owned
+    // pointers. Second arg is a fn-pointer (p-sized) accepting `*mut u8`.
+    out.push((
+        "__cobrust_list_drop_elems",
+        sig(call_conv, &[p, p], None),
+    ));
+    // ADR-0050c §"Phase 6" / F5 §2.2 uniformity addendum: list_is_empty
+    // predicate; returns i64 0/1 per the SwitchInt codegen convention.
+    out.push(("__cobrust_list_is_empty", sig(call_conv, &[p], Some(i64))));
     // ADR-0041 §H6: comprehension lowering uses runtime append.
     out.push(("__cobrust_list_append", sig(call_conv, &[p, i64], None)));
 
@@ -1976,6 +1985,9 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_str_len", sig(call_conv, &[p], Some(i64))));
     out.push(("__cobrust_str_ptr", sig(call_conv, &[p], Some(p))));
     out.push(("__cobrust_str_drop", sig(call_conv, &[p], None)));
+    // ADR-0050c §"Phase 3": deep-copy a Str buffer; explicit clone for
+    // shared-ownership escape hatch. NULL → NULL; empty → fresh empty.
+    out.push(("__cobrust_str_clone", sig(call_conv, &[p], Some(p))));
 
     // -- ADR-0044 W2 Phase 2: stdin + argv source-level binding ---
     // `input(prompt: str) -> str` — writes prompt to stdout, reads one

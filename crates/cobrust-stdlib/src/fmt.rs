@@ -231,6 +231,32 @@ pub unsafe extern "C" fn __cobrust_str_drop(buf: *mut u8) {
     let _ = unsafe { Box::from_raw(buf.cast::<StringBuffer>()) };
 }
 
+/// Deep-copy a string buffer. Allocates a fresh `StringBuffer`, copies
+/// the source bytes, returns the new pointer. NULL → NULL.
+///
+/// ADR-0050c §"Phase 3": explicit clone for the shared-ownership
+/// escape hatch. Phase 4 emits this at MIR operand-lowering when a
+/// Str-typed local would otherwise be read twice (`let a = s; let b
+/// = s` source-level pattern).
+///
+/// # Safety
+///
+/// `buf` must be a pointer returned by [`__cobrust_str_new`] and not
+/// yet dropped, OR `buf` may be NULL. Returned pointer must be passed
+/// to [`__cobrust_str_drop`] exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_clone(buf: *mut u8) -> *mut u8 {
+    if buf.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let src = unsafe { &*buf.cast::<StringBuffer>() };
+    let copy = Box::new(StringBuffer {
+        bytes: src.bytes.clone(),
+    });
+    Box::into_raw(copy).cast::<u8>()
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
