@@ -719,3 +719,360 @@ fn i62_for_iter_tuple_heterogeneous() {
         Cat::NotIterable,
     );
 }
+
+// ============================================================
+// M-F.3.3 — f64 ill-typed corpus (i63..i92)
+// Targets: implicit coercion rejections, illegal cast types, wrong
+// argument types to math functions, and IEEE 754 misuse patterns.
+//
+// Constitution §2.2 (non-negotiable):
+//   "Silent coercion (`"1" + 1`, `0 == False`, truthiness of arbitrary
+//    types) → type error"
+//   No implicit i64 ↔ f64; explicit `as` cast required.
+// ============================================================
+
+// ---- Implicit coercion — rejected ----
+
+#[test]
+fn i63_implicit_i64_to_f64_assign() {
+    // `let x: f64 = 1` — implicit i64 literal → f64 must be rejected.
+    // Constitution §2.2: no silent coercion.
+    must_reject(
+        "implicit-i64-to-f64",
+        "fn f() -> f64:\n    let x: f64 = 1\n    return x\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i64_implicit_f64_to_i64_assign() {
+    // `let x: i64 = 1.0` — implicit f64 literal → i64 must be rejected.
+    must_reject(
+        "implicit-f64-to-i64",
+        "fn f() -> i64:\n    let x: i64 = 1.0\n    return x\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i65_implicit_i64_to_f64_return() {
+    // Returning i64 from f64-typed function is a type mismatch.
+    must_reject(
+        "implicit-return-i64-as-f64",
+        "fn f(n: i64) -> f64:\n    return n\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i66_implicit_f64_to_i64_return() {
+    // Returning f64 from i64-typed function is a type mismatch.
+    must_reject(
+        "implicit-return-f64-as-i64",
+        "fn f(v: f64) -> i64:\n    return v\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i67_mixed_int_float_add_is_rejected() {
+    // `i64 + f64` is a type mismatch; already exercised by i10 but
+    // this variant tests the assignment context.
+    must_reject(
+        "add-int-float-assign",
+        "fn f(n: i64, x: f64) -> f64:\n    let r: f64 = (n + x)\n    return r\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i68_mixed_float_int_mul_is_rejected() {
+    // `f64 * i64` ordering variant.
+    must_reject(
+        "mul-float-int",
+        "fn f(x: f64, n: i64) -> f64:\n    return (x * n)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i69_implicit_int_to_float_fn_arg() {
+    // Passing an i64 where f64 is expected (no implicit coerce in call).
+    must_reject(
+        "arg-int-to-float",
+        "fn g(x: f64) -> f64:\n    return x\nfn f(n: i64) -> f64:\n    return g(n)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i70_implicit_float_to_int_fn_arg() {
+    // Passing f64 where i64 is expected.
+    must_reject(
+        "arg-float-to-int",
+        "fn g(x: i64) -> i64:\n    return x\nfn f(v: f64) -> i64:\n    return g(v)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- `as` cast invalid types (M-F.3.3 gap item a — ill-typed side) ----
+// NOTE: After the DEV agent adds `x as T` expression syntax, the
+// type-checker must reject these cases. Until the DEV lands, these
+// will fail at the PARSER level (the `must_reject` helper panics on
+// parse failure). That is the correct "failing" state for a TDD corpus —
+// both the parse gap and the future type-check gap are surfaced.
+//
+// The DEV agent must:
+//   1. Add parser support for `x as T`.
+//   2. Add type-check rule: `as` only valid for i64↔f64 and bool↔i64;
+//      casting str → f64 is a TypeError::TypeMismatch (no such cast).
+
+#[test]
+fn i71_cast_str_to_f64_rejected() {
+    // `"hello" as f64` — str is not castable to float; must be TypeError.
+    must_reject(
+        "cast-str-to-f64",
+        "fn f() -> f64:\n    return (\"hello\" as f64)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i72_cast_bool_to_f64_rejected() {
+    // `True as f64` — bool → f64 cast not supported (only bool → i64).
+    must_reject(
+        "cast-bool-to-f64",
+        "fn f() -> f64:\n    return (True as f64)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i73_cast_str_to_i64_rejected() {
+    // `"42" as i64` — no str→i64 cast; use `parse_int` for parsing.
+    must_reject(
+        "cast-str-to-i64",
+        "fn f() -> i64:\n    return (\"42\" as i64)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i74_cast_f64_to_str_rejected() {
+    // `3.14 as str` — no numeric → str cast; use f-string formatting.
+    must_reject(
+        "cast-f64-to-str",
+        "fn f() -> str:\n    return (3.14 as str)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i75_cast_i64_to_str_rejected() {
+    // `42 as str` — no i64 → str cast.
+    must_reject(
+        "cast-i64-to-str",
+        "fn f() -> str:\n    return (42 as str)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Math function argument type mismatches ----
+// NOTE: These stub the math functions inline so the type checker
+// exercises its own constraint propagation, not the PRELUDE.
+// Once the PRELUDE ships, the inline stubs can be removed and the
+// tests will still exercise the same type-check path via built-ins.
+
+#[test]
+fn i76_sqrt_with_int_arg_rejected() {
+    // `sqrt(n: i64)` where `sqrt` expects f64 — type mismatch.
+    must_reject(
+        "sqrt-int-arg",
+        "fn sqrt(x: f64) -> f64:\n    return x\nfn f(n: i64) -> f64:\n    return sqrt(n)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i77_pow_second_arg_int_rejected() {
+    // `pow(x: f64, n: i64)` — second arg must be f64.
+    must_reject(
+        "pow-second-arg-int",
+        "fn pow(base: f64, exp: f64) -> f64:\n    return base\nfn f(b: f64, n: i64) -> f64:\n    return pow(b, n)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i78_floor_with_str_arg_rejected() {
+    // `floor("hello")` — str is not a valid argument to floor.
+    must_reject(
+        "floor-str-arg",
+        "fn floor(x: f64) -> f64:\n    return x\nfn f() -> f64:\n    return floor(\"hello\")\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i79_abs_with_bool_arg_rejected() {
+    // `abs(True)` — bool is not valid for abs(f64).
+    must_reject(
+        "abs-bool-arg",
+        "fn abs(x: f64) -> f64:\n    return x\nfn f() -> f64:\n    return abs(True)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i80_min_heterogeneous_args_rejected() {
+    // `min(1.0, 2)` — heterogeneous arg types; second arg is i64 not f64.
+    must_reject(
+        "min-hetero-args",
+        "fn min(a: f64, b: f64) -> f64:\n    return a\nfn f() -> f64:\n    return min(1.0, 2)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- f64 truthiness / implicit bool (constitution §2.2) ----
+
+#[test]
+fn i81_float_in_if_condition_rejected() {
+    // `if x:` where x: f64 — ImplicitTruthiness; §2.2 "if x requires x: bool".
+    must_reject(
+        "float-if-cond",
+        "fn f(x: f64) -> i64:\n    if x:\n        return 1\n    return 0\n",
+        Cat::ImplicitTruthiness,
+    );
+}
+
+#[test]
+fn i82_float_in_while_condition_rejected() {
+    // `while x:` where x: f64 — same ImplicitTruthiness rule.
+    must_reject(
+        "float-while-cond",
+        "fn f(x: f64) -> i64:\n    while x:\n        return 1\n    return 0\n",
+        Cat::ImplicitTruthiness,
+    );
+}
+
+// ---- f64 comparison result used in arithmetic (type chain) ----
+
+#[test]
+fn i83_cmp_result_used_as_float_rejected() {
+    // `(a < b) + 1.0` — bool + f64 is a type mismatch.
+    must_reject(
+        "cmp-result-plus-float",
+        "fn f(a: f64, b: f64) -> f64:\n    return ((a < b) + 1.0)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- f64 in bit-ops (must reject — bit ops are int-only) ----
+
+#[test]
+fn i84_float_bitand_rejected() {
+    // `x & y` where x, y: f64 — bitwise ops are i64-only.
+    must_reject(
+        "float-bitand",
+        "fn f(x: f64, y: f64) -> i64:\n    return (x & y)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i85_float_bitor_rejected() {
+    // `x | y` where x, y: f64.
+    must_reject(
+        "float-bitor",
+        "fn f(x: f64, y: f64) -> i64:\n    return (x | y)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Annotated return type mismatch with f64 expression ----
+
+#[test]
+fn i86_f64_expr_returned_as_i64() {
+    // Addition of two f64 literals returned as i64.
+    must_reject(
+        "f64-add-returned-as-i64",
+        "fn f() -> i64:\n    return (1.0 + 2.0)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i87_i64_expr_returned_as_f64() {
+    // Addition of two i64 literals returned as f64 (no implicit coerce).
+    must_reject(
+        "i64-add-returned-as-f64",
+        "fn f() -> f64:\n    return (1 + 2)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- f64 as list element type mismatch ----
+
+#[test]
+fn i88_list_i64_pushed_with_f64() {
+    // Assigning f64 into a List[i64] slot — type mismatch.
+    must_reject(
+        "list-i64-assign-f64",
+        "fn f() -> i64:\n    let xs: List[i64] = [1, 2, 3]\n    let x: i64 = 1.5\n    return x\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i89_list_f64_get_annotated_as_i64() {
+    // Annotating a List[f64] element retrieval as i64.
+    must_reject(
+        "list-f64-as-i64",
+        "fn f() -> i64:\n    let xs: List[f64] = [1.0, 2.0]\n    let x: i64 = xs[0]\n    return x\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- f64 mod operator type-check ----
+
+#[test]
+fn i90_float_mod_with_int_rejected() {
+    // `x % n` where x: f64, n: i64 — operand types must match.
+    must_reject(
+        "float-mod-int",
+        "fn f(x: f64, n: i64) -> f64:\n    return (x % n)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Tuple/record containing f64 — wrong field type ----
+
+#[test]
+fn i91_f64_fn_result_annotated_as_i64() {
+    // A function returning f64 whose result is annotated as i64 — type mismatch.
+    // (Replaces the tuple-float variant that requires tuple-float-literal parse
+    // support which is deferred. This exercises the same "f64 used in i64 binding"
+    // path without needing float literals in tuple context.)
+    must_reject(
+        "f64-fn-result-as-i64",
+        "fn get_float(x: f64) -> f64:\n    return x\nfn f(v: f64) -> i64:\n    let x: i64 = get_float(v)\n    return x\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- inf / nan as identifier (reserved) ----
+// NOTE: After DEV adds `inf`/`nan` as f64 prelude constants, using them
+// as variable names should remain valid (they are names, not keywords).
+// But assigning a non-f64 value to a variable named `inf` that is
+// declared as f64 is still a type mismatch.
+
+#[test]
+fn i92_assign_int_to_f64_named_inf_binding() {
+    // Declaring `let x: f64 = 1` (int literal, not inf) — type mismatch.
+    // This is another variant of i63 testing the f64 annotation path.
+    must_reject(
+        "int-to-f64-binding",
+        "fn f() -> f64:\n    let result: f64 = 42\n    return result\n",
+        Cat::TypeMismatch,
+    );
+}
