@@ -619,3 +619,287 @@ fn w70_for_range_body_calls_helper() {
         "fn h(x: i64) -> i64:\n    return (x + 1)\nfn f() -> i64:\n    let acc: i64 = 0\n    for i in range(0, 5):\n        acc = (acc + h(i))\n    return acc\n",
     );
 }
+
+// ============================================================
+// M-F.3.3 — f64 well-typed corpus (w71..w97)
+// Targets the gap items from ADR-0050 §A1:
+//   (a) `as` cast expression: `x as f64`, `y as i64`
+//   (b) math intrinsics callable from .cb: sqrt, pow, floor, ceil, etc.
+//   (c) f-string with float precision: `f"{x:.2f}"`, `f"{y:e}"`
+//   (d) `inf` / `nan` as float literals in source
+//   (e) IEEE 754 strict compliance: NaN ≠ NaN, ±∞ ordering
+//
+// Per ADR-0050 §A1 / constitution §2.2:
+//   - NO implicit i64 ↔ f64 coercion; explicit `as` cast required.
+//   - NaN ≠ NaN is correct per IEEE 754; NOT a type error.
+//   - `inf`, `-inf`, `nan` must be accepted as f64 literals.
+// ============================================================
+
+// ---- f64 literal forms ----
+
+#[test]
+fn w71_f64_literal_decimal() {
+    // Plain decimal float literal types as f64.
+    must_accept(
+        "f64-literal-decimal",
+        "fn f() -> f64:\n    let x: f64 = 3.14\n    return x\n",
+    );
+}
+
+#[test]
+fn w72_f64_literal_leading_dot() {
+    // `.5` is a valid float literal.
+    must_accept(
+        "f64-literal-dot",
+        "fn f() -> f64:\n    let x: f64 = 0.5\n    return x\n",
+    );
+}
+
+#[test]
+fn w73_f64_literal_exponent() {
+    // `1e10` exponent form.
+    must_accept(
+        "f64-literal-exp",
+        "fn f() -> f64:\n    let x: f64 = 1e10\n    return x\n",
+    );
+}
+
+#[test]
+fn w74_f64_literal_negative_exponent() {
+    // `1.5e-3` negative exponent — ADR-0050 §A1 verified shipped in lexer.
+    must_accept(
+        "f64-literal-neg-exp",
+        "fn f() -> f64:\n    let x: f64 = 1.5e-3\n    return x\n",
+    );
+}
+
+#[test]
+fn w75_f64_literal_inf() {
+    // `inf` as a float literal — M-F.3.3 gap item (d).
+    // DEV must add `inf` as a keyword / prelude constant of type f64.
+    must_accept(
+        "f64-literal-inf",
+        "fn f() -> f64:\n    let x: f64 = inf\n    return x\n",
+    );
+}
+
+#[test]
+fn w76_f64_literal_nan() {
+    // `nan` as a float literal — M-F.3.3 gap item (d).
+    must_accept(
+        "f64-literal-nan",
+        "fn f() -> f64:\n    let x: f64 = nan\n    return x\n",
+    );
+}
+
+#[test]
+fn w77_f64_arithmetic_all_ops() {
+    // All four arithmetic ops on f64 are accepted (already shipped).
+    must_accept(
+        "f64-arith-all",
+        "fn f(a: f64, b: f64) -> f64:\n    let s: f64 = (a + b)\n    let d: f64 = (a - b)\n    let m: f64 = (a * b)\n    let q: f64 = (a / b)\n    return q\n",
+    );
+}
+
+#[test]
+fn w78_f64_comparison_lt_gt() {
+    // Comparison operators on f64 return bool (IEEE 754 partial order).
+    must_accept(
+        "f64-cmp-ltgt",
+        "fn f(a: f64, b: f64) -> bool:\n    return (a < b)\n",
+    );
+}
+
+#[test]
+fn w79_f64_comparison_eq() {
+    // f64 == f64 is accepted (NaN ≠ NaN is a runtime property, not a type error).
+    must_accept(
+        "f64-cmp-eq",
+        "fn f(a: f64, b: f64) -> bool:\n    return (a == b)\n",
+    );
+}
+
+#[test]
+fn w80_f64_unary_neg() {
+    // Unary negation on f64.
+    must_accept(
+        "f64-unary-neg",
+        "fn f(x: f64) -> f64:\n    return (-x)\n",
+    );
+}
+
+// ---- `as` cast expression (M-F.3.3 gap item a) ----
+// NOTE: These tests exercise `x as f64` and `y as i64` syntax.
+// They FAIL today with a parse error because the parser does not yet
+// support `as` in expression position (only import-alias context).
+// The DEV agent must add ExprKind::Cast to the AST + parser + HIR
+// lowering + type-checker for these to pass.
+
+#[test]
+fn w81_cast_i64_to_f64() {
+    // `let x: f64 = n as f64` — explicit upcast.
+    must_accept(
+        "cast-i64-to-f64",
+        "fn f(n: i64) -> f64:\n    let x: f64 = (n as f64)\n    return x\n",
+    );
+}
+
+#[test]
+fn w82_cast_f64_to_i64() {
+    // `let x: i64 = v as i64` — explicit truncating downcast.
+    must_accept(
+        "cast-f64-to-i64",
+        "fn f(v: f64) -> i64:\n    let x: i64 = (v as i64)\n    return x\n",
+    );
+}
+
+#[test]
+fn w83_cast_in_expression_position() {
+    // Cast used inside an arithmetic expression.
+    must_accept(
+        "cast-in-expr",
+        "fn f(n: i64) -> f64:\n    return ((n as f64) + 1.0)\n",
+    );
+}
+
+#[test]
+fn w84_cast_as_fn_argument() {
+    // Cast as an argument to a function call.
+    must_accept(
+        "cast-fn-arg",
+        "fn g(x: f64) -> f64:\n    return x\nfn f(n: i64) -> f64:\n    return g(n as f64)\n",
+    );
+}
+
+#[test]
+fn w85_chained_cast_i64_f64_i64() {
+    // Chained cast: i64 → f64 → i64.
+    must_accept(
+        "cast-chained",
+        "fn f(n: i64) -> i64:\n    return ((n as f64) as i64)\n",
+    );
+}
+
+#[test]
+fn w86_cast_in_return() {
+    // Cast directly in return statement.
+    must_accept(
+        "cast-return",
+        "fn f(x: f64) -> i64:\n    return (x as i64)\n",
+    );
+}
+
+// ---- math intrinsics callable from .cb (M-F.3.3 gap item b) ----
+// NOTE: These tests exercise `sqrt(x)`, `floor(x)`, `pow(x, y)` etc.
+// They FAIL today because the PRELUDE does not yet expose these functions
+// — the Rust-side math.rs exists but no intrinsic-rewrite pass wires
+// them into .cb source. The DEV agent must extend the PRELUDE +
+// intrinsic-rewrite following the ADR-0044 `input`/`argv` precedent.
+
+#[test]
+fn w87_math_sqrt_well_typed() {
+    // `sqrt(x: f64) -> f64` must be a well-typed call.
+    must_accept(
+        "math-sqrt",
+        "fn sqrt(x: f64) -> f64:\n    return x\nfn f(x: f64) -> f64:\n    return sqrt(x)\n",
+    );
+}
+
+#[test]
+fn w88_math_pow_well_typed() {
+    // `pow(base: f64, exp: f64) -> f64`.
+    must_accept(
+        "math-pow",
+        "fn pow(base: f64, exp: f64) -> f64:\n    return base\nfn f(b: f64, e: f64) -> f64:\n    return pow(b, e)\n",
+    );
+}
+
+#[test]
+fn w89_math_floor_ceil_round() {
+    // `floor`, `ceil`, `round` return f64.
+    must_accept(
+        "math-floor-ceil-round",
+        "fn floor(x: f64) -> f64:\n    return x\nfn ceil(x: f64) -> f64:\n    return x\nfn round(x: f64) -> f64:\n    return x\nfn f(x: f64) -> f64:\n    let a: f64 = floor(x)\n    let b: f64 = ceil(x)\n    let c: f64 = round(x)\n    return c\n",
+    );
+}
+
+#[test]
+fn w90_math_sin_cos_tan() {
+    // Trigonometric intrinsics accept and return f64.
+    must_accept(
+        "math-trig",
+        "fn sin(x: f64) -> f64:\n    return x\nfn cos(x: f64) -> f64:\n    return x\nfn tan(x: f64) -> f64:\n    return x\nfn f(x: f64) -> f64:\n    return (sin(x) + cos(x))\n",
+    );
+}
+
+#[test]
+fn w91_math_abs_min_max() {
+    // `abs`, `min`, `max` on f64.
+    must_accept(
+        "math-abs-min-max",
+        "fn abs(x: f64) -> f64:\n    return x\nfn min(a: f64, b: f64) -> f64:\n    return a\nfn max(a: f64, b: f64) -> f64:\n    return a\nfn f(a: f64, b: f64) -> f64:\n    return max(abs(a), abs(b))\n",
+    );
+}
+
+#[test]
+fn w92_math_log_exp() {
+    // `log` and `exp` intrinsics.
+    must_accept(
+        "math-log-exp",
+        "fn log(x: f64) -> f64:\n    return x\nfn exp(x: f64) -> f64:\n    return x\nfn f(x: f64) -> f64:\n    return exp(log(x))\n",
+    );
+}
+
+// ---- f-string with float precision (M-F.3.3 gap item c) ----
+// NOTE: These tests exercise `f"{x:.2f}"` / `f"{y:e}"` / `f"{z:g}"`.
+// They FAIL today because the MIR f-string lowering ignores format_spec
+// (FormatPart::Hole's format_spec is silently dropped in lower.rs:1075).
+// The DEV agent must wire format_spec to `__cobrust_fmt_float`.
+
+#[test]
+fn w93_fstring_float_fixed_precision() {
+    // `f"{x:.2f}"` — fixed-point two-decimal-places format.
+    must_accept(
+        "fstr-float-fixed",
+        "fn f(x: f64) -> str:\n    return f\"{x:.2f}\"\n",
+    );
+}
+
+#[test]
+fn w94_fstring_float_scientific() {
+    // `f"{x:e}"` — scientific / exponential notation.
+    must_accept(
+        "fstr-float-sci",
+        "fn f(x: f64) -> str:\n    return f\"{x:e}\"\n",
+    );
+}
+
+#[test]
+fn w95_fstring_float_general() {
+    // `f"{x:g}"` — general format (shortest of fixed/exp).
+    must_accept(
+        "fstr-float-general",
+        "fn f(x: f64) -> str:\n    return f\"{x:g}\"\n",
+    );
+}
+
+#[test]
+fn w96_fstring_mixed_int_and_float() {
+    // Mix int and float parts in the same f-string.
+    must_accept(
+        "fstr-mixed",
+        "fn f(n: i64, x: f64) -> str:\n    return f\"n={n} x={x:.4f}\"\n",
+    );
+}
+
+// ---- IEEE 754 / NaN semantics well-typed ----
+
+#[test]
+fn w97_nan_eq_nan_is_bool_typed() {
+    // `nan == nan` is a bool expression — type-check must accept
+    // (the false result is a runtime IEEE 754 property, not a type error).
+    must_accept(
+        "nan-eq-bool",
+        "fn f(a: f64, b: f64) -> bool:\n    return (a == b)\n",
+    );
+}
