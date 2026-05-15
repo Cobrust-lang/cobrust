@@ -1,0 +1,31 @@
+# early_exit.cb — ADR-0050a M-F.3.0 demonstrates break + continue.
+#
+# Iterates i = 1..=99, building a running sum while:
+#   * skipping i == 7 (continue → go to next iteration without adding)
+#   * breaking out of the loop once sum > 30 (break → exit immediately)
+#
+# Expected execution trace (ADR-0050a §"Semantics"):
+#   i=1  sum guard: 0>30? no  → add → sum=1
+#   i=2                                → sum=3
+#   i=3                                → sum=6
+#   i=4                                → sum=10
+#   i=5                                → sum=15
+#   i=6                                → sum=21
+#   i=7  continue (skip the add)
+#   i=8                                → sum=29
+#   i=9                                → sum=38
+#   i=10 sum guard: 38>30? YES → break
+#
+# Final print: 38.
+fn main() -> i64:
+    let i: i64 = 0
+    let sum: i64 = 0
+    while i < 100:
+        i = i + 1
+        if i == 7:
+            continue
+        if sum > 30:
+            break
+        sum = sum + i
+    print_int(sum)
+    return 0
