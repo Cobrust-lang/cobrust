@@ -286,3 +286,56 @@ The teammate runs in parallel with the next wave's dispatch.
 - Host routing memo — `feedback_heavy_build_offload_to_workstation.md`.
 - Sub-agent model tier rule — `feedback_subagent_model_tier.md` (D-matrix + Opus/Sonnet/Haiku binding).
 - Dev/Test PAIR pattern — `cto_operations_runbook.md` §"Dev/test pair pattern (2026-05-11+ MANDATORY for D1-D3 + D5)".
+
+## Amendment 2026-05-16 — Audit verdict + scope correction (ADSD F2 addendum-not-rewrite)
+
+Per ADSD §F2 (no retroactive ADR rewrite), the original §"Existing W2 + Phase F.2 baseline" + §"What this batch must add" + §"v0.2.0 stable tag binding" text above stays as the **historical record** of the spike-time understanding. This amendment captures the verified-at-HEAD scope correction surfaced by the pre-impl audit teammate run 2026-05-16 (agent `afe53e8f443c7ec32`, verdict `BLOCK-WITH-FINDINGS`, 5-lane review).
+
+### A1 — Verified-at-HEAD scope correction (audit Findings 2.1 + 2.2 + 2.3)
+
+Three of the five P0 features are **substantially already shipped** on `main@30cf2b2`. The audit cross-verified this against P9-A's spike (ADR-0050a on `feature/f3-break-continue`) and P9-B's spike (ADR-0050b on `feature/f3-for-loop`); both spikes independently arrived at the same conclusion before this amendment landed. The net-new deltas are smaller than the original "What this batch must add" table implied:
+
+| Feature | Original "Net new" assumed | Verified-at-HEAD reality | Real Wave-1 work |
+|---|---|---|---|
+| **break/continue** | small; reuses existing CFG plumbing | **already shipped end-to-end** (lexer KwBreak/KwContinue + AST `StmtKind::BreakContinue(BreakKind)` + parser + HIR `StmtKind::Break/Continue` + types `loop_depth` reject-if-0 + MIR `loop_stack` Goto + Cranelift Goto). Codegen diff corpus `diff_form_16_break` + `diff_form_16_continue` already pass. | **Contract seal** (ADR-0050a) + ≥30-test corpus + ill-typed rejection corpus. No new lowering. |
+| **for** | medium; iter-protocol Phase 2 deferred | **for-protocol operational** over list[i64] and list[str]-via-W2-reinterpret (`__cobrust_iter_init` / `_next` / `_drop` shipped per ADR-0044 W2 Phase 2 amendment; MIR `lower.rs:726-836` does full lowering). | **Plug `range(a, b)`** as a new iter source via PRELUDE+intrinsic-rewrite (mirrors `input` / `argv` precedent), document `for x in xs: list[str]` already works **read-only**, leak-safety on str element drop blocks on Wave 2 list[str]. |
+| **f64** | large; touches every crate (lexer + parser + HIR Ty::F64 + types + MIR F64 ops + codegen fadd/fcvt + stdlib math + f-string {:.Nf}) | **80% shipped**: `Ty::Float` (types/ty.rs:43-45), `Constant::Float(u64)` (mir/tree.rs:313-314), full Cranelift F64 codegen (fadd/fsub/fmul/fdiv/fcmp + fcvt_to_sint/fcvt_from_sint at cranelift_backend.rs:305..2132), lexer Float token incl. `1.5e-3` (lexer.rs:564), Rust-side `crates/cobrust-stdlib/src/math.rs` ships sqrt/pow/sin/cos/abs/floor/ceil/round + PI/E, `__cobrust_fmt_float` exists (fmt.rs:115-121). | **Remaining gap (D2 sonnet scope, not D4 opus 1-week)**: (a) source-level `as` cast expression (parser does not have it; lexer has `KwAs` only in import-alias context), (b) PRELUDE+intrinsic-rewrite for `sqrt`/`floor`/`ceil`/`round`/`sin`/`cos`/`pow`/`abs`/`min`/`max` (math fns are not yet callable from `.cb`), (c) f-string `{:.Nf}` lowering, (d) `inf` / `nan` lexer literals, (e) NaN total-ordering newtype decision per Finding 1.4. |
+| **list[str]** | large; closes TD-1 | **TD-1 debt is real** (`mir/lower.rs:1677-1686` + `mir/drop.rs:122-129` both treat `Ty::Str \| Ty::List(_)` as Copy with explicit ADR-0044 W2 Phase 3 comment). Iteration already works **read-only** via W2 reinterpret. | **No change to scope** — ADR-0050c Str-ownership flip remains the load-bearing Wave 2 work. List-of-str iter drop-correctness gates on it. |
+| **dict** | very large; ADR-0050d design first, impl Wave 3 | **60% scaffolded** (parser literal `{k: v}` at parser.rs:1470; AST DictLit at ast.rs:390; type universe at ty.rs:65; type-check synth at check.rs:614; MIR `Aggregate` lowering at mir/lower.rs:1111-1137; M12.x stub `__cobrust_dict_{new,set,get,len,drop}` C-ABI for `Dict<i64,i64>` at stdlib/collections.rs:534-636). | **No change to scope** — Wave 3 swaps the M12.x `HashMap<i64,i64>` stub for `indexmap::IndexMap<KeyEnum, ValueEnum>` with type-dispatched shims + wires source-level indexing + iteration + methods. ADR-0050d Decision 6A pins `indexmap = "2"`. |
+
+### A2 — Wave timing revision
+
+Original §"Wave structure" estimated ~3-5 days Wave 1, ~7-10 days Wave 2, ~10-14 days Wave 3 = ~4-5 weeks total.
+
+Revised given A1 verified-at-HEAD reality:
+
+| Wave | Original | Revised | Reason |
+|---|---|---|---|
+| 1 (break/continue + for-loop + dict-design ADR) | 3-5 days | **1-2 days** | Wave 1 is contract-seal + ADR text + corpus; impl scaffolding already shipped |
+| 2 (f64 + ADR-0050c Str-ownership + list[str]) | 7-10 days | **3-5 days** | f64 shrinks from D4 to D2; Str-ownership ADR-0050c is doc-only (P9 solo); only list[str] impl is heavy |
+| 3 (dict impl per ADR-0050d) | 10-14 days | **10-14 days** | Unchanged — dict is the real opus-tier work this batch contains |
+
+**Total batch ≈ 2-3 weeks**, not 4-5. Opus budget reallocates accordingly: P9-D f64 sprint downgrades from D4 opus to **D2 sonnet** + Mode-C-Mac+DG-verify (not DG-primary). P9-F dict impl is the only D5 sprint that truly needs opus + heavy DG.
+
+### A3 — v0.2.0 stable tag binding clarification (audit Finding 5.3)
+
+The original §"v0.2.0 stable tag binding" defers M-AI.3..M-AI.6 + TD-Recursive-Types Phase 7.5 to **Phase F.4** but does not explicitly state whether Phase 7.5 *blocks* v0.2.0 stable. ADR-0048 §"v0.2.0-alpha tag" L96 originally made Phase 7.5 a P0 blocker because it closes ADSD F24 (primitive-as-everything-simulation).
+
+**Amendment**: Phase 7.5 (recursive struct types like `class Tree(val, left, right)`) **does NOT block v0.2.0 stable**. Reasoning:
+
+1. Phase F.3's `dict[str, list[str]]` + `list[str]` together substantially close the F24 user-facing ergonomic gap: recursive-shaped data (trees, linked lists, graphs) can be modeled as `dict[i64, NodeRecord]` with i64 IDs as pointers.
+2. The LC-100 Pattern B finding that drove F24's P0 framing is closed by `list[str]` shipping; the remaining LC-100 primitive-simulation cases all become idiomatic via dict-keyed indirection.
+3. Native recursive struct syntax (Phase 7.5) is a Phase F.4 ergonomic improvement, not a stability blocker.
+4. v0.2.0 stable continues to gate on §1.1 language-half completeness as defined in the original tag binding (M-F.3.0..M-F.3.4 + M-F.3.5 + M-F.3.6) without growing the scope.
+
+### A4 — ADR-0050d follow-up (audit Finding 1.2)
+
+ADR-0050d (`feature/f3-dict-design@8466433`) already addresses audit Findings 3.5 (indexmap pin at `"2"`) and 3.4 (f64-key NaN rejection cross-referenced to ADR-0050 §M-F.3.3). The surviving audit gap is **Finding 1.2**: `dict.is_empty() -> bool` is not yet pinned in the dict surface. Constitution §2.2 forbids implicit truthy/falsy, so without `is_empty()` users have no idiomatic path to `if d.is_empty(): …`. Addendum landed in a separate commit on `feature/f3-dict-design` before Wave 3 dispatches; pin recorded in ADR-0050d §"Decision 5 — Length / emptiness".
+
+### A5 — ADSD F27 candidate (audit Lane 5 ADSD discipline check)
+
+Audit surfaced an ADSD-upstream candidate: **F27 — ADR scope-reality divergence**. ADR-0050 §"Implementation map" cited work-needed across crates without source-code verification pre-acceptance; P9-A and P9-B independently re-discovered scope-already-shipped in their spikes. Recommended ADSD upstream addition: an "ADR pre-dispatch source-code verification gate" alongside the two-phase dispatch SOP. Cobrust mirrors this as a finding at `docs/agent/findings/adr-scope-reality-divergence.md`.
+
+### A6 — Wave 2 dispatch hold
+
+Wave 2 (f64 + Str-ownership + list[str]) **HOLDS** until this amendment lands on `main`. Wave 1 P9-A and P9-B continue uninterrupted — both have already self-corrected scope on their own branches and need no SendMessage redirection per audit recommendation. The audit `BLOCK-WITH-FINDINGS` verdict gated on this amendment + the dict-design `is_empty()` addendum; both ship now.
