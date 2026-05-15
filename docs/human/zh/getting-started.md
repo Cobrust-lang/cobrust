@@ -61,6 +61,86 @@ cp cobrust.toml.example cobrust.toml
 
 配置形状见 [cobrust.toml.example](../../../cobrust.toml.example)，完整设计说明见[架构](architecture.md)。
 
+## 第三步半：循环与控制流
+
+### `while` 循环
+
+Cobrust 已经支持 `while` 循环;`for` 循环正在 M-F.3.1 sprint 中（参见 [ADR-0050](../../agent/adr/0050-phase-f3-language-completeness-batch.md)）。
+
+```cobrust
+fn main() -> i64:
+    let i: i64 = 0
+    while i < 5:
+        print_int(i)
+        i = i + 1
+    return 0
+```
+
+输出:
+
+```
+0
+1
+2
+3
+4
+```
+
+### `break` 与 `continue`
+
+- `break` 立即退出**最内层**的循环,跳过剩余循环体**以及**下一次条件判断。
+- `continue` 跳过当前迭代剩余的循环体,直接回到循环头继续判断条件。
+- 两个关键字必须单独成行(Cobrust 不支持 Python 的 `break <label>` —— 按宪章 §2.2 的极简主义,只保留裸关键字)。
+- 仅在循环内部合法。若在函数体里没有外层循环,类型检查就会报错。
+
+示例 —— 找到目标就立即跳出搜索循环:
+
+```cobrust
+fn first_multiple(n: i64, of: i64) -> i64:
+    let i: i64 = 1
+    while i <= n:
+        if i % of == 0:
+            return i        # 这里也可以 break + return,等价
+        i = i + 1
+    return -1
+```
+
+示例 —— 用 `continue` 跳过某些元素:
+
+```cobrust
+fn sum_skip_seven(limit: i64) -> i64:
+    let i: i64 = 0
+    let s: i64 = 0
+    while i < limit:
+        i = i + 1
+        if i == 7:
+            continue        # 跳过 7,直接进入下一次迭代
+        s = s + i
+    return s
+```
+
+示例 —— 嵌套循环;`break` 永远绑定最内层:
+
+```cobrust
+fn main() -> i64:
+    let i: i64 = 0
+    while i < 3:
+        let j: i64 = 0
+        while j < 3:
+            if j == 1:
+                break       # 仅退出内层;外层 i 循环继续
+            j = j + 1
+        i = i + 1
+    return 0
+```
+
+完整的 `break` + `continue` 演示见 [`examples/early_exit.cb`](../../../examples/early_exit.cb),可用 `cobrust build` + `./early_exit` 验证预期输出。
+
+设计动机:
+
+- 一件事一种做法:裸 `break` / `continue` 已经覆盖了 "提早退出" 和 "跳过当前迭代" 两种最常见模式。带 label 的 break 是一把利刃;若真的需要,把内层循环抽成一个函数用 `return` 退出即可。
+- 在循环外使用直接编译报错:防止 Python 把此类拼写错误推迟到运行时才暴露。
+
 ## 第四步：翻译 Python 库（可选）
 
 ```bash

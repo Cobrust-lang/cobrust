@@ -122,9 +122,25 @@ re-exports are pinned at the crate root (`lib.rs`).
 - Error recovery into a partial AST — tracked as a follow-up; the
   M1 parser fails fast.
 
+## ADR-0050a M-F.3.0 — `break` / `continue` (form 16)
+
+| Surface | Anchor |
+|---|---|
+| Lexer keywords | `KwBreak` + `KwContinue` in `crates/cobrust-frontend/src/token.rs` |
+| Reserved word table | `crates/cobrust-frontend/src/lexer.rs` L961, L964 |
+| Parser reducer | `crates/cobrust-frontend/src/parser.rs` L205-220 — bumps the keyword token, calls `expect_eos()`, emits `StmtKind::BreakContinue(BreakKind::{Break,Continue})` |
+| AST node | `ast::StmtKind::BreakContinue(ast::BreakKind)` + `enum BreakKind { Break, Continue }` (L105-121 of `ast.rs`) |
+| Unparser | `crates/cobrust-frontend/src/unparse.rs` L85-93 |
+| Test corpus | `crates/cobrust-frontend/tests/break_continue_parse_corpus.rs` — 20 well-typed parse + 5 round-trip + 13 reject; total 38 |
+
+Constraints (ADR-0050a §"Semantics"):
+- Bare `break` / `continue` only. No label (`break <ident>` rejected by `expect_eos()` mismatch). No payload (`break 0` / `break "label"` likewise rejected).
+- Each keyword stands alone on its own line — the parser does NOT permit `break;` (semicolons unsupported in Cobrust) or `break()` (parses `break` as ident, hits the reserved-word block).
+
 ## Cross-references
 
 - `adr:0003` — the 30-form definition this module implements.
+- `adr:0050a` — break/continue semantics + contract seal.
 - `find:m1-fuzz-method` — fuzz-gate methodology + the one bug it
   caught.
 - Constitution `CLAUDE.md` §7 — milestone definition.
