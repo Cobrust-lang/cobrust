@@ -1076,3 +1076,208 @@ fn i92_assign_int_to_f64_named_inf_binding() {
         Cat::TypeMismatch,
     );
 }
+
+// ============================================================
+// M-F.3.2 — list[str] ownership ill-typed corpus (i93..i104)
+// Closes TD-1 per ADR-0050c Option A. The type checker must REJECT:
+//   - element-type heterogeneity in list[str] literals
+//   - silent Str→i64 / Str→bool coercion when reading list[str][i]
+//   - mutable default argument with list[str] type (constitution §2.2,
+//     ADR-0050c §"list[str] knock-on (audit Finding 1.3 carry-forward)")
+//   - assigning list[i64] to list[str] binding (and vice versa)
+//   - implicit truthy/falsy on list[str] (must use list_is_empty)
+//   - iterating non-iterable in str-targeted for-loops
+//
+// Each test cites the ADR-0050c §"Consequences" or constitution §2.2
+// clause it locks.
+// ============================================================
+
+// ---- Tier B.1: literal element-type mismatch ----
+
+#[test]
+fn i93_list_str_literal_with_int_elem_rejected() {
+    // `let xs: list[str] = [1, 2, 3]` — annotation says str but
+    // literal elements are i64. Head + unify rejects.
+    must_reject(
+        "list-str-literal-int-elem",
+        "fn f() -> i64:\n    let xs: list[str] = [1, 2, 3]\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i94_list_str_mixed_literal_rejected() {
+    // `["a", 1]` — head-element ("a": str), tail-element (1: i64);
+    // unify rejects.
+    must_reject(
+        "list-str-mixed-literal",
+        "fn f() -> i64:\n    let xs: list[str] = [\"a\", 1]\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i95_list_str_literal_with_bool_elem_rejected() {
+    // `let xs: list[str] = [True, False]` — annotation/literal mismatch.
+    must_reject(
+        "list-str-literal-bool-elem",
+        "fn f() -> i64:\n    let xs: list[str] = [True, False]\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Tier B.2: Str→i64 / Str→bool implicit coercion rejected ----
+
+#[test]
+fn i96_list_str_index_assigned_to_i64_rejected() {
+    // `let y: i64 = xs[0]` where xs: list[str] — Str→i64 silent
+    // coercion rejected per constitution §2.2.
+    must_reject(
+        "list-str-index-as-i64",
+        "fn f() -> i64:\n    let xs: list[str] = [\"a\", \"b\"]\n    let y: i64 = xs[0]\n    return y\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i97_list_str_index_in_bool_condition_rejected() {
+    // `if xs[0]:` — xs[0]: str, not bool. Constitution §2.2 forbids
+    // implicit truthy/falsy on str.
+    must_reject(
+        "list-str-index-in-if",
+        "fn f() -> i64:\n    let xs: list[str] = [\"a\"]\n    if xs[0]:\n        return 0\n    return 1\n",
+        Cat::ImplicitTruthiness,
+    );
+}
+
+#[test]
+fn i98_list_str_used_directly_in_if_condition_rejected() {
+    // `if xs:` — xs: list[str], not bool. Constitution §2.2 forbids
+    // implicit truthy/falsy on collections; users must call
+    // `list_is_empty(xs)` (which returns bool).
+    must_reject(
+        "list-str-bare-if-cond",
+        "fn f() -> i64:\n    let xs: list[str] = [\"a\"]\n    if xs:\n        return 0\n    return 1\n",
+        Cat::ImplicitTruthiness,
+    );
+}
+
+// ---- Tier B.3: list[i64] / list[str] mutual incompatibility ----
+
+#[test]
+fn i99_list_i64_assigned_to_list_str_binding_rejected() {
+    // `let xs: list[str] = [1, 2]` — synth `[1, 2]` to list[i64],
+    // unify with list[str] annotation rejects.
+    must_reject(
+        "list-i64-to-list-str-binding",
+        "fn f() -> i64:\n    let xs: list[str] = [1, 2]\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i100_list_str_passed_to_list_i64_param_rejected() {
+    // `fn count_i(xs: list[i64]) -> i64; count_i(list[str])` — arg
+    // type mismatch.
+    must_reject(
+        "list-str-to-list-i64-arg",
+        "fn count_i(xs: list[i64]) -> i64:\n    return list_len(xs)\nfn main() -> i64:\n    let ys: list[str] = [\"a\"]\n    return count_i(ys)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Tier B.4: mutable default argument with list[str]
+// (audit Finding 1.3 carry-forward; ADR-0050c §"list[str] knock-on") ----
+
+#[test]
+fn i101_mutable_default_arg_list_str_rejected() {
+    // `fn f(xs: list[str] = []) -> i64:` — constitution §2.2 forbids
+    // mutable default arguments. ADR-0050c §"list[str] knock-on" binds
+    // this as `MutableDefaultArgument` at fn declaration site (forward-
+    // looking for when the default-arg surface widens to non-Lit
+    // expressions, ADR-0036 candidate / Phase F.4+).
+    //
+    // At HEAD the parser rejects this earlier as `NonLiteralDefault`
+    // (since `[]` is an `Expr::List`, not a `Lit`). Either rejection
+    // is acceptable for the constitution §2.2 invariant; this test
+    // accepts both paths via a custom helper that allows parse-layer
+    // rejection (in addition to lower-layer + type-check-layer per
+    // the standard `must_reject`).
+    //
+    // When DEV widens default-arg syntax (Phase F.4+), this test must
+    // graduate to `Cat::MutableDefault` (type-check rejection).
+    must_reject_with_parse_ok(
+        "mutable-default-list-str",
+        "fn f(xs: list[str] = []) -> i64:\n    return list_len(xs)\nfn main() -> i64:\n    return f([\"a\"])\n",
+        Cat::MutableDefault,
+    );
+}
+
+/// Like [`must_reject`] but ALSO accepts a parse-layer rejection.
+///
+/// ADR-0050c §"list[str] knock-on" forward-looking case: the mutable
+/// default arg `list[str] = []` is rejected at parse-layer today
+/// (`NonLiteralDefault`); when the default-arg surface widens it must
+/// be rejected at type-check (`MutableDefault`). This helper accepts
+/// either — locks the constitution §2.2 invariant without depending
+/// on which layer enforces it.
+fn must_reject_with_parse_ok(name: &str, src: &str, cat: Cat) {
+    match parse_str(src, FileId::SYNTHETIC) {
+        Err(_e) => {
+            // Parse-layer rejection counts — constitution §2.2 honored.
+        }
+        Ok(module) => {
+            let mut sess = Session::new();
+            match lower(&module, &mut sess) {
+                Err(_e) => return, // lowering caught it
+                Ok(hir) => match check(&hir) {
+                    Ok(_) => panic!(
+                        "{name}: must reject (parse/lower/type-check) but passed everything\nsource:\n{src}"
+                    ),
+                    Err(e) => assert!(
+                        matches_cat(&e, cat),
+                        "{name}: rejected with wrong category\n  expected: {cat:?}\n  got:      {e:?}\n  source:\n{src}"
+                    ),
+                },
+            }
+        }
+    }
+}
+
+// ---- Tier B.5: for-loop iteration over non-iter / str-typed iter ----
+
+#[test]
+fn i102_for_over_str_loop_rejected() {
+    // `for c in "hello":` — strings are not iter sources in Phase F.3
+    // (deferred to Phase G per ADR-0050b §"Iter source type checking").
+    // The loop-var would have type str (one-char str) — but the iter
+    // source check rejects str entirely.
+    must_reject(
+        "for-over-str-literal",
+        "fn f() -> i64:\n    for c in \"hello\":\n        let _ = print(c)\n    return 0\n",
+        Cat::NotIterable,
+    );
+}
+
+// ---- Tier B.6: list_is_empty arity / type errors ----
+
+#[test]
+fn i103_list_is_empty_with_str_arg_rejected() {
+    // `list_is_empty(s)` where s: str — list_is_empty only accepts
+    // list types. Type mismatch.
+    must_reject(
+        "list-is-empty-str-arg",
+        "fn f() -> bool:\n    let s: str = \"hi\"\n    return list_is_empty(s)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i104_list_is_empty_no_args_rejected() {
+    // `list_is_empty()` — arity mismatch (expects 1 arg).
+    must_reject(
+        "list-is-empty-no-args",
+        "fn f() -> bool:\n    return list_is_empty()\n",
+        Cat::ArityMismatch,
+    );
+}
