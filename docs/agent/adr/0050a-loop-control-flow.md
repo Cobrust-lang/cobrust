@@ -2,9 +2,9 @@
 doc_kind: adr
 adr_id: 0050a
 title: "M-F.3.0 — Loop control flow (`break` / `continue`) semantics + contract seal"
-status: proposed
+status: accepted
 date: 2026-05-16
-last_verified_commit: TBD
+last_verified_commit: 3f22611
 supersedes: []
 superseded_by: []
 relates_to: [adr:0003, adr:0005, adr:0006, adr:0020, adr:0027, adr:0030, adr:0035, adr:0050]
