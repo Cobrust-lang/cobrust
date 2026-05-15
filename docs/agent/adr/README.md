@@ -82,4 +82,5 @@ same atomic commit as the change it justifies.
 | [0050](0050-phase-f3-language-completeness-batch.md) | Phase F.3 — language completeness batch (dict, f64, list[str], break/continue, for) and v0.2.0 stable tag | proposed | 2026-05-16 |
 | [0050a](0050a-loop-control-flow.md) | M-F.3.0 — Loop control flow (`break` / `continue`) semantics + contract seal | accepted | 2026-05-16 |
 | [0050b](0050b-for-loop-shape.md) | M-F.3.1 — for-loop shape (range-first + list[i64] iter); list[str] gated on Wave 2 | accepted | 2026-05-16 |
+| [0050c](0050c-str-ownership.md) | M-F.3.2 prereq — Str ownership flip (TD-1 closure): Option A Full-Drop schedule, explicit `__cobrust_str_clone`, F29 enumeration covers 27 Str / List consumers + `__cobrust_list_is_empty` F5 addendum | accepted | 2026-05-16 |
 | [0050d](0050d-dict-design.md) | Dict design — `{k: v}` literal, `d[k]` panic + `.get` safe escape, `indexmap` insertion-order, K∈{i64,str}, NotHashable rejects f64, 7-sub-sprint Wave-3 implementation map | proposed | 2026-05-16 |
