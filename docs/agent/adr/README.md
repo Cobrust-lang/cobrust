@@ -80,4 +80,4 @@ same atomic commit as the change it justifies.
 | [0048](0048-ai-native-framing-reframe.md) | Cobrust framing reframe — "AI-friendly Python successor with AI-native stdlib in development" (Phase F.2 M-AI.0..M-AI.6 + TD-Recursive-Types Phase 7.5) + v0.2.0-alpha tag binding | accepted | 2026-05-12 |
 | [0049](0049-alpha-honesty-and-onboarding-hardening.md) | Alpha honesty and onboarding hardening before external AI-surface exposure | accepted | 2026-05-13 |
 | [0050](0050-phase-f3-language-completeness-batch.md) | Phase F.3 — language completeness batch (dict, f64, list[str], break/continue, for) and v0.2.0 stable tag | proposed | 2026-05-16 |
-| [0050a](0050a-loop-control-flow.md) | M-F.3.0 — Loop control flow (`break` / `continue`) semantics + contract seal | proposed | 2026-05-16 |
+| [0050a](0050a-loop-control-flow.md) | M-F.3.0 — Loop control flow (`break` / `continue`) semantics + contract seal | accepted | 2026-05-16 |
