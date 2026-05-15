@@ -35,6 +35,52 @@ cobrust new hello && cd hello && cobrust run src/main.cb
 hello, world
 ```
 
+## 第 2.5 步：for 循环（M-F.3.1）
+
+Cobrust 提供 Python 风格的 `for ... in ...` 循环，可以遍历 `list[T]`，并通过
+prelude 的 `range(start, stop)` 辅助函数生成整数序列。依据 ADR-0050b，
+`range(start, stop)` 会物化一个包含 `start, start+1, ..., stop-1` 的
+`list[i64]`；空区间（`start >= stop`）会跳过循环体。
+
+```cobrust
+fn main() -> i64:
+    # 正向区间：依次打印 0 1 2 3 4
+    for i in range(0, 5):
+        print_int(i)
+
+    # 空区间：循环体不会执行
+    for i in range(0, 0):
+        print_int(-1)
+
+    # 遍历 list
+    let xs: list[i64] = list_new(3)
+    let _0 = list_set(xs, 0, 10)
+    let _1 = list_set(xs, 1, 20)
+    let _2 = list_set(xs, 2, 30)
+    for v in xs:
+        print_int(v)        # 10  20  30
+
+    # 遍历 argv（list[str]）
+    for arg in argv():
+        print(arg)
+
+    return 0
+```
+
+Phase F.3 提供两参数形式 `range(start, stop)`。三参数 `range(start, stop, step)`
+延后至 Phase G，与完整迭代器协议一起落地。字符串遍历
+（`for c in "hello":`）同样属于 Phase G 工作 —— 详见 ADR-0050b §"Iter source type checking"。
+
+循环语义：
+- 循环变量每次迭代都是全新绑定；在循环体内创建的闭包，在第 N 次迭代时
+  捕获的是第 N 次迭代的值（宪法 §2.2 —— 拒绝 Python 的延迟绑定）。
+- 允许 `for` 嵌套；变量遮蔽遵循 Rust 规则。
+- 非 `list[T]` 的迭代源（例如 `for x in 42:`）在类型检查阶段就会被拒绝
+  （`TypeError::NotIterable`）。
+
+可运行示例见 [examples/for_range.cb](../../../examples/for_range.cb)
+与 [examples/for_list.cb](../../../examples/for_list.cb)。
+
 ## 第三步：试用 AI alpha 能力（可选）
 
 1. 复制 router 示例配置，并填入你的 provider 凭据：

@@ -460,3 +460,162 @@ fn w54_in_iterable() {
         "fn f(xs: List[i64], target: i64) -> bool:\n    return (target in xs)\n",
     );
 }
+
+// ============================================================
+// M-F.3.1 for-loop corpus (ADR-0050b)
+//
+// `range(a, b)` is plumbed as a prelude function returning
+// `list[i64]`. The type-check harness here does NOT prepend the
+// prelude, so each test that exercises `range` ships an inline
+// `fn range(a: i64, b: i64) -> list[i64]:` stub identical in shape
+// to the prelude declaration.
+//
+// These tests lock the iter-source classifier, the loop-var
+// binding, nested for, mixed for+while, and shadowing semantics.
+// ============================================================
+
+const RANGE_STUB: &str =
+    "fn range(a: i64, b: i64) -> List[i64]:\n    let xs: List[i64] = []\n    return xs\n";
+
+fn must_accept_with_range(name: &str, body: &str) {
+    let src = format!("{RANGE_STUB}{body}");
+    must_accept(name, &src);
+}
+
+#[test]
+fn w55_for_range_simple() {
+    must_accept_with_range(
+        "for-range-simple",
+        "fn f() -> i64:\n    for i in range(0, 5):\n        return i\n    return 0\n",
+    );
+}
+
+#[test]
+fn w56_for_range_negative_start() {
+    must_accept_with_range(
+        "for-range-negative",
+        "fn f() -> i64:\n    for i in range(-3, 3):\n        return i\n    return 0\n",
+    );
+}
+
+#[test]
+fn w57_for_range_empty() {
+    must_accept_with_range(
+        "for-range-empty",
+        "fn f() -> i64:\n    for i in range(0, 0):\n        return i\n    return 0\n",
+    );
+}
+
+#[test]
+fn w58_for_range_var_unused() {
+    // `_` should be accepted as loop binding too.
+    must_accept_with_range(
+        "for-range-wildcard",
+        "fn f() -> i64:\n    let n: i64 = 0\n    for _ in range(0, 5):\n        return n\n    return 0\n",
+    );
+}
+
+#[test]
+fn w59_for_range_nested() {
+    must_accept_with_range(
+        "for-range-nested",
+        "fn f() -> i64:\n    for i in range(0, 3):\n        for j in range(0, 3):\n            return (i + j)\n    return 0\n",
+    );
+}
+
+#[test]
+fn w60_for_range_with_inner_let() {
+    must_accept_with_range(
+        "for-range-let",
+        "fn f() -> i64:\n    for i in range(0, 5):\n        let doubled: i64 = (i + i)\n        return doubled\n    return 0\n",
+    );
+}
+
+#[test]
+fn w61_for_range_with_outer_var() {
+    must_accept_with_range(
+        "for-range-outer",
+        "fn f() -> i64:\n    let acc: i64 = 0\n    for i in range(0, 5):\n        acc = (acc + i)\n    return acc\n",
+    );
+}
+
+#[test]
+fn w62_for_range_inner_shadowing() {
+    // Shadowing the loop-var inside the body is legal per Rust rules
+    // (the inner `let i` makes a new binding for the body's tail; next
+    // iter reassigns the loop slot).
+    must_accept_with_range(
+        "for-range-shadow",
+        "fn f() -> i64:\n    for i in range(0, 5):\n        let i: i64 = 42\n        return i\n    return 0\n",
+    );
+}
+
+#[test]
+fn w63_for_range_inside_while() {
+    must_accept_with_range(
+        "for-range-in-while",
+        "fn f() -> i64:\n    let n: i64 = 0\n    while (n < 3):\n        for i in range(0, 3):\n            n = (n + i)\n        n = (n + 1)\n    return n\n",
+    );
+}
+
+#[test]
+fn w64_while_inside_for_range() {
+    must_accept_with_range(
+        "while-in-for-range",
+        "fn f() -> i64:\n    let acc: i64 = 0\n    for i in range(0, 3):\n        let k: i64 = 0\n        while (k < i):\n            acc = (acc + 1)\n            k = (k + 1)\n    return acc\n",
+    );
+}
+
+#[test]
+fn w65_for_range_inside_if() {
+    must_accept_with_range(
+        "for-range-in-if",
+        "fn f(p: bool) -> i64:\n    let acc: i64 = 0\n    if p:\n        for i in range(0, 3):\n            acc = (acc + i)\n    return acc\n",
+    );
+}
+
+#[test]
+fn w66_for_range_with_early_return() {
+    must_accept_with_range(
+        "for-range-early-return",
+        "fn f() -> i64:\n    for i in range(0, 100):\n        if (i == 7):\n            return i\n    return -1\n",
+    );
+}
+
+#[test]
+fn w67_for_range_with_fn_call() {
+    // iter expr can be a Call producing a List.
+    must_accept_with_range(
+        "for-range-fn-call",
+        "fn f() -> i64:\n    let r: List[i64] = range(0, 5)\n    for i in r:\n        return i\n    return 0\n",
+    );
+}
+
+#[test]
+fn w68_for_range_arith_args() {
+    // range(a + b, c - d) — args are arbitrary i64 expressions.
+    must_accept_with_range(
+        "for-range-arith",
+        "fn f(a: i64, b: i64) -> i64:\n    for i in range((a + 0), (b + 1)):\n        return i\n    return 0\n",
+    );
+}
+
+#[test]
+fn w69_for_list_str_argv_iter() {
+    // list[str] iter source — runtime works per ADR-0044 W2 Phase 2;
+    // ADR-0050b §"list[str] iter source" notes that ownership
+    // correctness lands in Wave 2 M-F.3.2 (ADR-0050c). Type-check
+    // accepts it today.
+    must_accept(
+        "for-list-str",
+        "fn argv() -> List[str]:\n    let xs: List[str] = []\n    return xs\nfn f() -> i64:\n    let args: List[str] = argv()\n    for a in args:\n        return 0\n    return 0\n",
+    );
+}
+
+#[test]
+fn w70_for_range_body_calls_helper() {
+    must_accept_with_range(
+        "for-range-helper",
+        "fn h(x: i64) -> i64:\n    return (x + 1)\nfn f() -> i64:\n    let acc: i64 = 0\n    for i in range(0, 5):\n        acc = (acc + h(i))\n    return acc\n",
+    );
+}
