@@ -339,3 +339,31 @@ Audit surfaced an ADSD-upstream candidate: **F27 — ADR scope-reality divergenc
 ### A6 — Wave 2 dispatch hold
 
 Wave 2 (f64 + Str-ownership + list[str]) **HOLDS** until this amendment lands on `main`. Wave 1 P9-A and P9-B continue uninterrupted — both have already self-corrected scope on their own branches and need no SendMessage redirection per audit recommendation. The audit `BLOCK-WITH-FINDINGS` verdict gated on this amendment + the dict-design `is_empty()` addendum; both ship now.
+
+### A7 — PAIR pattern shift (user 2026-05-16 — ADSD F28 candidate)
+
+User surfaced a structural ADSD-vs-Claude-Code-architecture gap during Wave 1 dispatch review: **Claude Code sub-agents are single-layer** — a P9 dispatched via `Agent(subagent_type=general-purpose)` does NOT have the `Agent` tool and therefore cannot literally spawn P7-TEST + P7-DEV sub-agents. The "P9 dispatches PAIR" ceremony copied verbatim from `cto_operations_runbook.md` §"Dev/test pair pattern" into Wave 1 P9-A and P9-B prompts was structurally void; both sprints fell back to single-Opus solo work doing TEST + DEV in one pass. Same-agent bias is retained — the very thing the PAIR pattern was designed to eliminate.
+
+Wave 1 mitigation (limited damage):
+
+- P9-A break/continue spike at `1998dbe` and P9-B for-loop spike at `909811f` are honest contract-seal + corpus work. The audit teammate verified the scope is narrow (≥30-test corpus + ill-typed corpus + ADR text). Single-Opus bias risk for contract-seal-narrow sprints is bounded — the impl is already shipped (per §A1) so the corpus only has to probe semantics, not validate independently-authored impl.
+- The post-Wave-1 audit teammate spawned at merge time gains an explicit assignment: verify the test corpus exercises real semantics (not just type-check happy paths) + verify edge-case coverage looks like independent thinking. This is the retrofit mitigation pathway for Wave 1's single-Opus PAIR-ceremony.
+
+Wave 2 + Wave 3 dispatch pattern lock (binding 2026-05-16+):
+
+- **P10 directly dispatches TEST agent + DEV agent as two parallel `Agent(...)` calls.** No P9 intermediary for impl sprints.
+- TEST prompt: forbidden to edit impl files; reports `[TEST-CORPUS-READY]` with paths + assertion counts + commit SHA.
+- DEV prompt: forbidden to edit TEST corpus files (or fence with `DO NOT EDIT — TEST-AGENT-OWNED` comments); requires TEST commit SHA + paths as required reads.
+- P10 acts as coordinator: reviews TEST corpus, SendMessage 补 if needed, then dispatches DEV.
+- P9 layer is preserved for **ADR-authoring sprints + strategic decomposition only** (D4 / D5 design-only, like P9-C dict design ADR-0050d which correctly used P9 solo and was unaffected).
+
+Per-Wave-2 sprint dispatch shape:
+
+| Sprint | Pattern |
+|---|---|
+| ADR-0050c Str-ownership design | P9 solo opus (doc-only); no PAIR. |
+| M-F.3.3 f64 (revised D2 sonnet) | **P10-direct PAIR**: TEST sonnet + DEV sonnet, parallel. |
+| M-F.3.2 list[str] (D4 opus) | **P10-direct PAIR**: TEST opus + DEV opus, parallel. |
+| M-F.3.4 dict impl per ADR-0050d (D5, multi-sub-sprint) | **P10-direct PAIR per sub-sprint** (parser / types / MIR / codegen / iter / drop / doc), staggered. |
+
+ADSD upstream candidate: **F28 — PAIR pattern impl gap under single-layer sub-agent architecture**. Filed at `docs/agent/findings/adsd-pair-pattern-impl-gap.md` alongside F27. Proposed methodology fix: ADSD §"Dev/test pair pattern" should declare its implementation-layer responsibility explicitly — under multi-layer agent platforms P9 dispatches PAIR; under single-layer platforms P10 directly dispatches and coordinates.
