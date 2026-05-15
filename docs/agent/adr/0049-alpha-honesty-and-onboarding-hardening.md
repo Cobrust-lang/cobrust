@@ -2,9 +2,9 @@
 doc_kind: adr
 adr_id: 0049
 title: "Alpha honesty and onboarding hardening before external AI-surface exposure"
-status: proposed
+status: accepted
 date: 2026-05-13
-last_verified_commit: 801eeb6
+last_verified_commit: 85548f1
 supersedes: []
 superseded_by: []
 relates_to: [adr:0045, adr:0048]
