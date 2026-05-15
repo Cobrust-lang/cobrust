@@ -236,3 +236,13 @@ Decision: defer 3-arg `range_step` to Phase G alongside iter-protocol expansion.
 - `cto_operations_runbook.md` §"Dev/test pair pattern" — D2-D3 mandatory PAIR sprint.
 - `feedback_subagent_model_tier.md` — sonnet model selection for D2-D3 well-scoped impl.
 - Worktree audit 2026-05-16 on `feature/f3-for-loop` — AST/parser/HIR/types/MIR/codegen/runtime baseline verified shipped.
+
+## Maintenance burden — addendum 2026-05-16 (post-Wave-1 audit Finding F3)
+
+The Option-B supersession retires the iter-protocol path for **for-loops** but the protocol remains shipped (`crates/cobrust-stdlib/src/iter.rs:278-349` `__cobrust_iter_init/_next/_drop`) and consumed by:
+
+- **List comprehensions** (`crates/cobrust-mir/src/lower.rs:1493-1576`) — still emit `SwitchInt { cases: [(SwitchValue::Bool(false), exit_block)], … }` on the i64 result of `__cobrust_iter_next`. **The 0-sentinel collision bug this ADR fixed for `for` loops therefore remains live for comprehensions.** See finding `comp-lowering-zero-sentinel-collision.md` (P2, open) for the empirical confirmation that `[print_int(x) for x in [0, 1, 2]]` would under-iterate.
+
+Constitution §5.1 "one way to do each thing" is honored locally (one for-loop lowering path) but at the workspace level there are now two iteration codepaths in MIR with different soundness profiles. **Closure target**: Phase G consolidation ADR (post-v0.2.0) folds comprehension lowering onto the same length-bound primitive `__cobrust_list_len` + `__cobrust_list_get` this ADR introduced, retiring `__cobrust_iter_*` from MIR entirely.
+
+This addendum exists per ADSD F29 candidate (`adr-cross-surface-bug-fix-scope-creep.md`): when a sub-ADR fixes a soundness bug in shared infrastructure by routing around it, the §"Consequences" must enumerate every remaining consumer of the bugged path. F29's SOP fix is recorded for ADSD upstream; this addendum is the Cobrust-side compliance.
