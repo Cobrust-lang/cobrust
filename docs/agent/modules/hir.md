@@ -183,9 +183,23 @@ discipline pass uses default semantics until then.
   preserves user intent via `Item::Decorated`. Full expansion lands
   at MIR.
 
+## ADR-0050a M-F.3.0 — `break` / `continue` HIR contract
+
+| Surface | Anchor |
+|---|---|
+| HIR variant | `tree::StmtKind::Break` + `tree::StmtKind::Continue` (L154-155 of `tree.rs`) — both are payload-free; the AST's `BreakKind` tag is flattened into distinct variants. |
+| Desugar | `lower.rs` L517-523: `ast::StmtKind::BreakContinue(BreakKind::Break)` → `h::StmtKind::Break`; `BreakKind::Continue` → `h::StmtKind::Continue`. |
+| Closure-capture analysis | `lower.rs` L1467 — `Break` / `Continue` / `Pass` produce no captures (they reference no names). |
+| Diagnostic name | `lower.rs` L1655 — `"break/continue"` for error rendering. |
+
+Constraint: HIR makes no decisions about loop scope. That obligation
+lives in `mod:types` (`loop_depth` check) and `mod:mir` (`loop_stack`
+push/pop discipline).
+
 ## Cross-references
 
 - `adr:0005` — HIR shape and lowering rules (authoritative).
+- `adr:0050a` — break/continue contract seal.
 - `mod:frontend` — input.
 - `mod:types` — output consumer.
 - Constitution `CLAUDE.md` §2.2 (drops), §7 (M2 done means).

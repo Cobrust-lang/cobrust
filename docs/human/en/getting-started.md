@@ -61,6 +61,86 @@ Current alpha note:
 
 See [cobrust.toml.example](../../../cobrust.toml.example) for the config shape and [Architecture](architecture.md) for the full AI stdlib design notes.
 
+## Step 3.5: loops and control flow
+
+### `while` loops
+
+Cobrust ships `while` loops out of the box (the for-loop sprint, M-F.3.1, is queued — see [ADR-0050](../../agent/adr/0050-phase-f3-language-completeness-batch.md)).
+
+```cobrust
+fn main() -> i64:
+    let i: i64 = 0
+    while i < 5:
+        print_int(i)
+        i = i + 1
+    return 0
+```
+
+Output:
+
+```
+0
+1
+2
+3
+4
+```
+
+### `break` and `continue`
+
+- `break` exits the **innermost** enclosing loop immediately, skipping any remaining body **and** the next condition check.
+- `continue` skips the rest of the current iteration's body and jumps back to the condition for the next iteration.
+- Both keywords stand alone on their own line (Cobrust does not have Python's `break <label>` — per constitution §2.2 minimalism, bare keywords only).
+- They are accepted **only** inside a loop. Using them in a function body without an enclosing loop is a type error.
+
+Example — break out of a search loop the moment a hit is found:
+
+```cobrust
+fn first_multiple(n: i64, of: i64) -> i64:
+    let i: i64 = 1
+    while i <= n:
+        if i % of == 0:
+            return i        # could also break + return, equivalent here
+        i = i + 1
+    return -1
+```
+
+Example — skip elements with `continue`:
+
+```cobrust
+fn sum_skip_seven(limit: i64) -> i64:
+    let i: i64 = 0
+    let s: i64 = 0
+    while i < limit:
+        i = i + 1
+        if i == 7:
+            continue        # skip 7 and resume next iteration
+        s = s + i
+    return s
+```
+
+Example — nested loops; break always binds innermost:
+
+```cobrust
+fn main() -> i64:
+    let i: i64 = 0
+    while i < 3:
+        let j: i64 = 0
+        while j < 3:
+            if j == 1:
+                break       # exits inner only; outer i loop continues
+            j = j + 1
+        i = i + 1
+    return 0
+```
+
+See [`examples/early_exit.cb`](../../../examples/early_exit.cb) for a combined `break` + `continue` demonstration with an expected output you can verify with `cobrust build` + `./early_exit`.
+
+Why this design?
+
+- One way to do each thing: bare `break` / `continue` covers the early-exit and skip patterns. Labelled break is a sharp tool; if you need it, structure the inner loop as a helper function and `return` instead.
+- Hard error on out-of-loop usage: prevents a class of typo-driven runtime bugs that Python pushes to runtime.
+
 ## Step 4: translate a Python library (optional)
 
 ```bash

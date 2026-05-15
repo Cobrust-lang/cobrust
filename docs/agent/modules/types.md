@@ -150,9 +150,25 @@ appeared in a return-type annotation.
 - No subtyping (deliberate; constitution §2.2).
 - No row polymorphism in M2 (future ADR may revisit).
 
+## ADR-0050a M-F.3.0 — `break` / `continue` scope discipline
+
+| Surface | Anchor |
+|---|---|
+| Counter | `Ctx::loop_depth: usize` (L82-84 of `check.rs`) — non-zero ⇒ inside loop scope. |
+| Increment | `check_loop` L415 (While arm) + L434 (For arm) — increments before checking body, decrements after. |
+| Reject | `check_stmt` L308-319 — `StmtKind::Break` / `Continue` returns `TypeError::BreakOutsideLoop` / `ContinueOutsideLoop` if `loop_depth == 0`. |
+| Diverges | Both branches return `BlockOutcome::Diverges` so statements after them are flagged as unreachable. |
+| Scope discipline (ADR-0050a §"Scope discipline") | `check_fn` L264-279 of `check.rs` — saves `loop_depth`, sets to 0 for the function body, restores on return. This prevents a nested `fn` inside a loop from seeing the outer loop's scope. |
+
+Test corpus: `crates/cobrust-types/tests/break_continue_types_corpus.rs`
+— 18 well-typed acceptance + 16 ill-typed rejection cases. Covers
+nested-fn boundary (b13/b14), while-else boundary (b11/b12), and
+deep nesting (a09 at 5 levels).
+
 ## Cross-references
 
 - `adr:0006` — type system shape + inference + proof obligations.
+- `adr:0050a` — break/continue contract seal (loop scope discipline).
 - `mod:hir` — input.
 - `mod:mir` — downstream consumer (M3+).
 - Constitution `CLAUDE.md` §2.2 (drop `is`, drop implicit truthiness),
