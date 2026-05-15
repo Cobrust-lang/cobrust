@@ -2,9 +2,9 @@
 doc_kind: adr
 adr_id: 0050b
 title: "M-F.3.1 — For-loop shape (range-first + list[i64] iter); list[str] gated on Wave 2"
-status: proposed
+status: accepted
 date: 2026-05-16
-last_verified_commit: TBD
+last_verified_commit: 9a14993
 supersedes: []
 superseded_by: []
 relates_to: [adr:0027, adr:0030, adr:0035, adr:0044, adr:0050]
