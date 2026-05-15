@@ -1394,6 +1394,48 @@ fi
 echo "doc-coverage: M-AI.2 tool surface checks passed"
 echo "doc-coverage: M13 stdlib task + sync surface checks passed"
 
+# --- M-F.3.1 for-loop + range PRELUDE surface coverage (ADR-0050b) ---------
+mf31_terms=(
+    "range(start, stop)"
+    "for-loop length-bound"
+    "ADR-0050b"
+    "length-bound index"
+)
+mf31_human_files=(
+    "docs/human/en/getting-started.md"
+    "docs/human/zh/getting-started.md"
+)
+# The human-tree section just needs the user-visible phrase
+# "range(start, stop)" plus the §2.5 anchor.
+for f in "${mf31_human_files[@]}"; do
+    grep -q -F 'range(start, stop)' "$f" \
+        || fail "M-F.3.1 user-facing term 'range(start, stop)' missing from ${f}"
+    grep -q -F 'for i in range' "$f" \
+        || fail "M-F.3.1 for-loop example 'for i in range' missing from ${f}"
+done
+# Agent-tree mir.md must document the length-bound index lowering.
+grep -q -F 'length-bound index' "docs/agent/modules/mir.md" \
+    || fail "M-F.3.1 'length-bound index' missing from docs/agent/modules/mir.md"
+grep -q -F 'ADR-0050b' "docs/agent/modules/mir.md" \
+    || fail "M-F.3.1 'ADR-0050b' cross-ref missing from docs/agent/modules/mir.md"
+# Agent-tree cli.md must document the PRELUDE range body.
+grep -q -F 'fn range(start: i64, stop: i64) -> list[i64]' "docs/agent/modules/cli.md" \
+    || fail "M-F.3.1 prelude range signature missing from docs/agent/modules/cli.md"
+# ADR-0050b must exist and reference the for-loop shape.
+[[ -f "docs/agent/adr/0050b-for-loop-shape.md" ]] \
+    || fail "ADR-0050b file missing (M-F.3.1 deliverable)"
+grep -q -F 'M-F.3.1' "docs/agent/adr/0050b-for-loop-shape.md" \
+    || fail "ADR-0050b must reference M-F.3.1 in its body"
+# Test corpus + examples must exist.
+[[ -f "crates/cobrust-cli/tests/for_range_e2e.rs" ]] \
+    || fail "crates/cobrust-cli/tests/for_range_e2e.rs missing (M-F.3.1 corpus)"
+[[ -f "examples/for_range.cb" ]] \
+    || fail "examples/for_range.cb missing (M-F.3.1 deliverable)"
+[[ -f "examples/for_list.cb" ]] \
+    || fail "examples/for_list.cb missing (M-F.3.1 deliverable)"
+
+echo "doc-coverage: M-F.3.1 for-loop + range surface checks passed"
+
 # --- 23. M14 REPL surface coverage --------------------------------------
 # When the cli module declares M14 delivered, the M14 binding surface
 # terms + ADR-0029 anchors must appear in all three doc trees.

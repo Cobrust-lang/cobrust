@@ -1,0 +1,38 @@
+# M-F.3.1 / ADR-0050b example — `for x in xs:` over `list[i64]` (and
+# `list[str]` via argv per ADR-0044 W2 Phase 2).
+#
+# Cobrust for-loops iterate any `list[T]` value. The iter source is
+# evaluated once, then the loop walks the list with length-bound
+# index iteration (the MIR lowering desugars to a while-loop over
+# __cobrust_list_len + __cobrust_list_get; see ADR-0050b §"Decision").
+#
+# Usage:
+#   cobrust build examples/for_list.cb -o /tmp/for_list && /tmp/for_list a b c
+#
+# Expected stdout (per line):
+#   10  20  30  40           # list[i64] iteration
+#   <program-path>           # argv[0] (runtime-variable)
+#   a                        # argv[1..] echo
+#   b
+#   c
+#
+# Constitution alignment:
+#   §1.1 — Python-familiar for-each
+#   §2.2 — no implicit truthy; iter source must be a list[T]
+
+fn main() -> i64:
+    # list[i64] iteration via direct allocation.
+    let xs: list[i64] = list_new(4)
+    let _0 = list_set(xs, 0, 10)
+    let _1 = list_set(xs, 1, 20)
+    let _2 = list_set(xs, 2, 30)
+    let _3 = list_set(xs, 3, 40)
+    for v in xs:
+        print_int(v)
+
+    # list[str] iteration via argv (ADR-0044 W2 Phase 2 path).
+    let args: list[str] = argv()
+    for a in args:
+        print(a)
+
+    return 0

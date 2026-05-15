@@ -731,40 +731,63 @@ impl<'a> BodyBuilder<'a> {
                 else_block,
                 ..
             } => {
-                // ADR-0027 §4 for-protocol lowering:
-                //   let it = iter_expr.iter();
-                //   loop:
-                //     let opt = it.next();
-                //     if opt.is_none() { break }
-                //     let var = opt.unwrap();
-                //     body
-                //     goto loop
+                // ADR-0050b §"Decision" — for-loop lowers to length-bound
+                // index iteration over the iter source's list layout:
                 //
-                // The iter / next calls land as MIR `Terminator::Call`
-                // edges so the codegen runtime can dispatch to the
-                // `cobrust_stdlib::iter::ListIter / DictIter / SetIter
-                // / RangeIter` types.
+                //   let __iter   = <iter_expr>
+                //   let __len    = __cobrust_list_len(__iter)
+                //   let __idx: i64 = 0
+                //   let var      = <declared, type = element type>
+                //   header:
+                //     if __idx < __len: goto body  else: goto exit
+                //   body:
+                //     var = __cobrust_list_get(__iter, __idx)
+                //     [lower body block]
+                //     __idx = __idx + 1
+                //     goto header
+                //   exit:
+                //     [optional else block]
+                //
+                // This supersedes the ADR-0027 §4 iter-protocol path
+                // (`__cobrust_iter_init/next/drop`) because the protocol's
+                // 0-as-None convention collides with list[i64] elements
+                // that are legitimately 0 (the first iteration of
+                // `for v in range(0, n):` immediately exits). The
+                // length-bound index iteration is unambiguous and
+                // composes monotonically with Phase G iter-protocol
+                // expansion (when user `__iter__` lands, this primitive
+                // becomes one of several iteration shapes the type
+                // checker dispatches between).
                 self.ensure_open_block();
-                // Step 1: evaluate iter expression and bind to `_iter`.
+
+                // Step 1: evaluate iter expression → iter_local.
                 let iter_val_op = self.lower_expr(iter)?;
                 let iter_local = self.declare_local("_iter".to_string(), Ty::None, span, true);
                 self.emit_assign(Place::local(iter_local), Rvalue::Use(iter_val_op), span);
 
-                // Step 2: call __cobrust_iter_init(iter_local) → it_local.
-                let it_local = self.declare_local("_iter_handle".to_string(), Ty::None, span, true);
+                // Step 2: call __cobrust_list_len(iter_local) → len_local.
+                let len_local = self.declare_local("_iter_len".to_string(), Ty::Int, span, true);
                 let cur = self.current_block_id();
-                let init_target = self.start_new_block();
+                let after_len = self.start_new_block();
                 self.cur_block = Some(cur.0 as usize);
                 self.terminate(Terminator::Call {
-                    func: Operand::Constant(Constant::Str("__cobrust_iter_init".to_string())),
+                    func: Operand::Constant(Constant::Str("__cobrust_list_len".to_string())),
                     args: vec![Operand::Copy(Place::local(iter_local))],
-                    destination: Place::local(it_local),
-                    target: init_target,
+                    destination: Place::local(len_local),
+                    target: after_len,
                     unwind: None,
                 });
-                self.cur_block = Some(init_target.0 as usize);
+                self.cur_block = Some(after_len.0 as usize);
 
-                // Binding allocation.
+                // Step 3: declare __idx and initialise to 0.
+                let idx_local = self.declare_local("_iter_idx".to_string(), Ty::Int, span, true);
+                self.emit_assign(
+                    Place::local(idx_local),
+                    Rvalue::Use(Operand::Constant(Constant::Int(0))),
+                    span,
+                );
+
+                // Step 4: declare the loop-var binding.
                 let var_local = if let PatternKind::Binding(name, def_id) = &pattern.kind {
                     let ty = self.ctx.lookup_ty(*def_id);
                     Some(self.declare_local_for_def(*def_id, name.clone(), ty, span, true))
@@ -782,52 +805,68 @@ impl<'a> BodyBuilder<'a> {
                     None
                 };
 
-                // Step 3: header — call __cobrust_iter_next(it) → opt_local.
-                //         opt_local==0 means exhausted (Option::None convention).
+                // Step 5: header — emit `idx < len` via Rvalue::BinaryOp,
+                // then SwitchInt on the bool.
                 let pre = self.current_block_id();
                 let header = self.start_new_block();
-                let opt_local = self.declare_local("_iter_opt".to_string(), Ty::None, span, true);
                 self.cur_block = Some(pre.0 as usize);
                 self.terminate(Terminator::Goto(header));
                 self.cur_block = Some(header.0 as usize);
-
-                // Inside header: call next, then SwitchInt on opt.
-                let after_next = self.start_new_block();
-                self.cur_block = Some(header.0 as usize);
-                self.terminate(Terminator::Call {
-                    func: Operand::Constant(Constant::Str("__cobrust_iter_next".to_string())),
-                    args: vec![Operand::Copy(Place::local(it_local))],
-                    destination: Place::local(opt_local),
-                    target: after_next,
-                    unwind: None,
-                });
-                self.cur_block = Some(after_next.0 as usize);
-
-                // Bind var = opt (the operand pointer; codegen unwraps).
-                if let Some(vl) = var_local {
-                    self.emit_assign(
-                        Place::local(vl),
-                        Rvalue::Use(Operand::Copy(Place::local(opt_local))),
-                        span,
-                    );
-                }
-
+                let cond_local = self.declare_local("_iter_cond".to_string(), Ty::Bool, span, true);
+                self.emit_assign(
+                    Place::local(cond_local),
+                    Rvalue::BinaryOp(
+                        crate::tree::BinOp::Lt,
+                        Operand::Copy(Place::local(idx_local)),
+                        Operand::Copy(Place::local(len_local)),
+                    ),
+                    span,
+                );
                 let body_block = self.start_new_block();
                 let exit_block = self.start_new_block();
-                self.cur_block = Some(after_next.0 as usize);
+                self.cur_block = Some(header.0 as usize);
                 self.terminate(Terminator::SwitchInt {
-                    operand: Operand::Copy(Place::local(opt_local)),
-                    cases: vec![(SwitchValue::Bool(false), exit_block)],
-                    otherwise: body_block,
+                    operand: Operand::Copy(Place::local(cond_local)),
+                    cases: vec![(SwitchValue::Bool(true), body_block)],
+                    otherwise: exit_block,
                 });
 
+                // Step 6: body — fetch var via __cobrust_list_get, then
+                // lower user body, then bump __idx, then goto header.
                 self.loop_stack.push((header, exit_block));
                 self.cur_block = Some(body_block.0 as usize);
+                if let Some(vl) = var_local {
+                    let after_get = self.start_new_block();
+                    self.cur_block = Some(body_block.0 as usize);
+                    self.terminate(Terminator::Call {
+                        func: Operand::Constant(Constant::Str("__cobrust_list_get".to_string())),
+                        args: vec![
+                            Operand::Copy(Place::local(iter_local)),
+                            Operand::Copy(Place::local(idx_local)),
+                        ],
+                        destination: Place::local(vl),
+                        target: after_get,
+                        unwind: None,
+                    });
+                    self.cur_block = Some(after_get.0 as usize);
+                }
                 self.lower_block(body)?;
                 if !self.terminated() {
+                    // Bump __idx and loop back to header.
+                    self.emit_assign(
+                        Place::local(idx_local),
+                        Rvalue::BinaryOp(
+                            crate::tree::BinOp::Add,
+                            Operand::Copy(Place::local(idx_local)),
+                            Operand::Constant(Constant::Int(1)),
+                        ),
+                        span,
+                    );
                     self.terminate(Terminator::Goto(header));
                 }
                 self.loop_stack.pop();
+
+                // Step 7: exit — optional else block.
                 self.cur_block = Some(exit_block.0 as usize);
                 if let Some(else_b) = else_block {
                     self.lower_block(else_b)?;
