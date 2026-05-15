@@ -262,8 +262,17 @@ impl Ctx {
             self.record_def(p.def_id, (**t).clone());
         }
         // Type-check body under the return-stack.
+        //
+        // ADR-0050a §"Scope discipline": loop scope MUST NOT cross a
+        // function boundary. A nested `fn` definition resets
+        // `loop_depth` to 0 for the duration of its body, then
+        // restores. Without this save/restore, `break` / `continue`
+        // inside a nested fn whose outer scope sits in a loop would
+        // erroneously type-check.
         self.return_stack.push((*fn_ty.return_ty).clone());
+        let saved_loop_depth = std::mem::take(&mut self.loop_depth);
         let _ = self.check_block(&f.body)?;
+        self.loop_depth = saved_loop_depth;
         let _ = self.return_stack.pop();
         Ok(())
     }

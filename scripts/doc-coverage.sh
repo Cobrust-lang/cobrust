@@ -1441,3 +1441,44 @@ if grep -q '^- \*\*M14 — delivered.\*\*' "docs/agent/modules/cli.md"; then
 fi
 
 echo "doc-coverage: M14 REPL surface checks passed"
+
+# --- M-F.3.0 break/continue contract seal (ADR-0050a) -----------------------
+# When ADR-0050a is present, verify that:
+# - Every doc tree (zh + en + agent) mentions `break` AND `continue`.
+# - The four binding corpus files exist.
+# - The canonical example exists.
+
+adr_50a="docs/agent/adr/0050a-loop-control-flow.md"
+if [[ -f "$adr_50a" ]]; then
+    mf3_0_doc_files=(
+        "docs/human/zh/getting-started.md"
+        "docs/human/en/getting-started.md"
+        "docs/agent/modules/frontend.md"
+        "docs/agent/modules/hir.md"
+        "docs/agent/modules/types.md"
+        "docs/agent/modules/mir.md"
+    )
+    for f in "${mf3_0_doc_files[@]}"; do
+        if ! grep -q "break" "$f"; then
+            fail "M-F.3.0 (ADR-0050a) requires '${f}' to mention 'break'"
+        fi
+        if ! grep -q "continue" "$f"; then
+            fail "M-F.3.0 (ADR-0050a) requires '${f}' to mention 'continue'"
+        fi
+    done
+
+    mf3_0_test_files=(
+        "crates/cobrust-frontend/tests/break_continue_parse_corpus.rs"
+        "crates/cobrust-types/tests/break_continue_types_corpus.rs"
+        "crates/cobrust-mir/tests/break_continue_mir_corpus.rs"
+        "crates/cobrust-cli/tests/cli_break_continue_e2e.rs"
+    )
+    for f in "${mf3_0_test_files[@]}"; do
+        [[ -f "$f" ]] || fail "M-F.3.0 (ADR-0050a) requires corpus file ${f}"
+    done
+
+    [[ -f "examples/early_exit.cb" ]] \
+        || fail "M-F.3.0 (ADR-0050a) requires examples/early_exit.cb"
+fi
+
+echo "doc-coverage: M-F.3.0 break/continue contract checks passed"

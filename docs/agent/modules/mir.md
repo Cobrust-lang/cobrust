@@ -155,7 +155,7 @@ Statement (7–19):
 | 13 `with_stmt` | `Call(__enter__) → body → Call(__exit__)`; binding is a `let` |
 | 14 `try_stmt` | each handler = `unwind` target; finally = on every exit edge |
 | 15 `return_stmt` | `Statement::Assign(_return, ...)` then `Terminator::Return` |
-| 16 `break_continue` | `Goto(loop_exit)` / `Goto(loop_header)` |
+| 16 `break_continue` | `Goto(loop_exit)` / `Goto(loop_header)` — looks up `(header_bb, exit_bb)` pair from the top of `BodyBuilder::loop_stack` (L201-202 of `lower.rs`). Pushed at While entry (L712) + For entry (L824); popped on natural exit. ADR-0050a §"Semantics": innermost-loop binding is implicit because each loop pushes/pops a fresh pair. |
 | 17 `raise_stmt` | `Terminator::Unreachable` (panic helper materialises at M11) |
 | 18 `pass_stmt` | `StatementKind::Nop` |
 | 19 `expr_stmt` | synthesize `let _tmp = expr` + discard |
@@ -325,11 +325,27 @@ Two MIR-level lowering paths were corrected to match Python semantics
 - Optimization passes (constant folding, DCE, etc.) — also M9+.
 - Generator state-machine lowering (M13 structured concurrency).
 
+## ADR-0050a M-F.3.0 — `break` / `continue` MIR contract
+
+| Surface | Anchor |
+|---|---|
+| Loop-scope stack | `BodyBuilder::loop_stack: Vec<(BlockId, BlockId)>` (`lower.rs` L201-202) — pair = `(header_bb, exit_bb)`. |
+| Break lowering | `lower.rs` L419-427 — `StmtKind::Break` → `Terminator::Goto(exit_bb)`; if `loop_stack.is_empty()` returns `MirError::Internal("break outside loop")` (defensive — types should reject earlier). |
+| Continue lowering | `lower.rs` L428-436 — `StmtKind::Continue` → `Terminator::Goto(header_bb)`. |
+| While push/pop | `LoopKind::While` arm at L712 pushes, L718 pops. |
+| For push/pop | `LoopKind::For` arm at L824 pushes, L830 pops. Once M-F.3.1 lands a richer for desugar, the contract is unchanged — break still binds to the for's exit. |
+| Unreachable tail | After `break` / `continue` terminate the current block, any subsequent statements in the same source body run through `ensure_open_block`, lowering into a fresh block with no predecessor. Codegen DCE removes them. |
+
+Test corpus: `crates/cobrust-mir/tests/break_continue_mir_corpus.rs`
+— 19 cases including 5-level deep nesting (`m10`, `m15`) and goto-target
+bounds verification (`m16`).
+
 ## Cross-references
 
 - `adr:0020` — MIR shape, terminator taxonomy, drop schedule, borrow obligations (authoritative).
 - `adr:0019` — Phase E roadmap; M8 row.
 - `adr:0006` — type-system obligations 1–9; B1..B5 project onto items 1–3.
+- `adr:0050a` — break/continue contract seal (MIR loop_stack discipline).
 - `mod:types` — input.
 - `mod:codegen` — output consumer.
 - Constitution `CLAUDE.md` §2.2 (drops including GIL/GC), §4.1 (pipeline), §5.1 (elegance), §5.2 (scientific — enumerated obligations), §7 (M2 done means), ADR-0019 (M8..M14 sequencing).
