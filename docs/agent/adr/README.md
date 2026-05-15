@@ -78,4 +78,5 @@ same atomic commit as the change it justifies.
 | [0047](0047-leetcode-coverage-strategy.md) | LeetCode coverage strategy — Tier A discovery (100 programs, 10 categories × 10) + B/C ramp decision gate (≥90% SKIP / 70-89% conditional GO / <70% HOLD); evidence-driven ramp policy + IP-boundary discipline | accepted | 2026-05-11 |
 | [0047a](0047a-verify-py-mandate.md) | Tier B P7-TEST mandate — verify.py independent oracle for every program (closes F23-A oracle-authoring defect after Tier A 65% rate) | accepted | 2026-05-12 |
 | [0048](0048-ai-native-framing-reframe.md) | Cobrust framing reframe — "AI-friendly Python successor with AI-native stdlib in development" (Phase F.2 M-AI.0..M-AI.6 + TD-Recursive-Types Phase 7.5) + v0.2.0-alpha tag binding | accepted | 2026-05-12 |
-| [0049](0049-alpha-honesty-and-onboarding-hardening.md) | Alpha honesty and onboarding hardening before external AI-surface exposure | proposed | 2026-05-13 |
+| [0049](0049-alpha-honesty-and-onboarding-hardening.md) | Alpha honesty and onboarding hardening before external AI-surface exposure | accepted | 2026-05-13 |
+| [0050](0050-phase-f3-language-completeness-batch.md) | Phase F.3 — language completeness batch (dict, f64, list[str], break/continue, for) and v0.2.0 stable tag | proposed | 2026-05-16 |
