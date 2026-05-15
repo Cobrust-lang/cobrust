@@ -1716,11 +1716,11 @@ fn un_to_mir(op: UnaryOp) -> UnOp {
 fn is_copy_type(ty: &Ty) -> bool {
     matches!(
         ty,
-        // ADR-0044 W2 Phase 3: Str and List are treated as Copy for
-        // source-level ergonomics — runtime Drop is a no-op jump (no
-        // __cobrust_str_drop / __cobrust_list_drop calls are emitted), so
-        // aliasing is safe for the short-lived LeetCode program lifetime.
-        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never | Ty::Str | Ty::List(_)
+        // ADR-0050c TD-1 closure: Str and List are non-Copy. Operand reads
+        // produce Operand::Move; duplicating ownership requires an explicit
+        // clone temp (Phase 4 implicit clone emission). Drop schedule lives
+        // in codegen's Terminator::Drop arm.
+        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never
     )
 }
 
