@@ -903,3 +903,263 @@ fn w97_nan_eq_nan_is_bool_typed() {
         "fn f(a: f64, b: f64) -> bool:\n    return (a == b)\n",
     );
 }
+
+// ============================================================
+// M-F.3.2 — list[str] ownership well-typed corpus (w98..w115)
+// Closes TD-1 per ADR-0050c Option A (Full-Drop schedule + explicit
+// `__cobrust_str_clone`). Type-check must accept the following Cobrust
+// programs:
+//   - literal list[str] (`["a", "b"]` synthesised as List<Str> via §601
+//     ExprKind::List head+unify)
+//   - `xs[i]` indexing returns Ty::Str
+//   - `list_len(xs)` returns i64 when xs: list[str] (DEV must widen
+//     the PRELUDE+intrinsic-rewrite to accept list[str])
+//   - `list_is_empty(xs)` returns bool when xs: list[str]
+//     (ADR-0050c §"Phase 6" / F5 §2.2 uniformity addendum binds the
+//     new `__cobrust_list_is_empty` shim; the matching PRELUDE entry
+//     should accept list[str] in addition to list[i64])
+//   - functions consuming + returning list[str]
+//   - nested list[list[str]]
+//
+// These tests probe the SOURCE-LEVEL TYPE-CHECK CONTRACT — they pass
+// today only insofar as Ty::List(Box::new(Ty::Str)) is a valid type
+// constructor. The `list_is_empty` rows require the new PRELUDE entry
+// and will FAIL until DEV adds it. The `list_len` over list[str] rows
+// require the type-check to accept the wider arg (currently the PRELUDE
+// declaration is `fn list_len(lst: list[i64]) -> i64`).
+//
+// Per type-check-layer-conventions: the runtime PRELUDE is NOT
+// available in these tests, so every test inlines the necessary stub
+// fns (`print`, `argv`, `list_len`, `list_is_empty`). The DEV's wider
+// PRELUDE signatures will replace these stubs at the CLI build layer.
+//
+// All ADR-0050c bug-witness invariants are runtime concerns and live
+// in `crates/cobrust-cli/tests/list_str_e2e.rs` (Tier C corpus).
+// ============================================================
+
+// Shared stub block: the prelude entries M-F.3.2 must accept.
+// `list_len` over list[str] + `list_is_empty(list[T]) -> bool` are
+// the row-polymorphic widenings ADR-0050c §"Phase 6" requires.
+const LIST_STR_STUBS: &str = "fn print(s: str) -> i64:\n    return 0\nfn argv() -> list[str]:\n    let xs: list[str] = []\n    return xs\nfn list_len(lst: list[str]) -> i64:\n    return 0\nfn list_is_empty_s(lst: list[str]) -> bool:\n    return True\nfn list_is_empty_i(lst: list[i64]) -> bool:\n    return True\n";
+
+fn must_accept_with_list_str_stubs(name: &str, body: &str) {
+    let src = format!("{LIST_STR_STUBS}{body}");
+    must_accept(name, &src);
+}
+
+// ---- Tier A.1: literal list[str] type synthesis ----
+
+#[test]
+fn w98_list_str_literal_three_elems() {
+    // `["a", "b", "c"]` synthesised + unified element-wise → list[str].
+    must_accept(
+        "list-str-literal-3",
+        "fn f() -> i64:\n    let xs: List[str] = [\"a\", \"b\", \"c\"]\n    return 0\n",
+    );
+}
+
+#[test]
+fn w99_list_str_literal_single_elem() {
+    // Single-element list[str].
+    must_accept(
+        "list-str-literal-1",
+        "fn f() -> i64:\n    let xs: List[str] = [\"only\"]\n    return 0\n",
+    );
+}
+
+#[test]
+fn w100_list_str_literal_lowercase_list_annot() {
+    // Lowercase `list[str]` annotation form (Python-flavoured alias per
+    // check.rs §1056). Same semantics as `List[str]`.
+    must_accept(
+        "list-str-lowercase-annot",
+        "fn f() -> i64:\n    let xs: list[str] = [\"a\", \"b\"]\n    return 0\n",
+    );
+}
+
+// ---- Tier A.2: indexing yields Ty::Str ----
+
+#[test]
+fn w101_list_str_index_yields_str() {
+    // `xs[0]` where xs: list[str] must type as str.
+    must_accept(
+        "list-str-index-yields-str",
+        "fn f() -> str:\n    let xs: list[str] = [\"alpha\", \"beta\"]\n    return xs[0]\n",
+    );
+}
+
+#[test]
+fn w102_list_str_index_in_print() {
+    // print(xs[0]) — xs[0]: str, print takes str. Stub-mode test.
+    must_accept_with_list_str_stubs(
+        "list-str-index-in-print",
+        "fn f() -> i64:\n    let xs: list[str] = [\"hello\"]\n    return print(xs[0])\n",
+    );
+}
+
+// ---- Tier A.3: list_len over list[str] ----
+// PRELUDE declares `fn list_len(lst: list[i64]) -> i64`. To make
+// this accept list[str], DEV must widen the PRELUDE signature (a
+// row-polymorphic `List<_>` arg via type-checker special-case) or
+// ship a separate `list_str_len(list[str]) -> i64` intrinsic. The
+// chosen path per ADR-0050c §"Decision" is row-polymorphic. The
+// stub in `LIST_STR_STUBS` mirrors this: `list_len(list[str]) -> i64`.
+
+#[test]
+fn w103_list_len_over_list_str() {
+    // `list_len(xs)` where xs: list[str] returns i64.
+    must_accept_with_list_str_stubs(
+        "list-len-over-list-str",
+        "fn f() -> i64:\n    let xs: list[str] = [\"a\", \"b\", \"c\"]\n    return list_len(xs)\n",
+    );
+}
+
+// ---- Tier A.4 / Tier E: list_is_empty (new PRELUDE entry per F5) ----
+// ADR-0050c §"Phase 6" mandates `__cobrust_list_is_empty(*mut List) -> i64`
+// alongside `__cobrust_dict_is_empty`. The chosen source-level PRELUDE
+// entry is row-polymorphic `fn list_is_empty(lst: list[<T>]) -> bool`.
+// At the type-check layer the row-polymorphic widening is not yet
+// available; we mock the two monomorphisations as `list_is_empty_s`
+// and `list_is_empty_i` to make the tests well-formed today. DEV must
+// land the row-polymorphic signature so that at the source level one
+// `list_is_empty` accepts both `list[i64]` and `list[str]`.
+
+#[test]
+fn w104_list_is_empty_over_list_i64_returns_bool() {
+    // F5 §2.2 uniformity — list_is_empty(xs) returns bool when xs: list[i64].
+    must_accept_with_list_str_stubs(
+        "list-is-empty-i64-bool",
+        "fn f() -> bool:\n    let xs: list[i64] = [1, 2, 3]\n    return list_is_empty_i(xs)\n",
+    );
+}
+
+#[test]
+fn w105_list_is_empty_over_list_str_returns_bool() {
+    // F5 §2.2 uniformity — list_is_empty(xs) returns bool when xs: list[str].
+    must_accept_with_list_str_stubs(
+        "list-is-empty-str-bool",
+        "fn f() -> bool:\n    let xs: list[str] = [\"a\"]\n    return list_is_empty_s(xs)\n",
+    );
+}
+
+#[test]
+fn w106_list_is_empty_in_if_condition() {
+    // Constitution §2.2 — implicit truthy/falsy forbidden; users write
+    // `if list_is_empty(xs):`, never `if xs:`. This locks the §2.2
+    // uniformity gain F5 §"Phase 6" describes.
+    must_accept_with_list_str_stubs(
+        "list-is-empty-in-if",
+        "fn f() -> i64:\n    let xs: list[str] = [\"a\"]\n    if list_is_empty_s(xs):\n        return 0\n    return 1\n",
+    );
+}
+
+// ---- Tier A.5: functions consuming + returning list[str] ----
+
+#[test]
+fn w107_fn_takes_list_str_returns_i64() {
+    // `fn f(xs: list[str]) -> i64` takes ownership of list[str].
+    must_accept_with_list_str_stubs(
+        "fn-takes-list-str",
+        "fn count(xs: list[str]) -> i64:\n    return list_len(xs)\nfn f() -> i64:\n    let v: list[str] = [\"x\", \"y\"]\n    return count(v)\n",
+    );
+}
+
+#[test]
+fn w108_fn_returns_owned_list_str() {
+    // `fn g() -> list[str]: return xs` — returns owned list[str].
+    // The drop schedule must transfer ownership to caller's binding.
+    must_accept_with_list_str_stubs(
+        "fn-returns-list-str",
+        "fn make() -> list[str]:\n    let xs: list[str] = [\"a\", \"b\"]\n    return xs\nfn f() -> i64:\n    let ys: list[str] = make()\n    return list_len(ys)\n",
+    );
+}
+
+#[test]
+fn w109_fn_str_arg_returns_str() {
+    // Single str ownership transfer: f(s: str) -> str. Caller binds
+    // the result, both old `s` parameter and new binding drop at scope exit.
+    must_accept(
+        "fn-str-arg-returns-str",
+        "fn identity(s: str) -> str:\n    return s\nfn f() -> i64:\n    let v: str = identity(\"hi\")\n    return 0\n",
+    );
+}
+
+// ---- Tier A.6: nested list[list[str]] ----
+
+#[test]
+fn w110_nested_list_list_str_lowercase() {
+    // `list[list[str]]` — recursive Aggregate; each inner list owns its
+    // Str slots; outer list owns each inner-list pointer.
+    must_accept(
+        "nested-list-list-str",
+        "fn f() -> i64:\n    let xs: list[list[str]] = [[\"a\", \"b\"], [\"c\"]]\n    return 0\n",
+    );
+}
+
+// ---- Tier A.7: rebind in inner scope (shadowing valid only when
+//                 the inner `let` is in a deeper block) ----
+
+#[test]
+fn w111_list_str_rebind_in_inner_block() {
+    // ADR-0050c Option A: an inner-scope `let xs: list[str] = ...`
+    // shadows the outer binding for the inner block; the inner list
+    // drops at the inner block's exit (before the outer is dropped).
+    // HIR rejects DuplicateBinding in the SAME scope; only inner-scope
+    // shadowing is valid. Source-level rebind via `xs = expr2` is the
+    // distinct ADR-0050c §"Decision" path covered at the runtime tier
+    // (Tier C f3ls25).
+    must_accept_with_list_str_stubs(
+        "list-str-inner-shadow",
+        "fn f() -> i64:\n    let xs: list[str] = [\"a\"]\n    if True:\n        let xs: list[str] = [\"b\", \"c\"]\n        return list_len(xs)\n    return list_len(xs)\n",
+    );
+}
+
+// ---- Tier A.8: argv() return type ----
+
+#[test]
+fn w112_argv_returns_list_str_typed_ok() {
+    // `let args: list[str] = argv()` — argv()'s PRELUDE signature is
+    // already `fn argv() -> list[str]`. This locks the binding remains
+    // type-correct under ADR-0050c (the return value is owned list[str]
+    // by callee; ownership transfers to caller's binding).
+    must_accept_with_list_str_stubs(
+        "argv-into-list-str-binding",
+        "fn f() -> i64:\n    let args: list[str] = argv()\n    return list_len(args)\n",
+    );
+}
+
+// ---- Tier A.9: for-loop iteration variable types as str ----
+
+#[test]
+fn w113_for_over_list_str_loop_var_is_str() {
+    // `for s in xs:` where xs: list[str] binds `s: str`. The drop
+    // schedule must drop `s` at the end of each iteration's scope.
+    must_accept_with_list_str_stubs(
+        "for-over-list-str",
+        "fn f() -> i64:\n    let xs: list[str] = [\"a\", \"b\", \"c\"]\n    for s in xs:\n        let _ = print(s)\n    return 0\n",
+    );
+}
+
+// ---- Tier A.10: empty list[str] literal annotation ----
+
+#[test]
+fn w114_empty_list_str_literal_with_annot() {
+    // `let xs: list[str] = []` — empty literal unifies to List(fresh).
+    // Annotation forces fresh → Str.
+    must_accept_with_list_str_stubs(
+        "empty-list-str-with-annot",
+        "fn f() -> i64:\n    let xs: list[str] = []\n    return list_len(xs)\n",
+    );
+}
+
+// ---- Tier A.11: f-string element-of-list[str] ----
+
+#[test]
+fn w115_fstring_contains_list_str_index() {
+    // f-string with a `{xs[0]}` hole — xs[0]: str composes into the
+    // f-string buffer; the resulting buffer drops at scope exit.
+    must_accept(
+        "fstring-list-str-index",
+        "fn f() -> str:\n    let xs: list[str] = [\"alpha\"]\n    let msg: str = f\"first={xs[0]}\"\n    return msg\n",
+    );
+}
