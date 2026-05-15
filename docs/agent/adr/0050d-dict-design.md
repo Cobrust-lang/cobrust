@@ -238,6 +238,10 @@ the **fast tier** with the abort contract — same precedent as Rust's
 
 **Chosen: 5A**. Match list/str.
 
+#### Surface addendum 2026-05-16 — `dict.is_empty() -> bool` (audit Finding 1.2)
+
+Pin `dict.is_empty() -> bool` in the surface alongside `len(d)`. Reasoning: constitution §2.2 forbids implicit truthy/falsy. Without `is_empty()` users have no idiomatic path to "is this dict empty?" — they would either write `if d:` (forbidden by §2.2) or `if len(d) == 0:` (allowed but less readable). `dict.is_empty()` mirrors `list.is_empty()` already-shipping in `__cobrust_list_len == 0` patterns and the constitution's preference for explicit predicate methods over coercion. Sub-sprint d ships `__cobrust_dict_is_empty(*mut Dict) -> i64` as the C-ABI shim (i64 0/1 per the SwitchInt codegen convention; see ADR-0044 W2 Phase 3 `str_eq` precedent at `stdlib/io.rs:502-515`).
+
 ### Decision 6 — Iteration order: Python 3.7+ insertion-order (backed by `indexmap::IndexMap`)
 
 #### Option 6A — `indexmap::IndexMap` for insertion order (CHOSEN)
