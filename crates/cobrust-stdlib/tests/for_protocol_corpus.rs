@@ -1,10 +1,18 @@
 //! M12.x for-protocol corpus (per ADR-0027 §4).
 //!
 //! Each test exercises the iter / next runtime ABI through the
-//! `ListIter / DictIter / SetIter / RangeIter` types. The codegen
-//! lowering (in cobrust-mir + cobrust-codegen) emits Calls into
-//! these helpers; here we exercise them directly to verify the
-//! Rust-side semantics independently of the codegen pipeline.
+//! `ListIter / DictIter / SetIter / RangeIter` types.
+//!
+//! POST-ADR-0050b NOTE: MIR `LoopKind::For` no longer emits Calls to
+//! `__cobrust_iter_init / next / drop` — the length-bound index
+//! lowering (per ADR-0050b §"Decision") iterates lists via
+//! `__cobrust_list_len` + `__cobrust_list_get` directly. The
+//! iter-protocol runtime shims stay shipped because (a) comprehension
+//! desugar still uses them (ADR-0041 §H6; Phase G will fold these
+//! onto the length-bound primitive), and (b) this test corpus
+//! exercises the Rust-side semantics for any future iter-protocol
+//! consumer. As of M-F.3.1, no source-level construct exercises the
+//! 0-as-None sentinel path through the for-loop.
 
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]

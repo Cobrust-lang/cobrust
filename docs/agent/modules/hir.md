@@ -125,6 +125,10 @@ The condensed list:
 - Augmented assignment → desugared to `target = target op rhs`
 - `if/elif/else` → `Stmt::If { arms: Vec<(Expr, Block)>, else_block }`
 - `for x in xs / while c` unified → `Stmt::Loop(LoopKind::{For,While})`
+  - Per ADR-0050b: HIR preserves `LoopKind::For` structurally; the
+    iter-protocol vs length-bound-index desugar choice is deferred to
+    MIR lowering. M-F.3.1 ships the length-bound-index shape for
+    every `Ty::List<_>` iter source.
 - `_` (when in a pattern position) → canonicalised to `Wildcard`
   regardless of how the parser tokenised the `_` glyph.
 - `from a import x, y` → one `Import` item per target.

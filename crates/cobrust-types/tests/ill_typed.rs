@@ -623,3 +623,99 @@ fn i54_seq_pattern_arity() {
         Cat::ArityMismatch,
     );
 }
+
+// ============================================================
+// M-F.3.1 for-loop ill-typed corpus (ADR-0050b)
+//
+// Iter-source classifier rejects non-iterable expressions:
+//   - int, bool, float, str (str-iter is Phase G alongside iter
+//     protocol per ADR-0050b §"Iter source type checking")
+//   - calls returning non-list/dict/set types
+//
+// Loop-var typing: rebinding inside body to wrong type is a
+// regular `TypeMismatch`; not specific to for-loops.
+// ============================================================
+
+#[test]
+fn i55_for_iter_str_phase_g_deferred() {
+    // str iteration is Phase G alongside iter protocol (ADR-0050b
+    // §"Iter source type checking"); rejected at M-F.3.1.
+    must_reject(
+        "for-iter-str",
+        "fn f() -> i64:\n    for c in \"hello\":\n        return 0\n    return 0\n",
+        Cat::NotIterable,
+    );
+}
+
+#[test]
+fn i56_for_iter_float() {
+    // f64 lands in Wave 2; here it's an unknown name + the iter
+    // source isn't a list. Cover the iter side specifically by
+    // calling a fn that returns i64 then iterating it.
+    must_reject(
+        "for-iter-i64-call",
+        "fn g() -> i64:\n    return 42\nfn f() -> i64:\n    for v in g():\n        return v\n    return 0\n",
+        Cat::NotIterable,
+    );
+}
+
+#[test]
+fn i57_for_iter_unknown_name() {
+    must_reject(
+        "for-iter-unknown",
+        "fn f() -> i64:\n    for v in undefined_iter:\n        return 0\n    return 0\n",
+        Cat::UnknownName,
+    );
+}
+
+#[test]
+fn i58_for_range_called_with_one_arg() {
+    // Inline range stub takes 2 args; calling with 1 is an arity
+    // mismatch.
+    must_reject(
+        "for-range-arity-1",
+        "fn range(a: i64, b: i64) -> List[i64]:\n    let xs: List[i64] = []\n    return xs\nfn f() -> i64:\n    for i in range(5):\n        return i\n    return 0\n",
+        Cat::ArityMismatch,
+    );
+}
+
+#[test]
+fn i59_for_range_called_with_three_args() {
+    // 3-arg range_step is deferred to Phase G per ADR-0050b.
+    must_reject(
+        "for-range-arity-3",
+        "fn range(a: i64, b: i64) -> List[i64]:\n    let xs: List[i64] = []\n    return xs\nfn f() -> i64:\n    for i in range(0, 10, 2):\n        return i\n    return 0\n",
+        Cat::ArityMismatch,
+    );
+}
+
+#[test]
+fn i60_for_range_with_str_args() {
+    // range expects i64 args.
+    must_reject(
+        "for-range-str-args",
+        "fn range(a: i64, b: i64) -> List[i64]:\n    let xs: List[i64] = []\n    return xs\nfn f() -> i64:\n    for i in range(\"a\", \"b\"):\n        return i\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i61_for_var_rebind_wrong_type() {
+    // Reassigning loop-var inside body to a string is a type-mismatch
+    // because var is bound to i64 (range element type).
+    must_reject(
+        "for-range-rebind-wrong",
+        "fn range(a: i64, b: i64) -> List[i64]:\n    let xs: List[i64] = []\n    return xs\nfn f() -> i64:\n    for i in range(0, 5):\n        i = \"oops\"\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i62_for_iter_tuple_heterogeneous() {
+    // Heterogeneous tuple isn't iterable (per existing iter_element).
+    must_reject(
+        "for-iter-tuple-hetero",
+        "fn f() -> i64:\n    let t = (1, \"two\")\n    for v in t:\n        return 0\n    return 0\n",
+        Cat::NotIterable,
+    );
+}

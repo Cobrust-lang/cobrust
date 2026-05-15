@@ -1,0 +1,39 @@
+# M-F.3.1 / ADR-0050b example — `for i in range(a, b):`
+#
+# range(a, b) materialises a list[i64] of (b - a) slots filled with
+# the values a, a+1, ..., b-1. Empty ranges (a >= b) skip the body.
+#
+# Usage:
+#   cobrust build examples/for_range.cb -o /tmp/for_range && /tmp/for_range
+#
+# Expected stdout (one int per line):
+#   0  1  2  3  4
+#   42
+#   3  4  5  6  7
+#   sum-of-0..10 = 45
+#
+# Constitution alignment:
+#   §1.1 — syntactically familiar to Python users
+#   §2.2 — no late closure binding; explicit per-iter rebinding
+
+fn main() -> i64:
+    # Basic forward range.
+    for i in range(0, 5):
+        print_int(i)
+
+    # Empty range — body skipped, sentinel printed.
+    for i in range(0, 0):
+        print_int(-1)
+    print_int(42)
+
+    # Non-zero start.
+    for i in range(3, 8):
+        print_int(i)
+
+    # Accumulator pattern.
+    let sum: i64 = 0
+    for i in range(0, 10):
+        sum = sum + i
+    print_int(sum)
+
+    return 0

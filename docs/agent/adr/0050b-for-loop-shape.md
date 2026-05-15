@@ -80,14 +80,17 @@ while __i < b:
 Add `range(a, b)` as a real prelude function body that materializes a `list[i64]`:
 
 ```cobrust
-fn range(a: i64, b: i64) -> list[i64]:
-    let mut xs: list[i64] = list_new(0)
-    let mut i: i64 = a
-    while i < b:
-        let _ = list_set(xs, i - a, i)
+fn range(start: i64, stop: i64) -> list[i64]:
+    let n: i64 = stop - start
+    let xs: list[i64] = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let _ = list_set(xs, i, start + i)
         i = i + 1
     return xs
 ```
+
+Note: Cobrust `let` is implicitly rebindable (no `mut` keyword); reassignment via `i = i + 1` is the canonical form (verified against `intrinsics_input.rs::test_t48_argv_iter_then_print_int`).
 
 (Implementation detail: `list_new` today allocates a capacity but does not size; the body uses `list_push`-equivalent via `list_set` indexed assignment, growing via the W2 Phase 3 list ABI. Actual emitted prelude body is the working form, not the sketch above; see §"Implementation map" for the exact text.)
 
@@ -196,11 +199,12 @@ Optional; ships if cheap. Prelude body:
 fn range_step(a: i64, b: i64, step: i64) -> list[i64]:
     # Cobrust precondition: step > 0; step <= 0 panics via division-by-zero
     # shape (no panic primitive in M-F.3.1; surface as TypeError if zero).
-    let mut xs: list[i64] = list_new(0)
-    let mut i: i64 = a
-    while i < b:
-        let _ = list_set(xs, (i - a) / step, i)
-        i = i + step
+    let n: i64 = (b - a) / step
+    let xs: list[i64] = list_new(n)
+    let i: i64 = 0
+    while i < n:
+        let _ = list_set(xs, i, a + i * step)
+        i = i + 1
     return xs
 ```
 
