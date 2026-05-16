@@ -715,6 +715,19 @@ unsafe fn dict_layout<'a>(dict: *mut u8) -> Option<&'a mut DictLayout> {
     }
 }
 
+/// Mirror of `fmt::StringBuffer`'s layout for cross-module casts.
+///
+/// `fmt::StringBuffer` is module-private inside `crates/cobrust-stdlib/
+/// src/fmt.rs`; we re-declare the shape here so the dict shims can
+/// safely read the bytes via a `*mut u8 → *const StrBufRef` cast.
+/// Phase G can consolidate these by hoisting `StringBuffer` to a
+/// shared `pub(crate)` location, but Phase F.3 keeps it local to
+/// avoid cross-module API churn.
+#[repr(C)]
+struct StrBufRef {
+    bytes: Vec<u8>,
+}
+
 /// Read the UTF-8 bytes from a `StringBuffer`-shape pointer.
 ///
 /// The runtime str ABI (per `crates/cobrust-stdlib/src/fmt.rs`) is
@@ -731,12 +744,6 @@ unsafe fn dict_layout<'a>(dict: *mut u8) -> Option<&'a mut DictLayout> {
 unsafe fn read_str_buffer(s: *mut u8) -> String {
     if s.is_null() {
         return String::new();
-    }
-    // Mirror `fmt::StringBuffer`'s layout. We can't import the type
-    // (it's `pub(crate)` in `fmt`), so we use a local clone.
-    #[repr(C)]
-    struct StrBufRef {
-        bytes: Vec<u8>,
     }
     // SAFETY: caller-attestation per `# Safety`.
     let buf = unsafe { &*s.cast::<StrBufRef>() };
@@ -755,11 +762,7 @@ fn alloc_str_buffer(payload: &str) -> *mut u8 {
     unsafe {
         let buf = crate::fmt::__cobrust_str_new();
         if !payload.is_empty() {
-            crate::fmt::__cobrust_str_push_static(
-                buf,
-                payload.as_ptr(),
-                payload.len() as i64,
-            );
+            crate::fmt::__cobrust_str_push_static(buf, payload.as_ptr(), payload.len() as i64);
         }
         buf
     }

@@ -1760,4 +1760,44 @@ grep -q -F 'M-F.3.4' "docs/agent/adr/0050d-dict-design.md" \
 grep -q 'fn dict_is_empty(d: dict\[i64, i64\]) -> bool' "crates/cobrust-cli/src/build.rs" \
     || fail "M-F.3.4 dict_is_empty PRELUDE stub missing from build.rs"
 
+# Sub-sprint c+d (ADR-0050d) — indexmap backing + typed (K, V) shims +
+# polymorphic len(d) builtin. The doc-coverage gate locks every new
+# surface term so a future re-write can't silently drop it.
+# 1. Workspace + stdlib must depend on indexmap (Decision 6A).
+grep -q -F 'indexmap = "2"' "Cargo.toml" \
+    || fail "M-F.3.4 sub-sprint d: 'indexmap = \"2\"' missing from workspace Cargo.toml (Decision 6A)"
+grep -q -F 'indexmap = { workspace = true }' "crates/cobrust-stdlib/Cargo.toml" \
+    || fail "M-F.3.4 sub-sprint d: 'indexmap = { workspace = true }' missing from cobrust-stdlib/Cargo.toml"
+# 2. New stdlib symbols (typed shims + helpers).
+mf34d_stdlib_symbols=(
+    '__cobrust_dict_set_i64_i64'
+    '__cobrust_dict_get_i64_i64'
+    '__cobrust_dict_contains_i64'
+    '__cobrust_dict_set_i64_str'
+    '__cobrust_dict_get_i64_str'
+    '__cobrust_dict_set_str_i64'
+    '__cobrust_dict_get_str_i64'
+    '__cobrust_dict_contains_str'
+    '__cobrust_dict_set_str_str'
+    '__cobrust_dict_get_str_str'
+    'KeyEnum'
+    'ValueEnum'
+    'DictLayout'
+)
+for sym in "${mf34d_stdlib_symbols[@]}"; do
+    grep -q -F "$sym" "crates/cobrust-stdlib/src/collections.rs" \
+        || fail "M-F.3.4 sub-sprint d: '${sym}' symbol missing from collections.rs"
+done
+# 3. agent stdlib.md must mention indexmap + at least one typed shim.
+grep -q -F 'indexmap::IndexMap' "docs/agent/modules/stdlib.md" \
+    || fail "M-F.3.4 sub-sprint d: 'indexmap::IndexMap' anchor missing from docs/agent/modules/stdlib.md"
+grep -q -F '__cobrust_dict_set_str_i64' "docs/agent/modules/stdlib.md" \
+    || fail "M-F.3.4 sub-sprint d: '__cobrust_dict_set_str_i64' shim missing from docs/agent/modules/stdlib.md"
+# 4. PRELUDE must declare the polymorphic len(d) stub.
+grep -q 'fn len(d: dict\[i64, i64\]) -> i64' "crates/cobrust-cli/src/build.rs" \
+    || fail "M-F.3.4 sub-sprint c/d: 'len(d)' polymorphic PRELUDE stub missing from build.rs"
+# 5. codegen must declare the typed shim signatures.
+grep -q -F '__cobrust_dict_set_i64_str' "crates/cobrust-codegen/src/cranelift_backend.rs" \
+    || fail "M-F.3.4 sub-sprint d: '__cobrust_dict_set_i64_str' signature missing from cranelift_backend.rs"
+
 echo "doc-coverage: M-F.3.4 dict surface checks passed"
