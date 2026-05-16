@@ -102,7 +102,9 @@ unsafe fn str_buf_to_string(buf: *mut u8) -> String {
     assert!(!ptr.is_null(), "non-empty Str must have non-null ptr");
     // SAFETY: ptr/len describe a UTF-8 slice owned by the Str buffer.
     let slice = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-    std::str::from_utf8(slice).expect("Str payload is UTF-8").to_string()
+    std::str::from_utf8(slice)
+        .expect("Str payload is UTF-8")
+        .to_string()
 }
 
 unsafe fn alloc_str_buf(bytes: &[u8]) -> *mut u8 {
@@ -304,7 +306,11 @@ fn d06_str_clone_empty_returns_valid_empty_str() {
             empty as usize, cloned as usize,
             "clone must allocate a fresh pointer even when source is empty"
         );
-        assert_eq!(__cobrust_str_len(cloned), 0, "cloned empty Str has length 0");
+        assert_eq!(
+            __cobrust_str_len(cloned),
+            0,
+            "cloned empty Str has length 0"
+        );
 
         __cobrust_str_drop(empty);
         __cobrust_str_drop(cloned);
@@ -335,11 +341,7 @@ fn d08_list_is_empty_returns_0_for_non_empty() {
         __cobrust_list_set(list, 0, 100);
         __cobrust_list_set(list, 1, 200);
         __cobrust_list_set(list, 2, 300);
-        assert_eq!(
-            __cobrust_list_is_empty(list),
-            0,
-            "non-empty list returns 0"
-        );
+        assert_eq!(__cobrust_list_is_empty(list), 0, "non-empty list returns 0");
         __cobrust_list_drop(list);
     }
 }

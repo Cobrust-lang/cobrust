@@ -281,7 +281,10 @@ fn f3ls06_argv_iter_zero_extra_args() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, run_stderr) = run_exe(&exe, &[], b"");
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
-    assert_eq!(stdout, "1\n", "expected argv length=1 (argv[0] only), got {stdout:?}");
+    assert_eq!(
+        stdout, "1\n",
+        "expected argv length=1 (argv[0] only), got {stdout:?}"
+    );
 }
 
 #[test]
@@ -295,9 +298,18 @@ fn f3ls07_argv_iter_user_args_print() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, run_stderr) = run_exe(&exe, &["one", "two", "three"], b"");
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
-    assert!(stdout.contains("one\n"), "missing 'one' in stdout: {stdout:?}");
-    assert!(stdout.contains("two\n"), "missing 'two' in stdout: {stdout:?}");
-    assert!(stdout.contains("three\n"), "missing 'three' in stdout: {stdout:?}");
+    assert!(
+        stdout.contains("one\n"),
+        "missing 'one' in stdout: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("two\n"),
+        "missing 'two' in stdout: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("three\n"),
+        "missing 'three' in stdout: {stdout:?}"
+    );
 }
 
 #[test]
@@ -328,7 +340,10 @@ fn f3ls09_argv_indexed_read_post_for_loop() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, run_stderr) = run_exe(&exe, &["userarg"], b"");
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
-    assert!(stdout.contains("userarg\n"), "missing 'userarg' in stdout: {stdout:?}");
+    assert!(
+        stdout.contains("userarg\n"),
+        "missing 'userarg' in stdout: {stdout:?}"
+    );
 }
 
 #[test]
@@ -340,11 +355,8 @@ fn f3ls10_argv_exit_zero_with_many_args() {
     );
     let (build_code, exe, build_stderr) = run_build_exe(&path);
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
-    let (run_code, stdout, run_stderr) = run_exe(
-        &exe,
-        &["a", "b", "c", "d", "e", "f", "g", "h"],
-        b"",
-    );
+    let (run_code, stdout, run_stderr) =
+        run_exe(&exe, &["a", "b", "c", "d", "e", "f", "g", "h"], b"");
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
     // 1 + 8 = 9
     assert_eq!(stdout, "9\n", "expected argc=9, got {stdout:?}");
@@ -367,8 +379,10 @@ fn f3ls11_argv_and_literal_independent_lifetimes() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, run_stderr) = run_exe(&exe, &[], b"");
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
-    assert!(stdout.contains("x\n") && stdout.contains("y\n"),
-        "expected x and y from literal, got {stdout:?}");
+    assert!(
+        stdout.contains("x\n") && stdout.contains("y\n"),
+        "expected x and y from literal, got {stdout:?}"
+    );
 }
 
 #[test]
@@ -383,10 +397,14 @@ fn f3ls12_iter_literal_then_iter_argv_no_corruption() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, run_stderr) = run_exe(&exe, &["user1"], b"");
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
-    assert!(stdout.starts_with("alpha\nbeta\n"),
-        "expected literal printed first, got {stdout:?}");
-    assert!(stdout.contains("user1\n"),
-        "expected argv[1] printed second, got {stdout:?}");
+    assert!(
+        stdout.starts_with("alpha\nbeta\n"),
+        "expected literal printed first, got {stdout:?}"
+    );
+    assert!(
+        stdout.contains("user1\n"),
+        "expected argv[1] printed second, got {stdout:?}"
+    );
 }
 
 #[test]
@@ -401,9 +419,14 @@ fn f3ls13_helper_fn_consumes_argv_caller_prints_literal() {
     let (run_code, stdout, run_stderr) = run_exe(&exe, &["x"], b"");
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
     // argc = 2, then literal a/b/c
-    assert!(stdout.starts_with("2\n"), "expected argc=2 first, got {stdout:?}");
-    assert!(stdout.contains("a\n") && stdout.contains("b\n") && stdout.contains("c\n"),
-        "expected literal a/b/c, got {stdout:?}");
+    assert!(
+        stdout.starts_with("2\n"),
+        "expected argc=2 first, got {stdout:?}"
+    );
+    assert!(
+        stdout.contains("a\n") && stdout.contains("b\n") && stdout.contains("c\n"),
+        "expected literal a/b/c, got {stdout:?}"
+    );
 }
 
 #[test]
@@ -419,7 +442,10 @@ fn f3ls14_iter_argv_using_helper() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, run_stderr) = run_exe(&exe, &[], b"");
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
-    assert_eq!(stdout, "from_helper\n", "expected from_helper, got {stdout:?}");
+    assert_eq!(
+        stdout, "from_helper\n",
+        "expected from_helper, got {stdout:?}"
+    );
 }
 
 #[test]
@@ -437,11 +463,20 @@ fn f3ls15_argv_iter_with_inner_literal_in_loop_body() {
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
     // For argv[0] + "X": two outer iterations × 3 inner each = 6 print lines.
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines.len(), 6,
-        "expected 6 lines (2 outer × 3 inner), got {} lines: {stdout:?}", lines.len());
-    assert!(stdout.contains("<<\n") && stdout.contains(">>\n"),
-        "expected << and >> markers, got {stdout:?}");
-    assert!(stdout.contains("X\n"), "expected user arg X, got {stdout:?}");
+    assert_eq!(
+        lines.len(),
+        6,
+        "expected 6 lines (2 outer × 3 inner), got {} lines: {stdout:?}",
+        lines.len()
+    );
+    assert!(
+        stdout.contains("<<\n") && stdout.contains(">>\n"),
+        "expected << and >> markers, got {stdout:?}"
+    );
+    assert!(
+        stdout.contains("X\n"),
+        "expected user arg X, got {stdout:?}"
+    );
 }
 
 // =====================================================================
@@ -460,7 +495,10 @@ fn f3ls16_two_independent_lists_no_cross_drop() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, _) = run_exe(&exe, &[], b"");
     assert_eq!(run_code, 0);
-    assert_eq!(stdout, "a\nb\nc\nd\n", "expected sequential prints, got {stdout:?}");
+    assert_eq!(
+        stdout, "a\nb\nc\nd\n",
+        "expected sequential prints, got {stdout:?}"
+    );
 }
 
 #[test]
@@ -476,7 +514,10 @@ fn f3ls17_same_literal_text_distinct_allocations() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, _) = run_exe(&exe, &[], b"");
     assert_eq!(run_code, 0);
-    assert_eq!(stdout, "dup\ndup\n", "expected dup printed twice, got {stdout:?}");
+    assert_eq!(
+        stdout, "dup\ndup\n",
+        "expected dup printed twice, got {stdout:?}"
+    );
 }
 
 #[test]
@@ -491,7 +532,10 @@ fn f3ls18_list_str_in_inner_scope_drops_at_block_exit() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, _) = run_exe(&exe, &[], b"");
     assert_eq!(run_code, 0);
-    assert_eq!(stdout, "inside\nafter\n", "expected inner then outer, got {stdout:?}");
+    assert_eq!(
+        stdout, "inside\nafter\n",
+        "expected inner then outer, got {stdout:?}"
+    );
 }
 
 #[test]
@@ -744,7 +788,10 @@ fn f3ls31_argv_explicit_drop_via_helper() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, run_stderr) = run_exe(&exe, &["p", "q"], b"");
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
-    assert_eq!(stdout, "3\n", "expected argc=3 (argv[0] + p + q), got {stdout:?}");
+    assert_eq!(
+        stdout, "3\n",
+        "expected argc=3 (argv[0] + p + q), got {stdout:?}"
+    );
 }
 
 #[test]
@@ -760,8 +807,10 @@ fn f3ls32_for_over_argv_in_helper_no_caller_leak() {
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
     let (run_code, stdout, run_stderr) = run_exe(&exe, &["one"], b"");
     assert_eq!(run_code, 0, "run failed; stderr={run_stderr}");
-    assert!(stdout.contains("one\n") && stdout.contains("END\n"),
-        "expected 'one' and 'END' in stdout, got {stdout:?}");
+    assert!(
+        stdout.contains("one\n") && stdout.contains("END\n"),
+        "expected 'one' and 'END' in stdout, got {stdout:?}"
+    );
 }
 
 #[test]
