@@ -601,108 +601,226 @@ pub unsafe extern "C" fn __cobrust_list_is_empty(list: *mut u8) -> i64 {
     i64::from(layout.len == 0)
 }
 
-// --- Dict<i64, i64> ---------------------------------------------------
+// --- Dict (typed C-ABI surface, ADR-0050d Decision 6A + 7A) -----------
+//
+// Backing storage: `indexmap::IndexMap<KeyEnum, ValueEnum>` (Decision
+// 6A). This gives Python-3.7+ insertion-order iteration for free. The
+// (K, V) shape is encoded in the symbol name (Decision 7A) and stored
+// as runtime tags so the iter machinery can dispatch keys/values
+// correctly. The legacy untyped `__cobrust_dict_set/get/len/drop`
+// symbols stay as i64,i64 aliases (M12.x backward compat).
+//
+// ADR-0050c interaction: Str keys + Str values are owned by the dict.
+// On `__cobrust_dict_set_*_str` the caller's `*mut u8` Str buffer is
+// consumed (we copy its bytes into a Rust `String`, then drop the
+// source via the codegen's standard drop schedule — the caller passes
+// `Move(str_local)` so the local is moved at MIR time). On
+// `__cobrust_dict_get_*_str` the dict returns a fresh `*mut u8` Str
+// buffer (deep-copy via the f-string runtime); the caller owns the
+// new buffer and drops it via `__cobrust_str_drop`.
+//
+// Equality between KeyEnum::I64 and KeyEnum::Str is structurally
+// disjoint: a dict instantiated as `Dict[i64, V]` only ever sees
+// `KeyEnum::I64` keys (the codegen never mixes them per the static
+// `K`-type dispatch), so the enum variant acts as a soundness witness.
 
-#[repr(C)]
-struct DictI64Layout {
-    map: *mut std::collections::HashMap<i64, i64>,
+use indexmap::IndexMap;
+
+/// Key shape stored inside the indexmap.
+///
+/// Per ADR-0050d Decision 7A the language admits `K ∈ {i64, str}` at
+/// Phase F.3. The codegen's type-dispatched shim always inserts the
+/// variant matching the static `K` type, so a runtime check is only
+/// a debug_assert! safety net for misuse.
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+enum KeyEnum {
+    I64(i64),
+    Str(String),
 }
 
-/// Allocate a new `Dict<i64, i64>` with reserved capacity for `len`
-/// entries.
+/// Value shape stored inside the indexmap.
+///
+/// `OpaquePtr` reserves the Phase G extension slot for `V ∈ {list[T],
+/// dict[K, V], record, ADT}` per ADR-0050d Decision 7A footnote; today
+/// the codegen never emits it (V ∈ {i64, str} only). The `Drop` impl
+/// below explicitly leaves `OpaquePtr` un-freed because the codegen's
+/// own drop schedule already owns the inner aggregate's `_drop` call.
+#[derive(Clone, Debug)]
+enum ValueEnum {
+    I64(i64),
+    Str(String),
+    #[allow(dead_code)] // reserved for Phase G nested aggregates
+    OpaquePtr(*mut u8),
+}
+
+/// Heap-allocated dict layout. `Box<DictLayout>` is the `*mut u8`
+/// exposed via the C-ABI.
+///
+/// `k_tag` and `v_tag` are encoded from `__cobrust_dict_new`'s
+/// `k_size` and `v_size` arguments:
+///
+/// - `0` → i64
+/// - `1` → str
+/// - `8` → i64 (M12.x backward-compat alias; raw byte-size of i64)
+///
+/// Anything else is treated as i64 (defensive default). Sub-sprint c
+/// callers (codegen Aggregate(Dict)) pass these tags based on the
+/// static `Ty::Dict(K, V)` derived from the type checker.
+#[repr(C)]
+struct DictLayout {
+    map: Box<IndexMap<KeyEnum, ValueEnum>>,
+    k_tag: i64,
+    v_tag: i64,
+}
+
+/// Internal tag values for `KeyEnum` / `ValueEnum` dispatch.
+const K_TAG_I64: i64 = 0;
+const K_TAG_STR: i64 = 1;
+const V_TAG_I64: i64 = 0;
+const V_TAG_STR: i64 = 1;
+
+#[inline]
+fn normalize_k_tag(raw: i64) -> i64 {
+    match raw {
+        K_TAG_STR => K_TAG_STR,
+        // Defensive default: anything that isn't explicitly the str
+        // tag (1) is treated as i64. The M12.x legacy callers pass
+        // `8` (sizeof(i64)) which maps to i64 here.
+        _ => K_TAG_I64,
+    }
+}
+
+#[inline]
+fn normalize_v_tag(raw: i64) -> i64 {
+    match raw {
+        V_TAG_STR => V_TAG_STR,
+        _ => V_TAG_I64,
+    }
+}
+
+/// Cast a `*mut u8` dict pointer back to a borrowed `DictLayout`.
+///
+/// Returns `None` for null pointers.
+///
+/// # Safety
+///
+/// `dict` must be a pointer previously returned by
+/// `__cobrust_dict_new` (or any typed variant) and not yet dropped.
+unsafe fn dict_layout<'a>(dict: *mut u8) -> Option<&'a mut DictLayout> {
+    if dict.is_null() {
+        None
+    } else {
+        // SAFETY: caller-attestation per `# Safety`.
+        Some(unsafe { &mut *dict.cast::<DictLayout>() })
+    }
+}
+
+/// Read the UTF-8 bytes from a `StringBuffer`-shape pointer.
+///
+/// The runtime str ABI (per `crates/cobrust-stdlib/src/fmt.rs`) is
+/// `#[repr(C)] struct StringBuffer { bytes: Vec<u8> }`. The codegen
+/// allocates these via `__cobrust_str_new` + `_push_static` for
+/// literals; we read the bytes here and copy them into an owned
+/// `String` for storage inside `KeyEnum::Str` / `ValueEnum::Str`.
+///
+/// # Safety
+///
+/// `s` must be a non-null pointer to a valid `StringBuffer`-shape
+/// allocation as produced by the f-string runtime, OR null (returns
+/// empty string).
+unsafe fn read_str_buffer(s: *mut u8) -> String {
+    if s.is_null() {
+        return String::new();
+    }
+    // Mirror `fmt::StringBuffer`'s layout. We can't import the type
+    // (it's `pub(crate)` in `fmt`), so we use a local clone.
+    #[repr(C)]
+    struct StrBufRef {
+        bytes: Vec<u8>,
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let buf = unsafe { &*s.cast::<StrBufRef>() };
+    String::from_utf8_lossy(&buf.bytes).into_owned()
+}
+
+/// Allocate a fresh `*mut u8` Str buffer containing `payload`.
+///
+/// Mirrors the codegen's f-string runtime path: allocate via
+/// `__cobrust_str_new`, push the payload bytes, return the opaque
+/// pointer. The caller owns the buffer and must eventually drop it
+/// via `__cobrust_str_drop`.
+fn alloc_str_buffer(payload: &str) -> *mut u8 {
+    // SAFETY: __cobrust_str_new is a fresh allocation; push_static
+    // sees a valid (ptr, len) slice owned by the caller (the &str).
+    unsafe {
+        let buf = crate::fmt::__cobrust_str_new();
+        if !payload.is_empty() {
+            crate::fmt::__cobrust_str_push_static(
+                buf,
+                payload.as_ptr(),
+                payload.len() as i64,
+            );
+        }
+        buf
+    }
+}
+
+/// Allocate a new dict. `k_size`/`v_size` encode the K/V type tag
+/// (see `K_TAG_*` / `V_TAG_*` consts). `len` is the reserved entry
+/// capacity hint. Returns a `*mut u8` that the caller must eventually
+/// pass to `__cobrust_dict_drop`.
 ///
 /// # Safety
 ///
 /// Caller must eventually pass the result to
 /// [`__cobrust_dict_drop`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __cobrust_dict_new(_k_size: i64, _v_size: i64, len: i64) -> *mut u8 {
+pub unsafe extern "C" fn __cobrust_dict_new(k_size: i64, v_size: i64, len: i64) -> *mut u8 {
     let cap = len.max(0) as usize;
-    let m: std::collections::HashMap<i64, i64> = std::collections::HashMap::with_capacity(cap);
-    let layout = Box::new(DictI64Layout {
-        map: Box::into_raw(Box::new(m)),
+    let map: IndexMap<KeyEnum, ValueEnum> = IndexMap::with_capacity(cap);
+    let layout = Box::new(DictLayout {
+        map: Box::new(map),
+        k_tag: normalize_k_tag(k_size),
+        v_tag: normalize_v_tag(v_size),
     });
     Box::into_raw(layout).cast::<u8>()
 }
 
-/// Insert / replace `dict[k] = v`.
-///
-/// # Safety
-///
-/// `dict` must be a non-null pointer returned by
-/// [`__cobrust_dict_new`] and not yet dropped.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __cobrust_dict_set(dict: *mut u8, k: i64, v: i64) {
-    if dict.is_null() {
-        return;
-    }
-    // SAFETY: caller-attestation per `# Safety`.
-    let layout = unsafe { &*dict.cast::<DictI64Layout>() };
-    if layout.map.is_null() {
-        return;
-    }
-    // SAFETY: map pointer is owned by the layout.
-    let map = unsafe { &mut *layout.map };
-    map.insert(k, v);
-}
-
-/// Read `dict[k]`. Returns 0 if absent.
-///
-/// # Safety
-///
-/// Same as [`__cobrust_dict_set`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __cobrust_dict_get(dict: *mut u8, k: i64) -> i64 {
-    if dict.is_null() {
-        return 0;
-    }
-    // SAFETY: caller-attestation per `# Safety`.
-    let layout = unsafe { &*dict.cast::<DictI64Layout>() };
-    if layout.map.is_null() {
-        return 0;
-    }
-    // SAFETY: map pointer is owned.
-    let map = unsafe { &*layout.map };
-    map.get(&k).copied().unwrap_or(0)
-}
-
-/// Read `dict.len()`.
-///
-/// # Safety
-///
-/// Same as [`__cobrust_dict_set`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __cobrust_dict_len(dict: *mut u8) -> i64 {
-    if dict.is_null() {
-        return 0;
-    }
-    // SAFETY: caller-attestation per `# Safety`.
-    let layout = unsafe { &*dict.cast::<DictI64Layout>() };
-    if layout.map.is_null() {
-        return 0;
-    }
-    // SAFETY: map pointer is owned.
-    let map = unsafe { &*layout.map };
-    map.len() as i64
-}
-
 /// Drop a dict (free entries + free the layout).
 ///
+/// Per ADR-0050c §"Phase 3" Str-key/Str-value ownership: every
+/// `KeyEnum::Str` / `ValueEnum::Str` inside the dict owns its String
+/// (we copied the bytes in at insert time), so Rust's `Drop` impl
+/// for `IndexMap<KeyEnum, ValueEnum>` reclaims them for free here.
+/// `ValueEnum::OpaquePtr` is left un-freed by design — the codegen's
+/// outer drop schedule owns the inner aggregate's `_drop`.
+///
 /// # Safety
 ///
-/// Same as [`__cobrust_dict_set`].
+/// `dict` must be a pointer returned by [`__cobrust_dict_new`] and
+/// not yet dropped, OR null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_dict_drop(dict: *mut u8) {
     if dict.is_null() {
         return;
     }
     // SAFETY: caller-attestation per `# Safety`.
-    let layout = unsafe { Box::from_raw(dict.cast::<DictI64Layout>()) };
-    if !layout.map.is_null() {
-        // SAFETY: map pointer is owned.
-        let _ = unsafe { Box::from_raw(layout.map) };
-    }
+    let layout = unsafe { Box::from_raw(dict.cast::<DictLayout>()) };
     drop(layout);
+}
+
+/// Read `dict.len()`.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract, OR null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_len(dict: *mut u8) -> i64 {
+    // SAFETY: caller-attestation per `# Safety`.
+    match unsafe { dict_layout(dict) } {
+        None => 0,
+        Some(layout) => layout.map.len() as i64,
+    }
 }
 
 /// Returns 1 if the dict is empty (`len == 0`), 0 otherwise. NULL is
@@ -711,31 +829,226 @@ pub unsafe extern "C" fn __cobrust_dict_drop(dict: *mut u8) {
 /// ADR-0050d Decision 5 addendum — Phase F.3 `dict.is_empty()`
 /// predicate. Constitution §2.2 forbids implicit truthy/falsy, so
 /// `if d:` is rejected at type-check; `dict_is_empty(d)` is the
-/// canonical replacement. Mirrors `__cobrust_list_is_empty` shape
-/// (i64 0/1 per the SwitchInt codegen convention).
-///
-/// M12.x stub-compatibility note: the Phase F.3 backing is the
-/// `__cobrust_dict_*` `HashMap<i64, i64>` shim — sub-sprint d swaps
-/// to `indexmap::IndexMap<KeyEnum, ValueEnum>` honest backing without
-/// breaking this signature.
+/// canonical replacement.
 ///
 /// # Safety
 ///
-/// `dict` must be a non-null pointer returned by
-/// [`__cobrust_dict_new`] and not yet dropped, OR `dict` may be NULL.
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract, OR null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_dict_is_empty(dict: *mut u8) -> i64 {
-    if dict.is_null() {
-        return 1;
-    }
     // SAFETY: caller-attestation per `# Safety`.
-    let layout = unsafe { &*dict.cast::<DictI64Layout>() };
-    if layout.map.is_null() {
-        return 1;
+    match unsafe { dict_layout(dict) } {
+        None => 1,
+        Some(layout) => i64::from(layout.map.is_empty()),
     }
-    // SAFETY: map pointer is owned.
-    let map = unsafe { &*layout.map };
-    i64::from(map.is_empty())
+}
+
+// ---- (i64, i64) typed shims --------------------------------------
+
+/// Insert / rebind `dict[k] = v` where K=i64, V=i64.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_set_i64_i64(dict: *mut u8, k: i64, v: i64) {
+    // SAFETY: caller-attestation per `# Safety`.
+    if let Some(layout) = unsafe { dict_layout(dict) } {
+        layout.map.insert(KeyEnum::I64(k), ValueEnum::I64(v));
+    }
+}
+
+/// Read `dict[k]` where K=i64, V=i64. Returns 0 sentinel if absent
+/// (matches M12.x legacy contract; new codegen branches on a
+/// `__cobrust_dict_contains_i64_i64` first per ADR-0050d Decision 2A).
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_get_i64_i64(dict: *mut u8, k: i64) -> i64 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let Some(layout) = (unsafe { dict_layout(dict) }) else {
+        return 0;
+    };
+    match layout.map.get(&KeyEnum::I64(k)) {
+        Some(ValueEnum::I64(v)) => *v,
+        _ => 0,
+    }
+}
+
+/// `k in dict` where K=i64. Returns 0/1.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_contains_i64(dict: *mut u8, k: i64) -> i64 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let Some(layout) = (unsafe { dict_layout(dict) }) else {
+        return 0;
+    };
+    i64::from(layout.map.contains_key(&KeyEnum::I64(k)))
+}
+
+// ---- (i64, str) typed shims --------------------------------------
+
+/// Insert / rebind `dict[k] = v` where K=i64, V=str.
+///
+/// The caller's `v` Str buffer is consumed (we copy its bytes into
+/// an owned `String`). The codegen passes `v` as `Move(local)` so
+/// the source local is invalidated at MIR time; the drop schedule
+/// owns the eventual `__cobrust_str_drop` for the source.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract.
+/// `v` must be a valid `StringBuffer`-shape pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_set_i64_str(dict: *mut u8, k: i64, v: *mut u8) {
+    // SAFETY: caller-attestation per `# Safety`.
+    if let Some(layout) = unsafe { dict_layout(dict) } {
+        let owned = unsafe { read_str_buffer(v) };
+        layout.map.insert(KeyEnum::I64(k), ValueEnum::Str(owned));
+    }
+}
+
+/// Read `dict[k]` where K=i64, V=str. Returns a fresh `*mut u8` Str
+/// buffer (caller-owned, must `__cobrust_str_drop` it). Returns null
+/// on missing key (the codegen's panic-on-missing path branches on
+/// `__cobrust_dict_contains_i64` first; the null return is a defensive
+/// fallback to prevent a use-after-free regression).
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_get_i64_str(dict: *mut u8, k: i64) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let Some(layout) = (unsafe { dict_layout(dict) }) else {
+        return std::ptr::null_mut();
+    };
+    match layout.map.get(&KeyEnum::I64(k)) {
+        Some(ValueEnum::Str(s)) => alloc_str_buffer(s),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+// ---- (str, i64) typed shims --------------------------------------
+
+/// Insert / rebind `dict[k] = v` where K=str, V=i64.
+///
+/// The caller's `k` Str buffer is consumed (we copy its bytes into
+/// an owned `String`). Caller-side drop schedule per ADR-0050c §"Phase
+/// 3" Move semantics.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract.
+/// `k` must be a valid `StringBuffer`-shape pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_set_str_i64(dict: *mut u8, k: *mut u8, v: i64) {
+    // SAFETY: caller-attestation per `# Safety`.
+    if let Some(layout) = unsafe { dict_layout(dict) } {
+        let key = unsafe { read_str_buffer(k) };
+        layout.map.insert(KeyEnum::Str(key), ValueEnum::I64(v));
+    }
+}
+
+/// Read `dict[k]` where K=str, V=i64.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_get_str_i64(dict: *mut u8, k: *mut u8) -> i64 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let Some(layout) = (unsafe { dict_layout(dict) }) else {
+        return 0;
+    };
+    let key = unsafe { read_str_buffer(k) };
+    match layout.map.get(&KeyEnum::Str(key)) {
+        Some(ValueEnum::I64(v)) => *v,
+        _ => 0,
+    }
+}
+
+/// `k in dict` where K=str. Returns 0/1.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_contains_str(dict: *mut u8, k: *mut u8) -> i64 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let Some(layout) = (unsafe { dict_layout(dict) }) else {
+        return 0;
+    };
+    let key = unsafe { read_str_buffer(k) };
+    i64::from(layout.map.contains_key(&KeyEnum::Str(key)))
+}
+
+// ---- (str, str) typed shims --------------------------------------
+
+/// Insert / rebind `dict[k] = v` where K=str, V=str.
+///
+/// Both `k` and `v` are consumed (bytes copied into owned Strings).
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract.
+/// `k` / `v` must be valid `StringBuffer` pointers or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_set_str_str(dict: *mut u8, k: *mut u8, v: *mut u8) {
+    // SAFETY: caller-attestation per `# Safety`.
+    if let Some(layout) = unsafe { dict_layout(dict) } {
+        let key = unsafe { read_str_buffer(k) };
+        let val = unsafe { read_str_buffer(v) };
+        layout.map.insert(KeyEnum::Str(key), ValueEnum::Str(val));
+    }
+}
+
+/// Read `dict[k]` where K=str, V=str. Returns a fresh Str buffer
+/// (caller-owned).
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_get_str_str(dict: *mut u8, k: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let Some(layout) = (unsafe { dict_layout(dict) }) else {
+        return std::ptr::null_mut();
+    };
+    let key = unsafe { read_str_buffer(k) };
+    match layout.map.get(&KeyEnum::Str(key)) {
+        Some(ValueEnum::Str(s)) => alloc_str_buffer(s),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+// ---- Legacy untyped aliases (M12.x backward compat) --------------
+
+/// Legacy untyped insert — aliased to `__cobrust_dict_set_i64_i64`.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_dict_set_i64_i64`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_set(dict: *mut u8, k: i64, v: i64) {
+    // SAFETY: caller-attestation.
+    unsafe { __cobrust_dict_set_i64_i64(dict, k, v) }
+}
+
+/// Legacy untyped get — aliased to `__cobrust_dict_get_i64_i64`.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_dict_get_i64_i64`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_get(dict: *mut u8, k: i64) -> i64 {
+    // SAFETY: caller-attestation.
+    unsafe { __cobrust_dict_get_i64_i64(dict, k) }
 }
 
 // --- Set<i64> --------------------------------------------------------
@@ -1293,6 +1606,131 @@ mod tests {
         unsafe {
             let d = __cobrust_dict_new(8, 8, 0);
             assert_eq!(__cobrust_dict_get(d, 42), 0);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    // ADR-0050d sub-sprint d — typed (K, V) shim coverage.
+
+    #[test]
+    fn cabi_dict_i64_i64_typed_roundtrip() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_I64, V_TAG_I64, 3);
+            __cobrust_dict_set_i64_i64(d, 1, 10);
+            __cobrust_dict_set_i64_i64(d, 2, 20);
+            __cobrust_dict_set_i64_i64(d, 3, 30);
+            assert_eq!(__cobrust_dict_get_i64_i64(d, 1), 10);
+            assert_eq!(__cobrust_dict_get_i64_i64(d, 2), 20);
+            assert_eq!(__cobrust_dict_get_i64_i64(d, 3), 30);
+            assert_eq!(__cobrust_dict_contains_i64(d, 2), 1);
+            assert_eq!(__cobrust_dict_contains_i64(d, 99), 0);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_str_i64_typed_roundtrip() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_STR, V_TAG_I64, 2);
+            // Build a "k1" Str buffer.
+            let k1 = alloc_str_buffer("apple");
+            let k2 = alloc_str_buffer("banana");
+            __cobrust_dict_set_str_i64(d, k1, 1);
+            __cobrust_dict_set_str_i64(d, k2, 2);
+            // After set, the dict owns its KeyEnum::Str copy; the
+            // caller's source buffers (k1/k2) are still drop-eligible
+            // and we free them per ADR-0050c § Move semantic.
+            crate::fmt::__cobrust_str_drop(k1);
+            crate::fmt::__cobrust_str_drop(k2);
+            let lookup1 = alloc_str_buffer("apple");
+            assert_eq!(__cobrust_dict_get_str_i64(d, lookup1), 1);
+            crate::fmt::__cobrust_str_drop(lookup1);
+            let lookup2 = alloc_str_buffer("banana");
+            assert_eq!(__cobrust_dict_get_str_i64(d, lookup2), 2);
+            assert_eq!(__cobrust_dict_contains_str(d, lookup2), 1);
+            crate::fmt::__cobrust_str_drop(lookup2);
+            let missing = alloc_str_buffer("missing");
+            assert_eq!(__cobrust_dict_contains_str(d, missing), 0);
+            crate::fmt::__cobrust_str_drop(missing);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_str_str_typed_roundtrip() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_STR, V_TAG_STR, 1);
+            let k = alloc_str_buffer("hello");
+            let v = alloc_str_buffer("world");
+            __cobrust_dict_set_str_str(d, k, v);
+            crate::fmt::__cobrust_str_drop(k);
+            crate::fmt::__cobrust_str_drop(v);
+            let lookup = alloc_str_buffer("hello");
+            let got = __cobrust_dict_get_str_str(d, lookup);
+            assert!(!got.is_null(), "str_str get returned null");
+            // Read back via str_len + buffer bytes.
+            let buf = read_str_buffer(got);
+            assert_eq!(buf, "world");
+            crate::fmt::__cobrust_str_drop(got);
+            crate::fmt::__cobrust_str_drop(lookup);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_i64_str_typed_roundtrip() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_I64, V_TAG_STR, 1);
+            let v = alloc_str_buffer("tag");
+            __cobrust_dict_set_i64_str(d, 42, v);
+            crate::fmt::__cobrust_str_drop(v);
+            let got = __cobrust_dict_get_i64_str(d, 42);
+            assert!(!got.is_null());
+            assert_eq!(read_str_buffer(got), "tag");
+            crate::fmt::__cobrust_str_drop(got);
+            // Missing key returns null.
+            let missing = __cobrust_dict_get_i64_str(d, 99);
+            assert!(missing.is_null());
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_indexmap_insertion_order_preserved() {
+        // ADR-0050d Decision 6A: indexmap preserves insertion order
+        // for keys/values/items iteration. Verify by inserting in
+        // a deliberately-non-numeric order and walking the underlying
+        // IndexMap (visible via the impl) — for the C-ABI surface
+        // the iter shims arrive in Phase F.3 sub-sprint e; here we
+        // exercise the backing-store guarantee via raw cast.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_I64, V_TAG_I64, 0);
+            __cobrust_dict_set_i64_i64(d, 3, 30);
+            __cobrust_dict_set_i64_i64(d, 1, 10);
+            __cobrust_dict_set_i64_i64(d, 2, 20);
+            let layout = &*d.cast::<DictLayout>();
+            let keys: Vec<KeyEnum> = layout.map.keys().cloned().collect();
+            assert_eq!(
+                keys,
+                vec![KeyEnum::I64(3), KeyEnum::I64(1), KeyEnum::I64(2)],
+                "indexmap must preserve insertion order"
+            );
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_is_empty_typed() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_I64, V_TAG_I64, 0);
+            assert_eq!(__cobrust_dict_is_empty(d), 1);
+            __cobrust_dict_set_i64_i64(d, 1, 10);
+            assert_eq!(__cobrust_dict_is_empty(d), 0);
             __cobrust_dict_drop(d);
         }
     }
