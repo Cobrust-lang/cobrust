@@ -468,6 +468,10 @@ fn norm_expr(e: &Expr) -> Expr {
         ast::ExprKind::Yield(None) => ast::ExprKind::Yield(None),
         ast::ExprKind::Yield(Some(e)) => ast::ExprKind::Yield(Some(Box::new(norm_expr(&e)))),
         ast::ExprKind::YieldFrom(e) => ast::ExprKind::YieldFrom(Box::new(norm_expr(&e))),
+        ast::ExprKind::Cast { expr, target } => ast::ExprKind::Cast {
+            expr: Box::new(norm_expr(&expr)),
+            target,
+        },
     };
     Expr { kind, span: ZERO }
 }

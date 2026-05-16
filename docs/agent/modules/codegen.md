@@ -360,6 +360,20 @@ Per ADR-0025 §"Codegen amendments":
 - Cross-compilation matrix beyond x86_64 + aarch64.
 - WASM target (Phase F).
 
+## M-F.3.3 — f64 and `as`-cast codegen (ADR-0050 §A1)
+
+| Feature | Location | Notes |
+|---|---|---|
+| `runtime_helper_signatures` math shims | `cranelift_backend.rs` — 11 new entries: `__cobrust_math_sqrt` … `__cobrust_math_exp` all `(f64) -> f64`; `__cobrust_math_pow` is `(f64, f64) -> f64` | M-F.3.3 gap (b) |
+| `__cobrust_fmt_float_prec` signature | `cranelift_backend.rs` — `(buf: ptr, val: f64, spec_ptr: ptr, spec_len: i64) -> void` | M-F.3.3 gap (c) |
+| `lower_aggregate_format_string` FMTSPEC | `cranelift_backend.rs` — detects `Constant::Str("FMTSPEC:<spec>")` sentinel after a float operand; routes to `__cobrust_fmt_float_prec` | M-F.3.3 gap (c) |
+| FormatString Str intern scan | `cranelift_backend.rs` — scans `Rvalue::Aggregate(FormatString, ..)` operands in pre-pass to intern their Constant::Str payloads (including FMTSPEC sentinels and bare specs) | M-F.3.3 gap (c) |
+| `inferred_locals` math call resolution | existing `runtime_helper_return_types` map — now includes math shim entries so `_callret` locals for math calls get inferred as `F64` | M-F.3.3 gap (b) |
+
+Invariants:
+- Math shim args are passed as `f64` directly (not via `coerce_to_i64` path); the codegen `lower_terminator` passes operands via `lower_operand` which preserves float types.
+- The FMTSPEC sentinel string must be interned in the pre-pass; `materialize_str_data` fails if called with an uninternded payload.
+
 ## Cross-references
 
 - `adr:0023` — backend feature flags, ABI, linker delegation,
@@ -368,6 +382,7 @@ Per ADR-0025 §"Codegen amendments":
 - `adr:0020` — MIR shape; M9 is the consumer.
 - `adr:0012` — "translate the surface, bind the core"; Cranelift +
   inkwell are bound, not reimplemented.
+- `adr:0050` §A1 — M-F.3.3 f64 gap table.
 - `mod:mir` — input.
 - `mod:cli` — future M10 consumer of `emit`.
 - Constitution `CLAUDE.md` §4.1 (compiler layers), §5.3 (efficient:

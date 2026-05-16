@@ -165,10 +165,25 @@ Test corpus: `crates/cobrust-types/tests/break_continue_types_corpus.rs`
 nested-fn boundary (b13/b14), while-else boundary (b11/b12), and
 deep nesting (a09 at 5 levels).
 
+## M-F.3.3 — f64 and `as`-cast type-checking (ADR-0050 §A1)
+
+| Feature | Location | Notes |
+|---|---|---|
+| `synth_expr` Cast arm | `types/src/check.rs` `synth_expr` | resolves `ExprKind::Cast { expr, target }` by name-matching `target` |
+| Allowed cast pairs | `i64 → f64`, `f64 → i64` | constitution §2.2: no bool→f64, no str→anything |
+| Rejected cast pairs | all others | `TypeError::TypeMismatch { expected, actual, span }` |
+| `finalize` usage | `types/src/infer.rs` `finalize(&from_ty, &subst, span)` | resolves any inference vars before the pair check |
+| `lower_named_type("f64")` | `types/src/check.rs` | maps `"f64"` → `Ty::Float`; `"i64"` → `Ty::Int` |
+
+Invariants:
+- Cast type-checking resolves the TARGET type from the raw AST type name (not via HIR type-lowering, since the HIR type is an AST `Type`).
+- `bool → f64` is rejected (only `bool → i64` via `BoolToInt` CastKind — not surfaced in source yet).
+
 ## Cross-references
 
 - `adr:0006` — type system shape + inference + proof obligations.
 - `adr:0050a` — break/continue contract seal (loop scope discipline).
+- `adr:0050` §A1 — M-F.3.3 f64 gap table.
 - `mod:hir` — input.
 - `mod:mir` — downstream consumer (M3+).
 - Constitution `CLAUDE.md` §2.2 (drop `is`, drop implicit truthiness),

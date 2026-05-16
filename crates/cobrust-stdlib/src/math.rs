@@ -69,6 +69,93 @@ pub fn round(x: f64) -> f64 {
     x.round()
 }
 
+/// Natural logarithm. NaN if `x < 0`, -∞ if `x == 0`.
+pub fn log(x: f64) -> f64 {
+    x.ln()
+}
+
+/// `eˣ`.
+pub fn exp(x: f64) -> f64 {
+    x.exp()
+}
+
+/// `tan(x)` (radians).
+pub fn tan(x: f64) -> f64 {
+    x.tan()
+}
+
+// =====================================================================
+// C-ABI shims — M-F.3.3 gap (b) intrinsic-rewrite targets.
+// Each exported symbol matches the `__cobrust_math_*` name in
+// `crates/cobrust-cli/src/build/intrinsics.rs`.
+// =====================================================================
+
+/// `sqrt(x) -> f64` C-ABI shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_sqrt(x: f64) -> f64 {
+    x.sqrt()
+}
+
+/// `floor(x) -> f64` C-ABI shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_floor(x: f64) -> f64 {
+    x.floor()
+}
+
+/// `ceil(x) -> f64` C-ABI shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_ceil(x: f64) -> f64 {
+    x.ceil()
+}
+
+/// `round(x) -> f64` C-ABI shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_round(x: f64) -> f64 {
+    x.round()
+}
+
+/// `abs(x) -> f64` C-ABI shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_abs(x: f64) -> f64 {
+    x.abs()
+}
+
+/// `pow(base, exp) -> f64` C-ABI shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_pow(base: f64, exp: f64) -> f64 {
+    base.powf(exp)
+}
+
+/// `sin(x) -> f64` C-ABI shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_sin(x: f64) -> f64 {
+    x.sin()
+}
+
+/// `cos(x) -> f64` C-ABI shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_cos(x: f64) -> f64 {
+    x.cos()
+}
+
+/// `tan(x) -> f64` C-ABI shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_tan(x: f64) -> f64 {
+    x.tan()
+}
+
+/// `log(x) -> f64` C-ABI shim (natural log).
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_log(x: f64) -> f64 {
+    x.ln()
+}
+
+/// `exp(x) -> f64` C-ABI shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_exp(x: f64) -> f64 {
+    x.exp()
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,

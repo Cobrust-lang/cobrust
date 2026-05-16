@@ -1072,9 +1072,25 @@ impl<'a> BodyBuilder<'a> {
                         FormatPart::Lit(s) => {
                             ops.push(Operand::Constant(Constant::Str(s.clone())));
                         }
-                        FormatPart::Hole { expr, .. } => {
+                        FormatPart::Hole {
+                            expr, format_spec, ..
+                        } => {
                             let op = self.lower_expr(expr)?;
                             ops.push(op);
+                            // M-F.3.3 gap (c): when a format spec is present
+                            // (e.g. ".2f", "e", "g"), encode it as a special
+                            // sentinel Constant::Str immediately after the
+                            // value operand. The codegen's
+                            // `lower_aggregate_format_string` detects the
+                            // `FMTSPEC:` prefix and routes to the precision
+                            // formatter instead of the plain `__cobrust_fmt_float`.
+                            if let Some(spec) = format_spec {
+                                if !spec.is_empty() {
+                                    ops.push(Operand::Constant(Constant::Str(format!(
+                                        "FMTSPEC:{spec}"
+                                    ))));
+                                }
+                            }
                         }
                     }
                 }
@@ -1255,6 +1271,28 @@ impl<'a> BodyBuilder<'a> {
                 let _ = self.lower_expr(inner)?;
                 Ok(Operand::Constant(Constant::None))
             }
+            ExprKind::Cast { expr, target } => {
+                // M-F.3.3 gap (a): lower `expr as T` to `Rvalue::Cast(kind, op, ty)`.
+                // Permitted pairs (constitution §2.2): i64↔f64.
+                // The type checker has already validated the pair; we derive the
+                // CastKind from the target type name.
+                let op = self.lower_expr(expr)?;
+                let target_name = match &target.kind {
+                    cobrust_frontend::ast::TypeKind::Name(parts) => parts.join("."),
+                    _ => String::new(),
+                };
+                let (cast_kind, ty) = match target_name.as_str() {
+                    "f64" | "float" => (CastKind::IntToFloat, Ty::Float),
+                    "i64" | "int" => (CastKind::FloatToInt, Ty::Int),
+                    _ => {
+                        // Unknown cast target — emit a no-op Move.
+                        return Ok(op);
+                    }
+                };
+                let dest = self.declare_local("_cast".to_string(), ty.clone(), e.span, false);
+                self.emit_assign(Place::local(dest), Rvalue::Cast(cast_kind, op, ty), e.span);
+                Ok(Operand::Copy(Place::local(dest)))
+            }
         }
     }
 
@@ -1328,8 +1366,11 @@ impl<'a> BodyBuilder<'a> {
         let lhs_op = self.lower_expr(lhs)?;
         let rhs_op = self.lower_expr(rhs)?;
         let mir_op = bin_to_mir(op);
-        // For integer division, emit assert(rhs != 0) first.
-        let needs_div_assert = matches!(op, HirBinOp::Div | HirBinOp::FloorDiv | HirBinOp::Mod);
+        // For integer division, emit assert(rhs != 0).
+        // IEEE 754 float division by zero is defined (produces ±inf / NaN),
+        // so skip the assert for float operands (constitution §2.2 / f64e21).
+        let needs_div_assert = matches!(op, HirBinOp::Div | HirBinOp::FloorDiv | HirBinOp::Mod)
+            && !hir_expr_is_float(lhs);
         if needs_div_assert {
             let cond_local = self.declare_local("_divcond".to_string(), Ty::Bool, span, false);
             self.emit_assign(
@@ -1664,11 +1705,11 @@ fn lit_to_constant(lit: &Lit) -> Constant {
         Lit::None => Constant::None,
         Lit::Int(s) => Constant::Int(s.parse::<i64>().unwrap_or(0)),
         Lit::Float(s) => {
-            let f = s.parse::<f64>().unwrap_or(0.0);
+            let f = parse_float_lit(s);
             Constant::Float(f.to_bits())
         }
         Lit::Imag(s) => {
-            let f = s.parse::<f64>().unwrap_or(0.0);
+            let f = parse_float_lit(s);
             Constant::Imag(f.to_bits())
         }
         Lit::Str(s) => Constant::Str(s.clone()),
@@ -1736,6 +1777,38 @@ fn synth_expr_ty(_b: &BodyBuilder<'_>, _e: &Expr) -> Ty {
 #[allow(dead_code)]
 fn _force_cast_kind_used(k: CastKind) -> CastKind {
     k
+}
+
+/// Parse a Cobrust float literal string → f64.
+/// Handles standard decimal forms, `inf`, `nan`, and exponential notation.
+/// `f64::from_str` in Rust does not accept "inf"/"nan" (case-insensitive
+/// match against std strings), so we special-case them here.
+fn parse_float_lit(s: &str) -> f64 {
+    match s {
+        "inf" => f64::INFINITY,
+        "nan" => f64::NAN,
+        other => other.parse::<f64>().unwrap_or(0.0),
+    }
+}
+
+/// Conservative check: is this HIR expression likely float-typed?
+/// Used by `lower_bin` to skip the integer div-by-zero assertion for float
+/// operands (IEEE 754 defines float/0.0 = ±inf, not a trap — f64e21).
+/// Returns true when we can statically determine the expression is f64.
+fn hir_expr_is_float(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Lit(Lit::Float(_)) => true,
+        ExprKind::Bin { lhs, rhs, .. } => hir_expr_is_float(lhs) || hir_expr_is_float(rhs),
+        ExprKind::Un { operand, .. } => hir_expr_is_float(operand),
+        ExprKind::Cast { target, .. } => {
+            let name = match &target.kind {
+                cobrust_frontend::ast::TypeKind::Name(parts) => parts.join("."),
+                _ => String::new(),
+            };
+            matches!(name.as_str(), "f64" | "float")
+        }
+        _ => false,
+    }
 }
 
 #[allow(dead_code)]

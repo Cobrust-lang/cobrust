@@ -70,6 +70,8 @@ const PREC_BITXOR: Prec = Prec(70);
 const PREC_BITAND: Prec = Prec(75);
 const PREC_SHIFT: Prec = Prec(80);
 const PREC_ADD: Prec = Prec(85);
+/// `as` cast — tighter than ADD/SUB, looser than MUL/DIV.
+const PREC_CAST: Prec = Prec(88);
 const PREC_MUL: Prec = Prec(90);
 const PREC_POW: Prec = Prec(95);
 
@@ -871,6 +873,30 @@ impl<'a> Parser<'a> {
     fn parse_pratt(&mut self, min: Prec) -> Result<Expr, ParseError> {
         let mut lhs = self.parse_unary()?;
         loop {
+            // `as` cast — M-F.3.3 gap (a). Higher precedence than ADD, lower than MUL.
+            // Only parse `expr as T` when T is a recognized Cobrust type name
+            // (i64, f64, str, bool, bytes, …). This prevents `with ctx as x`
+            // and `import foo as bar` from being misinterpreted as cast
+            // expressions (both are handled at statement level before the Pratt
+            // parser runs on the expression). The look-ahead checks peek_at(1)
+            // (token after `as`) for a known type identifier.
+            if matches!(self.peek_kind(), TokenKind::KwAs)
+                && PREC_CAST >= min
+                && is_cast_type_token(self.peek_at(1))
+            {
+                self.bump(); // consume `as`
+                let target = self.parse_type()?;
+                let span = lhs.span.merge(target.span);
+                lhs = Expr {
+                    kind: ExprKind::Cast {
+                        expr: Box::new(lhs),
+                        target,
+                    },
+                    span,
+                };
+                continue;
+            }
+
             // Comparison chain detection: a < b < c collapses to
             // `(a < b) and (b < c)` — but we keep it simple for M1
             // and parse left-associatively, returning a binary tree.
@@ -2013,6 +2039,39 @@ impl<'a> Parser<'a> {
                 })
             }
         }
+    }
+}
+
+/// Return `true` if `tok` can start a Cobrust cast-target type.
+/// Used by `parse_pratt` to distinguish `expr as T` (cast) from
+/// `with ctx as x` (with-binding) and `import foo as bar` (alias).
+///
+/// Valid cast targets in M-F.3.3 are the scalar type names: `i64`,
+/// `f64`, `str`, `bool`, `bytes`, plus generic containers like
+/// `list[T]`, `dict[K, V]`. We check only the FIRST token, so we
+/// accept `Ident("i64")`, `Ident("f64")`, `Ident("str")`,
+/// `Ident("bool")`, `Ident("bytes")` and the bracket-started generics
+/// `list[`, `dict[`, `set[`. Any other identifier is NOT a cast target
+/// (it is a variable name used for with-binding or import aliases).
+fn is_cast_type_token(tok: &TokenKind) -> bool {
+    if let TokenKind::Ident(name) = tok {
+        matches!(
+            name.as_str(),
+            "i64"
+                | "f64"
+                | "int"
+                | "float"
+                | "str"
+                | "bool"
+                | "bytes"
+                | "None"
+                | "Never"
+                | "list"
+                | "dict"
+                | "set"
+        )
+    } else {
+        false
     }
 }
 
