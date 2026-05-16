@@ -4,8 +4,8 @@ finding_id: lc100-str-use-after-move-regression-from-adr0050c
 last_verified_commit: 09006f6
 dependencies: [adr:0050c]
 discovered_by: CTO post-Wave-2 DG verify 2026-05-16 — DG verify bithma12o on 09006f6 returned 108 failures including 100 LC-100 tests; Mac leetcode_corpus_e2e 10/12 fail with same root cause
-severity: P0 (regression from baseline; blocks v0.2.0 readiness per ADR-0050 §"v0.2.0 stable tag binding")
-status: open_pending_strategic_decision
+severity: P1 (downgraded from P0 per P10 disposition 2026-05-16 — honest-debt with Phase G closure target)
+status: accepted_as_honest_debt
 related: [predicate-flip-cascade-discovery-deficit, adr:0050c, adr:0050]
 ---
 
@@ -77,6 +77,24 @@ The audit's framing was wrong: it called LC-100 + leetcode failures "NOT related
 ### Recommendation
 
 **Path A** — walk-back Str to Copy-at-operand, mirroring Phase 2a List walk-back. The audit blessed the List walk-back on §5.1 "one way" + "preserve PRELUDE shapes without explicit borrow" grounds. The same rationale applies symmetrically to Str. ADR-0050c amendment addendum names the symmetric walk-back as "Phase 2a' — Str Copy@operand walk-back" and documents the cost (deferred compile-time use-after-move detection on Str).
+
+### Path D — accepted disposition 2026-05-16 (honest-debt; user-directed)
+
+P10/user directed 2026-05-16 ("标记 LC-100 为 honest-debt,继续推进"): treat the LC-100 mass-regression as documented honest-debt mirroring f3ls22's disposition, keep ADR-0050c Option A (Str=non-Copy uniformly) intact, and proceed to Wave 3 dispatch.
+
+**What this means in practice**:
+- ADR-0050c Decision stays as Option A. No amendment. Str remains non-Copy uniformly across operand-level and drop-level.
+- LC-100 corpus stays failing on integrated main at `09006f6` and any subsequent commit until Phase G closes via explicit-borrow syntax or a source-level `clone()` builtin.
+- v0.2.0 stable tag readiness criterion #1 is reframed: M-F.3.0..M-F.3.4 closure measured by §"Done means" in ADR-0050 (test corpus turn-green + ADR accepted), not by LC-100 corpus state. The LC-100 corpus was a *Phase F.1 user-traction wedge* per ADR-0047; Phase F.3 prioritized §1.1 language-half soundness (drop schedule + ownership) over wedge cosmetics. The trade-off is explicit.
+- Release-readiness P7 sonnet GO (ADR-0045 user-traction gate) must explicitly enumerate LC-100 as a known regression in the v0.2.0 release notes, with the Phase G closure pointer.
+- Wave 3 dispatch unblocks. Dict impl + string stdlib + file IO proceed; the LC-100 surface inherits the same Str=non-Copy semantics by construction.
+
+**ADSD F30 candidate strengthened, not weakened, by this disposition**: the audit + my own conflict-resolution missed the predicate-flip cascade on a 100-program corpus. The Path D acceptance is honest about the cost but does NOT vacate the methodology lesson. F30's proposed SOP fix (shadow-flip dry-run with feature flag before §"Consequences" enumeration is finalized) remains the upstream proposal. The empirical baseline now has a P1 honest-debt receipt to point at.
+
+**Phase G closure scope** (binding when Phase G is planned):
+- Source-level `clone(s)` builtin OR a `&` borrow form OR a let-binding-rebind shortcut that the type checker rewrites to implicit-clone.
+- LC-100 corpus re-greens at Phase G close (a release-readiness gate for v0.3.0 or whichever release ships Phase G).
+- Until then: LC-100 is documented honest-debt; new LC-100-style programs that ship with Phase F.3 must use list[i64]-only or argv-only Str patterns.
 
 ## Cross-references
 
