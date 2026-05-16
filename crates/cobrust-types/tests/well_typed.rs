@@ -1554,3 +1554,389 @@ fn w145_dict_comp_squares_i64() {
         "fn f(xs: List[i64]) -> Dict[i64, i64]:\n    return {x: (x * x) for x in xs}\n",
     );
 }
+
+// ============================================================
+// Tier A — M-F.3.5 string stdlib well-typed corpus (ADR-0050e).
+//
+// Locks the type-checker surface for the eleven new PRELUDE fns:
+//   1.  `split(s: str, sep: str) -> list[str]`     (Move both args)
+//   2.  `join(parts: list[str], sep: str) -> str`  (Move both args)
+//   3.  `replace(s: str, old: str, new: str) -> str`
+//   4.  `trim(s: str) -> str`
+//   5.  `find(s: str, needle: str) -> i64`         (-1 sentinel)
+//   6.  `contains(s: str, needle: str) -> bool`
+//   7.  `starts_with(s: str, prefix: str) -> bool`
+//   8.  `ends_with(s: str, suffix: str) -> bool`
+//   9.  `lower(s: str) -> str`
+//   10. `upper(s: str) -> str`
+//   11. `clone(s: str) -> str`                     (LC-100 mitigation)
+//
+// Pre-impl status: the PRELUDE in `crates/cobrust-cli/src/build.rs`
+// does NOT yet declare these eleven fns; the `Kind` enum +
+// `kind_for_name` in `crates/cobrust-cli/src/build/intrinsics.rs` has
+// no M-F.3.5 entries. Type-check pipeline drops the PRELUDE step
+// (see `must_accept` at top of file), so these w146.. tests use a
+// STR_STDLIB_STUBS const that ships the eleven PRELUDE signatures
+// inline. DEV sub-sprint 1 lands the PRELUDE entries; sub-sprint 2
+// wires intrinsic-rewrite; sub-sprint 3 ships the C-ABI shims.
+//
+// w146..w175 cover the type-check layer surface. Runtime semantics
+// (split round-trips, find sentinel correctness, etc.) live in the
+// Tier C E2E corpus at `crates/cobrust-cli/tests/string_stdlib_e2e.rs`.
+// ============================================================
+
+// Shared stub block: the eleven PRELUDE signatures M-F.3.5 must
+// accept. Mirrors the LIST_STR_STUBS + DICT_METHOD_STUBS pattern so
+// tests can land BEFORE DEV graduates the stubs into the canonical
+// PRELUDE. The `print` declaration is included so tests that pipe
+// returns into print() are well-formed.
+const STR_STDLIB_STUBS: &str = concat!(
+    "fn print(s: str) -> i64:\n    return 0\n",
+    "fn str_len(s: str) -> i64:\n    return 0\n",
+    "fn str_at(s: str, i: i64) -> str:\n    return \"\"\n",
+    "fn input(prompt: str) -> str:\n    return \"\"\n",
+    "fn split(s: str, sep: str) -> list[str]:\n    let xs: list[str] = []\n    return xs\n",
+    "fn join(parts: list[str], sep: str) -> str:\n    return \"\"\n",
+    "fn replace(s: str, old: str, new: str) -> str:\n    return \"\"\n",
+    "fn trim(s: str) -> str:\n    return \"\"\n",
+    "fn find(s: str, needle: str) -> i64:\n    return -1\n",
+    "fn contains(s: str, needle: str) -> bool:\n    return False\n",
+    "fn starts_with(s: str, prefix: str) -> bool:\n    return False\n",
+    "fn ends_with(s: str, suffix: str) -> bool:\n    return False\n",
+    "fn lower(s: str) -> str:\n    return \"\"\n",
+    "fn upper(s: str) -> str:\n    return \"\"\n",
+    "fn clone(s: str) -> str:\n    return s\n",
+);
+
+fn must_accept_with_str_stdlib_stubs(name: &str, body: &str) {
+    let src = format!("{STR_STDLIB_STUBS}{body}");
+    must_accept(name, &src);
+}
+
+// ---- Tier A.1: split — basic signatures ----
+
+#[test]
+fn w146_split_basic_signature() {
+    // `split(s, sep)` consumes both Str args and returns list[str].
+    // ADR-0050e Decision 3 row 1.
+    must_accept_with_str_stdlib_stubs(
+        "split-basic",
+        "fn f() -> list[str]:\n    let xs: list[str] = split(\"a,b,c\", \",\")\n    return xs\n",
+    );
+}
+
+#[test]
+fn w147_split_return_into_let_list_str() {
+    // The return type is list[str]; binding via `let xs: list[str] = split(...)`
+    // type-checks cleanly even though both args are Move-consumed.
+    must_accept_with_str_stdlib_stubs(
+        "split-return-into-let",
+        "fn f() -> i64:\n    let xs: list[str] = split(\"x,y\", \",\")\n    return 0\n",
+    );
+}
+
+#[test]
+fn w148_split_empty_separator_returns_list_str() {
+    // Empty-sep edge case (ADR-0050e Decision 8): the surface
+    // signature accepts `""` literally; runtime returns [s].
+    must_accept_with_str_stdlib_stubs(
+        "split-empty-sep",
+        "fn f() -> list[str]:\n    let xs: list[str] = split(\"abc\", \"\")\n    return xs\n",
+    );
+}
+
+// ---- Tier A.2: join — list[str] arg + str return ----
+
+#[test]
+fn w149_join_basic_signature() {
+    // `join(parts, sep)` returns str. parts is list[str] (List walk-back
+    // per ADR-0050c Phase 2a means parts survives operand-level; still
+    // dropped at scope exit).
+    must_accept_with_str_stdlib_stubs(
+        "join-basic",
+        "fn f() -> str:\n    let xs: list[str] = [\"a\", \"b\"]\n    return join(xs, \",\")\n",
+    );
+}
+
+#[test]
+fn w150_join_empty_list_returns_empty_str() {
+    // Edge: join of empty list. Type-check accepts; runtime returns "".
+    must_accept_with_str_stdlib_stubs(
+        "join-empty-list",
+        "fn f() -> str:\n    let xs: list[str] = []\n    return join(xs, \",\")\n",
+    );
+}
+
+// ---- Tier A.3: replace — three-arg Str → Str ----
+
+#[test]
+fn w151_replace_basic_signature() {
+    // `replace(s, old, new)` returns str.
+    must_accept_with_str_stdlib_stubs(
+        "replace-basic",
+        "fn f() -> str:\n    return replace(\"foo bar\", \"bar\", \"baz\")\n",
+    );
+}
+
+#[test]
+fn w152_replace_into_let_str() {
+    // Bind into `let result: str = replace(...)`.
+    must_accept_with_str_stdlib_stubs(
+        "replace-into-let",
+        "fn f() -> i64:\n    let result: str = replace(\"aaa\", \"a\", \"b\")\n    return 0\n",
+    );
+}
+
+// ---- Tier A.4: trim — Str → Str ----
+
+#[test]
+fn w153_trim_basic_signature() {
+    // `trim(s)` returns str (whitespace stripped both sides).
+    must_accept_with_str_stdlib_stubs(
+        "trim-basic",
+        "fn f() -> str:\n    return trim(\"  hello  \")\n",
+    );
+}
+
+#[test]
+fn w154_trim_empty_input_well_typed() {
+    // `trim("")` — type-check accepts; runtime returns "".
+    must_accept_with_str_stdlib_stubs(
+        "trim-empty",
+        "fn f() -> str:\n    return trim(\"\")\n",
+    );
+}
+
+// ---- Tier A.5: find — Str x Str → i64 (with -1 sentinel) ----
+
+#[test]
+fn w155_find_basic_signature() {
+    // `find(s, needle)` returns i64 (per ADR-0050e Decision 5 / Q2).
+    // The -1 sentinel is a runtime concern; type-check sees i64 only.
+    must_accept_with_str_stdlib_stubs(
+        "find-basic",
+        "fn f() -> i64:\n    return find(\"hello\", \"world\")\n",
+    );
+}
+
+#[test]
+fn w156_find_into_let_i64() {
+    // Bind result to `let pos: i64`. Locks the doc-required idiom
+    // `if pos != -1:` is well-typed (i64 == -1 is bool).
+    must_accept_with_str_stdlib_stubs(
+        "find-into-let",
+        "fn f() -> i64:\n    let pos: i64 = find(\"hi\", \"i\")\n    if pos != -1:\n        return 1\n    return 0\n",
+    );
+}
+
+#[test]
+fn w157_find_sentinel_compare_in_predicate() {
+    // The doc-required `if find(s, x) != -1:` idiom from Decision 5.
+    // Lacks an intermediate let; tests the inline compare-against-sentinel.
+    must_accept_with_str_stdlib_stubs(
+        "find-inline-sentinel",
+        "fn f() -> i64:\n    if find(\"abc\", \"b\") != -1:\n        return 1\n    return 0\n",
+    );
+}
+
+// ---- Tier A.6: contains / starts_with / ends_with — Str x Str → bool ----
+
+#[test]
+fn w158_contains_basic_signature() {
+    // `contains(s, needle)` returns bool.
+    must_accept_with_str_stdlib_stubs(
+        "contains-basic",
+        "fn f() -> bool:\n    return contains(\"hello\", \"ell\")\n",
+    );
+}
+
+#[test]
+fn w159_contains_in_if_predicate() {
+    // `if contains(s, x):` works because contains returns bool. No
+    // implicit-truthy violation here — bool IS the type.
+    must_accept_with_str_stdlib_stubs(
+        "contains-in-if",
+        "fn f() -> i64:\n    if contains(\"hi\", \"i\"):\n        return 1\n    return 0\n",
+    );
+}
+
+#[test]
+fn w160_starts_with_basic_signature() {
+    // `starts_with(s, prefix) -> bool`.
+    must_accept_with_str_stdlib_stubs(
+        "starts-with-basic",
+        "fn f() -> bool:\n    return starts_with(\"foobar\", \"foo\")\n",
+    );
+}
+
+#[test]
+fn w161_ends_with_basic_signature() {
+    // `ends_with(s, suffix) -> bool`.
+    must_accept_with_str_stdlib_stubs(
+        "ends-with-basic",
+        "fn f() -> bool:\n    return ends_with(\"foobar\", \"bar\")\n",
+    );
+}
+
+// ---- Tier A.7: lower / upper — Str → Str ----
+
+#[test]
+fn w162_lower_basic_signature() {
+    // `lower(s) -> str` — ASCII fast path matches Rust str::to_lowercase.
+    must_accept_with_str_stdlib_stubs(
+        "lower-basic",
+        "fn f() -> str:\n    return lower(\"HELLO\")\n",
+    );
+}
+
+#[test]
+fn w163_upper_basic_signature() {
+    // `upper(s) -> str`.
+    must_accept_with_str_stdlib_stubs(
+        "upper-basic",
+        "fn f() -> str:\n    return upper(\"hello\")\n",
+    );
+}
+
+#[test]
+fn w164_lower_mixed_case_input() {
+    // Mixed-case input — type-check sees no special case.
+    must_accept_with_str_stdlib_stubs(
+        "lower-mixed",
+        "fn f() -> str:\n    return lower(\"HeLLo\")\n",
+    );
+}
+
+// ---- Tier A.8: clone — the LC-100 unblocker ----
+
+#[test]
+fn w165_clone_basic_signature() {
+    // `clone(s) -> str` deep-copies the StringBuffer (per ADR-0050e
+    // Decision 2). The C-ABI shim already ships at fmt.rs:306; M-F.3.5
+    // adds the PRELUDE + intrinsic-rewrite plumbing.
+    must_accept_with_str_stdlib_stubs(
+        "clone-basic",
+        "fn f() -> str:\n    return clone(\"hello\")\n",
+    );
+}
+
+#[test]
+fn w166_clone_into_let_str_then_reuse_original() {
+    // THE LC-100 unblocker pattern. Under ADR-0050c, Str is non-Copy,
+    // so `let n = str_len(s); let c = str_at(s, 0)` fails UseAfterMove.
+    // With `let s2 = clone(s); let n = str_len(s); let c = str_at(s2, 0)`,
+    // the type checker accepts both reads because s and s2 are
+    // independent owned bindings. This is the load-bearing test for
+    // the LC-100 honest-debt mitigation.
+    must_accept_with_str_stdlib_stubs(
+        "clone-lc100-unblock",
+        "fn f() -> i64:\n    let s: str = input(\"\")\n    let s2: str = clone(s)\n    let n: i64 = str_len(s)\n    let c: str = str_at(s2, 0)\n    return n\n",
+    );
+}
+
+#[test]
+fn w167_clone_double_clone_independent_bindings() {
+    // `let a = clone(s); let b = clone(s); ...` — multi-clone safety
+    // pattern. Each clone moves the previous arg, but the inputs are
+    // (a) `clone(s)` — moves s once and (b) `clone(s)` — needs s alive.
+    // The trick: this pattern still moves s on the FIRST clone; the
+    // second clone needs s alive. We test the well-typed shape WITH a
+    // re-clone idiom: `let a = clone(s); let b = clone(a);` (chained
+    // clones, each from the previous).
+    must_accept_with_str_stdlib_stubs(
+        "clone-chained-pair",
+        "fn f() -> i64:\n    let s: str = \"x\"\n    let a: str = clone(s)\n    let b: str = clone(a)\n    return 0\n",
+    );
+}
+
+// ---- Tier A.9: idiomatic compositions ----
+
+#[test]
+fn w168_trim_then_split_chained() {
+    // `split(trim(s), ",")` — split's first arg is trim's return (a
+    // fresh str). Both args consumed; OK because each is rvalue.
+    must_accept_with_str_stdlib_stubs(
+        "trim-then-split",
+        "fn f() -> list[str]:\n    return split(trim(\"  a,b,c  \"), \",\")\n",
+    );
+}
+
+#[test]
+fn w169_lower_into_contains_chained() {
+    // `contains(lower(s), needle)` — case-insensitive substring search
+    // workaround per ADR-0050e Decision 7 (Phase G adds the explicit
+    // variant; today users hand-compose).
+    must_accept_with_str_stdlib_stubs(
+        "lower-into-contains",
+        "fn f() -> bool:\n    return contains(lower(\"FooBar\"), \"foo\")\n",
+    );
+}
+
+#[test]
+fn w170_join_split_roundtrip_typed() {
+    // `join(split(s, ","), ",")` — types: split → list[str], join takes
+    // list[str] + str. Type-check accepts; runtime is a near-identity
+    // (non-pathological s).
+    must_accept_with_str_stdlib_stubs(
+        "join-split-roundtrip",
+        "fn f() -> str:\n    return join(split(\"a,b,c\", \",\"), \",\")\n",
+    );
+}
+
+// ---- Tier A.10: as fn argument / return type ----
+
+#[test]
+fn w171_fn_takes_str_returns_via_lower() {
+    // `fn lowercase_of(s: str) -> str: return lower(s)` — user-defined
+    // wrapper over the M-F.3.5 surface.
+    must_accept_with_str_stdlib_stubs(
+        "fn-wraps-lower",
+        "fn lowercase_of(s: str) -> str:\n    return lower(s)\nfn f() -> str:\n    return lowercase_of(\"FOO\")\n",
+    );
+}
+
+#[test]
+fn w172_fn_returns_split_result_then_iter() {
+    // `fn parts_of(s: str) -> list[str]: return split(s, ",")` chained
+    // with for-iter over list[str]. Locks the user-traction surface.
+    must_accept_with_str_stdlib_stubs(
+        "fn-returns-split-then-iter",
+        "fn parts_of(s: str) -> list[str]:\n    return split(s, \",\")\nfn f() -> i64:\n    let xs: list[str] = parts_of(\"a,b\")\n    for x in xs:\n        let _ = print(x)\n    return 0\n",
+    );
+}
+
+// ---- Tier A.11: f-string composition with M-F.3.5 returns ----
+
+#[test]
+fn w173_fstring_contains_split_index_result() {
+    // F30 bug-witness shape — f-string with split result indexed.
+    // `f"first={split(s, ",")[0]}"` locks (a) f-string Str hole accepts
+    // a str; (b) list[str] indexing yields str; (c) split's return
+    // composes with f-string lowering.
+    must_accept_with_str_stdlib_stubs(
+        "fstring-with-split-index",
+        "fn f() -> str:\n    let xs: list[str] = split(\"a,b\", \",\")\n    return f\"first={xs[0]}\"\n",
+    );
+}
+
+#[test]
+fn w174_fstring_contains_trim_result() {
+    // f-string with trim() return slotted into a hole — lightweight
+    // composition test.
+    must_accept_with_str_stdlib_stubs(
+        "fstring-with-trim",
+        "fn f() -> str:\n    return f\"trimmed=[{trim(\"  x  \")}]\"\n",
+    );
+}
+
+// ---- Tier A.12: find result in boolean predicate ----
+
+#[test]
+fn w175_find_compared_to_sentinel_doc_idiom() {
+    // The documented `let pos = find(...); if pos != -1: ...` shape.
+    // Locks Decision 5's doc-required idiom is well-typed end-to-end.
+    must_accept_with_str_stdlib_stubs(
+        "find-doc-idiom",
+        "fn f() -> i64:\n    let pos: i64 = find(\"hello world\", \"world\")\n    if pos != -1:\n        return pos\n    return -1\n",
+    );
+}
