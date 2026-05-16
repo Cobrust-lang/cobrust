@@ -1436,6 +1436,48 @@ grep -q -F 'M-F.3.1' "docs/agent/adr/0050b-for-loop-shape.md" \
 
 echo "doc-coverage: M-F.3.1 for-loop + range surface checks passed"
 
+# --- M-F.3.2 list[str] + Str ownership surface coverage (ADR-0050c) -------
+# Parallel to the M-F.3.0 / M-F.3.1 blocks above.
+mf32_human_files=(
+    "docs/human/en/getting-started.md"
+    "docs/human/zh/getting-started.md"
+)
+for f in "${mf32_human_files[@]}"; do
+    grep -q -F 'M-F.3.2' "$f" \
+        || fail "M-F.3.2 'M-F.3.2' marker missing from ${f}"
+    grep -q -F 'list[str]' "$f" \
+        || fail "M-F.3.2 user-facing term 'list[str]' missing from ${f}"
+    grep -q -F 'list_is_empty' "$f" \
+        || fail "M-F.3.2 'list_is_empty' missing from ${f}"
+done
+# Agent-tree mir.md must document the Str ownership + drop schedule.
+grep -q -F 'ADR-0050c' "docs/agent/modules/mir.md" \
+    || fail "M-F.3.2 'ADR-0050c' cross-ref missing from docs/agent/modules/mir.md"
+grep -q -F '__cobrust_str_clone' "docs/agent/modules/mir.md" \
+    || fail "M-F.3.2 '__cobrust_str_clone' anchor missing from docs/agent/modules/mir.md"
+# Agent-tree codegen.md must document emit_drop_for_ty + Aggregate clone.
+grep -q -F 'emit_drop_for_ty' "docs/agent/modules/codegen.md" \
+    || fail "M-F.3.2 'emit_drop_for_ty' anchor missing from docs/agent/modules/codegen.md"
+grep -q -F '__cobrust_list_drop_elems' "docs/agent/modules/codegen.md" \
+    || fail "M-F.3.2 '__cobrust_list_drop_elems' anchor missing from docs/agent/modules/codegen.md"
+# Agent-tree stdlib.md must document the new C-ABI shims.
+grep -q -F '__cobrust_str_clone' "docs/agent/modules/stdlib.md" \
+    || fail "M-F.3.2 '__cobrust_str_clone' shim missing from docs/agent/modules/stdlib.md"
+grep -q -F '__cobrust_list_is_empty' "docs/agent/modules/stdlib.md" \
+    || fail "M-F.3.2 '__cobrust_list_is_empty' shim missing from docs/agent/modules/stdlib.md"
+# ADR-0050c must exist.
+[[ -f "docs/agent/adr/0050c-str-ownership.md" ]] \
+    || fail "ADR-0050c file missing (M-F.3.2 deliverable)"
+grep -q -F 'M-F.3.2' "docs/agent/adr/0050c-str-ownership.md" \
+    || fail "ADR-0050c must reference M-F.3.2 in its body"
+# Test corpus must exist.
+[[ -f "crates/cobrust-cli/tests/list_str_e2e.rs" ]] \
+    || fail "crates/cobrust-cli/tests/list_str_e2e.rs missing (M-F.3.2 corpus)"
+[[ -f "crates/cobrust-stdlib/tests/list_str_drop_corpus.rs" ]] \
+    || fail "crates/cobrust-stdlib/tests/list_str_drop_corpus.rs missing (M-F.3.2 corpus)"
+
+echo "doc-coverage: M-F.3.2 list[str] + Str ownership surface checks passed"
+
 # --- 23. M14 REPL surface coverage --------------------------------------
 # When the cli module declares M14 delivered, the M14 binding surface
 # terms + ADR-0029 anchors must appear in all three doc trees.

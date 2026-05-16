@@ -434,6 +434,23 @@ Invariants:
 - `adr:0006` — type-system obligations 1–9; B1..B5 project onto items 1–3.
 - `adr:0050a` — break/continue contract seal (MIR loop_stack discipline).
 - `adr:0050` §A1 — M-F.3.3 f64 gap table.
+- `adr:0050c` — M-F.3.2 list[str] TD-1 closure (Str ownership flip + drop schedule).
 - `mod:types` — input.
 - `mod:codegen` — output consumer.
 - Constitution `CLAUDE.md` §2.2 (drops including GIL/GC), §4.1 (pipeline), §5.1 (elegance), §5.2 (scientific — enumerated obligations), §7 (M2 done means), ADR-0019 (M8..M14 sequencing).
+
+## ADR-0050c M-F.3.2 — Str ownership + list[str] drop schedule
+
+| Surface | Anchor |
+|---|---|
+| `is_copy` (drop pass) | `drop.rs:142-152` — `Ty::Str` and `Ty::List(_)` REMOVED from the Copy set. Drop pass enumerates them as drop-eligible. |
+| `is_copy_type` (lowering operand) | `lower.rs:1909-1934` — `Ty::Str` non-Copy at operand-read time (Move semantics); `Ty::List(_)` kept Copy-at-operand for shared-borrow shapes like `list_set(xs, i, v)`. Honest-debt: use-after-move on list[str] is not detected. |
+| Param exclusion cutoff | `drop.rs:63-78` — `param_cutoff = body.param_count + 1` to cover BOTH the synthetic `_return` slot (LocalId(0)) AND every user param. Pre-fix off-by-one excluded the LAST user param; double-free on helper-fn returns. |
+| Return-move upgrade | `lower.rs:408-434` — `StmtKind::Return` upgrades `Operand::Copy(p)` to `Operand::Move(p)` when `p`'s type is drop-eligible. Marks the local as moved in `collect_moves`, so the drop pass excludes it from the auto-drop chain. NRVO-equivalent. |
+| Aggregate(List) elem-type synth | `lower.rs:1206-1232` — element type synthesised from first element via `synth_expr_ty`, replacing the legacy `Ty::None` placeholder. |
+| For-loop body Str clone | `lower.rs:854-948` — when `var_local`'s type is `Ty::Str`, fetch the raw pointer into a throwaway i64 temp, then `__cobrust_str_clone` into the loop var. Prevents alias with the list slot's owned Str. |
+| Index expr Str clone | `lower.rs:1304-1395` — `xs[i]` on a `list[str]` routes through `__cobrust_list_get` + `__cobrust_str_clone`. Returns owned Str via `Operand::Move`. |
+
+Test corpus:
+- `crates/cobrust-cli/tests/list_str_e2e.rs` — 33 end-to-end tests (build + run + assert stdout) covering literal construction, iteration, argv interop, helper-fn pass + return, indexing, f-string interpolation, list_is_empty, nested list[list[str]].
+- `crates/cobrust-stdlib/tests/list_str_drop_corpus.rs` — 10 C-ABI link-time tests for `__cobrust_str_clone` / `__cobrust_list_drop_elems` / `__cobrust_list_is_empty`.

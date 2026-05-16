@@ -126,6 +126,58 @@ Key rules:
 - Math functions: `sqrt`, `floor`, `ceil`, `round`, `abs`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`.
 - f-string format spec: `{x:.2f}` (fixed), `{x:e}` (scientific), `{x:g}` (general).
 
+## Step 2.7: list[str] and Str ownership (M-F.3.2)
+
+Cobrust now ships `list[str]` end-to-end with the Rust-style ownership
+schedule mandated by ADR-0050c. Per constitution §2.3, every Str is an
+owning value (the slot of a `list[str]` owns its element); the compiler
+auto-drops at scope exit, mirroring Rust's `String`.
+
+```cobrust
+fn main() -> i64:
+    # Literal list[str] — each element materialised on the heap.
+    let xs: list[str] = ["alpha", "beta", "gamma"]
+    for s in xs:
+        print(s)                       # alpha beta gamma
+    # xs drops here: each Str slot freed, then the list container.
+
+    # `list_is_empty` is the §2.2-mandated emptiness predicate
+    # (`if xs:` is rejected as implicit truthiness).
+    let empty: list[str] = []
+    if list_is_empty(empty):
+        print("empty branch")
+    else:
+        print("non-empty branch")     # not reached
+
+    return 0
+```
+
+What changed at M-F.3.2:
+- `Ty::Str` and `Ty::List(_)` are non-Copy in the MIR drop pass
+  (ADR-0050c §"Phase 1"). The codegen emits `__cobrust_str_drop` for
+  Str slots and `__cobrust_list_drop_elems` for `list[str]` at every
+  reachable scope exit.
+- The `list_len` / `list_get` / `list_set` / `list_new` / `list_is_empty`
+  intrinsics are row-polymorphic — they accept `list[T]` for any
+  element type, not just `list[i64]`.
+- For-loop `for s in xs:` over a `list[str]` clones each slot into the
+  loop variable (`__cobrust_str_clone`) so the loop binding owns its
+  own copy; the slot's ownership stays with `xs`.
+
+Compile-rejected (per ADR-0050c "Decision"):
+- Use after move for Str-typed locals (`let a = s; let b = s` requires
+  an explicit clone — Phase G surfaces a `clone(s)` builtin).
+
+Known honest-debt (per Phase 2a walk-back):
+- `list[T]` is Copy at the operand level, so passing a `list[str]` to
+  a fn that takes it by value DOES NOT compile-reject the post-call
+  use; double-use is allowed today and Phase G's explicit borrow
+  syntax will close this.
+
+See `crates/cobrust-cli/tests/list_str_e2e.rs` for the end-to-end
+corpus and `crates/cobrust-stdlib/tests/list_str_drop_corpus.rs` for
+the C-ABI link-time tests.
+
 ## Step 3: try the AI alpha surfaces (optional)
 
 1. Copy the router example and add your provider credentials:
