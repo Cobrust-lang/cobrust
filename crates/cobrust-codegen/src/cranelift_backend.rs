@@ -2424,6 +2424,16 @@ pub(crate) fn dict_set_symbol(k_tag: i64, v_tag: i64) -> &'static str {
 }
 
 /// ADR-0050d Decision 7A — pick the `__cobrust_dict_get_K_V` symbol.
+///
+/// Mirror of `dict_set_symbol` for the symmetric read path. Currently
+/// used only by sub-sprint c+d MIR-side intrinsic-rewrite (the
+/// `ExprKind::Index { Ty::Dict(K, V) base }` arm inlines the same
+/// 2x2 match); kept here as the canonical lookup table so sub-sprint
+/// e iter-key extraction + `.get()` method dispatch can reuse it
+/// without copy-paste drift. Visibility is `pub(crate)` so a future
+/// codegen pass (Phase G iter dispatch, ADT slot get/set) can pull
+/// from the same table.
+#[allow(dead_code)]
 pub(crate) fn dict_get_symbol(k_tag: i64, v_tag: i64) -> &'static str {
     match (k_tag, v_tag) {
         (1, 1) => "__cobrust_dict_get_str_str",
@@ -2434,6 +2444,12 @@ pub(crate) fn dict_get_symbol(k_tag: i64, v_tag: i64) -> &'static str {
 }
 
 /// ADR-0050d Decision 4A — pick the `__cobrust_dict_contains_K` symbol.
+///
+/// Same forward-compat rationale as `dict_get_symbol`; the
+/// MIR-side `BinOp::In` lowering currently inlines the 2-way match,
+/// but `for k in d:` desugar (sub-sprint e) will need this to derive
+/// the iterator's key-extract symbol.
+#[allow(dead_code)]
 pub(crate) fn dict_contains_symbol(k_tag: i64) -> &'static str {
     if k_tag == 1 {
         "__cobrust_dict_contains_str"

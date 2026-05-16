@@ -721,10 +721,42 @@ NOT mitigate use-after-move under strict ADR-0050c Path D Option A
 ## ADR-0050d M-F.3.4 — dict surface C-ABI shims
 
 Sub-sprint a+b lands the source-level + type-checker surface plus the
-`dict_is_empty` C-ABI shim. The remaining shims (iter init/next/drop,
-typed get/set per (K, V) shape, equality, keyerror abort) ship in
-sub-sprint d alongside the `indexmap::IndexMap` backing swap.
+`dict_is_empty` C-ABI shim. **Sub-sprint c+d (this milestone) ships
+the indexmap backing + the typed (K, V) shims + the polymorphic
+`len(d)` rewrite.** The remaining shims (iter init/next/drop +
+keyerror abort) ship in sub-sprint e alongside the `for k in d:`
+desugar.
+
+**Backing storage (sub-sprint d)**: `#[repr(C)] DictLayout { map:
+Box<indexmap::IndexMap<KeyEnum, ValueEnum>>, k_tag: i64, v_tag: i64 }`.
+The `k_tag` / `v_tag` discriminators are encoded by `__cobrust_dict_new`'s
+`k_size` / `v_size` args (`0 = i64`, `1 = str`); legacy callers
+passing `8, 8` map to (i64, i64) via `normalize_*_tag`. `KeyEnum` and
+`ValueEnum` are module-private enums; Phase G nested-aggregate values
+are reserved as `ValueEnum::OpaquePtr` (currently codegen never emits
+this variant).
+
+**Symbol naming convention**: typed shims encode the (K, V) shape in
+the symbol name. The codegen's `dict_set_symbol(k_tag, v_tag)` /
+`dict_get_symbol(k_tag, v_tag)` / `dict_contains_symbol(k_tag)`
+helpers (in `crates/cobrust-codegen/src/cranelift_backend.rs`) pick
+the right symbol per callsite based on the static `Ty::Dict(K, V)`.
 
 | Symbol | Definition | Purpose |
 |---|---|---|
-| `__cobrust_dict_is_empty(dict: *mut u8) -> i64` | `stdlib/collections.rs` — returns 1 if `map.is_empty()`, 0 otherwise. NULL dict is treated as empty. M12.x backing is `HashMap<i64, i64>`; sub-sprint d swaps to indexmap without breaking the signature. | §2.2-mandated emptiness predicate; the `if d:` implicit-truthiness ban requires this for the `if dict_is_empty(d):` canonical pattern. Source binding at `intrinsics.rs::DICT_IS_EMPTY_RUNTIME_SYMBOL`. Row-polymorphic at the type-checker via `is_list_polymorphic_intrinsic_name` Dict widening. |
+| `__cobrust_dict_new(k_size: i64, v_size: i64, len: i64) -> *mut u8` | `stdlib/collections.rs` — alloc `Box<DictLayout { map: IndexMap::with_capacity(len), k_tag, v_tag }>` with K/V tags derived from `normalize_*_tag(k_size/v_size)`. | Type-erased allocator. Codegen passes `(k_tag, v_tag, len)` per the static `Ty::Dict(K, V)`. |
+| `__cobrust_dict_drop(dict: *mut u8)` | Reclaim `Box<DictLayout>`; `IndexMap`'s `Drop` cleans up every `KeyEnum::Str` / `ValueEnum::Str` owned `String`. | Type-erased drop; codegen `emit_drop_for_ty` Ty::Dict arm calls this for every dict-typed local at scope exit. |
+| `__cobrust_dict_len(dict: *mut u8) -> i64` | Read `map.len() as i64`. | Type-erased length. Source-level binding via the new `len(d)` polymorphic builtin (`Kind::LenPoly` in `intrinsics.rs`); also a regression-stable alias to the legacy untyped symbol. |
+| `__cobrust_dict_is_empty(dict: *mut u8) -> i64` | Returns 1 if `map.is_empty()`, 0 otherwise. NULL is empty. | §2.2-mandated emptiness predicate; `if d:` is rejected, `if dict_is_empty(d):` is canonical. Row-polymorphic on (K, V). |
+| `__cobrust_dict_set_i64_i64(d, k, v)` | `map.insert(KeyEnum::I64(k), ValueEnum::I64(v))`. | Codegen emits this for `d[k] = v` when `d: Dict[i64, i64]`. |
+| `__cobrust_dict_get_i64_i64(d, k) -> i64` | `map.get(&KeyEnum::I64(k))` → `i64` value, or `0` sentinel on missing. | Codegen emits this for `d[k]` reads when `d: Dict[i64, i64]`. Missing-key behavior is the panic-on-missing path scope-capped to a sentinel return; explicit abort helper is sub-sprint e/f stretch. |
+| `__cobrust_dict_contains_i64(d, k) -> i64` | Returns `i64` 0/1 per the SwitchInt bool convention. | Codegen emits this for `key in d` when `d: Dict[i64, _]`. |
+| `__cobrust_dict_set_i64_str(d, k: i64, v: *mut u8)` | Consumes `v` Str buffer: `read_str_buffer(v)` → owned `String` stored as `ValueEnum::Str`. | `d[k] = v` for `d: Dict[i64, str]`. Source `v` local is moved at MIR time (ADR-0050c Move semantic); the dict owns the bytes. |
+| `__cobrust_dict_get_i64_str(d, k) -> *mut u8` | Returns a fresh `StringBuffer` via `alloc_str_buffer` (deep-clone) or null on missing. | Caller owns the new buffer (drop via `__cobrust_str_drop`). Null sentinel on missing — Phase F.3 scope cap. |
+| `__cobrust_dict_set_str_i64(d, k: *mut u8, v: i64)` | Consumes `k` Str buffer. | `d[k] = v` for `d: Dict[str, i64]`. |
+| `__cobrust_dict_get_str_i64(d, k: *mut u8) -> i64` | `read_str_buffer(k)` then map lookup. | `d[k]` reads for `d: Dict[str, i64]`. |
+| `__cobrust_dict_contains_str(d, k: *mut u8) -> i64` | `read_str_buffer(k)` then `map.contains_key(&KeyEnum::Str(k))`. | `key in d` for `d: Dict[str, _]`. |
+| `__cobrust_dict_set_str_str(d, k: *mut u8, v: *mut u8)` | Consumes both `k` and `v` Str buffers. | `d[k] = v` for `d: Dict[str, str]`. |
+| `__cobrust_dict_get_str_str(d, k: *mut u8) -> *mut u8` | Deep-clones the matched value or returns null. | `d[k]` reads for `d: Dict[str, str]`. |
+| `__cobrust_dict_set(d, k, v)` | Legacy untyped alias for `_set_i64_i64`. | M12.x backward compat; existing M12.x callers + the 3 `cabi_dict_*` legacy tests stay green. |
+| `__cobrust_dict_get(d, k) -> i64` | Legacy untyped alias for `_get_i64_i64`. | Same M12.x backward-compat note as above. |

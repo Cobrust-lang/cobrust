@@ -568,8 +568,7 @@ impl<'a> BodyBuilder<'a> {
                 // sink the discard into a junk i64 dest. The
                 // `Terminator::Call` ABI always carries a destination,
                 // so we make a one-off scratch local.
-                let scratch =
-                    self.declare_local("_dsetret".to_string(), Ty::None, span, false);
+                let scratch = self.declare_local("_dsetret".to_string(), Ty::None, span, false);
                 let cur = self.current_block_id();
                 let next = self.start_new_block();
                 self.cur_block = Some(cur.0 as usize);
@@ -1684,8 +1683,7 @@ impl<'a> BodyBuilder<'a> {
                 } else {
                     BinOp::NotEq
                 };
-                let bool_dest =
-                    self.declare_local("_dctnb".to_string(), Ty::Bool, span, false);
+                let bool_dest = self.declare_local("_dctnb".to_string(), Ty::Bool, span, false);
                 self.emit_assign(
                     Place::local(bool_dest),
                     Rvalue::BinaryOp(

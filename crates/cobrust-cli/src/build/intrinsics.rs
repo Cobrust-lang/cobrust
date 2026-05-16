@@ -1435,8 +1435,7 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         });
                     }
                     let arg = args[0].clone();
-                    *func =
-                        Operand::Constant(Constant::Str("__cobrust_dict_len".to_string()));
+                    *func = Operand::Constant(Constant::Str("__cobrust_dict_len".to_string()));
                     args.clear();
                     args.push(arg);
                 }
