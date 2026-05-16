@@ -239,6 +239,43 @@ impl Ty {
         matches!(self, Ty::List(_) | Ty::Set(_) | Ty::Dict(_, _))
     }
 
+    /// ADR-0050d Decision 7A + §"Type-checker amendments" item 2 —
+    /// Hashable predicate for dict-key admissibility.
+    ///
+    /// **Hashable** (Phase F.3): `bool`, `i64`, `str`, `bytes`,
+    /// `None`, `Never`, and `Tuple(items)` if every item is hashable.
+    ///
+    /// **Not hashable** (Phase F.3): `f64` (NaN != NaN breaks Hash
+    /// invariants per IEEE 754 — constitution §2.2 "no silent
+    /// coercion"); `Imag` (same numerical concerns); `List` / `Set`
+    /// / `Dict` / `Record` (mutable + structural); `Fn` (no canonical
+    /// hash for closures); `Adt` / `Alias` / `Generic` (Phase G adds
+    /// trait-based hashability); `Var` (under-determined — the type
+    /// checker resolves the var before consulting this predicate, so
+    /// callers should `subst.apply` first).
+    ///
+    /// Used at `synth_dict_lit` (after key/value unification) and at
+    /// every `Dict[K, V]` annotation site (`lower_generic_type`) to
+    /// emit `TypeError::NotHashable` when K is rejected.
+    #[must_use]
+    pub fn is_hashable(&self) -> bool {
+        match self {
+            Ty::Bool | Ty::Int | Ty::Str | Ty::Bytes | Ty::None | Ty::Never => true,
+            Ty::Tuple(items) => items.iter().all(Ty::is_hashable),
+            Ty::Float
+            | Ty::Imag
+            | Ty::List(_)
+            | Ty::Set(_)
+            | Ty::Dict(_, _)
+            | Ty::Record(_)
+            | Ty::Fn(_)
+            | Ty::Adt(_, _)
+            | Ty::Alias(_, _)
+            | Ty::Generic(_)
+            | Ty::Var(_) => false,
+        }
+    }
+
     /// Substitute a [`VarId`] throughout a type.
     pub fn subst_var(&self, v: VarId, replacement: &Ty) -> Ty {
         match self {

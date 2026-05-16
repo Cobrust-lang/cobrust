@@ -720,6 +720,31 @@ impl From<TypeError> for UserError {
                 let (l, c) = span_to_line_col(span);
                 ("`yield` outside of a function".to_owned(), None, l, c)
             }
+            E::NotHashable { actual, span } => {
+                let (l, c) = span_to_line_col(span);
+                (
+                    format!(
+                        "dict key type `{actual}` is not Hashable (Phase F.3 admits i64 / str / bool / None)"
+                    ),
+                    Some(
+                        "f64 keys are forbidden (NaN != NaN); use i64 via `f.to_bits() as i64` or a str repr".to_owned(),
+                    ),
+                    l,
+                    c,
+                )
+            }
+            E::DictSpreadNotSupported { span } => {
+                let (l, c) = span_to_line_col(span);
+                (
+                    "dict spread `**other` is not supported in dict literals".to_owned(),
+                    Some(
+                        "dict-merge is Phase G; build the result manually by iterating `other.items()` and inserting"
+                            .to_owned(),
+                    ),
+                    l,
+                    c,
+                )
+            }
             E::Multiple(errors) => {
                 // Surface the first error; the rest are silently counted.
                 // The caller should iterate and report individually for
