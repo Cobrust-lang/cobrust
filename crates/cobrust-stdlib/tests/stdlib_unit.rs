@@ -395,8 +395,9 @@ fn upper_unicode() {
 }
 
 #[test]
-fn strip_keeps_internal_whitespace() {
-    assert_eq!(string::strip("  hello world  "), "hello world");
+fn trim_keeps_internal_whitespace() {
+    // ADR-0050e Decision 4: renamed `strip` → `trim`.
+    assert_eq!(string::trim("  hello world  "), "hello world");
 }
 
 #[test]
@@ -719,7 +720,8 @@ fn string_micro_4() {
 }
 #[test]
 fn string_micro_5() {
-    assert_eq!(string::strip("\t\nhi\t\n"), "hi");
+    // ADR-0050e Decision 4: renamed `strip` → `trim`.
+    assert_eq!(string::trim("\t\nhi\t\n"), "hi");
 }
 #[test]
 fn string_micro_6() {
