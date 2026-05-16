@@ -411,6 +411,26 @@ impl<'a> BodyBuilder<'a> {
                     Some(expr) => self.lower_expr(expr)?,
                     None => Operand::Constant(Constant::None),
                 };
+                // ADR-0050c Phase 2 cascade fix: when the returned operand is
+                // `Operand::Copy(p)` of a drop-eligible local (Str / List /
+                // future non-Copy types), upgrade it to `Operand::Move(p)`.
+                // Rationale: the Phase 2a Copy-at-operand walk-back for List
+                // (`is_copy_type` returns true for `Ty::List(_)` so that fn-arg
+                // shapes like `list_set(xs, i, v)` continue to read xs without
+                // consuming it) interacts badly with the drop pass:
+                // the drop pass enumerates list-typed locals as drop-eligible
+                // and inserts a Drop on the predecessor edge of every Return
+                // block (`drop.rs:104-115`). That Drop runs BEFORE the
+                // ret_block's statements; if the ret_block contains
+                // `return_local = Copy(xs)`, the post-drop borrow check
+                // surfaces UseAfterDrop on `xs` (`borrow.rs:219-224`).
+                //
+                // The fix is to mark the returned operand as a Move so the
+                // drop pass's `globally_moved` set contains `xs` and the Drop
+                // is not inserted on this path. This matches Rust's NRVO /
+                // return-value-move semantics and is sound because the return
+                // statement is the last use of the local in the function body.
+                let op = upgrade_return_to_move(self, op);
                 let ret = self.return_local;
                 self.emit_assign(Place::local(ret), Rvalue::Use(op), stmt.span);
                 self.terminate(Terminator::Return);
@@ -1747,6 +1767,40 @@ fn is_copy_type(ty: &Ty) -> bool {
         ty,
         Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never | Ty::List(_)
     )
+}
+
+/// ADR-0050c Phase 2 cascade fix: upgrade `Operand::Copy(p)` to
+/// `Operand::Move(p)` when `p`'s local has a drop-eligible declared type
+/// (i.e., the type would be enumerated by `drop::is_copy` as non-Copy).
+///
+/// This is called only from the `StmtKind::Return` lowering, where the
+/// operand IS the function return value. Forcing a Move here:
+///
+/// 1. Marks the local as moved-out in the drop pass's `moved_out_per_block`,
+///    so the local is excluded from the auto-inserted Drop chain on the
+///    predecessor edge of the ret_block.
+/// 2. Matches Rust's return-value-move (NRVO-friendly) semantics: the local
+///    is consumed by the return; the caller owns the dropped value.
+///
+/// This preserves correctness regardless of the `is_copy_type` walk-back
+/// for List (Phase 2a) — the walk-back keeps fn-arg patterns
+/// (`list_set(xs, i, v)` reads `xs` as shared-borrow) working without
+/// regressing return-value ownership transfer.
+fn upgrade_return_to_move(b: &BodyBuilder<'_>, op: Operand) -> Operand {
+    if let Operand::Copy(ref p) = op {
+        if let Some(decl) = b.locals.get(p.local.0 as usize) {
+            // Same drop-eligibility predicate as `drop::is_copy`:
+            // every type NOT in the Copy set is drop-eligible.
+            let is_drop_eligible = !matches!(
+                &decl.ty,
+                Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never
+            );
+            if is_drop_eligible {
+                return Operand::Move(p.clone());
+            }
+        }
+    }
+    op
 }
 
 fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
