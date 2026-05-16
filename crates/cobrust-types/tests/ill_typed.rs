@@ -1974,3 +1974,109 @@ fn i150_write_file_one_arg_arity_rejected() {
         Cat::ArityMismatch,
     );
 }
+
+// ============================================================
+// ADR-0052a Wave 1 — Direction A explicit `&s` borrow type-error corpus
+//
+// 6 ill-typed programs the type checker MUST reject under the `&s`
+// surface (CLAUDE.md §2.5 Direction A binding).
+//
+// Pre-DEV-impl status: every i0052a_* test below is `#[ignore]`'d
+// pending Wave-1 DEV merge. DEV removes the `#[ignore]` markers and
+// the suite turns green.
+//
+// Coverage map (mirrors ADR-0052a §10.1 ill-typed category):
+// - `&undefined_ident`                          → i0052a_01 (UnknownName)
+// - `&s` where s declared but not bound         → i0052a_02 (UnknownName)
+// - `&` operand-arity mismatch surfaces TM      → i0052a_03 (TypeMismatch)
+// - borrow used in arith without int coercion   → i0052a_04 (TypeMismatch)
+// - borrow assigned to wrong typed annotation   → i0052a_05 (TypeMismatch)
+// - borrow as if-cond (implicit truthiness)     → i0052a_06 (ImplicitTruthiness)
+//
+// NOTE: TypeError::BorrowOfNonPlace per ADR-0052a §6 is a Wave-1 net-new
+// variant; tests would require Cat::BorrowOfNonPlace enum addition. We
+// stage that via the `Cat::TypeMismatch` placeholder pattern established
+// in i118+ for NotHashable / DictSpreadNotSupported.
+// ============================================================
+
+#[test]
+#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&` + type checker rejects `&undefined`"]
+fn i0052a_01_borrow_of_undefined_ident_rejected() {
+    // `&missing` — borrow of an undefined name surfaces as
+    // TypeError::UnknownName at type-check time.
+    must_reject(
+        "borrow-of-undefined-ident",
+        "fn main() -> i64:\n    let n = str_len(&missing)\n    return n\n",
+        Cat::UnknownName,
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&` + type checker rejects `&missing_in_scope`"]
+fn i0052a_02_borrow_of_out_of_scope_ident_rejected() {
+    // `&s` where `s` was defined in an outer block that exited;
+    // surfaces as UnknownName at the inner use site.
+    must_reject(
+        "borrow-of-out-of-scope",
+        "fn main() -> i64:\n    let cond: bool = True\n    if cond:\n        let s: str = \"hi\"\n        let _ = str_len(&s)\n    let m = str_len(&s)\n    return m\n",
+        Cat::UnknownName,
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when type checker enforces &T transparency only for read positions"]
+fn i0052a_03_borrow_assigned_to_int_annot_rejected() {
+    // `let n: i64 = &s` — borrow of a Str cannot satisfy an i64 type
+    // annotation. Surfaces as TypeMismatch at the assignment site.
+    //
+    // Note: under Wave-1 transparency `&Str` and `Str` are
+    // interchangeable for read-only PRELUDE positions, but the type
+    // annotation slot is NOT read-only — it constrains the local's
+    // type. `&Str` ≠ `i64` regardless of transparency.
+    must_reject(
+        "borrow-assigned-int-annot",
+        "fn main() -> i64:\n    let s: str = \"hi\"\n    let n: i64 = &s\n    return n\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when type checker rejects str-arith via TypeMismatch"]
+fn i0052a_04_borrow_int_plus_borrow_str_rejected() {
+    // `(&n) + (&s)` — adding a borrow of Int and a borrow of Str
+    // must surface TypeMismatch the same way `n + s` does. Wave-1
+    // transparency rule says PRELUDE-read positions accept both;
+    // arithmetic is not a PRELUDE position.
+    must_reject(
+        "borrow-int-plus-borrow-str",
+        "fn main() -> i64:\n    let n: i64 = 1\n    let s: str = \"hi\"\n    let total = (&n) + (&s)\n    return total\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when type checker rejects str arg passed where i64 expected"]
+fn i0052a_05_borrow_str_passed_where_int_expected_rejected() {
+    // `&s` (borrow of str) passed where the function expects `n: i64`.
+    // Transparency rule does NOT bridge str → i64; surfaces as
+    // TypeMismatch.
+    must_reject(
+        "borrow-str-where-int-expected",
+        "fn takes_int(n: i64) -> i64:\n    return n + 1\nfn main() -> i64:\n    let s: str = \"hi\"\n    let r = takes_int(&s)\n    return r\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when type checker rejects `if &str:` via ImplicitTruthiness"]
+fn i0052a_06_borrow_in_if_cond_implicit_truthiness_rejected() {
+    // `if &s:` — borrow of Str used as if-condition surfaces
+    // ImplicitTruthiness, same as `if s:`. Constitution §2.2
+    // "Implicit truthy/falsy" rule applies through the transparency
+    // rule.
+    must_reject(
+        "borrow-as-if-cond",
+        "fn main() -> i64:\n    let s: str = \"hi\"\n    if &s:\n        return 1\n    return 0\n",
+        Cat::ImplicitTruthiness,
+    );
+}
