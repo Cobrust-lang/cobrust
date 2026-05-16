@@ -217,6 +217,31 @@ pub const MATH_LOG_RUNTIME_SYMBOL: &str = "__cobrust_math_log";
 /// `exp(x: f64) -> f64` → `__cobrust_math_exp(f64) -> f64`.
 pub const MATH_EXP_RUNTIME_SYMBOL: &str = "__cobrust_math_exp";
 
+// ---- M-F.3.5 string stdlib (ADR-0050e) -------------------------------
+/// M-F.3.5 — `split(s: str, sep: str) -> list[str]`.
+pub const STR_SPLIT_RUNTIME_SYMBOL: &str = "__cobrust_str_split";
+/// M-F.3.5 — `join(parts: list[str], sep: str) -> str`.
+pub const STR_JOIN_RUNTIME_SYMBOL: &str = "__cobrust_str_join";
+/// M-F.3.5 — `replace(s: str, old: str, new: str) -> str`.
+pub const STR_REPLACE_RUNTIME_SYMBOL: &str = "__cobrust_str_replace";
+/// M-F.3.5 — `trim(s: str) -> str`.
+pub const STR_TRIM_RUNTIME_SYMBOL: &str = "__cobrust_str_trim";
+/// M-F.3.5 — `find(s: str, needle: str) -> i64` (-1 sentinel).
+pub const STR_FIND_RUNTIME_SYMBOL: &str = "__cobrust_str_find";
+/// M-F.3.5 — `contains(s: str, needle: str) -> bool` (i64 0/1 at ABI).
+pub const STR_CONTAINS_RUNTIME_SYMBOL: &str = "__cobrust_str_contains";
+/// M-F.3.5 — `starts_with(s: str, prefix: str) -> bool`.
+pub const STR_STARTS_WITH_RUNTIME_SYMBOL: &str = "__cobrust_str_starts_with";
+/// M-F.3.5 — `ends_with(s: str, suffix: str) -> bool`.
+pub const STR_ENDS_WITH_RUNTIME_SYMBOL: &str = "__cobrust_str_ends_with";
+/// M-F.3.5 — `lower(s: str) -> str` (ASCII-fast Unicode-aware per Rust stdlib).
+pub const STR_LOWER_RUNTIME_SYMBOL: &str = "__cobrust_str_lower";
+/// M-F.3.5 — `upper(s: str) -> str`.
+pub const STR_UPPER_RUNTIME_SYMBOL: &str = "__cobrust_str_upper";
+/// M-F.3.5 — `clone(s: str) -> str` (LC-100 honest-debt mitigation;
+/// shim already ships at `crates/cobrust-stdlib/src/fmt.rs:306`).
+pub const STR_CLONE_RUNTIME_SYMBOL: &str = "__cobrust_str_clone";
+
 /// Errors from the print-intrinsic rewrite.
 #[derive(Debug, thiserror::Error)]
 pub enum IntrinsicError {
@@ -319,6 +344,29 @@ struct IntrinsicDefIds {
     math_log: HashSet<u32>,
     /// M-F.3.3.
     math_exp: HashSet<u32>,
+    // ---- M-F.3.5 string stdlib (ADR-0050e) ----
+    /// M-F.3.5.
+    str_split: HashSet<u32>,
+    /// M-F.3.5.
+    str_join: HashSet<u32>,
+    /// M-F.3.5.
+    str_replace: HashSet<u32>,
+    /// M-F.3.5.
+    str_trim: HashSet<u32>,
+    /// M-F.3.5.
+    str_find: HashSet<u32>,
+    /// M-F.3.5.
+    str_contains: HashSet<u32>,
+    /// M-F.3.5.
+    str_starts_with: HashSet<u32>,
+    /// M-F.3.5.
+    str_ends_with: HashSet<u32>,
+    /// M-F.3.5.
+    str_lower: HashSet<u32>,
+    /// M-F.3.5.
+    str_upper: HashSet<u32>,
+    /// M-F.3.5 — LC-100 honest-debt mitigation.
+    str_clone: HashSet<u32>,
 }
 
 impl IntrinsicDefIds {
@@ -368,6 +416,18 @@ impl IntrinsicDefIds {
         out.extend(&self.math_tan);
         out.extend(&self.math_log);
         out.extend(&self.math_exp);
+        // M-F.3.5 string stdlib.
+        out.extend(&self.str_split);
+        out.extend(&self.str_join);
+        out.extend(&self.str_replace);
+        out.extend(&self.str_trim);
+        out.extend(&self.str_find);
+        out.extend(&self.str_contains);
+        out.extend(&self.str_starts_with);
+        out.extend(&self.str_ends_with);
+        out.extend(&self.str_lower);
+        out.extend(&self.str_upper);
+        out.extend(&self.str_clone);
         out
     }
 
@@ -416,6 +476,17 @@ impl IntrinsicDefIds {
             && self.math_tan.is_empty()
             && self.math_log.is_empty()
             && self.math_exp.is_empty()
+            && self.str_split.is_empty()
+            && self.str_join.is_empty()
+            && self.str_replace.is_empty()
+            && self.str_trim.is_empty()
+            && self.str_find.is_empty()
+            && self.str_contains.is_empty()
+            && self.str_starts_with.is_empty()
+            && self.str_ends_with.is_empty()
+            && self.str_lower.is_empty()
+            && self.str_upper.is_empty()
+            && self.str_clone.is_empty()
     }
 }
 
@@ -468,6 +539,18 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         math_tan: HashSet::new(),
         math_log: HashSet::new(),
         math_exp: HashSet::new(),
+        // M-F.3.5 string stdlib.
+        str_split: HashSet::new(),
+        str_join: HashSet::new(),
+        str_replace: HashSet::new(),
+        str_trim: HashSet::new(),
+        str_find: HashSet::new(),
+        str_contains: HashSet::new(),
+        str_starts_with: HashSet::new(),
+        str_ends_with: HashSet::new(),
+        str_lower: HashSet::new(),
+        str_upper: HashSet::new(),
+        str_clone: HashSet::new(),
     };
     // Track names already collected to detect user-defined shadowing of
     // PRELUDE stubs (M-F.3.3). For non-math intrinsics (print, parse_int,
@@ -477,6 +560,10 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
     // user-defined function. Only the PRELUDE stub should be in the
     // intrinsic set; the user's function must NOT be rewritten.
     let mut math_names_seen: HashSet<&'static str> = HashSet::new();
+    // M-F.3.5 string stdlib (ADR-0050e): same first-body-wins guard
+    // because names like `clone` / `find` / `trim` / `lower` / `upper`
+    // are common enough that user-defined functions may collide.
+    let mut str_names_seen: HashSet<&'static str> = HashSet::new();
 
     for body in &module.bodies {
         match body.name.as_str() {
@@ -642,6 +729,62 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
                     ids.math_exp.insert(body.def_id.0);
                 }
             }
+            // ---- M-F.3.5 string stdlib (ADR-0050e) ----
+            "split" => {
+                if str_names_seen.insert("split") {
+                    ids.str_split.insert(body.def_id.0);
+                }
+            }
+            "join" => {
+                if str_names_seen.insert("join") {
+                    ids.str_join.insert(body.def_id.0);
+                }
+            }
+            "replace" => {
+                if str_names_seen.insert("replace") {
+                    ids.str_replace.insert(body.def_id.0);
+                }
+            }
+            "trim" => {
+                if str_names_seen.insert("trim") {
+                    ids.str_trim.insert(body.def_id.0);
+                }
+            }
+            "find" => {
+                if str_names_seen.insert("find") {
+                    ids.str_find.insert(body.def_id.0);
+                }
+            }
+            "contains" => {
+                if str_names_seen.insert("contains") {
+                    ids.str_contains.insert(body.def_id.0);
+                }
+            }
+            "starts_with" => {
+                if str_names_seen.insert("starts_with") {
+                    ids.str_starts_with.insert(body.def_id.0);
+                }
+            }
+            "ends_with" => {
+                if str_names_seen.insert("ends_with") {
+                    ids.str_ends_with.insert(body.def_id.0);
+                }
+            }
+            "lower" => {
+                if str_names_seen.insert("lower") {
+                    ids.str_lower.insert(body.def_id.0);
+                }
+            }
+            "upper" => {
+                if str_names_seen.insert("upper") {
+                    ids.str_upper.insert(body.def_id.0);
+                }
+            }
+            "clone" => {
+                if str_names_seen.insert("clone") {
+                    ids.str_clone.insert(body.def_id.0);
+                }
+            }
             _ => {}
         }
     }
@@ -724,6 +867,18 @@ enum Kind {
     MathTan,
     MathLog,
     MathExp,
+    // ---- M-F.3.5 string stdlib (ADR-0050e) ----
+    StrSplit,
+    StrJoin,
+    StrReplace,
+    StrTrim,
+    StrFind,
+    StrContains,
+    StrStartsWith,
+    StrEndsWith,
+    StrLower,
+    StrUpper,
+    StrClone,
 }
 
 fn kind_for_name(name: &str) -> Option<Kind> {
@@ -773,6 +928,18 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "tan" => Some(Kind::MathTan),
         "log" => Some(Kind::MathLog),
         "exp" => Some(Kind::MathExp),
+        // M-F.3.5 string stdlib (ADR-0050e).
+        "split" => Some(Kind::StrSplit),
+        "join" => Some(Kind::StrJoin),
+        "replace" => Some(Kind::StrReplace),
+        "trim" => Some(Kind::StrTrim),
+        "find" => Some(Kind::StrFind),
+        "contains" => Some(Kind::StrContains),
+        "starts_with" => Some(Kind::StrStartsWith),
+        "ends_with" => Some(Kind::StrEndsWith),
+        "lower" => Some(Kind::StrLower),
+        "upper" => Some(Kind::StrUpper),
+        "clone" => Some(Kind::StrClone),
         _ => None,
     }
 }
@@ -866,6 +1033,28 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::MathLog)
     } else if ids.math_exp.contains(&id) {
         Some(Kind::MathExp)
+    } else if ids.str_split.contains(&id) {
+        Some(Kind::StrSplit)
+    } else if ids.str_join.contains(&id) {
+        Some(Kind::StrJoin)
+    } else if ids.str_replace.contains(&id) {
+        Some(Kind::StrReplace)
+    } else if ids.str_trim.contains(&id) {
+        Some(Kind::StrTrim)
+    } else if ids.str_find.contains(&id) {
+        Some(Kind::StrFind)
+    } else if ids.str_contains.contains(&id) {
+        Some(Kind::StrContains)
+    } else if ids.str_starts_with.contains(&id) {
+        Some(Kind::StrStartsWith)
+    } else if ids.str_ends_with.contains(&id) {
+        Some(Kind::StrEndsWith)
+    } else if ids.str_lower.contains(&id) {
+        Some(Kind::StrLower)
+    } else if ids.str_upper.contains(&id) {
+        Some(Kind::StrUpper)
+    } else if ids.str_clone.contains(&id) {
+        Some(Kind::StrClone)
     } else {
         None
     }
@@ -1521,6 +1710,92 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     args.clear();
                     args.push(base_arg);
                     args.push(exp_arg);
+                }
+                // ---- M-F.3.5 string stdlib (ADR-0050e) ----
+                // Two-arg Str×Str dispatch (split / find / contains /
+                // starts_with / ends_with) — all p×p signatures.
+                Kind::StrSplit
+                | Kind::StrFind
+                | Kind::StrContains
+                | Kind::StrStartsWith
+                | Kind::StrEndsWith => {
+                    if args.len() != 2 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!(
+                                "M-F.3.5 string fn: expected 2 args, got {}",
+                                args.len()
+                            ),
+                        });
+                    }
+                    let a = args[0].clone();
+                    let b = args[1].clone();
+                    let sym = match kind {
+                        Kind::StrSplit => STR_SPLIT_RUNTIME_SYMBOL,
+                        Kind::StrFind => STR_FIND_RUNTIME_SYMBOL,
+                        Kind::StrContains => STR_CONTAINS_RUNTIME_SYMBOL,
+                        Kind::StrStartsWith => STR_STARTS_WITH_RUNTIME_SYMBOL,
+                        Kind::StrEndsWith => STR_ENDS_WITH_RUNTIME_SYMBOL,
+                        _ => unreachable!(),
+                    };
+                    *func = Operand::Constant(Constant::Str(sym.to_string()));
+                    args.clear();
+                    args.push(a);
+                    args.push(b);
+                }
+                // `join(parts: list[str], sep: str) -> str` — two-arg
+                // p×p signature; first arg is a list[str] pointer, second
+                // is a str pointer. C-ABI handles both as `*mut u8`.
+                Kind::StrJoin => {
+                    if args.len() != 2 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("join: expected 2 args, got {}", args.len()),
+                        });
+                    }
+                    let parts = args[0].clone();
+                    let sep = args[1].clone();
+                    *func = Operand::Constant(Constant::Str(STR_JOIN_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(parts);
+                    args.push(sep);
+                }
+                // `replace(s, old, new) -> str` — three-arg p×p×p→p.
+                Kind::StrReplace => {
+                    if args.len() != 3 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("replace: expected 3 args, got {}", args.len()),
+                        });
+                    }
+                    let s = args[0].clone();
+                    let old = args[1].clone();
+                    let new_ = args[2].clone();
+                    *func =
+                        Operand::Constant(Constant::Str(STR_REPLACE_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(s);
+                    args.push(old);
+                    args.push(new_);
+                }
+                // Single-arg Str→Str dispatch (trim / lower / upper / clone).
+                Kind::StrTrim | Kind::StrLower | Kind::StrUpper | Kind::StrClone => {
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!(
+                                "M-F.3.5 string single-arg fn: expected 1 arg, got {}",
+                                args.len()
+                            ),
+                        });
+                    }
+                    let s = args[0].clone();
+                    let sym = match kind {
+                        Kind::StrTrim => STR_TRIM_RUNTIME_SYMBOL,
+                        Kind::StrLower => STR_LOWER_RUNTIME_SYMBOL,
+                        Kind::StrUpper => STR_UPPER_RUNTIME_SYMBOL,
+                        Kind::StrClone => STR_CLONE_RUNTIME_SYMBOL,
+                        _ => unreachable!(),
+                    };
+                    *func = Operand::Constant(Constant::Str(sym.to_string()));
+                    args.clear();
+                    args.push(s);
                 }
             }
         }
