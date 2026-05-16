@@ -1690,6 +1690,11 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                     let len_v = self.builder.inst_results(len_call)[0];
                     self.builder.ins().call(fmt_fr, &[buf, ptr_v, len_v]);
                 }
+                idx += 1; // ADR-0050c merge-conflict regression: forgot to advance the
+            // hole-iterator in the is_str branch (f64-DEV's while-idx loop +
+            // list[str]-DEV's is_str dispatch were combined in commit aca5d87 but
+            // the increment was dropped). Result: infinite loop on f-string Str
+            // hole, build hangs+exits silently. Test f3ls29 caught this regression.
             } else if v_ty == ir::types::F32 || v_ty == ir::types::F64 {
                 let v_f64 = if v_ty == ir::types::F32 {
                     self.builder.ins().fpromote(ir::types::F64, v)
