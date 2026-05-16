@@ -1603,3 +1603,219 @@ fn i125_dict_empty_no_annot_ambiguous_or_inferred() {
         Cat::AmbiguousType,
     );
 }
+
+// ============================================================
+// Tier B — M-F.3.5 string stdlib ill-typed corpus (ADR-0050e).
+//
+// Locks the type-checker rejection surface for the eleven new PRELUDE
+// fns from ADR-0050e §"Decision 3":
+//   1.  split / 2. join / 3. replace / 4. trim / 5. find
+//   6.  contains / 7. starts_with / 8. ends_with
+//   9.  lower / 10. upper / 11. clone
+//
+// Per the precedent at well_typed.rs:STR_STDLIB_STUBS, these tests
+// prepend the eleven PRELUDE signatures inline so the rejection is
+// from arg-type / arity / return-type mismatch rather than UnknownName
+// (which would be a less specific signal). Sub-sprint 1 DEV graduates
+// the stubs into the canonical PRELUDE; after that the stub prefix
+// is redundant but harmless.
+//
+// Coverage table (matches mission §"Tier B" requirements):
+//   - wrong arg type for each fn (i126..i130)
+//   - wrong return-bind type (i131..i133)
+//   - clone on non-Str (i134) — clone is Str-only in M-F.3.5
+//   - implicit-truthiness of find return (i135) — Cat::ImplicitTruthiness
+//   - wrong arity for each variadic-position fn (i136..i140)
+//
+// ============================================================
+
+// Shared stub block (mirror of STR_STDLIB_STUBS in well_typed.rs).
+const STR_STDLIB_STUBS: &str = concat!(
+    "fn print(s: str) -> i64:\n    return 0\n",
+    "fn split(s: str, sep: str) -> list[str]:\n    let xs: list[str] = []\n    return xs\n",
+    "fn join(parts: list[str], sep: str) -> str:\n    return \"\"\n",
+    "fn replace(s: str, old: str, new: str) -> str:\n    return \"\"\n",
+    "fn trim(s: str) -> str:\n    return \"\"\n",
+    "fn find(s: str, needle: str) -> i64:\n    return -1\n",
+    "fn contains(s: str, needle: str) -> bool:\n    return False\n",
+    "fn starts_with(s: str, prefix: str) -> bool:\n    return False\n",
+    "fn ends_with(s: str, suffix: str) -> bool:\n    return False\n",
+    "fn lower(s: str) -> str:\n    return \"\"\n",
+    "fn upper(s: str) -> str:\n    return \"\"\n",
+    "fn clone(s: str) -> str:\n    return s\n",
+);
+
+fn must_reject_with_str_stdlib_stubs(name: &str, body: &str, cat: Cat) {
+    let src = format!("{STR_STDLIB_STUBS}{body}");
+    must_reject(name, &src, cat);
+}
+
+// ---- Tier B.1: wrong arg type for each surface fn ----
+
+#[test]
+fn i126_split_wrong_first_arg_int_rejected() {
+    // `split(42, ",")` — first arg must be str, not i64.
+    must_reject_with_str_stdlib_stubs(
+        "split-int-first-arg",
+        "fn f() -> i64:\n    let xs: list[str] = split(42, \",\")\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i127_split_wrong_second_arg_int_rejected() {
+    // `split("a,b", 0)` — second arg must be str.
+    must_reject_with_str_stdlib_stubs(
+        "split-int-second-arg",
+        "fn f() -> i64:\n    let xs: list[str] = split(\"a,b\", 0)\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i128_contains_wrong_needle_int_rejected() {
+    // `contains(s, 42)` — needle must be str.
+    must_reject_with_str_stdlib_stubs(
+        "contains-int-needle",
+        "fn f(s: str) -> bool:\n    return contains(s, 42)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i129_replace_wrong_third_arg_bool_rejected() {
+    // `replace(s, "a", True)` — third arg must be str.
+    must_reject_with_str_stdlib_stubs(
+        "replace-bool-third-arg",
+        "fn f(s: str) -> str:\n    return replace(s, \"a\", True)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i130_find_wrong_needle_list_rejected() {
+    // `find(s, [1, 2])` — needle must be str; list[i64] rejected.
+    must_reject_with_str_stdlib_stubs(
+        "find-list-needle",
+        "fn f(s: str) -> i64:\n    let xs: list[i64] = [1, 2]\n    return find(s, xs)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Tier B.2: wrong return-bind type ----
+
+#[test]
+fn i131_trim_return_bound_to_i64_rejected() {
+    // `let v: i64 = trim("x")` — trim returns str, not i64.
+    must_reject_with_str_stdlib_stubs(
+        "trim-into-i64-let",
+        "fn f() -> i64:\n    let v: i64 = trim(\"x\")\n    return v\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i132_find_return_bound_to_str_rejected() {
+    // `let v: str = find(s, n)` — find returns i64, not str.
+    must_reject_with_str_stdlib_stubs(
+        "find-into-str-let",
+        "fn f(s: str, n: str) -> str:\n    let v: str = find(s, n)\n    return v\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i133_contains_return_bound_to_str_rejected() {
+    // `let v: str = contains(s, n)` — contains returns bool, not str.
+    must_reject_with_str_stdlib_stubs(
+        "contains-into-str-let",
+        "fn f(s: str, n: str) -> str:\n    let v: str = contains(s, n)\n    return v\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Tier B.3: clone on non-Str — clone is Str-only in M-F.3.5 ----
+
+#[test]
+fn i134_clone_on_i64_rejected_str_only() {
+    // `clone(42)` — clone is `fn clone(s: str) -> str`; calling on i64
+    // is an arg-type error. Generic clone is Phase G (Q10 in ADR-0050e
+    // §"Open questions").
+    must_reject_with_str_stdlib_stubs(
+        "clone-on-i64",
+        "fn f() -> i64:\n    let v: str = clone(42)\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Tier B.4: implicit-truthiness of find's i64 return ----
+
+#[test]
+fn i135_find_in_if_predicate_implicit_truthy_rejected() {
+    // The footgun ADR-0050e Decision 5 / Q2 calls out explicitly:
+    // `if find(s, x):` is implicit-truthiness on an i64 return.
+    // Constitution §2.2 forbids; type-check rejects with
+    // ImplicitTruthiness. Users MUST write `if find(s, x) != -1:`.
+    //
+    // This test locks the §2.2 footgun-blocking gate documented at
+    // ADR-0050e §"Decision 5 — `find` returns i64 with -1 sentinel".
+    must_reject_with_str_stdlib_stubs(
+        "find-in-if-implicit-truthy",
+        "fn f(s: str, n: str) -> i64:\n    if find(s, n):\n        return 1\n    return 0\n",
+        Cat::ImplicitTruthiness,
+    );
+}
+
+// ---- Tier B.5: wrong arity ----
+
+#[test]
+fn i136_split_one_arg_arity_rejected() {
+    // `split("x")` — split requires 2 args; calling with 1 is arity.
+    must_reject_with_str_stdlib_stubs(
+        "split-arity-one",
+        "fn f() -> i64:\n    let xs: list[str] = split(\"x\")\n    return 0\n",
+        Cat::ArityMismatch,
+    );
+}
+
+#[test]
+fn i137_clone_zero_args_arity_rejected() {
+    // `clone()` — clone requires 1 arg; zero is arity.
+    must_reject_with_str_stdlib_stubs(
+        "clone-arity-zero",
+        "fn f() -> i64:\n    let v: str = clone()\n    return 0\n",
+        Cat::ArityMismatch,
+    );
+}
+
+#[test]
+fn i138_replace_two_args_arity_rejected() {
+    // `replace(s, old)` — replace requires 3 args; 2 is arity.
+    must_reject_with_str_stdlib_stubs(
+        "replace-arity-two",
+        "fn f() -> str:\n    return replace(\"a\", \"b\")\n",
+        Cat::ArityMismatch,
+    );
+}
+
+#[test]
+fn i139_trim_two_args_arity_rejected() {
+    // `trim(s, x)` — trim accepts 1 arg; 2 is arity. The Phase G
+    // `trim_chars(s, chars)` extension is a different surface
+    // (per ADR-0050e §Q5).
+    must_reject_with_str_stdlib_stubs(
+        "trim-arity-two",
+        "fn f() -> str:\n    return trim(\"  x  \", \" \")\n",
+        Cat::ArityMismatch,
+    );
+}
+
+#[test]
+fn i140_starts_with_one_arg_arity_rejected() {
+    // `starts_with(s)` — starts_with requires 2 args.
+    must_reject_with_str_stdlib_stubs(
+        "starts-with-arity-one",
+        "fn f() -> bool:\n    return starts_with(\"abc\")\n",
+        Cat::ArityMismatch,
+    );
+}
