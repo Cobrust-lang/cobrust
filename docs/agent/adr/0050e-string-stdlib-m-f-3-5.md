@@ -4,7 +4,7 @@ adr_id: 0050e
 title: "M-F.3.5 string stdlib design (split / join / replace / trim / find / contains / starts_with / ends_with / lower / upper + clone)"
 status: accepted
 date: 2026-05-16
-last_verified_commit: 0ddcd27
+last_verified_commit: 8c104cc
 supersedes: []
 superseded_by: []
 relates_to: [adr:0019, adr:0024, adr:0025, adr:0027, adr:0034, adr:0044, adr:0044a, adr:0049, adr:0050, adr:0050b, adr:0050c, adr:0050d]
