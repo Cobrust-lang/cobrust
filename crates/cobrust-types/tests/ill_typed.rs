@@ -1819,3 +1819,158 @@ fn i140_starts_with_one_arg_arity_rejected() {
         Cat::ArityMismatch,
     );
 }
+
+// ============================================================
+// M-F.3.6 — File IO completion (ADR-0050f)
+// i141..i150 — Tier B ill-typed corpus for 7 surface fns.
+//
+// Pre-impl status: the 7 fns do not exist in the PRELUDE yet.
+// These tests inject FILE_IO_STUBS inline (same pattern as
+// STR_STDLIB_STUBS above) so rejection is from arg-type /
+// arity / return-type mismatch rather than UnknownName.
+//
+// Coverage table (ADR-0050f mission §"Tier B"):
+//   i141: wrong arg type — write_file(42, "x") → TypeMismatch
+//   i142: implicit truthy on i64 — if write_file(p, c): → ImplicitTruthiness
+//   i143: wrong return bind — let s: str = write_file(p, c) → TypeMismatch
+//   i144: wrong arg type — read_file(42) → TypeMismatch
+//   i145: wrong arg type — append_file(42, "x") → TypeMismatch
+//   i146: implicit truthy — if append_file(p, c): → ImplicitTruthiness
+//   i147: wrong return bind — let b: bool = stdout_write(s) → TypeMismatch
+//   i148: implicit truthy — if stdout_write(s): → ImplicitTruthiness
+//   i149: wrong arg type — stdout_write(42) → TypeMismatch
+//   i150: arity — write_file("/path") → ArityMismatch (1 arg, needs 2)
+//
+// NOTE: read_file with a non-existent path is a RUNTIME error,
+// not a TYPE error. Tests for runtime errors live in the E2E
+// corpus (file_io_e2e.rs). No ill-typed test covers that case.
+// ============================================================
+
+// Shared file-IO stub block (mirrors FILE_IO_STUBS in well_typed.rs).
+const FILE_IO_STUBS: &str = concat!(
+    "fn print(s: str) -> i64:\n    return 0\n",
+    "fn str_len(s: str) -> i64:\n    return 0\n",
+    "fn clone(s: str) -> str:\n    return s\n",
+    "fn read_file(path: str) -> str:\n    return \"\"\n",
+    "fn read_file_lines(path: str) -> list[str]:\n    let xs: list[str] = []\n    return xs\n",
+    "fn write_file(path: str, contents: str) -> i64:\n    return 0\n",
+    "fn append_file(path: str, contents: str) -> i64:\n    return 0\n",
+    "fn stdin_read_all() -> str:\n    return \"\"\n",
+    "fn stdout_write(s: str) -> i64:\n    return 0\n",
+    "fn stderr_write(s: str) -> i64:\n    return 0\n",
+);
+
+fn must_reject_with_file_io_stubs(name: &str, body: &str, cat: Cat) {
+    let src = format!("{FILE_IO_STUBS}{body}");
+    must_reject(name, &src, cat);
+}
+
+// ---- Tier B.1: wrong arg type for write_file / read_file ----
+
+#[test]
+fn i141_write_file_first_arg_int_rejected() {
+    // `write_file(42, "x")` — first arg must be str (path), not i64.
+    // ADR-0050f §"Decision": `write_file(path: str, contents: str) -> i64`.
+    must_reject_with_file_io_stubs(
+        "write-file-int-path",
+        "fn f() -> i64:\n    return write_file(42, \"x\")\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i142_write_file_implicit_truthy_on_i64_rejected() {
+    // `if write_file(p, c):` — implicit truthiness on i64 return.
+    // ADR-0050f Q1 + constitution §2.2 "if x requires x: bool".
+    must_reject_with_file_io_stubs(
+        "write-file-implicit-truthy",
+        "fn f() -> i64:\n    if write_file(\"/tmp/x\", \"hello\"):\n        return 1\n    return 0\n",
+        Cat::ImplicitTruthiness,
+    );
+}
+
+#[test]
+fn i143_write_file_return_bound_to_str_rejected() {
+    // `let s: str = write_file(p, c)` — return is i64, not str.
+    // Type annotation mismatch.
+    must_reject_with_file_io_stubs(
+        "write-file-return-as-str",
+        "fn f() -> i64:\n    let s: str = write_file(\"/tmp/x\", \"hello\")\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i144_read_file_int_path_rejected() {
+    // `read_file(42)` — path must be str; i64 rejected.
+    // ADR-0050f §"Decision": `read_file(path: str) -> str`.
+    must_reject_with_file_io_stubs(
+        "read-file-int-path",
+        "fn f() -> str:\n    return read_file(42)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i145_append_file_first_arg_int_rejected() {
+    // `append_file(42, "x")` — first arg must be str.
+    // ADR-0050f §"Decision": `append_file(path: str, contents: str) -> i64`.
+    must_reject_with_file_io_stubs(
+        "append-file-int-path",
+        "fn f() -> i64:\n    return append_file(42, \"x\")\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i146_append_file_implicit_truthy_on_i64_rejected() {
+    // `if append_file(p, c):` — implicit truthiness on i64 return.
+    must_reject_with_file_io_stubs(
+        "append-file-implicit-truthy",
+        "fn f() -> i64:\n    if append_file(\"/tmp/x\", \"more\"):\n        return 1\n    return 0\n",
+        Cat::ImplicitTruthiness,
+    );
+}
+
+#[test]
+fn i147_stdout_write_return_bound_to_bool_rejected() {
+    // `let b: bool = stdout_write(s)` — return is i64, not bool.
+    // Locks that i64-sentinel return is not silently coerced.
+    must_reject_with_file_io_stubs(
+        "stdout-write-return-as-bool",
+        "fn f() -> i64:\n    let b: bool = stdout_write(\"msg\")\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i148_stdout_write_implicit_truthy_on_i64_rejected() {
+    // `if stdout_write(s):` — implicit truthiness. Same rule as
+    // print family; stdout_write i64 return cannot be used as bool.
+    must_reject_with_file_io_stubs(
+        "stdout-write-implicit-truthy",
+        "fn f() -> i64:\n    if stdout_write(\"msg\"):\n        return 1\n    return 0\n",
+        Cat::ImplicitTruthiness,
+    );
+}
+
+#[test]
+fn i149_stdout_write_int_arg_rejected() {
+    // `stdout_write(42)` — arg must be str; i64 rejected.
+    // ADR-0050f §"Decision": `stdout_write(s: str) -> i64`.
+    must_reject_with_file_io_stubs(
+        "stdout-write-int-arg",
+        "fn f() -> i64:\n    return stdout_write(42)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i150_write_file_one_arg_arity_rejected() {
+    // `write_file("/path")` — write_file requires 2 args; 1 is arity.
+    must_reject_with_file_io_stubs(
+        "write-file-arity-one",
+        "fn f() -> i64:\n    return write_file(\"/tmp/x\")\n",
+        Cat::ArityMismatch,
+    );
+}
