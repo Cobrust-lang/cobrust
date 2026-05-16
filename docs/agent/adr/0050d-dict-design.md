@@ -1103,3 +1103,82 @@ tight; this ADR is the design-side prerequisite to keep the wall
 clock honest.
 
 — P9 opus tech-lead, 2026-05-16
+
+## Amendment 2026-05-16 — Dict Copy@operand walk-back (sub-sprint c+d cascade closure)
+
+Per ADSD F2 addendum-not-rewrite discipline. This amendment captures
+the symmetric extension of the Phase 2a List walk-back to Dict that
+surfaced during sub-sprints c+d (per merge `d15bde7`). Mirrors the
+ADR-0050 §A1-A7 amendment pattern.
+
+### Context — the symmetric walk-back
+
+ADR-0050d Decision 7 originally inherited ADR-0050c Option A
+(Str=non-Copy uniformly) and implied the same for Dict-typed locals.
+Sub-sprint c+d DEV (per `d15bde7` merge commit body) found this
+caused **UseAfterMove** on every PRELUDE-shape dict access:
+
+```cobrust
+let d: Dict[i64, i64] = {}
+d[1] = 10       # First call MOVES `d` under strict Decision 7.
+d[1]            # UseAfterMove rejection — but this is the most basic dict access pattern.
+```
+
+Same root cause as the LC-100 list-str `let n = str_len(s); str_at(s, i)`
+honest-debt: strict non-Copy at the operand level + no source-level
+`&` borrow syntax = unusable PRELUDE ergonomics.
+
+### Decision — symmetric Copy@operand + non-Copy@drop split
+
+`Ty::Dict(_, _)` joins `Ty::List(_)` in `is_copy_type` at
+`crates/cobrust-mir/src/lower.rs:2186` (Copy at operand level).
+`Ty::Dict(_, _)` stays excluded from `drop.rs::is_copy` at
+`crates/cobrust-mir/src/drop.rs:149` (drop-eligible at scope exit
+via `__cobrust_dict_drop` per §"Implementation map" sub-sprint d).
+
+This is the **symmetric extension** of the Phase 2a List walk-back
+(per `ADR-0050c §"Phase 2a spike"` + `crates/cobrust-mir/src/lower.rs::is_copy_type`
+existing List handling). The rationale is identical:
+
+- Phase F.3 has no source-level `&` borrow syntax.
+- PRELUDE call shapes (`dict_get(d, k)`, `dict_set(d, k, v)`,
+  `dict_is_empty(d)`, `d[k]`, `d[k] = v`, `key in d`) all need to
+  read `d` without consuming it for multi-call patterns.
+- The drop schedule is unaffected — every Dict-typed local emits
+  `__cobrust_dict_drop` at scope exit via the codegen `emit_drop_for_ty`
+  Ty::Dict arm. Heap memory ownership is correct.
+- Compile-time use-after-move detection on Dict is lost (same trade
+  as List). Phase G's explicit borrow form or let-rebind shortcut
+  will close this.
+
+### Consequences (F30 enumeration update)
+
+This amendment closes 4 cascade bugs surfaced at impl time but not
+pre-enumerated in §"Consequences" at design time:
+
+1. **UseAfterMove on `d[k]=v; d[k]`** — fixed by `is_copy_type`
+   extension (`lower.rs:2186`).
+2. **`Aggregate(Dict)` destination-type plumbing** — fixed via
+   `lower_aggregate_dict_typed(operands, dest_ty)` overload reading
+   `body.locals[place].ty` to pick the right (K, V) typed shim.
+3. **`BinOp::In` codegen "UnimplementedBinOp" panic** — fixed by
+   MIR-side Dict-typed intrinsic rewrite emitting
+   `__cobrust_dict_contains_K(d, k)` + `Eq`/`NotEq` bool wrap.
+4. **clippy `items_after_statements`** on inline StrBufRef — hoisted
+   to module scope.
+
+These 4 bugs are the second empirical baseline for ADSD F30
+candidate (`docs/agent/findings/predicate-flip-cascade-discovery-deficit.md`).
+Wave 2 list[str] was baseline #1; Wave 3 dict is baseline #2. F30
+"shadow-flip dry-run" SOP would have surfaced all 4 at design time.
+
+### Symmetry table (post-amendment, locked)
+
+| Type | `is_copy_type` (operand level) | `is_copy` (drop pass) | Notes |
+|---|---|---|---|
+| `Ty::Str` | excluded (non-Copy) | excluded (drop-eligible) | Uniform non-Copy per ADR-0050c Option A. |
+| `Ty::List(_)` | included (Copy@operand) | excluded (drop-eligible) | Phase 2a walk-back per ADR-0050c. |
+| `Ty::Dict(_, _)` | included (Copy@operand) | excluded (drop-eligible) | **This amendment** — symmetric extension. |
+| `Ty::Bool / Ty::Int / Ty::Float / Ty::Imag / Ty::None / Ty::Never` | included (Copy) | included (no-op drop) | Primitive Copy types. |
+
+— Post-Wave-3 audit (a19ec12e17f7212b3) F-W3-1 closure, 2026-05-16 night
