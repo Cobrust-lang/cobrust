@@ -56,10 +56,10 @@ pub fn argv_list() -> Vec<String> {
 /// # Safety
 ///
 /// No pointer arguments — always safe to call. The returned list and
-/// its element Strs must be freed via `__cobrust_list_drop` (which
-/// frees the i64 slots; the Str payloads each need
-/// `__cobrust_str_drop`). M12.x convention: codegen owns the drop
-/// schedule.
+/// its element Strs are freed by the codegen-emitted drop schedule per
+/// ADR-0050c: `Ty::List(Ty::Str)` dispatches to
+/// `__cobrust_list_drop_elems(list, __cobrust_str_drop)` at the
+/// binding's scope exit (`cranelift_backend.rs::emit_drop_for_ty`).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_argv() -> *mut u8 {
     let captured = argv_list();

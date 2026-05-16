@@ -231,6 +231,18 @@ impl<'a> BodyBuilder<'a> {
         // Skip the return local at index 0; params live at indices 1..1+N.
         // After lowering finishes we record param_count = (number of
         // Param-DefId locals).
+        //
+        // NOTE: this `param_count` reflects USER-DECLARED parameters
+        // only (the return slot at LocalId(0) is not counted). Codegen
+        // at `cranelift_backend.rs:561-565` uses
+        // `body.locals.iter().skip(1).take(param_count)` to slice
+        // params for block-arg binding, so the value must remain the
+        // USER count. The drop pass's `is_param(id) = id < param_count`
+        // therefore covers `[LocalId(0)=_return, LocalId(1)=param0,
+        // ..., LocalId(N-1)=param_{N-2}]` but EXCLUDES LocalId(N) — the
+        // last parameter. ADR-0050c Phase 4 cascade-fix sidesteps this
+        // skew by changing the drop pass's exclusion predicate directly
+        // (`crates/cobrust-mir/src/drop.rs:45`) to use a +1 offset.
         self.param_count = self.def_to_local.len();
     }
 
