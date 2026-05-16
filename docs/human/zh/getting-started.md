@@ -167,6 +167,91 @@ M-F.3.2 的变化:
 端到端 corpus 见 `crates/cobrust-cli/tests/list_str_e2e.rs`,
 C-ABI 链接期测试见 `crates/cobrust-stdlib/tests/list_str_drop_corpus.rs`。
 
+## 第 2.8 步：字符串标准库（M-F.3.5）
+
+十一个 PRELUDE 函数让 Cobrust 可以应付日常字符串处理 —— 日志解析、
+CSV 切片、简单文本变换(参见
+[ADR-0050e](../../agent/adr/0050e-string-stdlib-m-f-3-5.md))。
+
+surface:
+
+- `split(s: str, sep: str) -> list[str]`
+- `join(parts: list[str], sep: str) -> str`
+- `replace(s: str, old: str, new: str) -> str`
+- `trim(s: str) -> str`(两侧空白)
+- `find(s: str, needle: str) -> i64`(找不到返回 `-1`)
+- `contains(s: str, needle: str) -> bool`
+- `starts_with(s: str, prefix: str) -> bool`
+- `ends_with(s: str, suffix: str) -> bool`
+- `lower(s: str) -> str` / `upper(s: str) -> str`
+- `clone(s: str) -> str`(深拷贝;LC-100 honest-debt 缓解手段)
+
+示例(`hello_csv.cb`):
+
+```cobrust
+fn main() -> i64:
+    let line: str = "alpha,beta,gamma"
+    let parts: list[str] = split(line, ",")
+    for p in parts:
+        let _ = print(upper(p))
+    return 0
+```
+
+```bash
+cobrust run hello_csv.cb
+# ALPHA
+# BETA
+# GAMMA
+```
+
+`find` 返回 `i64`,用 `-1` 做哨兵(Decision 5 / Q2)。文档强制的用法
+是 `if pos != -1:`,而 **不是** `if find(...):` —— Cobrust 不允许
+隐式真假(§2.2):
+
+```cobrust
+let pos: i64 = find("hello world", "world")
+if pos != -1:
+    print_int(pos)
+else:
+    let _ = print("not found")
+```
+
+`clone(s)` 是 LC-100 honest-debt 的缓解手段。因为 ADR-0050c 让所有
+Str 参数都是 Move 语义,所以 `let n = str_len(s); let c = str_at(s, 0)`
+这种多次读取会被编译器以 use-after-move 拒绝。解决办法是 inline 调用
+`clone()`,让每次调用拿到一份新 buffer:
+
+```cobrust
+let s: str = input("")
+let n: i64 = str_len(clone(s))      # 拿一份新 s 给 str_len
+let i: i64 = n - 1
+while i >= 0:
+    let c: str = str_at(clone(s), i)  # 每次循环再 clone 一份
+    let _ = print(c)
+    i = i - 1
+let _ = print(upper(s))              # 最后一次使用,不需要 clone
+return 0
+```
+
+M-F.3.5 的变化:
+- `crates/cobrust-cli/src/build.rs` 的 PRELUDE 加了 11 个新 stub;
+  `intrinsics.rs` 加了 11 条 intrinsic-rewrite 路径,把每一处调用
+  改写成 C-ABI shim `__cobrust_str_<fn>`。
+- `crates/cobrust-stdlib/src/string.rs` 提供 10 个新 C-ABI shim
+  (`__cobrust_str_clone` 在 ADR-0050c 已经随 fmt.rs 一并落地)。
+- Rust 侧 `string::strip` 按 Decision 4 改名为 `string::trim`。
+
+边界用例(ADR-0050e Decision 8):
+- `split("", ",") -> [""]`(单元素)
+- `split(s, "") -> [s]`(参考 Rust `str::split` 的语义)
+- `join([], sep) -> ""`
+- `replace(s, "", new)` 在每个字节位置都插入 `new`
+- `find(s, "") -> 0`
+- `contains(s, "") -> true`(空子串总是命中)
+
+端到端 corpus 见 `crates/cobrust-cli/tests/string_stdlib_e2e.rs`,
+C-ABI shim 定义见 `crates/cobrust-stdlib/src/string.rs`。
+
 ## 第三步：试用 AI alpha 能力（可选）
 
 1. 复制 router 示例配置，并填入你的 provider 凭据：

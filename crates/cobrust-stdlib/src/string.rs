@@ -1,10 +1,16 @@
-//! `std.string` — len / find / replace / split / strip / lower /
-//! upper / format.
+//! `std.string` — len / find / replace / split / trim / lower /
+//! upper / contains / starts_with / ends_with / join / format
+//! plus the C-ABI surface consumed by codegen-emitted M-F.3.5 calls.
 //!
-//! ADR-0025 §"Public surface (binding)" pins the API. Per ADR-0019
-//! §"M11 — Standard library" the surface mirrors Python's `str`
-//! operations, with Cobrust's "no silent coercion" rule
+//! ADR-0025 §"Public surface (binding)" pins the Rust-side API. Per
+//! ADR-0019 §"M11 — Standard library" the surface mirrors Python's
+//! `str` operations, with Cobrust's "no silent coercion" rule
 //! (constitution §2.2) applied to `format`.
+//!
+//! ADR-0050e (M-F.3.5) adds the C-ABI shim surface and four net-new
+//! Rust helpers (`join` / `contains` / `starts_with` / `ends_with`).
+//! The existing `strip` helper is renamed to `trim` per Decision 4
+//! to match Rust + LeetCode convention.
 
 // =====================================================================
 // Surface helpers
@@ -40,7 +46,11 @@ pub fn split(s: &str, sep: &str) -> Vec<String> {
 }
 
 /// Trim ASCII / Unicode whitespace from both ends.
-pub fn strip(s: &str) -> &str {
+///
+/// Renamed from `strip` in ADR-0050e Decision 4 to match Rust's
+/// `str::trim`, Python's `str.strip()` (no-arg form), and LeetCode
+/// convention.
+pub fn trim(s: &str) -> &str {
     s.trim()
 }
 
@@ -54,6 +64,30 @@ pub fn lower(s: &str) -> String {
 /// Uppercase. Same caveat as [`lower`].
 pub fn upper(s: &str) -> String {
     s.to_uppercase()
+}
+
+/// Concatenate `parts` with `sep` between every pair of adjacent
+/// elements. ADR-0050e Decision 8: empty input list yields the empty
+/// string; one-element input yields the element unchanged (no
+/// separator emitted).
+pub fn join(parts: &[&str], sep: &str) -> String {
+    parts.join(sep)
+}
+
+/// Returns `true` if `needle` is a (byte) substring of `s`. Byte-level
+/// per ADR-0050e Decision 6.
+pub fn contains(s: &str, needle: &str) -> bool {
+    s.contains(needle)
+}
+
+/// Returns `true` if `s` begins with `prefix` (byte-level).
+pub fn starts_with(s: &str, prefix: &str) -> bool {
+    s.starts_with(prefix)
+}
+
+/// Returns `true` if `s` ends with `suffix` (byte-level).
+pub fn ends_with(s: &str, suffix: &str) -> bool {
+    s.ends_with(suffix)
 }
 
 // =====================================================================
@@ -139,6 +173,254 @@ pub fn format(template: &str, args: &[FormatArg<'_>]) -> String {
     }
     out
 }
+
+// =====================================================================
+// C-ABI surface (ADR-0050e M-F.3.5)
+// =====================================================================
+//
+// Eleven shims wrapping the Rust-side helpers above. Each shim takes
+// `*mut u8` Str buffer pointers per the ADR-0044 W2 Phase 3 + ADR-0050c
+// convention (StringBuffer pointers materialized via
+// `__cobrust_str_new` + `__cobrust_str_push_static`). Returns either a
+// newly-allocated Str pointer or i64 (for find / predicates).
+//
+// **Ownership convention (ADR-0050e §"Open shim-drop-owner question")**:
+// The shim does NOT drop its Str args. The caller's MIR drop pass
+// (ADR-0050c Phase 2) owns the input lifetime; the codegen emits
+// `__cobrust_str_drop` at scope exit for the call-site bindings. The
+// shim only reads its inputs via `str_buf_as_str_local` and allocates
+// fresh return buffers via `alloc_str_buffer_local`.
+//
+// `__cobrust_str_clone` is already shipped at `fmt.rs:306` and is NOT
+// duplicated here; the M-F.3.5 PRELUDE plumbing reuses that shim.
+
+/// Read a Str buffer pointer as a `&str` slice (read-only borrow into
+/// the heap StringBuffer's UTF-8 bytes). Mirrors `io.rs:570`'s
+/// `str_buf_as_str_phase3` so this module is self-contained.
+///
+/// # Safety
+///
+/// `buf` must be a non-null pointer to a `StringBuffer` produced by
+/// `__cobrust_str_new` (or `__cobrust_str_clone`).
+unsafe fn str_buf_as_str_local<'a>(buf: *mut u8) -> &'a str {
+    if buf.is_null() {
+        return "";
+    }
+    // SAFETY: caller-attestation.
+    let len = unsafe { crate::fmt::__cobrust_str_len(buf) } as usize;
+    if len == 0 {
+        return "";
+    }
+    let ptr = unsafe { crate::fmt::__cobrust_str_ptr(buf) };
+    if ptr.is_null() {
+        return "";
+    }
+    // SAFETY: ptr points to `len` bytes of UTF-8 maintained by all
+    // StringBuffer write paths.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    std::str::from_utf8(bytes).unwrap_or("")
+}
+
+/// Allocate a fresh heap StringBuffer carrying `s`'s bytes; returns the
+/// opaque `*mut u8` pointer the caller's drop pass picks up.
+fn alloc_str_buffer_local(s: &str) -> *mut u8 {
+    // SAFETY: `__cobrust_str_new` returns a valid empty buffer pointer;
+    // `__cobrust_str_push_static` is safe for valid (ptr, len) pairs.
+    unsafe {
+        let buf = crate::fmt::__cobrust_str_new();
+        if !s.is_empty() {
+            crate::fmt::__cobrust_str_push_static(buf, s.as_ptr(), s.len() as i64);
+        }
+        buf
+    }
+}
+
+/// C-ABI shim for source-level `split(s: str, sep: str) -> list[str]`.
+///
+/// Materializes a heap `List<i64>` whose i64 slots store owned
+/// StringBuffer pointers (one per split element). The codegen drop
+/// schedule frees each element + the list via
+/// `__cobrust_list_drop_elems(list, __cobrust_str_drop)` at scope exit
+/// (ADR-0050c Phase 3).
+///
+/// Empty-input edge cases (ADR-0050e Decision 8):
+///   - `split("", sep)` → `[""]` (one element, empty Str)
+///   - `split(s, "")`   → `[s]` (mirrors `string::split` semantics)
+///
+/// # Safety
+///
+/// `s` and `sep` must be valid Str buffer pointers produced by
+/// `__cobrust_str_new` (or null). The returned list must be passed to
+/// `__cobrust_list_drop_elems(list, __cobrust_str_drop)` exactly once
+/// (codegen does this automatically per ADR-0050c).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_split(s: *mut u8, sep: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation.
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    let sep_str = unsafe { str_buf_as_str_local(sep) };
+    let parts = split(s_str, sep_str);
+    // SAFETY: list_new returns a valid List<i64> pointer with `len`
+    // zeroed slots; list_set writes the i64 slot at index i.
+    unsafe {
+        let list = crate::collections::__cobrust_list_new(8, parts.len() as i64);
+        for (i, part) in parts.iter().enumerate() {
+            let buf = alloc_str_buffer_local(part);
+            crate::collections::__cobrust_list_set(list, i as i64, buf as i64);
+        }
+        list
+    }
+}
+
+/// C-ABI shim for source-level `join(parts: list[str], sep: str) -> str`.
+///
+/// Reads `parts` as a `List<i64>` whose slots store Str buffer
+/// pointers (the shape `split` / `argv()` produces), reads `sep`,
+/// concatenates with `sep` between every adjacent pair, and returns a
+/// fresh Str buffer. Empty list → empty Str; one-element list → that
+/// element without separator (ADR-0050e Decision 8).
+///
+/// # Safety
+///
+/// `parts` must be a valid `List<i64>` pointer whose slots are valid
+/// Str buffer pointers. `sep` must be a valid Str buffer pointer or
+/// null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_join(parts: *mut u8, sep: *mut u8) -> *mut u8 {
+    let sep_str = unsafe { str_buf_as_str_local(sep) };
+    if parts.is_null() {
+        return alloc_str_buffer_local("");
+    }
+    // SAFETY: parts is a valid List<i64>.
+    let n = unsafe { crate::collections::__cobrust_list_len(parts) };
+    if n <= 0 {
+        return alloc_str_buffer_local("");
+    }
+    let mut owned: Vec<String> = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        // SAFETY: i is in [0, n) and the slot stores an `*mut u8`
+        // reinterpretation of a StringBuffer pointer.
+        let slot = unsafe { crate::collections::__cobrust_list_get(parts, i) };
+        // Treat slot value as a Str buffer pointer.
+        let bp = slot as *mut u8;
+        let s = unsafe { str_buf_as_str_local(bp) };
+        owned.push(s.to_string());
+    }
+    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+    let joined = join(&refs, sep_str);
+    alloc_str_buffer_local(&joined)
+}
+
+/// C-ABI shim for source-level `replace(s, old, new) -> str`.
+///
+/// # Safety
+///
+/// `s`, `old`, `new_` must each be valid Str buffer pointers or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_replace(s: *mut u8, old: *mut u8, new_: *mut u8) -> *mut u8 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    let old_str = unsafe { str_buf_as_str_local(old) };
+    let new_str = unsafe { str_buf_as_str_local(new_) };
+    let r = replace(s_str, old_str, new_str);
+    alloc_str_buffer_local(&r)
+}
+
+/// C-ABI shim for source-level `trim(s) -> str`. Whitespace-only,
+/// both-sides; ADR-0050e Q5 defers a chars-argument form to Phase G.
+///
+/// # Safety
+///
+/// `s` must be a valid Str buffer pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_trim(s: *mut u8) -> *mut u8 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    alloc_str_buffer_local(trim(s_str))
+}
+
+/// C-ABI shim for source-level `find(s, needle) -> i64` with `-1`
+/// sentinel per ADR-0050e Decision 5. Empty needle yields `0` (matches
+/// Python's `str.find('')`).
+///
+/// # Safety
+///
+/// `s` and `needle` must be valid Str buffer pointers or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_find(s: *mut u8, needle: *mut u8) -> i64 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    let needle_str = unsafe { str_buf_as_str_local(needle) };
+    match find(s_str, needle_str) {
+        Some(i) => i as i64,
+        None => -1,
+    }
+}
+
+/// C-ABI shim for source-level `contains(s, needle) -> bool`. Returns
+/// `1` (true) or `0` (false) in i64 for the SwitchInt codegen
+/// convention. Empty needle is always true (mirrors `find` returning
+/// 0 plus the symmetry `contains(s, "") == (find(s, "") != -1)`).
+///
+/// # Safety
+///
+/// `s` and `needle` must be valid Str buffer pointers or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_contains(s: *mut u8, needle: *mut u8) -> i64 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    let needle_str = unsafe { str_buf_as_str_local(needle) };
+    i64::from(contains(s_str, needle_str))
+}
+
+/// C-ABI shim for source-level `starts_with(s, prefix) -> bool`. i64 0/1
+/// at the ABI per the SwitchInt convention.
+///
+/// # Safety
+///
+/// `s` and `prefix` must be valid Str buffer pointers or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_starts_with(s: *mut u8, prefix: *mut u8) -> i64 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    let prefix_str = unsafe { str_buf_as_str_local(prefix) };
+    i64::from(starts_with(s_str, prefix_str))
+}
+
+/// C-ABI shim for source-level `ends_with(s, suffix) -> bool`. i64 0/1
+/// at the ABI per the SwitchInt convention.
+///
+/// # Safety
+///
+/// `s` and `suffix` must be valid Str buffer pointers or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_ends_with(s: *mut u8, suffix: *mut u8) -> i64 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    let suffix_str = unsafe { str_buf_as_str_local(suffix) };
+    i64::from(ends_with(s_str, suffix_str))
+}
+
+/// C-ABI shim for source-level `lower(s) -> str`. ASCII fast-path with
+/// Unicode case-folding via Rust stdlib (ADR-0050e Decision 6).
+///
+/// # Safety
+///
+/// `s` must be a valid Str buffer pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_lower(s: *mut u8) -> *mut u8 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    alloc_str_buffer_local(&lower(s_str))
+}
+
+/// C-ABI shim for source-level `upper(s) -> str`. ASCII fast-path with
+/// Unicode case-folding via Rust stdlib.
+///
+/// # Safety
+///
+/// `s` must be a valid Str buffer pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_upper(s: *mut u8) -> *mut u8 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    alloc_str_buffer_local(&upper(s_str))
+}
+
+// `__cobrust_str_clone` ships at `crates/cobrust-stdlib/src/fmt.rs:306`
+// — no duplicate shim needed here; M-F.3.5 only adds the PRELUDE
+// stub + intrinsic-rewrite arm (landed in Phases 1 + 2).
 
 #[cfg(test)]
 #[allow(
@@ -249,18 +531,89 @@ mod tests {
     }
 
     #[test]
-    fn strip_whitespace() {
-        assert_eq!(strip("  hello  "), "hello");
+    fn trim_whitespace() {
+        assert_eq!(trim("  hello  "), "hello");
     }
 
     #[test]
-    fn strip_no_whitespace() {
-        assert_eq!(strip("hello"), "hello");
+    fn trim_no_whitespace() {
+        assert_eq!(trim("hello"), "hello");
     }
 
     #[test]
-    fn strip_only_whitespace() {
-        assert_eq!(strip("   "), "");
+    fn trim_only_whitespace() {
+        assert_eq!(trim("   "), "");
+    }
+
+    #[test]
+    fn trim_empty_input() {
+        assert_eq!(trim(""), "");
+    }
+
+    #[test]
+    fn join_basic() {
+        assert_eq!(join(&["a", "b", "c"], ","), "a,b,c");
+    }
+
+    #[test]
+    fn join_empty_list_returns_empty() {
+        let empty: [&str; 0] = [];
+        assert_eq!(join(&empty, ","), "");
+    }
+
+    #[test]
+    fn join_single_element_no_separator_emitted() {
+        assert_eq!(join(&["solo"], ","), "solo");
+    }
+
+    #[test]
+    fn join_empty_separator_concatenates() {
+        assert_eq!(join(&["a", "b", "c"], ""), "abc");
+    }
+
+    #[test]
+    fn contains_present() {
+        assert!(contains("hello world", "world"));
+    }
+
+    #[test]
+    fn contains_absent() {
+        assert!(!contains("hello", "xyz"));
+    }
+
+    #[test]
+    fn contains_empty_needle_is_true() {
+        assert!(contains("hello", ""));
+    }
+
+    #[test]
+    fn starts_with_present() {
+        assert!(starts_with("foobar", "foo"));
+    }
+
+    #[test]
+    fn starts_with_absent() {
+        assert!(!starts_with("foobar", "bar"));
+    }
+
+    #[test]
+    fn starts_with_empty_prefix_is_true() {
+        assert!(starts_with("foobar", ""));
+    }
+
+    #[test]
+    fn ends_with_present() {
+        assert!(ends_with("foobar", "bar"));
+    }
+
+    #[test]
+    fn ends_with_absent() {
+        assert!(!ends_with("foobar", "foo"));
+    }
+
+    #[test]
+    fn ends_with_empty_suffix_is_true() {
+        assert!(ends_with("foobar", ""));
     }
 
     #[test]

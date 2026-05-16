@@ -178,6 +178,93 @@ See `crates/cobrust-cli/tests/list_str_e2e.rs` for the end-to-end
 corpus and `crates/cobrust-stdlib/tests/list_str_drop_corpus.rs` for
 the C-ABI link-time tests.
 
+## Step 2.8: string stdlib (M-F.3.5)
+
+Eleven PRELUDE fns make Cobrust usable for daily string-processing
+programs — log parsing, CSV slicing, simple text transforms (per
+[ADR-0050e](../../agent/adr/0050e-string-stdlib-m-f-3-5.md)).
+
+Surface:
+
+- `split(s: str, sep: str) -> list[str]`
+- `join(parts: list[str], sep: str) -> str`
+- `replace(s: str, old: str, new: str) -> str`
+- `trim(s: str) -> str` (whitespace, both sides)
+- `find(s: str, needle: str) -> i64` (`-1` if absent — see idiom below)
+- `contains(s: str, needle: str) -> bool`
+- `starts_with(s: str, prefix: str) -> bool`
+- `ends_with(s: str, suffix: str) -> bool`
+- `lower(s: str) -> str` / `upper(s: str) -> str`
+- `clone(s: str) -> str` (deep-copy; LC-100 honest-debt mitigation)
+
+Example (`hello_csv.cb`):
+
+```cobrust
+fn main() -> i64:
+    let line: str = "alpha,beta,gamma"
+    let parts: list[str] = split(line, ",")
+    for p in parts:
+        let _ = print(upper(p))
+    return 0
+```
+
+```bash
+cobrust run hello_csv.cb
+# ALPHA
+# BETA
+# GAMMA
+```
+
+`find` returns `i64` with the `-1` sentinel (Decision 5 / Q2). The
+documented idiom is `if pos != -1:`, NOT `if find(...):` — Cobrust
+forbids implicit truthy/falsy (§2.2). Worked example:
+
+```cobrust
+let pos: i64 = find("hello world", "world")
+if pos != -1:
+    print_int(pos)
+else:
+    let _ = print("not found")
+```
+
+`clone(s)` is the LC-100 honest-debt mitigation. Because every Str
+parameter is Move-consumed under ADR-0050c, a multi-use pattern like
+`let n = str_len(s); let c = str_at(s, 0)` is rejected as
+use-after-move. Insert `clone()` so each surface call gets a fresh
+buffer (the original `s` is preserved for the final use):
+
+```cobrust
+let s: str = input("")
+let n: i64 = str_len(clone(s))      # consumes a fresh clone of s
+let i: i64 = n - 1
+while i >= 0:
+    let c: str = str_at(clone(s), i)  # another fresh clone per read
+    let _ = print(c)
+    i = i - 1
+let _ = print(upper(s))              # final use; no clone needed
+return 0
+```
+
+What changed at M-F.3.5:
+- 11 new PRELUDE stubs in `crates/cobrust-cli/src/build.rs`; eleven
+  matching intrinsic-rewrite arms in `intrinsics.rs` route each call
+  to the C-ABI shim `__cobrust_str_<fn>`.
+- `crates/cobrust-stdlib/src/string.rs` ships the ten new C-ABI
+  shims (`__cobrust_str_clone` was already shipped with ADR-0050c).
+- Rust-side `string::strip` renamed to `string::trim` (Decision 4).
+
+Edge cases (per ADR-0050e Decision 8):
+- `split("", ",") -> [""]` (singleton)
+- `split(s, "") -> [s]` (Rust-style empty-sep behavior)
+- `join([], sep) -> ""`
+- `replace(s, "", new)` inserts `new` at every byte position
+- `find(s, "") -> 0`
+- `contains(s, "") -> true` (universal sub-needle)
+
+See `crates/cobrust-cli/tests/string_stdlib_e2e.rs` for the
+end-to-end corpus and `crates/cobrust-stdlib/src/string.rs` for the
+C-ABI shim definitions.
+
 ## Step 3: try the AI alpha surfaces (optional)
 
 1. Copy the router example and add your provider credentials:

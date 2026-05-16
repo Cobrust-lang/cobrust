@@ -359,12 +359,37 @@ pub fn len(s: &str) -> usize;
 pub fn find(s: &str, pat: &str) -> Option<usize>;
 pub fn replace(s: &str, from: &str, to: &str) -> String;
 pub fn split(s: &str, sep: &str) -> Vec<String>;
-pub fn strip(s: &str) -> &str;
+pub fn trim(s: &str) -> &str;                            // ADR-0050e Decision 4 — renamed from `strip`
 pub fn lower(s: &str) -> String;
 pub fn upper(s: &str) -> String;
+pub fn join(parts: &[&str], sep: &str) -> String;        // ADR-0050e M-F.3.5
+pub fn contains(s: &str, needle: &str) -> bool;          // ADR-0050e M-F.3.5
+pub fn starts_with(s: &str, prefix: &str) -> bool;       // ADR-0050e M-F.3.5
+pub fn ends_with(s: &str, suffix: &str) -> bool;         // ADR-0050e M-F.3.5
 pub fn format(template: &str, args: &[FormatArg<'_>]) -> String;
 
 pub enum FormatArg<'a> { Str(&'a str), Int(i64), Float(f64), Bool(bool) }
+
+// -- M-F.3.5 string stdlib C-ABI surface (ADR-0050e) ------------------
+// Each shim takes Str buffer pointers (`*mut u8`) per ADR-0044 W2 Phase 3
+// + ADR-0050c convention. Returns `*mut u8` (new heap StringBuffer) or
+// i64 (find sentinel / bool predicates as 0/1).
+//
+// Ownership: shims do NOT drop their inputs — the caller's MIR drop
+// schedule (ADR-0050c Phase 2) owns the input lifetime. Outputs are
+// drop-eligible per the caller's binding scope.
+
+pub unsafe extern "C" fn __cobrust_str_split(s: *mut u8, sep: *mut u8) -> *mut u8;     // -> list[str]
+pub unsafe extern "C" fn __cobrust_str_join(parts: *mut u8, sep: *mut u8) -> *mut u8;  // -> str
+pub unsafe extern "C" fn __cobrust_str_replace(s: *mut u8, old: *mut u8, new_: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_str_trim(s: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_str_find(s: *mut u8, needle: *mut u8) -> i64;       // -1 sentinel
+pub unsafe extern "C" fn __cobrust_str_contains(s: *mut u8, needle: *mut u8) -> i64;   // 0/1
+pub unsafe extern "C" fn __cobrust_str_starts_with(s: *mut u8, prefix: *mut u8) -> i64;
+pub unsafe extern "C" fn __cobrust_str_ends_with(s: *mut u8, suffix: *mut u8) -> i64;
+pub unsafe extern "C" fn __cobrust_str_lower(s: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_str_upper(s: *mut u8) -> *mut u8;
+// __cobrust_str_clone already shipped at fmt.rs:306 (ADR-0050c Phase 3).
 ```
 
 ### `std.math`
@@ -661,3 +686,32 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
 | `__cobrust_str_clone(buf: *mut u8) -> *mut u8` | `stdlib/fmt.rs` — allocates a fresh `StringBuffer`, copies the bytes from the source buffer, returns the new pointer. NULL input returns NULL. | Explicit Str clone path for ADR-0050c Phase 4. Used by for-loop body, index-expression, and Aggregate(List) lowering when a Str-typed operand needs a fresh owning copy. |
 | `__cobrust_list_drop_elems(list: *mut u8, elem_drop_fn: extern "C" fn(*mut u8))` | `stdlib/collections.rs:548-589` — walks the list's i64 slots, casts each non-zero slot to `*mut u8`, calls `elem_drop_fn(slot)`, then `__cobrust_list_drop(list)`. NULL list is a no-op. | Per-element drop dispatch for `Ty::List(Ty::Str)`. Codegen passes `__cobrust_str_drop` as the elem_drop_fn (materialised via `func_addr`). |
 | `__cobrust_list_is_empty(list: *mut u8) -> i64` | `stdlib/collections.rs:594-605` — returns 1 if `len == 0`, 0 otherwise. NULL is treated as empty. | §2.2-mandated emptiness predicate; the `if xs:` implicit-truthiness ban requires this for the `if list_is_empty(xs):` canonical pattern. |
+
+## M-F.3.5 string stdlib (ADR-0050e)
+
+Eleven new PRELUDE fns + 10 C-ABI shims (`__cobrust_str_clone`
+already shipped with ADR-0050c). Surface listed in §"std.string"
+above. Ownership: every shim takes Move-consumed Str args at the
+source level; the codegen drop schedule (ADR-0050c Phase 2) owns the
+input lifetime — shims do NOT drop their inputs.
+
+| PRELUDE fn | C-ABI shim | Return | Notes |
+|---|---|---|---|
+| `split(s, sep)` | `__cobrust_str_split` | `*mut u8` (list[str]) | Materializes a fresh List<i64> with Str-pointer slots (mirrors `__cobrust_argv`). |
+| `join(parts, sep)` | `__cobrust_str_join` | `*mut u8` (str) | Reads each slot of `parts` back via `__cobrust_list_get`. |
+| `replace(s, old, new)` | `__cobrust_str_replace` | `*mut u8` (str) | Delegates to Rust `string::replace`. |
+| `trim(s)` | `__cobrust_str_trim` | `*mut u8` (str) | Renamed from `strip` (Decision 4). |
+| `find(s, needle)` | `__cobrust_str_find` | `i64` | `-1` sentinel per Decision 5. |
+| `contains(s, needle)` | `__cobrust_str_contains` | `i64` (0/1) | bool source-side; i64 ABI. |
+| `starts_with(s, prefix)` | `__cobrust_str_starts_with` | `i64` (0/1) | bool source-side. |
+| `ends_with(s, suffix)` | `__cobrust_str_ends_with` | `i64` (0/1) | bool source-side. |
+| `lower(s)` | `__cobrust_str_lower` | `*mut u8` (str) | Unicode-aware via Rust stdlib. |
+| `upper(s)` | `__cobrust_str_upper` | `*mut u8` (str) | Unicode-aware via Rust stdlib. |
+| `clone(s)` | `__cobrust_str_clone` (existing) | `*mut u8` (str) | LC-100 honest-debt mitigation; the shim ships at `fmt.rs:306`. |
+
+E2E corpus: `crates/cobrust-cli/tests/string_stdlib_e2e.rs` (25
+tests; 22 pass under `--include-ignored`. The 3 remaining
+`f3str{16,17,22}` are LC-100 honest-debt mitigation tests whose
+source pattern `let s2 = clone(s); let n = str_len(s); ...` does
+NOT mitigate use-after-move under strict ADR-0050c Path D Option A
+— Phase G closure target).
