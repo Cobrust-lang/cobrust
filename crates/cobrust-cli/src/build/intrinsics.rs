@@ -300,6 +300,11 @@ struct IntrinsicDefIds {
     list_is_empty: HashSet<u32>,
     /// ADR-0050d Decision 5 addendum — §2.2 implicit-truthy ban for dicts.
     dict_is_empty: HashSet<u32>,
+    /// ADR-0050d Decision 5 — polymorphic `len(d)` builtin for dict.
+    /// Phase F.3 scope cap: only the dict-shaped widening lands at
+    /// this stage; future Phase G can fold List + Str under the same
+    /// name.
+    len_poly: HashSet<u32>,
     /// ADR-0044 W2 Phase 3.
     list_new: HashSet<u32>,
     /// ADR-0044 W2 Phase 3.
@@ -400,6 +405,7 @@ impl IntrinsicDefIds {
         out.extend(&self.list_len);
         out.extend(&self.list_is_empty);
         out.extend(&self.dict_is_empty);
+        out.extend(&self.len_poly);
         out.extend(&self.list_new);
         out.extend(&self.print_no_nl);
         out.extend(&self.llm_complete);
@@ -461,6 +467,7 @@ impl IntrinsicDefIds {
             && self.list_len.is_empty()
             && self.list_is_empty.is_empty()
             && self.dict_is_empty.is_empty()
+            && self.len_poly.is_empty()
             && self.list_new.is_empty()
             && self.print_no_nl.is_empty()
             && self.llm_complete.is_empty()
@@ -525,6 +532,7 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         list_len: HashSet::new(),
         list_is_empty: HashSet::new(),
         dict_is_empty: HashSet::new(),
+        len_poly: HashSet::new(),
         list_new: HashSet::new(),
         print_no_nl: HashSet::new(),
         llm_complete: HashSet::new(),
@@ -635,6 +643,10 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
             }
             "dict_is_empty" => {
                 ids.dict_is_empty.insert(body.def_id.0);
+            }
+            "len" => {
+                // ADR-0050d Decision 5 — polymorphic `len(d)` builtin.
+                ids.len_poly.insert(body.def_id.0);
             }
             "list_new" => {
                 ids.list_new.insert(body.def_id.0);
@@ -856,6 +868,7 @@ enum Kind {
     ListLen,
     ListIsEmpty,
     DictIsEmpty,
+    LenPoly,
     ListNew,
     PrintNoNl,
     LlmComplete,
@@ -918,6 +931,7 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "list_len" => Some(Kind::ListLen),
         "list_is_empty" => Some(Kind::ListIsEmpty),
         "dict_is_empty" => Some(Kind::DictIsEmpty),
+        "len" => Some(Kind::LenPoly),
         "list_new" => Some(Kind::ListNew),
         "print_no_nl" => Some(Kind::PrintNoNl),
         "llm_complete" => Some(Kind::LlmComplete),
@@ -1000,6 +1014,8 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::ListIsEmpty)
     } else if ids.dict_is_empty.contains(&id) {
         Some(Kind::DictIsEmpty)
+    } else if ids.len_poly.contains(&id) {
+        Some(Kind::LenPoly)
     } else if ids.list_new.contains(&id) {
         Some(Kind::ListNew)
     } else if ids.print_no_nl.contains(&id) {
@@ -1405,6 +1421,24 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         Operand::Constant(Constant::Str(DICT_IS_EMPTY_RUNTIME_SYMBOL.to_string()));
                     args.clear();
                     args.push(d);
+                }
+                Kind::LenPoly => {
+                    // ADR-0050d Decision 5 — polymorphic `len(d)` builtin.
+                    // Dispatches to `__cobrust_dict_len` (Phase F.3 scope cap:
+                    // only Dict args; future Phase G extends to List/Str via
+                    // operand-shape sniffing). The dict shim is type-erased
+                    // over (K, V) — it reads `DictLayout.map.len()` regardless
+                    // of K/V tag, so a single symbol suffices.
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("len: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let arg = args[0].clone();
+                    *func =
+                        Operand::Constant(Constant::Str("__cobrust_dict_len".to_string()));
+                    args.clear();
+                    args.push(arg);
                 }
                 Kind::PrintNoNl => {
                     // print_no_nl(s: str) — operand-aware dispatch
