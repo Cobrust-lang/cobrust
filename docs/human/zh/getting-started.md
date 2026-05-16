@@ -257,8 +257,13 @@ C-ABI shim 定义见 `crates/cobrust-stdlib/src/string.rs`。
 Cobrust 的 dict 镜像 Python 的心智模型：`{}` 是 dict（不是 set）、
 插入顺序迭代（Python 3.7+ 的承诺）、`d[k]` 在键缺失时 panic、
 `.get(k, default)` 是安全转义惯用法。Phase F.3 的表面由 ADR-0050d
-锁定;子冲刺 a+b（本里程碑）落地 parser + 类型检查器 + dict_is_empty
-内建；子冲刺 c/d/e 接入 codegen + indexmap 后端 + 迭代去糖。
+锁定;子冲刺 a+b 落地 parser + 类型检查器 + dict_is_empty 内建;
+**子冲刺 c+d（本里程碑）接入 codegen + `indexmap::IndexMap<KeyEnum,
+ValueEnum>` 后端 + 类型分派的 `__cobrust_dict_{set,get,contains}_K_V`
+shim,使得字面量、`d[k]` 读、`d[k] = v` 写、`key in d` 成员判定、
+`len(d)` 长度查询都在运行时落地**；子冲刺 e 接入 `for k in d:` /
+`d.items()` / `d.keys()` / `d.values()` 迭代去糖 +
+`.get()` 方法分派(目前部分测试仍 `#[ignore]`)。
 
 ```cobrust
 fn main() -> i64:
@@ -311,7 +316,12 @@ fn main() -> i64:
 - `dict_is_empty(d)` 是 `bool` 谓词,符合宪法 §2.2 隐式真值禁令
   （拒绝 `if d:`）。
 - 迭代按插入顺序（Decision 6A —— 子冲刺 d 之后由
-  `indexmap::IndexMap` 提供）。
+  `indexmap::IndexMap` 提供）。**实现层细节(子冲刺 d 已落地)**：
+  `__cobrust_dict_new(k_tag, v_tag, len)` 把 `k_size`/`v_size` 参数
+  重新解释为类型标签(0=i64, 1=str);
+  `__cobrust_dict_set_K_V` / `__cobrust_dict_get_K_V` /
+  `__cobrust_dict_contains_K` 按 (K, V) 静态类型分派;`__cobrust_dict_*`
+  的旧无类型符号仍作为 (i64, i64) 的别名以保持 M12.x 后向兼容。
 - 类型参数：`K ∈ {i64, str}`（Phase F.3）;在类型检查阶段拒绝
   `f64` 键（NaN != NaN 破坏 Hash 不变式 —— 见 `TypeError::NotHashable`）。
 - `d.copy()` 是浅克隆（Decision 10A）。

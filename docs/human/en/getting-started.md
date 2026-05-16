@@ -270,9 +270,15 @@ C-ABI shim definitions.
 Cobrust dicts mirror Python's mental model: `{}` is dict (not set),
 insertion-order iteration (Python 3.7+ guarantee), `d[k]` panics on
 missing key, `.get(k, default)` is the safe-escape idiom. The Phase
-F.3 surface is locked by ADR-0050d; sub-sprint a+b (this milestone)
-lands the parser + type checker + dict_is_empty intrinsic; sub-sprint
-c/d/e wire codegen + indexmap backing + iteration desugar.
+F.3 surface is locked by ADR-0050d; sub-sprint a+b lands the parser +
+type checker + dict_is_empty intrinsic; **sub-sprint c+d (this
+milestone) wires codegen + `indexmap::IndexMap<KeyEnum, ValueEnum>`
+backing + type-dispatched `__cobrust_dict_{set,get,contains}_K_V`
+shims, so dict literals, `d[k]` reads, `d[k] = v` writes, `key in d`
+membership tests, and `len(d)` length queries are now runtime-shipped**;
+sub-sprint e wires `for k in d:` / `d.items()` / `d.keys()` /
+`d.values()` iter desugar + `.get()` method dispatch (some tests
+remain `#[ignore]` pending that).
 
 ```cobrust
 fn main() -> i64:
@@ -326,7 +332,13 @@ Key rules (M-F.3.4 / ADR-0050d):
 - `dict_is_empty(d)` is the `bool` predicate canonical per
   constitution §2.2 implicit-truthy ban (no `if d:`).
 - Iteration is insertion-order (Decision 6A — backed by
-  `indexmap::IndexMap` post-sub-sprint d).
+  `indexmap::IndexMap` post-sub-sprint d). **Implementation detail
+  (sub-sprint d landed)**: `__cobrust_dict_new(k_tag, v_tag, len)`
+  reinterprets the `k_size`/`v_size` arguments as type tags (0=i64,
+  1=str); `__cobrust_dict_set_K_V` / `__cobrust_dict_get_K_V` /
+  `__cobrust_dict_contains_K` dispatch on the static (K, V) shape;
+  the legacy untyped `__cobrust_dict_*` symbols remain aliased to the
+  (i64, i64) variants for M12.x backward compat.
 - Type parameters: `K ∈ {i64, str}` for Phase F.3; reject `f64`
   keys at type-check (NaN != NaN breaks Hash invariants — see
   `TypeError::NotHashable`).

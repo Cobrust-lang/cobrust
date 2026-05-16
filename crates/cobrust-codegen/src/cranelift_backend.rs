@@ -1089,9 +1089,29 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                     }
                 }
             }
-            // Tuple/Dict/Set drops are not yet plumbed; M12.x leaves
-            // these as no-op (matches pre-ADR-0050c behavior). Phase F.3.4
-            // dict + Phase G set ownership widen this dispatch.
+            // ADR-0050d sub-sprint d+f closure: Dict drop.
+            //
+            // The C-ABI `__cobrust_dict_drop` is type-erased — it
+            // reads `DictLayout.map` and drops the underlying
+            // `IndexMap<KeyEnum, ValueEnum>`. Rust's `Drop` impl for
+            // the map reclaims every `KeyEnum::Str` / `ValueEnum::Str`
+            // owned `String` automatically; the dict thus cleans up
+            // its keys/values regardless of (K, V) shape.
+            //
+            // `ValueEnum::OpaquePtr` (Phase G nested-aggregate slot)
+            // is left un-freed by design — the outer drop schedule
+            // owns the inner aggregate's `_drop`. Phase F.3 emits no
+            // OpaquePtr values, so this is purely a future-proofing
+            // contract.
+            Ty::Dict(_, _) => {
+                let ptr = self.read_place(place)?;
+                if let Some(fr) = self.runtime_funcs.get("__cobrust_dict_drop").copied() {
+                    self.builder.ins().call(fr, &[ptr]);
+                }
+            }
+            // Tuple/Set drops are not yet plumbed; M12.x leaves these
+            // as no-op (matches pre-ADR-0050c behavior). Phase G set
+            // ownership widens this dispatch.
             _ => {}
         }
         Ok(())
@@ -1127,6 +1147,25 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                         let value = self.materialize_str_buffer(payload)?;
                         return self.write_place(place, value);
                     }
+                }
+                // ADR-0050d sub-sprint c+d cascade: `Aggregate(Dict)`
+                // needs the destination's static `Ty::Dict(K, V)` shape
+                // so codegen can dispatch to the typed
+                // `__cobrust_dict_set_K_V` shim. The destination's
+                // declared type is the source of truth — the MIR temp
+                // also carries this (via `synth_expr_ty` in lower.rs),
+                // but when the temp is fresh + assigned into a
+                // user-annotated `d: Dict[str, i64]`, the user's
+                // annotation overrides any temp-level inference. We
+                // peek both and prefer non-`None` legs.
+                if let Rvalue::Aggregate(AggregateKind::Dict, ops) = rvalue {
+                    let dest_ty = self
+                        .body
+                        .locals
+                        .get(place.local.0 as usize)
+                        .map(|l| l.ty.clone());
+                    let value = self.lower_aggregate_dict_typed(ops, dest_ty.as_ref())?;
+                    return self.write_place(place, value);
                 }
                 let value = self.lower_rvalue(rvalue)?;
                 self.write_place(place, value)
@@ -1553,10 +1592,35 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
     }
 
     fn lower_aggregate_dict(&mut self, operands: &[Operand]) -> Result<ir::Value, CodegenError> {
-        // Dict operands come as a flat (k, v, k, v, ...) sequence.
+        // Legacy entry — assumes (i64, i64). Sub-sprint c+d callers
+        // route through `lower_aggregate_dict_typed` with a destination
+        // type so the (K, V) shape selects the right C-ABI shim.
+        self.lower_aggregate_dict_typed(operands, None)
+    }
+
+    /// ADR-0050d Decision 7A — Aggregate(Dict) codegen with per-(K, V)
+    /// shim dispatch.
+    ///
+    /// `dest_ty` is the destination local's declared type (the
+    /// `Ty::Dict(K, V)` annotation from the source-level binding) or
+    /// `None` for a fallback to (i64, i64). The K/V tags map to the
+    /// stdlib `K_TAG_*` / `V_TAG_*` consts:
+    ///   - i64 / Int / Bool / None → 0 (i64 backing)
+    ///   - Str → 1 (str backing)
+    fn lower_aggregate_dict_typed(
+        &mut self,
+        operands: &[Operand],
+        dest_ty: Option<&Ty>,
+    ) -> Result<ir::Value, CodegenError> {
+        let (k_ty, v_ty) = match dest_ty {
+            Some(Ty::Dict(k, v)) => ((**k).clone(), (**v).clone()),
+            _ => (Ty::None, Ty::None),
+        };
+        let k_tag = dict_k_tag(&k_ty);
+        let v_tag = dict_v_tag(&v_ty);
         let pair_count = (operands.len() / 2) as i64;
-        let k_size = self.builder.ins().iconst(ir::types::I64, 8);
-        let v_size = self.builder.ins().iconst(ir::types::I64, 8);
+        let k_size = self.builder.ins().iconst(ir::types::I64, k_tag);
+        let v_size = self.builder.ins().iconst(ir::types::I64, v_tag);
         let len_v = self.builder.ins().iconst(ir::types::I64, pair_count);
         let alloc = if let Some(fr) = self.runtime_funcs.get("__cobrust_dict_new").copied() {
             let inst = self.builder.ins().call(fr, &[k_size, v_size, len_v]);
@@ -1564,18 +1628,81 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
         } else {
             self.builder.ins().iconst(self.pointer_type, 0)
         };
-        if let Some(set_fr) = self.runtime_funcs.get("__cobrust_dict_set").copied() {
+        let set_symbol = dict_set_symbol(k_tag, v_tag);
+        if let Some(set_fr) = self.runtime_funcs.get(set_symbol).copied() {
             for chunk in operands.chunks(2) {
                 if chunk.len() == 2 {
-                    let k_val = self.lower_operand(&chunk[0])?;
-                    let v_val = self.lower_operand(&chunk[1])?;
-                    let k_i64 = coerce_to_i64(self.builder, k_val);
-                    let v_i64 = coerce_to_i64(self.builder, v_val);
-                    self.builder.ins().call(set_fr, &[alloc, k_i64, v_i64]);
+                    let k_val = self.materialize_dict_key_operand(&chunk[0], k_tag)?;
+                    let v_val = self.materialize_dict_value_operand(&chunk[1], v_tag)?;
+                    self.builder.ins().call(set_fr, &[alloc, k_val, v_val]);
                 }
             }
         }
         Ok(alloc)
+    }
+
+    /// Materialize a dict key operand based on the static K tag.
+    ///
+    /// - i64 keys → `coerce_to_i64` (existing M12.x path).
+    /// - str keys → for `Constant::Str` literals, materialize a fresh
+    ///   `StringBuffer` via `materialize_str_buffer`; for non-literal
+    ///   Str operands, the operand pointer is consumed by the dict
+    ///   (ADR-0050c Move semantic; the source local is moved at MIR
+    ///   time).
+    fn materialize_dict_key_operand(
+        &mut self,
+        op: &Operand,
+        k_tag: i64,
+    ) -> Result<ir::Value, CodegenError> {
+        if k_tag == 1 {
+            // Str key.
+            if let Operand::Constant(Constant::Str(payload)) = op {
+                return self.materialize_str_buffer(payload);
+            }
+            // Non-literal Str operand: the operand IS a *mut u8 buffer
+            // pointer. The dict copies bytes into its own KeyEnum::Str,
+            // so the caller's buffer can be dropped after the set.
+            return self.lower_operand(op);
+        }
+        // Default i64 path.
+        let v = self.lower_operand(op)?;
+        Ok(coerce_to_i64(self.builder, v))
+    }
+
+    fn materialize_dict_value_operand(
+        &mut self,
+        op: &Operand,
+        v_tag: i64,
+    ) -> Result<ir::Value, CodegenError> {
+        if v_tag == 1 {
+            if let Operand::Constant(Constant::Str(payload)) = op {
+                return self.materialize_str_buffer(payload);
+            }
+            // ADR-0050c Move semantic: clone non-literal Str values
+            // before handing to the dict, mirroring the list literal
+            // path (`lower_aggregate_list` line ~1534) so the source
+            // local stays drop-eligible without double-free.
+            let is_str_operand = match op {
+                Operand::Copy(p) | Operand::Move(p) => self
+                    .body
+                    .locals
+                    .get(p.local.0 as usize)
+                    .map(|l| matches!(l.ty, Ty::Str))
+                    .unwrap_or(false),
+                Operand::Constant(_) => false,
+            };
+            if is_str_operand {
+                let raw = self.lower_operand(op)?;
+                if let Some(clone_fr) = self.runtime_funcs.get("__cobrust_str_clone").copied() {
+                    let inst = self.builder.ins().call(clone_fr, &[raw]);
+                    return Ok(self.builder.inst_results(inst)[0]);
+                }
+                return Ok(raw);
+            }
+            return self.lower_operand(op);
+        }
+        let v = self.lower_operand(op)?;
+        Ok(coerce_to_i64(self.builder, v))
     }
 
     fn lower_aggregate_set(&mut self, operands: &[Operand]) -> Result<ir::Value, CodegenError> {
@@ -2264,6 +2391,73 @@ fn compute_reachable_blocks(body: &Body) -> std::collections::HashSet<BlockId> {
     reachable
 }
 
+/// ADR-0050d Decision 7A — map a Cobrust `Ty` to the dict-shim K-tag.
+///
+/// The stdlib C-ABI accepts `K_TAG_I64=0` / `K_TAG_STR=1` via
+/// `__cobrust_dict_new`'s `k_size` argument; anything else is treated
+/// as i64 by `normalize_k_tag`. Phase F.3 admits K ∈ {i64, str}
+/// (Decision 7A); Phase G extends.
+pub(crate) fn dict_k_tag(k: &Ty) -> i64 {
+    match k {
+        Ty::Str => 1,
+        _ => 0,
+    }
+}
+
+/// ADR-0050d Decision 7A — map a Cobrust `Ty` to the dict-shim V-tag.
+pub(crate) fn dict_v_tag(v: &Ty) -> i64 {
+    match v {
+        Ty::Str => 1,
+        _ => 0,
+    }
+}
+
+/// ADR-0050d Decision 7A — pick the `__cobrust_dict_set_K_V` symbol
+/// for the given (k_tag, v_tag) shape.
+pub(crate) fn dict_set_symbol(k_tag: i64, v_tag: i64) -> &'static str {
+    match (k_tag, v_tag) {
+        (1, 1) => "__cobrust_dict_set_str_str",
+        (1, 0) => "__cobrust_dict_set_str_i64",
+        (0, 1) => "__cobrust_dict_set_i64_str",
+        _ => "__cobrust_dict_set_i64_i64",
+    }
+}
+
+/// ADR-0050d Decision 7A — pick the `__cobrust_dict_get_K_V` symbol.
+///
+/// Mirror of `dict_set_symbol` for the symmetric read path. Currently
+/// used only by sub-sprint c+d MIR-side intrinsic-rewrite (the
+/// `ExprKind::Index { Ty::Dict(K, V) base }` arm inlines the same
+/// 2x2 match); kept here as the canonical lookup table so sub-sprint
+/// e iter-key extraction + `.get()` method dispatch can reuse it
+/// without copy-paste drift. Visibility is `pub(crate)` so a future
+/// codegen pass (Phase G iter dispatch, ADT slot get/set) can pull
+/// from the same table.
+#[allow(dead_code)]
+pub(crate) fn dict_get_symbol(k_tag: i64, v_tag: i64) -> &'static str {
+    match (k_tag, v_tag) {
+        (1, 1) => "__cobrust_dict_get_str_str",
+        (1, 0) => "__cobrust_dict_get_str_i64",
+        (0, 1) => "__cobrust_dict_get_i64_str",
+        _ => "__cobrust_dict_get_i64_i64",
+    }
+}
+
+/// ADR-0050d Decision 4A — pick the `__cobrust_dict_contains_K` symbol.
+///
+/// Same forward-compat rationale as `dict_get_symbol`; the
+/// MIR-side `BinOp::In` lowering currently inlines the 2-way match,
+/// but `for k in d:` desugar (sub-sprint e) will need this to derive
+/// the iterator's key-extract symbol.
+#[allow(dead_code)]
+pub(crate) fn dict_contains_symbol(k_tag: i64) -> &'static str {
+    if k_tag == 1 {
+        "__cobrust_dict_contains_str"
+    } else {
+        "__cobrust_dict_contains_i64"
+    }
+}
+
 /// ADR-0027 binding: register the runtime-helper symbol table that
 /// every body's lowering pre-imports. The signatures match the
 /// `cobrust-stdlib` C-ABI surface bit-for-bit.
@@ -2292,20 +2486,65 @@ fn runtime_helper_signatures(
     // ADR-0041 §H6: comprehension lowering uses runtime append.
     out.push(("__cobrust_list_append", sig(call_conv, &[p, i64], None)));
 
-    // Dict<i64, i64>
+    // Dict — ADR-0050d Decision 6A indexmap backing + Decision 7A
+    // typed (K, V) shims. The legacy untyped `__cobrust_dict_set/_get`
+    // remain as i64,i64 aliases (M12.x backward compat) but the
+    // codegen routes new emissions through the typed `_K_V` variants.
     out.push((
         "__cobrust_dict_new",
         sig(call_conv, &[i64, i64, i64], Some(p)),
     ));
+    // Legacy aliases (i64, i64).
     out.push(("__cobrust_dict_set", sig(call_conv, &[p, i64, i64], None)));
     out.push(("__cobrust_dict_get", sig(call_conv, &[p, i64], Some(i64))));
     out.push(("__cobrust_dict_len", sig(call_conv, &[p], Some(i64))));
     out.push(("__cobrust_dict_drop", sig(call_conv, &[p], None)));
     // ADR-0050d Decision 5 addendum — `dict_is_empty(d) -> bool` predicate.
-    // Returns i64 0/1 per the SwitchInt convention (same shape as
-    // `__cobrust_list_is_empty`). Source-level binding lives at
-    // `crates/cobrust-cli/src/build/intrinsics.rs::DICT_IS_EMPTY_RUNTIME_SYMBOL`.
     out.push(("__cobrust_dict_is_empty", sig(call_conv, &[p], Some(i64))));
+    // (i64, i64) typed shims.
+    out.push((
+        "__cobrust_dict_set_i64_i64",
+        sig(call_conv, &[p, i64, i64], None),
+    ));
+    out.push((
+        "__cobrust_dict_get_i64_i64",
+        sig(call_conv, &[p, i64], Some(i64)),
+    ));
+    out.push((
+        "__cobrust_dict_contains_i64",
+        sig(call_conv, &[p, i64], Some(i64)),
+    ));
+    // (i64, str) typed shims.
+    out.push((
+        "__cobrust_dict_set_i64_str",
+        sig(call_conv, &[p, i64, p], None),
+    ));
+    out.push((
+        "__cobrust_dict_get_i64_str",
+        sig(call_conv, &[p, i64], Some(p)),
+    ));
+    // (str, i64) typed shims.
+    out.push((
+        "__cobrust_dict_set_str_i64",
+        sig(call_conv, &[p, p, i64], None),
+    ));
+    out.push((
+        "__cobrust_dict_get_str_i64",
+        sig(call_conv, &[p, p], Some(i64)),
+    ));
+    out.push((
+        "__cobrust_dict_contains_str",
+        sig(call_conv, &[p, p], Some(i64)),
+    ));
+    // (str, str) typed shims.
+    out.push((
+        "__cobrust_dict_set_str_str",
+        sig(call_conv, &[p, p, p], None),
+    ));
+    out.push((
+        "__cobrust_dict_get_str_str",
+        sig(call_conv, &[p, p], Some(p)),
+    ));
 
     // Set<i64>
     out.push(("__cobrust_set_new", sig(call_conv, &[i64, i64], Some(p))));
