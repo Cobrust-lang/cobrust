@@ -91,10 +91,23 @@ P10/user directed 2026-05-16 ("标记 LC-100 为 honest-debt,继续推进"): tre
 
 **ADSD F30 candidate strengthened, not weakened, by this disposition**: the audit + my own conflict-resolution missed the predicate-flip cascade on a 100-program corpus. The Path D acceptance is honest about the cost but does NOT vacate the methodology lesson. F30's proposed SOP fix (shadow-flip dry-run with feature flag before §"Consequences" enumeration is finalized) remains the upstream proposal. The empirical baseline now has a P1 honest-debt receipt to point at.
 
-**Phase G closure scope** (binding when Phase G is planned):
-- Source-level `clone(s)` builtin OR a `&` borrow form OR a let-binding-rebind shortcut that the type checker rewrites to implicit-clone.
-- LC-100 corpus re-greens at Phase G close (a release-readiness gate for v0.3.0 or whichever release ships Phase G).
-- Until then: LC-100 is documented honest-debt; new LC-100-style programs that ship with Phase F.3 must use list[i64]-only or argv-only Str patterns.
+**Long-term deferral — addendum 2026-05-16 (P10/user re-disposition)**
+
+P10/user directed 2026-05-16 (verbatim): "LC-100 我觉得你留到以后语言更成熟了再重写吧, 现在暂时不管他了, 因为咱们暂时也没人用, 暂时." Translation: leave LC-100 alone until the language matures; nobody's using it right now.
+
+What this means in practice:
+- LC-100 corpus is **NOT** a Phase G closure target with any specific binding. It is **indefinite long-term tech debt** to be revisited when the language has external users + a recursive-struct-types + explicit-borrow surface (post-Phase G, possibly v0.3.0+).
+- v0.2.0 stable release-readiness gate does NOT enumerate LC-100 as a blocker. Release notes mention it as a known limitation without a closure ETA.
+- M-F.3.5's `clone()` builtin remains the inline-clone-at-callsite mitigation idiom; documented in zh/en getting-started §"Step 2.8" — but no batch sprint will retroactively apply it to LC-100 programs at Phase F.3 close.
+- The 14 corpus-pattern-error e2e tests across Wave 2/3 (f3ls22/23/25 + f3str16/17/22 + f3fio01/03/05/06/10/11/12 + f3fio_bug03) inherit the same long-term deferral disposition: documented honest-debt, no scheduled closure sprint.
+
+**Why this is a defensible call**:
+
+- Nobody is using the LC-100 corpus today (user attestation). User-traction comes from §1.1 language-half completeness (which Phase F.3 delivers: dict + f64 + list[str] + string stdlib + file IO) and §1.2 AI-native progress (which Phase F.2 delivers).
+- The 100-program LC-100 corpus was a Phase F.1 user-traction wedge per ADR-0047. Phase F.3's broader §1.1 surface supersedes the wedge framing.
+- ADR-0050c Option A (Str=non-Copy uniformly) buys correct drop schedule + structural ownership soundness — properties that compound across every future language feature. Burning that to make LC-100 green is the wrong trade.
+
+This addendum supersedes the earlier "Path D-prime / Path A / Phase G closure scope" framing.
 
 ## Cross-references
 
