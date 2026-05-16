@@ -4,7 +4,7 @@ adr_id: 0050c
 title: "M-F.3.2 prereq — Str ownership flip (TD-1 closure)"
 status: accepted
 date: 2026-05-16
-last_verified_commit: f566026
+last_verified_commit: aca5d87
 supersedes: []
 superseded_by: []
 relates_to: [adr:0020, adr:0023, adr:0027, adr:0034, adr:0035, adr:0044, adr:0044a, adr:0049, adr:0050, adr:0050b, adr:0050d]
