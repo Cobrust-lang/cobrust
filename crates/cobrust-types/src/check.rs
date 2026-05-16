@@ -15,7 +15,7 @@
 //! - Mutable defaults rejected (`MutableDefault`).
 //! - `match` exhaustiveness over ADTs / built-ins enforced.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cobrust_frontend::span::Span;
 use cobrust_hir::{
@@ -82,6 +82,13 @@ struct Ctx {
     /// Stack of loop nestings; non-empty means `break` / `continue`
     /// are valid.
     loop_depth: usize,
+    /// ADR-0050c §F5 / Phase 6 — row-polymorphic widening. DefIds of
+    /// PRELUDE intrinsics whose `list[T]` parameters must be
+    /// instantiated with a fresh type variable at every call site
+    /// instead of unified with their declared `list[i64]` shape.
+    /// Populated during `prebind_item` by name match against
+    /// `is_list_polymorphic_intrinsic_name`.
+    poly_intrinsic_defs: HashSet<DefId>,
 }
 
 impl Ctx {
@@ -125,6 +132,15 @@ impl Ctx {
         match &it.kind {
             ItemKind::Fn(f) => {
                 let fn_ty = self.fn_signature_type(f);
+                // ADR-0050c §F5 / Phase 6 — row-polymorphic widening.
+                // PRELUDE intrinsics that operate over `list[T]` for any
+                // element type `T` are recorded; `synth_call` will
+                // instantiate fresh vars for the `T` slot at every call
+                // site (instead of unifying with the declared
+                // `list[i64]` shape in PRELUDE). See `build.rs` PRELUDE.
+                if is_list_polymorphic_intrinsic_name(&f.name) {
+                    self.poly_intrinsic_defs.insert(f.def_id);
+                }
                 self.record_def(f.def_id, fn_ty);
             }
             ItemKind::Class(c) => {
@@ -769,6 +785,22 @@ impl Ctx {
     fn synth_call(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
         let callee_ty = self.synth_expr(callee)?;
         let callee_ty = self.subst.apply(&callee_ty);
+        // ADR-0050c §F5 / Phase 6 — row-polymorphic widening. When the
+        // callee resolves to a PRELUDE intrinsic whose `list[T]` rows
+        // should accept any element type, freshly-instantiate the fn
+        // signature: walk every `Ty::List(elem)` inside the signature
+        // and replace `elem` with a fresh `Ty::Var` so this call site
+        // can unify it with `Ty::Str` / `Ty::Int` / etc. without
+        // polluting other call sites' unifications.
+        let callee_ty = if let ExprKind::Name(rn) = &callee.kind {
+            if self.poly_intrinsic_defs.contains(&rn.def_id) {
+                self.instantiate_list_polymorphic(&callee_ty)
+            } else {
+                callee_ty
+            }
+        } else {
+            callee_ty
+        };
         match callee_ty {
             Ty::Fn(fn_ty) => {
                 // M2 calls: positional args check pointwise; keyword
@@ -1086,6 +1118,48 @@ impl Ctx {
         }
     }
 
+    /// ADR-0050c §F5 / Phase 6 — row-polymorphic widening helper.
+    /// Walk a type and replace every `Ty::List(elem)` with
+    /// `Ty::List(fresh_var)` so each call to a list-polymorphic
+    /// intrinsic gets its own elem-var. Recurses into Tuple / Set /
+    /// Dict / Fn / Record / Adt / Alias so that nested list types are
+    /// instantiated too (e.g. `fn f(xs: list[list[T]]) -> ...`).
+    fn instantiate_list_polymorphic(&self, ty: &Ty) -> Ty {
+        match ty {
+            Ty::List(_) => Ty::List(Box::new(self.fresh_var())),
+            Ty::Tuple(items) => {
+                Ty::Tuple(items.iter().map(|t| self.instantiate_list_polymorphic(t)).collect())
+            }
+            Ty::Set(elem) => Ty::Set(Box::new(self.instantiate_list_polymorphic(elem))),
+            Ty::Dict(k, v) => Ty::Dict(
+                Box::new(self.instantiate_list_polymorphic(k)),
+                Box::new(self.instantiate_list_polymorphic(v)),
+            ),
+            Ty::Fn(fn_ty) => Ty::Fn(FnTy {
+                positional: fn_ty
+                    .positional
+                    .iter()
+                    .map(|t| self.instantiate_list_polymorphic(t))
+                    .collect(),
+                named: fn_ty
+                    .named
+                    .iter()
+                    .map(|(n, t)| (n.clone(), self.instantiate_list_polymorphic(t)))
+                    .collect(),
+                var_positional: fn_ty
+                    .var_positional
+                    .as_ref()
+                    .map(|t| Box::new(self.instantiate_list_polymorphic(t))),
+                var_keyword: fn_ty
+                    .var_keyword
+                    .as_ref()
+                    .map(|t| Box::new(self.instantiate_list_polymorphic(t))),
+                return_ty: Box::new(self.instantiate_list_polymorphic(&fn_ty.return_ty)),
+            }),
+            _ => ty.clone(),
+        }
+    }
+
     fn expect_bool(&mut self, t: &Ty, span: Span) -> Result<(), TypeError> {
         let resolved = self.subst.apply(t);
         match resolved {
@@ -1232,6 +1306,30 @@ fn lit_to_string(lit: &Lit) -> String {
 #[allow(dead_code)]
 fn _dummy() {
     let _ = finalize;
+}
+
+/// ADR-0050c §F5 / Phase 6 — row-polymorphic widening name list.
+///
+/// PRELUDE intrinsics declared with `list[i64]` parameters that
+/// SHOULD accept `list[T]` for any `T`. The type checker tracks each
+/// matching fn's `DefId` during `prebind_item` and re-instantiates a
+/// fresh `Ty::List(Ty::Var(_))` per call site in `synth_call`.
+///
+/// This matches the existing CLI intrinsic-rewrite pass at
+/// `crates/cobrust-cli/src/build/intrinsics.rs` which already routes
+/// these names to their C-ABI runtime symbols (`__cobrust_list_len`,
+/// etc.), and the symbols themselves take a `*mut u8` list pointer
+/// (no element-type-specific path at the ABI level).
+///
+/// Synchronisation: this list must stay aligned with the PRELUDE
+/// definitions at `crates/cobrust-cli/src/build.rs::PRELUDE`. When
+/// PRELUDE adds a new `list[i64]`-typed intrinsic that should be
+/// row-polymorphic, add the name here.
+fn is_list_polymorphic_intrinsic_name(name: &str) -> bool {
+    matches!(
+        name,
+        "list_len" | "list_get" | "list_set" | "list_new" | "list_is_empty"
+    )
 }
 
 /// ADR-0041 §H8: extract the integer value of an `Expr` that's a
