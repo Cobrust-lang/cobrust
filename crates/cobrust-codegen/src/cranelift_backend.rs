@@ -305,9 +305,9 @@ impl CraneliftCtx {
                 // of falling back to `Ty::None` → I8 (which violates
                 // sig matching at call sites, e.g. `__cobrust_println`
                 // taking i64).
-                body.locals.get(p.local.0 as usize).map(|l| {
-                    cranelift_scalar_ty(&l.ty).unwrap_or(self.pointer_type)
-                })
+                body.locals
+                    .get(p.local.0 as usize)
+                    .map(|l| cranelift_scalar_ty(&l.ty).unwrap_or(self.pointer_type))
             }
             Operand::Constant(c) => Some(match c {
                 Constant::Bool(_) | Constant::None => ir::types::I8,
@@ -772,22 +772,23 @@ impl CraneliftCtx {
         // `cranelift_backend.rs:932-946`.
         let mut str_data_ids: HashMap<String, cranelift_module::DataId> = HashMap::new();
         // Inner helper: intern a payload if not already seen.
-        let mut intern_payload =
-            |payload: &str, ids: &mut HashMap<String, cranelift_module::DataId>| -> Result<(), CodegenError> {
-                if ids.contains_key(payload) {
-                    return Ok(());
-                }
-                let symbol = str_data_symbol(body.def_id.0, ids.len(), payload);
-                let data_id = obj
-                    .declare_data(&symbol, Linkage::Local, false, false)
-                    .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
-                let mut data_desc = cranelift_module::DataDescription::new();
-                data_desc.define(payload.as_bytes().to_vec().into_boxed_slice());
-                obj.define_data(data_id, &data_desc)
-                    .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
-                ids.insert(payload.to_string(), data_id);
-                Ok(())
-            };
+        let mut intern_payload = |payload: &str,
+                                  ids: &mut HashMap<String, cranelift_module::DataId>|
+         -> Result<(), CodegenError> {
+            if ids.contains_key(payload) {
+                return Ok(());
+            }
+            let symbol = str_data_symbol(body.def_id.0, ids.len(), payload);
+            let data_id = obj
+                .declare_data(&symbol, Linkage::Local, false, false)
+                .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+            let mut data_desc = cranelift_module::DataDescription::new();
+            data_desc.define(payload.as_bytes().to_vec().into_boxed_slice());
+            obj.define_data(data_id, &data_desc)
+                .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+            ids.insert(payload.to_string(), data_id);
+            Ok(())
+        };
         for mir_block in &body.blocks {
             // Walk statements: every Aggregate rvalue operand that is a
             // Constant::Str participates (per ADR-0050c Phase 2 — list[str]
@@ -1005,18 +1006,12 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                     // list[str]: per-element __cobrust_str_drop then
                     // container drop, atomically via the new
                     // __cobrust_list_drop_elems shim.
-                    let drop_fn_ref = self
-                        .runtime_funcs
-                        .get("__cobrust_str_drop")
-                        .copied();
-                    let drop_elems_ref = self
-                        .runtime_funcs
-                        .get("__cobrust_list_drop_elems")
-                        .copied();
+                    let drop_fn_ref = self.runtime_funcs.get("__cobrust_str_drop").copied();
+                    let drop_elems_ref =
+                        self.runtime_funcs.get("__cobrust_list_drop_elems").copied();
                     if let (Some(drop_fn), Some(drop_elems)) = (drop_fn_ref, drop_elems_ref) {
                         // Materialize the function pointer to __cobrust_str_drop.
-                        let fn_addr =
-                            self.builder.ins().func_addr(self.pointer_type, drop_fn);
+                        let fn_addr = self.builder.ins().func_addr(self.pointer_type, drop_fn);
                         self.builder.ins().call(drop_elems, &[ptr, fn_addr]);
                     } else if let Some(fr) = self.runtime_funcs.get("__cobrust_list_drop").copied()
                     {
@@ -2190,10 +2185,7 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_list_drop", sig(call_conv, &[p], None)));
     // ADR-0050c §"Phase 3": drop a list whose i64 slots store owned
     // pointers. Second arg is a fn-pointer (p-sized) accepting `*mut u8`.
-    out.push((
-        "__cobrust_list_drop_elems",
-        sig(call_conv, &[p, p], None),
-    ));
+    out.push(("__cobrust_list_drop_elems", sig(call_conv, &[p, p], None)));
     // ADR-0050c §"Phase 6" / F5 §2.2 uniformity addendum: list_is_empty
     // predicate; returns i64 0/1 per the SwitchInt codegen convention.
     out.push(("__cobrust_list_is_empty", sig(call_conv, &[p], Some(i64))));

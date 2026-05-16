@@ -890,12 +890,8 @@ impl<'a> BodyBuilder<'a> {
                         .map(|d| d.ty.clone())
                         .unwrap_or(Ty::None);
                     if matches!(vl_ty, Ty::Str) {
-                        let raw_local = self.declare_local(
-                            "_iter_raw".to_string(),
-                            Ty::Int,
-                            span,
-                            false,
-                        );
+                        let raw_local =
+                            self.declare_local("_iter_raw".to_string(), Ty::Int, span, false);
                         // body_block → Call(list_get → raw_local) → after_get
                         let after_get = self.start_new_block();
                         self.cur_block = Some(body_block.0 as usize);
@@ -1210,9 +1206,7 @@ impl<'a> BodyBuilder<'a> {
                 // `Terminator::Drop` arm can dispatch on Ty::List(elem).
                 // For `["a", "b"]` this records `Ty::List(Ty::Str)`,
                 // enabling the per-element `__cobrust_str_drop` schedule.
-                let elem_ty = items
-                    .first()
-                    .map_or(Ty::None, |it| synth_expr_ty(self, it));
+                let elem_ty = items.first().map_or(Ty::None, |it| synth_expr_ty(self, it));
                 for it in items {
                     ops.push(self.lower_expr(it)?);
                 }
@@ -1349,12 +1343,8 @@ impl<'a> BodyBuilder<'a> {
                     // dest. Mirror of the for-loop body fix above.
                     if matches!(elem_ty, Ty::Str) {
                         // Step 1: list_get into raw i64 temp.
-                        let raw_dest = self.declare_local(
-                            "_idxraw".to_string(),
-                            Ty::Int,
-                            e.span,
-                            false,
-                        );
+                        let raw_dest =
+                            self.declare_local("_idxraw".to_string(), Ty::Int, e.span, false);
                         let cur = self.current_block_id();
                         let after_get = self.start_new_block();
                         self.cur_block = Some(cur.0 as usize);
@@ -1368,12 +1358,8 @@ impl<'a> BodyBuilder<'a> {
                             unwind: None,
                         });
                         // Step 2: str_clone(raw) → owned Str dest.
-                        let clone_dest = self.declare_local(
-                            "_idxget".to_string(),
-                            elem_ty,
-                            e.span,
-                            false,
-                        );
+                        let clone_dest =
+                            self.declare_local("_idxget".to_string(), elem_ty, e.span, false);
                         let after_clone = self.start_new_block();
                         self.cur_block = Some(after_get.0 as usize);
                         self.terminate(Terminator::Call {
