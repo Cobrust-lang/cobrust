@@ -1468,7 +1468,7 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                             .get(p.local.0 as usize)
                             .map(|l| matches!(l.ty, Ty::Str))
                             .unwrap_or(false),
-                        _ => false,
+                        Operand::Constant(_) => false,
                     };
                     if is_str_operand {
                         let raw = self.lower_operand(op)?;
