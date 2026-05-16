@@ -788,6 +788,67 @@ impl CraneliftCtx {
                 }
             }
         }
+        // M-F.3.3 gap (c): also intern Constant::Str payloads that appear
+        // inside Rvalue::Aggregate(FormatString, ..) operands. These include
+        // both static string literals ("hello ") and FMTSPEC: sentinels.
+        // For FMTSPEC: sentinels we also intern the bare spec (without the
+        // prefix) because `lower_aggregate_format_string` calls
+        // `materialize_str_data` with the bare spec to pass (ptr, len) to
+        // `__cobrust_fmt_float_prec`.
+        let mut fmtspec_extra: Vec<String> = Vec::new();
+        for mir_block in &body.blocks {
+            for stmt in &mir_block.statements {
+                if let cobrust_mir::StatementKind::Assign {
+                    rvalue:
+                        cobrust_mir::Rvalue::Aggregate(cobrust_mir::AggregateKind::FormatString, ops),
+                    ..
+                } = &stmt.kind
+                {
+                    for op in ops {
+                        if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(payload)) =
+                            op
+                        {
+                            if str_data_ids.contains_key(payload) {
+                                continue;
+                            }
+                            let symbol =
+                                str_data_symbol(body.def_id.0, str_data_ids.len(), payload);
+                            let data_id =
+                                obj.declare_data(&symbol, Linkage::Local, false, false)
+                                    .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+                            let mut data_desc = cranelift_module::DataDescription::new();
+                            data_desc.define(payload.as_bytes().to_vec().into_boxed_slice());
+                            obj.define_data(data_id, &data_desc)
+                                .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+                            str_data_ids.insert(payload.clone(), data_id);
+                            // If this is a FMTSPEC sentinel, queue the bare spec
+                            // for separate interning.
+                            if let Some(spec) = payload.strip_prefix("FMTSPEC:") {
+                                if !spec.is_empty() {
+                                    fmtspec_extra.push(spec.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Intern the bare specs (used by `materialize_str_data` in
+        // `lower_aggregate_format_string` when calling `__cobrust_fmt_float_prec`).
+        for spec in fmtspec_extra {
+            if str_data_ids.contains_key(&spec) {
+                continue;
+            }
+            let symbol = str_data_symbol(body.def_id.0, str_data_ids.len(), &spec);
+            let data_id = obj
+                .declare_data(&symbol, Linkage::Local, false, false)
+                .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+            let mut data_desc = cranelift_module::DataDescription::new();
+            data_desc.define(spec.as_bytes().to_vec().into_boxed_slice());
+            obj.define_data(data_id, &data_desc)
+                .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+            str_data_ids.insert(spec, data_id);
+        }
         let mut str_data_globals: HashMap<String, ir::GlobalValue> = HashMap::new();
         for (payload, did) in &str_data_ids {
             let gv = obj.declare_data_in_func(*did, builder.func);
@@ -1369,9 +1430,18 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
             self.builder.ins().iconst(self.pointer_type, 0)
         };
 
-        for op in operands {
+        let mut idx = 0;
+        while idx < operands.len() {
+            let op = &operands[idx];
             // Static string literal? Materialize via `.rodata` symbol.
+            // Skip FMTSPEC sentinels — they are consumed by the preceding
+            // float operand's handling below.
             if let Operand::Constant(Constant::Str(payload)) = op {
+                if payload.starts_with("FMTSPEC:") {
+                    // Stray sentinel with no preceding float — skip.
+                    idx += 1;
+                    continue;
+                }
                 if !payload.is_empty() {
                     let (ptr, len) = self.materialize_str_data(payload)?;
                     if let Some(push_fr) =
@@ -1380,19 +1450,40 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                         self.builder.ins().call(push_fr, &[buf, ptr, len]);
                     }
                 }
+                idx += 1;
                 continue;
             }
             // Hole — codegen the value and dispatch by type.
             let v = self.lower_operand(op)?;
             let v_ty = self.builder.func.dfg.value_type(v);
+            // Check for a trailing FMTSPEC: sentinel.
+            let maybe_spec = operands.get(idx + 1).and_then(|next| {
+                if let Operand::Constant(Constant::Str(s)) = next {
+                    s.strip_prefix("FMTSPEC:")
+                } else {
+                    None
+                }
+            });
             if v_ty == ir::types::F32 || v_ty == ir::types::F64 {
                 let v_f64 = if v_ty == ir::types::F32 {
                     self.builder.ins().fpromote(ir::types::F64, v)
                 } else {
                     v
                 };
-                if let Some(fr) = self.runtime_funcs.get("__cobrust_fmt_float").copied() {
-                    self.builder.ins().call(fr, &[buf, v_f64]);
+                if let Some(spec) = maybe_spec {
+                    // M-F.3.3 gap (c): route to precision formatter.
+                    if let Some(fr) = self.runtime_funcs.get("__cobrust_fmt_float_prec").copied() {
+                        let (spec_ptr, spec_len) = self.materialize_str_data(spec)?;
+                        self.builder
+                            .ins()
+                            .call(fr, &[buf, v_f64, spec_ptr, spec_len]);
+                    }
+                    idx += 2; // consume value + sentinel
+                } else {
+                    if let Some(fr) = self.runtime_funcs.get("__cobrust_fmt_float").copied() {
+                        self.builder.ins().call(fr, &[buf, v_f64]);
+                    }
+                    idx += 1;
                 }
             } else if v_ty == ir::types::I8 {
                 // Bool path — i8 value.
@@ -1400,6 +1491,7 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 if let Some(fr) = self.runtime_funcs.get("__cobrust_fmt_bool").copied() {
                     self.builder.ins().call(fr, &[buf, v_i64]);
                 }
+                idx += 1;
             } else if v_ty.is_int() {
                 let v_i64 = if v_ty.bits() < 64 {
                     self.builder.ins().sextend(ir::types::I64, v)
@@ -1409,12 +1501,14 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 if let Some(fr) = self.runtime_funcs.get("__cobrust_fmt_int").copied() {
                     self.builder.ins().call(fr, &[buf, v_i64]);
                 }
+                idx += 1;
             } else {
                 // Pointer-typed value — assume List/Dict/Set repr.
                 if let Some(fr) = self.runtime_funcs.get("__cobrust_fmt_repr").copied() {
                     let type_id = self.builder.ins().iconst(ir::types::I64, 0);
                     self.builder.ins().call(fr, &[buf, v, type_id]);
                 }
+                idx += 1;
             }
         }
         Ok(buf)
@@ -1970,6 +2064,11 @@ fn runtime_helper_signatures(
     ));
     out.push(("__cobrust_fmt_int", sig(call_conv, &[p, i64], None)));
     out.push(("__cobrust_fmt_float", sig(call_conv, &[p, f64], None)));
+    // M-F.3.3 gap (c): precision formatter `(buf, val, spec_ptr, spec_len)`.
+    out.push((
+        "__cobrust_fmt_float_prec",
+        sig(call_conv, &[p, f64, p, i64], None),
+    ));
     out.push(("__cobrust_fmt_bool", sig(call_conv, &[p, i64], None)));
     out.push(("__cobrust_fmt_str", sig(call_conv, &[p, p, i64], None)));
     out.push(("__cobrust_fmt_repr", sig(call_conv, &[p, p, i64], None)));
@@ -2031,6 +2130,21 @@ fn runtime_helper_signatures(
     // `StringBuffer` cast. Runtime-str callsites continue to use the
     // existing single-pointer entry.
     out.push(("__cobrust_print_no_nl_lit", sig(call_conv, &[p, i64], None)));
+
+    // -- M-F.3.3 gap (b): math intrinsics ----------------------------
+    // Single-arg f64→f64 shims.
+    out.push(("__cobrust_math_sqrt", sig(call_conv, &[f64], Some(f64))));
+    out.push(("__cobrust_math_floor", sig(call_conv, &[f64], Some(f64))));
+    out.push(("__cobrust_math_ceil", sig(call_conv, &[f64], Some(f64))));
+    out.push(("__cobrust_math_round", sig(call_conv, &[f64], Some(f64))));
+    out.push(("__cobrust_math_abs", sig(call_conv, &[f64], Some(f64))));
+    out.push(("__cobrust_math_sin", sig(call_conv, &[f64], Some(f64))));
+    out.push(("__cobrust_math_cos", sig(call_conv, &[f64], Some(f64))));
+    out.push(("__cobrust_math_tan", sig(call_conv, &[f64], Some(f64))));
+    out.push(("__cobrust_math_log", sig(call_conv, &[f64], Some(f64))));
+    out.push(("__cobrust_math_exp", sig(call_conv, &[f64], Some(f64))));
+    // Two-arg f64×f64→f64.
+    out.push(("__cobrust_math_pow", sig(call_conv, &[f64, f64], Some(f64))));
 
     // -- M-AI.0 (α Phase 2): cobrust.llm source-level binding ---------
     // `llm_complete(provider, model, prompt) -> str`. All three args are

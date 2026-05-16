@@ -354,6 +354,13 @@ pub enum ExprKind {
     Await(Box<Expr>),
     Yield(Option<Box<Expr>>),
     YieldFrom(Box<Expr>),
+    /// `<expr> as <type>` — explicit numeric cast (M-F.3.3 gap a).
+    /// Only i64↔f64 and bool→i64 are permitted; the type checker
+    /// enforces permitted pairs (constitution §2.2: no silent coercion).
+    Cast {
+        expr: Box<Expr>,
+        target: Type,
+    },
 }
 
 /// Literal expression payload (form 21).

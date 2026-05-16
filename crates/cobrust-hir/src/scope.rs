@@ -91,6 +91,12 @@ impl Scope {
     /// if a binding with the same name already exists in this exact
     /// scope (shadowing across scopes is allowed; duplicate within
     /// the same scope is the error).
+    ///
+    /// **Exception**: when both the existing binding and the new one
+    /// are `DefKind::Fn`, the new definition shadows the old silently.
+    /// Python/Cobrust module-level `def` semantics — later definition wins.
+    /// The prior DefId is returned via `Ok(Some(prior_def_id))` so the
+    /// caller can track PRELUDE stub overrides (M-F.3.3 math intrinsics).
     pub fn bind(
         &mut self,
         name: &str,
@@ -99,6 +105,12 @@ impl Scope {
         span: Span,
     ) -> Result<(), Span> {
         if let Some(prior) = self.bindings.get(name) {
+            if matches!(kind, DefKind::Fn) && matches!(prior.kind, DefKind::Fn) {
+                // Fn→Fn shadowing: user's definition overwrites PRELUDE stub.
+                self.bindings
+                    .insert(name.to_string(), BindingRecord { def_id, kind, span });
+                return Ok(());
+            }
             return Err(prior.span);
         }
         self.bindings
