@@ -942,6 +942,21 @@ impl<'a> Parser<'a> {
             TokenKind::KwIn => (BinOp::In, PREC_CMP, false),
             TokenKind::KwNot => {
                 // Only valid as `not in` here.
+                //
+                // ADR-0050d sub-sprint a/b parser disposition (clarifies
+                // Decision 4A): `BinOp::NotIn` is recognised when KwNot
+                // sits in binary-op position and is followed by KwIn at
+                // PREC_CMP. The canonical pre-Phase-G workaround for
+                // negated membership is `not (k in d)` (unary-not over
+                // the `BinOp::In` bool result) — the well_typed corpus
+                // w130 + dict_e2e f3d18 ship that idiom. Both are
+                // semantically `bool -> bool` and the type-checker accepts
+                // either form without divergence. Phase G may revisit
+                // `k not in d` Pratt-loop bookkeeping (the second
+                // self.bump() after producing BinOp::NotIn is currently
+                // unbalanced — see parse_pratt §"Special-case `not in`"
+                // commentary at L909-L915); for Phase F.3 the workaround
+                // is canonical to keep scope tight.
                 if matches!(self.peek_at(1), TokenKind::KwIn) {
                     (BinOp::NotIn, PREC_CMP, false)
                 } else {

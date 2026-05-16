@@ -265,6 +265,93 @@ See `crates/cobrust-cli/tests/string_stdlib_e2e.rs` for the
 end-to-end corpus and `crates/cobrust-stdlib/src/string.rs` for the
 C-ABI shim definitions.
 
+## Step 2.9: dict (M-F.3.4)
+
+Cobrust dicts mirror Python's mental model: `{}` is dict (not set),
+insertion-order iteration (Python 3.7+ guarantee), `d[k]` panics on
+missing key, `.get(k, default)` is the safe-escape idiom. The Phase
+F.3 surface is locked by ADR-0050d; sub-sprint a+b (this milestone)
+lands the parser + type checker + dict_is_empty intrinsic; sub-sprint
+c/d/e wire codegen + indexmap backing + iteration desugar.
+
+```cobrust
+fn main() -> i64:
+    # Literal: empty {} is dict, not set.
+    let empty: Dict[str, i64] = {}
+    let scores: Dict[str, i64] = {"alice": 90, "bob": 85, "carol": 92}
+
+    # Indexing read — panics on missing key.
+    let a: i64 = scores["alice"]                   # 90
+
+    # Indexing write — rebind or insert.
+    scores["dave"] = 78
+
+    # Membership — `in` returns bool; canonical workaround for `not in`.
+    if "alice" in scores:
+        print("found alice")
+    if not ("zoey" in scores):
+        print("zoey absent")
+
+    # dict_is_empty (canonical predicate — `if d:` is rejected by §2.2).
+    if dict_is_empty(empty):
+        print("empty is empty")
+
+    # Method-intrinsic surface (recognised at type-check; codegen lands
+    # in sub-sprint d/e per ADR-0050d):
+    let ks: List[str] = scores.keys()              # insertion order
+    let vs: List[i64] = scores.values()
+    let kvs: List[Tuple[str, i64]] = scores.items()
+    let v: i64 = scores.get("alice")               # 90
+    let safe: i64 = scores.get("missing", 0)       # 0 (sentinel-pair scope cap)
+    let copy: Dict[str, i64] = scores.copy()       # shallow clone
+
+    # Comprehension.
+    let xs: List[i64] = [1, 2, 3]
+    let squares: Dict[i64, i64] = {x: (x * x) for x in xs}
+
+    return 0
+```
+
+Key rules (M-F.3.4 / ADR-0050d):
+- `{}` is empty dict (matches Python; set literal requires `set()`
+  ctor — Phase G).
+- `d[k]` panics + aborts on missing key (matches Python's `KeyError`
+  but using Rust's abort path — see `__cobrust_dict_keyerror_abort`).
+  Use `d.get(k, default)` for the safe-escape (no Option lowering at
+  Phase F.3 — Phase F.3-late or Phase G adds typed Option).
+- `key in d` returns `bool` (Decision 4A). The canonical idiom for
+  negated membership is `not (k in d)` — `BinOp::NotIn` Pratt-loop
+  bookkeeping is a Phase G follow-up.
+- `len(d)` returns `i64` (Decision 5A — uniform with list/str).
+- `dict_is_empty(d)` is the `bool` predicate canonical per
+  constitution §2.2 implicit-truthy ban (no `if d:`).
+- Iteration is insertion-order (Decision 6A — backed by
+  `indexmap::IndexMap` post-sub-sprint d).
+- Type parameters: `K ∈ {i64, str}` for Phase F.3; reject `f64`
+  keys at type-check (NaN != NaN breaks Hash invariants — see
+  `TypeError::NotHashable`).
+- `d.copy()` is shallow clone (Decision 10A).
+- `{**other}` dict-spread is Phase G — Phase F.3 rejects at
+  `TypeError::DictSpreadNotSupported`.
+
+Compile-rejected (M-F.3.4):
+- `Dict[f64, V]` and `Dict[List[T], V]` (non-hashable K) — see
+  `TypeError::NotHashable` taxonomy.
+- `let d = {}` (no annotation, no use site that pins K/V) →
+  `TypeError::AmbiguousType` at the final resolution pass. Annotate
+  explicitly.
+- `if d:` (implicit truthiness) — use `dict_is_empty(d)` or
+  `len(d) > 0`.
+- `def f(d: Dict[K, V] = {})` (mutable default) — same rule as
+  `list = []` (ADR-0006).
+- `{"a": 1, **other}` (spread in dict literal) — dict-merge is
+  Phase G.
+
+See `crates/cobrust-cli/tests/dict_e2e.rs` for the end-to-end corpus
+(many ignored pre-sub-sprint c/d codegen close) and the dict block
+in `crates/cobrust-types/tests/well_typed.rs` w116..w145 for the
+type-checker surface.
+
 ## Step 3: try the AI alpha surfaces (optional)
 
 1. Copy the router example and add your provider credentials:

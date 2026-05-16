@@ -132,6 +132,8 @@ pub unsafe extern "C" fn __cobrust_dict_set(dict: *mut u8, k: i64, v: i64);
 pub unsafe extern "C" fn __cobrust_dict_get(dict: *mut u8, k: i64) -> i64;
 pub unsafe extern "C" fn __cobrust_dict_len(dict: *mut u8) -> i64;
 pub unsafe extern "C" fn __cobrust_dict_drop(dict: *mut u8);
+// M-F.3.4 / ADR-0050d Decision 5 addendum.
+pub unsafe extern "C" fn __cobrust_dict_is_empty(dict: *mut u8) -> i64;
 
 pub unsafe extern "C" fn __cobrust_set_new(elem_size: i64, len: i64) -> *mut u8;
 pub unsafe extern "C" fn __cobrust_set_insert(set: *mut u8, v: i64);
@@ -715,3 +717,14 @@ tests; 22 pass under `--include-ignored`. The 3 remaining
 source pattern `let s2 = clone(s); let n = str_len(s); ...` does
 NOT mitigate use-after-move under strict ADR-0050c Path D Option A
 — Phase G closure target).
+
+## ADR-0050d M-F.3.4 — dict surface C-ABI shims
+
+Sub-sprint a+b lands the source-level + type-checker surface plus the
+`dict_is_empty` C-ABI shim. The remaining shims (iter init/next/drop,
+typed get/set per (K, V) shape, equality, keyerror abort) ship in
+sub-sprint d alongside the `indexmap::IndexMap` backing swap.
+
+| Symbol | Definition | Purpose |
+|---|---|---|
+| `__cobrust_dict_is_empty(dict: *mut u8) -> i64` | `stdlib/collections.rs` — returns 1 if `map.is_empty()`, 0 otherwise. NULL dict is treated as empty. M12.x backing is `HashMap<i64, i64>`; sub-sprint d swaps to indexmap without breaking the signature. | §2.2-mandated emptiness predicate; the `if d:` implicit-truthiness ban requires this for the `if dict_is_empty(d):` canonical pattern. Source binding at `intrinsics.rs::DICT_IS_EMPTY_RUNTIME_SYMBOL`. Row-polymorphic at the type-checker via `is_list_polymorphic_intrinsic_name` Dict widening. |

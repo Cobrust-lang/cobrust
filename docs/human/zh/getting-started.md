@@ -252,6 +252,87 @@ M-F.3.5 的变化:
 端到端 corpus 见 `crates/cobrust-cli/tests/string_stdlib_e2e.rs`,
 C-ABI shim 定义见 `crates/cobrust-stdlib/src/string.rs`。
 
+## 第 2.9 步：dict（M-F.3.4）
+
+Cobrust 的 dict 镜像 Python 的心智模型：`{}` 是 dict（不是 set）、
+插入顺序迭代（Python 3.7+ 的承诺）、`d[k]` 在键缺失时 panic、
+`.get(k, default)` 是安全转义惯用法。Phase F.3 的表面由 ADR-0050d
+锁定;子冲刺 a+b（本里程碑）落地 parser + 类型检查器 + dict_is_empty
+内建；子冲刺 c/d/e 接入 codegen + indexmap 后端 + 迭代去糖。
+
+```cobrust
+fn main() -> i64:
+    # 字面量：空 {} 是 dict，不是 set。
+    let empty: Dict[str, i64] = {}
+    let scores: Dict[str, i64] = {"alice": 90, "bob": 85, "carol": 92}
+
+    # 下标读取 —— 键缺失时 panic。
+    let a: i64 = scores["alice"]                   # 90
+
+    # 下标写入 —— 重绑或插入。
+    scores["dave"] = 78
+
+    # 成员判定 —— `in` 返回 bool;`not in` 的规范替代写法见下。
+    if "alice" in scores:
+        print("found alice")
+    if not ("zoey" in scores):
+        print("zoey absent")
+
+    # dict_is_empty（规范的空判定 —— §2.2 拒绝 `if d:`）。
+    if dict_is_empty(empty):
+        print("empty is empty")
+
+    # 方法内建表面（类型检查器已识别;codegen 由子冲刺 d/e 落地,
+    # 见 ADR-0050d）：
+    let ks: List[str] = scores.keys()              # 插入顺序
+    let vs: List[i64] = scores.values()
+    let kvs: List[Tuple[str, i64]] = scores.items()
+    let v: i64 = scores.get("alice")               # 90
+    let safe: i64 = scores.get("missing", 0)       # 0（哨兵对回退,scope cap)
+    let copy: Dict[str, i64] = scores.copy()       # 浅克隆
+
+    # 推导式。
+    let xs: List[i64] = [1, 2, 3]
+    let squares: Dict[i64, i64] = {x: (x * x) for x in xs}
+
+    return 0
+```
+
+核心规则（M-F.3.4 / ADR-0050d）：
+- `{}` 是空 dict（匹配 Python;空 set 字面量需要 `set()` ctor —— Phase G）。
+- `d[k]` 在键缺失时 panic + abort（匹配 Python 的 `KeyError` 但走
+  Rust 的 abort 路径 —— 见 `__cobrust_dict_keyerror_abort`）。
+  用 `d.get(k, default)` 做安全转义（Phase F.3 不带 Option lowering
+  —— Phase F.3-late 或 Phase G 接入类型化 Option）。
+- `key in d` 返回 `bool`（Decision 4A）。负向成员判定的规范惯用法
+  是 `not (k in d)` —— `BinOp::NotIn` 的 Pratt loop 簿记是 Phase G
+  的后续工作。
+- `len(d)` 返回 `i64`（Decision 5A —— 与 list / str 保持统一）。
+- `dict_is_empty(d)` 是 `bool` 谓词,符合宪法 §2.2 隐式真值禁令
+  （拒绝 `if d:`）。
+- 迭代按插入顺序（Decision 6A —— 子冲刺 d 之后由
+  `indexmap::IndexMap` 提供）。
+- 类型参数：`K ∈ {i64, str}`（Phase F.3）;在类型检查阶段拒绝
+  `f64` 键（NaN != NaN 破坏 Hash 不变式 —— 见 `TypeError::NotHashable`）。
+- `d.copy()` 是浅克隆（Decision 10A）。
+- `{**other}` dict 展开是 Phase G —— Phase F.3 在
+  `TypeError::DictSpreadNotSupported` 处拒绝。
+
+编译期拒绝（M-F.3.4）：
+- `Dict[f64, V]` 与 `Dict[List[T], V]`（非 hashable 的 K）——
+  见 `TypeError::NotHashable` 分类。
+- `let d = {}`（无注解,也没有后续用法将 K/V 锁定）→
+  最终解析过程触发 `TypeError::AmbiguousType`。请显式注解。
+- `if d:`（隐式真值）—— 用 `dict_is_empty(d)` 或 `len(d) > 0`。
+- `def f(d: Dict[K, V] = {})`（可变默认）—— 同
+  `list = []` 规则（ADR-0006）。
+- `{"a": 1, **other}`（dict 字面量中的 spread）—— dict-merge 是
+  Phase G 范畴。
+
+端到端 corpus 见 `crates/cobrust-cli/tests/dict_e2e.rs`
+（许多在子冲刺 c/d codegen 关闭前为 ignored）;类型检查表面见
+`crates/cobrust-types/tests/well_typed.rs` 中 w116..w145 的 dict 段。
+
 ## 第三步：试用 AI alpha 能力（可选）
 
 1. 复制 router 示例配置，并填入你的 provider 凭据：
