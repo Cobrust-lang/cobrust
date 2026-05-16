@@ -722,10 +722,7 @@ fn w79_f64_comparison_eq() {
 #[test]
 fn w80_f64_unary_neg() {
     // Unary negation on f64.
-    must_accept(
-        "f64-unary-neg",
-        "fn f(x: f64) -> f64:\n    return (-x)\n",
-    );
+    must_accept("f64-unary-neg", "fn f(x: f64) -> f64:\n    return (-x)\n");
 }
 
 // ---- `as` cast expression (M-F.3.3 gap item a) ----

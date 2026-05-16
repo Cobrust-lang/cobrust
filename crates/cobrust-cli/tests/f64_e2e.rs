@@ -492,7 +492,10 @@ fn f64e24_inf_literal_check_accepts() {
         "fn main() -> i64:\n    let x: f64 = inf\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
-    assert_eq!(code, 0, "expected check ok for `inf` literal; stderr={stderr}");
+    assert_eq!(
+        code, 0,
+        "expected check ok for `inf` literal; stderr={stderr}"
+    );
 }
 
 #[test]
@@ -503,7 +506,10 @@ fn f64e25_nan_literal_check_accepts() {
         "fn main() -> i64:\n    let x: f64 = nan\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
-    assert_eq!(code, 0, "expected check ok for `nan` literal; stderr={stderr}");
+    assert_eq!(
+        code, 0,
+        "expected check ok for `nan` literal; stderr={stderr}"
+    );
 }
 
 #[test]
