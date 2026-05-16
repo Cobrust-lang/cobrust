@@ -2518,6 +2518,25 @@ fn runtime_helper_signatures(
         sig(call_conv, &[p, p], Some(p)),
     ));
 
+    // -- M-F.3.6 file IO completion (ADR-0050f) ---------------------------
+    // `read_file(path: str) -> str` — reads entire file; returns owned Str.
+    out.push(("__cobrust_read_file", sig(call_conv, &[p], Some(p))));
+    // `read_file_lines(path: str) -> list[str]` — returns owned list ptr.
+    out.push(("__cobrust_read_file_lines", sig(call_conv, &[p], Some(p))));
+    // `write_file(path: str, contents: str) -> i64` — 0=success, 1=error.
+    out.push(("__cobrust_write_file", sig(call_conv, &[p, p], Some(i64))));
+    // `append_file(path: str, contents: str) -> i64` — 0=success, 1=error.
+    out.push((
+        "__cobrust_append_file",
+        sig(call_conv, &[p, p], Some(i64)),
+    ));
+    // `stdin_read_all() -> str` — reads stdin to EOF; returns owned Str.
+    out.push(("__cobrust_stdin_read_all", sig(call_conv, &[], Some(p))));
+    // `stdout_write(s: str) -> i64` — no trailing newline; 0=success.
+    out.push(("__cobrust_stdout_write", sig(call_conv, &[p], Some(i64))));
+    // `stderr_write(s: str) -> i64` — to stderr only; 0=success.
+    out.push(("__cobrust_stderr_write", sig(call_conv, &[p], Some(i64))));
+
     out
 }
 

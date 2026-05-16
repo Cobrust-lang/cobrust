@@ -249,6 +249,36 @@ pub const STR_UPPER_RUNTIME_SYMBOL: &str = "__cobrust_str_upper";
 /// shim already ships at `crates/cobrust-stdlib/src/fmt.rs:306`).
 pub const STR_CLONE_RUNTIME_SYMBOL: &str = "__cobrust_str_clone";
 
+// ---- M-F.3.6 file IO completion (ADR-0050f) --------------------------
+
+/// M-F.3.6 — `read_file(path: str) -> str`.
+/// Reads entire file as UTF-8; empty on error (i64-sentinel Q1).
+pub const READ_FILE_RUNTIME_SYMBOL: &str = "__cobrust_read_file";
+
+/// M-F.3.6 — `read_file_lines(path: str) -> list[str]`.
+/// Splits file into newline-stripped lines per ADR-0050f Q2.
+pub const READ_FILE_LINES_RUNTIME_SYMBOL: &str = "__cobrust_read_file_lines";
+
+/// M-F.3.6 — `write_file(path: str, contents: str) -> i64`.
+/// Creates or truncates; returns 0 on success, 1 on I/O error.
+pub const WRITE_FILE_RUNTIME_SYMBOL: &str = "__cobrust_write_file";
+
+/// M-F.3.6 — `append_file(path: str, contents: str) -> i64`.
+/// Creates if absent, appends if present; returns 0/1 sentinel.
+pub const APPEND_FILE_RUNTIME_SYMBOL: &str = "__cobrust_append_file";
+
+/// M-F.3.6 — `stdin_read_all() -> str`.
+/// Reads stdin until EOF; returns empty Str on EOF.
+pub const STDIN_READ_ALL_RUNTIME_SYMBOL: &str = "__cobrust_stdin_read_all";
+
+/// M-F.3.6 — `stdout_write(s: str) -> i64`.
+/// Writes `s` to stdout WITHOUT trailing newline; returns 0/1 sentinel.
+pub const STDOUT_WRITE_RUNTIME_SYMBOL: &str = "__cobrust_stdout_write";
+
+/// M-F.3.6 — `stderr_write(s: str) -> i64`.
+/// Writes `s` to stderr WITHOUT trailing newline; returns 0/1 sentinel.
+pub const STDERR_WRITE_RUNTIME_SYMBOL: &str = "__cobrust_stderr_write";
+
 /// Errors from the print-intrinsic rewrite.
 #[derive(Debug, thiserror::Error)]
 pub enum IntrinsicError {
@@ -376,6 +406,21 @@ struct IntrinsicDefIds {
     str_upper: HashSet<u32>,
     /// M-F.3.5 — LC-100 honest-debt mitigation.
     str_clone: HashSet<u32>,
+    // ---- M-F.3.6 file IO completion (ADR-0050f) ----
+    /// M-F.3.6 — `read_file(path: str) -> str`.
+    read_file: HashSet<u32>,
+    /// M-F.3.6 — `read_file_lines(path: str) -> list[str]`.
+    read_file_lines: HashSet<u32>,
+    /// M-F.3.6 — `write_file(path: str, contents: str) -> i64`.
+    write_file: HashSet<u32>,
+    /// M-F.3.6 — `append_file(path: str, contents: str) -> i64`.
+    append_file: HashSet<u32>,
+    /// M-F.3.6 — `stdin_read_all() -> str`.
+    stdin_read_all: HashSet<u32>,
+    /// M-F.3.6 — `stdout_write(s: str) -> i64`.
+    stdout_write: HashSet<u32>,
+    /// M-F.3.6 — `stderr_write(s: str) -> i64`.
+    stderr_write: HashSet<u32>,
 }
 
 impl IntrinsicDefIds {
@@ -438,6 +483,14 @@ impl IntrinsicDefIds {
         out.extend(&self.str_lower);
         out.extend(&self.str_upper);
         out.extend(&self.str_clone);
+        // M-F.3.6 file IO completion.
+        out.extend(&self.read_file);
+        out.extend(&self.read_file_lines);
+        out.extend(&self.write_file);
+        out.extend(&self.append_file);
+        out.extend(&self.stdin_read_all);
+        out.extend(&self.stdout_write);
+        out.extend(&self.stderr_write);
         out
     }
 
@@ -498,6 +551,13 @@ impl IntrinsicDefIds {
             && self.str_lower.is_empty()
             && self.str_upper.is_empty()
             && self.str_clone.is_empty()
+            && self.read_file.is_empty()
+            && self.read_file_lines.is_empty()
+            && self.write_file.is_empty()
+            && self.append_file.is_empty()
+            && self.stdin_read_all.is_empty()
+            && self.stdout_write.is_empty()
+            && self.stderr_write.is_empty()
     }
 }
 
@@ -563,6 +623,14 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         str_lower: HashSet::new(),
         str_upper: HashSet::new(),
         str_clone: HashSet::new(),
+        // M-F.3.6 file IO completion.
+        read_file: HashSet::new(),
+        read_file_lines: HashSet::new(),
+        write_file: HashSet::new(),
+        append_file: HashSet::new(),
+        stdin_read_all: HashSet::new(),
+        stdout_write: HashSet::new(),
+        stderr_write: HashSet::new(),
     };
     // Track names already collected to detect user-defined shadowing of
     // PRELUDE stubs (M-F.3.3). For non-math intrinsics (print, parse_int,
@@ -800,6 +868,28 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
                     ids.str_clone.insert(body.def_id.0);
                 }
             }
+            // ---- M-F.3.6 file IO completion (ADR-0050f) ----
+            "read_file" => {
+                ids.read_file.insert(body.def_id.0);
+            }
+            "read_file_lines" => {
+                ids.read_file_lines.insert(body.def_id.0);
+            }
+            "write_file" => {
+                ids.write_file.insert(body.def_id.0);
+            }
+            "append_file" => {
+                ids.append_file.insert(body.def_id.0);
+            }
+            "stdin_read_all" => {
+                ids.stdin_read_all.insert(body.def_id.0);
+            }
+            "stdout_write" => {
+                ids.stdout_write.insert(body.def_id.0);
+            }
+            "stderr_write" => {
+                ids.stderr_write.insert(body.def_id.0);
+            }
             _ => {}
         }
     }
@@ -895,6 +985,14 @@ enum Kind {
     StrLower,
     StrUpper,
     StrClone,
+    // ---- M-F.3.6 file IO completion (ADR-0050f) ----
+    ReadFile,
+    ReadFileLines,
+    WriteFile,
+    AppendFile,
+    StdinReadAll,
+    StdoutWrite,
+    StderrWrite,
 }
 
 fn kind_for_name(name: &str) -> Option<Kind> {
@@ -957,6 +1055,14 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "lower" => Some(Kind::StrLower),
         "upper" => Some(Kind::StrUpper),
         "clone" => Some(Kind::StrClone),
+        // M-F.3.6 file IO completion (ADR-0050f).
+        "read_file" => Some(Kind::ReadFile),
+        "read_file_lines" => Some(Kind::ReadFileLines),
+        "write_file" => Some(Kind::WriteFile),
+        "append_file" => Some(Kind::AppendFile),
+        "stdin_read_all" => Some(Kind::StdinReadAll),
+        "stdout_write" => Some(Kind::StdoutWrite),
+        "stderr_write" => Some(Kind::StderrWrite),
         _ => None,
     }
 }
@@ -1074,8 +1180,44 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::StrUpper)
     } else if ids.str_clone.contains(&id) {
         Some(Kind::StrClone)
+    } else if ids.read_file.contains(&id) {
+        Some(Kind::ReadFile)
+    } else if ids.read_file_lines.contains(&id) {
+        Some(Kind::ReadFileLines)
+    } else if ids.write_file.contains(&id) {
+        Some(Kind::WriteFile)
+    } else if ids.append_file.contains(&id) {
+        Some(Kind::AppendFile)
+    } else if ids.stdin_read_all.contains(&id) {
+        Some(Kind::StdinReadAll)
+    } else if ids.stdout_write.contains(&id) {
+        Some(Kind::StdoutWrite)
+    } else if ids.stderr_write.contains(&id) {
+        Some(Kind::StderrWrite)
     } else {
         None
+    }
+}
+
+/// Convert `Operand::Move(place)` → `Operand::Copy(place)`.
+///
+/// Used by M-F.3.6 file-IO intrinsic dispatch to adopt the ADR-0050c
+/// Phase 2a "Copy-at-operand" discipline for Str arguments whose C-ABI
+/// shim only borrows the pointer (reads via `str_buf_as_str_phase3`)
+/// without freeing it. Ownership of the named local stays with the
+/// caller's scope; the drop schedule handles freeing at scope exit.
+///
+/// This mirrors how `list_set(xs, i, v)` passes `xs` as a shared
+/// borrow — the list is `is_copy_type = true` at the operand level so
+/// the local is not consumed by the call. File-IO shims adopt the same
+/// convention for their `path` / `contents` / `s` arguments.
+///
+/// Constant operands are returned unchanged (they're immortal literals
+/// with no local to upgrade).
+fn move_to_copy(op: Operand) -> Operand {
+    match op {
+        Operand::Move(place) => Operand::Copy(place),
+        other => other,
     }
 }
 
@@ -1832,6 +1974,129 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         _ => unreachable!(),
                     };
                     *func = Operand::Constant(Constant::Str(sym.to_string()));
+                    args.clear();
+                    args.push(s);
+                }
+                // ---- M-F.3.6 file IO completion (ADR-0050f) ----
+                //
+                // Copy-at-operand discipline for str args (ADR-0050c Phase 2a
+                // walk-back precedent): these shims READ the Str pointer without
+                // freeing it (the C-ABI shim calls str_buf_as_str_phase3 which
+                // only borrows the buffer). Ownership of the str local stays with
+                // the caller's scope; the drop schedule handles freeing at scope
+                // exit. This mirrors how list arguments work (list is Copy at
+                // the operand level, non-Copy at drop level).
+                //
+                // Concretely: we upgrade Move(p) → Copy(p) for every named-local
+                // str arg so the borrow checker doesn't flag the local as consumed.
+                // Constant::Str args (literals) are passed as-is (they're already
+                // immortal .rodata; no ownership transfer).
+                Kind::ReadFile => {
+                    // read_file(path: str) -> str
+                    // → __cobrust_read_file(path_ptr) -> *mut u8
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("read_file: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let path = move_to_copy(args[0].clone());
+                    *func =
+                        Operand::Constant(Constant::Str(READ_FILE_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(path);
+                }
+                Kind::ReadFileLines => {
+                    // read_file_lines(path: str) -> list[str]
+                    // → __cobrust_read_file_lines(path_ptr) -> *mut u8 (list ptr)
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("read_file_lines: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let path = move_to_copy(args[0].clone());
+                    *func = Operand::Constant(Constant::Str(
+                        READ_FILE_LINES_RUNTIME_SYMBOL.to_string(),
+                    ));
+                    args.clear();
+                    args.push(path);
+                }
+                Kind::WriteFile => {
+                    // write_file(path: str, contents: str) -> i64
+                    // → __cobrust_write_file(path_ptr, contents_ptr) -> i64
+                    // Both path and contents are Copy-at-operand (shim reads only;
+                    // caller scope drops at exit per ADR-0050c Phase 2a walk-back).
+                    if args.len() != 2 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("write_file: expected 2 args, got {}", args.len()),
+                        });
+                    }
+                    let path = move_to_copy(args[0].clone());
+                    let contents = move_to_copy(args[1].clone());
+                    *func =
+                        Operand::Constant(Constant::Str(WRITE_FILE_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(path);
+                    args.push(contents);
+                }
+                Kind::AppendFile => {
+                    // append_file(path: str, contents: str) -> i64
+                    // → __cobrust_append_file(path_ptr, contents_ptr) -> i64
+                    // Copy-at-operand (shim reads only).
+                    if args.len() != 2 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("append_file: expected 2 args, got {}", args.len()),
+                        });
+                    }
+                    let path = move_to_copy(args[0].clone());
+                    let contents = move_to_copy(args[1].clone());
+                    *func =
+                        Operand::Constant(Constant::Str(APPEND_FILE_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(path);
+                    args.push(contents);
+                }
+                Kind::StdinReadAll => {
+                    // stdin_read_all() -> str
+                    // → __cobrust_stdin_read_all() -> *mut u8
+                    if !args.is_empty() {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("stdin_read_all: expected 0 args, got {}", args.len()),
+                        });
+                    }
+                    *func = Operand::Constant(Constant::Str(
+                        STDIN_READ_ALL_RUNTIME_SYMBOL.to_string(),
+                    ));
+                    args.clear();
+                }
+                Kind::StdoutWrite => {
+                    // stdout_write(s: str) -> i64
+                    // → __cobrust_stdout_write(s_ptr) -> i64
+                    // Does NOT append newline (f3fio14 lock per ADR-0050f).
+                    // Copy-at-operand: shim reads s without freeing.
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("stdout_write: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let s = move_to_copy(args[0].clone());
+                    *func =
+                        Operand::Constant(Constant::Str(STDOUT_WRITE_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(s);
+                }
+                Kind::StderrWrite => {
+                    // stderr_write(s: str) -> i64
+                    // → __cobrust_stderr_write(s_ptr) -> i64
+                    // Goes to stderr; stdout empty (f3fio15 lock per ADR-0050f).
+                    // Copy-at-operand: shim reads s without freeing.
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("stderr_write: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let s = move_to_copy(args[0].clone());
+                    *func =
+                        Operand::Constant(Constant::Str(STDERR_WRITE_RUNTIME_SYMBOL.to_string()));
                     args.clear();
                     args.push(s);
                 }
