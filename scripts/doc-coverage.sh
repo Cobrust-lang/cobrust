@@ -1606,3 +1606,55 @@ grep -q 'fn pow(base: f64, exp: f64) -> f64' "crates/cobrust-cli/src/build.rs" \
     || fail "M-F.3.3 pow PRELUDE stub missing from build.rs"
 
 echo "doc-coverage: M-F.3.3 f64 + as-cast surface checks passed"
+
+# --- M-F.3.4 dict surface coverage (ADR-0050d) -----------------------------
+# Parallel to the M-F.3.0 / M-F.3.1 / M-F.3.2 / M-F.3.3 blocks above. Locks
+# the dict surface terms across all three doc trees, the ADR-0050d file,
+# the TEST corpus (well_typed + ill_typed + dict_e2e), the PRELUDE stub,
+# and the new C-ABI shim entries.
+mf34_human_files=(
+    "docs/human/en/getting-started.md"
+    "docs/human/zh/getting-started.md"
+)
+for f in "${mf34_human_files[@]}"; do
+    grep -q -F 'M-F.3.4' "$f" \
+        || fail "M-F.3.4 'M-F.3.4' marker missing from ${f}"
+    grep -q -F 'dict_is_empty' "$f" \
+        || fail "M-F.3.4 'dict_is_empty' canonical predicate missing from ${f}"
+    grep -q -F 'NotHashable' "$f" \
+        || fail "M-F.3.4 'NotHashable' surface term missing from ${f}"
+    grep -q -F 'DictSpreadNotSupported' "$f" \
+        || fail "M-F.3.4 'DictSpreadNotSupported' surface term missing from ${f}"
+done
+# Agent-tree types.md must document the new TypeError variants + is_hashable.
+grep -q -F 'M-F.3.4' "docs/agent/modules/types.md" \
+    || fail "M-F.3.4 not mentioned in docs/agent/modules/types.md"
+grep -q -F 'is_hashable' "docs/agent/modules/types.md" \
+    || fail "M-F.3.4 'is_hashable' predicate anchor missing from docs/agent/modules/types.md"
+grep -q -F 'NotHashable' "docs/agent/modules/types.md" \
+    || fail "M-F.3.4 'NotHashable' anchor missing from docs/agent/modules/types.md"
+grep -q -F 'DictSpreadNotSupported' "docs/agent/modules/types.md" \
+    || fail "M-F.3.4 'DictSpreadNotSupported' anchor missing from docs/agent/modules/types.md"
+grep -q -F 'try_synth_dict_method' "docs/agent/modules/types.md" \
+    || fail "M-F.3.4 'try_synth_dict_method' method-intrinsic anchor missing from docs/agent/modules/types.md"
+# Agent-tree mir.md must document the dict scaffolding cross-ref.
+grep -q -F 'M-F.3.4' "docs/agent/modules/mir.md" \
+    || fail "M-F.3.4 not mentioned in docs/agent/modules/mir.md"
+grep -q -F 'ADR-0050d' "docs/agent/modules/mir.md" \
+    || fail "M-F.3.4 'ADR-0050d' cross-ref missing from docs/agent/modules/mir.md"
+# Agent-tree stdlib.md must document the new shim.
+grep -q -F '__cobrust_dict_is_empty' "docs/agent/modules/stdlib.md" \
+    || fail "M-F.3.4 '__cobrust_dict_is_empty' shim missing from docs/agent/modules/stdlib.md"
+# ADR-0050d must exist.
+[[ -f "docs/agent/adr/0050d-dict-design.md" ]] \
+    || fail "ADR-0050d file missing (M-F.3.4 deliverable)"
+grep -q -F 'M-F.3.4' "docs/agent/adr/0050d-dict-design.md" \
+    || fail "ADR-0050d must reference M-F.3.4 in its body"
+# Test corpus must exist (sub-sprint a TEST corpus from 8b081ae).
+[[ -f "crates/cobrust-cli/tests/dict_e2e.rs" ]] \
+    || fail "crates/cobrust-cli/tests/dict_e2e.rs missing (M-F.3.4 corpus)"
+# PRELUDE must include dict_is_empty stub.
+grep -q 'fn dict_is_empty(d: dict\[i64, i64\]) -> bool' "crates/cobrust-cli/src/build.rs" \
+    || fail "M-F.3.4 dict_is_empty PRELUDE stub missing from build.rs"
+
+echo "doc-coverage: M-F.3.4 dict surface checks passed"
