@@ -1643,6 +1643,12 @@ fn is_list_polymorphic_intrinsic_name(name: &str) -> bool {
             // delegates to `instantiate_list_polymorphic` which widens
             // Dict to `Dict[?, ?]`).
             | "dict_is_empty"
+            // ADR-0050d Decision 5 — `len(d)` / `len(xs)` polymorphic
+            // builtin. Intrinsic-rewrite at the CLI tier picks the
+            // right runtime symbol per arg shape (Dict / List). The
+            // PRELUDE stub declares `len: dict[i64,i64] -> i64`; the
+            // widening here allows any (K, V) shape AND any List elem.
+            | "len"
     )
 }
 
