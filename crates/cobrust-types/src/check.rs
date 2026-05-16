@@ -222,10 +222,21 @@ impl Ctx {
         match &it.kind {
             ItemKind::Fn(f) => self.check_fn(f, it.span),
             ItemKind::Class(c) => self.check_class(c, it.span),
-            ItemKind::TypeAlias(_) => Ok(()),
+            ItemKind::TypeAlias(a) => {
+                // ADR-0050d §"Type-checker amendments" item 1 — `type
+                // Foo = Dict[f64, i64]` rejects at the alias site.
+                self.validate_hashable_dict(&a.value)
+            }
             ItemKind::Decorated { inner, .. } => self.check_item(inner),
             ItemKind::Import { .. } => Ok(()),
             ItemKind::Let(b) => {
+                // ADR-0050d §"Type-checker amendments" item 1 — annotation
+                // site rejection. Catches `let d: Dict[f64, i64] = {}`
+                // (the empty-literal case where synth_dict_lit can't see
+                // K from entries).
+                if let Some(t) = &b.annot {
+                    self.validate_hashable_dict(t)?;
+                }
                 let value_ty = self.synth_expr(&b.value)?;
                 let bound_ty = match &b.annot {
                     Some(t) => {
@@ -246,6 +257,33 @@ impl Ctx {
     }
 
     fn check_fn(&mut self, f: &cobrust_hir::FnBody, _span: Span) -> Result<(), TypeError> {
+        // ADR-0050d §"Type-checker amendments" item 1 — fn signature
+        // annotation rejection. Walks every param + return annotation
+        // for `Dict[K, V]` with non-hashable K. Covers i118 / i119 /
+        // i120 (Dict[f64,_], Dict[List[i64],_] surface).
+        for p in &f.params.positional {
+            if let Some(t) = &p.annot {
+                self.validate_hashable_dict(t)?;
+            }
+        }
+        for p in &f.params.keyword_only {
+            if let Some(t) = &p.annot {
+                self.validate_hashable_dict(t)?;
+            }
+        }
+        if let Some(p) = &f.params.var_positional {
+            if let Some(t) = &p.annot {
+                self.validate_hashable_dict(t)?;
+            }
+        }
+        if let Some(p) = &f.params.var_keyword {
+            if let Some(t) = &p.annot {
+                self.validate_hashable_dict(t)?;
+            }
+        }
+        if let Some(t) = &f.return_type {
+            self.validate_hashable_dict(t)?;
+        }
         // The function type is already pre-bound; pull it out.
         let fn_ty = match self.lookup_def(f.def_id) {
             Some(Ty::Fn(t)) => t,
@@ -638,6 +676,18 @@ impl Ctx {
             }
             ExprKind::Dict(entries) => {
                 if entries.is_empty() {
+                    // ADR-0050d Decision 7A / sub-sprint b disposition for
+                    // empty `{}` without annotation: synthesise fresh
+                    // `Ty::Dict(?K, ?V)`. Later use sites (annotation,
+                    // subscript, comparison, return-position) pin K/V via
+                    // unification. If no use pins them by the end of the
+                    // module, the final-resolution pass at `check()` top
+                    // surfaces `TypeError::AmbiguousType` for the leaked
+                    // free vars — this is the binding Phase F.3 contract
+                    // (i125 ill_typed corpus). Fresh-K inference (without
+                    // requiring annotation) is intentionally Phase G —
+                    // Phase F.3 minimalism mandates explicit annotation
+                    // for empty-literal disambiguation.
                     return Ok(Ty::Dict(
                         Box::new(self.fresh_var()),
                         Box::new(self.fresh_var()),
@@ -646,6 +696,10 @@ impl Ctx {
                 // Use first non-spread to seed key/value types.
                 let mut k_ty: Option<Ty> = None;
                 let mut v_ty: Option<Ty> = None;
+                // Track the span of the first concrete-key pair so a
+                // NotHashable diagnostic can point at the actual key
+                // expression, not the outer Dict literal span.
+                let mut first_k_span: Option<Span> = None;
                 for entry in entries {
                     match entry {
                         DictEntry::Pair(k, v) => {
@@ -655,6 +709,7 @@ impl Ctx {
                                 (None, None) => {
                                     k_ty = Some(kt);
                                     v_ty = Some(vt);
+                                    first_k_span = Some(k.span);
                                 }
                                 (Some(prev_k), Some(prev_v)) => {
                                     unify(prev_k, &kt, &mut self.subst, k.span)?;
@@ -664,15 +719,36 @@ impl Ctx {
                             }
                         }
                         DictEntry::Spread(e) => {
-                            let s_ty = self.synth_expr(e)?;
-                            // We require the spread to be a Dict[K, V] matching k_ty/v_ty.
-                            let kk = k_ty.clone().unwrap_or_else(|| self.fresh_var());
-                            let vv = v_ty.clone().unwrap_or_else(|| self.fresh_var());
-                            let want = Ty::Dict(Box::new(kk.clone()), Box::new(vv.clone()));
-                            unify(&want, &s_ty, &mut self.subst, e.span)?;
-                            k_ty = Some(kk);
-                            v_ty = Some(vv);
+                            // ADR-0050d §"Parser amendments" 1 +
+                            // Decision 1 commentary — dict-merge
+                            // `{**other}` is Phase G; Phase F.3 rejects
+                            // any spread operand in a dict literal at
+                            // type-check. Synth the spread operand for
+                            // diagnostic completeness even though we
+                            // abort here (so the user sees a single
+                            // crisp DictSpreadNotSupported diagnostic
+                            // and not a cascade of unify mismatches).
+                            let _ = self.synth_expr(e)?;
+                            return Err(TypeError::DictSpreadNotSupported { span: e.span });
                         }
+                    }
+                }
+                // ADR-0050d §"Type-checker amendments" item 2 —
+                // Hashable predicate. After all entries unify, resolve
+                // K and reject if non-hashable (matches `Ty::is_hashable`
+                // contract). Examples: `{1.0: 1}` → K resolves to f64
+                // → NotHashable; `{xs: 1}` where xs: List[i64] → K
+                // resolves to List → NotHashable. The annotation-side
+                // analogue lives in `validate_hashable_dict` invoked
+                // at `Let` / `check_fn` so the empty-literal case
+                // `let d: Dict[f64, i64] = {}` is also caught.
+                if let Some(k) = &k_ty {
+                    let k_resolved = self.subst.apply(k);
+                    if !k_resolved.is_hashable() {
+                        return Err(TypeError::NotHashable {
+                            actual: k_resolved,
+                            span: first_k_span.unwrap_or(span),
+                        });
                     }
                 }
                 Ok(Ty::Dict(
@@ -1003,6 +1079,14 @@ impl Ctx {
             (CompKind::Dict, CompElem::KeyValue(k, v)) => {
                 let kt = self.synth_expr(k)?;
                 let vt = self.synth_expr(v)?;
+                // ADR-0050d Decision 7A — dict comp K must be hashable.
+                let kt_resolved = self.subst.apply(&kt);
+                if !kt_resolved.is_hashable() {
+                    return Err(TypeError::NotHashable {
+                        actual: kt_resolved,
+                        span: k.span,
+                    });
+                }
                 Ok(Ty::Dict(Box::new(kt), Box::new(vt)))
             }
             (CompKind::Generator, CompElem::Single(e)) => {
@@ -1038,6 +1122,57 @@ impl Ctx {
             return self.lit_type(lit);
         }
         Ty::None
+    }
+
+    /// ADR-0050d §"Type-checker amendments" item 1 — validate that
+    /// every `Dict[K, V]` annotation inside `t` has a hashable K.
+    /// Walks the HIR type tree (not the lowered `Ty`) so that spans
+    /// are preserved on each sub-position; emits `NotHashable` with
+    /// the actual non-hashable K type if any dict annotation rejects.
+    ///
+    /// Called at every annotation-lowering site: `Let`, `fn` param /
+    /// return, `class` field, `TypeAlias` body. The literal-lit
+    /// rejection at `synth_dict_lit` covers the value-position case
+    /// where the user writes `{1.0: 1}` without an annotation.
+    fn validate_hashable_dict(&self, t: &HirType) -> Result<(), TypeError> {
+        match &t.kind {
+            TypeKind::Name(_) => Ok(()),
+            TypeKind::Generic { base, args } => {
+                let base_s = base.join(".");
+                // `Dict[K, V]` / `dict[K, V]` is the only generic that
+                // requires K-hashability; per Decision 7A this is
+                // Phase F.3's only Hash dispatch site.
+                if matches!(base_s.as_str(), "Dict" | "dict") && args.len() == 2 {
+                    let k_ty = self.lower_type(&args[0]);
+                    let k_resolved = self.subst.apply(&k_ty);
+                    if !k_resolved.is_hashable() {
+                        return Err(TypeError::NotHashable {
+                            actual: k_resolved,
+                            span: args[0].span,
+                        });
+                    }
+                }
+                for a in args {
+                    self.validate_hashable_dict(a)?;
+                }
+                Ok(())
+            }
+            TypeKind::Union(items) | TypeKind::Tuple(items) => {
+                for it in items {
+                    self.validate_hashable_dict(it)?;
+                }
+                Ok(())
+            }
+            TypeKind::Fn {
+                params,
+                return_type,
+            } => {
+                for p in params {
+                    self.validate_hashable_dict(p)?;
+                }
+                self.validate_hashable_dict(return_type)
+            }
+        }
     }
 
     fn lower_type(&self, t: &HirType) -> Ty {
