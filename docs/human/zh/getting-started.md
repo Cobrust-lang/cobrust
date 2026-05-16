@@ -81,6 +81,43 @@ Phase F.3 提供两参数形式 `range(start, stop)`。三参数 `range(start, s
 可运行示例见 [examples/for_range.cb](../../../examples/for_range.cb)
 与 [examples/for_list.cb](../../../examples/for_list.cb)。
 
+## 第 2.6 步：f64 与 `as` 类型转换（M-F.3.3）
+
+Cobrust 支持一等公民 `f64`（IEEE-754 双精度浮点数）。
+`i64` 与 `f64` 之间必须使用显式 `as` 转换——不允许隐式类型提升（宪法 §2.2）。
+
+```cobrust
+fn main() -> i64:
+    # 浮点字面量
+    let x: f64 = 3.14
+    let y: f64 = 1e-3
+    let big: f64 = inf      # IEEE 754 正无穷
+    let nothing: f64 = nan  # IEEE 754 NaN
+
+    # 显式 as 转换：i64 → f64 和 f64 → i64
+    let n: i64 = 42
+    let f: f64 = (n as f64)        # 42.0
+    let back: i64 = (3.9 as i64)   # 3（向零截断）
+
+    # 数学内建函数（全部返回 f64）
+    let s: f64 = sqrt(4.0)         # 2.0
+    let p: f64 = pow(2.0, 10.0)    # 1024.0
+    let fl: f64 = floor(3.7)        # 3.0
+
+    # f-string 浮点格式化
+    print(f"{x:.2f}")               # "3.14"
+
+    return 0
+```
+
+核心规则：
+- `i64 → f64` 必须写 `(n as f64)`，不支持隐式提升。
+- `f64 → i64` 向零截断（C 语义，不是 floor）。
+- 浮点除以零不是陷阱——IEEE 754 定义为 ±inf。
+- `nan != nan` 为 `true`（IEEE 754 语义）。
+- 数学函数：`sqrt`、`floor`、`ceil`、`round`、`abs`、`pow`、`sin`、`cos`、`tan`、`log`、`exp`。
+- f-string 格式说明符：`{x:.2f}`（定点）、`{x:e}`（科学计数）、`{x:g}`（通用）。
+
 ## 第三步：试用 AI alpha 能力（可选）
 
 1. 复制 router 示例配置，并填入你的 provider 凭据：

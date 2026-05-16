@@ -587,6 +587,49 @@ LLVM message to the first line only — preventing 3000-line IR dumps.
 - Integration: `tests/error_ux_corpus.rs` (11 cases — 10 corpus + Conway 4-cell).
 - Existing: `tests/cli_exit_codes.rs` (6 cases) all green.
 
+## M-F.3.3 — f64 math PRELUDE + intrinsic-rewrite (ADR-0050 §A1)
+
+### PRELUDE amendment (M-F.3.3 gap b)
+
+`crates/cobrust-cli/src/build.rs` — `PRELUDE` constant extended with 11 math stubs:
+
+```
+fn sqrt(x: f64) -> f64: return 0.0
+fn floor(x: f64) -> f64: return 0.0
+fn ceil(x: f64) -> f64: return 0.0
+fn round(x: f64) -> f64: return 0.0
+fn abs(x: f64) -> f64: return 0.0
+fn pow(base: f64, exp: f64) -> f64: return 0.0
+fn sin(x: f64) -> f64: return 0.0
+fn cos(x: f64) -> f64: return 0.0
+fn tan(x: f64) -> f64: return 0.0
+fn log(x: f64) -> f64: return 0.0
+fn exp(x: f64) -> f64: return 0.0
+```
+
+### Intrinsic-rewrite extension
+
+`crates/cobrust-cli/src/build/intrinsics.rs` — 11 new `Kind` variants + rewrite arms:
+
+| Source name | Runtime symbol | Arity |
+|---|---|---|
+| `sqrt` | `__cobrust_math_sqrt` | 1 |
+| `floor` | `__cobrust_math_floor` | 1 |
+| `ceil` | `__cobrust_math_ceil` | 1 |
+| `round` | `__cobrust_math_round` | 1 |
+| `abs` | `__cobrust_math_abs` | 1 |
+| `pow` | `__cobrust_math_pow` | 2 |
+| `sin` / `cos` / `tan` | `__cobrust_math_{sin,cos,tan}` | 1 |
+| `log` | `__cobrust_math_log` | 1 |
+| `exp` | `__cobrust_math_exp` | 1 |
+
+### Fn→Fn shadowing compatibility
+
+User-defined functions with the same names (e.g. `fn pow(x, n: i64)` in LC-098)
+shadow the PRELUDE stubs WITHOUT error. `collect_print_def_ids` only collects the
+FIRST body with each math name (always the PRELUDE stub). The user's DefId is
+NOT collected → NOT rewritten → compiled normally. Stub body is dropped as before.
+
 ## Cross-references
 
 - `mod:frontend` — `parse_str`, `unparse` (used by build / check / fmt).
@@ -600,4 +643,5 @@ LLVM message to the first line only — preventing 3000-line IR dumps.
 - ADR-0023 §"Per-MIR-form lowering rules" — M10 amendment to the Call row.
 - ADR-0024 — M10 design (the stub this M14 supersedes).
 - ADR-0029 — M14 design (interactive REPL).
+- ADR-0050 §A1 — M-F.3.3 f64 gap table.
 - T1.4 — error UX rewrite for 0.1.0-beta release.

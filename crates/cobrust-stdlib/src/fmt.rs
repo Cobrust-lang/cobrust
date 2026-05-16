@@ -128,6 +128,64 @@ pub unsafe extern "C" fn __cobrust_fmt_float(buf: *mut u8, v: f64) {
     b.bytes.extend_from_slice(s.as_bytes());
 }
 
+/// Append a float with a fixed-precision format spec (M-F.3.3 gap c).
+///
+/// `spec_ptr` / `spec_len` describe a UTF-8 format spec string such as
+/// `.2f`, `e`, or `g`. A leading `.` followed by digits and `f` means
+/// fixed-decimal with that many places; `e` means scientific notation;
+/// `g` means shortest-repr (default). Other values fall back to default.
+///
+/// # Safety
+///
+/// - `buf` must be a pointer returned by [`__cobrust_str_new`].
+/// - `spec_ptr`/`spec_len` must describe a valid UTF-8 slice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_fmt_float_prec(
+    buf: *mut u8,
+    v: f64,
+    spec_ptr: *const u8,
+    spec_len: i64,
+) {
+    if buf.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let b = unsafe { &mut *buf.cast::<StringBuffer>() };
+    let s = if spec_ptr.is_null() || spec_len <= 0 {
+        format_float(v)
+    } else {
+        // SAFETY: caller-attestation.
+        let spec_bytes = unsafe { std::slice::from_raw_parts(spec_ptr, spec_len as usize) };
+        let spec = std::str::from_utf8(spec_bytes).unwrap_or("");
+        format_float_with_spec(v, spec)
+    };
+    b.bytes.extend_from_slice(s.as_bytes());
+}
+
+/// Format a float using a Python-style format spec string (`.Nf`, `e`, `g`).
+pub fn format_float_with_spec(x: f64, spec: &str) -> String {
+    // Strip leading `.` if present; check for form `.Nf`, `.Ne`, `e`, `g`.
+    let spec = spec.trim_start_matches('.');
+    if let Some(rest) = spec.strip_suffix('f') {
+        // Fixed-point: e.g. "2f" from ".2f".
+        if rest.is_empty() {
+            // `.f` without precision — default to 6 decimal places.
+            return format!("{x:.6}");
+        }
+        if let Ok(prec) = rest.parse::<usize>() {
+            return format!("{x:.prec$}");
+        }
+    } else if spec.ends_with('e') || spec == "e" {
+        // Scientific notation.
+        return format!("{x:e}");
+    } else if spec.ends_with('g') || spec == "g" {
+        // General / shortest repr.
+        return format_float(x);
+    }
+    // Fallback: default float repr.
+    format_float(x)
+}
+
 /// Append `True`/`False`.
 ///
 /// # Safety

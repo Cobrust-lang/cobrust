@@ -84,6 +84,48 @@ See [examples/for_range.cb](../../../examples/for_range.cb) and
 [examples/for_list.cb](../../../examples/for_list.cb) for runnable
 demos.
 
+## Step 2.6: f64 and `as`-cast (M-F.3.3)
+
+Cobrust ships first-class `f64` (IEEE-754 double precision). Explicit
+`as` casts are required between `i64` and `f64` — no silent coercion
+(constitution §2.2).
+
+```cobrust
+fn main() -> i64:
+    # Float literals
+    let x: f64 = 3.14
+    let y: f64 = 1e-3
+    let big: f64 = inf      # IEEE 754 infinity
+    let nothing: f64 = nan  # IEEE 754 NaN
+
+    # Explicit as-cast: i64 → f64 and f64 → i64
+    let n: i64 = 42
+    let f: f64 = (n as f64)        # 42.0
+    let back: i64 = (3.9 as i64)   # 3 (truncates toward zero)
+
+    # Math intrinsics (all return f64)
+    let s: f64 = sqrt(4.0)         # 2.0
+    let p: f64 = pow(2.0, 10.0)    # 1024.0
+    let fl: f64 = floor(3.7)        # 3.0
+    let ce: f64 = ceil(3.2)         # 4.0
+    let ro: f64 = round(2.5)        # 3.0
+    let ab: f64 = abs(-5.5)         # 5.5
+
+    # f-string float formatting
+    print(f"{x:.2f}")               # "3.14"
+    print(f"{sqrt(2.0):.4f}")       # "1.4142"
+
+    return 0
+```
+
+Key rules:
+- `i64 → f64` requires explicit `(n as f64)`. No implicit promotion.
+- `f64 → i64` truncates toward zero (C semantics, not floor).
+- `inf / 0.0` is not a trap — IEEE 754 defines float division by zero.
+- `nan != nan` is `true` per IEEE 754.
+- Math functions: `sqrt`, `floor`, `ceil`, `round`, `abs`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`.
+- f-string format spec: `{x:.2f}` (fixed), `{x:e}` (scientific), `{x:g}` (general).
+
 ## Step 3: try the AI alpha surfaces (optional)
 
 1. Copy the router example and add your provider credentials:

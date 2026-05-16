@@ -184,6 +184,31 @@ pub const TOOL_INVOKE_RUNTIME_SYMBOL: &str = "__cobrust_tool_invoke";
 /// M-AI.2 (α Phase 4) — exported by `cobrust-stdlib::tool`.
 pub const LLM_COMPLETE_WITH_TOOLS_RUNTIME_SYMBOL: &str = "__cobrust_llm_complete_with_tools";
 
+// ---- M-F.3.3 gap (b): math intrinsic symbols ----------------------------
+
+/// `sqrt(x: f64) -> f64` → `__cobrust_math_sqrt(f64) -> f64`.
+pub const MATH_SQRT_RUNTIME_SYMBOL: &str = "__cobrust_math_sqrt";
+/// `floor(x: f64) -> f64` → `__cobrust_math_floor(f64) -> f64`.
+pub const MATH_FLOOR_RUNTIME_SYMBOL: &str = "__cobrust_math_floor";
+/// `ceil(x: f64) -> f64` → `__cobrust_math_ceil(f64) -> f64`.
+pub const MATH_CEIL_RUNTIME_SYMBOL: &str = "__cobrust_math_ceil";
+/// `round(x: f64) -> f64` → `__cobrust_math_round(f64) -> f64`.
+pub const MATH_ROUND_RUNTIME_SYMBOL: &str = "__cobrust_math_round";
+/// `abs(x: f64) -> f64` → `__cobrust_math_abs(f64) -> f64`.
+pub const MATH_ABS_RUNTIME_SYMBOL: &str = "__cobrust_math_abs";
+/// `pow(base: f64, exp: f64) -> f64` → `__cobrust_math_pow(f64, f64) -> f64`.
+pub const MATH_POW_RUNTIME_SYMBOL: &str = "__cobrust_math_pow";
+/// `sin(x: f64) -> f64` → `__cobrust_math_sin(f64) -> f64`.
+pub const MATH_SIN_RUNTIME_SYMBOL: &str = "__cobrust_math_sin";
+/// `cos(x: f64) -> f64` → `__cobrust_math_cos(f64) -> f64`.
+pub const MATH_COS_RUNTIME_SYMBOL: &str = "__cobrust_math_cos";
+/// `tan(x: f64) -> f64` → `__cobrust_math_tan(f64) -> f64`.
+pub const MATH_TAN_RUNTIME_SYMBOL: &str = "__cobrust_math_tan";
+/// `log(x: f64) -> f64` → `__cobrust_math_log(f64) -> f64`.
+pub const MATH_LOG_RUNTIME_SYMBOL: &str = "__cobrust_math_log";
+/// `exp(x: f64) -> f64` → `__cobrust_math_exp(f64) -> f64`.
+pub const MATH_EXP_RUNTIME_SYMBOL: &str = "__cobrust_math_exp";
+
 /// Errors from the print-intrinsic rewrite.
 #[derive(Debug, thiserror::Error)]
 pub enum IntrinsicError {
@@ -261,6 +286,29 @@ struct IntrinsicDefIds {
     tool_invoke: HashSet<u32>,
     /// M-AI.2 (α Phase 4).
     llm_complete_with_tools: HashSet<u32>,
+    // ---- M-F.3.3 gap (b): math intrinsics ----
+    /// M-F.3.3.
+    math_sqrt: HashSet<u32>,
+    /// M-F.3.3.
+    math_floor: HashSet<u32>,
+    /// M-F.3.3.
+    math_ceil: HashSet<u32>,
+    /// M-F.3.3.
+    math_round: HashSet<u32>,
+    /// M-F.3.3.
+    math_abs: HashSet<u32>,
+    /// M-F.3.3.
+    math_pow: HashSet<u32>,
+    /// M-F.3.3.
+    math_sin: HashSet<u32>,
+    /// M-F.3.3.
+    math_cos: HashSet<u32>,
+    /// M-F.3.3.
+    math_tan: HashSet<u32>,
+    /// M-F.3.3.
+    math_log: HashSet<u32>,
+    /// M-F.3.3.
+    math_exp: HashSet<u32>,
 }
 
 impl IntrinsicDefIds {
@@ -298,6 +346,17 @@ impl IntrinsicDefIds {
         out.extend(&self.tool_registry_register);
         out.extend(&self.tool_invoke);
         out.extend(&self.llm_complete_with_tools);
+        out.extend(&self.math_sqrt);
+        out.extend(&self.math_floor);
+        out.extend(&self.math_ceil);
+        out.extend(&self.math_round);
+        out.extend(&self.math_abs);
+        out.extend(&self.math_pow);
+        out.extend(&self.math_sin);
+        out.extend(&self.math_cos);
+        out.extend(&self.math_tan);
+        out.extend(&self.math_log);
+        out.extend(&self.math_exp);
         out
     }
 
@@ -334,6 +393,17 @@ impl IntrinsicDefIds {
             && self.tool_registry_register.is_empty()
             && self.tool_invoke.is_empty()
             && self.llm_complete_with_tools.is_empty()
+            && self.math_sqrt.is_empty()
+            && self.math_floor.is_empty()
+            && self.math_ceil.is_empty()
+            && self.math_round.is_empty()
+            && self.math_abs.is_empty()
+            && self.math_pow.is_empty()
+            && self.math_sin.is_empty()
+            && self.math_cos.is_empty()
+            && self.math_tan.is_empty()
+            && self.math_log.is_empty()
+            && self.math_exp.is_empty()
     }
 }
 
@@ -374,7 +444,27 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         tool_registry_register: HashSet::new(),
         tool_invoke: HashSet::new(),
         llm_complete_with_tools: HashSet::new(),
+        math_sqrt: HashSet::new(),
+        math_floor: HashSet::new(),
+        math_ceil: HashSet::new(),
+        math_round: HashSet::new(),
+        math_abs: HashSet::new(),
+        math_pow: HashSet::new(),
+        math_sin: HashSet::new(),
+        math_cos: HashSet::new(),
+        math_tan: HashSet::new(),
+        math_log: HashSet::new(),
+        math_exp: HashSet::new(),
     };
+    // Track names already collected to detect user-defined shadowing of
+    // PRELUDE stubs (M-F.3.3). For non-math intrinsics (print, parse_int,
+    // etc.) any duplicate is a user bug and is ignored. For math intrinsics
+    // (sqrt, pow, etc.) — if there are TWO bodies with the same name, the
+    // FIRST is the PRELUDE stub (inserted first) and the SECOND is a
+    // user-defined function. Only the PRELUDE stub should be in the
+    // intrinsic set; the user's function must NOT be rewritten.
+    let mut math_names_seen: HashSet<&'static str> = HashSet::new();
+
     for body in &module.bodies {
         match body.name.as_str() {
             "print" => {
@@ -473,6 +563,69 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
             "llm_complete_with_tools" => {
                 ids.llm_complete_with_tools.insert(body.def_id.0);
             }
+            // M-F.3.3 gap (b): math intrinsics.
+            // Only collect the FIRST body with each name — that is
+            // always the PRELUDE stub. If a user defines their own
+            // function with the same name (e.g. `fn pow(...)`), the
+            // second body must NOT be added: the user's function
+            // should be compiled normally, not rewritten to the math
+            // C-ABI shim. The scope-shadowing fix in cobrust-hir/scope.rs
+            // already makes the user's definition win for call resolution.
+            "sqrt" => {
+                if math_names_seen.insert("sqrt") {
+                    ids.math_sqrt.insert(body.def_id.0);
+                }
+            }
+            "floor" => {
+                if math_names_seen.insert("floor") {
+                    ids.math_floor.insert(body.def_id.0);
+                }
+            }
+            "ceil" => {
+                if math_names_seen.insert("ceil") {
+                    ids.math_ceil.insert(body.def_id.0);
+                }
+            }
+            "round" => {
+                if math_names_seen.insert("round") {
+                    ids.math_round.insert(body.def_id.0);
+                }
+            }
+            "abs" => {
+                if math_names_seen.insert("abs") {
+                    ids.math_abs.insert(body.def_id.0);
+                }
+            }
+            "pow" => {
+                if math_names_seen.insert("pow") {
+                    ids.math_pow.insert(body.def_id.0);
+                }
+            }
+            "sin" => {
+                if math_names_seen.insert("sin") {
+                    ids.math_sin.insert(body.def_id.0);
+                }
+            }
+            "cos" => {
+                if math_names_seen.insert("cos") {
+                    ids.math_cos.insert(body.def_id.0);
+                }
+            }
+            "tan" => {
+                if math_names_seen.insert("tan") {
+                    ids.math_tan.insert(body.def_id.0);
+                }
+            }
+            "log" => {
+                if math_names_seen.insert("log") {
+                    ids.math_log.insert(body.def_id.0);
+                }
+            }
+            "exp" => {
+                if math_names_seen.insert("exp") {
+                    ids.math_exp.insert(body.def_id.0);
+                }
+            }
             _ => {}
         }
     }
@@ -542,6 +695,18 @@ enum Kind {
     ToolRegistryRegister,
     ToolInvoke,
     LlmCompleteWithTools,
+    // ---- M-F.3.3 gap (b): math intrinsics ----
+    MathSqrt,
+    MathFloor,
+    MathCeil,
+    MathRound,
+    MathAbs,
+    MathPow,
+    MathSin,
+    MathCos,
+    MathTan,
+    MathLog,
+    MathExp,
 }
 
 fn kind_for_name(name: &str) -> Option<Kind> {
@@ -578,6 +743,18 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "tool_registry_register" => Some(Kind::ToolRegistryRegister),
         "tool_invoke" => Some(Kind::ToolInvoke),
         "llm_complete_with_tools" => Some(Kind::LlmCompleteWithTools),
+        // M-F.3.3 gap (b): math intrinsics.
+        "sqrt" => Some(Kind::MathSqrt),
+        "floor" => Some(Kind::MathFloor),
+        "ceil" => Some(Kind::MathCeil),
+        "round" => Some(Kind::MathRound),
+        "abs" => Some(Kind::MathAbs),
+        "pow" => Some(Kind::MathPow),
+        "sin" => Some(Kind::MathSin),
+        "cos" => Some(Kind::MathCos),
+        "tan" => Some(Kind::MathTan),
+        "log" => Some(Kind::MathLog),
+        "exp" => Some(Kind::MathExp),
         _ => None,
     }
 }
@@ -647,6 +824,28 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::ToolInvoke)
     } else if ids.llm_complete_with_tools.contains(&id) {
         Some(Kind::LlmCompleteWithTools)
+    } else if ids.math_sqrt.contains(&id) {
+        Some(Kind::MathSqrt)
+    } else if ids.math_floor.contains(&id) {
+        Some(Kind::MathFloor)
+    } else if ids.math_ceil.contains(&id) {
+        Some(Kind::MathCeil)
+    } else if ids.math_round.contains(&id) {
+        Some(Kind::MathRound)
+    } else if ids.math_abs.contains(&id) {
+        Some(Kind::MathAbs)
+    } else if ids.math_pow.contains(&id) {
+        Some(Kind::MathPow)
+    } else if ids.math_sin.contains(&id) {
+        Some(Kind::MathSin)
+    } else if ids.math_cos.contains(&id) {
+        Some(Kind::MathCos)
+    } else if ids.math_tan.contains(&id) {
+        Some(Kind::MathTan)
+    } else if ids.math_log.contains(&id) {
+        Some(Kind::MathLog)
+    } else if ids.math_exp.contains(&id) {
+        Some(Kind::MathExp)
     } else {
         None
     }
@@ -1237,6 +1436,54 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     args.clear();
                     args.push(prompt);
                     args.push(registry);
+                }
+                // ---- M-F.3.3 gap (b): math intrinsics — single-arg f64→f64 ----
+                Kind::MathSqrt
+                | Kind::MathFloor
+                | Kind::MathCeil
+                | Kind::MathRound
+                | Kind::MathAbs
+                | Kind::MathSin
+                | Kind::MathCos
+                | Kind::MathTan
+                | Kind::MathLog
+                | Kind::MathExp => {
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("math single-arg: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let x_arg = args[0].clone();
+                    let sym = match kind {
+                        Kind::MathSqrt => MATH_SQRT_RUNTIME_SYMBOL,
+                        Kind::MathFloor => MATH_FLOOR_RUNTIME_SYMBOL,
+                        Kind::MathCeil => MATH_CEIL_RUNTIME_SYMBOL,
+                        Kind::MathRound => MATH_ROUND_RUNTIME_SYMBOL,
+                        Kind::MathAbs => MATH_ABS_RUNTIME_SYMBOL,
+                        Kind::MathSin => MATH_SIN_RUNTIME_SYMBOL,
+                        Kind::MathCos => MATH_COS_RUNTIME_SYMBOL,
+                        Kind::MathTan => MATH_TAN_RUNTIME_SYMBOL,
+                        Kind::MathLog => MATH_LOG_RUNTIME_SYMBOL,
+                        Kind::MathExp => MATH_EXP_RUNTIME_SYMBOL,
+                        _ => unreachable!(),
+                    };
+                    *func = Operand::Constant(Constant::Str(sym.to_string()));
+                    args.clear();
+                    args.push(x_arg);
+                }
+                Kind::MathPow => {
+                    // pow(base: f64, exp: f64) -> f64
+                    if args.len() != 2 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("pow: expected 2 args, got {}", args.len()),
+                        });
+                    }
+                    let base_arg = args[0].clone();
+                    let exp_arg = args[1].clone();
+                    *func = Operand::Constant(Constant::Str(MATH_POW_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(base_arg);
+                    args.push(exp_arg);
                 }
             }
         }

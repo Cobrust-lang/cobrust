@@ -46,6 +46,13 @@ struct Lowerer<'s> {
     sess: &'s mut Session,
     /// Stack of active scopes. `scopes.last()` is the innermost.
     scopes: Vec<Scope>,
+    /// Maps `stmt.span.start` → the [`DefId`] that was allocated for
+    /// that specific statement in [`Lowerer::prebind_items`]. Used by
+    /// [`Lowerer::lower_module_stmt`] so that each `fn` definition gets
+    /// the DefId that was assigned to IT specifically, even when the
+    /// scope was later shadowed by a same-name function (M-F.3.3 Fn→Fn
+    /// shadowing: user code can override PRELUDE stubs).
+    stmt_def_ids: std::collections::HashMap<u32, DefId>,
 }
 
 impl<'s> Lowerer<'s> {
@@ -53,6 +60,7 @@ impl<'s> Lowerer<'s> {
         Self {
             sess,
             scopes: vec![Scope::new()],
+            stmt_def_ids: std::collections::HashMap::new(),
         }
     }
 
@@ -128,6 +136,9 @@ impl<'s> Lowerer<'s> {
             match &stmt.kind {
                 ast::StmtKind::Fn(f) => {
                     let id = self.fresh();
+                    // Record the DefId for this specific statement so that
+                    // `lower_module_stmt` can find it even after scope shadowing.
+                    self.stmt_def_ids.insert(stmt.span.start, id);
                     self.bind(&f.name, id, DefKind::Fn, stmt.span)?;
                 }
                 ast::StmtKind::Class(c) => {
@@ -176,9 +187,16 @@ impl<'s> Lowerer<'s> {
     ) -> Result<Option<Vec<h::Item>>, LoweringError> {
         match &stmt.kind {
             ast::StmtKind::Fn(f) => {
+                // Prefer the DefId that was allocated for THIS specific
+                // statement in `prebind_items`. When Fn→Fn shadowing is
+                // active (user overrides a PRELUDE math stub), `lookup_top_level`
+                // would return the LAST-bound DefId (the user's), not the
+                // PRELUDE stub's DefId — so we use `stmt_def_ids` instead.
                 let def_id = self
-                    .lookup_top_level(&f.name)
-                    .map(|(id, _)| id)
+                    .stmt_def_ids
+                    .get(&stmt.span.start)
+                    .copied()
+                    .or_else(|| self.lookup_top_level(&f.name).map(|(id, _)| id))
                     .unwrap_or_else(|| self.fresh());
                 let body = self.lower_fn_body_with_id(f, def_id, stmt.span)?;
                 Ok(Some(vec![h::Item {
@@ -1098,6 +1116,10 @@ impl<'s> Lowerer<'s> {
                 h::ExprKind::Yield(lowered)
             }
             ast::ExprKind::YieldFrom(e) => h::ExprKind::YieldFrom(Box::new(self.lower_expr(e)?)),
+            ast::ExprKind::Cast { expr, target } => h::ExprKind::Cast {
+                expr: Box::new(self.lower_expr(expr)?),
+                target: target.clone(),
+            },
         };
         Ok(h::Expr { kind, span })
     }
@@ -1594,6 +1616,9 @@ fn walk_expr_for_captures(
             }
         }
         h::ExprKind::YieldFrom(e) => walk_expr_for_captures(e, local_def_id_start, out, seen),
+        h::ExprKind::Cast { expr, .. } => {
+            walk_expr_for_captures(expr, local_def_id_start, out, seen);
+        }
     }
 }
 

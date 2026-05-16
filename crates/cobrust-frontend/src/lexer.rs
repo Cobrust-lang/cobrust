@@ -443,6 +443,24 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        // `inf` and `nan` are Float literals, not identifiers (M-F.3.3 gap d).
+        if word == "inf" {
+            self.out.push(Token::new(
+                TokenKind::Float("inf".to_owned()),
+                Span::new(self.file, start as u32, self.pos as u32),
+            ));
+            self.last_emitted_newline = false;
+            return Ok(());
+        }
+        if word == "nan" {
+            self.out.push(Token::new(
+                TokenKind::Float("nan".to_owned()),
+                Span::new(self.file, start as u32, self.pos as u32),
+            ));
+            self.last_emitted_newline = false;
+            return Ok(());
+        }
+
         // Otherwise: keyword or normalized identifier.
         let kind = if let Some(kw) = match_keyword(word) {
             kw
