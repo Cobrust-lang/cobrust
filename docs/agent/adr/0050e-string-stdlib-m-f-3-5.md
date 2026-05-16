@@ -1163,3 +1163,51 @@ the Str=non-Copy hazard. This is the single highest-leverage decision
 in this ADR.
 
 — P9-G design-only sprint, 2026-05-16
+
+## Amendment 2026-05-16 — clone() mitigation idiom is INLINE-CLONE-AT-CALLSITE (F-W3-5)
+
+Per ADSD F2 addendum-not-rewrite. Post-Wave-3 audit (a19ec12e17f7212b3)
+F-W3-5 surfaced that this ADR's Lane 4 framing was slightly too
+optimistic about what `clone()` mitigates.
+
+**The mitigation idiom that WORKS** (per ADR-0050c Option A + ADR-0050d
+symmetric walk-back):
+
+```cobrust
+let s: str = input("")
+let n: i64 = str_len(clone(s))      # inline clone — fresh buffer for str_len
+let i: i64 = 0
+while i < n:
+    let c: str = str_at(clone(s), i)  # inline clone — fresh buffer for str_at
+    let _ = print(c)
+    i = i + 1
+let final: str = upper(s)            # bare `s` — final consumer, no clone
+```
+
+Each PRELUDE call gets its own freshly-cloned Str buffer; the bare
+`s` is the LAST consumer.
+
+**The pattern that DOES NOT WORK** (caught at Wave 3 string-stdlib TEST
+corpus authoring, per `f3str16` / `f3str17` / `f3str22`):
+
+```cobrust
+let s: str = input("")
+let s2: str = clone(s)               # `s` is MOVED into the clone() call.
+let n: i64 = str_len(s)              # UseAfterMove — `s` already moved.
+```
+
+The naive consume-then-reuse pattern is itself UseAfterMove because
+`clone(s)` consumes `s` under ADR-0050c Option A. The TEST corpus
+author wrote this naive pattern thinking it would work; it does not.
+The 3 failing f3str{16,17,22} tests are documented at
+`findings/lc100-str-use-after-move-regression-from-adr0050c.md` Path
+D long-term-deferral disposition.
+
+**LC-100 corpus mitigation pathway** (when revisited post-Phase G):
+re-author each LC-100 program to use the inline-clone-at-callsite
+idiom. ~100 programs × small mechanical edit. Could batch as a
+post-Phase G corpus-cleanup sprint when LC-100 closure becomes
+worth the effort (currently long-term deferral per user 2026-05-16
+disposition).
+
+— Post-Wave-3 audit F-W3-5 closure, 2026-05-16 night
