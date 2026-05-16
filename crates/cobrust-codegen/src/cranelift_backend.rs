@@ -2424,6 +2424,34 @@ fn runtime_helper_signatures(
     // Two-arg f64×f64→f64.
     out.push(("__cobrust_math_pow", sig(call_conv, &[f64, f64], Some(f64))));
 
+    // -- M-F.3.5 string stdlib (ADR-0050e) -------------------------
+    // All Str pointers are pointer-sized (`p`). Predicate fns
+    // (`contains` / `starts_with` / `ends_with`) and `find` return i64
+    // (0/1 for bool, -1 sentinel for find). `__cobrust_str_clone`
+    // signature already registered above with the f-string runtime.
+    out.push(("__cobrust_str_split", sig(call_conv, &[p, p], Some(p))));
+    out.push(("__cobrust_str_join", sig(call_conv, &[p, p], Some(p))));
+    out.push((
+        "__cobrust_str_replace",
+        sig(call_conv, &[p, p, p], Some(p)),
+    ));
+    out.push(("__cobrust_str_trim", sig(call_conv, &[p], Some(p))));
+    out.push(("__cobrust_str_find", sig(call_conv, &[p, p], Some(i64))));
+    out.push((
+        "__cobrust_str_contains",
+        sig(call_conv, &[p, p], Some(i64)),
+    ));
+    out.push((
+        "__cobrust_str_starts_with",
+        sig(call_conv, &[p, p], Some(i64)),
+    ));
+    out.push((
+        "__cobrust_str_ends_with",
+        sig(call_conv, &[p, p], Some(i64)),
+    ));
+    out.push(("__cobrust_str_lower", sig(call_conv, &[p], Some(p))));
+    out.push(("__cobrust_str_upper", sig(call_conv, &[p], Some(p))));
+
     // -- M-AI.0 (α Phase 2): cobrust.llm source-level binding ---------
     // `llm_complete(provider, model, prompt) -> str`. All three args are
     // heap-Str pointers (or .rodata-static-literal pointers). Returns an
