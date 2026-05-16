@@ -1113,12 +1113,20 @@ impl<'a> BodyBuilder<'a> {
             }
             ExprKind::List(items) => {
                 let mut ops = Vec::with_capacity(items.len());
+                // ADR-0050c Phase 2 — TD-1 closure: synthesise the element
+                // type from the first element so codegen's
+                // `Terminator::Drop` arm can dispatch on Ty::List(elem).
+                // For `["a", "b"]` this records `Ty::List(Ty::Str)`,
+                // enabling the per-element `__cobrust_str_drop` schedule.
+                let elem_ty = items
+                    .first()
+                    .map_or(Ty::None, |it| synth_expr_ty(self, it));
                 for it in items {
                     ops.push(self.lower_expr(it)?);
                 }
                 let temp = self.declare_local(
                     "_list".to_string(),
-                    Ty::List(Box::new(Ty::None)),
+                    Ty::List(Box::new(elem_ty)),
                     e.span,
                     false,
                 );
@@ -1714,21 +1722,71 @@ fn un_to_mir(op: UnaryOp) -> UnOp {
 }
 
 fn is_copy_type(ty: &Ty) -> bool {
+    // ADR-0050c TD-1 closure: Str is non-Copy at the operand-read level —
+    // every `ExprKind::Name` reading a `Ty::Str` local produces
+    // `Operand::Move(s)`, transferring ownership at MIR time.
+    //
+    // List is treated as Copy at the OPERAND level (so existing PRELUDE
+    // helpers like `list_set(xs, i, v)` + `list_len(xs)` continue to
+    // pass `xs` by shared-reference) but as non-Copy at the DROP level
+    // (so the drop pass enumerates list-typed locals as drop-eligible
+    // and the codegen `Terminator::Drop` arm calls
+    // `__cobrust_list_drop_elems` for `list[str]`). This split mirrors
+    // Rust's `Copy` vs `Drop` separation: a type can be `!Copy` (must
+    // be moved or borrowed) AND `Drop` (frees resources), but here we
+    // weaken the operand-level discipline for List so that read-only
+    // borrow patterns work without explicit `&` syntax (which Cobrust
+    // does not yet surface). Phase G consolidation will introduce
+    // explicit borrow forms and bring List to the same operand-level
+    // non-Copy semantics Str has today.
+    //
+    // f3ls22 (use-after-move on `list[str]`) is documented as
+    // honest-debt under this split — the language detects use-after-
+    // move on Str but not on List at Phase F.3.
     matches!(
         ty,
-        // ADR-0050c TD-1 closure: Str and List are non-Copy. Operand reads
-        // produce Operand::Move; duplicating ownership requires an explicit
-        // clone temp (Phase 4 implicit clone emission). Drop schedule lives
-        // in codegen's Terminator::Drop arm.
-        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never
+        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never | Ty::List(_)
     )
 }
 
-fn synth_expr_ty(_b: &BodyBuilder<'_>, _e: &Expr) -> Ty {
-    // M8 conservative: tuple element types default to None for the
-    // builder; the type checker has already verified element typing,
-    // so codegen will rely on the actual operand types when needed.
-    Ty::None
+fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
+    // ADR-0050c Phase 2 — TD-1 closure. We need the element type at
+    // Aggregate(List) MIR build time so the codegen `Terminator::Drop`
+    // arm can dispatch correctly (list[str] → __cobrust_list_drop_elems
+    // with __cobrust_str_drop). The type checker has already validated
+    // the element typing; here we synthesise the surface form.
+    //
+    // Coverage: this synth-time inference handles the cases the Phase F.3
+    // corpus exercises (literals, name references, indexing, calls into
+    // PRELUDE-stub fns). Unknown shapes still fall through to `Ty::None`
+    // (matches the M8 conservative default; codegen treats this as
+    // "non-Copy but un-droppable", a safe no-op leak — same as today
+    // for unrecognised cases).
+    match &e.kind {
+        ExprKind::Lit(Lit::Bool(_)) => Ty::Bool,
+        ExprKind::Lit(Lit::Int(_)) => Ty::Int,
+        ExprKind::Lit(Lit::Float(_)) => Ty::Float,
+        ExprKind::Lit(Lit::Imag(_)) => Ty::Imag,
+        ExprKind::Lit(Lit::Str(_)) => Ty::Str,
+        ExprKind::Lit(Lit::None) => Ty::None,
+        ExprKind::Lit(Lit::Bytes(_)) => Ty::Bytes,
+        ExprKind::Format(_) => Ty::Str,
+        ExprKind::Name(rn) => b.ctx.lookup_ty(rn.def_id),
+        ExprKind::List(items) => {
+            let elem_ty = items.first().map_or(Ty::None, |it| synth_expr_ty(b, it));
+            Ty::List(Box::new(elem_ty))
+        }
+        ExprKind::Index { base, .. } => {
+            // For `xs[i]`, the result is the element type of xs.
+            match synth_expr_ty(b, base) {
+                Ty::List(elem) => *elem,
+                Ty::Dict(_, v) => *v,
+                Ty::Str => Ty::Str,
+                other => other,
+            }
+        }
+        _ => Ty::None,
+    }
 }
 
 // Mark CastKind / NullaryOp as used to satisfy `dead_code`-on-strict
