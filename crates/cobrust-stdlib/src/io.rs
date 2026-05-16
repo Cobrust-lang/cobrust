@@ -344,6 +344,36 @@ pub fn write_file(path: &str, contents: &str) -> Result<(), Error> {
     std::fs::write(path, contents).map_err(|e| Error::io(format!("{path}: {e}")))
 }
 
+/// Read the entire file at `path`, split into newline-stripped lines.
+///
+/// Per ADR-0050f Q2: both `\n` and `\r\n` line endings are stripped.
+/// Trailing empty element is preserved — `"a\nb\n"` → `["a", "b", ""]`
+/// matching `s.split('\n')` semantics (NOT Python `readlines()`).
+pub fn read_file_lines(path: &str) -> Result<Vec<String>, Error> {
+    let raw = std::fs::read_to_string(path).map_err(|e| Error::io(format!("{path}: {e}")))?;
+    let lines: Vec<String> = raw
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        .collect();
+    Ok(lines)
+}
+
+/// Append `contents` to the file at `path`, creating if absent.
+///
+/// Per ADR-0050f §"Decision" row 4: "always create if absent" matching
+/// `OpenOptions::new().append(true).create(true)`.
+pub fn append_file(path: &str, contents: &str) -> Result<(), Error> {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .map_err(|e| Error::io(format!("{path}: {e}")))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|e| Error::io(format!("{path}: {e}")))?;
+    file.flush().map_err(|e| Error::io(format!("{path}: {e}")))
+}
+
 // =====================================================================
 // Stream handles
 // =====================================================================
@@ -675,6 +705,197 @@ pub unsafe extern "C" fn __cobrust_print_no_nl_lit(ptr: *const u8, len: usize) {
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
     if let Ok(s) = std::str::from_utf8(bytes) {
         print(s);
+    }
+}
+
+// =====================================================================
+// M-F.3.6 file IO C-ABI shims (ADR-0050f)
+//
+// 7 new shims mirroring the ADR-0044 W2 Phase 2/3 PRELUDE+intrinsic-
+// rewrite+C-ABI pattern. Each shim:
+//   1. Reads Str buffer(s) via str_buf_as_str_phase3.
+//   2. Calls the Rust-side helper or stdlib fn.
+//   3. Returns i64 sentinel (0/1) or owned Str/*mut u8 pointer.
+//
+// All shims use `alloc_str_buffer` for `*mut u8` string returns
+// (same as __cobrust_input / __cobrust_read_line pattern).
+// =====================================================================
+
+/// C-ABI shim for source-level `read_file(path: str) -> str`.
+/// Reads entire file at `path` as UTF-8. Returns an owned Str pointer
+/// (empty on I/O error — i64-sentinel Q1: bare-str return for reads).
+///
+/// # Safety
+///
+/// `path` must be a valid non-null Str pointer returned by any of the
+/// W2 shims. The returned Str is dropped by the codegen drop schedule
+/// at the binding's scope exit (ADR-0050c §Phase 2).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_read_file(path: *mut u8) -> *mut u8 {
+    if path.is_null() {
+        return alloc_str_buffer("");
+    }
+    // SAFETY: path is non-null.
+    let path_str = unsafe { str_buf_as_str_phase3(path) };
+    match read_file(path_str) {
+        Ok(s) => alloc_str_buffer(&s),
+        Err(_) => alloc_str_buffer(""),
+    }
+}
+
+/// C-ABI shim for source-level `read_file_lines(path: str) -> list[str]`.
+/// Returns an owned list pointer whose i64 slots store heap-Str pointers
+/// (same shape as `__cobrust_argv` per ADR-0050c list[str] precedent).
+/// Per ADR-0050f Q2: trailing empty element preserved; \r stripped.
+///
+/// # Safety
+///
+/// `path` must be a valid non-null Str pointer. The returned list is
+/// dropped by `__cobrust_list_drop_elems(list, __cobrust_str_drop)` at
+/// scope exit (ADR-0050c Phase 3).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_read_file_lines(path: *mut u8) -> *mut u8 {
+    if path.is_null() {
+        // Return a list with one empty element: "" — matches empty-file
+        // behaviour ("" split by '\n' = [""]). Null path → treat as
+        // empty file for consistency.
+        unsafe {
+            let list = crate::collections::__cobrust_list_new(8, 1);
+            let elem = alloc_str_buffer("");
+            crate::collections::__cobrust_list_set(list, 0, elem as i64);
+            return list;
+        }
+    }
+    // SAFETY: path is non-null.
+    let path_str = unsafe { str_buf_as_str_phase3(path) };
+    let lines = match read_file_lines(path_str) {
+        Ok(ls) => ls,
+        Err(_) => {
+            // I/O error → return list with single empty string (consistent
+            // with read_file returning "" on error; bare-str sentinel Q1).
+            unsafe {
+                let list = crate::collections::__cobrust_list_new(8, 1);
+                let elem = alloc_str_buffer("");
+                crate::collections::__cobrust_list_set(list, 0, elem as i64);
+                return list;
+            }
+        }
+    };
+    let n = lines.len() as i64;
+    // SAFETY: __cobrust_list_new + __cobrust_list_set C-ABI contract.
+    unsafe {
+        let list = crate::collections::__cobrust_list_new(8, n);
+        for (i, line) in lines.iter().enumerate() {
+            let elem = alloc_str_buffer(line);
+            crate::collections::__cobrust_list_set(list, i as i64, elem as i64);
+        }
+        list
+    }
+}
+
+/// C-ABI shim for source-level `write_file(path: str, contents: str) -> i64`.
+/// Creates or truncates the file. Returns 0 on success, 1 on I/O error
+/// (i64-sentinel Q1 — ADR-0050f §"Error code convention").
+///
+/// # Safety
+///
+/// Both `path` and `contents` must be valid non-null Str pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_write_file(path: *mut u8, contents: *mut u8) -> i64 {
+    if path.is_null() || contents.is_null() {
+        return 1;
+    }
+    // SAFETY: both pointers are non-null.
+    let path_str = unsafe { str_buf_as_str_phase3(path) };
+    let contents_str = unsafe { str_buf_as_str_phase3(contents) };
+    match write_file(path_str, contents_str) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+/// C-ABI shim for source-level `append_file(path: str, contents: str) -> i64`.
+/// Creates if absent, appends if present. Returns 0/1 sentinel.
+///
+/// # Safety
+///
+/// Both `path` and `contents` must be valid non-null Str pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_append_file(path: *mut u8, contents: *mut u8) -> i64 {
+    if path.is_null() || contents.is_null() {
+        return 1;
+    }
+    // SAFETY: both pointers are non-null.
+    let path_str = unsafe { str_buf_as_str_phase3(path) };
+    let contents_str = unsafe { str_buf_as_str_phase3(contents) };
+    match append_file(path_str, contents_str) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+/// C-ABI shim for source-level `stdin_read_all() -> str`.
+/// Reads stdin until EOF as UTF-8. Returns an owned Str pointer
+/// (empty Str on EOF per ADR-0050f §"Decision").
+///
+/// # Safety
+///
+/// No pointer arguments. The returned Str is dropped at scope exit
+/// (ADR-0050c §Phase 2).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_stdin_read_all() -> *mut u8 {
+    let stdin = std::io::stdin();
+    let mut buf = String::new();
+    let _ = stdin.lock().read_to_string(&mut buf);
+    alloc_str_buffer(&buf)
+}
+
+/// C-ABI shim for source-level `stdout_write(s: str) -> i64`.
+/// Writes `s` to stdout WITHOUT a trailing newline (f3fio14 lock —
+/// ADR-0050f §"Cross-surface dispatch table"). Returns 0/1 sentinel.
+///
+/// # Safety
+///
+/// `s` must be a valid non-null Str pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_stdout_write(s: *mut u8) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    // SAFETY: s is non-null.
+    let text = unsafe { str_buf_as_str_phase3(s) };
+    let mut stdout = std::io::stdout().lock();
+    match stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+/// C-ABI shim for source-level `stderr_write(s: str) -> i64`.
+/// Writes `s` to stderr WITHOUT a trailing newline; stdout is untouched
+/// (f3fio15 lock — ADR-0050f §"Cross-surface dispatch table").
+/// Returns 0/1 sentinel.
+///
+/// # Safety
+///
+/// `s` must be a valid non-null Str pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_stderr_write(s: *mut u8) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    // SAFETY: s is non-null.
+    let text = unsafe { str_buf_as_str_phase3(s) };
+    let mut stderr = std::io::stderr().lock();
+    match stderr
+        .write_all(text.as_bytes())
+        .and_then(|()| stderr.flush())
+    {
+        Ok(()) => 0,
+        Err(_) => 1,
     }
 }
 
