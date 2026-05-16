@@ -501,6 +501,7 @@ name = "cobrust-stdlib"
 version = "0.1.2"
 dependencies = [
  "cobrust-llm-router",
+ "indexmap",
  "mimalloc",
  "proptest",
  "serde",
