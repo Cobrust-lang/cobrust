@@ -116,6 +116,14 @@ pub const LIST_GET_RUNTIME_SYMBOL: &str = "__cobrust_list_get";
 /// Wraps `__cobrust_list_len`. ADR-0044 W2 Phase 3.
 pub const LIST_LEN_RUNTIME_SYMBOL: &str = "__cobrust_list_len";
 
+/// Runtime symbol for source-level `list_is_empty(lst)`.
+/// Wraps `__cobrust_list_is_empty`. ADR-0050c §F5 / Phase 6 —
+/// §2.2 implicit-truthy ban: returns `bool` at the source level
+/// while the C-ABI returns `i64` (0/1) to match the SwitchInt
+/// convention. Symmetric to `__cobrust_dict_is_empty` from
+/// ADR-0050d Decision 5 addendum.
+pub const LIST_IS_EMPTY_RUNTIME_SYMBOL: &str = "__cobrust_list_is_empty";
+
 /// Runtime symbol for source-level `list_new(capacity)`.
 /// Wraps `__cobrust_list_new`. ADR-0044 W2 Phase 3.
 pub const LIST_NEW_RUNTIME_SYMBOL: &str = "__cobrust_list_new";
@@ -256,6 +264,8 @@ struct IntrinsicDefIds {
     list_get: HashSet<u32>,
     /// ADR-0044 W2 Phase 3.
     list_len: HashSet<u32>,
+    /// ADR-0050c §F5 / Phase 6 — §2.2 implicit-truthy ban for lists.
+    list_is_empty: HashSet<u32>,
     /// ADR-0044 W2 Phase 3.
     list_new: HashSet<u32>,
     /// ADR-0044 W2 Phase 3.
@@ -331,6 +341,7 @@ impl IntrinsicDefIds {
         out.extend(&self.list_set);
         out.extend(&self.list_get);
         out.extend(&self.list_len);
+        out.extend(&self.list_is_empty);
         out.extend(&self.list_new);
         out.extend(&self.print_no_nl);
         out.extend(&self.llm_complete);
@@ -378,6 +389,7 @@ impl IntrinsicDefIds {
             && self.list_set.is_empty()
             && self.list_get.is_empty()
             && self.list_len.is_empty()
+            && self.list_is_empty.is_empty()
             && self.list_new.is_empty()
             && self.print_no_nl.is_empty()
             && self.llm_complete.is_empty()
@@ -429,6 +441,7 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         list_set: HashSet::new(),
         list_get: HashSet::new(),
         list_len: HashSet::new(),
+        list_is_empty: HashSet::new(),
         list_new: HashSet::new(),
         print_no_nl: HashSet::new(),
         llm_complete: HashSet::new(),
@@ -517,6 +530,9 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
             }
             "list_len" => {
                 ids.list_len.insert(body.def_id.0);
+            }
+            "list_is_empty" => {
+                ids.list_is_empty.insert(body.def_id.0);
             }
             "list_new" => {
                 ids.list_new.insert(body.def_id.0);
@@ -680,6 +696,7 @@ enum Kind {
     ListSet,
     ListGet,
     ListLen,
+    ListIsEmpty,
     ListNew,
     PrintNoNl,
     LlmComplete,
@@ -728,6 +745,7 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "list_set" => Some(Kind::ListSet),
         "list_get" => Some(Kind::ListGet),
         "list_len" => Some(Kind::ListLen),
+        "list_is_empty" => Some(Kind::ListIsEmpty),
         "list_new" => Some(Kind::ListNew),
         "print_no_nl" => Some(Kind::PrintNoNl),
         "llm_complete" => Some(Kind::LlmComplete),
@@ -794,6 +812,8 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::ListGet)
     } else if ids.list_len.contains(&id) {
         Some(Kind::ListLen)
+    } else if ids.list_is_empty.contains(&id) {
+        Some(Kind::ListIsEmpty)
     } else if ids.list_new.contains(&id) {
         Some(Kind::ListNew)
     } else if ids.print_no_nl.contains(&id) {
@@ -1139,6 +1159,23 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     }
                     let lst = args[0].clone();
                     *func = Operand::Constant(Constant::Str(LIST_LEN_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(lst);
+                }
+                Kind::ListIsEmpty => {
+                    // ADR-0050c §F5 / Phase 6 — §2.2 implicit-truthy ban.
+                    // list_is_empty(lst) -> bool → __cobrust_list_is_empty(lst_ptr) -> i64.
+                    // The C-ABI returns i64 (0/1) matching the SwitchInt convention;
+                    // Cranelift sees a 1-byte bool slot fed by an i64-returning call
+                    // (truncation handled by codegen's i64-to-bool coerce path).
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("list_is_empty: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let lst = args[0].clone();
+                    *func =
+                        Operand::Constant(Constant::Str(LIST_IS_EMPTY_RUNTIME_SYMBOL.to_string()));
                     args.clear();
                     args.push(lst);
                 }

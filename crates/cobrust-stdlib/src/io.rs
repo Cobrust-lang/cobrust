@@ -212,8 +212,9 @@ pub unsafe extern "C" fn __cobrust_input(ptr: *const u8, len: usize) -> *mut u8 
 ///
 /// # Safety
 ///
-/// No pointer arguments — always safe to call. The returned Str must
-/// be freed via `__cobrust_str_drop` when no longer needed.
+/// No pointer arguments — always safe to call. The returned Str is
+/// automatically freed by the codegen drop schedule at the binding's
+/// scope exit (ADR-0050c §Phase 2).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_input_no_prompt() -> *mut u8 {
     let stdin = std::io::stdin();
@@ -306,8 +307,9 @@ pub unsafe extern "C" fn __cobrust_println_str_buf(buf: *mut u8) {
 ///
 /// # Safety
 ///
-/// No pointer arguments — always safe to call. The returned Str must
-/// be freed via `__cobrust_str_drop` when no longer needed.
+/// No pointer arguments — always safe to call. The returned Str is
+/// automatically freed by the codegen drop schedule at the binding's
+/// scope exit (ADR-0050c §Phase 2).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_read_line() -> *mut u8 {
     let stdin = std::io::stdin();

@@ -40,9 +40,29 @@ pub fn compute_drop_schedule(body: &mut Body) -> Result<(), MirError> {
     // A local is *drop-eligible* if its declared type is non-`Copy`
     // and it is *not* a parameter (parameters are dropped by the
     // caller's frame in the C-ABI sense; M8 keeps them caller-owned).
+    //
+    // ADR-0050c Phase 4 cascade fix: `body.is_param(id)` is
+    // `id < param_count` where `param_count` only counts USER-declared
+    // parameters (LocalId(0) is the synthetic _return slot per
+    // `lower.rs::BodyBuilder::new`). For `fn count(xs: list[str])`
+    // with param_count=1, that predicate covers LocalId(0)=_return
+    // (correctly excluded — _return is Ty::None on entry, irrelevant
+    // anyway) but EXCLUDES LocalId(1)=xs (incorrectly included as
+    // drop-eligible). Pre-ADR-0050c that didn't matter because Str
+    // and List were Copy, but the Phase 1 flip made list-typed params
+    // drop-eligible — and the drop pass then fired
+    // `__cobrust_list_drop_elems` on the param's list pointer both in
+    // the callee AND the caller, causing mimalloc free-list corruption.
+    //
+    // Fix: shift the exclusion predicate by +1 to cover the _return slot
+    // PLUS all `param_count` user params. The _return slot itself is
+    // never drop-eligible (Ty::None is Copy), so this only affects the
+    // last user parameter — which is what we want.
+    let param_cutoff = body.param_count + 1;
     let mut drop_eligible: HashSet<LocalId> = HashSet::new();
     for ld in &body.locals {
-        if !is_copy(&ld.ty) && !body.is_param(ld.id) {
+        let is_param = (ld.id.0 as usize) < param_cutoff;
+        if !is_copy(&ld.ty) && !is_param {
             drop_eligible.insert(ld.id);
         }
     }
@@ -122,9 +142,11 @@ pub fn compute_drop_schedule(body: &mut Body) -> Result<(), MirError> {
 fn is_copy(ty: &Ty) -> bool {
     matches!(
         ty,
-        // ADR-0044 W2 Phase 3: Str and List are non-drop-eligible (same
-        // rationale as lower.rs is_copy_type — runtime Drop is a no-op jump).
-        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never | Ty::Str | Ty::List(_)
+        // ADR-0050c TD-1 closure: Str and List are non-Copy; the drop pass
+        // enumerates them as drop-eligible. Element-type-aware drop
+        // (list[str] → drop each element first) lives in codegen's
+        // Terminator::Drop arm dispatch on `body.locals[place.local.0].ty`.
+        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never
     )
 }
 

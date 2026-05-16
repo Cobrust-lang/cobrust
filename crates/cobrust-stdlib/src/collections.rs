@@ -531,6 +531,76 @@ pub unsafe extern "C" fn __cobrust_list_drop(list: *mut u8) {
     drop(boxed);
 }
 
+/// Drop a list whose i64 slots store owned pointer values. Iterates
+/// each slot, casts it to `*mut u8`, calls `elem_drop_fn(slot)`, then
+/// frees the list container.
+///
+/// ADR-0050c §"Phase 3": this is the codegen-emitted drop call for
+/// `list[str]` and `list[list[T]]` typed locals. The element-drop
+/// function pointer is supplied by codegen based on the element
+/// type:
+///
+/// - `list[str]` → `__cobrust_str_drop` per slot.
+/// - `list[list[T]]` → a fn pointer that recursively calls
+///   `__cobrust_list_drop_elems` with the inner element drop fn (or
+///   `__cobrust_list_drop` for `list[i64]`).
+///
+/// # Safety
+///
+/// `list` must be the pointer returned by [`__cobrust_list_new`] and
+/// not yet dropped, OR `list` may be NULL. `elem_drop_fn` must be a
+/// valid C-ABI fn pointer that accepts an `*mut u8` slot value and
+/// is safe to call once on each slot. Zero-valued slots (i64 0) are
+/// skipped (mirrors the standard NULL-pointer convention).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_drop_elems(
+    list: *mut u8,
+    elem_drop_fn: unsafe extern "C" fn(*mut u8),
+) {
+    if list.is_null() {
+        return;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*list.cast::<ListI64Layout>() };
+    let len = layout.len;
+    if !layout.items.is_null() && len > 0 {
+        for i in 0..len {
+            // SAFETY: bounds-checked by `len`; items is non-null when len>0.
+            let slot = unsafe { *layout.items.add(i as usize) };
+            if slot != 0 {
+                // SAFETY: caller-attestation — `elem_drop_fn` is valid.
+                unsafe { elem_drop_fn(slot as *mut u8) };
+            }
+        }
+    }
+    // Free the list container itself.
+    // SAFETY: list was non-null and from `__cobrust_list_new`.
+    unsafe { __cobrust_list_drop(list) };
+}
+
+/// Returns 1 if the list is empty (`len == 0`), 0 otherwise. NULL is
+/// treated as empty (mirrors `__cobrust_list_len(NULL) == 0`).
+///
+/// ADR-0050c §"Phase 6" / F5 §2.2 uniformity addendum: complements
+/// the future `__cobrust_dict_is_empty` shim from ADR-0050d so users
+/// have one canonical "is empty" predicate per collection. Honors
+/// §2.2 implicit-truthy ban: `if list_is_empty(xs):` is the canonical
+/// pattern; `if xs:` is rejected at type-check time.
+///
+/// # Safety
+///
+/// `list` must be a non-null pointer returned by
+/// [`__cobrust_list_new`] and not yet dropped, OR `list` may be NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_is_empty(list: *mut u8) -> i64 {
+    if list.is_null() {
+        return 1;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*list.cast::<ListI64Layout>() };
+    i64::from(layout.len == 0)
+}
+
 // --- Dict<i64, i64> ---------------------------------------------------
 
 #[repr(C)]

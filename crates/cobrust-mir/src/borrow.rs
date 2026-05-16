@@ -117,6 +117,16 @@ fn check_statement(stmt: &Statement, state: &mut BlockState) -> Result<(), MirEr
                     });
                 }
             }
+            // ADR-0050c Phase 4 note: `Rvalue::Aggregate` with multiple
+            // `Operand::Move(p)` items pointing at the SAME local is a
+            // pattern the codegen handles via per-element
+            // `__cobrust_str_clone` (see `lower_aggregate_list` at
+            // `cranelift_backend.rs`). The borrow check intentionally
+            // tolerates this — every Move slot's read produces a fresh
+            // owned clone via codegen, so the source local stays valid
+            // for subsequent moves within the same Aggregate. This
+            // matches the implicit-clone insertion pattern declared in
+            // ADR-0050c §"Phase 4 Operand-lowering clone emission".
             // Take a borrow if Rvalue::Ref(...).
             if let Rvalue::Ref(kind, target) = rvalue {
                 push_borrow(state, target, *kind, stmt.span)?;

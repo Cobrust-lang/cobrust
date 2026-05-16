@@ -14,6 +14,7 @@ use cobrust_mir::{
     Module, Operand, Place, Projection, Rvalue, Statement, StatementKind, SwitchValue, Terminator,
     UnOp,
 };
+use cobrust_types::Ty;
 
 use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, MemFlags, Signature, UserFuncName};
 use cranelift_codegen::isa::{self, OwnedTargetIsa};
@@ -295,9 +296,18 @@ impl CraneliftCtx {
                 if let Some(ty) = inferred.get(&p.local) {
                     return Some(*ty);
                 }
+                // ADR-0050c Phase 4 cascade fix: indirect types
+                // (Str / List / Tuple / Dict / Set / Record / Adt /
+                // Alias / Fn) all pass-by-pointer at M9; their
+                // `cranelift_scalar_ty` is None. Map those to the
+                // pointer type so callers (signature inference,
+                // var_map declaration) consistently see an i64 instead
+                // of falling back to `Ty::None` → I8 (which violates
+                // sig matching at call sites, e.g. `__cobrust_println`
+                // taking i64).
                 body.locals
                     .get(p.local.0 as usize)
-                    .and_then(|l| cranelift_scalar_ty(&l.ty))
+                    .map(|l| cranelift_scalar_ty(&l.ty).unwrap_or(self.pointer_type))
             }
             Operand::Constant(c) => Some(match c {
                 Constant::Bool(_) | Constant::None => ir::types::I8,
@@ -755,35 +765,56 @@ impl CraneliftCtx {
         //
         // M11 scope: only payloads on the `args[0]` slot of a
         // `Terminator::Call` whose `func` is `Constant::Str(_)` are
-        // interned. M12 will widen to all Constant::Str uses
-        // (including local-binding slots).
+        // interned. ADR-0044 W2 widened to all Constant::Str args.
+        // ADR-0050c Phase 2 widens again to Aggregate-rvalue operands —
+        // literal `["a", "b"]` lowering needs each element interned so
+        // `materialize_str_buffer` can fetch the data symbol per
+        // `cranelift_backend.rs:932-946`.
         let mut str_data_ids: HashMap<String, cranelift_module::DataId> = HashMap::new();
+        // Inner helper: intern a payload if not already seen.
+        let mut intern_payload = |payload: &str,
+                                  ids: &mut HashMap<String, cranelift_module::DataId>|
+         -> Result<(), CodegenError> {
+            if ids.contains_key(payload) {
+                return Ok(());
+            }
+            let symbol = str_data_symbol(body.def_id.0, ids.len(), payload);
+            let data_id = obj
+                .declare_data(&symbol, Linkage::Local, false, false)
+                .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+            let mut data_desc = cranelift_module::DataDescription::new();
+            data_desc.define(payload.as_bytes().to_vec().into_boxed_slice());
+            obj.define_data(data_id, &data_desc)
+                .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+            ids.insert(payload.to_string(), data_id);
+            Ok(())
+        };
         for mir_block in &body.blocks {
-            if let cobrust_mir::Terminator::Call { func, args, .. } = &mir_block.terminator {
-                if !matches!(
-                    func,
-                    cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(_))
-                ) {
-                    continue;
+            // Walk statements: every Aggregate rvalue operand that is a
+            // Constant::Str participates (per ADR-0050c Phase 2 — list[str]
+            // literals materialise via Aggregate(List) + per-slot Str
+            // construction in `lower_aggregate_list`).
+            for stmt in &mir_block.statements {
+                if let cobrust_mir::StatementKind::Assign { rvalue, .. } = &stmt.kind {
+                    collect_str_payloads_from_rvalue(rvalue, &mut |p| {
+                        intern_payload(p, &mut str_data_ids)
+                    })?;
                 }
-                // ADR-0044 W2 Phase 3 amendment: intern ALL string-constant
-                // args, not just args[0]. This covers str_eq(c, "lit") where
-                // the literal is the second argument.
+            }
+            // Walk terminator args for `Constant::Str` literals regardless
+            // of `func` kind. ADR-0044 W2 Phase 3 originally walked only
+            // runtime-helper calls (`func` = `Constant::Str(name)`), but
+            // ADR-0050c Phase 2 cascade fix needs user-fn calls
+            // (`func` = `Constant::FnRef(id)`) to materialise Str args
+            // too — the new `materialize_str_buffer` branch in the FnRef
+            // lowering at `cranelift_backend.rs:1183-1199` calls
+            // `materialize_str_data` which requires the payload to be
+            // already interned in `str_data_globals`.
+            if let cobrust_mir::Terminator::Call { args, .. } = &mir_block.terminator {
                 for arg in args {
                     if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(payload)) = arg
                     {
-                        if str_data_ids.contains_key(payload) {
-                            continue;
-                        }
-                        let symbol = str_data_symbol(body.def_id.0, str_data_ids.len(), payload);
-                        let data_id = obj
-                            .declare_data(&symbol, Linkage::Local, false, false)
-                            .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
-                        let mut data_desc = cranelift_module::DataDescription::new();
-                        data_desc.define(payload.as_bytes().to_vec().into_boxed_slice());
-                        obj.define_data(data_id, &data_desc)
-                            .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
-                        str_data_ids.insert(payload.clone(), data_id);
+                        intern_payload(payload, &mut str_data_ids)?;
                     }
                 }
             }
@@ -1005,12 +1036,98 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
         Ok(buf)
     }
 
+    /// ADR-0050c Phase 2 — TD-1 closure. Emit the drop call appropriate
+    /// for the given Cobrust type. Called from the `Terminator::Drop`
+    /// arm and from the Aggregate-List Str-element materialization path.
+    ///
+    /// Dispatch table:
+    ///
+    /// - `Ty::Str` → `__cobrust_str_drop(local_ptr)`.
+    /// - `Ty::List(Ty::Str)` → `__cobrust_list_drop_elems(local_ptr,
+    ///   __cobrust_str_drop)` — frees each Str slot, then the list.
+    /// - `Ty::List(_)` (other element types) → `__cobrust_list_drop`.
+    ///   For `list[list[str]]` this still frees the outer container
+    ///   but leaks the inner element Strs; the leak is bounded to the
+    ///   nesting case and is documented as `fixed-later-with-anchor`
+    ///   per ADR-0050c §"Consequences" (mirrors the comprehension
+    ///   leak carry-forward).
+    /// - All other types → no-op (Tuple/Dict/Set inherit M12.x drop
+    ///   semantics; widening lands in M-F.3.4 / M-F.3.5).
+    fn emit_drop_for_ty(&mut self, place: &Place, ty: &Ty) -> Result<(), CodegenError> {
+        match ty {
+            Ty::Str => {
+                let ptr = self.read_place(place)?;
+                if let Some(fr) = self.runtime_funcs.get("__cobrust_str_drop").copied() {
+                    self.builder.ins().call(fr, &[ptr]);
+                }
+            }
+            Ty::List(elem) => {
+                let ptr = self.read_place(place)?;
+                if matches!(**elem, Ty::Str) {
+                    // list[str]: per-element __cobrust_str_drop then
+                    // container drop, atomically via the new
+                    // __cobrust_list_drop_elems shim.
+                    let drop_fn_ref = self.runtime_funcs.get("__cobrust_str_drop").copied();
+                    let drop_elems_ref =
+                        self.runtime_funcs.get("__cobrust_list_drop_elems").copied();
+                    if let (Some(drop_fn), Some(drop_elems)) = (drop_fn_ref, drop_elems_ref) {
+                        // Materialize the function pointer to __cobrust_str_drop.
+                        let fn_addr = self.builder.ins().func_addr(self.pointer_type, drop_fn);
+                        self.builder.ins().call(drop_elems, &[ptr, fn_addr]);
+                    } else if let Some(fr) = self.runtime_funcs.get("__cobrust_list_drop").copied()
+                    {
+                        // Defensive fallback: drop the container only.
+                        self.builder.ins().call(fr, &[ptr]);
+                    }
+                } else {
+                    // list[i64] / list[bool] / list[list[_]] / etc.:
+                    // i64-Copy elements need no per-slot drop; nested
+                    // lists leak under Phase 2 (fixed-later-with-anchor
+                    // per ADR-0050c §"Consequences"). Container freed.
+                    if let Some(fr) = self.runtime_funcs.get("__cobrust_list_drop").copied() {
+                        self.builder.ins().call(fr, &[ptr]);
+                    }
+                }
+            }
+            // Tuple/Dict/Set drops are not yet plumbed; M12.x leaves
+            // these as no-op (matches pre-ADR-0050c behavior). Phase F.3.4
+            // dict + Phase G set ownership widen this dispatch.
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn lower_statement(&mut self, stmt: &Statement) -> Result<(), CodegenError> {
         match &stmt.kind {
             StatementKind::Nop | StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {
                 Ok(())
             }
             StatementKind::Assign { place, rvalue } => {
+                // ADR-0050c Phase 2 cascade fix: `let v: str = "hello"`
+                // lowers to `Assign(v, Use(Constant::Str("hello")))`.
+                // The default `lower_constant(Constant::Str(_))` returns
+                // a zero pointer (the M9 stub); writing 0 into a
+                // Str-typed slot leaves `v` null, so any consumer
+                // (`print(v)` → `__cobrust_println_str_buf(0)`) sees a
+                // null buffer and prints nothing.
+                //
+                // Resolution: when the rvalue is a direct `Use` of a
+                // `Constant::Str(payload)` AND the destination's
+                // declared type is `Ty::Str`, materialise the literal
+                // as a heap `StringBuffer` via the existing
+                // `materialize_str_buffer` (mirror of f-string + list
+                // literal materialisation paths).
+                if let Rvalue::Use(Operand::Constant(Constant::Str(payload))) = rvalue {
+                    let dest_ty = self
+                        .body
+                        .locals
+                        .get(place.local.0 as usize)
+                        .map(|l| l.ty.clone());
+                    if matches!(dest_ty, Some(Ty::Str)) && place.projections.is_empty() {
+                        let value = self.materialize_str_buffer(payload)?;
+                        return self.write_place(place, value);
+                    }
+                }
                 let value = self.lower_rvalue(rvalue)?;
                 self.write_place(place, value)
             }
@@ -1080,7 +1197,20 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 self.builder.seal_block(trap_blk);
                 Ok(())
             }
-            Terminator::Drop { target, .. } => {
+            Terminator::Drop { place, target } => {
+                // ADR-0050c Phase 2 — TD-1 closure. Dispatch by the
+                // dropped local's declared type:
+                //   - Ty::Str → __cobrust_str_drop(local_ptr)
+                //   - Ty::List(Ty::Str) → __cobrust_list_drop_elems(
+                //         local_ptr, __cobrust_str_drop)
+                //   - Ty::List(_) (other elem types) → __cobrust_list_drop
+                //   - anything else → no-op (matches the pre-ADR-0050c
+                //     behavior for non-Str/List drops, e.g. Ty::Tuple).
+                let local_decl = self.body.locals.get(place.local.0 as usize);
+                let ty = local_decl.map(|d| &d.ty);
+                if let Some(ty) = ty {
+                    self.emit_drop_for_ty(place, ty)?;
+                }
                 let blk = self.block_id(target)?;
                 self.builder.ins().jump(blk, &[]);
                 Ok(())
@@ -1107,7 +1237,20 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                     if let Some(func_ref) = self.user_funcs.get(id).copied() {
                         let mut call_args = Vec::with_capacity(args.len());
                         for arg in args {
-                            let v = self.lower_operand(arg)?;
+                            // ADR-0050c Phase 2 cascade fix: when a
+                            // user-fn call passes a `Constant::Str`
+                            // literal arg into a Str-typed parameter,
+                            // the M9 stub at `lower_constant(Str)` would
+                            // return a zero pointer, leaving the callee's
+                            // param null. Materialise the literal as a
+                            // heap `StringBuffer` so the callee sees a
+                            // real pointer (mirror of the f-string and
+                            // list-literal materialisation paths).
+                            let v = if let Operand::Constant(Constant::Str(payload)) = arg {
+                                self.materialize_str_buffer(payload)?
+                            } else {
+                                self.lower_operand(arg)?
+                            };
                             call_args.push(v);
                         }
                         let inst = self.builder.ins().call(func_ref, &call_args);
@@ -1357,7 +1500,51 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
         if let Some(set_fr) = self.runtime_funcs.get("__cobrust_list_set").copied() {
             for (i, op) in operands.iter().enumerate() {
                 let idx_v = self.builder.ins().iconst(ir::types::I64, i as i64);
-                let val = self.lower_operand(op)?;
+                // ADR-0050c Phase 2 + Phase 4 — TD-1 closure.
+                //
+                // Three cases for list-element materialisation:
+                //
+                // 1. `Constant::Str(payload)` literal → call
+                //    `__cobrust_str_new` + `__cobrust_str_push_static`
+                //    so each slot owns a fresh heap buffer.
+                //
+                // 2. Non-literal Str-typed operand (`Move(tag)` or
+                //    `Copy(tag)` where tag: Ty::Str) → clone the
+                //    pointer via `__cobrust_str_clone` so the slot
+                //    owns a fresh copy and the source local stays
+                //    valid for any subsequent uses (including more
+                //    list slots in the same literal — `[tag, tag, tag]`
+                //    becomes three independent allocations).
+                //
+                // 3. Anything else (Int / Bool / list-of-list pointer)
+                //    → `lower_operand` direct (i64 by value).
+                let val = if let Operand::Constant(Constant::Str(payload)) = op {
+                    self.materialize_str_buffer(payload)?
+                } else {
+                    // Check if the operand is a Str-typed place read.
+                    let is_str_operand = match op {
+                        Operand::Copy(p) | Operand::Move(p) => self
+                            .body
+                            .locals
+                            .get(p.local.0 as usize)
+                            .map(|l| matches!(l.ty, Ty::Str))
+                            .unwrap_or(false),
+                        Operand::Constant(_) => false,
+                    };
+                    if is_str_operand {
+                        let raw = self.lower_operand(op)?;
+                        if let Some(clone_fr) =
+                            self.runtime_funcs.get("__cobrust_str_clone").copied()
+                        {
+                            let inst = self.builder.ins().call(clone_fr, &[raw]);
+                            self.builder.inst_results(inst)[0]
+                        } else {
+                            raw
+                        }
+                    } else {
+                        self.lower_operand(op)?
+                    }
+                };
                 let val_i64 = coerce_to_i64(self.builder, val);
                 self.builder.ins().call(set_fr, &[alloc, idx_v, val_i64]);
             }
@@ -1453,10 +1640,32 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 idx += 1;
                 continue;
             }
-            // Hole — codegen the value and dispatch by type.
+            // Hole — codegen the value and dispatch by MIR-declared
+            // type when possible, falling back to Cranelift's value
+            // type for unrecognised operands.
+            //
+            // ADR-0050c Phase 2 cascade fix: a Str-typed local read via
+            // `Operand::Move(p)` produces an i64 Cranelift value (the
+            // heap buffer pointer), but pre-fix the codegen branched on
+            // `v_ty.is_int()` and dispatched to `__cobrust_fmt_int`,
+            // emitting the raw pointer as a decimal number into the
+            // f-string. Resolution: inspect `op`'s MIR-declared type
+            // FIRST; if it's `Ty::Str`, dispatch to `__cobrust_fmt_str`
+            // which reads the buffer via `__cobrust_str_ptr` /
+            // `__cobrust_str_len`. Other indirect types fall through to
+            // `__cobrust_fmt_repr`.
+            let mir_ty = match op {
+                Operand::Copy(p) | Operand::Move(p) => self
+                    .body
+                    .locals
+                    .get(p.local.0 as usize)
+                    .map(|l| l.ty.clone()),
+                Operand::Constant(_) => None,
+            };
+            let is_str = matches!(mir_ty, Some(Ty::Str));
             let v = self.lower_operand(op)?;
             let v_ty = self.builder.func.dfg.value_type(v);
-            // Check for a trailing FMTSPEC: sentinel.
+            // Check for a trailing FMTSPEC: sentinel (f-string precision spec).
             let maybe_spec = operands.get(idx + 1).and_then(|next| {
                 if let Operand::Constant(Constant::Str(s)) = next {
                     s.strip_prefix("FMTSPEC:")
@@ -1464,7 +1673,24 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                     None
                 }
             });
-            if v_ty == ir::types::F32 || v_ty == ir::types::F64 {
+            if is_str {
+                // `__cobrust_fmt_str(buf, ptr, len)` expects raw bytes,
+                // not a StringBuffer pointer. Extract (ptr, len) from
+                // the StringBuffer via the existing accessors. f-string
+                // precision spec doesn't apply to str holes — only floats.
+                let str_ptr_fr = self.runtime_funcs.get("__cobrust_str_ptr").copied();
+                let str_len_fr = self.runtime_funcs.get("__cobrust_str_len").copied();
+                let fmt_str_fr = self.runtime_funcs.get("__cobrust_fmt_str").copied();
+                if let (Some(ptr_fr), Some(len_fr), Some(fmt_fr)) =
+                    (str_ptr_fr, str_len_fr, fmt_str_fr)
+                {
+                    let ptr_call = self.builder.ins().call(ptr_fr, &[v]);
+                    let ptr_v = self.builder.inst_results(ptr_call)[0];
+                    let len_call = self.builder.ins().call(len_fr, &[v]);
+                    let len_v = self.builder.inst_results(len_call)[0];
+                    self.builder.ins().call(fmt_fr, &[buf, ptr_v, len_v]);
+                }
+            } else if v_ty == ir::types::F32 || v_ty == ir::types::F64 {
                 let v_f64 = if v_ty == ir::types::F32 {
                     self.builder.ins().fpromote(ir::types::F64, v)
                 } else {
@@ -1963,6 +2189,44 @@ fn str_data_symbol(def_id: u32, idx: usize, _payload: &str) -> String {
     format!("_cobrust_str_{def_id}_{idx}")
 }
 
+/// ADR-0050c Phase 2 — TD-1 closure. Walk an Rvalue, invoking `visit`
+/// on every `Constant::Str(payload)` operand it transitively contains.
+/// Used by the interning pre-pass to ensure literal-list lowering
+/// (`["a", "b"]` → Aggregate(List, [Str("a"), Str("b")])) has every
+/// element interned before `materialize_str_buffer` is called in
+/// `lower_aggregate_list`.
+fn collect_str_payloads_from_rvalue<F>(
+    rvalue: &cobrust_mir::Rvalue,
+    visit: &mut F,
+) -> Result<(), CodegenError>
+where
+    F: FnMut(&str) -> Result<(), CodegenError>,
+{
+    use cobrust_mir::{Constant, Operand, Rvalue};
+    let visit_operand = |op: &Operand, visit: &mut F| -> Result<(), CodegenError> {
+        if let Operand::Constant(Constant::Str(payload)) = op {
+            visit(payload)?;
+        }
+        Ok(())
+    };
+    match rvalue {
+        Rvalue::Use(op) | Rvalue::Cast(_, op, _) | Rvalue::UnaryOp(_, op) => {
+            visit_operand(op, visit)?;
+        }
+        Rvalue::BinaryOp(_, a, b) => {
+            visit_operand(a, visit)?;
+            visit_operand(b, visit)?;
+        }
+        Rvalue::Aggregate(_, ops) => {
+            for op in ops {
+                visit_operand(op, visit)?;
+            }
+        }
+        Rvalue::Ref(_, _) | Rvalue::Discriminant(_) | Rvalue::Len(_) | Rvalue::NullaryOp(_) => {}
+    }
+    Ok(())
+}
+
 /// Compute the set of basic-block ids reachable from the entry
 /// (BlockId(0)) via successor edges. Used to skip dead drop-schedule
 /// chains that target the entry block (which Cranelift's verifier
@@ -2014,6 +2278,12 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_list_get", sig(call_conv, &[p, i64], Some(i64))));
     out.push(("__cobrust_list_len", sig(call_conv, &[p], Some(i64))));
     out.push(("__cobrust_list_drop", sig(call_conv, &[p], None)));
+    // ADR-0050c §"Phase 3": drop a list whose i64 slots store owned
+    // pointers. Second arg is a fn-pointer (p-sized) accepting `*mut u8`.
+    out.push(("__cobrust_list_drop_elems", sig(call_conv, &[p, p], None)));
+    // ADR-0050c §"Phase 6" / F5 §2.2 uniformity addendum: list_is_empty
+    // predicate; returns i64 0/1 per the SwitchInt codegen convention.
+    out.push(("__cobrust_list_is_empty", sig(call_conv, &[p], Some(i64))));
     // ADR-0041 §H6: comprehension lowering uses runtime append.
     out.push(("__cobrust_list_append", sig(call_conv, &[p, i64], None)));
 
@@ -2075,6 +2345,9 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_str_len", sig(call_conv, &[p], Some(i64))));
     out.push(("__cobrust_str_ptr", sig(call_conv, &[p], Some(p))));
     out.push(("__cobrust_str_drop", sig(call_conv, &[p], None)));
+    // ADR-0050c §"Phase 3": deep-copy a Str buffer; explicit clone for
+    // shared-ownership escape hatch. NULL → NULL; empty → fresh empty.
+    out.push(("__cobrust_str_clone", sig(call_conv, &[p], Some(p))));
 
     // -- ADR-0044 W2 Phase 2: stdin + argv source-level binding ---
     // `input(prompt: str) -> str` — writes prompt to stdout, reads one

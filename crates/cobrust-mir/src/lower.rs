@@ -231,6 +231,18 @@ impl<'a> BodyBuilder<'a> {
         // Skip the return local at index 0; params live at indices 1..1+N.
         // After lowering finishes we record param_count = (number of
         // Param-DefId locals).
+        //
+        // NOTE: this `param_count` reflects USER-DECLARED parameters
+        // only (the return slot at LocalId(0) is not counted). Codegen
+        // at `cranelift_backend.rs:561-565` uses
+        // `body.locals.iter().skip(1).take(param_count)` to slice
+        // params for block-arg binding, so the value must remain the
+        // USER count. The drop pass's `is_param(id) = id < param_count`
+        // therefore covers `[LocalId(0)=_return, LocalId(1)=param0,
+        // ..., LocalId(N-1)=param_{N-2}]` but EXCLUDES LocalId(N) — the
+        // last parameter. ADR-0050c Phase 4 cascade-fix sidesteps this
+        // skew by changing the drop pass's exclusion predicate directly
+        // (`crates/cobrust-mir/src/drop.rs:45`) to use a +1 offset.
         self.param_count = self.def_to_local.len();
     }
 
@@ -411,6 +423,26 @@ impl<'a> BodyBuilder<'a> {
                     Some(expr) => self.lower_expr(expr)?,
                     None => Operand::Constant(Constant::None),
                 };
+                // ADR-0050c Phase 2 cascade fix: when the returned operand is
+                // `Operand::Copy(p)` of a drop-eligible local (Str / List /
+                // future non-Copy types), upgrade it to `Operand::Move(p)`.
+                // Rationale: the Phase 2a Copy-at-operand walk-back for List
+                // (`is_copy_type` returns true for `Ty::List(_)` so that fn-arg
+                // shapes like `list_set(xs, i, v)` continue to read xs without
+                // consuming it) interacts badly with the drop pass:
+                // the drop pass enumerates list-typed locals as drop-eligible
+                // and inserts a Drop on the predecessor edge of every Return
+                // block (`drop.rs:104-115`). That Drop runs BEFORE the
+                // ret_block's statements; if the ret_block contains
+                // `return_local = Copy(xs)`, the post-drop borrow check
+                // surfaces UseAfterDrop on `xs` (`borrow.rs:219-224`).
+                //
+                // The fix is to mark the returned operand as a Move so the
+                // drop pass's `globally_moved` set contains `xs` and the Drop
+                // is not inserted on this path. This matches Rust's NRVO /
+                // return-value-move semantics and is sound because the return
+                // statement is the last use of the local in the function body.
+                let op = upgrade_return_to_move(self, op);
                 let ret = self.return_local;
                 self.emit_assign(Place::local(ret), Rvalue::Use(op), stmt.span);
                 self.terminate(Terminator::Return);
@@ -833,22 +865,78 @@ impl<'a> BodyBuilder<'a> {
 
                 // Step 6: body — fetch var via __cobrust_list_get, then
                 // lower user body, then bump __idx, then goto header.
+                //
+                // ADR-0050c Phase 4 — clone emission for Str loop var.
+                // For `for s in xs:` where `xs: list[str]`, the slots
+                // are owned by `xs`. If the loop var `s: Ty::Str` got
+                // a raw slot pointer via `__cobrust_list_get` and the
+                // drop pass enumerated `s` as drop-eligible (Str is
+                // non-Copy), then BOTH `s` and `xs`'s slot would call
+                // `__cobrust_str_drop` on the same pointer at scope
+                // exit. Double-free → segfault / abort / hang in
+                // mimalloc's free-list walker.
+                //
+                // Resolution: when the loop-var type is `Ty::Str`,
+                // fetch the raw pointer into a *throwaway i64 temp*
+                // (no drop schedule), then materialise an owned clone
+                // via `__cobrust_str_clone(raw) -> s`. The slot remains
+                // owned by `xs`; the loop var owns its own fresh copy.
                 self.loop_stack.push((header, exit_block));
                 self.cur_block = Some(body_block.0 as usize);
                 if let Some(vl) = var_local {
-                    let after_get = self.start_new_block();
-                    self.cur_block = Some(body_block.0 as usize);
-                    self.terminate(Terminator::Call {
-                        func: Operand::Constant(Constant::Str("__cobrust_list_get".to_string())),
-                        args: vec![
-                            Operand::Copy(Place::local(iter_local)),
-                            Operand::Copy(Place::local(idx_local)),
-                        ],
-                        destination: Place::local(vl),
-                        target: after_get,
-                        unwind: None,
-                    });
-                    self.cur_block = Some(after_get.0 as usize);
+                    let vl_ty = self
+                        .locals
+                        .get(vl.0 as usize)
+                        .map(|d| d.ty.clone())
+                        .unwrap_or(Ty::None);
+                    if matches!(vl_ty, Ty::Str) {
+                        let raw_local =
+                            self.declare_local("_iter_raw".to_string(), Ty::Int, span, false);
+                        // body_block → Call(list_get → raw_local) → after_get
+                        let after_get = self.start_new_block();
+                        self.cur_block = Some(body_block.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_list_get".to_string(),
+                            )),
+                            args: vec![
+                                Operand::Copy(Place::local(iter_local)),
+                                Operand::Copy(Place::local(idx_local)),
+                            ],
+                            destination: Place::local(raw_local),
+                            target: after_get,
+                            unwind: None,
+                        });
+                        // after_get → Call(str_clone(raw) → vl) → after_clone
+                        let after_clone = self.start_new_block();
+                        self.cur_block = Some(after_get.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_str_clone".to_string(),
+                            )),
+                            args: vec![Operand::Copy(Place::local(raw_local))],
+                            destination: Place::local(vl),
+                            target: after_clone,
+                            unwind: None,
+                        });
+                        self.cur_block = Some(after_clone.0 as usize);
+                    } else {
+                        let after_get = self.start_new_block();
+                        self.cur_block = Some(body_block.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_list_get".to_string(),
+                            )),
+                            args: vec![
+                                Operand::Copy(Place::local(iter_local)),
+                                Operand::Copy(Place::local(idx_local)),
+                            ],
+                            destination: Place::local(vl),
+                            target: after_get,
+                            unwind: None,
+                        });
+                        self.cur_block = Some(after_get.0 as usize);
+                    }
                 }
                 self.lower_block(body)?;
                 if !self.terminated() {
@@ -1129,12 +1217,18 @@ impl<'a> BodyBuilder<'a> {
             }
             ExprKind::List(items) => {
                 let mut ops = Vec::with_capacity(items.len());
+                // ADR-0050c Phase 2 — TD-1 closure: synthesise the element
+                // type from the first element so codegen's
+                // `Terminator::Drop` arm can dispatch on Ty::List(elem).
+                // For `["a", "b"]` this records `Ty::List(Ty::Str)`,
+                // enabling the per-element `__cobrust_str_drop` schedule.
+                let elem_ty = items.first().map_or(Ty::None, |it| synth_expr_ty(self, it));
                 for it in items {
                     ops.push(self.lower_expr(it)?);
                 }
                 let temp = self.declare_local(
                     "_list".to_string(),
-                    Ty::List(Box::new(Ty::None)),
+                    Ty::List(Box::new(elem_ty)),
                     e.span,
                     false,
                 );
@@ -1230,6 +1324,91 @@ impl<'a> BodyBuilder<'a> {
                 Ok(Operand::Copy(p))
             }
             ExprKind::Index { base, index } => {
+                // ADR-0050c Phase 2 cascade fix: source-level `xs[i]` on a
+                // `list[T]` base must go through the runtime helper
+                // `__cobrust_list_get(xs, i) -> i64` rather than the
+                // codegen-side `Projection::Index` (which at M12.x is a
+                // no-op pass-through, surfacing as a segfault when the
+                // user actually consumes the result — see f3ls09 / f3ls13
+                // / f3ls29 in the list[str] corpus).
+                //
+                // The base's HIR-recorded type tells us whether the index
+                // is a list lookup or some other shape (tuple / dict /
+                // str). For now we only special-case `Ty::List(_)`; tuple
+                // / dict are out of ADR-0050c scope.
+                let base_ty = synth_expr_ty(self, base);
+                if matches!(base_ty, Ty::List(_)) {
+                    let base_op = self.lower_expr(base)?;
+                    let idx_op = self.lower_index(index)?;
+                    let elem_ty = if let Ty::List(elem) = &base_ty {
+                        (**elem).clone()
+                    } else {
+                        Ty::None
+                    };
+                    // ADR-0050c Phase 4 — clone emission for Str-indexed
+                    // reads. For `xs[i]` where `xs: list[str]`, the raw
+                    // slot pointer aliases the slot owned by `xs`. The
+                    // drop pass enumerates the destination temp as
+                    // drop-eligible (Str non-Copy), so without cloning
+                    // BOTH the temp and `xs`'s slot would call
+                    // `__cobrust_str_drop` on the same pointer at scope
+                    // exit — double-free.
+                    //
+                    // Resolution: fetch the raw pointer into a throwaway
+                    // i64 temp, then `__cobrust_str_clone` into the typed
+                    // dest. Mirror of the for-loop body fix above.
+                    if matches!(elem_ty, Ty::Str) {
+                        // Step 1: list_get into raw i64 temp.
+                        let raw_dest =
+                            self.declare_local("_idxraw".to_string(), Ty::Int, e.span, false);
+                        let cur = self.current_block_id();
+                        let after_get = self.start_new_block();
+                        self.cur_block = Some(cur.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_list_get".to_string(),
+                            )),
+                            args: vec![base_op, idx_op],
+                            destination: Place::local(raw_dest),
+                            target: after_get,
+                            unwind: None,
+                        });
+                        // Step 2: str_clone(raw) → owned Str dest.
+                        let clone_dest =
+                            self.declare_local("_idxget".to_string(), elem_ty, e.span, false);
+                        let after_clone = self.start_new_block();
+                        self.cur_block = Some(after_get.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_str_clone".to_string(),
+                            )),
+                            args: vec![Operand::Copy(Place::local(raw_dest))],
+                            destination: Place::local(clone_dest),
+                            target: after_clone,
+                            unwind: None,
+                        });
+                        self.cur_block = Some(after_clone.0 as usize);
+                        // Return Move so the operand-consumer takes
+                        // ownership of the freshly-cloned Str (and the
+                        // drop pass excludes clone_dest from the auto-
+                        // drop chain at this scope's return).
+                        return Ok(Operand::Move(Place::local(clone_dest)));
+                    }
+                    // Non-Str elem types: simple list_get into typed dest.
+                    let dest = self.declare_local("_idxget".to_string(), elem_ty, e.span, false);
+                    let cur = self.current_block_id();
+                    let next = self.start_new_block();
+                    self.cur_block = Some(cur.0 as usize);
+                    self.terminate(Terminator::Call {
+                        func: Operand::Constant(Constant::Str("__cobrust_list_get".to_string())),
+                        args: vec![base_op, idx_op],
+                        destination: Place::local(dest),
+                        target: next,
+                        unwind: None,
+                    });
+                    self.cur_block = Some(next.0 as usize);
+                    return Ok(Operand::Copy(Place::local(dest)));
+                }
                 let base_op = self.lower_expr(base)?;
                 let base_local =
                     self.declare_local("_idxbase".to_string(), Ty::None, e.span, false);
@@ -1755,21 +1934,105 @@ fn un_to_mir(op: UnaryOp) -> UnOp {
 }
 
 fn is_copy_type(ty: &Ty) -> bool {
+    // ADR-0050c TD-1 closure: Str is non-Copy at the operand-read level —
+    // every `ExprKind::Name` reading a `Ty::Str` local produces
+    // `Operand::Move(s)`, transferring ownership at MIR time.
+    //
+    // List is treated as Copy at the OPERAND level (so existing PRELUDE
+    // helpers like `list_set(xs, i, v)` + `list_len(xs)` continue to
+    // pass `xs` by shared-reference) but as non-Copy at the DROP level
+    // (so the drop pass enumerates list-typed locals as drop-eligible
+    // and the codegen `Terminator::Drop` arm calls
+    // `__cobrust_list_drop_elems` for `list[str]`). This split mirrors
+    // Rust's `Copy` vs `Drop` separation: a type can be `!Copy` (must
+    // be moved or borrowed) AND `Drop` (frees resources), but here we
+    // weaken the operand-level discipline for List so that read-only
+    // borrow patterns work without explicit `&` syntax (which Cobrust
+    // does not yet surface). Phase G consolidation will introduce
+    // explicit borrow forms and bring List to the same operand-level
+    // non-Copy semantics Str has today.
+    //
+    // f3ls22 (use-after-move on `list[str]`) is documented as
+    // honest-debt under this split — the language detects use-after-
+    // move on Str but not on List at Phase F.3.
     matches!(
         ty,
-        // ADR-0044 W2 Phase 3: Str and List are treated as Copy for
-        // source-level ergonomics — runtime Drop is a no-op jump (no
-        // __cobrust_str_drop / __cobrust_list_drop calls are emitted), so
-        // aliasing is safe for the short-lived LeetCode program lifetime.
-        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never | Ty::Str | Ty::List(_)
+        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never | Ty::List(_)
     )
 }
 
-fn synth_expr_ty(_b: &BodyBuilder<'_>, _e: &Expr) -> Ty {
-    // M8 conservative: tuple element types default to None for the
-    // builder; the type checker has already verified element typing,
-    // so codegen will rely on the actual operand types when needed.
-    Ty::None
+/// ADR-0050c Phase 2 cascade fix: upgrade `Operand::Copy(p)` to
+/// `Operand::Move(p)` when `p`'s local has a drop-eligible declared type
+/// (i.e., the type would be enumerated by `drop::is_copy` as non-Copy).
+///
+/// This is called only from the `StmtKind::Return` lowering, where the
+/// operand IS the function return value. Forcing a Move here:
+///
+/// 1. Marks the local as moved-out in the drop pass's `moved_out_per_block`,
+///    so the local is excluded from the auto-inserted Drop chain on the
+///    predecessor edge of the ret_block.
+/// 2. Matches Rust's return-value-move (NRVO-friendly) semantics: the local
+///    is consumed by the return; the caller owns the dropped value.
+///
+/// This preserves correctness regardless of the `is_copy_type` walk-back
+/// for List (Phase 2a) — the walk-back keeps fn-arg patterns
+/// (`list_set(xs, i, v)` reads `xs` as shared-borrow) working without
+/// regressing return-value ownership transfer.
+fn upgrade_return_to_move(b: &BodyBuilder<'_>, op: Operand) -> Operand {
+    if let Operand::Copy(ref p) = op {
+        if let Some(decl) = b.locals.get(p.local.0 as usize) {
+            // Same drop-eligibility predicate as `drop::is_copy`:
+            // every type NOT in the Copy set is drop-eligible.
+            let is_drop_eligible = !matches!(
+                &decl.ty,
+                Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never
+            );
+            if is_drop_eligible {
+                return Operand::Move(p.clone());
+            }
+        }
+    }
+    op
+}
+
+fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
+    // ADR-0050c Phase 2 — TD-1 closure. We need the element type at
+    // Aggregate(List) MIR build time so the codegen `Terminator::Drop`
+    // arm can dispatch correctly (list[str] → __cobrust_list_drop_elems
+    // with __cobrust_str_drop). The type checker has already validated
+    // the element typing; here we synthesise the surface form.
+    //
+    // Coverage: this synth-time inference handles the cases the Phase F.3
+    // corpus exercises (literals, name references, indexing, calls into
+    // PRELUDE-stub fns). Unknown shapes still fall through to `Ty::None`
+    // (matches the M8 conservative default; codegen treats this as
+    // "non-Copy but un-droppable", a safe no-op leak — same as today
+    // for unrecognised cases).
+    match &e.kind {
+        ExprKind::Lit(Lit::Bool(_)) => Ty::Bool,
+        ExprKind::Lit(Lit::Int(_)) => Ty::Int,
+        ExprKind::Lit(Lit::Float(_)) => Ty::Float,
+        ExprKind::Lit(Lit::Imag(_)) => Ty::Imag,
+        ExprKind::Lit(Lit::Str(_)) => Ty::Str,
+        ExprKind::Lit(Lit::None) => Ty::None,
+        ExprKind::Lit(Lit::Bytes(_)) => Ty::Bytes,
+        ExprKind::Format(_) => Ty::Str,
+        ExprKind::Name(rn) => b.ctx.lookup_ty(rn.def_id),
+        ExprKind::List(items) => {
+            let elem_ty = items.first().map_or(Ty::None, |it| synth_expr_ty(b, it));
+            Ty::List(Box::new(elem_ty))
+        }
+        ExprKind::Index { base, .. } => {
+            // For `xs[i]`, the result is the element type of xs.
+            match synth_expr_ty(b, base) {
+                Ty::List(elem) => *elem,
+                Ty::Dict(_, v) => *v,
+                Ty::Str => Ty::Str,
+                other => other,
+            }
+        }
+        _ => Ty::None,
+    }
 }
 
 // Mark CastKind / NullaryOp as used to satisfy `dead_code`-on-strict

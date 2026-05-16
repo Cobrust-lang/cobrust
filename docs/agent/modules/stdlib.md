@@ -648,5 +648,16 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
 - ADR-0025 — M11 design (this milestone).
 - `adr:0050` §A1 — M-F.3.3 f64 gap table.
 - ADR-0028 — M13 structured-concurrency runtime.
+- `adr:0050c` — M-F.3.2 Str ownership + list[str] drop schedule
+  (new shims `__cobrust_str_clone` / `__cobrust_list_drop_elems` /
+  `__cobrust_list_is_empty`).
 - `finding:m13-sync-bridge-cost` — empirical perf finding +
   budget amendment justification (0.7× → 0.3×).
+
+## ADR-0050c M-F.3.2 — new C-ABI shims
+
+| Symbol | Definition | Purpose |
+|---|---|---|
+| `__cobrust_str_clone(buf: *mut u8) -> *mut u8` | `stdlib/fmt.rs` — allocates a fresh `StringBuffer`, copies the bytes from the source buffer, returns the new pointer. NULL input returns NULL. | Explicit Str clone path for ADR-0050c Phase 4. Used by for-loop body, index-expression, and Aggregate(List) lowering when a Str-typed operand needs a fresh owning copy. |
+| `__cobrust_list_drop_elems(list: *mut u8, elem_drop_fn: extern "C" fn(*mut u8))` | `stdlib/collections.rs:548-589` — walks the list's i64 slots, casts each non-zero slot to `*mut u8`, calls `elem_drop_fn(slot)`, then `__cobrust_list_drop(list)`. NULL list is a no-op. | Per-element drop dispatch for `Ty::List(Ty::Str)`. Codegen passes `__cobrust_str_drop` as the elem_drop_fn (materialised via `func_addr`). |
+| `__cobrust_list_is_empty(list: *mut u8) -> i64` | `stdlib/collections.rs:594-605` — returns 1 if `len == 0`, 0 otherwise. NULL is treated as empty. | §2.2-mandated emptiness predicate; the `if xs:` implicit-truthiness ban requires this for the `if list_is_empty(xs):` canonical pattern. |
