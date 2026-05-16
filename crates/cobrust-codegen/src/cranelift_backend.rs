@@ -1444,19 +1444,50 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
         if let Some(set_fr) = self.runtime_funcs.get("__cobrust_list_set").copied() {
             for (i, op) in operands.iter().enumerate() {
                 let idx_v = self.builder.ins().iconst(ir::types::I64, i as i64);
-                // ADR-0050c Phase 2 — TD-1 closure: when a list element
-                // is a `Constant::Str(payload)`, materialise it as a
-                // heap-allocated `__cobrust_str_new` + `_push_static`
-                // buffer rather than the default 0 i64 from
-                // `lower_constant`. The list slot then stores the heap
-                // pointer (matching the `__cobrust_argv` slot
-                // convention at `stdlib/env.rs:64`), and the
-                // `Terminator::Drop` arm's `__cobrust_list_drop_elems`
-                // dispatch frees each Str + the container.
+                // ADR-0050c Phase 2 + Phase 4 — TD-1 closure.
+                //
+                // Three cases for list-element materialisation:
+                //
+                // 1. `Constant::Str(payload)` literal → call
+                //    `__cobrust_str_new` + `__cobrust_str_push_static`
+                //    so each slot owns a fresh heap buffer.
+                //
+                // 2. Non-literal Str-typed operand (`Move(tag)` or
+                //    `Copy(tag)` where tag: Ty::Str) → clone the
+                //    pointer via `__cobrust_str_clone` so the slot
+                //    owns a fresh copy and the source local stays
+                //    valid for any subsequent uses (including more
+                //    list slots in the same literal — `[tag, tag, tag]`
+                //    becomes three independent allocations).
+                //
+                // 3. Anything else (Int / Bool / list-of-list pointer)
+                //    → `lower_operand` direct (i64 by value).
                 let val = if let Operand::Constant(Constant::Str(payload)) = op {
                     self.materialize_str_buffer(payload)?
                 } else {
-                    self.lower_operand(op)?
+                    // Check if the operand is a Str-typed place read.
+                    let is_str_operand = match op {
+                        Operand::Copy(p) | Operand::Move(p) => self
+                            .body
+                            .locals
+                            .get(p.local.0 as usize)
+                            .map(|l| matches!(l.ty, Ty::Str))
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    if is_str_operand {
+                        let raw = self.lower_operand(op)?;
+                        if let Some(clone_fr) =
+                            self.runtime_funcs.get("__cobrust_str_clone").copied()
+                        {
+                            let inst = self.builder.ins().call(clone_fr, &[raw]);
+                            self.builder.inst_results(inst)[0]
+                        } else {
+                            raw
+                        }
+                    } else {
+                        self.lower_operand(op)?
+                    }
                 };
                 let val_i64 = coerce_to_i64(self.builder, val);
                 self.builder.ins().call(set_fr, &[alloc, idx_v, val_i64]);

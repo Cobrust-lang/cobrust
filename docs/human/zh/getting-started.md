@@ -81,6 +81,55 @@ Phase F.3 提供两参数形式 `range(start, stop)`。三参数 `range(start, s
 可运行示例见 [examples/for_range.cb](../../../examples/for_range.cb)
 与 [examples/for_list.cb](../../../examples/for_list.cb)。
 
+## 第 2.6 步：list[str] 与 Str 所有权（M-F.3.2）
+
+Cobrust 现在端到端支持 `list[str]`,且遵循 ADR-0050c 规定的 Rust 风格
+所有权调度。根据宪法 §2.3,每个 Str 都是拥有式值(`list[str]` 的槽位
+拥有其元素);编译器在作用域退出时自动 drop,镜像 Rust 的 `String`。
+
+```cobrust
+fn main() -> i64:
+    # 字面量 list[str] —— 每个元素都在堆上分配。
+    let xs: list[str] = ["alpha", "beta", "gamma"]
+    for s in xs:
+        print(s)                       # alpha beta gamma
+    # xs 在此 drop:每个 Str 槽位释放,然后释放列表容器。
+
+    # `list_is_empty` 是 §2.2 强制的空判定函数
+    # (`if xs:` 作为隐式真值判断会被拒绝)。
+    let empty: list[str] = []
+    if list_is_empty(empty):
+        print("empty branch")
+    else:
+        print("non-empty branch")     # 不会执行
+
+    return 0
+```
+
+M-F.3.2 的变化:
+- 在 MIR drop pass 中,`Ty::Str` 和 `Ty::List(_)` 不再是 Copy
+  (ADR-0050c §"Phase 1")。Codegen 在每个可达的作用域退出处
+  emit `__cobrust_str_drop`(针对 Str 槽位)和
+  `__cobrust_list_drop_elems`(针对 `list[str]`)。
+- `list_len` / `list_get` / `list_set` / `list_new` / `list_is_empty`
+  这些内置函数是行多态的 —— 它们接受任意元素类型的 `list[T]`,
+  而不仅仅是 `list[i64]`。
+- `for s in xs:` 遍历 `list[str]` 时,每个槽位都会克隆到循环变量
+  (`__cobrust_str_clone`),因此循环变量拥有自己的副本;槽位的所有权
+  仍然属于 `xs`。
+
+编译期拒绝(根据 ADR-0050c "Decision"):
+- 对 Str 类型局部变量的 use-after-move(`let a = s; let b = s` 需要
+  显式克隆 —— Phase G 会引入 `clone(s)` 内建函数)。
+
+已知 honest-debt(根据 Phase 2a walk-back):
+- `list[T]` 在 operand 层面仍然是 Copy,所以将 `list[str]` 按值传给
+  某个函数后,该 list 的后续使用并不会被拒绝;双重使用今天是被允许的,
+  Phase G 引入显式借用语法时会关闭这个缝隙。
+
+端到端 corpus 见 `crates/cobrust-cli/tests/list_str_e2e.rs`,
+C-ABI 链接期测试见 `crates/cobrust-stdlib/tests/list_str_drop_corpus.rs`。
+
 ## 第三步：试用 AI alpha 能力（可选）
 
 1. 复制 router 示例配置，并填入你的 provider 凭据：
