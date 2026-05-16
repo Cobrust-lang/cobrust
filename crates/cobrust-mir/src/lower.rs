@@ -541,6 +541,48 @@ impl<'a> BodyBuilder<'a> {
 
     fn lower_assign(&mut self, target: &Expr, value: &Expr, span: Span) -> Result<(), MirError> {
         self.ensure_open_block();
+        // ADR-0050d sub-sprint c — Dict index-assign `d[k] = v`.
+        //
+        // Source-level `d[k] = v` on `d: Dict[K, V]` lowers to:
+        //   __cobrust_dict_set_K_V(d, k, v)
+        //
+        // Without this dispatch, `lower_lvalue` would emit a
+        // `Place::Index` projection which is a no-op at codegen for
+        // dict-shaped bases (Cranelift can't write into a hashmap
+        // slot directly).
+        if let ExprKind::Index { base, index } = &target.kind {
+            let base_ty = synth_expr_ty(self, base);
+            if let Ty::Dict(k_ty, v_ty) = &base_ty {
+                let key_is_str = matches!(**k_ty, Ty::Str);
+                let val_is_str = matches!(**v_ty, Ty::Str);
+                let set_symbol = match (key_is_str, val_is_str) {
+                    (true, true) => "__cobrust_dict_set_str_str",
+                    (true, false) => "__cobrust_dict_set_str_i64",
+                    (false, true) => "__cobrust_dict_set_i64_str",
+                    (false, false) => "__cobrust_dict_set_i64_i64",
+                };
+                let base_op = self.lower_expr(base)?;
+                let key_op = self.lower_index(index)?;
+                let val_op = self.lower_expr(value)?;
+                // Set returns no value (signature has None return); we
+                // sink the discard into a junk i64 dest. The
+                // `Terminator::Call` ABI always carries a destination,
+                // so we make a one-off scratch local.
+                let scratch = self.declare_local("_dsetret".to_string(), Ty::None, span, false);
+                let cur = self.current_block_id();
+                let next = self.start_new_block();
+                self.cur_block = Some(cur.0 as usize);
+                self.terminate(Terminator::Call {
+                    func: Operand::Constant(Constant::Str(set_symbol.to_string())),
+                    args: vec![base_op, key_op, val_op],
+                    destination: Place::local(scratch),
+                    target: next,
+                    unwind: None,
+                });
+                self.cur_block = Some(next.0 as usize);
+                return Ok(());
+            }
+        }
         let value_op = self.lower_expr(value)?;
         let target_place = self.lower_lvalue(target)?;
         self.emit_assign(target_place, Rvalue::Use(value_op), span);
@@ -1258,6 +1300,22 @@ impl<'a> BodyBuilder<'a> {
                 Ok(Operand::Move(Place::local(temp)))
             }
             ExprKind::Dict(entries) => {
+                // ADR-0050d sub-sprint c — synthesize K/V types from the
+                // first Pair entry so codegen's `lower_aggregate_dict`
+                // can dispatch to typed `__cobrust_dict_set_K_V`. Same
+                // pattern as the List arm's `synth_expr_ty(items[0])`.
+                // For empty `{}` we fall back to (Ty::None, Ty::None);
+                // the codegen treats this as the (i64, i64) shape (the
+                // legacy `K_TAG_I64`/`V_TAG_I64` defaults).
+                let (k_ty, v_ty) = entries
+                    .iter()
+                    .find_map(|entry| match entry {
+                        DictEntry::Pair(k, v) => {
+                            Some((synth_expr_ty(self, k), synth_expr_ty(self, v)))
+                        }
+                        DictEntry::Spread(_) => None,
+                    })
+                    .unwrap_or((Ty::None, Ty::None));
                 let mut ops = Vec::new();
                 for entry in entries {
                     match entry {
@@ -1273,7 +1331,7 @@ impl<'a> BodyBuilder<'a> {
                 }
                 let temp = self.declare_local(
                     "_dict".to_string(),
-                    Ty::Dict(Box::new(Ty::None), Box::new(Ty::None)),
+                    Ty::Dict(Box::new(k_ty), Box::new(v_ty)),
                     e.span,
                     false,
                 );
@@ -1337,6 +1395,47 @@ impl<'a> BodyBuilder<'a> {
                 // str). For now we only special-case `Ty::List(_)`; tuple
                 // / dict are out of ADR-0050c scope.
                 let base_ty = synth_expr_ty(self, base);
+                // ADR-0050d sub-sprint c — Dict index read.
+                //
+                // Source-level `d[k]` on `d: Dict[K, V]` lowers to:
+                //   __cobrust_dict_get_K_V(d, k) -> V
+                //
+                // The codegen-side `runtime_funcs` table already imports
+                // these symbols (per Phase 3+4 wiring). For Str values,
+                // the runtime returns a fresh `*mut u8` buffer (caller-
+                // owned via the drop schedule). For i64 values, the
+                // sentinel-on-missing is 0 (Decision 2A documents this
+                // as the panic-on-missing path; an explicit abort
+                // helper is sub-sprint c's stretch goal).
+                if let Ty::Dict(k_ty, v_ty) = &base_ty {
+                    let key_is_str = matches!(**k_ty, Ty::Str);
+                    let val_is_str = matches!(**v_ty, Ty::Str);
+                    let get_symbol = match (key_is_str, val_is_str) {
+                        (true, true) => "__cobrust_dict_get_str_str",
+                        (true, false) => "__cobrust_dict_get_str_i64",
+                        (false, true) => "__cobrust_dict_get_i64_str",
+                        (false, false) => "__cobrust_dict_get_i64_i64",
+                    };
+                    let base_op = self.lower_expr(base)?;
+                    let key_op = self.lower_index(index)?;
+                    let dest_ty = (**v_ty).clone();
+                    let dest = self.declare_local("_didxget".to_string(), dest_ty, e.span, false);
+                    let cur = self.current_block_id();
+                    let next = self.start_new_block();
+                    self.cur_block = Some(cur.0 as usize);
+                    self.terminate(Terminator::Call {
+                        func: Operand::Constant(Constant::Str(get_symbol.to_string())),
+                        args: vec![base_op, key_op],
+                        destination: Place::local(dest),
+                        target: next,
+                        unwind: None,
+                    });
+                    self.cur_block = Some(next.0 as usize);
+                    if val_is_str {
+                        return Ok(Operand::Move(Place::local(dest)));
+                    }
+                    return Ok(Operand::Copy(Place::local(dest)));
+                }
                 if matches!(base_ty, Ty::List(_)) {
                     let base_op = self.lower_expr(base)?;
                     let idx_op = self.lower_index(index)?;
@@ -1572,6 +1671,61 @@ impl<'a> BodyBuilder<'a> {
         // assigns the unified bool result.
         if matches!(op, HirBinOp::And | HirBinOp::Or) {
             return self.lower_short_circuit_bool(op, lhs, rhs, span);
+        }
+        // ADR-0050d Decision 4A — `key in d` for Dict-typed RHS.
+        //
+        // Lowers `k in d` (where d: Dict[K, _]) to:
+        //   __cobrust_dict_contains_K(d, k) -> i64 (0/1)
+        // Then upcasts the i64 result to bool via a comparison.
+        //
+        // Codegen's `BinOp::In` arm errors out by design (the
+        // language-level In for arbitrary iterables is not yet
+        // implemented at codegen); the Dict-specific intrinsic-rewrite
+        // here short-circuits that error before MIR reaches codegen.
+        if matches!(op, HirBinOp::In | HirBinOp::NotIn) {
+            let rhs_ty = synth_expr_ty(self, rhs);
+            if let Ty::Dict(k_ty, _) = &rhs_ty {
+                let key_is_str = matches!(**k_ty, Ty::Str);
+                let contains_symbol = if key_is_str {
+                    "__cobrust_dict_contains_str"
+                } else {
+                    "__cobrust_dict_contains_i64"
+                };
+                let key_op = self.lower_expr(lhs)?;
+                let dict_op = self.lower_expr(rhs)?;
+                let raw_dest = self.declare_local("_dctn".to_string(), Ty::Int, span, false);
+                let cur = self.current_block_id();
+                let next = self.start_new_block();
+                self.cur_block = Some(cur.0 as usize);
+                self.terminate(Terminator::Call {
+                    func: Operand::Constant(Constant::Str(contains_symbol.to_string())),
+                    args: vec![dict_op, key_op],
+                    destination: Place::local(raw_dest),
+                    target: next,
+                    unwind: None,
+                });
+                self.cur_block = Some(next.0 as usize);
+                // The raw i64 0/1 result is the bool value the
+                // SwitchInt expects (per `__cobrust_dict_is_empty`
+                // precedent — bool ABI = i64 0/1 lower-bit). Wrap as a
+                // bool by comparing != 0 (NotIn inverts via Eq 0).
+                let cmp_op = if matches!(op, HirBinOp::NotIn) {
+                    BinOp::Eq
+                } else {
+                    BinOp::NotEq
+                };
+                let bool_dest = self.declare_local("_dctnb".to_string(), Ty::Bool, span, false);
+                self.emit_assign(
+                    Place::local(bool_dest),
+                    Rvalue::BinaryOp(
+                        cmp_op,
+                        Operand::Copy(Place::local(raw_dest)),
+                        Operand::Constant(Constant::Int(0)),
+                    ),
+                    span,
+                );
+                return Ok(Operand::Copy(Place::local(bool_dest)));
+            }
         }
         let lhs_op = self.lower_expr(lhs)?;
         let rhs_op = self.lower_expr(rhs)?;
@@ -2012,9 +2166,24 @@ fn is_copy_type(ty: &Ty) -> bool {
     // f3ls22 (use-after-move on `list[str]`) is documented as
     // honest-debt under this split — the language detects use-after-
     // move on Str but not on List at Phase F.3.
+    // ADR-0050d sub-sprint c+d closure — Dict joins List in the
+    // operand-level-Copy walk-back. Without this, `let d: Dict[..] =
+    // {...}; d[1] = 10; d[1]` triggers UseAfterMove on `d` (since the
+    // first `d` read moves the local, leaving the second read invalid).
+    // Same rationale as the List walk-back: dict-typed args / reads
+    // are conceptually a shared borrow at the source surface; the
+    // drop pass still enumerates dict locals as drop-eligible (via
+    // `is_copy` in drop.rs).
     matches!(
         ty,
-        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never | Ty::List(_)
+        Ty::Bool
+            | Ty::Int
+            | Ty::Float
+            | Ty::Imag
+            | Ty::None
+            | Ty::Never
+            | Ty::List(_)
+            | Ty::Dict(_, _)
     )
 }
 

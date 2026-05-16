@@ -72,6 +72,12 @@ hex = "0.4"
 semver = "1"
 flate2 = "1"
 tar = "0.4"
+# ADR-0050d Decision 6A — Wave 3 sub-sprint d Dict storage backing.
+# `indexmap::IndexMap` provides Python-3.7+ insertion-order iteration
+# (`for k in d:` / `d.items()` / `d.keys()` / `d.values()` preserve insert
+# order). Dep audit: depends only on `equivalent` (MIT/Apache-2.0) and
+# `hashbrown` (transitively, already a common dep).
+indexmap = "2"
 # M-AI.0: cobrust-stdlib consumes the router via the optional llm-router feature.
 cobrust-llm-router = { path = "crates/cobrust-llm-router" }
 
