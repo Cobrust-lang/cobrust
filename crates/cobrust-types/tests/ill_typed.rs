@@ -1281,3 +1281,325 @@ fn i104_list_is_empty_no_args_rejected() {
         Cat::ArityMismatch,
     );
 }
+
+// ============================================================
+// Tier B — Dict ill-typed corpus
+// (ADR-0050d sub-sprint a parser/AST/HIR/types surface lock).
+//
+// Each rejection targets a constitution-§2.2 invariant or an
+// ADR-0050d Decision constraint that the type checker (post
+// sub-sprint b amendments) MUST surface as a `TypeError::*`
+// variant. Some rejections already work pre-impl (TypeMismatch
+// is shipped); the NotHashable + DictSpreadNotSupported variants
+// are explicitly net-new sub-sprint b additions and the tests
+// here SHOULD fail pre-impl, then turn green when DEV ships the
+// type-checker amendments.
+//
+// Test name pattern: `iNNN_dict_<rejection-scenario>`.
+//
+// Pre-impl status legend (also in the dispatch report):
+//   PASS = test passes against current scaffolding (TypeMismatch
+//          / ImplicitTruthiness / MutableDefault / etc. already
+//          wired); DEV must NOT regress.
+//   FAIL = test correctly fails pre-impl; surfaces the gap DEV
+//          closes via sub-sprint b new TypeError variant or
+//          new check.rs amendment.
+// ============================================================
+
+// Cat extension for sub-sprint b net-new TypeError variants.
+//
+// These categories MUST appear in the `Cat` enum at the top of
+// this file once DEV's sub-sprint b adds the corresponding
+// TypeError variants. Pre-impl, the tests using these categories
+// stay marked with `#[ignore]` so the gate passes against the
+// current scaffolding while still documenting the expected
+// rejection category.
+//
+// When DEV lands `TypeError::NotHashable { actual: Ty, span: Span }`
+// and `TypeError::DictSpreadNotSupported { span: Span }` (per
+// ADR-0050d §"Type-checker amendments" 1 + 2), the test author
+// adds the matching `Cat::NotHashable` / `Cat::DictSpreadNotSupported`
+// variants to the enum + `matches_cat` switch, removes the
+// `#[ignore]` attrs, and the suite turns green.
+
+// ---- Tier B.1: mixed key types — TypeMismatch (PRE-IMPL: PASS) ----
+
+#[test]
+fn i105_dict_mixed_key_str_then_i64_rejected() {
+    // `{"a": 1, 2: 3}` — first entry seeds K=str (check.rs:651-657),
+    // second entry's key `2: i64` unifies vs str → TypeMismatch.
+    must_reject(
+        "dict-mixed-keys-str-then-i64",
+        "fn f() -> Dict[str, i64]:\n    return {\"a\": 1, 2: 3}\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i106_dict_mixed_key_i64_then_str_rejected() {
+    // Reverse order: i64 seeded first, str key second.
+    must_reject(
+        "dict-mixed-keys-i64-then-str",
+        "fn f() -> Dict[i64, i64]:\n    return {1: 1, \"a\": 2}\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Tier B.2: mixed value types — TypeMismatch (PRE-IMPL: PASS) ----
+
+#[test]
+fn i107_dict_mixed_value_str_then_i64_rejected() {
+    // First entry seeds V=str; second entry's value i64 unifies vs str.
+    // Mirrors existing i14_dict_mixed_value pattern.
+    must_reject(
+        "dict-mixed-values-str-then-i64",
+        "fn f() -> Dict[str, str]:\n    return {\"a\": \"x\", \"b\": 2}\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i108_dict_homogeneous_str_keys_mixed_values_rejected() {
+    // All str keys; values: i64, str, i64 — TypeMismatch on second entry.
+    must_reject(
+        "dict-str-keys-mixed-values",
+        "fn f() -> Dict[str, i64]:\n    return {\"a\": 1, \"b\": \"x\", \"c\": 3}\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Tier B.3: index with wrong key type — TypeMismatch (PRE-IMPL: PASS) ----
+
+#[test]
+fn i109_dict_index_i64_into_str_keyed_rejected() {
+    // `d[1]` where `d: Dict[str, i64]` — i64 key unifies vs str → TM.
+    // Already lockable; mirrors existing i26_dict_index_wrong_key.
+    must_reject(
+        "dict-index-i64-into-str-keyed",
+        "fn f(d: Dict[str, i64]) -> i64:\n    return d[1]\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i110_dict_index_str_into_i64_keyed_rejected() {
+    // `d["a"]` where `d: Dict[i64, i64]` — str vs i64 → TypeMismatch.
+    must_reject(
+        "dict-index-str-into-i64-keyed",
+        "fn f(d: Dict[i64, i64]) -> i64:\n    return d[\"a\"]\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i111_dict_index_bool_into_str_keyed_rejected() {
+    // `d[True]` where `d: Dict[str, i64]` — bool vs str → TM.
+    must_reject(
+        "dict-index-bool-into-str-keyed",
+        "fn f(d: Dict[str, i64]) -> i64:\n    return d[True]\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Tier B.4: `d[k] = v` write with wrong V type — TypeMismatch
+//                (PRE-IMPL: may FAIL — sub-sprint c wires LHS-index
+//                 assignment unification at check.rs)              ----
+
+#[test]
+fn i112_dict_index_assign_wrong_value_type_rejected() {
+    // `d["a"] = "x"` where `d: Dict[str, i64]` — V=i64 vs "x":str → TM.
+    must_reject(
+        "dict-assign-wrong-value-type",
+        "fn f() -> i64:\n    let d: Dict[str, i64] = {\"a\": 1}\n    d[\"a\"] = \"x\"\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i113_dict_index_assign_wrong_key_type_rejected() {
+    // `d[1] = 2` where `d: Dict[str, i64]` — K=str vs 1:i64 → TM.
+    must_reject(
+        "dict-assign-wrong-key-type",
+        "fn f() -> i64:\n    let d: Dict[str, i64] = {\"a\": 1}\n    d[1] = 2\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Tier B.5: implicit truthiness `if d:` — ImplicitTruthiness
+//                (PRE-IMPL: PASS — already wired)                  ----
+
+#[test]
+fn i114_dict_in_if_predicate_rejected_truthiness() {
+    // `if d:` where d: Dict[str, i64] — constitution §2.2 forbids;
+    // user must call `dict_is_empty_si(d)` or `len(d) > 0`. Already
+    // wired at i50 (negative duplicate); this entry locks the lookalike
+    // shape inside a fn body for sub-sprint a's surface coverage.
+    must_reject(
+        "dict-if-truthiness-rejected",
+        "fn f(d: Dict[str, i64]) -> i64:\n    if d:\n        return 1\n    return 0\n",
+        Cat::ImplicitTruthiness,
+    );
+}
+
+#[test]
+fn i115_dict_in_while_predicate_rejected_truthiness() {
+    // `while d:` — same rejection class.
+    must_reject(
+        "dict-while-truthiness-rejected",
+        "fn f(d: Dict[str, i64]) -> i64:\n    while d:\n        return 1\n    return 0\n",
+        Cat::ImplicitTruthiness,
+    );
+}
+
+// ---- Tier B.6: mutable default arg with dict — MutableDefault
+//                (PRE-IMPL: PASS — already wired for `= {}`)       ----
+
+#[test]
+fn i116_dict_mutable_default_empty_rejected() {
+    // `fn f(d: Dict[str, i64] = {}) -> i64:` — constitution §2.2.
+    // At HEAD the parser rejects this earlier as `NonLiteralDefault`
+    // (since `{}` is `Expr::Dict`, not a `Lit`). Either rejection
+    // path is acceptable; mirrors i101's list-str mutable-default lock.
+    must_reject_with_parse_ok(
+        "dict-mutable-default-empty",
+        "fn f(d: Dict[str, i64] = {}) -> i64:\n    return 0\nfn main() -> i64:\n    return f({\"a\": 1})\n",
+        Cat::MutableDefault,
+    );
+}
+
+#[test]
+fn i117_dict_mutable_default_nonempty_rejected() {
+    // `fn f(d: Dict[str, i64] = {\"a\": 1}) -> i64:` — same constitution
+    // §2.2 invariant on a non-empty literal.
+    must_reject_with_parse_ok(
+        "dict-mutable-default-nonempty",
+        "fn f(d: Dict[str, i64] = {\"a\": 1}) -> i64:\n    return 0\nfn main() -> i64:\n    return f({})\n",
+        Cat::MutableDefault,
+    );
+}
+
+// ---- Tier B.7: f64-keyed dict — NotHashable
+//                (PRE-IMPL: FAIL — sub-sprint b net-new variant)   ----
+
+// NotHashable is a Cat addition that DEV's sub-sprint b lands per
+// ADR-0050d §"Type-checker amendments" item 1. Pre-impl, the test
+// is `#[ignore]` so the suite stays green; once DEV adds
+// `TypeError::NotHashable { actual: Ty::Float, span }` + the
+// `Cat::NotHashable` enum variant + `matches_cat` row, removing the
+// `#[ignore]` re-engages the test and it must turn green.
+
+#[test]
+#[ignore = "sub-sprint b lands TypeError::NotHashable; turn green when DEV adds Cat::NotHashable"]
+fn i118_dict_f64_key_literal_rejected_not_hashable() {
+    // `Dict[f64, i64] = {1.0: 1}` — NaN != NaN breaks Hash invariants;
+    // constitution §2.2 "no silent coercion" rejects via NotHashable.
+    // Pre-impl the type checker accepts (no NotHashable variant); DEV
+    // sub-sprint b lands the rejection.
+    //
+    // When unmarked, this test category is `Cat::NotHashable` (to add
+    // in the enum + matches_cat). Until then, the helper expects a
+    // category that doesn't exist; the `#[ignore]` keeps the suite
+    // green; the surface gap is documented for DEV.
+    must_reject(
+        "dict-f64-key-rejected-not-hashable",
+        "fn f() -> Dict[f64, i64]:\n    return {1.0: 1}\n",
+        Cat::TypeMismatch, // placeholder; replace with Cat::NotHashable post-DEV
+    );
+}
+
+#[test]
+#[ignore = "sub-sprint b lands TypeError::NotHashable; turn green when DEV adds Cat::NotHashable"]
+fn i119_dict_f64_key_annot_only_rejected_not_hashable() {
+    // `Dict[f64, i64] = {}` — annotation alone (no entries) should also
+    // surface NotHashable at the annotation-validation site
+    // (`lower_type` → Ty::Dict per ADR-0050d §"Type-checker amendments" 1).
+    must_reject(
+        "dict-f64-annot-only-rejected-not-hashable",
+        "fn f() -> Dict[f64, i64]:\n    let d: Dict[f64, i64] = {}\n    return d\n",
+        Cat::TypeMismatch, // placeholder; replace with Cat::NotHashable post-DEV
+    );
+}
+
+#[test]
+#[ignore = "sub-sprint b lands TypeError::NotHashable; turn green when DEV adds Cat::NotHashable"]
+fn i120_dict_list_key_rejected_not_hashable() {
+    // `Dict[List[i64], i64]` — lists are unhashable (Python tradition
+    // and is_hashable(List) = false per ADR-0050d §"Type-checker
+    // amendments" 2). Pre-impl the type checker accepts; DEV adds the
+    // rejection.
+    must_reject(
+        "dict-list-key-rejected-not-hashable",
+        "fn f() -> Dict[List[i64], i64]:\n    let xs: List[i64] = [1, 2]\n    let d: Dict[List[i64], i64] = {xs: 1}\n    return d\n",
+        Cat::TypeMismatch, // placeholder; replace with Cat::NotHashable post-DEV
+    );
+}
+
+// ---- Tier B.8: dict-spread in non-comprehension literal —
+//      DictSpreadNotSupported (PRE-IMPL: FAIL — sub-sprint b
+//      net-new variant per ADR-0050d §"Parser amendments" 1)      ----
+
+#[test]
+#[ignore = "sub-sprint b lands TypeError::DictSpreadNotSupported; turn green when DEV adds Cat::DictSpreadNotSupported"]
+fn i121_dict_spread_in_literal_rejected() {
+    // `{**other}` in a non-comprehension dict literal — Phase F.3 rejects
+    // (dict-merge is Phase G per ADR-0050d Decision 1 footnote). Parser
+    // already emits `DictEntry::Spread`; type-checker amendment surfaces
+    // the rejection.
+    must_reject(
+        "dict-spread-in-literal-rejected",
+        "fn f() -> Dict[str, i64]:\n    let other: Dict[str, i64] = {\"a\": 1}\n    return {**other}\n",
+        Cat::TypeMismatch, // placeholder; replace with Cat::DictSpreadNotSupported post-DEV
+    );
+}
+
+#[test]
+#[ignore = "sub-sprint b lands TypeError::DictSpreadNotSupported; turn green when DEV adds Cat::DictSpreadNotSupported"]
+fn i122_dict_spread_mixed_with_entries_rejected() {
+    // `{"x": 1, **other}` — same rejection; mixed-mode literal.
+    must_reject(
+        "dict-spread-mixed-rejected",
+        "fn f() -> Dict[str, i64]:\n    let other: Dict[str, i64] = {\"a\": 1}\n    return {\"x\": 1, **other}\n",
+        Cat::TypeMismatch, // placeholder; replace with Cat::DictSpreadNotSupported post-DEV
+    );
+}
+
+// ---- Tier B.9: indexing into a non-dict / non-list — NotIndexable
+//                (PRE-IMPL: PASS — already wired)                  ----
+
+#[test]
+fn i123_dict_index_into_i64_rejected_not_indexable() {
+    // `n["a"]` where n: i64 — i64 is not indexable.
+    must_reject(
+        "dict-index-into-i64",
+        "fn f(n: i64) -> i64:\n    return n[\"a\"]\n",
+        Cat::NotIndexable,
+    );
+}
+
+#[test]
+fn i124_dict_index_into_bool_rejected_not_indexable() {
+    // `b["a"]` where b: bool — bool is not indexable.
+    must_reject(
+        "dict-index-into-bool",
+        "fn f(b: bool) -> i64:\n    return b[\"a\"]\n",
+        Cat::NotIndexable,
+    );
+}
+
+// ---- Tier B.10: empty literal in ambiguous-K context — AmbiguousType
+//                 (PRE-IMPL: may PASS or FAIL depending on whether
+//                  the empty-dict synth narrows K with later uses) ----
+
+#[test]
+#[ignore = "sub-sprint b ratifies whether empty-dict in non-annotated context is Ambiguous or fresh-K; DEV decides"]
+fn i125_dict_empty_no_annot_ambiguous_or_inferred() {
+    // `let d = {}` with no subsequent use that pins K/V — type checker
+    // should either pin via later use (current behavior?) or raise
+    // AmbiguousType. This test captures the decision-point; sub-sprint b
+    // ratifies which behavior is correct.
+    must_reject(
+        "dict-empty-no-annot-no-use",
+        "fn f() -> i64:\n    let d = {}\n    return 0\n",
+        Cat::AmbiguousType,
+    );
+}
