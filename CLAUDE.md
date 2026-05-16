@@ -64,6 +64,28 @@ Ownership, borrowing, traits, `Result<T, E>` / `Option<T>`, exhaustive pattern m
 - **Translation provenance**: every translated module carries a manifest (source library, version, oracle artifacts, verification seeds, known divergences). No silent translations, ever.
 - **Deterministic build IDs**: hash of source + toolchain + LLM router decisions, so any translation is reproducible bit-for-bit given the same inputs.
 
+### 2.5 LLM-first design principle (constitutional north star — added 2026-05-16 per ADR-0051)
+
+**Cobrust is not the language most pleasant for humans to write — it is the language LLM agents write correctly on the first try.**
+
+This sentence binds every design trade-off. When a choice pits "elegance for humans" against "the LLM gets it right ex ante", the latter wins.
+
+Two operational selection rules:
+
+- **Compile-time-catch-errors**: prefer designs that surface bugs at type-check / borrow-check / parse time over designs that defer to runtime. The LLM's compile-error feedback loop is its strongest correction signal. Every `TypeError::*` variant + every `MirError::*` variant is a successful catch.
+- **Maximize-overlap-with-training-data**: prefer syntax + semantics that occur frequently in Python + Rust training corpora. LLMs write correctly when the surface matches their priors.
+
+Four binding priority directions (Phase G+) per ADR-0051:
+
+- **A. Explicit `&` borrow / let-rebind shortcut**: eliminates `clone()` clutter; the LARGEST current LLM-friendliness deficit per LC-100 honest-debt empirical baseline. Phase G P0.
+- **B. F.1.4 Error UX rewrite**: error messages MUST print the FIX, not just the diagnosis. Today: `TypeError::ImplicitTruthiness { actual: Int, span }`. Tomorrow: same + `suggestion: "change to 'if x != 0:'"`. LLM consumes stderr to decide next step.
+- **C. `@py_compat` tier hard-bind to L2 verifier** (ADR-0037 activation): translation pipeline strict/semantic/numerical tier becomes a contract the LLM router can route on.
+- **D. Method-call sugar priority**: `s.split(",")` over `split(s, ",")`. Closer to LLM training data distribution. ADR-0050e Q10 + ADR-0050f Phase G method-form path. Ship as Phase G P0.
+
+Every existing §2.1-§2.4 choice already serves this principle (no GIL = no LLM-confusing concurrency; no implicit truthy/falsy = no `if x` runtime surprise; structural Aggregate::Dict = no `{}`-is-set-or-dict-or-block confusion). §2.5 makes the rationale ex-ante for all future design.
+
+Audit teammates have an explicit compliance check: "did this design respect §2.5's compile-time-catch + training-data-overlap rules?"
+
 ---
 
 ## 3. Documentation Mandate (DUAL TRACK — non-negotiable)
