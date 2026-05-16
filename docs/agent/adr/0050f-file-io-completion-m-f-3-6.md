@@ -4,7 +4,7 @@ adr_id: 0050f
 title: "M-F.3.6 — file-IO completion (read_file_lines / read_file / append_file / stdin_read_all / stdout_write / stderr_write at source level)"
 status: accepted
 date: 2026-05-16
-last_verified_commit: 0ddcd27
+last_verified_commit: c524738
 supersedes: []
 superseded_by: []
 relates_to: [adr:0025, adr:0027, adr:0034, adr:0044, adr:0044a, adr:0049, adr:0050, adr:0050a, adr:0050b, adr:0050c, adr:0050d]
