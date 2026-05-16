@@ -1701,10 +1701,7 @@ fn w153_trim_basic_signature() {
 #[test]
 fn w154_trim_empty_input_well_typed() {
     // `trim("")` — type-check accepts; runtime returns "".
-    must_accept_with_str_stdlib_stubs(
-        "trim-empty",
-        "fn f() -> str:\n    return trim(\"\")\n",
-    );
+    must_accept_with_str_stdlib_stubs("trim-empty", "fn f() -> str:\n    return trim(\"\")\n");
 }
 
 // ---- Tier A.5: find — Str x Str → i64 (with -1 sentinel) ----
