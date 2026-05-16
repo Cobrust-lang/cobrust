@@ -2000,8 +2000,7 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         });
                     }
                     let path = move_to_copy(args[0].clone());
-                    *func =
-                        Operand::Constant(Constant::Str(READ_FILE_RUNTIME_SYMBOL.to_string()));
+                    *func = Operand::Constant(Constant::Str(READ_FILE_RUNTIME_SYMBOL.to_string()));
                     args.clear();
                     args.push(path);
                 }
@@ -2032,8 +2031,7 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     }
                     let path = move_to_copy(args[0].clone());
                     let contents = move_to_copy(args[1].clone());
-                    *func =
-                        Operand::Constant(Constant::Str(WRITE_FILE_RUNTIME_SYMBOL.to_string()));
+                    *func = Operand::Constant(Constant::Str(WRITE_FILE_RUNTIME_SYMBOL.to_string()));
                     args.clear();
                     args.push(path);
                     args.push(contents);
@@ -2063,9 +2061,8 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                             found: format!("stdin_read_all: expected 0 args, got {}", args.len()),
                         });
                     }
-                    *func = Operand::Constant(Constant::Str(
-                        STDIN_READ_ALL_RUNTIME_SYMBOL.to_string(),
-                    ));
+                    *func =
+                        Operand::Constant(Constant::Str(STDIN_READ_ALL_RUNTIME_SYMBOL.to_string()));
                     args.clear();
                 }
                 Kind::StdoutWrite => {

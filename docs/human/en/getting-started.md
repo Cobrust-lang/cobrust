@@ -352,6 +352,111 @@ See `crates/cobrust-cli/tests/dict_e2e.rs` for the end-to-end corpus
 in `crates/cobrust-types/tests/well_typed.rs` w116..w145 for the
 type-checker surface.
 
+## Step 2.10: file IO (M-F.3.6)
+
+Cobrust now ships 7 flat source-level functions for file and stdio IO
+([ADR-0050f](../../agent/adr/0050f-file-io-completion-m-f-3-6.md)).
+
+```cobrust
+fn main() -> i64:
+    # Write a file; returns 0 on success (i64-sentinel Q1).
+    let rc: i64 = write_file("/tmp/hello.txt", "hello, cobrust\n")
+    if rc != 0:
+        return rc
+
+    # Read entire file as a str.
+    let contents: str = read_file("/tmp/hello.txt")
+    let _ = print(contents)           # prints: hello, cobrust
+
+    # Read as list[str] — each line stripped of \n / \r\n (Q2).
+    let lines: list[str] = read_file_lines("/tmp/hello.txt")
+    let n: i64 = list_len(lines)
+    print_int(n)                      # prints: 2 (trailing empty elem)
+
+    # Append to an existing file; creates if absent (Q3).
+    let rc2: i64 = append_file("/tmp/hello.txt", "more text")
+
+    # Read all stdin until EOF.
+    let stdin_data: str = stdin_read_all()
+
+    # Write to stdout WITHOUT trailing newline (differs from print).
+    let rc3: i64 = stdout_write("no newline here")
+
+    # Write to stderr WITHOUT trailing newline; stdout unchanged.
+    let rc4: i64 = stderr_write("error note")
+
+    return 0
+```
+
+### 7 functions at a glance
+
+| Function | Signature | Returns | Notes |
+|---|---|---|---|
+| `read_file` | `(path: str) -> str` | file contents as str | Empty str on I/O error (i64-sentinel Q1). |
+| `read_file_lines` | `(path: str) -> list[str]` | lines stripped of `\n`/`\r\n` | Trailing empty element preserved (Q2): `"a\nb\n"` → `["a","b",""]`. |
+| `write_file` | `(path: str, contents: str) -> i64` | `0` = success, `1` = I/O error | Creates or truncates. Both args consumed (Move). |
+| `append_file` | `(path: str, contents: str) -> i64` | `0` = success, `1` = I/O error | Creates if absent (Q3). Both args consumed. |
+| `stdin_read_all` | `() -> str` | stdin until EOF | Empty str on EOF. |
+| `stdout_write` | `(s: str) -> i64` | `0`/`1` sentinel | No trailing newline; differs from `print`. |
+| `stderr_write` | `(s: str) -> i64` | `0`/`1` sentinel | Goes to stderr only; stdout unchanged. |
+
+### i64-sentinel idiom
+
+`write_file` / `append_file` / `stdout_write` / `stderr_write` return
+`0` on success, non-zero on failure. The pattern:
+
+```cobrust
+let rc: i64 = write_file("/tmp/out.txt", "data")
+if rc != 0:
+    return rc   # propagate error
+```
+
+`read_file` returns an empty `str` on error (no separate sentinel — bare
+str return per Q1). Use `str_len(contents)` to distinguish empty file
+from read failure.
+
+### `read_file_lines` trailing-empty-element rule (Q2)
+
+`read_file_lines(p)` splits on `\n` using `s.split('\n')` semantics —
+NOT Python's `readlines()`. A file ending with `\n` always has a
+trailing empty string element:
+
+```
+"alpha\nbeta\ngamma\n" → ["alpha", "beta", "gamma", ""]  (4 elements)
+"a\nb"                 → ["a", "b"]                       (2 elements)
+""                     → [""]                              (1 element)
+```
+
+Count matches `s.count('\n') + 1` for any file content.
+
+### `print` vs `stdout_write` (ADR-0050f cross-surface table)
+
+| Call | Trailing newline? | i64 return |
+|---|---|---|
+| `print("literal")` | yes | always 0 |
+| `print(s: str)` | yes | always 0 |
+| `print_no_nl(s)` | no | always 0 |
+| `stdout_write(s)` | no | 0 = success, 1 = error |
+| `stderr_write(s)` | no | 0 = success, 1 = error |
+
+`print` / `print_no_nl` are "fire and forget"; `stdout_write` /
+`stderr_write` surface the write result for programs that need to
+detect a closed pipe.
+
+What changed at M-F.3.6:
+- 7 new PRELUDE stubs: `read_file`, `read_file_lines`, `write_file`,
+  `append_file`, `stdin_read_all`, `stdout_write`, `stderr_write`.
+- 7 new C-ABI shims at `crates/cobrust-stdlib/src/io.rs`.
+- 7 new intrinsic-rewrite arms in `crates/cobrust-cli/src/build/intrinsics.rs`.
+- Copy-at-operand discipline for str args (ADR-0050c Phase 2a walk-back
+  precedent): shims READ the Str buffer without freeing; caller scope owns drop.
+- Phase G: method-form sugar `stdin().read_all()` / `stdout().write(s)` deferred
+  until MIR method dispatch lands.
+
+See `crates/cobrust-cli/tests/file_io_e2e.rs` for the end-to-end corpus
+and `crates/cobrust-types/tests/well_typed.rs` w176..w195 for the
+type-checker surface.
+
 ## Step 3: try the AI alpha surfaces (optional)
 
 1. Copy the router example and add your provider credentials:
