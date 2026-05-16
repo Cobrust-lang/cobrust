@@ -853,22 +853,82 @@ impl<'a> BodyBuilder<'a> {
 
                 // Step 6: body — fetch var via __cobrust_list_get, then
                 // lower user body, then bump __idx, then goto header.
+                //
+                // ADR-0050c Phase 4 — clone emission for Str loop var.
+                // For `for s in xs:` where `xs: list[str]`, the slots
+                // are owned by `xs`. If the loop var `s: Ty::Str` got
+                // a raw slot pointer via `__cobrust_list_get` and the
+                // drop pass enumerated `s` as drop-eligible (Str is
+                // non-Copy), then BOTH `s` and `xs`'s slot would call
+                // `__cobrust_str_drop` on the same pointer at scope
+                // exit. Double-free → segfault / abort / hang in
+                // mimalloc's free-list walker.
+                //
+                // Resolution: when the loop-var type is `Ty::Str`,
+                // fetch the raw pointer into a *throwaway i64 temp*
+                // (no drop schedule), then materialise an owned clone
+                // via `__cobrust_str_clone(raw) -> s`. The slot remains
+                // owned by `xs`; the loop var owns its own fresh copy.
                 self.loop_stack.push((header, exit_block));
                 self.cur_block = Some(body_block.0 as usize);
                 if let Some(vl) = var_local {
-                    let after_get = self.start_new_block();
-                    self.cur_block = Some(body_block.0 as usize);
-                    self.terminate(Terminator::Call {
-                        func: Operand::Constant(Constant::Str("__cobrust_list_get".to_string())),
-                        args: vec![
-                            Operand::Copy(Place::local(iter_local)),
-                            Operand::Copy(Place::local(idx_local)),
-                        ],
-                        destination: Place::local(vl),
-                        target: after_get,
-                        unwind: None,
-                    });
-                    self.cur_block = Some(after_get.0 as usize);
+                    let vl_ty = self
+                        .locals
+                        .get(vl.0 as usize)
+                        .map(|d| d.ty.clone())
+                        .unwrap_or(Ty::None);
+                    if matches!(vl_ty, Ty::Str) {
+                        let raw_local = self.declare_local(
+                            "_iter_raw".to_string(),
+                            Ty::Int,
+                            span,
+                            false,
+                        );
+                        // body_block → Call(list_get → raw_local) → after_get
+                        let after_get = self.start_new_block();
+                        self.cur_block = Some(body_block.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_list_get".to_string(),
+                            )),
+                            args: vec![
+                                Operand::Copy(Place::local(iter_local)),
+                                Operand::Copy(Place::local(idx_local)),
+                            ],
+                            destination: Place::local(raw_local),
+                            target: after_get,
+                            unwind: None,
+                        });
+                        // after_get → Call(str_clone(raw) → vl) → after_clone
+                        let after_clone = self.start_new_block();
+                        self.cur_block = Some(after_get.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_str_clone".to_string(),
+                            )),
+                            args: vec![Operand::Copy(Place::local(raw_local))],
+                            destination: Place::local(vl),
+                            target: after_clone,
+                            unwind: None,
+                        });
+                        self.cur_block = Some(after_clone.0 as usize);
+                    } else {
+                        let after_get = self.start_new_block();
+                        self.cur_block = Some(body_block.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_list_get".to_string(),
+                            )),
+                            args: vec![
+                                Operand::Copy(Place::local(iter_local)),
+                                Operand::Copy(Place::local(idx_local)),
+                            ],
+                            destination: Place::local(vl),
+                            target: after_get,
+                            unwind: None,
+                        });
+                        self.cur_block = Some(after_get.0 as usize);
+                    }
                 }
                 self.lower_block(body)?;
                 if !self.terminated() {
@@ -1258,20 +1318,69 @@ impl<'a> BodyBuilder<'a> {
                 if matches!(base_ty, Ty::List(_)) {
                     let base_op = self.lower_expr(base)?;
                     let idx_op = self.lower_index(index)?;
-                    // The slot holds an i64 (either an int payload or a
-                    // heap Str pointer cast to i64 per ADR-0044 W2 Phase 2
-                    // argv() materialisation). Codegen's reinterpret path
-                    // already treats this i64 as a Str pointer when the
-                    // destination's type is Ty::Str. Phase 4 may need to
-                    // emit a __cobrust_str_clone here so the slot's
-                    // original ownership isn't aliased; the M-F.3.2
-                    // corpus tolerates the alias today because argv's
-                    // slots outlive the index expression.
                     let elem_ty = if let Ty::List(elem) = &base_ty {
                         (**elem).clone()
                     } else {
                         Ty::None
                     };
+                    // ADR-0050c Phase 4 — clone emission for Str-indexed
+                    // reads. For `xs[i]` where `xs: list[str]`, the raw
+                    // slot pointer aliases the slot owned by `xs`. The
+                    // drop pass enumerates the destination temp as
+                    // drop-eligible (Str non-Copy), so without cloning
+                    // BOTH the temp and `xs`'s slot would call
+                    // `__cobrust_str_drop` on the same pointer at scope
+                    // exit — double-free.
+                    //
+                    // Resolution: fetch the raw pointer into a throwaway
+                    // i64 temp, then `__cobrust_str_clone` into the typed
+                    // dest. Mirror of the for-loop body fix above.
+                    if matches!(elem_ty, Ty::Str) {
+                        // Step 1: list_get into raw i64 temp.
+                        let raw_dest = self.declare_local(
+                            "_idxraw".to_string(),
+                            Ty::Int,
+                            e.span,
+                            false,
+                        );
+                        let cur = self.current_block_id();
+                        let after_get = self.start_new_block();
+                        self.cur_block = Some(cur.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_list_get".to_string(),
+                            )),
+                            args: vec![base_op, idx_op],
+                            destination: Place::local(raw_dest),
+                            target: after_get,
+                            unwind: None,
+                        });
+                        // Step 2: str_clone(raw) → owned Str dest.
+                        let clone_dest = self.declare_local(
+                            "_idxget".to_string(),
+                            elem_ty,
+                            e.span,
+                            false,
+                        );
+                        let after_clone = self.start_new_block();
+                        self.cur_block = Some(after_get.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_str_clone".to_string(),
+                            )),
+                            args: vec![Operand::Copy(Place::local(raw_dest))],
+                            destination: Place::local(clone_dest),
+                            target: after_clone,
+                            unwind: None,
+                        });
+                        self.cur_block = Some(after_clone.0 as usize);
+                        // Return Move so the operand-consumer takes
+                        // ownership of the freshly-cloned Str (and the
+                        // drop pass excludes clone_dest from the auto-
+                        // drop chain at this scope's return).
+                        return Ok(Operand::Move(Place::local(clone_dest)));
+                    }
+                    // Non-Str elem types: simple list_get into typed dest.
                     let dest = self.declare_local("_idxget".to_string(), elem_ty, e.span, false);
                     let cur = self.current_block_id();
                     let next = self.start_new_block();
@@ -1284,9 +1393,6 @@ impl<'a> BodyBuilder<'a> {
                         unwind: None,
                     });
                     self.cur_block = Some(next.0 as usize);
-                    // Read the dest place. Use Copy since we don't want
-                    // to consume the dest local (it's a synthetic temp
-                    // that flows directly into the consumer).
                     return Ok(Operand::Copy(Place::local(dest)));
                 }
                 let base_op = self.lower_expr(base)?;
