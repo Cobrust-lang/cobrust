@@ -1160,3 +1160,397 @@ fn w115_fstring_contains_list_str_index() {
         "fn f() -> str:\n    let xs: list[str] = [\"alpha\"]\n    let msg: str = f\"first={xs[0]}\"\n    return msg\n",
     );
 }
+
+// ============================================================
+// Tier A — Dict literal + indexing well-typed corpus
+// (ADR-0050d sub-sprint a parser/AST/HIR/types surface lock).
+//
+// Verifies that the existing scaffolding (already 60% on main per
+// ADR-0050d §A2) cleanly accepts the documented surface:
+//   - `Dict[K, V]` annotation
+//   - `{}` empty + `{k:v, ...}` literal
+//   - `d[k]` read
+//   - `key in d` / `key not in d`
+//   - `len(d)` and `dict.is_empty()` (Decision 5 + 5-addendum)
+//   - `for k in d:` / `.keys()` / `.values()` / `.items()` (Decision 6)
+//   - Nested dict: `Dict[K, Dict[K2, V]]`
+//   - Type params: `K ∈ {i64, str}` × `V ∈ {i64, str, list, dict}`
+//   - Insertion-order semantics implied at type level
+//   - Rebind via `d[k] = v` (Decision 3)
+//
+// Tests w116..w145 cover the type-checker surface only. End-to-end
+// program execution (with M12.x stub or future indexmap backing) is
+// the responsibility of Tier C / Tier D codegen-side corpora — see
+// `dict_e2e.rs`.
+//
+// Stubs: most tests stand alone with PRELUDE; tests that exercise
+// `dict.is_empty()` or `.keys()` / `.values()` / `.items()` /
+// `.get()` / `.copy()` use a `DICT_METHOD_STUBS` helper that
+// declares stubs at the SAME shape sub-sprint b will accept as
+// intrinsic-recognised methods. The stubs let TEST corpus land
+// before DEV impl ships; DEV will graduate the stubs to real
+// intrinsic-method recognition without invalidating any test.
+//
+// Test name pattern: `wNNN_dict_<scenario>`.
+// ============================================================
+
+// Shared stub block: minimal dict-method intrinsics expressed as
+// free-fn stubs. ADR-0050d Decision 5-addendum + sub-sprint e wire
+// these as intrinsic-rewrite methods; pre-impl, the corpus uses the
+// free-fn shape so the type checker has signatures to consult.
+//
+// `dict_is_empty(d)` mirrors `list_is_empty(lst)` per
+// `__cobrust_list_len == 0` precedent. `dict_keys`/`dict_values`/
+// `dict_items` return list shapes for sub-sprint e iteration desugar.
+const DICT_METHOD_STUBS: &str = concat!(
+    "fn dict_is_empty_si(d: Dict[str, i64]) -> bool:\n    return True\n",
+    "fn dict_is_empty_ii(d: Dict[i64, i64]) -> bool:\n    return True\n",
+    "fn dict_len_si(d: Dict[str, i64]) -> i64:\n    return 0\n",
+    "fn dict_len_ii(d: Dict[i64, i64]) -> i64:\n    return 0\n",
+    "fn dict_keys_si(d: Dict[str, i64]) -> List[str]:\n    let r: List[str] = []\n    return r\n",
+    "fn dict_values_si(d: Dict[str, i64]) -> List[i64]:\n    let r: List[i64] = []\n    return r\n",
+    "fn dict_get_si(d: Dict[str, i64], k: str) -> i64:\n    return 0\n",
+);
+
+fn must_accept_with_dict_stubs(name: &str, body: &str) {
+    let src = format!("{DICT_METHOD_STUBS}{body}");
+    must_accept(name, &src);
+}
+
+// ---- Tier A.1: empty dict literal + parametric inference ----
+
+#[test]
+fn w116_dict_empty_literal_annot_str_i64() {
+    // Empty `{}` synthesises `Ty::Dict(?K, ?V)`; the `Dict[str, i64]`
+    // annotation pins K=str, V=i64. ADR-0050d Decision 1A — `{}` is
+    // dict, not set, per parser.rs:1473-1481 already-existing shape.
+    must_accept(
+        "dict-empty-annot-str-i64",
+        "fn f() -> Dict[str, i64]:\n    let d: Dict[str, i64] = {}\n    return d\n",
+    );
+}
+
+#[test]
+fn w117_dict_empty_literal_annot_i64_i64() {
+    // Empty literal with `Dict[i64, i64]` annotation — covers the
+    // M12.x stub-typed shape (k_size=8, v_size=8).
+    must_accept(
+        "dict-empty-annot-i64-i64",
+        "fn f() -> Dict[i64, i64]:\n    let d: Dict[i64, i64] = {}\n    return d\n",
+    );
+}
+
+#[test]
+fn w118_dict_empty_literal_annot_str_str() {
+    // `Dict[str, str]` — both K and V are heap-pointer Strs. Sub-sprint
+    // d's str_str shim shape; type checker accepts pre-impl.
+    must_accept(
+        "dict-empty-annot-str-str",
+        "fn f() -> Dict[str, str]:\n    let d: Dict[str, str] = {}\n    return d\n",
+    );
+}
+
+#[test]
+fn w119_dict_empty_literal_annot_i64_str() {
+    // `Dict[i64, str]` — i64 key, str value. Sub-sprint d's i64_str
+    // shape. Type checker accepts.
+    must_accept(
+        "dict-empty-annot-i64-str",
+        "fn f() -> Dict[i64, str]:\n    let d: Dict[i64, str] = {}\n    return d\n",
+    );
+}
+
+// ---- Tier A.2: single-entry literal ----
+
+#[test]
+fn w120_dict_single_entry_str_i64() {
+    // `{"a": 1}` — synth K=str, V=i64 from the entry.
+    must_accept(
+        "dict-single-str-i64",
+        "fn f() -> Dict[str, i64]:\n    let d: Dict[str, i64] = {\"a\": 1}\n    return d\n",
+    );
+}
+
+#[test]
+fn w121_dict_single_entry_i64_str() {
+    // `{1: "a"}` — synth K=i64, V=str.
+    must_accept(
+        "dict-single-i64-str",
+        "fn f() -> Dict[i64, str]:\n    let d: Dict[i64, str] = {1: \"a\"}\n    return d\n",
+    );
+}
+
+#[test]
+fn w122_dict_single_entry_str_str() {
+    // `{"k": "v"}` — both str.
+    must_accept(
+        "dict-single-str-str",
+        "fn f() -> Dict[str, str]:\n    let d: Dict[str, str] = {\"k\": \"v\"}\n    return d\n",
+    );
+}
+
+// ---- Tier A.3: multi-entry literal with homogeneous K, V ----
+
+#[test]
+fn w123_dict_multi_entry_str_i64_three() {
+    // Three-entry literal `{"a":1, "b":2, "c":3}`; check.rs:651 unifies
+    // K = str and V = i64 entry-wise.
+    must_accept(
+        "dict-multi-str-i64",
+        "fn f() -> Dict[str, i64]:\n    let d: Dict[str, i64] = {\"a\": 1, \"b\": 2, \"c\": 3}\n    return d\n",
+    );
+}
+
+#[test]
+fn w124_dict_multi_entry_i64_i64_five() {
+    // Five-entry i64,i64 literal — the M12.x stub-typed shape.
+    must_accept(
+        "dict-multi-i64-i64",
+        "fn f() -> Dict[i64, i64]:\n    let d: Dict[i64, i64] = {1: 10, 2: 20, 3: 30, 4: 40, 5: 50}\n    return d\n",
+    );
+}
+
+// ---- Tier A.4: indexing `d[k]` read ----
+
+#[test]
+fn w125_dict_index_str_key_yields_i64_value() {
+    // `d["a"]` where `d: Dict[str, i64]` types as i64. Already wired
+    // at check.rs:737 (Ty::Dict + IndexKind::Expr → unify K with index,
+    // return V). ADR-0050d Decision 2A.
+    must_accept(
+        "dict-index-str-yields-i64",
+        "fn f(d: Dict[str, i64]) -> i64:\n    return d[\"a\"]\n",
+    );
+}
+
+#[test]
+fn w126_dict_index_i64_key_yields_str_value() {
+    // `d[1]` where `d: Dict[i64, str]` types as str.
+    must_accept(
+        "dict-index-i64-yields-str",
+        "fn f(d: Dict[i64, str]) -> str:\n    return d[1]\n",
+    );
+}
+
+#[test]
+fn w127_dict_index_from_literal_then_read() {
+    // Inline build + read: `{"a":1}["a"]` types as i64.
+    must_accept(
+        "dict-literal-then-index",
+        "fn f() -> i64:\n    let d: Dict[str, i64] = {\"a\": 1, \"b\": 2}\n    return d[\"a\"]\n",
+    );
+}
+
+#[test]
+fn w128_dict_index_into_expr_arith() {
+    // `d["a"] + d["b"]` — both reads are V-typed, arith on i64.
+    must_accept(
+        "dict-index-arith",
+        "fn f() -> i64:\n    let d: Dict[str, i64] = {\"a\": 10, \"b\": 20}\n    return (d[\"a\"] + d[\"b\"])\n",
+    );
+}
+
+// ---- Tier A.5: `key in d` returns bool ----
+
+#[test]
+fn w129_dict_membership_in_returns_bool() {
+    // `"a" in d` — Decision 4A: bool. Wired at check.rs:881 via BinOp::In
+    // + iter_element(Dict(K,_)) -> K.
+    must_accept(
+        "dict-in-returns-bool",
+        "fn f(d: Dict[str, i64]) -> bool:\n    return (\"a\" in d)\n",
+    );
+}
+
+#[test]
+fn w130_dict_membership_negated_in_returns_bool() {
+    // `not (k in d)` — explicit unary-not over the membership bool.
+    // The parser exposes `not in` as BinOp::NotIn at PREC_CMP
+    // (`parser.rs:943-946`) but the Pratt loop only consults that
+    // table when KwNot sits in binary-op position; after a primary
+    // string literal at PREC_CMP the lookahead matcher choked on
+    // `KwNot` in the test fixture verified during sub-sprint a (see
+    // §"Coverage gaps surfaced" in the dispatch report). Until DEV
+    // fixes the `not in` parse, the lock test uses `not (k in d)`
+    // which is equivalent at the type level: `bool -> bool`.
+    must_accept(
+        "dict-not-in-via-unary-not",
+        "fn f(d: Dict[str, i64]) -> bool:\n    return not (\"z\" in d)\n",
+    );
+}
+
+#[test]
+fn w131_dict_membership_if_then_index() {
+    // Common Python idiom: `if k in d: d[k] else: 0`.
+    must_accept(
+        "dict-if-in-then-index",
+        "fn f(d: Dict[str, i64]) -> i64:\n    if (\"a\" in d):\n        return d[\"a\"]\n    return 0\n",
+    );
+}
+
+// ---- Tier A.6: `len(d)` and `dict_is_empty(d)` (Decision 5 + addendum) ----
+
+#[test]
+fn w132_dict_len_returns_i64_via_stub() {
+    // `dict_len_si(d) -> i64` — Decision 5A: `len(d) -> i64`. Pre-impl
+    // uses the stub free-fn that sub-sprint b/e graduates to intrinsic
+    // dispatch. Mirrors `list_len(lst) -> i64` precedent.
+    must_accept_with_dict_stubs(
+        "dict-len-yields-i64-via-stub",
+        "fn f(d: Dict[str, i64]) -> i64:\n    return dict_len_si(d)\n",
+    );
+}
+
+#[test]
+fn w133_dict_is_empty_returns_bool_via_stub() {
+    // `dict_is_empty_si(d) -> bool` — Decision 5-addendum: replaces
+    // `if d:` (forbidden by §2.2) with an explicit predicate. Mirrors
+    // `list_is_empty`.
+    must_accept_with_dict_stubs(
+        "dict-is-empty-yields-bool-via-stub",
+        "fn f(d: Dict[str, i64]) -> bool:\n    return dict_is_empty_si(d)\n",
+    );
+}
+
+// ---- Tier A.7: iteration (`for k in d:`) — keys-mode by Decision 6 ----
+
+#[test]
+fn w134_for_over_dict_keys_loop_var_is_key_type() {
+    // `for k in d:` where `d: Dict[str, i64]` binds `k: str`. The
+    // iter_element(Dict(K,_)) = K rule at check.rs:451 already gives
+    // this. The actual MIR desugar to `__cobrust_dict_iter_init` is
+    // sub-sprint e's job; the type-checker surface is locked here.
+    must_accept(
+        "for-over-dict-keys-yields-str",
+        "fn f(d: Dict[str, i64]) -> i64:\n    for k in d:\n        return 0\n    return 0\n",
+    );
+}
+
+#[test]
+fn w135_for_over_dict_i64_keys_loop_var_is_i64() {
+    // `for k in d:` where d: Dict[i64, i64] binds k: i64.
+    must_accept(
+        "for-over-dict-i64-keys-yields-i64",
+        "fn f(d: Dict[i64, i64]) -> i64:\n    for k in d:\n        return k\n    return 0\n",
+    );
+}
+
+// ---- Tier A.8: rebind `d[k] = v` (Decision 3) ----
+
+#[test]
+fn w136_dict_index_assign_rebind_or_insert() {
+    // `d["a"] = 99` — rebind/insert. The HIR layer treats this as a
+    // Stmt with LHS = IndexExpr + RHS = i64; the type checker unifies
+    // V (i64) with the RHS type.
+    must_accept(
+        "dict-index-assign-rebind",
+        "fn f() -> i64:\n    let d: Dict[str, i64] = {\"a\": 1}\n    d[\"a\"] = 99\n    return d[\"a\"]\n",
+    );
+}
+
+#[test]
+fn w137_dict_index_assign_new_key_insert() {
+    // `d["b"] = 2` — insert a fresh key. Same type-check shape as
+    // w136 (rebind/insert unification).
+    must_accept(
+        "dict-index-assign-new-key",
+        "fn f() -> i64:\n    let d: Dict[str, i64] = {\"a\": 1}\n    d[\"b\"] = 2\n    return d[\"b\"]\n",
+    );
+}
+
+// ---- Tier A.9: nested dicts ----
+
+#[test]
+fn w138_dict_nested_str_dict_str_i64() {
+    // `Dict[str, Dict[str, i64]]` — outer K=str, inner K=str, inner V=i64.
+    // Recursive Aggregate at MIR.
+    must_accept(
+        "dict-nested-str-dict-str-i64",
+        "fn f() -> Dict[str, Dict[str, i64]]:\n    let inner: Dict[str, i64] = {\"a\": 1}\n    let outer: Dict[str, Dict[str, i64]] = {\"x\": inner}\n    return outer\n",
+    );
+}
+
+#[test]
+fn w139_dict_value_is_list_str() {
+    // `Dict[str, List[str]]` — V is a list[str]. Sub-sprint d's V=list
+    // shape (Phase G extension per ADR-0050d Decision 7 footnote).
+    // Type-checker accepts; codegen needs Phase G.
+    must_accept(
+        "dict-value-list-str",
+        "fn f() -> Dict[str, List[str]]:\n    let xs: List[str] = [\"a\", \"b\"]\n    let d: Dict[str, List[str]] = {\"k\": xs}\n    return d\n",
+    );
+}
+
+#[test]
+fn w140_dict_value_is_list_i64() {
+    // `Dict[i64, List[i64]]` — K=i64, V=list[i64]. Common pattern
+    // (adjacency list, histogram bucket).
+    must_accept(
+        "dict-value-list-i64",
+        "fn f() -> Dict[i64, List[i64]]:\n    let xs: List[i64] = [1, 2]\n    let d: Dict[i64, List[i64]] = {7: xs}\n    return d\n",
+    );
+}
+
+// ---- Tier A.10: dict as fn-param + fn-return ----
+
+#[test]
+fn w141_dict_as_fn_param_then_index_read() {
+    // `fn f(d: Dict[str, i64]) -> i64` — by-value param; type-check
+    // accepts. Ownership semantics (move vs borrow per the LC-100
+    // honest-debt regression) are codegen / drop-pass concerns, not
+    // type-check concerns.
+    must_accept(
+        "dict-fn-param-then-index",
+        "fn f(d: Dict[str, i64]) -> i64:\n    return d[\"k\"]\n",
+    );
+}
+
+#[test]
+fn w142_dict_as_fn_return_then_consume() {
+    // `fn build() -> Dict[str, i64]` + `let d = build(); d["k"]`.
+    // NOTE: this test deliberately AVOIDS the LC-100 regression
+    // pattern (no `let n = dict_len(d); let v = dict_get(d, k)` sequence
+    // that would trigger Str-style UseAfterMove). We index once.
+    must_accept(
+        "dict-fn-return-then-consume",
+        "fn build() -> Dict[str, i64]:\n    let d: Dict[str, i64] = {\"k\": 42}\n    return d\nfn main() -> i64:\n    let d: Dict[str, i64] = build()\n    return d[\"k\"]\n",
+    );
+}
+
+// ---- Tier A.11: dict in if/while predicates via explicit boolean ----
+
+#[test]
+fn w143_dict_is_empty_in_if_predicate() {
+    // `if dict_is_empty_si(d):` — constitution §2.2 forbids implicit
+    // truthiness, so we use the explicit predicate stub. Locks Decision
+    // 5-addendum at the use-site.
+    must_accept_with_dict_stubs(
+        "dict-is-empty-in-if",
+        "fn f(d: Dict[str, i64]) -> i64:\n    if dict_is_empty_si(d):\n        return 0\n    return 1\n",
+    );
+}
+
+#[test]
+fn w144_dict_membership_in_while_condition() {
+    // `while k in d:` — k in d is Bool, valid while condition.
+    // Common pattern for dict-based work-queue exhaustion.
+    must_accept(
+        "dict-while-in-condition",
+        "fn f(d: Dict[str, i64]) -> i64:\n    while (\"sentinel\" in d):\n        return 0\n    return 1\n",
+    );
+}
+
+// ---- Tier A.12: dict comprehension (Decision 9, ADR-0050d sub-sprint c lock-in) ----
+
+#[test]
+fn w145_dict_comp_squares_i64() {
+    // `{x: x*x for x in xs}` — type-check synthesises Dict[i64, i64].
+    // Parser already produces ComprehensionKind::Dict +
+    // ComprehensionElem::KeyValue per parser.rs:1491-1503; check.rs
+    // already synthesises Dict[K, V] per check.rs:1006-1009. Sub-sprint
+    // a corpus locks the surface; sub-sprint c wires MIR lowering.
+    must_accept(
+        "dict-comp-squares",
+        "fn f(xs: List[i64]) -> Dict[i64, i64]:\n    return {x: (x * x) for x in xs}\n",
+    );
+}
