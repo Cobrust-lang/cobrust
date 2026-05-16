@@ -2526,10 +2526,7 @@ fn runtime_helper_signatures(
     // `write_file(path: str, contents: str) -> i64` — 0=success, 1=error.
     out.push(("__cobrust_write_file", sig(call_conv, &[p, p], Some(i64))));
     // `append_file(path: str, contents: str) -> i64` — 0=success, 1=error.
-    out.push((
-        "__cobrust_append_file",
-        sig(call_conv, &[p, p], Some(i64)),
-    ));
+    out.push(("__cobrust_append_file", sig(call_conv, &[p, p], Some(i64))));
     // `stdin_read_all() -> str` — reads stdin to EOF; returns owned Str.
     out.push(("__cobrust_stdin_read_all", sig(call_conv, &[], Some(p))));
     // `stdout_write(s: str) -> i64` — no trailing newline; 0=success.

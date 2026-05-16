@@ -1761,3 +1761,98 @@ grep -q 'fn dict_is_empty(d: dict\[i64, i64\]) -> bool' "crates/cobrust-cli/src/
     || fail "M-F.3.4 dict_is_empty PRELUDE stub missing from build.rs"
 
 echo "doc-coverage: M-F.3.4 dict surface checks passed"
+
+# --- M-F.3.6 file IO completion coverage (ADR-0050f) -----------------------
+# 7 new PRELUDE fns + 7 new C-ABI shims + 7 intrinsic-rewrite arms.
+# The block enforces:
+#   - Both getting-started human docs gain a §M-F.3.6 section (Step 2.10).
+#   - The agent docs (modules/stdlib.md, modules/cli.md) document the
+#     surface and reference ADR-0050f.
+#   - The PRELUDE in build.rs declares all 7 stubs.
+#   - The intrinsic-rewrite Kind enum has all 7 entries.
+#   - The C-ABI shims exist in stdlib/src/io.rs.
+mf36_human_files=(
+    "docs/human/en/getting-started.md"
+    "docs/human/zh/getting-started.md"
+)
+for f in "${mf36_human_files[@]}"; do
+    grep -q -F 'M-F.3.6' "$f" \
+        || fail "M-F.3.6 section anchor missing from ${f}"
+    grep -q -F 'read_file' "$f" \
+        || fail "M-F.3.6 'read_file' fn name missing from ${f}"
+    grep -q -F 'read_file_lines' "$f" \
+        || fail "M-F.3.6 'read_file_lines' fn name missing from ${f}"
+    grep -q -F 'write_file' "$f" \
+        || fail "M-F.3.6 'write_file' fn name missing from ${f}"
+    grep -q -F 'append_file' "$f" \
+        || fail "M-F.3.6 'append_file' fn name missing from ${f}"
+    grep -q -F 'stdin_read_all' "$f" \
+        || fail "M-F.3.6 'stdin_read_all' fn name missing from ${f}"
+    grep -q -F 'stdout_write' "$f" \
+        || fail "M-F.3.6 'stdout_write' fn name missing from ${f}"
+    grep -q -F 'stderr_write' "$f" \
+        || fail "M-F.3.6 'stderr_write' fn name missing from ${f}"
+done
+# Agent module docs must document the M-F.3.6 surface + cite ADR-0050f.
+grep -q -F 'M-F.3.6' "docs/agent/modules/stdlib.md" \
+    || fail "M-F.3.6 not mentioned in docs/agent/modules/stdlib.md"
+grep -q -F 'ADR-0050f' "docs/agent/modules/stdlib.md" \
+    || fail "M-F.3.6 'ADR-0050f' cross-ref missing from docs/agent/modules/stdlib.md"
+grep -q -F 'M-F.3.6' "docs/agent/modules/cli.md" \
+    || fail "M-F.3.6 not mentioned in docs/agent/modules/cli.md"
+grep -q -F 'ADR-0050f' "docs/agent/modules/cli.md" \
+    || fail "M-F.3.6 'ADR-0050f' cross-ref missing from docs/agent/modules/cli.md"
+# PRELUDE stubs (7 fns).
+mf36_prelude_stubs=(
+    'fn read_file(path: str) -> str'
+    'fn read_file_lines(path: str) -> list[str]'
+    'fn write_file(path: str, contents: str) -> i64'
+    'fn append_file(path: str, contents: str) -> i64'
+    'fn stdin_read_all() -> str'
+    'fn stdout_write(s: str) -> i64'
+    'fn stderr_write(s: str) -> i64'
+)
+for stub in "${mf36_prelude_stubs[@]}"; do
+    grep -q -F "$stub" "crates/cobrust-cli/src/build.rs" \
+        || fail "M-F.3.6 PRELUDE stub '${stub}' missing from build.rs"
+done
+# Intrinsic-rewrite Kind enum entries.
+mf36_kinds=(
+    'Kind::ReadFile'
+    'Kind::ReadFileLines'
+    'Kind::WriteFile'
+    'Kind::AppendFile'
+    'Kind::StdinReadAll'
+    'Kind::StdoutWrite'
+    'Kind::StderrWrite'
+)
+for k in "${mf36_kinds[@]}"; do
+    grep -q -F "$k" "crates/cobrust-cli/src/build/intrinsics.rs" \
+        || fail "M-F.3.6 intrinsic Kind '${k}' missing from intrinsics.rs"
+done
+# Runtime symbol consts + C-ABI shims in io.rs.
+mf36_syms=(
+    '__cobrust_read_file'
+    '__cobrust_read_file_lines'
+    '__cobrust_write_file'
+    '__cobrust_append_file'
+    '__cobrust_stdin_read_all'
+    '__cobrust_stdout_write'
+    '__cobrust_stderr_write'
+)
+for sym in "${mf36_syms[@]}"; do
+    grep -q -F "$sym" "crates/cobrust-cli/src/build/intrinsics.rs" \
+        || fail "M-F.3.6 runtime symbol '${sym}' missing from intrinsics.rs"
+    grep -q -F "$sym" "crates/cobrust-codegen/src/cranelift_backend.rs" \
+        || fail "M-F.3.6 runtime symbol '${sym}' missing from cranelift_backend.rs (runtime_helper_signatures)"
+    grep -q -F "$sym" "crates/cobrust-stdlib/src/io.rs" \
+        || fail "M-F.3.6 C-ABI shim '${sym}' missing from stdlib/src/io.rs"
+done
+# ADR-0050f must exist.
+[[ -f "docs/agent/adr/0050f-file-io-completion-m-f-3-6.md" ]] \
+    || fail "ADR-0050f file missing (M-F.3.6 deliverable)"
+# Test corpus must exist.
+[[ -f "crates/cobrust-cli/tests/file_io_e2e.rs" ]] \
+    || fail "crates/cobrust-cli/tests/file_io_e2e.rs missing (M-F.3.6 corpus)"
+
+echo "doc-coverage: M-F.3.6 file IO completion surface checks passed"
