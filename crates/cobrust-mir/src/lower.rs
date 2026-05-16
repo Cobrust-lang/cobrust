@@ -1242,6 +1242,53 @@ impl<'a> BodyBuilder<'a> {
                 Ok(Operand::Copy(p))
             }
             ExprKind::Index { base, index } => {
+                // ADR-0050c Phase 2 cascade fix: source-level `xs[i]` on a
+                // `list[T]` base must go through the runtime helper
+                // `__cobrust_list_get(xs, i) -> i64` rather than the
+                // codegen-side `Projection::Index` (which at M12.x is a
+                // no-op pass-through, surfacing as a segfault when the
+                // user actually consumes the result — see f3ls09 / f3ls13
+                // / f3ls29 in the list[str] corpus).
+                //
+                // The base's HIR-recorded type tells us whether the index
+                // is a list lookup or some other shape (tuple / dict /
+                // str). For now we only special-case `Ty::List(_)`; tuple
+                // / dict are out of ADR-0050c scope.
+                let base_ty = synth_expr_ty(self, base);
+                if matches!(base_ty, Ty::List(_)) {
+                    let base_op = self.lower_expr(base)?;
+                    let idx_op = self.lower_index(index)?;
+                    // The slot holds an i64 (either an int payload or a
+                    // heap Str pointer cast to i64 per ADR-0044 W2 Phase 2
+                    // argv() materialisation). Codegen's reinterpret path
+                    // already treats this i64 as a Str pointer when the
+                    // destination's type is Ty::Str. Phase 4 may need to
+                    // emit a __cobrust_str_clone here so the slot's
+                    // original ownership isn't aliased; the M-F.3.2
+                    // corpus tolerates the alias today because argv's
+                    // slots outlive the index expression.
+                    let elem_ty = if let Ty::List(elem) = &base_ty {
+                        (**elem).clone()
+                    } else {
+                        Ty::None
+                    };
+                    let dest = self.declare_local("_idxget".to_string(), elem_ty, e.span, false);
+                    let cur = self.current_block_id();
+                    let next = self.start_new_block();
+                    self.cur_block = Some(cur.0 as usize);
+                    self.terminate(Terminator::Call {
+                        func: Operand::Constant(Constant::Str("__cobrust_list_get".to_string())),
+                        args: vec![base_op, idx_op],
+                        destination: Place::local(dest),
+                        target: next,
+                        unwind: None,
+                    });
+                    self.cur_block = Some(next.0 as usize);
+                    // Read the dest place. Use Copy since we don't want
+                    // to consume the dest local (it's a synthetic temp
+                    // that flows directly into the consumer).
+                    return Ok(Operand::Copy(Place::local(dest)));
+                }
                 let base_op = self.lower_expr(base)?;
                 let base_local =
                     self.declare_local("_idxbase".to_string(), Ty::None, e.span, false);
