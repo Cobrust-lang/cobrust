@@ -728,3 +728,54 @@ sub-sprint d alongside the `indexmap::IndexMap` backing swap.
 | Symbol | Definition | Purpose |
 |---|---|---|
 | `__cobrust_dict_is_empty(dict: *mut u8) -> i64` | `stdlib/collections.rs` — returns 1 if `map.is_empty()`, 0 otherwise. NULL dict is treated as empty. M12.x backing is `HashMap<i64, i64>`; sub-sprint d swaps to indexmap without breaking the signature. | §2.2-mandated emptiness predicate; the `if d:` implicit-truthiness ban requires this for the `if dict_is_empty(d):` canonical pattern. Source binding at `intrinsics.rs::DICT_IS_EMPTY_RUNTIME_SYMBOL`. Row-polymorphic at the type-checker via `is_list_polymorphic_intrinsic_name` Dict widening. |
+
+## M-F.3.6 file IO completion (ADR-0050f)
+
+7 new PRELUDE fns + 7 new C-ABI shims at `crates/cobrust-stdlib/src/io.rs`.
+Extends the ADR-0044 W2 Phase 2/3 PRELUDE+intrinsic-rewrite+C-ABI pattern.
+Copy-at-operand discipline for str args (ADR-0050c Phase 2a walk-back):
+shims READ the Str buffer without freeing; caller scope owns drop.
+
+### Source-level surface (PRELUDE stubs)
+
+| PRELUDE fn | C-ABI shim | Return | Notes |
+|---|---|---|---|
+| `read_file(path: str) -> str` | `__cobrust_read_file` | `*mut u8` (str) | Reads entire file UTF-8. Empty str on I/O error (i64-sentinel Q1). |
+| `read_file_lines(path: str) -> list[str]` | `__cobrust_read_file_lines` | `*mut u8` (list[str]) | Splits on `\n`; strips `\r`; preserves trailing empty element (Q2). |
+| `write_file(path: str, contents: str) -> i64` | `__cobrust_write_file` | `i64` (0/1) | Creates or truncates. 0 = success. |
+| `append_file(path: str, contents: str) -> i64` | `__cobrust_append_file` | `i64` (0/1) | Creates if absent (Q3), appends if present. |
+| `stdin_read_all() -> str` | `__cobrust_stdin_read_all` | `*mut u8` (str) | Reads stdin until EOF. |
+| `stdout_write(s: str) -> i64` | `__cobrust_stdout_write` | `i64` (0/1) | No trailing newline. Differs from `print` family. |
+| `stderr_write(s: str) -> i64` | `__cobrust_stderr_write` | `i64` (0/1) | Writes to stderr only; stdout unchanged. |
+
+### Drop-schedule notes (ADR-0050c Option A)
+
+- str returns (`read_file`, `stdin_read_all`, `read_file_lines` elements)
+  are owned; caller binding drops at scope exit.
+- `list[str]` return (`read_file_lines`) drops via
+  `__cobrust_list_drop_elems(list, __cobrust_str_drop)` at scope exit.
+- str args (`path`, `contents`, `s`) are consumed by Move into the call;
+  shims do NOT free them — caller scope emits the drop (Copy-at-operand).
+
+### Cross-surface dispatch table (ADR-0050f §"F30 Consequences")
+
+| Source call | Trailing newline? | i64 semantic |
+|---|---|---|
+| `print(<literal>)` | yes | always 0 |
+| `print(<Str-buf>)` | yes | always 0 |
+| `print_no_nl(<any>)` | no | always 0 |
+| `stdout_write(<Str-buf>)` | no | 0 = success, 1 = I/O error |
+| `stderr_write(<Str-buf>)` | no | 0 = success, 1 = I/O error |
+
+### Intrinsic-rewrite symbols (ADR-0050f)
+
+All 7 symbols declared in `crates/cobrust-cli/src/build/intrinsics.rs`
+(`READ_FILE_RUNTIME_SYMBOL` … `STDERR_WRITE_RUNTIME_SYMBOL`).
+All 7 entries in `crates/cobrust-codegen/src/cranelift_backend.rs`
+`runtime_helper_signatures()`. F30 enumeration: 7 new Str consumers, all
+`also-fixed` under ADR-0050c Option A drop schedule.
+
+E2E corpus: `crates/cobrust-cli/tests/file_io_e2e.rs` (18 tests; 10/18
+pass at Phase 1-4 partial; 8 failing are corpus-level honest-debt per
+Phase 5b investigation — see `findings/` for disposition).
+Type-checker corpus: `crates/cobrust-types/tests/well_typed.rs` w176..w195.

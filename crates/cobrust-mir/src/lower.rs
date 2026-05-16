@@ -1492,6 +1492,28 @@ impl<'a> BodyBuilder<'a> {
         // M9 stub `iconst(I64, 0)` path and the call's return value
         // would be a constant zero (broken for any non-trivial recursion
         // or cross-fn dispatch).
+        //
+        // M-F.3.6 ADR-0050f: detect the 7 file-IO PRELUDE fns and record
+        // whether their str args should be Copy-at-operand. These shims
+        // READ the Str pointer without freeing it (borrow-not-move).
+        // This mirrors the Phase 2a walk-back for List operands.
+        let callee_name = if let ExprKind::Name(rn) = &callee.kind {
+            Some(rn.name.as_str())
+        } else {
+            None
+        };
+        // File-IO fns whose str args are Copy-at-operand (borrow-not-move).
+        let is_file_io_borrow = matches!(
+            callee_name,
+            Some(
+                "read_file"
+                    | "read_file_lines"
+                    | "write_file"
+                    | "append_file"
+                    | "stdout_write"
+                    | "stderr_write"
+            )
+        );
         let callee_op = if let ExprKind::Name(rn) = &callee.kind {
             let ty = self.ctx.lookup_ty(rn.def_id);
             if matches!(ty, Ty::Fn(_)) {
@@ -1509,7 +1531,16 @@ impl<'a> BodyBuilder<'a> {
                 | CallArg::Keyword(_, e)
                 | CallArg::StarArgs(e)
                 | CallArg::StarStarKwargs(e) => {
-                    arg_ops.push(self.lower_expr(e)?);
+                    let op = self.lower_expr(e)?;
+                    // M-F.3.6: upgrade Move→Copy for Str args of file-IO
+                    // borrow fns so the caller's local remains live after
+                    // the call (ADR-0050f §"Copy-at-operand" rationale).
+                    let op = if is_file_io_borrow {
+                        upgrade_move_to_copy_for_str(self, op)
+                    } else {
+                        op
+                    };
+                    arg_ops.push(op);
                 }
             }
         }
@@ -1933,6 +1964,32 @@ fn un_to_mir(op: UnaryOp) -> UnOp {
     }
 }
 
+/// M-F.3.6 ADR-0050f: upgrade `Operand::Move(p)` → `Operand::Copy(p)` when
+/// `p`'s declared type is `Ty::Str` and the call is to a file-IO PRELUDE fn
+/// that borrows its str arguments (reads the pointer without freeing it).
+///
+/// This mirrors the Phase 2a walk-back for `Ty::List` (see `is_copy_type`
+/// doc comment): List is Copy-at-operand so `list_set(xs, i, v)` doesn't
+/// consume `xs`. File-IO fns adopt the same convention for their str args:
+/// the C-ABI shim reads via `str_buf_as_str_phase3` without freeing; the
+/// drop schedule handles freeing at the caller's scope exit.
+///
+/// Constant operands (string literals etc.) are returned unchanged.
+fn upgrade_move_to_copy_for_str(b: &BodyBuilder<'_>, op: Operand) -> Operand {
+    match op {
+        Operand::Move(ref p) => {
+            // Look up the declared type of the local.
+            if let Some(decl) = b.locals.get(p.local.0 as usize) {
+                if matches!(decl.ty, Ty::Str) {
+                    return Operand::Copy(p.clone());
+                }
+            }
+            op
+        }
+        other => other,
+    }
+}
+
 fn is_copy_type(ty: &Ty) -> bool {
     // ADR-0050c TD-1 closure: Str is non-Copy at the operand-read level —
     // every `ExprKind::Name` reading a `Ty::Str` local produces
@@ -2030,6 +2087,24 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
                 Ty::Str => Ty::Str,
                 other => other,
             }
+        }
+        ExprKind::Call { callee, .. } => {
+            // M-F.3.6 ADR-0050f: synthesise the return type for fn-call
+            // expressions so that `argv()[1]` etc. get the correct
+            // element-type on the base when lowering the subscript.
+            // Without this, `argv()` has synth-type Ty::None, causing the
+            // list-index special path to be skipped and the projection
+            // to fall back to the unsafe M12.x Projection::Index path.
+            //
+            // Strategy: if the callee is a Name whose def_id resolves to
+            // a Fn type, return the return type of that Fn.
+            if let ExprKind::Name(rn) = &callee.kind {
+                let callee_ty = b.ctx.lookup_ty(rn.def_id);
+                if let Ty::Fn(fn_ty) = callee_ty {
+                    return (*fn_ty.return_ty).clone();
+                }
+            }
+            Ty::None
         }
         _ => Ty::None,
     }

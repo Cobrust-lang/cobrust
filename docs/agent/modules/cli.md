@@ -678,6 +678,47 @@ Same first-body-wins guard as M-F.3.3 math. Names like `clone`,
 helpers may collide; `collect_print_def_ids` only stamps the FIRST
 body with each name (the PRELUDE stub) into the rewrite set.
 
+## M-F.3.6 — file IO completion PRELUDE + intrinsic-rewrite (ADR-0050f)
+
+### PRELUDE amendment
+
+`crates/cobrust-cli/src/build.rs` — `PRELUDE` constant extended with
+7 new file IO stubs (ADR-0050f §"Sub-sprint 1"):
+
+```
+fn read_file(path: str) -> str: return ""
+fn read_file_lines(path: str) -> list[str]: let xs: list[str] = []; return xs
+fn write_file(path: str, contents: str) -> i64: return 0
+fn append_file(path: str, contents: str) -> i64: return 0
+fn stdin_read_all() -> str: return ""
+fn stdout_write(s: str) -> i64: return 0
+fn stderr_write(s: str) -> i64: return 0
+```
+
+### Intrinsic-rewrite extension
+
+`crates/cobrust-cli/src/build/intrinsics.rs` — 7 new `Kind` variants
++ 7 new `*_RUNTIME_SYMBOL` consts + 7 new match arms in `rewrite_print`:
+
+| Source name | Runtime symbol | Arity | Return | Dispatch notes |
+|---|---|---|---|---|
+| `read_file` | `__cobrust_read_file` | 1 | `*mut u8` (str) | Copy-at-operand for path arg. |
+| `read_file_lines` | `__cobrust_read_file_lines` | 1 | `*mut u8` (list[str]) | Copy-at-operand for path arg. |
+| `write_file` | `__cobrust_write_file` | 2 | `i64` | Copy-at-operand for path + contents. |
+| `append_file` | `__cobrust_append_file` | 2 | `i64` | Copy-at-operand for path + contents. |
+| `stdin_read_all` | `__cobrust_stdin_read_all` | 0 | `*mut u8` (str) | No args. |
+| `stdout_write` | `__cobrust_stdout_write` | 1 | `i64` | Copy-at-operand for s arg. |
+| `stderr_write` | `__cobrust_stderr_write` | 1 | `i64` | Copy-at-operand for s arg. |
+
+### Copy-at-operand discipline (ADR-0050c Phase 2a walk-back precedent)
+
+`move_to_copy(op: Operand) -> Operand` helper in intrinsics.rs upgrades
+`Move(place)` → `Copy(place)` for every named-local str arg before the
+intrinsic-rewrite replaces the call target. This mirrors the list-arg
+convention: shims READ the Str pointer (borrow) without freeing; the
+caller's scope drop schedule owns the lifetime. Constant::Str args (literals)
+are immortal .rodata and pass through unchanged.
+
 ## Cross-references
 
 - `mod:frontend` — `parse_str`, `unparse` (used by build / check / fmt).
@@ -693,4 +734,5 @@ body with each name (the PRELUDE stub) into the rewrite set.
 - ADR-0029 — M14 design (interactive REPL).
 - ADR-0050 §A1 — M-F.3.3 f64 gap table.
 - ADR-0050e — M-F.3.5 string stdlib design (11 PRELUDE fns + clone()).
+- ADR-0050f — M-F.3.6 file IO completion design (7 PRELUDE fns).
 - T1.4 — error UX rewrite for 0.1.0-beta release.

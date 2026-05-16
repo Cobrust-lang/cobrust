@@ -333,6 +333,108 @@ fn main() -> i64:
 （许多在子冲刺 c/d codegen 关闭前为 ignored）;类型检查表面见
 `crates/cobrust-types/tests/well_typed.rs` 中 w116..w145 的 dict 段。
 
+## 第 2.10 步：文件 IO（M-F.3.6）
+
+Cobrust 现在提供 7 个源码级平铺函数用于文件与 stdio IO
+（[ADR-0050f](../../agent/adr/0050f-file-io-completion-m-f-3-6.md)）。
+
+```cobrust
+fn main() -> i64:
+    # 写文件；成功返回 0（i64-sentinel Q1）。
+    let rc: i64 = write_file("/tmp/hello.txt", "hello, cobrust\n")
+    if rc != 0:
+        return rc
+
+    # 读取整个文件为 str。
+    let contents: str = read_file("/tmp/hello.txt")
+    let _ = print(contents)           # 输出：hello, cobrust
+
+    # 按行读取 —— 每行去除 \n / \r\n（Q2 决议）。
+    let lines: list[str] = read_file_lines("/tmp/hello.txt")
+    let n: i64 = list_len(lines)
+    print_int(n)                      # 输出：2（保留尾空行）
+
+    # 追加写入；文件不存在时自动创建（Q3）。
+    let rc2: i64 = append_file("/tmp/hello.txt", "more text")
+
+    # 读取 stdin 至 EOF。
+    let stdin_data: str = stdin_read_all()
+
+    # 向 stdout 写入，不追加换行（与 print 不同）。
+    let rc3: i64 = stdout_write("no newline here")
+
+    # 向 stderr 写入，不追加换行；stdout 不受影响。
+    let rc4: i64 = stderr_write("error note")
+
+    return 0
+```
+
+### 7 个函数速览
+
+| 函数 | 签名 | 返回 | 说明 |
+|---|---|---|---|
+| `read_file` | `(path: str) -> str` | 文件内容字符串 | I/O 错误返回空串（i64-sentinel Q1）。 |
+| `read_file_lines` | `(path: str) -> list[str]` | 去除 `\n`/`\r\n` 的行列表 | 保留尾空行（Q2）：`"a\nb\n"` → `["a","b",""]`。 |
+| `write_file` | `(path: str, contents: str) -> i64` | `0` = 成功, `1` = I/O 错误 | 创建或截断。两个参数均被 Move 消费。 |
+| `append_file` | `(path: str, contents: str) -> i64` | `0` = 成功, `1` = I/O 错误 | 文件不存在时创建（Q3）。参数均被消费。 |
+| `stdin_read_all` | `() -> str` | stdin 至 EOF | EOF 返回空串。 |
+| `stdout_write` | `(s: str) -> i64` | `0`/`1` 哨兵 | 不追加换行；区别于 `print`。 |
+| `stderr_write` | `(s: str) -> i64` | `0`/`1` 哨兵 | 仅写 stderr；stdout 不变。 |
+
+### i64-sentinel 惯用法
+
+`write_file` / `append_file` / `stdout_write` / `stderr_write` 成功返回 `0`，
+失败返回非零。规范写法：
+
+```cobrust
+let rc: i64 = write_file("/tmp/out.txt", "data")
+if rc != 0:
+    return rc   # 传播错误
+```
+
+`read_file` 出错时返回空 `str`（无独立哨兵 —— 裸字符串返回 Q1）。
+用 `str_len(contents)` 区分"文件为空"与"读取失败"。
+
+### `read_file_lines` 尾空行规则（Q2）
+
+`read_file_lines(p)` 按 `s.split('\n')` 语义切分 —— 不同于 Python 的
+`readlines()`。以 `\n` 结尾的文件**总会**产生一个尾空字符串元素：
+
+```
+"alpha\nbeta\ngamma\n" → ["alpha", "beta", "gamma", ""]  （4 个元素）
+"a\nb"                 → ["a", "b"]                       （2 个元素）
+""                     → [""]                              （1 个元素）
+```
+
+计数满足 `s.count('\n') + 1`。
+
+### `print` vs `stdout_write`（ADR-0050f 跨表面调度表）
+
+| 调用 | 追加换行？ | i64 返回 |
+|---|---|---|
+| `print("literal")` | 是 | 恒为 0 |
+| `print(s: str)` | 是 | 恒为 0 |
+| `print_no_nl(s)` | 否 | 恒为 0 |
+| `stdout_write(s)` | 否 | 0 = 成功, 1 = 错误 |
+| `stderr_write(s)` | 否 | 0 = 成功, 1 = 错误 |
+
+`print` / `print_no_nl` 是"即发即忘"；`stdout_write` /
+`stderr_write` 将写入结果暴露给需要检测管道关闭的程序。
+
+M-F.3.6 变更说明：
+- 7 个新 PRELUDE stub：`read_file`、`read_file_lines`、`write_file`、
+  `append_file`、`stdin_read_all`、`stdout_write`、`stderr_write`。
+- 7 个新 C-ABI shim，位于 `crates/cobrust-stdlib/src/io.rs`。
+- 7 个新 intrinsic-rewrite arm，位于
+  `crates/cobrust-cli/src/build/intrinsics.rs`。
+- str 参数采用 Copy-at-operand 策略（ADR-0050c Phase 2a walk-back 先例）：
+  shim 仅读取 Str 缓冲区而不释放；调用方 scope 负责 drop。
+- Phase G：`stdin().read_all()` / `stdout().write(s)` 方法形式，
+  待 MIR 方法分发落地后再加入。
+
+端到端 corpus 见 `crates/cobrust-cli/tests/file_io_e2e.rs`；
+类型检查表面见 `crates/cobrust-types/tests/well_typed.rs` 中 w176..w195 的段。
+
 ## 第三步：试用 AI alpha 能力（可选）
 
 1. 复制 router 示例配置，并填入你的 provider 凭据：

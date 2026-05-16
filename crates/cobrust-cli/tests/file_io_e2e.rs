@@ -464,7 +464,10 @@ fn f3fio15_stderr_write_goes_to_stderr_not_stdout() {
     let (run_code, stdout, stderr) = run_exe(&exe, &[], b"");
     assert_eq!(run_code, 0, "run failed\nstderr={stderr}");
     // stdout must be empty — stderr_write does NOT go to stdout.
-    assert_eq!(stdout, "", "stdout must be empty; stderr_write goes to stderr");
+    assert_eq!(
+        stdout, "",
+        "stdout must be empty; stderr_write goes to stderr"
+    );
     // stderr must contain the message.
     assert!(
         stderr.contains("err msg"),
