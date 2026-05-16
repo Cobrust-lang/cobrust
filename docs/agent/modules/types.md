@@ -179,11 +179,42 @@ Invariants:
 - Cast type-checking resolves the TARGET type from the raw AST type name (not via HIR type-lowering, since the HIR type is an AST `Type`).
 - `bool → f64` is rejected (only `bool → i64` via `BoolToInt` CastKind — not surfaced in source yet).
 
+## M-F.3.4 — dict type-checking (ADR-0050d sub-sprint b)
+
+| Feature | Location | Notes |
+|---|---|---|
+| `Ty::Dict(K, V)` parametric | `types/src/ty.rs` | already exists; both K and V are boxed `Ty` |
+| `Ty::is_hashable()` predicate | `types/src/ty.rs::Ty::is_hashable` | true for `bool` / `i64` / `str` / `bytes` / `None` / `Never` / `Tuple(items if all hashable)`; false for `f64` / `imag` / `list` / `set` / `dict` / `record` / `fn` / `adt` / `alias` / `generic` / `var` (Phase G extends ADT to hashable-if-trait-impl) |
+| `synth_dict_lit` hashability + spread guard | `types/src/check.rs::synth_expr` `ExprKind::Dict` arm | after entry-wise K/V unify, `subst.apply(K)` + check hashability; `DictEntry::Spread` rejected at first occurrence with `DictSpreadNotSupported` |
+| `synth_comp` dict-comp K hashability | `types/src/check.rs::synth_comp` `CompKind::Dict` arm | check K hashable after entry synth |
+| `validate_hashable_dict(&HirType)` | `types/src/check.rs` | walks HIR type tree (preserves spans), surfaces `NotHashable` at `Let` annot / fn params / fn return / type alias |
+| `TypeError::NotHashable { actual: Ty, span }` | `types/src/error.rs` | "dict key type `{actual}` is not Hashable at {span}" |
+| `TypeError::DictSpreadNotSupported { span }` | `types/src/error.rs` | "dict spread (`**other`) is not supported in dict literals (Phase G feature) at {span}" |
+| `iter_element(Dict(K,_)) -> K` | `types/src/check.rs::iter_element` | unchanged; `for k in d:` already keys-mode via this rule |
+| Method-intrinsic recognition | `types/src/check.rs::try_synth_dict_method` | `d.keys() -> List[K]` / `d.values() -> List[V]` / `d.items() -> List[Tuple[K, V]]` / `d.get(k) -> V` / `d.get(k, default) -> V` (sentinel-pair scope cap per §"Surface coverage matrix" caveat) / `d.copy() -> Dict[K, V]` (shallow clone per Decision 10A) |
+| Row-polymorphic widening for `dict_is_empty` | `types/src/check.rs::is_list_polymorphic_intrinsic_name` + `instantiate_list_polymorphic` Dict arm | `dict_is_empty(d: Dict[i64, i64])` PRELUDE stub widens to `Dict[?A, ?B]` at every call site so any (K, V) shape unifies |
+| Empty-literal disposition | `types/src/check.rs::synth_expr` `ExprKind::Dict` empty arm | `let d = {}` (no annot) synthesises `Ty::Dict(?K, ?V)`; final resolution at `check()` surfaces `AmbiguousType` if no later use pins K/V. Fresh-K inference deferred to Phase G |
+
+Invariants:
+- Hashable K is enforced at every Dict construction + annotation site;
+  rejection occurs at type-check time (no runtime NaN surprises per
+  constitution §2.2).
+- Spread (`{**other}`) in non-comprehension dict literal is rejected
+  with `DictSpreadNotSupported`; the parser AST variant
+  `DictEntry::Spread` stays for forward compat to Phase G dict-merge.
+- Method-intrinsic dispatch happens **before** the generic
+  `synth_call` path so the type-checker returns precise types for
+  `.keys()` / etc. without falling back to fresh-var Attr resolution.
+- The type-checker side recognises dict methods but the codegen side
+  remains an M12.x stub for sub-sprint d; downstream MIR / codegen
+  emit may not yet honour the recognised type.
+
 ## Cross-references
 
 - `adr:0006` — type system shape + inference + proof obligations.
 - `adr:0050a` — break/continue contract seal (loop scope discipline).
 - `adr:0050` §A1 — M-F.3.3 f64 gap table.
+- `adr:0050d` — M-F.3.4 dict design (sub-sprint a..g blueprint).
 - `mod:hir` — input.
 - `mod:mir` — downstream consumer (M3+).
 - Constitution `CLAUDE.md` §2.2 (drop `is`, drop implicit truthiness),

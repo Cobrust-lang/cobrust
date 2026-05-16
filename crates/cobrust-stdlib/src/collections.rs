@@ -705,6 +705,39 @@ pub unsafe extern "C" fn __cobrust_dict_drop(dict: *mut u8) {
     drop(layout);
 }
 
+/// Returns 1 if the dict is empty (`len == 0`), 0 otherwise. NULL is
+/// treated as empty (mirrors `__cobrust_dict_len(NULL) == 0`).
+///
+/// ADR-0050d Decision 5 addendum — Phase F.3 `dict.is_empty()`
+/// predicate. Constitution §2.2 forbids implicit truthy/falsy, so
+/// `if d:` is rejected at type-check; `dict_is_empty(d)` is the
+/// canonical replacement. Mirrors `__cobrust_list_is_empty` shape
+/// (i64 0/1 per the SwitchInt codegen convention).
+///
+/// M12.x stub-compatibility note: the Phase F.3 backing is the
+/// `__cobrust_dict_*` `HashMap<i64, i64>` shim — sub-sprint d swaps
+/// to `indexmap::IndexMap<KeyEnum, ValueEnum>` honest backing without
+/// breaking this signature.
+///
+/// # Safety
+///
+/// `dict` must be a non-null pointer returned by
+/// [`__cobrust_dict_new`] and not yet dropped, OR `dict` may be NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_is_empty(dict: *mut u8) -> i64 {
+    if dict.is_null() {
+        return 1;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let layout = unsafe { &*dict.cast::<DictI64Layout>() };
+    if layout.map.is_null() {
+        return 1;
+    }
+    // SAFETY: map pointer is owned.
+    let map = unsafe { &*layout.map };
+    i64::from(map.is_empty())
+}
+
 // --- Set<i64> --------------------------------------------------------
 
 #[repr(C)]

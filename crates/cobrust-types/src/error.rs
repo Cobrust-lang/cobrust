@@ -109,6 +109,26 @@ pub enum TypeError {
     #[error("`yield` outside any function at {span}")]
     YieldOutsideFn { span: Span },
 
+    /// ADR-0050d Decision 7A — dict key type is not Hashable.
+    /// Phase F.3 admits `i64`, `str`, `bool`, `none`; rejects `f64`
+    /// (NaN != NaN breaks the Hash invariant), `list`, `dict`, `set`,
+    /// `tuple`, `record`, `fn`, `imag`. `Ty::is_hashable()` is the
+    /// canonical predicate; emitted at `synth_dict_lit` + every
+    /// `Dict[K, V]` annotation lower site (`lower_generic_type`).
+    #[error("dict key type `{actual}` is not Hashable at {span}")]
+    NotHashable { actual: Ty, span: Span },
+
+    /// ADR-0050d §"Parser amendments" 1 + Decision 1 commentary —
+    /// dict-merge `{**other}` is Phase G; Phase F.3 rejects any
+    /// `DictEntry::Spread` operand at type-check time. The parser
+    /// already emits the AST variant (forward-compat); the type
+    /// checker surfaces this rejection at every `Spread` entry inside
+    /// a `ExprKind::Dict` literal.
+    #[error(
+        "dict spread (`**other`) is not supported in dict literals (Phase G feature) at {span}"
+    )]
+    DictSpreadNotSupported { span: Span },
+
     /// A composite "we recorded multiple errors" container — use
     /// when the checker wants to surface several diagnostics.
     #[error("multiple type errors")]
