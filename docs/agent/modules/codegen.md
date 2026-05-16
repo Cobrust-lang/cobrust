@@ -368,7 +368,25 @@ Per ADR-0025 §"Codegen amendments":
 - `adr:0020` — MIR shape; M9 is the consumer.
 - `adr:0012` — "translate the surface, bind the core"; Cranelift +
   inkwell are bound, not reimplemented.
+- `adr:0050c` — M-F.3.2 Str ownership + list[str] drop schedule
+  (codegen consumer of the MIR-level closure).
 - `mod:mir` — input.
 - `mod:cli` — future M10 consumer of `emit`.
 - Constitution `CLAUDE.md` §4.1 (compiler layers), §5.3 (efficient:
   AOT default).
+
+## ADR-0050c M-F.3.2 — Str + list[str] codegen surfaces
+
+| Surface | Anchor |
+|---|---|
+| `emit_drop_for_ty(place, ty)` | `cranelift_backend.rs:965-1014` — polymorphic drop helper. `Ty::Str` → `__cobrust_str_drop`; `Ty::List(Ty::Str)` → `__cobrust_list_drop_elems(ptr, __cobrust_str_drop)`; `Ty::List(_)` (other elem types) → `__cobrust_list_drop`; anything else → no-op. |
+| `Terminator::Drop` arm | `cranelift_backend.rs:1108-1124` — wired to `emit_drop_for_ty(place, &body.locals[place.local].ty)`. |
+| Aggregate(List) Str slot | `cranelift_backend.rs:1396-1450` — `Constant::Str(payload)` materialised via `materialize_str_buffer`; non-literal Str-typed operand cloned via `__cobrust_str_clone`. Each slot owns a fresh heap copy. |
+| Str literal interning pre-pass | `cranelift_backend.rs:761-810` — walks BOTH `Terminator::Call` args AND every statement's `Rvalue::Aggregate` operands for `Constant::Str(payload)`. Closes the "str payload not interned" codegen-time bug for list literals. |
+| FnRef call arg Str materialise | `cranelift_backend.rs:1180-1212` — `Constant::Str` literal args to user-fn calls route through `materialize_str_buffer` so the callee's param receives a real heap pointer (was 0 under the M9 stub). |
+| `let v: str = "literal"` materialise | `cranelift_backend.rs:1048-1075` — `Use(Constant::Str(_))` rvalue with a Str-typed destination routes through `materialize_str_buffer`. |
+| `operand_ty` for indirect types | `cranelift_backend.rs:286-310` — Str / List / Tuple / Dict / Set / Record / Adt / Alias / Fn now resolve to `pointer_type` (i64) instead of None. Fixes signature inference for Str-returning fns so the Cranelift verifier accepts the call ABI. |
+| f-string Str hole dispatch | `cranelift_backend.rs:1547-1626` — inspects MIR-declared type. `Ty::Str` operand extracts `(ptr, len)` via `__cobrust_str_ptr` + `__cobrust_str_len`, then calls `__cobrust_fmt_str(buf, ptr, len)`. Previously routed through `__cobrust_fmt_int` printing the pointer as a decimal number. |
+| `__cobrust_list_is_empty` signature | `cranelift_backend.rs:2082` — `(p) -> i64` — symmetric to `__cobrust_dict_is_empty` (ADR-0050d Decision 5 addendum). |
+| `__cobrust_str_clone` signature | `cranelift_backend.rs:2141` — `(p) -> p` — closes the Phase 4 explicit-clone path. |
+| `__cobrust_list_drop_elems` signature | `cranelift_backend.rs:2068+` — `(p, p) -> ()` — the second `p` is the per-element fn pointer materialised via `func_addr` on `__cobrust_str_drop`. |
