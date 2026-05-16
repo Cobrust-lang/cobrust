@@ -2,9 +2,9 @@
 doc_kind: adr
 adr_id: 0050d
 title: "Dict design — literal syntax, indexing, iteration order, Hashable keys, and Wave-3 implementation map"
-status: proposed
+status: accepted
 date: 2026-05-16
-last_verified_commit: TBD
+last_verified_commit: b364c3d
 supersedes: []
 superseded_by: []
 relates_to: [adr:0003, adr:0006, adr:0019, adr:0023, adr:0025, adr:0027, adr:0030, adr:0034, adr:0035, adr:0038, adr:0044, adr:0048, adr:0049, adr:0050, adr:0050a, adr:0050b, adr:0050c]
