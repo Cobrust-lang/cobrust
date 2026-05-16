@@ -14,6 +14,7 @@ use cobrust_mir::{
     Module, Operand, Place, Projection, Rvalue, Statement, StatementKind, SwitchValue, Terminator,
     UnOp,
 };
+use cobrust_types::Ty;
 
 use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, MemFlags, Signature, UserFuncName};
 use cranelift_codegen::isa::{self, OwnedTargetIsa};
@@ -944,6 +945,73 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
         Ok(buf)
     }
 
+    /// ADR-0050c Phase 2 — TD-1 closure. Emit the drop call appropriate
+    /// for the given Cobrust type. Called from the `Terminator::Drop`
+    /// arm and from the Aggregate-List Str-element materialization path.
+    ///
+    /// Dispatch table:
+    ///
+    /// - `Ty::Str` → `__cobrust_str_drop(local_ptr)`.
+    /// - `Ty::List(Ty::Str)` → `__cobrust_list_drop_elems(local_ptr,
+    ///   __cobrust_str_drop)` — frees each Str slot, then the list.
+    /// - `Ty::List(_)` (other element types) → `__cobrust_list_drop`.
+    ///   For `list[list[str]]` this still frees the outer container
+    ///   but leaks the inner element Strs; the leak is bounded to the
+    ///   nesting case and is documented as `fixed-later-with-anchor`
+    ///   per ADR-0050c §"Consequences" (mirrors the comprehension
+    ///   leak carry-forward).
+    /// - All other types → no-op (Tuple/Dict/Set inherit M12.x drop
+    ///   semantics; widening lands in M-F.3.4 / M-F.3.5).
+    fn emit_drop_for_ty(&mut self, place: &Place, ty: &Ty) -> Result<(), CodegenError> {
+        match ty {
+            Ty::Str => {
+                let ptr = self.read_place(place)?;
+                if let Some(fr) = self.runtime_funcs.get("__cobrust_str_drop").copied() {
+                    self.builder.ins().call(fr, &[ptr]);
+                }
+            }
+            Ty::List(elem) => {
+                let ptr = self.read_place(place)?;
+                if matches!(**elem, Ty::Str) {
+                    // list[str]: per-element __cobrust_str_drop then
+                    // container drop, atomically via the new
+                    // __cobrust_list_drop_elems shim.
+                    let drop_fn_ref = self
+                        .runtime_funcs
+                        .get("__cobrust_str_drop")
+                        .copied();
+                    let drop_elems_ref = self
+                        .runtime_funcs
+                        .get("__cobrust_list_drop_elems")
+                        .copied();
+                    if let (Some(drop_fn), Some(drop_elems)) = (drop_fn_ref, drop_elems_ref) {
+                        // Materialize the function pointer to __cobrust_str_drop.
+                        let fn_addr =
+                            self.builder.ins().func_addr(self.pointer_type, drop_fn);
+                        self.builder.ins().call(drop_elems, &[ptr, fn_addr]);
+                    } else if let Some(fr) = self.runtime_funcs.get("__cobrust_list_drop").copied()
+                    {
+                        // Defensive fallback: drop the container only.
+                        self.builder.ins().call(fr, &[ptr]);
+                    }
+                } else {
+                    // list[i64] / list[bool] / list[list[_]] / etc.:
+                    // i64-Copy elements need no per-slot drop; nested
+                    // lists leak under Phase 2 (fixed-later-with-anchor
+                    // per ADR-0050c §"Consequences"). Container freed.
+                    if let Some(fr) = self.runtime_funcs.get("__cobrust_list_drop").copied() {
+                        self.builder.ins().call(fr, &[ptr]);
+                    }
+                }
+            }
+            // Tuple/Dict/Set drops are not yet plumbed; M12.x leaves
+            // these as no-op (matches pre-ADR-0050c behavior). Phase F.3.4
+            // dict + Phase G set ownership widen this dispatch.
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn lower_statement(&mut self, stmt: &Statement) -> Result<(), CodegenError> {
         match &stmt.kind {
             StatementKind::Nop | StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {
@@ -1019,7 +1087,20 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 self.builder.seal_block(trap_blk);
                 Ok(())
             }
-            Terminator::Drop { target, .. } => {
+            Terminator::Drop { place, target } => {
+                // ADR-0050c Phase 2 — TD-1 closure. Dispatch by the
+                // dropped local's declared type:
+                //   - Ty::Str → __cobrust_str_drop(local_ptr)
+                //   - Ty::List(Ty::Str) → __cobrust_list_drop_elems(
+                //         local_ptr, __cobrust_str_drop)
+                //   - Ty::List(_) (other elem types) → __cobrust_list_drop
+                //   - anything else → no-op (matches the pre-ADR-0050c
+                //     behavior for non-Str/List drops, e.g. Ty::Tuple).
+                let local_decl = self.body.locals.get(place.local.0 as usize);
+                let ty = local_decl.map(|d| &d.ty);
+                if let Some(ty) = ty {
+                    self.emit_drop_for_ty(place, ty)?;
+                }
                 let blk = self.block_id(target)?;
                 self.builder.ins().jump(blk, &[]);
                 Ok(())
@@ -1296,7 +1377,20 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
         if let Some(set_fr) = self.runtime_funcs.get("__cobrust_list_set").copied() {
             for (i, op) in operands.iter().enumerate() {
                 let idx_v = self.builder.ins().iconst(ir::types::I64, i as i64);
-                let val = self.lower_operand(op)?;
+                // ADR-0050c Phase 2 — TD-1 closure: when a list element
+                // is a `Constant::Str(payload)`, materialise it as a
+                // heap-allocated `__cobrust_str_new` + `_push_static`
+                // buffer rather than the default 0 i64 from
+                // `lower_constant`. The list slot then stores the heap
+                // pointer (matching the `__cobrust_argv` slot
+                // convention at `stdlib/env.rs:64`), and the
+                // `Terminator::Drop` arm's `__cobrust_list_drop_elems`
+                // dispatch frees each Str + the container.
+                let val = if let Operand::Constant(Constant::Str(payload)) = op {
+                    self.materialize_str_buffer(payload)?
+                } else {
+                    self.lower_operand(op)?
+                };
                 let val_i64 = coerce_to_i64(self.builder, val);
                 self.builder.ins().call(set_fr, &[alloc, idx_v, val_i64]);
             }
