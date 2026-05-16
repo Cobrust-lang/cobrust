@@ -1937,3 +1937,271 @@ fn w175_find_compared_to_sentinel_doc_idiom() {
         "fn f() -> i64:\n    let pos: i64 = find(\"hello world\", \"world\")\n    if pos != -1:\n        return pos\n    return -1\n",
     );
 }
+
+// ============================================================
+// M-F.3.6 — File IO completion (ADR-0050f)
+// w176..w195 — Tier A well-typed corpus for 7 surface fns.
+//
+// Pre-impl status: none of the 7 fns exist in the PRELUDE; the
+// `Kind` enum + `kind_for_name` in intrinsics.rs have no M-F.3.6
+// entries. C-ABI shims (__cobrust_read_file, __cobrust_write_file,
+// etc.) do not yet exist. Every test below SHOULD FAIL pre-impl.
+// The type-check layer does not run the PRELUDE (see `must_accept`
+// at top of file), so we inject FILE_IO_STUBS inline — the same
+// pattern as STR_STDLIB_STUBS above.
+//
+// Signature table (binding — ADR-0050f §"Decision"):
+//   fn read_file(path: str) -> str
+//   fn read_file_lines(path: str) -> list[str]
+//   fn write_file(path: str, contents: str) -> i64
+//   fn append_file(path: str, contents: str) -> i64
+//   fn stdin_read_all() -> str
+//   fn stdout_write(s: str) -> i64
+//   fn stderr_write(s: str) -> i64
+//
+// Q1 resolution: i64-sentinel (0=success, 1=I/O error) for
+// write/append/stdout/stderr; bare str / list[str] for reads.
+// Q2 resolution: read_file_lines strips \n and \r\n.
+//
+// w176..w182: basic signature acceptance per fn.
+// w183..w188: i64-sentinel binding + comparison patterns.
+// w189..w192: inline-clone-at-callsite (M-F.3.5 carry-forward).
+// w193..w195: f-string composition with file-IO returns.
+// ============================================================
+
+// Shared stub block: the 7 M-F.3.6 PRELUDE signatures + helpers
+// needed by the tests (print, str_len, clone, list helpers).
+const FILE_IO_STUBS: &str = concat!(
+    "fn print(s: str) -> i64:\n    return 0\n",
+    "fn print_int(n: i64) -> i64:\n    return 0\n",
+    "fn str_len(s: str) -> i64:\n    return 0\n",
+    "fn clone(s: str) -> str:\n    return s\n",
+    "fn list_len(xs: list[str]) -> i64:\n    return 0\n",
+    "fn read_file(path: str) -> str:\n    return \"\"\n",
+    "fn read_file_lines(path: str) -> list[str]:\n    let xs: list[str] = []\n    return xs\n",
+    "fn write_file(path: str, contents: str) -> i64:\n    return 0\n",
+    "fn append_file(path: str, contents: str) -> i64:\n    return 0\n",
+    "fn stdin_read_all() -> str:\n    return \"\"\n",
+    "fn stdout_write(s: str) -> i64:\n    return 0\n",
+    "fn stderr_write(s: str) -> i64:\n    return 0\n",
+);
+
+fn must_accept_with_file_io_stubs(name: &str, body: &str) {
+    let src = format!("{FILE_IO_STUBS}{body}");
+    must_accept(name, &src);
+}
+
+// ---- Tier A.1: read_file basic signatures ----
+
+#[test]
+fn w176_read_file_basic_signature_accepted() {
+    // ADR-0050f §"Decision" row 1: `read_file(path: str) -> str`.
+    // path is consumed (Move); return is owned str.
+    must_accept_with_file_io_stubs(
+        "read-file-basic",
+        "fn f() -> str:\n    let contents: str = read_file(\"/tmp/x.txt\")\n    return contents\n",
+    );
+}
+
+#[test]
+fn w177_read_file_return_bound_to_str_var() {
+    // Binding read_file result to a `let` of type `str` is well-typed.
+    // Locks that the type checker accepts `str` return annotation.
+    must_accept_with_file_io_stubs(
+        "read-file-let-bind",
+        "fn f() -> i64:\n    let s: str = read_file(\"/tmp/x.txt\")\n    let _ = print(s)\n    return 0\n",
+    );
+}
+
+// ---- Tier A.2: read_file_lines signatures ----
+
+#[test]
+fn w178_read_file_lines_returns_list_str_accepted() {
+    // ADR-0050f §"Decision" row 2: `read_file_lines(path: str) -> list[str]`.
+    // Locks the return type annotation is accepted.
+    must_accept_with_file_io_stubs(
+        "read-file-lines-basic",
+        "fn f() -> list[str]:\n    let xs: list[str] = read_file_lines(\"/tmp/x.txt\")\n    return xs\n",
+    );
+}
+
+#[test]
+fn w179_read_file_lines_iterated_with_for_loop() {
+    // read_file_lines result iterated via ADR-0050b for-loop over list[str].
+    // Each element `s` has type `str`; print(s) is well-typed.
+    must_accept_with_file_io_stubs(
+        "read-file-lines-for-iter",
+        "fn f() -> i64:\n    let xs: list[str] = read_file_lines(\"/tmp/x.txt\")\n    for s in xs:\n        let _ = print(s)\n    return 0\n",
+    );
+}
+
+// ---- Tier A.3: write_file signatures ----
+
+#[test]
+fn w180_write_file_returns_i64_accepted() {
+    // ADR-0050f §"Decision" row 3: `write_file(path: str, contents: str) -> i64`.
+    // 0 = success sentinel; both path and contents are consumed.
+    must_accept_with_file_io_stubs(
+        "write-file-basic",
+        "fn f() -> i64:\n    let rc: i64 = write_file(\"/tmp/x.txt\", \"hello\")\n    return rc\n",
+    );
+}
+
+#[test]
+fn w181_write_file_sentinel_compared_to_zero() {
+    // i64-sentinel pattern: `if write_file(p, c) != 0: ...`
+    // ADR-0050f §"i64-sentinel error reporting (Q1 resolution)".
+    must_accept_with_file_io_stubs(
+        "write-file-sentinel-check",
+        "fn f() -> i64:\n    if write_file(\"/tmp/x.txt\", \"hello\") != 0:\n        return 1\n    return 0\n",
+    );
+}
+
+// ---- Tier A.4: append_file signatures ----
+
+#[test]
+fn w182_append_file_returns_i64_accepted() {
+    // ADR-0050f §"Decision" row 4: `append_file(path: str, contents: str) -> i64`.
+    // Same sentinel pattern as write_file.
+    must_accept_with_file_io_stubs(
+        "append-file-basic",
+        "fn f() -> i64:\n    let rc: i64 = append_file(\"/tmp/x.txt\", \"line\")\n    return rc\n",
+    );
+}
+
+#[test]
+fn w183_append_file_sentinel_checked() {
+    // Sentinel comparison: `if append_file(p, c) != 0:` well-typed.
+    must_accept_with_file_io_stubs(
+        "append-file-sentinel-check",
+        "fn f() -> i64:\n    if append_file(\"/tmp/x.txt\", \"more\") != 0:\n        return 1\n    return 0\n",
+    );
+}
+
+// ---- Tier A.5: stdin_read_all ----
+
+#[test]
+fn w184_stdin_read_all_returns_str_accepted() {
+    // ADR-0050f §"Decision" row 5: `stdin_read_all() -> str`.
+    // Zero args; return is owned str.
+    must_accept_with_file_io_stubs(
+        "stdin-read-all-basic",
+        "fn f() -> str:\n    let s: str = stdin_read_all()\n    return s\n",
+    );
+}
+
+#[test]
+fn w185_stdin_read_all_used_with_str_len() {
+    // stdin_read_all() returns str; str_len(s) consumes it (Move).
+    // Single-use pattern: well-typed.
+    must_accept_with_file_io_stubs(
+        "stdin-read-all-str-len",
+        "fn f() -> i64:\n    let s: str = stdin_read_all()\n    return str_len(s)\n",
+    );
+}
+
+// ---- Tier A.6: stdout_write / stderr_write ----
+
+#[test]
+fn w186_stdout_write_returns_i64_accepted() {
+    // ADR-0050f §"Decision" row 6: `stdout_write(s: str) -> i64`.
+    // Differs from print family: explicit i64 return + no trailing newline.
+    must_accept_with_file_io_stubs(
+        "stdout-write-basic",
+        "fn f() -> i64:\n    let rc: i64 = stdout_write(\"hello\")\n    return rc\n",
+    );
+}
+
+#[test]
+fn w187_stderr_write_returns_i64_accepted() {
+    // ADR-0050f §"Decision" row 7: `stderr_write(s: str) -> i64`.
+    must_accept_with_file_io_stubs(
+        "stderr-write-basic",
+        "fn f() -> i64:\n    let rc: i64 = stderr_write(\"error msg\")\n    return rc\n",
+    );
+}
+
+#[test]
+fn w188_stdout_write_sentinel_compared_to_zero() {
+    // Sentinel: `if stdout_write(s) != 0:` is well-typed.
+    // ADR-0050f §"Cross-surface dispatch table".
+    must_accept_with_file_io_stubs(
+        "stdout-write-sentinel-check",
+        "fn f() -> i64:\n    if stdout_write(\"msg\") != 0:\n        return 1\n    return 0\n",
+    );
+}
+
+// ---- Tier A.7: inline-clone-at-callsite (M-F.3.5 carry-forward) ----
+
+#[test]
+fn w189_inline_clone_before_write_file_then_read_file() {
+    // ADR-0050f §"Step 2.8 idiom" (from ADR-0050e): multi-use str
+    // requires clone. Pattern: `let n = write_file(clone(path),
+    // clone(contents)); read_file(path)`.
+    // path and contents each consumed once after cloning.
+    must_accept_with_file_io_stubs(
+        "inline-clone-write-then-read",
+        "fn f() -> str:\n    let path: str = \"/tmp/x.txt\"\n    let n: i64 = write_file(clone(path), \"hello\")\n    return read_file(path)\n",
+    );
+}
+
+#[test]
+fn w190_clone_path_for_write_then_read_file_lines() {
+    // Clone path so write_file + read_file_lines both have an owned str.
+    must_accept_with_file_io_stubs(
+        "clone-for-write-then-lines",
+        "fn f() -> list[str]:\n    let path: str = \"/tmp/x.txt\"\n    let n: i64 = write_file(clone(path), \"a\")\n    return read_file_lines(path)\n",
+    );
+}
+
+#[test]
+fn w191_clone_contents_for_write_and_append() {
+    // Clone contents so write_file and append_file each consume a copy.
+    must_accept_with_file_io_stubs(
+        "clone-contents-write-append",
+        "fn f() -> i64:\n    let c: str = \"line\"\n    let rc1: i64 = write_file(\"/tmp/a.txt\", clone(c))\n    let rc2: i64 = append_file(\"/tmp/a.txt\", c)\n    return rc1\n",
+    );
+}
+
+#[test]
+fn w192_clone_str_for_stdout_write_and_stderr_write() {
+    // Clone s so stdout_write and stderr_write each consume a copy.
+    must_accept_with_file_io_stubs(
+        "clone-for-stdout-stderr",
+        "fn f() -> i64:\n    let s: str = \"msg\"\n    let rc1: i64 = stdout_write(clone(s))\n    let rc2: i64 = stderr_write(s)\n    return rc1\n",
+    );
+}
+
+// ---- Tier A.8: f-string composition with file-IO returns ----
+
+#[test]
+fn w193_fstring_with_read_file_return_str_hole() {
+    // f-string Str hole: `f"contents={read_file(p)}"`.
+    // Locks the f-string Str-hole dispatch fix (Wave 2 commit 9c8b1d2
+    // per ADR-0050f §"F30 §Consequences — f-string Str hole dispatch").
+    must_accept_with_file_io_stubs(
+        "fstring-read-file-hole",
+        "fn f() -> str:\n    let p: str = \"/tmp/x.txt\"\n    return f\"contents={read_file(p)}\"\n",
+    );
+}
+
+#[test]
+fn w194_fstring_with_stdin_read_all_hole() {
+    // f-string with stdin_read_all() slotted into a Str hole.
+    // stdin_read_all() returns owned str; f-string consumes it.
+    must_accept_with_file_io_stubs(
+        "fstring-stdin-read-all-hole",
+        "fn f() -> str:\n    return f\"stdin=[{stdin_read_all()}]\"\n",
+    );
+}
+
+#[test]
+fn w195_list_len_of_read_file_lines_result() {
+    // read_file_lines returns list[str]; list_len(xs) consumes the list
+    // and returns i64. Locks that list[str] return from file-IO fn can
+    // be passed to list_len.
+    must_accept_with_file_io_stubs(
+        "list-len-of-read-file-lines",
+        "fn f() -> i64:\n    let xs: list[str] = read_file_lines(\"/tmp/x.txt\")\n    return list_len(xs)\n",
+    );
+}
