@@ -885,7 +885,138 @@ impl Ctx {
         }
     }
 
+    /// ADR-0050d sub-sprint b §"Type-checker amendments" item 4 —
+    /// dict method-intrinsic recognition for `.keys()` / `.values()`
+    /// / `.items()` / `.get(k)` / `.copy()`.
+    ///
+    /// Returns `Ok(Some(ret_ty))` if the callsite matches a dict
+    /// method on a `Ty::Dict(K, V)`-typed base; `Ok(None)` if the
+    /// pattern doesn't match (callsite is `Call { callee: Attr ... }`
+    /// but base is not Dict, or method name is unrecognised); errors
+    /// propagate when the matched method has a wrong arity / K-type.
+    ///
+    /// Phase F.3 scope cap (per ADR-0050d §"Surface coverage matrix"):
+    /// the codegen-emit for `.keys()` / `.values()` / `.items()` /
+    /// `.copy()` ships in sub-sprint d (`__cobrust_dict_iter_*` +
+    /// `__cobrust_dict_clone` shims). `.get(k)` ships in the
+    /// sentinel-pair scope-cap form (returns V; the typed Option
+    /// return is a Phase F.3-late or Phase G follow-on per ADR-0044a
+    /// timeline). This function is the type-checker side only — the
+    /// MIR / codegen surfaces stay as M12.x stubs for sub-sprint d's
+    /// dispatch.
+    fn try_synth_dict_method(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Attr { base, name } = &callee.kind else {
+            return Ok(None);
+        };
+        let base_ty = self.synth_expr(base)?;
+        let base_resolved = self.subst.apply(&base_ty);
+        let Ty::Dict(k_box, v_box) = base_resolved else {
+            return Ok(None);
+        };
+        let k = *k_box;
+        let v = *v_box;
+        let pos_args: Vec<&Expr> = args
+            .iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        match name.as_str() {
+            "keys" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::List(Box::new(k))))
+            }
+            "values" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::List(Box::new(v))))
+            }
+            "items" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                // `d.items() -> List[Tuple[K, V]]`. Insertion-order
+                // iteration is a Decision 6A guarantee enforced at
+                // the storage backing (sub-sprint d indexmap), not
+                // at the type universe.
+                Ok(Some(Ty::List(Box::new(Ty::Tuple(vec![k, v])))))
+            }
+            "get" => {
+                // ADR-0050d §"Surface coverage matrix" caveat —
+                // `.get(k)` scope-caps to `V` (not `Option[V]`) for
+                // Phase F.3 because typed Option lowering is not yet
+                // wired (ADR-0044a Phase F.1.x candidate). Accept
+                // both the 1-arg form (`.get(k)`) and the 2-arg
+                // default-fallback form (`.get(k, default)`) — the
+                // latter is the wedge-audience pre-Option idiom
+                // covered by dict_e2e f3d19/f3d20.
+                match pos_args.len() {
+                    1 => {
+                        let kt = self.synth_expr(pos_args[0])?;
+                        unify(&k, &kt, &mut self.subst, pos_args[0].span)?;
+                        Ok(Some(v))
+                    }
+                    2 => {
+                        let kt = self.synth_expr(pos_args[0])?;
+                        unify(&k, &kt, &mut self.subst, pos_args[0].span)?;
+                        let dt = self.synth_expr(pos_args[1])?;
+                        unify(&v, &dt, &mut self.subst, pos_args[1].span)?;
+                        Ok(Some(v))
+                    }
+                    _ => Err(TypeError::ArityMismatch {
+                        expected: 1,
+                        actual: pos_args.len(),
+                        span,
+                    }),
+                }
+            }
+            "copy" => {
+                // `d.copy() -> Dict[K, V]` shallow clone — Decision 10A.
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::Dict(Box::new(k), Box::new(v))))
+            }
+            _ => {
+                // Unknown dict method — fall through to the generic
+                // Attr-fresh-var path (M2 conservative behaviour).
+                Ok(None)
+            }
+        }
+    }
+
     fn synth_call(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
+        // ADR-0050d sub-sprint b §"Type-checker amendments" item 4 —
+        // method-intrinsic recognition. See `try_synth_dict_method`
+        // for the dispatch table.
+        if let Some(t) = self.try_synth_dict_method(callee, args, span)? {
+            return Ok(t);
+        }
         let callee_ty = self.synth_expr(callee)?;
         let callee_ty = self.subst.apply(&callee_ty);
         // ADR-0050c §F5 / Phase 6 — row-polymorphic widening. When the
