@@ -1606,3 +1606,106 @@ grep -q 'fn pow(base: f64, exp: f64) -> f64' "crates/cobrust-cli/src/build.rs" \
     || fail "M-F.3.3 pow PRELUDE stub missing from build.rs"
 
 echo "doc-coverage: M-F.3.3 f64 + as-cast surface checks passed"
+
+# --- M-F.3.5 string stdlib surface coverage (ADR-0050e) -------------------
+# 11 new PRELUDE fns + 10 new C-ABI shims (clone shipped with ADR-0050c) +
+# `string::strip` renamed to `string::trim`. The block enforces:
+#   - Both getting-started human docs gain a §M-F.3.5 section with the
+#     11 PRELUDE fn names + the `clone(s)` LC-100 mitigation idiom.
+#   - The agent docs (modules/stdlib.md, modules/cli.md) document the
+#     surface and reference ADR-0050e.
+#   - The PRELUDE in build.rs declares each of the 11 stubs.
+#   - The intrinsic-rewrite Kind enum / kind_for_name has the 11 entries.
+#   - The C-ABI shims exist in stdlib/src/string.rs (clone is in fmt.rs).
+mf35_human_files=(
+    "docs/human/en/getting-started.md"
+    "docs/human/zh/getting-started.md"
+)
+for f in "${mf35_human_files[@]}"; do
+    grep -q -F 'M-F.3.5' "$f" \
+        || fail "M-F.3.5 section anchor missing from ${f}"
+    grep -q -F 'split' "$f" \
+        || fail "M-F.3.5 'split' fn name missing from ${f}"
+    grep -q -F 'clone(' "$f" \
+        || fail "M-F.3.5 'clone(' example missing from ${f}"
+done
+# Agent module docs must document the M-F.3.5 surface + cite ADR-0050e.
+grep -q -F 'M-F.3.5' "docs/agent/modules/stdlib.md" \
+    || fail "M-F.3.5 not mentioned in docs/agent/modules/stdlib.md"
+grep -q -F 'ADR-0050e' "docs/agent/modules/stdlib.md" \
+    || fail "M-F.3.5 'ADR-0050e' cross-ref missing from docs/agent/modules/stdlib.md"
+grep -q -F 'M-F.3.5' "docs/agent/modules/cli.md" \
+    || fail "M-F.3.5 not mentioned in docs/agent/modules/cli.md"
+grep -q -F 'ADR-0050e' "docs/agent/modules/cli.md" \
+    || fail "M-F.3.5 'ADR-0050e' cross-ref missing from docs/agent/modules/cli.md"
+# PRELUDE stubs (11 fns).
+mf35_prelude_stubs=(
+    'fn split(s: str, sep: str) -> list[str]'
+    'fn join(parts: list[str], sep: str) -> str'
+    'fn replace(s: str, old: str, new: str) -> str'
+    'fn trim(s: str) -> str'
+    'fn find(s: str, needle: str) -> i64'
+    'fn contains(s: str, needle: str) -> bool'
+    'fn starts_with(s: str, prefix: str) -> bool'
+    'fn ends_with(s: str, suffix: str) -> bool'
+    'fn lower(s: str) -> str'
+    'fn upper(s: str) -> str'
+    'fn clone(s: str) -> str'
+)
+for stub in "${mf35_prelude_stubs[@]}"; do
+    grep -q -F "$stub" "crates/cobrust-cli/src/build.rs" \
+        || fail "M-F.3.5 PRELUDE stub '${stub}' missing from build.rs"
+done
+# Intrinsic-rewrite Kind enum entries.
+mf35_kinds=(
+    'Kind::StrSplit'
+    'Kind::StrJoin'
+    'Kind::StrReplace'
+    'Kind::StrTrim'
+    'Kind::StrFind'
+    'Kind::StrContains'
+    'Kind::StrStartsWith'
+    'Kind::StrEndsWith'
+    'Kind::StrLower'
+    'Kind::StrUpper'
+    'Kind::StrClone'
+)
+for k in "${mf35_kinds[@]}"; do
+    grep -q -F "$k" "crates/cobrust-cli/src/build/intrinsics.rs" \
+        || fail "M-F.3.5 intrinsic Kind '${k}' missing from intrinsics.rs"
+done
+# Runtime symbol consts.
+mf35_syms=(
+    '__cobrust_str_split'
+    '__cobrust_str_join'
+    '__cobrust_str_replace'
+    '__cobrust_str_trim'
+    '__cobrust_str_find'
+    '__cobrust_str_contains'
+    '__cobrust_str_starts_with'
+    '__cobrust_str_ends_with'
+    '__cobrust_str_lower'
+    '__cobrust_str_upper'
+)
+for sym in "${mf35_syms[@]}"; do
+    grep -q -F "$sym" "crates/cobrust-cli/src/build/intrinsics.rs" \
+        || fail "M-F.3.5 runtime symbol '${sym}' missing from intrinsics.rs"
+    grep -q -F "$sym" "crates/cobrust-codegen/src/cranelift_backend.rs" \
+        || fail "M-F.3.5 runtime symbol '${sym}' missing from cranelift_backend.rs (runtime_helper_signatures)"
+    grep -q -F "$sym" "crates/cobrust-stdlib/src/string.rs" \
+        || fail "M-F.3.5 C-ABI shim '${sym}' missing from stdlib/src/string.rs"
+done
+# `__cobrust_str_clone` is shipped at fmt.rs:306 — assert it's still there.
+grep -q -F '__cobrust_str_clone' "crates/cobrust-stdlib/src/fmt.rs" \
+    || fail "M-F.3.5 '__cobrust_str_clone' shim missing from stdlib/src/fmt.rs"
+# `string::strip` renamed to `string::trim`.
+grep -q -F 'pub fn trim(s: &str) -> &str' "crates/cobrust-stdlib/src/string.rs" \
+    || fail "M-F.3.5 'pub fn trim' missing from stdlib/src/string.rs (Decision 4 rename)"
+# ADR-0050e must exist.
+[[ -f "docs/agent/adr/0050e-string-stdlib-m-f-3-5.md" ]] \
+    || fail "ADR-0050e file missing (M-F.3.5 deliverable)"
+# Test corpus must exist.
+[[ -f "crates/cobrust-cli/tests/string_stdlib_e2e.rs" ]] \
+    || fail "crates/cobrust-cli/tests/string_stdlib_e2e.rs missing (M-F.3.5 corpus)"
+
+echo "doc-coverage: M-F.3.5 string stdlib surface checks passed"

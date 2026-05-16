@@ -630,6 +630,54 @@ shadow the PRELUDE stubs WITHOUT error. `collect_print_def_ids` only collects th
 FIRST body with each math name (always the PRELUDE stub). The user's DefId is
 NOT collected → NOT rewritten → compiled normally. Stub body is dropped as before.
 
+## M-F.3.5 — string stdlib PRELUDE + intrinsic-rewrite (ADR-0050e)
+
+### PRELUDE amendment
+
+`crates/cobrust-cli/src/build.rs` — `PRELUDE` constant extended with
+11 new string stubs:
+
+```
+fn split(s: str, sep: str) -> list[str]: ...
+fn join(parts: list[str], sep: str) -> str: return ""
+fn replace(s: str, old: str, new: str) -> str: return ""
+fn trim(s: str) -> str: return ""
+fn find(s: str, needle: str) -> i64: return -1
+fn contains(s: str, needle: str) -> bool: return False
+fn starts_with(s: str, prefix: str) -> bool: return False
+fn ends_with(s: str, suffix: str) -> bool: return False
+fn lower(s: str) -> str: return ""
+fn upper(s: str) -> str: return ""
+fn clone(s: str) -> str: return s
+```
+
+### Intrinsic-rewrite extension
+
+`crates/cobrust-cli/src/build/intrinsics.rs` — 11 new `Kind` variants
++ first-body-wins collection guard (`str_names_seen`) mirroring the
+M-F.3.3 math precedent:
+
+| Source name | Runtime symbol | Arity | Return |
+|---|---|---|---|
+| `split` | `__cobrust_str_split` | 2 | `*mut u8` (list[str]) |
+| `join` | `__cobrust_str_join` | 2 | `*mut u8` (str) |
+| `replace` | `__cobrust_str_replace` | 3 | `*mut u8` (str) |
+| `trim` | `__cobrust_str_trim` | 1 | `*mut u8` (str) |
+| `find` | `__cobrust_str_find` | 2 | `i64` (-1 sentinel) |
+| `contains` | `__cobrust_str_contains` | 2 | `i64` (0/1 for bool) |
+| `starts_with` | `__cobrust_str_starts_with` | 2 | `i64` (0/1) |
+| `ends_with` | `__cobrust_str_ends_with` | 2 | `i64` (0/1) |
+| `lower` | `__cobrust_str_lower` | 1 | `*mut u8` (str) |
+| `upper` | `__cobrust_str_upper` | 1 | `*mut u8` (str) |
+| `clone` | `__cobrust_str_clone` | 1 | `*mut u8` (str; shim already ships) |
+
+### Fn→Fn shadowing compatibility
+
+Same first-body-wins guard as M-F.3.3 math. Names like `clone`,
+`find`, `replace`, `trim` are common enough that user-defined
+helpers may collide; `collect_print_def_ids` only stamps the FIRST
+body with each name (the PRELUDE stub) into the rewrite set.
+
 ## Cross-references
 
 - `mod:frontend` — `parse_str`, `unparse` (used by build / check / fmt).
@@ -644,4 +692,5 @@ NOT collected → NOT rewritten → compiled normally. Stub body is dropped as b
 - ADR-0024 — M10 design (the stub this M14 supersedes).
 - ADR-0029 — M14 design (interactive REPL).
 - ADR-0050 §A1 — M-F.3.3 f64 gap table.
+- ADR-0050e — M-F.3.5 string stdlib design (11 PRELUDE fns + clone()).
 - T1.4 — error UX rewrite for 0.1.0-beta release.

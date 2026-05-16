@@ -316,11 +316,7 @@ pub unsafe extern "C" fn __cobrust_str_join(parts: *mut u8, sep: *mut u8) -> *mu
 ///
 /// `s`, `old`, `new_` must each be valid Str buffer pointers or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __cobrust_str_replace(
-    s: *mut u8,
-    old: *mut u8,
-    new_: *mut u8,
-) -> *mut u8 {
+pub unsafe extern "C" fn __cobrust_str_replace(s: *mut u8, old: *mut u8, new_: *mut u8) -> *mut u8 {
     let s_str = unsafe { str_buf_as_str_local(s) };
     let old_str = unsafe { str_buf_as_str_local(old) };
     let new_str = unsafe { str_buf_as_str_local(new_) };
