@@ -756,10 +756,43 @@ impl CraneliftCtx {
         //
         // M11 scope: only payloads on the `args[0]` slot of a
         // `Terminator::Call` whose `func` is `Constant::Str(_)` are
-        // interned. M12 will widen to all Constant::Str uses
-        // (including local-binding slots).
+        // interned. ADR-0044 W2 widened to all Constant::Str args.
+        // ADR-0050c Phase 2 widens again to Aggregate-rvalue operands —
+        // literal `["a", "b"]` lowering needs each element interned so
+        // `materialize_str_buffer` can fetch the data symbol per
+        // `cranelift_backend.rs:932-946`.
         let mut str_data_ids: HashMap<String, cranelift_module::DataId> = HashMap::new();
+        // Inner helper: intern a payload if not already seen.
+        let mut intern_payload =
+            |payload: &str, ids: &mut HashMap<String, cranelift_module::DataId>| -> Result<(), CodegenError> {
+                if ids.contains_key(payload) {
+                    return Ok(());
+                }
+                let symbol = str_data_symbol(body.def_id.0, ids.len(), payload);
+                let data_id = obj
+                    .declare_data(&symbol, Linkage::Local, false, false)
+                    .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+                let mut data_desc = cranelift_module::DataDescription::new();
+                data_desc.define(payload.as_bytes().to_vec().into_boxed_slice());
+                obj.define_data(data_id, &data_desc)
+                    .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
+                ids.insert(payload.to_string(), data_id);
+                Ok(())
+            };
         for mir_block in &body.blocks {
+            // Walk statements: every Aggregate rvalue operand that is a
+            // Constant::Str participates (per ADR-0050c Phase 2 — list[str]
+            // literals materialise via Aggregate(List) + per-slot Str
+            // construction in `lower_aggregate_list`).
+            for stmt in &mir_block.statements {
+                if let cobrust_mir::StatementKind::Assign { rvalue, .. } = &stmt.kind {
+                    collect_str_payloads_from_rvalue(rvalue, &mut |p| {
+                        intern_payload(p, &mut str_data_ids)
+                    })?;
+                }
+            }
+            // Walk terminator: existing ADR-0044 W2 Phase 3 behavior for
+            // `Terminator::Call` whose `func` is `Constant::Str(_)`.
             if let cobrust_mir::Terminator::Call { func, args, .. } = &mir_block.terminator {
                 if !matches!(
                     func,
@@ -767,24 +800,10 @@ impl CraneliftCtx {
                 ) {
                     continue;
                 }
-                // ADR-0044 W2 Phase 3 amendment: intern ALL string-constant
-                // args, not just args[0]. This covers str_eq(c, "lit") where
-                // the literal is the second argument.
                 for arg in args {
                     if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(payload)) = arg
                     {
-                        if str_data_ids.contains_key(payload) {
-                            continue;
-                        }
-                        let symbol = str_data_symbol(body.def_id.0, str_data_ids.len(), payload);
-                        let data_id = obj
-                            .declare_data(&symbol, Linkage::Local, false, false)
-                            .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
-                        let mut data_desc = cranelift_module::DataDescription::new();
-                        data_desc.define(payload.as_bytes().to_vec().into_boxed_slice());
-                        obj.define_data(data_id, &data_desc)
-                            .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
-                        str_data_ids.insert(payload.clone(), data_id);
+                        intern_payload(payload, &mut str_data_ids)?;
                     }
                 }
             }
@@ -1961,6 +1980,44 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
 /// sufficient for M11; cross-body interning is M12.
 fn str_data_symbol(def_id: u32, idx: usize, _payload: &str) -> String {
     format!("_cobrust_str_{def_id}_{idx}")
+}
+
+/// ADR-0050c Phase 2 — TD-1 closure. Walk an Rvalue, invoking `visit`
+/// on every `Constant::Str(payload)` operand it transitively contains.
+/// Used by the interning pre-pass to ensure literal-list lowering
+/// (`["a", "b"]` → Aggregate(List, [Str("a"), Str("b")])) has every
+/// element interned before `materialize_str_buffer` is called in
+/// `lower_aggregate_list`.
+fn collect_str_payloads_from_rvalue<F>(
+    rvalue: &cobrust_mir::Rvalue,
+    visit: &mut F,
+) -> Result<(), CodegenError>
+where
+    F: FnMut(&str) -> Result<(), CodegenError>,
+{
+    use cobrust_mir::{Constant, Operand, Rvalue};
+    let visit_operand = |op: &Operand, visit: &mut F| -> Result<(), CodegenError> {
+        if let Operand::Constant(Constant::Str(payload)) = op {
+            visit(payload)?;
+        }
+        Ok(())
+    };
+    match rvalue {
+        Rvalue::Use(op) | Rvalue::Cast(_, op, _) | Rvalue::UnaryOp(_, op) => {
+            visit_operand(op, visit)?;
+        }
+        Rvalue::BinaryOp(_, a, b) => {
+            visit_operand(a, visit)?;
+            visit_operand(b, visit)?;
+        }
+        Rvalue::Aggregate(_, ops) => {
+            for op in ops {
+                visit_operand(op, visit)?;
+            }
+        }
+        Rvalue::Ref(_, _) | Rvalue::Discriminant(_) | Rvalue::Len(_) | Rvalue::NullaryOp(_) => {}
+    }
+    Ok(())
 }
 
 /// Compute the set of basic-block ids reachable from the entry
