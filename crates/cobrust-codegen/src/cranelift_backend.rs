@@ -1543,10 +1543,48 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 }
                 continue;
             }
-            // Hole — codegen the value and dispatch by type.
+            // Hole — codegen the value and dispatch by MIR-declared
+            // type when possible, falling back to Cranelift's value
+            // type for unrecognised operands.
+            //
+            // ADR-0050c Phase 2 cascade fix: a Str-typed local read via
+            // `Operand::Move(p)` produces an i64 Cranelift value (the
+            // heap buffer pointer), but pre-fix the codegen branched on
+            // `v_ty.is_int()` and dispatched to `__cobrust_fmt_int`,
+            // emitting the raw pointer as a decimal number into the
+            // f-string. Resolution: inspect `op`'s MIR-declared type
+            // FIRST; if it's `Ty::Str`, dispatch to `__cobrust_fmt_str`
+            // which reads the buffer via `__cobrust_str_ptr` /
+            // `__cobrust_str_len`. Other indirect types fall through to
+            // `__cobrust_fmt_repr`.
+            let mir_ty = match op {
+                Operand::Copy(p) | Operand::Move(p) => self
+                    .body
+                    .locals
+                    .get(p.local.0 as usize)
+                    .map(|l| l.ty.clone()),
+                Operand::Constant(_) => None,
+            };
+            let is_str = matches!(mir_ty, Some(Ty::Str));
             let v = self.lower_operand(op)?;
             let v_ty = self.builder.func.dfg.value_type(v);
-            if v_ty == ir::types::F32 || v_ty == ir::types::F64 {
+            if is_str {
+                // `__cobrust_fmt_str(buf, ptr, len)` expects raw bytes,
+                // not a StringBuffer pointer. Extract (ptr, len) from
+                // the StringBuffer via the existing accessors.
+                let str_ptr_fr = self.runtime_funcs.get("__cobrust_str_ptr").copied();
+                let str_len_fr = self.runtime_funcs.get("__cobrust_str_len").copied();
+                let fmt_str_fr = self.runtime_funcs.get("__cobrust_fmt_str").copied();
+                if let (Some(ptr_fr), Some(len_fr), Some(fmt_fr)) =
+                    (str_ptr_fr, str_len_fr, fmt_str_fr)
+                {
+                    let ptr_call = self.builder.ins().call(ptr_fr, &[v]);
+                    let ptr_v = self.builder.inst_results(ptr_call)[0];
+                    let len_call = self.builder.ins().call(len_fr, &[v]);
+                    let len_v = self.builder.inst_results(len_call)[0];
+                    self.builder.ins().call(fmt_fr, &[buf, ptr_v, len_v]);
+                }
+            } else if v_ty == ir::types::F32 || v_ty == ir::types::F64 {
                 let v_f64 = if v_ty == ir::types::F32 {
                     self.builder.ins().fpromote(ir::types::F64, v)
                 } else {
