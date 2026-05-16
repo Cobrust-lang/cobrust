@@ -975,9 +975,8 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         });
                     }
                     let lst = args[0].clone();
-                    *func = Operand::Constant(Constant::Str(
-                        LIST_IS_EMPTY_RUNTIME_SYMBOL.to_string(),
-                    ));
+                    *func =
+                        Operand::Constant(Constant::Str(LIST_IS_EMPTY_RUNTIME_SYMBOL.to_string()));
                     args.clear();
                     args.push(lst);
                 }

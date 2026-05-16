@@ -1127,9 +1127,12 @@ impl Ctx {
     fn instantiate_list_polymorphic(&self, ty: &Ty) -> Ty {
         match ty {
             Ty::List(_) => Ty::List(Box::new(self.fresh_var())),
-            Ty::Tuple(items) => {
-                Ty::Tuple(items.iter().map(|t| self.instantiate_list_polymorphic(t)).collect())
-            }
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|t| self.instantiate_list_polymorphic(t))
+                    .collect(),
+            ),
             Ty::Set(elem) => Ty::Set(Box::new(self.instantiate_list_polymorphic(elem))),
             Ty::Dict(k, v) => Ty::Dict(
                 Box::new(self.instantiate_list_polymorphic(k)),
