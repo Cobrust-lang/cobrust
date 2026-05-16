@@ -1,6 +1,6 @@
 ---
 doc_kind: index
-last_verified_commit: ac5636a
+last_verified_commit: 7ab04a4
 ---
 
 # Architecture Decision Records
@@ -87,3 +87,4 @@ same atomic commit as the change it justifies.
 | [0050e](0050e-string-stdlib-m-f-3-5.md) | M-F.3.5 string stdlib design — 10 PRELUDE-fn surface (`split` / `join` / `replace` / `trim` / `find` / `contains` / `starts_with` / `ends_with` / `lower` / `upper`) + `clone()` builtin scoped IN to retroactively close LC-100 honest-debt; Option C PRELUDE-now / method-form-Phase-G | accepted | 2026-05-16 |
 | [0050f](0050f-file-io-completion-m-f-3-6.md) | M-F.3.6 file IO completion design — 7 PRELUDE-fn surface (`read_file` / `read_file_lines` / `write_file` / `append_file` / `stdin_read_all` / `stdout_write` / `stderr_write`); Option C PRELUDE-now / method-form-Phase-G; i64-sentinel error reporting mirroring ADR-0044 W2 Phase 2 cap | accepted | 2026-05-16 |
 | [0051](0051-llm-first-design-principle.md) | LLM-first design principle — constitutional north star: "Cobrust is not the language most pleasant for humans to write — it is the language LLM agents write correctly on the first try." 4 Phase G+ priority directions (explicit `&` borrow / F.1.4 error UX / `@py_compat` L2 hard-bind / method-call sugar). Amends CLAUDE.md §2.5 | accepted | 2026-05-16 |
+| [0052](0052-phase-g-llm-friendliness-batch.md) | Phase G — LLM-friendliness sprint batch frame: 4 sub-ADRs (0052a explicit borrow / 0052b error UX FIX-text / 0052c `@py_compat` L2 bind / 0052d method-call sugar with method-dispatch infra prereq); two-wave dispatch plan (Direction A solo Wave 1 — predicate-flip; B+C+D parallel Wave 2); §2.5 compliance scoreboard rubric; F30 shadow-flip + F28 P10-direct PAIR + F27 verified-at-HEAD SOPs bound; LC-100 cleanup deferred (not in Phase G scope) | proposed | 2026-05-16 |
