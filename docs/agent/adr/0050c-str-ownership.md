@@ -49,7 +49,7 @@ Per `findings/adr-scope-reality-divergence.md` F27 SOP: every claim below was cr
 | Comprehension lowering iter-protocol path | `crates/cobrust-mir/src/lower.rs:1493-1576` | open finding `comp-lowering-zero-sentinel-collision.md` (P2); same iter-protocol that Aggregate List feeds |
 | For-loop lowering length-bound path | `crates/cobrust-mir/src/lower.rs:1717-1725 + 726-836` | ADR-0050b superseded iter-protocol for for-loop; uses `__cobrust_list_len + __cobrust_list_get` |
 | `__cobrust_iter_init / _next / _drop` runtime backing | `crates/cobrust-stdlib/src/iter.rs:278-355` | iter-protocol over list-of-i64 slots; reads list pointers via `__cobrust_list_get` returning `i64` |
-| Existing Str consumer count (grep `__cobrust_str_` non-test) | `crates/cobrust-codegen/src/cranelift_backend.rs` + `crates/cobrust-stdlib/src/{fmt,io,env,llm}.rs` + `crates/cobrust-cli/src/build/intrinsics.rs` | 18 distinct non-test references across 6 files; full list in §"Consequences" enumeration |
+| Existing Str consumer count (grep `__cobrust_str_` non-test) | `crates/cobrust-codegen/src/cranelift_backend.rs` + `crates/cobrust-stdlib/src/{fmt,io,env,llm}.rs` + `crates/cobrust-cli/src/build/intrinsics.rs` | 11 distinct non-test references across 6 files; full list in §"Consequences" enumeration |
 
 ### LC-100 / Wave 2 / list[str] dependency framing
 
@@ -284,7 +284,7 @@ Per `findings/adr-cross-surface-bug-fix-scope-creep.md` F29 SOP: when a sub-ADR 
 | `__cobrust_argv` | `stdlib/env.rs:64` | declared at `codegen` runtime_helper_signatures; emits a List<Str> where each slot is an owned Str pointer | **also-fixed** — but requires the new `__cobrust_list_drop_elems` shim (Phase 3) because the list's elements are each owned. |
 | LLM stdlib `alloc_str_buffer` | `stdlib/llm.rs:398` | various LLM shims (~10 callsites within `llm.rs`) | **also-fixed** — same f-string-style buffer; same drop schedule. |
 
-**Total Str consumers benefitted: 18 distinct shim definitions + ~30 consumer callsites across 6 crates.** All are `also-fixed` in this sprint. No `fixed-later-with-anchor` and no `accepted-as-known-debt` for Str.
+**Total Str consumers benefitted: 11 distinct shim definitions + ~30 consumer callsites across 6 crates.** All are `also-fixed` in this sprint. No `fixed-later-with-anchor` and no `accepted-as-known-debt` for Str.
 
 #### Every Ty::Str-typed local in MIR lowering
 
@@ -325,7 +325,7 @@ Per `findings/adr-cross-surface-bug-fix-scope-creep.md` F29 SOP: when a sub-ADR 
 
 #### Comprehensive enumeration count
 
-- 18 distinct `__cobrust_str_*` shim definitions, all `also-fixed` (no deferral, no debt).
+- 11 distinct `__cobrust_str_*` shim definitions, all `also-fixed` (no deferral, no debt).
 - 4 Ty::Str-producing MIR sites, all `also-fixed`.
 - 2 Aggregate::List producing Ty::List(Ty::Str), 1 `also-fixed` (literal + argv) and 1 `fixed-later-with-anchor` (comprehensions; existing finding).
 - 1 f-string surface, `also-fixed`.
