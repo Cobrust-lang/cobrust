@@ -296,9 +296,18 @@ impl CraneliftCtx {
                 if let Some(ty) = inferred.get(&p.local) {
                     return Some(*ty);
                 }
-                body.locals
-                    .get(p.local.0 as usize)
-                    .and_then(|l| cranelift_scalar_ty(&l.ty))
+                // ADR-0050c Phase 4 cascade fix: indirect types
+                // (Str / List / Tuple / Dict / Set / Record / Adt /
+                // Alias / Fn) all pass-by-pointer at M9; their
+                // `cranelift_scalar_ty` is None. Map those to the
+                // pointer type so callers (signature inference,
+                // var_map declaration) consistently see an i64 instead
+                // of falling back to `Ty::None` → I8 (which violates
+                // sig matching at call sites, e.g. `__cobrust_println`
+                // taking i64).
+                body.locals.get(p.local.0 as usize).map(|l| {
+                    cranelift_scalar_ty(&l.ty).unwrap_or(self.pointer_type)
+                })
             }
             Operand::Constant(c) => Some(match c {
                 Constant::Bool(_) | Constant::None => ir::types::I8,
@@ -791,15 +800,16 @@ impl CraneliftCtx {
                     })?;
                 }
             }
-            // Walk terminator: existing ADR-0044 W2 Phase 3 behavior for
-            // `Terminator::Call` whose `func` is `Constant::Str(_)`.
-            if let cobrust_mir::Terminator::Call { func, args, .. } = &mir_block.terminator {
-                if !matches!(
-                    func,
-                    cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(_))
-                ) {
-                    continue;
-                }
+            // Walk terminator args for `Constant::Str` literals regardless
+            // of `func` kind. ADR-0044 W2 Phase 3 originally walked only
+            // runtime-helper calls (`func` = `Constant::Str(name)`), but
+            // ADR-0050c Phase 2 cascade fix needs user-fn calls
+            // (`func` = `Constant::FnRef(id)`) to materialise Str args
+            // too — the new `materialize_str_buffer` branch in the FnRef
+            // lowering at `cranelift_backend.rs:1183-1199` calls
+            // `materialize_str_data` which requires the payload to be
+            // already interned in `str_data_globals`.
+            if let cobrust_mir::Terminator::Call { args, .. } = &mir_block.terminator {
                 for arg in args {
                     if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(payload)) = arg
                     {
@@ -1037,6 +1047,31 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 Ok(())
             }
             StatementKind::Assign { place, rvalue } => {
+                // ADR-0050c Phase 2 cascade fix: `let v: str = "hello"`
+                // lowers to `Assign(v, Use(Constant::Str("hello")))`.
+                // The default `lower_constant(Constant::Str(_))` returns
+                // a zero pointer (the M9 stub); writing 0 into a
+                // Str-typed slot leaves `v` null, so any consumer
+                // (`print(v)` → `__cobrust_println_str_buf(0)`) sees a
+                // null buffer and prints nothing.
+                //
+                // Resolution: when the rvalue is a direct `Use` of a
+                // `Constant::Str(payload)` AND the destination's
+                // declared type is `Ty::Str`, materialise the literal
+                // as a heap `StringBuffer` via the existing
+                // `materialize_str_buffer` (mirror of f-string + list
+                // literal materialisation paths).
+                if let Rvalue::Use(Operand::Constant(Constant::Str(payload))) = rvalue {
+                    let dest_ty = self
+                        .body
+                        .locals
+                        .get(place.local.0 as usize)
+                        .map(|l| l.ty.clone());
+                    if matches!(dest_ty, Some(Ty::Str)) && place.projections.is_empty() {
+                        let value = self.materialize_str_buffer(payload)?;
+                        return self.write_place(place, value);
+                    }
+                }
                 let value = self.lower_rvalue(rvalue)?;
                 self.write_place(place, value)
             }
@@ -1146,7 +1181,20 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                     if let Some(func_ref) = self.user_funcs.get(id).copied() {
                         let mut call_args = Vec::with_capacity(args.len());
                         for arg in args {
-                            let v = self.lower_operand(arg)?;
+                            // ADR-0050c Phase 2 cascade fix: when a
+                            // user-fn call passes a `Constant::Str`
+                            // literal arg into a Str-typed parameter,
+                            // the M9 stub at `lower_constant(Str)` would
+                            // return a zero pointer, leaving the callee's
+                            // param null. Materialise the literal as a
+                            // heap `StringBuffer` so the callee sees a
+                            // real pointer (mirror of the f-string and
+                            // list-literal materialisation paths).
+                            let v = if let Operand::Constant(Constant::Str(payload)) = arg {
+                                self.materialize_str_buffer(payload)?
+                            } else {
+                                self.lower_operand(arg)?
+                            };
                             call_args.push(v);
                         }
                         let inst = self.builder.ins().call(func_ref, &call_args);
