@@ -2431,16 +2431,10 @@ fn runtime_helper_signatures(
     // signature already registered above with the f-string runtime.
     out.push(("__cobrust_str_split", sig(call_conv, &[p, p], Some(p))));
     out.push(("__cobrust_str_join", sig(call_conv, &[p, p], Some(p))));
-    out.push((
-        "__cobrust_str_replace",
-        sig(call_conv, &[p, p, p], Some(p)),
-    ));
+    out.push(("__cobrust_str_replace", sig(call_conv, &[p, p, p], Some(p))));
     out.push(("__cobrust_str_trim", sig(call_conv, &[p], Some(p))));
     out.push(("__cobrust_str_find", sig(call_conv, &[p, p], Some(i64))));
-    out.push((
-        "__cobrust_str_contains",
-        sig(call_conv, &[p, p], Some(i64)),
-    ));
+    out.push(("__cobrust_str_contains", sig(call_conv, &[p, p], Some(i64))));
     out.push((
         "__cobrust_str_starts_with",
         sig(call_conv, &[p, p], Some(i64)),
