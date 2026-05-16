@@ -132,6 +132,8 @@ pub unsafe extern "C" fn __cobrust_dict_set(dict: *mut u8, k: i64, v: i64);
 pub unsafe extern "C" fn __cobrust_dict_get(dict: *mut u8, k: i64) -> i64;
 pub unsafe extern "C" fn __cobrust_dict_len(dict: *mut u8) -> i64;
 pub unsafe extern "C" fn __cobrust_dict_drop(dict: *mut u8);
+// M-F.3.4 / ADR-0050d Decision 5 addendum.
+pub unsafe extern "C" fn __cobrust_dict_is_empty(dict: *mut u8) -> i64;
 
 pub unsafe extern "C" fn __cobrust_set_new(elem_size: i64, len: i64) -> *mut u8;
 pub unsafe extern "C" fn __cobrust_set_insert(set: *mut u8, v: i64);
@@ -661,3 +663,14 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
 | `__cobrust_str_clone(buf: *mut u8) -> *mut u8` | `stdlib/fmt.rs` — allocates a fresh `StringBuffer`, copies the bytes from the source buffer, returns the new pointer. NULL input returns NULL. | Explicit Str clone path for ADR-0050c Phase 4. Used by for-loop body, index-expression, and Aggregate(List) lowering when a Str-typed operand needs a fresh owning copy. |
 | `__cobrust_list_drop_elems(list: *mut u8, elem_drop_fn: extern "C" fn(*mut u8))` | `stdlib/collections.rs:548-589` — walks the list's i64 slots, casts each non-zero slot to `*mut u8`, calls `elem_drop_fn(slot)`, then `__cobrust_list_drop(list)`. NULL list is a no-op. | Per-element drop dispatch for `Ty::List(Ty::Str)`. Codegen passes `__cobrust_str_drop` as the elem_drop_fn (materialised via `func_addr`). |
 | `__cobrust_list_is_empty(list: *mut u8) -> i64` | `stdlib/collections.rs:594-605` — returns 1 if `len == 0`, 0 otherwise. NULL is treated as empty. | §2.2-mandated emptiness predicate; the `if xs:` implicit-truthiness ban requires this for the `if list_is_empty(xs):` canonical pattern. |
+
+## ADR-0050d M-F.3.4 — dict surface C-ABI shims
+
+Sub-sprint a+b lands the source-level + type-checker surface plus the
+`dict_is_empty` C-ABI shim. The remaining shims (iter init/next/drop,
+typed get/set per (K, V) shape, equality, keyerror abort) ship in
+sub-sprint d alongside the `indexmap::IndexMap` backing swap.
+
+| Symbol | Definition | Purpose |
+|---|---|---|
+| `__cobrust_dict_is_empty(dict: *mut u8) -> i64` | `stdlib/collections.rs` — returns 1 if `map.is_empty()`, 0 otherwise. NULL dict is treated as empty. M12.x backing is `HashMap<i64, i64>`; sub-sprint d swaps to indexmap without breaking the signature. | §2.2-mandated emptiness predicate; the `if d:` implicit-truthiness ban requires this for the `if dict_is_empty(d):` canonical pattern. Source binding at `intrinsics.rs::DICT_IS_EMPTY_RUNTIME_SYMBOL`. Row-polymorphic at the type-checker via `is_list_polymorphic_intrinsic_name` Dict widening. |

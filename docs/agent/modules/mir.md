@@ -427,6 +427,28 @@ Invariants:
 - MIR `Rvalue::Cast(IntToFloat, op, Ty::Float)` and `Rvalue::Cast(FloatToInt, op, Ty::Int)` are the only cast forms emitted for source-level `as`.
 - `FMTSPEC:` sentinel is a MIR-internal encoding; codegen detects it to route to `__cobrust_fmt_float_prec`.
 
+## M-F.3.4 — dict MIR scaffolding (ADR-0050d sub-sprint a+b)
+
+Sub-sprint a+b lands type-checker + parser + PRELUDE plumbing for dict;
+the MIR-side codegen swap (sub-sprint c/d) is a separate dispatch.
+The Wave-1 scaffolding stays intact:
+
+| Surface | Status | Anchor |
+|---|---|---|
+| `AggregateKind::Dict` MIR rvalue | already exists pre-Wave-3 | `cobrust-mir/src/tree.rs:387` |
+| `lower.rs ExprKind::Dict` → `Rvalue::Aggregate(Dict, ops)` | ops are interleaved K, V pairs | `cobrust-mir/src/lower.rs:1111-1137` |
+| `Rvalue::Aggregate(Dict, ..)` codegen | M9 stub returns null (sub-sprint c/d closes) | `cobrust-codegen/src/cranelift_backend.rs` per ADR-0027 §1 |
+| `d[k]` read / `d[k] = v` write / `key in d` MIR dispatch | falls through M12.x `__cobrust_dict_*` stub (HashMap-backed, i64,i64 only) | sub-sprint c wires intrinsic-rewrite to typed `_<K_V>` shims |
+| Drop schedule for `Ty::Dict(K, V)` | sub-sprint f extension | `cobrust-mir/src/drop.rs` per ADR-0050d sub-sprint f |
+
+Sub-sprint a+b additions in this milestone:
+- `Ty::is_hashable` predicate (`cobrust-types/src/ty.rs`) used by the
+  MIR-bound type info to dispatch K-typed codegen in sub-sprint c.
+- Method-intrinsic recognition for `d.keys()` / `.values()` / `.items()`
+  / `.get(k)` / `.copy()` at `cobrust-types/src/check.rs::try_synth_dict_method`
+  feeds type info downstream; MIR receives precise return types so the
+  sub-sprint d C-ABI dispatch can encode K and V correctly.
+
 ## Cross-references
 
 - `adr:0020` — MIR shape, terminator taxonomy, drop schedule, borrow obligations (authoritative).
@@ -435,6 +457,7 @@ Invariants:
 - `adr:0050a` — break/continue contract seal (MIR loop_stack discipline).
 - `adr:0050` §A1 — M-F.3.3 f64 gap table.
 - `adr:0050c` — M-F.3.2 list[str] TD-1 closure (Str ownership flip + drop schedule).
+- `adr:0050d` — M-F.3.4 dict design (sub-sprint a..g blueprint + MIR shape per §"MIR shape (binding)").
 - `mod:types` — input.
 - `mod:codegen` — output consumer.
 - Constitution `CLAUDE.md` §2.2 (drops including GIL/GC), §4.1 (pipeline), §5.1 (elegance), §5.2 (scientific — enumerated obligations), §7 (M2 done means), ADR-0019 (M8..M14 sequencing).
