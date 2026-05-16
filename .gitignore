@@ -32,3 +32,8 @@ crates/*/target/
 # Python bytecode caches (corpus harness scratch)
 __pycache__/
 *.pyc
+
+# Claude Code agent transcript worktrees (CTO 2026-05-16 — leaked once
+# via `git add -A` in the f64 fmt-stamp 46b3d02; gitignored to prevent
+# recurrence).
+.claude/
