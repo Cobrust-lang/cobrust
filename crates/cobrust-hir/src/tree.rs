@@ -354,6 +354,11 @@ pub enum ExprKind {
     Yield(Option<Box<Expr>>),
     /// Form 30 — `yield from e`.
     YieldFrom(Box<Expr>),
+    /// `expr as Type` — explicit numeric cast (M-F.3.3 gap a).
+    Cast {
+        expr: Box<Expr>,
+        target: cobrust_frontend::ast::Type,
+    },
 }
 
 /// Literal payload — same shape as the AST literal, recapitulated to

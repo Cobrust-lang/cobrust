@@ -200,10 +200,25 @@ Constraint: HIR makes no decisions about loop scope. That obligation
 lives in `mod:types` (`loop_depth` check) and `mod:mir` (`loop_stack`
 push/pop discipline).
 
+## M-F.3.3 — f64 and `as`-cast additions (ADR-0050 §A1)
+
+| Feature | Location | Notes |
+|---|---|---|
+| `ExprKind::Cast { expr, target }` | `hir/src/tree.rs` — new HIR variant; `target` is `cobrust_frontend::ast::Type` | M-F.3.3 gap (a) |
+| Lowering AST→HIR Cast | `hir/src/lower.rs` `lower_expr` — lowers `ast::ExprKind::Cast` to `h::ExprKind::Cast` | M-F.3.3 gap (a) |
+| `walk_expr_for_captures` Cast arm | `hir/src/lower.rs` — walks into Cast `expr` for lambda capture analysis | M-F.3.3 gap (a) |
+| Fn→Fn shadowing | `hir/src/scope.rs` `Scope::bind` — allows user `fn` to shadow PRELUDE stub of same name | M-F.3.3 gap (b) PRELUDE compatibility |
+| `stmt_def_ids` map | `hir/src/lower.rs` `Lowerer` struct — stores `span.start → DefId` per `fn` stmt so `lower_module_stmt` uses the per-stmt DefId even after scope shadowing | M-F.3.3 gap (b) |
+
+Invariants:
+- `ExprKind::Cast::target` is the RAW AST `Type` (not a HIR type). Type-checking and cast-kind determination are deferred to `mod:types` and `mod:mir`.
+- Fn→Fn shadowing: the later definition's DefId wins in scope; PRELUDE stub DefId is preserved in `stmt_def_ids` so the stub body is still lowered under its original DefId.
+
 ## Cross-references
 
 - `adr:0005` — HIR shape and lowering rules (authoritative).
 - `adr:0050a` — break/continue contract seal.
+- `adr:0050` §A1 — M-F.3.3 f64 gap table.
 - `mod:frontend` — input.
 - `mod:types` — output consumer.
 - Constitution `CLAUDE.md` §2.2 (drops), §7 (M2 done means).

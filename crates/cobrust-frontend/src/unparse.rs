@@ -552,6 +552,13 @@ impl Writer {
                 self.write_expr(e);
                 self.push(")");
             }
+            ExprKind::Cast { expr, target } => {
+                self.push("(");
+                self.write_expr(expr);
+                self.push(" as ");
+                self.write_type(target);
+                self.push(")");
+            }
         }
     }
 

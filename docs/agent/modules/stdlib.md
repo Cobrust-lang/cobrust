@@ -611,6 +611,29 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
 - **Full Unicode case-folding** in `string::lower`/`upper` —
   ASCII fast-path at M11; full case-folding is M11.x.
 
+## M-F.3.3 — f64 math C-ABI shims (ADR-0050 §A1)
+
+| Symbol | C ABI | Notes |
+|---|---|---|
+| `__cobrust_math_sqrt(f64) -> f64` | `math.rs` | `x.sqrt()` |
+| `__cobrust_math_floor(f64) -> f64` | `math.rs` | `x.floor()` |
+| `__cobrust_math_ceil(f64) -> f64` | `math.rs` | `x.ceil()` |
+| `__cobrust_math_round(f64) -> f64` | `math.rs` | `x.round()` (half-away-from-zero) |
+| `__cobrust_math_abs(f64) -> f64` | `math.rs` | `x.abs()` |
+| `__cobrust_math_pow(f64, f64) -> f64` | `math.rs` | `base.powf(exp)` |
+| `__cobrust_math_sin(f64) -> f64` | `math.rs` | `x.sin()` |
+| `__cobrust_math_cos(f64) -> f64` | `math.rs` | `x.cos()` |
+| `__cobrust_math_tan(f64) -> f64` | `math.rs` | `x.tan()` |
+| `__cobrust_math_log(f64) -> f64` | `math.rs` | `x.ln()` (natural log) |
+| `__cobrust_math_exp(f64) -> f64` | `math.rs` | `x.exp()` |
+| `__cobrust_fmt_float_prec(buf: *mut u8, val: f64, spec_ptr: *const u8, spec_len: i64)` | `fmt.rs` | fixed / scientific / general via Python-style format spec |
+
+`__cobrust_fmt_float_prec` spec rules:
+- `.Nf` — fixed N decimal places
+- `e` — scientific notation
+- `g` — shortest repr (default float display)
+- empty / unknown — falls back to `format_float(v)`
+
 ## Cross-references
 
 - `mod:codegen` — emits calls into the C ABI symbols this module
@@ -623,6 +646,7 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
   delegated to M11.
 - ADR-0024 §"Hello-world contract" — M10 supersedes pinned here.
 - ADR-0025 — M11 design (this milestone).
+- `adr:0050` §A1 — M-F.3.3 f64 gap table.
 - ADR-0028 — M13 structured-concurrency runtime.
 - `finding:m13-sync-bridge-cost` — empirical perf finding +
   budget amendment justification (0.7× → 0.3×).

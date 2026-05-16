@@ -414,12 +414,26 @@ Test corpus: `crates/cobrust-mir/tests/break_continue_mir_corpus.rs`
 — 19 cases including 5-level deep nesting (`m10`, `m15`) and goto-target
 bounds verification (`m16`).
 
+## M-F.3.3 — f64 and `as`-cast MIR lowering (ADR-0050 §A1)
+
+| Feature | Location | Notes |
+|---|---|---|
+| `ExprKind::Cast` → `Rvalue::Cast` | `mir/src/lower.rs` `lower_expr` — detects target name `"f64"/"float"` → `CastKind::IntToFloat`, `"i64"/"int"` → `CastKind::FloatToInt` | M-F.3.3 gap (a) |
+| Float literal `inf`/`nan` | `mir/src/lower.rs` `parse_float_lit` — handles `"inf"` → `f64::INFINITY`, `"nan"` → `f64::NAN` | M-F.3.3 gap (d) |
+| Float div-assert guard | `mir/src/lower.rs` `lower_bin` — `hir_expr_is_float(lhs)` suppresses the integer div-by-zero assert for float operands (IEEE 754 defines float/0.0 = ±inf) | M-F.3.3 f64e21 |
+| f-string `FMTSPEC:` sentinel | `mir/src/lower.rs` `lower_expr` Format arm — when a Hole has `format_spec`, emits `Operand::Constant(Constant::Str("FMTSPEC:<spec>"))` after the value | M-F.3.3 gap (c) |
+
+Invariants:
+- MIR `Rvalue::Cast(IntToFloat, op, Ty::Float)` and `Rvalue::Cast(FloatToInt, op, Ty::Int)` are the only cast forms emitted for source-level `as`.
+- `FMTSPEC:` sentinel is a MIR-internal encoding; codegen detects it to route to `__cobrust_fmt_float_prec`.
+
 ## Cross-references
 
 - `adr:0020` — MIR shape, terminator taxonomy, drop schedule, borrow obligations (authoritative).
 - `adr:0019` — Phase E roadmap; M8 row.
 - `adr:0006` — type-system obligations 1–9; B1..B5 project onto items 1–3.
 - `adr:0050a` — break/continue contract seal (MIR loop_stack discipline).
+- `adr:0050` §A1 — M-F.3.3 f64 gap table.
 - `mod:types` — input.
 - `mod:codegen` — output consumer.
 - Constitution `CLAUDE.md` §2.2 (drops including GIL/GC), §4.1 (pipeline), §5.1 (elegance), §5.2 (scientific — enumerated obligations), §7 (M2 done means), ADR-0019 (M8..M14 sequencing).

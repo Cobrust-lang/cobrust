@@ -1524,3 +1524,43 @@ if [[ -f "$adr_50a" ]]; then
 fi
 
 echo "doc-coverage: M-F.3.0 break/continue contract checks passed"
+
+# --- M-F.3.3 f64 and as-cast surface coverage (ADR-0050 §A1) ---------------
+# Human-facing docs must mention f64 as-cast and inf/nan literals.
+mf33_human_files=(
+    "docs/human/en/getting-started.md"
+    "docs/human/zh/getting-started.md"
+)
+for f in "${mf33_human_files[@]}"; do
+    grep -q -F 'M-F.3.3' "$f" \
+        || fail "M-F.3.3 section anchor missing from ${f}"
+    grep -q -F 'as f64' "$f" \
+        || fail "M-F.3.3 'as f64' cast example missing from ${f}"
+    grep -q -F 'inf' "$f" \
+        || fail "M-F.3.3 'inf' literal missing from ${f}"
+done
+# Agent module docs must document each sub-gap.
+grep -q -F 'M-F.3.3' "docs/agent/modules/frontend.md" \
+    || fail "M-F.3.3 not mentioned in docs/agent/modules/frontend.md"
+grep -q -F 'M-F.3.3' "docs/agent/modules/hir.md" \
+    || fail "M-F.3.3 not mentioned in docs/agent/modules/hir.md"
+grep -q -F 'M-F.3.3' "docs/agent/modules/types.md" \
+    || fail "M-F.3.3 not mentioned in docs/agent/modules/types.md"
+grep -q -F 'M-F.3.3' "docs/agent/modules/mir.md" \
+    || fail "M-F.3.3 not mentioned in docs/agent/modules/mir.md"
+grep -q -F 'M-F.3.3' "docs/agent/modules/codegen.md" \
+    || fail "M-F.3.3 not mentioned in docs/agent/modules/codegen.md"
+grep -q -F 'M-F.3.3' "docs/agent/modules/stdlib.md" \
+    || fail "M-F.3.3 not mentioned in docs/agent/modules/stdlib.md"
+grep -q -F 'M-F.3.3' "docs/agent/modules/cli.md" \
+    || fail "M-F.3.3 not mentioned in docs/agent/modules/cli.md"
+# Test corpus must exist.
+[[ -f "crates/cobrust-cli/tests/f64_e2e.rs" ]] \
+    || fail "crates/cobrust-cli/tests/f64_e2e.rs missing (M-F.3.3 corpus)"
+# PRELUDE must include sqrt/pow stubs.
+grep -q 'fn sqrt(x: f64) -> f64' "crates/cobrust-cli/src/build.rs" \
+    || fail "M-F.3.3 sqrt PRELUDE stub missing from build.rs"
+grep -q 'fn pow(base: f64, exp: f64) -> f64' "crates/cobrust-cli/src/build.rs" \
+    || fail "M-F.3.3 pow PRELUDE stub missing from build.rs"
+
+echo "doc-coverage: M-F.3.3 f64 + as-cast surface checks passed"

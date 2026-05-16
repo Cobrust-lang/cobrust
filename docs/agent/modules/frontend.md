@@ -137,10 +137,25 @@ Constraints (ADR-0050a §"Semantics"):
 - Bare `break` / `continue` only. No label (`break <ident>` rejected by `expect_eos()` mismatch). No payload (`break 0` / `break "label"` likewise rejected).
 - Each keyword stands alone on its own line — the parser does NOT permit `break;` (semicolons unsupported in Cobrust) or `break()` (parses `break` as ident, hits the reserved-word block).
 
+## M-F.3.3 — f64 and `as`-cast (ADR-0050 §A1)
+
+| Feature | Location | Notes |
+|---|---|---|
+| `inf` / `nan` Float literals | `lexer.rs` `lex_word_or_string_with_prefix` — emits `TokenKind::Float("inf")` / `TokenKind::Float("nan")` | M-F.3.3 gap (d) |
+| `ExprKind::Cast { expr, target }` | `ast.rs` — variant after `YieldFrom` | M-F.3.3 gap (a) |
+| `as` cast parsing | `parser.rs` `parse_pratt` — `KwAs` guarded by `is_cast_type_token()` | M-F.3.3 gap (a) |
+| `is_cast_type_token` | `parser.rs` free function — recognizes `i64/f64/int/float/str/bool/bytes/list/dict/set` | M-F.3.3 gap (a) |
+| Unparser `Cast` arm | `unparse.rs` `write_expr` — renders `(expr as type)` | M-F.3.3 gap (a) |
+
+Constraints:
+- `inf` and `nan` are Float literals; they cannot be identifiers.
+- `as` cast only triggers when followed by a recognized type token (prevents `with ctx as x` ambiguity).
+
 ## Cross-references
 
 - `adr:0003` — the 30-form definition this module implements.
 - `adr:0050a` — break/continue semantics + contract seal.
+- `adr:0050` §A1 — M-F.3.3 f64 gap table.
 - `find:m1-fuzz-method` — fuzz-gate methodology + the one bug it
   caught.
 - Constitution `CLAUDE.md` §7 — milestone definition.

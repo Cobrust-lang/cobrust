@@ -763,6 +763,33 @@ impl Ctx {
                 self.synth_expr(e)?;
                 Ok(Ty::None)
             }
+            ExprKind::Cast { expr, target } => {
+                // M-F.3.3 gap (a): `x as T`. Permitted casts (constitution §2.2):
+                //   i64 → f64, f64 → i64 (numeric widening / truncating).
+                // Rejected: str → anything, bool → f64, anything → str, list → anything.
+                // The HIR cast target is an AST Type stored verbatim. Convert it to
+                // a Ty by name-matching the target type parts directly.
+                let from_ty = self.synth_expr(expr)?;
+                let from_resolved = finalize(&from_ty, &self.subst, span)?;
+                let target_name = match &target.kind {
+                    cobrust_frontend::ast::TypeKind::Name(parts) => parts.join("."),
+                    _ => String::new(),
+                };
+                let to_resolved = self.lower_named_type(&target_name);
+                let allowed = matches!(
+                    (&from_resolved, &to_resolved),
+                    (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int)
+                );
+                if allowed {
+                    Ok(to_resolved)
+                } else {
+                    Err(TypeError::TypeMismatch {
+                        expected: to_resolved,
+                        actual: from_resolved,
+                        span,
+                    })
+                }
+            }
         }
     }
 
