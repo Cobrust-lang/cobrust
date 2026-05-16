@@ -1280,12 +1280,21 @@ impl Ctx {
         }
     }
 
-    /// ADR-0050c §F5 / Phase 6 — row-polymorphic widening helper.
-    /// Walk a type and replace every `Ty::List(elem)` with
-    /// `Ty::List(fresh_var)` so each call to a list-polymorphic
-    /// intrinsic gets its own elem-var. Recurses into Tuple / Set /
-    /// Dict / Fn / Record / Adt / Alias so that nested list types are
-    /// instantiated too (e.g. `fn f(xs: list[list[T]]) -> ...`).
+    /// ADR-0050c §F5 / Phase 6 + ADR-0050d Decision 5 addendum —
+    /// row-polymorphic widening helper.
+    ///
+    /// Walk a type and replace every collection-type at the top level
+    /// with fresh `Ty::Var` element types so each call to a
+    /// collection-polymorphic intrinsic gets its own elem vars. The
+    /// pre-Wave-3 incarnation widened only `Ty::List(elem)`; the
+    /// Wave-3 amendment widens `Ty::Dict(K, V)` at the top level too,
+    /// so `dict_is_empty(d: Dict[i64, i64])` accepts a call with
+    /// `d: Dict[str, str]` etc. (Decision 5 addendum row-polymorphic
+    /// dispatch).
+    ///
+    /// Recurses into Tuple / Set / Dict / Fn / Record / Adt / Alias
+    /// so that nested collection types are instantiated too (e.g.
+    /// `fn f(xs: list[list[T]]) -> ...`).
     fn instantiate_list_polymorphic(&self, ty: &Ty) -> Ty {
         match ty {
             Ty::List(_) => Ty::List(Box::new(self.fresh_var())),
@@ -1296,10 +1305,10 @@ impl Ctx {
                     .collect(),
             ),
             Ty::Set(elem) => Ty::Set(Box::new(self.instantiate_list_polymorphic(elem))),
-            Ty::Dict(k, v) => Ty::Dict(
-                Box::new(self.instantiate_list_polymorphic(k)),
-                Box::new(self.instantiate_list_polymorphic(v)),
-            ),
+            // ADR-0050d Decision 5 addendum — top-level Dict widens to
+            // fresh K + fresh V so `dict_is_empty(d: Dict[i64,i64])`
+            // unifies with any `Dict[K,V]` at the callsite.
+            Ty::Dict(_, _) => Ty::Dict(Box::new(self.fresh_var()), Box::new(self.fresh_var())),
             Ty::Fn(fn_ty) => Ty::Fn(FnTy {
                 positional: fn_ty
                     .positional
@@ -1493,7 +1502,16 @@ fn _dummy() {
 fn is_list_polymorphic_intrinsic_name(name: &str) -> bool {
     matches!(
         name,
-        "list_len" | "list_get" | "list_set" | "list_new" | "list_is_empty"
+        "list_len"
+            | "list_get"
+            | "list_set"
+            | "list_new"
+            | "list_is_empty"
+            // ADR-0050d Decision 5 addendum — `dict_is_empty(d) -> bool`
+            // accepts any `Dict[K, V]` at the callsite (widening
+            // delegates to `instantiate_list_polymorphic` which widens
+            // Dict to `Dict[?, ?]`).
+            | "dict_is_empty"
     )
 }
 

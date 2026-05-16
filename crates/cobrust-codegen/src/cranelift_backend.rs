@@ -2301,6 +2301,11 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_dict_get", sig(call_conv, &[p, i64], Some(i64))));
     out.push(("__cobrust_dict_len", sig(call_conv, &[p], Some(i64))));
     out.push(("__cobrust_dict_drop", sig(call_conv, &[p], None)));
+    // ADR-0050d Decision 5 addendum — `dict_is_empty(d) -> bool` predicate.
+    // Returns i64 0/1 per the SwitchInt convention (same shape as
+    // `__cobrust_list_is_empty`). Source-level binding lives at
+    // `crates/cobrust-cli/src/build/intrinsics.rs::DICT_IS_EMPTY_RUNTIME_SYMBOL`.
+    out.push(("__cobrust_dict_is_empty", sig(call_conv, &[p], Some(i64))));
 
     // Set<i64>
     out.push(("__cobrust_set_new", sig(call_conv, &[i64, i64], Some(p))));
