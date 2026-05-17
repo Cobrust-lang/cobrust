@@ -774,6 +774,25 @@ impl From<TypeError> for UserError {
                     col,
                 )
             }
+            // ADR-0052d-prereq §"New error variant" — method-form
+            // receiver matched one of the 5 recognised types but the
+            // method name is not in that type's table. Forward stderr
+            // surfaces the `suggestion` field (Wave-2 hard-coded
+            // `&'static str` hints, 0052b promotes to structured shape).
+            E::UnknownMethod {
+                type_name,
+                method_name,
+                span,
+                suggestion,
+            } => {
+                let (line, col) = span_to_line_col(span);
+                (
+                    format!("method `{method_name}` not found on `{type_name}`"),
+                    suggestion.map(|s| s.to_owned()),
+                    line,
+                    col,
+                )
+            }
         };
         Self::Type {
             file: PathBuf::from("<source>"),
