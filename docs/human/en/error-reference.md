@@ -269,3 +269,55 @@ errors are returned as `Result::Err` — they never panic or abort the process.
 | `Pack` | Value could not be encoded (out of M6 scope). | Check the `MsgValue` variant. |
 | `Unpack` | Malformed or truncated msgpack bytes. | Check the input bytes. |
 | `OverflowSize` | `pos + length` overflowed `usize` — likely adversarial input with a crafted length field near `u32::MAX`. | Reject the input; it is not a valid msgpack payload (B6 fix). |
+
+---
+
+## Error messages print the FIX (ADR-0052b)
+
+Since Phase G Wave 2 (ADR-0052b), every compiler diagnostic carries a
+machine-structured `suggestion` field that names the specific FIX path,
+not just the diagnosis. The CLI renderer surfaces this as a `hint:`
+line; LSP / `--emit-json` consumers (planned) read the `&'static str`
+field directly.
+
+### Why this matters
+
+CLAUDE.md §2.5 binds Cobrust as "the language LLM agents write
+correctly on the first try". An LLM agent consuming stderr should
+extract the FIX deterministically, without prose-stripping:
+
+```
+error[Type]: cannot use `Int` as a boolean condition
+  --> src/main.cb:3:8
+  hint: change to `if x != 0:` (use `.is_some()` for Option)
+```
+
+The `hint:` text is now a `&'static str` literal populated at the
+error-construction site, identical across all triggers of the same
+variant. The fix path is reproducible, structured, and LLM-friendly.
+
+### Three properties
+
+- **Construction-time write**. Each `Err(TypeError::Foo { ... })` site
+  in the compiler populates `suggestion` with the most actionable fix
+  string at that call site.
+- **Static `&'static str`**. Suggestion text is a compile-time literal —
+  no dynamic format arguments. The primary error line still carries the
+  failing identifier (`unknown name \`foo\``) so LLM stderr parsing
+  retains it; the suggestion text is generic-and-actionable.
+- **Renderer is structural**. The CLI's `error_ux.rs` `From<...>` impls
+  read `suggestion.map(str::to_owned)` directly — no per-variant prose
+  hard-coded at render time.
+
+### Covered error types
+
+- `cobrust_types::TypeError` — 24 variants (every S-class variant
+  carries `Some(...)`; class-N variants such as `Multiple` carry
+  `None`).
+- `cobrust_mir::MirError` — 10 variants (use-after-move, borrow
+  conflicts, drop-schedule violations).
+- `cobrust_hir::LoweringError` — 6 variants (unknown name, dropped
+  feature, mutable default, duplicate binding).
+
+Future Direction-B extensions to `cobrust_frontend::{LexError,
+ParseError}` are tracked but out-of-scope for Wave-2.
