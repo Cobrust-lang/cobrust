@@ -2657,7 +2657,6 @@ fn must_accept_with_method_dispatch_stubs(name: &str, body: &str) {
 // ---- Tier A: Str method forms (w0052dpre_01..10) ----
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_01_str_len_method_form() {
     // ADR-0052d-prereq §4 row 1: `s.len()` → `str_len(s)`. Return i64.
     must_accept_with_method_dispatch_stubs(
@@ -2667,7 +2666,6 @@ fn w0052dpre_01_str_len_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_02_str_split_method_form() {
     // ADR-0052d-prereq §4 row 2: `s.split(",")` → `split(s, ",")`. Return list[str].
     must_accept_with_method_dispatch_stubs(
@@ -2677,7 +2675,6 @@ fn w0052dpre_02_str_split_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_03_str_replace_method_form() {
     // ADR-0052d-prereq §4 row 3: `s.replace(a, b)` → `replace(s, a, b)`. Return str.
     must_accept_with_method_dispatch_stubs(
@@ -2687,7 +2684,6 @@ fn w0052dpre_03_str_replace_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_04_str_trim_method_form() {
     // ADR-0052d-prereq §4 row 4: `s.trim()` → `trim(s)`. Return str.
     must_accept_with_method_dispatch_stubs(
@@ -2697,7 +2693,6 @@ fn w0052dpre_04_str_trim_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_05_str_find_method_form() {
     // ADR-0052d-prereq §4 row 5: `s.find("x")` → `find(s, "x")`. Return i64.
     must_accept_with_method_dispatch_stubs(
@@ -2707,7 +2702,6 @@ fn w0052dpre_05_str_find_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_06_str_contains_method_form() {
     // ADR-0052d-prereq §4 row 6: `s.contains("x")` → `contains(s, "x")`. Return bool.
     must_accept_with_method_dispatch_stubs(
@@ -2717,7 +2711,6 @@ fn w0052dpre_06_str_contains_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_07_str_starts_with_method_form() {
     // ADR-0052d-prereq §4 row 7: `s.starts_with("x")` → `starts_with(s, "x")`. Return bool.
     must_accept_with_method_dispatch_stubs(
@@ -2727,7 +2720,6 @@ fn w0052dpre_07_str_starts_with_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_08_str_ends_with_method_form() {
     // ADR-0052d-prereq §4 row 8: `s.ends_with("x")` → `ends_with(s, "x")`. Return bool.
     must_accept_with_method_dispatch_stubs(
@@ -2737,7 +2729,6 @@ fn w0052dpre_08_str_ends_with_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_09_str_lower_method_form() {
     // ADR-0052d-prereq §4 row 9: `s.lower()` → `lower(s)`. Return str.
     must_accept_with_method_dispatch_stubs(
@@ -2747,7 +2738,6 @@ fn w0052dpre_09_str_lower_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_10_str_upper_method_form() {
     // ADR-0052d-prereq §4 row 10: `s.upper()` → `upper(s)`. Return str.
     must_accept_with_method_dispatch_stubs(
@@ -2759,7 +2749,6 @@ fn w0052dpre_10_str_upper_method_form() {
 // ---- Tier B: List method forms (w0052dpre_11..15) ----
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_11_list_len_method_form() {
     // ADR-0052d-prereq §4 row 11: `xs.len()` → `len(xs)` (polymorphic per
     // check.rs:1710). Return i64.
@@ -2770,7 +2759,6 @@ fn w0052dpre_11_list_len_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_12_list_push_method_form() {
     // ADR-0052d-prereq §4 row 12: `xs.push(v)` → `list_push(xs, v)`. Return () (i64 stub).
     must_accept_with_method_dispatch_stubs(
@@ -2780,7 +2768,6 @@ fn w0052dpre_12_list_push_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_13_list_get_method_form() {
     // ADR-0052d-prereq §4 row 13: `xs.get(i)` → `list_get(xs, i)` (polymorphic
     // per check.rs:1696). Return T (i64 in this fixture).
@@ -2791,7 +2778,6 @@ fn w0052dpre_13_list_get_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_14_list_set_method_form() {
     // ADR-0052d-prereq §4 row 14: `xs.set(i, v)` → `list_set(xs, i, v)`
     // (polymorphic per check.rs:1697). Return () (i64 stub).
@@ -2802,7 +2788,6 @@ fn w0052dpre_14_list_set_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_15_list_is_empty_method_form() {
     // ADR-0052d-prereq §4 row 15: `xs.is_empty()` → `list_is_empty(xs)`
     // (polymorphic per check.rs:1699). Return bool.
@@ -2815,7 +2800,6 @@ fn w0052dpre_15_list_is_empty_method_form() {
 // ---- Tier C: Float method forms (w0052dpre_16..20) ----
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_16_float_floor_method_form() {
     // ADR-0052d-prereq §4 row 16: `f.floor()` → `floor(f)`. Return f64.
     must_accept_with_method_dispatch_stubs(
@@ -2825,7 +2809,6 @@ fn w0052dpre_16_float_floor_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_17_float_ceil_method_form() {
     // ADR-0052d-prereq §4 row 17: `f.ceil()` → `ceil(f)`. Return f64.
     must_accept_with_method_dispatch_stubs(
@@ -2835,7 +2818,6 @@ fn w0052dpre_17_float_ceil_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_18_float_is_nan_method_form() {
     // ADR-0052d-prereq §4 row 18: `f.is_nan()` → `is_nan(f)`. Return bool.
     must_accept_with_method_dispatch_stubs(
@@ -2845,7 +2827,6 @@ fn w0052dpre_18_float_is_nan_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_19_float_is_finite_method_form() {
     // ADR-0052d-prereq §4 row 19: `f.is_finite()` → `is_finite(f)`. Return bool.
     must_accept_with_method_dispatch_stubs(
@@ -2855,7 +2836,6 @@ fn w0052dpre_19_float_is_finite_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_20_float_abs_method_form() {
     // ADR-0052d-prereq §4 row 20: `f.abs()` → `abs_f(f)` (NOT the int
     // `abs`; method-table dispatch chooses the right PRELUDE alias
@@ -2869,7 +2849,6 @@ fn w0052dpre_20_float_abs_method_form() {
 // ---- Tier D: Int method forms (w0052dpre_21..25) ----
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_21_int_abs_method_form() {
     // ADR-0052d-prereq §4 row 21: `n.abs()` → `abs(n)`. Return i64.
     // Cross-disambiguation versus float `f.abs()` lives in the
@@ -2882,7 +2861,6 @@ fn w0052dpre_21_int_abs_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_22_int_pow_method_form() {
     // ADR-0052d-prereq §4 row 22: `n.pow(k)` → `pow(n, k)`. Return i64.
     must_accept_with_method_dispatch_stubs(
@@ -2892,7 +2870,6 @@ fn w0052dpre_22_int_pow_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_23_int_min_method_form() {
     // ADR-0052d-prereq §4 row 23: `n.min(m)` → `min(n, m)`. Return i64.
     must_accept_with_method_dispatch_stubs(
@@ -2902,7 +2879,6 @@ fn w0052dpre_23_int_min_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_24_int_max_method_form() {
     // ADR-0052d-prereq §4 row 24: `n.max(m)` → `max(n, m)`. Return i64.
     must_accept_with_method_dispatch_stubs(
@@ -2912,7 +2888,6 @@ fn w0052dpre_24_int_max_method_form() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn w0052dpre_25_int_bit_count_method_form() {
     // ADR-0052d-prereq §4 row 25: `n.bit_count()` → `bit_count(n)`. Return i64.
     must_accept_with_method_dispatch_stubs(

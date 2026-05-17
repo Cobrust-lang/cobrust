@@ -76,19 +76,59 @@ struct LowerCtx<'a> {
     typed: &'a TypedModule,
     /// Cache of types per `DefId` — pulled from `typed.def_types`.
     def_ty: HashMap<u32, Ty>,
+    /// ADR-0052d-prereq §"Decision" — method-form rewrite map.
+    /// Maps a top-level fn name (PRELUDE-fn + user-declared) to its
+    /// `DefId`. Populated at construction by walking `typed.hir.items`.
+    /// The method-form lowering at `lower_call` consults this map to
+    /// resolve the PRELUDE-fn target's `FnRef` for emitting a direct
+    /// MIR Call (`s.len()` → `str_len(s)` → `Constant::FnRef(def_id)`).
+    fn_name_to_def_id: HashMap<String, DefId>,
 }
 
 impl<'a> LowerCtx<'a> {
     fn new(typed: &'a TypedModule) -> Self {
+        let def_ty = typed.def_types.clone();
+        // Walk top-level items to build name → DefId for fns. Used by
+        // method-form lowering at `lower_call` per ADR-0052d-prereq.
+        let mut fn_name_to_def_id = HashMap::new();
+        Self::collect_fn_names(&typed.hir.items, &mut fn_name_to_def_id);
         Self {
             typed,
-            def_ty: typed.def_types.clone(),
+            def_ty,
+            fn_name_to_def_id,
+        }
+    }
+
+    /// Recursive helper for collecting top-level fn name → DefId,
+    /// including fns inside decorated items + class members.
+    fn collect_fn_names(items: &[Item], map: &mut HashMap<String, DefId>) {
+        for item in items {
+            match &item.kind {
+                ItemKind::Fn(f) => {
+                    // First-wins (PRELUDE before user) for safety; M2
+                    // user-shadowing of PRELUDE names is not Wave-2 scope.
+                    map.entry(f.name.clone()).or_insert(f.def_id);
+                }
+                ItemKind::Class(c) => {
+                    Self::collect_fn_names(&c.members, map);
+                }
+                ItemKind::Decorated { inner, .. } => {
+                    Self::collect_fn_names(std::slice::from_ref(inner.as_ref()), map);
+                }
+                _ => {}
+            }
         }
     }
 
     /// Look up the resolved type of a `DefId`.
     fn lookup_ty(&self, def_id: DefId) -> Ty {
         self.def_ty.get(&def_id.0).cloned().unwrap_or(Ty::None) // defense in depth — we expect it
+    }
+
+    /// ADR-0052d-prereq §"Decision" — resolve a PRELUDE-fn / user-fn
+    /// name to its `DefId` for method-form rewrite at `lower_call`.
+    fn lookup_fn_def_id(&self, name: &str) -> Option<DefId> {
+        self.fn_name_to_def_id.get(name).copied()
     }
 
     /// Lower module-level statements into the synthetic init body.
@@ -1590,6 +1630,38 @@ impl<'a> BodyBuilder<'a> {
         args: &[CallArg],
         span: Span,
     ) -> Result<Operand, MirError> {
+        // ADR-0052d-prereq §"Decision" — method-form lowering. When the
+        // callee is `Attr { base, name }` and `base`'s type matches one
+        // of the 5 recognised method-table receivers (Str / List /
+        // Float / Int — Dict is sub-sprint d's stretch goal), rewrite
+        // the call to its PRELUDE-fn equivalent (`s.len()` →
+        // `str_len(s)`). The type checker has already validated the
+        // (receiver, method, args) tuple; this is a pure syntactic
+        // sugar lowering — no new MIR instruction kinds.
+        //
+        // The PRELUDE-fn target is resolved by name via
+        // `self.ctx.lookup_fn_def_id(rewritten_name)`. If the name is
+        // not declared (e.g. `is_nan` which is not in PRELUDE), the
+        // rewrite is skipped and the fallthrough produces the original
+        // (broken) `Attr` lowering — the type checker already accepted
+        // the call so this is observable only at link / Cranelift
+        // verification time. Phase H+ may add the missing PRELUDE-fns
+        // to close this gap; Wave-2 ships the partial coverage with
+        // the gap documented in ADR-0052d-prereq §"Consequences".
+        if let ExprKind::Attr { base, name } = &callee.kind {
+            if let Some(rewritten_name) = method_form_rewrite_name(self, base, name.as_str()) {
+                if let Some(prelude_def_id) = self.ctx.lookup_fn_def_id(&rewritten_name) {
+                    return self.lower_rewritten_method_call(
+                        base,
+                        args,
+                        prelude_def_id,
+                        rewritten_name,
+                        span,
+                    );
+                }
+            }
+        }
+
         // ADR-0034 §"Decision" Option 3: when the callee is a `Name`
         // expression whose resolved type is `Ty::Fn(...)`, emit
         // `Operand::Constant(Constant::FnRef(rn.def_id.0))` so the
@@ -1659,6 +1731,69 @@ impl<'a> BodyBuilder<'a> {
         self.cur_block = Some(cur.0 as usize);
         self.terminate(Terminator::Call {
             func: callee_op,
+            args: arg_ops,
+            destination: Place::local(dest),
+            target,
+            unwind: None,
+        });
+        self.cur_block = Some(target.0 as usize);
+        Ok(Operand::Move(Place::local(dest)))
+    }
+
+    /// ADR-0052d-prereq §"Decision" — emit a MIR Call for a rewritten
+    /// method-form call. The receiver `base` is prepended as the first
+    /// argument (per the PRELUDE-fn signature: `str_len(s)`, `split(s,
+    /// sep)`, `list_push(xs, v)`, etc.); subsequent `args` follow.
+    /// Callee is `Constant::FnRef(prelude_def_id)` so codegen routes
+    /// the call through the per-module forward-declaration table.
+    fn lower_rewritten_method_call(
+        &mut self,
+        base: &Expr,
+        args: &[CallArg],
+        prelude_def_id: DefId,
+        rewritten_name: String,
+        span: Span,
+    ) -> Result<Operand, MirError> {
+        // ADR-0050f §"Copy-at-operand" — Str helpers borrow rather than
+        // move their first arg. Apply the same upgrade to the receiver
+        // when the rewritten fn is in the borrow-not-move set.
+        let is_str_borrow_target = matches!(
+            rewritten_name.as_str(),
+            "str_len"
+                | "split"
+                | "replace"
+                | "trim"
+                | "find"
+                | "contains"
+                | "starts_with"
+                | "ends_with"
+                | "lower"
+                | "upper"
+        );
+        let base_op = self.lower_expr(base)?;
+        let base_op = if is_str_borrow_target {
+            upgrade_move_to_copy_for_str(self, base_op)
+        } else {
+            base_op
+        };
+        let mut arg_ops = Vec::with_capacity(args.len() + 1);
+        arg_ops.push(base_op);
+        for a in args {
+            match a {
+                CallArg::Positional(e)
+                | CallArg::Keyword(_, e)
+                | CallArg::StarArgs(e)
+                | CallArg::StarStarKwargs(e) => {
+                    arg_ops.push(self.lower_expr(e)?);
+                }
+            }
+        }
+        let dest = self.declare_local("_callret".to_string(), Ty::None, span, true);
+        let cur = self.current_block_id();
+        let target = self.start_new_block();
+        self.cur_block = Some(cur.0 as usize);
+        self.terminate(Terminator::Call {
+            func: Operand::Constant(Constant::FnRef(prelude_def_id.0)),
             args: arg_ops,
             destination: Place::local(dest),
             target,
@@ -2372,4 +2507,74 @@ fn hir_expr_is_float(e: &Expr) -> bool {
 #[allow(dead_code)]
 fn _force_borrow_kind_used(k: BorrowKind) -> BorrowKind {
     k
+}
+
+/// ADR-0052d-prereq §"Decision" — method-form rewrite-name resolver.
+///
+/// Given a method-call `base.method_name(...)`, return the PRELUDE-fn
+/// name the method-form rewrites to (e.g. `("hello": Str, "len") ->
+/// Some("str_len")`). Returns `None` when:
+/// - `base`'s type is not one of the 5 recognised method-table
+///   receivers (Str / List / Float / Int — Dict is sub-sprint d's
+///   stretch goal).
+/// - The (receiver, method) pair is not in the per-type table.
+///
+/// This mirrors `crates/cobrust-types/src/check.rs::try_synth_*_method`
+/// exactly. Any divergence between the two sides is a Wave-2 ratification
+/// bug.
+fn method_form_rewrite_name(b: &BodyBuilder<'_>, base: &Expr, method_name: &str) -> Option<String> {
+    let base_ty = synth_expr_ty(b, base);
+    let resolved = match &base_ty {
+        Ty::Ref(inner) => (**inner).clone(),
+        other => other.clone(),
+    };
+    match resolved {
+        Ty::Str => match method_name {
+            "len" => Some("str_len".to_string()),
+            "split" => Some("split".to_string()),
+            "replace" => Some("replace".to_string()),
+            "trim" => Some("trim".to_string()),
+            "find" => Some("find".to_string()),
+            "contains" => Some("contains".to_string()),
+            "starts_with" => Some("starts_with".to_string()),
+            "ends_with" => Some("ends_with".to_string()),
+            "lower" => Some("lower".to_string()),
+            "upper" => Some("upper".to_string()),
+            _ => None,
+        },
+        Ty::List(_) => match method_name {
+            // ADR-0052d-prereq §4: `xs.len()` rewrites to `len(xs)`
+            // per the surface table, but at MIR-lower time we target
+            // `list_len` directly because the intrinsic-rewrite of
+            // `len` is dict-only (cobrust-cli intrinsics.rs:1567
+            // dispatches `len` → `__cobrust_dict_len`). The two PRELUDE
+            // names are arity-1 List receivers either way; `list_len`
+            // is the codegen-safe route. f30wit_method_02 admits both
+            // (it checks subset-of-prelude-fn-form callees, and the
+            // PRELUDE-fn comparison source also reads `list_len`).
+            "len" => Some("list_len".to_string()),
+            "push" => Some("list_push".to_string()),
+            "get" => Some("list_get".to_string()),
+            "set" => Some("list_set".to_string()),
+            "is_empty" => Some("list_is_empty".to_string()),
+            _ => None,
+        },
+        Ty::Float => match method_name {
+            "floor" => Some("floor".to_string()),
+            "ceil" => Some("ceil".to_string()),
+            "is_nan" => Some("is_nan".to_string()),
+            "is_finite" => Some("is_finite".to_string()),
+            "abs" => Some("abs_f".to_string()),
+            _ => None,
+        },
+        Ty::Int => match method_name {
+            "abs" => Some("abs".to_string()),
+            "pow" => Some("pow".to_string()),
+            "min" => Some("min".to_string()),
+            "max" => Some("max".to_string()),
+            "bit_count" => Some("bit_count".to_string()),
+            _ => None,
+        },
+        _ => None,
+    }
 }

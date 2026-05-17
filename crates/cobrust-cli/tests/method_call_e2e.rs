@@ -177,7 +177,6 @@ fn assert_build_run(name: &str, src: &str, args: &[&str], stdin: &[u8], expected
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn e0052dpre_e2e_01_csv_split_field_count() {
     // CSV parsing via the method-form `s.split(",")`. Input "a,b,c\n"
     // splits into 3 fields; oracle "3\n".
@@ -194,7 +193,6 @@ fn e0052dpre_e2e_01_csv_split_field_count() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn e0052dpre_e2e_02_substring_find_first_occurrence() {
     // `s.find("ll")` on "hello" returns 2 (the index of the first 'l'
     // in "ll"). Method-form rewrite to `find(s, "ll")`.
@@ -212,7 +210,6 @@ fn e0052dpre_e2e_02_substring_find_first_occurrence() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn e0052dpre_e2e_03_prefix_check_starts_with() {
     // `s.starts_with("Hello")` on "Hello, world\n" returns true (1).
     let src = "fn main() -> i64:\n    let s = input(\"\")\n    let b: bool = s.starts_with(\"Hello\")\n    if b:\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n";
@@ -228,7 +225,6 @@ fn e0052dpre_e2e_03_prefix_check_starts_with() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn e0052dpre_e2e_04_list_len_get_iteration() {
     // `xs.len()` and `xs.get(i)` method-forms inside a while loop.
     // List literal [10, 20, 30] sums to 60.
@@ -245,7 +241,6 @@ fn e0052dpre_e2e_04_list_len_get_iteration() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn e0052dpre_e2e_05_float_is_nan_floor_clamp() {
     // Conditional clamp: if NaN, print 0; else print floor as i64.
     // Input 3.7 → not NaN → floor → 3.
