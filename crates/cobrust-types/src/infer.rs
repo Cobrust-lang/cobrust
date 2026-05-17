@@ -128,9 +128,7 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     expected: t1,
                     actual: t2,
                     span,
-                    suggestion: Some(
-                        "change the expression type or add `: <expected>` annotation",
-                    ),
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
                 });
             }
             for (x, y) in a.iter().zip(b.iter()) {
@@ -159,9 +157,7 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     expected: Ty::Record(a),
                     actual: Ty::Record(b),
                     span,
-                    suggestion: Some(
-                        "change the expression type or add `: <expected>` annotation",
-                    ),
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
                 });
             }
             for (k, av) in &a.fields {
@@ -214,9 +210,7 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     expected: Ty::Adt(id_a, args_a),
                     actual: Ty::Adt(id_b, args_b),
                     span,
-                    suggestion: Some(
-                        "change the expression type or add `: <expected>` annotation",
-                    ),
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
                 });
             }
             for (x, y) in args_a.iter().zip(args_b.iter()) {
@@ -230,9 +224,7 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     expected: Ty::Alias(id_a, args_a),
                     actual: Ty::Alias(id_b, args_b),
                     span,
-                    suggestion: Some(
-                        "change the expression type or add `: <expected>` annotation",
-                    ),
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
                 });
             }
             for (x, y) in args_a.iter().zip(args_b.iter()) {
