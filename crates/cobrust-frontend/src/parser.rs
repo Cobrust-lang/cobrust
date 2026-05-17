@@ -1131,12 +1131,26 @@ impl<'a> Parser<'a> {
                     .to_string(),
                 span: operand.span,
             }),
-            ExprKind::Call { .. } => Err(ParseError::Syntax {
-                message: "borrow of a call-result is not supported in Wave-1 \
-                          (ADR-0052a §8 cap: borrow operand must be `Name`, `Name.field`, or `Name[idx]`)"
-                    .to_string(),
-                span: operand.span,
-            }),
+            // ADR-0052f §5 — relax §8 cap for `&Call(Attr(...))` form.
+            // Method-form (`&recv.method(...)`) is admitted when the
+            // receiver `base` is itself borrowable (recursive
+            // validation). Free-fn `&Call(Name)` and other callee
+            // shapes STILL reject per the §2.5 compile-time-catch
+            // path — borrowing a free-fn temporary is almost always
+            // wrong (no anchored place for the borrow).
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Access(AccessKind::Attribute { base, .. }) => {
+                    Self::validate_borrow_operand(base)
+                }
+                _ => Err(ParseError::Syntax {
+                    message: "borrow of a free-function call-result is not supported \
+                              (ADR-0052f only relaxes method-form `&recv.method(...)`; \
+                              borrow operand must be `Name`, `Name.field`, `Name[idx]`, \
+                              or `Name.method(...)`)"
+                        .to_string(),
+                    span: operand.span,
+                }),
+            },
             _ => Err(ParseError::Syntax {
                 message: "borrow operand must be `Name`, `Name.field`, or `Name[idx]` \
                           in Wave-1 (ADR-0052a §8 cap)"
