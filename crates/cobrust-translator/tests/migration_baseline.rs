@@ -67,7 +67,6 @@ fn corpus_spec(library: &str) -> PathBuf {
 ///
 /// Forecast disposition: pass cleanly (M4 already differential-tests
 /// via `corpus/tomli/harness/`).
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn c1_tomli_spec_loads_under_new_tier_verifier() {
     let path = corpus_spec("tomli");
@@ -110,7 +109,6 @@ fn c1_tomli_spec_loads_under_new_tier_verifier() {
 /// cleanly; one latent regression on a leap-second / TZ edge case per
 /// ADR-0052 line 269 forecast. Disposition recorded in
 /// `findings/0052c-dateutil-strict-regression-N.md` post-DEV.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn c2_dateutil_spec_loads_under_new_tier_verifier() {
     let path = corpus_spec("dateutil");
@@ -144,7 +142,6 @@ fn c2_dateutil_spec_loads_under_new_tier_verifier() {
 /// declares `py_compat = "strict"` on all 19 entries. M6 native-extension
 /// corpus; expected most-fragile under the tightened gate. Disposition
 /// per regression: file `findings/0052c-msgpack-strict-regression-N.md`.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn c3_msgpack_spec_loads_under_new_tier_verifier() {
     let path = corpus_spec("msgpack");
@@ -188,7 +185,6 @@ fn c3_msgpack_spec_loads_under_new_tier_verifier() {
 /// TierVerifier rejects, triggering the remediation flow. This test
 /// asserts the verdict on a representative tomli function in the
 /// post-DEV regime; it currently passes via the simulated rejection.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn c4_tomli_strict_tighter_gate_rejects_divergent_oracle() {
     // Mock: a tomli function emits a value that diverges from the
@@ -255,7 +251,6 @@ fn c4_tomli_strict_tighter_gate_rejects_divergent_oracle() {
 /// a divergent oracle on a msgpack function rejects under Strict —
 /// preventing the v0 AcceptAll silent-accept from masking the M6
 /// regression.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn c5_msgpack_strict_tighter_gate_rejects_divergent_oracle() {
     struct MsgpackStrictTighterRejector;

@@ -1,16 +1,16 @@
 ---
 adr_id: "0037"
 title: "@py_compat hard-bind — strict tier enforcement in translation pipeline"
-status: proposed
+status: superseded
 date: 2026-05-10
 authors: [review-claude, p7-cleanup-sprint]
 supersedes: []
-superseded_by: []
+superseded_by: ["0052c"]
 ---
 
 # ADR-0037 — @py_compat hard-bind
 
-**Status**: proposed (reserved placeholder)
+**Status**: superseded by ADR-0052c (Wave-2 activation, 2026-05-17 at HEAD `0418eae`)
 
 ## Context
 
@@ -28,16 +28,26 @@ the existing oracle.
   §"Actionable consequences" #1 — source of this reserved slot.
 - ADR-0038 §Cross-references: references ADR-0037 for this binding.
 - Constitution §2.4 — `@py_compat` tier definitions.
+- ADR-0052c — Wave-2 activation that supersedes this placeholder.
 
 ## Decision
 
-Deferred to Phase F.1 post-M12 cleanup. This placeholder prevents the
-ADR roster from showing a dangling gap between ADR-0036 and ADR-0038,
-and prevents cross-references from being stale.
+**Superseded by ADR-0052c** (Wave-2 activation, 2026-05-17 at HEAD
+`0418eae`). The full design is now in ADR-0052c §3-§7:
+
+- `FunctionSpec.py_compat: String` → `FunctionSpec.py_compat: PyCompatTier`
+  enum migration (ADR-0052c §4)
+- `TierVerifier` impl `BehaviorVerifier` dispatches per-tier verdict
+  (ADR-0052c §5)
+- Tier-aware prompt construction in `translate.rs` (ADR-0052c §6)
+- Per-tier router routing (`translate_strict` → consensus,
+  `translate_numerical` → cost) (ADR-0052c §7)
+
+This placeholder remains for cross-reference stability; consult
+ADR-0052c for the binding contract.
 
 ## Consequences
 
-None until implemented. When implemented: the L2.behavior gate will
-reject translations that fail the declared py_compat tier (e.g.
-`strict` tier requires byte-identical oracle match; `numerical` tier
-allows `rtol=1e-7` tolerance).
+Superseded. See ADR-0052c §13 for the full consequences enumeration
+(positive / negative / neutral) and the Wave-2 cascade addendum
+ratified at HEAD `0418eae`.

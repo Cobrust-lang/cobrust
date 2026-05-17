@@ -79,7 +79,6 @@ tolerance = "exact"
 /// the TOML string `"strict"` and emit `PyCompatTier::Strict`. The
 /// deterministic-id contract (BTreeMap iteration order pinning) requires
 /// that the round-trip back to TOML produce the same string.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn a1_strict_string_parses_to_strict_variant() {
     let toml = spec_with_py_compat("strict");
@@ -113,7 +112,6 @@ fn a1_strict_string_parses_to_strict_variant() {
 /// `urllib.parse` Python-3-vs-2 quirks). Today's `corpus/click/spec.toml`
 /// already declares `py_compat = "semantic"` on at least one entry; that
 /// callsite must still load post-0052c.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn a2_semantic_string_parses_to_semantic_variant() {
     let toml = spec_with_py_compat("semantic");
@@ -135,7 +133,6 @@ fn a2_semantic_string_parses_to_semantic_variant() {
 /// must parse to `PyCompatTier::Numerical { rtol: 1e-7 }`. The rtol
 /// payload is read via regex per §4 spec text. This is the canonical
 /// numpy-test idiom (`numpy.testing.assert_allclose(rtol=...)`).
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn a3_numerical_with_rtol_parses_payload() {
     let toml = spec_with_py_compat("numerical(rtol=1e-7)");
@@ -171,7 +168,6 @@ fn a3_numerical_with_rtol_parses_payload() {
 /// recorded honestly per ADR-0040. This is the opt-out path retained for
 /// translations that intentionally have no correctness contract (e.g.
 /// docstring-only or repair-loop failure footer per `repair.rs:233`).
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn a4_none_string_parses_to_none_variant() {
     let toml = spec_with_py_compat("none");
@@ -197,7 +193,6 @@ fn a4_none_string_parses_to_none_variant() {
 /// strict|semantic|numerical(rtol=…)|none")`. This is the canonical
 /// §2.5 compile-time-catch surface — typos surface at spec-load instead
 /// of at L2-fail-time.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn a5_strikt_typo_rejected_at_parse_time() {
     let toml = spec_with_py_compat("strikt");
@@ -232,7 +227,6 @@ fn a5_strikt_typo_rejected_at_parse_time() {
 /// silently default. This is the §2.5 compile-time-catch surface for the
 /// numerical arm — the spec author must specify an explicit tolerance
 /// or use `"strict"` instead.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn a6_numerical_with_empty_rtol_rejected_at_parse_time() {
     let toml = spec_with_py_compat("numerical(rtol=)");
@@ -259,7 +253,6 @@ fn a6_numerical_with_empty_rtol_rejected_at_parse_time() {
 /// as Strict (the v0 §2.4 stringly-typed behavior). This test asserts
 /// the parse path produces EITHER an explicit error OR a Numerical
 /// variant with a default rtol — never any other arm.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn a7_numerical_without_args_explicit_disposition() {
     let toml = spec_with_py_compat("numerical");
@@ -301,7 +294,6 @@ fn a7_numerical_without_args_explicit_disposition() {
 /// callsites. This test exercises the canonical M4 tomli minimal-spec
 /// pattern (`crates/cobrust-translator/src/spec.rs:122` fixture form)
 /// and asserts it loads cleanly post-0052c.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn a8_backward_compat_existing_tomli_style_spec_loads() {
     let toml = r#"

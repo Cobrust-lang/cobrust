@@ -4,12 +4,12 @@ adr_id: "0052c"
 parent_adr: "0052"
 relates_to: ["adr:0037", "adr:0052", "adr:0051"]
 title: "Phase G Direction C — @py_compat tier hard-bind to L2 verifier"
-status: proposed
+status: accepted
 date: 2026-05-17
-authors: [p9-tech-lead-wave2]
+authors: [p9-tech-lead-wave2, p10-dev-wave2]
 supersedes: []
 superseded_by: []
-last_verified_commit: "8dc2723"
+last_verified_commit: "0418eae"
 ---
 
 # ADR-0052c — Direction C: `@py_compat` tier hard-bind to L2 verifier
@@ -198,6 +198,29 @@ Per `findings/adsd-pair-pattern-impl-gap.md` F28 binding (ADR-0052 line 230), Di
 
 - Whether `Semantic` tier deserves a dedicated `SemanticVerifier` strategy or just opt-in flags on `Strict` (e.g. `Strict { ignore_dict_order: bool, ignore_error_text: bool }`). Sub-ADR proposes a separate enum arm; impl sprint may collapse the design if Semantic exemplars stay sparse.
 - Whether router `tier_override` belongs in `[routing.translate.tier_override.<tier>]` (proposed) or as a flat `[routing.translate_strict]` block (Phase H+ revisit if config-tree depth becomes painful).
+
+### Cascade enumeration (post-spike, ratified at HEAD `0418eae`)
+
+DEV impl SHA chain: `91cd668` (Phase 1 PyCompatTier enum + serde) → `92a5f70` (Phase 2 TierVerifier) → `64ecf06` (Phase 3 tier-aware prompt + router) → `0418eae` (Phase 5 un-ignore Wave-2 corpus).
+
+Verified-at-HEAD migration sweep results:
+- `corpus/tomli/spec.toml` — 12 functions × `strict` round-trip cleanly; `tomli_pipeline.rs` 5 tests green.
+- `corpus/dateutil/spec.toml` — 8 functions × `strict` round-trip cleanly; `dateutil_pipeline.rs` 6 tests green.
+- `corpus/msgpack/spec.toml` — 19 functions × `strict` round-trip cleanly; `msgpack_pipeline.rs` 7 tests green.
+- `corpus/numpy/M7.*/spec.toml` — bare `"numerical"` + sibling `py_compat_rtol` sidecar form retained; default-rtol = `1e-7` applied when sidecar absent (matches existing M7.1 baseline). No regressions surfaced.
+
+F30 cascade discovery (10 callsites enumerated in §9 → 10 actual + 1 missed):
+- `tests/audit_3a_tomli_stateful.rs:285` literal `py_compat: "strict".to_string()` constructor — mechanical migration to `PyCompatTier::Strict` required after `String → PyCompatTier` field type change. Not in §9 enumeration; surfaced at Phase 1 build time. Total cascade = **11 callsites**, still under the F30 cap-of-20 budget.
+
+Translator-side test counts after un-ignore:
+- 26 Wave-2 tests un-ignored, all passing on first cargo invocation
+- 0 non-0052c regressions vs main HEAD `e772f4a` (verified by parallel `cargo test --workspace` on main running concurrently with identical FAILED pattern: 12 test files × pre-existing baseline failures from ADR-0052a F31 cascade + LC-100 + F.3 honest-debt, no new failures introduced)
+
+Wave-2 forecast vs actual:
+- Forecast (§13 negative): "1-2 translator regressions" from tighter gate. **Actual**: 0 regressions because the tomli/dateutil/msgpack pipelines still use `AcceptAll` (test fixture) by default and never wire `TierVerifier`. Production users opting into `TierVerifier` would surface the forecast regressions; that is remediation work outside the 0052c impl PR per §"Migration plan" guidance.
+- Forecast: `numerical(rtol=...)` payload from regex parse. **Actual**: simpler `strip_prefix("numerical(")` + `strip_suffix(')')` + `strip_prefix("rtol")` + `strip_prefix('=')` chain (no regex dep added).
+
+ADR-0037 status flip queued for follow-up commit (Phase 7).
 
 ## 14. Dispatch readiness
 

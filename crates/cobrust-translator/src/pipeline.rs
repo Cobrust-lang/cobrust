@@ -38,7 +38,7 @@ use crate::manifest::{
     RouterSection, SourceSection, VerificationSection,
 };
 use crate::repair::{GateFailure, write_failure_report};
-use crate::spec::SpecToml;
+use crate::spec::{FunctionSpec, PyCompatTier, SpecToml};
 use crate::synthetic::{CannedTable, SyntheticProvider};
 use crate::translate::{FunctionTranslation, TranslationOutput, TranslationPlan, run_l1};
 
@@ -285,6 +285,298 @@ impl BehaviorVerifier for AcceptAll {
             reason: "AcceptAll — no L2.behavior gate wired".into(),
         }
     }
+}
+
+// ============================================================================
+// ADR-0052c §5 — TierVerifier + OracleHarness
+// ============================================================================
+
+/// One observation pair from the differential oracle: the upstream
+/// CPython oracle's expected output and the Cobrust translation's
+/// actual output, both rendered to canonical strings. ADR-0052c §5
+/// pairs this with [`TierVerifier`] for per-tier verdict dispatch.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OracleObservation {
+    /// Input passed to both the oracle and the translation.
+    pub input: String,
+    /// Canonical string form of the oracle's output (CPython truth).
+    pub expected: String,
+    /// Canonical string form of the translation's output. For tiers
+    /// other than [`PyCompatTier::Numerical`] this is compared
+    /// byte-for-byte (Strict) or structurally (Semantic); for
+    /// `Numerical { rtol }` it must parse as f64 and the
+    /// [`TierVerifier`] applies `assert_allclose(rtol=...)` semantics.
+    pub actual: String,
+}
+
+/// The caller-supplied oracle harness ADR-0052c §5 binds. The pipeline
+/// invokes [`OracleHarness::observe`] once per `(function_name, attempt)`
+/// and feeds the returned observations through [`TierVerifier`].
+///
+/// The trait does NOT prescribe how observations are gathered — the
+/// concrete impl may shell out to a Python subprocess (M4/M5/M6
+/// canonical), call a vendored Python interpreter via FFI (M7+), or
+/// return precomputed observations from disk.
+pub trait OracleHarness: Send + Sync {
+    /// Gather observations for one function. The translator passes the
+    /// function's name + emitted text; the impl returns the per-input
+    /// `(expected, actual)` pairs. Returning an empty vec is permitted
+    /// (oracle-disabled fast path); [`TierVerifier`] treats this as
+    /// `Accept` for any tier.
+    ///
+    /// # Errors
+    /// Returns an oracle-side diagnostic the verifier surfaces as a
+    /// [`GateFailure::failure_summary`] when the harness itself fails
+    /// (NOT when a divergence is observed — divergences are returned
+    /// in the observation list).
+    fn observe(
+        &self,
+        function: &FunctionTranslation,
+        attempt: u32,
+    ) -> Result<Vec<OracleObservation>, String>;
+}
+
+/// ADR-0052c §5 tier-aware behavior verifier. Reads each function's
+/// [`PyCompatTier`] from the spec table and dispatches per-tier verdict
+/// policy:
+///
+/// - [`PyCompatTier::Strict`] — byte-identity check; any divergence rejects.
+/// - [`PyCompatTier::Semantic`] — structural-equivalence permitted.
+/// - [`PyCompatTier::Numerical { rtol }`] — `assert_allclose(rtol=...)`.
+/// - [`PyCompatTier::None`] — gate disabled; accepts unconditionally.
+///
+/// Replaces [`AcceptAll`] as the production default once a caller wires
+/// it via [`translate_with_verifier`]. [`AcceptAll`] remains exported as
+/// a no-op test fixture (the M4 backward-compat path).
+pub struct TierVerifier {
+    /// Per-function L0 specs keyed by function name. The pipeline
+    /// builds this from `SpecToml.function` when constructing the
+    /// verifier; see [`TierVerifier::from_spec`].
+    specs: std::collections::BTreeMap<String, FunctionSpec>,
+    /// Caller-supplied oracle harness producing `(expected, actual)`
+    /// observation pairs.
+    oracle: Arc<dyn OracleHarness>,
+}
+
+impl TierVerifier {
+    /// Construct from a per-function spec table + an oracle harness.
+    #[must_use]
+    pub fn new(
+        specs: std::collections::BTreeMap<String, FunctionSpec>,
+        oracle: Arc<dyn OracleHarness>,
+    ) -> Self {
+        Self { specs, oracle }
+    }
+
+    /// Convenience: build the verifier from a parsed [`SpecToml`].
+    /// Clones the function map so the caller retains ownership of the
+    /// spec value.
+    #[must_use]
+    pub fn from_spec(spec: &SpecToml, oracle: Arc<dyn OracleHarness>) -> Self {
+        Self::new(spec.function.clone(), oracle)
+    }
+
+    /// Per-tier strict byte-identity check.
+    #[allow(clippy::unused_self)] // method receiver retained for future oracle handle access
+    fn verify_bit_identical(
+        &self,
+        function: &FunctionTranslation,
+        observations: &[OracleObservation],
+        attempt: u32,
+    ) -> VerifierVerdict {
+        for obs in observations {
+            if obs.expected != obs.actual {
+                return VerifierVerdict::Reject(GateFailure {
+                    function: function.name.clone(),
+                    failed_gate: "l2_behavior".into(),
+                    failure_summary: format!(
+                        "Strict-tier byte-identity check failed for {}: oracle vs emission diverge",
+                        function.name
+                    ),
+                    failed_inputs: vec![obs.input.clone()],
+                    expected: Some(obs.expected.clone()),
+                    actual: Some(obs.actual.clone()),
+                    attempt: attempt.saturating_add(1),
+                });
+            }
+        }
+        VerifierVerdict::Accept
+    }
+
+    /// Per-tier semantic / structural-equivalence check. M-batch
+    /// canonical impl: compare after stripping whitespace + normalizing
+    /// punctuation; treat the JSON representation of dicts as
+    /// key-order-insensitive.
+    #[allow(clippy::unused_self)] // method receiver retained for future oracle handle access
+    fn verify_semantic(
+        &self,
+        function: &FunctionTranslation,
+        observations: &[OracleObservation],
+        attempt: u32,
+    ) -> VerifierVerdict {
+        for obs in observations {
+            if !semantic_equivalent(&obs.expected, &obs.actual) {
+                return VerifierVerdict::Reject(GateFailure {
+                    function: function.name.clone(),
+                    failed_gate: "l2_behavior".into(),
+                    failure_summary: format!(
+                        "Semantic-tier structural check failed for {}: oracle vs emission diverge",
+                        function.name
+                    ),
+                    failed_inputs: vec![obs.input.clone()],
+                    expected: Some(obs.expected.clone()),
+                    actual: Some(obs.actual.clone()),
+                    attempt: attempt.saturating_add(1),
+                });
+            }
+        }
+        VerifierVerdict::Accept
+    }
+
+    /// Per-tier numerical `assert_allclose(rtol=...)` check.
+    #[allow(clippy::unused_self)] // method receiver retained for future oracle handle access
+    fn verify_allclose(
+        &self,
+        function: &FunctionTranslation,
+        observations: &[OracleObservation],
+        rtol: f64,
+        attempt: u32,
+    ) -> VerifierVerdict {
+        for obs in observations {
+            let Ok(expected) = obs.expected.trim().parse::<f64>() else {
+                return VerifierVerdict::Reject(GateFailure {
+                    function: function.name.clone(),
+                    failed_gate: "l2_behavior".into(),
+                    failure_summary: format!(
+                        "Numerical(rtol={rtol}) expected f64 oracle for {}, got non-numeric",
+                        function.name
+                    ),
+                    failed_inputs: vec![obs.input.clone()],
+                    expected: Some(obs.expected.clone()),
+                    actual: Some(obs.actual.clone()),
+                    attempt: attempt.saturating_add(1),
+                });
+            };
+            let Ok(actual) = obs.actual.trim().parse::<f64>() else {
+                return VerifierVerdict::Reject(GateFailure {
+                    function: function.name.clone(),
+                    failed_gate: "l2_behavior".into(),
+                    failure_summary: format!(
+                        "Numerical(rtol={rtol}) expected f64 emission for {}, got non-numeric",
+                        function.name
+                    ),
+                    failed_inputs: vec![obs.input.clone()],
+                    expected: Some(obs.expected.clone()),
+                    actual: Some(obs.actual.clone()),
+                    attempt: attempt.saturating_add(1),
+                });
+            };
+            if !numpy_allclose(expected, actual, rtol) {
+                return VerifierVerdict::Reject(GateFailure {
+                    function: function.name.clone(),
+                    failed_gate: "l2_behavior".into(),
+                    failure_summary: format!(
+                        "Numerical(rtol={rtol}) rejected: drift exceeds tolerance for {}",
+                        function.name
+                    ),
+                    failed_inputs: vec![obs.input.clone()],
+                    expected: Some(obs.expected.clone()),
+                    actual: Some(obs.actual.clone()),
+                    attempt: attempt.saturating_add(1),
+                });
+            }
+        }
+        VerifierVerdict::Accept
+    }
+}
+
+impl BehaviorVerifier for TierVerifier {
+    fn verify(&self, function: &FunctionTranslation, attempt: u32) -> VerifierVerdict {
+        // Look up the per-function spec; absent entries fall through
+        // to Accept (TierVerifier never rejects what it can't classify).
+        let Some(spec) = self.specs.get(&function.name) else {
+            return VerifierVerdict::Accept;
+        };
+
+        // None tier: gate disabled.
+        if matches!(spec.py_compat, PyCompatTier::None) {
+            return VerifierVerdict::Accept;
+        }
+
+        // Query the caller-supplied oracle.
+        let observations = match self.oracle.observe(function, attempt) {
+            Ok(obs) => obs,
+            Err(msg) => {
+                return VerifierVerdict::Reject(GateFailure {
+                    function: function.name.clone(),
+                    failed_gate: "l2_behavior".into(),
+                    failure_summary: format!("oracle harness failed: {msg}"),
+                    failed_inputs: vec![],
+                    expected: None,
+                    actual: None,
+                    attempt: attempt.saturating_add(1),
+                });
+            }
+        };
+
+        // Empty observation set = oracle-disabled fast path. Accept.
+        if observations.is_empty() {
+            return VerifierVerdict::Accept;
+        }
+
+        // Per-tier dispatch.
+        match &spec.py_compat {
+            PyCompatTier::Strict => self.verify_bit_identical(function, &observations, attempt),
+            PyCompatTier::Semantic => self.verify_semantic(function, &observations, attempt),
+            PyCompatTier::Numerical { rtol } => {
+                self.verify_allclose(function, &observations, *rtol, attempt)
+            }
+            // None already handled above; this arm unreachable in practice.
+            PyCompatTier::None => VerifierVerdict::Accept,
+        }
+    }
+
+    fn default_outcome(&self) -> GateOutcome {
+        GateOutcome::Pass {
+            detail: "TierVerifier wired (ADR-0052c)".into(),
+        }
+    }
+}
+
+/// Semantic-tier structural-equivalence predicate. Strips whitespace
+/// from both sides and treats JSON-shaped dict strings as
+/// key-order-insensitive when both parse as JSON objects.
+fn semantic_equivalent(expected: &str, actual: &str) -> bool {
+    if expected == actual {
+        return true;
+    }
+    // Whitespace-only difference.
+    let exp_ws: String = expected.chars().filter(|c| !c.is_whitespace()).collect();
+    let act_ws: String = actual.chars().filter(|c| !c.is_whitespace()).collect();
+    if exp_ws == act_ws {
+        return true;
+    }
+    // JSON object key-order-insensitive comparison.
+    if let (Ok(a), Ok(b)) = (
+        serde_json::from_str::<serde_json::Value>(expected),
+        serde_json::from_str::<serde_json::Value>(actual),
+    ) {
+        return a == b;
+    }
+    false
+}
+
+/// `numpy.testing.assert_allclose(rtol=...)` predicate. Matches the
+/// NumPy canonical semantics: `|a - b| <= atol + rtol * |b|` with
+/// `atol = 0.0` (NumPy's default for `assert_allclose`).
+#[allow(clippy::float_cmp)] // intentional bit-identity short-circuit before tolerance check
+fn numpy_allclose(expected: f64, actual: f64, rtol: f64) -> bool {
+    if expected == actual {
+        return true;
+    }
+    let diff = (expected - actual).abs();
+    let tol = rtol * actual.abs();
+    diff <= tol
 }
 
 /// Run the pipeline with the default no-op verifier. This is the M4
