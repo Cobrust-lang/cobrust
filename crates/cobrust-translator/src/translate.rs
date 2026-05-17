@@ -141,7 +141,12 @@ pub async fn run_l1(
                 stop: vec![],
             },
         };
-        let resp = router.dispatch(Task::Translate, req).await.map_err(|e| {
+        // ADR-0052c §7: per-tier routing override. If the router has a
+        // `translate_<tier>` entry, dispatch there; otherwise fall back
+        // to the default `Task::Translate`. The base task in the ledger
+        // remains `unit.spec.task` for provenance honesty.
+        let router_task = tier_router_task(router, &unit.spec.py_compat);
+        let resp = router.dispatch(router_task, req).await.map_err(|e| {
             // Lift synthetic-miss into a structured TranslatorError.
             translate_router_err(&task, &unit.name, e)
         })?;
@@ -190,6 +195,29 @@ fn build_translation_prompt(unit: &FunctionUnit) -> String {
     s.push_str(&tier_prompt_instruction(&unit.spec.py_compat));
     s.push('\n');
     s
+}
+
+/// ADR-0052c §7 tier-aware router task resolution. Probes the router's
+/// routing table for a `translate_<tier>` override (Strict → consensus,
+/// Numerical → cost). Falls back to [`Task::Translate`] when no
+/// override exists. The base task name in the ledger entry stays
+/// `unit.spec.task` (provenance honesty).
+#[must_use]
+fn tier_router_task(router: &Router, tier: &crate::spec::PyCompatTier) -> Task {
+    let tier_key = match tier {
+        crate::spec::PyCompatTier::Strict => "translate_strict",
+        crate::spec::PyCompatTier::Semantic => "translate_semantic",
+        crate::spec::PyCompatTier::Numerical { .. } => "translate_numerical",
+        // None tier never consults the LLM for translation in practice
+        // (the gate is disabled); we still dispatch via the default
+        // Translate task to preserve M4 backward-compat.
+        crate::spec::PyCompatTier::None => return Task::Translate,
+    };
+    if router.has_routing_for(tier_key) {
+        Task::Custom(tier_key.to_string())
+    } else {
+        Task::Translate
+    }
 }
 
 /// ADR-0052c §6 tier-aware prompt instruction block. Renders the

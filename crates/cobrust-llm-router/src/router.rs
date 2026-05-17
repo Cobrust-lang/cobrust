@@ -289,6 +289,15 @@ impl Router {
         RouterBuilder::new()
     }
 
+    /// Whether the routing table contains an entry under the given task
+    /// key. ADR-0052c §7 callers use this to probe for tier-specific
+    /// overrides like `translate_strict` / `translate_numerical` before
+    /// dispatching with [`Task::Custom`].
+    #[must_use]
+    pub fn has_routing_for(&self, task_key: &str) -> bool {
+        self.routing.contains_key(task_key)
+    }
+
     /// Dispatch one task. Honours the resolved strategy, retries transient
     /// errors per the retry policy, falls through to the next preferred
     /// provider on permanent failure, writes one ledger entry per attempt,
