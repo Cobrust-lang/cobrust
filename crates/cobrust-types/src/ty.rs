@@ -75,6 +75,18 @@ pub enum Ty {
     Generic(GenericVar),
     /// Inference unknown.
     Var(VarId),
+    /// ADR-0052a Wave-1 — `&T` immutable shared borrow type. The
+    /// borrowed type is a **distinct type at inference**: it unifies
+    /// only with itself (`Ref(a)` ⇔ `Ref(b)` iff `a` unifies with
+    /// `b`); it does NOT unify with `T` directly (the §3 + §13
+    /// "Design lesson 2026-05-17" bans bidirectional `Ref(T) ↔ T`
+    /// unify — the v1+v2 cascade root). The §3 Wave-1 transparency
+    /// rule is implemented by a **one-way call-site coercion** at
+    /// `synth_call` argument-binding only: when a formal parameter is
+    /// `T` and the actual arg type is `Ref(T)`, the type checker
+    /// drops the `Ref` wrapper locally before unifying. The coercion
+    /// does NOT extend the substitution table.
+    Ref(Box<Ty>),
 }
 
 /// Closed structural record (M2: closed; row variables deferred to
@@ -222,6 +234,9 @@ impl fmt::Display for Ty {
             }
             Ty::Generic(g) => write!(f, "T{}", g.0),
             Ty::Var(v) => write!(f, "?{}", v.0),
+            // ADR-0052a Wave-1 — `&T` borrow type printed with the
+            // source-surface glyph.
+            Ty::Ref(inner) => write!(f, "&{inner}"),
         }
     }
 }
@@ -272,7 +287,11 @@ impl Ty {
             | Ty::Adt(_, _)
             | Ty::Alias(_, _)
             | Ty::Generic(_)
-            | Ty::Var(_) => false,
+            | Ty::Var(_)
+            // ADR-0052a Wave-1 — `&T` is not hashable in Wave-1
+            // (Phase H may revisit when borrowed-key dict-lookup
+            // semantics land).
+            | Ty::Ref(_) => false,
         }
     }
 
@@ -325,6 +344,8 @@ impl Ty {
                 *id,
                 args.iter().map(|t| t.subst_var(v, replacement)).collect(),
             ),
+            // ADR-0052a Wave-1 — `&T` walks into its inner for substitution.
+            Ty::Ref(inner) => Ty::Ref(Box::new(inner.subst_var(v, replacement))),
             other => other.clone(),
         }
     }
@@ -378,6 +399,8 @@ impl Ty {
                     t.collect_vars(out);
                 }
             }
+            // ADR-0052a Wave-1 — `&T` walks into its inner for var collection.
+            Ty::Ref(inner) => inner.collect_vars(out),
             _ => {}
         }
     }
