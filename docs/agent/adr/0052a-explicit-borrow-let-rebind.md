@@ -48,7 +48,7 @@ Alternative glyphs considered and rejected:
 ## 3. Semantics
 
 - **`&s`** in expression position constructs an immutable shared borrow of `s`. Operand-level lowering emits `Operand::Copy(place)` instead of `Operand::Move(place)`. The use-after-move catch at `crates/cobrust-mir/src/borrow.rs:114` does not fire for borrowed reads.
-- **Type**: `&s : &Ty` where `Ty = type_of(s)`. For Wave 1, the borrowed type `&Ty` is **transparent at the type-checker boundary**: `&s` and `s` are interchangeable wherever `s` is read but not consumed. PRELUDE Str helpers (`str_len`, `str_at`, etc.) accept both `s: Str` and `&s: &Str` under the Wave-1 transparency rule; the difference is observable only at MIR (`Operand::Move` vs `Operand::Copy`).
+- **Type**: `&s : Ty::Ref(Ty)` where `Ty = type_of(s)`. The borrowed type `Ty::Ref(Ty)` is a **distinct type at inference** — it does **NOT** unify with `Ty` in the substitution table (this was tried in v1+v2 DEV and produced a 100+ test cascade via inference ambiguity — see §13 "Design lesson 2026-05-17"). PRELUDE Str helpers (`str_len`, `str_at`, etc.) accept both `s: Str` and `&s: &Str` via **one-way call-site coercion only**: when a formal parameter type is `T` and the actual argument type is `Ty::Ref(T)`, the type checker emits an implicit auto-deref (drops the `Ref` wrapper) at that single call site. The coercion is (a) **local** — does NOT propagate via inference substitution; (b) **unidirectional** — `Ref(T) → T` only, never `T → Ref(T)`; (c) **scoped to fn-call argument-binding positions only** — `let` bindings, return types, and arithmetic operands do NOT auto-coerce. The difference is observable at MIR (`Operand::Move` vs `Operand::Copy`).
 - **Scope**: function-body-scoped. The borrow is valid from the point of construction until the borrowed binding leaves scope. Wave 1 ships **intra-block** borrow checking (matches `crates/cobrust-mir/src/borrow.rs` module-comment "M8 is intra-procedural; inter-procedural lifetime obligations land at M9"). Inter-block / inter-function NLL is deferred to M9.
 - **`let` rebind shortcut**: `let s = &s` is the let-rebinding form. The right-hand `&s` borrows the outer binding; the new `s` shadows it inside the rebind's scope. This is the §2.5-honest replacement for `let s = clone(s)`.
 - **Mutability**: `&mut s` is deferred to a future sub-ADR; Wave 1 is shared-borrow-only. Str helpers are all read-only, so `&s` covers 100% of the LC-100 honest-debt corpus.
@@ -160,7 +160,7 @@ Per `findings/predicate-flip-cascade-discovery-deficit.md` §"Operational SOP" s
 
 Per ADR-0052 §"Direction A scaffolding anchors":
 
-- `crates/cobrust-types/src/check.rs` — add `ExprKind::Borrow(inner)` arm. Type: `&Ty` where `Ty = check(inner)`. Wave-1 transparency rule means PRELUDE-fn signature unification treats `&Ty` as `Ty` for read-only positions. New error variant `TypeError::BorrowOfNonPlace { span }` (Wave-1: only `Name` and field-access expressions are borrow-able; literal borrows like `&"hello"` are deferred).
+- `crates/cobrust-types/src/check.rs` — add `ExprKind::Borrow(inner)` arm. Type: `Ty::Ref(Box::new(check(inner)))`. **NO unify-arm in `infer.rs`** for `Ty::Ref ↔ T` (the v1+v2 cascade root — see §13). Instead, at the **fn-call argument-binding site** (`ExprKind::Call` synth_call_args path) add a one-way coercion: when formal param type is `T` and actual arg type unifies with `Ty::Ref(T)`, accept the call and emit a flag for codegen to skip the `Move` (already handled because `Ty::Ref(_)` is `is_copy_type = true`). New error variant `TypeError::BorrowOfNonPlace { span, suggestion: Option<&'static str> }` (Wave-1: only `Name` and field-access expressions are borrow-able; literal borrows like `&"hello"` are deferred).
 - `crates/cobrust-types/src/ty.rs` — add `Ty::Ref(Box<Ty>)` variant. Wave-1: `Display` impl prints `&T` matching the surface glyph.
 - `crates/cobrust-types/src/error.rs` — add `BorrowOfNonPlace { span: Span }` to `TypeError`; per §2.5 Direction B forward-compat, populate `suggestion: Option<&'static str>` field at construction (Direction B sub-ADR ratifies the field shape).
 
@@ -196,7 +196,7 @@ Per F28 strict-separation discipline (`findings/adsd-pair-pattern-impl-gap.md`):
 ### 10.2 DEV phases
 
 - Phase 1 (parser+HIR): ~1h. Add `&` unary prefix; HIR lowering. Spike-commit feature-flag.
-- Phase 2 (types): ~1.5h. Add `Ty::Ref`, `ExprKind::Borrow` check arm, transparency unification rule.
+- Phase 2 (types): ~1.5h. Add `Ty::Ref`, `ExprKind::Borrow` check arm, **one-way call-site coercion** at `synth_call_args` (NOT a bidirectional unify rule; do NOT touch `infer::unify` for `Ref`/`T` interconversion).
 - Phase 3 (MIR): ~1h. Add `ExprKind::Borrow → Operand::Copy` lowering branch. Verify `is_copy_type(Ty::Ref(_)) = true`.
 - Phase 4 (LC-100 corpus migration): ~1h. Mechanically rewrite §5 rows 1-6 to use `&s`. Retire `clone(s)` from these 6 sources.
 - Phase 5 (F30 shadow-flip post-flag-removal): ~30min. Full workspace test matrix flag-ON; classify any new failures; address before flag removal.
@@ -227,18 +227,40 @@ Per CLAUDE.md §2.5 audit-teammate rubric:
 - §2.5 Direction A binding satisfied: `clone()` clutter retires from idiomatic LC-100 paths.
 - LC-100 honest-debt closure path becomes concrete (the 6 mitigation files migrate to `&s`).
 - LLM compile-error feedback loop sharpens: UseAfterMove now suggests `&s` as the fix.
-- Zero codegen surface (Wave-1 transparency rule): no new Cranelift IR, no perf regression.
+- Zero codegen surface (one-way call-site coercion): no new Cranelift IR, no perf regression.
 
 ### Negative
 
 - Adds a new expression form to surface, parser, HIR, types, MIR — small surface but real maintenance.
-- Wave-1 transparency rule defers proper `&T` ≠ `T` type-checking; some ill-typed programs that should be rejected at type-check time still go through (e.g. passing `&s` where `s: Int` is expected — Wave-1 would accept and lower to `Operand::Copy(s: Int)` which is fine semantically but loses the §2.5 "you borrowed a primitive" diagnostic). Acceptable for Wave-1; tighten in M9 with NLL.
+- One-way call-site coercion defers proper `&T` ≠ `T` type-checking at non-fn-arg positions; some ill-typed programs that should be rejected at type-check time still go through if they reach a fn-arg site (e.g. passing `&s` where `s: Int` is expected — would accept via coercion and lower to `Operand::Copy(s: Int)` which is fine semantically but loses the §2.5 "you borrowed a primitive" diagnostic). Acceptable for Wave-1; tighten in M9 with NLL + reserved-coercion-set discipline.
 - `__cobrust_str_clone` shim stays in stdlib (still called from `Aggregate` lowering and explicit `clone(s)` from M-F.3.5). Not a regression; just not retired.
 
 ### Neutral
 
 - §2.5 Direction D (method-call sugar) coordination: parser reserves `&s.method()` parse path; full semantics in 0052d.
 - §2.5 Direction B (error UX) coordination: Wave-1 ships the `&s` suggestion as a hard-coded string at the `MirError::UseAfterMove` construction site; Direction B sub-ADR formalizes the structured `suggestion` field. No conflict; Wave-1 work is forward-compatible.
+
+### Design lesson 2026-05-17 — bidirectional `Ref(T) ↔ T` unify is wrong
+
+The original §3 + §6 text specified a **bidirectional transparency unify rule** (`Ref(T)` and `T` unify in both directions in `infer::unify`). Two DEV dispatches (v1 `feature/0052a-dev-rejected-prelude-cascade`, v2 `feature/0052a-dev-v2`) implemented exactly that. Both produced **142 cargo test failures** including 100+ LC-100 regressions (`AmbiguousType` everywhere) — entirely from inference ambiguity:
+
+- Any inference variable that could bind to `T` could now also bind to `Ref(T)`.
+- Existing programs that didn't use `&s` had their type variables become ambiguous between the two candidate types.
+- The cascade was NOT limited to programs using `&s` — it broke programs that had no borrow expression at all.
+
+**Empirical cascade size**: 77 `AmbiguousType` + 23 `UseAfterMove` + 6 f64 regression + 3 f3ls regression + 30/30 0052a well-typed + 4/4 F30-witness + 3/8 e0052a-e2e + 1 bg0052a parse = 142 failures (vs ADR-0052 F30 §5.5 prediction of "1-3 latent failures").
+
+**Root cause**: the §3 v1 text described inference-level transparency as a *cap* on the cascade surface. The actual effect of bidirectional unify was inference-level *over-permissive resolution*, producing AmbiguousType (the substitution table couldn't pick a unique witness).
+
+**Fix (this revision, 2026-05-17)**: replace bidirectional unify with **one-way call-site coercion**:
+- `Ty::Ref(T)` and `T` are distinct types at the inference layer.
+- The coercion lives at `ExprKind::Call` → `synth_call_args` only.
+- When formal arg type is `T` and actual is `Ty::Ref(T)`, the call-arg-binding accepts (drops the `Ref` wrapper locally).
+- Inference substitution untouched.
+
+**Validation**: v3 DEV dispatch implements this; cargo test must show zero non-0052a regression (vs main HEAD `9c89222` baseline) before the spike becomes mergeable.
+
+**ADSD candidate (F31 sediment family)**: "inference-layer transparency rule for new type wrapper produces AmbiguousType cascade in legacy code; coercion-at-call-site is the right pattern". Will file as a finding post-Wave-1 v3 closure.
 
 ## 14. Dispatch readiness
 
