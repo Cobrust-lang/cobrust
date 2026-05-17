@@ -49,8 +49,39 @@
 
 每一项决定背后都有一个真实代价。例子：
 
-- 移除 `is`，因为它制造了大量初学者陷阱（`a is b` 在小整数缓存范围内意外为真），且 99% 的合法用途可以由 `==` 或显式 `same_object(a, b)` 替代
-- 移除 async / sync 染色，因为它把生态切成两半，每个库要写两遍——结构化并发是更好的抽象，单一 runtime 让你不再被迫染色
+- 移除 `is`,因为它制造了大量初学者陷阱(`a is b` 在小整数缓存范围内意外为真),且 99% 的合法用途可以由 `==` 或显式 `same_object(a, b)` 替代
+- 移除 async / sync 染色,因为它把生态切成两半,每个库要写两遍——结构化并发是更好的抽象,单一 runtime 让你不再被迫染色
+
+## 为何用 `&s` 而非 `clone(s)`(ADR-0052a Direction A binding)
+
+宪章 §2.5 把设计绑定到"LLM agent 第一次就能写对的语言"上。LC-100
+多次读取场景 —— 把同一个 Str 读两次(例如 `let n = str_len(s);
+let c = str_at(s, 0)`)—— 是当前 LLM-friendliness 最大的缺口:
+
+- 编译器今天(ADR-0050c 之后)会用 `UseAfterMove` 拒绝第二次读取,
+  这是一个真正的 §2.5 编译期信号。
+- Phase F.3 M-F.3.5 引入了 `clone(s)` PRELUDE 内建作为 mitigation。
+  那条 fix 路径让 LLM 学到的是错误信号:"用 `clone(s)` 包住第二次
+  读取",而 `clone(s)` 会堆分配、让源码膨胀、且不是 Rust 风格的
+  canonical 答案。
+- 正确的信号是 **`&s`**:零代价共享借用,与 LLM 的 Rust priors
+  对齐(`&str` 是训练语料中最高频的 token 之一)。根据 CLAUDE.md
+  §2.5 Direction A binding,`&s` 是 LC-100 honest-debt 的
+  §2.5-honest 收口路径。
+
+ADR-0052a Wave-1 以一元前缀表达式形式提供 `&s`。类型检查器通过
+**单向 call-site 强制转换** 接受 `str_len(&s)` 和 `str_at(&s, i)`
+—— 局部、单向(只允许 `&Str → Str`)、仅作用于 call-arg binding。
+`clone(s)` 在显式拷贝场景下仍然可用,但已不再是 stderr 推荐的
+canonical fix 路径;新的诊断提示是 "use `&s` to borrow without
+consuming"。
+
+考虑过但被拒绝的替代符号(ADR-0052a §2):
+- `borrow(s)` PRELUDE 形式:LLM 训练数据 overlap 更低、更长。
+- 隐式借用推断:违反 §2.5 "compile-time-catch-errors" 规则 ——
+  LLM 无法从 stderr 解码推断错失。
+- `ref s` 关键字(Rust pattern position):与 Cobrust 的 let
+  重绑定语法冲突。
 
 ## 进一步阅读
 
