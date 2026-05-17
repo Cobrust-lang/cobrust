@@ -76,14 +76,14 @@ pub use crate::manifest::{
     RouterSection, SourceSection, VerificationSection,
 };
 pub use crate::pipeline::{
-    AcceptAll, AcceptAllPerf, BehaviorVerifier, GateOutcome, GateOutcomes, PerfVerdict,
-    PerfVerifier, PyLibrary, TranslatedCrate, VerifierVerdict, translate, translate_with_verifier,
-    translate_with_verifiers,
+    AcceptAll, AcceptAllPerf, BehaviorVerifier, GateOutcome, GateOutcomes, OracleHarness,
+    OracleObservation, PerfVerdict, PerfVerifier, PyLibrary, TierVerifier, TranslatedCrate,
+    VerifierVerdict, translate, translate_with_verifier, translate_with_verifiers,
 };
 pub use crate::repair::{
     GateFailure, repair_translation, repair_translation_with_task, write_failure_report,
 };
-pub use crate::spec::{FunctionSpec, SpecError, SpecToml};
+pub use crate::spec::{FunctionSpec, PyCompatTier, SpecError, SpecToml};
 pub use crate::synthetic::{CannedResponse, CannedTable, PromptHeader, SyntheticProvider};
 pub use crate::translate::{
     EmittedFile, FunctionTranslation, TranslationOutput, TranslationPlan, WorkspaceContext,

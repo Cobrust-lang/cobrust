@@ -45,6 +45,40 @@ Ownership, borrowing, traits, `Result<T, E>` / `Option<T>`, exhaustive pattern m
 - **Translation provenance**: every translated module carries a manifest (source library, version, oracle artifacts, verification seeds, known divergences). **No silent translations, ever.**
 - **Deterministic build IDs**: hash of source + toolchain + LLM router decisions, reproducible bit-for-bit given the same inputs.
 
+## Translation tier system (ADR-0052c)
+
+The `@py_compat` tag is more than documentation — it is the typed contract
+the L2 behavior verifier enforces, end-to-end. ADR-0052c (2026-05-17)
+makes the tier a typed enum at every layer:
+
+- **Spec layer**: `corpus/<lib>/spec.toml` declares `py_compat = "strict"`
+  (or `"semantic"`, `"numerical(rtol=1e-7)"`, `"none"`). Malformed
+  strings (e.g. `"strikt"`) reject at spec-load time with a diagnostic
+  naming the typo and the expected variants — the `§2.5
+  compile-time-catch` rule applied to spec data.
+- **Verifier layer**: `TierVerifier` dispatches per-tier verdict policy:
+  - `Strict` → byte-identity check; any divergence rejects.
+  - `Semantic` → structural equivalence (dict key order, whitespace,
+    JSON-shaped output normalized before compare).
+  - `Numerical { rtol }` → `numpy.testing.assert_allclose(rtol=...)`
+    semantics for f64 comparisons.
+  - `None` → gate disabled; verdict honestly recorded as `Skip` per
+    ADR-0040.
+- **Router layer**: per-tier routing override via `[routing.translate_<tier>]`
+  blocks. `Strict` routes through consensus (n=2 by default), `Numerical`
+  routes through cost (cheap single-model is fine since rtol absorbs
+  emission variance), `Semantic` falls back to the global Quality
+  default.
+- **Prompt layer**: each tier emits a tier-specific instruction block
+  into the L1 translation prompt, telling the LLM the contract its
+  emission must satisfy ("output MUST be bit-identical" vs "output
+  MUST satisfy assert_allclose(rtol=...)" vs "output MUST match
+  structurally").
+
+The backward-compat M7+ numpy-corpus sidecar form (`py_compat =
+"numerical"` + `py_compat_rtol = 1e-7`) remains accepted; bare
+`"numerical"` without a sidecar defaults to `rtol = 1e-7`.
+
 ## The "why" behind decisions
 
 Each decision pays a real cost. Examples:

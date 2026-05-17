@@ -196,7 +196,6 @@ struct MockOracleRecord {
 /// reads `function.spec.py_compat` → `PyCompatTier::Strict` → calls
 /// `verify_bit_identical(...)` → records strict-equality match →
 /// returns `VerifierVerdict::Accept`.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn b1_strict_tier_accepts_byte_identical_output() {
     // Pre-DEV: AcceptAll accepts unconditionally. Post-DEV: TierVerifier
@@ -234,7 +233,6 @@ fn b1_strict_tier_accepts_byte_identical_output() {
 /// This test uses an inline custom verifier (matching the M5 pattern
 /// in `pipeline_l2_gates_use_real_verdicts.rs:378`) that simulates the
 /// DEV-side TierVerifier behaviour for Strict + divergent oracle.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn b2_strict_tier_rejects_any_divergence() {
     // Stand-in: a verifier that always rejects (simulating Strict +
@@ -288,7 +286,6 @@ fn b2_strict_tier_rejects_any_divergence() {
 /// must reject. This test pins the strictness — proves the Strict
 /// arm doesn't silently fall through to a Semantic-like structural
 /// match.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn b3_strict_tier_rejects_single_char_drift() {
     // Post-DEV: `TierVerifier::new(MockOracle::divergent("abc", "ab c"))`
@@ -337,7 +334,6 @@ fn b3_strict_tier_rejects_single_char_drift() {
 /// Per ADR-0052c §3 matrix row 2: Semantic tier accepts structural
 /// equivalence. When the emission matches the oracle exactly (the
 /// trivial structural-equivalence case), Semantic must Accept.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn b4_semantic_tier_accepts_identical_output() {
     // Post-DEV: `TierVerifier::new(MockOracle::matching("{a:1}", "{a:1}"))`
@@ -369,7 +365,6 @@ fn b4_semantic_tier_accepts_identical_output() {
 /// `actual = "{'b': 2, 'a': 1}"`. TierVerifier dispatches Semantic →
 /// calls `verify_semantic` → parses both as dicts → structural-eq passes
 /// → Accept.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn b5_semantic_tier_accepts_dict_key_order_drift() {
     // Stand-in: a verifier that accepts (simulating Semantic + dict-key-
@@ -403,7 +398,6 @@ fn b5_semantic_tier_accepts_dict_key_order_drift() {
 /// `[1, 2, 3]` and the oracle produces `[1, 2, 4]`, the structural-eq
 /// check must reject (different list element). This pins the contract
 /// against accidental over-permissive impls.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn b6_semantic_tier_rejects_genuine_divergence() {
     struct SemanticDivergenceRejector;
@@ -452,7 +446,6 @@ fn b6_semantic_tier_rejects_genuine_divergence() {
 /// DEV-side: `TierVerifier::new(MockOracle::numerical(expected, actual))`
 /// dispatches Numerical → calls `verify_allclose(rtol=1e-7)` → records
 /// `assert_allclose(actual, expected, rtol=1e-7)` pass → Accept.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn b7_numerical_tier_accepts_drift_within_rtol() {
     // Post-DEV: corpus declares py_compat="numerical(rtol=1e-7)" and
@@ -476,7 +469,6 @@ fn b7_numerical_tier_accepts_drift_within_rtol() {
 /// drift exceeding tolerance. A 1e-5 drift exceeds rtol=1e-7 by 100x
 /// and must Reject. This pins the contract — the DEV impl MUST honor
 /// the rtol payload, not silently accept everything.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn b8_numerical_tier_rejects_drift_exceeding_rtol() {
     struct NumericalOverflowRejector;
@@ -526,7 +518,6 @@ fn b8_numerical_tier_rejects_drift_exceeding_rtol() {
 ///
 /// This is the opt-out path retained for translations with no correctness
 /// contract (e.g. repair.rs:233 failure-footer text).
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn b9_none_tier_accepts_unconditionally() {
     // Post-DEV: corpus declares py_compat="none" and TierVerifier
@@ -571,7 +562,6 @@ fn b9_none_tier_accepts_unconditionally() {
 /// We test by running the full pipeline with a mixed-tier spec.toml and
 /// asserting all three functions translate (none rejected by the wrong
 /// arm).
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[tokio::test]
 async fn b10_mixed_tier_manifest_per_function_dispatch() {
     let dir = tempfile::tempdir().unwrap();
@@ -707,7 +697,6 @@ pub fn f_none() {{}}
 /// This test asserts the router CONFIG SHAPE supports the override —
 /// validation against the existing `validate()` rules (consensus
 /// requires `n >= 2` and `preferred.len() >= n`).
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn d1_strict_tier_translation_routes_through_consensus() {
     // Post-DEV: router config grows a per-tier override block. This
@@ -791,7 +780,6 @@ preferred = [
 ///
 /// This test asserts the router config WITHOUT a Semantic override is
 /// valid (no required override) and the default strategy is Quality.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn d2_semantic_tier_translation_routes_through_quality_default() {
     let toml = r#"
@@ -839,7 +827,6 @@ preferred = ["anthropic_official:claude-opus-4-7"]
 /// This test asserts a router config with a Numerical-tier-cost
 /// override parses + validates. The Cost strategy has no consensus
 /// requirements (n omitted), simpler than D1's Strict-consensus.
-#[ignore = "ADR-0052c Wave-2 DEV impl pending"]
 #[test]
 fn d3_numerical_tier_translation_routes_through_cost() {
     let toml = r#"
