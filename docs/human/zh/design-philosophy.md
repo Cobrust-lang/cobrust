@@ -45,6 +45,34 @@
 - **翻译来源（provenance）**：每个翻译模块携带清单（来源库、版本、oracle 工件、验证种子、已知偏差）。**永远不允许静默翻译。**
 - **确定性构建 ID**：源码 + 工具链 + LLM 路由决策的哈希，相同输入逐字节可重现
 
+## 翻译层级系统（ADR-0052c）
+
+`@py_compat` 标签不只是文档——它是 L2 行为验证器从头到尾强制执行的类型化契约。
+ADR-0052c（2026-05-17）让该层级在每一层都是类型化枚举：
+
+- **Spec 层**：`corpus/<lib>/spec.toml` 声明 `py_compat = "strict"`
+  （或 `"semantic"`、`"numerical(rtol=1e-7)"`、`"none"`）。书写错误
+  （例如 `"strikt"`）在 spec 加载时直接拒绝，错误信息包含拼错的标识符
+  与所有合法选项——这是 `§2.5 编译期捕获` 规则在 spec 数据上的应用。
+- **Verifier 层**：`TierVerifier` 按层级分发判定策略：
+  - `Strict` → 逐字节恒等检查；任意偏差都拒绝。
+  - `Semantic` → 结构等价（字典键序、空白、JSON 形状先归一化再比较）。
+  - `Numerical { rtol }` → `numpy.testing.assert_allclose(rtol=...)`
+    f64 语义。
+  - `None` → 关闭闸门；按 ADR-0040 诚实记为 `Skip`。
+- **Router 层**：按层级覆盖路由（`[routing.translate_<tier>]` 块）。
+  `Strict` 走共识路径（默认 n=2）；`Numerical` 走 Cost 路径
+  （单模型即可，因为 rtol 已吸收输出抖动）；`Semantic` 落回全局
+  Quality 默认。
+- **Prompt 层**：每个层级在 L1 翻译 prompt 中插入层级专属指令块，明确告
+  诉 LLM 当前输出必须满足什么契约（"output MUST be bit-identical" /
+  "output MUST satisfy assert_allclose(rtol=...)" /
+  "output MUST match structurally"）。
+
+M7+ numpy 语料的旁路形式（`py_compat = "numerical"` + 同级
+`py_compat_rtol = 1e-7`）保持向后兼容；裸 `"numerical"` 无旁路时
+默认 `rtol = 1e-7`。
+
 ## 设计的"为什么"
 
 每一项决定背后都有一个真实代价。例子：

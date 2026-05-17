@@ -377,6 +377,7 @@ impl TierVerifier {
     }
 
     /// Per-tier strict byte-identity check.
+    #[allow(clippy::unused_self)] // method receiver retained for future oracle handle access
     fn verify_bit_identical(
         &self,
         function: &FunctionTranslation,
@@ -406,6 +407,7 @@ impl TierVerifier {
     /// canonical impl: compare after stripping whitespace + normalizing
     /// punctuation; treat the JSON representation of dicts as
     /// key-order-insensitive.
+    #[allow(clippy::unused_self)] // method receiver retained for future oracle handle access
     fn verify_semantic(
         &self,
         function: &FunctionTranslation,
@@ -432,6 +434,7 @@ impl TierVerifier {
     }
 
     /// Per-tier numerical `assert_allclose(rtol=...)` check.
+    #[allow(clippy::unused_self)] // method receiver retained for future oracle handle access
     fn verify_allclose(
         &self,
         function: &FunctionTranslation,
@@ -566,6 +569,7 @@ fn semantic_equivalent(expected: &str, actual: &str) -> bool {
 /// `numpy.testing.assert_allclose(rtol=...)` predicate. Matches the
 /// NumPy canonical semantics: `|a - b| <= atol + rtol * |b|` with
 /// `atol = 0.0` (NumPy's default for `assert_allclose`).
+#[allow(clippy::float_cmp)] // intentional bit-identity short-circuit before tolerance check
 fn numpy_allclose(expected: f64, actual: f64, rtol: f64) -> bool {
     if expected == actual {
         return true;

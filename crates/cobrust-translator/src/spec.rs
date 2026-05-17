@@ -309,10 +309,7 @@ impl Serialize for FunctionSpec {
 
 /// Resolve the `py_compat` string + optional sidecar `py_compat_rtol`
 /// into a typed [`PyCompatTier`] per ADR-0052c §4.
-fn resolve_py_compat(
-    tier_string: &str,
-    sidecar_rtol: Option<f64>,
-) -> Result<PyCompatTier, String> {
+fn resolve_py_compat(tier_string: &str, sidecar_rtol: Option<f64>) -> Result<PyCompatTier, String> {
     let trimmed = tier_string.trim();
     if trimmed == "numerical" {
         // Bare numerical: read the sidecar if present, else default to
