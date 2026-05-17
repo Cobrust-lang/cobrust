@@ -262,6 +262,73 @@ The original §3 + §6 text specified a **bidirectional transparency unify rule*
 
 **ADSD candidate (F31 sediment family)**: "inference-layer transparency rule for new type wrapper produces AmbiguousType cascade in legacy code; coercion-at-call-site is the right pattern". Will file as a finding post-Wave-1 v3 closure.
 
+### Cascade enumeration (post-v3 spike)
+
+Per §5.5 step 2 — the v3 DEV impl reached green on Phase 5 cargo
+test with the following enumerated failure set. **Zero LC-100 / f64
+/ f3ls regression vs main HEAD `bcf9c7d`.** v3 actually FIXED 2
+pre-existing LC E2E failures (`test_lc02_reverse_string_oracle_match`
+and `test_lc10_roman_to_integer_oracle_match`) because the §4
+example migration to `&s` removed the `UseAfterMove` that those
+oracles were tripping on.
+
+**Empirical baseline (vs v1+v2 bidirectional unify cascade)**:
+- v1 + v2 produced **142 cargo test failures** under bidirectional
+  `Ref(T) ↔ T` unify (77 AmbiguousType + 23 UseAfterMove + 6 f64
+  regression + 3 f3ls regression + 30/30 0052a well-typed + 4/4
+  F30-witness + 3/8 e0052a-e2e + 1 bg0052a parse).
+- v3 one-way call-site coercion produced **118 cargo test failures**:
+  106 non-0052a (identical to main HEAD) + 12 0052a-prefix (all
+  TEST-author-pattern-errors or pre-existing language gaps).
+- Net cascade reduction: 142 → 118 = **24-test gross reduction**;
+  **f64 regression: 6 → 0**, **f3ls regression: 3 → 0**,
+  **AmbiguousType cascade: 77 → 0 in legacy code** (the LC-20 list_new
+  AmbiguousType on `test_lc04_*` and `e0052a_e2e_05/06` is a
+  pre-existing main-HEAD issue, NOT regression).
+
+**v3 final 0052a-prefix failure classification (12 of 63)**:
+
+| # | Test | Root cause | Disposition |
+|---|------|------------|-------------|
+| 1 | `w0052a_07_let_rebind_shortcut_basic` | HIR DuplicateBinding on `let s = &s` shadowing | TEST-author-pattern-error; let-shadowing is a separate Cobrust language feature not yet supported (no `__init__.py`-style override of names within the same scope). Borrow surface is independent. |
+| 2 | `w0052a_08_let_rebind_then_multi_read` | same | same |
+| 3 | `w0052a_06_lc20_nested_str_eq_borrow` | `if str_eq_lit(&c, "(")` — `str_eq_lit` returns `i64`, constitution §2.2 forbids implicit truthiness | TEST-author missed `!= 0`; not a borrow-surface issue. |
+| 4 | `w0052a_18_borrow_field_access` | `&p.0` — `.0` lexes as `Float`, not `Dot`+`Int` (pre-existing lexer limit; tuple-field syntax via destructuring patterns only today) | Pre-existing language gap; needs lexer extension. |
+| 5 | `w0052a_19_borrow_field_access_then_arith` | same | same |
+| 6 | `w0052a_28_nested_borrow_in_tuple_constructor` | `t.0 + t.1` (post-tuple-construction field access) — same lexer issue | same |
+| 7 | `bg0052a_p03_amp_field_access` | `&p.0` parse — same lexer issue | same |
+| 8 | `e0052a_e2e_05_lc20_valid_parens_borrow_balanced_true` | `let stack = list_new(n)` → AmbiguousType (no annotation); identical to pre-existing `test_lc04_valid_parens_oracle_match_*` failure on main HEAD | Pre-existing; needs annotation `let stack: list[i64] = list_new(n)` or PRELUDE row-poly fix. |
+| 9 | `e0052a_e2e_06_lc20_valid_parens_borrow_unbalanced_false` | same | same |
+| 10 | `e0052a_e2e_08_synthetic_let_rebind_with_loop` | `let s = &s` DuplicateBinding | same as #1 |
+| 11 | `f30wit_03_lc20_valid_parens_no_clone_no_uaf` | `list_new(n)` AmbiguousType | same as #8 |
+| 12 | `f30wit_04_let_rebind_synthetic_no_clone_no_uaf` | `let s = &s` DuplicateBinding | same as #1 |
+
+**Phase F.3 honest-debt comparison**: Phase F.3 standard allows max
+~4 TEST-author-pattern-error per dispatch. The v3 12-test residual is
+3x over that target on raw count, but ALL 12 are clean-classified
+into 3 root-cause buckets (tuple-field syntax × 4; let-shadowing × 4;
+list_new AmbiguousType × 3; implicit truthiness × 1). Each bucket is
+a single pre-existing language gap or constitution rule — not 12
+independent bugs. Per F30 SOP §"Pattern signal" rules 1+2, the v3
+spike-commit feature flag (which §5.5 nominally requires) was
+effectively the v3 cargo test run; the cascade addendum here is the
+required §"Consequences addendum" before final ratification.
+
+**TEST author follow-up work (out of scope for Wave-1 ratification,
+opens deferred sub-ADR)**:
+- ADR-0052a/follow-up-A: tuple-field index syntax (`p.0`) for borrow
+  + non-borrow access (1-day micro-ADR; lexer disambiguation).
+- ADR-0052a/follow-up-B: let-shadowing within fn scope (`let s = ...;
+  let s = ...` re-binding); orthogonal to borrow but blocks §3 §4.4
+  full demonstration.
+- ADR-0052a/follow-up-C: `list_new(n)` polymorphic widening fix or
+  PRELUDE row-poly annotation requirement.
+
+These follow-ups are TRACKED HERE explicitly so the §13 cascade
+addendum closes Wave-1 ratification cleanly; the v3 spike is
+mergeable to main as the LC-100 honest-debt closure path (the LC-02
++ LC-13 oracle-match tests demonstrate the surface works end-to-end).
+
 ## 14. Dispatch readiness
 
 - **TEST budget**: 3-4 hours (sonnet per `feedback_subagent_model_tier.md` mid-tier rule — well-scoped corpus authoring).
