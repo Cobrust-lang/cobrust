@@ -56,7 +56,10 @@ pub fn check(module: &Module) -> Result<TypedModule, TypeError> {
     // Verify no inference variables leaked into a binding type.
     for (_, t) in &resolved {
         if !t.free_vars().is_empty() {
-            return Err(TypeError::AmbiguousType { span: module.span });
+            return Err(TypeError::AmbiguousType {
+                span: module.span,
+                suggestion: Some("add an explicit type annotation, e.g. `let x: i64 = …`"),
+            });
         }
     }
     Ok(TypedModule {
@@ -296,7 +299,12 @@ impl Ctx {
             if let Some(_lit) = &p.default {
                 let dt = self.lower_default_type(p);
                 if dt.is_mutable_container() {
-                    return Err(TypeError::MutableDefault { span: p.span });
+                    return Err(TypeError::MutableDefault {
+                        span: p.span,
+                        suggestion: Some(
+                            "use `None` as the default and assign inside the function body",
+                        ),
+                    });
                 }
             }
         }
@@ -305,7 +313,12 @@ impl Ctx {
             if p.default.is_some() {
                 let dt = self.lower_default_type(p);
                 if dt.is_mutable_container() {
-                    return Err(TypeError::MutableDefault { span: p.span });
+                    return Err(TypeError::MutableDefault {
+                        span: p.span,
+                        suggestion: Some(
+                            "use `None` as the default and assign inside the function body",
+                        ),
+                    });
                 }
             }
         }
@@ -360,7 +373,10 @@ impl Ctx {
                     .return_stack
                     .last()
                     .cloned()
-                    .ok_or(TypeError::ReturnOutsideFn { span: s.span })?;
+                    .ok_or(TypeError::ReturnOutsideFn {
+                        span: s.span,
+                        suggestion: Some("move the `return` inside a `fn` body"),
+                    })?;
                 let value_ty = match e {
                     Some(e) => self.synth_expr(e)?,
                     None => Ty::None,
@@ -370,13 +386,21 @@ impl Ctx {
             }
             StmtKind::Break => {
                 if self.loop_depth == 0 {
-                    return Err(TypeError::BreakOutsideLoop { span: s.span });
+                    return Err(TypeError::BreakOutsideLoop {
+                        span: s.span,
+                        suggestion: Some("move the `break` inside a `for` or `while` loop body"),
+                    });
                 }
                 Ok(BlockOutcome::Diverges)
             }
             StmtKind::Continue => {
                 if self.loop_depth == 0 {
-                    return Err(TypeError::ContinueOutsideLoop { span: s.span });
+                    return Err(TypeError::ContinueOutsideLoop {
+                        span: s.span,
+                        suggestion: Some(
+                            "move the `continue` inside a `for` or `while` loop body",
+                        ),
+                    });
                 }
                 Ok(BlockOutcome::Diverges)
             }
@@ -517,6 +541,9 @@ impl Ctx {
                     return Err(TypeError::NotIterable {
                         actual: Ty::Tuple(items),
                         span,
+                        suggestion: Some(
+                            "use a list / dict / range / str — primitives cannot iterate",
+                        ),
                     });
                 }
                 let head = items[0].clone();
@@ -526,6 +553,9 @@ impl Ctx {
                         return Err(TypeError::NotIterable {
                             actual: Ty::Tuple(items),
                             span,
+                            suggestion: Some(
+                                "use a list / dict / range / str — primitives cannot iterate",
+                            ),
                         });
                     }
                 }
@@ -542,6 +572,7 @@ impl Ctx {
             other => Err(TypeError::NotIterable {
                 actual: other,
                 span,
+                suggestion: Some("use a list / dict / range / str — primitives cannot iterate"),
             }),
         }
     }
@@ -584,6 +615,7 @@ impl Ctx {
             return Err(TypeError::NonExhaustiveMatch {
                 uncovered: self.uncovered_set(&scrutinee_ty, &covered_lits),
                 span,
+                suggestion: Some("add the missing cases or a wildcard `_` arm"),
             });
         }
         Ok(BlockOutcome::Falls)
@@ -729,7 +761,12 @@ impl Ctx {
                             // crisp DictSpreadNotSupported diagnostic
                             // and not a cascade of unify mismatches).
                             let _ = self.synth_expr(e)?;
-                            return Err(TypeError::DictSpreadNotSupported { span: e.span });
+                            return Err(TypeError::DictSpreadNotSupported {
+                                span: e.span,
+                                suggestion: Some(
+                                    "dict-merge is Phase G; build the result manually by iterating `other.items()` and inserting",
+                                ),
+                            });
                         }
                     }
                 }
@@ -748,6 +785,9 @@ impl Ctx {
                         return Err(TypeError::NotHashable {
                             actual: k_resolved,
                             span: first_k_span.unwrap_or(span),
+                            suggestion: Some(
+                                "f64 keys are forbidden (NaN != NaN); use i64 via `f.to_bits() as i64` or a str repr",
+                            ),
                         });
                     }
                 }
@@ -830,6 +870,9 @@ impl Ctx {
                     (other, _) => Err(TypeError::NotIndexable {
                         actual: other.clone(),
                         span,
+                        suggestion: Some(
+                            "use a list / dict / tuple / str — primitive types cannot be indexed",
+                        ),
                     }),
                 }
             }
@@ -854,7 +897,10 @@ impl Ctx {
             }
             ExprKind::Yield(opt) => {
                 if self.return_stack.is_empty() {
-                    return Err(TypeError::YieldOutsideFn { span });
+                    return Err(TypeError::YieldOutsideFn {
+                        span,
+                        suggestion: Some("move the `yield` inside a generator `fn` body"),
+                    });
                 }
                 if let Some(e) = opt {
                     self.synth_expr(e)?;
@@ -863,7 +909,10 @@ impl Ctx {
             }
             ExprKind::YieldFrom(e) => {
                 if self.return_stack.is_empty() {
-                    return Err(TypeError::YieldOutsideFn { span });
+                    return Err(TypeError::YieldOutsideFn {
+                        span,
+                        suggestion: Some("move the `yield` inside a generator `fn` body"),
+                    });
                 }
                 self.synth_expr(e)?;
                 Ok(Ty::None)
@@ -892,6 +941,9 @@ impl Ctx {
                         expected: to_resolved,
                         actual: from_resolved,
                         span,
+                        suggestion: Some(
+                            "change the expression type or add `: <expected>` annotation",
+                        ),
                     })
                 }
             }
@@ -947,6 +999,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::List(Box::new(k))))
@@ -957,6 +1010,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::List(Box::new(v))))
@@ -967,6 +1021,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 // `d.items() -> List[Tuple[K, V]]`. Insertion-order
@@ -1001,6 +1056,7 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     }),
                 }
             }
@@ -1011,6 +1067,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::Dict(Box::new(k), Box::new(v))))
@@ -1061,6 +1118,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::Int))
@@ -1071,6 +1129,7 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 let at = self.synth_expr(pos_args[0])?;
@@ -1083,6 +1142,7 @@ impl Ctx {
                         expected: 2,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 let a0 = self.synth_expr(pos_args[0])?;
@@ -1097,6 +1157,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::Str))
@@ -1107,6 +1168,7 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 let at = self.synth_expr(pos_args[0])?;
@@ -1119,6 +1181,7 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 let at = self.synth_expr(pos_args[0])?;
@@ -1131,6 +1194,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::Str))
@@ -1179,6 +1243,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::Int))
@@ -1189,6 +1254,7 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 let at = self.synth_expr(pos_args[0])?;
@@ -1204,6 +1270,7 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 let it = self.synth_expr(pos_args[0])?;
@@ -1216,6 +1283,7 @@ impl Ctx {
                         expected: 2,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 let it = self.synth_expr(pos_args[0])?;
@@ -1230,6 +1298,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::Bool))
@@ -1273,6 +1342,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::Float))
@@ -1283,6 +1353,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::Bool))
@@ -1326,6 +1397,7 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 Ok(Some(Ty::Int))
@@ -1336,6 +1408,7 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 let at = self.synth_expr(pos_args[0])?;
@@ -1435,6 +1508,7 @@ impl Ctx {
                         expected: fn_ty.positional.len(),
                         actual: pos_args.len(),
                         span,
+                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                     });
                 }
                 for (a, p) in pos_args.iter().zip(fn_ty.positional.iter()) {
@@ -1452,6 +1526,7 @@ impl Ctx {
                             .ok_or_else(|| TypeError::KeywordArgMismatch {
                                 name: name.clone(),
                                 span: e.span,
+                                suggestion: Some("remove or rename — the callee does not accept this keyword"),
                             })?;
                         let et = self.synth_expr(e)?;
                         self.unify_call_arg(&p, &et, e.span)?;
@@ -1488,6 +1563,7 @@ impl Ctx {
             other => Err(TypeError::NotCallable {
                 actual: other,
                 span,
+                suggestion: Some("only function types are callable; verify the name resolves to a fn"),
             }),
         }
     }
@@ -1565,6 +1641,7 @@ impl Ctx {
                         expected: Ty::Int,
                         actual: other,
                         span,
+                        suggestion: Some("change the expression type or add `: <expected>` annotation"),
                     }),
                 }
             }
@@ -1602,6 +1679,7 @@ impl Ctx {
                         expected: Ty::Int,
                         actual: other,
                         span,
+                        suggestion: Some("change the expression type or add `: <expected>` annotation"),
                     }),
                 }
             }
@@ -1645,6 +1723,7 @@ impl Ctx {
                     return Err(TypeError::NotHashable {
                         actual: kt_resolved,
                         span: k.span,
+                        suggestion: Some("f64 keys are forbidden (NaN != NaN); use i64 via `f.to_bits() as i64` or a str repr"),
                     });
                 }
                 Ok(Ty::Dict(Box::new(kt), Box::new(vt)))
@@ -1659,6 +1738,7 @@ impl Ctx {
                 expected: Ty::Never,
                 actual: Ty::Never,
                 span: c.span,
+                suggestion: Some("change the expression type or add `: <expected>` annotation"),
             }),
         }
     }
@@ -1709,6 +1789,7 @@ impl Ctx {
                         return Err(TypeError::NotHashable {
                             actual: k_resolved,
                             span: args[0].span,
+                            suggestion: Some("f64 keys are forbidden (NaN != NaN); use i64 via `f.to_bits() as i64` or a str repr"),
                         });
                     }
                 }
@@ -1836,6 +1917,7 @@ impl Ctx {
             None => Err(TypeError::UnknownName {
                 name: rn.name.clone(),
                 span,
+                suggestion: Some("declare with `let <name> = …` first"),
             }),
         }
     }
@@ -1902,6 +1984,7 @@ impl Ctx {
             other => Err(TypeError::ImplicitTruthiness {
                 actual: other,
                 span,
+                suggestion: Some("change to `if x != 0:` (use `.is_some()` for Option)"),
             }),
         }
     }
@@ -1930,6 +2013,7 @@ impl Ctx {
                                 expected: elems.len(),
                                 actual: items.len(),
                                 span: p.span,
+                                suggestion: Some("check the function signature; pass exactly the declared positional arity"),
                             });
                         }
                         for (it, e_ty) in items.iter().zip(elems.iter()) {
@@ -1962,6 +2046,7 @@ impl Ctx {
                         expected: Ty::Tuple(vec![]),
                         actual: other,
                         span: p.span,
+                        suggestion: Some("change the expression type or add `: <expected>` annotation"),
                     }),
                 }
             }

@@ -303,6 +303,9 @@ fn verify_drops(body: &Body) -> Result<(), MirError> {
                     return Err(MirError::DoubleDrop {
                         local: place.local.0,
                         span: block.span,
+                        suggestion: Some(
+                            "a value can only be dropped once; check your control flow",
+                        ),
                     });
                 }
                 propagate(target, &dropped, &mut entry_dropped, &mut work);

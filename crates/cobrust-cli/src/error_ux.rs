@@ -548,13 +548,25 @@ impl From<LoweringError> for UserError {
 
 impl From<TypeError> for UserError {
     fn from(e: TypeError) -> Self {
+        // ADR-0052b §7 Direction B — the renderer is structural. Each
+        // variant's `suggestion: Option<&'static str>` field is mapped
+        // directly to the `hint` field; primary-line `msg` only carries
+        // the failing identifier / type info (no fix-prose
+        // interpolation). Per §3.5 + §10, the primary `msg` still
+        // includes the bound name (e.g. `unknown name \`foo\``) so LLM
+        // stderr parsing retains it; the fix path lives in the
+        // structured `suggestion` field populated at construction time.
         use TypeError as E;
         let (msg, hint, line, col) = match &e {
-            E::UnknownName { name, span } => {
+            E::UnknownName {
+                name,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!("unknown name `{name}`"),
-                    Some(format!("did you mean to declare it with `let {name} = …`?")),
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
@@ -563,42 +575,66 @@ impl From<TypeError> for UserError {
                 expected,
                 actual,
                 span,
+                suggestion,
             } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!("wrong number of arguments: expected {expected}, got {actual}"),
-                    None,
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::KeywordArgMismatch { name, span } => {
+            E::KeywordArgMismatch {
+                name,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
-                (format!("unknown keyword argument `{name}`"), None, l, c)
+                (
+                    format!("unknown keyword argument `{name}`"),
+                    suggestion.map(str::to_owned),
+                    l,
+                    c,
+                )
             }
-            E::MissingArgument { name, span } => {
+            E::MissingArgument {
+                name,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
-                (format!("missing required argument `{name}`"), None, l, c)
+                (
+                    format!("missing required argument `{name}`"),
+                    suggestion.map(str::to_owned),
+                    l,
+                    c,
+                )
             }
             E::TypeMismatch {
                 expected,
                 actual,
                 span,
+                suggestion,
             } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!("type mismatch: expected `{expected}`, found `{actual}`"),
-                    Some("add a type annotation or fix the expression type".to_owned()),
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::NonExhaustiveMatch { uncovered, span } => {
+            E::NonExhaustiveMatch {
+                uncovered,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
                 let missing = uncovered.join(", ");
                 (
                     format!("non-exhaustive match: missing case(s) {missing}"),
-                    Some("add the missing cases or a wildcard `_` arm".to_owned()),
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
@@ -608,139 +644,182 @@ impl From<TypeError> for UserError {
                 ty1,
                 ty2,
                 span,
+                suggestion,
             } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!("conflicting types for field `{field}`: `{ty1}` vs `{ty2}`"),
-                    None,
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::ImplicitTruthiness { actual, span } => {
+            E::ImplicitTruthiness {
+                actual,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!("cannot use `{actual}` as a boolean condition"),
-                    Some(
-                        "Cobrust requires an explicit bool — try `if x != 0:` or `if x.is_some():`"
-                            .to_owned(),
-                    ),
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::UseOfDroppedFeature { name, span } => {
+            E::UseOfDroppedFeature {
+                name,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!("use of dropped feature `{name}`"),
-                    Some(
-                        "this Python feature is not part of Cobrust — see the language reference"
-                            .to_owned(),
-                    ),
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::MutableDefault { span } => {
+            E::MutableDefault { span, suggestion } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     "mutable default argument is forbidden".to_owned(),
-                    Some(
-                        "use `None` as the default and assign inside the function body".to_owned(),
-                    ),
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::AmbiguousType { span } => {
+            E::AmbiguousType { span, suggestion } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     "ambiguous type — cannot infer".to_owned(),
-                    Some("add an explicit type annotation, e.g. `let x: i64 = …`".to_owned()),
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::DuplicateField { name, span } => {
+            E::DuplicateField {
+                name,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!("duplicate field `{name}` in record literal"),
-                    None,
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::OccursCheck { var, ty, span } => {
+            E::OccursCheck {
+                var,
+                ty,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!("type inference loop: cannot unify `?{}` with `{ty}`", var.0),
-                    Some(
-                        "this is usually caused by a recursive type without an annotation"
-                            .to_owned(),
-                    ),
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::NotCallable { actual, span } => {
+            E::NotCallable {
+                actual,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
-                (format!("`{actual}` is not callable"), None, l, c)
+                (
+                    format!("`{actual}` is not callable"),
+                    suggestion.map(str::to_owned),
+                    l,
+                    c,
+                )
             }
-            E::NotIndexable { actual, span } => {
+            E::NotIndexable {
+                actual,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!("`{actual}` cannot be indexed with `[]`"),
-                    None,
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::NotIterable { actual, span } => {
+            E::NotIterable {
+                actual,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!("`{actual}` cannot be used in a `for` loop"),
-                    None,
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::BreakOutsideLoop { span } => {
+            E::BreakOutsideLoop { span, suggestion } => {
                 let (l, c) = span_to_line_col(span);
-                ("`break` outside of a loop".to_owned(), None, l, c)
+                (
+                    "`break` outside of a loop".to_owned(),
+                    suggestion.map(str::to_owned),
+                    l,
+                    c,
+                )
             }
-            E::ContinueOutsideLoop { span } => {
+            E::ContinueOutsideLoop { span, suggestion } => {
                 let (l, c) = span_to_line_col(span);
-                ("`continue` outside of a loop".to_owned(), None, l, c)
+                (
+                    "`continue` outside of a loop".to_owned(),
+                    suggestion.map(str::to_owned),
+                    l,
+                    c,
+                )
             }
-            E::ReturnOutsideFn { span } => {
+            E::ReturnOutsideFn { span, suggestion } => {
                 let (l, c) = span_to_line_col(span);
-                ("`return` outside of a function".to_owned(), None, l, c)
+                (
+                    "`return` outside of a function".to_owned(),
+                    suggestion.map(str::to_owned),
+                    l,
+                    c,
+                )
             }
-            E::YieldOutsideFn { span } => {
+            E::YieldOutsideFn { span, suggestion } => {
                 let (l, c) = span_to_line_col(span);
-                ("`yield` outside of a function".to_owned(), None, l, c)
+                (
+                    "`yield` outside of a function".to_owned(),
+                    suggestion.map(str::to_owned),
+                    l,
+                    c,
+                )
             }
-            E::NotHashable { actual, span } => {
+            E::NotHashable {
+                actual,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     format!(
                         "dict key type `{actual}` is not Hashable (Phase F.3 admits i64 / str / bool / None)"
                     ),
-                    Some(
-                        "f64 keys are forbidden (NaN != NaN); use i64 via `f.to_bits() as i64` or a str repr".to_owned(),
-                    ),
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            E::DictSpreadNotSupported { span } => {
+            E::DictSpreadNotSupported { span, suggestion } => {
                 let (l, c) = span_to_line_col(span);
                 (
                     "dict spread `**other` is not supported in dict literals".to_owned(),
-                    Some(
-                        "dict-merge is Phase G; build the result manually by iterating `other.items()` and inserting"
-                            .to_owned(),
-                    ),
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
@@ -748,37 +827,29 @@ impl From<TypeError> for UserError {
             E::Multiple(errors) => {
                 // Surface the first error; the rest are silently counted.
                 // The caller should iterate and report individually for
-                // best UX — but this fallback is safe.
+                // best UX — but this fallback is safe. The aggregate
+                // wrapper is N-class per ADR-0052b §4.1; the child's
+                // structured `suggestion` field is what reaches the user.
                 if let Some(first) = errors.first() {
                     return UserError::from(first.clone());
                 }
                 ("multiple type errors".to_owned(), None, 1, 0)
             }
-            // ADR-0052a Wave-1 §6 — borrow-of-non-place. The parser
-            // already enforces the §8 Wave-1 cap at parse time; this
-            // arm is forward-compat for future shapes admitted by the
-            // parser but rejected by the type checker (e.g. record-
-            // field-of-arith borrows in a future sub-ADR).
+            // ADR-0052b §2 Direction B — borrow-of-non-place's
+            // `suggestion` field is the canonical Wave-1 forward-compat
+            // shape; uniform structural rendering applies.
             E::BorrowOfNonPlace { span, suggestion } => {
                 let (line, col) = span_to_line_col(span);
                 (
                     "cannot borrow this expression".to_owned(),
-                    suggestion.map(|s| s.to_owned()).or_else(|| {
-                        Some(
-                            "borrow operand must be `Name`, `Name.field`, or `Name[idx]` \
-                             (ADR-0052a Wave-1 §8 cap)"
-                                .to_owned(),
-                        )
-                    }),
+                    suggestion.map(str::to_owned),
                     line,
                     col,
                 )
             }
-            // ADR-0052d-prereq §"New error variant" — method-form
-            // receiver matched one of the 5 recognised types but the
-            // method name is not in that type's table. Forward stderr
-            // surfaces the `suggestion` field (Wave-2 hard-coded
-            // `&'static str` hints, 0052b promotes to structured shape).
+            // ADR-0052b §2 Direction B — method-not-found's
+            // `suggestion` field carries the chosen "did you mean" prose
+            // assembled at construction in `{str,list,float,int}_method_suggestion`.
             E::UnknownMethod {
                 type_name,
                 method_name,
@@ -788,7 +859,7 @@ impl From<TypeError> for UserError {
                 let (line, col) = span_to_line_col(span);
                 (
                     format!("method `{method_name}` not found on `{type_name}`"),
-                    suggestion.map(|s| s.to_owned()),
+                    suggestion.map(str::to_owned),
                     line,
                     col,
                 )
@@ -808,68 +879,98 @@ impl From<TypeError> for UserError {
 
 impl From<MirError> for UserError {
     fn from(e: MirError) -> Self {
-        // MIR errors come from the ownership / borrow checker and are
-        // user-visible (they describe source-level ownership violations).
-        // However we do not have a span-to-line map here, so line/col
-        // are best-effort from the raw span offset.
+        // ADR-0052b §7 Direction B — the renderer is structural. Each
+        // variant's `suggestion: Option<&'static str>` is mapped to the
+        // `hint` field via `suggestion.map(str::to_owned)`. MIR errors
+        // come from the ownership / borrow checker and are user-visible
+        // (they describe source-level ownership violations). Compiler-
+        // internal variants (UnresolvedDefId, Internal) route through
+        // `UserError::internal` per the existing T1.4 contract.
         use MirError as M;
         let (msg, hint, span) = match &e {
-            M::UseAfterMove { local, span } => (
+            M::UseAfterMove {
+                local,
+                span,
+                suggestion,
+            } => (
                 format!("use of moved value `_{local}` after it was moved"),
-                // ADR-0052a Wave-1 §7 + §11 — surface `&s` as the
-                // canonical fix path. Hard-coded suggestion at the
-                // construction site per §"Direction B coordination"
-                // forward-compat (Direction B sub-ADR formalises the
-                // structured `suggestion` field shape).
-                Some(
-                    "change to `&s` to borrow without consuming \
-                     (ADR-0052a explicit shared borrow)"
-                        .to_owned(),
-                ),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            M::UseAfterDrop { local, span } => (
+            M::UseAfterDrop {
+                local,
+                span,
+                suggestion,
+            } => (
                 format!("use of dropped value `_{local}`"),
-                Some("the value was already dropped at this point".to_owned()),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            M::ConflictingMutBorrow { local, span } => (
+            M::ConflictingMutBorrow {
+                local,
+                span,
+                suggestion,
+            } => (
                 format!("conflicting mutable borrow of `_{local}`"),
-                Some("only one mutable borrow can be active at a time".to_owned()),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            M::SharedMutOverlap { local, span } => (
+            M::SharedMutOverlap {
+                local,
+                span,
+                suggestion,
+            } => (
                 format!("shared and mutable borrow of `_{local}` overlap"),
-                Some("cannot borrow mutably while a shared borrow is active".to_owned()),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            M::EscapingBorrow { local, span } => (
+            M::EscapingBorrow {
+                local,
+                span,
+                suggestion,
+            } => (
                 format!("borrow of `_{local}` escapes its declaring scope"),
-                Some("the borrowed value must live at least as long as the reference".to_owned()),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            M::DropMissing { local, span } => (
+            M::DropMissing {
+                local,
+                span,
+                suggestion,
+            } => (
                 format!("owning value `_{local}` not dropped on this return path"),
-                Some("every owned value must be explicitly dropped or returned".to_owned()),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            M::DoubleDrop { local, span } => (
+            M::DoubleDrop {
+                local,
+                span,
+                suggestion,
+            } => (
                 format!("value `_{local}` dropped more than once"),
-                Some("a value can only be dropped once; check your control flow".to_owned()),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            M::NonExhaustiveSwitch { span } => (
+            M::NonExhaustiveSwitch { span, suggestion } => (
                 "non-exhaustive match expression".to_owned(),
-                Some("add a wildcard `_` arm or cover all cases".to_owned()),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            M::FieldOutOfBounds { place, span } => (
+            M::FieldOutOfBounds {
+                place,
+                span,
+                suggestion,
+            } => (
                 format!("field projection out of bounds: {place:?}"),
-                Some("the struct does not have that many fields".to_owned()),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            M::UnresolvedDefId { def_id, span: _ } => {
-                // This should never reach users — it's a compiler bug.
+            M::UnresolvedDefId {
+                def_id,
+                span: _,
+                suggestion: _,
+            } => {
+                // Compiler-internal; routes through `UserError::internal`.
                 return UserError::internal(
                     format!("UnresolvedDefId({def_id})"),
                     "cobrust build <file>".to_owned(),
