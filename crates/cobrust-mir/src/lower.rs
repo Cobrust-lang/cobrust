@@ -1521,6 +1521,16 @@ impl<'a> BodyBuilder<'a> {
             }
             ExprKind::Bin { op, lhs, rhs } => self.lower_bin(*op, lhs, rhs, e.span),
             ExprKind::Un { op, operand } => self.lower_un(*op, operand, e.span),
+            // ADR-0052a Wave-1 §7 — `&expr` lowering. The borrow arm
+            // always emits `Operand::Copy(place)` regardless of the
+            // underlying type's Copy-ness. This is the §3 §13-honest
+            // lowering: a borrow is a shared read, never a move, so
+            // borrow.rs:114's `UseAfterMove` does not fire on borrowed
+            // reads. Wave-1 cap: parser ensures inner is `Name`,
+            // `Attr`, or `Index` of a place; we delegate to
+            // `lower_borrow_inner` which mirrors the place projection
+            // walk without crossing the move/copy boundary.
+            ExprKind::Borrow(inner) => self.lower_borrow_inner(inner, e.span),
             ExprKind::Await(inner) => {
                 // Placeholder: lower as a call to a synthetic
                 // `__await__` runtime helper. M13 binds the runtime.
@@ -1772,6 +1782,41 @@ impl<'a> BodyBuilder<'a> {
         let temp = self.declare_local("_un".to_string(), Ty::None, span, false);
         self.emit_assign(Place::local(temp), Rvalue::UnaryOp(mir_op, op_val), span);
         Ok(Operand::Copy(Place::local(temp)))
+    }
+
+    /// ADR-0052a Wave-1 §7 — lower the inner of an `&expr` borrow as
+    /// a non-consuming shared read. The key invariant is **never emit
+    /// `Operand::Move`** on the inner place — borrowed reads are
+    /// always `Operand::Copy`, so `borrow.rs:114`'s `UseAfterMove` does
+    /// not flag the same local on subsequent reads.
+    ///
+    /// Wave-1 §8 cap restricts the inner to one of:
+    ///   - `Name(rn)` — direct local read; produces
+    ///     `Operand::Copy(Place::local(local))` regardless of
+    ///     `is_copy_type` (the override is the whole point).
+    ///   - `Attr { base, .. }` / `Index { base, index }` — Wave-1
+    ///     accepts the existing `lower_expr` path for these shapes
+    ///     because their lowering already emits `Operand::Copy` of a
+    ///     projection (Attr) or a freshly-cloned owned value for
+    ///     `list[str]` indexing. Semantically still a borrow at the
+    ///     source level; the slight inefficiency for `&xs[i]` on
+    ///     `list[str]` is acceptable Wave-1 (Phase H may revisit with
+    ///     proper borrow-projection).
+    fn lower_borrow_inner(&mut self, inner: &Expr, _span: Span) -> Result<Operand, MirError> {
+        match &inner.kind {
+            ExprKind::Name(rn) => {
+                let local = self.lookup_local_for_resolved(rn, inner.span)?;
+                // Override the move/copy dispatch: borrow is always Copy.
+                Ok(Operand::Copy(Place::local(local)))
+            }
+            // For Attr / Index Wave-1 delegates to the standard
+            // expression lowering. The Attr arm already emits
+            // `Operand::Copy(projection)` and the Index arm either
+            // emits `Operand::Copy(projection)` (non-Str) or
+            // synthesises a fresh owned clone (str list element);
+            // either way the inner is not consumed by Move.
+            _ => self.lower_expr(inner),
+        }
     }
 
     /// ADR-0041 §H2: short-circuit `and` / `or` at MIR.
@@ -2184,6 +2229,12 @@ fn is_copy_type(ty: &Ty) -> bool {
             | Ty::Never
             | Ty::List(_)
             | Ty::Dict(_, _)
+            // ADR-0052a Wave-1 §7 — `&T` is operand-level Copy. A
+            // borrow is a shared read; reading the local that holds
+            // a `Ref(T)` value (e.g. the rebound `s` in `let s = &s`)
+            // emits `Operand::Copy`, not `Operand::Move`, so the
+            // borrow stays valid across multiple use sites.
+            | Ty::Ref(_)
     )
 }
 
