@@ -3,14 +3,16 @@ doc_kind: adr
 adr_id: 0052a
 parent_adr: 0052
 title: "Direction A — Explicit `&s` borrow / let-rebind shortcut"
-status: proposed
+status: accepted
 date: 2026-05-16
-last_verified_commit: 708981b
+last_verified_commit: 8f29189
 supersedes: []
 superseded_by: []
 relates_to: [adr:0050c, adr:0051, adr:0052]
 discovered_by: ADR-0052 Phase G frame ADR §"Direction A scaffolding anchors" pre-commit
 ratification_path: P9 Wave-1 sub-ADR review (per ADR-0052 §"Sub-ADR prerequisites")
+ratified_at: 8f29189
+ratified_on: 2026-05-17
 ---
 
 # ADR-0052a: Direction A — Explicit `&s` borrow / let-rebind shortcut
