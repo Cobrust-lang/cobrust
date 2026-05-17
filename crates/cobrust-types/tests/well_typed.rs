@@ -2568,3 +2568,355 @@ fn w0052a_30_borrow_passed_to_user_fn_with_typed_arg() {
         "fn read_len(s: str) -> i64:\n    let n = str_len(&s)\n    return n\nfn main() -> i64:\n    let label = input(\"\")\n    let a = read_len(&label)\n    let b = read_len(&label)\n    return a + b\n",
     );
 }
+
+// ============================================================
+// ADR-0052d-prereq Wave 2 — method-dispatch infrastructure corpus
+//
+// 25 well-typed programs covering the four new per-type method
+// tables (Str / List / Float / Int) that ADR-0052d-prereq §4
+// "Surface" enumerates. Each test asserts that the method-form
+// `base.method(args)` parses + type-checks clean to the same return
+// type as the equivalent PRELUDE-fn call (e.g. `s.split(",")` ≡
+// `split(s, ",")`).
+//
+// Pre-DEV-impl status: every w0052dpre_* test below is `#[ignore]`'d
+// pending Wave-2 DEV merge per F28 strict-separation PAIR pattern
+// (`findings/adsd-pair-pattern-impl-gap.md`). DEV's responsibility
+// is to (a) land four `try_synth_*_method` fns next to the existing
+// `try_synth_dict_method`, (b) wire them into the `synth_call`
+// chain, (c) add `TypeError::UnknownMethod { type_name, method_name,
+// span, suggestion }` per ADR-0052d-prereq §"New error variant",
+// then remove the `#[ignore]` markers.
+//
+// Stub strategy mirrors the existing `STR_STDLIB_STUBS` /
+// `DICT_METHOD_STUBS` idiom: tests prepend a PRELUDE-fn stub block
+// (`METHOD_DISPATCH_STUBS`) declaring the canonical signatures so
+// the type checker has names to consult both for the method-form
+// (when DEV rewrites it) AND for hand-authored PRELUDE-fn calls
+// that the corpus uses as cross-checks.
+//
+// Coverage map (mirrors ADR-0052d-prereq §4 "Surface" table):
+//   - Str (10):   w0052dpre_01..10
+//   - List (5):   w0052dpre_11..15
+//   - Float (5):  w0052dpre_16..20
+//   - Int (5):    w0052dpre_21..25
+// ============================================================
+
+// Shared stub block: PRELUDE-fn signatures the four new method
+// tables rewrite into. Mirrors `STR_STDLIB_STUBS` +
+// `DICT_METHOD_STUBS` so the corpus lands BEFORE DEV graduates the
+// stubs into the canonical PRELUDE.
+//
+// Note on `len` polymorphism: `xs.len()` per ADR-0052d-prereq §4
+// rewrites to `len(xs)` (polymorphic; already wired at
+// `check.rs:1710`). `s.len()` rewrites to `str_len(s)` (str-only
+// signature) per ADR-0052d-prereq §4 row 1. Two distinct PRELUDE
+// targets — the method-table dispatch carries the discriminating
+// receiver type.
+const METHOD_DISPATCH_STUBS: &str = concat!(
+    // Str method targets (10).
+    "fn str_len(s: str) -> i64:\n    return 0\n",
+    "fn split(s: str, sep: str) -> list[str]:\n    let xs: list[str] = []\n    return xs\n",
+    "fn replace(s: str, old: str, new: str) -> str:\n    return \"\"\n",
+    "fn trim(s: str) -> str:\n    return \"\"\n",
+    "fn find(s: str, needle: str) -> i64:\n    return -1\n",
+    "fn contains(s: str, needle: str) -> bool:\n    return False\n",
+    "fn starts_with(s: str, prefix: str) -> bool:\n    return False\n",
+    "fn ends_with(s: str, suffix: str) -> bool:\n    return False\n",
+    "fn lower(s: str) -> str:\n    return \"\"\n",
+    "fn upper(s: str) -> str:\n    return \"\"\n",
+    // List method targets (5). `list_push` / `list_get` / `list_set`
+    // / `list_is_empty` / `len` (polymorphic). For w0052dpre_*
+    // tests, we use `list[i64]` shape uniformly so the polymorphic
+    // intrinsics resolve unambiguously.
+    "fn list_push(xs: list[i64], v: i64) -> i64:\n    return 0\n",
+    "fn list_get(xs: list[i64], i: i64) -> i64:\n    return 0\n",
+    "fn list_set(xs: list[i64], i: i64, v: i64) -> i64:\n    return 0\n",
+    "fn list_is_empty(xs: list[i64]) -> bool:\n    return True\n",
+    "fn len(xs: list[i64]) -> i64:\n    return 0\n",
+    // Float method targets (5). `abs_f` matches ADR-0052d-prereq §4
+    // row "f.abs() → abs_f(f)" — separate from int `abs`.
+    "fn floor(f: f64) -> f64:\n    return f\n",
+    "fn ceil(f: f64) -> f64:\n    return f\n",
+    "fn is_nan(f: f64) -> bool:\n    return False\n",
+    "fn is_finite(f: f64) -> bool:\n    return True\n",
+    "fn abs_f(f: f64) -> f64:\n    return f\n",
+    // Int method targets (5).
+    "fn abs(n: i64) -> i64:\n    return n\n",
+    "fn pow(n: i64, k: i64) -> i64:\n    return 0\n",
+    "fn min(a: i64, b: i64) -> i64:\n    return a\n",
+    "fn max(a: i64, b: i64) -> i64:\n    return a\n",
+    "fn bit_count(n: i64) -> i64:\n    return 0\n",
+);
+
+fn must_accept_with_method_dispatch_stubs(name: &str, body: &str) {
+    let src = format!("{METHOD_DISPATCH_STUBS}{body}");
+    must_accept(name, &src);
+}
+
+// ---- Tier A: Str method forms (w0052dpre_01..10) ----
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_01_str_len_method_form() {
+    // ADR-0052d-prereq §4 row 1: `s.len()` → `str_len(s)`. Return i64.
+    must_accept_with_method_dispatch_stubs(
+        "str-len-method",
+        "fn f() -> i64:\n    let s: str = \"hello\"\n    let n: i64 = s.len()\n    return n\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_02_str_split_method_form() {
+    // ADR-0052d-prereq §4 row 2: `s.split(",")` → `split(s, ",")`. Return list[str].
+    must_accept_with_method_dispatch_stubs(
+        "str-split-method",
+        "fn f() -> list[str]:\n    let s: str = \"a,b,c\"\n    let xs: list[str] = s.split(\",\")\n    return xs\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_03_str_replace_method_form() {
+    // ADR-0052d-prereq §4 row 3: `s.replace(a, b)` → `replace(s, a, b)`. Return str.
+    must_accept_with_method_dispatch_stubs(
+        "str-replace-method",
+        "fn f() -> str:\n    let s: str = \"foo bar\"\n    let t: str = s.replace(\"bar\", \"baz\")\n    return t\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_04_str_trim_method_form() {
+    // ADR-0052d-prereq §4 row 4: `s.trim()` → `trim(s)`. Return str.
+    must_accept_with_method_dispatch_stubs(
+        "str-trim-method",
+        "fn f() -> str:\n    let s: str = \"  hi  \"\n    let t: str = s.trim()\n    return t\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_05_str_find_method_form() {
+    // ADR-0052d-prereq §4 row 5: `s.find("x")` → `find(s, "x")`. Return i64.
+    must_accept_with_method_dispatch_stubs(
+        "str-find-method",
+        "fn f() -> i64:\n    let s: str = \"abc\"\n    let i: i64 = s.find(\"b\")\n    return i\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_06_str_contains_method_form() {
+    // ADR-0052d-prereq §4 row 6: `s.contains("x")` → `contains(s, "x")`. Return bool.
+    must_accept_with_method_dispatch_stubs(
+        "str-contains-method",
+        "fn f() -> bool:\n    let s: str = \"abc\"\n    let b: bool = s.contains(\"b\")\n    return b\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_07_str_starts_with_method_form() {
+    // ADR-0052d-prereq §4 row 7: `s.starts_with("x")` → `starts_with(s, "x")`. Return bool.
+    must_accept_with_method_dispatch_stubs(
+        "str-starts-with-method",
+        "fn f() -> bool:\n    let s: str = \"prefix-rest\"\n    let b: bool = s.starts_with(\"prefix\")\n    return b\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_08_str_ends_with_method_form() {
+    // ADR-0052d-prereq §4 row 8: `s.ends_with("x")` → `ends_with(s, "x")`. Return bool.
+    must_accept_with_method_dispatch_stubs(
+        "str-ends-with-method",
+        "fn f() -> bool:\n    let s: str = \"rest-suffix\"\n    let b: bool = s.ends_with(\"suffix\")\n    return b\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_09_str_lower_method_form() {
+    // ADR-0052d-prereq §4 row 9: `s.lower()` → `lower(s)`. Return str.
+    must_accept_with_method_dispatch_stubs(
+        "str-lower-method",
+        "fn f() -> str:\n    let s: str = \"HELLO\"\n    let t: str = s.lower()\n    return t\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_10_str_upper_method_form() {
+    // ADR-0052d-prereq §4 row 10: `s.upper()` → `upper(s)`. Return str.
+    must_accept_with_method_dispatch_stubs(
+        "str-upper-method",
+        "fn f() -> str:\n    let s: str = \"hello\"\n    let t: str = s.upper()\n    return t\n",
+    );
+}
+
+// ---- Tier B: List method forms (w0052dpre_11..15) ----
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_11_list_len_method_form() {
+    // ADR-0052d-prereq §4 row 11: `xs.len()` → `len(xs)` (polymorphic per
+    // check.rs:1710). Return i64.
+    must_accept_with_method_dispatch_stubs(
+        "list-len-method",
+        "fn f() -> i64:\n    let xs: list[i64] = [1, 2, 3]\n    let n: i64 = xs.len()\n    return n\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_12_list_push_method_form() {
+    // ADR-0052d-prereq §4 row 12: `xs.push(v)` → `list_push(xs, v)`. Return () (i64 stub).
+    must_accept_with_method_dispatch_stubs(
+        "list-push-method",
+        "fn f() -> i64:\n    let xs: list[i64] = [1, 2]\n    let _ = xs.push(3)\n    return 0\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_13_list_get_method_form() {
+    // ADR-0052d-prereq §4 row 13: `xs.get(i)` → `list_get(xs, i)` (polymorphic
+    // per check.rs:1696). Return T (i64 in this fixture).
+    must_accept_with_method_dispatch_stubs(
+        "list-get-method",
+        "fn f() -> i64:\n    let xs: list[i64] = [10, 20, 30]\n    let v: i64 = xs.get(1)\n    return v\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_14_list_set_method_form() {
+    // ADR-0052d-prereq §4 row 14: `xs.set(i, v)` → `list_set(xs, i, v)`
+    // (polymorphic per check.rs:1697). Return () (i64 stub).
+    must_accept_with_method_dispatch_stubs(
+        "list-set-method",
+        "fn f() -> i64:\n    let xs: list[i64] = [10, 20, 30]\n    let _ = xs.set(1, 99)\n    return 0\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_15_list_is_empty_method_form() {
+    // ADR-0052d-prereq §4 row 15: `xs.is_empty()` → `list_is_empty(xs)`
+    // (polymorphic per check.rs:1699). Return bool.
+    must_accept_with_method_dispatch_stubs(
+        "list-is-empty-method",
+        "fn f() -> bool:\n    let xs: list[i64] = []\n    let b: bool = xs.is_empty()\n    return b\n",
+    );
+}
+
+// ---- Tier C: Float method forms (w0052dpre_16..20) ----
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_16_float_floor_method_form() {
+    // ADR-0052d-prereq §4 row 16: `f.floor()` → `floor(f)`. Return f64.
+    must_accept_with_method_dispatch_stubs(
+        "float-floor-method",
+        "fn g() -> f64:\n    let x: f64 = 3.7\n    let y: f64 = x.floor()\n    return y\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_17_float_ceil_method_form() {
+    // ADR-0052d-prereq §4 row 17: `f.ceil()` → `ceil(f)`. Return f64.
+    must_accept_with_method_dispatch_stubs(
+        "float-ceil-method",
+        "fn g() -> f64:\n    let x: f64 = 3.2\n    let y: f64 = x.ceil()\n    return y\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_18_float_is_nan_method_form() {
+    // ADR-0052d-prereq §4 row 18: `f.is_nan()` → `is_nan(f)`. Return bool.
+    must_accept_with_method_dispatch_stubs(
+        "float-is-nan-method",
+        "fn g() -> bool:\n    let x: f64 = nan\n    let b: bool = x.is_nan()\n    return b\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_19_float_is_finite_method_form() {
+    // ADR-0052d-prereq §4 row 19: `f.is_finite()` → `is_finite(f)`. Return bool.
+    must_accept_with_method_dispatch_stubs(
+        "float-is-finite-method",
+        "fn g() -> bool:\n    let x: f64 = 1.0\n    let b: bool = x.is_finite()\n    return b\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_20_float_abs_method_form() {
+    // ADR-0052d-prereq §4 row 20: `f.abs()` → `abs_f(f)` (NOT the int
+    // `abs`; method-table dispatch chooses the right PRELUDE alias
+    // by receiver type). Return f64.
+    must_accept_with_method_dispatch_stubs(
+        "float-abs-method",
+        "fn g() -> f64:\n    let x: f64 = 0.0 - 3.5\n    let y: f64 = x.abs()\n    return y\n",
+    );
+}
+
+// ---- Tier D: Int method forms (w0052dpre_21..25) ----
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_21_int_abs_method_form() {
+    // ADR-0052d-prereq §4 row 21: `n.abs()` → `abs(n)`. Return i64.
+    // Cross-disambiguation versus float `f.abs()` lives in the
+    // method-table receiver-type guard (Ty::Int branch picks `abs`,
+    // Ty::Float branch picks `abs_f`).
+    must_accept_with_method_dispatch_stubs(
+        "int-abs-method",
+        "fn h() -> i64:\n    let n: i64 = 0 - 42\n    let m: i64 = n.abs()\n    return m\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_22_int_pow_method_form() {
+    // ADR-0052d-prereq §4 row 22: `n.pow(k)` → `pow(n, k)`. Return i64.
+    must_accept_with_method_dispatch_stubs(
+        "int-pow-method",
+        "fn h() -> i64:\n    let n: i64 = 2\n    let m: i64 = n.pow(10)\n    return m\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_23_int_min_method_form() {
+    // ADR-0052d-prereq §4 row 23: `n.min(m)` → `min(n, m)`. Return i64.
+    must_accept_with_method_dispatch_stubs(
+        "int-min-method",
+        "fn h() -> i64:\n    let n: i64 = 7\n    let m: i64 = n.min(3)\n    return m\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_24_int_max_method_form() {
+    // ADR-0052d-prereq §4 row 24: `n.max(m)` → `max(n, m)`. Return i64.
+    must_accept_with_method_dispatch_stubs(
+        "int-max-method",
+        "fn h() -> i64:\n    let n: i64 = 7\n    let m: i64 = n.max(3)\n    return m\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending"]
+fn w0052dpre_25_int_bit_count_method_form() {
+    // ADR-0052d-prereq §4 row 25: `n.bit_count()` → `bit_count(n)`. Return i64.
+    must_accept_with_method_dispatch_stubs(
+        "int-bit-count-method",
+        "fn h() -> i64:\n    let n: i64 = 31\n    let m: i64 = n.bit_count()\n    return m\n",
+    );
+}

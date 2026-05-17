@@ -2074,3 +2074,309 @@ fn i0052a_06_borrow_in_if_cond_implicit_truthiness_rejected() {
         Cat::ImplicitTruthiness,
     );
 }
+
+// ============================================================
+// ADR-0052d-prereq Wave 2 — method-dispatch ill-typed corpus
+//
+// 12 rejection programs covering the new `TypeError::UnknownMethod`
+// variant (per ADR-0052d-prereq §"New error variant") + arity /
+// arg-type rejection paths for the four new per-type method tables.
+//
+// Pre-DEV-impl status: every i0052dpre_* test below is `#[ignore]`'d
+// pending Wave-2 DEV merge per F28 strict-separation PAIR pattern
+// (`findings/adsd-pair-pattern-impl-gap.md`). DEV's responsibility
+// is to land (a) `TypeError::UnknownMethod { type_name, method_name,
+// span, suggestion }`, (b) the four `try_synth_*_method` fns +
+// chain dispatcher, (c) per-method arity / arg-type validation
+// inside each table arm, then unmark the tests and add the
+// `Cat::UnknownMethod` enum variant + `matches_cat` row so the
+// typo / wrong-base-type cases lock onto the post-impl variant.
+//
+// Placeholder cat strategy: typo + wrong-base-type cases use
+// `Cat::UnknownName` (semantically closest stable variant per
+// ADR-0052d-prereq §"New error variant"); DEV swaps to
+// `Cat::UnknownMethod` post-impl. Wrong-arity uses `Cat::ArityMismatch`
+// (already wired in the existing dict-method table). Wrong-arg-type
+// uses `Cat::TypeMismatch`.
+//
+// Coverage map (per dispatch contract §"Ill-typed corpus"):
+//   - Typos:            i0052dpre_01..03 (Str / List / Float)
+//   - Wrong-base-type:  i0052dpre_04..06 (Int→Str, Str→Float, List→Str)
+//   - Wrong-arity:      i0052dpre_07..09 (Str.split / Str.split2 / List.push)
+//   - Wrong-arg-type:   i0052dpre_10..12 (Str.split / List.push / Float.is_nan)
+// ============================================================
+
+// Shared stub block: PRELUDE-fn signatures for the new method-table
+// rewrite targets. Mirrors `METHOD_DISPATCH_STUBS` in the well_typed
+// sibling. Each i0052dpre_* test prepends these so the type-checker
+// has signatures to consult for the rewritten PRELUDE-fn call.
+const METHOD_DISPATCH_STUBS_IT: &str = concat!(
+    "fn str_len(s: str) -> i64:\n    return 0\n",
+    "fn split(s: str, sep: str) -> list[str]:\n    let xs: list[str] = []\n    return xs\n",
+    "fn replace(s: str, old: str, new: str) -> str:\n    return \"\"\n",
+    "fn trim(s: str) -> str:\n    return \"\"\n",
+    "fn find(s: str, needle: str) -> i64:\n    return -1\n",
+    "fn contains(s: str, needle: str) -> bool:\n    return False\n",
+    "fn starts_with(s: str, prefix: str) -> bool:\n    return False\n",
+    "fn ends_with(s: str, suffix: str) -> bool:\n    return False\n",
+    "fn lower(s: str) -> str:\n    return \"\"\n",
+    "fn upper(s: str) -> str:\n    return \"\"\n",
+    "fn list_push(xs: list[i64], v: i64) -> i64:\n    return 0\n",
+    "fn list_get(xs: list[i64], i: i64) -> i64:\n    return 0\n",
+    "fn list_set(xs: list[i64], i: i64, v: i64) -> i64:\n    return 0\n",
+    "fn list_is_empty(xs: list[i64]) -> bool:\n    return True\n",
+    "fn len(xs: list[i64]) -> i64:\n    return 0\n",
+    "fn floor(f: f64) -> f64:\n    return f\n",
+    "fn ceil(f: f64) -> f64:\n    return f\n",
+    "fn is_nan(f: f64) -> bool:\n    return False\n",
+    "fn is_finite(f: f64) -> bool:\n    return True\n",
+    "fn abs_f(f: f64) -> f64:\n    return f\n",
+    "fn abs(n: i64) -> i64:\n    return n\n",
+    "fn pow(n: i64, k: i64) -> i64:\n    return 0\n",
+    "fn min(a: i64, b: i64) -> i64:\n    return a\n",
+    "fn max(a: i64, b: i64) -> i64:\n    return a\n",
+    "fn bit_count(n: i64) -> i64:\n    return 0\n",
+);
+
+fn must_reject_with_method_dispatch_stubs(name: &str, body: &str, cat: Cat) {
+    let src = format!("{METHOD_DISPATCH_STUBS_IT}{body}");
+    must_reject(name, &src, cat);
+}
+
+// ---- Tier A: typo on otherwise-valid receiver type ----
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
+fn i0052dpre_01_str_typo_splittt_rejected() {
+    // `s.splittt(",")` — typo for `s.split(",")` on a Str receiver.
+    // Post-impl: `TypeError::UnknownMethod { type_name: "str",
+    // method_name: "splittt", suggestion: Some("did you mean
+    // 'split'?") }` per ADR-0052d-prereq §"New error variant".
+    // Placeholder: `Cat::UnknownName` (closest stable variant
+    // semantically); DEV swaps to `Cat::UnknownMethod` post-impl.
+    must_reject_with_method_dispatch_stubs(
+        "str-typo-splittt",
+        "fn f() -> i64:\n    let s: str = \"a,b\"\n    let xs: list[str] = s.splittt(\",\")\n    return 0\n",
+        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
+fn i0052dpre_02_list_typo_lenggg_rejected() {
+    // `xs.lenggg()` — typo for `xs.len()` on a List receiver.
+    // Post-impl: UnknownMethod with type_name="list".
+    must_reject_with_method_dispatch_stubs(
+        "list-typo-lenggg",
+        "fn f() -> i64:\n    let xs: list[i64] = [1, 2]\n    let n: i64 = xs.lenggg()\n    return n\n",
+        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
+fn i0052dpre_03_float_typo_flrr_rejected() {
+    // `f.flrr()` — typo for `f.floor()` on a Float receiver.
+    // Post-impl: UnknownMethod with type_name="f64".
+    must_reject_with_method_dispatch_stubs(
+        "float-typo-flrr",
+        "fn g() -> f64:\n    let x: f64 = 3.14\n    let y: f64 = x.flrr()\n    return y\n",
+        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+    );
+}
+
+// ---- Tier B: method-form on the WRONG receiver type ----
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
+fn i0052dpre_04_int_split_method_only_on_str_rejected() {
+    // `n.split(",")` where `n: i64` — `split` lives on the Str table
+    // ONLY; calling it on Int must surface UnknownMethod with
+    // type_name="i64".
+    must_reject_with_method_dispatch_stubs(
+        "int-split-rejected-method-only-on-str",
+        "fn f() -> i64:\n    let n: i64 = 42\n    let xs: list[str] = n.split(\",\")\n    return 0\n",
+        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
+fn i0052dpre_05_str_floor_method_only_on_float_rejected() {
+    // `s.floor()` where `s: str` — `floor` lives on the Float table
+    // ONLY. UnknownMethod with type_name="str".
+    must_reject_with_method_dispatch_stubs(
+        "str-floor-rejected-method-only-on-float",
+        "fn g() -> f64:\n    let s: str = \"hi\"\n    let y: f64 = s.floor()\n    return y\n",
+        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
+fn i0052dpre_06_list_upper_method_only_on_str_rejected() {
+    // `xs.upper()` where `xs: list[i64]` — `upper` lives on the Str
+    // table ONLY. UnknownMethod with type_name="list".
+    must_reject_with_method_dispatch_stubs(
+        "list-upper-rejected-method-only-on-str",
+        "fn f() -> str:\n    let xs: list[i64] = [1, 2]\n    let t: str = xs.upper()\n    return t\n",
+        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+    );
+}
+
+// ---- Tier C: wrong arity ----
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arity guard fires"]
+fn i0052dpre_07_str_split_missing_delim_rejected() {
+    // `s.split()` — `split` requires 1 arg per ADR-0052d-prereq §4
+    // row 2; calling with 0 args must surface ArityMismatch (already
+    // wired in the existing dict-method table; the new Str table
+    // mirrors the pattern).
+    must_reject_with_method_dispatch_stubs(
+        "str-split-missing-delim",
+        "fn f() -> list[str]:\n    let s: str = \"a,b\"\n    let xs: list[str] = s.split()\n    return xs\n",
+        Cat::ArityMismatch,
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arity guard fires"]
+fn i0052dpre_08_str_split_extra_arg_rejected() {
+    // `s.split(",", "x")` — 2 args where 1 is expected.
+    must_reject_with_method_dispatch_stubs(
+        "str-split-extra-arg",
+        "fn f() -> list[str]:\n    let s: str = \"a,b\"\n    let xs: list[str] = s.split(\",\", \"x\")\n    return xs\n",
+        Cat::ArityMismatch,
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arity guard fires"]
+fn i0052dpre_09_list_push_missing_value_rejected() {
+    // `xs.push()` — `push` requires 1 arg per ADR-0052d-prereq §4
+    // row 12; calling with 0 args must surface ArityMismatch.
+    must_reject_with_method_dispatch_stubs(
+        "list-push-missing-value",
+        "fn f() -> i64:\n    let xs: list[i64] = [1, 2]\n    let _ = xs.push()\n    return 0\n",
+        Cat::ArityMismatch,
+    );
+}
+
+// ---- Tier D: wrong arg type ----
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arg-type guard fires"]
+fn i0052dpre_10_str_split_int_delim_rejected() {
+    // `s.split(42)` — `split` requires `sep: str` per ADR-0052d-prereq
+    // §4 row 2; passing `i64` must surface TypeMismatch (the table
+    // arm calls `unify(&Ty::Str, &arg_ty, ...)` exactly like the
+    // existing dict-method table for `get(k)`).
+    must_reject_with_method_dispatch_stubs(
+        "str-split-int-delim",
+        "fn f() -> list[str]:\n    let s: str = \"a,b\"\n    let xs: list[str] = s.split(42)\n    return xs\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arg-type guard fires"]
+fn i0052dpre_11_list_push_str_into_list_i64_rejected() {
+    // `xs.push("x")` where `xs: list[i64]` — the element type must
+    // unify with i64. TypeMismatch.
+    must_reject_with_method_dispatch_stubs(
+        "list-push-str-into-int-list",
+        "fn f() -> i64:\n    let xs: list[i64] = [1, 2]\n    let _ = xs.push(\"x\")\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arg-type guard fires"]
+fn i0052dpre_12_float_is_nan_extra_arg_rejected() {
+    // `f.is_nan(42)` — `is_nan` per ADR-0052d-prereq §4 row 18 is
+    // 0-arity; passing any extra arg must surface ArityMismatch.
+    // (Also a wrong-arity case; the ADR test plan calls this the
+    // boundary case where wrong-arity dominates wrong-arg-type.)
+    must_reject_with_method_dispatch_stubs(
+        "float-is-nan-extra-arg",
+        "fn g() -> bool:\n    let x: f64 = 1.0\n    let b: bool = x.is_nan(42)\n    return b\n",
+        Cat::ArityMismatch,
+    );
+}
+
+// ============================================================
+// ADR-0052d-prereq × ADR-0052b cross-ADR coordination test
+//
+// Per ADR-0052d-prereq §"New error variant":
+//
+// ```rust
+// TypeError::UnknownMethod {
+//     type_name: String,
+//     method_name: String,
+//     span: Span,
+//     suggestion: Option<&'static str>,
+// }
+// ```
+//
+// The `suggestion: Option<&'static str>` field is a Wave-2 stub for
+// ADR-0052b Direction B's structured-suggestion record (the eventual
+// promoted shape that lives on every `TypeError::*` variant per
+// CLAUDE.md §2.5 line 78 "print the FIX, not just the diagnosis").
+//
+// This test locks the cross-ADR contract: for typo cases like
+// `s.splittt(",")`, the `suggestion` field MUST be `Some(_)` (a
+// concrete hint), NOT `None`. The hint contents are not asserted
+// (DEV can choose "did you mean 'split'?" or a method-list); only
+// the `Some`-ness is locked, because the structured-suggestion shape
+// is promoted by 0052b after Wave-2 merge.
+//
+// Pre-impl strategy: since `TypeError::UnknownMethod` is a net-new
+// variant that DEV adds in Wave-2, this test uses a string-match
+// proxy on `format!("{:?}", err)` to forward-compat the assertion
+// without depending on the variant existing. DEV updates the test
+// to do a real `if let TypeError::UnknownMethod { suggestion, .. } =
+// err` pattern-match post-impl.
+//
+// Test name: i0052dpre_cross_01.
+// ============================================================
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + non-None suggestion for typo"]
+fn i0052dpre_cross_01_unknown_method_suggestion_field_populated_for_typo() {
+    // `s.splittt(",")` — typo. Post-impl: type-check produces
+    // `TypeError::UnknownMethod { type_name: "str", method_name:
+    // "splittt", suggestion: Some(_), .. }` per ADR-0052d-prereq
+    // §"New error variant" coordinated with ADR-0052b Direction B.
+    //
+    // Locked property: `suggestion.is_some()`. (Hint contents are
+    // not asserted; the structured-suggestion shape is 0052b's
+    // post-Wave-2 refactor scope.)
+    let src = format!(
+        "{METHOD_DISPATCH_STUBS_IT}fn f() -> i64:\n    let s: str = \"a,b\"\n    let xs: list[str] = s.splittt(\",\")\n    return 0\n"
+    );
+    let module = parse_str(&src, FileId::SYNTHETIC).expect("parse must succeed");
+    let mut sess = Session::new();
+    let hir = lower(&module, &mut sess).expect("hir lower must succeed");
+    let err = check(&hir).expect_err(
+        "type check must reject `s.splittt(...)` (typo); pre-impl this assertion fails on the Ok branch",
+    );
+    // Forward-compat proxy: stringify the error and check for
+    // `UnknownMethod` + a non-empty `suggestion: Some(...)` shape.
+    // DEV replaces this with:
+    //
+    //   if let TypeError::UnknownMethod { suggestion, .. } = err {
+    //       assert!(suggestion.is_some(), "suggestion must be populated");
+    //   } else {
+    //       panic!("expected UnknownMethod, got {err:?}");
+    //   }
+    let dbg = format!("{err:?}");
+    assert!(
+        dbg.contains("UnknownMethod"),
+        "i0052dpre_cross_01: expected `TypeError::UnknownMethod` for `s.splittt(...)` typo, got: {dbg}"
+    );
+    assert!(
+        dbg.contains("suggestion: Some"),
+        "i0052dpre_cross_01: `suggestion` field must be `Some(_)` for typo (ADR-0052b Direction B coordination), got: {dbg}"
+    );
+}
