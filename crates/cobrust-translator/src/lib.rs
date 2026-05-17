@@ -83,7 +83,7 @@ pub use crate::pipeline::{
 pub use crate::repair::{
     GateFailure, repair_translation, repair_translation_with_task, write_failure_report,
 };
-pub use crate::spec::{FunctionSpec, SpecError, SpecToml};
+pub use crate::spec::{FunctionSpec, PyCompatTier, SpecError, SpecToml};
 pub use crate::synthetic::{CannedResponse, CannedTable, PromptHeader, SyntheticProvider};
 pub use crate::translate::{
     EmittedFile, FunctionTranslation, TranslationOutput, TranslationPlan, WorkspaceContext,
