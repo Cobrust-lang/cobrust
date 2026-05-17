@@ -147,4 +147,21 @@ pub enum TypeError {
         span: Span,
         suggestion: Option<&'static str>,
     },
+
+    /// ADR-0052d-prereq §"New error variant" — method-form receiver
+    /// matched one of the 5 recognised types (Dict / Str / List /
+    /// Float / Int) but the method name is not in that type's method
+    /// table. Carries the receiver `type_name` and the attempted
+    /// `method_name` so the diagnostic can list available methods
+    /// per §2.5 "compile-time-catch" rule. The `suggestion` field is
+    /// a Wave-2 stub for ADR-0052b Direction B's structured-suggestion
+    /// record — Wave-2 ships `Option<&'static str>`; post-Wave-2
+    /// 0052b promotes it to the full structured shape.
+    #[error("method `{method_name}` not found on `{type_name}` at {span}")]
+    UnknownMethod {
+        type_name: String,
+        method_name: String,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 }
