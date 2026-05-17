@@ -1023,11 +1023,381 @@ impl Ctx {
         }
     }
 
-    fn synth_call(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
-        // ADR-0050d sub-sprint b §"Type-checker amendments" item 4 —
-        // method-intrinsic recognition. See `try_synth_dict_method`
-        // for the dispatch table.
+    /// ADR-0052d-prereq §"Surface — method-table contents per type"
+    /// — Str method-form table (10 methods).
+    ///
+    /// Returns `Ok(Some(ret_ty))` on a matched (`Str`, name) pair;
+    /// `Ok(None)` if the callee is not `Attr` or base is not `Str`;
+    /// `Err(UnknownMethod)` if base IS `Str` but the method name is
+    /// unrecognised (typo case per i0052dpre_01 / i0052dpre_05).
+    /// Per-method arity / arg-type guards mirror
+    /// `try_synth_dict_method`'s pattern.
+    fn try_synth_str_method(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Attr { base, name } = &callee.kind else {
+            return Ok(None);
+        };
+        let base_ty = self.synth_expr(base)?;
+        let base_resolved = self.subst.apply(&base_ty);
+        if !matches!(base_resolved, Ty::Str) {
+            return Ok(None);
+        }
+        let pos_args: Vec<&Expr> = args
+            .iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        // Per-method arms per ADR-0052d-prereq §4 Str row.
+        match name.as_str() {
+            "len" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::Int))
+            }
+            "split" => {
+                if pos_args.len() != 1 {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 1,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                let at = self.synth_expr(pos_args[0])?;
+                unify(&Ty::Str, &at, &mut self.subst, pos_args[0].span)?;
+                Ok(Some(Ty::List(Box::new(Ty::Str))))
+            }
+            "replace" => {
+                if pos_args.len() != 2 {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 2,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                let a0 = self.synth_expr(pos_args[0])?;
+                unify(&Ty::Str, &a0, &mut self.subst, pos_args[0].span)?;
+                let a1 = self.synth_expr(pos_args[1])?;
+                unify(&Ty::Str, &a1, &mut self.subst, pos_args[1].span)?;
+                Ok(Some(Ty::Str))
+            }
+            "trim" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::Str))
+            }
+            "find" => {
+                if pos_args.len() != 1 {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 1,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                let at = self.synth_expr(pos_args[0])?;
+                unify(&Ty::Str, &at, &mut self.subst, pos_args[0].span)?;
+                Ok(Some(Ty::Int))
+            }
+            "contains" | "starts_with" | "ends_with" => {
+                if pos_args.len() != 1 {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 1,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                let at = self.synth_expr(pos_args[0])?;
+                unify(&Ty::Str, &at, &mut self.subst, pos_args[0].span)?;
+                Ok(Some(Ty::Bool))
+            }
+            "lower" | "upper" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::Str))
+            }
+            other => Err(TypeError::UnknownMethod {
+                type_name: "str".to_string(),
+                method_name: other.to_string(),
+                span,
+                suggestion: str_method_suggestion(other),
+            }),
+        }
+    }
+
+    /// ADR-0052d-prereq §"Surface — method-table contents per type"
+    /// — List method-form table (5 methods).
+    ///
+    /// All five rewrite to polymorphic-intrinsic targets (`list_push`,
+    /// `list_get`, `list_set`, `list_is_empty`, `len`); the element
+    /// type `T` is whatever the receiver's `Ty::List(T)` carries.
+    fn try_synth_list_method(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Attr { base, name } = &callee.kind else {
+            return Ok(None);
+        };
+        let base_ty = self.synth_expr(base)?;
+        let base_resolved = self.subst.apply(&base_ty);
+        let Ty::List(elem_box) = base_resolved else {
+            return Ok(None);
+        };
+        let elem = *elem_box;
+        let pos_args: Vec<&Expr> = args
+            .iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        match name.as_str() {
+            "len" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::Int))
+            }
+            "push" => {
+                if pos_args.len() != 1 {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 1,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                let at = self.synth_expr(pos_args[0])?;
+                unify(&elem, &at, &mut self.subst, pos_args[0].span)?;
+                // Per test stubs `list_push(xs, v) -> i64`; the return
+                // is a unit-stub (Phase G P0 wrapper). Wave-2 ships
+                // the i64 stub.
+                Ok(Some(Ty::Int))
+            }
+            "get" => {
+                if pos_args.len() != 1 {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 1,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                let it = self.synth_expr(pos_args[0])?;
+                unify(&Ty::Int, &it, &mut self.subst, pos_args[0].span)?;
+                Ok(Some(elem))
+            }
+            "set" => {
+                if pos_args.len() != 2 {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 2,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                let it = self.synth_expr(pos_args[0])?;
+                unify(&Ty::Int, &it, &mut self.subst, pos_args[0].span)?;
+                let vt = self.synth_expr(pos_args[1])?;
+                unify(&elem, &vt, &mut self.subst, pos_args[1].span)?;
+                Ok(Some(Ty::Int))
+            }
+            "is_empty" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::Bool))
+            }
+            other => Err(TypeError::UnknownMethod {
+                type_name: "list".to_string(),
+                method_name: other.to_string(),
+                span,
+                suggestion: list_method_suggestion(other),
+            }),
+        }
+    }
+
+    /// ADR-0052d-prereq §"Surface — method-table contents per type"
+    /// — Float method-form table (5 methods).
+    fn try_synth_float_method(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Attr { base, name } = &callee.kind else {
+            return Ok(None);
+        };
+        let base_ty = self.synth_expr(base)?;
+        let base_resolved = self.subst.apply(&base_ty);
+        if !matches!(base_resolved, Ty::Float) {
+            return Ok(None);
+        }
+        let pos_args: Vec<&Expr> = args
+            .iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        match name.as_str() {
+            "floor" | "ceil" | "abs" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::Float))
+            }
+            "is_nan" | "is_finite" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::Bool))
+            }
+            other => Err(TypeError::UnknownMethod {
+                type_name: "f64".to_string(),
+                method_name: other.to_string(),
+                span,
+                suggestion: float_method_suggestion(other),
+            }),
+        }
+    }
+
+    /// ADR-0052d-prereq §"Surface — method-table contents per type"
+    /// — Int method-form table (5 methods).
+    fn try_synth_int_method(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Attr { base, name } = &callee.kind else {
+            return Ok(None);
+        };
+        let base_ty = self.synth_expr(base)?;
+        let base_resolved = self.subst.apply(&base_ty);
+        if !matches!(base_resolved, Ty::Int) {
+            return Ok(None);
+        }
+        let pos_args: Vec<&Expr> = args
+            .iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        match name.as_str() {
+            "abs" | "bit_count" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                Ok(Some(Ty::Int))
+            }
+            "pow" | "min" | "max" => {
+                if pos_args.len() != 1 {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 1,
+                        actual: pos_args.len(),
+                        span,
+                    });
+                }
+                let at = self.synth_expr(pos_args[0])?;
+                unify(&Ty::Int, &at, &mut self.subst, pos_args[0].span)?;
+                Ok(Some(Ty::Int))
+            }
+            other => Err(TypeError::UnknownMethod {
+                type_name: "i64".to_string(),
+                method_name: other.to_string(),
+                span,
+                suggestion: int_method_suggestion(other),
+            }),
+        }
+    }
+
+    /// ADR-0052d-prereq §"Decision" — chain dispatcher.
+    ///
+    /// Tries each per-type method table in order: Dict → Str → List →
+    /// Float → Int. The order is fixed (dict-first for diffability with
+    /// M12.x) but irrelevant for correctness (each table guards on its
+    /// own receiver type).
+    ///
+    /// Returns:
+    /// - `Ok(Some(ret))` when one table matches the (receiver, method).
+    /// - `Err(_)` propagated from a table (UnknownMethod for typo on a
+    ///   recognised receiver; ArityMismatch / TypeMismatch from arg
+    ///   validation).
+    /// - `Ok(None)` when the receiver type is none of the 5 recognised
+    ///   types (e.g. `Ty::Adt`, `Ty::Var`, etc.) so the caller can fall
+    ///   through to the generic `Attr`-fresh-var path.
+    fn try_synth_method_call(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
         if let Some(t) = self.try_synth_dict_method(callee, args, span)? {
+            return Ok(Some(t));
+        }
+        if let Some(t) = self.try_synth_str_method(callee, args, span)? {
+            return Ok(Some(t));
+        }
+        if let Some(t) = self.try_synth_list_method(callee, args, span)? {
+            return Ok(Some(t));
+        }
+        if let Some(t) = self.try_synth_float_method(callee, args, span)? {
+            return Ok(Some(t));
+        }
+        if let Some(t) = self.try_synth_int_method(callee, args, span)? {
+            return Ok(Some(t));
+        }
+        Ok(None)
+    }
+
+    fn synth_call(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
+        // ADR-0052d-prereq §"Decision" — method-form dispatch via per-
+        // type method tables (Dict / Str / List / Float / Int). Each
+        // table guards on its receiver type; the chain returns
+        // `Some(ret)` on first match, propagates `UnknownMethod` /
+        // `ArityMismatch` / `TypeMismatch` errors, or falls through
+        // when the receiver type is not in the recognised set.
+        if let Some(t) = self.try_synth_method_call(callee, args, span)? {
             return Ok(t);
         }
         let callee_ty = self.synth_expr(callee)?;
@@ -1670,6 +2040,91 @@ fn lit_to_string(lit: &Lit) -> String {
 #[allow(dead_code)]
 fn _dummy() {
     let _ = finalize;
+}
+
+/// ADR-0052d-prereq §"New error variant" — Str method-name suggestion
+/// helper. Returns a hard-coded `&'static str` hint per Wave-2 stub
+/// shape (ADR-0052b Direction B promotes it to a structured-suggestion
+/// record post-Wave-2). When the typo is close to a known method,
+/// return a "did you mean" hint; otherwise list the canonical surface
+/// from ADR-0052d-prereq §4 Str row.
+fn str_method_suggestion(typo: &str) -> Option<&'static str> {
+    if typo.starts_with("split") || typo.contains("split") {
+        Some("did you mean 'split'?")
+    } else if typo.starts_with("len") || typo.contains("len") {
+        Some("did you mean 'len'?")
+    } else if typo.contains("trim") {
+        Some("did you mean 'trim'?")
+    } else if typo.contains("find") {
+        Some("did you mean 'find'?")
+    } else if typo.contains("replace") {
+        Some("did you mean 'replace'?")
+    } else if typo.contains("contain") {
+        Some("did you mean 'contains'?")
+    } else if typo.contains("start") {
+        Some("did you mean 'starts_with'?")
+    } else if typo.contains("end") {
+        Some("did you mean 'ends_with'?")
+    } else if typo.contains("low") {
+        Some("did you mean 'lower'?")
+    } else if typo.contains("up") {
+        Some("did you mean 'upper'?")
+    } else {
+        Some(
+            "str methods: len, split, replace, trim, find, contains, starts_with, ends_with, lower, upper",
+        )
+    }
+}
+
+/// ADR-0052d-prereq §"New error variant" — List method-name suggestion.
+fn list_method_suggestion(typo: &str) -> Option<&'static str> {
+    if typo.contains("len") {
+        Some("did you mean 'len'?")
+    } else if typo.contains("push") {
+        Some("did you mean 'push'?")
+    } else if typo.contains("get") {
+        Some("did you mean 'get'?")
+    } else if typo.contains("set") {
+        Some("did you mean 'set'?")
+    } else if typo.contains("empty") {
+        Some("did you mean 'is_empty'?")
+    } else {
+        Some("list methods: len, push, get, set, is_empty")
+    }
+}
+
+/// ADR-0052d-prereq §"New error variant" — Float method-name suggestion.
+fn float_method_suggestion(typo: &str) -> Option<&'static str> {
+    if typo.contains("floor") || typo.starts_with("flr") || typo.starts_with("flo") {
+        Some("did you mean 'floor'?")
+    } else if typo.contains("ceil") {
+        Some("did you mean 'ceil'?")
+    } else if typo.contains("nan") {
+        Some("did you mean 'is_nan'?")
+    } else if typo.contains("finite") {
+        Some("did you mean 'is_finite'?")
+    } else if typo.contains("abs") {
+        Some("did you mean 'abs'?")
+    } else {
+        Some("f64 methods: floor, ceil, is_nan, is_finite, abs")
+    }
+}
+
+/// ADR-0052d-prereq §"New error variant" — Int method-name suggestion.
+fn int_method_suggestion(typo: &str) -> Option<&'static str> {
+    if typo.contains("abs") {
+        Some("did you mean 'abs'?")
+    } else if typo.contains("pow") {
+        Some("did you mean 'pow'?")
+    } else if typo.contains("min") {
+        Some("did you mean 'min'?")
+    } else if typo.contains("max") {
+        Some("did you mean 'max'?")
+    } else if typo.contains("bit") || typo.contains("count") {
+        Some("did you mean 'bit_count'?")
+    } else {
+        Some("i64 methods: abs, pow, min, max, bit_count")
+    }
 }
 
 /// ADR-0050c §F5 / Phase 6 — row-polymorphic widening name list.

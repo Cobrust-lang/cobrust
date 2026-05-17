@@ -4,12 +4,14 @@ adr_id: 0052d-prereq
 parent_adr: 0052
 title: "Phase G Direction D prereq — method-dispatch infrastructure (per-type method tables)"
 relates_to: [adr:0050e, adr:0052, adr:0051, adr:0052d-pending]
-last_verified_commit: 8dc2723
+last_verified_commit: 0a90594
 date: 2026-05-17
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
-ratification_path: P9 Wave-2 sub-ADR review; ratifies on impl merge; gates 0052d
+ratification_path: P9 Wave-2 sub-ADR review; ratified on Wave-2 impl merge at `0a90594`
+ratified_at: 0a90594
+ratified_on: 2026-05-17
 ---
 
 # ADR-0052d-prereq — Method-dispatch infrastructure (per-type method tables)
@@ -284,6 +286,61 @@ Per ADR-0052 F28 (P10-direct PAIR for impl sprints):
 - Whether Phase H+ promotes per-type tables to a registration macro
   (`register_method!(Str, "split", split, 1, List[Str])`). Phase G
   hand-authors all 25 entries.
+
+### Cascade enumeration (post-spike) — 2026-05-17 / SHA `0a90594`
+
+Per ADR-0052a §13 §"Cascade enumeration (post-v3 spike)" methodology
++ findings/predicate-flip-cascade-discovery-deficit.md SOP. The
+Wave-2 DEV impl ran `cargo test --workspace --no-fail-fast` at
+HEAD `0a90594` and compared against main HEAD `74f17de` baseline:
+
+**Empirical**:
+- Main HEAD `74f17de`: 118 cargo test failures.
+- Branch `0a90594`: 118 cargo test failures.
+- **Set-diff**: zero new failures on branch, zero fixed failures on
+  branch. The two failure sets are byte-identical.
+- **Zero LC-100 / f64 / f3ls / 0052a regression.**
+
+**0052dpre-prefix test results at `0a90594`** (45 of 46 green; 1
+deferred per finding):
+
+| Family | Count | Status |
+|---|---|---|
+| `w0052dpre_01..25` (well_typed) | 25 | ok |
+| `i0052dpre_01..12` (ill_typed) | 12 | ok |
+| `i0052dpre_cross_01` (cross-ADR with 0052b) | 1 | ok |
+| `e0052dpre_e2e_01..05` (CLI build+run) | 5 | ok |
+| `f30wit_method_01..02` (MIR witness) | 2 | ok |
+| `f30wit_method_03` (`&<Call>` precedence) | 1 | deferred (parser blocker) |
+
+**Deferred test — `f30wit_method_03`**: documented in
+`findings/0052d-prereq-impl-blocker.md`. ADR §"Precedence with
+0052a `&s`" line 117-121 claimed `&s.method()` works in the existing
+parser, but `crates/cobrust-frontend/src/parser.rs:1134-1139`
+`validate_borrow_operand` rejects `ExprKind::Call { .. }` per
+ADR-0052a Wave-1 §8 cap. Resolution path: ADR-0052d follow-up
+parser-cap relaxation sub-ADR. The §"Precedence" prose is forward-
+looking design; the empirical reality at the spike SHA is `&Call(...)`
+parse error. This is the ADR's "no parser change needed" forecast-
+miss equivalent to ADR-0052a §13's "bidirectional unify cascade"
+sediment — it is documented here so future ADRs reference the
+actual scope cap.
+
+**ADSD candidate (F32 sediment family)**: "method-form precedence
+witness pre-supposes parser §8 cap relaxation; cap status MUST be
+verified at design-time, not assumed". Will file as a finding post-
+Wave-2 close if the pattern repeats elsewhere in Wave-2.
+
+**Cascade reduction vs Wave-1 v1/v2 baseline**:
+- Wave-1 v1/v2 (bidirectional `Ref(T) ↔ T` unify): 142 cargo test
+  failures (cf. ADR-0052a §13 empirical baseline).
+- Wave-2 prereq DEV (per-type method tables, no inference change):
+  0 new failures vs main HEAD. Method-form is correctly identified
+  as static-dispatch sugar (§13 design lesson 2026-05-17 honored).
+
+**Attestation**: zero non-0052dpre regression vs main HEAD
+`74f17de`. The 45/46 green + 1 documented deferral represents the
+Wave-2 prereq ratification readiness; sub-ADR is mergeable.
 
 ## Dispatch readiness
 
