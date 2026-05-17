@@ -835,6 +835,19 @@ impl Ctx {
             }
             ExprKind::Bin { op, lhs, rhs } => self.synth_bin(*op, lhs, rhs, span),
             ExprKind::Un { op, operand } => self.synth_un(*op, operand, span),
+            // ADR-0052a Wave-1 §6 — `&expr` synth. Type is
+            // `Ty::Ref(synth_expr(inner))`. The parser already ensured
+            // the operand shape obeys §8 (Name / field-access /
+            // indexing); the type checker just synthesises the
+            // borrowed type. The §3 Wave-1 transparency rule for
+            // PRELUDE Str helpers lives at `synth_call` argument-
+            // binding via one-way call-site coercion (NOT here, and
+            // NOT in `infer::unify` — §13 "Design lesson 2026-05-17"
+            // bans bidirectional `Ref(T) ↔ T` unify).
+            ExprKind::Borrow(inner) => {
+                let inner_ty = self.synth_expr(inner)?;
+                Ok(Ty::Ref(Box::new(inner_ty)))
+            }
             ExprKind::Await(e) => {
                 let _ = self.synth_expr(e)?;
                 Ok(self.fresh_var())
@@ -1056,7 +1069,7 @@ impl Ctx {
                 }
                 for (a, p) in pos_args.iter().zip(fn_ty.positional.iter()) {
                     let at = self.synth_expr(a)?;
-                    unify(p, &at, &mut self.subst, a.span)?;
+                    self.unify_call_arg(p, &at, a.span)?;
                 }
                 let mut kw_seen: Vec<&str> = Vec::new();
                 for a in args {
@@ -1071,7 +1084,7 @@ impl Ctx {
                                 span: e.span,
                             })?;
                         let et = self.synth_expr(e)?;
-                        unify(&p, &et, &mut self.subst, e.span)?;
+                        self.unify_call_arg(&p, &et, e.span)?;
                         kw_seen.push(name);
                     }
                     if let CallArg::StarArgs(e) = a {
@@ -1107,6 +1120,57 @@ impl Ctx {
                 span,
             }),
         }
+    }
+
+    /// ADR-0052a Wave-1 §3 + §6 — one-way call-site coercion.
+    ///
+    /// Unify `formal` against `actual` at a function-call argument-
+    /// binding position. The Wave-1 transparency rule allows PRELUDE
+    /// Str helpers (and any user fn taking `s: Str`) to accept `&s`:
+    /// when the formal parameter is a concrete non-`Ref` type `T` and
+    /// the actual argument resolves to `Ref(T_inner)`, drop the `Ref`
+    /// wrapper locally and unify `formal` against `T_inner`.
+    ///
+    /// **Critical**: this coercion is (a) **scoped to call-arg
+    /// binding only** — `let n: i64 = &s`, `(&n) + (&s)`, and `if &s:`
+    /// all go through other unify paths and continue to reject; (b)
+    /// **unidirectional** — `Ref(T) → T`, never `T → Ref(T)`; (c)
+    /// **local** — does NOT extend the substitution table with a
+    /// `Ref` interconversion entry (the v1+v2 cascade root per §13
+    /// "Design lesson 2026-05-17"). The substitution side-effects of
+    /// the inner `unify(formal, &inner_ty, ...)` call are the same as
+    /// they would be if the user had written the unwrapped form
+    /// directly.
+    ///
+    /// Coercion fires iff (after substitution application):
+    /// - actual is `Ty::Ref(inner)`
+    /// - formal is NOT `Ty::Ref(_)` (no Ref↔Ref shape change; the
+    ///   structural `(Ref(a), Ref(b))` arm in `infer::unify` handles
+    ///   that case directly).
+    /// - formal is NOT `Ty::Var(_)` (let inference bind `?0 :=
+    ///   Ref(T)` if the formal is genuinely under-determined).
+    ///
+    /// All other shapes fall through to plain `unify`, preserving the
+    /// existing behaviour for non-borrow arguments and the i0052a_*
+    /// rejection corpus (TypeMismatch where the inner types don't
+    /// unify, e.g. `takes_int(&s)` with `s: Str`).
+    fn unify_call_arg(
+        &mut self,
+        formal: &Ty,
+        actual: &Ty,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let formal_resolved = self.subst.apply(formal);
+        let actual_resolved = self.subst.apply(actual);
+        if let Ty::Ref(inner) = &actual_resolved {
+            let formal_is_ref = matches!(formal_resolved, Ty::Ref(_));
+            let formal_is_var = matches!(formal_resolved, Ty::Var(_));
+            if !formal_is_ref && !formal_is_var {
+                // One-way Ref(T) → T coercion at the call-arg boundary.
+                return unify(formal, inner, &mut self.subst, span);
+            }
+        }
+        unify(formal, actual, &mut self.subst, span)
     }
 
     fn synth_bin(
