@@ -86,6 +86,40 @@ Alternative glyphs considered and rejected (ADR-0052a §2):
 - `ref s` keyword (Rust pattern position): conflicts with Cobrust's
   let-rebinding shortcut.
 
+## Method-form as PRELUDE-fn sugar (ADR-0052d-prereq Direction D binding)
+
+ADR-0052d-prereq adopts a per-type method-call form (`s.split(",")`)
+that rewrites to the canonical PRELUDE-fn form (`split(s, ",")`)
+at type-check time. The decision honors §2.5 "training-data-overlap"
+rule: Python (`str.split`) and Rust (`str::split`) both use the
+method-call surface; the dot-after-receiver shape is the most
+common ergonomic in the LLM's training distribution.
+
+Key design properties:
+
+- **Static resolution**: the method form rewrites at type-check
+  time to a PRELUDE-fn call with the receiver as the first arg.
+  No vtable, no dynamic dispatch, no runtime cost. Method-form
+  and PRELUDE-fn form produce identical machine code (see
+  [ADR-0052d-prereq](../../agent/adr/0052d-prereq-method-dispatch-infra.md)
+  §"Surface — method-table contents per type").
+- **PRELUDE-fn form stays canonical**: every method-form has a
+  PRELUDE-fn alias the user can write directly. Method-form is
+  pure sugar — there is no method-form that cannot be expressed
+  as a PRELUDE-fn call.
+- **§2.5 "compile-time-catch" sharpening**: typos like
+  `s.splittt(",")` surface as `TypeError::UnknownMethod` with a
+  "did you mean 'split'?" hint. The LLM's compile-error feedback
+  loop now decodes "I called a method that doesn't exist on str;
+  the suggestion lists the available methods" — a stronger signal
+  than the previous behaviour (silent fresh-var inference on the
+  `Attr` callee).
+
+Method-table coverage today (25 methods): `str` (10), `list[T]`
+(5), `f64` (5), `i64` (5). Dict methods ship under separate
+ADR-0050d sub-sprints. Method-form for user-declared types is
+post-M11 (trait-based dispatch).
+
 ## Further reading
 
 - [Architecture](architecture.md)
