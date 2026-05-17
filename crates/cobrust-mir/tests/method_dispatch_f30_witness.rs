@@ -48,6 +48,7 @@
 #![allow(clippy::needless_lifetimes)]
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::collapsible_match)]
+#![allow(clippy::manual_assert)]
 
 use cobrust_frontend::{parse_str, span::FileId};
 use cobrust_hir::{Session, lower as hir_lower};
