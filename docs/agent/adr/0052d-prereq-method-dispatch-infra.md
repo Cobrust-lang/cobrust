@@ -117,10 +117,15 @@ through to `Ok(None)` → final chain raises `TypeError::UnknownMethod`.
 Per ADR-0052 F-G.3 amendment (line 275): `&s.method()` parses as
 `&(s.method())` — method-call binds tighter than the unary borrow.
 Matches Rust corpus (`&v.len()` parses `&(v.len())`) per §2.5 §B.
-No parser change needed: the existing `parser.rs:1239-1249` Attribute
-production + `parser.rs:1105-1110` borrow-operand validator already
-produce `Unary(Borrow, Call(Attr(s, "method"), args))` for
-`&s.method(args)`.
+~~No parser change needed~~ **[SUPERSEDED at `0a90594` — see §"Cascade
+enumeration" L320 + `findings/0052d-prereq-impl-blocker.md`]**: while the
+Attribute production at `parser.rs:1239-1249` produces the correct
+`Call(Attr(...))` shape, the `validate_borrow_operand` cap at
+`parser.rs:1134-1139` rejects `Unary(Borrow, Call(..))` per ADR-0052a §8
+cap. Test `f30wit_method_03` is `#[ignore]`'d; parser-cap relaxation
+deferred to a separate Wave-2 follow-up sub-ADR (provisionally
+`ADR-0052f` or `ADR-0052d-prereq-rd2`) which must land BEFORE 0052d
+round 2 ships method-call sugar in examples.
 
 ## Parser / HIR / Types changes
 
