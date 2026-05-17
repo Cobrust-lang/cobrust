@@ -1015,6 +1015,29 @@ impl<'a> Parser<'a> {
                     span,
                 })
             }
+            // ADR-0052a Wave-1 — unary `&` immutable shared borrow.
+            // Parsed at high precedence (Prec(100)) so any binary op after
+            // the operand stays outside the borrow (`&s + 1` == `(&s) + 1`).
+            // Wave-1 §8 cap restricts the operand shape to `Name`,
+            // `Access(Attribute)`, `Access(Index)`, or a parenthesised
+            // single sub-expression of those — rejected shapes:
+            //   - `&literal`           — int/float/str/bytes/bool/None/f-string
+            //   - `&[..]`/`&(..,..)`   — collection literals
+            //   - `&call(...)`         — call-result borrow
+            //   - `&&s`                — nested borrow
+            //   - `&mut s`             — mutable borrow (Phase H)
+            //   - bare `&` operand-less
+            TokenKind::Amp => {
+                let start = self.current_span();
+                self.bump();
+                let operand = self.parse_pratt(Prec(100))?;
+                Self::validate_borrow_operand(&operand)?;
+                let span = start.merge(operand.span);
+                Ok(Expr {
+                    kind: ExprKind::Borrow(Box::new(operand)),
+                    span,
+                })
+            }
             TokenKind::KwAwait => {
                 let start = self.current_span();
                 self.bump();
@@ -1060,6 +1083,66 @@ impl<'a> Parser<'a> {
             }
             TokenKind::KwLambda => self.parse_lambda(),
             _ => self.parse_postfix(),
+        }
+    }
+
+    /// ADR-0052a §8 — Wave-1 borrow operand validator.
+    ///
+    /// The accepted operand shapes are:
+    ///   - `Name`                            — `&s`
+    ///   - `Access(Attribute { base, .. })`  — `&p.field` (recurse on base)
+    ///   - `Access(Index { base, .. })`      — `&xs[i]`   (recurse on base)
+    ///   - parenthesised single sub-expression of the above (the
+    ///     parser flattens parens, so a `(s)` is just `Name("s")`).
+    ///
+    /// Every other shape is rejected at parse time with
+    /// `ParseError::Syntax`. Wave-1 deferred shapes (literal-borrow,
+    /// collection-borrow, call-result-borrow, nested borrow, mutable
+    /// borrow) all flow through this validator.
+    fn validate_borrow_operand(operand: &Expr) -> Result<(), ParseError> {
+        match &operand.kind {
+            ExprKind::Name(_) => Ok(()),
+            ExprKind::Access(AccessKind::Attribute { base, .. }) => {
+                Self::validate_borrow_operand(base)
+            }
+            ExprKind::Access(AccessKind::Index { base, .. }) => {
+                Self::validate_borrow_operand(base)
+            }
+            ExprKind::Borrow(_) => Err(ParseError::Syntax {
+                message: "nested borrow `&&` is not supported in Wave-1 (ADR-0052a §8)"
+                    .to_string(),
+                span: operand.span,
+            }),
+            ExprKind::Literal(_) => Err(ParseError::Syntax {
+                message: "borrow of a literal is not supported in Wave-1 \
+                          (ADR-0052a §8 cap: borrow operand must be `Name`, `Name.field`, or `Name[idx]`)"
+                    .to_string(),
+                span: operand.span,
+            }),
+            ExprKind::FString(_) => Err(ParseError::Syntax {
+                message: "borrow of an f-string is not supported in Wave-1 \
+                          (ADR-0052a §8 cap)"
+                    .to_string(),
+                span: operand.span,
+            }),
+            ExprKind::Collection(_) | ExprKind::Comprehension(_) => Err(ParseError::Syntax {
+                message: "borrow of a collection / comprehension literal is not \
+                          supported in Wave-1 (ADR-0052a §8 cap)"
+                    .to_string(),
+                span: operand.span,
+            }),
+            ExprKind::Call { .. } => Err(ParseError::Syntax {
+                message: "borrow of a call-result is not supported in Wave-1 \
+                          (ADR-0052a §8 cap: borrow operand must be `Name`, `Name.field`, or `Name[idx]`)"
+                    .to_string(),
+                span: operand.span,
+            }),
+            _ => Err(ParseError::Syntax {
+                message: "borrow operand must be `Name`, `Name.field`, or `Name[idx]` \
+                          in Wave-1 (ADR-0052a §8 cap)"
+                    .to_string(),
+                span: operand.span,
+            }),
         }
     }
 

@@ -350,6 +350,12 @@ pub enum ExprKind {
         op: UnaryOp,
         operand: Box<Expr>,
     },
+    /// ADR-0052a Wave-1 — `&expr` immutable shared borrow. Wave-1
+    /// admits only `Name`, `Access(Attribute)`, `Access(Index)`, and
+    /// parenthesised single-identifier sub-expressions (the parser
+    /// enforces the §8 Wave-1 cap; the type checker then synthesises
+    /// `Ty::Ref(inner_ty)`).
+    Borrow(Box<Expr>),
     /// Form 30 — `await e`, `yield e?`, `yield from e`.
     Await(Box<Expr>),
     Yield(Option<Box<Expr>>),

@@ -534,6 +534,12 @@ impl Writer {
                 self.write_expr(operand);
                 self.push(")");
             }
+            // ADR-0052a Wave-1 — `&expr` borrow round-trip.
+            ExprKind::Borrow(operand) => {
+                self.push("(&");
+                self.write_expr(operand);
+                self.push(")");
+            }
             ExprKind::Await(e) => {
                 self.push("(await ");
                 self.write_expr(e);
