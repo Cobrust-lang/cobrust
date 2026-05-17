@@ -36,6 +36,11 @@ enum Cat {
     AmbiguousType,
     MutableDefault,
     UnknownName,
+    /// ADR-0052d-prereq §"New error variant" — `Cat::UnknownMethod`
+    /// pairs with `TypeError::UnknownMethod`. TEST author documented
+    /// the placeholder swap (`Cat::UnknownName` → `Cat::UnknownMethod`)
+    /// in i0052dpre_01..06 inline comments; DEV graduates per F28.
+    UnknownMethod,
 }
 
 fn matches_cat(err: &TypeError, cat: Cat) -> bool {
@@ -55,6 +60,7 @@ fn matches_cat(err: &TypeError, cat: Cat) -> bool {
         (Cat::AmbiguousType, TypeError::AmbiguousType { .. }) => true,
         (Cat::MutableDefault, TypeError::MutableDefault { .. }) => true,
         (Cat::UnknownName, TypeError::UnknownName { .. }) => true,
+        (Cat::UnknownMethod, TypeError::UnknownMethod { .. }) => true,
         _ => false,
     }
 }
@@ -2146,7 +2152,6 @@ fn must_reject_with_method_dispatch_stubs(name: &str, body: &str, cat: Cat) {
 // ---- Tier A: typo on otherwise-valid receiver type ----
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
 fn i0052dpre_01_str_typo_splittt_rejected() {
     // `s.splittt(",")` — typo for `s.split(",")` on a Str receiver.
     // Post-impl: `TypeError::UnknownMethod { type_name: "str",
@@ -2157,38 +2162,35 @@ fn i0052dpre_01_str_typo_splittt_rejected() {
     must_reject_with_method_dispatch_stubs(
         "str-typo-splittt",
         "fn f() -> i64:\n    let s: str = \"a,b\"\n    let xs: list[str] = s.splittt(\",\")\n    return 0\n",
-        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+        Cat::UnknownMethod, // ADR-0052d-prereq DEV graduation per inline-comment contract
     );
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
 fn i0052dpre_02_list_typo_lenggg_rejected() {
     // `xs.lenggg()` — typo for `xs.len()` on a List receiver.
     // Post-impl: UnknownMethod with type_name="list".
     must_reject_with_method_dispatch_stubs(
         "list-typo-lenggg",
         "fn f() -> i64:\n    let xs: list[i64] = [1, 2]\n    let n: i64 = xs.lenggg()\n    return n\n",
-        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+        Cat::UnknownMethod, // ADR-0052d-prereq DEV graduation per inline-comment contract
     );
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
 fn i0052dpre_03_float_typo_flrr_rejected() {
     // `f.flrr()` — typo for `f.floor()` on a Float receiver.
     // Post-impl: UnknownMethod with type_name="f64".
     must_reject_with_method_dispatch_stubs(
         "float-typo-flrr",
         "fn g() -> f64:\n    let x: f64 = 3.14\n    let y: f64 = x.flrr()\n    return y\n",
-        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+        Cat::UnknownMethod, // ADR-0052d-prereq DEV graduation per inline-comment contract
     );
 }
 
 // ---- Tier B: method-form on the WRONG receiver type ----
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
 fn i0052dpre_04_int_split_method_only_on_str_rejected() {
     // `n.split(",")` where `n: i64` — `split` lives on the Str table
     // ONLY; calling it on Int must surface UnknownMethod with
@@ -2196,38 +2198,35 @@ fn i0052dpre_04_int_split_method_only_on_str_rejected() {
     must_reject_with_method_dispatch_stubs(
         "int-split-rejected-method-only-on-str",
         "fn f() -> i64:\n    let n: i64 = 42\n    let xs: list[str] = n.split(\",\")\n    return 0\n",
-        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+        Cat::UnknownMethod, // ADR-0052d-prereq DEV graduation per inline-comment contract
     );
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
 fn i0052dpre_05_str_floor_method_only_on_float_rejected() {
     // `s.floor()` where `s: str` — `floor` lives on the Float table
     // ONLY. UnknownMethod with type_name="str".
     must_reject_with_method_dispatch_stubs(
         "str-floor-rejected-method-only-on-float",
         "fn g() -> f64:\n    let s: str = \"hi\"\n    let y: f64 = s.floor()\n    return y\n",
-        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+        Cat::UnknownMethod, // ADR-0052d-prereq DEV graduation per inline-comment contract
     );
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + Cat::UnknownMethod"]
 fn i0052dpre_06_list_upper_method_only_on_str_rejected() {
     // `xs.upper()` where `xs: list[i64]` — `upper` lives on the Str
     // table ONLY. UnknownMethod with type_name="list".
     must_reject_with_method_dispatch_stubs(
         "list-upper-rejected-method-only-on-str",
         "fn f() -> str:\n    let xs: list[i64] = [1, 2]\n    let t: str = xs.upper()\n    return t\n",
-        Cat::UnknownName, // placeholder; replace with Cat::UnknownMethod post-DEV
+        Cat::UnknownMethod, // ADR-0052d-prereq DEV graduation per inline-comment contract
     );
 }
 
 // ---- Tier C: wrong arity ----
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arity guard fires"]
 fn i0052dpre_07_str_split_missing_delim_rejected() {
     // `s.split()` — `split` requires 1 arg per ADR-0052d-prereq §4
     // row 2; calling with 0 args must surface ArityMismatch (already
@@ -2241,7 +2240,6 @@ fn i0052dpre_07_str_split_missing_delim_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arity guard fires"]
 fn i0052dpre_08_str_split_extra_arg_rejected() {
     // `s.split(",", "x")` — 2 args where 1 is expected.
     must_reject_with_method_dispatch_stubs(
@@ -2252,7 +2250,6 @@ fn i0052dpre_08_str_split_extra_arg_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arity guard fires"]
 fn i0052dpre_09_list_push_missing_value_rejected() {
     // `xs.push()` — `push` requires 1 arg per ADR-0052d-prereq §4
     // row 12; calling with 0 args must surface ArityMismatch.
@@ -2266,7 +2263,6 @@ fn i0052dpre_09_list_push_missing_value_rejected() {
 // ---- Tier D: wrong arg type ----
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arg-type guard fires"]
 fn i0052dpre_10_str_split_int_delim_rejected() {
     // `s.split(42)` — `split` requires `sep: str` per ADR-0052d-prereq
     // §4 row 2; passing `i64` must surface TypeMismatch (the table
@@ -2280,7 +2276,6 @@ fn i0052dpre_10_str_split_int_delim_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arg-type guard fires"]
 fn i0052dpre_11_list_push_str_into_list_i64_rejected() {
     // `xs.push("x")` where `xs: list[i64]` — the element type must
     // unify with i64. TypeMismatch.
@@ -2292,7 +2287,6 @@ fn i0052dpre_11_list_push_str_into_list_i64_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV's per-method arg-type guard fires"]
 fn i0052dpre_12_float_is_nan_extra_arg_rejected() {
     // `f.is_nan(42)` — `is_nan` per ADR-0052d-prereq §4 row 18 is
     // 0-arity; passing any extra arg must surface ArityMismatch.
@@ -2342,7 +2336,6 @@ fn i0052dpre_12_float_is_nan_extra_arg_rejected() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + non-None suggestion for typo"]
 fn i0052dpre_cross_01_unknown_method_suggestion_field_populated_for_typo() {
     // `s.splittt(",")` — typo. Post-impl: type-check produces
     // `TypeError::UnknownMethod { type_name: "str", method_name:

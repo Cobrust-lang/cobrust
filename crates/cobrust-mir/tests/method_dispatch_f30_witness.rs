@@ -185,7 +185,6 @@ fn assert_method_form_subset_of_prelude_fn_form(name: &str, method_src: &str, pr
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn f30wit_method_01_str_split_method_form_lowers_to_prelude_fn() {
     let method_src = "fn main() -> i64:\n    let s: str = \"a,b,c\"\n    let xs: list[str] = s.split(\",\")\n    return 0\n";
     let prelude_src = "fn main() -> i64:\n    let s: str = \"a,b,c\"\n    let xs: list[str] = split(s, \",\")\n    return 0\n";
@@ -204,7 +203,6 @@ fn f30wit_method_01_str_split_method_form_lowers_to_prelude_fn() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
 fn f30wit_method_02_list_len_method_form_lowers_to_prelude_fn() {
     let method_src = "fn main() -> i64:\n    let xs: list[i64] = [1, 2, 3]\n    let n: i64 = xs.len()\n    return n\n";
     let prelude_src = "fn main() -> i64:\n    let xs: list[i64] = [1, 2, 3]\n    let n: i64 = len(xs)\n    return n\n";
@@ -239,7 +237,7 @@ fn f30wit_method_02_list_len_method_form_lowers_to_prelude_fn() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052d-prereq DEV impl pending"]
+#[ignore = "ADR-0052d-prereq DEV impl pending — parser §8 cap rejects `&<Call>` per findings/0052d-prereq-impl-blocker.md; deferred to 0052d follow-up parser-cap relaxation sub-ADR"]
 fn f30wit_method_03_borrow_precedence_binds_tighter_than_method_call() {
     // `&s.len()` parses as `&(s.len())` per ADR-0052 F-G.3. The
     // method-form rewrite of `s.len()` to `str_len(s)` runs INSIDE
