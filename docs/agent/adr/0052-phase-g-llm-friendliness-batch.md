@@ -161,7 +161,7 @@ Per `findings/adr-scope-reality-divergence.md` F27 verified-at-HEAD discipline, 
 
 - **Error variant definition site**: `crates/cobrust-types/src/error.rs:64` `TypeError::ImplicitTruthiness { actual: Ty, span: Span }`. Direction B adds a `suggestion: Option<&'static str>` field at construction time (NOT rendering time). Each of the ~30 `TypeError::*` variants + ~10 `MirError::*` variants similarly extended.
 - **Current rendering site**: `crates/cobrust-cli/src/error_ux.rs:620-631` produces the English suggestion via hard-coded match. Direction B's rendering site shifts to reading the structured `suggestion` field, eliminating the hard-coded prose duplication.
-- **Construction site (one of many)**: `crates/cobrust-types/src/check.rs:1473` `Err(TypeError::ImplicitTruthiness { actual, span })`. Direction B updates every construction call site to populate `suggestion: Some("change to 'if x != 0:' or 'if x.is_some():'")`.
+- **Construction site (one of many)**: `crates/cobrust-types/src/check.rs:1532` `Err(TypeError::ImplicitTruthiness { actual, span })` (per Wave 2 audit F2 amendment 2026-05-17; original anchor `check.rs:1473` was the parent helper region). Direction B updates every construction call site to populate `suggestion: Some("change to 'if x != 0:' or 'if x.is_some():'")`.
 
 ### Sub-ADR 0052c (Direction C) scaffolding anchors
 
@@ -172,7 +172,7 @@ Per `findings/adr-scope-reality-divergence.md` F27 verified-at-HEAD discipline, 
 
 ### Sub-ADR 0052d (Direction D) scaffolding anchors
 
-- **The parser surface (already shipped)**: `crates/cobrust-frontend/src/parser.rs:1156-1167` parses `s.method(args)` as `Call { callee: Access(AccessKind::Attribute { base: s, name: "method" }), args }`. No parser change needed.
+- **The parser surface (already shipped)**: `crates/cobrust-frontend/src/parser.rs:1239-1249` parses `s.method(args)` as `Call { callee: Access(AccessKind::Attribute { base: s, name: "method" }), args }` (per Wave 2 audit F1 amendment 2026-05-17; original anchor `parser.rs:1156-1167` was the lambda body parser region). No parser change needed.
 - **The HIR lowering (already shipped)**: `crates/cobrust-hir/src/lower.rs:1078-1083` produces `ExprKind::Attr { base, name }`. No HIR change needed.
 - **The type-check resolver gap**: `crates/cobrust-types/src/check.rs:780-787` `ExprKind::Attr { base, name }` returns `self.fresh_var()` — accepts any attribute. Direction D adds method-name lookup against a per-type method table HERE.
 - **The dict-method precedent**: `crates/cobrust-types/src/check.rs:907-915` `fn try_synth_dict_method` shows the per-type method resolver shape. Direction D generalizes this from `Ty::Dict` to `Ty::Str`, `Ty::List(_)`, `Ty::Float`, `Ty::Int` and reroutes the existing PRELUDE-fn intrinsics through it.
