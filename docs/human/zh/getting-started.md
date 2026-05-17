@@ -613,6 +613,35 @@ cobrust translate tomli
 
 完整的翻译工作流和验证门控见 [ADR-0007 translator pipeline](../../agent/adr/0007-translator-pipeline.md)。
 
+## 第四步半:方法调用形式（ADR-0052d-prereq, Phase G P0)
+
+Cobrust 在内置类型上支持 Python / Rust 风格的方法调用形式,作为
+PRELUDE-fn 形式的语法糖。详见
+[ADR-0052d-prereq](../../agent/adr/0052d-prereq-method-dispatch-infra.md):
+
+```cobrust
+# 方法形式(首选——匹配 LLM 训练数据分布,
+# 见 CLAUDE.md §2.5 §B "training-data-overlap rule")。
+let n: i64 = s.len()
+let xs: list[str] = s.split(",")
+let y: f64 = x.floor()
+let m: i64 = n.abs()
+
+# PRELUDE-fn 形式(规范等价——方法形式在类型检查时
+# 重写为此形式,零运行时开销)。
+let n: i64 = str_len(s)
+let xs: list[str] = split(s, ",")
+let y: f64 = floor(x)
+let m: i64 = abs(n)
+```
+
+方法形式在类型检查时静态解析——无 vtable,无动态调度,无装箱。
+拼写错误在编译期通过 `TypeError::UnknownMethod` 暴露,并附带
+"did you mean…" 提示。当前方法表覆盖范围(25 个方法):`str` (10)、
+`list[T]` (5)、`f64` (5)、`i64` (5)。Dict 方法
+(`d.keys()`、`d.values()`、`d.items()`、`d.get(k)`、`d.copy()`)
+在 [ADR-0050d 子冲刺 b/d](../../agent/adr/0050d-dict-types.md) 落地。
+
 ## 开发工作流（贡献者路径）
 
 ```bash

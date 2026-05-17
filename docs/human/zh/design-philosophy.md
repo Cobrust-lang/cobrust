@@ -83,6 +83,34 @@ consuming"。
 - `ref s` 关键字(Rust pattern position):与 Cobrust 的 let
   重绑定语法冲突。
 
+## 方法形式作为 PRELUDE-fn 糖(ADR-0052d-prereq Direction D 绑定)
+
+ADR-0052d-prereq 引入按类型的方法调用形式(`s.split(",")`),
+在类型检查时重写为规范的 PRELUDE-fn 形式(`split(s, ",")`)。
+该决策遵循 §2.5 "training-data-overlap" 规则:Python
+(`str.split`) 和 Rust (`str::split`) 都使用方法调用语法表面;
+"接收者.方法" 形状是 LLM 训练分布中最常见的人体工学。
+
+关键设计属性:
+
+- **静态解析**:方法形式在类型检查时被重写为以接收者作为第一
+  参数的 PRELUDE-fn 调用。无 vtable,无动态调度,零运行时开销。
+  方法形式与 PRELUDE-fn 形式产生完全相同的机器码(详见
+  [ADR-0052d-prereq](../../agent/adr/0052d-prereq-method-dispatch-infra.md)
+  §"Surface — method-table contents per type")。
+- **PRELUDE-fn 形式仍为规范**:每个方法形式都有用户可直接书写的
+  PRELUDE-fn 别名。方法形式是纯粹的糖 —— 不存在不能用 PRELUDE-fn
+  调用表达的方法形式。
+- **§2.5 "compile-time-catch" 锐化**:像 `s.splittt(",")` 这样的
+  拼写错误在编译期通过 `TypeError::UnknownMethod` 暴露并附带
+  "did you mean 'split'?" 提示。LLM 的编译错误反馈环现在解码为
+  "我调用了 str 上不存在的方法;提示列出了可用方法" —— 比之前
+  的行为(`Attr` callee 上无声的 fresh-var 推断)是更强的信号。
+
+当前方法表覆盖(25 个方法):`str` (10)、`list[T]` (5)、`f64` (5)、
+`i64` (5)。Dict 方法在独立的 ADR-0050d 子冲刺中落地。用户声明
+类型的方法形式在 M11 之后(基于 trait 的调度)。
+
 ## 进一步阅读
 
 - [架构](architecture.md)

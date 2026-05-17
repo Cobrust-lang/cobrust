@@ -641,6 +641,36 @@ cobrust translate tomli
 
 See [ADR-0007 translator pipeline](../../agent/adr/0007-translator-pipeline.md) for the full translation workflow and verification gates.
 
+## Step 4.5: method-call form (ADR-0052d-prereq, Phase G P0)
+
+Cobrust supports a Python/Rust-style method-call form on built-in
+types as syntactic sugar over the PRELUDE-fn form. See
+[ADR-0052d-prereq](../../agent/adr/0052d-prereq-method-dispatch-infra.md):
+
+```cobrust
+# Method form (preferred — matches LLM training-data distribution
+# per CLAUDE.md §2.5 §B "training-data-overlap rule").
+let n: i64 = s.len()
+let xs: list[str] = s.split(",")
+let y: f64 = x.floor()
+let m: i64 = n.abs()
+
+# PRELUDE-fn form (canonical equivalent — method form rewrites to this
+# at type-check time, zero runtime overhead).
+let n: i64 = str_len(s)
+let xs: list[str] = split(s, ",")
+let y: f64 = floor(x)
+let m: i64 = abs(n)
+```
+
+The method form resolves statically at type-check time — no vtable,
+no dynamic dispatch, no boxing. Typos surface as
+`TypeError::UnknownMethod` at compile time with a "did you mean…"
+hint. Method-table coverage today (25 methods): `str` (10),
+`list[T]` (5), `f64` (5), `i64` (5). Dict methods (`d.keys()`,
+`d.values()`, `d.items()`, `d.get(k)`, `d.copy()`) ship under
+[ADR-0050d sub-sprint b/d](../../agent/adr/0050d-dict-types.md).
+
 ## Development workflows (contributor path)
 
 ```bash
