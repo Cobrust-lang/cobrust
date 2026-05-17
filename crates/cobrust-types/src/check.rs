@@ -1154,12 +1154,7 @@ impl Ctx {
     /// existing behaviour for non-borrow arguments and the i0052a_*
     /// rejection corpus (TypeMismatch where the inner types don't
     /// unify, e.g. `takes_int(&s)` with `s: Str`).
-    fn unify_call_arg(
-        &mut self,
-        formal: &Ty,
-        actual: &Ty,
-        span: Span,
-    ) -> Result<(), TypeError> {
+    fn unify_call_arg(&mut self, formal: &Ty, actual: &Ty, span: Span) -> Result<(), TypeError> {
         let formal_resolved = self.subst.apply(formal);
         let actual_resolved = self.subst.apply(actual);
         if let Ty::Ref(inner) = &actual_resolved {
