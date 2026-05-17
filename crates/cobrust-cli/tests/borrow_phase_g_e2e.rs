@@ -172,7 +172,6 @@ fn assert_build_run(name: &str, src: &str, args: &[&str], stdin: &[u8], expected
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser+MIR accept unary `&`"]
 fn e0052a_e2e_01_lc02_reverse_string_borrow_oracle_match() {
     // LC-02 §4.1 canonical: replace `str_len(s)` + `str_at(s, i)` with
     // borrow form. Oracle output is byte-identical to the LC-02
@@ -183,7 +182,6 @@ fn e0052a_e2e_01_lc02_reverse_string_borrow_oracle_match() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser+MIR accept unary `&`"]
 fn e0052a_e2e_02_lc02_reverse_string_borrow_empty_input() {
     // LC-02 §4.1 variant: empty input. The while loop body must
     // execute zero times; output is a single newline (from
@@ -200,7 +198,6 @@ fn e0052a_e2e_02_lc02_reverse_string_borrow_empty_input() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser+MIR accept unary `&`"]
 fn e0052a_e2e_03_lc13_roman_to_integer_borrow_mcmxciv() {
     // LC-13 §4.2: borrow form replaces `str_len(s)` + `str_at(s, i)`.
     // Oracle: "MCMXCIV" → 1994.
@@ -209,7 +206,6 @@ fn e0052a_e2e_03_lc13_roman_to_integer_borrow_mcmxciv() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser+MIR accept unary `&`"]
 fn e0052a_e2e_04_lc13_roman_to_integer_borrow_iii() {
     // LC-13 §4.2: simple input "III" → 3.
     let src = "fn roman_val(c: str) -> i64:\n    let o = str_ord(c)\n    if o == 73:\n        return 1\n    if o == 86:\n        return 5\n    if o == 88:\n        return 10\n    if o == 76:\n        return 50\n    if o == 67:\n        return 100\n    if o == 68:\n        return 500\n    if o == 77:\n        return 1000\n    return 0\nfn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let result: i64 = 0\n    let prev: i64 = 0\n    let i: i64 = n - 1\n    while i >= 0:\n        let c = str_at(&s, i)\n        let v = roman_val(c)\n        if v < prev:\n            result = result - v\n        else:\n            result = result + v\n        prev = v\n        i = i - 1\n    print_int(result)\n    return 0\n";
@@ -226,7 +222,6 @@ fn e0052a_e2e_04_lc13_roman_to_integer_borrow_iii() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser+MIR accept unary `&`"]
 fn e0052a_e2e_05_lc20_valid_parens_borrow_balanced_true() {
     // LC-20 §4.3: balanced "()[]{}" → "true".
     let src = "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let stack = list_new(n)\n    let top: i64 = 0\n    let ok: i64 = 1\n    let i: i64 = 0\n    while i < n:\n        let c = str_at(&s, i)\n        let o = str_ord(c)\n        if o == 40:\n            list_set(stack, top, 40)\n            top = top + 1\n        elif o == 91:\n            list_set(stack, top, 91)\n            top = top + 1\n        elif o == 123:\n            list_set(stack, top, 123)\n            top = top + 1\n        elif o == 41:\n            if top == 0:\n                ok = 0\n            else:\n                top = top - 1\n                let expected = list_get(stack, top)\n                if expected != 40:\n                    ok = 0\n        elif o == 93:\n            if top == 0:\n                ok = 0\n            else:\n                top = top - 1\n                let expected = list_get(stack, top)\n                if expected != 91:\n                    ok = 0\n        elif o == 125:\n            if top == 0:\n                ok = 0\n            else:\n                top = top - 1\n                let expected = list_get(stack, top)\n                if expected != 123:\n                    ok = 0\n        i = i + 1\n    if top != 0:\n        ok = 0\n    if ok == 1:\n        print(\"true\")\n    else:\n        print(\"false\")\n    return 0\n";
@@ -234,7 +229,6 @@ fn e0052a_e2e_05_lc20_valid_parens_borrow_balanced_true() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser+MIR accept unary `&`"]
 fn e0052a_e2e_06_lc20_valid_parens_borrow_unbalanced_false() {
     // LC-20 §4.3 variant: unbalanced "(]" → "false".
     let src = "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let stack = list_new(n)\n    let top: i64 = 0\n    let ok: i64 = 1\n    let i: i64 = 0\n    while i < n:\n        let c = str_at(&s, i)\n        let o = str_ord(c)\n        if o == 40:\n            list_set(stack, top, 40)\n            top = top + 1\n        elif o == 91:\n            list_set(stack, top, 91)\n            top = top + 1\n        elif o == 123:\n            list_set(stack, top, 123)\n            top = top + 1\n        elif o == 41:\n            if top == 0:\n                ok = 0\n            else:\n                top = top - 1\n                let expected = list_get(stack, top)\n                if expected != 40:\n                    ok = 0\n        elif o == 93:\n            if top == 0:\n                ok = 0\n            else:\n                top = top - 1\n                let expected = list_get(stack, top)\n                if expected != 91:\n                    ok = 0\n        elif o == 125:\n            if top == 0:\n                ok = 0\n            else:\n                top = top - 1\n                let expected = list_get(stack, top)\n                if expected != 123:\n                    ok = 0\n        i = i + 1\n    if top != 0:\n        ok = 0\n    if ok == 1:\n        print(\"true\")\n    else:\n        print(\"false\")\n    return 0\n";
@@ -250,7 +244,6 @@ fn e0052a_e2e_06_lc20_valid_parens_borrow_unbalanced_false() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser+MIR accept unary `&`"]
 fn e0052a_e2e_07_synthetic_three_borrows_then_consume_print_int() {
     // Synthetic: three borrowed reads on the same Str + final owned
     // consume into a user-fn that takes ownership. Oracle: stdin
@@ -264,7 +257,6 @@ fn e0052a_e2e_07_synthetic_three_borrows_then_consume_print_int() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser+MIR accept unary `&`"]
 fn e0052a_e2e_08_synthetic_let_rebind_with_loop() {
     // Synthetic: let-rebind shortcut (`let s = &s`) followed by a
     // for-loop that reads the borrowed `s` length N times. Oracle:
