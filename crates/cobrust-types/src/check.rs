@@ -369,14 +369,14 @@ impl Ctx {
                 Ok(BlockOutcome::Falls)
             }
             StmtKind::Return(e) => {
-                let ret_ty = self
-                    .return_stack
-                    .last()
-                    .cloned()
-                    .ok_or(TypeError::ReturnOutsideFn {
-                        span: s.span,
-                        suggestion: Some("move the `return` inside a `fn` body"),
-                    })?;
+                let ret_ty =
+                    self.return_stack
+                        .last()
+                        .cloned()
+                        .ok_or(TypeError::ReturnOutsideFn {
+                            span: s.span,
+                            suggestion: Some("move the `return` inside a `fn` body"),
+                        })?;
                 let value_ty = match e {
                     Some(e) => self.synth_expr(e)?,
                     None => Ty::None,
@@ -397,9 +397,7 @@ impl Ctx {
                 if self.loop_depth == 0 {
                     return Err(TypeError::ContinueOutsideLoop {
                         span: s.span,
-                        suggestion: Some(
-                            "move the `continue` inside a `for` or `while` loop body",
-                        ),
+                        suggestion: Some("move the `continue` inside a `for` or `while` loop body"),
                     });
                 }
                 Ok(BlockOutcome::Diverges)
@@ -999,7 +997,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::List(Box::new(k))))
@@ -1010,7 +1010,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::List(Box::new(v))))
@@ -1021,7 +1023,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 // `d.items() -> List[Tuple[K, V]]`. Insertion-order
@@ -1056,7 +1060,9 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     }),
                 }
             }
@@ -1067,7 +1073,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::Dict(Box::new(k), Box::new(v))))
@@ -1118,7 +1126,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::Int))
@@ -1129,7 +1139,9 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 let at = self.synth_expr(pos_args[0])?;
@@ -1142,7 +1154,9 @@ impl Ctx {
                         expected: 2,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 let a0 = self.synth_expr(pos_args[0])?;
@@ -1157,7 +1171,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::Str))
@@ -1168,7 +1184,9 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 let at = self.synth_expr(pos_args[0])?;
@@ -1181,7 +1199,9 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 let at = self.synth_expr(pos_args[0])?;
@@ -1194,7 +1214,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::Str))
@@ -1243,7 +1265,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::Int))
@@ -1254,7 +1278,9 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 let at = self.synth_expr(pos_args[0])?;
@@ -1270,7 +1296,9 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 let it = self.synth_expr(pos_args[0])?;
@@ -1283,7 +1311,9 @@ impl Ctx {
                         expected: 2,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 let it = self.synth_expr(pos_args[0])?;
@@ -1298,7 +1328,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::Bool))
@@ -1342,7 +1374,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::Float))
@@ -1353,7 +1387,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::Bool))
@@ -1397,7 +1433,9 @@ impl Ctx {
                         expected: 0,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 Ok(Some(Ty::Int))
@@ -1408,7 +1446,9 @@ impl Ctx {
                         expected: 1,
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 let at = self.synth_expr(pos_args[0])?;
@@ -1508,7 +1548,9 @@ impl Ctx {
                         expected: fn_ty.positional.len(),
                         actual: pos_args.len(),
                         span,
-                        suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
                     });
                 }
                 for (a, p) in pos_args.iter().zip(fn_ty.positional.iter()) {
@@ -1526,7 +1568,9 @@ impl Ctx {
                             .ok_or_else(|| TypeError::KeywordArgMismatch {
                                 name: name.clone(),
                                 span: e.span,
-                                suggestion: Some("remove or rename — the callee does not accept this keyword"),
+                                suggestion: Some(
+                                    "remove or rename — the callee does not accept this keyword",
+                                ),
                             })?;
                         let et = self.synth_expr(e)?;
                         self.unify_call_arg(&p, &et, e.span)?;
@@ -1563,7 +1607,9 @@ impl Ctx {
             other => Err(TypeError::NotCallable {
                 actual: other,
                 span,
-                suggestion: Some("only function types are callable; verify the name resolves to a fn"),
+                suggestion: Some(
+                    "only function types are callable; verify the name resolves to a fn",
+                ),
             }),
         }
     }
@@ -1641,7 +1687,9 @@ impl Ctx {
                         expected: Ty::Int,
                         actual: other,
                         span,
-                        suggestion: Some("change the expression type or add `: <expected>` annotation"),
+                        suggestion: Some(
+                            "change the expression type or add `: <expected>` annotation",
+                        ),
                     }),
                 }
             }
@@ -1679,7 +1727,9 @@ impl Ctx {
                         expected: Ty::Int,
                         actual: other,
                         span,
-                        suggestion: Some("change the expression type or add `: <expected>` annotation"),
+                        suggestion: Some(
+                            "change the expression type or add `: <expected>` annotation",
+                        ),
                     }),
                 }
             }
@@ -1723,7 +1773,9 @@ impl Ctx {
                     return Err(TypeError::NotHashable {
                         actual: kt_resolved,
                         span: k.span,
-                        suggestion: Some("f64 keys are forbidden (NaN != NaN); use i64 via `f.to_bits() as i64` or a str repr"),
+                        suggestion: Some(
+                            "f64 keys are forbidden (NaN != NaN); use i64 via `f.to_bits() as i64` or a str repr",
+                        ),
                     });
                 }
                 Ok(Ty::Dict(Box::new(kt), Box::new(vt)))
@@ -1789,7 +1841,9 @@ impl Ctx {
                         return Err(TypeError::NotHashable {
                             actual: k_resolved,
                             span: args[0].span,
-                            suggestion: Some("f64 keys are forbidden (NaN != NaN); use i64 via `f.to_bits() as i64` or a str repr"),
+                            suggestion: Some(
+                                "f64 keys are forbidden (NaN != NaN); use i64 via `f.to_bits() as i64` or a str repr",
+                            ),
                         });
                     }
                 }
@@ -2013,7 +2067,9 @@ impl Ctx {
                                 expected: elems.len(),
                                 actual: items.len(),
                                 span: p.span,
-                                suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                                suggestion: Some(
+                                    "check the function signature; pass exactly the declared positional arity",
+                                ),
                             });
                         }
                         for (it, e_ty) in items.iter().zip(elems.iter()) {
@@ -2046,7 +2102,9 @@ impl Ctx {
                         expected: Ty::Tuple(vec![]),
                         actual: other,
                         span: p.span,
-                        suggestion: Some("change the expression type or add `: <expected>` annotation"),
+                        suggestion: Some(
+                            "change the expression type or add `: <expected>` annotation",
+                        ),
                     }),
                 }
             }
