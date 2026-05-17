@@ -8,10 +8,13 @@
 
 fn main() -> i64:
     let s = input("")
-    let n = str_len(s)
+    # ADR-0052a Wave-1 §4.1 — `&s` borrows for the read-only PRELUDE
+    # call; `s` is never moved, so the loop body can re-read it via
+    # `&s` each iteration.
+    let n = str_len(&s)
     let i: i64 = n - 1
     while i >= 0:
-        let c = str_at(s, i)
+        let c = str_at(&s, i)
         print_no_nl(c)
         i = i - 1
     print("")
