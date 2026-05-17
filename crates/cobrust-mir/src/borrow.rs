@@ -114,6 +114,9 @@ fn check_statement(stmt: &Statement, state: &mut BlockState) -> Result<(), MirEr
                     return Err(MirError::UseAfterMove {
                         local: p.local.0,
                         span: stmt.span,
+                        suggestion: Some(
+                            "change to `&s` to borrow without consuming (ADR-0052a explicit shared borrow)",
+                        ),
                     });
                 }
             }
@@ -224,12 +227,18 @@ fn check_operand_read(
                 return Err(MirError::UseAfterMove {
                     local: p.local.0,
                     span,
+                    suggestion: Some(
+                        "change to `&s` to borrow without consuming (ADR-0052a explicit shared borrow)",
+                    ),
                 });
             }
             if state.dropped.contains(&p.local) {
                 return Err(MirError::UseAfterDrop {
                     local: p.local.0,
                     span,
+                    suggestion: Some(
+                        "the value was already dropped; reorder code so the read precedes the drop",
+                    ),
                 });
             }
             Ok(())
@@ -252,12 +261,18 @@ fn push_borrow(
                 return Err(MirError::ConflictingMutBorrow {
                     local: place.local.0,
                     span,
+                    suggestion: Some(
+                        "only one mutable borrow can be active at a time; release the first borrow first",
+                    ),
                 });
             }
             if has_shared {
                 return Err(MirError::SharedMutOverlap {
                     local: place.local.0,
                     span,
+                    suggestion: Some(
+                        "cannot borrow mutably while a shared borrow is active; release shared first",
+                    ),
                 });
             }
         }
@@ -266,6 +281,9 @@ fn push_borrow(
                 return Err(MirError::SharedMutOverlap {
                     local: place.local.0,
                     span,
+                    suggestion: Some(
+                        "cannot borrow mutably while a shared borrow is active; release shared first",
+                    ),
                 });
             }
         }

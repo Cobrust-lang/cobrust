@@ -323,6 +323,7 @@ impl<'a> BodyBuilder<'a> {
             .ok_or(MirError::UnresolvedDefId {
                 def_id: def_id.0,
                 span: self.span,
+                suggestion: None,
             })
     }
 

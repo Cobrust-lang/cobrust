@@ -126,7 +126,7 @@ fn check_must_fail_with_stubs(name: &str, body: &str) -> TypeError {
 // =========================================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_01_unknown_name_carries_suggestion() {
     // `let n: i64 = missing` — `missing` is undeclared. Surfaces
     // TypeError::UnknownName. Post-impl: `suggestion: Some("declare
@@ -139,7 +139,7 @@ fn s0052b_01_unknown_name_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_02_arity_mismatch_carries_suggestion() {
     // `g()` where `g` takes 1 arg — wrong arity. Post-impl:
     // suggestion = "check the function signature; pass exactly the
@@ -152,7 +152,7 @@ fn s0052b_02_arity_mismatch_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_03_keyword_arg_mismatch_carries_suggestion() {
     // `g(bogus=1)` — callee `g` does not declare a keyword named
     // `bogus`. Post-impl: suggestion = "remove or rename — the
@@ -165,7 +165,7 @@ fn s0052b_03_keyword_arg_mismatch_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_04_missing_argument_carries_suggestion() {
     // `g()` where `g(x: i64, y: i64)` — missing required arg.
     // Post-impl: suggestion = "add the missing argument at the call
@@ -178,7 +178,7 @@ fn s0052b_04_missing_argument_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_05_type_mismatch_carries_suggestion() {
     // `let x: i64 = "hello"` — str→i64. Post-impl: suggestion =
     // "change the expression type or add `: <expected>` annotation"
@@ -191,7 +191,7 @@ fn s0052b_05_type_mismatch_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_06_non_exhaustive_match_carries_suggestion() {
     // `match` on i64 with only one case + no wildcard. Post-impl:
     // suggestion = "add the missing cases or a wildcard `_` arm"
@@ -204,7 +204,7 @@ fn s0052b_06_non_exhaustive_match_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_07_implicit_truthiness_carries_suggestion() {
     // `if x:` where `x: i64` — §2.5 canonical case. Post-impl:
     // suggestion = "change to `if x != 0:` (use `.is_some()` for
@@ -217,7 +217,7 @@ fn s0052b_07_implicit_truthiness_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_08_mutable_default_carries_suggestion() {
     // `fn f(xs: list[i64] = [])` — mutable default forbidden.
     // Post-impl: suggestion = "use `None` as the default and assign
@@ -230,7 +230,7 @@ fn s0052b_08_mutable_default_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_09_ambiguous_type_carries_suggestion() {
     // `let x = []` — empty list with no inferable element type.
     // Post-impl: suggestion = "add an explicit type annotation,
@@ -243,7 +243,7 @@ fn s0052b_09_ambiguous_type_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_10_duplicate_field_carries_suggestion() {
     // Record literal with two `a` fields. Post-impl: suggestion =
     // "remove the duplicate field; record literals require unique
@@ -262,7 +262,7 @@ fn s0052b_10_duplicate_field_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_11_not_callable_carries_suggestion() {
     // `let n: i64 = 1; let r = n()` — calling an Int. Post-impl:
     // suggestion = "only function types are callable; verify the
@@ -275,7 +275,7 @@ fn s0052b_11_not_callable_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_12_not_indexable_carries_suggestion() {
     // `let n: i64 = 1; let r = n[0]` — indexing an Int. Post-impl:
     // suggestion = "use a list / dict / tuple / str — primitive
@@ -288,7 +288,7 @@ fn s0052b_12_not_indexable_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_13_not_iterable_carries_suggestion() {
     // `for x in 1:` — iterating an Int. Post-impl: suggestion =
     // "use a list / dict / range / str — primitives cannot iterate"
@@ -301,7 +301,7 @@ fn s0052b_13_not_iterable_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_14_break_outside_loop_carries_suggestion() {
     // `break` at top-level of a fn body. Post-impl: suggestion =
     // "move the `break` inside a `for` or `while` loop body" per
@@ -314,7 +314,7 @@ fn s0052b_14_break_outside_loop_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_15_continue_outside_loop_carries_suggestion() {
     // `continue` at top-level of a fn body. Post-impl: suggestion =
     // "move the `continue` inside a `for` or `while` loop body" per
@@ -327,7 +327,7 @@ fn s0052b_15_continue_outside_loop_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_16_return_outside_fn_carries_suggestion() {
     // `return` at the module top-level (not inside a fn). Post-impl:
     // suggestion = "move the `return` inside a `fn` body" per §4.1.
@@ -341,7 +341,7 @@ fn s0052b_16_return_outside_fn_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_17_yield_outside_fn_carries_suggestion() {
     // `yield` at the module top-level. Post-impl: suggestion =
     // "move the `yield` inside a generator `fn` body" per §4.1.
@@ -350,7 +350,7 @@ fn s0052b_17_yield_outside_fn_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_18_not_hashable_carries_suggestion() {
     // `{1.5: 0}` — f64 dict key forbidden per ADR-0050d Decision 7A.
     // Post-impl: suggestion = "f64 keys are forbidden (NaN != NaN);
@@ -364,7 +364,7 @@ fn s0052b_18_not_hashable_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_19_dict_spread_not_supported_carries_suggestion() {
     // `{**other}` — dict-spread is Phase G; Phase F.3 rejects.
     // Post-impl: suggestion = "dict-merge is Phase G; build the
@@ -378,7 +378,7 @@ fn s0052b_19_dict_spread_not_supported_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_20_use_of_dropped_feature_carries_suggestion() {
     // Use of a constitution-dropped form. Post-impl: suggestion =
     // "this Python feature is not part of Cobrust — see the language
@@ -402,7 +402,7 @@ fn s0052b_20_use_of_dropped_feature_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_21_occurs_check_carries_suggestion() {
     // Recursive inference: `let f = fn(x): return f(x)` — no annot.
     // Post-impl: suggestion = "add a type annotation — recursive
@@ -485,7 +485,7 @@ fn assert_mir_suggestion_some(name: &str, err: &MirError) {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_22_use_after_move_mir_carries_suggestion() {
     // bb0: _0 = move _1; _2 = move _1 → UseAfterMove.
     // Post-impl: suggestion = "change to `&s` to borrow without
@@ -523,7 +523,7 @@ fn s0052b_22_use_after_move_mir_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_23_conflicting_mut_borrow_mir_carries_suggestion() {
     // bb0: _r1 = &mut _x; _r2 = &mut _x → ConflictingMutBorrow.
     // Post-impl: suggestion = "only one mutable borrow can be
@@ -561,7 +561,7 @@ fn s0052b_23_conflicting_mut_borrow_mir_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_24_shared_mut_overlap_mir_carries_suggestion() {
     // bb0: _r1 = &_x (shared); _r2 = &mut _x (mut) → SharedMutOverlap.
     // Post-impl: suggestion = "cannot borrow mutably while a shared
@@ -599,7 +599,7 @@ fn s0052b_24_shared_mut_overlap_mir_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_25_use_after_drop_mir_carries_suggestion() {
     // Construct a body that moves a local then reads it; we use the
     // same operand pattern as UseAfterMove but the test labels it
@@ -642,7 +642,7 @@ fn s0052b_25_use_after_drop_mir_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_26_non_exhaustive_switch_mir_carries_suggestion() {
     // Construct a switch terminator with neither matching case nor
     // an otherwise block. Post-impl: suggestion = "add a wildcard
@@ -690,7 +690,7 @@ fn s0052b_26_non_exhaustive_switch_mir_carries_suggestion() {
 // =========================================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_27_unknown_name_dynamic_drop_static_suggestion() {
     // The suggestion field is the static text per §3.5; DEV's chosen
     // wording starts with "declare with `let " and ends with
@@ -716,7 +716,7 @@ fn s0052b_27_unknown_name_dynamic_drop_static_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_28_unknown_name_primary_line_keeps_name() {
     // Per ADR-0052b §3.5 + §10: the dynamic-format drop is only in
     // the SUGGESTION text. The PRIMARY diagnostic line still carries
@@ -738,7 +738,7 @@ fn s0052b_28_unknown_name_primary_line_keeps_name() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_29_unknown_name_static_text_no_format_args() {
     // Reverse property: across two different undeclared names
     // (`alpha` and `beta`), the SUGGESTION text must be IDENTICAL
@@ -801,7 +801,7 @@ fn extract_suggestion_text(dbg: &str) -> Option<String> {
 // =========================================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_30_cross_adr_borrow_of_non_place_suggestion() {
     // Per ADR-0052a Wave-1: `TypeError::BorrowOfNonPlace { span,
     // suggestion: Option<&'static str> }`. The variant is reserved
@@ -832,7 +832,7 @@ fn s0052b_30_cross_adr_borrow_of_non_place_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_31_cross_adr_unknown_method_suggestion() {
     // Per ADR-0052d-prereq §"New error variant" + ADR-0052b §12:
     // `TypeError::UnknownMethod { type_name, method_name, span,
@@ -884,7 +884,7 @@ fn s0052b_31_cross_adr_unknown_method_suggestion() {
 // =========================================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_32_row_conflict_no_suggestion_allowed() {
     // RowConflict is class-N per §4.1 (no static fix — depends on
     // intent). The variant MAY carry `suggestion: None`; the test
@@ -905,6 +905,7 @@ fn s0052b_32_row_conflict_no_suggestion_allowed() {
         ty1: Ty::Int,
         ty2: Ty::Str,
         span,
+        suggestion: None,
     };
     let dbg = format!("{err:?}");
     // The Debug-print must mention `suggestion` (as a field), regardless
@@ -917,7 +918,7 @@ fn s0052b_32_row_conflict_no_suggestion_allowed() {
 }
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn s0052b_33_multiple_aggregate_no_suggestion_at_top_level() {
     // `TypeError::Multiple(Vec<TypeError>)` is class-N. The
     // renderer delegates to the first child per
@@ -933,6 +934,7 @@ fn s0052b_33_multiple_aggregate_no_suggestion_at_top_level() {
     let child = TypeError::ImplicitTruthiness {
         actual: Ty::Int,
         span,
+        suggestion: Some("change to `if x != 0:` (use `.is_some()` for Option)"),
     };
     let err = TypeError::Multiple(vec![child]);
     let dbg = format!("{err:?}");
