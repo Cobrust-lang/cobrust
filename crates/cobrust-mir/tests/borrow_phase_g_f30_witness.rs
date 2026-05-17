@@ -52,6 +52,7 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::needless_lifetimes)]
 #![allow(clippy::uninlined_format_args)]
+#![allow(clippy::collapsible_match)]
 
 use cobrust_frontend::{parse_str, span::FileId};
 use cobrust_hir::{Session, lower as hir_lower};
@@ -65,6 +66,28 @@ use cobrust_types::check;
 /// from the borrowed-read path.
 const STR_CLONE_SYMBOL: &str = "__cobrust_str_clone";
 
+/// ADR-0052a Wave-1 DEV v3 post-impl wiring (TEST author pattern
+/// error correction): the f30wit_* tests originally fed source-text
+/// referencing PRELUDE names (`input`, `str_len`, `str_at`,
+/// `print_no_nl`, `str_ord`, `print_int`, `print`) directly into
+/// `lower_to_mir`, which does NOT prepend PRELUDE stubs. The HIR
+/// lower stage rejected with `UnknownName` before the F30 witness
+/// could observe the borrow lowering. DEV adds this BORROW_STUBS
+/// const matching the well_typed sibling so the tests reach the
+/// borrow-lowering observation site.
+const BORROW_STUBS: &str = concat!(
+    "fn print(s: str) -> i64:\n    return 0\n",
+    "fn print_int(n: i64) -> i64:\n    return 0\n",
+    "fn print_no_nl(s: str) -> i64:\n    return 0\n",
+    "fn input(prompt: str) -> str:\n    return \"\"\n",
+    "fn str_len(s: str) -> i64:\n    return 0\n",
+    "fn str_at(s: str, i: i64) -> str:\n    return \"\"\n",
+    "fn str_ord(s: str) -> i64:\n    return 0\n",
+    "fn list_new(capacity: i64) -> list[i64]:\n    let xs: list[i64] = []\n    return xs\n",
+    "fn list_get(lst: list[i64], i: i64) -> i64:\n    return 0\n",
+    "fn list_set(lst: list[i64], i: i64, v: i64) -> i64:\n    return 0\n",
+);
+
 /// Lower source through frontend → HIR → types → MIR.
 ///
 /// Returns `Err(_)` if any stage rejects the program; this matters
@@ -76,7 +99,9 @@ const STR_CLONE_SYMBOL: &str = "__cobrust_str_clone";
 ///    error on the borrowed-read path. Counts as a (b) violation; the
 ///    test panics with the diagnostic.
 fn lower_to_mir(src: &str) -> Result<MirModule, String> {
-    let module = parse_str(src, FileId::SYNTHETIC).map_err(|e| format!("parse error: {e:?}"))?;
+    let combined = format!("{BORROW_STUBS}{src}");
+    let module =
+        parse_str(&combined, FileId::SYNTHETIC).map_err(|e| format!("parse error: {e:?}"))?;
     let mut sess = Session::new();
     let hir = hir_lower(&module, &mut sess).map_err(|e| format!("hir lower error: {e:?}"))?;
     let typed = check(&hir).map_err(|e| format!("type check error: {e:?}"))?;
@@ -166,7 +191,6 @@ fn assert_witness_clean(name: &str, src: &str) {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; F30 cascade addendum binds at spike-commit"]
 fn f30wit_01_lc02_reverse_string_no_clone_no_uaf() {
     // F30 §5 rows 1-2 witness. Asserts (a) no __cobrust_str_clone
     // appears (witness: clone-shim retirement) AND (b) UseAfterMove
@@ -182,7 +206,6 @@ fn f30wit_01_lc02_reverse_string_no_clone_no_uaf() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; F30 cascade addendum binds at spike-commit"]
 fn f30wit_02_lc13_roman_no_clone_no_uaf() {
     // F30 §5 rows 3-4 witness. LC-13 pattern: str_len + str_at on
     // borrow form.
@@ -198,7 +221,6 @@ fn f30wit_02_lc13_roman_no_clone_no_uaf() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; F30 cascade addendum binds at spike-commit"]
 fn f30wit_03_lc20_valid_parens_no_clone_no_uaf() {
     // F30 §5 rows 5-6 witness. LC-20 pattern: str_len + str_at on
     // borrow form, deeply nested if/elif body.
@@ -216,7 +238,6 @@ fn f30wit_03_lc20_valid_parens_no_clone_no_uaf() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; F30 cascade addendum binds at spike-commit"]
 fn f30wit_04_let_rebind_synthetic_no_clone_no_uaf() {
     // Synthetic F30 witness: let-rebind shortcut + 3 reads through
     // the rebound borrow. The rebind itself must lower as a

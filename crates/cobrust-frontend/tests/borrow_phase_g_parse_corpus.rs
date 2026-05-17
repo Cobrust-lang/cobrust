@@ -67,7 +67,6 @@ fn assert_rejects(name: &str, src: &str) {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn bg0052a_p01_amp_ident_in_call_arg() {
     // `&s` as a function-call argument is the canonical Wave-1 form.
     let src = "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    return n\n";
@@ -75,7 +74,6 @@ fn bg0052a_p01_amp_ident_in_call_arg() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn bg0052a_p02_amp_ident_in_let_rebind() {
     // `let s = &s` is the let-rebind shortcut per ADR-0052a §4.4.
     let src = "fn main() -> i64:\n    let s = input(\"\")\n    let s = &s\n    return str_len(s)\n";
@@ -83,7 +81,6 @@ fn bg0052a_p02_amp_ident_in_let_rebind() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&` on field-access"]
 fn bg0052a_p03_amp_field_access() {
     // `&p.0` — borrow of a tuple-field projection. One of the three
     // Wave-1 production paths per §8.
@@ -93,7 +90,6 @@ fn bg0052a_p03_amp_field_access() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&` on indexing"]
 fn bg0052a_p04_amp_indexed_list() {
     // `&xs[0]` — borrow of an indexed list element. One of the three
     // Wave-1 production paths per §8.
@@ -102,7 +98,6 @@ fn bg0052a_p04_amp_indexed_list() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn bg0052a_p05_amp_parens_ident() {
     // `&(s)` — parenthesised identifier; ADR-0052a §3 implies parens
     // wrap any single sub-expression that the borrow targets.
@@ -112,7 +107,6 @@ fn bg0052a_p05_amp_parens_ident() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn bg0052a_p06_amp_ident_multiple_in_one_expr() {
     // Multiple `&s` reads in a single expression — the parser must
     // accept independent occurrences.
@@ -136,7 +130,6 @@ fn bg0052a_p06_amp_ident_multiple_in_one_expr() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser rejects `&\"literal\"`"]
 fn bg0052a_r01_amp_string_literal_rejected() {
     // `&"literal"` — literal-borrow is deferred per ADR-0052a §8
     // Wave-1 cap. Wave-1 only borrows `Name` and field-access /
@@ -146,7 +139,6 @@ fn bg0052a_r01_amp_string_literal_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser rejects `&123`"]
 fn bg0052a_r02_amp_int_literal_rejected() {
     // `&123` — int-literal-borrow rejected by the same §8 Wave-1 cap.
     let src = "fn main() -> i64:\n    let r = &123\n    return r\n";
@@ -154,7 +146,6 @@ fn bg0052a_r02_amp_int_literal_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser rejects `&[1,2,3]`"]
 fn bg0052a_r03_amp_list_literal_rejected() {
     // `&[1, 2, 3]` — list-literal-borrow rejected by §8 Wave-1 cap;
     // composite-literal borrows are not in scope.
@@ -163,7 +154,6 @@ fn bg0052a_r03_amp_list_literal_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser rejects `&mut s`"]
 fn bg0052a_r04_amp_mut_rejected() {
     // `&mut s` — mutable borrow deferred to Phase H per ADR-0052a §12.
     // Wave-1 is shared-borrow-only.
@@ -173,7 +163,6 @@ fn bg0052a_r04_amp_mut_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser rejects double-`&`"]
 fn bg0052a_r05_amp_amp_double_borrow_rejected() {
     // `&&s` — double-borrow rejected by §8 Wave-1 cap; nested borrow
     // surfaces in Phase H if it surfaces at all.
@@ -187,7 +176,6 @@ fn bg0052a_r05_amp_amp_double_borrow_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser rejects bare-`&` operand"]
 fn bg0052a_r06_amp_no_operand_rejected() {
     // `&\n` — unary `&` with no operand. Must be a parse error.
     let src = "fn main() -> i64:\n    let s = input(\"\")\n    let r = &\n    return str_len(s)\n";
@@ -195,7 +183,6 @@ fn bg0052a_r06_amp_no_operand_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser rejects `&` on call-result"]
 fn bg0052a_r07_amp_call_result_rejected() {
     // `&input("")` — borrow of a call expression. Wave-1 §8 limits
     // borrow to `Name` / `Name.field` / `Name[idx]`. Call-results
@@ -205,7 +192,6 @@ fn bg0052a_r07_amp_call_result_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser rejects `&` followed by stmt"]
 fn bg0052a_r08_amp_followed_by_block_rejected() {
     // `let r = & if cond: ...` — `&` followed by a statement-keyword
     // is a parse error in Wave-1.
@@ -214,7 +200,6 @@ fn bg0052a_r08_amp_followed_by_block_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser rejects `&` on f-string"]
 fn bg0052a_r09_amp_fstring_rejected() {
     // `&f"hello"` — borrow of an f-string literal. Same §8 cap as
     // `&"literal"`; f-strings are literal-shaped expressions.

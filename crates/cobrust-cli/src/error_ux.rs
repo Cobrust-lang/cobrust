@@ -754,6 +754,26 @@ impl From<TypeError> for UserError {
                 }
                 ("multiple type errors".to_owned(), None, 1, 0)
             }
+            // ADR-0052a Wave-1 §6 — borrow-of-non-place. The parser
+            // already enforces the §8 Wave-1 cap at parse time; this
+            // arm is forward-compat for future shapes admitted by the
+            // parser but rejected by the type checker (e.g. record-
+            // field-of-arith borrows in a future sub-ADR).
+            E::BorrowOfNonPlace { span, suggestion } => {
+                let (line, col) = span_to_line_col(span);
+                (
+                    "cannot borrow this expression".to_owned(),
+                    suggestion.map(|s| s.to_owned()).or_else(|| {
+                        Some(
+                            "borrow operand must be `Name`, `Name.field`, or `Name[idx]` \
+                             (ADR-0052a Wave-1 §8 cap)"
+                                .to_owned(),
+                        )
+                    }),
+                    line,
+                    col,
+                )
+            }
         };
         Self::Type {
             file: PathBuf::from("<source>"),
@@ -777,7 +797,16 @@ impl From<MirError> for UserError {
         let (msg, hint, span) = match &e {
             M::UseAfterMove { local, span } => (
                 format!("use of moved value `_{local}` after it was moved"),
-                Some("each value can only be used once after being moved".to_owned()),
+                // ADR-0052a Wave-1 §7 + §11 — surface `&s` as the
+                // canonical fix path. Hard-coded suggestion at the
+                // construction site per §"Direction B coordination"
+                // forward-compat (Direction B sub-ADR formalises the
+                // structured `suggestion` field shape).
+                Some(
+                    "change to `&s` to borrow without consuming \
+                     (ADR-0052a explicit shared borrow)"
+                        .to_owned(),
+                ),
                 *span,
             ),
             M::UseAfterDrop { local, span } => (

@@ -70,6 +70,12 @@ impl Subst {
             }),
             Ty::Adt(id, args) => Ty::Adt(*id, args.iter().map(|t| self.apply(t)).collect()),
             Ty::Alias(id, args) => Ty::Alias(*id, args.iter().map(|t| self.apply(t)).collect()),
+            // ADR-0052a Wave-1 — substitution walks into `&T` so an
+            // inner `Var` resolves through the surrounding `Ref` (e.g.
+            // `Ref(?0)` with `?0 := Str` becomes `Ref(Str)`). This is
+            // a structural walk, NOT a transparency rule — `Ref(T)`
+            // and `T` remain distinct types per §3 + §13.
+            Ty::Ref(inner) => Ty::Ref(Box::new(self.apply(inner))),
             other => other.clone(),
         }
     }
@@ -130,6 +136,14 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
         }
         (Ty::List(a), Ty::List(b)) => unify(&a, &b, subst, span),
         (Ty::Set(a), Ty::Set(b)) => unify(&a, &b, subst, span),
+        // ADR-0052a Wave-1 — `&T1` and `&T2` unify pointwise on the
+        // inner types. This is structural unification (same shape as
+        // List/Set above), **NOT** transparency: `Ref(T)` does not
+        // unify with `T` (no `(Ref(a), b)`/`(b, Ref(a))` arm here —
+        // the v1+v2 cascade root per §13 "Design lesson 2026-05-17").
+        // The §3 Wave-1 transparency rule lives at `synth_call`
+        // argument-binding as a one-way coercion.
+        (Ty::Ref(a), Ty::Ref(b)) => unify(&a, &b, subst, span),
         (Ty::Dict(ak, av), Ty::Dict(bk, bv)) => {
             unify(&ak, &bk, subst, span)?;
             unify(&av, &bv, subst, span)

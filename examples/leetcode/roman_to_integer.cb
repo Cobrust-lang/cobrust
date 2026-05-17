@@ -28,12 +28,14 @@ fn roman_val(c: str) -> i64:
 
 fn main() -> i64:
     let s = input("")
-    let n = str_len(s)
+    # ADR-0052a Wave-1 §4.2 — `&s` borrow on both reads; loop body
+    # re-reads `&s` per iteration without consuming the local.
+    let n = str_len(&s)
     let result: i64 = 0
     let prev: i64 = 0
     let i: i64 = n - 1
     while i >= 0:
-        let c = str_at(s, i)
+        let c = str_at(&s, i)
         let v = roman_val(c)
         if v < prev:
             result = result - v
