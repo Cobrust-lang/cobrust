@@ -3,14 +3,16 @@ doc_kind: adr
 adr_id: 0052f
 parent_adr: 0052
 title: "Parser §8 cap relaxation — `&Call(Attr(...))` (method-form borrow)"
-status: proposed
+status: accepted
 date: 2026-05-17
-last_verified_commit: 4e05cbb
+last_verified_commit: 94e5544
+ratified_at: 94e5544
+ratified_on: 2026-05-17
 supersedes: []
 superseded_by: []
 relates_to: [adr:0052a, adr:0052d-prereq, adr:0052]
 discovered_by: findings/0052d-prereq-impl-blocker.md (Wave-2 prereq DEV cargo-test) + ADR-0052d-prereq §"Cascade enumeration" L320 `f30wit_method_03` deferral
-ratification_path: P9 Wave-2 round-2 sub-ADR review (ratifies on impl merge)
+ratification_path: P9 Wave-2 round-2 sub-ADR review; ratified on impl merge at 94e5544
 ---
 
 # ADR-0052f — Parser §8 cap relaxation for `&Call(Attr(...))` form
@@ -202,6 +204,18 @@ Per CLAUDE.md §2.5 audit-teammate rubric:
 
 - No HIR / types / MIR / codegen surface. The relaxation is a pure parser-side gate adjustment.
 - The §"Cascade enumeration" addendum methodology (per ADR-0052a §13, ADR-0052d-prereq §"Cascade enumeration") is structurally inapplicable here: the change is additive parser admission, not a flip of operand semantics. The F30 dry-run table in §7 + the cargo-test green at impl merge is the cascade evidence. If unexpected failures appear during DEV impl, classify per F30 SOP and append a `### Cascade enumeration (post-spike)` subsection before ratification.
+
+### Cascade enumeration (post-spike 2026-05-17 / SHA `94e5544`)
+
+**Empirical attestation**: 8/8 new `bg0052f_*` parse tests GREEN (5 well-typed accepts + 3 ill-typed rejects per §8.1). Parser cap relaxation works as specified.
+
+**Pre-existing test outcome**: `f30wit_method_03_borrow_precedence_binds_tighter_than_method_call` was deferred from 0052d-prereq with the expectation that 0052f parser-cap relaxation alone would unblock it. **Empirically incorrect**: the test program `let r: i64 = read_i64(&s.len())` parses post-0052f (✓), but the type-checker still rejects `&CallResult` as `BorrowOfNonPlace` because the method-call return value is a temporary, not an lvalue. The parser cap relaxation is a NECESSARY but not SUFFICIENT condition for full `&s.method()` use sites.
+
+**Disposition**: f30wit_method_03 **re-ignored** with updated message naming the type-check gap. ADR-0052f scope is correctly captured by §"Semantics" L46 ("else falls through to existing BorrowOfNonPlace") — the type-check piece is deliberately out of 0052f scope.
+
+**Follow-up**: Wave 2 round 2 needs a SECOND sub-ADR (provisionally `0052g`) for the type-check support of `&CallResult` as a borrowable expression, OR folded into 0052d-final method-call sugar impl. Decision deferred to round-2 close audit.
+
+**Cascade quantification vs main HEAD `4e05cbb`**: 128 failures at v3 baseline + 0 new failures on the relaxation path = ZERO non-0052f regression. 0052b/0052a/0052d-prereq honest-debt failures (~10 tests) unchanged.
 
 ## 12. Dispatch readiness
 
