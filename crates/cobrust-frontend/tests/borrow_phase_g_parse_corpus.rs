@@ -228,7 +228,8 @@ fn bg0052a_r09_amp_fstring_rejected() {
 fn bg0052f_p01_amp_method_call_no_args() {
     // `&s.len()` — the canonical Wave-2-rd2 witness (parses as
     // `Borrow(Call(Attr(s, "len"), []))` per ADR-0052 F-G.3 precedence).
-    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s.len())\n    return n\n";
+    let src =
+        "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s.len())\n    return n\n";
     assert_parses("bg0052f_p01", src);
 }
 
