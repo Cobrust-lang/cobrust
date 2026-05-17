@@ -52,6 +52,7 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::needless_lifetimes)]
 #![allow(clippy::uninlined_format_args)]
+#![allow(clippy::collapsible_match)]
 
 use cobrust_frontend::{parse_str, span::FileId};
 use cobrust_hir::{Session, lower as hir_lower};
@@ -99,7 +100,8 @@ const BORROW_STUBS: &str = concat!(
 ///    test panics with the diagnostic.
 fn lower_to_mir(src: &str) -> Result<MirModule, String> {
     let combined = format!("{BORROW_STUBS}{src}");
-    let module = parse_str(&combined, FileId::SYNTHETIC).map_err(|e| format!("parse error: {e:?}"))?;
+    let module =
+        parse_str(&combined, FileId::SYNTHETIC).map_err(|e| format!("parse error: {e:?}"))?;
     let mut sess = Session::new();
     let hir = hir_lower(&module, &mut sess).map_err(|e| format!("hir lower error: {e:?}"))?;
     let typed = check(&hir).map_err(|e| format!("type check error: {e:?}"))?;
