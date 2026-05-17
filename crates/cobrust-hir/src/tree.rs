@@ -348,6 +348,12 @@ pub enum ExprKind {
     },
     /// Form 29 — unary.
     Un { op: UnaryOp, operand: Box<Expr> },
+    /// ADR-0052a Wave-1 — `&expr` immutable shared borrow. Mirrors
+    /// the AST `ExprKind::Borrow` variant. Type checker synthesises
+    /// `Ty::Ref(inner_ty)` at this node (see check.rs); MIR lowering
+    /// emits `Operand::Copy` on the inner place (borrow.rs:114
+    /// `UseAfterMove` does not fire for borrowed reads).
+    Borrow(Box<Expr>),
     /// Form 30 — `await e`.
     Await(Box<Expr>),
     /// Form 30 — `yield e?`.

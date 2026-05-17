@@ -1107,6 +1107,11 @@ impl<'s> Lowerer<'s> {
                     operand: Box::new(inner),
                 }
             }
+            // ADR-0052a Wave-1 — `&expr` borrow lowering: 1:1 AST→HIR mirror.
+            ast::ExprKind::Borrow(inner) => {
+                let inner_h = self.lower_expr(inner)?;
+                h::ExprKind::Borrow(Box::new(inner_h))
+            }
             ast::ExprKind::Await(e) => h::ExprKind::Await(Box::new(self.lower_expr(e)?)),
             ast::ExprKind::Yield(opt) => {
                 let lowered = match opt {
@@ -1608,6 +1613,10 @@ fn walk_expr_for_captures(
         }
         h::ExprKind::Un { operand, .. } => {
             walk_expr_for_captures(operand, local_def_id_start, out, seen);
+        }
+        // ADR-0052a Wave-1 — `&inner` recurses into inner for capture tracking.
+        h::ExprKind::Borrow(inner) => {
+            walk_expr_for_captures(inner, local_def_id_start, out, seen);
         }
         h::ExprKind::Await(e) => walk_expr_for_captures(e, local_def_id_start, out, seen),
         h::ExprKind::Yield(opt) => {
