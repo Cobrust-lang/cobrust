@@ -76,9 +76,9 @@ pub use crate::manifest::{
     RouterSection, SourceSection, VerificationSection,
 };
 pub use crate::pipeline::{
-    AcceptAll, AcceptAllPerf, BehaviorVerifier, GateOutcome, GateOutcomes, PerfVerdict,
-    PerfVerifier, PyLibrary, TranslatedCrate, VerifierVerdict, translate, translate_with_verifier,
-    translate_with_verifiers,
+    AcceptAll, AcceptAllPerf, BehaviorVerifier, GateOutcome, GateOutcomes, OracleHarness,
+    OracleObservation, PerfVerdict, PerfVerifier, PyLibrary, TierVerifier, TranslatedCrate,
+    VerifierVerdict, translate, translate_with_verifier, translate_with_verifiers,
 };
 pub use crate::repair::{
     GateFailure, repair_translation, repair_translation_with_task, write_failure_report,
