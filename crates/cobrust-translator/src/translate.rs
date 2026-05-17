@@ -187,9 +187,36 @@ fn build_translation_prompt(unit: &FunctionUnit) -> String {
     s.push_str("\nDescription: ");
     s.push_str(&unit.spec.description);
     s.push_str("\nPy-compat tier: ");
-    s.push_str(&unit.spec.py_compat);
+    s.push_str(&tier_prompt_instruction(&unit.spec.py_compat));
     s.push('\n');
     s
+}
+
+/// ADR-0052c §6 tier-aware prompt instruction block. Renders the
+/// per-tier directive the L1 translation LLM consumes.
+///
+/// - `Strict` → bit-identity instruction.
+/// - `Numerical { rtol }` → `assert_allclose(rtol=...)` instruction.
+/// - `Semantic` → structural-match instruction.
+/// - `None` → no-gate disclosure.
+#[must_use]
+pub fn tier_prompt_instruction(tier: &crate::spec::PyCompatTier) -> String {
+    match tier {
+        crate::spec::PyCompatTier::Strict => "strict (output MUST be bit-identical to the \
+             CPython oracle on all exemplars; any divergence fails the gate)"
+            .to_string(),
+        crate::spec::PyCompatTier::Numerical { rtol } => format!(
+            "numerical(rtol={rtol}) (output MUST satisfy \
+             numpy.assert_allclose(rtol={rtol}) vs the oracle; small float drift OK)"
+        ),
+        crate::spec::PyCompatTier::Semantic => "semantic (output MUST match the oracle \
+             structurally; dict key order and error message text may differ provided the \
+             error kind matches)"
+            .to_string(),
+        crate::spec::PyCompatTier::None => "none (no L2 gate; emit the most faithful \
+             translation you can)"
+            .to_string(),
+    }
 }
 
 /// Workspace-context bundle the rich prompt builder consumes, per
@@ -346,8 +373,8 @@ pub fn build_translation_prompt_rich(unit: &FunctionUnit, ctx: &WorkspaceContext
     );
     let desc = &unit.spec.description;
     writeln!(s, "5. Spec description (from L0): {desc}").expect("write to String never fails");
-    let tier = &unit.spec.py_compat;
-    writeln!(s, "6. Py-compat tier: {tier}").expect("write to String never fails");
+    let tier_block = tier_prompt_instruction(&unit.spec.py_compat);
+    writeln!(s, "6. Py-compat tier: {tier_block}").expect("write to String never fails");
     let sig = &unit.spec.signature;
     writeln!(s, "7. Spec signature (Python): {sig}").expect("write to String never fails");
 

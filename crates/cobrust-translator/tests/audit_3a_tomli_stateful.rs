@@ -282,7 +282,10 @@ fn parse_int_function_unit() -> cobrust_translator::translate::FunctionUnit {
         qualname: "tomli_loads._parse_int".to_string(),
         public: false,
         signature: "_parse_int(state: _State) -> int".to_string(),
-        py_compat: "strict".to_string(),
+        // ADR-0052c §13 cascade addendum: String → PyCompatTier field
+        // type migration. The audit-3a stateful constructor switches to
+        // the typed enum form (was: `"strict".to_string()`).
+        py_compat: cobrust_translator::PyCompatTier::Strict,
         description: "Parse decimal int with optional + or - sign.".to_string(),
         exemplars: Vec::new(),
         errors_on: Vec::new(),
