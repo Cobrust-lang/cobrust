@@ -464,6 +464,8 @@ fn norm_expr(e: &Expr) -> Expr {
             op,
             operand: Box::new(norm_expr(&operand)),
         },
+        // ADR-0052a Wave-1 — `&expr` borrow round-trip.
+        ast::ExprKind::Borrow(inner) => ast::ExprKind::Borrow(Box::new(norm_expr(&inner))),
         ast::ExprKind::Await(e) => ast::ExprKind::Await(Box::new(norm_expr(&e))),
         ast::ExprKind::Yield(None) => ast::ExprKind::Yield(None),
         ast::ExprKind::Yield(Some(e)) => ast::ExprKind::Yield(Some(Box::new(norm_expr(&e)))),

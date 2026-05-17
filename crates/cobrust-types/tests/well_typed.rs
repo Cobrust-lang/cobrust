@@ -2217,6 +2217,35 @@ fn w195_list_len_of_read_file_lines_result() {
 // ADR-0052a §6–§9). DEV removes the `#[ignore]` markers and the suite
 // turns green.
 //
+// DEV v3 post-impl wiring (TEST author pattern error correction):
+// the w0052a_* tests originally called `must_accept` directly with
+// bodies that reference PRELUDE names (`input`, `str_len`, `str_at`,
+// `list_len`, etc.). `must_accept` does NOT prepend PRELUDE stubs;
+// the test framework rejects with `UnknownName` before reaching the
+// borrow surface. DEV adds `must_accept_with_borrow_stubs` below
+// (mirrors `must_accept_with_str_stdlib_stubs` / LIST_STR_STUBS
+// idiom) and the 30 w0052a tests use it.
+const BORROW_STUBS: &str = concat!(
+    "fn print(s: str) -> i64:\n    return 0\n",
+    "fn print_int(n: i64) -> i64:\n    return 0\n",
+    "fn print_no_nl(s: str) -> i64:\n    return 0\n",
+    "fn input(prompt: str) -> str:\n    return \"\"\n",
+    "fn str_len(s: str) -> i64:\n    return 0\n",
+    "fn str_at(s: str, i: i64) -> str:\n    return \"\"\n",
+    "fn str_ord(s: str) -> i64:\n    return 0\n",
+    "fn str_eq(a: str, b: str) -> i64:\n    return 0\n",
+    "fn str_eq_lit(s: str, lit: str) -> i64:\n    return 0\n",
+    "fn list_len(lst: list[i64]) -> i64:\n    return 0\n",
+    "fn list_new(capacity: i64) -> list[i64]:\n    let xs: list[i64] = []\n    return xs\n",
+    "fn list_get(lst: list[i64], i: i64) -> i64:\n    return 0\n",
+    "fn list_set(lst: list[i64], i: i64, v: i64) -> i64:\n    return 0\n",
+);
+
+fn must_accept_with_borrow_stubs(name: &str, body: &str) {
+    let src = format!("{BORROW_STUBS}{body}");
+    must_accept(name, &src);
+}
+//
 // Coverage map (mirrors ADR-0052a §4 + §10.1 TEST corpus categories):
 // - 4.1 LC-02 reverse_string pattern              → w0052a_01..02
 // - 4.2 LC-13 roman_to_integer pattern            → w0052a_03..04
@@ -2237,194 +2266,176 @@ fn w195_list_len_of_read_file_lines_result() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_01_lc02_reverse_string_pattern() {
     // ADR-0052a §4.1 LC-02 canonical trigger. `let n = str_len(&s)`
     // followed by `let c = str_at(&s, i)` must type-check clean under
     // Wave-1 transparency rule (PRELUDE Str helpers accept both `s: Str`
     // and `&s: &Str` for read-only positions).
-    must_accept(
+    must_accept_with_borrow_stubs(
         "lc02-reverse-string-borrow",
         "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let i: i64 = n - 1\n    while i >= 0:\n        let c = str_at(&s, i)\n        i = i - 1\n    return 0\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_02_lc02_reverse_string_three_reads() {
     // LC-02 variant with three borrow reads on the same Str.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "lc02-reverse-string-three-reads",
         "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let m = str_len(&s)\n    let p = str_len(&s)\n    return (n + m) + p\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_03_lc13_roman_to_integer_pattern() {
     // ADR-0052a §4.2 LC-13 pattern. `&s` in str_len + str_at sequence.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "lc13-roman-to-integer-borrow",
         "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let i: i64 = 0\n    while i < n:\n        let c = str_at(&s, i)\n        i = i + 1\n    return 0\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_04_lc13_with_ord_extract() {
     // LC-13 variant: `&s` read in str_at followed by str_ord on the
     // sub-string borrow (Wave-1 transparency: `&c` and `c` are
     // interchangeable for str_ord).
-    must_accept(
+    must_accept_with_borrow_stubs(
         "lc13-with-ord",
         "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let c = str_at(&s, 0)\n    let o = str_ord(&c)\n    return o + n\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_05_lc20_valid_parentheses_pattern() {
     // ADR-0052a §4.3 LC-20 pattern. While-bound iteration with `&s`.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "lc20-valid-parens-borrow",
         "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let i: i64 = 0\n    while i < n:\n        let c = str_at(&s, i)\n        i = i + 1\n    return 0\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_06_lc20_nested_str_eq_borrow() {
     // LC-20 variant: `&c` used in str_eq comparison; multiple borrowed
     // reads off the same str within an if-else chain.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "lc20-nested-streq",
         "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let c = str_at(&s, 0)\n    if str_eq_lit(&c, \"(\"):\n        return 1\n    return 0\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_07_let_rebind_shortcut_basic() {
     // ADR-0052a §4.4 let-rebind shortcut. `let s = &s` creates a borrow
     // that shadows the outer binding for the new scope.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "let-rebind-basic",
         "fn main() -> i64:\n    let s = input(\"\")\n    let s = &s\n    let n = str_len(s)\n    return n\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_08_let_rebind_then_multi_read() {
     // Let-rebind followed by multiple reads via the rebound (borrowed)
     // binding; works because the rebound `s` is `&Str`.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "let-rebind-multi-read",
         "fn main() -> i64:\n    let s = input(\"\")\n    let s = &s\n    let n = str_len(s)\n    let m = str_len(s)\n    return n + m\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_09_let_rebind_with_typed_function_arg() {
     // Let-rebind shortcut inside a function with typed parameter.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "let-rebind-typed-arg",
         "fn count(s: str) -> i64:\n    let s = &s\n    let n = str_len(s)\n    let m = str_len(s)\n    return n + m\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_10_function_arg_pass_by_borrow() {
     // ADR-0052a §4.5 fn-arg pass-by-borrow. PRELUDE printer takes `s: str`;
     // `print(&label)` works under transparency rule.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "fn-arg-borrow-print",
         "fn main() -> i64:\n    let label = input(\"\")\n    let _ = print(&label)\n    let _ = print(&label)\n    return 0\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_11_function_arg_borrow_user_fn() {
     // User-defined fn accepting `s: str`; caller passes `&label`.
     // Transparency rule makes `&str` compatible with `str` parameter.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "fn-arg-borrow-user-fn",
         "fn echo(s: str) -> i64:\n    return str_len(s)\nfn main() -> i64:\n    let label = input(\"\")\n    let a = echo(&label)\n    let b = echo(&label)\n    return a + b\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_12_comprehension_predicate_borrow() {
     // ADR-0052a §4.6 comprehension predicate with `&line`. The
     // comprehension variable `line` would be moved by str_len; `&line`
     // borrows for read-only use.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "comprehension-predicate-borrow",
         "fn main() -> i64:\n    let lines: list[str] = [\"a\", \"bb\"]\n    let xs: list[i64] = [str_len(&line) for line in lines]\n    return list_len(xs)\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_13_comprehension_with_borrow_in_predicate() {
     // Comprehension with `if` predicate using `&line` for str_len > 0.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "comprehension-if-borrow",
         "fn main() -> i64:\n    let lines: list[str] = [\"\", \"x\", \"ab\"]\n    let xs: list[i64] = [str_len(&line) for line in lines if str_len(&line) > 0]\n    return list_len(xs)\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_14_conditional_borrow_if_branch() {
     // ADR-0052a §4.7 conditional borrow. `if cond: f(&s)` lowers the
     // borrow only in the taken branch; the else branch leaves `s`
     // owned.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "conditional-borrow-if",
         "fn main() -> i64:\n    let cond: bool = True\n    let s = input(\"\")\n    let v: i64 = 0\n    if cond:\n        v = str_len(&s)\n    return v\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_15_conditional_borrow_else_branch() {
     // Conditional borrow used in the else-branch; analogous to §4.7
     // but routed through the else path.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "conditional-borrow-else",
         "fn main() -> i64:\n    let cond: bool = False\n    let s = input(\"\")\n    let v: i64 = 0\n    if cond:\n        v = 0\n    else:\n        v = str_len(&s)\n    return v\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_16_borrow_chained_through_let() {
     // ADR-0052a §4.8 borrow chained through let-statements. Multiple
     // `&s` reads through let bindings.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "borrow-chained-lets",
         "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let m = str_ord(&s)\n    let p = n + m\n    return p\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_17_borrow_in_arithmetic_expression() {
     // Borrowed read inside a more complex arithmetic expression. The
     // arithmetic result is i64; the borrow is transient.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "borrow-in-arith",
         "fn main() -> i64:\n    let s = input(\"\")\n    let total = str_len(&s) + str_len(&s)\n    return total\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&` on field-access"]
 fn w0052a_18_borrow_field_access() {
     // ADR-0052a §3 + §8 — `&ident.field` is one of the three Wave-1
     // production paths. Wave-1 transparency keeps this exposable to
@@ -2433,138 +2444,126 @@ fn w0052a_18_borrow_field_access() {
     // NOTE: tuple-field syntax `.0` is the Cobrust convention for
     // accessing positional tuple fields (see ADR-0050a / round-trip
     // tests). The borrow form `&p.0` must type-check clean.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "borrow-field-access-tuple",
         "fn main() -> i64:\n    let p = (\"left\", \"right\")\n    let n = str_len(&p.0)\n    return n\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&` on field-access"]
 fn w0052a_19_borrow_field_access_then_arith() {
     // Borrow of tuple-field used in arithmetic.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "borrow-field-then-arith",
         "fn main() -> i64:\n    let p = (\"a\", \"bb\")\n    let total = str_len(&p.0) + str_len(&p.1)\n    return total\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&` on indexing"]
 fn w0052a_20_borrow_indexed_list_str() {
     // ADR-0052a §3 + §8 — `&ident[idx]` is one of the three Wave-1
     // production paths. Index into list[str], take borrow.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "borrow-indexed-list-str",
         "fn main() -> i64:\n    let xs: list[str] = [\"alpha\", \"beta\"]\n    let n = str_len(&xs[0])\n    return n\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&` on indexing"]
 fn w0052a_21_borrow_indexed_in_loop() {
     // Borrow of indexed list[str] element inside a length-bound loop.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "borrow-indexed-in-loop",
         "fn main() -> i64:\n    let xs: list[str] = [\"a\", \"bb\", \"ccc\"]\n    let n: i64 = list_len(xs)\n    let i: i64 = 0\n    let total: i64 = 0\n    while i < n:\n        total = total + str_len(&xs[i])\n        i = i + 1\n    return total\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_22_let_rebind_chain_basic() {
     // Two-step let-rebind chain: `let r = &s; let r2 = r;`. Both `r`
     // and `r2` are `&Str`; transparency rule allows PRELUDE call on
     // both.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "let-rebind-chain-2",
         "fn main() -> i64:\n    let s = input(\"\")\n    let r = &s\n    let r2 = r\n    let n = str_len(r2)\n    return n\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_23_let_rebind_chain_three_levels() {
     // Three-step let-rebind chain.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "let-rebind-chain-3",
         "fn main() -> i64:\n    let s = input(\"\")\n    let r = &s\n    let r2 = r\n    let r3 = r2\n    let n = str_len(r3)\n    return n\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_24_mixed_borrowed_and_owned_reads() {
     // First read is borrowed (`&s`); LAST read consumes the owned
     // local. Both reads must succeed; this exercises the Wave-1
     // semantics that borrows don't conflict with a subsequent move.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "mixed-borrow-then-move",
         "fn consume(s: str) -> i64:\n    return str_len(s)\nfn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let m = consume(s)\n    return n + m\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_25_two_borrows_then_owned_read() {
     // Two `&s` reads, then a single owned consume. Three reads total
     // on the same Str local; only the last consumes.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "two-borrows-then-consume",
         "fn consume(s: str) -> i64:\n    return str_len(s)\nfn main() -> i64:\n    let s = input(\"\")\n    let a = str_len(&s)\n    let b = str_len(&s)\n    let c = consume(s)\n    return (a + b) + c\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_26_sequenced_borrows_in_loop() {
     // Borrowed reads sequenced inside a loop body; the binding `s` is
     // never moved, so loop iterations work uniformly.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "sequenced-borrows-loop",
         "fn main() -> i64:\n    let s = input(\"\")\n    let i: i64 = 0\n    let total: i64 = 0\n    while i < 3:\n        total = total + str_len(&s)\n        i = i + 1\n    return total\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_27_borrows_then_final_owned_move() {
     // Borrowed reads in a loop; final owned move after loop exits.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "loop-borrows-then-final-move",
         "fn consume(s: str) -> i64:\n    return str_len(s)\nfn main() -> i64:\n    let s = input(\"\")\n    let i: i64 = 0\n    while i < 2:\n        let _ = str_len(&s)\n        i = i + 1\n    let final = consume(s)\n    return final\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_28_nested_borrow_in_tuple_constructor() {
     // Borrowed reads used to build a fresh tuple of i64s. The tuple
     // construction site reads `&s` twice; `s` is never consumed.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "nested-borrow-in-tuple",
         "fn main() -> i64:\n    let s = input(\"\")\n    let t = (str_len(&s), str_len(&s))\n    return t.0 + t.1\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_29_parenthesised_borrow_on_ident() {
     // ADR-0052a §8 Wave-1 cap: `&(complex_expr)` without parens is a
     // parse error, but `&(ident)` with redundant parens is accepted.
     // This codifies the parenthesisation rule positively.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "parenthesised-borrow-ident",
         "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&(s))\n    return n\n",
     );
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&`"]
 fn w0052a_30_borrow_passed_to_user_fn_with_typed_arg() {
     // §4.5 corollary — multiple `&label` calls into a user-defined fn
     // that takes `s: str`; transparency rule keeps both calls valid.
-    must_accept(
+    must_accept_with_borrow_stubs(
         "user-fn-borrow-arg",
         "fn read_len(s: str) -> i64:\n    let n = str_len(&s)\n    return n\nfn main() -> i64:\n    let label = input(\"\")\n    let a = read_len(&label)\n    let b = read_len(&label)\n    return a + b\n",
     );

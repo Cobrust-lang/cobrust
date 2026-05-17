@@ -178,6 +178,64 @@ See `crates/cobrust-cli/tests/list_str_e2e.rs` for the end-to-end
 corpus and `crates/cobrust-stdlib/tests/list_str_drop_corpus.rs` for
 the C-ABI link-time tests.
 
+## Step 2.7a: explicit `&s` borrow (ADR-0052a Phase G, Wave-1)
+
+Per CLAUDE.md §2.5 (Direction A) and ADR-0052a §2, Cobrust ships
+explicit immutable shared-borrow syntax `&s` so the LLM-friendly
+fix path for the LC-100 multi-read pattern is **`&s`**, not
+`clone(s)`.
+
+The use case: reading a Str local twice today moves the Str on the
+first read and surfaces `MirError::UseAfterMove` on the second.
+The `&s` form constructs a shared borrow that the PRELUDE Str
+helpers accept transparently:
+
+```cobrust
+fn main() -> i64:
+    let s = input("")
+    # Multiple borrowed reads — `s` is never consumed.
+    let n = str_len(&s)
+    let i: i64 = n - 1
+    while i >= 0:
+        let c = str_at(&s, i)
+        print_no_nl(c)
+        i = i - 1
+    print("")
+    return 0
+```
+
+Wave-1 admits three borrow shapes (per ADR-0052a §8):
+- `&ident`            — `&s`
+- `&ident.field`      — `&p.field` (when tuple-field syntax lands)
+- `&ident[idx]`       — `&xs[0]`
+
+Parse-rejected (Wave-1 scope cap):
+- `&"literal"`        — literal-borrow deferred (future sub-ADR).
+- `&[1, 2, 3]`        — collection-literal borrow deferred.
+- `&call(...)`        — call-result borrow deferred.
+- `&&s`               — nested borrow deferred (Phase H).
+- `&mut s`            — mutable borrow deferred (Phase H).
+
+How the type checker handles this (ADR-0052a §3): `&s` synthesises
+type `&Str`. PRELUDE Str helpers (`str_len(s: str)`, `str_at(s: str,
+i: i64)`, etc.) accept `&Str` via a **one-way call-site coercion**
+— the type checker locally drops the `&` wrapper at the call-arg
+binding position. The coercion is unidirectional (`&Str → Str`,
+never `Str → &Str`) and scoped to call-arg only. Annotation slots,
+arithmetic, and `if`-conditions still reject `&T` ≠ `T` mismatches:
+
+```cobrust
+fn main() -> i64:
+    let s: str = "hi"
+    let n: i64 = &s        # rejected: TypeMismatch (annot is i64, &s is &Str)
+    let total = (&n) + (&s) # rejected: TypeMismatch (arithmetic)
+    return 0
+```
+
+Why `&` was chosen over `clone(s)`, `borrow(s)`, or `ref s` — see
+the cross-reference in `design-philosophy.md` §"Why `&s` not
+`clone(s)`".
+
 ## Step 2.8: string stdlib (M-F.3.5)
 
 Eleven PRELUDE fns make Cobrust usable for daily string-processing

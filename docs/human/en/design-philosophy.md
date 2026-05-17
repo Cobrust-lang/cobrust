@@ -52,6 +52,40 @@ Each decision pays a real cost. Examples:
 - We remove `is` because it creates a forest of beginner traps (`a is b` accidentally true within the small-int cache range), and 99% of legitimate uses can be replaced by `==` or an explicit `same_object(a, b)`
 - We remove async/sync coloring because it splits the ecosystem in half and forces every library to ship two implementations — structured concurrency is a better abstraction; a single runtime ends the coloring tax
 
+## Why `&s` not `clone(s)` (ADR-0052a Direction A binding)
+
+Constitution §2.5 binds the design to "the language LLM agents write
+correctly on the first try". The LC-100 multi-read pattern — read
+the same Str twice (e.g. `let n = str_len(s); let c = str_at(s, 0)`)
+— is the largest current LLM-friendliness deficit:
+
+- The compiler today (post-ADR-0050c) rejects the second read with
+  `UseAfterMove`, a real §2.5 compile-time signal.
+- Phase F.3 M-F.3.5 shipped a `clone(s)` PRELUDE builtin as the
+  mitigation. That fix path ratifies the wrong signal: the LLM
+  learns "wrap second read with `clone(s)`" which heap-allocates,
+  bloats the source corpus, and is not the canonical Rust-style
+  answer.
+- The right signal is **`&s`**: a zero-cost shared borrow that
+  matches the LLM's Rust-priors (`&str` is one of the most-trained
+  tokens in the corpus). Per CLAUDE.md §2.5 Direction A binding,
+  `&s` is the §2.5-honest closure of the LC-100 honest-debt.
+
+ADR-0052a Wave-1 ships `&s` as a unary prefix expression. The type
+checker accepts `str_len(&s)` and `str_at(&s, i)` via a **one-way
+call-site coercion** — local, unidirectional (`&Str → Str` only),
+scoped to call-arg binding only. `clone(s)` stays available for the
+explicit-copy use case but is no longer the canonical fix path
+stderr suggests; the new diagnostic says "use `&s` to borrow without
+consuming".
+
+Alternative glyphs considered and rejected (ADR-0052a §2):
+- `borrow(s)` PRELUDE form: lower LLM training-data overlap; longer.
+- Implicit borrow inference: violates §2.5 "compile-time-catch-errors"
+  rule — the LLM cannot decode an inference miss from stderr.
+- `ref s` keyword (Rust pattern position): conflicts with Cobrust's
+  let-rebinding shortcut.
+
 ## Further reading
 
 - [Architecture](architecture.md)

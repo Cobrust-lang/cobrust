@@ -167,6 +167,60 @@ M-F.3.2 的变化:
 端到端 corpus 见 `crates/cobrust-cli/tests/list_str_e2e.rs`,
 C-ABI 链接期测试见 `crates/cobrust-stdlib/tests/list_str_drop_corpus.rs`。
 
+## 第 2.7a 步:显式 `&s` 借用(ADR-0052a Phase G,Wave-1)
+
+根据 CLAUDE.md §2.5(Direction A)和 ADR-0052a §2,Cobrust 提供
+显式不可变共享借用语法 `&s`,使 LLM 在 LC-100 多次读取场景下的
+canonical fix 路径是 **`&s`** 而不是 `clone(s)`。
+
+适用场景:在今天的 Str 非 Copy 语义下,对一个 Str 局部变量读两次,
+第一次读取会 move 掉它,第二次读取会触发 `MirError::UseAfterMove`。
+`&s` 构造一个共享借用,PRELUDE Str 助手会在 call-site 透明接受它:
+
+```cobrust
+fn main() -> i64:
+    let s = input("")
+    # 多次借用读取 —— `s` 始终不会被消耗。
+    let n = str_len(&s)
+    let i: i64 = n - 1
+    while i >= 0:
+        let c = str_at(&s, i)
+        print_no_nl(c)
+        i = i - 1
+    print("")
+    return 0
+```
+
+Wave-1 接受的三种借用形状(参见 ADR-0052a §8):
+- `&ident`            —— `&s`
+- `&ident.field`      —— `&p.field`(待 tuple-field 语法落地后可用)
+- `&ident[idx]`       —— `&xs[0]`
+
+Parse 拒绝(Wave-1 cap 外):
+- `&"literal"`        —— literal-borrow 延后(未来 sub-ADR)。
+- `&[1, 2, 3]`        —— collection-literal 借用延后。
+- `&call(...)`        —— call-result 借用延后。
+- `&&s`               —— 嵌套借用延后(Phase H)。
+- `&mut s`            —— 可变借用延后(Phase H)。
+
+类型检查器如何处理(参见 ADR-0052a §3):`&s` 合成类型 `&Str`。
+PRELUDE Str 助手(`str_len(s: str)`、`str_at(s: str, i: i64)` 等)
+通过 **单向 call-site 强制转换** 接受 `&Str` —— 类型检查器在
+call-arg binding 位置局部地去掉 `&` 包装。这个 coercion 是
+单向的(`&Str → Str`,而不会反过来),且仅作用于 call-arg。
+类型标注位置、算术运算、`if` 条件仍然会拒绝 `&T` ≠ `T` 的不匹配:
+
+```cobrust
+fn main() -> i64:
+    let s: str = "hi"
+    let n: i64 = &s        # 拒绝:TypeMismatch(标注是 i64,&s 是 &Str)
+    let total = (&n) + (&s) # 拒绝:TypeMismatch(算术不接受透明)
+    return 0
+```
+
+`&` 为什么优于 `clone(s)`、`borrow(s)` 或 `ref s` —— 参见
+`design-philosophy.md` §"为何用 `&s` 而非 `clone(s)`"。
+
 ## 第 2.8 步：字符串标准库（M-F.3.5）
 
 十一个 PRELUDE 函数让 Cobrust 可以应付日常字符串处理 —— 日志解析、

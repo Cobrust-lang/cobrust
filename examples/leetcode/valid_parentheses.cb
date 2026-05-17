@@ -13,13 +13,15 @@
 
 fn main() -> i64:
     let s = input("")
-    let n = str_len(s)
+    # ADR-0052a Wave-1 §4.3 — `&s` borrow on both reads; loop body
+    # re-reads `&s` per iteration without consuming the local.
+    let n = str_len(&s)
     let stack = list_new(n)
     let top: i64 = 0
     let ok: i64 = 1
     let i: i64 = 0
     while i < n:
-        let c = str_at(s, i)
+        let c = str_at(&s, i)
         let o = str_ord(c)
         if o == 40:
             list_set(stack, top, 40)

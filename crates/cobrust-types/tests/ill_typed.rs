@@ -2000,7 +2000,6 @@ fn i150_write_file_one_arg_arity_rejected() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&` + type checker rejects `&undefined`"]
 fn i0052a_01_borrow_of_undefined_ident_rejected() {
     // `&missing` — borrow of an undefined name surfaces as
     // TypeError::UnknownName at type-check time.
@@ -2012,7 +2011,6 @@ fn i0052a_01_borrow_of_undefined_ident_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when parser accepts unary `&` + type checker rejects `&missing_in_scope`"]
 fn i0052a_02_borrow_of_out_of_scope_ident_rejected() {
     // `&s` where `s` was defined in an outer block that exited;
     // surfaces as UnknownName at the inner use site.
@@ -2024,7 +2022,6 @@ fn i0052a_02_borrow_of_out_of_scope_ident_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when type checker enforces &T transparency only for read positions"]
 fn i0052a_03_borrow_assigned_to_int_annot_rejected() {
     // `let n: i64 = &s` — borrow of a Str cannot satisfy an i64 type
     // annotation. Surfaces as TypeMismatch at the assignment site.
@@ -2041,7 +2038,6 @@ fn i0052a_03_borrow_assigned_to_int_annot_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when type checker rejects str-arith via TypeMismatch"]
 fn i0052a_04_borrow_int_plus_borrow_str_rejected() {
     // `(&n) + (&s)` — adding a borrow of Int and a borrow of Str
     // must surface TypeMismatch the same way `n + s` does. Wave-1
@@ -2055,7 +2051,6 @@ fn i0052a_04_borrow_int_plus_borrow_str_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when type checker rejects str arg passed where i64 expected"]
 fn i0052a_05_borrow_str_passed_where_int_expected_rejected() {
     // `&s` (borrow of str) passed where the function expects `n: i64`.
     // Transparency rule does NOT bridge str → i64; surfaces as
@@ -2068,7 +2063,6 @@ fn i0052a_05_borrow_str_passed_where_int_expected_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052a Wave-1 DEV impl pending; turn green when type checker rejects `if &str:` via ImplicitTruthiness"]
 fn i0052a_06_borrow_in_if_cond_implicit_truthiness_rejected() {
     // `if &s:` — borrow of Str used as if-condition surfaces
     // ImplicitTruthiness, same as `if s:`. Constitution §2.2

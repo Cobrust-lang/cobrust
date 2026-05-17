@@ -133,4 +133,18 @@ pub enum TypeError {
     /// when the checker wants to surface several diagnostics.
     #[error("multiple type errors")]
     Multiple(Vec<TypeError>),
+
+    /// ADR-0052a Wave-1 §6 — `&expr` where `expr` is not a borrowable
+    /// place. Today the parser already rejects literal-borrow,
+    /// call-result-borrow, etc. at parse time (Wave-1 §8 cap); this
+    /// variant is reserved for type-check-time rejection of shapes
+    /// the parser admits but the checker disallows. The `suggestion`
+    /// field is populated per §"Direction B coordination" forward-
+    /// compat — Direction B sub-ADR formalises the structured shape;
+    /// Wave-1 ships it as a hard-coded `&'static str` hint.
+    #[error("cannot borrow non-place expression at {span}")]
+    BorrowOfNonPlace {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 }
