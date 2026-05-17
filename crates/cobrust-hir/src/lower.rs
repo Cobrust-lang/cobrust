@@ -96,6 +96,7 @@ impl<'s> Lowerer<'s> {
                 name: name.to_string(),
                 first: prior,
                 second: span,
+                suggestion: Some("rename one of the bindings to make them distinct"),
             }),
         }
     }
@@ -232,6 +233,9 @@ impl<'s> Lowerer<'s> {
                         .ok_or(LoweringError::DroppedFeature {
                             name: "decorated-non-item",
                             span: stmt.span,
+                            suggestion: Some(
+                                "this Python feature is not part of Cobrust — see the language reference",
+                            ),
                         })?;
                 let mut decorator_exprs = Vec::with_capacity(decorators.len());
                 for d in decorators {
@@ -331,6 +335,9 @@ impl<'s> Lowerer<'s> {
             other => Err(LoweringError::DroppedFeature {
                 name: ast_kind_name(other),
                 span: stmt.span,
+                suggestion: Some(
+                    "this Python feature is not part of Cobrust — see the language reference",
+                ),
             }),
         }
     }
@@ -824,6 +831,9 @@ impl<'s> Lowerer<'s> {
                         return Err(LoweringError::DroppedFeature {
                             name: "decorated-non-item",
                             span,
+                            suggestion: Some(
+                                "this Python feature is not part of Cobrust — see the language reference",
+                            ),
                         });
                     }
                 }
@@ -914,6 +924,9 @@ impl<'s> Lowerer<'s> {
             _ => Err(LoweringError::AssignToUnknown {
                 name: "<non-l-value>".to_string(),
                 span: target.span,
+                suggestion: Some(
+                    "assignment target must be a name, attribute, index, tuple, or list pattern",
+                ),
             }),
         }
     }
@@ -955,6 +968,7 @@ impl<'s> Lowerer<'s> {
                     return Err(LoweringError::UnknownName {
                         name: n.clone(),
                         span,
+                        suggestion: Some("declare with `let <name> = …` first"),
                     });
                 }
             },
@@ -1272,7 +1286,12 @@ impl<'s> Lowerer<'s> {
                     for other in branch_outs.iter().skip(1) {
                         let names: Vec<String> = other.iter().map(|(n, _)| n.clone()).collect();
                         if !same_set(&first, &names) {
-                            return Err(LoweringError::OrPatternBindingMismatch { span });
+                            return Err(LoweringError::OrPatternBindingMismatch {
+                                span,
+                                suggestion: Some(
+                                    "ensure every branch in `| pat1 | pat2` binds identical names",
+                                ),
+                            });
                         }
                     }
                     // Bind canonical set in the outer scope and rewrite
