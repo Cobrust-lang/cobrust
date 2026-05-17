@@ -3,6 +3,10 @@
 //! Every `MirError` is reportable at the user-source span; the
 //! lowering / borrow / drop passes never panic on input the type
 //! checker accepted (constitution §6: closed-loop validation).
+//!
+//! ADR-0052b §2 + §6 — every variant carries a uniform
+//! `suggestion: Option<&'static str>` field populated at construction
+//! time per CLAUDE.md §2.5 Direction B (LLM-first error UX).
 
 use cobrust_frontend::span::Span;
 use thiserror::Error;
@@ -13,46 +17,85 @@ use crate::tree::{LocalId, PlaceDebug};
 pub enum MirError {
     /// B1 — read of a local already moved.
     #[error("use of moved value `_{local}`")]
-    UseAfterMove { local: u32, span: Span },
+    UseAfterMove {
+        local: u32,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// B4 — read of a local already dropped.
     #[error("use of dropped value `_{local}`")]
-    UseAfterDrop { local: u32, span: Span },
+    UseAfterDrop {
+        local: u32,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// B2 — second mutable borrow while a first is still live.
     #[error("conflicting mutable borrow of `_{local}`")]
-    ConflictingMutBorrow { local: u32, span: Span },
+    ConflictingMutBorrow {
+        local: u32,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// B3 — shared and mutable borrow on the same root local overlap.
     #[error("shared and mutable borrow of `_{local}` overlap")]
-    SharedMutOverlap { local: u32, span: Span },
+    SharedMutOverlap {
+        local: u32,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// B5 — reference outlives the local it references.
     #[error("borrow of `_{local}` escapes its scope")]
-    EscapingBorrow { local: u32, span: Span },
+    EscapingBorrow {
+        local: u32,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Drop-schedule invariant — owning local reaches `Return`
     /// without being dropped.
     #[error("missing drop for owning local `_{local}` on return path")]
-    DropMissing { local: u32, span: Span },
+    DropMissing {
+        local: u32,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Drop-schedule invariant — same local dropped twice on a path.
     #[error("double-drop of `_{local}`")]
-    DoubleDrop { local: u32, span: Span },
+    DoubleDrop {
+        local: u32,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Lowering error — projection out-of-bounds for the local's type.
     #[error("field projection out of bounds at {place:?}")]
-    FieldOutOfBounds { place: PlaceDebug, span: Span },
+    FieldOutOfBounds {
+        place: PlaceDebug,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Lowering error — referenced `DefId` had no recorded type
     /// (defense-in-depth; the type checker should have caught).
     #[error("unresolved DefId {def_id} at lowering time")]
-    UnresolvedDefId { def_id: u32, span: Span },
+    UnresolvedDefId {
+        def_id: u32,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Lowering error — switch terminator emitted with neither a
     /// matching case nor an `otherwise` block.
     #[error("non-exhaustive switch")]
-    NonExhaustiveSwitch { span: Span },
+    NonExhaustiveSwitch {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Catch-all for invariants the lowering should never violate.
     /// Hitting this is a bug in the MIR builder.
@@ -81,10 +124,17 @@ impl MirError {
 }
 
 /// Helper for `MirError::UseAfterMove` style errors at a `LocalId`.
+///
+/// ADR-0052b §6 — the helper threads the canonical UseAfterMove
+/// suggestion (ADR-0052a §7 explicit shared borrow `&s`) so callers
+/// inherit the fix path without re-specifying it.
 #[must_use]
 pub fn use_after_move(local: LocalId, span: Span) -> MirError {
     MirError::UseAfterMove {
         local: local.0,
         span,
+        suggestion: Some(
+            "change to `&s` to borrow without consuming (ADR-0052a explicit shared borrow)",
+        ),
     }
 }

@@ -905,6 +905,7 @@ fn s0052b_32_row_conflict_no_suggestion_allowed() {
         ty1: Ty::Int,
         ty2: Ty::Str,
         span,
+        suggestion: None,
     };
     let dbg = format!("{err:?}");
     // The Debug-print must mention `suggestion` (as a field), regardless
@@ -933,6 +934,7 @@ fn s0052b_33_multiple_aggregate_no_suggestion_at_top_level() {
     let child = TypeError::ImplicitTruthiness {
         actual: Ty::Int,
         span,
+        suggestion: Some("change to `if x != 0:` (use `.is_some()` for Option)"),
     };
     let err = TypeError::Multiple(vec![child]);
     let dbg = format!("{err:?}");
