@@ -206,3 +206,102 @@ fn bg0052a_r09_amp_fstring_rejected() {
     let src = "fn main() -> i64:\n    let label = input(\"\")\n    let r = &f\"hi {label}\"\n    return str_len(r)\n";
     assert_rejects("bg0052a_r09", src);
 }
+
+// =====================================================================
+// Section C — ADR-0052f Wave-2 round-2 cap relaxation (`&Call(Attr(...))`)
+//
+// Per ADR-0052f §5 + §8.1: the parser's `validate_borrow_operand`
+// is relaxed to admit `ExprKind::Call { callee: Attr { base, .. }, .. }`
+// when `base` is itself a borrowable place (recursive admission).
+// Free-fn `&Call(Name)` and other shapes STILL reject (asymmetric cap
+// per ADR-0052f §2).
+//
+// Pre-DEV-impl: every `bg0052f_p*` parse-acceptance test is
+// `#[ignore]`'d pending the parser relaxation. DEV removes the ignore
+// after the §5 diff lands. The `bg0052f_r*` rejection tests are NOT
+// ignored — they survive impl as asymmetry-preservation regression
+// guards (their reject status pre/post-impl is identical).
+// =====================================================================
+
+#[test]
+#[ignore = "ADR-0052f Wave-2-rd2 DEV impl pending"]
+fn bg0052f_p01_amp_method_call_no_args() {
+    // `&s.len()` — the canonical Wave-2-rd2 witness (parses as
+    // `Borrow(Call(Attr(s, "len"), []))` per ADR-0052 F-G.3 precedence).
+    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s.len())\n    return n\n";
+    assert_parses("bg0052f_p01", src);
+}
+
+#[test]
+#[ignore = "ADR-0052f Wave-2-rd2 DEV impl pending"]
+fn bg0052f_p02_amp_method_call_with_arg() {
+    // `&xs.get(0)` — method-form with one arg; list-method receiver.
+    // Parse-only assertion (the parser must admit the surface).
+    let src = "fn main() -> i64:\n    let xs: list[str] = [\"a\", \"b\"]\n    let n = str_len(&xs.get(0))\n    return n\n";
+    assert_parses("bg0052f_p02", src);
+}
+
+#[test]
+#[ignore = "ADR-0052f Wave-2-rd2 DEV impl pending"]
+fn bg0052f_p03_amp_method_call_float_receiver() {
+    // `&f.floor()` — float-method receiver; cosmetic-borrow uniformity
+    // case per ADR-0052f §7 latent-consumer row 4.
+    let src = "fn read_i64(n: i64) -> i64:\n    return n\nfn main() -> i64:\n    let f: f64 = 1.5\n    let n = read_i64(&f.floor())\n    return n\n";
+    assert_parses("bg0052f_p03", src);
+}
+
+#[test]
+#[ignore = "ADR-0052f Wave-2-rd2 DEV impl pending"]
+fn bg0052f_p04_amp_method_call_multi_arg() {
+    // `&xs.method(args)` — method-form with multiple args; parser
+    // admits any arity as long as the callee shape is `Attr(base, _)`
+    // and `base` is borrowable.
+    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s.replace(\"a\", \"b\"))\n    return n\n";
+    assert_parses("bg0052f_p04", src);
+}
+
+#[test]
+#[ignore = "ADR-0052f Wave-2-rd2 DEV impl pending"]
+fn bg0052f_p05_amp_method_call_in_let_binding() {
+    // `let n = &s.len()` — direct let-binding of the borrow result.
+    // Confirms the relaxation isn't gated on call-argument position.
+    let src = "fn read_i64(n: i64) -> i64:\n    return n\nfn main() -> i64:\n    let s = input(\"\")\n    let n = &s.len()\n    return read_i64(n)\n";
+    assert_parses("bg0052f_p05", src);
+}
+
+// --- Section C.2 — Rejection regression guards (NOT ignored). ---
+//
+// These cases must reject both pre- and post-impl. The asymmetry
+// between method-form (admitted) and free-fn / literal / complex
+// (rejected) is principled per ADR-0052f §2 + §9 §2.5 compile-time-
+// catch preservation.
+
+#[test]
+fn bg0052f_r01_amp_free_fn_call_rejected() {
+    // `&free_fn()` — callee is `Name`, not `Attr(base, _)`. The
+    // §2.5 compile-time-catch path stays armed: `&free_fn(x)` borrows
+    // a temporary with no anchored place. ADR-0052f §2 explicitly
+    // keeps this rejection.
+    let src = "fn main() -> i64:\n    let n = str_len(&input(\"\"))\n    return n\n";
+    assert_rejects("bg0052f_r01", src);
+}
+
+#[test]
+fn bg0052f_r02_amp_literal_method_call_rejected() {
+    // `&"hello".len()` — string-literal-receiver method-form. The
+    // parser's recursive `validate_borrow_operand(base)` MUST reject
+    // the literal receiver per the existing §8 literal-cap
+    // (parser.rs L1116-1121). Guards against the recursion
+    // accidentally admitting literals via the new method-form arm.
+    let src = "fn main() -> i64:\n    let n = str_len(&\"hello\".len())\n    return n\n";
+    assert_rejects("bg0052f_r02", src);
+}
+
+#[test]
+fn bg0052f_r03_amp_free_fn_with_args_rejected() {
+    // `&foo(x, y)` — free-fn call with multi-arg. Same `Name`-callee
+    // rejection path as r01; confirms arity does not affect the
+    // asymmetric cap.
+    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&str_len(s, s))\n    return n\n";
+    assert_rejects("bg0052f_r03", src);
+}
