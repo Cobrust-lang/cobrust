@@ -2304,3 +2304,79 @@ fn i0052dpre_12_float_is_nan_extra_arg_rejected() {
         Cat::ArityMismatch,
     );
 }
+
+// ============================================================
+// ADR-0052d-prereq × ADR-0052b cross-ADR coordination test
+//
+// Per ADR-0052d-prereq §"New error variant":
+//
+// ```rust
+// TypeError::UnknownMethod {
+//     type_name: String,
+//     method_name: String,
+//     span: Span,
+//     suggestion: Option<&'static str>,
+// }
+// ```
+//
+// The `suggestion: Option<&'static str>` field is a Wave-2 stub for
+// ADR-0052b Direction B's structured-suggestion record (the eventual
+// promoted shape that lives on every `TypeError::*` variant per
+// CLAUDE.md §2.5 line 78 "print the FIX, not just the diagnosis").
+//
+// This test locks the cross-ADR contract: for typo cases like
+// `s.splittt(",")`, the `suggestion` field MUST be `Some(_)` (a
+// concrete hint), NOT `None`. The hint contents are not asserted
+// (DEV can choose "did you mean 'split'?" or a method-list); only
+// the `Some`-ness is locked, because the structured-suggestion shape
+// is promoted by 0052b after Wave-2 merge.
+//
+// Pre-impl strategy: since `TypeError::UnknownMethod` is a net-new
+// variant that DEV adds in Wave-2, this test uses a string-match
+// proxy on `format!("{:?}", err)` to forward-compat the assertion
+// without depending on the variant existing. DEV updates the test
+// to do a real `if let TypeError::UnknownMethod { suggestion, .. } =
+// err` pattern-match post-impl.
+//
+// Test name: i0052dpre_cross_01.
+// ============================================================
+
+#[test]
+#[ignore = "ADR-0052d-prereq DEV impl pending; turn green when DEV adds TypeError::UnknownMethod + non-None suggestion for typo"]
+fn i0052dpre_cross_01_unknown_method_suggestion_field_populated_for_typo() {
+    // `s.splittt(",")` — typo. Post-impl: type-check produces
+    // `TypeError::UnknownMethod { type_name: "str", method_name:
+    // "splittt", suggestion: Some(_), .. }` per ADR-0052d-prereq
+    // §"New error variant" coordinated with ADR-0052b Direction B.
+    //
+    // Locked property: `suggestion.is_some()`. (Hint contents are
+    // not asserted; the structured-suggestion shape is 0052b's
+    // post-Wave-2 refactor scope.)
+    let src = format!(
+        "{METHOD_DISPATCH_STUBS_IT}fn f() -> i64:\n    let s: str = \"a,b\"\n    let xs: list[str] = s.splittt(\",\")\n    return 0\n"
+    );
+    let module = parse_str(&src, FileId::SYNTHETIC).expect("parse must succeed");
+    let mut sess = Session::new();
+    let hir = lower(&module, &mut sess).expect("hir lower must succeed");
+    let err = check(&hir).expect_err(
+        "type check must reject `s.splittt(...)` (typo); pre-impl this assertion fails on the Ok branch",
+    );
+    // Forward-compat proxy: stringify the error and check for
+    // `UnknownMethod` + a non-empty `suggestion: Some(...)` shape.
+    // DEV replaces this with:
+    //
+    //   if let TypeError::UnknownMethod { suggestion, .. } = err {
+    //       assert!(suggestion.is_some(), "suggestion must be populated");
+    //   } else {
+    //       panic!("expected UnknownMethod, got {err:?}");
+    //   }
+    let dbg = format!("{err:?}");
+    assert!(
+        dbg.contains("UnknownMethod"),
+        "i0052dpre_cross_01: expected `TypeError::UnknownMethod` for `s.splittt(...)` typo, got: {dbg}"
+    );
+    assert!(
+        dbg.contains("suggestion: Some"),
+        "i0052dpre_cross_01: `suggestion` field must be `Some(_)` for typo (ADR-0052b Direction B coordination), got: {dbg}"
+    );
+}
