@@ -105,6 +105,7 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     var: v,
                     ty: other,
                     span,
+                    suggestion: Some("add a type annotation — recursive types must be explicit"),
                 });
             }
             subst.extend(v, other);
@@ -127,6 +128,7 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     expected: t1,
                     actual: t2,
                     span,
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
                 });
             }
             for (x, y) in a.iter().zip(b.iter()) {
@@ -155,6 +157,7 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     expected: Ty::Record(a),
                     actual: Ty::Record(b),
                     span,
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
                 });
             }
             for (k, av) in &a.fields {
@@ -169,6 +172,9 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     expected: a.positional.len(),
                     actual: b.positional.len(),
                     span,
+                    suggestion: Some(
+                        "check the function signature; pass exactly the declared positional arity",
+                    ),
                 });
             }
             if a.named.len() != b.named.len() {
@@ -176,6 +182,9 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     expected: a.named.len(),
                     actual: b.named.len(),
                     span,
+                    suggestion: Some(
+                        "check the function signature; pass exactly the declared positional arity",
+                    ),
                 });
             }
             for (x, y) in a.positional.iter().zip(b.positional.iter()) {
@@ -186,6 +195,9 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     return Err(TypeError::KeywordArgMismatch {
                         name: n1.clone(),
                         span,
+                        suggestion: Some(
+                            "remove or rename — the callee does not accept this keyword",
+                        ),
                     });
                 }
                 unify(x, y, subst, span)?;
@@ -198,6 +210,7 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     expected: Ty::Adt(id_a, args_a),
                     actual: Ty::Adt(id_b, args_b),
                     span,
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
                 });
             }
             for (x, y) in args_a.iter().zip(args_b.iter()) {
@@ -211,6 +224,7 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
                     expected: Ty::Alias(id_a, args_a),
                     actual: Ty::Alias(id_b, args_b),
                     span,
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
                 });
             }
             for (x, y) in args_a.iter().zip(args_b.iter()) {
@@ -225,6 +239,7 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
             expected: t1,
             actual: t2,
             span,
+            suggestion: Some("change the expression type or add `: <expected>` annotation"),
         }),
     }
 }
@@ -236,6 +251,9 @@ pub fn finalize(t: &Ty, subst: &Subst, span: Span) -> Result<Ty, TypeError> {
     if resolved.free_vars().is_empty() {
         Ok(resolved)
     } else {
-        Err(TypeError::AmbiguousType { span })
+        Err(TypeError::AmbiguousType {
+            span,
+            suggestion: Some("add an explicit type annotation, e.g. `let x: i64 = …`"),
+        })
     }
 }

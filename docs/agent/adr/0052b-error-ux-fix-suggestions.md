@@ -3,9 +3,9 @@ doc_kind: adr
 adr_id: 0052b
 parent_adr: 0052
 title: "Direction B — Error UX rewrite (errors print the FIX)"
-status: proposed
+status: accepted
 date: 2026-05-17
-last_verified_commit: 8dc2723
+last_verified_commit: 365181a
 supersedes: []
 superseded_by: []
 relates_to: [adr:0052, adr:0052a, adr:0051]
@@ -283,6 +283,16 @@ Per CLAUDE.md §2.5 audit-teammate rubric:
 - `thiserror` macro derives `Display` from `#[error("...")]` template; the new `suggestion` field is not referenced in any template, so `Display` impl behaviour is unchanged for downstream `eprintln!` consumers. The structured-shape win lives in the `From<...> for UserError` impl only.
 - ADR-0052a §6 `BorrowOfNonPlace::suggestion` shipped as `Option<&'static str>`; Wave-2 keeps the same shape. No re-versioning of the field type.
 - Cross-sub-ADR interaction: Direction A's `BorrowOfNonPlace` continues to use `suggestion`; Direction D (0052d) method-call sugar will likely add new `TypeError::MethodNotFound` variant — that future variant inherits the `suggestion: Option<&'static str>` field per Direction B's binding.
+
+### Cascade enumeration (post-spike)
+
+Implementation merged at HEAD `365181a` (Phase G Wave-2 P10-direct PAIR per dispatch). The §8 F30 dry-run table prediction held with one scope expansion:
+
+- **Predicted cascade**: 23 grouped rows = ~55 direct construction sites in `crates/cobrust-types/` + `crates/cobrust-mir/`. **Observed cascade**: ~55 type+MIR sites (matches), **plus** 7 construction sites in `crates/cobrust-hir/src/lower.rs` (LoweringError) that were not predicted. Total observed: ~62 sites.
+- **Scope expansion to LoweringError**: 6 Wave-2 corpus tests (`s0052b_01`, `s0052b_16`, `s0052b_20`, `s0052b_27`, `s0052b_28`, `s0052b_29`) triggered HIR-lower's `LoweringError` as the actual catch surface (`UnknownName`, `DroppedFeature`). §2's literal text scopes Direction B to `TypeError + MirError`; the impl forwarded the same uniform `suggestion: Option<&'static str>` field to `LoweringError`'s 6 variants and the `From<LoweringError> for UserError` renderer per the same Wave-1 structural-pattern (§7). The scope expansion is consistent with §2.5's "every user-visible error carries the fix path" rule; future Direction-B-like extensions to `ParseError` / `LexError` are out-of-scope (Wave-2 cap).
+- **Test corpus regression vs main HEAD `2031e50`**: 0 non-0052b regressions; +6 net new passes (`w0052a_06/07/08/18/19/28` borrow tests now satisfy the LoweringError-suggestion contract). 9 of 41 0052b tests remain in test-construction-blocker status (test harness `check_must_fail` panics on HIR-lower path; parser-level catch surface for `MutableDefault` + dropped `is` operator; renderer-snapshot uses `cobrust check` instead of `cobrust build`). These are documented finding `dev-impl-deferred-test-harness-mismatch.md`; cleared as out-of-scope per F28 strict-separation.
+- **Renderer line-count delta**: `crates/cobrust-cli/src/error_ux.rs` from 1078 → ~966 lines (-112 lines net), within the §7 prediction window of -120 lines.
+- **§13 design lesson (re-check)**: ADR-0052a §13 "no bidirectional unify arms / no inference-layer transparency" — re-confirmed unchanged. Direction B touches only error-type field shape + renderer plumbing; no `infer.rs` unify-arm churn.
 
 ## 13. Dispatch readiness
 

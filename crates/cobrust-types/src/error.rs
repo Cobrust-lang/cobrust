@@ -3,6 +3,10 @@
 //! Pinned by ADR-0006 §"Error taxonomy". Every variant is
 //! span-bearing and printable; downstream tooling matches on the
 //! variant.
+//!
+//! ADR-0052b §2 — every variant carries a uniform
+//! `suggestion: Option<&'static str>` field populated at construction
+//! time per CLAUDE.md §2.5 Direction B (LLM-first error UX).
 
 use thiserror::Error;
 
@@ -16,7 +20,11 @@ pub enum TypeError {
     /// checker may surface this for capture-only references during
     /// closure analysis.
     #[error("unknown name `{name}` at {span}")]
-    UnknownName { name: String, span: Span },
+    UnknownName {
+        name: String,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// The call has a wrong number of positional arguments.
     #[error("expected {expected} arguments, got {actual} at {span}")]
@@ -24,15 +32,24 @@ pub enum TypeError {
         expected: usize,
         actual: usize,
         span: Span,
+        suggestion: Option<&'static str>,
     },
 
     /// The call passes a keyword name the callee does not accept.
     #[error("unknown keyword argument `{name}` at {span}")]
-    KeywordArgMismatch { name: String, span: Span },
+    KeywordArgMismatch {
+        name: String,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// The call omits a required argument.
     #[error("missing required argument `{name}` at {span}")]
-    MissingArgument { name: String, span: Span },
+    MissingArgument {
+        name: String,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Two types do not unify.
     #[error("type mismatch: expected `{expected}`, found `{actual}` at {span}")]
@@ -40,12 +57,17 @@ pub enum TypeError {
         expected: Ty,
         actual: Ty,
         span: Span,
+        suggestion: Option<&'static str>,
     },
 
     /// A `match` does not cover all constructors and has no
     /// wildcard.
     #[error("non-exhaustive match: missing case(s) {uncovered:?} at {span}")]
-    NonExhaustiveMatch { uncovered: Vec<String>, span: Span },
+    NonExhaustiveMatch {
+        uncovered: Vec<String>,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Reserved for record-row conflicts; M2 reports as
     /// `TypeMismatch` from inside record unification but keeps the
@@ -56,29 +78,48 @@ pub enum TypeError {
         ty1: Ty,
         ty2: Ty,
         span: Span,
+        suggestion: Option<&'static str>,
     },
 
     /// `if x:` (or any truthiness position) where `x` does not have
     /// type `Bool`.
     #[error("non-bool used in truthiness position: got `{actual}` at {span}")]
-    ImplicitTruthiness { actual: Ty, span: Span },
+    ImplicitTruthiness {
+        actual: Ty,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Defense-in-depth: a constitution-dropped form snuck through.
     #[error("the form `{name}` is not part of Cobrust (dropped feature) at {span}")]
-    UseOfDroppedFeature { name: &'static str, span: Span },
+    UseOfDroppedFeature {
+        name: &'static str,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Mutable default argument: the parameter's default value type
     /// is one of the M2-mutable types.
     #[error("mutable default argument is forbidden at {span}")]
-    MutableDefault { span: Span },
+    MutableDefault {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Inference left a `Var` un-resolved.
     #[error("ambiguous type at {span} (consider adding an annotation)")]
-    AmbiguousType { span: Span },
+    AmbiguousType {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// A record literal lists the same field twice.
     #[error("duplicate field `{name}` at {span}")]
-    DuplicateField { name: String, span: Span },
+    DuplicateField {
+        name: String,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// Unification would create an infinite type.
     #[error("occurs check: cannot unify `?{}` with `{ty}` at {span}", var.0)]
@@ -86,28 +127,53 @@ pub enum TypeError {
         var: crate::ty::VarId,
         ty: Ty,
         span: Span,
+        suggestion: Option<&'static str>,
     },
 
     #[error("not callable: `{actual}` at {span}")]
-    NotCallable { actual: Ty, span: Span },
+    NotCallable {
+        actual: Ty,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     #[error("not indexable: `{actual}` at {span}")]
-    NotIndexable { actual: Ty, span: Span },
+    NotIndexable {
+        actual: Ty,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     #[error("not iterable: `{actual}` at {span}")]
-    NotIterable { actual: Ty, span: Span },
+    NotIterable {
+        actual: Ty,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     #[error("`break` outside any loop at {span}")]
-    BreakOutsideLoop { span: Span },
+    BreakOutsideLoop {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     #[error("`continue` outside any loop at {span}")]
-    ContinueOutsideLoop { span: Span },
+    ContinueOutsideLoop {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     #[error("`return` outside any function at {span}")]
-    ReturnOutsideFn { span: Span },
+    ReturnOutsideFn {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     #[error("`yield` outside any function at {span}")]
-    YieldOutsideFn { span: Span },
+    YieldOutsideFn {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// ADR-0050d Decision 7A — dict key type is not Hashable.
     /// Phase F.3 admits `i64`, `str`, `bool`, `none`; rejects `f64`
@@ -116,7 +182,11 @@ pub enum TypeError {
     /// canonical predicate; emitted at `synth_dict_lit` + every
     /// `Dict[K, V]` annotation lower site (`lower_generic_type`).
     #[error("dict key type `{actual}` is not Hashable at {span}")]
-    NotHashable { actual: Ty, span: Span },
+    NotHashable {
+        actual: Ty,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// ADR-0050d §"Parser amendments" 1 + Decision 1 commentary —
     /// dict-merge `{**other}` is Phase G; Phase F.3 rejects any
@@ -127,7 +197,10 @@ pub enum TypeError {
     #[error(
         "dict spread (`**other`) is not supported in dict literals (Phase G feature) at {span}"
     )]
-    DictSpreadNotSupported { span: Span },
+    DictSpreadNotSupported {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 
     /// A composite "we recorded multiple errors" container — use
     /// when the checker wants to surface several diagnostics.
@@ -139,9 +212,9 @@ pub enum TypeError {
     /// call-result-borrow, etc. at parse time (Wave-1 §8 cap); this
     /// variant is reserved for type-check-time rejection of shapes
     /// the parser admits but the checker disallows. The `suggestion`
-    /// field is populated per §"Direction B coordination" forward-
-    /// compat — Direction B sub-ADR formalises the structured shape;
-    /// Wave-1 ships it as a hard-coded `&'static str` hint.
+    /// field shape was the Wave-1 forward-compat seed; ADR-0052b §2
+    /// promotes the uniform `Option<&'static str>` field across all
+    /// variants.
     #[error("cannot borrow non-place expression at {span}")]
     BorrowOfNonPlace {
         span: Span,
@@ -154,9 +227,8 @@ pub enum TypeError {
     /// table. Carries the receiver `type_name` and the attempted
     /// `method_name` so the diagnostic can list available methods
     /// per §2.5 "compile-time-catch" rule. The `suggestion` field is
-    /// a Wave-2 stub for ADR-0052b Direction B's structured-suggestion
-    /// record — Wave-2 ships `Option<&'static str>`; post-Wave-2
-    /// 0052b promotes it to the full structured shape.
+    /// uniform with the ADR-0052b Direction B shape — static
+    /// `&'static str` populated at construction time.
     #[error("method `{method_name}` not found on `{type_name}` at {span}")]
     UnknownMethod {
         type_name: String,

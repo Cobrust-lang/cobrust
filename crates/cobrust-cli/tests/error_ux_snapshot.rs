@@ -12,7 +12,7 @@
 //!   the surface label (§3.1 surface example uses `suggestion:`).
 //! - The match is on substring (not exact-line) so DEV has freedom
 //!   to refine prose while preserving the canonical fix-path keyword.
-//! - All tests are `#[ignore = "ADR-0052b Wave-2 DEV impl pending"]`
+//! - All tests are ``
 //!   pre-merge per F28 strict-separation PAIR pattern.
 //!
 //! Per ADR-0052b §3 surface examples, the 8 scenarios below cover
@@ -98,7 +98,7 @@ fn assert_suggestion_contains(name: &str, source: &str, needle_keywords: &[&str]
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn snap_01_implicit_truthiness_suggestion() {
     // `if x:` where `x: i64`. Per ADR-0052b §3.1 surface example:
     //
@@ -122,7 +122,7 @@ fn snap_01_implicit_truthiness_suggestion() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn snap_02_type_mismatch_suggestion() {
     // `let x: i64 = "hello"`. Per ADR-0052b §3.2 + §4.1:
     //
@@ -153,7 +153,7 @@ fn snap_02_type_mismatch_suggestion() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn snap_03_use_after_move_suggestion() {
     // Construct a use-after-move scenario at source level. The
     // canonical Cobrust source is:
@@ -190,7 +190,7 @@ fn snap_03_use_after_move_suggestion() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn snap_04_ambiguous_type_suggestion() {
     // `let x = []` — empty list with no inferable element type.
     // Per ADR-0052b §3.4 + §4.1:
@@ -220,7 +220,7 @@ fn snap_04_ambiguous_type_suggestion() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn snap_05_unknown_name_static_suggestion() {
     // `let r = foo` where `foo` is undeclared. Per ADR-0052b §3.5:
     //
@@ -245,7 +245,7 @@ fn snap_05_unknown_name_static_suggestion() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn snap_06_mutable_default_suggestion() {
     // `fn g(xs: list[i64] = [])` — mutable default forbidden. Per
     // ADR-0052b §3.6 + §4.1:
@@ -269,7 +269,7 @@ fn snap_06_mutable_default_suggestion() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn snap_07_not_hashable_suggestion() {
     // `{1.5: 0}` — f64 dict key forbidden per ADR-0050d Decision
     // 7A. Per ADR-0052b §3.8 + §4.1:
@@ -295,7 +295,7 @@ fn snap_07_not_hashable_suggestion() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052b Wave-2 DEV impl pending"]
+
 fn snap_08_dict_spread_not_supported_suggestion() {
     // `{**other}` — dict-spread is Phase G. Per ADR-0052b §4.1:
     //

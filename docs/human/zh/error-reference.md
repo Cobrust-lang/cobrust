@@ -266,4 +266,52 @@ error[Internal]: CraneliftError: inst441 has type i64, expected i8
 |---|---|---|
 | `Pack` | 值无法被编码（超出 M6 范围）。 | 检查 `MsgValue` 变体。 |
 | `Unpack` | msgpack 字节格式错误或被截断。 | 检查输入字节。 |
-| `OverflowSize` | `pos + length` 造成 `usize` 溢出——可能是带有接近 `u32::MAX` 长度字段的对抗性输入。 | 拒绝该输入；这不是有效的 msgpack 数据（B6 修复）。 |
+| `OverflowSize` | `pos + length` 造成 `usize` 溢出——可能是带有接近 `u32::MAX` 长度字段的对抗性输入。 | 拒绝该输入；这不是有效的 msgpack 数据(B6 修复)。 |
+
+---
+
+## 错误消息打印修复方法 (ADR-0052b)
+
+从 Phase G Wave 2 (ADR-0052b) 开始，每个编译器诊断都携带一个机器可
+解析的 `suggestion` 字段，指明具体的**修复路径**，而不仅仅是问题描
+述。CLI 渲染器将其呈现为 `hint:` 行；未来的 LSP / `--emit-json`
+消费者直接读取 `&'static str` 字段。
+
+### 为什么这很重要
+
+CLAUDE.md §2.5 将 Cobrust 定位为 "LLM 智能体一次就能写对的语言"。
+LLM 智能体从 stderr 中提取修复方法时应当是确定性的，无需 prose
+剥离：
+
+```
+error[Type]: cannot use `Int` as a boolean condition
+  --> src/main.cb:3:8
+  hint: change to `if x != 0:` (use `.is_some()` for Option)
+```
+
+`hint:` 文本现在是一个 `&'static str` 字面量，在错误构造点处填充，
+对同一变体的所有触发场景都一致。修复路径是可复现、结构化、
+LLM 友好的。
+
+### 三大特性
+
+- **构造时写入**。编译器中每个 `Err(TypeError::Foo { ... })` 站点
+  都在该调用位置填充 `suggestion`，包含最具操作性的修复文本。
+- **静态 `&'static str`**。Suggestion 文本是编译时字面量——不含动
+  态格式参数。主错误行仍然携带失败标识符（`unknown name \`foo\``），
+  以便 LLM stderr 解析保留它；suggestion 文本是通用且可操作的。
+- **渲染器是结构化的**。CLI 的 `error_ux.rs` 中的 `From<...>` 实
+  现直接读取 `suggestion.map(str::to_owned)`——不再在渲染时硬编
+  码 per-variant 文本。
+
+### 覆盖的错误类型
+
+- `cobrust_types::TypeError` — 24 个变体（每个 S 类变体都携带
+  `Some(...)`；如 `Multiple` 这样的 N 类变体携带 `None`）。
+- `cobrust_mir::MirError` — 10 个变体（use-after-move、borrow 冲
+  突、drop-schedule 违反）。
+- `cobrust_hir::LoweringError` — 6 个变体（未知名称、被弃用功
+  能、可变默认参数、重复绑定）。
+
+未来对 `cobrust_frontend::{LexError, ParseError}` 的 Direction-B
+扩展已经被跟踪，但不在 Wave-2 范围内。
