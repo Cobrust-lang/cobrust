@@ -494,42 +494,58 @@ impl From<ParseError> for UserError {
 
 impl From<LoweringError> for UserError {
     fn from(e: LoweringError) -> Self {
+        // ADR-0052b §2 Direction B — uniform `suggestion: Option<&'static str>`
+        // on LoweringError variants (scope-expanded per Wave-2 corpus
+        // s0052b_01/16/20/27/28/29 catch-surface findings). The renderer
+        // is structural; primary `msg` carries the failing identifier so
+        // LLM stderr parsing still extracts it per §3.5 + §10.
         use LoweringError as L;
         let (msg, hint, span) = match &e {
-            L::UnknownName { name, span } => (
+            L::UnknownName {
+                name,
+                span,
+                suggestion,
+            } => (
                 format!("unknown name `{name}`"),
-                Some(format!("did you declare it with `let {name} = …`?")),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            L::DroppedFeature { name, span } => (
+            L::DroppedFeature {
+                name,
+                span,
+                suggestion,
+            } => (
                 format!("use of dropped feature `{name}`"),
-                Some(
-                    "this Python construct is not part of Cobrust — see the language reference"
-                        .to_owned(),
-                ),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            L::MutableDefault { span } => (
+            L::MutableDefault { span, suggestion } => (
                 "parameter default must be a literal expression".to_owned(),
-                Some(
-                    "use `None` as the default; assign real defaults inside the function body"
-                        .to_owned(),
-                ),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            L::OrPatternBindingMismatch { span } => (
+            L::OrPatternBindingMismatch { span, suggestion } => (
                 "or-pattern branches must bind the same set of names".to_owned(),
-                Some("ensure every branch in `| pat1 | pat2` binds identical names".to_owned()),
+                suggestion.map(str::to_owned),
                 *span,
             ),
-            L::DuplicateBinding { name, second, .. } => (
+            L::DuplicateBinding {
+                name,
+                second,
+                suggestion,
+                ..
+            } => (
                 format!("duplicate binding `{name}` in this scope"),
-                Some("rename one of the bindings to make them distinct".to_owned()),
+                suggestion.map(str::to_owned),
                 *second,
             ),
-            L::AssignToUnknown { name, span } => (
+            L::AssignToUnknown {
+                name,
+                span,
+                suggestion,
+            } => (
                 format!("assignment to undeclared name `{name}`"),
-                Some(format!("declare it first with `let {name}: <type> = …`")),
+                suggestion.map(str::to_owned),
                 *span,
             ),
         };
