@@ -1,0 +1,31 @@
+[package]
+name = "cobrust-jit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Cobrust JIT — Cranelift-backed JIT engine for REPL incremental evaluation (Phase I wave-1, ADR-0056a)."
+
+[lints]
+workspace = true
+
+[dependencies]
+cobrust-mir = { path = "../cobrust-mir", version = "=0.3.0" }
+cobrust-types = { path = "../cobrust-types", version = "=0.3.0" }
+# Cranelift quartet pinned to 0.131 family per ADR-0056a §"3.1
+# Dependency add"; matches the already-pinned versions in
+# cobrust-codegen for ABI consistency.
+cranelift-codegen = "0.131"
+cranelift-frontend = "0.131"
+cranelift-module = "0.131"
+cranelift-jit = "0.131"
+cranelift-native = "0.131"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+cobrust-frontend = { path = "../cobrust-frontend", version = "=0.3.0" }
+cobrust-hir = { path = "../cobrust-hir", version = "=0.3.0" }
