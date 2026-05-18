@@ -21,7 +21,7 @@ Phase H Tier-1 stage per ADR-0055 §3.3 sub-ADR roster (`error.rs` + `lib.rs` cb
 
 `crates/cobrust-types/src/error.rs` at HEAD `f5d1f5a` is **239 LOC** containing:
 
-- `TypeError` enum with **22 variants**, every one span-bearing + carrying a uniform `suggestion: Option<&'static str>` field per ADR-0052b §2 Direction B (LLM-first error UX).
+- `TypeError` enum with **25 variants**, every one span-bearing + carrying a uniform `suggestion: Option<&'static str>` field per ADR-0052b §2 Direction B (LLM-first error UX).
 - `#[error("...")]` thiserror-derived `Display` impl on every variant.
 - One composite variant `TypeError::Multiple(Vec<TypeError>)` for multi-error aggregation.
 - Variants carry payload of `Ty` (`TypeMismatch::expected`, `RowConflict::ty1`+`ty2`, `OccursCheck::ty`, `ImplicitTruthiness::actual`, `NotCallable::actual`, `NotIndexable::actual`, `NotIterable::actual`, `NotHashable::actual`), `VarId` (`OccursCheck::var`), or `String` (`UnknownName::name`, etc.).
@@ -42,7 +42,7 @@ The §1 surface choice — porting `lib.rs` alongside `error.rs` rather than spl
 
 Concretely:
 
-- `TypeError` enum mirrored 1:1 — same 22 variants, same variant names, same payload field names. `Ty` payload fields become `i64` arena handles (consuming 0055a's `TyArena` per §"Cross-ADR coordination"). `VarId` payload (`OccursCheck::var`) becomes `i64` per 0055a's VarId-as-i64 convention.
+- `TypeError` enum mirrored 1:1 — same 25 variants, same variant names, same payload field names. `Ty` payload fields become `i64` arena handles (consuming 0055a's `TyArena` per §"Cross-ADR coordination"). `VarId` payload (`OccursCheck::var`) becomes `i64` per 0055a's VarId-as-i64 convention.
 - `suggestion: Option<&'static str>` payload field — see §"Risk register" risk 1 for the `&'static str` representation decision. Cobrust has no `'static` lifetime annotation per ADR-0055 §4.1; field type becomes `Option[str]` (owned Cobrust string).
 - `Display` impl — replaced by free function `display_error(arena: &TyArena, err: &TypeError) -> str` per ADR-0055 §4.1 ("User-defined traits NOT shipped"). Format strings match the Rust `#[error("...")]` arguments byte-for-byte.
 - `lib.cb` — preserves module exports + re-exports. Cobrust has no `#![allow(...)]` lint attributes; the lint block omits cleanly (the Cobrust toolchain emits its own lint discipline per ADR-0048 §"Toolchain lints"). `pub mod` + `pub use` translate to Cobrust `pub mod` + `pub use` per ADR-0050a §"Module system" baseline. The `#![forbid(unsafe_code)]` attribute is **N/A** in cb — Cobrust has no `unsafe` keyword per CLAUDE.md §2.3 baseline; the cb mirror inherits forbid-unsafe semantics structurally.
@@ -94,7 +94,7 @@ Cb-port-required language features at HEAD `f5d1f5a` per ADR-0055 §4.1 feature-
 - **`Option[T]`** — shipped per ADR-0050a §"Option type" baseline. Used for `suggestion: Option[str]` on every variant.
 - **`list[T]`** — shipped per ADR-0050d. Used for `Multiple(list[TypeError])`.
 - **Owned `str`** — shipped per ADR-0050c §"Str ownership" + ADR-0052a Wave-1 (Str non-Copy uniformly). Used for `UnknownName::name`, `KeywordArgMismatch::name`, etc., and for the `suggestion: Option[str]` replacement of Rust's `&'static str` (see §6 risk 1).
-- **Exhaustive `match`** — shipped (M2 baseline). Used in `display_error` dispatch over 22 variants.
+- **Exhaustive `match`** — shipped (M2 baseline). Used in `display_error` dispatch over 25 variants.
 - **`pub mod` + `pub use`** — shipped per ADR-0050a §"Module system" baseline. Used in `lib.cb` re-exports.
 - **Method-call sugar** — shipped per ADR-0052d (Phase G method-form). Improves `display_error` ergonomics.
 

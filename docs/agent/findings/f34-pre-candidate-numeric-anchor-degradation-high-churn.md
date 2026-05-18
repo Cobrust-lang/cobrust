@@ -1,9 +1,9 @@
 ---
 doc_kind: finding
-finding_id: F34-pre-candidate
+finding_id: F34
 title: "Numeric-anchor degradation in ADRs under high-churn surface files"
 date: 2026-05-18
-status: pre-candidate (single-Phase instance; needs second corroborator)
+status: ratified (2026-05-18)
 discovered_by: project-wide Tier-2 review-claude ab88ae5a4ec1ab490
 adsd_family: F1-Sediment (doc-tree decay sub-family)
 related_findings: F27, F33
@@ -32,9 +32,11 @@ Total: ~24 stale anchors in 2 ADRs after ~14 days.
 
 The doc-tree decays AS the codebase grows. The decay is invisible (no compile error, no runtime failure). Reader follows the anchor + sees adjacent code that's plausibly-related, doesn't notice the drift.
 
-# Pre-candidate (NOT yet ratified F-pattern)
+# Promotion 2026-05-18
 
-Single-Phase instance (Phase G batch). Second corroborator needed before promoting to F34 sediment family. Watch for: same pattern in Phase H/I impl batch (0055a-e + 0056b-c authors).
+**Second corroborator confirmed**: Phase H batch ADRs 0055c + 0055d explicitly adopted symbol-anchor convention throughout (e.g., `check.rs::Ctx::synth_expr`, `check.rs::Ctx::synth_call` over numeric `check.rs:NNN` form) per audit `af22fcdedbd1976d5` Lane 2. The audit GO-WITH-FINDINGS verdict on 0055c + 0055d documents adoption as load-bearing design decision for ADR longevity — matching the exact mechanism described in §Mechanism above.
+
+Two-Phase evidence (Phase G first-instance + Phase H explicit adoption) satisfies the second-corroborator requirement. F34 promoted from pre-candidate to ratified.
 
 # Proposed mitigation
 
