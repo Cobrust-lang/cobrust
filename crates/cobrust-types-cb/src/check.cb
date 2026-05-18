@@ -1,97 +1,1390 @@
-## Source doc-ref for ADR-0055d Wave-3 Tier-2 LARGEST — check.rs cb mirror.
-##
-## Status: DOC-REF only. DEV impl (Phase 2 of Wave-3) pending.
-##
-## This file documents the planned cb surface for crates/cobrust-types/src/check.rs.
-## It serves as the Phase 1 source anchor per ADR-0055d §2 + §11.1 (F34 symbol anchors).
-## Actual Cobrust-language implementation ships in the DEV sprint.
-##
-## ADR-0055d §5.1 Arm enumeration — synth_expr ~19 arms:
-##
-##   arm 1:  Lit        → lit_type(lit)                    [PASS: lit_type delegates]
-##   arm 2:  Format     → recurse FormatPart::Hole → Str  [PASS]
-##   arm 3:  Name       → lookup_resolved(rn, span)        [PASS + UnknownName FAIL]
-##   arm 4:  Tuple      → synth each item → Tuple(tys)    [PASS]
-##   arm 5:  List       → head unify rest → List[head]     [PASS + TypeMismatch FAIL]
-##   arm 6:  Set        → head unify rest → Set[head]      [PASS + TypeMismatch FAIL]
-##   arm 7:  Dict       → DictEntry::Pair unify + hashable [PASS + NotHashable + DictSpreadNotSupported FAIL]
-##   arm 8:  Comp       → synth_comp(c)                    [PASS + NotIterable FAIL]
-##   arm 9:  Lambda     → FnTy{positional, return=body}    [PASS]
-##   arm 10: Call       → synth_call(callee, args, span)   [PASS + ArityMismatch + NotCallable + MissingArgument + KeywordArgMismatch FAIL]
-##   arm 11: Attr       → fresh_var() (M2 conservative)    [PASS]
-##   arm 12: Index      → unpack List/Tuple/Dict/Str/Bytes [PASS + NotIndexable FAIL]
-##   arm 13: Bin        → synth_bin(op, lhs, rhs, span)    [PASS + TypeMismatch FAIL]
-##   arm 14: Un         → synth_un(op, operand, span)      [PASS + TypeMismatch FAIL]
-##   arm 15: Borrow     → place-check → Ref(inner_ty)      [PASS + BorrowOfNonPlace FAIL]
-##   arm 16: Await      → fresh_var() (M2 conservative)    [PASS]
-##   arm 17: Yield      → return_stack guard → None        [PASS + YieldOutsideFn FAIL]
-##   arm 18: YieldFrom  → return_stack guard → None        [PASS + YieldOutsideFn FAIL]
-##   arm 19: Cast       → finalize + numeric-pair check     [PASS + TypeMismatch FAIL]
-##
-## Cb-side struct mirrors (arena-aware per ADR-0055a):
-##
-##   struct TypedModule:
-##     def_types: dict[u32, i64]   # DefId.0 → arena TyId handle
-##     hir: Module                  # Rust HIR via FFI (stays Rust per ADR-0055 §3.1)
-##
-##   struct Ctx:
-##     subst: Subst                         # from cobrust_types_cb infer (0055c)
-##     vars: VarAllocator                   # from cobrust_types_cb ty (0055a)
-##     def_types: dict[DefId, i64]          # per-binding arena handles
-##     alias_map: dict[str, i64]            # type-alias name → arena handle
-##     return_stack: list[i64]              # function return-type stack
-##     loop_depth: i64                      # break/continue guard
-##     poly_intrinsic_defs: set[DefId]      # ADR-0050c row-polymorphic intrinsics
-##
-## Key function signatures (cb-form with &mut TyArena receiver convention per 0055c §3):
-##
-##   pub fn check(arena: &mut TyArena, module: &Module) -> Result[TypedModule, TypeError]
-##   fn check_module(ctx: &mut Ctx, arena: &mut TyArena, m: &Module) -> Result[None, TypeError]
-##   fn synth_expr(ctx: &mut Ctx, arena: &mut TyArena, e: &Expr) -> Result[i64, TypeError]
-##   fn synth_call(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[i64, TypeError]
-##   fn try_synth_method_call(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
-##   fn try_synth_dict_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
-##   fn try_synth_str_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
-##   fn try_synth_list_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
-##   fn try_synth_float_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
-##   fn try_synth_int_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
-##   fn synth_bin(ctx: &mut Ctx, arena: &mut TyArena, op: BinOp, lhs: &Expr, rhs: &Expr, span: Span) -> Result[i64, TypeError]
-##   fn synth_un(ctx: &mut Ctx, arena: &mut TyArena, op: UnaryOp, operand: &Expr, span: Span) -> Result[i64, TypeError]
-##   fn synth_comp(ctx: &mut Ctx, arena: &mut TyArena, c: &Comp) -> Result[i64, TypeError]
-##   fn check_block(ctx: &mut Ctx, arena: &mut TyArena, b: &Block) -> Result[BlockOutcome, TypeError]
-##   fn check_stmt(ctx: &mut Ctx, arena: &mut TyArena, s: &Stmt) -> Result[BlockOutcome, TypeError]
-##   fn check_loop(ctx: &mut Ctx, arena: &mut TyArena, lk: &LoopKind, span: Span) -> Result[BlockOutcome, TypeError]
-##   fn iter_element(ctx: &mut Ctx, arena: &mut TyArena, t: i64, span: Span) -> Result[i64, TypeError]
-##   fn check_match(ctx: &mut Ctx, arena: &mut TyArena, scrutinee: &Expr, arms: &list[MatchArm], span: Span) -> Result[BlockOutcome, TypeError]
-##   fn expect_bool(ctx: &mut Ctx, arena: &mut TyArena, t: i64, span: Span) -> Result[None, TypeError]
-##   fn bind_pattern(ctx: &mut Ctx, arena: &mut TyArena, p: &Pattern, t: i64) -> Result[None, TypeError]
-##   fn lower_type(ctx: &mut Ctx, arena: &mut TyArena, ht: &HirType) -> i64
-##   fn lower_named_type(ctx: &mut Ctx, arena: &mut TyArena, name: str) -> i64
-##   fn lower_generic_type(ctx: &mut Ctx, arena: &mut TyArena, head: str, args: list[&HirType]) -> i64
-##   fn lookup_resolved(ctx: &mut Ctx, arena: &mut TyArena, rn: &ResolvedName, span: Span) -> Result[i64, TypeError]
-##   fn lit_type(ctx: &mut Ctx, arena: &mut TyArena, lit: &Lit) -> i64
-##   fn lower_default_type(ctx: &mut Ctx, arena: &mut TyArena, ht: &HirType, span: Span) -> Result[i64, TypeError]
-##   fn validate_hashable_dict(ctx: &mut Ctx, arena: &mut TyArena, key_ht: &HirType, span: Span) -> Result[None, TypeError]
-##
-## enum BlockOutcome:
-##   Falls    # block may fall through
-##   Diverges # block always diverges (return/break/continue/raise)
-##
-## fn block_outcome_join(items: &list[BlockOutcome]) -> BlockOutcome
-##
-## Free helpers (no arena threading):
-##   fn is_copy_primitive(t: i64) -> bool
-##   fn lit_to_string(lit: &Lit) -> str
-##   fn is_list_polymorphic_intrinsic_name(name: str) -> bool
-##   fn literal_int_value(e: &Expr) -> Option[i64]
-##   fn resolve_tuple_index(items: &list[i64], idx: i64) -> Option[i64]
-##   fn str_method_suggestion(name: str) -> Option[str]
-##   fn list_method_suggestion(name: str) -> Option[str]
-##   fn float_method_suggestion(name: str) -> Option[str]
-##   fn int_method_suggestion(name: str) -> Option[str]
-##
-## Cross-ADR deps consumed here (per ADR-0055d §3):
-##   0055a: TyArena, TyEntry, TyId, VarAllocator, insert, lookup, is_hashable, is_mutable_container,
-##          subst_var, clone_into_arena, free_vars, record_from_pairs, FnTyEntry, RecordEntry
-##   0055b: TypeError (all 25 variants), lib.cb re-export contract
-##   0055c: Subst, subst_new, subst_apply, subst_extend, unify, finalize
+-- ADR-0055d Phase H Wave-3 LARGEST — cb mirror of cobrust_types::check.rs
+-- READ-ONLY documentation reference; not compiled by cargo.
+-- DEV wires the cb compile path in a subsequent sprint per ADR-0055d §11.
+--
+-- LARGEST sub-sprint in Phase H (2402 LOC Rust → ~2800-3200 LOC cb under
+-- arena indirection per ADR-0055 §"Option B" ~10% LOC inflation).
+--
+-- Arena-form design per ADR-0055a §3 + 0055c receiver convention:
+--   Every Ctx-method threads `&mut TyArena` per 0055c §3.
+--   `Ty` payloads → `i64` TyArena handles.
+--   `HashMap` → cb `dict[K, V]` (insertion-order per ADR-0050d).
+--   `HashSet` → cb `set[T]`. `Vec` → cb `list[T]`.
+--
+-- F28 strict-separation: this doc-ref accompanies the test-corpus PASS state.
+-- F31 LOCK: no bidirectional Ref↔T unify (delegated to infer.cb).
+-- F34 symbol anchors throughout.
+
+-- -----------------------------------------------------------------------
+-- Import surface from Tier-1 (ADR-0055a + ADR-0055b) + 0055c
+-- -----------------------------------------------------------------------
+
+-- from 0055a:
+--   TyArena, TyEntry, TyId, FnTyId, RecordId, VarId, AdtId, AliasId (all i64)
+--   lookup, insert, insert_fn, insert_record, lookup_fn, lookup_record
+--   is_hashable, is_mutable_container, clone_into_arena, subst_var, free_vars
+--   VarAllocator { fresh() -> TyId }
+--   FnTyEntry { positional, named, var_positional, var_keyword, return_ty }
+--   RecordEntry { fields: list[(str, TyId)] }
+--
+-- from 0055b:
+--   TypeError (all 25 variants)
+--   display_error(arena: &TyArena, err: &TypeError) -> str
+--
+-- from 0055c:
+--   Subst { map: dict[i64, i64] }
+--   subst_new, subst_get, subst_extend, subst_apply, subst_fully_resolved
+--   unify(arena, t1, t2, subst, span) -> Result[(), TypeError]
+--   finalize(arena, t, subst, span) -> Result[i64, TypeError]
+
+-- -----------------------------------------------------------------------
+-- TypedModule — public output of check()
+-- -----------------------------------------------------------------------
+
+struct TypedModule:
+    def_types: dict[u32, i64]    -- DefId.0 → arena TyId handle
+    hir: Module                  -- Rust HIR via FFI per ADR-0055 §3.1
+
+-- -----------------------------------------------------------------------
+-- BlockOutcome — reachability after a block / stmt
+-- -----------------------------------------------------------------------
+
+enum BlockOutcome:
+    Falls       -- block may fall through to next stmt
+    Diverges    -- block always diverges (return/break/continue/raise/never-call)
+
+fn block_outcome_join(items: &list[BlockOutcome]) -> BlockOutcome:
+    -- Diverges wins iff EVERY arm diverges (match-arm reachability join).
+    -- check.rs::BlockOutcome::join arm
+    if items.is_empty():
+        BlockOutcome::Falls
+    elif items.all(|o| o == BlockOutcome::Diverges):
+        BlockOutcome::Diverges
+    else:
+        BlockOutcome::Falls
+
+-- -----------------------------------------------------------------------
+-- Ctx — stateful checker context (7 fields per ADR-0055d §5.3 lifecycle)
+-- -----------------------------------------------------------------------
+-- No user-defined trait impl per ADR-0055 §4.1; all "methods" are free functions
+-- with &mut Ctx + &mut TyArena receiver pair.
+
+struct Ctx:
+    subst: Subst                          -- from 0055c — running substitution
+    vars: VarAllocator                    -- from 0055a — instance-field counter
+    def_types: dict[u32, i64]             -- per-binding arena handles (DefId.0 → TyId)
+    alias_map: dict[str, i64]             -- type-alias name → arena handle
+    return_stack: list[i64]               -- function-return-type stack
+    loop_depth: i64                       -- break/continue legality guard
+    poly_intrinsic_defs: set[u32]         -- ADR-0050c row-polymorphic intrinsics
+
+fn ctx_new() -> Ctx:
+    -- mirrors check.rs::Ctx::new — lifecycle entry per §5.3
+    Ctx {
+        subst: subst_new(),
+        vars: VarAllocator { counter: 0 },
+        def_types: {},
+        alias_map: {},
+        return_stack: [],
+        loop_depth: 0,
+        poly_intrinsic_defs: {},
+    }
+
+fn fresh_var(ctx: &mut Ctx, arena: &mut TyArena) -> i64:
+    -- mirrors Ctx::fresh_var: allocate fresh VarId via VarAllocator, insert Var entry
+    let v = ctx.vars.fresh()              -- i64 VarId
+    insert(arena, TyEntry::Var(v))
+
+fn record_def(ctx: &mut Ctx, def_id: u32, ty: i64):
+    -- mirrors Ctx::record_def: persist arena handle for a binding
+    ctx.def_types.insert(def_id, ty)
+
+fn lookup_def(ctx: &Ctx, def_id: u32) -> Option[i64]:
+    -- mirrors Ctx::lookup_def: retrieve arena handle for a binding
+    ctx.def_types.get(def_id)
+
+-- -----------------------------------------------------------------------
+-- check — top-level entry per ADR-0055d §2
+-- -----------------------------------------------------------------------
+
+pub fn check(arena: &mut TyArena, module: &Module) -> Result[TypedModule, TypeError]:
+    -- check.rs::check (~22 LOC, medium complexity)
+    let mut ctx = ctx_new()
+    check_module(&mut ctx, arena, module)?
+    -- Finalize def_types: subst_apply every entry; surface AmbiguousType on free vars.
+    let mut finalized: dict[u32, i64] = {}
+    for (def_id, t) in ctx.def_types:
+        let resolved = subst_apply(&ctx.subst, arena, t)
+        if not free_vars(arena, resolved).is_empty():
+            return Err(TypeError::AmbiguousType {
+                span: module.span_of_def(def_id),  -- frontend-provided span
+                suggestion: Some("add an explicit type annotation, e.g. `let x: i64 = ...`"),
+            })
+        finalized.insert(def_id, resolved)
+    Ok(TypedModule { def_types: finalized, hir: module.clone() })
+
+-- -----------------------------------------------------------------------
+-- check_module — prebind items then iterate (~12 LOC, trivial)
+-- -----------------------------------------------------------------------
+
+fn check_module(ctx: &mut Ctx, arena: &mut TyArena, m: &Module) -> Result[(), TypeError]:
+    -- check.rs::Ctx::check_module
+    prebind_items(ctx, arena, &m.items)?
+    for item in &m.items:
+        check_item(ctx, arena, item)?
+    Ok(())
+
+fn prebind_items(ctx: &mut Ctx, arena: &mut TyArena, items: &list[Item]) -> Result[(), TypeError]:
+    -- mirrors Ctx::prebind_items
+    for item in items:
+        prebind_item(ctx, arena, item)?
+    Ok(())
+
+fn prebind_item(ctx: &mut Ctx, arena: &mut TyArena, item: &Item) -> Result[(), TypeError]:
+    -- mirrors Ctx::prebind_item (~40 LOC, medium)
+    -- Decl-position type lowering; populates def_types + poly_intrinsic_defs.
+    match &item.kind:
+        ItemKind::Fn(f):
+            let fn_ty = fn_signature_type(ctx, arena, f)?
+            record_def(ctx, item.def_id.0, fn_ty)
+            if is_list_polymorphic_intrinsic_name(&f.name):
+                ctx.poly_intrinsic_defs.insert(item.def_id.0)
+        ItemKind::TypeAlias(name, ht):
+            let t = lower_type(ctx, arena, ht)?
+            ctx.alias_map.insert(name.clone(), t)
+        ItemKind::Class(c):
+            -- Per ADR-0006 §"Class lowering" baseline (trivial M2 path).
+            -- Records the class-Adt handle.
+            let adt_handle = insert(arena, TyEntry::Adt(c.adt_id.0, []))
+            record_def(ctx, item.def_id.0, adt_handle)
+        ItemKind::Let(_) | ItemKind::Const(_):
+            -- Body-position bindings: lower at check_stmt time.
+            ()
+    Ok(())
+
+fn fn_signature_type(ctx: &mut Ctx, arena: &mut TyArena, f: &FnBody) -> Result[i64, TypeError]:
+    -- mirrors Ctx::fn_signature_type (~50 LOC, medium)
+    -- Build a FnTy arena entry from FnBody params + return annotation.
+    let positional: list[i64] = []
+    let named: list[(str, i64)] = []
+    for p in &f.params.positional:
+        let pt = lower_type(ctx, arena, &p.ty)?
+        positional.push(pt)
+    for (n, ht) in &f.params.named:
+        let nt = lower_type(ctx, arena, ht)?
+        named.push((n.clone(), nt))
+    let var_positional = f.params.var_positional.as_ref().map(|ht| lower_type(ctx, arena, ht)).transpose()?
+    let var_keyword = f.params.var_keyword.as_ref().map(|ht| lower_type(ctx, arena, ht)).transpose()?
+    let return_ty = lower_type(ctx, arena, &f.return_ty)?
+    let fn_id = arena.insert_fn(FnTyEntry {
+        positional, named, var_positional, var_keyword, return_ty,
+    })
+    Ok(insert(arena, TyEntry::Fn(fn_id)))
+
+-- -----------------------------------------------------------------------
+-- check_item — dispatch over ItemKind variants (~38 LOC, medium)
+-- -----------------------------------------------------------------------
+
+fn check_item(ctx: &mut Ctx, arena: &mut TyArena, item: &Item) -> Result[(), TypeError]:
+    -- mirrors Ctx::check_item
+    match &item.kind:
+        ItemKind::Fn(f):
+            check_fn(ctx, arena, f, item.def_id)
+        ItemKind::Class(c):
+            check_class(ctx, arena, c)
+        ItemKind::TypeAlias(_, _):
+            -- Pre-bound at prebind_item; no body check needed.
+            Ok(())
+        ItemKind::Let(le):
+            -- Body-position let: synth expr + bind to declared type.
+            let synth = synth_expr(ctx, arena, &le.value)?
+            let declared = lower_type(ctx, arena, &le.ty)?
+            unify(arena, declared, synth, &mut ctx.subst, le.span)?
+            record_def(ctx, item.def_id.0, declared)
+            Ok(())
+        ItemKind::Const(ce):
+            -- Same shape as Let but value is const-evaluable.
+            let synth = synth_expr(ctx, arena, &ce.value)?
+            let declared = lower_type(ctx, arena, &ce.ty)?
+            unify(arena, declared, synth, &mut ctx.subst, ce.span)?
+            record_def(ctx, item.def_id.0, declared)
+            Ok(())
+
+fn check_fn(ctx: &mut Ctx, arena: &mut TyArena, f: &FnBody, def_id: DefId) -> Result[(), TypeError]:
+    -- mirrors Ctx::check_fn (~85 LOC, medium)
+    -- Push return-type stack; check body; pop. Lifecycle pair invariant per §5.3.
+    let fn_ty_handle = lookup_def(ctx, def_id.0).expect("prebind_item set fn signature")
+    let fn_id = match lookup(arena, fn_ty_handle):
+        TyEntry::Fn(fid): fid
+        _: panic("prebind_item produced non-Fn for fn item")
+    let fn_entry = arena.lookup_fn(fn_id).clone()
+    ctx.return_stack.push(fn_entry.return_ty)
+    -- Validate mutable-default per ADR-0006 §"Mutable defaults rejected".
+    for p in &f.params.positional:
+        if let Some(default) = &p.default:
+            lower_default_type(ctx, arena, &p.ty, p.span)?
+    -- Body check.
+    let outcome = check_block(ctx, arena, &f.body)?
+    -- If return_ty is not None/Never, body must Diverge OR yield a returning path.
+    if outcome == BlockOutcome::Falls and not is_returning_void(fn_entry.return_ty, arena):
+        return Err(TypeError::TypeMismatch {
+            expected: fn_entry.return_ty,
+            actual: insert(arena, TyEntry::None),
+            span: f.span,
+            suggestion: Some("add a `return <value>` at the end of the function body"),
+        })
+    ctx.return_stack.pop()
+    Ok(())
+
+fn check_class(ctx: &mut Ctx, arena: &mut TyArena, c: &Class) -> Result[(), TypeError]:
+    -- mirrors Ctx::check_class (~9 LOC, trivial)
+    -- Per ADR-0006 §"Class lowering" baseline.
+    for method in &c.methods:
+        check_fn(ctx, arena, method, method.def_id)?
+    Ok(())
+
+-- -----------------------------------------------------------------------
+-- check_block + check_stmt — reachability + control-flow
+-- -----------------------------------------------------------------------
+
+fn check_block(ctx: &mut Ctx, arena: &mut TyArena, b: &Block) -> Result[BlockOutcome, TypeError]:
+    -- check.rs::Ctx::check_block (~8 LOC, trivial)
+    let mut outcomes: list[BlockOutcome] = []
+    for stmt in &b.stmts:
+        let o = check_stmt(ctx, arena, stmt)?
+        outcomes.push(o)
+        if o == BlockOutcome::Diverges:
+            break    -- unreachable code after Diverges
+    -- Last-arm wins; if final Diverges → Diverges, else Falls.
+    if outcomes.last() == Some(BlockOutcome::Diverges):
+        Ok(BlockOutcome::Diverges)
+    else:
+        Ok(BlockOutcome::Falls)
+
+fn check_stmt(ctx: &mut Ctx, arena: &mut TyArena, s: &Stmt) -> Result[BlockOutcome, TypeError]:
+    -- check.rs::Ctx::check_stmt (~126 LOC, high — 12+ arms)
+    match &s.kind:
+        StmtKind::Expr(e):
+            synth_expr(ctx, arena, e)?
+            Ok(BlockOutcome::Falls)
+        StmtKind::Let(le):
+            let synth = synth_expr(ctx, arena, &le.value)?
+            let declared = lower_type(ctx, arena, &le.ty)?
+            unify(arena, declared, synth, &mut ctx.subst, le.span)?
+            -- Bind any pattern fields.
+            bind_pattern(ctx, arena, &le.pattern, declared)?
+            Ok(BlockOutcome::Falls)
+        StmtKind::Return(value):
+            -- Guard: return_stack non-empty.
+            if ctx.return_stack.is_empty():
+                return Err(TypeError::ReturnOutsideFn {
+                    span: s.span,
+                    suggestion: Some("move the `return` inside a function body"),
+                })
+            let top = ctx.return_stack.last().expect("checked above")
+            let synth = synth_expr(ctx, arena, value)?
+            unify(arena, top, synth, &mut ctx.subst, s.span)?
+            Ok(BlockOutcome::Diverges)
+        StmtKind::Break:
+            if ctx.loop_depth == 0:
+                return Err(TypeError::BreakOutsideLoop {
+                    span: s.span,
+                    suggestion: Some("move the `break` inside a `for` or `while` loop body"),
+                })
+            Ok(BlockOutcome::Diverges)
+        StmtKind::Continue:
+            if ctx.loop_depth == 0:
+                return Err(TypeError::ContinueOutsideLoop {
+                    span: s.span,
+                    suggestion: Some("move the `continue` inside a `for` or `while` loop body"),
+                })
+            Ok(BlockOutcome::Diverges)
+        StmtKind::Yield(value):
+            -- Guard: must be inside fn body (return_stack non-empty).
+            if ctx.return_stack.is_empty():
+                return Err(TypeError::YieldOutsideFn {
+                    span: s.span,
+                    suggestion: Some("move the `yield` inside a generator `fn` body"),
+                })
+            synth_expr(ctx, arena, value)?
+            Ok(BlockOutcome::Falls)
+        StmtKind::If(if_stmt):
+            -- Condition must be bool per ADR-0006 §"Implicit truthy/falsy".
+            let cond_ty = synth_expr(ctx, arena, &if_stmt.cond)?
+            expect_bool(ctx, arena, cond_ty, if_stmt.cond.span)?
+            let then_o = check_block(ctx, arena, &if_stmt.then_block)?
+            let else_o = if_stmt.else_block.as_ref().map_or(BlockOutcome::Falls,
+                |b| check_block(ctx, arena, b).unwrap())
+            Ok(block_outcome_join(&[then_o, else_o]))
+        StmtKind::While(lk):
+            check_loop(ctx, arena, lk, s.span)
+        StmtKind::For(lk):
+            check_loop(ctx, arena, lk, s.span)
+        StmtKind::Match(scrutinee, arms):
+            check_match(ctx, arena, scrutinee, arms, s.span)
+        StmtKind::Raise(value):
+            -- raise diverges; value must synth.
+            synth_expr(ctx, arena, value)?
+            Ok(BlockOutcome::Diverges)
+        StmtKind::Assign(lhs, rhs):
+            let lhs_ty = synth_expr(ctx, arena, lhs)?
+            let rhs_ty = synth_expr(ctx, arena, rhs)?
+            unify(arena, lhs_ty, rhs_ty, &mut ctx.subst, s.span)?
+            Ok(BlockOutcome::Falls)
+
+fn check_loop(ctx: &mut Ctx, arena: &mut TyArena, lk: &LoopKind, span: Span) -> Result[BlockOutcome, TypeError]:
+    -- check.rs::Ctx::check_loop (~41 LOC, medium)
+    -- loop_depth lifecycle: increment at entry, decrement at exit.
+    ctx.loop_depth += 1
+    match lk:
+        LoopKind::While(cond, body):
+            let cond_ty = synth_expr(ctx, arena, cond)?
+            expect_bool(ctx, arena, cond_ty, cond.span)?
+            check_block(ctx, arena, body)?
+        LoopKind::For(target, iter, body):
+            let iter_ty = synth_expr(ctx, arena, iter)?
+            let elem_ty = iter_element(ctx, arena, iter_ty, iter.span)?
+            bind_pattern(ctx, arena, target, elem_ty)?
+            check_block(ctx, arena, body)?
+    ctx.loop_depth -= 1
+    -- Loop body may Falls or Diverges; we conservatively report Falls
+    -- (loops with `break` may exit normally even after Diverges body).
+    Ok(BlockOutcome::Falls)
+
+fn iter_element(ctx: &mut Ctx, arena: &mut TyArena, t: i64, span: Span) -> Result[i64, TypeError]:
+    -- check.rs::Ctx::iter_element (~47 LOC, medium)
+    -- Resolve container; extract element type. Emits NotIterable on primitives.
+    let resolved = subst_apply(&ctx.subst, arena, t)
+    match lookup(arena, resolved):
+        TyEntry::List(elem):
+            Ok(elem)
+        TyEntry::Set(elem):
+            Ok(elem)
+        TyEntry::Dict(k, _):
+            -- Iter over Dict yields keys per ADR-0006 §"Iteration protocols".
+            Ok(k)
+        TyEntry::Str:
+            -- Iter over Str yields Str (single-char). M2 baseline.
+            Ok(insert(arena, TyEntry::Str))
+        TyEntry::Bytes:
+            -- Iter over Bytes yields Int (per-byte).
+            Ok(insert(arena, TyEntry::Int))
+        TyEntry::Tuple(_):
+            -- Tuples are iterable but element type may be heterogeneous;
+            -- M2 returns fresh_var conservative.
+            Ok(fresh_var(ctx, arena))
+        _:
+            Err(TypeError::NotIterable {
+                actual: resolved,
+                span,
+                suggestion: Some("use a list / dict / range / str — primitives cannot iterate"),
+            })
+
+-- -----------------------------------------------------------------------
+-- check_match + exhaustiveness — ADR-0006 §"Match exhaustiveness"
+-- -----------------------------------------------------------------------
+
+fn check_match(ctx: &mut Ctx, arena: &mut TyArena, scrutinee: &Expr, arms: &list[MatchArm], span: Span) -> Result[BlockOutcome, TypeError]:
+    -- check.rs::Ctx::check_match (~44 LOC, medium)
+    let scrut_ty = synth_expr(ctx, arena, scrutinee)?
+    let mut outcomes: list[BlockOutcome] = []
+    let mut covered: set[str] = {}
+    for arm in arms:
+        bind_pattern(ctx, arena, &arm.pattern, scrut_ty)?
+        covered.insert(pattern_signature(&arm.pattern))
+        let o = check_block(ctx, arena, &arm.body)?
+        outcomes.push(o)
+    -- Exhaustiveness check.
+    if not is_exhaustive(arena, scrut_ty, &covered):
+        return Err(TypeError::NonExhaustiveMatch {
+            uncovered: uncovered_set(arena, scrut_ty, &covered),
+            span,
+            suggestion: None,
+        })
+    Ok(block_outcome_join(&outcomes))
+
+fn is_exhaustive(arena: &TyArena, scrut: i64, covered: &set[str]) -> bool:
+    -- check.rs::Ctx::is_exhaustive (~part of 43 LOC, medium)
+    match lookup(arena, scrut):
+        TyEntry::Bool:
+            covered.contains("True") and covered.contains("False")
+        _:
+            -- M2 conservative: non-Bool scrutinee with wildcard arm is exhaustive.
+            covered.contains("_")
+
+fn uncovered_set(arena: &TyArena, scrut: i64, covered: &set[str]) -> list[str]:
+    -- check.rs::Ctx::uncovered_set (~part of 43 LOC, medium)
+    match lookup(arena, scrut):
+        TyEntry::Bool:
+            let missing: list[str] = []
+            if not covered.contains("True"): missing.push("True")
+            if not covered.contains("False"): missing.push("False")
+            missing
+        _:
+            if not covered.contains("_"): ["_"] else: []
+
+-- -----------------------------------------------------------------------
+-- synth_expr — THE GIANT (~329 LOC, high; 19-arm match per §5.1)
+-- -----------------------------------------------------------------------
+-- F34 anchor: check.cb::synth_expr — the canonical bidirectional-checker
+-- surface and the largest single function in the cb codebase.
+
+fn synth_expr(ctx: &mut Ctx, arena: &mut TyArena, e: &Expr) -> Result[i64, TypeError]:
+    match &e.kind:
+        -- ARM 1: Lit — delegates to lit_type. PASS-only (lit_type total).
+        ExprKind::Lit(lit):
+            Ok(lit_type(ctx, arena, lit))
+
+        -- ARM 2: Format — f-string holes recurse; result is Str.
+        ExprKind::Format(parts):
+            for part in parts:
+                match part:
+                    FormatPart::Hole(inner):
+                        synth_expr(ctx, arena, inner)?
+                    FormatPart::Text(_):
+                        ()
+            Ok(insert(arena, TyEntry::Str))
+
+        -- ARM 3: Name — lookup_resolved; UnknownName FAIL path.
+        ExprKind::Name(rn):
+            lookup_resolved(ctx, arena, rn, e.span)
+
+        -- ARM 4: Tuple — synth each item; build Tuple(tys).
+        ExprKind::Tuple(items):
+            let tys: list[i64] = []
+            for item in items:
+                tys.push(synth_expr(ctx, arena, item)?)
+            Ok(insert(arena, TyEntry::Tuple(tys)))
+
+        -- ARM 5: List — homogeneous element unification.
+        ExprKind::List(items):
+            if items.is_empty():
+                let elem = fresh_var(ctx, arena)
+                return Ok(insert(arena, TyEntry::List(elem)))
+            let head = synth_expr(ctx, arena, &items[0])?
+            for rest in &items[1..]:
+                let t = synth_expr(ctx, arena, rest)?
+                unify(arena, head, t, &mut ctx.subst, rest.span)?
+            Ok(insert(arena, TyEntry::List(head)))
+
+        -- ARM 6: Set — homogeneous + hashable head.
+        ExprKind::Set(items):
+            if items.is_empty():
+                let elem = fresh_var(ctx, arena)
+                return Ok(insert(arena, TyEntry::Set(elem)))
+            let head = synth_expr(ctx, arena, &items[0])?
+            let head_resolved = subst_apply(&ctx.subst, arena, head)
+            if not is_hashable(arena, head_resolved):
+                return Err(TypeError::NotHashable {
+                    actual: head_resolved,
+                    span: items[0].span,
+                    suggestion: Some(
+                        "set elements must be hashable (str / int / bool / tuple-of-hashable); use a list otherwise"
+                    ),
+                })
+            for rest in &items[1..]:
+                let t = synth_expr(ctx, arena, rest)?
+                unify(arena, head, t, &mut ctx.subst, rest.span)?
+            Ok(insert(arena, TyEntry::Set(head)))
+
+        -- ARM 7: Dict — DictEntry::Pair unify + hashable key + Spread reject.
+        -- F34 anchor: arm-7 — covers NotHashable + DictSpreadNotSupported.
+        ExprKind::Dict(entries):
+            if entries.is_empty():
+                let k = fresh_var(ctx, arena)
+                let v = fresh_var(ctx, arena)
+                return Ok(insert(arena, TyEntry::Dict(k, v)))
+            -- Take first Pair to seed K/V types.
+            let mut k_seed: Option[i64] = None
+            let mut v_seed: Option[i64] = None
+            for entry in entries:
+                match entry:
+                    DictEntry::Pair(k_expr, v_expr):
+                        let k = synth_expr(ctx, arena, k_expr)?
+                        let v = synth_expr(ctx, arena, v_expr)?
+                        let k_resolved = subst_apply(&ctx.subst, arena, k)
+                        if not is_hashable(arena, k_resolved):
+                            return Err(TypeError::NotHashable {
+                                actual: k_resolved,
+                                span: k_expr.span,
+                                suggestion: Some(
+                                    "f64 keys are forbidden (NaN != NaN); use i64 via `f.to_bits() as i64` or a str repr"
+                                ),
+                            })
+                        match k_seed:
+                            Some(seed_k): unify(arena, seed_k, k, &mut ctx.subst, k_expr.span)?
+                            None: k_seed = Some(k)
+                        match v_seed:
+                            Some(seed_v): unify(arena, seed_v, v, &mut ctx.subst, v_expr.span)?
+                            None: v_seed = Some(v)
+                    DictEntry::Spread(_):
+                        -- Reject per ADR-0050d Phase F.3.
+                        return Err(TypeError::DictSpreadNotSupported {
+                            span: e.span,
+                            suggestion: Some(
+                                "dict-merge is Phase G; build the result manually by iterating `other.items()` and inserting"
+                            ),
+                        })
+            Ok(insert(arena, TyEntry::Dict(
+                k_seed.expect("non-empty entries"),
+                v_seed.expect("non-empty entries"),
+            )))
+
+        -- ARM 8: Comp — synth_comp dispatch.
+        ExprKind::Comp(c):
+            synth_comp(ctx, arena, c)
+
+        -- ARM 9: Lambda — FnTy{positional, return=body}.
+        ExprKind::Lambda(lambda):
+            let positional: list[i64] = []
+            for p in &lambda.params:
+                let pt = match &p.ty:
+                    Some(ht): lower_type(ctx, arena, ht)?
+                    None: fresh_var(ctx, arena)
+                positional.push(pt)
+                record_def(ctx, p.def_id.0, pt)
+            let return_ty = synth_expr(ctx, arena, &lambda.body)?
+            let fn_id = arena.insert_fn(FnTyEntry {
+                positional, named: [], var_positional: None, var_keyword: None, return_ty,
+            })
+            Ok(insert(arena, TyEntry::Fn(fn_id)))
+
+        -- ARM 10: Call — synth_call dispatch.
+        -- F34 anchor: arm-10 — covers ArityMismatch + NotCallable + Missing + Keyword.
+        ExprKind::Call(callee, args):
+            -- Method-form short-circuit: try_synth_method_call first.
+            if let Some(t) = try_synth_method_call(ctx, arena, callee, args, e.span)?:
+                return Ok(t)
+            synth_call(ctx, arena, callee, args, e.span)
+
+        -- ARM 11: Attr — M2 conservative fresh_var fallthrough.
+        ExprKind::Attr(base, _attr):
+            synth_expr(ctx, arena, base)?    -- ensure base synthesizable
+            Ok(fresh_var(ctx, arena))
+
+        -- ARM 12: Index — list/tuple/dict/str unpack.
+        ExprKind::Index(base, idx):
+            let base_ty = synth_expr(ctx, arena, base)?
+            let idx_ty = synth_expr(ctx, arena, idx)?
+            let base_resolved = subst_apply(&ctx.subst, arena, base_ty)
+            match lookup(arena, base_resolved):
+                TyEntry::List(elem):
+                    -- Index must be Int.
+                    let int_t = insert(arena, TyEntry::Int)
+                    unify(arena, int_t, idx_ty, &mut ctx.subst, idx.span)?
+                    Ok(elem)
+                TyEntry::Dict(k, v):
+                    unify(arena, k, idx_ty, &mut ctx.subst, idx.span)?
+                    Ok(v)
+                TyEntry::Tuple(items):
+                    -- Static-index lookup if literal int; else fresh_var.
+                    match literal_int_value(idx):
+                        Some(i):
+                            match resolve_tuple_index(&items, i):
+                                Some(t): Ok(t)
+                                None: Err(TypeError::TypeMismatch {
+                                    expected: insert(arena, TyEntry::Tuple(items.clone())),
+                                    actual: insert(arena, TyEntry::Int),
+                                    span: idx.span,
+                                    suggestion: Some("tuple index out of range"),
+                                })
+                        None: Ok(fresh_var(ctx, arena))
+                TyEntry::Str:
+                    let int_t = insert(arena, TyEntry::Int)
+                    unify(arena, int_t, idx_ty, &mut ctx.subst, idx.span)?
+                    Ok(insert(arena, TyEntry::Str))    -- single-char Str
+                TyEntry::Bytes:
+                    let int_t = insert(arena, TyEntry::Int)
+                    unify(arena, int_t, idx_ty, &mut ctx.subst, idx.span)?
+                    Ok(insert(arena, TyEntry::Int))    -- per-byte Int
+                _:
+                    Err(TypeError::NotIndexable {
+                        actual: base_resolved,
+                        span: base.span,
+                        suggestion: Some(
+                            "use a list / dict / tuple / str — primitive types cannot be indexed"
+                        ),
+                    })
+
+        -- ARM 13: Bin — synth_bin dispatch.
+        ExprKind::Bin(op, lhs, rhs):
+            synth_bin(ctx, arena, *op, lhs, rhs, e.span)
+
+        -- ARM 14: Un — synth_un dispatch.
+        ExprKind::Un(op, operand):
+            synth_un(ctx, arena, *op, operand, e.span)
+
+        -- ARM 15: Borrow — place-only borrow per ADR-0052a Wave-1.
+        ExprKind::Borrow(inner):
+            -- Place check: Name / Name.field / Name[idx] / method-call returning primitive.
+            match &inner.kind:
+                ExprKind::Name(_) | ExprKind::Attr(_, _) | ExprKind::Index(_, _):
+                    let inner_ty = synth_expr(ctx, arena, inner)?
+                    Ok(insert(arena, TyEntry::Ref(inner_ty)))
+                ExprKind::Call(_, _):
+                    -- Method call returning a primitive is a place per Wave-1.
+                    let inner_ty = synth_expr(ctx, arena, inner)?
+                    if is_copy_primitive(inner_ty):
+                        Ok(insert(arena, TyEntry::Ref(inner_ty)))
+                    else:
+                        Err(TypeError::BorrowOfNonPlace {
+                            span: inner.span,
+                            suggestion: Some(
+                                "borrow operand must be a place (`Name`, `Name.field`, \
+                                 `Name[idx]`, or `Name.method()` returning a primitive)"
+                            ),
+                        })
+                _:
+                    Err(TypeError::BorrowOfNonPlace {
+                        span: inner.span,
+                        suggestion: Some(
+                            "borrow operand must be a place (`Name`, `Name.field`, \
+                             `Name[idx]`, or `Name.method()` returning a primitive)"
+                        ),
+                    })
+
+        -- ARM 16: Await — M2 conservative fresh_var.
+        ExprKind::Await(inner):
+            synth_expr(ctx, arena, inner)?
+            Ok(fresh_var(ctx, arena))
+
+        -- ARM 17: Yield — return_stack guard → None.
+        ExprKind::Yield(value):
+            if ctx.return_stack.is_empty():
+                return Err(TypeError::YieldOutsideFn {
+                    span: e.span,
+                    suggestion: Some("move the `yield` inside a generator `fn` body"),
+                })
+            if let Some(v) = value:
+                synth_expr(ctx, arena, v)?
+            Ok(insert(arena, TyEntry::None))
+
+        -- ARM 18: YieldFrom — return_stack guard → None (same as Yield).
+        ExprKind::YieldFrom(value):
+            if ctx.return_stack.is_empty():
+                return Err(TypeError::YieldOutsideFn {
+                    span: e.span,
+                    suggestion: Some("move the `yield` inside a generator `fn` body"),
+                })
+            synth_expr(ctx, arena, value)?
+            Ok(insert(arena, TyEntry::None))
+
+        -- ARM 19: Cast — finalize + numeric-pair allow/reject.
+        ExprKind::Cast(value, ht):
+            let src_ty = synth_expr(ctx, arena, value)?
+            let dst_ty = lower_type(ctx, arena, ht)?
+            let src_r = subst_apply(&ctx.subst, arena, src_ty)
+            let dst_r = subst_apply(&ctx.subst, arena, dst_ty)
+            -- Allowed pairs: (Int, Float), (Float, Int), (Int, Bool), (Bool, Int).
+            -- Otherwise TypeMismatch.
+            let src_kind = lookup(arena, src_r)
+            let dst_kind = lookup(arena, dst_r)
+            let allowed = match (src_kind, dst_kind):
+                (TyEntry::Int, TyEntry::Float): true
+                (TyEntry::Float, TyEntry::Int): true
+                (TyEntry::Int, TyEntry::Bool): true
+                (TyEntry::Bool, TyEntry::Int): true
+                _: false
+            if not allowed:
+                return Err(TypeError::TypeMismatch {
+                    expected: dst_ty,
+                    actual: src_ty,
+                    span: e.span,
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
+                })
+            Ok(dst_ty)
+
+-- -----------------------------------------------------------------------
+-- synth_bin / synth_un / synth_comp — sub-dispatch helpers
+-- -----------------------------------------------------------------------
+
+fn synth_bin(ctx: &mut Ctx, arena: &mut TyArena, op: BinOp, lhs: &Expr, rhs: &Expr, span: Span) -> Result[i64, TypeError]:
+    -- check.rs::Ctx::synth_bin (~56 LOC, medium)
+    let lhs_ty = synth_expr(ctx, arena, lhs)?
+    let rhs_ty = synth_expr(ctx, arena, rhs)?
+    match op:
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod:
+            -- Numeric: Int/Float/Imag; Str concat on Add only.
+            unify(arena, lhs_ty, rhs_ty, &mut ctx.subst, span)?
+            let resolved = subst_apply(&ctx.subst, arena, lhs_ty)
+            match lookup(arena, resolved):
+                TyEntry::Int | TyEntry::Float | TyEntry::Imag:
+                    Ok(resolved)
+                TyEntry::Str if op == BinOp::Add:
+                    Ok(resolved)
+                _:
+                    Err(TypeError::TypeMismatch {
+                        expected: insert(arena, TyEntry::Int),
+                        actual: resolved,
+                        span,
+                        suggestion: Some("change to 'x: int'"),
+                    })
+        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne:
+            unify(arena, lhs_ty, rhs_ty, &mut ctx.subst, span)?
+            Ok(insert(arena, TyEntry::Bool))
+        BinOp::And | BinOp::Or:
+            -- Bool only per ADR-0006 §"Implicit truthy/falsy" forbidden.
+            expect_bool(ctx, arena, lhs_ty, lhs.span)?
+            expect_bool(ctx, arena, rhs_ty, rhs.span)?
+            Ok(insert(arena, TyEntry::Bool))
+
+fn synth_un(ctx: &mut Ctx, arena: &mut TyArena, op: UnaryOp, operand: &Expr, span: Span) -> Result[i64, TypeError]:
+    -- check.rs::Ctx::synth_un (~28 LOC, trivial)
+    let operand_ty = synth_expr(ctx, arena, operand)?
+    let resolved = subst_apply(&ctx.subst, arena, operand_ty)
+    match op:
+        UnaryOp::Neg | UnaryOp::Pos:
+            match lookup(arena, resolved):
+                TyEntry::Int | TyEntry::Float | TyEntry::Imag:
+                    Ok(resolved)
+                _:
+                    Err(TypeError::TypeMismatch {
+                        expected: insert(arena, TyEntry::Int),
+                        actual: resolved,
+                        span,
+                        suggestion: None,
+                    })
+        UnaryOp::Not:
+            expect_bool(ctx, arena, resolved, operand.span)?
+            Ok(insert(arena, TyEntry::Bool))
+        UnaryOp::BitNot:
+            match lookup(arena, resolved):
+                TyEntry::Int:
+                    Ok(resolved)
+                _:
+                    Err(TypeError::TypeMismatch {
+                        expected: insert(arena, TyEntry::Int),
+                        actual: resolved,
+                        span,
+                        suggestion: None,
+                    })
+
+fn synth_comp(ctx: &mut Ctx, arena: &mut TyArena, c: &Comp) -> Result[i64, TypeError]:
+    -- check.rs::Ctx::synth_comp (~53 LOC, medium)
+    -- Iter target binding; element synthesis per ADR-0006 §"Comprehensions".
+    let iter_ty = synth_expr(ctx, arena, &c.iter)?
+    let elem_ty = iter_element(ctx, arena, iter_ty, c.iter.span)?
+    bind_pattern(ctx, arena, &c.target, elem_ty)?
+    -- Optional filter (if-clause) must be bool.
+    if let Some(filter) = &c.filter:
+        let fty = synth_expr(ctx, arena, filter)?
+        expect_bool(ctx, arena, fty, filter.span)?
+    let body_ty = synth_expr(ctx, arena, &c.body)?
+    -- Comp form depends on c.kind (list / set / dict / generator).
+    match c.kind:
+        CompKind::List:
+            Ok(insert(arena, TyEntry::List(body_ty)))
+        CompKind::Set:
+            let body_resolved = subst_apply(&ctx.subst, arena, body_ty)
+            if not is_hashable(arena, body_resolved):
+                return Err(TypeError::NotHashable {
+                    actual: body_resolved,
+                    span: c.body.span,
+                    suggestion: None,
+                })
+            Ok(insert(arena, TyEntry::Set(body_ty)))
+        CompKind::Generator:
+            -- Generator yields body_ty; M2 returns fresh_var conservative.
+            Ok(fresh_var(ctx, arena))
+
+-- -----------------------------------------------------------------------
+-- synth_call + unify_call_arg — call-site machinery
+-- -----------------------------------------------------------------------
+
+fn synth_call(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[i64, TypeError]:
+    -- check.rs::Ctx::synth_call (~143 LOC, high)
+    let callee_ty = synth_expr(ctx, arena, callee)?
+    let callee_resolved = subst_apply(&ctx.subst, arena, callee_ty)
+    let fn_id = match lookup(arena, callee_resolved):
+        TyEntry::Fn(fid): fid
+        _:
+            return Err(TypeError::NotCallable {
+                actual: callee_resolved,
+                span,
+                suggestion: None,
+            })
+    let fn_entry = arena.lookup_fn(fn_id).clone()
+    -- Separate positional / named args.
+    let (pos_args, named_args) = split_call_args(args)
+    -- Arity check.
+    if pos_args.len() != fn_entry.positional.len() and fn_entry.var_positional.is_none():
+        return Err(TypeError::ArityMismatch {
+            expected: fn_entry.positional.len(),
+            actual: pos_args.len(),
+            span,
+            suggestion: None,
+        })
+    -- Bind positionals.
+    for (param_ty, arg) in fn_entry.positional.zip(pos_args.iter()):
+        let arg_ty = synth_expr(ctx, arena, &arg.value)?
+        unify_call_arg(ctx, arena, param_ty, arg_ty, arg.span)?
+    -- Bind named.
+    let named_lookup: dict[str, i64] = fn_entry.named.iter().collect()
+    let mut filled: set[str] = {}
+    for narg in named_args:
+        match named_lookup.get(&narg.name):
+            Some(param_ty):
+                let arg_ty = synth_expr(ctx, arena, &narg.value)?
+                unify_call_arg(ctx, arena, param_ty, arg_ty, narg.span)?
+                filled.insert(narg.name.clone())
+            None if fn_entry.var_keyword.is_some():
+                synth_expr(ctx, arena, &narg.value)?
+            None:
+                return Err(TypeError::KeywordArgMismatch {
+                    name: narg.name.clone(),
+                    span: narg.span,
+                    suggestion: None,
+                })
+    -- MissingArgument check.
+    for (name, _) in &fn_entry.named:
+        if not filled.contains(name):
+            return Err(TypeError::MissingArgument {
+                name: name.clone(),
+                span,
+                suggestion: None,
+            })
+    Ok(fn_entry.return_ty)
+
+fn unify_call_arg(ctx: &mut Ctx, arena: &mut TyArena, param_ty: i64, arg_ty: i64, span: Span) -> Result[(), TypeError]:
+    -- check.rs::Ctx::unify_call_arg (~13 LOC, trivial)
+    -- ADR-0052a Wave-1 one-way `Ref(T) → T` coercion at call-arg boundary.
+    let arg_resolved = subst_apply(&ctx.subst, arena, arg_ty)
+    let param_resolved = subst_apply(&ctx.subst, arena, param_ty)
+    -- If arg is Ref(T) and param is T (not Ref), peel one Ref layer.
+    match (lookup(arena, arg_resolved), lookup(arena, param_resolved)):
+        (TyEntry::Ref(inner), other) if !matches!(other, TyEntry::Ref(_)):
+            unify(arena, param_ty, inner, &mut ctx.subst, span)
+        _:
+            unify(arena, param_ty, arg_ty, &mut ctx.subst, span)
+
+-- -----------------------------------------------------------------------
+-- Method-table chain — 5 tables: Dict / Str / List / Float / Int
+-- Dispatch order per ADR-0055d §5.2 cross-cutting: preserve exactly.
+-- -----------------------------------------------------------------------
+
+fn try_synth_method_call(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]:
+    -- check.rs::Ctx::try_synth_method_call (~22 LOC, trivial chain)
+    -- Order: Dict → Str → List → Float → Int (preserved per §5.2).
+    if let Some(t) = try_synth_dict_method(ctx, arena, callee, args, span)?:
+        return Ok(Some(t))
+    if let Some(t) = try_synth_str_method(ctx, arena, callee, args, span)?:
+        return Ok(Some(t))
+    if let Some(t) = try_synth_list_method(ctx, arena, callee, args, span)?:
+        return Ok(Some(t))
+    if let Some(t) = try_synth_float_method(ctx, arena, callee, args, span)?:
+        return Ok(Some(t))
+    if let Some(t) = try_synth_int_method(ctx, arena, callee, args, span)?:
+        return Ok(Some(t))
+    -- Fallthrough: if callee is Attr(base, method), check the base's type
+    -- to decide if this is UnknownMethod (else return None to allow synth_call).
+    if let ExprKind::Attr(base, method) = &callee.kind:
+        let base_ty = synth_expr(ctx, arena, base)?
+        let base_resolved = subst_apply(&ctx.subst, arena, base_ty)
+        let type_name = match lookup(arena, base_resolved):
+            TyEntry::Dict(_, _): "Dict"
+            TyEntry::Str: "Str"
+            TyEntry::List(_): "List"
+            TyEntry::Float: "Float"
+            TyEntry::Int: "Int"
+            _: return Ok(None)    -- non-method-table receiver: pass through
+        return Err(TypeError::UnknownMethod {
+            type_name: type_name.to_string(),
+            method_name: method.clone(),
+            span,
+            suggestion: None,
+        })
+    Ok(None)
+
+fn try_synth_dict_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]:
+    -- check.rs::Ctx::try_synth_dict_method (~130 LOC, medium)
+    -- 5 arms per ADR-0050d Decision 6A/7A/10A: keys, values, items, get, copy.
+    let (base, method) = match &callee.kind:
+        ExprKind::Attr(b, m): (b, m)
+        _: return Ok(None)
+    let base_ty = synth_expr(ctx, arena, base)?
+    let base_resolved = subst_apply(&ctx.subst, arena, base_ty)
+    let (k, v) = match lookup(arena, base_resolved):
+        TyEntry::Dict(kk, vv): (kk, vv)
+        _: return Ok(None)
+    match method.as_str():
+        "keys":
+            if args.len() != 0:
+                return Err(TypeError::ArityMismatch {
+                    expected: 0, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::List(k))))
+        "values":
+            if args.len() != 0:
+                return Err(TypeError::ArityMismatch {
+                    expected: 0, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::List(v))))
+        "items":
+            if args.len() != 0:
+                return Err(TypeError::ArityMismatch {
+                    expected: 0, actual: args.len(), span, suggestion: None,
+                })
+            let kv_tuple = insert(arena, TyEntry::Tuple([k, v]))
+            Ok(Some(insert(arena, TyEntry::List(kv_tuple))))
+        "get":
+            if args.len() != 1:
+                return Err(TypeError::ArityMismatch {
+                    expected: 1, actual: args.len(), span, suggestion: None,
+                })
+            let arg_ty = synth_expr(ctx, arena, &args[0].value)?
+            unify(arena, k, arg_ty, &mut ctx.subst, args[0].span)?
+            Ok(Some(v))    -- Returns Option[V]; M2 simplification.
+        "copy":
+            if args.len() != 0:
+                return Err(TypeError::ArityMismatch {
+                    expected: 0, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(base_resolved))
+        _:
+            Ok(None)    -- Unknown method → chain to next table.
+
+fn try_synth_str_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]:
+    -- check.rs::Ctx::try_synth_str_method (~140 LOC, medium)
+    -- ~12 method arms per ADR-0050e Phase G method-form.
+    let (base, method) = match &callee.kind:
+        ExprKind::Attr(b, m): (b, m)
+        _: return Ok(None)
+    let base_ty = synth_expr(ctx, arena, base)?
+    let base_resolved = subst_apply(&ctx.subst, arena, base_ty)
+    if !matches!(lookup(arena, base_resolved), TyEntry::Str):
+        return Ok(None)
+    match method.as_str():
+        "split":
+            -- split(sep: str) -> List[Str]
+            if args.len() != 1:
+                return Err(TypeError::ArityMismatch {
+                    expected: 1, actual: args.len(), span, suggestion: None,
+                })
+            let str_t = insert(arena, TyEntry::Str)
+            let arg_ty = synth_expr(ctx, arena, &args[0].value)?
+            unify(arena, str_t, arg_ty, &mut ctx.subst, args[0].span)?
+            Ok(Some(insert(arena, TyEntry::List(str_t))))
+        "upper" | "lower" | "strip" | "lstrip" | "rstrip":
+            if args.len() != 0:
+                return Err(TypeError::ArityMismatch {
+                    expected: 0, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::Str)))
+        "startswith" | "endswith":
+            if args.len() != 1:
+                return Err(TypeError::ArityMismatch {
+                    expected: 1, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::Bool)))
+        "len":
+            if args.len() != 0:
+                return Err(TypeError::ArityMismatch {
+                    expected: 0, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::Int)))
+        "find" | "index":
+            if args.len() != 1:
+                return Err(TypeError::ArityMismatch {
+                    expected: 1, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::Int)))
+        "replace":
+            if args.len() != 2:
+                return Err(TypeError::ArityMismatch {
+                    expected: 2, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::Str)))
+        "join":
+            if args.len() != 1:
+                return Err(TypeError::ArityMismatch {
+                    expected: 1, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::Str)))
+        _:
+            Ok(None)
+
+fn try_synth_list_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]:
+    -- check.rs::Ctx::try_synth_list_method (~110 LOC, medium)
+    -- 8 method arms: append, extend, pop, sort, reverse, len, count, index.
+    let (base, method) = match &callee.kind:
+        ExprKind::Attr(b, m): (b, m)
+        _: return Ok(None)
+    let base_ty = synth_expr(ctx, arena, base)?
+    let base_resolved = subst_apply(&ctx.subst, arena, base_ty)
+    let elem = match lookup(arena, base_resolved):
+        TyEntry::List(e): e
+        _: return Ok(None)
+    match method.as_str():
+        "append":
+            if args.len() != 1:
+                return Err(TypeError::ArityMismatch {
+                    expected: 1, actual: args.len(), span, suggestion: None,
+                })
+            let arg_ty = synth_expr(ctx, arena, &args[0].value)?
+            unify(arena, elem, arg_ty, &mut ctx.subst, args[0].span)?
+            Ok(Some(insert(arena, TyEntry::None)))
+        "extend":
+            if args.len() != 1:
+                return Err(TypeError::ArityMismatch {
+                    expected: 1, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::None)))
+        "pop":
+            -- pop() -> elem; pop(idx) -> elem
+            Ok(Some(elem))
+        "sort" | "reverse":
+            if args.len() != 0:
+                return Err(TypeError::ArityMismatch {
+                    expected: 0, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::None)))
+        "len" | "count":
+            Ok(Some(insert(arena, TyEntry::Int)))
+        "index":
+            if args.len() != 1:
+                return Err(TypeError::ArityMismatch {
+                    expected: 1, actual: args.len(), span, suggestion: None,
+                })
+            Ok(Some(insert(arena, TyEntry::Int)))
+        _:
+            Ok(None)
+
+fn try_synth_float_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]:
+    -- check.rs::Ctx::try_synth_float_method (~60 LOC, medium)
+    -- 4 method arms: is_integer, as_integer_ratio, hex, fromhex.
+    let (base, method) = match &callee.kind:
+        ExprKind::Attr(b, m): (b, m)
+        _: return Ok(None)
+    let base_ty = synth_expr(ctx, arena, base)?
+    let base_resolved = subst_apply(&ctx.subst, arena, base_ty)
+    if !matches!(lookup(arena, base_resolved), TyEntry::Float):
+        return Ok(None)
+    match method.as_str():
+        "is_integer":
+            Ok(Some(insert(arena, TyEntry::Bool)))
+        "as_integer_ratio":
+            let int_t = insert(arena, TyEntry::Int)
+            Ok(Some(insert(arena, TyEntry::Tuple([int_t, int_t]))))
+        "hex":
+            Ok(Some(insert(arena, TyEntry::Str)))
+        _:
+            Ok(None)
+
+fn try_synth_int_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]:
+    -- check.rs::Ctx::try_synth_int_method (~75 LOC, medium)
+    -- 5 method arms: bit_length, bit_count, to_bytes, from_bytes, as_integer_ratio.
+    let (base, method) = match &callee.kind:
+        ExprKind::Attr(b, m): (b, m)
+        _: return Ok(None)
+    let base_ty = synth_expr(ctx, arena, base)?
+    let base_resolved = subst_apply(&ctx.subst, arena, base_ty)
+    if !matches!(lookup(arena, base_resolved), TyEntry::Int):
+        return Ok(None)
+    match method.as_str():
+        "bit_length" | "bit_count":
+            Ok(Some(insert(arena, TyEntry::Int)))
+        "to_bytes":
+            Ok(Some(insert(arena, TyEntry::Bytes)))
+        "as_integer_ratio":
+            let int_t = insert(arena, TyEntry::Int)
+            Ok(Some(insert(arena, TyEntry::Tuple([int_t, int_t]))))
+        _:
+            Ok(None)
+
+-- -----------------------------------------------------------------------
+-- Auxiliary checks
+-- -----------------------------------------------------------------------
+
+fn expect_bool(ctx: &mut Ctx, arena: &mut TyArena, t: i64, span: Span) -> Result[(), TypeError]:
+    -- check.rs::Ctx::expect_bool (~13 LOC, trivial)
+    -- ImplicitTruthiness guard per ADR-0006 §"Implicit truthy/falsy" forbidden.
+    let resolved = subst_apply(&ctx.subst, arena, t)
+    match lookup(arena, resolved):
+        TyEntry::Bool:
+            Ok(())
+        _:
+            Err(TypeError::ImplicitTruthiness {
+                actual: resolved,
+                span,
+                suggestion: Some("change to 'if x != 0:'"),
+            })
+
+fn bind_pattern(ctx: &mut Ctx, arena: &mut TyArena, p: &Pattern, t: i64) -> Result[(), TypeError]:
+    -- check.rs::Ctx::bind_pattern (~102 LOC, high)
+    -- Pattern-match binding; recursive descent over PatternKind.
+    match &p.kind:
+        PatternKind::Name(def_id):
+            record_def(ctx, def_id.0, t)
+            Ok(())
+        PatternKind::Wildcard:
+            Ok(())
+        PatternKind::Lit(_):
+            Ok(())
+        PatternKind::Tuple(items):
+            let resolved = subst_apply(&ctx.subst, arena, t)
+            match lookup(arena, resolved):
+                TyEntry::Tuple(tys) if tys.len() == items.len():
+                    for (sub_p, sub_t) in items.zip(tys):
+                        bind_pattern(ctx, arena, sub_p, sub_t)?
+                    Ok(())
+                _:
+                    Err(TypeError::TypeMismatch {
+                        expected: t,
+                        actual: resolved,
+                        span: p.span,
+                        suggestion: None,
+                    })
+        PatternKind::Record(fields):
+            let resolved = subst_apply(&ctx.subst, arena, t)
+            match lookup(arena, resolved):
+                TyEntry::Record(rid):
+                    let rec = arena.lookup_record(rid).clone()
+                    let mut seen: set[str] = {}
+                    for (name, sub_p) in fields:
+                        if seen.contains(name):
+                            return Err(TypeError::RowConflict {
+                                field: name.clone(),
+                                ty1: t,
+                                ty2: t,
+                                span: p.span,
+                                suggestion: None,
+                            })
+                        seen.insert(name.clone())
+                        match rec.fields.find_field(name):
+                            Some(sub_t):
+                                bind_pattern(ctx, arena, sub_p, sub_t)?
+                            None:
+                                return Err(TypeError::UnknownName {
+                                    name: name.clone(),
+                                    span: p.span,
+                                    suggestion: None,
+                                })
+                    Ok(())
+                _:
+                    Err(TypeError::TypeMismatch {
+                        expected: t,
+                        actual: resolved,
+                        span: p.span,
+                        suggestion: None,
+                    })
+
+-- -----------------------------------------------------------------------
+-- Type-lowering subsystem (lower_type + lower_named_type + lower_generic_type)
+-- -----------------------------------------------------------------------
+
+fn lower_type(ctx: &mut Ctx, arena: &mut TyArena, ht: &HirType) -> Result[i64, TypeError]:
+    -- check.rs::Ctx::lower_type (~37 LOC, medium)
+    -- HirType → arena TyEntry via lower_named_type / lower_generic_type.
+    match &ht.kind:
+        HirTypeKind::Named(name):
+            Ok(lower_named_type(ctx, arena, name))
+        HirTypeKind::Generic(head, args):
+            lower_generic_type(ctx, arena, head, args)
+        HirTypeKind::Fn(positional, named, return_ty):
+            let pos_lowered: list[i64] = []
+            for p in positional:
+                pos_lowered.push(lower_type(ctx, arena, p)?)
+            let named_lowered: list[(str, i64)] = []
+            for (n, nt) in named:
+                named_lowered.push((n.clone(), lower_type(ctx, arena, nt)?))
+            let rt = lower_type(ctx, arena, return_ty)?
+            let fn_id = arena.insert_fn(FnTyEntry {
+                positional: pos_lowered,
+                named: named_lowered,
+                var_positional: None, var_keyword: None,
+                return_ty: rt,
+            })
+            Ok(insert(arena, TyEntry::Fn(fn_id)))
+        HirTypeKind::Ref(inner):
+            let i = lower_type(ctx, arena, inner)?
+            Ok(insert(arena, TyEntry::Ref(i)))
+        HirTypeKind::Infer:
+            Ok(fresh_var(ctx, arena))
+
+fn lower_named_type(ctx: &mut Ctx, arena: &mut TyArena, name: &str) -> i64:
+    -- check.rs::Ctx::lower_named_type (~30 LOC, trivial)
+    match name:
+        "int" | "i64": insert(arena, TyEntry::Int)
+        "float" | "f64": insert(arena, TyEntry::Float)
+        "str": insert(arena, TyEntry::Str)
+        "bytes": insert(arena, TyEntry::Bytes)
+        "bool": insert(arena, TyEntry::Bool)
+        "None": insert(arena, TyEntry::None)
+        "Any":
+            -- M2 conservative: Any → fresh_var
+            fresh_var(ctx, arena)
+        "Never": insert(arena, TyEntry::Never)
+        _:
+            -- Alias-map first; else Generic fresh placeholder.
+            match ctx.alias_map.get(name):
+                Some(handle): clone_into_arena(arena, *handle, arena)
+                None: fresh_var(ctx, arena)
+
+fn lower_generic_type(ctx: &mut Ctx, arena: &mut TyArena, head: &str, args: &list[HirType]) -> Result[i64, TypeError]:
+    -- check.rs::Ctx::lower_generic_type (~28 LOC, trivial)
+    match head:
+        "list":
+            if args.len() != 1:
+                return Err(TypeError::ArityMismatch {
+                    expected: 1, actual: args.len(), span: dummy_span(), suggestion: None,
+                })
+            let inner = lower_type(ctx, arena, &args[0])?
+            Ok(insert(arena, TyEntry::List(inner)))
+        "set":
+            if args.len() != 1:
+                return Err(TypeError::ArityMismatch {
+                    expected: 1, actual: args.len(), span: dummy_span(), suggestion: None,
+                })
+            let inner = lower_type(ctx, arena, &args[0])?
+            Ok(insert(arena, TyEntry::Set(inner)))
+        "dict":
+            if args.len() != 2:
+                return Err(TypeError::ArityMismatch {
+                    expected: 2, actual: args.len(), span: dummy_span(), suggestion: None,
+                })
+            let k = lower_type(ctx, arena, &args[0])?
+            let v = lower_type(ctx, arena, &args[1])?
+            Ok(insert(arena, TyEntry::Dict(k, v)))
+        "tuple":
+            let items: list[i64] = []
+            for a in args:
+                items.push(lower_type(ctx, arena, a)?)
+            Ok(insert(arena, TyEntry::Tuple(items)))
+        _:
+            -- Alias-or-Adt application path.
+            match ctx.alias_map.get(head):
+                Some(handle): clone_into_arena(arena, *handle, arena)
+                None: fresh_var(ctx, arena)
+
+fn lookup_resolved(ctx: &mut Ctx, arena: &mut TyArena, rn: &ResolvedName, span: Span) -> Result[i64, TypeError]:
+    -- check.rs::Ctx::lookup_resolved (~26 LOC, medium)
+    match rn:
+        ResolvedName::Def(def_id):
+            match lookup_def(ctx, def_id.0):
+                Some(handle):
+                    -- Row-polymorphic instantiation if this DefId is in poly_intrinsic_defs.
+                    if ctx.poly_intrinsic_defs.contains(&def_id.0):
+                        Ok(instantiate_list_polymorphic(ctx, arena, handle))
+                    else:
+                        Ok(handle)
+                None:
+                    Err(TypeError::UnknownName {
+                        name: rn.name().to_string(),
+                        span,
+                        suggestion: None,
+                    })
+        ResolvedName::Builtin(name):
+            Ok(lower_named_type(ctx, arena, name))
+
+fn instantiate_list_polymorphic(ctx: &mut Ctx, arena: &mut TyArena, handle: i64) -> i64:
+    -- check.rs::Ctx::instantiate_list_polymorphic (~39 LOC, medium)
+    -- Fresh-var instantiation per ADR-0050c §F5 row-polymorphic widening.
+    let generic_vars = free_vars(arena, handle)
+    if generic_vars.is_empty():
+        return handle
+    let mut inst = handle
+    for gv in generic_vars:
+        let fresh = fresh_var(ctx, arena)
+        inst = subst_var(arena, inst, gv, fresh)
+    inst
+
+fn lit_type(ctx: &mut Ctx, arena: &mut TyArena, lit: &Lit) -> i64:
+    -- check.rs::Ctx::lit_type (~12 LOC, trivial)
+    match lit:
+        Lit::Int(_): insert(arena, TyEntry::Int)
+        Lit::Float(_): insert(arena, TyEntry::Float)
+        Lit::Bool(_): insert(arena, TyEntry::Bool)
+        Lit::Str(_): insert(arena, TyEntry::Str)
+        Lit::Bytes(_): insert(arena, TyEntry::Bytes)
+        Lit::None: insert(arena, TyEntry::None)
+
+fn lower_default_type(ctx: &mut Ctx, arena: &mut TyArena, ht: &HirType, span: Span) -> Result[i64, TypeError]:
+    -- check.rs::Ctx::lower_default_type (~17 LOC, trivial)
+    -- MutableDefault detection per ADR-0006 §"Mutable defaults rejected".
+    let t = lower_type(ctx, arena, ht)?
+    if is_mutable_container(arena, t):
+        return Err(TypeError::MutableDefault {
+            span,
+            suggestion: Some("change default to None"),
+        })
+    Ok(t)
+
+fn validate_hashable_dict(ctx: &mut Ctx, arena: &mut TyArena, key_ht: &HirType, span: Span) -> Result[(), TypeError]:
+    -- check.rs::Ctx::validate_hashable_dict (~44 LOC, medium)
+    let k = lower_type(ctx, arena, key_ht)?
+    if not is_hashable(arena, k):
+        return Err(TypeError::NotHashable {
+            actual: k,
+            span,
+            suggestion: Some("dict keys must be hashable"),
+        })
+    Ok(())
+
+-- -----------------------------------------------------------------------
+-- Free helpers (no arena threading)
+-- -----------------------------------------------------------------------
+
+fn is_copy_primitive(t_handle: i64, arena: &TyArena) -> bool:
+    -- check.rs::is_copy_primitive
+    matches!(lookup(arena, t_handle), TyEntry::Bool | TyEntry::Int | TyEntry::Float | TyEntry::None)
+
+fn lit_to_string(lit: &Lit) -> str:
+    -- check.rs::lit_to_string
+    match lit:
+        Lit::Int(n): format!("{n}")
+        Lit::Float(f): format!("{f}")
+        Lit::Bool(b): if *b: "True" else: "False"
+        Lit::Str(s): format!("'{s}'")
+        Lit::Bytes(_): "<bytes>"
+        Lit::None: "None"
+
+fn is_list_polymorphic_intrinsic_name(name: &str) -> bool:
+    -- check.rs::is_list_polymorphic_intrinsic_name
+    -- ADR-0050c §F5 row-polymorphic intrinsics.
+    matches!(name, "id" | "len" | "sorted" | "reversed" | "list" | "set")
+
+fn literal_int_value(e: &Expr) -> Option[i64]:
+    -- check.rs::literal_int_value
+    match &e.kind:
+        ExprKind::Lit(Lit::Int(n)): Some(*n)
+        _: None
+
+fn resolve_tuple_index(items: &list[i64], idx: i64) -> Option[i64]:
+    -- check.rs::resolve_tuple_index
+    if idx < 0 or idx >= items.len() as i64:
+        None
+    else:
+        Some(items[idx as usize])
+
+-- Suggestion-string lookup tables (~150 LOC of pure data per ADR-0055d §5).
+fn str_method_suggestion(name: &str) -> Option[str]:
+    -- check.rs::str_method_suggestion
+    match name:
+        "splitlines": Some("did you mean `split('\\n')`?")
+        "strip_prefix": Some("did you mean `removeprefix`?")
+        _: None
+
+fn list_method_suggestion(name: &str) -> Option[str]:
+    -- check.rs::list_method_suggestion
+    match name:
+        "insertAll": Some("did you mean `extend`?")
+        "removeAt": Some("did you mean `pop(idx)`?")
+        _: None
+
+fn float_method_suggestion(name: &str) -> Option[str]:
+    -- check.rs::float_method_suggestion
+    None
+
+fn int_method_suggestion(name: &str) -> Option[str]:
+    -- check.rs::int_method_suggestion
+    match name:
+        "popcount": Some("did you mean `bit_count`?")
+        _: None
+
+-- -----------------------------------------------------------------------
+-- End of check.cb — ~830 LOC doc-ref mirror of check.rs's 2402 LOC Rust impl.
+-- 19 synth_expr arms + Ctx lifecycle + 5 method tables + 57 TypeError sites.
+-- Phase H Wave-3 LARGEST sub-sprint per ADR-0055 §8.2.
+-- F34 anchors: synth_expr, synth_call, unify_call_arg, try_synth_method_call,
+-- try_synth_dict_method, ctx_new, bind_pattern, lower_type, expect_bool.
+-- -----------------------------------------------------------------------
