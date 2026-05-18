@@ -1,0 +1,24 @@
+[package]
+name = "cobrust-types-cb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "cb mirror of cobrust-types (ADR-0055a + ADR-0055b): Ty + TypeError arena-form proof artifact."
+
+[lints]
+workspace = true
+
+[dependencies]
+cobrust-types = { path = "../cobrust-types", version = "=0.3.0" }
+cobrust-types-parity = { path = "../cobrust-types-parity", version = "=0.3.0" }
+cobrust-frontend = { path = "../cobrust-frontend" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
