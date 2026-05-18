@@ -270,6 +270,27 @@ Cold-start budget (per ADR-0029 §"Cold-start budget"):
 History persistence: `~/.cobrust/repl_history` (1024-entry bound,
 managed by rustyline).
 
+### Phase I ADR-0056b extension — `Session::type_ctx` (cross-turn TypeCheckCtx)
+
+Per ADR-0056b §3.3 + §6 (accepted at `b0e1e9e`):
+
+- `Session` now `#[derive(Clone)]` and carries a
+  `type_ctx: TypeCheckCtx` field (Arc-COW internals — O(1) Clone).
+- `Session::type_ctx() -> &TypeCheckCtx` — Phase J LSP wave-1
+  (ADR-0057a §4) reads this on `did_change`.
+- `Session::invalidate(file_id: u32)` — multi-file invalidation per
+  ADR-0057a §4.
+- `:type x` directive fast-paths to `type_ctx.lookup(x)` for bare
+  identifiers; cross-turn `let x = …` + `:type x` now reports the
+  inferred type without re-parse.
+- `:clear` resets `type_ctx` alongside `bindings`.
+- `evaluate_module` runs a parallel `check_incremental` per turn to
+  populate `type_ctx` under `FileId::SYNTHETIC`. Errors are swallowed
+  (eval-side is wave-2 narrow; diagnostics belong to ADR-0057a wire).
+
+Tests: `crates/cobrust-cli/src/repl.rs::tests::session_*` (7 cases)
++ `crates/cobrust-types/tests/type_check_ctx_contract.rs` (16 cases).
+
 ## Done means (M14)
 
 - [x] `cobrust repl` lifts the M10 stub to full functionality.
