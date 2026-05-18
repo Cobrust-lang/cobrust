@@ -1697,6 +1697,7 @@ dependencies = [
  "bitflags 2.11.1",
  "inkwell_internals",
  "libc",
+ "llvm-sys",
  "thiserror 2.0.18",
 ]
 
@@ -1873,6 +1874,20 @@ name = "litemap"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
+
+[[package]]
+name = "llvm-sys"
+version = "181.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e24aad69cbdb0c6ebe777262e9e6314dceba0d6e6a2a63e47563ccd293a2eda8"
+dependencies = [
+ "anyhow",
+ "cc",
+ "lazy_static",
+ "libc",
+ "regex-lite",
+ "semver",
+]
 
 [[package]]
 name = "lock_api"
@@ -2765,6 +2780,12 @@ dependencies = [
  "memchr",
  "regex-syntax",
 ]
+
+[[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
 name = "regex-syntax"
