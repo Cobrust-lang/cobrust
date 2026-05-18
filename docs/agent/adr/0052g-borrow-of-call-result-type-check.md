@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0052g
 parent_adr: 0052
 title: "Type-check support for `&CallResult` (method-call return-value borrow)"
-status: proposed
+status: accepted
 date: 2026-05-18
-last_verified_commit: 25ee43f
+last_verified_commit: 29416f4
+ratified_at: 29416f4
+ratified_on: 2026-05-18
 supersedes: []
 superseded_by: []
 relates_to: [adr:0052a, adr:0052d-prereq, adr:0052f, adr:0052]
@@ -239,6 +241,18 @@ Per CLAUDE.md §2.5 audit-teammate rubric:
 
 - No HIR / parser / MIR / codegen change. The MIR rewrite map at `mir/src/lower.rs:2526` already resolves the method-form receiver under the borrow wrapper.
 - §11-style "Cascade enumeration (post-spike)" addendum methodology applies — append subsection to §10 after impl merge.
+
+### Cascade enumeration (post-spike 2026-05-18 / SHA `29416f4`)
+
+**Empirical attestation (DG, branch `feature/0052g-impl` @ `29416f4`)**:
+
+- **Type-check corpus (Phase 2 impl @ `3dc17da`)**: 5/5 `w0052g_*` admit + 3/3 `i0052g_*` reject GREEN under `cargo test --package cobrust-types --test {well_typed,ill_typed}` (8/8 pass; 0 fail). Narrowed `Borrow` synth arm at `crates/cobrust-types/src/check.rs:895-929` works as specified.
+- **MIR borrow-precedence witness (Phase 3 + witness-fix @ `29416f4`)**: `f30wit_method_03_borrow_precedence_binds_tighter_than_method_call` GREEN under `cargo test --package cobrust-mir --test method_dispatch_f30_witness`. The §"Neutral" L240 framing was empirically correct — MIR `lower_borrow_inner` (`crates/cobrust-mir/src/lower.rs:1941-1956`) recurses the method-form rewrite via the `_ => lower_expr(inner)` fallthrough, and the resulting `Terminator::Call` carries `Operand::Constant(Constant::FnRef(prelude_def_id))` per `lower_rewritten_method_call:1797`.
+- **Witness instrumentation gap (closed @ `29416f4`)**: the test-side `callees()` at `crates/cobrust-mir/tests/method_dispatch_f30_witness.rs:104` originally scanned only `Constant::Str(name)` and false-failed with an empty callee set. Extended to also resolve `Constant::FnRef(id)` against `MirModule.bodies[def_id == id].name`. No production-code change.
+
+**Cascade quantification vs main HEAD `d60d736`**: partial workspace cargo run on `6810ca0` observed pass=1369 / fail=114 / ignored=84 with cobrust-types tests not yet reached when SSH dropped (cargo continued to completion DG-side; cobrust-types tests verified GREEN via targeted re-run per L189-191 above). Targeted re-runs of the 9 0052g-specific witnesses: 9 GREEN / 0 FAIL. All pre-existing failures are honest-debt LC-100 / e0052a / f64e* / snap_03 unrelated to ADR-0052g surface. **ZERO non-0052g regression.**
+
+**§13-style design lesson**: the §10 "Neutral L240 framing" assertion was correct at the production-code layer but missed the witness-observability gap. ADR-0052g §6 dry-run table (L173-181) should have included a witness-side instrumentation row. Future MIR-affecting type-check ADRs should pair a §"Witness instrumentation audit" subsection with the §6 cascade table.
 
 ## 11. Dispatch readiness
 

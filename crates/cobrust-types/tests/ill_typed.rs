@@ -41,6 +41,11 @@ enum Cat {
     /// the placeholder swap (`Cat::UnknownName` → `Cat::UnknownMethod`)
     /// in i0052dpre_01..06 inline comments; DEV graduates per F28.
     UnknownMethod,
+    /// ADR-0052g Wave-2 round 2 — `Cat::BorrowOfNonPlace` pairs with
+    /// `TypeError::BorrowOfNonPlace`. Used by i0052g_* tests that
+    /// assert `&recv.method()` (non-Copy return) + `&free_fn(...)`
+    /// rejections per ADR-0052g §4.2-§4.3.
+    BorrowOfNonPlace,
 }
 
 fn matches_cat(err: &TypeError, cat: Cat) -> bool {
@@ -61,6 +66,7 @@ fn matches_cat(err: &TypeError, cat: Cat) -> bool {
         (Cat::MutableDefault, TypeError::MutableDefault { .. }) => true,
         (Cat::UnknownName, TypeError::UnknownName { .. }) => true,
         (Cat::UnknownMethod, TypeError::UnknownMethod { .. }) => true,
+        (Cat::BorrowOfNonPlace, TypeError::BorrowOfNonPlace { .. }) => true,
         _ => false,
     }
 }
@@ -2371,5 +2377,79 @@ fn i0052dpre_cross_01_unknown_method_suggestion_field_populated_for_typo() {
     assert!(
         dbg.contains("suggestion: Some"),
         "i0052dpre_cross_01: `suggestion` field must be `Some(_)` for typo (ADR-0052b Direction B coordination), got: {dbg}"
+    );
+}
+
+// ============================================================
+// ADR-0052g Wave 2 round 2 — `&recv.method()` rejection corpus
+//
+// 3 ill-typed programs the type checker MUST reject under the
+// narrowed `Borrow` synth arm per ADR-0052g §4.2-§4.3:
+//
+//   - `&s.split(",")` (Str.split returns `list[str]` — non-Copy)
+//   - `&xs.get(0)` (List[Str] element returns Str — non-Copy)
+//   - `&literal_call()` (free-fn call — defense-in-depth)
+//
+// All emit `TypeError::BorrowOfNonPlace` with a populated `suggestion`
+// field carrying the let-bind-then-borrow rewrite pattern (§2.5
+// Direction B "print the FIX, not just the diagnosis").
+//
+// Pre-DEV-impl status: every i0052g_* test below is `#[ignore]`'d
+// pending Wave-2 round 2 DEV merge at `check.rs:888-891`.
+// ============================================================
+
+const METHOD_STUBS_FOR_NON_COPY_BORROW: &str = concat!(
+    "fn str_len(s: str) -> i64:\n    return 0\n",
+    "fn split(s: str, sep: str) -> list[str]:\n    let xs: list[str] = []\n    return xs\n",
+    "fn list_get_str(xs: list[str], i: i64) -> str:\n    return \"\"\n",
+    "fn trim(s: str) -> str:\n    return \"\"\n",
+);
+
+#[test]
+fn i0052g_01_borrow_str_split_non_copy_rejected() {
+    // ADR-0052g §4.2 — `&s.split(",")` returns `list[str]` (non-Copy);
+    // must emit `BorrowOfNonPlace` with FIX-text pointing at let-bind.
+    let src = format!(
+        "{METHOD_STUBS_FOR_NON_COPY_BORROW}fn read_xs(xs: list[str]) -> i64:\n    return 0\nfn f() -> i64:\n    let s: str = \"a,b\"\n    let r: i64 = read_xs(&s.split(\",\"))\n    return r\n",
+    );
+    must_reject(
+        "borrow-str-split-non-copy",
+        &src,
+        Cat::BorrowOfNonPlace,
+    );
+}
+
+#[test]
+fn i0052g_02_borrow_method_returning_str_non_copy_rejected() {
+    // ADR-0052g §4.2 — `&s.trim()` returns Str (non-Copy); must emit
+    // `BorrowOfNonPlace` with FIX-text. Trim is a Str-table method.
+    let src = format!(
+        "{METHOD_STUBS_FOR_NON_COPY_BORROW}fn read_str(s: str) -> i64:\n    return 0\nfn f() -> i64:\n    let s: str = \"  hi  \"\n    let r: i64 = read_str(&s.trim())\n    return r\n",
+    );
+    must_reject(
+        "borrow-str-trim-non-copy",
+        &src,
+        Cat::BorrowOfNonPlace,
+    );
+}
+
+#[test]
+fn i0052g_03_borrow_list_get_non_copy_rejected() {
+    // ADR-0052g §4.2 — `&xs.get(0)` where `xs: list[str]` returns Str
+    // (non-Copy); must emit `BorrowOfNonPlace` per the narrowed arm.
+    //
+    // Defense-in-depth note: free-fn-call borrow `&free_fn(x)` was the
+    // original §4.3 test target but the parser §8 cap (post-0052f)
+    // catches it at parse time — `must_reject` would panic on the
+    // parse failure since the helper requires the snippet to parse.
+    // Substituting a parser-admissible non-Copy method-form witness
+    // keeps the test exercising the type-check rejection path.
+    let src = format!(
+        "{METHOD_STUBS_FOR_NON_COPY_BORROW}fn read_str(s: str) -> i64:\n    return 0\nfn f() -> i64:\n    let xs: list[str] = [\"a\", \"b\"]\n    let r: i64 = read_str(&xs.get(0))\n    return r\n",
+    );
+    must_reject(
+        "borrow-list-get-non-copy",
+        &src,
+        Cat::BorrowOfNonPlace,
     );
 }
