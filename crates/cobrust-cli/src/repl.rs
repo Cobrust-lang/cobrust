@@ -169,6 +169,7 @@ impl Session {
     /// snapshot may reflect pre- or post-write — per-snapshot version
     /// tag via [`TypeCheckCtx::version`]).
     #[must_use]
+    #[allow(dead_code)] // ADR-0057a wave-1 consumes
     pub fn type_ctx(&self) -> &TypeCheckCtx {
         &self.type_ctx
     }
@@ -178,6 +179,7 @@ impl Session {
     /// ctx. Phase J LSP `did_change` calls this BEFORE re-checking
     /// the new file content. `file_id` matches
     /// [`cobrust_frontend::span::FileId`]'s wrapped u32.
+    #[allow(dead_code)] // ADR-0057a wave-1 consumes
     pub fn invalidate(&mut self, file_id: u32) {
         self.type_ctx.invalidate(file_id);
     }
