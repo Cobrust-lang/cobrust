@@ -84,6 +84,12 @@ pub struct TypeCheckCtx {
     /// [`Self::invalidate`] to drop only the affected DefId rows on a
     /// `did_change` / file-removal per ADR-0056b §"Invalidation".
     file_defs: Arc<HashMap<u32, Vec<u32>>>,
+    /// Binding name → DefId mapping for the rows in [`Self::bindings`].
+    /// Lets [`Self::invalidate`] drop name-keyed entries whose owner
+    /// DefId belongs to the invalidated file. Without this, a row
+    /// like `let x: i64 = 0` survives invalidation (its `Ty::Int`
+    /// payload doesn't reference a removed DefId).
+    binding_defs: Arc<HashMap<String, u32>>,
     /// Per-snapshot freshness tag per ADR-0056b §6. Bumped on every
     /// successful `check_incremental` / `invalidate` write. Phase J
     /// uses this to know whether a snapshot is current (per-snapshot
@@ -177,10 +183,22 @@ impl TypeCheckCtx {
         // turn (COW). Subsequent writes share the same allocation.
         if !removed.is_empty() {
             Arc::make_mut(&mut self.def_types).retain(|k, _| !removed.contains(k));
-            // Best-effort name-side invalidation: drop bindings whose
-            // resolved type references one of the removed DefIds via
-            // ADT/Alias. Other bindings (`Int`, `Str`, …) are untouched.
-            Arc::make_mut(&mut self.bindings).retain(|_, ty| !type_refs_any(ty, &removed));
+            // Names whose owning DefId is in the removed set — primary
+            // invalidation surface (e.g. `let x = 0` whose DefId
+            // belonged to the invalidated file).
+            let drop_names: HashSet<String> = self
+                .binding_defs
+                .iter()
+                .filter(|(_, def)| removed.contains(*def))
+                .map(|(n, _)| n.clone())
+                .collect();
+            Arc::make_mut(&mut self.binding_defs).retain(|_, def| !removed.contains(def));
+            // Drop the row if EITHER its owning DefId is invalidated
+            // OR its resolved type references a removed Adt/Alias
+            // (defence-in-depth — e.g. `let v: MyClass` survives the
+            // name-side filter only when `MyClass` is still alive).
+            Arc::make_mut(&mut self.bindings)
+                .retain(|name, ty| !drop_names.contains(name) && !type_refs_any(ty, &removed));
         }
         Arc::make_mut(&mut self.file_defs).remove(&file_id);
         self.version = self.version.wrapping_add(1);
@@ -205,6 +223,7 @@ impl TypeCheckCtx {
         let bindings_mut = Arc::make_mut(&mut self.bindings);
         let def_types_mut = Arc::make_mut(&mut self.def_types);
         let file_defs_mut = Arc::make_mut(&mut self.file_defs);
+        let binding_defs_mut = Arc::make_mut(&mut self.binding_defs);
 
         let mut owned_defs: Vec<u32> = Vec::new();
         for item in &typed.hir.items {
@@ -212,6 +231,7 @@ impl TypeCheckCtx {
                 ItemKind::Fn(f) => {
                     if let Some(ty) = typed.def_types.get(&f.def_id.0) {
                         bindings_mut.insert(f.name.clone(), ty.clone());
+                        binding_defs_mut.insert(f.name.clone(), f.def_id.0);
                     }
                     owned_defs.push(f.def_id.0);
                 }
@@ -223,6 +243,7 @@ impl TypeCheckCtx {
                     if let PatternKind::Binding(name, def_id) = &b.pattern.kind {
                         if let Some(ty) = typed.def_types.get(&def_id.0) {
                             bindings_mut.insert(name.clone(), ty.clone());
+                            binding_defs_mut.insert(name.clone(), def_id.0);
                         }
                         owned_defs.push(def_id.0);
                     }
@@ -230,6 +251,7 @@ impl TypeCheckCtx {
                 ItemKind::Class(c) => {
                     if let Some(ty) = typed.def_types.get(&c.def_id.0) {
                         bindings_mut.insert(c.name.clone(), ty.clone());
+                        binding_defs_mut.insert(c.name.clone(), c.def_id.0);
                     }
                     owned_defs.push(c.def_id.0);
                 }
