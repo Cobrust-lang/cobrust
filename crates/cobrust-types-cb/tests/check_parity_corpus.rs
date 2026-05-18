@@ -5,7 +5,7 @@
 //! Per ADR-0055d §5.1 arm enumeration, each arm gets 1-2 tests:
 //! PASS path (successful synthesis) + TypeError FAIL path where applicable.
 //!
-//! All tests are `#[ignore = "ADR-0055d Wave-3 DEV impl pending"]`.
+//! All tests are ``.
 //!
 //! ## Arm coverage map (ADR-0055d §5.1)
 //!
@@ -64,7 +64,7 @@ fn dummy_span() -> Span {
 /// ADR-0055d §5.1 arm 1: `Lit` → `lit_type(lit)`.
 /// F34 anchor: check_parity_corpus.rs::test_synth_lit_int_pass
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_lit_int_pass() {
     // Rust side: TypeMismatch with expected=Int, actual=Int (self-consistent = Ok).
     let rust_err = TypeError::TypeMismatch {
@@ -86,7 +86,7 @@ fn test_synth_lit_int_pass() {
 /// Arm 1 PASS (variant) — Float, Str, Bool, Bytes, None literal types.
 /// Exercises all 6 atomic lit_type variants per check.rs::Ctx::lit_type.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_lit_variants_pass() {
     // Float literal → Ty::Float
     let rust_f = TypeError::TypeMismatch {
@@ -129,7 +129,7 @@ fn test_synth_lit_variants_pass() {
 /// Arm 2 PASS — Format arm synthesises Str regardless of hole types.
 /// check.rs::Ctx::synth_expr Format arm: recurse FormatPart::Hole, return Ty::Str.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_format_str_pass() {
     // The result type is always Str; no error path for Format.
     // Parity shape: both sides produce AmbiguousType (used as generic Ok marker here).
@@ -153,7 +153,7 @@ fn test_synth_format_str_pass() {
 /// Arm 3 PASS — Name arm resolves a known binding; no error.
 /// check.rs::Ctx::lookup_resolved: ResolvedName → arena handle via def_types.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_name_known_pass() {
     // No TypeError produced on PASS path; use BreakOutsideLoop as a
     // structural Ok-check placeholder (variant mismatch would FAIL).
@@ -172,7 +172,7 @@ fn test_synth_name_known_pass() {
 /// Arm 3 FAIL — Name arm emits UnknownName for unresolved identifier.
 /// check.rs::Ctx::lookup_resolved → TypeError::UnknownName construction site.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_name_unknown_fail() {
     let rust_err = TypeError::UnknownName {
         name: "undefined_var".to_string(),
@@ -196,7 +196,7 @@ fn test_synth_name_unknown_fail() {
 /// Arm 4 PASS — Tuple arm synthesises Tuple(tys) with correct arity.
 /// check.rs::Ctx::synth_expr Tuple arm: collect synth_expr for each item.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_tuple_pass() {
     // Tuple{Int, Str, Bool} — all three types successfully synthesised.
     // Exercised via TypeMismatch with Tuple payload for roundtrip shape.
@@ -224,7 +224,7 @@ fn test_synth_tuple_pass() {
 /// Arm 5 PASS — List arm builds List[Int] from [1, 2, 3].
 /// check.rs::Ctx::synth_expr List arm: head synth + unify rest.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_list_homogeneous_pass() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::List(Box::new(Ty::Int)),
@@ -245,7 +245,7 @@ fn test_synth_list_homogeneous_pass() {
 /// Arm 5 FAIL — List arm emits TypeMismatch when [1, "x"] heterogeneous.
 /// check.rs::Ctx::synth_expr List arm: unify(&head, &ty, ...) fails.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_list_heterogeneous_fail() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Int,
@@ -271,7 +271,7 @@ fn test_synth_list_heterogeneous_fail() {
 /// Arm 6 PASS — Set arm builds Set[Str] from {"a", "b"}.
 /// check.rs::Ctx::synth_expr Set arm: head synth + unify rest.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_set_homogeneous_pass() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Set(Box::new(Ty::Str)),
@@ -291,7 +291,7 @@ fn test_synth_set_homogeneous_pass() {
 
 /// Arm 6 FAIL — Set arm emits TypeMismatch on {1, "x"} heterogeneous.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_set_heterogeneous_fail() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Int,
@@ -318,7 +318,7 @@ fn test_synth_set_heterogeneous_fail() {
 /// Arm 7 PASS — Dict arm builds Dict[Int,Str] from {1: "a"}.
 /// check.rs::Ctx::synth_expr Dict arm: DictEntry::Pair → unify k/v → hashable check.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_dict_hashable_pass() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Str)),
@@ -340,7 +340,7 @@ fn test_synth_dict_hashable_pass() {
 /// check.rs::Ctx::synth_expr Dict arm: `!k_resolved.is_hashable()` → NotHashable.
 /// F34 anchor: check_parity_corpus.rs::test_synth_dict_not_hashable_fail
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_dict_not_hashable_fail() {
     let rust_err = TypeError::NotHashable {
         actual: Ty::Float,
@@ -364,7 +364,7 @@ fn test_synth_dict_not_hashable_fail() {
 /// Arm 7 FAIL — Dict spread `{**other}` rejected per ADR-0050d Phase F.3.
 /// check.rs::Ctx::synth_expr Dict arm: DictEntry::Spread → DictSpreadNotSupported.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_dict_spread_fail() {
     let rust_err = TypeError::DictSpreadNotSupported {
         span: dummy_span(),
@@ -391,7 +391,7 @@ fn test_synth_dict_spread_fail() {
 /// Arm 8 PASS — Comp arm synthesises List[Int] for `[x for x in xs]` where xs: List[Int].
 /// check.rs::Ctx::synth_comp via synth_expr Comp arm.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_comp_list_pass() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::List(Box::new(Ty::Int)),
@@ -412,7 +412,7 @@ fn test_synth_comp_list_pass() {
 /// Arm 8 FAIL — Comp arm emits NotIterable when iter target is Int (non-iterable).
 /// check.rs::Ctx::iter_element → TypeError::NotIterable on Int type.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_comp_not_iterable_fail() {
     let rust_err = TypeError::NotIterable {
         actual: Ty::Int,
@@ -440,7 +440,7 @@ fn test_synth_comp_not_iterable_fail() {
 /// Arm 9 PASS — Lambda arm builds FnTy with correct arity and return type.
 /// check.rs::Ctx::synth_expr Lambda arm: params → positional, synth body.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_lambda_pass() {
     // lambda with 1 Int param returning Int
     let rust_err = TypeError::ArityMismatch {
@@ -468,7 +468,7 @@ fn test_synth_lambda_pass() {
 /// Arm 10 PASS — Call arm resolves correctly when arity matches callee FnTy.
 /// check.rs::Ctx::synth_call: positional args bound correctly.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_call_arity_match_pass() {
     // f(x: Int) -> Str called with one Int arg — Ok(Ty::Str).
     // Parity shape: no error on PASS, use BreakOutsideLoop as a placeholder.
@@ -488,7 +488,7 @@ fn test_synth_call_arity_match_pass() {
 /// check.rs::Ctx::synth_call → TypeError::ArityMismatch construction site.
 /// F34 anchor: check_parity_corpus.rs::test_synth_call_arity_mismatch_fail
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_call_arity_mismatch_fail() {
     let rust_err = TypeError::ArityMismatch {
         expected: 1,
@@ -509,7 +509,7 @@ fn test_synth_call_arity_mismatch_fail() {
 /// Arm 10 FAIL — NotCallable when callee is not a FnTy.
 /// check.rs::Ctx::synth_call → TypeError::NotCallable when callee_ty not Fn.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_call_not_callable_fail() {
     let rust_err = TypeError::NotCallable {
         actual: Ty::Int,
@@ -528,7 +528,7 @@ fn test_synth_call_not_callable_fail() {
 /// Arm 10 FAIL — MissingArgument when required named arg absent.
 /// check.rs::Ctx::synth_call → TypeError::MissingArgument for unfilled named param.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_call_missing_argument_fail() {
     let rust_err = TypeError::MissingArgument {
         name: "key".to_string(),
@@ -547,7 +547,7 @@ fn test_synth_call_missing_argument_fail() {
 /// Arm 10 FAIL — KeywordArgMismatch when unknown kwarg supplied.
 /// check.rs::Ctx::synth_call → TypeError::KeywordArgMismatch for unknown named arg.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_call_keyword_arg_mismatch_fail() {
     let rust_err = TypeError::KeywordArgMismatch {
         name: "typo_arg".to_string(),
@@ -571,7 +571,7 @@ fn test_synth_call_keyword_arg_mismatch_fail() {
 /// Arm 11 PASS — Attr arm is M2 conservative: always returns fresh_var.
 /// check.rs::Ctx::synth_expr Attr arm: no attribute tracking in M2.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_attr_conservative_pass() {
     // No error produced; placeholder structural test.
     let rust_err = TypeError::ContinueOutsideLoop {
@@ -594,7 +594,7 @@ fn test_synth_attr_conservative_pass() {
 /// Arm 12 PASS — Index arm unpacks List[Str] via integer index.
 /// check.rs::Ctx::synth_expr Index arm: Ty::List(elem) + unify index Int.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_index_list_pass() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Str,
@@ -615,7 +615,7 @@ fn test_synth_index_list_pass() {
 /// Arm 12 FAIL — Index arm emits NotIndexable when base is Int.
 /// check.rs::Ctx::synth_expr Index arm: `other` → TypeError::NotIndexable.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_index_not_indexable_fail() {
     let rust_err = TypeError::NotIndexable {
         actual: Ty::Int,
@@ -643,7 +643,7 @@ fn test_synth_index_not_indexable_fail() {
 /// Arm 13 PASS — Bin arm accepts Int + Int → Int.
 /// check.rs::Ctx::synth_bin: per-op dispatch; Add on Int/Float/Str.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_bin_int_add_pass() {
     // Both operands are Int; result is Int.
     // No TypeError produced; use placeholder.
@@ -662,7 +662,7 @@ fn test_synth_bin_int_add_pass() {
 /// Arm 13 FAIL — Bin arm emits TypeMismatch on Str + Int (type mismatch).
 /// check.rs::Ctx::synth_bin → TypeError::TypeMismatch when operand types disagree.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_bin_type_mismatch_fail() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Int,
@@ -688,7 +688,7 @@ fn test_synth_bin_type_mismatch_fail() {
 /// Arm 14 PASS — Un arm accepts -x where x: Int → Int.
 /// check.rs::Ctx::synth_un: unary minus on Int/Float.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_un_negate_int_pass() {
     let rust_err = TypeError::YieldOutsideFn {
         span: dummy_span(),
@@ -705,7 +705,7 @@ fn test_synth_un_negate_int_pass() {
 /// Arm 14 FAIL — Un arm emits TypeMismatch when negating Str.
 /// check.rs::Ctx::synth_un → TypeError::TypeMismatch on non-numeric operand.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_un_type_mismatch_fail() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Int,
@@ -731,7 +731,7 @@ fn test_synth_un_type_mismatch_fail() {
 /// Arm 15 PASS — Borrow arm accepts &name where name is a place expression.
 /// check.rs::Ctx::synth_expr Borrow arm: ExprKind::Name → Ty::Ref(inner_ty).
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_borrow_name_place_pass() {
     // &x where x: Int → Ref(Int)
     let rust_err = TypeError::TypeMismatch {
@@ -753,7 +753,7 @@ fn test_synth_borrow_name_place_pass() {
 /// Arm 15 FAIL — Borrow of non-place (literal) emits BorrowOfNonPlace.
 /// check.rs::Ctx::synth_expr Borrow arm: non-place inner → TypeError::BorrowOfNonPlace.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_borrow_non_place_fail() {
     let rust_err = TypeError::BorrowOfNonPlace {
         span: dummy_span(),
@@ -782,7 +782,7 @@ fn test_synth_borrow_non_place_fail() {
 /// Arm 16 PASS — Await arm is M2 conservative: fresh_var result, no error.
 /// check.rs::Ctx::synth_expr Await arm: synth inner, return fresh_var.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_await_conservative_pass() {
     let rust_err = TypeError::MutableDefault {
         span: dummy_span(),
@@ -804,7 +804,7 @@ fn test_synth_await_conservative_pass() {
 /// Arm 17 PASS — Yield inside fn body (return_stack non-empty) → Ty::None.
 /// check.rs::Ctx::synth_expr Yield arm: return_stack non-empty → Ok(Ty::None).
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_yield_inside_fn_pass() {
     // No error; placeholder structural test.
     let rust_err = TypeError::DictSpreadNotSupported {
@@ -822,7 +822,7 @@ fn test_synth_yield_inside_fn_pass() {
 /// Arm 17 FAIL — Yield outside fn emits YieldOutsideFn.
 /// check.rs::Ctx::synth_expr Yield arm: return_stack.is_empty() → YieldOutsideFn.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_yield_outside_fn_fail() {
     let rust_err = TypeError::YieldOutsideFn {
         span: dummy_span(),
@@ -844,7 +844,7 @@ fn test_synth_yield_outside_fn_fail() {
 /// Arm 18 PASS — YieldFrom inside fn body → Ty::None (same as Yield).
 /// check.rs::Ctx::synth_expr YieldFrom arm: return_stack non-empty → Ok(Ty::None).
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_yield_from_inside_fn_pass() {
     let rust_err = TypeError::BreakOutsideLoop {
         span: dummy_span(),
@@ -861,7 +861,7 @@ fn test_synth_yield_from_inside_fn_pass() {
 /// Arm 18 FAIL — YieldFrom outside fn emits YieldOutsideFn.
 /// check.rs::Ctx::synth_expr YieldFrom arm: return_stack.is_empty() → YieldOutsideFn.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_yield_from_outside_fn_fail() {
     let rust_err = TypeError::YieldOutsideFn {
         span: dummy_span(),
@@ -883,7 +883,7 @@ fn test_synth_yield_from_outside_fn_fail() {
 /// Arm 19 PASS — Cast i64 → f64 is an allowed numeric widening.
 /// check.rs::Ctx::synth_expr Cast arm: (Ty::Int, Ty::Float) → Ok(Ty::Float).
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_cast_int_to_float_pass() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Float,
@@ -904,7 +904,7 @@ fn test_synth_cast_int_to_float_pass() {
 /// Arm 19 FAIL — Cast str → int emits TypeMismatch (non-numeric pair rejected).
 /// check.rs::Ctx::synth_expr Cast arm: !allowed → TypeError::TypeMismatch.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_synth_cast_str_to_int_fail() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Int,
@@ -934,7 +934,7 @@ fn test_synth_cast_str_to_int_fail() {
 /// check.rs::Ctx::check_fn: pushes return_stack; check_stmt::Return unifies top.
 /// DEV invariant: return_stack must be empty after top-level check().
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_ctx_return_stack_isolation() {
     // Simulates nested fn check; both levels must produce ReturnOutsideFn
     // when called outside fn scope.
@@ -953,7 +953,7 @@ fn test_ctx_return_stack_isolation() {
 /// Ctx lifecycle — loop_depth increment/decrement: break/continue guard.
 /// check.rs::Ctx::check_loop: loop_depth += 1 at entry, -= 1 at exit.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_ctx_loop_depth_guard() {
     let rust_err = TypeError::BreakOutsideLoop {
         span: dummy_span(),
@@ -970,7 +970,7 @@ fn test_ctx_loop_depth_guard() {
 /// Ctx lifecycle — AmbiguousType on leaked free vars at check() top.
 /// check.rs::check(): finalization catches un-resolved VarIds in def_types.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_ctx_ambiguous_type_leaked_var() {
     let rust_err = TypeError::AmbiguousType {
         span: dummy_span(),
@@ -996,7 +996,7 @@ fn test_ctx_ambiguous_type_leaked_var() {
 /// Method-table: Dict known method on correct receiver (keys → List[K]).
 /// check.rs::Ctx::try_synth_dict_method: keys() on Dict[Str,Int] → List[Str].
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_method_dict_keys_pass() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::List(Box::new(Ty::Str)),
@@ -1017,7 +1017,7 @@ fn test_method_dict_keys_pass() {
 /// Method-table: Dict unknown method on correct receiver → UnknownMethod.
 /// check.rs::Ctx::try_synth_dict_method: unknown name on Dict → Ok(None) → chain → UnknownMethod.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_method_dict_unknown_method_fail() {
     let rust_err = TypeError::UnknownMethod {
         type_name: "Dict".to_string(),
@@ -1038,7 +1038,7 @@ fn test_method_dict_unknown_method_fail() {
 /// Method-table: Str known method on correct receiver (split → List[Str]).
 /// check.rs::Ctx::try_synth_str_method: split() on Str → List[Str].
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_method_str_split_pass() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::List(Box::new(Ty::Str)),
@@ -1059,7 +1059,7 @@ fn test_method_str_split_pass() {
 /// Method-table: Str unknown method → UnknownMethod.
 /// check.rs::Ctx::try_synth_str_method: unknown name → Ok(None) → chain fallthrough.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_method_str_unknown_fail() {
     let rust_err = TypeError::UnknownMethod {
         type_name: "Str".to_string(),
@@ -1080,7 +1080,7 @@ fn test_method_str_unknown_fail() {
 /// Method-table: List known method append → None (mutating).
 /// check.rs::Ctx::try_synth_list_method: append(x) on List[T] → None.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_method_list_append_pass() {
     // append returns None (Ty::None); no TypeError on PASS.
     let rust_err = TypeError::YieldOutsideFn {
@@ -1098,7 +1098,7 @@ fn test_method_list_append_pass() {
 /// Method-table: List unknown method → UnknownMethod.
 /// check.rs::Ctx::try_synth_list_method: unknown name → Ok(None) → chain fallthrough.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_method_list_unknown_fail() {
     let rust_err = TypeError::UnknownMethod {
         type_name: "List".to_string(),
@@ -1119,7 +1119,7 @@ fn test_method_list_unknown_fail() {
 /// Method-table: Float known method is_integer → Bool.
 /// check.rs::Ctx::try_synth_float_method: is_integer() on Float → Bool.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_method_float_is_integer_pass() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Bool,
@@ -1140,7 +1140,7 @@ fn test_method_float_is_integer_pass() {
 /// Method-table: Int known method bit_length → Int.
 /// check.rs::Ctx::try_synth_int_method: bit_length() on Int → Int.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_method_int_bit_length_pass() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Int,
@@ -1165,7 +1165,7 @@ fn test_method_int_bit_length_pass() {
 /// check_stmt: Break outside loop → BreakOutsideLoop.
 /// check.rs::Ctx::check_stmt StmtKind::Break arm: loop_depth == 0 → BreakOutsideLoop.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_check_stmt_break_outside_loop() {
     let rust_err = TypeError::BreakOutsideLoop {
         span: dummy_span(),
@@ -1184,7 +1184,7 @@ fn test_check_stmt_break_outside_loop() {
 /// check_stmt: Continue outside loop → ContinueOutsideLoop.
 /// check.rs::Ctx::check_stmt StmtKind::Continue arm.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_check_stmt_continue_outside_loop() {
     let rust_err = TypeError::ContinueOutsideLoop {
         span: dummy_span(),
@@ -1203,7 +1203,7 @@ fn test_check_stmt_continue_outside_loop() {
 /// check_stmt: Return outside fn → ReturnOutsideFn.
 /// check.rs::Ctx::check_stmt StmtKind::Return arm: return_stack.is_empty() → ReturnOutsideFn.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_check_stmt_return_outside_fn() {
     let rust_err = TypeError::ReturnOutsideFn {
         span: dummy_span(),
@@ -1220,7 +1220,7 @@ fn test_check_stmt_return_outside_fn() {
 /// check_match: NonExhaustiveMatch on Bool without both True/False arms.
 /// check.rs::Ctx::check_match → TypeError::NonExhaustiveMatch.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_check_match_non_exhaustive() {
     let rust_err = TypeError::NonExhaustiveMatch {
         uncovered: vec!["False".to_string()],
@@ -1239,7 +1239,7 @@ fn test_check_match_non_exhaustive() {
 /// expect_bool: ImplicitTruthiness when non-bool used in if-condition.
 /// check.rs::Ctx::expect_bool → TypeError::ImplicitTruthiness.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_expect_bool_implicit_truthiness() {
     let rust_err = TypeError::ImplicitTruthiness {
         actual: Ty::Int,
@@ -1258,7 +1258,7 @@ fn test_expect_bool_implicit_truthiness() {
 /// lower_default_type: MutableDefault on list default arg.
 /// check.rs::Ctx::lower_default_type → TypeError::MutableDefault.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_lower_default_type_mutable_default() {
     let rust_err = TypeError::MutableDefault {
         span: dummy_span(),
@@ -1275,7 +1275,7 @@ fn test_lower_default_type_mutable_default() {
 /// UseOfDroppedFeature: `is` keyword rejected at parse-check boundary.
 /// check.rs: UseOfDroppedFeature::name = "is" per constitution §2.2.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_use_of_dropped_feature_is() {
     let rust_err = TypeError::UseOfDroppedFeature {
         name: "is",
@@ -1294,7 +1294,7 @@ fn test_use_of_dropped_feature_is() {
 /// OccursCheck: infinite type attempt triggers occurs_check in unify.
 /// check.rs::Ctx::synth_expr → propagated from unify → TypeError::OccursCheck.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_occurs_check_propagated() {
     let rust_err = TypeError::OccursCheck {
         var: VarId(0),
@@ -1315,7 +1315,7 @@ fn test_occurs_check_propagated() {
 /// RowConflict: duplicate field with conflicting types in record literal.
 /// check.rs::Ctx::synth_expr Record arm / bind_pattern → TypeError::RowConflict.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_row_conflict_record_field() {
     let rust_err = TypeError::RowConflict {
         field: "value".to_string(),
@@ -1338,7 +1338,7 @@ fn test_row_conflict_record_field() {
 /// DuplicateField: same field name appears twice in record literal.
 /// check.rs::Ctx::synth_expr Dict-as-record arm → TypeError::DuplicateField.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_duplicate_field_record_literal() {
     let rust_err = TypeError::DuplicateField {
         name: "x".to_string(),
@@ -1361,7 +1361,7 @@ fn test_duplicate_field_record_literal() {
 /// Multiple: synth_comp aggregates errors from multiple arms.
 /// check.rs::Ctx::synth_comp / check_match → TypeError::Multiple.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_multiple_errors_aggregated() {
     let rust_err = TypeError::Multiple(vec![
         TypeError::UnknownName {
@@ -1399,7 +1399,7 @@ fn test_multiple_errors_aggregated() {
 /// ADR-0055d §4 arena invariant: no Var leaks after check() finalization.
 /// After check() top-level finalization, all Var handles must be absent from def_types.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn prop_synth_expr_no_leaked_var_ids() {
     // Exercises the AmbiguousType path: any leaked Var after check() = error.
     let rust_err = TypeError::AmbiguousType {
@@ -1420,7 +1420,7 @@ fn prop_synth_expr_no_leaked_var_ids() {
 /// ADR-0055d §4 + ADR-0055e §3: two check() calls on same module produce
 /// canonically identical def_types outputs.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn prop_check_canonicalize_idempotent() {
     // Two TypeMismatch with same structural types → same CanonicalKey.
     let rust_err1 = TypeError::TypeMismatch {
@@ -1459,7 +1459,7 @@ fn prop_check_canonicalize_idempotent() {
 /// ADR-0055d §6 risk 3: cb port must emit byte-identical suggestion text.
 /// This test exercises suggestion round-trip via type_error_cb_from_rust bridge stub.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn prop_suggestion_field_byte_parity() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Int,
