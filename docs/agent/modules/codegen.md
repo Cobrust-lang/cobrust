@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:codegen
 crate: cobrust-codegen
-last_verified_commit: e85630f
-dependencies: [mod:mir, mod:types, adr:0023, adr:0027, adr:0041]
+last_verified_commit: 4686192
+dependencies: [mod:mir, mod:types, adr:0023, adr:0027, adr:0041, adr:0058, adr:0058a]
 ---
 
 # Module: codegen
@@ -405,3 +405,145 @@ Invariants:
 | `__cobrust_list_is_empty` signature | `cranelift_backend.rs:2082` — `(p) -> i64` — symmetric to `__cobrust_dict_is_empty` (ADR-0050d Decision 5 addendum). |
 | `__cobrust_str_clone` signature | `cranelift_backend.rs:2141` — `(p) -> p` — closes the Phase 4 explicit-clone path. |
 | `__cobrust_list_drop_elems` signature | `cranelift_backend.rs:2068+` — `(p, p) -> ()` — the second `p` is the per-element fn pointer materialised via `func_addr` on `__cobrust_str_drop`. |
+
+## Phase K wave-1 — LLVM backend MIR→LLVM IR core (ADR-0058a)
+
+Status: **delivered at HEAD `4686192`**. DG verify: 355 tests PASS,
+TEST_EXIT=0, 0 regressions.
+
+### Public surface (LLVM backend)
+
+```rust
+// crates/cobrust-codegen/src/llvm_backend.rs
+// Gated behind #[cfg(feature = "llvm")].
+
+/// Public LLVM backend entrypoint. Mirrors cranelift_backend::emit.
+pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError>;
+
+/// Per-emit state. Borrows the inkwell Context for `'ctx`.
+pub struct LlvmEmitter<'ctx> {
+    pub module: inkwell::module::Module<'ctx>,
+    // ... private fields ...
+}
+
+impl<'ctx> LlvmEmitter<'ctx> {
+    /// Construct + pre-declare runtime-helper externs.
+    pub fn new(
+        ctx: &'ctx inkwell::context::Context,
+        spec: &TargetSpec,
+        target_machine: &inkwell::targets::TargetMachine,
+    ) -> Result<Self, CodegenError>;
+
+    /// First pass — declare function symbol so cross-body calls resolve.
+    pub fn declare_body(&mut self, body: &Body) -> Result<(), CodegenError>;
+
+    /// Second pass — emit the function body.
+    pub fn define_body(&mut self, body: &Body) -> Result<(), CodegenError>;
+}
+```
+
+### Lowering tables
+
+#### §4 MIR Ty → LLVM type (wave-1 revised)
+
+| MIR `Ty` | LLVM type | Notes |
+|---|---|---|
+| `Bool` | `i1` | `ctx.bool_type()` |
+| `Int` | `i64` | `ctx.i64_type()` |
+| `Float` / `Imag` | `double` | `ctx.f64_type()` |
+| `None` | `i64` | mirrors Cranelift `pointer_type` fallback; revised from spec's `i8` |
+| `Str` / `Bytes` | `i8*` (opaque ptr) | `ctx.i8_type().ptr_type(AddressSpace::default())` |
+| `List[T]` / `Dict[K,V]` / `Set[T]` | `i8*` (opaque ptr) | heap-managed; element ty stays MIR-level |
+| `Ref(T)` | same as `T` (transparent) | borrow tracked at MIR per ADR-0020 B1..B5 |
+| `Tuple(...)` / `Record(_)` / `Adt(_,_)` / `Alias(_,_)` / `Fn(_)` | `i8*` opaque ptr | by-pointer at wave-1 |
+
+#### §5 Operand lowering
+
+| MIR `Operand` | LLVM | inkwell call |
+|---|---|---|
+| `Copy(place)` | `load ty, place_ptr` | `builder.build_load(ty, alloca, "load")` |
+| `Move(place)` | `load ty, place_ptr` | same (Move semantics enforced at MIR) |
+| `Constant(Int(i))` | `i64` constant | `ctx.i64_type().const_int(i as u64, true)` |
+| `Constant(Float(bits))` / `Imag(bits)` | `double` constant | `ctx.f64_type().const_float(f64::from_bits(bits))` |
+| `Constant(Bool(b))` | `i1` constant | `ctx.bool_type().const_int(b as u64, false)` |
+| `Constant(None)` | `i64` zero | matches `Ty::None → i64` mapping |
+| `Constant(Str(_))` / `Bytes(_)` | `i8*` null | wave-1 stub (M11 materialises rodata) |
+| `Constant(FnRef(_))` | `i64` zero | wave-1 stub |
+
+#### §6 Terminator lowering
+
+| MIR `Terminator` | LLVM | inkwell call |
+|---|---|---|
+| `Goto(b)` | unconditional branch | `builder.build_unconditional_branch(b)` |
+| `Return` | return value | `builder.build_return(Some(&load(_return)))` |
+| `Unreachable` | unreachable instr | `builder.build_unreachable()` |
+| `SwitchInt {...}` | switch instr | `builder.build_switch(discr, default, &cases)` |
+| `Call { FnRef(id), args, dest, target }` | call + branch | `builder.build_call(callee, &args, "call")` then branch |
+| `Call { Constant::Str(_) or unknown, ..}` | wave-1 stub (zero ret) | M11 wires runtime-helper path |
+| `Drop { place, target }` | runtime helper call + branch | dispatched by `emit_drop_for_ty(place, &local_ty)` |
+| `Assert { cond, expected, msg, target }` | conditional branch to trap block | trap block builds `build_unreachable` (wave-1 stub for panic) |
+
+#### Drop lowering by Ty (mirrors ADR-0050c TD-1)
+
+| `Ty` | Helper | inkwell args |
+|---|---|---|
+| `Ty::Str` | `__cobrust_str_drop` | `[ptr_arg]` |
+| `Ty::List(Ty::Str)` | `__cobrust_list_drop_elems` | `[ptr_arg, &__cobrust_str_drop as fn ptr]` |
+| `Ty::List(other)` | `__cobrust_list_drop` | `[ptr_arg]` |
+| other | (no-op) | — |
+
+#### §7 Calling convention
+
+- `CallConv::C` (inkwell default).
+- Linux x86_64: System V AMD64 — argument registers `rdi rsi rdx rcx r8 r9`, return in `rax`/`xmm0`.
+- macOS arm64: AAPCS64 — argument registers `x0..x7`, return in `x0`/`d0`.
+- No custom convention at wave-1; sub-ADR 0058b may add an opt-driven convention.
+
+### F34 symbol anchors
+
+| Anchor | Role |
+|---|---|
+| `llvm_backend::emit` | public entry (`llvm_backend.rs:75`) |
+| `LlvmEmitter::new` | emitter constructor (`llvm_backend.rs:194`) |
+| `LlvmEmitter::declare_body` | first-pass fn symbol declare (`llvm_backend.rs:313`) |
+| `LlvmEmitter::define_body` | second-pass fn body emit (`llvm_backend.rs:357`) |
+| `BodyLowerer::lower_terminator` | per-block terminator dispatch (`llvm_backend.rs:464`) |
+
+### Wave-1 non-goals (deferred)
+
+- **Optimization pass pipeline** (`OptLevel::Speed` / `SpeedAndSize`):
+  sub-ADR 0058b. LLVM backend ignores opt_level beyond `None` at wave-1.
+- **DWARF debug-info emission**: sub-ADR 0058c.
+- **Multi-target cross-compilation matrix**: sub-ADR 0058b.
+- **Binary-size acceptance bar** (ADR-0023 §"LLVM `-O3` ≥ 30% smaller"):
+  closes at sub-ADR 0058b under `OptLevel::SpeedAndSize`.
+- **`Constant::Str` / `Bytes` runtime-helper Call lowering**: wave-2;
+  Cranelift M11 `__cobrust_*` extern-helper Call path not yet ported.
+- **Aggregate construction** (List/Dict/Set/Tuple/Record): wave-2 stub
+  returns null pointer (matches Cranelift mid-M9 posture pre-M11).
+- **`Projection::Field` / `Projection::Index` / `Projection::Discriminant`**:
+  wave-2 stub (Deref handled; others fall back to bare-local load).
+- **`Rvalue::Discriminant` / `Len` / `NullaryOp`**: wave-2 stub returns
+  i64 zero (matches Cranelift M9 posture).
+
+### Test counts (DG verify at HEAD `4686192`)
+
+| Suite | Passed | Notes |
+|---|---|---|
+| llvm_backend wave-1 smoke (inline) | 5 | empty/return-42/binop-add/unop-neg-float/drop-str |
+| aggregate_corpus | 31 | wave-1 stub matches Cranelift mid-M9 stub |
+| cast_corpus | 31 | cast lowering parity |
+| codegen_diff_corpus | 22 (6 ignored) | M9 "core 30" diff gate |
+| codegen_ill_formed | 50 | error taxonomy |
+| codegen_object_layout | 16 | symbol/section assertions |
+| codegen_release_smoke | 10 | LLVM-backed release default; recursion (fib/ack) NOW PASSES |
+| function_corpus | 70 | user-fn call surface |
+| ip_corpus | 33 | int-precision parity |
+| list_corpus | 16 | aggregate/index/len |
+| mir_to_codegen | 10 | end-to-end |
+| mut_corpus | 12 | mutability + place writes |
+| placeholder_corpus | 30 | placeholder ADR coverage |
+| str_corpus | 12 | str materialise + drop |
+| while_corpus | 12 | while + nested binop |
+| while_if_corpus | 7 | fizzbuzz/short |
+| **Total** | **355** | TEST_EXIT=0 |
