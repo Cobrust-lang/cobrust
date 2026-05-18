@@ -174,10 +174,14 @@ fn host_isa() -> Result<Arc<dyn cranelift_codegen::isa::TargetIsa>, JitError> {
     shared_builder
         .set("opt_level", "none")
         .map_err(|e| JitError::Settings(e.to_string()))?;
-    // PIC required even for in-process JIT: avoids the
-    // "absolute relocs into anon memory" wart on macOS.
+    // cranelift-jit explicitly REQUIRES is_pic=false — it generates
+    // absolute relocs into anon memory and asserts at module
+    // construction time. AOT (cranelift-object) is the opposite: PIC
+    // required for ELF/Mach-O linking. The settings divergence is
+    // why ADR-0056a §3.2 mandates separate Aot/Jit codegen entries
+    // sharing only the MIR-lowering loop.
     shared_builder
-        .set("is_pic", "true")
+        .set("is_pic", "false")
         .map_err(|e| JitError::Settings(e.to_string()))?;
     let shared_flags = settings::Flags::new(shared_builder);
 
