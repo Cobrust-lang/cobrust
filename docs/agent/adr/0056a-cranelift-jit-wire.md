@@ -3,9 +3,9 @@ doc_kind: adr
 adr_id: 0056a
 parent_adr: 0056
 title: "Phase I day 1-2 — Cranelift JIT crate wire (`CodegenMode { Aot, Jit }` switch + minimal arithmetic round-trip)"
-status: proposed
+status: accepted
 date: 2026-05-18
-last_verified_commit: 2a710d3
+last_verified_commit: 710fadd
 supersedes: []
 superseded_by: []
 relates_to: [adr:0056, adr:0054, adr:0034]
@@ -246,3 +246,70 @@ ADR's impl-merge triggers the frame ratify.
 TEST 4h, DEV 8h, wall ~2 days. Matches ADR-0056 §9 row 2.
 
 — P9 Tech Lead, 2026-05-18
+
+## 13. Impl-time amendment — separate `cobrust-jit` crate vs. in-place
+##     `cobrust-codegen/src/cranelift_jit.rs` (2026-05-18)
+
+The pre-dispatch design (§3.3) placed `emit_jit` + `JitArtifact`
+inside `cobrust-codegen` as a sibling to
+`cranelift_backend::emit`. The P10 dispatcher for wave-1 instead
+specified a NEW workspace crate `cobrust-jit` with public surface
+`JitEngine` / `JitHandle` / `JitError`. Rationale (per P10
+dispatcher):
+
+- **PIC divergence (load-bearing).** Discovered at first DG test
+  run: cranelift-jit asserts `is_pic=false` (panics at
+  `cranelift-jit-0.131.1/src/backend.rs:353`). AOT (cranelift-
+  object) requires `is_pic=true` for ELF/Mach-O. Two ISA flag
+  sets that **cannot coexist** in one `build_isa` helper without
+  a mode parameter; cleaner factored across crates.
+- **REPL Session ergonomics.** ADR-0056c needs to own a long-
+  lived `JitEngine` across REPL turns. Embedding inside the
+  CodegenError taxonomy adds a leaky surface to AOT callers who
+  don't want the JIT failure modes (NoSuchFunction,
+  SignatureMismatch).
+- **Wave-1 vs wave-2 boundary.** ADR-0056b plans to extract a
+  `lower_module<M: ClifModule>` helper shared between
+  cobrust-codegen + cobrust-jit (per parent §3.2). Having two
+  crates makes the shared-helper extraction a true sibling-
+  refactor, not an internal module split.
+
+Concretely shipped (impl-time):
+
+- New crate `crates/cobrust-jit/` registered in workspace `[members]`.
+- `JitEngine::new()` — host ISA via `cranelift-native::builder`,
+  `is_pic=false`, `opt_level=none`.
+- `JitEngine::compile_mir(self, &Module) -> Result<JitHandle>` —
+  consumes engine; two-pass declare/define against `JITModule`;
+  one `finalize_definitions` call.
+- `JitHandle::call::<R, A: ArgsList>(name, args) -> Result<R>` —
+  unsafe (one of two unsafe surfaces in the project alongside
+  cobrust-llm-router's HTTP client) with pre-transmute signature
+  validation against the 4-arm extern table at §4.
+- `JitHandle::function_names()` / `signature(name)` —
+  introspection for the REPL Session caller.
+- `JitError` — 9-variant taxonomy including
+  `UnsupportedMirFeature` for the AOT-fallback signal (parent §4
+  4-arm table).
+
+§3.2's `CodegenMode { Aot, Jit }` enum is **deferred** to ADR-
+0056b's `lower_module<M: ClifModule>` extraction sprint —
+wave-1's standalone `JitEngine` is the cleaner first step.
+
+§3.1's `cranelift-jit = "0.131"` dependency ships clean (the
+quartet pinning held; no version-skew).
+
+Wave-1 lowering surface (per `crates/cobrust-jit/src/lower.rs`):
+`Constant::Int`, `BinOp::{Add,Sub,Mul}`, `UnOp::{Neg,Plus}`,
+`Place::local` (no projections), `Terminator::{Return,Goto,
+Unreachable}`. ADR-0056b grows to the AOT-parity surface.
+
+DG verify at HEAD `710fadd` — `cargo test -p cobrust-jit`:
+1 unit + 11 integration tests PASS, POSTFLIGHT clean.
+
+The §3.2 enum + lower_module helper still ship — ADR-0056b is
+the binding sub-ADR for them. This amendment narrows wave-1 to
+the standalone crate path; no semantic deviation from the parent
+ADR-0056 frame (the `Module` trait gating is still the
+abstraction, just sourced from `cranelift-module` directly
+rather than through a Cobrust-side enum).
