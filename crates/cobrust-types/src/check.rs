@@ -885,10 +885,48 @@ impl Ctx {
             // binding via one-way call-site coercion (NOT here, and
             // NOT in `infer::unify` — §13 "Design lesson 2026-05-17"
             // bans bidirectional `Ref(T) ↔ T` unify).
-            ExprKind::Borrow(inner) => {
-                let inner_ty = self.synth_expr(inner)?;
-                Ok(Ty::Ref(Box::new(inner_ty)))
-            }
+            //
+            // ADR-0052g Wave-2 round 2 — narrow the §6 rule so genuine
+            // non-places (literals, arithmetic, free-fn calls) emit
+            // `BorrowOfNonPlace` while method-form `&recv.method()`
+            // with Copy-primitive return type is admitted. The borrow
+            // targets the rewritten PRELUDE-fn call's return value
+            // materialised as a Copy operand at MIR.
+            ExprKind::Borrow(inner) => match &inner.kind {
+                // Place expressions — admit unconditionally (Wave-1 §8 cap).
+                ExprKind::Name(_) | ExprKind::Attr { .. } | ExprKind::Index { .. } => {
+                    let inner_ty = self.synth_expr(inner)?;
+                    Ok(Ty::Ref(Box::new(inner_ty)))
+                }
+                // Method-form call — admit iff method's return type is Copy.
+                ExprKind::Call { callee, .. }
+                    if matches!(callee.kind, ExprKind::Attr { .. }) =>
+                {
+                    let inner_ty = self.synth_expr(inner)?;
+                    let resolved = self.subst.apply(&inner_ty);
+                    if is_copy_primitive(&resolved) {
+                        Ok(Ty::Ref(Box::new(inner_ty)))
+                    } else {
+                        Err(TypeError::BorrowOfNonPlace {
+                            span,
+                            suggestion: Some(
+                                "borrow of a method returning non-Copy type; \
+                                 bind the return value to a local first: \
+                                 `let t = recv.method(); &t`",
+                            ),
+                        })
+                    }
+                }
+                // Free-fn call, literal, arithmetic, complex expression —
+                // reject per ADR-0052a §6.
+                _ => Err(TypeError::BorrowOfNonPlace {
+                    span,
+                    suggestion: Some(
+                        "borrow operand must be a place (`Name`, `Name.field`, \
+                         `Name[idx]`, or `Name.method()` returning a primitive)",
+                    ),
+                }),
+            },
             ExprKind::Await(e) => {
                 let _ = self.synth_expr(e)?;
                 Ok(self.fresh_var())
@@ -2160,6 +2198,16 @@ impl BlockOutcome {
             Self::Falls
         }
     }
+}
+
+/// ADR-0052g §5 — Wave-2 round 2 helper for the narrowed `Borrow` synth
+/// arm. Returns true iff the type is a Copy primitive admissible at the
+/// outer `&` wrapper of a method-form call. Deliberately narrower than
+/// MIR's `is_copy_type` at `crates/cobrust-mir/src/lower.rs:2328`:
+/// the type-check arm excludes `Ty::Ref(_)` to prevent `&&x`
+/// nested-borrow regression per ADR-0052a §8.
+fn is_copy_primitive(ty: &Ty) -> bool {
+    matches!(ty, Ty::Int | Ty::Float | Ty::Bool)
 }
 
 fn lit_to_string(lit: &Lit) -> String {
