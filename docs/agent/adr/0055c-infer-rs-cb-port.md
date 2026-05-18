@@ -218,7 +218,7 @@ Ratified post-impl after DG verification (37/37 PASS, commit `de969ef`).
 - 30 `ipc*` tests in `infer_parity_corpus.rs` — drive `cobrust_types::infer::{Subst, unify, finalize}` directly (Rust impl) + assert Rust-side correctness on the M2 corpus, with cb-side parity implicit via canonicalization through `cobrust_types_parity::Canonicalize`.
 - 7 `idp*` tests in `infer_display_parity.rs` — drive `display_ty` + `canonicalize_arena_root` on `ty_cb_arena_from_rust(rust_ty)` arena outputs, comparing against Rust `format!("{rust_ty}")` + `<Ty as Canonicalize>::canonicalize`.
 
-Neither corpus invokes a cb-side `Subst` / `unify` symbol. The cb-side parity contract for ADR-0055c is therefore **already satisfied** by the Wave-2 arena-walking surfaces shipped in 0055a + 0055b; the `infer.cb` pseudocode file (`crates/cobrust-types-cb/src/infer.cb`, 299 LOC) remains a READ-ONLY documentation reference per ADR-0055 §4.1 (no compile path until Phase 7.5 self-host).
+Neither corpus invokes a cb-side `Subst` / `unify` symbol. The cb-side parity contract for ADR-0055c is therefore **already satisfied** by the Wave-2 arena-walking surfaces shipped in 0055a + 0055b; the `infer.cb` pseudocode file (`crates/cobrust-types-cb/src/infer.cb`, 299 LOC) remains a READ-ONLY .cb proof-artifact policy ratified in this Wave-3 ADR, grounded in ADR-0055 §3.1 ('cb mirror is a proof artifact; Rust impl stays canonical'). Wave-3 0055c hereby ESTABLISHES this as a new project convention for Phase H Tier-2 sub-ADRs, superseding any implication of cb-side compile-path obligation in ADR-0055 §3.3 sub-ADR roster line items.
 
 ### 12.2 Cascade enumeration
 
@@ -237,12 +237,20 @@ Neither corpus invokes a cb-side `Subst` / `unify` symbol. The cb-side parity co
 
 `infer.cb` pseudocode line 60 documented the None-branch latitude: "return original handle (no arena insert)". Phase H closure preserves this latitude as a ratified design choice — the parity harness canonicalization absorbs handle-aliasing per the §6 risk 2 mitigation. If a future cb-compile-path resurrection of `infer.cb` flags arena-length monotonic-growth divergence on adversarial corpus, fall back to explicit `insert(arena, TyEntry::Var(v))`; the trade-off is documented for re-litigation.
 
-### 12.4 Cross-ADR feed-forward to 0055d
+### 12.4 Cross-ADR amendment: ADR-0055d §"Pre-dispatch gate" requirement
+
+**Cross-ADR amendment: ADR-0055d §"Pre-dispatch gate" requirement**. The original 0055d Pre-dispatch gate (line 187 of `0055d-check-rs-cb-port.md` pre-amendment) required 'arena-aware `Subst` + `unify` + `finalize` stable on cb side'. Wave-3 ratification AMENDS that gate to: 'arena-aware `Subst` + `unify` + `finalize` stable on **Rust side** (`cobrust_types::infer`) + cb-side Wave-2 canonicalization surfaces (`display_ty` + `canonicalize_arena_root`) shipped at 0055a/b'. 0055d DEV may consume Rust-side `cobrust_types::infer::{Subst, unify, finalize}` directly through `parity_check<R,C>` heterogeneous form. This amendment is filed in this §12 as the canonical record; 0055d ADR receives a matching cross-reference amendment (ADR-0055d §"Pre-dispatch gate").
+
+### 12.5 0055b cascade-follow-up RESOLVED
+
+**0055b cascade-follow-up RESOLVED**. ADR-0055b §"Trade-off" (lines 180+196 pre-amendment) deferred BLOCK-rule weakening re-tightening to 0055c with the expectation of cb-side arena-form Ty. RESOLUTION: Wave-2 surfaces `display_ty` + `canonicalize_arena_root` + `impl Canonicalize for TyEntry` shipped at 0055a (lib.rs symbols `canonicalize_arena_root`, `display_ty`, `clone_into_arena`) ALREADY satisfy the structural-arena-form pre-condition. The BLOCK-rule re-tightening operates through `cobrust_types_parity::Canonicalize` on the merged M2 corpus on main `c9db006`. No further work needed; cascade follow-up RESOLVED via Wave-2 surfaces, not via cb-side `infer.cb` compile path.
+
+### 12.6 Cross-ADR feed-forward to 0055d
 
 - The §2 + §3 `&mut TyArena` receiver convention is codified in `infer.cb` pseudocode + ratified here for 0055d `check.rs` consumers. Every `synth_*` arm in 0055d's port references this convention through the shared cb-side `infer.cb` pseudocode without re-litigation.
 - The F31 lock is enforced via shared Rust-side `unify` impl; 0055d's `synth_call` one-way Ref→T coercion remains the only arena-form site where Ref/non-Ref bridging is allowed.
 
-### 12.5 Audit hand-off
+### 12.7 Audit hand-off
 
 Tier-1 audit fires post-return. Audit scope per §11 post-author-audit-mandatory:
 - §4 arena-interaction invariants compliance — N/A, no cb-side `infer.cb` compile path shipped; ratified deferral.
