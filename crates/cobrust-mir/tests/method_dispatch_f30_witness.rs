@@ -238,7 +238,6 @@ fn f30wit_method_02_list_len_method_form_lowers_to_prelude_fn() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0052f only relaxes parser cap; type-check still rejects \\&CallResult as non-place. Deferred to Wave 2 round 2 follow-up (0052g type-check piece OR fold into 0052d-final)."]
 fn f30wit_method_03_borrow_precedence_binds_tighter_than_method_call() {
     // `&s.len()` parses as `&(s.len())` per ADR-0052 F-G.3. The
     // method-form rewrite of `s.len()` to `str_len(s)` runs INSIDE
