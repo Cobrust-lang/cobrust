@@ -1,0 +1,29 @@
+[package]
+name = "cobrust-types-cb"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Cobrust-cb arena-form mirror of cobrust-types (ADR-0055a Phase H Wave-2 TEST)"
+
+[lib]
+name = "cobrust_types_cb"
+path = "src/lib.rs"
+
+[dependencies]
+cobrust-types = { path = "../cobrust-types" }
+cobrust-types-parity = { path = "../cobrust-types-parity" }
+serde = { workspace = true }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+cobrust-types = { path = "../cobrust-types" }
+cobrust-types-parity = { path = "../cobrust-types-parity" }
+
+[lints]
+workspace = true
