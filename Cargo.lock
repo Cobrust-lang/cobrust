@@ -552,6 +552,7 @@ dependencies = [
 name = "cobrust-types-cb"
 version = "0.3.0"
 dependencies = [
+ "cobrust-frontend",
  "cobrust-types",
  "cobrust-types-parity",
  "serde",

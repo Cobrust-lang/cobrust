@@ -1,4 +1,4 @@
-//! Cobrust-cb arena-form mirror of `cobrust_types` — ADR-0055a Phase H Wave-2.
+//! Cobrust-cb arena-form mirror of `cobrust_types` — ADR-0055a + ADR-0055b Phase H Wave-2.
 //!
 //! # Scope (F28 strict-separation — TEST only)
 //!
@@ -29,6 +29,14 @@
 //! - `TyArena::insert` — dense-pack push returning the new TyId handle.
 //! - `ty_cb_arena_from_rust` — conversion bridge stub (DEV fills).
 //! - `parity_check` re-export — test corpus calls via this crate's surface.
+//!
+//! ## Re-export surface (mirrors `cobrust-types::lib.rs`)
+//!
+//! Every `pub use` in Rust `lib.rs` is reproduced here per ADR-0055b §4
+//! risk 3 mitigation: Tier-2 ports (`0055c` `infer.rs`, `0055d` `check.rs`)
+//! import from this crate with identical name shapes.
+//!
+//! ADR-0055b §9.4 doc mandate: agent docs in `docs/agent/modules/types-cb.md`.
 
 #![forbid(unsafe_code)]
 #![allow(clippy::module_name_repetitions)]
@@ -447,3 +455,14 @@ impl Canonicalize for TyEntry {
         todo!("ADR-0055a Wave-2 DEV: Canonicalize for TyEntry — post-order arena traversal")
     }
 }
+
+// =====================================================================
+// 0055b: error_cb module + re-exports (ADR-0055b §4 re-export contract)
+// =====================================================================
+
+pub mod error_cb;
+
+// Re-export mirrors: names preserved per ADR-0055b §4 re-export contract.
+// Tier-2 (0055c infer.rs, 0055d check.rs) imports `use cobrust_types_cb::{TypeError, ...}`
+// with the same shape as Rust `lib.rs`.
+pub use error_cb::TypeErrorCb as TypeError;

@@ -1,0 +1,98 @@
+// error.cb — ADR-0055b cb mirror of cobrust-types/src/error.rs
+// Doc-ref: proof artifact showing Cobrust source form of TypeError.
+// All Ty fields are i64 arena handles (0055a TyArena workaround).
+// suggestion: Option[str] — owned (replaces Rust Option<&'static str>).
+// Multiple(list[TypeError]) is the only recursive variant.
+// display_error(arena: &TyArena, err: &TypeError) -> str replaces thiserror derive.
+
+// lib.cb re-export mirrors (ADR-0055b §4 risk 3 mitigation):
+//   pub mod error
+//   pub use error::TypeError
+
+pub enum TypeError:
+    // --- Class 1: span + suggestion only ---
+    BreakOutsideLoop { span: Span, suggestion: Option[str] }
+    ContinueOutsideLoop { span: Span, suggestion: Option[str] }
+    ReturnOutsideFn { span: Span, suggestion: Option[str] }
+    YieldOutsideFn { span: Span, suggestion: Option[str] }
+    MutableDefault { span: Span, suggestion: Option[str] }
+    AmbiguousType { span: Span, suggestion: Option[str] }
+    DictSpreadNotSupported { span: Span, suggestion: Option[str] }
+    BorrowOfNonPlace { span: Span, suggestion: Option[str] }
+
+    // --- Class 2: String payload ---
+    UnknownName { name: str, span: Span, suggestion: Option[str] }
+    KeywordArgMismatch { name: str, span: Span, suggestion: Option[str] }
+    MissingArgument { name: str, span: Span, suggestion: Option[str] }
+    DuplicateField { name: str, span: Span, suggestion: Option[str] }
+    UseOfDroppedFeature { name: str, span: Span, suggestion: Option[str] }
+
+    // --- Class 3: Ty payload (i64 arena handles) ---
+    TypeMismatch { expected: i64, actual: i64, span: Span, suggestion: Option[str] }
+    RowConflict { field: str, ty1: i64, ty2: i64, span: Span, suggestion: Option[str] }
+    ImplicitTruthiness { actual: i64, span: Span, suggestion: Option[str] }
+    OccursCheck { var: i64, ty: i64, span: Span, suggestion: Option[str] }
+    NotCallable { actual: i64, span: Span, suggestion: Option[str] }
+    NotIndexable { actual: i64, span: Span, suggestion: Option[str] }
+    NotIterable { actual: i64, span: Span, suggestion: Option[str] }
+    NotHashable { actual: i64, span: Span, suggestion: Option[str] }
+
+    // --- Class 4: Composite + special ---
+    ArityMismatch { expected: int, actual: int, span: Span, suggestion: Option[str] }
+    NonExhaustiveMatch { uncovered: list[str], span: Span, suggestion: Option[str] }
+    UnknownMethod { type_name: str, method_name: str, span: Span, suggestion: Option[str] }
+    Multiple(list[TypeError])  // only recursive variant; tree-shaped, heap-backed
+
+// display_error: replaces thiserror derive — byte-equal format strings per ADR-0055b §4
+def display_error(arena: &TyArena, err: &TypeError) -> str:
+    match err:
+        TypeError.UnknownName { name, span, .. }:
+            f"unknown name `{name}` at {span}"
+        TypeError.ArityMismatch { expected, actual, span, .. }:
+            f"expected {expected} arguments, got {actual} at {span}"
+        TypeError.KeywordArgMismatch { name, span, .. }:
+            f"unknown keyword argument `{name}` at {span}"
+        TypeError.MissingArgument { name, span, .. }:
+            f"missing required argument `{name}` at {span}"
+        TypeError.TypeMismatch { expected, actual, span, .. }:
+            f"type mismatch: expected `{display_ty(arena, expected)}`, found `{display_ty(arena, actual)}` at {span}"
+        TypeError.NonExhaustiveMatch { uncovered, span, .. }:
+            f"non-exhaustive match: missing case(s) {uncovered:?} at {span}"
+        TypeError.RowConflict { field, ty1, ty2, span, .. }:
+            f"conflicting field `{field}` in record types at {span}: `{display_ty(arena, ty1)}` vs `{display_ty(arena, ty2)}`"
+        TypeError.ImplicitTruthiness { actual, span, .. }:
+            f"non-bool used in truthiness position: got `{display_ty(arena, actual)}` at {span}"
+        TypeError.UseOfDroppedFeature { name, span, .. }:
+            f"the form `{name}` is not part of Cobrust (dropped feature) at {span}"
+        TypeError.MutableDefault { span, .. }:
+            f"mutable default argument is forbidden at {span}"
+        TypeError.AmbiguousType { span, .. }:
+            f"ambiguous type at {span} (consider adding an annotation)"
+        TypeError.DuplicateField { name, span, .. }:
+            f"duplicate field `{name}` at {span}"
+        TypeError.OccursCheck { var, ty, span, .. }:
+            f"occurs check: cannot unify `?{var}` with `{display_ty(arena, ty)}` at {span}"
+        TypeError.NotCallable { actual, span, .. }:
+            f"not callable: `{display_ty(arena, actual)}` at {span}"
+        TypeError.NotIndexable { actual, span, .. }:
+            f"not indexable: `{display_ty(arena, actual)}` at {span}"
+        TypeError.NotIterable { actual, span, .. }:
+            f"not iterable: `{display_ty(arena, actual)}` at {span}"
+        TypeError.BreakOutsideLoop { span, .. }:
+            f"`break` outside any loop at {span}"
+        TypeError.ContinueOutsideLoop { span, .. }:
+            f"`continue` outside any loop at {span}"
+        TypeError.ReturnOutsideFn { span, .. }:
+            f"`return` outside any function at {span}"
+        TypeError.YieldOutsideFn { span, .. }:
+            f"`yield` outside any function at {span}"
+        TypeError.NotHashable { actual, span, .. }:
+            f"dict key type `{display_ty(arena, actual)}` is not Hashable at {span}"
+        TypeError.DictSpreadNotSupported { span, .. }:
+            f"dict spread (`**other`) is not supported in dict literals (Phase G feature) at {span}"
+        TypeError.Multiple(_):
+            "multiple type errors"
+        TypeError.BorrowOfNonPlace { span, .. }:
+            f"cannot borrow non-place expression at {span}"
+        TypeError.UnknownMethod { method_name, type_name, span, .. }:
+            f"method `{method_name}` not found on `{type_name}` at {span}"
