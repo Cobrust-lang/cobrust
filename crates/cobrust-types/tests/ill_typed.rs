@@ -2406,7 +2406,6 @@ const METHOD_STUBS_FOR_NON_COPY_BORROW: &str = concat!(
 );
 
 #[test]
-#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
 fn i0052g_01_borrow_str_split_non_copy_rejected() {
     // ADR-0052g §4.2 — `&s.split(",")` returns `list[str]` (non-Copy);
     // must emit `BorrowOfNonPlace` with FIX-text pointing at let-bind.
@@ -2421,7 +2420,6 @@ fn i0052g_01_borrow_str_split_non_copy_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
 fn i0052g_02_borrow_method_returning_str_non_copy_rejected() {
     // ADR-0052g §4.2 — `&s.trim()` returns Str (non-Copy); must emit
     // `BorrowOfNonPlace` with FIX-text. Trim is a Str-table method.
@@ -2436,7 +2434,6 @@ fn i0052g_02_borrow_method_returning_str_non_copy_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
 fn i0052g_03_borrow_list_get_non_copy_rejected() {
     // ADR-0052g §4.2 — `&xs.get(0)` where `xs: list[str]` returns Str
     // (non-Copy); must emit `BorrowOfNonPlace` per the narrowed arm.

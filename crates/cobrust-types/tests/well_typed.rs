@@ -2914,7 +2914,6 @@ fn w0052dpre_25_int_bit_count_method_form() {
 // ============================================================
 
 #[test]
-#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
 fn w0052g_01_borrow_str_len_returns_ref_int() {
     // ADR-0052g §4.1 canonical witness — `&s.len()` admits as `Ref(Int)`.
     // Int is Copy → §5 `is_copy_primitive` returns true → admit.
@@ -2925,7 +2924,6 @@ fn w0052g_01_borrow_str_len_returns_ref_int() {
 }
 
 #[test]
-#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
 fn w0052g_02_borrow_list_len_returns_ref_int() {
     // ADR-0052g §4.1 List variant — `&xs.len()` admits as `Ref(Int)`.
     must_accept_with_method_dispatch_stubs(
@@ -2935,7 +2933,6 @@ fn w0052g_02_borrow_list_len_returns_ref_int() {
 }
 
 #[test]
-#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
 fn w0052g_03_borrow_float_is_nan_returns_ref_bool() {
     // ADR-0052g §4.1 Bool variant — `&f.is_nan()` admits as `Ref(Bool)`.
     must_accept_with_method_dispatch_stubs(
@@ -2945,7 +2942,6 @@ fn w0052g_03_borrow_float_is_nan_returns_ref_bool() {
 }
 
 #[test]
-#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
 fn w0052g_04_borrow_int_abs_returns_ref_int() {
     // ADR-0052g §4.1 Int.abs variant — `&n.abs()` admits as `Ref(Int)`.
     must_accept_with_method_dispatch_stubs(
@@ -2955,7 +2951,6 @@ fn w0052g_04_borrow_int_abs_returns_ref_int() {
 }
 
 #[test]
-#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
 fn w0052g_05_borrow_str_len_at_fn_arg_one_way_coercion() {
     // ADR-0052g §2 motivation — the one-way call-site coercion at
     // `check.rs:1649-1661` drops the `Ref` wrapper when `Ref(Int)`
