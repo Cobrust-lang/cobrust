@@ -63,7 +63,6 @@ fn dummy_span() -> Span {
 ///
 /// Baseline: Var arm follows the map chain to a concrete TyEntry::Int.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc01_subst_apply_var_concrete() {
     // Rust side: Subst {?0 → Int}.apply(Var(?0)) = Int
     use cobrust_types::infer::Subst;
@@ -88,7 +87,6 @@ fn ipc01_subst_apply_var_concrete() {
 /// Chained Var resolution: ADR-0055c §9.1 "chained Var resolution" property test.
 /// Rust impl follows `?0 → ?1 → Int` transitively via `self.apply(inner)`.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc02_subst_apply_chained_var_resolution() {
     use cobrust_types::infer::Subst;
     let mut subst = Subst::new();
@@ -105,7 +103,6 @@ fn ipc02_subst_apply_chained_var_resolution() {
 ///
 /// List arm: inner Var replaced.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc03_subst_apply_list_inner_var() {
     use cobrust_types::infer::Subst;
     let mut subst = Subst::new();
@@ -119,7 +116,6 @@ fn ipc03_subst_apply_list_inner_var() {
 ///
 /// Set arm: inner Var replaced.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc04_subst_apply_set_inner_var() {
     use cobrust_types::infer::Subst;
     let mut subst = Subst::new();
@@ -133,7 +129,6 @@ fn ipc04_subst_apply_set_inner_var() {
 ///
 /// Dict arm: both key and value Vars replaced.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc05_subst_apply_dict_both_vars() {
     use cobrust_types::infer::Subst;
     let mut subst = Subst::new();
@@ -151,7 +146,6 @@ fn ipc05_subst_apply_dict_both_vars() {
 ///
 /// Tuple arm: partial Var replacement.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc06_subst_apply_tuple_partial_var() {
     use cobrust_types::infer::Subst;
     let mut subst = Subst::new();
@@ -166,7 +160,6 @@ fn ipc06_subst_apply_tuple_partial_var() {
 /// Ref arm per ADR-0052a Wave-1: structural walk into &T.
 /// NOT transparency — `Ref(T)` and `T` remain distinct.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc07_subst_apply_ref_inner_var() {
     use cobrust_types::infer::Subst;
     let mut subst = Subst::new();
@@ -180,7 +173,6 @@ fn ipc07_subst_apply_ref_inner_var() {
 ///
 /// Adt arm: per-arg Var replacement.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc08_subst_apply_adt_var_arg() {
     use cobrust_types::infer::Subst;
     let mut subst = Subst::new();
@@ -194,7 +186,6 @@ fn ipc08_subst_apply_adt_var_arg() {
 ///
 /// Alias arm: per-arg Var replacement.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc09_subst_apply_alias_var_arg() {
     use cobrust_types::infer::Subst;
     let mut subst = Subst::new();
@@ -208,7 +199,6 @@ fn ipc09_subst_apply_alias_var_arg() {
 ///
 /// Leaf arm: no arena mutation; returns original handle on cb side.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc10_subst_apply_leaf_no_change() {
     use cobrust_types::infer::Subst;
     let subst = Subst::new(); // empty subst
@@ -220,7 +210,6 @@ fn ipc10_subst_apply_leaf_no_change() {
 ///
 /// Fn arm (cross-arena flow per ADR-0055c §4.1): writes to FnTyArena + TyArena.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc11_subst_apply_fn_type_vars() {
     use cobrust_types::infer::Subst;
     let mut subst = Subst::new();
@@ -252,7 +241,6 @@ fn ipc11_subst_apply_fn_type_vars() {
 
 /// `unify(Int, Int)` → `Ok(())`.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc12_unify_int_int_success() {
     use cobrust_types::infer::{unify, Subst};
     let mut subst = Subst::new();
@@ -262,7 +250,6 @@ fn ipc12_unify_int_int_success() {
 
 /// `unify(Str, Str)` → `Ok(())`.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc13_unify_str_str_success() {
     use cobrust_types::infer::{unify, Subst};
     let mut subst = Subst::new();
@@ -272,7 +259,6 @@ fn ipc13_unify_str_str_success() {
 
 /// `unify(List[Int], List[Int])` → `Ok(())`.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc14_unify_list_list_success() {
     use cobrust_types::infer::{unify, Subst};
     let mut subst = Subst::new();
@@ -287,7 +273,6 @@ fn ipc14_unify_list_list_success() {
 
 /// `unify(Tuple[Int, Str], Tuple[Int, Str])` → `Ok(())`.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc15_unify_tuple_tuple_success() {
     use cobrust_types::infer::{unify, Subst};
     let mut subst = Subst::new();
@@ -302,7 +287,6 @@ fn ipc15_unify_tuple_tuple_success() {
 
 /// `unify(Never, Int)` → `Ok(())` (Never is bottom).
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc16_unify_never_anything_success() {
     use cobrust_types::infer::{unify, Subst};
     let mut subst = Subst::new();
@@ -315,7 +299,6 @@ fn ipc16_unify_never_anything_success() {
 /// ADR-0055c §9.1 "unify-termination" property test.
 /// Depth-5 nesting: both sides identical. Cb impl must not loop.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc17_unify_termination_deep_list() {
     use cobrust_types::infer::{unify, Subst};
     // Build List[List[List[List[List[Int]]]]] depth-5
@@ -331,7 +314,6 @@ fn ipc17_unify_termination_deep_list() {
 ///
 /// Variable unification: Var arm extends the substitution.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc18_unify_var_concrete_extends_subst() {
     use cobrust_types::infer::{unify, Subst};
     let mut subst = Subst::new();
@@ -346,7 +328,6 @@ fn ipc18_unify_var_concrete_extends_subst() {
 ///
 /// ADR-0055c §9.1 "chained Var resolution" — second unify with same mapping is Ok.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc19_adjacent_unify_var_idempotent() {
     use cobrust_types::infer::{unify, Subst};
     let mut subst = Subst::new();
@@ -364,7 +345,6 @@ fn ipc19_adjacent_unify_var_idempotent() {
 
 /// `unify(Int, Str)` → `Err(TypeError::TypeMismatch)`.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc20_unify_int_str_mismatch() {
     use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
@@ -381,7 +361,6 @@ fn ipc20_unify_int_str_mismatch() {
 ///
 /// Failure propagates from inner element unification.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc21_unify_list_int_vs_list_str_mismatch() {
     use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
@@ -400,7 +379,6 @@ fn ipc21_unify_list_int_vs_list_str_mismatch() {
 ///
 /// Arity mismatch on Tuple → TypeMismatch per Rust arm.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc22_unify_tuple_arity_mismatch() {
     use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
@@ -422,7 +400,6 @@ fn ipc22_unify_tuple_arity_mismatch() {
 ///
 /// Fn positional type mismatch: first positional Int vs Str.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc23_unify_fn_positional_type_mismatch() {
     use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
@@ -450,7 +427,6 @@ fn ipc23_unify_fn_positional_type_mismatch() {
 ///
 /// Named-parameter name mismatch: `a` vs `b`.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc24_unify_fn_named_key_mismatch() {
     use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
@@ -486,7 +462,6 @@ fn ipc24_unify_fn_named_key_mismatch() {
 /// ADR-0055c §9.1 "occurs-check positive" property test.
 /// ?0 appears free in `List[?0]`, so unification would create an infinite type.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc25_occurs_check_var_in_list() {
     use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
@@ -505,7 +480,6 @@ fn ipc25_occurs_check_var_in_list() {
 ///
 /// Occurs-check: ?0 free in Dict key position.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc26_occurs_check_var_in_dict_key() {
     use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
@@ -521,7 +495,6 @@ fn ipc26_occurs_check_var_in_dict_key() {
 ///
 /// Occurs-check: ?0 free in Tuple element.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc27_occurs_check_var_in_tuple() {
     use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
@@ -545,7 +518,6 @@ fn ipc27_occurs_check_var_in_tuple() {
 /// F31 lock: Ref↔non-Ref unification is forbidden.
 /// The one-way coercion lives at `synth_call` in 0055d scope.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc28_ref_t_no_bidirectional_unify() {
     use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
@@ -566,7 +538,6 @@ fn ipc28_ref_t_no_bidirectional_unify() {
 ///
 /// F31 lock: symmetric case — non-Ref↔Ref also forbidden.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc29_t_ref_no_bidirectional_unify_symmetric() {
     use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
@@ -588,7 +559,6 @@ fn ipc29_t_ref_no_bidirectional_unify_symmetric() {
 ///
 /// Free Var with empty subst: AmbiguousType per infer.rs::finalize.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn ipc30_finalize_free_var_ambiguous() {
     use cobrust_types::infer::{finalize, Subst};
     use cobrust_types::TypeError;
