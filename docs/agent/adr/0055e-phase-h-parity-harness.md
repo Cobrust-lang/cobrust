@@ -4,9 +4,9 @@ adr_id: 0055e
 title: "Phase H parity harness contract — Rust impl vs cb impl diff-test on M2 corpus"
 status: accepted
 date: 2026-05-18
-ratified_at: 2244ae3
+ratified_at: 2d94761
 ratified_on: 2026-05-18
-last_verified_commit: 2244ae3
+last_verified_commit: 2d94761
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0054]
