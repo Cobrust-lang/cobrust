@@ -5,7 +5,7 @@ parent_adr: 0052
 title: "Direction B — Error UX rewrite (errors print the FIX)"
 status: accepted
 date: 2026-05-17
-last_verified_commit: 365181a
+last_verified_commit: 2a710d3
 supersedes: []
 superseded_by: []
 relates_to: [adr:0052, adr:0052a, adr:0051]
@@ -22,9 +22,9 @@ Phase G Wave 2 per ADR-0052 §"Wave 2 — Directions B + C + D parallel". CLAUDE
 > Today: `TypeError::ImplicitTruthiness { actual: Int, span }`.
 > Tomorrow: same + `suggestion: "change to 'if x != 0:'"`. LLM consumes stderr to decide next step.
 
-The rationale is the §2.5 LLM-first compile-time-catch rule: every `TypeError::*` and `MirError::*` variant is already a "successful catch". The catch only converts to a useful corrective signal if the diagnostic also carries the **fix path** in machine-consumable form. Today's renderer at `crates/cobrust-cli/src/error_ux.rs:547-786` produces English suggestion prose via a hard-coded match per variant; the suggestion lives at *render* time, not at *construction* time, and the structured shape (`Option<&'static str>`) is not visible to downstream LSP / JSON / agent consumers.
+The rationale is the §2.5 LLM-first compile-time-catch rule: every `TypeError::*` and `MirError::*` variant is already a "successful catch". The catch only converts to a useful corrective signal if the diagnostic also carries the **fix path** in machine-consumable form. Today's renderer at `crates/cobrust-cli/src/error_ux.rs:563-893` produces English suggestion prose via a hard-coded match per variant; the suggestion lives at *render* time, not at *construction* time, and the structured shape (`Option<&'static str>`) is not visible to downstream LSP / JSON / agent consumers.
 
-Wave 1 (ADR-0052a §6) shipped the forward-compat field shape on the new variant `TypeError::BorrowOfNonPlace { span, suggestion: Option<&'static str> }` at `error.rs:146-149`, and `MirError::UseAfterMove` already ships a hard-coded `&s` suggestion at *render* time at `error_ux.rs:798-810` per ADR-0052a §7. Direction B generalises this pattern across all ~35 variants: every error gains a `suggestion: Option<&'static str>` field at construction; the renderer becomes a thin structural pass-through.
+Wave 1 (ADR-0052a §6) shipped the forward-compat field shape on the new variant `TypeError::BorrowOfNonPlace { span, suggestion: Option<&'static str> }` at `error.rs::TypeError::BorrowOfNonPlace` (currently `error.rs:219`), and `MirError::UseAfterMove` already ships a hard-coded `&s` suggestion at *render* time at `error_ux.rs:907` per ADR-0052a §7. Direction B generalises this pattern across all ~35 variants: every error gains a `suggestion: Option<&'static str>` field at construction; the renderer becomes a thin structural pass-through.
 
 Empirical baseline at HEAD `8dc2723`: 24 `TypeError::*` variants (`crates/cobrust-types/src/error.rs`), 11 `MirError::*` variants (`crates/cobrust-mir/src/error.rs`). Of these, 19 already have hard-coded suggestion prose in the renderer; 16 have `None` hint today. Direction B shifts all 35 to a uniform `suggestion: Option<&'static str>` field consumed by the renderer.
 
@@ -36,7 +36,7 @@ Three binding properties:
 
 - **Construction-time write**. Each `Err(TypeError::Foo { ... })` site populates `suggestion` with the most actionable fix string available at that call site. Sites where no useful fix exists pass `suggestion: None`. The choice is local, not deferred to a global match.
 - **Static `&'static str`**. Wave-2 suggestions are compile-time literals only. Dynamic format-arg interpolation (e.g. `format!("try `{name}.is_some()`")`) is **out of scope** (§11). This preserves zero-allocation rendering and matches the precedent Wave-1 set for `BorrowOfNonPlace::suggestion`.
-- **Renderer becomes structural**. `error_ux.rs:547-786` (TypeError) and `error_ux.rs:790-865` (MirError) lose the per-variant hard-coded hint prose; the variants emit their `suggestion` field unchanged.
+- **Renderer becomes structural**. `error_ux.rs:563-893` (TypeError) and `error_ux.rs:894-1000` (MirError) lose the per-variant hard-coded hint prose; the variants emit their `suggestion` field unchanged.
 
 Rejected alternatives:
 
@@ -60,7 +60,7 @@ error: non-bool used in truthiness position: got `Int` at line 12
 suggestion: change to `if x != 0:` (use `.is_some()` for Option)
 ```
 
-Renderer reads `suggestion` directly; the hint prose lives at the `Err(TypeError::ImplicitTruthiness { actual, span, suggestion: Some("...") })` construction site in `check.rs:1532`.
+Renderer reads `suggestion` directly; the hint prose lives at the `Err(TypeError::ImplicitTruthiness { actual, span, suggestion: Some("...") })` construction site in `check.rs::TypeError::ImplicitTruthiness` (currently `check.rs:2076`).
 
 ### 3.2 `TypeError::TypeMismatch`
 
@@ -69,7 +69,7 @@ Tomorrow: `change the expression type or add `: <expected>` annotation` (still g
 
 ### 3.3 `MirError::UseAfterMove` (ADR-0052a precedent)
 
-Today (hard-coded at `error_ux.rs:798-810`): `change to \`&s\` to borrow without consuming (ADR-0052a explicit shared borrow)`.
+Today (hard-coded at `error_ux.rs:907`): `change to \`&s\` to borrow without consuming (ADR-0052a explicit shared borrow)`.
 Tomorrow: same text, but lifted to construction site in `borrow.rs:114` + `borrow.rs:224`.
 
 ### 3.4 `TypeError::AmbiguousType`
@@ -85,7 +85,7 @@ Tomorrow: static text `declare with \`let <name> = …\` first` — drops the dy
 ### 3.6 `TypeError::MutableDefault`
 
 Today: `use \`None\` as the default and assign inside the function body`.
-Tomorrow: same text, lifted to construction site in `check.rs:299` + `check.rs:308`.
+Tomorrow: same text, lifted to construction site in `check.rs:302` + `check.rs:316`.
 
 ### 3.7 `MirError::DropMissing`
 
@@ -95,7 +95,7 @@ Tomorrow: `add \`drop(<local>)\` before return or transfer ownership` — sharpe
 ### 3.8 `TypeError::NotHashable`
 
 Today: `f64 keys are forbidden (NaN != NaN); use i64 via \`f.to_bits() as i64\` or a str repr`.
-Tomorrow: same text, lifted to `check.rs:748` + `check.rs:1275` + `check.rs:1339`.
+Tomorrow: same text, lifted to `check.rs:783` + `check.rs:1811` + `check.rs:1879`.
 
 ## 4. Variant enumeration table
 
@@ -150,42 +150,42 @@ All 35 variants at HEAD `8dc2723`. **Class**: `S` = static suggestion ready; `C`
 
 ## 5. Type checker changes — `crates/cobrust-types/src/error.rs`
 
-Each variant gains `suggestion: Option<&'static str>`. Twenty-four variants; mechanical field-add. Construction sites that need updating (sample at HEAD `8dc2723`):
+Each variant gains `suggestion: Option<&'static str>`. Twenty-four variants; mechanical field-add. Construction sites that need updating (anchors at HEAD `2a710d3`; prefer symbol-style per F34 pre-candidate):
 
 - `check.rs:59` `TypeError::AmbiguousType` — populate with annotation suggestion.
-- `check.rs:299`, `check.rs:308` `TypeError::MutableDefault` — populate with `None`-default suggestion.
-- `check.rs:373`, `check.rs:379` `TypeError::BreakOutsideLoop` / `ContinueOutsideLoop` — populate with in-loop suggestion.
-- `check.rs:517`, `check.rs:526`, `check.rs:542` `TypeError::NotIterable` — populate with iterable-types list.
-- `check.rs:732` `TypeError::DictSpreadNotSupported` — populate with manual-merge suggestion.
-- `check.rs:748`, `check.rs:1275`, `check.rs:1339` `TypeError::NotHashable` — populate with f64-to-bits suggestion.
-- `check.rs:1466` `TypeError::UnknownName` — populate with `let <name> = …` suggestion.
-- `check.rs:1532` `TypeError::ImplicitTruthiness` — populate with §2.5-canonical `if x != 0:` suggestion.
+- `check.rs:302`, `check.rs:316` `TypeError::MutableDefault` — populate with `None`-default suggestion.
+- `check.rs:389`, `check.rs:398` `TypeError::BreakOutsideLoop` / `ContinueOutsideLoop` — populate with in-loop suggestion.
+- `check.rs:539`, `check.rs:551`, `check.rs:570` `TypeError::NotIterable` — populate with iterable-types list.
+- `check.rs:762` `TypeError::DictSpreadNotSupported` — populate with manual-merge suggestion.
+- `check.rs:783`, `check.rs:1811`, `check.rs:1879` `TypeError::NotHashable` — populate with f64-to-bits suggestion.
+- `check.rs:2009` `TypeError::UnknownName` — populate with `let <name> = …` suggestion.
+- `check.rs:2076` `TypeError::ImplicitTruthiness` — populate with §2.5-canonical `if x != 0:` suggestion.
 
 Total construction-site updates: ~40-50 across `check.rs` (each variant appears 1-4 times). Mechanical field-add; no logic change.
 
 ## 6. MIR error changes — `crates/cobrust-mir/src/error.rs`
 
-Each variant gains `suggestion: Option<&'static str>`. Eleven variants; parallel mechanical field-add. Construction sites at HEAD `8dc2723`:
+Each variant gains `suggestion: Option<&'static str>`. Eleven variants; parallel mechanical field-add. Construction sites at HEAD `2a710d3`:
 
-- `borrow.rs:114`, `borrow.rs:224` `MirError::UseAfterMove` — populate with `&s` suggestion (already render-time at `error_ux.rs:805-809`).
-- `borrow.rs:230` `MirError::UseAfterDrop` — populate with reorder-read-before-drop suggestion.
-- `borrow.rs:252` `MirError::ConflictingMutBorrow` — populate with release-first-borrow suggestion.
-- `borrow.rs:258`, `borrow.rs:266` `MirError::SharedMutOverlap` — populate with release-shared-first suggestion.
+- `borrow.rs:114`, `borrow.rs:227` `MirError::UseAfterMove` — populate with `&s` suggestion (already render-time at `error_ux.rs:907`).
+- `borrow.rs:236` `MirError::UseAfterDrop` — populate with reorder-read-before-drop suggestion.
+- `borrow.rs:261` `MirError::ConflictingMutBorrow` — populate with release-first-borrow suggestion.
+- `borrow.rs:270`, `borrow.rs:281` `MirError::SharedMutOverlap` — populate with release-shared-first suggestion.
 - `drop.rs:303` `MirError::DoubleDrop` — populate with control-flow-check suggestion.
-- `lower.rs:283` `MirError::UnresolvedDefId` — pass `None` (compiler-internal).
-- `lower.rs:457`, `lower.rs:466`, `lower.rs:607` `MirError::Internal` — pass `None` (compiler bug).
-- Helper `use_after_move()` at `error.rs:85-90` — extend signature with `suggestion: Option<&'static str>` arg.
+- `lower.rs:323` `MirError::UnresolvedDefId` — pass `None` (compiler-internal).
+- `lower.rs:498`, `lower.rs:507`, `lower.rs:648` `MirError::Internal` — pass `None` (compiler bug).
+- Helper `use_after_move()` at `error.rs::use_after_move` (currently `error.rs:132`) — extend signature with `suggestion: Option<&'static str>` arg.
 
 Total construction-site updates: ~12-15 across the MIR crate.
 
 ## 7. CLI rendering changes — `crates/cobrust-cli/src/error_ux.rs`
 
-The `From<TypeError> for UserError` impl at lines 549-786 and `From<MirError> for UserError` impl at lines 790-874 are rewritten:
+The `From<TypeError> for UserError` impl at lines 563-893 and `From<MirError> for UserError` impl at lines 894-1000 are rewritten:
 
 - Each variant's match arm extracts `suggestion` from the variant payload.
 - The arm's existing hard-coded `Some("...".to_owned())` literal is replaced by `suggestion.map(str::to_owned)`.
-- Format-arg interpolation (e.g. `format!("did you mean to declare it with \`let {name} = …\`?")` at line 557) is dropped per §11; replaced by static text via construction-site population.
-- The precedent is `MirError::UseAfterMove` at `error_ux.rs:798-810` (Wave-1 hard-coded at render time) plus `TypeError::BorrowOfNonPlace` at `error_ux.rs:762-776` (Wave-1 reads `suggestion.map(...)` then falls back to static text). Direction B drops the fallback and standardises on `suggestion.map(str::to_owned)`.
+- Format-arg interpolation (e.g. `format!("did you mean to declare it with \`let {name} = …\`?")`) is dropped per §11; replaced by static text via construction-site population.
+- The precedent is `MirError::UseAfterMove` at `error_ux.rs:907` (Wave-1 hard-coded at render time) plus `TypeError::BorrowOfNonPlace` at `error_ux.rs:857` (Wave-1 reads `suggestion.map(...)` then falls back to static text). Direction B drops the fallback and standardises on `suggestion.map(str::to_owned)`.
 
 Approximate diff: -180 lines (hint-prose literals) +60 lines (uniform `suggestion.map` plumbing) = net -120 lines in `error_ux.rs`.
 
@@ -196,28 +196,28 @@ Per `findings/predicate-flip-cascade-discovery-deficit.md`. The flip is mechanic
 | # | File:line | Variant | Class |
 |---|---|---|---|
 | 1 | `check.rs:59` | `AmbiguousType` | E |
-| 2 | `check.rs:299, 308` | `MutableDefault` ×2 | E |
-| 3 | `check.rs:363` | `ReturnOutsideFn` | E |
-| 4 | `check.rs:373, 379` | `BreakOutsideLoop`, `ContinueOutsideLoop` | E |
-| 5 | `check.rs:517, 526, 542` | `NotIterable` ×3 | E |
-| 6 | `check.rs:584` | `NonExhaustiveMatch` | E |
-| 7 | `check.rs:732` | `DictSpreadNotSupported` | E |
-| 8 | `check.rs:748, 1275, 1339` | `NotHashable` ×3 | E |
-| 9 | `check.rs:830` | `NotIndexable` | E |
-| 10 | `check.rs:857, 866` | `YieldOutsideFn` ×2 | E |
-| 11 | `check.rs:891, 1194, 1231, 1288, 1591` | `TypeMismatch` ×5 | C → E |
-| 12 | `check.rs:946-1064 (6 sites), 1559` | `ArityMismatch` ×7 | E |
-| 13 | `check.rs:1082` | `KeywordArgMismatch` | E |
-| 14 | `check.rs:1118` | `NotCallable` | E |
-| 15 | `check.rs:1466` | `UnknownName` | E (static §3.5) |
-| 16 | `check.rs:1532` | `ImplicitTruthiness` | E (§2.5-canonical) |
-| 17 | `borrow.rs:114, 224` | `UseAfterMove` ×2 | E (ADR-0052a §7) |
-| 18 | `borrow.rs:230` | `UseAfterDrop` | E |
-| 19 | `borrow.rs:252` | `ConflictingMutBorrow` | E |
-| 20 | `borrow.rs:258, 266` | `SharedMutOverlap` ×2 | E |
+| 2 | `check.rs:302, 316` | `MutableDefault` ×2 | E |
+| 3 | `check.rs:376` | `ReturnOutsideFn` | E |
+| 4 | `check.rs:389, 398` | `BreakOutsideLoop`, `ContinueOutsideLoop` | E |
+| 5 | `check.rs:539, 551, 570` | `NotIterable` ×3 | E |
+| 6 | `check.rs:613` | `NonExhaustiveMatch` | E |
+| 7 | `check.rs:762` | `DictSpreadNotSupported` | E |
+| 8 | `check.rs:783, 1811, 1879` | `NotHashable` ×3 | E |
+| 9 | `check.rs:868` | `NotIndexable` | E |
+| 10 | `check.rs:936, 948` | `YieldOutsideFn` ×2 | E |
+| 11 | `check.rs:976, 1034-1251 (multi)` | `TypeMismatch` + `ArityMismatch` batch | C → E |
+| 12 | `check.rs:1034-1251 (9 sites)` | `ArityMismatch` ×9 | E |
+| 13 | `check.rs:1606` | `KeywordArgMismatch` | E |
+| 14 | `check.rs:1645` | `NotCallable` | E |
+| 15 | `check.rs:2009` | `UnknownName` | E (static §3.5) |
+| 16 | `check.rs:2076` | `ImplicitTruthiness` | E (§2.5-canonical) |
+| 17 | `borrow.rs:114, 227` | `UseAfterMove` ×2 | E (ADR-0052a §7) |
+| 18 | `borrow.rs:236` | `UseAfterDrop` | E |
+| 19 | `borrow.rs:261` | `ConflictingMutBorrow` | E |
+| 20 | `borrow.rs:270, 281` | `SharedMutOverlap` ×2 | E |
 | 21 | `drop.rs:303` | `DoubleDrop` | E |
-| 22 | `lower.rs:283, 457, 466, 607` | `UnresolvedDefId` + `Internal` ×3 | N |
-| 23 | `mir/error.rs:85-90` (helper) | `use_after_move()` signature | E |
+| 22 | `lower.rs:323, 498, 507, 648` | `UnresolvedDefId` + `Internal` ×3 | N |
+| 23 | `mir/error.rs::use_after_move` (`error.rs:132`) | `use_after_move()` signature | E |
 
 **Totals**: 23 grouped rows = ~55 direct construction sites. E = 19 rows (~48 sites); C → E collapse = 1 row (5 sites); N = 1 row (~4 sites, all compiler-internal). All five `TypeMismatch` sites reduce to a single static text per §3.2 + §11.
 

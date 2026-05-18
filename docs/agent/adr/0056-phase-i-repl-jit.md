@@ -5,7 +5,7 @@ parent_adr: 0054
 title: "Phase I frame — REPL JIT (M14.1): Cranelift JIT runtime invoke for incremental REPL eval"
 status: proposed
 date: 2026-05-18
-last_verified_commit: 8b4366c
+last_verified_commit: 2a710d3
 supersedes: []
 superseded_by: []
 relates_to: [adr:0054, adr:0029, adr:0034]

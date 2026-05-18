@@ -25,7 +25,7 @@ prerequisites"; this prereq ADR MUST land first because 0052d needs a
 single uniform method-table mechanism, not four ad-hoc rewrites.
 
 Today, method dispatch is **dict-only** via `try_synth_dict_method` at
-`crates/cobrust-types/src/check.rs:920` (ADR-0050d sub-sprint b). It
+`crates/cobrust-types/src/check.rs::try_synth_dict_method` (currently `check.rs:1008`; ADR-0050d sub-sprint b). It
 recognises `Call { callee: Attr { base, name } }` where `base: Dict[K, V]`
 and resolves a fixed roster (`.keys()` / `.values()` / `.items()` /
 `.get(k)` / `.copy()`) at type-check time. No parser change was needed:

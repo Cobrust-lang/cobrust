@@ -76,13 +76,16 @@ Phase H precedes Phase J despite J's higher §2.5 ROI because:
 
 ### 3.3 Sub-ADRs
 
-- **ADR-0055** — Phase H frame ADR. Same structural role this ADR plays for the H-L roadmap.
-- **ADR-0055-prereq** — Scoping ADR (~1 week). Decides which types + which crate split: full mirror of `cobrust-types` vs. carved-out subset (e.g. just `Ty` + `check_expr` + `unify` first).
-- **ADR-0055a** — Type-check inference port (~1 week sub-phase).
-- **ADR-0055b** — Borrow-check projection port (~1 week sub-phase).
-- **ADR-0055c** — Unification + error-emission port (~1 week sub-phase).
+Ratified 6-sub-ADR enumeration per ADR-0055 §3.3 (✓ inline-applied 2026-05-18):
 
-NOTE 2026-05-18 amendment: sub-ADR partition refined in ADR-0055 §3.3 from inference/borrow/unify split to per-source-file split (0055a-e); borrow-check excluded (lives in `cobrust-mir`, not `cobrust-types`).
+- **ADR-0055** — Phase H frame ADR. Same structural role this ADR plays for the H-L roadmap.
+- **ADR-0055a** — `ty.rs` Cobrust port (~1 week sub-phase). Core type enum + arena allocation.
+- **ADR-0055b** — `error.rs` + `lib.rs` Cobrust port (~0.5 week sub-phase). Error enum + public API surface.
+- **ADR-0055c** — `infer.rs` Cobrust port (~1 week sub-phase). Unification + constraint solving.
+- **ADR-0055d** — `check.rs` Cobrust port (~1 week sub-phase). Type-check expression + statement passes. Largest file.
+- **ADR-0055e** — Parity harness. Rust ↔ Cobrust-cb differential test on M2 corpus. (~0.5 week; Wave-1 priority per ADR-0055 §3.5 — ship first to gate 0055a-d).
+
+NOTE: borrow-check (`cobrust-mir`) excluded from Phase H scope (lives in separate crate; included only if Phase H capacity surplus remains). ADR-0059 (Debugger) references: frame stub pending.
 
 ### 3.4 Risk
 
