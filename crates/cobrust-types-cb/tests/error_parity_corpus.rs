@@ -1,7 +1,7 @@
 //! Per-variant round-trip parity corpus — ADR-0055b Wave-2.
 //!
 //! F28 strict-separation: TEST scope only. No impl body present.
-//! All tests are `#[ignore = "ADR-0055b Wave-2 DEV impl pending"]`.
+//! All tests are ``.
 //!
 //! Each test constructs a Rust `TypeError` + a matching `TypeErrorCb`,
 //! then asserts `parity_check(&rust_err, &cb_err) == Ok(())`.
@@ -18,14 +18,14 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::todo)]
 
-use cobrust_frontend::span::Span;
+use cobrust_frontend::span::{FileId, Span};
 use cobrust_types::TypeError;
 use cobrust_types::ty::{Ty, VarId};
 use cobrust_types_cb::error_cb::{TypeErrorCb, type_error_cb_from_rust};
 use cobrust_types_parity::{TyArena, parity_check};
 
 fn dummy_span() -> Span {
-    Span::new(0, 1)
+    Span::new(FileId(0), 0, 1)
 }
 
 // =====================================================================
@@ -33,7 +33,7 @@ fn dummy_span() -> Span {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_break_outside_loop() {
     let rust_err = TypeError::BreakOutsideLoop {
         span: dummy_span(),
@@ -48,7 +48,7 @@ fn test_break_outside_loop() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_continue_outside_loop() {
     let rust_err = TypeError::ContinueOutsideLoop {
         span: dummy_span(),
@@ -63,7 +63,7 @@ fn test_continue_outside_loop() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_return_outside_fn() {
     let rust_err = TypeError::ReturnOutsideFn {
         span: dummy_span(),
@@ -78,7 +78,7 @@ fn test_return_outside_fn() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_yield_outside_fn() {
     let rust_err = TypeError::YieldOutsideFn {
         span: dummy_span(),
@@ -93,7 +93,7 @@ fn test_yield_outside_fn() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_mutable_default() {
     let rust_err = TypeError::MutableDefault {
         span: dummy_span(),
@@ -108,7 +108,7 @@ fn test_mutable_default() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_ambiguous_type() {
     let rust_err = TypeError::AmbiguousType {
         span: dummy_span(),
@@ -123,7 +123,7 @@ fn test_ambiguous_type() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_dict_spread_not_supported() {
     let rust_err = TypeError::DictSpreadNotSupported {
         span: dummy_span(),
@@ -138,7 +138,7 @@ fn test_dict_spread_not_supported() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_borrow_of_non_place() {
     let rust_err = TypeError::BorrowOfNonPlace {
         span: dummy_span(),
@@ -157,7 +157,7 @@ fn test_borrow_of_non_place() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_unknown_name() {
     let rust_err = TypeError::UnknownName {
         name: "foo".to_string(),
@@ -174,7 +174,7 @@ fn test_unknown_name() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_keyword_arg_mismatch() {
     let rust_err = TypeError::KeywordArgMismatch {
         name: "verbose".to_string(),
@@ -191,7 +191,7 @@ fn test_keyword_arg_mismatch() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_missing_argument() {
     let rust_err = TypeError::MissingArgument {
         name: "x".to_string(),
@@ -208,7 +208,7 @@ fn test_missing_argument() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_duplicate_field() {
     let rust_err = TypeError::DuplicateField {
         name: "name".to_string(),
@@ -225,7 +225,7 @@ fn test_duplicate_field() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_use_of_dropped_feature() {
     // UseOfDroppedFeature::name is &'static str in Rust → String in cb.
     let rust_err = TypeError::UseOfDroppedFeature {
@@ -247,7 +247,7 @@ fn test_use_of_dropped_feature() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_type_mismatch() {
     // Anchor: error_parity_corpus.rs::test_type_mismatch
     let rust_err = TypeError::TypeMismatch {
@@ -270,7 +270,7 @@ fn test_type_mismatch() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_row_conflict() {
     let rust_err = TypeError::RowConflict {
         field: "age".to_string(),
@@ -291,7 +291,7 @@ fn test_row_conflict() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_implicit_truthiness() {
     let rust_err = TypeError::ImplicitTruthiness {
         actual: Ty::Int,
@@ -308,7 +308,7 @@ fn test_implicit_truthiness() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_occurs_check() {
     // Anchor: error_parity_corpus.rs::test_occurs_check
     // VarId-as-i64: var field is i64 on the cb side.
@@ -329,7 +329,7 @@ fn test_occurs_check() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_not_callable() {
     let rust_err = TypeError::NotCallable {
         actual: Ty::Int,
@@ -346,7 +346,7 @@ fn test_not_callable() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_not_indexable() {
     let rust_err = TypeError::NotIndexable {
         actual: Ty::Bool,
@@ -363,7 +363,7 @@ fn test_not_indexable() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_not_iterable() {
     let rust_err = TypeError::NotIterable {
         actual: Ty::Float,
@@ -380,7 +380,7 @@ fn test_not_iterable() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_not_hashable() {
     let rust_err = TypeError::NotHashable {
         actual: Ty::List(Box::new(Ty::Int)),
@@ -401,7 +401,7 @@ fn test_not_hashable() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_arity_mismatch() {
     let rust_err = TypeError::ArityMismatch {
         expected: 2,
@@ -420,7 +420,7 @@ fn test_arity_mismatch() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_non_exhaustive_match() {
     let rust_err = TypeError::NonExhaustiveMatch {
         uncovered: vec!["None".to_string(), "Err".to_string()],
@@ -437,7 +437,7 @@ fn test_non_exhaustive_match() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_unknown_method() {
     let rust_err = TypeError::UnknownMethod {
         type_name: "Int".to_string(),
@@ -456,7 +456,7 @@ fn test_unknown_method() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_multiple_flat() {
     // Anchor: error_parity_corpus.rs::test_multiple
     // Multiple: flat list — ADR-0055b §2 callers flatten before construction.
@@ -473,7 +473,7 @@ fn test_multiple_flat() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_multiple_nested_two_levels() {
     // ADR-0055b §2: harness corpus exercises ≤2-level Multiple.
     let inner = TypeError::Multiple(vec![
@@ -490,7 +490,7 @@ fn test_multiple_nested_two_levels() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_multiple_singleton() {
     // Multiple([single_err]) — degenerate but valid.
     let rust_err = TypeError::Multiple(vec![
@@ -508,7 +508,7 @@ fn test_multiple_singleton() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_bridge_stub_unknown_name() {
     // type_error_cb_from_rust stub: verifies it can be called (will panic until DEV fills).
     let rust_err = TypeError::UnknownName {
@@ -525,7 +525,7 @@ fn test_bridge_stub_unknown_name() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_bridge_stub_type_mismatch() {
     let rust_err = TypeError::TypeMismatch {
         expected: Ty::Str,
@@ -541,7 +541,7 @@ fn test_bridge_stub_type_mismatch() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_bridge_stub_multiple() {
     let rust_err = TypeError::Multiple(vec![
         TypeError::MutableDefault { span: dummy_span(), suggestion: None },
