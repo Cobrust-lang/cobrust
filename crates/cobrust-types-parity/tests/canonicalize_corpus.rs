@@ -229,6 +229,35 @@ fn c14_ref_canonical_key_single_child() {
     assert_eq!(key.children[0].kind, "Int");
 }
 
+/// C-10b: FnTyId and RecordId namespaces are independent from each other and from
+/// the other 4 namespaces (AdtId, AliasId, VarId, GenericVar).
+#[test]
+#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
+fn c10b_fnty_record_namespaces_independent() {
+    let mut arena_a = TyArena::new();
+    let mut arena_b = TyArena::new();
+
+    // arena_a: allocate FnTyId first, then RecordId
+    let fn_id_a0 = arena_a.fresh_fn_ty_id();
+    let rec_id_a0 = arena_a.fresh_record_id();
+
+    // arena_b: allocate RecordId first, then FnTyId — order must not matter
+    let rec_id_b0 = arena_b.fresh_record_id();
+    let fn_id_b0 = arena_b.fresh_fn_ty_id();
+
+    // Both arenas start each namespace at 0 independently
+    assert_eq!(fn_id_a0, 0, "FnTy counter starts at 0 (arena_a)");
+    assert_eq!(rec_id_a0, 0, "Record counter starts at 0, independent of FnTy (arena_a)");
+    assert_eq!(fn_id_b0, 0, "FnTy counter starts at 0 (arena_b)");
+    assert_eq!(rec_id_b0, 0, "Record counter starts at 0 (arena_b)");
+
+    // Second allocation increments each independently
+    let fn_id_a1 = arena_a.fresh_fn_ty_id();
+    let rec_id_a1 = arena_a.fresh_record_id();
+    assert_eq!(fn_id_a1, 1, "second FnTy id → 1");
+    assert_eq!(rec_id_a1, 1, "second Record id → 1, independent of FnTy counter");
+}
+
 /// C-15: Deeply nested canonical key roundtrip — `List[Set[Dict[Str,Bool]]]`
 /// Canonical key must be idempotent: building from the same Ty twice → equal.
 #[test]

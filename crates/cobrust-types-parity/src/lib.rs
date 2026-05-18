@@ -132,6 +132,20 @@ impl TyArena {
         let next = self.generic_canon.len() as u32;
         *self.generic_canon.entry(raw).or_insert(next)
     }
+
+    /// Allocate a new canonical FnTyId (dense-pack counter).
+    pub fn fresh_fn_ty_id(&mut self) -> u32 {
+        let id = self.fn_ty_counter;
+        self.fn_ty_counter = self.fn_ty_counter.checked_add(1).expect("FnTyId overflow");
+        id
+    }
+
+    /// Allocate a new canonical RecordId (dense-pack counter).
+    pub fn fresh_record_id(&mut self) -> u32 {
+        let id = self.record_counter;
+        self.record_counter = self.record_counter.checked_add(1).expect("RecordId overflow");
+        id
+    }
 }
 
 // =====================================================================
@@ -234,21 +248,11 @@ pub enum ParityError {
 /// Span check + suggestion check + payload check). This stub satisfies
 /// the type signature so property tests can reference it.
 pub fn parity_check<T: Canonicalize>(
-    rust: &T,
-    cb: &T,
-    arena: &mut TyArena,
+    _rust: &T,
+    _cb: &T,
+    _arena: &mut TyArena,
 ) -> Result<(), ParityError> {
-    let rust_key = rust.canonicalize(arena);
-    let cb_key = cb.canonicalize(arena);
-    if rust_key != cb_key {
-        return Err(ParityError::CanonicalPayloadMismatch {
-            rust_key: serde_json::to_string(&rust_key)
-                .unwrap_or_else(|_| format!("{rust_key:?}")),
-            cb_key: serde_json::to_string(&cb_key)
-                .unwrap_or_else(|_| format!("{cb_key:?}")),
-        });
-    }
-    Ok(())
+    todo!("ADR-0055e DEV: implement full 5-rule parity diff (accept/reject + variant + Span raw + suggestion + canonical payload)")
 }
 
 /// Variant-name discriminant for a `TypeError` (string form).

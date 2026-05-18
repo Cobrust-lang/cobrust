@@ -26,3 +26,6 @@ cobrust-hir = { path = "../cobrust-hir" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+insta = { version = "1", features = ["json"] }
