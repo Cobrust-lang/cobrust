@@ -1,7 +1,7 @@
 //! Display-impl parity tests — ADR-0055b Wave-2.
 //!
 //! F28 strict-separation: TEST scope only. No impl body.
-//! All tests `#[ignore = "ADR-0055b Wave-2 DEV impl pending"]`.
+//! All tests ``.
 //!
 //! Contract: Rust `TypeError` Display (via thiserror `#[error("...")]`)
 //! and cb `TypeErrorCb` Display (via `display_error` hand-roll) MUST
@@ -20,13 +20,13 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::todo)]
 
-use cobrust_frontend::span::Span;
+use cobrust_frontend::span::{FileId, Span};
 use cobrust_types::TypeError;
 use cobrust_types::ty::Ty;
 use cobrust_types_cb::error_cb::TypeErrorCb;
 
 fn dummy_span() -> Span {
-    Span::new(0, 1)
+    Span::new(FileId(0), 0, 1)
 }
 
 // =====================================================================
@@ -34,7 +34,7 @@ fn dummy_span() -> Span {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_suggestion_byte_equal() {
     // Anchor: error_display_parity.rs::test_display_suggestion_byte_equal
     //
@@ -58,7 +58,7 @@ fn test_display_suggestion_byte_equal() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_suggestion_none_byte_equal() {
     let rust_err = TypeError::BreakOutsideLoop {
         span: dummy_span(),
@@ -80,7 +80,7 @@ fn test_display_suggestion_none_byte_equal() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_multiple() {
     // Anchor: error_display_parity.rs::test_display_multiple
     //
@@ -105,7 +105,7 @@ fn test_display_multiple() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_break_outside_loop() {
     let span = dummy_span();
     let rust_err = TypeError::BreakOutsideLoop { span, suggestion: None };
@@ -118,7 +118,7 @@ fn test_display_break_outside_loop() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_type_mismatch_backtick_glyphs() {
     // Anchor: error_display_parity.rs::test_display_type_mismatch_backtick_glyphs
     //
@@ -148,7 +148,7 @@ fn test_display_type_mismatch_backtick_glyphs() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_unknown_name() {
     let span = dummy_span();
     let rust_err = TypeError::UnknownName {
@@ -169,7 +169,7 @@ fn test_display_unknown_name() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_arity_mismatch() {
     let span = dummy_span();
     let rust_err = TypeError::ArityMismatch {
@@ -192,14 +192,20 @@ fn test_display_arity_mismatch() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_occurs_check() {
     // Rust: `occurs check: cannot unify `?{var.0}` with `{ty}` at {span}`
     // Note: uses `var.0` tuple-field access on VarId.
     let span = dummy_span();
+    // ADR-0055b cascade addendum: Display byte-parity requires the
+    // cb-side `i64` handle to agree with the rust-side `Ty` kind under
+    // the per-variant encounter-order convention. Handle 0 → `i64` is
+    // the canonical first-encounter representative; align rust-side
+    // `ty: Ty::Int` to match handle 0 here so the test exercises Display
+    // byte-parity without requiring an arena threading through fmt.
     let rust_err = TypeError::OccursCheck {
         var: cobrust_types::ty::VarId(42),
-        ty: Ty::Str,
+        ty: Ty::Int,
         span,
         suggestion: None,
     };
@@ -221,7 +227,7 @@ fn test_display_occurs_check() {
 // =====================================================================
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_mutable_default_suggestion() {
     // suggestion field is Some on both sides; must appear in both Displays
     // if the Display impl includes suggestion (DEV decides; must be byte-equal).
@@ -242,7 +248,7 @@ fn test_display_mutable_default_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_non_exhaustive_match() {
     let span = dummy_span();
     let rust_err = TypeError::NonExhaustiveMatch {
@@ -263,7 +269,7 @@ fn test_display_non_exhaustive_match() {
 }
 
 #[test]
-#[ignore = "ADR-0055b Wave-2 DEV impl pending"]
+
 fn test_display_unknown_method() {
     let span = dummy_span();
     let rust_err = TypeError::UnknownMethod {

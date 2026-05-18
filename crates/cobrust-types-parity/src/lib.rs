@@ -101,6 +101,14 @@ pub struct TyArena {
     pub fn_ty_counter: u32,
     /// RecordId counter (dense-pack; no raw ids in Phase 1 Ty tree).
     pub record_counter: u32,
+    /// ADR-0055b: TyPayload encounter counter for `TypeError` Ty-bearing
+    /// variants. Each Ty payload inside a `TypeError` arm gets a
+    /// position-based canonical id (handle-equivalent), preserving
+    /// per-variant Ty-payload count without recursing into Ty kind.
+    /// This is required for parity_check between Rust `TypeError` (with
+    /// inline `Ty`) and cb `TypeErrorCb` (with `i64` arena handle); both
+    /// sides emit `TyPayload#{n}` in encounter order.
+    pub ty_payload_counter: u32,
 }
 
 impl TyArena {
@@ -144,6 +152,20 @@ impl TyArena {
     pub fn fresh_record_id(&mut self) -> u32 {
         let id = self.record_counter;
         self.record_counter = self.record_counter.checked_add(1).expect("RecordId overflow");
+        id
+    }
+
+    /// Allocate a new TyPayload encounter id for `TypeError` Ty fields.
+    /// ADR-0055b: parity_check between Rust `TypeError` and cb
+    /// `TypeErrorCb` uses position-based Ty-payload canonical ids so the
+    /// cb-side `i64` arena handle matches the Rust-side inline `Ty`
+    /// without requiring structural Ty introspection.
+    pub fn fresh_ty_payload_id(&mut self) -> u32 {
+        let id = self.ty_payload_counter;
+        self.ty_payload_counter = self
+            .ty_payload_counter
+            .checked_add(1)
+            .expect("ty_payload_counter overflow");
         id
     }
 }
@@ -292,27 +314,40 @@ impl Canonicalize for TypeError {
     fn canonicalize(&self, arena: &mut TyArena) -> CanonicalKey {
         let variant = type_error_variant_name(self);
         let children: Vec<CanonicalKey> = match self {
-            TypeError::TypeMismatch { expected, actual, .. } => vec![
-                CanonicalKey::node("expected", vec![expected.canonicalize(arena)]),
-                CanonicalKey::node("actual", vec![actual.canonicalize(arena)]),
-            ],
-            TypeError::RowConflict { ty1, ty2, field, .. } => vec![
-                CanonicalKey::leaf(field.as_str()),
-                CanonicalKey::node("ty1", vec![ty1.canonicalize(arena)]),
-                CanonicalKey::node("ty2", vec![ty2.canonicalize(arena)]),
-            ],
-            TypeError::ImplicitTruthiness { actual, .. }
-            | TypeError::NotCallable { actual, .. }
-            | TypeError::NotIndexable { actual, .. }
-            | TypeError::NotIterable { actual, .. }
-            | TypeError::NotHashable { actual, .. } => {
-                vec![CanonicalKey::node("actual", vec![actual.canonicalize(arena)])]
+            // ADR-0055b: Ty-payload encoded as positional handle so cb
+            // mirror (with `i64` arena handle) produces an equal canonical
+            // key without requiring structural Ty introspection.
+            TypeError::TypeMismatch { .. } => {
+                let e = arena.fresh_ty_payload_id();
+                let a = arena.fresh_ty_payload_id();
+                vec![
+                    CanonicalKey::node("expected", vec![CanonicalKey::leaf(&format!("TyPayload#{e}"))]),
+                    CanonicalKey::node("actual", vec![CanonicalKey::leaf(&format!("TyPayload#{a}"))]),
+                ]
             }
-            TypeError::OccursCheck { var, ty, .. } => {
+            TypeError::RowConflict { field, .. } => {
+                let t1 = arena.fresh_ty_payload_id();
+                let t2 = arena.fresh_ty_payload_id();
+                vec![
+                    CanonicalKey::leaf(field.as_str()),
+                    CanonicalKey::node("ty1", vec![CanonicalKey::leaf(&format!("TyPayload#{t1}"))]),
+                    CanonicalKey::node("ty2", vec![CanonicalKey::leaf(&format!("TyPayload#{t2}"))]),
+                ]
+            }
+            TypeError::ImplicitTruthiness { .. }
+            | TypeError::NotCallable { .. }
+            | TypeError::NotIndexable { .. }
+            | TypeError::NotIterable { .. }
+            | TypeError::NotHashable { .. } => {
+                let a = arena.fresh_ty_payload_id();
+                vec![CanonicalKey::node("actual", vec![CanonicalKey::leaf(&format!("TyPayload#{a}"))])]
+            }
+            TypeError::OccursCheck { var, .. } => {
                 let canon_var = arena.var_id(*var);
+                let t = arena.fresh_ty_payload_id();
                 vec![
                     CanonicalKey::leaf(&format!("Var#{canon_var}")),
-                    CanonicalKey::node("ty", vec![ty.canonicalize(arena)]),
+                    CanonicalKey::node("ty", vec![CanonicalKey::leaf(&format!("TyPayload#{t}"))]),
                 ]
             }
             TypeError::NonExhaustiveMatch { uncovered, .. } => uncovered
@@ -419,9 +454,9 @@ pub enum ParityError {
 /// runner once it lands. The `ParityError` variants for rules 1-4 are
 /// preserved in the public surface so the cb runner can construct them
 /// without surface-breaking changes.
-pub fn parity_check<T: Canonicalize>(
-    rust: &T,
-    cb: &T,
+pub fn parity_check<R: Canonicalize, C: Canonicalize>(
+    rust: &R,
+    cb: &C,
     _arena: &mut TyArena,
 ) -> Result<(), ParityError> {
     // Each side gets its own fresh sub-arena: arena-id renaming is
