@@ -184,7 +184,7 @@ Required before this ADR's P9 design spike + P10-direct PAIR dispatches:
 
 - [ ] **ADR-0055a merged** — Tier-1 `ty.rs` cb port + `TyArena` + arena utilities stable.
 - [ ] **ADR-0055b merged** — Tier-1 `error.rs` + `lib.rs` cb port + `TypeError` enum + `display_error` + 25-variant compliance matrix stable.
-- [ ] **ADR-0055c merged** — Tier-2 `infer.rs` cb port + arena-aware `Subst` + `unify` + `finalize` stable. Receiver convention (`&mut TyArena`) ratified in 0055c §3.
+- [ ] **ADR-0055c merged** — **AMENDED 2026-05-18 per ADR-0055c §12.4**: this gate now accepts Rust-side `cobrust_types::infer::{Subst, unify, finalize}` consumption via parity_check<R,C> heterogeneous form; cb-side compile-path impl is NOT required. See ADR-0055c §12.4 for resolution narrative. ~~Tier-2 `infer.rs` cb port + arena-aware `Subst` + `unify` + `finalize` stable on cb side.~~ Receiver convention (`&mut TyArena`) ratified in 0055c §3.
 - [ ] **ADR-0055e accepted (Phase 2 sanity baseline merged)** — Rust-vs-Rust diff-empty on M2 corpus confirmed; 5-namespace canonicalization in-effect per 0055e amendment 2026-05-18.
 - [ ] **Arena re-evaluation gate** — ADR-0055 §5 closing paragraph mandates Tier-2 dispatch revisit the arena disposition. Default: holds. Confirm Tier-1 + 0055c impl experience did not surface arena cost.
 
