@@ -55,7 +55,6 @@ fn assert_display_parity(rust_ty: &Ty) {
 ///
 /// `subst_apply({?0 → Int}, Var(?0))` produces `Int`; display must be `"i64"`.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn idp01_display_int_from_var_apply() {
     // The infer.rs apply of ?0→Int yields Ty::Int; cb side must produce "i64"
     assert_display_parity(&Ty::Int);
@@ -63,14 +62,12 @@ fn idp01_display_int_from_var_apply() {
 
 /// Display parity for `List[Str]` — `subst_apply({?0 → Str}, List[?0])` output form.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn idp02_display_list_str_from_apply() {
     assert_display_parity(&Ty::List(Box::new(Ty::Str)));
 }
 
 /// Display parity for `Dict[Int, Bool]` — `subst_apply` on Dict with two Vars.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn idp03_display_dict_int_bool_from_apply() {
     assert_display_parity(&Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Bool)));
 }
@@ -83,7 +80,6 @@ fn idp03_display_dict_int_bool_from_apply() {
 ///
 /// `(Int) -> Bool` — positional + return after substitution.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn idp04_display_fn_int_to_bool() {
     let fn_ty = Ty::Fn(FnTy {
         positional: vec![Ty::Int],
@@ -99,7 +95,6 @@ fn idp04_display_fn_int_to_bool() {
 ///
 /// `List[List[Dict[Int, Str]]]` — finalize on a fully-resolved nested type.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn idp05_display_deep_nested_finalize_output() {
     let ty = Ty::List(Box::new(Ty::List(Box::new(Ty::Dict(
         Box::new(Ty::Int),
@@ -117,7 +112,6 @@ fn idp05_display_deep_nested_finalize_output() {
 /// Verifies `canonicalize_arena_root` produces the same `CanonicalKey`
 /// as `Ty::canonicalize` for a common unify output form.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn idp06_canonical_key_parity_list_int() {
     let rust_ty = Ty::List(Box::new(Ty::Int));
     let (cb_id, cb_arena) = ty_cb_arena_from_rust(&rust_ty);
@@ -135,7 +129,6 @@ fn idp06_canonical_key_parity_list_int() {
 ///
 /// Three-element Tuple: verifies Tuple arm of `canonicalize_arena_root`.
 #[test]
-#[ignore = "ADR-0055c Wave-3 DEV impl pending"]
 fn idp07_canonical_key_parity_tuple_three_elements() {
     let rust_ty = Ty::Tuple(vec![Ty::Bool, Ty::Float, Ty::Str]);
     let (cb_id, cb_arena) = ty_cb_arena_from_rust(&rust_ty);

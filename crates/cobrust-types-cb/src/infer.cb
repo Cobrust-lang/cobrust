@@ -1,5 +1,5 @@
 -- ADR-0055c Phase H Wave-3 — cb mirror of cobrust_types::infer.rs
--- READ-ONLY documentation reference; not compiled by cargo.
+-- READ-ONLY proof artifact per ADR-0055c §12 (READ-ONLY pseudocode policy ratified Wave-3); not compiled by cargo.
 -- DEV wires the cb compile path in a subsequent sprint per ADR-0055c §11.
 --
 -- Arena-form design per ADR-0055a §3:
