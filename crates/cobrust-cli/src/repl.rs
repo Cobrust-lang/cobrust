@@ -1335,4 +1335,71 @@ mod tests {
             other => panic!("unexpected: {other:?}"),
         }
     }
+
+    // ===== ADR-0056b §6 Phase J handoff contract — collocated smoke =====
+
+    #[test]
+    fn session_implements_clone_and_send() {
+        fn assert_clone_send<T: Clone + Send + 'static>() {}
+        assert_clone_send::<Session>();
+        let s = Session::new();
+        let _ = s.clone();
+    }
+
+    #[test]
+    fn session_type_ctx_accessor_returns_reference() {
+        let s = Session::new();
+        // Wave-2 contract: type_ctx() returns &TypeCheckCtx; default
+        // ctx has zero bindings and version 0.
+        assert_eq!(s.type_ctx().binding_count(), 0);
+        assert_eq!(s.type_ctx().version(), 0);
+    }
+
+    #[test]
+    fn session_let_populates_type_ctx() {
+        let mut s = Session::new();
+        let _ = step(&mut s, "let x = 42");
+        assert!(
+            s.type_ctx().lookup("x").is_some(),
+            "let x = 42 should populate type_ctx"
+        );
+    }
+
+    #[test]
+    fn session_type_directive_uses_cross_turn_ctx() {
+        let mut s = Session::new();
+        let _ = step(&mut s, "let n = 7");
+        match step(&mut s, ":type n") {
+            StepResult::Done(out) => assert_eq!(out, "i64"),
+            other => panic!("expected :type n -> i64 from cross-turn ctx, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_invalidate_clears_ctx_rows() {
+        let mut s = Session::new();
+        let _ = step(&mut s, "let answer = 42");
+        assert!(s.type_ctx().lookup("answer").is_some());
+        s.invalidate(FileId::SYNTHETIC.0);
+        assert!(s.type_ctx().lookup("answer").is_none());
+    }
+
+    #[test]
+    fn session_clear_resets_type_ctx() {
+        let mut s = Session::new();
+        let _ = step(&mut s, "let v = 9");
+        assert!(s.type_ctx().lookup("v").is_some());
+        let _ = step(&mut s, ":clear");
+        assert!(s.type_ctx().lookup("v").is_none(), ":clear must reset type_ctx");
+    }
+
+    #[test]
+    fn session_clone_can_cross_thread() {
+        let mut s = Session::new();
+        let _ = step(&mut s, "let n = 5");
+        let snap = s.clone();
+        let h = std::thread::spawn(move || snap.type_ctx().binding_count());
+        let count = h.join().unwrap();
+        assert!(count >= 1);
+    }
 }
