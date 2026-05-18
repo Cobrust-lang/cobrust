@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue.svg)](#license)
-[![Stage](https://img.shields.io/badge/stage-0.2.0-orange.svg)](https://github.com/Cobrust-lang/cobrust/releases)
+[![Stage](https://img.shields.io/badge/stage-0.3.0-orange.svg)](https://github.com/Cobrust-lang/cobrust/releases)
 
 [**Why Cobrust?**](docs/post/why-cobrust.md) ·
 [**Quick Start**](#quick-start) ·
@@ -76,13 +76,13 @@ cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
 # Or download a prebuilt binary (tier-1 targets per ADR-0046)
 # macOS arm64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.2.0-aarch64-apple-darwin.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 # Linux arm64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.2.0-aarch64-unknown-linux-gnu.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-aarch64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 # Linux x86_64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.2.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
 ```
 
@@ -157,7 +157,7 @@ See [docs/human/en/getting-started.md](docs/human/en/getting-started.md) for the
 
 Want to solve LeetCode problems in Cobrust? Two steps:
 
-1. Install Cobrust v0.2.0+ (see [Install](#install) above)
+1. Install Cobrust v0.3.0+ (see [Install](#install) above)
 2. Read the guide:
    - English: [LeetCode with Cobrust](docs/human/en/getting-started-leetcode.md)
    - 中文: [用 Cobrust 刷 LeetCode](docs/human/zh/getting-started-leetcode.md)
@@ -180,23 +180,25 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
 
 ## Status
 
-**0.2.0** — Phase F.3 language-completeness batch + Phase G LLM-friendliness sprint (Wave 1 + Wave 2 round 1 + round 2 partial). Full release notes in [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md).
+**0.3.0** — Phase G closure (all four §2.5 directions A/B/C/D shipped). Full release notes in [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md).
 
-- ✅ **Compiler core** — lexer / parser / HIR / type checker / MIR / Cranelift codegen; 3,300+ tests on `cargo test --workspace --locked`, zero clippy warnings under `-D warnings`.
+- ✅ **Compiler core** — lexer / parser / HIR / type checker / MIR / Cranelift codegen; zero clippy warnings under `-D warnings`.
 - ✅ **Phase F.3 language completeness** (v0.2.0) — `break` / `continue`, `for` loops, `list[str]`, `f64` (full IEEE-754 + f-string `{:.Nf}`), `dict[K, V]` (insertion-ordered per [ADR-0050d](docs/agent/adr/0050d-dict-design.md)), string stdlib (split/join/replace/trim/find/contains/...), file IO (read/write/append, stdin/stdout/stderr).
-- ✅ **Phase G LLM-first surface** (in progress, post-v0.2.0):
-  - **Explicit `&s` borrow** — eliminates `clone()` clutter per [ADR-0052a](docs/agent/adr/0052a-explicit-borrow-let-rebind.md). One-way call-site coercion (NOT bidirectional unify — see §13 design lesson).
-  - **Errors print the FIX** — every `TypeError` + `MirError` carries a structured `suggestion: Option<&'static str>` field consumed by CLI renderer (and forward-compat hook for LSP `Diagnostic.relatedInformation`) per [ADR-0052b](docs/agent/adr/0052b-error-ux-fix-suggestions.md).
-  - **`@py_compat` tier hard-bind to L2 verifier** — `Strict` / `Semantic` / `Numerical{rtol}` / `None` enum + `TierVerifier` per [ADR-0052c](docs/agent/adr/0052c-py-compat-tier-l2-bind.md); activates [ADR-0037](docs/agent/adr/0037-py-compat-hard-bind.md) from 6-week reserved placeholder.
-  - **Method-call sugar** — `s.split(",")` over `split(s, ",")`; per-type method tables (Str×10 + List×5 + Float×5 + Int×5 = 25 methods) per [ADR-0052d-prereq](docs/agent/adr/0052d-prereq-method-dispatch-infra.md).
+- ✅ **Phase G LLM-first surface** (v0.3.0, all four directions closed):
+  - **A — Explicit `&s` borrow** — eliminates `clone()` clutter; one-way call-site coercion per [ADR-0052a](docs/agent/adr/0052a-explicit-borrow-let-rebind.md) + [ADR-0052f](docs/agent/adr/0052f-parser-borrow-cap-relaxation.md) + [ADR-0052g](docs/agent/adr/0052g-borrow-callresult-typecheck.md). `&s.method()` parse path unblocked.
+  - **B — Errors print the FIX** — 41 variants total (24 `TypeError` + 11 `MirError` + 6 `LoweringError`) carry structured `suggestion: Option<&'static str>`; LSP `Diagnostic.relatedInformation` forward-compat per [ADR-0052b](docs/agent/adr/0052b-error-ux-fix-suggestions.md).
+  - **C — `@py_compat` tier hard-bind to L2 verifier** — `Strict` / `Semantic` / `Numerical{rtol}` / `None` enum + `TierVerifier`; [ADR-0037](docs/agent/adr/0037-py-compat-hard-bind.md) activated per [ADR-0052c](docs/agent/adr/0052c-py-compat-tier-l2-bind.md).
+  - **D — Method-call sugar infra** — 25 new method-form entries (Str×10 + List×5 + Float×5 + Int×5) per [ADR-0052d-prereq](docs/agent/adr/0052d-prereq-method-dispatch-infra.md); full LC-100 corpus migration deferred to v0.3.1 (ADR-0052d-final).
+- ✅ **CLI tempdir RAII** — closes the Mac/DG `/tmp/cobrust-*` leak (235G temp-leak incident root cause); `tempfile::TempDir` RAII guarantees cleanup on panic / cancellation / signal.
+- ✅ **Bilingual README** — `README.zh.md` ships with full Chinese translation parity to `README.md` per CLAUDE.md §3 dual-track documentation mandate.
 - ✅ **Standard library** — io / collections / string / math / panic / env / fmt / iter + structured concurrency runtime (M13). AI-facing alpha: `cobrust.llm` / `.prompt` / `.tool` flat prelude fns (per [ADR-0049](docs/agent/adr/0049-alpha-honesty-and-onboarding-hardening.md) honesty hardening).
 - ✅ **Package format** — `cobrust.toml`, content-addressed registry, deterministic lockfile.
 - ✅ **AI translation pipeline** — production-validated on stateless + stateful tomli functions (real LLM, 12/12 + 14/14 strict deterministic over 5 runs). dateutil / msgpack: partial.
 - 🚧 **Tooling** — REPL is M14 stub (Phase I REPL JIT scoped; ~1 week wall per [ADR-0054](docs/agent/adr/0054-post-phase-g-roadmap.md)). No LSP yet (Phase J ~2-3 weeks, the biggest §2.5 ROI — wires ADR-0052b structured suggestion into IDE agents). No debugger (Phase L). No WASM target.
 - 🚧 **LLVM backend** — Phase K (3-4 weeks); current release builds use Cranelift.
-- 🚧 **Self-hosting** — 0%. Phase H scoping spike landed [2026-05-18-phase-h-self-host-scoping.md](docs/agent/dispatches/2026-05-18-phase-h-self-host-scoping.md); ~2.5-3 weeks wall once dispatched.
+- 🚧 **Self-hosting** — 0%. Phase H scoping spike landed; ~2.5 weeks wall once dispatched (ADR-0054 empirical correction from 3-week estimate).
 
-**What this means**: Cobrust is **mechanism-validated** for the language core + AI translation pipeline. **Phase G LLM-friendliness ships in v0.3.0** with the four §2.5 binding directions (A explicit borrow ✅ / B error UX ✅ / C @py_compat L2 ✅ / D method-call sugar 🚧).
+**What this means**: Cobrust is **mechanism-validated** for the language core + AI translation pipeline. **Phase G LLM-friendliness is fully closed in v0.3.0** with all four §2.5 binding directions (A explicit borrow ✅ / B error UX ✅ / C @py_compat L2 ✅ / D method-call sugar ✅ infra shipped, corpus migration in v0.3.1).
 
 **§2.5 constitutional pillar** ([CLAUDE.md §2.5](CLAUDE.md) + [ADR-0051](docs/agent/adr/0051-llm-first-design-principle.md)): "Cobrust is not the language most pleasant for humans to write — it is the language LLM agents write correctly on the first try." See [`docs/agent/skills/cobrust-first-try.md`](docs/agent/skills/cobrust-first-try.md) for the agent-facing onboarding skill.
 
@@ -242,17 +244,17 @@ Full diagram: [docs/human/en/architecture.md](docs/human/en/architecture.md).
 
 **Phase F — DONE** (v0.1.x → v0.2.0): translation pipeline production-validated (tomli 5/5 + dateutil 5/5 real-LLM); AI-native stdlib alpha (`cobrust.llm` / `.prompt` / `.tool`); Phase F.3 language completeness (break/continue, for, list[str], f64, dict, string stdlib, file IO).
 
-**Phase G — Now** (v0.2.0 → v0.3.0, ~5 weeks total): the four §2.5 LLM-first binding directions
-- ✅ A — Explicit `&s` borrow (LARGEST current LLM-friendliness deficit per LC-100 honest-debt empirical baseline)
-- ✅ B — Errors print the FIX (structured `suggestion` field; LSP forward-compat)
-- ✅ C — `@py_compat` tier hard-bind to L2 verifier (ADR-0037 6-week-old reserved → activated)
-- 🚧 D — Method-call sugar (infra shipped via 0052d-prereq; full LC-100 corpus migration queued)
+**Phase G — DONE** (v0.2.0 → v0.3.0): the four §2.5 LLM-first binding directions — all shipped
+- ✅ A — Explicit `&s` borrow (ADR-0052a/f/g; LARGEST LLM-friendliness deficit per LC-100 honest-debt empirical baseline)
+- ✅ B — Errors print the FIX (41 variants; structured `suggestion` field; LSP forward-compat)
+- ✅ C — `@py_compat` tier hard-bind to L2 verifier (ADR-0037 reserved → activated via ADR-0052c)
+- ✅ D — Method-call sugar infra (25 new entries across 4 types; full LC-100 corpus migration deferred to v0.3.1)
 
 **Post-Phase-G roadmap** ([ADR-0054](docs/agent/adr/0054-post-phase-g-roadmap.md), ~10-12 weeks total at agent-velocity):
 
 | Phase | Surface | Wall | §2.5 ROI |
 |---|---|---|---|
-| **H** | Self-host type checker (constitution §4.4) | ~3 weeks | medium |
+| **H** | Self-host type checker (constitution §4.4) | ~2.5 weeks | medium |
 | **I** | REPL JIT (M14.1; reuses M11.2 FnRef Call lowering) | ~1 week | medium |
 | **J** | **LSP server** (Cursor/Continue/Cody/Aider/VSCode integration) | ~2-3 weeks | **highest** |
 | **K** | LLVM Backend (release perf + cross-platform + DWARF) | ~3-4 weeks | neutral |
@@ -301,7 +303,7 @@ Cobrust stands on the shoulders of:
 
 <div align="center">
 
-**Cobrust 0.2.0** — built in public, by AI agents working with humans.
+**Cobrust 0.3.0** — built in public, by AI agents working with humans.
 *If you tried it, tell us what broke.*
 
 </div>
