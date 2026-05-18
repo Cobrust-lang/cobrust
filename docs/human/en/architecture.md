@@ -2130,6 +2130,49 @@ is O(1) via `Arc::clone`, writes copy-on-write via `Arc::make_mut`.
 See `docs/agent/adr/0056b-repl-control-flow-session.md` for the
 full design + scope-narrowing addendum.
 
+#### Phase I wave-3 — fn-redefinition contract (ADR-0056c)
+
+Phase I wave-3 (ADR-0056c) lands the fn-redefinition lifecycle on
+top of wave-2's `Session` + `TypeCheckCtx`. When a user enters
+`fn name(...): ...` a second time at the REPL prompt, the Session
+atomically drops the old `DefId` row, merges the new signature, and
+prints a one-line notice classifying the outcome.
+
+New public surface:
+
+- `TypeCheckCtx::invalidate_def(def_id: u32)` — per-symbol
+  invalidation (sibling of `invalidate(file_id)`). Drops the row
+  from `def_types`, drops name-keyed `bindings` / `binding_defs`
+  entries whose owner is the target DefId, drops `bindings` rows
+  whose resolved type references the DefId, removes the DefId from
+  every `file_defs` vector, and bumps `version`.
+- `TypeCheckCtx::binding_def_id(name) -> Option<u32>` — looks up
+  the DefId owning a current binding. `Session::redefine_fn` uses
+  this to resolve `name → DefId` before calling `invalidate_def`.
+- `Session::redefine_fn(name, source) -> Result<RedefineOutcome,
+  String>` — atomically re-binds one `fn name(...): ...` source.
+  A failed typecheck leaves the old binding intact (matches Python
+  REPL's "typo doesn't destroy the working function" ergonomics).
+- `RedefineOutcome::{Created, Identical, SignatureChanged}` —
+  structured classification. `user_message()` renders one line:
+  - `Created` (first def) — silent (matches Python REPL).
+  - `Identical` (signature unchanged) — `redefined \`f\``.
+  - `SignatureChanged` (arity / param / return changed) —
+    `redefined \`f\` (signature changed: <old> -> <new>)`.
+- `evaluate_module` inlines the same flow for the normal eval
+  path: pre-scans top-level fn-defs, captures pre-existing DefIds,
+  atomically invalidates, runs `check_incremental` merge, classifies
+  + prints per-fn notices. The user just re-types the fn with a new
+  signature and gets structured feedback.
+
+On-stack redef detection (`call_stack: Vec<String>` per ADR-0056c
+§4 "Residual hazard") is RESERVED for M14.2 when JIT mode lands —
+the M14.1 REPL has no JIT call stack so the contract is trivially
+satisfied at REPL turn boundaries.
+
+See `docs/agent/adr/0056c-repl-session-state-fn-redef.md` for the
+full design.
+
 #### Multi-line input contract
 
 The REPL emits a continuation prompt (`...`) when the input is

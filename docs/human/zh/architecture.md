@@ -2015,6 +2015,43 @@ handler 跨 `.await` 边界移动快照。
 完整设计与诚实的缩窄说明见
 `docs/agent/adr/0056b-repl-control-flow-session.md`。
 
+#### Phase I wave-3 —— 函数重定义合同（ADR-0056c）
+
+Phase I wave-3（ADR-0056c）在 wave-2 `Session` + `TypeCheckCtx` 之上
+落地函数重定义生命周期。当用户在 REPL 里第二次输入同名 `fn` 时，
+Session 会原子地丢弃旧 `DefId` 行，再合并新签名，并打印一行反馈。
+
+新公共表面：
+
+- `TypeCheckCtx::invalidate_def(def_id: u32)` —— 按 `DefId`
+  粒度的失效（`invalidate(file_id)` 的兄弟 API）。先从 `def_types`
+  删除该行，再删除以该 DefId 为所有者的 `bindings` / `binding_defs`
+  条目，再丢弃类型引用了该 DefId 的行，最后从 `file_defs` 各向量
+  里剔除并把 `version` 自增。
+- `TypeCheckCtx::binding_def_id(name) -> Option<u32>` —— 查询
+  当前绑定的所有者 DefId。`Session::redefine_fn` 用这个把 `name →
+  DefId` 解析出来后再调用 `invalidate_def`。
+- `Session::redefine_fn(name, source) -> Result<RedefineOutcome,
+  String>` —— 把单条 `fn name(...): ...` 源码原子地重新绑定。失败
+  的类型检查不会破坏旧绑定（匹配 Python REPL 的"打错字不丢函数"
+  ergonomics）。
+- `RedefineOutcome::{Created, Identical, SignatureChanged}` —— 三
+  种结果的结构化分类。`user_message()` 渲染一行反馈：
+  - `Created`（首次定义）—— 静默（匹配 Python REPL）。
+  - `Identical`（签名未变）—— `redefined \`f\``。
+  - `SignatureChanged`（arity / 形参类型 / 返回类型变了）——
+    `redefined \`f\` (signature changed: <旧> -> <新>)`。
+- `evaluate_module` 在普通 eval 路径里内联了同一流程：预扫顶层
+  fn-defs，捕获旧 DefId，原子失效，再做 `check_incremental` 合并，
+  最后按类按行打印。这样用户只要"再输入一遍带新签名的 fn"就能
+  得到结构化反馈。
+
+JIT 模式下"在执行栈上重定义自身"（ADR-0056c §4 残留风险）的
+`call_stack: Vec<String>` 检测留给 M14.2（M14.1 REPL 无 JIT 调用
+栈,合同在回合边界上自然成立）。
+
+完整设计见 `docs/agent/adr/0056c-repl-session-state-fn-redef.md`。
+
 #### 多行输入合同
 
 REPL 在以下情形显示续行提示（`...`）—— 输入结构不完整：
