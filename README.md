@@ -72,7 +72,7 @@ The wedge: **AI translates the existing Python ecosystem into Cobrust automatica
 ```bash
 # Via cargo (Rust toolchain required, 1.94+)
 cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
-# (crates.io publish queued for v0.2.0)
+# (crates.io publish queued for v0.3.0)
 
 # Or download a prebuilt binary (tier-1 targets per ADR-0046)
 # macOS arm64
@@ -185,7 +185,7 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
 - ✅ **Compiler core** — lexer / parser / HIR / type checker / MIR / Cranelift codegen; zero clippy warnings under `-D warnings`.
 - ✅ **Phase F.3 language completeness** (v0.2.0) — `break` / `continue`, `for` loops, `list[str]`, `f64` (full IEEE-754 + f-string `{:.Nf}`), `dict[K, V]` (insertion-ordered per [ADR-0050d](docs/agent/adr/0050d-dict-design.md)), string stdlib (split/join/replace/trim/find/contains/...), file IO (read/write/append, stdin/stdout/stderr).
 - ✅ **Phase G LLM-first surface** (v0.3.0, all four directions closed):
-  - **A — Explicit `&s` borrow** — eliminates `clone()` clutter; one-way call-site coercion per [ADR-0052a](docs/agent/adr/0052a-explicit-borrow-let-rebind.md) + [ADR-0052f](docs/agent/adr/0052f-parser-borrow-cap-relaxation.md) + [ADR-0052g](docs/agent/adr/0052g-borrow-callresult-typecheck.md). `&s.method()` parse path unblocked.
+  - **A — Explicit `&s` borrow** — eliminates `clone()` clutter; one-way call-site coercion per [ADR-0052a](docs/agent/adr/0052a-explicit-borrow-let-rebind.md) + [ADR-0052f](docs/agent/adr/0052f-borrow-of-call-relaxation.md) + [ADR-0052g](docs/agent/adr/0052g-borrow-of-call-result-type-check.md). `&s.method()` parse path unblocked.
   - **B — Errors print the FIX** — 41 variants total (24 `TypeError` + 11 `MirError` + 6 `LoweringError`) carry structured `suggestion: Option<&'static str>`; LSP `Diagnostic.relatedInformation` forward-compat per [ADR-0052b](docs/agent/adr/0052b-error-ux-fix-suggestions.md).
   - **C — `@py_compat` tier hard-bind to L2 verifier** — `Strict` / `Semantic` / `Numerical{rtol}` / `None` enum + `TierVerifier`; [ADR-0037](docs/agent/adr/0037-py-compat-hard-bind.md) activated per [ADR-0052c](docs/agent/adr/0052c-py-compat-tier-l2-bind.md).
   - **D — Method-call sugar infra** — 25 new method-form entries (Str×10 + List×5 + Float×5 + Int×5) per [ADR-0052d-prereq](docs/agent/adr/0052d-prereq-method-dispatch-infra.md); full LC-100 corpus migration deferred to v0.3.1 (ADR-0052d-final).
