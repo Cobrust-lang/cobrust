@@ -5,7 +5,7 @@ parent_adr: 0054
 title: "Phase J frame — LSP server (highest §2.5 ROI post-Phase-G)"
 status: proposed
 date: 2026-05-18
-last_verified_commit: 1fbed82
+last_verified_commit: 2a710d3
 supersedes: []
 superseded_by: []
 relates_to: [adr:0054, adr:0052b, adr:0056, adr:0051]

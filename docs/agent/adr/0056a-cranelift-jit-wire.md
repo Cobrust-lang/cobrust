@@ -5,7 +5,7 @@ parent_adr: 0056
 title: "Phase I day 1-2 — Cranelift JIT crate wire (`CodegenMode { Aot, Jit }` switch + minimal arithmetic round-trip)"
 status: proposed
 date: 2026-05-18
-last_verified_commit: 1fbed82
+last_verified_commit: 2a710d3
 supersedes: []
 superseded_by: []
 relates_to: [adr:0056, adr:0054, adr:0034]
