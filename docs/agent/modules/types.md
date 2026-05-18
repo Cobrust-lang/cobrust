@@ -209,13 +209,69 @@ Invariants:
   remains an M12.x stub for sub-sprint d; downstream MIR / codegen
   emit may not yet honour the recognised type.
 
+## Phase I ADR-0056b — `TypeCheckCtx` (Clone+Send Arc-COW snapshot)
+
+Per ADR-0056b §3.3 + §5 + §6 (accepted at `b0e1e9e`):
+
+- `TypeCheckCtx` lives in `cobrust_types::check` and is the
+  cross-turn / cross-file incremental type-check state carrier.
+- `derive(Clone, Debug, Default)`; `Send + 'static` (compile-time
+  asserted by `tests/type_check_ctx_contract.rs`).
+- Five internal `Arc<HashMap<...>>` rows for O(1) Clone via
+  `Arc::clone` + COW writes via `Arc::make_mut`:
+  - `bindings: HashMap<String, Ty>` — name → type
+  - `binding_defs: HashMap<String, u32>` — name → owning DefId
+    (load-bearing for `invalidate(file_id)` per ADR-0056b §11.2)
+  - `def_types: HashMap<u32, Ty>` — DefId → Ty
+  - `file_defs: HashMap<u32, Vec<u32>>` — FileId → owned DefIds
+  - `binding_defs`, `alias_map`, `subst` — carried for ADR-0056c.
+
+- Public surface (compile-time-catch + training-data-overlap §2.5):
+
+```rust
+impl TypeCheckCtx {
+    pub fn new() -> Self;
+    pub fn lookup(&self, name: &str) -> Option<&Ty>;
+    pub fn def_type(&self, def_id: u32) -> Option<&Ty>;
+    pub fn alias(&self, name: &str) -> Option<&Ty>;
+    pub fn subst(&self) -> &Subst;
+    pub fn version(&self) -> u64;                       // ADR-0056b §6
+    pub fn binding_count(&self) -> usize;
+    pub fn bindings(&self) -> impl Iterator<Item = (&String, &Ty)>;
+    pub fn invalidate(&mut self, file_id: u32);         // ADR-0057a §4
+    pub fn merge_module(&mut self, &TypedModule, file_id: u32);
+}
+
+pub fn check_incremental(
+    ctx: &mut TypeCheckCtx,
+    module: &Module,
+    file_id: u32,
+) -> Result<TypedModule, TypeError>;
+```
+
+- Per-turn write path: `merge_module` records every Fn/Let/Class
+  name → type row + DefId provenance. Redefine replaces in place.
+- Per-file invalidate path: drops every DefId row recorded against
+  `file_id` from `def_types`, then drops name-keyed `bindings` rows
+  whose owning DefId is in the removed set, then defence-in-depth
+  drops rows whose RESOLVED TYPE references a removed Adt/Alias.
+- `version()` bumps on every `merge_module` / `invalidate` —
+  monotone signal for Phase J snapshot freshness (§6).
+
+Tests: `crates/cobrust-types/tests/type_check_ctx_contract.rs`
+(16 cases — Clone+Send compile-time + Arc-COW isolation + invalidate
++ version monotonicity + cross-thread snapshot survival).
+
 ## Cross-references
 
 - `adr:0006` — type system shape + inference + proof obligations.
 - `adr:0050a` — break/continue contract seal (loop scope discipline).
 - `adr:0050` §A1 — M-F.3.3 f64 gap table.
 - `adr:0050d` — M-F.3.4 dict design (sub-sprint a..g blueprint).
+- `adr:0056b` — Phase I × J handoff primitive (`TypeCheckCtx`).
+- `adr:0057a` — Phase J wave-1 LSP `publishDiagnostics` consumer.
 - `mod:hir` — input.
 - `mod:mir` — downstream consumer (M3+).
+- `mod:cli` — REPL `Session` carrier (ADR-0029 + ADR-0056b §3.3).
 - Constitution `CLAUDE.md` §2.2 (drop `is`, drop implicit truthiness),
   §7 (M2 done means).
