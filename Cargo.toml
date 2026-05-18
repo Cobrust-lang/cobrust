@@ -17,6 +17,7 @@ members = [
     "crates/cobrust-translator",
     "crates/cobrust-requests",
     "crates/cobrust-click",
+    "crates/cobrust-types-parity",
 ]
 
 [workspace.package]
