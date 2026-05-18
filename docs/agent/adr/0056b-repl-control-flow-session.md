@@ -3,12 +3,12 @@ doc_kind: adr
 adr_id: 0056b
 parent_adr: 0056
 title: "Phase I day 3-5 — Control-flow + stdlib lowering reuse + `Session` struct + incremental `TypeCheckCtx`"
-status: proposed
+status: accepted
 date: 2026-05-18
-last_verified_commit: 54a599c
+last_verified_commit: b0e1e9e
 supersedes: []
 superseded_by: []
-relates_to: [adr:0056, adr:0056a, adr:0029, adr:0034, adr:0057]
+relates_to: [adr:0056, adr:0056a, adr:0029, adr:0034, adr:0057, adr:0057a]
 discovered_by: P9 — ADR-0056 §4 sub-ADR roster, day 3-5 slot
 ratification_path: P9 ADR review; ratifies on impl-merge gate
 ---
@@ -268,3 +268,99 @@ sonnet + DEV opus per MEMORY.md `feedback_subagent_model_tier`.
 Two-phase dispatch SOP per `feedback_p9_two_phase_dispatch`.
 
 — P9 Tech Lead, 2026-05-18
+
+## 11. Acceptance addendum (impl-merge, 2026-05-18)
+
+Ratified on impl-merge of feature/0056b-dev (HEAD `b0e1e9e`). The
+shipped surface is the **Phase J handoff carrier** of §3.3 + §5 + §6
+(the load-bearing Phase J `Clone + Send + invalidate(file_id)`
+contract). Two scope refinements vs the proposed text:
+
+### 11.1 Honest scope-narrowing (LARGEST split)
+
+§3.1 (control-flow JIT lowering reuse) + §3.2 (stdlib/PRELUDE in REPL)
+remain **proposed**, not delivered in this DEV. The load-bearing
+Phase J × J wave-1 dependency (ADR-0057a §10) is the
+`TypeCheckCtx: Clone + Send` + `Session::type_ctx()` accessor + the
+`invalidate(file_id)` API, all of which §3.3 + §5 + §6 ship. The
+JIT control-flow + stdlib eval-side wiring is hand-rolled into the
+ADR-0056c roster (which §3.3 already names as the cross-turn
+state-machine sub-sprint). This split is deliberate: ADR-0057a's
+pre-dispatch gate §10 requires only the §3.3 + §6 surface — so the
+wave-1 LSP DEV unblocks without waiting on §3.1/§3.2.
+
+### 11.2 §5 cascade addendum — `binding_defs` map
+
+`TypeCheckCtx` ships with one additional internal Arc field NOT in
+the original §3.3 sketch: `binding_defs: Arc<HashMap<String, u32>>`
+(name → owning DefId). Required because invalidate must drop
+name-keyed rows whose owner belongs to the invalidated file —
+a row like `let x = 0` carries `Ty::Int` payload that has NO
+DefId reference, so the §5 "type_refs_any" filter alone leaks it.
+
+The addition is invisible to the public surface (no new accessor;
+all reads + writes go through existing `lookup` / `invalidate` /
+`merge_module`). It preserves §5 Risk 3 Arc-COW O(1) Clone — the
+new map is wrapped in the same `Arc<...>` discipline as the four
+existing inner structures. Caught by `invalidate_drops_file_owned_rows`
+contract test.
+
+### 11.3 Wave-2 delivered surface (the LSP-unblocker)
+
+Concrete public types/methods committed at HEAD `b0e1e9e`:
+
+```rust
+// crates/cobrust-types/src/check.rs — new
+pub struct TypeCheckCtx { /* Arc-COW internals */ }
+impl TypeCheckCtx {
+    pub fn new() -> Self;                          // O(1)
+    pub fn lookup(&self, name: &str) -> Option<&Ty>;
+    pub fn def_type(&self, def_id: u32) -> Option<&Ty>;
+    pub fn alias(&self, name: &str) -> Option<&Ty>;
+    pub fn subst(&self) -> &Subst;
+    pub fn version(&self) -> u64;
+    pub fn binding_count(&self) -> usize;
+    pub fn bindings(&self) -> impl Iterator<Item = (&String, &Ty)>;
+    pub fn invalidate(&mut self, file_id: u32);    // ADR-0057a §4
+    pub fn merge_module(&mut self, &TypedModule, file_id: u32);
+}
+// Clone + Default + Send + 'static (compile-time assertions in tests)
+
+pub fn check_incremental(
+    ctx: &mut TypeCheckCtx,
+    module: &Module,
+    file_id: u32,
+) -> Result<TypedModule, TypeError>;
+
+// crates/cobrust-cli/src/repl.rs — extended (ADR-0029 carrier)
+impl Session {
+    pub fn type_ctx(&self) -> &TypeCheckCtx;       // Phase J snapshot
+    pub fn invalidate(&mut self, file_id: u32);    // ADR-0057a §4
+}
+// + #[derive(Clone)]
+```
+
+Test coverage 23 new (16 contract + 7 collocated session). DG verify
+PASS green on RTX 3090 workstation; zero new regressions on the
+existing failing surface (124 pre-existing F-findings tracked under
+MEMORY audit pipeline are identical on Mac main + DG main baselines).
+Phase H 188 cobrust-types-cb regression PASS on 8 target test binaries
+(unit, type_check_ctx_contract, repl_smoke, repl_session_corpus,
+repl_types_integration, borrow_phase_g_e2e [pre-existing 3 skip],
+tomli_e2e, parity_wave1).
+
+### 11.4 Phase J wave-1 pre-dispatch gate closure
+
+Per ADR-0057a §10:
+
+- [x] Phase I `Session::type_ctx: Clone + Send` contract shipped.
+- [x] `TypeCheckCtx: Clone + Send + 'static` compile-time asserted.
+- [x] `Session::invalidate(file_id: u32)` per-file API.
+- [x] ADR-0056 + ADR-0056a accepted; this ADR ratifies on merge.
+- [x] No regressions on ADR-0052b snapshot corpus (delta tests run
+      clean — 25/25 PASS on repl_smoke + repl_session_corpus).
+
+ADR-0057a wave-1 (`textDocument/publishDiagnostics`) is now
+dispatchable.
+
+— P10 CTO, 2026-05-18 (post-merge ratification)
