@@ -172,20 +172,83 @@ impl TypeCheckCtx {
     /// is a no-op except for the version bump (which keeps Phase J's
     /// "did the ctx change?" signal monotone even on misses).
     pub fn invalidate(&mut self, file_id: u32) {
+        self.invalidate_with(file_id, None);
+    }
+
+    /// Per-symbol invalidation per ADR-0056c §4 (fn-redefinition path).
+    ///
+    /// Drops a single `DefId` from [`Self::def_types`], drops any
+    /// [`Self::bindings`] / [`Self::binding_defs`] entry whose owning
+    /// DefId equals `def_id`, drops any binding whose resolved type
+    /// references the DefId (via [`type_refs_any`], so e.g. `let x: T`
+    /// is invalidated when `T`'s DefId is invalidated). Bumps
+    /// [`Self::version`].
+    ///
+    /// Wave-3 use-case is single-fn redefinition at the REPL: caller
+    /// resolves `binding_defs[name]` → old DefId, then calls
+    /// `invalidate_def(old_def_id)` BEFORE a subsequent
+    /// [`Self::merge_module`] re-installs the new binding. Symmetric
+    /// surface with [`Self::invalidate`] (which is file-scoped).
+    ///
+    /// O(N) in the number of bindings + the number of file→defs
+    /// vectors (the latter is single-digit at REPL session sizes); no
+    /// allocations on miss.
+    pub fn invalidate_def(&mut self, def_id: u32) {
+        let mut removed = HashSet::new();
+        removed.insert(def_id);
+        // Drop the row from def_types.
+        Arc::make_mut(&mut self.def_types).remove(&def_id);
+        // Drop name-keyed bindings whose owner DefId is the target —
+        // primary invalidation surface for fn redefinition.
+        let drop_names: HashSet<String> = self
+            .binding_defs
+            .iter()
+            .filter(|(_, d)| **d == def_id)
+            .map(|(n, _)| n.clone())
+            .collect();
+        Arc::make_mut(&mut self.binding_defs).retain(|_, d| *d != def_id);
+        // Drop any binding whose type references the invalidated DefId
+        // (e.g. a `let f_alias = f` row carrying `Ty::Fn(...)` shape).
+        Arc::make_mut(&mut self.bindings)
+            .retain(|name, ty| !drop_names.contains(name) && !type_refs_any(ty, &removed));
+        // Remove the DefId from any file_defs vector — defence-in-depth
+        // so a subsequent file-scoped `invalidate(file_id)` doesn't
+        // double-drop or attempt to re-clear an already-invalidated row.
+        let file_defs_mut = Arc::make_mut(&mut self.file_defs);
+        for defs in file_defs_mut.values_mut() {
+            defs.retain(|d| *d != def_id);
+        }
+        self.version = self.version.wrapping_add(1);
+    }
+
+    /// Lookup the DefId owning a named binding, if any. Used by
+    /// callers of [`Self::invalidate_def`] to resolve `name → DefId`
+    /// before invalidation (e.g. `Session::redefine_fn` in
+    /// `cobrust-cli/src/repl.rs`).
+    #[must_use]
+    pub fn binding_def_id(&self, name: &str) -> Option<u32> {
+        self.binding_defs.get(name).copied()
+    }
+
+    /// Internal helper backing [`Self::invalidate`] (file_id form) and
+    /// the wave-3 [`Self::invalidate_def`] (DefId form). When `extra`
+    /// is `Some(def_id)`, that DefId is added to the removal set in
+    /// addition to the file-owned ones.
+    fn invalidate_with(&mut self, file_id: u32, extra: Option<u32>) {
         let removed_defs: Vec<u32> = self
             .file_defs
             .get(&file_id)
             .cloned()
             .unwrap_or_default();
-        let removed: HashSet<u32> = removed_defs.iter().copied().collect();
+        let mut removed: HashSet<u32> = removed_defs.iter().copied().collect();
+        if let Some(d) = extra {
+            removed.insert(d);
+        }
 
         // Arc::make_mut clones the inner map ONLY on first write per
         // turn (COW). Subsequent writes share the same allocation.
         if !removed.is_empty() {
             Arc::make_mut(&mut self.def_types).retain(|k, _| !removed.contains(k));
-            // Names whose owning DefId is in the removed set — primary
-            // invalidation surface (e.g. `let x = 0` whose DefId
-            // belonged to the invalidated file).
             let drop_names: HashSet<String> = self
                 .binding_defs
                 .iter()
@@ -193,10 +256,6 @@ impl TypeCheckCtx {
                 .map(|(n, _)| n.clone())
                 .collect();
             Arc::make_mut(&mut self.binding_defs).retain(|_, def| !removed.contains(def));
-            // Drop the row if EITHER its owning DefId is invalidated
-            // OR its resolved type references a removed Adt/Alias
-            // (defence-in-depth — e.g. `let v: MyClass` survives the
-            // name-side filter only when `MyClass` is still alive).
             Arc::make_mut(&mut self.bindings)
                 .retain(|name, ty| !drop_names.contains(name) && !type_refs_any(ty, &removed));
         }

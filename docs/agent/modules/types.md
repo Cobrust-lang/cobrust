@@ -262,6 +262,44 @@ Tests: `crates/cobrust-types/tests/type_check_ctx_contract.rs`
 (16 cases — Clone+Send compile-time + Arc-COW isolation + invalidate
 + version monotonicity + cross-thread snapshot survival).
 
+## Phase I wave-3 ADR-0056c — `invalidate_def` + `binding_def_id`
+
+Per ADR-0056c §4 fn-redefinition lifecycle (accepted at impl-merge).
+Two new public methods extend the §3.3 + §5 surface:
+
+```rust
+impl TypeCheckCtx {
+    /// Per-symbol invalidation (sibling of `invalidate(file_id)`).
+    /// Drops one DefId's row from `def_types`, drops name-keyed
+    /// `bindings` / `binding_defs` entries whose owner is this
+    /// DefId, drops `bindings` rows whose resolved type references
+    /// the DefId via `type_refs_any`, removes the DefId from any
+    /// `file_defs` vector, bumps `version`.
+    pub fn invalidate_def(&mut self, def_id: u32);
+
+    /// Lookup the DefId owning a named binding. Callers of
+    /// `invalidate_def` use this to resolve `name → DefId` before
+    /// invalidation (e.g. REPL `Session::redefine_fn` in cli/repl.rs).
+    pub fn binding_def_id(&self, name: &str) -> Option<u32>;
+}
+```
+
+- `invalidate_def` is the load-bearing primitive for cross-turn
+  fn-redefinition. REPL `evaluate_module` pre-scans top-level fn-defs,
+  captures the pre-existing DefIds via `binding_def_id`, then calls
+  `invalidate_def(old_def_id)` BEFORE `merge_module` reinstalls the
+  fresh binding.
+- Internal helper `invalidate_with(file_id, extra: Option<u32>)`
+  unifies the file-scoped and DefId-scoped paths (single shared
+  removal-set + COW write).
+- Public `invalidate(file_id)` semantics unchanged — wave-3 is
+  strictly additive to the wave-2 surface.
+
+Tests: `crates/cobrust-cli/tests/session_fn_redef.rs` (8 cases —
+identical re-def, arity / param-type / return-type changes,
+:type-after-redef, :clear-then-redef, failed-typecheck preserves
+old binding, first-def-silent).
+
 ## Cross-references
 
 - `adr:0006` — type system shape + inference + proof obligations.
@@ -269,6 +307,7 @@ Tests: `crates/cobrust-types/tests/type_check_ctx_contract.rs`
 - `adr:0050` §A1 — M-F.3.3 f64 gap table.
 - `adr:0050d` — M-F.3.4 dict design (sub-sprint a..g blueprint).
 - `adr:0056b` — Phase I × J handoff primitive (`TypeCheckCtx`).
+- `adr:0056c` — Phase I wave-3 fn-redefinition + per-symbol invalidation.
 - `adr:0057a` — Phase J wave-1 LSP `publishDiagnostics` consumer.
 - `mod:hir` — input.
 - `mod:mir` — downstream consumer (M3+).
