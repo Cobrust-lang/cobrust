@@ -4,7 +4,7 @@ skill_id: cobrust-first-try
 title: "Write Cobrust correctly on the first try"
 audience: any LLM agent (Claude Code / Cursor / OpenClaw / Hermes / Aider / OpenAI Codex / etc.)
 load_when: before writing or editing any `.cb` source file
-last_verified_commit: 25ee43f
+last_verified_commit: 793032d
 maintainers: P10/user; updated atomically with language-surface ADRs
 ---
 
@@ -218,6 +218,105 @@ cobrust check src/main.cb        # type-check only
 cobrust repl                     # interactive
 ```
 
+## 9a. REPL function redefinition (Phase I wave-3 / ADR-0056c)
+
+In `cobrust repl`, a `def` (or `fn`) at the top level may **redefine** an existing binding. The REPL returns a `RedefineOutcome` value on every definition:
+
+| Outcome | Meaning | When it appears |
+|---|---|---|
+| `Created` | First binding of this name in the session | Always on first `def f` |
+| `Identical` | New body is byte-identical to existing body | Pasting same code twice |
+| `SignatureChanged { old_sig, new_sig }` | Types changed | `def f(x: i64)` → `def f(x: str)` |
+
+**Rules**:
+- `SignatureChanged` is a **warning**, not an error. The new signature wins; callers already typed against the old signature may now fail on next typecheck.
+- `Identical` silently re-binds (no message displayed to user; outcome available programmatically).
+- `:type f` reflects the **new** signature immediately after any redef.
+- `:clear` resets the entire session; the next `def f` produces `Created` again.
+
+```
+cobrust> def f(x: i64) -> i64:
+...         return x + 1
+Created: f(x: i64) -> i64
+
+cobrust> def f(x: i64) -> i64:
+...         return x * 2
+Identical: f — rebinding with same signature
+
+cobrust> def f(x: str) -> str:
+...         return x.upper()
+warning[RedefineOutcome::SignatureChanged]: f
+  old: (x: i64) -> i64
+  new: (x: str) -> str
+```
+
+## 9b. Session machinery for LSP/REPL tooling clients (Phase I wave-2 / ADR-0056b)
+
+Agents building editors, LSP servers, or REPL front-ends interact with `cobrust_session::Session`:
+
+```rust
+// O(1) Arc-bump — safe to clone per request; no deep copy
+let snapshot: Session = session.clone();
+
+// Incremental typecheck consumers
+let ctx: &TypeContext = session.type_ctx();   // borrow; updated in place after each eval
+
+// Invalidate a single file's parse + type cache (e.g. on didChange)
+session.invalidate(file_id);   // next type_ctx() access re-checks only this file
+```
+
+**Invariants**:
+- `clone()` is O(1) — it Arc-bumps the internal AST/type maps. Never clones the heap.
+- `invalidate(file_id)` is idempotent; safe to call on a file_id not yet in the session.
+- `type_ctx()` returns a reference valid until the next `eval()` or `invalidate()` call.
+- Do not cache `type_ctx()` across `eval()` boundaries — the reference may alias stale data.
+
+## 9c. LSP integration (Phase J wave-1 / ADR-0057a)
+
+**Start the LSP server**:
+```bash
+cobrust lsp           # stdio transport; editor spawns as child process
+cobrust-lsp           # standalone binary (same binary, alternate entrypoint)
+```
+
+**Editor wiring** (brief; full config at `docs/human/{zh,en}/editor-setup.md`):
+- **VSCode / Cursor**: add `cobrust-lsp` to `"cobrust.server.path"` in settings; language ID `"cobrust"`, file extension `.cb`.
+- **Neovim** (`nvim-lspconfig`): `require('lspconfig').cobrust_lsp.setup({})` — uses stdio transport by default.
+
+**Protocol surface (wave-1 only)**:
+- `textDocument/didOpen` → triggers parse + typecheck → `textDocument/publishDiagnostics`
+- 42 error variants mapped → LSP `Diagnostic`; all at severity `Error`; source field `"cobrust"`.
+- Suggestion text (from `help:` field in compiler diagnostics) → `relatedInformation[0].message`.
+- `textDocument/didChange`, `textDocument/hover`, `textDocument/completion` — **NOT yet implemented** in wave-1.
+
+**Scope caution**: Phase J wave-1 is closed; Phase J wave-2+ (hover, completion, rename) has NOT landed. Do not assume those capabilities exist.
+
+## 9d. JIT (preview / wave-1 only) (ADR-0056a)
+
+**Availability**:
+```bash
+cargo add cobrust-jit   # crate; not yet in cobrust CLI as a top-level subcommand
+```
+
+**Wave-1 supported MIR shapes**:
+- Arithmetic: `Add`, `Sub`, `Mul` on `i64` / `f64`
+- Simple control flow: `if`/`else` branches, unconditional `return`
+
+**Everything else returns `JitError::UnsupportedMirFeature`** — this is a **clean rejection**, not a panic. The JIT does not crash; it signals the shape is out of scope.
+
+```rust
+match cobrust_jit::compile(&mir_fn) {
+    Ok(compiled) => compiled.call(args),
+    Err(JitError::UnsupportedMirFeature(shape)) => {
+        // fall through to AOT path — this is expected for wave-1
+        aot_execute(&mir_fn, args)
+    }
+    Err(e) => return Err(e.into()),
+}
+```
+
+**AOT path (`cobrust build`) is canonical for production.** JIT is preview/experimental; never use it in the translation pipeline or L2 verification gates. Wave-2 scope (loops, function calls, closures) has NOT landed.
+
 ## 10. When in doubt — read the canonical example programs
 
 `examples/leetcode/*.cb` is the largest reference corpus (LeetCode #1-100 in Cobrust). When unsure of the idiomatic form, grep there first.
@@ -229,11 +328,21 @@ cobrust repl                     # interactive
 - **Constitution** at `CLAUDE.md` — the non-negotiables (§2.2 drops, §2.5 LLM-first).
 - **This skill** at `docs/agent/skills/cobrust-first-try.md` — updated atomically with any language-surface ADR.
 
-## 12. Maintenance rules (for whoever updates this file)
+## 12. Done means (onboarding checklist)
+
+A freshly-onboarded agent is ready when it can do all of the following without a compile error:
+
+- [ ] Write a small Cobrust program (`fn main() -> i64: return 0`) and pass `cobrust check`
+- [ ] Redefine a function in `cobrust repl` and read the `RedefineOutcome` string correctly
+- [ ] Run the program via `cobrust build src/main.cb` (AOT, canonical path)
+- [ ] Know that `cobrust lsp` / `cobrust-lsp` exists and which editor wiring file to consult
+- [ ] Know that JIT is wave-1 preview only: `Add`/`Sub`/`Mul` + simple control flow; everything else → `JitError::UnsupportedMirFeature`; fall through to AOT
+
+## 13. Maintenance rules (for whoever updates this file)
 
 - **One source of truth**: every claim in this file must be derivable from a specific ADR + verifiable at the latest commit. The frontmatter `last_verified_commit` must be bumped on every edit.
 - **Surface drift kills the skill**: when a new ADR changes the language (new keyword, new method, dropped pattern), update §3 + §4 + §6 + §8 in the SAME commit as the ADR ratification. CI doc-coverage should flag drift.
 - **Examples are load-bearing**: every example in §3-§5 must `cobrust check` clean. If it doesn't, fix the example or fix the language — never let the skill silently lie.
 - **Cross-platform fidelity**: this skill is plain Markdown — no Claude-Code-specific frontmatter, no Cursor-specific tags. Any agent system can paste this into a system prompt or treat it as a `read-first` doc.
 
-— P10 lineage 2026-05-18; skill seeded after Phase G Wave 2 round 2 partial closure (`25ee43f`).
+— P10 lineage 2026-05-18; seeded after Phase G Wave 2 (`25ee43f`). Refreshed 2026-05-19: added §9a fn-redef / §9b Session / §9c LSP / §9d JIT preview + §12 Done-means; Phase I FULL CLOSED + Phase J wave-1 closed (`793032d`).
