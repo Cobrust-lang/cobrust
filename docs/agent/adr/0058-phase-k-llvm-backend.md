@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0058
 parent_adr: 0054
 title: "Phase K frame — LLVM Backend (release perf + cross-platform + DWARF prep for Phase L)"
-status: proposed
+status: accepted
 date: 2026-05-18
-last_verified_commit: 2a710d3
+ratified_on: 2026-05-19
+ratified_at: pending-this-commit
+last_verified_commit: 7275f33
 supersedes: []
 superseded_by: []
 relates_to: [adr:0054, adr:0023, adr:0046]
