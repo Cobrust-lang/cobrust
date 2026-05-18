@@ -1,6 +1,6 @@
 [package]
 name = "cobrust-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -21,14 +21,14 @@ workspace = true
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-cobrust-codegen = { path = "../cobrust-codegen", version = "=0.2.0" }
-cobrust-frontend = { path = "../cobrust-frontend", version = "=0.2.0" }
-cobrust-hir = { path = "../cobrust-hir", version = "=0.2.0" }
-cobrust-llm-router = { path = "../cobrust-llm-router", version = "=0.2.0" }
-cobrust-mir = { path = "../cobrust-mir", version = "=0.2.0" }
-cobrust-pkg = { path = "../cobrust-pkg", version = "=0.2.0" }
-cobrust-translator = { path = "../cobrust-translator", version = "=0.2.0" }
-cobrust-types = { path = "../cobrust-types", version = "=0.2.0" }
+cobrust-codegen = { path = "../cobrust-codegen", version = "=0.3.0" }
+cobrust-frontend = { path = "../cobrust-frontend", version = "=0.3.0" }
+cobrust-hir = { path = "../cobrust-hir", version = "=0.3.0" }
+cobrust-llm-router = { path = "../cobrust-llm-router", version = "=0.3.0" }
+cobrust-mir = { path = "../cobrust-mir", version = "=0.3.0" }
+cobrust-pkg = { path = "../cobrust-pkg", version = "=0.3.0" }
+cobrust-translator = { path = "../cobrust-translator", version = "=0.3.0" }
+cobrust-types = { path = "../cobrust-types", version = "=0.3.0" }
 rustyline = "14"
 target-lexicon = "0.13"
 # `tempfile` is a runtime dep (NOT dev-dep) since 2026-05-18: the
