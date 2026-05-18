@@ -16,6 +16,7 @@
 //! - `match` exhaustiveness over ADTs / built-ins enforced.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use cobrust_frontend::span::Span;
 use cobrust_hir::{
@@ -36,6 +37,298 @@ pub struct TypedModule {
     pub def_types: HashMap<u32, Ty>,
     /// The HIR module that was checked, for downstream consumers.
     pub hir: Module,
+}
+
+/// Incremental type-check context — the Phase I × J handoff primitive
+/// per ADR-0056b §3.3 + §5 + §6.
+///
+/// `TypeCheckCtx` carries the post-check state needed for cross-turn
+/// REPL incrementality (`let x = …` rebind, fn redef, multi-file
+/// invalidation) AND the snapshot Phase J LSP forks per `hover` /
+/// `completion` request (ADR-0057 §6 + §11; ADR-0057a §4 wave-1).
+///
+/// Internals are `Arc`-shared with copy-on-write so [`Self::clone`]
+/// is O(1) `Arc::clone` — Phase J's <100ms per-keystroke IDE budget
+/// (ADR-0057 §7) is unmeetable if every LSP request re-derives the
+/// ctx. Write-path clones the `Arc` on first mutation per turn
+/// (`Arc::make_mut`).
+///
+/// Per ADR-0056b §"Risk 3": default-derived `Clone` on `Subst` +
+/// symbol-table is O(n) per turn — kills LSP per-keystroke budget on
+/// deep-source files; Arc-COW restores O(1) per snapshot.
+///
+/// `Send` is satisfied because every interior structure is `Send`:
+/// `HashMap<…>` is `Send` when its keys + values are `Send`; `Ty` +
+/// `Subst` + `String` are `Send`. `VarAllocator` is `Send` via
+/// `AtomicU32`. No `Rc` / `RefCell` / `Cell` is reachable from the
+/// public surface.
+#[derive(Clone, Debug, Default)]
+pub struct TypeCheckCtx {
+    /// Name → type for cross-turn REPL bindings (`let x = …`).
+    /// REPL `:type x` reads this; LSP `hover` consumes the per-DefId
+    /// projection (`def_types`).
+    bindings: Arc<HashMap<String, Ty>>,
+    /// Per-`DefId` resolved type (one entry per top-level binding).
+    /// Mirrors [`TypedModule::def_types`] but persists across turns
+    /// — Phase J `did_change` (ADR-0057a §4) re-publishes diagnostics
+    /// against this map without re-deriving from scratch.
+    def_types: Arc<HashMap<u32, Ty>>,
+    /// Type-alias name → resolved value (carried for next-turn alias
+    /// resolution; matches `Ctx::alias_map`).
+    alias_map: Arc<HashMap<String, Ty>>,
+    /// Final substitution after the last `check_incremental` call —
+    /// preserved for next-turn unification of `let y = x` against the
+    /// existing `x: Ty` row.
+    subst: Arc<Subst>,
+    /// Multi-file `FileId.0` → last-checked module DefIds. Used by
+    /// [`Self::invalidate`] to drop only the affected DefId rows on a
+    /// `did_change` / file-removal per ADR-0056b §"Invalidation".
+    file_defs: Arc<HashMap<u32, Vec<u32>>>,
+    /// Binding name → DefId mapping for the rows in [`Self::bindings`].
+    /// Lets [`Self::invalidate`] drop name-keyed entries whose owner
+    /// DefId belongs to the invalidated file. Without this, a row
+    /// like `let x: i64 = 0` survives invalidation (its `Ty::Int`
+    /// payload doesn't reference a removed DefId).
+    binding_defs: Arc<HashMap<String, u32>>,
+    /// Per-snapshot freshness tag per ADR-0056b §6. Bumped on every
+    /// successful `check_incremental` / `invalidate` write. Phase J
+    /// uses this to know whether a snapshot is current (per-snapshot
+    /// version tag deferred to ADR-0057a wave-2; this field is the
+    /// concrete carrier).
+    version: u64,
+}
+
+impl TypeCheckCtx {
+    /// Construct an empty incremental context. Cheap — all internal
+    /// `Arc`s point at empty default maps.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Lookup the inferred type of a named binding from a previous
+    /// turn. Returns `None` if the name was never bound or has since
+    /// been invalidated.
+    #[must_use]
+    pub fn lookup(&self, name: &str) -> Option<&Ty> {
+        self.bindings.get(name)
+    }
+
+    /// Lookup the type of a specific `DefId`. The numeric form
+    /// matches [`TypedModule::def_types`] so LSP `hover` callers
+    /// thread a single `u32` from the resolved-name tables.
+    #[must_use]
+    pub fn def_type(&self, def_id: u32) -> Option<&Ty> {
+        self.def_types.get(&def_id)
+    }
+
+    /// Snapshot version (monotonically increasing). Phase J snapshot
+    /// freshness check per ADR-0056b §6.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// Total number of cross-turn bindings (REPL `:bindings`).
+    #[must_use]
+    pub fn binding_count(&self) -> usize {
+        self.bindings.len()
+    }
+
+    /// Iterate over `(name, ty)` bindings in unspecified order.
+    pub fn bindings(&self) -> impl Iterator<Item = (&String, &Ty)> {
+        self.bindings.iter()
+    }
+
+    /// Lookup a type-alias name (`type Foo = ...`) from a previous
+    /// turn. Carried for ADR-0056c cross-turn alias resolution; wave-2
+    /// exposes the read so LSP `hover` can resolve aliased names.
+    #[must_use]
+    pub fn alias(&self, name: &str) -> Option<&Ty> {
+        self.alias_map.get(name)
+    }
+
+    /// Get a reference to the carried substitution map. Phase J reads
+    /// this when materialising a fully-substituted type for a hover
+    /// label (`Subst::apply` resolves any residual inference vars).
+    #[must_use]
+    pub fn subst(&self) -> &Subst {
+        &self.subst
+    }
+
+    /// Multi-file invalidation per ADR-0056b §"Invalidation" + ADR-0057
+    /// §6. Drops every `DefId` row recorded against `file_id` from
+    /// `def_types` + every `bindings` entry whose type referenced one
+    /// of those DefIds. Bumps [`Self::version`] so Phase J snapshot
+    /// readers can detect staleness.
+    ///
+    /// O(n) in the number of DefIds the file owned + the number of
+    /// global bindings (single-pass filter). Phase J wave-1 calls this
+    /// from `did_change` AFTER the new file content is re-type-checked
+    /// — invalidate clears the old; the subsequent
+    /// [`check_incremental`] re-populates with the new types.
+    ///
+    /// If `file_id` has no recorded DefIds (never type-checked), this
+    /// is a no-op except for the version bump (which keeps Phase J's
+    /// "did the ctx change?" signal monotone even on misses).
+    pub fn invalidate(&mut self, file_id: u32) {
+        let removed_defs: Vec<u32> = self
+            .file_defs
+            .get(&file_id)
+            .cloned()
+            .unwrap_or_default();
+        let removed: HashSet<u32> = removed_defs.iter().copied().collect();
+
+        // Arc::make_mut clones the inner map ONLY on first write per
+        // turn (COW). Subsequent writes share the same allocation.
+        if !removed.is_empty() {
+            Arc::make_mut(&mut self.def_types).retain(|k, _| !removed.contains(k));
+            // Names whose owning DefId is in the removed set — primary
+            // invalidation surface (e.g. `let x = 0` whose DefId
+            // belonged to the invalidated file).
+            let drop_names: HashSet<String> = self
+                .binding_defs
+                .iter()
+                .filter(|(_, def)| removed.contains(*def))
+                .map(|(n, _)| n.clone())
+                .collect();
+            Arc::make_mut(&mut self.binding_defs).retain(|_, def| !removed.contains(def));
+            // Drop the row if EITHER its owning DefId is invalidated
+            // OR its resolved type references a removed Adt/Alias
+            // (defence-in-depth — e.g. `let v: MyClass` survives the
+            // name-side filter only when `MyClass` is still alive).
+            Arc::make_mut(&mut self.bindings)
+                .retain(|name, ty| !drop_names.contains(name) && !type_refs_any(ty, &removed));
+        }
+        Arc::make_mut(&mut self.file_defs).remove(&file_id);
+        self.version = self.version.wrapping_add(1);
+    }
+
+    /// Merge a freshly type-checked module into this ctx — the
+    /// per-turn write-path per ADR-0056b §4 + §5.
+    ///
+    /// Semantics:
+    /// - Every `(name, Ty)` pair from top-level `let` bindings + `fn`
+    ///   defs in `typed.hir` is inserted into [`Self::bindings`].
+    /// - **Redefine**: an existing name's row is *replaced* (ADR-0056b
+    ///   §5 "Redefine") — downstream invalidation per dep-map is
+    ///   deferred to ADR-0056c (not load-bearing for wave-2 Phase J
+    ///   contract; LSP re-runs the full file check on each
+    ///   `did_change` per ADR-0057a §4).
+    /// - DefIds owned by this file are recorded so a later
+    ///   [`Self::invalidate`] can drop them.
+    /// - Version bumps on every call (whether or not bindings actually
+    ///   changed).
+    pub fn merge_module(&mut self, typed: &TypedModule, file_id: u32) {
+        let bindings_mut = Arc::make_mut(&mut self.bindings);
+        let def_types_mut = Arc::make_mut(&mut self.def_types);
+        let file_defs_mut = Arc::make_mut(&mut self.file_defs);
+        let binding_defs_mut = Arc::make_mut(&mut self.binding_defs);
+
+        let mut owned_defs: Vec<u32> = Vec::new();
+        for item in &typed.hir.items {
+            match &item.kind {
+                ItemKind::Fn(f) => {
+                    if let Some(ty) = typed.def_types.get(&f.def_id.0) {
+                        bindings_mut.insert(f.name.clone(), ty.clone());
+                        binding_defs_mut.insert(f.name.clone(), f.def_id.0);
+                    }
+                    owned_defs.push(f.def_id.0);
+                }
+                ItemKind::Let(b) => {
+                    // Top-level `let` patterns at wave-2 are limited to
+                    // simple `Binding(name, def_id)` per the REPL
+                    // synthetic module shape; destructuring lands in
+                    // ADR-0056c.
+                    if let PatternKind::Binding(name, def_id) = &b.pattern.kind {
+                        if let Some(ty) = typed.def_types.get(&def_id.0) {
+                            bindings_mut.insert(name.clone(), ty.clone());
+                            binding_defs_mut.insert(name.clone(), def_id.0);
+                        }
+                        owned_defs.push(def_id.0);
+                    }
+                }
+                ItemKind::Class(c) => {
+                    if let Some(ty) = typed.def_types.get(&c.def_id.0) {
+                        bindings_mut.insert(c.name.clone(), ty.clone());
+                        binding_defs_mut.insert(c.name.clone(), c.def_id.0);
+                    }
+                    owned_defs.push(c.def_id.0);
+                }
+                ItemKind::TypeAlias(a) => {
+                    owned_defs.push(a.def_id.0);
+                }
+                ItemKind::Import { def_id, .. } => {
+                    owned_defs.push(def_id.0);
+                }
+                ItemKind::Decorated { .. } | ItemKind::ExprStmt(_) => {}
+            }
+        }
+        for (def_id, ty) in &typed.def_types {
+            def_types_mut.insert(*def_id, ty.clone());
+        }
+        file_defs_mut.insert(file_id, owned_defs);
+        self.version = self.version.wrapping_add(1);
+    }
+}
+
+/// Helper: does `ty` reference any `DefId` (via `Adt` / `Alias`) in
+/// `removed`? Used by [`TypeCheckCtx::invalidate`] for best-effort
+/// name-side cleanup.
+fn type_refs_any(ty: &Ty, removed: &HashSet<u32>) -> bool {
+    match ty {
+        Ty::Adt(id, args) => {
+            removed.contains(&id.0) || args.iter().any(|t| type_refs_any(t, removed))
+        }
+        Ty::Alias(id, args) => {
+            removed.contains(&id.0) || args.iter().any(|t| type_refs_any(t, removed))
+        }
+        Ty::Tuple(items) => items.iter().any(|t| type_refs_any(t, removed)),
+        Ty::List(t) | Ty::Set(t) | Ty::Ref(t) => type_refs_any(t, removed),
+        Ty::Dict(k, v) => type_refs_any(k, removed) || type_refs_any(v, removed),
+        Ty::Record(r) => r.fields.iter().any(|(_, t)| type_refs_any(t, removed)),
+        Ty::Fn(fn_ty) => {
+            fn_ty.positional.iter().any(|t| type_refs_any(t, removed))
+                || fn_ty.named.iter().any(|(_, t)| type_refs_any(t, removed))
+                || fn_ty
+                    .var_positional
+                    .as_ref()
+                    .is_some_and(|t| type_refs_any(t, removed))
+                || fn_ty
+                    .var_keyword
+                    .as_ref()
+                    .is_some_and(|t| type_refs_any(t, removed))
+                || type_refs_any(&fn_ty.return_ty, removed)
+        }
+        _ => false,
+    }
+}
+
+/// Type-check a module incrementally against an existing
+/// [`TypeCheckCtx`].
+///
+/// The wave-2 contract per ADR-0056b §4: this is functionally
+/// equivalent to [`check`] (returns the same `TypedModule`) PLUS it
+/// merges every new binding into the carried ctx via
+/// [`TypeCheckCtx::merge_module`] for the next-turn LSP/REPL snapshot.
+///
+/// The full incremental algorithm (re-using `ctx.subst` for cross-turn
+/// unification of `let y = x`) is deferred to ADR-0056c; wave-2 ships
+/// the carrier + snapshot semantics, which is the load-bearing Phase
+/// J contract.
+///
+/// # Errors
+///
+/// Returns the first type error encountered (or `TypeError::Multiple`
+/// aggregating several).
+pub fn check_incremental(
+    ctx: &mut TypeCheckCtx,
+    module: &Module,
+    file_id: u32,
+) -> Result<TypedModule, TypeError> {
+    let typed = check(module)?;
+    ctx.merge_module(&typed, file_id);
+    Ok(typed)
 }
 
 /// Type-check a module.

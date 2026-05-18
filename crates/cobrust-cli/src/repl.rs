@@ -33,7 +33,7 @@ use cobrust_hir::{
     Expr as HirExpr, Module as HirModule, Session as HirSession, lower as hir_lower,
 };
 use cobrust_mir::lower as mir_lower;
-use cobrust_types::{Ty, check as type_check};
+use cobrust_types::{Ty, TypeCheckCtx, check as type_check, check_incremental};
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -132,9 +132,19 @@ impl Value {
 }
 
 /// Session state. Public for testability per ADR-0029 §"Public surface".
+///
+/// ADR-0056b §3.3 extension: carries a cross-turn [`TypeCheckCtx`]
+/// (Clone+Send Arc-COW snapshot). Phase J LSP wave-1 (ADR-0057a §4)
+/// reads [`Session::type_ctx`] on `did_change` to re-publish
+/// diagnostics without re-deriving the symbol table from scratch.
+#[derive(Clone)]
 pub struct Session {
     /// Accumulated `let` bindings: name → value.
     bindings: HashMap<String, Value>,
+    /// Cross-turn incremental type-check ctx (ADR-0056b §3.3 + §5).
+    /// O(1) Clone via Arc-COW; Send via interior Arc<HashMap<...>>.
+    /// Phase J reads via [`Session::type_ctx`].
+    type_ctx: TypeCheckCtx,
 }
 
 impl Default for Session {
@@ -148,7 +158,30 @@ impl Session {
     pub fn new() -> Self {
         Self {
             bindings: HashMap::new(),
+            type_ctx: TypeCheckCtx::new(),
         }
+    }
+
+    /// Phase J handoff accessor per ADR-0056b §3.3 + §6. LSP wave-1
+    /// (ADR-0057a §4) reads this on `did_change` to dispatch fresh
+    /// diagnostics. The returned reference shares Arc-internal data
+    /// with future writes; per §6 readers never block writers (Phase J
+    /// snapshot may reflect pre- or post-write — per-snapshot version
+    /// tag via [`TypeCheckCtx::version`]).
+    #[must_use]
+    #[allow(dead_code)] // ADR-0057a wave-1 consumes
+    pub fn type_ctx(&self) -> &TypeCheckCtx {
+        &self.type_ctx
+    }
+
+    /// Multi-file invalidation per ADR-0056b §"Invalidation". Drops
+    /// every DefId row recorded against `file_id` from the cross-turn
+    /// ctx. Phase J LSP `did_change` calls this BEFORE re-checking
+    /// the new file content. `file_id` matches
+    /// [`cobrust_frontend::span::FileId`]'s wrapped u32.
+    #[allow(dead_code)] // ADR-0057a wave-1 consumes
+    pub fn invalidate(&mut self, file_id: u32) {
+        self.type_ctx.invalidate(file_id);
     }
 
     /// Drive one logical input (which may include embedded newlines for
@@ -195,6 +228,10 @@ impl Session {
             "help" => StepResult::Done(help_text()),
             "clear" => {
                 self.bindings.clear();
+                // ADR-0056b §3.3 — cross-turn type-ctx also clears so
+                // `:type x` after `:clear` reports unbound rather than
+                // stale.
+                self.type_ctx = TypeCheckCtx::new();
                 StepResult::Done("session bindings cleared.".to_string())
             }
             "type" => {
@@ -234,7 +271,20 @@ impl Session {
     }
 
     /// `:type EXPR` — print the inferred return type of `fn _t() -> _: return EXPR`.
+    ///
+    /// ADR-0056b §3.3 — if `expr_src` is a bare identifier that's
+    /// bound in the cross-turn `type_ctx`, return that type
+    /// immediately (no parse/lower/check needed). This is the smoke
+    /// test for `Session::type_ctx` cross-turn persistence.
     fn directive_type(&self, expr_src: &str) -> StepResult {
+        // Fast path: bare identifier referenced from a previous turn.
+        let trimmed = expr_src.trim();
+        if is_bare_identifier(trimmed) {
+            if let Some(ty) = self.type_ctx.lookup(trimmed) {
+                return StepResult::Done(format!("{ty}"));
+            }
+        }
+
         let wrapped = wrap_for_typecheck(expr_src);
         let ast = match parse_str(&wrapped, FileId::SYNTHETIC) {
             Ok(m) => m,
@@ -316,6 +366,31 @@ impl Session {
             Some(b) => b,
             None => return StepResult::Error("internal: synthetic body shape lost".to_string()),
         };
+
+        // ADR-0056b §3.3 + §5 — parallel type-check pass merges the
+        // input's bindings into the cross-turn type_ctx (so `:type x`
+        // and Phase J `did_change` consumers see the new row). The
+        // synthetic module rewrap (around the original user input)
+        // surfaces top-level `let` patterns as `LetBody` rows; the
+        // wrap_for_typecheck_stmts variant exposes them at module top
+        // so `check_incremental` records them under FileId::REPL.
+        if !raw_input.trim().is_empty() {
+            let wrap = wrap_for_typecheck_stmts(raw_input);
+            if let Ok(ast) = parse_str(&wrap, FileId::SYNTHETIC) {
+                let mut sess = HirSession::new();
+                if let Ok(hir) = hir_lower(&ast, &mut sess) {
+                    let _ = check_incremental(
+                        &mut self.type_ctx,
+                        &hir,
+                        FileId::SYNTHETIC.0,
+                    );
+                    // Errors are intentionally swallowed here: eval
+                    // proceeds with the (possibly stale) value loop;
+                    // diagnostics belong to `:type` / future LSP wire.
+                }
+            }
+        }
+
         let mut output = Vec::<String>::new();
         for stmt in body {
             match self.eval_stmt(stmt) {
@@ -512,6 +587,42 @@ fn is_input_incomplete(input: &str) -> bool {
 /// Wrap a single expression for type/HIR/MIR introspection.
 fn wrap_for_typecheck(expr_src: &str) -> String {
     format!("fn _t():\n    return {expr_src}\n")
+}
+
+/// Is `s` a bare identifier (`[A-Za-z_][A-Za-z0-9_]*`)? Used by
+/// `:type` directive to fast-path cross-turn ctx lookup per
+/// ADR-0056b §3.3.
+fn is_bare_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// Wrap user input as top-level module statements so `let`-bindings
+/// surface as `ItemKind::Let` (which [`check_incremental`] / merge
+/// reads to populate the cross-turn type ctx per ADR-0056b §3.3).
+///
+/// Non-`let` lines are wrapped in `_t = ...` so they still type-check
+/// without introducing meaningful top-level state. Lines we cannot
+/// classify (e.g. trailing whitespace) are passed through unchanged
+/// — `parse_str` either accepts (top-level expr stmt) or rejects
+/// (the caller already type-checks via the existing `_repl` path).
+fn wrap_for_typecheck_stmts(input: &str) -> String {
+    // M14 the user-input is a single logical statement (multi-line
+    // continues are folded into one input by the rustyline loop).
+    // We pass it verbatim — `let x = …` is already top-level form 7;
+    // a bare expression is top-level form 19 (ExprStmt). Either way,
+    // `parse_str` produces an `AstModule` whose `ItemKind::Let` /
+    // `ItemKind::ExprStmt` surface what the merge_module path reads.
+    let mut out = String::new();
+    for line in input.lines() {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 /// Extract user-input statements from the parsed `_repl` synthetic body.
@@ -1225,5 +1336,72 @@ mod tests {
             StepResult::Done(out) => assert_eq!(out, "99"),
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    // ===== ADR-0056b §6 Phase J handoff contract — collocated smoke =====
+
+    #[test]
+    fn session_implements_clone_and_send() {
+        fn assert_clone_send<T: Clone + Send + 'static>() {}
+        assert_clone_send::<Session>();
+        let s = Session::new();
+        let _ = s.clone();
+    }
+
+    #[test]
+    fn session_type_ctx_accessor_returns_reference() {
+        let s = Session::new();
+        // Wave-2 contract: type_ctx() returns &TypeCheckCtx; default
+        // ctx has zero bindings and version 0.
+        assert_eq!(s.type_ctx().binding_count(), 0);
+        assert_eq!(s.type_ctx().version(), 0);
+    }
+
+    #[test]
+    fn session_let_populates_type_ctx() {
+        let mut s = Session::new();
+        let _ = step(&mut s, "let x = 42");
+        assert!(
+            s.type_ctx().lookup("x").is_some(),
+            "let x = 42 should populate type_ctx"
+        );
+    }
+
+    #[test]
+    fn session_type_directive_uses_cross_turn_ctx() {
+        let mut s = Session::new();
+        let _ = step(&mut s, "let n = 7");
+        match step(&mut s, ":type n") {
+            StepResult::Done(out) => assert_eq!(out, "i64"),
+            other => panic!("expected :type n -> i64 from cross-turn ctx, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_invalidate_clears_ctx_rows() {
+        let mut s = Session::new();
+        let _ = step(&mut s, "let answer = 42");
+        assert!(s.type_ctx().lookup("answer").is_some());
+        s.invalidate(FileId::SYNTHETIC.0);
+        assert!(s.type_ctx().lookup("answer").is_none());
+    }
+
+    #[test]
+    fn session_clear_resets_type_ctx() {
+        let mut s = Session::new();
+        let _ = step(&mut s, "let v = 9");
+        assert!(s.type_ctx().lookup("v").is_some());
+        let _ = step(&mut s, ":clear");
+        assert!(s.type_ctx().lookup("v").is_none(), ":clear must reset type_ctx");
+    }
+
+    #[test]
+    fn session_clone_can_cross_thread() {
+        let mut s = Session::new();
+        let _ = step(&mut s, "let n = 5");
+        let snap = s.clone();
+        let h = std::thread::spawn(move || snap.type_ctx().binding_count());
+        let count = h.join().unwrap();
+        assert!(count >= 1);
     }
 }

@@ -1992,6 +1992,29 @@ flowchart LR
     eval --> bindings[更新会话绑定]
 ```
 
+#### Phase I 扩展 —— `Session::type_ctx`（ADR-0056b）
+
+Phase I wave-2（ADR-0056b，于 2026-05-18 接受）扩展 `Session`，
+携带跨回合增量类型检查快照（`TypeCheckCtx`）。动机来自 Phase J
+× Phase I 的握手契约：LSP 服务器（ADR-0057a wave-1）需要每次
+LSP 请求都能 O(1) 克隆快照，并具备 `Send` bound 以便异步
+handler 跨 `.await` 边界移动快照。
+
+关键新增公共表面：
+
+- `Session: Clone + Send` —— 通过 derive / 编译期断言。
+- `Session::type_ctx() -> &TypeCheckCtx` —— Phase J 快照读取入口。
+- `Session::invalidate(file_id: u32)` —— 多文件失效。
+- `:type x` 对裸标识符现在直接读跨回合 ctx（无需重新
+  parse + lower + check）。
+- `:clear` 同时重置 `type_ctx` 与 `bindings`。
+
+`TypeCheckCtx` 内部为五个 `Arc<HashMap<...>>` 行；克隆是 O(1) 的
+`Arc::clone`，写时通过 `Arc::make_mut` copy-on-write。
+
+完整设计与诚实的缩窄说明见
+`docs/agent/adr/0056b-repl-control-flow-session.md`。
+
 #### 多行输入合同
 
 REPL 在以下情形显示续行提示（`...`）—— 输入结构不完整：

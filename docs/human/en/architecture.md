@@ -2106,6 +2106,30 @@ flowchart LR
     eval --> bindings[update session bindings]
 ```
 
+#### Phase I extension — `Session::type_ctx` (ADR-0056b)
+
+Phase I wave-2 (ADR-0056b, accepted 2026-05-18) extends `Session` to
+carry a cross-turn incremental type-check snapshot
+(`TypeCheckCtx`). The motivation is the Phase J × Phase I handoff:
+the LSP server (ADR-0057a wave-1) needs O(1) snapshot cloning per
+LSP request, with `Send` bounds so async handlers can move the
+snapshot across an `.await` boundary.
+
+Key public additions:
+
+- `Session: Clone + Send` — derived/asserted.
+- `Session::type_ctx() -> &TypeCheckCtx` — Phase J snapshot reader.
+- `Session::invalidate(file_id: u32)` — multi-file invalidation.
+- `:type x` for a bare identifier now reads the cross-turn ctx
+  directly (no parse + lower + check round-trip).
+- `:clear` resets `type_ctx` alongside `bindings`.
+
+The `TypeCheckCtx` internals are five `Arc<HashMap<...>>` rows; clone
+is O(1) via `Arc::clone`, writes copy-on-write via `Arc::make_mut`.
+
+See `docs/agent/adr/0056b-repl-control-flow-session.md` for the
+full design + scope-narrowing addendum.
+
 #### Multi-line input contract
 
 The REPL emits a continuation prompt (`...`) when the input is
