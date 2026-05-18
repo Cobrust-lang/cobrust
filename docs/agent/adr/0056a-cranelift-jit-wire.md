@@ -152,7 +152,7 @@ identical to the AOT path:
 - M11.2 FnRef::Call (ADR-0034 §"Decision Option 3" forward-decl)
   re-binds against `JITModule` without form-level rewrites — both
   modules implement `cranelift_module::Module`.
-- M11.3 `lower_condition` shared root (ADR-0044) — unchanged.
+- M11.3 `lower_condition` shared root (ADR-0035) — unchanged.
 - ADR-0050d dict / mapping lowering — unchanged.
 - All intrinsic / PRELUDE rewrites (ADR-0027 + ADR-0050a-f) —
   unchanged surface.
