@@ -6,7 +6,7 @@ title: "Phase K frame — LLVM Backend (release perf + cross-platform + DWARF pr
 status: accepted
 date: 2026-05-18
 ratified_on: 2026-05-19
-ratified_at: pending-this-commit
+ratified_at: 9bf8d67
 last_verified_commit: 7275f33
 supersedes: []
 superseded_by: []
