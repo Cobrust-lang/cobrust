@@ -8,6 +8,7 @@ members = [
     "crates/cobrust-mir",
     "crates/cobrust-types",
     "crates/cobrust-codegen",
+    "crates/cobrust-jit",
     "crates/cobrust-llm-router",
     "crates/cobrust-msgpack",
     "crates/cobrust-pkg",
