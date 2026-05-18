@@ -291,6 +291,55 @@ Per ADR-0056b §3.3 + §6 (accepted at `b0e1e9e`):
 Tests: `crates/cobrust-cli/src/repl.rs::tests::session_*` (7 cases)
 + `crates/cobrust-types/tests/type_check_ctx_contract.rs` (16 cases).
 
+### Phase I wave-3 ADR-0056c — `Session::redefine_fn` + auto-redef UX
+
+Per ADR-0056c §4 fn-redefinition lifecycle (accepted at impl-merge):
+
+- New public method `Session::redefine_fn(name: &str, source: &str)
+  -> Result<RedefineOutcome, String>` parses + type-checks a single
+  fn-def source; on conflict invalidates the old DefId atomically via
+  `TypeCheckCtx::invalidate_def` before merging the fresh binding.
+- New `RedefineOutcome` enum with three variants:
+  - `Created { name }` — no prior binding (fresh first-def).
+  - `Identical { name }` — prior binding existed; new signature is
+    type-equal to old.
+  - `SignatureChanged { name, old, new }` — prior binding existed
+    and the new signature differs (arity / param-type / return).
+- `RedefineOutcome::user_message()` formats the one-line REPL
+  feedback: `defined \`f\``, `redefined \`f\``, or
+  `redefined \`f\` (signature changed: <old> -> <new>)`.
+- `evaluate_module` integrates the path inline: pre-scans the parsed
+  input for top-level `StmtKind::Fn`, captures pre-existing DefIds via
+  `binding_def_id`, invalidates them atomically, then runs the
+  standard `check_incremental` merge, then classifies + emits per-fn
+  notices. `Created` is suppressed (matches Python REPL ergonomics);
+  `Identical` / `SignatureChanged` print to stdout.
+- Failed-typecheck path leaves the old binding intact (matches
+  Python REPL: redefinition with a typo doesn't lose the working
+  function).
+- On-stack redef detection (`call_stack: Vec<String>` per ADR-0056c
+  §4 "Residual hazard") is RESERVED for M14.2 when JIT mode ships;
+  the M14.1 REPL has no JIT call stack so the contract is trivially
+  satisfied at turn boundaries.
+
+```rust
+pub enum RedefineOutcome {
+    Created { name: String },
+    Identical { name: String },
+    SignatureChanged { name: String, old: String, new: String },
+}
+
+impl Session {
+    pub fn redefine_fn(&mut self, name: &str, source: &str)
+        -> Result<RedefineOutcome, String>;
+}
+```
+
+Tests: `crates/cobrust-cli/tests/session_fn_redef.rs` (8 cases —
+first-def silent, identical re-def, arity / param-type / return-type
+changes, `:type` after redef, `:clear`-then-redef, failed-typecheck
+preserves old binding).
+
 ## Done means (M14)
 
 - [x] `cobrust repl` lifts the M10 stub to full functionality.
