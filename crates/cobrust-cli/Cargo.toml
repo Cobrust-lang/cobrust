@@ -31,8 +31,11 @@ cobrust-translator = { path = "../cobrust-translator", version = "=0.2.0" }
 cobrust-types = { path = "../cobrust-types", version = "=0.2.0" }
 rustyline = "14"
 target-lexicon = "0.13"
+# `tempfile` is a runtime dep (NOT dev-dep) since 2026-05-18: the
+# `cobrust build` driver uses TempDir to RAII-scope intermediate .o
+# artifacts so they don't leak into the caller's -o directory. See
+# crates/cobrust-cli/src/build.rs `build()::EmitKind::Executable` and
+# commit `findings: diagnose CLI tempdir leak root cause` for context.
+tempfile = "3"
 thiserror = { workspace = true }
 tokio = { workspace = true }
-
-[dev-dependencies]
-tempfile = "3"
