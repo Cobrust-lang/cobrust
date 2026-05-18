@@ -32,15 +32,18 @@ use cobrust_types_cb::{display_ty, ty_cb_arena_from_rust, FnTyArena, RecordArena
 // =====================================================================
 
 /// Assert `display_ty` output equals Rust `fmt::Display` for `rust_ty`.
+///
+/// DEV-wired per F28 + ADR-0055a Wave-2: the `ty_cb_arena_from_rust`
+/// conversion populates `TyArena.fn_entries` + `TyArena.record_entries`,
+/// so the standalone `FnTyArena` + `RecordArena` are passed empty.
+/// `display_ty` prefers the in-arena parallel storage when present.
 fn assert_display(rust_ty: &Ty) {
     let expected = format!("{rust_ty}");
-    let (_root_id, _cb_arena) = ty_cb_arena_from_rust(rust_ty);
-    let _fn_arena = FnTyArena::new();
-    let _rec_arena = RecordArena::new();
-    // DEV wires: let actual = display_ty(&_cb_arena, &_fn_arena, &_rec_arena, _root_id);
-    // assert_eq!(actual, expected, "Display parity failed for {rust_ty}");
-    let _ = expected;
-    todo!("ADR-0055a Wave-2 DEV: wire display_ty + assert byte equality")
+    let (root_id, cb_arena) = ty_cb_arena_from_rust(rust_ty);
+    let fn_arena = FnTyArena::new();
+    let rec_arena = RecordArena::new();
+    let actual = display_ty(&cb_arena, &fn_arena, &rec_arena, root_id);
+    assert_eq!(actual, expected, "Display parity failed for {rust_ty}");
 }
 
 // =====================================================================
@@ -50,7 +53,6 @@ fn assert_display(rust_ty: &Ty) {
 /// `(i64,)` — Rust emits trailing comma for single-element tuples.
 /// If cb emits `(i64)` the test fails with a byte-mismatch.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn dp01_one_tuple_trailing_comma() {
     assert_display(&Ty::Tuple(vec![Ty::Int]));
 }
@@ -64,7 +66,6 @@ fn dp01_one_tuple_trailing_comma() {
 /// Rust arm: prepends `", "` before named param if positional non-empty
 /// OR if not the first named param. cb `display_ty` must mirror this.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn dp02_fn_ty_named_separator() {
     let fn_ty = Ty::Fn(FnTy {
         positional: vec![Ty::Int],
@@ -82,7 +83,6 @@ fn dp02_fn_ty_named_separator() {
 
 /// `&i64` — Ref display glyph per ADR-0052a Wave-1 + ty.rs Ref arm.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn dp03_ref_glyph() {
     assert_display(&Ty::Ref(Box::new(Ty::Int)));
 }
@@ -93,7 +93,6 @@ fn dp03_ref_glyph() {
 
 /// `List[str]` — square-bracket annotation glyph.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn dp04_list_bracket_glyph() {
     assert_display(&Ty::List(Box::new(Ty::Str)));
 }
@@ -104,7 +103,6 @@ fn dp04_list_bracket_glyph() {
 
 /// `Dict[i64, str]` — dict bracket + comma.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn dp05_dict_bracket_glyph() {
     assert_display(&Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Str)));
 }
@@ -115,7 +113,6 @@ fn dp05_dict_bracket_glyph() {
 
 /// `()` — empty tuple; no trailing comma (only 1-tuple gets trailing comma).
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn dp06_empty_tuple_glyph() {
     assert_display(&Ty::Tuple(vec![]));
 }
@@ -129,7 +126,6 @@ fn dp06_empty_tuple_glyph() {
 /// BTreeMap ordering means fields are lexicographically sorted:
 /// `name` < `tag` → `name` first.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn dp07_record_field_annotation_glyph() {
     let record_ty = Ty::Record(Record::from_pairs(vec![
         ("name".to_string(), Ty::Int),
@@ -144,7 +140,6 @@ fn dp07_record_field_annotation_glyph() {
 
 /// `List[List[i64]]` — two-level nesting, both bracket glyphs.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn dp08_nested_list_display() {
     assert_display(&Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))));
 }
@@ -158,7 +153,6 @@ fn dp08_nested_list_display() {
 /// Rust arm: `write!(f, "Adt#{}", id.0)` then `[args]` if non-empty.
 /// cb must emit identical prefix and bracket form.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn dp09_adt_prefix_glyph() {
     assert_display(&Ty::Adt(AdtId(3), vec![Ty::Int, Ty::Str]));
 }
@@ -172,7 +166,6 @@ fn dp09_adt_prefix_glyph() {
 /// Three distinct special-case glyphs in a single type; any divergence in
 /// the glyph encoding produces a byte-mismatch.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn dp10_alias_generic_var_glyphs() {
     assert_display(&Ty::Alias(
         AliasId(2),
