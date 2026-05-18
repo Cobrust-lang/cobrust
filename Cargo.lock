@@ -549,6 +549,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cobrust-types-parity"
+version = "0.3.0"
+dependencies = [
+ "cobrust-frontend",
+ "cobrust-hir",
+ "cobrust-types",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
