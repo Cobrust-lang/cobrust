@@ -2,10 +2,10 @@
 doc_kind: adr
 adr_id: 0056c
 parent_adr: 0056
-title: "Phase I wave-3 — REPL session state machine + multi-file invalidation API + fn-redefinition safety"
-status: proposed
-date: 2026-05-18
-last_verified_commit: 54a599c
+title: "Phase I wave-3 — REPL fn-redefinition lifecycle + per-symbol TypeCheckCtx invalidation"
+status: accepted
+date: 2026-05-19
+last_verified_commit: 3626021
 supersedes: []
 superseded_by: []
 relates_to: [adr:0056, adr:0056a, adr:0056b, adr:0057]
@@ -13,7 +13,7 @@ discovered_by: P9 — ADR-0056 §4 sub-ADR roster, day 6 slot
 ratification_path: P9 ADR review; ratifies on impl-merge gate (final wave under ADR-0056 frame)
 ---
 
-# ADR-0056c: REPL session state machine + multi-file invalidation API + fn-redefinition safety
+# ADR-0056c: REPL fn-redefinition lifecycle + per-symbol TypeCheckCtx invalidation
 
 ## 1. Context
 
@@ -253,3 +253,117 @@ parallel under PAIR (P10-direct per
 `feedback_adsd_pair_pattern_impl_gap`).
 
 — P9 Tech Lead, 2026-05-18
+
+## 12. Acceptance addendum (impl-merge, 2026-05-19)
+
+Ratified on impl-merge of `feature/0056c-dev` (HEAD `3626021`).
+The shipped surface is the **fn-redefinition lifecycle** + the
+**per-symbol invalidation primitive** (§4 + §5 narrowed). Three
+honest scope-narrowings vs the proposed §3 + §4 + §6 text.
+
+### 12.1 Honest scope-narrowing (LARGEST split)
+
+The proposed §3 7-state `SessionState` automaton + shadow-buffer
+panic-unwind machinery is **deferred** to ADR-0056c.x or the M14.2
+roster. The wave-3 DEV ships only the **redefine transition** that
+§3 §"Lowering" row would have produced (atomic re-bind via
+`invalidate_def` + `merge_module`). Rationale: at M14.1 the REPL has
+no JIT call stack (the §4 "Residual hazard" call_stack detector is
+trivially satisfied at REPL turn boundaries because the REPL does
+not yet **execute** fn bodies — only type-checks signatures); the
+full 7-state machine has no observable consumer at the M14.1
+surface, so building it speculatively would have violated CLAUDE.md
+§8 "smallest correct increment".
+
+§5 multi-file invalidation surface — `def_to_file` +
+`file_to_defs` cross-maps + the `Session::invalidate(file: PathBuf)`
+PathBuf-keyed entry — was already shipped at wave-2 via the simpler
+`file_id: u32` keying (per ADR-0056b §11.4 + §"binding_defs map").
+Wave-3 EXTENDS that with the per-DefId form (`invalidate_def`).
+ADR-0057c can re-broaden later if PathBuf-keyed invalidation
+becomes load-bearing for goto-definition / rename.
+
+§6 `Session::snapshot_for_lsp(file) -> LspFileCtx` remains unshipped
+at wave-3 boundary per the existing §9 phase-ordering note (the
+`LspFileCtx` type lives in `crates/cobrust-lsp` and ships under
+ADR-0057a wave-2+). Phase J wave-1 (ADR-0057a) already consumes
+the wave-2 `Session::type_ctx()` + Arc-COW Clone, which was the
+real binding contract; the `snapshot_for_lsp` name is editorial
+sugar for future LSP roster ADRs.
+
+### 12.2 §4 cascade addendum — `RedefineOutcome` enum + inline path
+
+§4 sketches "rename to `<name>_v2` or restart REPL session" as the
+only diagnostic. The shipped surface goes further: `RedefineOutcome`
+classifies the redef as `{ Created, Identical, SignatureChanged }`
+with the old + new signature strings carried on the changed variant,
+and `evaluate_module` inlines the same flow for plain REPL fn-def
+re-entry (so the user just re-types `fn f(x): ...` and gets a
+structured one-line notice). Public surface:
+
+```rust
+// crates/cobrust-types/src/check.rs
+impl TypeCheckCtx {
+    pub fn invalidate_def(&mut self, def_id: u32);       // §4 atomic drop
+    pub fn binding_def_id(&self, name: &str) -> Option<u32>;
+}
+
+// crates/cobrust-cli/src/repl.rs
+pub enum RedefineOutcome {
+    Created { name: String },
+    Identical { name: String },
+    SignatureChanged { name: String, old: String, new: String },
+}
+impl RedefineOutcome { pub fn user_message(&self) -> String; }
+
+impl Session {
+    pub fn redefine_fn(&mut self, name: &str, source: &str)
+        -> Result<RedefineOutcome, String>;
+}
+```
+
+Failed-typecheck on the new body leaves the old binding intact
+(matches Python REPL ergonomics) — covered by
+`failed_typecheck_redef_preserves_old_binding` test.
+
+### 12.3 Wave-3 delivered surface
+
+| Layer | Symbol | File anchor |
+|---|---|---|
+| types | `TypeCheckCtx::invalidate_def` | `cobrust-types::check::TypeCheckCtx::invalidate_def` |
+| types | `TypeCheckCtx::binding_def_id` | `cobrust-types::check::TypeCheckCtx::binding_def_id` |
+| cli | `Session::redefine_fn` | `cobrust-cli::repl::Session::redefine_fn` |
+| cli | `RedefineOutcome` enum | `cobrust-cli::repl::RedefineOutcome` |
+| cli | inline fn-redef path | `cobrust-cli::repl::Session::evaluate_module` |
+
+Tests: `crates/cobrust-cli/tests/session_fn_redef.rs` (8 cases) —
+all green on DG (RTX 3090 workstation) and Mac.
+
+### 12.4 DG verify + regression snapshot
+
+- DG `cargo test --no-fail-fast -p cobrust-types -p cobrust-cli -p
+  cobrust-lsp -p cobrust-jit` on HEAD `3626021`:
+  - `session_fn_redef`: 8/8 PASS (new).
+  - `repl_smoke`: 22/22 PASS.
+  - `repl_session_corpus`: 3/3 PASS.
+  - `type_check_ctx_contract`: 16/16 PASS (0056b preserved).
+  - `snapshot_diagnostics` (LSP): 5/5 PASS (0057a preserved).
+  - `cobrust_lsp` lib: 11/11 PASS.
+  - Total failed tests on 0056c branch: 136.
+  - Total failed tests on main HEAD `e2d8ecb`: 136.
+  - **Net regression: 0** (identical pre-existing baseline).
+- POSTFLIGHT `/tmp/cobrust-*`: clean (POST_TMP=0).
+
+### 12.5 Phase I closure
+
+This ADR closes the Phase I sub-roster:
+
+- 0056a — JIT mode + 4-arm extern "C" (accepted).
+- 0056b — `Session` + Arc-COW `TypeCheckCtx` Clone+Send (accepted).
+- 0056c — fn-redefinition lifecycle + per-symbol invalidate
+  (accepted, this addendum).
+
+Phase J (ADR-0057a wave-1) merged at `e2d8ecb` consumes the wave-2
+contract; wave-3 is additive (no consumer-side break).
+
+— P10 CTO, 2026-05-19 (post-merge ratification)
