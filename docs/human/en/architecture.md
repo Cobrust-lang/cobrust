@@ -1656,7 +1656,24 @@ flowchart TD
 | `Rvalue::BinaryOp(Add, ...)` | `ins().iadd / fadd` |
 | `Rvalue::Aggregate / Ref / Cast` | M9 stub: zero-pointer placeholder |
 
-**LLVM `-O3` ≥ 30% smaller binary acceptance bar** (per ADR-0023 §"LLVM `-O3` ≥ 30% smaller binary"): measured on a fixed sample (`fib_50.cb`, `dotproduct_1k.cb`, `bubble_sort_256.cb`); Cranelift `-O0` baseline → LLVM `--release -O3` target should yield ≥ 30% size reduction. The LLVM backend at M9 ships as a feature-gated stub (`CodegenError::LlvmError`) until the inkwell wiring closes — that is M9.1 follow-up scope.
+**LLVM `-O3` ≥ 30% smaller binary acceptance bar** (per ADR-0023 §"LLVM `-O3` ≥ 30% smaller binary"): measured on a fixed sample (`fib_50.cb`, `dotproduct_1k.cb`, `bubble_sort_256.cb`); Cranelift `-O0` baseline → LLVM `--release -O3` target should yield ≥ 30% size reduction. The LLVM backend at M9 ships as a feature-gated stub (`CodegenError::LlvmError`); Phase K wave-1 (ADR-0058a) un-stubs the lowering core. Sub-ADR 0058b lands the `-O3` opt pipeline and closes this acceptance bar.
+
+#### Phase K wave-1 — LLVM IR core lowering (ADR-0058a)
+
+Phase K wave-1 (`crates/cobrust-codegen/src/llvm_backend.rs`, ~1100 LOC) replaces the M9 36-line stub with the **complete MIR → LLVM IR construction pass** via `inkwell 0.9 + llvm18-1`. Wave-1 acceptance is **functional parity** with Cranelift on the M9 "core 30" forms — not optimization parity.
+
+- **Two-pass declare/define** mirroring `CraneliftCtx`: `LlvmEmitter::declare_body` populates `function_ids` so the second-pass `define_body` resolves cross-body `Call(FnRef)`.
+- **Type table** (§4): `Ty::Bool→i1`, `Int→i64`, `Float/Imag→f64`, `None→i64` (matches Cranelift's `pointer_type` fallback), `Str/Bytes/List/Dict/Set/Tuple/Record/Adt→i8*` opaque pointer (LLVM 15+ default), `Ref(T)` transparent.
+- **Operand lowering** (§5): `Constant::Int/Float/Bool/None/Str-stub` directly to constant values; `Copy/Move` via `build_load` from per-local `alloca`; `Deref` projection chains.
+- **Terminator lowering** (§6): `Goto/Return/Unreachable/SwitchInt/Call/Drop/Assert`. `Drop` dispatches by `Ty` to `__cobrust_str_drop` / `__cobrust_list_drop_elems` (`List[Str]`) / `__cobrust_list_drop` (other `List`). `Call(FnRef)` for user fns; `Call(Str)` runtime-helper path is wave-2.
+- **BinOp + UnOp**: 21 binary variants (Add/Sub/Mul/Div/FloorDiv/Mod with ADR-0041 Python floor-mod, bitwise+logical, shifts, comparisons across signed-int + float). `Pow/MatMul/In/NotIn` surface `CodegenError::UnimplementedBinOp` (ADR-0041 §H3 honest drift).
+- **Calling-conv** (§7): inkwell's default `CallConv::C` — System V AMD64 (Linux x86_64) + AAPCS64 (macOS arm64). No custom convention at wave-1.
+- **Object emission**: `TargetMachine::write_to_file(FileType::Object)` then delegated to the shared `linker::link`.
+- **Dev-mode verifier**: `cfg!(debug_assertions)` runs `module.verify()` before object write; failures surface as `CodegenError::LlvmError`.
+
+Explicit non-goals (deferred per ADR-0058a §8): opt-pass pipeline (sub-ADR 0058b), DWARF debug-info (sub-ADR 0058c), multi-target cross-compile matrix (sub-ADR 0058b).
+
+DG-Workstation verify @ HEAD `4686192`: cargo test -p cobrust-codegen --features llvm = 355 tests PASS / 0 failed / 6 ignored (LLVM-conditional), TEST_EXIT=0. 5 wave-1 inline smoke + 350 baseline tests across aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora.
 
 **M9 test counts**: 158 tests across 5 suites:
 - `codegen_well_formed.rs` — 60 well-formed programs covering int / float / bool arithmetic, comparison, branching, looping, recursion, bit ops, logical ops.

@@ -1547,7 +1547,24 @@ flowchart TD
 | `Rvalue::BinaryOp(Add, ...)` | `ins().iadd / fadd` |
 | `Rvalue::Aggregate / Ref / Cast` | M9 stub：零指针占位 |
 
-**LLVM `-O3` ≥ 30% 二进制更小验收线**（按 ADR-0023 §"LLVM `-O3` ≥ 30% smaller binary"）：在固定样本（`fib_50.cb`、`dotproduct_1k.cb`、`bubble_sort_256.cb`）上测量；Cranelift `-O0` 基线 → LLVM `--release -O3` 目标应至少减少 30% 大小。M9 时 LLVM 后端以 feature-gated stub 形式发布（`CodegenError::LlvmError`），等 inkwell wiring 闭环后才完成——那是 M9.1 后续工作。
+**LLVM `-O3` ≥ 30% 二进制更小验收线**（按 ADR-0023 §"LLVM `-O3` ≥ 30% smaller binary"）：在固定样本（`fib_50.cb`、`dotproduct_1k.cb`、`bubble_sort_256.cb`）上测量；Cranelift `-O0` 基线 → LLVM `--release -O3` 目标应至少减少 30% 大小。M9 时 LLVM 后端以 feature-gated stub 形式发布（`CodegenError::LlvmError`）；Phase K wave-1（ADR-0058a）去除该 stub 并落地 lowering core。Sub-ADR 0058b 接续 `-O3` opt 流水线并关闭这条验收线。
+
+#### Phase K wave-1 —— LLVM IR core lowering（ADR-0058a）
+
+Phase K wave-1（`crates/cobrust-codegen/src/llvm_backend.rs`，~1100 LOC）以 `inkwell 0.9 + llvm18-1` 替换 M9 的 36 行 stub，实现**完整的 MIR → LLVM IR 构造 pass**。wave-1 的验收是与 Cranelift 在 M9 "核心 30 形式" 上的**功能性奇偶**（functional parity），不是优化奇偶。
+
+- **二阶段 declare/define** 镜像 `CraneliftCtx`：`LlvmEmitter::declare_body` 填充 `function_ids` 让第二阶段 `define_body` 解析跨 body `Call(FnRef)`。
+- **类型表**（§4）：`Ty::Bool→i1`、`Int→i64`、`Float/Imag→f64`、`None→i64`（与 Cranelift 的 `pointer_type` 回退一致）、`Str/Bytes/List/Dict/Set/Tuple/Record/Adt→i8*` 不透明指针（LLVM 15+ 默认）、`Ref(T)` 透明。
+- **Operand lowering**（§5）：`Constant::Int/Float/Bool/None/Str-stub` 直接产生常量值；`Copy/Move` 通过 `build_load` 从 per-local `alloca` 加载；支持 `Deref` projection 链。
+- **Terminator lowering**（§6）：`Goto/Return/Unreachable/SwitchInt/Call/Drop/Assert`。`Drop` 按 `Ty` 派发到 `__cobrust_str_drop` / `__cobrust_list_drop_elems`（`List[Str]`）/ `__cobrust_list_drop`（其他 `List`）。`Call(FnRef)` 用于用户函数；`Call(Str)` 运行时辅助路径属 wave-2。
+- **BinOp + UnOp**：21 个二元变体（Add/Sub/Mul/Div/FloorDiv/Mod，含 ADR-0041 Python floor-mod、位运算+逻辑、shift、比较，覆盖 signed-int + float）。`Pow/MatMul/In/NotIn` 浮起 `CodegenError::UnimplementedBinOp`（ADR-0041 §H3 诚实 drift）。
+- **调用约定**（§7）：inkwell 默认 `CallConv::C` —— System V AMD64（Linux x86_64）+ AAPCS64（macOS arm64）。wave-1 不引入定制 convention。
+- **对象发射**：`TargetMachine::write_to_file(FileType::Object)` 然后委派给共享 `linker::link`。
+- **Dev-mode verifier**：`cfg!(debug_assertions)` 在对象写入前运行 `module.verify()`；失败浮起为 `CodegenError::LlvmError`。
+
+明示非目标（按 ADR-0058a §8 延后）：opt-pass 流水线（sub-ADR 0058b）、DWARF 调试信息（sub-ADR 0058c）、多目标交叉编译矩阵（sub-ADR 0058b）。
+
+DG-Workstation 验证 @ HEAD `4686192`：cargo test -p cobrust-codegen --features llvm = 355 测试 PASS / 0 失败 / 6 ignored（LLVM-conditional），TEST_EXIT=0。5 个 wave-1 inline smoke + 350 baseline tests 覆盖 aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora。
 
 **M9 测试总数**：158 个测试，覆盖 5 个套件：
 - `codegen_well_formed.rs` —— 60 个良型程序，覆盖整数 / 浮点 / 布尔的算术、比较、分支、循环、递归、位运算、逻辑运算。
