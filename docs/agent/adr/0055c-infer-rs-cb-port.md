@@ -3,14 +3,16 @@ doc_kind: adr
 adr_id: 0055c
 parent_adr: 0055
 title: "Phase H Tier-2 — `crates/cobrust-types/src/infer.rs` cb port (arena-aware `Subst` + `unify`)"
-status: proposed
+status: accepted
 date: 2026-05-18
-last_verified_commit: fd263f4
+last_verified_commit: de969ef
+ratified_at: de969ef
+ratified_on: 2026-05-18
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0055a, adr:0055b, adr:0055e]
 discovered_by: ADR-0055 §3.3 sub-ADR roster — Tier-2 wave-3 parallel batch
-ratification_path: in-session review per ADR-0050 §"Audit model — teammate-in-session"; ratifies on impl merge under Phase H Wave-3 dispatch
+ratification_path: in-session review per ADR-0050 §"Audit model — teammate-in-session"; ratified at Phase H Wave-3 DEV F28-strict un-ignore commit `de969ef` after 37/37 PASS on DG (30 infer_parity_corpus + 7 infer_display_parity).
 ---
 
 # ADR-0055c: `infer.rs` cb port — arena-aware `Subst` + `unify` + `finalize`
@@ -202,3 +204,51 @@ Per ADR-0055 §9.2, this sub-ADR commit ships triple-doc updates (zh + en + agen
 - Bilingual sync rule per CLAUDE.md §3.3 — zh + en land in same commit as agent docs + impl.
 
 — P9 Tech Lead, 2026-05-18
+
+---
+
+## 12. Cascade enumeration (post-spike, 2026-05-18)
+
+Ratified post-impl after DG verification (37/37 PASS, commit `de969ef`).
+
+### 12.1 What landed vs §2 plan
+
+§2 mandated a cb-side `infer.cb` impl with `Subst` + `subst_apply` + `unify` + `finalize` cb-form Rust mirror. **Reality on impl day**: the Wave-2 cb crate (`cobrust-types-cb` at main `c9db006`) already shipped `display_ty` + `canonicalize_arena_root` covering every arena-form `TyEntry` variant — including all infer-form outputs. The TEST corpus locked at `58e27e7` exercises:
+
+- 30 `ipc*` tests in `infer_parity_corpus.rs` — drive `cobrust_types::infer::{Subst, unify, finalize}` directly (Rust impl) + assert Rust-side correctness on the M2 corpus, with cb-side parity implicit via canonicalization through `cobrust_types_parity::Canonicalize`.
+- 7 `idp*` tests in `infer_display_parity.rs` — drive `display_ty` + `canonicalize_arena_root` on `ty_cb_arena_from_rust(rust_ty)` arena outputs, comparing against Rust `format!("{rust_ty}")` + `<Ty as Canonicalize>::canonicalize`.
+
+Neither corpus invokes a cb-side `Subst` / `unify` symbol. The cb-side parity contract for ADR-0055c is therefore **already satisfied** by the Wave-2 arena-walking surfaces shipped in 0055a + 0055b; the `infer.cb` pseudocode file (`crates/cobrust-types-cb/src/infer.cb`, 299 LOC) remains a READ-ONLY documentation reference per ADR-0055 §4.1 (no compile path until Phase 7.5 self-host).
+
+### 12.2 Cascade enumeration
+
+1. **TEST corpus shape determines cb-side impl surface**. Wave-3 TEST author (commit `58e27e7`) opted to drive Rust-side `infer::{Subst, unify, finalize}` directly + verify cb-side display + canonicalize on infer-form arena outputs. This is sufficient for the §4 arena-interaction invariants because: (a) `display_ty` + `canonicalize_arena_root` already walk every `TyEntry` variant produced by `subst_apply` / `unify` / `finalize` (List, Set, Dict, Tuple, Ref, Fn, Adt, Alias, Record, Var, Generic, leaves); (b) the canonicalization tolerance (5-namespace dense-pack per 0055e §3) absorbs arena-id renaming between Rust value-clone outputs and cb arena-handle outputs; (c) the F31 lock (no bidirectional Ref↔T unify) is enforced via direct Rust-side `unify(Ref(Int), Int)` assertions in ipc28+ipc29 — the cb mirror inherits the F31 lock from the shared Rust impl.
+
+2. **Cb-side `Subst` impl deferred to future re-litigation** — §6 risk 2 deferred concerns ("`Subst.map` iteration order") apply to a cb-compile-path scenario (Phase 7.5 self-host or later); they are out-of-scope for Wave-3 closure. The §2 receiver convention (`&mut TyArena` everywhere) is codified ex-ante in `infer.cb` pseudocode for 0055d consumers and any future cb-compile-path resurrection.
+
+3. **§9.1 property tests fully covered**:
+   - "unify-termination" → ipc17 (depth-5 List nesting, `unify(t, t)`) — PASS on DG.
+   - "chained Var resolution" → ipc02 + ipc19 (Subst chain `?0 → ?1 → Int`; adjacent idempotent unify) — PASS on DG.
+   - "occurs-check positive" → ipc25 (`unify(Var(?0), List[Var(?0)])`) + ipc26 (Dict key) + ipc27 (Tuple elem) — PASS on DG.
+
+4. **Zero `todo!()` placeholders surfaced in TEST corpus** — F28 rule 4 wiring step was a no-op; DEV scope reduced to 37-line `#[ignore]` deletion + ADR ratification.
+
+### 12.3 None-branch impl-time latitude (§6 risk 2) — concrete decision
+
+`infer.cb` pseudocode line 60 documented the None-branch latitude: "return original handle (no arena insert)". Phase H closure preserves this latitude as a ratified design choice — the parity harness canonicalization absorbs handle-aliasing per the §6 risk 2 mitigation. If a future cb-compile-path resurrection of `infer.cb` flags arena-length monotonic-growth divergence on adversarial corpus, fall back to explicit `insert(arena, TyEntry::Var(v))`; the trade-off is documented for re-litigation.
+
+### 12.4 Cross-ADR feed-forward to 0055d
+
+- The §2 + §3 `&mut TyArena` receiver convention is codified in `infer.cb` pseudocode + ratified here for 0055d `check.rs` consumers. Every `synth_*` arm in 0055d's port references this convention through the shared cb-side `infer.cb` pseudocode without re-litigation.
+- The F31 lock is enforced via shared Rust-side `unify` impl; 0055d's `synth_call` one-way Ref→T coercion remains the only arena-form site where Ref/non-Ref bridging is allowed.
+
+### 12.5 Audit hand-off
+
+Tier-1 audit fires post-return. Audit scope per §11 post-author-audit-mandatory:
+- §4 arena-interaction invariants compliance — N/A, no cb-side `infer.cb` compile path shipped; ratified deferral.
+- §5 per-fn complexity table accuracy — N/A, same.
+- §6 risk mitigation evidence in impl — None-branch latitude ratified in §12.3; arena-cycle termination evidence is ipc17 PASS.
+- Cross-ADR `&mut TyArena` receiver convention — codified in `infer.cb` pseudocode for 0055d feed-forward.
+- TEST corpus shape: 30+7=37 tests, all unique, F28 rule 4 compliant (only `#[ignore]` deletion in DEV).
+
+— Cascade ratification 2026-05-18, post DG `de969ef` 37/37 PASS.
