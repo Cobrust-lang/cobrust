@@ -18,6 +18,7 @@ members = [
     "crates/cobrust-requests",
     "crates/cobrust-click",
     "crates/cobrust-types-parity",
+    "crates/cobrust-types-cb",
 ]
 
 [workspace.package]

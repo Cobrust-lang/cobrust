@@ -1,0 +1,157 @@
+-- ADR-0055a Phase H Wave-2 — cb mirror of cobrust_types::ty.rs
+-- READ-ONLY documentation reference; not compiled by cargo.
+-- DEV wires the cb compile path in a subsequent sprint per ADR-0055a §9.3.
+--
+-- Arena-form workaround per ADR-0055a §3:
+--   TyId   = i64  (arena handle; Cobrust M2 single-width int per ADR-0006)
+--   TyArena = vec[TyEntry]  (dense-pack; index = handle)
+--   Parallel arenas: FnTyArena (FnTyId), RecordArena (RecordId)
+
+-- -----------------------------------------------------------------------
+-- Handle types (ADR-0055a §2)
+-- -----------------------------------------------------------------------
+
+type TyId = i64
+type FnTyId = i64
+type RecordId = i64
+
+-- -----------------------------------------------------------------------
+-- TyEntry enum  (mirrors cobrust_types::Ty 1:1 per ADR-0055a §3)
+-- -----------------------------------------------------------------------
+
+enum TyEntry:
+    -- Copy-scalar leaves
+    Bool
+    Int
+    Float
+    Imag
+    Str
+    Bytes
+    None
+    Never
+
+    -- Composite: recursive children as arena handles
+    Tuple(list[TyId])          -- 1-tuple trailing comma: (T,)
+    List(TyId)
+    Set(TyId)
+    Dict(TyId, TyId)           -- (key_id, val_id)
+    Record(RecordId)           -- parallel RecordArena handle
+    Fn(FnTyId)                 -- parallel FnTyArena handle; named sep: a: T
+    Adt(TyId, list[TyId])      -- AdtId-as-i64 + arg handles
+    Alias(TyId, list[TyId])    -- AliasId-as-i64 + arg handles
+    Generic(TyId)              -- GenericVar-as-i64 display: T{n}
+    Var(TyId)                  -- VarId-as-i64   display: ?{n}
+    Ref(TyId)                  -- &T; not hashable (ADR-0052a Wave-1)
+
+-- -----------------------------------------------------------------------
+-- FnTyEntry  (parallel arena; FnTyId -> FnTyEntry)
+-- -----------------------------------------------------------------------
+
+struct FnTyEntry:
+    positional:     list[TyId]
+    named:          list[(str, TyId)]
+    var_positional: TyId?       -- *args
+    var_keyword:    TyId?       -- **kwargs
+    return_ty:      TyId
+
+fn fn_ty_arity(fn_arena: &FnTyArena, fn_id: FnTyId) -> i64:
+    let entry = fn_arena.lookup(fn_id)
+    return (entry.positional.len() + entry.named.len()) as i64
+
+-- -----------------------------------------------------------------------
+-- RecordEntry  (parallel arena; RecordId -> RecordEntry)
+-- -----------------------------------------------------------------------
+
+struct RecordEntry:
+    fields: list[(str, TyId)]   -- sorted by name (ADR-0006 canonicalization)
+
+fn record_from_pairs(arena: &mut RecordArena, pairs: list[(str, TyId)]) -> RecordId:
+    let sorted = pairs.sorted_by_key(fn(p) -> p.0)
+    return arena.insert(RecordEntry { fields: sorted })
+
+-- -----------------------------------------------------------------------
+-- TyArena  (list[TyEntry] + insert/lookup)
+-- -----------------------------------------------------------------------
+
+struct TyArena:
+    entries: list[TyEntry]
+
+fn arena_insert(arena: &mut TyArena, entry: TyEntry) -> TyId:
+    let id = arena.entries.len() as TyId
+    arena.entries.push(entry)
+    return id
+
+fn arena_lookup(arena: &TyArena, id: TyId) -> &TyEntry:
+    return &arena.entries[id as i64]
+
+-- -----------------------------------------------------------------------
+-- VarAllocator  (instance-field counter; ADR-0055a §2 + §6 risk 3)
+-- -----------------------------------------------------------------------
+
+struct VarAllocator:
+    next: i64
+
+fn var_alloc_fresh(alloc: &mut VarAllocator) -> i64:
+    let id = alloc.next
+    alloc.next = alloc.next + 1
+    return id
+
+-- -----------------------------------------------------------------------
+-- display_ty  (byte-identical to Rust `impl Display for Ty`)
+-- 5 special-case glyphs (ADR-0055a §4):
+--   (T,)         1-tuple trailing comma
+--   Adt#{id}     AdtId prefix
+--   Alias#{id}   AliasId prefix
+--   T{n}         Generic
+--   ?{n}         Var
+--   &{inner}     Ref
+-- -----------------------------------------------------------------------
+
+fn display_ty(arena: &TyArena, fn_arena: &FnTyArena, rec_arena: &RecordArena, id: TyId) -> str:
+    match arena_lookup(arena, id):
+        TyEntry::Bool  -> "bool"
+        TyEntry::Int   -> "i64"
+        TyEntry::Float -> "f64"
+        TyEntry::Imag  -> "imag"
+        TyEntry::Str   -> "str"
+        TyEntry::Bytes -> "bytes"
+        TyEntry::None  -> "None"
+        TyEntry::Never -> "Never"
+        TyEntry::Tuple(items) ->
+            let inner = items.map(fn(i) -> display_ty(arena, fn_arena, rec_arena, i)).join(", ")
+            if items.len() == 1:
+                "(" + inner + ",)"
+            else:
+                "(" + inner + ")"
+        TyEntry::List(t)    -> "List[" + display_ty(arena, fn_arena, rec_arena, t) + "]"
+        TyEntry::Set(t)     -> "Set["  + display_ty(arena, fn_arena, rec_arena, t) + "]"
+        TyEntry::Dict(k, v) ->
+            "Dict[" + display_ty(arena, fn_arena, rec_arena, k)
+            + ", " + display_ty(arena, fn_arena, rec_arena, v) + "]"
+        TyEntry::Record(rid) ->
+            let re = rec_arena.lookup(rid)
+            let pairs = re.fields.map(fn(p) -> p.0 + ": " + display_ty(arena, fn_arena, rec_arena, p.1))
+            "{" + pairs.join(", ") + "}"
+        TyEntry::Fn(fid) ->
+            let fe = fn_arena.lookup(fid)
+            let pos = fe.positional.map(fn(t) -> display_ty(arena, fn_arena, rec_arena, t))
+            let named = fe.named.map(fn(p) -> p.0 + ": " + display_ty(arena, fn_arena, rec_arena, p.1))
+            let params = pos + named
+            "(" + params.join(", ") + ") -> " + display_ty(arena, fn_arena, rec_arena, fe.return_ty)
+        TyEntry::Adt(aid, args) ->
+            let prefix = "Adt#" + aid.to_str()
+            if args.is_empty():
+                prefix
+            else:
+                let s = args.map(fn(t) -> display_ty(arena, fn_arena, rec_arena, t)).join(", ")
+                prefix + "[" + s + "]"
+        TyEntry::Alias(lid, args) ->
+            let prefix = "Alias#" + lid.to_str()
+            if args.is_empty():
+                prefix
+            else:
+                let s = args.map(fn(t) -> display_ty(arena, fn_arena, rec_arena, t)).join(", ")
+                prefix + "[" + s + "]"
+        TyEntry::Generic(gid) -> "T" + gid.to_str()
+        TyEntry::Var(vid)     -> "?" + vid.to_str()
+        TyEntry::Ref(inner)   -> "&" + display_ty(arena, fn_arena, rec_arena, inner)
