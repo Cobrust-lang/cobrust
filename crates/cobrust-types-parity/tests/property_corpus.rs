@@ -34,7 +34,6 @@ use cobrust_types_parity::{
 
 /// P1-01: `parity_check(Int, Int)` → `Ok(())`
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p1_01_int_vs_int_ok() {
     let ty = Ty::Int;
     let mut arena = TyArena::new();
@@ -46,7 +45,6 @@ fn p1_01_int_vs_int_ok() {
 
 /// P1-02: `parity_check(Bool, Bool)` → `Ok(())`
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p1_02_bool_vs_bool_ok() {
     let ty = Ty::Bool;
     let mut arena = TyArena::new();
@@ -58,7 +56,6 @@ fn p1_02_bool_vs_bool_ok() {
 
 /// P1-03: `parity_check(List[Str], List[Str])` → `Ok(())`
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p1_03_list_str_vs_list_str_ok() {
     let ty = Ty::List(Box::new(Ty::Str));
     let mut arena = TyArena::new();
@@ -70,7 +67,6 @@ fn p1_03_list_str_vs_list_str_ok() {
 
 /// P1-04: `parity_check(Dict[Int, Bool], Dict[Int, Bool])` → `Ok(())`
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p1_04_dict_int_bool_vs_same_ok() {
     let ty = Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Bool));
     let mut arena = TyArena::new();
@@ -82,7 +78,6 @@ fn p1_04_dict_int_bool_vs_same_ok() {
 
 /// P1-05: `parity_check(Tuple([Int, Str, Float]), same)` → `Ok(())`
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p1_05_tuple_int_str_float_vs_same_ok() {
     let ty = Ty::Tuple(vec![Ty::Int, Ty::Str, Ty::Float]);
     let mut arena = TyArena::new();
@@ -94,7 +89,6 @@ fn p1_05_tuple_int_str_float_vs_same_ok() {
 
 /// P1-06: `parity_check(Ref(Int), Ref(Int))` → `Ok(())` — ADR-0052a borrow type
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p1_06_ref_int_vs_ref_int_ok() {
     let ty = Ty::Ref(Box::new(Ty::Int));
     let mut arena = TyArena::new();
@@ -107,7 +101,6 @@ fn p1_06_ref_int_vs_ref_int_ok() {
 /// P1-07: nested List[List[Dict[Str,Int]]] vs same → `Ok(())`
 /// Exercises deep nesting — canonical traversal must recurse.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p1_07_deeply_nested_ok() {
     let inner = Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Int));
     let mid = Ty::List(Box::new(inner));
@@ -127,7 +120,6 @@ fn p1_07_deeply_nested_ok() {
 /// P2-01: `parity_check(Int, Str)` → `Err(CanonicalPayloadMismatch)`
 /// Most fundamental divergence — scalar variant mismatch.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_01_int_vs_str_catches_mismatch() {
     let rust_ty = Ty::Int;
     let cb_ty = Ty::Str;
@@ -142,7 +134,6 @@ fn p2_01_int_vs_str_catches_mismatch() {
 /// P2-02: `parity_check(List[Int], List[Str])` → `Err(CanonicalPayloadMismatch)`
 /// Child-level divergence inside a container.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_02_list_int_vs_list_str_catches_mismatch() {
     let rust_ty = Ty::List(Box::new(Ty::Int));
     let cb_ty = Ty::List(Box::new(Ty::Str));
@@ -157,7 +148,6 @@ fn p2_02_list_int_vs_list_str_catches_mismatch() {
 /// P2-03: `parity_check(Tuple([Int, Str]), Tuple([Str, Int]))` — order matters
 /// Canonicalization must preserve child ordering; reversed tuple != original.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_03_tuple_order_mismatch_caught() {
     let rust_ty = Ty::Tuple(vec![Ty::Int, Ty::Str]);
     let cb_ty = Ty::Tuple(vec![Ty::Str, Ty::Int]);
@@ -172,7 +162,6 @@ fn p2_03_tuple_order_mismatch_caught() {
 /// P2-04: `parity_check(Dict[Int, Str], Dict[Str, Int])` — key/val swap
 /// Inverted Dict[K,V] vs Dict[V,K] is a real divergence.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_04_dict_key_val_swap_caught() {
     let rust_ty = Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Str));
     let cb_ty = Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Int));
@@ -187,7 +176,6 @@ fn p2_04_dict_key_val_swap_caught() {
 /// P2-05: `parity_check(Set[Int], List[Int])` — container-kind swap
 /// `Set` vs `List` with same inner type must be caught.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_05_set_vs_list_kind_mismatch() {
     let rust_ty = Ty::Set(Box::new(Ty::Int));
     let cb_ty = Ty::List(Box::new(Ty::Int));
@@ -205,7 +193,6 @@ fn p2_05_set_vs_list_kind_mismatch() {
 /// This is the core arena-id renaming tolerance test — only works once
 /// DEV implements the dense-pack renaming.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_06_var_id_renaming_tolerance() {
     // Both are stand-alone Var types; same structure, different raw ids.
     // Post the rename, both should be Var(0) canonically → parity_check Ok.
@@ -224,7 +211,6 @@ fn p2_06_var_id_renaming_tolerance() {
 /// `Adt(AdtId(1), [Int])` vs `Adt(AdtId(5), [Int])` → same canonical key
 /// because both are "first-encountered Adt with arg Int".
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_07_adt_id_renaming_tolerance() {
     let rust_ty = Ty::Adt(AdtId(1), vec![Ty::Int]);
     let cb_ty = Ty::Adt(AdtId(5), vec![Ty::Int]);
@@ -240,7 +226,6 @@ fn p2_07_adt_id_renaming_tolerance() {
 /// `Adt(AdtId(1), [Int])` vs `Adt(AdtId(1), [Str])` — same raw id, different args
 /// → must still be caught (canonical key differs by child).
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_08_adt_same_id_different_args_caught() {
     let rust_ty = Ty::Adt(AdtId(1), vec![Ty::Int]);
     let cb_ty = Ty::Adt(AdtId(1), vec![Ty::Str]);
@@ -255,7 +240,6 @@ fn p2_08_adt_same_id_different_args_caught() {
 /// P2-09: AliasId renaming tolerance
 /// `Alias(AliasId(2), [Bool])` vs `Alias(AliasId(9), [Bool])` → Ok after renaming.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_09_alias_id_renaming_tolerance() {
     let rust_ty = Ty::Alias(AliasId(2), vec![Ty::Bool]);
     let cb_ty = Ty::Alias(AliasId(9), vec![Ty::Bool]);
@@ -270,7 +254,6 @@ fn p2_09_alias_id_renaming_tolerance() {
 /// P2-10: GenericVar renaming tolerance
 /// `Generic(GenericVar(0))` vs `Generic(GenericVar(4))` → Ok after renaming.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_10_generic_var_renaming_tolerance() {
     let rust_ty = Ty::Generic(GenericVar(0));
     let cb_ty = Ty::Generic(GenericVar(4));
@@ -285,7 +268,6 @@ fn p2_10_generic_var_renaming_tolerance() {
 /// P2-11: Record field name divergence is caught
 /// Two Records with different field names but same value types → caught.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_11_record_field_name_divergence_caught() {
     let rust_ty = Ty::Record(Record::from_pairs(vec![("x".to_string(), Ty::Int)]));
     let cb_ty = Ty::Record(Record::from_pairs(vec![("y".to_string(), Ty::Int)]));
@@ -300,7 +282,6 @@ fn p2_11_record_field_name_divergence_caught() {
 /// P2-12: Fn return type divergence is caught
 /// Two `FnTy` with same params but different return type → caught.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_12_fn_return_type_divergence_caught() {
     let rust_ty = Ty::Fn(FnTy {
         positional: vec![Ty::Int],
@@ -327,7 +308,6 @@ fn p2_12_fn_return_type_divergence_caught() {
 /// P2-13: `ParityError::AcceptReject` variant is constructible and carries correct fields
 /// Validates that the contract type is well-formed for accept/reject cases.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_13_accept_reject_error_well_formed() {
     let err = ParityError::AcceptReject {
         rust_accepted: true,
@@ -340,7 +320,6 @@ fn p2_13_accept_reject_error_well_formed() {
 
 /// P2-14: `ParityError::VariantMismatch` variant is constructible
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_14_variant_mismatch_error_well_formed() {
     let err = ParityError::VariantMismatch {
         rust_variant: "ImplicitTruthiness".to_string(),
@@ -359,7 +338,6 @@ fn p2_14_variant_mismatch_error_well_formed() {
 
 /// P2-15: `ParityError::SuggestionMismatch` variant is constructible
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn p2_15_suggestion_mismatch_error_well_formed() {
     let err = ParityError::SuggestionMismatch {
         variant: "ImplicitTruthiness".to_string(),
