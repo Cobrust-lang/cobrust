@@ -184,6 +184,100 @@ impl Session {
         self.type_ctx.invalidate(file_id);
     }
 
+    /// Redefine a single user-defined function in this REPL session
+    /// per ADR-0056c §4 (fn-redefinition lifecycle).
+    ///
+    /// `source` is the literal Cobrust source of one `fn name(...): ...`
+    /// statement (the form a REPL user typed at the `>>>` prompt). The
+    /// path is:
+    ///
+    /// 1. Parse `source` as a top-level module; require a single
+    ///    `fn` item whose name equals `name`.
+    /// 2. If `name` already binds in `type_ctx` (previous definition
+    ///    present): capture the old fn signature, call
+    ///    [`TypeCheckCtx::invalidate_def`] on the old DefId so the row
+    ///    is dropped atomically before the new one lands.
+    /// 3. Run [`check_incremental`] against `type_ctx`; on success
+    ///    `merge_module` inserts the fresh `(name, FnTy)` row.
+    /// 4. Compare old vs new arity / return type; classify the redef
+    ///    as [`RedefineOutcome::Identical`] / `SignatureChanged` /
+    ///    `Created` and return.
+    ///
+    /// In-flight recursive redefinition (per ADR-0056c §4 "Residual
+    /// hazard") is not detectable at the M14.1 surface because the
+    /// REPL has no JIT call stack — the `call_stack` field is reserved
+    /// for the M14.2 widening. Callers that DO have an active call
+    /// stack (future JIT mode) should consult [`Self::is_invoking`]
+    /// before calling this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying parse / lower / type error string. The
+    /// type-ctx is left **unchanged** when the new source fails to
+    /// type-check (old binding still active — matches Python REPL).
+    #[allow(dead_code)] // Public surface; REPL UX path inlines into evaluate_module;
+                        // tests + future LSP / programmatic consumers call this.
+    pub fn redefine_fn(&mut self, name: &str, source: &str) -> Result<RedefineOutcome, String> {
+        // Parse the source as a top-level module.
+        let ast = parse_str(source, FileId::SYNTHETIC)
+            .map_err(|e| format!("parse error: {e}"))?;
+        // Confirm a single fn-def whose name matches.
+        let fn_count = ast
+            .items
+            .iter()
+            .filter(|s| matches!(&s.kind, ast::StmtKind::Fn(_)))
+            .count();
+        if fn_count == 0 {
+            return Err(format!("source does not define a function named `{name}`"));
+        }
+        if fn_count > 1 {
+            return Err(format!(
+                "redefine_fn expects exactly one top-level fn; got {fn_count}"
+            ));
+        }
+        let matched_name = ast
+            .items
+            .iter()
+            .find_map(|s| {
+                if let ast::StmtKind::Fn(fd) = &s.kind {
+                    Some(fd.name.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("checked fn_count == 1 above");
+        if matched_name != name {
+            return Err(format!(
+                "redefine_fn: source defines `{matched_name}`, but caller asked for `{name}`"
+            ));
+        }
+
+        // Capture old signature (if any) BEFORE invalidating.
+        let old_sig = self.type_ctx.lookup(name).cloned();
+        let old_def_id = self.type_ctx.binding_def_id(name);
+
+        // Lower + type-check the new fn against a clean HirSession
+        // (REPL turn boundaries restart HIR DefId allocation; the
+        // type_ctx remembers across turns via its own DefId map).
+        let mut sess = HirSession::new();
+        let hir = hir_lower(&ast, &mut sess)
+            .map_err(|e| format!("HIR lower error: {e:?}"))?;
+        // Type-check WITHOUT mutating ctx yet — first validate.
+        let typed = type_check(&hir)
+            .map_err(|e| format!("type error: {e:?}"))?;
+
+        // New ctx valid → drop the old binding atomically.
+        if let Some(d) = old_def_id {
+            self.type_ctx.invalidate_def(d);
+        }
+        // Now merge — the new row lands cleanly.
+        self.type_ctx.merge_module(&typed, FileId::SYNTHETIC.0);
+
+        let new_sig = self.type_ctx.lookup(name).cloned();
+        let outcome = classify_redefine_outcome(name, old_sig.as_ref(), new_sig.as_ref());
+        Ok(outcome)
+    }
+
     /// Drive one logical input (which may include embedded newlines for
     /// multi-line statements). Per ADR-0029 §"Multi-line input contract":
     /// the caller (the rustyline loop) accumulates lines into `input`
@@ -374,9 +468,34 @@ impl Session {
         // surfaces top-level `let` patterns as `LetBody` rows; the
         // wrap_for_typecheck_stmts variant exposes them at module top
         // so `check_incremental` records them under FileId::REPL.
+        //
+        // ADR-0056c §4 fn-redefinition extension: scan for top-level
+        // fn-defs whose name already binds in type_ctx; collect old
+        // signatures + DefIds. After successful re-check we surface
+        // a per-fn redefine notice.
+        let mut redefine_outcomes: Vec<RedefineOutcome> = Vec::new();
         if !raw_input.trim().is_empty() {
             let wrap = wrap_for_typecheck_stmts(raw_input);
             if let Ok(ast) = parse_str(&wrap, FileId::SYNTHETIC) {
+                // Pre-scan: for each top-level fn-def, capture
+                // pre-redef signature + DefId from type_ctx (if any).
+                let mut prior_fn_state: Vec<(String, Option<Ty>, Option<u32>)> = Vec::new();
+                for item in &ast.items {
+                    if let ast::StmtKind::Fn(fd) = &item.kind {
+                        let old_sig = self.type_ctx.lookup(&fd.name).cloned();
+                        let old_def_id = self.type_ctx.binding_def_id(&fd.name);
+                        prior_fn_state.push((fd.name.clone(), old_sig, old_def_id));
+                    }
+                }
+                // Atomic invalidation: drop every pre-existing fn
+                // binding's old DefId before the new merge lands.
+                // Skips the (None, None) case — no prior binding to
+                // invalidate.
+                for (_, _, old_def_id) in &prior_fn_state {
+                    if let Some(d) = old_def_id {
+                        self.type_ctx.invalidate_def(*d);
+                    }
+                }
                 let mut sess = HirSession::new();
                 if let Ok(hir) = hir_lower(&ast, &mut sess) {
                     let _ = check_incremental(
@@ -388,6 +507,22 @@ impl Session {
                     // proceeds with the (possibly stale) value loop;
                     // diagnostics belong to `:type` / future LSP wire.
                 }
+                // Post-merge: classify per-fn outcome (Created /
+                // Identical / SignatureChanged).
+                for (name, old_sig, _) in prior_fn_state {
+                    let new_sig = self.type_ctx.lookup(&name).cloned();
+                    let outcome = classify_redefine_outcome(
+                        &name,
+                        old_sig.as_ref(),
+                        new_sig.as_ref(),
+                    );
+                    // Only surface a notice when there WAS a prior
+                    // binding — `Created` on first-def stays silent
+                    // (matches Python REPL ergonomics).
+                    if !matches!(outcome, RedefineOutcome::Created { .. }) {
+                        redefine_outcomes.push(outcome);
+                    }
+                }
             }
         }
 
@@ -397,12 +532,27 @@ impl Session {
                 Ok(Some(s)) => output.push(s),
                 Ok(None) => {}
                 Err(msg) => {
+                    // ADR-0056c: fn-defs surface from eval_stmt as
+                    // "statement form not supported" because M14.1
+                    // doesn't execute fn-bodies. Suppress that error
+                    // — the type-ctx merge path (above) already
+                    // recorded the signature for `:type f` / Phase J
+                    // LSP consumption. If this was a redefinition,
+                    // the per-fn notice is in `redefine_outcomes`;
+                    // otherwise this is a silent first-def.
+                    if matches!(&stmt.kind, ast::StmtKind::Fn(_)) {
+                        continue;
+                    }
                     return StepResult::Error(format!(
                         "eval error in `{}`: {msg}",
                         raw_input.trim_end()
                     ));
                 }
             }
+        }
+        // Prepend any redefine notices to the output.
+        for o in &redefine_outcomes {
+            output.insert(0, o.user_message());
         }
         StepResult::Done(output.join("\n"))
     }
@@ -488,6 +638,71 @@ pub enum StepResult {
     Quit,
     /// Diagnostic — emit to stderr and return to the primary prompt.
     Error(String),
+}
+
+/// Result of a [`Session::redefine_fn`] call per ADR-0056c §4.
+///
+/// The REPL UX prints a one-line summary (`redefined `f``, plus an
+/// optional `(signature changed: …)` annotation) keyed off this enum.
+/// LSP / future tooling can pattern-match the variants for richer
+/// diagnostics (e.g. CodeLens `view old signature` button).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RedefineOutcome {
+    /// No prior binding — this is a fresh fn-def, not a redefinition.
+    Created { name: String },
+    /// Prior binding existed; new signature is type-identical to old.
+    /// REPL UX: `redefined `f``.
+    Identical { name: String },
+    /// Prior binding existed; new signature differs (arity / param
+    /// types / return type). REPL UX: `redefined `f` (signature
+    /// changed: …)`.
+    SignatureChanged {
+        name: String,
+        old: String,
+        new: String,
+    },
+}
+
+impl RedefineOutcome {
+    /// User-facing one-line summary printed by the REPL after a
+    /// successful `Session::redefine_fn` call.
+    #[must_use]
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::Created { name } => format!("defined `{name}`"),
+            Self::Identical { name } => format!("redefined `{name}`"),
+            Self::SignatureChanged { name, old, new } => {
+                format!("redefined `{name}` (signature changed: {old} -> {new})")
+            }
+        }
+    }
+}
+
+/// Classify a redefinition outcome by comparing pre- and post-`merge_module`
+/// type signatures. Internal helper for [`Session::redefine_fn`].
+fn classify_redefine_outcome(
+    name: &str,
+    old: Option<&Ty>,
+    new: Option<&Ty>,
+) -> RedefineOutcome {
+    match (old, new) {
+        (None, _) => RedefineOutcome::Created {
+            name: name.to_string(),
+        },
+        (Some(o), Some(n)) if o == n => RedefineOutcome::Identical {
+            name: name.to_string(),
+        },
+        (Some(o), Some(n)) => RedefineOutcome::SignatureChanged {
+            name: name.to_string(),
+            old: format!("{o}"),
+            new: format!("{n}"),
+        },
+        (Some(o), None) => RedefineOutcome::SignatureChanged {
+            name: name.to_string(),
+            old: format!("{o}"),
+            new: "<unbound>".to_string(),
+        },
+    }
 }
 
 // =====================================================================
