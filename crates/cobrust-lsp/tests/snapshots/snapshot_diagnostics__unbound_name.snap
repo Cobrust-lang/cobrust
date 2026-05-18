@@ -1,0 +1,42 @@
+---
+source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
+assertion_line: 59
+expression: diags
+snapshot_kind: text
+---
+[
+  {
+    "range": {
+      "start": {
+        "line": 0,
+        "character": 0
+      },
+      "end": {
+        "line": 0,
+        "character": 1
+      }
+    },
+    "severity": 1,
+    "code": "unknown-name",
+    "source": "cobrust",
+    "message": "unknown name `y` at file#0@0..1",
+    "relatedInformation": [
+      {
+        "location": {
+          "uri": "cobrust://synthetic",
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 1
+            }
+          }
+        },
+        "message": "did you forget to bind `y` with `let`?"
+      }
+    ]
+  }
+]
