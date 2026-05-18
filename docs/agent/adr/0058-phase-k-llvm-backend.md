@@ -82,7 +82,9 @@ The default-resolution logic in `crates/cobrust-codegen/src/target.rs` `Backend:
 
 Bind `inkwell` (safe-Rust LLVM wrapper) at LLVM 18 if the target build host has LLVM 18 available, otherwise LLVM 17. Concretely:
 
-- **Crate**: `inkwell = { version = "0.5", optional = true, features = ["llvm18-1"] }`. ADR-0023 §"Backend feature flag layout" lists `inkwell = "0.9"` as a forward-compat placeholder; current stable inkwell as of `1fbed82` is `0.5.x` series targeting LLVM 15–18. Phase K dispatch verifies the lockfile-pinned version at sub-ADR 0058a entry.
+- **Crate**: `inkwell = { version = "0.9", optional = true, features = ["llvm18-1"] }`. ADR-0023 §"Backend feature flag layout" already pins `inkwell = "0.9"` — the latest stable as of `1fbed82`. Phase K keeps this version and **adds** `features = ["llvm18-1"]` to activate LLVM 18; `llvm17-0` accepted as fallback. Phase K dispatch verifies the lockfile-pinned version at sub-ADR 0058a entry.
+
+  > **Correction 2026-05-18 per audit `a8155e81cb212aaca` F1**: ADR-0023 comment treated `inkwell = "0.9"` as forward-compat placeholder; this was empirically incorrect (0.9 is latest stable on crates.io). The `llvm18-1` feature only exists on inkwell ≥ 0.6, making a downgrade to 0.5 immediately fatal to `cargo build`. Phase K keeps 0.9 + enables `llvm18-1` feature.
 - **LLVM version**: 18.x preferred, 17.x acceptable fallback. CI matrix expands to verify both.
 - **Pin via `Cargo.lock`**: the exact `inkwell` revision + LLVM features array land in `Cargo.lock`; sub-ADR 0058a captures the pin commit.
 - **System LLVM**: macOS via `brew install llvm@18`; Linux via apt `llvm-18-dev` / `libpolly-18-dev`. Documented in `docs/human/{zh,en}/install.md` Phase K addition.
