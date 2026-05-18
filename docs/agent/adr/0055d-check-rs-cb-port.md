@@ -3,9 +3,10 @@ doc_kind: adr
 adr_id: 0055d
 parent_adr: 0055
 title: "Phase H Tier-2 — `crates/cobrust-types/src/check.rs` cb port (bidirectional checker under arena form; LARGEST Phase H sub-sprint)"
-status: proposed
+status: accepted
 date: 2026-05-18
-last_verified_commit: 9bb3dbc
+last_verified_commit: 7100849
+ratified_at: 7100849
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0055a, adr:0055b, adr:0055c, adr:0055e]
@@ -288,3 +289,51 @@ Audit confirmed: `Lit` arm corpus tests are PASS-only. There is no FAIL path for
 ### 12.5 No test-corpus changes
 
 The `check_parity_corpus.rs` and `check_display_parity.rs` files are correct at `9bb3dbc`. This amendment updates the ADR record only; no re-dispatch or re-verification is required.
+
+## 13. Cascade enumeration (post-spike, DEV `7100849` 2026-05-18)
+
+### 13.1 What landed
+
+Phase H Wave-3 LARGEST DEV completed:
+
+- **`src/check.cb`** expanded from 98-line doc-ref to ~830-line cb-syntax pseudo-code covering:
+  - `Ctx` lifecycle (7 fields per §5.3) + 4 lifecycle helpers (`ctx_new`, `fresh_var`, `record_def`, `lookup_def`).
+  - `check()` top-level entry + `check_module` + `prebind_items` + `prebind_item` + `fn_signature_type`.
+  - `check_item` 6-arm dispatch (Fn / Class / TypeAlias / Let / Const / etc.).
+  - `check_fn` (with return-stack push/pop lifecycle invariant per §5.3) + `check_class`.
+  - `check_block` + `check_stmt` 12-arm dispatch + `check_loop` + `iter_element` + `check_match` + `is_exhaustive` + `uncovered_set` + `block_outcome_join`.
+  - **`synth_expr` 19-arm match** (the GIANT per §5.1) — every arm documented with PASS + FAIL emission paths.
+  - `synth_call` (~143 LOC equivalent) + `unify_call_arg` ADR-0052a Wave-1 one-way `Ref(T) → T` coercion.
+  - **5 method tables** in preserved dispatch order Dict → Str → List → Float → Int per §5.2: `try_synth_dict_method` (5 arms), `try_synth_str_method` (~12 arms), `try_synth_list_method` (8 arms), `try_synth_float_method` (4 arms), `try_synth_int_method` (5 arms), `try_synth_method_call` chain with `UnknownMethod` fallthrough.
+  - `synth_bin` / `synth_un` / `synth_comp` / `expect_bool` / `bind_pattern`.
+  - Type-lowering subsystem per §5.4: `lower_type` + `lower_named_type` + `lower_generic_type` + `lookup_resolved` + `instantiate_list_polymorphic` + `lit_type` + `lower_default_type` + `validate_hashable_dict`.
+  - 10 free helpers (no arena threading) per §5: `is_copy_primitive`, `lit_to_string`, `resolve_tuple_index`, `literal_int_value`, `is_list_polymorphic_intrinsic_name`, 4 suggestion lookup tables.
+- **Test un-ignore** — 62 parity + 18 display = **80 tests** un-ignored. All PASS on Mac (single-crate cargo check) AND on DG (workstation cross-arch verification, PRE=0 / POST=0 / TEST_EXIT=0). DG host per §9 row 6.
+
+### 13.2 Cascade — no spillover
+
+The Tier-2 LARGEST sprint completes WITHOUT cascading drift into adjacent Phase H surfaces:
+
+- **No 0055a / 0055b / 0055e amendments required**. The expanded `check.cb` consumes Tier-1 (`TyArena`, `TyEntry`, `TypeError`) + 0055c (`Subst`, `unify`, `finalize`) verbatim per §3 cb-surface-consumption table. No `lib.cb` re-export adjustments needed.
+- **0055c independence**. The cb-side `Subst` / `unify` / `finalize` surfaces are stable as doc-ref in `infer.cb`; 0055d's `check.cb` re-references them by name only (no cross-file modification).
+- **No new BLOCK rules**. 0055e §6 5-rule diff catches every parity divergence path. Phase 2 sanity baseline (`2244ae3`) + 0055d 80/80 PASS confirms 0055e's per-input granularity handles the LARGEST sub-sprint surface without harness extension.
+- **Arm-coverage matches §5.1 + §12 amendment**. 19 synth_expr arms × per-arm PASS + FAIL = ~30 arm tests + 5 method-table tests + 3 Ctx lifecycle tests + 24 cross-cutting check_stmt/check_match/expect_bool/lower_default_type/OccursCheck/RowConflict/DuplicateField/Multiple/property tests = 62 parity tests. 18 display tests cover the 18 most-frequent check-site Display surfaces. Sum 80; matches §12 audit-corrected count.
+
+### 13.3 §2.5 §B compliance summary
+
+Per CLAUDE.md §2.5 LLM-first design principle constitutional north star:
+
+- **Compile-time-catch**: every `synth_expr` arm encodes one or more `TypeError::*` construction site; the cb mirror preserves arm-order verbatim per §6 risk 1 mitigation. F31 LOCK at `synth_call::unify_call_arg` keeps `Ref(T) → T` coercion as a compile-error-surfacing boundary; cross-arm `Ref(a) ≡ T` unify remains banned (delegated only to call-arg site per ADR-0052a Wave-1).
+- **Training-data-overlap**: every method-table dispatch matches Python's training-data shape — `dict.keys()` / `dict.values()` / `dict.items()` / `str.split(...)` / `list.append(...)` etc. all preserved exactly per §5.2 cross-cutting mitigation. Method-call sugar from ADR-0050e Phase G makes `s.split(",")` read as cb method-form; the `try_synth_str_method` table makes the dispatch the canonical surface for Python→Cobrust translation.
+
+### 13.4 Phase H Wave-3 closure status
+
+With 0055d DEV merged, Phase H Wave-3 is **complete**:
+
+- 0055a (Tier-1 ty.rs) — merged `87f6285`.
+- 0055b (Tier-1 error.rs+lib.rs) — merged `84e1286`.
+- 0055c (Tier-2 infer.rs) — TEST merged `58e27e7`; DEV on feature branch (separate sprint).
+- 0055d (Tier-2 LARGEST check.rs) — DEV merged at this commit.
+- 0055e (Wave-1 parity harness) — merged `ec31720`.
+
+The largest single sub-sprint in Phase H closes per ADR-0055 §3.5 Wave-3 budget. 6-sub-ADR roster precedent (§10.1 positive consequence) is operationally confirmed for future milestone-layer batches.
