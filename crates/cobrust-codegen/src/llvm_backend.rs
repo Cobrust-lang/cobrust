@@ -893,7 +893,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         b: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         let is_float = a.is_float_value();
-        let builder = self.emitter.builder;
+        let builder = &self.emitter.builder;
         let val: BasicValueEnum<'ctx> = match (op, is_float) {
             (BinOp::Add, false) => builder
                 .build_int_add(a.into_int_value(), b.into_int_value(), "add")
@@ -1152,7 +1152,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         a: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         let is_float = a.is_float_value();
-        let builder = self.emitter.builder;
+        let builder = &self.emitter.builder;
         let val: BasicValueEnum<'ctx> = match (op, is_float) {
             (UnOp::Plus, _) => a,
             (UnOp::Neg, false) => builder
@@ -1191,7 +1191,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         _target_ty: &Ty,
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         let v = self.lower_operand(op)?;
-        let builder = self.emitter.builder;
+        let builder = &self.emitter.builder;
         let ctx = self.emitter.ctx;
         let val: BasicValueEnum<'ctx> = match kind {
             CastKind::IntToFloat => builder
