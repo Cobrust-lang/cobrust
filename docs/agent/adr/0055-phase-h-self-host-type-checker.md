@@ -29,7 +29,7 @@ Phase H is **§2.5-ranked second among Phase H/I/J/K/L** per ADR-0054 §2 rerank
 
 `docs/agent/dispatches/2026-05-18-phase-h-self-host-scoping.md` (P9 scoping spike authored 2026-05-18) supplies the empirical anchors this frame ratifies:
 
-- **File count + LOC**: `wc -l crates/cobrust-types/src/*.rs` at HEAD `8b4366c` = **5 files / 3320 LOC** (ty.rs 407 + check.rs 2354 + error.rs 239 + infer.rs 259 + lib.rs 61) — **NOT** the 12 files / 5500 LOC ADR-0054 §3.1 estimated. Estimate-vs-actual delta tightens Phase H wall-time by ~30% (~2.5 weeks vs ADR-0054 §3.2's 3-week budget; ~0.5 week buffer).
+- **File count + LOC**: `wc -l crates/cobrust-types/src/*.rs` at HEAD `8b4366c` = **5 files / 3368 LOC** (ty.rs 407 + check.rs 2402 + error.rs 239 + infer.rs 259 + lib.rs 61) — **NOT** the 12 files / 5500 LOC ADR-0054 §3.1 estimated. Estimate-vs-actual delta tightens Phase H wall-time by ~30% (~2.5 weeks vs ADR-0054 §3.2's 3-week budget; ~0.5 week buffer).
 - **Tier-3 files mentioned in earlier scoping prompts (`validate.rs`, `normalize.rs`) do not exist** at HEAD `8b4366c`. Phase H scope is the full mirror of the 5 listed files.
 - **Recursive struct types (`Ty::List(Box<Ty>)`, `Ty::Tuple(Vec<Ty>)`, `Ty::Dict(Box<Ty>, Box<Ty>)`)** are the load-bearing language-feature gap. Spike §4 surfaced three options (A: ship Phase 7.5 first; B: arena workaround; C: hybrid). Spike recommended B; this ADR ratifies B per §5.
 
@@ -124,8 +124,8 @@ Empirical LOC anchors at HEAD `8b4366c` per `wc -l crates/cobrust-types/src/*.rs
 | `ty.rs` | 407 | Tier-1 | 0055a | `Ty` enum + `Record` + `FnTy` + `VarAllocator`. Pure data + `Display`. **Arena workaround applied here.** |
 | `error.rs` | 239 | Tier-1 | 0055b | `TypeError` enum + `Display` + ADR-0052b `suggestion` thread. Pure data. |
 | `infer.rs` | 259 | Tier-2 | 0055c | `Subst` + `unify` + `finalize`. Recursive over arena `Ty`. |
-| `check.rs` | 2354 | Tier-2 | 0055d | Bidirectional checker. Stateful `Ctx` + 2 `HashMap` (`def_types`, `poly_intrinsic_defs`) + recursive descent over HIR. Largest single-file port. |
-| **Total** | **3320** | — | — | |
+| `check.rs` | 2402 | Tier-2 | 0055d | Bidirectional checker. Stateful `Ctx` + 2 `HashMap` (`def_types`, `poly_intrinsic_defs`) + recursive descent over HIR. Largest single-file port. |
+| **Total** | **3368** | — | — | |
 
 ### 4.1 Per-file feature-gap inventory (spike §3 anchor)
 

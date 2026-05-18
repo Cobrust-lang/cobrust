@@ -82,6 +82,8 @@ Phase H precedes Phase J despite J's higher §2.5 ROI because:
 - **ADR-0055b** — Borrow-check projection port (~1 week sub-phase).
 - **ADR-0055c** — Unification + error-emission port (~1 week sub-phase).
 
+NOTE 2026-05-18 amendment: sub-ADR partition refined in ADR-0055 §3.3 from inference/borrow/unify split to per-source-file split (0055a-e); borrow-check excluded (lives in `cobrust-mir`, not `cobrust-types`).
+
 ### 3.4 Risk
 
 Self-host stresses every language feature simultaneously (the type checker uses dicts, lists, options, results, traits, pattern match, generics-via-typeparams). Phase H will discover Phase F+G ergonomic gaps that the test corpus did not surface. Budget +1 week buffer for retroactive sub-ADRs against Cobrust language surface.
