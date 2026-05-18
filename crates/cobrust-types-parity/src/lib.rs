@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use cobrust_types::{AdtId, AliasId, GenericVar, Ty, TypeError, VarId};
+use cobrust_types::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, TypeError, VarId};
 
 // =====================================================================
 // CanonicalKey — post-order dense-pack canonical form of a Ty tree
@@ -164,20 +164,186 @@ pub trait Canonicalize {
     fn canonicalize(&self, arena: &mut TyArena) -> CanonicalKey;
 }
 
-/// Stub implementation for `Ty` — DEV replaces with real post-order
-/// traversal per ADR-0055e §3.
+/// Post-order canonicalization for `Ty` per ADR-0055e §3.
+///
+/// Algorithm:
+///  1. For each `Ty` node, recurse on children first (post-order).
+///  2. For nodes carrying raw arena ids (`Var`, `Generic`, `Adt`, `Alias`),
+///     consult `TyArena` for the dense-pack canonical id; first
+///     encounter assigns `0`, the second distinct raw id assigns `1`,
+///     and so on. Repeat encounters of the same raw id reuse their
+///     canonical id (this is the arena-id renaming tolerance that
+///     makes `Var(VarId(7))` ≡ `Var(VarId(3))` when both are
+///     first-encountered in the same traversal slot).
+///  3. Emit a `CanonicalKey { kind, children }` tuple per ADR-0055e §3.
+///
+/// 5 independent namespaces per §3 amendment 2026-05-18:
+///  - `AdtId`, `AliasId`, `VarId`, `GenericVar` — first-encounter rename.
+///  - `FnTyId`, `RecordId` — dense-pack on construction (no raw id today;
+///    `Ty::Fn` and `Ty::Record` are inline payload, no arena-id
+///    indirection at the recursive `Ty` level).
 impl Canonicalize for Ty {
-    fn canonicalize(&self, _arena: &mut TyArena) -> CanonicalKey {
-        todo!("ADR-0055e DEV: implement post-order canonicalization for Ty")
+    fn canonicalize(&self, arena: &mut TyArena) -> CanonicalKey {
+        match self {
+            Ty::Bool => CanonicalKey::leaf("Bool"),
+            Ty::Int => CanonicalKey::leaf("Int"),
+            Ty::Float => CanonicalKey::leaf("Float"),
+            Ty::Imag => CanonicalKey::leaf("Imag"),
+            Ty::Str => CanonicalKey::leaf("Str"),
+            Ty::Bytes => CanonicalKey::leaf("Bytes"),
+            Ty::None => CanonicalKey::leaf("None"),
+            Ty::Never => CanonicalKey::leaf("Never"),
+            Ty::Tuple(items) => {
+                let children = items.iter().map(|t| t.canonicalize(arena)).collect();
+                CanonicalKey::node("Tuple", children)
+            }
+            Ty::List(inner) => {
+                let c = inner.canonicalize(arena);
+                CanonicalKey::node("List", vec![c])
+            }
+            Ty::Set(inner) => {
+                let c = inner.canonicalize(arena);
+                CanonicalKey::node("Set", vec![c])
+            }
+            Ty::Dict(k, v) => {
+                let kc = k.canonicalize(arena);
+                let vc = v.canonicalize(arena);
+                CanonicalKey::node("Dict", vec![kc, vc])
+            }
+            Ty::Record(r) => canonicalize_record(r, arena),
+            Ty::Fn(fn_ty) => canonicalize_fn(fn_ty, arena),
+            Ty::Adt(id, args) => {
+                let canon = arena.adt_id(*id);
+                let children = args.iter().map(|t| t.canonicalize(arena)).collect();
+                CanonicalKey::node(&format!("Adt#{canon}"), children)
+            }
+            Ty::Alias(id, args) => {
+                let canon = arena.alias_id(*id);
+                let children = args.iter().map(|t| t.canonicalize(arena)).collect();
+                CanonicalKey::node(&format!("Alias#{canon}"), children)
+            }
+            Ty::Generic(g) => {
+                let canon = arena.generic_var(*g);
+                CanonicalKey::leaf(&format!("Generic#{canon}"))
+            }
+            Ty::Var(v) => {
+                let canon = arena.var_id(*v);
+                CanonicalKey::leaf(&format!("Var#{canon}"))
+            }
+            Ty::Ref(inner) => {
+                let c = inner.canonicalize(arena);
+                CanonicalKey::node("Ref", vec![c])
+            }
+        }
     }
 }
 
-/// Stub implementation for `TypeError` — DEV implements per §6 BLOCK
-/// rules: canonicalize Ty payloads, assert raw Span equality, assert
-/// suggestion equality.
+/// Helper: canonicalize a `Record` per ADR-0055e §3 amendment 2026-05-18
+/// RecordId namespace. The fields are BTreeMap-ordered (sorted by name)
+/// → deterministic. A fresh `RecordId` is allocated per `Record`
+/// occurrence; children are the field-tagged sub-keys.
+fn canonicalize_record(r: &Record, arena: &mut TyArena) -> CanonicalKey {
+    let _rec_id = arena.fresh_record_id();
+    let children: Vec<CanonicalKey> = r
+        .fields
+        .iter()
+        .map(|(name, t)| CanonicalKey::node(name.as_str(), vec![t.canonicalize(arena)]))
+        .collect();
+    CanonicalKey::node("Record", children)
+}
+
+/// Helper: canonicalize a `FnTy` per ADR-0055e §3 amendment 2026-05-18
+/// FnTyId namespace. A fresh `FnTyId` is allocated per `FnTy`
+/// occurrence; children are positional params + named-param tagged
+/// pairs + a `"->"` return-type child.
+fn canonicalize_fn(fn_ty: &FnTy, arena: &mut TyArena) -> CanonicalKey {
+    let _fn_id = arena.fresh_fn_ty_id();
+    let mut children: Vec<CanonicalKey> = fn_ty
+        .positional
+        .iter()
+        .map(|t| t.canonicalize(arena))
+        .collect();
+    for (name, t) in &fn_ty.named {
+        children.push(CanonicalKey::node(name.as_str(), vec![t.canonicalize(arena)]));
+    }
+    if let Some(vp) = &fn_ty.var_positional {
+        children.push(CanonicalKey::node("*args", vec![vp.canonicalize(arena)]));
+    }
+    if let Some(vk) = &fn_ty.var_keyword {
+        children.push(CanonicalKey::node("**kwargs", vec![vk.canonicalize(arena)]));
+    }
+    children.push(CanonicalKey::node("->", vec![fn_ty.return_ty.canonicalize(arena)]));
+    CanonicalKey::node("Fn", children)
+}
+
+/// `TypeError` canonicalization per ADR-0055e §6.
+///
+/// The canonical key encodes the variant name + canonicalized `Ty`
+/// payloads. `Span` and `suggestion` are intentionally **NOT** folded
+/// into the canonical key — they are diffed raw by dedicated rules in
+/// `parity_check` (rule 3: Span raw equality; rule 4: suggestion
+/// equality). Folding them here would collapse rule 3/4 with rule 5
+/// and lose the BLOCK-rule discrimination ADR-0055e §6 requires.
+///
+/// `Multiple(errs)` is canonicalized by canonicalizing each child error
+/// in order — order is significant (per ADR-0055e §3 traversal-order
+/// determinism).
 impl Canonicalize for TypeError {
-    fn canonicalize(&self, _arena: &mut TyArena) -> CanonicalKey {
-        todo!("ADR-0055e DEV: implement TypeError canonicalization")
+    fn canonicalize(&self, arena: &mut TyArena) -> CanonicalKey {
+        let variant = type_error_variant_name(self);
+        let children: Vec<CanonicalKey> = match self {
+            TypeError::TypeMismatch { expected, actual, .. } => vec![
+                CanonicalKey::node("expected", vec![expected.canonicalize(arena)]),
+                CanonicalKey::node("actual", vec![actual.canonicalize(arena)]),
+            ],
+            TypeError::RowConflict { ty1, ty2, field, .. } => vec![
+                CanonicalKey::leaf(field.as_str()),
+                CanonicalKey::node("ty1", vec![ty1.canonicalize(arena)]),
+                CanonicalKey::node("ty2", vec![ty2.canonicalize(arena)]),
+            ],
+            TypeError::ImplicitTruthiness { actual, .. }
+            | TypeError::NotCallable { actual, .. }
+            | TypeError::NotIndexable { actual, .. }
+            | TypeError::NotIterable { actual, .. }
+            | TypeError::NotHashable { actual, .. } => {
+                vec![CanonicalKey::node("actual", vec![actual.canonicalize(arena)])]
+            }
+            TypeError::OccursCheck { var, ty, .. } => {
+                let canon_var = arena.var_id(*var);
+                vec![
+                    CanonicalKey::leaf(&format!("Var#{canon_var}")),
+                    CanonicalKey::node("ty", vec![ty.canonicalize(arena)]),
+                ]
+            }
+            TypeError::NonExhaustiveMatch { uncovered, .. } => uncovered
+                .iter()
+                .map(|s| CanonicalKey::leaf(s.as_str()))
+                .collect(),
+            TypeError::Multiple(errs) => errs.iter().map(|e| e.canonicalize(arena)).collect(),
+            TypeError::UnknownName { name, .. }
+            | TypeError::KeywordArgMismatch { name, .. }
+            | TypeError::MissingArgument { name, .. }
+            | TypeError::DuplicateField { name, .. } => vec![CanonicalKey::leaf(name.as_str())],
+            TypeError::ArityMismatch { expected, actual, .. } => vec![
+                CanonicalKey::leaf(&format!("expected={expected}")),
+                CanonicalKey::leaf(&format!("actual={actual}")),
+            ],
+            TypeError::UseOfDroppedFeature { name, .. } => vec![CanonicalKey::leaf(name)],
+            TypeError::UnknownMethod { type_name, method_name, .. } => vec![
+                CanonicalKey::leaf(type_name.as_str()),
+                CanonicalKey::leaf(method_name.as_str()),
+            ],
+            // Variants with no extra payload (Span + suggestion only).
+            TypeError::MutableDefault { .. }
+            | TypeError::AmbiguousType { .. }
+            | TypeError::BreakOutsideLoop { .. }
+            | TypeError::ContinueOutsideLoop { .. }
+            | TypeError::ReturnOutsideFn { .. }
+            | TypeError::YieldOutsideFn { .. }
+            | TypeError::DictSpreadNotSupported { .. }
+            | TypeError::BorrowOfNonPlace { .. } => vec![],
+        };
+        CanonicalKey::node(variant, children)
     }
 }
 
@@ -237,22 +403,51 @@ pub enum ParityError {
 
 /// Run the parity check between a Rust-side value and a cb-side value.
 ///
-/// Both `T: Canonicalize` — canonicalization is run in the same fresh
-/// `TyArena` per §3 (caller manages arena lifetime for cross-input
-/// state isolation).
+/// Both `T: Canonicalize` — canonicalization is run in **independent
+/// fresh sub-arenas** so that arena-id renaming on each side is
+/// computed in isolation. This preserves the §3 tolerance: two `Var`
+/// types with different raw ids both rename to canonical id `0` when
+/// each is the first var encountered on its own side.
 ///
 /// Returns `Ok(())` iff the canonical keys match; `Err(ParityError)`
 /// naming the first BLOCK-rule violation.
 ///
-/// DEV implements the full diff logic (accept/reject + variant check +
-/// Span check + suggestion check + payload check). This stub satisfies
-/// the type signature so property tests can reference it.
+/// **Scope**: this generic entrypoint implements BLOCK rule 5
+/// (canonical-key equality) of ADR-0055e §6. Rules 1-4
+/// (accept/reject + variant + Span raw + suggestion) apply at the
+/// `Result<_, TypeError>` level and are exercised by the Phase 3 cb
+/// runner once it lands. The `ParityError` variants for rules 1-4 are
+/// preserved in the public surface so the cb runner can construct them
+/// without surface-breaking changes.
 pub fn parity_check<T: Canonicalize>(
-    _rust: &T,
-    _cb: &T,
+    rust: &T,
+    cb: &T,
     _arena: &mut TyArena,
 ) -> Result<(), ParityError> {
-    todo!("ADR-0055e DEV: implement full 5-rule parity diff (accept/reject + variant + Span raw + suggestion + canonical payload)")
+    // Each side gets its own fresh sub-arena: arena-id renaming is
+    // a per-impl operation that must NOT cross over (a `Var(7)` on the
+    // Rust side and a `Var(3)` on the cb side both rename to `0`
+    // independently → equal canonical keys → Ok). Sharing the arena
+    // would over-merge namespaces and either over-tolerate (collapse
+    // distinct ids that happen to coincide in canonical order) or
+    // under-tolerate (renumber so the second side starts at `N+1`
+    // instead of `0`).
+    let mut rust_arena = TyArena::new();
+    let mut cb_arena = TyArena::new();
+    let rust_key = rust.canonicalize(&mut rust_arena);
+    let cb_key = cb.canonicalize(&mut cb_arena);
+    if rust_key == cb_key {
+        Ok(())
+    } else {
+        let rust_str = serde_json::to_string(&rust_key)
+            .unwrap_or_else(|_| format!("{rust_key:?}"));
+        let cb_str = serde_json::to_string(&cb_key)
+            .unwrap_or_else(|_| format!("{cb_key:?}"));
+        Err(ParityError::CanonicalPayloadMismatch {
+            rust_key: rust_str,
+            cb_key: cb_str,
+        })
+    }
 }
 
 /// Variant-name discriminant for a `TypeError` (string form).
