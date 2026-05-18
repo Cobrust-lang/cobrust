@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0057a
 parent_adr: 0057
 title: "Phase J wave-1 — LSP `textDocument/publishDiagnostics` wire mapping"
-status: proposed
+status: accepted
 date: 2026-05-18
-last_verified_commit: 0ee5c77
+last_verified_commit: da5198c
+ratified_at: da5198c
+ratified_on: 2026-05-18
 supersedes: []
 superseded_by: []
 relates_to: [adr:0057, adr:0052b, adr:0054, adr:0056]
@@ -278,4 +280,58 @@ tower-lsp learning curve). Branch: `feature/j-lsp-publish-
 diagnostics`. Host: DG workstation for heavy `cargo build` final
 gate per heavy-build offload policy.
 
-— P9 Tech Lead, 2026-05-18
+## 13. Ratification addendum (2026-05-18)
+
+Implementation merged on branch `feature/0057a-dev` at SHA `da5198c`
+(scaffold + handlers + snapshot tests = `1c6aeb9`; dual-track docs =
+`da5198c`). Deviations from the design above (none load-bearing;
+documented for L2 audit traceability):
+
+- **Cargo dep choice**: workspace already pins `tokio = "1.40"` with a
+  default feature set that omits `io-std`; wave-1 adds an explicit
+  per-crate dep with `io-std` enabled so the stdio binary compiles.
+  Other workspace features (`macros`, `rt-multi-thread`, `fs`,
+  `io-util`, `sync`, `time`) are inherited verbatim.
+- **CodeAction scope spill (§3.2)**: wave-1 emits the `Diagnostic`
+  with the `relatedInformation[0].message` carrying the
+  `UseAfterMove` suggestion text, but does NOT emit a paired
+  `CodeAction { kind: quickfix }` per §3.2. The structured fix text
+  is delivered; the auto-apply edit is left to ADR-0057d wave-4.
+  Cursor / VSCode consume the message text directly today; agents
+  call `workspace/applyEdit` themselves until ADR-0057d ships.
+- **TypeCheckCtx reuse (§4 `did_change`)**: wave-1 re-runs the
+  full pipeline on every `did_change`. The Phase I × J
+  `Session::type_ctx` Clone+Send handoff (ADR-0056b §3.3 + §6)
+  is consumed in ADR-0057a wave-2 (deferred). Per §9 Risk 3 this
+  is acceptable for the 100ms debounce target on small files; large
+  files may exceed the budget until incremental ctx reuse lands.
+- **Snapshot file path**: wave-1 uses a synthetic
+  `cobrust://synthetic` URI inside `Diagnostic.relatedInformation`
+  because the per-document URI is not in scope at conversion time
+  (`Backend` owns it; mappers don't). Editor consumers read the
+  `message` field, not the URI, so the placeholder is invisible.
+- **Severity coverage**: ADR-0057a §5 reserves Warning/Information/
+  Hint for future use; wave-1 emits Error severity for all 42
+  mapped variants. Lint-level diagnostics (e.g. unused-let) are
+  Phase J+ scope.
+
+Acceptance gate (§10) status as of merge:
+
+- [x] Phase I `Session::type_ctx: Clone + Send` shipped at
+      `097b477` (origin/main).
+- [x] ADR-0057 frame status = accepted.
+- [x] `tower-lsp = "0.20"` dep added to `crates/cobrust-lsp/Cargo.toml`.
+- [x] No regressions on ADR-0052b snapshot corpus — wave-1 touched
+      zero error construction sites. Pre-existing 3
+      `borrow_phase_g_e2e` + 8 `cobrust-types` failures on origin/main
+      remain pre-existing on `feature/0057a-dev`; no new failures
+      introduced.
+
+Test verification:
+
+- Mac single-crate: `cargo test -p cobrust-lsp` PASS (11 unit + 5
+  snapshot + 0 doc = 16 tests).
+- DG verify: same 16 tests PASS; POSTFLIGHT `/tmp/cobrust-*` clean
+  (PRE=0, POST=0).
+
+— P9 Tech Lead, 2026-05-18 (ratification 2026-05-18)
