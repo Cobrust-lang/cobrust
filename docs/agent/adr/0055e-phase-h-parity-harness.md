@@ -2,9 +2,11 @@
 doc_kind: adr
 adr_id: 0055e
 title: "Phase H parity harness contract — Rust impl vs cb impl diff-test on M2 corpus"
-status: proposed
+status: accepted
 date: 2026-05-18
-last_verified_commit: fd263f4
+ratified_at: 2d94761
+ratified_on: 2026-05-18
+last_verified_commit: 2d94761
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0054]
@@ -172,6 +174,36 @@ Top 3:
 1. **Arena-id renaming over-tolerance hiding real divergence** — if canonicalization is too aggressive (e.g., collapses `Ty::List(TyId(a))` and `Ty::List(TyId(b))` when the canonical traversal order differs by impl), it may mask a legitimate semantic divergence. Mitigation: Phase 2 Rust-vs-Rust sanity must include adversarial test cases where the same Rust impl is run twice with different `VarAllocator` seeds; canonicalization must report empty diff. If the adversarial test cannot reach empty diff, the algorithm is too tight; if it always reaches empty diff regardless of structural change, the algorithm is too loose. Calibration during Phase 2.
 2. **Per-input vs per-module granularity migration cost** — if Phase 3 wire-in surfaces a need to rollup multiple inputs (e.g., cross-input `VarAllocator` state leaks on the cb side), the per-input granularity (§2) may force per-input reset that the actual impl does not perform. Mitigation: harness invokes each input in a **fresh `Ctx`** on both sides; cross-input state is impl-level, not harness-level. If a real cross-input bug surfaces, escalate to ADR-0055 amendment (add per-module granularity as a second contract layer).
 3. **Integration with future cb test runner** — Phase 3 depends on `cobrust build` + `cobrust run` producing stable JSON output that the harness can parse. If the cb runner's JSON schema drifts during 0055a-d port work, the harness's deserializer must be updated in lockstep. Mitigation: ADR-0055 §6 pre-Phase-H "cobrust-cb compile-and-diff infrastructure spike" must lock the JSON schema before Wave 3; harness depends on that schema as a contract surface (not on the runner's free-form output).
+
+### Cascade enumeration (post-spike)
+
+Phase 1 + Phase 2 closed 2026-05-18 with **38/38 PASS on DG** (Mode C SSH;
+`cargo test -p cobrust-types-parity`). Breakdown:
+
+- `canonicalize_corpus` — 16/16 PASS (shape preservation + 5-namespace
+  dense-pack + idempotency).
+- `property_corpus` — 22/22 PASS (Phase 1 sanity: 7 Rust-vs-Rust Ok +
+  Phase 2 calibration: 12 injected-divergence catches + 3
+  `ParityError` variant well-formedness).
+
+Risk 1 (over-tolerance) **calibrated and rejected**: P2-06 / P2-07 /
+P2-09 / P2-10 surfaced as the dense-pack rename's positive tolerance
+side (different raw ids → equal canonical → `Ok`), while P2-08
+(same `AdtId`, different inner args) surfaced as the negative side
+(same raw → divergent canonical → caught). Both poles surface the
+expected outcome, confirming the algorithm is neither too tight nor
+too loose against the M2 corpus.
+
+Risk 2 (per-input vs per-module migration) — N/A in Wave 1: harness
+only exercises pure-`Ty` canonicalization; cross-input state isolation
+is automatic via `parity_check`'s per-side fresh sub-arena allocation
+(see `lib.rs` `parity_check` body — each side allocates its own
+`TyArena::new()`, no shared mutable state across sides or across
+inputs).
+
+Risk 3 (Phase 3 schema drift) — deferred to 0055a + 0055d closure per
+ADR-0055 §6 pre-Phase-H spike. Phase 1 + Phase 2 are Rust-only, so
+risk 3 cannot surface this commit.
 
 ## 11. Consequences
 
