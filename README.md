@@ -196,7 +196,9 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
 - ✅ **AI translation pipeline** — production-validated on stateless + stateful tomli functions (real LLM, 12/12 + 14/14 strict deterministic over 5 runs). dateutil / msgpack: partial.
 - 🚧 **Tooling** — REPL is M14 stub (Phase I REPL JIT scoped; ~1 week wall per [ADR-0054](docs/agent/adr/0054-post-phase-g-roadmap.md)). No LSP yet (Phase J ~2-3 weeks, the biggest §2.5 ROI — wires ADR-0052b structured suggestion into IDE agents). No debugger (Phase L). No WASM target.
 - 🚧 **LLVM backend** — Phase K (3-4 weeks); current release builds use Cranelift.
-- 🚧 **Self-hosting** — 0%. Phase H scoping spike landed; ~2.5 weeks wall once dispatched (ADR-0054 empirical correction from 3-week estimate).
+- 🚧 **Self-hosting** — 0%. Phase H scoping spike landed; ~2.5 weeks wall once dispatched (ADR-0054 empirical correction from 3-week estimate).[^phase-h-wall]
+
+[^phase-h-wall]: Phase H wall-time dominated by `check.rs` (~1-2 weeks; see [ADR-0055d §10.2](docs/agent/adr/0055d-check-rs-cb-port.md) — largest single sub-sprint in project history disclosure).
 
 **What this means**: Cobrust is **mechanism-validated** for the language core + AI translation pipeline. **Phase G LLM-friendliness is fully closed in v0.3.0** with all four §2.5 binding directions (A explicit borrow ✅ / B error UX ✅ / C @py_compat L2 ✅ / D method-call sugar ✅ infra shipped, corpus migration in v0.3.1).
 

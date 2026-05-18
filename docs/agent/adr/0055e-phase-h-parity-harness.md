@@ -4,7 +4,7 @@ adr_id: 0055e
 title: "Phase H parity harness contract — Rust impl vs cb impl diff-test on M2 corpus"
 status: proposed
 date: 2026-05-18
-last_verified_commit: 929cd4af24b614853dd73a1db96835553fea235c
+last_verified_commit: fd263f4
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0054]
@@ -201,5 +201,7 @@ Top 3:
 - **Wall**: ~1 week (Phase 1 + Phase 2 sequential; Phase 3 concurrent with Wave 3).
 - **Host**: DG primary per ADR-0055 §9.1 row 2.
 - **Mode**: C (P10-direct PAIR).
+- **TEST tier**: sonnet D2 — well-scoped property-test corpus author (canonicalization algorithm property tests + Phase 2 sanity corpus extension).
+- **DEV tier**: opus D3 — canonicalization algorithm design + adversarial calibration (edge-case arena-cycle construction + corpus divergence triage require §2.5 compile-time-catch discipline).
 
 — P9 Tech Lead, 2026-05-18

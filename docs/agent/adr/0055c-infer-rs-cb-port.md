@@ -5,7 +5,7 @@ parent_adr: 0055
 title: "Phase H Tier-2 — `crates/cobrust-types/src/infer.rs` cb port (arena-aware `Subst` + `unify`)"
 status: proposed
 date: 2026-05-18
-last_verified_commit: 929cd4a
+last_verified_commit: fd263f4
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0055a, adr:0055b, adr:0055e]
@@ -144,7 +144,7 @@ No dependency on Phase 7.5 (recursive struct types) per ADR-0055 §3.2.
 - **Feeds into 0055d (`check.rs` cb port, Tier-2)** — every `synth_*` arm in 0055d calls `unify` or `subst_apply` from this ADR. The `&mut TyArena` receiver convention codified in §2 + §3 settles ownership questions for 0055d's stateful `Ctx` (which holds the `TyArena` for the checker invocation duration).
 - **Consumed by ADR-0055e** — parity harness diff-tests both impls' `Subst` + `unify` + `finalize` outputs on the M2 corpus. The 5-namespace canonicalization (per 0055e §3 amendment 2026-05-18) covers every arena-handle this ADR threads through `Subst.map` values + `TypeError` payload fields.
 - **Inherits from ADR-0006** — bidirectional inference rules pinned by ADR-0006 §"Selected typing rules". This ADR ports the inference engine under arena form without semantic divergence.
-- **Inherits from ADR-0052a Wave-1** — `Ty::Ref(Box<Ty>)` ports under arena as `Ref(i64)` per 0055a §3 table. The `unify` arm for `(Ty::Ref(a), Ty::Ref(b)) => unify(&a, &b, ...)` preserves structural-not-transparent semantics per `infer.rs::unify` Ref-arm doc-comment (no `(Ref(a), b)` cross-arm — the one-way coercion lives at `synth_call_args` in 0055d scope).
+- **Inherits from ADR-0052a Wave-1** — `Ty::Ref(Box<Ty>)` ports under arena as `Ref(i64)` per 0055a §3 table. The `unify` arm for `(Ty::Ref(a), Ty::Ref(b)) => unify(&a, &b, ...)` preserves structural-not-transparent semantics per `infer.rs::unify` Ref-arm doc-comment (no `(Ref(a), b)` cross-arm — the one-way coercion lives at `unify_call_arg` in 0055d scope).
 
 ## 9. Wall
 

@@ -5,7 +5,7 @@ parent_adr: 0055
 title: "Phase H Tier-1 — `crates/cobrust-types/src/ty.rs` cb port (arena-form `Ty` universe)"
 status: proposed
 date: 2026-05-18
-last_verified_commit: f5d1f5a
+last_verified_commit: fd263f4
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0055e, adr:0050d, adr:0006]
@@ -179,6 +179,10 @@ No dependency on Phase 7.5 (recursive struct types) per ADR-0055 §3.2.
 - **TEST hours**: ~6-8 (5 property tests in §4.1 + arena-cycle-correctness assertions + cross-arena clone smoke test).
 - **DEV hours**: ~16-24 (port 407 LOC Rust to ~450-500 LOC cb under arena form + write `clone_into_arena` utility + agent-doc surface).
 - **Post-author audit**: Tier-1 audit fires post-return BEFORE merge per `feedback_post_author_audit_mandatory`. Audit scope: §3 arena table compliance + §4 surface-invariant byte-equality + §4.1 property-test coverage + §6 risk mitigation evidence in impl.
+
+### 9.4 Documentation mandate
+
+Per ADR-0055 §9.2 and CLAUDE.md §3.3, this sub-ADR commit ships triple-doc updates (zh + en + agent). Human docs land in `docs/human/{zh,en}/self-host.md` §"Type universe self-host".
 
 ## 10. Why this ADR now
 

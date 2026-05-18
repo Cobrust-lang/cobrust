@@ -188,7 +188,9 @@ printf "4\n2\n7\n11\n15\n9\n" | cargo run -p cobrust-cli -- run examples/leetcod
 - ✅ **AI 翻译流水线** — 在 stateless + stateful tomli 函数上生产级验证通过(真实 LLM,12/12 + 14/14 严格确定性 5 次跑)。dateutil / msgpack:部分。
 - 🚧 **工具链** — REPL 仍是 M14 stub(Phase I REPL JIT 已 scoping,约 1 周 wall,见 [ADR-0054](docs/agent/adr/0054-post-phase-g-roadmap.md))。无 LSP(Phase J 约 2-3 周,**最高 §2.5 ROI** — 把 ADR-0052b 结构化 suggestion 接进 IDE agents)。无 debugger(Phase L)。无 WASM target。
 - 🚧 **LLVM backend** — Phase K(3-4 周);当前 release build 走 Cranelift。
-- 🚧 **自托管** — 0%。Phase H scoping spike 已完成;dispatched 后约 2.5 周(ADR-0054 实证修正,原估 3 周)。
+- 🚧 **自托管** — 0%。Phase H scoping spike 已完成;dispatched 后约 2.5 周(ADR-0054 实证修正,原估 3 周)。[^phase-h-wall]
+
+[^phase-h-wall]: Phase H wall-time 主要由 `check.rs`（约 1-2 周）主导;参见 [ADR-0055d §10.2](docs/agent/adr/0055d-check-rs-cb-port.md)——项目历史上最大单子冲刺披露。
 
 **这意味着什么**:Cobrust 在语言核心 + AI 翻译流水线层面**机制已验证**。**Phase G LLM-friendliness 在 v0.3.0 全部关闭**,四条 §2.5 binding direction 均已落地(A 显式借用 ✅ / B 错误 UX ✅ / C @py_compat L2 ✅ / D 方法调用糖 ✅ 基础设施已 ship,corpus 迁移在 v0.3.1)。
 
