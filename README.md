@@ -189,22 +189,25 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
   - **B — Errors print the FIX** — 41 variants total (24 `TypeError` + 11 `MirError` + 6 `LoweringError`) carry structured `suggestion: Option<&'static str>`; LSP `Diagnostic.relatedInformation` forward-compat per [ADR-0052b](docs/agent/adr/0052b-error-ux-fix-suggestions.md).
   - **C — `@py_compat` tier hard-bind to L2 verifier** — `Strict` / `Semantic` / `Numerical{rtol}` / `None` enum + `TierVerifier`; [ADR-0037](docs/agent/adr/0037-py-compat-hard-bind.md) activated per [ADR-0052c](docs/agent/adr/0052c-py-compat-tier-l2-bind.md).
   - **D — Method-call sugar infra** — 25 new method-form entries (Str×10 + List×5 + Float×5 + Int×5) per [ADR-0052d-prereq](docs/agent/adr/0052d-prereq-method-dispatch-infra.md); full LC-100 corpus migration deferred to v0.3.1 (ADR-0052d-final).
+- ✅ **Phase H FULL CLOSED** (2026-05-18) — self-host type-checker scoping + 226 cobrust-types-cb parity tests PASS on DG; `.cb` files are READ-ONLY pseudocode policy ratified (ADR-0055/a/b/c/d/e; Wave-2 canonicalization surfaces).
+- ✅ **Phase I FULL CLOSED** (2026-05-19) — Cranelift-JIT scaffold (`cobrust-cranelift-jit` crate, 12 unit tests) + TypeCheckCtx `Clone+Send` Arc-COW + Session + per-file invalidate (LSP unblocker) + REPL `fn` redefinition + per-symbol `invalidate_def` (ADR-0056a/b/c).
+- ✅ **Phase J wave-1 closed** (2026-05-19) — `cobrust-lsp` crate: `textDocument/publishDiagnostics` over stdio, 16 tests (incl. 5 insta snapshots), 42 `From` impls, dual-track docs (ADR-0057a). Wave-2 `didChange` + CodeAction (0057d) pending.
 - ✅ **CLI tempdir RAII** — closes the Mac/DG `/tmp/cobrust-*` leak (235G temp-leak incident root cause); `tempfile::TempDir` RAII guarantees cleanup on panic / cancellation / signal.
 - ✅ **Bilingual README** — `README.zh.md` ships with full Chinese translation parity to `README.md` per CLAUDE.md §3 dual-track documentation mandate.
 - ✅ **Standard library** — io / collections / string / math / panic / env / fmt / iter + structured concurrency runtime (M13). AI-facing alpha: `cobrust.llm` / `.prompt` / `.tool` flat prelude fns (per [ADR-0049](docs/agent/adr/0049-alpha-honesty-and-onboarding-hardening.md) honesty hardening).
 - ✅ **Package format** — `cobrust.toml`, content-addressed registry, deterministic lockfile.
 - ✅ **AI translation pipeline** — production-validated on stateless + stateful tomli functions (real LLM, 12/12 + 14/14 strict deterministic over 5 runs). dateutil / msgpack: partial.
-- 🚧 **Tooling** — REPL is M14 stub (Phase I REPL JIT scoped; ~1 week wall per [ADR-0054](docs/agent/adr/0054-post-phase-g-roadmap.md)). No LSP yet (Phase J ~2-3 weeks, the biggest §2.5 ROI — wires ADR-0052b structured suggestion into IDE agents). No debugger (Phase L). No WASM target.
-- 🚧 **LLVM backend** — Phase K (3-4 weeks); current release builds use Cranelift.
-- 🚧 **Self-hosting** — 0%. Phase H scoping spike landed; ~2.5 weeks wall once dispatched (ADR-0054 empirical correction from 3-week estimate).[^phase-h-wall]
+- 🚧 **Tooling** — REPL JIT scaffold landed (Phase I); full REPL interactive loop pending. LSP `publishDiagnostics` live (Phase J wave-1); `didChange` + CodeAction pending (wave-2). No debugger (Phase L). No WASM target.
+- 🚧 **LLVM backend** — Phase K (queued; 3-4 weeks); current release builds use Cranelift.
+- 🚧 **Phase J wave-2+** — `didChange` snapshot reuse + CodeAction (ADR-0057d); ~1-2 weeks.
 
-[^phase-h-wall]: Phase H wall-time dominated by `check.rs` (~1-2 weeks; see [ADR-0055d §10.2](docs/agent/adr/0055d-check-rs-cb-port.md) — largest single sub-sprint in project history disclosure).
-
-**What this means**: Cobrust is **mechanism-validated** for the language core + AI translation pipeline. **Phase G LLM-friendliness is fully closed in v0.3.0** with all four §2.5 binding directions (A explicit borrow ✅ / B error UX ✅ / C @py_compat L2 ✅ / D method-call sugar ✅ infra shipped, corpus migration in v0.3.1).
+**What this means**: Cobrust is **mechanism-validated** for the language core + AI translation pipeline. **Phase G LLM-friendliness is fully closed in v0.3.0**. **Phases H and I are fully closed**; Phase J wave-1 (LSP diagnostics) is closed. Phase J wave-2 + Phase K (LLVM + Drop + IR opt + JIT/AOT conv + xarch) are next.
 
 **§2.5 constitutional pillar** ([CLAUDE.md §2.5](CLAUDE.md) + [ADR-0051](docs/agent/adr/0051-llm-first-design-principle.md)): "Cobrust is not the language most pleasant for humans to write — it is the language LLM agents write correctly on the first try." See [`docs/agent/skills/cobrust-first-try.md`](docs/agent/skills/cobrust-first-try.md) for the agent-facing onboarding skill.
 
-See the [post-Phase-G roadmap (ADR-0054)](docs/agent/adr/0054-post-phase-g-roadmap.md) for what's next.
+**What's next** (queue order): Phase J wave-2 (`didChange` + CodeAction) → Phase K codegen hardening (LLVM backend, Drop schedule, MIR-level IR opt, JIT/AOT lowering convergence, cross-compile matrix expansion) → outstanding tasks #26 / #30 / #52.
+
+See the [post-Phase-G roadmap (ADR-0054)](docs/agent/adr/0054-post-phase-g-roadmap.md) for full detail.
 
 ---
 
@@ -256,10 +259,11 @@ Full diagram: [docs/human/en/architecture.md](docs/human/en/architecture.md).
 
 | Phase | Surface | Wall | §2.5 ROI |
 |---|---|---|---|
-| **H** | Self-host type checker (constitution §4.4) | ~2.5 weeks | medium |
-| **I** | REPL JIT (M14.1; reuses M11.2 FnRef Call lowering) | ~1 week | medium |
-| **J** | **LSP server** (Cursor/Continue/Cody/Aider/VSCode integration) | ~2-3 weeks | **highest** |
-| **K** | LLVM Backend (release perf + cross-platform + DWARF) | ~3-4 weeks | neutral |
+| ~~**H**~~ ✅ | Self-host type checker scoping; 226 parity tests; `.cb` READ-ONLY policy | closed 2026-05-18 | medium |
+| ~~**I**~~ ✅ | Cranelift-JIT scaffold + Session Clone+Send + REPL fn-redef | closed 2026-05-19 | medium |
+| **J** wave-1 ✅ | `publishDiagnostics` LSP server (cobrust-lsp, 16 tests, 42 From impls) | closed 2026-05-19 | **highest** |
+| **J** wave-2+ | `didChange` snapshot reuse + CodeAction (ADR-0057d) | ~1-2 weeks | **highest** |
+| **K** | LLVM Backend + Drop schedule + MIR IR opt + JIT/AOT conv + xarch | ~3-4 weeks | neutral |
 | **L** | Debugger (DWARF from K + breakpoint runtime + REPL integration) | ~1 week | low |
 
 §2.5 ROI rerank explanation: J is highest because in-editor LLM agents (Cursor / Continue / Cody) read LSP diagnostics + suggestions directly — ADR-0052b's structured `suggestion` field is the precise payload Phase J wires into `Diagnostic.relatedInformation` + `CodeAction.title`.
