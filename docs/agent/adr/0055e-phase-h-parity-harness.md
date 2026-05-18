@@ -4,7 +4,7 @@ adr_id: 0055e
 title: "Phase H parity harness contract — Rust impl vs cb impl diff-test on M2 corpus"
 status: proposed
 date: 2026-05-18
-last_verified_commit: 2a710d3
+last_verified_commit: 929cd4af24b614853dd73a1db96835553fea235c
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0054]
@@ -65,6 +65,8 @@ Properties:
 - **Idempotent**: canonicalizing a canonicalized output yields itself. Useful for snapshot-test integration (`insta` reuse per §5).
 
 `VarId` canonicalization follows the same rule — `Var(VarId(7))` becomes `Var(canonical_0)` in first-encounter order. If the cb impl unifies in a different order and produces `Var(VarId(3))` for the same logical inference variable, canonicalization aligns them. `AdtId` + `AliasId` + `GenericVar` follow analogously, each with its own dense-pack canonical namespace (no cross-namespace renaming).
+
+**Amendment 2026-05-18 (per ADR-0055a §8 F1 cross-ADR dep)**: 0055a §3 introduces 2 parallel arenas (`FnTyArena` + `RecordArena`) beyond the single TyArena parent §5 specified. Canonical-namespace post-order traversal extends to 5 namespaces: TyId + AdtId + AliasId + FnTyId + RecordId. Each namespace canonicalizes independently before cross-namespace consistency check. `VarId` and `GenericVar` remain auxiliary canonicalization namespaces (not counted in the 5 primary arenas) and follow the same dense-pack rule as before.
 
 **Out of scope for canonicalization**: `Span` byte offsets — these come from the parser and must match raw (no canonicalization). The harness asserts raw `Span` equality on every TypeError variant. If the parser is shared between impls (cb mirror reuses Rust frontend per ADR-0055 §"Crate split"), `Span` equality holds trivially. If a future sub-ADR ports the parser too, `Span` becomes a canonicalization concern and this ADR amends.
 
