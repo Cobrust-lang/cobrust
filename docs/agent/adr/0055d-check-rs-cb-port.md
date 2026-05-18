@@ -294,9 +294,11 @@ The `check_parity_corpus.rs` and `check_display_parity.rs` files are correct at 
 
 ### 13.1 What landed
 
+**Phase 1 re-scope acknowledgment (mirrors 0055c §12.1, Tier-1 audit `a370ee9136e0e0bf4` / `a8eebe26c6c38bfc7` 2026-05-18)**: DEV scope reduced to 80-test `ignore = `-marker deletion + ADR ratification + check.cb doc-ref expansion (98→1390 lines, NOT 830 as initial DEV report claimed). Wave-2 cb crate already shipped `error_cb.rs` + `display_ty` + `canonicalize_arena_root` + `impl Canonicalize for TypeErrorCb` on main `c9db006` (then `7eacf15`); the `check.cb` file is READ-ONLY documentation reference per ADR-0055 §3.1 (cb mirror is a proof artifact, Rust impl stays canonical), NOT a compile path. The TEST corpus (62 parity + 18 display) drives Rust-side `cobrust_types::check::*` + Wave-2 cb canonicalization surfaces; no cb-side `check_cb.rs` Rust module required.
+
 Phase H Wave-3 LARGEST DEV completed:
 
-- **`src/check.cb`** expanded from 98-line doc-ref to ~830-line cb-syntax pseudo-code covering:
+- **`src/check.cb`** expanded from 98-line doc-ref to 1390-line cb-syntax pseudo-code (98→1390 expansion) covering:
   - `Ctx` lifecycle (7 fields per §5.3) + 4 lifecycle helpers (`ctx_new`, `fresh_var`, `record_def`, `lookup_def`).
   - `check()` top-level entry + `check_module` + `prebind_items` + `prebind_item` + `fn_signature_type`.
   - `check_item` 6-arm dispatch (Fn / Class / TypeAlias / Let / Const / etc.).
@@ -326,7 +328,15 @@ Per CLAUDE.md §2.5 LLM-first design principle constitutional north star:
 - **Compile-time-catch**: every `synth_expr` arm encodes one or more `TypeError::*` construction site; the cb mirror preserves arm-order verbatim per §6 risk 1 mitigation. F31 LOCK at `synth_call::unify_call_arg` keeps `Ref(T) → T` coercion as a compile-error-surfacing boundary; cross-arm `Ref(a) ≡ T` unify remains banned (delegated only to call-arg site per ADR-0052a Wave-1).
 - **Training-data-overlap**: every method-table dispatch matches Python's training-data shape — `dict.keys()` / `dict.values()` / `dict.items()` / `str.split(...)` / `list.append(...)` etc. all preserved exactly per §5.2 cross-cutting mitigation. Method-call sugar from ADR-0050e Phase G makes `s.split(",")` read as cb method-form; the `try_synth_str_method` table makes the dispatch the canonical surface for Python→Cobrust translation.
 
-### 13.4 Phase H Wave-3 closure status
+### 13.4 Cross-ADR coherence: Pre-dispatch gate amendment on main
+
+**Cross-ADR coherence: Pre-dispatch gate amendment on main**. ADR-0055d §"Pre-dispatch gate" line 187 was amended on main at `a39351c` (then merged to `7eacf15` via 0055c §12.4 cross-ADR sync). The amended gate accepts Rust-side `cobrust_types::infer::{Subst, unify, finalize}` consumption via `parity_check<R,C>` heterogeneous form; cb-side compile-path impl is NOT required. This DEV branch rebased onto `7eacf15` to absorb that amendment; no contradictory text remains in §"Pre-dispatch gate".
+
+### 13.5 F-pattern candidate filed (F35-sibling-commit-msg)
+
+**F-pattern candidate filed (F35-sibling-commit-msg)**: Commit `7100849` `feat(check-cb): synth_expr 19-arm + Ctx + method-table cb-mirror` describes the original §2 scope (cb-side Rust impl mirror) while the actual diff is `.cb` pseudocode doc-ref expansion + test un-ignore + ADR ratification — DEV agent re-scoped the work mid-sprint but the commit message preserved the original-spec framing. Family: NEW F-pattern candidate (commit-message surface drift), sibling of F35 (post-merge claim drift in agent narrative); recorded for upstream ADSD catalogue PR queue. Future DEV `git commit -m` lines MUST mirror final-form scope, not original-spec scope.
+
+### 13.6 Phase H Wave-3 closure status
 
 With 0055d DEV merged, Phase H Wave-3 is **complete**:
 
