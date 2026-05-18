@@ -76,14 +76,10 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
     // One Context, scoped to the duration of emit. All inkwell
     // values borrow from this arena — drop ordering enforced by `'ctx`.
     let ctx = Context::create();
-    let llvm_module = ctx.create_module(&spec.module_name);
-    let builder = ctx.create_builder();
-
     let target_machine = build_target_machine(spec)?;
-    llvm_module.set_triple(&target_machine.get_triple());
-    llvm_module.set_data_layout(&target_machine.get_target_data().get_data_layout());
 
-    let mut emitter = LlvmEmitter::new(&ctx, &llvm_module, &builder, spec)?;
+    // Build emitter (owns Module + Builder via `'ctx` borrowed Context).
+    let mut emitter = LlvmEmitter::new(&ctx, spec, &target_machine)?;
 
     // --- declare every body's signature first ---------------------------
     for body in &module.bodies {
@@ -99,7 +95,7 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
     if cfg!(debug_assertions) {
         // ADR-0058a §9.2: dev-mode verifier prints offending IR via
         // structured error.
-        if let Err(err) = llvm_module.verify() {
+        if let Err(err) = emitter.module.verify() {
             return Err(CodegenError::LlvmError(format!(
                 "LLVM module verify failed: {}",
                 err
@@ -111,7 +107,7 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
     let object_name = format!("{}.o", spec.module_name);
     let object_path = spec.output_dir.join(object_name);
     target_machine
-        .write_to_file(&llvm_module, FileType::Object, &object_path)
+        .write_to_file(&emitter.module, FileType::Object, &object_path)
         .map_err(|e| CodegenError::ObjectEmission(e.to_string()))?;
 
     finalize_artifact(object_path, spec)
@@ -183,8 +179,10 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
 /// resolve forward-declared callees emitted by `declare_body`.
 pub struct LlvmEmitter<'ctx> {
     ctx: &'ctx Context,
-    module: &'ctx LlvmModule<'ctx>,
-    builder: &'ctx Builder<'ctx>,
+    /// Owned LLVM module — borrows from `ctx` via `'ctx`.
+    pub module: LlvmModule<'ctx>,
+    /// Owned LLVM builder — borrows from `ctx` via `'ctx`.
+    builder: Builder<'ctx>,
     /// MIR body `def_id` → declared LLVM function.
     function_ids: HashMap<u32, FunctionValue<'ctx>>,
     /// Per-body return type cache (ADR-0034 parallel).
@@ -200,12 +198,18 @@ impl<'ctx> LlvmEmitter<'ctx> {
     /// used by Drop / Assert lowering (`__cobrust_str_drop`,
     /// `__cobrust_list_drop_elems`, `__cobrust_list_drop`,
     /// `__cobrust_panic`).
+    ///
+    /// `spec` and `target_machine` drive module-name + triple +
+    /// data-layout binding.
     pub fn new(
         ctx: &'ctx Context,
-        module: &'ctx LlvmModule<'ctx>,
-        builder: &'ctx Builder<'ctx>,
-        _spec: &TargetSpec,
+        spec: &TargetSpec,
+        target_machine: &TargetMachine,
     ) -> Result<Self, CodegenError> {
+        let module = ctx.create_module(&spec.module_name);
+        module.set_triple(&target_machine.get_triple());
+        module.set_data_layout(&target_machine.get_target_data().get_data_layout());
+        let builder = ctx.create_builder();
         let opaque_ptr_ty = ctx.i8_type().ptr_type(AddressSpace::default());
 
         let mut emitter = LlvmEmitter {
@@ -597,7 +601,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                     .map_err(map_builder_err)?;
                 let ret_val: BasicValueEnum<'ctx> = call_site
                     .try_as_basic_value()
-                    .left()
+                    .basic()
                     .unwrap_or_else(|| self.emitter.ctx.i64_type().const_zero().into());
                 self.write_place(destination, ret_val)?;
                 let blk = self.block_map[&target];
@@ -1241,6 +1245,10 @@ fn zero_of<'ctx>(ty: BasicTypeEnum<'ctx>) -> BasicValueEnum<'ctx> {
         BasicTypeEnum::ArrayType(t) => t.const_zero().into(),
         BasicTypeEnum::StructType(t) => t.const_zero().into(),
         BasicTypeEnum::VectorType(t) => t.const_zero().into(),
+        // LLVM 18+ inkwell exposes scalable vectors as a distinct
+        // variant. Wave-1 does not produce scalable-vector locals;
+        // panic loudly if MIR somehow surfaces one.
+        BasicTypeEnum::ScalableVectorType(t) => t.const_zero().into(),
     }
 }
 
@@ -1271,7 +1279,10 @@ mod tests {
 
     fn host_spec() -> TargetSpec {
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.into_path();
+        // Persist the temp dir for the test's duration via leaking the
+        // handle; the directory is cleaned up by the OS at exit. (We
+        // do this rather than `into_path()` which is deprecated.)
+        let path = tmp.keep();
         TargetSpec {
             triple: target_lexicon::Triple::host(),
             opt_level: OptLevel::None,
