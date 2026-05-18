@@ -21,7 +21,7 @@
 #![allow(clippy::ignored_unit_patterns)]
 
 use cobrust_types::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarId};
-use cobrust_types_cb::{ty_cb_arena_from_rust, TyArena, TyEntry};
+use cobrust_types_cb::{canonicalize_arena_root, ty_cb_arena_from_rust, TyArena, TyEntry};
 use cobrust_types_parity::{parity_check, Canonicalize, TyArena as ParityArena};
 
 // =====================================================================
@@ -30,19 +30,18 @@ use cobrust_types_parity::{parity_check, Canonicalize, TyArena as ParityArena};
 
 /// Build both canonical keys and assert they are equal.
 ///
-/// Calls the stub `ty_cb_arena_from_rust` (todo! in F28); when DEV
-/// fills the stub this function becomes the live parity gate.
+/// DEV-wired per F28 + ADR-0055a Wave-2: builds cb arena via
+/// `ty_cb_arena_from_rust`, then canonicalizes both Rust and cb roots
+/// via independent fresh `ParityArena` instances per ADR-0055e §3
+/// "Each side gets its own fresh sub-arena" rule, and asserts the two
+/// canonical keys are equal.
 fn assert_parity(rust_ty: &Ty) {
-    let (_cb_id, _cb_arena) = ty_cb_arena_from_rust(rust_ty);
-    // Both sides canonicalize via their own fresh sub-arenas inside
-    // `parity_check` per ADR-0055e §3.
-    let mut parity_arena = ParityArena::new();
-    let rust_key = rust_ty.canonicalize(&mut parity_arena);
-    // cb_ty as TyEntry for root — lookup from cb_arena[_cb_id].
-    // DEV wires this after Wave-2 impl lands.
-    // For now the test body documents the contract only.
-    let _ = (rust_key, _cb_arena, _cb_id);
-    todo!("ADR-0055a Wave-2 DEV: wire parity_check after ty_cb_arena_from_rust impl")
+    let (cb_id, cb_arena) = ty_cb_arena_from_rust(rust_ty);
+    let mut rust_parity = ParityArena::new();
+    let mut cb_parity = ParityArena::new();
+    let rust_key = rust_ty.canonicalize(&mut rust_parity);
+    let cb_key = canonicalize_arena_root(&cb_arena, &mut cb_parity, cb_id);
+    assert_eq!(rust_key, cb_key, "parity mismatch for {rust_ty}");
 }
 
 // =====================================================================
@@ -51,35 +50,30 @@ fn assert_parity(rust_ty: &Ty) {
 
 /// Round-trip `Bool` through cb arena and assert canonical parity.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc01_bool_roundtrip() {
     assert_parity(&Ty::Bool);
 }
 
 /// Round-trip `Int` through cb arena.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc02_int_roundtrip() {
     assert_parity(&Ty::Int);
 }
 
 /// Round-trip `Float` through cb arena.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc03_float_roundtrip() {
     assert_parity(&Ty::Float);
 }
 
 /// Round-trip `Str` through cb arena.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc04_str_roundtrip() {
     assert_parity(&Ty::Str);
 }
 
 /// Round-trip `Never` through cb arena (bottom type per ADR-0006).
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc05_never_roundtrip() {
     assert_parity(&Ty::Never);
 }
@@ -90,35 +84,30 @@ fn pc05_never_roundtrip() {
 
 /// `Tuple([Int, Str])` — two-element tuple, no trailing comma.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc06_tuple_int_str() {
     assert_parity(&Ty::Tuple(vec![Ty::Int, Ty::Str]));
 }
 
 /// `List(Box<Int>)` — homogeneous list.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc07_list_int() {
     assert_parity(&Ty::List(Box::new(Ty::Int)));
 }
 
 /// `Set(Box<Str>)` — homogeneous set.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc08_set_str() {
     assert_parity(&Ty::Set(Box::new(Ty::Str)));
 }
 
 /// `Dict(Box<Int>, Box<Str>)` — dict with hashable key.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc09_dict_int_str() {
     assert_parity(&Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Str)));
 }
 
 /// `Ref(Box<Int>)` — ADR-0052a Wave-1 borrow type.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc10_ref_int() {
     assert_parity(&Ty::Ref(Box::new(Ty::Int)));
 }
@@ -129,14 +118,12 @@ fn pc10_ref_int() {
 
 /// `List<List<Int>>` — two-level nesting.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc11_list_list_int() {
     assert_parity(&Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))));
 }
 
 /// `Dict<Str, List<Int>>` — dict with composite value type.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc12_dict_str_list_int() {
     assert_parity(&Ty::Dict(
         Box::new(Ty::Str),
@@ -146,7 +133,6 @@ fn pc12_dict_str_list_int() {
 
 /// `Tuple([List<Int>, Dict<Int, Str>])` — tuple of composite types.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc13_tuple_list_dict() {
     assert_parity(&Ty::Tuple(vec![
         Ty::List(Box::new(Ty::Int)),
@@ -156,14 +142,12 @@ fn pc13_tuple_list_dict() {
 
 /// `Adt(AdtId(0), [Int, Str])` — ADT with two type args.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc14_adt_with_args() {
     assert_parity(&Ty::Adt(AdtId(0), vec![Ty::Int, Ty::Str]));
 }
 
 /// `Alias(AliasId(1), [List<Bool>])` — alias application with nested arg.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc15_alias_with_nested_arg() {
     assert_parity(&Ty::Alias(
         AliasId(1),
@@ -183,14 +167,12 @@ fn pc15_alias_with_nested_arg() {
 /// `display_parity.rs::dp01_one_tuple_trailing_comma` covers the Display
 /// path. Here we verify structural parity only.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc16_one_tuple_trailing_comma_structural() {
     assert_parity(&Ty::Tuple(vec![Ty::Int]));
 }
 
 /// `Tuple([])` — empty tuple; Display form `()`.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc17_empty_tuple() {
     assert_parity(&Ty::Tuple(vec![]));
 }
@@ -206,7 +188,6 @@ fn pc17_empty_tuple() {
 /// the arena rejects it (it's legal; see comment). For the cycle-rejection
 /// property test, see `pc19_arena_handle_validity`.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc18_ref_ref_int_double_nested() {
     assert_parity(&Ty::Ref(Box::new(Ty::Ref(Box::new(Ty::Int)))));
 }
@@ -218,7 +199,6 @@ fn pc18_ref_ref_int_double_nested() {
 /// This is the "fresh handle is always valid" invariant from ADR-0055a §4.1
 /// property test "arena-roundtrip".
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc19_arena_handle_validity() {
     let rust_ty = Ty::Dict(
         Box::new(Ty::Tuple(vec![Ty::Int, Ty::Str])),
@@ -271,19 +251,20 @@ fn pc19_arena_handle_validity() {
 
 /// Display byte-parity: `format!("{}", rust_ty)` == `display_ty(arena, id)`.
 ///
-/// Calls `cobrust_types_cb::display_ty` stub (todo! in F28); when DEV fills
-/// the stub, this test verifies byte-identical display for a multi-level type.
+/// DEV-wired per F28 + ADR-0055a Wave-2: verifies byte-identical display
+/// for a multi-level type via `display_ty`.
 #[test]
-#[ignore = "ADR-0055a Wave-2 DEV impl pending"]
 fn pc20_display_byte_parity_multitype() {
+    use cobrust_types_cb::{display_ty, FnTyArena, RecordArena};
     let rust_ty = Ty::Tuple(vec![
         Ty::Int,
         Ty::List(Box::new(Ty::Str)),
         Ty::Dict(Box::new(Ty::Bool), Box::new(Ty::Float)),
     ]);
     let expected = format!("{rust_ty}");
-    let (_root_id, _cb_arena) = ty_cb_arena_from_rust(&rust_ty);
-    // DEV: call display_ty(_cb_arena, ..., _root_id) and assert == expected.
-    let _ = expected;
-    todo!("ADR-0055a Wave-2 DEV: wire display_ty after impl")
+    let (root_id, cb_arena) = ty_cb_arena_from_rust(&rust_ty);
+    let fn_arena = FnTyArena::new();
+    let rec_arena = RecordArena::new();
+    let actual = display_ty(&cb_arena, &fn_arena, &rec_arena, root_id);
+    assert_eq!(actual, expected, "display byte-parity failed");
 }
