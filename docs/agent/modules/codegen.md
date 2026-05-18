@@ -504,10 +504,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
 | Anchor | Role |
 |---|---|
 | `llvm_backend::emit` | public entry (`llvm_backend.rs:75`) |
-| `LlvmEmitter::new` | emitter constructor (`llvm_backend.rs:194`) |
-| `LlvmEmitter::declare_body` | first-pass fn symbol declare (`llvm_backend.rs:313`) |
-| `LlvmEmitter::define_body` | second-pass fn body emit (`llvm_backend.rs:357`) |
-| `BodyLowerer::lower_terminator` | per-block terminator dispatch (`llvm_backend.rs:464`) |
+| `LlvmEmitter::new` | emitter constructor (`llvm_backend.rs:204`) |
+| `LlvmEmitter::declare_body` | first-pass fn symbol declare (`llvm_backend.rs:331`) |
+| `LlvmEmitter::define_body` | second-pass fn body emit (`llvm_backend.rs:371`) |
+| `BodyLowerer::lower_terminator` | per-block terminator dispatch (`llvm_backend.rs:500`) |
 
 ### Wave-1 non-goals (deferred)
 
