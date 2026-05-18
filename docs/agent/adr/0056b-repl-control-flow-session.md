@@ -344,6 +344,10 @@ Test coverage 23 new (16 contract + 7 collocated session). DG verify
 PASS green on RTX 3090 workstation; zero new regressions on the
 existing failing surface (124 pre-existing F-findings tracked under
 MEMORY audit pipeline are identical on Mac main + DG main baselines).
+Phase H 188 cobrust-types-cb regression PASS on 8 target test binaries
+(unit, type_check_ctx_contract, repl_smoke, repl_session_corpus,
+repl_types_integration, borrow_phase_g_e2e [pre-existing 3 skip],
+tomli_e2e, parity_wave1).
 
 ### 11.4 Phase J wave-1 pre-dispatch gate closure
 
