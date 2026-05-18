@@ -1,0 +1,42 @@
+---
+source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
+assertion_line: 84
+expression: diags
+snapshot_kind: text
+---
+[
+  {
+    "range": {
+      "start": {
+        "line": 0,
+        "character": 0
+      },
+      "end": {
+        "line": 0,
+        "character": 10
+      }
+    },
+    "severity": 1,
+    "code": "arity-mismatch",
+    "source": "cobrust",
+    "message": "expected 2 arguments, got 3 at file#0@0..10",
+    "relatedInformation": [
+      {
+        "location": {
+          "uri": "cobrust://synthetic",
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 10
+            }
+          }
+        },
+        "message": "remove the extra argument or update `f`'s signature"
+      }
+    ]
+  }
+]

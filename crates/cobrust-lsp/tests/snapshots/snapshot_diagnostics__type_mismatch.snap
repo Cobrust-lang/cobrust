@@ -1,0 +1,42 @@
+---
+source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
+assertion_line: 34
+expression: diags
+snapshot_kind: text
+---
+[
+  {
+    "range": {
+      "start": {
+        "line": 0,
+        "character": 13
+      },
+      "end": {
+        "line": 0,
+        "character": 20
+      }
+    },
+    "severity": 1,
+    "code": "type-mismatch",
+    "source": "cobrust",
+    "message": "type mismatch: expected `i64`, found `str` at file#0@13..20",
+    "relatedInformation": [
+      {
+        "location": {
+          "uri": "cobrust://synthetic",
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 13
+            },
+            "end": {
+              "line": 0,
+              "character": 20
+            }
+          }
+        },
+        "message": "change to `: str` (or convert the value to `i64`)"
+      }
+    ]
+  }
+]

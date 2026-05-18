@@ -1,0 +1,42 @@
+---
+source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
+assertion_line: 47
+expression: diags
+snapshot_kind: text
+---
+[
+  {
+    "range": {
+      "start": {
+        "line": 0,
+        "character": 8
+      },
+      "end": {
+        "line": 0,
+        "character": 18
+      }
+    },
+    "severity": 1,
+    "code": "occurs-check",
+    "source": "cobrust",
+    "message": "occurs check: cannot unify `?7` with `i64` at file#0@8..18",
+    "relatedInformation": [
+      {
+        "location": {
+          "uri": "cobrust://synthetic",
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 8
+            },
+            "end": {
+              "line": 0,
+              "character": 18
+            }
+          }
+        },
+        "message": "add an explicit type annotation to break the recursive constraint"
+      }
+    ]
+  }
+]
