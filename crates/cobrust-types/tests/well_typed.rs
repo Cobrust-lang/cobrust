@@ -2895,3 +2895,74 @@ fn w0052dpre_25_int_bit_count_method_form() {
         "fn h() -> i64:\n    let n: i64 = 31\n    let m: i64 = n.bit_count()\n    return m\n",
     );
 }
+
+// ============================================================
+// ADR-0052g Wave 2 round 2 — `&recv.method()` Copy-primitive borrow
+//
+// 5 well-typed programs covering the type-check arm narrowing per
+// ADR-0052g §5 (admit `&Call(Attr(...))` when method returns a Copy
+// primitive — `Int`, `Float`, `Bool`).
+//
+// Pre-DEV-impl status: every w0052g_* test below is `#[ignore]`'d
+// pending Wave-2 round 2 DEV merge at `check.rs:888-891`. DEV
+// removes the `#[ignore]` markers + lands the synth_expr branch
+// narrowing per ADR-0052g §5 diff.
+//
+// Each test relies on the method-form rewrite chain (ADR-0052d-prereq)
+// so we reuse `METHOD_DISPATCH_STUBS`. The outer `&` admission is the
+// new behaviour under test.
+// ============================================================
+
+#[test]
+#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
+fn w0052g_01_borrow_str_len_returns_ref_int() {
+    // ADR-0052g §4.1 canonical witness — `&s.len()` admits as `Ref(Int)`.
+    // Int is Copy → §5 `is_copy_primitive` returns true → admit.
+    must_accept_with_method_dispatch_stubs(
+        "borrow-str-len",
+        "fn read_i64(n: i64) -> i64:\n    return n\nfn f() -> i64:\n    let s: str = \"hello\"\n    let r: i64 = read_i64(&s.len())\n    return r\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
+fn w0052g_02_borrow_list_len_returns_ref_int() {
+    // ADR-0052g §4.1 List variant — `&xs.len()` admits as `Ref(Int)`.
+    must_accept_with_method_dispatch_stubs(
+        "borrow-list-len",
+        "fn read_i64(n: i64) -> i64:\n    return n\nfn f() -> i64:\n    let xs: list[i64] = [1, 2, 3]\n    let r: i64 = read_i64(&xs.len())\n    return r\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
+fn w0052g_03_borrow_float_is_nan_returns_ref_bool() {
+    // ADR-0052g §4.1 Bool variant — `&f.is_nan()` admits as `Ref(Bool)`.
+    must_accept_with_method_dispatch_stubs(
+        "borrow-float-is-nan",
+        "fn read_bool(b: bool) -> bool:\n    return b\nfn f() -> bool:\n    let x: f64 = 1.0\n    let r: bool = read_bool(&x.is_nan())\n    return r\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
+fn w0052g_04_borrow_int_abs_returns_ref_int() {
+    // ADR-0052g §4.1 Int.abs variant — `&n.abs()` admits as `Ref(Int)`.
+    must_accept_with_method_dispatch_stubs(
+        "borrow-int-abs",
+        "fn read_i64(n: i64) -> i64:\n    return n\nfn f() -> i64:\n    let n: i64 = -5\n    let r: i64 = read_i64(&n.abs())\n    return r\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0052g Wave-2-rd2 DEV impl pending"]
+fn w0052g_05_borrow_str_len_at_fn_arg_one_way_coercion() {
+    // ADR-0052g §2 motivation — the one-way call-site coercion at
+    // `check.rs:1649-1661` drops the `Ref` wrapper when `Ref(Int)`
+    // flows into an `i64` parameter slot. This is the originating
+    // motivation from ADR-0052f §11.
+    must_accept_with_method_dispatch_stubs(
+        "borrow-str-len-fn-arg-coercion",
+        "fn read_i64(n: i64) -> i64:\n    return n + 1\nfn f() -> i64:\n    let s: str = \"abc\"\n    return read_i64(&s.len())\n",
+    );
+}
