@@ -313,3 +313,9 @@ the standalone crate path; no semantic deviation from the parent
 ADR-0056 frame (the `Module` trait gating is still the
 abstraction, just sourced from `cranelift-module` directly
 rather than through a Cobrust-side enum).
+
+**Cross-arch note (Tier-1 audit A1, 2026-05-18)**: JIT-compiled code from `cobrust-jit::JitEngine` is host-ISA-bound. A `JitHandle` produced on Mac aarch64 (via `cranelift_native::builder()` auto-detect) cannot be shipped to DG x86_64 for execution. Practical implication: `cargo test -p cobrust-jit` on Mac aarch64 is a valid CI gate for JIT correctness on macOS; DG x86_64 must re-run the same tests natively to validate Linux-host JIT path. Both arches are required for the green signal. AOT artifacts (cobrust-codegen) remain cross-arch portable per ADR-0023; JIT is host-only by Cranelift contract.
+
+**Follow-on amendments deferred to 0056b sprint** (Tier-1 audit A2 + A3):
+- **A2**: Remove blanket `#![allow(clippy::must_use_candidate)]` in `crates/cobrust-jit/src/lib.rs` and apply explicit `#[must_use]` to `JitEngine::compile_mir` and `JitHandle::call` return types per §5.1 engineering standard.
+- **A3**: Add 2 rejection-path tests for `Rvalue::Aggregate` + `Rvalue::Cast` (each 2-line MIR body, expect `JitError::UnsupportedMirFeature`). Prevents silent regression when 0056b extends lowering.
