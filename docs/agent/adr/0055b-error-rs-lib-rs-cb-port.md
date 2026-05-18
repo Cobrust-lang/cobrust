@@ -204,6 +204,8 @@ Two locked-TEST bugs were fixed during Phase 2 un-ignore because no impl-side ch
 
 Both modifications are noted here per F28-spirit transparency: TEST contract semantics (per-variant Display + Canonicalize parity for 25 variants) preserved; only literal data tweaks to make tests compile + agree with a single convention.
 
+- **Audit honesty addendum**: the `Ty::Str → Ty::Int` change in `test_display_occurs_check` is a TEST-author bug fix (test was inconsistent with §10.2's handle-0 Display convention), NOT a pure compile-typo fix. Scope grazes F28's 'no assertion semantic change' rule but is openly documented and necessary for §10.2 convention coherence. Logged to Tier-1 audit report `a70c10e1eaffe14a6` (2026-05-18).
+
 ### 10.4 `parity_check` signature relaxation (cobrust-types-parity crate)
 
 `parity_check<T: Canonicalize>(&T, &T, ...)` was relaxed to `parity_check<R: Canonicalize, C: Canonicalize>(&R, &C, ...)` so the corpus can pass heterogeneous `&TypeError` + `&TypeErrorCb`. Backward compatible: Rust-vs-Rust call sites (0055e Phase 1+2 sanity, 0055e Phase 2 BLOCK rules) continue working with `R = C = Ty`. Cascade follow-up: the rule-1 to rule-4 ParityError variants apply at the `Result<_, TypeError>` level (Phase 3 cb runner per ADR-0055e §10); the relaxed signature is forward-compatible with that runner.
