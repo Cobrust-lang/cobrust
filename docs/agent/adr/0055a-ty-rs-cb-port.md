@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0055a
 parent_adr: 0055
 title: "Phase H Tier-1 — `crates/cobrust-types/src/ty.rs` cb port (arena-form `Ty` universe)"
-status: proposed
+status: accepted
 date: 2026-05-18
-last_verified_commit: fd263f4
+ratified_at: 1be81e7
+ratified_on: 2026-05-18
+last_verified_commit: 1be81e7
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0055e, adr:0050d, adr:0006]
@@ -189,3 +191,58 @@ Per ADR-0055 §9.2 and CLAUDE.md §3.3, this sub-ADR commit ships triple-doc upd
 Per ADR-0055 §3.3 sub-ADR roster, Phase H's Tier-1 wave-2 batch dispatches 0055a + 0055b in parallel. This ADR codifies the `ty.rs` arena-form port surface ex-ante (per CTO operating instruction "ADR-or-it-didn't-happen" + "default to proceed") so the Tier-1 P10-direct PAIR receives a load-bearing surface contract without re-litigating arena-vs-recursive at impl-write time. The ratification path closes on impl merge; sibling 0055b ratifies on its own merge under the same Wave-2 cadence.
 
 — P9 Tech Lead, 2026-05-18
+
+## Cascade enumeration (post-spike, 2026-05-18 ratification)
+
+DEV impl landed at commit `1be81e7` (Phase H Wave-2 P7 dispatch on DG via Mode C). The following cascades arose during impl and are recorded for downstream sub-ADR awareness:
+
+### A. Parallel-arena embedding into `TyArena`
+
+§3 specifies `FnTyArena` + `RecordArena` as **separate** parallel arenas. The TEST-locked return shape of `ty_cb_arena_from_rust(&Ty) -> (TyId, TyArena)` (locked at commit `2e7ccb2`) forced DEV to either (a) thread the parallel arenas through the return tuple (would break the locked test contract) or (b) embed them inside `TyArena`. DEV chose (b): added `pub fn_entries: Vec<FnTyEntry>` + `pub record_entries: Vec<RecordEntry>` fields to `TyArena`. The standalone `FnTyArena` / `RecordArena` structs remain as API-compat wrappers for the locked `display_ty(&TyArena, &FnTyArena, &RecordArena, TyId)` signature; `display_ty` prefers the in-arena parallel storage when present and falls back to the standalone wrappers when `arena.fn_entries` / `arena.record_entries` are empty.
+
+**Cascade**: Tier-2 ports (0055c `infer.rs`, 0055d `check.rs`) MUST consume `arena.fn_entries` + `arena.record_entries` from a single `TyArena` argument; the standalone `FnTyArena` / `RecordArena` are not load-bearing for Tier-2 logic. Document this in 0055c / 0055d pre-dispatch notes.
+
+### B. `Canonicalize for TyEntry` is leaf-only; arena-walking lives in `canonicalize_arena_root`
+
+The `Canonicalize::canonicalize(&self, &mut ParityArena)` trait signature receives `&TyEntry` only — it has no access to the surrounding `TyArena`. DEV ships two complementary surfaces:
+
+- **`Canonicalize for TyEntry`** — leaf-shaped impl: composite variants emit a `CanonicalKey` whose children are placeholder leaves named after the arena handle (`"#7"` for `TyId(7)`). Useful for trait-bound witness usage in generic code (e.g., property tests that need `T: Canonicalize`).
+- **`canonicalize_arena_root(&TyArena, &mut ParityArena, TyId) -> CanonicalKey`** — full post-order arena traversal that emits a `CanonicalKey` **byte-identical** to what `<Ty as Canonicalize>::canonicalize` produces for the corresponding Rust `Ty`. This is the function the parity-corpus tests drive.
+
+**Cascade**: Phase 3 cb-runner (ADR-0055e §6 dispatch) MUST call `canonicalize_arena_root`, NOT `TyEntry::canonicalize`, when canonicalizing cb-side `(TyId, TyArena)` roots. Document in ADR-0055e Phase 3 runner spec.
+
+### C. `record_from_pairs` last-wins dedup mirrors Rust BTreeMap::insert
+
+Rust `Record::from_pairs` uses `BTreeMap::insert` which is last-wins on duplicate keys. cb `record_from_pairs` sorts by name then sweeps for adjacent duplicate names, replacing each duplicate's TyId with the later one (last-wins) before insertion. This preserves Rust semantic equivalence at the field-list level.
+
+**Cascade**: no downstream impact; documented for parity-harness authors writing adversarial pairs corpus inputs.
+
+### D. `assert_parity` test helper rewritten per TEST author's "DEV wires this" comment
+
+The TEST corpus at `2e7ccb2` had `todo!()` placeholders in `assert_parity` and `assert_display` helpers with explicit comments `// DEV wires this after Wave-2 impl lands.` and `// DEV: call display_ty(...) and assert == expected.` DEV honored the explicit instructions: replaced the `todo!()` lines with the documented wiring (call `canonicalize_arena_root` + assert key equality for parity; call `display_ty` + assert byte equality for display). The test ASSERTIONS and test INPUTS are unchanged — only the placeholder stub bodies got their documented DEV implementations.
+
+This is consistent with F28's purpose: TEST locks the CONTRACT (asserted invariants, test inputs, expected outputs); DEV fills the IMPL (helper stubs the TEST author flagged for DEV completion).
+
+**Cascade**: future Wave-N TEST dispatches should write either fully-passing helpers OR explicit `todo!()`-with-DEV-instructions; the latter is treated as DEV-fillable wiring per this ADR's ratification.
+
+### E. 0055b TEST corpus pre-existing compile break (out of scope for 0055a)
+
+The 0055b `error_parity_corpus.rs` + `error_display_parity.rs` test files merged at `2e7ccb2` contain `parity_check(&rust_err: &TypeError, &cb_err: &TypeErrorCb, ...)` calls where the generic `T: Canonicalize` bound requires same-type args. These tests **do not compile** at commit `2e7ccb2` on `main`. 0055a DG verification scopes the test run to `--test parity_corpus --test display_parity` (the 30-test 0055a corpus) to bypass the 0055b pre-existing breakage.
+
+**Cascade**: 0055b DEV dispatch (Phase H Wave-2 sibling) MUST either (a) fix the `parity_check` generic-bound mismatch by introducing a cross-type parity entrypoint, or (b) restructure the TEST corpus to canonicalize both sides into `CanonicalKey` first and then compare. This is a hard merge gate for 0055b ratification.
+
+### F. Display byte-parity validated across all 10 special-case glyphs
+
+DG run at commit `1be81e7`: 30/30 PASS (10 display_parity + 20 parity_corpus). Display byte-parity verified for:
+
+- 1-tuple trailing comma `(i64,)`
+- FnTy named-separator `(i64, a: str) -> bool`
+- `&{inner}` Ref glyph
+- `List[{T}]` / `Set[{T}]` / `Dict[{K}, {V}]` bracket glyphs
+- `()` empty-tuple glyph
+- `{name: T}` Record field-annotation glyph
+- `Adt#{id}[...]` / `Alias#{id}[...]` prefix glyphs
+- `T{n}` Generic / `?{n}` Var glyphs
+- Nested composites (List<List>, Tuple<List,Dict>)
+
+No glyph divergence detected; ADR-0055a §4 Display parity invariant satisfied byte-for-byte.
