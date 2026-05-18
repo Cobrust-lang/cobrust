@@ -5,7 +5,7 @@ parent_adr: 0055
 title: "Phase H Tier-2 — `crates/cobrust-types/src/check.rs` cb port (bidirectional checker under arena form; LARGEST Phase H sub-sprint)"
 status: proposed
 date: 2026-05-18
-last_verified_commit: 929cd4a
+last_verified_commit: fd263f4
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0055a, adr:0055b, adr:0055c, adr:0055e]
@@ -24,7 +24,7 @@ Phase H Tier-2 stage per ADR-0055 §3.3 sub-ADR roster (`check.rs` cb port, Tier
 - `TypedModule` — public output: `def_types: HashMap<u32, Ty>` + `hir: Module`.
 - `pub fn check(module: &Module) -> Result<TypedModule, TypeError>` — top-level entry; constructs a `Ctx`, invokes `check_module`, finalizes via `subst.apply` over every `def_types` entry, surfaces `AmbiguousType` if any free var remains.
 - `Ctx` — stateful struct holding `subst: Subst`, `vars: VarAllocator`, `def_types: HashMap<DefId, Ty>`, `alias_map: HashMap<String, Ty>`, `return_stack: Vec<Ty>`, `loop_depth: usize`, `poly_intrinsic_defs: HashSet<DefId>`.
-- ~50 methods on `Ctx`: 4 lifecycle (`new`, `fresh_var`, `record_def`, `lookup_def`), 7 module-checking (`check_module`, `prebind_items`, `prebind_item`, `fn_signature_type`, `check_item`, `check_fn`, `check_class`), 4 block-checking (`check_block`, `check_stmt`, `check_loop`, `iter_element`), 1 match (`check_match`), 2 exhaustiveness (`is_exhaustive`, `uncovered_set`), `synth_expr` (the giant — ~340 LOC), 5 method-table tries (`try_synth_{dict,str,list,float,int}_method`), `try_synth_method_call` chain, `synth_call`, `unify_call_arg` (ADR-0052a one-way `Ref(T) → T` coercion), `synth_bin`, `synth_un`, `synth_comp`, `lit_type`, `lower_default_type`, `validate_hashable_dict`, `lower_type`, `lower_named_type`, `lower_generic_type`, `lookup_resolved`, `instantiate_list_polymorphic`, `expect_bool`, `bind_pattern`.
+- ~50 methods on `Ctx`: 4 lifecycle (`new`, `fresh_var`, `record_def`, `lookup_def`), 7 module-checking (`check_module`, `prebind_items`, `prebind_item`, `fn_signature_type`, `check_item`, `check_fn`, `check_class`), 4 block-checking (`check_block`, `check_stmt`, `check_loop`, `iter_element`), 1 match (`check_match`), 2 exhaustiveness (`is_exhaustive`, `uncovered_set`), `synth_expr` (the giant — ~329 LOC), 5 method-table tries (`try_synth_{dict,str,list,float,int}_method`), `try_synth_method_call` chain, `synth_call`, `unify_call_arg` (ADR-0052a one-way `Ref(T) → T` coercion), `synth_bin`, `synth_un`, `synth_comp`, `lit_type`, `lower_default_type`, `validate_hashable_dict`, `lower_type`, `lower_named_type`, `lower_generic_type`, `lookup_resolved`, `instantiate_list_polymorphic`, `expect_bool`, `bind_pattern`.
 - ~10 free functions: `is_copy_primitive`, `lit_to_string`, `_dummy`, `{str,list,float,int}_method_suggestion`, `is_list_polymorphic_intrinsic_name`, `literal_int_value`, `resolve_tuple_index`.
 - `BlockOutcome` enum + `BlockOutcome::join` helper.
 

@@ -5,7 +5,7 @@ parent_adr: 0055
 title: "Phase H Tier-1 — `crates/cobrust-types/src/error.rs` + `lib.rs` cb port"
 status: proposed
 date: 2026-05-18
-last_verified_commit: f5d1f5a
+last_verified_commit: fd263f4
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0055e, adr:0055a, adr:0052b]
@@ -112,7 +112,7 @@ Top 3 risks ranked by impl-blast-radius:
 
 1. **`suggestion: &'static str` representation in cb** — Rust impl uses `Option<&'static str>` because every suggestion is a compile-time literal per ADR-0052b §2 ("populated at construction time"). Cobrust has no `'static` lifetime; the natural port is `Option[str]` (owned). Two concerns: (a) cb-side construction allocates a fresh str (vs Rust zero-alloc literal reference); negligible cost at M2 since errors are not hot-path. (b) parity harness compares string **value** byte-equal per ADR-0055e §6 BLOCK rule 4 — both impls must emit the same characters regardless of lifetime; the lifetime difference is invisible to the harness. Mitigation: cb impl emits the same literal-text suggestions as Rust; the static-vs-owned distinction is purely an impl-internal storage choice with no observable surface impact.
 
-2. **Pretty-printing parity** — every `#[error("...")]` format string in Rust must be reproduced byte-identically in cb `display_error`. Subtle drift risks: argument ordering (`{expected}` before `{actual}` per `TypeMismatch` arm); backtick-vs-quote glyphs (Rust `\`{name}\`` becomes cb-side `\` + name + `\``); `{span}` rendering invokes `Display for Span` from the shared Rust frontend (per ADR-0055 §3.1 frontend-stays-Rust) — the cb side calls back into the Rust `Span` Display through the FFI surface defined by ADR-0055 §6 pre-Phase-H spike. Mitigation: 0055e Phase 2 sanity stage extends to include "every `display_error` variant round-trips through canonicalization" property test; calibrates byte-equality on the 22 variant Display outputs before any cb impl wires in.
+2. **Pretty-printing parity** — every `#[error("...")]` format string in Rust must be reproduced byte-identically in cb `display_error`. Subtle drift risks: argument ordering (`{expected}` before `{actual}` per `TypeMismatch` arm); backtick-vs-quote glyphs (Rust `\`{name}\`` becomes cb-side `\` + name + `\``); `{span}` rendering invokes `Display for Span` from the shared Rust frontend (per ADR-0055 §3.1 frontend-stays-Rust) — the cb side calls back into the Rust `Span` Display through the FFI surface defined by ADR-0055 §6 pre-Phase-H spike. Mitigation: 0055e Phase 2 sanity stage extends to include "every `display_error` variant round-trips through canonicalization" property test; calibrates byte-equality on the 25 variant Display outputs before any cb impl wires in.
 
 3. **`lib.rs` re-export equivalence** — the cb `lib.cb` re-export surface MUST preserve every `pub use` name from Rust `lib.rs` so downstream Tier-2 ports (0055c `infer.rs`, 0055d `check.rs`) can `use cobrust_types_cb::{TypeError, Ty, VarId, ...}` with the same import shape. Drift risks: arena-form `Ty` is `TyEntry`-and-arena-handle in cb; the re-export must preserve the **name** `Ty` (as alias to `TyEntry` per §4) for Tier-2 import-shape parity. `VarAllocator` re-export is name-identical; payload shape per 0055a §"Decision" instance-field-counter form. The 4 `pub mod` lines (`check`, `error`, `infer`, `ty`) translate 1:1; the 4 `pub use` lines preserve every name (`TypedModule`, `check`, `TypeError`, `Subst`, `finalize`, `unify`, `AdtId`, `AliasId`, `FnTy`, `GenericVar`, `Record`, `Ty`, `VarAllocator`, `VarId`). Mitigation: this ADR's §4 lists the re-export-name contract explicitly; the parity harness's per-input granularity (ADR-0055e §2) catches re-export drift at compile time on Tier-2 impl (cb file fails to compile = harness fails CI before parity is even tested).
 
@@ -139,7 +139,7 @@ No dependency on Phase 7.5 (recursive struct types) per ADR-0055 §3.2.
 ### 9.1 Positive
 
 - Tier-1 closure (with 0055a) hands Tier-2 ports (0055c + 0055d) a complete data-surface API: `TyArena` + `TyEntry` + `TypeError` + `lib.cb` re-exports. Tier-2 spikes can start without re-litigating Tier-1 surface choices.
-- 22 `TypeError::*` variants in cb mirror become §2.5 §B training-data overlap surface — every future Cobrust error-type port (HIR errors, MIR errors per ADR-0054 §11) learns from this 22-variant cb-enum layout.
+- 22 `TypeError::*` variants in cb mirror become §2.5 §B training-data overlap surface — every future Cobrust error-type port (HIR errors, MIR errors per ADR-0054 §11) learns from this 25-variant cb-enum layout.
 - `lib.cb` re-exports are mechanical; `lib.rs` ≈ 61 LOC ⇒ cb mirror ≈ 30 LOC after dropping the clippy lint block. Smallest sub-port in Phase H.
 
 ### 9.2 Negative
@@ -150,9 +150,13 @@ No dependency on Phase 7.5 (recursive struct types) per ADR-0055 §3.2.
 
 ### 9.3 Dispatch shape
 
-- **TEST**: sonnet — well-scoped impl per this ADR's §4 invariants. Property tests on 22-variant Display round-trip + suggestion-field presence + Multiple-variant flattening.
-- **DEV**: opus — variant proliferation (22 arms) is mechanical but Display byte-parity (risk 2) needs §2.5 compile-time-catch discipline.
+- **TEST**: sonnet — well-scoped impl per this ADR's §4 invariants. Property tests on 25-variant Display round-trip + suggestion-field presence + Multiple-variant flattening.
+- **DEV**: opus — variant proliferation (25 arms) is mechanical but Display byte-parity (risk 2) needs §2.5 compile-time-catch discipline.
 - **Wall**: ~2-3 days per ADR-0055 §3.5 Wave 2 budget (smaller surface than 0055a; faster close possible).
 - **Host**: DG primary per ADR-0055 §9.1 row 4. Mode C (P10-direct PAIR).
+
+### 9.4 Documentation mandate
+
+Per ADR-0055 §9.2 and CLAUDE.md §3.3, this sub-ADR commit ships triple-doc updates (zh + en + agent). Human docs land in `docs/human/{zh,en}/self-host.md` §"Error enum self-host".
 
 — P9 Tech Lead, 2026-05-18

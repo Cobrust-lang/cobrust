@@ -1896,3 +1896,30 @@ done
     || fail "crates/cobrust-cli/tests/file_io_e2e.rs missing (M-F.3.6 corpus)"
 
 echo "doc-coverage: M-F.3.6 file IO completion surface checks passed"
+
+# --- Phase H self-host surface coverage (ADR-0055 + 0055a-e) ----------------
+# When ANY of the 0055/a/b/c/d/e ADRs reaches 'status: accepted', both
+# bilingual self-host.md skeleton files must exist. While all are 'proposed'
+# this block is dormant (condition never triggers).
+phase_h_adrs=(
+    "docs/agent/adr/0055-phase-h-self-host-type-checker.md"
+    "docs/agent/adr/0055a-ty-rs-cb-port.md"
+    "docs/agent/adr/0055b-error-rs-lib-rs-cb-port.md"
+    "docs/agent/adr/0055c-infer-rs-cb-port.md"
+    "docs/agent/adr/0055d-check-rs-cb-port.md"
+    "docs/agent/adr/0055e-phase-h-parity-harness.md"
+)
+phase_h_any_accepted=0
+for adr_path in "${phase_h_adrs[@]}"; do
+    if [[ -f "$adr_path" ]] && grep -q '^status: accepted$' "$adr_path"; then
+        phase_h_any_accepted=1
+        break
+    fi
+done
+if [[ "$phase_h_any_accepted" -eq 1 ]]; then
+    [[ -f "docs/human/zh/self-host.md" ]] \
+        || fail "docs/human/zh/self-host.md missing — required when any Phase H ADR (0055/a-e) is accepted"
+    [[ -f "docs/human/en/self-host.md" ]] \
+        || fail "docs/human/en/self-host.md missing — required when any Phase H ADR (0055/a-e) is accepted"
+    echo "doc-coverage: Phase H self-host bilingual skeleton check passed"
+fi

@@ -4,7 +4,7 @@ adr_id: 0055
 title: "Phase H — Self-host cobrust-types in Cobrust (frame ADR: arena-vs-recursive disposition / crate split / parity-harness contract / completion bar)"
 status: proposed
 date: 2026-05-18
-last_verified_commit: 2a710d3
+last_verified_commit: fd263f4
 supersedes: []
 superseded_by: []
 relates_to: [adr:0054, adr:0050d, adr:0048]
@@ -16,6 +16,8 @@ ratification_path: in-session review per ADR-0050 §"Audit model — teammate-in
 # ADR-0055: Phase H — Self-host `cobrust-types` in Cobrust (batch frame)
 
 ## 1. Context
+
+Phase H self-hosts `cobrust-types` (5 files / 3368 LOC) under the Option B arena workaround: `Ty::List(Box<Ty>)` recursive fields become arena handles (`i64`), deferring Phase 7.5 recursive-type native support while unblocking the full translation now. This 2-sentence frame is the load-bearing executive summary; §5 and §6 below expand the arena disposition in full.
 
 ### 1.1 Constitutional binding (§4.4)
 
@@ -38,7 +40,7 @@ Phase H is **§2.5-ranked second among Phase H/I/J/K/L** per ADR-0054 §2 rerank
 | Axis | Phase G (closed) | Phase H (this ADR) |
 |---|---|---|
 | Mandate | §2.5 LLM-friendliness — ergonomic + verification depth | §4.4 self-hosting binding — proof artifact + training-data corpus |
-| Surface posture | depth (4 P0 ergonomic axes) | breadth (full mirror of one crate, 5 files / 3320 LOC) |
+| Surface posture | depth (4 P0 ergonomic axes) | breadth (full mirror of one crate, 5 files / 3368 LOC) |
 | Output kind | Rust impl edits + new error fields | new `.cb` crate parallel to Rust canonical |
 | Verification model | 5-gate (cargo build / clippy / fmt / cargo test / corpus) | 5-gate + **parity harness** (ADR-0055e) — Rust impl vs cb impl diff-test on M2 corpus |
 | Audience for output | LLM agent emitting v0.3.0+ source | LLM agent + Phase J LSP + future Cobrust translations |
@@ -92,7 +94,7 @@ Scoping spike §5 refined ADR-0054 §3.3's 4-sub-ADR proposal to **6 sub-ADRs** 
 - **ADR-0055a** — `ty.rs` cb port (Tier-1; week 1 days 1-3). Arena-based `Ty` enum + `Record` + `FnTy` + `VarAllocator`. Pure data + `Display` impl. Most load-bearing data type for downstream sub-ADRs.
 - **ADR-0055b** — `error.rs` + `lib.rs` cb port (Tier-1; week 1 days 3-5). `TypeError` enum + ADR-0052b `suggestion: Option<&'static str>` thread + module exports. Pure data.
 - **ADR-0055c** — `infer.rs` cb port (Tier-2; week 2 days 1-4). `Subst` + `unify` + `finalize` over arena `Ty`. Recursive over arena handles.
-- **ADR-0055d** — `check.rs` cb port (Tier-2; weeks 2-3). Bidirectional checker over arena. Single largest sub-sprint (2354 LOC).
+- **ADR-0055d** — `check.rs` cb port (Tier-2; weeks 2-3). Bidirectional checker over arena. Single largest sub-sprint (2402 LOC).
 - **ADR-0055e** — Parity harness contract. M2 corpus diff-test infrastructure (Rust impl vs cb impl). Failure surface per §3.4.
 
 ### 3.4 Parity-harness contract (sub-ADR 0055e)
@@ -150,7 +152,7 @@ Cobrust-source feature availability at HEAD `8b4366c` per spike §3 table:
 
 Per spike §4 Option B, recursive struct types deferred per ADR-0050 §A3 are worked around via an arena:
 
-- **Rust impl shape** (HEAD `8b4366c` `crates/cobrust-types/src/ty.rs:58-65`):
+- **Rust impl shape** (HEAD `8b4366c` `crates/cobrust-types/src/ty.rs::Ty (Tuple / List / Set / Dict recursive variants)`):
   ```rust
   Tuple(Vec<Ty>),
   List(Box<Ty>),
@@ -206,7 +208,7 @@ Additional Phase-H-specific risks beyond spike §6:
 ### 8.2 Negative
 
 - 6 sub-ADRs + parity-harness infrastructure = heaviest doc-tree commitment of any Phase to date (vs Phase G's 4 sub-ADRs + 1 prereq ADR). Doc-coverage gate (constitution §3.3) load is ~6 × triple-doc (zh + en + agent) = 18 doc surfaces.
-- 0055d (`check.rs` cb port, 2354 LOC) is the largest single sub-sprint in project history. P9 design spike for 0055d alone may run multi-day before P10-direct PAIR dispatch.
+- 0055d (`check.rs` cb port, 2402 LOC) is the largest single sub-sprint in project history. P9 design spike for 0055d alone may run multi-day before P10-direct PAIR dispatch.
 - Arena workaround (§5) introduces a layer of indirection the Rust impl does not have. cb mirror is not a 1:1 line-for-line translation; semantic equivalence holds (via parity harness) but syntactic divergence is real. Phase J LSP dogfooding (ADR-0054 §3.1) sees the arena form, not the recursive-type form Phase 7.5 would deliver.
 - Parity harness (ADR-0055e) requires `cobrust build` + `cobrust run` pipeline to be production-quality before Phase H Wave 2 dispatches. Pre-Phase-H "cobrust-cb compile-and-diff infrastructure spike" (per §6 acceptance gate) is a hidden prerequisite that may slip Wave 2.
 
@@ -258,7 +260,7 @@ Each sub-ADR's commit ships triple-doc updates per ADR-0052 §"Documentation man
 
 - Phase G Wave 2 round 2 is near-closure (ADR-0052d method-call sugar impl remaining); v0.3.0 tag boundary approaches.
 - ADR-0054 §10 explicitly named ADR-0055 (Phase H frame) as a pre-Phase-H prep deliverable: "Self-host type checker scoping ADR-0055-prereq (~1 week, Mac-local doc-only): which types + which `cobrust-types` modules get the `.cb` mirror first."
-- The scoping spike (`docs/agent/dispatches/2026-05-18-phase-h-self-host-scoping.md`) is fresh (authored 2026-05-18 at `bc10842`); empirical anchors (5 files / 3320 LOC vs ADR-0054's 12 files / 5500 LOC estimate) need ADR-codification before Wave 1 dispatch. Without this frame, sub-ADRs 0055a..e would re-derive scope from the spike + ADR-0054 in each spike, risking drift across the 6 parallel dispatches.
+- The scoping spike (`docs/agent/dispatches/2026-05-18-phase-h-self-host-scoping.md`) is fresh (authored 2026-05-18 at `bc10842`); empirical anchors (5 files / 3368 LOC vs ADR-0054's 12 files / 5500 LOC estimate) need ADR-codification before Wave 1 dispatch. Without this frame, sub-ADRs 0055a..e would re-derive scope from the spike + ADR-0054 in each spike, risking drift across the 6 parallel dispatches.
 - The arena-vs-recursive disposition (§5) is the load-bearing decision affecting all 5 sub-ADRs. Codifying it ex-ante per CTO operating instruction "default to proceed" + "ADR-or-it-didn't-happen" prevents per-sub-ADR re-litigation.
 - Phase H's 6-sub-ADR roster + Wave 0 infra precedent (parity harness landing FIRST) is a new pattern; Phase J/K/L inherit it for similarly-large self-host-style work.
 
