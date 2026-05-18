@@ -1,0 +1,42 @@
+---
+source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
+assertion_line: 71
+expression: diags
+snapshot_kind: text
+---
+[
+  {
+    "range": {
+      "start": {
+        "line": 0,
+        "character": 3
+      },
+      "end": {
+        "line": 0,
+        "character": 4
+      }
+    },
+    "severity": 1,
+    "code": "implicit-truthiness",
+    "source": "cobrust",
+    "message": "non-bool used in truthiness position: got `i64` at file#0@3..4",
+    "relatedInformation": [
+      {
+        "location": {
+          "uri": "cobrust://synthetic",
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 3
+            },
+            "end": {
+              "line": 0,
+              "character": 4
+            }
+          }
+        },
+        "message": "change to `if x != 0:` (use `.is_some()` for Option)"
+      }
+    ]
+  }
+]
