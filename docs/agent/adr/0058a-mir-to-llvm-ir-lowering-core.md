@@ -3,14 +3,15 @@ doc_kind: adr
 adr_id: 0058a
 parent_adr: 0058
 title: "Phase K wave-1 — MIR → LLVM IR lowering core (parallel to Cranelift backend)"
-status: proposed
+status: accepted
 date: 2026-05-18
-last_verified_commit: 54a599c
+ratified_at: 2026-05-19
+last_verified_commit: 3d60e63
 supersedes: []
 superseded_by: []
 relates_to: [adr:0058, adr:0023, adr:0046]
 discovered_by: P10 Phase K wave-1 first sub-sprint per ADR-0058 §"Sub-ADR roster"
-ratification_path: P9 sub-ADR review; ratifies on TEST+DEV PAIR landing the LLVM `emit` entry path + diff-gate parity
+ratification_path: P9 sub-ADR review; ratified on DEV landing of LlvmEmitter (`4686192`) + DG verify 355 tests PASS / TEST_EXIT=0
 ---
 
 # ADR-0058a: Phase K wave-1 — MIR → LLVM IR lowering core
@@ -333,3 +334,87 @@ audit-trail protection against scope creep at later sub-ADR authoring.
 - CLAUDE.md §4.1 — pipeline `Codegen (LLVM / Cranelift)` anchor.
 
 — P9 Tech Lead, 2026-05-18
+
+## 14. Cascade enumeration (post-spike, 2026-05-19 ratification)
+
+Three honest re-scopes surfaced during <self-hosted-runner> verify against
+LLVM 18.1.8. Each is recorded here so sub-ADR 0058b's authoring sees
+the ratified-shape ex-ante:
+
+### 14.1 `Ty::None → i64` (revises §4.1 row from `i8`)
+
+**Original §4.1 row**: `Ty::None → i8 (unit-shaped placeholder)`.
+
+**Ratified shape**: `Ty::None → i64`, mirroring Cranelift backend's
+`cranelift_scalar_ty(...).unwrap_or(pointer_type)` fallback.
+
+**Reason**: MIR uses `Ty::None` for synthetic temporaries (e.g.
+`_callret` slots, post-BinOp spills). The lowering relies on the
+caller's value flow to fix the type at use. Lowering to `i8`
+mis-aligned the function signature for recursive callees (e.g. `fib`,
+`ack` in `codegen_release_smoke`) where the LLVM verifier rejected
+`call i64 @fib(i8 %load)` against an `i64`-typed param.
+
+**Wave-2 evolution**: sub-ADR 0058b may port the Cranelift
+backend's `infer_local_types` fixed-point dataflow for tighter
+codegen; wave-1's coarser fallback is functionally correct on the
+M9 "core 30".
+
+### 14.2 `LlvmEmitter::new` owns Module + Builder (revises §3.1 sketch)
+
+**Original §3.1 sketch**: `let llvm_module = ctx.create_module(...);
+let builder = ctx.create_builder(); LlvmLowerCtx::new(&ctx, &llvm_module, &builder, spec)`.
+
+**Ratified shape**: `LlvmEmitter::new(&'ctx Context, &TargetSpec, &TargetMachine)`
+constructs and OWNS the `Module<'ctx>` + `Builder<'ctx>` internally.
+
+**Reason**: borrowed-Module + borrowed-Builder created on the
+`emit()` stack drop before `LlvmEmitter<'ctx>` does, violating the
+lifetime contract. Owning them inside the emitter binds drop order
+to the emitter itself (which drops before the enclosing `Context`
+arena).
+
+**Public surface impact**: `LlvmEmitter::new` signature differs from
+the ADR's pre-impl sketch by one argument (`&TargetMachine` replaces
+the borrowed Module + Builder pair). The `emit()` entry path is
+unchanged.
+
+### 14.3 `Call(Constant::Str)` runtime-helper path deferred to wave-2
+
+**Original §3.1 scope**: implicit in "every M9 'core 30' form".
+
+**Ratified shape**: wave-1 ships `Call(Constant::FnRef(id))` (user
+fns) but **defers** `Call(Constant::Str(name))` (runtime-helper /
+extern-symbol path) to wave-2. The wave-1 stub fallthrough writes 0
+into the destination and branches — matches Cranelift's mid-M9
+posture.
+
+**Reason**: the Cranelift backend's runtime-helper Call lowering
+(`cranelift_backend.rs:1313-1395`) entangles ADR-0024 + ADR-0025 +
+ADR-0027 + ADR-0044 amendments across ~80 LOC of dispatch logic
+(typed runtime-helper FuncRef path, `(ptr, len)` expansion for
+M10 hello-world legacy, ADR-0044 trailing-Str expansion). Porting
+this faithfully into the LLVM backend is a wave-2 sprint of its own.
+
+**Impact on §8 non-goals**: §8 lists "Optimization pass pipeline",
+"DWARF emission", and "Multi-target" as deferred. Wave-2 (sub-ADR
+0058b) acquires the runtime-helper Call path AS WELL as the opt
+pipeline. The acceptance gate for sub-ADR 0058b shifts: runtime-
+helper Call parity becomes a prerequisite for the §"binary-size
+acceptance bar" close (programs with print/format/iter need the
+runtime helpers to link, then opt can measure size).
+
+### 14.4 Other addenda
+
+- `BasicTypeEnum::ScalableVectorType(_)` match arm in `zero_of()`:
+  LLVM 18+ inkwell exposes scalable vectors as a distinct variant.
+  Wave-1 handles defensively (`t.const_zero()` mirror of regular
+  vectors).
+- inkwell 0.9 `try_as_basic_value()` returns `ValueKind<'ctx>` (enum
+  Basic/Instruction), NOT `Either<BasicValueEnum, InstructionValue>`.
+  Use `.basic()` (Option<BasicValueEnum>), not `.left()`.
+- <self-hosted-runner> deps: zlib1g + libzstd `.so.1` shared libs exist
+  but no `-dev` symlinks (no passwordless sudo); workaround via
+  `~/.local/lib/{libz,libzstd}.so` symlinks + `RUSTFLAGS="-L ..."`.
+
+— P10 dispatcher post-DEV ratification, 2026-05-19
