@@ -7,7 +7,7 @@
 //! impl from error_cb.rs (0055b wave-2) under the convention-based
 //! handle→ty-display mapping.
 //!
-//! All tests are `#[ignore = "ADR-0055d Wave-3 DEV impl pending"]`.
+//! All tests are ``.
 //!
 //! ## F34 anchors
 //! - `check_display_parity.rs::test_display_type_mismatch_check_site` — check-site representative
@@ -33,7 +33,7 @@ fn dummy_span() -> Span {
 /// check.rs::Ctx::synth_bin → TypeError::TypeMismatch.
 /// F34 anchor: check_display_parity.rs::test_display_type_mismatch_check_site
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_type_mismatch_check_site() {
     let cb_err = TypeErrorCb::TypeMismatch {
         expected: 0, // i64
@@ -61,7 +61,7 @@ fn test_display_type_mismatch_check_site() {
 /// check.rs::Ctx::iter_element → TypeError::NotIterable.
 /// F34 anchor: check_display_parity.rs::test_display_not_iterable_check_site
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_not_iterable_check_site() {
     let cb_err = TypeErrorCb::NotIterable {
         actual: 0, // i64
@@ -83,7 +83,7 @@ fn test_display_not_iterable_check_site() {
 /// check.rs::Ctx::expect_bool → TypeError::ImplicitTruthiness.
 /// F34 anchor: check_display_parity.rs::test_display_implicit_truthiness_check_site
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_implicit_truthiness_check_site() {
     let cb_err = TypeErrorCb::ImplicitTruthiness {
         actual: 0, // i64
@@ -104,7 +104,7 @@ fn test_display_implicit_truthiness_check_site() {
 /// Display: NotCallable produced at synth_call (Int not callable).
 /// check.rs::Ctx::synth_call → TypeError::NotCallable.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_not_callable_check_site() {
     let cb_err = TypeErrorCb::NotCallable {
         actual: 0, // i64
@@ -125,7 +125,7 @@ fn test_display_not_callable_check_site() {
 /// Display: NotIndexable produced at Index arm (Float not indexable).
 /// check.rs::Ctx::synth_expr Index arm → TypeError::NotIndexable.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_not_indexable_check_site() {
     let cb_err = TypeErrorCb::NotIndexable {
         actual: 3, // f64
@@ -146,7 +146,7 @@ fn test_display_not_indexable_check_site() {
 /// Display: NotHashable produced at Dict arm (List key rejected).
 /// check.rs::Ctx::synth_expr Dict arm → TypeError::NotHashable.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_not_hashable_check_site() {
     // List handle — any non-standard handle produces "?_" per convention.
     let cb_err = TypeErrorCb::NotHashable {
@@ -164,7 +164,7 @@ fn test_display_not_hashable_check_site() {
 /// Display: ArityMismatch produced at synth_call.
 /// check.rs::Ctx::synth_call → TypeError::ArityMismatch.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_arity_mismatch_check_site() {
     let cb_err = TypeErrorCb::ArityMismatch {
         expected: 2,
@@ -186,7 +186,7 @@ fn test_display_arity_mismatch_check_site() {
 /// Display: UnknownName produced at lookup_resolved.
 /// check.rs::Ctx::lookup_resolved → TypeError::UnknownName.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_unknown_name_check_site() {
     let cb_err = TypeErrorCb::UnknownName {
         name: "missing_var".to_string(),
@@ -207,7 +207,7 @@ fn test_display_unknown_name_check_site() {
 /// Display: AmbiguousType produced at check() top-level finalization.
 /// check.rs::check() → TypeError::AmbiguousType on leaked free vars.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_ambiguous_type_check_top() {
     let cb_err = TypeErrorCb::AmbiguousType {
         span: dummy_span(),
@@ -223,7 +223,7 @@ fn test_display_ambiguous_type_check_top() {
 /// Display: DictSpreadNotSupported produced at Dict arm spread rejection.
 /// check.rs::Ctx::synth_expr Dict arm DictEntry::Spread → TypeError::DictSpreadNotSupported.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_dict_spread_not_supported() {
     let cb_err = TypeErrorCb::DictSpreadNotSupported {
         span: dummy_span(),
@@ -239,7 +239,7 @@ fn test_display_dict_spread_not_supported() {
 /// Display: BorrowOfNonPlace produced at Borrow arm non-place rejection.
 /// check.rs::Ctx::synth_expr Borrow arm → TypeError::BorrowOfNonPlace.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_borrow_of_non_place() {
     let cb_err = TypeErrorCb::BorrowOfNonPlace {
         span: dummy_span(),
@@ -255,7 +255,7 @@ fn test_display_borrow_of_non_place() {
 /// Display: MutableDefault produced at lower_default_type.
 /// check.rs::Ctx::lower_default_type → TypeError::MutableDefault.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_mutable_default() {
     let cb_err = TypeErrorCb::MutableDefault {
         span: dummy_span(),
@@ -271,7 +271,7 @@ fn test_display_mutable_default() {
 /// Display: NonExhaustiveMatch produced at check_match exhaustiveness check.
 /// check.rs::Ctx::check_match → TypeError::NonExhaustiveMatch.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_non_exhaustive_match() {
     let cb_err = TypeErrorCb::NonExhaustiveMatch {
         uncovered: vec!["True".to_string(), "False".to_string()],
@@ -292,7 +292,7 @@ fn test_display_non_exhaustive_match() {
 /// Display: UnknownMethod produced at try_synth_method_call fallthrough.
 /// check.rs::Ctx::try_synth_method_call chain → TypeError::UnknownMethod.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_unknown_method() {
     let cb_err = TypeErrorCb::UnknownMethod {
         type_name: "Int".to_string(),
@@ -318,7 +318,7 @@ fn test_display_unknown_method() {
 /// Display: BreakOutsideLoop produced at check_stmt Break arm.
 /// check.rs::Ctx::check_stmt StmtKind::Break → TypeError::BreakOutsideLoop.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_break_outside_loop() {
     let cb_err = TypeErrorCb::BreakOutsideLoop {
         span: dummy_span(),
@@ -334,7 +334,7 @@ fn test_display_break_outside_loop() {
 /// Display: YieldOutsideFn produced at Yield/YieldFrom arms.
 /// check.rs::Ctx::synth_expr Yield arm → TypeError::YieldOutsideFn.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_yield_outside_fn() {
     let cb_err = TypeErrorCb::YieldOutsideFn {
         span: dummy_span(),
@@ -350,7 +350,7 @@ fn test_display_yield_outside_fn() {
 /// Display: Multiple wraps check-site errors; output is generic "multiple type errors".
 /// check.rs::Ctx::synth_comp / check_match → TypeError::Multiple.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_multiple_check_aggregated() {
     let cb_err = TypeErrorCb::Multiple(vec![
         TypeErrorCb::BreakOutsideLoop {
@@ -373,7 +373,7 @@ fn test_display_multiple_check_aggregated() {
 /// Display: OccursCheck produced when unify detects infinite type.
 /// check.rs::Ctx::synth_expr propagated from infer::unify → TypeError::OccursCheck.
 #[test]
-#[ignore = "ADR-0055d Wave-3 DEV impl pending"]
+
 fn test_display_occurs_check() {
     let cb_err = TypeErrorCb::OccursCheck {
         var: 0,
