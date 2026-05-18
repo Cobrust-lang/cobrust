@@ -69,7 +69,64 @@ indent = { tab-width = 4, unit = "    " }
 1. 双击 `tools/textmate-cobrust.tmbundle` — TextMate 会自动安装。
 2. 对于 Sublime Text：将 bundle 复制到 `Packages/User/` 并重启编辑器。
 
+## 语言服务器 (LSP, wave-1:诊断)
+
+Cobrust 提供语言服务器协议(LSP)实现 `cobrust-lsp`,可在编辑时直接
+将编译器错误浮现在编辑器中。
+
+**Wave-1 范围(根据 ADR-0057a):**
+
+- `textDocument/publishDiagnostics` —— Cobrust 编译流水线(parse + lower +
+  type-check)中的每个 `TypeError` / `MirError` / `LoweringError` 都会以
+  LSP `Diagnostic` 形式发布,包含:
+  - `cobrust check` 的规范错误信息;
+  - 结构化的 `code` 字段(例如 `"implicit-truthiness"`),供编辑器侧
+    code-action 路由使用;
+  - ADR-0052b 的 `suggestion` 字段(若已设置)作为
+    `relatedInformation[0].message` 附加 —— agent-LLM 直接消费的修复路径。
+
+**Wave-2+(后续):** hover、补全、定义跳转、重命名、codeAction。
+roster 参见 ADR-0057。
+
+### 构建与运行
+
+```bash
+# 在仓库根目录
+cargo build --release -p cobrust-lsp
+# 产物路径:target/release/cobrust-lsp
+```
+
+### VSCode / Cursor 配置
+
+在 `~/.vscode/extensions/<your-ext>/extension.js` 添加一个最小客户端,
+通过 stdio 为 `.cb` 文件启动 `cobrust-lsp`:
+
+```javascript
+const { LanguageClient } = require('vscode-languageclient/node');
+const serverOptions = { command: '/path/to/cobrust-lsp' };
+const clientOptions = {
+  documentSelector: [{ scheme: 'file', language: 'cobrust' }],
+};
+new LanguageClient('cobrust', 'Cobrust LSP', serverOptions, clientOptions).start();
+```
+
+### Neovim 配置 (nvim-lspconfig)
+
+```lua
+local lspconfig = require('lspconfig')
+local configs = require('lspconfig.configs')
+configs.cobrust = {
+  default_config = {
+    cmd = { '/path/to/cobrust-lsp' },
+    filetypes = { 'cobrust' },
+    root_dir = lspconfig.util.root_pattern('cobrust.toml', '.git'),
+  },
+}
+lspconfig.cobrust.setup{}
+```
+
 ## 不包含的功能
 
-- 定义跳转、类型检查、代码补全、诊断信息 — 参见 **F.1.8**（LSP 语言服务器）。
+- Wave-1 LSP 仅提供诊断。定义跳转、补全、悬浮提示、重命名、code-action
+  快速修复均在 ADR-0057b/c/d 范围内。
 - 格式化集成 — 参见 `cobrust fmt` CLI 工具。
