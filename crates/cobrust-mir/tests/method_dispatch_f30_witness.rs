@@ -97,16 +97,31 @@ fn lower_to_mir(src: &str) -> Result<MirModule, String> {
 
 /// Collect every callee symbol from every `Terminator::Call` in a body.
 ///
-/// Symbols are returned as `String`s lifted from `Operand::Constant
-/// (Constant::Str(name))`. The witness uses this to compare method-
-/// form vs PRELUDE-fn-form lowering and to verify no forbidden
-/// dispatch symbols appear.
-fn callees(body: &Body) -> Vec<String> {
+/// Symbols are returned as `String`s lifted from both
+/// `Operand::Constant(Constant::Str(name))` (runtime helpers) and
+/// `Operand::Constant(Constant::FnRef(def_id))` (PRELUDE / user fns
+/// resolved against the module's per-body name table). The witness
+/// uses this to compare method-form vs PRELUDE-fn-form lowering and
+/// to verify no forbidden dispatch symbols appear.
+///
+/// ADR-0052g §"MIR rewrite gap discovery 2026-05-18": the method-form
+/// rewrite at `lower.rs::lower_rewritten_method_call` emits
+/// `Constant::FnRef(def_id)`, not `Constant::Str(name)` — `callees()`
+/// MUST resolve FnRef back to the body name table to observe the
+/// rewrite from outside the MIR crate. Without FnRef resolution, the
+/// `f30wit_method_03` borrow-precedence witness observes an empty
+/// callee set and false-fails the assertion.
+fn callees(m: &MirModule, body: &Body) -> Vec<String> {
     body.blocks
         .iter()
         .filter_map(|b| match &b.terminator {
             Terminator::Call { func, .. } => match func {
                 Operand::Constant(Constant::Str(name)) => Some(name.clone()),
+                Operand::Constant(Constant::FnRef(id)) => m
+                    .bodies
+                    .iter()
+                    .find(|other| other.def_id.0 == *id)
+                    .map(|other| other.name.clone()),
                 _ => None,
             },
             _ => None,
@@ -116,7 +131,7 @@ fn callees(body: &Body) -> Vec<String> {
 
 /// Collect every callee symbol across every body in the module.
 fn all_callees(m: &MirModule) -> Vec<String> {
-    m.bodies.iter().flat_map(callees).collect()
+    m.bodies.iter().flat_map(|b| callees(m, b)).collect()
 }
 
 /// Assert property (b): no forbidden dispatch symbols appear in any
