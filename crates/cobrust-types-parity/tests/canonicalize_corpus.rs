@@ -29,7 +29,6 @@ use cobrust_types_parity::{CanonicalKey, TyArena, manual_canonical_key};
 
 /// C-01: `Tuple([Int, Str])` shape preserved — 2-child node, children Int + Str
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c01_tuple_shape_preserved() {
     let ty = Ty::Tuple(vec![Ty::Int, Ty::Str]);
     let key = manual_canonical_key(&ty);
@@ -41,7 +40,6 @@ fn c01_tuple_shape_preserved() {
 
 /// C-02: Empty tuple `Tuple([])` → leaf-like Tuple node with 0 children
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c02_empty_tuple_shape() {
     let ty = Ty::Tuple(vec![]);
     let key = manual_canonical_key(&ty);
@@ -51,7 +49,6 @@ fn c02_empty_tuple_shape() {
 
 /// C-03: `List[Bool]` shape preserved — single child Bool
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c03_list_shape_preserved() {
     let ty = Ty::List(Box::new(Ty::Bool));
     let key = manual_canonical_key(&ty);
@@ -62,7 +59,6 @@ fn c03_list_shape_preserved() {
 
 /// C-04: `Set[Bytes]` shape preserved — single child Bytes
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c04_set_shape_preserved() {
     let ty = Ty::Set(Box::new(Ty::Bytes));
     let key = manual_canonical_key(&ty);
@@ -73,7 +69,6 @@ fn c04_set_shape_preserved() {
 
 /// C-05: `Dict[Str, Float]` shape preserved — 2 children: Str, Float
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c05_dict_shape_preserved() {
     let ty = Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Float));
     let key = manual_canonical_key(&ty);
@@ -90,7 +85,6 @@ fn c05_dict_shape_preserved() {
 /// C-06: `TyArena::adt_id` assigns dense-pack ids (namespace: AdtId)
 /// First call → 0, second new id → 1, repeat → same.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c06_adt_namespace_dense_pack() {
     let mut arena = TyArena::new();
     let c0 = arena.adt_id(AdtId(42));
@@ -103,7 +97,6 @@ fn c06_adt_namespace_dense_pack() {
 
 /// C-07: `TyArena::alias_id` assigns dense-pack ids (namespace: AliasId)
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c07_alias_namespace_dense_pack() {
     let mut arena = TyArena::new();
     let c0 = arena.alias_id(AliasId(100));
@@ -116,7 +109,6 @@ fn c07_alias_namespace_dense_pack() {
 
 /// C-08: `TyArena::var_id` assigns dense-pack ids (namespace: VarId)
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c08_var_id_namespace_dense_pack() {
     let mut arena = TyArena::new();
     let c0 = arena.var_id(VarId(999));
@@ -129,7 +121,6 @@ fn c08_var_id_namespace_dense_pack() {
 
 /// C-09: `TyArena::generic_var` assigns dense-pack ids (namespace: GenericVar)
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c09_generic_var_namespace_dense_pack() {
     let mut arena = TyArena::new();
     let c0 = arena.generic_var(GenericVar(50));
@@ -142,7 +133,6 @@ fn c09_generic_var_namespace_dense_pack() {
 
 /// C-10: 5 namespaces are INDEPENDENT — AdtId(1) and AliasId(1) each start at 0
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c10_namespaces_independent() {
     let mut arena = TyArena::new();
     let adt0 = arena.adt_id(AdtId(1));
@@ -163,7 +153,6 @@ fn c10_namespaces_independent() {
 /// C-11: Same Ty structure with different VarId handles → same CanonicalKey
 /// (manual_canonical_key uses raw ids; this tests the DEV impl via TyArena)
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c11_var_id_different_handles_same_canonical() {
     // Both are single Var types — in a fresh arena, both become canonical id 0.
     let ty_a = Ty::Var(VarId(13));
@@ -181,7 +170,6 @@ fn c11_var_id_different_handles_same_canonical() {
 /// C-12: `Record` fields canonicalize in sorted order (BTreeMap guaranteed)
 /// The canonical key children must be sorted by field name.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c12_record_fields_sorted_in_canonical_key() {
     // Insertion order: z, a, m — BTreeMap sorts to: a, m, z
     let ty = Ty::Record(Record::from_pairs(vec![
@@ -200,7 +188,6 @@ fn c12_record_fields_sorted_in_canonical_key() {
 
 /// C-13: `Fn` canonical key includes both params and return child
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c13_fn_canonical_key_includes_return() {
     let ty = Ty::Fn(FnTy {
         positional: vec![Ty::Int, Ty::Str],
@@ -220,7 +207,6 @@ fn c13_fn_canonical_key_includes_return() {
 
 /// C-14: `Ref(Int)` canonical key is a single-child node per ADR-0052a
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c14_ref_canonical_key_single_child() {
     let ty = Ty::Ref(Box::new(Ty::Int));
     let key = manual_canonical_key(&ty);
@@ -232,7 +218,6 @@ fn c14_ref_canonical_key_single_child() {
 /// C-10b: FnTyId and RecordId namespaces are independent from each other and from
 /// the other 4 namespaces (AdtId, AliasId, VarId, GenericVar).
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c10b_fnty_record_namespaces_independent() {
     let mut arena_a = TyArena::new();
     let mut arena_b = TyArena::new();
@@ -261,7 +246,6 @@ fn c10b_fnty_record_namespaces_independent() {
 /// C-15: Deeply nested canonical key roundtrip — `List[Set[Dict[Str,Bool]]]`
 /// Canonical key must be idempotent: building from the same Ty twice → equal.
 #[test]
-#[ignore = "ADR-0055e Wave-1 DEV impl pending"]
 fn c15_deeply_nested_canonical_key_idempotent() {
     let inner = Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Bool));
     let mid = Ty::Set(Box::new(inner));
