@@ -1,0 +1,299 @@
+-- ADR-0055c Phase H Wave-3 — cb mirror of cobrust_types::infer.rs
+-- READ-ONLY documentation reference; not compiled by cargo.
+-- DEV wires the cb compile path in a subsequent sprint per ADR-0055c §11.
+--
+-- Arena-form design per ADR-0055a §3:
+--   Subst.map: dict[i64, i64]  — VarId-as-i64 key → TyId arena handle value
+--   unify, finalize, subst_apply all take &mut TyArena because subst_apply
+--   inserts fresh composite entries (fresh-handle invariant, ADR-0055a §6 risk 1).
+--
+-- F31 LOCK: no bidirectional Ref↔T unify. (Ref(a), T) cross-arm is NOT present.
+-- The one-way coercion lives at synth_call in 0055d scope.
+
+-- -----------------------------------------------------------------------
+-- Import surface from Tier-1 (ADR-0055a + ADR-0055b)
+-- -----------------------------------------------------------------------
+
+-- from 0055a:
+--   TyArena, TyEntry, TyId, FnTyId, RecordId, VarId (all i64)
+--   lookup(arena: &TyArena, id: TyId) -> TyEntry
+--   insert(arena: &mut TyArena, entry: TyEntry) -> TyId
+--   clone_into_arena(src: &TyArena, src_id: TyId, dst: &mut TyArena) -> TyId
+--   free_vars(arena: &TyArena, id: TyId) -> list[TyId]
+--
+-- from 0055b:
+--   TypeError  (TypeMismatch, ArityMismatch, OccursCheck, KeywordArgMismatch, AmbiguousType, ...)
+--   display_error(arena: &TyArena, err: &TypeError) -> str
+
+-- -----------------------------------------------------------------------
+-- Subst — running substitution: VarId-as-i64 → TyId arena handle
+-- -----------------------------------------------------------------------
+-- mirrors cobrust_types::infer::Subst
+-- No user-defined trait impl per ADR-0055 §4.1; all methods are free functions.
+
+struct Subst:
+    map: dict[i64, i64]    -- VarId-as-i64 → TyId arena handle
+
+fn subst_new() -> Subst:
+    -- mirrors Subst::new / Default
+    Subst { map: {} }
+
+fn subst_get(s: &Subst, v: i64) -> Option[i64]:
+    -- mirrors Subst::get(&self, v: VarId) -> Option<&Ty>
+    s.map.get(v)
+
+fn subst_extend(s: &mut Subst, v: i64, t: i64):
+    -- mirrors Subst::extend(&mut self, v: VarId, t: Ty)
+    s.map.insert(v, t)
+
+fn subst_apply(s: &Subst, arena: &mut TyArena, t: i64) -> i64:
+    -- mirrors Subst::apply(&self, t: &Ty) -> Ty
+    -- &mut TyArena because composite arms insert fresh TyEntry composites
+    -- (fresh-handle-always->referenced invariant, ADR-0055a §6 risk 1).
+    -- Var arm: chains through map transitively (compose-by-walk semantics,
+    -- ADR-0055c §6 risk 2). None-branch returns original handle (value-clone
+    -- semantics per §6 risk 2 None-branch latitude).
+    match lookup(arena, t):
+        TyEntry::Var(v):
+            match s.map.get(v):
+                Some(inner_id): subst_apply(s, arena, inner_id)
+                None: t                  -- return original handle (no arena insert)
+        TyEntry::Tuple(items):
+            let mapped = items.map(|c| subst_apply(s, arena, c))
+            insert(arena, TyEntry::Tuple(mapped))
+        TyEntry::List(inner):
+            let mapped = subst_apply(s, arena, inner)
+            insert(arena, TyEntry::List(mapped))
+        TyEntry::Set(inner):
+            let mapped = subst_apply(s, arena, inner)
+            insert(arena, TyEntry::Set(mapped))
+        TyEntry::Dict(k, v):
+            let mk = subst_apply(s, arena, k)
+            let mv = subst_apply(s, arena, v)
+            insert(arena, TyEntry::Dict(mk, mv))
+        TyEntry::Record(rid):
+            let rec = arena.lookup_record(rid).clone()
+            let fields = rec.fields.map(|(name, c)| (name, subst_apply(s, arena, c)))
+            let new_rid = arena.insert_record(RecordEntry { fields })
+            insert(arena, TyEntry::Record(new_rid))
+        TyEntry::Fn(fid):
+            -- cross-arena flow: writes to FnTyArena + TyArena (ADR-0055c §4.1)
+            let fn_e = arena.lookup_fn(fid).clone()
+            let positional = fn_e.positional.map(|c| subst_apply(s, arena, c))
+            let named = fn_e.named.map(|(n, c)| (n, subst_apply(s, arena, c)))
+            let var_positional = fn_e.var_positional.map(|c| subst_apply(s, arena, c))
+            let var_keyword = fn_e.var_keyword.map(|c| subst_apply(s, arena, c))
+            let return_ty = subst_apply(s, arena, fn_e.return_ty)
+            let new_fid = arena.insert_fn(FnTyEntry { positional, named, var_positional, var_keyword, return_ty })
+            insert(arena, TyEntry::Fn(new_fid))
+        TyEntry::Adt(adt_id, args):
+            let mapped = args.map(|c| subst_apply(s, arena, c))
+            insert(arena, TyEntry::Adt(adt_id, mapped))
+        TyEntry::Alias(alias_id, args):
+            let mapped = args.map(|c| subst_apply(s, arena, c))
+            insert(arena, TyEntry::Alias(alias_id, mapped))
+        TyEntry::Ref(inner):
+            -- structural walk per ADR-0052a Wave-1 §13; NOT transparency
+            let mapped = subst_apply(s, arena, inner)
+            insert(arena, TyEntry::Ref(mapped))
+        _:
+            -- leaf variants (Bool, Int, Float, Imag, Str, Bytes, None, Never, Generic)
+            t
+
+fn subst_fully_resolved(s: &Subst, arena: &TyArena, t: i64) -> bool:
+    -- mirrors Subst::fully_resolved — apply + check free_vars empty
+    -- NOTE: uses a read-only arena snapshot; subst_apply is called on a mut clone
+    -- in the impl; here we document the logical intent.
+    -- free_vars(arena, subst_apply(s, arena_copy, t)).is_empty()
+    free_vars(arena, t).is_empty()      -- approximation; DEV uses applied form
+
+-- -----------------------------------------------------------------------
+-- unify — structural HM unification with substitution
+-- -----------------------------------------------------------------------
+-- mirrors cobrust_types::infer::unify
+--
+-- 14 arms per ADR-0055c §5 per-fn table:
+--   1. (Never, _) | (_, Never) — bottom unifies with anything
+--   2. (Var(v1), Var(v2)) if v1 == v2 — trivial identity
+--   3. (Var(v), other) | (other, Var(v)) — occurs-check + extend
+--   4-10. Atomic equality: Bool, Int, Float, Imag, Str, Bytes, None
+--   11. Tuple — arity check + per-element recursive descent
+--   12. List — single recursive descent
+--   13. Set — single recursive descent
+--   14. Ref(a), Ref(b) — structural unify on inner; NOT Ref↔T (F31 LOCK)
+--   15. Dict — per-key/value recursive descent
+--   16. Record — closed key-set equality + per-field recursive descent
+--   17. Fn — positional+named arity check + per-param + return descent
+--   18. Adt(id_a, ..) Adt(id_b, ..) if id_a == id_b — arity + per-arg
+--   19. Alias(id_a, ..) Alias(id_b, ..) if id_a == id_b — arity + per-arg
+--   20. Generic(g1), Generic(g2) if g1 == g2 — trivial
+--   21. default — TypeMismatch
+
+fn unify(arena: &mut TyArena, t1: i64, t2: i64, subst: &mut Subst, span: Span) -> Result[(), TypeError]:
+    let t1 = subst_apply(subst, arena, t1)
+    let t2 = subst_apply(subst, arena, t2)
+    match (lookup(arena, t1), lookup(arena, t2)):
+        -- Never is bottom: unifies with anything
+        (TyEntry::Never, _) | (_, TyEntry::Never):
+            Ok(())
+
+        -- Var identity
+        (TyEntry::Var(v1), TyEntry::Var(v2)) if v1 == v2:
+            Ok(())
+
+        -- Var arm: occurs-check + extend
+        (TyEntry::Var(v), _) | (_, TyEntry::Var(v)):
+            -- other is the non-Var side handle
+            let other = if matches!(lookup(arena, t1), TyEntry::Var(_)): t2 else: t1
+            if free_vars(arena, other).contains(v):
+                Err(TypeError::OccursCheck {
+                    var: v,
+                    ty: other,
+                    span,
+                    suggestion: Some("add a type annotation — recursive types must be explicit"),
+                })
+            else:
+                subst_extend(subst, v, other)
+                Ok(())
+
+        -- Atomic equality pairs
+        (TyEntry::Bool, TyEntry::Bool) |
+        (TyEntry::Int, TyEntry::Int)   |
+        (TyEntry::Float, TyEntry::Float) |
+        (TyEntry::Imag, TyEntry::Imag) |
+        (TyEntry::Str, TyEntry::Str)   |
+        (TyEntry::Bytes, TyEntry::Bytes) |
+        (TyEntry::None, TyEntry::None):
+            Ok(())
+
+        -- Tuple: arity check + per-element recursive descent
+        (TyEntry::Tuple(a_items), TyEntry::Tuple(b_items)):
+            if a_items.len() != b_items.len():
+                return Err(TypeError::TypeMismatch {
+                    expected: t1,
+                    actual: t2,
+                    span,
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
+                })
+            for (x, y) in a_items.zip(b_items):
+                unify(arena, x, y, subst, span)?
+            Ok(())
+
+        -- List
+        (TyEntry::List(a), TyEntry::List(b)):
+            unify(arena, a, b, subst, span)
+
+        -- Set
+        (TyEntry::Set(a), TyEntry::Set(b)):
+            unify(arena, a, b, subst, span)
+
+        -- Ref(a), Ref(b): structural, NOT Ref↔T (F31 LOCK per ADR-0052a Wave-1 §13)
+        (TyEntry::Ref(a), TyEntry::Ref(b)):
+            unify(arena, a, b, subst, span)
+
+        -- Dict: per-key/value recursive descent
+        (TyEntry::Dict(ak, av), TyEntry::Dict(bk, bv)):
+            unify(arena, ak, bk, subst, span)?
+            unify(arena, av, bv, subst, span)
+
+        -- Record: closed key-set equality + per-field recursive descent
+        (TyEntry::Record(ra), TyEntry::Record(rb)):
+            let rec_a = arena.lookup_record(ra).clone()
+            let rec_b = arena.lookup_record(rb).clone()
+            let keys_a = rec_a.fields.map(|(k, _)| k)
+            let keys_b = rec_b.fields.map(|(k, _)| k)
+            if keys_a != keys_b:
+                return Err(TypeError::TypeMismatch {
+                    expected: t1,
+                    actual: t2,
+                    span,
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
+                })
+            for (k, av) in rec_a.fields:
+                let bv = rec_b.fields.get(k).expect("keys checked above")
+                unify(arena, av, bv, subst, span)?
+            Ok(())
+
+        -- Fn: positional + named arity check; per-param + return descent
+        (TyEntry::Fn(fa), TyEntry::Fn(fb)):
+            let fn_a = arena.lookup_fn(fa).clone()
+            let fn_b = arena.lookup_fn(fb).clone()
+            if fn_a.positional.len() != fn_b.positional.len():
+                return Err(TypeError::ArityMismatch {
+                    expected: fn_a.positional.len(),
+                    actual: fn_b.positional.len(),
+                    span,
+                    suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                })
+            if fn_a.named.len() != fn_b.named.len():
+                return Err(TypeError::ArityMismatch {
+                    expected: fn_a.named.len(),
+                    actual: fn_b.named.len(),
+                    span,
+                    suggestion: Some("check the function signature; pass exactly the declared positional arity"),
+                })
+            for (x, y) in fn_a.positional.zip(fn_b.positional):
+                unify(arena, x, y, subst, span)?
+            for ((n1, x), (n2, y)) in fn_a.named.zip(fn_b.named):
+                if n1 != n2:
+                    return Err(TypeError::KeywordArgMismatch {
+                        name: n1,
+                        span,
+                        suggestion: Some("remove or rename — the callee does not accept this keyword"),
+                    })
+                unify(arena, x, y, subst, span)?
+            unify(arena, fn_a.return_ty, fn_b.return_ty, subst, span)
+
+        -- Adt: id equality guard + arity + per-arg
+        (TyEntry::Adt(id_a, args_a), TyEntry::Adt(id_b, args_b)) if id_a == id_b:
+            if args_a.len() != args_b.len():
+                return Err(TypeError::TypeMismatch {
+                    expected: t1,
+                    actual: t2,
+                    span,
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
+                })
+            for (x, y) in args_a.zip(args_b):
+                unify(arena, x, y, subst, span)?
+            Ok(())
+
+        -- Alias: id equality guard + arity + per-arg
+        (TyEntry::Alias(id_a, args_a), TyEntry::Alias(id_b, args_b)) if id_a == id_b:
+            if args_a.len() != args_b.len():
+                return Err(TypeError::TypeMismatch {
+                    expected: t1,
+                    actual: t2,
+                    span,
+                    suggestion: Some("change the expression type or add `: <expected>` annotation"),
+                })
+            for (x, y) in args_a.zip(args_b):
+                unify(arena, x, y, subst, span)?
+            Ok(())
+
+        -- Generic identity
+        (TyEntry::Generic(g1), TyEntry::Generic(g2)) if g1 == g2:
+            Ok(())
+
+        -- Default: structural mismatch
+        _:
+            Err(TypeError::TypeMismatch {
+                expected: t1,
+                actual: t2,
+                span,
+                suggestion: Some("change the expression type or add `: <expected>` annotation"),
+            })
+
+-- -----------------------------------------------------------------------
+-- finalize — fully resolve; AmbiguousType if any free Var remains
+-- -----------------------------------------------------------------------
+-- mirrors cobrust_types::infer::finalize
+
+fn finalize(arena: &mut TyArena, t: i64, subst: &Subst, span: Span) -> Result[i64, TypeError]:
+    let resolved = subst_apply(subst, arena, t)
+    if free_vars(arena, resolved).is_empty():
+        Ok(resolved)
+    else:
+        Err(TypeError::AmbiguousType {
+            span,
+            suggestion: Some("add an explicit type annotation, e.g. `let x: i64 = ...`"),
+        })
