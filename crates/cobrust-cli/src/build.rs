@@ -117,15 +117,21 @@ pub fn build(
         .and_then(|s| s.to_str())
         .map_or_else(|| String::from("a"), String::from);
 
-    let output_dir = match output {
+    // Final output directory — where the user wants the *final* artifact
+    // to land. For `EmitKind::Object` this is also the codegen output dir.
+    // For `EmitKind::Executable` we route codegen + runtime intermediates
+    // through a scoped `tempfile::TempDir` (see `intermediate_scope`
+    // below) so the `.o` files don't pile up next to the final executable.
+    let final_output_dir = match output {
         Some(p) => p
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from(".")),
         None => PathBuf::from("target/cobrust"),
     };
-    std::fs::create_dir_all(&output_dir)
-        .map_err(|e| BuildError::Internal(format!("mkdir {}: {e}", output_dir.display())))?;
+    std::fs::create_dir_all(&final_output_dir).map_err(|e| {
+        BuildError::Internal(format!("mkdir {}: {e}", final_output_dir.display()))
+    })?;
 
     // For Executable emit, ask codegen for the Object only; we link
     // ourselves with the runtime helper. Codegen's own link step would
@@ -147,12 +153,41 @@ pub fn build(
         Backend::default_for_dev()
     };
 
+    // Tempdir RAII for intermediate .o artifacts in the Executable path
+    // (2026-05-18 leak fix; supersedes the 81a2433 test-only patch).
+    // `intermediate_scope` is `Some(TempDir)` when we're building an
+    // executable — its Drop runs at function exit (success OR
+    // panic-unwind) and removes the temp directory + all the
+    // intermediate `.o` files inside. For Object emit, intermediates
+    // ARE the final output, so we keep `intermediate_scope = None` and
+    // codegen writes directly to `final_output_dir`.
+    //
+    // CRITICAL: do NOT call `intermediate_scope.into_path()` anywhere
+    // below — that consumes the TempDir and leaks the directory.
+    // Tempdir is RAII-owned by this scope; see the commit
+    // `findings: diagnose CLI tempdir leak root cause` for rationale.
+    let intermediate_scope = match emit_kind {
+        EmitKind::Object => None,
+        EmitKind::Executable => Some(
+            tempfile::Builder::new()
+                .prefix("cobrust-build-")
+                .tempdir_in(&final_output_dir)
+                .or_else(|_| tempfile::Builder::new().prefix("cobrust-build-").tempdir())
+                .map_err(|e| BuildError::Internal(format!("create intermediate tempdir: {e}")))?,
+        ),
+    };
+
+    let codegen_output_dir: PathBuf = match &intermediate_scope {
+        Some(td) => td.path().to_path_buf(),
+        None => final_output_dir.clone(),
+    };
+
     let spec = TargetSpec {
         triple,
         opt_level,
         backend,
         artifact: artifact_kind,
-        output_dir: output_dir.clone(),
+        output_dir: codegen_output_dir.clone(),
         module_name: module_name.clone(),
     };
 
@@ -188,7 +223,13 @@ pub fn build(
             // Codegen emitted an executable, but it lacks the runtime
             // helper. Re-link: produce a fresh `.o` then link with
             // runtime/m10_runtime.c.
-            let user_obj_path = output_dir.join(format!("{module_name}.o"));
+            //
+            // The user object + runtime helper object both live under
+            // `codegen_output_dir` (= `intermediate_scope.path()` for
+            // EmitKind::Executable, owned by the TempDir created above).
+            // The final exe is written to `final_output_dir` so it
+            // survives the TempDir Drop at function exit.
+            let user_obj_path = codegen_output_dir.join(format!("{module_name}.o"));
             // The previous emit may have left the `.o` next to the exe
             // (cranelift_backend::emit always writes `<module_name>.o`
             // first, then links). Confirm + re-link.
@@ -199,11 +240,16 @@ pub fn build(
                 )));
             }
 
-            let runtime_obj = ensure_runtime_object(&output_dir)?;
+            let runtime_obj = ensure_runtime_object(&codegen_output_dir)?;
             let exe_path = match output {
                 Some(p) => p.to_path_buf(),
                 None => {
-                    let mut p = output_dir.join(&module_name);
+                    // No `-o` flag: write the final exe into the
+                    // user-visible `final_output_dir` (= `target/cobrust`
+                    // by default), NOT the TempDir — otherwise it would
+                    // be deleted on Drop before `cobrust run` could
+                    // spawn it.
+                    let mut p = final_output_dir.join(&module_name);
                     let ext = ArtifactKind::Executable.extension(&Triple::host());
                     if !ext.is_empty() {
                         p.set_extension(ext);
