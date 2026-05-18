@@ -1,0 +1,97 @@
+## Source doc-ref for ADR-0055d Wave-3 Tier-2 LARGEST — check.rs cb mirror.
+##
+## Status: DOC-REF only. DEV impl (Phase 2 of Wave-3) pending.
+##
+## This file documents the planned cb surface for crates/cobrust-types/src/check.rs.
+## It serves as the Phase 1 source anchor per ADR-0055d §2 + §11.1 (F34 symbol anchors).
+## Actual Cobrust-language implementation ships in the DEV sprint.
+##
+## ADR-0055d §5.1 Arm enumeration — synth_expr ~19 arms:
+##
+##   arm 1:  Lit        → lit_type(lit)                    [PASS: lit_type delegates]
+##   arm 2:  Format     → recurse FormatPart::Hole → Str  [PASS]
+##   arm 3:  Name       → lookup_resolved(rn, span)        [PASS + UnknownName FAIL]
+##   arm 4:  Tuple      → synth each item → Tuple(tys)    [PASS]
+##   arm 5:  List       → head unify rest → List[head]     [PASS + TypeMismatch FAIL]
+##   arm 6:  Set        → head unify rest → Set[head]      [PASS + TypeMismatch FAIL]
+##   arm 7:  Dict       → DictEntry::Pair unify + hashable [PASS + NotHashable + DictSpreadNotSupported FAIL]
+##   arm 8:  Comp       → synth_comp(c)                    [PASS + NotIterable FAIL]
+##   arm 9:  Lambda     → FnTy{positional, return=body}    [PASS]
+##   arm 10: Call       → synth_call(callee, args, span)   [PASS + ArityMismatch + NotCallable + MissingArgument + KeywordArgMismatch FAIL]
+##   arm 11: Attr       → fresh_var() (M2 conservative)    [PASS]
+##   arm 12: Index      → unpack List/Tuple/Dict/Str/Bytes [PASS + NotIndexable FAIL]
+##   arm 13: Bin        → synth_bin(op, lhs, rhs, span)    [PASS + TypeMismatch FAIL]
+##   arm 14: Un         → synth_un(op, operand, span)      [PASS + TypeMismatch FAIL]
+##   arm 15: Borrow     → place-check → Ref(inner_ty)      [PASS + BorrowOfNonPlace FAIL]
+##   arm 16: Await      → fresh_var() (M2 conservative)    [PASS]
+##   arm 17: Yield      → return_stack guard → None        [PASS + YieldOutsideFn FAIL]
+##   arm 18: YieldFrom  → return_stack guard → None        [PASS + YieldOutsideFn FAIL]
+##   arm 19: Cast       → finalize + numeric-pair check     [PASS + TypeMismatch FAIL]
+##
+## Cb-side struct mirrors (arena-aware per ADR-0055a):
+##
+##   struct TypedModule:
+##     def_types: dict[u32, i64]   # DefId.0 → arena TyId handle
+##     hir: Module                  # Rust HIR via FFI (stays Rust per ADR-0055 §3.1)
+##
+##   struct Ctx:
+##     subst: Subst                         # from cobrust_types_cb infer (0055c)
+##     vars: VarAllocator                   # from cobrust_types_cb ty (0055a)
+##     def_types: dict[DefId, i64]          # per-binding arena handles
+##     alias_map: dict[str, i64]            # type-alias name → arena handle
+##     return_stack: list[i64]              # function return-type stack
+##     loop_depth: i64                      # break/continue guard
+##     poly_intrinsic_defs: set[DefId]      # ADR-0050c row-polymorphic intrinsics
+##
+## Key function signatures (cb-form with &mut TyArena receiver convention per 0055c §3):
+##
+##   pub fn check(arena: &mut TyArena, module: &Module) -> Result[TypedModule, TypeError]
+##   fn check_module(ctx: &mut Ctx, arena: &mut TyArena, m: &Module) -> Result[None, TypeError]
+##   fn synth_expr(ctx: &mut Ctx, arena: &mut TyArena, e: &Expr) -> Result[i64, TypeError]
+##   fn synth_call(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[i64, TypeError]
+##   fn try_synth_method_call(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
+##   fn try_synth_dict_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
+##   fn try_synth_str_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
+##   fn try_synth_list_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
+##   fn try_synth_float_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
+##   fn try_synth_int_method(ctx: &mut Ctx, arena: &mut TyArena, callee: &Expr, args: &list[CallArg], span: Span) -> Result[Option[i64], TypeError]
+##   fn synth_bin(ctx: &mut Ctx, arena: &mut TyArena, op: BinOp, lhs: &Expr, rhs: &Expr, span: Span) -> Result[i64, TypeError]
+##   fn synth_un(ctx: &mut Ctx, arena: &mut TyArena, op: UnaryOp, operand: &Expr, span: Span) -> Result[i64, TypeError]
+##   fn synth_comp(ctx: &mut Ctx, arena: &mut TyArena, c: &Comp) -> Result[i64, TypeError]
+##   fn check_block(ctx: &mut Ctx, arena: &mut TyArena, b: &Block) -> Result[BlockOutcome, TypeError]
+##   fn check_stmt(ctx: &mut Ctx, arena: &mut TyArena, s: &Stmt) -> Result[BlockOutcome, TypeError]
+##   fn check_loop(ctx: &mut Ctx, arena: &mut TyArena, lk: &LoopKind, span: Span) -> Result[BlockOutcome, TypeError]
+##   fn iter_element(ctx: &mut Ctx, arena: &mut TyArena, t: i64, span: Span) -> Result[i64, TypeError]
+##   fn check_match(ctx: &mut Ctx, arena: &mut TyArena, scrutinee: &Expr, arms: &list[MatchArm], span: Span) -> Result[BlockOutcome, TypeError]
+##   fn expect_bool(ctx: &mut Ctx, arena: &mut TyArena, t: i64, span: Span) -> Result[None, TypeError]
+##   fn bind_pattern(ctx: &mut Ctx, arena: &mut TyArena, p: &Pattern, t: i64) -> Result[None, TypeError]
+##   fn lower_type(ctx: &mut Ctx, arena: &mut TyArena, ht: &HirType) -> i64
+##   fn lower_named_type(ctx: &mut Ctx, arena: &mut TyArena, name: str) -> i64
+##   fn lower_generic_type(ctx: &mut Ctx, arena: &mut TyArena, head: str, args: list[&HirType]) -> i64
+##   fn lookup_resolved(ctx: &mut Ctx, arena: &mut TyArena, rn: &ResolvedName, span: Span) -> Result[i64, TypeError]
+##   fn lit_type(ctx: &mut Ctx, arena: &mut TyArena, lit: &Lit) -> i64
+##   fn lower_default_type(ctx: &mut Ctx, arena: &mut TyArena, ht: &HirType, span: Span) -> Result[i64, TypeError]
+##   fn validate_hashable_dict(ctx: &mut Ctx, arena: &mut TyArena, key_ht: &HirType, span: Span) -> Result[None, TypeError]
+##
+## enum BlockOutcome:
+##   Falls    # block may fall through
+##   Diverges # block always diverges (return/break/continue/raise)
+##
+## fn block_outcome_join(items: &list[BlockOutcome]) -> BlockOutcome
+##
+## Free helpers (no arena threading):
+##   fn is_copy_primitive(t: i64) -> bool
+##   fn lit_to_string(lit: &Lit) -> str
+##   fn is_list_polymorphic_intrinsic_name(name: str) -> bool
+##   fn literal_int_value(e: &Expr) -> Option[i64]
+##   fn resolve_tuple_index(items: &list[i64], idx: i64) -> Option[i64]
+##   fn str_method_suggestion(name: str) -> Option[str]
+##   fn list_method_suggestion(name: str) -> Option[str]
+##   fn float_method_suggestion(name: str) -> Option[str]
+##   fn int_method_suggestion(name: str) -> Option[str]
+##
+## Cross-ADR deps consumed here (per ADR-0055d §3):
+##   0055a: TyArena, TyEntry, TyId, VarAllocator, insert, lookup, is_hashable, is_mutable_container,
+##          subst_var, clone_into_arena, free_vars, record_from_pairs, FnTyEntry, RecordEntry
+##   0055b: TypeError (all 25 variants), lib.cb re-export contract
+##   0055c: Subst, subst_new, subst_apply, subst_extend, unify, finalize
