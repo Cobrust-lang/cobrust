@@ -420,6 +420,8 @@ dependencies = [
 name = "cobrust-jit"
 version = "0.3.0"
 dependencies = [
+ "cobrust-frontend",
+ "cobrust-hir",
  "cobrust-mir",
  "cobrust-types",
  "cranelift-codegen",
