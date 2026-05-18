@@ -273,7 +273,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
     /// Lower a Cobrust MIR `Ty` to an inkwell `BasicTypeEnum`.
     ///
-    /// Per ADR-0058a §4.1:
+    /// Per ADR-0058a §4.1 (revised):
     ///
     /// | Ty | LLVM |
     /// |---|---|
@@ -284,15 +284,25 @@ impl<'ctx> LlvmEmitter<'ctx> {
     /// | `Str` / `Bytes` | `i8*` (opaque pointer) |
     /// | `List` / `Dict` / `Set` | `i8*` (heap-managed opaque) |
     /// | `Ref(T)` | same LLVM repr as `T` (transparent) |
-    /// | `None` | `i8` (unit-shaped placeholder) |
+    /// | `None` | `i64` (mirrors Cranelift's `pointer_type` fallback) |
     /// | `Tuple(...)` / `Record(_)` / `Adt(_,_)` | `i8*` (by pointer at wave-1) |
     /// | other | `i8*` fallback |
+    ///
+    /// `Ty::None` lowers to `i64` (not `i8`) to match the Cranelift
+    /// backend's `cranelift_scalar_ty(...).unwrap_or(pointer_type)`
+    /// posture. MIR uses `Ty::None` as a placeholder for "type not yet
+    /// inferred" on synthetic temporaries; defaulting to `i64` matches
+    /// what those temps hold in practice (recursion return values,
+    /// `_callret` slots, etc.). Cranelift backend §"infer_local_types"
+    /// converges these via a fixed-point dataflow; wave-1 LLVM backend
+    /// takes the simpler fallback. If a real i8 unit value is ever
+    /// needed, MIR can be explicit (Ty::Bool widens to i64 at use sites).
     fn lower_ty(&self, ty: &Ty) -> BasicTypeEnum<'ctx> {
         match ty {
             Ty::Bool => self.ctx.bool_type().as_basic_type_enum(),
             Ty::Int => self.ctx.i64_type().as_basic_type_enum(),
             Ty::Float | Ty::Imag => self.ctx.f64_type().as_basic_type_enum(),
-            Ty::None => self.ctx.i8_type().as_basic_type_enum(),
+            Ty::None => self.ctx.i64_type().as_basic_type_enum(),
             Ty::Ref(inner) => self.lower_ty(inner),
             // Owning + container + reference / tuple / record / ADT all
             // lower to opaque pointer at wave-1. Element type stays at
@@ -754,7 +764,11 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 let f = f64::from_bits(*bits);
                 Ok(ctx.f64_type().const_float(f).into())
             }
-            Constant::None => Ok(ctx.i8_type().const_zero().into()),
+            // `Ty::None` lowers to `i64` (see `lower_ty`); a bare
+            // `Constant::None` therefore is the i64 zero. The coerce
+            // pass at write_place() narrows it to the destination's
+            // declared type if different.
+            Constant::None => Ok(ctx.i64_type().const_zero().into()),
             Constant::Str(_) | Constant::Bytes(_) => {
                 // Wave-1 stub — Cranelift backend M9 emits zero for
                 // string literals at most callsites; matching that
