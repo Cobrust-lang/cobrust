@@ -1,6 +1,6 @@
-<!-- README-public.md — paste this to Cobrust/README.md, replacing current content. -->
-
 <div align="center">
+
+**English** · [中文](README.zh.md)
 
 # Cobrust
 
@@ -15,7 +15,7 @@
 [**Why Cobrust?**](docs/post/why-cobrust.md) ·
 [**Quick Start**](#quick-start) ·
 [**Examples**](examples/) ·
-[**Roadmap**](docs/agent/adr/0038-phase-f-roadmap.md) ·
+[**Roadmap**](docs/agent/adr/0054-post-phase-g-roadmap.md) ·
 [**Discussions**](https://github.com/Cobrust-lang/cobrust/discussions)
 
 </div>
