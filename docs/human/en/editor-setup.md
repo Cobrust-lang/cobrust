@@ -69,7 +69,65 @@ indent = { tab-width = 4, unit = "    " }
 1. Double-click `tools/textmate-cobrust.tmbundle` — TextMate installs it automatically.
 2. For Sublime Text: copy the bundle into `Packages/User/` and restart.
 
+## Language Server (LSP, wave-1: diagnostics)
+
+Cobrust ships a Language Server Protocol (LSP) implementation, `cobrust-lsp`,
+that surfaces compiler errors directly in your editor as you type.
+
+**Wave-1 scope (per ADR-0057a):**
+
+- `textDocument/publishDiagnostics` — every `TypeError` / `MirError` /
+  `LoweringError` from the Cobrust compile pipeline (parse + lower +
+  type-check) is published as an LSP `Diagnostic` with:
+  - the canonical error message from `cobrust check`,
+  - a structured `code` (e.g. `"implicit-truthiness"`) for editor-side
+    code-action routing,
+  - the ADR-0052b `suggestion` field (when set) attached as
+    `relatedInformation[0].message` — the fix path the agent-LLM
+    consumes.
+
+**Wave-2+ (deferred):** hover, completion, definition, rename, codeAction.
+See ADR-0057 for the roster.
+
+### Build and run
+
+```bash
+# From the repo root
+cargo build --release -p cobrust-lsp
+# The binary lands at target/release/cobrust-lsp
+```
+
+### VSCode / Cursor wiring
+
+Add a minimal client in your `~/.vscode/extensions/<your-ext>/extension.js`
+that launches `cobrust-lsp` over stdio for `.cb` files:
+
+```javascript
+const { LanguageClient } = require('vscode-languageclient/node');
+const serverOptions = { command: '/path/to/cobrust-lsp' };
+const clientOptions = {
+  documentSelector: [{ scheme: 'file', language: 'cobrust' }],
+};
+new LanguageClient('cobrust', 'Cobrust LSP', serverOptions, clientOptions).start();
+```
+
+### Neovim wiring (nvim-lspconfig)
+
+```lua
+local lspconfig = require('lspconfig')
+local configs = require('lspconfig.configs')
+configs.cobrust = {
+  default_config = {
+    cmd = { '/path/to/cobrust-lsp' },
+    filetypes = { 'cobrust' },
+    root_dir = lspconfig.util.root_pattern('cobrust.toml', '.git'),
+  },
+}
+lspconfig.cobrust.setup{}
+```
+
 ## What is NOT included
 
-- Go-to-definition, type checking, completions, diagnostics — see **F.1.8** (LSP).
+- Wave-1 LSP only ships diagnostics. Go-to-definition, completion, hover,
+  rename, and code-action quickfixes are scoped under ADR-0057b/c/d.
 - Formatter integration — see the `cobrust fmt` CLI tool.
