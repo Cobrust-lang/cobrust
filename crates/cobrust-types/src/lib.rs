@@ -55,7 +55,7 @@ pub mod error;
 pub mod infer;
 pub mod ty;
 
-pub use check::{TypedModule, check};
+pub use check::{TypeCheckCtx, TypedModule, check, check_incremental};
 pub use error::TypeError;
 pub use infer::{Subst, finalize, unify};
 pub use ty::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarAllocator, VarId};
