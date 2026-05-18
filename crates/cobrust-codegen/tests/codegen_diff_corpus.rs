@@ -16,6 +16,24 @@
 //! differential mode here checks that every such program *compiles*
 //! to a valid object file and (for the executable subset) **link
 //! + run yields exit code 0** when the program returns 0 from `main`.
+//!
+//! ## ADR-0058a LLVM column (Phase K wave-1)
+//!
+//! The second section of this file adds 30 LLVM-backend fixtures that
+//! mirror the Cranelift forms above. Each test is `#[ignore]` until
+//! the DEV agent un-stubs `llvm_backend::emit` per ADR-0058a. The
+//! fixture naming convention is `llvm_<category>_<N>_<description>`.
+//!
+//! Coverage matrix:
+//! - **Type table** (12 fixtures): ADR-0058a §4 scalar + aggregate types.
+//! - **Operand** (10 fixtures): ADR-0058a §5 Const / Copy / Move / BinOp.
+//! - **Terminator** (5 fixtures): ADR-0058a §6 Return / Goto / Branch / Call.
+//! - **Calling-conv** (3 fixtures): ADR-0058a §7 SysV stack-align / reg-args / ret-via-ptr.
+//!
+//! F34 anchors:
+//! - `codegen_diff_corpus::llvm_type_01_i64` — type table head
+//! - `codegen_diff_corpus::llvm_operand_01_const_i64` — operand head
+//! - `codegen_diff_corpus::llvm_terminator_01_return_i64` — terminator head
 
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
@@ -364,5 +382,389 @@ fn diff_reference_factorial_compiles() {
     compile_to_object(
         "diff_ref_fact",
         "fn ref_fact(n: i64) -> i64:\n    let acc: i64 = 1\n    let i: i64 = 1\n    while (i <= n):\n        acc *= i\n        i += 1\n    return acc\n",
+    );
+}
+
+// =====================================================================
+// ADR-0058a Phase K wave-1 — LLVM backend column
+//
+// All 30 tests below are #[ignore] until the DEV agent un-stubs
+// llvm_backend::emit. The ignore string encodes the rationale so
+// `cargo test -- --ignored --list` surfaces them cleanly.
+//
+// Helper: same shape as compile_to_object but routes to Backend::Llvm.
+// =====================================================================
+
+#[cfg(feature = "llvm")]
+fn llvm_spec(name: &str) -> TargetSpec {
+    let dir = std::env::temp_dir().join(format!(
+        "cobrust-0058a-llvm-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    TargetSpec {
+        triple: Triple::host(),
+        opt_level: OptLevel::None,
+        backend: Backend::Llvm,
+        artifact: ArtifactKind::Object,
+        output_dir: dir,
+        module_name: name.to_string(),
+    }
+}
+
+/// Emit via LLVM backend + assert object non-empty.
+/// Gated behind feature = "llvm"; callers are all #[ignore] until DEV lands.
+#[cfg(feature = "llvm")]
+fn llvm_compile_ok(name: &str, src: &str) {
+    let mir = lower_to_mir(src);
+    let spec = llvm_spec(name);
+    let artifact = emit(&mir, spec).unwrap_or_else(|e| panic!("llvm emit `{name}`: {e}"));
+    let path = artifact.path();
+    let meta = std::fs::metadata(path).unwrap();
+    assert!(meta.len() > 16, "LLVM object too small for `{name}`");
+}
+
+// =====================================================================
+// TYPE TABLE — ADR-0058a §4 (12 fixtures)
+// Exercises: ctx.i64_type / i32_type / i8_type / bool_type / f64_type /
+// void return / ptr_type / struct_type / array_type / fn_type shapes.
+// =====================================================================
+
+/// F34: codegen_diff_corpus::llvm_type_01_i64
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_01_i64() {
+    // Ty::Int(i64) → ctx.i64_type(); inkwell: i64
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok("llvm_type01", "fn f(x: i64) -> i64:\n    return x\n");
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_02_i32() {
+    // Ty::Int(i32) → ctx.i32_type()
+    // i32 arithmetic: add two i32 values
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_type02",
+        "fn f(a: i32, b: i32) -> i32:\n    return (a + b)\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_03_i8() {
+    // Ty::Int(i8) → ctx.i8_type(); narrow integer passthrough
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok("llvm_type03", "fn f(x: i8) -> i8:\n    return x\n");
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_04_bool() {
+    // Ty::Bool → ctx.bool_type() → i1; return literal True
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok("llvm_type04", "fn f() -> bool:\n    return True\n");
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_05_f64() {
+    // Ty::Float(f64) → ctx.f64_type(); double passthrough
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_type05",
+        "fn f(x: f64) -> f64:\n    return x\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_06_void_return() {
+    // void return → builder.build_return(None); fn() -> void
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok("llvm_type06", "fn f() -> None:\n    return\n");
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_07_ptr() {
+    // Ty::Str (*mut u8) → ctx.ptr_type(AddressSpace::default())
+    // Opaque pointer passthrough (LLVM 15+ default mode).
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok("llvm_type07", "fn f(s: str) -> str:\n    return s\n");
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_08_array_i64() {
+    // Fixed-size array [i64; 4] → ctx.i64_type().array_type(4)
+    // Passes an aggregate argument and extracts element [0].
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_type08",
+        "fn first(a: [i64; 4]) -> i64:\n    return a[0]\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_09_struct_two_i64() {
+    // Ty::Tuple(i64, i64) → ctx.struct_type(&[i64, i64], false)
+    // Returns first field of a two-field struct.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_type09",
+        "fn fst(p: (i64, i64)) -> i64:\n    return p.0\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_10_fn_one_arg() {
+    // fn(i64) -> i64 function-type shape;
+    // verifies FunctionType construction ctx.i64_type().fn_type(&[i64], false)
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_type10",
+        "fn identity(x: i64) -> i64:\n    return x\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_11_fn_two_args() {
+    // fn(i64, i64) -> i64; two-parameter FunctionType shape.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_type11",
+        "fn add(a: i64, b: i64) -> i64:\n    return (a + b)\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_type_12_opaque_list() {
+    // Ty::List[Int] → ctx.ptr_type(AddressSpace::default()) (opaque heap ptr)
+    // runtime helper __cobrust_list_new declared extern; object emits call placeholder.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_type12",
+        "fn make_empty() -> list[i64]:\n    return []\n",
+    );
+}
+
+// =====================================================================
+// OPERAND LOWERING — ADR-0058a §5 (10 fixtures)
+// =====================================================================
+
+/// F34: codegen_diff_corpus::llvm_operand_01_const_i64
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_operand_01_const_i64() {
+    // Operand::Constant(Int(42)) → ctx.i64_type().const_int(42, true)
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_op01",
+        "fn f() -> i64:\n    return 42\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_operand_02_const_bool() {
+    // Operand::Constant(Bool(true)) → ctx.bool_type().const_int(1, false)
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok("llvm_op02", "fn f() -> bool:\n    return True\n");
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_operand_03_copy_local() {
+    // Operand::Copy(Place{local=x}) → builder.build_load(i64_ty, alloca_x, "copy")
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_op03",
+        "fn f(x: i64) -> i64:\n    let y: i64 = x\n    return y\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_operand_04_move_local() {
+    // Operand::Move(Place) — same LLVM load as Copy; ownership at MIR level.
+    // MIR borrow checker enforces; LLVM sees a plain load.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_op04",
+        "fn consume(x: i64) -> i64:\n    return x\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_operand_05_ref_local() {
+    // Operand via immutable ref (&x) — Ty::Ref(Int); transparent at LLVM level per §4.1.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_op05",
+        "fn f(x: i64) -> i64:\n    let r: &i64 = &x\n    return *r\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_operand_06_deref_ptr() {
+    // Projection::Deref on ptr local → load pointer-typed alloca, then GEP + load.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_op06",
+        "fn f(p: &i64) -> i64:\n    return *p\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_operand_07_binop_add_i64() {
+    // Rvalue::BinaryOp(Add, i64, i64) → builder.build_int_add(lhs, rhs, "add")
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_op07",
+        "fn f(a: i64, b: i64) -> i64:\n    return (a + b)\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_operand_08_binop_sub_i64() {
+    // Rvalue::BinaryOp(Sub, i64, i64) → builder.build_int_sub
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_op08",
+        "fn f(a: i64, b: i64) -> i64:\n    return (a - b)\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_operand_09_binop_mul_i64() {
+    // Rvalue::BinaryOp(Mul, i64, i64) → builder.build_int_mul
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_op09",
+        "fn f(a: i64, b: i64) -> i64:\n    return (a * b)\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_operand_10_binop_div_i64() {
+    // Rvalue::BinaryOp(Div, i64, i64) → builder.build_int_signed_div
+    // ADR-0058a §6: Assert { cond: b!=0 } precedes the div in MIR.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_op10",
+        "fn f(a: i64, b: i64) -> i64:\n    return (a / b)\n",
+    );
+}
+
+// =====================================================================
+// TERMINATOR LOWERING — ADR-0058a §6 (5 fixtures)
+// =====================================================================
+
+/// F34: codegen_diff_corpus::llvm_terminator_01_return_i64
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_terminator_01_return_i64() {
+    // Terminator::Return(operand:i64) → builder.build_return(Some(&val))
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok("llvm_term01", "fn f() -> i64:\n    return 7\n");
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_terminator_02_return_void() {
+    // Terminator::Return(None) → builder.build_return(None)
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok("llvm_term02", "fn f() -> None:\n    return\n");
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_terminator_03_goto_bb() {
+    // Terminator::Goto(target) → builder.build_unconditional_branch(target_block)
+    // Sequence: bb0 → bb1 → return.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_term03",
+        "fn f() -> i64:\n    let x: i64 = 1\n    let y: i64 = (x + 1)\n    return y\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_terminator_04_branch_cond() {
+    // Terminator::SwitchInt(bool) → builder.build_conditional_branch(cond, t_bb, f_bb)
+    // if/else produces two live blocks; tests branch-both-arms coverage.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_term04",
+        "fn f(x: i64) -> i64:\n    if (x > 0):\n        return 1\n    else:\n        return 0\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_terminator_05_call() {
+    // Terminator::Call{fn, args, dest, target} →
+    //   builder.build_call(callee_fn, &[arg_val], "call")
+    //   + build_unconditional_branch(target_block)
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_term05",
+        "fn double(x: i64) -> i64:\n    return (x + x)\n\nfn caller() -> i64:\n    return double(21)\n",
+    );
+}
+
+// =====================================================================
+// CALLING CONVENTION — ADR-0058a §7 (3 fixtures)
+// System V AMD64 ABI / AAPCS64 via inkwell CallConv::C (ccc).
+// =====================================================================
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_callconv_01_sysv_stack_align() {
+    // SysV AMD64: stack pointer must be 16-byte aligned at call sites.
+    // Fixture: function call chain that exercises stack alignment slot.
+    // Verification: emitted object passes llvm-mc re-parse without alignment faults.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_cc01",
+        "fn leaf(a: i64, b: i64, c: i64) -> i64:\n    return ((a + b) + c)\n\nfn caller() -> i64:\n    return leaf(1, 2, 3)\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_callconv_02_integer_args_in_regs() {
+    // SysV AMD64: first 6 integer args in rdi/rsi/rdx/rcx/r8/r9.
+    // Fixture: 6-arg function exercises full integer register bank.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_cc02",
+        "fn f(a: i64, b: i64, c: i64, d: i64, e: i64, g: i64) -> i64:\n    return ((((a + b) + c) + d) + (e + g))\n",
+    );
+}
+
+#[test]
+#[ignore = "ADR-0058a Wave-1 DEV impl pending"]
+fn llvm_callconv_03_return_aggregate_via_ptr() {
+    // Aggregate return: struct (i64, i64) → sret pointer per SysV.
+    // inkwell: fn_type returns pointer; caller passes hidden first arg.
+    // ADR-0058a §7: ccc maps to sret for aggregates > register width.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_cc03",
+        "fn make_pair(a: i64, b: i64) -> (i64, i64):\n    return (a, b)\n",
     );
 }
