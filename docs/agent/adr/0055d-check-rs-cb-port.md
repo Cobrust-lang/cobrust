@@ -5,7 +5,7 @@ parent_adr: 0055
 title: "Phase H Tier-2 — `crates/cobrust-types/src/check.rs` cb port (bidirectional checker under arena form; LARGEST Phase H sub-sprint)"
 status: proposed
 date: 2026-05-18
-last_verified_commit: fd263f4
+last_verified_commit: 9bb3dbc
 supersedes: []
 superseded_by: []
 relates_to: [adr:0055, adr:0055a, adr:0055b, adr:0055c, adr:0055e]
@@ -253,3 +253,38 @@ Per ADR-0055 §9.2, this sub-ADR commit ships triple-doc updates (zh + en + agen
 - Bilingual sync rule per CLAUDE.md §3.3 — zh + en land in same commit as agent docs + impl + Phase H closure retrospective.
 
 — P9 Tech Lead, 2026-05-18
+
+## 12. Count accounting amendment (Tier-1 audit `af6d8ce1eb343127a` 2026-05-18)
+
+**Trigger**: Tier-1 post-author audit of Phase H Wave-3 TEST corpus at branch HEAD `9bb3dbc` found agent-claim drift in test-count projections written during pre-dispatch planning. No test-corpus changes are required; this section corrects the ADR record only.
+
+### 12.1 Actual counts at `9bb3dbc`
+
+| File | Claimed | Actual |
+|---|---|---|
+| `crates/cobrust-types-cb/tests/check_parity_corpus.rs` (`#[ignore]` count) | 47 | **62** |
+| `crates/cobrust-types-cb/tests/check_display_parity.rs` (`#[ignore]` count) | 18 | 18 (unchanged) |
+| **Total parity corpus** | **65** | **80** |
+
+### 12.2 Arm-coverage corrections
+
+Audit enumerated per-arm test counts and found two arms with more tests than the planning claim:
+
+- **Dict arm (arm 7 in `synth_expr`)**: 3 tests, not 2. The extra test covers `DictSpreadNotSupported` rejection path distinct from `DuplicateField`.
+- **Call arm (arm 10 in `synth_expr`)**: 5 tests, not 2. The extra 3 tests cover: `NotCallable` on non-callable receiver, `KeywordArgMismatch` on positional-only target, `ArityMismatch` under consensus-mode LLM-translated variant.
+
+### 12.3 Extra non-synth tests
+
+The original planning claim of 14 extra (non-arm-pair) tests was understated. Actual count is **22**. The 8 additional extras cover:
+
+- 4 tests for `BlockOutcome::join` reachability join (Added during free-function port; not enumerated in arm-pair breakdown).
+- 2 tests for `Ctx` lifecycle state-leak (nested `check_fn` + `loop_depth` decrement).
+- 2 tests for `lower_default_type` `MutableDefault` edge cases.
+
+### 12.4 Arm 1 (Lit) coverage note
+
+Audit confirmed: `Lit` arm corpus tests are PASS-only. There is no FAIL path for `Lit` because `lit_type` is total (every `LitKind` maps to a concrete `Ty`). This is correct behavior, not a coverage gap. The `check.cb` doc-ref is already accurate per audit.
+
+### 12.5 No test-corpus changes
+
+The `check_parity_corpus.rs` and `check_display_parity.rs` files are correct at `9bb3dbc`. This amendment updates the ADR record only; no re-dispatch or re-verification is required.
