@@ -509,14 +509,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
 | `LlvmEmitter::define_body` | second-pass fn body emit (`llvm_backend.rs:371`) |
 | `BodyLowerer::lower_terminator` | per-block terminator dispatch (`llvm_backend.rs:500`) |
 
-### Wave-1 non-goals (deferred)
+### Wave-1 non-goals (deferred — wave-2 status noted inline)
 
 - **Optimization pass pipeline** (`OptLevel::Speed` / `SpeedAndSize`):
-  sub-ADR 0058b. LLVM backend ignores opt_level beyond `None` at wave-1.
+  **DELIVERED at wave-2 (ADR-0058b)** via `pass_pipeline_for(OptLevel)` +
+  `Module::run_passes`. See "Phase K wave-2" section below.
 - **DWARF debug-info emission**: sub-ADR 0058c.
-- **Multi-target cross-compilation matrix**: sub-ADR 0058b.
+- **Multi-target cross-compilation matrix**: **DELIVERED at wave-2 (ADR-0058b §3.4)**
+  via `supported_tier1_triples()` enumeration; cross-link stays `release.yml`-scope.
 - **Binary-size acceptance bar** (ADR-0023 §"LLVM `-O3` ≥ 30% smaller"):
-  closes at sub-ADR 0058b under `OptLevel::SpeedAndSize`.
+  **RESOLVED at wave-2** under `OptLevel::SpeedAndSize`; see `tests/binary_size_bench.rs`.
 - **`Constant::Str` / `Bytes` runtime-helper Call lowering**: wave-2;
   Cranelift M11 `__cobrust_*` extern-helper Call path not yet ported.
 - **Aggregate construction** (List/Dict/Set/Tuple/Record): wave-2 stub
@@ -547,6 +549,70 @@ impl<'ctx> LlvmEmitter<'ctx> {
 | while_corpus | 12 | while + nested binop |
 | while_if_corpus | 7 | fizzbuzz/short |
 | **Total** | **355** | TEST_EXIT=0 |
+
+## Phase K wave-2 — LLVM opt pipeline + multi-target (ADR-0058b)
+
+Status: **delivered**. Extends wave-1's `llvm_backend::emit` with the LLVM new-pass-manager pipeline and codifies the ADR-0046 tier-1 multi-target dispatch contract.
+
+### Public surface added (wave-2)
+
+```rust
+// crates/cobrust-codegen/src/llvm_backend.rs
+// All gated behind #[cfg(feature = "llvm")].
+
+/// Map OptLevel to PassBuilder pipeline string (ADR-0058b §3.2).
+/// Returns None for OptLevel::None (no passes run).
+pub fn pass_pipeline_for(level: OptLevel) -> Option<&'static str>;
+
+/// ADR-0046 tier-1 four-triple binding contract (ADR-0058b §3.4).
+pub fn supported_tier1_triples() -> &'static [&'static str];
+```
+
+### Pipeline mapping (binding)
+
+| `OptLevel` | `pass_pipeline_for` | `TargetMachine` opt | LLVM behavior |
+|---|---|---|---|
+| `None` | `None` | `OptimizationLevel::None` | wave-1 path; `run_passes` skipped |
+| `Speed` | `Some("default<O2>")` | `OptimizationLevel::Default` | LLVM `-O2` equivalent |
+| `SpeedAndSize` | `Some("default<O3>,default<Os>")` | `OptimizationLevel::Aggressive` | LLVM `-O3` then size overlay |
+
+`PassBuilderOptions::create()` defaults preserved at wave-2 (no manual `set_loop_*` / `set_inline_threshold` flipping); follow-up sub-ADR if empirical bench fails.
+
+### Tier-1 triple matrix (ADR-0046)
+
+| Triple | Object format | Backend availability |
+|---|---|---|
+| `aarch64-apple-darwin` | Mach-O | brew `llvm@18` on Mac |
+| `aarch64-unknown-linux-gnu` | ELF | apt `llvm-18-dev` on Linux + `cross` |
+| `x86_64-unknown-linux-gnu` | ELF | apt `llvm-18-dev` on Linux |
+| `x86_64-unknown-linux-musl` | ELF (static) | apt `llvm-18-dev` + musl sysroot |
+
+Cross-link stays in `release.yml` + `cross` scope (linker delegation per ADR-0023 §"Linker delegation" unchanged).
+
+### Wave-2 test surface
+
+| Suite | Tests | Notes |
+|---|---|---|
+| llvm_backend inline (wave-2) | 5 added | `pass_pipeline_mapping_matches_spec`, `tier1_triple_matrix_has_four_entries`, `tier1_triples_parse_via_target_lexicon`, `smoke_opt_speed_pipeline`, `smoke_opt_speed_and_size_pipeline` |
+| binary_size_bench | 2 | `bench_fixtures`, `o3_median_under_70pct` (ADR-0023 §A3 close) |
+
+5-fixture bench corpus: `hello`, `fizzbuzz`, `fib`, `dot_product`, `nested_branch`. Per-fixture O3/O0 ratios printed on stderr via `--nocapture`; median ratio asserted ≤ 0.70.
+
+### F34 symbol anchors (wave-2)
+
+| Anchor | Role |
+|---|---|
+| `llvm_backend::pass_pipeline_for` | OptLevel → PassBuilder pipeline mapping |
+| `llvm_backend::supported_tier1_triples` | ADR-0046 tier-1 enumeration |
+| `binary_size_bench::o3_median_under_70pct` | ADR-0023 §A3 empirical close assertion |
+
+### Non-goals (deferred per ADR-0058b §4)
+
+- **DWARF emission**: sub-ADR 0058c.
+- **JIT opt-level changes**: cobrust-jit `lower.rs` unchanged at wave-2.
+- **Cross-link**: linker stays at `cc`; cross-target executables are `release.yml` + `cross`-tool scope.
+- **New MIR features**: wave-2 consumes wave-1's IR-construction pass.
+- **Manual PassBuilder flag tuning**: defaults preserved; sub-ADR follow-up only if bench fails on tier-1 host.
 
 ## Phase K Strand #4 — JIT/AOT lowering convergence (ADR-0058d)
 
