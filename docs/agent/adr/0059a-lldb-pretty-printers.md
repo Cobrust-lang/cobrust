@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0059a
 parent_adr: 0059
 title: "Phase L wave-1 — lldb pretty-printers for 6 Cobrust types"
-status: proposed
+status: accepted
 date: 2026-05-19
-last_verified_commit: 3c9382c
+last_verified_commit: 982b716
+ratified_at: c6e0099
+ratified_on: 2026-05-19
 supersedes: []
 superseded_by: []
 relates_to: [adr:0059, adr:0058c, adr:0050c, adr:0050d]
