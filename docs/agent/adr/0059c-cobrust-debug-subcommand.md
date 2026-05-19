@@ -3,7 +3,7 @@ doc_kind: adr
 adr_id: 0059c
 parent_adr: 0059
 title: "Phase L wave-3 — `cobrust debug` CLI subcommand"
-status: proposed
+status: accepted
 date: 2026-05-19
 last_verified_commit: 12e1d87
 supersedes: []

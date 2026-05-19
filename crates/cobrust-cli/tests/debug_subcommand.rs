@@ -19,7 +19,7 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::unwrap_used)]
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
