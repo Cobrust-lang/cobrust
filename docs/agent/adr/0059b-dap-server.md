@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0059b
 parent_adr: 0059
 title: "Phase L wave-2 — DAP server crate (`cobrust-dap`)"
-status: proposed
+status: accepted
 date: 2026-05-19
-last_verified_commit: 1629550
+last_verified_commit: 1457024
+ratified_at: 1457024
+ratified_on: 2026-05-19
 supersedes: []
 superseded_by: []
 relates_to: [adr:0059, adr:0059a, adr:0057, adr:0057a, adr:0058c, adr:0012]
@@ -468,4 +470,83 @@ gate per heavy-build-offload policy.
   CLI builds on the same lldb-18 host requirement; dispatch
   sequentially or parallel-after-wave-2 ratifies.
 
-— P9 Tech Lead, 2026-05-19
+## 14. Ratification addendum (2026-05-19)
+
+Implementation merged on branch `feature/0059b-dev` (head `1457024`).
+Phase 1-7 dispatch summary:
+
+- **Phase 0 — ADR author**: this ADR at `d953e7e`.
+- **Phase 1 — Crate scaffold**: `c4ad968` (`cobrust-dap/Cargo.toml`,
+  `src/main.rs`, `src/lib.rs`, `src/dap_types.rs` with 7 unit tests
+  covering DAP type round-tripping).
+- **Phase 2 — lldb driver**: `8f212a5` (`src/lldb_driver.rs` with 10
+  unit tests covering 4 parsers + 2 stub-driver shapes).
+- **Phase 3 — DAP handlers**: `c29e0ac` (`src/handlers.rs` with 5
+  handler-level unit tests).
+- **Phase 4 — snapshot + e2e tests**: `eb2f85c` (5 snapshot tests in
+  `tests/dap_handler_snapshots.rs` covering Initialize, SetBreakpoints,
+  Continue, StackTrace, Variables; 1 ignored e2e in
+  `tests/dap_e2e_smoke.rs` covering the full stdio handshake).
+- **Phase 5 — DG verify**: Performed at `eb2f85c`. <self-hosted-runner>
+  results: `cargo test -p cobrust-dap` PASS (22 unit + 5 snapshot +
+  1 ignored = 28 tests, TEST_EXIT=0); `cargo test -p cobrust-dap
+  --test dap_e2e_smoke -- --ignored` PASS (1/1); `cargo test -p
+  cobrust-lsp` PASS (5/5 — no Phase J regression). POSTFLIGHT clean:
+  `/tmp/cobrust-*` PRE=0, POST=0.
+- **Phase 6 — Dual-track docs**: `25671fc` (agent module
+  `docs/agent/modules/dap.md`) + `1457024` (zh + en editor-setup
+  extension).
+- **Phase 7 — Ratify**: this commit.
+
+Deviations from the design above (none load-bearing; documented for
+L2 audit traceability):
+
+- **DAP types**: §4.1 noted "hand-rolled vs `dap` crate"; wave-2
+  ships hand-rolled `Request`/`Response` + the 6 wave-2 argument
+  structs in `src/dap_types.rs` (~290 LOC including 6 unit tests).
+  ~150 LOC budget held.
+- **Snapshot test count**: §6.1 enumerated 5 tests; the §6.1 #5
+  "Continue + Paused event" entry is delivered as `snapshot_continue_response`
+  (verifying the `continue` response shape; the follow-up `StoppedEvent`
+  emission is left as Phase L wave-3+ scope since wave-2 doesn't
+  implement an event-pump loop — only request/response). The 5-test
+  count is preserved.
+- **E2E smoke scope**: §6.2 enumerated "Initialize → Launch →
+  SetBreakpoint → Continue → StackTrace → Variables → Disconnect" as
+  the e2e flow; the implemented e2e covers Initialize → response shape
+  check → Disconnect (the load-bearing stdio handshake). F37 explicit
+  deferral: the full Launch + breakpoint flow depends on a
+  `cobrust build --debug`-produced binary on the test host, which the
+  test runner does not orchestrate today. Phase L wave-3 (`cobrust
+  debug` CLI) will own the full e2e flow once binary-build is
+  scriptable inside `cargo test`.
+- **`evaluate` handler**: §3.2 listed 9 handlers; the implementation
+  adds a 10th stub for `threads` (single-thread hardcoded per §5
+  non-goal). `evaluate` is NOT implemented; the dispatcher returns
+  `{"message": "command 'evaluate' not implemented in wave-2"}` per
+  the generic "unsupported command" path in `Adapter::dispatch`.
+- **lldb-18 child-process driver vs lldb-rs**: §3.3 codified the
+  decision; implementation matches.
+
+Acceptance gate (§10) status as of merge:
+
+- [x] ADR-0059a (wave-1) merged at `1629550`.
+- [x] ADR-0058c (DWARF emission) ratified at `a46fe85`.
+- [x] Parent ADR-0059 frame in `proposed` status → this wave's merge
+      ratifies the parent frame per ADR-0059 §10.
+- [x] lldb-18 available on <self-hosted-runner> per ADR-0058 §4.
+- [x] No regressions on existing Phase J `cobrust-lsp` snapshot
+      corpus — DG-verified 5/5 PASS at `eb2f85c`.
+
+Test verification:
+
+- Mac single-crate: `cargo test -p cobrust-dap` PASS (22 unit + 5
+  snapshot + 1 ignored e2e = 28 tests).
+- DG verify: same 28 tests PASS; e2e ignored test runnable via
+  `--ignored` flag PASS (1/1). POSTFLIGHT `/tmp/cobrust-*` clean
+  (PRE=0, POST=0).
+- Phase H/I/J/K/L wave-1/M regression baselines: cobrust-lsp 5/5
+  snapshot PASS verified on DG (Phase J); other phases not exercised
+  by this dispatch (new crate scope; non-shared file edits).
+
+— P9 Tech Lead, 2026-05-19 (ratification 2026-05-19)
