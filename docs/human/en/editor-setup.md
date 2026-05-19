@@ -202,6 +202,46 @@ cargo run -p cobrust-cli -- build --debug examples/fib.cb -o /tmp/fib
 #    pane shows `n: Int = N` for the recursive case.
 ```
 
+## `cobrust debug` (wave-3: one-command launcher)
+
+The `cobrust debug` subcommand (Phase L wave-3, ADR-0059c) wraps the
+wave-1 lldb pretty-printers + wave-2 `cobrust-dap` server into a single
+CLI entrypoint — no manual `lldb` / `command script import` / per-editor
+`launch.json` wiring needed for the common case.
+
+Three modes:
+
+```bash
+# Interactive lldb session: builds with debug info, auto-loads the
+# wave-1 pretty-printers, drops you at the (lldb) prompt.
+cobrust debug examples/fib.cb
+
+# Interactive + auto-breakpoint at line 5 (repeatable: --bp 5 --bp 12).
+cobrust debug examples/fib.cb --bp 5
+
+# Forward stdio to the cobrust-dap server (for editor DAP-stdio
+# transport; replaces the explicit cobrust-dap binary path in
+# `launch.json`).
+cobrust debug --dap
+```
+
+**Flags:**
+
+- `<source.cb>` — required in interactive mode; optional in `--dap` mode
+  (the DAP `Launch` request carries the program path).
+- `--dap` — spawn the sibling `cobrust-dap` and forward stdin/stdout/stderr.
+- `--bp <line>` — auto-set a line breakpoint; repeatable.
+- `--lldb-path <path>` — override the lldb binary (default resolution:
+  `lldb-18` then `lldb` on `$PATH`).
+- `--quiet` / `-q` — suppress informational stderr.
+
+**Exit codes** (per ADR-0024 §"Exit-code scheme"):
+
+- `0` — clean exit from lldb / cobrust-dap.
+- `1` — user error (missing source, lldb binary not found, sibling
+  cobrust-dap binary not located).
+- `3` — build failure (forwarded from `cobrust build` driver).
+
 ## What is NOT included
 
 - Wave-1 LSP only ships diagnostics. Go-to-definition, completion, hover,
@@ -210,4 +250,7 @@ cargo run -p cobrust-cli -- build --debug examples/fib.cb -o /tmp/fib
   only. Conditional breakpoints, expression watch (`evaluate`),
   multi-thread debug, attach mode, and `setVariable` are Phase L wave-3+
   followups per ADR-0059b §5.
+- Wave-3 `cobrust debug` ships line-number breakpoints only. Conditional /
+  function-name breakpoints stay inside the lldb prompt scope per
+  ADR-0059c §5.
 - Formatter integration — see the `cobrust fmt` CLI tool.

@@ -64,6 +64,21 @@ end-to-end driver and ships the M10 hello-world contract.
   `(p, p, p) -> p` for `prompt_render` / `prompt_format_few_shot`;
   `(p, p) -> p` for `prompt_format_system_user` / `llm_complete_structured`;
   `(p,) -> p` for `prompt_escape_braces`.
+- **Phase L wave-3 — delivered.** ADR-0059c adds the `cobrust debug`
+  subcommand: 3-mode dispatch (interactive lldb, `--dap` stdio
+  forward to `cobrust-dap`, `--bp <line>` shorthand). New module
+  `crates/cobrust-cli/src/debug.rs` (~280 LOC) exports `DebugArgs` +
+  `run()` + closed `DebugError` enum mapped to ADR-0024 exit codes
+  (`MissingSource` / `SourceNotFound` / `LldbNotFound` /
+  `DapBinaryNotFound` / `PrintersNotFound` / `BuildFailed` / `Io`).
+  Interactive mode builds via `build::run`, writes a temp `.lldbrc`
+  (`tempfile::NamedTempFile`) with `command script import
+  <workspace>/tools/lldb-cobrust/printers.py` + per-`--bp` directive,
+  and spawns `lldb-18 -s <rc> <binary>` with inherited stdio.
+  `--dap` mode locates sibling `cobrust-dap` via `current_exe()`
+  parent + spawns with inherited stdio. ZERO new Cargo deps per
+  HARD-BANNED #1 (reuses `tempfile` / `clap` / `thiserror` /
+  `std::process::Command`).
 
 ## Public surface (M10)
 
@@ -85,6 +100,7 @@ ADR-0024 §"Subcommand contracts":
 | `cobrust test [--quiet]` | (none) | summary + per-test verdict (manifest-aware) | 0/1/2/3/6 |
 | `cobrust add <name> [--path PATH \| --git URL --rev REV \| --version REQ] [--dev]` | a dep name + source | appends to nearest `cobrust.toml` | 0/1 |
 | `cobrust repl` | (none) | interactive shell + directives (M14) | 0 |
+| `cobrust debug [<file.cb>] [--dap] [--bp <line>]... [--lldb-path <path>]` (Phase L wave-3, ADR-0059c) | source path (optional in `--dap` mode) | interactive lldb session OR forwarded `cobrust-dap` stdio | 0/1/3 |
 
 ### Exit-code constants
 
