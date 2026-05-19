@@ -51,15 +51,15 @@ fn main() -> i64:
                     let start = pos - wlen
                     let matched: i64 = 0
                     if wi == 0:
-                        matched = words_match(s, start, wstrs_0, wlen)
+                        matched = words_match(&s, start, wstrs_0, wlen)
                     elif wi == 1:
-                        matched = words_match(s, start, wstrs_1, wlen)
+                        matched = words_match(&s, start, wstrs_1, wlen)
                     elif wi == 2:
-                        matched = words_match(s, start, wstrs_2, wlen)
+                        matched = words_match(&s, start, wstrs_2, wlen)
                     elif wi == 3:
-                        matched = words_match(s, start, wstrs_3, wlen)
+                        matched = words_match(&s, start, wstrs_3, wlen)
                     else:
-                        matched = words_match(s, start, wstrs_4, wlen)
+                        matched = words_match(&s, start, wstrs_4, wlen)
                     if matched == 1:
                         list_set(dp, pos, 1)
             wi = wi + 1

@@ -36,7 +36,7 @@ fn main() -> i64:
         i = i + 1
     while lo < hi:
         let mid = lo + (hi - lo) / 2
-        if can_ship(line, n, mid, days) == 1:
+        if can_ship(&line, n, mid, days) == 1:
             hi = mid
         else:
             lo = mid + 1

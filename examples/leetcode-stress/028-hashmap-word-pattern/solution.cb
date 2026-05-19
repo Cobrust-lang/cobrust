@@ -61,7 +61,7 @@ fn main() -> i64:
         if mapped_w == -1:
             let q: i64 = 0
             while q < p:
-                if words_equal(wline, starts, lens, p, q) == 1:
+                if words_equal(&wline, starts, lens, p, q) == 1:
                     if list_get(w2c, q) != pc:
                         print("false")
                         return 0
@@ -69,7 +69,7 @@ fn main() -> i64:
             list_set(c2w, pc, p)
             list_set(w2c, p, pc)
         else:
-            if words_equal(wline, starts, lens, p, mapped_w) == 0:
+            if words_equal(&wline, starts, lens, p, mapped_w) == 0:
                 print("false")
                 return 0
             if list_get(w2c, mapped_w) != pc:

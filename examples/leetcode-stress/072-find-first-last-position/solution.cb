@@ -101,7 +101,7 @@ fn main() -> i64:
     let n = parse_int(input(""))
     let line = input("")
     let target = parse_int(input(""))
-    let first = lower_bound(line, n, target)
+    let first = lower_bound(&line, n, target)
     if first == n:
         print_int_no_nl(-1)
         print_no_nl(" ")
@@ -114,7 +114,7 @@ fn main() -> i64:
         print_int_no_nl(-1)
         print("")
         return 0
-    let last = upper_bound(line, n, target) - 1
+    let last = upper_bound(&line, n, target) - 1
     print_int_no_nl(first)
     print_no_nl(" ")
     print_int_no_nl(last)
