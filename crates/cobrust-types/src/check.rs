@@ -1233,7 +1233,15 @@ impl Ctx {
                         let it = self.synth_expr(e)?;
                         unify(&Ty::Int, &it, &mut self.subst, e.span)?;
                         if let Some(idx) = literal_int_value(e) {
-                            let n_i = *n as i64;
+                            // `n: usize` → `i64` for OOB compare against
+                            // a signed literal-index value. Per ADR-0060b
+                            // §3.4 the array-length tier is bounded to
+                            // i64::MAX in practice; on the (unreachable)
+                            // 64-bit-wide-pointer overflow path we treat
+                            // the index as in-range and defer to codegen,
+                            // since the literal-OOB diagnostic is purely
+                            // an LLM-friendliness fast-path (§2.5).
+                            let n_i = i64::try_from(*n).unwrap_or(i64::MAX);
                             if idx < 0 || idx >= n_i {
                                 return Err(TypeError::NotIndexable {
                                     actual: Ty::Array(elem.clone(), *n),

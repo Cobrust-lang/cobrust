@@ -23,6 +23,11 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
+// `*_canon.len() as u32` casts are bounded by the canonical-id namespace
+// allocation — the canonicalization arena cannot exceed u32::MAX entries
+// (no realistic Ty tree approaches this). F37-honest: pre-existing pattern
+// across the dense-pack arena; surface here for the new arena-id sites.
+#![allow(clippy::cast_possible_truncation)]
 
 use std::collections::HashMap;
 
@@ -258,6 +263,15 @@ impl Canonicalize for Ty {
             Ty::Ref(inner) => {
                 let c = inner.canonicalize(arena);
                 CanonicalKey::node("Ref", vec![c])
+            }
+            // ADR-0060b + ADR-0060c additions: IntN width tier + fixed-size
+            // Array. No arena-id renaming required — both carry inline
+            // primitive payloads (width + length); canonical form mirrors
+            // `Display`.
+            Ty::IntN(w) => CanonicalKey::leaf(&format!("IntN#{w}")),
+            Ty::Array(elem, n) => {
+                let c = elem.canonicalize(arena);
+                CanonicalKey::node(&format!("Array#{n}"), vec![c])
             }
         }
     }
@@ -612,5 +626,11 @@ pub fn manual_canonical_key(ty: &Ty) -> CanonicalKey {
         Ty::Generic(g) => CanonicalKey::leaf(&format!("Generic#{}", g.0)),
         Ty::Var(v) => CanonicalKey::leaf(&format!("Var#{}", v.0)),
         Ty::Ref(inner) => CanonicalKey::node("Ref", vec![manual_canonical_key(inner)]),
+        // ADR-0060b + ADR-0060c additions: IntN width tier + fixed-size Array.
+        // Manual canonical form mirrors `Display`: `i{N}` for IntN, `[T; N]` for Array.
+        Ty::IntN(w) => CanonicalKey::leaf(&format!("IntN#{w}")),
+        Ty::Array(elem, n) => {
+            CanonicalKey::node(&format!("Array#{n}"), vec![manual_canonical_key(elem)])
+        }
     }
 }
