@@ -197,6 +197,43 @@ cargo run -p cobrust-cli -- build --debug examples/fib.cb -o /tmp/fib
 #    递归情况下的 `n: Int = N`。
 ```
 
+## `cobrust debug`(wave-3:一键调试入口)
+
+`cobrust debug` 子命令(Phase L wave-3,ADR-0059c)把 wave-1 lldb pretty-
+printer 和 wave-2 `cobrust-dap` 包装成单条 CLI 入口 —— 常见场景下不再需要
+手动 `lldb` / `command script import` 或为每个编辑器写 `launch.json`。
+
+三种模式:
+
+```bash
+# 交互式 lldb 会话:带 debug info 构建、自动加载 wave-1 pretty-printers、
+# 落到 (lldb) 提示符。
+cobrust debug examples/fib.cb
+
+# 交互模式 + 行号断点(可重复:--bp 5 --bp 12)。
+cobrust debug examples/fib.cb --bp 5
+
+# 把 stdio 转发到 cobrust-dap 服务(替代 `launch.json` 里显式写
+# cobrust-dap 二进制路径的方式)。
+cobrust debug --dap
+```
+
+**参数:**
+
+- `<source.cb>` —— 交互模式下必填;`--dap` 模式下可选(DAP `Launch`
+  请求会带上程序路径)。
+- `--dap` —— 启动同目录的 `cobrust-dap`,转发 stdin/stdout/stderr。
+- `--bp <line>` —— 自动设置行号断点;可重复。
+- `--lldb-path <path>` —— 覆盖 lldb 二进制路径(默认查找顺序:
+  `lldb-18`,再到 `$PATH` 上的 `lldb`)。
+- `--quiet` / `-q` —— 静默 informational stderr。
+
+**退出码**(按 ADR-0024 §"Exit-code scheme"):
+
+- `0` —— lldb / cobrust-dap 正常退出。
+- `1` —— 用户错误(源文件缺失、lldb 二进制未找到、cobrust-dap 同目录缺失)。
+- `3` —— 构建失败(从 `cobrust build` 驱动透传)。
+
 ## 不包含的功能
 
 - Wave-1 LSP 仅提供诊断。定义跳转、补全、悬浮提示、重命名、code-action
@@ -204,4 +241,6 @@ cargo run -p cobrust-cli -- build --debug examples/fib.cb -o /tmp/fib
 - Wave-2 DAP 仅承担单线程单步调试的核心表面。条件断点、表达式监视
   (`evaluate`)、多线程调试、attach 模式、`setVariable` 是 Phase L
   wave-3+ 的后续工作,详见 ADR-0059b §5。
+- Wave-3 `cobrust debug` 仅支持行号断点。条件断点 / 函数名断点需要
+  在 lldb 提示符内手动输入,详见 ADR-0059c §5。
 - 格式化集成 — 参见 `cobrust fmt` CLI 工具。

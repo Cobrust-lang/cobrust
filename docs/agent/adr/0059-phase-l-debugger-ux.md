@@ -3,7 +3,7 @@ doc_kind: adr
 adr_id: 0059
 parent_adr: 0054
 title: "Phase L frame — Debugger UX (lldb pretty-printers + DAP + `cobrust debug` CLI)"
-status: proposed
+status: accepted
 date: 2026-05-19
 last_verified_commit: 3c9382c
 supersedes: []
@@ -134,6 +134,16 @@ users hand-compose `cobrust build --debug; lldb out.bin; command script
 import ...` every time.
 
 **Owner**: ADR-0059c.
+
+**Status**: CLOSED (2026-05-19) at ADR-0059c acceptance. Shipped
+`crates/cobrust-cli/src/debug.rs` (~280 LOC) with `DebugArgs` +
+`run()` + closed `DebugError` enum; 3-mode dispatch (interactive /
+`--dap` stdio / `--bp` shorthand); ZERO new Cargo deps per
+HARD-BANNED #1 (reuses `tempfile`, `clap`, `thiserror`,
+`std::process::Command`). 3 integration tests PASS DG
+(`cargo test -p cobrust-cli --test debug_subcommand`: 2 PASS + 1
+ignored DAP-handshake gated per ADR-0059b §6.2 precedent + 0 failed
++ 0 regression).
 
 ## 4. Non-goals (wave-1 scope; later waves may revisit)
 
