@@ -193,3 +193,10 @@ merges into `main`.
   ADR-0009 (downstream), ADR-0010 (native-ext), ADR-0011 (PyO3).
 - Upstream Rust crates: `ndarray` 0.16, `ndarray-linalg` 0.16, `rand`
   0.8, `rustfft` 6.x.
+
+## See also
+
+- `docs/agent/strategy/numpy-translation-architecture.md` — strategic
+  insight (2026-05-19): numpy = 30% Python-wrapper translation + 50% C
+  kept intact via FFI + 20% Fortran external dep. Same difficulty grade
+  as tomli. READ BEFORE any M7 / Phase N numpy sprint dispatch.
