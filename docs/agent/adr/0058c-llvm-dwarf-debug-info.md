@@ -3,15 +3,15 @@ doc_kind: adr
 adr_id: 0058c
 parent_adr: 0058
 title: "Phase K wave-3 — LLVM DWARF debug-info emission"
-status: proposed
+status: accepted
 date: 2026-05-19
-ratified_at: TBD
-last_verified_commit: 2575a4d
+ratified_at: a46fe85
+last_verified_commit: a46fe85
 supersedes: []
 superseded_by: []
 relates_to: [adr:0058, adr:0058a, adr:0058b, adr:0023, adr:0046, adr:0059]
 discovered_by: P10 Phase K wave-3 third sub-sprint per ADR-0058 §"Sub-ADR roster"
-ratification_path: P9 sub-ADR review; ratify on DEV landing + DG verify clean + lldb-18 smoke
+ratification_path: P9 sub-ADR review; ratified on DEV landing + DG verify clean + lldb-18 smoke
 ---
 
 # ADR-0058c: Phase K wave-3 — LLVM DWARF debug-info emission

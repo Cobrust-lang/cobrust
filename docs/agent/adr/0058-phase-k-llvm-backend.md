@@ -242,6 +242,8 @@ Phase L Debugger (ADR-0059) blocks on Phase K's ADR-0058c sub-ADR landing:
 
 If Phase K slips, Phase L slips by the same delta. ADR-0054 §9 critical-path treats the Phase K → L sequence as sequential; this ADR preserves that binding.
 
+**Status: RESOLVED at ADR-0058c acceptance** (2026-05-19, Phase K wave-3 landing). DWARF v5 emission verified on tier-1 host `x86_64-unknown-linux-gnu` via <self-hosted-runner> `cargo test -p cobrust-codegen --features llvm` clean + `tests/dwarf_lldb_smoke.rs` exercising `lldb-18` symbol resolution + line-table inspection. Wave-3 ships per-fn DISubprogram + per-Span DILocation + DIBuilder finalize (per ADR-0058c §3.1-§3.4); source-level variable inspection (`DILocalVariable`) intentionally deferred to Phase L UX per ADR-0058c §4. Phase L (ADR-0059) frame-author + dispatch unblocked.
+
 ## 14. Consequences
 
 ### 14.1 Positive

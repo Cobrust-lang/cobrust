@@ -666,7 +666,7 @@ A single shared cache (`di_basic_types: HashMap<&'static str, DIBasicType<'ctx>>
 
 | Suite | Tests | Notes |
 |---|---|---|
-| llvm_backend inline DWARF smoke | 5 added | `dwarf_empty_module_emits_well_formed_object`, `dwarf_return_42_emits_subprogram`, `dwarf_multi_fn_module_emits_per_fn_subprograms`, `dwarf_drop_emitting_fn_still_validates`, `dwarf_o3_pipeline_preserves_dwarf` |
+| llvm_backend inline DWARF smoke | 5 added | `dwarf_empty_module_emits_well_formed_object`, `dwarf_return_42_emits_debug_sections`, `dwarf_multi_fn_module_emits_debug_sections`, `dwarf_drop_emitting_fn_still_validates`, `dwarf_o3_pipeline_preserves_dwarf` |
 | llvm_backend inline LineMap | 2 added | `linemap_empty_returns_1_1`, `linemap_ascii_lines` |
 | `tests/dwarf_lldb_smoke.rs` | 4 fixtures | `lldb_smoke_hello_world_subprogram_resolves`, `lldb_smoke_fib_function_visible`, `lldb_smoke_multi_fn_module_lists_both`, `lldb_smoke_line_table_present` — skip cleanly when neither `lldb-18` nor `lldb` is on `$PATH` |
 
