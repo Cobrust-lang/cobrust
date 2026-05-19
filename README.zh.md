@@ -75,10 +75,17 @@ sudo mv cobrust /usr/local/bin/
 # Linux arm64
 curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-aarch64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
-# Linux x86_64
+# Linux x86_64(glibc — 标准发行版:Debian / Ubuntu / Fedora / RHEL)
 curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
+# Linux x86_64 静态 musl — Alpine / distroless / 最小容器(无需 glibc)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-x86_64-unknown-linux-musl.tar.gz | tar xz
+sudo mv cobrust /usr/local/bin/
 ```
+
+> **用哪个 Linux 二进制?** Alpine 容器、scratch 镜像或无 glibc 环境请用 `musl` 变体。
+> 标准 Linux 发行版(Debian / Ubuntu / Fedora / RHEL / Arch,自带 glibc)用 `gnu` 变体。
+> 两者都是 tier-1 目标,每次 release 都会构建发布。
 
 ### Hello world
 

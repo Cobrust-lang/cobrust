@@ -1627,16 +1627,20 @@ flowchart TD
 
 **Linker delegation**: `emit` invokes the system `cc` (via `$CC` env var, defaulting to `cc`); when `--features lld` is on, passes `-fuse-ld=lld`. M9 never bundles a linker. Linker failures surface as `CodegenError::LinkerFailed { exit_code, stderr }`.
 
-**Target triple matrix (M9 delivery scope)**:
+**Target triple matrix (M9 delivery scope + Phase K Strand #5 tier-1 expansion)**:
 
-| Triple | Object format | Status |
-|---|---|---|
-| `x86_64-unknown-linux-gnu` | ELF | delivered |
-| `aarch64-apple-darwin` | Mach-O | delivered |
-| `x86_64-apple-darwin` | Mach-O | reachable |
-| `aarch64-unknown-linux-gnu` | ELF | reachable |
-| `wasm32-unknown-unknown` | WASM | out of scope (Phase F) |
-| `x86_64-pc-windows-msvc` | COFF | out of scope (Phase F) |
+| Triple | Object format | Tier | Status |
+|---|---|---|---|
+| `x86_64-unknown-linux-gnu` | ELF | tier-1 | delivered (ADR-0046) |
+| `aarch64-apple-darwin` | Mach-O | tier-1 | delivered (ADR-0046) |
+| `aarch64-unknown-linux-gnu` | ELF | tier-1 | delivered (ADR-0044 + 0046) |
+| `x86_64-unknown-linux-musl` | ELF (static) | **tier-1** | **promoted Phase K Strand #5** — static binary, no glibc; Alpine/distroless |
+| `x86_64-apple-darwin` | Mach-O | queued | reachable (cargo install --git) |
+| `x86_64-pc-windows-msvc` | COFF | queued | deferred to ADR-0058b (Gate 8) |
+| `wasm32-unknown-unknown` | WASM | out of scope | Phase F+ |
+
+ADR-0046 §Amendment documents the musl promotion rationale and the MSVC deferral decision
+(Gate 8 audit ae2316f1c51dbd6be). Release-readiness agent curl gate is now curl × 4.
 
 **Type inference for unresolved MIR locals**: the MIR's `_return` slot is declared `Ty::None` (per ADR-0020 `BodyBuilder::new`) and sub-expression spill temps may also carry `Ty::None`. The Cranelift backend runs a pre-pass that walks every `Statement::Assign`; the first rvalue assigned to a local recovers that local's effective Cranelift type (i64 for arithmetic, i8 for comparisons, f64 for float, etc.), so the function's actual return type and intermediate-temp widths are reconstructed without modifying the MIR.
 
