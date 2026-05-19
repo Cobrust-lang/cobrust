@@ -62,6 +62,7 @@ fn release_object_spec(name: &str) -> TargetSpec {
         artifact: ArtifactKind::Object,
         output_dir: dir,
         module_name: name.to_string(),
+        source_path: None,
     }
 }
 
@@ -135,6 +136,7 @@ fn smoke_006_linker_smoke_when_cc_available() {
         artifact: ArtifactKind::DynamicLibrary,
         output_dir: dir,
         module_name: "linksmoke".to_string(),
+        source_path: None,
     };
     // The link step needs a `_main` (ELF) / `_start` symbol for an
     // executable; for the smoke test we emit a dynamic library which
@@ -177,6 +179,7 @@ fn smoke_007_release_object_not_dramatically_larger_than_dev() {
         artifact: ArtifactKind::Object,
         output_dir: dev_dir,
         module_name: "smoke_007_dev".to_string(),
+        source_path: None,
     };
     let dev_artifact = emit(&mir, dev_spec).unwrap();
     let dev_size = std::fs::metadata(dev_artifact.path()).unwrap().len();
@@ -190,6 +193,7 @@ fn smoke_007_release_object_not_dramatically_larger_than_dev() {
         artifact: ArtifactKind::Object,
         output_dir: rel_dir,
         module_name: "smoke_007_rel".to_string(),
+        source_path: None,
     };
     let rel_artifact = emit(&mir, rel_spec).unwrap();
     let rel_size = std::fs::metadata(rel_artifact.path()).unwrap().len();

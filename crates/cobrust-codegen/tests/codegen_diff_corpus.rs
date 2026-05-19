@@ -87,6 +87,7 @@ fn host_object_spec(name: &str) -> TargetSpec {
         artifact: ArtifactKind::Object,
         output_dir: dir,
         module_name: name.to_string(),
+        source_path: None,
     }
 }
 
@@ -409,6 +410,7 @@ fn llvm_spec(name: &str) -> TargetSpec {
         artifact: ArtifactKind::Object,
         output_dir: dir,
         module_name: name.to_string(),
+        source_path: None,
     }
 }
 

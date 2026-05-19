@@ -29,6 +29,18 @@ pub struct TargetSpec {
     /// Module name — used for the artifact filename and as the
     /// linker symbol prefix.
     pub module_name: String,
+    /// Optional source-file path for DWARF emission (ADR-0058c §3.3).
+    ///
+    /// When `Some`, the LLVM backend builds a per-Span `LineMap` from
+    /// the file's contents at emit time + emits per-statement
+    /// `DILocation`s keyed against real (line, column) pairs. When
+    /// `None` (default — most tests + synthetic modules), the DWARF
+    /// emission falls back to `module_name` as the filename + `.` as
+    /// the directory; line table collapses to 0/0 for every statement
+    /// (DI structure still validates per `llvm-dwarfdump`).
+    ///
+    /// Cranelift backend ignores this field.
+    pub source_path: Option<PathBuf>,
 }
 
 impl TargetSpec {
@@ -45,6 +57,7 @@ impl TargetSpec {
             artifact: ArtifactKind::Executable,
             output_dir,
             module_name: module_name.into(),
+            source_path: None,
         }
     }
 
@@ -59,6 +72,7 @@ impl TargetSpec {
             artifact: ArtifactKind::Executable,
             output_dir,
             module_name: module_name.into(),
+            source_path: None,
         }
     }
 
@@ -72,6 +86,7 @@ impl TargetSpec {
             artifact: ArtifactKind::Object,
             output_dir,
             module_name: module_name.into(),
+            source_path: None,
         }
     }
 }

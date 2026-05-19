@@ -189,6 +189,7 @@ pub fn build(
         artifact: artifact_kind,
         output_dir: codegen_output_dir.clone(),
         module_name: module_name.clone(),
+        source_path: None,
     };
 
     // Emit the user's object file.
