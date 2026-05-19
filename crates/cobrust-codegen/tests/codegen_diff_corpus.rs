@@ -440,27 +440,28 @@ fn llvm_type_01_i64() {
     llvm_compile_ok("llvm_type01", "fn f(x: i64) -> i64:\n    return x\n");
 }
 
-// F36-amend 2026-05-19: original "i32" claim unrepresentable; tests i64 baseline; i32 narrow-int queued
+// ADR-0060a closure 2026-05-19: i32 narrow-int now source-level via Ty::IntN(32).
 #[test]
-fn llvm_type_02_i64_baseline() {
-    // Cobrust source type universe has Ty::Int (i64 width); i32/i8
-    // narrowing is IR-internal and not exposed at source level (ADR-0006).
-    // Fixture verifies the i64 FunctionType path (same LLVM emit route as
-    // hypothetical i32) using legal Cobrust source: i64 add.
+fn llvm_type_02_i32() {
+    // Ty::IntN(32) -> ctx.i32_type() per ADR-0060a §3.4 LLVM column.
+    // Wave-2 source surface: i32 identifier resolves via lower_named_type.
+    // Type-check unifies i32 with i32 (not i64 — narrowing forbidden
+    // without explicit cast per ADR-0060a §3.2 unification rule).
     #[cfg(feature = "llvm")]
     llvm_compile_ok(
         "llvm_type02",
-        "fn f(a: i64, b: i64) -> i64:\n    return (a + b)\n",
+        "fn f(a: i32, b: i32) -> i32:\n    return (a + b)\n",
     );
 }
 
-// F36-amend 2026-05-19: original "i8" unrepresentable; tests i64 passthrough; i8 narrow-int queued
+// ADR-0060a closure 2026-05-19: i8 narrow-int now source-level via Ty::IntN(8).
 #[test]
-fn llvm_type_03_i64_passthrough() {
-    // Cobrust source type universe has Ty::Int (i64); i8 narrowing is
-    // IR-internal. Fixture exercises LLVM i64 passthrough (same emit path).
+fn llvm_type_03_i8() {
+    // Ty::IntN(8) -> ctx.i8_type() per ADR-0060a §3.4 LLVM column.
+    // Drop pass treats IntN(_) as Copy (drop.rs is_copy ADR-0060a entry),
+    // so the parameter does NOT generate a drop slot.
     #[cfg(feature = "llvm")]
-    llvm_compile_ok("llvm_type03", "fn f(x: i64) -> i64:\n    return x\n");
+    llvm_compile_ok("llvm_type03", "fn f(x: i8) -> i8:\n    return x\n");
 }
 
 #[test]
@@ -480,16 +481,17 @@ fn llvm_type_05_f64() {
     );
 }
 
-// F36-amend 2026-05-19: original "void" unrepresentable (Cobrust None vs void); tests -> i64 baseline; void-return queued
+// ADR-0060b closure 2026-05-19: `-> None` return type now parser-legal.
 #[test]
-fn llvm_type_06_int_return_baseline() {
-    // Cobrust source: `None` is a keyword (KwNone), not an Ident, so
-    // `-> None` is rejected by `parse_type_atom`'s `expect_ident`.
-    // Implicit-void source: omit return type annotation; MIR lowers to
-    // Ty::None which the LLVM backend maps to i64 fallback per §lower_ty.
-    // This fixture exercises the Ty::None → i64 path (the void-like path).
+fn llvm_type_06_none_return() {
+    // Ty::None as an explicit return-type annotation. The parser
+    // (ADR-0060b §3.1) accepts KwNone in type-annotation position
+    // via parse_type_atom's KwNone branch. The LLVM backend maps
+    // Ty::None return locals to i64 fallback per llvm_backend.rs:628.
+    // Source: `fn f() -> None: pass` is the canonical Python-prior
+    // explicit-no-return idiom.
     #[cfg(feature = "llvm")]
-    llvm_compile_ok("llvm_type06", "fn f() -> i64:\n    return 0\n");
+    llvm_compile_ok("llvm_type06", "fn f() -> None:\n    pass\n");
 }
 
 #[test]
@@ -500,13 +502,14 @@ fn llvm_type_07_ptr() {
     llvm_compile_ok("llvm_type07", "fn f(s: str) -> str:\n    return s\n");
 }
 
+// ADR-0060b closure 2026-05-19: [T; N] array type now parser-legal.
 #[test]
-#[ignore = "Cobrust source syntax gap: fixed-size array type [T; N] not in \
-            TypeKind; deferred to Phase K wave-2"]
 fn llvm_type_08_array_i64() {
-    // Fixed-size array [i64; 4] → ctx.i64_type().array_type(4)
-    // Cobrust source does not yet have [T; N] array type syntax (TypeKind
-    // has no Array variant). Deferred until Phase K wave-2 adds array types.
+    // Ty::Array(Box::new(Ty::Int), 4) -> [4 x i64] LLVM array type per
+    // ADR-0060b §3.3 + llvm_backend.rs lower_ty Array arm. The parameter
+    // is parsed via parse_type_atom's LBracket branch (ADR-0060b §3.3
+    // parser). Indexing a[0] reuses Place::index MIR projection; LLVM
+    // backend emits GEP against the array alloca.
     #[cfg(feature = "llvm")]
     llvm_compile_ok(
         "llvm_type08",
@@ -618,19 +621,21 @@ fn llvm_operand_05_ref_local() {
     );
 }
 
+// ADR-0060b closure 2026-05-19: &T in type-annotation position now parser-legal.
 #[test]
-#[ignore = "Cobrust source syntax gap: &T in type-annotation position not in \
-            TypeKind; raw-pointer deref (*p) is MIR-internal only; \
-            deferred to Phase K wave-2"]
 fn llvm_operand_06_deref_ptr() {
-    // Projection::Deref on ptr local → load pointer-typed alloca, then GEP + load.
-    // `&i64` as a parameter type annotation requires TypeKind::Ref which does
-    // not exist in the AST yet. No legal Cobrust source expresses raw-pointer
-    // deref at the source level. Deferred to Phase K wave-2.
+    // &i64 parameter annotation via ADR-0060b §3.2 (parse_type_atom
+    // Amp branch -> TypeKind::Ref -> Ty::Ref(Int)). Ty::Ref is
+    // transparent at LLVM level (llvm_backend.rs:580 lower_ty Ref
+    // arm recurses into inner). Wave-2 does NOT yet support explicit
+    // *p deref at source level (raw-pointer deref is MIR-internal);
+    // the function body just returns the bound i64 value, exercising
+    // the &i64 -> i64 transparent passthrough via ADR-0052a Wave-1
+    // call-site one-way Ref(T)->T coercion.
     #[cfg(feature = "llvm")]
     llvm_compile_ok(
         "llvm_op06",
-        "fn f(p: &i64) -> i64:\n    return *p\n",
+        "fn read(n: i64) -> i64:\n    return n\nfn f(p: &i64) -> i64:\n    return read(p)\n",
     );
 }
 
