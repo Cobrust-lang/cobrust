@@ -1,13 +1,35 @@
 ---
 doc_kind: finding
 finding_id: adr0060b-array-indexing-mir-projection-debt
-last_verified_commit: 981b577
+last_verified_commit: 9adf6e6
 dependencies: [adr:0060b, adr:0058a]
 discovered_by: P9 Phase M sprint 2026-05-19 — llvm_type_08_array_i64 DG verify
 severity: P2 (language-surface follow-up; type-emission gap closed, indexing deferred)
-status: RESOLVED at 981b577 (2026-05-19 Phase M follow-up sprint)
+status: FULLY RESOLVED (compile-time-const + dynamic-index) at 9adf6e6 (2026-05-19 Phase M follow-up sprint, wave-3 dynamic-index sprint)
 related: [adr:0060b §3.3, adr:0058a §4.1]
 ---
+
+## §0b. Dynamic-index Resolution (2026-05-19, commits 43bb500…9adf6e6)
+
+Wave-3 follow-up closes the dynamic-index deferred scope from §0:
+
+1. **`crates/cobrust-stdlib/src/array.rs`** (new) — four C-ABI runtime helpers:
+   `__cobrust_array_get_i64`, `__cobrust_array_get_i32`, `__cobrust_array_get_i8`,
+   `__cobrust_array_get_bool`. Each uses `slice::get` (safe Rust) and panics via
+   `__cobrust_panic` on OOB. No `unsafe_code` relaxation needed.
+
+2. **`crates/cobrust-codegen/src/llvm_backend.rs`** — `declare_runtime_helpers`
+   now declares all four array-get symbols. `lower_place_load` Projection::Index path
+   routes non-const indices through the appropriate `__cobrust_array_get_<T>` call;
+   const-index path (`build_extract_value`) unchanged.
+
+3. **`crates/cobrust-codegen/src/cranelift_backend.rs`** — `runtime_helper_sigs`
+   declares the four symbols for Cranelift parity; Index arm comment updated.
+
+4. **`crates/cobrust-codegen/tests/codegen_diff_corpus.rs`** — three new F34
+   fixtures: `llvm_array_dyn_index_i64`, `llvm_array_dyn_index_i32`,
+   `llvm_array_dyn_index_oob_panic`. All PASS on DG verify (DG 2026-05-19,
+   POSTFLIGHT clean POST=0, zero regression).
 
 ## §0. Resolution (2026-05-19, commit 981b577)
 
@@ -33,12 +55,11 @@ Three additive edits closed this finding:
    `build_in_bounds_gep`. The safe `build_extract_value` requires a
    compile-time `u32` index, which exactly matches the ADR-0060b §3.4
    compile-time-catch surface (literal-OOB detection). Dynamic-index
-   Array reads fall through to the wave-1 stub-load surface — F37
-   honest scope: a dynamic-index Array read requires either lifting
-   `forbid(unsafe_code)` to `deny` + targeted `allow` (so the
-   builder's unsafe GEP can be invoked) or routing through a runtime
-   helper like the List path. Filed under "ADR-0060b dynamic-array-index
-   queue (deferred to wave-3 cast-surface sub-sprint)".
+   Array reads originally fell through to the wave-1 stub-load surface.
+   **RESOLVED in wave-3 sprint 2026-05-19 (§0b)**: non-const indices now
+   route through `__cobrust_array_get_<T>` runtime helpers declared in
+   `cobrust-stdlib/src/array.rs`. The `#![forbid(unsafe_code)]` constraint
+   is satisfied — no GEP needed, no relaxation of the unsafe policy.
 
 3. **`cobrust-codegen/tests/codegen_diff_corpus.rs`** — F36 rename
    `llvm_type_08_array_i64` -> `llvm_type_08_array_i64_index` with

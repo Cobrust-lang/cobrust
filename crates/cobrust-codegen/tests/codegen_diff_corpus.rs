@@ -804,3 +804,64 @@ fn llvm_callconv_03_return_aggregate_via_ptr() {
         "fn make_pair(a: i64, b: i64) -> (i64, i64):\n    return (a, b)\n",
     );
 }
+
+// =====================================================================
+// DYNAMIC-INDEX ARRAY — ADR-0060b finding-closure (3 fixtures)
+// F34 anchors: llvm_array_dyn_index_i64 / i32 / oob_panic
+// These exercise the runtime-helper path in lower_place_load:
+// non-const index → call __cobrust_array_get_<T>(arr_ptr, N, idx).
+// =====================================================================
+
+/// F34: codegen_diff_corpus::llvm_array_dyn_index_i64
+/// Exercises dynamic-index `a[i]` on `[i64; 4]` — routes through
+/// `__cobrust_array_get_i64` runtime helper (LLVM backend).
+/// Fixture compiles; no OOB panic expected for const-propagated safe index.
+#[test]
+fn llvm_array_dyn_index_i64() {
+    // `fn nth(a: [i64; 4], i: i64) -> i64: return a[i]`
+    // Dynamic index (parameter `i`) forces the runtime-helper path.
+    // Type check passes: Ty::Array(Int, 4) + index Ty::Int → OK.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_arr_dyn_i64",
+        "fn nth(a: [i64; 4], i: i64) -> i64:\n    return a[i]\n",
+    );
+}
+
+/// F34: codegen_diff_corpus::llvm_array_dyn_index_i32
+/// Exercises dynamic-index `a[i]` on `[i32; 3]` — routes through
+/// `__cobrust_array_get_i32` runtime helper (LLVM backend).
+#[test]
+fn llvm_array_dyn_index_i32() {
+    // `fn nth(a: [i32; 3], i: i64) -> i32: return a[i]`
+    // Dynamic index; element type Ty::IntN(32) → __cobrust_array_get_i32.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_arr_dyn_i32",
+        "fn nth(a: [i32; 3], i: i64) -> i32:\n    return a[i]\n",
+    );
+}
+
+/// F34: codegen_diff_corpus::llvm_array_dyn_index_oob_panic
+/// Verifies the type-check phase accepts a dynamic-index expression
+/// (OOB cannot be detected at compile-time for non-literal index).
+/// The runtime helper bounds-check will fire at runtime, not compile time.
+/// This test confirms compile-time acceptance (no false-positive rejection).
+#[test]
+fn llvm_array_dyn_index_oob_panic() {
+    // Dynamic index on [i64; 4]: no literal OOB → typeck passes.
+    // Codegen emits call to __cobrust_array_get_i64 which panics at runtime
+    // if idx >= 4. This fixture only verifies compilation succeeds.
+    let src = "fn nth(a: [i64; 4], i: i64) -> i64:\n    return a[i]\n";
+    let module = parse_str(src, FileId::SYNTHETIC).expect("parse");
+    let mut sess = Session::new();
+    let hir = hir_lower(&module, &mut sess).expect("hir");
+    let res = check(&hir);
+    assert!(
+        res.is_ok(),
+        "dynamic-index array typeck must pass (no literal OOB detectable): {src}"
+    );
+    // Compile via LLVM backend confirms codegen route.
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok("llvm_arr_dyn_oob", src);
+}
