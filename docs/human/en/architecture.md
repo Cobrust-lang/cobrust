@@ -2511,3 +2511,48 @@ fn main() -> i64:
 
 **Error mode:** all five functions return `""` on malformed JSON, invalid
 schema, unknown tool, router failure, or unavailable `llm-router` feature.
+
+---
+
+## cobrust skills — agent-readable embedded docs (ADR-0061)
+
+### Why it exists
+
+CLAUDE.md §2.5 requires maximizing overlap with LLM training data. Cobrust-specific idioms (`@py_compat`, `&borrow`, `Result<T,E>` idioms, L0–L3 manifest headers) postdate any LLM's training cutoff and are never in training data. The `cobrust skills` subcommand solves this by embedding curated cheatsheets directly into the binary — so any LLM agent can fetch them mid-conversation via a single CLI call.
+
+### How it works
+
+```mermaid
+flowchart LR
+    A[LLM agent] -- "cobrust skills get cobrust-language" --> CLI[cobrust CLI]
+    CLI --> EMBED["SkillAssets (rust-embed)"]
+    EMBED --> MD["cobrust-language.md (frozen at compile time)"]
+    MD -- "markdown bytes" --> CLI
+    CLI -- "stdout" --> A
+```
+
+- Skill files at `docs/agent/skills/*.md` are embedded via `rust-embed` at compile time.
+- The binary version and skill content are always matched (no runtime filesystem reads).
+- Three subcommand forms:
+  - `cobrust skills list` — newline-delimited names to stdout
+  - `cobrust skills get <name>` — raw markdown to stdout
+  - `cobrust skills get <name> --json` — `{"name","version","content"}` JSON
+
+### Skill catalog (Phase N)
+
+| Skill name | Contents |
+|---|---|
+| `cobrust-language` | Core syntax: types, let/fn/struct/enum/match, borrow syntax, @py_compat, f-strings, comprehensions |
+| `cobrust-stdlib` | Key stdlib modules and function signatures: string, list, dict, file I/O, Result/Option helpers, concurrency |
+| `cobrust-error-codes` | All TypeError + MIR error variants with FIX hints (ADR-0052b UX direction B) |
+| `cobrust-debugger` | `cobrust debug` CLI + DAP server + lldb pretty-printers (ADR-0059a/b/c) |
+
+### Why design: version-matching
+
+> "The cheatsheet returned by `cobrust skills get <name>` must match the installed cobrust version." — ADR-0061 §1.3
+
+`rust-embed` with `compression` + `include-exclude` features freezes skills at compile time. A skill file for 0.3.0 borrow syntax is never served to an agent running 0.4.0 — the binary carries only the skills compiled into it.
+
+### Crate location
+
+`crates/cobrust-cli/src/skills.rs` — implementation is in the CLI crate, not a separate crate. Skills are tooling, not a compiler component. The `SkillAssets` embed struct uses `#[folder = "../../docs/agent/skills/"]` relative to the crate root.

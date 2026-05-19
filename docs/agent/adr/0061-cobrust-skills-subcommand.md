@@ -1,12 +1,13 @@
 ---
 name: "0061"
 title: cobrust skills subcommand
-status: proposed
+status: accepted
 phase: Phase N (post-Phase-M)
 relates_to: [adr:0024, adr:0051, adr:0057a]
 date: 2026-05-19
 author: CTO (P10)
 competitive_source: docs/agent/strategy/competitive-intel-zero-language.md §3.1
+last_verified_commit: e0cede2
 ---
 
 ## §1 Motivation

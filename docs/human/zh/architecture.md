@@ -2369,3 +2369,48 @@ fn main() -> i64:
 ```
 
 **错误模式**：五个函数在 malformed JSON、非法 schema、未知工具、router 失败或 `llm-router` feature 不可用时均返回 `""`。
+
+---
+
+## cobrust skills — AI agent 可读内嵌文档 (ADR-0061)
+
+### 为什么需要它
+
+CLAUDE.md §2.5 要求最大化与 LLM 训练数据的重叠度。Cobrust 特有惯用语（`@py_compat`、`&borrow`、`Result<T,E>` 惯用法、L0–L3 manifest 头格式）均在任何 LLM 训练截止日期之后才存在，永远不会出现在训练数据中。`cobrust skills` 子命令通过将精心整理的速查表直接嵌入二进制文件来解决这一问题——任何 LLM agent 都可以在会话中通过单次 CLI 调用获取这些内容。
+
+### 工作原理
+
+```mermaid
+flowchart LR
+    A[LLM agent] -- "cobrust skills get cobrust-language" --> CLI[cobrust CLI]
+    CLI --> EMBED["SkillAssets (rust-embed)"]
+    EMBED --> MD["cobrust-language.md (编译期冻结)"]
+    MD -- "markdown 字节" --> CLI
+    CLI -- "stdout" --> A
+```
+
+- `docs/agent/skills/*.md` 处的技能文件通过 `rust-embed` 在编译期嵌入。
+- 二进制版本与技能内容始终匹配（运行时不读取文件系统）。
+- 三种子命令形式：
+  - `cobrust skills list` — 逐行输出名称到 stdout
+  - `cobrust skills get <name>` — 原始 markdown 输出到 stdout
+  - `cobrust skills get <name> --json` — 输出 `{"name","version","content"}` JSON
+
+### 技能目录（Phase N）
+
+| 技能名称 | 内容 |
+|---|---|
+| `cobrust-language` | 核心语法：类型、let/fn/struct/enum/match、借用语法、@py_compat、f-string、推导式 |
+| `cobrust-stdlib` | 关键 stdlib 模块及函数签名：string、list、dict、文件 I/O、Result/Option 工具、并发 |
+| `cobrust-error-codes` | 所有 TypeError + MIR 错误变体及 FIX 提示（ADR-0052b UX 方向 B） |
+| `cobrust-debugger` | `cobrust debug` CLI + DAP 服务器 + lldb pretty-printer（ADR-0059a/b/c） |
+
+### 设计原因：版本匹配
+
+> "`cobrust skills get <name>` 返回的速查表必须与已安装的 cobrust 版本匹配。" —— ADR-0061 §1.3
+
+带 `compression` + `include-exclude` feature 的 `rust-embed` 在编译期冻结技能内容。0.3.0 借用语法的技能文件永远不会被运行 0.4.0 的 agent 获取——二进制文件只携带编译进去的技能。
+
+### Crate 位置
+
+`crates/cobrust-cli/src/skills.rs`——实现在 CLI crate 中，不是独立 crate。技能是工具，不是编译器组件。`SkillAssets` 嵌入结构使用 `#[folder = "../../docs/agent/skills/"]`，相对于 crate 根目录。

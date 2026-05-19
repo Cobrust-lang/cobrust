@@ -830,3 +830,66 @@ are immortal .rodata and pass through unchanged.
 - ADR-0050e — M-F.3.5 string stdlib design (11 PRELUDE fns + clone()).
 - ADR-0050f — M-F.3.6 file IO completion design (7 PRELUDE fns).
 - T1.4 — error UX rewrite for 0.1.0-beta release.
+- ADR-0061 — `cobrust skills` subcommand design.
+
+---
+
+## `cobrust skills` subcommand (ADR-0061 / Phase N)
+
+### Purpose
+
+Binary-embedded agent-readable skill cheatsheets. Solves the training-data-overlap gap (CLAUDE.md §2.5): Cobrust-specific idioms that postdate LLM training cutoffs can be fetched on demand mid-conversation.
+
+### CLI surface
+
+```
+cobrust skills list
+cobrust skills get <name>
+cobrust skills get <name> --json
+```
+
+- `list` → newline-delimited names, one per line, sorted alphabetically
+- `get <name>` → raw markdown bytes to stdout; exit 1 if name not found (error to stderr)
+- `get <name> --json` → `{"name":"…","version":"…","content":"…"}` where `version` = `CARGO_PKG_VERSION`
+
+### Implementation
+
+- **Source**: `crates/cobrust-cli/src/skills.rs`
+- **Embed struct**: `SkillAssets` via `#[derive(rust_embed::Embed)]`; `#[folder = "../../docs/agent/skills/"]`; `#[include = "*.md"]`
+- **Features**: `rust-embed = { version = "8", features = ["compression", "include-exclude"] }`
+- **Public fns**: `list_skills() -> Vec<String>`; `get_skill(name: &str) -> Option<Cow<'static, [u8]>>`
+- **Dispatch**: `cmd_skills(args: &SkillsArgs) -> u8` (returns exit code)
+- **Error type**: `SkillsError` (thiserror): `NotFound`, `Corrupt`, `JsonError`
+
+F34 anchors: `skills-mod-v1`, `skills-err-v1`, `skills-list-v1`, `skills-get-v1`.
+
+### Skill catalog (Phase N)
+
+| Name | Source file | Contents |
+|---|---|---|
+| `cobrust-language` | `docs/agent/skills/cobrust-language.md` | Core syntax, ownership/borrow, @py_compat, f-strings, comprehensions |
+| `cobrust-stdlib` | `docs/agent/skills/cobrust-stdlib.md` | I/O, string, list, dict, math, concurrency API surface |
+| `cobrust-error-codes` | `docs/agent/skills/cobrust-error-codes.md` | All TypeError + MIR variants with FIX hints per ADR-0052b |
+| `cobrust-debugger` | `docs/agent/skills/cobrust-debugger.md` | cobrust debug CLI + DAP + lldb pretty-printers |
+| `cobrust-first-try` | `docs/agent/skills/cobrust-first-try.md` | LLM-first onboarding (pre-existing) |
+
+### Acceptance gates (ADR-0061 §6)
+
+Three integration tests in `crates/cobrust-cli/tests/test_skills.rs` (F34: test-skills-integration-v1):
+
+| Test fn | Assertion |
+|---|---|
+| `test_skills_list_nonempty` | exit 0 + stdout contains all 4 new skill names |
+| `test_skills_get_language_returns_content` | exit 0 + stdout > 100 bytes + contains `@py_compat` |
+| `test_skills_get_json_valid` | exit 0 + valid JSON + keys `name`/`version`/`content` |
+
+### Non-goals
+
+- No live doc-build at runtime (skills are frozen at compile time)
+- No external skill-pack download / network calls
+- No MCP integration in Phase N (future Phase P+)
+- No skills for third-party libraries in Phase N
+
+### Version-matching invariant
+
+`rust-embed` with `compression` + `include-exclude` freezes skill content at compile time. The skill served by `cobrust skills get` always matches the installed binary version. ADR-0061 §1.3.
