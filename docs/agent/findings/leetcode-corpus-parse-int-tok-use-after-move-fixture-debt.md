@@ -177,11 +177,18 @@ POST (031ac44):   99 passed;  0 failed;  1 ignored (lc024 same)
 Δ:                +83 PASS / −87 FAIL
 ```
 
-The remaining `lc024_hashmap_group_anagrams` ignore is a pre-existing
-RUNTIME-FAIL (failure.md cites "str_at on literal vars misaligned +
-missing list[str]"), unrelated to ADR-0050c borrow semantics. No new
-`#[ignore]` added during this sprint (F37 compliant — no silent
-cover-ups).
+The remaining `lc024_hashmap_group_anagrams` ignore (at the time of
+the +83 PASS sprint) was a pre-existing RUNTIME-FAIL (failure.md
+cited "str_at on literal vars misaligned + missing list[str]"),
+unrelated to ADR-0050c borrow semantics. No new `#[ignore]` added
+during this sprint (F37 compliant — no silent cover-ups).
+
+Follow-up (2026-05-19): lc024 root-cause sprint discovered the
+`#[ignore]` was already stale at `8f63132` — upstream Pattern A
+`__cobrust_print_no_nl_lit` + codegen `materialize_str_buffer`
+allocating real StringBuffers had silently closed the path. See
+finding `lc024-already-passing-stale-ignore.md`. LC-100 stress
+final state at the follow-up: 100 passed; 0 failed; 0 ignored.
 
 F36 compliance audit: zero fixture renames. All 84 refactored fixtures
 solve the LeetCode problem named in their slug.
