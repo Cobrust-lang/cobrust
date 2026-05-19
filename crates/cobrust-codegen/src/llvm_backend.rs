@@ -356,8 +356,12 @@ pub fn emit_multi_version_dispatch<'ctx>(
         let fn_type = original_fn.get_type();
 
         // Step 1: Rename original → <fn>_v1_sse2 and tag with +sse2.
+        //
+        // inkwell 0.9 does not expose `set_name` directly on `FunctionValue`,
+        // but it is available via the `GlobalValue` delegation since every
+        // function is a global value in LLVM IR.
         let sse2_name = format!("{base_name}_v1_sse2");
-        original_fn.set_name(&sse2_name);
+        original_fn.as_global_value().set_name(&sse2_name);
         add_target_features_attr(emitter, original_fn, Tier1Variant::Sse2.target_features());
 
         // Step 2: Clone to _v2_avx2 and _v3_avx512.
