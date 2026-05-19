@@ -47,6 +47,7 @@ mod pkg_build;
 mod repl;
 mod report_bug;
 mod run;
+mod skills;
 mod test_runner;
 mod translate;
 
@@ -189,6 +190,21 @@ enum Command {
         #[arg(long)]
         out_dir: Option<PathBuf>,
     },
+    /// Show or fetch agent-readable skill cheatsheets embedded in the binary.
+    ///
+    /// Skills are version-matched to this binary (rust-embed; ADR-0061).
+    /// LLM agents call this mid-conversation to fetch Cobrust-specific
+    /// idioms absent from training data (CLAUDE.md §2.5).
+    ///
+    /// Examples:
+    ///   cobrust skills list
+    ///   cobrust skills get cobrust-language
+    ///   cobrust skills get cobrust-error-codes --json
+    Skills {
+        #[command(subcommand)]
+        action: skills::SkillsArgs,
+    },
+
     /// Interactive lldb / DAP-stdio debugging launcher (Phase L wave-3,
     /// ADR-0059c). Builds the source with DWARF on, auto-imports the
     /// wave-1 lldb pretty-printers (`tools/lldb-cobrust/printers.py`),
@@ -301,6 +317,7 @@ fn main() -> ExitCode {
             source_file,
             out_dir,
         } => report_bug::run(include_mir, source_file.as_deref(), out_dir.as_deref()),
+        Command::Skills { action } => skills::cmd_skills(&action),
         Command::Debug {
             file,
             dap,

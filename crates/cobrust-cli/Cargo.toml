@@ -36,6 +36,8 @@ target-lexicon = "0.13"
 # artifacts so they don't leak into the caller's -o directory. See
 # crates/cobrust-cli/src/build.rs `build()::EmitKind::Executable` and
 # commit `findings: diagnose CLI tempdir leak root cause` for context.
+rust-embed = { version = "8", features = ["compression"] }
+serde_json = "1"
 tempfile = "3"
 thiserror = { workspace = true }
 tokio = { workspace = true }
