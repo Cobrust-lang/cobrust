@@ -266,6 +266,14 @@ pub enum TypeKind {
     },
     /// Tuple type: `(A, B)`.
     Tuple(Vec<Type>),
+    /// ADR-0060b — `&T` immutable shared borrow type in annotation
+    /// position. Lowers to `Ty::Ref(inner)` at type-check. Companion
+    /// to the expression-position `&` form added by ADR-0052a.
+    Ref(Box<Type>),
+    /// ADR-0060b — fixed-size array type `[T; N]`. Lowers to
+    /// `Ty::Array(elem, n)` at type-check. `N` is a literal usize
+    /// (not an expression at wave-2).
+    Array { elem: Box<Type>, len: usize },
 }
 
 // =====================================================================

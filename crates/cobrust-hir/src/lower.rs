@@ -1337,6 +1337,13 @@ impl<'s> Lowerer<'s> {
             ast::TypeKind::Tuple(items) => {
                 h::TypeKind::Tuple(items.iter().map(|a| self.lower_type(a)).collect())
             }
+            // ADR-0060b — `&T` annotation lowers transparently.
+            ast::TypeKind::Ref(inner) => h::TypeKind::Ref(Box::new(self.lower_type(inner))),
+            // ADR-0060b — `[T; N]` array type lowers transparently.
+            ast::TypeKind::Array { elem, len } => h::TypeKind::Array {
+                elem: Box::new(self.lower_type(elem)),
+                len: *len,
+            },
         };
         h::Type { kind, span }
     }

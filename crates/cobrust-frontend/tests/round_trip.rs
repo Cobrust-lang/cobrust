@@ -549,6 +549,12 @@ fn norm_type(t: &Type) -> Type {
             return_type: Box::new(norm_type(&return_type)),
         },
         ast::TypeKind::Tuple(parts) => ast::TypeKind::Tuple(parts.iter().map(norm_type).collect()),
+        // ADR-0060b — recurse into Ref + Array inner annotations.
+        ast::TypeKind::Ref(inner) => ast::TypeKind::Ref(Box::new(norm_type(&inner))),
+        ast::TypeKind::Array { elem, len } => ast::TypeKind::Array {
+            elem: Box::new(norm_type(&elem)),
+            len,
+        },
     };
     Type { kind, span: ZERO }
 }
