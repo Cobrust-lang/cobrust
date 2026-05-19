@@ -782,6 +782,17 @@ impl Ctx {
                 Ok(BlockOutcome::Diverges)
             }
             StmtKind::Let(b) => {
+                // ADR-0060b finding-closure 2026-05-19:
+                // `finding:adr0060b-empty-dict-annotation-k-flow-debt`.
+                // Function-body `let d: dict[[i64; 4], i64] = {}` must
+                // fire `TypeError::NotHashable` exactly like the
+                // item-level `ItemKind::Let` path (line 595). Without
+                // this guard, the empty `{}` literal synthesises
+                // `Dict(Var, Var)` which unifies-with the annotation
+                // post-hoc, bypassing the K-hashability check.
+                if let Some(t) = &b.annot {
+                    self.validate_hashable_dict(t)?;
+                }
                 let value_ty = self.synth_expr(&b.value)?;
                 let bound_ty = match &b.annot {
                     Some(t) => {

@@ -179,20 +179,25 @@ fn pm_b05_array_diff_length() {
 }
 
 #[test]
-#[ignore = "ADR-0060b wave-2 follow-up: empty `{}` dict literal lacks K-type \
-            propagation through the annotation site — the Hashable check at \
-            validate_hashable_dict fires on the annotation `K` slot but the \
-            literal supplies fresh Var that masks the Array K; full check \
-            requires the annotation-flow rewrite per \
-            finding:adr0060b-empty-dict-annotation-k-flow-debt"]
 fn pm_b06_array_not_hashable() {
     // ADR-0060b §3.3 — Array is NOT hashable at wave-2; using as
-    // dict key must fail. Today's empty-dict `{}` literal does not
-    // propagate the annotation K type through validate_hashable_dict
-    // (the literal supplies fresh Vars, which mask the Array K).
-    // The honest fix requires the annotation-flow rewrite for empty
-    // collection literals; deferred to a separate sub-sprint.
+    // dict key must fail. Phase M follow-up closure 2026-05-19:
+    // the `StmtKind::Let` path now invokes `validate_hashable_dict`
+    // on the annotation before evaluating the RHS, mirroring the
+    // item-level `ItemKind::Let` site. The empty `{}` literal no
+    // longer masks the Array K because validation runs against the
+    // HIR annotation tree itself.
     ill_typed(
         "fn f() -> i64:\n    let d: dict[[i64; 4], i64] = {}\n    return 0\n",
+    );
+}
+
+/// F34: phase_m_type_corpus::pm_b07_array_not_hashable_empty_dict_module_level
+/// — guard rail for the symmetric item-level path that was already correct
+/// pre-closure; documents that both paths now behave identically.
+#[test]
+fn pm_b07_array_not_hashable_empty_dict_module_level() {
+    ill_typed(
+        "let d: dict[[i64; 4], i64] = {}\n",
     );
 }
