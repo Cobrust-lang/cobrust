@@ -286,3 +286,10 @@ All 3 tier-1 URLs return HTTP 200. Contract verified against v0.1.2 artifacts.
   (`9caef99`); this ADR codifies that promotion in the contract comment.
 - `cto_operations_runbook.md` §"Release-readiness agent" — the runbook section
   that executes the curl × 3 gate mandated by ADR-0045.
+
+## Future extension: tier-3 multi-wheel
+
+`docs/agent/strategy/numerical-compute-hardware-tiering.md` describes extending
+this ADR's `release.yml` matrix with CPU sub-targets (`-x86-64-v3`, `-haswell`,
+`-skylake-avx512`) to support prebuilt multi-wheel distribution — the §2.5
+LLM-friendliest packaging option.

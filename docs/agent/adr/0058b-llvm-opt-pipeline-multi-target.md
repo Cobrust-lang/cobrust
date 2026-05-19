@@ -303,3 +303,11 @@ HEAD `72f4d27`. Median size reduction 41.6% on the 5-fixture bench
 corpus exceeds the 30% bar by a 11.6-pp safety margin.
 
 — P10 Phase K wave-2 ratifier, 2026-05-19
+
+## Future extension: runtime-dispatch + target-cpu CLI
+
+`docs/agent/strategy/numerical-compute-hardware-tiering.md` details two direct
+extensions of this ADR's multi-target dispatch infrastructure: Tier 1 runtime-dispatch
+multi-versioning (~200 LOC using `multiversion` crate on top of this ADR's framework)
+and Tier 2 `cobrust build --release --target-cpu=native` CLI flag (~20 LOC). Both
+are the recommended first steps before Tier 3 multi-wheel distribution.

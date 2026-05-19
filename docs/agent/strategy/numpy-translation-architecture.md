@@ -97,3 +97,10 @@ is the work" misframe.
 - [[adr:0032]] audit #1 — tomli proof of concept for Python-wrapper translation
 - [[adr:0036]] audit #3a — production rich-prompt builder + stateful
   `tomli::_parse_int` (this is the prompt-design level numpy needs)
+
+## See also — hardware tiering
+
+`docs/agent/strategy/numerical-compute-hardware-tiering.md` — CPU tier 0-3
+(baseline → runtime-dispatch → native → multi-wheel) + GPU paths (cuBLAS FFI vs
+NVPTX codegen) + §2.5 LLM-friendly ranking. Read before any numpy-cb SIMD or
+`cobrust.gpu` dispatch.
