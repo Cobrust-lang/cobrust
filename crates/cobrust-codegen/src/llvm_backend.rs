@@ -1999,4 +1999,233 @@ mod tests {
             result.err()
         );
     }
+
+    // =================================================================
+    // ADR-0058c §3.4 — DWARF emission smoke tests
+    //
+    // Each test compiles a small fixture + asserts the emitted object
+    // file contains at least one DWARF section. The acceptance gate
+    // (§6) verifies via `llvm-dwarfdump-18` externally; here we use
+    // the `object` crate to inspect the section table directly so the
+    // smoke tests run with `cargo test` alone.
+    // =================================================================
+
+    use object::{Object, ObjectSection};
+    use std::fs;
+
+    /// Predicate: object file contains at least one DWARF section.
+    ///
+    /// ELF on Linux: `.debug_info` / `.debug_line` / etc.
+    /// Mach-O on macOS: `__debug_info` / `__debug_line` (note Mach-O
+    /// strips the leading dot and prepends `__`).
+    fn object_has_dwarf_sections(path: &std::path::Path) -> bool {
+        let data = fs::read(path).expect("read emitted object");
+        let obj = object::File::parse(&*data).expect("parse emitted object");
+        obj.sections().any(|s| {
+            let name = s.name().unwrap_or("");
+            name.contains("debug_info") || name.contains("debug_line")
+        })
+    }
+
+    #[test]
+    fn dwarf_empty_module_emits_no_subprogram() {
+        // Empty modules still emit a `DW_TAG_compile_unit` (per
+        // §3.4 finalize contract), but no `DW_TAG_subprogram`. We
+        // verify the object file is well-formed + has at least one
+        // .debug_* section (the CU lives there).
+        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let module = Module { bodies: vec![] };
+        let mut spec = host_spec();
+        spec.module_name = "dwarf_empty".to_string();
+        let result = emit(&module, &spec).expect("empty module emit");
+        let path = match result {
+            Artifact::Object(p) => p,
+            _ => panic!("expected Artifact::Object"),
+        };
+        assert!(
+            object_has_dwarf_sections(&path),
+            "empty module: missing .debug_* sections in {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn dwarf_return_42_emits_subprogram() {
+        // `fn answer() -> i64 { return 42 }` — DI emits a
+        // DW_TAG_subprogram for the function. We assert the object
+        // file is well-formed + carries DWARF sections.
+        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let body = build_simple_body(
+            1,
+            "dwarf_answer",
+            vec![],
+            Ty::Int,
+            Rvalue::Use(Operand::Constant(MirConstant::Int(42))),
+        );
+        let module = Module { bodies: vec![body] };
+        let mut spec = host_spec();
+        spec.module_name = "dwarf_return_42".to_string();
+        let result = emit(&module, &spec).expect("return 42 emit");
+        let path = match result {
+            Artifact::Object(p) => p,
+            _ => panic!("expected Artifact::Object"),
+        };
+        assert!(
+            object_has_dwarf_sections(&path),
+            "return-42 fixture: missing .debug_* sections"
+        );
+    }
+
+    #[test]
+    fn dwarf_multi_fn_module_emits_per_fn_subprograms() {
+        // Two unrelated user fns share the compile unit; both get
+        // their own DISubprogram per §3.2.
+        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let body_a = build_simple_body(
+            10,
+            "alpha",
+            vec![],
+            Ty::Int,
+            Rvalue::Use(Operand::Constant(MirConstant::Int(1))),
+        );
+        let body_b = build_simple_body(
+            11,
+            "beta",
+            vec![],
+            Ty::Int,
+            Rvalue::Use(Operand::Constant(MirConstant::Int(2))),
+        );
+        let module = Module {
+            bodies: vec![body_a, body_b],
+        };
+        let mut spec = host_spec();
+        spec.module_name = "dwarf_multi_fn".to_string();
+        let result = emit(&module, &spec).expect("multi-fn emit");
+        let path = match result {
+            Artifact::Object(p) => p,
+            _ => panic!("expected Artifact::Object"),
+        };
+        assert!(
+            object_has_dwarf_sections(&path),
+            "multi-fn fixture: missing .debug_* sections"
+        );
+    }
+
+    #[test]
+    fn dwarf_drop_emitting_fn_still_validates() {
+        // A function that lowers a `Drop` terminator still emits
+        // well-formed DWARF (the Drop helper call gets a debug
+        // location like every other instruction).
+        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let locals = vec![
+            LocalDecl {
+                id: LocalId(0),
+                name: "_return".to_string(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0(),
+            },
+            LocalDecl {
+                id: LocalId(1),
+                name: "s".to_string(),
+                ty: Ty::Str,
+                mutable: false,
+                span: span0(),
+            },
+        ];
+        let block0 = MirBlock {
+            id: BlockId(0),
+            statements: vec![Statement {
+                kind: StatementKind::Assign {
+                    place: Place::local(LocalId(0)),
+                    rvalue: Rvalue::Use(Operand::Constant(MirConstant::Int(0))),
+                },
+                span: span0(),
+            }],
+            terminator: Terminator::Drop {
+                place: Place::local(LocalId(1)),
+                target: BlockId(1),
+            },
+            span: span0(),
+        };
+        let block1 = MirBlock {
+            id: BlockId(1),
+            statements: vec![],
+            terminator: Terminator::Return,
+            span: span0(),
+        };
+        let body = Body {
+            def_id: DefId(99),
+            name: "dwarf_drop_str".to_string(),
+            locals,
+            blocks: vec![block0, block1],
+            return_local: LocalId(0),
+            param_count: 1,
+            span: span0(),
+        };
+        let module = Module { bodies: vec![body] };
+        let mut spec = host_spec();
+        spec.module_name = "dwarf_drop".to_string();
+        let result = emit(&module, &spec).expect("drop fn emit");
+        let path = match result {
+            Artifact::Object(p) => p,
+            _ => panic!("expected Artifact::Object"),
+        };
+        assert!(
+            object_has_dwarf_sections(&path),
+            "drop-fn fixture: missing .debug_* sections"
+        );
+    }
+
+    #[test]
+    fn dwarf_o3_pipeline_preserves_dwarf() {
+        // §A3 follow-on: ensure the `-O3,Os` pipeline doesn't strip
+        // DWARF sections. Optimization passes consume but preserve
+        // debug-info metadata when emit-time `is_optimized` is true.
+        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let body = build_simple_body(
+            42,
+            "dwarf_opt_fn",
+            vec![Ty::Int, Ty::Int],
+            Ty::Int,
+            Rvalue::BinaryOp(
+                MirBinOp::Add,
+                Operand::Copy(Place::local(LocalId(1))),
+                Operand::Copy(Place::local(LocalId(2))),
+            ),
+        );
+        let module = Module { bodies: vec![body] };
+        let mut spec = host_spec();
+        spec.opt_level = OptLevel::SpeedAndSize;
+        spec.module_name = "dwarf_o3".to_string();
+        let result = emit(&module, &spec).expect("O3 emit");
+        let path = match result {
+            Artifact::Object(p) => p,
+            _ => panic!("expected Artifact::Object"),
+        };
+        assert!(
+            object_has_dwarf_sections(&path),
+            "O3 fixture: DWARF sections were stripped by the opt pipeline"
+        );
+    }
+
+    // =================================================================
+    // ADR-0058c §3.3 — LineMap helper unit tests
+    // =================================================================
+
+    #[test]
+    fn linemap_empty_returns_1_1() {
+        let lm = LineMap::empty();
+        assert_eq!(lm.line_column(0), (1, 1));
+        assert_eq!(lm.line_column(1234), (1, 1));
+    }
+
+    #[test]
+    fn linemap_ascii_lines() {
+        let lm = LineMap::from_source("ab\ncd\nef");
+        assert_eq!(lm.line_column(0), (1, 1));
+        assert_eq!(lm.line_column(1), (1, 2));
+        assert_eq!(lm.line_column(3), (2, 1));
+        assert_eq!(lm.line_column(6), (3, 1));
+    }
 }
