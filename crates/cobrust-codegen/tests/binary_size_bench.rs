@@ -131,6 +131,7 @@ fn llvm_spec(name: &str, opt: OptLevel) -> TargetSpec {
         artifact: ArtifactKind::Object,
         output_dir: dir,
         module_name: name.to_string(),
+        source_path: None,
     }
 }
 
