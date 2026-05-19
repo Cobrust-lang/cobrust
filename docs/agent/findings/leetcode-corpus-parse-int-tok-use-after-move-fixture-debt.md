@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: leetcode-corpus-parse-int-tok-use-after-move-fixture-debt
-last_verified_commit: 99228c3
+last_verified_commit: 031ac44
 dependencies: [adr:0050c, adr:0052a, finding:list-polymorphic-instantiation-ambiguity-root-cause]
 discovered_by: P9 lc01/lc02 root-cause sprint 2026-05-19 — pre-state assertion in P10 directive misnamed the failures; post-list-poly-fix lc01 + lc02 already PASS, real residue is lc05/06/07/09 + lc_all_compile
 severity: P1 (fixture-authoring debt; non-blocking on language; compile-time-caught with concrete fix suggestion)
@@ -141,6 +141,50 @@ to these 4 examples — predicted delta on stress-corpus 16P/87F is +0 to
 +small (these are different programs from the stress corpus; only
 overlap is the `parse_int_tok` repeat-read pattern, which the stress
 corpus may also use).
+
+### §5.1 LC-100 stress corpus follow-on sprint (HEAD `031ac44`, 2026-05-19)
+
+The predicted "+0 to +small" delta on stress-corpus was wrong — the
+SAME root cause (PRELUDE str-fn first-arg consumed in repeat-read
+context) afflicted **84 of 100** stress fixtures. Mechanical refactor
+sprint applied the b2618f3 precedent to `examples/leetcode-stress/`:
+
+| Batch | Range | Files | PRELUDE-fn call sites |
+|---|---|---|---|
+| 1 | lc001-020 | 20 | 36 |
+| 2 | lc021-040 | 20 | 52 |
+| 3 | lc041-060 | 15 | 45 |
+| 4 | lc061-080 | 17 | 56 |
+| 5 | lc081-100 | 12 | 18 |
+| 6 (user-fn) | 028 + 065 + 068 + 072 + 077 + 078 + 080 | 7 | 14 user-fn + 5 word-arg |
+| **Total** | — | **84** | **226** |
+
+Empirical category counts of the 87 pre-state stress failures:
+
+- **A** (PRELUDE str-fn first-arg, bare ident): ~85 fixtures — RESOLVED
+  by batches 1-5.
+- **B** (str_at/str_len in deeper str-heavy fixtures): subset of A;
+  same root cause, same fix.
+- **C** (list_get/set polymorphic): 0 — resolved earlier at `99228c3`.
+- **D** (user-defined str-arg fns called multiple times): 7 fixtures
+  (028, 065, 068, 072, 077, 078, 080) — RESOLVED by batch 6; lc068
+  additionally needed word-arg `&` (3rd arg in `words_match`, batch 7).
+
+LC-100 stress before/after:
+```
+PRE (b2618f3):    16 passed; 87 failed;  1 ignored (lc024 separate)
+POST (031ac44):   99 passed;  0 failed;  1 ignored (lc024 same)
+Δ:                +83 PASS / −87 FAIL
+```
+
+The remaining `lc024_hashmap_group_anagrams` ignore is a pre-existing
+RUNTIME-FAIL (failure.md cites "str_at on literal vars misaligned +
+missing list[str]"), unrelated to ADR-0050c borrow semantics. No new
+`#[ignore]` added during this sprint (F37 compliant — no silent
+cover-ups).
+
+F36 compliance audit: zero fixture renames. All 84 refactored fixtures
+solve the LeetCode problem named in their slug.
 
 ## §6. F36 + F37 compliance
 
