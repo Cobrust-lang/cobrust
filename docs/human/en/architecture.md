@@ -1715,6 +1715,18 @@ Phase K wave-3 (`crates/cobrust-codegen/src/llvm_backend.rs` `DebugInfoBuilder` 
 
 Non-goals (deferred per ADR-0058c §4): source-level variable inspection (`DILocalVariable` / `DIFormalParameter` entries — Phase L UX scope), macOS dSYM packaging (`dsymutil` post-link step handled in `release.yml`), inlined-frame chains (`DILocation::inlined_at` — Phase L+ if debugger demand surfaces it), DWARF v4 fallback (LLVM-18 default is v5).
 
+#### Phase L wave-1 — lldb pretty-printers (ADR-0059a)
+
+Phase L wave-1 (`tools/lldb-cobrust/printers.py` + `llvm_backend.rs::populate_di_basic_types` extension) closes the ADR-0058c §4 "source-level variable inspection" deferral via lldb pretty-printers — Python scripts hosted in lldb's embedded interpreter that translate the raw struct shape Cobrust runtime stores in memory into Cobrust source-level appearance.
+
+- **6-type printer roster** (ADR-0059a §2). One pretty-printer per non-primitive Cobrust type: `Str` (UTF-8 decoded), `List<T>` (`[e0, e1, ...]` shape), `Dict<K, V>` (`{k0: v0, ...}` shape, wave-1 ships `{<n entries>}` placeholder pending wave-2 IndexMap layout stabilisation), `Tuple` (`(e0, e1, ...)` shape), `Set<T>` (`{e0, e1, ...}` shape), `Option<T>` (`None` / `Some(<x>)` shape). Primitive types (`Int` / `Float` / `Bool`) need no pretty-printer — lldb's native DWARF-driven display already prints them correctly per ADR-0058c §3.2.
+- **Option A named DIType** (ADR-0059a §3.3.1). Extends `populate_di_basic_types` with 5 new `DIBasicType` entries (`cobrust::Str` / `cobrust::List` / `cobrust::Dict` / `cobrust::Set` / `cobrust::Tuple`); all share opaque-ptr storage but carry distinct DWARF type-names. `di_type_for` dispatches Cobrust `Ty` variants to those names. lldb pretty-printers (`type summary add cobrust::Str`, `type synthetic add -l <Provider> --regex '^cobrust::List'`) match on the names. ~40 LOC codegen delta total.
+- **Loading mechanism** (ADR-0059a §3.2). Three paths: project-local `tools/lldb-cobrust/.lldbinit` snippet (`command script import tools/lldb-cobrust/printers.py`); per-user `~/.lldbinit-Cobrust` append; future `cobrust debug` auto-load (ADR-0059c wave-3). Wave-1 ships paths 1 + 2.
+- **Robustness** (ADR-0059a §2.1, §2.2, §7.3). Recursion depth caps at 8 (deeper nesting renders `[...]` placeholder). Containers > 32 elements truncate to first 32 + `, ...` + total count. Invalid UTF-8 in `Str` renders with `errors='replace'` Unicode replacement char `�` rather than crashing the printer.
+- **Smoke gate extension** (ADR-0059a §6). `dwarf_lldb_smoke.rs` extends with 3 new tests (`lldb_smoke_str_variable_renders_content` / `lldb_smoke_list_variable_renders_bracket` / `lldb_smoke_dict_variable_renders_braces`) that verify `image lookup --type cobrust::{Str,List,Dict}` finds the named DIE in emitted DWARF — proves Option A naming reached `.debug_info` end-to-end. Baseline 4 ADR-0058c tests preserved; wave-1 corpus is 4 + 3 = 7 lldb smoke tests.
+
+Non-goals (deferred per ADR-0059a §4): source-level type-name rendering in Rust style (Cobrust uses `List<Str>` not `Vec<String>`), inline expression evaluation, struct-field display for user-defined records (Phase L+ once user-record DI lands), gdb pretty-printers (Phase L+ followup), REPL-style mutation from inspector.
+
 **M9 test counts**: 158 tests across 5 suites:
 - `codegen_well_formed.rs` — 60 well-formed programs covering int / float / bool arithmetic, comparison, branching, looping, recursion, bit ops, logical ops.
 - `codegen_ill_formed.rs` — 50 ill-formed cases covering every `CodegenError` variant: dangling locals, dangling block targets, unsupported targets, unsupported backends, error display invariants, artifact / kind extension matrix.

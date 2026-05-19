@@ -1,0 +1,15 @@
+# ADR-0059a Phase L wave-1 — auto-load Cobrust pretty-printers.
+#
+# Usage:
+#   - Project-local: `lldb -s tools/lldb-cobrust/.lldbinit -- <binary>`
+#     or copy this file to `.lldbinit` at the project root.
+#   - Per-user: append `command source <path-to-this-file>` to
+#     `~/.lldbinit-Cobrust` (per ADR-0059a §3.2 "User snippet" path).
+#
+# The `script import` command runs `__lldb_init_module` in printers.py,
+# which calls `type summary add` for each of the 6 Cobrust container
+# types (Str / List / Dict / Tuple / Set / Option). The DWARF type-
+# names (e.g. `cobrust::Str`) are emitted by ADR-0058c DWARF + ADR-0059a
+# §3.3.1 Option A named DIType extensions in `llvm_backend.rs`.
+
+command script import tools/lldb-cobrust/printers.py

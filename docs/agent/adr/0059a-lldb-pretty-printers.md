@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0059a
 parent_adr: 0059
 title: "Phase L wave-1 — lldb pretty-printers for 6 Cobrust types"
-status: proposed
+status: accepted
 date: 2026-05-19
-last_verified_commit: 3c9382c
+last_verified_commit: 982b716
+ratified_at: c6e0099
+ratified_on: 2026-05-19
 supersedes: []
 superseded_by: []
 relates_to: [adr:0059, adr:0058c, adr:0050c, adr:0050d]
@@ -187,6 +189,67 @@ to match on); the impl P7 sprint will validate Option A's LOC cost
 matches the +50 LOC estimate before committing. If LOC explodes >+150,
 escalate to a sibling sub-ADR splitting "DIType naming" off
 ADR-0059a. This deferral is the wave-1 §5 Risk 5.1 mitigation.
+
+### 3.3.1 Wave-1 dispatch-eve decision: **Option A chosen** (2026-05-19)
+
+Empirical spike at HEAD `f8c459f` (P7 DEV pre-impl read):
+
+- `llvm_backend.rs::populate_di_basic_types` (lines 421-449) emits
+  ONLY 4 `DIBasicType` entries: `i64`, `f64`, `bool`, `ptr`.
+- `llvm_backend.rs::di_type_for` (lines 454-462) collapses every
+  non-primitive `Ty::Str / List / Dict / Set / Tuple / Adt` to the
+  same `"Ptr"` opaque-pointer DI key.
+- `llvm_backend.rs::lower_ty` (lines 536-548) collapses every
+  container type to the SAME LLVM `i8*` opaque pointer.
+
+**Consequence**: under Option B (printer-infer-from-DIE-structure),
+lldb sees every Cobrust container local as identically `(ptr) x = ...`
+— no struct DIE, no field offsets, no shape distinction. Three
+distinct types `List<Int>` / `Dict<Int, Str>` / `Set<Int>` are
+indistinguishable to the lldb pretty-printer dispatcher. Option B
+is **structurally infeasible** at ADR-0058c's current DWARF emission
+level.
+
+**Option A — chosen.** Smallest viable codegen delta: extend
+`populate_di_basic_types` with 5 NEW named `DIBasicType` entries
+(`Str`, `List`, `Dict`, `Set`, `Tuple`), all 64-bit opaque-pointer
+storage (`DW_ATE_ADDRESS`) but with **distinct DWARF type-names**.
+Then `di_type_for` dispatches Cobrust `Ty` variant → name. Pretty-
+printers register on these names (`type summary add cobrust::Str`,
+`type synthetic add -l ListProvider --regex '^cobrust::List'`).
+
+Option per type:
+
+- `Ty::Str` → "cobrust::Str"
+- `Ty::List(_)` → "cobrust::List" (regex match; Phase L+ may add
+  inner element type-name e.g. "cobrust::List<Int>" once MIR carries
+  the element type through to DI; wave-1 ships the un-parametrized
+  matcher).
+- `Ty::Dict(_, _)` → "cobrust::Dict"
+- `Ty::Set(_)` → "cobrust::Set"
+- `Ty::Tuple(_)` → "cobrust::Tuple"
+- `Option<T>` is modeled via `Ty::Adt(...)` in HIR/MIR. Wave-1 ships
+  the OptionProvider Python class as scaffolding, but the smoke gate
+  exercises only the 3 directly-typeable container shapes (Str / List
+  / Dict per §6) since `Option<T>` requires Adt → DI naming which is
+  a Phase L+ sub-ADR. The printer registration is filed with a
+  conservative `cobrust::Option` matcher; if no MIR Local carries
+  that name, lldb simply never invokes the printer.
+
+**LOC cost**: ~35 LOC delta in `populate_di_basic_types` (5 new
+`create_basic_type` calls) + ~20 LOC delta in `di_type_for`
+(Cobrust-aware variant dispatch). Total +55 LOC. Within the +150
+escalation threshold. Wave-1 proceeds without sibling sub-ADR split.
+
+**Reproducibility**: spike performed against worktree
+`/Users/hakureirm/codespace/Study/cobrust-0059a-dev` at branch
+`feature/0059a-dev`. The 4 existing baseline smoke tests
+(`lldb_smoke_hello_world_subprogram_resolves` /
+`lldb_smoke_fib_function_visible` /
+`lldb_smoke_multi_fn_module_lists_both` /
+`lldb_smoke_line_table_present`) are guaranteed to PASS regardless
+of Option A or B (their fixtures use only `Ty::Int` locals which
+already map to a working `DIBasicType`).
 
 ## 4. Non-goals
 

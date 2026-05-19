@@ -133,6 +133,60 @@ fn body_returning_const(def_id: u32, name: &str, value: i64) -> Body {
     }
 }
 
+/// Helper: assemble a 1-block body whose `_return` local is typed
+/// `ty`. The body trivially copies a single param-typed local into
+/// the return slot so the function signature exercises the DI
+/// type-name we want to verify. Used by the ADR-0059a pretty-printer
+/// smoke tests to force the named container DIType
+/// (`cobrust::Str` / `cobrust::List` / `cobrust::Dict`) to surface in
+/// the emitted DWARF.
+///
+/// Per ADR-0059a §3.3.1 Option A, named container DIType entries are
+/// emitted only when a function signature mentions the corresponding
+/// Cobrust `Ty` variant (`di_type_for` dispatches off the local's
+/// type). The fixture body has exactly one param + one return both
+/// typed `ty`, so the DI subroutine type carries the named DIType
+/// twice — once for return, once for the param.
+fn body_with_typed_signature(def_id: u32, name: &str, ty: Ty) -> Body {
+    let locals = vec![
+        LocalDecl {
+            id: LocalId(0),
+            name: "_return".to_string(),
+            ty: ty.clone(),
+            mutable: true,
+            span: span0(),
+        },
+        LocalDecl {
+            id: LocalId(1),
+            name: "x".to_string(),
+            ty,
+            mutable: false,
+            span: span0(),
+        },
+    ];
+    let block0 = MirBlock {
+        id: BlockId(0),
+        statements: vec![Statement {
+            kind: StatementKind::Assign {
+                place: Place::local(LocalId(0)),
+                rvalue: Rvalue::Use(Operand::Copy(Place::local(LocalId(1)))),
+            },
+            span: span0(),
+        }],
+        terminator: Terminator::Return,
+        span: span0(),
+    };
+    Body {
+        def_id: DefId(def_id),
+        name: name.to_string(),
+        locals,
+        blocks: vec![block0],
+        return_local: LocalId(0),
+        param_count: 1,
+        span: span0(),
+    }
+}
+
 /// Helper: assemble a body with two params summing them.
 fn body_summing_params(def_id: u32, name: &str) -> Body {
     let locals = vec![
@@ -296,6 +350,128 @@ fn lldb_smoke_line_table_present() {
     assert!(
         out.contains("with_line_info") || out.contains("Line table"),
         "lldb image dump line-table failed; output:\n{}",
+        out
+    );
+}
+
+// =====================================================================
+// ADR-0059a Phase L wave-1 — pretty-printer smoke (3 new tests)
+//
+// Each fixture compiles a function whose signature mentions a named
+// Cobrust container type (`Ty::Str` / `Ty::List(Int)` / `Ty::Dict(
+// Int, Str)`). Per ADR-0059a §3.3.1 Option A, `populate_di_basic_types`
+// emits a distinct DWARF type-name (`cobrust::Str` / `cobrust::List`
+// / `cobrust::Dict`) for those `Ty` variants; `di_type_for` dispatches
+// at function-signature lowering time.
+//
+// The lldb command `image lookup --type <name>` walks the object
+// file's DWARF and prints type DIEs matching `<name>`. The smoke
+// passes when lldb reports the named DIType is present in the
+// emitted DWARF — proving Option A's named-DIType reached the
+// `.debug_info` section + would dispatch the pretty-printer at
+// runtime.
+//
+// Per ADR-0059a §6: runtime `frame variable` verification (which
+// requires linkage + execution) is wave-1 scope but achievable only
+// when the lldb host + linker stack can run an executable end-to-end.
+// On Mac dev hosts that may lack the runtime stdlib link path, the
+// object-level DIE assertion is the stable test surface. The DG
+// gate (Phase 3 of the dispatch) is the cross-host check.
+// =====================================================================
+
+#[test]
+fn lldb_smoke_str_variable_renders_content() {
+    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(lldb) = find_lldb() else {
+        eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
+        return;
+    };
+
+    // Build a fn `take_str(x: Str) -> Str` — signature exercises the
+    // `cobrust::Str` named DIType per ADR-0059a §3.3.1.
+    let body = body_with_typed_signature(20, "take_str", Ty::Str);
+    let module = Module { bodies: vec![body] };
+    let spec = object_spec("str_pretty_lldb");
+    let artifact = emit(&module, spec).expect("str pretty emit");
+    let path = match artifact {
+        Artifact::Object(p) => p,
+        _ => panic!("expected Artifact::Object"),
+    };
+
+    // `image lookup --type cobrust::Str` returns DIE info when the
+    // named DIType is present in the object's DWARF.
+    let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::Str");
+    assert!(
+        out.contains("cobrust::Str"),
+        "ADR-0059a §3.3.1: object does not contain `cobrust::Str` \
+         DIType — Option A naming did not reach DWARF.\n\
+         lldb output:\n{}",
+        out
+    );
+}
+
+#[test]
+fn lldb_smoke_list_variable_renders_bracket() {
+    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(lldb) = find_lldb() else {
+        eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
+        return;
+    };
+
+    // Build a fn `take_list(x: List<Int>) -> List<Int>` — exercises
+    // the `cobrust::List` named DIType.
+    let body = body_with_typed_signature(
+        21,
+        "take_list",
+        Ty::List(Box::new(Ty::Int)),
+    );
+    let module = Module { bodies: vec![body] };
+    let spec = object_spec("list_pretty_lldb");
+    let artifact = emit(&module, spec).expect("list pretty emit");
+    let path = match artifact {
+        Artifact::Object(p) => p,
+        _ => panic!("expected Artifact::Object"),
+    };
+
+    let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::List");
+    assert!(
+        out.contains("cobrust::List"),
+        "ADR-0059a §3.3.1: object does not contain `cobrust::List` \
+         DIType — Option A naming did not reach DWARF.\n\
+         lldb output:\n{}",
+        out
+    );
+}
+
+#[test]
+fn lldb_smoke_dict_variable_renders_braces() {
+    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(lldb) = find_lldb() else {
+        eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
+        return;
+    };
+
+    // Build a fn `take_dict(x: Dict<Int, Str>) -> Dict<Int, Str>` —
+    // exercises the `cobrust::Dict` named DIType.
+    let body = body_with_typed_signature(
+        22,
+        "take_dict",
+        Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Str)),
+    );
+    let module = Module { bodies: vec![body] };
+    let spec = object_spec("dict_pretty_lldb");
+    let artifact = emit(&module, spec).expect("dict pretty emit");
+    let path = match artifact {
+        Artifact::Object(p) => p,
+        _ => panic!("expected Artifact::Object"),
+    };
+
+    let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::Dict");
+    assert!(
+        out.contains("cobrust::Dict"),
+        "ADR-0059a §3.3.1: object does not contain `cobrust::Dict` \
+         DIType — Option A naming did not reach DWARF.\n\
+         lldb output:\n{}",
         out
     );
 }

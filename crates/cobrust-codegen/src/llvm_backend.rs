@@ -414,10 +414,19 @@ impl<'ctx> LlvmEmitter<'ctx> {
         Ok(emitter)
     }
 
-    /// Pre-build the four DI basic types used by every signature
-    /// lowering: `i64` / `f64` / `bool` / `ptr`. Cached so each
-    /// `create_subroutine_type` call reuses the same `DIType` pointers
-    /// (per ADR-0058c §3.2 dedup contract).
+    /// Pre-build the DI basic types used by every signature lowering:
+    /// `i64` / `f64` / `bool` / `ptr` (ADR-0058c §3.2 base) plus 5
+    /// distinctly-named container types `cobrust::Str` /
+    /// `cobrust::List` / `cobrust::Dict` / `cobrust::Set` /
+    /// `cobrust::Tuple` (ADR-0059a §3.3.1 Option A). The 5 container
+    /// entries share opaque-pointer storage (64-bit, `DW_ATE_ADDRESS`)
+    /// but carry distinct DWARF type-names so lldb pretty-printers
+    /// (`tools/lldb-cobrust/printers.py`) can dispatch via
+    /// `type summary add cobrust::Str` /
+    /// `type synthetic add -l <Provider> --regex '^cobrust::List'`.
+    ///
+    /// Cached so each `create_subroutine_type` call reuses the same
+    /// `DIType` pointers (per ADR-0058c §3.2 dedup contract).
     fn populate_di_basic_types(&mut self) {
         let zero = inkwell::debug_info::DIFlags::ZERO;
         // Int64 — DW_ATE_signed (5).
@@ -440,22 +449,51 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .create_basic_type("bool", 8, DW_ATE_BOOLEAN, zero)
             .expect("DI basic type bool");
         self.di_basic_types.insert("Bool", bool_ty);
-        // Opaque pointer — DW_ATE_address (1).
+        // Opaque pointer — DW_ATE_address (1). Fallback for opaque /
+        // unmodeled `Ty::Ref` / `Ty::Adt` / `Ty::Bytes`.
         let ptr_ty = self
             .di_builder
             .create_basic_type("ptr", 64, DW_ATE_ADDRESS, zero)
             .expect("DI basic type ptr");
         self.di_basic_types.insert("Ptr", ptr_ty);
+
+        // ADR-0059a §3.3.1 Option A — 5 named container DI types.
+        // All share opaque-pointer storage; names disambiguate the
+        // lldb pretty-printer dispatch surface.
+        for (key, name) in [
+            ("Str", "cobrust::Str"),
+            ("List", "cobrust::List"),
+            ("Dict", "cobrust::Dict"),
+            ("Set", "cobrust::Set"),
+            ("Tuple", "cobrust::Tuple"),
+        ] {
+            let ty = self
+                .di_builder
+                .create_basic_type(name, 64, DW_ATE_ADDRESS, zero)
+                .expect("DI basic type cobrust container");
+            self.di_basic_types.insert(key, ty);
+        }
     }
 
     /// Map a Cobrust MIR `Ty` to its cached `DIBasicType`. Per
-    /// ADR-0058c §3.2: numeric scalars get their own DI; everything
-    /// else opaque-pointer (matches the wave-1/2 LLVM type lowering).
+    /// ADR-0058c §3.2: numeric scalars get their own DI. Per
+    /// ADR-0059a §3.3.1 Option A: 5 container variants
+    /// (`Str` / `List` / `Dict` / `Set` / `Tuple`) get their own
+    /// distinctly-named DI entries so lldb pretty-printers can
+    /// dispatch on the DWARF type-name. All other (`Bytes`, `Ref`,
+    /// `Adt`, `Record`, `Fn`, `Var`, `Alias`, `Generic`, `None`,
+    /// `Never`) collapse to the opaque-pointer fallback `Ptr` (matches
+    /// the wave-1/2 LLVM type lowering).
     fn di_type_for(&self, ty: &Ty) -> DIBasicType<'ctx> {
         let key = match ty {
             Ty::Int => "Int",
             Ty::Float | Ty::Imag => "Float",
             Ty::Bool => "Bool",
+            Ty::Str => "Str",
+            Ty::List(_) => "List",
+            Ty::Dict(_, _) => "Dict",
+            Ty::Set(_) => "Set",
+            Ty::Tuple(_) => "Tuple",
             _ => "Ptr",
         };
         self.di_basic_types[key]
