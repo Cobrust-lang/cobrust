@@ -423,14 +423,24 @@ runtime helpers to link, then opt can measure size).
 
 Per F36 retroactive audit (memory `feedback_fixture_name_vs_behavior_drift.md`), 6 source-level shapes promised by original ADR-0058a fixture names are unrepresentable in current Cobrust language surface. Fixtures renamed per F36 rule + gaps queued:
 
-1. **`i32`** narrow-int type — Cobrust `Ty::Int = i64` only. Adding requires new AST `TypeKind::IntN(width)` + type-check narrowing rules + codegen path. Queued post-Phase-K.
-2. **`i8`** narrow-int type — same as #1.
-3. **`None` keyword as return type** — parser KwNone rejection in return-type position; codegen maps Ty::None → i64 per ADR-0058a §14.1 fallback. Source-side syntax `-> None` needs parser allowance + may collide with `def f(): pass` implicit-none idiom; design pending.
-4. **Anonymous struct literal `struct{i64,i64}`** — likely won't add (use tuple/record); explicitly out-of-scope but documented for clarity.
-5. **`[T; N]` fixed-size array TypeKind** — already in 0058a Wave-1 `#[ignore]` queue at `llvm_type_08_array_i64`.
-6. **`&T` in type-annotation position** — already in 0058a Wave-1 `#[ignore]` queue at `llvm_operand_06_deref_ptr`.
+1. **`i32`** narrow-int type — Cobrust `Ty::Int = i64` only. Adding requires new AST `TypeKind::IntN(width)` + type-check narrowing rules + codegen path. **CLOSED at `2d84de5` (Phase M wave-1) via ADR-0060a:** `Ty::IntN(u8)` added; codegen lowers to native i8/i16/i32. Cast-surface follow-up tracked in `finding:adr0060a-binop-on-intn-narrow-int-debt`.
+2. **`i8`** narrow-int type — same as #1. **CLOSED at `2d84de5` via ADR-0060a** (shared impl path).
+3. **`None` keyword as return type** — parser KwNone rejection in return-type position; codegen maps Ty::None → i64 per ADR-0058a §14.1 fallback. **CLOSED at `2d84de5` via ADR-0060b §3.1:** `parse_type_atom` accepts KwNone at entry; resolves to `Ty::None`. Implicit-None idiom unaffected.
+4. **Anonymous struct literal `struct{i64,i64}`** — likely won't add (use tuple/record); explicitly out-of-scope but documented for clarity. **CLOSED-OOS at `2d84de5` via ADR-0060c:** formal won't-add decision; tuple + record cover the use case. F36 fixture rename `llvm_type_09_tuple_two_i64` is permanent.
+5. **`[T; N]` fixed-size array TypeKind** — already in 0058a Wave-1 `#[ignore]` queue at `llvm_type_08_array_i64`. **CLOSED-PARTIAL at `2d84de5` via ADR-0060b §3.3:** type identity + LLVM type emission ship; source-level indexing follow-up tracked in `finding:adr0060b-array-indexing-mir-projection-debt`.
+6. **`&T` in type-annotation position** — already in 0058a Wave-1 `#[ignore]` queue at `llvm_operand_06_deref_ptr`. **CLOSED at `2d84de5` via ADR-0060b §3.2:** `parse_type_atom` accepts `&` prefix; AST `TypeKind::Ref` lowers to `Ty::Ref`; LLVM treats as transparent.
 
 Tracked across:
-- 4 fixture rename comments in `codegen_diff_corpus.rs` (F36-amend tag)
-- 2 #[ignore] fixtures in `codegen_diff_corpus.rs` (cobrust source syntax gap)
-- This §15 section as canonical roster
+- 4 fixture rename comments in `codegen_diff_corpus.rs` — UPDATED to "ADR-0060a/b closure" comments at `2d84de5`
+- 2 #[ignore] fixtures in `codegen_diff_corpus.rs` — UN-IGNORED at `2d84de5` (both PASS DG)
+- This §15 section as canonical roster (now reflects closure state)
+
+**DG verify summary** at `1ff7921`:
+
+```
+codegen_diff_corpus:   52 passed, 0 failed, 6 ignored
+phase_m_syntax_corpus: 17 passed, 0 failed
+phase_m_type_corpus:   11 passed, 0 failed, 3 ignored (F37 paired with findings)
+```
+
+Zero regression on Phase H/I/J/K/L baselines.

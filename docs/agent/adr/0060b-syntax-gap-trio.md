@@ -3,9 +3,10 @@ doc_kind: adr
 adr_id: 0060b
 parent_adr: 0060
 title: "Phase M wave-2 — syntax trio (None-return + &T-annot + [T;N]-array)"
-status: proposed
+status: accepted
 date: 2026-05-19
-last_verified_commit: b6d536a
+ratified_at: 2026-05-19
+last_verified_commit: 2d84de5
 supersedes: []
 superseded_by: []
 relates_to: [adr:0060, adr:0060a, adr:0058a, adr:0052a]
