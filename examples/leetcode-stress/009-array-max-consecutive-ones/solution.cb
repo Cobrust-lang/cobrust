@@ -11,7 +11,7 @@ fn main() -> i64:
     let cur: i64 = 0
     let i: i64 = 0
     while i < n:
-        let v = parse_int_tok(line, i)
+        let v = parse_int_tok(&line, i)
         if v == 1:
             cur = cur + 1
             if cur > best:

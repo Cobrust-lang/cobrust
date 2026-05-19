@@ -6,19 +6,19 @@
 
 fn main() -> i64:
     let mn_line = input("")
-    let m = parse_int_tok(mn_line, 0)
-    let n = parse_int_tok(mn_line, 1)
+    let m = parse_int_tok(&mn_line, 0)
+    let n = parse_int_tok(&mn_line, 1)
     let arr1 = list_new(m)
     let arr2 = list_new(n)
     let line1 = input("")
     let line2 = input("")
     let i: i64 = 0
     while i < m:
-        list_set(arr1, i, parse_int_tok(line1, i))
+        list_set(arr1, i, parse_int_tok(&line1, i))
         i = i + 1
     let j: i64 = 0
     while j < n:
-        list_set(arr2, j, parse_int_tok(line2, j))
+        list_set(arr2, j, parse_int_tok(&line2, j))
         j = j + 1
     let pi: i64 = 0
     let pj: i64 = 0

@@ -5,7 +5,7 @@
 # Algorithm: two-pointer skip non-alnum, compare normalized chars
 
 fn is_alnum(c: str) -> i64:
-    let code = str_ord(c)
+    let code = str_ord(&c)
     if code >= 48 and code <= 57:
         return 1
     if code >= 65 and code <= 90:
@@ -15,23 +15,23 @@ fn is_alnum(c: str) -> i64:
     return 0
 
 fn to_lower_code(c: str) -> i64:
-    let code = str_ord(c)
+    let code = str_ord(&c)
     if code >= 65 and code <= 90:
         return code + 32
     return code
 
 fn main() -> i64:
     let s = input("")
-    let n = str_len(s)
+    let n = str_len(&s)
     let lo: i64 = 0
     let hi: i64 = n - 1
     while lo < hi:
-        while lo < hi and is_alnum(str_at(s, lo)) == 0:
+        while lo < hi and is_alnum(str_at(&s, lo)) == 0:
             lo = lo + 1
-        while lo < hi and is_alnum(str_at(s, hi)) == 0:
+        while lo < hi and is_alnum(str_at(&s, hi)) == 0:
             hi = hi - 1
         if lo < hi:
-            if to_lower_code(str_at(s, lo)) != to_lower_code(str_at(s, hi)):
+            if to_lower_code(str_at(&s, lo)) != to_lower_code(str_at(&s, hi)):
                 print("false")
                 return 0
             lo = lo + 1
