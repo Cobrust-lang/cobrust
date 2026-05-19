@@ -3,14 +3,15 @@ doc_kind: adr
 adr_id: 0058b
 parent_adr: 0058
 title: "Phase K wave-2 — LLVM optimization pipeline + multi-target dispatch"
-status: proposed
+status: accepted
 date: 2026-05-19
-last_verified_commit: c06f0bd
+ratified_at: 72f4d27
+last_verified_commit: 72f4d27
 supersedes: []
 superseded_by: []
 relates_to: [adr:0058, adr:0058a, adr:0023, adr:0046]
 discovered_by: P10 Phase K wave-2 second sub-sprint per ADR-0058 §"Sub-ADR roster"
-ratification_path: P9 sub-ADR review; ratifies on DEV landing of PassBuilder wire + multi-target dispatch + binary-size bench + DG verify clean
+ratification_path: P9 sub-ADR review; ratified on DEV landing of PassBuilder wire (`f3574b1`) + multi-target smoke (`4749f99`) + binary-size bench (`ea9edac`) + DG verify clean @ 72f4d27 (404 PASS / 0 FAILED, O3 median ratio 0.584)
 ---
 
 # ADR-0058b: Phase K wave-2 — LLVM optimization pipeline + multi-target dispatch
@@ -264,3 +265,41 @@ ratio fails the bar, recovery is in scope (§7.2 fall-back) without re-spec.
 - LLVM new pass manager — `default<O3>` pipeline; `opt -passes='default<O3>'`.
 
 — P10 Phase K wave-2 dispatcher, 2026-05-19
+
+## 11. Ratification — empirical close (2026-05-19)
+
+<self-hosted-runner> verify @ `cargo test -p cobrust-codegen --features llvm -p cobrust-jit`:
+
+- **TEST_EXIT=0**, 404 tests PASS / 0 FAILED / 8 ignored.
+- **codegen** (392): 12 unit (incl. 5 wave-2 inline added by 4749f99) + 2 binary_size_bench + 31 aggregate + 31 cast + 50 diff + 50 ill_formed + 16 object_layout + 10 release_smoke + 70 well_formed + 33 control_flow + 16 float_return + 10 fnref_call + 12 if_condition + 30 ref + 12 while_condition + 7 while_if.
+- **cobrust-jit** (12): 1 unit + 11 jit_roundtrip. Wave-2 does not touch JIT lowering surface; regression clean.
+- **POSTFLIGHT clean**: `/tmp/cobrust-*` count 0 → 0 across the bench run (one mid-run drop required PRE_TMP=434 cleanup pre-bench-rerun; final bench POST_TMP=0).
+
+### 11.1 Binary-size empirical (ADR-0023 §A3 close)
+
+Per-fixture O3/O0 object-file size ratio on <self-hosted-runner>
+`x86_64-unknown-linux-gnu` host:
+
+| Fixture | O0 size | O3 size | Ratio |
+|---|---|---|---|
+| `hello` | 872 | 576 | **0.661** |
+| `fizzbuzz` | 1408 | 760 | **0.540** |
+| `fib` | 1192 | 696 | **0.584** |
+| `dot_product` | 1056 | 640 | **0.606** |
+| `nested_branch` | 1200 | 624 | **0.520** |
+
+**Median ratio: 0.584** (41.6% size reduction). Clears the ADR-0023 §A3
+≥ 30% bar (≤ 0.70 ratio). Sorted per-fixture ratios:
+`[0.520, 0.540, 0.584, 0.606, 0.661]`.
+
+The `default<O3>,default<Os>` pipeline + `OptimizationLevel::Aggressive`
+TargetMachine combination is sound. §7.2 risk's `default<Os>` overlay
+fall-back is NOT triggered.
+
+### 11.2 ADR-0023 §A3 RESOLVED
+
+ADR-0023 §"LLVM `-O3` ≥ 30% smaller binary acceptance" RESOLVED at
+HEAD `72f4d27`. Median size reduction 41.6% on the 5-fixture bench
+corpus exceeds the 30% bar by a 11.6-pp safety margin.
+
+— P10 Phase K wave-2 ratifier, 2026-05-19
