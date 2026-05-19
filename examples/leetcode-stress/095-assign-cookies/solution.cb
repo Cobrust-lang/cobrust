@@ -33,11 +33,11 @@ fn main() -> i64:
     let cookies = list_new(s)
     let i: i64 = 0
     while i < g:
-        list_set(greed, i, parse_int_tok(gline, i))
+        list_set(greed, i, parse_int_tok(&gline, i))
         i = i + 1
     let j: i64 = 0
     while j < s:
-        list_set(cookies, j, parse_int_tok(sline, j))
+        list_set(cookies, j, parse_int_tok(&sline, j))
         j = j + 1
     bubble_sort(greed, g)
     bubble_sort(cookies, s)

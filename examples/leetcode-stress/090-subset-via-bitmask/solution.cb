@@ -47,7 +47,7 @@ fn main() -> i64:
     let elems = list_new(n)
     let i: i64 = 0
     while i < n:
-        list_set(elems, i, parse_int_tok(line, i))
+        list_set(elems, i, parse_int_tok(&line, i))
         i = i + 1
     let total = 1 << n
     let mask: i64 = 1

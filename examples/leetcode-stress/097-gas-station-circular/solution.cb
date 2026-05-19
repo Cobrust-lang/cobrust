@@ -19,8 +19,8 @@ fn main() -> i64:
     let cost = list_new(n)
     let i: i64 = 0
     while i < n:
-        list_set(gas, i, parse_int_tok(gline, i))
-        list_set(cost, i, parse_int_tok(cline, i))
+        list_set(gas, i, parse_int_tok(&gline, i))
+        list_set(cost, i, parse_int_tok(&cline, i))
         i = i + 1
     let total: i64 = 0
     let tank: i64 = 0

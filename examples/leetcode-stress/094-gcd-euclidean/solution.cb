@@ -8,8 +8,8 @@
 
 fn main() -> i64:
     let line = input("")
-    let a = parse_int_tok(line, 0)
-    let b = parse_int_tok(line, 1)
+    let a = parse_int_tok(&line, 0)
+    let b = parse_int_tok(&line, 1)
     while b != 0:
         let t = b
         b = a % b

@@ -6,8 +6,8 @@
 
 fn main() -> i64:
     let line = input("")
-    let x = parse_int_tok(line, 0)
-    let y = parse_int_tok(line, 1)
+    let x = parse_int_tok(&line, 0)
+    let y = parse_int_tok(&line, 1)
     let v = x ^ y
     let count: i64 = 0
     while v != 0:
