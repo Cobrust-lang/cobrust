@@ -1591,7 +1591,19 @@ Phase K wave-2（`crates/cobrust-codegen/src/llvm_backend.rs` post-IR-constructi
 - **多目标分派**（ADR-0058b §3.4）。`supported_tier1_triples()` 列出四个 ADR-0046 tier-1 triple（`aarch64-apple-darwin` / `aarch64-unknown-linux-gnu` / `x86_64-unknown-linux-gnu` / `x86_64-unknown-linux-musl`）；当宿主 LLVM-18 工具链包含相应后端时，`Target::from_triple` 接受其中任一。交叉链接仍属 `release.yml` + `cross` 范围（ADR-0023 §"Linker delegation" 不变）。
 - **二进制大小 bench 工具**（ADR-0023 §A3 经验关闭）。新建 `tests/binary_size_bench.rs` 通过 `Backend::Llvm` 在 O0 + O3 下编译 5 个 fixture（hello / fizzbuzz / fib / dot_product / nested_branch）；断言 O3 中位数比 ≤ 0.70 of O0 中位数（≥ 30% 缩减）。每 fixture 比例通过 `--nocapture` 在 stderr 输出，便于将来宿主上若超线时做诊断回退。
 
-非目标（按 ADR-0058b §4 延后）：DWARF 发射（sub-ADR 0058c）、JIT opt-level 变更（cobrust-jit `lower.rs` 不变）、交叉链接、新 MIR feature、超出 `default<O*>` 默认的手动 PassBuilder flag 调优。
+非目标（按 ADR-0058b §4 延后）：DWARF 发射 —— **wave-3 已交付（ADR-0058c），见下一节**；JIT opt-level 变更（cobrust-jit `lower.rs` 不变）、交叉链接、新 MIR feature、超出 `default<O*>` 默认的手动 PassBuilder flag 调优。
+
+#### Phase K wave-3 —— LLVM DWARF 调试信息发射（ADR-0058c）
+
+Phase K wave-3（`crates/cobrust-codegen/src/llvm_backend.rs` 内接入 `DebugInfoBuilder` + 新建 `tests/dwarf_lldb_smoke.rs`）将 DWARF v5 发射接入 LLVM 后端，产出 Phase L Debugger（ADR-0059）通过标准 `lldb` / `gdb` / VS Code DAP 消费的产物。
+
+- **DIBuilder 脚手架**（ADR-0058c §3.1）。模块级 "Debug Info Version" + "Dwarf Version" flag + 在 `LlvmEmitter::new` 中构造 `(DebugInfoBuilder, DICompileUnit, DIFile)` 三元组，使用 `DWARFSourceLanguage::C`（DWARF 规范暂无 Cobrust 专用 tag；C 是最稳妥的回退 —— 所有 debugger 都识别）。四个被缓存的 DI 基本类型（`i64` / `f64` / `bool` / 不透明 `ptr`），按短标签键去重，跨签名复用。
+- **逐函数 DISubprogram**（ADR-0058c §3.2）。`declare_body` 由参数 + 返回 DI 基本类型构造 `DISubroutineType`，再以 compile-unit scope 为根创建 `DISubprogram`；`FunctionValue::set_subprogram` 把它挂到 LLVM 函数上。`di_subprograms: HashMap<u32, DISubprogram>` 表在 `define_body` 中被消费，给逐指令的调试位置定根。
+- **逐 Span DILocation 行表**（ADR-0058c §3.3）。内联 `LineMap`（避免 `cobrust-lsp` 依赖）将每个 MIR 语句的 `Span::start` 字节偏移翻译成 DWARF 约定的 1-索引（行、列）。在每个 block 起点 + 语句 + 终结符发射前，`BodyLowerer::set_debug_loc` 调用 `builder.set_current_debug_location(loc)`。`TargetSpec.source_path: Option<PathBuf>`（新字段）选择真实源码解析（`LineMap::from_source(read_to_string(path))`）或合成测试回退（`LineMap::empty()` → 所有 span 折叠到第 1 行）。
+- **DIBuilder finalize**（ADR-0058c §3.4）。`emit` 在 IR 构造和 `Module::verify` 之间调用 `di_builder.finalize()`，将所有延后的 DIE 元数据写入模块。DI 形状错误以 `CodegenError::LlvmError(String)` 上报 —— 与 wave-1/2 错误分类相同。
+- **lldb 冒烟工具**（ADR-0058c §3.5）。`crates/cobrust-codegen/tests/dwarf_lldb_smoke.rs` 以批处理模式启动 `lldb-18 -b`，对编译产出的对象文件运行 `image lookup --regex` 和 `image dump line-table` 查询，断言查询返回非空 —— 端到端证明 DWARF subprogram + 行表发射。宿主既无 `lldb-18` 也无 `lldb` 时干净跳过（Mac 开发机可能没有；<self-hosted-runner> 通过 `llvm.sh` apt 已装）。
+
+非目标（按 ADR-0058c §4 延后）：源码级变量检查（`DILocalVariable` / `DIFormalParameter`—— Phase L UX 范围）、macOS dSYM 打包（`dsymutil` 链接后步骤在 `release.yml` 处理）、内联帧链（`DILocation::inlined_at` —— Phase L+ 视 debugger 需求）、DWARF v4 回退（LLVM-18 默认 v5）。
 
 **M9 测试总数**：158 个测试，覆盖 5 个套件：
 - `codegen_well_formed.rs` —— 60 个良型程序，覆盖整数 / 浮点 / 布尔的算术、比较、分支、循环、递归、位运算、逻辑运算。
