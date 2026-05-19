@@ -20,7 +20,7 @@ fn pow(x: i64, n: i64) -> i64:
 
 fn main() -> i64:
     let line = input("")
-    let x = parse_int_tok(line, 0)
-    let n = parse_int_tok(line, 1)
+    let x = parse_int_tok(&line, 0)
+    let n = parse_int_tok(&line, 1)
     print_int(pow(x, n))
     return 0

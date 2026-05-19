@@ -11,7 +11,7 @@ fn main() -> i64:
     let i: i64 = 0
     while i < n:
         acc = acc ^ i
-        acc = acc ^ parse_int_tok(line, i)
+        acc = acc ^ parse_int_tok(&line, i)
         i = i + 1
     acc = acc ^ n
     print_int(acc)

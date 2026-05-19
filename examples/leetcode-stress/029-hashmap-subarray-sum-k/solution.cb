@@ -17,7 +17,7 @@ fn main() -> i64:
     let ans: i64 = 0
     let i: i64 = 0
     while i < n:
-        let v = parse_int_tok(line, i)
+        let v = parse_int_tok(&line, i)
         prefix = prefix + v
         let need = prefix - k
         let j: i64 = 0

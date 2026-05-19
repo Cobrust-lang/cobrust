@@ -47,11 +47,11 @@ fn main() -> i64:
     let wi: i64 = 0
     while wi < m:
         let word = input("")
-        let wlen = str_len(word)
+        let wlen = str_len(&word)
         list_set(lens, wi, wlen)
         let ci: i64 = 0
         while ci < wlen:
-            let code = str_ord(str_at(word, ci))
+            let code = str_ord(str_at(&word, ci))
             list_set(words, wi * 32 + ci, code)
             let freq_idx = wi * 26 + (code - 97)
             list_set(sig, freq_idx, list_get(sig, freq_idx) + 1)

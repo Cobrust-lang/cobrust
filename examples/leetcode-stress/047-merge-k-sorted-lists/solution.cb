@@ -14,13 +14,13 @@ fn main() -> i64:
     let i: i64 = 0
     while i < k:
         let line = input("")
-        let sz = parse_int_tok(line, 0)
+        let sz = parse_int_tok(&line, 0)
         list_set(sizes, i, sz)
         list_set(offsets, i, total)
         list_set(ptrs, i, 0)
         let j: i64 = 0
         while j < sz:
-            list_set(flat, total, parse_int_tok(line, j + 1))
+            list_set(flat, total, parse_int_tok(&line, j + 1))
             total = total + 1
             j = j + 1
         i = i + 1

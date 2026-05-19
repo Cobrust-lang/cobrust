@@ -13,7 +13,7 @@ fn main() -> i64:
     let t_top: i64 = 0
     let i: i64 = 0
     while i < n:
-        let val = parse_int_tok(line, i)
+        let val = parse_int_tok(&line, i)
         t_top = 0
         while s_top > 0 and list_get(sorted, s_top - 1) > val:
             s_top = s_top - 1

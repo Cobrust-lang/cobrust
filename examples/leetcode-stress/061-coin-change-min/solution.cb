@@ -18,7 +18,7 @@ fn main() -> i64:
     while j <= amount:
         let ci: i64 = 0
         while ci < k:
-            let coin = parse_int_tok(cline, ci)
+            let coin = parse_int_tok(&cline, ci)
             if coin <= j:
                 let prev = list_get(dp, j - coin) + 1
                 if prev < list_get(dp, j):

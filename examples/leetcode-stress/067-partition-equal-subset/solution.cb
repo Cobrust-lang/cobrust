@@ -10,7 +10,7 @@ fn main() -> i64:
     let total: i64 = 0
     let i: i64 = 0
     while i < n:
-        total = total + parse_int_tok(line, i)
+        total = total + parse_int_tok(&line, i)
         i = i + 1
     if total % 2 == 1:
         print("false")
@@ -24,7 +24,7 @@ fn main() -> i64:
     list_set(dp, 0, 1)
     let ci: i64 = 0
     while ci < n:
-        let v = parse_int_tok(line, ci)
+        let v = parse_int_tok(&line, ci)
         let s: i64 = half
         while s >= v:
             if list_get(dp, s - v) == 1:

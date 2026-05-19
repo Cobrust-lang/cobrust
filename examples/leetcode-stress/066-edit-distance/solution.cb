@@ -7,8 +7,8 @@
 fn main() -> i64:
     let s = input("")
     let t = input("")
-    let m = str_len(s)
-    let n = str_len(t)
+    let m = str_len(&s)
+    let n = str_len(&t)
     let dp = list_new(n + 1)
     let j: i64 = 0
     while j <= n:
@@ -20,13 +20,13 @@ fn main() -> i64:
         list_set(dp, 0, i)
         let col: i64 = 1
         while col <= n:
-            let si = str_at(s, i - 1)
-            let tj = str_at(t, col - 1)
+            let si = str_at(&s, i - 1)
+            let tj = str_at(&t, col - 1)
             let old_diag = prev
             let ins = list_get(dp, col) + 1
             let del = list_get(dp, col - 1) + 1
             let rep_cost: i64 = 0
-            if str_eq(si, tj) == 1:
+            if str_eq(&si, tj) == 1:
                 rep_cost = 0
             else:
                 rep_cost = 1

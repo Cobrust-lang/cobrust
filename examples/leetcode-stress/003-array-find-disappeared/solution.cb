@@ -14,7 +14,7 @@ fn main() -> i64:
         i = i + 1
     let j: i64 = 0
     while j < n:
-        let v = parse_int_tok(line, j)
+        let v = parse_int_tok(&line, j)
         list_set(seen, v, 1)
         j = j + 1
     let k: i64 = 1

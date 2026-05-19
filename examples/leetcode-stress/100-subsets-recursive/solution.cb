@@ -73,7 +73,7 @@ fn main() -> i64:
     let chosen = list_new(n)
     let i: i64 = 0
     while i < n:
-        list_set(nums, i, parse_int_tok(line, i))
+        list_set(nums, i, parse_int_tok(&line, i))
         i = i + 1
     gen(nums, chosen, 0, n, 0)
     return 0

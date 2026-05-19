@@ -7,31 +7,31 @@
 fn main() -> i64:
     let s = input("")
     let t = input("")
-    let sn = str_len(s)
-    let tn = str_len(t)
+    let sn = str_len(&s)
+    let tn = str_len(&t)
     let sbuf = list_new(sn)
     let tbuf = list_new(tn)
     let sw: i64 = 0
     let i: i64 = 0
     while i < sn:
-        let c = str_at(s, i)
-        if str_eq_lit(c, "#") == 1:
+        let c = str_at(&s, i)
+        if str_eq_lit(&c, "#") == 1:
             if sw > 0:
                 sw = sw - 1
         else:
-            let code = str_ord(c)
+            let code = str_ord(&c)
             list_set(sbuf, sw, code)
             sw = sw + 1
         i = i + 1
     let tw: i64 = 0
     let j: i64 = 0
     while j < tn:
-        let c2 = str_at(t, j)
-        if str_eq_lit(c2, "#") == 1:
+        let c2 = str_at(&t, j)
+        if str_eq_lit(&c2, "#") == 1:
             if tw > 0:
                 tw = tw - 1
         else:
-            let code2 = str_ord(c2)
+            let code2 = str_ord(&c2)
             list_set(tbuf, tw, code2)
             tw = tw + 1
         j = j + 1

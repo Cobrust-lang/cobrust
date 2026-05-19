@@ -11,9 +11,9 @@ fn words_equal(wline: str, starts: list[i64], lens: list[i64], a: i64, b: i64) -
         return 0
     let i: i64 = 0
     while i < la:
-        let ca = str_at(wline, list_get(starts, a) + i)
-        let cb = str_at(wline, list_get(starts, b) + i)
-        if str_ord(ca) != str_ord(cb):
+        let ca = str_at(&wline, list_get(starts, a) + i)
+        let cb = str_at(&wline, list_get(starts, b) + i)
+        if str_ord(&ca) != str_ord(&cb):
             return 0
         i = i + 1
     return 1
@@ -21,8 +21,8 @@ fn words_equal(wline: str, starts: list[i64], lens: list[i64], a: i64, b: i64) -
 fn main() -> i64:
     let pattern = input("")
     let wline = input("")
-    let pn = str_len(pattern)
-    let wn = str_len(wline)
+    let pn = str_len(&pattern)
+    let wn = str_len(&wline)
     let starts = list_new(pn)
     let lens = list_new(pn)
     let wcount: i64 = 0
@@ -32,7 +32,7 @@ fn main() -> i64:
         let is_space: i64 = 0
         if i == wn:
             is_space = 1
-        elif str_ord(str_at(wline, i)) == 32:
+        elif str_ord(str_at(&wline, i)) == 32:
             is_space = 1
         if is_space == 1:
             if i > cur_start:
@@ -56,12 +56,12 @@ fn main() -> i64:
         k = k + 1
     let p: i64 = 0
     while p < pn:
-        let pc = str_ord(str_at(pattern, p))
+        let pc = str_ord(str_at(&pattern, p))
         let mapped_w = list_get(c2w, pc)
         if mapped_w == -1:
             let q: i64 = 0
             while q < p:
-                if words_equal(wline, starts, lens, p, q) == 1:
+                if words_equal(&wline, starts, lens, p, q) == 1:
                     if list_get(w2c, q) != pc:
                         print("false")
                         return 0
@@ -69,7 +69,7 @@ fn main() -> i64:
             list_set(c2w, pc, p)
             list_set(w2c, p, pc)
         else:
-            if words_equal(wline, starts, lens, p, mapped_w) == 0:
+            if words_equal(&wline, starts, lens, p, mapped_w) == 0:
                 print("false")
                 return 0
             if list_get(w2c, mapped_w) != pc:

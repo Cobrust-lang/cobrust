@@ -13,12 +13,12 @@ fn main() -> i64:
     let result: i64 = -1
     while lo <= hi:
         let mid = lo + (hi - lo) / 2
-        let mv = parse_int_tok(line, mid)
+        let mv = parse_int_tok(&line, mid)
         if mv == target:
             result = mid
             lo = hi + 1
         else:
-            let lv = parse_int_tok(line, lo)
+            let lv = parse_int_tok(&line, lo)
             if lv <= mv:
                 if target >= lv:
                     if target < mv:
@@ -28,7 +28,7 @@ fn main() -> i64:
                 else:
                     lo = mid + 1
             else:
-                let hv = parse_int_tok(line, hi)
+                let hv = parse_int_tok(&line, hi)
                 if target > mv:
                     if target <= hv:
                         lo = mid + 1

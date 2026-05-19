@@ -7,8 +7,8 @@
 fn main() -> i64:
     let s = input("")
     let t = input("")
-    let sn = str_len(s)
-    let tn = str_len(t)
+    let sn = str_len(&s)
+    let tn = str_len(&t)
     if sn != tn:
         print("false")
         return 0
@@ -19,12 +19,12 @@ fn main() -> i64:
         i = i + 1
     let j: i64 = 0
     while j < sn:
-        let code = str_ord(str_at(s, j)) - 97
+        let code = str_ord(str_at(&s, j)) - 97
         list_set(freq, code, list_get(freq, code) + 1)
         j = j + 1
     let k: i64 = 0
     while k < tn:
-        let code2 = str_ord(str_at(t, k)) - 97
+        let code2 = str_ord(str_at(&t, k)) - 97
         list_set(freq, code2, list_get(freq, code2) - 1)
         k = k + 1
     let m: i64 = 0

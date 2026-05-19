@@ -14,8 +14,8 @@ fn main() -> i64:
     let hi: i64 = n - 1
     while lo < hi:
         let mid = lo + (hi - lo) / 2
-        let mv = parse_int_tok(line, mid)
-        let next = parse_int_tok(line, mid + 1)
+        let mv = parse_int_tok(&line, mid)
+        let next = parse_int_tok(&line, mid + 1)
         if mv < next:
             lo = mid + 1
         else:

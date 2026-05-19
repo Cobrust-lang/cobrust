@@ -15,10 +15,10 @@ fn main() -> i64:
     let ans: i64 = 1
     let cur: i64 = 1
     while cur < n:
-        let vc = parse_int_tok(line, cur)
+        let vc = parse_int_tok(&line, cur)
         let j: i64 = 0
         while j < cur:
-            let vj = parse_int_tok(line, j)
+            let vj = parse_int_tok(&line, j)
             if vj < vc:
                 let cand = list_get(dp, j) + 1
                 if cand > list_get(dp, cur):

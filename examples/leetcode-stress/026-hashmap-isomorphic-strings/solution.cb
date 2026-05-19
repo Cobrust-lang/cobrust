@@ -7,8 +7,8 @@
 fn main() -> i64:
     let s = input("")
     let t = input("")
-    let sn = str_len(s)
-    let tn = str_len(t)
+    let sn = str_len(&s)
+    let tn = str_len(&t)
     if sn != tn:
         print("false")
         return 0
@@ -21,8 +21,8 @@ fn main() -> i64:
         i = i + 1
     let j: i64 = 0
     while j < sn:
-        let sc = str_ord(str_at(s, j))
-        let tc = str_ord(str_at(t, j))
+        let sc = str_ord(str_at(&s, j))
+        let tc = str_ord(str_at(&t, j))
         let mapped_s = list_get(s2t, sc)
         let mapped_t = list_get(t2s, tc)
         if mapped_s == -1 and mapped_t == -1:

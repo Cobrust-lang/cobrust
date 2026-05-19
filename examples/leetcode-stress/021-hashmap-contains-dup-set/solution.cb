@@ -11,7 +11,7 @@ fn main() -> i64:
     let seen_count: i64 = 0
     let i: i64 = 0
     while i < n:
-        let v = parse_int_tok(line, i)
+        let v = parse_int_tok(&line, i)
         let j: i64 = 0
         while j < seen_count:
             if list_get(seen, j) == v:

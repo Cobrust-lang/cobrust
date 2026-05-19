@@ -6,7 +6,7 @@
 
 fn main() -> i64:
     let s = input("")
-    let n = str_len(s)
+    let n = str_len(&s)
     let last_seen = list_new(128)
     let i: i64 = 0
     while i < 128:
@@ -16,7 +16,7 @@ fn main() -> i64:
     let best: i64 = 0
     let j: i64 = 0
     while j < n:
-        let code = str_ord(str_at(s, j))
+        let code = str_ord(str_at(&s, j))
         let prev = list_get(last_seen, code)
         if prev >= left:
             left = prev + 1

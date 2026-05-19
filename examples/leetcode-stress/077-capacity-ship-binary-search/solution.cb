@@ -9,7 +9,7 @@ fn can_ship(line: str, n: i64, cap: i64, days: i64) -> i64:
     let d: i64 = 1
     let i: i64 = 0
     while i < n:
-        let w = parse_int_tok(line, i)
+        let w = parse_int_tok(&line, i)
         if cur + w > cap:
             d = d + 1
             cur = w
@@ -22,21 +22,21 @@ fn can_ship(line: str, n: i64, cap: i64, days: i64) -> i64:
 
 fn main() -> i64:
     let dims = input("")
-    let n = parse_int_tok(dims, 0)
-    let days = parse_int_tok(dims, 1)
+    let n = parse_int_tok(&dims, 0)
+    let days = parse_int_tok(&dims, 1)
     let line = input("")
     let lo: i64 = 0
     let hi: i64 = 0
     let i: i64 = 0
     while i < n:
-        let w = parse_int_tok(line, i)
+        let w = parse_int_tok(&line, i)
         if w > lo:
             lo = w
         hi = hi + w
         i = i + 1
     while lo < hi:
         let mid = lo + (hi - lo) / 2
-        if can_ship(line, n, mid, days) == 1:
+        if can_ship(&line, n, mid, days) == 1:
             hi = mid
         else:
             lo = mid + 1
