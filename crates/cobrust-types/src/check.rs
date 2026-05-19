@@ -1224,6 +1224,32 @@ impl Ctx {
                         unify(&Ty::Int, &it, &mut self.subst, e.span)?;
                         Ok((**elem).clone())
                     }
+                    // ADR-0060b finding-closure 2026-05-19:
+                    // `finding:adr0060b-array-indexing-mir-projection-debt`.
+                    // `[T; N]` indexing — same shape as `Ty::List`
+                    // (Int index, element type returned). ADR-0060b §3.4
+                    // adds literal-OOB detection: when `e` is a constant
+                    // integer literal, bounds-check against `n` and
+                    // surface as `TypeError::NotIndexable` with the
+                    // OOB suggestion. Codegen lowers via
+                    // `Projection::Index` (no MIR shape change).
+                    (Ty::Array(elem, n), IndexKind::Expr(e)) => {
+                        let it = self.synth_expr(e)?;
+                        unify(&Ty::Int, &it, &mut self.subst, e.span)?;
+                        if let Some(idx) = literal_int_value(e) {
+                            let n_i = *n as i64;
+                            if idx < 0 || idx >= n_i {
+                                return Err(TypeError::NotIndexable {
+                                    actual: Ty::Array(elem.clone(), *n),
+                                    span: e.span,
+                                    suggestion: Some(
+                                        "array index out of bounds — use a value in [0, len-1]",
+                                    ),
+                                });
+                            }
+                        }
+                        Ok((**elem).clone())
+                    }
                     (Ty::Tuple(items), IndexKind::Expr(e)) => {
                         let it = self.synth_expr(e)?;
                         unify(&Ty::Int, &it, &mut self.subst, e.span)?;

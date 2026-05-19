@@ -503,28 +503,44 @@ fn llvm_type_07_ptr() {
     llvm_compile_ok("llvm_type07", "fn f(s: str) -> str:\n    return s\n");
 }
 
-// ADR-0060b closure 2026-05-19: [T; N] array type now parser-legal.
-// Wave-2 scope: type-signature + LLVM type emission only. Source-level
-// array indexing (`a[0]`) deferred to a follow-up sub-sprint per
-// finding:adr0060b-array-indexing-mir-projection-debt — the typeck
-// NotIndexable predicate currently rejects Array as an index base,
-// and a MIR-level Place::index variant must be added.
+// ADR-0060b closure 2026-05-19: [T; N] array type + literal indexing.
+// Phase M follow-up closure: typeck `NotIndexable` predicate now
+// allow-lists Array; LLVM backend emits in-bounds GEP for
+// `Place::index` on Array bases per
+// finding:adr0060b-array-indexing-mir-projection-debt. Cranelift
+// backend keeps the opaque-pointer wave-1 surface (ADR-0060b §3.3
+// narrows Cranelift arrays to opaque ptr).
+//
+// F36 rename: `llvm_type_08_array_i64` -> `llvm_type_08_array_i64_index`
+// now reflects the real indexing behavior the fixture exercises.
 #[test]
-fn llvm_type_08_array_i64() {
+fn llvm_type_08_array_i64_index() {
     // Ty::Array(Box::new(Ty::Int), 4) -> [4 x i64] LLVM array type per
-    // ADR-0060b §3.3 + llvm_backend.rs lower_ty Array arm. The parameter
-    // is parsed via parse_type_atom's LBracket branch (ADR-0060b §3.3
-    // parser). Wave-2 verifies type-emission shape; indexing follows in
-    // a separate sub-sprint that adds Array to the NotIndexable predicate
-    // allow-list + Place::index MIR projection arm.
-    //
-    // Use a passthrough function (no indexing) to exercise the LLVM
-    // type-emission path for Ty::Array (parameter alloca + return value
-    // by pointer at wave-2; the array body itself is opaque).
+    // ADR-0060b §3.3 + llvm_backend.rs lower_ty Array arm. The body
+    // exercises `a[0]` — real array indexing via in-bounds GEP +
+    // load. The typeck IndexAccess Array arm rejects literal OOB at
+    // compile-time per ADR-0060b §3.4 (k=0 is in-bounds for [_; 4]).
     #[cfg(feature = "llvm")]
     llvm_compile_ok(
         "llvm_type08",
-        "fn first(a: [i64; 4]) -> i64:\n    return 0\n",
+        "fn first(a: [i64; 4]) -> i64:\n    return a[0]\n",
+    );
+}
+
+/// F34: codegen_diff_corpus::llvm_type_08b_array_index_literal_oob
+/// — exercises the §3.4 compile-time-catch for literal OOB on `[T; N]`.
+/// Distinct from llvm_type_08 because this asserts type-check **rejection**.
+#[test]
+fn llvm_type_08b_array_index_literal_oob() {
+    // Reading past the end at type-check time. Must FAIL typeck.
+    let src = "fn first(a: [i64; 4]) -> i64:\n    return a[5]\n";
+    let module = parse_str(src, FileId::SYNTHETIC).expect("parse");
+    let mut sess = Session::new();
+    let hir = hir_lower(&module, &mut sess).expect("hir");
+    let res = check(&hir);
+    assert!(
+        res.is_err(),
+        "literal-OOB array index must fail typeck: {src}"
     );
 }
 

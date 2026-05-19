@@ -1214,6 +1214,63 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 return Ok(loaded);
             }
             Ok(ptr_val)
+        } else if let [Projection::Index(idx_op)] = place.projections.as_slice() {
+            // ADR-0060b finding-closure 2026-05-19:
+            // `finding:adr0060b-array-indexing-mir-projection-debt`.
+            // `Place::index` on a `Ty::Array(elem, n)` base lowers via
+            // the safe `build_extract_value` aggregate-extract path
+            // when the index is a constant integer (the §3.4
+            // compile-time-catch surface). Dynamic-index Array
+            // accesses keep the wave-1 stub-load surface — wave-2
+            // ships the constant-index path that exercises real
+            // element-type lowering through the LLVM type system.
+            //
+            // Why no GEP: `cobrust-codegen/src/lib.rs:32`
+            // `#![forbid(unsafe_code)]` blocks inkwell's unsafe
+            // `build_in_bounds_gep`; the safe `build_extract_value`
+            // requires a compile-time `u32` index. ADR-0060b §3.4
+            // pivots the wave-2 demonstrable surface onto the literal
+            // path which is also the prized compile-time-catch payoff.
+            let base_ty_is_array = self
+                .body
+                .locals
+                .get(place.local.0 as usize)
+                .map(|d| matches!(d.ty, Ty::Array(_, _)))
+                .unwrap_or(false);
+            if base_ty_is_array {
+                // Detect a compile-time-constant integer index.
+                let const_idx: Option<u32> = match idx_op {
+                    Operand::Constant(Constant::Int(k)) if *k >= 0 => u32::try_from(*k).ok(),
+                    _ => None,
+                };
+                if let Some(idx_u32) = const_idx {
+                    // Load the whole array aggregate, then extract.
+                    let agg_val = self
+                        .emitter
+                        .builder
+                        .build_load(ty, alloca, "arr_agg")
+                        .map_err(map_builder_err)?;
+                    if let BasicValueEnum::ArrayValue(av) = agg_val {
+                        let elem = self
+                            .emitter
+                            .builder
+                            .build_extract_value(av, idx_u32, "arr_elem")
+                            .map_err(map_builder_err)?;
+                        return Ok(elem);
+                    }
+                }
+                // Dynamic index or aggregate not loaded as ArrayValue
+                // — fall through to the wave-1 stub-load surface.
+            }
+            // Non-Array Index projection — fall through to the stub
+            // load (preserves the wave-1 surface for List / Dict /
+            // Tuple bases that already lowered via runtime helpers).
+            let val = self
+                .emitter
+                .builder
+                .build_load(ty, alloca, "load_proj_stub")
+                .map_err(map_builder_err)?;
+            Ok(val)
         } else {
             // Other projections fall back to bare-local load — wave-2
             // (sub-ADR 0058b) closes Field / Index lowering.
