@@ -608,11 +608,74 @@ Cross-link stays in `release.yml` + `cross` scope (linker delegation per ADR-002
 
 ### Non-goals (deferred per ADR-0058b §4)
 
-- **DWARF emission**: sub-ADR 0058c.
+- **DWARF emission**: **DELIVERED at wave-3 (ADR-0058c)**; see "Phase K wave-3" section below.
 - **JIT opt-level changes**: cobrust-jit `lower.rs` unchanged at wave-2.
 - **Cross-link**: linker stays at `cc`; cross-target executables are `release.yml` + `cross`-tool scope.
 - **New MIR features**: wave-2 consumes wave-1's IR-construction pass.
 - **Manual PassBuilder flag tuning**: defaults preserved; sub-ADR follow-up only if bench fails on tier-1 host.
+
+## Phase K wave-3 — LLVM DWARF debug-info emission (ADR-0058c)
+
+Status: **delivered**. Extends wave-1/2's `LlvmEmitter` with a
+`DebugInfoBuilder` + per-function `DISubprogram` + per-Span
+`DILocation` line-table, finalized before `Module::verify` + the opt
+pipeline. Phase L Debugger (ADR-0059) consumes the emitted DWARF v5
+via standard `lldb` / `gdb` / VS Code DAP (bind-the-core, ADR-0012).
+
+### Public surface added (wave-3)
+
+```rust
+// crates/cobrust-codegen/src/target.rs
+pub struct TargetSpec {
+    // ... existing fields ...
+    /// Optional source-file path for DWARF emission (ADR-0058c §3.3).
+    pub source_path: Option<PathBuf>,
+}
+
+// crates/cobrust-codegen/src/llvm_backend.rs (gated --features llvm)
+// LlvmEmitter::new signature unchanged; DI scaffold built internally.
+// Per-fn DISubprogram + per-Span DILocation emitted in declare_body +
+// BodyLowerer::lower_block respectively. No new pub fns.
+```
+
+### DI basic-type mapping (ADR-0058c §3.2)
+
+| Cobrust `Ty` | DWARF basic type | DW_ATE | Size |
+|---|---|---|---|
+| `Int` | `int64_t` | `DW_ATE_signed` (5) | 64 bits |
+| `Float` / `Imag` | `double` | `DW_ATE_float` (4) | 64 bits |
+| `Bool` | `bool` | `DW_ATE_boolean` (2) | 8 bits (storage) |
+| `Str` / `Bytes` / `List` / `Dict` / `Set` / `Ref` / `None` / `Tuple` / etc. | opaque `ptr` | `DW_ATE_address` (1) | 64 bits |
+
+A single shared cache (`di_basic_types: HashMap<&'static str, DIBasicType<'ctx>>`) dedups the four basic types per module.
+
+### Source-path resolution (ADR-0058c §3.3)
+
+- `TargetSpec.source_path = Some(path)` → `LineMap::from_source(read_to_string(path))`; DILocation lines + columns match the on-disk file.
+- `TargetSpec.source_path = None` → `LineMap::empty()`; every span resolves to `(line=1, col=1)`. DI structure still validates per `llvm-dwarfdump-18` but breakpoint resolution collapses to "the first line" of the synthetic file.
+
+### F34 symbol anchors (wave-3)
+
+| Anchor | Role |
+|---|---|
+| `LlvmEmitter::new` | Constructs DIBuilder + DICompileUnit + DIFile + cached DI basic types per source (`llvm_backend.rs`, ADR-0058c §3.1) |
+| `LlvmEmitter::populate_di_basic_types` | Four-DI-basic-type cache builder (Int / Float / Bool / Ptr) keyed by ADR-0058c §3.2 short tag |
+| `BodyLowerer::set_debug_loc` | Per-Span DILocation setter — root of ADR-0058c §3.3 line-table emission |
+
+### Wave-3 test surface (per ADR-0058c §3.4 + §3.5)
+
+| Suite | Tests | Notes |
+|---|---|---|
+| llvm_backend inline DWARF smoke | 5 added | `dwarf_empty_module_emits_well_formed_object`, `dwarf_return_42_emits_debug_sections`, `dwarf_multi_fn_module_emits_debug_sections`, `dwarf_drop_emitting_fn_still_validates`, `dwarf_o3_pipeline_preserves_dwarf` |
+| llvm_backend inline LineMap | 2 added | `linemap_empty_returns_1_1`, `linemap_ascii_lines` |
+| `tests/dwarf_lldb_smoke.rs` | 4 fixtures | `lldb_smoke_hello_world_subprogram_resolves`, `lldb_smoke_fib_function_visible`, `lldb_smoke_multi_fn_module_lists_both`, `lldb_smoke_line_table_present` — skip cleanly when neither `lldb-18` nor `lldb` is on `$PATH` |
+
+### Non-goals (deferred per ADR-0058c §4)
+
+- **Source-level variable inspection** (`DILocalVariable` / `DIFormalParameter` entries for `lldb frame variable`): Phase L UX scope; wave-3 ships per-fn + per-line baseline only.
+- **macOS dSYM packaging**: `dsymutil` invocation handled in `release.yml`, not `llvm_backend`.
+- **Inlined-frame chains** (`DILocation::inlined_at`): Phase-L+ if debugger demand surfaces it.
+- **DWARF v4 fallback**: LLVM-18 emits v5 by default; older toolchains must regenerate.
 
 ## Phase K Strand #4 — JIT/AOT lowering convergence (ADR-0058d)
 

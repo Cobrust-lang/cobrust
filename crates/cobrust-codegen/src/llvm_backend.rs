@@ -37,9 +37,16 @@
 //!   extern-name Call lowering is wave-2.
 //!
 //! Per-form differences from Cranelift live next to each `lower_*` fn.
+//!
+//! ADR-0058c wave-3 (this file) extends with:
+//!
+//! - **DWARF v5 emission** via `DebugInfoBuilder` (inkwell 0.9 LLVM-18 binding).
+//!   Compile-unit DI scope + per-function `DISubprogram` + per-statement
+//!   `DILocation` line table. Phase L Debugger (ADR-0059) consumes the
+//!   emitted DWARF via standard `lldb` / `gdb` / VS Code DAP — bind-the-core.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cobrust_mir::{
     AggregateKind, BinOp, BlockId, Body, CastKind, Constant, LocalId, Module, Operand, Place,
@@ -54,7 +61,11 @@ use inkwell::OptimizationLevel;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::module::{Linkage, Module as LlvmModule};
+use inkwell::debug_info::{
+    AsDIScope, DIBasicType, DICompileUnit, DIFile, DIFlagsConstants, DILocation, DISubprogram,
+    DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
+};
+use inkwell::module::{FlagBehavior, Linkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
@@ -64,10 +75,26 @@ use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
 };
 
+use cobrust_frontend::span::Span;
+
 use crate::artifact::{Artifact, ArtifactKind};
 use crate::error::CodegenError;
 use crate::linker;
 use crate::target::{OptLevel, TargetSpec};
+
+// =====================================================================
+// DWARF basic-type encoding constants (DW_ATE_* per DWARF v5 §7.8)
+// =====================================================================
+//
+// inkwell 0.9 takes the encoding as a raw `LLVMDWARFTypeEncoding`
+// (`u32`) — no symbolic enum is re-exported. We use the canonical
+// DW_ATE numeric values per the DWARF v5 spec so the emitted basic
+// types are inspectable via standard `llvm-dwarfdump`.
+
+const DW_ATE_ADDRESS: u32 = 0x01;
+const DW_ATE_BOOLEAN: u32 = 0x02;
+const DW_ATE_FLOAT: u32 = 0x04;
+const DW_ATE_SIGNED: u32 = 0x05;
 
 // =====================================================================
 // Public entry — `llvm_backend::emit`
@@ -102,6 +129,15 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
     for body in &module.bodies {
         emitter.define_body(body)?;
     }
+
+    // --- ADR-0058c §3.4: finalize DWARF DIEs before verify + opt -------
+    //
+    // `DebugInfoBuilder::finalize` writes all deferred DIE metadata
+    // (placeholder DIs, replace-all-uses-with chains) into the LLVM
+    // module IR. Must run before `Module::verify` (DI metadata shape
+    // is checked there) and before `Module::run_passes` (some opt
+    // passes consume DI metadata for inliner debug-info bookkeeping).
+    emitter.di_builder.finalize();
 
     // --- verify (debug only) --------------------------------------------
     if cfg!(debug_assertions) {
@@ -256,6 +292,11 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
 /// Mirrors `cranelift_backend::CraneliftCtx`: holds the function-id
 /// table + return-type cache so a second-pass `define_body` can
 /// resolve forward-declared callees emitted by `declare_body`.
+///
+/// ADR-0058c wave-3 extends with DWARF emission state: a
+/// `DebugInfoBuilder` + `DICompileUnit` per module + cached basic-type
+/// DIs + per-function `DISubprogram` lookups + a `LineMap` for
+/// resolving per-statement spans into (line, column) pairs.
 pub struct LlvmEmitter<'ctx> {
     ctx: &'ctx Context,
     /// Owned LLVM module — borrows from `ctx` via `'ctx`.
@@ -270,6 +311,30 @@ pub struct LlvmEmitter<'ctx> {
     runtime_helper_decls: HashMap<&'static str, FunctionValue<'ctx>>,
     /// Cached `i8*` opaque pointer type used for str/list/dict/refs.
     opaque_ptr_ty: inkwell::types::PointerType<'ctx>,
+    // ----- ADR-0058c wave-3 DWARF state ---------------------------------
+    /// inkwell DWARF builder; one per LLVM module (per source file).
+    di_builder: DebugInfoBuilder<'ctx>,
+    /// Compile-unit DI scope; root of every Cobrust function's DIScope.
+    di_cu: DICompileUnit<'ctx>,
+    /// The `DIFile` inside `di_cu`; reused for every `DISubprogram` +
+    /// `DILocation`.
+    di_file: DIFile<'ctx>,
+    /// Cached basic-type DIs (Int / Float / Bool / opaque-ptr) keyed by
+    /// a stable short tag so each signature lowering reuses the same
+    /// `DIBasicType` objects.
+    di_basic_types: HashMap<&'static str, DIBasicType<'ctx>>,
+    /// Per-body `DefId.0` → emitted `DISubprogram`. Populated at
+    /// `declare_body`; consumed at `define_body` to set per-instruction
+    /// debug locations.
+    di_subprograms: HashMap<u32, DISubprogram<'ctx>>,
+    /// Per-Span (line, column) lookup helper, built from the source
+    /// file's bytes when `TargetSpec.source_path` is `Some`. Empty when
+    /// the source is unknown (tests / synthetic modules).
+    line_map: LineMap,
+    /// Whether opt passes will run downstream — flows into `is_optimized`
+    /// flag on every `DICompileUnit` + `DISubprogram` so the debugger
+    /// renders inline-resolved frames consistently.
+    is_optimized: bool,
 }
 
 impl<'ctx> LlvmEmitter<'ctx> {
@@ -280,6 +345,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
     ///
     /// `spec` and `target_machine` drive module-name + triple +
     /// data-layout binding.
+    ///
+    /// ADR-0058c wave-3: also instantiates the DWARF emission scaffold
+    /// (`DebugInfoBuilder` + `DICompileUnit` + `DIFile`) and pre-caches
+    /// the four DI basic types (`Int`, `Float`, `Bool`, opaque `Ptr`).
+    /// When `spec.source_path` is `Some`, the per-Span `LineMap` is
+    /// built from the file's contents; otherwise it's empty (every
+    /// span maps to line 0 / col 0 — DI structure still validates).
     pub fn new(
         ctx: &'ctx Context,
         spec: &TargetSpec,
@@ -291,6 +363,36 @@ impl<'ctx> LlvmEmitter<'ctx> {
         let builder = ctx.create_builder();
         let opaque_ptr_ty = ctx.i8_type().ptr_type(AddressSpace::default());
 
+        // --- ADR-0058c §3.1 DWARF scaffold -----------------------------
+        // LLVM requires the module-level "Debug Info Version" + "Dwarf Version"
+        // metadata flags before any DIE emission, else `Module::verify`
+        // rejects DI metadata under `LLVMVerifierFailureAction`.
+        let dbg_ver = ctx.i32_type().const_int(3, false);
+        module.add_basic_value_flag("Debug Info Version", FlagBehavior::Warning, dbg_ver);
+        let dwarf_ver = ctx.i32_type().const_int(5, false);
+        module.add_basic_value_flag("Dwarf Version", FlagBehavior::Warning, dwarf_ver);
+
+        let (filename, directory, line_map) = resolve_source_paths(spec);
+        let is_optimized = matches!(spec.opt_level, OptLevel::Speed | OptLevel::SpeedAndSize);
+        let (di_builder, di_cu) = module.create_debug_info_builder(
+            /* allow_unresolved */ true,
+            DWARFSourceLanguage::C,
+            &filename,
+            &directory,
+            /* producer */ "cobrust 0.3.x (ADR-0058c)",
+            /* is_optimized */ is_optimized,
+            /* compiler command-line flags */ "",
+            /* runtime_ver */ 0,
+            /* split_name */ "",
+            DWARFEmissionKind::Full,
+            /* dwo_id */ 0,
+            /* split_debug_inlining */ false,
+            /* debug_info_for_profiling */ false,
+            /* sysroot */ "",
+            /* sdk */ "",
+        );
+        let di_file = di_cu.get_file();
+
         let mut emitter = LlvmEmitter {
             ctx,
             module,
@@ -299,9 +401,64 @@ impl<'ctx> LlvmEmitter<'ctx> {
             body_return_types: HashMap::new(),
             runtime_helper_decls: HashMap::new(),
             opaque_ptr_ty,
+            di_builder,
+            di_cu,
+            di_file,
+            di_basic_types: HashMap::new(),
+            di_subprograms: HashMap::new(),
+            line_map,
+            is_optimized,
         };
         emitter.declare_runtime_helpers();
+        emitter.populate_di_basic_types();
         Ok(emitter)
+    }
+
+    /// Pre-build the four DI basic types used by every signature
+    /// lowering: `i64` / `f64` / `bool` / `ptr`. Cached so each
+    /// `create_subroutine_type` call reuses the same `DIType` pointers
+    /// (per ADR-0058c §3.2 dedup contract).
+    fn populate_di_basic_types(&mut self) {
+        let zero = inkwell::debug_info::DIFlags::ZERO;
+        // Int64 — DW_ATE_signed (5).
+        let int_ty = self
+            .di_builder
+            .create_basic_type("i64", 64, DW_ATE_SIGNED, zero)
+            .expect("DI basic type i64");
+        self.di_basic_types.insert("Int", int_ty);
+        // Float64 — DW_ATE_float (4).
+        let float_ty = self
+            .di_builder
+            .create_basic_type("f64", 64, DW_ATE_FLOAT, zero)
+            .expect("DI basic type f64");
+        self.di_basic_types.insert("Float", float_ty);
+        // Bool — DW_ATE_boolean (2), 8 bits per typical lldb expectation
+        // (LLVM emits i1 → 1 byte at storage time; basic type stays at
+        // 8 bits so debuggers don't gag on sub-byte storage).
+        let bool_ty = self
+            .di_builder
+            .create_basic_type("bool", 8, DW_ATE_BOOLEAN, zero)
+            .expect("DI basic type bool");
+        self.di_basic_types.insert("Bool", bool_ty);
+        // Opaque pointer — DW_ATE_address (1).
+        let ptr_ty = self
+            .di_builder
+            .create_basic_type("ptr", 64, DW_ATE_ADDRESS, zero)
+            .expect("DI basic type ptr");
+        self.di_basic_types.insert("Ptr", ptr_ty);
+    }
+
+    /// Map a Cobrust MIR `Ty` to its cached `DIBasicType`. Per
+    /// ADR-0058c §3.2: numeric scalars get their own DI; everything
+    /// else opaque-pointer (matches the wave-1/2 LLVM type lowering).
+    fn di_type_for(&self, ty: &Ty) -> DIBasicType<'ctx> {
+        let key = match ty {
+            Ty::Int => "Int",
+            Ty::Float | Ty::Imag => "Float",
+            Ty::Bool => "Bool",
+            _ => "Ptr",
+        };
+        self.di_basic_types[key]
     }
 
     /// Pre-declare runtime helpers used by Drop / Assert lowering.
@@ -443,6 +600,41 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
         self.function_ids.insert(body.def_id.0, func);
         self.body_return_types.insert(body.def_id.0, ret_ty);
+
+        // --- ADR-0058c §3.2 per-function DISubprogram ----------------------
+        //
+        // Build a DISubroutineType from the parameter + return DI basic
+        // types, then a DISubprogram rooted at the compile-unit scope.
+        // Attach via `FunctionValue::set_subprogram` so the LLVM IR
+        // metadata graph wires the function to its DI metadata.
+        let ret_di = self.di_type_for(&ret_local.ty);
+        let param_di: Vec<inkwell::debug_info::DIType<'ctx>> = param_locals
+            .iter()
+            .map(|l| self.di_type_for(&l.ty).as_type())
+            .collect();
+        let subroutine_ty = self.di_builder.create_subroutine_type(
+            self.di_file,
+            Some(ret_di.as_type()),
+            &param_di,
+            inkwell::debug_info::DIFlags::ZERO,
+        );
+        let (line_no, _col) = self.line_map.line_column(body.span.start);
+        let subprogram = self.di_builder.create_function(
+            self.di_cu.as_debug_info_scope(),
+            /* fn name */ &name,
+            /* linkage name */ None,
+            self.di_file,
+            line_no,
+            subroutine_ty,
+            /* is_local_to_unit */ false,
+            /* is_definition */ true,
+            /* scope_line */ line_no,
+            inkwell::debug_info::DIFlags::ZERO,
+            /* is_optimized */ self.is_optimized,
+        );
+        func.set_subprogram(subprogram);
+        self.di_subprograms.insert(body.def_id.0, subprogram);
+
         Ok(())
     }
 
@@ -467,11 +659,44 @@ impl<'ctx> LlvmEmitter<'ctx> {
             block_map.insert(mir_block.id, bb);
         }
 
+        // Capture the per-body DISubprogram (declared in `declare_body`)
+        // before the allocas emit — LLVM `Module::verify` rejects any
+        // `!dbg` attachment that points at a different subprogram than
+        // the function it's attached to, so we must reset the builder's
+        // current debug location to *this* subprogram before any alloca
+        // / store hits the IR stream (ADR-0058c §3.3).
+        let subprogram = self
+            .di_subprograms
+            .get(&body.def_id.0)
+            .copied()
+            .ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "body {} missing DISubprogram",
+                    body.def_id.0
+                ))
+            })?;
+
         // Entry block sets up allocas + binds parameters. Use a
         // dedicated "allocas" block prepended in front of bb0.
         let entry_bb = block_map[&BlockId(0)];
         let allocas_bb = self.ctx.prepend_basic_block(entry_bb, "allocas");
         self.builder.position_at_end(allocas_bb);
+
+        // ADR-0058c §3.3 multi-fn fix: every body resets the current
+        // debug location to a DILocation rooted at *its own*
+        // subprogram before alloca/store emission. Without this, the
+        // builder leaks the previous body's location into this body's
+        // entry block, and `Module::verify` rejects the resulting IR
+        // with "!dbg attachment points at wrong subprogram".
+        let (init_line, init_col) = self.line_map.line_column(body.span.start);
+        let body_entry_loc = self.di_builder.create_debug_location(
+            self.ctx,
+            init_line,
+            init_col,
+            subprogram.as_debug_info_scope(),
+            None,
+        );
+        self.builder.set_current_debug_location(body_entry_loc);
 
         let mut local_allocas: HashMap<LocalId, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)> =
             HashMap::new();
@@ -516,7 +741,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .build_unconditional_branch(entry_bb)
             .map_err(map_builder_err)?;
 
-        // Lower every MIR block via the per-Body lowerer.
+        // Lower every MIR block via the per-Body lowerer (subprogram
+        // captured above for the entry-block debug-location reset).
         let blocks = body.blocks.clone();
         let mut lowerer = BodyLowerer {
             emitter: self,
@@ -525,6 +751,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             block_map: &block_map,
             local_allocas: &local_allocas,
             ret_ty,
+            subprogram,
         };
         for mir_block in &blocks {
             lowerer.lower_block(mir_block)?;
@@ -541,6 +768,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
 /// Per-Body lowerer. Borrows the emitter mutably + the body's state
 /// tables. The `'a` lifetime scopes the per-body borrow; `'ctx` is the
 /// inkwell context arena.
+///
+/// ADR-0058c §3.3: carries the per-body `DISubprogram` so each
+/// instruction's debug location can root at the right function scope.
 struct BodyLowerer<'a, 'ctx> {
     emitter: &'a mut LlvmEmitter<'ctx>,
     body: &'a Body,
@@ -548,15 +778,43 @@ struct BodyLowerer<'a, 'ctx> {
     block_map: &'a HashMap<BlockId, BasicBlock<'ctx>>,
     local_allocas: &'a HashMap<LocalId, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
     ret_ty: BasicTypeEnum<'ctx>,
+    /// Per-body DISubprogram scope (ADR-0058c §3.3).
+    subprogram: DISubprogram<'ctx>,
+}
+
+impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
+    /// Resolve a `Span` to a `DILocation` rooted at the subprogram
+    /// scope, then set it as the builder's current debug location so
+    /// every subsequent instruction emission is tagged with it
+    /// (ADR-0058c §3.3).
+    fn set_debug_loc(&self, span: Span) {
+        let (line, col) = self.emitter.line_map.line_column(span.start);
+        let loc: DILocation<'ctx> = self.emitter.di_builder.create_debug_location(
+            self.emitter.ctx,
+            line,
+            col,
+            self.subprogram.as_debug_info_scope(),
+            None,
+        );
+        self.emitter.builder.set_current_debug_location(loc);
+    }
 }
 
 impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
     fn lower_block(&mut self, mir_block: &cobrust_mir::BasicBlock) -> Result<(), CodegenError> {
         let bb = self.block_map[&mir_block.id];
         self.emitter.builder.position_at_end(bb);
+        // ADR-0058c §3.3: anchor every block at its own debug location
+        // (the block's span). Per-statement locs override on each step.
+        self.set_debug_loc(mir_block.span);
         for stmt in &mir_block.statements {
+            self.set_debug_loc(stmt.span);
             self.lower_statement(stmt)?;
         }
+        // The terminator inherits the block's span (terminators don't
+        // carry their own `Span` in MIR — they're keyed to the closing
+        // brace of the block).
+        self.set_debug_loc(mir_block.span);
         self.lower_terminator(&mir_block.terminator)?;
         Ok(())
     }
@@ -1329,6 +1587,118 @@ fn map_builder_err(e: inkwell::builder::BuilderError) -> CodegenError {
     CodegenError::LlvmError(format!("inkwell builder error: {e}"))
 }
 
+// =====================================================================
+// ADR-0058c §3.3 — LineMap (Span byte-offset → 1-indexed line, column)
+// =====================================================================
+//
+// Inlined here to avoid a `cobrust-lsp` dependency. The algorithm is
+// the same as `cobrust-lsp::span_convert::LineMap` (which produces
+// UTF-16 columns for LSP); this variant emits **1-indexed** lines +
+// columns measured in UTF-8 codepoints, matching DWARF's `DW_LNS_*` line
+// table conventions per DWARF v5 §6.2.
+
+/// Byte-offset → (line, column) lookup over a source string.
+///
+/// `line_starts[i]` is the byte offset of the first character on line
+/// `i` (0-indexed internally; DWARF emission adds +1 at lookup time so
+/// debuggers see DWARF-conventional 1-indexed lines).
+///
+/// Empty when constructed via `LineMap::empty()` — every lookup returns
+/// `(1, 1)` so the DWARF DIE structure validates but breakpoint
+/// resolution collapses to "the first line". Tests + synthetic modules
+/// use this path.
+#[derive(Clone, Debug, Default)]
+struct LineMap {
+    line_starts: Vec<u32>,
+    source: String,
+}
+
+impl LineMap {
+    /// Empty `LineMap` — `(1, 1)` for every lookup.
+    fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Build a `LineMap` from a source string.
+    fn from_source(source: &str) -> Self {
+        let mut line_starts: Vec<u32> = vec![0];
+        let bytes = source.as_bytes();
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'\n' {
+                let next = u32::try_from(i + 1).unwrap_or(u32::MAX);
+                line_starts.push(next);
+            }
+        }
+        Self {
+            line_starts,
+            source: source.to_string(),
+        }
+    }
+
+    /// Lookup a 1-indexed (line, column) pair for a byte offset.
+    ///
+    /// Returns `(1, 1)` on empty maps (synthetic-source fallback).
+    fn line_column(&self, byte_offset: u32) -> (u32, u32) {
+        if self.line_starts.is_empty() {
+            return (1, 1);
+        }
+        let line_idx = match self.line_starts.binary_search(&byte_offset) {
+            Ok(i) => i,
+            Err(i) => i.saturating_sub(1),
+        };
+        let line_start = self.line_starts.get(line_idx).copied().unwrap_or(0);
+        let line_byte_off = byte_offset.saturating_sub(line_start) as usize;
+        let line_start_us = line_start as usize;
+        let bytes = self.source.as_bytes();
+        let safe_end = bytes.len().min(line_start_us + line_byte_off);
+        let safe_end = clamp_to_char_boundary(&self.source, safe_end);
+        let prefix = &self.source[line_start_us..safe_end];
+        // Column = codepoint count (DWARF column convention is bytes or
+        // codepoints depending on the producer; LLVM emits codepoint
+        // counts on most consumers — we follow that convention).
+        let col = u32::try_from(prefix.chars().count()).unwrap_or(u32::MAX);
+        // DWARF expects 1-indexed lines + columns.
+        (u32::try_from(line_idx).unwrap_or(u32::MAX) + 1, col + 1)
+    }
+}
+
+/// Round `byte_offset` down to the nearest `char` boundary in `source`.
+fn clamp_to_char_boundary(source: &str, byte_offset: usize) -> usize {
+    let mut off = byte_offset.min(source.len());
+    while off > 0 && !source.is_char_boundary(off) {
+        off -= 1;
+    }
+    off
+}
+
+/// Resolve DWARF source filename + directory + `LineMap` from a
+/// `TargetSpec`. When `source_path` is `Some` and the file is readable,
+/// returns `(basename, dirname, LineMap::from_source(file_contents))`.
+/// Otherwise falls back to `(spec.module_name, ".", LineMap::empty())`.
+fn resolve_source_paths(spec: &TargetSpec) -> (String, String, LineMap) {
+    if let Some(src_path) = &spec.source_path {
+        if let Ok(source) = std::fs::read_to_string(src_path) {
+            let line_map = LineMap::from_source(&source);
+            let filename = path_filename(src_path).unwrap_or_else(|| spec.module_name.clone());
+            let directory = path_directory(src_path).unwrap_or_else(|| ".".to_string());
+            return (filename, directory, line_map);
+        }
+        // Fall through to synthetic fallback when the file isn't readable
+        // (path may be transient; DI structure validates either way).
+    }
+    (format!("{}.cb", spec.module_name), ".".to_string(), LineMap::empty())
+}
+
+fn path_filename(p: &Path) -> Option<String> {
+    p.file_name().and_then(|s| s.to_str()).map(String::from)
+}
+
+fn path_directory(p: &Path) -> Option<String> {
+    p.parent()
+        .and_then(|s| s.to_str())
+        .map(|s| if s.is_empty() { ".".to_string() } else { s.to_string() })
+}
+
 /// Zero-init value for an arbitrary BasicTypeEnum.
 fn zero_of<'ctx>(ty: BasicTypeEnum<'ctx>) -> BasicValueEnum<'ctx> {
     match ty {
@@ -1383,6 +1753,7 @@ mod tests {
             artifact: ArtifactKind::Object,
             output_dir: path,
             module_name: "smoke".to_string(),
+            source_path: None,
         }
     }
 
@@ -1441,7 +1812,7 @@ mod tests {
 
     #[test]
     fn smoke_empty_module() {
-        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let module = Module { bodies: vec![] };
         let spec = host_spec();
         let result = emit(&module, &spec);
@@ -1450,7 +1821,7 @@ mod tests {
 
     #[test]
     fn smoke_return_42() {
-        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let body = build_simple_body(
             1,
             "answer",
@@ -1466,7 +1837,7 @@ mod tests {
 
     #[test]
     fn smoke_binop_add() {
-        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let body = build_simple_body(
             2,
             "add_i64",
@@ -1486,7 +1857,7 @@ mod tests {
 
     #[test]
     fn smoke_unop_neg_float() {
-        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let body = build_simple_body(
             3,
             "neg_f64",
@@ -1502,7 +1873,7 @@ mod tests {
 
     #[test]
     fn smoke_drop_str_local() {
-        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // fn drop_str(s: Str) -> i64 { _return = 0; drop s; return }
         // We exercise the Drop terminator by inserting an explicit
         // Drop block before Return.
@@ -1605,7 +1976,7 @@ mod tests {
     /// inkwell's `run_passes`.
     #[test]
     fn smoke_opt_speed_pipeline() {
-        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let body = build_simple_body(
             10,
             "opt_speed",
@@ -1629,7 +2000,7 @@ mod tests {
     /// pipeline.
     #[test]
     fn smoke_opt_speed_and_size_pipeline() {
-        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let body = build_simple_body(
             11,
             "opt_sized",
@@ -1647,5 +2018,244 @@ mod tests {
             "OptLevel::SpeedAndSize emit failed: {:?}",
             result.err()
         );
+    }
+
+    // =================================================================
+    // ADR-0058c §3.4 — DWARF emission smoke tests
+    //
+    // Each test compiles a small fixture + asserts the emitted object
+    // file contains at least one DWARF section. The acceptance gate
+    // (§6) verifies via `llvm-dwarfdump-18` externally; here we use
+    // the `object` crate to inspect the section table directly so the
+    // smoke tests run with `cargo test` alone.
+    // =================================================================
+
+    use object::{Object, ObjectSection};
+    use std::fs;
+
+    /// Predicate: object file contains at least one DWARF section.
+    ///
+    /// ELF on Linux: `.debug_info` / `.debug_line` / etc.
+    /// Mach-O on macOS: `__debug_info` / `__debug_line` (note Mach-O
+    /// strips the leading dot and prepends `__`).
+    ///
+    /// We accept any section whose name contains `debug_info`,
+    /// `debug_line`, or `debug_abbrev` — those are the three core
+    /// DWARF v5 sections LLVM emits per non-empty CU.
+    fn object_has_dwarf_sections(path: &std::path::Path) -> bool {
+        let data = fs::read(path).expect("read emitted object");
+        let obj = object::File::parse(&*data).expect("parse emitted object");
+        obj.sections().any(|s| {
+            let name = s.name().unwrap_or("");
+            name.contains("debug_info")
+                || name.contains("debug_line")
+                || name.contains("debug_abbrev")
+        })
+    }
+
+    #[test]
+    fn dwarf_empty_module_emits_well_formed_object() {
+        // Empty modules emit a `DW_TAG_compile_unit` placeholder in
+        // the LLVM IR but LLVM-18's object backend elides the
+        // resulting `.debug_*` sections when no symbols reference them
+        // (an empty CU has nothing to anchor in `.debug_info`). The
+        // contract is "emit() must not panic on an empty module"; the
+        // DWARF-content gate is enforced by the non-empty fixtures
+        // below.
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let module = Module { bodies: vec![] };
+        let mut spec = host_spec();
+        spec.module_name = "dwarf_empty".to_string();
+        let result = emit(&module, &spec).expect("empty module emit");
+        let path = match result {
+            Artifact::Object(p) => p,
+            _ => panic!("expected Artifact::Object"),
+        };
+        // Object file must exist + parse as an object.
+        let bytes = std::fs::read(&path).expect("read object");
+        let _ = object::File::parse(&*bytes).expect("parse object");
+    }
+
+    #[test]
+    fn dwarf_return_42_emits_debug_sections() {
+        // `fn answer() -> i64 { return 42 }` — DI emits a
+        // DW_TAG_subprogram for the function. We assert the object
+        // file is well-formed + carries DWARF sections
+        // (section-presence check; subprogram symbol-level check is in
+        // dwarf_lldb_smoke.rs::lldb_smoke_hello_world_subprogram_resolves).
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body = build_simple_body(
+            1,
+            "dwarf_answer",
+            vec![],
+            Ty::Int,
+            Rvalue::Use(Operand::Constant(MirConstant::Int(42))),
+        );
+        let module = Module { bodies: vec![body] };
+        let mut spec = host_spec();
+        spec.module_name = "dwarf_return_42".to_string();
+        let result = emit(&module, &spec).expect("return 42 emit");
+        let path = match result {
+            Artifact::Object(p) => p,
+            _ => panic!("expected Artifact::Object"),
+        };
+        assert!(
+            object_has_dwarf_sections(&path),
+            "return-42 fixture: missing .debug_* sections"
+        );
+    }
+
+    #[test]
+    fn dwarf_multi_fn_module_emits_debug_sections() {
+        // Two unrelated user fns share the compile unit; both get
+        // their own DISubprogram per §3.2.
+        // (Section-presence check; per-fn symbol check in lldb smoke suite.)
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body_a = build_simple_body(
+            10,
+            "alpha",
+            vec![],
+            Ty::Int,
+            Rvalue::Use(Operand::Constant(MirConstant::Int(1))),
+        );
+        let body_b = build_simple_body(
+            11,
+            "beta",
+            vec![],
+            Ty::Int,
+            Rvalue::Use(Operand::Constant(MirConstant::Int(2))),
+        );
+        let module = Module {
+            bodies: vec![body_a, body_b],
+        };
+        let mut spec = host_spec();
+        spec.module_name = "dwarf_multi_fn".to_string();
+        let result = emit(&module, &spec).expect("multi-fn emit");
+        let path = match result {
+            Artifact::Object(p) => p,
+            _ => panic!("expected Artifact::Object"),
+        };
+        assert!(
+            object_has_dwarf_sections(&path),
+            "multi-fn fixture: missing .debug_* sections"
+        );
+    }
+
+    #[test]
+    fn dwarf_drop_emitting_fn_still_validates() {
+        // A function that lowers a `Drop` terminator still emits
+        // well-formed DWARF (the Drop helper call gets a debug
+        // location like every other instruction).
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let locals = vec![
+            LocalDecl {
+                id: LocalId(0),
+                name: "_return".to_string(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0(),
+            },
+            LocalDecl {
+                id: LocalId(1),
+                name: "s".to_string(),
+                ty: Ty::Str,
+                mutable: false,
+                span: span0(),
+            },
+        ];
+        let block0 = MirBlock {
+            id: BlockId(0),
+            statements: vec![Statement {
+                kind: StatementKind::Assign {
+                    place: Place::local(LocalId(0)),
+                    rvalue: Rvalue::Use(Operand::Constant(MirConstant::Int(0))),
+                },
+                span: span0(),
+            }],
+            terminator: Terminator::Drop {
+                place: Place::local(LocalId(1)),
+                target: BlockId(1),
+            },
+            span: span0(),
+        };
+        let block1 = MirBlock {
+            id: BlockId(1),
+            statements: vec![],
+            terminator: Terminator::Return,
+            span: span0(),
+        };
+        let body = Body {
+            def_id: DefId(99),
+            name: "dwarf_drop_str".to_string(),
+            locals,
+            blocks: vec![block0, block1],
+            return_local: LocalId(0),
+            param_count: 1,
+            span: span0(),
+        };
+        let module = Module { bodies: vec![body] };
+        let mut spec = host_spec();
+        spec.module_name = "dwarf_drop".to_string();
+        let result = emit(&module, &spec).expect("drop fn emit");
+        let path = match result {
+            Artifact::Object(p) => p,
+            _ => panic!("expected Artifact::Object"),
+        };
+        assert!(
+            object_has_dwarf_sections(&path),
+            "drop-fn fixture: missing .debug_* sections"
+        );
+    }
+
+    #[test]
+    fn dwarf_o3_pipeline_preserves_dwarf() {
+        // §A3 follow-on: ensure the `-O3,Os` pipeline doesn't strip
+        // DWARF sections. Optimization passes consume but preserve
+        // debug-info metadata when emit-time `is_optimized` is true.
+        let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body = build_simple_body(
+            42,
+            "dwarf_opt_fn",
+            vec![Ty::Int, Ty::Int],
+            Ty::Int,
+            Rvalue::BinaryOp(
+                MirBinOp::Add,
+                Operand::Copy(Place::local(LocalId(1))),
+                Operand::Copy(Place::local(LocalId(2))),
+            ),
+        );
+        let module = Module { bodies: vec![body] };
+        let mut spec = host_spec();
+        spec.opt_level = OptLevel::SpeedAndSize;
+        spec.module_name = "dwarf_o3".to_string();
+        let result = emit(&module, &spec).expect("O3 emit");
+        let path = match result {
+            Artifact::Object(p) => p,
+            _ => panic!("expected Artifact::Object"),
+        };
+        assert!(
+            object_has_dwarf_sections(&path),
+            "O3 fixture: DWARF sections were stripped by the opt pipeline"
+        );
+    }
+
+    // =================================================================
+    // ADR-0058c §3.3 — LineMap helper unit tests
+    // =================================================================
+
+    #[test]
+    fn linemap_empty_returns_1_1() {
+        let lm = LineMap::empty();
+        assert_eq!(lm.line_column(0), (1, 1));
+        assert_eq!(lm.line_column(1234), (1, 1));
+    }
+
+    #[test]
+    fn linemap_ascii_lines() {
+        let lm = LineMap::from_source("ab\ncd\nef");
+        assert_eq!(lm.line_column(0), (1, 1));
+        assert_eq!(lm.line_column(1), (1, 2));
+        assert_eq!(lm.line_column(3), (2, 1));
+        assert_eq!(lm.line_column(6), (3, 1));
     }
 }

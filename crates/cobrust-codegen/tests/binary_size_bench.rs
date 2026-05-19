@@ -131,11 +131,21 @@ fn llvm_spec(name: &str, opt: OptLevel) -> TargetSpec {
         artifact: ArtifactKind::Object,
         output_dir: dir,
         module_name: name.to_string(),
+        source_path: None,
     }
 }
 
-/// Compile fixture at given opt level, return object-file size in bytes.
+/// Compile fixture at given opt level, return CODE size in bytes
+/// (sum of non-DWARF section sizes — `.debug_*` / `__debug_*` sections
+/// excluded).
+///
+/// ADR-0023 §A3 measures *code-size reduction* from O3 opt passes. After
+/// ADR-0058c added DWARF v5 emission, both O0 and O3 binaries carry
+/// ~equal `.debug_*` payloads which dominate the small machine-code
+/// delta and skew the O3/O0 ratio toward 1.0. Excluding debug sections
+/// preserves the wave-2 contract empirically.
 fn compile_and_size(fixture: &Fixture, opt: OptLevel) -> u64 {
+    use object::{Object, ObjectSection};
     let mir = lower_to_mir(fixture.source);
     let spec = llvm_spec(fixture.name, opt);
     let artifact = emit(&mir, spec)
@@ -143,9 +153,17 @@ fn compile_and_size(fixture: &Fixture, opt: OptLevel) -> u64 {
     let Artifact::Object(path) = artifact else {
         panic!("expected Object artifact for `{}`", fixture.name);
     };
-    let meta =
-        std::fs::metadata(&path).unwrap_or_else(|e| panic!("metadata {}: {}", path.display(), e));
-    meta.len()
+    let bytes = std::fs::read(&path)
+        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
+    let obj = object::File::parse(&*bytes)
+        .unwrap_or_else(|e| panic!("parse {}: {}", path.display(), e));
+    obj.sections()
+        .filter(|s| {
+            let n = s.name().unwrap_or("");
+            !(n.contains("debug_") || n.contains("__debug"))
+        })
+        .map(|s| s.size())
+        .sum()
 }
 
 /// Per-fixture: emit at O0 + O3, both succeed and produce non-empty
