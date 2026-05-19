@@ -200,20 +200,25 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
 - ✅ **Phase H FULL CLOSED** (2026-05-18) — self-host type-checker scoping + 226 cobrust-types-cb parity tests PASS on DG; `.cb` files are READ-ONLY pseudocode policy ratified (ADR-0055/a/b/c/d/e; Wave-2 canonicalization surfaces).
 - ✅ **Phase I FULL CLOSED** (2026-05-19) — Cranelift-JIT scaffold (`cobrust-cranelift-jit` crate, 12 unit tests) + TypeCheckCtx `Clone+Send` Arc-COW + Session + per-file invalidate (LSP unblocker) + REPL `fn` redefinition + per-symbol `invalidate_def` (ADR-0056a/b/c).
 - ✅ **Phase J wave-1 closed** (2026-05-19) — `cobrust-lsp` crate: `textDocument/publishDiagnostics` over stdio, 16 tests (incl. 5 insta snapshots), 42 `From` impls, dual-track docs (ADR-0057a). Wave-2 `didChange` + CodeAction (0057d) pending.
+- ✅ **Phase K FULL CLOSED** (2026-05-19) — 5 strands: 0058a LLVM IR emission + 0058b opt passes + multi-target + 0058c DWARF debug info + 0058d JIT/AOT lowering convergence + Strand #5 musl tier-1 static binary. ADR-0023 §A3 RESOLVED (toy-fixture qualified per F36). Pending: 0058e AOT unification + 50MB+ production bench.
+- ✅ **Phase L FULL CLOSED** (2026-05-19) — 3-wave debugger UX: 0059a lldb pretty-printers + 0059b cobrust-dap server (DAP protocol) + 0059c cobrust debug CLI (`cobrust debug`, `cobrust debug attach`). Note: runtime frame variable + Dict iteration + Option Adt DI queued wave-2+.
+- ✅ **Phase M closure** (2026-05-19) — 6 language-surface gaps: i32/i8 narrow-int literals, `-> None` return annotation, `&T` reference annotation, `[T; N]` array literal syntax, anonymous-struct OOS. Follow-ups queued: BinOp-IntN widening, array-indexing dynamic index, empty-dict K-flow.
+- ✅ **LC-100 真 100/100** — `examples/leetcode-stress/`: leetcode_corpus_e2e 12/0 + stress 100/0 (was 16/87 pre-session). Production-validated Cobrust source corpus.
 - ✅ **CLI tempdir RAII** — closes the Mac/DG `/tmp/cobrust-*` leak (235G temp-leak incident root cause); `tempfile::TempDir` RAII guarantees cleanup on panic / cancellation / signal.
 - ✅ **Bilingual README** — `README.zh.md` ships with full Chinese translation parity to `README.md` per CLAUDE.md §3 dual-track documentation mandate.
 - ✅ **Standard library** — io / collections / string / math / panic / env / fmt / iter + structured concurrency runtime (M13). AI-facing alpha: `cobrust.llm` / `.prompt` / `.tool` flat prelude fns (per [ADR-0049](docs/agent/adr/0049-alpha-honesty-and-onboarding-hardening.md) honesty hardening).
 - ✅ **Package format** — `cobrust.toml`, content-addressed registry, deterministic lockfile.
 - ✅ **AI translation pipeline** — production-validated on stateless + stateful tomli functions (real LLM, 12/12 + 14/14 strict deterministic over 5 runs). dateutil / msgpack: partial.
-- 🚧 **Tooling** — REPL JIT scaffold landed (Phase I); full REPL interactive loop pending. LSP `publishDiagnostics` live (Phase J wave-1); `didChange` + CodeAction pending (wave-2). No debugger (Phase L). No WASM target.
-- 🚧 **LLVM backend** — Phase K (queued; 3-4 weeks); current release builds use Cranelift.
-- 🚧 **Phase J wave-2+** — `didChange` snapshot reuse + CodeAction (ADR-0057d); ~1-2 weeks.
+- 🚧 **Tooling** — REPL JIT scaffold landed (Phase I); full REPL interactive loop pending. LSP `publishDiagnostics` live (Phase J wave-1); `didChange` + CodeAction pending (wave-2). Debugger: lldb pretty-printers + DAP server + `cobrust debug` CLI (Phase L wave-1 closed); runtime frame variable + Dict iteration + Option Adt DI queued wave-2+. No WASM target.
+- 🚧 **LLVM backend** — Phase K closed (LLVM IR + DWARF + JIT/AOT conv + musl tier-1); 0058e AOT unification + 50MB+ production bench pending.
+- 🚧 **Phase J wave-2+** — `didChange` snapshot reuse + CodeAction (ADR-0057d); pending.
+- 🚧 **Phase M follow-ups** — BinOp-IntN widening + dynamic-index Array (`#![forbid(unsafe_code)]` blocks GEP) + empty-dict K-flow.
 
-**What this means**: Cobrust is **mechanism-validated** for the language core + AI translation pipeline. **Phase G LLM-friendliness is fully closed in v0.3.0**. **Phases H and I are fully closed**; Phase J wave-1 (LSP diagnostics) is closed. Phase J wave-2 + Phase K (LLVM + Drop + IR opt + JIT/AOT conv + xarch) are next.
+**What this means**: Cobrust is **mechanism-validated** for language core + AI translation pipeline + debugger UX. **Phases G/H/I/J wave-1/K/L/M are fully closed**; LC-100 stress corpus is 100/100 production-validated. Phase J wave-2, 0058e AOT unification, dynamic-index Array, and 50MB+ production bench are next.
 
 **§2.5 constitutional pillar** ([CLAUDE.md §2.5](CLAUDE.md) + [ADR-0051](docs/agent/adr/0051-llm-first-design-principle.md)): "Cobrust is not the language most pleasant for humans to write — it is the language LLM agents write correctly on the first try." See [`docs/agent/skills/cobrust-first-try.md`](docs/agent/skills/cobrust-first-try.md) for the agent-facing onboarding skill.
 
-**What's next** (queue order): Phase J wave-2 (`didChange` + CodeAction) → Phase K codegen hardening (LLVM backend, Drop schedule, MIR-level IR opt, JIT/AOT lowering convergence, cross-compile matrix expansion) → outstanding tasks #26 / #30 / #52.
+**What's next** (queue order): 0058e AOT unification → 50MB+ production bench → dynamic-index Array (Phase M follow-up) → Phase J wave-2 (`didChange` + CodeAction).
 
 See the [post-Phase-G roadmap (ADR-0054)](docs/agent/adr/0054-post-phase-g-roadmap.md) for full detail.
 
@@ -269,10 +274,14 @@ Full diagram: [docs/human/en/architecture.md](docs/human/en/architecture.md).
 |---|---|---|---|
 | ~~**H**~~ ✅ | Self-host type checker scoping; 226 parity tests; `.cb` READ-ONLY policy | closed 2026-05-18 | medium |
 | ~~**I**~~ ✅ | Cranelift-JIT scaffold + Session Clone+Send + REPL fn-redef | closed 2026-05-19 | medium |
-| **J** wave-1 ✅ | `publishDiagnostics` LSP server (cobrust-lsp, 16 tests, 42 From impls) | closed 2026-05-19 | **highest** |
-| **J** wave-2+ | `didChange` snapshot reuse + CodeAction (ADR-0057d) | ~1-2 weeks | **highest** |
-| **K** | LLVM Backend + Drop schedule + MIR IR opt + JIT/AOT conv + xarch | ~3-4 weeks | neutral |
-| **L** | Debugger (DWARF from K + breakpoint runtime + REPL integration) | ~1 week | low |
+| ~~**J**~~ wave-1 ✅ | `publishDiagnostics` LSP server (cobrust-lsp, 16 tests, 42 From impls) | closed 2026-05-19 | **highest** |
+| ~~**K**~~ ✅ | LLVM IR + DWARF + opt passes + multi-target + JIT/AOT conv + musl tier-1 | closed 2026-05-19 | neutral |
+| ~~**L**~~ ✅ wave-1 | lldb pretty-printers + cobrust-dap server + cobrust debug CLI | closed 2026-05-19 | low |
+| ~~**M**~~ ✅ | 6 language-surface gaps (i32/i8, None-return, &T, [T;N], anon-struct OOS) + LC-100 100/100 | closed 2026-05-19 | **highest** |
+| **J** wave-2+ | `didChange` snapshot reuse + CodeAction (ADR-0057d) | pending | **highest** |
+| **0058e** | AOT unification + 50MB+ production bench | pending | neutral |
+| **M follow-ups** | BinOp-IntN widening + dynamic-index Array + empty-dict K-flow | pending | high |
+| **L** wave-2+ | Runtime frame variable + Dict iteration + Option Adt DI | pending | low |
 
 §2.5 ROI rerank explanation: J is highest because in-editor LLM agents (Cursor / Continue / Cody) read LSP diagnostics + suggestions directly — ADR-0052b's structured `suggestion` field is the precise payload Phase J wires into `Diagnostic.relatedInformation` + `CodeAction.title`.
 
