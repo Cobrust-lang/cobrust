@@ -94,6 +94,7 @@
 // stricter alignment is satisfied; clippy can't see that.
 #![allow(clippy::cast_ptr_alignment)]
 
+pub mod array;
 pub mod collections;
 pub mod env;
 pub mod fmt;
