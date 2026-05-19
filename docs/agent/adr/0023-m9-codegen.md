@@ -249,7 +249,11 @@ median size reduction ≥ 30%. The sample programs use only
 the M9-supported subset of forms (no print, no f-string, no
 collections; M10/M11 will widen).
 
-**Status: RESOLVED at HEAD `72f4d27` (Phase K wave-2 / ADR-0058b).**
+**Status: TOY-FIXTURE RESOLVED at HEAD `72f4d27` (Phase K wave-2 / ADR-0058b §11.1).**
+
+Empirical median 0.584 measured on 5 small fixtures (hello 872B / fizzbuzz 1408B / fib 1192B / dot_product 1056B / nested_branch 1200B). All fixtures O0 binary ≤ 1408 bytes; LLVM compresses tiny binaries asymmetrically well vs production-scale workloads.
+
+Production-scale (50MB+ binary) validation PENDING — queued post-Phase-K alongside realistic benchmark harness (Phase K+ ADR placeholder). Until that lands, §A3 should be considered TOY-FIXTURE-RESOLVED only. Honesty-amend per F36 retroactive audit 2026-05-19 (memory `feedback_fixture_name_vs_behavior_drift.md`).
 
 The empirical close uses an LLVM-only 5-fixture corpus per
 ADR-0058b §A3 (refining the original Cranelift-vs-LLVM framing into

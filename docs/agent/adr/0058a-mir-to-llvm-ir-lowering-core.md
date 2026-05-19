@@ -418,3 +418,19 @@ runtime helpers to link, then opt can measure size).
   `~/.local/lib/{libz,libzstd}.so` symlinks + `RUSTFLAGS="-L ..."`.
 
 — P10 dispatcher post-DEV ratification, 2026-05-19
+
+## §15 Language-surface gap queue (F36-driven, 2026-05-19)
+
+Per F36 retroactive audit (memory `feedback_fixture_name_vs_behavior_drift.md`), 6 source-level shapes promised by original ADR-0058a fixture names are unrepresentable in current Cobrust language surface. Fixtures renamed per F36 rule + gaps queued:
+
+1. **`i32`** narrow-int type — Cobrust `Ty::Int = i64` only. Adding requires new AST `TypeKind::IntN(width)` + type-check narrowing rules + codegen path. Queued post-Phase-K.
+2. **`i8`** narrow-int type — same as #1.
+3. **`None` keyword as return type** — parser KwNone rejection in return-type position; codegen maps Ty::None → i64 per ADR-0058a §14.1 fallback. Source-side syntax `-> None` needs parser allowance + may collide with `def f(): pass` implicit-none idiom; design pending.
+4. **Anonymous struct literal `struct{i64,i64}`** — likely won't add (use tuple/record); explicitly out-of-scope but documented for clarity.
+5. **`[T; N]` fixed-size array TypeKind** — already in 0058a Wave-1 `#[ignore]` queue at `llvm_type_08_array_i64`.
+6. **`&T` in type-annotation position** — already in 0058a Wave-1 `#[ignore]` queue at `llvm_operand_06_deref_ptr`.
+
+Tracked across:
+- 4 fixture rename comments in `codegen_diff_corpus.rs` (F36-amend tag)
+- 2 #[ignore] fixtures in `codegen_diff_corpus.rs` (cobrust source syntax gap)
+- This §15 section as canonical roster

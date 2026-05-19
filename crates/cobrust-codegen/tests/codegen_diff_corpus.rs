@@ -440,8 +440,9 @@ fn llvm_type_01_i64() {
     llvm_compile_ok("llvm_type01", "fn f(x: i64) -> i64:\n    return x\n");
 }
 
+// F36-amend 2026-05-19: original "i32" claim unrepresentable; tests i64 baseline; i32 narrow-int queued
 #[test]
-fn llvm_type_02_i32() {
+fn llvm_type_02_i64_baseline() {
     // Cobrust source type universe has Ty::Int (i64 width); i32/i8
     // narrowing is IR-internal and not exposed at source level (ADR-0006).
     // Fixture verifies the i64 FunctionType path (same LLVM emit route as
@@ -453,8 +454,9 @@ fn llvm_type_02_i32() {
     );
 }
 
+// F36-amend 2026-05-19: original "i8" unrepresentable; tests i64 passthrough; i8 narrow-int queued
 #[test]
-fn llvm_type_03_i8() {
+fn llvm_type_03_i64_passthrough() {
     // Cobrust source type universe has Ty::Int (i64); i8 narrowing is
     // IR-internal. Fixture exercises LLVM i64 passthrough (same emit path).
     #[cfg(feature = "llvm")]
@@ -478,8 +480,9 @@ fn llvm_type_05_f64() {
     );
 }
 
+// F36-amend 2026-05-19: original "void" unrepresentable (Cobrust None vs void); tests -> i64 baseline; void-return queued
 #[test]
-fn llvm_type_06_void_return() {
+fn llvm_type_06_int_return_baseline() {
     // Cobrust source: `None` is a keyword (KwNone), not an Ident, so
     // `-> None` is rejected by `parse_type_atom`'s `expect_ident`.
     // Implicit-void source: omit return type annotation; MIR lowers to
@@ -511,8 +514,9 @@ fn llvm_type_08_array_i64() {
     );
 }
 
+// F36-amend 2026-05-19: original "struct" unrepresentable; tests tuple(i64,i64); anonymous-struct-literal queued
 #[test]
-fn llvm_type_09_struct_two_i64() {
+fn llvm_type_09_tuple_two_i64() {
     // Ty::Tuple(i64, i64) → ctx.struct_type(&[i64, i64], false)
     // Tuple integer field access via `.0` requires a numeric literal after
     // Dot, but `parse_postfix` calls `expect_ident` which rejects integer
@@ -683,8 +687,9 @@ fn llvm_terminator_01_return_i64() {
     llvm_compile_ok("llvm_term01", "fn f() -> i64:\n    return 7\n");
 }
 
+// F36-amend 2026-05-19: original "return_void" unrepresentable (Ty::None → i64 fallback, not void); tests -> i64 baseline; void-return queued
 #[test]
-fn llvm_terminator_02_return_void() {
+fn llvm_terminator_02_return_int_baseline() {
     // Terminator::Return(None) → builder.build_return(None)
     // Cobrust source: `None` is KwNone, not an Ident, so `-> None` is
     // rejected by parse_type_atom. Implicit-void source omits return type;
