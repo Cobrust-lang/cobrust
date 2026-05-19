@@ -1557,4 +1557,95 @@ mod tests {
         let result = emit(&module, &spec);
         assert!(result.is_ok(), "drop_str emit failed: {:?}", result.err());
     }
+
+    // =================================================================
+    // ADR-0058b §3.2 + §3.4 — opt pipeline + multi-target dispatch
+    // =================================================================
+
+    /// ADR-0058b §3.2: OptLevel → PassBuilder pipeline string mapping.
+    #[test]
+    fn pass_pipeline_mapping_matches_spec() {
+        assert!(pass_pipeline_for(OptLevel::None).is_none());
+        assert_eq!(pass_pipeline_for(OptLevel::Speed), Some("default<O2>"));
+        assert_eq!(
+            pass_pipeline_for(OptLevel::SpeedAndSize),
+            Some("default<O3>,default<Os>")
+        );
+    }
+
+    /// ADR-0058b §3.4: four tier-1 triples are enumerated in the binding
+    /// contract.
+    #[test]
+    fn tier1_triple_matrix_has_four_entries() {
+        let triples = supported_tier1_triples();
+        assert_eq!(triples.len(), 4, "tier-1 matrix is ADR-0046 + Strand #5");
+        assert!(triples.contains(&"aarch64-apple-darwin"));
+        assert!(triples.contains(&"aarch64-unknown-linux-gnu"));
+        assert!(triples.contains(&"x86_64-unknown-linux-gnu"));
+        assert!(triples.contains(&"x86_64-unknown-linux-musl"));
+    }
+
+    /// ADR-0058b §3.4: every tier-1 triple can be parsed by `target-lexicon`
+    /// and round-trips through `Triple::host()`-style construction. This
+    /// does NOT require backend availability — `Target::from_triple` is
+    /// guarded behind the runtime LLVM-18 backend presence and is exercised
+    /// at object emission time by the diff corpus.
+    #[test]
+    fn tier1_triples_parse_via_target_lexicon() {
+        use std::str::FromStr;
+        for triple_str in supported_tier1_triples() {
+            let parsed = target_lexicon::Triple::from_str(triple_str)
+                .unwrap_or_else(|e| panic!("triple `{triple_str}` failed to parse: {e}"));
+            assert_eq!(parsed.to_string(), *triple_str);
+        }
+    }
+
+    /// ADR-0058b §3.2: `OptLevel::Speed` emit runs without error on a small
+    /// fixture. This validates that `default<O2>` pipeline is accepted by
+    /// inkwell's `run_passes`.
+    #[test]
+    fn smoke_opt_speed_pipeline() {
+        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let body = build_simple_body(
+            10,
+            "opt_speed",
+            vec![],
+            Ty::Int,
+            Rvalue::Use(Operand::Constant(MirConstant::Int(7))),
+        );
+        let module = Module { bodies: vec![body] };
+        let mut spec = host_spec();
+        spec.opt_level = OptLevel::Speed;
+        spec.module_name = "opt_speed".to_string();
+        let result = emit(&module, &spec);
+        assert!(
+            result.is_ok(),
+            "OptLevel::Speed emit failed: {:?}",
+            result.err()
+        );
+    }
+
+    /// ADR-0058b §3.2 + §A3: `OptLevel::SpeedAndSize` runs the size-overlay
+    /// pipeline.
+    #[test]
+    fn smoke_opt_speed_and_size_pipeline() {
+        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let body = build_simple_body(
+            11,
+            "opt_sized",
+            vec![],
+            Ty::Int,
+            Rvalue::Use(Operand::Constant(MirConstant::Int(11))),
+        );
+        let module = Module { bodies: vec![body] };
+        let mut spec = host_spec();
+        spec.opt_level = OptLevel::SpeedAndSize;
+        spec.module_name = "opt_sized".to_string();
+        let result = emit(&module, &spec);
+        assert!(
+            result.is_ok(),
+            "OptLevel::SpeedAndSize emit failed: {:?}",
+            result.err()
+        );
+    }
 }
