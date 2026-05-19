@@ -409,8 +409,7 @@ pub fn emit_multi_version_dispatch<'ctx>(
                 builder.build_return(None).map_err(map_builder_err)?;
             } else {
                 let ret_val = call
-                    .try_as_basic_value()
-                    .left()
+                    .try_as_basic_value().basic()
                     .ok_or_else(|| CodegenError::LlvmError(
                         format!("Tier1 dispatch wrapper for `{base_name}`: call has no return value for non-void fn"),
                     ))?;
@@ -462,8 +461,7 @@ pub fn emit_multi_version_dispatch<'ctx>(
             let avx512_result = builder
                 .build_call(detect_avx512, &[], "avx512_check")
                 .map_err(map_builder_err)?
-                .try_as_basic_value()
-                .left()
+                .try_as_basic_value().basic()
                 .ok_or_else(|| CodegenError::LlvmError("avx512 detect call".into()))?
                 .into_int_value();
             let zero_i32 = i32_ty.const_zero();
@@ -496,7 +494,7 @@ pub fn emit_multi_version_dispatch<'ctx>(
             if fn_type.get_return_type().is_none() {
                 builder.build_return(None).map_err(map_builder_err)?;
             } else {
-                let rv = v3_call.try_as_basic_value().left().ok_or_else(|| {
+                let rv = v3_call.try_as_basic_value().basic().ok_or_else(|| {
                     CodegenError::LlvmError(format!("v3 call no retval for {base_name}"))
                 })?;
                 builder.build_return(Some(&rv)).map_err(map_builder_err)?;
@@ -507,8 +505,7 @@ pub fn emit_multi_version_dispatch<'ctx>(
             let avx2_result = builder
                 .build_call(detect_avx2, &[], "avx2_check")
                 .map_err(map_builder_err)?
-                .try_as_basic_value()
-                .left()
+                .try_as_basic_value().basic()
                 .ok_or_else(|| CodegenError::LlvmError("avx2 detect call".into()))?
                 .into_int_value();
             let avx2_cond = builder
@@ -534,7 +531,7 @@ pub fn emit_multi_version_dispatch<'ctx>(
             if fn_type.get_return_type().is_none() {
                 builder.build_return(None).map_err(map_builder_err)?;
             } else {
-                let rv = v2_call.try_as_basic_value().left().ok_or_else(|| {
+                let rv = v2_call.try_as_basic_value().basic().ok_or_else(|| {
                     CodegenError::LlvmError(format!("v2 call no retval for {base_name}"))
                 })?;
                 builder.build_return(Some(&rv)).map_err(map_builder_err)?;
@@ -556,7 +553,7 @@ pub fn emit_multi_version_dispatch<'ctx>(
             if fn_type.get_return_type().is_none() {
                 builder.build_return(None).map_err(map_builder_err)?;
             } else {
-                let rv = v1_call.try_as_basic_value().left().ok_or_else(|| {
+                let rv = v1_call.try_as_basic_value().basic().ok_or_else(|| {
                     CodegenError::LlvmError(format!("v1 call no retval for {base_name}"))
                 })?;
                 builder.build_return(Some(&rv)).map_err(map_builder_err)?;
