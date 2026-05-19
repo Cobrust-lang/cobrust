@@ -4,10 +4,14 @@ adr_id: 0046
 title: "release.yml asset consolidation + tier-1 platform contract"
 status: accepted
 date: 2026-05-11
-last_verified_commit: 03c70f2
+last_verified_commit: 50fb111
 supersedes: []
 superseded_by: []
 relates_to: [adr:0044, finding:m10-sha-pin-hallucination, finding:f19]
+amendments:
+  - date: 2026-05-19
+    ref: "Phase K Strand #5"
+    summary: "Promote x86_64-unknown-linux-musl to tier-1; defer x86_64-pc-windows-msvc to ADR-0058b followup (Gate 8 audit decision ae2316f1c51dbd6be)"
 ---
 
 # ADR-0046: release.yml asset consolidation + tier-1 platform contract
@@ -100,10 +104,18 @@ Adopt **Option C**. Add a tier-1 contract comment block to the top of
 v0.1.2+:
 
 **Tier-1 (must build, must appear in release notes, release-readiness agent
-must curl-verify all three):**
+must curl-verify all four):**
 - `aarch64-apple-darwin` — macOS arm64 (Apple Silicon)
 - `aarch64-unknown-linux-gnu` — Linux arm64 (cross-compiled via `cross`)
-- `x86_64-unknown-linux-gnu` — Linux x86_64
+- `x86_64-unknown-linux-gnu` — Linux x86_64 (glibc dynamic)
+- `x86_64-unknown-linux-musl` — Linux x86_64 **static** binary (musl libc, no glibc
+  dependency; runs on Alpine, distroless, minimal containers; promoted Phase K Strand #5)
+
+  Build method: `ubuntu-latest` runner + `apt-get install -y musl-tools` +
+  `rustup target add x86_64-unknown-linux-musl` +
+  `cargo build --release --locked -p cobrust-cli --target x86_64-unknown-linux-musl`.
+  No `cross` required — musl-tools provides the necessary cross-linker on the
+  ubuntu-latest runner natively.
 
 **Tier-2 (best-effort, `continue-on-error: true`, no release-readiness gate):**
 - none currently
@@ -111,22 +123,38 @@ must curl-verify all three):**
 **Queued (documented intent, not yet built; available via
 `cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli`):**
 - `x86_64-apple-darwin` — macOS x86_64 (Intel; available via `cargo install --git`)
-- `windows-*` — Windows x86_64 (MSVC or GNU; deferred to Phase F.2.x)
+- `x86_64-pc-windows-msvc` — Windows x86_64 MSVC; **DEFERRED to ADR-0058b followup**.
+  Gate 8 audit (ae2316f1c51dbd6be) determined musl is the smaller, higher-value
+  increment; Windows MSVC promotion blocked on stable Windows runner + test suite.
+  Previous status: best-effort in `build-best-effort` job. New status: queued
+  (removed from best-effort matrix in Phase K Strand #5 — see release.yml §"Build
+  best-effort targets" comment).
 
 ### YAML matrix alignment
 
-`release.yml` build-tier1 matrix at v0.1.2 HEAD (`9caef99`) matches the
-above tier-1 contract:
+`release.yml` build-tier1 matrix at v0.1.2 HEAD (`9caef99`) matched the
+prior 3-target tier-1 contract:
 ```
 - aarch64-apple-darwin   os: macos-latest
 - aarch64-unknown-linux-gnu  os: ubuntu-latest  use_cross: true
 - x86_64-unknown-linux-gnu   os: ubuntu-latest
 ```
 
-The best-effort job (`build-best-effort`) currently carries
-`x86_64-pc-windows-msvc`; its `continue-on-error: true` semantics are
-preserved and documented under "queued" above (Windows target is best-effort
-until a Windows runner is stable).
+**Phase K Strand #5 amendment (HEAD `50fb111`)** — tier-1 matrix expanded to 4
+targets. `release.yml` `build-tier1` job now includes:
+```
+- aarch64-apple-darwin          os: macos-latest          use_cross: false
+- aarch64-unknown-linux-gnu     os: ubuntu-latest         use_cross: true
+- x86_64-unknown-linux-gnu      os: ubuntu-latest         use_cross: false
+- x86_64-unknown-linux-musl     os: ubuntu-latest         use_cross: false
+  install_musl_tools: true
+```
+
+The `build-best-effort` job previously carried `x86_64-pc-windows-msvc`
+with `continue-on-error: true`. Per Gate 8 audit decision, Windows MSVC is
+**removed from best-effort** (it was not providing a verified artifact) and
+re-classified as "queued" pending ADR-0058b. The `build-best-effort` job
+remains in `release.yml` as a skeleton for future tier-2 promotions.
 
 ## Consequences
 
@@ -166,6 +194,62 @@ until a Windows runner is stable).
   with `continue-on-error: true`. ADR-0046 documents it as "queued" because
   the binary is not advertised in the release notes body. This is the correct
   state until a stable Windows runner + test suite lands (Phase F.2.x).
+
+## Amendment — Phase K Strand #5: x86_64-unknown-linux-musl tier-1 promotion
+
+**Date:** 2026-05-19  
+**Audit ref:** Gate 8 ae2316f1c51dbd6be  
+**Pre-state:** main HEAD `50fb111` (Phase K Strand #4 closed, ADR-0058d)
+
+### Rationale
+
+Per Gate 8 audit decision, `x86_64-unknown-linux-musl` is a smaller, higher-value
+increment than `x86_64-pc-windows-msvc` for immediate tier-1 promotion:
+
+- **Static binary** — zero glibc dependency; single binary that runs on any
+  Linux distribution, Alpine containers, distroless images, scratch-based deployments.
+- **Build simplicity** — `musl-tools` apt package + `rustup target add` is sufficient;
+  no need for `cross` or a Windows runner. The build fits natively in `ubuntu-latest`.
+- **Container / CI ecosystem** — Alpine-based Docker images (e.g. `rust:alpine`,
+  `alpine:latest`) are the dominant minimal-footprint pattern in 2026; a static musl
+  binary is the correct artifact for this audience.
+- **Cargo.toml compatibility** — no workspace dependency blocks musl: `reqwest` uses
+  `rustls-tls` (not native-tls), `tokio` is pure-Rust, all workspace deps are
+  musl-compatible. No `[target.cfg(not(target_env="musl"))`.unwrap()]` exclusions needed.
+
+### Windows MSVC deferral (ADSR-0058b followup)
+
+`x86_64-pc-windows-msvc` is **deferred** to ADR-0058b (Phase K Strand #5b or later).
+Blockers:
+1. Windows runner stability — `windows-latest` in GitHub Actions occasionally flakes
+   on Rust workspace builds with multiple crates.
+2. Test suite parity — no CI verification that the full `cargo test --workspace` passes
+   on Windows MSVC.
+3. Binary size / linking — MSVC linker produces `.pdb` files; packaging convention
+   differs from the Unix tar.gz pattern (`.zip` is the Windows norm).
+
+These are not blocking musl. They are tracked under ADR-0058b (separate sub-ADR).
+
+### Tier-1 matrix: was 3, now 4
+
+| # | Target | Before | After |
+|---|---|---|---|
+| 1 | `aarch64-apple-darwin` | tier-1 | tier-1 (unchanged) |
+| 2 | `aarch64-unknown-linux-gnu` | tier-1 | tier-1 (unchanged) |
+| 3 | `x86_64-unknown-linux-gnu` | tier-1 | tier-1 (unchanged) |
+| 4 | `x86_64-unknown-linux-musl` | queued | **tier-1** (promoted) |
+| — | `x86_64-pc-windows-msvc` | best-effort | queued (demoted, pending ADR-0058b) |
+
+### Release-readiness agent update
+
+ADR-0045 `curl × 3` gate becomes `curl × 4`. The release-readiness agent must
+verify all 4 tier-1 URLs for any tag ≥ the first tag after Phase K Strand #5
+lands. Example curl for the musl target:
+
+```bash
+curl -fsSL -o /dev/null -w "HTTP %{http_code} x86_64-unknown-linux-musl\n" \
+  https://github.com/Cobrust-lang/cobrust/releases/download/v0.X.Y/cobrust-v0.X.Y-x86_64-unknown-linux-musl.tar.gz
+```
 
 ## Evidence
 
