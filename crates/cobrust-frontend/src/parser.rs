@@ -1878,6 +1878,68 @@ impl<'a> Parser<'a> {
 
     fn parse_type_atom(&mut self) -> Result<Type, ParseError> {
         let start = self.current_span();
+        // ADR-0060b §3.1 — `None` keyword as a named type. The
+        // `KwNone` token (Python's `None` literal) is accepted in
+        // type-annotation position and resolves to `Ty::None` via
+        // `lower_named_type("None")`. Implicit-None idiom
+        // (`def f(): pass`, no annotation) is unaffected — that
+        // path doesn't enter `parse_type_atom`.
+        if matches!(self.peek_kind(), TokenKind::KwNone) {
+            let span = self.peek().span;
+            self.bump();
+            return Ok(Type {
+                kind: TypeKind::Name(vec!["None".to_string()]),
+                span,
+            });
+        }
+        // ADR-0060b §3.2 — `&T` immutable shared borrow type. The
+        // expression-position `&` form is ADR-0052a Wave-1; this
+        // adds the type-annotation companion. `&&T` is parser-legal
+        // but currently fails at use-site type-check (no nested-Ref
+        // call-site coercion in Wave-2; deferred).
+        if self.eat(&TokenKind::Amp) {
+            let inner = self.parse_type_atom()?;
+            let span = start.merge(inner.span);
+            return Ok(Type {
+                kind: TypeKind::Ref(Box::new(inner)),
+                span,
+            });
+        }
+        // ADR-0060b §3.3 — `[T; N]` fixed-size array type. Length
+        // is parsed as a non-negative integer literal at wave-2
+        // (no const-expr arithmetic). Empty arrays (`[T; 0]`) are
+        // permitted at parse time; codegen handles them as zero-
+        // sized.
+        if self.eat(&TokenKind::LBracket) {
+            let elem = self.parse_type()?;
+            self.expect(&TokenKind::Semicolon)?;
+            let len_tok = self.peek().clone();
+            let len: usize = match &len_tok.kind {
+                TokenKind::Int(s) => s.parse::<usize>().map_err(|_| ParseError::Syntax {
+                    message: format!(
+                        "array length must be a non-negative integer literal, got `{s}`"
+                    ),
+                    span: len_tok.span,
+                })?,
+                _ => {
+                    return Err(ParseError::Syntax {
+                        message: "array type `[T; N]` expects an integer length after `;`"
+                            .into(),
+                        span: len_tok.span,
+                    });
+                }
+            };
+            self.bump(); // consume the Int token
+            let end = self.current_span();
+            self.expect(&TokenKind::RBracket)?;
+            return Ok(Type {
+                kind: TypeKind::Array {
+                    elem: Box::new(elem),
+                    len,
+                },
+                span: start.merge(end),
+            });
+        }
         // `(A, B)` tuple type or `(A) -> B` fn type.
         if self.eat(&TokenKind::LParen) {
             let mut params = Vec::new();

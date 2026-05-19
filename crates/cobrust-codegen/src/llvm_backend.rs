@@ -487,6 +487,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
     fn di_type_for(&self, ty: &Ty) -> DIBasicType<'ctx> {
         let key = match ty {
             Ty::Int => "Int",
+            // ADR-0060a — narrow ints collapse to the same DW_ATE_signed
+            // basic-type category as `Ty::Int`. Width disambiguation lives
+            // in LLVM-IR's iN type — DI tracks signedness, not width here.
+            Ty::IntN(_) => "Int",
             Ty::Float | Ty::Imag => "Float",
             Ty::Bool => "Bool",
             Ty::Str => "Str",
@@ -494,6 +498,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
             Ty::Dict(_, _) => "Dict",
             Ty::Set(_) => "Set",
             Ty::Tuple(_) => "Tuple",
+            // ADR-0060b — array DI collapses to opaque-ptr (no array DI
+            // wave-2; lldb can introspect via the LLVM type).
+            Ty::Array(_, _) => "Ptr",
             _ => "Ptr",
         };
         self.di_basic_types[key]
@@ -578,6 +585,27 @@ impl<'ctx> LlvmEmitter<'ctx> {
             Ty::Float | Ty::Imag => self.ctx.f64_type().as_basic_type_enum(),
             Ty::None => self.ctx.i64_type().as_basic_type_enum(),
             Ty::Ref(inner) => self.lower_ty(inner),
+            // ADR-0060a — narrow-int types lower to their native LLVM
+            // width via inkwell's `iN_type()` constructors.
+            Ty::IntN(8) => self.ctx.i8_type().as_basic_type_enum(),
+            Ty::IntN(16) => self.ctx.i16_type().as_basic_type_enum(),
+            Ty::IntN(32) => self.ctx.i32_type().as_basic_type_enum(),
+            // Unknown narrow width — fall back to i64.
+            Ty::IntN(_) => self.ctx.i64_type().as_basic_type_enum(),
+            // ADR-0060b — `[T; N]` arrays lower to `[N x T]` at LLVM
+            // type level. The MIR `Place::index` projection materializes
+            // GEPs against this in-memory layout. Wave-2 supports
+            // element types {Int / IntN / Float / Bool / opaque-ptr}.
+            Ty::Array(elem, n) => {
+                let elem_ty = self.lower_ty(elem);
+                let n32 = u32::try_from(*n).unwrap_or(u32::MAX);
+                match elem_ty {
+                    BasicTypeEnum::IntType(it) => it.array_type(n32).as_basic_type_enum(),
+                    BasicTypeEnum::FloatType(ft) => ft.array_type(n32).as_basic_type_enum(),
+                    BasicTypeEnum::PointerType(pt) => pt.array_type(n32).as_basic_type_enum(),
+                    _ => self.opaque_ptr_ty.as_basic_type_enum(),
+                }
+            }
             // Owning + container + reference / tuple / record / ADT all
             // lower to opaque pointer at wave-1. Element type stays at
             // MIR level — recovered from per-Place / per-Operand context.

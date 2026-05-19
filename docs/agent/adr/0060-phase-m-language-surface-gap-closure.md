@@ -2,9 +2,10 @@
 doc_kind: adr
 adr_id: 0060
 title: "Phase M frame — language-surface gap closure (5 syntax gaps + 1 OOS)"
-status: proposed
+status: accepted
 date: 2026-05-19
-last_verified_commit: b6d536a
+ratified_at: 2026-05-19
+last_verified_commit: 2d84de5
 supersedes: []
 superseded_by: []
 relates_to: [adr:0058a, adr:0006, adr:0052a, adr:0023]

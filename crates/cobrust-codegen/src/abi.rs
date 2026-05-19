@@ -43,6 +43,11 @@ pub fn cranelift_scalar_ty(ty: &Ty) -> Option<cranelift_codegen::ir::Type> {
         Ty::Float => Some(types::F64),
         Ty::Imag => Some(types::F64), // imaginary stored as a single f64 lane
         Ty::None => Some(types::I8),  // unit-shaped placeholder
+        // ADR-0060a — narrow ints map directly to Cranelift's IR widths.
+        Ty::IntN(8) => Some(types::I8),
+        Ty::IntN(16) => Some(types::I16),
+        Ty::IntN(32) => Some(types::I32),
+        Ty::IntN(_) => Some(types::I64),
         // Owning + reference + record / tuple / list / dict types are
         // passed by pointer at M9 — return None to signal "indirect".
         _ => None,
@@ -53,7 +58,10 @@ pub fn cranelift_scalar_ty(ty: &Ty) -> Option<cranelift_codegen::ir::Type> {
 /// be passed by value without ownership transfer.
 #[must_use]
 pub fn is_copy_ty(ty: &Ty) -> bool {
-    matches!(ty, Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None)
+    matches!(
+        ty,
+        Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::IntN(_)
+    )
 }
 
 /// Pointer-width type for the given target. Always `I64` on the

@@ -809,6 +809,19 @@ impl Writer {
                 }
                 self.push(")");
             }
+            // ADR-0060b — `&T` annotation print.
+            TypeKind::Ref(inner) => {
+                self.push("&");
+                self.write_type(inner);
+            }
+            // ADR-0060b — `[T; N]` annotation print.
+            TypeKind::Array { elem, len } => {
+                self.push("[");
+                self.write_type(elem);
+                self.push("; ");
+                self.push(&len.to_string());
+                self.push("]");
+            }
         }
     }
 

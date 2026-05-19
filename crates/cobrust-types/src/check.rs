@@ -344,6 +344,8 @@ fn type_refs_any(ty: &Ty, removed: &HashSet<u32>) -> bool {
         }
         Ty::Tuple(items) => items.iter().any(|t| type_refs_any(t, removed)),
         Ty::List(t) | Ty::Set(t) | Ty::Ref(t) => type_refs_any(t, removed),
+        // ADR-0060b — Array recurses into its elem for alias cycles.
+        Ty::Array(t, _) => type_refs_any(t, removed),
         Ty::Dict(k, v) => type_refs_any(k, removed) || type_refs_any(v, removed),
         Ty::Record(r) => r.fields.iter().any(|(_, t)| type_refs_any(t, removed)),
         Ty::Fn(fn_ty) => {
@@ -2270,6 +2272,10 @@ impl Ctx {
                 }
                 self.validate_hashable_dict(return_type)
             }
+            // ADR-0060b — Ref + Array recurse into their inner annotation
+            // for nested Dict[K,V] hashability checks.
+            TypeKind::Ref(inner) => self.validate_hashable_dict(inner),
+            TypeKind::Array { elem, .. } => self.validate_hashable_dict(elem),
         }
     }
 
@@ -2307,6 +2313,10 @@ impl Ctx {
                 return_ty: Box::new(self.lower_type(return_type)),
             }),
             TypeKind::Tuple(items) => Ty::Tuple(items.iter().map(|t| self.lower_type(t)).collect()),
+            // ADR-0060b — `&T` annotation lowers to `Ty::Ref`.
+            TypeKind::Ref(inner) => Ty::Ref(Box::new(self.lower_type(inner))),
+            // ADR-0060b — `[T; N]` annotation lowers to `Ty::Array`.
+            TypeKind::Array { elem, len } => Ty::Array(Box::new(self.lower_type(elem)), *len),
         }
     }
 
@@ -2317,6 +2327,10 @@ impl Ctx {
         match s {
             "bool" => Ty::Bool,
             "i64" | "int" => Ty::Int,
+            // ADR-0060a — narrow-int named types.
+            "i8" => Ty::IntN(8),
+            "i16" => Ty::IntN(16),
+            "i32" => Ty::IntN(32),
             "f64" | "float" => Ty::Float,
             "str" => Ty::Str,
             "bytes" => Ty::Bytes,

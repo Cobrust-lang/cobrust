@@ -258,6 +258,10 @@ pub enum TypeKind {
         return_type: Box<Type>,
     },
     Tuple(Vec<Type>),
+    /// ADR-0060b — `&T` immutable shared borrow type annotation.
+    Ref(Box<Type>),
+    /// ADR-0060b — fixed-size array type `[T; N]`.
+    Array { elem: Box<Type>, len: usize },
 }
 
 // =====================================================================

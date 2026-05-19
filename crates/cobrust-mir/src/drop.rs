@@ -147,6 +147,8 @@ fn is_copy(ty: &Ty) -> bool {
         // (list[str] → drop each element first) lives in codegen's
         // Terminator::Drop arm dispatch on `body.locals[place.local.0].ty`.
         Ty::Bool | Ty::Int | Ty::Float | Ty::Imag | Ty::None | Ty::Never
+        // ADR-0060a — narrow ints are scalar Copy (same as `Ty::Int`).
+        | Ty::IntN(_)
     )
 }
 
