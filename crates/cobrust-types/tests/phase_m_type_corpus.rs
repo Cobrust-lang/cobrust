@@ -51,34 +51,41 @@ fn pm_a02_i32_passthrough_well_typed() {
 }
 
 #[test]
-#[ignore = "ADR-0060a wave-1 follow-up: BinOp lowering pins arithmetic to Ty::Int; \
-            extending to Ty::IntN(_) arms is the cast-surface sub-sprint per \
-            finding:adr0060a-binop-on-intn-narrow-int-debt"]
 fn pm_a03_i8_add_well_typed() {
-    // i8 + i8 via Ty::IntN(8) arithmetic. Today the BinOp synthesis
-    // path in check.rs unifies operands with Ty::Int (the canonical
-    // integer); IntN-on-IntN arithmetic needs an additive arm or an
-    // explicit cast surface (`i8(...)` / `i32(...)`). Deferred to the
-    // ADR-0060a cast-surface sub-sprint; this test is the §15 closure
-    // anchor for that follow-up.
+    // i8 + i8 via Ty::IntN(8) arithmetic. Phase M follow-up closure
+    // 2026-05-19: `synth_bin` arithmetic family now whitelists
+    // `Ty::IntN(_)` as a result type, so `Ty::IntN(8) + Ty::IntN(8)`
+    // resolves to `Ty::IntN(8)` (per ADR-0060a §3.2 unification rule).
     well_typed("fn f(a: i8, b: i8) -> i8:\n    return (a + b)\n");
 }
 
 #[test]
-#[ignore = "ADR-0060a wave-1 follow-up: integer-literal default Ty is Int (i64); \
-            assigning to a narrow-int annotation requires literal-fit guard + \
-            implicit-narrowing-on-literal, both deferred to the cast-surface \
-            sub-sprint per finding:adr0060a-binop-on-intn-narrow-int-debt"]
 fn pm_a04_intn_is_copy() {
     // Per ADR-0060a §3.5 + drop.rs is_copy: IntN is Copy. Calling f
     // twice with the same `let x: i32 = 0` must not flag UseAfterMove.
-    // Today integer-literal `0` synthesizes as Ty::Int and does not
-    // unify with `Ty::IntN(32)`. Same follow-up sub-sprint adds the
-    // literal-fit guard that ADR-0060a §3.6 specifies.
+    // Phase M follow-up closure 2026-05-19: integer-literal `0` now
+    // narrows to `Ty::IntN(32)` at the annotation site via the
+    // literal-narrowing coercion in `ItemKind::Let` / `StmtKind::Let`.
+    // The dedicated overflow diagnostic (§3.6) lands in a follow-up.
     well_typed(
         "fn f(x: i32) -> i32:\n    return x\n\
          fn main() -> i32:\n    let x: i32 = 0\n    let a: i32 = f(x)\n    let b: i32 = f(x)\n    return (a + b)\n",
     );
+}
+
+/// F34: phase_m_type_corpus::pm_a09_intn_negative_literal_narrows
+/// — sister to pm_a04; exercises the `Un::Neg + Lit::Int` literal
+/// shape that the closure must also recognise.
+#[test]
+fn pm_a09_intn_negative_literal_narrows() {
+    well_typed("fn f() -> i32:\n    let x: i32 = -5\n    return x\n");
+}
+
+/// F34: phase_m_type_corpus::pm_a10_intn_add_mul_chain
+/// — exercise the full arithmetic family (Add + Mul) on narrow ints.
+#[test]
+fn pm_a10_intn_add_mul_chain() {
+    well_typed("fn f(a: i32, b: i32) -> i32:\n    return (a * b + a)\n");
 }
 
 #[test]

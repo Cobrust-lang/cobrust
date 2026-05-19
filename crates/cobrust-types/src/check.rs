@@ -598,7 +598,23 @@ impl Ctx {
                 let bound_ty = match &b.annot {
                     Some(t) => {
                         let annot_ty = self.lower_type(t);
-                        unify(&annot_ty, &value_ty, &mut self.subst, b.span)?;
+                        // ADR-0060a finding-closure 2026-05-19: when
+                        // annotation is `Ty::IntN(_)` and the value
+                        // expression is a literal-like integer, narrow
+                        // the synthesised `Ty::Int` to the annotation
+                        // width instead of failing unification. The
+                        // dedicated overflow diagnostic (§3.6) lands
+                        // in a follow-up; today's happy path is the
+                        // `let x: i32 = 0` form.
+                        let coerced_value_ty = if matches!(annot_ty, Ty::IntN(_))
+                            && matches!(value_ty, Ty::Int)
+                            && is_literal_like_int(&b.value)
+                        {
+                            annot_ty.clone()
+                        } else {
+                            value_ty
+                        };
+                        unify(&annot_ty, &coerced_value_ty, &mut self.subst, b.span)?;
                         annot_ty
                     }
                     None => value_ty,
@@ -770,7 +786,18 @@ impl Ctx {
                 let bound_ty = match &b.annot {
                     Some(t) => {
                         let at = self.lower_type(t);
-                        unify(&at, &value_ty, &mut self.subst, b.span)?;
+                        // ADR-0060a finding-closure 2026-05-19: mirror
+                        // of the `ItemKind::Let` literal-narrowing —
+                        // `let x: i32 = 0` in function-body position.
+                        let coerced_value_ty = if matches!(at, Ty::IntN(_))
+                            && matches!(value_ty, Ty::Int)
+                            && is_literal_like_int(&b.value)
+                        {
+                            at.clone()
+                        } else {
+                            value_ty
+                        };
+                        unify(&at, &coerced_value_ty, &mut self.subst, b.span)?;
                         at
                     }
                     None => value_ty,
@@ -2087,7 +2114,14 @@ impl Ctx {
                 unify(&lt, &rt, &mut self.subst, span)?;
                 let resolved = self.subst.apply(&lt);
                 match resolved {
-                    Ty::Int | Ty::Float | Ty::Str | Ty::Var(_) => Ok(resolved),
+                    // ADR-0060a finding-closure 2026-05-19:
+                    // `finding:adr0060a-binop-on-intn-narrow-int-debt`.
+                    // Narrow-int operands stay narrow under arithmetic
+                    // — `Ty::IntN(w) + Ty::IntN(w) -> Ty::IntN(w)` per
+                    // ADR-0060a §3.2 unification rule. Codegen lowers
+                    // the BinOp at the narrow width directly (LLVM
+                    // `build_int_add` is width-polymorphic on iN).
+                    Ty::Int | Ty::Float | Ty::Str | Ty::IntN(_) | Ty::Var(_) => Ok(resolved),
                     other => Err(TypeError::TypeMismatch {
                         expected: Ty::Int,
                         actual: other,
@@ -2831,6 +2865,29 @@ fn is_list_polymorphic_intrinsic_name(name: &str) -> bool {
             // widening here allows any (K, V) shape AND any List elem.
             | "len"
     )
+}
+
+/// ADR-0060a finding-closure 2026-05-19:
+/// `finding:adr0060a-binop-on-intn-narrow-int-debt`.
+///
+/// Test whether the source-position expression of a `let x: i32 = E`
+/// statement is a "literal-like" integer that should narrow to the
+/// annotation's `Ty::IntN(_)`. The wave-1 ADR-0060a §3.6 specifies a
+/// dedicated overflow diagnostic (`TypeError::NarrowIntOverflow`); to
+/// keep the finding-closure scope minimal, this helper only declares
+/// the **shape** that triggers narrowing — overflow detection lands
+/// later via the dedicated diagnostic. Returns `true` for plain integer
+/// literals + their unary-negated forms (the two canonical literal
+/// shapes the parser emits today).
+fn is_literal_like_int(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Lit(Lit::Int(_)) => true,
+        ExprKind::Un {
+            op: UnaryOp::Neg,
+            operand,
+        } => matches!(&operand.kind, ExprKind::Lit(Lit::Int(_))),
+        _ => false,
+    }
 }
 
 /// ADR-0041 §H8: extract the integer value of an `Expr` that's a
