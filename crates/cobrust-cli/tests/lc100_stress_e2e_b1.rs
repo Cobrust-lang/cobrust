@@ -544,13 +544,14 @@ fn test_lc023_hashmap_majority_element() {
 
 // =====================================================================
 // LC-024 — Hash Map Group Anagrams
-// NOTE: RUNTIME-FAIL; see failure.md for root cause.
-// str_at on string-literal variables produces misaligned pointer;
-// list[str] not available for storing multiple input strings.
+// Resolved 2026-05-19; see
+// docs/agent/findings/lc024-already-passing-stale-ignore.md. The
+// upstream Pattern A `__cobrust_print_no_nl_lit` shim + codegen
+// `materialize_str_buffer` allocating real StringBuffers for literal
+// first-args closed the `str_at("literal", i)` misalignment path.
 // =====================================================================
 
 #[test]
-#[ignore = "LC-024 hashmap-group-anagrams: RUNTIME-FAIL; see failure.md (str_at on literal vars misaligned + missing list[str])"]
 fn test_lc024_hashmap_group_anagrams() {
     let out = build_and_run_stress(
         "024-hashmap-group-anagrams",

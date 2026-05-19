@@ -2,6 +2,20 @@
 
 ## Status
 
+RESOLVED (HEAD `8f63132`, 2026-05-19) — see
+`docs/agent/findings/lc024-already-passing-stale-ignore.md`. The
+upstream Pattern A `__cobrust_print_no_nl_lit` shim + codegen
+`materialize_str_buffer` allocating real StringBuffers for literal
+first-args together closed the misalignment path. lc024 produces
+byte-exact expected output for all three e2e assertion inputs.
+
+Below is the original failure-report content, preserved for
+historical traceability per F37 honest-debt (do not delete).
+
+---
+
+## Original status (e91caed and earlier)
+
 RUNTIME-FAIL
 
 ## Failing command
