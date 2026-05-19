@@ -171,3 +171,26 @@ let bad: i8 = 200  # TypeError::NarrowIntOverflow
 - ADR-0023 — Cranelift backend row extension
 - `cobrust-mir::lower.rs:1615` — existing cast surface
 - `cobrust-mir::drop.rs:149` — Copy fast-path
+
+## 8. Cascade addendum (2026-05-19 Phase M follow-up sprint)
+
+`finding:adr0060a-binop-on-intn-narrow-int-debt` RESOLVED at
+commit **2d20ae5**. Two minimal `cobrust-types/src/check.rs` edits:
+
+- `synth_bin` arithmetic family whitelists `Ty::IntN(_)` — narrow
+  ints stay narrow through Add/Sub/Mul/Div/FloorDiv/Mod/Pow/MatMul
+  per §3.2 unification rule. LLVM `build_int_add` handles the iN
+  width polymorphism at codegen.
+- `ItemKind::Let` + `StmtKind::Let` annotation sites pre-narrow
+  integer literals: when annot is `Ty::IntN(_)` and the value-expr
+  is `Lit::Int(_)` or `-Lit::Int(_)`, the synthesised `Ty::Int`
+  narrows before unify (the happy path of §3.6 without the dedicated
+  `TypeError::NarrowIntOverflow` diagnostic — that lands later).
+
+Tests un-ignored + PASS: `pm_a03_i8_add_well_typed`,
+`pm_a04_intn_is_copy`. Added: `pm_a09_intn_negative_literal_narrows`,
+`pm_a10_intn_add_mul_chain` (F34 closure anchors).
+
+§3.5 cast-surface (`i32(...)` / `i8(...)`) + §3.6 dedicated
+overflow diagnostic remain deferrable to a later wave (not blocked
+on this finding).

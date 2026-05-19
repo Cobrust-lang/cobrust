@@ -1,13 +1,41 @@
 ---
 doc_kind: finding
 finding_id: adr0060a-binop-on-intn-narrow-int-debt
-last_verified_commit: TBD
+last_verified_commit: 2d20ae5
 dependencies: [adr:0060a, adr:0006]
 discovered_by: P9 Phase M sprint 2026-05-19 — narrow-int corpus authoring (pm_a03 + pm_a04 ignore)
 severity: P2 (additive language-surface follow-up; non-blocking)
-status: open (deferred to ADR-0060a cast-surface sub-sprint)
+status: RESOLVED at 2d20ae5 (2026-05-19 Phase M follow-up sprint)
 related: [adr:0060a §3.3 §3.5 §3.6, adr:0006 §"Type universe"]
 ---
+
+## §0. Resolution (2026-05-19, commit 2d20ae5)
+
+Two minimal `cobrust-types/src/check.rs` edits closed this finding:
+
+1. **`synth_bin` arithmetic family whitelist** — added `Ty::IntN(_)`
+   to the result-type match arm (Add/Sub/Mul/Div/FloorDiv/Mod/Pow/MatMul).
+   `Ty::IntN(w) + Ty::IntN(w)` now resolves to `Ty::IntN(w)` per
+   ADR-0060a §3.2 unification rule. Codegen lowers the BinOp at the
+   narrow width directly (LLVM `build_int_add` is width-polymorphic
+   on iN).
+
+2. **`ItemKind::Let` + `StmtKind::Let` annotation sites pre-narrow
+   integer literals** — when the annotation is `Ty::IntN(_)` and the
+   value-expression is a literal-like integer (`Lit::Int(_)` or
+   `-Lit::Int(_)`), the synthesised `Ty::Int` narrows to the
+   annotation width before unify. The dedicated overflow diagnostic
+   (`TypeError::NarrowIntOverflow` per ADR-0060a §3.6) lands later
+   as a separate diagnostic-surface item.
+
+Test closure: `pm_a03_i8_add_well_typed` + `pm_a04_intn_is_copy`
+un-ignored + PASS. Added `pm_a09_intn_negative_literal_narrows` +
+`pm_a10_intn_add_mul_chain` as F34 closure anchors for the
+negative-literal + arithmetic-chain sub-cases.
+
+The `i32(...)` / `i8(...)` source-level cast surface + the
+`TypeError::NarrowIntOverflow` literal-fit diagnostic remain
+ADR-0060a §3.5 §3.6 deferrable items (separate from this finding).
 
 # Finding: BinOp + integer-literal arithmetic does not yet route through `Ty::IntN(_)`
 

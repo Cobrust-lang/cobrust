@@ -239,3 +239,40 @@ fn oob() -> i64:
 - ADR-0052a Wave-1 §4.1 — expr-position `&` (paired with annot `&T`)
 - `cobrust-types::check.rs:2323` — `None` lookup site
 - `cobrust-codegen::llvm_backend.rs:580` — `Ty::Ref` transparency
+
+## 8. Cascade addendum (2026-05-19 Phase M follow-up sprint)
+
+Two paired findings RESOLVED:
+
+- `finding:adr0060b-array-indexing-mir-projection-debt` RESOLVED at
+  commit **981b577**:
+  - `synth_expr` IndexAccess arm now allow-lists `Ty::Array(elem, n)`;
+    literal-OOB index fires `TypeError::NotIndexable` per §3.4
+    compile-time-catch.
+  - `llvm_backend.rs::lower_place_load` emits safe
+    `build_extract_value` aggregate-extract for constant-int Array
+    index reads (the `forbid(unsafe_code)` crate-level lint blocks
+    the inkwell GEP; aggregate-extract requires a compile-time `u32`
+    index, which matches the §3.4 literal-OOB compile-time-catch
+    surface naturally).
+  - F36 rename `llvm_type_08_array_i64` -> `llvm_type_08_array_i64_index`
+    + added `llvm_type_08b_array_index_literal_oob`.
+  - F37 honest scope: dynamic-index Array reads (non-literal `xs[i]`
+    where `i` is an Ident or BinOp) still fall through to the
+    wave-1 stub-load and are tracked under "ADR-0060b dynamic-array-index
+    queue (deferred to wave-3 cast-surface sub-sprint)". The wave-2
+    closure here surfaces the §3.4 compile-time-catch payoff exactly.
+
+- `finding:adr0060b-empty-dict-annotation-k-flow-debt` RESOLVED at
+  commit **83ee812**:
+  - `StmtKind::Let` annotation site now calls `validate_hashable_dict`
+    on the HIR annotation tree before evaluating the RHS, mirroring
+    the existing `ItemKind::Let` site. The root-cause turned out to
+    be a one-arm symmetry bug between item-level and stmt-level let;
+    the empty `{}` literal masking the Array K via fresh-var
+    substitution is no longer reachable because the validation runs
+    pre-RHS.
+
+Test closures: `pm_b06_array_not_hashable` un-ignored + PASS; added
+`pm_b07_array_not_hashable_empty_dict_module_level` (F34 regression
+guard rail for the symmetric item-level path).
