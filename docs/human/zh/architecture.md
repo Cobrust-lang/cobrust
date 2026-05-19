@@ -1593,6 +1593,20 @@ Phase K wave-2（`crates/cobrust-codegen/src/llvm_backend.rs` post-IR-constructi
 
 非目标（按 ADR-0058b §4 延后）：DWARF 发射 —— **wave-3 已交付（ADR-0058c），见下一节**；JIT opt-level 变更（cobrust-jit `lower.rs` 不变）、交叉链接、新 MIR feature、超出 `default<O*>` 默认的手动 PassBuilder flag 调优。
 
+#### Tier 1 运行时多版本分派（ADR-0058b 扩展，numerical-compute-hardware-tiering.md §Tier1）
+
+Tier 1 是 `cobrust build --release` 的默认行为（§2.5 LLM 优先：LLM 用户无需指定 target-CPU）。同一个 `.so` / 对象文件内嵌每个顶层函数的三个特化版本，一个薄分派器在启动时选取最快的可用版本。
+
+- **三个 ISA 变体（仅 x86_64；aarch64 的 NEON 恒开启）**：
+  - `<fn>_v1_sse2` — `target-features=+sse2`（x86_64-v1 基线，始终可用）
+  - `<fn>_v2_avx2` — `target-features=+avx2,+fma`（Haswell 起的现代 x86）
+  - `<fn>_v3_avx512` — `target-features=+avx512f,+avx512dq`（服务器 / Ice Lake+）
+- **分派器 `<fn>`** — 调用 `__cobrust_cpu_avx512_supported()` 和 `__cobrust_cpu_avx2_supported()`（C 辅助函数，位于 `runtime/cpu_features.c`，使用 `__builtin_cpu_supports`；无 unsafe Rust，`#![forbid(unsafe_code)]` 不受影响），跳转到最快可用变体。
+- **二进制大小开销** — 约为单变体对象的 1.5–2×，与策略文档记录的 Tier 1 预期开销一致。
+- **CLI 标志** — `cobrust build --enable-runtime-dispatch=false` 可关闭，适用于需要最小二进制体积或针对已知 ISA 的场景。默认：`--release` 时为 `true`，debug 构建时为 `false`。
+- **aarch64** — `emit_multi_version_dispatch` 在 aarch64 上为空操作（NEON 在 armv8-a 中是强制的；SVE 多版本化延至未来 sprint，见策略文档 §NEON/SVE）。
+- **实现** — `llvm_backend::emit_multi_version_dispatch` + `Tier1Variant` 枚举 + `triple_is_x86_64` 辅助函数；接入 `emit()` 中 DWARF finalize 之后、PassBuilder 之前，确保三个版本都经过优化。
+
 #### Phase K wave-3 —— LLVM DWARF 调试信息发射（ADR-0058c）
 
 Phase K wave-3（`crates/cobrust-codegen/src/llvm_backend.rs` 内接入 `DebugInfoBuilder` + 新建 `tests/dwarf_lldb_smoke.rs`）将 DWARF v5 发射接入 LLVM 后端，产出 Phase L Debugger（ADR-0059）通过标准 `lldb` / `gdb` / VS Code DAP 消费的产物。

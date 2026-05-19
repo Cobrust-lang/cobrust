@@ -1703,6 +1703,20 @@ Phase K wave-2 (`crates/cobrust-codegen/src/llvm_backend.rs` post-IR-constructio
 
 Non-goals (deferred per ADR-0058b §4): DWARF emission — **DELIVERED at wave-3 (ADR-0058c), see next section**; JIT opt-level changes (cobrust-jit `lower.rs` unchanged), cross-link, new MIR features, manual PassBuilder flag tuning beyond `default<O*>` defaults.
 
+#### Tier 1 runtime-dispatch multi-versioning (ADR-0058b extension, numerical-compute-hardware-tiering.md §Tier1)
+
+Tier 1 is the `cobrust build --release` default per the hardware-tiering strategy document (§2.5 LLM-first: LLM users don't need to specify target-CPU). The same `.so` / object embeds three specialisations of every top-level function, and a thin dispatcher selects the fastest available version at startup.
+
+- **Three ISA variants per function** (x86_64 only; aarch64 is NEON-always-on):
+  - `<fn>_v1_sse2` — `target-features=+sse2` (x86_64-v1 baseline, always-on)
+  - `<fn>_v2_avx2` — `target-features=+avx2,+fma` (modern x86 since Haswell)
+  - `<fn>_v3_avx512` — `target-features=+avx512f,+avx512dq` (server / Ice Lake+)
+- **Dispatcher `<fn>`** — calls `__cobrust_cpu_avx512_supported()` then `__cobrust_cpu_avx2_supported()` (C helpers in `runtime/cpu_features.c` using `__builtin_cpu_supports`; no unsafe Rust, `#![forbid(unsafe_code)]` unaffected) and branches to the fastest available variant.
+- **Binary-size overhead** — approximately 1.5–2× the single-variant object due to three function copies. This is the expected Tier 1 overhead documented in the strategy.
+- **CLI flag** — `cobrust build --enable-runtime-dispatch=false` disables for users who need minimal binary size or are targeting a known ISA. Default: `true` on `--release`, `false` on debug builds.
+- **aarch64** — `emit_multi_version_dispatch` is a no-op on aarch64 (NEON is mandatory in armv8-a; SVE multi-versioning deferred to a future sprint per strategy doc §NEON/SVE).
+- **Implementation** — `llvm_backend::emit_multi_version_dispatch` + `Tier1Variant` enum + `triple_is_x86_64` helper; wired into `emit()` post-DWARF-finalize, pre-PassBuilder so all three versions are optimised.
+
 #### Phase K wave-3 — LLVM DWARF debug-info emission (ADR-0058c)
 
 Phase K wave-3 (`crates/cobrust-codegen/src/llvm_backend.rs` `DebugInfoBuilder` integration + new `tests/dwarf_lldb_smoke.rs`) wires DWARF v5 emission into the LLVM backend, producing the artifact Phase L Debugger (ADR-0059) consumes via standard `lldb` / `gdb` / VS Code DAP.
