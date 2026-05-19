@@ -487,6 +487,23 @@ fn insert_rust_into_arena(rust: &Ty, arena: &mut TyArena) -> TyId {
             let id = insert_rust_into_arena(inner, arena);
             TyEntry::Ref(id)
         }
+        // ADR-0060b + ADR-0060c additions: IntN width tier + fixed-size
+        // Array. The cb arena mirror is a Phase H proof artifact +
+        // training-data corpus per ADR-0055 §1.1. These new Rust-side
+        // variants are NOT yet mirrored in `TyEntry` because the Phase H
+        // parity corpus is locked at the M2 + ADR-0041 surface; extending
+        // it requires a coordinated `0055f` follow-up that adds the
+        // arena-form mirror variants + extends the Wave-2 + Wave-3 parity
+        // corpus. Until that lands, refuse to insert these Ty variants —
+        // they are out-of-scope for the current cb mirror contract.
+        Ty::IntN(_) => panic!(
+            "cb mirror does not yet support Ty::IntN (ADR-0060c, post-Phase-H; \
+             track via finding `cb-mirror-intn-array-port`)"
+        ),
+        Ty::Array(_, _) => panic!(
+            "cb mirror does not yet support Ty::Array (ADR-0060b, post-Phase-H; \
+             track via finding `cb-mirror-intn-array-port`)"
+        ),
     };
     arena.insert(entry)
 }
