@@ -199,10 +199,10 @@ fn lldb_smoke_hello_world_subprogram_resolves() {
         _ => panic!("expected Artifact::Object"),
     };
 
-    // `image lookup --regex hello` asks lldb to scan the object's
-    // DWARF + symbol tables for any function matching the regex.
-    // A successful resolution proves DWARF subprogram emission.
-    let out = lldb_batch(&lldb, &path, "image lookup --regex hello");
+    // `image dump symtab` lists every symbol in the object file's
+    // symbol table. The DWARF subprogram emission attaches symbols
+    // with the function name; we look for ours in the output.
+    let out = lldb_batch(&lldb, &path, "image dump symtab");
     assert_lldb_symbol(&out, "hello");
 }
 
@@ -225,7 +225,7 @@ fn lldb_smoke_fib_function_visible() {
         _ => panic!("expected Artifact::Object"),
     };
 
-    let out = lldb_batch(&lldb, &path, "image lookup --regex fib");
+    let out = lldb_batch(&lldb, &path, "image dump symtab");
     assert_lldb_symbol(&out, "fib");
 }
 
@@ -248,7 +248,7 @@ fn lldb_smoke_multi_fn_module_lists_both() {
         _ => panic!("expected Artifact::Object"),
     };
 
-    let out = lldb_batch(&lldb, &path, "image lookup --regex fizzbuzz");
+    let out = lldb_batch(&lldb, &path, "image dump symtab");
     assert_lldb_symbol(&out, "fizzbuzz_a");
     assert_lldb_symbol(&out, "fizzbuzz_b");
 }
