@@ -10,16 +10,16 @@
 fn words_match(s: str, pos: i64, word: str, wlen: i64) -> i64:
     let k: i64 = 0
     while k < wlen:
-        let sc = str_at(s, pos + k)
-        let wc = str_at(word, k)
-        if str_eq(sc, wc) == 0:
+        let sc = str_at(&s, pos + k)
+        let wc = str_at(&word, k)
+        if str_eq(&sc, wc) == 0:
             return 0
         k = k + 1
     return 1
 
 fn main() -> i64:
     let s = input("")
-    let slen = str_len(s)
+    let slen = str_len(&s)
     let w = parse_int(input(""))
     let wstrs_0 = input("")
     let wstrs_1 = input("")
@@ -30,11 +30,11 @@ fn main() -> i64:
     let actual_w = w
     if actual_w > 5:
         actual_w = 5
-    list_set(wlens, 0, str_len(wstrs_0))
-    list_set(wlens, 1, str_len(wstrs_1))
-    list_set(wlens, 2, str_len(wstrs_2))
-    list_set(wlens, 3, str_len(wstrs_3))
-    list_set(wlens, 4, str_len(wstrs_4))
+    list_set(wlens, 0, str_len(&wstrs_0))
+    list_set(wlens, 1, str_len(&wstrs_1))
+    list_set(wlens, 2, str_len(&wstrs_2))
+    list_set(wlens, 3, str_len(&wstrs_3))
+    list_set(wlens, 4, str_len(&wstrs_4))
     let dp = list_new(slen + 1)
     let i: i64 = 0
     while i <= slen:

@@ -6,15 +6,15 @@
 
 fn main() -> i64:
     let dims = input("")
-    let m = parse_int_tok(dims, 0)
-    let n = parse_int_tok(dims, 1)
+    let m = parse_int_tok(&dims, 0)
+    let n = parse_int_tok(&dims, 1)
     let cells = list_new(m * n)
     let r: i64 = 0
     while r < m:
         let rline = input("")
         let c: i64 = 0
         while c < n:
-            let v = parse_int_tok(rline, c)
+            let v = parse_int_tok(&rline, c)
             list_set(cells, r * n + c, v)
             c = c + 1
         r = r + 1

@@ -9,7 +9,7 @@ fn lower_bound(line: str, n: i64, target: i64) -> i64:
     let hi: i64 = n
     while lo < hi:
         let mid = lo + (hi - lo) / 2
-        if parse_int_tok(line, mid) < target:
+        if parse_int_tok(&line, mid) < target:
             lo = mid + 1
         else:
             hi = mid
@@ -20,7 +20,7 @@ fn upper_bound(line: str, n: i64, target: i64) -> i64:
     let hi: i64 = n
     while lo < hi:
         let mid = lo + (hi - lo) / 2
-        if parse_int_tok(line, mid) <= target:
+        if parse_int_tok(&line, mid) <= target:
             lo = mid + 1
         else:
             hi = mid
@@ -108,7 +108,7 @@ fn main() -> i64:
         print_int_no_nl(-1)
         print("")
         return 0
-    if parse_int_tok(line, first) != target:
+    if parse_int_tok(&line, first) != target:
         print_int_no_nl(-1)
         print_no_nl(" ")
         print_int_no_nl(-1)

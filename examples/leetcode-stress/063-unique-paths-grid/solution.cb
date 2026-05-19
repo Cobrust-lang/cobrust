@@ -6,8 +6,8 @@
 
 fn main() -> i64:
     let line = input("")
-    let m = parse_int_tok(line, 0)
-    let n = parse_int_tok(line, 1)
+    let m = parse_int_tok(&line, 0)
+    let n = parse_int_tok(&line, 1)
     let dp = list_new(n)
     let j: i64 = 0
     while j < n:

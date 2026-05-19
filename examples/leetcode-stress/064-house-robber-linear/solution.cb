@@ -8,10 +8,10 @@ fn main() -> i64:
     let n = parse_int(input(""))
     let line = input("")
     if n == 1:
-        print_int(parse_int_tok(line, 0))
+        print_int(parse_int_tok(&line, 0))
         return 0
-    let prev2 = parse_int_tok(line, 0)
-    let v1 = parse_int_tok(line, 1)
+    let prev2 = parse_int_tok(&line, 0)
+    let v1 = parse_int_tok(&line, 1)
     let prev1: i64 = 0
     if v1 > prev2:
         prev1 = v1
@@ -19,7 +19,7 @@ fn main() -> i64:
         prev1 = prev2
     let i: i64 = 2
     while i < n:
-        let vi = parse_int_tok(line, i)
+        let vi = parse_int_tok(&line, i)
         let cand = prev2 + vi
         let cur: i64 = 0
         if cand > prev1:

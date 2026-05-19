@@ -11,11 +11,11 @@ fn main() -> i64:
     let hi: i64 = n - 1
     while lo < hi:
         let mid = lo + (hi - lo) / 2
-        let mv = parse_int_tok(line, mid)
-        let hv = parse_int_tok(line, hi)
+        let mv = parse_int_tok(&line, mid)
+        let hv = parse_int_tok(&line, hi)
         if mv > hv:
             lo = mid + 1
         else:
             hi = mid
-    print_int(parse_int_tok(line, lo))
+    print_int(parse_int_tok(&line, lo))
     return 0
