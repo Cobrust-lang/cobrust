@@ -8,19 +8,23 @@
 //! `(*const u8, usize)` C-ABI call (per ADR-0025 §"Codegen amendments"
 //! Constant::Str row + ADR-0025 §"Runtime ABI").
 //!
-//! ADR-0030 §Decision step 5 adds `print_int(n: i64)` — any
-//! `print_int(<i64-operand>)` callsite is rewritten to
+//! ADR-0030 §Decision step 5 adds `print(n: i64)` — any
+//! `print(<i64-operand>)` callsite is rewritten to
 //! `__cobrust_println_int`, which takes the integer directly. This
 //! avoids the string-formatting overhead for the bare-number FizzBuzz
 //! `else` branch.
 //!
+//! ADR-0064: `print_int` removed from PRELUDE source-face. The single
+//! polymorphic `print(x)` now dispatches to `__cobrust_println_int`,
+//! `__cobrust_println_bool`, or `__cobrust_println_float` at MIR time
+//! based on the resolved type of the argument (from `LocalDecl.ty`).
+//!
 //! The diagnostic `IntrinsicError::M10ScopeNarrowed` from M10 is
 //! deleted; M11 accepts any string-literal argument. Non-literal
-//! arguments to `print` (other than via `print_int`) emit
-//! `IntrinsicError::PrintArgUnsupported` — they are M11.x scope (full
-//! HIR-tier dispatch through stdlib FnRefs).
+//! arguments to `print` route to the polymorphic dispatch path (ADR-0064)
+//! or `IntrinsicError::PrintArgUnsupported` for unresolvable shapes.
 //!
-//! Body removal: the prelude's `print` / `print_int` stub Bodies are
+//! Body removal: the prelude's `print` stub Body is
 //! dropped from the MIR after the rewrite. Per ADR-0024 §"Consequences"
 //! the M8 drop schedule for an unmoved `s: str` parameter is unsound;
 //! ADR-0025 §"Drop-schedule fix" notes that the drop_eligible filter
@@ -32,6 +36,7 @@
 use std::collections::HashSet;
 
 use cobrust_mir::{Constant, Module, Operand, Terminator};
+use cobrust_types::Ty;
 
 /// Runtime symbol providing `__cobrust_println(*const u8, usize)`.
 /// Per ADR-0025 §"Runtime ABI" this is exported by `cobrust-stdlib`.
@@ -40,6 +45,16 @@ pub const PRINTLN_RUNTIME_SYMBOL: &str = "__cobrust_println";
 /// Runtime symbol providing `__cobrust_println_int(i64)`.
 /// Per ADR-0030 §Decision step 5 — exported by `cobrust-stdlib`.
 pub const PRINTLN_INT_RUNTIME_SYMBOL: &str = "__cobrust_println_int";
+
+/// Runtime symbol providing `__cobrust_println_bool(i64)`.
+/// ADR-0064 §3.3 — polymorphic `print(b: bool)` path.
+/// Prints `True` or `False` + newline. Exported by `cobrust-stdlib`.
+pub const PRINTLN_BOOL_RUNTIME_SYMBOL: &str = "__cobrust_println_bool";
+
+/// Runtime symbol providing `__cobrust_println_float(f64)`.
+/// ADR-0064 §3.3 — polymorphic `print(f: f64)` path.
+/// Prints the float value + newline. Exported by `cobrust-stdlib`.
+pub const PRINTLN_FLOAT_RUNTIME_SYMBOL: &str = "__cobrust_println_float";
 
 /// Runtime symbol providing `__cobrust_println_str_buf(*mut Str)` —
 /// ADR-0044 W2 Phase 2 fallback for `print(s)` when `s` is a non-
@@ -294,8 +309,8 @@ pub enum IntrinsicError {
 /// be redirected to runtime symbols and (b) drop the stub bodies after
 /// rewrite (since no callsite references them anymore).
 struct IntrinsicDefIds {
+    // ADR-0064: `print_int` removed from PRELUDE source-face; field dropped.
     print: HashSet<u32>,
-    print_int: HashSet<u32>,
     /// ADR-0044 W2 Phase 2.
     input: HashSet<u32>,
     /// ADR-0044 W2 Phase 2.
@@ -432,7 +447,6 @@ impl IntrinsicDefIds {
     fn all(&self) -> HashSet<u32> {
         let mut out = HashSet::new();
         out.extend(&self.print);
-        out.extend(&self.print_int);
         out.extend(&self.input);
         out.extend(&self.input_no_prompt);
         out.extend(&self.read_line);
@@ -502,7 +516,6 @@ impl IntrinsicDefIds {
 
     fn is_empty(&self) -> bool {
         self.print.is_empty()
-            && self.print_int.is_empty()
             && self.input.is_empty()
             && self.input_no_prompt.is_empty()
             && self.read_line.is_empty()
@@ -569,12 +582,12 @@ impl IntrinsicDefIds {
 }
 
 /// Identify Body def_ids whose name matches a recognized prelude
-/// intrinsic — print / print_int (M11) + ADR-0044 W2 Phase 2 stdin/argv
-/// surface (input / input_no_prompt / read_line / argv).
+/// intrinsic — print (M11, ADR-0064 polymorphic) + ADR-0044 W2 Phase 2
+/// stdin/argv surface (input / input_no_prompt / read_line / argv).
+/// ADR-0064: `print_int` removed from PRELUDE; no longer collected here.
 fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
     let mut ids = IntrinsicDefIds {
         print: HashSet::new(),
-        print_int: HashSet::new(),
         input: HashSet::new(),
         input_no_prompt: HashSet::new(),
         read_line: HashSet::new(),
@@ -658,9 +671,8 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
             "print" => {
                 ids.print.insert(body.def_id.0);
             }
-            "print_int" => {
-                ids.print_int.insert(body.def_id.0);
-            }
+            // ADR-0064: "print_int" removed from PRELUDE source-face;
+            // no longer collected as a PRELUDE intrinsic.
             "input" => {
                 ids.input.insert(body.def_id.0);
             }
@@ -908,19 +920,19 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
     ids
 }
 
-/// Rewrite every prelude-intrinsic callsite (print / print_int +
+/// Rewrite every prelude-intrinsic callsite (polymorphic `print` +
 /// ADR-0044 W2 Phase 2 input / input_no_prompt / read_line / argv) to
 /// the appropriate runtime helpers.
 ///
+/// ADR-0064: `print(x)` is now a polymorphic intrinsic. Dispatch is
+/// based on the resolved type of `x` (via `LocalDecl.ty` or literal
+/// operand variant):
 /// - `print(s: str)` — string-literal arg → `__cobrust_println(ptr, len)`
 ///   via the M11 extern_funcs path.
-/// - `print(s: str)` — non-literal arg → `__cobrust_println(ptr, len)`
-///   with the runtime-helper `(ptr, len)` expansion handled by codegen
-///   (heap-buffer pointer source → buffer ptr/len extracted at runtime).
-///   *(Today this path errors via `PrintArgUnsupported`; future work
-///   adds a `__cobrust_println_str_buf` shim or amends codegen's
-///   runtime_funcs lowering.)*
-/// - `print_int(n: i64)` → `__cobrust_println_int(n)`.
+/// - `print(s: str)` — non-literal str arg → `__cobrust_println_str_buf`.
+/// - `print(n: i64)` → `__cobrust_println_int(n)`.
+/// - `print(b: bool)` → `__cobrust_println_bool(b)`.
+/// - `print(f: f64)` → `__cobrust_println_float(f)`.
 /// - `input(prompt: str)` — string-literal prompt →
 ///   `__cobrust_input(prompt_ptr, prompt_len)`.
 /// - `input(prompt: str)` — non-literal prompt buffer →
@@ -939,8 +951,9 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
 /// to satisfy clippy::items_after_statements.
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum Kind {
+    // ADR-0064: PrintInt removed — print_int no longer a PRELUDE intrinsic;
+    // polymorphic print(x) dispatch handles Int/Bool/Float via Kind::Print.
     Print,
-    PrintInt,
     Input,
     InputNoPrompt,
     ReadLine,
@@ -1011,7 +1024,7 @@ enum Kind {
 fn kind_for_name(name: &str) -> Option<Kind> {
     match name {
         "print" => Some(Kind::Print),
-        "print_int" => Some(Kind::PrintInt),
+        // ADR-0064: "print_int" removed from source-face PRELUDE.
         "input" => Some(Kind::Input),
         "input_no_prompt" => Some(Kind::InputNoPrompt),
         "read_line" => Some(Kind::ReadLine),
@@ -1084,8 +1097,6 @@ fn kind_for_name(name: &str) -> Option<Kind> {
 fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
     if ids.print.contains(&id) {
         Some(Kind::Print)
-    } else if ids.print_int.contains(&id) {
-        Some(Kind::PrintInt)
     } else if ids.input.contains(&id) {
         Some(Kind::Input)
     } else if ids.input_no_prompt.contains(&id) {
@@ -1252,8 +1263,15 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
         // variant callees that point at a prelude stub by name).
         let mut local_name: std::collections::HashMap<u32, String> =
             std::collections::HashMap::new();
+        // ADR-0064 §3.3: local-id → Ty map for polymorphic `print` dispatch.
+        // When `print(x)` is called with a Place operand, we need to know
+        // `x`'s resolved type to pick `__cobrust_println_int` vs
+        // `__cobrust_println_str_buf` etc.
+        let mut local_ty: std::collections::HashMap<u32, Ty> =
+            std::collections::HashMap::new();
         for decl in &body.locals {
             local_name.insert(decl.id.0, decl.name.clone());
+            local_ty.insert(decl.id.0, decl.ty.clone());
         }
 
         for block in &mut body.blocks {
@@ -1279,18 +1297,69 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
 
             match kind {
                 Kind::Print => {
+                    // ADR-0064 §3.2-§3.3 — polymorphic `print(x)` dispatch.
+                    // Monomorphize at MIR time based on the resolved type of
+                    // the single argument:
+                    //   Int / Constant::Int  → __cobrust_println_int
+                    //   Bool / Constant::Bool → __cobrust_println_bool
+                    //   Float / Constant::Float → __cobrust_println_float
+                    //   Str (literal)         → __cobrust_println (ptr, len)
+                    //   Str (heap buffer)     → __cobrust_println_str_buf
+                    // The PRELUDE stub declares `print(s: str)` but is
+                    // registered as a polymorphic intrinsic (ADR-0064 §3.2)
+                    // so the type-checker accepts any single-arg call. By the
+                    // time the rewrite pass runs, the arg operand / local type
+                    // carries the concrete resolved type.
                     if args.len() != 1 {
                         return Err(IntrinsicError::PrintArgUnsupported {
                             found: format!("{} arg(s)", args.len()),
                         });
                     }
-                    match &args[0] {
-                        Operand::Constant(Constant::Str(s)) => {
-                            // Literal path: codegen materialises (ptr, len)
-                            // from the runtime helper's `(*const u8, usize)`
-                            // signature via the runtime_funcs single-Str-to-
-                            // (ptr, len) expansion (ADR-0044 codegen
-                            // amendment).
+                    // Determine the effective type of the argument.
+                    let effective_ty: Option<&Ty> = match &args[0] {
+                        Operand::Constant(Constant::Int(_)) => Some(&Ty::Int),
+                        Operand::Constant(Constant::Bool(_)) => Some(&Ty::Bool),
+                        Operand::Constant(Constant::Float(_)) => Some(&Ty::Float),
+                        Operand::Constant(Constant::Str(_)) => None, // handled below
+                        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                            local_ty.get(&p.local.0)
+                        }
+                        _ => None,
+                    };
+                    match (effective_ty, &args[0]) {
+                        // Int path — Place or Constant::Int
+                        (Some(Ty::Int), _) | (None, Operand::Constant(Constant::Int(_))) => {
+                            let int_arg = args[0].clone();
+                            *func = Operand::Constant(Constant::Str(
+                                PRINTLN_INT_RUNTIME_SYMBOL.to_string(),
+                            ));
+                            args.clear();
+                            args.push(int_arg);
+                        }
+                        // Bool path — Place or Constant::Bool
+                        (Some(Ty::Bool), _) | (None, Operand::Constant(Constant::Bool(_))) => {
+                            let bool_arg = args[0].clone();
+                            *func = Operand::Constant(Constant::Str(
+                                PRINTLN_BOOL_RUNTIME_SYMBOL.to_string(),
+                            ));
+                            args.clear();
+                            args.push(bool_arg);
+                        }
+                        // Float path — Place or Constant::Float
+                        (Some(Ty::Float), _)
+                        | (None, Operand::Constant(Constant::Float(_))) => {
+                            let float_arg = args[0].clone();
+                            *func = Operand::Constant(Constant::Str(
+                                PRINTLN_FLOAT_RUNTIME_SYMBOL.to_string(),
+                            ));
+                            args.clear();
+                            args.push(float_arg);
+                        }
+                        // Str literal path: codegen materialises (ptr, len)
+                        // from the runtime helper's `(*const u8, usize)`
+                        // signature via the runtime_funcs single-Str-to-
+                        // (ptr, len) expansion (ADR-0044 codegen amendment).
+                        (_, Operand::Constant(Constant::Str(s))) => {
                             let lit = s.clone();
                             *func = Operand::Constant(Constant::Str(
                                 PRINTLN_RUNTIME_SYMBOL.to_string(),
@@ -1298,10 +1367,10 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                             args.clear();
                             args.push(Operand::Constant(Constant::Str(lit)));
                         }
+                        // Str heap-buffer path (ADR-0044 W2 Phase 2 wedge):
+                        // route to `__cobrust_println_str_buf` which takes
+                        // the heap Str buffer pointer directly.
                         _ => {
-                            // Non-literal path (ADR-0044 W2 Phase 2 wedge):
-                            // route to `__cobrust_println_str_buf` which
-                            // takes the heap Str buffer pointer directly.
                             let arg = args[0].clone();
                             *func = Operand::Constant(Constant::Str(
                                 PRINTLN_STR_BUF_RUNTIME_SYMBOL.to_string(),
@@ -1310,18 +1379,6 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                             args.push(arg);
                         }
                     }
-                }
-                Kind::PrintInt => {
-                    if args.len() != 1 {
-                        return Err(IntrinsicError::PrintArgUnsupported {
-                            found: format!("print_int: expected 1 arg, got {}", args.len()),
-                        });
-                    }
-                    let int_arg = args[0].clone();
-                    *func =
-                        Operand::Constant(Constant::Str(PRINTLN_INT_RUNTIME_SYMBOL.to_string()));
-                    args.clear();
-                    args.push(int_arg);
                 }
                 Kind::Input => {
                     // input(prompt: str)

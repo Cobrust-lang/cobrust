@@ -2574,9 +2574,14 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_iter_next", sig(call_conv, &[p], Some(i64))));
     out.push(("__cobrust_iter_drop", sig(call_conv, &[p], None)));
 
-    // -- print_int runtime (ADR-0030 §Decision step 5) ----------------
-    // `print_int(n: i64)` — prints n as decimal + newline.
+    // -- polymorphic print runtime (ADR-0030 §Decision step 5 / ADR-0064) --
+    // `print(x: i64)` — prints decimal integer + newline.
     out.push(("__cobrust_println_int", sig(call_conv, &[i64], None)));
+    // `print(b: bool)` — prints "True"/"False" + newline. ADR-0064 §3.3.
+    // Booleans are I8 in Cranelift (see Constant::Bool branch in lower_constant).
+    out.push(("__cobrust_println_bool", sig(call_conv, &[ir::types::I8], None)));
+    // `print(f: f64)` — prints float + newline. ADR-0064 §3.3.
+    out.push(("__cobrust_println_float", sig(call_conv, &[f64], None)));
 
     // -- f-string runtime ------------------------------------------
     out.push(("__cobrust_str_new", sig(call_conv, &[], Some(p))));

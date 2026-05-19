@@ -494,6 +494,19 @@ impl Ctx {
                 if is_list_polymorphic_intrinsic_name(&f.name) {
                     self.poly_intrinsic_defs.insert(f.def_id);
                 }
+                // ADR-0064 §3.2 — polymorphic `print(x)` accepts any type.
+                // The PRELUDE stub declares `print(s: str) -> i64`; that
+                // signature is too narrow for `print(42)` / `print(True)` /
+                // `print(3.14)`. Registering `print` in `poly_intrinsic_defs`
+                // causes `synth_call` to call `instantiate_intrinsic_signature`
+                // which returns a `Fn([fresh_var]) -> i64` — unifies with any
+                // single-arg call. Codegen-level dispatch to the right C-ABI
+                // symbol (`__cobrust_println_int` etc.) happens in the
+                // intrinsic-rewrite pass at MIR time, keyed on the resolved
+                // type of the argument's `LocalDecl.ty`.
+                if f.name == "print" {
+                    self.poly_intrinsic_defs.insert(f.def_id);
+                }
                 self.record_def(f.def_id, fn_ty);
             }
             ItemKind::Class(c) => {
@@ -2579,6 +2592,20 @@ impl Ctx {
         }
         let elem = self.fresh_var();
         match name {
+            // ADR-0064 §3.2 — polymorphic `print(x)` type signature.
+            // Accepts a single argument of any type; returns i64 (unit
+            // sentinel matching all other PRELUDE fn stubs). The fresh
+            // type var `elem` unifies with whatever concrete type the
+            // caller passes — `i64`, `str`, `bool`, `f64`. The
+            // intrinsic-rewrite pass at MIR time then picks the right
+            // C-ABI symbol based on `LocalDecl.ty` of the argument.
+            "print" => Ty::Fn(FnTy {
+                positional: vec![elem],
+                named: vec![],
+                var_positional: None,
+                var_keyword: None,
+                return_ty: Box::new(Ty::Int),
+            }),
             "list_new" => Ty::Fn(FnTy {
                 // fn(i64) -> list[T]
                 positional: vec![Ty::Int],
