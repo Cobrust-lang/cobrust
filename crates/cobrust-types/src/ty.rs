@@ -87,6 +87,17 @@ pub enum Ty {
     /// drops the `Ref` wrapper locally before unifying. The coercion
     /// does NOT extend the substitution table.
     Ref(Box<Ty>),
+    /// ADR-0060a — narrow signed integer (width in bits, one of
+    /// {8, 16, 32}). `Ty::Int` (width 64) remains the canonical
+    /// big-int spelling. `IntN(a)` unifies with `IntN(b)` iff
+    /// `a == b`; does NOT unify with `Ty::Int` directly — narrowing
+    /// requires an explicit `i32(...)` / `i8(...)` cast.
+    IntN(u8),
+    /// ADR-0060b — fixed-size homogeneous array `[T; N]`. Unifies
+    /// element-and-length-wise (`Array(t1, n1) ⇔ Array(t2, n2)` iff
+    /// `n1 == n2 ∧ t1 ⇔ t2`). Lowers to LLVM `[N x T]` array type;
+    /// indexing reuses the existing `Place::index` MIR projection.
+    Array(Box<Ty>, usize),
 }
 
 /// Closed structural record (M2: closed; row variables deferred to
@@ -237,6 +248,10 @@ impl fmt::Display for Ty {
             // ADR-0052a Wave-1 — `&T` borrow type printed with the
             // source-surface glyph.
             Ty::Ref(inner) => write!(f, "&{inner}"),
+            // ADR-0060a — narrow signed integer printed at its source spelling.
+            Ty::IntN(w) => write!(f, "i{w}"),
+            // ADR-0060b — fixed-size array printed at its source spelling.
+            Ty::Array(elem, n) => write!(f, "[{elem}; {n}]"),
         }
     }
 }
@@ -276,6 +291,8 @@ impl Ty {
     pub fn is_hashable(&self) -> bool {
         match self {
             Ty::Bool | Ty::Int | Ty::Str | Ty::Bytes | Ty::None | Ty::Never => true,
+            // ADR-0060a — narrow ints are scalar + Copy, hashable.
+            Ty::IntN(_) => true,
             Ty::Tuple(items) => items.iter().all(Ty::is_hashable),
             Ty::Float
             | Ty::Imag
@@ -291,7 +308,10 @@ impl Ty {
             // ADR-0052a Wave-1 — `&T` is not hashable in Wave-1
             // (Phase H may revisit when borrowed-key dict-lookup
             // semantics land).
-            | Ty::Ref(_) => false,
+            | Ty::Ref(_)
+            // ADR-0060b — Array not hashable in wave-2 (would need
+            // recursive Hash on elem; deferrable).
+            | Ty::Array(_, _) => false,
         }
     }
 
@@ -346,6 +366,8 @@ impl Ty {
             ),
             // ADR-0052a Wave-1 — `&T` walks into its inner for substitution.
             Ty::Ref(inner) => Ty::Ref(Box::new(inner.subst_var(v, replacement))),
+            // ADR-0060b — Array walks into its elem.
+            Ty::Array(elem, n) => Ty::Array(Box::new(elem.subst_var(v, replacement)), *n),
             other => other.clone(),
         }
     }
@@ -401,6 +423,8 @@ impl Ty {
             }
             // ADR-0052a Wave-1 — `&T` walks into its inner for var collection.
             Ty::Ref(inner) => inner.collect_vars(out),
+            // ADR-0060b — Array walks into its elem.
+            Ty::Array(elem, _) => elem.collect_vars(out),
             _ => {}
         }
     }

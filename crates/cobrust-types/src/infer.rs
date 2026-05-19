@@ -76,6 +76,8 @@ impl Subst {
             // a structural walk, NOT a transparency rule — `Ref(T)`
             // and `T` remain distinct types per §3 + §13.
             Ty::Ref(inner) => Ty::Ref(Box::new(self.apply(inner))),
+            // ADR-0060b — Array recurses into elem; length is meta-data.
+            Ty::Array(elem, n) => Ty::Array(Box::new(self.apply(elem)), *n),
             other => other.clone(),
         }
     }
@@ -121,6 +123,11 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
         | (Ty::Bytes, Ty::Bytes)
         | (Ty::None, Ty::None) => Ok(()),
 
+        // ADR-0060a — narrow-int equality by width. `IntN(a)` and
+        // `IntN(b)` unify iff `a == b`; cross-width unification is
+        // rejected (forces explicit cast). Does NOT unify with `Int`.
+        (Ty::IntN(a), Ty::IntN(b)) if a == b => Ok(()),
+
         // Compounds — unify pointwise.
         (Ty::Tuple(a), Ty::Tuple(b)) => {
             if a.len() != b.len() {
@@ -146,6 +153,18 @@ pub fn unify(t1: &Ty, t2: &Ty, subst: &mut Subst, span: Span) -> Result<(), Type
         // The §3 Wave-1 transparency rule lives at `synth_call`
         // argument-binding as a one-way coercion.
         (Ty::Ref(a), Ty::Ref(b)) => unify(&a, &b, subst, span),
+        // ADR-0060b — fixed-size array unification: same length + inner.
+        (Ty::Array(a, n1), Ty::Array(b, n2)) => {
+            if n1 != n2 {
+                return Err(TypeError::TypeMismatch {
+                    expected: Ty::Array(a, n1),
+                    actual: Ty::Array(b, n2),
+                    span,
+                    suggestion: Some("array length mismatch — adjust the literal arity"),
+                });
+            }
+            unify(&a, &b, subst, span)
+        }
         (Ty::Dict(ak, av), Ty::Dict(bk, bv)) => {
             unify(&ak, &bk, subst, span)?;
             unify(&av, &bv, subst, span)

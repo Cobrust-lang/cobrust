@@ -66,8 +66,15 @@ pub fn lower_ty_wave1(ty: &Ty) -> Result<ir::Type, CodegenError> {
         Ty::Int => Ok(ir::types::I64),
         Ty::Bool => Ok(ir::types::I8),
         Ty::None => Ok(ir::types::INVALID),
+        // ADR-0060a — narrow ints map directly to Cranelift's IR widths.
+        // The codegen cast surface (CastKind::IntNarrow) inserts
+        // `ireduce` / `sextend` ops to bridge `Ty::Int <-> Ty::IntN(w)`.
+        Ty::IntN(8) => Ok(ir::types::I8),
+        Ty::IntN(16) => Ok(ir::types::I16),
+        Ty::IntN(32) => Ok(ir::types::I32),
+        Ty::IntN(_) => Ok(ir::types::I64),
         other => Err(CodegenError::InvalidMir(format!(
-            "wave1: unsupported type {other:?} (only Int / Bool / None)"
+            "wave1: unsupported type {other:?} (only Int / IntN / Bool / None)"
         ))),
     }
 }
