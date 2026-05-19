@@ -2008,8 +2008,11 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                         .load(self.pointer_type, MemFlags::new(), ptr, 0);
                 }
                 Projection::Index(_) | Projection::Discriminant => {
-                    // Index / discriminant projections require runtime
-                    // helpers; M12.x conservative — pass pointer through.
+                    // ADR-0060b §3.3: Cranelift backend keeps opaque-pointer
+                    // wave-1 surface for Array indexing. Dynamic-index route
+                    // through __cobrust_array_get_<T> runtime helpers declared
+                    // in `runtime_helper_sigs` (parity with LLVM backend).
+                    // M12.x conservative — pass pointer through.
                 }
             }
         }
@@ -2772,6 +2775,35 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_stdout_write", sig(call_conv, &[p], Some(i64))));
     // `stderr_write(s: str) -> i64` — to stderr only; 0=success.
     out.push(("__cobrust_stderr_write", sig(call_conv, &[p], Some(i64))));
+
+    // -- ADR-0060b dynamic-index Array runtime helpers -----------------
+    // `array_get_i64(arr_ptr: *const i64, len: usize, idx: usize) -> i64`
+    // `array_get_i32(arr_ptr: *const i32, len: usize, idx: usize) -> i32`
+    // `array_get_i8 (arr_ptr: *const i8,  len: usize, idx: usize) -> i8`
+    // `array_get_bool(arr_ptr: *const u8, len: usize, idx: usize) -> i64`
+    // Cranelift backend keeps opaque-pointer wave-1 surface per ADR-0060b
+    // §3.3; these declarations ensure the symbol table is complete so
+    // cross-backend parity is maintained and future Cranelift dynamic-index
+    // lowering can route through the same helpers without a new table entry.
+    out.push((
+        "__cobrust_array_get_i64",
+        sig(call_conv, &[p, i64, i64], Some(i64)),
+    ));
+    let i32 = ir::types::I32;
+    out.push((
+        "__cobrust_array_get_i32",
+        sig(call_conv, &[p, i64, i64], Some(i32)),
+    ));
+    let i8 = ir::types::I8;
+    out.push((
+        "__cobrust_array_get_i8",
+        sig(call_conv, &[p, i64, i64], Some(i8)),
+    ));
+    // bool variant: stored as u8, returned as i64 (0/1).
+    out.push((
+        "__cobrust_array_get_bool",
+        sig(call_conv, &[p, i64, i64], Some(i64)),
+    ));
 
     out
 }

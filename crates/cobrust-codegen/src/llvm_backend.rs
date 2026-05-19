@@ -546,6 +546,53 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .module
             .add_function("__cobrust_panic", panic_ty, Some(Linkage::External));
         self.runtime_helper_decls.insert("__cobrust_panic", panic_fn);
+
+        // ADR-0060b dynamic-index Array runtime helpers.
+        // __cobrust_array_get_i64(*const i64, usize, usize) -> i64
+        let arr_get_i64_ty =
+            i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_i64 = self.module.add_function(
+            "__cobrust_array_get_i64",
+            arr_get_i64_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_array_get_i64", arr_get_i64);
+
+        // __cobrust_array_get_i32(*const i32, usize, usize) -> i32
+        let i32_ty = self.ctx.i32_type();
+        let arr_get_i32_ty =
+            i32_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_i32 = self.module.add_function(
+            "__cobrust_array_get_i32",
+            arr_get_i32_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_array_get_i32", arr_get_i32);
+
+        // __cobrust_array_get_i8(*const i8, usize, usize) -> i8
+        let i8_ty = self.ctx.i8_type();
+        let arr_get_i8_ty =
+            i8_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_i8 = self.module.add_function(
+            "__cobrust_array_get_i8",
+            arr_get_i8_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_array_get_i8", arr_get_i8);
+
+        // __cobrust_array_get_bool(*const u8, usize, usize) -> i64
+        let arr_get_bool_ty =
+            i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_bool = self.module.add_function(
+            "__cobrust_array_get_bool",
+            arr_get_bool_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_array_get_bool", arr_get_bool);
     }
 
     // =====================================================================
@@ -1231,11 +1278,13 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
             // requires a compile-time `u32` index. ADR-0060b §3.4
             // pivots the wave-2 demonstrable surface onto the literal
             // path which is also the prized compile-time-catch payoff.
-            let base_ty_is_array = self
+            let base_local_ty = self
                 .body
                 .locals
                 .get(place.local.0 as usize)
-                .map(|d| matches!(d.ty, Ty::Array(_, _)))
+                .map(|d| &d.ty);
+            let base_ty_is_array = base_local_ty
+                .map(|t| matches!(t, Ty::Array(_, _)))
                 .unwrap_or(false);
             if base_ty_is_array {
                 // Detect a compile-time-constant integer index.
@@ -1259,7 +1308,61 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                         return Ok(elem);
                     }
                 }
-                // Dynamic index or aggregate not loaded as ArrayValue
+                // Dynamic index — route through runtime helper per
+                // ADR-0060b finding-closure (wave-3 dynamic-index).
+                // `#![forbid(unsafe_code)]` in codegen lib.rs blocks GEP;
+                // runtime helper gives bounds-checked safe path.
+                if let Some(Ty::Array(elem_ty, n)) = base_local_ty {
+                    let helper_name = match elem_ty.as_ref() {
+                        Ty::Int => "__cobrust_array_get_i64",
+                        Ty::IntN(32) => "__cobrust_array_get_i32",
+                        Ty::IntN(8) => "__cobrust_array_get_i8",
+                        Ty::Bool => "__cobrust_array_get_bool",
+                        _ => "__cobrust_array_get_i64", // fallback to i64
+                    };
+                    if let Some(&helper_fn) =
+                        self.emitter.runtime_helper_decls.get(helper_name)
+                    {
+                        let i64_ty = self.emitter.ctx.i64_type();
+                        // Array base alloca as opaque pointer arg.
+                        let arr_ptr_val: BasicMetadataValueEnum<'ctx> =
+                            alloca.as_basic_value_enum().into();
+                        // Static N as i64.
+                        let len_val: BasicMetadataValueEnum<'ctx> = i64_ty
+                            .const_int(*n as u64, false)
+                            .as_basic_value_enum()
+                            .into();
+                        // Runtime index operand.
+                        let idx_val = self.lower_operand(idx_op)?;
+                        // Widen to i64 if needed (Bool/i8/i32 index).
+                        let idx_i64: BasicMetadataValueEnum<'ctx> = match idx_val {
+                            BasicValueEnum::IntValue(iv)
+                                if iv.get_type() != i64_ty =>
+                            {
+                                self.emitter
+                                    .builder
+                                    .build_int_z_extend(iv, i64_ty, "idx_zext")
+                                    .map_err(map_builder_err)?
+                                    .as_basic_value_enum()
+                                    .into()
+                            }
+                            _ => idx_val.into(),
+                        };
+                        let call = self
+                            .emitter
+                            .builder
+                            .build_call(
+                                helper_fn,
+                                &[arr_ptr_val, len_val, idx_i64],
+                                "arr_dyn_get",
+                            )
+                            .map_err(map_builder_err)?;
+                        if let Some(v) = call.try_as_basic_value().left() {
+                            return Ok(v);
+                        }
+                    }
+                }
+                // Dynamic index not matched or helper not found
                 // — fall through to the wave-1 stub-load surface.
             }
             // Non-Array Index projection — fall through to the stub
