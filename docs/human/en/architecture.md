@@ -1673,6 +1673,19 @@ Phase K wave-1 (`crates/cobrust-codegen/src/llvm_backend.rs`, ~1100 LOC) replace
 
 Explicit non-goals (deferred per ADR-0058a §8): opt-pass pipeline (sub-ADR 0058b), DWARF debug-info (sub-ADR 0058c), multi-target cross-compile matrix (sub-ADR 0058b).
 
+#### Phase K Strand #4 — JIT/AOT MIR→Cranelift lowering convergence (ADR-0058d)
+
+Pre-0058d, `cobrust-jit/src/lower.rs` (430 LOC) carried its own copy of the wave-1 MIR→Cranelift IR lowering shape, with an explicit deferred convergence point named in ADR-0056a §13 ("AOT may add MIR features JIT doesn't pick up; drift risk"). Phase K Strand #4 closes that drift surface:
+
+- **Single source of truth.** New `pub mod lowering` in `cobrust-codegen` (492 LOC impl + 100 LOC tests) anchors the wave-1 substrate as module-generic free fns: `lower_constant`, `lower_place`, `lower_operand`, `lower_rvalue_wave1`, `lower_statement_wave1`, `lower_terminator_wave1`, `lower_body_wave1`, `body_signature_wave1`, `lower_ty_wave1`.
+- **JIT becomes thin wrapper.** `cobrust-jit/src/lower.rs` collapses 430 → 97 LOC (−333 LOC, ~−77%); its two pub(crate) fns now just delegate to `cobrust_codegen::lowering::*` and convert `CodegenError` → `JitError` via a focused `From` impl.
+- **AOT path unchanged.** `cranelift_backend::CraneliftCtx::define_body`'s stateful AOT dispatcher (which carries runtime helpers, extern symbol declarations, drop schedules, dict/list/str intrinsics, Place projections, FnRef calls, str data symbols) is **not modified** by Strand #4. The wave-1 substrate exists primarily to anchor a stable contract for the JIT consumer; AOT-side delegation through the substrate is reserved for a future ADR.
+- **Stability contract.** Wave-1 surface is stable-for-wave-1 per ADR-0058d §5.1: signature changes require a sub-ADR; additive helpers are non-breaking; non-wave-1 MIR returns `CodegenError::InvalidMir("wave1: ...")` so JIT callers can fall back to AOT.
+
+DG-Workstation verify @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrust-jit` = 392 PASS / 0 FAILED / 8 ignored, TEST_EXIT=0. Includes 2 new wave-1 unit tests in `lowering::tests` (round-trip + reject-Str), 378 pre-existing cobrust-codegen tests unchanged, 12 cobrust-jit tests (1 unit + 11 integration jit_roundtrip) unchanged.
+
+Reference: `docs/agent/adr/0058d-jit-aot-lowering-convergence.md`. Closes ADR-0056a §13 noted-debt + audit `ae2316f1c51dbd6be` Gate 7.
+
 DG-Workstation verify @ HEAD `4686192`: cargo test -p cobrust-codegen --features llvm = 355 tests PASS / 0 failed / 6 ignored (LLVM-conditional), TEST_EXIT=0. 5 wave-1 inline smoke + 350 baseline tests across aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora.
 
 **M9 test counts**: 158 tests across 5 suites:

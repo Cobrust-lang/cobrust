@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:codegen
 crate: cobrust-codegen
-last_verified_commit: 4686192
-dependencies: [mod:mir, mod:types, adr:0023, adr:0027, adr:0041, adr:0058, adr:0058a]
+last_verified_commit: 0590731
+dependencies: [mod:mir, mod:types, adr:0023, adr:0027, adr:0041, adr:0058, adr:0058a, adr:0058d]
 ---
 
 # Module: codegen
@@ -547,3 +547,41 @@ impl<'ctx> LlvmEmitter<'ctx> {
 | while_corpus | 12 | while + nested binop |
 | while_if_corpus | 7 | fizzbuzz/short |
 | **Total** | **355** | TEST_EXIT=0 |
+
+## Phase K Strand #4 — JIT/AOT lowering convergence (ADR-0058d)
+
+`crates/cobrust-codegen/src/lowering.rs` is the module-generic MIR→Cranelift IR lowering substrate extracted in ADR-0058d. It anchors a single source of truth for the wave-1 lowering shape consumed by both the AOT path (`cranelift_backend::CraneliftCtx::define_body`'s stateful dispatcher) and the JIT path (`cobrust-jit::lower`, which is a thin wrapper consumer).
+
+### Public surface (stable for wave-1 per ADR-0058d §5.1)
+
+| Symbol | Signature | Wave-1 shape |
+|---|---|---|
+| `lowering::lower_ty_wave1` | `(&Ty) -> Result<ir::Type, CodegenError>` | `Int → I64`, `Bool → I8`, `None → INVALID` |
+| `lowering::body_signature_wave1` | `(&Body, CallConv) -> Result<Signature, CodegenError>` | params=`I64`s, return=`I64` |
+| `lowering::lower_constant` | `(&mut FunctionBuilder, &Constant, BlockId) -> Result<ir::Value, CodegenError>` | `Int(n)` + `Bool(b)` lifted to I64 |
+| `lowering::lower_place` | `(&mut FunctionBuilder, &HashMap<LocalId, Variable>, &Place, BlockId) -> Result<ir::Value, CodegenError>` | bare local read; no projections |
+| `lowering::lower_operand` | `(&mut FunctionBuilder, &HashMap<LocalId, Variable>, &Operand, BlockId) -> Result<ir::Value, CodegenError>` | `Copy`/`Move`/`Constant` dispatch |
+| `lowering::lower_rvalue_wave1` | `(&mut FunctionBuilder, &HashMap<LocalId, Variable>, &Rvalue, BlockId) -> Result<ir::Value, CodegenError>` | `Use` + `BinaryOp::{Add,Sub,Mul}` + `UnaryOp::{Neg,Plus}` |
+| `lowering::lower_statement_wave1` | `(&mut FunctionBuilder, &HashMap<LocalId, Variable>, &Statement, BlockId) -> Result<(), CodegenError>` | `Assign(Place::local, _)` + Storage{Live,Dead}/Nop |
+| `lowering::lower_terminator_wave1` | `(&mut FunctionBuilder, &HashMap<LocalId, Variable>, &HashMap<BlockId, ir::Block>, &Terminator, BlockId, LocalId) -> Result<(), CodegenError>` | `Return` + `Goto` + `Unreachable` |
+| `lowering::lower_body_wave1` | `(&Body, CallConv) -> Result<ir::Function, CodegenError>` | full Body → `ir::Function` |
+
+Non-wave-1 MIR shapes return `CodegenError::InvalidMir` with a `"wave1:"` prefix; JIT callers narrow this to `JitError::UnsupportedMirFeature` / `UnsupportedType` via `From<CodegenError> for JitError` in `cobrust-jit::lower`.
+
+### Stability contract
+
+**Wave-1 surface is stable-for-wave-1** (ADR-0058d §5.1):
+- Signature changes require a sub-ADR.
+- Adding helpers (`lower_constant_float`, `lower_call_wave2`, etc.) is **non-breaking**.
+- Removing or changing the wave-1 signature is **breaking**.
+
+### What is NOT in the substrate (ADR-0058d §2.3 non-goals)
+
+- AOT-specific surface stays in `cranelift_backend::CraneliftCtx::define_body`: runtime helpers, extern symbol declaration, drop schedules, dict/list/str intrinsics, `Place` projections, `Constant::FnRef` call lowering, str data symbols, `infer_local_types` chained inference.
+- `cranelift_backend.rs` is unchanged by ADR-0058d. AOT-side delegation through the wave-1 helpers is reserved for a future ADR (hypothetical 0058e or 0056d) — see ADR-0058d §2.3 deferral rationale.
+
+### Unit tests (wave-1 substrate)
+
+`crates/cobrust-codegen/src/lowering.rs::tests`:
+- `lower_body_wave1_int_add_round_trip` — `1 + 2` through full Body lowering.
+- `lower_constant_str_rejected` — `Constant::Str(_)` returns `InvalidMir("wave1: ...")`.

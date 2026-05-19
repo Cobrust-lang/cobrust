@@ -16,6 +16,10 @@ workspace = true
 [dependencies]
 cobrust-mir = { path = "../cobrust-mir", version = "=0.3.0" }
 cobrust-types = { path = "../cobrust-types", version = "=0.3.0" }
+# ADR-0058d: cobrust-jit's MIR→Cranelift lowering is a thin wrapper
+# over cobrust-codegen::lowering wave-1 substrate. Closes 0056a §13
+# noted-debt (JIT/AOT drift surface).
+cobrust-codegen = { path = "../cobrust-codegen", version = "=0.3.0" }
 # Cranelift quartet pinned to 0.131 family per ADR-0056a §"3.1
 # Dependency add"; matches the already-pinned versions in
 # cobrust-codegen for ABI consistency.
