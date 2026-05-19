@@ -12,13 +12,13 @@ fn main() -> i64:
     let i: i64 = 0
     while i < n:
         let line = input("")
-        let c0 = str_at(line, 0)
-        let c1 = str_at(line, 1)
-        let o0 = str_ord(c0)
-        let o1 = str_ord(c1)
+        let c0 = str_at(&line, 0)
+        let c1 = str_at(&line, 1)
+        let o0 = str_ord(&c0)
+        let o1 = str_ord(&c1)
         if o0 == 112:
             if o1 == 117:
-                let val = parse_int_tok(line, 1)
+                let val = parse_int_tok(&line, 1)
                 list_set(main_stk, top, val)
                 if top == 0:
                     list_set(min_stk, top, val)

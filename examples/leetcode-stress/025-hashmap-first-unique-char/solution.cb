@@ -6,7 +6,7 @@
 
 fn main() -> i64:
     let s = input("")
-    let n = str_len(s)
+    let n = str_len(&s)
     let freq = list_new(26)
     let i: i64 = 0
     while i < 26:
@@ -14,12 +14,12 @@ fn main() -> i64:
         i = i + 1
     let j: i64 = 0
     while j < n:
-        let code = str_ord(str_at(s, j)) - 97
+        let code = str_ord(str_at(&s, j)) - 97
         list_set(freq, code, list_get(freq, code) + 1)
         j = j + 1
     let k: i64 = 0
     while k < n:
-        let code2 = str_ord(str_at(s, k)) - 97
+        let code2 = str_ord(str_at(&s, k)) - 97
         if list_get(freq, code2) == 1:
             print_int(k)
             return 0

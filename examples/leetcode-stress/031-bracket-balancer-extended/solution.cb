@@ -6,14 +6,14 @@
 
 fn main() -> i64:
     let s = input("")
-    let n = str_len(s)
+    let n = str_len(&s)
     let stack = list_new(n + 1)
     let top: i64 = 0
     let ok: i64 = 1
     let i: i64 = 0
     while i < n:
-        let c = str_at(s, i)
-        let o = str_ord(c)
+        let c = str_at(&s, i)
+        let o = str_ord(&c)
         if o == 40:
             list_set(stack, top, 40)
             top = top + 1

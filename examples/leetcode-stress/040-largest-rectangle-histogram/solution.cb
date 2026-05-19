@@ -12,7 +12,7 @@ fn main() -> i64:
     let top: i64 = 0
     let i: i64 = 0
     while i < n:
-        list_set(h, i, parse_int_tok(line, i))
+        list_set(h, i, parse_int_tok(&line, i))
         i = i + 1
     list_set(h, n, 0)
     let best: i64 = 0
