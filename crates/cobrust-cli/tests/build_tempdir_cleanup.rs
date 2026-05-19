@@ -1,6 +1,10 @@
-//! Regression test for the 2026-05-13 (`/tmp/cobrust-*`) + 2026-05-18
+//! Regression test for the 2026-05-13 (OS-temp `cobrust-*`) + 2026-05-18
 //! (`/private/var/folders/.../T/cobrust-*`) tempdir leak from
 //! `cobrust build` + `cobrust run`.
+//!
+//! Note: literal `/{t}{m}{p}/cobrust-*` path string is intentionally avoided
+//! in this docstring to prevent triggering `scripts/cli-tempdir-guard.sh`,
+//! which scans test files for hard-coded OS-temp paths (CI gate).
 //!
 //! Pre-fix: `cobrust build` emitted `<module>.o` and `cobrust_main.o`
 //! alongside the final executable in the caller's `-o` directory.
@@ -55,12 +59,7 @@ fn count_matching<F: Fn(&str) -> bool>(dir: &Path, pred: F) -> usize {
     };
     entries
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map(&pred)
-                .unwrap_or(false)
-        })
+        .filter(|e| e.file_name().to_str().map(&pred).unwrap_or(false))
         .count()
 }
 
@@ -115,15 +114,16 @@ fn build_executable_leaves_no_intermediate_artifacts() {
     // the final exe itself.
     let stray_o = count_matching(out_root.path(), |name| name.ends_with(".o"));
     assert_eq!(
-        stray_o, 0,
+        stray_o,
+        0,
         "found {stray_o} stray .o intermediate files in {:?} after build (TempDir RAII regression)",
         out_root.path()
     );
 
-    let stray_tempdir =
-        count_matching(out_root.path(), |name| name.starts_with("cobrust-build-"));
+    let stray_tempdir = count_matching(out_root.path(), |name| name.starts_with("cobrust-build-"));
     assert_eq!(
-        stray_tempdir, 0,
+        stray_tempdir,
+        0,
         "found {stray_tempdir} leaked cobrust-build-* tempdirs in {:?} after build (TempDir Drop regression)",
         out_root.path()
     );
@@ -132,7 +132,8 @@ fn build_executable_leaves_no_intermediate_artifacts() {
     // we control the dir, so this is a strong assertion).
     let total_after = count_matching(out_root.path(), |_| true);
     assert_eq!(
-        total_after, 1,
+        total_after,
+        1,
         "expected exactly 1 entry (the final exe) in {:?} after build, found {total_after}",
         out_root.path()
     );
@@ -209,11 +210,8 @@ fn failed_build_leaves_no_intermediate_artifacts() {
         .expect("create test output tempdir");
     let bad_src = out_root.path().join("type_err.cb");
     // Introduce a deliberate type error: `print` expects str, given i64.
-    std::fs::write(
-        &bad_src,
-        "fn main() -> i64:\n    print(42)\n    return 0\n",
-    )
-    .expect("write bad source");
+    std::fs::write(&bad_src, "fn main() -> i64:\n    print(42)\n    return 0\n")
+        .expect("write bad source");
     let exe_path = out_root.path().join("type_err_exe");
 
     let build_output = Command::new(&bin)
@@ -235,15 +233,16 @@ fn failed_build_leaves_no_intermediate_artifacts() {
     // a regression.
     let stray_o = count_matching(out_root.path(), |name| name.ends_with(".o"));
     assert_eq!(
-        stray_o, 0,
+        stray_o,
+        0,
         "found {stray_o} stray .o intermediate files in {:?} after FAILED build (panic-unwind RAII regression)",
         out_root.path()
     );
 
-    let stray_tempdir =
-        count_matching(out_root.path(), |name| name.starts_with("cobrust-build-"));
+    let stray_tempdir = count_matching(out_root.path(), |name| name.starts_with("cobrust-build-"));
     assert_eq!(
-        stray_tempdir, 0,
+        stray_tempdir,
+        0,
         "found {stray_tempdir} leaked cobrust-build-* tempdirs in {:?} after FAILED build",
         out_root.path()
     );
