@@ -67,7 +67,7 @@ pub enum SkillsArgs {
 /// F34 anchor: skills-list-v1.
 pub fn list_skills() -> Vec<String> {
     let mut names: Vec<String> = SkillAssets::iter()
-        .map(|f| {
+        .map(|f: std::borrow::Cow<'static, str>| {
             f.trim_end_matches(".md").to_owned()
         })
         .collect();
