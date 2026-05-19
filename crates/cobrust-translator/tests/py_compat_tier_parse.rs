@@ -66,7 +66,7 @@ tolerance = "exact"
         // We pass the tier value as a quoted TOML string. Callers must
         // escape any internal quotes; the eight test cases below use
         // simple non-escapable strings (no internal `"`).
-        tier_value = format!("\"{}\"", tier_string),
+        tier_value = format_args!("\"{tier_string}\""),
     )
 }
 
