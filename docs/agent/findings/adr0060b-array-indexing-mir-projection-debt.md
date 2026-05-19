@@ -1,13 +1,53 @@
 ---
 doc_kind: finding
 finding_id: adr0060b-array-indexing-mir-projection-debt
-last_verified_commit: TBD
+last_verified_commit: 981b577
 dependencies: [adr:0060b, adr:0058a]
 discovered_by: P9 Phase M sprint 2026-05-19 — llvm_type_08_array_i64 DG verify
 severity: P2 (language-surface follow-up; type-emission gap closed, indexing deferred)
-status: open (deferred to ADR-0060b array-indexing sub-sprint)
+status: RESOLVED at 981b577 (2026-05-19 Phase M follow-up sprint)
 related: [adr:0060b §3.3, adr:0058a §4.1]
 ---
+
+## §0. Resolution (2026-05-19, commit 981b577)
+
+Three additive edits closed this finding:
+
+1. **`cobrust-types/src/check.rs::synth_expr` IndexAccess arm** — added
+   the `(Ty::Array(elem, n), IndexKind::Expr(e))` match arm. Index
+   must unify with `Ty::Int`. ADR-0060b §3.4 literal-OOB check fires
+   when the index is a constant integer literal whose value falls
+   outside `[0, n-1]`; surfaces as `TypeError::NotIndexable` with the
+   OOB suggestion.
+
+2. **`cobrust-codegen/src/llvm_backend.rs::lower_place_load`** — added
+   the `[Projection::Index(idx_op)]` Array path. When the base
+   LocalDecl's type is `Ty::Array(elem, _)` AND the index Operand is
+   a compile-time `Constant::Int(k)` with `k >= 0`, the lowering
+   emits a safe aggregate-extract:
+   - `build_load(array_ty, alloca)` -> ArrayValue
+   - `build_extract_value(arr, k as u32)` -> element.
+
+   Why aggregate-extract not GEP: `cobrust-codegen/src/lib.rs:32`
+   declares `#![forbid(unsafe_code)]` which blocks inkwell's unsafe
+   `build_in_bounds_gep`. The safe `build_extract_value` requires a
+   compile-time `u32` index, which exactly matches the ADR-0060b §3.4
+   compile-time-catch surface (literal-OOB detection). Dynamic-index
+   Array reads fall through to the wave-1 stub-load surface — F37
+   honest scope: a dynamic-index Array read requires either lifting
+   `forbid(unsafe_code)` to `deny` + targeted `allow` (so the
+   builder's unsafe GEP can be invoked) or routing through a runtime
+   helper like the List path. Filed under "ADR-0060b dynamic-array-index
+   queue (deferred to wave-3 cast-surface sub-sprint)".
+
+3. **`cobrust-codegen/tests/codegen_diff_corpus.rs`** — F36 rename
+   `llvm_type_08_array_i64` -> `llvm_type_08_array_i64_index` with
+   the body changed from `return 0` (passthrough) to `return a[0]`
+   (real element extract). Added `llvm_type_08b_array_index_literal_oob`
+   as a typeck-rejection fixture for the §3.4 compile-time-catch.
+
+Cranelift backend keeps the opaque-pointer wave-1 surface per
+ADR-0060b §3.3.
 
 # Finding: `[T; N]` array indexing at source level not yet wired
 

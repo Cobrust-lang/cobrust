@@ -1,13 +1,42 @@
 ---
 doc_kind: finding
 finding_id: adr0060b-empty-dict-annotation-k-flow-debt
-last_verified_commit: TBD
+last_verified_commit: 83ee812
 dependencies: [adr:0060b, adr:0050d]
 discovered_by: P9 Phase M sprint 2026-05-19 — pm_b06_array_not_hashable corpus
 severity: P3 (test-only; production path correctly rejects non-empty Array-keyed dicts)
-status: open (deferred to a separate annotation-flow sub-sprint)
+status: RESOLVED at 83ee812 (2026-05-19 Phase M follow-up sprint)
 related: [adr:0060b §3.3, adr:0050d Decision 7A]
 ---
+
+## §0. Resolution (2026-05-19, commit 83ee812)
+
+Single `cobrust-types/src/check.rs` edit closed this finding:
+
+**`StmtKind::Let` annotation site now invokes `validate_hashable_dict`
+before evaluating the RHS** — mirroring the existing `ItemKind::Let`
+(module-level) site at line 594-596. The root-cause investigation in
+§2 turned out to be ALMOST correct: the item-level `ItemKind::Let`
+already called `validate_hashable_dict`, but the function-body
+`StmtKind::Let` (a different match arm under `check_stmt`) did NOT.
+Both arms must call `validate_hashable_dict` to catch the empty `{}`
+literal masquerade.
+
+The fix is one block of 3 lines before `synth_expr`:
+
+```rust
+if let Some(t) = &b.annot {
+    self.validate_hashable_dict(t)?;
+}
+```
+
+Validating the HIR annotation tree directly catches the unhashable
+Array K independently of the literal's fresh vars — exactly as the
+item-level path already does.
+
+Test closure: `pm_b06_array_not_hashable` un-ignored + PASS. Added
+`pm_b07_array_not_hashable_empty_dict_module_level` as F34 anchor
+for the symmetric item-level path (regression guard rail).
 
 # Finding: empty-dict `{}` literal does not propagate annotation `K` through hashability check
 
