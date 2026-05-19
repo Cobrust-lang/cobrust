@@ -319,3 +319,31 @@ rather than through a Cobrust-side enum).
 **Follow-on amendments deferred to 0056b sprint** (Tier-1 audit A2 + A3):
 - **A2**: Remove blanket `#![allow(clippy::must_use_candidate)]` in `crates/cobrust-jit/src/lib.rs` and apply explicit `#[must_use]` to `JitEngine::compile_mir` and `JitHandle::call` return types per §5.1 engineering standard.
 - **A3**: Add 2 rejection-path tests for `Rvalue::Aggregate` + `Rvalue::Cast` (each 2-line MIR body, expect `JitError::UnsupportedMirFeature`). Prevents silent regression when 0056b extends lowering.
+
+## 14. Noted-debt RESOLVED via ADR-0058d (2026-05-19)
+
+The §13 deferred convergence point ("§3.2's `CodegenMode { Aot, Jit }`
+enum is deferred to ADR-0056b's `lower_module<M: ClifModule>`
+extraction sprint — wave-1's standalone `JitEngine` is the cleaner
+first step") and the drift-risk noted-debt that motivated it ("AOT
+may add MIR features JIT doesn't pick up; drift risk") are RESOLVED
+via ADR-0058d at `0590731` (feature/0058d-dev).
+
+The resolution does **not** revive the `CodegenMode { Aot, Jit }`
+enum (an explicit non-goal per ADR-0058d §3). Instead the
+convergence happens one level lower: cobrust-codegen exposes a new
+`pub mod lowering` with module-generic wave-1 lowering free fns, and
+cobrust-jit/src/lower.rs becomes a thin wrapper (430 → 97 LOC,
+−333 LOC). The wave-1 surface is the contract; the JIT and AOT
+crates remain separate workspace crates (preserving §13's PIC-
+divergence rationale and REPL Session ergonomics rationale).
+
+AOT-side delegation through the wave-1 substrate is deferred to a
+future ADR (hypothetical 0058e or 0056d) per ADR-0058d §2.3. The
+drift surface for *new* wave-1 MIR features is now closed — any
+extension lands in `cobrust-codegen::lowering` and is automatically
+picked up by cobrust-jit.
+
+<self-hosted-runner> verify at `0590731`: cobrust-codegen 380 PASS (378
+existing + 2 new wave-1 unit tests) + cobrust-jit 12 PASS unchanged
+= 392 total / TEST_EXIT=0. POSTFLIGHT clean.
