@@ -235,11 +235,7 @@ impl TypeCheckCtx {
     /// is `Some(def_id)`, that DefId is added to the removal set in
     /// addition to the file-owned ones.
     fn invalidate_with(&mut self, file_id: u32, extra: Option<u32>) {
-        let removed_defs: Vec<u32> = self
-            .file_defs
-            .get(&file_id)
-            .cloned()
-            .unwrap_or_default();
+        let removed_defs: Vec<u32> = self.file_defs.get(&file_id).cloned().unwrap_or_default();
         let mut removed: HashSet<u32> = removed_defs.iter().copied().collect();
         if let Some(d) = extra {
             removed.insert(d);
@@ -1317,9 +1313,7 @@ impl Ctx {
                     Ok(Ty::Ref(Box::new(inner_ty)))
                 }
                 // Method-form call — admit iff method's return type is Copy.
-                ExprKind::Call { callee, .. }
-                    if matches!(callee.kind, ExprKind::Attr { .. }) =>
-                {
+                ExprKind::Call { callee, .. } if matches!(callee.kind, ExprKind::Attr { .. }) => {
                     let inner_ty = self.synth_expr(inner)?;
                     let resolved = self.subst.apply(&inner_ty);
                     if is_copy_primitive(&resolved) {

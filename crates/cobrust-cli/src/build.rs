@@ -70,7 +70,15 @@ pub fn run(
     quiet: bool,
     enable_runtime_dispatch: Option<bool>,
 ) -> u8 {
-    match build(file, output, emit_kind, release, target, quiet, enable_runtime_dispatch) {
+    match build(
+        file,
+        output,
+        emit_kind,
+        release,
+        target,
+        quiet,
+        enable_runtime_dispatch,
+    ) {
         Ok(_) => exit_codes::SUCCESS,
         Err(e) => {
             eprintln!("cobrust build: {e}");
@@ -135,9 +143,8 @@ pub fn build(
             .unwrap_or_else(|| PathBuf::from(".")),
         None => PathBuf::from("target/cobrust"),
     };
-    std::fs::create_dir_all(&final_output_dir).map_err(|e| {
-        BuildError::Internal(format!("mkdir {}: {e}", final_output_dir.display()))
-    })?;
+    std::fs::create_dir_all(&final_output_dir)
+        .map_err(|e| BuildError::Internal(format!("mkdir {}: {e}", final_output_dir.display())))?;
 
     // For Executable emit, ask codegen for the Object only; we link
     // ourselves with the runtime helper. Codegen's own link step would

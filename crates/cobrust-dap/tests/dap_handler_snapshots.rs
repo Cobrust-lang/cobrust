@@ -99,7 +99,8 @@ async fn snapshot_variables_response_with_pretty_printer_output() {
     // pretty-printer summaries (List, Str, Int).
     let adapter = Adapter::with_driver(LldbDriver::test_stub(vec![(
         "frame variable".to_string(),
-        "(cobrust::List) xs = [1, 2, 3]\n(cobrust::Str) name = \"hello\"\n(int) n = 10\n".to_string(),
+        "(cobrust::List) xs = [1, 2, 3]\n(cobrust::Str) name = \"hello\"\n(int) n = 10\n"
+            .to_string(),
     )]));
     let request = req(
         5,

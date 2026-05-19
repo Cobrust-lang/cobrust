@@ -123,8 +123,7 @@ fn debug_dap_stdio_initialize_disconnect_handshake() {
 
     // 1. Send Initialize. Hand-rolled JSON body so wave-3 carries no
     //    new serde_json dep.
-    let init_body =
-        r#"{"seq":1,"type":"request","command":"initialize","arguments":{"clientID":"wave3-e2e","pathFormat":"path"}}"#;
+    let init_body = r#"{"seq":1,"type":"request","command":"initialize","arguments":{"clientID":"wave3-e2e","pathFormat":"path"}}"#;
     write_dap_frame(&mut stdin, init_body);
 
     // 2. Read response body and assert success substrings.

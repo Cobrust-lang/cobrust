@@ -2412,11 +2412,7 @@ fn i0052g_01_borrow_str_split_non_copy_rejected() {
     let src = format!(
         "{METHOD_STUBS_FOR_NON_COPY_BORROW}fn read_xs(xs: list[str]) -> i64:\n    return 0\nfn f() -> i64:\n    let s: str = \"a,b\"\n    let r: i64 = read_xs(&s.split(\",\"))\n    return r\n",
     );
-    must_reject(
-        "borrow-str-split-non-copy",
-        &src,
-        Cat::BorrowOfNonPlace,
-    );
+    must_reject("borrow-str-split-non-copy", &src, Cat::BorrowOfNonPlace);
 }
 
 #[test]
@@ -2426,11 +2422,7 @@ fn i0052g_02_borrow_method_returning_str_non_copy_rejected() {
     let src = format!(
         "{METHOD_STUBS_FOR_NON_COPY_BORROW}fn read_str(s: str) -> i64:\n    return 0\nfn f() -> i64:\n    let s: str = \"  hi  \"\n    let r: i64 = read_str(&s.trim())\n    return r\n",
     );
-    must_reject(
-        "borrow-str-trim-non-copy",
-        &src,
-        Cat::BorrowOfNonPlace,
-    );
+    must_reject("borrow-str-trim-non-copy", &src, Cat::BorrowOfNonPlace);
 }
 
 #[test]
@@ -2447,9 +2439,5 @@ fn i0052g_03_borrow_list_get_non_copy_rejected() {
     let src = format!(
         "{METHOD_STUBS_FOR_NON_COPY_BORROW}fn read_str(s: str) -> i64:\n    return 0\nfn f() -> i64:\n    let xs: list[str] = [\"a\", \"b\"]\n    let r: i64 = read_str(&xs.get(0))\n    return r\n",
     );
-    must_reject(
-        "borrow-list-get-non-copy",
-        &src,
-        Cat::BorrowOfNonPlace,
-    );
+    must_reject("borrow-list-get-non-copy", &src, Cat::BorrowOfNonPlace);
 }

@@ -216,11 +216,10 @@ impl Session {
     /// type-ctx is left **unchanged** when the new source fails to
     /// type-check (old binding still active — matches Python REPL).
     #[allow(dead_code)] // Public surface; REPL UX path inlines into evaluate_module;
-                        // tests + future LSP / programmatic consumers call this.
+    // tests + future LSP / programmatic consumers call this.
     pub fn redefine_fn(&mut self, name: &str, source: &str) -> Result<RedefineOutcome, String> {
         // Parse the source as a top-level module.
-        let ast = parse_str(source, FileId::SYNTHETIC)
-            .map_err(|e| format!("parse error: {e}"))?;
+        let ast = parse_str(source, FileId::SYNTHETIC).map_err(|e| format!("parse error: {e}"))?;
         // Confirm a single fn-def whose name matches.
         let fn_count = ast
             .items
@@ -260,11 +259,9 @@ impl Session {
         // (REPL turn boundaries restart HIR DefId allocation; the
         // type_ctx remembers across turns via its own DefId map).
         let mut sess = HirSession::new();
-        let hir = hir_lower(&ast, &mut sess)
-            .map_err(|e| format!("HIR lower error: {e:?}"))?;
+        let hir = hir_lower(&ast, &mut sess).map_err(|e| format!("HIR lower error: {e:?}"))?;
         // Type-check WITHOUT mutating ctx yet — first validate.
-        let typed = type_check(&hir)
-            .map_err(|e| format!("type error: {e:?}"))?;
+        let typed = type_check(&hir).map_err(|e| format!("type error: {e:?}"))?;
 
         // New ctx valid → drop the old binding atomically.
         if let Some(d) = old_def_id {
@@ -498,11 +495,7 @@ impl Session {
                 }
                 let mut sess = HirSession::new();
                 if let Ok(hir) = hir_lower(&ast, &mut sess) {
-                    let _ = check_incremental(
-                        &mut self.type_ctx,
-                        &hir,
-                        FileId::SYNTHETIC.0,
-                    );
+                    let _ = check_incremental(&mut self.type_ctx, &hir, FileId::SYNTHETIC.0);
                     // Errors are intentionally swallowed here: eval
                     // proceeds with the (possibly stale) value loop;
                     // diagnostics belong to `:type` / future LSP wire.
@@ -511,11 +504,8 @@ impl Session {
                 // Identical / SignatureChanged).
                 for (name, old_sig, _) in prior_fn_state {
                     let new_sig = self.type_ctx.lookup(&name).cloned();
-                    let outcome = classify_redefine_outcome(
-                        &name,
-                        old_sig.as_ref(),
-                        new_sig.as_ref(),
-                    );
+                    let outcome =
+                        classify_redefine_outcome(&name, old_sig.as_ref(), new_sig.as_ref());
                     // Only surface a notice when there WAS a prior
                     // binding — `Created` on first-def stays silent
                     // (matches Python REPL ergonomics).
@@ -680,11 +670,7 @@ impl RedefineOutcome {
 
 /// Classify a redefinition outcome by comparing pre- and post-`merge_module`
 /// type signatures. Internal helper for [`Session::redefine_fn`].
-fn classify_redefine_outcome(
-    name: &str,
-    old: Option<&Ty>,
-    new: Option<&Ty>,
-) -> RedefineOutcome {
+fn classify_redefine_outcome(name: &str, old: Option<&Ty>, new: Option<&Ty>) -> RedefineOutcome {
     match (old, new) {
         (None, _) => RedefineOutcome::Created {
             name: name.to_string(),
@@ -1607,7 +1593,10 @@ mod tests {
         let _ = step(&mut s, "let v = 9");
         assert!(s.type_ctx().lookup("v").is_some());
         let _ = step(&mut s, ":clear");
-        assert!(s.type_ctx().lookup("v").is_none(), ":clear must reset type_ctx");
+        assert!(
+            s.type_ctx().lookup("v").is_none(),
+            ":clear must reset type_ctx"
+        );
     }
 
     #[test]

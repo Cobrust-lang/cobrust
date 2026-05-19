@@ -65,7 +65,10 @@ fn empty_ctx_has_zero_bindings_and_version_zero() {
 fn check_incremental_populates_let_bindings() {
     let mut ctx = TypeCheckCtx::new();
     merge(&mut ctx, "let x = 42\n");
-    assert!(ctx.lookup("x").is_some(), "x should be bound after `let x = 42`");
+    assert!(
+        ctx.lookup("x").is_some(),
+        "x should be bound after `let x = 42`"
+    );
     assert!(ctx.version() > 0, "version should bump after a merge");
 }
 
@@ -107,7 +110,10 @@ fn clone_is_independent_of_original() {
 
     // Snapshot didn't observe the post-clone write.
     assert_eq!(snapshot.version(), snapshot_version);
-    assert!(snapshot.lookup("b").is_none(), "snapshot should not see post-clone writes");
+    assert!(
+        snapshot.lookup("b").is_none(),
+        "snapshot should not see post-clone writes"
+    );
 }
 
 #[test]
@@ -115,7 +121,10 @@ fn clone_preserves_existing_bindings() {
     let mut ctx = TypeCheckCtx::new();
     merge(&mut ctx, "let a = 1\n");
     let snap = ctx.clone();
-    assert!(snap.lookup("a").is_some(), "snapshot should preserve pre-clone bindings");
+    assert!(
+        snap.lookup("a").is_some(),
+        "snapshot should preserve pre-clone bindings"
+    );
     assert_eq!(snap.binding_count(), ctx.binding_count());
 }
 
@@ -137,7 +146,10 @@ fn invalidate_unknown_file_still_bumps_version() {
     let mut ctx = TypeCheckCtx::new();
     let v0 = ctx.version();
     ctx.invalidate(99_999);
-    assert!(ctx.version() > v0, "unknown-file invalidate must still bump version");
+    assert!(
+        ctx.version() > v0,
+        "unknown-file invalidate must still bump version"
+    );
 }
 
 #[test]

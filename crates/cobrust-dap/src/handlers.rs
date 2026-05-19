@@ -12,6 +12,7 @@
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::Adapter;
 use crate::dap_types::{
     Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments, InitializeResponse,
     LaunchArguments, NextArguments, PauseArguments, Request, SetBreakpointsArguments,
@@ -19,7 +20,6 @@ use crate::dap_types::{
     VariablesResponse,
 };
 use crate::lldb_driver::DapError;
-use crate::Adapter;
 
 #[derive(Debug, Error)]
 pub enum DapHandlerError {
@@ -314,11 +314,7 @@ mod tests {
             "process continue".to_string(),
             "Process 12345 stopped\n  stop reason = breakpoint 1.1".to_string(),
         )]));
-        let request = req(
-            4,
-            "continue",
-            Some(serde_json::json!({"threadId": 1})),
-        );
+        let request = req(4, "continue", Some(serde_json::json!({"threadId": 1})));
         let result = handle_continue(&adapter, &request).await.unwrap();
         assert_eq!(result["allThreadsContinued"], true);
     }
@@ -326,11 +322,7 @@ mod tests {
     #[tokio::test]
     async fn stack_trace_with_stub_returns_empty_when_no_canned_response() {
         let adapter = Adapter::with_driver(LldbDriver::test_stub(vec![]));
-        let request = req(
-            5,
-            "stackTrace",
-            Some(serde_json::json!({"threadId": 1})),
-        );
+        let request = req(5, "stackTrace", Some(serde_json::json!({"threadId": 1})));
         let result = handle_stack_trace(&adapter, &request).await.unwrap();
         assert_eq!(result["totalFrames"], 0);
     }

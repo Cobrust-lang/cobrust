@@ -25,12 +25,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cobrust_mir::Module;
+use cranelift_codegen::Context;
 use cranelift_codegen::ir::Signature;
 use cranelift_codegen::isa::{CallConv, OwnedTargetIsa};
 use cranelift_codegen::settings::{self, Configurable};
-use cranelift_codegen::Context;
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{default_libcall_names, FuncId, Linkage, Module as ClifModule};
+use cranelift_module::{FuncId, Linkage, Module as ClifModule, default_libcall_names};
 
 use crate::error::JitError;
 use crate::handle::JitHandle;
@@ -185,8 +185,8 @@ fn host_isa() -> Result<Arc<dyn cranelift_codegen::isa::TargetIsa>, JitError> {
         .map_err(|e| JitError::Settings(e.to_string()))?;
     let shared_flags = settings::Flags::new(shared_builder);
 
-    let isa_builder = cranelift_native::builder()
-        .map_err(|e| JitError::HostIsaUnavailable(e.to_string()))?;
+    let isa_builder =
+        cranelift_native::builder().map_err(|e| JitError::HostIsaUnavailable(e.to_string()))?;
     let isa: OwnedTargetIsa = isa_builder
         .finish(shared_flags)
         .map_err(|e| JitError::ModuleConstruction(e.to_string()))?;

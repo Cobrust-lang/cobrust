@@ -118,26 +118,62 @@ mod tests {
     fn line_map_basic_ascii() {
         let lm = LineMap::from_source("abc\ndef\nghi");
         // 'a' at offset 0 -> (0, 0)
-        assert_eq!(lm.byte_to_position(0), Position { line: 0, character: 0 });
+        assert_eq!(
+            lm.byte_to_position(0),
+            Position {
+                line: 0,
+                character: 0
+            }
+        );
         // 'b' at offset 1 -> (0, 1)
-        assert_eq!(lm.byte_to_position(1), Position { line: 0, character: 1 });
+        assert_eq!(
+            lm.byte_to_position(1),
+            Position {
+                line: 0,
+                character: 1
+            }
+        );
         // 'd' at offset 4 -> (1, 0)
-        assert_eq!(lm.byte_to_position(4), Position { line: 1, character: 0 });
+        assert_eq!(
+            lm.byte_to_position(4),
+            Position {
+                line: 1,
+                character: 0
+            }
+        );
         // 'g' at offset 8 -> (2, 0)
-        assert_eq!(lm.byte_to_position(8), Position { line: 2, character: 0 });
+        assert_eq!(
+            lm.byte_to_position(8),
+            Position {
+                line: 2,
+                character: 0
+            }
+        );
     }
 
     #[test]
     fn line_map_handles_empty_source() {
         let lm = LineMap::from_source("");
-        assert_eq!(lm.byte_to_position(0), Position { line: 0, character: 0 });
+        assert_eq!(
+            lm.byte_to_position(0),
+            Position {
+                line: 0,
+                character: 0
+            }
+        );
     }
 
     #[test]
     fn line_map_handles_trailing_newline() {
         let lm = LineMap::from_source("a\n");
         // Offset 2 is right after the '\n' — on a virtual line 1, col 0.
-        assert_eq!(lm.byte_to_position(2), Position { line: 1, character: 0 });
+        assert_eq!(
+            lm.byte_to_position(2),
+            Position {
+                line: 1,
+                character: 0
+            }
+        );
     }
 
     #[test]
@@ -146,9 +182,21 @@ mod tests {
         // in UTF-16 (surrogate pair).
         let lm = LineMap::from_source("a🦀b");
         // After 'a': byte 1, line 0, char 1.
-        assert_eq!(lm.byte_to_position(1), Position { line: 0, character: 1 });
+        assert_eq!(
+            lm.byte_to_position(1),
+            Position {
+                line: 0,
+                character: 1
+            }
+        );
         // After '🦀': byte 5, line 0, char 3 (1 + 2 surrogates).
-        assert_eq!(lm.byte_to_position(5), Position { line: 0, character: 3 });
+        assert_eq!(
+            lm.byte_to_position(5),
+            Position {
+                line: 0,
+                character: 3
+            }
+        );
     }
 
     #[test]
@@ -156,7 +204,19 @@ mod tests {
         let lm = LineMap::from_source("let x = 1\nlet y = 2");
         let span = Span::new(cobrust_frontend::span::FileId::SYNTHETIC, 10, 13);
         let range = span_to_lsp_range(&span, &lm);
-        assert_eq!(range.start, Position { line: 1, character: 0 });
-        assert_eq!(range.end, Position { line: 1, character: 3 });
+        assert_eq!(
+            range.start,
+            Position {
+                line: 1,
+                character: 0
+            }
+        );
+        assert_eq!(
+            range.end,
+            Position {
+                line: 1,
+                character: 3
+            }
+        );
     }
 }

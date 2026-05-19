@@ -50,16 +50,10 @@ fn drive_repl(script: &str) -> (String, String) {
         .expect("spawn cobrust repl");
     {
         let mut stdin = child.stdin.take().expect("stdin");
-        stdin
-            .write_all(script.as_bytes())
-            .expect("write stdin");
-        stdin
-            .write_all(b":quit\n")
-            .expect("write :quit");
+        stdin.write_all(script.as_bytes()).expect("write stdin");
+        stdin.write_all(b":quit\n").expect("write :quit");
     }
-    let output = child
-        .wait_with_output()
-        .expect("wait_with_output");
+    let output = child.wait_with_output().expect("wait_with_output");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     (stdout, stderr)
@@ -76,8 +70,7 @@ fn first_fn_def_is_silent() {
 
 #[test]
 fn simple_identical_redef_prints_redefined_notice() {
-    let script =
-        "fn identical_f(x: i64) -> i64:\n    return x + 1\n\nfn identical_f(x: i64) -> i64:\n    return x + 1\n\n";
+    let script = "fn identical_f(x: i64) -> i64:\n    return x + 1\n\nfn identical_f(x: i64) -> i64:\n    return x + 1\n\n";
     let (stdout, _stderr) = drive_repl(script);
     assert!(
         stdout.contains("redefined `identical_f`"),
@@ -91,8 +84,7 @@ fn simple_identical_redef_prints_redefined_notice() {
 
 #[test]
 fn arity_change_flags_signature_changed() {
-    let script =
-        "fn arity_g(x: i64) -> i64:\n    return x\n\nfn arity_g(x: i64, y: i64) -> i64:\n    return x + y\n\n";
+    let script = "fn arity_g(x: i64) -> i64:\n    return x\n\nfn arity_g(x: i64, y: i64) -> i64:\n    return x + y\n\n";
     let (stdout, _stderr) = drive_repl(script);
     assert!(
         stdout.contains("redefined `arity_g`"),
@@ -117,8 +109,7 @@ fn param_type_change_flags_signature_changed() {
 
 #[test]
 fn return_type_change_flags_signature_changed() {
-    let script =
-        "fn rtype_k(x: i64) -> i64:\n    return x\n\nfn rtype_k(x: i64) -> str:\n    return \"ok\"\n\n";
+    let script = "fn rtype_k(x: i64) -> i64:\n    return x\n\nfn rtype_k(x: i64) -> str:\n    return \"ok\"\n\n";
     let (stdout, _stderr) = drive_repl(script);
     assert!(
         stdout.contains("redefined `rtype_k`") && stdout.contains("signature changed"),
@@ -132,10 +123,7 @@ fn type_directive_after_arity_redef_reflects_new_signature() {
     let (stdout, _stderr) = drive_repl(script);
     // FnTy display is "fn(i64, i64) -> i64" or similar; we just confirm
     // the output mentions i64 twice (param + return) AFTER the redef.
-    let after_redef = stdout
-        .split("redefined `tcheck_m`")
-        .nth(1)
-        .unwrap_or("");
+    let after_redef = stdout.split("redefined `tcheck_m`").nth(1).unwrap_or("");
     let i64_count = after_redef.matches("i64").count();
     assert!(
         i64_count >= 3,
@@ -145,8 +133,7 @@ fn type_directive_after_arity_redef_reflects_new_signature() {
 
 #[test]
 fn clear_then_redef_surfaces_silently_no_signature_change() {
-    let script =
-        "fn clr_n(x: i64) -> i64:\n    return x\n\n:clear\nfn clr_n(x: i64) -> i64:\n    return x\n\n";
+    let script = "fn clr_n(x: i64) -> i64:\n    return x\n\n:clear\nfn clr_n(x: i64) -> i64:\n    return x\n\n";
     let (stdout, _stderr) = drive_repl(script);
     assert!(
         stdout.contains("session bindings cleared"),

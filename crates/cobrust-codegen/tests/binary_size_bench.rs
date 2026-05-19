@@ -32,7 +32,6 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::similar_names)]
-
 #![cfg(feature = "llvm")]
 
 use cobrust_codegen::{Artifact, ArtifactKind, Backend, OptLevel, TargetSpec, emit};
@@ -149,15 +148,14 @@ fn compile_and_size(fixture: &Fixture, opt: OptLevel) -> u64 {
     use object::{Object, ObjectSection};
     let mir = lower_to_mir(fixture.source);
     let spec = llvm_spec(fixture.name, opt);
-    let artifact = emit(&mir, spec)
-        .unwrap_or_else(|e| panic!("emit `{}` @ {:?}: {}", fixture.name, opt, e));
+    let artifact =
+        emit(&mir, spec).unwrap_or_else(|e| panic!("emit `{}` @ {:?}: {}", fixture.name, opt, e));
     let Artifact::Object(path) = artifact else {
         panic!("expected Object artifact for `{}`", fixture.name);
     };
-    let bytes = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
-    let obj = object::File::parse(&*bytes)
-        .unwrap_or_else(|e| panic!("parse {}: {}", path.display(), e));
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
+    let obj =
+        object::File::parse(&*bytes).unwrap_or_else(|e| panic!("parse {}: {}", path.display(), e));
     obj.sections()
         .filter(|s| {
             let n = s.name().unwrap_or("");

@@ -314,8 +314,14 @@ fn p2_13_accept_reject_error_well_formed() {
         cb_accepted: false,
     };
     let msg = err.to_string();
-    assert!(msg.contains("rust=true"), "error message must contain rust=true: {msg}");
-    assert!(msg.contains("cb=false"), "error message must contain cb=false: {msg}");
+    assert!(
+        msg.contains("rust=true"),
+        "error message must contain rust=true: {msg}"
+    );
+    assert!(
+        msg.contains("cb=false"),
+        "error message must contain cb=false: {msg}"
+    );
 }
 
 /// P2-14: `ParityError::VariantMismatch` variant is constructible

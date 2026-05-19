@@ -28,7 +28,9 @@
 #![allow(unused_imports)]
 
 use cobrust_types::{FnTy, Ty};
-use cobrust_types_cb::{canonicalize_arena_root, display_ty, ty_cb_arena_from_rust, FnTyArena, RecordArena};
+use cobrust_types_cb::{
+    FnTyArena, RecordArena, canonicalize_arena_root, display_ty, ty_cb_arena_from_rust,
+};
 use cobrust_types_parity::{Canonicalize, TyArena as ParityArena};
 
 // =====================================================================

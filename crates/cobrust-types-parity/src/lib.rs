@@ -151,7 +151,10 @@ impl TyArena {
     /// Allocate a new canonical RecordId (dense-pack counter).
     pub fn fresh_record_id(&mut self) -> u32 {
         let id = self.record_counter;
-        self.record_counter = self.record_counter.checked_add(1).expect("RecordId overflow");
+        self.record_counter = self
+            .record_counter
+            .checked_add(1)
+            .expect("RecordId overflow");
         id
     }
 
@@ -286,7 +289,10 @@ fn canonicalize_fn(fn_ty: &FnTy, arena: &mut TyArena) -> CanonicalKey {
         .map(|t| t.canonicalize(arena))
         .collect();
     for (name, t) in &fn_ty.named {
-        children.push(CanonicalKey::node(name.as_str(), vec![t.canonicalize(arena)]));
+        children.push(CanonicalKey::node(
+            name.as_str(),
+            vec![t.canonicalize(arena)],
+        ));
     }
     if let Some(vp) = &fn_ty.var_positional {
         children.push(CanonicalKey::node("*args", vec![vp.canonicalize(arena)]));
@@ -294,7 +300,10 @@ fn canonicalize_fn(fn_ty: &FnTy, arena: &mut TyArena) -> CanonicalKey {
     if let Some(vk) = &fn_ty.var_keyword {
         children.push(CanonicalKey::node("**kwargs", vec![vk.canonicalize(arena)]));
     }
-    children.push(CanonicalKey::node("->", vec![fn_ty.return_ty.canonicalize(arena)]));
+    children.push(CanonicalKey::node(
+        "->",
+        vec![fn_ty.return_ty.canonicalize(arena)],
+    ));
     CanonicalKey::node("Fn", children)
 }
 
@@ -321,8 +330,14 @@ impl Canonicalize for TypeError {
                 let e = arena.fresh_ty_payload_id();
                 let a = arena.fresh_ty_payload_id();
                 vec![
-                    CanonicalKey::node("expected", vec![CanonicalKey::leaf(&format!("TyPayload#{e}"))]),
-                    CanonicalKey::node("actual", vec![CanonicalKey::leaf(&format!("TyPayload#{a}"))]),
+                    CanonicalKey::node(
+                        "expected",
+                        vec![CanonicalKey::leaf(&format!("TyPayload#{e}"))],
+                    ),
+                    CanonicalKey::node(
+                        "actual",
+                        vec![CanonicalKey::leaf(&format!("TyPayload#{a}"))],
+                    ),
                 ]
             }
             TypeError::RowConflict { field, .. } => {
@@ -340,7 +355,10 @@ impl Canonicalize for TypeError {
             | TypeError::NotIterable { .. }
             | TypeError::NotHashable { .. } => {
                 let a = arena.fresh_ty_payload_id();
-                vec![CanonicalKey::node("actual", vec![CanonicalKey::leaf(&format!("TyPayload#{a}"))])]
+                vec![CanonicalKey::node(
+                    "actual",
+                    vec![CanonicalKey::leaf(&format!("TyPayload#{a}"))],
+                )]
             }
             TypeError::OccursCheck { var, .. } => {
                 let canon_var = arena.var_id(*var);
@@ -359,12 +377,18 @@ impl Canonicalize for TypeError {
             | TypeError::KeywordArgMismatch { name, .. }
             | TypeError::MissingArgument { name, .. }
             | TypeError::DuplicateField { name, .. } => vec![CanonicalKey::leaf(name.as_str())],
-            TypeError::ArityMismatch { expected, actual, .. } => vec![
+            TypeError::ArityMismatch {
+                expected, actual, ..
+            } => vec![
                 CanonicalKey::leaf(&format!("expected={expected}")),
                 CanonicalKey::leaf(&format!("actual={actual}")),
             ],
             TypeError::UseOfDroppedFeature { name, .. } => vec![CanonicalKey::leaf(name)],
-            TypeError::UnknownMethod { type_name, method_name, .. } => vec![
+            TypeError::UnknownMethod {
+                type_name,
+                method_name,
+                ..
+            } => vec![
                 CanonicalKey::leaf(type_name.as_str()),
                 CanonicalKey::leaf(method_name.as_str()),
             ],
@@ -407,7 +431,9 @@ pub enum ParityError {
 
     /// BLOCK rule 3: `Span` raw byte-offset divergence on any
     /// `TypeError` variant. `Span` is **not** canonicalized per §3.
-    #[error("Span raw mismatch on variant `{variant}`: rust_span={rust_span:?}, cb_span={cb_span:?}")]
+    #[error(
+        "Span raw mismatch on variant `{variant}`: rust_span={rust_span:?}, cb_span={cb_span:?}"
+    )]
     SpanRawMismatch {
         variant: String,
         rust_span: String,
@@ -415,7 +441,9 @@ pub enum ParityError {
     },
 
     /// BLOCK rule 4: `suggestion` field divergence.
-    #[error("suggestion field mismatch on variant `{variant}`: rust={rust_suggestion:?}, cb={cb_suggestion:?}")]
+    #[error(
+        "suggestion field mismatch on variant `{variant}`: rust={rust_suggestion:?}, cb={cb_suggestion:?}"
+    )]
     SuggestionMismatch {
         variant: String,
         rust_suggestion: Option<String>,
@@ -426,10 +454,7 @@ pub enum ParityError {
     /// `CanonicalKey` strings are the serialized JSON form for
     /// readability in diagnostics.
     #[error("canonical Ty payload divergence: rust_key={rust_key}, cb_key={cb_key}")]
-    CanonicalPayloadMismatch {
-        rust_key: String,
-        cb_key: String,
-    },
+    CanonicalPayloadMismatch { rust_key: String, cb_key: String },
 }
 
 // =====================================================================
@@ -474,10 +499,8 @@ pub fn parity_check<R: Canonicalize, C: Canonicalize>(
     if rust_key == cb_key {
         Ok(())
     } else {
-        let rust_str = serde_json::to_string(&rust_key)
-            .unwrap_or_else(|_| format!("{rust_key:?}"));
-        let cb_str = serde_json::to_string(&cb_key)
-            .unwrap_or_else(|_| format!("{cb_key:?}"));
+        let rust_str = serde_json::to_string(&rust_key).unwrap_or_else(|_| format!("{rust_key:?}"));
+        let cb_str = serde_json::to_string(&cb_key).unwrap_or_else(|_| format!("{cb_key:?}"));
         Err(ParityError::CanonicalPayloadMismatch {
             rust_key: rust_str,
             cb_key: cb_str,
@@ -543,10 +566,9 @@ pub fn manual_canonical_key(ty: &Ty) -> CanonicalKey {
         Ty::Bytes => CanonicalKey::leaf("Bytes"),
         Ty::None => CanonicalKey::leaf("None"),
         Ty::Never => CanonicalKey::leaf("Never"),
-        Ty::Tuple(items) => CanonicalKey::node(
-            "Tuple",
-            items.iter().map(manual_canonical_key).collect(),
-        ),
+        Ty::Tuple(items) => {
+            CanonicalKey::node("Tuple", items.iter().map(manual_canonical_key).collect())
+        }
         Ty::List(inner) => CanonicalKey::node("List", vec![manual_canonical_key(inner)]),
         Ty::Set(inner) => CanonicalKey::node("Set", vec![manual_canonical_key(inner)]),
         Ty::Dict(k, v) => CanonicalKey::node(

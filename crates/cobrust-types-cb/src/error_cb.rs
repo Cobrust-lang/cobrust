@@ -23,7 +23,7 @@ use cobrust_frontend::span::Span;
 use cobrust_types::TypeError;
 use cobrust_types::ty::VarId;
 use cobrust_types_parity::{
-    type_error_variant_name as rust_te_variant_name, CanonicalKey, Canonicalize, TyArena,
+    CanonicalKey, Canonicalize, TyArena, type_error_variant_name as rust_te_variant_name,
 };
 
 // =====================================================================
@@ -49,7 +49,6 @@ use cobrust_types_parity::{
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypeErrorCb {
     // --- Class 1: Name-only (span + suggestion) -------------------------
-
     /// `break` outside any loop.
     /// Mirrors `TypeError::BreakOutsideLoop`.
     BreakOutsideLoop {
@@ -100,7 +99,6 @@ pub enum TypeErrorCb {
     },
 
     // --- Class 2: Name + String payload ---------------------------------
-
     /// Unknown name (capture-only references during closure analysis).
     /// Mirrors `TypeError::UnknownName { name: String, span, suggestion }`.
     UnknownName {
@@ -143,7 +141,6 @@ pub enum TypeErrorCb {
     },
 
     // --- Class 3: Name + Ty payload (i64 arena handles) -----------------
-
     /// Two types do not unify.
     /// `expected` + `actual` are `i64` TyArena handles.
     /// Mirrors `TypeError::TypeMismatch { expected: Ty, actual: Ty, span, suggestion }`.
@@ -221,7 +218,6 @@ pub enum TypeErrorCb {
     },
 
     // --- Class 4: Composite + special -----------------------------------
-
     /// Wrong number of positional arguments.
     /// Mirrors `TypeError::ArityMismatch { expected: usize, actual: usize, span, suggestion }`.
     ArityMismatch {
@@ -318,36 +314,54 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             span: *span,
             suggestion: opt_string(suggestion),
         },
-        TypeError::UnknownName { name, span, suggestion } => TypeErrorCb::UnknownName {
+        TypeError::UnknownName {
+            name,
+            span,
+            suggestion,
+        } => TypeErrorCb::UnknownName {
             name: name.clone(),
             span: *span,
             suggestion: opt_string(suggestion),
         },
-        TypeError::KeywordArgMismatch { name, span, suggestion } => {
-            TypeErrorCb::KeywordArgMismatch {
-                name: name.clone(),
-                span: *span,
-                suggestion: opt_string(suggestion),
-            }
-        }
-        TypeError::MissingArgument { name, span, suggestion } => TypeErrorCb::MissingArgument {
+        TypeError::KeywordArgMismatch {
+            name,
+            span,
+            suggestion,
+        } => TypeErrorCb::KeywordArgMismatch {
             name: name.clone(),
             span: *span,
             suggestion: opt_string(suggestion),
         },
-        TypeError::DuplicateField { name, span, suggestion } => TypeErrorCb::DuplicateField {
+        TypeError::MissingArgument {
+            name,
+            span,
+            suggestion,
+        } => TypeErrorCb::MissingArgument {
             name: name.clone(),
             span: *span,
             suggestion: opt_string(suggestion),
         },
-        TypeError::UseOfDroppedFeature { name, span, suggestion } => {
-            TypeErrorCb::UseOfDroppedFeature {
-                name: (*name).to_string(),
-                span: *span,
-                suggestion: opt_string(suggestion),
-            }
-        }
-        TypeError::TypeMismatch { span, suggestion, .. } => {
+        TypeError::DuplicateField {
+            name,
+            span,
+            suggestion,
+        } => TypeErrorCb::DuplicateField {
+            name: name.clone(),
+            span: *span,
+            suggestion: opt_string(suggestion),
+        },
+        TypeError::UseOfDroppedFeature {
+            name,
+            span,
+            suggestion,
+        } => TypeErrorCb::UseOfDroppedFeature {
+            name: (*name).to_string(),
+            span: *span,
+            suggestion: opt_string(suggestion),
+        },
+        TypeError::TypeMismatch {
+            span, suggestion, ..
+        } => {
             let expected = i64::from(arena.fresh_ty_payload_id());
             let actual = i64::from(arena.fresh_ty_payload_id());
             TypeErrorCb::TypeMismatch {
@@ -357,7 +371,12 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(suggestion),
             }
         }
-        TypeError::RowConflict { field, span, suggestion, .. } => {
+        TypeError::RowConflict {
+            field,
+            span,
+            suggestion,
+            ..
+        } => {
             let ty1 = i64::from(arena.fresh_ty_payload_id());
             let ty2 = i64::from(arena.fresh_ty_payload_id());
             TypeErrorCb::RowConflict {
@@ -368,7 +387,9 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(suggestion),
             }
         }
-        TypeError::ImplicitTruthiness { span, suggestion, .. } => {
+        TypeError::ImplicitTruthiness {
+            span, suggestion, ..
+        } => {
             let actual = i64::from(arena.fresh_ty_payload_id());
             TypeErrorCb::ImplicitTruthiness {
                 actual,
@@ -376,7 +397,12 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(suggestion),
             }
         }
-        TypeError::OccursCheck { var, span, suggestion, .. } => {
+        TypeError::OccursCheck {
+            var,
+            span,
+            suggestion,
+            ..
+        } => {
             let canon_var = i64::from(arena.var_id(*var));
             let ty = i64::from(arena.fresh_ty_payload_id());
             TypeErrorCb::OccursCheck {
@@ -386,7 +412,9 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(suggestion),
             }
         }
-        TypeError::NotCallable { span, suggestion, .. } => {
+        TypeError::NotCallable {
+            span, suggestion, ..
+        } => {
             let actual = i64::from(arena.fresh_ty_payload_id());
             TypeErrorCb::NotCallable {
                 actual,
@@ -394,7 +422,9 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(suggestion),
             }
         }
-        TypeError::NotIndexable { span, suggestion, .. } => {
+        TypeError::NotIndexable {
+            span, suggestion, ..
+        } => {
             let actual = i64::from(arena.fresh_ty_payload_id());
             TypeErrorCb::NotIndexable {
                 actual,
@@ -402,7 +432,9 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(suggestion),
             }
         }
-        TypeError::NotIterable { span, suggestion, .. } => {
+        TypeError::NotIterable {
+            span, suggestion, ..
+        } => {
             let actual = i64::from(arena.fresh_ty_payload_id());
             TypeErrorCb::NotIterable {
                 actual,
@@ -410,7 +442,9 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(suggestion),
             }
         }
-        TypeError::NotHashable { span, suggestion, .. } => {
+        TypeError::NotHashable {
+            span, suggestion, ..
+        } => {
             let actual = i64::from(arena.fresh_ty_payload_id());
             TypeErrorCb::NotHashable {
                 actual,
@@ -418,31 +452,41 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(suggestion),
             }
         }
-        TypeError::ArityMismatch { expected, actual, span, suggestion } => {
-            TypeErrorCb::ArityMismatch {
-                expected: *expected,
-                actual: *actual,
-                span: *span,
-                suggestion: opt_string(suggestion),
-            }
-        }
-        TypeError::NonExhaustiveMatch { uncovered, span, suggestion } => {
-            TypeErrorCb::NonExhaustiveMatch {
-                uncovered: uncovered.clone(),
-                span: *span,
-                suggestion: opt_string(suggestion),
-            }
-        }
-        TypeError::UnknownMethod { type_name, method_name, span, suggestion } => {
-            TypeErrorCb::UnknownMethod {
-                type_name: type_name.clone(),
-                method_name: method_name.clone(),
-                span: *span,
-                suggestion: opt_string(suggestion),
-            }
-        }
+        TypeError::ArityMismatch {
+            expected,
+            actual,
+            span,
+            suggestion,
+        } => TypeErrorCb::ArityMismatch {
+            expected: *expected,
+            actual: *actual,
+            span: *span,
+            suggestion: opt_string(suggestion),
+        },
+        TypeError::NonExhaustiveMatch {
+            uncovered,
+            span,
+            suggestion,
+        } => TypeErrorCb::NonExhaustiveMatch {
+            uncovered: uncovered.clone(),
+            span: *span,
+            suggestion: opt_string(suggestion),
+        },
+        TypeError::UnknownMethod {
+            type_name,
+            method_name,
+            span,
+            suggestion,
+        } => TypeErrorCb::UnknownMethod {
+            type_name: type_name.clone(),
+            method_name: method_name.clone(),
+            span: *span,
+            suggestion: opt_string(suggestion),
+        },
         TypeError::Multiple(errs) => TypeErrorCb::Multiple(
-            errs.iter().map(|e| type_error_cb_from_rust(e, arena)).collect(),
+            errs.iter()
+                .map(|e| type_error_cb_from_rust(e, arena))
+                .collect(),
         ),
     }
 }
@@ -486,14 +530,8 @@ impl Canonicalize for TypeErrorCb {
                 let t2 = arena.fresh_ty_payload_id();
                 vec![
                     CanonicalKey::leaf(field.as_str()),
-                    CanonicalKey::node(
-                        "ty1",
-                        vec![CanonicalKey::leaf(&format!("TyPayload#{t1}"))],
-                    ),
-                    CanonicalKey::node(
-                        "ty2",
-                        vec![CanonicalKey::leaf(&format!("TyPayload#{t2}"))],
-                    ),
+                    CanonicalKey::node("ty1", vec![CanonicalKey::leaf(&format!("TyPayload#{t1}"))]),
+                    CanonicalKey::node("ty2", vec![CanonicalKey::leaf(&format!("TyPayload#{t2}"))]),
                 ]
             }
             TypeErrorCb::ImplicitTruthiness { .. }
@@ -521,23 +559,27 @@ impl Canonicalize for TypeErrorCb {
                 .iter()
                 .map(|s| CanonicalKey::leaf(s.as_str()))
                 .collect(),
-            TypeErrorCb::Multiple(errs) => {
-                errs.iter().map(|e| e.canonicalize(arena)).collect()
-            }
+            TypeErrorCb::Multiple(errs) => errs.iter().map(|e| e.canonicalize(arena)).collect(),
             TypeErrorCb::UnknownName { name, .. }
             | TypeErrorCb::KeywordArgMismatch { name, .. }
             | TypeErrorCb::MissingArgument { name, .. }
             | TypeErrorCb::DuplicateField { name, .. } => {
                 vec![CanonicalKey::leaf(name.as_str())]
             }
-            TypeErrorCb::ArityMismatch { expected, actual, .. } => vec![
+            TypeErrorCb::ArityMismatch {
+                expected, actual, ..
+            } => vec![
                 CanonicalKey::leaf(&format!("expected={expected}")),
                 CanonicalKey::leaf(&format!("actual={actual}")),
             ],
             TypeErrorCb::UseOfDroppedFeature { name, .. } => {
                 vec![CanonicalKey::leaf(name.as_str())]
             }
-            TypeErrorCb::UnknownMethod { type_name, method_name, .. } => vec![
+            TypeErrorCb::UnknownMethod {
+                type_name,
+                method_name,
+                ..
+            } => vec![
                 CanonicalKey::leaf(type_name.as_str()),
                 CanonicalKey::leaf(method_name.as_str()),
             ],
@@ -579,7 +621,12 @@ impl std::fmt::Display for TypeErrorCb {
             TypeErrorCb::UnknownName { name, span, .. } => {
                 write!(f, "unknown name `{name}` at {span}")
             }
-            TypeErrorCb::ArityMismatch { expected, actual, span, .. } => {
+            TypeErrorCb::ArityMismatch {
+                expected,
+                actual,
+                span,
+                ..
+            } => {
                 write!(f, "expected {expected} arguments, got {actual} at {span}")
             }
             TypeErrorCb::KeywordArgMismatch { name, span, .. } => {
@@ -588,7 +635,12 @@ impl std::fmt::Display for TypeErrorCb {
             TypeErrorCb::MissingArgument { name, span, .. } => {
                 write!(f, "missing required argument `{name}` at {span}")
             }
-            TypeErrorCb::TypeMismatch { expected, actual, span, .. } => {
+            TypeErrorCb::TypeMismatch {
+                expected,
+                actual,
+                span,
+                ..
+            } => {
                 write!(
                     f,
                     "type mismatch: expected `{}`, found `{}` at {span}",
@@ -596,10 +648,21 @@ impl std::fmt::Display for TypeErrorCb {
                     handle_to_ty_display(*actual)
                 )
             }
-            TypeErrorCb::NonExhaustiveMatch { uncovered, span, .. } => {
-                write!(f, "non-exhaustive match: missing case(s) {uncovered:?} at {span}")
+            TypeErrorCb::NonExhaustiveMatch {
+                uncovered, span, ..
+            } => {
+                write!(
+                    f,
+                    "non-exhaustive match: missing case(s) {uncovered:?} at {span}"
+                )
             }
-            TypeErrorCb::RowConflict { field, ty1, ty2, span, .. } => {
+            TypeErrorCb::RowConflict {
+                field,
+                ty1,
+                ty2,
+                span,
+                ..
+            } => {
                 write!(
                     f,
                     "conflicting field `{field}` in record types at {span}: `{}` vs `{}`",
@@ -624,7 +687,10 @@ impl std::fmt::Display for TypeErrorCb {
                 write!(f, "mutable default argument is forbidden at {span}")
             }
             TypeErrorCb::AmbiguousType { span, .. } => {
-                write!(f, "ambiguous type at {span} (consider adding an annotation)")
+                write!(
+                    f,
+                    "ambiguous type at {span} (consider adding an annotation)"
+                )
             }
             TypeErrorCb::DuplicateField { name, span, .. } => {
                 write!(f, "duplicate field `{name}` at {span}")
@@ -637,13 +703,25 @@ impl std::fmt::Display for TypeErrorCb {
                 )
             }
             TypeErrorCb::NotCallable { actual, span, .. } => {
-                write!(f, "not callable: `{}` at {span}", handle_to_ty_display(*actual))
+                write!(
+                    f,
+                    "not callable: `{}` at {span}",
+                    handle_to_ty_display(*actual)
+                )
             }
             TypeErrorCb::NotIndexable { actual, span, .. } => {
-                write!(f, "not indexable: `{}` at {span}", handle_to_ty_display(*actual))
+                write!(
+                    f,
+                    "not indexable: `{}` at {span}",
+                    handle_to_ty_display(*actual)
+                )
             }
             TypeErrorCb::NotIterable { actual, span, .. } => {
-                write!(f, "not iterable: `{}` at {span}", handle_to_ty_display(*actual))
+                write!(
+                    f,
+                    "not iterable: `{}` at {span}",
+                    handle_to_ty_display(*actual)
+                )
             }
             TypeErrorCb::BreakOutsideLoop { span, .. } => {
                 write!(f, "`break` outside any loop at {span}")
@@ -672,8 +750,16 @@ impl std::fmt::Display for TypeErrorCb {
             TypeErrorCb::BorrowOfNonPlace { span, .. } => {
                 write!(f, "cannot borrow non-place expression at {span}")
             }
-            TypeErrorCb::UnknownMethod { type_name, method_name, span, .. } => {
-                write!(f, "method `{method_name}` not found on `{type_name}` at {span}")
+            TypeErrorCb::UnknownMethod {
+                type_name,
+                method_name,
+                span,
+                ..
+            } => {
+                write!(
+                    f,
+                    "method `{method_name}` not found on `{type_name}` at {span}"
+                )
             }
         }
     }

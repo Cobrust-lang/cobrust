@@ -86,12 +86,24 @@ fn test_display_multiple() {
     //
     // Rust `#[error("multiple type errors")]` → cb Display must emit same string.
     let rust_err = TypeError::Multiple(vec![
-        TypeError::BreakOutsideLoop { span: dummy_span(), suggestion: None },
-        TypeError::MutableDefault { span: dummy_span(), suggestion: None },
+        TypeError::BreakOutsideLoop {
+            span: dummy_span(),
+            suggestion: None,
+        },
+        TypeError::MutableDefault {
+            span: dummy_span(),
+            suggestion: None,
+        },
     ]);
     let cb_err = TypeErrorCb::Multiple(vec![
-        TypeErrorCb::BreakOutsideLoop { span: dummy_span(), suggestion: None },
-        TypeErrorCb::MutableDefault { span: dummy_span(), suggestion: None },
+        TypeErrorCb::BreakOutsideLoop {
+            span: dummy_span(),
+            suggestion: None,
+        },
+        TypeErrorCb::MutableDefault {
+            span: dummy_span(),
+            suggestion: None,
+        },
     ]);
     assert_eq!(
         format!("{rust_err}"),
@@ -108,8 +120,14 @@ fn test_display_multiple() {
 
 fn test_display_break_outside_loop() {
     let span = dummy_span();
-    let rust_err = TypeError::BreakOutsideLoop { span, suggestion: None };
-    let cb_err = TypeErrorCb::BreakOutsideLoop { span, suggestion: None };
+    let rust_err = TypeError::BreakOutsideLoop {
+        span,
+        suggestion: None,
+    };
+    let cb_err = TypeErrorCb::BreakOutsideLoop {
+        span,
+        suggestion: None,
+    };
     assert_eq!(
         format!("{rust_err}"),
         format!("{cb_err}"),

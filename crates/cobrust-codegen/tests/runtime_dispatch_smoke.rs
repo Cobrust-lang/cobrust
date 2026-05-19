@@ -20,11 +20,11 @@
 #![allow(clippy::cast_possible_wrap)]
 
 use cobrust_codegen::{ArtifactKind, Backend, OptLevel, TargetSpec, emit};
-use object::ObjectSymbol as _;
 use cobrust_frontend::{parse_str, span::FileId};
 use cobrust_hir::{Session, lower as hir_lower};
 use cobrust_mir::{Module as MirModule, lower as mir_lower};
 use cobrust_types::check;
+use object::ObjectSymbol as _;
 use target_lexicon::Triple;
 
 // F34 anchor: runtime_dispatch_smoke::lower_to_mir
@@ -130,7 +130,9 @@ fn smoke_dispatch_disabled_emits_single_symbol() {
 
     let syms = object_symbols(artifact.path());
     assert!(
-        !syms.iter().any(|s| s.contains("_v1_sse2") || s.contains("_v2_avx2") || s.contains("_v3_avx512")),
+        !syms
+            .iter()
+            .any(|s| s.contains("_v1_sse2") || s.contains("_v2_avx2") || s.contains("_v3_avx512")),
         "versioned symbols present when dispatch disabled; symbols: {syms:?}"
     );
 }

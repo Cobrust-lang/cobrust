@@ -21,8 +21,8 @@ use cobrust_hir::LoweringError;
 use cobrust_mir::MirError;
 use cobrust_types::TypeError;
 use tower_lsp::lsp_types::{
-    Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString,
-    Range, Url,
+    Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString, Range,
+    Url,
 };
 
 use crate::span_convert::{LineMap, span_to_lsp_range};
@@ -96,30 +96,64 @@ pub fn type_error_to_diagnostics(err: &TypeError, line_map: &LineMap) -> Vec<Dia
 fn type_error_to_diagnostic_single(err: &TypeError, line_map: &LineMap) -> Diagnostic {
     use TypeError::*;
     let (span, suggestion, code) = match err {
-        UnknownName { span, suggestion, .. } => (*span, *suggestion, "unknown-name"),
-        ArityMismatch { span, suggestion, .. } => (*span, *suggestion, "arity-mismatch"),
-        KeywordArgMismatch { span, suggestion, .. } => (*span, *suggestion, "keyword-arg-mismatch"),
-        MissingArgument { span, suggestion, .. } => (*span, *suggestion, "missing-argument"),
-        TypeMismatch { span, suggestion, .. } => (*span, *suggestion, "type-mismatch"),
-        NonExhaustiveMatch { span, suggestion, .. } => (*span, *suggestion, "non-exhaustive-match"),
-        RowConflict { span, suggestion, .. } => (*span, *suggestion, "row-conflict"),
-        ImplicitTruthiness { span, suggestion, .. } => (*span, *suggestion, "implicit-truthiness"),
-        UseOfDroppedFeature { span, suggestion, .. } => (*span, *suggestion, "dropped-feature"),
+        UnknownName {
+            span, suggestion, ..
+        } => (*span, *suggestion, "unknown-name"),
+        ArityMismatch {
+            span, suggestion, ..
+        } => (*span, *suggestion, "arity-mismatch"),
+        KeywordArgMismatch {
+            span, suggestion, ..
+        } => (*span, *suggestion, "keyword-arg-mismatch"),
+        MissingArgument {
+            span, suggestion, ..
+        } => (*span, *suggestion, "missing-argument"),
+        TypeMismatch {
+            span, suggestion, ..
+        } => (*span, *suggestion, "type-mismatch"),
+        NonExhaustiveMatch {
+            span, suggestion, ..
+        } => (*span, *suggestion, "non-exhaustive-match"),
+        RowConflict {
+            span, suggestion, ..
+        } => (*span, *suggestion, "row-conflict"),
+        ImplicitTruthiness {
+            span, suggestion, ..
+        } => (*span, *suggestion, "implicit-truthiness"),
+        UseOfDroppedFeature {
+            span, suggestion, ..
+        } => (*span, *suggestion, "dropped-feature"),
         MutableDefault { span, suggestion } => (*span, *suggestion, "mutable-default"),
         AmbiguousType { span, suggestion } => (*span, *suggestion, "ambiguous-type"),
-        DuplicateField { span, suggestion, .. } => (*span, *suggestion, "duplicate-field"),
-        OccursCheck { span, suggestion, .. } => (*span, *suggestion, "occurs-check"),
-        NotCallable { span, suggestion, .. } => (*span, *suggestion, "not-callable"),
-        NotIndexable { span, suggestion, .. } => (*span, *suggestion, "not-indexable"),
-        NotIterable { span, suggestion, .. } => (*span, *suggestion, "not-iterable"),
+        DuplicateField {
+            span, suggestion, ..
+        } => (*span, *suggestion, "duplicate-field"),
+        OccursCheck {
+            span, suggestion, ..
+        } => (*span, *suggestion, "occurs-check"),
+        NotCallable {
+            span, suggestion, ..
+        } => (*span, *suggestion, "not-callable"),
+        NotIndexable {
+            span, suggestion, ..
+        } => (*span, *suggestion, "not-indexable"),
+        NotIterable {
+            span, suggestion, ..
+        } => (*span, *suggestion, "not-iterable"),
         BreakOutsideLoop { span, suggestion } => (*span, *suggestion, "break-outside-loop"),
         ContinueOutsideLoop { span, suggestion } => (*span, *suggestion, "continue-outside-loop"),
         ReturnOutsideFn { span, suggestion } => (*span, *suggestion, "return-outside-fn"),
         YieldOutsideFn { span, suggestion } => (*span, *suggestion, "yield-outside-fn"),
-        NotHashable { span, suggestion, .. } => (*span, *suggestion, "not-hashable"),
-        DictSpreadNotSupported { span, suggestion } => (*span, *suggestion, "dict-spread-unsupported"),
+        NotHashable {
+            span, suggestion, ..
+        } => (*span, *suggestion, "not-hashable"),
+        DictSpreadNotSupported { span, suggestion } => {
+            (*span, *suggestion, "dict-spread-unsupported")
+        }
         BorrowOfNonPlace { span, suggestion } => (*span, *suggestion, "borrow-of-non-place"),
-        UnknownMethod { span, suggestion, .. } => (*span, *suggestion, "unknown-method"),
+        UnknownMethod {
+            span, suggestion, ..
+        } => (*span, *suggestion, "unknown-method"),
         Multiple(_) => unreachable!("Multiple flattened by type_error_to_diagnostics"),
     };
     let range = span_to_lsp_range(&span, line_map);
@@ -141,21 +175,33 @@ fn type_error_to_diagnostic_single(err: &TypeError, line_map: &LineMap) -> Diagn
 pub fn mir_error_to_diagnostic(err: &MirError, line_map: &LineMap) -> Diagnostic {
     use MirError::*;
     let (span_opt, suggestion, code) = match err {
-        UseAfterMove { span, suggestion, .. } => (Some(*span), *suggestion, "use-after-move"),
-        UseAfterDrop { span, suggestion, .. } => (Some(*span), *suggestion, "use-after-drop"),
-        ConflictingMutBorrow { span, suggestion, .. } => {
-            (Some(*span), *suggestion, "conflicting-mut-borrow")
-        }
-        SharedMutOverlap { span, suggestion, .. } => {
-            (Some(*span), *suggestion, "shared-mut-overlap")
-        }
-        EscapingBorrow { span, suggestion, .. } => (Some(*span), *suggestion, "escaping-borrow"),
-        DropMissing { span, suggestion, .. } => (Some(*span), *suggestion, "drop-missing"),
-        DoubleDrop { span, suggestion, .. } => (Some(*span), *suggestion, "double-drop"),
-        FieldOutOfBounds { span, suggestion, .. } => {
-            (Some(*span), *suggestion, "field-out-of-bounds")
-        }
-        UnresolvedDefId { span, suggestion, .. } => (Some(*span), *suggestion, "unresolved-defid"),
+        UseAfterMove {
+            span, suggestion, ..
+        } => (Some(*span), *suggestion, "use-after-move"),
+        UseAfterDrop {
+            span, suggestion, ..
+        } => (Some(*span), *suggestion, "use-after-drop"),
+        ConflictingMutBorrow {
+            span, suggestion, ..
+        } => (Some(*span), *suggestion, "conflicting-mut-borrow"),
+        SharedMutOverlap {
+            span, suggestion, ..
+        } => (Some(*span), *suggestion, "shared-mut-overlap"),
+        EscapingBorrow {
+            span, suggestion, ..
+        } => (Some(*span), *suggestion, "escaping-borrow"),
+        DropMissing {
+            span, suggestion, ..
+        } => (Some(*span), *suggestion, "drop-missing"),
+        DoubleDrop {
+            span, suggestion, ..
+        } => (Some(*span), *suggestion, "double-drop"),
+        FieldOutOfBounds {
+            span, suggestion, ..
+        } => (Some(*span), *suggestion, "field-out-of-bounds"),
+        UnresolvedDefId {
+            span, suggestion, ..
+        } => (Some(*span), *suggestion, "unresolved-defid"),
         NonExhaustiveSwitch { span, suggestion } => {
             (Some(*span), *suggestion, "non-exhaustive-switch")
         }
@@ -173,16 +219,22 @@ pub fn mir_error_to_diagnostic(err: &MirError, line_map: &LineMap) -> Diagnostic
 pub fn lowering_error_to_diagnostic(err: &LoweringError, line_map: &LineMap) -> Diagnostic {
     use LoweringError::*;
     let (span, suggestion, code) = match err {
-        UnknownName { span, suggestion, .. } => (*span, *suggestion, "lower-unknown-name"),
-        DroppedFeature { span, suggestion, .. } => (*span, *suggestion, "lower-dropped-feature"),
+        UnknownName {
+            span, suggestion, ..
+        } => (*span, *suggestion, "lower-unknown-name"),
+        DroppedFeature {
+            span, suggestion, ..
+        } => (*span, *suggestion, "lower-dropped-feature"),
         MutableDefault { span, suggestion } => (*span, *suggestion, "lower-mutable-default"),
         OrPatternBindingMismatch { span, suggestion } => {
             (*span, *suggestion, "lower-or-pattern-mismatch")
         }
-        DuplicateBinding { second, suggestion, .. } => {
-            (*second, *suggestion, "lower-duplicate-binding")
-        }
-        AssignToUnknown { span, suggestion, .. } => (*span, *suggestion, "lower-assign-unknown"),
+        DuplicateBinding {
+            second, suggestion, ..
+        } => (*second, *suggestion, "lower-duplicate-binding"),
+        AssignToUnknown {
+            span, suggestion, ..
+        } => (*span, *suggestion, "lower-assign-unknown"),
     };
     let range = span_to_lsp_range(&span, line_map);
     let diag = make_diagnostic(range, err.to_string(), code);
@@ -214,9 +266,11 @@ pub fn frontend_error_to_diagnostic(err: &FrontendError, line_map: &LineMap) -> 
 fn lex_error_span(err: &LexError) -> Span {
     use LexError::*;
     match err {
-        InvalidUtf8 { byte_offset } => {
-            Span::new(cobrust_frontend::span::FileId::SYNTHETIC, *byte_offset, *byte_offset)
-        }
+        InvalidUtf8 { byte_offset } => Span::new(
+            cobrust_frontend::span::FileId::SYNTHETIC,
+            *byte_offset,
+            *byte_offset,
+        ),
         UnexpectedChar { span, .. }
         | UnterminatedString { span }
         | UnterminatedFString { span }
@@ -278,7 +332,10 @@ mod tests {
         let diags = type_error_to_diagnostics(&err, &lm);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("truthiness"));
-        assert_eq!(diags[0].code, Some(NumberOrString::String("implicit-truthiness".into())));
+        assert_eq!(
+            diags[0].code,
+            Some(NumberOrString::String("implicit-truthiness".into()))
+        );
     }
 
     #[test]
@@ -313,7 +370,10 @@ mod tests {
         let d = mir_error_to_diagnostic(&err, &lm);
         let related = d.related_information.as_ref().expect("suggestion present");
         assert!(related[0].message.contains("&s"));
-        assert_eq!(d.code, Some(NumberOrString::String("use-after-move".into())));
+        assert_eq!(
+            d.code,
+            Some(NumberOrString::String("use-after-move".into()))
+        );
     }
 
     #[test]

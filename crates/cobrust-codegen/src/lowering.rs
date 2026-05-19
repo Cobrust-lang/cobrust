@@ -406,10 +406,7 @@ fn terminator_kind(t: &Terminator) -> &'static str {
 /// Propagates from any sub-lowering helper.
 pub fn lower_body_wave1(body: &Body, call_conv: CallConv) -> Result<ir::Function, CodegenError> {
     let sig = body_signature_wave1(body, call_conv)?;
-    let mut function = ir::Function::with_name_signature(
-        UserFuncName::user(0, body.def_id.0),
-        sig,
-    );
+    let mut function = ir::Function::with_name_signature(UserFuncName::user(0, body.def_id.0), sig);
     let inferred = infer_locals_wave1(body)?;
 
     let mut builder_ctx = FunctionBuilderContext::new();

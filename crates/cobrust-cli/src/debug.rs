@@ -286,11 +286,7 @@ fn write_lldbrc(
         .file_name()
         .map_or_else(|| source.to_string_lossy(), |s| s.to_string_lossy());
     for line in breakpoints {
-        writeln!(
-            rc,
-            "breakpoint set --file {} --line {}",
-            source_name, line
-        )?;
+        writeln!(rc, "breakpoint set --file {} --line {}", source_name, line)?;
     }
     rc.flush()?;
     Ok(rc)
@@ -340,7 +336,10 @@ mod tests {
 
     #[test]
     fn debug_error_exit_codes_map_to_adr_0024_scheme() {
-        assert_eq!(DebugError::MissingSource.exit_code(), exit_codes::USER_ERROR);
+        assert_eq!(
+            DebugError::MissingSource.exit_code(),
+            exit_codes::USER_ERROR
+        );
         assert_eq!(
             DebugError::SourceNotFound(PathBuf::from("/nope.cb")).exit_code(),
             exit_codes::USER_ERROR
