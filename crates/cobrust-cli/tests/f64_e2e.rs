@@ -177,10 +177,10 @@ fn assert_build_run(name: &str, src: &str, args: &[&str], stdin: &[u8], expected
 
 #[test]
 fn f64e01_cast_int_literal_to_f64_then_to_i64() {
-    // `let x: f64 = 3.14; print_int(x as i64)` → prints "3" (truncating).
+    // `let x: f64 = 3.14; print(x as i64)` → prints "3" (truncating).
     assert_build_run(
         "f64e01_cast_int_lit",
-        "fn main() -> i64:\n    let x: f64 = 3.14\n    print_int((x as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let x: f64 = 3.14\n    print((x as i64))\n    return 0\n",
         &[],
         b"",
         "3\n",
@@ -189,10 +189,10 @@ fn f64e01_cast_int_literal_to_f64_then_to_i64() {
 
 #[test]
 fn f64e02_cast_i64_to_f64_then_divide() {
-    // `print_int(((10 as f64) / 3.0) as i64)` → "3" (integer division via float).
+    // `print(((10 as f64) / 3.0) as i64)` → "3" (integer division via float).
     assert_build_run(
         "f64e02_cast_div",
-        "fn main() -> i64:\n    print_int((((10 as f64) / 3.0) as i64))\n    return 0\n",
+        "fn main() -> i64:\n    print((((10 as f64) / 3.0) as i64))\n    return 0\n",
         &[],
         b"",
         "3\n",
@@ -204,7 +204,7 @@ fn f64e03_cast_f64_to_i64_floor_semantics() {
     // `3.9 as i64` truncates toward zero (C/IEEE semantics) → 3.
     assert_build_run(
         "f64e03_cast_trunc",
-        "fn main() -> i64:\n    let v: f64 = 3.9\n    print_int((v as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let v: f64 = 3.9\n    print((v as i64))\n    return 0\n",
         &[],
         b"",
         "3\n",
@@ -216,7 +216,7 @@ fn f64e04_cast_negative_f64_to_i64_truncates_toward_zero() {
     // `-3.9 as i64` truncates toward zero → -3 (not -4).
     assert_build_run(
         "f64e04_cast_neg_trunc",
-        "fn main() -> i64:\n    let v: f64 = -3.9\n    print_int((v as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let v: f64 = -3.9\n    print((v as i64))\n    return 0\n",
         &[],
         b"",
         "-3\n",
@@ -228,7 +228,7 @@ fn f64e05_cast_i64_zero_to_f64() {
     // `(0 as f64)` should produce 0.0 which cast back to i64 is 0.
     assert_build_run(
         "f64e05_cast_zero",
-        "fn main() -> i64:\n    let z: f64 = (0 as f64)\n    print_int((z as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let z: f64 = (0 as f64)\n    print((z as i64))\n    return 0\n",
         &[],
         b"",
         "0\n",
@@ -249,7 +249,7 @@ fn f64e06_sqrt_of_four_is_two() {
     // `sqrt(4.0)` → 2.0 → `as i64` → 2.
     assert_build_run(
         "f64e06_sqrt",
-        "fn main() -> i64:\n    let r: f64 = sqrt(4.0)\n    print_int((r as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let r: f64 = sqrt(4.0)\n    print((r as i64))\n    return 0\n",
         &[],
         b"",
         "2\n",
@@ -261,7 +261,7 @@ fn f64e07_sqrt_of_two_truncated() {
     // `sqrt(2.0)` → ~1.4142 → truncated as i64 → 1.
     assert_build_run(
         "f64e07_sqrt_two",
-        "fn main() -> i64:\n    let r: f64 = sqrt(2.0)\n    print_int((r as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let r: f64 = sqrt(2.0)\n    print((r as i64))\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -273,7 +273,7 @@ fn f64e08_pow_two_to_ten_is_1024() {
     // `pow(2.0, 10.0) as i64` → 1024.
     assert_build_run(
         "f64e08_pow",
-        "fn main() -> i64:\n    let p: f64 = pow(2.0, 10.0)\n    print_int((p as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let p: f64 = pow(2.0, 10.0)\n    print((p as i64))\n    return 0\n",
         &[],
         b"",
         "1024\n",
@@ -285,7 +285,7 @@ fn f64e09_floor_of_3pt7_is_3() {
     // `floor(3.7) as i64` → 3.
     assert_build_run(
         "f64e09_floor",
-        "fn main() -> i64:\n    let f: f64 = floor(3.7)\n    print_int((f as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let f: f64 = floor(3.7)\n    print((f as i64))\n    return 0\n",
         &[],
         b"",
         "3\n",
@@ -297,7 +297,7 @@ fn f64e10_ceil_of_3pt2_is_4() {
     // `ceil(3.2) as i64` → 4.
     assert_build_run(
         "f64e10_ceil",
-        "fn main() -> i64:\n    let c: f64 = ceil(3.2)\n    print_int((c as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let c: f64 = ceil(3.2)\n    print((c as i64))\n    return 0\n",
         &[],
         b"",
         "4\n",
@@ -311,7 +311,7 @@ fn f64e11_round_of_2pt5_is_3() {
     // Cobrust follows Rust's f64::round() which is "round half away from zero" → 3.
     assert_build_run(
         "f64e11_round",
-        "fn main() -> i64:\n    let r: f64 = round(2.5)\n    print_int((r as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let r: f64 = round(2.5)\n    print((r as i64))\n    return 0\n",
         &[],
         b"",
         "3\n",
@@ -323,7 +323,7 @@ fn f64e12_abs_of_negative() {
     // `abs(-5.5) as i64` → 5.
     assert_build_run(
         "f64e12_abs",
-        "fn main() -> i64:\n    let a: f64 = abs(-5.5)\n    print_int((a as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let a: f64 = abs(-5.5)\n    print((a as i64))\n    return 0\n",
         &[],
         b"",
         "5\n",
@@ -387,7 +387,7 @@ fn f64e16_nan_not_equal_to_itself() {
     // Tests that the codegen uses `fcmp` with the NaN-aware `ne` predicate.
     assert_build_run(
         "f64e16_nan_neq",
-        "fn main() -> i64:\n    let n: f64 = nan\n    if (n != n):\n        print_int(1)\n    return 0\n",
+        "fn main() -> i64:\n    let n: f64 = nan\n    if (n != n):\n        print(1)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -399,7 +399,7 @@ fn f64e17_nan_equal_to_itself_is_false() {
     // `nan == nan` must be `false` — the else branch prints 0.
     assert_build_run(
         "f64e17_nan_eq_false",
-        "fn main() -> i64:\n    let n: f64 = nan\n    if (n == n):\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n",
+        "fn main() -> i64:\n    let n: f64 = nan\n    if (n == n):\n        print(1)\n    else:\n        print(0)\n    return 0\n",
         &[],
         b"",
         "0\n",
@@ -411,7 +411,7 @@ fn f64e18_inf_greater_than_any_finite() {
     // `inf > 1e308` must be `true`.
     assert_build_run(
         "f64e18_inf_gt",
-        "fn main() -> i64:\n    let i: f64 = inf\n    let big: f64 = 1e308\n    if (i > big):\n        print_int(1)\n    return 0\n",
+        "fn main() -> i64:\n    let i: f64 = inf\n    let big: f64 = 1e308\n    if (i > big):\n        print(1)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -423,7 +423,7 @@ fn f64e19_neg_inf_less_than_any_finite() {
     // `-inf < -1e308` must be `true`.
     assert_build_run(
         "f64e19_neg_inf_lt",
-        "fn main() -> i64:\n    let ni: f64 = -inf\n    let neg_big: f64 = -1e308\n    if (ni < neg_big):\n        print_int(1)\n    return 0\n",
+        "fn main() -> i64:\n    let ni: f64 = -inf\n    let neg_big: f64 = -1e308\n    if (ni < neg_big):\n        print(1)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -435,7 +435,7 @@ fn f64e20_inf_ordering_chain() {
     // `-inf < 0.0 < inf` is true.
     assert_build_run(
         "f64e20_inf_order",
-        "fn main() -> i64:\n    let pos: f64 = inf\n    let neg: f64 = -inf\n    let zero: f64 = 0.0\n    if ((neg < zero) and (zero < pos)):\n        print_int(1)\n    return 0\n",
+        "fn main() -> i64:\n    let pos: f64 = inf\n    let neg: f64 = -inf\n    let zero: f64 = 0.0\n    if ((neg < zero) and (zero < pos)):\n        print(1)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -448,7 +448,7 @@ fn f64e21_one_div_zero_is_inf() {
     // Cobrust must NOT trap on float division by zero (unlike integer div/zero).
     assert_build_run(
         "f64e21_div_zero_inf",
-        "fn main() -> i64:\n    let r: f64 = (1.0 / 0.0)\n    let i: f64 = inf\n    if (r == i):\n        print_int(1)\n    return 0\n",
+        "fn main() -> i64:\n    let r: f64 = (1.0 / 0.0)\n    let i: f64 = inf\n    if (r == i):\n        print(1)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -461,7 +461,7 @@ fn f64e22_zero_point_one_plus_zero_point_two_not_eq_zero_point_three() {
     // This is the canonical floating-point gotcha; Cobrust must not paper over it.
     assert_build_run(
         "f64e22_0point1_0point2",
-        "fn main() -> i64:\n    let s: f64 = (0.1 + 0.2)\n    let t: f64 = 0.3\n    if (s != t):\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n",
+        "fn main() -> i64:\n    let s: f64 = (0.1 + 0.2)\n    let t: f64 = 0.3\n    if (s != t):\n        print(1)\n    else:\n        print(0)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -475,7 +475,7 @@ fn f64e23_sqrt_negative_produces_nan() {
     // NOTE: Requires sqrt() PRELUDE intrinsic to be wired (gap item b).
     assert_build_run(
         "f64e23_sqrt_neg_nan",
-        "fn main() -> i64:\n    let r: f64 = sqrt(-1.0)\n    if (r != r):\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n",
+        "fn main() -> i64:\n    let r: f64 = sqrt(-1.0)\n    if (r != r):\n        print(1)\n    else:\n        print(0)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -542,7 +542,7 @@ fn f64e28_inf_run_prints_int_one() {
     // `inf > 0.0` is true → prints 1.
     assert_build_run(
         "f64e28_inf_run",
-        "fn main() -> i64:\n    let x: f64 = inf\n    if (x > 0.0):\n        print_int(1)\n    return 0\n",
+        "fn main() -> i64:\n    let x: f64 = inf\n    if (x > 0.0):\n        print(1)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -554,7 +554,7 @@ fn f64e29_nan_run_not_gt_zero() {
     // `nan > 0.0` is false per IEEE 754 (NaN comparisons are always false).
     assert_build_run(
         "f64e29_nan_not_gt",
-        "fn main() -> i64:\n    let x: f64 = nan\n    if (x > 0.0):\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n",
+        "fn main() -> i64:\n    let x: f64 = nan\n    if (x > 0.0):\n        print(1)\n    else:\n        print(0)\n    return 0\n",
         &[],
         b"",
         "0\n",
@@ -577,7 +577,7 @@ fn f64e30_log_negative_produces_nan_bit_pattern_preserved() {
     // NOTE: Requires log() PRELUDE intrinsic (gap item b).
     assert_build_run(
         "f64e30_log_neg_nan",
-        "fn main() -> i64:\n    let r: f64 = log(-1.0)\n    if (r != r):\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n",
+        "fn main() -> i64:\n    let r: f64 = log(-1.0)\n    if (r != r):\n        print(1)\n    else:\n        print(0)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -591,7 +591,7 @@ fn f64e31_pow_negative_base_non_integer_exp_is_nan() {
     // NOTE: Requires pow() PRELUDE intrinsic (gap item b).
     assert_build_run(
         "f64e31_pow_neg_nan",
-        "fn main() -> i64:\n    let r: f64 = pow(-1.0, 0.5)\n    if (r != r):\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n",
+        "fn main() -> i64:\n    let r: f64 = pow(-1.0, 0.5)\n    if (r != r):\n        print(1)\n    else:\n        print(0)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -607,7 +607,7 @@ fn f64e32_pow_then_cast_back_to_i64() {
     // pow(2.0, 10.0) = 1024.0 → as i64 → 1024. Mirrors mission brief example.
     assert_build_run(
         "f64e32_pow_cast",
-        "fn main() -> i64:\n    let p: f64 = pow(2.0, 10.0)\n    print_int((p as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let p: f64 = pow(2.0, 10.0)\n    print((p as i64))\n    return 0\n",
         &[],
         b"",
         "1024\n",
@@ -637,7 +637,7 @@ fn f64e34_basic_float_arithmetic_print() {
     // (1.5 + 2.5) * 2.0 = 8.0 → as i64 → 8.
     assert_build_run(
         "f64e34_basic_arith",
-        "fn main() -> i64:\n    let a: f64 = 1.5\n    let b: f64 = 2.5\n    let c: f64 = ((a + b) * 2.0)\n    print_int((c as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let a: f64 = 1.5\n    let b: f64 = 2.5\n    let c: f64 = ((a + b) * 2.0)\n    print((c as i64))\n    return 0\n",
         &[],
         b"",
         "8\n",
@@ -652,7 +652,7 @@ fn f64e35_cast_in_loop_accumulates_correctly() {
     // NOTE: Requires both `as` cast (gap a) and `range`/for (already shipped).
     assert_build_run(
         "f64e35_cast_loop",
-        "fn main() -> i64:\n    let acc: f64 = 0.0\n    let i: i64 = 0\n    while (i < 10):\n        acc = (acc + ((i as f64) + 1.0))\n        i = (i + 1)\n    print_int((acc as i64))\n    return 0\n",
+        "fn main() -> i64:\n    let acc: f64 = 0.0\n    let i: i64 = 0\n    while (i < 10):\n        acc = (acc + ((i as f64) + 1.0))\n        i = (i + 1)\n    print((acc as i64))\n    return 0\n",
         &[],
         b"",
         "55\n",

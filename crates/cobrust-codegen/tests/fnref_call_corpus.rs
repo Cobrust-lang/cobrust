@@ -11,7 +11,7 @@
 //! Bug shape: MIR's `lower_call` keeps the resolved fn-name local in
 //! `Operand::Copy(local)` (per `cobrust-mir/src/lower.rs:1003-1011 + 1178`).
 //! The intrinsic-rewrite pass (`cobrust-cli/src/build/intrinsics.rs:143,156`)
-//! converts known callsites (`print` / `print_int`) to
+//! converts known callsites (polymorphic `print`, ADR-0064) to
 //! `Constant::Str(runtime_symbol)` so the M11 codegen Str-callee branch
 //! handles them. User-defined fn callees (`fib`, `is_even`, ...) remain
 //! `Operand::Constant(Constant::FnRef(def_id))` — and the M9 stub fired
@@ -183,7 +183,7 @@ fn fnref_single_arg_recursive() {
          \x20\x20\x20\x20return fib(n - 1) + fib(n - 2)\n\
          \n\
          fn main() -> i64:\n\
-         \x20\x20\x20\x20print_int(fib(10))\n\
+         \x20\x20\x20\x20print(fib(10))\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fnref_single_arg_recursive", &src);
@@ -210,7 +210,7 @@ fn fnref_multi_arg_recursive() {
          \x20\x20\x20\x20return ack_t(m - 1, ack_t(m, n - 1))\n\
          \n\
          fn main() -> i64:\n\
-         \x20\x20\x20\x20print_int(ack_t(2, 2))\n\
+         \x20\x20\x20\x20print(ack_t(2, 2))\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fnref_multi_arg_recursive", &src);
@@ -243,7 +243,7 @@ fn fnref_zero_arg_recursive() {
          \x20\x20\x20\x20return depth_2()\n\
          \n\
          fn main() -> i64:\n\
-         \x20\x20\x20\x20print_int(depth_3())\n\
+         \x20\x20\x20\x20print(depth_3())\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fnref_zero_arg_recursive", &src);
@@ -268,7 +268,7 @@ fn fnref_direct_recursion() {
          \x20\x20\x20\x20return n + sum_to(n - 1)\n\
          \n\
          fn main() -> i64:\n\
-         \x20\x20\x20\x20print_int(sum_to(5))\n\
+         \x20\x20\x20\x20print(sum_to(5))\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fnref_direct_recursion", &src);
@@ -302,10 +302,10 @@ fn fnref_mutual_recursion() {
          \x20\x20\x20\x20return is_even(n - 1)\n\
          \n\
          fn main() -> i64:\n\
-         \x20\x20\x20\x20print_int(is_even(4))\n\
-         \x20\x20\x20\x20print_int(is_odd(4))\n\
-         \x20\x20\x20\x20print_int(is_even(7))\n\
-         \x20\x20\x20\x20print_int(is_odd(7))\n\
+         \x20\x20\x20\x20print(is_even(4))\n\
+         \x20\x20\x20\x20print(is_odd(4))\n\
+         \x20\x20\x20\x20print(is_even(7))\n\
+         \x20\x20\x20\x20print(is_odd(7))\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fnref_mutual_recursion", &src);
@@ -343,7 +343,7 @@ fn fnref_chain_call() {
          \x20\x20\x20\x20return b() + 1000\n\
          \n\
          fn main() -> i64:\n\
-         \x20\x20\x20\x20print_int(a())\n\
+         \x20\x20\x20\x20print(a())\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fnref_chain_call", &src);
@@ -377,7 +377,7 @@ fn fnref_inferred_locals_recursive_chain() {
          \x20\x20\x20\x20return (2 * n) + dbl_rec(n - 1)\n\
          \n\
          fn main() -> i64:\n\
-         \x20\x20\x20\x20print_int(dbl_rec(3))\n\
+         \x20\x20\x20\x20print(dbl_rec(3))\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fnref_inferred_locals_recursive_chain", &src);
@@ -405,8 +405,8 @@ fn fnref_no_args_no_return() {
          \x20\x20\x20\x20return 0\n\
          \n\
          fn main() -> i64:\n\
-         \x20\x20\x20\x20print_int(side_effect())\n\
-         \x20\x20\x20\x20print_int(side_effect())\n\
+         \x20\x20\x20\x20print(side_effect())\n\
+         \x20\x20\x20\x20print(side_effect())\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fnref_no_args_no_return", &src);
@@ -437,7 +437,7 @@ fn fnref_returns_call_of_other() {
          \x20\x20\x20\x20return produces_seven()\n\
          \n\
          fn main() -> i64:\n\
-         \x20\x20\x20\x20print_int(relay())\n\
+         \x20\x20\x20\x20print(relay())\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fnref_returns_call_of_other", &src);
@@ -462,12 +462,12 @@ fn fnref_negative_arg() {
         "fn countdown(n: i64) -> i64:\n\
          \x20\x20\x20\x20if n <= 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20return 0\n\
-         \x20\x20\x20\x20print_int(n)\n\
+         \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return countdown(n - 1)\n\
          \n\
          fn main() -> i64:\n\
          \x20\x20\x20\x20let result: i64 = countdown(3)\n\
-         \x20\x20\x20\x20print_int(result)\n\
+         \x20\x20\x20\x20print(result)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fnref_negative_arg", &src);

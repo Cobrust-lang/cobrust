@@ -27,7 +27,7 @@ fn main() -> i64:
         j = j + 1
     let ans = list_get(dp, amount)
     if ans > amount:
-        print_int(-1)
+        print(-1)
     else:
-        print_int(ans)
+        print(ans)
     return 0

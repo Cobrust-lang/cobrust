@@ -18,8 +18,8 @@ fn main() -> i64:
     while lo < hi:
         let s = list_get(nums, lo) + list_get(nums, hi)
         if s == target:
-            print_int(lo + 1)
-            print_int(hi + 1)
+            print(lo + 1)
+            print(hi + 1)
             return 0
         elif s < target:
             lo = lo + 1

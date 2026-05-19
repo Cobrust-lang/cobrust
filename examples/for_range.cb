@@ -19,21 +19,21 @@
 fn main() -> i64:
     # Basic forward range.
     for i in range(0, 5):
-        print_int(i)
+        print(i)
 
     # Empty range — body skipped, sentinel printed.
     for i in range(0, 0):
-        print_int(-1)
-    print_int(42)
+        print(-1)
+    print(42)
 
     # Non-zero start.
     for i in range(3, 8):
-        print_int(i)
+        print(i)
 
     # Accumulator pattern.
     let sum: i64 = 0
     for i in range(0, 10):
         sum = sum + i
-    print_int(sum)
+    print(sum)
 
     return 0

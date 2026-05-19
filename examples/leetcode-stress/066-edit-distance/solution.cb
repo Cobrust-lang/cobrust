@@ -40,5 +40,5 @@ fn main() -> i64:
             list_set(dp, col, best)
             col = col + 1
         i = i + 1
-    print_int(list_get(dp, n))
+    print(list_get(dp, n))
     return 0

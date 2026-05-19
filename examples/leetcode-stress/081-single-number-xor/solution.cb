@@ -13,5 +13,5 @@ fn main() -> i64:
         let v = parse_int_tok(&line, i)
         acc = acc ^ v
         i = i + 1
-    print_int(acc)
+    print(acc)
     return 0

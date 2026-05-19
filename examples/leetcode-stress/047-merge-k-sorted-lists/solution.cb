@@ -38,7 +38,7 @@ fn main() -> i64:
                     best_val = v
                     best_k = q
             q = q + 1
-        print_int(best_val)
+        print(best_val)
         list_set(ptrs, best_k, list_get(ptrs, best_k) + 1)
         printed = printed + 1
     return 0

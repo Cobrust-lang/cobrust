@@ -315,7 +315,7 @@ fn corpus_conway_4cell_check_ok() {
     let or3: i64 = m3 + r3 - m3 * r3
     let n3: i64 = (l3 + or3) % 2
     let result: i64 = n0 + n1 * 2 + n2 * 4 + n3 * 8
-    print_int(result)
+    print(result)
     return 0
 ";
 

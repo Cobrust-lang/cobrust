@@ -51,5 +51,5 @@ fn main() -> i64:
                 list_set(ht, node, lh)
             else:
                 list_set(ht, node, rh)
-    print_int(best)
+    print(best)
     return 0

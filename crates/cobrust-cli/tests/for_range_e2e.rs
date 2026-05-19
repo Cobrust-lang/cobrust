@@ -154,7 +154,7 @@ fn run_exe(exe: &Path, args: &[&str], stdin_bytes: &[u8]) -> (i32, String, Strin
 fn f3r01_check_simple_for_range() {
     let src = write_cb(
         "f3r01_simple",
-        "fn main() -> i64:\n    for i in range(0, 5):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(0, 5):\n        print(i)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(code, 0, "expected check ok; stderr={stderr}");
@@ -164,7 +164,7 @@ fn f3r01_check_simple_for_range() {
 fn f3r02_check_range_negative_start() {
     let src = write_cb(
         "f3r02_negative",
-        "fn main() -> i64:\n    for i in range(-3, 3):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(-3, 3):\n        print(i)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(code, 0, "expected check ok; stderr={stderr}");
@@ -174,7 +174,7 @@ fn f3r02_check_range_negative_start() {
 fn f3r03_check_range_empty() {
     let src = write_cb(
         "f3r03_empty",
-        "fn main() -> i64:\n    for i in range(0, 0):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(0, 0):\n        print(i)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(code, 0, "expected check ok; stderr={stderr}");
@@ -185,7 +185,7 @@ fn f3r04_check_range_reverse_is_empty() {
     // start > stop is treated as an empty range (Python semantics).
     let src = write_cb(
         "f3r04_reverse",
-        "fn main() -> i64:\n    for i in range(5, 0):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(5, 0):\n        print(i)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(code, 0, "expected check ok; stderr={stderr}");
@@ -195,7 +195,7 @@ fn f3r04_check_range_reverse_is_empty() {
 fn f3r05_check_range_bound_to_var() {
     let src = write_cb(
         "f3r05_bound",
-        "fn main() -> i64:\n    let r: list[i64] = range(0, 5)\n    for i in r:\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    let r: list[i64] = range(0, 5)\n    for i in r:\n        print(i)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(code, 0, "expected check ok; stderr={stderr}");
@@ -205,7 +205,7 @@ fn f3r05_check_range_bound_to_var() {
 fn f3r06_check_range_nested() {
     let src = write_cb(
         "f3r06_nested",
-        "fn main() -> i64:\n    for i in range(0, 3):\n        for j in range(0, 3):\n            print_int((i + j))\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(0, 3):\n        for j in range(0, 3):\n            print((i + j))\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(code, 0, "expected check ok; stderr={stderr}");
@@ -215,7 +215,7 @@ fn f3r06_check_range_nested() {
 fn f3r07_check_range_in_helper_fn() {
     let src = write_cb(
         "f3r07_helper",
-        "fn loopy() -> i64:\n    for i in range(0, 5):\n        print_int(i)\n    return 0\nfn main() -> i64:\n    return loopy()\n",
+        "fn loopy() -> i64:\n    for i in range(0, 5):\n        print(i)\n    return 0\nfn main() -> i64:\n    return loopy()\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(code, 0, "expected check ok; stderr={stderr}");
@@ -225,7 +225,7 @@ fn f3r07_check_range_in_helper_fn() {
 fn f3r08_check_range_in_arg_expression() {
     let src = write_cb(
         "f3r08_arg-expr",
-        "fn main() -> i64:\n    let n: i64 = 5\n    for i in range(0, (n + 0)):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    let n: i64 = 5\n    for i in range(0, (n + 0)):\n        print(i)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(code, 0, "expected check ok; stderr={stderr}");
@@ -251,7 +251,7 @@ fn assert_build_run(name: &str, src: &str, args: &[&str], stdin: &[u8], expected
 fn f3r09_run_range_0_to_5_prints_5_ints() {
     assert_build_run(
         "f3r09_basic",
-        "fn main() -> i64:\n    for i in range(0, 5):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(0, 5):\n        print(i)\n    return 0\n",
         &[],
         b"",
         "0\n1\n2\n3\n4\n",
@@ -262,7 +262,7 @@ fn f3r09_run_range_0_to_5_prints_5_ints() {
 fn f3r10_run_range_empty_skips_body() {
     assert_build_run(
         "f3r10_empty",
-        "fn main() -> i64:\n    for i in range(0, 0):\n        print_int(i)\n    print_int(-1)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(0, 0):\n        print(i)\n    print(-1)\n    return 0\n",
         &[],
         b"",
         "-1\n",
@@ -273,7 +273,7 @@ fn f3r10_run_range_empty_skips_body() {
 fn f3r11_run_range_reverse_skips_body() {
     assert_build_run(
         "f3r11_reverse",
-        "fn main() -> i64:\n    for i in range(5, 0):\n        print_int(i)\n    print_int(-1)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(5, 0):\n        print(i)\n    print(-1)\n    return 0\n",
         &[],
         b"",
         "-1\n",
@@ -284,7 +284,7 @@ fn f3r11_run_range_reverse_skips_body() {
 fn f3r12_run_range_negative_values() {
     assert_build_run(
         "f3r12_negative",
-        "fn main() -> i64:\n    for i in range(-3, 3):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(-3, 3):\n        print(i)\n    return 0\n",
         &[],
         b"",
         "-3\n-2\n-1\n0\n1\n2\n",
@@ -295,7 +295,7 @@ fn f3r12_run_range_negative_values() {
 fn f3r13_run_range_sum_via_outer_var() {
     assert_build_run(
         "f3r13_sum",
-        "fn main() -> i64:\n    let acc: i64 = 0\n    for i in range(0, 10):\n        acc = (acc + i)\n    print_int(acc)\n    return 0\n",
+        "fn main() -> i64:\n    let acc: i64 = 0\n    for i in range(0, 10):\n        acc = (acc + i)\n    print(acc)\n    return 0\n",
         &[],
         b"",
         "45\n",
@@ -306,7 +306,7 @@ fn f3r13_run_range_sum_via_outer_var() {
 fn f3r14_run_range_nested_cartesian_product_count() {
     assert_build_run(
         "f3r14_nested",
-        "fn main() -> i64:\n    let n: i64 = 0\n    for i in range(0, 3):\n        for j in range(0, 4):\n            n = (n + 1)\n    print_int(n)\n    return 0\n",
+        "fn main() -> i64:\n    let n: i64 = 0\n    for i in range(0, 3):\n        for j in range(0, 4):\n            n = (n + 1)\n    print(n)\n    return 0\n",
         &[],
         b"",
         "12\n",
@@ -317,7 +317,7 @@ fn f3r14_run_range_nested_cartesian_product_count() {
 fn f3r15_run_range_early_return() {
     assert_build_run(
         "f3r15_early-return",
-        "fn first_seven() -> i64:\n    for i in range(0, 100):\n        if (i == 7):\n            return i\n    return -1\nfn main() -> i64:\n    let r: i64 = first_seven()\n    print_int(r)\n    return 0\n",
+        "fn first_seven() -> i64:\n    for i in range(0, 100):\n        if (i == 7):\n            return i\n    return -1\nfn main() -> i64:\n    let r: i64 = first_seven()\n    print(r)\n    return 0\n",
         &[],
         b"",
         "7\n",
@@ -328,7 +328,7 @@ fn f3r15_run_range_early_return() {
 fn f3r16_run_range_zero_to_one_yields_zero() {
     assert_build_run(
         "f3r16_one-elem",
-        "fn main() -> i64:\n    for i in range(0, 1):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(0, 1):\n        print(i)\n    return 0\n",
         &[],
         b"",
         "0\n",
@@ -339,7 +339,7 @@ fn f3r16_run_range_zero_to_one_yields_zero() {
 fn f3r17_run_range_bound_to_var_then_iter() {
     assert_build_run(
         "f3r17_bound",
-        "fn main() -> i64:\n    let r: list[i64] = range(2, 5)\n    for v in r:\n        print_int(v)\n    return 0\n",
+        "fn main() -> i64:\n    let r: list[i64] = range(2, 5)\n    for v in r:\n        print(v)\n    return 0\n",
         &[],
         b"",
         "2\n3\n4\n",
@@ -350,7 +350,7 @@ fn f3r17_run_range_bound_to_var_then_iter() {
 fn f3r18_run_range_arith_args() {
     assert_build_run(
         "f3r18_arith",
-        "fn main() -> i64:\n    let a: i64 = 1\n    let b: i64 = 4\n    for i in range((a - 1), (b + 1)):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    let a: i64 = 1\n    let b: i64 = 4\n    for i in range((a - 1), (b + 1)):\n        print(i)\n    return 0\n",
         &[],
         b"",
         "0\n1\n2\n3\n4\n",
@@ -361,7 +361,7 @@ fn f3r18_run_range_arith_args() {
 fn f3r19_run_range_with_helper_call() {
     assert_build_run(
         "f3r19_helper",
-        "fn double(x: i64) -> i64:\n    return (x + x)\nfn main() -> i64:\n    for i in range(0, 4):\n        print_int(double(i))\n    return 0\n",
+        "fn double(x: i64) -> i64:\n    return (x + x)\nfn main() -> i64:\n    for i in range(0, 4):\n        print(double(i))\n    return 0\n",
         &[],
         b"",
         "0\n2\n4\n6\n",
@@ -399,7 +399,7 @@ fn f3r20_run_for_over_argv_list_str_contains() {
 fn f3r21_run_range_inside_while() {
     assert_build_run(
         "f3r21_for-in-while",
-        "fn main() -> i64:\n    let outer: i64 = 0\n    while (outer < 2):\n        for i in range(0, 3):\n            print_int(i)\n        outer = (outer + 1)\n    return 0\n",
+        "fn main() -> i64:\n    let outer: i64 = 0\n    while (outer < 2):\n        for i in range(0, 3):\n            print(i)\n        outer = (outer + 1)\n    return 0\n",
         &[],
         b"",
         "0\n1\n2\n0\n1\n2\n",
@@ -410,7 +410,7 @@ fn f3r21_run_range_inside_while() {
 fn f3r22_run_while_inside_for_range() {
     assert_build_run(
         "f3r22_while-in-for",
-        "fn main() -> i64:\n    for i in range(0, 3):\n        let k: i64 = 0\n        while (k < 2):\n            print_int(i)\n            k = (k + 1)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(0, 3):\n        let k: i64 = 0\n        while (k < 2):\n            print(i)\n            k = (k + 1)\n    return 0\n",
         &[],
         b"",
         "0\n0\n1\n1\n2\n2\n",
@@ -421,7 +421,7 @@ fn f3r22_run_while_inside_for_range() {
 fn f3r23_run_range_inside_if() {
     assert_build_run(
         "f3r23_if-for",
-        "fn main() -> i64:\n    let p: bool = True\n    if p:\n        for i in range(0, 3):\n            print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    let p: bool = True\n    if p:\n        for i in range(0, 3):\n            print(i)\n    return 0\n",
         &[],
         b"",
         "0\n1\n2\n",
@@ -434,7 +434,7 @@ fn f3r24_run_range_one_arg_rejected() {
     // ships only the 2-arg form at M-F.3.1 per ADR-0050b §"`range(a, b, step)`".
     let src = write_cb(
         "f3r24_one-arg",
-        "fn main() -> i64:\n    for i in range(5):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(5):\n        print(i)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(
@@ -448,7 +448,7 @@ fn f3r25_run_range_three_arg_rejected() {
     // 3-arg range(a, b, step) — deferred to Phase G per ADR-0050b.
     let src = write_cb(
         "f3r25_three-arg",
-        "fn main() -> i64:\n    for i in range(0, 10, 2):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(0, 10, 2):\n        print(i)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(
@@ -461,7 +461,7 @@ fn f3r25_run_range_three_arg_rejected() {
 fn f3r26_run_range_with_str_arg_rejected() {
     let src = write_cb(
         "f3r26_str-arg",
-        "fn main() -> i64:\n    for i in range(\"a\", \"b\"):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(\"a\", \"b\"):\n        print(i)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(
@@ -474,7 +474,7 @@ fn f3r26_run_range_with_str_arg_rejected() {
 fn f3r27_run_for_iter_int_rejected() {
     let src = write_cb(
         "f3r27_iter-int",
-        "fn main() -> i64:\n    for v in 42:\n        print_int(v)\n    return 0\n",
+        "fn main() -> i64:\n    for v in 42:\n        print(v)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(
@@ -508,7 +508,7 @@ fn f3r29_run_range_large_count() {
     }
     assert_build_run(
         "f3r29_large",
-        "fn main() -> i64:\n    for i in range(0, 50):\n        print_int(i)\n    return 0\n",
+        "fn main() -> i64:\n    for i in range(0, 50):\n        print(i)\n    return 0\n",
         &[],
         b"",
         &expected,
@@ -520,9 +520,118 @@ fn f3r30_run_range_with_deeply_nested() {
     // 3-deep nesting; tighter bounds to keep test fast.
     assert_build_run(
         "f3r30_triple-nest",
-        "fn main() -> i64:\n    let total: i64 = 0\n    for i in range(0, 2):\n        for j in range(0, 2):\n            for k in range(0, 2):\n                total = (total + 1)\n    print_int(total)\n    return 0\n",
+        "fn main() -> i64:\n    let total: i64 = 0\n    for i in range(0, 2):\n        for j in range(0, 2):\n            for k in range(0, 2):\n                total = (total + 1)\n    print(total)\n    return 0\n",
         &[],
         b"",
         "8\n",
+    );
+}
+
+// =====================================================================
+// ADR-0064 acceptance gate tests — polymorphic print(x)
+// §6 gate items 1-5 and 7 (gate 6 is compile-error verification in
+// error_ux_corpus.rs; gate 8 is the F38 grep check in DG verify).
+// =====================================================================
+
+#[test]
+fn adr0064_gate1_print_int_literal() {
+    // ADR-0064 §6 gate 1: print(42) → "42\n"
+    assert_build_run(
+        "adr0064_g1_int",
+        "fn main() -> i64:\n    print(42)\n    return 0\n",
+        &[],
+        b"",
+        "42\n",
+    );
+}
+
+#[test]
+fn adr0064_gate2_print_str_literal() {
+    // ADR-0064 §6 gate 2: print("hello") → "hello\n"
+    assert_build_run(
+        "adr0064_g2_str",
+        "fn main() -> i64:\n    print(\"hello\")\n    return 0\n",
+        &[],
+        b"",
+        "hello\n",
+    );
+}
+
+#[test]
+fn adr0064_gate3_print_bool_true() {
+    // ADR-0064 §6 gate 3: print(True) → "True\n"
+    assert_build_run(
+        "adr0064_g3_bool_true",
+        "fn main() -> i64:\n    let b: bool = True\n    print(b)\n    return 0\n",
+        &[],
+        b"",
+        "True\n",
+    );
+}
+
+#[test]
+fn adr0064_gate4_print_float() {
+    // ADR-0064 §6 gate 4: print(3.14) → "3.14\n"
+    assert_build_run(
+        "adr0064_g4_float",
+        "fn main() -> i64:\n    let f: f64 = 3.14\n    print(f)\n    return 0\n",
+        &[],
+        b"",
+        "3.14\n",
+    );
+}
+
+#[test]
+fn adr0064_gate5_print_computed_int() {
+    // ADR-0064 §6 gate 5: print(fib(10)) = 55
+    assert_build_run(
+        "adr0064_g5_fib",
+        "fn fib(n: i64) -> i64:\n\
+         \x20\x20\x20\x20if n < 2:\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20return n\n\
+         \x20\x20\x20\x20return fib(n - 1) + fib(n - 2)\n\
+         fn main() -> i64:\n\
+         \x20\x20\x20\x20print(fib(10))\n\
+         \x20\x20\x20\x20return 0\n",
+        &[],
+        b"",
+        "55\n",
+    );
+}
+
+#[test]
+fn adr0064_gate7_lc100_spot_check() {
+    // ADR-0064 §6 gate 7: LC-100 spot-check — FizzBuzz with polymorphic
+    // print(n) for integer branch. Validates print(i64) in a real loop.
+    let mut expected = String::new();
+    for n in 1..=15i64 {
+        if n % 15 == 0 {
+            expected.push_str("FizzBuzz\n");
+        } else if n % 3 == 0 {
+            expected.push_str("Fizz\n");
+        } else if n % 5 == 0 {
+            expected.push_str("Buzz\n");
+        } else {
+            expected.push_str(&format!("{n}\n"));
+        }
+    }
+    assert_build_run(
+        "adr0064_g7_fizzbuzz",
+        "fn main() -> i64:\n\
+         \x20\x20\x20\x20let n: i64 = 1\n\
+         \x20\x20\x20\x20while n <= 15:\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20if n % 15 == 0:\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print(\"FizzBuzz\")\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20elif n % 3 == 0:\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print(\"Fizz\")\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20elif n % 5 == 0:\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print(\"Buzz\")\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20else:\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print(n)\n\
+         \x20\x20\x20\x20n = n + 1\n\
+         \x20\x20\x20\x20return 0\n",
+        &[],
+        b"",
+        &expected,
     );
 }

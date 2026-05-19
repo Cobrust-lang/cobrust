@@ -24,6 +24,6 @@ fn main() -> i64:
         cur = next_node
     let node: i64 = prev
     while node != -1:
-        print_int(list_get(val, node))
+        print(list_get(val, node))
         node = list_get(nxt, node)
     return 0

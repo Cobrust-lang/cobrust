@@ -43,5 +43,5 @@ fn main() -> i64:
             result = result + v
         prev = v
         i = i - 1
-    print_int(result)
+    print(result)
     return 0

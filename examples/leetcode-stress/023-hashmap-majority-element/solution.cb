@@ -35,5 +35,5 @@ fn main() -> i64:
             best_cnt = list_get(cnts, k)
             best_val = list_get(vals, k)
         k = k + 1
-    print_int(best_val)
+    print(best_val)
     return 0

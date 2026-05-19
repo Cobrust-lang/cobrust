@@ -180,7 +180,7 @@ fn assert_build_run(name: &str, src: &str, args: &[&str], stdin: &[u8], expected
 fn e0052dpre_e2e_01_csv_split_field_count() {
     // CSV parsing via the method-form `s.split(",")`. Input "a,b,c\n"
     // splits into 3 fields; oracle "3\n".
-    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let xs: list[str] = s.split(\",\")\n    let n: i64 = xs.len()\n    print_int(n)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let xs: list[str] = s.split(\",\")\n    let n: i64 = xs.len()\n    print(n)\n    return 0\n";
     assert_build_run("e0052dpre_e2e_01", src, &[], b"a,b,c\n", "3\n");
 }
 
@@ -196,7 +196,7 @@ fn e0052dpre_e2e_01_csv_split_field_count() {
 fn e0052dpre_e2e_02_substring_find_first_occurrence() {
     // `s.find("ll")` on "hello" returns 2 (the index of the first 'l'
     // in "ll"). Method-form rewrite to `find(s, "ll")`.
-    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let i: i64 = s.find(\"ll\")\n    print_int(i)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let i: i64 = s.find(\"ll\")\n    print(i)\n    return 0\n";
     assert_build_run("e0052dpre_e2e_02", src, &[], b"hello\n", "2\n");
 }
 
@@ -212,7 +212,7 @@ fn e0052dpre_e2e_02_substring_find_first_occurrence() {
 #[test]
 fn e0052dpre_e2e_03_prefix_check_starts_with() {
     // `s.starts_with("Hello")` on "Hello, world\n" returns true (1).
-    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let b: bool = s.starts_with(\"Hello\")\n    if b:\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let b: bool = s.starts_with(\"Hello\")\n    if b:\n        print(1)\n    else:\n        print(0)\n    return 0\n";
     assert_build_run("e0052dpre_e2e_03", src, &[], b"Hello, world\n", "1\n");
 }
 
@@ -228,7 +228,7 @@ fn e0052dpre_e2e_03_prefix_check_starts_with() {
 fn e0052dpre_e2e_04_list_len_get_iteration() {
     // `xs.len()` and `xs.get(i)` method-forms inside a while loop.
     // List literal [10, 20, 30] sums to 60.
-    let src = "fn main() -> i64:\n    let xs: list[i64] = [10, 20, 30]\n    let n: i64 = xs.len()\n    let i: i64 = 0\n    let total: i64 = 0\n    while i < n:\n        total = total + xs.get(i)\n        i = i + 1\n    print_int(total)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let xs: list[i64] = [10, 20, 30]\n    let n: i64 = xs.len()\n    let i: i64 = 0\n    let total: i64 = 0\n    while i < n:\n        total = total + xs.get(i)\n        i = i + 1\n    print(total)\n    return 0\n";
     assert_build_run("e0052dpre_e2e_04", src, &[], b"", "60\n");
 }
 
@@ -244,6 +244,6 @@ fn e0052dpre_e2e_04_list_len_get_iteration() {
 fn e0052dpre_e2e_05_float_is_nan_floor_clamp() {
     // Conditional clamp: if NaN, print 0; else print floor as i64.
     // Input 3.7 → not NaN → floor → 3.
-    let src = "fn main() -> i64:\n    let x: f64 = 3.7\n    let b: bool = x.is_nan()\n    if b:\n        print_int(0)\n    else:\n        let y: f64 = x.floor()\n        let n: i64 = y as i64\n        print_int(n)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let x: f64 = 3.7\n    let b: bool = x.is_nan()\n    if b:\n        print(0)\n    else:\n        let y: f64 = x.floor()\n        let n: i64 = y as i64\n        print(n)\n    return 0\n";
     assert_build_run("e0052dpre_e2e_05", src, &[], b"", "3\n");
 }

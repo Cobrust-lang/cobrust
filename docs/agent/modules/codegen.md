@@ -246,7 +246,7 @@ contains `_callret = call FnRef(M)`, `infer_local_types` consults
 `body_return_types[M]` to type `_callret` directly — closing the
 interaction surface that would otherwise leave `_callret` defaulting
 to `I8` and miscompiling any caller chain (e.g.
-`print_int(fib(10))`). The mandatory regression case
+`print(fib(10))`). The mandatory regression case
 `fnref_inferred_locals_recursive_chain` (in
 `crates/cobrust-codegen/tests/fnref_call_corpus.rs`) exercises this
 exact path.

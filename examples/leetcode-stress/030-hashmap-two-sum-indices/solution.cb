@@ -18,8 +18,8 @@ fn main() -> i64:
         let j: i64 = 0
         while j < sz:
             if list_get(seen_vals, j) == complement:
-                print_int(list_get(seen_idxs, j))
-                print_int(i)
+                print(list_get(seen_idxs, j))
+                print(i)
                 return 0
             j = j + 1
         list_set(seen_vals, sz, v)

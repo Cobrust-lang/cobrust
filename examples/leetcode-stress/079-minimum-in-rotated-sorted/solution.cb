@@ -17,5 +17,5 @@ fn main() -> i64:
             lo = mid + 1
         else:
             hi = mid
-    print_int(parse_int_tok(&line, lo))
+    print(parse_int_tok(&line, lo))
     return 0

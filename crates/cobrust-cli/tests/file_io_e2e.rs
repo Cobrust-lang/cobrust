@@ -215,7 +215,7 @@ fn f3fio02_write_empty_string_then_read_back() {
     let path = tmp.path().to_str().expect("utf8 path").to_owned();
     assert_build_run(
         "f3fio02_write_empty",
-        "fn main() -> i64:\n    let p: str = argv()[1]\n    let rc: i64 = write_file(p, \"\")\n    if rc != 0:\n        return rc\n    let contents: str = read_file(p)\n    let n: i64 = str_len(contents)\n    print_int(n)\n    return 0\n",
+        "fn main() -> i64:\n    let p: str = argv()[1]\n    let rc: i64 = write_file(p, \"\")\n    if rc != 0:\n        return rc\n    let contents: str = read_file(p)\n    let n: i64 = str_len(contents)\n    print(n)\n    return 0\n",
         &[&path],
         b"",
         "0\n",
@@ -247,7 +247,7 @@ fn f3fio04_write_file_returns_zero_sentinel_on_success() {
     let path = tmp.path().to_str().expect("utf8 path").to_owned();
     assert_build_run(
         "f3fio04_write_sentinel_zero",
-        "fn main() -> i64:\n    let p: str = argv()[1]\n    let rc: i64 = write_file(p, \"x\")\n    print_int(rc)\n    return 0\n",
+        "fn main() -> i64:\n    let p: str = argv()[1]\n    let rc: i64 = write_file(p, \"x\")\n    print(rc)\n    return 0\n",
         &[&path],
         b"",
         "0\n",
@@ -312,7 +312,7 @@ fn f3fio07_read_file_lines_three_crlf_lines_cr_stripped() {
     std::fs::write(&path, "a\r\nb\r\nc\r\n").expect("setup");
     assert_build_run(
         "f3fio07_lines_crlf",
-        "fn main() -> i64:\n    let p: str = argv()[1]\n    let xs: list[str] = read_file_lines(p)\n    let n: i64 = list_len(xs)\n    print_int(n)\n    return 0\n",
+        "fn main() -> i64:\n    let p: str = argv()[1]\n    let xs: list[str] = read_file_lines(p)\n    let n: i64 = list_len(xs)\n    print(n)\n    return 0\n",
         &[&path],
         b"",
         "4\n",
@@ -331,7 +331,7 @@ fn f3fio08_read_file_lines_count_equals_newlines_plus_one() {
     std::fs::write(&path, "x\ny\n").expect("setup");
     assert_build_run(
         "f3fio08_lines_count",
-        "fn main() -> i64:\n    let p: str = argv()[1]\n    let xs: list[str] = read_file_lines(p)\n    let n: i64 = list_len(xs)\n    print_int(n)\n    return 0\n",
+        "fn main() -> i64:\n    let p: str = argv()[1]\n    let xs: list[str] = read_file_lines(p)\n    let n: i64 = list_len(xs)\n    print(n)\n    return 0\n",
         &[&path],
         b"",
         "3\n",
@@ -348,7 +348,7 @@ fn f3fio09_read_file_lines_elements_have_no_trailing_newline() {
     std::fs::write(&path, "hello\nworld\n").expect("setup");
     assert_build_run(
         "f3fio09_lines_no_newline",
-        "fn main() -> i64:\n    let p: str = argv()[1]\n    let xs: list[str] = read_file_lines(p)\n    let s: str = xs[0]\n    let n: i64 = str_len(s)\n    print_int(n)\n    return 0\n",
+        "fn main() -> i64:\n    let p: str = argv()[1]\n    let xs: list[str] = read_file_lines(p)\n    let s: str = xs[0]\n    let n: i64 = str_len(s)\n    print(n)\n    return 0\n",
         &[&path],
         b"",
         "5\n",
@@ -427,7 +427,7 @@ fn f3fio13_stdin_read_all_captures_full_input() {
     // Prints the byte length of the captured string to confirm full read.
     assert_build_run(
         "f3fio13_stdin_read_all",
-        "fn main() -> i64:\n    let s: str = stdin_read_all()\n    let n: i64 = str_len(s)\n    print_int(n)\n    return 0\n",
+        "fn main() -> i64:\n    let s: str = stdin_read_all()\n    let n: i64 = str_len(s)\n    print(n)\n    return 0\n",
         &[],
         b"hello world",
         "11\n",
@@ -499,7 +499,7 @@ fn f3fio_bug01_read_file_lines_empty_file_returns_empty_list() {
     std::fs::write(&path, "").expect("setup empty file");
     assert_build_run(
         "f3fio_bug01_empty_lines",
-        "fn main() -> i64:\n    let p: str = argv()[1]\n    let xs: list[str] = read_file_lines(p)\n    let n: i64 = list_len(xs)\n    print_int(n)\n    return 0\n",
+        "fn main() -> i64:\n    let p: str = argv()[1]\n    let xs: list[str] = read_file_lines(p)\n    let n: i64 = list_len(xs)\n    print(n)\n    return 0\n",
         &[&path],
         b"",
         "1\n",
@@ -522,7 +522,7 @@ fn f3fio_bug02_read_file_lines_trailing_newline_preserved_as_empty_elem() {
     std::fs::write(&path, "a\nb\n").expect("setup");
     assert_build_run(
         "f3fio_bug02_trailing_newline_elem",
-        "fn main() -> i64:\n    let p: str = argv()[1]\n    let xs: list[str] = read_file_lines(p)\n    let n: i64 = list_len(xs)\n    print_int(n)\n    return 0\n",
+        "fn main() -> i64:\n    let p: str = argv()[1]\n    let xs: list[str] = read_file_lines(p)\n    let n: i64 = list_len(xs)\n    print(n)\n    return 0\n",
         &[&path],
         b"",
         "3\n",

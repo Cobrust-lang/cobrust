@@ -144,7 +144,7 @@ fn while_binop_mod_eq_zero() {
          \x20\x20\x20\x20while n % 2 == 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"loop\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20n = 9999\n\
-         \x20\x20\x20\x20print_int(n)\n\
+         \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("while_binop_mod_eq_zero", &src);
@@ -169,7 +169,7 @@ fn while_binop_mod_ne_zero() {
          \x20\x20\x20\x20while n % 2 != 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"loop\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20n = 8\n\
-         \x20\x20\x20\x20print_int(n)\n\
+         \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("while_binop_mod_ne_zero", &src);
@@ -197,7 +197,7 @@ fn while_binop_add_eq_zero() {
          \x20\x20\x20\x20while a + b == 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"loop\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20a = 1\n\
-         \x20\x20\x20\x20print_int(a)\n\
+         \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("while_binop_add_eq_zero", &src);
@@ -221,7 +221,7 @@ fn while_binop_sub_ne_zero() {
          \x20\x20\x20\x20while a - b != 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"loop\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20a = 3\n\
-         \x20\x20\x20\x20print_int(a)\n\
+         \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("while_binop_sub_ne_zero", &src);
@@ -245,7 +245,7 @@ fn while_binop_mul_eq_zero() {
          \x20\x20\x20\x20while a * b == 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"loop\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20a = 1\n\
-         \x20\x20\x20\x20print_int(a)\n\
+         \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("while_binop_mul_eq_zero", &src);
@@ -271,7 +271,7 @@ fn while_binop_div_eq_zero() {
          \x20\x20\x20\x20while a / b == 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"loop\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20a = 100\n\
-         \x20\x20\x20\x20print_int(a)\n\
+         \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("while_binop_div_eq_zero", &src);
@@ -320,7 +320,7 @@ fn while_compare_eq() {
          \x20\x20\x20\x20while n == 5:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"five\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20n = 0\n\
-         \x20\x20\x20\x20print_int(n)\n\
+         \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("while_compare_eq", &src);
@@ -376,7 +376,7 @@ fn while_nested_binop() {
          \x20\x20\x20\x20while (a + b) % c == 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"hit\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20a = 5\n\
-         \x20\x20\x20\x20print_int(a)\n\
+         \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("while_nested_binop", &src);
@@ -407,7 +407,7 @@ fn while_binop_with_function_call() {
          \x20\x20\x20\x20while step(n) > 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"tick\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20n = n - 1\n\
-         \x20\x20\x20\x20print_int(n)\n\
+         \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("while_binop_with_function_call", &src);
@@ -441,7 +441,7 @@ fn while_condition_through_inferred_locals_chain() {
          \x20\x20\x20\x20while -(n - 5) == 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"loop\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20n = 99\n\
-         \x20\x20\x20\x20print_int(n)\n\
+         \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("while_condition_through_inferred_locals_chain", &src);

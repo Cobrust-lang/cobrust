@@ -116,21 +116,21 @@ fn assert_program_output(name: &str, src: &str, expected: &str) {
 #[test]
 fn e01_break_at_5_in_while_under_10() {
     // i=1,2,3,4 print; i=5 break; then post-loop 99.
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        i = i + 1\n        if i == 5:\n            break\n        print_int(i)\n    print_int(99)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        i = i + 1\n        if i == 5:\n            break\n        print(i)\n    print(99)\n    return 0\n";
     assert_program_output("e01_break_at_5", src, "1\n2\n3\n4\n99");
 }
 
 #[test]
 fn e02_break_at_first_iteration() {
     // i=0 → check i==0 → break. Loop prints nothing.
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 100:\n        if i == 0:\n            break\n        print_int(i)\n        i = i + 1\n    print_int(99)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 100:\n        if i == 0:\n            break\n        print(i)\n        i = i + 1\n    print(99)\n    return 0\n";
     assert_program_output("e02_break_first", src, "99");
 }
 
 #[test]
 fn e03_break_after_all_iterations() {
     // i=1..5 print; then i=5 fails cond, exits naturally; sum/post = 6.
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 5:\n        i = i + 1\n        print_int(i)\n    print_int(6)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 5:\n        i = i + 1\n        print(i)\n    print(6)\n    return 0\n";
     assert_program_output("e03_natural_exit", src, "1\n2\n3\n4\n5\n6");
 }
 
@@ -141,19 +141,19 @@ fn e03_break_after_all_iterations() {
 #[test]
 fn e04_continue_skips_odd() {
     // i=1..10; skip if odd. Should print 2,4,6,8,10.
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        i = i + 1\n        if i % 2 == 1:\n            continue\n        print_int(i)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        i = i + 1\n        if i % 2 == 1:\n            continue\n        print(i)\n    return 0\n";
     assert_program_output("e04_continue_odd", src, "2\n4\n6\n8\n10");
 }
 
 #[test]
 fn e05_continue_skips_one_specific_value() {
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 5:\n        i = i + 1\n        if i == 3:\n            continue\n        print_int(i)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 5:\n        i = i + 1\n        if i == 3:\n            continue\n        print(i)\n    return 0\n";
     assert_program_output("e05_continue_3", src, "1\n2\n4\n5");
 }
 
 #[test]
 fn e06_continue_in_elif() {
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 6:\n        i = i + 1\n        if i == 2:\n            print_int(20)\n        elif i == 4:\n            continue\n        else:\n            print_int(i)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 6:\n        i = i + 1\n        if i == 2:\n            print(20)\n        elif i == 4:\n            continue\n        else:\n            print(i)\n    return 0\n";
     assert_program_output("e06_continue_elif", src, "1\n20\n3\n5\n6");
 }
 
@@ -164,13 +164,13 @@ fn e06_continue_in_elif() {
 #[test]
 fn e07_continue_then_break() {
     // i=1..10; skip 3; break at 7. Prints 1,2,4,5,6.
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        i = i + 1\n        if i == 3:\n            continue\n        if i == 7:\n            break\n        print_int(i)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        i = i + 1\n        if i == 3:\n            continue\n        if i == 7:\n            break\n        print(i)\n    return 0\n";
     assert_program_output("e07_continue_then_break", src, "1\n2\n4\n5\n6");
 }
 
 #[test]
 fn e08_three_skips_then_break() {
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 100:\n        i = i + 1\n        if i == 2:\n            continue\n        if i == 4:\n            continue\n        if i == 6:\n            continue\n        if i == 9:\n            break\n        print_int(i)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 100:\n        i = i + 1\n        if i == 2:\n            continue\n        if i == 4:\n            continue\n        if i == 6:\n            continue\n        if i == 9:\n            break\n        print(i)\n    return 0\n";
     assert_program_output("e08_three_skips_break", src, "1\n3\n5\n7\n8");
 }
 
@@ -181,14 +181,14 @@ fn e08_three_skips_then_break() {
 #[test]
 fn e09_break_inner_only() {
     // i=0..2, inner j=0..2 with break-when-j==1. Should print (0,0), (1,0), (2,0).
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 3:\n        let j: i64 = 0\n        while j < 3:\n            if j == 1:\n                break\n            print_int(i * 10 + j)\n            j = j + 1\n        i = i + 1\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 3:\n        let j: i64 = 0\n        while j < 3:\n            if j == 1:\n                break\n            print(i * 10 + j)\n            j = j + 1\n        i = i + 1\n    return 0\n";
     assert_program_output("e09_break_inner", src, "0\n10\n20");
 }
 
 #[test]
 fn e10_continue_inner_only() {
     // Inner skips j==1; prints (i,0), (i,2) for each outer i.
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 2:\n        let j: i64 = 0\n        while j < 3:\n            j = j + 1\n            if j == 2:\n                continue\n            print_int(i * 10 + j)\n        i = i + 1\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 2:\n        let j: i64 = 0\n        while j < 3:\n            j = j + 1\n            if j == 2:\n                continue\n            print(i * 10 + j)\n        i = i + 1\n    return 0\n";
     // For i=0: j inc to 1 (print 1), j=2 continue, j inc to 3 (print 3)
     // For i=1: same → print 11, 13
     assert_program_output("e10_continue_inner", src, "1\n3\n11\n13");
@@ -196,7 +196,7 @@ fn e10_continue_inner_only() {
 
 #[test]
 fn e11_three_level_nested_innermost_break() {
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 2:\n        let j: i64 = 0\n        while j < 2:\n            let k: i64 = 0\n            while k < 5:\n                if k == 2:\n                    break\n                print_int(i * 100 + j * 10 + k)\n                k = k + 1\n            j = j + 1\n        i = i + 1\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 2:\n        let j: i64 = 0\n        while j < 2:\n            let k: i64 = 0\n            while k < 5:\n                if k == 2:\n                    break\n                print(i * 100 + j * 10 + k)\n                k = k + 1\n            j = j + 1\n        i = i + 1\n    return 0\n";
     // i=0,j=0,k=0,1 print 0,1; k=2 break inner
     // i=0,j=1,k=0,1 print 10,11
     // i=1,j=0,k=0,1 print 100,101
@@ -212,14 +212,14 @@ fn e11_three_level_nested_innermost_break() {
 fn e12_post_loop_value_preserved_after_break() {
     // Use sum + break; check post-loop sum is correct.
     // Sum of 1..=5 = 15.
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    let s: i64 = 0\n    while i < 100:\n        i = i + 1\n        if i == 6:\n            break\n        s = s + i\n    print_int(s)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    let s: i64 = 0\n    while i < 100:\n        i = i + 1\n        if i == 6:\n            break\n        s = s + i\n    print(s)\n    return 0\n";
     assert_program_output("e12_post_loop_sum", src, "15");
 }
 
 #[test]
 fn e13_break_in_while_true_infinite_guard() {
     // while True must terminate via break.
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while True:\n        i = i + 1\n        if i == 3:\n            break\n        print_int(i)\n    print_int(99)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while True:\n        i = i + 1\n        if i == 3:\n            break\n        print(i)\n    print(99)\n    return 0\n";
     assert_program_output("e13_while_true_break", src, "1\n2\n99");
 }
 
@@ -227,7 +227,7 @@ fn e13_break_in_while_true_infinite_guard() {
 fn e14_continue_at_top_does_not_hang_when_cond_changes_outside() {
     // Continue plus mutation BEFORE the continue means the loop
     // terminates naturally.
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 3:\n        i = i + 1\n        continue\n        print_int(99)\n    print_int(100)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 3:\n        i = i + 1\n        continue\n        print(99)\n    print(100)\n    return 0\n";
     assert_program_output("e14_continue_top", src, "100");
 }
 

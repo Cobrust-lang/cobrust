@@ -30,5 +30,5 @@ fn main() -> i64:
             else:
                 total = total + right_max - list_get(h, hi)
             hi = hi - 1
-    print_int(total)
+    print(total)
     return 0

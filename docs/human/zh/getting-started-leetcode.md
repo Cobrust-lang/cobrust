@@ -107,8 +107,8 @@ fn main() -> i64:
         let b: i64 = a + 1
         while b < n:
             if list_get(nums, a) + list_get(nums, b) == target:
-                print_int(a)
-                print_int(b)
+                print(a)
+                print(b)
                 return 0
             b = b + 1
         a = a + 1
@@ -144,7 +144,7 @@ printf "4\n2\n7\n11\n15\n9\n" | /tmp/two_sum
 | 创建列表 | `nums = [0] * n` | `let nums = list_new(n)` |
 | 写入列表 | `nums[i] = v` | `list_set(nums, i, v)` |
 | 读取列表 | `nums[i]` | `list_get(nums, i)` |
-| 打印整数 | `print(x)` | `print_int(x)` |
+| 打印整数 | `print(x)` | `print(x)` |
 | 打印字符串 | `print(s)` | `print(s)` |
 | EOF 处理 | 抛出 `EOFError` | 返回 `""` |
 
@@ -203,7 +203,7 @@ fn main() -> i64:
 ### print 用法
 
 - `print(s)` — 打印字符串并自动加 `\n`
-- `print_int(n)` — 打印整数并自动加 `\n`
+- `print(n)` — 打印整数并自动加 `\n`
 - `print_no_nl(s)` — 打印字符串，不加 `\n`（适合逐字符输出）
 
 ---

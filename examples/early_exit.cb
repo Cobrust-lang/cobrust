@@ -27,5 +27,5 @@ fn main() -> i64:
         if sum > 30:
             break
         sum = sum + i
-    print_int(sum)
+    print(sum)
     return 0

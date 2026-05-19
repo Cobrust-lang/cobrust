@@ -209,7 +209,7 @@ fn f30wit_01_lc02_reverse_string_no_clone_no_uaf() {
 fn f30wit_02_lc13_roman_no_clone_no_uaf() {
     // F30 §5 rows 3-4 witness. LC-13 pattern: str_len + str_at on
     // borrow form.
-    let src = "fn roman_val(c: str) -> i64:\n    let o = str_ord(c)\n    if o == 73:\n        return 1\n    if o == 86:\n        return 5\n    if o == 88:\n        return 10\n    if o == 76:\n        return 50\n    if o == 67:\n        return 100\n    if o == 68:\n        return 500\n    if o == 77:\n        return 1000\n    return 0\nfn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let result: i64 = 0\n    let prev: i64 = 0\n    let i: i64 = n - 1\n    while i >= 0:\n        let c = str_at(&s, i)\n        let v = roman_val(c)\n        if v < prev:\n            result = result - v\n        else:\n            result = result + v\n        prev = v\n        i = i - 1\n    print_int(result)\n    return 0\n";
+    let src = "fn roman_val(c: str) -> i64:\n    let o = str_ord(c)\n    if o == 73:\n        return 1\n    if o == 86:\n        return 5\n    if o == 88:\n        return 10\n    if o == 76:\n        return 50\n    if o == 67:\n        return 100\n    if o == 68:\n        return 500\n    if o == 77:\n        return 1000\n    return 0\nfn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let result: i64 = 0\n    let prev: i64 = 0\n    let i: i64 = n - 1\n    while i >= 0:\n        let c = str_at(&s, i)\n        let v = roman_val(c)\n        if v < prev:\n            result = result - v\n        else:\n            result = result + v\n        prev = v\n        i = i - 1\n    print(result)\n    return 0\n";
     assert_witness_clean("f30wit_02", src);
 }
 
@@ -244,6 +244,6 @@ fn f30wit_04_let_rebind_synthetic_no_clone_no_uaf() {
     // the rebound borrow. The rebind itself must lower as a
     // `Operand::Copy` (NOT a Call to __cobrust_str_clone); each
     // subsequent str_len read must also use `Operand::Copy`.
-    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let s = &s\n    let a = str_len(s)\n    let b = str_len(s)\n    let c = str_len(s)\n    let total = (a + b) + c\n    print_int(total)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let s = &s\n    let a = str_len(s)\n    let b = str_len(s)\n    let c = str_len(s)\n    let total = (a + b) + c\n    print(total)\n    return 0\n";
     assert_witness_clean("f30wit_04", src);
 }

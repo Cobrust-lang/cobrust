@@ -46,11 +46,11 @@ empty ranges (`start >= stop`) skip the body.
 fn main() -> i64:
     # Forward range: prints 0 1 2 3 4
     for i in range(0, 5):
-        print_int(i)
+        print(i)
 
     # Empty range: body never executes
     for i in range(0, 0):
-        print_int(-1)
+        print(-1)
 
     # Iteration over a list
     let xs: list[i64] = list_new(3)
@@ -58,7 +58,7 @@ fn main() -> i64:
     let _1 = list_set(xs, 1, 20)
     let _2 = list_set(xs, 2, 30)
     for v in xs:
-        print_int(v)        # 10  20  30
+        print(v)        # 10  20  30
 
     # Iteration over argv (list[str])
     for arg in argv():
@@ -280,7 +280,7 @@ forbids implicit truthy/falsy (§2.2). Worked example:
 ```cobrust
 let pos: i64 = find("hello world", "world")
 if pos != -1:
-    print_int(pos)
+    print(pos)
 else:
     let _ = print("not found")
 ```
@@ -441,7 +441,7 @@ fn main() -> i64:
     # Read as list[str] — each line stripped of \n / \r\n (Q2).
     let lines: list[str] = read_file_lines("/tmp/hello.txt")
     let n: i64 = list_len(lines)
-    print_int(n)                      # prints: 2 (trailing empty elem)
+    print(n)                      # prints: 2 (trailing empty elem)
 
     # Append to an existing file; creates if absent (Q3).
     let rc2: i64 = append_file("/tmp/hello.txt", "more text")
@@ -563,7 +563,7 @@ Cobrust ships `while` loops out of the box. For `for` loops over `range(start, s
 fn main() -> i64:
     let i: i64 = 0
     while i < 5:
-        print_int(i)
+        print(i)
         i = i + 1
     return 0
 ```

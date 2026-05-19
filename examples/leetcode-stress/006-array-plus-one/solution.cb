@@ -24,9 +24,9 @@ fn main() -> i64:
             carry = 0
         pos = pos - 1
     if carry == 1:
-        print_int(1)
+        print(1)
     let j: i64 = 0
     while j < n:
-        print_int(list_get(digits, j))
+        print(list_get(digits, j))
         j = j + 1
     return 0

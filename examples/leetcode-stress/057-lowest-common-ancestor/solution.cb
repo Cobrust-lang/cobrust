@@ -50,5 +50,5 @@ fn main() -> i64:
             a = list_get(par, a)
         else:
             b = list_get(par, b)
-    print_int(list_get(val, a))
+    print(list_get(val, a))
     return 0

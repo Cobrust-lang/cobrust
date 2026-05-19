@@ -362,13 +362,13 @@ fn fr13_float_neg_compound() {
 
 // =====================================================================
 // Category 5 — value-correctness probes via shell-out + bracket
-// comparisons + `print_int`.
+// comparisons + polymorphic `print`.
 //
 // Constraints (M11 / M11.2 deferred-feature inventory):
 //
-// - `print` only accepts string literals
-//   (`cobrust-cli/src/build/intrinsics.rs:48`). Value-shaped probes
-//   use `print_int` (ADR-0030 §Decision step 5).
+// - ADR-0064: `print(x)` is now polymorphic; `print_int` is removed.
+//   Value-shaped probes use `print(x)` which dispatches to
+//   `__cobrust_println_int` at MIR time for i64 arguments.
 // - User-defined function calls from `main` are M11.2-deferred: the
 //   `Terminator::Call` whose `func` is `Operand::Move(FnRef-local)`
 //   falls through to the M9 stub at
@@ -411,9 +411,9 @@ fn fr14_value_correctness_double_neg_const() {
          \x20\x20\x20\x20let y: f64 = -(-3.25)\n\
          \x20\x20\x20\x20if y > 3.24:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20if y < 3.26:\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print_int(1)\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print(1)\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20return 0\n\
-         \x20\x20\x20\x20print_int(0)\n\
+         \x20\x20\x20\x20print(0)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fr14", &src);
@@ -448,9 +448,9 @@ fn fr15_value_correctness_compound_arith() {
          \x20\x20\x20\x20let z: f64 = (a + b) * c\n\
          \x20\x20\x20\x20if z > 1.79:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20if z < 1.81:\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print_int(1)\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print(1)\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20return 0\n\
-         \x20\x20\x20\x20print_int(0)\n\
+         \x20\x20\x20\x20print(0)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fr15", &src);
@@ -476,9 +476,9 @@ fn fr16_value_correctness_neg_plus() {
          \x20\x20\x20\x20let r: f64 = -a + b\n\
          \x20\x20\x20\x20if r > 3.49:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20if r < 3.51:\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print_int(1)\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print(1)\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20return 0\n\
-         \x20\x20\x20\x20print_int(0)\n\
+         \x20\x20\x20\x20print(0)\n\
          \x20\x20\x20\x20return 0\n",
     );
     let exe = build("fr16", &src);

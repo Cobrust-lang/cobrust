@@ -13,7 +13,7 @@
 //!
 //! On hosts where `lldb-18` (or `lldb`) is not on `$PATH`, every test
 //! prints a warning and exits with success (skip semantics — the
-//! gate runs on <self-hosted-runner> which has lldb-18 via `llvm.sh` apt
+//! gate runs on DG-Workstation which has lldb-18 via `llvm.sh` apt
 //! install).
 //!
 //! These tests run ONLY under `--features llvm`. Without the feature

@@ -22,5 +22,5 @@ fn main() -> i64:
     let line = input("")
     let x = parse_int_tok(&line, 0)
     let n = parse_int_tok(&line, 1)
-    print_int(pow(x, n))
+    print(pow(x, n))
     return 0

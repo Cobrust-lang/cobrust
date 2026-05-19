@@ -14,5 +14,5 @@ fn main() -> i64:
         let t = b
         b = a % b
         a = t
-    print_int(a)
+    print(a)
     return 0

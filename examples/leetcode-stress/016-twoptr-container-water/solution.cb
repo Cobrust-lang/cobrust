@@ -28,5 +28,5 @@ fn main() -> i64:
             lo = lo + 1
         else:
             hi = hi - 1
-    print_int(best)
+    print(best)
     return 0

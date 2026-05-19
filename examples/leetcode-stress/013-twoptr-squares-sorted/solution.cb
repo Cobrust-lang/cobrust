@@ -33,6 +33,6 @@ fn main() -> i64:
         pos = pos - 1
     let j: i64 = 0
     while j < n:
-        print_int(list_get(result, j))
+        print(list_get(result, j))
         j = j + 1
     return 0
