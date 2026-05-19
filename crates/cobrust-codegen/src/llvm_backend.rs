@@ -659,11 +659,44 @@ impl<'ctx> LlvmEmitter<'ctx> {
             block_map.insert(mir_block.id, bb);
         }
 
+        // Capture the per-body DISubprogram (declared in `declare_body`)
+        // before the allocas emit — LLVM `Module::verify` rejects any
+        // `!dbg` attachment that points at a different subprogram than
+        // the function it's attached to, so we must reset the builder's
+        // current debug location to *this* subprogram before any alloca
+        // / store hits the IR stream (ADR-0058c §3.3).
+        let subprogram = self
+            .di_subprograms
+            .get(&body.def_id.0)
+            .copied()
+            .ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "body {} missing DISubprogram",
+                    body.def_id.0
+                ))
+            })?;
+
         // Entry block sets up allocas + binds parameters. Use a
         // dedicated "allocas" block prepended in front of bb0.
         let entry_bb = block_map[&BlockId(0)];
         let allocas_bb = self.ctx.prepend_basic_block(entry_bb, "allocas");
         self.builder.position_at_end(allocas_bb);
+
+        // ADR-0058c §3.3 multi-fn fix: every body resets the current
+        // debug location to a DILocation rooted at *its own*
+        // subprogram before alloca/store emission. Without this, the
+        // builder leaks the previous body's location into this body's
+        // entry block, and `Module::verify` rejects the resulting IR
+        // with "!dbg attachment points at wrong subprogram".
+        let (init_line, init_col) = self.line_map.line_column(body.span.start);
+        let body_entry_loc = self.di_builder.create_debug_location(
+            self.ctx,
+            init_line,
+            init_col,
+            subprogram.as_debug_info_scope(),
+            None,
+        );
+        self.builder.set_current_debug_location(body_entry_loc);
 
         let mut local_allocas: HashMap<LocalId, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)> =
             HashMap::new();
@@ -708,21 +741,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .build_unconditional_branch(entry_bb)
             .map_err(map_builder_err)?;
 
-        // Capture the per-body DISubprogram (declared in `declare_body`)
-        // so the lowerer can attach `DILocation`s rooted at the function
-        // scope (ADR-0058c §3.3).
-        let subprogram = self
-            .di_subprograms
-            .get(&body.def_id.0)
-            .copied()
-            .ok_or_else(|| {
-                CodegenError::Internal(format!(
-                    "body {} missing DISubprogram",
-                    body.def_id.0
-                ))
-            })?;
-
-        // Lower every MIR block via the per-Body lowerer.
+        // Lower every MIR block via the per-Body lowerer (subprogram
+        // captured above for the entry-block debug-location reset).
         let blocks = body.blocks.clone();
         let mut lowerer = BodyLowerer {
             emitter: self,
