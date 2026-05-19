@@ -11,19 +11,24 @@
 
 fn main() -> i64:
     let nm_line = input("")
-    let n = parse_int_tok(nm_line, 0)
-    let m = parse_int_tok(nm_line, 1)
+    # ADR-0052a Wave-1 §4.1 — `&nm_line` borrows for the read-only
+    # PRELUDE call; the same line is read twice (n then m), so explicit
+    # shared-borrow form is required under ADR-0050c Str=non-Copy.
+    let n = parse_int_tok(&nm_line, 0)
+    let m = parse_int_tok(&nm_line, 1)
     let list1 = list_new(n)
     let list2 = list_new(m)
     let line1 = input("")
     let line2 = input("")
     let i: i64 = 0
     while i < n:
-        list_set(list1, i, parse_int_tok(line1, i))
+        # `&line1` re-reads the same str on every loop iteration.
+        list_set(list1, i, parse_int_tok(&line1, i))
         i = i + 1
     let j: i64 = 0
     while j < m:
-        list_set(list2, j, parse_int_tok(line2, j))
+        # `&line2` mirrors the line1 loop pattern.
+        list_set(list2, j, parse_int_tok(&line2, j))
         j = j + 1
     let pi: i64 = 0
     let pj: i64 = 0
