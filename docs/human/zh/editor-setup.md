@@ -125,8 +125,83 @@ configs.cobrust = {
 lspconfig.cobrust.setup{}
 ```
 
+## Debug Adapter Protocol (DAP, wave-2: VSCode / Cursor 调试)
+
+Cobrust 提供 DAP(Debug Adapter Protocol)服务器 `cobrust-dap`,
+通过 VSCode / Cursor 的 **Run > Start Debugging** 菜单驱动编辑器侧
+单步调试。服务器底层委托 `lldb-18`,并自动加载 Phase L wave-1 的
+pretty-printer,使得 Variables 面板显示 Cobrust 源代码形式的值
+(例如 `xs: List<Int> = [1, 2, 3]`,而非原始的 struct 字节)。
+
+**Wave-2 范围(根据 ADR-0059b):**
+
+- 支持 9 个 DAP 请求:`initialize`、`launch`、`setBreakpoints`、
+  `continue`、`next`(step-over)、`pause`、`stackTrace`、`variables`、
+  `disconnect`。
+- 仅支持单线程调试(Cobrust 程序目前是单线程的)。
+- 仅支持行断点(条件断点、函数断点、表达式求值是 wave-3+ 推迟项)。
+- 不支持 attach 模式;仅 `launch`(派生新进程)。
+
+### 前置条件
+
+- `lldb-18` 在 PATH 中可用(macOS:`brew install llvm@18`;
+  Linux:`apt install lldb-18` 或通过 [llvm.sh](https://apt.llvm.org/))。
+- 带调试信息构建的 Cobrust 二进制:`cobrust build --debug
+  examples/fib.cb -o fib`。
+
+### 构建 DAP 服务器
+
+```bash
+cargo build --release -p cobrust-dap
+# 二进制位于:target/release/cobrust-dap
+```
+
+### VSCode `launch.json` 示例
+
+添加到项目的 `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "cobrust",
+      "request": "launch",
+      "name": "Debug Cobrust binary",
+      "program": "${workspaceFolder}/fib",
+      "cwd": "${workspaceFolder}",
+      "stopOnEntry": true
+    }
+  ]
+}
+```
+
+为让 VSCode 发现 `cobrust` 调试类型,需安装或开发一个薄扩展,
+其 `debuggers` 条目指向 `target/release/cobrust-dap`。同样的
+`launch.json` 也适用于 Cursor(VSCode 的分叉)。
+
+### 单步调试演示(终端步骤)
+
+```bash
+# 1. 携带调试信息构建。
+cargo run -p cobrust-cli -- build --debug examples/fib.cb -o /tmp/fib
+
+# 2. 在 VSCode/Cursor 中通过 Run > Start Debugging (F5) 启动调试,
+#    配置见上方 launch.json。
+
+# 3. 在 examples/fib.cb 第 8 行(递归 fib() 调用所在行)设置断点。
+#    VSCode 会在装订线显示断点。
+
+# 4. 按 F5 启动。cobrust-dap 派生 lldb-18,加载 wave-1 pretty-printer,
+#    设置断点并运行二进制。执行在断点处暂停;Variables 面板显示
+#    递归情况下的 `n: Int = N`。
+```
+
 ## 不包含的功能
 
 - Wave-1 LSP 仅提供诊断。定义跳转、补全、悬浮提示、重命名、code-action
   快速修复均在 ADR-0057b/c/d 范围内。
+- Wave-2 DAP 仅承担单线程单步调试的核心表面。条件断点、表达式监视
+  (`evaluate`)、多线程调试、attach 模式、`setVariable` 是 Phase L
+  wave-3+ 的后续工作,详见 ADR-0059b §5。
 - 格式化集成 — 参见 `cobrust fmt` CLI 工具。

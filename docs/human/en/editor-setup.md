@@ -126,8 +126,88 @@ configs.cobrust = {
 lspconfig.cobrust.setup{}
 ```
 
+## Debug Adapter Protocol (DAP, wave-2: VSCode / Cursor debugging)
+
+Cobrust ships a Debug Adapter Protocol (DAP) server, `cobrust-dap`,
+that powers in-editor step debugging via VSCode / Cursor's
+**Run > Start Debugging** menu. The server delegates to `lldb-18`
+under the hood and auto-loads the Phase L wave-1 pretty-printers so
+the Variables pane shows Cobrust source-form values (e.g.
+`xs: List<Int> = [1, 2, 3]`, not raw struct bytes).
+
+**Wave-2 scope (per ADR-0059b):**
+
+- 9 DAP requests supported: `initialize`, `launch`, `setBreakpoints`,
+  `continue`, `next` (step-over), `pause`, `stackTrace`, `variables`,
+  `disconnect`.
+- Single-thread debug only (Cobrust programs are single-threaded today).
+- Line breakpoints only (conditional breakpoints, function breakpoints,
+  expression evaluation are wave-3+ deferrals).
+- Attach mode is NOT supported; only `launch` (spawn a fresh binary).
+
+### Prerequisites
+
+- `lldb-18` available on PATH (macOS: `brew install llvm@18`; Linux:
+  `apt install lldb-18` or via [llvm.sh](https://apt.llvm.org/)).
+- A Cobrust binary built with debug info: `cobrust build --debug
+  examples/fib.cb -o fib`.
+
+### Build the DAP server
+
+```bash
+cargo build --release -p cobrust-dap
+# Binary at: target/release/cobrust-dap
+```
+
+### VSCode `launch.json` sample
+
+Add to your project's `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "cobrust",
+      "request": "launch",
+      "name": "Debug Cobrust binary",
+      "program": "${workspaceFolder}/fib",
+      "cwd": "${workspaceFolder}",
+      "stopOnEntry": true
+    }
+  ]
+}
+```
+
+For VSCode to discover the `cobrust` debugger type, install or develop
+a thin extension contributing a `debuggers` entry pointing at
+`target/release/cobrust-dap`. The same `launch.json` works in Cursor
+(VSCode fork).
+
+### Step-debug demo (terminal walkthrough)
+
+```bash
+# 1. Build with debug info.
+cargo run -p cobrust-cli -- build --debug examples/fib.cb -o /tmp/fib
+
+# 2. Start debugging in VSCode/Cursor: Run > Start Debugging (F5)
+#    with the launch.json above.
+
+# 3. Set a breakpoint on line 8 of examples/fib.cb (inside the
+#    recursive fib() call). VSCode shows it in the gutter.
+
+# 4. Press F5 to launch. cobrust-dap spawns lldb-18, loads the
+#    wave-1 pretty-printers, sets your breakpoint, and runs the
+#    binary. Execution stops at the breakpoint; the Variables
+#    pane shows `n: Int = N` for the recursive case.
+```
+
 ## What is NOT included
 
 - Wave-1 LSP only ships diagnostics. Go-to-definition, completion, hover,
   rename, and code-action quickfixes are scoped under ADR-0057b/c/d.
+- Wave-2 DAP supports the load-bearing single-thread step-debug surface
+  only. Conditional breakpoints, expression watch (`evaluate`),
+  multi-thread debug, attach mode, and `setVariable` are Phase L wave-3+
+  followups per ADR-0059b §5.
 - Formatter integration — see the `cobrust fmt` CLI tool.
