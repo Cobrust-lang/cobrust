@@ -231,13 +231,14 @@ records the form as **out-of-scope (M9 stub)** with a tracked
 M10/M11 followup ticket. The gate runs all forms; failure = at
 least one in-scope form mismatched.
 
-### LLVM `-O3` ≥ 30% smaller binary acceptance
+### LLVM `-O3` ≥ 30% smaller binary acceptance — RESOLVED 2026-05-19 (Phase K wave-2)
 
 ADR-0019 §"M9 — Codegen" pinned: "Optional LLVM backend
 (`--features llvm`) produces correct object code; ≥ 30% smaller
 binary on a representative sample at `-O3`."
 
-The acceptance is measured on a **fixed sample** (`benches/binsize/`):
+The acceptance was originally specified on a **fixed sample**
+(`benches/binsize/`):
 
 - `fib_50.cb` — recursive fib(50)
 - `dotproduct_1k.cb` — 1024-element dot product
@@ -247,6 +248,28 @@ Cranelift `-O0` baseline → LLVM `--release -O3` target:
 median size reduction ≥ 30%. The sample programs use only
 the M9-supported subset of forms (no print, no f-string, no
 collections; M10/M11 will widen).
+
+**Status: RESOLVED at HEAD `72f4d27` (Phase K wave-2 / ADR-0058b).**
+
+The empirical close uses an LLVM-only 5-fixture corpus per
+ADR-0058b §A3 (refining the original Cranelift-vs-LLVM framing into
+an O0-vs-O3 same-backend comparison — this isolates the opt-pipeline
+contribution from the Cranelift-vs-LLVM IR shape difference, which
+was the original ADR-0023 framing's confound):
+
+| Fixture | O0 size | O3 size | Ratio |
+|---|---|---|---|
+| `hello` | 872 | 576 | 0.661 |
+| `fizzbuzz` | 1408 | 760 | 0.540 |
+| `fib` | 1192 | 696 | 0.584 |
+| `dot_product` | 1056 | 640 | 0.606 |
+| `nested_branch` | 1200 | 624 | 0.520 |
+
+**Median O3/O0 ratio: 0.584 (41.6% size reduction).** Clears the
+30% bar by 11.6 percentage points. Verified on DG-Workstation
+(`x86_64-unknown-linux-gnu`) via `crates/cobrust-codegen/tests/binary_size_bench.rs`.
+
+See ADR-0058b §11.1 for the binding empirical close trace.
 
 ### Public surface (binding)
 

@@ -4,13 +4,24 @@
 //! to lower MIR into LLVM IR and emit object code via the LLVM 18+
 //! toolchain.
 //!
-//! ADR-0058a wave-1 ships the **core lowering pass** only. Explicit
-//! non-goals (deferred per ADR-0058a §8):
+//! ADR-0058a wave-1 ships the **core lowering pass**.
+//! ADR-0058b wave-2 (this file) extends with:
 //!
-//! - Optimization pass pipeline (`OptLevel::Speed` / `SpeedAndSize`)
-//!   stays at LLVM `-O0` until sub-ADR 0058b lands.
+//! - **PassBuilder pipeline**: `OptLevel::Speed` → `default<O2>`,
+//!   `OptLevel::SpeedAndSize` → `default<O3>,default<Os>` via
+//!   `Module::run_passes` (inkwell 0.9 + LLVM-18 new pass manager).
+//! - **Multi-target dispatch**: `Target::from_triple` parametric over
+//!   ADR-0046 tier-1 four-triple matrix (Mac arm64 / Linux arm64 /
+//!   Linux x86_64 gnu+musl). See `supported_tier1_triples()` for the
+//!   binding contract.
+//!
+//! Explicit non-goals (deferred per ADR-0058b §4):
+//!
 //! - DWARF debug-info emission (`DIBuilder`, `dbg.declare`) is sub-ADR 0058c.
-//! - Multi-target cross-compilation matrix is sub-ADR 0058b.
+//! - JIT opt-level changes (cobrust-jit `lower.rs` unchanged).
+//! - Cross-link (linker stays at `cc`; cross-target executables are
+//!   `release.yml` + `cross`-tool scope).
+//! - New MIR features (wave-2 consumes wave-1's IR-construction pass).
 //!
 //! The lowering mirrors `cranelift_backend.rs` semantically:
 //!
@@ -44,6 +55,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module as LlvmModule};
+use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
@@ -91,7 +103,7 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
         emitter.define_body(body)?;
     }
 
-    // --- finalize: write object file ------------------------------------
+    // --- verify (debug only) --------------------------------------------
     if cfg!(debug_assertions) {
         // ADR-0058a §9.2: dev-mode verifier prints offending IR via
         // structured error.
@@ -103,6 +115,21 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
         }
     }
 
+    // --- ADR-0058b §3.2: run PassBuilder pipeline per OptLevel ----------
+    if let Some(pipeline) = pass_pipeline_for(spec.opt_level) {
+        let options = PassBuilderOptions::create();
+        emitter
+            .module
+            .run_passes(pipeline, &target_machine, options)
+            .map_err(|e| {
+                CodegenError::LlvmError(format!(
+                    "LLVM PassBuilder pipeline `{}` failed: {}",
+                    pipeline, e
+                ))
+            })?;
+    }
+
+    // --- finalize: write object file ------------------------------------
     std::fs::create_dir_all(&spec.output_dir)?;
     let object_name = format!("{}.o", spec.module_name);
     let object_path = spec.output_dir.join(object_name);
@@ -111,6 +138,48 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
         .map_err(|e| CodegenError::ObjectEmission(e.to_string()))?;
 
     finalize_artifact(object_path, spec)
+}
+
+/// Map [`OptLevel`] to an LLVM PassBuilder pipeline string per
+/// ADR-0058b §3.2.
+///
+/// Returns `None` when no optimization passes should run (preserves the
+/// wave-1 `-O0` path for `OptLevel::None`).
+///
+/// | `OptLevel` | Pipeline |
+/// |---|---|
+/// | `OptLevel::None` | `None` (skip `run_passes`) |
+/// | `OptLevel::Speed` | `Some("default<O2>")` |
+/// | `OptLevel::SpeedAndSize` | `Some("default<O3>,default<Os>")` |
+///
+/// The strings use LLVM's new-pass-manager `default<O*>` syntax; see
+/// the `opt` tool's `-passes` argument and `llvm::PassBuilder::buildPerModuleDefaultPipeline`.
+#[must_use]
+pub fn pass_pipeline_for(level: OptLevel) -> Option<&'static str> {
+    match level {
+        OptLevel::None => None,
+        OptLevel::Speed => Some("default<O2>"),
+        OptLevel::SpeedAndSize => Some("default<O3>,default<Os>"),
+    }
+}
+
+/// Enumerate the ADR-0046 tier-1 four-triple matrix that ADR-0058b
+/// codifies as supported `TargetMachine::from_triple` inputs.
+///
+/// Tier-1 triples are guaranteed to construct successfully when the
+/// underlying LLVM-18 toolchain on the host includes the corresponding
+/// backend (Mac brew `llvm@18`, Linux apt `llvm-18-dev`). Tier-2+
+/// triples may construct but are not exercised in CI per ADR-0046.
+///
+/// See ADR-0058b §3.4 for the binding rationale.
+#[must_use]
+pub fn supported_tier1_triples() -> &'static [&'static str] {
+    &[
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+    ]
 }
 
 /// Decide the final artifact: object alone, or invoke the linker.
@@ -139,6 +208,14 @@ fn finalize_artifact(object: PathBuf, spec: &TargetSpec) -> Result<Artifact, Cod
 }
 
 /// Build a `TargetMachine` for the requested triple + opt level.
+///
+/// ADR-0058b §3.2 maps Cobrust [`OptLevel`] to LLVM
+/// [`OptimizationLevel`] for the TargetMachine; the wave-2 PassBuilder
+/// pipeline runs orthogonally on the module (§emit `run_passes`).
+///
+/// ADR-0058b §3.4 codifies parametric multi-target dispatch: `Target::from_triple`
+/// accepts any tier-1 triple per [`supported_tier1_triples`]. Tier-2+ triples
+/// may construct successfully at runtime when the LLVM backend is compiled in.
 fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError> {
     Target::initialize_all(&InitializationConfig::default());
     let triple = TargetTriple::create(&spec.triple.to_string());
@@ -146,9 +223,11 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
         .map_err(|e| CodegenError::UnsupportedTarget(format!("{}: {}", spec.triple, e)))?;
     let opt = match spec.opt_level {
         OptLevel::None => OptimizationLevel::None,
-        // ADR-0058a §8 non-goals: opt pipeline stays at -O0 until sub-ADR
-        // 0058b. The LLVM backend ignores opt_level beyond None at wave-1.
-        OptLevel::Speed | OptLevel::SpeedAndSize => OptimizationLevel::None,
+        // ADR-0058b §3.2: Speed → LLVM Default (O2); SpeedAndSize → Aggressive (O3).
+        // PassBuilder pipeline (`run_passes`) drives the actual opt; TargetMachine
+        // opt level sets codegen-time knobs (instruction selection, scheduling).
+        OptLevel::Speed => OptimizationLevel::Default,
+        OptLevel::SpeedAndSize => OptimizationLevel::Aggressive,
     };
     target
         .create_target_machine(
@@ -1477,5 +1556,96 @@ mod tests {
         let spec = host_spec();
         let result = emit(&module, &spec);
         assert!(result.is_ok(), "drop_str emit failed: {:?}", result.err());
+    }
+
+    // =================================================================
+    // ADR-0058b §3.2 + §3.4 — opt pipeline + multi-target dispatch
+    // =================================================================
+
+    /// ADR-0058b §3.2: OptLevel → PassBuilder pipeline string mapping.
+    #[test]
+    fn pass_pipeline_mapping_matches_spec() {
+        assert!(pass_pipeline_for(OptLevel::None).is_none());
+        assert_eq!(pass_pipeline_for(OptLevel::Speed), Some("default<O2>"));
+        assert_eq!(
+            pass_pipeline_for(OptLevel::SpeedAndSize),
+            Some("default<O3>,default<Os>")
+        );
+    }
+
+    /// ADR-0058b §3.4: four tier-1 triples are enumerated in the binding
+    /// contract.
+    #[test]
+    fn tier1_triple_matrix_has_four_entries() {
+        let triples = supported_tier1_triples();
+        assert_eq!(triples.len(), 4, "tier-1 matrix is ADR-0046 + Strand #5");
+        assert!(triples.contains(&"aarch64-apple-darwin"));
+        assert!(triples.contains(&"aarch64-unknown-linux-gnu"));
+        assert!(triples.contains(&"x86_64-unknown-linux-gnu"));
+        assert!(triples.contains(&"x86_64-unknown-linux-musl"));
+    }
+
+    /// ADR-0058b §3.4: every tier-1 triple can be parsed by `target-lexicon`
+    /// and round-trips through `Triple::host()`-style construction. This
+    /// does NOT require backend availability — `Target::from_triple` is
+    /// guarded behind the runtime LLVM-18 backend presence and is exercised
+    /// at object emission time by the diff corpus.
+    #[test]
+    fn tier1_triples_parse_via_target_lexicon() {
+        use std::str::FromStr;
+        for triple_str in supported_tier1_triples() {
+            let parsed = target_lexicon::Triple::from_str(triple_str)
+                .unwrap_or_else(|e| panic!("triple `{triple_str}` failed to parse: {e}"));
+            assert_eq!(parsed.to_string(), *triple_str);
+        }
+    }
+
+    /// ADR-0058b §3.2: `OptLevel::Speed` emit runs without error on a small
+    /// fixture. This validates that `default<O2>` pipeline is accepted by
+    /// inkwell's `run_passes`.
+    #[test]
+    fn smoke_opt_speed_pipeline() {
+        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let body = build_simple_body(
+            10,
+            "opt_speed",
+            vec![],
+            Ty::Int,
+            Rvalue::Use(Operand::Constant(MirConstant::Int(7))),
+        );
+        let module = Module { bodies: vec![body] };
+        let mut spec = host_spec();
+        spec.opt_level = OptLevel::Speed;
+        spec.module_name = "opt_speed".to_string();
+        let result = emit(&module, &spec);
+        assert!(
+            result.is_ok(),
+            "OptLevel::Speed emit failed: {:?}",
+            result.err()
+        );
+    }
+
+    /// ADR-0058b §3.2 + §A3: `OptLevel::SpeedAndSize` runs the size-overlay
+    /// pipeline.
+    #[test]
+    fn smoke_opt_speed_and_size_pipeline() {
+        let _guard = LLVM_TEST_LOCK.lock().unwrap();
+        let body = build_simple_body(
+            11,
+            "opt_sized",
+            vec![],
+            Ty::Int,
+            Rvalue::Use(Operand::Constant(MirConstant::Int(11))),
+        );
+        let module = Module { bodies: vec![body] };
+        let mut spec = host_spec();
+        spec.opt_level = OptLevel::SpeedAndSize;
+        spec.module_name = "opt_sized".to_string();
+        let result = emit(&module, &spec);
+        assert!(
+            result.is_ok(),
+            "OptLevel::SpeedAndSize emit failed: {:?}",
+            result.err()
+        );
     }
 }
