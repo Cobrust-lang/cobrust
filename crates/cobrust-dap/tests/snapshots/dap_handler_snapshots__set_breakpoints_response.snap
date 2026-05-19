@@ -1,0 +1,27 @@
+---
+source: crates/cobrust-dap/tests/dap_handler_snapshots.rs
+expression: response.body
+snapshot_kind: text
+---
+{
+  "breakpoints": [
+    {
+      "id": 1,
+      "line": 7,
+      "source": {
+        "name": "/tmp/fib.cb",
+        "path": "/tmp/fib.cb"
+      },
+      "verified": true
+    },
+    {
+      "id": 2,
+      "line": 12,
+      "source": {
+        "name": "/tmp/fib.cb",
+        "path": "/tmp/fib.cb"
+      },
+      "verified": true
+    }
+  ]
+}

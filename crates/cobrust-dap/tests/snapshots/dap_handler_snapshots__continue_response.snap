@@ -1,0 +1,8 @@
+---
+source: crates/cobrust-dap/tests/dap_handler_snapshots.rs
+expression: response.body
+snapshot_kind: text
+---
+{
+  "allThreadsContinued": true
+}
