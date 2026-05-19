@@ -6,9 +6,9 @@
 
 fn main() -> i64:
     let nm_line = input("")
-    let pre1 = parse_int_tok(nm_line, 0)
-    let pre2 = parse_int_tok(nm_line, 1)
-    let shared = parse_int_tok(nm_line, 2)
+    let pre1 = parse_int_tok(&nm_line, 0)
+    let pre2 = parse_int_tok(&nm_line, 1)
+    let shared = parse_int_tok(&nm_line, 2)
     let total = pre1 + pre2 + shared
     let vals = list_new(total + 1)
     let i: i64 = 0

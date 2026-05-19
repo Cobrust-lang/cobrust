@@ -12,9 +12,9 @@ fn main() -> i64:
     let i: i64 = 0
     while i < n:
         let line = input("")
-        list_set(val, i, parse_int_tok(line, 0))
-        list_set(lft, i, parse_int_tok(line, 1))
-        list_set(rgt, i, parse_int_tok(line, 2))
+        list_set(val, i, parse_int_tok(&line, 0))
+        list_set(lft, i, parse_int_tok(&line, 1))
+        list_set(rgt, i, parse_int_tok(&line, 2))
         i = i + 1
     let stk_node = list_new(n + 1)
     let stk_dep = list_new(n + 1)
