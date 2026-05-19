@@ -4,7 +4,7 @@ skill_id: cobrust-first-try
 title: "Write Cobrust correctly on the first try"
 audience: any LLM agent (Claude Code / Cursor / OpenClaw / Hermes / Aider / OpenAI Codex / etc.)
 load_when: before writing or editing any `.cb` source file
-last_verified_commit: 793032d
+last_verified_commit: current-main
 maintainers: P10/user; updated atomically with language-surface ADRs
 ---
 
@@ -317,11 +317,82 @@ match cobrust_jit::compile(&mir_fn) {
 
 **AOT path (`cobrust build`) is canonical for production.** JIT is preview/experimental; never use it in the translation pipeline or L2 verification gates. Wave-2 scope (loops, function calls, closures) has NOT landed.
 
+## 9e. Debugger (Phase L wave-1 / ADR-0059a/b/c)
+
+**Phase L wave-1 is closed.** Three user-facing surfaces:
+
+**lldb pretty-printers** (0059a): Install once, then `cobrust` types print readably in lldb/gdb.
+```bash
+# Enable pretty-printers in ~/.lldbinit (done once):
+command script import /path/to/cobrust/tools/lldb/cobrust_printers.py
+
+# Then in lldb:
+(lldb) p my_list   # prints: CobList<i64>[1, 2, 3]  (not raw memory)
+(lldb) p my_dict   # prints: CobDict{"a": 1, "b": 2}
+```
+
+**cobrust-dap server** (0059b): DAP protocol over stdio; attach any DAP-capable editor.
+```bash
+cobrust-dap           # starts DAP server on stdio
+# Neovim nvim-dap / VSCode launch.json: "type": "cobrust", "request": "launch"
+```
+
+**cobrust debug CLI** (0059c): Command-line debugging without an editor.
+```bash
+cobrust debug src/main.cb          # launch with debugger attached; interactive
+cobrust debug attach <pid>         # attach to running process
+cobrust debug --breakpoint 42 src/main.cb   # stop at line 42
+```
+
+**Scope caution (honest-debt per ADR-0059a §6)**: Wave-1 does NOT include runtime frame variable inspection, Dict iteration display, or Option Adt DI. These are queued wave-2+. Do not assume them.
+
+## 9f. Phase M language-surface gaps now supported
+
+Six surface forms that previously rejected at the type-checker or parser now compile correctly:
+
+```cobrust
+# i32 / i8 narrow-int literals (Phase M)
+let x: i32 = 42i32
+let y: i8 = -1i8
+let z: i32 = x + 1i32
+
+# -> None return annotation
+fn side_effect(s: str) -> None:
+    print(s)
+
+# &T reference annotation in fn signatures
+fn needs_ref(s: &str) -> i64:
+    return str_len(s)
+
+# [T; N] array literal syntax
+let arr: [i64; 3] = [1, 2, 3]
+let first: i64 = arr[0]      # static-index OK; dynamic-index pending (M follow-up)
+```
+
+**Still pending (Phase M follow-ups — not yet landed)**:
+- BinOp between IntN types (e.g., `i32 + i8` without explicit widening)
+- Dynamic array indexing (`arr[n]` where `n` is a variable — `#![forbid(unsafe_code)]` blocks GEP)
+- Empty-dict key-flow inference (`let d: dict[str, i64] = {}`)
+
+Do NOT write these patterns yet — they will produce a type error.
+
 ## 10. When in doubt — read the canonical example programs
 
-`examples/leetcode/*.cb` is the largest reference corpus (LeetCode #1-100 in Cobrust). When unsure of the idiomatic form, grep there first.
+`examples/leetcode-stress/` is the production-validated stress corpus: **LC-100 真 100/100** (leetcode_corpus_e2e 12/0 + stress 100/0 as of 2026-05-19). When unsure of the idiomatic form, grep there first.
 
-## 11. Where to file findings / follow-ups
+`examples/leetcode/*.cb` covers problems #1-100 individually; use for per-problem reference.
+
+## 10a. F-pattern caveats for agent authors (F35 / F36 / F37 lessons)
+
+Three recurring drift patterns that have caused incorrect claims in this project's history. Agents writing doc-updates or status reports must avoid them:
+
+**F35-sibling — commit-msg vs diff drift**: A commit message says "Phase X FULL CLOSED" but the diff only closes one sub-strand. Rule: commit message scope = what the diff actually contains, nothing more. If the diff closes strand A, say "close strand A", not "Phase X closed."
+
+**F36 — fixture-name vs behavior drift**: A test file named `test_full_roundtrip.rs` does not prove full round-trip unless the test body actually exercises it. Fixture names are labels, not proof. Read the test body before citing the fixture name as evidence.
+
+**F37 — silent rot on accepted debt**: A known failing test that is accepted-debt must be annotated `#[ignore = "<finding-id>: <one-line reason>"]`. A bare `#[ignore]` with no annotation is a finding. Agents adding ignored tests MUST include the finding ID.
+
+**Operational rule for this skill**: when adding a "X is now supported" entry to this document, cite the ADR + commit that landed it. Do not forward-declare. If the ADR is ratified but the impl commit is not yet on main, write "queued" not "supported."
 
 - **ADR roster** at `docs/agent/adr/README.md` — every language decision lives here.
 - **Findings ledger** at `docs/agent/findings/` — empirical defects + ADSD F-pattern sediment.
@@ -345,4 +416,4 @@ A freshly-onboarded agent is ready when it can do all of the following without a
 - **Examples are load-bearing**: every example in §3-§5 must `cobrust check` clean. If it doesn't, fix the example or fix the language — never let the skill silently lie.
 - **Cross-platform fidelity**: this skill is plain Markdown — no Claude-Code-specific frontmatter, no Cursor-specific tags. Any agent system can paste this into a system prompt or treat it as a `read-first` doc.
 
-— P10 lineage 2026-05-18; seeded after Phase G Wave 2 (`25ee43f`). Refreshed 2026-05-19: added §9a fn-redef / §9b Session / §9c LSP / §9d JIT preview + §12 Done-means; Phase I FULL CLOSED + Phase J wave-1 closed (`793032d`).
+— P10 lineage 2026-05-18; seeded after Phase G Wave 2 (`25ee43f`). Refreshed 2026-05-19: added §9a fn-redef / §9b Session / §9c LSP / §9d JIT preview + §12 Done-means; Phase I FULL CLOSED + Phase J wave-1 closed (`793032d`). Refreshed 2026-05-19 (P7 maintenance #30/#34): added §9e Phase L debugger / §9f Phase M 6-gap / §10 LC-100 stress ref updated + §10a F-pattern caveats; Phase K/L/M closed + LC-100 真 100/100.
