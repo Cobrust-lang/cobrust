@@ -5,11 +5,36 @@ last_verified_commit: 09006f6
 dependencies: [adr:0050c]
 discovered_by: CTO post-Wave-2 DG verify 2026-05-16 — DG verify bithma12o on 09006f6 returned 108 failures including 100 LC-100 tests; Mac leetcode_corpus_e2e 10/12 fail with same root cause
 severity: P1 (downgraded from P0 per P10 disposition 2026-05-16 — honest-debt with Phase G closure target)
-status: accepted_as_honest_debt
-related: [predicate-flip-cascade-discovery-deficit, adr:0050c, adr:0050]
+status: superseded
+superseded_by: list-polymorphic-instantiation-ambiguity-root-cause
+superseded_on: 2026-05-19
+related: [list-polymorphic-instantiation-ambiguity-root-cause, predicate-flip-cascade-discovery-deficit, adr:0050c, adr:0050]
 ---
 
 # Finding: LC-100 leetcode corpus mass-regression from ADR-0050c Str=non-Copy
+
+> **SUPERSEDED 2026-05-19 by
+> `findings/list-polymorphic-instantiation-ambiguity-root-cause.md`**.
+>
+> The "Str=non-Copy cascade" hypothesis below was empirically falsified.
+> The new finding's `list_poly_pure_i64_triple` test demonstrates a
+> pure-i64 program — no `&s`, no `str_*` calls, no `f64`, no `as`
+> cast — that ALSO fails with `AmbiguousType` on `let nums =
+> list_new(n); list_set(nums, ..., ...); list_get(nums, ...)`. The
+> true root cause is `instantiate_list_polymorphic` allocating
+> independent fresh `Ty::Var`s per `Ty::List(_)` slot and leaving the
+> bare-`i64` scalar element slots unconstrained. Fix landed in
+> commit `c4d607e` via `instantiate_intrinsic_signature` (shared
+> elem var per call site). DG verify post-fix: LC e2e went
+> 4 PASS / 8 FAIL → 7 PASS / 5 FAIL (test_lc01 + test_lc02 both OK);
+> LC-100 stress went 9 PASS / 94 FAIL → 16 PASS / 87 FAIL (+7).
+>
+> The Str=non-Copy concern in §"Hypothesis" below remains potentially
+> valid for a SUBSET of LC programs that exercise the
+> str-with-multiple-reads pattern, but that subset is the b1 batch
+> (29 programs still 0/29 PASS) — and the predicted error mode there
+> is `UseAfterMove`, not `AmbiguousType`. That residual issue is a
+> separate finding queue when LC-100 b1 batch is re-investigated.
 
 ## Hypothesis
 

@@ -1914,7 +1914,20 @@ impl Ctx {
         // polluting other call sites' unifications.
         let callee_ty = if let ExprKind::Name(rn) = &callee.kind {
             if self.poly_intrinsic_defs.contains(&rn.def_id) {
-                self.instantiate_list_polymorphic(&callee_ty)
+                // ADR-0050h root-cause fix — per-call-site shared elem
+                // var across all element-typed slots for known
+                // intrinsics. The pre-fix incarnation called
+                // `instantiate_list_polymorphic` which generated an
+                // INDEPENDENT fresh var per `Ty::List(_)` slot; the
+                // scalar `i64` slots that represent the same element
+                // (e.g. `list_set(lst, i, v)`'s `v: i64` and
+                // `list_get(lst, i) -> i64`'s return) were left
+                // unchanged, so the list-elem var never got anchored
+                // to a concrete type when no annotation was present
+                // on the receiver binding (`let nums = list_new(n)`).
+                // The result: `def_types[nums] = list[Var(α)]` with α
+                // unresolved at `check()` finalize → `AmbiguousType`.
+                self.instantiate_intrinsic_signature(&rn.name, &callee_ty)
             } else {
                 callee_ty
             }
@@ -2417,6 +2430,103 @@ impl Ctx {
                 return_ty: Box::new(self.instantiate_list_polymorphic(&fn_ty.return_ty)),
             }),
             _ => ty.clone(),
+        }
+    }
+
+    /// ADR-0050h root-cause fix — per-intrinsic signature
+    /// instantiation that SHARES one fresh element-type var across all
+    /// element-typed slots of a known polymorphic intrinsic.
+    ///
+    /// # The bug this resolves
+    ///
+    /// The pre-fix `instantiate_list_polymorphic` walked the signature
+    /// recursively and allocated a fresh `Ty::Var` per `Ty::List(_)`
+    /// slot. For PRELUDE intrinsics with multiple element-typed slots
+    /// (`list_set(lst: list[i64], i: i64, v: i64)`, `list_get(lst:
+    /// list[i64], i: i64) -> i64`), the scalar `i64` value-slot / return
+    /// did NOT get rewritten (since `i64` is not `Ty::List`), so the
+    /// freshly-allocated list-elem var stayed orphan-unconstrained. A
+    /// caller like `let nums = list_new(n); list_set(nums, 0, 1);` left
+    /// `def_types[nums] = list[Var(α)]` with α never anchored, and
+    /// `check()` finalize surfaced `AmbiguousType`. Empirically this
+    /// broke the entire LC-100 corpus (pure-i64 programs included),
+    /// 3+ days silently — see `findings/list-polymorphic-instantiation-ambiguity-root-cause.md`.
+    ///
+    /// # The fix
+    ///
+    /// For each polymorphic intrinsic name we synthesise a fresh
+    /// signature with a SHARED `elem` var (allocated once per call
+    /// site) used in BOTH the `list[T]` slot AND every scalar slot
+    /// that semantically represents the element type. The PRELUDE
+    /// declaration's concrete `i64` in those scalar slots is treated
+    /// as "stand-in for the element type" per the row-polymorphic
+    /// intent that ADR-0050c §F5 / Phase 6 established but did not
+    /// fully wire up.
+    ///
+    /// Intrinsics without scalar element slots (`list_len`,
+    /// `list_is_empty`, `dict_is_empty`, `len`) fall through to the
+    /// recursive `instantiate_list_polymorphic` which already handles
+    /// them correctly.
+    ///
+    /// # Why this is sound
+    ///
+    /// - The MIR intrinsic-rewrite at `crates/cobrust-cli/src/build/intrinsics.rs`
+    ///   routes these names to their C-ABI runtime symbols
+    ///   (`__cobrust_list_get`, `__cobrust_list_set`, etc.) which take
+    ///   element-type-agnostic `*mut u8` pointers + bytewise widths
+    ///   chosen at MIR-lowering time. The Cobrust type checker is the
+    ///   only layer that distinguishes element types; pinning a single
+    ///   shared elem var per call site is consistent with what the
+    ///   runtime layer expects.
+    /// - The F31 lock (one-way `Ref(T) → T` coercion at call-arg
+    ///   boundary, per `unify_call_arg`) is preserved: the shared elem
+    ///   var is on the formal side, the actual arg side may be `Ref(T)`
+    ///   and the boundary coercion still applies.
+    fn instantiate_intrinsic_signature(&self, name: &str, ty: &Ty) -> Ty {
+        if !matches!(ty, Ty::Fn(_)) {
+            // Non-fn shapes (e.g. when the def-type erroneously
+            // resolves to a var or alias) — fall back to the recursive
+            // walk so the existing AmbiguousType / type-mismatch path
+            // is unchanged.
+            return self.instantiate_list_polymorphic(ty);
+        }
+        let elem = self.fresh_var();
+        match name {
+            "list_new" => Ty::Fn(FnTy {
+                // fn(i64) -> list[T]
+                positional: vec![Ty::Int],
+                named: vec![],
+                var_positional: None,
+                var_keyword: None,
+                return_ty: Box::new(Ty::List(Box::new(elem))),
+            }),
+            "list_get" => Ty::Fn(FnTy {
+                // fn(list[T], i64) -> T
+                positional: vec![Ty::List(Box::new(elem.clone())), Ty::Int],
+                named: vec![],
+                var_positional: None,
+                var_keyword: None,
+                return_ty: Box::new(elem),
+            }),
+            "list_set" => Ty::Fn(FnTy {
+                // fn(list[T], i64, T) -> i64
+                positional: vec![Ty::List(Box::new(elem.clone())), Ty::Int, elem],
+                named: vec![],
+                var_positional: None,
+                var_keyword: None,
+                return_ty: Box::new(Ty::Int),
+            }),
+            // `list_len` / `list_is_empty`: single list[elem] slot, no
+            // scalar element slot, no element-typed return → the
+            // recursive walk already handles these correctly.
+            //
+            // `dict_is_empty` / `len`: dict K/V are independent slots
+            // (no scalar element constraint), the recursive walk's
+            // fresh-var-per-Dict already handles them correctly.
+            _ => {
+                let _ = elem; // unused for non-shared-elem intrinsics
+                self.instantiate_list_polymorphic(ty)
+            }
         }
     }
 
