@@ -1324,14 +1324,11 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                         self.emitter.runtime_helper_decls.get(helper_name)
                     {
                         let i64_ty = self.emitter.ctx.i64_type();
-                        // Array base alloca as opaque pointer arg.
-                        let arr_ptr_val: BasicMetadataValueEnum<'ctx> =
-                            alloca.as_basic_value_enum().into();
+                        // Array base alloca (PointerValue) as opaque ptr arg.
+                        let arr_ptr_val: BasicMetadataValueEnum<'ctx> = alloca.into();
                         // Static N as i64.
-                        let len_val: BasicMetadataValueEnum<'ctx> = i64_ty
-                            .const_int(*n as u64, false)
-                            .as_basic_value_enum()
-                            .into();
+                        let len_val: BasicMetadataValueEnum<'ctx> =
+                            i64_ty.const_int(*n as u64, false).into();
                         // Runtime index operand.
                         let idx_val = self.lower_operand(idx_op)?;
                         // Widen to i64 if needed (Bool/i8/i32 index).
@@ -1343,7 +1340,6 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                                     .builder
                                     .build_int_z_extend(iv, i64_ty, "idx_zext")
                                     .map_err(map_builder_err)?
-                                    .as_basic_value_enum()
                                     .into()
                             }
                             _ => idx_val.into(),
@@ -1357,7 +1353,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                                 "arr_dyn_get",
                             )
                             .map_err(map_builder_err)?;
-                        if let Some(v) = call.try_as_basic_value().left() {
+                        if let Some(v) = call.try_as_basic_value().basic() {
                             return Ok(v);
                         }
                     }
