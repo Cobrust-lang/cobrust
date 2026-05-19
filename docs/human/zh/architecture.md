@@ -1564,6 +1564,19 @@ Phase K wave-1（`crates/cobrust-codegen/src/llvm_backend.rs`，~1100 LOC）以 
 
 明示非目标（按 ADR-0058a §8 延后）：opt-pass 流水线（sub-ADR 0058b）、DWARF 调试信息（sub-ADR 0058c）、多目标交叉编译矩阵（sub-ADR 0058b）。
 
+#### Phase K Strand #4 —— JIT/AOT MIR→Cranelift lowering 收敛（ADR-0058d）
+
+ADR-0058d 之前，`cobrust-jit/src/lower.rs`（430 LOC）携带自己一份 wave-1 MIR→Cranelift IR lowering 的副本,ADR-0056a §13 已明确标注延期的收敛点："AOT 可能加入 JIT 没有跟进的 MIR feature；存在漂移风险"。Phase K Strand #4 关闭该漂移面：
+
+- **单一真理之源（single source of truth）。** 新增 `pub mod lowering`（`cobrust-codegen` 内,492 LOC 实现 + 100 LOC 测试）将 wave-1 substrate 锚定为模块无关的自由函数: `lower_constant`、`lower_place`、`lower_operand`、`lower_rvalue_wave1`、`lower_statement_wave1`、`lower_terminator_wave1`、`lower_body_wave1`、`body_signature_wave1`、`lower_ty_wave1`。
+- **JIT 成为薄包装（thin wrapper）。** `cobrust-jit/src/lower.rs` 从 430 LOC 缩到 97 LOC（−333 LOC,约 −77%）；其两个 pub(crate) 函数现在只是委托给 `cobrust_codegen::lowering::*` 并通过一个针对性的 `From` impl 把 `CodegenError` 转成 `JitError`。
+- **AOT 路径不变。** `cranelift_backend::CraneliftCtx::define_body` 的有状态 AOT 派发器（携带运行时辅助函数、外部符号声明、drop 调度、dict/list/str intrinsics、Place projection、FnRef 调用、str 数据符号）在 Strand #4 中**未被修改**。wave-1 substrate 的存在主要是为 JIT 消费者锚定一条稳定契约；AOT 端通过 substrate 的委托被保留给将来的 ADR。
+- **稳定性契约。** wave-1 表面按 ADR-0058d §5.1 是 stable-for-wave-1：签名变更需要 sub-ADR；新增 helper 不破坏兼容；非 wave-1 的 MIR 返回带 `"wave1:"` 前缀的 `CodegenError::InvalidMir`,JIT 调用方可以据此回退到 AOT。
+
+DG-Workstation 验证 @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrust-jit` = 392 PASS / 0 FAILED / 8 ignored,TEST_EXIT=0。包括 2 个新的 wave-1 单元测试在 `lowering::tests`（round-trip + reject-Str）、378 个 cobrust-codegen 既有测试无变化、12 个 cobrust-jit 测试（1 unit + 11 integration jit_roundtrip）无变化。
+
+参考: `docs/agent/adr/0058d-jit-aot-lowering-convergence.md`。关闭 ADR-0056a §13 noted-debt + 审计 `ae2316f1c51dbd6be` Gate 7。
+
 DG-Workstation 验证 @ HEAD `4686192`：cargo test -p cobrust-codegen --features llvm = 355 测试 PASS / 0 失败 / 6 ignored（LLVM-conditional），TEST_EXIT=0。5 个 wave-1 inline smoke + 350 baseline tests 覆盖 aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora。
 
 **M9 测试总数**：158 个测试，覆盖 5 个套件：
