@@ -2077,10 +2077,12 @@ mod tests {
     }
 
     #[test]
-    fn dwarf_return_42_emits_subprogram() {
+    fn dwarf_return_42_emits_debug_sections() {
         // `fn answer() -> i64 { return 42 }` — DI emits a
         // DW_TAG_subprogram for the function. We assert the object
-        // file is well-formed + carries DWARF sections.
+        // file is well-formed + carries DWARF sections
+        // (section-presence check; subprogram symbol-level check is in
+        // dwarf_lldb_smoke.rs::lldb_smoke_hello_world_subprogram_resolves).
         let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let body = build_simple_body(
             1,
@@ -2104,9 +2106,10 @@ mod tests {
     }
 
     #[test]
-    fn dwarf_multi_fn_module_emits_per_fn_subprograms() {
+    fn dwarf_multi_fn_module_emits_debug_sections() {
         // Two unrelated user fns share the compile unit; both get
         // their own DISubprogram per §3.2.
+        // (Section-presence check; per-fn symbol check in lldb smoke suite.)
         let _guard = LLVM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let body_a = build_simple_body(
             10,

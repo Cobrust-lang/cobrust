@@ -24,6 +24,12 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+
+// Serialize LLVM init + emit across tests — `Target::initialize_all` is
+// process-global; parallel execution of integration tests races on it.
+// Same rationale as `LLVM_TEST_LOCK` in llvm_backend.rs unit tests.
+static LLDB_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 use cobrust_codegen::{Artifact, ArtifactKind, Backend, OptLevel, TargetSpec, emit};
 use cobrust_frontend::span::{FileId, Span};
@@ -185,6 +191,7 @@ fn body_summing_params(def_id: u32, name: &str) -> Body {
 
 #[test]
 fn lldb_smoke_hello_world_subprogram_resolves() {
+    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
         return;
@@ -208,6 +215,7 @@ fn lldb_smoke_hello_world_subprogram_resolves() {
 
 #[test]
 fn lldb_smoke_fib_function_visible() {
+    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Build a "fib-shaped" body (single fn, two params, sum
     // approximation — the DWARF surface is what we care about, not
     // the math).
@@ -231,6 +239,7 @@ fn lldb_smoke_fib_function_visible() {
 
 #[test]
 fn lldb_smoke_multi_fn_module_lists_both() {
+    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
         return;
@@ -255,6 +264,7 @@ fn lldb_smoke_multi_fn_module_lists_both() {
 
 #[test]
 fn lldb_smoke_line_table_present() {
+    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Verify the DWARF line table (.debug_line) is emitted. We can
     // assert this indirectly by asking lldb to list source line info
     // for the symbol's PC — if .debug_line is missing, lldb returns
