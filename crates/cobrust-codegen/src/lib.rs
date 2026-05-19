@@ -69,6 +69,9 @@ pub mod artifact;
 pub mod cranelift_backend;
 pub mod error;
 pub mod linker;
+/// Module-generic MIR→Cranelift IR lowering substrate (ADR-0058d).
+/// Wave-1 surface; see module docs for the binding scope.
+pub mod lowering;
 pub mod target;
 
 #[cfg(feature = "llvm")]
