@@ -1605,6 +1605,18 @@ Phase K wave-3（`crates/cobrust-codegen/src/llvm_backend.rs` 内接入 `DebugIn
 
 非目标（按 ADR-0058c §4 延后）：源码级变量检查（`DILocalVariable` / `DIFormalParameter`—— Phase L UX 范围）、macOS dSYM 打包（`dsymutil` 链接后步骤在 `release.yml` 处理）、内联帧链（`DILocation::inlined_at` —— Phase L+ 视 debugger 需求）、DWARF v4 回退（LLVM-18 默认 v5）。
 
+#### Phase L wave-1 —— lldb pretty-printers（ADR-0059a）
+
+Phase L wave-1（`tools/lldb-cobrust/printers.py` + `llvm_backend.rs::populate_di_basic_types` 扩展）通过 lldb pretty-printer 关闭 ADR-0058c §4「源码级变量检查」延后项 —— Python 脚本由 lldb 内嵌解释器运行,把 Cobrust 运行时在内存中存的原始结构形态翻译成 Cobrust 源码级展示。
+
+- **6 型 printer 名册**（ADR-0059a §2)。每个非原始 Cobrust 类型一个 pretty-printer：`Str`（UTF-8 解码）、`List<T>`（`[e0, e1, ...]` 形）、`Dict<K, V>`（`{k0: v0, ...}` 形，wave-1 出 `{<n entries>}` 占位符,等待 wave-2 IndexMap 布局稳定化）、`Tuple`（`(e0, e1, ...)` 形）、`Set<T>`（`{e0, e1, ...}` 形）、`Option<T>`（`None` / `Some(<x>)` 形）。原始类型（`Int` / `Float` / `Bool`）无需 pretty-printer —— lldb 原生 DWARF 驱动展示已按 ADR-0058c §3.2 正确显示。
+- **Option A 命名 DIType**（ADR-0059a §3.3.1)。扩展 `populate_di_basic_types`,增加 5 个新 `DIBasicType` 项（`cobrust::Str` / `cobrust::List` / `cobrust::Dict` / `cobrust::Set` / `cobrust::Tuple`）；所有共享不透明指针存储,但携带各异的 DWARF 类型名。`di_type_for` 分派 Cobrust `Ty` 变体到这些名字。lldb pretty-printer（`type summary add cobrust::Str`、`type synthetic add -l <Provider> --regex '^cobrust::List'`）按名匹配。codegen 总增量 ~40 LOC。
+- **加载机制**（ADR-0059a §3.2)。三条路径：项目本地 `tools/lldb-cobrust/.lldbinit` 片段（`command script import tools/lldb-cobrust/printers.py`）；用户级 `~/.lldbinit-Cobrust` 追加；未来 `cobrust debug` 自动加载（ADR-0059c wave-3）。wave-1 发布路径 1 + 2。
+- **健壮性**（ADR-0059a §2.1、§2.2、§7.3)。递归深度上限 8（更深嵌套渲染 `[...]` 占位符）。容器 > 32 元素截断到前 32 + `, ...` + 总数。`Str` 中无效 UTF-8 用 `errors='replace'` Unicode 替换字符 `�` 渲染而非崩溃 printer。
+- **冒烟门扩展**（ADR-0059a §6)。`dwarf_lldb_smoke.rs` 扩展 3 个新测试（`lldb_smoke_str_variable_renders_content` / `lldb_smoke_list_variable_renders_bracket` / `lldb_smoke_dict_variable_renders_braces`),验证 `image lookup --type cobrust::{Str,List,Dict}` 在发射的 DWARF 中找到命名 DIE —— 端到端证明 Option A 命名到达 `.debug_info`。保留 4 个 ADR-0058c 基线测试；wave-1 corpus 为 4 + 3 = 7 个 lldb 冒烟测试。
+
+非目标（按 ADR-0059a §4 延后）：Rust 风格源码级类型名渲染（Cobrust 用 `List<Str>` 而非 `Vec<String>`）、内联表达式求值、用户自定义 record 的字段展示（Phase L+,待用户 record DI 落地）、gdb pretty-printers（Phase L+ 后续）、从 inspector 做 REPL 风格修改。
+
 **M9 测试总数**：158 个测试，覆盖 5 个套件：
 - `codegen_well_formed.rs` —— 60 个良型程序，覆盖整数 / 浮点 / 布尔的算术、比较、分支、循环、递归、位运算、逻辑运算。
 - `codegen_ill_formed.rs` —— 50 个病型用例，覆盖每个 `CodegenError` 变体：dangling 局部、dangling block target、不支持的目标、不支持的后端、错误 Display 不变量、产物 / kind 扩展矩阵。

@@ -672,10 +672,46 @@ A single shared cache (`di_basic_types: HashMap<&'static str, DIBasicType<'ctx>>
 
 ### Non-goals (deferred per ADR-0058c §4)
 
-- **Source-level variable inspection** (`DILocalVariable` / `DIFormalParameter` entries for `lldb frame variable`): Phase L UX scope; wave-3 ships per-fn + per-line baseline only.
+- **Source-level variable inspection** (`DILocalVariable` / `DIFormalParameter` entries for `lldb frame variable`): Phase L UX scope; wave-3 ships per-fn + per-line baseline only. **Wave-1 (ADR-0059a) closes this via pretty-printers, see Phase L wave-1 below.**
 - **macOS dSYM packaging**: `dsymutil` invocation handled in `release.yml`, not `llvm_backend`.
 - **Inlined-frame chains** (`DILocation::inlined_at`): Phase-L+ if debugger demand surfaces it.
 - **DWARF v4 fallback**: LLVM-18 emits v5 by default; older toolchains must regenerate.
+
+## Phase L wave-1 — lldb pretty-printers (ADR-0059a)
+
+`tools/lldb-cobrust/printers.py` + `llvm_backend::populate_di_basic_types` named-DIType extension close the ADR-0058c §4 source-level variable inspection deferral via lldb pretty-printers (Python scripts in lldb's embedded interpreter).
+
+### Wave-1 deliverables
+
+- **6-type printer roster** (ADR-0059a §2). `Str` / `List<T>` / `Dict<K, V>` / `Set<T>` / `Tuple` / `Option<T>`. Primitive types (`Int` / `Float` / `Bool`) use lldb's native DI-driven display.
+- **Option A named DIType** (ADR-0059a §3.3.1). 5 new `DIBasicType` entries in `populate_di_basic_types` (`cobrust::Str` / `cobrust::List` / `cobrust::Dict` / `cobrust::Set` / `cobrust::Tuple`) all share opaque-ptr storage but carry distinct DWARF type-names. `di_type_for` dispatches `Ty::{Str, List, Dict, Set, Tuple}` to those keys. ~40 LOC codegen delta. The 5 names are the matching surface for lldb pretty-printers.
+
+### Wave-1 test surface (per ADR-0059a §6)
+
+| Suite | Tests | Notes |
+|---|---|---|
+| `tests/dwarf_lldb_smoke.rs` Phase L wave-1 | 3 added | `lldb_smoke_str_variable_renders_content`, `lldb_smoke_list_variable_renders_bracket`, `lldb_smoke_dict_variable_renders_braces`. Each builds an MIR fixture whose signature mentions the named container `Ty` variant; asserts `image lookup --type cobrust::{Str,List,Dict}` finds the DIE in emitted DWARF. Skips cleanly when neither `lldb-18` nor `lldb` is on `$PATH`. |
+| Baseline preserved | 4 | ADR-0058c §3.5 baseline (`lldb_smoke_hello_world_subprogram_resolves` / `lldb_smoke_fib_function_visible` / `lldb_smoke_multi_fn_module_lists_both` / `lldb_smoke_line_table_present`) — Wave-1 corpus is 4 + 3 = 7 lldb smoke tests. |
+
+DG verify `cargo test -p cobrust-codegen --features llvm --test dwarf_lldb_smoke`: 7 PASS / 0 FAIL / 0 IGNORED, TEST_EXIT=0, POSTFLIGHT PRE=0/POST=0 (clean).
+
+### Wave-1 printer surface
+
+| File | LOC | Purpose |
+|---|---|---|
+| `tools/lldb-cobrust/printers.py` | 343 | 6 summary providers + `__lldb_init_module` registration. Reads runtime layouts (`StringBuffer`, `ListI64Layout`, `DictLayout`, `SetI64Layout`) via `SBProcess.ReadPointerFromMemory` / `ReadMemory`. |
+| `tools/lldb-cobrust/.lldbinit` | 15 | `command script import tools/lldb-cobrust/printers.py` auto-load snippet. |
+
+### Non-goals (deferred per ADR-0059a §4)
+
+- **Source-level type-name rendering in Rust style** (Cobrust uses `List<Str>` not `Vec<String>`).
+- **Inline expression evaluation in printer** (display raw values only).
+- **Struct-field display for user-defined records** (Phase L+ once user-record DI lands).
+- **gdb pretty-printers** (Phase L+ followup; wave-1 is lldb-18-only).
+- **REPL-style mutation from inspector** (read-only display).
+- **Runtime `frame variable` end-to-end test**: wave-1 verifies named DIType reached DWARF (object-level `image lookup`); runtime test requires linkage + execution + stdlib link path — wave-2 scope.
+- **Adt-discriminant DI emission for Option**: scaffolding shipped (OptionProvider registered on `cobrust::Option`), full discriminant recovery is Phase L+ sub-ADR scope.
+- **IndexMap layout-stable Dict display**: wave-1 ships `{<n entries>}` placeholder; wave-2 stabilises via `__cobrust_dict_keys` / `__cobrust_dict_values` runtime exports the printer can call via `EvaluateExpression`.
 
 ## Phase K Strand #4 — JIT/AOT lowering convergence (ADR-0058d)
 
