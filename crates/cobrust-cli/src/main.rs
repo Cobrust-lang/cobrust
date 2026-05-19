@@ -38,6 +38,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod add;
 mod build;
 mod check;
+mod debug;
 pub mod error_ux;
 mod exit_codes;
 mod fmt;
@@ -181,6 +182,32 @@ enum Command {
         #[arg(long)]
         out_dir: Option<PathBuf>,
     },
+    /// Interactive lldb / DAP-stdio debugging launcher (Phase L wave-3,
+    /// ADR-0059c). Builds the source with DWARF on, auto-imports the
+    /// wave-1 lldb pretty-printers (`tools/lldb-cobrust/printers.py`),
+    /// and spawns `lldb-18` with inherited stdio. With `--dap`, forwards
+    /// stdio to the wave-2 `cobrust-dap` server.
+    Debug {
+        /// Source `.cb` file. Required in interactive mode; optional
+        /// in `--dap` mode (the DAP `Launch` request carries the
+        /// program path).
+        file: Option<PathBuf>,
+        /// Spawn the sibling `cobrust-dap` stdio server and forward
+        /// stdin/stdout/stderr to it (editor DAP-stdio transport).
+        #[arg(long)]
+        dap: bool,
+        /// Auto-set a line breakpoint in interactive mode. Repeatable
+        /// (`--bp 5 --bp 12`).
+        #[arg(long)]
+        bp: Vec<u32>,
+        /// Override the lldb binary path (default: `lldb-18`, fallback
+        /// `lldb` on `$PATH`).
+        #[arg(long)]
+        lldb_path: Option<PathBuf>,
+        /// Suppress informational stderr.
+        #[arg(short, long)]
+        quiet: bool,
+    },
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -265,6 +292,19 @@ fn main() -> ExitCode {
             source_file,
             out_dir,
         } => report_bug::run(include_mir, source_file.as_deref(), out_dir.as_deref()),
+        Command::Debug {
+            file,
+            dap,
+            bp,
+            lldb_path,
+            quiet,
+        } => debug::run(debug::DebugArgs {
+            file,
+            dap,
+            bp,
+            lldb_path,
+            quiet,
+        }),
     };
     ExitCode::from(code)
 }
