@@ -147,6 +147,7 @@ fn run_interactive(args: &DebugArgs) -> Result<u8, DebugError> {
         false, // release=false → DWARF on per ADR-0058c
         None,  // host triple
         args.quiet,
+        None, // enable_runtime_dispatch: use default (false for debug)
     );
     if build_code != exit_codes::SUCCESS {
         return Err(DebugError::BuildFailed(build_code));

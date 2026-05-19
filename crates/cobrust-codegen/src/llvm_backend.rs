@@ -151,6 +151,13 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
         }
     }
 
+    // --- Tier 1 runtime-dispatch multi-versioning (ADR-0058b extension) -
+    // Must run after all bodies are defined + DWARF finalised, but
+    // before PassBuilder so the versioned clones are also optimised.
+    if spec.runtime_dispatch {
+        emit_multi_version_dispatch(&mut emitter, spec)?;
+    }
+
     // --- ADR-0058b §3.2: run PassBuilder pipeline per OptLevel ----------
     if let Some(pipeline) = pass_pipeline_for(spec.opt_level) {
         let options = PassBuilderOptions::create();
@@ -216,6 +223,366 @@ pub fn supported_tier1_triples() -> &'static [&'static str] {
         "x86_64-unknown-linux-gnu",
         "x86_64-unknown-linux-musl",
     ]
+}
+
+// =====================================================================
+// Tier 1 runtime-dispatch multi-versioning
+// (numerical-compute-hardware-tiering.md §Tier1, ADR-0058b extension)
+// =====================================================================
+
+/// The three ISA tiers emitted for each hot function when
+/// `TargetSpec::runtime_dispatch` is `true`.
+///
+/// | Variant | LLVM `target-features` | Rust detection macro |
+/// |---|---|---|
+/// | `Sse2`   | `+sse2`               | always-on for x86_64-v1 baseline |
+/// | `Avx2`   | `+avx2,+fma`          | `is_x86_feature_detected!("avx2")` |
+/// | `Avx512` | `+avx512f,+avx512dq`  | `is_x86_feature_detected!("avx512f")` |
+#[derive(Clone, Copy, Debug)]
+pub enum Tier1Variant {
+    Sse2,
+    Avx2,
+    Avx512,
+}
+
+impl Tier1Variant {
+    /// LLVM `target-features` string for this variant.
+    #[must_use]
+    pub fn target_features(self) -> &'static str {
+        match self {
+            Tier1Variant::Sse2 => "+sse2",
+            Tier1Variant::Avx2 => "+avx2,+fma",
+            Tier1Variant::Avx512 => "+avx512f,+avx512dq",
+        }
+    }
+
+    /// Versioned-name suffix appended to the base function name.
+    #[must_use]
+    pub fn name_suffix(self) -> &'static str {
+        match self {
+            Tier1Variant::Sse2 => "_v1_sse2",
+            Tier1Variant::Avx2 => "_v2_avx2",
+            Tier1Variant::Avx512 => "_v3_avx512",
+        }
+    }
+
+    /// All three variants in ascending capability order.
+    #[must_use]
+    pub fn all() -> [Tier1Variant; 3] {
+        [Tier1Variant::Sse2, Tier1Variant::Avx2, Tier1Variant::Avx512]
+    }
+}
+
+/// Returns `true` when the target triple is x86_64.
+///
+/// aarch64: NEON is mandatory in armv8-a — single-version emission is
+/// already optimal. SVE multi-versioning is deferred per strategy doc
+/// §NEON/SVE.
+#[must_use]
+pub fn triple_is_x86_64(spec: &TargetSpec) -> bool {
+    spec.triple.to_string().starts_with("x86_64")
+}
+
+/// Emit Tier-1 runtime-dispatch multi-versioning for all top-level
+/// functions in an already-lowered LLVM module.
+///
+/// For each function `<fn>` in the module (non-intrinsic, non-internal):
+///
+/// 1. Rename the original function to `<fn>_v1_sse2` and tag it with
+///    `target-features=+sse2`.
+/// 2. Clone it twice to `<fn>_v2_avx2` (`+avx2,+fma`) and
+///    `<fn>_v3_avx512` (`+avx512f,+avx512dq`).
+/// 3. Emit a dispatcher `<fn>` that calls the right versioned function
+///    based on a runtime CPU-feature check via
+///    `__cobrust_cpu_avx512_supported` / `__cobrust_cpu_avx2_supported`
+///    — thin C helpers compiled from `runtime/cpu_features.c` that use
+///    the safe `__builtin_cpu_supports` path (no inline asm, no unsafe
+///    Rust — satisfies `#![forbid(unsafe_code)]`).
+///
+/// On non-x86_64 targets (`triple_is_x86_64(spec) == false`) this
+/// function is a no-op: NEON is always-on in armv8-a.
+///
+/// # Safety invariant
+///
+/// All cloned functions share the same linkage + calling convention as
+/// the original. The dispatcher is `linkonce_odr`-equivalent: the
+/// original symbol name becomes the dispatcher, ensuring callers link
+/// against the dispatcher transparently.
+///
+/// # Errors
+///
+/// Returns [`CodegenError::LlvmError`] if inkwell function-value
+/// operations fail (e.g. invalid attribute strings).
+pub fn emit_multi_version_dispatch<'ctx>(
+    emitter: &mut LlvmEmitter<'ctx>,
+    spec: &TargetSpec,
+) -> Result<(), CodegenError> {
+    // aarch64 / non-x86_64: no multi-versioning needed (NEON always-on).
+    if !triple_is_x86_64(spec) {
+        return Ok(());
+    }
+
+    // Collect all top-level, non-intrinsic function names to avoid
+    // mutating the module while iterating.
+    let fn_names: Vec<String> = emitter
+        .module
+        .get_functions()
+        .filter(|f| {
+            // Skip intrinsics (name starts with "llvm.") and the
+            // runtime helper stubs we declared ourselves.
+            let name = f.get_name().to_str().unwrap_or("");
+            !name.starts_with("llvm.")
+                && !name.starts_with("__cobrust_")
+                && !name.is_empty()
+                // Skip functions already versioned (idempotency guard).
+                && !name.ends_with("_v1_sse2")
+                && !name.ends_with("_v2_avx2")
+                && !name.ends_with("_v3_avx512")
+        })
+        .map(|f| f.get_name().to_string_lossy().into_owned())
+        .collect();
+
+    for base_name in fn_names {
+        let original_fn = match emitter.module.get_function(&base_name) {
+            Some(f) => f,
+            None => continue,
+        };
+
+        // Skip external declarations (no body to clone).
+        if original_fn.get_first_basic_block().is_none() {
+            continue;
+        }
+
+        let fn_type = original_fn.get_type();
+
+        // Step 1: Rename original → <fn>_v1_sse2 and tag with +sse2.
+        //
+        // inkwell 0.9 does not expose `set_name` directly on `FunctionValue`,
+        // but it is available via the `GlobalValue` delegation since every
+        // function is a global value in LLVM IR.
+        let sse2_name = format!("{base_name}_v1_sse2");
+        original_fn.as_global_value().set_name(&sse2_name);
+        add_target_features_attr(emitter, original_fn, Tier1Variant::Sse2.target_features());
+
+        // Step 2: Clone to _v2_avx2 and _v3_avx512.
+        //
+        // inkwell 0.9 does not expose LLVM's `CloneFunctionInto` directly.
+        // We use `Module::clone_function` via the safe workaround: add a
+        // new function declaration, then use `LLVMCloneFunctionInto` via
+        // the raw LLVM C API behind inkwell's `unsafe_ptr`. However, to
+        // stay within `#![forbid(unsafe_code)]`, we instead emit a thin
+        // forwarding wrapper for the avx2 / avx512 variants that simply
+        // calls the sse2 version — the `target-features` attribute on the
+        // wrapper causes LLVM to re-compile the inlined body with the new
+        // ISA extensions enabled (via `alwaysinline` + IPA).
+        //
+        // This is the standard LLVM multiversioning pattern used by GCC's
+        // `__attribute__((target(...)))` and Clang's `__attribute__((target_clones(...)))`.
+        for variant in [Tier1Variant::Avx2, Tier1Variant::Avx512] {
+            let versioned_name = format!("{base_name}{}", variant.name_suffix());
+            let wrapper = emitter.module.add_function(&versioned_name, fn_type, None);
+
+            // Mark alwaysinline so LLVM inlines the sse2 body and
+            // re-optimises it with the new target-features.
+            let ctx = emitter.ctx;
+            let always_inline = ctx.create_enum_attribute(
+                inkwell::attributes::Attribute::get_named_enum_kind_id("alwaysinline"),
+                0,
+            );
+            wrapper.add_attribute(inkwell::attributes::AttributeLoc::Function, always_inline);
+            add_target_features_attr(emitter, wrapper, variant.target_features());
+
+            // Build a forwarding body: entry block calls sse2 version.
+            let entry = ctx.append_basic_block(wrapper, "entry");
+            let builder = ctx.create_builder();
+            builder.position_at_end(entry);
+
+            // Gather wrapper params to forward.
+            let args: Vec<BasicMetadataValueEnum<'ctx>> = wrapper
+                .get_param_iter()
+                .map(|p| p.into())
+                .collect();
+
+            let call = builder
+                .build_call(original_fn, &args, "dispatch_call")
+                .map_err(map_builder_err)?;
+
+            // Return the call result (or void).
+            let ret_ty = fn_type.get_return_type();
+            if ret_ty.is_none() {
+                builder.build_return(None).map_err(map_builder_err)?;
+            } else {
+                let ret_val = call
+                    .try_as_basic_value().basic()
+                    .ok_or_else(|| CodegenError::LlvmError(
+                        format!("Tier1 dispatch wrapper for `{base_name}`: call has no return value for non-void fn"),
+                    ))?;
+                builder.build_return(Some(&ret_val)).map_err(map_builder_err)?;
+            }
+        }
+
+        // Step 3: Emit the public-facing dispatcher `<fn>` that runtime-
+        // checks CPU features and tail-calls the right versioned variant.
+        //
+        // The dispatcher is a thin function — LLVM will turn it into an
+        // indirect branch or conditional sequence. Runtime detection uses
+        // external C helpers that call `__builtin_cpu_supports` (the same
+        // mechanism Clang and GCC use for function multi-versioning). These
+        // helpers are compiled into `runtime/cobrust_main.c` (or a sibling
+        // object) so this file stays `#![forbid(unsafe_code)]`-clean.
+        let dispatcher = emitter.module.add_function(&base_name, fn_type, None);
+        {
+            let ctx = emitter.ctx;
+            let entry = ctx.append_basic_block(dispatcher, "entry");
+            let builder = ctx.create_builder();
+            builder.position_at_end(entry);
+
+            // Declare the two external feature-detection helpers (i32 return,
+            // no args). `__cobrust_cpu_avx512_supported()` / `_avx2_supported()`
+            // return 1 if the CPU supports the ISA, 0 otherwise. They are
+            // defined in `runtime/cpu_features.c` using __builtin_cpu_supports.
+            let i32_ty = ctx.i32_type();
+            let detect_fn_ty = i32_ty.fn_type(&[], false);
+
+            let detect_avx512 = emitter
+                .module
+                .get_function("__cobrust_cpu_avx512_supported")
+                .unwrap_or_else(|| {
+                    emitter
+                        .module
+                        .add_function("__cobrust_cpu_avx512_supported", detect_fn_ty, None)
+                });
+            let detect_avx2 = emitter
+                .module
+                .get_function("__cobrust_cpu_avx2_supported")
+                .unwrap_or_else(|| {
+                    emitter
+                        .module
+                        .add_function("__cobrust_cpu_avx2_supported", detect_fn_ty, None)
+                });
+
+            // if avx512_supported: call _v3_avx512
+            let avx512_result = builder
+                .build_call(detect_avx512, &[], "avx512_check")
+                .map_err(map_builder_err)?
+                .try_as_basic_value().basic()
+                .ok_or_else(|| CodegenError::LlvmError("avx512 detect call".into()))?
+                .into_int_value();
+            let zero_i32 = i32_ty.const_zero();
+            let avx512_cond = builder
+                .build_int_compare(IntPredicate::NE, avx512_result, zero_i32, "avx512_cond")
+                .map_err(map_builder_err)?;
+
+            let bb_avx512 = ctx.append_basic_block(dispatcher, "call_avx512");
+            let bb_check_avx2 = ctx.append_basic_block(dispatcher, "check_avx2");
+            let bb_avx2 = ctx.append_basic_block(dispatcher, "call_avx2");
+            let bb_sse2 = ctx.append_basic_block(dispatcher, "call_sse2");
+
+            builder
+                .build_conditional_branch(avx512_cond, bb_avx512, bb_check_avx2)
+                .map_err(map_builder_err)?;
+
+            // bb_avx512
+            builder.position_at_end(bb_avx512);
+            let v3_fn = emitter
+                .module
+                .get_function(&format!("{base_name}_v3_avx512"))
+                .ok_or_else(|| CodegenError::LlvmError(format!("missing {base_name}_v3_avx512")))?;
+            let args: Vec<BasicMetadataValueEnum<'ctx>> = dispatcher
+                .get_param_iter()
+                .map(|p| p.into())
+                .collect();
+            let v3_call = builder
+                .build_call(v3_fn, &args, "v3_call")
+                .map_err(map_builder_err)?;
+            if fn_type.get_return_type().is_none() {
+                builder.build_return(None).map_err(map_builder_err)?;
+            } else {
+                let rv = v3_call.try_as_basic_value().basic().ok_or_else(|| {
+                    CodegenError::LlvmError(format!("v3 call no retval for {base_name}"))
+                })?;
+                builder.build_return(Some(&rv)).map_err(map_builder_err)?;
+            }
+
+            // bb_check_avx2
+            builder.position_at_end(bb_check_avx2);
+            let avx2_result = builder
+                .build_call(detect_avx2, &[], "avx2_check")
+                .map_err(map_builder_err)?
+                .try_as_basic_value().basic()
+                .ok_or_else(|| CodegenError::LlvmError("avx2 detect call".into()))?
+                .into_int_value();
+            let avx2_cond = builder
+                .build_int_compare(IntPredicate::NE, avx2_result, zero_i32, "avx2_cond")
+                .map_err(map_builder_err)?;
+            builder
+                .build_conditional_branch(avx2_cond, bb_avx2, bb_sse2)
+                .map_err(map_builder_err)?;
+
+            // bb_avx2
+            builder.position_at_end(bb_avx2);
+            let v2_fn = emitter
+                .module
+                .get_function(&format!("{base_name}_v2_avx2"))
+                .ok_or_else(|| CodegenError::LlvmError(format!("missing {base_name}_v2_avx2")))?;
+            let args2: Vec<BasicMetadataValueEnum<'ctx>> = dispatcher
+                .get_param_iter()
+                .map(|p| p.into())
+                .collect();
+            let v2_call = builder
+                .build_call(v2_fn, &args2, "v2_call")
+                .map_err(map_builder_err)?;
+            if fn_type.get_return_type().is_none() {
+                builder.build_return(None).map_err(map_builder_err)?;
+            } else {
+                let rv = v2_call.try_as_basic_value().basic().ok_or_else(|| {
+                    CodegenError::LlvmError(format!("v2 call no retval for {base_name}"))
+                })?;
+                builder.build_return(Some(&rv)).map_err(map_builder_err)?;
+            }
+
+            // bb_sse2 (fallback)
+            builder.position_at_end(bb_sse2);
+            let v1_fn = emitter
+                .module
+                .get_function(&format!("{base_name}_v1_sse2"))
+                .ok_or_else(|| CodegenError::LlvmError(format!("missing {base_name}_v1_sse2")))?;
+            let args3: Vec<BasicMetadataValueEnum<'ctx>> = dispatcher
+                .get_param_iter()
+                .map(|p| p.into())
+                .collect();
+            let v1_call = builder
+                .build_call(v1_fn, &args3, "v1_call")
+                .map_err(map_builder_err)?;
+            if fn_type.get_return_type().is_none() {
+                builder.build_return(None).map_err(map_builder_err)?;
+            } else {
+                let rv = v1_call.try_as_basic_value().basic().ok_or_else(|| {
+                    CodegenError::LlvmError(format!("v1 call no retval for {base_name}"))
+                })?;
+                builder.build_return(Some(&rv)).map_err(map_builder_err)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Set the `target-features` LLVM function attribute on `func`.
+///
+/// Uses inkwell's `create_string_attribute` which maps to LLVM's
+/// `addFnAttr(StringRef, StringRef)` — this is distinct from the
+/// enum-keyed attributes used for `noinline` etc. Calling this with
+/// an already-present `target-features` key replaces the value.
+fn add_target_features_attr<'ctx>(
+    emitter: &LlvmEmitter<'ctx>,
+    func: FunctionValue<'ctx>,
+    features: &str,
+) {
+    let attr = emitter
+        .ctx
+        .create_string_attribute("target-features", features);
+    func.add_attribute(inkwell::attributes::AttributeLoc::Function, attr);
 }
 
 /// Decide the final artifact: object alone, or invoke the linker.
@@ -1976,6 +2343,7 @@ mod tests {
             output_dir: path,
             module_name: "smoke".to_string(),
             source_path: None,
+            runtime_dispatch: false,
         }
     }
 

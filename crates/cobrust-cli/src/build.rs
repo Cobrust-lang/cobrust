@@ -68,8 +68,9 @@ pub fn run(
     release: bool,
     target: Option<&str>,
     quiet: bool,
+    enable_runtime_dispatch: Option<bool>,
 ) -> u8 {
-    match build(file, output, emit_kind, release, target, quiet) {
+    match build(file, output, emit_kind, release, target, quiet, enable_runtime_dispatch) {
         Ok(_) => exit_codes::SUCCESS,
         Err(e) => {
             eprintln!("cobrust build: {e}");
@@ -80,6 +81,10 @@ pub fn run(
 
 /// Underlying `Result`-returning driver. Used by `cobrust run` to grab
 /// the produced artifact path before invoking it.
+///
+/// `enable_runtime_dispatch` — when `Some`, overrides the default
+/// Tier-1 runtime-dispatch setting (default: `true` on `--release`).
+/// Pass `None` to accept the default.
 pub fn build(
     file: &Path,
     output: Option<&Path>,
@@ -87,6 +92,7 @@ pub fn build(
     release: bool,
     target: Option<&str>,
     quiet: bool,
+    enable_runtime_dispatch: Option<bool>,
 ) -> Result<Artifact, BuildError> {
     let user_source = std::fs::read_to_string(file)
         .map_err(|e| BuildError::User(format!("cannot read {}: {e}", file.display())))?;
@@ -190,6 +196,9 @@ pub fn build(
         output_dir: codegen_output_dir.clone(),
         module_name: module_name.clone(),
         source_path: None,
+        // Tier 1 runtime-dispatch: default true on --release, false on debug.
+        // `enable_runtime_dispatch` overrides when explicitly set.
+        runtime_dispatch: enable_runtime_dispatch.unwrap_or(release),
     };
 
     // Emit the user's object file.

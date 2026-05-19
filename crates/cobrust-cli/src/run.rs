@@ -18,7 +18,7 @@ pub fn run(
     quiet: bool,
     program_args: &[String],
 ) -> u8 {
-    let artifact = match build::build(file, None, EmitKind::Executable, release, target, quiet) {
+    let artifact = match build::build(file, None, EmitKind::Executable, release, target, quiet, None) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("cobrust run: {e}");

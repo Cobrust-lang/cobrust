@@ -85,6 +85,13 @@ enum Command {
         /// Suppress informational stderr.
         #[arg(short, long)]
         quiet: bool,
+        /// Enable (true) or disable (false) Tier-1 LLVM runtime-dispatch
+        /// multi-versioning (SSE2 / AVX2 / AVX-512 specialisations in one binary).
+        /// Default: true on --release, false on debug builds.
+        /// LLVM backend only; Cranelift ignores this flag. §2.5 LLM-first:
+        /// LLM users do not need to specify this flag for --release builds.
+        #[arg(long)]
+        enable_runtime_dispatch: Option<bool>,
     },
     /// Compile + invoke a `.cb` source file.
     Run {
@@ -235,6 +242,7 @@ fn main() -> ExitCode {
             release,
             target,
             quiet,
+            enable_runtime_dispatch,
         } => match file {
             // M11 single-file mode: explicit `.cb` argument.
             Some(p) if p.is_file() && p.extension().is_some_and(|e| e == "cb") => build::run(
@@ -244,6 +252,7 @@ fn main() -> ExitCode {
                 release,
                 target.as_deref(),
                 quiet,
+                enable_runtime_dispatch,
             ),
             // M12 package mode: directory or no argument → walk for cobrust.toml.
             other => pkg_build::run_build(

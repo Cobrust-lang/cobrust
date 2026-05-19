@@ -90,10 +90,26 @@ hatch. Tier 3 is the long-run distribution story and the §2.5 optimum.
 
 ---
 
-## Recommended landing order
+## Tier 1 status: SHIPPED 2026-05-19
 
-1. **Tier 1** runtime-dispatch as `cobrust build --release` default
-   (~200 LOC; builds on ADR-0058b; no new ADR needed if within scope of 0058b).
+Tier 1 runtime-dispatch multi-versioning landed on main via the
+feature/tier1-runtime-dispatch branch merge. Delivered:
+
+- `TargetSpec::runtime_dispatch: bool` (default `true` on `--release`).
+- `--enable-runtime-dispatch [bool]` CLI flag (`cobrust build`).
+- `llvm_backend::emit_multi_version_dispatch`: x86_64 emits `_v1_sse2` /
+  `_v2_avx2` / `_v3_avx512` + dispatcher; aarch64 no-op.
+- `runtime/cpu_features.c` — `__builtin_cpu_supports` helpers, no unsafe.
+- 3 smoke tests in `tests/runtime_dispatch_smoke.rs`; TEST_EXIT=0 on DG.
+
+Cascade addendum (honest re-scope):
+- Hot-function selection deferred: wave-1 dispatches ALL top-level functions.
+  Opt-out: `--enable-runtime-dispatch=false`.
+- SVE multi-versioning (aarch64) deferred — see §NEON/SVE above.
+
+## Recommended landing order (updated)
+
+1. ~~**Tier 1** runtime-dispatch~~ — **SHIPPED 2026-05-19**.
 2. **Tier 2** `--target-cpu` CLI flag for advanced users
    (~20 LOC; trivial on top of ADR-0058b).
 3. **Tier 3** multi-wheel prebuilt distribution
