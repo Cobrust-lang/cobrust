@@ -564,10 +564,18 @@ Validates: `cargo install` → `--version` → `cobrust new testpkg` →
 ### release.yml
 
 `.github/workflows/release.yml` fires on `v*` tags. Tier-1 targets
-(required): `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`.
-Best-effort: `aarch64-unknown-linux-gnu` (via `cross`),
-`x86_64-pc-windows-msvc`. Archive naming:
-`cobrust-{version}-{target_triple}.tar.gz`.
+(all required — ADR-0046 §Amendment, Phase K Strand #5):
+
+| Target | Build method |
+|---|---|
+| `aarch64-apple-darwin` | macos-latest runner, native |
+| `aarch64-unknown-linux-gnu` | ubuntu-latest + `cross` |
+| `x86_64-unknown-linux-gnu` | ubuntu-latest, native |
+| `x86_64-unknown-linux-musl` | ubuntu-latest + `musl-tools` apt; static binary, no glibc |
+
+Release-readiness agent: curl × 4 (one per tier-1 target). Queued (not built):
+`x86_64-apple-darwin`, `x86_64-pc-windows-msvc` (deferred to ADR-0058b).
+Archive naming: `cobrust-v{version}-{target_triple}.tar.gz`.
 
 ## User-facing error pipeline (T1.4 — 0.1.0-beta)
 

@@ -1518,16 +1518,19 @@ flowchart TD
 
 **链接器委派**：`emit` 调用系统 `cc`（通过 `$CC` 环境变量，默认是 `cc`）；当 `--features lld` 开启时，传入 `-fuse-ld=lld`。M9 从不自带链接器。链接器失败以 `CodegenError::LinkerFailed { exit_code, stderr }` 形式返回。
 
-**目标三元组矩阵（M9 交付范围）**：
+**目标三元组矩阵（M9 交付范围 + Phase K Strand #5 tier-1 扩展）**：
 
-| 三元组 | 目标格式 | 状态 |
-|---|---|---|
-| `x86_64-unknown-linux-gnu` | ELF | 已交付 |
-| `aarch64-apple-darwin` | Mach-O | 已交付 |
-| `x86_64-apple-darwin` | Mach-O | 可达 |
-| `aarch64-unknown-linux-gnu` | ELF | 可达 |
-| `wasm32-unknown-unknown` | WASM | 范围外（Phase F） |
-| `x86_64-pc-windows-msvc` | COFF | 范围外（Phase F） |
+| 三元组 | 目标格式 | 层级 | 状态 |
+|---|---|---|---|
+| `x86_64-unknown-linux-gnu` | ELF | tier-1 | 已交付（ADR-0046） |
+| `aarch64-apple-darwin` | Mach-O | tier-1 | 已交付（ADR-0046） |
+| `aarch64-unknown-linux-gnu` | ELF | tier-1 | 已交付（ADR-0044 + 0046） |
+| `x86_64-unknown-linux-musl` | ELF（静态） | **tier-1** | **Phase K Strand #5 晋升** — 静态二进制,无 glibc 依赖;适用 Alpine/distroless |
+| `x86_64-apple-darwin` | Mach-O | queued | 可达（cargo install --git） |
+| `x86_64-pc-windows-msvc` | COFF | queued | 延至 ADR-0058b（Gate 8 审计决定） |
+| `wasm32-unknown-unknown` | WASM | 范围外 | Phase F+ |
+
+ADR-0046 §Amendment 记录了 musl 晋升理由和 MSVC 延期决定（Gate 8 审计 ae2316f1c51dbd6be）。发版就绪 agent curl 门由 curl × 3 升为 curl × 4。
 
 **对未解析 MIR 局部的类型推断**：MIR 的 `_return` slot 按约定声明为 `Ty::None`（按 ADR-0020 `BodyBuilder::new`），子表达式临时变量也可能携带 `Ty::None`。Cranelift 后端在 lowering 前先扫描整个 `Statement::Assign` 列表；某局部的第一个 rvalue 决定了该局部的有效 Cranelift 类型（算术得 i64、比较得 i8、浮点得 f64 等），无需修改 MIR 就能恢复函数实际返回类型与中间临时变量的位宽。
 
