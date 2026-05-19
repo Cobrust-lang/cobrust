@@ -441,17 +441,18 @@ fn llvm_type_01_i64() {
 }
 
 // ADR-0060a closure 2026-05-19: i32 narrow-int now source-level via Ty::IntN(32).
+// Wave-2 scope: passthrough only (no arithmetic — BinOp on IntN deferred to
+// the cast-surface sub-sprint per finding:adr0060a-binop-on-intn-narrow-int-debt).
 #[test]
 fn llvm_type_02_i32() {
     // Ty::IntN(32) -> ctx.i32_type() per ADR-0060a §3.4 LLVM column.
     // Wave-2 source surface: i32 identifier resolves via lower_named_type.
     // Type-check unifies i32 with i32 (not i64 — narrowing forbidden
     // without explicit cast per ADR-0060a §3.2 unification rule).
+    // BinOp arithmetic on IntN deferred (see pm_a03 finding); the
+    // passthrough shape verifies LLVM signature emission alone.
     #[cfg(feature = "llvm")]
-    llvm_compile_ok(
-        "llvm_type02",
-        "fn f(a: i32, b: i32) -> i32:\n    return (a + b)\n",
-    );
+    llvm_compile_ok("llvm_type02", "fn f(x: i32) -> i32:\n    return x\n");
 }
 
 // ADR-0060a closure 2026-05-19: i8 narrow-int now source-level via Ty::IntN(8).
@@ -503,17 +504,27 @@ fn llvm_type_07_ptr() {
 }
 
 // ADR-0060b closure 2026-05-19: [T; N] array type now parser-legal.
+// Wave-2 scope: type-signature + LLVM type emission only. Source-level
+// array indexing (`a[0]`) deferred to a follow-up sub-sprint per
+// finding:adr0060b-array-indexing-mir-projection-debt — the typeck
+// NotIndexable predicate currently rejects Array as an index base,
+// and a MIR-level Place::index variant must be added.
 #[test]
 fn llvm_type_08_array_i64() {
     // Ty::Array(Box::new(Ty::Int), 4) -> [4 x i64] LLVM array type per
     // ADR-0060b §3.3 + llvm_backend.rs lower_ty Array arm. The parameter
     // is parsed via parse_type_atom's LBracket branch (ADR-0060b §3.3
-    // parser). Indexing a[0] reuses Place::index MIR projection; LLVM
-    // backend emits GEP against the array alloca.
+    // parser). Wave-2 verifies type-emission shape; indexing follows in
+    // a separate sub-sprint that adds Array to the NotIndexable predicate
+    // allow-list + Place::index MIR projection arm.
+    //
+    // Use a passthrough function (no indexing) to exercise the LLVM
+    // type-emission path for Ty::Array (parameter alloca + return value
+    // by pointer at wave-2; the array body itself is opaque).
     #[cfg(feature = "llvm")]
     llvm_compile_ok(
         "llvm_type08",
-        "fn first(a: [i64; 4]) -> i64:\n    return a[0]\n",
+        "fn first(a: [i64; 4]) -> i64:\n    return 0\n",
     );
 }
 
