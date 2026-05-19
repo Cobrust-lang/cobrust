@@ -81,10 +81,18 @@ sudo mv cobrust /usr/local/bin/
 # Linux arm64
 curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-aarch64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
-# Linux x86_64
+# Linux x86_64 (glibc — standard distros: Debian, Ubuntu, Fedora, RHEL)
 curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cobrust /usr/local/bin/
+# Linux x86_64 static musl — Alpine, distroless, minimal containers (no glibc required)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-x86_64-unknown-linux-musl.tar.gz | tar xz
+sudo mv cobrust /usr/local/bin/
 ```
+
+> **Which Linux binary?** Use the `musl` variant for Alpine containers, scratch-based images,
+> or any environment without a glibc installation. Use the `gnu` variant on standard Linux
+> distributions (Debian, Ubuntu, Fedora, RHEL, Arch) that ship glibc.
+> Both are tier-1 targets; both are built and published on every release.
 
 ### Hello world
 
