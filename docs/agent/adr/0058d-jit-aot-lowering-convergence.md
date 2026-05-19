@@ -3,10 +3,10 @@ doc_kind: adr
 adr_id: 0058d
 parent_adr: 0058
 title: "Phase K Strand #4 — JIT/AOT MIR→Cranelift lowering convergence (eliminate cobrust-jit lower.rs drift surface)"
-status: proposed
+status: accepted
 date: 2026-05-19
 phase: Phase K Strand #4
-last_verified_commit: e25f768
+last_verified_commit: 0590731
 supersedes: []
 superseded_by: []
 relates_to: [adr:0056a, adr:0058, adr:0058a, adr:0023]
