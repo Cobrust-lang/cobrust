@@ -41,6 +41,28 @@ pub struct TargetSpec {
     ///
     /// Cranelift backend ignores this field.
     pub source_path: Option<PathBuf>,
+    /// Tier 1 runtime-dispatch multi-versioning
+    /// (numerical-compute-hardware-tiering.md §Tier1).
+    ///
+    /// When `true`, the LLVM backend emits three specialisations of
+    /// every top-level function:
+    ///
+    /// - `<fn>_v1_sse2`   — compiled with `+sse2` (x86_64 baseline)
+    /// - `<fn>_v2_avx2`   — compiled with `+avx2,+fma`
+    /// - `<fn>_v3_avx512` — compiled with `+avx512f,+avx512dq`
+    ///
+    /// A thin dispatcher `<fn>` is synthesised that calls the fastest
+    /// available version detected at **startup** via Rust's safe macro
+    /// `is_x86_feature_detected!` (no `unsafe`, no `#![forbid]`
+    /// relaxation). On `aarch64` the flag is silently treated as
+    /// single-version NEON-always-on (SVE multi-versioning is deferred
+    /// per strategy doc §NEON/SVE).
+    ///
+    /// **Default**: `true` when `opt_level != OptLevel::None`
+    /// (i.e. `cobrust build --release`). False on debug builds.
+    ///
+    /// Cranelift backend ignores this field.
+    pub runtime_dispatch: bool,
 }
 
 impl TargetSpec {
@@ -58,6 +80,7 @@ impl TargetSpec {
             output_dir,
             module_name: module_name.into(),
             source_path: None,
+            runtime_dispatch: false,
         }
     }
 
@@ -73,6 +96,7 @@ impl TargetSpec {
             output_dir,
             module_name: module_name.into(),
             source_path: None,
+            runtime_dispatch: true,
         }
     }
 
@@ -87,6 +111,7 @@ impl TargetSpec {
             output_dir,
             module_name: module_name.into(),
             source_path: None,
+            runtime_dispatch: false,
         }
     }
 }

@@ -1976,6 +1976,7 @@ mod tests {
             output_dir: path,
             module_name: "smoke".to_string(),
             source_path: None,
+            runtime_dispatch: false,
         }
     }
 

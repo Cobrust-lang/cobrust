@@ -153,6 +153,7 @@ pub fn run_build(
         release,
         target,
         quiet,
+        None, // enable_runtime_dispatch: use default (true on --release)
     ) {
         Ok(_) => exit_codes::SUCCESS,
         Err(e) => {
@@ -250,6 +251,7 @@ pub fn run_test(file_or_dir: Option<&Path>, release: bool, quiet: bool) -> u8 {
             release,
             None,
             true,
+            None, // enable_runtime_dispatch: use default
         );
         match result {
             Ok(_) => {}
