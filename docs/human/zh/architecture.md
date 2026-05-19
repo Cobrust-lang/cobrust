@@ -1582,6 +1582,17 @@ DG-Workstation 验证 @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrus
 
 DG-Workstation 验证 @ HEAD `4686192`：cargo test -p cobrust-codegen --features llvm = 355 测试 PASS / 0 失败 / 6 ignored（LLVM-conditional），TEST_EXIT=0。5 个 wave-1 inline smoke + 350 baseline tests 覆盖 aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora。
 
+#### Phase K wave-2 —— LLVM opt 流水线 + 多目标（ADR-0058b）
+
+Phase K wave-2（`crates/cobrust-codegen/src/llvm_backend.rs` post-IR-construction 钩子 + 新建 `tests/binary_size_bench.rs`）接入 LLVM new-pass-manager 流水线，关闭 ADR-0023 §"LLVM `-O3` ≥ 30% 二进制更小验收线"。
+
+- **Opt 流水线映射**（ADR-0058b §3.2）。`OptLevel::None` 跳过 `Module::run_passes`（保留 wave-1 `-O0`）；`OptLevel::Speed` 跑 `default<O2>`；`OptLevel::SpeedAndSize` 跑 `default<O3>,default<Os>`。实现：一个 `pass_pipeline_for(OptLevel) -> Option<&'static str>` 映射函数 + 在 dev-mode verify 与 `write_to_file` 之间插入 `Module::run_passes(pipeline, &target_machine, PassBuilderOptions::create())`。
+- **TargetMachine opt-level 绑定**。`build_target_machine` 现在将 `OptLevel::Speed → OptimizationLevel::Default`（O2）和 `OptLevel::SpeedAndSize → OptimizationLevel::Aggressive`（O3）做映射，使 codegen 时的开关（指令选择、调度）与运行在模块上的 PassBuilder 流水线对齐。
+- **多目标分派**（ADR-0058b §3.4）。`supported_tier1_triples()` 列出四个 ADR-0046 tier-1 triple（`aarch64-apple-darwin` / `aarch64-unknown-linux-gnu` / `x86_64-unknown-linux-gnu` / `x86_64-unknown-linux-musl`）；当宿主 LLVM-18 工具链包含相应后端时，`Target::from_triple` 接受其中任一。交叉链接仍属 `release.yml` + `cross` 范围（ADR-0023 §"Linker delegation" 不变）。
+- **二进制大小 bench 工具**（ADR-0023 §A3 经验关闭）。新建 `tests/binary_size_bench.rs` 通过 `Backend::Llvm` 在 O0 + O3 下编译 5 个 fixture（hello / fizzbuzz / fib / dot_product / nested_branch）；断言 O3 中位数比 ≤ 0.70 of O0 中位数（≥ 30% 缩减）。每 fixture 比例通过 `--nocapture` 在 stderr 输出，便于将来宿主上若超线时做诊断回退。
+
+非目标（按 ADR-0058b §4 延后）：DWARF 发射（sub-ADR 0058c）、JIT opt-level 变更（cobrust-jit `lower.rs` 不变）、交叉链接、新 MIR feature、超出 `default<O*>` 默认的手动 PassBuilder flag 调优。
+
 **M9 测试总数**：158 个测试，覆盖 5 个套件：
 - `codegen_well_formed.rs` —— 60 个良型程序，覆盖整数 / 浮点 / 布尔的算术、比较、分支、循环、递归、位运算、逻辑运算。
 - `codegen_ill_formed.rs` —— 50 个病型用例，覆盖每个 `CodegenError` 变体：dangling 局部、dangling block target、不支持的目标、不支持的后端、错误 Display 不变量、产物 / kind 扩展矩阵。

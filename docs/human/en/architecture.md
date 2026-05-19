@@ -1692,6 +1692,17 @@ Reference: `docs/agent/adr/0058d-jit-aot-lowering-convergence.md`. Closes ADR-00
 
 DG-Workstation verify @ HEAD `4686192`: cargo test -p cobrust-codegen --features llvm = 355 tests PASS / 0 failed / 6 ignored (LLVM-conditional), TEST_EXIT=0. 5 wave-1 inline smoke + 350 baseline tests across aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora.
 
+#### Phase K wave-2 — LLVM opt pipeline + multi-target (ADR-0058b)
+
+Phase K wave-2 (`crates/cobrust-codegen/src/llvm_backend.rs` post-IR-construction hook + new `tests/binary_size_bench.rs`) wires the LLVM new-pass-manager pipeline and closes the ADR-0023 §"LLVM `-O3` ≥ 30% smaller binary acceptance" bar.
+
+- **Opt pipeline mapping** (ADR-0058b §3.2). `OptLevel::None` skips `Module::run_passes` (preserves wave-1 `-O0`); `OptLevel::Speed` runs `default<O2>`; `OptLevel::SpeedAndSize` runs `default<O3>,default<Os>`. Implementation: one `pass_pipeline_for(OptLevel) -> Option<&'static str>` mapping fn + `Module::run_passes(pipeline, &target_machine, PassBuilderOptions::create())` invocation between dev-mode verify and `write_to_file`.
+- **TargetMachine opt-level binding**. `build_target_machine` now maps `OptLevel::Speed → OptimizationLevel::Default` (O2) and `OptLevel::SpeedAndSize → OptimizationLevel::Aggressive` (O3), so codegen-time knobs (instruction selection, scheduling) align with the PassBuilder pipeline running on the module.
+- **Multi-target dispatch** (ADR-0058b §3.4). `supported_tier1_triples()` enumerates the four ADR-0046 tier-1 triples (`aarch64-apple-darwin` / `aarch64-unknown-linux-gnu` / `x86_64-unknown-linux-gnu` / `x86_64-unknown-linux-musl`); `Target::from_triple` accepts any of them when the host LLVM-18 toolchain includes the backend. Cross-link stays in `release.yml` + `cross` scope (linker delegation per ADR-0023 §"Linker delegation" unchanged).
+- **Binary-size bench harness** (ADR-0023 §A3 empirical close). New `tests/binary_size_bench.rs` compiles 5 fixtures (hello / fizzbuzz / fib / dot_product / nested_branch) at O0 + O3 via `Backend::Llvm`; asserts the O3 median ratio ≤ 0.70 of the O0 median (≥ 30% reduction). Per-fixture ratios emitted on stderr via `--nocapture` for diagnostic-driven follow-up if the bar slips on a future host.
+
+Non-goals (deferred per ADR-0058b §4): DWARF emission (sub-ADR 0058c), JIT opt-level changes (cobrust-jit `lower.rs` unchanged), cross-link, new MIR features, manual PassBuilder flag tuning beyond `default<O*>` defaults.
+
 **M9 test counts**: 158 tests across 5 suites:
 - `codegen_well_formed.rs` — 60 well-formed programs covering int / float / bool arithmetic, comparison, branching, looping, recursion, bit ops, logical ops.
 - `codegen_ill_formed.rs` — 50 ill-formed cases covering every `CodegenError` variant: dangling locals, dangling block targets, unsupported targets, unsupported backends, error display invariants, artifact / kind extension matrix.
