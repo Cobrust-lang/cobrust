@@ -149,9 +149,10 @@ Err(IoError::NotFound("config.toml"))
 Point { x: 1.0, y: 2.0 }
 ```
 
-**Wave-1 honest-debt**:
-- Dict iteration display inside lldb loops: NOT yet (shows first entry only)
-- Option ADT discriminant-inspect (DI): NOT yet (shows raw tag byte)
+**Wave-1 honest-debt** (resolved wave-2 2026-05-20 except where noted):
+- Dict iteration display inside lldb loops: **wave-2 RESOLVED** — printer walks insertion-order K:V via runtime accessor exports (`__cobrust_dict_iter_{key,value}_{i64,str}_at`). Falls back to `{<n entries>}` when accessors unresolved (object-only smoke).
+- Option ADT discriminant-inspect (DI): **wave-2 RESOLVED for generic Adt naming** — `cobrust::Adt` DIE emitted, printer renders ptr-tag `None` / `Some(<0xaddr>)`. Per-variant payload rendering (proper `Some(42)`) is Phase L+ scope.
+- Str runtime breakpoint hit: **wave-2 HONEST-CITE** — byte-decode logic verified via 12 Python self-tests; full executable smoke parked for wave-3.
 - gdb support: tested but not CI-gated; may diverge
 
 ### gdb pretty-printers (untested in wave-1)

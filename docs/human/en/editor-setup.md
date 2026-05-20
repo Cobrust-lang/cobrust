@@ -131,9 +131,24 @@ lspconfig.cobrust.setup{}
 Cobrust ships a Debug Adapter Protocol (DAP) server, `cobrust-dap`,
 that powers in-editor step debugging via VSCode / Cursor's
 **Run > Start Debugging** menu. The server delegates to `lldb-18`
-under the hood and auto-loads the Phase L wave-1 pretty-printers so
-the Variables pane shows Cobrust source-form values (e.g.
-`xs: List<Int> = [1, 2, 3]`, not raw struct bytes).
+under the hood and auto-loads the Phase L wave-1 + wave-2 pretty-
+printers so the Variables pane shows Cobrust source-form values (e.g.
+`xs: List<Int> = [1, 2, 3]`, `d: Dict<Int, Str> = {1: "a", 2: "b"}`,
+`opt: Option<Int> = Some(<0xaddr>)`, not raw struct bytes).
+
+Phase L wave-2 (ADR-0059a §6 resolved at 2026-05-20) extends the
+printer surface with:
+
+- **Dict K:V walk in insertion order** — the printer calls runtime
+  exports `__cobrust_dict_iter_{key,value}_{i64,str}_at` via lldb's
+  `expression` API, so `d` renders the actual `{k: v, ...}` shape
+  rather than the wave-1 `{<n entries>}` placeholder.
+- **Generic Adt naming** — every `Ty::Adt` local now has a distinct
+  `cobrust::Adt` DWARF type-name, so the printer renders
+  `None` / `Some(<0xaddr>)` ptr-tag for any user-defined enum or
+  future Option / Result. Per-variant rendering (e.g. proper
+  `Some(42)` showing the actual payload) awaits MIR threading the
+  Adt schema through DI (Phase L+ scope).
 
 **Wave-2 scope (per ADR-0059b):**
 

@@ -1030,6 +1030,143 @@ pub unsafe extern "C" fn __cobrust_dict_get_str_str(dict: *mut u8, k: *mut u8) -
     }
 }
 
+// ---- Insertion-order iteration helpers (ADR-0059a §6.2 wave-2) ----
+//
+// Wave-1 lldb pretty-printer (`tools/lldb-cobrust/printers.py
+// ::cobrust_dict_summary`) could not walk indexmap's unstable
+// in-memory representation. Wave-2 closes the deferral by exporting
+// runtime accessors the printer can invoke via lldb's
+// `EvaluateExpression` API. Insertion order is `IndexMap`'s
+// `get_index(i)` contract — the i-th entry in insertion order.
+//
+// Six exports follow:
+//   - `__cobrust_dict_key_tag(dict)`   → 0 = i64, 1 = str (KeyEnum tag)
+//   - `__cobrust_dict_value_tag(dict)` → 0 = i64, 1 = str (ValueEnum tag)
+//   - `__cobrust_dict_iter_key_i64_at(dict, i)`   → i64 key at index i
+//   - `__cobrust_dict_iter_key_str_at(dict, i)`   → fresh Str ptr (caller drops)
+//   - `__cobrust_dict_iter_value_i64_at(dict, i)` → i64 value at index i
+//   - `__cobrust_dict_iter_value_str_at(dict, i)` → fresh Str ptr (caller drops)
+//
+// All return sentinel (0 / null) on null dict, out-of-range index, or
+// tag mismatch (e.g. asking for an i64 key when the dict's K is str).
+
+/// Return the dict's K tag: `0` = i64, `1` = str. `-1` if `dict` is null.
+///
+/// Used by `tools/lldb-cobrust/printers.py::cobrust_dict_summary` to
+/// decide which `__cobrust_dict_iter_key_*_at` accessor to call.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract, OR null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_key_tag(dict: *mut u8) -> i64 {
+    // SAFETY: caller-attestation per `# Safety`.
+    match unsafe { dict_layout(dict) } {
+        None => -1,
+        Some(layout) => layout.k_tag,
+    }
+}
+
+/// Return the dict's V tag: `0` = i64, `1` = str. `-1` if `dict` is null.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract, OR null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_value_tag(dict: *mut u8) -> i64 {
+    // SAFETY: caller-attestation per `# Safety`.
+    match unsafe { dict_layout(dict) } {
+        None => -1,
+        Some(layout) => layout.v_tag,
+    }
+}
+
+/// Return the i64 key at insertion index `i`, or `0` on out-of-range /
+/// null dict / tag mismatch (key is actually a Str). The lldb pretty-
+/// printer branches on `__cobrust_dict_key_tag` before calling this.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract, OR null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_iter_key_i64_at(dict: *mut u8, i: i64) -> i64 {
+    if i < 0 {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let Some(layout) = (unsafe { dict_layout(dict) }) else {
+        return 0;
+    };
+    match layout.map.get_index(i as usize) {
+        Some((KeyEnum::I64(k), _)) => *k,
+        _ => 0,
+    }
+}
+
+/// Return the str key at insertion index `i` as a freshly-allocated
+/// `*mut u8` Str buffer the caller owns (must `__cobrust_str_drop`).
+/// Returns null on out-of-range / null dict / tag mismatch.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract, OR null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_iter_key_str_at(dict: *mut u8, i: i64) -> *mut u8 {
+    if i < 0 {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let Some(layout) = (unsafe { dict_layout(dict) }) else {
+        return std::ptr::null_mut();
+    };
+    match layout.map.get_index(i as usize) {
+        Some((KeyEnum::Str(s), _)) => alloc_str_buffer(s),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// Return the i64 value at insertion index `i`, or `0` on out-of-range /
+/// null dict / tag mismatch.
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract, OR null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_iter_value_i64_at(dict: *mut u8, i: i64) -> i64 {
+    if i < 0 {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let Some(layout) = (unsafe { dict_layout(dict) }) else {
+        return 0;
+    };
+    match layout.map.get_index(i as usize) {
+        Some((_, ValueEnum::I64(v))) => *v,
+        _ => 0,
+    }
+}
+
+/// Return the str value at insertion index `i` as a freshly-allocated
+/// `*mut u8` Str buffer (caller-owned).
+///
+/// # Safety
+///
+/// `dict` must be valid per [`__cobrust_dict_drop`]'s contract, OR null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dict_iter_value_str_at(dict: *mut u8, i: i64) -> *mut u8 {
+    if i < 0 {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let Some(layout) = (unsafe { dict_layout(dict) }) else {
+        return std::ptr::null_mut();
+    };
+    match layout.map.get_index(i as usize) {
+        Some((_, ValueEnum::Str(s))) => alloc_str_buffer(s),
+        _ => std::ptr::null_mut(),
+    }
+}
+
 // ---- Legacy untyped aliases (M12.x backward compat) --------------
 
 /// Legacy untyped insert — aliased to `__cobrust_dict_set_i64_i64`.
@@ -1735,6 +1872,137 @@ mod tests {
             __cobrust_dict_set_i64_i64(d, 1, 10);
             assert_eq!(__cobrust_dict_is_empty(d), 0);
             __cobrust_dict_drop(d);
+        }
+    }
+
+    // ---- ADR-0059a §6.2 wave-2 — dict iter exports unit tests ----
+
+    #[test]
+    fn cabi_dict_key_value_tag_reports_i64_i64() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_I64, V_TAG_I64, 0);
+            assert_eq!(__cobrust_dict_key_tag(d), K_TAG_I64);
+            assert_eq!(__cobrust_dict_value_tag(d), V_TAG_I64);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_key_value_tag_reports_str_str() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_STR, V_TAG_STR, 0);
+            assert_eq!(__cobrust_dict_key_tag(d), K_TAG_STR);
+            assert_eq!(__cobrust_dict_value_tag(d), V_TAG_STR);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_key_value_tag_null_returns_negative() {
+        // SAFETY: contract.
+        unsafe {
+            assert_eq!(__cobrust_dict_key_tag(std::ptr::null_mut()), -1);
+            assert_eq!(__cobrust_dict_value_tag(std::ptr::null_mut()), -1);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_iter_i64_i64_insertion_order() {
+        // ADR-0059a §6.2 — printer reads via `__cobrust_dict_iter_*_at`
+        // expecting `IndexMap::get_index` insertion-order semantics.
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_I64, V_TAG_I64, 0);
+            __cobrust_dict_set_i64_i64(d, 3, 30);
+            __cobrust_dict_set_i64_i64(d, 1, 10);
+            __cobrust_dict_set_i64_i64(d, 2, 20);
+            assert_eq!(__cobrust_dict_iter_key_i64_at(d, 0), 3);
+            assert_eq!(__cobrust_dict_iter_value_i64_at(d, 0), 30);
+            assert_eq!(__cobrust_dict_iter_key_i64_at(d, 1), 1);
+            assert_eq!(__cobrust_dict_iter_value_i64_at(d, 1), 10);
+            assert_eq!(__cobrust_dict_iter_key_i64_at(d, 2), 2);
+            assert_eq!(__cobrust_dict_iter_value_i64_at(d, 2), 20);
+            // Out-of-range returns sentinel 0.
+            assert_eq!(__cobrust_dict_iter_key_i64_at(d, 3), 0);
+            assert_eq!(__cobrust_dict_iter_value_i64_at(d, 3), 0);
+            // Negative index returns sentinel 0.
+            assert_eq!(__cobrust_dict_iter_key_i64_at(d, -1), 0);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_iter_i64_str_insertion_order() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_I64, V_TAG_STR, 0);
+            let va = alloc_str_buffer("alpha");
+            let vb = alloc_str_buffer("beta");
+            __cobrust_dict_set_i64_str(d, 7, va);
+            __cobrust_dict_set_i64_str(d, 5, vb);
+            crate::fmt::__cobrust_str_drop(va);
+            crate::fmt::__cobrust_str_drop(vb);
+            assert_eq!(__cobrust_dict_iter_key_i64_at(d, 0), 7);
+            let got0 = __cobrust_dict_iter_value_str_at(d, 0);
+            assert!(!got0.is_null());
+            assert_eq!(read_str_buffer(got0), "alpha");
+            crate::fmt::__cobrust_str_drop(got0);
+            assert_eq!(__cobrust_dict_iter_key_i64_at(d, 1), 5);
+            let got1 = __cobrust_dict_iter_value_str_at(d, 1);
+            assert!(!got1.is_null());
+            assert_eq!(read_str_buffer(got1), "beta");
+            crate::fmt::__cobrust_str_drop(got1);
+            // Tag mismatch — i64 key accessor on a str-keyed dict returns
+            // 0 sentinel (the printer must branch on `_key_tag` first).
+            let d_str_keyed = __cobrust_dict_new(K_TAG_STR, V_TAG_I64, 0);
+            let k_alpha = alloc_str_buffer("alpha");
+            __cobrust_dict_set_str_i64(d_str_keyed, k_alpha, 1);
+            crate::fmt::__cobrust_str_drop(k_alpha);
+            assert_eq!(__cobrust_dict_iter_key_i64_at(d_str_keyed, 0), 0);
+            __cobrust_dict_drop(d_str_keyed);
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_iter_str_keys_renders_caller_owned_buffers() {
+        // SAFETY: contract.
+        unsafe {
+            let d = __cobrust_dict_new(K_TAG_STR, V_TAG_I64, 0);
+            let ka = alloc_str_buffer("first");
+            let kb = alloc_str_buffer("second");
+            __cobrust_dict_set_str_i64(d, ka, 100);
+            __cobrust_dict_set_str_i64(d, kb, 200);
+            crate::fmt::__cobrust_str_drop(ka);
+            crate::fmt::__cobrust_str_drop(kb);
+            let k0 = __cobrust_dict_iter_key_str_at(d, 0);
+            assert!(!k0.is_null());
+            assert_eq!(read_str_buffer(k0), "first");
+            crate::fmt::__cobrust_str_drop(k0);
+            let k1 = __cobrust_dict_iter_key_str_at(d, 1);
+            assert!(!k1.is_null());
+            assert_eq!(read_str_buffer(k1), "second");
+            crate::fmt::__cobrust_str_drop(k1);
+            // Out-of-range returns null.
+            let k_oor = __cobrust_dict_iter_key_str_at(d, 5);
+            assert!(k_oor.is_null());
+            __cobrust_dict_drop(d);
+        }
+    }
+
+    #[test]
+    fn cabi_dict_iter_null_dict_safe() {
+        // SAFETY: null inputs are explicit contract.
+        unsafe {
+            assert_eq!(__cobrust_dict_iter_key_i64_at(std::ptr::null_mut(), 0), 0);
+            assert_eq!(
+                __cobrust_dict_iter_value_i64_at(std::ptr::null_mut(), 0),
+                0
+            );
+            assert!(__cobrust_dict_iter_key_str_at(std::ptr::null_mut(), 0).is_null());
+            assert!(__cobrust_dict_iter_value_str_at(std::ptr::null_mut(), 0).is_null());
         }
     }
 
