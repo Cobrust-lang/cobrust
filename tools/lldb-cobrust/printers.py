@@ -199,37 +199,176 @@ def cobrust_list_summary(valobj, internal_dict):
     return "[" + body + "]"
 
 
+#: Tag constants mirroring `collections.rs::{K,V}_TAG_*`. Kept in sync
+#: with the runtime by ADR-0050d Decision 7A semantics.
+_DICT_TAG_I64 = 0
+_DICT_TAG_STR = 1
+
+
+def _eval_i64(target, expr, default=0):
+    """Evaluate `expr` in the inferior process and return the result as
+    a signed i64. Returns `default` on evaluation failure (e.g. when
+    the process is dead, the expression doesn't compile, or the symbol
+    is absent because the runtime stdlib wasn't linked)."""
+    try:
+        result = target.EvaluateExpression(expr)
+    except Exception:  # noqa: BLE001 — lldb raises bare Exception subclasses.
+        return default
+    if not result or not result.IsValid():
+        return default
+    err = result.GetError()
+    if err.Fail():
+        return default
+    return result.GetValueAsSigned(default)
+
+
+def _eval_ptr(target, expr, default=0):
+    """Evaluate `expr` and return the result as an unsigned pointer-sized
+    integer (the address). Returns `default` on failure."""
+    try:
+        result = target.EvaluateExpression(expr)
+    except Exception:  # noqa: BLE001
+        return default
+    if not result or not result.IsValid():
+        return default
+    err = result.GetError()
+    if err.Fail():
+        return default
+    return result.GetValueAsUnsigned(default)
+
+
+def _format_dict_key(target, process, dict_ptr, idx, k_tag):
+    """Render the i-th dict key as a Cobrust source-form string."""
+    if k_tag == _DICT_TAG_STR:
+        addr = _eval_ptr(
+            target,
+            "(void*)__cobrust_dict_iter_key_str_at((unsigned char*){:#x}, {})".format(
+                dict_ptr, idx
+            ),
+        )
+        if addr == 0:
+            return '""'
+        raw = _read_string_buffer(process, addr)
+        try:
+            decoded = raw.decode("utf-8", errors="replace")
+        except (UnicodeDecodeError, AttributeError):
+            decoded = "<unreadable>"
+        # Caller is supposed to drop the returned Str buffer, but
+        # this is a read-only inspection — leaking 1 small allocation
+        # per debugger render is acceptable per ADR-0059 §5 (printer
+        # MUST NOT execute side-effectful runtime helpers during a
+        # stop). We accept the leak rather than call `_str_drop` and
+        # risk crashing the inferior.
+        return '"' + decoded.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    # Default i64.
+    value = _eval_i64(
+        target,
+        "(long long)__cobrust_dict_iter_key_i64_at((unsigned char*){:#x}, {})".format(
+            dict_ptr, idx
+        ),
+    )
+    return str(value)
+
+
+def _format_dict_value(target, process, dict_ptr, idx, v_tag):
+    """Render the i-th dict value as a Cobrust source-form string."""
+    if v_tag == _DICT_TAG_STR:
+        addr = _eval_ptr(
+            target,
+            "(void*)__cobrust_dict_iter_value_str_at((unsigned char*){:#x}, {})".format(
+                dict_ptr, idx
+            ),
+        )
+        if addr == 0:
+            return '""'
+        raw = _read_string_buffer(process, addr)
+        try:
+            decoded = raw.decode("utf-8", errors="replace")
+        except (UnicodeDecodeError, AttributeError):
+            decoded = "<unreadable>"
+        return '"' + decoded.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    value = _eval_i64(
+        target,
+        "(long long)__cobrust_dict_iter_value_i64_at((unsigned char*){:#x}, {})".format(
+            dict_ptr, idx
+        ),
+    )
+    return str(value)
+
+
 def cobrust_dict_summary(valobj, internal_dict):
-    """`cobrust::Dict` summary — render `{k0: v0, k1: v1, ...}`.
+    """`cobrust::Dict` summary — render `{k0: v0, k1: v1, ...}` in
+    IndexMap insertion order.
 
-    Wave-1: the runtime DictLayout at collections.rs:670 stores entries
-    via `indexmap::IndexMap<i64, *mut u8>` for the `Dict<Int, Str>`
-    shape (insertion order). The underlying IndexMap repr is NOT
-    stable cross-version, so wave-1 takes the conservative path: read
-    `len` (offset depends on indexmap revision) and render
-    `{<len entries>}` placeholder if we cannot resolve the exact
-    in-memory layout.
+    Wave-2 (ADR-0059a §6.2 RESOLVED) walks the dict via runtime
+    accessors `__cobrust_dict_{key,value}_tag` +
+    `__cobrust_dict_iter_{key,value}_{i64,str}_at` exported by
+    `crates/cobrust-stdlib/src/collections.rs`. The accessors call
+    `IndexMap::get_index(i)` which preserves insertion order
+    (ADR-0050d Decision 6A).
 
-    Phase L+ wave-2 stabilises this by introducing an explicit
-    runtime export (`__cobrust_dict_keys(dict, i) -> i64`,
-    `__cobrust_dict_values(dict, i) -> *mut u8`) the printer can call
-    via `EvaluateExpression`. Wave-1 ships the safe placeholder."""
+    Three fallback paths in priority order:
+
+    1. **Tag dispatch succeeds + iter walk succeeds** → render the
+       real `{k0: v0, ...}` shape (wave-2 happy path).
+    2. **Tag dispatch fails** (process dead / runtime stdlib not
+       linked / Mac smoke fixture only emits object — no symbol
+       table) → render `{<n entries>}` placeholder (wave-1
+       behaviour, preserved for object-level smoke).
+    3. **Empty dict / null dict** → render `{}`.
+    """
     process = _process(valobj)
     if process is None:
+        return "{}"
+    target = valobj.GetTarget()
+    if not target:
         return "{}"
     ptr = _valobj_pointer_addr(valobj)
     if ptr == 0:
         return "{}"
-    # Conservative: render `{<n entries>}` rather than guessing
-    # IndexMap internals. The printer is non-crashing per §7.3.
-    # Read first 8 bytes as a length hint; if zero, render `{}`.
-    length_hint = _read_i64(process, ptr)
-    if length_hint <= 0:
+
+    # Tag dispatch — `-1` means null or runtime accessor unresolved
+    # (e.g. when only the object file is loaded, no executable, no
+    # process, no symbol table — the smoke harness path).
+    k_tag = _eval_i64(
+        target,
+        "(long long)__cobrust_dict_key_tag((unsigned char*){:#x})".format(ptr),
+        default=-1,
+    )
+    v_tag = _eval_i64(
+        target,
+        "(long long)__cobrust_dict_value_tag((unsigned char*){:#x})".format(ptr),
+        default=-1,
+    )
+
+    if k_tag < 0 or v_tag < 0:
+        # Fallback path 2 — keep wave-1's safe placeholder when the
+        # runtime accessors are unavailable. Read first 8 bytes as a
+        # length hint per the wave-1 best-effort path.
+        length_hint = _read_i64(process, ptr)
+        if length_hint <= 0:
+            return "{}"
+        safe_len = min(length_hint, 1 << 30)
+        return "{{<{} entries>}}".format(safe_len)
+
+    # We have valid tags. Query len + walk.
+    length = _eval_i64(
+        target,
+        "(long long)__cobrust_dict_len((unsigned char*){:#x})".format(ptr),
+        default=0,
+    )
+    if length <= 0:
         return "{}"
-    # Cap the displayed-count hint at a sane upper bound (corrupted
-    # memory could return huge values).
-    safe_len = min(length_hint, 1 << 30)
-    return "{{<{} entries>}}".format(safe_len)
+    display_count = min(length, MAX_INLINE_ELEMS)
+    parts = []
+    for i in range(display_count):
+        k_repr = _format_dict_key(target, process, ptr, i, k_tag)
+        v_repr = _format_dict_value(target, process, ptr, i, v_tag)
+        parts.append("{}: {}".format(k_repr, v_repr))
+    body = ", ".join(parts)
+    if length > MAX_INLINE_ELEMS:
+        body += TRUNCATION_MARKER + " ({} total)".format(length)
+    return "{" + body + "}"
 
 
 def cobrust_set_summary(valobj, internal_dict):
@@ -287,17 +426,25 @@ def cobrust_tuple_summary(valobj, internal_dict):
 
 
 def cobrust_option_summary(valobj, internal_dict):
-    """`cobrust::Option` summary — render `None` or `Some(<inner>)`.
+    """`cobrust::Adt` (and the future `cobrust::Option`) summary —
+    render `None` or `Some(<inner>)`.
 
-    Wave-1 scaffolding: Option<T> is modeled as `Ty::Adt(...)` in
-    MIR; ADR-0058c §4 defers Adt DI naming to Phase L+. Wave-1
-    registers this provider conservatively — until MIR carries a
-    `Ty::Adt` with the Option AdtId through to `di_type_for`, no
-    local will match `cobrust::Option` and this printer will not be
-    invoked. The body remains a placeholder that renders the
-    discriminant; full discriminant recovery is Phase L+ scope.
+    Wave-2 (ADR-0059a §6.3 RESOLVED for generic Adt):
+    `populate_di_basic_types` now emits a distinct `cobrust::Adt` DI
+    name for every `Ty::Adt(...)` local (previously collapsed to the
+    opaque `Ptr` fallback). The printer registers on `cobrust::Adt`
+    AND `cobrust::Option` so:
 
-    Per ADR-0059a §3.3.1 final bullet."""
+    - Today: every Adt local (user-defined enums + future Option /
+      Result) renders as `None` (null ptr-tag) or `Some(<0xaddr>)`
+      (non-null ptr-tag). This is the conservative ptr-as-tag fallback
+      — full discriminant + payload recovery awaits MIR threading the
+      Adt name through DI (Phase L+ follow-up).
+    - Phase L+: once `__cobrust_adt_discriminant(adt) -> i64` +
+      `__cobrust_adt_variant_name(adt) -> *mut u8` exports land,
+      this provider will dispatch on the discriminant + render
+      `<VariantName>(<payload>)` per the per-Adt schema.
+    """
     process = _process(valobj)
     if process is None:
         return "None"
@@ -315,21 +462,25 @@ def cobrust_option_summary(valobj, internal_dict):
 
 
 def __lldb_init_module(debugger, internal_dict):
-    """Register the 6 type summary providers under their DWARF
+    """Register the 7 type summary providers under their DWARF
     type-names (ADR-0059a §3.3.1 Option A names emitted by
     `populate_di_basic_types`).
 
     Uses literal type-name matching for `cobrust::Str` /
-    `cobrust::Dict` / `cobrust::Tuple` / `cobrust::Option`, and regex
-    `^cobrust::List` / `^cobrust::Set` (so future
-    `cobrust::List<Int>` parametrised names also match — Phase L+
-    refinement)."""
+    `cobrust::Dict` / `cobrust::Tuple` / `cobrust::Option` /
+    `cobrust::Adt` (wave-2 §6.3), and regex `^cobrust::List` /
+    `^cobrust::Set` (so future `cobrust::List<Int>` parametrised
+    names also match — Phase L+ refinement).
+    """
     cmds = [
         # Literal matches.
         "type summary add -F printers.cobrust_str_summary cobrust::Str",
         "type summary add -F printers.cobrust_dict_summary cobrust::Dict",
         "type summary add -F printers.cobrust_tuple_summary cobrust::Tuple",
         "type summary add -F printers.cobrust_option_summary cobrust::Option",
+        # ADR-0059a §6.3 wave-2 — generic Adt printer bound until
+        # MIR threads per-Adt names through DI.
+        "type summary add -F printers.cobrust_option_summary cobrust::Adt",
         # Regex matches (forward-compatible with parametrised names).
         '''type summary add -F printers.cobrust_list_summary -x "^cobrust::List"''',
         '''type summary add -F printers.cobrust_set_summary -x "^cobrust::Set"''',
@@ -339,5 +490,5 @@ def __lldb_init_module(debugger, internal_dict):
     # Silent confirmation (writes to lldb's status pane, not stderr)
     # so a `command script import` user sees the load completed.
     debugger.HandleCommand(
-        'script print("cobrust pretty-printers loaded (ADR-0059a wave-1)")'
+        'script print("cobrust pretty-printers loaded (ADR-0059a wave-2)")'
     )
