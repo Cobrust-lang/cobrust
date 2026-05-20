@@ -1,0 +1,314 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Cobrust",
+    "scopeName": "source.cobrust",
+    "fileTypes": ["cb"],
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#fstrings" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#decorators" },
+        { "include": "#keywords" },
+        { "include": "#types" },
+        { "include": "#constants" },
+        { "include": "#operators" },
+        { "include": "#functions" },
+        { "include": "#prelude" }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.number-sign.cobrust",
+                    "match": "#.*$"
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.cobrust",
+                    "begin": "\"",
+                    "end": "\"",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.cobrust",
+                            "match": "\\\\(?:[nrt\\\\\"'0]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]{1,6}\\})"
+                        }
+                    ]
+                },
+                {
+                    "name": "string.quoted.single.cobrust",
+                    "begin": "'",
+                    "end": "'",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.cobrust",
+                            "match": "\\\\(?:[nrt\\\\\"'0]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]{1,6}\\})"
+                        }
+                    ]
+                },
+                {
+                    "name": "string.quoted.raw.cobrust",
+                    "begin": "r\"",
+                    "end": "\""
+                },
+                {
+                    "name": "string.quoted.byte.cobrust",
+                    "begin": "b\"",
+                    "end": "\"",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.cobrust",
+                            "match": "\\\\(?:[nrt\\\\\"'0]|x[0-9A-Fa-f]{2})"
+                        }
+                    ]
+                }
+            ]
+        },
+        "fstrings": {
+            "patterns": [
+                {
+                    "name": "string.interpolated.cobrust",
+                    "begin": "f\"",
+                    "end": "\"",
+                    "beginCaptures": {
+                        "0": { "name": "punctuation.definition.string.begin.cobrust" }
+                    },
+                    "endCaptures": {
+                        "0": { "name": "punctuation.definition.string.end.cobrust" }
+                    },
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.cobrust",
+                            "match": "\\\\(?:[nrt\\\\\"'0]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]{1,6}\\})"
+                        },
+                        {
+                            "name": "meta.embedded.expression.cobrust",
+                            "begin": "\\{",
+                            "end": "\\}",
+                            "beginCaptures": {
+                                "0": { "name": "punctuation.section.embedded.begin.cobrust" }
+                            },
+                            "endCaptures": {
+                                "0": { "name": "punctuation.section.embedded.end.cobrust" }
+                            },
+                            "patterns": [
+                                {
+                                    "name": "constant.other.format-spec.cobrust",
+                                    "match": ":[\\s]*(?:[<>=^]?[0-9]*(?:\\.[0-9]+)?[bcdeEfFgGnosxX%]?|0[0-9]+[bcdoxX]?|\\.[0-9]+[fFeE]?)"
+                                },
+                                { "include": "#numbers" },
+                                { "include": "#constants" },
+                                { "include": "#operators" },
+                                { "include": "#keywords" },
+                                { "include": "#prelude" }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "numbers": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.float.cobrust",
+                    "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?(?:_?f64)?\\b"
+                },
+                {
+                    "name": "constant.numeric.float.exponent.cobrust",
+                    "match": "\\b[0-9][0-9_]*[eE][+-]?[0-9]+(?:_?f64)?\\b"
+                },
+                {
+                    "name": "constant.numeric.hex.cobrust",
+                    "match": "\\b0[xX][0-9A-Fa-f][0-9A-Fa-f_]*(?:_?(?:i8|i16|i32|i64|u8|u16|u32|u64))?\\b"
+                },
+                {
+                    "name": "constant.numeric.octal.cobrust",
+                    "match": "\\b0[oO][0-7][0-7_]*(?:_?(?:i8|i16|i32|i64|u8|u16|u32|u64))?\\b"
+                },
+                {
+                    "name": "constant.numeric.binary.cobrust",
+                    "match": "\\b0[bB][01][01_]*(?:_?(?:i8|i16|i32|i64|u8|u16|u32|u64))?\\b"
+                },
+                {
+                    "name": "constant.numeric.integer.cobrust",
+                    "match": "\\b[0-9][0-9_]*(?:_?(?:i8|i16|i32|i64|u8|u16|u32|u64))?\\b"
+                }
+            ]
+        },
+        "decorators": {
+            "patterns": [
+                {
+                    "name": "meta.decorator.cobrust",
+                    "begin": "^\\s*(@)([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "beginCaptures": {
+                        "1": { "name": "punctuation.definition.decorator.cobrust" },
+                        "2": { "name": "entity.name.function.decorator.cobrust" }
+                    },
+                    "end": "$",
+                    "patterns": [
+                        {
+                            "name": "support.type.cobrust",
+                            "match": "\\b(strict|semantic|numerical|none)\\b"
+                        },
+                        { "include": "#numbers" },
+                        { "include": "#strings" },
+                        { "include": "#operators" }
+                    ]
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.cobrust",
+                    "match": "\\b(if|elif|else|for|while|break|continue|return|match|case|try|except|finally|raise|with|yield|in|where)\\b"
+                },
+                {
+                    "name": "keyword.declaration.cobrust",
+                    "match": "\\b(fn|let|mut|struct|class|enum|trait|impl|type|alias|module|import|from|as|pub|self|Self)\\b"
+                },
+                {
+                    "name": "keyword.other.cobrust",
+                    "match": "\\b(pass|async|await|lambda|move|copy|ref|dyn|box|raise|del|global|nonlocal|same_object)\\b"
+                },
+                {
+                    "name": "storage.modifier.cobrust",
+                    "match": "\\b(mut|pub|const|static|extern)\\b"
+                }
+            ]
+        },
+        "types": {
+            "patterns": [
+                {
+                    "name": "support.type.primitive.cobrust",
+                    "match": "\\b(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|bool|str|None|isize|usize)\\b"
+                },
+                {
+                    "name": "support.type.collection.cobrust",
+                    "match": "\\b(List|list|Dict|dict|Set|set|Tuple|tuple|Option|Result|Vec|HashMap|HashSet)\\b"
+                },
+                {
+                    "name": "support.type.adt.cobrust",
+                    "match": "\\b(Some|None|Ok|Err)\\b"
+                },
+                {
+                    "name": "entity.name.type.cobrust",
+                    "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+                }
+            ]
+        },
+        "constants": {
+            "patterns": [
+                {
+                    "name": "constant.language.cobrust",
+                    "match": "\\b(True|False|None|Ok|Err|Some)\\b"
+                }
+            ]
+        },
+        "operators": {
+            "patterns": [
+                {
+                    "name": "keyword.operator.assignment.cobrust",
+                    "match": "(\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|=)"
+                },
+                {
+                    "name": "keyword.operator.comparison.cobrust",
+                    "match": "(==|!=|<=|>=|<|>)"
+                },
+                {
+                    "name": "keyword.operator.arithmetic.cobrust",
+                    "match": "(\\+|-|\\*|/|%|\\*\\*|//)"
+                },
+                {
+                    "name": "keyword.operator.logical.cobrust",
+                    "match": "\\b(and|or|not)\\b"
+                },
+                {
+                    "name": "keyword.operator.bitwise.cobrust",
+                    "match": "(\\^|\\||~|<<|>>)"
+                },
+                {
+                    "name": "keyword.operator.borrow.cobrust",
+                    "match": "&"
+                },
+                {
+                    "name": "keyword.operator.error-propagation.cobrust",
+                    "match": "\\?"
+                },
+                {
+                    "name": "keyword.operator.arrow.cobrust",
+                    "match": "->"
+                },
+                {
+                    "name": "keyword.operator.annotation.cobrust",
+                    "match": ":"
+                },
+                {
+                    "name": "keyword.operator.scope.cobrust",
+                    "match": "::"
+                },
+                {
+                    "name": "keyword.operator.range.cobrust",
+                    "match": "\\.\\.=?"
+                }
+            ]
+        },
+        "functions": {
+            "patterns": [
+                {
+                    "match": "\\b(fn)\\s+([a-z_][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": { "name": "keyword.declaration.function.cobrust" },
+                        "2": { "name": "entity.name.function.cobrust" }
+                    }
+                },
+                {
+                    "match": "\\b(class|struct|enum|trait)\\s+([A-Z][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": { "name": "keyword.declaration.cobrust" },
+                        "2": { "name": "entity.name.type.cobrust" }
+                    }
+                },
+                {
+                    "match": "\\b([a-z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+                    "name": "entity.name.function.call.cobrust"
+                }
+            ]
+        },
+        "prelude": {
+            "patterns": [
+                {
+                    "name": "support.function.builtin.io.cobrust",
+                    "match": "\\b(print|println|eprint|eprintln|input|read_file|read_file_safe|write_file|append_file|stdin|stdout|stderr)\\b"
+                },
+                {
+                    "name": "support.function.builtin.collections.cobrust",
+                    "match": "\\b(len|list_new|list_get|list_set|list_push|list_pop|list_len|list_clear|dict_new|dict_get|dict_set|dict_has|dict_remove|dict_len|dict_clear|dict_keys|dict_values|dict_items|set_new|set_add|set_has|set_remove|set_len)\\b"
+                },
+                {
+                    "name": "support.function.builtin.string.cobrust",
+                    "match": "\\b(str_len|str_at|str_ord|str_chr|str_concat|str_substring|str_starts_with|str_ends_with|str_contains|str_find|str_split|str_join|str_replace|str_trim|str_trim_start|str_trim_end|str_to_lower|str_to_upper|str_repeat|str_reverse|parse_int|parse_int_safe|parse_float|parse_float_safe|to_str|int_to_str|float_to_str)\\b"
+                },
+                {
+                    "name": "support.function.builtin.math.cobrust",
+                    "match": "\\b(abs|min|max|pow|sqrt|sin|cos|tan|asin|acos|atan|atan2|exp|ln|log|log2|log10|ceil|floor|round|trunc|f64_isnan|f64_isinf|f64_isfinite)\\b"
+                },
+                {
+                    "name": "support.function.builtin.iter.cobrust",
+                    "match": "\\b(enumerate|zip|range|map|filter|reduce|sum|product|any|all|sorted|reversed)\\b"
+                },
+                {
+                    "name": "support.function.builtin.llm.cobrust",
+                    "match": "\\b(llm_complete|llm_stream|llm_dispatch|llm_complete_structured|llm_complete_with_tools|prompt_template|tool_register|tool_call)\\b"
+                },
+                {
+                    "name": "support.function.builtin.misc.cobrust",
+                    "match": "\\b(clone|same_object|panic|assert|debug_assert|todo|unimplemented|unreachable|exit|env_get|env_set|args)\\b"
+                }
+            ]
+        }
+    }
+}
