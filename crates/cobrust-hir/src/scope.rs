@@ -118,6 +118,28 @@ impl Scope {
         Ok(())
     }
 
+    /// ADR-0052a §4.4 let-rebind shortcut.
+    ///
+    /// `let s = &s` (and any other `let` rebind in the same scope) is
+    /// the §2.5-honest replacement for `let s = clone(s)`. The new `s`
+    /// shadows the outer / prior `s` for the rest of the scope; the
+    /// prior binding's `DefId` stays valid for any reference taken
+    /// before this point (and the RHS of the rebind itself, which is
+    /// lowered before the new binding is installed).
+    ///
+    /// This method is the let-statement / for-target counterpart of
+    /// `bind()`: shadow is unconditional for `DefKind::PatternBinding`,
+    /// `Local`, and other let-target kinds. Other binding kinds still
+    /// flow through `bind()` (which keeps `DuplicateBinding` semantics).
+    ///
+    /// Constitution §2.5 "maximize-overlap-with-training-data": Rust's
+    /// `let` permits same-scope shadow unconditionally; aligning with
+    /// the Rust prior eliminates the `DuplicateBinding` deviation.
+    pub fn bind_let_shadow(&mut self, name: &str, def_id: DefId, kind: DefKind, span: Span) {
+        self.bindings
+            .insert(name.to_string(), BindingRecord { def_id, kind, span });
+    }
+
     /// Resolve a name, searching innermost-first up the parent
     /// chain.
     pub fn resolve(&self, name: &str) -> Option<(DefId, DefKind)> {
