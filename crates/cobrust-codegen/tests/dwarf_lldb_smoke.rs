@@ -599,8 +599,7 @@ fn lldb_smoke_adt_variable_renders_naming() {
     // `cobrust::Adt` named DIType. `AdtId(0)` is a synthetic id; the
     // DI emission keys off the `Ty::Adt(_, _)` variant only, not the
     // specific AdtId, so any id suffices.
-    let body =
-        body_with_typed_signature(32, "take_adt_wave2", Ty::Adt(AdtId(0), Vec::new()));
+    let body = body_with_typed_signature(32, "take_adt_wave2", Ty::Adt(AdtId(0), Vec::new()));
     let module = Module { bodies: vec![body] };
     let spec = object_spec("adt_naming_lldb_wave2");
     let artifact = emit(&module, spec).expect("adt naming emit");

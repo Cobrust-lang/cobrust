@@ -1997,10 +1997,7 @@ mod tests {
         // SAFETY: null inputs are explicit contract.
         unsafe {
             assert_eq!(__cobrust_dict_iter_key_i64_at(std::ptr::null_mut(), 0), 0);
-            assert_eq!(
-                __cobrust_dict_iter_value_i64_at(std::ptr::null_mut(), 0),
-                0
-            );
+            assert_eq!(__cobrust_dict_iter_value_i64_at(std::ptr::null_mut(), 0), 0);
             assert!(__cobrust_dict_iter_key_str_at(std::ptr::null_mut(), 0).is_null());
             assert!(__cobrust_dict_iter_value_str_at(std::ptr::null_mut(), 0).is_null());
         }
