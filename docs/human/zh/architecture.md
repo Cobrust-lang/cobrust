@@ -1576,11 +1576,11 @@ ADR-0058d 之前，`cobrust-jit/src/lower.rs`（430 LOC）携带自己一份 wav
 - **AOT 路径不变。** `cranelift_backend::CraneliftCtx::define_body` 的有状态 AOT 派发器（携带运行时辅助函数、外部符号声明、drop 调度、dict/list/str intrinsics、Place projection、FnRef 调用、str 数据符号）在 Strand #4 中**未被修改**。wave-1 substrate 的存在主要是为 JIT 消费者锚定一条稳定契约；AOT 端通过 substrate 的委托被保留给将来的 ADR。
 - **稳定性契约。** wave-1 表面按 ADR-0058d §5.1 是 stable-for-wave-1：签名变更需要 sub-ADR；新增 helper 不破坏兼容；非 wave-1 的 MIR 返回带 `"wave1:"` 前缀的 `CodegenError::InvalidMir`,JIT 调用方可以据此回退到 AOT。
 
-<self-hosted-runner> 验证 @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrust-jit` = 392 PASS / 0 FAILED / 8 ignored,TEST_EXIT=0。包括 2 个新的 wave-1 单元测试在 `lowering::tests`（round-trip + reject-Str）、378 个 cobrust-codegen 既有测试无变化、12 个 cobrust-jit 测试（1 unit + 11 integration jit_roundtrip）无变化。
+DG-Workstation 验证 @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrust-jit` = 392 PASS / 0 FAILED / 8 ignored,TEST_EXIT=0。包括 2 个新的 wave-1 单元测试在 `lowering::tests`（round-trip + reject-Str）、378 个 cobrust-codegen 既有测试无变化、12 个 cobrust-jit 测试（1 unit + 11 integration jit_roundtrip）无变化。
 
 参考: `docs/agent/adr/0058d-jit-aot-lowering-convergence.md`。关闭 ADR-0056a §13 noted-debt + 审计 `ae2316f1c51dbd6be` Gate 7。
 
-<self-hosted-runner> 验证 @ HEAD `4686192`：cargo test -p cobrust-codegen --features llvm = 355 测试 PASS / 0 失败 / 6 ignored（LLVM-conditional），TEST_EXIT=0。5 个 wave-1 inline smoke + 350 baseline tests 覆盖 aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora。
+DG-Workstation 验证 @ HEAD `4686192`：cargo test -p cobrust-codegen --features llvm = 355 测试 PASS / 0 失败 / 6 ignored（LLVM-conditional），TEST_EXIT=0。5 个 wave-1 inline smoke + 350 baseline tests 覆盖 aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora。
 
 #### Phase K wave-2 —— LLVM opt 流水线 + 多目标（ADR-0058b）
 
@@ -1615,7 +1615,7 @@ Phase K wave-3（`crates/cobrust-codegen/src/llvm_backend.rs` 内接入 `DebugIn
 - **逐函数 DISubprogram**（ADR-0058c §3.2）。`declare_body` 由参数 + 返回 DI 基本类型构造 `DISubroutineType`，再以 compile-unit scope 为根创建 `DISubprogram`；`FunctionValue::set_subprogram` 把它挂到 LLVM 函数上。`di_subprograms: HashMap<u32, DISubprogram>` 表在 `define_body` 中被消费，给逐指令的调试位置定根。
 - **逐 Span DILocation 行表**（ADR-0058c §3.3）。内联 `LineMap`（避免 `cobrust-lsp` 依赖）将每个 MIR 语句的 `Span::start` 字节偏移翻译成 DWARF 约定的 1-索引（行、列）。在每个 block 起点 + 语句 + 终结符发射前，`BodyLowerer::set_debug_loc` 调用 `builder.set_current_debug_location(loc)`。`TargetSpec.source_path: Option<PathBuf>`（新字段）选择真实源码解析（`LineMap::from_source(read_to_string(path))`）或合成测试回退（`LineMap::empty()` → 所有 span 折叠到第 1 行）。
 - **DIBuilder finalize**（ADR-0058c §3.4）。`emit` 在 IR 构造和 `Module::verify` 之间调用 `di_builder.finalize()`，将所有延后的 DIE 元数据写入模块。DI 形状错误以 `CodegenError::LlvmError(String)` 上报 —— 与 wave-1/2 错误分类相同。
-- **lldb 冒烟工具**（ADR-0058c §3.5）。`crates/cobrust-codegen/tests/dwarf_lldb_smoke.rs` 以批处理模式启动 `lldb-18 -b`，对编译产出的对象文件运行 `image lookup --regex` 和 `image dump line-table` 查询，断言查询返回非空 —— 端到端证明 DWARF subprogram + 行表发射。宿主既无 `lldb-18` 也无 `lldb` 时干净跳过（Mac 开发机可能没有；<self-hosted-runner> 通过 `llvm.sh` apt 已装）。
+- **lldb 冒烟工具**（ADR-0058c §3.5）。`crates/cobrust-codegen/tests/dwarf_lldb_smoke.rs` 以批处理模式启动 `lldb-18 -b`，对编译产出的对象文件运行 `image lookup --regex` 和 `image dump line-table` 查询，断言查询返回非空 —— 端到端证明 DWARF subprogram + 行表发射。宿主既无 `lldb-18` 也无 `lldb` 时干净跳过（Mac 开发机可能没有；DG-Workstation 通过 `llvm.sh` apt 已装）。
 
 非目标（按 ADR-0058c §4 延后）：源码级变量检查（`DILocalVariable` / `DIFormalParameter`—— Phase L UX 范围）、macOS dSYM 打包（`dsymutil` 链接后步骤在 `release.yml` 处理）、内联帧链（`DILocation::inlined_at` —— Phase L+ 视 debugger 需求）、DWARF v4 回退（LLVM-18 默认 v5）。
 
@@ -1713,7 +1713,7 @@ cobrust-version = "0.0.1"
 |---|---|---|
 | `__cobrust_print` | `extern "C" fn(*const u8, usize)` | `std.io.print` 运行时 |
 | `__cobrust_println` | `extern "C" fn(*const u8, usize)` | `std.io.println` 运行时 |
-| `__cobrust_println_int` | `extern "C" fn(i64)` | `print_int(n)` 内建 — 打印整数 + 换行（ADR-0030） |
+| `__cobrust_println_int` | `extern "C" fn(i64)` | `print(n)` 内建 — 打印整数 + 换行（ADR-0030） |
 | `__cobrust_panic` | `extern "C" fn(*const u8, usize) -> !` | 以代码 3（`INTERNAL_PANIC`）退出 |
 | `__cobrust_assert` | `extern "C" fn(bool, *const u8, usize)` | 条件 panic |
 | `__cobrust_capture_argv` | `extern "C" fn(i32, *const *const u8)` | 为 `std.env.args` 捕获 argv |
@@ -1783,7 +1783,7 @@ M11.2 sprint 闭合了 M9 codegen stub 在用户定义 fn 调用 callsite 上的
 - **Pass 1（declare）**：`emit()` 已经迭代 `module.bodies` 两次。第一次迭代为每个 body 调用 `declare_body`，调用 `obj.declare_function(name, Linkage::Export, sig)` 并在 `CraneliftCtx.function_ids` 中按 `body.def_id.0` 记录 `FuncId`。同一调用还把 body 的声明返回类型记录到 `CraneliftCtx.body_return_types` 中，以便 ADR-0033 的 `inferred_locals` 不动点 pass 在 pass 2 跑时能查询跨 fn 返回类型。
 - **Pass 2（define）**：第二次迭代为每个 body 调用 `define_body`。在 `define_body` 内，`function_ids` 的每一项通过 `obj.declare_func_in_func` 转换为 builder 作用域的 `FuncRef` 并存入 per-body `user_funcs: HashMap<u32, ir::FuncRef>`。`EmitCtx` 持有这张 map 的借用。`lower_call` 在 callee 操作数为 `Constant::FnRef(id)` 时查询 `user_funcs` 并发出真实 `call` 指令——参数、返回值、跳转到 continuation——逐字镜像现有的 `extern_funcs` 分支。
 
-**与 ADR-0033 `inferred_locals` 不动点的交互**：ADR-0033 的 per-fn `inferred_locals` 在 codegen 时为 `Ty::None` 声明的 locals（合成 temp `_un` / `_bin` / `_callret`）赋类型。M11.2 的前向声明 pass 在 fn 签名边界上工作；两层是正交的。当 caller 包含 `_callret = call FnRef(M)` 时，`infer_local_types` 查询 `body_return_types[M]` 直接为 `_callret` 赋类型——闭合了交互面，否则 `_callret` 会默认到 `I8` 并使 `print_int(fib(10))` 这样的 caller 链 miscompile。强制回归用例 `fnref_inferred_locals_recursive_chain`（`crates/cobrust-codegen/tests/fnref_call_corpus.rs`）正是踩这条路径。
+**与 ADR-0033 `inferred_locals` 不动点的交互**：ADR-0033 的 per-fn `inferred_locals` 在 codegen 时为 `Ty::None` 声明的 locals（合成 temp `_un` / `_bin` / `_callret`）赋类型。M11.2 的前向声明 pass 在 fn 签名边界上工作；两层是正交的。当 caller 包含 `_callret = call FnRef(M)` 时，`infer_local_types` 查询 `body_return_types[M]` 直接为 `_callret` 赋类型——闭合了交互面，否则 `_callret` 会默认到 `I8` 并使 `print(fib(10))` 这样的 caller 链 miscompile。强制回归用例 `fnref_inferred_locals_recursive_chain`（`crates/cobrust-codegen/tests/fnref_call_corpus.rs`）正是踩这条路径。
 
 **MIR 端配套**：要让 codegen 端的分支真的触发，MIR 的 `lower_call`（`crates/cobrust-mir/src/lower.rs`）扩展为：当 callee 是 `Name` 表达式且其解析后类型为 `Ty::Fn(...)` 时，降级为 `Operand::Constant(Constant::FnRef(rn.def_id.0))`，而不是通用的 `Operand::Move(Place::local(L))`。非 fn 类型 callee（间接 call 走的 fn 指针 local、lambda）保留现有表达式降级路径。这是 ADR-0034 要求的唯一 MIR 改动；其他都在 codegen。
 

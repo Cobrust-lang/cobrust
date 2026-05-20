@@ -36,15 +36,15 @@ fn main() -> i64:
         let va = list_get(list1, pi)
         let vb = list_get(list2, pj)
         if va <= vb:
-            print_int(va)
+            print(va)
             pi = pi + 1
         else:
-            print_int(vb)
+            print(vb)
             pj = pj + 1
     while pi < n:
-        print_int(list_get(list1, pi))
+        print(list_get(list1, pi))
         pi = pi + 1
     while pj < m:
-        print_int(list_get(list2, pj))
+        print(list_get(list2, pj))
         pj = pj + 1
     return 0

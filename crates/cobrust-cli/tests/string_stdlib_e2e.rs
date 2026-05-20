@@ -249,7 +249,7 @@ fn f3str05_find_present_byte_offset() {
     // offset (here byte offset of "world" in "hello world" = 6).
     assert_build_run(
         "f3str05_find_present",
-        "fn main() -> i64:\n    let pos: i64 = find(\"hello world\", \"world\")\n    print_int(pos)\n    return 0\n",
+        "fn main() -> i64:\n    let pos: i64 = find(\"hello world\", \"world\")\n    print(pos)\n    return 0\n",
         &[],
         b"",
         "6\n",
@@ -264,7 +264,7 @@ fn f3str06_find_absent_returns_neg_one() {
     // idiom (w156, w175) together lock.
     assert_build_run(
         "f3str06_find_absent",
-        "fn main() -> i64:\n    let pos: i64 = find(\"hello\", \"xyz\")\n    print_int(pos)\n    return 0\n",
+        "fn main() -> i64:\n    let pos: i64 = find(\"hello\", \"xyz\")\n    print(pos)\n    return 0\n",
         &[],
         b"",
         "-1\n",
@@ -456,7 +456,7 @@ fn f3str17_lc100_valid_parentheses_via_clone_mitigation() {
     // algorithmic shape (while + comparison).
     assert_build_run(
         "f3str17_lc100_valid_parens",
-        "fn main() -> i64:\n    let s: str = input(\"\")\n    let s2: str = clone(s)\n    let n: i64 = str_len(s)\n    let count: i64 = 0\n    let i: i64 = 0\n    while i < n:\n        let c: str = str_at(s2, i)\n        let o: i64 = str_ord(c)\n        if o == 40:\n            count = count + 1\n        i = i + 1\n    print_int(count)\n    return 0\n",
+        "fn main() -> i64:\n    let s: str = input(\"\")\n    let s2: str = clone(s)\n    let n: i64 = str_len(s)\n    let count: i64 = 0\n    let i: i64 = 0\n    while i < n:\n        let c: str = str_at(s2, i)\n        let o: i64 = str_ord(c)\n        if o == 40:\n            count = count + 1\n        i = i + 1\n    print(count)\n    return 0\n",
         &[],
         b"((()))\n",
         "3\n",
@@ -475,7 +475,7 @@ fn f3str18_clone_twice_then_chained_reads() {
     // future cascade-bug audits must not regress.
     assert_build_run(
         "f3str18_clone_chain",
-        "fn main() -> i64:\n    let s: str = \"abc\"\n    let a: str = clone(s)\n    let b: str = clone(a)\n    let n: i64 = str_len(b)\n    print_int(n)\n    return 0\n",
+        "fn main() -> i64:\n    let s: str = \"abc\"\n    let a: str = clone(s)\n    let b: str = clone(a)\n    let n: i64 = str_len(b)\n    print(n)\n    return 0\n",
         &[],
         b"",
         "3\n",
@@ -604,7 +604,7 @@ fn f3str24_split_result_partial_iter_clean_exit() {
     // drop schedule's coverage of split's heap returns.
     assert_build_run(
         "f3str24_split_partial",
-        "fn first_two(xs: list[str]) -> i64:\n    let count: i64 = 0\n    for s in xs:\n        let _ = print(s)\n        count = count + 1\n        if count == 2:\n            return count\n    return count\nfn main() -> i64:\n    let xs: list[str] = split(\"a,b,c,d\", \",\")\n    let n: i64 = first_two(xs)\n    print_int(n)\n    return 0\n",
+        "fn first_two(xs: list[str]) -> i64:\n    let count: i64 = 0\n    for s in xs:\n        let _ = print(s)\n        count = count + 1\n        if count == 2:\n            return count\n    return count\nfn main() -> i64:\n    let xs: list[str] = split(\"a,b,c,d\", \",\")\n    let n: i64 = first_two(xs)\n    print(n)\n    return 0\n",
         &[],
         b"",
         "a\nb\n2\n",

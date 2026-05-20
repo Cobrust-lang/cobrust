@@ -275,7 +275,7 @@ fn f3ls06_argv_iter_zero_extra_args() {
     // drop cleanly on scope exit.
     let path = write_cb(
         "f3ls06_argv-only",
-        "fn main() -> i64:\n    let args: list[str] = argv()\n    let count: i64 = 0\n    for a in args:\n        count = count + 1\n    print_int(count)\n    return 0\n",
+        "fn main() -> i64:\n    let args: list[str] = argv()\n    let count: i64 = 0\n    for a in args:\n        count = count + 1\n    print(count)\n    return 0\n",
     );
     let (build_code, exe, build_stderr) = run_build_exe(&path);
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
@@ -317,7 +317,7 @@ fn f3ls08_argv_len_returns_argc() {
     // list_len(argv()) === argc.
     let path = write_cb(
         "f3ls08_argv-len",
-        "fn main() -> i64:\n    let args: list[str] = argv()\n    print_int(list_len(args))\n    return 0\n",
+        "fn main() -> i64:\n    let args: list[str] = argv()\n    print(list_len(args))\n    return 0\n",
     );
     let (build_code, exe, build_stderr) = run_build_exe(&path);
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
@@ -351,7 +351,7 @@ fn f3ls10_argv_exit_zero_with_many_args() {
     // Stress: 8 args → exits 0. No leak-induced abort.
     let path = write_cb(
         "f3ls10_argv-many",
-        "fn main() -> i64:\n    let args: list[str] = argv()\n    let count: i64 = 0\n    for a in args:\n        count = count + 1\n    print_int(count)\n    return 0\n",
+        "fn main() -> i64:\n    let args: list[str] = argv()\n    let count: i64 = 0\n    for a in args:\n        count = count + 1\n    print(count)\n    return 0\n",
     );
     let (build_code, exe, build_stderr) = run_build_exe(&path);
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
@@ -412,7 +412,7 @@ fn f3ls13_helper_fn_consumes_argv_caller_prints_literal() {
     // helper fn takes ownership of argv; caller still owns its literal.
     let path = write_cb(
         "f3ls13_helper",
-        "fn count_args(xs: list[str]) -> i64:\n    return list_len(xs)\nfn main() -> i64:\n    let extras: list[str] = [\"a\", \"b\", \"c\"]\n    let argc: i64 = count_args(argv())\n    print_int(argc)\n    for s in extras:\n        let _ = print(s)\n    return 0\n",
+        "fn count_args(xs: list[str]) -> i64:\n    return list_len(xs)\nfn main() -> i64:\n    let extras: list[str] = [\"a\", \"b\", \"c\"]\n    let argc: i64 = count_args(argv())\n    print(argc)\n    for s in extras:\n        let _ = print(s)\n    return 0\n",
     );
     let (build_code, exe, build_stderr) = run_build_exe(&path);
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
@@ -544,7 +544,7 @@ fn f3ls19_two_lists_both_passed_to_helpers() {
     // After the calls, the locals are no longer in scope as owners.
     let path = write_cb(
         "f3ls19_both-moved",
-        "fn count(xs: list[str]) -> i64:\n    return list_len(xs)\nfn main() -> i64:\n    let xs: list[str] = [\"a\", \"b\"]\n    let ys: list[str] = [\"c\"]\n    let n: i64 = count(xs)\n    let m: i64 = count(ys)\n    print_int(n)\n    print_int(m)\n    return 0\n",
+        "fn count(xs: list[str]) -> i64:\n    return list_len(xs)\nfn main() -> i64:\n    let xs: list[str] = [\"a\", \"b\"]\n    let ys: list[str] = [\"c\"]\n    let n: i64 = count(xs)\n    let m: i64 = count(ys)\n    print(n)\n    print(m)\n    return 0\n",
     );
     let (build_code, exe, build_stderr) = run_build_exe(&path);
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
@@ -785,7 +785,7 @@ fn f3ls31_argv_explicit_drop_via_helper() {
     // drop, no remaining leak).
     let path = write_cb(
         "f3ls31_drop-helper",
-        "fn drop_helper(xs: list[str]) -> i64:\n    return list_len(xs)\nfn main() -> i64:\n    let n: i64 = drop_helper(argv())\n    print_int(n)\n    return 0\n",
+        "fn drop_helper(xs: list[str]) -> i64:\n    return list_len(xs)\nfn main() -> i64:\n    let n: i64 = drop_helper(argv())\n    print(n)\n    return 0\n",
     );
     let (build_code, exe, build_stderr) = run_build_exe(&path);
     assert_eq!(build_code, 0, "build failed; stderr={build_stderr}");
@@ -823,7 +823,7 @@ fn f3ls33_list_str_after_str_eq_lit_does_not_drop_early() {
     // verify the list is still valid.
     assert_build_run(
         "f3ls33_eq-after-iter",
-        "fn main() -> i64:\n    let xs: list[str] = [\"target\", \"other\"]\n    let hit: i64 = str_eq_lit(xs[0], \"target\")\n    print_int(hit)\n    for s in xs:\n        let _ = print(s)\n    return 0\n",
+        "fn main() -> i64:\n    let xs: list[str] = [\"target\", \"other\"]\n    let hit: i64 = str_eq_lit(xs[0], \"target\")\n    print(hit)\n    for s in xs:\n        let _ = print(s)\n    return 0\n",
         &[],
         b"",
         "1\ntarget\nother\n",

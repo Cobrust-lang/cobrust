@@ -2,9 +2,9 @@
 doc_kind: finding
 name: f38
 title: Source-Surface Leakage of Codegen Internal Primitive
-status: candidate
+status: ratified
 date: 2026-05-19
-last_verified_commit: 4cfef19
+last_verified_commit: 46c0946
 family: "F36/F37 source-fidelity"
 resolution: adr:0064
 related_findings: [f36, f37]
@@ -57,9 +57,15 @@ Static types are fully resolved by the time codegen runs. Monomorphization (`pri
 
 **Detection date:** 2026-05-19 user retrospective.
 
-**Estimated call-site count:** ~50–100 across `examples/`, `tests/`, `src/` fixture strings, and `cobrust-first-try` skill. (Exact count to be recorded post-sprint in §3 update.)
+**Actual call-site count (ADR-0064 sprint):** 133 `.cb` call sites + ~200 Rust inline-source test strings refactored (prior agent commit `5e87e77`). Net source delta ~333 LOC.
 
-**Sprint commit reference:** TBD — fill after ADR-0064 impl sprint closes.
+**Sprint commit references:**
+- `c73be4e` — PRELUDE table: remove `print_int`/`str`/`bool`/`float` source-face entries (§3.1)
+- `b51b907` — polymorphic `print()` dispatch in `synth_call` + codegen monomorphization (§3.2-§3.3)
+- `5e87e77` — mechanical refactor: 133 `.cb` call sites + Rust inline strings → `print()` (§3.4)
+- `46c0946` — Phase 4 fix: `Ty::None` callret locals must dispatch to `__cobrust_println_int` not str-buf (§3.3 correctness)
+
+**Ratified at:** `46c0946` (feature/0064-print-mono, rebased on `28176fa`)
 
 ---
 
@@ -94,10 +100,12 @@ Implementation phases:
 
 ## §6 Status
 
-`candidate` — will promote to `ratified` after ADR-0064 impl sprint closes with:
-- Zero `print_int` / `print_str` / `print_bool` / `print_float` references in any `.cb` source file under `examples/`.
-- LC-100 100/100 maintained.
-- 5+ integration tests passing for polymorphic `print`.
+`ratified` at commit `46c0946` (2026-05-20):
+- Zero `print_int` / `print_str` / `print_bool` / `print_float` call-sites in any `.cb` source file under `examples/`. Confirmed via `grep -rEn "print_(int|str|bool|float)\(" examples/ --include="*.cb"` → empty.
+- LC-100 12/12 maintained (including LC-05 merge_two_sorted_lists which caught a Ty::None dispatch bug fixed in Phase 4).
+- 5+ integration tests passing for polymorphic `print` (`for_range_e2e.rs` ADR-0064 acceptance gate tests).
+- `print_int(42)` in a `.cb` source file now produces `NameError: print_int is not defined` (removal confirmed at §3.1).
+- 56/56 codegen diff corpus tests passing.
 
 ---
 

@@ -23,7 +23,7 @@ fn main() -> i64:
     while top > 0:
         top = top - 1
         let node = list_get(stk, top)
-        print_int(list_get(val, node))
+        print(list_get(val, node))
         let r = list_get(rgt, node)
         let l = list_get(lft, node)
         if r != -1:

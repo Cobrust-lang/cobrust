@@ -10,5 +10,5 @@ fn main() -> i64:
     while i < n:
         let line = input("")
         i = i + 1
-    print_int(n)
+    print(n)
     return 0

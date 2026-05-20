@@ -19,9 +19,9 @@ fn main() -> i64:
             list_set(nums, write, list_get(nums, j))
             write = write + 1
         j = j + 1
-    print_int(write)
+    print(write)
     let k: i64 = 0
     while k < write:
-        print_int(list_get(nums, k))
+        print(list_get(nums, k))
         k = k + 1
     return 0

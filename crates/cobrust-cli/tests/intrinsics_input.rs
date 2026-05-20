@@ -361,7 +361,7 @@ fn test_t08_argv_length_matches_argc() {
     // exercised in M11+ but the binding to argv() must be wired.
     let src = write_cb(
         "t08_argv_count",
-        "fn main() -> i64:\n    let args = argv()\n    let count: i64 = 0\n    for a in args:\n        count = count + 1\n    print_int(count)\n    return 0\n",
+        "fn main() -> i64:\n    let args = argv()\n    let count: i64 = 0\n    for a in args:\n        count = count + 1\n    print(count)\n    return 0\n",
     );
     let (build_code, exe, stderr) = run_build_exe(&src);
     assert_eq!(build_code, 0, "build failed; stderr={stderr}");
@@ -420,7 +420,7 @@ fn test_t10_argv_user_args_passthrough() {
 fn test_t11_argv_only_argv0_when_no_user_args() {
     let src = write_cb(
         "t11_argv_only_argv0",
-        "fn main() -> i64:\n    let args = argv()\n    let count: i64 = 0\n    for a in args:\n        count = count + 1\n    print_int(count)\n    return 0\n",
+        "fn main() -> i64:\n    let args = argv()\n    let count: i64 = 0\n    for a in args:\n        count = count + 1\n    print(count)\n    return 0\n",
     );
     let (build_code, exe, stderr) = run_build_exe(&src);
     assert_eq!(build_code, 0, "stderr={stderr}");
@@ -784,7 +784,7 @@ fn test_t36_input_chained_into_print() {
 fn test_t37_argv_mutable_counter() {
     let src = write_cb(
         "t37_argv_counter",
-        "fn main() -> i64:\n    let args = argv()\n    let mut n: i64 = 0\n    for _ in args:\n        n = n + 1\n    print_int(n)\n    return 0\n",
+        "fn main() -> i64:\n    let args = argv()\n    let mut n: i64 = 0\n    for _ in args:\n        n = n + 1\n    print(n)\n    return 0\n",
     );
     // `mut` may not be in scope today; relax via let n. Most M11+ syntax is
     // let n with rebind via `n = n + 1` — the t08 case already covers this.
@@ -921,10 +921,10 @@ fn test_t47_input_reassigned() {
 // ----- #48 argv() iterated then size measured -----------------------
 
 #[test]
-fn test_t48_argv_iter_then_print_int() {
+fn test_t48_argv_iter_then_print() {
     let src = write_cb(
         "t48_argv_count_print",
-        "fn main() -> i64:\n    let xs = argv()\n    let c: i64 = 0\n    for _ in xs:\n        c = c + 1\n    print_int(c)\n    return 0\n",
+        "fn main() -> i64:\n    let xs = argv()\n    let c: i64 = 0\n    for _ in xs:\n        c = c + 1\n    print(c)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(code, 0, "stderr={stderr}");
@@ -945,12 +945,12 @@ fn test_t49_read_line_helper_returns_str() {
 // ----- #50 input(prompt) result print_int via length ----------------
 
 #[test]
-fn test_t50_input_then_print_int() {
+fn test_t50_input_then_print() {
     // Stand-alone: input() then print a fixed int. Confirms input
     // doesn't taint downstream type-check.
     let src = write_cb(
         "t50_input_then_int",
-        "fn main() -> i64:\n    let _ = input(\"\")\n    print_int(42)\n    return 0\n",
+        "fn main() -> i64:\n    let _ = input(\"\")\n    print(42)\n    return 0\n",
     );
     let (code, stderr) = run_check(&src);
     assert_eq!(code, 0, "stderr={stderr}");

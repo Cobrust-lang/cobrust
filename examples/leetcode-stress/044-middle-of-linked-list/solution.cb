@@ -14,6 +14,6 @@ fn main() -> i64:
     let mid: i64 = n / 2
     i = mid
     while i < n:
-        print_int(list_get(vals, i))
+        print(list_get(vals, i))
         i = i + 1
     return 0

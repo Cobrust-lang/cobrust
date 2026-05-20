@@ -23,8 +23,8 @@ fn main() -> i64:
         let b: i64 = a + 1
         while b < n:
             if list_get(nums, a) + list_get(nums, b) == target:
-                print_int(a)
-                print_int(b)
+                print(a)
+                print(b)
                 return 0
             b = b + 1
         a = a + 1

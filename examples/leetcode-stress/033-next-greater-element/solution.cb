@@ -28,6 +28,6 @@ fn main() -> i64:
         i = i + 1
     i = 0
     while i < n:
-        print_int(list_get(ans, i))
+        print(list_get(ans, i))
         i = i + 1
     return 0

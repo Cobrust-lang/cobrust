@@ -20,6 +20,6 @@ fn main() -> i64:
     let k: i64 = 1
     while k <= n:
         if list_get(seen, k) == 0:
-            print_int(k)
+            print(k)
         k = k + 1
     return 0

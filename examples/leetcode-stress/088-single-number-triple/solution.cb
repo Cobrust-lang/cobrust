@@ -20,5 +20,5 @@ fn main() -> i64:
         if rem != 0:
             result = result | (1 << bit)
         bit = bit + 1
-    print_int(result)
+    print(result)
     return 0

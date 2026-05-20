@@ -35,7 +35,7 @@ fn main() -> i64:
             tank = 0
         j = j + 1
     if total < 0:
-        print_int(-1)
+        print(-1)
     else:
-        print_int(start)
+        print(start)
     return 0

@@ -201,14 +201,14 @@ fn e0052a_e2e_02_lc02_reverse_string_borrow_empty_input() {
 fn e0052a_e2e_03_lc13_roman_to_integer_borrow_mcmxciv() {
     // LC-13 §4.2: borrow form replaces `str_len(s)` + `str_at(s, i)`.
     // Oracle: "MCMXCIV" → 1994.
-    let src = "fn roman_val(c: str) -> i64:\n    let o = str_ord(c)\n    if o == 73:\n        return 1\n    if o == 86:\n        return 5\n    if o == 88:\n        return 10\n    if o == 76:\n        return 50\n    if o == 67:\n        return 100\n    if o == 68:\n        return 500\n    if o == 77:\n        return 1000\n    return 0\nfn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let result: i64 = 0\n    let prev: i64 = 0\n    let i: i64 = n - 1\n    while i >= 0:\n        let c = str_at(&s, i)\n        let v = roman_val(c)\n        if v < prev:\n            result = result - v\n        else:\n            result = result + v\n        prev = v\n        i = i - 1\n    print_int(result)\n    return 0\n";
+    let src = "fn roman_val(c: str) -> i64:\n    let o = str_ord(c)\n    if o == 73:\n        return 1\n    if o == 86:\n        return 5\n    if o == 88:\n        return 10\n    if o == 76:\n        return 50\n    if o == 67:\n        return 100\n    if o == 68:\n        return 500\n    if o == 77:\n        return 1000\n    return 0\nfn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let result: i64 = 0\n    let prev: i64 = 0\n    let i: i64 = n - 1\n    while i >= 0:\n        let c = str_at(&s, i)\n        let v = roman_val(c)\n        if v < prev:\n            result = result - v\n        else:\n            result = result + v\n        prev = v\n        i = i - 1\n    print(result)\n    return 0\n";
     assert_build_run("e0052a_e2e_03", src, &[], b"MCMXCIV\n", "1994\n");
 }
 
 #[test]
 fn e0052a_e2e_04_lc13_roman_to_integer_borrow_iii() {
     // LC-13 §4.2: simple input "III" → 3.
-    let src = "fn roman_val(c: str) -> i64:\n    let o = str_ord(c)\n    if o == 73:\n        return 1\n    if o == 86:\n        return 5\n    if o == 88:\n        return 10\n    if o == 76:\n        return 50\n    if o == 67:\n        return 100\n    if o == 68:\n        return 500\n    if o == 77:\n        return 1000\n    return 0\nfn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let result: i64 = 0\n    let prev: i64 = 0\n    let i: i64 = n - 1\n    while i >= 0:\n        let c = str_at(&s, i)\n        let v = roman_val(c)\n        if v < prev:\n            result = result - v\n        else:\n            result = result + v\n        prev = v\n        i = i - 1\n    print_int(result)\n    return 0\n";
+    let src = "fn roman_val(c: str) -> i64:\n    let o = str_ord(c)\n    if o == 73:\n        return 1\n    if o == 86:\n        return 5\n    if o == 88:\n        return 10\n    if o == 76:\n        return 50\n    if o == 67:\n        return 100\n    if o == 68:\n        return 500\n    if o == 77:\n        return 1000\n    return 0\nfn main() -> i64:\n    let s = input(\"\")\n    let n = str_len(&s)\n    let result: i64 = 0\n    let prev: i64 = 0\n    let i: i64 = n - 1\n    while i >= 0:\n        let c = str_at(&s, i)\n        let v = roman_val(c)\n        if v < prev:\n            result = result - v\n        else:\n            result = result + v\n        prev = v\n        i = i - 1\n    print(result)\n    return 0\n";
     assert_build_run("e0052a_e2e_04", src, &[], b"III\n", "3\n");
 }
 
@@ -244,7 +244,7 @@ fn e0052a_e2e_06_lc20_valid_parens_borrow_unbalanced_false() {
 // =====================================================================
 
 #[test]
-fn e0052a_e2e_07_synthetic_three_borrows_then_consume_print_int() {
+fn e0052a_e2e_07_synthetic_three_borrows_then_consume_print() {
     // Synthetic: three borrowed reads on the same Str + final owned
     // consume into a user-fn that takes ownership. Oracle: stdin
     // "abc\n" → "9\n" (3 + 3 + 3 from the three borrows; consume is
@@ -252,7 +252,7 @@ fn e0052a_e2e_07_synthetic_three_borrows_then_consume_print_int() {
     //
     // Verifies the Wave-1 transparency rule across a mix of borrowed
     // (Operand::Copy) and final owned (Operand::Move) reads.
-    let src = "fn consume(s: str) -> i64:\n    return str_len(s)\nfn main() -> i64:\n    let s = input(\"\")\n    let a = str_len(&s)\n    let b = str_len(&s)\n    let c = str_len(&s)\n    let _ = consume(s)\n    let total = (a + b) + c\n    print_int(total)\n    return 0\n";
+    let src = "fn consume(s: str) -> i64:\n    return str_len(s)\nfn main() -> i64:\n    let s = input(\"\")\n    let a = str_len(&s)\n    let b = str_len(&s)\n    let c = str_len(&s)\n    let _ = consume(s)\n    let total = (a + b) + c\n    print(total)\n    return 0\n";
     assert_build_run("e0052a_e2e_07", src, &[], b"abc\n", "9\n");
 }
 
@@ -266,6 +266,6 @@ fn e0052a_e2e_08_synthetic_let_rebind_with_loop() {
     //
     // Verifies the §4.4 let-rebind shortcut transports the borrow
     // through scope correctly under a loop body's iterative reads.
-    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let s = &s\n    let total: i64 = 0\n    let i: i64 = 0\n    while i < 3:\n        total = total + str_len(s)\n        i = i + 1\n    print_int(total)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let s = input(\"\")\n    let s = &s\n    let total: i64 = 0\n    let i: i64 = 0\n    while i < 3:\n        total = total + str_len(s)\n        i = i + 1\n    print(total)\n    return 0\n";
     assert_build_run("e0052a_e2e_08", src, &[], b"xyz\n", "9\n");
 }

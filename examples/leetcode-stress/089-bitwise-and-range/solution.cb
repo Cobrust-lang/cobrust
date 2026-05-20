@@ -13,5 +13,5 @@ fn main() -> i64:
         m = m >> 1
         n = n >> 1
         shift = shift + 1
-    print_int(m << shift)
+    print(m << shift)
     return 0

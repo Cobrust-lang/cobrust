@@ -8,7 +8,7 @@ fn main() -> i64:
     let n = parse_int(input(""))
     let line = input("")
     if n == 1:
-        print_int(0)
+        print(0)
         return 0
     let lo: i64 = 0
     let hi: i64 = n - 1
@@ -20,5 +20,5 @@ fn main() -> i64:
             lo = mid + 1
         else:
             hi = mid
-    print_int(lo)
+    print(lo)
     return 0

@@ -36,6 +36,6 @@ fn main() -> i64:
             list_set(q, qtail, r)
             qtail = qtail + 1
         if qhead == level_end:
-            print_int(list_get(val, last_in_level))
+            print(list_get(val, last_in_level))
             level_end = qtail
     return 0

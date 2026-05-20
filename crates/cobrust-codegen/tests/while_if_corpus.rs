@@ -282,7 +282,7 @@ fn test8_while_if_no_else() {
 #[test]
 fn test_fizzbuzz_short() {
     // FizzBuzz 1..=15 using while + if/elif/elif/else + modulo.
-    // Uses print_int for the plain-number case.
+    // Uses polymorphic print(n) for the plain-number case (ADR-0064).
     let src = write_temp(
         "fizzbuzz_short",
         "fn main() -> i64:\n\
@@ -295,7 +295,7 @@ fn test_fizzbuzz_short() {
          \x20\x20\x20\x20\x20\x20\x20\x20elif n % 5 == 0:\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print(\"Buzz\")\n\
          \x20\x20\x20\x20\x20\x20\x20\x20else:\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print_int(n)\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20\x20\x20\x20\x20n = n + 1\n\
          \x20\x20\x20\x20return 0\n",
     );

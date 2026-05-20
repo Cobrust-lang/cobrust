@@ -18,7 +18,7 @@ fn main() -> i64:
     i = 0
     while i < n:
         if i != remove_idx:
-            print_int(list_get(vals, i))
+            print(list_get(vals, i))
             printed = printed + 1
         i = i + 1
     if printed == 0:

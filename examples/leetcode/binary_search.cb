@@ -29,5 +29,5 @@ fn main() -> i64:
             lo = mid + 1
         else:
             hi = mid - 1
-    print_int(result)
+    print(result)
     return 0

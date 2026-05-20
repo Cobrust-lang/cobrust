@@ -37,7 +37,7 @@ Wave 3: 0055d — bidirectional checker (Tier-2; largest sub-sprint)
 ## Current status
 
 All Phase H ADRs (0055 + 0055a–0055e) are **proposed**.
-Implementation will be dispatched to the self-hosted runner (2×RTX 3090) after
+Implementation will be dispatched to the DG workstation (2×RTX 3090) after
 Wave 1 (0055e) is approved.
 
 ## Related ADRs

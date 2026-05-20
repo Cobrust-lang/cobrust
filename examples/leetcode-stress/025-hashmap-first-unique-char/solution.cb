@@ -21,8 +21,8 @@ fn main() -> i64:
     while k < n:
         let code2 = str_ord(str_at(&s, k)) - 97
         if list_get(freq, code2) == 1:
-            print_int(k)
+            print(k)
             return 0
         k = k + 1
-    print_int(-1)
+    print(-1)
     return 0

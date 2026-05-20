@@ -36,7 +36,7 @@ fn main() -> i64:
         else:
             j = j + 1
     if third == sentinel:
-        print_int(first)
+        print(first)
     else:
-        print_int(third)
+        print(third)
     return 0

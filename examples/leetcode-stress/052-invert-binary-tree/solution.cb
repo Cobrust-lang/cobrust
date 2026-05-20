@@ -31,7 +31,7 @@ fn main() -> i64:
     while qhead < qtail:
         let node = list_get(q, qhead)
         qhead = qhead + 1
-        print_int(list_get(val, node))
+        print(list_get(val, node))
         let l = list_get(lft, node)
         let r = list_get(rgt, node)
         if l != -1:

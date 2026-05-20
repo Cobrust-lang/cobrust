@@ -231,7 +231,7 @@ fn f3d01_dict_i64_i64_literal_index_read_print() {
     // Three-entry Dict[i64, i64], read d[2] → expect "20\n".
     assert_build_run(
         "f3d01_dict_index_read",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20, 3: 30}\n    print_int(d[2])\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20, 3: 30}\n    print(d[2])\n    return 0\n",
         &[],
         b"",
         "20\n",
@@ -244,7 +244,7 @@ fn f3d02_dict_i64_i64_first_key_index() {
     // Read the first inserted entry.
     assert_build_run(
         "f3d02_dict_first_index",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {7: 70, 8: 80}\n    print_int(d[7])\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {7: 70, 8: 80}\n    print(d[7])\n    return 0\n",
         &[],
         b"",
         "70\n",
@@ -258,7 +258,7 @@ fn f3d03_dict_i64_i64_last_key_index() {
     // Decision 6A: backing-store choice should not affect lookup.
     assert_build_run(
         "f3d03_dict_last_index",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 100, 2: 200, 3: 300, 4: 400}\n    print_int(d[4])\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 100, 2: 200, 3: 300, 4: 400}\n    print(d[4])\n    return 0\n",
         &[],
         b"",
         "400\n",
@@ -272,7 +272,7 @@ fn f3d04_dict_i64_i64_arith_two_reads() {
     // pointer (read twice without intervening drop).
     assert_build_run(
         "f3d04_dict_arith_reads",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20}\n    print_int((d[1] + d[2]))\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20}\n    print((d[1] + d[2]))\n    return 0\n",
         &[],
         b"",
         "30\n",
@@ -286,7 +286,7 @@ fn f3d05_dict_str_i64_literal_index_read_print() {
     // (`__cobrust_dict_get_str_i64`). Sub-sprint d's str-keyed shape.
     assert_build_run(
         "f3d05_dict_str_index",
-        "fn main() -> i64:\n    let d: Dict[str, i64] = {\"a\": 1, \"b\": 2, \"c\": 3}\n    print_int(d[\"b\"])\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[str, i64] = {\"a\": 1, \"b\": 2, \"c\": 3}\n    print(d[\"b\"])\n    return 0\n",
         &[],
         b"",
         "2\n",
@@ -308,7 +308,7 @@ fn f3d06_dict_insert_new_key_read() {
     // wires the `dict[k] = v` HIR Stmt::IndexAssign → intrinsic-rewrite.
     assert_build_run(
         "f3d06_dict_insert_read",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    d[2] = 20\n    print_int(d[2])\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    d[2] = 20\n    print(d[2])\n    return 0\n",
         &[],
         b"",
         "20\n",
@@ -323,7 +323,7 @@ fn f3d07_dict_rebind_existing_key() {
     // hashmap backing).
     assert_build_run(
         "f3d07_dict_rebind",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    d[1] = 99\n    print_int(d[1])\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    d[1] = 99\n    print(d[1])\n    return 0\n",
         &[],
         b"",
         "99\n",
@@ -339,7 +339,7 @@ fn f3d08_dict_len_returns_count() {
     // Pre-impl uses a free-fn stub or fails.
     assert_build_run(
         "f3d08_dict_len",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20, 3: 30}\n    print_int(len(d))\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20, 3: 30}\n    print(len(d))\n    return 0\n",
         &[],
         b"",
         "3\n",
@@ -353,7 +353,7 @@ fn f3d09_dict_empty_len_zero() {
     // `dict_len(empty) -> 0`.
     assert_build_run(
         "f3d09_dict_empty_len",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {}\n    print_int(len(d))\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {}\n    print(len(d))\n    return 0\n",
         &[],
         b"",
         "0\n",
@@ -372,7 +372,7 @@ fn f3d10_dict_is_empty_after_insert_returns_false() {
     // confirms the source path).
     assert_build_run(
         "f3d10_dict_is_empty",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    if dict_is_empty(d):\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    if dict_is_empty(d):\n        print(1)\n    else:\n        print(0)\n    return 0\n",
         &[],
         b"",
         "0\n",
@@ -407,7 +407,7 @@ fn f3d11_for_keys_in_dict_print_keys_insertion_order() {
     // `for k in d:` iterates keys in insertion order.
     assert_build_run(
         "f3d11_for_keys_order",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {3: 30, 1: 10, 2: 20}\n    for k in d:\n        print_int(k)\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {3: 30, 1: 10, 2: 20}\n    for k in d:\n        print(k)\n    return 0\n",
         &[],
         b"",
         "3\n1\n2\n",
@@ -420,7 +420,7 @@ fn f3d12_for_items_in_dict_print_values() {
     // `for k, v in d.items():` — destructure tuple at HIR `Stmt::For`.
     assert_build_run(
         "f3d12_for_items_values",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20, 3: 30}\n    for (k, v) in d.items():\n        print_int(v)\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20, 3: 30}\n    for (k, v) in d.items():\n        print(v)\n    return 0\n",
         &[],
         b"",
         "10\n20\n30\n",
@@ -434,7 +434,7 @@ fn f3d13_for_in_keys_explicit_method() {
     // as `for k in d:` (Decision 6A — keys mode is default).
     assert_build_run(
         "f3d13_for_keys_explicit",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {10: 1, 20: 2, 30: 3}\n    for k in d.keys():\n        print_int(k)\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {10: 1, 20: 2, 30: 3}\n    for k in d.keys():\n        print(k)\n    return 0\n",
         &[],
         b"",
         "10\n20\n30\n",
@@ -447,7 +447,7 @@ fn f3d14_for_in_values_explicit_method() {
     // `for v in d.values():` — iterates values in insertion order.
     assert_build_run(
         "f3d14_for_values_explicit",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 100, 2: 200, 3: 300}\n    for v in d.values():\n        print_int(v)\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 100, 2: 200, 3: 300}\n    for v in d.values():\n        print(v)\n    return 0\n",
         &[],
         b"",
         "100\n200\n300\n",
@@ -461,7 +461,7 @@ fn f3d15_for_items_str_keyed_dict_print_pair() {
     // shim + sub-sprint e's iter desugar.
     assert_build_run(
         "f3d15_for_items_str",
-        "fn main() -> i64:\n    let d: Dict[str, i64] = {\"a\": 1, \"b\": 2, \"c\": 3}\n    for (k, v) in d.items():\n        let _ = print(k)\n        print_int(v)\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[str, i64] = {\"a\": 1, \"b\": 2, \"c\": 3}\n    for (k, v) in d.items():\n        let _ = print(k)\n        print(v)\n    return 0\n",
         &[],
         b"",
         "a\n1\nb\n2\nc\n3\n",
@@ -485,7 +485,7 @@ fn f3d16_key_in_dict_present_returns_true() {
     // `if k in d: print 1 else print 0` — present case.
     assert_build_run(
         "f3d16_in_present",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20}\n    if (1 in d):\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20}\n    if (1 in d):\n        print(1)\n    else:\n        print(0)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -498,7 +498,7 @@ fn f3d17_key_in_dict_absent_returns_false() {
     // Absent case.
     assert_build_run(
         "f3d17_in_absent",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    if (99 in d):\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    if (99 in d):\n        print(1)\n    else:\n        print(0)\n    return 0\n",
         &[],
         b"",
         "0\n",
@@ -515,7 +515,7 @@ fn f3d18_key_not_in_dict_via_unary_not() {
     // `not (k in d)` as the canonical workaround).
     assert_build_run(
         "f3d18_not_in_via_unary",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    if not (99 in d):\n        print_int(1)\n    else:\n        print_int(0)\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    if not (99 in d):\n        print(1)\n    else:\n        print(0)\n    return 0\n",
         &[],
         b"",
         "1\n",
@@ -533,7 +533,7 @@ fn f3d19_dict_get_present_via_intrinsic() {
     // graduates to a match-on-Option form.
     assert_build_run(
         "f3d19_dict_get_present",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20}\n    print_int(d.get(1, 0))\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10, 2: 20}\n    print(d.get(1, 0))\n    return 0\n",
         &[],
         b"",
         "10\n",
@@ -547,7 +547,7 @@ fn f3d20_dict_get_absent_returns_default() {
     // safe-escape contract. Same scope-cap caveat as f3d19.
     assert_build_run(
         "f3d20_dict_get_absent",
-        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    print_int(d.get(99, -1))\n    return 0\n",
+        "fn main() -> i64:\n    let d: Dict[i64, i64] = {1: 10}\n    print(d.get(99, -1))\n    return 0\n",
         &[],
         b"",
         "-1\n",

@@ -25,5 +25,5 @@ fn main() -> i64:
         if window > best:
             best = window
         j = j + 1
-    print_int(best)
+    print(best)
     return 0

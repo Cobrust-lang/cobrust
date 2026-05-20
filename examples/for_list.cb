@@ -28,7 +28,7 @@ fn main() -> i64:
     let _2 = list_set(xs, 2, 30)
     let _3 = list_set(xs, 3, 40)
     for v in xs:
-        print_int(v)
+        print(v)
 
     # list[str] iteration via argv (ADR-0044 W2 Phase 2 path).
     let args: list[str] = argv()

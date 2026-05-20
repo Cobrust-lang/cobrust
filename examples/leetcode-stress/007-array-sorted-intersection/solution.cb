@@ -26,7 +26,7 @@ fn main() -> i64:
         let va = list_get(arr1, pi)
         let vb = list_get(arr2, pj)
         if va == vb:
-            print_int(va)
+            print(va)
             pi = pi + 1
             pj = pj + 1
         elif va < vb:

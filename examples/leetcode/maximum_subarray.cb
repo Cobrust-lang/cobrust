@@ -27,5 +27,5 @@ fn main() -> i64:
         if cur_sum > max_sum:
             max_sum = cur_sum
         i = i + 1
-    print_int(max_sum)
+    print(max_sum)
     return 0

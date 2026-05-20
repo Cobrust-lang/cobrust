@@ -26,6 +26,6 @@ fn main() -> i64:
         k = k - 1
     let m: i64 = 0
     while m < n:
-        print_int(list_get(left, m) * list_get(right, m))
+        print(list_get(left, m) * list_get(right, m))
         m = m + 1
     return 0

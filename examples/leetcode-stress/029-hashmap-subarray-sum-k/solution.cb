@@ -39,5 +39,5 @@ fn main() -> i64:
             list_set(ps_cnts, table_sz, 1)
             table_sz = table_sz + 1
         i = i + 1
-    print_int(ans)
+    print(ans)
     return 0

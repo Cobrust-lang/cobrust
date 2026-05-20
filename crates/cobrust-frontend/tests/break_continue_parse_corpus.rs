@@ -206,7 +206,7 @@ fn p03_break_inside_if_inside_while() {
 
 #[test]
 fn p04_continue_inside_if_else_inside_while() {
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        i = i + 1\n        if i == 5:\n            continue\n        else:\n            print_int(i)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        i = i + 1\n        if i == 5:\n            continue\n        else:\n            print(i)\n    return 0\n";
     assert_parses("p04", src);
     assert_eq!(count_break_continue(src), (0, 1));
 }
@@ -252,21 +252,21 @@ fn p09_continue_at_top_of_loop_body() {
 
 #[test]
 fn p10_break_with_post_loop_statements() {
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        if i == 5:\n            break\n        i = i + 1\n    print_int(i)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        if i == 5:\n            break\n        i = i + 1\n    print(i)\n    return 0\n";
     assert_parses("p10", src);
     assert_eq!(count_break_continue(src), (1, 0));
 }
 
 #[test]
 fn p11_break_inside_elif_chain() {
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 20:\n        i = i + 1\n        if i == 3:\n            print_int(i)\n        elif i == 7:\n            break\n        elif i == 11:\n            print_int(i)\n        else:\n            pass\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 20:\n        i = i + 1\n        if i == 3:\n            print(i)\n        elif i == 7:\n            break\n        elif i == 11:\n            print(i)\n        else:\n            pass\n    return 0\n";
     assert_parses("p11", src);
     assert_eq!(count_break_continue(src), (1, 0));
 }
 
 #[test]
 fn p12_continue_inside_elif_chain() {
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 20:\n        i = i + 1\n        if i == 3:\n            continue\n        elif i == 7:\n            print_int(i)\n        else:\n            pass\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 20:\n        i = i + 1\n        if i == 3:\n            continue\n        elif i == 7:\n            print(i)\n        else:\n            pass\n    return 0\n";
     assert_parses("p12", src);
     assert_eq!(count_break_continue(src), (0, 1));
 }
@@ -308,14 +308,14 @@ fn p17_multiple_continues_in_one_loop() {
 
 #[test]
 fn p18_break_with_while_else_clause() {
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 5:\n        if i == 3:\n            break\n        i = i + 1\n    else:\n        print_int(99)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 5:\n        if i == 3:\n            break\n        i = i + 1\n    else:\n        print(99)\n    return 0\n";
     assert_parses("p18", src);
     assert_eq!(count_break_continue(src), (1, 0));
 }
 
 #[test]
 fn p19_continue_with_while_else_clause() {
-    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 3:\n        i = i + 1\n        if i == 2:\n            continue\n    else:\n        print_int(99)\n    return 0\n";
+    let src = "fn main() -> i64:\n    let i: i64 = 0\n    while i < 3:\n        i = i + 1\n        if i == 2:\n            continue\n    else:\n        print(99)\n    return 0\n";
     assert_parses("p19", src);
     assert_eq!(count_break_continue(src), (0, 1));
 }
@@ -326,7 +326,7 @@ fn p20_break_then_unreachable_stmt() {
     // parser doesn't enforce that — it's a type-checker / MIR concern.
     // The parser must accept the shape.
     let src =
-        "fn main() -> i64:\n    while True:\n        break\n        print_int(0)\n    return 0\n";
+        "fn main() -> i64:\n    while True:\n        break\n        print(0)\n    return 0\n";
     assert_parses("p20", src);
     assert_eq!(count_break_continue(src), (1, 0));
 }
@@ -371,7 +371,7 @@ fn r04_round_trip_mixed_break_continue() {
 fn r05_round_trip_break_in_elif() {
     round_trip(
         "r05",
-        "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        i = i + 1\n        if i == 3:\n            print_int(i)\n        elif i == 5:\n            break\n        else:\n            pass\n    return 0\n",
+        "fn main() -> i64:\n    let i: i64 = 0\n    while i < 10:\n        i = i + 1\n        if i == 3:\n            print(i)\n        elif i == 5:\n            break\n        else:\n            pass\n    return 0\n",
     );
 }
 

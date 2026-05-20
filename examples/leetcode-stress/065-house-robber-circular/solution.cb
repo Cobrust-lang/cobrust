@@ -35,12 +35,12 @@ fn main() -> i64:
     let n = parse_int(input(""))
     let line = input("")
     if n == 1:
-        print_int(parse_int_tok(&line, 0))
+        print(parse_int_tok(&line, 0))
         return 0
     let a = rob_range(&line, 0, n - 1)
     let b = rob_range(&line, 1, n)
     if a > b:
-        print_int(a)
+        print(a)
     else:
-        print_int(b)
+        print(b)
     return 0
