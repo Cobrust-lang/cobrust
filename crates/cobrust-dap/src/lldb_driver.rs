@@ -471,6 +471,7 @@ fn parse_variables(stdout: &str) -> Vec<Variable> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
 mod tests {
     use super::*;
 

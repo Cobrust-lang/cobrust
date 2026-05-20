@@ -253,6 +253,7 @@ pub async fn handle_threads(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
 mod tests {
     use super::*;
     use crate::lldb_driver::LldbDriver;
