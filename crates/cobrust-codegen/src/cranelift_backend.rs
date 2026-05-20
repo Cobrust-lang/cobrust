@@ -2579,7 +2579,10 @@ fn runtime_helper_signatures(
     out.push(("__cobrust_println_int", sig(call_conv, &[i64], None)));
     // `print(b: bool)` — prints "True"/"False" + newline. ADR-0064 §3.3.
     // Booleans are I8 in Cranelift (see Constant::Bool branch in lower_constant).
-    out.push(("__cobrust_println_bool", sig(call_conv, &[ir::types::I8], None)));
+    out.push((
+        "__cobrust_println_bool",
+        sig(call_conv, &[ir::types::I8], None),
+    ));
     // `print(f: f64)` — prints float + newline. ADR-0064 §3.3.
     out.push(("__cobrust_println_float", sig(call_conv, &[f64], None)));
 

@@ -1267,8 +1267,7 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
         // When `print(x)` is called with a Place operand, we need to know
         // `x`'s resolved type to pick `__cobrust_println_int` vs
         // `__cobrust_println_str_buf` etc.
-        let mut local_ty: std::collections::HashMap<u32, Ty> =
-            std::collections::HashMap::new();
+        let mut local_ty: std::collections::HashMap<u32, Ty> = std::collections::HashMap::new();
         for decl in &body.locals {
             local_name.insert(decl.id.0, decl.name.clone());
             local_ty.insert(decl.id.0, decl.ty.clone());
@@ -1363,8 +1362,7 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                             args.push(bool_arg);
                         }
                         // Float path — Place or Constant::Float
-                        (Some(Ty::Float), _)
-                        | (None, Operand::Constant(Constant::Float(_))) => {
+                        (Some(Ty::Float), _) | (None, Operand::Constant(Constant::Float(_))) => {
                             let float_arg = args[0].clone();
                             *func = Operand::Constant(Constant::Str(
                                 PRINTLN_FLOAT_RUNTIME_SYMBOL.to_string(),

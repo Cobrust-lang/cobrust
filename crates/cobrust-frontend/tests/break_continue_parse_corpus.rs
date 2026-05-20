@@ -325,8 +325,7 @@ fn p20_break_then_unreachable_stmt() {
     // After `break`, anything else in the body is unreachable but the
     // parser doesn't enforce that — it's a type-checker / MIR concern.
     // The parser must accept the shape.
-    let src =
-        "fn main() -> i64:\n    while True:\n        break\n        print(0)\n    return 0\n";
+    let src = "fn main() -> i64:\n    while True:\n        break\n        print(0)\n    return 0\n";
     assert_parses("p20", src);
     assert_eq!(count_break_continue(src), (1, 0));
 }
