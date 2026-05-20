@@ -21,7 +21,10 @@
 #![allow(clippy::uninlined_format_args)]
 
 use cobrust_types::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarId};
-use cobrust_types_parity::{CanonicalKey, TyArena, manual_canonical_key};
+// `CanonicalKey` is referenced only in doc comments below; the runtime tests
+// drive `manual_canonical_key`, so the type itself is not imported to keep
+// `-D unused-imports` (build gate) clean.
+use cobrust_types_parity::{TyArena, manual_canonical_key};
 
 // =====================================================================
 // 1. Shape preservation: containers

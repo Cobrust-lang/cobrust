@@ -23,9 +23,10 @@
 #![allow(clippy::uninlined_format_args)]
 
 use cobrust_types::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarId};
-use cobrust_types_parity::{
-    CanonicalKey, Canonicalize, ParityError, TyArena, manual_canonical_key, parity_check,
-};
+// `CanonicalKey`, `Canonicalize`, and `manual_canonical_key` are documented as
+// part of the parity surface but the property corpus exercises only the
+// `parity_check` entry point; keep imports minimal to satisfy `-D warnings`.
+use cobrust_types_parity::{ParityError, TyArena, parity_check};
 
 // =====================================================================
 // Phase 1 — sanity: Rust-vs-Rust parity_check always Ok
