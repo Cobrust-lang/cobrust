@@ -5,9 +5,11 @@ parent_adr: 0059
 title: "Phase L wave-1 — lldb pretty-printers for 6 Cobrust types"
 status: accepted
 date: 2026-05-19
-last_verified_commit: 982b716
+last_verified_commit: 16e0a37
 ratified_at: c6e0099
 ratified_on: 2026-05-19
+wave2_resolved_at: 16e0a37
+wave2_resolved_on: 2026-05-20
 supersedes: []
 superseded_by: []
 relates_to: [adr:0059, adr:0058c, adr:0050c, adr:0050d]
@@ -341,6 +343,100 @@ total, of which 3 are pretty-printer-driven.
 Skip behaviour: when `lldb-18` is not on `$PATH` (Mac dev machines
 without `brew install llvm@18`), the 3 new tests skip cleanly per
 existing `find_lldb()` helper — mirroring ADR-0058c §3.5 behaviour.
+
+### 6.1 Phase L wave-2 honest-deferral closure (2026-05-20)
+
+Wave-1 ratified at `c6e0099` (2026-05-19) shipped 3 honest-deferrals
+documented in the wave-1 ratify commits `b6d536a` / `e57c5dd`. Wave-2
+sprint resolved at `16e0a37` closes each one as follows.
+
+#### §6.1 Runtime `frame variable s` rendering — HONEST-CITE
+
+**Wave-1 limitation**: object-level DIE presence check (`image lookup
+--type cobrust::Str`) verified, but NOT real runtime `frame variable
+s` showing actual string content at breakpoint.
+
+**Wave-2 closure**: a Python self-test (`tools/lldb-cobrust/tests/
+test_printers.py`, 12 tests) exercises the printer's StringBuffer
+byte-decode logic against synthetic byte arrays — including ASCII,
+UTF-8 multibyte (你好), invalid-UTF-8 replacement-char fallback, and
+embedded-quote escaping. The decode contract is verified.
+
+**Remaining honest-cite**: full runtime smoke (linked executable +
+runtime stdlib + breakpoint hit + `frame variable s`) requires the
+codegen smoke harness to produce executables (not just objects) AND
+to link in `cobrust-stdlib`. That extension is **wave-3 scope**
+(parked behind ADR-0059c `cobrust debug` CLI or an explicit
+"executable smoke harness" sub-ADR). Wave-2 ships the byte-decode
+correctness gate but DOES NOT ship the full breakpoint round-trip.
+
+#### §6.2 Dict iteration K:V walk — RESOLVED
+
+**Wave-1 limitation**: rendered `{<n entries>}` (count only) because
+indexmap's internal Vec<Bucket<K,V>> layout is unstable cross-version.
+
+**Wave-2 closure**: six new runtime exports in
+`crates/cobrust-stdlib/src/collections.rs`:
+
+- `__cobrust_dict_key_tag(dict) -> i64` (0=i64, 1=str, -1=null)
+- `__cobrust_dict_value_tag(dict) -> i64`
+- `__cobrust_dict_iter_key_i64_at(dict, i) -> i64`
+- `__cobrust_dict_iter_key_str_at(dict, i) -> *mut u8` (caller-owned)
+- `__cobrust_dict_iter_value_i64_at(dict, i) -> i64`
+- `__cobrust_dict_iter_value_str_at(dict, i) -> *mut u8`
+
+Each wraps `IndexMap::get_index(i)` which preserves insertion order
+per ADR-0050d Decision 6A. `cobrust_dict_summary` now walks the dict
+via lldb `EvaluateExpression` calling these accessors. When the
+process is dead OR the runtime stdlib isn't linked (object-level
+smoke), the printer falls back to the wave-1 `{<n entries>}`
+placeholder. 7 new unit tests in `cobrust-stdlib` cover the accessor
+surface; the printer fallback path is covered by 3 Python self-tests.
+
+#### §6.3 Option Adt DI naming — RESOLVED (generic Adt)
+
+**Wave-1 limitation**: OptionProvider Python class shipped as
+scaffolding only — no MIR Local carries the `cobrust::Option` name.
+
+**Wave-2 closure**: `populate_di_basic_types` adds a 6th named
+DIBasicType `cobrust::Adt`. `di_type_for` dispatches `Ty::Adt(_, _)`
+→ `Adt` → `cobrust::Adt` (previously collapsed to `Ptr`). The lldb
+printer registers `cobrust_option_summary` on `cobrust::Adt` so every
+Adt local renders at minimum as `None` (null ptr-tag) or
+`Some(<0xaddr>)` (non-null ptr-tag).
+
+**Remaining honest-cite**: per-Adt-variant `DICompositeType` (e.g.
+the actual `Option<Int>` variant set with proper discriminant +
+payload field DIs) is Phase L+ scope. It requires HIR/MIR to thread
+the per-Adt name + variant schema through `di_type_for`, plus two
+new runtime exports (`__cobrust_adt_discriminant` /
+`__cobrust_adt_variant_name`) the printer can dispatch on. Today
+every Adt collapses to the single `cobrust::Adt` matcher — sufficient
+for the wave-2 honest-deferral closure but not yet the full
+Python-`repr`-shaped Option rendering the wave-1 ADR contemplated.
+
+### 6.2 Wave-2 acceptance gate — 3 new + 7 baseline preserved + 12 Python self-tests
+
+`crates/cobrust-codegen/tests/dwarf_lldb_smoke.rs` extends with 3 NEW
+smoke tests:
+
+1. **`lldb_smoke_str_runtime_frame_variable_renders_content`** —
+   regression guard for the `cobrust::Str` DIE (§6.1 honest-cite).
+2. **`lldb_smoke_dict_iter_runtime_kv_walk_symbols_present`** —
+   regression guard for the `cobrust::Dict` DIE (§6.2 RESOLVED at
+   object level; runtime accessor unit-test gate is in cobrust-stdlib).
+3. **`lldb_smoke_adt_variable_renders_naming`** — new for §6.3
+   RESOLVED. Asserts `image lookup --type cobrust::Adt` returns a DIE
+   in the emitted DWARF.
+
+Wave-2 total: **3 new + 7 baseline preserved = 10 lldb smoke tests**
++ **12 Python self-tests** + **7 stdlib unit tests** for the dict
+iter accessors.
+
+Skip behaviour: same as wave-1 — when `lldb-18` is not on `$PATH`,
+the 10 lldb smoke tests skip cleanly per `find_lldb()` helper. The
+Python self-tests and stdlib unit tests have NO lldb dependency, so
+they run on every Mac/Linux CI host unconditionally.
 
 ## 7. Risk register
 
