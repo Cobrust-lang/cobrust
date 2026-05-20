@@ -124,12 +124,34 @@ Cascade addendum (honest re-scope):
 
 1. ~~**Tier 1** runtime-dispatch~~ — **SHIPPED 2026-05-19**.
 2. ~~**Tier 2** `--target-cpu` CLI flag~~ — **SHIPPED f900910** (merge SHA: 4e862bb).
-3. **Tier 3** multi-wheel prebuilt distribution
-   (release.yml matrix extension ~50 LOC YAML + new package-tool ADR).
+3. ~~**Tier 3** multi-wheel prebuilt distribution
+   (release.yml matrix extension ~50 LOC YAML + new package-tool ADR).~~
+   **PROPOSED via ADR-0065** — see `docs/agent/adr/0065-tier-3-prebuilt-multi-wheel-distribution.md`.
 4. **GPU Path A** `cobrust.gpu` stdlib module wrapping cuBLAS / Metal / ROCm
    (new ADR; low-risk; covers most user demand).
 5. **GPU Path B** Cobrust → NVPTX / SPIR-V direct codegen
    (last; blocked on ADR-0028 device-memory ownership extension; Phase K+ at earliest).
+
+---
+
+## Tier 3 status: PROPOSED via ADR-0065
+
+ADR-0065 (`docs/agent/adr/0065-tier-3-prebuilt-multi-wheel-distribution.md`)
+authors the full Tier 3 spec. Key decisions:
+
+- **Wheel matrix**: 4 tier-1 triples × 2-3 CPU levels = 7+ variants per release
+  (`-gnu-v1`, `-gnu-v3`, `-gnu-v4`, `-musl-v1`, `-musl-v3`, `-linux-neon`,
+  `-linux-sve`[experimental], `-darwin-m1`, `-darwin-m2`).
+- **`cobrust install <pkg>`**: auto-detects host CPU via `/proc/cpuinfo` /
+  `sysctl -a`; selects best matching wheel; SHA-256 verifies before disk write;
+  falls back to `v1` / `neon` / `m1` baseline on detection failure.
+- **Registry shape**: static JSON index over GitHub Releases + CDN mirror
+  (mirrors PyPI Simple API; no dynamic server required).
+- **Phase O waves**: wave-1 release.yml ~30 LOC YAML; wave-2 `cobrust install`
+  ~600 LOC; wave-3 registry crate + CDN ~350 LOC; wave-4 ABI hardening + smoke.
+
+Acceptance gate: ≥ 5 wheel variants per tagged release; `cobrust install`
+smoke across 3 CPU classes; SHA mismatch → hard error; ABI mismatch → hard error.
 
 ---
 
