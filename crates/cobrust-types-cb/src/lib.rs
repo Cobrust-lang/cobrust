@@ -1435,8 +1435,10 @@ fn _doc_anchor_record(_r: &RustRecord) {}
 // =====================================================================
 
 pub mod error_cb;
+pub mod fix_safety_cb;
 
 // Re-export mirrors: names preserved per ADR-0055b §4 re-export contract.
 // Tier-2 (0055c infer.rs, 0055d check.rs) imports `use cobrust_types_cb::{TypeError, ...}`
 // with the same shape as Rust `lib.rs`.
 pub use error_cb::TypeErrorCb as TypeError;
+pub use fix_safety_cb::{FixSafetyCb, SuggestionCb, type_error_cb_fix_safety};
