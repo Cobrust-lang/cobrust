@@ -37,6 +37,7 @@
 //! Reference: `docs/agent/adr/0058d-jit-aot-lowering-convergence.md`.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 
 use cobrust_mir::{
     BinOp, BlockId, Body, Constant, LocalId, Operand, Place, Rvalue, Statement, StatementKind,
@@ -186,9 +187,9 @@ pub fn lower_constant(
 /// Returns [`CodegenError::InvalidMir`] if the place carries any
 /// projection, or [`CodegenError::Internal`] if the local is not
 /// in the var_map.
-pub fn lower_place(
+pub fn lower_place<S: BuildHasher>(
     builder: &mut FunctionBuilder<'_>,
-    var_map: &HashMap<LocalId, Variable>,
+    var_map: &HashMap<LocalId, Variable, S>,
     place: &Place,
     block_id: BlockId,
 ) -> Result<ir::Value, CodegenError> {
@@ -211,9 +212,9 @@ pub fn lower_place(
 /// # Errors
 ///
 /// Propagates from [`lower_place`] / [`lower_constant`].
-pub fn lower_operand(
+pub fn lower_operand<S: BuildHasher>(
     builder: &mut FunctionBuilder<'_>,
-    var_map: &HashMap<LocalId, Variable>,
+    var_map: &HashMap<LocalId, Variable, S>,
     op: &Operand,
     block_id: BlockId,
 ) -> Result<ir::Value, CodegenError> {
@@ -234,9 +235,9 @@ pub fn lower_operand(
 ///
 /// Returns [`CodegenError::InvalidMir`] for non-wave-1 rvalue
 /// shapes.
-pub fn lower_rvalue_wave1(
+pub fn lower_rvalue_wave1<S: BuildHasher>(
     builder: &mut FunctionBuilder<'_>,
-    var_map: &HashMap<LocalId, Variable>,
+    var_map: &HashMap<LocalId, Variable, S>,
     rvalue: &Rvalue,
     block_id: BlockId,
 ) -> Result<ir::Value, CodegenError> {
@@ -294,9 +295,9 @@ fn rvalue_kind(r: &Rvalue) -> &'static str {
 ///
 /// Returns [`CodegenError::InvalidMir`] if the statement is
 /// `Assign` with a projected place, or if the rvalue is non-wave-1.
-pub fn lower_statement_wave1(
+pub fn lower_statement_wave1<S: BuildHasher>(
     builder: &mut FunctionBuilder<'_>,
-    var_map: &HashMap<LocalId, Variable>,
+    var_map: &HashMap<LocalId, Variable, S>,
     stmt: &Statement,
     block_id: BlockId,
 ) -> Result<(), CodegenError> {
@@ -332,14 +333,18 @@ pub fn lower_statement_wave1(
 ///
 /// Returns [`CodegenError::InvalidMir`] for non-wave-1 terminators
 /// or invalid Goto target.
-pub fn lower_terminator_wave1(
+pub fn lower_terminator_wave1<S1, S2>(
     builder: &mut FunctionBuilder<'_>,
-    var_map: &HashMap<LocalId, Variable>,
-    block_map: &HashMap<BlockId, ir::Block>,
+    var_map: &HashMap<LocalId, Variable, S1>,
+    block_map: &HashMap<BlockId, ir::Block, S2>,
     term: &Terminator,
     block_id: BlockId,
     return_local: LocalId,
-) -> Result<(), CodegenError> {
+) -> Result<(), CodegenError>
+where
+    S1: BuildHasher,
+    S2: BuildHasher,
+{
     match term {
         Terminator::Return => {
             let var = var_map.get(&return_local).ok_or_else(|| {
