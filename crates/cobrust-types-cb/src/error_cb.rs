@@ -278,8 +278,7 @@ pub enum TypeErrorCb {
 /// # Anchor
 /// `error_cb.rs::type_error_cb_from_rust`
 pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErrorCb {
-    let opt_string =
-        |s: Option<&'static str>| s.map(std::string::ToString::to_string);
+    let opt_string = |s: Option<&'static str>| s.map(std::string::ToString::to_string);
     match rust {
         TypeError::BreakOutsideLoop { span, suggestion } => TypeErrorCb::BreakOutsideLoop {
             span: *span,
