@@ -10,7 +10,7 @@
 //! 2. Recursive single-level       — `Tuple`, `List`, `Set`, `Dict`, `Ref`      (5)
 //! 3. Nested-recursive             — `List<List>`, `Dict<Str,List>`, etc.        (5)
 //! 4. Corner-cases                 — 1-tuple, empty-tuple, Ref-Ref cycle-reject,
-//!                                   Display byte-parity, arena-lookup            (5)
+//!    Display byte-parity, arena-lookup            (5)
 //!
 //! Each test builds the Rust `Ty`, converts via the stub, then calls
 //! `parity_check(&rust_ty_canon, &cb_ty_canon)` asserting `Ok(())`.
@@ -19,10 +19,11 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::todo)]
 #![allow(clippy::ignored_unit_patterns)]
+#![allow(clippy::cast_possible_wrap)]
 
-use cobrust_types::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarId};
-use cobrust_types_cb::{TyArena, TyEntry, canonicalize_arena_root, ty_cb_arena_from_rust};
-use cobrust_types_parity::{Canonicalize, TyArena as ParityArena, parity_check};
+use cobrust_types::{AdtId, AliasId, Ty};
+use cobrust_types_cb::{TyEntry, canonicalize_arena_root, ty_cb_arena_from_rust};
+use cobrust_types_parity::{Canonicalize, TyArena as ParityArena};
 
 // =====================================================================
 // Helper: build cb-form from Rust Ty + run parity_check

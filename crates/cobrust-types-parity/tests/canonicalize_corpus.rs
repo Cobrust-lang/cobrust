@@ -19,6 +19,10 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::items_after_statements)]
 #![allow(clippy::uninlined_format_args)]
+// Test scaffolds deliberately use parallel `_a` / `_b` arena handles to make
+// the parity assertions readable; clippy's `similar_names` heuristic flags the
+// suffix differences but the test corpus loses clarity if renamed.
+#![allow(clippy::similar_names)]
 
 use cobrust_types::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarId};
 // `CanonicalKey` is referenced only in doc comments below; the runtime tests

@@ -19,6 +19,12 @@
 
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::todo)]
+// Each enum-variant arm forwards `suggestion.as_deref()` identically by design:
+// the trait wants an exhaustive variant→suggestion projector and folding arms
+// would lose the exhaustiveness check (ADR-0055b §4 invariant 1 — mirror).
+#![allow(clippy::match_same_arms)]
+#![allow(clippy::doc_lazy_continuation)]
+#![allow(clippy::doc_overindented_list_items)]
 
 use cobrust_frontend::span::{FileId, Span};
 use cobrust_types::TypeError;

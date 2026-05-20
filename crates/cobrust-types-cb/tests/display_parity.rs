@@ -25,7 +25,7 @@
 #![allow(clippy::ignored_unit_patterns)]
 
 use cobrust_types::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarId};
-use cobrust_types_cb::{FnTyArena, RecordArena, TyArena, display_ty, ty_cb_arena_from_rust};
+use cobrust_types_cb::{FnTyArena, RecordArena, display_ty, ty_cb_arena_from_rust};
 
 // =====================================================================
 // Helper
