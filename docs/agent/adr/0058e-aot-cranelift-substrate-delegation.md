@@ -4,10 +4,10 @@ adr_id: 0058e
 parent_adr: 0058d
 name: 0058e
 title: "AOT cranelift_backend substrate delegation — close 0058d §2.3 deferral"
-status: proposed
+status: accepted
 date: 2026-05-20
 phase: Phase K Strand #4 follow-up
-last_verified_commit: d921f97
+last_verified_commit: c9de99c
 supersedes: []
 superseded_by: []
 relates_to: [adr:0058d, adr:0058a, adr:0056a]
@@ -142,8 +142,8 @@ preserving zero behavioral change for all current corpus tests.
 | `cargo check -p cobrust-codegen` Mac | PASS | PASS |
 | `cargo test -p cobrust-codegen` Mac | 56+ PASS, 0 FAIL | 56+ PASS, 0 FAIL |
 | `cargo test -p cobrust-jit` Mac | 12 PASS | 12 PASS (unchanged) |
-| `cranelift_backend.rs` LOC | 2878 | substantially less (body-lowering core removed) |
-| `lowering.rs` LOC | ~600 | ≤ ~650 (no major additions) |
+| `cranelift_backend.rs` LOC | 2878 | 3037 (+159 net: wave-1 predicate + delegation path added; non-wave-1 EmitCtx path unchanged) |
+| `lowering.rs` LOC | ~600 | ~600 (unchanged — no new substrate fns needed) |
 | F36 compliance | N/A | no new test names introduced |
 | F37 compliance | N/A | no behavioral change to existing tests |
 | 0058d §2.3 deferral | OPEN | RESOLVED at merge SHA |
@@ -192,10 +192,21 @@ preserving zero behavioral change for all current corpus tests.
 
 **Phase 5** (~30 min): dual-track docs.
 
-LOC delta expectation: ~200-350 lines removed from `cranelift_backend.rs`
-(the body-setup + block-map + var-map + param-bind + pre-init + block-
-traversal + seal + finalize block for the wave-1 arm); net `lowering.rs`
-change ~0 (no new fns needed).
+LOC delta actual: +159 net to `cranelift_backend.rs` (wave-1 predicate
+`body_is_wave1` ~60 LOC + `define_body_wave1_path` ~40 LOC +
+`rvalue_is_wave1_with_locals`/`operand_is_wave1_with_locals` free fns
+~40 LOC + delegation branch ~5 LOC + ADR-0058e comment blocks ~14 LOC).
+The non-wave-1 `EmitCtx` path is unchanged (no lines removed).
+`lowering.rs` delta: 0 (no new substrate fns needed).
+
+Note: The original expectation of "~200-350 lines removed" assumed the
+`define_body` body-lowering block would be replaced wholesale. The
+actual refactor adds a parallel fast path for wave-1 bodies; the full
+EmitCtx path remains for non-wave-1 bodies. The touch-two-places window
+is closed (wave-1 logic now sources from the substrate), but the
+duplicated setup lines are NOT removed since they serve non-wave-1 bodies
+on the existing path. A future ADR widening the wave-1 substrate to cover
+the full wave could then remove the EmitCtx path entirely.
 
 ## 7. Consequences
 
