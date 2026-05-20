@@ -47,7 +47,7 @@ pub fn run(quiet: bool) -> u8 {
     let mut failed: u32 = 0;
 
     for f in &cb_files {
-        let artifact = match build::build(f, None, EmitKind::Executable, false, None, true, None) {
+        let artifact = match build::build(f, None, EmitKind::Executable, false, None, true, None, None) {
             Ok(a) => a,
             Err(e) => {
                 if !quiet {

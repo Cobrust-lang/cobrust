@@ -63,6 +63,24 @@ pub struct TargetSpec {
     ///
     /// Cranelift backend ignores this field.
     pub runtime_dispatch: bool,
+    /// Tier 2 host-specific CPU tuning
+    /// (numerical-compute-hardware-tiering.md §Tier 2).
+    ///
+    /// When `Some("native")`, LLVM auto-detects the host CPU and enables
+    /// all available instruction-set extensions (no dispatch overhead;
+    /// binary is host-only). When `Some(<name>)`, the named CPU string
+    /// (e.g. `"skylake"`, `"apple-m1"`, `"neoverse-v1"`) is passed
+    /// directly to `TargetMachine::create_target_machine`. When `None`
+    /// (default), LLVM targets the `"generic"` baseline — same as
+    /// current behaviour prior to Tier 2.
+    ///
+    /// Compatible with Tier 1 `runtime_dispatch`:
+    /// - `None` + `runtime_dispatch=true`  → Tier 1 only (default `--release`).
+    /// - `Some("native")` + `runtime_dispatch=false` → Tier 2 only.
+    /// - `Some("native")` + `runtime_dispatch=true`  → both layers active.
+    ///
+    /// Cranelift backend ignores this field.
+    pub target_cpu: Option<String>,
 }
 
 impl TargetSpec {
@@ -81,6 +99,7 @@ impl TargetSpec {
             module_name: module_name.into(),
             source_path: None,
             runtime_dispatch: false,
+            target_cpu: None,
         }
     }
 
@@ -97,6 +116,7 @@ impl TargetSpec {
             module_name: module_name.into(),
             source_path: None,
             runtime_dispatch: true,
+            target_cpu: None,
         }
     }
 
@@ -112,6 +132,7 @@ impl TargetSpec {
             module_name: module_name.into(),
             source_path: None,
             runtime_dispatch: false,
+            target_cpu: None,
         }
     }
 }

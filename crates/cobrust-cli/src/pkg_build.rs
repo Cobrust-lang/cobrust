@@ -154,6 +154,7 @@ pub fn run_build(
         target,
         quiet,
         None, // enable_runtime_dispatch: use default (true on --release)
+        None, // target_cpu: generic baseline
     ) {
         Ok(_) => exit_codes::SUCCESS,
         Err(e) => {
@@ -252,6 +253,7 @@ pub fn run_test(file_or_dir: Option<&Path>, release: bool, quiet: bool) -> u8 {
             None,
             true,
             None, // enable_runtime_dispatch: use default
+            None, // target_cpu: generic baseline
         );
         match result {
             Ok(_) => {}
