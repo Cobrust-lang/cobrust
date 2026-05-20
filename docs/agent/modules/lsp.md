@@ -134,10 +134,44 @@ codepoints (e.g. 🦀 → 2 UTF-16 surrogates).
   end-to-end. Phase I × J handoff (ADR-0056b §3.3 + §6) is wired in
   ADR-0057a wave-2.
 
+## CodeAction gating by FixSafety tier (ADR-0062)
+
+The `code_action` module (anchor: `crates/cobrust-lsp/src/code_action.rs`)
+maps a diagnostic's `FixSafety` tier to the LSP `CodeActionKind` the
+client should expose. Defined per ADR-0062 §3.5 gating matrix:
+
+| Tier | CodeActionKind | Auto-apply behaviour |
+|---|---|---|
+| `FormatOnly` | `SOURCE_FIX_ALL` | Applied on save / format pass |
+| `BehaviorPreserving` | `QUICKFIX` | Apply on user accept |
+| `LocalEdit` | `QUICKFIX` | Apply on user accept |
+| `ApiChanging` | `REFACTOR` | Suggest only, no quick apply |
+| `TargetChanging` | `None` | Diagnostic-only, no code action |
+| `RequiresHumanReview` | `None` | Diagnostic-only, no code action |
+
+### Convenience helpers
+
+- `code_action_kind_for_type_error(&TypeError) -> Option<CodeActionKind>`
+- `code_action_kind_for_mir_error(&MirError) -> Option<CodeActionKind>`
+- `code_action_kind_for_lowering_error(&LoweringError) -> Option<CodeActionKind>`
+- `code_action_kind_for_fix_safety(FixSafety) -> Option<CodeActionKind>` (raw)
+- `fix_safety_from_code(u8) -> FixSafety` — widens the opaque `u8` tier
+  code emitted by `cobrust-mir` / `cobrust-hir` (which don't depend on
+  `cobrust-types`) into the public `FixSafety` enum at this LSP-adapter
+  boundary.
+
+### Wire-form contract
+
+The kebab-case Display impl on `FixSafety` is the JSON wire form per
+ADR-0062 §1.2 Zero-language precedent. When `--emit-json` diagnostic
+output ships, the field name is `"fix_safety": "behavior-preserving"`.
+
 ## See also
 
 - ADR-0057 — Phase J frame.
 - ADR-0057a — this wave-1 spec.
 - ADR-0052b — `suggestion` field shape (`Option<&'static str>`).
 - ADR-0056b — Phase I × J handoff (`TypeCheckCtx` Clone + Send).
+- ADR-0062 — FixSafety ladder (CodeAction gating + JSON wire field).
 - `docs/human/{zh,en}/editor-setup.md` — user-facing setup guide.
+- `docs/human/{zh,en}/error-reference.md` — six-tier fix-safety table.

@@ -74,7 +74,7 @@ pub mod tree;
 
 pub use borrow::borrow_check;
 pub use drop::compute_drop_schedule;
-pub use error::MirError;
+pub use error::{MirError, mir_error_fix_safety_code, mir_error_suggestion_text};
 pub use lower::lower;
 pub use tree::{
     AggregateKind, AssertKind, BasicBlock, BinOp, BlockId, Body, BorrowKind, CastKind, Constant,

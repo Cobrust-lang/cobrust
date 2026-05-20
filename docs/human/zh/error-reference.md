@@ -315,3 +315,33 @@ LLM 友好的。
 
 未来对 `cobrust_frontend::{LexError, ParseError}` 的 Direction-B
 扩展已经被跟踪，但不在 Wave-2 范围内。
+
+## 修复安全梯度（ADR-0062）
+
+每条建议都额外携带一个 `fix_safety` 等级，LSP 代码动作层和 JSON
+诊断输出据此判断该建议是否可以自动应用。从风险最低（总是可以自动
+应用）到风险最高（永不自动应用）共六个等级：
+
+| 等级 | 序列化形式 | 自动应用行为 |
+|---|---|---|
+| FormatOnly | `format-only` | 保存 / 格式化时自动应用 |
+| BehaviorPreserving | `behavior-preserving` | 用户接受后应用 |
+| LocalEdit | `local-edit` | 用户接受后应用（可能需要修改相邻测试） |
+| ApiChanging | `api-changing` | 仅建议——无一键应用 |
+| TargetChanging | `target-changing` | 仅诊断——绝不自动应用 |
+| RequiresHumanReview | `requires-human-review` | 仅诊断——需人工审查 |
+
+### 各等级触发场景
+
+- **BehaviorPreserving**：`if x:` → `if x != 0:`；可变默认值 → `None`-默认值重写；f64 字典键 → `.to_bits() as i64`。编译器强制的语义等价重写。
+- **LocalEdit**：拼写修复（`UnknownName`）、arity / 关键字不匹配、类型注解添加（`AmbiguousType`）、`break`/`continue`/`return` 位置。调用点或单绑定范围内的修复。
+- **RequiresHumanReview**：`OccursCheck`（递归类型）、`UseOfDroppedFeature`（改用不同构造）、`DictSpreadNotSupported`（等待 Phase G）、`MirError::EscapingBorrow` / `DoubleDrop`（生命周期重构）。
+
+### LSP 代码动作分级
+
+当连接到 Cobrust LSP 服务器（`cobrust-lsp` 二进制）时，编辑器的
+「快速修复」菜单只为 `FormatOnly` / `BehaviorPreserving` /
+`LocalEdit` 三个等级显示代码动作。`ApiChanging` 建议会作为
+`Refactor` 出现（仅建议）。`TargetChanging` /
+`RequiresHumanReview` 建议会出现在诊断消息中，但不生成代码动作——
+代理必须自行推理修复方案。

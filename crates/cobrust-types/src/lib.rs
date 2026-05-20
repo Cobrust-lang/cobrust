@@ -52,10 +52,12 @@
 
 pub mod check;
 pub mod error;
+pub mod fix_safety;
 pub mod infer;
 pub mod ty;
 
 pub use check::{TypeCheckCtx, TypedModule, check, check_incremental};
 pub use error::TypeError;
+pub use fix_safety::{FixSafety, Suggestion, type_error_fix_safety, type_error_suggestion_text};
 pub use infer::{Subst, finalize, unify};
 pub use ty::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarAllocator, VarId};

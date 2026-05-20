@@ -51,7 +51,7 @@ pub mod scope;
 pub mod tree;
 
 pub use cobrust_frontend::span::{FileId, Span};
-pub use error::LoweringError;
+pub use error::{LoweringError, lowering_error_fix_safety_code, lowering_error_suggestion_text};
 pub use lower::{Session, lower};
 pub use scope::{DefId, DefKind, ResolvedName};
 pub use tree::{

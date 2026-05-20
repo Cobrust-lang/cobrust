@@ -138,3 +138,60 @@ pub fn use_after_move(local: LocalId, span: Span) -> MirError {
         ),
     }
 }
+
+/// Extract the construction-time `suggestion: Option<&'static str>`
+/// payload from a `MirError`. ADR-0062 §3.4 mirror of
+/// `type_error_suggestion_text` for the MIR taxonomy.
+#[must_use]
+pub fn mir_error_suggestion_text(err: &MirError) -> Option<&'static str> {
+    use MirError::*;
+    match err {
+        UseAfterMove { suggestion, .. }
+        | UseAfterDrop { suggestion, .. }
+        | ConflictingMutBorrow { suggestion, .. }
+        | SharedMutOverlap { suggestion, .. }
+        | EscapingBorrow { suggestion, .. }
+        | DropMissing { suggestion, .. }
+        | DoubleDrop { suggestion, .. }
+        | FieldOutOfBounds { suggestion, .. }
+        | UnresolvedDefId { suggestion, .. }
+        | NonExhaustiveSwitch { suggestion, .. } => *suggestion,
+        Internal(_) => None,
+    }
+}
+
+/// Look up the fix-safety tier code for a `MirError` variant per
+/// ADR-0062 §3.4 mapping.
+///
+/// Returns an opaque `u8` (FormatOnly=0 .. RequiresHumanReview=5) so
+/// `cobrust-mir` does not depend on `cobrust-types`. The LSP adapter
+/// (`crates/cobrust-lsp/src/diagnostic.rs`) widens this byte into the
+/// `FixSafety` enum at the consumer boundary.
+///
+/// Conservative tagging: borrow / drop fixes that reshape lifetime
+/// graphs default to `RequiresHumanReview` (5); trivially-local
+/// substitutions (e.g. `&s`-borrow swap) are `LocalEdit` (2).
+#[must_use]
+pub fn mir_error_fix_safety_code(err: &MirError) -> u8 {
+    use MirError::*;
+    match err {
+        // `&s` borrow substitution — confined to one expression site.
+        UseAfterMove { .. } => 2,
+        // Reorder reads before drops — local but multi-statement.
+        UseAfterDrop { .. } => 2,
+        // Release the first borrow — usually a scope rewrite.
+        ConflictingMutBorrow { .. } => 2,
+        // Release shared borrow before taking mutable.
+        SharedMutOverlap { .. } => 2,
+        // Borrow outlives owner — lifetime restructuring.
+        EscapingBorrow { .. } => 5,
+        // Add `drop(<local>)` or transfer ownership.
+        DropMissing { .. } => 2,
+        // Control-flow surgery to reach a single drop.
+        DoubleDrop { .. } => 5,
+        // Compiler-internal (defense-in-depth — should never user-facing).
+        FieldOutOfBounds { .. } | UnresolvedDefId { .. } | Internal(_) => 5,
+        // Add wildcard / cover all cases.
+        NonExhaustiveSwitch { .. } => 2,
+    }
+}

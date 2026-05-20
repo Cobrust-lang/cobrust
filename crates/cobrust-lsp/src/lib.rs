@@ -38,9 +38,14 @@ use tower_lsp::lsp_types::{
     ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 
+pub mod code_action;
 pub mod diagnostic;
 pub mod span_convert;
 
+pub use code_action::{
+    code_action_kind_for_fix_safety, code_action_kind_for_lowering_error,
+    code_action_kind_for_mir_error, code_action_kind_for_type_error, fix_safety_from_code,
+};
 pub use diagnostic::{
     lowering_error_to_diagnostic, mir_error_to_diagnostic, type_error_to_diagnostics,
 };

@@ -77,3 +77,47 @@ pub enum LoweringError {
         suggestion: Option<&'static str>,
     },
 }
+
+/// Extract the construction-time `suggestion: Option<&'static str>`
+/// payload from a `LoweringError`. ADR-0062 §3.4 mirror of
+/// `type_error_suggestion_text` for the HIR-lower taxonomy.
+#[must_use]
+pub fn lowering_error_suggestion_text(err: &LoweringError) -> Option<&'static str> {
+    use LoweringError::*;
+    match err {
+        UnknownName { suggestion, .. }
+        | DroppedFeature { suggestion, .. }
+        | MutableDefault { suggestion, .. }
+        | OrPatternBindingMismatch { suggestion, .. }
+        | DuplicateBinding { suggestion, .. }
+        | AssignToUnknown { suggestion, .. } => *suggestion,
+    }
+}
+
+/// Look up the fix-safety tier code for a `LoweringError` variant per
+/// ADR-0062 §3.4 mapping. Returns an opaque `u8` (FormatOnly=0 ..
+/// RequiresHumanReview=5) so `cobrust-hir` does not depend on
+/// `cobrust-types`. The LSP adapter widens the byte into `FixSafety`
+/// at the consumer boundary.
+///
+/// ADR-0062 §3.4: lowering errors are mostly `LocalEdit` (typo /
+/// declaration fix) or `RequiresHumanReview` (dropped feature, or-pattern
+/// shape mismatch).
+#[must_use]
+pub fn lowering_error_fix_safety_code(err: &LoweringError) -> u8 {
+    use LoweringError::*;
+    match err {
+        // Typo / declaration fix — call-site only.
+        UnknownName { .. } => 2,
+        // Dropped feature — must rewrite to a supported construct.
+        DroppedFeature { .. } => 5,
+        // `None`-default rewrite is compiler-mandated (semantically equivalent).
+        MutableDefault { .. } => 1,
+        // Or-pattern binding shape — usually requires re-design.
+        OrPatternBindingMismatch { .. } => 5,
+        // Rename one of the duplicate bindings — local edit.
+        DuplicateBinding { .. } => 2,
+        // Add `let <name> = …` declaration first — local edit.
+        AssignToUnknown { .. } => 2,
+    }
+}
