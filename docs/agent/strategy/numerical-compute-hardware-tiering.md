@@ -107,11 +107,23 @@ Cascade addendum (honest re-scope):
   Opt-out: `--enable-runtime-dispatch=false`.
 - SVE multi-versioning (aarch64) deferred — see §NEON/SVE above.
 
+## Tier 2 status: SHIPPED f900910
+
+`--target-cpu=native` CLI flag landed on main via feature/tier2-target-cpu. Delivered:
+
+- `TargetSpec::target_cpu: Option<String>` (default `None` = generic baseline).
+- `--target-cpu <CPU>` CLI flag on `cobrust build`; accepted values: `"native"`,
+  any LLVM CPU name (`"skylake"`, `"apple-m1"`, `"neoverse-v1"`, …).
+- `build_target_machine` reads `spec.target_cpu` instead of hardcoded `"generic"`.
+- Tier 1 and Tier 2 are mutually compatible: `--target-cpu=native --enable-runtime-dispatch=true`
+  activates both layers simultaneously.
+- 3 LLVM-gated smoke tests in `tests/tier2_target_cpu_smoke.rs`; 0/pass on Mac
+  (LLVM not installed); Tier 1 smoke tests: zero regression (3/3 pass).
+
 ## Recommended landing order (updated)
 
 1. ~~**Tier 1** runtime-dispatch~~ — **SHIPPED 2026-05-19**.
-2. **Tier 2** `--target-cpu` CLI flag for advanced users
-   (~20 LOC; trivial on top of ADR-0058b).
+2. ~~**Tier 2** `--target-cpu` CLI flag~~ — **SHIPPED f900910** (merge SHA: TBD).
 3. **Tier 3** multi-wheel prebuilt distribution
    (release.yml matrix extension ~50 LOC YAML + new package-tool ADR).
 4. **GPU Path A** `cobrust.gpu` stdlib module wrapping cuBLAS / Metal / ROCm
