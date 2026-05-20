@@ -2327,7 +2327,6 @@ fn w0052a_06_lc20_nested_str_eq_borrow() {
 }
 
 #[test]
-#[ignore = "ADR-0052a §4.4 let-rebind shortcut not yet wired through type check. Pre-existing red on main HEAD as of 2026-05-20."]
 fn w0052a_07_let_rebind_shortcut_basic() {
     // ADR-0052a §4.4 let-rebind shortcut. `let s = &s` creates a borrow
     // that shadows the outer binding for the new scope.
@@ -2338,7 +2337,6 @@ fn w0052a_07_let_rebind_shortcut_basic() {
 }
 
 #[test]
-#[ignore = "ADR-0052a §4.4 let-rebind shortcut not yet wired through type check. Pre-existing red on main HEAD as of 2026-05-20."]
 fn w0052a_08_let_rebind_then_multi_read() {
     // Let-rebind followed by multiple reads via the rebound (borrowed)
     // binding; works because the rebound `s` is `&Str`.

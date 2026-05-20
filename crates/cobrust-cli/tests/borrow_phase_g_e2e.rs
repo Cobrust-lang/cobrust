@@ -257,7 +257,6 @@ fn e0052a_e2e_07_synthetic_three_borrows_then_consume_print() {
 }
 
 #[test]
-#[ignore = "ADR-0052a §4.4 let-rebind shortcut (`let s = &s`) currently rejected by HIR lower as DuplicateBinding; re-enable when the shortcut lands on main (pre-existing red, not introduced by this branch — also red on main HEAD as of 2026-05-20)"]
 fn e0052a_e2e_08_synthetic_let_rebind_with_loop() {
     // Synthetic: let-rebind shortcut (`let s = &s`) followed by a
     // for-loop that reads the borrowed `s` length N times. Oracle:
