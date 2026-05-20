@@ -123,7 +123,7 @@ Cascade addendum (honest re-scope):
 ## Recommended landing order (updated)
 
 1. ~~**Tier 1** runtime-dispatch~~ — **SHIPPED 2026-05-19**.
-2. ~~**Tier 2** `--target-cpu` CLI flag~~ — **SHIPPED f900910** (merge SHA: TBD).
+2. ~~**Tier 2** `--target-cpu` CLI flag~~ — **SHIPPED f900910** (merge SHA: 4e862bb).
 3. **Tier 3** multi-wheel prebuilt distribution
    (release.yml matrix extension ~50 LOC YAML + new package-tool ADR).
 4. **GPU Path A** `cobrust.gpu` stdlib module wrapping cuBLAS / Metal / ROCm
