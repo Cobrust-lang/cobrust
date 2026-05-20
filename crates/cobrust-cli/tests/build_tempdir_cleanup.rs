@@ -34,6 +34,11 @@
 #![allow(clippy::similar_names)]
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::needless_pass_by_value)]
+// `.o` is the toolchain's intermediate-artifact extension; the asserts only
+// run on Cobrust-produced filenames (lowercase fixed at the source). A
+// case-insensitive match would let unrelated future-extension lookalikes leak
+// through the regression net.
+#![allow(clippy::case_sensitive_file_extension_comparisons)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,7 +64,7 @@ fn count_matching<F: Fn(&str) -> bool>(dir: &Path, pred: F) -> usize {
     };
     entries
         .filter_map(Result::ok)
-        .filter(|e| e.file_name().to_str().map(&pred).unwrap_or(false))
+        .filter(|e| e.file_name().to_str().is_some_and(&pred))
         .count()
 }
 

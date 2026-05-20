@@ -286,7 +286,7 @@ fn write_lldbrc(
         .file_name()
         .map_or_else(|| source.to_string_lossy(), |s| s.to_string_lossy());
     for line in breakpoints {
-        writeln!(rc, "breakpoint set --file {} --line {}", source_name, line)?;
+        writeln!(rc, "breakpoint set --file {source_name} --line {line}")?;
     }
     rc.flush()?;
     Ok(rc)
