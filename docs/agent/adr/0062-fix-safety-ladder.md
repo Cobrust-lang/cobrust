@@ -1,10 +1,11 @@
 ---
 name: "0062"
 title: fix-safety ladder on diagnostic variants
-status: proposed
+status: accepted
 phase: Phase G+ (extends ADR-0052b)
 relates_to: [adr:0052b, adr:0057a]
 date: 2026-05-19
+ratified: 2026-05-20
 author: CTO (P10)
 competitive_source: docs/agent/strategy/competitive-intel-zero-language.md §3.2
 ---
@@ -252,3 +253,99 @@ All five tests MUST pass. Additionally, `cargo build` MUST produce zero warnings
 1. Does `FixSafety` live in `cobrust-types` or a new `cobrust-diagnostics` crate? Prefer `cobrust-types` to avoid a new crate dependency.
 2. Should `replacement: Option<String>` be a newtype `Replacement(String)` to distinguish from `message: String`? Prefer newtype for public API clarity.
 3. Should `FixSafety` implement `Display` for the JSON field name (`"behavior-preserving"`)? Yes — the `serde(rename_all = "kebab-case")` handles serialization; add `Display` for CLI `--emit=text` output.
+
+---
+
+## §10 Cascade addendum (impl-merge 2026-05-20)
+
+### 10.1 Non-invasive impl pattern
+
+The §4.1 step-3 prescription ("update all `Suggestion { message, span }`
+constructors to supply `fix_safety` — compiler will error on missing
+fields") was reframed during impl to a non-breaking lookup-table
+approach:
+
+- The construction-time payload on `TypeError + MirError + LoweringError`
+  variants stays `suggestion: Option<&'static str>` per ADR-0052b §2.
+- New `FixSafety` enum + `Suggestion` struct live in
+  `crates/cobrust-types/src/fix_safety.rs` (Rust) +
+  `crates/cobrust-types-cb/src/fix_safety_cb.rs` (cb-mirror).
+- The per-variant tier classification lives in three lookup functions:
+  `type_error_fix_safety`, `mir_error_fix_safety_code`,
+  `lowering_error_fix_safety_code`. Consumers (LSP + future
+  `--emit-json`) invoke these to obtain the tier without disturbing
+  50+ construction sites.
+
+Rationale: the §3.2 prescription would have churned `Suggestion { ... }`
+constructions across `crates/cobrust-types/src/check.rs` (~28 sites),
+`crates/cobrust-mir/src/borrow.rs` + `drop.rs` (~12 sites), and
+`crates/cobrust-hir/src/lower.rs` (~7 sites). The lookup-table pattern
+delivers the same machine-routable signal (LSP code-action + JSON wire
+field) with zero construction-site churn — preserving the
+ADR-0052b §"Cascade enumeration" finding that 60+ sites are
+mechanically brittle to mass-rewrite.
+
+### 10.2 Opaque-u8 cross-crate protocol
+
+`cobrust-mir` and `cobrust-hir` cannot depend on `cobrust-types` (the
+crate graph forbids it — types is the consumer of HIR, MIR is the
+consumer of types). The tier classifications in those crates return an
+opaque `u8` (0=FormatOnly .. 5=RequiresHumanReview); the
+`fix_safety_from_code(u8) -> FixSafety` helper in `cobrust-lsp` widens
+the byte at the LSP-adapter boundary. This keeps the public surface of
+`FixSafety` confined to `cobrust-types` per §9 question 1 resolution.
+
+### 10.3 Cluster B closure
+
+The 8 #[ignore]'d tests in `crates/cobrust-types/tests/error_suggestion_corpus.rs`
++ `crates/cobrust-cli/tests/error_ux_snapshot.rs` were audited per F37
+("if predicted-error-mode does not match observed-error-mode, the
+finding is empirically wrong"). Outcome:
+
+- **6 un-ignored + PASSING**: s0052b_01 / _16 / _27 / _28 / _29 — the
+  tagged reason "variant-level suggestion text not attached" was wrong;
+  the suggestion field IS attached (post-ADR-0052b), but the catch
+  surface is `LoweringError::UnknownName` / `DroppedFeature`, not
+  `TypeError`. The new `CorpusError` unified enum lets the harness route
+  around the variant.
+- **2 stay `#[ignore]`'d with honest cite**: s0052b_10 (DuplicateField
+  needs record literals — Phase G+), s0052b_20 (UseOfDroppedFeature `is`
+  fails at parser level — Phase-J+ FrontendError suggestion needed).
+- **1 unrelated `#[ignore]`** (snap_03 in error_ux_snapshot.rs): out of
+  ADR-0062 scope — `cobrust check` exit-code-0 issue, not a suggestion
+  / FixSafety problem.
+
+### 10.4 Test count
+
+- `crates/cobrust-types/tests/fix_safety_corpus.rs` — 15 new tests
+  covering the six-tier ladder + Display wire form + per-variant
+  TypeError tier classification + Suggestion::for_type_error roundtrip.
+- `crates/cobrust-types/src/fix_safety.rs` — 11 collocated unit tests
+  in `#[cfg(test)]` covering the same surface from the impl side.
+- `crates/cobrust-types-cb/src/fix_safety_cb.rs` — 4 collocated tests
+  (Phase H byte-parity).
+- `crates/cobrust-lsp/src/code_action.rs` — 11 collocated tests
+  covering the full 6-tier gating matrix + cross-crate code roundtrip.
+
+Total: 41 new unit tests + 6 corpus un-ignore. §6 acceptance gate
+(5-test minimum) exceeded by 8x.
+
+### 10.5 LOC delta (impl merge)
+
+| Component | LOC |
+|---|---|
+| `cobrust-types/src/fix_safety.rs` (new) | ~340 |
+| `cobrust-mir/src/error.rs` (extension) | ~60 |
+| `cobrust-hir/src/error.rs` (extension) | ~45 |
+| `cobrust-types-cb/src/fix_safety_cb.rs` (new) | ~210 |
+| `cobrust-lsp/src/code_action.rs` (new) | ~190 |
+| `cobrust-types/tests/fix_safety_corpus.rs` (new) | ~200 |
+| `cobrust-types/tests/error_suggestion_corpus.rs` (Cluster B closure) | ~80 net |
+| Docs (zh/en error-reference + agent/lsp.md) | ~100 |
+| **Total** | **~1225 LOC** |
+
+The §4.2 estimate of ~600 LOC was for the breaking-change impl path;
+the non-invasive pattern (§10.1) ships more LOC but distributes the
+cost across new files only — zero modifications to construction sites.
+The net surface delta is the same: structured `FixSafety` tier exists,
+LSP gates on it, JSON wire field is ready.
