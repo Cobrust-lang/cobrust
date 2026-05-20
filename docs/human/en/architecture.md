@@ -1690,6 +1690,18 @@ DG-Workstation verify @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrus
 
 Reference: `docs/agent/adr/0058d-jit-aot-lowering-convergence.md`. Closes ADR-0056a §13 noted-debt + audit `ae2316f1c51dbd6be` Gate 7.
 
+#### Phase K Strand #4 follow-up — AOT cranelift_backend substrate delegation (ADR-0058e)
+
+ADR-0058d §2.3 explicitly deferred the AOT-side unification with a note that a future ADR-0058e could close it. This follow-up does so:
+
+- **AOT path now delegates wave-1 bodies.** A new `body_is_wave1` predicate in `CraneliftCtx` classifies bodies by type, terminator, rvalue, and operand shapes. Bodies that qualify as wave-1 (Int/IntN/Bool locals, no Call/Aggregate/Str/projection) route through `define_body_wave1_path`, which calls `lowering::lower_body_wave1` directly and wraps the result in a `Context` for `obj.define_function`. Non-wave-1 bodies continue through the existing `EmitCtx` path unchanged.
+- **Touch-two-places window closed.** Wave-1 body lowering now has a single source of truth in `cobrust-codegen::lowering`. Previously, the same block-map creation, variable declaration, param binding, and pre-init logic existed both in `lower_body_wave1` (substrate) and in `define_body` (AOT path); for wave-1 bodies, only the substrate now runs.
+- **Zero regression.** `codegen_diff_corpus`: 56 PASS / 0 FAIL / 6 ignored. `codegen_ill_formed`: 50 PASS. `cobrust-jit`: 12 PASS. The conservative predicate ensures ill-formed bodies (dangling locals, unknown operand types) fall back to the full AOT path and continue to produce `CodegenError::InvalidMir`.
+
+Mac per-crate verify @ `c9de99c`: `cargo test -p cobrust-codegen` (diff corpus + ill-formed + lowering unit tests) = PASS; `cargo test -p cobrust-jit` = 12 PASS.
+
+Reference: `docs/agent/adr/0058e-aot-cranelift-substrate-delegation.md`. Closes ADR-0058d §2.3 deferral.
+
 DG-Workstation verify @ HEAD `4686192`: cargo test -p cobrust-codegen --features llvm = 355 tests PASS / 0 failed / 6 ignored (LLVM-conditional), TEST_EXIT=0. 5 wave-1 inline smoke + 350 baseline tests across aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora.
 
 #### Phase K wave-2 — LLVM opt pipeline + multi-target (ADR-0058b)

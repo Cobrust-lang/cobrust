@@ -1580,6 +1580,18 @@ DG-Workstation 验证 @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrus
 
 参考: `docs/agent/adr/0058d-jit-aot-lowering-convergence.md`。关闭 ADR-0056a §13 noted-debt + 审计 `ae2316f1c51dbd6be` Gate 7。
 
+#### Phase K Strand #4 后续 —— AOT cranelift_backend substrate 委托（ADR-0058e）
+
+ADR-0058d §2.3 明确将 AOT 端统一推迟，并注明"未来的 ADR-0058e 可以关闭此项"。本后续 ADR 完成了这一工作：
+
+- **AOT 路径现在对 wave-1 body 进行委托。** `CraneliftCtx` 中的新谓词 `body_is_wave1` 通过类型、terminator、rvalue 和操作数形状对 body 进行分类。符合 wave-1 条件的 body（Int/IntN/Bool 局部变量，无 Call/Aggregate/Str/projection）通过 `define_body_wave1_path` 路由，该函数直接调用 `lowering::lower_body_wave1` 并将结果包装在 `Context` 中供 `obj.define_function` 使用。非 wave-1 的 body 继续走现有的 `EmitCtx` 路径，行为不变。
+- **两处维护窗口已关闭。** wave-1 body lowering 现在在 `cobrust-codegen::lowering` 中有单一可信来源。之前，相同的 block-map 创建、变量声明、参数绑定和预初始化逻辑同时存在于 `lower_body_wave1`（substrate）和 `define_body`（AOT 路径）中；对于 wave-1 body，现在只运行 substrate。
+- **零回归。** `codegen_diff_corpus`：56 PASS / 0 FAIL / 6 ignored。`codegen_ill_formed`：50 PASS。`cobrust-jit`：12 PASS。保守谓词确保格式错误的 body（悬空局部变量、未知操作数类型）回退到完整 AOT 路径，继续产生 `CodegenError::InvalidMir`。
+
+Mac 单 crate 验证 @ `c9de99c`：`cargo test -p cobrust-codegen`（diff corpus + ill-formed + lowering 单元测试）= PASS；`cargo test -p cobrust-jit` = 12 PASS。
+
+参考: `docs/agent/adr/0058e-aot-cranelift-substrate-delegation.md`。关闭 ADR-0058d §2.3 延期项。
+
 DG-Workstation 验证 @ HEAD `4686192`：cargo test -p cobrust-codegen --features llvm = 355 测试 PASS / 0 失败 / 6 ignored（LLVM-conditional），TEST_EXIT=0。5 个 wave-1 inline smoke + 350 baseline tests 覆盖 aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora。
 
 #### Phase K wave-2 —— LLVM opt 流水线 + 多目标（ADR-0058b）
