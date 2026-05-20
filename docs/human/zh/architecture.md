@@ -1628,8 +1628,9 @@ Phase L wave-1（`tools/lldb-cobrust/printers.py` + `llvm_backend.rs::populate_d
 - **加载机制**（ADR-0059a §3.2)。三条路径：项目本地 `tools/lldb-cobrust/.lldbinit` 片段（`command script import tools/lldb-cobrust/printers.py`）；用户级 `~/.lldbinit-Cobrust` 追加；未来 `cobrust debug` 自动加载（ADR-0059c wave-3）。wave-1 发布路径 1 + 2。
 - **健壮性**（ADR-0059a §2.1、§2.2、§7.3)。递归深度上限 8（更深嵌套渲染 `[...]` 占位符）。容器 > 32 元素截断到前 32 + `, ...` + 总数。`Str` 中无效 UTF-8 用 `errors='replace'` Unicode 替换字符 `�` 渲染而非崩溃 printer。
 - **冒烟门扩展**（ADR-0059a §6)。`dwarf_lldb_smoke.rs` 扩展 3 个新测试（`lldb_smoke_str_variable_renders_content` / `lldb_smoke_list_variable_renders_bracket` / `lldb_smoke_dict_variable_renders_braces`),验证 `image lookup --type cobrust::{Str,List,Dict}` 在发射的 DWARF 中找到命名 DIE —— 端到端证明 Option A 命名到达 `.debug_info`。保留 4 个 ADR-0058c 基线测试；wave-1 corpus 为 4 + 3 = 7 个 lldb 冒烟测试。
+- **Phase L wave-2 honest-deferrals 已 RESOLVED**(2026-05-20,ADR-0059a §6.1-§6.3)。三处关闭:(a) §6.2 Dict K:V 遍历 —— `crates/cobrust-stdlib/src/collections.rs` 新增 6 个运行时导出(`__cobrust_dict_{key,value}_tag` + `__cobrust_dict_iter_{key,value}_{i64,str}_at`),printer 通过 `EvaluateExpression` 调用;按 `IndexMap::get_index` 保留插入顺序。(b) §6.3 Adt DI 命名 —— 第 6 个 `DIBasicType` `cobrust::Adt` 添加;`di_type_for(Ty::Adt(_, _))` 分派到此;printer 对任何 Adt 局部变量渲染指针标签 `None` / `Some(<0xaddr>)`。(c) §6.1 Str 运行时断点 —— HONEST-CITE;`tools/lldb-cobrust/tests/test_printers.py` 12 个 Python 自测验证 StringBuffer 字节解码契约;完整可执行 + 链入 stdlib + bp 命中冒烟推迟到 wave-3。
 
-非目标（按 ADR-0059a §4 延后）：Rust 风格源码级类型名渲染（Cobrust 用 `List<Str>` 而非 `Vec<String>`）、内联表达式求值、用户自定义 record 的字段展示（Phase L+,待用户 record DI 落地）、gdb pretty-printers（Phase L+ 后续）、从 inspector 做 REPL 风格修改。
+非目标（按 ADR-0059a §4 延后）：Rust 风格源码级类型名渲染（Cobrust 用 `List<Str>` 而非 `Vec<String>`）、内联表达式求值、用户自定义 record 的字段展示（Phase L+,待用户 record DI 落地）、gdb pretty-printers（Phase L+ 后续）、从 inspector 做 REPL 风格修改、逐 Adt 变体 DICompositeType(Phase L+ 范围;wave-2 仅交付泛型 Adt 命名)。
 
 **M9 测试总数**：158 个测试，覆盖 5 个套件：
 - `codegen_well_formed.rs` —— 60 个良型程序，覆盖整数 / 浮点 / 布尔的算术、比较、分支、循环、递归、位运算、逻辑运算。

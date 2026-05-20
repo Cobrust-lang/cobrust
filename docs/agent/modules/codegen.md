@@ -685,6 +685,10 @@ A single shared cache (`di_basic_types: HashMap<&'static str, DIBasicType<'ctx>>
 
 - **6-type printer roster** (ADR-0059a §2). `Str` / `List<T>` / `Dict<K, V>` / `Set<T>` / `Tuple` / `Option<T>`. Primitive types (`Int` / `Float` / `Bool`) use lldb's native DI-driven display.
 - **Option A named DIType** (ADR-0059a §3.3.1). 5 new `DIBasicType` entries in `populate_di_basic_types` (`cobrust::Str` / `cobrust::List` / `cobrust::Dict` / `cobrust::Set` / `cobrust::Tuple`) all share opaque-ptr storage but carry distinct DWARF type-names. `di_type_for` dispatches `Ty::{Str, List, Dict, Set, Tuple}` to those keys. ~40 LOC codegen delta. The 5 names are the matching surface for lldb pretty-printers.
+- **Phase L wave-2 RESOLVED (2026-05-20, ADR-0059a §6)** — wave-2 closes the 3 wave-1 honest-deferrals:
+  - **§6.2 Dict K:V walk** — 6 new C-ABI exports in `crates/cobrust-stdlib/src/collections.rs` (`__cobrust_dict_{key,value}_tag` + `__cobrust_dict_iter_{key,value}_{i64,str}_at`). Printer calls them via `EvaluateExpression` to walk insertion-order entries.
+  - **§6.3 Adt DI naming** — 6th DIBasicType `cobrust::Adt` added. `di_type_for(Ty::Adt(_, _))` → `cobrust::Adt` (previously collapsed to `Ptr`). Printer registers `cobrust_option_summary` on `cobrust::Adt` for ptr-tag `None` / `Some(<addr>)` rendering.
+  - **§6.1 Str runtime smoke** — HONEST-CITE; Python self-test (`tools/lldb-cobrust/tests/test_printers.py`, 12 tests) verifies the byte-decode contract. Full executable + breakpoint smoke parked for wave-3.
 
 ### Wave-1 test surface (per ADR-0059a §6)
 
@@ -694,6 +698,16 @@ A single shared cache (`di_basic_types: HashMap<&'static str, DIBasicType<'ctx>>
 | Baseline preserved | 4 | ADR-0058c §3.5 baseline (`lldb_smoke_hello_world_subprogram_resolves` / `lldb_smoke_fib_function_visible` / `lldb_smoke_multi_fn_module_lists_both` / `lldb_smoke_line_table_present`) — Wave-1 corpus is 4 + 3 = 7 lldb smoke tests. |
 
 DG verify `cargo test -p cobrust-codegen --features llvm --test dwarf_lldb_smoke`: 7 PASS / 0 FAIL / 0 IGNORED, TEST_EXIT=0, POSTFLIGHT PRE=0/POST=0 (clean).
+
+### Wave-2 test surface (per ADR-0059a §6.1-§6.3)
+
+| Suite | Tests | Notes |
+|---|---|---|
+| `tests/dwarf_lldb_smoke.rs` Phase L wave-2 | 3 added | `lldb_smoke_str_runtime_frame_variable_renders_content` (§6.1 regression guard), `lldb_smoke_dict_iter_runtime_kv_walk_symbols_present` (§6.2 regression guard), `lldb_smoke_adt_variable_renders_naming` (§6.3 new — `image lookup --type cobrust::Adt` finds DIE). Total dwarf_lldb_smoke corpus: 4 baseline + 3 wave-1 + 3 wave-2 = **10 tests**. |
+| `crates/cobrust-stdlib::collections::tests` wave-2 | 7 added | `cabi_dict_key_value_tag_reports_{i64_i64, str_str}`, `cabi_dict_key_value_tag_null_returns_negative`, `cabi_dict_iter_{i64_i64, i64_str}_insertion_order`, `cabi_dict_iter_str_keys_renders_caller_owned_buffers`, `cabi_dict_iter_null_dict_safe`. Mac-buildable (no LLVM dep). |
+| `tools/lldb-cobrust/tests/test_printers.py` | 12 added | Standalone Python tests for printer byte-decode + tag-dispatch + fallback. Mocks SBValue/SBProcess/SBTarget; runs without lldb installed. Covers Str ASCII/UTF-8/invalid-UTF-8/null/escape, Dict K:V happy path + placeholder fallback, Adt ptr-tag, List regression. |
+
+Mac verify `python3 tools/lldb-cobrust/tests/test_printers.py`: 12 PASS. Mac verify `cargo test -p cobrust-stdlib --lib cabi_dict_`: 16 PASS. CI verify of `--features llvm` smoke awaits CI runner (Mac lacks LLVM-18 per F37 lock).
 
 ### Wave-1 printer surface
 
@@ -709,9 +723,9 @@ DG verify `cargo test -p cobrust-codegen --features llvm --test dwarf_lldb_smoke
 - **Struct-field display for user-defined records** (Phase L+ once user-record DI lands).
 - **gdb pretty-printers** (Phase L+ followup; wave-1 is lldb-18-only).
 - **REPL-style mutation from inspector** (read-only display).
-- **Runtime `frame variable` end-to-end test**: wave-1 verifies named DIType reached DWARF (object-level `image lookup`); runtime test requires linkage + execution + stdlib link path — wave-2 scope.
-- **Adt-discriminant DI emission for Option**: scaffolding shipped (OptionProvider registered on `cobrust::Option`), full discriminant recovery is Phase L+ sub-ADR scope.
-- **IndexMap layout-stable Dict display**: wave-1 ships `{<n entries>}` placeholder; wave-2 stabilises via `__cobrust_dict_keys` / `__cobrust_dict_values` runtime exports the printer can call via `EvaluateExpression`.
+- **Runtime `frame variable` end-to-end test (wave-2 honest-cite preserved)**: object-level `image lookup` is the wave-1/2 verifiable surface; full executable + linked stdlib + breakpoint smoke awaits wave-3 (linker harness sub-ADR). Wave-2 verifies the byte-decode contract via Python self-tests instead.
+- **Per-Adt variant DICompositeType for Option / Result** (wave-2 honest-cite preserved): wave-2 closes the GENERIC Adt naming gap (`cobrust::Adt` DIE for any `Ty::Adt`), but per-variant discriminant + payload field DI awaits MIR threading per-Adt names through `di_type_for`. Phase L+ scope.
+- **IndexMap layout-stable Dict display** (wave-2 RESOLVED): the wave-1 `{<n entries>}` placeholder remains as a fallback when accessors are unresolved (object-level smoke); the wave-2 happy path uses six runtime accessor exports + `EvaluateExpression`.
 
 ## Phase K Strand #4 — JIT/AOT lowering convergence (ADR-0058d)
 

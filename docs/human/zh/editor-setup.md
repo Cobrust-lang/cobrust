@@ -129,9 +129,25 @@ lspconfig.cobrust.setup{}
 
 Cobrust 提供 DAP(Debug Adapter Protocol)服务器 `cobrust-dap`,
 通过 VSCode / Cursor 的 **Run > Start Debugging** 菜单驱动编辑器侧
-单步调试。服务器底层委托 `lldb-18`,并自动加载 Phase L wave-1 的
-pretty-printer,使得 Variables 面板显示 Cobrust 源代码形式的值
-(例如 `xs: List<Int> = [1, 2, 3]`,而非原始的 struct 字节)。
+单步调试。服务器底层委托 `lldb-18`,并自动加载 Phase L wave-1 +
+wave-2 的 pretty-printer,使得 Variables 面板显示 Cobrust 源代码
+形式的值(例如 `xs: List<Int> = [1, 2, 3]`、
+`d: Dict<Int, Str> = {1: "a", 2: "b"}`、
+`opt: Option<Int> = Some(<0xaddr>)`,而非原始的 struct 字节)。
+
+Phase L wave-2(ADR-0059a §6 于 2026-05-20 解决)在 printer 表面
+之上扩展了:
+
+- **Dict 按插入顺序的 K:V 遍历** — printer 通过 lldb `expression`
+  API 调用运行时导出
+  `__cobrust_dict_iter_{key,value}_{i64,str}_at`,因此 `d` 渲染为
+  实际的 `{k: v, ...}` 形状,而不是 wave-1 的 `{<n entries>}`
+  占位符。
+- **泛型 Adt 命名** — 每个 `Ty::Adt` 局部变量现在拥有独立的
+  `cobrust::Adt` DWARF 类型名,因此 printer 会为任何用户定义的
+  枚举或未来的 Option / Result 渲染 `None` / `Some(<0xaddr>)`
+  指针标签。逐变体渲染(例如 `Some(42)` 显示实际 payload)需要
+  MIR 把 Adt schema 透传到 DI(Phase L+ 范围)。
 
 **Wave-2 范围(根据 ADR-0059b):**
 
