@@ -1316,13 +1316,30 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         });
                     }
                     // Determine the effective type of the argument.
+                    //
+                    // ADR-0064 §3.3 fix: MIR call-return locals are declared
+                    // with `Ty::None` (see lower.rs:1729,1792 — destination
+                    // is always `declare_local("_callret", Ty::None, …)`).
+                    // At runtime all non-Str/non-Bool/non-Float intrinsics
+                    // return a raw i64, so `Ty::None` must map to `Ty::Int`
+                    // here to avoid misrouting through the str-buf fallback
+                    // arm (which interprets the i64 value as a Str pointer
+                    // and crashes with a misaligned-pointer dereference).
+                    // Example: `let va = list_get(list1, pi); print(va)` —
+                    // `va`'s local type is `Ty::None`; without this fix the
+                    // `_` arm below calls `__cobrust_println_str_buf(va_i64)`.
                     let effective_ty: Option<&Ty> = match &args[0] {
                         Operand::Constant(Constant::Int(_)) => Some(&Ty::Int),
                         Operand::Constant(Constant::Bool(_)) => Some(&Ty::Bool),
                         Operand::Constant(Constant::Float(_)) => Some(&Ty::Float),
                         Operand::Constant(Constant::Str(_)) => None, // handled below
                         Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
-                            local_ty.get(&p.local.0)
+                            match local_ty.get(&p.local.0) {
+                                // Unresolved call-return local: treat as i64
+                                // (all non-Str/Bool/Float runtime values are i64).
+                                Some(Ty::None) | None => Some(&Ty::Int),
+                                other => other,
+                            }
                         }
                         _ => None,
                     };
