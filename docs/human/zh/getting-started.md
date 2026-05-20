@@ -193,8 +193,24 @@ fn main() -> i64:
 
 Wave-1 接受的三种借用形状(参见 ADR-0052a §8):
 - `&ident`            —— `&s`
-- `&ident.field`      —— `&p.field`(待 tuple-field 语法落地后可用)
+- `&ident.field`      —— `&p.0` / `&p.1` 元组字段投影,或 ADT 字段
+                         落地后的 `&record.name`
 - `&ident[idx]`       —— `&xs[0]`
+
+并提供 **let-rebind 快捷形式**(ADR-0052a §4.4):
+
+```cobrust
+fn main() -> i64:
+    let s = input("")
+    let s = &s              # let-rebind:外层 s(str)→ 内层 s(&str)
+    let n = str_len(s)
+    let m = str_len(s)
+    return n + m
+```
+
+`let s = &s` 是 `let s = clone(s)` 的 §2.5 诚实替代形式。新的
+`s` 在当前作用域之后的语句中遮蔽外层绑定;类型从 `str` 收窄到
+`&str`,PRELUDE 透明规则继续在 call-arg 位置接受它。
 
 Parse 拒绝(Wave-1 cap 外):
 - `&"literal"`        —— literal-borrow 延后(未来 sub-ADR)。

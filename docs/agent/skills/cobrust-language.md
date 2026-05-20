@@ -96,6 +96,29 @@ fn count_a(s: str) -> i64:
 - Primitives (`i64`, `f64`, `bool`, `None`) are Copy — no borrow needed
 - `clone(s)` exists as fallback when `&s` cannot apply; heap-allocates; prefer `&s`
 
+Wave-1 admitted borrow operand shapes (ADR-0052a §8):
+- `&ident`              — `&s`
+- `&p.<N>`              — `&p.0` / `&p.1` tuple-field projection
+- `&xs[i]`              — index-projection borrow
+- `&(ident)`            — parenthesised identifier
+
+Let-rebind shortcut (ADR-0052a §4.4) — the §2.5-honest replacement
+for `let s = clone(s)`:
+
+```cobrust
+fn main() -> i64:
+    let s = input("")
+    let s = &s            # outer `s: str` -> inner `s: &str`
+    let n = str_len(s)    # transparency: &str admitted at `s: str` slot
+    let m = str_len(s)
+    return n + m
+```
+
+The new `s` shadows the outer binding in the same scope; the type
+narrows from `str` to `&str`. Sub-patterns inside tuple / dict /
+class patterns still reject same-name duplicates with
+`DuplicateBinding`.
+
 ## 5. match (exhaustive)
 
 ```cobrust
