@@ -630,10 +630,17 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
         OptLevel::Speed => OptimizationLevel::Default,
         OptLevel::SpeedAndSize => OptimizationLevel::Aggressive,
     };
+    // Tier 2 host-specific CPU tuning (numerical-compute-hardware-tiering.md §Tier 2).
+    // `"native"` asks LLVM to auto-detect the host CPU and enables all available
+    // ISA extensions — zero dispatch overhead, host-only binary.
+    // Any other string (e.g. `"skylake"`, `"apple-m1"`, `"neoverse-v1"`) is passed
+    // verbatim to LLVM as the target CPU name.
+    // When `None`, fall back to the `"generic"` baseline (pre-Tier-2 behaviour).
+    let cpu = spec.target_cpu.as_deref().unwrap_or("generic");
     target
         .create_target_machine(
             &triple,
-            "generic",
+            cpu,
             "",
             opt,
             RelocMode::PIC,
@@ -641,7 +648,7 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
         )
         .ok_or_else(|| {
             CodegenError::LlvmError(format!(
-                "failed to create LLVM TargetMachine for {}",
+                "failed to create LLVM TargetMachine for {} (cpu={cpu})",
                 spec.triple
             ))
         })
@@ -2336,6 +2343,7 @@ mod tests {
             module_name: "smoke".to_string(),
             source_path: None,
             runtime_dispatch: false,
+            target_cpu: None,
         }
     }
 

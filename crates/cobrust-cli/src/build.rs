@@ -76,6 +76,7 @@ pub fn run(
     target: Option<&str>,
     quiet: bool,
     enable_runtime_dispatch: Option<bool>,
+    target_cpu: Option<&str>,
 ) -> u8 {
     match build(
         file,
@@ -85,6 +86,7 @@ pub fn run(
         target,
         quiet,
         enable_runtime_dispatch,
+        target_cpu,
     ) {
         Ok(_) => exit_codes::SUCCESS,
         Err(e) => {
@@ -100,6 +102,12 @@ pub fn run(
 /// `enable_runtime_dispatch` — when `Some`, overrides the default
 /// Tier-1 runtime-dispatch setting (default: `true` on `--release`).
 /// Pass `None` to accept the default.
+///
+/// `target_cpu` — Tier 2 host-specific CPU tuning
+/// (numerical-compute-hardware-tiering.md §Tier 2).
+/// `"native"` auto-detects the host CPU; any other string is passed
+/// directly to LLVM as the CPU name (e.g. `"skylake"`, `"apple-m1"`).
+/// `None` keeps the generic LLVM baseline.
 pub fn build(
     file: &Path,
     output: Option<&Path>,
@@ -108,6 +116,7 @@ pub fn build(
     target: Option<&str>,
     quiet: bool,
     enable_runtime_dispatch: Option<bool>,
+    target_cpu: Option<&str>,
 ) -> Result<Artifact, BuildError> {
     let user_source = std::fs::read_to_string(file)
         .map_err(|e| BuildError::User(format!("cannot read {}: {e}", file.display())))?;
@@ -213,6 +222,8 @@ pub fn build(
         // Tier 1 runtime-dispatch: default true on --release, false on debug.
         // `enable_runtime_dispatch` overrides when explicitly set.
         runtime_dispatch: enable_runtime_dispatch.unwrap_or(release),
+        // Tier 2: pass caller-supplied CPU string (or None for generic baseline).
+        target_cpu: target_cpu.map(str::to_owned),
     };
 
     // Emit the user's object file.

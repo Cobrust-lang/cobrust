@@ -148,6 +148,7 @@ fn run_interactive(args: &DebugArgs) -> Result<u8, DebugError> {
         None,  // host triple
         args.quiet,
         None, // enable_runtime_dispatch: use default (false for debug)
+        None, // target_cpu: generic baseline
     );
     if build_code != exit_codes::SUCCESS {
         return Err(DebugError::BuildFailed(build_code));

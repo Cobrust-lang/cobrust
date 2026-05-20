@@ -93,6 +93,14 @@ enum Command {
         /// LLM users do not need to specify this flag for --release builds.
         #[arg(long)]
         enable_runtime_dispatch: Option<bool>,
+        /// Tier-2 host-specific CPU tuning: pass a CPU name to LLVM
+        /// (e.g. `native`, `skylake`, `apple-m1`, `neoverse-v1`).
+        /// `native` auto-detects the current host CPU and enables all
+        /// available ISA extensions — zero dispatch overhead, host-only binary.
+        /// Default: unset (LLVM targets generic baseline).
+        /// LLVM backend only; Cranelift ignores this flag.
+        #[arg(long)]
+        target_cpu: Option<String>,
     },
     /// Compile + invoke a `.cb` source file.
     Run {
@@ -259,6 +267,7 @@ fn main() -> ExitCode {
             target,
             quiet,
             enable_runtime_dispatch,
+            target_cpu,
         } => match file {
             // M11 single-file mode: explicit `.cb` argument.
             Some(p) if p.is_file() && p.extension().is_some_and(|e| e == "cb") => build::run(
@@ -269,6 +278,7 @@ fn main() -> ExitCode {
                 target.as_deref(),
                 quiet,
                 enable_runtime_dispatch,
+                target_cpu.as_deref(),
             ),
             // M12 package mode: directory or no argument → walk for cobrust.toml.
             other => pkg_build::run_build(
