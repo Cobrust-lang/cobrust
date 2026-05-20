@@ -278,41 +278,42 @@ pub enum TypeErrorCb {
 /// # Anchor
 /// `error_cb.rs::type_error_cb_from_rust`
 pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErrorCb {
-    let opt_string = |s: &Option<&'static str>| s.map(|x| x.to_string());
+    let opt_string =
+        |s: Option<&'static str>| s.map(std::string::ToString::to_string);
     match rust {
         TypeError::BreakOutsideLoop { span, suggestion } => TypeErrorCb::BreakOutsideLoop {
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::ContinueOutsideLoop { span, suggestion } => TypeErrorCb::ContinueOutsideLoop {
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::ReturnOutsideFn { span, suggestion } => TypeErrorCb::ReturnOutsideFn {
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::YieldOutsideFn { span, suggestion } => TypeErrorCb::YieldOutsideFn {
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::MutableDefault { span, suggestion } => TypeErrorCb::MutableDefault {
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::AmbiguousType { span, suggestion } => TypeErrorCb::AmbiguousType {
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::DictSpreadNotSupported { span, suggestion } => {
             TypeErrorCb::DictSpreadNotSupported {
                 span: *span,
-                suggestion: opt_string(suggestion),
+                suggestion: opt_string(*suggestion),
             }
         }
         TypeError::BorrowOfNonPlace { span, suggestion } => TypeErrorCb::BorrowOfNonPlace {
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::UnknownName {
             name,
@@ -321,7 +322,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
         } => TypeErrorCb::UnknownName {
             name: name.clone(),
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::KeywordArgMismatch {
             name,
@@ -330,7 +331,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
         } => TypeErrorCb::KeywordArgMismatch {
             name: name.clone(),
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::MissingArgument {
             name,
@@ -339,7 +340,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
         } => TypeErrorCb::MissingArgument {
             name: name.clone(),
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::DuplicateField {
             name,
@@ -348,7 +349,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
         } => TypeErrorCb::DuplicateField {
             name: name.clone(),
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::UseOfDroppedFeature {
             name,
@@ -357,7 +358,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
         } => TypeErrorCb::UseOfDroppedFeature {
             name: (*name).to_string(),
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::TypeMismatch {
             span, suggestion, ..
@@ -368,7 +369,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 expected,
                 actual,
                 span: *span,
-                suggestion: opt_string(suggestion),
+                suggestion: opt_string(*suggestion),
             }
         }
         TypeError::RowConflict {
@@ -384,7 +385,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 ty1,
                 ty2,
                 span: *span,
-                suggestion: opt_string(suggestion),
+                suggestion: opt_string(*suggestion),
             }
         }
         TypeError::ImplicitTruthiness {
@@ -394,7 +395,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             TypeErrorCb::ImplicitTruthiness {
                 actual,
                 span: *span,
-                suggestion: opt_string(suggestion),
+                suggestion: opt_string(*suggestion),
             }
         }
         TypeError::OccursCheck {
@@ -409,7 +410,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 var: canon_var,
                 ty,
                 span: *span,
-                suggestion: opt_string(suggestion),
+                suggestion: opt_string(*suggestion),
             }
         }
         TypeError::NotCallable {
@@ -419,7 +420,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             TypeErrorCb::NotCallable {
                 actual,
                 span: *span,
-                suggestion: opt_string(suggestion),
+                suggestion: opt_string(*suggestion),
             }
         }
         TypeError::NotIndexable {
@@ -429,7 +430,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             TypeErrorCb::NotIndexable {
                 actual,
                 span: *span,
-                suggestion: opt_string(suggestion),
+                suggestion: opt_string(*suggestion),
             }
         }
         TypeError::NotIterable {
@@ -439,7 +440,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             TypeErrorCb::NotIterable {
                 actual,
                 span: *span,
-                suggestion: opt_string(suggestion),
+                suggestion: opt_string(*suggestion),
             }
         }
         TypeError::NotHashable {
@@ -449,7 +450,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             TypeErrorCb::NotHashable {
                 actual,
                 span: *span,
-                suggestion: opt_string(suggestion),
+                suggestion: opt_string(*suggestion),
             }
         }
         TypeError::ArityMismatch {
@@ -461,7 +462,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             expected: *expected,
             actual: *actual,
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::NonExhaustiveMatch {
             uncovered,
@@ -470,7 +471,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
         } => TypeErrorCb::NonExhaustiveMatch {
             uncovered: uncovered.clone(),
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::UnknownMethod {
             type_name,
@@ -481,7 +482,7 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             type_name: type_name.clone(),
             method_name: method_name.clone(),
             span: *span,
-            suggestion: opt_string(suggestion),
+            suggestion: opt_string(*suggestion),
         },
         TypeError::Multiple(errs) => TypeErrorCb::Multiple(
             errs.iter()
@@ -792,6 +793,7 @@ fn handle_to_ty_display(handle: i64) -> &'static str {
 /// `TypeError` counterpart with the same name. This is a runtime
 /// no-op the test harness can call to assert the mirror.
 #[doc(hidden)]
+#[must_use]
 pub fn assert_variant_name_mirror(rust: &TypeError, cb: &TypeErrorCb) -> bool {
     rust_te_variant_name(rust) == type_error_cb_variant_name(cb)
 }
