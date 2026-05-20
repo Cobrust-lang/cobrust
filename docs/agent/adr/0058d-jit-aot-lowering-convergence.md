@@ -147,6 +147,21 @@ with the refactor.
 
 ### 2.3 AOT-side consumption
 
+**RESOLVED at `c9de99c` by ADR-0058e (2026-05-20).**
+
+`CraneliftCtx::define_body` now delegates wave-1-compatible bodies to
+`lowering::lower_body_wave1` via a `body_is_wave1` predicate +
+`define_body_wave1_path` helper. The predicate is conservative: any
+body whose locals, terminators, rvalues, or operands fall outside the
+wave-1 surface routes through the existing `EmitCtx` path unchanged.
+
+The 0058d §2.3 deferral rationale ("mixed-dispatch table") was resolved
+by the predicate branching at the **body level** rather than at the
+statement level — no per-statement branch is added; the entire
+body-lowering path is selected once upfront.
+
+--- original text (for archival) ---
+
 cobrust-codegen's existing `CraneliftCtx::define_body` does NOT
 delegate to the new wave-1 helpers (yet). The stateful AOT path
 has its own statement/rvalue/terminator dispatchers that need to

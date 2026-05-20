@@ -487,6 +487,110 @@ impl CraneliftCtx {
         out
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // ADR-0058e: wave-1 predicate + substrate-delegation path
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Return `true` if `body` is fully expressible in the wave-1
+    /// lowering substrate (`cobrust_codegen::lowering`).
+    ///
+    /// A body qualifies as wave-1 when:
+    /// - Every local has a wave-1-compatible type (Int / IntN / Bool /
+    ///   None — i.e. `lower_ty_wave1` does not return `Err`).
+    /// - Every block terminator is `Return`, `Goto`, or `Unreachable`.
+    /// - Every `Assign` statement targets a bare local (no projections)
+    ///   and its rvalue is wave-1 (`Use`, `BinaryOp::{Add,Sub,Mul}`,
+    ///   `UnaryOp::{Neg,Plus}` with wave-1 operands).
+    /// - Every referenced local ID (place destination, place source,
+    ///   return local in `Terminator::Return`) is declared in
+    ///   `body.locals`. This ensures ill-formed bodies with dangling
+    ///   locals produce `InvalidMir` (from the full AOT path) rather
+    ///   than `Internal` (from the substrate's var_map miss).
+    ///
+    /// Conservative: unknown → `false` → falls back to full `EmitCtx`
+    /// path. False-negatives are safe; false-positives would route an
+    /// unsupported body through `lower_body_wave1` which returns
+    /// `CodegenError::InvalidMir` with a `wave1:` prefix.
+    fn body_is_wave1(body: &Body) -> bool {
+        // Build a set of declared local IDs for reference validation.
+        let declared: std::collections::HashSet<LocalId> =
+            body.locals.iter().map(|l| l.id).collect();
+
+        // Local type check.
+        for local in &body.locals {
+            if crate::lowering::lower_ty_wave1(&local.ty).is_err() {
+                return false;
+            }
+        }
+        // Block-level check.
+        for block in &body.blocks {
+            match &block.terminator {
+                Terminator::Return | Terminator::Goto(_) | Terminator::Unreachable => {}
+                _ => return false,
+            }
+            for stmt in &block.statements {
+                match &stmt.kind {
+                    StatementKind::Nop
+                    | StatementKind::StorageLive(_)
+                    | StatementKind::StorageDead(_) => {}
+                    StatementKind::Assign { place, rvalue } => {
+                        if !place.projections.is_empty() {
+                            return false;
+                        }
+                        // Validate destination local is declared.
+                        if !declared.contains(&place.local) {
+                            return false;
+                        }
+                        if !rvalue_is_wave1_with_locals(rvalue, &declared) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// AOT-side wave-1 delegation path (ADR-0058e).
+    ///
+    /// Called from `define_body` when `body_is_wave1` returns `true`.
+    /// Delegates the `ir::Function` construction entirely to
+    /// `lowering::lower_body_wave1`, then wraps the result in a
+    /// Cranelift `Context` and calls `obj.define_function`.
+    ///
+    /// No str-data interning, extern-func declaration, runtime-helper
+    /// wiring, or user-FuncRef injection is required for wave-1 bodies:
+    /// wave-1 bodies contain no `Call`, no `Aggregate`, no
+    /// `Constant::Str` — so the only module-level reference is the
+    /// function's own `FuncId` (already declared in `declare_body`).
+    fn define_body_wave1_path(
+        &self,
+        obj: &mut ObjectModule,
+        body: &Body,
+        func_id: cranelift_module::FuncId,
+    ) -> Result<(), CodegenError> {
+        // `lower_body_wave1` constructs the full `ir::Function`.
+        let function = crate::lowering::lower_body_wave1(body, self.call_conv)?;
+        let mut ctx = Context::for_function(function);
+        obj.define_function(func_id, &mut ctx).map_err(|e| {
+            let detail = match &e {
+                cranelift_module::ModuleError::Compilation(
+                    cranelift_codegen::CodegenError::Verifier(v),
+                ) => format!(
+                    "Verifier errors (wave1 path): {v}\n--- IR ---\n{}\n--- end IR ---",
+                    ctx.func.display()
+                ),
+                cranelift_module::ModuleError::Compilation(cl) => format!(
+                    "{cl}\n--- IR ---\n{}\n--- end IR ---",
+                    ctx.func.display()
+                ),
+                _ => e.to_string(),
+            };
+            CodegenError::CraneliftError(detail)
+        })?;
+        Ok(())
+    }
+
     fn declare_body(&mut self, obj: &mut ObjectModule, body: &Body) -> Result<(), CodegenError> {
         let sig = self.body_signature(body);
         // ADR-0025 §G "Runtime requirements": codegen emits the user's
@@ -537,6 +641,16 @@ impl CraneliftCtx {
                     .map(|l| format!("_{}:{}", l.id.0, l.ty))
                     .collect::<Vec<_>>()
             );
+        }
+
+        // ADR-0058e: wave-1 bodies delegate to the shared lowering substrate.
+        // No module-level pre-passes (str data, extern funcs, runtime helpers,
+        // user FuncRefs) are needed — wave-1 bodies contain no Call, Aggregate,
+        // Constant::Str, or projection references, so the substrate's
+        // `lower_body_wave1` produces a fully self-contained `ir::Function`
+        // that only needs wrapping in a `Context` for `obj.define_function`.
+        if Self::body_is_wave1(body) {
+            return self.define_body_wave1_path(obj, body, func_id);
         }
 
         // ADR-0033: compute the converged inferred-locals map once so
@@ -2327,6 +2441,51 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
         };
         self.builder.def_var(var, coerced);
         Ok(())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ADR-0058e helpers (module-level, used by body_is_wave1 predicate)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Returns `true` if `operand` is within the wave-1 surface
+/// and references only locals in `declared`.
+///
+/// Wave-1 operands: `Copy`/`Move` of a bare local (no projections,
+/// local declared), or `Constant::Int` / `Constant::Bool`. All other
+/// constants (`None`, `Str`, `Float`, `Imag`, `Bytes`, `FnRef`) are
+/// non-wave-1 because `lower_constant` only handles `Int` and `Bool`.
+fn operand_is_wave1_with_locals(
+    op: &Operand,
+    declared: &std::collections::HashSet<LocalId>,
+) -> bool {
+    match op {
+        Operand::Copy(p) | Operand::Move(p) => {
+            p.projections.is_empty() && declared.contains(&p.local)
+        }
+        Operand::Constant(c) => matches!(c, Constant::Int(_) | Constant::Bool(_)),
+    }
+}
+
+/// Returns `true` if `rvalue` is within the wave-1 surface
+/// and references only locals in `declared`.
+///
+/// Called by [`CraneliftCtx::body_is_wave1`].
+fn rvalue_is_wave1_with_locals(
+    rvalue: &Rvalue,
+    declared: &std::collections::HashSet<LocalId>,
+) -> bool {
+    match rvalue {
+        Rvalue::Use(op) => operand_is_wave1_with_locals(op, declared),
+        Rvalue::BinaryOp(op, lhs, rhs) => {
+            matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+                && operand_is_wave1_with_locals(lhs, declared)
+                && operand_is_wave1_with_locals(rhs, declared)
+        }
+        Rvalue::UnaryOp(op, val) => {
+            matches!(op, UnOp::Neg | UnOp::Plus) && operand_is_wave1_with_locals(val, declared)
+        }
+        _ => false,
     }
 }
 

@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:codegen
 crate: cobrust-codegen
-last_verified_commit: 0590731
-dependencies: [mod:mir, mod:types, adr:0023, adr:0027, adr:0041, adr:0058, adr:0058a, adr:0058d]
+last_verified_commit: c9de99c
+dependencies: [mod:mir, mod:types, adr:0023, adr:0027, adr:0041, adr:0058, adr:0058a, adr:0058d, adr:0058e]
 ---
 
 # Module: codegen
@@ -757,7 +757,26 @@ Non-wave-1 MIR shapes return `CodegenError::InvalidMir` with a `"wave1:"` prefix
 ### What is NOT in the substrate (ADR-0058d §2.3 non-goals)
 
 - AOT-specific surface stays in `cranelift_backend::CraneliftCtx::define_body`: runtime helpers, extern symbol declaration, drop schedules, dict/list/str intrinsics, `Place` projections, `Constant::FnRef` call lowering, str data symbols, `infer_local_types` chained inference.
-- `cranelift_backend.rs` is unchanged by ADR-0058d. AOT-side delegation through the wave-1 helpers is reserved for a future ADR (hypothetical 0058e or 0056d) — see ADR-0058d §2.3 deferral rationale.
+- For **non-wave-1 bodies**: `cranelift_backend.rs` is unchanged. The full `EmitCtx` path runs.
+- For **wave-1 bodies**: `CraneliftCtx::define_body` now delegates to `lower_body_wave1` via `define_body_wave1_path` (ADR-0058e, closed at `c9de99c`). ADR-0058d §2.3 deferral is RESOLVED.
+
+### ADR-0058e: AOT-side wave-1 delegation (closed 2026-05-20)
+
+**Status:** closed at `c9de99c` (`docs/agent/adr/0058e-aot-cranelift-substrate-delegation.md`).
+
+New internal helpers in `cranelift_backend.rs`:
+
+| Symbol | Description |
+|---|---|
+| `CraneliftCtx::body_is_wave1(&Body) -> bool` | Predicate: true if body qualifies for wave-1 substrate delegation. Checks local types, terminator shapes, rvalue forms, constant variants, and declared-local membership. Conservative: unknown → false → full EmitCtx path. |
+| `CraneliftCtx::define_body_wave1_path(&mut self, obj, body, func_id) -> Result<()>` | Calls `lowering::lower_body_wave1`, wraps in `Context::for_function`, calls `obj.define_function`. No str-data/extern/runtime pre-passes needed (wave-1 has no Call/Aggregate/Str). |
+| `rvalue_is_wave1_with_locals(&Rvalue, &HashSet<LocalId>) -> bool` | Free fn: checks rvalue shape + operand constants + source local membership. |
+| `operand_is_wave1_with_locals(&Operand, &HashSet<LocalId>) -> bool` | Free fn: `Copy`/`Move` bare-local + declared; `Constant::Int`/`Bool` only. |
+
+**Invariants:**
+- `body_is_wave1` returning `true` guarantees `lower_body_wave1` will succeed (no `wave1:` prefix errors in production).
+- Ill-formed bodies (dangling locals, non-wave-1 constants) return `false` from `body_is_wave1` → full AOT path → `CodegenError::InvalidMir` as before.
+- Wave-1 delegation is AOT-only; JIT path unchanged.
 
 ### Unit tests (wave-1 substrate)
 
