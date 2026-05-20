@@ -375,12 +375,14 @@ impl<'a> Lexer<'a> {
     fn prev_token_completes_postfix(&self) -> bool {
         matches!(
             self.out.last().map(|t| &t.kind),
-            Some(TokenKind::Ident(_))
-                | Some(TokenKind::Int(_))
-                | Some(TokenKind::RParen)
-                | Some(TokenKind::RBracket)
-                | Some(TokenKind::Str { .. })
-                | Some(TokenKind::Bytes { .. })
+            Some(
+                TokenKind::Ident(_)
+                    | TokenKind::Int(_)
+                    | TokenKind::RParen
+                    | TokenKind::RBracket
+                    | TokenKind::Str { .. }
+                    | TokenKind::Bytes { .. }
+            )
         )
     }
 
