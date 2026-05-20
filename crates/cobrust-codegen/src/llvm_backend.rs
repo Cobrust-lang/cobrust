@@ -832,12 +832,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // ADR-0059a §3.3.1 Option A — 5 named container DI types.
         // All share opaque-pointer storage; names disambiguate the
         // lldb pretty-printer dispatch surface.
+        //
+        // ADR-0059a §6.3 wave-2 — `cobrust::Adt` named DI type added so
+        // `Ty::Adt(...)` (the future home of `Option<T>`, `Result<T,E>`,
+        // and user-defined enums) gets a distinct DWARF name. Until
+        // HIR/MIR carry the per-variant Adt name through to DI, every
+        // Adt local collapses to the single `cobrust::Adt` matcher; the
+        // generic Adt printer renders `<adt#N @ 0xaddr>` and the
+        // OptionProvider takes over once MIR threads the Adt name
+        // (Phase L+ follow-up).
         for (key, name) in [
             ("Str", "cobrust::Str"),
             ("List", "cobrust::List"),
             ("Dict", "cobrust::Dict"),
             ("Set", "cobrust::Set"),
             ("Tuple", "cobrust::Tuple"),
+            ("Adt", "cobrust::Adt"),
         ] {
             let ty = self
                 .di_builder
@@ -852,10 +862,18 @@ impl<'ctx> LlvmEmitter<'ctx> {
     /// ADR-0059a §3.3.1 Option A: 5 container variants
     /// (`Str` / `List` / `Dict` / `Set` / `Tuple`) get their own
     /// distinctly-named DI entries so lldb pretty-printers can
-    /// dispatch on the DWARF type-name. All other (`Bytes`, `Ref`,
-    /// `Adt`, `Record`, `Fn`, `Var`, `Alias`, `Generic`, `None`,
-    /// `Never`) collapse to the opaque-pointer fallback `Ptr` (matches
-    /// the wave-1/2 LLVM type lowering).
+    /// dispatch on the DWARF type-name.
+    ///
+    /// ADR-0059a §6.3 wave-2 — `Ty::Adt(_, _)` now gets its own
+    /// `cobrust::Adt` DI name (was `Ptr`). The lldb printer
+    /// registrations bind the generic `cobrust_option_summary` to
+    /// `cobrust::Adt` so any Adt local renders with at least the
+    /// `Some(<addr>)` ptr-tag shape until per-Adt naming is threaded
+    /// through MIR (Phase L+ follow-up).
+    ///
+    /// All other (`Bytes`, `Ref`, `Record`, `Fn`, `Var`, `Alias`,
+    /// `Generic`, `None`, `Never`) collapse to the opaque-pointer
+    /// fallback `Ptr` (matches the wave-1/2 LLVM type lowering).
     fn di_type_for(&self, ty: &Ty) -> DIBasicType<'ctx> {
         let key = match ty {
             Ty::Int => "Int",
@@ -870,6 +888,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             Ty::Dict(_, _) => "Dict",
             Ty::Set(_) => "Set",
             Ty::Tuple(_) => "Tuple",
+            // ADR-0059a §6.3 wave-2 — `Ty::Adt` gets a distinct DI name.
+            Ty::Adt(_, _) => "Adt",
             // ADR-0060b — array DI collapses to opaque-ptr (no array DI
             // wave-2; lldb can introspect via the LLVM type).
             Ty::Array(_, _) => "Ptr",
