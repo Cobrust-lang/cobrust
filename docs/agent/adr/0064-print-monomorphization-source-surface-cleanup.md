@@ -3,10 +3,10 @@ doc_kind: adr
 adr_id: 0064
 name: "0064"
 title: print_int debt removal + polymorphic print monomorphization
-status: proposed
+status: accepted
 phase: "Phase N (post-Phase-M)"
 date: 2026-05-19
-last_verified_commit: 4cfef19
+last_verified_commit: 46c0946
 supersedes: []
 superseded_by: []
 relates_to: [adr:0050e, adr:0051, adr:0052b, adr:0058d]
