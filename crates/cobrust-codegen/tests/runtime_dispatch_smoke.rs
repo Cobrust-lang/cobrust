@@ -24,7 +24,7 @@ use cobrust_frontend::{parse_str, span::FileId};
 use cobrust_hir::{Session, lower as hir_lower};
 use cobrust_mir::{Module as MirModule, lower as mir_lower};
 use cobrust_types::check;
-use object::ObjectSymbol as _;
+use object::{Object as _, ObjectSymbol as _};
 use target_lexicon::Triple;
 
 // F34 anchor: runtime_dispatch_smoke::lower_to_mir
@@ -64,7 +64,6 @@ fn make_llvm_spec(name: &str, runtime_dispatch: bool) -> TargetSpec {
 fn object_symbols(path: &std::path::Path) -> Vec<String> {
     let data = std::fs::read(path).expect("read object");
     let obj = object::File::parse(data.as_slice()).expect("parse object");
-    use object::Object as _;
     obj.symbols()
         .filter_map(|sym| {
             let name = sym.name().ok()?;
