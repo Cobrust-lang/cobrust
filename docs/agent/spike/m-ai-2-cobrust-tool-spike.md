@@ -463,7 +463,8 @@ Update:
 
 ## Gates
 
-All heavy gates run on <self-hosted-runner> via Mode C. The Mac remains edit/dispatch
+<!-- Status 2026-05-20: DG self-hosted-runner abandoned (SSH reset). Route heavy gates to GH Actions CI (ubuntu-latest + macos-latest) instead. Mac single-crate verify is primary local path. -->
+All heavy gates run on GH Actions CI (ubuntu-latest + macos-latest). The Mac remains edit/dispatch
 brain only.
 
 Minimum completion evidence:
