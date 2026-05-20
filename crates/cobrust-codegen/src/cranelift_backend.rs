@@ -826,6 +826,15 @@ impl CraneliftCtx {
         // prefix) because `lower_aggregate_format_string` calls
         // `materialize_str_data` with the bare spec to pass (ptr, len) to
         // `__cobrust_fmt_float_prec`.
+        //
+        // Bug fix (Cluster C): the first pass `collect_str_payloads_from_rvalue`
+        // already interns `FMTSPEC:.2f` (via `Rvalue::Aggregate` arm). The old
+        // code below had the bare-spec extraction inside `if !already_interned`,
+        // so the `FMTSPEC:` sentinel was skipped by the `continue` on the
+        // second pass and the bare spec `.2f` was never queued. Fix: always
+        // scan FormatString operands for FMTSPEC-prefixed payloads and queue
+        // bare specs unconditionally; the inner `if str_data_ids.contains_key`
+        // guard below prevents double-registration of the bare spec itself.
         let mut fmtspec_extra: Vec<String> = Vec::new();
         for mir_block in &body.blocks {
             for stmt in &mir_block.statements {
@@ -839,6 +848,17 @@ impl CraneliftCtx {
                         if let cobrust_mir::Operand::Constant(cobrust_mir::Constant::Str(payload)) =
                             op
                         {
+                            // Always extract bare spec from FMTSPEC sentinels,
+                            // regardless of whether the sentinel was already
+                            // interned by the first pass.
+                            if let Some(spec) = payload.strip_prefix("FMTSPEC:") {
+                                if !spec.is_empty() {
+                                    fmtspec_extra.push(spec.to_string());
+                                }
+                                // The sentinel itself (FMTSPEC:.2f) is already
+                                // handled by the first pass; skip re-interning.
+                                continue;
+                            }
                             if str_data_ids.contains_key(payload) {
                                 continue;
                             }
@@ -852,13 +872,6 @@ impl CraneliftCtx {
                             obj.define_data(data_id, &data_desc)
                                 .map_err(|e| CodegenError::CraneliftError(e.to_string()))?;
                             str_data_ids.insert(payload.clone(), data_id);
-                            // If this is a FMTSPEC sentinel, queue the bare spec
-                            // for separate interning.
-                            if let Some(spec) = payload.strip_prefix("FMTSPEC:") {
-                                if !spec.is_empty() {
-                                    fmtspec_extra.push(spec.to_string());
-                                }
-                            }
                         }
                     }
                 }

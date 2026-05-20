@@ -337,7 +337,6 @@ fn f64e12_abs_of_negative() {
 // =====================================================================
 
 #[test]
-#[ignore = "codegen-time bug: `str payload \".2f\" not interned`. F-string `:.Nf` precision interning missing on this build. Pre-existing red on main HEAD as of 2026-05-20, not introduced by this branch."]
 fn f64e13_fstring_fixed_2_decimals() {
     // `f"{x:.2f}"` where x = 3.14159 → "3.14".
     assert_build_run(
@@ -350,7 +349,6 @@ fn f64e13_fstring_fixed_2_decimals() {
 }
 
 #[test]
-#[ignore = "codegen-time bug: `str payload \".4f\" not interned`. F-string `:.Nf` precision interning missing on this build. Pre-existing red on main HEAD as of 2026-05-20, not introduced by this branch."]
 fn f64e14_fstring_fixed_4_decimals() {
     // `f"{y:.4f}"` where y = sqrt(2.0) → "1.4142".
     // NOTE: This test implicitly requires both sqrt() and f-string precision.
@@ -364,7 +362,6 @@ fn f64e14_fstring_fixed_4_decimals() {
 }
 
 #[test]
-#[ignore = "codegen-time bug: `str payload \".0f\" not interned`. F-string `:.Nf` precision interning missing on this build. Pre-existing red on main HEAD as of 2026-05-20, not introduced by this branch."]
 fn f64e15_fstring_zero_decimals() {
     // `f"{x:.0f}"` → no decimal point, just the integer part.
     assert_build_run(
@@ -615,7 +612,6 @@ fn f64e32_pow_then_cast_back_to_i64() {
 }
 
 #[test]
-#[ignore = "codegen-time bug: `str payload \".2f\" not interned`. F-string `:.Nf` precision interning missing on this build (depends on the same fix as f64e13-15). Pre-existing red on main HEAD as of 2026-05-20, not introduced by this branch."]
 fn f64e33_circle_area_print_fixed_2() {
     // Circle area: π × r² where r = 5.0.
     // Area = 3.14159... × 25.0 = 78.539...
