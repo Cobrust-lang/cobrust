@@ -321,3 +321,34 @@ variant. The fix path is reproducible, structured, and LLM-friendly.
 
 Future Direction-B extensions to `cobrust_frontend::{LexError,
 ParseError}` are tracked but out-of-scope for Wave-2.
+
+## Fix-safety ladder (ADR-0062)
+
+Every suggestion now also carries a `fix_safety` tier the LSP code-
+action layer and JSON diagnostic emit consume to decide whether the
+suggestion is safe to auto-apply. The six tiers from lowest-risk
+(always-safe-to-auto-apply) to highest-risk (never-auto-apply):
+
+| Tier | Wire form | Auto-apply behaviour |
+|---|---|---|
+| FormatOnly | `format-only` | Applied on save / format pass |
+| BehaviorPreserving | `behavior-preserving` | Apply on user accept |
+| LocalEdit | `local-edit` | Apply on user accept (may require adjacent test update) |
+| ApiChanging | `api-changing` | Suggest only — no one-click apply |
+| TargetChanging | `target-changing` | Diagnostic only — never auto-apply |
+| RequiresHumanReview | `requires-human-review` | Diagnostic only — manual review required |
+
+### When each tier appears
+
+- **BehaviorPreserving**: `if x:` → `if x != 0:`; mutable-default → `None`-default rewrite; f64 dict key → `.to_bits() as i64`. Compiler-mandated rewrites that preserve user intent.
+- **LocalEdit**: typo fixes (`UnknownName`), arity / keyword mismatches, type-annotation adds (`AmbiguousType`), `break`/`continue`/`return` placement. Call-site or one-binding fixes.
+- **RequiresHumanReview**: `OccursCheck` (recursive type), `UseOfDroppedFeature` (use a different construct), `DictSpreadNotSupported` (wait for Phase G), `MirError::EscapingBorrow` / `DoubleDrop` (lifetime restructuring).
+
+### LSP code-action gating
+
+When connected to a Cobrust LSP server (`cobrust-lsp` binary), the
+editor's "quick fix" menu shows code actions only for tiers
+`FormatOnly` / `BehaviorPreserving` / `LocalEdit`. `ApiChanging`
+suggestions surface as `Refactor` (suggest-only). `TargetChanging` /
+`RequiresHumanReview` suggestions appear in the diagnostic message
+but generate no code action — the agent must reason about the fix.
