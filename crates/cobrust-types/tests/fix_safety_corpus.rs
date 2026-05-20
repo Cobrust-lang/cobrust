@@ -1,8 +1,8 @@
 //! ADR-0062 §6 — FixSafety acceptance gate corpus.
 //!
-//! Five+ unit tests that cover the six-tier ladder + Display wire form
-//! + per-variant TypeError tier classification + Suggestion struct
-//! shape. Every test references the ADR row it covers in the doc-string.
+//! Fifteen unit tests covering: the six-tier ladder, Display wire form,
+//! per-variant TypeError tier classification, and Suggestion struct shape.
+//! Every test references the ADR row it covers in the doc-string.
 //!
 //! Pre-reads:
 //! - `docs/agent/adr/0062-fix-safety-ladder.md` §3 + §6.
@@ -12,10 +12,10 @@
 #![allow(clippy::single_match_else)]
 
 use cobrust_frontend::span::{FileId, Span};
+use cobrust_types::ty::{Ty, VarId};
 use cobrust_types::{
     FixSafety, Suggestion, TypeError, type_error_fix_safety, type_error_suggestion_text,
 };
-use cobrust_types::ty::{Ty, VarId};
 
 fn span() -> Span {
     Span::new(FileId::SYNTHETIC, 0, 1)

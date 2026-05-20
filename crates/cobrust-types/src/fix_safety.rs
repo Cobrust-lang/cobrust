@@ -324,10 +324,7 @@ mod tests {
             span: span(),
             suggestion: Some("add a type annotation — recursive types must be explicit"),
         };
-        assert_eq!(
-            type_error_fix_safety(&err),
-            FixSafety::RequiresHumanReview
-        );
+        assert_eq!(type_error_fix_safety(&err), FixSafety::RequiresHumanReview);
     }
 
     #[test]
@@ -348,10 +345,7 @@ mod tests {
         assert!(type_error_suggestion_text(&err).is_none());
         assert!(Suggestion::for_type_error(&err).is_none());
         // Tier defaults to conservative RequiresHumanReview.
-        assert_eq!(
-            type_error_fix_safety(&err),
-            FixSafety::RequiresHumanReview
-        );
+        assert_eq!(type_error_fix_safety(&err), FixSafety::RequiresHumanReview);
     }
 
     #[test]

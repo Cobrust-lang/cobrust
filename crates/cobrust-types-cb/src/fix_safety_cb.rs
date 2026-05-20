@@ -220,9 +220,6 @@ mod tests {
             assert_eq!(FixSafetyCb::from_code(variant.as_code()), variant);
         }
         // Out-of-range defaults to RequiresHumanReview.
-        assert_eq!(
-            FixSafetyCb::from_code(99),
-            FixSafetyCb::RequiresHumanReview
-        );
+        assert_eq!(FixSafetyCb::from_code(99), FixSafetyCb::RequiresHumanReview);
     }
 }
