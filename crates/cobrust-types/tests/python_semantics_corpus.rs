@@ -110,6 +110,7 @@ fn host_object_spec(name: &str) -> TargetSpec {
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
+        target_cpu: None,
     }
 }
 

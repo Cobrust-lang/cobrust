@@ -56,6 +56,7 @@ fn make_llvm_spec(name: &str, runtime_dispatch: bool) -> TargetSpec {
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch,
+        target_cpu: None,
     }
 }
 
@@ -152,6 +153,7 @@ fn smoke_triple_is_x86_64_classification() {
         module_name: "t".to_string(),
         source_path: None,
         runtime_dispatch: false,
+        target_cpu: None,
     };
 
     #[cfg(feature = "llvm")]
