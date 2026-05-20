@@ -30,8 +30,10 @@ use crate::error_cb::TypeErrorCb;
 /// cb mirror of `cobrust_types::FixSafety`.
 ///
 /// Variant declaration order is identical so the derived `Ord`
-/// reflects the same tier ladder. ADR-0062 §3.1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// reflects the same tier ladder. ADR-0062 §3.1. The default is
+/// `RequiresHumanReview` (conservative; declared last so the
+/// `derive(Default)` lands on it via `#[default]`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FixSafetyCb {
     /// Whitespace / formatting only.
     FormatOnly,
@@ -44,13 +46,8 @@ pub enum FixSafetyCb {
     /// Changes target platform, ABI, or linking contract.
     TargetChanging,
     /// Semantic ambiguity beyond compiler's ability to assess.
+    #[default]
     RequiresHumanReview,
-}
-
-impl Default for FixSafetyCb {
-    fn default() -> Self {
-        FixSafetyCb::RequiresHumanReview
-    }
 }
 
 impl fmt::Display for FixSafetyCb {
@@ -146,6 +143,7 @@ impl SuggestionCb {
 /// `cobrust_types::type_error_fix_safety` (each variant in Rust maps to
 /// its same-named cb mirror under this function).
 #[must_use]
+#[allow(clippy::enum_glob_use)]
 pub fn type_error_cb_fix_safety(err: &TypeErrorCb) -> FixSafetyCb {
     use TypeErrorCb::*;
     match err {
