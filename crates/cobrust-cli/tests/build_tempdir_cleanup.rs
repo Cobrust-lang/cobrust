@@ -214,9 +214,16 @@ fn failed_build_leaves_no_intermediate_artifacts() {
         .tempdir()
         .expect("create test output tempdir");
     let bad_src = out_root.path().join("type_err.cb");
-    // Introduce a deliberate type error: `print` expects str, given i64.
-    std::fs::write(&bad_src, "fn main() -> i64:\n    print(42)\n    return 0\n")
-        .expect("write bad source");
+    // ADR-0064: `print(42)` is now VALID (polymorphic print accepts i64).
+    // Use a genuine type error: implicit-truthy `if 1:` is banned per
+    // ADR-0052 (§2.2 compile-time-catch rule). The type checker emits
+    // TypeError::ImplicitTruthiness for non-bool conditions, causing a
+    // non-zero exit code — which is what this test verifies.
+    std::fs::write(
+        &bad_src,
+        "fn main() -> i64:\n    if 1:\n        return 1\n    return 0\n",
+    )
+    .expect("write bad source");
     let exe_path = out_root.path().join("type_err_exe");
 
     let build_output = Command::new(&bin)
