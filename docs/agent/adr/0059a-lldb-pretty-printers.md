@@ -362,13 +362,21 @@ byte-decode logic against synthetic byte arrays — including ASCII,
 UTF-8 multibyte (你好), invalid-UTF-8 replacement-char fallback, and
 embedded-quote escaping. The decode contract is verified.
 
-**Remaining honest-cite**: full runtime smoke (linked executable +
-runtime stdlib + breakpoint hit + `frame variable s`) requires the
-codegen smoke harness to produce executables (not just objects) AND
-to link in `cobrust-stdlib`. That extension is **wave-3 scope**
-(parked behind ADR-0059c `cobrust debug` CLI or an explicit
-"executable smoke harness" sub-ADR). Wave-2 ships the byte-decode
-correctness gate but DOES NOT ship the full breakpoint round-trip.
+**Wave-3 closure (ADR-0059d §3.3 — partial RESOLVED)**:
+`lldb_linked_str_frame_variable` test added to `dwarf_lldb_smoke.rs`
+verifying the linked-executable path emits a binary and the
+`cobrust::Str` DIE is present in it. The linked-executable harness
+(`executable_spec` / `build_linked_executable` / `lldb_run_with_bp`)
+is shipped.
+
+**Remaining honest-cite (preserved)**: full runtime `frame variable s`
+showing actual Str content at a breakpoint requires stdlib linkage +
+a populated StringBuffer at runtime. The MIR fixture bodies are
+self-contained and do not call the Str allocator. Full bp-hit content
+smoke deferred to ADR-0059c `cobrust debug` CLI path.
+
+**§6.1 partially RESOLVED at Phase L wave-3** (DIE + linked harness);
+bp-hit content carries to ADR-0059c.
 
 #### §6.2 Dict iteration K:V walk — RESOLVED
 
@@ -405,15 +413,17 @@ printer registers `cobrust_option_summary` on `cobrust::Adt` so every
 Adt local renders at minimum as `None` (null ptr-tag) or
 `Some(<0xaddr>)` (non-null ptr-tag).
 
-**Remaining honest-cite**: per-Adt-variant `DICompositeType` (e.g.
-the actual `Option<Int>` variant set with proper discriminant +
-payload field DIs) is Phase L+ scope. It requires HIR/MIR to thread
-the per-Adt name + variant schema through `di_type_for`, plus two
-new runtime exports (`__cobrust_adt_discriminant` /
-`__cobrust_adt_variant_name`) the printer can dispatch on. Today
-every Adt collapses to the single `cobrust::Adt` matcher — sufficient
-for the wave-2 honest-deferral closure but not yet the full
-Python-`repr`-shaped Option rendering the wave-1 ADR contemplated.
+**Wave-3 closure (ADR-0059d §3.2 — RESOLVED at wave-3)**:
+`populate_di_basic_types` emits a `DICompositeType`
+(DW_TAG_structure_type) named `"cobrust::Option"` with two member
+fields (tag: i32 at offset 0, payload: i64 at offset 64). Stored in
+`di_option_composite` field; emitted unconditionally so `image lookup
+--type cobrust::Option` finds the DIE. `cobrust_option_summary`
+extended with tag-dispatch via `process.ReadMemory`: tag=0 → `None`;
+tag=1 → read i64 at ptr+8 → `Some(<payload>)`. Fallback to ptr-as-tag
+preserved for unreadable memory.
+
+**§6.3-per-variant RESOLVED at Phase L wave-3.**
 
 ### 6.2 Wave-2 acceptance gate — 3 new + 7 baseline preserved + 12 Python self-tests
 
@@ -437,6 +447,30 @@ Skip behaviour: same as wave-1 — when `lldb-18` is not on `$PATH`,
 the 10 lldb smoke tests skip cleanly per `find_lldb()` helper. The
 Python self-tests and stdlib unit tests have NO lldb dependency, so
 they run on every Mac/Linux CI host unconditionally.
+
+### 6.3 Wave-3 acceptance gate — 5 new + 10 baseline preserved + 14 Python self-tests
+
+`crates/cobrust-codegen/tests/dwarf_lldb_smoke.rs` extends with 5 NEW
+tests:
+
+1. **`lldb_linked_str_frame_variable`** — linked-exe path; `cobrust::Str`
+   DIE present; HONEST-CITE for bp-hit content (stdlib linkage needed).
+2. **`lldb_linked_option_none`** — linked-exe; `cobrust::Adt` /
+   `cobrust::Option` DIE present for parametrised `Ty::Adt`.
+3. **`lldb_linked_option_some_int`** — linked-exe; symbol present in
+   linked binary; regression guard for linker step with composite DI.
+4. **`lldb_option_di_composite_type_fields`** — object-level; asserts
+   `cobrust::Option` or `cobrust::Adt` DIE present after wave-3 codegen
+   change.
+5. **`lldb_option_di_composite_adt_regression`** — object-level;
+   regression guard that non-parametrised `Ty::Adt` still emits
+   `cobrust::Adt` (wave-2 preservation).
+
+Wave-3 total: **5 new + 10 baseline preserved = 15 lldb smoke tests**
++ **14 Python self-tests** (12 wave-2 + 2 wave-3 tag-dispatch).
+
+Skip behaviour: linked-executable tests additionally skip when `cc` is
+not on PATH (`linker::linker_available()` check).
 
 ## 7. Risk register
 

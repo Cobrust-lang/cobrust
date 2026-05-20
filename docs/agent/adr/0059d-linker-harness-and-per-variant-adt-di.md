@@ -4,10 +4,12 @@ adr_id: 0059d
 name: 0059d
 parent_adr: 0059a
 title: "Phase L wave-3 — linker harness + per-variant Option DICompositeType"
-status: proposed
+status: accepted
 date: 2026-05-20
 phase: Phase L wave-3
-last_verified_commit: 545631a
+last_verified_commit: 79bd1b2
+ratified_at: 79bd1b2
+ratified_on: 2026-05-20
 relates_to: [adr:0059a, adr:0059, adr:0058c]
 discovered_by: ADR-0059a §6 honest-deferrals — §6.1 runtime frame variable + §6.3 per-variant Option DI remained after wave-2
 ---

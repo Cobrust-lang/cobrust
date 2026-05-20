@@ -1642,7 +1642,17 @@ Phase L wave-1（`tools/lldb-cobrust/printers.py` + `llvm_backend.rs::populate_d
 - **冒烟门扩展**（ADR-0059a §6)。`dwarf_lldb_smoke.rs` 扩展 3 个新测试（`lldb_smoke_str_variable_renders_content` / `lldb_smoke_list_variable_renders_bracket` / `lldb_smoke_dict_variable_renders_braces`),验证 `image lookup --type cobrust::{Str,List,Dict}` 在发射的 DWARF 中找到命名 DIE —— 端到端证明 Option A 命名到达 `.debug_info`。保留 4 个 ADR-0058c 基线测试；wave-1 corpus 为 4 + 3 = 7 个 lldb 冒烟测试。
 - **Phase L wave-2 honest-deferrals 已 RESOLVED**(2026-05-20,ADR-0059a §6.1-§6.3)。三处关闭:(a) §6.2 Dict K:V 遍历 —— `crates/cobrust-stdlib/src/collections.rs` 新增 6 个运行时导出(`__cobrust_dict_{key,value}_tag` + `__cobrust_dict_iter_{key,value}_{i64,str}_at`),printer 通过 `EvaluateExpression` 调用;按 `IndexMap::get_index` 保留插入顺序。(b) §6.3 Adt DI 命名 —— 第 6 个 `DIBasicType` `cobrust::Adt` 添加;`di_type_for(Ty::Adt(_, _))` 分派到此;printer 对任何 Adt 局部变量渲染指针标签 `None` / `Some(<0xaddr>)`。(c) §6.1 Str 运行时断点 —— HONEST-CITE;`tools/lldb-cobrust/tests/test_printers.py` 12 个 Python 自测验证 StringBuffer 字节解码契约;完整可执行 + 链入 stdlib + bp 命中冒烟推迟到 wave-3。
 
-非目标（按 ADR-0059a §4 延后）：Rust 风格源码级类型名渲染（Cobrust 用 `List<Str>` 而非 `Vec<String>`）、内联表达式求值、用户自定义 record 的字段展示（Phase L+,待用户 record DI 落地）、gdb pretty-printers（Phase L+ 后续）、从 inspector 做 REPL 风格修改、逐 Adt 变体 DICompositeType(Phase L+ 范围;wave-2 仅交付泛型 Adt 命名)。
+非目标（按 ADR-0059a §4 延后）：Rust 风格源码级类型名渲染（Cobrust 用 `List<Str>` 而非 `Vec<String>`）、内联表达式求值、用户自定义 record 的字段展示（Phase L+,待用户 record DI 落地）、gdb pretty-printers（Phase L+ 后续）、从 inspector 做 REPL 风格修改。
+
+#### Phase L wave-3 —— 链接器测试框架 + 逐变体 Option DICompositeType（ADR-0059d）
+
+Phase L wave-3（ADR-0059d，2026-05-20）关闭 wave-2 延后的两个 honest-cite：
+
+- **链接可执行文件测试框架**（ADR-0059d §3.1）。`dwarf_lldb_smoke.rs` 增加 `executable_spec` / `build_linked_executable` / `lldb_run_with_bp` 辅助函数。5 个新链接/Option 冒烟测试；`dwarf_lldb_smoke.rs` corpus = **15 个测试**。
+- **逐变体 Option DICompositeType**（ADR-0059d §3.2）。`cobrust::Option` `DICompositeType` 发射，含 `tag: i32`（偏移 0，0=None，1=Some）和 `payload: i64`（偏移 64）成员字段。`cobrust_option_summary` 扩展标签分派：通过 `process.ReadMemory` 在 ptr 偏移 0 读取标签；tag=0 → `None`；tag=1 → 读取 ptr+8 处 8 字节 → `Some(<payload>)`。保留指针标签回退（回归安全）。
+- **Python 自测**扩展至 **14 个**（新增 2 个 wave-3 标签分派测试）。
+
+HONEST-CITE 保留：完整 `frame variable s = "hello"` 断点命中需要 stdlib Str 分配器；延后至 ADR-0059c `cobrust debug` CLI。
 
 **M9 测试总数**：158 个测试，覆盖 5 个套件：
 - `codegen_well_formed.rs` —— 60 个良型程序，覆盖整数 / 浮点 / 布尔的算术、比较、分支、循环、递归、位运算、逻辑运算。

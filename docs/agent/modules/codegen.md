@@ -723,9 +723,16 @@ Mac verify `python3 tools/lldb-cobrust/tests/test_printers.py`: 12 PASS. Mac ver
 - **Struct-field display for user-defined records** (Phase L+ once user-record DI lands).
 - **gdb pretty-printers** (Phase L+ followup; wave-1 is lldb-18-only).
 - **REPL-style mutation from inspector** (read-only display).
-- **Runtime `frame variable` end-to-end test (wave-2 honest-cite preserved)**: object-level `image lookup` is the wave-1/2 verifiable surface; full executable + linked stdlib + breakpoint smoke awaits wave-3 (linker harness sub-ADR). Wave-2 verifies the byte-decode contract via Python self-tests instead.
-- **Per-Adt variant DICompositeType for Option / Result** (wave-2 honest-cite preserved): wave-2 closes the GENERIC Adt naming gap (`cobrust::Adt` DIE for any `Ty::Adt`), but per-variant discriminant + payload field DI awaits MIR threading per-Adt names through `di_type_for`. Phase L+ scope.
+- **Runtime `frame variable` end-to-end test (wave-2 honest-cite; wave-3 PARTIAL RESOLVED)**: wave-3 (ADR-0059d) ships the linked-executable harness (`executable_spec` / `build_linked_executable` / `lldb_run_with_bp`) and verifies `cobrust::Str` DIE in linked binary. Full bp-hit content (`frame variable s = "hello"`) deferred to ADR-0059c (requires stdlib Str allocator).
+- **Per-Adt variant DICompositeType for Option / Result** (wave-2 honest-cite; wave-3 RESOLVED): wave-3 (ADR-0059d §3.2) emits a `DICompositeType` named `"cobrust::Option"` with tag (i32) + payload (i64) member fields in `populate_di_basic_types`. `cobrust_option_summary` extended with tag-dispatch via `process.ReadMemory`. Generic Adt variants for user-defined enums remain Phase L+ scope.
 - **IndexMap layout-stable Dict display** (wave-2 RESOLVED): the wave-1 `{<n entries>}` placeholder remains as a fallback when accessors are unresolved (object-level smoke); the wave-2 happy path uses six runtime accessor exports + `EvaluateExpression`.
+
+### Wave-3 test surface (ADR-0059d §5)
+
+| Suite | Tests added | Notes |
+|---|---|---|
+| `tests/dwarf_lldb_smoke.rs` Phase L wave-3 | 5 added | `lldb_linked_str_frame_variable` (linked exe + Str DIE), `lldb_linked_option_none` (linked Option Adt DIE), `lldb_linked_option_some_int` (linked exe symbol), `lldb_option_di_composite_type_fields` (object-level Option/Adt DIE), `lldb_option_di_composite_adt_regression` (wave-2 Adt regression). Total: 4+3+3+5=**15 tests**. Linked-exe tests skip when `cc` absent. |
+| `tools/lldb-cobrust/tests/test_printers.py` | 2 added | `test_tag_zero_renders_none`, `test_tag_one_renders_some_with_payload`. Total: **14 Python self-tests**. |
 
 ## Phase K Strand #4 — JIT/AOT lowering convergence (ADR-0058d)
 
