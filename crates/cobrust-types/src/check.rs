@@ -1217,10 +1217,32 @@ impl Ctx {
             }
             ExprKind::Call { callee, args } => self.synth_call(callee, args, span),
             ExprKind::Attr { base, name } => {
-                let _bt = self.synth_expr(base)?;
-                // M2 stays conservative on attribute access — return
-                // a fresh inference variable. The static core does
-                // not yet track instance fields per ADT.
+                let bt = self.synth_expr(base)?;
+                // ADR-0052a §8 Wave-1 — tuple-field projection
+                // resolution. When the base type is `Ty::Tuple(items)`
+                // and the attribute `name` parses as a non-negative
+                // integer, return the element type at that index. OOB
+                // surfaces as `NotIndexable` so the LLM gets a
+                // §2.5-honest fix path.
+                //
+                // Non-tuple bases (instance fields per ADT, methods,
+                // etc.) still fall back to `fresh_var()` — the static
+                // core does not yet track ADT fields.
+                if let Ok(idx) = name.parse::<usize>() {
+                    let resolved = self.subst.apply(&bt);
+                    if let Ty::Tuple(items) = &resolved {
+                        if idx < items.len() {
+                            return Ok(items[idx].clone());
+                        }
+                        return Err(TypeError::NotIndexable {
+                            actual: resolved.clone(),
+                            span,
+                            suggestion: Some(
+                                "tuple-field index out of bounds — use a value in [0, len-1]",
+                            ),
+                        });
+                    }
+                }
                 let _ = name;
                 Ok(self.fresh_var())
             }
