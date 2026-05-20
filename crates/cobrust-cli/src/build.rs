@@ -108,6 +108,7 @@ pub fn run(
 /// `"native"` auto-detects the host CPU; any other string is passed
 /// directly to LLVM as the CPU name (e.g. `"skylake"`, `"apple-m1"`).
 /// `None` keeps the generic LLVM baseline.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     file: &Path,
     output: Option<&Path>,

@@ -638,14 +638,7 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
     // When `None`, fall back to the `"generic"` baseline (pre-Tier-2 behaviour).
     let cpu = spec.target_cpu.as_deref().unwrap_or("generic");
     target
-        .create_target_machine(
-            &triple,
-            cpu,
-            "",
-            opt,
-            RelocMode::PIC,
-            CodeModel::Default,
-        )
+        .create_target_machine(&triple, cpu, "", opt, RelocMode::PIC, CodeModel::Default)
         .ok_or_else(|| {
             CodegenError::LlvmError(format!(
                 "failed to create LLVM TargetMachine for {} (cpu={cpu})",

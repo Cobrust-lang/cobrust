@@ -25,8 +25,8 @@ pub fn run(
         release,
         target,
         quiet,
-        None,  // enable_runtime_dispatch: use default
-        None,  // target_cpu: generic baseline
+        None, // enable_runtime_dispatch: use default
+        None, // target_cpu: generic baseline
     ) {
         Ok(a) => a,
         Err(e) => {

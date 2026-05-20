@@ -47,10 +47,7 @@ fn add_src() -> &'static str {
 
 #[cfg(feature = "llvm")]
 fn make_tier2_spec(name: &str, target_cpu: Option<&str>, runtime_dispatch: bool) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-tier2-cpu-{name}-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("cobrust-tier2-cpu-{name}-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     TargetSpec {
         triple: Triple::host(),

@@ -47,16 +47,17 @@ pub fn run(quiet: bool) -> u8 {
     let mut failed: u32 = 0;
 
     for f in &cb_files {
-        let artifact = match build::build(f, None, EmitKind::Executable, false, None, true, None, None) {
-            Ok(a) => a,
-            Err(e) => {
-                if !quiet {
-                    println!("FAIL {} (build: {e})", f.display());
+        let artifact =
+            match build::build(f, None, EmitKind::Executable, false, None, true, None, None) {
+                Ok(a) => a,
+                Err(e) => {
+                    if !quiet {
+                        println!("FAIL {} (build: {e})", f.display());
+                    }
+                    failed += 1;
+                    continue;
                 }
-                failed += 1;
-                continue;
-            }
-        };
+            };
         let status = Command::new(artifact.path()).status();
         match status {
             Ok(s) if s.success() => {
