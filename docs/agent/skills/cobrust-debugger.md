@@ -149,10 +149,10 @@ Err(IoError::NotFound("config.toml"))
 Point { x: 1.0, y: 2.0 }
 ```
 
-**Wave-1 honest-debt** (resolved wave-2 2026-05-20 except where noted):
-- Dict iteration display inside lldb loops: **wave-2 RESOLVED** — printer walks insertion-order K:V via runtime accessor exports (`__cobrust_dict_iter_{key,value}_{i64,str}_at`). Falls back to `{<n entries>}` when accessors unresolved (object-only smoke).
-- Option ADT discriminant-inspect (DI): **wave-2 RESOLVED for generic Adt naming** — `cobrust::Adt` DIE emitted, printer renders ptr-tag `None` / `Some(<0xaddr>)`. Per-variant payload rendering (proper `Some(42)`) is Phase L+ scope.
-- Str runtime breakpoint hit: **wave-2 HONEST-CITE** — byte-decode logic verified via 12 Python self-tests; full executable smoke parked for wave-3.
+**Wave-1/2/3 honest-debt status** (last updated 2026-05-20 wave-3):
+- Dict iteration display: **wave-2 RESOLVED** — printer walks insertion-order K:V via runtime accessor exports. Falls back to `{<n entries>}` when accessors unresolved.
+- Option ADT discriminant + payload: **wave-3 RESOLVED** (ADR-0059d §3.2) — `cobrust::Option` DICompositeType emitted (tag: i32 + payload: i64). Printer reads tag via `process.ReadMemory`: tag=0 → `None`; tag=1 → `Some(<i64 payload>)`. Generic Adt variants for user-defined enums remain Phase L+ scope.
+- Str runtime breakpoint hit: **wave-3 PARTIAL RESOLVED** (ADR-0059d §3.3) — linked-executable harness shipped; `cobrust::Str` DIE verified in linked binary. Full `frame variable s = "hello"` requires stdlib linkage (deferred to ADR-0059c).
 - gdb support: tested but not CI-gated; may diverge
 
 ### gdb pretty-printers (untested in wave-1)

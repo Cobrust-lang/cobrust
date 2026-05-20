@@ -63,7 +63,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::debug_info::{
     AsDIScope, DIBasicType, DICompileUnit, DIFile, DIFlagsConstants, DILocation, DISubprogram,
-    DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
+    DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder, DICompositeType,
 };
 use inkwell::module::{FlagBehavior, Linkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
@@ -688,6 +688,14 @@ pub struct LlvmEmitter<'ctx> {
     /// a stable short tag so each signature lowering reuses the same
     /// `DIBasicType` objects.
     di_basic_types: HashMap<&'static str, DIBasicType<'ctx>>,
+    /// ADR-0059d §3.2 — per-variant `cobrust::Option` `DICompositeType`.
+    /// Emitted once in `populate_di_basic_types`; holds the two-member
+    /// struct DI (tag: i32 at offset 0, payload: i64 at offset 64) so
+    /// `image lookup --type cobrust::Option` finds the DIE in lldb.
+    /// The composite is emitted unconditionally so the DIE is always
+    /// present; `di_type_for` keeps returning `cobrust::Adt` for
+    /// function signatures (opaque-pointer).
+    di_option_composite: Option<DICompositeType<'ctx>>,
     /// Per-body `DefId.0` → emitted `DISubprogram`. Populated at
     /// `declare_body`; consumed at `define_body` to set per-instruction
     /// debug locations.
@@ -773,6 +781,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             di_subprograms: HashMap::new(),
             line_map,
             is_optimized,
+            di_option_composite: None,
         };
         emitter.declare_runtime_helpers();
         emitter.populate_di_basic_types();
@@ -848,6 +857,66 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 .expect("DI basic type cobrust container");
             self.di_basic_types.insert(key, ty);
         }
+
+        // ADR-0059d §3.2 — per-variant Option DICompositeType.
+        //
+        // Emit a `DICompositeType` (DW_TAG_structure_type) named
+        // `"cobrust::Option"` unconditionally so `image lookup --type
+        // cobrust::Option` finds the DIE in lldb. The composite has
+        // two member fields:
+        //
+        //   tag:     i32 at offset   0, DW_ATE_signed — 0=None, 1=Some.
+        //   payload: i64 at offset  64, DW_ATE_signed — valid only
+        //            when tag=1 (Option<Int> representative layout).
+        //
+        // This is a representative layout for `Option<Int>`; the lldb
+        // printer reads tag first then conditionally reads the payload
+        // (ADR-0059d §3.2 printer extension). Phase L+ will parametrise
+        // the payload type once MIR threads the Adt params through DI.
+        let tag_ty = self
+            .di_builder
+            .create_basic_type("i32", 32, DW_ATE_SIGNED, zero)
+            .expect("DI i32 basic type for Option tag");
+        let payload_ty = self.di_basic_types["Int"]; // i64
+
+        let cu_scope = self.di_cu.as_debug_info_scope();
+        let tag_member = self.di_builder.create_member_type(
+            cu_scope,
+            "tag",
+            self.di_file,
+            0,  // line number
+            32, // size in bits
+            32, // align in bits
+            0,  // offset in bits
+            zero,
+            tag_ty.as_type(),
+        );
+        let payload_member = self.di_builder.create_member_type(
+            cu_scope,
+            "payload",
+            self.di_file,
+            0,   // line number
+            64,  // size in bits
+            64,  // align in bits
+            64,  // offset in bits (after 32-bit tag + 32-bit pad)
+            zero,
+            payload_ty.as_type(),
+        );
+        let option_composite = self.di_builder.create_struct_type(
+            cu_scope,
+            "cobrust::Option",
+            self.di_file,
+            0,   // line number
+            128, // size in bits (tag 32 + pad 32 + payload 64)
+            64,  // align in bits
+            zero,
+            None,                                                         // derived_from
+            &[tag_member.as_type(), payload_member.as_type()],            // elements
+            0,                                                            // runtime language
+            None,                                                         // vtable_holder
+            "cobrust::Option",                                            // unique_id
+        );
+        self.di_option_composite = Some(option_composite);
     }
 
     /// Map a Cobrust MIR `Ty` to its cached `DIBasicType`. Per

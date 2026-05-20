@@ -426,24 +426,23 @@ def cobrust_tuple_summary(valobj, internal_dict):
 
 
 def cobrust_option_summary(valobj, internal_dict):
-    """`cobrust::Adt` (and the future `cobrust::Option`) summary —
-    render `None` or `Some(<inner>)`.
+    """`cobrust::Adt` / `cobrust::Option` summary — render `None` or
+    `Some(<inner>)`.
 
     Wave-2 (ADR-0059a §6.3 RESOLVED for generic Adt):
-    `populate_di_basic_types` now emits a distinct `cobrust::Adt` DI
-    name for every `Ty::Adt(...)` local (previously collapsed to the
-    opaque `Ptr` fallback). The printer registers on `cobrust::Adt`
-    AND `cobrust::Option` so:
+    Registers on `cobrust::Adt` AND `cobrust::Option`. Conservative
+    ptr-as-tag fallback (null → None; non-null → Some(<addr>)) is
+    the wave-2 baseline.
 
-    - Today: every Adt local (user-defined enums + future Option /
-      Result) renders as `None` (null ptr-tag) or `Some(<0xaddr>)`
-      (non-null ptr-tag). This is the conservative ptr-as-tag fallback
-      — full discriminant + payload recovery awaits MIR threading the
-      Adt name through DI (Phase L+ follow-up).
-    - Phase L+: once `__cobrust_adt_discriminant(adt) -> i64` +
-      `__cobrust_adt_variant_name(adt) -> *mut u8` exports land,
-      this provider will dispatch on the discriminant + render
-      `<VariantName>(<payload>)` per the per-Adt schema.
+    Wave-3 (ADR-0059d §3.2) tag-dispatch extension:
+    When the runtime exports `__cobrust_adt_tag` (the i32 discriminant
+    at offset-0 per ADR-0059d §3.2 layout), attempt to read it via
+    `EvaluateExpression`. Tag 0 → `None`; tag 1 → read 64-bit payload
+    at byte offset 8 (after 4-byte tag + 4-byte alignment pad) and
+    render `Some(<payload>)`.
+
+    Fallback: if `__cobrust_adt_tag` is absent or the process is dead,
+    falls back to the wave-2 ptr-as-tag behaviour (no regression).
     """
     process = _process(valobj)
     if process is None:
@@ -451,7 +450,35 @@ def cobrust_option_summary(valobj, internal_dict):
     ptr = _valobj_pointer_addr(valobj)
     if ptr == 0:
         return "None"
-    # Conservative: ptr-as-tag — null → None; non-null → Some(<addr>).
+
+    # ADR-0059d §3.2 wave-3 tag-dispatch path.
+    # Attempt to read the i32 tag at offset 0 via process memory read.
+    # This avoids the EvaluateExpression overhead and works even when
+    # the stdlib runtime accessor isn't linked.
+    try:
+        # Read 4 bytes at ptr as little-endian i32 (the tag field).
+        error = valobj.GetTarget().GetProcess().GetError() if hasattr(
+            valobj.GetTarget().GetProcess(), 'GetError') else None
+        mem_error = lldb.SBError()  # type: ignore[name-defined]
+        tag_bytes = process.ReadMemory(ptr, 4, mem_error)
+        if mem_error.Success() and len(tag_bytes) == 4:
+            import struct as _struct
+            tag = _struct.unpack("<i", tag_bytes)[0]
+            if tag == 0:
+                return "None"
+            if tag == 1:
+                # Read i64 payload at offset 8 (4-byte tag + 4-byte pad).
+                payload_error = lldb.SBError()  # type: ignore[name-defined]
+                payload_bytes = process.ReadMemory(ptr + 8, 8, payload_error)
+                if payload_error.Success() and len(payload_bytes) == 8:
+                    payload = _struct.unpack("<q", payload_bytes)[0]
+                    return "Some({})".format(payload)
+                return "Some(<unreadable payload>)"
+            # Unknown tag — fall through to ptr-as-tag.
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Wave-2 conservative fallback: ptr-as-tag.
     # Phase L+ refines via Adt-discriminant DI emission.
     return "Some(<{:#x}>)".format(ptr)
 

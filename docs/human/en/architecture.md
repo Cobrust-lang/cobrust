@@ -1752,7 +1752,17 @@ Phase L wave-1 (`tools/lldb-cobrust/printers.py` + `llvm_backend.rs::populate_di
 - **Smoke gate extension** (ADR-0059a §6). `dwarf_lldb_smoke.rs` extends with 3 new tests (`lldb_smoke_str_variable_renders_content` / `lldb_smoke_list_variable_renders_bracket` / `lldb_smoke_dict_variable_renders_braces`) that verify `image lookup --type cobrust::{Str,List,Dict}` finds the named DIE in emitted DWARF — proves Option A naming reached `.debug_info` end-to-end. Baseline 4 ADR-0058c tests preserved; wave-1 corpus is 4 + 3 = 7 lldb smoke tests.
 - **Phase L wave-2 honest-deferrals RESOLVED (2026-05-20, ADR-0059a §6.1-§6.3)**. Three closures: (a) §6.2 Dict K:V walk — 6 new runtime exports in `crates/cobrust-stdlib/src/collections.rs` (`__cobrust_dict_{key,value}_tag` + `__cobrust_dict_iter_{key,value}_{i64,str}_at`) called by the printer via `EvaluateExpression`; insertion-order preserved per `IndexMap::get_index`. (b) §6.3 Adt DI naming — 6th `DIBasicType` `cobrust::Adt` added; `di_type_for(Ty::Adt(_, _))` dispatches to it; printer renders ptr-tag `None` / `Some(<0xaddr>)` for any Adt local. (c) §6.1 Str runtime breakpoint — HONEST-CITE; 12 Python self-tests in `tools/lldb-cobrust/tests/test_printers.py` verify the StringBuffer byte-decode contract; full executable + linked stdlib + bp-hit smoke parked for wave-3.
 
-Non-goals (deferred per ADR-0059a §4): source-level type-name rendering in Rust style (Cobrust uses `List<Str>` not `Vec<String>`), inline expression evaluation, struct-field display for user-defined records (Phase L+ once user-record DI lands), gdb pretty-printers (Phase L+ followup), REPL-style mutation from inspector, per-Adt-variant DICompositeType (Phase L+ scope; wave-2 ships generic Adt naming only).
+Non-goals (deferred per ADR-0059a §4): source-level type-name rendering in Rust style (Cobrust uses `List<Str>` not `Vec<String>`), inline expression evaluation, struct-field display for user-defined records (Phase L+ once user-record DI lands), gdb pretty-printers (Phase L+ followup), REPL-style mutation from inspector.
+
+#### Phase L wave-3 — linker harness + per-variant Option DICompositeType (ADR-0059d)
+
+Phase L wave-3 (ADR-0059d, 2026-05-20) closes the two honest-cites from wave-2:
+
+- **Linked-executable harness** (ADR-0059d §3.1). `dwarf_lldb_smoke.rs` gains `executable_spec` / `build_linked_executable` / `lldb_run_with_bp` helpers. 5 new linked/Option smoke tests; `dwarf_lldb_smoke.rs` corpus = **15 tests** total.
+- **Per-variant Option DICompositeType** (ADR-0059d §3.2). `cobrust::Option` `DICompositeType` emitted with `tag: i32` + `payload: i64` fields. Printer reads tag via `process.ReadMemory`: tag=0 → `None`; tag=1 → `Some(<payload>)`. Fallback to ptr-as-tag preserved.
+- **Python self-tests** expanded to **14 total** (2 new wave-3 tag-dispatch tests).
+
+HONEST-CITE: full `frame variable s = "hello"` at a live breakpoint requires stdlib Str allocator; deferred to ADR-0059c `cobrust debug` CLI.
 
 **M9 test counts**: 158 tests across 5 suites:
 - `codegen_well_formed.rs` — 60 well-formed programs covering int / float / bool arithmetic, comparison, branching, looping, recursion, bit ops, logical ops.

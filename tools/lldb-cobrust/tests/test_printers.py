@@ -347,6 +347,59 @@ class TestListSummary(unittest.TestCase):
         self.assertEqual(summary, "[10, 20, 30]")
 
 
+class TestOptionTagDispatch(unittest.TestCase):
+    """ADR-0059d §3.2 — wave-3 tag-dispatch in `cobrust_option_summary`.
+
+    The wave-3 printer attempts to read the i32 tag at offset 0 from
+    process memory. Tag 0 → `None`; tag 1 → read i64 payload at offset 8
+    and render `Some(<payload>)`.
+
+    These tests exercise the new tag-dispatch path without lldb present
+    by providing fake process memory with the ADR-0059d §3.2 layout.
+    """
+
+    def _make_option_none_memory(self, base_addr):
+        """Build memory with tag=0 (None) at base_addr."""
+        # tag: i32 = 0 (little-endian, 4 bytes)
+        tag_bytes = struct.pack("<i", 0)
+        # pad: 4 bytes (alignment)
+        pad_bytes = b"\x00" * 4
+        # payload: i64 = 0 (8 bytes, irrelevant for None)
+        payload_bytes = struct.pack("<q", 0)
+        return {base_addr: tag_bytes + pad_bytes + payload_bytes}
+
+    def _make_option_some_memory(self, base_addr, payload_value):
+        """Build memory with tag=1 (Some) + payload_value at base_addr."""
+        tag_bytes = struct.pack("<i", 1)
+        pad_bytes = b"\x00" * 4
+        payload_bytes = struct.pack("<q", payload_value)
+        return {base_addr: tag_bytes + pad_bytes + payload_bytes}
+
+    def test_tag_zero_renders_none(self):
+        """ADR-0059d §3.2: tag=0 path should render `None`."""
+        base_addr = 0x80000
+        memory = self._make_option_none_memory(base_addr)
+        process = MockSBProcess(memory)
+        target = MockSBTarget()
+        target._process = process
+        valobj = MockSBValue(base_addr)
+        valobj._target = target
+        summary = printers.cobrust_option_summary(valobj, {})
+        self.assertEqual(summary, "None")
+
+    def test_tag_one_renders_some_with_payload(self):
+        """ADR-0059d §3.2: tag=1 path should render `Some(42)`."""
+        base_addr = 0x80000
+        memory = self._make_option_some_memory(base_addr, 42)
+        process = MockSBProcess(memory)
+        target = MockSBTarget()
+        target._process = process
+        valobj = MockSBValue(base_addr)
+        valobj._target = target
+        summary = printers.cobrust_option_summary(valobj, {})
+        self.assertEqual(summary, "Some(42)")
+
+
 # =====================================================================
 # Entry point
 # =====================================================================
