@@ -206,8 +206,25 @@ fn main() -> i64:
 
 Wave-1 admits three borrow shapes (per ADR-0052a §8):
 - `&ident`            — `&s`
-- `&ident.field`      — `&p.field` (when tuple-field syntax lands)
+- `&ident.field`      — `&p.0` / `&p.1` tuple-field projection, or
+                         `&record.name` once ADT fields land
 - `&ident[idx]`       — `&xs[0]`
+
+Plus the **let-rebind shortcut** (ADR-0052a §4.4):
+
+```cobrust
+fn main() -> i64:
+    let s = input("")
+    let s = &s              # let-rebind: outer `s` (str) → inner `s` (&str)
+    let n = str_len(s)
+    let m = str_len(s)
+    return n + m
+```
+
+`let s = &s` is the §2.5-honest replacement for `let s = clone(s)`.
+The new `s` shadows the outer binding for the rest of the scope; the
+type narrows from `str` to `&str` and PRELUDE transparency continues
+to admit it at call-arg positions.
 
 Parse-rejected (Wave-1 scope cap):
 - `&"literal"`        — literal-borrow deferred (future sub-ADR).

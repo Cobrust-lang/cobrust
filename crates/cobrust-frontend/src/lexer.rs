@@ -247,7 +247,15 @@ impl<'a> Lexer<'a> {
             b'.' => {
                 if self.starts_with(b"...") {
                     self.simple(TokenKind::DotDotDot, start, 3)
-                } else if self.peek_byte(1).is_some_and(|c| c.is_ascii_digit()) {
+                } else if self.peek_byte(1).is_some_and(|c| c.is_ascii_digit())
+                    && !self.prev_token_completes_postfix()
+                {
+                    // ADR-0052a §8 Wave-1 tuple-field projection
+                    // disambiguation: `p.0` (Ident followed by `.0`)
+                    // must lex as `Dot Int("0")`, NOT `Ident Float(".0")`.
+                    // Without this guard the parser cannot see the
+                    // tuple-field projection because the Dot disappears
+                    // into the leading-dot Float.
                     self.lex_number(start)
                 } else {
                     self.simple(TokenKind::Dot, start, 1)
@@ -349,6 +357,33 @@ impl<'a> Lexer<'a> {
         ));
         self.last_emitted_newline = false;
         Ok(())
+    }
+
+    /// ADR-0052a §8 Wave-1 tuple-field projection lex disambiguator.
+    ///
+    /// Returns `true` when the most-recently-emitted significant token
+    /// is one that COMPLETES a postfix-eligible expression — i.e. one
+    /// that could be the receiver of a `.fieldname` projection.
+    /// Concretely: identifiers, integer/float literals (themselves
+    /// improper postfix targets but ruled out elsewhere), closing
+    /// brackets, and string literals (which Python permits as
+    /// `"abc".method()`).
+    ///
+    /// When this returns `true`, a subsequent `.<digit>` must lex as
+    /// `Dot Int` (the tuple-field-projection path) instead of
+    /// `Float(.N)`.
+    fn prev_token_completes_postfix(&self) -> bool {
+        matches!(
+            self.out.last().map(|t| &t.kind),
+            Some(
+                TokenKind::Ident(_)
+                    | TokenKind::Int(_)
+                    | TokenKind::RParen
+                    | TokenKind::RBracket
+                    | TokenKind::Str { .. }
+                    | TokenKind::Bytes { .. }
+            )
+        )
     }
 
     fn single(&mut self, kind: TokenKind, start: usize) -> Result<(), LexError> {

@@ -123,6 +123,56 @@ Same ADR landed `Tuple[A, B, C]` annotation handling at
 variable which surfaced as `AmbiguousType` whenever the tuple
 appeared in a return-type annotation.
 
+## ADR-0052a §4.4 + §8 — let-rebind shortcut + `&p.<field>` (Wave-1 closure)
+
+### §4.4 let-rebind shortcut
+
+- **Surface**: `let s = &s` (top-level binding pattern in a `let`
+  statement re-binds the same name within the same scope).
+- **HIR (`cobrust-hir`)**: `Scope::bind_let_shadow` allows the new
+  binding to replace the prior one unconditionally. `Lower::bind_let`
+  wraps the call; `lower_let_pattern_with_bindings` is the let-aware
+  variant of `lower_pattern_with_bindings`, threaded into both
+  module-level and block-level `StmtKind::Let` arms. Sub-patterns
+  inside tuples / dicts / class patterns continue to flow through the
+  strict bind path so `let (x, x) = ...` still rejects with
+  `DuplicateBinding`.
+- **Types**: no new code path. The RHS `&s` synthesises `Ty::Ref(Str)`
+  per ADR-0052a §6; the new `s` binding adopts that type. Subsequent
+  reads through the rebound binding flow through the existing
+  one-way `&T → T` call-arg coercion at `synth_call`.
+- **MIR**: no new code path. HIR assigns a fresh `DefId` for the
+  rebound `s`; `lower_let` allocates a fresh local; `lower_borrow_inner`'s
+  `Name` arm emits `Operand::Copy` of the local. No
+  `__cobrust_str_clone` is inserted (verified by F30 witness
+  `f30wit_04_let_rebind_synthetic_no_clone_no_uaf`).
+
+### §8 Wave-1 `&p.<field>` field-projection borrow
+
+- **Lexer (`cobrust-frontend`)**: `prev_token_completes_postfix` gates
+  the `.<digit>` → `Float(.N)` collapse. After an ident / `]` / `)` /
+  string / bytes token, `.0` lexes as `Dot Int("0")` instead of
+  `Float(".0")`. This unlocks the Rust-style tuple-field syntax.
+- **Parser**: `parse_postfix` Dot arm accepts `Int(s)` as the
+  attribute name (synthesises `Attribute { name: "0" }`). Identifier
+  attribute names continue to flow through `expect_ident()`.
+- **Types**: `synth_expr → ExprKind::Attr` resolves numeric attribute
+  names against `Ty::Tuple(items)`. Index parsing via
+  `name.parse::<usize>()` gates the tuple-field path; non-numeric
+  names retain the prior `fresh_var()` ADT-conservative fallback.
+  Out-of-bounds tuple indices surface as `NotIndexable` (§2.5
+  fix-suggestion path).
+- **Borrow validator**: already accepts `Access(Attribute { base, .. })`
+  per ADR-0052a §8; no validator change needed. `&p.0` now type-checks
+  to `Ty::Ref(items[0])` via the borrow-of-place arm at `check.rs:1332`.
+
+### Invariants preserved
+
+- F31 lock: no new `(Ty::Ref(T), T)` cross-arm in `infer::unify` —
+  Cluster A closure does not add a bidirectional unify rule.
+- BorrowOfNonPlace continues to fire at the existing §6 emission
+  points — only the §8 Wave-1 admitted shapes pass.
+
 ## Invariants (M2)
 
 - Type errors never emit a "best guess" type — either inferred or

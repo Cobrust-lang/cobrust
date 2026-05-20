@@ -101,6 +101,18 @@ impl<'s> Lowerer<'s> {
         }
     }
 
+    /// ADR-0052a §4.4 let-rebind shortcut — bind a `let`-statement
+    /// target pattern, allowing same-scope shadow. The RHS of the
+    /// `let` has already been lowered (which resolved the prior
+    /// binding by `DefId`), so installing the new binding here is
+    /// always safe.
+    fn bind_let(&mut self, name: &str, def_id: DefId, kind: DefKind, span: Span) {
+        self.scopes
+            .last_mut()
+            .expect("scope stack underflow")
+            .bind_let_shadow(name, def_id, kind, span);
+    }
+
     fn resolve_name(&self, name: &str) -> Option<(DefId, DefKind)> {
         for s in self.scopes.iter().rev() {
             if let Some(hit) = s.resolve(name) {
@@ -302,7 +314,10 @@ impl<'s> Lowerer<'s> {
                 value,
             } => {
                 let value_h = self.lower_expr(value)?;
-                let pattern_h = self.lower_pattern_with_bindings(target, &mut Vec::new())?;
+                // ADR-0052a §4.4 — let-rebind shortcut. Allow same-scope
+                // shadow at the top-level binding pattern. The RHS has
+                // already resolved the prior binding by `DefId`.
+                let pattern_h = self.lower_let_pattern_with_bindings(target, &mut Vec::new())?;
                 let primary_def = match &pattern_h.kind {
                     h::PatternKind::Binding(_, id) => *id,
                     _ => self.fresh(),
@@ -566,7 +581,10 @@ impl<'s> Lowerer<'s> {
                 value,
             } => {
                 let value_h = self.lower_expr(value)?;
-                let pattern_h = self.lower_pattern_with_bindings(target, &mut Vec::new())?;
+                // ADR-0052a §4.4 — let-rebind shortcut. Allow same-scope
+                // shadow at the top-level binding pattern. The RHS has
+                // already resolved the prior binding by `DefId`.
+                let pattern_h = self.lower_let_pattern_with_bindings(target, &mut Vec::new())?;
                 let primary_def = match &pattern_h.kind {
                     h::PatternKind::Binding(_, id) => *id,
                     _ => self.fresh(),
@@ -1175,6 +1193,28 @@ impl<'s> Lowerer<'s> {
         p: &ast::Pattern,
         out: &mut Vec<DefId>,
     ) -> Result<h::Pattern, LoweringError> {
+        self.lower_pattern_with_bindings_impl(p, out, false)
+    }
+
+    /// ADR-0052a §4.4 let-rebind shortcut — variant used for
+    /// `let`-statement targets that allows same-scope shadow at the
+    /// top-level binding (`let s = &s`). Sub-patterns inside tuples /
+    /// dicts / class patterns still flow through the strict path so
+    /// that `let (x, x) = ...` continues to reject as `DuplicateBinding`.
+    fn lower_let_pattern_with_bindings(
+        &mut self,
+        p: &ast::Pattern,
+        out: &mut Vec<DefId>,
+    ) -> Result<h::Pattern, LoweringError> {
+        self.lower_pattern_with_bindings_impl(p, out, true)
+    }
+
+    fn lower_pattern_with_bindings_impl(
+        &mut self,
+        p: &ast::Pattern,
+        out: &mut Vec<DefId>,
+        let_shadow_top: bool,
+    ) -> Result<h::Pattern, LoweringError> {
         let span = p.span;
         let kind = match &p.kind {
             ast::PatternKind::Wildcard => h::PatternKind::Wildcard,
@@ -1190,7 +1230,13 @@ impl<'s> Lowerer<'s> {
                     h::PatternKind::Wildcard
                 } else {
                     let id = self.fresh();
-                    self.bind(name, id, DefKind::PatternBinding, span)?;
+                    if let_shadow_top {
+                        // ADR-0052a §4.4 — let-rebind shortcut: top-level
+                        // binding shadows any prior same-scope binding.
+                        self.bind_let(name, id, DefKind::PatternBinding, span);
+                    } else {
+                        self.bind(name, id, DefKind::PatternBinding, span)?;
+                    }
                     out.push(id);
                     h::PatternKind::Binding(name.clone(), id)
                 }
