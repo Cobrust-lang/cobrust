@@ -61,7 +61,7 @@
 #![allow(clippy::match_same_arms)]
 
 use cobrust_types::{Record as RustRecord, Ty};
-use cobrust_types_parity::{Canonicalize, CanonicalKey, TyArena as ParityArena};
+use cobrust_types_parity::{CanonicalKey, Canonicalize, TyArena as ParityArena};
 
 // =====================================================================
 // Arena handle type
@@ -261,8 +261,8 @@ impl TyArena {
     /// The returned handle is always `>= 0`. Panics if `entries.len()`
     /// exceeds `i64::MAX` (unreachable in practice).
     pub fn insert(&mut self, entry: TyEntry) -> TyId {
-        let id = i64::try_from(self.entries.len())
-            .expect("TyArena overflow: entries.len() > i64::MAX");
+        let id =
+            i64::try_from(self.entries.len()).expect("TyArena overflow: entries.len() > i64::MAX");
         self.entries.push(entry);
         id
     }
@@ -487,6 +487,23 @@ fn insert_rust_into_arena(rust: &Ty, arena: &mut TyArena) -> TyId {
             let id = insert_rust_into_arena(inner, arena);
             TyEntry::Ref(id)
         }
+        // ADR-0060b + ADR-0060c additions: IntN width tier + fixed-size
+        // Array. The cb arena mirror is a Phase H proof artifact +
+        // training-data corpus per ADR-0055 §1.1. These new Rust-side
+        // variants are NOT yet mirrored in `TyEntry` because the Phase H
+        // parity corpus is locked at the M2 + ADR-0041 surface; extending
+        // it requires a coordinated `0055f` follow-up that adds the
+        // arena-form mirror variants + extends the Wave-2 + Wave-3 parity
+        // corpus. Until that lands, refuse to insert these Ty variants —
+        // they are out-of-scope for the current cb mirror contract.
+        Ty::IntN(_) => panic!(
+            "cb mirror does not yet support Ty::IntN (ADR-0060c, post-Phase-H; \
+             track via finding `cb-mirror-intn-array-port`)"
+        ),
+        Ty::Array(_, _) => panic!(
+            "cb mirror does not yet support Ty::Array (ADR-0060b, post-Phase-H; \
+             track via finding `cb-mirror-intn-array-port`)"
+        ),
     };
     arena.insert(entry)
 }
@@ -895,12 +912,7 @@ pub fn clone_into_arena(src_arena: &TyArena, src_id: TyId, dst_arena: &mut TyAre
 /// Returns a **fresh handle** (new entry inserted) for composite results;
 /// returns a copy of an existing handle for leaf results that are not the
 /// target var. Matches `ty.rs::Ty::subst_var` value semantics.
-pub fn subst_var(
-    arena: &mut TyArena,
-    src_id: TyId,
-    var_id: TyId,
-    replacement_id: TyId,
-) -> TyId {
+pub fn subst_var(arena: &mut TyArena, src_id: TyId, var_id: TyId, replacement_id: TyId) -> TyId {
     // Snapshot the src entry to drop the borrow before recursion.
     let entry = arena.lookup(src_id).clone();
     match entry {
@@ -1066,7 +1078,9 @@ fn clone_within_arena(arena: &mut TyArena, src_id: TyId) -> TyId {
                 .into_iter()
                 .map(|(n, c)| (n, clone_within_arena(arena, c)))
                 .collect();
-            let var_positional = fn_entry.var_positional.map(|c| clone_within_arena(arena, c));
+            let var_positional = fn_entry
+                .var_positional
+                .map(|c| clone_within_arena(arena, c));
             let var_keyword = fn_entry.var_keyword.map(|c| clone_within_arena(arena, c));
             let return_ty = clone_within_arena(arena, fn_entry.return_ty);
             let new_fid = arena.insert_fn(FnTyEntry {
@@ -1271,10 +1285,9 @@ impl Canonicalize for TyEntry {
                 let canon = arena.var_id(raw);
                 CanonicalKey::leaf(&format!("Var#{canon}"))
             }
-            TyEntry::Ref(id) => CanonicalKey::node(
-                "Ref",
-                vec![CanonicalKey::leaf(&format!("#{id}"))],
-            ),
+            TyEntry::Ref(id) => {
+                CanonicalKey::node("Ref", vec![CanonicalKey::leaf(&format!("#{id}"))])
+            }
         }
     }
 }
@@ -1310,14 +1323,12 @@ pub fn canonicalize_arena_root(
                 .map(|c| canonicalize_arena_root(arena, parity, *c))
                 .collect(),
         ),
-        TyEntry::List(inner) => CanonicalKey::node(
-            "List",
-            vec![canonicalize_arena_root(arena, parity, inner)],
-        ),
-        TyEntry::Set(inner) => CanonicalKey::node(
-            "Set",
-            vec![canonicalize_arena_root(arena, parity, inner)],
-        ),
+        TyEntry::List(inner) => {
+            CanonicalKey::node("List", vec![canonicalize_arena_root(arena, parity, inner)])
+        }
+        TyEntry::Set(inner) => {
+            CanonicalKey::node("Set", vec![canonicalize_arena_root(arena, parity, inner)])
+        }
         TyEntry::Dict(k, v) => CanonicalKey::node(
             "Dict",
             vec![
@@ -1408,10 +1419,9 @@ pub fn canonicalize_arena_root(
             let canon = parity.var_id(raw);
             CanonicalKey::leaf(&format!("Var#{canon}"))
         }
-        TyEntry::Ref(inner) => CanonicalKey::node(
-            "Ref",
-            vec![canonicalize_arena_root(arena, parity, inner)],
-        ),
+        TyEntry::Ref(inner) => {
+            CanonicalKey::node("Ref", vec![canonicalize_arena_root(arena, parity, inner)])
+        }
     }
 }
 

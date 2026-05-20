@@ -25,7 +25,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::time::timeout;
 
-use crate::dap_types::{Breakpoint, StackFrame, Source, Variable};
+use crate::dap_types::{Breakpoint, Source, StackFrame, Variable};
 
 /// Stop reason returned by lldb after a `continue` / `next` / `pause`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,10 +238,7 @@ impl LldbDriver {
     pub async fn set_breakpoint(&mut self, file: &str, line: u32) -> Result<Breakpoint, DapError> {
         // Stub fast-path: return a synthetic breakpoint with a
         // monotonically increasing id.
-        if let DriverKind::Stub {
-            breakpoint_seq, ..
-        } = &mut self.kind
-        {
+        if let DriverKind::Stub { breakpoint_seq, .. } = &mut self.kind {
             let id = *breakpoint_seq;
             *breakpoint_seq += 1;
             return Ok(Breakpoint {
@@ -444,8 +441,7 @@ fn parse_stack_trace(stdout: &str) -> Vec<StackFrame> {
 /// Each line has the form `(<type>) <name> = <pretty-printer summary>`,
 /// e.g. `(cobrust::List) xs = [1, 2, 3]` (with pretty-printers loaded).
 fn parse_variables(stdout: &str) -> Vec<Variable> {
-    let re =
-        Regex::new(r"\(([^)]+)\)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)").expect("valid regex");
+    let re = Regex::new(r"\(([^)]+)\)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)").expect("valid regex");
 
     let mut vars = Vec::new();
     for line in stdout.lines() {
@@ -475,6 +471,7 @@ fn parse_variables(stdout: &str) -> Vec<Variable> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
 mod tests {
     use super::*;
 
@@ -536,7 +533,8 @@ mod tests {
 
     #[test]
     fn parse_variables_with_pretty_printer_output() {
-        let stdout = "(cobrust::List) xs = [1, 2, 3]\n(cobrust::Str) name = \"hello\"\n(int) n = 10\n";
+        let stdout =
+            "(cobrust::List) xs = [1, 2, 3]\n(cobrust::Str) name = \"hello\"\n(int) n = 10\n";
         let vars = parse_variables(stdout);
         assert_eq!(vars.len(), 3);
         assert_eq!(vars[0].name, "xs");

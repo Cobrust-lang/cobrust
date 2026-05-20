@@ -64,10 +64,8 @@ fn find_lldb() -> Option<String> {
 /// smoke gates inspect the object directly, which is enough for lldb
 /// symbol resolution).
 fn object_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-0058c-lldb-{name}-{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("cobrust-0058c-lldb-{name}-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     TargetSpec {
         triple: target_lexicon::Triple::host(),
@@ -84,11 +82,16 @@ fn object_spec(name: &str) -> TargetSpec {
 /// Run `lldb-18 -b -o "<command>" -- <object>` and capture stdout.
 fn lldb_batch(lldb: &str, object_path: &Path, command: &str) -> String {
     let output = Command::new(lldb)
-        .args(["-b", "-o", command, "--", &object_path.display().to_string()])
+        .args([
+            "-b",
+            "-o",
+            command,
+            "--",
+            &object_path.display().to_string(),
+        ])
         .output()
         .expect("spawn lldb");
-    String::from_utf8_lossy(&output.stdout).into_owned()
-        + &String::from_utf8_lossy(&output.stderr)
+    String::from_utf8_lossy(&output.stdout).into_owned() + &String::from_utf8_lossy(&output.stderr)
 }
 
 /// Assert lldb output mentions the given symbol (DWARF debug info
@@ -340,11 +343,7 @@ fn lldb_smoke_line_table_present() {
 
     // `image dump line-table <name>` returns a non-empty table when
     // DWARF .debug_line is well-formed for the named symbol.
-    let out = lldb_batch(
-        &lldb,
-        &path,
-        "image dump line-table with_line_info",
-    );
+    let out = lldb_batch(&lldb, &path, "image dump line-table with_line_info");
     // We don't assert the exact line numbers (synthetic spans
     // collapse to line 1); the contract is "lldb sees the symbol +
     // does not error 'no debug info'".
@@ -421,11 +420,7 @@ fn lldb_smoke_list_variable_renders_bracket() {
 
     // Build a fn `take_list(x: List<Int>) -> List<Int>` — exercises
     // the `cobrust::List` named DIType.
-    let body = body_with_typed_signature(
-        21,
-        "take_list",
-        Ty::List(Box::new(Ty::Int)),
-    );
+    let body = body_with_typed_signature(21, "take_list", Ty::List(Box::new(Ty::Int)));
     let module = Module { bodies: vec![body] };
     let spec = object_spec("list_pretty_lldb");
     let artifact = emit(&module, spec).expect("list pretty emit");

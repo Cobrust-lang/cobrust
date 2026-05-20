@@ -39,8 +39,8 @@
 
 use cobrust_frontend::span::{FileId, Span};
 use cobrust_types::{AdtId, AliasId, FnTy, Record, Ty, VarId};
-use cobrust_types_cb::{ty_cb_arena_from_rust, TyArena, TyEntry, FnTyEntry, RecordEntry};
-use cobrust_types_parity::{parity_check, Canonicalize, TyArena as ParityArena};
+use cobrust_types_cb::{FnTyEntry, RecordEntry, TyArena, TyEntry, ty_cb_arena_from_rust};
+use cobrust_types_parity::{Canonicalize, TyArena as ParityArena, parity_check};
 
 // =====================================================================
 // Test helpers
@@ -136,10 +136,7 @@ fn ipc05_subst_apply_dict_both_vars() {
     subst.extend(VarId(1), Ty::Str);
     let input = Ty::Dict(Box::new(Ty::Var(VarId(0))), Box::new(Ty::Var(VarId(1))));
     let result = subst.apply(&input);
-    assert_eq!(
-        result,
-        Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Str))
-    );
+    assert_eq!(result, Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Str)));
 }
 
 /// `subst_apply(?, Tuple[?0, Int]) with ?0 → Bool` = `Tuple[Bool, Int]`.
@@ -242,7 +239,7 @@ fn ipc11_subst_apply_fn_type_vars() {
 /// `unify(Int, Int)` → `Ok(())`.
 #[test]
 fn ipc12_unify_int_int_success() {
-    use cobrust_types::infer::{unify, Subst};
+    use cobrust_types::infer::{Subst, unify};
     let mut subst = Subst::new();
     let result = unify(&Ty::Int, &Ty::Int, &mut subst, dummy_span());
     assert!(result.is_ok(), "unify(Int, Int) must succeed");
@@ -251,7 +248,7 @@ fn ipc12_unify_int_int_success() {
 /// `unify(Str, Str)` → `Ok(())`.
 #[test]
 fn ipc13_unify_str_str_success() {
-    use cobrust_types::infer::{unify, Subst};
+    use cobrust_types::infer::{Subst, unify};
     let mut subst = Subst::new();
     let result = unify(&Ty::Str, &Ty::Str, &mut subst, dummy_span());
     assert!(result.is_ok());
@@ -260,7 +257,7 @@ fn ipc13_unify_str_str_success() {
 /// `unify(List[Int], List[Int])` → `Ok(())`.
 #[test]
 fn ipc14_unify_list_list_success() {
-    use cobrust_types::infer::{unify, Subst};
+    use cobrust_types::infer::{Subst, unify};
     let mut subst = Subst::new();
     let result = unify(
         &Ty::List(Box::new(Ty::Int)),
@@ -274,7 +271,7 @@ fn ipc14_unify_list_list_success() {
 /// `unify(Tuple[Int, Str], Tuple[Int, Str])` → `Ok(())`.
 #[test]
 fn ipc15_unify_tuple_tuple_success() {
-    use cobrust_types::infer::{unify, Subst};
+    use cobrust_types::infer::{Subst, unify};
     let mut subst = Subst::new();
     let result = unify(
         &Ty::Tuple(vec![Ty::Int, Ty::Str]),
@@ -288,7 +285,7 @@ fn ipc15_unify_tuple_tuple_success() {
 /// `unify(Never, Int)` → `Ok(())` (Never is bottom).
 #[test]
 fn ipc16_unify_never_anything_success() {
-    use cobrust_types::infer::{unify, Subst};
+    use cobrust_types::infer::{Subst, unify};
     let mut subst = Subst::new();
     assert!(unify(&Ty::Never, &Ty::Int, &mut subst, dummy_span()).is_ok());
     assert!(unify(&Ty::Bool, &Ty::Never, &mut subst, dummy_span()).is_ok());
@@ -300,14 +297,17 @@ fn ipc16_unify_never_anything_success() {
 /// Depth-5 nesting: both sides identical. Cb impl must not loop.
 #[test]
 fn ipc17_unify_termination_deep_list() {
-    use cobrust_types::infer::{unify, Subst};
+    use cobrust_types::infer::{Subst, unify};
     // Build List[List[List[List[List[Int]]]]] depth-5
     let depth5 = Ty::List(Box::new(Ty::List(Box::new(Ty::List(Box::new(Ty::List(
         Box::new(Ty::List(Box::new(Ty::Int))),
     )))))));
     let mut subst = Subst::new();
     let result = unify(&depth5, &depth5, &mut subst, dummy_span());
-    assert!(result.is_ok(), "unify(t, t) on depth-5 List must terminate with Ok(())");
+    assert!(
+        result.is_ok(),
+        "unify(t, t) on depth-5 List must terminate with Ok(())"
+    );
 }
 
 /// `unify(Var(?0), Int)` extends subst with `?0 → Int`.
@@ -315,7 +315,7 @@ fn ipc17_unify_termination_deep_list() {
 /// Variable unification: Var arm extends the substitution.
 #[test]
 fn ipc18_unify_var_concrete_extends_subst() {
-    use cobrust_types::infer::{unify, Subst};
+    use cobrust_types::infer::{Subst, unify};
     let mut subst = Subst::new();
     let result = unify(&Ty::Var(VarId(0)), &Ty::Int, &mut subst, dummy_span());
     assert!(result.is_ok(), "unify(Var(?0), Int) must succeed");
@@ -329,14 +329,17 @@ fn ipc18_unify_var_concrete_extends_subst() {
 /// ADR-0055c §9.1 "chained Var resolution" — second unify with same mapping is Ok.
 #[test]
 fn ipc19_adjacent_unify_var_idempotent() {
-    use cobrust_types::infer::{unify, Subst};
+    use cobrust_types::infer::{Subst, unify};
     let mut subst = Subst::new();
     let r1 = unify(&Ty::Var(VarId(0)), &Ty::Int, &mut subst, dummy_span());
     assert!(r1.is_ok(), "first unify must succeed");
     // second unify: Var(?0) already resolves to Int, so unify(Int, Int) = Ok
     let r2 = unify(&Ty::Var(VarId(0)), &Ty::Int, &mut subst, dummy_span());
     assert!(r2.is_ok(), "idempotent second unify must succeed");
-    assert!(subst.fully_resolved(&Ty::Var(VarId(0))), "?0 must be fully resolved");
+    assert!(
+        subst.fully_resolved(&Ty::Var(VarId(0))),
+        "?0 must be fully resolved"
+    );
 }
 
 // =====================================================================
@@ -346,8 +349,8 @@ fn ipc19_adjacent_unify_var_idempotent() {
 /// `unify(Int, Str)` → `Err(TypeError::TypeMismatch)`.
 #[test]
 fn ipc20_unify_int_str_mismatch() {
-    use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, unify};
     let mut subst = Subst::new();
     let result = unify(&Ty::Int, &Ty::Str, &mut subst, dummy_span());
     assert!(result.is_err(), "unify(Int, Str) must fail");
@@ -362,8 +365,8 @@ fn ipc20_unify_int_str_mismatch() {
 /// Failure propagates from inner element unification.
 #[test]
 fn ipc21_unify_list_int_vs_list_str_mismatch() {
-    use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, unify};
     let mut subst = Subst::new();
     let result = unify(
         &Ty::List(Box::new(Ty::Int)),
@@ -380,8 +383,8 @@ fn ipc21_unify_list_int_vs_list_str_mismatch() {
 /// Arity mismatch on Tuple → TypeMismatch per Rust arm.
 #[test]
 fn ipc22_unify_tuple_arity_mismatch() {
-    use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, unify};
     let mut subst = Subst::new();
     let result = unify(
         &Ty::Tuple(vec![Ty::Int, Ty::Str]),
@@ -401,8 +404,8 @@ fn ipc22_unify_tuple_arity_mismatch() {
 /// Fn positional type mismatch: first positional Int vs Str.
 #[test]
 fn ipc23_unify_fn_positional_type_mismatch() {
-    use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, unify};
     let fn_a = Ty::Fn(FnTy {
         positional: vec![Ty::Int],
         named: vec![],
@@ -428,8 +431,8 @@ fn ipc23_unify_fn_positional_type_mismatch() {
 /// Named-parameter name mismatch: `a` vs `b`.
 #[test]
 fn ipc24_unify_fn_named_key_mismatch() {
-    use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, unify};
     let fn_a = Ty::Fn(FnTy {
         positional: vec![],
         named: vec![("a".to_string(), Ty::Int)],
@@ -463,8 +466,8 @@ fn ipc24_unify_fn_named_key_mismatch() {
 /// ?0 appears free in `List[?0]`, so unification would create an infinite type.
 #[test]
 fn ipc25_occurs_check_var_in_list() {
-    use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, unify};
     let var0 = Ty::Var(VarId(0));
     let list_var0 = Ty::List(Box::new(Ty::Var(VarId(0))));
     let mut subst = Subst::new();
@@ -481,8 +484,8 @@ fn ipc25_occurs_check_var_in_list() {
 /// Occurs-check: ?0 free in Dict key position.
 #[test]
 fn ipc26_occurs_check_var_in_dict_key() {
-    use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, unify};
     let var0 = Ty::Var(VarId(0));
     let dict_var0 = Ty::Dict(Box::new(Ty::Var(VarId(0))), Box::new(Ty::Str));
     let mut subst = Subst::new();
@@ -496,8 +499,8 @@ fn ipc26_occurs_check_var_in_dict_key() {
 /// Occurs-check: ?0 free in Tuple element.
 #[test]
 fn ipc27_occurs_check_var_in_tuple() {
-    use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, unify};
     let var0 = Ty::Var(VarId(0));
     let tuple_var0 = Ty::Tuple(vec![Ty::Int, Ty::Var(VarId(0))]);
     let mut subst = Subst::new();
@@ -519,8 +522,8 @@ fn ipc27_occurs_check_var_in_tuple() {
 /// The one-way coercion lives at `synth_call` in 0055d scope.
 #[test]
 fn ipc28_ref_t_no_bidirectional_unify() {
-    use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, unify};
     let ref_int = Ty::Ref(Box::new(Ty::Int));
     let mut subst = Subst::new();
     let result = unify(&ref_int, &Ty::Int, &mut subst, dummy_span());
@@ -539,8 +542,8 @@ fn ipc28_ref_t_no_bidirectional_unify() {
 /// F31 lock: symmetric case — non-Ref↔Ref also forbidden.
 #[test]
 fn ipc29_t_ref_no_bidirectional_unify_symmetric() {
-    use cobrust_types::infer::{unify, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, unify};
     let ref_int = Ty::Ref(Box::new(Ty::Int));
     let mut subst = Subst::new();
     let result = unify(&Ty::Int, &ref_int, &mut subst, dummy_span());
@@ -560,11 +563,14 @@ fn ipc29_t_ref_no_bidirectional_unify_symmetric() {
 /// Free Var with empty subst: AmbiguousType per infer.rs::finalize.
 #[test]
 fn ipc30_finalize_free_var_ambiguous() {
-    use cobrust_types::infer::{finalize, Subst};
     use cobrust_types::TypeError;
+    use cobrust_types::infer::{Subst, finalize};
     let subst = Subst::new(); // empty: ?0 unresolved
     let result = finalize(&Ty::Var(VarId(0)), &subst, dummy_span());
-    assert!(result.is_err(), "finalize with free Var must return AmbiguousType");
+    assert!(
+        result.is_err(),
+        "finalize with free Var must return AmbiguousType"
+    );
     assert!(
         matches!(result, Err(TypeError::AmbiguousType { .. })),
         "expected AmbiguousType, got {result:?}"

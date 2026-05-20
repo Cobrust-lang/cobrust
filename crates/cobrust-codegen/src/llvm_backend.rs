@@ -398,10 +398,8 @@ pub fn emit_multi_version_dispatch<'ctx>(
             builder.position_at_end(entry);
 
             // Gather wrapper params to forward.
-            let args: Vec<BasicMetadataValueEnum<'ctx>> = wrapper
-                .get_param_iter()
-                .map(|p| p.into())
-                .collect();
+            let args: Vec<BasicMetadataValueEnum<'ctx>> =
+                wrapper.get_param_iter().map(|p| p.into()).collect();
 
             let call = builder
                 .build_call(original_fn, &args, "dispatch_call")
@@ -417,7 +415,9 @@ pub fn emit_multi_version_dispatch<'ctx>(
                     .ok_or_else(|| CodegenError::LlvmError(
                         format!("Tier1 dispatch wrapper for `{base_name}`: call has no return value for non-void fn"),
                     ))?;
-                builder.build_return(Some(&ret_val)).map_err(map_builder_err)?;
+                builder
+                    .build_return(Some(&ret_val))
+                    .map_err(map_builder_err)?;
             }
         }
 
@@ -448,9 +448,11 @@ pub fn emit_multi_version_dispatch<'ctx>(
                 .module
                 .get_function("__cobrust_cpu_avx512_supported")
                 .unwrap_or_else(|| {
-                    emitter
-                        .module
-                        .add_function("__cobrust_cpu_avx512_supported", detect_fn_ty, None)
+                    emitter.module.add_function(
+                        "__cobrust_cpu_avx512_supported",
+                        detect_fn_ty,
+                        None,
+                    )
                 });
             let detect_avx2 = emitter
                 .module
@@ -465,7 +467,8 @@ pub fn emit_multi_version_dispatch<'ctx>(
             let avx512_result = builder
                 .build_call(detect_avx512, &[], "avx512_check")
                 .map_err(map_builder_err)?
-                .try_as_basic_value().basic()
+                .try_as_basic_value()
+                .basic()
                 .ok_or_else(|| CodegenError::LlvmError("avx512 detect call".into()))?
                 .into_int_value();
             let zero_i32 = i32_ty.const_zero();
@@ -488,10 +491,8 @@ pub fn emit_multi_version_dispatch<'ctx>(
                 .module
                 .get_function(&format!("{base_name}_v3_avx512"))
                 .ok_or_else(|| CodegenError::LlvmError(format!("missing {base_name}_v3_avx512")))?;
-            let args: Vec<BasicMetadataValueEnum<'ctx>> = dispatcher
-                .get_param_iter()
-                .map(|p| p.into())
-                .collect();
+            let args: Vec<BasicMetadataValueEnum<'ctx>> =
+                dispatcher.get_param_iter().map(|p| p.into()).collect();
             let v3_call = builder
                 .build_call(v3_fn, &args, "v3_call")
                 .map_err(map_builder_err)?;
@@ -509,7 +510,8 @@ pub fn emit_multi_version_dispatch<'ctx>(
             let avx2_result = builder
                 .build_call(detect_avx2, &[], "avx2_check")
                 .map_err(map_builder_err)?
-                .try_as_basic_value().basic()
+                .try_as_basic_value()
+                .basic()
                 .ok_or_else(|| CodegenError::LlvmError("avx2 detect call".into()))?
                 .into_int_value();
             let avx2_cond = builder
@@ -525,10 +527,8 @@ pub fn emit_multi_version_dispatch<'ctx>(
                 .module
                 .get_function(&format!("{base_name}_v2_avx2"))
                 .ok_or_else(|| CodegenError::LlvmError(format!("missing {base_name}_v2_avx2")))?;
-            let args2: Vec<BasicMetadataValueEnum<'ctx>> = dispatcher
-                .get_param_iter()
-                .map(|p| p.into())
-                .collect();
+            let args2: Vec<BasicMetadataValueEnum<'ctx>> =
+                dispatcher.get_param_iter().map(|p| p.into()).collect();
             let v2_call = builder
                 .build_call(v2_fn, &args2, "v2_call")
                 .map_err(map_builder_err)?;
@@ -547,10 +547,8 @@ pub fn emit_multi_version_dispatch<'ctx>(
                 .module
                 .get_function(&format!("{base_name}_v1_sse2"))
                 .ok_or_else(|| CodegenError::LlvmError(format!("missing {base_name}_v1_sse2")))?;
-            let args3: Vec<BasicMetadataValueEnum<'ctx>> = dispatcher
-                .get_param_iter()
-                .map(|p| p.into())
-                .collect();
+            let args3: Vec<BasicMetadataValueEnum<'ctx>> =
+                dispatcher.get_param_iter().map(|p| p.into()).collect();
             let v1_call = builder
                 .build_call(v1_fn, &args3, "v1_call")
                 .map_err(map_builder_err)?;
@@ -883,17 +881,17 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
         // __cobrust_str_drop(*mut Str) -> void
         let str_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
-        let str_drop = self
-            .module
-            .add_function("__cobrust_str_drop", str_drop_ty, Some(Linkage::External));
+        let str_drop =
+            self.module
+                .add_function("__cobrust_str_drop", str_drop_ty, Some(Linkage::External));
         self.runtime_helper_decls
             .insert("__cobrust_str_drop", str_drop);
 
         // __cobrust_list_drop(*mut List) -> void
         let list_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
-        let list_drop = self
-            .module
-            .add_function("__cobrust_list_drop", list_drop_ty, Some(Linkage::External));
+        let list_drop =
+            self.module
+                .add_function("__cobrust_list_drop", list_drop_ty, Some(Linkage::External));
         self.runtime_helper_decls
             .insert("__cobrust_list_drop", list_drop);
 
@@ -909,15 +907,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
         // __cobrust_panic(*const u8, usize) -> void (noreturn at runtime)
         let panic_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
-        let panic_fn = self
-            .module
-            .add_function("__cobrust_panic", panic_ty, Some(Linkage::External));
-        self.runtime_helper_decls.insert("__cobrust_panic", panic_fn);
+        let panic_fn =
+            self.module
+                .add_function("__cobrust_panic", panic_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_panic", panic_fn);
 
         // ADR-0060b dynamic-index Array runtime helpers.
         // __cobrust_array_get_i64(*const i64, usize, usize) -> i64
-        let arr_get_i64_ty =
-            i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_i64_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
         let arr_get_i64 = self.module.add_function(
             "__cobrust_array_get_i64",
             arr_get_i64_ty,
@@ -928,8 +926,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
         // __cobrust_array_get_i32(*const i32, usize, usize) -> i32
         let i32_ty = self.ctx.i32_type();
-        let arr_get_i32_ty =
-            i32_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_i32_ty = i32_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
         let arr_get_i32 = self.module.add_function(
             "__cobrust_array_get_i32",
             arr_get_i32_ty,
@@ -940,8 +937,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
         // __cobrust_array_get_i8(*const i8, usize, usize) -> i8
         let i8_ty = self.ctx.i8_type();
-        let arr_get_i8_ty =
-            i8_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_i8_ty = i8_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
         let arr_get_i8 = self.module.add_function(
             "__cobrust_array_get_i8",
             arr_get_i8_ty,
@@ -951,8 +947,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_array_get_i8", arr_get_i8);
 
         // __cobrust_array_get_bool(*const u8, usize, usize) -> i64
-        let arr_get_bool_ty =
-            i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_bool_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
         let arr_get_bool = self.module.add_function(
             "__cobrust_array_get_bool",
             arr_get_bool_ty,
@@ -1120,16 +1115,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
     /// Second pass — emit the function body.
     pub fn define_body(&mut self, body: &Body) -> Result<(), CodegenError> {
-        let func = *self
-            .function_ids
-            .get(&body.def_id.0)
-            .ok_or_else(|| CodegenError::Internal(format!("body {} not declared", body.def_id.0)))?;
-        let ret_ty = *self
-            .body_return_types
-            .get(&body.def_id.0)
-            .ok_or_else(|| {
-                CodegenError::Internal(format!("body {} return type missing", body.def_id.0))
-            })?;
+        let func = *self.function_ids.get(&body.def_id.0).ok_or_else(|| {
+            CodegenError::Internal(format!("body {} not declared", body.def_id.0))
+        })?;
+        let ret_ty = *self.body_return_types.get(&body.def_id.0).ok_or_else(|| {
+            CodegenError::Internal(format!("body {} return type missing", body.def_id.0))
+        })?;
 
         // Create one LLVM basic block per MIR block.
         let mut block_map: HashMap<BlockId, BasicBlock<'ctx>> = HashMap::new();
@@ -1150,10 +1141,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .get(&body.def_id.0)
             .copied()
             .ok_or_else(|| {
-                CodegenError::Internal(format!(
-                    "body {} missing DISubprogram",
-                    body.def_id.0
-                ))
+                CodegenError::Internal(format!("body {} missing DISubprogram", body.def_id.0))
             })?;
 
         // Entry block sets up allocas + binds parameters. Use a
@@ -1360,7 +1348,10 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
             } => {
                 let cond_val = self.lower_operand(cond)?.into_int_value();
                 let target_blk = self.block_map[target];
-                let trap_blk = self.emitter.ctx.append_basic_block(self.func, "assert_trap");
+                let trap_blk = self
+                    .emitter
+                    .ctx
+                    .append_basic_block(self.func, "assert_trap");
                 if *expected {
                     self.emitter
                         .builder
@@ -1478,11 +1469,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
             } else if val.is_int_value() {
                 self.emitter
                     .builder
-                    .build_int_to_ptr(
-                        val.into_int_value(),
-                        self.emitter.opaque_ptr_ty,
-                        "drop_arg",
-                    )
+                    .build_int_to_ptr(val.into_int_value(), self.emitter.opaque_ptr_ty, "drop_arg")
                     .map_err(map_builder_err)?
                     .into()
             } else {
@@ -1645,11 +1632,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
             // requires a compile-time `u32` index. ADR-0060b §3.4
             // pivots the wave-2 demonstrable surface onto the literal
             // path which is also the prized compile-time-catch payoff.
-            let base_local_ty = self
-                .body
-                .locals
-                .get(place.local.0 as usize)
-                .map(|d| &d.ty);
+            let base_local_ty = self.body.locals.get(place.local.0 as usize).map(|d| &d.ty);
             let base_ty_is_array = base_local_ty
                 .map(|t| matches!(t, Ty::Array(_, _)))
                 .unwrap_or(false);
@@ -1687,9 +1670,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                         Ty::Bool => "__cobrust_array_get_bool",
                         _ => "__cobrust_array_get_i64", // fallback to i64
                     };
-                    if let Some(&helper_fn) =
-                        self.emitter.runtime_helper_decls.get(helper_name)
-                    {
+                    if let Some(&helper_fn) = self.emitter.runtime_helper_decls.get(helper_name) {
                         let i64_ty = self.emitter.ctx.i64_type();
                         // Array base alloca (PointerValue) as opaque ptr arg.
                         let arr_ptr_val: BasicMetadataValueEnum<'ctx> = alloca.into();
@@ -1700,25 +1681,18 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                         let idx_val = self.lower_operand(idx_op)?;
                         // Widen to i64 if needed (Bool/i8/i32 index).
                         let idx_i64: BasicMetadataValueEnum<'ctx> = match idx_val {
-                            BasicValueEnum::IntValue(iv)
-                                if iv.get_type() != i64_ty =>
-                            {
-                                self.emitter
-                                    .builder
-                                    .build_int_z_extend(iv, i64_ty, "idx_zext")
-                                    .map_err(map_builder_err)?
-                                    .into()
-                            }
+                            BasicValueEnum::IntValue(iv) if iv.get_type() != i64_ty => self
+                                .emitter
+                                .builder
+                                .build_int_z_extend(iv, i64_ty, "idx_zext")
+                                .map_err(map_builder_err)?
+                                .into(),
                             _ => idx_val.into(),
                         };
                         let call = self
                             .emitter
                             .builder
-                            .build_call(
-                                helper_fn,
-                                &[arr_ptr_val, len_val, idx_i64],
-                                "arr_dyn_get",
-                            )
+                            .build_call(helper_fn, &[arr_ptr_val, len_val, idx_i64], "arr_dyn_get")
                             .map_err(map_builder_err)?;
                         if let Some(v) = call.try_as_basic_value().basic() {
                             return Ok(v);
@@ -1960,11 +1934,21 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 .map_err(map_builder_err)?
                 .into(),
             (BinOp::Eq, false) => builder
-                .build_int_compare(IntPredicate::EQ, a.into_int_value(), b.into_int_value(), "eq")
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    a.into_int_value(),
+                    b.into_int_value(),
+                    "eq",
+                )
                 .map_err(map_builder_err)?
                 .into(),
             (BinOp::NotEq, false) => builder
-                .build_int_compare(IntPredicate::NE, a.into_int_value(), b.into_int_value(), "ne")
+                .build_int_compare(
+                    IntPredicate::NE,
+                    a.into_int_value(),
+                    b.into_int_value(),
+                    "ne",
+                )
                 .map_err(map_builder_err)?
                 .into(),
             (BinOp::Lt, false) => builder
@@ -2275,7 +2259,11 @@ fn resolve_source_paths(spec: &TargetSpec) -> (String, String, LineMap) {
         // Fall through to synthetic fallback when the file isn't readable
         // (path may be transient; DI structure validates either way).
     }
-    (format!("{}.cb", spec.module_name), ".".to_string(), LineMap::empty())
+    (
+        format!("{}.cb", spec.module_name),
+        ".".to_string(),
+        LineMap::empty(),
+    )
 }
 
 fn path_filename(p: &Path) -> Option<String> {
@@ -2283,9 +2271,13 @@ fn path_filename(p: &Path) -> Option<String> {
 }
 
 fn path_directory(p: &Path) -> Option<String> {
-    p.parent()
-        .and_then(|s| s.to_str())
-        .map(|s| if s.is_empty() { ".".to_string() } else { s.to_string() })
+    p.parent().and_then(|s| s.to_str()).map(|s| {
+        if s.is_empty() {
+            ".".to_string()
+        } else {
+            s.to_string()
+        }
+    })
 }
 
 /// Zero-init value for an arbitrary BasicTypeEnum.
@@ -2406,7 +2398,11 @@ mod tests {
         let module = Module { bodies: vec![] };
         let spec = host_spec();
         let result = emit(&module, &spec);
-        assert!(result.is_ok(), "empty module emit failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "empty module emit failed: {:?}",
+            result.err()
+        );
     }
 
     #[test]

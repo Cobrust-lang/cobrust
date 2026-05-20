@@ -399,10 +399,8 @@ fn diff_reference_factorial_compiles() {
 
 #[cfg(feature = "llvm")]
 fn llvm_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-0058a-llvm-{name}-{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("cobrust-0058a-llvm-{name}-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     TargetSpec {
         triple: Triple::host(),
@@ -478,10 +476,7 @@ fn llvm_type_04_bool() {
 fn llvm_type_05_f64() {
     // Ty::Float(f64) → ctx.f64_type(); double passthrough
     #[cfg(feature = "llvm")]
-    llvm_compile_ok(
-        "llvm_type05",
-        "fn f(x: f64) -> f64:\n    return x\n",
-    );
+    llvm_compile_ok("llvm_type05", "fn f(x: f64) -> f64:\n    return x\n");
 }
 
 // ADR-0060b closure 2026-05-19: `-> None` return type now parser-legal.
@@ -566,10 +561,7 @@ fn llvm_type_10_fn_one_arg() {
     // fn(i64) -> i64 function-type shape;
     // verifies FunctionType construction ctx.i64_type().fn_type(&[i64], false)
     #[cfg(feature = "llvm")]
-    llvm_compile_ok(
-        "llvm_type10",
-        "fn identity(x: i64) -> i64:\n    return x\n",
-    );
+    llvm_compile_ok("llvm_type10", "fn identity(x: i64) -> i64:\n    return x\n");
 }
 
 #[test]
@@ -602,10 +594,7 @@ fn llvm_type_12_opaque_list() {
 fn llvm_operand_01_const_i64() {
     // Operand::Constant(Int(42)) → ctx.i64_type().const_int(42, true)
     #[cfg(feature = "llvm")]
-    llvm_compile_ok(
-        "llvm_op01",
-        "fn f() -> i64:\n    return 42\n",
-    );
+    llvm_compile_ok("llvm_op01", "fn f() -> i64:\n    return 42\n");
 }
 
 #[test]
@@ -630,10 +619,7 @@ fn llvm_operand_04_move_local() {
     // Operand::Move(Place) — same LLVM load as Copy; ownership at MIR level.
     // MIR borrow checker enforces; LLVM sees a plain load.
     #[cfg(feature = "llvm")]
-    llvm_compile_ok(
-        "llvm_op04",
-        "fn consume(x: i64) -> i64:\n    return x\n",
-    );
+    llvm_compile_ok("llvm_op04", "fn consume(x: i64) -> i64:\n    return x\n");
 }
 
 #[test]

@@ -58,7 +58,10 @@ pub struct JitHandle {
 unsafe impl Send for JitHandle {}
 
 impl JitHandle {
-    pub(crate) fn new(module: JITModule, fn_table: HashMap<String, (*const u8, Signature)>) -> Self {
+    pub(crate) fn new(
+        module: JITModule,
+        fn_table: HashMap<String, (*const u8, Signature)>,
+    ) -> Self {
         Self {
             module,
             fn_table,
@@ -253,14 +256,12 @@ fn validate_signature<R: JitReturn, A: ArgsList>(sig: &Signature) -> Result<(), 
             });
         }
     } else {
-        let actual_ret = sig
-            .returns
-            .first()
-            .map(|p| p.value_type)
-            .ok_or_else(|| JitError::SignatureMismatch {
+        let actual_ret = sig.returns.first().map(|p| p.value_type).ok_or_else(|| {
+            JitError::SignatureMismatch {
                 expected: format!("returns=[{expected_ret:?}]"),
                 actual: "returns=[]".to_string(),
-            })?;
+            }
+        })?;
         if actual_ret != expected_ret {
             return Err(JitError::SignatureMismatch {
                 expected: format!("returns=[{expected_ret:?}]"),
@@ -278,8 +279,14 @@ mod tests {
 
     #[test]
     fn args_list_param_types_match_shape() {
-        assert_eq!(<() as ArgsList>::expected_param_types(), Vec::<ir::Type>::new());
-        assert_eq!(<(i64,) as ArgsList>::expected_param_types(), vec![ir::types::I64]);
+        assert_eq!(
+            <() as ArgsList>::expected_param_types(),
+            Vec::<ir::Type>::new()
+        );
+        assert_eq!(
+            <(i64,) as ArgsList>::expected_param_types(),
+            vec![ir::types::I64]
+        );
         assert_eq!(
             <(i64, i64) as ArgsList>::expected_param_types(),
             vec![ir::types::I64, ir::types::I64]

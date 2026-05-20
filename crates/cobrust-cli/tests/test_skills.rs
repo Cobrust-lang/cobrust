@@ -130,10 +130,7 @@ fn test_skills_get_json_valid() {
     );
 
     let obj = parsed.as_object().unwrap();
-    assert!(
-        obj.contains_key("name"),
-        "JSON object must have key 'name'"
-    );
+    assert!(obj.contains_key("name"), "JSON object must have key 'name'");
     assert!(
         obj.contains_key("version"),
         "JSON object must have key 'version'"

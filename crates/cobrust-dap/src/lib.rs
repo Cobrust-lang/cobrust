@@ -118,11 +118,7 @@ impl Default for Adapter {
 ///
 /// Returns `Ok(())` on graceful client disconnect (EOF on stdin) or
 /// on a `Disconnect` DAP request.
-pub async fn run_stdio_loop<R, W>(
-    adapter: Adapter,
-    stdin: R,
-    mut stdout: W,
-) -> io::Result<()>
+pub async fn run_stdio_loop<R, W>(adapter: Adapter, stdin: R, mut stdout: W) -> io::Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,

@@ -41,8 +41,8 @@ use cobrust_frontend::span::{FileId, Span};
 use cobrust_hir::DefId;
 use cobrust_jit::{JitEngine, JitError};
 use cobrust_mir::{
-    BasicBlock, BinOp, BlockId, Body, Constant, LocalDecl, LocalId, Module, Operand, Place,
-    Rvalue, Statement, StatementKind, Terminator, UnOp,
+    BasicBlock, BinOp, BlockId, Body, Constant, LocalDecl, LocalId, Module, Operand, Place, Rvalue,
+    Statement, StatementKind, Terminator, UnOp,
 };
 use cobrust_types::Ty;
 
@@ -122,7 +122,10 @@ fn assign(local: LocalId, rvalue: Rvalue) -> Statement {
 fn const_return_42() {
     // fn ret42() -> i64 { return 42 }
     let module = mk_module("ret42", 0, |_params, ret| {
-        vec![assign(ret, Rvalue::Use(Operand::Constant(Constant::Int(42))))]
+        vec![assign(
+            ret,
+            Rvalue::Use(Operand::Constant(Constant::Int(42))),
+        )]
     });
     let engine = JitEngine::new().expect("JitEngine::new should succeed on host ISA");
     let handle = engine.compile_mir(&module).expect("compile should succeed");
@@ -296,11 +299,41 @@ fn three_param_sum() {
             def_id: DefId(1),
             name: "sum3".to_string(),
             locals: vec![
-                LocalDecl { id: return_local, name: "_return".into(), ty: Ty::None, mutable: true, span: SPAN },
-                LocalDecl { id: a, name: "a".into(), ty: Ty::Int, mutable: false, span: SPAN },
-                LocalDecl { id: b, name: "b".into(), ty: Ty::Int, mutable: false, span: SPAN },
-                LocalDecl { id: c, name: "c".into(), ty: Ty::Int, mutable: false, span: SPAN },
-                LocalDecl { id: tmp, name: "_tmp".into(), ty: Ty::Int, mutable: false, span: SPAN },
+                LocalDecl {
+                    id: return_local,
+                    name: "_return".into(),
+                    ty: Ty::None,
+                    mutable: true,
+                    span: SPAN,
+                },
+                LocalDecl {
+                    id: a,
+                    name: "a".into(),
+                    ty: Ty::Int,
+                    mutable: false,
+                    span: SPAN,
+                },
+                LocalDecl {
+                    id: b,
+                    name: "b".into(),
+                    ty: Ty::Int,
+                    mutable: false,
+                    span: SPAN,
+                },
+                LocalDecl {
+                    id: c,
+                    name: "c".into(),
+                    ty: Ty::Int,
+                    mutable: false,
+                    span: SPAN,
+                },
+                LocalDecl {
+                    id: tmp,
+                    name: "_tmp".into(),
+                    ty: Ty::Int,
+                    mutable: false,
+                    span: SPAN,
+                },
             ],
             blocks: vec![BasicBlock {
                 id: BlockId(0),
@@ -342,7 +375,10 @@ fn signature_mismatch_caught_before_transmute() {
     // Compiled fn is () -> i64. Caller asks for (i64,) -> i64. Must
     // surface JitError::SignatureMismatch, NOT segfault.
     let module = mk_module("nullary", 0, |_p, ret| {
-        vec![assign(ret, Rvalue::Use(Operand::Constant(Constant::Int(99))))]
+        vec![assign(
+            ret,
+            Rvalue::Use(Operand::Constant(Constant::Int(99))),
+        )]
     });
     let engine = JitEngine::new().unwrap();
     let handle = engine.compile_mir(&module).unwrap();
@@ -370,7 +406,10 @@ fn signature_mismatch_caught_before_transmute() {
 #[test]
 fn unknown_function_name_caught() {
     let module = mk_module("known", 0, |_p, ret| {
-        vec![assign(ret, Rvalue::Use(Operand::Constant(Constant::Int(0))))]
+        vec![assign(
+            ret,
+            Rvalue::Use(Operand::Constant(Constant::Int(0))),
+        )]
     });
     let engine = JitEngine::new().unwrap();
     let handle = engine.compile_mir(&module).unwrap();
@@ -396,8 +435,20 @@ fn unsupported_mir_feature_call_terminator() {
             def_id: DefId(1),
             name: "uses_call".to_string(),
             locals: vec![
-                LocalDecl { id: return_local, name: "_return".into(), ty: Ty::None, mutable: true, span: SPAN },
-                LocalDecl { id: tmp, name: "_callret".into(), ty: Ty::Int, mutable: false, span: SPAN },
+                LocalDecl {
+                    id: return_local,
+                    name: "_return".into(),
+                    ty: Ty::None,
+                    mutable: true,
+                    span: SPAN,
+                },
+                LocalDecl {
+                    id: tmp,
+                    name: "_callret".into(),
+                    ty: Ty::Int,
+                    mutable: false,
+                    span: SPAN,
+                },
             ],
             blocks: vec![
                 BasicBlock {

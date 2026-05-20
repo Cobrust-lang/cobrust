@@ -111,11 +111,7 @@ pub unsafe extern "C" fn __cobrust_array_get_i32(
 ///
 /// Panics if `arr_ptr` is null or `idx >= len`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __cobrust_array_get_i8(
-    arr_ptr: *const i8,
-    len: usize,
-    idx: usize,
-) -> i8 {
+pub unsafe extern "C" fn __cobrust_array_get_i8(arr_ptr: *const i8, len: usize, idx: usize) -> i8 {
     if arr_ptr.is_null() {
         let msg = b"__cobrust_array_get_i8: null array pointer";
         // SAFETY: static UTF-8 byte slice.

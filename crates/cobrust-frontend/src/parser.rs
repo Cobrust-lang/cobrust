@@ -1923,8 +1923,7 @@ impl<'a> Parser<'a> {
                 })?,
                 _ => {
                     return Err(ParseError::Syntax {
-                        message: "array type `[T; N]` expects an integer length after `;`"
-                            .into(),
+                        message: "array type `[T; N]` expects an integer length after `;`".into(),
                         span: len_tok.span,
                     });
                 }

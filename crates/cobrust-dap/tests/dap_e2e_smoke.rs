@@ -22,6 +22,9 @@
 //! Wave-2 ships the stdio-handshake subset; the full flow is a
 //! Phase L wave-3+ followup test once the `cobrust debug` CLI lands.
 
+#![allow(clippy::unwrap_used, clippy::missing_panics_doc)]
+#![allow(clippy::doc_lazy_continuation)]
+
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};

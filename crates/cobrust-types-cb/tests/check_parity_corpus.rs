@@ -417,16 +417,12 @@ fn test_synth_comp_not_iterable_fail() {
     let rust_err = TypeError::NotIterable {
         actual: Ty::Int,
         span: dummy_span(),
-        suggestion: Some(
-            "use a list / dict / range / str — primitives cannot iterate",
-        ),
+        suggestion: Some("use a list / dict / range / str — primitives cannot iterate"),
     };
     let cb_err = TypeErrorCb::NotIterable {
         actual: 0,
         span: dummy_span(),
-        suggestion: Some(
-            "use a list / dict / range / str — primitives cannot iterate".to_string(),
-        ),
+        suggestion: Some("use a list / dict / range / str — primitives cannot iterate".to_string()),
     };
     let mut arena = TyArena::new();
     assert_eq!(parity_check(&rust_err, &cb_err, &mut arena), Ok(()));
@@ -620,9 +616,7 @@ fn test_synth_index_not_indexable_fail() {
     let rust_err = TypeError::NotIndexable {
         actual: Ty::Int,
         span: dummy_span(),
-        suggestion: Some(
-            "use a list / dict / tuple / str — primitive types cannot be indexed",
-        ),
+        suggestion: Some("use a list / dict / tuple / str — primitive types cannot be indexed"),
     };
     let cb_err = TypeErrorCb::NotIndexable {
         actual: 0,
@@ -910,17 +904,13 @@ fn test_synth_cast_str_to_int_fail() {
         expected: Ty::Int,
         actual: Ty::Str,
         span: dummy_span(),
-        suggestion: Some(
-            "change the expression type or add `: <expected>` annotation",
-        ),
+        suggestion: Some("change the expression type or add `: <expected>` annotation"),
     };
     let cb_err = TypeErrorCb::TypeMismatch {
         expected: 0,
         actual: 1,
         span: dummy_span(),
-        suggestion: Some(
-            "change the expression type or add `: <expected>` annotation".to_string(),
-        ),
+        suggestion: Some("change the expression type or add `: <expected>` annotation".to_string()),
     };
     let mut arena = TyArena::new();
     assert_eq!(parity_check(&rust_err, &cb_err, &mut arena), Ok(()));
@@ -978,9 +968,7 @@ fn test_ctx_ambiguous_type_leaked_var() {
     };
     let cb_err = TypeErrorCb::AmbiguousType {
         span: dummy_span(),
-        suggestion: Some(
-            "add an explicit type annotation, e.g. `let x: i64 = …`".to_string(),
-        ),
+        suggestion: Some("add an explicit type annotation, e.g. `let x: i64 = …`".to_string()),
     };
     let mut arena = TyArena::new();
     assert_eq!(parity_check(&rust_err, &cb_err, &mut arena), Ok(()));
@@ -1173,9 +1161,7 @@ fn test_check_stmt_break_outside_loop() {
     };
     let cb_err = TypeErrorCb::BreakOutsideLoop {
         span: dummy_span(),
-        suggestion: Some(
-            "move the `break` inside a `for` or `while` loop body".to_string(),
-        ),
+        suggestion: Some("move the `break` inside a `for` or `while` loop body".to_string()),
     };
     let mut arena = TyArena::new();
     assert_eq!(parity_check(&rust_err, &cb_err, &mut arena), Ok(()));
@@ -1192,9 +1178,7 @@ fn test_check_stmt_continue_outside_loop() {
     };
     let cb_err = TypeErrorCb::ContinueOutsideLoop {
         span: dummy_span(),
-        suggestion: Some(
-            "move the `continue` inside a `for` or `while` loop body".to_string(),
-        ),
+        suggestion: Some("move the `continue` inside a `for` or `while` loop body".to_string()),
     };
     let mut arena = TyArena::new();
     assert_eq!(parity_check(&rust_err, &cb_err, &mut arena), Ok(()));
@@ -1408,9 +1392,7 @@ fn prop_synth_expr_no_leaked_var_ids() {
     };
     let cb_err = TypeErrorCb::AmbiguousType {
         span: dummy_span(),
-        suggestion: Some(
-            "add an explicit type annotation, e.g. `let x: i64 = …`".to_string(),
-        ),
+        suggestion: Some("add an explicit type annotation, e.g. `let x: i64 = …`".to_string()),
     };
     let mut arena = TyArena::new();
     assert_eq!(parity_check(&rust_err, &cb_err, &mut arena), Ok(()));

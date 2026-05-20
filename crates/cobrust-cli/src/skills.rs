@@ -33,9 +33,7 @@ struct SkillAssets;
 #[derive(Debug, Error)]
 pub enum SkillsError {
     /// Requested skill name was not found in the embedded catalog.
-    #[error(
-        "skill '{0}' not found\n  run 'cobrust skills list' to see available skills"
-    )]
+    #[error("skill '{0}' not found\n  run 'cobrust skills list' to see available skills")]
     NotFound(String),
 
     /// Embedded asset bytes are not valid UTF-8 (indicates a broken embed).
@@ -67,9 +65,7 @@ pub enum SkillsArgs {
 /// F34 anchor: skills-list-v1.
 pub fn list_skills() -> Vec<String> {
     let mut names: Vec<String> = SkillAssets::iter()
-        .map(|f: std::borrow::Cow<'static, str>| {
-            f.trim_end_matches(".md").to_owned()
-        })
+        .map(|f: std::borrow::Cow<'static, str>| f.trim_end_matches(".md").to_owned())
         .collect();
     names.sort();
     names
@@ -97,31 +93,29 @@ pub fn cmd_skills(args: &SkillsArgs) -> u8 {
             }
             0
         }
-        SkillsArgs::Get { name, json } => {
-            match run_get(name, *json) {
-                Ok(()) => 0,
-                Err(SkillsError::NotFound(msg)) => {
-                    eprintln!("error: {msg}");
-                    1
-                }
-                Err(SkillsError::Corrupt(msg)) => {
-                    eprintln!("error: {msg}");
-                    1
-                }
-                Err(SkillsError::JsonError(e)) => {
-                    eprintln!("error: {e}");
-                    1
-                }
+        SkillsArgs::Get { name, json } => match run_get(name, *json) {
+            Ok(()) => 0,
+            Err(SkillsError::NotFound(msg)) => {
+                eprintln!("error: {msg}");
+                1
             }
-        }
+            Err(SkillsError::Corrupt(msg)) => {
+                eprintln!("error: {msg}");
+                1
+            }
+            Err(SkillsError::JsonError(e)) => {
+                eprintln!("error: {e}");
+                1
+            }
+        },
     }
 }
 
 /// Inner implementation for `cobrust skills get`.
 fn run_get(name: &str, json: bool) -> Result<(), SkillsError> {
     let bytes = get_skill(name).ok_or_else(|| SkillsError::NotFound(name.to_owned()))?;
-    let content = std::str::from_utf8(bytes.as_ref())
-        .map_err(|_| SkillsError::Corrupt(name.to_owned()))?;
+    let content =
+        std::str::from_utf8(bytes.as_ref()).map_err(|_| SkillsError::Corrupt(name.to_owned()))?;
 
     if json {
         let obj = serde_json::json!({
@@ -160,7 +154,11 @@ mod tests {
             names.contains(&"cobrust-debugger".to_owned()),
             "cobrust-debugger not in list: {names:?}"
         );
-        assert_eq!(names.len(), 5, "expected 5 embedded skills (4 new + cobrust-first-try)");
+        assert_eq!(
+            names.len(),
+            5,
+            "expected 5 embedded skills (4 new + cobrust-first-try)"
+        );
     }
 
     // F36: test name matches assertion

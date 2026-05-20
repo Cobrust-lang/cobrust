@@ -19,6 +19,12 @@
 
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::todo)]
+// Each enum-variant arm forwards `suggestion.as_deref()` identically by design:
+// the trait wants an exhaustive variant→suggestion projector and folding arms
+// would lose the exhaustiveness check (ADR-0055b §4 invariant 1 — mirror).
+#![allow(clippy::match_same_arms)]
+#![allow(clippy::doc_lazy_continuation)]
+#![allow(clippy::doc_overindented_list_items)]
 
 use cobrust_frontend::span::{FileId, Span};
 use cobrust_types::TypeError;
@@ -86,12 +92,24 @@ fn test_display_multiple() {
     //
     // Rust `#[error("multiple type errors")]` → cb Display must emit same string.
     let rust_err = TypeError::Multiple(vec![
-        TypeError::BreakOutsideLoop { span: dummy_span(), suggestion: None },
-        TypeError::MutableDefault { span: dummy_span(), suggestion: None },
+        TypeError::BreakOutsideLoop {
+            span: dummy_span(),
+            suggestion: None,
+        },
+        TypeError::MutableDefault {
+            span: dummy_span(),
+            suggestion: None,
+        },
     ]);
     let cb_err = TypeErrorCb::Multiple(vec![
-        TypeErrorCb::BreakOutsideLoop { span: dummy_span(), suggestion: None },
-        TypeErrorCb::MutableDefault { span: dummy_span(), suggestion: None },
+        TypeErrorCb::BreakOutsideLoop {
+            span: dummy_span(),
+            suggestion: None,
+        },
+        TypeErrorCb::MutableDefault {
+            span: dummy_span(),
+            suggestion: None,
+        },
     ]);
     assert_eq!(
         format!("{rust_err}"),
@@ -108,8 +126,14 @@ fn test_display_multiple() {
 
 fn test_display_break_outside_loop() {
     let span = dummy_span();
-    let rust_err = TypeError::BreakOutsideLoop { span, suggestion: None };
-    let cb_err = TypeErrorCb::BreakOutsideLoop { span, suggestion: None };
+    let rust_err = TypeError::BreakOutsideLoop {
+        span,
+        suggestion: None,
+    };
+    let cb_err = TypeErrorCb::BreakOutsideLoop {
+        span,
+        suggestion: None,
+    };
     assert_eq!(
         format!("{rust_err}"),
         format!("{cb_err}"),

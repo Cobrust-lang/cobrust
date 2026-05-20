@@ -10,7 +10,7 @@
 //! 2. Recursive single-level       — `Tuple`, `List`, `Set`, `Dict`, `Ref`      (5)
 //! 3. Nested-recursive             — `List<List>`, `Dict<Str,List>`, etc.        (5)
 //! 4. Corner-cases                 — 1-tuple, empty-tuple, Ref-Ref cycle-reject,
-//!                                   Display byte-parity, arena-lookup            (5)
+//!    Display byte-parity, arena-lookup            (5)
 //!
 //! Each test builds the Rust `Ty`, converts via the stub, then calls
 //! `parity_check(&rust_ty_canon, &cb_ty_canon)` asserting `Ok(())`.
@@ -19,10 +19,11 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::todo)]
 #![allow(clippy::ignored_unit_patterns)]
+#![allow(clippy::cast_possible_wrap)]
 
-use cobrust_types::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarId};
-use cobrust_types_cb::{canonicalize_arena_root, ty_cb_arena_from_rust, TyArena, TyEntry};
-use cobrust_types_parity::{parity_check, Canonicalize, TyArena as ParityArena};
+use cobrust_types::{AdtId, AliasId, Ty};
+use cobrust_types_cb::{TyEntry, canonicalize_arena_root, ty_cb_arena_from_rust};
+use cobrust_types_parity::{Canonicalize, TyArena as ParityArena};
 
 // =====================================================================
 // Helper: build cb-form from Rust Ty + run parity_check
@@ -149,10 +150,7 @@ fn pc14_adt_with_args() {
 /// `Alias(AliasId(1), [List<Bool>])` — alias application with nested arg.
 #[test]
 fn pc15_alias_with_nested_arg() {
-    assert_parity(&Ty::Alias(
-        AliasId(1),
-        vec![Ty::List(Box::new(Ty::Bool))],
-    ));
+    assert_parity(&Ty::Alias(AliasId(1), vec![Ty::List(Box::new(Ty::Bool))]));
 }
 
 // =====================================================================
@@ -209,9 +207,15 @@ fn pc19_arena_handle_validity() {
     // Every TyId payload must be in [0, len).
     for entry in &cb_arena.entries {
         match entry {
-            TyEntry::List(id) | TyEntry::Set(id) | TyEntry::Ref(id)
-            | TyEntry::Generic(id) | TyEntry::Var(id) => {
-                assert!(*id >= 0 && *id < len, "dangling TyId {id} in arena of len {len}");
+            TyEntry::List(id)
+            | TyEntry::Set(id)
+            | TyEntry::Ref(id)
+            | TyEntry::Generic(id)
+            | TyEntry::Var(id) => {
+                assert!(
+                    *id >= 0 && *id < len,
+                    "dangling TyId {id} in arena of len {len}"
+                );
             }
             TyEntry::Dict(k, v) => {
                 assert!(*k >= 0 && *k < len, "dangling key TyId {k}");
@@ -243,8 +247,14 @@ fn pc19_arena_handle_validity() {
                 assert!(*rid >= 0, "negative RecordId {rid}");
             }
             // Leaf variants have no handle payloads.
-            TyEntry::Bool | TyEntry::Int | TyEntry::Float | TyEntry::Imag
-            | TyEntry::Str | TyEntry::Bytes | TyEntry::None | TyEntry::Never => {}
+            TyEntry::Bool
+            | TyEntry::Int
+            | TyEntry::Float
+            | TyEntry::Imag
+            | TyEntry::Str
+            | TyEntry::Bytes
+            | TyEntry::None
+            | TyEntry::Never => {}
         }
     }
 }
@@ -255,7 +265,7 @@ fn pc19_arena_handle_validity() {
 /// for a multi-level type via `display_ty`.
 #[test]
 fn pc20_display_byte_parity_multitype() {
-    use cobrust_types_cb::{display_ty, FnTyArena, RecordArena};
+    use cobrust_types_cb::{FnTyArena, RecordArena, display_ty};
     let rust_ty = Ty::Tuple(vec![
         Ty::Int,
         Ty::List(Box::new(Ty::Str)),

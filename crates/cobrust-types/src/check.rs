@@ -235,11 +235,7 @@ impl TypeCheckCtx {
     /// is `Some(def_id)`, that DefId is added to the removal set in
     /// addition to the file-owned ones.
     fn invalidate_with(&mut self, file_id: u32, extra: Option<u32>) {
-        let removed_defs: Vec<u32> = self
-            .file_defs
-            .get(&file_id)
-            .cloned()
-            .unwrap_or_default();
+        let removed_defs: Vec<u32> = self.file_defs.get(&file_id).cloned().unwrap_or_default();
         let mut removed: HashSet<u32> = removed_defs.iter().copied().collect();
         if let Some(d) = extra {
             removed.insert(d);
@@ -1237,7 +1233,15 @@ impl Ctx {
                         let it = self.synth_expr(e)?;
                         unify(&Ty::Int, &it, &mut self.subst, e.span)?;
                         if let Some(idx) = literal_int_value(e) {
-                            let n_i = *n as i64;
+                            // `n: usize` → `i64` for OOB compare against
+                            // a signed literal-index value. Per ADR-0060b
+                            // §3.4 the array-length tier is bounded to
+                            // i64::MAX in practice; on the (unreachable)
+                            // 64-bit-wide-pointer overflow path we treat
+                            // the index as in-range and defer to codegen,
+                            // since the literal-OOB diagnostic is purely
+                            // an LLM-friendliness fast-path (§2.5).
+                            let n_i = i64::try_from(*n).unwrap_or(i64::MAX);
                             if idx < 0 || idx >= n_i {
                                 return Err(TypeError::NotIndexable {
                                     actual: Ty::Array(elem.clone(), *n),
@@ -1317,9 +1321,7 @@ impl Ctx {
                     Ok(Ty::Ref(Box::new(inner_ty)))
                 }
                 // Method-form call — admit iff method's return type is Copy.
-                ExprKind::Call { callee, .. }
-                    if matches!(callee.kind, ExprKind::Attr { .. }) =>
-                {
+                ExprKind::Call { callee, .. } if matches!(callee.kind, ExprKind::Attr { .. }) => {
                     let inner_ty = self.synth_expr(inner)?;
                     let resolved = self.subst.apply(&inner_ty);
                     if is_copy_primitive(&resolved) {

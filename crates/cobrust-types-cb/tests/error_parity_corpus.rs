@@ -461,12 +461,24 @@ fn test_multiple_flat() {
     // Anchor: error_parity_corpus.rs::test_multiple
     // Multiple: flat list — ADR-0055b §2 callers flatten before construction.
     let rust_err = TypeError::Multiple(vec![
-        TypeError::BreakOutsideLoop { span: dummy_span(), suggestion: None },
-        TypeError::ReturnOutsideFn { span: dummy_span(), suggestion: None },
+        TypeError::BreakOutsideLoop {
+            span: dummy_span(),
+            suggestion: None,
+        },
+        TypeError::ReturnOutsideFn {
+            span: dummy_span(),
+            suggestion: None,
+        },
     ]);
     let cb_err = TypeErrorCb::Multiple(vec![
-        TypeErrorCb::BreakOutsideLoop { span: dummy_span(), suggestion: None },
-        TypeErrorCb::ReturnOutsideFn { span: dummy_span(), suggestion: None },
+        TypeErrorCb::BreakOutsideLoop {
+            span: dummy_span(),
+            suggestion: None,
+        },
+        TypeErrorCb::ReturnOutsideFn {
+            span: dummy_span(),
+            suggestion: None,
+        },
     ]);
     let mut arena = TyArena::new();
     assert_eq!(parity_check(&rust_err, &cb_err, &mut arena), Ok(()));
@@ -476,14 +488,16 @@ fn test_multiple_flat() {
 
 fn test_multiple_nested_two_levels() {
     // ADR-0055b §2: harness corpus exercises ≤2-level Multiple.
-    let inner = TypeError::Multiple(vec![
-        TypeError::AmbiguousType { span: dummy_span(), suggestion: None },
-    ]);
+    let inner = TypeError::Multiple(vec![TypeError::AmbiguousType {
+        span: dummy_span(),
+        suggestion: None,
+    }]);
     let rust_err = TypeError::Multiple(vec![inner]);
 
-    let cb_inner = TypeErrorCb::Multiple(vec![
-        TypeErrorCb::AmbiguousType { span: dummy_span(), suggestion: None },
-    ]);
+    let cb_inner = TypeErrorCb::Multiple(vec![TypeErrorCb::AmbiguousType {
+        span: dummy_span(),
+        suggestion: None,
+    }]);
     let cb_err = TypeErrorCb::Multiple(vec![cb_inner]);
     let mut arena = TyArena::new();
     assert_eq!(parity_check(&rust_err, &cb_err, &mut arena), Ok(()));
@@ -493,12 +507,14 @@ fn test_multiple_nested_two_levels() {
 
 fn test_multiple_singleton() {
     // Multiple([single_err]) — degenerate but valid.
-    let rust_err = TypeError::Multiple(vec![
-        TypeError::DictSpreadNotSupported { span: dummy_span(), suggestion: None },
-    ]);
-    let cb_err = TypeErrorCb::Multiple(vec![
-        TypeErrorCb::DictSpreadNotSupported { span: dummy_span(), suggestion: None },
-    ]);
+    let rust_err = TypeError::Multiple(vec![TypeError::DictSpreadNotSupported {
+        span: dummy_span(),
+        suggestion: None,
+    }]);
+    let cb_err = TypeErrorCb::Multiple(vec![TypeErrorCb::DictSpreadNotSupported {
+        span: dummy_span(),
+        suggestion: None,
+    }]);
     let mut arena = TyArena::new();
     assert_eq!(parity_check(&rust_err, &cb_err, &mut arena), Ok(()));
 }
@@ -543,9 +559,10 @@ fn test_bridge_stub_type_mismatch() {
 #[test]
 
 fn test_bridge_stub_multiple() {
-    let rust_err = TypeError::Multiple(vec![
-        TypeError::MutableDefault { span: dummy_span(), suggestion: None },
-    ]);
+    let rust_err = TypeError::Multiple(vec![TypeError::MutableDefault {
+        span: dummy_span(),
+        suggestion: None,
+    }]);
     let mut arena = TyArena::new();
     let cb_err = type_error_cb_from_rust(&rust_err, &mut arena);
     let rust_variant = cobrust_types_parity::type_error_variant_name(&rust_err);

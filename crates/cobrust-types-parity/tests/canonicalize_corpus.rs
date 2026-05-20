@@ -19,9 +19,16 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::items_after_statements)]
 #![allow(clippy::uninlined_format_args)]
+// Test scaffolds deliberately use parallel `_a` / `_b` arena handles to make
+// the parity assertions readable; clippy's `similar_names` heuristic flags the
+// suffix differences but the test corpus loses clarity if renamed.
+#![allow(clippy::similar_names)]
 
 use cobrust_types::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarId};
-use cobrust_types_parity::{CanonicalKey, TyArena, manual_canonical_key};
+// `CanonicalKey` is referenced only in doc comments below; the runtime tests
+// drive `manual_canonical_key`, so the type itself is not imported to keep
+// `-D unused-imports` (build gate) clean.
+use cobrust_types_parity::{TyArena, manual_canonical_key};
 
 // =====================================================================
 // 1. Shape preservation: containers
@@ -161,7 +168,10 @@ fn c11_var_id_different_handles_same_canonical() {
     let key_a_raw = manual_canonical_key(&ty_a);
     let key_b_raw = manual_canonical_key(&ty_b);
     // Raw keys differ (expected — manual_canonical_key preserves raw ids).
-    assert_ne!(key_a_raw, key_b_raw, "raw keys must differ for raw manual helper");
+    assert_ne!(
+        key_a_raw, key_b_raw,
+        "raw keys must differ for raw manual helper"
+    );
     // DEV impl via Canonicalize + TyArena must produce equal canonical keys.
     // This assertion is left as a comment because DEV implements Canonicalize.
     // Once DEV lands: assert_eq!(ty_a.canonicalize(&mut TyArena::new()), ty_b.canonicalize(&mut TyArena::new()));
@@ -232,7 +242,10 @@ fn c10b_fnty_record_namespaces_independent() {
 
     // Both arenas start each namespace at 0 independently
     assert_eq!(fn_id_a0, 0, "FnTy counter starts at 0 (arena_a)");
-    assert_eq!(rec_id_a0, 0, "Record counter starts at 0, independent of FnTy (arena_a)");
+    assert_eq!(
+        rec_id_a0, 0,
+        "Record counter starts at 0, independent of FnTy (arena_a)"
+    );
     assert_eq!(fn_id_b0, 0, "FnTy counter starts at 0 (arena_b)");
     assert_eq!(rec_id_b0, 0, "Record counter starts at 0 (arena_b)");
 
@@ -240,7 +253,10 @@ fn c10b_fnty_record_namespaces_independent() {
     let fn_id_a1 = arena_a.fresh_fn_ty_id();
     let rec_id_a1 = arena_a.fresh_record_id();
     assert_eq!(fn_id_a1, 1, "second FnTy id → 1");
-    assert_eq!(rec_id_a1, 1, "second Record id → 1, independent of FnTy counter");
+    assert_eq!(
+        rec_id_a1, 1,
+        "second Record id → 1, independent of FnTy counter"
+    );
 }
 
 /// C-15: Deeply nested canonical key roundtrip — `List[Set[Dict[Str,Bool]]]`
@@ -252,7 +268,10 @@ fn c15_deeply_nested_canonical_key_idempotent() {
     let outer = Ty::List(Box::new(mid));
     let key1 = manual_canonical_key(&outer);
     let key2 = manual_canonical_key(&outer);
-    assert_eq!(key1, key2, "same Ty must produce equal CanonicalKey on repeat calls");
+    assert_eq!(
+        key1, key2,
+        "same Ty must produce equal CanonicalKey on repeat calls"
+    );
     // Check structural shape
     assert_eq!(key1.kind, "List");
     assert_eq!(key1.children[0].kind, "Set");

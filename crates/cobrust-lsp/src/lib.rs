@@ -30,19 +30,20 @@ use std::sync::Mutex;
 
 use cobrust_frontend::span::FileId;
 use tower_lsp::Client;
+use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::{
-    Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
-    MessageType, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Url,
+    Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    InitializeParams, InitializeResult, InitializedParams, MessageType, ServerCapabilities,
+    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
-use tower_lsp::LanguageServer;
 
 pub mod diagnostic;
 pub mod span_convert;
 
-pub use diagnostic::{lowering_error_to_diagnostic, mir_error_to_diagnostic, type_error_to_diagnostics};
+pub use diagnostic::{
+    lowering_error_to_diagnostic, mir_error_to_diagnostic, type_error_to_diagnostics,
+};
 pub use span_convert::{LineMap, span_to_lsp_range};
 
 /// Per-document state cached by the LSP server.

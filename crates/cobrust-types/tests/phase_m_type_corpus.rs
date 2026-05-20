@@ -92,9 +92,7 @@ fn pm_a10_intn_add_mul_chain() {
 fn pm_a05_intn_is_hashable() {
     // ADR-0060a §3.2 + Ty::is_hashable IntN arm — narrow ints are
     // hashable (scalar). Use as dict key.
-    well_typed(
-        "fn f(d: dict[i32, i64]) -> i64:\n    return 0\n",
-    );
+    well_typed("fn f(d: dict[i32, i64]) -> i64:\n    return 0\n");
 }
 
 #[test]
@@ -115,17 +113,13 @@ fn pm_a06_intn_distinct_from_int() {
 fn pm_a07_intn_width_distinct() {
     // IntN(8) ≠ IntN(32). A function declared `-> i8` returning a
     // `let y: i32 = ...` must fail typeck (no implicit widen).
-    ill_typed(
-        "fn f() -> i8:\n    let y: i32 = 0\n    return y\n",
-    );
+    ill_typed("fn f() -> i8:\n    let y: i32 = 0\n    return y\n");
 }
 
 #[test]
 fn pm_a08_intn_in_tuple() {
     // Composition: tuple of (i32, i8).
-    well_typed(
-        "fn pair(a: i32, b: i8) -> (i32, i8):\n    return (a, b)\n",
-    );
+    well_typed("fn pair(a: i32, b: i8) -> (i32, i8):\n    return (a, b)\n");
 }
 
 // =====================================================================
@@ -150,14 +144,8 @@ fn pm_b02_ref_display() {
 
 #[test]
 fn pm_b03_array_display() {
-    assert_eq!(
-        Ty::Array(Box::new(Ty::Int), 4).to_string(),
-        "[i64; 4]"
-    );
-    assert_eq!(
-        Ty::Array(Box::new(Ty::Bool), 0).to_string(),
-        "[bool; 0]"
-    );
+    assert_eq!(Ty::Array(Box::new(Ty::Int), 4).to_string(), "[i64; 4]");
+    assert_eq!(Ty::Array(Box::new(Ty::Bool), 0).to_string(), "[bool; 0]");
 }
 
 #[test]
@@ -187,9 +175,7 @@ fn pm_b06_array_not_hashable() {
     // item-level `ItemKind::Let` site. The empty `{}` literal no
     // longer masks the Array K because validation runs against the
     // HIR annotation tree itself.
-    ill_typed(
-        "fn f() -> i64:\n    let d: dict[[i64; 4], i64] = {}\n    return 0\n",
-    );
+    ill_typed("fn f() -> i64:\n    let d: dict[[i64; 4], i64] = {}\n    return 0\n");
 }
 
 /// F34: phase_m_type_corpus::pm_b07_array_not_hashable_empty_dict_module_level
@@ -197,7 +183,5 @@ fn pm_b06_array_not_hashable() {
 /// pre-closure; documents that both paths now behave identically.
 #[test]
 fn pm_b07_array_not_hashable_empty_dict_module_level() {
-    ill_typed(
-        "let d: dict[[i64; 4], i64] = {}\n",
-    );
+    ill_typed("let d: dict[[i64; 4], i64] = {}\n");
 }
