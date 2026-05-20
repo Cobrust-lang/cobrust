@@ -1252,7 +1252,21 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::Dot => {
                     self.bump();
-                    let name = self.expect_ident()?;
+                    // ADR-0052a §8 Wave-1 — tuple-field projection
+                    // `p.0` / `p.1` / ... is the canonical Cobrust
+                    // tuple-field syntax (mirrors Rust). The lexer's
+                    // `prev_token_completes_postfix` guard ensures the
+                    // `.<digit>` sequence after an ident / `]` / `)` /
+                    // string lexes as `Dot Int("N")` instead of
+                    // `Float(".N")`. We recognise the integer here and
+                    // synthesise an `Attribute { name: "N" }` AST node.
+                    let name = match self.peek_kind().clone() {
+                        TokenKind::Int(s) => {
+                            self.bump();
+                            s
+                        }
+                        _ => self.expect_ident()?,
+                    };
                     let end = self.current_span();
                     e = Expr {
                         kind: ExprKind::Access(AccessKind::Attribute {
