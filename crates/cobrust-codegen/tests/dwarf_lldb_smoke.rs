@@ -904,7 +904,9 @@ fn lldb_smoke_str_di_composite_type_fields() {
     // in the DWARF tree.
     let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(lldb) = find_lldb() else {
-        eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb_smoke_str_di_composite_type_fields");
+        eprintln!(
+            "SKIP: lldb-18 / lldb not on PATH; skipping lldb_smoke_str_di_composite_type_fields"
+        );
         return;
     };
 
@@ -938,16 +940,15 @@ fn lldb_smoke_str_di_composite_regression_adt_preserved() {
     // verify both DIEs are present after `image lookup`.
     let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(lldb) = find_lldb() else {
-        eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb_smoke_str_di_composite_regression_adt_preserved");
+        eprintln!(
+            "SKIP: lldb-18 / lldb not on PATH; skipping lldb_smoke_str_di_composite_regression_adt_preserved"
+        );
         return;
     };
 
     let body_str = body_with_typed_signature(51, "take_str_w3e_reg", Ty::Str);
-    let body_adt = body_with_typed_signature(
-        52,
-        "take_opt_w3e_reg",
-        Ty::Adt(AdtId(0), vec![Ty::Int]),
-    );
+    let body_adt =
+        body_with_typed_signature(52, "take_opt_w3e_reg", Ty::Adt(AdtId(0), vec![Ty::Int]));
     let module = Module {
         bodies: vec![body_str, body_adt],
     };

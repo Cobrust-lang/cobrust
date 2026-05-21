@@ -991,11 +991,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
             128, // size in bits (ptr 64 + len 64)
             64,  // align in bits
             zero,
-            None,                                                // derived_from
+            None,                                                  // derived_from
             &[str_ptr_member.as_type(), str_len_member.as_type()], // elements
-            0,                                                   // runtime language
-            None,                                                // vtable_holder
-            "cobrust::Str",                                      // unique_id
+            0,                                                     // runtime language
+            None,                                                  // vtable_holder
+            "cobrust::Str",                                        // unique_id
         );
         self.di_str_composite = Some(str_composite);
     }
