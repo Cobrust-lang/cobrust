@@ -46,25 +46,32 @@ use tower_lsp::Client;
 use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::{
-    Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    InitializeParams, InitializeResult, InitializedParams, MessageType, ServerCapabilities,
-    ServerInfo, TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
-    Url,
+    CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, Hover,
+    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    MessageType, ServerCapabilities, ServerInfo, TextDocumentContentChangeEvent,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 
 pub mod code_action;
+pub mod completion;
 pub mod debounce;
 pub mod diagnostic;
+pub mod hover;
 pub mod span_convert;
 
 pub use code_action::{
     code_action_kind_for_fix_safety, code_action_kind_for_lowering_error,
     code_action_kind_for_mir_error, code_action_kind_for_type_error, fix_safety_from_code,
 };
+pub use completion::{
+    build_completion_response, keyword_items, prefix_at_offset, prelude_items, scope_items,
+};
 pub use debounce::{DEFAULT_DEBOUNCE_MS, DebounceTokens};
 pub use diagnostic::{
     lowering_error_to_diagnostic, mir_error_to_diagnostic, type_error_to_diagnostics,
 };
+pub use hover::{render_hover_markdown, resolve_hover, word_at_offset};
 pub use span_convert::{LineMap, span_to_lsp_range};
 
 /// Per-document state cached by the LSP server.
@@ -341,14 +348,18 @@ impl Backend {
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, _params: InitializeParams) -> LspResult<InitializeResult> {
-        // ADR-0057b §3.2 — advertise INCREMENTAL sync. The handler
-        // additionally accepts full-replace events (LSP spec mandates
-        // servers handle both) via `apply_content_changes`.
+        // ADR-0057b §3.2 — advertise INCREMENTAL sync.
+        // ADR-0057c §6 — advertise hover + completion capabilities.
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(vec![".".to_string(), "_".to_string()]),
+                    ..Default::default()
+                }),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -470,6 +481,65 @@ impl LanguageServer for Backend {
         // ADR-0057b §3.4 (monotonic FileId allocation across reopens).
         // `debounce_tokens` for the URI is left in place too — stale
         // entries are harmless (every new event re-keys them).
+    }
+
+    /// ADR-0057c §3.1 — hover handler.
+    ///
+    /// Resolves the identifier at the cursor from the shared
+    /// `TypeCheckCtx` and returns a Markdown hover card with the
+    /// inferred type. Returns `Ok(None)` for unknown identifiers,
+    /// punctuation, or positions with no surrounding identifier.
+    async fn hover(&self, params: HoverParams) -> LspResult<Option<Hover>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        // Read the doc state (no long-held lock).
+        let (source, line_map) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            match docs.get(uri) {
+                Some(s) => (s.source.clone(), s.line_map.clone()),
+                None => return Ok(None),
+            }
+        };
+
+        // Snapshot the type context (O(1) Arc clone per ADR-0056b).
+        let ctx = self.session_ctx_snapshot();
+
+        Ok(hover::resolve_hover(&source, &line_map, position, &ctx))
+    }
+
+    /// ADR-0057c §3.2 — completion handler.
+    ///
+    /// Returns PRELUDE functions + in-scope bindings + keywords,
+    /// filtered by the identifier prefix at the cursor.
+    async fn completion(&self, params: CompletionParams) -> LspResult<Option<CompletionResponse>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        // Read the doc state.
+        let (source, line_map) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            match docs.get(uri) {
+                Some(s) => (s.source.clone(), s.line_map.clone()),
+                // No doc open yet — still return PRELUDE + keywords from
+                // an empty context so clients connected before `did_open`
+                // get a useful list.
+                None => {
+                    let ctx = self.session_ctx_snapshot();
+                    let resp = completion::build_completion_response("", 0, &ctx);
+                    return Ok(Some(resp));
+                }
+            }
+        };
+
+        // Convert LSP Position → byte offset.
+        let byte_offset = line_map
+            .position_to_byte(position)
+            .map_or(0, |b| b as usize);
+
+        let ctx = self.session_ctx_snapshot();
+        let resp = completion::build_completion_response(&source, byte_offset, &ctx);
+        Ok(Some(resp))
     }
 }
 

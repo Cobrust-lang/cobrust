@@ -1,0 +1,7 @@
+---
+source: crates/cobrust-lsp/tests/hover_completion_e2e.rs
+assertion_line: 206
+expression: hover
+snapshot_kind: text
+---
+null

@@ -1,7 +1,7 @@
 ---
 module_id: lsp
-last_verified_commit: feature/0057b-didchange
-milestone: J.wave2.1
+last_verified_commit: feature/0057c-hover-completion
+milestone: J.wave2.2
 dependencies:
   - crates/cobrust-frontend/src/lib.rs       # parse_str entrypoint
   - crates/cobrust-hir/src/lower.rs          # HIR Session + lower
@@ -14,6 +14,7 @@ adr:
   - 0057   # Phase J frame
   - 0057a  # Wave-1 publishDiagnostics
   - 0057b  # Wave-2.1 didChange incremental + Session reuse
+  - 0057c  # Wave-2.2 hover + completion
   - 0052b  # suggestion: Option<&'static str> field
   - 0056b  # TypeCheckCtx Clone + Send + invalidate (Arc-COW contract)
 ---
@@ -27,8 +28,16 @@ Cobrust Language Server Protocol (LSP) implementation.
 Wave-1 (ADR-0057a) ships `textDocument/publishDiagnostics`. Every
 `TypeError + MirError + LoweringError + FrontendError` produced by the
 Cobrust compile pipeline is mapped to an LSP `Diagnostic` and pushed
-to the editor via `Client::publish_diagnostics`. Wave-2+ (ADR-0057b/c/d)
-extends to hover, completion, definition, rename, codeAction.
+to the editor via `Client::publish_diagnostics`.
+
+Wave-2.1 (ADR-0057b) adds per-keystroke live diagnostics via
+`textDocument/didChange` incremental sync + 100ms debounce + shared
+`TypeCheckCtx`.
+
+Wave-2.2 (ADR-0057c) adds `textDocument/hover` (inferred type at cursor)
++ `textDocument/completion` (PRELUDE + scope + keywords).
+
+Wave-2+ (ADR-0057d) adds definition, rename, codeAction.
 
 ## Public surface
 
@@ -42,6 +51,14 @@ extends to hover, completion, definition, rename, codeAction.
 | `Backend::compile_diagnostics(&str, &LineMap) -> Vec<Diagnostic>` | `crates/cobrust-lsp/src/lib.rs::Backend::compile_diagnostics` | wave-1 stateless |
 | `Backend::compile_diagnostics_with_session(&str, &LineMap, &mut TypeCheckCtx, u32) -> Vec<Diagnostic>` | `crates/cobrust-lsp/src/lib.rs::Backend::compile_diagnostics_with_session` | wave-2.1 stateful (invalidate + check_incremental) |
 | `Backend::apply_content_changes(String, &[TextDocumentContentChangeEvent]) -> String` | `crates/cobrust-lsp/src/lib.rs::Backend::apply_content_changes` | range-splice + full-replace |
+| `word_at_offset(&str, usize) -> Option<(usize, usize)>` | `crates/cobrust-lsp/src/hover.rs::word_at_offset` | byte-range of ident at cursor |
+| `render_hover_markdown(&str, &str) -> String` | `crates/cobrust-lsp/src/hover.rs::render_hover_markdown` | `**name**: \`Type\`` card |
+| `resolve_hover(&str, &LineMap, Position, &TypeCheckCtx) -> Option<Hover>` | `crates/cobrust-lsp/src/hover.rs::resolve_hover` | hover dispatcher |
+| `prefix_at_offset(&str, usize) -> &str` | `crates/cobrust-lsp/src/completion.rs::prefix_at_offset` | ident prefix at cursor |
+| `prelude_items(&str) -> Vec<CompletionItem>` | `crates/cobrust-lsp/src/completion.rs::prelude_items` | PRELUDE fn catalogue |
+| `scope_items(&TypeCheckCtx, &str) -> Vec<CompletionItem>` | `crates/cobrust-lsp/src/completion.rs::scope_items` | in-scope binding items |
+| `keyword_items(&str) -> Vec<CompletionItem>` | `crates/cobrust-lsp/src/completion.rs::keyword_items` | keyword items |
+| `build_completion_response(&str, usize, &TypeCheckCtx) -> CompletionResponse` | `crates/cobrust-lsp/src/completion.rs::build_completion_response` | full completion dispatcher |
 | `LineMap` | `crates/cobrust-lsp/src/span_convert.rs::LineMap` | byte-offset → UTF-16 position |
 | `LineMap::from_source(&str) -> LineMap` | `crates/cobrust-lsp/src/span_convert.rs::LineMap::from_source` | constructor |
 | `LineMap::byte_to_position(u32) -> Position` | `crates/cobrust-lsp/src/span_convert.rs::LineMap::byte_to_position` | byte → position |
@@ -159,28 +176,65 @@ codepoints (e.g. 🦀 → 2 UTF-16 surrogates).
 
 - `cargo check -p cobrust-lsp` exits 0 on Mac single-crate scope.
 - `cargo clippy -p cobrust-lsp --all-targets -- -D warnings` clean.
-- `cargo test -p cobrust-lsp` PASS for 47 tests:
-  - 32 unit (code_action + debounce + diagnostic + span_convert).
-  - 5 integration in `tests/did_change_e2e.rs` covering ADR-0057b §5
-    gate (incremental refresh, full-replace, debounce coalesce,
-    invalidate session, concurrent serialisation).
-  - 10 snapshot in `tests/snapshot_diagnostics.rs` (5 wave-1 +
-    5 wave-2.1 after-edit JSON shapes).
-- ADR-0057b status flips `proposed → accepted` on impl merge.
+- `cargo test -p cobrust-lsp` PASS for 75 tests:
+  - 48 unit (code_action + debounce + diagnostic + span_convert +
+    hover + completion).
+  - 5 integration in `tests/did_change_e2e.rs` (ADR-0057b §5 gate).
+  - 12 integration + snapshot in `tests/hover_completion_e2e.rs`
+    (ADR-0057c §5 gate: 3 hover + 3 completion + 3 hover snap + 3 completion snap).
+  - 10 snapshot in `tests/snapshot_diagnostics.rs` (wave-1 + wave-2.1).
+- ADR-0057c status flips `proposed → accepted` on impl merge.
 
-## Non-goals (wave-2.1)
+## Hover dispatch path (wave-2.2, ADR-0057c §3.1)
+
+```text
+hover(HoverParams):
+  1. docs[uri].source + line_map snapshot (mutex held briefly)
+  2. session_ctx_snapshot()           // O(1) Arc clone
+  3. line_map.position_to_byte(pos)   // LSP Position → byte offset
+  4. word_at_offset(source, offset)   // (start, end) or None
+  5. source[start..end] → name
+  6. ctx.lookup(name)                 // TypeCheckCtx name → Ty
+  7. render_hover_markdown(name, ty)  // "**x**: `Int`\n\nInferred type."
+  8. Return Hover { MarkupContent::Markdown, range: word_range }
+```
+
+Unknown name → `Ok(None)`.
+
+## Completion dispatch path (wave-2.2, ADR-0057c §3.2)
+
+```text
+completion(CompletionParams):
+  1. docs[uri].source + line_map snapshot
+  2. line_map.position_to_byte(pos) → byte_offset
+  3. prefix_at_offset(source, offset) → &str prefix
+  4. build_completion_response(source, offset, ctx):
+     4a. prelude_items(prefix)       // 23 hardcoded PRELUDE fns, sortText "0_*"
+     4b. scope_items(ctx, prefix)    // TypeCheckCtx::bindings(), sortText "1_*"
+     4c. keyword_items(prefix)       // 35 keywords, sortText "2_*"
+  5. Return CompletionResponse::Array(items)
+```
+
+Prefix filtering is case-sensitive. Empty prefix returns all items.
+
+## Non-goals (wave-2.1 + wave-2.2)
 
 - No incremental parse — full re-parse on each debounced batch.
-  AST-cache + incremental parse is wave-2.2 scope.
+  AST-cache + incremental parse is wave-2.3 scope.
 - No per-DefId incremental type-check — full re-check via
   `TypeCheckCtx::invalidate + merge_module`. True incremental
   check is an ADR-0056c follow-up.
-- No hover / completion / definition / rename — separate sub-ADRs.
+- No definition / rename / codeAction — separate sub-ADRs.
 - No CodeAction emission on `did_change` push — code actions surface
   on `textDocument/codeAction` request only.
 - No multi-file invalidation propagation — wave-2.1 invalidates
   only the URI whose source changed. Cross-file dependency
   invalidation is future scope.
+- No full HIR span-indexed hover — wave-2.2 uses word-boundary
+  heuristic. DefId-span hover is wave-3 scope (ADR-0057c §4).
+- No PRELUDE introspection from `TypeCheckCtx` — completion uses a
+  hardcoded 23-item catalogue. Live query is wave-3 per
+  `TODO(#hover-prelude-sync)` in `src/completion.rs`.
 
 ## CodeAction gating by FixSafety tier (ADR-0062)
 
@@ -218,7 +272,8 @@ output ships, the field name is `"fix_safety": "behavior-preserving"`.
 
 - ADR-0057 — Phase J frame.
 - ADR-0057a — wave-1 publishDiagnostics spec.
-- ADR-0057b — wave-2.1 didChange + Session reuse (this milestone).
+- ADR-0057b — wave-2.1 didChange + Session reuse.
+- ADR-0057c — wave-2.2 hover + completion (this milestone).
 - ADR-0052b — `suggestion` field shape (`Option<&'static str>`).
 - ADR-0056b — Phase I × J handoff (`TypeCheckCtx` Clone + Send Arc-COW).
 - ADR-0062 — FixSafety ladder (CodeAction gating + JSON wire field).

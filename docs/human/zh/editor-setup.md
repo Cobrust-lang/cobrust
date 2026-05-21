@@ -117,7 +117,36 @@ sequenceDiagram
     Backend->>Editor: publish_diagnostics(N+1, diags)
 ```
 
-**Wave-2+(后续):** hover、补全、定义跳转、重命名、codeAction。
+### 悬浮类型提示 —— wave-2.2 (ADR-0057c)
+
+ADR-0057c 实现后，`cobrust-lsp` 可响应 `textDocument/hover` 请求。
+将光标置于任意 `let` 绑定或函数名上，编辑器将以 Markdown 气泡形式显示推断出的类型：
+
+```
+**x**: `Int`
+
+Inferred type.
+```
+
+- 适用于文件打开后（或经过 `didChange` 防抖后）`TypeCheckCtx` 中登记的所有绑定。
+- 对于未知名称、关键字和标点符号，返回无提示（`null`）。
+- Wave-2.2 使用单词边界启发式算法；子表达式类型的完整 DefId 索引 hover 留待 wave-3 实现。
+
+### 补全 —— PRELUDE + 作用域 + 关键字 (wave-2.2, ADR-0057c)
+
+`cobrust-lsp` 可响应 `textDocument/completion` 请求，由任意标识符字符或 `.` / `_` 触发。
+
+三级补全候选：
+
+| 层级 | 类型 | 示例 | 排序前缀 |
+|---|---|---|---|
+| PRELUDE 函数 | Function | `print`、`len`、`range`、`map`、`filter` | `0_` |
+| 作用域绑定 | Variable | 当前文件中的每个 `let` 绑定 | `1_` |
+| 关键字 | Keyword | `let`、`fn`、`if`、`match`、`for`、`return` | `2_` |
+
+过滤规则为大小写敏感前缀匹配。输入 `pri` 后仅剩 `print`。
+
+**Wave-2+(后续):** 定义跳转、重命名、codeAction。
 roster 参见 ADR-0057。
 
 ### 构建与运行

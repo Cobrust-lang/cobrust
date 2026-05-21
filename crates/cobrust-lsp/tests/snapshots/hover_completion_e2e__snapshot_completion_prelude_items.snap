@@ -1,0 +1,146 @@
+---
+source: crates/cobrust-lsp/tests/hover_completion_e2e.rs
+assertion_line: 217
+expression: items
+snapshot_kind: text
+---
+[
+  {
+    "label": "print",
+    "kind": 3,
+    "detail": "(s: Any) -> None",
+    "sortText": "0_print"
+  },
+  {
+    "label": "len",
+    "kind": 3,
+    "detail": "(x: List[T] | Str | Bytes) -> Int",
+    "sortText": "0_len"
+  },
+  {
+    "label": "range",
+    "kind": 3,
+    "detail": "(start: Int, stop: Int) -> List[Int]",
+    "sortText": "0_range"
+  },
+  {
+    "label": "input",
+    "kind": 3,
+    "detail": "(prompt: Str = \"\") -> Str",
+    "sortText": "0_input"
+  },
+  {
+    "label": "int",
+    "kind": 3,
+    "detail": "(x: Any) -> Int",
+    "sortText": "0_int"
+  },
+  {
+    "label": "float",
+    "kind": 3,
+    "detail": "(x: Any) -> Float",
+    "sortText": "0_float"
+  },
+  {
+    "label": "str",
+    "kind": 3,
+    "detail": "(x: Any) -> Str",
+    "sortText": "0_str"
+  },
+  {
+    "label": "bool",
+    "kind": 3,
+    "detail": "(x: Any) -> Bool",
+    "sortText": "0_bool"
+  },
+  {
+    "label": "list",
+    "kind": 3,
+    "detail": "(x: Any) -> List[Any]",
+    "sortText": "0_list"
+  },
+  {
+    "label": "dict",
+    "kind": 3,
+    "detail": "() -> Dict[Any, Any]",
+    "sortText": "0_dict"
+  },
+  {
+    "label": "set",
+    "kind": 3,
+    "detail": "(x: Any) -> Set[Any]",
+    "sortText": "0_set"
+  },
+  {
+    "label": "abs",
+    "kind": 3,
+    "detail": "(x: Int | Float) -> Int | Float",
+    "sortText": "0_abs"
+  },
+  {
+    "label": "max",
+    "kind": 3,
+    "detail": "(a: T, b: T) -> T",
+    "sortText": "0_max"
+  },
+  {
+    "label": "min",
+    "kind": 3,
+    "detail": "(a: T, b: T) -> T",
+    "sortText": "0_min"
+  },
+  {
+    "label": "sum",
+    "kind": 3,
+    "detail": "(xs: List[Int | Float]) -> Int | Float",
+    "sortText": "0_sum"
+  },
+  {
+    "label": "sorted",
+    "kind": 3,
+    "detail": "(xs: List[T]) -> List[T]",
+    "sortText": "0_sorted"
+  },
+  {
+    "label": "reversed",
+    "kind": 3,
+    "detail": "(xs: List[T]) -> List[T]",
+    "sortText": "0_reversed"
+  },
+  {
+    "label": "enumerate",
+    "kind": 3,
+    "detail": "(xs: List[T]) -> List[(Int, T)]",
+    "sortText": "0_enumerate"
+  },
+  {
+    "label": "zip",
+    "kind": 3,
+    "detail": "(a: List[A], b: List[B]) -> List[(A, B)]",
+    "sortText": "0_zip"
+  },
+  {
+    "label": "map",
+    "kind": 3,
+    "detail": "(f: (T) -> U, xs: List[T]) -> List[U]",
+    "sortText": "0_map"
+  },
+  {
+    "label": "filter",
+    "kind": 3,
+    "detail": "(f: (T) -> Bool, xs: List[T]) -> List[T]",
+    "sortText": "0_filter"
+  },
+  {
+    "label": "open",
+    "kind": 3,
+    "detail": "(path: Str, mode: Str) -> FileHandle",
+    "sortText": "0_open"
+  },
+  {
+    "label": "argv",
+    "kind": 3,
+    "detail": "() -> List[Str]",
+    "sortText": "0_argv"
+  }
+]
