@@ -2589,3 +2589,60 @@ flowchart LR
 ### Crate location
 
 `crates/cobrust-cli/src/skills.rs` — implementation is in the CLI crate, not a separate crate. Skills are tooling, not a compiler component. The `SkillAssets` embed struct uses `#[folder = "../../docs/agent/skills/"]` relative to the crate root.
+
+---
+
+## `cobrust install` — Tier 3 wheel installer (Phase O W2, ADR-0065 §7.2)
+
+`cobrust install` is the consumer-side counterpart to the Tier 3 multi-wheel `release.yml` matrix shipped in W1. It detects the host CPU, fetches the wheel index for the requested package, picks the highest-tier wheel that matches the host, verifies the SHA-256, validates the `cobrust_abi` tag, and unpacks the archive into `$COBRUST_HOME/pkgs/<name>-<version>/`.
+
+```mermaid
+flowchart LR
+    A[user / agent] -- "cobrust install hello-cb --version 0.1.0" --> CLI
+    CLI -- "detect_host_cpu()" --> CPU[HostCpu enum]
+    CLI -- "GET /index/hello-cb/0.1.0/wheels.json" --> REG[Wheel registry]
+    REG -- "Vec WheelMeta" --> SEL[select_wheel]
+    CPU --> SEL
+    SEL -- "best wheel" --> DL[download_wheel + SHA-256 verify]
+    DL -- "tar.gz" --> UN[unpack to ~/.cobrust/pkgs/]
+```
+
+### Subcommand surface
+
+```
+cobrust install <pkg> --version <ver> [--registry-url <url>] [--dry-run]
+```
+
+- `pkg` — package name (e.g. `hello-cb`, `numpy-cb`).
+- `--version` — required in W2 (transitive resolution lands in W3+).
+- `--registry-url` — override the default GitHub Releases registry (advanced).
+- `--dry-run` — resolve + select but don't download or write to disk.
+
+### CPU detection
+
+| Host arch | Mechanism | Wheel suffix candidates |
+|---|---|---|
+| x86_64 | `is_x86_feature_detected!("avx2" / "fma" / "avx512f")` | `v1` / `v3` / `v4` |
+| aarch64 Linux | `std::arch::is_aarch64_feature_detected!("sve")` | `neon` / `sve` |
+| aarch64 macOS | `sysctl machdep.cpu.brand_string` for M1 / M2 / M3+ | `m1` / `m2` |
+| unknown | none | `v1` (fallback) |
+
+### Errors print the FIX (§2.5 direction B)
+
+Every install error includes a `suggestion:` line per ADR-0065 §3.3.2 step 8. Example:
+
+```
+error: SHA-256 mismatch for cobrust-hello-0.1.0-x86_64-unknown-linux-gnu-v3.tar.gz
+  expected: a1b2c3...
+  got:      deadbeef...
+  suggestion: re-run `cobrust install <pkg> --force` to re-download, or pin to a known-good version
+```
+
+### Crate map
+
+| Crate | Module | Role |
+|---|---|---|
+| `cobrust-pkg` | `cpu_detect` | Host CPU introspection → `HostCpu` enum |
+| `cobrust-pkg` | `wheel_select` | Pick highest-tier wheel for host triple |
+| `cobrust-pkg` | `registry_client` | HTTPS fetch index + download + SHA-256 verify |
+| `cobrust-cli` | `install` | Subcommand glue + unpack |

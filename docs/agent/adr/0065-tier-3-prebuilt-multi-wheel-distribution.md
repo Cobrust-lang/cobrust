@@ -3,7 +3,7 @@ doc_kind: adr
 adr_id: 0065
 name: 0065
 title: "Tier 3 prebuilt multi-wheel distribution — per-CPU sub-target + cobrust install package tool"
-status: partial (wave-1 shipped; waves 2-4 queued)
+status: partial (waves 1+2 shipped; waves 3-4 queued)
 date: 2026-05-20
 phase: Phase O (post-Phase-N packaging)
 relates_to: [adr:0026, adr:0046, adr:0058b, adr:0058e]
@@ -346,16 +346,30 @@ Delivered:
 - Note: `generate-index` step deferred to wave-3 (registry crate must exist first).
 - Prerequisite: none (atop existing ADR-0046 matrix).
 
-### 7.2 Phase O wave-2: `cobrust install` subcommand + CPU detection
+### 7.2 Phase O wave-2: `cobrust install` subcommand + CPU detection — SHIPPED
 
-- `cobrust-cli`: new `install` subcommand (~200 LOC argument parsing + flow).
-- `crates/cobrust-pkg`: new `cpu_detect` module (~100 LOC); new `wheel_select`
-  module (~150 LOC); new `registry_client` module (~150 LOC).
-- SHA-256 verification using `sha2` crate (already in dependency graph via
-  translation pipeline).
-- ABI compatibility check on `cobrust_abi` semver-major.
-- Total delta: approximately 600 LOC.
-- Prerequisite: wave-1 (registry index must exist to test against).
+Status: **SHIPPED** (feature/tier3-w2-install → main, 2026-05-21).
+
+Delivered:
+
+- `crates/cobrust-pkg/src/cpu_detect.rs` — `HostCpu` enum + `detect_host_cpu()`
+  using `is_x86_feature_detected!` / `is_aarch64_feature_detected!` +
+  `sysctl machdep.cpu.brand_string` for Apple Silicon M-series gating.
+- `crates/cobrust-pkg/src/wheel_select.rs` — `WheelMeta` struct + `select_wheel`
+  function picking highest-tier wheel for host triple, fallback to baseline
+  (`v1` / `neon` / `m1`).
+- `crates/cobrust-pkg/src/registry_client.rs` — `RegistryClient` synchronous
+  client wrapping `reqwest::blocking`; `fetch_index` parses §3.4 wheels.json,
+  `download_wheel` downloads + SHA-256 verifies before disk write. All errors
+  carry `suggestion:` per §3.3.2 step 8 (§2.5 direction B).
+- `crates/cobrust-cli/src/install.rs` — `cobrust install <pkg> --version <ver>`
+  subcommand orchestrating cpu_detect → fetch_index → select_wheel →
+  download_wheel → unpack (flate2 + tar). Supports `--dry-run` and
+  `--registry-url` override.
+- 14 atomic tests across 4 files: 3 cpu_detect + 5 wheel_select + 3
+  registry_client + 3 install-CLI integration (mock HTTP server).
+- ABI compatibility check on `cobrust_abi` semver-major (§6.4).
+- Prerequisite: wave-1 (registry index must exist to test against). [satisfied]
 
 ### 7.3 Phase O wave-3: `cobrust-registry` crate spike + CDN mirror
 

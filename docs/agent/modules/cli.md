@@ -893,3 +893,72 @@ Three integration tests in `crates/cobrust-cli/tests/test_skills.rs` (F34: test-
 ### Version-matching invariant
 
 `rust-embed` with `compression` + `include-exclude` freezes skill content at compile time. The skill served by `cobrust skills get` always matches the installed binary version. ADR-0061 §1.3.
+
+---
+
+## `cobrust install` subcommand (Phase O W2 — ADR-0065 §7.2)
+
+**Module**: `crates/cobrust-cli/src/install.rs`
+**Anchor**: install-v1
+**Status**: SHIPPED (Phase O W2, feature/tier3-w2-install)
+
+### Public surface
+
+```
+cobrust install <pkg_name> [--version <ver>] [--registry-url <url>] [--dry-run]
+```
+
+Argument schema (clap-derived):
+
+| Field | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `pkg_name` | `String` | yes | — | Package name (e.g. `numpy-cb`) |
+| `--version` | `Option<String>` | required in W2 | — | Explicit version pin; transitive resolution lands W3+ |
+| `--registry-url` | `Option<String>` | no | `DEFAULT_REGISTRY_URL` | GitHub Releases base URL |
+| `--dry-run` | `bool` flag | no | `false` | Resolve + select but no disk writes |
+
+### Dispatch contract
+
+`install::run(InstallArgs) -> u8` — exit code per `exit_codes.rs`:
+
+- `SUCCESS = 0` — install completed (or dry-run reported wheel).
+- `USER_ERROR = 1` — registry failure, no matching wheel, ABI mismatch, missing required `--version`.
+
+### Errors emitted (all carry `suggestion:`)
+
+| Variant | Trigger | Suggestion |
+|---|---|---|
+| `RegistryClientError::BadStatus` | non-2xx HTTP from registry | verify pkg name + version, or override `--registry-url` |
+| `RegistryClientError::Parse` | malformed wheels.json | format drift; file an issue |
+| `RegistryClientError::Sha256Mismatch` | downloaded payload SHA != index advert | re-run with `--force` or pin known-good version |
+| `InstallError::NoMatchingWheel` | no wheel for host triple | not built for your platform; check Releases or build from source |
+| `InstallError::AbiMismatch` | wheel `cobrust_abi` semver-major != installer | upgrade `cobrust` or pin older package |
+| `InstallError::MissingVersion` | `--version` omitted | pass `cobrust install <pkg>@<version>` |
+
+### Side-effect contract
+
+When `dry_run = false`:
+
+1. Read `$COBRUST_HOME` (or `$HOME/.cobrust`); create `pkgs/` and `cache/` subdirs.
+2. Write downloaded archive at `<root>/cache/<filename>`.
+3. Unpack into `<root>/pkgs/<pkg>-<version>/` via `flate2 + tar`.
+
+When `dry_run = true`: zero filesystem writes, but the wheel index is still fetched (HTTP GET hits the network).
+
+### Tests
+
+| File | Tests | Assertion |
+|---|---|---|
+| `crates/cobrust-pkg/tests/cpu_detect_tests.rs` | 3 | host-arch variant; valid suffix; baseline fallback |
+| `crates/cobrust-pkg/tests/wheel_select_tests.rs` | 5 | exact / baseline-fallback / no-match / multi-tier / Apple-M1 |
+| `crates/cobrust-pkg/tests/registry_client_tests.rs` | 3 | `fetch_index` JSON; SHA match; SHA mismatch error |
+| `crates/cobrust-cli/tests/install_subcommand.rs` | 3 | `--help` exit 0 + flag list; missing `--version` non-zero; `--dry-run` happy path against mock |
+
+### Crate dependencies
+
+| Crate | Module | Role |
+|---|---|---|
+| `cobrust-pkg` | `cpu_detect` | `detect_host_cpu() -> HostCpu` |
+| `cobrust-pkg` | `wheel_select` | `select_wheel(&HostCpu, &[WheelMeta]) -> Option<&WheelMeta>` |
+| `cobrust-pkg` | `registry_client` | `RegistryClient::fetch_index`, `download_wheel` + SHA-256 verify |
+| `cobrust-cli` | `install` | orchestrates + unpacks tarball |

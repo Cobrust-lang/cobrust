@@ -2447,3 +2447,60 @@ flowchart LR
 ### Crate 位置
 
 `crates/cobrust-cli/src/skills.rs`——实现在 CLI crate 中，不是独立 crate。技能是工具，不是编译器组件。`SkillAssets` 嵌入结构使用 `#[folder = "../../docs/agent/skills/"]`，相对于 crate 根目录。
+
+---
+
+## `cobrust install`——Tier 3 wheel 安装器（Phase O W2，ADR-0065 §7.2）
+
+`cobrust install` 是 W1 已发布的 Tier 3 多 wheel `release.yml` 矩阵的消费侧对应。它检测主机 CPU、为请求的包获取 wheel 索引、为该主机挑选最高层级的 wheel、校验 SHA-256、验证 `cobrust_abi` 标签，并将归档解包到 `$COBRUST_HOME/pkgs/<name>-<version>/`。
+
+```mermaid
+flowchart LR
+    A[用户 / agent] -- "cobrust install hello-cb --version 0.1.0" --> CLI
+    CLI -- "detect_host_cpu()" --> CPU[HostCpu 枚举]
+    CLI -- "GET /index/hello-cb/0.1.0/wheels.json" --> REG[Wheel 注册表]
+    REG -- "Vec WheelMeta" --> SEL[select_wheel]
+    CPU --> SEL
+    SEL -- "最佳 wheel" --> DL[download_wheel + SHA-256 校验]
+    DL -- "tar.gz" --> UN[解包到 ~/.cobrust/pkgs/]
+```
+
+### 子命令接口
+
+```
+cobrust install <pkg> --version <ver> [--registry-url <url>] [--dry-run]
+```
+
+- `pkg`——包名（如 `hello-cb`、`numpy-cb`）。
+- `--version`——W2 阶段必填（传递依赖解析在 W3+ 落地）。
+- `--registry-url`——覆盖默认的 GitHub Releases 注册表（高级用法）。
+- `--dry-run`——解析 + 选择但不下载、不写入磁盘。
+
+### CPU 检测
+
+| 主机架构 | 机制 | Wheel 后缀候选 |
+|---|---|---|
+| x86_64 | `is_x86_feature_detected!("avx2" / "fma" / "avx512f")` | `v1` / `v3` / `v4` |
+| aarch64 Linux | `std::arch::is_aarch64_feature_detected!("sve")` | `neon` / `sve` |
+| aarch64 macOS | `sysctl machdep.cpu.brand_string`（M1 / M2 / M3+） | `m1` / `m2` |
+| 未知 | 无 | `v1`（回退） |
+
+### 错误打印修复建议（§2.5 方向 B）
+
+每个 install 错误都按 ADR-0065 §3.3.2 步骤 8 包含一行 `suggestion:`。例如：
+
+```
+error: SHA-256 mismatch for cobrust-hello-0.1.0-x86_64-unknown-linux-gnu-v3.tar.gz
+  expected: a1b2c3...
+  got:      deadbeef...
+  suggestion: re-run `cobrust install <pkg> --force` to re-download, or pin to a known-good version
+```
+
+### Crate 映射
+
+| Crate | 模块 | 角色 |
+|---|---|---|
+| `cobrust-pkg` | `cpu_detect` | 主机 CPU 探测 → `HostCpu` 枚举 |
+| `cobrust-pkg` | `wheel_select` | 为主机三元组挑选最高层级 wheel |
+| `cobrust-pkg` | `registry_client` | HTTPS 拉取索引 + 下载 + SHA-256 校验 |
+| `cobrust-cli` | `install` | 子命令胶水层 + 解包 |
