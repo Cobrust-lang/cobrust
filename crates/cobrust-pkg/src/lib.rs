@@ -45,6 +45,7 @@
 #![allow(clippy::unnecessary_literal_unwrap)]
 #![allow(clippy::manual_strip)]
 
+pub mod cpu_detect;
 pub mod error;
 pub mod lockfile;
 pub mod manifest;
@@ -53,6 +54,7 @@ pub mod resolver;
 pub mod sources;
 pub mod tarball;
 
+pub use cpu_detect::{HostCpu, detect_host_cpu};
 pub use error::{
     LockfileError, ManifestError, PkgError, RegistryError, ResolutionError, SourceError,
     TarballError,
