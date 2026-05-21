@@ -1,0 +1,22 @@
+---
+source: crates/cobrust-lsp/tests/hover_completion_e2e.rs
+assertion_line: 178
+expression: hover
+snapshot_kind: text
+---
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "**x**: `i64`\n\nInferred type."
+  },
+  "range": {
+    "start": {
+      "line": 0,
+      "character": 4
+    },
+    "end": {
+      "line": 0,
+      "character": 5
+    }
+  }
+}

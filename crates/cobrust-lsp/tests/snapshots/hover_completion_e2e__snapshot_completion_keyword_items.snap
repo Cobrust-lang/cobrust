@@ -1,0 +1,183 @@
+---
+source: crates/cobrust-lsp/tests/hover_completion_e2e.rs
+assertion_line: 224
+expression: items
+snapshot_kind: text
+---
+[
+  {
+    "label": "def",
+    "kind": 14,
+    "sortText": "2_def"
+  },
+  {
+    "label": "let",
+    "kind": 14,
+    "sortText": "2_let"
+  },
+  {
+    "label": "mut",
+    "kind": 14,
+    "sortText": "2_mut"
+  },
+  {
+    "label": "if",
+    "kind": 14,
+    "sortText": "2_if"
+  },
+  {
+    "label": "else",
+    "kind": 14,
+    "sortText": "2_else"
+  },
+  {
+    "label": "elif",
+    "kind": 14,
+    "sortText": "2_elif"
+  },
+  {
+    "label": "for",
+    "kind": 14,
+    "sortText": "2_for"
+  },
+  {
+    "label": "while",
+    "kind": 14,
+    "sortText": "2_while"
+  },
+  {
+    "label": "break",
+    "kind": 14,
+    "sortText": "2_break"
+  },
+  {
+    "label": "continue",
+    "kind": 14,
+    "sortText": "2_continue"
+  },
+  {
+    "label": "return",
+    "kind": 14,
+    "sortText": "2_return"
+  },
+  {
+    "label": "class",
+    "kind": 14,
+    "sortText": "2_class"
+  },
+  {
+    "label": "enum",
+    "kind": 14,
+    "sortText": "2_enum"
+  },
+  {
+    "label": "match",
+    "kind": 14,
+    "sortText": "2_match"
+  },
+  {
+    "label": "with",
+    "kind": 14,
+    "sortText": "2_with"
+  },
+  {
+    "label": "and",
+    "kind": 14,
+    "sortText": "2_and"
+  },
+  {
+    "label": "or",
+    "kind": 14,
+    "sortText": "2_or"
+  },
+  {
+    "label": "not",
+    "kind": 14,
+    "sortText": "2_not"
+  },
+  {
+    "label": "True",
+    "kind": 14,
+    "sortText": "2_True"
+  },
+  {
+    "label": "False",
+    "kind": 14,
+    "sortText": "2_False"
+  },
+  {
+    "label": "None",
+    "kind": 14,
+    "sortText": "2_None"
+  },
+  {
+    "label": "pass",
+    "kind": 14,
+    "sortText": "2_pass"
+  },
+  {
+    "label": "raise",
+    "kind": 14,
+    "sortText": "2_raise"
+  },
+  {
+    "label": "try",
+    "kind": 14,
+    "sortText": "2_try"
+  },
+  {
+    "label": "except",
+    "kind": 14,
+    "sortText": "2_except"
+  },
+  {
+    "label": "finally",
+    "kind": 14,
+    "sortText": "2_finally"
+  },
+  {
+    "label": "import",
+    "kind": 14,
+    "sortText": "2_import"
+  },
+  {
+    "label": "from",
+    "kind": 14,
+    "sortText": "2_from"
+  },
+  {
+    "label": "as",
+    "kind": 14,
+    "sortText": "2_as"
+  },
+  {
+    "label": "in",
+    "kind": 14,
+    "sortText": "2_in"
+  },
+  {
+    "label": "is",
+    "kind": 14,
+    "sortText": "2_is"
+  },
+  {
+    "label": "yield",
+    "kind": 14,
+    "sortText": "2_yield"
+  },
+  {
+    "label": "async",
+    "kind": 14,
+    "sortText": "2_async"
+  },
+  {
+    "label": "await",
+    "kind": 14,
+    "sortText": "2_await"
+  },
+  {
+    "label": "type",
+    "kind": 14,
+    "sortText": "2_type"
+  }
+]
