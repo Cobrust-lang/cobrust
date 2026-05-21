@@ -22,21 +22,24 @@
 //! negative-index normalisation matches numpy; slice bounds clamp
 //! (not error) on out-of-range; zero step → `ZeroStep`.
 
-#![allow(clippy::cast_lossless)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::missing_panics_doc)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::if_not_else)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::map_unwrap_or)]
+// CQ P1-4: consolidated from 15 separate inner attrs; translator-template fix deferred per F37.
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::module_name_repetitions,
+    clippy::similar_names,
+    clippy::needless_pass_by_value,
+    clippy::uninlined_format_args,
+    clippy::if_not_else,
+    clippy::too_many_lines,
+    clippy::map_unwrap_or
+)]
 #![allow(clippy::unnecessary_wraps)]
 
 use ndarray::{ArrayD, IxDyn};

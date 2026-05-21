@@ -19,15 +19,18 @@
 //! boolean mask, `np.where`) returns owned `Array` per the view-vs-copy
 //! contract documented in ADR-0015 §3.
 
-#![allow(clippy::cast_lossless)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::missing_panics_doc)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::module_name_repetitions)]
+// CQ P1-4: consolidated from 9 separate inner attrs; translator-template fix deferred per F37.
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::module_name_repetitions
+)]
 
 use ndarray::{ArrayViewD, ArrayViewMutD};
 

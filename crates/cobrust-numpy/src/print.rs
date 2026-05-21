@@ -15,8 +15,8 @@
 //! uses `to_json` for bytewise comparison; `repr` is for human
 //! display.
 
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_possible_truncation)]
+// CQ P1-4: consolidated from 2 separate inner attrs; translator-template fix deferred per F37.
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 use crate::array::Array;
 

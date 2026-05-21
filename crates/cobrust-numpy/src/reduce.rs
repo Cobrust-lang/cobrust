@@ -22,26 +22,29 @@
 //! a closed enum variant. Constitution §5.3 (efficient): inner loops
 //! are auto-vectorisable.
 
-#![allow(clippy::cast_lossless)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::float_cmp)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::missing_panics_doc)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::if_not_else)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::unnecessary_wraps)]
-#![allow(clippy::imprecise_flops)]
-#![allow(clippy::suboptimal_flops)]
-#![allow(clippy::excessive_precision)]
+// CQ P1-4: consolidated from 20 separate inner attrs; translator-template fix deferred per F37.
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::module_name_repetitions,
+    clippy::similar_names,
+    clippy::needless_pass_by_value,
+    clippy::uninlined_format_args,
+    clippy::if_not_else,
+    clippy::too_many_lines,
+    clippy::map_unwrap_or,
+    clippy::unnecessary_wraps,
+    clippy::imprecise_flops,
+    clippy::suboptimal_flops,
+    clippy::excessive_precision
+)]
 #![allow(clippy::explicit_iter_loop)]
 #![allow(clippy::bool_to_int_with_if)]
 #![allow(clippy::single_match_else)]
