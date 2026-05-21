@@ -95,6 +95,8 @@ const DW_ATE_ADDRESS: u32 = 0x01;
 const DW_ATE_BOOLEAN: u32 = 0x02;
 const DW_ATE_FLOAT: u32 = 0x04;
 const DW_ATE_SIGNED: u32 = 0x05;
+// ADR-0059e §3.2 — DW_ATE_unsigned for the `cobrust::Str::len` member DI.
+const DW_ATE_UNSIGNED: u32 = 0x07;
 
 // =====================================================================
 // Public entry — `llvm_backend::emit`
@@ -696,6 +698,16 @@ pub struct LlvmEmitter<'ctx> {
     /// present; `di_type_for` keeps returning `cobrust::Adt` for
     /// function signatures (opaque-pointer).
     di_option_composite: Option<DICompositeType<'ctx>>,
+    /// ADR-0059e §3.2 — `cobrust::Str` `DICompositeType` carrying the
+    /// logical (ptr, len) shape so lldb pretty-printers can walk into
+    /// the StringBuffer payload via `SBValue.GetChildMemberWithName`.
+    /// Mirrors the wave-3 `cobrust::Option` composite precedent above.
+    /// Emitted unconditionally so `image lookup --type cobrust::Str`
+    /// resolves to the composite DIE; `di_type_for` continues returning
+    /// the opaque-pointer basic type for function signatures (so the
+    /// LLVM type lowering doesn't shift). Closes the final Phase L
+    /// §6.1 honest-cite (Str runtime `frame variable s = "hello"`).
+    di_str_composite: Option<DICompositeType<'ctx>>,
     /// Per-body `DefId.0` → emitted `DISubprogram`. Populated at
     /// `declare_body`; consumed at `define_body` to set per-instruction
     /// debug locations.
@@ -782,6 +794,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             line_map,
             is_optimized,
             di_option_composite: None,
+            di_str_composite: None,
         };
         emitter.declare_runtime_helpers();
         emitter.populate_di_basic_types();
@@ -917,6 +930,74 @@ impl<'ctx> LlvmEmitter<'ctx> {
             "cobrust::Option",                                 // unique_id
         );
         self.di_option_composite = Some(option_composite);
+
+        // ADR-0059e §3.2 — per-variant `cobrust::Str` DICompositeType.
+        //
+        // Emit a `DICompositeType` (DW_TAG_structure_type) named
+        // `"cobrust::Str"` so `image lookup --type cobrust::Str` returns
+        // a DIE with structured member fields. Two members carry the
+        // logical (ptr, len) view that the lldb pretty-printer
+        // (`tools/lldb-cobrust/printers.py::cobrust_str_summary`) walks
+        // via `SBValue.GetChildMemberWithName("ptr")` /
+        // `GetChildMemberWithName("len")`:
+        //
+        //   ptr: *const u8 at offset   0, DW_ATE_ADDRESS — bytes start.
+        //   len: u64       at offset  64, DW_ATE_UNSIGNED — byte length.
+        //
+        // The composite models the **logical** (ptr, len) view; the
+        // runtime layout is `Box<StringBuffer { Vec<u8> }>` (an
+        // indirection through the box). The printer's wave-2
+        // `_read_string_buffer` fallback path is preserved for
+        // backward-compat with binaries that pre-date this emission.
+        //
+        // Note: `di_basic_types["Str"]` keeps pointing at the opaque-
+        // pointer basic type so function signatures
+        // (`fn take_str(x: Str) -> Str`) keep using the pointer-sized
+        // DI without affecting LLVM type lowering. The composite is
+        // emitted unconditionally — like the Option composite above —
+        // so lldb resolves the DIE even when no function signature
+        // returns a `Str`.
+        let unsigned_i64_ty = self
+            .di_builder
+            .create_basic_type("u64", 64, DW_ATE_UNSIGNED, zero)
+            .expect("DI u64 basic type for Str len");
+        let str_ptr_member = self.di_builder.create_member_type(
+            cu_scope,
+            "ptr",
+            self.di_file,
+            0,  // line number
+            64, // size in bits
+            64, // align in bits
+            0,  // offset in bits
+            zero,
+            ptr_ty.as_type(),
+        );
+        let str_len_member = self.di_builder.create_member_type(
+            cu_scope,
+            "len",
+            self.di_file,
+            0,  // line number
+            64, // size in bits
+            64, // align in bits
+            64, // offset in bits (after 64-bit ptr)
+            zero,
+            unsigned_i64_ty.as_type(),
+        );
+        let str_composite = self.di_builder.create_struct_type(
+            cu_scope,
+            "cobrust::Str",
+            self.di_file,
+            0,   // line number
+            128, // size in bits (ptr 64 + len 64)
+            64,  // align in bits
+            zero,
+            None,                                                // derived_from
+            &[str_ptr_member.as_type(), str_len_member.as_type()], // elements
+            0,                                                   // runtime language
+            None,                                                // vtable_holder
+            "cobrust::Str",                                      // unique_id
+        );
+        self.di_str_composite = Some(str_composite);
     }
 
     /// Map a Cobrust MIR `Ty` to its cached `DIBasicType`. Per
