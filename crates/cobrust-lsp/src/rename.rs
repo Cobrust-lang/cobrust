@@ -176,8 +176,7 @@ fn collect_occurrences(
             if ws == i && we == i + name_len && source.get(ws..we) == Some(old_name) {
                 let start_pos =
                     line_map.byte_to_position(u32::try_from(ws).expect("source < 4 GiB"));
-                let end_pos =
-                    line_map.byte_to_position(u32::try_from(we).expect("source < 4 GiB"));
+                let end_pos = line_map.byte_to_position(u32::try_from(we).expect("source < 4 GiB"));
                 edits.push(TextEdit {
                     range: Range {
                         start: start_pos,

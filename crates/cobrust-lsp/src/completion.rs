@@ -319,8 +319,8 @@ mod tests {
         let ast = cobrust_frontend::parse_str(source, FileId::SYNTHETIC)
             .expect("test: source must parse");
         let mut hir_sess = cobrust_hir::lower::Session::new();
-        let hir = cobrust_hir::lower::lower(&ast, &mut hir_sess)
-            .expect("test: HIR lower must succeed");
+        let hir =
+            cobrust_hir::lower::lower(&ast, &mut hir_sess).expect("test: HIR lower must succeed");
         let _ = check_incremental(&mut ctx, &hir, 1);
 
         let items = scope_items(&ctx, "");

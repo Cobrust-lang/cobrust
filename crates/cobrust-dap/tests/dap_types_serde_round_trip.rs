@@ -38,9 +38,7 @@ fn request_round_trip_preserves_arguments_value() {
     assert_eq!(back.type_field, "request");
     // arguments payload preserved verbatim
     assert_eq!(
-        back.arguments.unwrap()["source"]["path"]
-            .as_str()
-            .unwrap(),
+        back.arguments.unwrap()["source"]["path"].as_str().unwrap(),
         "/tmp/x.cb"
     );
 }

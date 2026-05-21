@@ -112,9 +112,7 @@ impl<'a> Parser<'a> {
                 depth: self.depth + 1,
                 max: MAX_PARSER_DEPTH,
                 span,
-                suggestion: Some(
-                    "flatten nested parentheses or split into multiple statements",
-                ),
+                suggestion: Some("flatten nested parentheses or split into multiple statements"),
             });
         }
         self.depth += 1;
@@ -389,9 +387,7 @@ impl<'a> Parser<'a> {
             return Err(ParseError::Syntax {
                 message: "`from … import *` is not supported".into(),
                 span,
-                suggestion: Some(
-                    "list specific names: `from <module> import name1, name2`",
-                ),
+                suggestion: Some("list specific names: `from <module> import name1, name2`"),
             });
         }
         let mut targets = Vec::new();
@@ -1440,9 +1436,7 @@ impl<'a> Parser<'a> {
             Err(ParseError::Syntax {
                 message: "empty index".into(),
                 span: self.current_span(),
-                suggestion: Some(
-                    "index with at least one bound: `x[i]`, `x[i:j]`, or `x[:j]`",
-                ),
+                suggestion: Some("index with at least one bound: `x[i]`, `x[i:j]`, or `x[:j]`"),
             })
         }
     }
@@ -1558,9 +1552,7 @@ impl<'a> Parser<'a> {
                     return Err(ParseError::DroppedByConstitution {
                         name: "walrus :=",
                         span: tok.span.merge(walrus_span),
-                        suggestion: Some(
-                            "split into separate `let` and use: `let x = …; if x: …`",
-                        ),
+                        suggestion: Some("split into separate `let` and use: `let x = …; if x: …`"),
                     });
                 }
                 Ok(Expr {
@@ -2046,9 +2038,7 @@ impl<'a> Parser<'a> {
                         "array length must be a non-negative integer literal, got `{s}`"
                     ),
                     span: len_tok.span,
-                    suggestion: Some(
-                        "use a non-negative integer literal for the array length",
-                    ),
+                    suggestion: Some("use a non-negative integer literal for the array length"),
                 })?,
                 _ => {
                     return Err(ParseError::Syntax {
@@ -2426,10 +2416,7 @@ mod tests {
         // by the type checker / HIR pass.
         let err = parse_src("is x\n").expect_err("expected parse error for `is` statement");
         assert!(
-            matches!(
-                &err,
-                ParseError::DroppedByConstitution { name: "is", .. }
-            ),
+            matches!(&err, ParseError::DroppedByConstitution { name: "is", .. }),
             "expected DroppedByConstitution {{ name: \"is\" }}, got {err:?}"
         );
     }
@@ -2439,10 +2426,7 @@ mod tests {
         // `is` with nothing after it — still DroppedByConstitution, not Eof.
         let err = parse_src("is\n").expect_err("expected parse error for bare `is`");
         assert!(
-            matches!(
-                &err,
-                ParseError::DroppedByConstitution { name: "is", .. }
-            ),
+            matches!(&err, ParseError::DroppedByConstitution { name: "is", .. }),
             "expected DroppedByConstitution {{ name: \"is\" }}, got {err:?}"
         );
     }
@@ -2452,10 +2436,7 @@ mod tests {
         // `del` is also DroppedByConstitution — shares the same parser arm.
         let err = parse_src("del x\n").expect_err("expected parse error for `del`");
         assert!(
-            matches!(
-                &err,
-                ParseError::DroppedByConstitution { name: "del", .. }
-            ),
+            matches!(&err, ParseError::DroppedByConstitution { name: "del", .. }),
             "expected DroppedByConstitution {{ name: \"del\" }}, got {err:?}"
         );
     }
