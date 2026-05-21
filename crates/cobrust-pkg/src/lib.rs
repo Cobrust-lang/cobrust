@@ -53,12 +53,14 @@ pub mod registry;
 pub mod resolver;
 pub mod sources;
 pub mod tarball;
+pub mod wheel_select;
 
 pub use cpu_detect::{HostCpu, detect_host_cpu};
 pub use error::{
     LockfileError, ManifestError, PkgError, RegistryError, ResolutionError, SourceError,
     TarballError,
 };
+pub use wheel_select::{WheelMeta, select_wheel};
 pub use lockfile::{
     LOCKFILE_VERSION, Lockfile, LockfileMetadata, LockfilePackage, load as load_lockfile,
     rewrite_dep_strings, save as save_lockfile,
