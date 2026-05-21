@@ -151,14 +151,24 @@ jobs:
       - name: Build release binary (cross)
         if: matrix.use_cross
         env:
-          RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
+          # CARGO_TARGET_*_RUSTFLAGS only applies to target compilation,
+          # NOT to build scripts (which run on the host CPU). This prevents
+          # SIGILL when build.rs is compiled with AVX-512 flags on runners
+          # that lack AVX-512 support (e.g. ubuntu-latest for v4 wheel).
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
         run: |
           cross build --release --locked -p cobrust-cli --target ${{ matrix.target }}
 
       - name: Build release binary (native)
         if: ${{ !matrix.use_cross }}
         env:
-          RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
+          # CARGO_TARGET_*_RUSTFLAGS only applies to target compilation,
+          # NOT to build scripts (which run on the host CPU). This prevents
+          # SIGILL when build.rs is compiled with AVX-512 flags on runners
+          # that lack AVX-512 support (e.g. ubuntu-latest for v4 wheel).
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
         run: |
           cargo build --release --locked -p cobrust-cli --target ${{ matrix.target }}
 
