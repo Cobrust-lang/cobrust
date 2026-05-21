@@ -22,6 +22,7 @@ members = [
     "crates/cobrust-types-cb",
     "crates/cobrust-lsp",
     "crates/cobrust-dap",
+    "crates/cobrust-registry",
 ]
 
 [workspace.package]
