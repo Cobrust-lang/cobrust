@@ -1,0 +1,42 @@
+---
+source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
+assertion_line: 201
+expression: diags
+snapshot_kind: text
+---
+[
+  {
+    "range": {
+      "start": {
+        "line": 1,
+        "character": 0
+      },
+      "end": {
+        "line": 2,
+        "character": 8
+      }
+    },
+    "severity": 1,
+    "code": "lower-dropped-feature",
+    "source": "cobrust",
+    "message": "the form `if` is not part of Cobrust (dropped feature) at file#102@15..29",
+    "relatedInformation": [
+      {
+        "location": {
+          "uri": "cobrust://synthetic",
+          "range": {
+            "start": {
+              "line": 1,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 8
+            }
+          }
+        },
+        "message": "this Python feature is not part of Cobrust — see the language reference"
+      }
+    ]
+  }
+]

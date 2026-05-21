@@ -1,0 +1,7 @@
+---
+source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
+assertion_line: 263
+expression: diags
+snapshot_kind: text
+---
+[]

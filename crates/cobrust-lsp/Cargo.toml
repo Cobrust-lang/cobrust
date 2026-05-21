@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Cobrust LSP server (textDocument/publishDiagnostics wave-1 per ADR-0057a)."
+description = "Cobrust LSP server (Phase J wave-2.1 textDocument/didChange + Session reuse per ADR-0057b)."
 keywords = ["cobrust", "lsp", "language-server", "ide"]
 categories = ["development-tools"]
 
@@ -42,3 +42,9 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
+# `url` exposes `tower_lsp::lsp_types::Url`; tests need it directly for
+# constructing synthetic URIs.
+url = "2"
+# `cobrust-types::ty::Ty` used by the invalidate-session integration
+# test (Ty::Int / Ty::Str comparison).
+cobrust-types = { path = "../cobrust-types", version = "=0.3.0" }

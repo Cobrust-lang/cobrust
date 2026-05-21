@@ -1,0 +1,42 @@
+---
+source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
+assertion_line: 226
+expression: diags
+snapshot_kind: text
+---
+[
+  {
+    "range": {
+      "start": {
+        "line": 2,
+        "character": 13
+      },
+      "end": {
+        "line": 2,
+        "character": 25
+      }
+    },
+    "severity": 1,
+    "code": "arity-mismatch",
+    "source": "cobrust",
+    "message": "expected 2 arguments, got 3 at file#103@61..73",
+    "relatedInformation": [
+      {
+        "location": {
+          "uri": "cobrust://synthetic",
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 13
+            },
+            "end": {
+              "line": 2,
+              "character": 25
+            }
+          }
+        },
+        "message": "check the function signature; pass exactly the declared positional arity"
+      }
+    ]
+  }
+]
