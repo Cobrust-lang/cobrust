@@ -146,6 +146,24 @@ jobs:
       - name: Run cargo audit
         run: cargo audit --deny warnings
 
+  # Code Quality P1: cargo-udeps unused-dependency check.
+  # Requires nightly toolchain (uses unstable compiler APIs).
+  # Non-blocking initially (continue-on-error: true) per F44 lesson — unused-dep
+  # accumulation is a quality regression, not a correctness break; promote to
+  # blocking once the baseline is clean. See docs/agent/findings/f44-ci-cache-stale-green-false-pass.md.
+  cargo-udeps:
+    name: cargo udeps (unused deps)
+    runs-on: ubuntu-latest
+    continue-on-error: true  # non-blocking initially — see comment above
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2  # v2.7.8
+      - name: Install cargo-udeps
+        run: cargo install cargo-udeps --locked
+      - name: Run cargo udeps
+        run: cargo +nightly udeps --workspace --all-targets --backend depinfo
+
   # Optional: real-LLM smoke (gated by step-level env check;
   # job-level `if: ${{ secrets.X != '' }}` is rejected by GitHub Actions
   # validation — secrets context is restricted to env/with/run.)
