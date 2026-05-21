@@ -102,8 +102,8 @@ pub fn prepare_rename(
 ) -> Option<PrepareRenameResponse> {
     let (_name, word_start, word_end) = resolve_rename_symbol(source, line_map, position, ctx)?;
 
-    let start_pos = line_map.byte_to_position(word_start as u32);
-    let end_pos = line_map.byte_to_position(word_end as u32);
+    let start_pos = line_map.byte_to_position(u32::try_from(word_start).expect("source < 4 GiB"));
+    let end_pos = line_map.byte_to_position(u32::try_from(word_end).expect("source < 4 GiB"));
     Some(PrepareRenameResponse::Range(Range {
         start: start_pos,
         end: end_pos,
@@ -166,28 +166,28 @@ fn collect_occurrences(
 
     let mut i = 0usize;
     while i < src_len {
-        if src_bytes[i] == first_byte {
-            if let Some((ws, we)) = word_at_offset(source, i) {
-                // Only record if this occurrence starts at exactly `i`
-                // (word_at_offset may return a wider boundary if called
-                // in the middle of a token; we only want occurrences
-                // whose start aligns with our scan position).
-                if ws == i && we == i + name_len {
-                    if source.get(ws..we) == Some(old_name) {
-                        let start_pos = line_map.byte_to_position(ws as u32);
-                        let end_pos = line_map.byte_to_position(we as u32);
-                        edits.push(TextEdit {
-                            range: Range {
-                                start: start_pos,
-                                end: end_pos,
-                            },
-                            new_text: new_name.to_string(),
-                        });
-                        // Advance past the matched word.
-                        i = we;
-                        continue;
-                    }
-                }
+        if src_bytes[i] == first_byte
+            && let Some((ws, we)) = word_at_offset(source, i)
+        {
+            // Only record if this occurrence starts at exactly `i`
+            // (word_at_offset may return a wider boundary if called
+            // in the middle of a token; we only want occurrences
+            // whose start aligns with our scan position).
+            if ws == i && we == i + name_len && source.get(ws..we) == Some(old_name) {
+                let start_pos =
+                    line_map.byte_to_position(u32::try_from(ws).expect("source < 4 GiB"));
+                let end_pos =
+                    line_map.byte_to_position(u32::try_from(we).expect("source < 4 GiB"));
+                edits.push(TextEdit {
+                    range: Range {
+                        start: start_pos,
+                        end: end_pos,
+                    },
+                    new_text: new_name.to_string(),
+                });
+                // Advance past the matched word.
+                i = we;
+                continue;
             }
         }
         i += 1;
@@ -201,18 +201,6 @@ fn collect_occurrences(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cobrust_frontend::span::FileId;
-    use cobrust_types::check_incremental;
-
-    /// Build a `TypeCheckCtx` pre-loaded from `source` with FileId=1.
-    fn ctx_from_source(source: &str) -> TypeCheckCtx {
-        let mut ctx = TypeCheckCtx::new();
-        let ast = cobrust_frontend::parse_str(source, FileId::SYNTHETIC).unwrap();
-        let mut hir_sess = cobrust_hir::lower::Session::new();
-        let hir = cobrust_hir::lower::lower(&ast, &mut hir_sess).unwrap();
-        let _ = check_incremental(&mut ctx, &hir, 1);
-        ctx
-    }
 
     #[test]
     fn is_keyword_let() {

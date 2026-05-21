@@ -316,9 +316,11 @@ mod tests {
 
         let source = "let alpha = 42\n";
         let mut ctx = TypeCheckCtx::new();
-        let ast = cobrust_frontend::parse_str(source, FileId::SYNTHETIC).unwrap();
+        let ast = cobrust_frontend::parse_str(source, FileId::SYNTHETIC)
+            .expect("test: source must parse");
         let mut hir_sess = cobrust_hir::lower::Session::new();
-        let hir = cobrust_hir::lower::lower(&ast, &mut hir_sess).unwrap();
+        let hir = cobrust_hir::lower::lower(&ast, &mut hir_sess)
+            .expect("test: HIR lower must succeed");
         let _ = check_incremental(&mut ctx, &hir, 1);
 
         let items = scope_items(&ctx, "");

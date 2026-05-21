@@ -118,7 +118,7 @@ fn rename_two_occurrences() {
     };
     let result = rename_symbol(source, &line_map, pos, "y", &ctx, test_uri());
     assert!(result.is_some(), "rename must succeed for known binding");
-    let ws = result.unwrap();
+    let ws = result.expect("rename result must be Some (asserted above)");
     let changes = ws.changes.expect("WorkspaceEdit.changes must be Some");
     let edits = changes
         .get(&test_uri())
@@ -143,7 +143,7 @@ fn rename_single_occurrence() {
     };
     let result = rename_symbol(source, &line_map, pos, "beta", &ctx, test_uri());
     assert!(result.is_some(), "rename must succeed");
-    let ws = result.unwrap();
+    let ws = result.expect("rename result must be Some (asserted above)");
     let changes = ws.changes.expect("changes must be Some");
     let edits = changes
         .get(&test_uri())
@@ -167,7 +167,7 @@ fn rename_multi_occurrence_multiline() {
     };
     let result = rename_symbol(source, &line_map, pos, "num", &ctx, test_uri());
     assert!(result.is_some(), "rename must succeed");
-    let ws = result.unwrap();
+    let ws = result.expect("rename result must be Some (asserted above)");
     let changes = ws.changes.expect("changes must be Some");
     let edits = changes
         .get(&test_uri())
@@ -208,8 +208,13 @@ fn snapshot_rename_workspace_edit() {
     };
     let result = rename_symbol(source, &line_map, pos, "y", &ctx, test_uri());
     // Snapshot the WorkspaceEdit (includes changes map + TextEdit ranges).
-    let changes = result.unwrap().changes.unwrap();
-    let edits = changes.get(&test_uri()).unwrap();
+    let changes = result
+        .expect("rename must succeed")
+        .changes
+        .expect("WorkspaceEdit.changes must be Some");
+    let edits = changes
+        .get(&test_uri())
+        .expect("changes must have entry for test URI");
     insta::assert_json_snapshot!(edits);
 }
 
