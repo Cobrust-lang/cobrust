@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0057e
 parent_adr: 0057
 title: "Phase J wave-3 — goto-def + codeAction (FixSafety-gated) + cross-file rename"
-status: proposed
+status: accepted
 date: 2026-05-21
 last_verified_commit: cb86fbd
+ratified_at: pending-merge
+ratified_on: 2026-05-21
 phase: "Phase J wave-3"
 supersedes: []
 superseded_by: []

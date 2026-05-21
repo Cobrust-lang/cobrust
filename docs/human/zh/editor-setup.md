@@ -171,13 +171,87 @@ count + 1
 将光标置于 `count`，按 **F2**（VSCode/Cursor）或 `<space>rn`（Neovim），
 输入 `total` 后回车。服务器返回两个编辑——两处 `count` 引用同时被替换。
 
-**作用域：** wave-2.3 仅支持单文档内重命名。跨文件工作区重命名计划在
-wave-3（ADR-0057e）中实现。
+**作用域：** wave-2.3 仅支持单文档内重命名。**Wave-3（ADR-0057e）
+已实现**——参见下方"跳转到定义 + Quick Fix + 跨文件重命名"小节。
 
 **不可重命名的情况：**
 - 语言关键字（`let`、`def`、`if`、`match` 等）
 - 空白符与标点
 - 尚未被类型检查器解析的标识符
+
+### 跳转到定义 + Quick Fix + 跨文件重命名（wave-3，ADR-0057e）
+
+Wave-3（v1.1 LSP 服务器）将三项编辑器生产力必备能力补全到 v1 之上：
+
+#### `textDocument/definition` —— F12 / Cmd+点击跳转
+
+将光标置于任意使用点标识符，按 **F12**（VSCode/Cursor）或 `gd`（Neovim），
+服务器返回指向定义点的 `Location`：
+
+```cobrust
+let x = 42
+x + 1     # ← 光标在此，按 F12 → 跳到第 1 行的 'x'
+```
+
+以下情况返回 `null`（不跳转）：
+
+- 光标位于 Cobrust 关键字上（`let`、`fn`、`if`、`match` 等）。
+- 光标位于空白或标点上。
+- 该符号未在类型检查器中绑定（未知/未解析）。
+
+Wave-3 诚实作用域：仅支持同文档内跳转。跨文件定义点索引延后至
+wave-4——目前定义点 `Location` 的 URI 与光标 URI 一致。
+
+#### `textDocument/codeAction` —— Quick Fix（ADR-0062 FixSafety 分级）
+
+每个携带建议的诊断现在还会生成一个 **Quick Fix** 代码动作，
+其行为取决于 ADR-0062 的 FixSafety 分级：
+
+| 分级 | Quick-fix 类型 | 自动应用编辑？ |
+|---|---|---|
+| `BehaviorPreserving` | `QuickFix` | 是（建议文本即替换文本） |
+| `LocalEdit` | `QuickFix` | 是（建议文本即替换文本） |
+| `ApiChanging` | `Refactor` | 否（建议仅在标题展示） |
+| `FormatOnly` | `SourceFixAll` | 否（建议仅在标题展示） |
+| `TargetChanging` | — | 不发出代码动作 |
+| `RequiresHumanReview` | — | 不发出代码动作 |
+
+例：在 `x: i64` 上写 `if x:` 会产生 ADR-0052b 的 `ImplicitTruthiness`
+诊断，建议 `change to 'if x != 0:'`。Wave-3 将其作为
+`BehaviorPreserving` QuickFix 发出——编辑器显示灯泡，点击"应用"即
+替换源代码。在 Cursor / Continue 等编辑器中驱动的 agent-LLM 通过
+`workspace/applyEdit` 直接应用修复，而无需自行组装补丁。
+
+#### 跨文件 `rename`（扩展 ADR-0057d）
+
+Wave-3 把重命名动词扩展到 LSP 会话中**当前打开的每个文档**。按 **F2**
+输入新名字；服务器扫描所有打开的 URI 查找单词边界出现，并聚合到一个
+`WorkspaceEdit.changes` map 中。编辑器一次性原子地应用每个文件的
+`TextEdit[]`。
+
+```cobrust
+# file_a.cb（已打开）
+let widget = 1
+widget + 1
+
+# file_b.cb（已打开）
+widget * 2
+
+# file_c.cb（已打开）—— 不包含 'widget'
+let other = 99
+```
+
+在 `file_a.cb` 中将 `widget` → `gadget`：file-A 收到 2 处编辑、
+file-B 收到 1 处编辑、file-C 完全不变（根本不在 `WorkspaceEdit.changes`
+映射中）。
+
+**诚实作用域：**
+
+- 跨文件重命名仅限于 LSP 会话中**打开**的文档。编辑器未打开的文件
+  不会被访问——文件系统遍历的全工作区搜索延后至后续 sub-ADR。
+- 作用域盲点：单词边界扫描尚未跨文件解析标识符作用域。若 `x` 在两个
+  打开文件的不同作用域中出现，两者都会被改名。真正支持跨文件作用域
+  感知的重命名（基于 HIR `DefId` 跨文件解析）延后至 wave-4。
 
 ### 构建与运行
 
