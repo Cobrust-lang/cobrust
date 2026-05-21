@@ -5,8 +5,8 @@ parent_adr: 0057
 title: "Phase J wave-2.2 — LSP hover + completion (textDocument/hover + textDocument/completion)"
 status: accepted
 date: 2026-05-21
-last_verified_commit: feature/0057c-hover-completion
-ratified_at: feature/0057c-hover-completion
+last_verified_commit: 1149325
+ratified_at: 1149325
 ratified_on: 2026-05-21
 phase: "Phase J wave-2.2"
 supersedes: []
@@ -250,14 +250,14 @@ This tells Cursor/VSCode to route hover requests to this server and to send
 
 ## 9. Ratification
 
-This ADR ratifies on `feature/0057c-hover-completion` impl merge. Per ADR-0057 §13,
+This ADR ratifies on `1149325` impl merge. Per ADR-0057 §13,
 sub-ADR ratification rolls up to parent Phase J status.
 
 — P9 Tech Lead, 2026-05-21
 
 ## 10. Ratification addendum (2026-05-21)
 
-Implementation merged on branch `feature/0057c-hover-completion`. Deviations from
+Implementation merged on branch `1149325`. Deviations from
 the design above (none load-bearing; documented for L2 audit traceability):
 
 - **Word-boundary heuristic scope**: design §3.1 step 4 mentioned scanning

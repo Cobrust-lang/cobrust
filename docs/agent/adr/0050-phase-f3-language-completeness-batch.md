@@ -4,7 +4,7 @@ adr_id: 0050
 title: "Phase F.3 — language completeness batch (dict, f64, list[str], break/continue, for) and v0.2.0 stable tag"
 status: proposed
 date: 2026-05-16
-last_verified_commit: TBD
+last_verified_commit: 8de3867
 supersedes: []
 superseded_by: []
 relates_to: [adr:0003, adr:0006, adr:0019, adr:0023, adr:0024, adr:0025, adr:0027, adr:0030, adr:0034, adr:0038, adr:0044, adr:0044a, adr:0045, adr:0048, adr:0049]

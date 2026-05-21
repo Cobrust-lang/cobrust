@@ -5,8 +5,8 @@ parent_adr: 0057
 title: "Phase J wave-2.3 — LSP rename (textDocument/prepareRename + textDocument/rename)"
 status: accepted
 date: 2026-05-21
-last_verified_commit: feature/0057d-rename
-ratified_at: feature/0057d-rename
+last_verified_commit: 9023f9d
+ratified_at: 9023f9d
 ratified_on: 2026-05-21
 phase: "Phase J wave-2.3"
 supersedes: []

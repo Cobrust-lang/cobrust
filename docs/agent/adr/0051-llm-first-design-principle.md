@@ -4,7 +4,7 @@ adr_id: 0051
 title: "LLM-first design principle — Cobrust's constitutional north star"
 status: accepted
 date: 2026-05-16
-last_verified_commit: TBD
+last_verified_commit: 85548f1
 supersedes: []
 superseded_by: []
 relates_to: [adr:0001, adr:0019, adr:0037, adr:0038, adr:0044, adr:0048, adr:0050, adr:0050a, adr:0050b, adr:0050c, adr:0050d, adr:0050e, adr:0050f]

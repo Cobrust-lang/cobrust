@@ -1,6 +1,6 @@
 ---
 module_id: lsp
-last_verified_commit: feature/0057d-rename
+last_verified_commit: 9023f9d
 milestone: J.wave2.3
 dependencies:
   - crates/cobrust-frontend/src/lib.rs       # parse_str entrypoint
