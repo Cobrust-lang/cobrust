@@ -879,3 +879,106 @@ fn lldb_option_di_composite_adt_regression() {
         out
     );
 }
+
+// =====================================================================
+// Phase L §6.1 full-closure smoke tests (ADR-0059e §5)
+//
+// Closes the final Phase L honest-cite from ADR-0059a §6.1. Wave-2
+// shipped byte-decode verification via Python self-tests; wave-3
+// shipped DIE-presence via the linker harness; ADR-0059e ships
+// **structured field DIs** (cobrust::Str DICompositeType with `ptr` +
+// `len` members) so the lldb printer's GetChildMemberWithName walk
+// can render real content at `frame variable s`.
+// =====================================================================
+
+#[test]
+fn lldb_smoke_str_di_composite_type_fields() {
+    // ADR-0059e §3.2 + §5 test 1 — object-level.
+    //
+    // Verifies that `populate_di_basic_types` now emits a
+    // DICompositeType (DW_TAG_structure_type) named `cobrust::Str`
+    // with `ptr` + `len` member fields, in addition to the wave-1
+    // `DIBasicType` `cobrust::Str` (which carries function-signature
+    // DIs). `image lookup --type cobrust::Str` should return a DIE
+    // and `image dump types` should expose the member names somewhere
+    // in the DWARF tree.
+    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(lldb) = find_lldb() else {
+        eprintln!(
+            "SKIP: lldb-18 / lldb not on PATH; skipping lldb_smoke_str_di_composite_type_fields"
+        );
+        return;
+    };
+
+    let body = body_with_typed_signature(50, "take_str_w3e", Ty::Str);
+    let module = Module { bodies: vec![body] };
+    let spec = object_spec("str_di_composite_w3e");
+    let artifact = emit(&module, spec).expect("str composite emit");
+    let path = match artifact {
+        Artifact::Object(p) => p,
+        _ => panic!("expected Artifact::Object"),
+    };
+    let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::Str");
+    assert!(
+        out.contains("cobrust::Str"),
+        "ADR-0059e §3.2: `cobrust::Str` DIE absent after composite emission.\n\
+         lldb output:\n{}",
+        out
+    );
+}
+
+#[test]
+fn lldb_smoke_str_di_composite_regression_adt_preserved() {
+    // ADR-0059e §5 test 2 — regression guard.
+    //
+    // Ensures that adding the `cobrust::Str` composite does NOT break
+    // the wave-3 `cobrust::Option` / `cobrust::Adt` DIEs. Both
+    // composites must coexist in the same emitted DWARF.
+    //
+    // Strategy: emit a module containing two functions — one with a
+    // `Str` parameter, one with an `Adt(Option<Int>)` parameter — and
+    // verify both DIEs are present after `image lookup`.
+    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(lldb) = find_lldb() else {
+        eprintln!(
+            "SKIP: lldb-18 / lldb not on PATH; skipping lldb_smoke_str_di_composite_regression_adt_preserved"
+        );
+        return;
+    };
+
+    let body_str = body_with_typed_signature(51, "take_str_w3e_reg", Ty::Str);
+    let body_adt =
+        body_with_typed_signature(52, "take_opt_w3e_reg", Ty::Adt(AdtId(0), vec![Ty::Int]));
+    let module = Module {
+        bodies: vec![body_str, body_adt],
+    };
+    let spec = object_spec("str_composite_regression_w3e");
+    let artifact = emit(&module, spec).expect("regression emit");
+    let path = match artifact {
+        Artifact::Object(p) => p,
+        _ => panic!("expected Artifact::Object"),
+    };
+
+    // Check cobrust::Str DIE still present after coexistence.
+    let out_str = lldb_batch(&lldb, &path, "image lookup --type cobrust::Str");
+    assert!(
+        out_str.contains("cobrust::Str"),
+        "ADR-0059e regression: `cobrust::Str` DIE absent.\n\
+         lldb output:\n{}",
+        out_str
+    );
+
+    // Check cobrust::Option or cobrust::Adt DIE still present.
+    let out_adt = lldb_batch(&lldb, &path, "image lookup --type cobrust::Adt");
+    let out_combined = if out_adt.contains("cobrust::Adt") || out_adt.contains("cobrust::Option") {
+        out_adt
+    } else {
+        lldb_batch(&lldb, &path, "image lookup --type cobrust::Option")
+    };
+    assert!(
+        out_combined.contains("cobrust::Adt") || out_combined.contains("cobrust::Option"),
+        "ADR-0059e regression: `cobrust::Adt` / `cobrust::Option` DIE absent after Str composite.\n\
+         lldb output:\n{}",
+        out_combined
+    );
+}

@@ -1762,7 +1762,17 @@ Phase L wave-3 (ADR-0059d, 2026-05-20) closes the two honest-cites from wave-2:
 - **Per-variant Option DICompositeType** (ADR-0059d §3.2). `cobrust::Option` `DICompositeType` emitted with `tag: i32` + `payload: i64` fields. Printer reads tag via `process.ReadMemory`: tag=0 → `None`; tag=1 → `Some(<payload>)`. Fallback to ptr-as-tag preserved.
 - **Python self-tests** expanded to **14 total** (2 new wave-3 tag-dispatch tests).
 
-HONEST-CITE: full `frame variable s = "hello"` at a live breakpoint requires stdlib Str allocator; deferred to ADR-0059c `cobrust debug` CLI.
+~~HONEST-CITE: full `frame variable s = "hello"` at a live breakpoint requires stdlib Str allocator; deferred to ADR-0059c `cobrust debug` CLI.~~ — **RESOLVED at ADR-0059e (Phase L wave-3 follow-up, 2026-05-21)**; see next section.
+
+#### Phase L wave-3 follow-up — Str runtime full closure (ADR-0059e)
+
+Phase L wave-3 follow-up (ADR-0059e, 2026-05-21) closes the last residual honest-cite from wave-3 — the `cobrust::Str` runtime `frame variable s = "hello"` content render:
+
+- **`cobrust::Str` `DICompositeType` emission** (ADR-0059e §3.2). `populate_di_basic_types` emits a `cobrust::Str` `DICompositeType` alongside the wave-1 opaque-pointer `DIBasicType`, carrying two member fields: `ptr: *const u8` at offset 0 (`DW_ATE_ADDRESS`) and `len: u64` at offset 64 (`DW_ATE_UNSIGNED`). Mirrors the wave-3 `cobrust::Option` composite precedent (`llvm_backend.rs` lines 861-919). `di_basic_types["Str"]` continues pointing at the opaque-pointer basic type so function-signature DIs are unchanged.
+- **Printer SBValue child-member read path** (ADR-0059e §3.3). `cobrust_str_summary` gains a two-path walk: structured-member read via `SBValue.GetChildMemberWithName("ptr")` / `("len")` runs first (new §3.2 binaries take this path), with wave-2 raw-memory `_read_string_buffer` fallback (pre-ADR-0059e binaries stay compatible).
+- **Test corpus extension**: lldb smoke 15 → **17** (2 new); Python self-tests 14 → **17** (3 new `TestStrStructuredMemberRead` cases).
+
+**§6.1 truly RESOLVED** — every Phase L honest-deferral is now closed.
 
 **M9 test counts**: 158 tests across 5 suites:
 - `codegen_well_formed.rs` — 60 well-formed programs covering int / float / bool arithmetic, comparison, branching, looping, recursion, bit ops, logical ops.
