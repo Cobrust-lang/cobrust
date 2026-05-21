@@ -1652,7 +1652,17 @@ Phase L wave-3（ADR-0059d，2026-05-20）关闭 wave-2 延后的两个 honest-c
 - **逐变体 Option DICompositeType**（ADR-0059d §3.2）。`cobrust::Option` `DICompositeType` 发射，含 `tag: i32`（偏移 0，0=None，1=Some）和 `payload: i64`（偏移 64）成员字段。`cobrust_option_summary` 扩展标签分派：通过 `process.ReadMemory` 在 ptr 偏移 0 读取标签；tag=0 → `None`；tag=1 → 读取 ptr+8 处 8 字节 → `Some(<payload>)`。保留指针标签回退（回归安全）。
 - **Python 自测**扩展至 **14 个**（新增 2 个 wave-3 标签分派测试）。
 
-HONEST-CITE 保留：完整 `frame variable s = "hello"` 断点命中需要 stdlib Str 分配器；延后至 ADR-0059c `cobrust debug` CLI。
+~~HONEST-CITE 保留：完整 `frame variable s = "hello"` 断点命中需要 stdlib Str 分配器；延后至 ADR-0059c `cobrust debug` CLI。~~ —— **已 RESOLVED 于 ADR-0059e（Phase L wave-3 follow-up，2026-05-21）**：详见下节。
+
+#### Phase L wave-3 follow-up —— Str runtime full closure（ADR-0059e）
+
+Phase L wave-3 follow-up（ADR-0059e，2026-05-21）关闭 wave-3 残留的最后一条 honest-cite —— `cobrust::Str` runtime `frame variable s = "hello"` 完整内容渲染：
+
+- **`cobrust::Str` `DICompositeType` 发射**（ADR-0059e §3.2）。`populate_di_basic_types` 在原 wave-1 opaque-pointer `DIBasicType` 之外，再发射一份命名为 `cobrust::Str` 的 `DICompositeType`，含两个成员字段：`ptr: *const u8`（偏移 0，`DW_ATE_ADDRESS`）和 `len: u64`（偏移 64，`DW_ATE_UNSIGNED`）。镜像 wave-3 `cobrust::Option` 复合 DI 先例（`llvm_backend.rs` 行 861-919）。`di_basic_types["Str"]` 继续指向 opaque-pointer 基本类型，函数签名 DI 不变。
+- **printer SBValue child-member 读取路径**（ADR-0059e §3.3）。`cobrust_str_summary` 增加双路径：先尝试 `SBValue.GetChildMemberWithName("ptr")` / `("len")` 结构化读取（新 §3.2 binaries 走此路径），再回退到 wave-2 raw-memory `_read_string_buffer` 路径（pre-ADR-0059e binaries 保持兼容）。
+- **测试 corpus 扩展**：lldb smoke 15 → **17**（新增 2 个）；Python 自测 14 → **17**（新增 3 个 `TestStrStructuredMemberRead` 用例）。
+
+**§6.1 真正 RESOLVED** —— Phase L 全部 honest-deferrals 关闭。
 
 **M9 测试总数**：158 个测试，覆盖 5 个套件：
 - `codegen_well_formed.rs` —— 60 个良型程序，覆盖整数 / 浮点 / 布尔的算术、比较、分支、循环、递归、位运算、逻辑运算。

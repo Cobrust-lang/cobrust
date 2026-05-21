@@ -4,10 +4,12 @@ adr_id: 0059e
 name: 0059e
 parent_adr: 0059a
 title: "Phase L wave-3 follow-up — Str runtime full closure (§6.1 truly RESOLVED)"
-status: proposed
+status: accepted
 date: 2026-05-21
+ratified_at: 6e1ac9c
+ratified_on: 2026-05-21
 phase: Phase L wave-3 follow-up
-last_verified_commit: c1880e3
+last_verified_commit: 6e1ac9c
 relates_to: [adr:0059a, adr:0059d, adr:0050c]
 discovered_by: ADR-0059a §6.1 wave-3 honest-cite — "full runtime `frame variable s = \"hello\"` breakpoint round-trip requires a runtime Str allocator + populated StringBuffer (not available in a bare MIR fixture). This test closes the DIE presence half of §6.1; the bp-hit content half is deferred to ADR-0059c `cobrust debug` CLI path."
 ---

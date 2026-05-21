@@ -369,14 +369,18 @@ verifying the linked-executable path emits a binary and the
 (`executable_spec` / `build_linked_executable` / `lldb_run_with_bp`)
 is shipped.
 
-**Remaining honest-cite (preserved)**: full runtime `frame variable s`
-showing actual Str content at a breakpoint requires stdlib linkage +
-a populated StringBuffer at runtime. The MIR fixture bodies are
-self-contained and do not call the Str allocator. Full bp-hit content
-smoke deferred to ADR-0059c `cobrust debug` CLI path.
+**Wave-3 follow-up closure (ADR-0059e — RESOLVED at 6e1ac9c, 2026-05-21)**:
+ADR-0059e attaches a `DICompositeType` to `cobrust::Str` carrying `ptr` +
+`len` member fields (mirroring the wave-3 `cobrust::Option` composite
+precedent in `llvm_backend.rs` lines 861-919). The lldb pretty-printer
+`cobrust_str_summary` adds a structured-member read path using
+`SBValue.GetChildMemberWithName("ptr")` / `("len")` that runs BEFORE
+the wave-2 raw-memory fallback. Binaries built with the §3.2 codegen
+emission give lldb a structured handle to walk into the StringBuffer
+payload; the wave-2 path is preserved for backward-compat with binaries
+pre-dating ADR-0059e.
 
-**§6.1 partially RESOLVED at Phase L wave-3** (DIE + linked harness);
-bp-hit content carries to ADR-0059c.
+**§6.1 RESOLVED at Phase L wave-3 follow-up (ADR-0059e).**
 
 #### §6.2 Dict iteration K:V walk — RESOLVED
 

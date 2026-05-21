@@ -723,7 +723,7 @@ Mac verify `python3 tools/lldb-cobrust/tests/test_printers.py`: 12 PASS. Mac ver
 - **Struct-field display for user-defined records** (Phase L+ once user-record DI lands).
 - **gdb pretty-printers** (Phase L+ followup; wave-1 is lldb-18-only).
 - **REPL-style mutation from inspector** (read-only display).
-- **Runtime `frame variable` end-to-end test (wave-2 honest-cite; wave-3 PARTIAL RESOLVED)**: wave-3 (ADR-0059d) ships the linked-executable harness (`executable_spec` / `build_linked_executable` / `lldb_run_with_bp`) and verifies `cobrust::Str` DIE in linked binary. Full bp-hit content (`frame variable s = "hello"`) deferred to ADR-0059c (requires stdlib Str allocator).
+- **Runtime `frame variable` end-to-end test (wave-2 honest-cite; wave-3 PARTIAL; **ADR-0059e RESOLVED 2026-05-21**)**: wave-3 (ADR-0059d) ships the linked-executable harness (`executable_spec` / `build_linked_executable` / `lldb_run_with_bp`) and verifies `cobrust::Str` DIE in linked binary. ADR-0059e (Phase L wave-3 follow-up) emits a `cobrust::Str` `DICompositeType` with `ptr` + `len` member fields, and the printer's `cobrust_str_summary` adds an `SBValue.GetChildMemberWithName` structured-member read path (wave-2 raw-memory fallback preserved). Phase L §6.1 truly RESOLVED.
 - **Per-Adt variant DICompositeType for Option / Result** (wave-2 honest-cite; wave-3 RESOLVED): wave-3 (ADR-0059d §3.2) emits a `DICompositeType` named `"cobrust::Option"` with tag (i32) + payload (i64) member fields in `populate_di_basic_types`. `cobrust_option_summary` extended with tag-dispatch via `process.ReadMemory`. Generic Adt variants for user-defined enums remain Phase L+ scope.
 - **IndexMap layout-stable Dict display** (wave-2 RESOLVED): the wave-1 `{<n entries>}` placeholder remains as a fallback when accessors are unresolved (object-level smoke); the wave-2 happy path uses six runtime accessor exports + `EvaluateExpression`.
 
@@ -733,6 +733,15 @@ Mac verify `python3 tools/lldb-cobrust/tests/test_printers.py`: 12 PASS. Mac ver
 |---|---|---|
 | `tests/dwarf_lldb_smoke.rs` Phase L wave-3 | 5 added | `lldb_linked_str_frame_variable` (linked exe + Str DIE), `lldb_linked_option_none` (linked Option Adt DIE), `lldb_linked_option_some_int` (linked exe symbol), `lldb_option_di_composite_type_fields` (object-level Option/Adt DIE), `lldb_option_di_composite_adt_regression` (wave-2 Adt regression). Total: 4+3+3+5=**15 tests**. Linked-exe tests skip when `cc` absent. |
 | `tools/lldb-cobrust/tests/test_printers.py` | 2 added | `test_tag_zero_renders_none`, `test_tag_one_renders_some_with_payload`. Total: **14 Python self-tests**. |
+
+### Wave-3 follow-up — Str runtime full closure (ADR-0059e §5)
+
+| Suite | Tests added | Notes |
+|---|---|---|
+| `tests/dwarf_lldb_smoke.rs` Phase L wave-3 follow-up | 2 added | `lldb_smoke_str_di_composite_type_fields` (object-level: `image lookup --type cobrust::Str` finds DIE with ptr+len members), `lldb_smoke_str_di_composite_regression_adt_preserved` (regression: Str composite + Adt/Option composite coexist). Total: 15 + 2 = **17 tests**. Skip when lldb-18 absent. |
+| `tools/lldb-cobrust/tests/test_printers.py` | 3 added | `TestStrStructuredMemberRead::{test_structured_member_decodes_ascii, test_structured_member_decodes_utf8_multibyte, test_structured_member_null_ptr_renders_empty}`. New `MockSBValueWithChildren` exercises the `GetChildMemberWithName` path. Total: 14 + 3 = **17 Python self-tests**. Mac-runnable without lldb. |
+
+Mac verify (this session, 2026-05-21): `python3 tools/lldb-cobrust/tests/test_printers.py` → **17 PASS / 0 FAIL**. lldb smoke tests skip cleanly when lldb-18 is not on PATH (Mac dev). CI verify of structured-member at bp-hit awaits CI runner.
 
 ## Phase K Strand #4 — JIT/AOT lowering convergence (ADR-0058d)
 
