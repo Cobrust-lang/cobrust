@@ -69,7 +69,7 @@ indent = { tab-width = 4, unit = "    " }
 1. Double-click `tools/textmate-cobrust.tmbundle` — TextMate installs it automatically.
 2. For Sublime Text: copy the bundle into `Packages/User/` and restart.
 
-## Language Server (LSP, wave-1: diagnostics)
+## Language Server (LSP, wave-1 + wave-2.1: live diagnostics)
 
 Cobrust ships a Language Server Protocol (LSP) implementation, `cobrust-lsp`,
 that surfaces compiler errors directly in your editor as you type.
@@ -85,6 +85,41 @@ that surfaces compiler errors directly in your editor as you type.
   - the ADR-0052b `suggestion` field (when set) attached as
     `relatedInformation[0].message` — the fix path the agent-LLM
     consumes.
+
+### Live diagnostics during edit (didChange) — wave-2.1 (ADR-0057b)
+
+As of ADR-0057b, diagnostics refresh on every keystroke (debounced at
+~100ms) — not just on file open. The server:
+
+- Declares `INCREMENTAL` text-document sync; clients send
+  `textDocument/didChange` events with `contentChanges[].range` for
+  partial edits or `contentChanges` without `range` for full-document
+  replacements. Both are supported.
+- Maintains a per-URI in-memory text store mutated in-place via
+  range-splice (UTF-16 column accounting matches the LSP spec).
+- Reuses a shared `TypeCheckCtx` across calls (per ADR-0056b's
+  Clone+Send Arc-COW contract), invalidating the URI's rows before
+  each re-check so the symbol table stays consistent with the
+  client's source.
+- Bounded debounce: 5 rapid edits within ~100ms coalesce into one
+  pipeline re-run + one `publish_diagnostics` emission (configurable
+  via `Backend::with_debounce_ms`).
+
+```mermaid
+sequenceDiagram
+    participant Editor
+    participant Backend
+    participant Pipeline
+    Editor->>Backend: did_change(version=N, range, text)
+    Backend->>Backend: splice text into URI store
+    Backend->>Backend: schedule debounce(N, 100ms)
+    Editor->>Backend: did_change(version=N+1, range, text)
+    Backend->>Backend: splice + schedule(N+1)
+    Note over Backend: 100ms later
+    Backend->>Pipeline: parse → check (URI N+1)
+    Pipeline->>Backend: diagnostics
+    Backend->>Editor: publish_diagnostics(N+1, diags)
+```
 
 **Wave-2+ (deferred):** hover, completion, definition, rename, codeAction.
 See ADR-0057 for the roster.
