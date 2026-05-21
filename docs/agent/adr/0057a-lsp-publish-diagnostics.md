@@ -305,6 +305,11 @@ documented for L2 audit traceability):
   is consumed in ADR-0057a wave-2 (deferred). Per §9 Risk 3 this
   is acceptable for the 100ms debounce target on small files; large
   files may exceed the budget until incremental ctx reuse lands.
+  **RESOLVED at `1df1300` (2026-05-21)** by ADR-0057b: wave-2.1
+  ships `Backend.session_ctx: Arc<Mutex<TypeCheckCtx>>` consumed
+  via `compile_diagnostics_with_session` (invalidate +
+  `check_incremental`) on every `did_change`; the 100ms debounce
+  coalesces rapid edits into a single re-check + publish.
 - **Snapshot file path**: wave-1 uses a synthetic
   `cobrust://synthetic` URI inside `Diagnostic.relatedInformation`
   because the per-document URI is not in scope at conversion time
