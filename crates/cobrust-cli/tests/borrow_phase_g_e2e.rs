@@ -19,8 +19,7 @@
 //! Per `feedback_p9_clippy_stall_pattern.md` 2026-05-09: module-level
 //! 18-lint test-only allow header at the top.
 //!
-//! Pre-DEV-impl status: every `e0052a_e2e_*` test below is `#[ignore]`'d
-//! pending Wave-1 DEV merge.
+//! All `e0052a_e2e_*` tests are active (no `#[ignore]`); Wave-1 DEV merged.
 
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
