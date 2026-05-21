@@ -84,8 +84,7 @@ impl LineMap {
             .line_starts
             .get(line + 1)
             .copied()
-            .map(|x| x as usize)
-            .unwrap_or(source_len);
+            .map_or(source_len, |x| x as usize);
         // Slice the line content (excluding the terminating newline
         // for clean per-char walks; the trailing \n's byte is line_end-1).
         let line_bytes_end = if line_end > 0

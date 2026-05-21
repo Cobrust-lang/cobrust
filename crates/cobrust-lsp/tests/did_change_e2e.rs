@@ -2,9 +2,11 @@
 //! wave-2.1 handler surface.
 //!
 //! The tower-lsp `LanguageServer` impl is exercised at the public
-//! `Backend` static-method layer + the in-process `apply_content_changes`
-//! + `compile_diagnostics_with_session` helpers (the spawned-task
-//! debounce path is covered by the unit tests in `src/debounce.rs`).
+//! `Backend` static-method layer + the in-process helpers
+//! (`apply_content_changes`, `compile_diagnostics_with_session`); the
+//! spawned-task debounce path is covered by the unit tests in
+//! `src/debounce.rs`.
+//!
 //! End-to-end stdio LSP transport tests are deferred to a future smoke
 //! sub-ADR (separate process boundary).
 

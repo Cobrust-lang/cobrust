@@ -313,7 +313,7 @@ impl Backend {
     ) -> String {
         for change in changes {
             let Some(range) = change.range else {
-                source = change.text.clone();
+                source.clone_from(&change.text);
                 continue;
             };
             let line_map = LineMap::from_source(&source);
