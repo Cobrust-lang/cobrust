@@ -50,6 +50,7 @@ pub mod error;
 pub mod lockfile;
 pub mod manifest;
 pub mod registry;
+pub mod registry_client;
 pub mod resolver;
 pub mod sources;
 pub mod tarball;
@@ -60,6 +61,7 @@ pub use error::{
     LockfileError, ManifestError, PkgError, RegistryError, ResolutionError, SourceError,
     TarballError,
 };
+pub use registry_client::{RegistryClient, RegistryClientError};
 pub use wheel_select::{WheelMeta, select_wheel};
 pub use lockfile::{
     LOCKFILE_VERSION, Lockfile, LockfileMetadata, LockfilePackage, load as load_lockfile,
