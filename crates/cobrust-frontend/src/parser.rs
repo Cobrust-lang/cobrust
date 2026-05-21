@@ -112,6 +112,9 @@ impl<'a> Parser<'a> {
                 depth: self.depth + 1,
                 max: MAX_PARSER_DEPTH,
                 span,
+                suggestion: Some(
+                    "flatten nested parentheses or split into multiple statements",
+                ),
             });
         }
         self.depth += 1;
@@ -169,6 +172,7 @@ impl<'a> Parser<'a> {
                 expected: vec![k.clone()],
                 found: self.peek_kind().clone(),
                 span,
+                suggestion: None,
             })
         }
     }
@@ -280,7 +284,13 @@ impl<'a> Parser<'a> {
                     "del" => "del",
                     _ => unreachable!(),
                 };
-                Err(ParseError::DroppedByConstitution { name: n, span })
+                Err(ParseError::DroppedByConstitution {
+                    name: n,
+                    span,
+                    suggestion: Some(
+                        "remove this construct; see CLAUDE.md §2.2 for the supported alternative",
+                    ),
+                })
             }
             _ => self.parse_expr_or_assign_stmt(),
         }
@@ -303,6 +313,7 @@ impl<'a> Parser<'a> {
                     self.peek_kind().classify()
                 ),
                 span,
+                suggestion: Some("end the statement with a newline or `;`"),
             })
         }
     }
@@ -338,6 +349,9 @@ impl<'a> Parser<'a> {
                     other.classify()
                 ),
                 span: self.current_span(),
+                suggestion: Some(
+                    "move the decorator immediately above an `fn` or `class` definition",
+                ),
             }),
         }?;
         let span = start.merge(inner.span);
@@ -375,6 +389,9 @@ impl<'a> Parser<'a> {
             return Err(ParseError::Syntax {
                 message: "`from … import *` is not supported".into(),
                 span,
+                suggestion: Some(
+                    "list specific names: `from <module> import name1, name2`",
+                ),
             });
         }
         let mut targets = Vec::new();
@@ -455,6 +472,9 @@ impl<'a> Parser<'a> {
                             "multi-base class is forbidden (constitution §2.2: composition + traits, no MRO; ADR-0041 §H7)"
                                 .to_string(),
                         span: parsed_base.span.merge(span),
+                        suggestion: Some(
+                            "use composition + traits instead of multi-inheritance (constitution §2.2)",
+                        ),
                     });
                 }
                 if matches!(
@@ -466,6 +486,9 @@ impl<'a> Parser<'a> {
                             "multi-base class is forbidden (constitution §2.2: composition + traits, no MRO; ADR-0041 §H7)"
                                 .to_string(),
                         span: parsed_base.span,
+                        suggestion: Some(
+                            "use composition + traits instead of multi-inheritance (constitution §2.2)",
+                        ),
                     });
                 }
                 base = Some(parsed_base);
@@ -1157,24 +1180,34 @@ impl<'a> Parser<'a> {
                 message: "nested borrow `&&` is not supported in Wave-1 (ADR-0052a §8)"
                     .to_string(),
                 span: operand.span,
+                suggestion: Some("use a single `&` borrow (ADR-0052a §8)"),
             }),
             ExprKind::Literal(_) => Err(ParseError::Syntax {
                 message: "borrow of a literal is not supported in Wave-1 \
                           (ADR-0052a §8 cap: borrow operand must be `Name`, `Name.field`, or `Name[idx]`)"
                     .to_string(),
                 span: operand.span,
+                suggestion: Some(
+                    "bind the literal to a name first: `let x = …; &x`",
+                ),
             }),
             ExprKind::FString(_) => Err(ParseError::Syntax {
                 message: "borrow of an f-string is not supported in Wave-1 \
                           (ADR-0052a §8 cap)"
                     .to_string(),
                 span: operand.span,
+                suggestion: Some(
+                    "bind the f-string to a name first: `let s = f\"…\"; &s`",
+                ),
             }),
             ExprKind::Collection(_) | ExprKind::Comprehension(_) => Err(ParseError::Syntax {
                 message: "borrow of a collection / comprehension literal is not \
                           supported in Wave-1 (ADR-0052a §8 cap)"
                     .to_string(),
                 span: operand.span,
+                suggestion: Some(
+                    "bind the collection to a name first: `let xs = [...]; &xs`",
+                ),
             }),
             // ADR-0052f §5 — relax §8 cap for `&Call(Attr(...))` form.
             // Method-form (`&recv.method(...)`) is admitted when the
@@ -1194,6 +1227,9 @@ impl<'a> Parser<'a> {
                               or `Name.method(...)`)"
                         .to_string(),
                     span: operand.span,
+                    suggestion: Some(
+                        "bind the call result to a name first: `let v = f(...); &v`",
+                    ),
                 }),
             },
             _ => Err(ParseError::Syntax {
@@ -1201,6 +1237,9 @@ impl<'a> Parser<'a> {
                           in Wave-1 (ADR-0052a §8 cap)"
                     .to_string(),
                 span: operand.span,
+                suggestion: Some(
+                    "borrow a place: `Name`, `Name.field`, or `Name[idx]`",
+                ),
             }),
         }
     }
@@ -1401,6 +1440,9 @@ impl<'a> Parser<'a> {
             Err(ParseError::Syntax {
                 message: "empty index".into(),
                 span: self.current_span(),
+                suggestion: Some(
+                    "index with at least one bound: `x[i]`, `x[i:j]`, or `x[:j]`",
+                ),
             })
         }
     }
@@ -1516,6 +1558,9 @@ impl<'a> Parser<'a> {
                     return Err(ParseError::DroppedByConstitution {
                         name: "walrus :=",
                         span: tok.span.merge(walrus_span),
+                        suggestion: Some(
+                            "split into separate `let` and use: `let x = …; if x: …`",
+                        ),
                     });
                 }
                 Ok(Expr {
@@ -1538,6 +1583,7 @@ impl<'a> Parser<'a> {
             other => Err(ParseError::Syntax {
                 message: format!("unexpected token {} in expression", other.classify()),
                 span: tok.span,
+                suggestion: None,
             }),
         }
     }
@@ -1560,10 +1606,12 @@ impl<'a> Parser<'a> {
                         LexError::InvalidUtf8 { byte_offset } => ParseError::Syntax {
                             message: format!("invalid UTF-8 in f-string at byte {byte_offset}"),
                             span: outer_span,
+                            suggestion: Some("ensure the f-string body is valid UTF-8"),
                         },
                         other => ParseError::Syntax {
                             message: other.to_string(),
                             span: outer_span,
+                            suggestion: None,
                         },
                     })?;
                     // Re-parse as a single expression.
@@ -1911,10 +1959,20 @@ impl<'a> Parser<'a> {
                         self.bump();
                         Ok(Literal::Float(format!("-{s}")))
                     }
-                    _ => Err(ParseError::NonLiteralDefault { span }),
+                    _ => Err(ParseError::NonLiteralDefault {
+                        span,
+                        suggestion: Some(
+                            "use a literal default (int / float / str / bool / None); mutable defaults are forbidden per CLAUDE.md §2.2",
+                        ),
+                    }),
                 }
             }
-            _ => Err(ParseError::NonLiteralDefault { span }),
+            _ => Err(ParseError::NonLiteralDefault {
+                span,
+                suggestion: Some(
+                    "use a literal default (int / float / str / bool / None); mutable defaults are forbidden per CLAUDE.md §2.2",
+                ),
+            }),
         }
     }
 
@@ -1988,11 +2046,17 @@ impl<'a> Parser<'a> {
                         "array length must be a non-negative integer literal, got `{s}`"
                     ),
                     span: len_tok.span,
+                    suggestion: Some(
+                        "use a non-negative integer literal for the array length",
+                    ),
                 })?,
                 _ => {
                     return Err(ParseError::Syntax {
                         message: "array type `[T; N]` expects an integer length after `;`".into(),
                         span: len_tok.span,
+                        suggestion: Some(
+                            "supply an integer length: `[T; N]` where N is a non-negative int",
+                        ),
                     });
                 }
             };
@@ -2230,6 +2294,7 @@ impl<'a> Parser<'a> {
             other => Err(ParseError::Syntax {
                 message: format!("invalid pattern start: {}", other.classify()),
                 span: tok.span,
+                suggestion: None,
             }),
         }
     }
@@ -2277,6 +2342,7 @@ impl<'a> Parser<'a> {
                     expected: vec![TokenKind::Ident(String::new())],
                     found: other,
                     span,
+                    suggestion: Some("expected an identifier here"),
                 })
             }
         }
@@ -2362,10 +2428,7 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                ParseError::DroppedByConstitution {
-                    name: "is",
-                    span: _
-                }
+                ParseError::DroppedByConstitution { name: "is", .. }
             ),
             "expected DroppedByConstitution {{ name: \"is\" }}, got {err:?}"
         );
@@ -2378,10 +2441,7 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                ParseError::DroppedByConstitution {
-                    name: "is",
-                    span: _
-                }
+                ParseError::DroppedByConstitution { name: "is", .. }
             ),
             "expected DroppedByConstitution {{ name: \"is\" }}, got {err:?}"
         );
@@ -2394,10 +2454,7 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                ParseError::DroppedByConstitution {
-                    name: "del",
-                    span: _
-                }
+                ParseError::DroppedByConstitution { name: "del", .. }
             ),
             "expected DroppedByConstitution {{ name: \"del\" }}, got {err:?}"
         );
@@ -2409,10 +2466,7 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                ParseError::DroppedByConstitution {
-                    name: "global",
-                    span: _
-                }
+                ParseError::DroppedByConstitution { name: "global", .. }
             ),
             "expected DroppedByConstitution {{ name: \"global\" }}, got {err:?}"
         );

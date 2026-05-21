@@ -43,7 +43,7 @@ fn hover_known_binding_returns_type() {
     };
     let hover = resolve_hover(source, &line_map, pos, &ctx);
     assert!(hover.is_some(), "expected Some hover for binding 'x'");
-    let hover = hover.unwrap();
+    let hover = hover.expect("hover must be Some (asserted above)");
     if let HoverContents::Markup(mc) = hover.contents {
         assert!(
             mc.value.contains("**x**"),
@@ -78,7 +78,7 @@ fn hover_function_binding_returns_fn_type() {
         hover.is_some(),
         "expected Some hover for function binding 'f'"
     );
-    let hover = hover.unwrap();
+    let hover = hover.expect("hover must be Some (asserted above)");
     if let HoverContents::Markup(mc) = hover.contents {
         assert!(
             mc.value.contains("**f**"),
@@ -143,8 +143,7 @@ fn completion_prefix_filters_items() {
         assert_eq!(
             labels,
             vec!["print"],
-            "only 'print' should match prefix 'pri'; got: {:?}",
-            labels
+            "only 'print' should match prefix 'pri'; got: {labels:?}"
         );
     } else {
         panic!("expected CompletionResponse::Array");

@@ -51,7 +51,7 @@ use tower_lsp::lsp_types::{
     HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
     MessageType, OneOf, PrepareRenameResponse, RenameOptions, RenameParams, ServerCapabilities,
     ServerInfo, TextDocumentContentChangeEvent, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkspaceEdit,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkDoneProgressOptions, WorkspaceEdit,
 };
 
 pub mod code_action;
@@ -368,7 +368,7 @@ impl LanguageServer for Backend {
                 // pre-flight the request (ADR-0057d §3.1).
                 rename_provider: Some(OneOf::Right(RenameOptions {
                     prepare_provider: Some(true),
-                    work_done_progress_options: Default::default(),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
                 })),
                 ..ServerCapabilities::default()
             },
@@ -529,16 +529,15 @@ impl LanguageServer for Backend {
         // Read the doc state.
         let (source, line_map) = {
             let docs = self.docs.lock().expect("docs mutex poisoned");
-            match docs.get(uri) {
-                Some(s) => (s.source.clone(), s.line_map.clone()),
+            if let Some(s) = docs.get(uri) {
+                (s.source.clone(), s.line_map.clone())
+            } else {
                 // No doc open yet — still return PRELUDE + keywords from
                 // an empty context so clients connected before `did_open`
                 // get a useful list.
-                None => {
-                    let ctx = self.session_ctx_snapshot();
-                    let resp = completion::build_completion_response("", 0, &ctx);
-                    return Ok(Some(resp));
-                }
+                let ctx = self.session_ctx_snapshot();
+                let resp = completion::build_completion_response("", 0, &ctx);
+                return Ok(Some(resp));
             }
         };
 

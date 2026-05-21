@@ -72,7 +72,7 @@ pub fn word_at_offset(source: &str, byte_offset: usize) -> Option<(usize, usize)
 /// Format: `**name**: \`TypeDisplay\`\n\nInferred type.\n`
 #[must_use]
 pub fn render_hover_markdown(name: &str, ty_display: &str) -> String {
-    format!("**{}**: `{}`\n\nInferred type.", name, ty_display)
+    format!("**{name}**: `{ty_display}`\n\nInferred type.")
 }
 
 /// Resolve the hover response for `position` in `source`.
@@ -104,13 +104,13 @@ pub fn resolve_hover(
     let ty = ctx.lookup(name)?;
 
     // 5. Render Markdown hover card.
-    let ty_display = format!("{ty}");
+    let ty_display = ty.to_string();
     let markdown = render_hover_markdown(name, &ty_display);
 
     // 6. Compute the LSP Range for the word so editors highlight the
     //    token under the cursor while the hover card is open.
-    let start_pos = line_map.byte_to_position(word_start as u32);
-    let end_pos = line_map.byte_to_position(word_end as u32);
+    let start_pos = line_map.byte_to_position(u32::try_from(word_start).expect("source < 4 GiB"));
+    let end_pos = line_map.byte_to_position(u32::try_from(word_end).expect("source < 4 GiB"));
     let range = Range {
         start: start_pos,
         end: end_pos,
@@ -170,14 +170,16 @@ mod tests {
     #[test]
     fn resolve_hover_known_binding() {
         use cobrust_frontend::span::FileId;
-        use cobrust_types::{Ty, TypeCheckCtx, check_incremental};
+        use cobrust_types::{TypeCheckCtx, check_incremental};
 
         let source = "let x = 42\n";
         let line_map = LineMap::from_source(source);
         let mut ctx = TypeCheckCtx::new();
-        let ast = cobrust_frontend::parse_str(source, FileId::SYNTHETIC).unwrap();
+        let ast = cobrust_frontend::parse_str(source, FileId::SYNTHETIC)
+            .expect("test: source must parse");
         let mut hir_sess = cobrust_hir::lower::Session::new();
-        let hir = cobrust_hir::lower::lower(&ast, &mut hir_sess).unwrap();
+        let hir = cobrust_hir::lower::lower(&ast, &mut hir_sess)
+            .expect("test: HIR lower must succeed");
         let _ = check_incremental(&mut ctx, &hir, 1);
 
         // Cursor on 'x' at position (0, 4).

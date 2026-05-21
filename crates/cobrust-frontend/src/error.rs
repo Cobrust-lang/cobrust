@@ -4,6 +4,16 @@
 //! information to point at the offending byte range. The frontend
 //! treats *every* lex/parse failure as recoverable diagnostics rather
 //! than panics — see crate-level docs.
+//!
+//! Tier-2 CQ P0-3 + CLAUDE.md §2.5 Direction B (LLM-first error UX):
+//! every `ParseError` variant carries a uniform
+//! `suggestion: Option<&'static str>` field populated at construction
+//! time so the LSP / `--emit-json` / agent loop sees the fix path
+//! without re-deriving it. The pattern mirrors ADR-0052b §2 (already
+//! applied to `TypeError` / `MirError` / `LoweringError`). Wave-1 of
+//! the frontend suggestion roll-out: `ParseError`. `LexError` shapes
+//! stay structural for now — character-class diagnostics rarely have
+//! a single canonical fix.
 
 use thiserror::Error;
 
@@ -38,6 +48,11 @@ pub enum LexError {
 }
 
 /// Parser error kinds.
+///
+/// Each variant carries a uniform `suggestion: Option<&'static str>`
+/// field populated at construction time per CLAUDE.md §2.5 Direction B
+/// (LLM-first error UX). Variants where no actionable fix is obvious
+/// at the call site pass `suggestion: None`.
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
 pub enum ParseError {
     /// We expected one set of token kinds, got something else.
@@ -46,26 +61,45 @@ pub enum ParseError {
         expected: Vec<TokenKind>,
         found: TokenKind,
         span: Span,
+        suggestion: Option<&'static str>,
     },
     /// Generic syntax error for less-tractable cases.
     #[error("{message} at {span}")]
-    Syntax { message: String, span: Span },
+    Syntax {
+        message: String,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
     /// Hit EOF while still parsing a construct.
     #[error("unexpected end of input at {span}")]
-    UnexpectedEof { span: Span },
+    UnexpectedEof {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
     /// A statement-level form is not yet supported. Reserved for
     /// constructs that the constitution drops by name (`is`, `del`,
     /// `global`, `nonlocal`, etc.).
     #[error("the form `{name}` is not part of Cobrust (see CLAUDE.md §2.2) at {span}")]
-    DroppedByConstitution { name: &'static str, span: Span },
+    DroppedByConstitution {
+        name: &'static str,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
     /// A default argument value that is not a literal expression. M1
     /// rejects mutable / computed defaults at parse time
     /// (constitution §2.2). The type-checker (M2) does the rest.
     #[error("default argument must be a literal expression at {span}")]
-    NonLiteralDefault { span: Span },
+    NonLiteralDefault {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
     /// Indentation level is inconsistent with surrounding context.
     #[error("indentation error at {span}: {message}")]
-    IndentError { message: String, span: Span },
+    IndentError {
+        message: String,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
     /// Expression nesting exceeds the compile-time safety limit.
     ///
     /// Prevents stack-overflow DoS from adversarially deeply-nested
@@ -75,7 +109,30 @@ pub enum ParseError {
         "expression nesting depth {depth} exceeds maximum ({max}) at {span}; \
          suggestion: flatten nested parentheses or sub-expressions"
     )]
-    ExpressionTooDeep { depth: u32, max: u32, span: Span },
+    ExpressionTooDeep {
+        depth: u32,
+        max: u32,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
+}
+
+/// Extract the construction-time `suggestion: Option<&'static str>`
+/// payload from a `ParseError`. Mirrors `type_error_suggestion_text` /
+/// `mir_error_suggestion_text` / `lowering_error_suggestion_text` per
+/// CLAUDE.md §2.5 Direction B.
+#[must_use]
+pub fn parse_error_suggestion_text(err: &ParseError) -> Option<&'static str> {
+    use ParseError::*;
+    match err {
+        Expected { suggestion, .. }
+        | Syntax { suggestion, .. }
+        | UnexpectedEof { suggestion, .. }
+        | DroppedByConstitution { suggestion, .. }
+        | NonLiteralDefault { suggestion, .. }
+        | IndentError { suggestion, .. }
+        | ExpressionTooDeep { suggestion, .. } => *suggestion,
+    }
 }
 
 /// Top-level error returned by [`crate::parse_str`].
