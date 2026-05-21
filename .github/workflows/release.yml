@@ -184,23 +184,13 @@ jobs:
   # NOTE: x86_64-pc-windows-msvc removed from this matrix in Phase K Strand #5.
   # Windows MSVC is now classified as "queued" pending ADR-0058b (stable runner
   # + test-suite parity + packaging convention decision).
-  # This job skeleton is retained for future tier-2 additions.
+  #
+  # Job intentionally OMITTED: GitHub Actions rejects `matrix.include: []` with
+  # "matrix must define at least one vector" at workflow-validation time —
+  # this fires BEFORE `if: false` job-skip evaluation, so a no-op skeleton
+  # cannot be retained. Re-add the entire `build-best-effort:` job (with at
+  # least one matrix entry) when the next tier-2 target lands.
   # -------------------------------------------------------------------------
-  build-best-effort:
-    name: Build ${{ matrix.target }} (best-effort)
-    runs-on: ${{ matrix.os }}
-    continue-on-error: true
-    if: ${{ false }}  # no tier-2 targets currently; remove this guard when next tier-2 lands
-    strategy:
-      fail-fast: false
-      matrix:
-        include: []
-
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-
-      - name: Placeholder
-        run: echo "No best-effort targets configured"
 
   # -------------------------------------------------------------------------
   # Create GitHub Release and upload all artifacts
