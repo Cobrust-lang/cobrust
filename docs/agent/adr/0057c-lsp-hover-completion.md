@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0057c
 parent_adr: 0057
 title: "Phase J wave-2.2 — LSP hover + completion (textDocument/hover + textDocument/completion)"
-status: proposed
+status: accepted
 date: 2026-05-21
-last_verified_commit: 2863a40
+last_verified_commit: feature/0057c-hover-completion
+ratified_at: feature/0057c-hover-completion
+ratified_on: 2026-05-21
 phase: "Phase J wave-2.2"
 supersedes: []
 superseded_by: []
@@ -252,3 +254,39 @@ This ADR ratifies on `feature/0057c-hover-completion` impl merge. Per ADR-0057 �
 sub-ADR ratification rolls up to parent Phase J status.
 
 — P9 Tech Lead, 2026-05-21
+
+## 10. Ratification addendum (2026-05-21)
+
+Implementation merged on branch `feature/0057c-hover-completion`. Deviations from
+the design above (none load-bearing; documented for L2 audit traceability):
+
+- **Word-boundary heuristic scope**: design §3.1 step 4 mentioned scanning
+  `source[..offset]` backwards. Impl uses a forward+backward scan from
+  `byte_offset` — same semantics, cleaner implementation. Cursor on a non-ident
+  byte (space, punctuation) returns `None` for hover (§3.1 contract) and `""`
+  for completion prefix (§3.2 contract). Cursor-at-`offset-1` (ident char)
+  forms the anchor for completion only (triggers on `.` or `_`), NOT for hover
+  (hover requires cursor on the token, not after it).
+
+- **`fn` keyword**: the integration test for function hover uses `fn f(a: i64)` —
+  Cobrust's function keyword is `fn` (not `def` as listed in ADR §1 examples).
+  `def` appears in the keyword completion list only.
+
+- **Snapshot count**: 6 new snapshot files created (3 hover + 3 completion).
+  Snapshot shapes are stable across test runs.
+
+Acceptance gate (§5) status as of merge:
+
+- [x] 3 hover integration tests in `tests/hover_completion_e2e.rs` PASS.
+- [x] 3 completion integration tests PASS.
+- [x] 3 hover snapshot tests PASS.
+- [x] 3 completion snapshot tests PASS.
+- [x] `cargo clippy -p cobrust-lsp --all-targets -- -D warnings` clean.
+- [x] ADR-0057 §4 PRIORITY 2 (hover) + PRIORITY 3 (completion) delivered.
+
+Test verification:
+
+- Mac single-crate: `cargo test -p cobrust-lsp` PASS (48 lib + 5 did_change
+  integration + 12 hover_completion + 10 snapshot_diagnostics = 75 tests).
+
+— P9 Tech Lead, 2026-05-21 (ratification 2026-05-21)

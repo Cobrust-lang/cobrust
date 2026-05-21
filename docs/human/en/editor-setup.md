@@ -121,7 +121,55 @@ sequenceDiagram
     Backend->>Editor: publish_diagnostics(N+1, diags)
 ```
 
-**Wave-2+ (deferred):** hover, completion, definition, rename, codeAction.
+### Hover — inferred type at cursor (wave-2.2, ADR-0057c)
+
+As of ADR-0057c, `cobrust-lsp` answers `textDocument/hover` requests.
+Place the cursor on any `let`-binding or function name and your editor
+shows the inferred type as a Markdown card:
+
+```
+**x**: `Int`
+
+Inferred type.
+```
+
+- Works on every binding registered in the incremental `TypeCheckCtx`
+  after the file has been opened (or edited past a `didChange` debounce).
+- Unknown names, keywords, and punctuation return no card (`null`).
+- Wave-2.2 uses a word-boundary heuristic; full DefId-span hover (for
+  sub-expression types) is wave-3 scope.
+
+### Completion — PRELUDE + scope + keywords (wave-2.2, ADR-0057c)
+
+`cobrust-lsp` answers `textDocument/completion` requests triggered by
+any identifier character or `.` / `_`.
+
+Three completion tiers:
+
+| Tier | Kind | Examples | Sort prefix |
+|---|---|---|---|
+| PRELUDE functions | Function | `print`, `len`, `range`, `map`, `filter` | `0_` |
+| In-scope bindings | Variable | Every `let`-binding in the current file | `1_` |
+| Keywords | Keyword | `let`, `fn`, `if`, `match`, `for`, `return` | `2_` |
+
+Filtering is by case-sensitive prefix match. Typing `pri` narrows to
+`print` only.
+
+```mermaid
+sequenceDiagram
+    participant Editor
+    participant cobrust-lsp
+    Editor->>cobrust-lsp: hover(uri, position)
+    cobrust-lsp->>cobrust-lsp: position → byte offset → word_at_offset
+    cobrust-lsp->>cobrust-lsp: TypeCheckCtx::lookup(name)
+    cobrust-lsp-->>Editor: Hover { "**x**: `Int`" }
+    Editor->>cobrust-lsp: completion(uri, position)
+    cobrust-lsp->>cobrust-lsp: prefix_at_offset(source, offset)
+    cobrust-lsp->>cobrust-lsp: PRELUDE + scope + keywords filtered by prefix
+    cobrust-lsp-->>Editor: CompletionItem[]
+```
+
+**Wave-2+ (deferred):** definition, rename, codeAction.
 See ADR-0057 for the roster.
 
 ### Build and run

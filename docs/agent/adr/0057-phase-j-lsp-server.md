@@ -191,9 +191,10 @@ scoping spike §6):
 |---|---|---|
 | **0057** | Phase J frame (this ADR) — crate split, `tower-lsp` bind, v3.17 pin, `Initialize` capabilities, `LspFileCtx` arch. | day 14 ratify |
 | **0057a** | Diagnostics wire mapping (PRIORITY 1) — `From<TypeError/MirError/LoweringError> for Vec<Diagnostic>`; 6 example cases. | day 1-3 |
-| **0057b** | Hover + completion (PRIORITY 2 + 3) — `:type` reuse; PRELUDE + method-form + in-scope sources. | day 4-7 |
-| **0057c** | Definition + rename (PRIORITY 4 + 6) — `DefId` → original-span map; workspace symbol table; cross-file rename. | day 8-12 |
-| **0057d** | CodeAction (PRIORITY 5) — paired `QuickFix` per `suggestion`. | day 13-14 |
+| **0057b** | didChange incremental + Session reuse (wave-2.1) — INCREMENTAL sync; 100ms debounce; shared TypeCheckCtx; FileId pool. **ACCEPTED `1df1300`** | day 4-5 |
+| **0057c** | Hover + completion (PRIORITY 2 + 3, wave-2.2) — word-boundary hover; PRELUDE + scope + keyword completion. **ACCEPTED `feature/0057c-hover-completion`** | day 6-7 |
+| **0057d** | Definition + rename (PRIORITY 4 + 6) — `DefId` → original-span map; workspace symbol table; cross-file rename. | day 8-12 |
+| **0057e** | CodeAction (PRIORITY 5) — paired `QuickFix` per `suggestion`. | day 13-14 |
 
 Sub-ADRs ratify sequentially. Frame ratifies on 0057a dispatch.
 
