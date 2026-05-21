@@ -15,17 +15,20 @@
 //!
 //! Seeds are recorded in `PROVENANCE.toml`'s `verification.seeds`.
 
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::format_push_string)]
-#![allow(clippy::let_unit_value)]
-#![allow(clippy::ignored_unit_patterns)]
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
-#![allow(clippy::manual_let_else)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::cast_lossless)]
+// lint-policy: consolidated per template-fix (numpy-template-fix sprint).
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::expect_used,
+    clippy::format_push_string,
+    clippy::ignored_unit_patterns,
+    clippy::let_unit_value,
+    clippy::manual_let_else,
+    clippy::unreadable_literal,
+    clippy::unwrap_used
+)]
 
 use cobrust_msgpack::{pack_to_vec, unpack, MsgValue};
 

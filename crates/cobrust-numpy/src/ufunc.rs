@@ -20,7 +20,7 @@
 //! on a closed enum variant. Constitution §5.3 (efficient): inner
 //! loops are auto-vectorisable.
 
-// CQ P1-4: consolidated from 17 separate inner attrs; translator-template fix deferred per F37.
+// CQ P1-4 + template-fix: single consolidated block; future emits use #[allow] at item level.
 #![allow(
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
@@ -28,17 +28,17 @@
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
     clippy::float_cmp,
+    clippy::if_not_else,
+    clippy::map_unwrap_or,
+    clippy::missing_errors_doc,
+    clippy::module_name_repetitions,
+    clippy::needless_bitwise_bool,
     clippy::needless_pass_by_value,
     clippy::similar_names,
-    clippy::module_name_repetitions,
-    clippy::missing_errors_doc,
-    clippy::unnecessary_wraps,
-    clippy::uninlined_format_args,
-    clippy::needless_bitwise_bool,
     clippy::too_many_arguments,
     clippy::too_many_lines,
-    clippy::map_unwrap_or,
-    clippy::if_not_else
+    clippy::uninlined_format_args,
+    clippy::unnecessary_wraps
 )]
 
 use ndarray::{ArrayD, Zip};

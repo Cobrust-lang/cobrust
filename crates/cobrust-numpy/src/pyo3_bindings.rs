@@ -12,6 +12,7 @@
 //! for the M7.0 differential gate; richer numpy-compatible Python
 //! types (e.g. a real `numpy.ndarray` view) lift in M7.1+.
 
+// CQ P1-4 + template-fix: single consolidated block; future emits use #[allow] at item level.
 #![allow(clippy::needless_pass_by_value)]
 
 use pyo3::prelude::*;

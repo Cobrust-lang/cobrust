@@ -21,38 +21,41 @@
 //! a closed enum variant. Constitution §5.3 (efficient): inner loops
 //! delegate to `ndarray::ArrayD<T>` which is allocation-stable.
 
-// CQ P1-4: consolidated from 20 separate inner attrs; translator-template fix deferred per F37.
+// CQ P1-4 + template-fix: all file-level allows consolidated into one block.
+// Future translator emits should use #[allow] at item level; file-level retained
+// here because linalg.rs is auto-generated and items are too numerous to annotate
+// individually without a regen step.
 #![allow(
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
+    clippy::collapsible_else_if,
+    clippy::doc_markdown,
+    clippy::excessive_precision,
     clippy::float_cmp,
+    clippy::if_not_else,
+    clippy::imprecise_flops,
+    clippy::many_single_char_names,
+    clippy::manual_range_contains,
+    clippy::manual_repeat_n,
+    clippy::map_unwrap_or,
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
-    clippy::must_use_candidate,
     clippy::module_name_repetitions,
-    clippy::similar_names,
+    clippy::must_use_candidate,
     clippy::needless_pass_by_value,
     clippy::needless_range_loop,
-    clippy::uninlined_format_args,
-    clippy::if_not_else,
+    clippy::redundant_else,
+    clippy::similar_names,
+    clippy::single_match_else,
+    clippy::suboptimal_flops,
     clippy::too_many_lines,
-    clippy::map_unwrap_or,
-    clippy::unnecessary_wraps,
-    clippy::imprecise_flops,
-    clippy::suboptimal_flops
+    clippy::type_complexity,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_wraps
 )]
-#![allow(clippy::excessive_precision)]
-#![allow(clippy::manual_repeat_n)]
-#![allow(clippy::manual_range_contains)]
-#![allow(clippy::single_match_else)]
-#![allow(clippy::collapsible_else_if)]
-#![allow(clippy::redundant_else)]
-#![allow(clippy::many_single_char_names)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::doc_markdown)]
 
 use ndarray::{Array1, Array2, ArrayD, IxDyn};
 

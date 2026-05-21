@@ -1399,7 +1399,11 @@ fn library_header(library: &PyLibrary, spec: &SpecToml, translation: &Translatio
 // source-library: {lib} {version}\n\
 // oracle: {oracle_runtime} {oracle_runtime_version} (module: {oracle})\n\
 // functions translated: {n}\n\
-// see PROVENANCE.toml for the full manifest.\n\n",
+// see PROVENANCE.toml for the full manifest.\n\
+//\n\
+// lint-policy: use #[allow(...)] at item level (not #![allow] at file level).\n\
+// Place each allow on the specific fn/struct/impl that needs it so future\n\
+// hand-edits inherit narrow scope and clippy catches drift early.\n\n",
         lib = library.library,
         version = library.version,
         oracle_runtime = spec.oracle_runtime,

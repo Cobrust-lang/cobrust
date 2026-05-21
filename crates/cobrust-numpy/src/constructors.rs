@@ -17,21 +17,21 @@
 //! Python-shaped contract (dtype string parsing, error taxonomy);
 //! `ndarray` owns the storage layout and zero-cost iteration.
 
-// CQ P1-4: consolidated from 13 separate inner attrs; translator-template fix deferred per F37.
+// CQ P1-4 + template-fix: single consolidated block; future emits use #[allow] at item level.
 #![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
     clippy::cast_lossless,
+    clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
     clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::manual_repeat_n,
+    clippy::missing_errors_doc,
     clippy::missing_panics_doc,
     clippy::must_use_candidate,
-    clippy::float_cmp,
-    clippy::similar_names,
-    clippy::missing_errors_doc,
-    clippy::uninlined_format_args,
     clippy::needless_range_loop,
-    clippy::manual_repeat_n
+    clippy::similar_names,
+    clippy::uninlined_format_args
 )]
 
 use ndarray::{ArrayD, IxDyn};

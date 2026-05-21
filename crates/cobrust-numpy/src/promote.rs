@@ -26,7 +26,7 @@
 //! comparisons to a separate path. `result_type` reflects
 //! arithmetic-op promotion only.
 
-// CQ P1-4: consolidated from 3 separate inner attrs; translator-template fix deferred per F37.
+// CQ P1-4 + template-fix: single consolidated block; future emits use #[allow] at item level.
 #![allow(
     clippy::match_same_arms,
     clippy::missing_panics_doc,

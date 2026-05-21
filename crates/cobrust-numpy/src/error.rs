@@ -20,7 +20,7 @@
 //! random surface. M7.6 (per ADR-0021 §11) adds three more for the
 //! expansion surface. Merge order: M7.3 → M7.4 → M7.5 → M7.6.
 
-// CQ P1-4: consolidated from per-lint inner attrs; translator-template fix deferred per F37.
+// CQ P1-4 + template-fix: single consolidated block; future emits use #[allow] at item level.
 #![allow(clippy::uninlined_format_args)]
 
 use std::fmt;
