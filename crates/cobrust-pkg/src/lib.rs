@@ -45,14 +45,18 @@
 #![allow(clippy::unnecessary_literal_unwrap)]
 #![allow(clippy::manual_strip)]
 
+pub mod cpu_detect;
 pub mod error;
 pub mod lockfile;
 pub mod manifest;
 pub mod registry;
+pub mod registry_client;
 pub mod resolver;
 pub mod sources;
 pub mod tarball;
+pub mod wheel_select;
 
+pub use cpu_detect::{HostCpu, detect_host_cpu};
 pub use error::{
     LockfileError, ManifestError, PkgError, RegistryError, ResolutionError, SourceError,
     TarballError,
@@ -65,9 +69,11 @@ pub use manifest::{
     BinTable, Dependency, DependencySpec, LibTable, Manifest, PackageTable, TestTable,
 };
 pub use registry::{Registry, RegistryEntry};
+pub use registry_client::{RegistryClient, RegistryClientError};
 pub use resolver::{MaxCompatibleStrategy, Resolution, ResolutionStrategy, Resolver};
 pub use sources::{Source, SourceFetchOutput};
 pub use tarball::Tarball;
+pub use wheel_select::{WheelMeta, select_wheel};
 
 use std::path::Path;
 

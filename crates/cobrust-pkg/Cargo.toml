@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 serde       = { workspace = true }
+serde_json  = { workspace = true }
 toml        = { workspace = true }
 thiserror   = { workspace = true }
 tracing     = { workspace = true }
@@ -23,6 +24,13 @@ hex         = { workspace = true }
 semver      = { workspace = true }
 flate2      = { workspace = true }
 tar         = { workspace = true }
+# ADR-0065 §7.2 — registry_client uses reqwest blocking client + sha2 for
+# wheel SHA-256 verification. Both are already in the workspace dep graph.
+reqwest     = { workspace = true, features = ["blocking"] }
+sha2        = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# Used by `tests/registry_client_tests.rs` to compute SHA-256 of mock-server
+# payloads. sha2 is already a runtime dep so this is a zero-cost dev addition.
+sha2 = { workspace = true }
