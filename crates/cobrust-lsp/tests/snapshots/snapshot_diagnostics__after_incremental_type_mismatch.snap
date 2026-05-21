@@ -1,0 +1,42 @@
+---
+source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
+assertion_line: 152
+expression: diags
+snapshot_kind: text
+---
+[
+  {
+    "range": {
+      "start": {
+        "line": 0,
+        "character": 0
+      },
+      "end": {
+        "line": 0,
+        "character": 19
+      }
+    },
+    "severity": 1,
+    "code": "type-mismatch",
+    "source": "cobrust",
+    "message": "type mismatch: expected `i64`, found `str` at file#100@0..19",
+    "relatedInformation": [
+      {
+        "location": {
+          "uri": "cobrust://synthetic",
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 19
+            }
+          }
+        },
+        "message": "change the expression type or add `: <expected>` annotation"
+      }
+    ]
+  }
+]

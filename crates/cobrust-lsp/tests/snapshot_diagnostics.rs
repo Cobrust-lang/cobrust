@@ -83,3 +83,182 @@ fn snapshot_arity_mismatch() {
     let diags = type_error_to_diagnostics(&err, &line_map_for(source));
     insta::assert_json_snapshot!("arity_mismatch", diags);
 }
+
+// =====================================================================
+// ADR-0057b wave-2.1 — snapshots of diagnostics produced by the
+// stateful compile path AFTER applying a content-change event. These
+// pin the JSON wire shape that LSP clients observe in the second
+// `publish_diagnostics` emission triggered by `did_change`.
+// =====================================================================
+
+use cobrust_lsp::Backend;
+use cobrust_lsp::LineMap as LspLineMap;
+use cobrust_types::TypeCheckCtx;
+use tower_lsp::lsp_types::{
+    Position, Range as LspRange, TextDocumentContentChangeEvent,
+};
+
+fn full_replace(text: &str) -> TextDocumentContentChangeEvent {
+    TextDocumentContentChangeEvent {
+        range: None,
+        range_length: None,
+        text: text.to_string(),
+    }
+}
+
+fn incremental(range: LspRange, text: &str) -> TextDocumentContentChangeEvent {
+    TextDocumentContentChangeEvent {
+        range: Some(range),
+        range_length: None,
+        text: text.to_string(),
+    }
+}
+
+#[test]
+fn snapshot_after_incremental_type_mismatch() {
+    // Open with valid `let x: i64 = 1`, then incrementally edit the
+    // literal `1` to `"oops"` (re-introduces a TypeMismatch).
+    let initial = "let x: i64 = 1\n".to_string();
+    let mut ctx = TypeCheckCtx::new();
+    let file_id = 100u32;
+    let _open = Backend::compile_diagnostics_with_session(
+        &initial,
+        &LspLineMap::from_source(&initial),
+        &mut ctx,
+        file_id,
+    );
+
+    // Replace `1` at line 0, chars 13..14 with `"oops"`.
+    let edit = incremental(
+        LspRange {
+            start: Position {
+                line: 0,
+                character: 13,
+            },
+            end: Position {
+                line: 0,
+                character: 14,
+            },
+        },
+        "\"oops\"",
+    );
+    let after = Backend::apply_content_changes(initial, &[edit]);
+    let diags = Backend::compile_diagnostics_with_session(
+        &after,
+        &LspLineMap::from_source(&after),
+        &mut ctx,
+        file_id,
+    );
+    insta::assert_json_snapshot!("after_incremental_type_mismatch", diags);
+}
+
+#[test]
+fn snapshot_after_full_replace_unbound_name() {
+    let initial = "let x: i64 = 0\n".to_string();
+    let mut ctx = TypeCheckCtx::new();
+    let file_id = 101u32;
+    let _open = Backend::compile_diagnostics_with_session(
+        &initial,
+        &LspLineMap::from_source(&initial),
+        &mut ctx,
+        file_id,
+    );
+
+    let replace = full_replace("let z: i64 = y + 1\n");
+    let after = Backend::apply_content_changes(initial, &[replace]);
+    let diags = Backend::compile_diagnostics_with_session(
+        &after,
+        &LspLineMap::from_source(&after),
+        &mut ctx,
+        file_id,
+    );
+    insta::assert_json_snapshot!("after_full_replace_unbound_name", diags);
+}
+
+#[test]
+fn snapshot_after_incremental_implicit_truthiness() {
+    let initial = "let x: i64 = 0\n".to_string();
+    let mut ctx = TypeCheckCtx::new();
+    let file_id = 102u32;
+    let _open = Backend::compile_diagnostics_with_session(
+        &initial,
+        &LspLineMap::from_source(&initial),
+        &mut ctx,
+        file_id,
+    );
+
+    // Append an `if x:` block that triggers ImplicitTruthiness on
+    // an Int value. We use full-replace to keep the snapshot stable
+    // against any range-arithmetic edge in the test setup.
+    let replace = full_replace("let x: i64 = 0\nif x:\n    pass\n");
+    let after = Backend::apply_content_changes(initial, &[replace]);
+    let diags = Backend::compile_diagnostics_with_session(
+        &after,
+        &LspLineMap::from_source(&after),
+        &mut ctx,
+        file_id,
+    );
+    insta::assert_json_snapshot!("after_incremental_implicit_truthiness", diags);
+}
+
+#[test]
+fn snapshot_after_full_replace_arity_mismatch() {
+    let initial = "let x: i64 = 0\n".to_string();
+    let mut ctx = TypeCheckCtx::new();
+    let file_id = 103u32;
+    let _open = Backend::compile_diagnostics_with_session(
+        &initial,
+        &LspLineMap::from_source(&initial),
+        &mut ctx,
+        file_id,
+    );
+
+    let replace = full_replace(
+        "fn add(a: i64, b: i64) -> i64:\n    return a + b\nlet r: i64 = add(1, 2, 3)\n",
+    );
+    let after = Backend::apply_content_changes(initial, &[replace]);
+    let diags = Backend::compile_diagnostics_with_session(
+        &after,
+        &LspLineMap::from_source(&after),
+        &mut ctx,
+        file_id,
+    );
+    insta::assert_json_snapshot!("after_full_replace_arity_mismatch", diags);
+}
+
+#[test]
+fn snapshot_after_incremental_clears_diagnostics() {
+    // Open with TypeMismatch; the incremental fix should clear all
+    // diagnostics — snapshot the empty vector to lock that behavior.
+    let initial = "let x: i64 = \"oops\"\n".to_string();
+    let mut ctx = TypeCheckCtx::new();
+    let file_id = 104u32;
+    let _open = Backend::compile_diagnostics_with_session(
+        &initial,
+        &LspLineMap::from_source(&initial),
+        &mut ctx,
+        file_id,
+    );
+
+    let edit = incremental(
+        LspRange {
+            start: Position {
+                line: 0,
+                character: 7,
+            },
+            end: Position {
+                line: 0,
+                character: 10,
+            },
+        },
+        "str",
+    );
+    let after = Backend::apply_content_changes(initial, &[edit]);
+    let diags = Backend::compile_diagnostics_with_session(
+        &after,
+        &LspLineMap::from_source(&after),
+        &mut ctx,
+        file_id,
+    );
+    insta::assert_json_snapshot!("after_incremental_clears_diagnostics", diags);
+}
