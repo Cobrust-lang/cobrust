@@ -169,8 +169,57 @@ sequenceDiagram
     cobrust-lsp-->>Editor: CompletionItem[]
 ```
 
-**Wave-2+ (deferred):** definition, rename, codeAction.
-See ADR-0057 for the roster.
+### Rename — symbol rename across file (wave-2.3, ADR-0057d)
+
+As of ADR-0057d, `cobrust-lsp` answers `textDocument/prepareRename`
+and `textDocument/rename` requests — the F2 "Rename Symbol" shortcut
+in every major editor.
+
+**How it works:**
+
+1. **Pre-flight (`prepareRename`)** — the editor calls this before
+   showing the rename input box. The server returns:
+   - A `Range` covering the symbol, if it is rename-able.
+   - `null` if the cursor is on a keyword, whitespace, or an unknown
+     (unbound) identifier.
+2. **Rename** — after the user types the new name and confirms, the
+   editor sends `textDocument/rename`. The server returns a
+   `WorkspaceEdit` containing `TextEdit[]` for every occurrence of
+   the old name in the file — definition and all uses.
+
+**Example:**
+
+```cobrust
+let count = 0
+count + 1
+```
+
+Place the cursor on `count`, press **F2** (VSCode/Cursor) or
+`<space>rn` (Neovim), type `total`, and press Enter. The server
+returns two edits — both `count` references are replaced atomically.
+
+**Scope:** wave-2.3 covers single-document rename only. Cross-file
+workspace rename (all files in the project) is planned for wave-3
+(ADR-0057e).
+
+**Not rename-able:**
+- Language keywords (`let`, `def`, `if`, `match`, etc.)
+- Whitespace and punctuation
+- Identifiers not yet resolved by the type-checker
+
+```mermaid
+sequenceDiagram
+    participant Editor
+    participant cobrust-lsp
+    Editor->>cobrust-lsp: prepareRename(uri, position)
+    cobrust-lsp->>cobrust-lsp: word_at_offset → keyword? → ctx.lookup?
+    cobrust-lsp-->>Editor: Range("count" at line 0, char 4-9)
+    Editor->>Editor: Show rename input box
+    Editor->>cobrust-lsp: rename(uri, position, newName="total")
+    cobrust-lsp->>cobrust-lsp: collect_occurrences("count") → 2 edits
+    cobrust-lsp-->>Editor: WorkspaceEdit { changes: { uri: [TextEdit×2] } }
+    Editor->>Editor: Apply edits atomically
+```
 
 ### Build and run
 
