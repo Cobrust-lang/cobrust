@@ -1686,7 +1686,7 @@ Pre-0058d, `cobrust-jit/src/lower.rs` (430 LOC) carried its own copy of the wave
 - **AOT path unchanged.** `cranelift_backend::CraneliftCtx::define_body`'s stateful AOT dispatcher (which carries runtime helpers, extern symbol declarations, drop schedules, dict/list/str intrinsics, Place projections, FnRef calls, str data symbols) is **not modified** by Strand #4. The wave-1 substrate exists primarily to anchor a stable contract for the JIT consumer; AOT-side delegation through the substrate is reserved for a future ADR.
 - **Stability contract.** Wave-1 surface is stable-for-wave-1 per ADR-0058d §5.1: signature changes require a sub-ADR; additive helpers are non-breaking; non-wave-1 MIR returns `CodegenError::InvalidMir("wave1: ...")` so JIT callers can fall back to AOT.
 
-DG-Workstation verify @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrust-jit` = 392 PASS / 0 FAILED / 8 ignored, TEST_EXIT=0. Includes 2 new wave-1 unit tests in `lowering::tests` (round-trip + reject-Str), 378 pre-existing cobrust-codegen tests unchanged, 12 cobrust-jit tests (1 unit + 11 integration jit_roundtrip) unchanged.
+heavy-build x86 host verify @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrust-jit` = 392 PASS / 0 FAILED / 8 ignored, TEST_EXIT=0. Includes 2 new wave-1 unit tests in `lowering::tests` (round-trip + reject-Str), 378 pre-existing cobrust-codegen tests unchanged, 12 cobrust-jit tests (1 unit + 11 integration jit_roundtrip) unchanged.
 
 Reference: `docs/agent/adr/0058d-jit-aot-lowering-convergence.md`. Closes ADR-0056a §13 noted-debt + audit `ae2316f1c51dbd6be` Gate 7.
 
@@ -1702,7 +1702,7 @@ Mac per-crate verify @ `c9de99c`: `cargo test -p cobrust-codegen` (diff corpus +
 
 Reference: `docs/agent/adr/0058e-aot-cranelift-substrate-delegation.md`. Closes ADR-0058d §2.3 deferral.
 
-DG-Workstation verify @ HEAD `4686192`: cargo test -p cobrust-codegen --features llvm = 355 tests PASS / 0 failed / 6 ignored (LLVM-conditional), TEST_EXIT=0. 5 wave-1 inline smoke + 350 baseline tests across aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora.
+heavy-build x86 host verify @ HEAD `4686192`: cargo test -p cobrust-codegen --features llvm = 355 tests PASS / 0 failed / 6 ignored (LLVM-conditional), TEST_EXIT=0. 5 wave-1 inline smoke + 350 baseline tests across aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora.
 
 #### Phase K wave-2 — LLVM opt pipeline + multi-target (ADR-0058b)
 
@@ -1737,7 +1737,7 @@ Phase K wave-3 (`crates/cobrust-codegen/src/llvm_backend.rs` `DebugInfoBuilder` 
 - **Per-function DISubprogram** (ADR-0058c §3.2). `declare_body` builds a `DISubroutineType` from the parameter + return DI basic types, then a `DISubprogram` rooted at the compile-unit scope; `FunctionValue::set_subprogram` attaches it to the LLVM function. Per-fn lookup table (`di_subprograms: HashMap<u32, DISubprogram>`) is consumed in `define_body` for per-instruction debug-location rooting.
 - **Per-Span DILocation line-table** (ADR-0058c §3.3). Inline `LineMap` (avoids a `cobrust-lsp` dep) translates each MIR statement's `Span::start` byte-offset into DWARF-conventional 1-indexed (line, column). Before every block start + statement + terminator emission, `BodyLowerer::set_debug_loc` invokes `builder.set_current_debug_location(loc)`. `TargetSpec.source_path: Option<PathBuf>` (new field) selects between real source resolution (`LineMap::from_source(read_to_string(path))`) and the synthetic-test fallback (`LineMap::empty()` → all-spans-collapse-to-line-1).
 - **DIBuilder finalize** (ADR-0058c §3.4). `emit` calls `di_builder.finalize()` between IR construction and `Module::verify`, writing all deferred DIE metadata into the module. DI shape errors surface as `CodegenError::LlvmError(String)` — identical taxonomy to wave-1/2.
-- **lldb smoke harness** (ADR-0058c §3.5). `crates/cobrust-codegen/tests/dwarf_lldb_smoke.rs` spawns `lldb-18 -b` (batch mode) against compiled object files, asks lldb for symbol resolution + line-table inspection via `image lookup --regex` and `image dump line-table`, and asserts the queries return non-empty results — proves DWARF subprogram + line-table emission end-to-end. Tests skip cleanly when neither `lldb-18` nor `lldb` is on `$PATH` (Mac hosts may lack it; DG-Workstation has it via `llvm.sh` apt install).
+- **lldb smoke harness** (ADR-0058c §3.5). `crates/cobrust-codegen/tests/dwarf_lldb_smoke.rs` spawns `lldb-18 -b` (batch mode) against compiled object files, asks lldb for symbol resolution + line-table inspection via `image lookup --regex` and `image dump line-table`, and asserts the queries return non-empty results — proves DWARF subprogram + line-table emission end-to-end. Tests skip cleanly when neither `lldb-18` nor `lldb` is on `$PATH` (Mac hosts may lack it; heavy-build x86 host has it via `llvm.sh` apt install).
 
 Non-goals (deferred per ADR-0058c §4): source-level variable inspection (`DILocalVariable` / `DIFormalParameter` entries — Phase L UX scope), macOS dSYM packaging (`dsymutil` post-link step handled in `release.yml`), inlined-frame chains (`DILocation::inlined_at` — Phase L+ if debugger demand surfaces it), DWARF v4 fallback (LLVM-18 default is v5).
 

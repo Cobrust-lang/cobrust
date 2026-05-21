@@ -1576,7 +1576,7 @@ ADR-0058d 之前，`cobrust-jit/src/lower.rs`（430 LOC）携带自己一份 wav
 - **AOT 路径不变。** `cranelift_backend::CraneliftCtx::define_body` 的有状态 AOT 派发器（携带运行时辅助函数、外部符号声明、drop 调度、dict/list/str intrinsics、Place projection、FnRef 调用、str 数据符号）在 Strand #4 中**未被修改**。wave-1 substrate 的存在主要是为 JIT 消费者锚定一条稳定契约；AOT 端通过 substrate 的委托被保留给将来的 ADR。
 - **稳定性契约。** wave-1 表面按 ADR-0058d §5.1 是 stable-for-wave-1：签名变更需要 sub-ADR；新增 helper 不破坏兼容；非 wave-1 的 MIR 返回带 `"wave1:"` 前缀的 `CodegenError::InvalidMir`,JIT 调用方可以据此回退到 AOT。
 
-DG-Workstation 验证 @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrust-jit` = 392 PASS / 0 FAILED / 8 ignored,TEST_EXIT=0。包括 2 个新的 wave-1 单元测试在 `lowering::tests`（round-trip + reject-Str）、378 个 cobrust-codegen 既有测试无变化、12 个 cobrust-jit 测试（1 unit + 11 integration jit_roundtrip）无变化。
+heavy-build x86 host 验证 @ HEAD `0590731`: `cargo test -p cobrust-codegen -p cobrust-jit` = 392 PASS / 0 FAILED / 8 ignored,TEST_EXIT=0。包括 2 个新的 wave-1 单元测试在 `lowering::tests`（round-trip + reject-Str）、378 个 cobrust-codegen 既有测试无变化、12 个 cobrust-jit 测试（1 unit + 11 integration jit_roundtrip）无变化。
 
 参考: `docs/agent/adr/0058d-jit-aot-lowering-convergence.md`。关闭 ADR-0056a §13 noted-debt + 审计 `ae2316f1c51dbd6be` Gate 7。
 
@@ -1592,7 +1592,7 @@ Mac 单 crate 验证 @ `c9de99c`：`cargo test -p cobrust-codegen`（diff corpus
 
 参考: `docs/agent/adr/0058e-aot-cranelift-substrate-delegation.md`。关闭 ADR-0058d §2.3 延期项。
 
-DG-Workstation 验证 @ HEAD `4686192`：cargo test -p cobrust-codegen --features llvm = 355 测试 PASS / 0 失败 / 6 ignored（LLVM-conditional），TEST_EXIT=0。5 个 wave-1 inline smoke + 350 baseline tests 覆盖 aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora。
+heavy-build x86 host 验证 @ HEAD `4686192`：cargo test -p cobrust-codegen --features llvm = 355 测试 PASS / 0 失败 / 6 ignored（LLVM-conditional），TEST_EXIT=0。5 个 wave-1 inline smoke + 350 baseline tests 覆盖 aggregate/cast/diff/ill-formed/object-layout/release-smoke/function/ip/list/mir-to-codegen/mut/placeholder/str/while/while-if corpora。
 
 #### Phase K wave-2 —— LLVM opt 流水线 + 多目标（ADR-0058b）
 
@@ -1627,7 +1627,7 @@ Phase K wave-3（`crates/cobrust-codegen/src/llvm_backend.rs` 内接入 `DebugIn
 - **逐函数 DISubprogram**（ADR-0058c §3.2）。`declare_body` 由参数 + 返回 DI 基本类型构造 `DISubroutineType`，再以 compile-unit scope 为根创建 `DISubprogram`；`FunctionValue::set_subprogram` 把它挂到 LLVM 函数上。`di_subprograms: HashMap<u32, DISubprogram>` 表在 `define_body` 中被消费，给逐指令的调试位置定根。
 - **逐 Span DILocation 行表**（ADR-0058c §3.3）。内联 `LineMap`（避免 `cobrust-lsp` 依赖）将每个 MIR 语句的 `Span::start` 字节偏移翻译成 DWARF 约定的 1-索引（行、列）。在每个 block 起点 + 语句 + 终结符发射前，`BodyLowerer::set_debug_loc` 调用 `builder.set_current_debug_location(loc)`。`TargetSpec.source_path: Option<PathBuf>`（新字段）选择真实源码解析（`LineMap::from_source(read_to_string(path))`）或合成测试回退（`LineMap::empty()` → 所有 span 折叠到第 1 行）。
 - **DIBuilder finalize**（ADR-0058c §3.4）。`emit` 在 IR 构造和 `Module::verify` 之间调用 `di_builder.finalize()`，将所有延后的 DIE 元数据写入模块。DI 形状错误以 `CodegenError::LlvmError(String)` 上报 —— 与 wave-1/2 错误分类相同。
-- **lldb 冒烟工具**（ADR-0058c §3.5）。`crates/cobrust-codegen/tests/dwarf_lldb_smoke.rs` 以批处理模式启动 `lldb-18 -b`，对编译产出的对象文件运行 `image lookup --regex` 和 `image dump line-table` 查询，断言查询返回非空 —— 端到端证明 DWARF subprogram + 行表发射。宿主既无 `lldb-18` 也无 `lldb` 时干净跳过（Mac 开发机可能没有；DG-Workstation 通过 `llvm.sh` apt 已装）。
+- **lldb 冒烟工具**（ADR-0058c §3.5）。`crates/cobrust-codegen/tests/dwarf_lldb_smoke.rs` 以批处理模式启动 `lldb-18 -b`，对编译产出的对象文件运行 `image lookup --regex` 和 `image dump line-table` 查询，断言查询返回非空 —— 端到端证明 DWARF subprogram + 行表发射。宿主既无 `lldb-18` 也无 `lldb` 时干净跳过（Mac 开发机可能没有；heavy-build x86 host 通过 `llvm.sh` apt 已装）。
 
 非目标（按 ADR-0058c §4 延后）：源码级变量检查（`DILocalVariable` / `DIFormalParameter`—— Phase L UX 范围）、macOS dSYM 打包（`dsymutil` 链接后步骤在 `release.yml` 处理）、内联帧链（`DILocation::inlined_at` —— Phase L+ 视 debugger 需求）、DWARF v4 回退（LLVM-18 默认 v5）。
 
