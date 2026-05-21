@@ -1,6 +1,9 @@
 #![allow(clippy::items_after_statements)]
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::single_match_else)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::single_match)]
+#![allow(clippy::match_wildcard_for_single_variants)]
 //! HIR lowering invariant tests (CQ P1-2).
 //!
 //! Invariants from ADR-0005:
@@ -13,9 +16,11 @@
 
 use cobrust_frontend::span::FileId;
 use cobrust_frontend::{ast, parse_str};
-use cobrust_hir::error::{lowering_error_fix_safety_code, lowering_error_suggestion_text, LoweringError};
+use cobrust_hir::error::{
+    LoweringError, lowering_error_fix_safety_code, lowering_error_suggestion_text,
+};
 use cobrust_hir::tree as h;
-use cobrust_hir::{lower, Session};
+use cobrust_hir::{Session, lower};
 
 // =====================================================================
 // Helpers
@@ -38,8 +43,8 @@ fn lower_err(src: &str) -> LoweringError {
 }
 
 fn lower_with_session(src: &str) -> (h::Module, Session) {
-    let module = parse_str(src, FileId::SYNTHETIC)
-        .unwrap_or_else(|e| panic!("parse failed: {e:?}"));
+    let module =
+        parse_str(src, FileId::SYNTHETIC).unwrap_or_else(|e| panic!("parse failed: {e:?}"));
     let mut sess = Session::new();
     let m = lower(&module, &mut sess).unwrap_or_else(|e| panic!("lower failed: {e:?}"));
     (m, sess)
@@ -66,7 +71,9 @@ fn totality_nested_fn() {
 
 #[test]
 fn totality_if_elif_else() {
-    lower_ok("fn f(x: i64) -> i64:\n    if x > 0:\n        return 1\n    elif x < 0:\n        return -1\n    else:\n        return 0\n");
+    lower_ok(
+        "fn f(x: i64) -> i64:\n    if x > 0:\n        return 1\n    elif x < 0:\n        return -1\n    else:\n        return 0\n",
+    );
 }
 
 #[test]
@@ -81,7 +88,9 @@ fn totality_for_loop() {
 
 #[test]
 fn totality_try_except() {
-    lower_ok("let ValueError = 0\nfn f():\n    try:\n        pass\n    except ValueError as e:\n        pass\n");
+    lower_ok(
+        "let ValueError = 0\nfn f():\n    try:\n        pass\n    except ValueError as e:\n        pass\n",
+    );
 }
 
 #[test]
@@ -133,7 +142,8 @@ fn totality_augmented_assign() {
 
 #[test]
 fn defid_monotonic_fn_params() {
-    let (m, sess) = lower_with_session("fn f(a: i64, b: i64, c: i64) -> i64:\n    return a + b + c\n");
+    let (m, sess) =
+        lower_with_session("fn f(a: i64, b: i64, c: i64) -> i64:\n    return a + b + c\n");
     // 4 bindings: f (module), a, b, c = at least 4 total
     let total = sess.defs.count();
     assert!(total >= 4, "expected at least 4 DefIds, got {total}");
@@ -142,9 +152,7 @@ fn defid_monotonic_fn_params() {
 
 #[test]
 fn defid_monotonic_let_bindings() {
-    let (_, sess) = lower_with_session(
-        "let a: i64 = 1\nlet b: i64 = 2\nlet c: i64 = 3\n",
-    );
+    let (_, sess) = lower_with_session("let a: i64 = 1\nlet b: i64 = 2\nlet c: i64 = 3\n");
     // 3 let bindings = 3 DefIds minimum
     assert!(sess.defs.count() >= 3);
 }
@@ -153,11 +161,22 @@ fn defid_monotonic_let_bindings() {
 fn defid_unique_per_binding_site() {
     // Two functions — prebind_items assigns distinct DefIds to each
     let (m, _) = lower_with_session("fn f() -> i64:\n    return 1\nfn g() -> i64:\n    return 2\n");
-    let fn_ids: Vec<u32> = m.items.iter().filter_map(|i| {
-        if let h::ItemKind::Fn(f) = &i.kind { Some(f.def_id.0) } else { None }
-    }).collect();
+    let fn_ids: Vec<u32> = m
+        .items
+        .iter()
+        .filter_map(|i| {
+            if let h::ItemKind::Fn(f) = &i.kind {
+                Some(f.def_id.0)
+            } else {
+                None
+            }
+        })
+        .collect();
     assert_eq!(fn_ids.len(), 2);
-    assert_ne!(fn_ids[0], fn_ids[1], "distinct fns must have distinct DefIds");
+    assert_ne!(
+        fn_ids[0], fn_ids[1],
+        "distinct fns must have distinct DefIds"
+    );
 }
 
 #[test]
@@ -246,7 +265,10 @@ fn suggestion_populated_duplicate_binding() {
     let err = lower_err("fn f(y: i64, y: i64) -> i64:\n    return y\n");
     match &err {
         LoweringError::DuplicateBinding { suggestion, .. } => {
-            assert!(suggestion.is_some(), "DuplicateBinding must have suggestion");
+            assert!(
+                suggestion.is_some(),
+                "DuplicateBinding must have suggestion"
+            );
         }
         _ => {}
     }
@@ -264,7 +286,10 @@ fn suggestion_text_unknown_name() {
         span: Span::point(FileId::SYNTHETIC, 0),
         suggestion: Some("declare x with let"),
     };
-    assert_eq!(lowering_error_suggestion_text(&e), Some("declare x with let"));
+    assert_eq!(
+        lowering_error_suggestion_text(&e),
+        Some("declare x with let")
+    );
 }
 
 #[test]
@@ -336,16 +361,42 @@ fn fix_safety_code_in_range() {
     use cobrust_frontend::span::Span;
     let s = Span::point(FileId::SYNTHETIC, 0);
     let variants = vec![
-        LoweringError::UnknownName { name: "x".into(), span: s, suggestion: None },
-        LoweringError::DroppedFeature { name: "del", span: s, suggestion: None },
-        LoweringError::MutableDefault { span: s, suggestion: None },
-        LoweringError::OrPatternBindingMismatch { span: s, suggestion: None },
-        LoweringError::DuplicateBinding { name: "x".into(), first: s, second: s, suggestion: None },
-        LoweringError::AssignToUnknown { name: "x".into(), span: s, suggestion: None },
+        LoweringError::UnknownName {
+            name: "x".into(),
+            span: s,
+            suggestion: None,
+        },
+        LoweringError::DroppedFeature {
+            name: "del",
+            span: s,
+            suggestion: None,
+        },
+        LoweringError::MutableDefault {
+            span: s,
+            suggestion: None,
+        },
+        LoweringError::OrPatternBindingMismatch {
+            span: s,
+            suggestion: None,
+        },
+        LoweringError::DuplicateBinding {
+            name: "x".into(),
+            first: s,
+            second: s,
+            suggestion: None,
+        },
+        LoweringError::AssignToUnknown {
+            name: "x".into(),
+            span: s,
+            suggestion: None,
+        },
     ];
     for v in &variants {
         let code = lowering_error_fix_safety_code(v);
-        assert!(code <= 5, "fix_safety_code({v:?}) = {code} is out of range [0..5]");
+        assert!(
+            code <= 5,
+            "fix_safety_code({v:?}) = {code} is out of range [0..5]"
+        );
     }
 }
 
@@ -357,7 +408,11 @@ fn fix_safety_unknown_name_is_local_edit() {
         span: Span::point(FileId::SYNTHETIC, 0),
         suggestion: None,
     };
-    assert_eq!(lowering_error_fix_safety_code(&e), 2, "UnknownName = LocalEdit (2)");
+    assert_eq!(
+        lowering_error_fix_safety_code(&e),
+        2,
+        "UnknownName = LocalEdit (2)"
+    );
 }
 
 #[test]
@@ -368,7 +423,11 @@ fn fix_safety_dropped_feature_is_human_review() {
         span: Span::point(FileId::SYNTHETIC, 0),
         suggestion: None,
     };
-    assert_eq!(lowering_error_fix_safety_code(&e), 5, "DroppedFeature = RequiresHumanReview (5)");
+    assert_eq!(
+        lowering_error_fix_safety_code(&e),
+        5,
+        "DroppedFeature = RequiresHumanReview (5)"
+    );
 }
 
 // =====================================================================
@@ -408,7 +467,9 @@ fn let_lower_preserves_annotation() {
 fn import_lower_preserves_path() {
     let m = lower_ok("import os.path as p\n");
     match &m.items[0].kind {
-        h::ItemKind::Import { path, local_name, .. } => {
+        h::ItemKind::Import {
+            path, local_name, ..
+        } => {
             assert_eq!(path, &["os".to_string(), "path".to_string()]);
             assert_eq!(local_name, "p");
         }
@@ -420,7 +481,11 @@ fn import_lower_preserves_path() {
 fn from_import_lower_from_name() {
     let m = lower_ok("from math import pi as euler_pi\n");
     match &m.items[0].kind {
-        h::ItemKind::Import { from_name, local_name, .. } => {
+        h::ItemKind::Import {
+            from_name,
+            local_name,
+            ..
+        } => {
             assert_eq!(from_name.as_deref(), Some("pi"));
             assert_eq!(local_name, "euler_pi");
         }

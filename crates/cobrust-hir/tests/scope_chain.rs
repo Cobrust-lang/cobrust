@@ -1,5 +1,7 @@
 #![allow(clippy::items_after_statements)]
 #![allow(clippy::too_many_lines)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::single_match)]
 //! Scope chain + bind_let_shadow tests (CQ P1-2).
 //!
 //! ADR-0005 §"Scoping" + ADR-0052a §4.4 invariants:
@@ -9,12 +11,12 @@
 //! - scope close restores parent correctly
 //! - DefAllocator never produces duplicate ids
 
-use cobrust_frontend::span::{FileId, Span};
-use cobrust_hir::scope::{DefAllocator, DefId, DefKind, Scope};
 use cobrust_frontend::ast;
 use cobrust_frontend::parse_str;
-use cobrust_hir::{lower, Session};
+use cobrust_frontend::span::{FileId, Span};
+use cobrust_hir::scope::{DefAllocator, DefId, DefKind, Scope};
 use cobrust_hir::tree as h;
+use cobrust_hir::{Session, lower};
 
 // =====================================================================
 // Scope unit tests — Scope::bind, resolve, close, bind_let_shadow
@@ -48,7 +50,10 @@ fn scope_bind_duplicate_returns_err() {
     let id2 = alloc.fresh();
     s.bind("x", id1, DefKind::LetBinding, make_span()).unwrap();
     let result = s.bind("x", id2, DefKind::LetBinding, make_span());
-    assert!(result.is_err(), "duplicate binding in same scope must return Err");
+    assert!(
+        result.is_err(),
+        "duplicate binding in same scope must return Err"
+    );
 }
 
 #[test]
@@ -82,7 +87,9 @@ fn scope_child_inherits_parent() {
     let mut parent = Scope::new();
     let mut alloc = DefAllocator::default();
     let id = alloc.fresh();
-    parent.bind("outer", id, DefKind::LetBinding, make_span()).unwrap();
+    parent
+        .bind("outer", id, DefKind::LetBinding, make_span())
+        .unwrap();
 
     let child = Scope::child(parent);
     let resolved = child.resolve("outer");
@@ -94,11 +101,15 @@ fn scope_child_shadows_parent() {
     let mut parent = Scope::new();
     let mut alloc = DefAllocator::default();
     let outer_id = alloc.fresh();
-    parent.bind("x", outer_id, DefKind::LetBinding, make_span()).unwrap();
+    parent
+        .bind("x", outer_id, DefKind::LetBinding, make_span())
+        .unwrap();
 
     let mut child = Scope::child(parent);
     let inner_id = alloc.fresh();
-    child.bind("x", inner_id, DefKind::LetBinding, make_span()).unwrap();
+    child
+        .bind("x", inner_id, DefKind::LetBinding, make_span())
+        .unwrap();
 
     // Child sees inner binding
     assert_eq!(child.resolve("x"), Some((inner_id, DefKind::LetBinding)));
@@ -109,11 +120,15 @@ fn scope_close_restores_parent() {
     let mut parent = Scope::new();
     let mut alloc = DefAllocator::default();
     let outer_id = alloc.fresh();
-    parent.bind("x", outer_id, DefKind::LetBinding, make_span()).unwrap();
+    parent
+        .bind("x", outer_id, DefKind::LetBinding, make_span())
+        .unwrap();
 
     let mut child = Scope::child(parent);
     let inner_id = alloc.fresh();
-    child.bind("x", inner_id, DefKind::LetBinding, make_span()).unwrap();
+    child
+        .bind("x", inner_id, DefKind::LetBinding, make_span())
+        .unwrap();
 
     let restored = child.close();
     // After close, inner binding is gone, outer is visible again
@@ -125,7 +140,8 @@ fn scope_binds_locally_true() {
     let mut s = Scope::new();
     let mut alloc = DefAllocator::default();
     let id = alloc.fresh();
-    s.bind("local", id, DefKind::LetBinding, make_span()).unwrap();
+    s.bind("local", id, DefKind::LetBinding, make_span())
+        .unwrap();
     assert!(s.binds_locally("local"));
 }
 
@@ -134,7 +150,9 @@ fn scope_binds_locally_false_for_parent() {
     let mut parent = Scope::new();
     let mut alloc = DefAllocator::default();
     let id = alloc.fresh();
-    parent.bind("from_parent", id, DefKind::LetBinding, make_span()).unwrap();
+    parent
+        .bind("from_parent", id, DefKind::LetBinding, make_span())
+        .unwrap();
     let child = Scope::child(parent);
     // binds_locally checks ONLY current scope, not parent
     assert!(!child.binds_locally("from_parent"));
@@ -172,7 +190,10 @@ fn def_allocator_monotonic() {
     let mut alloc = DefAllocator::default();
     let ids: Vec<DefId> = (0..10).map(|_| alloc.fresh()).collect();
     for i in 1..ids.len() {
-        assert!(ids[i].0 > ids[i - 1].0, "DefIds must be strictly increasing");
+        assert!(
+            ids[i].0 > ids[i - 1].0,
+            "DefIds must be strictly increasing"
+        );
     }
 }
 
@@ -200,15 +221,15 @@ fn def_allocator_no_duplicates() {
 // =====================================================================
 
 fn lower_ok(src: &str) -> h::Module {
-    let module: ast::Module = parse_str(src, FileId::SYNTHETIC)
-        .unwrap_or_else(|e| panic!("parse failed: {e:?}"));
+    let module: ast::Module =
+        parse_str(src, FileId::SYNTHETIC).unwrap_or_else(|e| panic!("parse failed: {e:?}"));
     let mut sess = Session::new();
     lower(&module, &mut sess).unwrap_or_else(|e| panic!("lower failed: {e:?}"))
 }
 
 fn lower_err_src(src: &str) -> cobrust_hir::error::LoweringError {
-    let module: ast::Module = parse_str(src, FileId::SYNTHETIC)
-        .unwrap_or_else(|e| panic!("parse failed: {e:?}"));
+    let module: ast::Module =
+        parse_str(src, FileId::SYNTHETIC).unwrap_or_else(|e| panic!("parse failed: {e:?}"));
     let mut sess = Session::new();
     lower(&module, &mut sess)
         .map(|_| panic!("expected error"))
@@ -239,7 +260,9 @@ fn integration_forward_reference_module_fns() {
 #[test]
 fn integration_fn_fn_shadow_user_overrides() {
     // User's definition of `sqrt` shadows any PRELUDE stub
-    lower_ok("fn sqrt(x: f64) -> f64:\n    return x\nfn sqrt(x: f64) -> f64:\n    return x * 2.0\n");
+    lower_ok(
+        "fn sqrt(x: f64) -> f64:\n    return x\nfn sqrt(x: f64) -> f64:\n    return x * 2.0\n",
+    );
 }
 
 #[test]
@@ -261,15 +284,15 @@ fn integration_param_binding_resolved_in_body() {
 #[test]
 fn integration_for_loop_binding_visible_in_body() {
     // loop variable is bound in for body
-    lower_ok("fn f(xs: list[i64]) -> i64:\n    let acc: i64 = 0\n    for x in xs:\n        acc += x\n    return acc\n");
+    lower_ok(
+        "fn f(xs: list[i64]) -> i64:\n    let acc: i64 = 0\n    for x in xs:\n        acc += x\n    return acc\n",
+    );
 }
 
 #[test]
 fn integration_match_arm_binding() {
     // Pattern binding in match arm is scoped to arm body
-    lower_ok(
-        "fn f(x: i64) -> i64:\n    match x:\n        case y:\n            return y\n",
-    );
+    lower_ok("fn f(x: i64) -> i64:\n    match x:\n        case y:\n            return y\n");
 }
 
 #[test]
@@ -284,5 +307,7 @@ fn integration_comprehension_variable_not_leaking() {
 #[test]
 fn integration_nested_fn_sees_outer_defined_names() {
     // Inner fn can reference module-level names (forward refs resolved by prebind)
-    lower_ok("let CONST: i64 = 42\nfn outer():\n    fn inner() -> i64:\n        return CONST\n    pass\n");
+    lower_ok(
+        "let CONST: i64 = 42\nfn outer():\n    fn inner() -> i64:\n        return CONST\n    pass\n",
+    );
 }

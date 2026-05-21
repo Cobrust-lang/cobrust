@@ -1,5 +1,8 @@
 #![allow(clippy::items_after_statements)]
 #![allow(clippy::too_many_lines)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::match_wildcard_for_single_variants)]
+#![allow(clippy::match_same_arms)]
 //! Lexer token-boundary and error-path tests (CQ P1-1 bump).
 //!
 //! Each test exercises a specific boundary in the lexer:
@@ -42,9 +45,7 @@ fn lex_all(src: &str) -> Vec<TokenKind> {
 }
 
 fn lex_err(src: &str) -> LexError {
-    match parse_str(src, FileId::SYNTHETIC)
-        .unwrap_err()
-    {
+    match parse_str(src, FileId::SYNTHETIC).unwrap_err() {
         FrontendError::Lex(l) => l,
         FrontendError::Parse(p) => panic!("expected LexError, got ParseError: {p:?}"),
     }
@@ -270,8 +271,14 @@ fn indent_dedent_single_level() {
 fn indent_dedent_nested() {
     let src = "fn f():\n    if True:\n        pass\n";
     let toks = lex_all(src);
-    let indent_count = toks.iter().filter(|k| matches!(k, TokenKind::Indent)).count();
-    let dedent_count = toks.iter().filter(|k| matches!(k, TokenKind::Dedent)).count();
+    let indent_count = toks
+        .iter()
+        .filter(|k| matches!(k, TokenKind::Indent))
+        .count();
+    let dedent_count = toks
+        .iter()
+        .filter(|k| matches!(k, TokenKind::Dedent))
+        .count();
     assert_eq!(indent_count, dedent_count, "Indent/Dedent must be balanced");
     assert_eq!(indent_count, 2, "two levels of nesting = 2 Indent tokens");
 }
@@ -281,7 +288,10 @@ fn no_indent_in_expression_continuation() {
     // Inside brackets, physical newlines are line joins — no Indent/Dedent
     let src = "[\n    1,\n    2,\n]\n";
     let toks = lex_all(src);
-    let indent_count = toks.iter().filter(|k| matches!(k, TokenKind::Indent)).count();
+    let indent_count = toks
+        .iter()
+        .filter(|k| matches!(k, TokenKind::Indent))
+        .count();
     assert_eq!(indent_count, 0, "no Indent inside brackets");
 }
 
@@ -346,8 +356,7 @@ fn line_continuation_joins_lines() {
     // Backslash at end of line joins the next line
     let src = "1 +\\\n2\n";
     // Should parse as "1 + 2" without a Newline between
-    let m = parse_str(src, FileId::SYNTHETIC)
-        .expect("line continuation should parse");
+    let m = parse_str(src, FileId::SYNTHETIC).expect("line continuation should parse");
     assert!(!m.items.is_empty());
 }
 
@@ -410,8 +419,5 @@ fn op_slash_slash_vs_slash() {
 #[test]
 fn op_arrow_recognized() {
     let ks = lex_kinds("-> i64\n");
-    assert!(
-        matches!(&ks[0], TokenKind::Arrow),
-        "expected Arrow token"
-    );
+    assert!(matches!(&ks[0], TokenKind::Arrow), "expected Arrow token");
 }

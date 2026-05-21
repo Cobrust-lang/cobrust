@@ -8,8 +8,8 @@
 
 use cobrust_frontend::ast::{BinOp, ExprKind, Literal, StmtKind, UnaryOp};
 use cobrust_frontend::error::{FrontendError, ParseError};
-use cobrust_frontend::span::FileId;
 use cobrust_frontend::parse_str;
+use cobrust_frontend::span::FileId;
 
 // =====================================================================
 // Helpers
@@ -99,7 +99,13 @@ fn prec_bitxor_over_bitor() {
         ExprKind::Binary { op, lhs, .. } => {
             assert_eq!(op, &BinOp::BitOr);
             assert!(
-                matches!(&lhs.kind, ExprKind::Binary { op: BinOp::BitXor, .. }),
+                matches!(
+                    &lhs.kind,
+                    ExprKind::Binary {
+                        op: BinOp::BitXor,
+                        ..
+                    }
+                ),
                 "lhs must be BitXor"
             );
         }
@@ -163,7 +169,13 @@ fn prec_not_over_and() {
         ExprKind::Binary { op, lhs, .. } => {
             assert_eq!(op, &BinOp::And);
             assert!(
-                matches!(&lhs.kind, ExprKind::Unary { op: UnaryOp::Not, .. }),
+                matches!(
+                    &lhs.kind,
+                    ExprKind::Unary {
+                        op: UnaryOp::Not,
+                        ..
+                    }
+                ),
                 "lhs must be Unary(Not)"
             );
         }
@@ -180,7 +192,13 @@ fn prec_bitand_over_bitxor() {
         ExprKind::Binary { op, rhs, .. } => {
             assert_eq!(op, &BinOp::BitXor);
             assert!(
-                matches!(&rhs.kind, ExprKind::Binary { op: BinOp::BitAnd, .. }),
+                matches!(
+                    &rhs.kind,
+                    ExprKind::Binary {
+                        op: BinOp::BitAnd,
+                        ..
+                    }
+                ),
                 "rhs must be BitAnd"
             );
         }
@@ -207,7 +225,10 @@ fn cmp_not_in_operator() {
     // Canonical workaround: `not (x in coll)` — unary Not over BinOp::In.
     let e = first_expr("not (x in [1, 2])\n");
     match &e.kind {
-        ExprKind::Unary { op: UnaryOp::Not, operand } => {
+        ExprKind::Unary {
+            op: UnaryOp::Not,
+            operand,
+        } => {
             assert!(
                 matches!(&operand.kind, ExprKind::Binary { op: BinOp::In, .. }),
                 "operand must be Binary(In)"
@@ -230,7 +251,13 @@ fn cmp_eq_operator() {
 fn cmp_neq_operator() {
     let e = first_expr("a != b\n");
     assert!(
-        matches!(&e.kind, ExprKind::Binary { op: BinOp::NotEq, .. }),
+        matches!(
+            &e.kind,
+            ExprKind::Binary {
+                op: BinOp::NotEq,
+                ..
+            }
+        ),
         "expected Binary(NotEq), got {e:?}"
     );
 }
@@ -242,9 +269,21 @@ fn cmp_lt_and_gt() {
     let gt = first_expr("a > b\n");
     assert!(matches!(&gt.kind, ExprKind::Binary { op: BinOp::Gt, .. }));
     let lte = first_expr("a <= b\n");
-    assert!(matches!(&lte.kind, ExprKind::Binary { op: BinOp::LtEq, .. }));
+    assert!(matches!(
+        &lte.kind,
+        ExprKind::Binary {
+            op: BinOp::LtEq,
+            ..
+        }
+    ));
     let gte = first_expr("a >= b\n");
-    assert!(matches!(&gte.kind, ExprKind::Binary { op: BinOp::GtEq, .. }));
+    assert!(matches!(
+        &gte.kind,
+        ExprKind::Binary {
+            op: BinOp::GtEq,
+            ..
+        }
+    ));
 }
 
 // =====================================================================
@@ -259,7 +298,13 @@ fn unary_double_neg_parens() {
         ExprKind::Unary { op, operand } => {
             assert_eq!(op, &UnaryOp::Neg);
             assert!(
-                matches!(&operand.kind, ExprKind::Unary { op: UnaryOp::Neg, .. }),
+                matches!(
+                    &operand.kind,
+                    ExprKind::Unary {
+                        op: UnaryOp::Neg,
+                        ..
+                    }
+                ),
                 "operand must be Unary(Neg)"
             );
         }
@@ -274,7 +319,13 @@ fn unary_bitnot_chain() {
         ExprKind::Unary { op, operand } => {
             assert_eq!(op, &UnaryOp::BitNot);
             assert!(
-                matches!(&operand.kind, ExprKind::Unary { op: UnaryOp::BitNot, .. }),
+                matches!(
+                    &operand.kind,
+                    ExprKind::Unary {
+                        op: UnaryOp::BitNot,
+                        ..
+                    }
+                ),
                 "inner must be BitNot"
             );
         }
@@ -286,7 +337,13 @@ fn unary_bitnot_chain() {
 fn unary_pos() {
     let e = first_expr("+x\n");
     assert!(
-        matches!(&e.kind, ExprKind::Unary { op: UnaryOp::Plus, .. }),
+        matches!(
+            &e.kind,
+            ExprKind::Unary {
+                op: UnaryOp::Plus,
+                ..
+            }
+        ),
         "expected Unary(Plus)"
     );
 }
@@ -295,7 +352,13 @@ fn unary_pos() {
 fn unary_not_bool() {
     let e = first_expr("not x\n");
     assert!(
-        matches!(&e.kind, ExprKind::Unary { op: UnaryOp::Not, .. }),
+        matches!(
+            &e.kind,
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                ..
+            }
+        ),
         "expected Unary(Not)"
     );
 }
@@ -334,7 +397,12 @@ fn expr_too_deep_suggestion_populated() {
     let src = format!("{open}1{close}\n");
     let err = parse_err(&src);
     match err {
-        ParseError::ExpressionTooDeep { suggestion, depth, max, .. } => {
+        ParseError::ExpressionTooDeep {
+            suggestion,
+            depth,
+            max,
+            ..
+        } => {
             assert!(
                 suggestion.is_some(),
                 "ExpressionTooDeep must carry a suggestion per §2.5 Direction B"
@@ -408,7 +476,13 @@ fn floor_div_and_mod_same_prec_left_assoc() {
         ExprKind::Binary { op, lhs, .. } => {
             assert_eq!(op, &BinOp::Mod);
             assert!(
-                matches!(&lhs.kind, ExprKind::Binary { op: BinOp::FloorDiv, .. }),
+                matches!(
+                    &lhs.kind,
+                    ExprKind::Binary {
+                        op: BinOp::FloorDiv,
+                        ..
+                    }
+                ),
                 "lhs must be FloorDiv"
             );
         }
@@ -421,7 +495,13 @@ fn matmul_operator() {
     // A @ B — matrix multiply
     let e = first_expr("A @ B\n");
     assert!(
-        matches!(&e.kind, ExprKind::Binary { op: BinOp::MatMul, .. }),
+        matches!(
+            &e.kind,
+            ExprKind::Binary {
+                op: BinOp::MatMul,
+                ..
+            }
+        ),
         "expected Binary(MatMul), got {e:?}"
     );
 }

@@ -1,4 +1,8 @@
 #![allow(clippy::items_after_statements)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::single_match)]
+#![allow(clippy::match_wildcard_for_single_variants)]
+#![allow(clippy::match_same_arms)]
 //! Exhaustive ParseError variant tests — verifies every variant is
 //! triggerable from source input and that each `suggestion` field
 //! is populated per CLAUDE.md §2.5 Direction B (LLM-first error UX).
@@ -6,18 +10,16 @@
 //! Also tests `parse_error_suggestion_text()` mirror helper. CQ P0-3
 //! follow-on + CQ P1-1 coverage bump.
 
-use cobrust_frontend::error::{parse_error_suggestion_text, FrontendError, ParseError};
-use cobrust_frontend::span::FileId;
+use cobrust_frontend::error::{FrontendError, ParseError, parse_error_suggestion_text};
 use cobrust_frontend::parse_str;
+use cobrust_frontend::span::FileId;
 
 // =====================================================================
 // Helpers
 // =====================================================================
 
 fn parse_err(src: &str) -> ParseError {
-    match parse_str(src, FileId::SYNTHETIC)
-        .expect_err(&format!("expected error from: {src:?}"))
-    {
+    match parse_str(src, FileId::SYNTHETIC).expect_err(&format!("expected error from: {src:?}")) {
         FrontendError::Parse(p) => p,
         FrontendError::Lex(l) => panic!("expected ParseError, got LexError: {l:?}"),
     }
@@ -32,7 +34,10 @@ fn expected_variant_triggers() {
     // `fn f(` — missing `)` then body
     let err = parse_err("fn f(\n");
     assert!(
-        matches!(err, ParseError::Expected { .. } | ParseError::UnexpectedEof { .. }),
+        matches!(
+            err,
+            ParseError::Expected { .. } | ParseError::UnexpectedEof { .. }
+        ),
         "expected Expected or UnexpectedEof, got {err:?}"
     );
 }
@@ -42,7 +47,9 @@ fn expected_variant_has_found_and_expected_fields() {
     // Trigger Expected by missing `:` after fn signature
     let err = parse_err("fn f() pass\n");
     match &err {
-        ParseError::Expected { expected, found, .. } => {
+        ParseError::Expected {
+            expected, found, ..
+        } => {
             assert!(!expected.is_empty(), "expected list must be non-empty");
             let _ = found; // just ensure it's present
         }
@@ -122,7 +129,10 @@ fn dropped_del_stmt() {
 fn dropped_global_stmt() {
     let err = parse_err("global x\n");
     assert!(
-        matches!(err, ParseError::DroppedByConstitution { name: "global", .. }),
+        matches!(
+            err,
+            ParseError::DroppedByConstitution { name: "global", .. }
+        ),
         "expected DroppedByConstitution(global), got {err:?}"
     );
 }
@@ -131,7 +141,13 @@ fn dropped_global_stmt() {
 fn dropped_nonlocal_stmt() {
     let err = parse_err("nonlocal x\n");
     assert!(
-        matches!(err, ParseError::DroppedByConstitution { name: "nonlocal", .. }),
+        matches!(
+            err,
+            ParseError::DroppedByConstitution {
+                name: "nonlocal",
+                ..
+            }
+        ),
         "expected DroppedByConstitution(nonlocal), got {err:?}"
     );
 }
@@ -194,7 +210,12 @@ fn expression_too_deep_variant() {
     let src = format!("{open}1{close}\n");
     let err = parse_err(&src);
     match &err {
-        ParseError::ExpressionTooDeep { depth, max, suggestion, .. } => {
+        ParseError::ExpressionTooDeep {
+            depth,
+            max,
+            suggestion,
+            ..
+        } => {
             assert!(*depth > *max, "depth must exceed max");
             assert!(
                 suggestion.is_some(),
@@ -264,10 +285,7 @@ fn suggestion_mirror_non_literal_default() {
         span: cobrust_frontend::span::Span::point(FileId::SYNTHETIC, 0),
         suggestion: Some("use a literal value"),
     };
-    assert_eq!(
-        parse_error_suggestion_text(&e),
-        Some("use a literal value")
-    );
+    assert_eq!(parse_error_suggestion_text(&e), Some("use a literal value"));
 }
 
 #[test]
