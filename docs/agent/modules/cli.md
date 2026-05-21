@@ -896,16 +896,16 @@ Three integration tests in `crates/cobrust-cli/tests/test_skills.rs` (F34: test-
 
 ---
 
-## `cobrust install` subcommand (Phase O W2 — ADR-0065 §7.2)
+## `cobrust install` subcommand (Phase O W4 — ADR-0065 §7.4)
 
 **Module**: `crates/cobrust-cli/src/install.rs`
 **Anchor**: install-v1
-**Status**: SHIPPED (Phase O W2, feature/tier3-w2-install)
+**Status**: SHIPPED (Phase O W4, feature/tier3-w4-abi)
 
 ### Public surface
 
 ```
-cobrust install <pkg_name> [--version <ver>] [--registry-url <url>] [--dry-run]
+cobrust install <pkg_name> [--version <ver>] [--registry-url <url>] [--dry-run] [--allow-experimental]
 ```
 
 Argument schema (clap-derived):
@@ -913,16 +913,17 @@ Argument schema (clap-derived):
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
 | `pkg_name` | `String` | yes | — | Package name (e.g. `numpy-cb`) |
-| `--version` | `Option<String>` | required in W2 | — | Explicit version pin; transitive resolution lands W3+ |
+| `--version` | `Option<String>` | required | — | Explicit version pin |
 | `--registry-url` | `Option<String>` | no | `DEFAULT_REGISTRY_URL` | GitHub Releases base URL |
 | `--dry-run` | `bool` flag | no | `false` | Resolve + select but no disk writes |
+| `--allow-experimental` | `bool` flag | no | `false` | Allow SVE or other experimental wheels (ADR-0065 §3.1/§6.5) |
 
 ### Dispatch contract
 
 `install::run(InstallArgs) -> u8` — exit code per `exit_codes.rs`:
 
 - `SUCCESS = 0` — install completed (or dry-run reported wheel).
-- `USER_ERROR = 1` — registry failure, no matching wheel, ABI mismatch, missing required `--version`.
+- `USER_ERROR = 1` — registry failure, no matching wheel, ABI mismatch, experimental not allowed, missing `--version`.
 
 ### Errors emitted (all carry `suggestion:`)
 
@@ -930,10 +931,23 @@ Argument schema (clap-derived):
 |---|---|---|
 | `RegistryClientError::BadStatus` | non-2xx HTTP from registry | verify pkg name + version, or override `--registry-url` |
 | `RegistryClientError::Parse` | malformed wheels.json | format drift; file an issue |
-| `RegistryClientError::Sha256Mismatch` | downloaded payload SHA != index advert | re-run with `--force` or pin known-good version |
+| `RegistryClientError::Sha256Mismatch` | downloaded payload SHA != index | re-run with `--force` or pin known-good version |
 | `InstallError::NoMatchingWheel` | no wheel for host triple | not built for your platform; check Releases or build from source |
 | `InstallError::AbiMismatch` | wheel `cobrust_abi` semver-major != installer | upgrade `cobrust` or pin older package |
+| `InstallError::AbiVersionMismatch` | wheel `cobrust_abi_version` != `COBRUST_ABI_VERSION` | upgrade `cobrust` or install older wheel |
+| `InstallError::ExperimentalNotAllowed` | experimental wheel without `--allow-experimental` | re-run with `--allow-experimental` flag |
 | `InstallError::MissingVersion` | `--version` omitted | pass `cobrust install <pkg>@<version>` |
+
+### ABI version check (W4 — ADR-0065 §6.4)
+
+`select_wheel` now filters wheels by `cobrust_abi_version == COBRUST_ABI_VERSION` before the
+tier-priority pass. This closes the dependency-closure ABI mixing gap. `COBRUST_ABI_VERSION = 1`
+for v0.4.0.
+
+### SVE experimental flag (W4 — ADR-0065 §3.1 / §6.5)
+
+Wheels with `experimental = true` (currently SVE) are skipped unless `allow_experimental = true`.
+When both stable (e.g. neon) and experimental (sve) wheels exist, stable is always preferred.
 
 ### Side-effect contract
 
@@ -950,9 +964,10 @@ When `dry_run = true`: zero filesystem writes, but the wheel index is still fetc
 | File | Tests | Assertion |
 |---|---|---|
 | `crates/cobrust-pkg/tests/cpu_detect_tests.rs` | 3 | host-arch variant; valid suffix; baseline fallback |
-| `crates/cobrust-pkg/tests/wheel_select_tests.rs` | 5 | exact / baseline-fallback / no-match / multi-tier / Apple-M1 |
+| `crates/cobrust-pkg/tests/wheel_select_tests.rs` | 5 | exact / baseline-fallback / no-match-err / multi-tier / Apple-M1 |
 | `crates/cobrust-pkg/tests/registry_client_tests.rs` | 3 | `fetch_index` JSON; SHA match; SHA mismatch error |
 | `crates/cobrust-cli/tests/install_subcommand.rs` | 3 | `--help` exit 0 + flag list; missing `--version` non-zero; `--dry-run` happy path against mock |
+| `crates/cobrust-cli/tests/install_cpu_class_smoke.rs` | 4 | v3 match / v1 fallback / SVE requires flag / neon-over-SVE |
 
 ### Crate dependencies
 

@@ -40,12 +40,15 @@ to select the best wheel for their host CPU.
 - One entry per `(triple, cpu_level)` variant.
 - `cpu_level` values: `v1` / `v3` / `v4` (x86-64), `neon` / `sve`
   (aarch64 Linux), `m1` / `m2` (Apple Silicon).
+- `cobrust_abi_version` — numeric ABI version (default `1`). `cobrust install` rejects wheels
+  with a mismatching ABI version before tier selection.
+- `experimental` — `true` for SVE wheels (ADR-0065 §6.5). Requires `--allow-experimental` to install.
 
 ## Using `cobrust-registry-gen`
 
 ```bash
 cobrust-registry-gen numpy-cb 0.1.0
-# writes pkg-index/numpy-cb-0.1.0.json
+# writes pkg-index/numpy-cb-0.1.0.json (with sha256 populated from SHA256SUMS asset)
 ```
 
 Options:
@@ -53,8 +56,20 @@ Options:
 - `--out-dir <dir>` — default: `pkg-index/`
 - Set `GITHUB_TOKEN` for authenticated API access (higher rate limits)
 
-## Known gap: SHA-256
+## SHA-256 (W4 — resolved)
 
-The GitHub Releases API does not expose SHA-256 in asset metadata. The
-generated `wheels.json` leaves `sha256` as `""`. W4 will add a
-post-download SHA computation step to the release pipeline.
+`release.yml` now generates `SHA256SUMS` via `sha256sum cobrust-v*.tar.gz > SHA256SUMS` and uploads
+it as a release asset. `cobrust-registry-gen` downloads `SHA256SUMS` from the same release and
+populates each `WheelEntry::sha256` field. If `SHA256SUMS` is absent, the generator proceeds with
+`sha256 = ""` (warning printed to stderr).
+
+## Installing an SVE (experimental) wheel
+
+```bash
+cobrust install svecalc-cb --version 0.1.0 --allow-experimental
+# warning: experimental SVE wheel; only use if you understand the risks
+```
+
+SVE wheels are marked `experimental: true` because SVE ABI is not yet declared stable (ADR-0065 §6.5).
+Without `--allow-experimental`, `cobrust install` falls back to the `neon` baseline wheel if available,
+or returns an error if SVE is the only option.

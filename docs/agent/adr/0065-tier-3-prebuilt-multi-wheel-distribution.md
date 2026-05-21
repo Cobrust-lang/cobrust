@@ -3,7 +3,7 @@ doc_kind: adr
 adr_id: 0065
 name: 0065
 title: "Tier 3 prebuilt multi-wheel distribution — per-CPU sub-target + cobrust install package tool"
-status: partial (waves 1+2+3 shipped; wave 4 queued)
+status: "Phase O Tier 3 FULL SHIPPED 2026-05-21 (W1+W2+W3+W4)"
 date: 2026-05-20
 phase: Phase O (post-Phase-N packaging)
 relates_to: [adr:0026, adr:0046, adr:0058b, adr:0058e]
@@ -392,14 +392,22 @@ Delivered:
 - CDN mirror sync script and `cobrust.toml [registry]` wiring deferred to W4.
 - Prerequisite: wave-2 (registry client shape must be known). [satisfied]
 
-### 7.4 Phase O wave-4: SHA verification hardening + ABI tagging
+### 7.4 Phase O wave-4: SHA verification hardening + ABI tagging — SHIPPED
 
-- Enforce ABI dependency-closure check (§6.4).
-- Mark SVE wheels as `experimental` in index generator.
-- Integration smoke tests across 3 CPU classes (§5.2).
-- Audit `cobrust-wheel.toml` provenance fields against ADR-0007 L1 manifest
-  shape (translation provenance carried through wheel).
-- Prerequisite: wave-3 (registry + CDN must be operational).
+**Status**: SHIPPED. Commit chain: feat(pkg+registry) ABI fields → feat(release+registry) SHA256SUMS → tests(cli) 3-CPU-class smoke → docs W4.
+
+Deliverables:
+
+- `COBRUST_ABI_VERSION: u32 = 1` const in `cobrust-pkg::wheel_select`; `WheelMeta` gains `cobrust_abi_version: u32` + `experimental: bool` fields.
+- `select_wheel` now returns `Result<&WheelMeta, SelectError>`; three error cases map to distinct `InstallError` variants with `suggestion:` text.
+- `--allow-experimental` CLI flag added to `cobrust install`; required to install SVE wheels.
+- `release.yml`: `Generate SHA256SUMS` step + `SHA256SUMS` uploaded as release asset.
+- `cobrust-registry`: `fetch_sha256sums()` + `parse_sha256sums_text()` populate `WheelEntry::sha256`; `generate_index` extended with `sha256_map` parameter.
+- `GENERATOR_ABI_VERSION = 1` stamped into every generated `WheelEntry`.
+- SVE wheels (`cpu_level == "sve"`) auto-marked `experimental = true`.
+- 3-CPU-class integration smoke tests: v3 match, v1 fallback, SVE requires flag.
+- `cobrust-pkg` + `cobrust-registry` + `cobrust-cli` clippy/test clean.
+- Prerequisite: wave-3 (registry + CDN must be operational). [satisfied]
 
 ---
 
