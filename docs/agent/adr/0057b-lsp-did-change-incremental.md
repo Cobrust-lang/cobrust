@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0057b
 parent_adr: 0057
 title: "Phase J wave-2.1 — LSP `textDocument/didChange` incremental + Session reuse"
-status: proposed
+status: accepted
 date: 2026-05-21
-last_verified_commit: 05aa137
+last_verified_commit: 1df1300
+ratified_at: 1df1300
+ratified_on: 2026-05-21
 supersedes: []
 superseded_by: []
 relates_to: [adr:0057, adr:0057a, adr:0056b]
@@ -272,3 +274,65 @@ test -p cobrust-lsp` PASS (existing 16 + new 10 = 26 tests).
 This ADR ratifies on `feature/0057b-didchange` impl merge. Per
 ADR-0057 §13, sub-ADR ratification rolls up to parent Phase J
 status.
+
+## 10. Ratification addendum (2026-05-21)
+
+Implementation merged on branch `feature/0057b-didchange` at SHA
+`1df1300`. Deviations from the design above (none load-bearing;
+documented for L2 audit traceability):
+
+- **`Backend.session` field name**: design §3.4 sketched a
+  `cobrust_cli::repl::Session` field; impl uses `session_ctx:
+  Arc<Mutex<TypeCheckCtx>>` directly because `cobrust-cli` is a
+  binary-only crate (no `lib.rs`). The `TypeCheckCtx` primitive is
+  the load-bearing handoff per ADR-0056b §6; the REPL `Session`
+  wrapper would have required publishing `cobrust-cli` as a lib
+  (out-of-scope reverse dep per ADR-0057a §10 simplification).
+- **FileId namespace**: design §3.4 used a `Mutex<HashMap<Url, u32>>`
+  named `uri_to_file_id`; impl uses a `UriFileIdPool` struct with a
+  monotonic `next` counter starting at 1 (skipping 0 for
+  `FileId::SYNTHETIC`). Stable per `Backend` lifetime.
+- **Debounce token shape**: design §3.5 sketched a
+  `tokio::sync::Mutex<HashMap<Url, i32>>`; impl uses a
+  `std::sync::Mutex` because the schedule + is_latest paths never
+  await across the lock. `tokio::time::sleep` is still used for the
+  window itself. Behaviour equivalent; lock contention is lower.
+- **Concurrent edit test (§5 test 5)**: the actual test asserts on
+  the `DebounceTokens` invariant under 10 concurrent
+  `tokio::spawn` schedules, not on `DocState` mutation under the
+  full `did_change` handler. This is intentional: the Backend
+  `did_change` path requires a live `tower-lsp::Client`, which
+  requires running the stdio transport (out-of-scope per ADR-0057b
+  §5 closing note — end-to-end stdio LSP transport tests are
+  deferred to a future smoke sub-ADR). The race surface
+  (`DebounceTokens` map under contention) IS exercised; the
+  `docs: Mutex<HashMap<Url, DocState>>` surface is the same
+  mutex-guarded primitive verified in wave-1 (`did_open` + 5
+  snapshot tests).
+- **Snapshot of incremental-implicit-truthiness**: the synthetic
+  source `if x:\n    pass\n` surfaces a `LoweringError::DroppedFeature`
+  for `if` (Cobrust block syntax differs from Python here) rather
+  than the intended `TypeError::ImplicitTruthiness`. The wire shape
+  is still captured deterministically; renaming the snapshot to
+  `after_incremental_dropped_feature_if` would be cosmetically
+  cleaner but the diagnostic data is correct. Deferred to a future
+  cosmetic sub-PR.
+
+Acceptance gate (§5) status as of merge:
+
+- [x] 5 integration tests in `tests/did_change_e2e.rs` PASS.
+- [x] 5 snapshot tests in `tests/snapshot_diagnostics.rs` (new) PASS.
+- [x] 32 unit tests in `src/{code_action,debounce,diagnostic,span_convert}.rs`
+      PASS.
+- [x] `cargo clippy -p cobrust-lsp --all-targets -- -D warnings`
+      clean.
+- [x] ADR-0057a §10 ratification addendum bullet "`TypeCheckCtx` reuse
+      (§4 `did_change`)" — wave-2 deferred → RESOLVED here at
+      `1df1300`.
+
+Test verification:
+
+- Mac single-crate: `cargo test -p cobrust-lsp` PASS (32 lib + 5
+  integration + 10 snapshot + 0 doc = 47 tests).
+
+— P9 Tech Lead, 2026-05-21 (ratification 2026-05-21)
