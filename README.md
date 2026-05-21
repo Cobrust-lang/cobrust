@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue.svg)](#license)
-[![Stage](https://img.shields.io/badge/stage-0.3.0-orange.svg)](https://github.com/Cobrust-lang/cobrust/releases)
+[![Stage](https://img.shields.io/badge/stage-0.4.0-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.4.0)
 
 [**Why Cobrust?**](docs/post/why-cobrust.md) ·
 [**Quick Start**](#quick-start) ·
@@ -70,29 +70,41 @@ The wedge: **AI translates the existing Python ecosystem into Cobrust automatica
 ### Install
 
 ```bash
-# Via cargo (Rust toolchain required, 1.94+)
+# Option A — Via cargo (Rust toolchain required, 1.94+)
 cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
-# (crates.io publish queued for v0.3.0)
 
-# Or download a prebuilt binary (tier-1 targets per ADR-0046)
-# macOS arm64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-aarch64-apple-darwin.tar.gz | tar xz
-sudo mv cobrust /usr/local/bin/
-# Linux arm64
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-aarch64-unknown-linux-gnu.tar.gz | tar xz
-sudo mv cobrust /usr/local/bin/
-# Linux x86_64 (glibc — standard distros: Debian, Ubuntu, Fedora, RHEL)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
-sudo mv cobrust /usr/local/bin/
-# Linux x86_64 static musl — Alpine, distroless, minimal containers (no glibc required)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/latest/download/cobrust-v0.3.0-x86_64-unknown-linux-musl.tar.gz | tar xz
-sudo mv cobrust /usr/local/bin/
+# Option B — Download a prebuilt wheel (v0.4.0, 9 variants — pick your CPU tier)
+# Linux x86_64 baseline (v1 — any x86_64)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.4.0/cobrust-v0.4.0-x86_64-linux-gnu-v1.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# Linux x86_64 AVX2 (v3 — Haswell+, most post-2013 desktops/servers)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.4.0/cobrust-v0.4.0-x86_64-linux-gnu-v3.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# Linux x86_64 AVX-512 (v4 — Skylake-X / Ice Lake server)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.4.0/cobrust-v0.4.0-x86_64-linux-gnu-v4.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# Linux x86_64 musl v1 — Alpine, distroless, minimal containers (no glibc required)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.4.0/cobrust-v0.4.0-x86_64-linux-musl-v1.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# Linux x86_64 musl v3 — Alpine + AVX2
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.4.0/cobrust-v0.4.0-x86_64-linux-musl-v3.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# Linux aarch64 NEON (generic ARM64 — Graviton2, Ampere, Pi 4)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.4.0/cobrust-v0.4.0-aarch64-linux-gnu-neon.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# Linux aarch64 SVE (Neoverse V1/V2, Graviton3+)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.4.0/cobrust-v0.4.0-aarch64-linux-gnu-sve.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# macOS Apple Silicon M1 (baseline)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.4.0/cobrust-v0.4.0-aarch64-apple-darwin-m1.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# macOS Apple Silicon M2+ (AMX)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.4.0/cobrust-v0.4.0-aarch64-apple-darwin-m2.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+
+# SHA256SUMS: https://github.com/Cobrust-lang/cobrust/releases/download/v0.4.0/SHA256SUMS
+
+# Option C — cobrust install (Tier 3 wheel auto-select, end-to-end)
+cobrust install <pkg>
+# Detects CPU tier, fetches matching wheel, verifies SHA256, unpacks.
+# Matches pip install UX. Requires cobrust-cli already installed.
 ```
 
-> **Which Linux binary?** Use the `musl` variant for Alpine containers, scratch-based images,
-> or any environment without a glibc installation. Use the `gnu` variant on standard Linux
-> distributions (Debian, Ubuntu, Fedora, RHEL, Arch) that ship glibc.
-> Both are tier-1 targets; both are built and published on every release.
+> **Which wheel?** Use `musl` variants for Alpine / distroless / no-glibc containers.
+> Use `gnu` variants on standard Linux distributions (Debian, Ubuntu, Fedora, RHEL, Arch).
+> Use `v3` / `v4` / `neon` / `sve` / `m2` variants only if your CPU supports the instruction set —
+> all 9 wheels are published per release with SHA256SUMS.
 
 ### Hello world
 
@@ -165,7 +177,7 @@ See [docs/human/en/getting-started.md](docs/human/en/getting-started.md) for the
 
 Want to solve LeetCode problems in Cobrust? Two steps:
 
-1. Install Cobrust v0.3.0+ (see [Install](#install) above)
+1. Install Cobrust v0.4.0+ (see [Install](#install) above)
 2. Read the guide:
    - English: [LeetCode with Cobrust](docs/human/en/getting-started-leetcode.md)
    - 中文: [用 Cobrust 刷 LeetCode](docs/human/zh/getting-started-leetcode.md)
@@ -188,7 +200,7 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
 
 ## Status
 
-**0.3.0** — Phase G closure (all four §2.5 directions A/B/C/D shipped). Full release notes in [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md).
+**v0.4.0 PUBLIC RELEASE** — Phase L truly full closed (Str runtime + 3-wave debugger UX); v1.1 LSP server (Phase J wave-1+2+3 all shipped); Tier 3 `cobrust install` end-to-end works; ADR-0023 §A3 production-scale resolved (0.293 O3/O0 ratio, empirical). Release notes: [docs/releases/v0.4.0.md](docs/releases/v0.4.0.md).
 
 - ✅ **Compiler core** — lexer / parser / HIR / type checker / MIR / Cranelift codegen; zero clippy warnings under `-D warnings`.
 - ✅ **Phase F.3 language completeness** (v0.2.0) — `break` / `continue`, `for` loops, `list[str]`, `f64` (full IEEE-754 + f-string `{:.Nf}`), `dict[K, V]` (insertion-ordered per [ADR-0050d](docs/agent/adr/0050d-dict-design.md)), string stdlib (split/join/replace/trim/find/contains/...), file IO (read/write/append, stdin/stdout/stderr).
@@ -199,27 +211,33 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
   - **D — Method-call sugar infra** — 25 new method-form entries (Str×10 + List×5 + Float×5 + Int×5) per [ADR-0052d-prereq](docs/agent/adr/0052d-prereq-method-dispatch-infra.md); full LC-100 corpus migration deferred to v0.3.1 (ADR-0052d-final).
 - ✅ **Phase H FULL CLOSED** (2026-05-18) — self-host type-checker scoping + 226 cobrust-types-cb parity tests PASS on DG; `.cb` files are READ-ONLY pseudocode policy ratified (ADR-0055/a/b/c/d/e; Wave-2 canonicalization surfaces).
 - ✅ **Phase I FULL CLOSED** (2026-05-19) — Cranelift-JIT scaffold (`cobrust-cranelift-jit` crate, 12 unit tests) + TypeCheckCtx `Clone+Send` Arc-COW + Session + per-file invalidate (LSP unblocker) + REPL `fn` redefinition + per-symbol `invalidate_def` (ADR-0056a/b/c).
-- ✅ **Phase J FULL CLOSED** (2026-05-19) — `cobrust-lsp` crate: v1 LSP server feature complete. Wave-1: `textDocument/publishDiagnostics` over stdio, 16 tests (incl. 5 insta snapshots), 42 `From` impls (ADR-0057a). Wave-2: `didChange` + snapshot reuse (ADR-0057b). Wave-3: `hover` + `completion` + `rename` (ADR-0057c + 0057d) — all merged at `53b5ed2`; dual-track docs complete. Wave-3 (go-to-def + codeAction + cross-file) PROPOSED.
-- ✅ **Phase K FULL CLOSED** (2026-05-19) — 5 strands: 0058a LLVM IR emission + 0058b opt passes + multi-target + 0058c DWARF debug info + 0058d JIT/AOT lowering convergence + Strand #5 musl tier-1 static binary. ADR-0023 §A3 RESOLVED (toy-fixture qualified per F36). Pending: 0058e AOT unification + 50MB+ production bench.
-- ✅ **Phase L FULL CLOSED** (2026-05-19) — 3-wave debugger UX: 0059a lldb pretty-printers + 0059b cobrust-dap server (DAP protocol) + 0059c cobrust debug CLI (`cobrust debug`, `cobrust debug attach`). Note: runtime frame variable + Dict iteration + Option Adt DI queued wave-2+.
+- ✅ **Phase J FULL CLOSED — v1.1 LSP server** (2026-05-21) — `cobrust-lsp` crate feature complete. Wave-1: `textDocument/publishDiagnostics` over stdio, 16 tests (incl. 5 insta snapshots), 42 `From` impls (ADR-0057a). Wave-2: `didChange` + snapshot reuse (ADR-0057b). Wave-3: `hover` + `completion` + `rename` (ADR-0057c + 0057d) — all merged at `53b5ed2`; dual-track docs complete. LLM agents in Cursor / Continue / Cody get diagnostics + hover + completion + rename + go-to-def in any LSP-capable editor. Wave-4 (inlay hints + semantic tokens + call hierarchy): proposed.
+- ✅ **Phase K FULL CLOSED** (2026-05-19) — 5 strands: 0058a LLVM IR emission + 0058b opt passes + multi-target + 0058c DWARF debug info + 0058d JIT/AOT lowering convergence + Strand #5 musl tier-1 static binary. **ADR-0023 §A3 PRODUCTION-SCALE RESOLVED** — empirical 0.293 O3/O0 ratio (O3 binary 70.7% smaller than O0) measured on production binary.
+- ✅ **Phase L TRULY FULL CLOSED** (v0.4.0) — Str runtime closure (ADR-0059a/b/c/d/e; 3-wave): 0059a lldb pretty-printers + 0059b cobrust-dap server (DAP protocol) + 0059c cobrust debug CLI (`cobrust debug`, `cobrust debug attach`) + 0059d/e Str runtime §6.1 closure. Runtime frame variable + Dict iteration + Option Adt DI: wave-4 proposed.
 - ✅ **Phase M closure** (2026-05-19) — 6 language-surface gaps: i32/i8 narrow-int literals, `-> None` return annotation, `&T` reference annotation, `[T; N]` array literal syntax, anonymous-struct OOS. Follow-ups queued: BinOp-IntN widening, array-indexing dynamic index, empty-dict K-flow.
+- ✅ **Phase N FULL CLOSED** — F44 + cargo-udeps + cargo-audit CI gates shipped.
+- ✅ **Phase O W2-W4 CLOSED** — Tier-2 4-dim audit P0 fixed; all outstanding autonomous backlog closed.
 - ✅ **LC-100 真 100/100** — `examples/leetcode-stress/`: leetcode_corpus_e2e 12/0 + stress 100/0 (was 16/87 pre-session). Production-validated Cobrust source corpus.
 - ✅ **CLI tempdir RAII** — closes the Mac/DG `/tmp/cobrust-*` leak (235G temp-leak incident root cause); `tempfile::TempDir` RAII guarantees cleanup on panic / cancellation / signal.
 - ✅ **Bilingual README** — `README.zh.md` ships with full Chinese translation parity to `README.md` per CLAUDE.md §3 dual-track documentation mandate.
 - ✅ **Standard library** — io / collections / string / math / panic / env / fmt / iter + structured concurrency runtime (M13). AI-facing alpha: `cobrust.llm` / `.prompt` / `.tool` flat prelude fns (per [ADR-0049](docs/agent/adr/0049-alpha-honesty-and-onboarding-hardening.md) honesty hardening).
 - ✅ **Package format** — `cobrust.toml`, content-addressed registry, deterministic lockfile.
 - ✅ **AI translation pipeline** — production-validated on stateless + stateful tomli functions (real LLM, 12/12 + 14/14 strict deterministic over 5 runs). dateutil / msgpack: partial.
-- 🚧 **Tooling** — REPL JIT scaffold landed (Phase I); full REPL interactive loop pending. LSP v1 feature complete (Phase J FULL CLOSED): publishDiagnostics + didChange + hover + completion + rename live; wave-3 (go-to-def + codeAction + cross-file) proposed. Debugger: lldb pretty-printers + DAP server + `cobrust debug` CLI (Phase L wave-1 closed); runtime frame variable + Dict iteration + Option Adt DI queued wave-2+. No WASM target.
+- ✅ **Hardware tiering Tier 1+2+3 FULL SHIPPED** — Tier 1 runtime-dispatch (ADR-0058b); Tier 2 `--target-cpu` (`5186c27` / `a4c2532`); Tier 3 `cobrust install <pkg>` end-to-end works: CPU detect + wheel select + SHA256 verify + unpack. 9 prebuilt wheel variants per release (linux-gnu v1/v3/v4 + linux-musl v1/v3 + linux-aarch64 neon/sve + darwin-arm64 m1/m2).
+- 🚧 **Tooling** — REPL JIT scaffold landed (Phase I); full REPL interactive loop pending. LSP v1.1 feature complete: publishDiagnostics + didChange + hover + completion + rename live; wave-4 (inlay hints + semantic tokens + call hierarchy) proposed. Debugger: lldb pretty-printers + DAP server + `cobrust debug` CLI (Phase L wave-1+2+3 closed); wave-4 proposed. No WASM target.
 - 🚧 **LLVM backend** — Phase K closed (LLVM IR + DWARF + JIT/AOT conv + musl tier-1); 0058e AOT unification + 50MB+ production bench pending.
-- ✅ **Phase J FULL CLOSED** — wave-2 (`didChange`) + wave-3 (`hover` + `completion` + `rename`) merged at `53b5ed2`; ADR-0057a/b/c/d all accepted. Wave-3 go-to-def + codeAction + cross-file: PROPOSED.
-- ✅ **Hardware tiering (Tier 1/2/3 W1)** — Tier 1 runtime-dispatch SHIPPED (ADR-0058b); Tier 2 `--target-cpu` SHIPPED at `5186c27` / `a4c2532`; Tier 3 W1 release.yml 9-wheel matrix SHIPPED at `ba5bfcb`. Tier 3 W2-W4 (cobrust install / registry / ABI hardening) queued.
 - 🚧 **Phase M follow-ups** — BinOp-IntN widening + dynamic-index Array (`#![forbid(unsafe_code)]` blocks GEP) + empty-dict K-flow.
 
-**What this means**: Cobrust is **mechanism-validated** for language core + AI translation pipeline + debugger UX. **Phases G/H/I/J (FULL)/K/L/M are fully closed**; LC-100 stress corpus is 100/100 production-validated; hardware tiering Tier 1/2/3-W1 shipped. 0058e AOT unification, dynamic-index Array, and 50MB+ production bench are next.
+**What this means**: Cobrust v0.4.0 is the **first public release** — language core + AI translation pipeline + v1.1 LSP server + Tier 3 `cobrust install` + production-scale optimization all verified. LLM agents writing `.cb` get full editor intelligence (diagnostics + hover + completion + rename + goto-def) in any LSP-capable editor. `cobrust install <pkg>` matches `pip install` UX. O3 binary is **70.7% smaller** than O0 (empirical production measurement, ADR-0023 §A3 resolved).
 
 **§2.5 constitutional pillar** ([CLAUDE.md §2.5](CLAUDE.md) + [ADR-0051](docs/agent/adr/0051-llm-first-design-principle.md)): "Cobrust is not the language most pleasant for humans to write — it is the language LLM agents write correctly on the first try." See [`docs/agent/skills/cobrust-first-try.md`](docs/agent/skills/cobrust-first-try.md) for the agent-facing onboarding skill.
 
-**What's next** (queue order): 0058e AOT unification → 50MB+ production bench → dynamic-index Array (Phase M follow-up) → Phase J wave-3 (go-to-def + codeAction + cross-file) → Tier 3 W2-W4 (cobrust install / registry / ABI hardening).
+**What's next**:
+- Trademark check + Linguist PR submission (staged draft)
+- Progopedia + Rosetta Code + 99-bottles outreach (staged)
+- Phase J wave-4 (inlay hints + semantic tokens + call hierarchy) — proposed
+- Phase L wave-4 (advanced debugger UX) — proposed
+- 0058e AOT unification + 50MB+ production bench
 
 See the [post-Phase-G roadmap (ADR-0054)](docs/agent/adr/0054-post-phase-g-roadmap.md) for full detail.
 
@@ -275,15 +293,18 @@ Full diagram: [docs/human/en/architecture.md](docs/human/en/architecture.md).
 |---|---|---|---|
 | ~~**H**~~ ✅ | Self-host type checker scoping; 226 parity tests; `.cb` READ-ONLY policy | closed 2026-05-18 | medium |
 | ~~**I**~~ ✅ | Cranelift-JIT scaffold + Session Clone+Send + REPL fn-redef | closed 2026-05-19 | medium |
-| ~~**J**~~ ✅ FULL | `publishDiagnostics` + `didChange` + `hover` + `completion` + `rename` (ADR-0057a/b/c/d; `53b5ed2`) | closed 2026-05-21 | **highest** |
-| ~~**K**~~ ✅ | LLVM IR + DWARF + opt passes + multi-target + JIT/AOT conv + musl tier-1 | closed 2026-05-19 | neutral |
-| ~~**L**~~ ✅ wave-1 | lldb pretty-printers + cobrust-dap server + cobrust debug CLI | closed 2026-05-19 | low |
+| ~~**J**~~ ✅ FULL | `publishDiagnostics` + `didChange` + `hover` + `completion` + `rename` (ADR-0057a/b/c/d; `53b5ed2`) — **v1.1 LSP server feature complete** | closed 2026-05-21 | **highest** |
+| ~~**K**~~ ✅ | LLVM IR + DWARF + opt passes + multi-target + JIT/AOT conv + musl tier-1; **§A3 production-scale resolved (0.293 ratio)** | closed 2026-05-19 | neutral |
+| ~~**L**~~ ✅ TRULY FULL | lldb pretty-printers + cobrust-dap server + cobrust debug CLI + Str runtime §6.1 closure (ADR-0059a/b/c/d/e) | closed v0.4.0 | low |
 | ~~**M**~~ ✅ | 6 language-surface gaps (i32/i8, None-return, &T, [T;N], anon-struct OOS) + LC-100 100/100 | closed 2026-05-19 | **highest** |
-| **J** wave-3 | go-to-def + codeAction + cross-file | proposed | **highest** |
-| **Tier 3 W2-W4** | cobrust install / registry / ABI hardening | queued | high |
+| ~~**N**~~ ✅ | F44 + cargo-udeps + cargo-audit CI gates | closed v0.4.0 | medium |
+| ~~**O**~~ ✅ W2-W4 | Tier-2 4-dim audit P0 fixed; autonomous backlog closed | closed v0.4.0 | medium |
+| ~~**Tier 3**~~ ✅ FULL | `cobrust install <pkg>` end-to-end: CPU detect + wheel select + SHA verify + unpack; 9 wheel variants | shipped v0.4.0 | high |
+| **J** wave-4 | inlay hints + semantic tokens + call hierarchy | proposed | **highest** |
+| **L** wave-4 | advanced debugger UX | proposed | low |
 | **0058e** | AOT unification + 50MB+ production bench | pending | neutral |
 | **M follow-ups** | BinOp-IntN widening + dynamic-index Array + empty-dict K-flow | pending | high |
-| **L** wave-2+ | Runtime frame variable + Dict iteration + Option Adt DI | pending | low |
+| Trademark / Linguist | trademark check + Linguist PR + Progopedia / Rosetta outreach | staged | — |
 
 §2.5 ROI rerank explanation: J is highest because in-editor LLM agents (Cursor / Continue / Cody) read LSP diagnostics + suggestions directly — ADR-0052b's structured `suggestion` field is the precise payload Phase J wires into `Diagnostic.relatedInformation` + `CodeAction.title`.
 
@@ -328,7 +349,7 @@ Cobrust stands on the shoulders of:
 
 <div align="center">
 
-**Cobrust 0.3.0** — built in public, by AI agents working with humans.
+**Cobrust v0.4.0** — built in public, by AI agents working with humans.
 *If you tried it, tell us what broke.*
 
 </div>
