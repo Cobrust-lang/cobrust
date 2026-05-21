@@ -3,7 +3,7 @@ doc_kind: adr
 adr_id: 0065
 name: 0065
 title: "Tier 3 prebuilt multi-wheel distribution — per-CPU sub-target + cobrust install package tool"
-status: proposed
+status: partial (wave-1 shipped; waves 2-4 queued)
 date: 2026-05-20
 phase: Phase O (post-Phase-N packaging)
 relates_to: [adr:0026, adr:0046, adr:0058b, adr:0058e]
@@ -333,12 +333,17 @@ stable deferred per strategy doc note.
 
 ## 7. Implementation plan (deferred to Phase O sprints)
 
-### 7.1 Phase O wave-1: release.yml matrix expansion
+### 7.1 Phase O wave-1: release.yml matrix expansion — SHIPPED
 
-- Extend `build-tier1` matrix with `cpu_level` + `rustflags_extra` fields.
-- Update `Package tar.gz` step naming to include `cpu_level`.
-- Add `generate-index` step to `release` job.
-- Delta: approximately 30 LOC YAML.
+Status: **SHIPPED** (feature/tier3-w1-matrix → main, 2026-05-21).
+
+Delivered:
+- `build-tier1` matrix extended from 4 → 9 entries with `cpu_level`, `rustflags_extra`, `asset_suffix` fields.
+- `Package tar.gz` step uses `asset_suffix` for ADR-0065 §3.2 naming: `cobrust-v{ver}-{triple}-{cpu_level}.tar.gz`.
+- RUSTFLAGS per-step env overrides global env; inherits `-D warnings` + appends `target-cpu` flag.
+- rust-cache key extended with `cpu_level` to prevent contamination across CPU variants.
+- Actual delta: 85 LOC YAML (header comments expanded; all 9 entries documented inline).
+- Note: `generate-index` step deferred to wave-3 (registry crate must exist first).
 - Prerequisite: none (atop existing ADR-0046 matrix).
 
 ### 7.2 Phase O wave-2: `cobrust install` subcommand + CPU detection
