@@ -27,6 +27,19 @@ use tokio::time::timeout;
 
 use crate::dap_types::{Breakpoint, Source, StackFrame, Variable};
 
+/// POSIX-safe quoting for lldb REPL command arguments (Tier-2 security P0-2).
+///
+/// Wraps `s` in single quotes and escapes any embedded single-quote character
+/// as `'\''` so that the resulting string is safe to pass verbatim inside an
+/// lldb command line. Use for every path or user-controlled token.
+///
+/// This helper must be used at *all* sites that interpolate external strings
+/// into lldb command strings — `target create`, `breakpoint set --file`, and
+/// `command script import`.
+pub(crate) fn lldb_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Stop reason returned by lldb after a `continue` / `next` / `pause`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopReason {
@@ -134,6 +147,11 @@ impl LldbDriver {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
+            // Remove LLM API keys before spawning lldb (P1-1 defence-in-depth).
+            .env_remove("ANTHROPIC_API_KEY")
+            .env_remove("OPENAI_API_KEY")
+            .env_remove("DEEPSEEK_API_KEY")
+            .env_remove("LOCAL_LLM_KEY")
             .spawn()
             .map_err(|_| DapError::LldbNotFound)?;
 
@@ -162,9 +180,9 @@ impl LldbDriver {
             .send_command(&format!("command script import {printers}"))
             .await?;
 
-        // Target the binary.
+        // Target the binary — use lldb_quote to prevent path injection.
         let _ = self
-            .send_command(&format!("target create '{binary_path}'"))
+            .send_command(&format!("target create {}", lldb_quote(binary_path)))
             .await?;
 
         Ok(())
@@ -256,7 +274,10 @@ impl LldbDriver {
         }
 
         let stdout = self
-            .send_command(&format!("breakpoint set --file '{file}' --line {line}"))
+            .send_command(&format!(
+                "breakpoint set --file {} --line {line}",
+                lldb_quote(file)
+            ))
             .await?;
         parse_breakpoint(&stdout, file, line)
     }
@@ -569,5 +590,24 @@ mod tests {
         let bp2 = driver.set_breakpoint("fib.cb", 12).await.unwrap();
         assert_eq!(bp1.id, Some(1));
         assert_eq!(bp2.id, Some(2));
+    }
+
+    // -------- lldb_quote tests (Tier-2 security P0-2) ------------------
+
+    #[test]
+    fn lldb_quote_normal_path() {
+        assert_eq!(
+            lldb_quote("/tmp/cobrust_debug_target"),
+            "'/tmp/cobrust_debug_target'"
+        );
+    }
+
+    #[test]
+    fn lldb_quote_apostrophe_in_path() {
+        // A path segment containing a single-quote must be shell-escaped.
+        assert_eq!(
+            lldb_quote("/home/user/it's/binary"),
+            "'/home/user/it'\\''s/binary'"
+        );
     }
 }

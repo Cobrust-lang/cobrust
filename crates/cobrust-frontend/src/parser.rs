@@ -53,9 +53,23 @@ pub fn parse(tokens: &[Token]) -> Result<Module, ParseError> {
     p.parse_module()
 }
 
+/// Maximum expression nesting depth before the parser rejects with
+/// `ParseError::ExpressionTooDeep`. Checked at every recursive expression
+/// entry point (`parse_pratt` and `parse_atom`'s LParen branch) so the
+/// OS stack is never reached.
+///
+/// Set to 50: well-formed Cobrust source does not exceed single-digit
+/// nesting. 50 paren levels × ~6 Rust frames each ≈ 300 frames —
+/// well within the 8 MiB default OS stack even in debug builds.
+/// (Tier-2 security P0-1)
+const MAX_PARSER_DEPTH: u32 = 50;
+
 struct Parser<'a> {
     toks: &'a [Token],
     pos: usize,
+    /// Current recursive-descent nesting depth. Checked at every
+    /// expression entry point via `enter_expr_depth`.
+    depth: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -77,7 +91,31 @@ const PREC_POW: Prec = Prec(95);
 
 impl<'a> Parser<'a> {
     fn new(toks: &'a [Token]) -> Self {
-        Self { toks, pos: 0 }
+        Self {
+            toks,
+            pos: 0,
+            depth: 0,
+        }
+    }
+
+    /// Check and increment the expression depth counter.
+    ///
+    /// Returns `Err(ExpressionTooDeep)` when the limit is hit. Callers
+    /// **must** pair every successful call with `self.depth -= 1` before
+    /// returning. Only `parse_pratt` is the proper entry point — it calls
+    /// `check_expr_depth` then dispatches to `parse_pratt_inner` and
+    /// always decrements before returning.
+    fn check_expr_depth(&mut self) -> Result<(), ParseError> {
+        if self.depth >= MAX_PARSER_DEPTH {
+            let span = self.current_span();
+            return Err(ParseError::ExpressionTooDeep {
+                depth: self.depth + 1,
+                max: MAX_PARSER_DEPTH,
+                span,
+            });
+        }
+        self.depth += 1;
+        Ok(())
     }
 
     // -------- token helpers --------------------------------------------
@@ -871,6 +909,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_pratt(&mut self, min: Prec) -> Result<Expr, ParseError> {
+        self.check_expr_depth()?;
+        let result = self.parse_pratt_inner(min);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_pratt_inner(&mut self, min: Prec) -> Result<Expr, ParseError> {
         let mut lhs = self.parse_unary()?;
         loop {
             // `as` cast — M-F.3.3 gap (a). Higher precedence than ADD, lower than MUL.
@@ -1478,7 +1523,16 @@ impl<'a> Parser<'a> {
                     span: tok.span,
                 })
             }
-            TokenKind::LParen => self.parse_paren_expr(),
+            TokenKind::LParen => {
+                // Depth guard at the outermost atom level so the check fires
+                // before entering parse_paren_expr's recursive descent.
+                // This prevents OS-stack overflow for adversarially deep
+                // `((((...))))` inputs (Tier-2 security P0-1).
+                self.check_expr_depth()?;
+                let result = self.parse_paren_expr();
+                self.depth -= 1;
+                result
+            }
             TokenKind::LBracket => self.parse_bracket_expr(),
             TokenKind::LBrace => self.parse_brace_expr(),
             other => Err(ParseError::Syntax {
@@ -2362,5 +2416,37 @@ mod tests {
             ),
             "expected DroppedByConstitution {{ name: \"global\" }}, got {err:?}"
         );
+    }
+
+    // -------- depth-limit tests (Tier-2 security P0-1) -----------------
+
+    /// 100-deep parenthesised integer must be rejected with
+    /// `ExpressionTooDeep` before the parser exhausts the OS stack.
+    /// (100 > MAX_PARSER_DEPTH = 50, but << OS-stack limit.)
+    #[test]
+    fn parser_deeply_nested_parens_rejects() {
+        const DEPTH: usize = 100;
+        let src = format!(
+            "{open}1{close}\n",
+            open = "(".repeat(DEPTH),
+            close = ")".repeat(DEPTH)
+        );
+        let err = parse_src(&src).expect_err("expected ExpressionTooDeep");
+        assert!(
+            matches!(
+                &err,
+                ParseError::ExpressionTooDeep { depth, max, .. }
+                    if *depth > MAX_PARSER_DEPTH && *max == MAX_PARSER_DEPTH
+            ),
+            "expected ExpressionTooDeep with depth > {MAX_PARSER_DEPTH}, got {err:?}"
+        );
+    }
+
+    /// Well-nested expression within the limit must still parse successfully.
+    #[test]
+    fn parser_normal_depth_below_limit_accepts() {
+        // (((1+2))) — 3 levels of nesting, well within the 1024 limit.
+        let m = parse_src("(((1+2)))\n").expect("should parse without depth error");
+        assert_eq!(m.items.len(), 1);
     }
 }

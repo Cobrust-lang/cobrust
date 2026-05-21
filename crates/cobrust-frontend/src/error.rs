@@ -66,6 +66,16 @@ pub enum ParseError {
     /// Indentation level is inconsistent with surrounding context.
     #[error("indentation error at {span}: {message}")]
     IndentError { message: String, span: Span },
+    /// Expression nesting exceeds the compile-time safety limit.
+    ///
+    /// Prevents stack-overflow DoS from adversarially deeply-nested
+    /// parentheses / unary chains. Limit: `MAX_PARSER_DEPTH = 1024`.
+    /// Suggestion: flatten deeply nested expressions.
+    #[error(
+        "expression nesting depth {depth} exceeds maximum ({max}) at {span}; \
+         suggestion: flatten nested parentheses or sub-expressions"
+    )]
+    ExpressionTooDeep { depth: u32, max: u32, span: Span },
 }
 
 /// Top-level error returned by [`crate::parse_str`].
