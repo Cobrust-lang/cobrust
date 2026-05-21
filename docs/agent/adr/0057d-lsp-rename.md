@@ -3,11 +3,11 @@ doc_kind: adr
 adr_id: 0057d
 parent_adr: 0057
 title: "Phase J wave-2.3 — LSP rename (textDocument/prepareRename + textDocument/rename)"
-status: proposed
+status: accepted
 date: 2026-05-21
 last_verified_commit: feature/0057d-rename
-ratified_at: ""
-ratified_on: ""
+ratified_at: feature/0057d-rename
+ratified_on: 2026-05-21
 phase: "Phase J wave-2.3"
 supersedes: []
 superseded_by: []
