@@ -3,7 +3,7 @@
 # On git tag v* — build release binaries for all tier-1 targets and
 # upload them to a GitHub Release as tar.gz archives.
 #
-# File naming convention: cobrust-v{version}-{target_triple}.tar.gz
+# File naming convention: cobrust-v{version}-{target_triple}-{cpu_level}.tar.gz
 # Binary inside archive: cobrust  (or cobrust.exe on Windows)
 #
 # ADR-0046 tier-1 platform contract (must build, must appear in release notes):
@@ -13,6 +13,13 @@
 #   - x86_64-unknown-linux-musl      Linux x86_64 STATIC (musl libc, no glibc)
 #                                    Promoted: Phase K Strand #5 (2026-05-19, ADR-0046 §Amendment)
 #                                    Runs on Alpine, distroless, minimal containers
+#
+# ADR-0065 Tier 3 CPU-level matrix (Phase O wave-1): 9 wheel variants per tag
+#   x86_64-unknown-linux-gnu:   v1 (baseline) | v3 (haswell / AVX2+FMA) | v4 (skylake-avx512)
+#   x86_64-unknown-linux-musl:  v1 (static baseline) | v3 (static AVX2)
+#   aarch64-unknown-linux-gnu:  neon (all ARMv8-A) | sve (Graviton3 / Altra, experimental)
+#   aarch64-apple-darwin:       m1 (Apple M1/M2 base) | m2 (Apple M2 Pro+ / M3+)
+#
 # Tier-2 (best-effort, may fail without blocking release): (none currently)
 # Queued (documented as cargo install --git path, not built):
 #   - x86_64-apple-darwin            macOS x86_64 Intel
@@ -32,35 +39,94 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
-  # Build tier-1 targets
+  # Build tier-1 targets — ADR-0065 Tier 3 CPU-level matrix (Phase O wave-1)
+  # 9 wheel variants: each matrix entry has cpu_level + rustflags_extra.
+  # asset_suffix drives the archive name per ADR-0065 §3.2 naming convention.
   # -------------------------------------------------------------------------
   build-tier1:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.target }} [${{ matrix.cpu_level }}]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
       matrix:
         include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            use_cross: false
-            install_musl_tools: false
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: true
-            install_musl_tools: false
+          # ---- x86_64-unknown-linux-gnu: v1 / v3 / v4 ----------------------
+          # v1: baseline, runs on all x86-64 hardware (ADR-0046 existing triple)
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: false
             install_musl_tools: false
-          # x86_64-unknown-linux-musl — static binary, no glibc dependency
-          # Build: ubuntu-latest + musl-tools apt pkg + rustup target add
-          # No `cross` needed — musl-tools provides the linker natively on ubuntu-latest
+            cpu_level: v1
+            rustflags_extra: "-C target-cpu=x86-64"
+            asset_suffix: x86_64-unknown-linux-gnu-v1
+          # v3: Haswell+; AVX2 + FMA (ADR-0065 §3.1)
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: false
+            install_musl_tools: false
+            cpu_level: v3
+            rustflags_extra: "-C target-cpu=haswell"
+            asset_suffix: x86_64-unknown-linux-gnu-v3
+          # v4: Skylake-AVX512; data-centre / HPC (ADR-0065 §3.1)
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: false
+            install_musl_tools: false
+            cpu_level: v4
+            rustflags_extra: "-C target-cpu=skylake-avx512"
+            asset_suffix: x86_64-unknown-linux-gnu-v4
+          # ---- x86_64-unknown-linux-musl: v1 / v3 --------------------------
+          # v1: static baseline, Alpine / distroless / minimal containers
           # ADR-0046 §Amendment: promoted to tier-1 Phase K Strand #5 (2026-05-19)
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             use_cross: false
             install_musl_tools: true
+            cpu_level: v1
+            rustflags_extra: "-C target-cpu=x86-64"
+            asset_suffix: x86_64-unknown-linux-musl-v1
+          # v3: static AVX2 musl (ADR-0065 §3.1)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: false
+            install_musl_tools: true
+            cpu_level: v3
+            rustflags_extra: "-C target-cpu=haswell"
+            asset_suffix: x86_64-unknown-linux-musl-v3
+          # ---- aarch64-unknown-linux-gnu: neon / sve ------------------------
+          # neon: mandatory ARMv8-A NEON; all AArch64 Linux (cross-compiled)
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+            install_musl_tools: false
+            cpu_level: neon
+            rustflags_extra: ""
+            asset_suffix: aarch64-unknown-linux-gnu-neon
+          # sve: Neoverse-V1 (Graviton3 / Ampere Altra); experimental per ADR-0065 §6.5
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+            install_musl_tools: false
+            cpu_level: sve
+            rustflags_extra: "-C target-cpu=neoverse-v1"
+            asset_suffix: aarch64-unknown-linux-gnu-sve
+          # ---- aarch64-apple-darwin: m1 / m2 --------------------------------
+          # m1: Apple M1 / M2 base (ADR-0065 §3.1)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            install_musl_tools: false
+            cpu_level: m1
+            rustflags_extra: "-C target-cpu=apple-m1"
+            asset_suffix: aarch64-apple-darwin-m1
+          # m2: Apple M2 Pro+ / M3+ (ADR-0065 §3.1)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            install_musl_tools: false
+            cpu_level: m2
+            rustflags_extra: "-C target-cpu=apple-m2"
+            asset_suffix: aarch64-apple-darwin-m2
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -72,7 +138,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2  # v2.7.8
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.target }}-${{ matrix.cpu_level }}
 
       - name: Install musl-tools (Linux musl static build)
         if: matrix.install_musl_tools
@@ -84,11 +150,15 @@ jobs:
 
       - name: Build release binary (cross)
         if: matrix.use_cross
+        env:
+          RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
         run: |
           cross build --release --locked -p cobrust-cli --target ${{ matrix.target }}
 
       - name: Build release binary (native)
         if: ${{ !matrix.use_cross }}
+        env:
+          RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
         run: |
           cargo build --release --locked -p cobrust-cli --target ${{ matrix.target }}
 
@@ -96,16 +166,16 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          TARGET="${{ matrix.target }}"
-          ARCHIVE="cobrust-v${VERSION}-${TARGET}.tar.gz"
-          BINARY="target/${TARGET}/release/cobrust"
+          # ADR-0065 §3.2 naming: cobrust-<version>-<triple>-<cpu_level>.tar.gz
+          ARCHIVE="cobrust-v${VERSION}-${{ matrix.asset_suffix }}.tar.gz"
+          BINARY="target/${{ matrix.target }}/release/cobrust"
           tar czf "${ARCHIVE}" -C "$(dirname ${BINARY})" "$(basename ${BINARY})"
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Upload artifact
         uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b  # v4.5.0
         with:
-          name: cobrust-${{ matrix.target }}
+          name: cobrust-${{ matrix.asset_suffix }}
           path: ${{ env.ARCHIVE }}
           retention-days: 1
 

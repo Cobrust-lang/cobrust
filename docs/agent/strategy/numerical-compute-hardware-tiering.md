@@ -126,7 +126,7 @@ Cascade addendum (honest re-scope):
 2. ~~**Tier 2** `--target-cpu` CLI flag~~ — **SHIPPED f900910** (merge SHA: 4e862bb).
 3. ~~**Tier 3** multi-wheel prebuilt distribution
    (release.yml matrix extension ~50 LOC YAML + new package-tool ADR).~~
-   **PROPOSED via ADR-0065** — see `docs/agent/adr/0065-tier-3-prebuilt-multi-wheel-distribution.md`.
+   **wave-1 SHIPPED** — release.yml 9-variant matrix landed; see ADR-0065 §7.1.
 4. **GPU Path A** `cobrust.gpu` stdlib module wrapping cuBLAS / Metal / ROCm
    (new ADR; low-risk; covers most user demand).
 5. **GPU Path B** Cobrust → NVPTX / SPIR-V direct codegen
@@ -134,24 +134,25 @@ Cascade addendum (honest re-scope):
 
 ---
 
-## Tier 3 status: PROPOSED via ADR-0065
+## Tier 3 status: wave-1 SHIPPED (Phase O wave-1)
 
-ADR-0065 (`docs/agent/adr/0065-tier-3-prebuilt-multi-wheel-distribution.md`)
-authors the full Tier 3 spec. Key decisions:
+ADR-0065 §7.1 wave-1 landed on main. Delivered:
 
-- **Wheel matrix**: 4 tier-1 triples × 2-3 CPU levels = 7+ variants per release
-  (`-gnu-v1`, `-gnu-v3`, `-gnu-v4`, `-musl-v1`, `-musl-v3`, `-linux-neon`,
-  `-linux-sve`[experimental], `-darwin-m1`, `-darwin-m2`).
-- **`cobrust install <pkg>`**: auto-detects host CPU via `/proc/cpuinfo` /
-  `sysctl -a`; selects best matching wheel; SHA-256 verifies before disk write;
-  falls back to `v1` / `neon` / `m1` baseline on detection failure.
-- **Registry shape**: static JSON index over GitHub Releases + CDN mirror
-  (mirrors PyPI Simple API; no dynamic server required).
-- **Phase O waves**: wave-1 release.yml ~30 LOC YAML; wave-2 `cobrust install`
-  ~600 LOC; wave-3 registry crate + CDN ~350 LOC; wave-4 ABI hardening + smoke.
+- `release.yml` matrix extended to 9 wheel variants per tagged release:
+  `-gnu-v1`, `-gnu-v3`, `-gnu-v4`, `-musl-v1`, `-musl-v3`,
+  `-linux-neon`, `-linux-sve` (experimental), `-darwin-m1`, `-darwin-m2`.
+- Each matrix entry carries `cpu_level`, `rustflags_extra`, `asset_suffix`.
+- Archive naming: `cobrust-v{version}-{triple}-{cpu_level}.tar.gz` per ADR-0065 §3.2.
+- RUSTFLAGS per-step env inherits `-D warnings` and appends `--target-cpu` flag.
+- rust-cache key extended to include `cpu_level` to prevent cross-contamination.
 
-Acceptance gate: ≥ 5 wheel variants per tagged release; `cobrust install`
-smoke across 3 CPU classes; SHA mismatch → hard error; ABI mismatch → hard error.
+Waves 2-4 remain queued per ADR-0065 §7:
+- **wave-2**: `cobrust install` subcommand + CPU detection (~600 LOC).
+- **wave-3**: `cobrust-registry` crate + CDN mirror (~350 LOC).
+- **wave-4**: SHA/ABI hardening + smoke tests across 3 CPU classes.
+
+Acceptance gate §5.1 (≥ 7 variants) is structurally satisfied by the 9-variant
+matrix. Gates §5.2-§5.4 are wave-2/4 scope.
 
 ---
 
