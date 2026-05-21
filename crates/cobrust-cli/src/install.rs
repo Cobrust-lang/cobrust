@@ -24,8 +24,7 @@ use crate::exit_codes;
 
 /// Default registry URL (GitHub Releases acts as the static-JSON registry
 /// host per ADR-0065 §3.4). Override via `--registry-url`.
-pub const DEFAULT_REGISTRY_URL: &str =
-    "https://github.com/Cobrust-lang/cobrust/releases/download";
+pub const DEFAULT_REGISTRY_URL: &str = "https://github.com/Cobrust-lang/cobrust/releases/download";
 
 /// `cobrust_abi` version this binary speaks. Wheels tagged with a mismatching
 /// semver-major are rejected at install time (ADR-0065 §3.3.2 step 9).

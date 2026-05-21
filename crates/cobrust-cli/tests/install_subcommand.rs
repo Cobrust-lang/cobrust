@@ -74,7 +74,11 @@ fn cobrust_install_dry_run_against_mock_registry_succeeds() {
         "x86_64-unknown-linux-gnu"
     };
     let cpu_level = if cfg!(target_arch = "aarch64") {
-        if cfg!(target_os = "macos") { "m1" } else { "neon" }
+        if cfg!(target_os = "macos") {
+            "m1"
+        } else {
+            "neon"
+        }
     } else {
         "v1"
     };
@@ -99,7 +103,13 @@ fn cobrust_install_dry_run_against_mock_registry_succeeds() {
         let mut buf = [0u8; 8192];
         let _ = stream.read(&mut buf);
         let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n");
-        let _ = stream.write_all(format!("Content-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes());
+        let _ = stream.write_all(
+            format!(
+                "Content-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        );
         let _ = stream.write_all(&body);
     });
     let _ = ready_rx.recv();

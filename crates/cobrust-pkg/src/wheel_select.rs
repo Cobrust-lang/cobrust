@@ -74,12 +74,9 @@ pub fn select_wheel<'a>(host: &HostCpu, available: &'a [WheelMeta]) -> Option<&'
 fn host_triple(host: &HostCpu) -> Option<&'static str> {
     match host {
         HostCpu::X86_64 { .. } => Some(canonical_x86_64_triple()),
-        HostCpu::Aarch64 {
-            apple_m1: true, ..
+        HostCpu::Aarch64 { apple_m1: true, .. } | HostCpu::Aarch64 { apple_m2: true, .. } => {
+            Some("aarch64-apple-darwin")
         }
-        | HostCpu::Aarch64 {
-            apple_m2: true, ..
-        } => Some("aarch64-apple-darwin"),
         HostCpu::Aarch64 { .. } => Some("aarch64-unknown-linux-gnu"),
         HostCpu::Unknown => None,
     }
@@ -109,12 +106,8 @@ fn cpu_level_priority(host: &HostCpu) -> Vec<&'static str> {
         HostCpu::X86_64 { v3: true, .. } => vec!["v3", "v1"],
         HostCpu::X86_64 { .. } => vec!["v1"],
         HostCpu::Aarch64 { sve: true, .. } => vec!["sve", "neon"],
-        HostCpu::Aarch64 {
-            apple_m2: true, ..
-        } => vec!["m2", "m1"],
-        HostCpu::Aarch64 {
-            apple_m1: true, ..
-        } => vec!["m1"],
+        HostCpu::Aarch64 { apple_m2: true, .. } => vec!["m2", "m1"],
+        HostCpu::Aarch64 { apple_m1: true, .. } => vec!["m1"],
         HostCpu::Aarch64 { .. } => vec!["neon"],
         HostCpu::Unknown => vec!["v1"],
     }

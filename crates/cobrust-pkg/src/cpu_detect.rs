@@ -291,7 +291,8 @@ mod tests {
     fn proc_cpuinfo_parser_handles_arm_features_line() {
         let dir = tempfile::tempdir().expect("test setup");
         let path = dir.path().join("cpuinfo");
-        std::fs::write(&path, "processor\t: 0\nFeatures\t: fp asimd evtstrm sve\n").expect("test setup");
+        std::fs::write(&path, "processor\t: 0\nFeatures\t: fp asimd evtstrm sve\n")
+            .expect("test setup");
         assert!(proc_cpuinfo_has_flag(&path, "sve"));
         assert!(proc_cpuinfo_has_flag(&path, "asimd"));
         assert!(!proc_cpuinfo_has_flag(&path, "missing"));

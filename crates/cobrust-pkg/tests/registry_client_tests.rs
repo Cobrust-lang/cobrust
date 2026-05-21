@@ -161,10 +161,7 @@ fn download_wheel_rejects_sha256_mismatch() {
     let err = client
         .download_wheel(&meta, dest.path())
         .expect_err("must reject mismatch");
-    assert!(matches!(
-        err,
-        RegistryClientError::Sha256Mismatch { .. }
-    ));
+    assert!(matches!(err, RegistryClientError::Sha256Mismatch { .. }));
     let msg = err.to_string();
     assert!(msg.contains("SHA-256 mismatch"));
     assert!(msg.contains("suggestion"));

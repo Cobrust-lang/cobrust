@@ -34,7 +34,9 @@ pub enum RegistryClientError {
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),
     /// HTTP response status was not 2xx.
-    #[error("registry returned status {status} for {url}\n  suggestion: verify the package name and version, or try `--registry-url` to override")]
+    #[error(
+        "registry returned status {status} for {url}\n  suggestion: verify the package name and version, or try `--registry-url` to override"
+    )]
     BadStatus {
         /// HTTP status code.
         status: u16,
@@ -42,7 +44,9 @@ pub enum RegistryClientError {
         url: String,
     },
     /// JSON deserialisation of the wheel index failed.
-    #[error("index JSON parse error: {0}\n  suggestion: registry index format may have drifted; report at https://github.com/Cobrust-lang/cobrust/issues")]
+    #[error(
+        "index JSON parse error: {0}\n  suggestion: registry index format may have drifted; report at https://github.com/Cobrust-lang/cobrust/issues"
+    )]
     Parse(#[from] serde_json::Error),
     /// Downloaded wheel SHA-256 didn't match the index advertisement.
     #[error(
