@@ -400,6 +400,89 @@ class TestOptionTagDispatch(unittest.TestCase):
         self.assertEqual(summary, "Some(42)")
 
 
+class MockSBValueWithChildren(MockSBValue):
+    """ADR-0059e §3.3 — extends MockSBValue with `GetChildMemberWithName`
+    so the structured-member walk path can be exercised without a real
+    lldb. The wave-2/baseline `MockSBValue` deliberately lacks this
+    method, so the printer's `getattr(valobj, "GetChildMemberWithName",
+    None)` returns None and falls through to the raw-memory path.
+
+    When this subclass is used, the printer takes the structured-member
+    path. `children` is a dict mapping `"ptr"`/`"len"` to fresh
+    `MockSBValue` instances carrying those scalar values."""
+
+    def __init__(self, value, children, success=True):
+        super().__init__(value, success=success)
+        self._children = children
+
+    def GetChildMemberWithName(self, name):
+        return self._children.get(name)
+
+
+class TestStrStructuredMemberRead(unittest.TestCase):
+    """ADR-0059e §3.3 — verify the structured-member path in
+    `cobrust_str_summary` reads (ptr, len) via `GetChildMemberWithName`
+    when the binary was built with the §3.2 `cobrust::Str`
+    `DICompositeType`. Closes Phase L §6.1 content-render half."""
+
+    def _make_str_content_memory(self, ptr_addr, payload):
+        """Map `ptr_addr` to the UTF-8 byte payload."""
+        return {ptr_addr: payload}
+
+    def test_structured_member_decodes_ascii(self):
+        """ADR-0059e §3.3 — structured path renders `"hello"` when the
+        binary has cobrust::Str DICompositeType + valid children."""
+        ptr_addr = 0xA0000
+        payload = b"hello"
+        memory = self._make_str_content_memory(ptr_addr, payload)
+        process = MockSBProcess(memory)
+        target = MockSBTarget()
+        target._process = process
+        # Children: ptr child returns ptr_addr, len child returns 5.
+        children = {
+            "ptr": MockSBValue(ptr_addr),
+            "len": MockSBValue(len(payload)),
+        }
+        # Top-level valobj's own pointer-as-int is irrelevant on the
+        # structured path; we set it to a sentinel so the raw fallback
+        # would FAIL if accidentally taken.
+        valobj = MockSBValueWithChildren(0xDEAD, children)
+        valobj._target = target
+        summary = printers.cobrust_str_summary(valobj, {})
+        self.assertEqual(summary, '"hello"')
+
+    def test_structured_member_decodes_utf8_multibyte(self):
+        """ADR-0059e §3.3 — structured path handles UTF-8 multibyte."""
+        ptr_addr = 0xA0000
+        payload = "你好".encode("utf-8")
+        memory = self._make_str_content_memory(ptr_addr, payload)
+        process = MockSBProcess(memory)
+        target = MockSBTarget()
+        target._process = process
+        children = {
+            "ptr": MockSBValue(ptr_addr),
+            "len": MockSBValue(len(payload)),
+        }
+        valobj = MockSBValueWithChildren(0xDEAD, children)
+        valobj._target = target
+        summary = printers.cobrust_str_summary(valobj, {})
+        self.assertEqual(summary, '"你好"')
+
+    def test_structured_member_null_ptr_renders_empty(self):
+        """ADR-0059e §3.3 — null ptr child short-circuits to `""`."""
+        process = MockSBProcess({})
+        target = MockSBTarget()
+        target._process = process
+        children = {
+            "ptr": MockSBValue(0),
+            "len": MockSBValue(0),
+        }
+        valobj = MockSBValueWithChildren(0xDEAD, children)
+        valobj._target = target
+        summary = printers.cobrust_str_summary(valobj, {})
+        self.assertEqual(summary, '""')
+
+
 # =====================================================================
 # Entry point
 # =====================================================================
