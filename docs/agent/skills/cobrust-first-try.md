@@ -4,7 +4,7 @@ skill_id: cobrust-first-try
 title: "Write Cobrust correctly on the first try"
 audience: any LLM agent (Claude Code / Cursor / OpenClaw / Hermes / Aider / OpenAI Codex / etc.)
 load_when: before writing or editing any `.cb` source file
-last_verified_commit: current-main
+last_verified_commit: 6a25ec8
 maintainers: P10/user; updated atomically with language-surface ADRs
 ---
 
@@ -289,7 +289,7 @@ cobrust-lsp           # standalone binary (same binary, alternate entrypoint)
 - Suggestion text (from `help:` field in compiler diagnostics) → `relatedInformation[0].message`.
 - `textDocument/didChange`, `textDocument/hover`, `textDocument/completion` — **NOT yet implemented** in wave-1.
 
-**Scope caution**: Phase J wave-1 is closed; Phase J wave-2+ (hover, completion, rename) has NOT landed. Do not assume those capabilities exist.
+**Scope caution**: Phase J wave-2 (didChange + snapshot reuse) and wave-3 (hover, completion, rename) are FULLY CLOSED at `53b5ed2` — ADR-0057a/b/c/d all accepted. publishDiagnostics + didChange + hover + completion + rename are all available. Wave-3 next iteration (go-to-def + codeAction + cross-file) is PROPOSED but not yet landed.
 
 ## 9d. JIT (preview / wave-1 only) (ADR-0056a)
 
@@ -319,7 +319,7 @@ match cobrust_jit::compile(&mir_fn) {
 
 ## 9e. Debugger (Phase L wave-1 / ADR-0059a/b/c)
 
-**Phase L wave-1 is closed.** Three user-facing surfaces:
+**Phase L wave-1 is closed.** Wave-2 (runtime frame variable + Dict iteration + Option Adt DI) merged at `171700b` + `05aa137`; §6.1 Str runtime full closure deferred to ADR-0059e (sub-ADR follow-up). Three user-facing surfaces:
 
 **lldb pretty-printers** (0059a): Install once, then `cobrust` types print readably in lldb/gdb.
 ```bash
@@ -344,7 +344,7 @@ cobrust debug attach <pid>         # attach to running process
 cobrust debug --breakpoint 42 src/main.cb   # stop at line 42
 ```
 
-**Scope caution (honest-debt per ADR-0059a §6)**: Wave-1 does NOT include runtime frame variable inspection, Dict iteration display, or Option Adt DI. These are queued wave-2+. Do not assume them.
+**Scope caution (honest-debt per ADR-0059a §6)**: Wave-1 did not include runtime frame variable inspection, Dict iteration display, or Option Adt DI — these were queued. Wave-2 landed at `171700b` + `05aa137`; §6.1 Str runtime full closure deferred to ADR-0059e.
 
 ## 9f. Phase M language-surface gaps now supported
 
@@ -375,6 +375,38 @@ let first: i64 = arr[0]      # static-index OK; dynamic-index pending (M follow-
 - Empty-dict key-flow inference (`let d: dict[str, i64] = {}`)
 
 Do NOT write these patterns yet — they will produce a type error.
+
+## 9g. Hardware tiering (Tier 1 / Tier 2 / Tier 3 W1)
+
+Three-tier hardware dispatch shipped post-Phase-K:
+
+- **Tier 1 — runtime dispatch** (ADR-0058b, SHIPPED): `cobrust build` auto-selects the best available runtime code-gen path at process startup.
+- **Tier 2 — `--target-cpu`** (SHIPPED at `5186c27` / `a4c2532`): compile-time CPU feature targeting; `cobrust build --target-cpu native` enables host-specific ISA optimizations.
+- **Tier 3 W1 — release.yml 9-wheel matrix** (SHIPPED at `ba5bfcb`): CI produces 9 platform wheels (linux x86_64/aarch64 musl/gnu + macOS arm64/x86_64 + Windows) on each tag.
+- **Tier 3 W2-W4** (queued): `cobrust install` from registry, registry publishing, ABI hardening for stable public API.
+
+Do not assume Tier 3 W2-W4 features exist — they are queued, not shipped.
+
+## 9h. Cluster A let-rebind + `&p.field` SHIPPED
+
+Explicit `&` borrow shorthand and let-rebind (CLAUDE.md §2.5 direction A) is fully operational:
+
+- `&s` as a call-site borrow — eliminates `clone()` noise; single-direction coercion per ADR-0052a §4.4.
+- `let s = &p.field` — rebind to borrow a struct field without moving; Wave-1 of let-rebind per ADR-0052a §8.
+- `&s.method()` — borrow-of-call-result path unblocked per ADR-0052f + 0052g.
+
+Empirical baseline: identified as the LARGEST LLM-friendliness deficit in LC-100 honest-debt audit (Cluster A finding). Now fully closed.
+
+## 9i. FixSafety ladder available (ADR-0062)
+
+All 41 error-suggestion variants (`TypeError` + `MirError` + `LoweringError`) are classified on a `FixSafety` ladder with four tiers:
+
+- `DefinitelySafe` — apply without human review
+- `LikelySafe` — apply; flag in commit message
+- `NeedsReview` — propose to human; do not auto-apply
+- `Structural` — architecture-level change; always escalate
+
+LLM consumers routing via `cobrust skills get cobrust-language` receive the FixSafety tier per error variant in the structured output. Route `DefinitelySafe` fixes directly; route `Structural` fixes to P10/human.
 
 ## 10. When in doubt — read the canonical example programs
 
@@ -416,4 +448,4 @@ A freshly-onboarded agent is ready when it can do all of the following without a
 - **Examples are load-bearing**: every example in §3-§5 must `cobrust check` clean. If it doesn't, fix the example or fix the language — never let the skill silently lie.
 - **Cross-platform fidelity**: this skill is plain Markdown — no Claude-Code-specific frontmatter, no Cursor-specific tags. Any agent system can paste this into a system prompt or treat it as a `read-first` doc.
 
-— P10 lineage 2026-05-18; seeded after Phase G Wave 2 (`25ee43f`). Refreshed 2026-05-19: added §9a fn-redef / §9b Session / §9c LSP / §9d JIT preview + §12 Done-means; Phase I FULL CLOSED + Phase J wave-1 closed (`793032d`). Refreshed 2026-05-19 (P7 maintenance #30/#34): added §9e Phase L debugger / §9f Phase M 6-gap / §10 LC-100 stress ref updated + §10a F-pattern caveats; Phase K/L/M closed + LC-100 真 100/100.
+— P10 lineage 2026-05-18; seeded after Phase G Wave 2 (`25ee43f`). Refreshed 2026-05-19: added §9a fn-redef / §9b Session / §9c LSP / §9d JIT preview + §12 Done-means; Phase I FULL CLOSED + Phase J wave-1 closed (`793032d`). Refreshed 2026-05-19 (P7 maintenance #30/#34): added §9e Phase L debugger / §9f Phase M 6-gap / §10 LC-100 stress ref updated + §10a F-pattern caveats; Phase K/L/M closed + LC-100 真 100/100. Refreshed 2026-05-21 (P7 Tier-2 doc audit P0): §9c Phase J wave-2 FULL CLOSED at `53b5ed2`; §9e Phase L wave-2 landed at `171700b`+`05aa137`; added §9g Tier 1/2/3 W1 hardware tiering + §9h Cluster A let-rebind SHIPPED + §9i FixSafety ladder (ADR-0062); `last_verified_commit` sentinel → `6a25ec8`.
