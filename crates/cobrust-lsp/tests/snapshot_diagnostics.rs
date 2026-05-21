@@ -94,9 +94,7 @@ fn snapshot_arity_mismatch() {
 use cobrust_lsp::Backend;
 use cobrust_lsp::LineMap as LspLineMap;
 use cobrust_types::TypeCheckCtx;
-use tower_lsp::lsp_types::{
-    Position, Range as LspRange, TextDocumentContentChangeEvent,
-};
+use tower_lsp::lsp_types::{Position, Range as LspRange, TextDocumentContentChangeEvent};
 
 fn full_replace(text: &str) -> TextDocumentContentChangeEvent {
     TextDocumentContentChangeEvent {

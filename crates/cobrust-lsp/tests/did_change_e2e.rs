@@ -40,7 +40,11 @@ fn incremental_event(range: Range, text: &str) -> TextDocumentContentChangeEvent
     }
 }
 
-fn _params(uri: &Url, version: i32, changes: Vec<TextDocumentContentChangeEvent>) -> DidChangeTextDocumentParams {
+fn _params(
+    uri: &Url,
+    version: i32,
+    changes: Vec<TextDocumentContentChangeEvent>,
+) -> DidChangeTextDocumentParams {
     DidChangeTextDocumentParams {
         text_document: VersionedTextDocumentIdentifier {
             uri: uri.clone(),
@@ -63,7 +67,8 @@ fn did_change_incremental_refreshes_diagnostics() {
     let mut ctx = TypeCheckCtx::new();
     let file_id = 1u32;
     let line_map = LineMap::from_source(&initial);
-    let diags_open = Backend::compile_diagnostics_with_session(&initial, &line_map, &mut ctx, file_id);
+    let diags_open =
+        Backend::compile_diagnostics_with_session(&initial, &line_map, &mut ctx, file_id);
     assert!(
         !diags_open.is_empty(),
         "open should surface TypeMismatch; got {diags_open:?}"
@@ -89,12 +94,8 @@ fn did_change_incremental_refreshes_diagnostics() {
     assert_eq!(after, "let x: str = \"hello\"\n");
 
     let line_map_after = LineMap::from_source(&after);
-    let diags_after = Backend::compile_diagnostics_with_session(
-        &after,
-        &line_map_after,
-        &mut ctx,
-        file_id,
-    );
+    let diags_after =
+        Backend::compile_diagnostics_with_session(&after, &line_map_after, &mut ctx, file_id);
     assert!(
         diags_after.is_empty(),
         "after the fixing edit, diagnostics should be empty; got {diags_after:?}"
@@ -124,12 +125,8 @@ fn did_change_full_replace_diagnostics() {
     assert_eq!(after, "let y: i64 = \"oops\"\n");
 
     let line_map_after = LineMap::from_source(&after);
-    let diags_after = Backend::compile_diagnostics_with_session(
-        &after,
-        &line_map_after,
-        &mut ctx,
-        file_id,
-    );
+    let diags_after =
+        Backend::compile_diagnostics_with_session(&after, &line_map_after, &mut ctx, file_id);
     assert!(
         !diags_after.is_empty(),
         "full-replace introducing TypeMismatch should surface a diagnostic; got {diags_after:?}"
@@ -184,12 +181,7 @@ fn did_change_invalidate_session_drops_stale_types() {
     let replace = full_replace_event("let x: str = \"hi\"\n");
     let after = Backend::apply_content_changes(initial.clone(), &[replace]);
     let line_map_after = LineMap::from_source(&after);
-    let _ = Backend::compile_diagnostics_with_session(
-        &after,
-        &line_map_after,
-        &mut ctx,
-        file_id,
-    );
+    let _ = Backend::compile_diagnostics_with_session(&after, &line_map_after, &mut ctx, file_id);
 
     let x_ty_after = ctx
         .lookup("x")

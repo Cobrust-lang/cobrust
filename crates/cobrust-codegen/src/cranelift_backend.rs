@@ -580,10 +580,9 @@ impl CraneliftCtx {
                     "Verifier errors (wave1 path): {v}\n--- IR ---\n{}\n--- end IR ---",
                     ctx.func.display()
                 ),
-                cranelift_module::ModuleError::Compilation(cl) => format!(
-                    "{cl}\n--- IR ---\n{}\n--- end IR ---",
-                    ctx.func.display()
-                ),
+                cranelift_module::ModuleError::Compilation(cl) => {
+                    format!("{cl}\n--- IR ---\n{}\n--- end IR ---", ctx.func.display())
+                }
                 _ => e.to_string(),
             };
             CodegenError::CraneliftError(detail)

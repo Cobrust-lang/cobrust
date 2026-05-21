@@ -62,8 +62,8 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::debug_info::{
-    AsDIScope, DIBasicType, DICompileUnit, DIFile, DIFlagsConstants, DILocation, DISubprogram,
-    DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder, DICompositeType,
+    AsDIScope, DIBasicType, DICompileUnit, DICompositeType, DIFile, DIFlagsConstants, DILocation,
+    DISubprogram, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
 };
 use inkwell::module::{FlagBehavior, Linkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
@@ -895,10 +895,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
             cu_scope,
             "payload",
             self.di_file,
-            0,   // line number
-            64,  // size in bits
-            64,  // align in bits
-            64,  // offset in bits (after 32-bit tag + 32-bit pad)
+            0,  // line number
+            64, // size in bits
+            64, // align in bits
+            64, // offset in bits (after 32-bit tag + 32-bit pad)
             zero,
             payload_ty.as_type(),
         );
@@ -910,11 +910,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
             128, // size in bits (tag 32 + pad 32 + payload 64)
             64,  // align in bits
             zero,
-            None,                                                         // derived_from
-            &[tag_member.as_type(), payload_member.as_type()],            // elements
-            0,                                                            // runtime language
-            None,                                                         // vtable_holder
-            "cobrust::Option",                                            // unique_id
+            None,                                              // derived_from
+            &[tag_member.as_type(), payload_member.as_type()], // elements
+            0,                                                 // runtime language
+            None,                                              // vtable_holder
+            "cobrust::Option",                                 // unique_id
         );
         self.di_option_composite = Some(option_composite);
     }

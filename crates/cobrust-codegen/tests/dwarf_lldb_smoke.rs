@@ -252,8 +252,7 @@ fn body_summing_params(def_id: u32, name: &str) -> Body {
 /// emits a relocatable object). Uses a distinct tmp dir to avoid races
 /// with the object-level fixtures.
 fn executable_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir()
-        .join(format!("cobrust-0059d-exe-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("cobrust-0059d-exe-{name}-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     TargetSpec {
         triple: target_lexicon::Triple::host(),
@@ -305,10 +304,7 @@ fn lldb_run_with_bp(lldb: &str, exe: &Path, batch_cmds: &[&str]) -> String {
     let mut args = vec!["-b".to_string()];
     // Load pretty-printers first.
     args.push("-o".to_string());
-    args.push(format!(
-        "command script import {}",
-        printers_path.display()
-    ));
+    args.push(format!("command script import {}", printers_path.display()));
     // Append caller-supplied batch commands.
     for cmd in batch_cmds {
         args.push("-o".to_string());
@@ -321,8 +317,7 @@ fn lldb_run_with_bp(lldb: &str, exe: &Path, batch_cmds: &[&str]) -> String {
         .args(&args)
         .output()
         .expect("spawn lldb for linked executable");
-    String::from_utf8_lossy(&output.stdout).into_owned()
-        + &String::from_utf8_lossy(&output.stderr)
+    String::from_utf8_lossy(&output.stdout).into_owned() + &String::from_utf8_lossy(&output.stderr)
 }
 
 // =====================================================================
@@ -756,8 +751,7 @@ fn lldb_linked_option_none() {
     }
 
     // `Ty::Adt(AdtId(0), vec![Ty::Int])` — the future `Option<Int>` shape.
-    let body =
-        body_with_typed_signature(41, "option_none_smoke", Ty::Adt(AdtId(0), vec![Ty::Int]));
+    let body = body_with_typed_signature(41, "option_none_smoke", Ty::Adt(AdtId(0), vec![Ty::Int]));
     let exe = build_linked_executable(body);
     // The wave-3 codegen emits `cobrust::Option` DICompositeType for
     // `Ty::Adt(_, non_empty_params)`. For generic/non-parametrised Adts
@@ -792,7 +786,11 @@ fn lldb_linked_option_some_int() {
         return;
     }
 
-    let body = body_with_typed_signature(42, "option_some_int_smoke", Ty::Adt(AdtId(0), vec![Ty::Int]));
+    let body = body_with_typed_signature(
+        42,
+        "option_some_int_smoke",
+        Ty::Adt(AdtId(0), vec![Ty::Int]),
+    );
     let exe = build_linked_executable(body);
     let out = lldb_run_with_bp(&lldb, &exe, &["image dump symtab"]);
     assert!(

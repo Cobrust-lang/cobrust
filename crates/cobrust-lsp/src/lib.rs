@@ -186,7 +186,10 @@ impl Backend {
     /// hover / completion will consume this for cross-file symbol
     /// lookups; tests assert on it after `did_change`.
     pub fn session_ctx_snapshot(&self) -> TypeCheckCtx {
-        self.session_ctx.lock().expect("session_ctx poisoned").clone()
+        self.session_ctx
+            .lock()
+            .expect("session_ctx poisoned")
+            .clone()
     }
 
     /// Intern a URI → `FileId` allocation. Public for tests; production
@@ -402,10 +405,7 @@ impl LanguageServer for Backend {
         // LineMap rebuild — released before the pipeline re-run.
         let new_state = {
             let mut docs = self.docs.lock().expect("docs mutex poisoned");
-            let prev_source = docs
-                .get(&uri)
-                .map(|s| s.source.clone())
-                .unwrap_or_default();
+            let prev_source = docs.get(&uri).map(|s| s.source.clone()).unwrap_or_default();
             let new_source = Backend::apply_content_changes(prev_source, &changes);
             let state = DocState::new(new_source, version);
             docs.insert(uri.clone(), state.clone());
