@@ -48,6 +48,16 @@ unwrap_used = "warn"
 todo = "warn"
 dbg_macro = "warn"
 # Disable lints that produce noise on legitimate domain vocabulary.
+#
+# Tier-2 CQ P0-1 audit (2026-05-21) re-confirmed: the 967 doc_markdown
+# warnings the audit reported are an artefact of running
+# `cargo clippy ... -W clippy::doc_markdown` (which re-elevates the lint
+# past this workspace-allow). Default `cargo clippy --workspace
+# --all-targets` reports zero doc_markdown warnings — workspace-allow
+# wins. The lint is suppressed because >80% of would-be hits are
+# domain identifiers (`DefId`, `MirError`, `LParen`, `DoS`, `FileId`,
+# `tomllib`) — backticking them does not improve readability for a
+# compiler crate's docs.
 doc_markdown = "allow"
 module_name_repetitions = "allow"
 
