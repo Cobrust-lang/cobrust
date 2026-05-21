@@ -115,7 +115,12 @@ fn detect_aarch64() -> HostCpu {
 /// that runs on every Mac with an Apple-designed SoC).  `is_m2_or_later` is
 /// true if the brand string mentions `M2`, `M3`, or a successor — used to
 /// upgrade the wheel from `m1` to `m2`.
-#[cfg(target_os = "macos")]
+///
+/// Only called from the aarch64 branch of `detect_aarch64()` (see line 95) —
+/// cfg-gated to `target_arch = "aarch64"` so the function does not appear
+/// on x86_64 builds where it would be unused and trip `-D warnings` /
+/// dead_code lints in the release-binary build path.
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
 fn detect_apple_silicon() -> (bool, bool) {
     // sysctl machdep.cpu.brand_string is the canonical Apple-supplied source
     // for CPU model name on macOS.  Examples:
@@ -131,7 +136,7 @@ fn detect_apple_silicon() -> (bool, bool) {
     (is_apple_silicon, is_m2_or_later)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(target_arch = "aarch64", not(target_os = "macos")))]
 fn detect_apple_silicon() -> (bool, bool) {
     (false, false)
 }
