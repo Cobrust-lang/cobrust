@@ -199,7 +199,7 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
   - **D — Method-call sugar infra** — 25 new method-form entries (Str×10 + List×5 + Float×5 + Int×5) per [ADR-0052d-prereq](docs/agent/adr/0052d-prereq-method-dispatch-infra.md); full LC-100 corpus migration deferred to v0.3.1 (ADR-0052d-final).
 - ✅ **Phase H FULL CLOSED** (2026-05-18) — self-host type-checker scoping + 226 cobrust-types-cb parity tests PASS on DG; `.cb` files are READ-ONLY pseudocode policy ratified (ADR-0055/a/b/c/d/e; Wave-2 canonicalization surfaces).
 - ✅ **Phase I FULL CLOSED** (2026-05-19) — Cranelift-JIT scaffold (`cobrust-cranelift-jit` crate, 12 unit tests) + TypeCheckCtx `Clone+Send` Arc-COW + Session + per-file invalidate (LSP unblocker) + REPL `fn` redefinition + per-symbol `invalidate_def` (ADR-0056a/b/c).
-- ✅ **Phase J wave-1 closed** (2026-05-19) — `cobrust-lsp` crate: `textDocument/publishDiagnostics` over stdio, 16 tests (incl. 5 insta snapshots), 42 `From` impls, dual-track docs (ADR-0057a). Wave-2 `didChange` + CodeAction (0057d) pending.
+- ✅ **Phase J FULL CLOSED** (2026-05-19) — `cobrust-lsp` crate: v1 LSP server feature complete. Wave-1: `textDocument/publishDiagnostics` over stdio, 16 tests (incl. 5 insta snapshots), 42 `From` impls (ADR-0057a). Wave-2: `didChange` + snapshot reuse (ADR-0057b). Wave-3: `hover` + `completion` + `rename` (ADR-0057c + 0057d) — all merged at `53b5ed2`; dual-track docs complete. Wave-3 (go-to-def + codeAction + cross-file) PROPOSED.
 - ✅ **Phase K FULL CLOSED** (2026-05-19) — 5 strands: 0058a LLVM IR emission + 0058b opt passes + multi-target + 0058c DWARF debug info + 0058d JIT/AOT lowering convergence + Strand #5 musl tier-1 static binary. ADR-0023 §A3 RESOLVED (toy-fixture qualified per F36). Pending: 0058e AOT unification + 50MB+ production bench.
 - ✅ **Phase L FULL CLOSED** (2026-05-19) — 3-wave debugger UX: 0059a lldb pretty-printers + 0059b cobrust-dap server (DAP protocol) + 0059c cobrust debug CLI (`cobrust debug`, `cobrust debug attach`). Note: runtime frame variable + Dict iteration + Option Adt DI queued wave-2+.
 - ✅ **Phase M closure** (2026-05-19) — 6 language-surface gaps: i32/i8 narrow-int literals, `-> None` return annotation, `&T` reference annotation, `[T; N]` array literal syntax, anonymous-struct OOS. Follow-ups queued: BinOp-IntN widening, array-indexing dynamic index, empty-dict K-flow.
@@ -209,16 +209,17 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
 - ✅ **Standard library** — io / collections / string / math / panic / env / fmt / iter + structured concurrency runtime (M13). AI-facing alpha: `cobrust.llm` / `.prompt` / `.tool` flat prelude fns (per [ADR-0049](docs/agent/adr/0049-alpha-honesty-and-onboarding-hardening.md) honesty hardening).
 - ✅ **Package format** — `cobrust.toml`, content-addressed registry, deterministic lockfile.
 - ✅ **AI translation pipeline** — production-validated on stateless + stateful tomli functions (real LLM, 12/12 + 14/14 strict deterministic over 5 runs). dateutil / msgpack: partial.
-- 🚧 **Tooling** — REPL JIT scaffold landed (Phase I); full REPL interactive loop pending. LSP `publishDiagnostics` live (Phase J wave-1); `didChange` + CodeAction pending (wave-2). Debugger: lldb pretty-printers + DAP server + `cobrust debug` CLI (Phase L wave-1 closed); runtime frame variable + Dict iteration + Option Adt DI queued wave-2+. No WASM target.
+- 🚧 **Tooling** — REPL JIT scaffold landed (Phase I); full REPL interactive loop pending. LSP v1 feature complete (Phase J FULL CLOSED): publishDiagnostics + didChange + hover + completion + rename live; wave-3 (go-to-def + codeAction + cross-file) proposed. Debugger: lldb pretty-printers + DAP server + `cobrust debug` CLI (Phase L wave-1 closed); runtime frame variable + Dict iteration + Option Adt DI queued wave-2+. No WASM target.
 - 🚧 **LLVM backend** — Phase K closed (LLVM IR + DWARF + JIT/AOT conv + musl tier-1); 0058e AOT unification + 50MB+ production bench pending.
-- 🚧 **Phase J wave-2+** — `didChange` snapshot reuse + CodeAction (ADR-0057d); pending.
+- ✅ **Phase J FULL CLOSED** — wave-2 (`didChange`) + wave-3 (`hover` + `completion` + `rename`) merged at `53b5ed2`; ADR-0057a/b/c/d all accepted. Wave-3 go-to-def + codeAction + cross-file: PROPOSED.
+- ✅ **Hardware tiering (Tier 1/2/3 W1)** — Tier 1 runtime-dispatch SHIPPED (ADR-0058b); Tier 2 `--target-cpu` SHIPPED at `5186c27` / `a4c2532`; Tier 3 W1 release.yml 9-wheel matrix SHIPPED at `ba5bfcb`. Tier 3 W2-W4 (cobrust install / registry / ABI hardening) queued.
 - 🚧 **Phase M follow-ups** — BinOp-IntN widening + dynamic-index Array (`#![forbid(unsafe_code)]` blocks GEP) + empty-dict K-flow.
 
-**What this means**: Cobrust is **mechanism-validated** for language core + AI translation pipeline + debugger UX. **Phases G/H/I/J wave-1/K/L/M are fully closed**; LC-100 stress corpus is 100/100 production-validated. Phase J wave-2, 0058e AOT unification, dynamic-index Array, and 50MB+ production bench are next.
+**What this means**: Cobrust is **mechanism-validated** for language core + AI translation pipeline + debugger UX. **Phases G/H/I/J (FULL)/K/L/M are fully closed**; LC-100 stress corpus is 100/100 production-validated; hardware tiering Tier 1/2/3-W1 shipped. 0058e AOT unification, dynamic-index Array, and 50MB+ production bench are next.
 
 **§2.5 constitutional pillar** ([CLAUDE.md §2.5](CLAUDE.md) + [ADR-0051](docs/agent/adr/0051-llm-first-design-principle.md)): "Cobrust is not the language most pleasant for humans to write — it is the language LLM agents write correctly on the first try." See [`docs/agent/skills/cobrust-first-try.md`](docs/agent/skills/cobrust-first-try.md) for the agent-facing onboarding skill.
 
-**What's next** (queue order): 0058e AOT unification → 50MB+ production bench → dynamic-index Array (Phase M follow-up) → Phase J wave-2 (`didChange` + CodeAction).
+**What's next** (queue order): 0058e AOT unification → 50MB+ production bench → dynamic-index Array (Phase M follow-up) → Phase J wave-3 (go-to-def + codeAction + cross-file) → Tier 3 W2-W4 (cobrust install / registry / ABI hardening).
 
 See the [post-Phase-G roadmap (ADR-0054)](docs/agent/adr/0054-post-phase-g-roadmap.md) for full detail.
 
@@ -274,11 +275,12 @@ Full diagram: [docs/human/en/architecture.md](docs/human/en/architecture.md).
 |---|---|---|---|
 | ~~**H**~~ ✅ | Self-host type checker scoping; 226 parity tests; `.cb` READ-ONLY policy | closed 2026-05-18 | medium |
 | ~~**I**~~ ✅ | Cranelift-JIT scaffold + Session Clone+Send + REPL fn-redef | closed 2026-05-19 | medium |
-| ~~**J**~~ wave-1 ✅ | `publishDiagnostics` LSP server (cobrust-lsp, 16 tests, 42 From impls) | closed 2026-05-19 | **highest** |
+| ~~**J**~~ ✅ FULL | `publishDiagnostics` + `didChange` + `hover` + `completion` + `rename` (ADR-0057a/b/c/d; `53b5ed2`) | closed 2026-05-21 | **highest** |
 | ~~**K**~~ ✅ | LLVM IR + DWARF + opt passes + multi-target + JIT/AOT conv + musl tier-1 | closed 2026-05-19 | neutral |
 | ~~**L**~~ ✅ wave-1 | lldb pretty-printers + cobrust-dap server + cobrust debug CLI | closed 2026-05-19 | low |
 | ~~**M**~~ ✅ | 6 language-surface gaps (i32/i8, None-return, &T, [T;N], anon-struct OOS) + LC-100 100/100 | closed 2026-05-19 | **highest** |
-| **J** wave-2+ | `didChange` snapshot reuse + CodeAction (ADR-0057d) | pending | **highest** |
+| **J** wave-3 | go-to-def + codeAction + cross-file | proposed | **highest** |
+| **Tier 3 W2-W4** | cobrust install / registry / ABI hardening | queued | high |
 | **0058e** | AOT unification + 50MB+ production bench | pending | neutral |
 | **M follow-ups** | BinOp-IntN widening + dynamic-index Array + empty-dict K-flow | pending | high |
 | **L** wave-2+ | Runtime frame variable + Dict iteration + Option Adt DI | pending | low |
