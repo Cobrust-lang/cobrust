@@ -1,0 +1,28 @@
+[package]
+name = "cobrust-registry"
+description = "Registry index generator — scans GitHub Release assets and emits canonical wheels.json per ADR-0065 §7.3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+
+[[bin]]
+name = "cobrust-registry-gen"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
+tokio = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

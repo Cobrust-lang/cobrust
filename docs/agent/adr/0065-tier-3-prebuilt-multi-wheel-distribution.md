@@ -3,7 +3,7 @@ doc_kind: adr
 adr_id: 0065
 name: 0065
 title: "Tier 3 prebuilt multi-wheel distribution — per-CPU sub-target + cobrust install package tool"
-status: partial (waves 1+2 shipped; waves 3-4 queued)
+status: partial (waves 1+2+3 shipped; wave 4 queued)
 date: 2026-05-20
 phase: Phase O (post-Phase-N packaging)
 relates_to: [adr:0026, adr:0046, adr:0058b, adr:0058e]
@@ -371,12 +371,26 @@ Delivered:
 - ABI compatibility check on `cobrust_abi` semver-major (§6.4).
 - Prerequisite: wave-1 (registry index must exist to test against). [satisfied]
 
-### 7.3 Phase O wave-3: `cobrust-registry` crate spike + CDN mirror
+### 7.3 Phase O wave-3: `cobrust-registry` crate spike — SHIPPED
 
-- `crates/cobrust-registry`: static index generation tool (~300 LOC Rust).
-- CDN mirror sync script (Bash, ~50 LOC).
-- `cobrust.toml` `[registry]` section parser wired into `cobrust install`.
-- Prerequisite: wave-2 (registry client shape must be known).
+Status: **SHIPPED** (feature/tier3-w3-registry → main, 2026-05-21).
+
+Delivered:
+
+- `crates/cobrust-registry/src/lib.rs` — public re-exports.
+- `crates/cobrust-registry/src/generator.rs` — `fetch_release_assets` (GitHub API),
+  `parse_wheel_asset` (filename parse, no `regex` dep), `generate_index` (pure
+  assembler), `write_index_json` (serializer + dir-create). SHA-256 gap documented:
+  `WheelEntry::sha256` is `""` from API path; W4 adds post-download patching.
+- `crates/cobrust-registry/src/main.rs` — `cobrust-registry-gen <pkg> <version>
+  [--repo] [--out-dir]` binary entrypoint. Reads `GITHUB_TOKEN`. Exit 0/1.
+- 3 tests: `parse_wheel_asset_x86_64_gnu_v3`, `parse_wheel_asset_unrelated_skips`,
+  `generate_index_round_trip` (9 assets in → 9 wheel entries, JSON round-trip).
+- Workspace member #23 (`crates/cobrust-registry`).
+- Dual-track docs: `docs/agent/modules/registry.md`, `docs/human/en/registry.md`,
+  `docs/human/zh/registry.md`.
+- CDN mirror sync script and `cobrust.toml [registry]` wiring deferred to W4.
+- Prerequisite: wave-2 (registry client shape must be known). [satisfied]
 
 ### 7.4 Phase O wave-4: SHA verification hardening + ABI tagging
 
