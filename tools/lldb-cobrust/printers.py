@@ -148,14 +148,89 @@ def _read_set_i64(process, ptr):
 # =====================================================================
 
 
+#: ADR-0059e §3.3 — upper bound on Str byte length the structured-member
+#: path will read. Mirrors `_read_string_buffer`'s 4096-byte safety cap;
+#: prevents a corrupted `len` from triggering a gigabyte memory read.
+_MAX_STR_LEN = 4096
+
+
+def _try_structured_member_read(valobj, process):
+    """ADR-0059e §3.3 — attempt `SBValue.GetChildMemberWithName` walk.
+
+    When the binary was built with the ADR-0059e `cobrust::Str`
+    `DICompositeType` (ptr + len member fields), lldb sees the local
+    as a structured value and `GetChildMemberWithName` returns valid
+    children. Reads the underlying bytes directly from `process` at the
+    `ptr` address with the `len` byte count, decoded UTF-8.
+
+    Returns the decoded summary string on success; `None` on any
+    short-circuit (no children / invalid len / read failure) so the
+    caller can fall back to the wave-2 raw-memory path.
+
+    Per CLAUDE.md §2.5 §B: this is the path that surfaces the rich
+    structured DI to the LLM-consumed `frame variable s` output."""
+    # `GetChildMemberWithName` returns an `SBValue`; bool truthiness
+    # on `SBValue` follows IsValid() in the upstream lldb Python API,
+    # but defensive isvalid+notnone keeps the mock test surface clean.
+    get_child = getattr(valobj, "GetChildMemberWithName", None)
+    if get_child is None:
+        return None
+    try:
+        ptr_child = get_child("ptr")
+        len_child = get_child("len")
+    except Exception:  # noqa: BLE001 — lldb raises bare Exception subclasses.
+        return None
+    if ptr_child is None or len_child is None:
+        return None
+    if not (ptr_child.IsValid() and len_child.IsValid()):
+        return None
+    err_ptr = lldb.SBError()
+    err_len = lldb.SBError()
+    ptr_addr = ptr_child.GetValueAsUnsigned(err_ptr, 0)
+    str_len = len_child.GetValueAsUnsigned(err_len, 0)
+    # Defensive: bad bounds → fall through to wave-2 fallback so a
+    # binary in a corrupted state still gets best-effort decode.
+    if ptr_addr == 0:
+        return '""'
+    if str_len <= 0 or str_len > _MAX_STR_LEN:
+        return None
+    raw = _read_bytes(process, ptr_addr, str_len)
+    if not raw:
+        return None
+    try:
+        decoded = raw.decode("utf-8", errors="replace")
+    except (UnicodeDecodeError, AttributeError):
+        return '"<unreadable>"'
+    return '"' + decoded.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def cobrust_str_summary(valobj, internal_dict):
     """`cobrust::Str` summary — decode StringBuffer bytes as UTF-8.
+
+    ADR-0059e §3.3 introduces a TWO-PATH walk:
+
+    1. **Structured-member path** (preferred): the binary has
+       `cobrust::Str` as a `DICompositeType` with `ptr`/`len` member
+       fields (ADR-0059e §3.2 codegen). `SBValue.GetChildMemberWithName`
+       returns valid children; we read the bytes directly.
+    2. **Raw-memory fallback** (wave-2 preserved): older binaries that
+       pre-date ADR-0059e have `cobrust::Str` as a `DIBasicType` opaque
+       pointer. The wave-1/wave-2 `_read_string_buffer` walks the
+       `Box<StringBuffer { Vec<u8> }>` indirection through the
+       pointer-as-int.
 
     Per ADR-0059a §7.3: invalid UTF-8 renders with `errors='replace'`;
     the printer never raises."""
     process = _process(valobj)
     if process is None:
         return '""'
+
+    # ADR-0059e §3.3 — try the structured-member walk first.
+    structured = _try_structured_member_read(valobj, process)
+    if structured is not None:
+        return structured
+
+    # ADR-0059a wave-2 fallback — raw-memory StringBuffer walk.
     ptr = _valobj_pointer_addr(valobj)
     if ptr == 0:
         return '""'
