@@ -288,7 +288,8 @@ fn parse_error_span(err: &ParseError) -> Span {
         | UnexpectedEof { span }
         | DroppedByConstitution { span, .. }
         | NonLiteralDefault { span }
-        | IndentError { span, .. } => *span,
+        | IndentError { span, .. }
+        | ExpressionTooDeep { span, .. } => *span,
     }
 }
 

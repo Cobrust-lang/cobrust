@@ -479,6 +479,19 @@ impl From<ParseError> for UserError {
                     c,
                 )
             }
+            ParseError::ExpressionTooDeep { depth, max, span } => {
+                let (l, c) = span_to_line_col(span);
+                (
+                    format!("expression nesting depth {depth} exceeds limit {max}"),
+                    Some(
+                        "flatten deeply nested parentheses or split the expression across \
+                         multiple let bindings"
+                            .to_owned(),
+                    ),
+                    l,
+                    c,
+                )
+            }
         };
         Self::Syntax {
             file: PathBuf::from("<source>"),
