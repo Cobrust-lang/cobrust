@@ -59,6 +59,60 @@ impl LineMap {
         }
     }
 
+    /// Convert an LSP [`Position`] back to a byte offset in the source.
+    ///
+    /// Inverse of [`Self::byte_to_position`] modulo positions that point
+    /// past EOF (returned as `Some(source.len() as u32)`) and positions
+    /// past the end of their line (clamped to the line's last byte).
+    /// Returns `None` only if `position.line` exceeds the number of
+    /// lines in the source.
+    ///
+    /// Per LSP spec §"Position Encoding Kinds", `character` is a UTF-16
+    /// code-unit count from the start of the line. The traversal here
+    /// walks chars one at a time, accumulating both byte-length and
+    /// UTF-16 length, stopping when we hit `position.character`.
+    #[must_use]
+    pub fn position_to_byte(&self, position: Position) -> Option<u32> {
+        let line = position.line as usize;
+        if line >= self.line_starts.len() {
+            return None;
+        }
+        let line_start = self.line_starts[line] as usize;
+        let source_len = self.source.len();
+        // Determine line end: next line's start, or EOF.
+        let line_end = self
+            .line_starts
+            .get(line + 1)
+            .copied()
+            .map(|x| x as usize)
+            .unwrap_or(source_len);
+        // Slice the line content (excluding the terminating newline
+        // for clean per-char walks; the trailing \n's byte is line_end-1).
+        let line_bytes_end = if line_end > 0
+            && line_end <= source_len
+            && self.source.as_bytes().get(line_end - 1) == Some(&b'\n')
+        {
+            line_end - 1
+        } else {
+            line_end
+        };
+        let line_bytes_end = line_bytes_end.min(source_len);
+        let line_start = line_start.min(line_bytes_end);
+        let line_str = &self.source[line_start..line_bytes_end];
+        let target = position.character as usize;
+        let mut utf16_seen = 0usize;
+        let mut byte_off = line_start;
+        for ch in line_str.chars() {
+            if utf16_seen >= target {
+                break;
+            }
+            byte_off += ch.len_utf8();
+            utf16_seen += ch.len_utf16();
+        }
+        // If `target > utf16_seen` we clamp to the line's end.
+        Some(u32::try_from(byte_off).unwrap_or(u32::MAX))
+    }
+
     /// Convert a byte offset into the source into an LSP [`Position`].
     ///
     /// Per LSP spec §"Position Encoding Kinds", `character` is a
@@ -218,5 +272,87 @@ mod tests {
                 character: 3
             }
         );
+    }
+
+    #[test]
+    fn position_to_byte_basic_ascii() {
+        let lm = LineMap::from_source("abc\ndef\nghi");
+        assert_eq!(
+            lm.position_to_byte(Position {
+                line: 0,
+                character: 0
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            lm.position_to_byte(Position {
+                line: 0,
+                character: 2
+            }),
+            Some(2)
+        );
+        assert_eq!(
+            lm.position_to_byte(Position {
+                line: 1,
+                character: 0
+            }),
+            Some(4)
+        );
+        assert_eq!(
+            lm.position_to_byte(Position {
+                line: 2,
+                character: 1
+            }),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn position_to_byte_roundtrip_ascii() {
+        let src = "let x = 1\nlet y = 2\n";
+        let lm = LineMap::from_source(src);
+        for byte in [0u32, 4, 9, 10, 14, 19] {
+            let pos = lm.byte_to_position(byte);
+            assert_eq!(lm.position_to_byte(pos), Some(byte), "byte={byte}");
+        }
+    }
+
+    #[test]
+    fn position_to_byte_handles_utf16_emoji() {
+        // 🦀 = 4 bytes UTF-8 / 2 UTF-16 code units.
+        let lm = LineMap::from_source("a🦀b");
+        // Char position 3 = after 🦀 = byte 5.
+        assert_eq!(
+            lm.position_to_byte(Position {
+                line: 0,
+                character: 3
+            }),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn position_to_byte_out_of_bounds_line_returns_none() {
+        let lm = LineMap::from_source("abc");
+        assert_eq!(
+            lm.position_to_byte(Position {
+                line: 99,
+                character: 0
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn position_to_byte_clamps_past_line_end() {
+        let lm = LineMap::from_source("abc\ndef");
+        // Position past end of line 0 → clamps to line 0's last byte.
+        let off = lm
+            .position_to_byte(Position {
+                line: 0,
+                character: 100,
+            })
+            .expect("line 0 exists");
+        assert!(off <= 3, "off={off} should clamp ≤ 3");
     }
 }
