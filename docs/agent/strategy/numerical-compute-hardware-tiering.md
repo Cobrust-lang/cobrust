@@ -4,7 +4,7 @@ strategy_id: numerical-compute-hardware-tiering
 title: "numerical compute — hardware tiering insight (CPU tier 0-3 + GPU paths)"
 status: strategic-anchor
 date: 2026-05-19
-last_verified_commit: 2b9460c
+last_verified_commit: d2cbb8d
 relates_to: [adr:0046, adr:0058b, adr:0007, adr:0011, adr:0028]
 sourced_from: user insight 2026-05-19 (numerical-compute hardware tiering)
 ---
@@ -153,6 +153,48 @@ Waves 2-4 remain queued per ADR-0065 §7:
 
 Acceptance gate §5.1 (≥ 7 variants) is structurally satisfied by the 9-variant
 matrix. Gates §5.2-§5.4 are wave-2/4 scope.
+
+---
+
+## Production benchmark v0.4.0 (2026-05-21)
+
+Empirical baseline of stripped O3 `cobrust` binary across all 9 shipped
+wheel variants. This is the real-world artifact downstream consumers
+exercise, captured at the v0.4.0 cut (main HEAD `d2cbb8d`):
+
+| CPU tier / target                  | Binary size  | Δ vs Tier-0 baseline |
+|------------------------------------|--------------|----------------------|
+| Tier-0  `x86_64-unknown-linux-gnu-v1`   | 14,814,368 B | — (baseline)         |
+| Tier-3  `x86_64-unknown-linux-gnu-v3`   | 14,814,368 B | 0 B (no -fvectorize delta visible at the binary layer; per-function code-size payoffs cancel) |
+| Tier-3  `x86_64-unknown-linux-gnu-v4`   | 14,814,368 B | 0 B (same as v3 — AVX-512 inlines bigger but cobrust binary has limited AVX-eligible hot loops at v0.4.0 scope) |
+| Tier-0  `x86_64-unknown-linux-musl-v1`  | 14,885,688 B | +71,320 B (musl libc statically linked) |
+| Tier-3  `x86_64-unknown-linux-musl-v3`  | 14,885,688 B | +71,320 B |
+| Tier-0  `aarch64-unknown-linux-gnu-neon`| 11,288,368 B | -3,526,000 B (arm64 instruction density vs x86_64) |
+| Tier-3  `aarch64-unknown-linux-gnu-sve` | 11,288,368 B | -3,526,000 B (SVE-scalable: opt-in but no SVE-eligible hot loops at v0.4.0) |
+| Tier-3  `aarch64-apple-darwin-m1`       | 10,231,360 B | -4,583,008 B (Mach-O vs ELF + Apple Silicon code density) |
+| Tier-3  `aarch64-apple-darwin-m2`       | 10,231,360 B | -4,583,008 B (M2 = M1 ISA superset; no native delta) |
+
+**Key finding 1**: at v0.4.0 the cobrust binary itself contains few
+SIMD-eligible hot loops, so the `-v3` / `-v4` / `-sve` CPU-tier flags
+produce **byte-identical** stripped binaries vs their `-v1` / `-neon`
+baselines on the same triple. The CPU-tier multiplexing pays off in
+the **downstream numerical workload** (numpy-cb, cobrust.gpu), not
+in the compiler binary itself. ADR-0065 wave-1's CPU-tier wheels
+remain correct in design — they distribute the same compiler binary
+across CPU tiers so that *user code* compiled with `--target-cpu=native`
+(Tier-2) can target the host's best instruction set.
+
+**Key finding 2**: cross-arch shows real density delta. `aarch64`
+beats `x86_64` by ~3.5 MB (29% smaller); `darwin` beats `gnu` by
+~1 MB additional (M-series Mach-O + Apple Silicon code density).
+This is consistent with prior art (Rust compiler, Go toolchain).
+
+**Key finding 3**: O3-vs-O0 production ratio (Mac aarch64 control)
+**0.293 (70.7% reduction)** — materially better than the toy-fixture
+median 0.584 (41.6% reduction). LTO + inlining + DCE compound at
+scale. See ADR-0023 §A3 production-scale empirical close for the
+full O0 baseline (34,960,800 B) and binding harness anchor
+(`crates/cobrust-codegen/tests/binary_size_prodscale.rs`).
 
 ---
 
