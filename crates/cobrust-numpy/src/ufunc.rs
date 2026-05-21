@@ -20,23 +20,26 @@
 //! on a closed enum variant. Constitution §5.3 (efficient): inner
 //! loops are auto-vectorisable.
 
-#![allow(clippy::cast_lossless)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::float_cmp)]
-#![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::unnecessary_wraps)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::needless_bitwise_bool)]
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::if_not_else)]
+// CQ P1-4: consolidated from 17 separate inner attrs; translator-template fix deferred per F37.
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::module_name_repetitions,
+    clippy::missing_errors_doc,
+    clippy::unnecessary_wraps,
+    clippy::uninlined_format_args,
+    clippy::needless_bitwise_bool,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::map_unwrap_or,
+    clippy::if_not_else
+)]
 
 use ndarray::{ArrayD, Zip};
 

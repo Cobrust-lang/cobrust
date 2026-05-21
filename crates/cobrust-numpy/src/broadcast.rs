@@ -22,8 +22,8 @@
 //! broadcast view is produced by callers in `ufunc.rs` via
 //! `ndarray::ArrayBase::broadcast(target_shape)`.
 
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::uninlined_format_args)]
+// CQ P1-4: consolidated from 2 separate inner attrs; translator-template fix deferred per F37.
+#![allow(clippy::missing_errors_doc, clippy::uninlined_format_args)]
 
 use crate::error::{NumpyError, NumpyErrorKind};
 

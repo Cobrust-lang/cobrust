@@ -26,9 +26,12 @@
 //! comparisons to a separate path. `result_type` reflects
 //! arithmetic-op promotion only.
 
-#![allow(clippy::match_same_arms)]
-#![allow(clippy::missing_panics_doc)]
-#![allow(clippy::must_use_candidate)]
+// CQ P1-4: consolidated from 3 separate inner attrs; translator-template fix deferred per F37.
+#![allow(
+    clippy::match_same_arms,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use crate::dtype::Dtype;
 

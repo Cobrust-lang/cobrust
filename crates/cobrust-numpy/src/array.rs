@@ -13,11 +13,14 @@
 //! ADR-0014. The variant set itself is closed at M7.0 — adding `Int8`
 //! etc. is an ADR-bumpable decision.
 
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_lossless)]
-#![allow(clippy::missing_errors_doc)]
+// CQ P1-4: consolidated from 5 separate inner attrs; translator-template fix deferred per F37.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::missing_errors_doc
+)]
 
 use ndarray::{ArrayD, ArrayViewD, ArrayViewMutD};
 

@@ -27,24 +27,27 @@
 //!   every host.
 //! - Vs numpy: distribution-level agreement (KS-test, χ², mean-bin).
 
-#![allow(clippy::cast_lossless)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::float_cmp)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::missing_panics_doc)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::imprecise_flops)]
-#![allow(clippy::suboptimal_flops)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::collapsible_if)]
-#![allow(clippy::collapsible_match)]
-#![allow(clippy::explicit_iter_loop)]
+// CQ P1-4: consolidated from 18 separate inner attrs; translator-template fix deferred per F37.
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::needless_pass_by_value,
+    clippy::imprecise_flops,
+    clippy::suboptimal_flops,
+    clippy::module_name_repetitions,
+    clippy::similar_names,
+    clippy::uninlined_format_args,
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::explicit_iter_loop
+)]
 
 use ndarray::{ArrayD, IxDyn};
 use rand::{Rng, SeedableRng};
