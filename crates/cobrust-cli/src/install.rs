@@ -6,11 +6,19 @@
 //! 2. Fetch the wheel index for the requested package from the registry.
 //! 3. Pick the highest-tier wheel matching the host (with baseline fallback).
 //! 4. Download the wheel + verify SHA-256.
-//! 5. Validate `cobrust_abi` compatibility.
+//! 5. Validate `cobrust_abi` + `cobrust_abi_version` compatibility.
 //! 6. Unpack the wheel tarball into `~/.cobrust/pkgs/<name>-<version>/`.
 //!
 //! Errors print a `suggestion:` block per CLAUDE.md §2.5 direction B
 //! (errors must print the fix, not just the diagnosis).
+//!
+//! # W4 additions (ADR-0065 §7.4)
+//!
+//! - `InstallArgs::allow_experimental` — mirrors `--allow-experimental` CLI
+//!   flag; required to install SVE wheels (§3.1 / §6.5).
+//! - `select_wheel` now returns `Result<&WheelMeta, SelectError>` instead of
+//!   `Option`; the three error cases are mapped to distinct `InstallError`
+//!   variants with actionable `suggestion:` text.
 
 use std::path::{Path, PathBuf};
 
@@ -18,7 +26,7 @@ use thiserror::Error;
 
 use cobrust_pkg::cpu_detect::detect_host_cpu;
 use cobrust_pkg::registry_client::{RegistryClient, RegistryClientError};
-use cobrust_pkg::wheel_select::{WheelMeta, select_wheel};
+use cobrust_pkg::wheel_select::{COBRUST_ABI_VERSION, SelectError, WheelMeta, select_wheel};
 
 use crate::exit_codes;
 
@@ -26,9 +34,11 @@ use crate::exit_codes;
 /// host per ADR-0065 §3.4). Override via `--registry-url`.
 pub const DEFAULT_REGISTRY_URL: &str = "https://github.com/Cobrust-lang/cobrust/releases/download";
 
-/// `cobrust_abi` version this binary speaks. Wheels tagged with a mismatching
-/// semver-major are rejected at install time (ADR-0065 §3.3.2 step 9).
-pub const COBRUST_ABI_VERSION: &str = "0.1";
+/// `cobrust_abi` semver-major version this binary speaks. Wheels tagged with
+/// a mismatching semver-major are rejected at install time (ADR-0065 §3.3.2
+/// step 9). Distinct from the numeric [`COBRUST_ABI_VERSION`] constant from
+/// `cobrust_pkg::wheel_select` which guards the dependency-closure ABI (§6.4).
+pub const COBRUST_SEMVER_ABI: &str = "0.1";
 
 /// Parsed arguments for `cobrust install`.
 #[derive(Debug, Clone)]
@@ -41,6 +51,9 @@ pub struct InstallArgs {
     pub registry_url: Option<String>,
     /// If true, do everything except writing to disk (per ADR-0065 §3.3.3).
     pub dry_run: bool,
+    /// Allow installing experimental wheels (e.g. SVE — ADR-0065 §3.1 /
+    /// §6.5). Default `false`; must be set explicitly via `--allow-experimental`.
+    pub allow_experimental: bool,
 }
 
 /// Errors that can surface from `cobrust install`.
@@ -57,7 +70,7 @@ pub enum InstallError {
         /// Package name lookup that failed.
         pkg: String,
     },
-    /// Wheel ABI tag does not match the binary's `COBRUST_ABI_VERSION`.
+    /// Wheel semver ABI tag does not match the binary's `COBRUST_SEMVER_ABI`.
     #[error(
         "wheel cobrust_abi {wheel_abi} incompatible with installer {installer_abi}\n  suggestion: upgrade `cobrust` to a release that supports cobrust_abi {wheel_abi}, or pin to an older package version"
     )]
@@ -67,6 +80,22 @@ pub enum InstallError {
         /// ABI version supported by this installer binary.
         installer_abi: String,
     },
+    /// Wheel numeric ABI version does not match [`COBRUST_ABI_VERSION`].
+    #[error(
+        "wheel cobrust_abi_version {wheel_ver} incompatible with this installer (expects {expected})\n  suggestion: upgrade `cobrust` to a version that supports ABI version {wheel_ver}, or install an older wheel"
+    )]
+    AbiVersionMismatch {
+        /// Numeric ABI version advertised by the wheel.
+        wheel_ver: u32,
+        /// Expected ABI version for this installer.
+        expected: u32,
+    },
+    /// The selected wheel is experimental but `--allow-experimental` was not
+    /// passed.
+    #[error(
+        "wheel is experimental (e.g. SVE); re-run with --allow-experimental to install\n  suggestion: experimental wheels may have unstable ABI or correctness gaps; only use if you understand the risks"
+    )]
+    ExperimentalNotAllowed,
     /// Filesystem / unpack errors.
     #[error("install I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -128,14 +157,21 @@ fn install(args: &InstallArgs) -> Result<InstallReport, InstallError> {
     let index = client.fetch_index(&args.pkg_name, &version)?;
 
     let host = detect_host_cpu();
-    let chosen = select_wheel(&host, &index).ok_or_else(|| InstallError::NoMatchingWheel {
-        pkg: args.pkg_name.clone(),
+    let chosen = select_wheel(&host, &index, args.allow_experimental).map_err(|e| match e {
+        SelectError::NoWheelForTriple => InstallError::NoMatchingWheel {
+            pkg: args.pkg_name.clone(),
+        },
+        SelectError::AbiVersionMismatch { found } => InstallError::AbiVersionMismatch {
+            wheel_ver: found,
+            expected: COBRUST_ABI_VERSION,
+        },
+        SelectError::ExperimentalNotAllowed => InstallError::ExperimentalNotAllowed,
     })?;
 
-    if !abi_compatible(&chosen.cobrust_abi, COBRUST_ABI_VERSION) {
+    if !abi_compatible(&chosen.cobrust_abi, COBRUST_SEMVER_ABI) {
         return Err(InstallError::AbiMismatch {
             wheel_abi: chosen.cobrust_abi.clone(),
-            installer_abi: COBRUST_ABI_VERSION.to_owned(),
+            installer_abi: COBRUST_SEMVER_ABI.to_owned(),
         });
     }
 

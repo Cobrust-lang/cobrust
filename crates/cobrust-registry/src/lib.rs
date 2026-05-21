@@ -9,10 +9,11 @@
 //! ## Public API
 //!
 //! ```text
-//! generator::fetch_release_assets(repo, version)  → Vec<ReleaseAsset>
-//! generator::parse_wheel_asset(filename)           → Option<(triple, cpu_level)>
-//! generator::generate_index(pkg, version, assets)  → Index
-//! generator::write_index_json(index, path)         → Result<(), Error>
+//! generator::fetch_release_assets(repo, version)           → Vec<ReleaseAsset>
+//! generator::fetch_sha256sums(assets)                      → HashMap<String,String>
+//! generator::parse_wheel_asset(filename)                   → Option<(triple, cpu_level)>
+//! generator::generate_index(pkg, version, assets, sha_map) → Index
+//! generator::write_index_json(index, path)                 → Result<(), Error>
 //! ```
 //!
 //! ## Wire format
@@ -29,7 +30,9 @@
 //!       "cpu_level": "v3",
 //!       "sha256": "a1b2c3...",
 //!       "url": "https://github.com/Cobrust-lang/cobrust/releases/download/v0.1.0/...",
-//!       "size": 4194304
+//!       "size": 4194304,
+//!       "cobrust_abi_version": 1,
+//!       "experimental": false
 //!     }
 //!   ]
 //! }
@@ -37,4 +40,6 @@
 
 pub mod generator;
 
-pub use generator::{Error, Index, ReleaseAsset, WheelEntry, generate_index, write_index_json};
+pub use generator::{
+    Error, Index, ReleaseAsset, WheelEntry, fetch_sha256sums, generate_index, write_index_json,
+};

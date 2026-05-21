@@ -225,6 +225,16 @@ jobs:
       - name: List artifacts
         run: ls -lh dist/
 
+      # W4 (ADR-0065 §7.4): generate SHA256SUMS file for all wheel archives so
+      # the registry-gen index builder can populate WheelEntry.sha256.
+      # `sha256sum` output format: "<hex>  <filename>" (two spaces, GNU coreutils).
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist/
+          sha256sum cobrust-v*.tar.gz > SHA256SUMS
+          echo "SHA256SUMS contents:"
+          cat SHA256SUMS
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2  # v2.2.1
         with:
@@ -276,6 +286,8 @@ jobs:
             ```
 
             See [Getting Started](https://github.com/Cobrust-lang/cobrust/blob/main/docs/human/en/getting-started.md) for the full guide.
-          files: dist/*.tar.gz
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

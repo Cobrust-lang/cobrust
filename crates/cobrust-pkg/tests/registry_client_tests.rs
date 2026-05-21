@@ -13,6 +13,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use cobrust_pkg::registry_client::{RegistryClient, RegistryClientError, WheelMeta};
+use cobrust_pkg::wheel_select::COBRUST_ABI_VERSION;
 use sha2::{Digest, Sha256};
 
 /// Spawn a single-request HTTP server on a random port. `responses` is a list
@@ -85,6 +86,20 @@ fn sha256_hex(bytes: &[u8]) -> String {
     })
 }
 
+fn make_meta(filename: &str, sha256: &str) -> WheelMeta {
+    WheelMeta {
+        filename: filename.to_owned(),
+        triple: "x86_64-unknown-linux-gnu".to_owned(),
+        cpu_level: "v1".to_owned(),
+        sha256: sha256.to_owned(),
+        cobrust_abi: "0.1".to_owned(),
+        cobrust_abi_version: COBRUST_ABI_VERSION,
+        experimental: false,
+        size_bytes: 1024,
+        download_url: String::new(),
+    }
+}
+
 #[test]
 fn fetch_index_parses_valid_json() {
     let wheels = vec![WheelMeta {
@@ -93,6 +108,8 @@ fn fetch_index_parses_valid_json() {
         cpu_level: "v1".to_owned(),
         sha256: "0".repeat(64),
         cobrust_abi: "0.1".to_owned(),
+        cobrust_abi_version: COBRUST_ABI_VERSION,
+        experimental: false,
         size_bytes: 1024,
         download_url: "https://example.com/wheel.tar.gz".to_owned(),
     }];
@@ -114,20 +131,12 @@ fn fetch_index_parses_valid_json() {
 fn download_wheel_verifies_sha256_on_match() {
     let payload = b"fake wheel bytes".to_vec();
     let sha = sha256_hex(&payload);
-    let meta = WheelMeta {
-        filename: "test.tar.gz".to_owned(),
-        triple: "x86_64-unknown-linux-gnu".to_owned(),
-        cpu_level: "v1".to_owned(),
-        sha256: sha,
-        cobrust_abi: "0.1".to_owned(),
-        size_bytes: payload.len() as u64,
-        download_url: String::new(), // filled in below
-    };
+    let mut meta = make_meta("test.tar.gz", &sha);
+    meta.size_bytes = payload.len() as u64;
 
     let (base, handle) =
         spawn_mock_server(vec![("/wheel/test.tar.gz".to_owned(), 200, payload)], 1);
 
-    let mut meta = meta;
     meta.download_url = format!("{base}/wheel/test.tar.gz");
 
     let client = RegistryClient::new(&base).expect("client");
@@ -141,19 +150,11 @@ fn download_wheel_verifies_sha256_on_match() {
 fn download_wheel_rejects_sha256_mismatch() {
     let payload = b"fake wheel bytes".to_vec();
     // Advertise a wrong SHA.
-    let meta = WheelMeta {
-        filename: "test.tar.gz".to_owned(),
-        triple: "x86_64-unknown-linux-gnu".to_owned(),
-        cpu_level: "v1".to_owned(),
-        sha256: "deadbeef".repeat(8), // 64 hex chars, but not actual hash
-        cobrust_abi: "0.1".to_owned(),
-        size_bytes: payload.len() as u64,
-        download_url: String::new(),
-    };
+    let mut meta = make_meta("test.tar.gz", &"deadbeef".repeat(8)); // 64 hex chars, but not actual hash
+    meta.size_bytes = payload.len() as u64;
 
     let (base, handle) =
         spawn_mock_server(vec![("/wheel/test.tar.gz".to_owned(), 200, payload)], 1);
-    let mut meta = meta;
     meta.download_url = format!("{base}/wheel/test.tar.gz");
 
     let client = RegistryClient::new(&base).expect("client");

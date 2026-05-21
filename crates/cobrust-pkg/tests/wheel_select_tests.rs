@@ -1,7 +1,7 @@
 //! Integration tests for `cobrust_pkg::wheel_select` (ADR-0065 §3.3.2).
 
 use cobrust_pkg::cpu_detect::HostCpu;
-use cobrust_pkg::wheel_select::{WheelMeta, select_wheel};
+use cobrust_pkg::wheel_select::{COBRUST_ABI_VERSION, WheelMeta, select_wheel};
 
 fn make(triple: &str, cpu_level: &str) -> WheelMeta {
     WheelMeta {
@@ -10,6 +10,8 @@ fn make(triple: &str, cpu_level: &str) -> WheelMeta {
         cpu_level: cpu_level.to_owned(),
         sha256: "0".repeat(64),
         cobrust_abi: "0.1".to_owned(),
+        cobrust_abi_version: COBRUST_ABI_VERSION,
+        experimental: false,
         size_bytes: 4096,
         download_url: format!("https://example/{triple}-{cpu_level}.tar.gz"),
     }
@@ -27,13 +29,13 @@ fn exact_match_v3_picked_when_host_advertises_v3() {
     ];
     #[cfg(target_os = "linux")]
     {
-        let chosen = select_wheel(&host, &wheels).expect("expected a wheel");
+        let chosen = select_wheel(&host, &wheels, false).expect("expected a wheel");
         assert_eq!(chosen.cpu_level, "v3");
     }
     #[cfg(not(target_os = "linux"))]
     {
         // On non-Linux hosts the canonical X86_64 triple is different; the
-        // selector returns None because no wheel matches the host triple.
+        // selector returns an error because no wheel matches the host triple.
         // This is the desired contract.
         let _ = (host, wheels);
     }
@@ -53,18 +55,18 @@ fn fallback_to_baseline_when_higher_tier_missing() {
         "x86_64-unknown-linux-gnu"
     };
     let wheels = vec![make(triple, "v1")];
-    let chosen = select_wheel(&host, &wheels).expect("baseline fallback should match");
+    let chosen = select_wheel(&host, &wheels, false).expect("baseline fallback should match");
     assert_eq!(chosen.cpu_level, "v1");
 }
 
 #[test]
-fn no_wheels_for_host_triple_returns_none() {
+fn no_wheels_for_host_triple_returns_err() {
     let host = HostCpu::X86_64 {
         v3: true,
         v4: false,
     };
     let wheels = vec![make("aarch64-apple-darwin", "m1")];
-    assert!(select_wheel(&host, &wheels).is_none());
+    assert!(select_wheel(&host, &wheels, false).is_err());
 }
 
 #[test]
@@ -78,7 +80,7 @@ fn multi_tier_preference_picks_highest_available() {
         "x86_64-unknown-linux-gnu"
     };
     let wheels = vec![make(triple, "v1"), make(triple, "v3"), make(triple, "v4")];
-    let chosen = select_wheel(&host, &wheels).expect("expected a wheel");
+    let chosen = select_wheel(&host, &wheels, false).expect("expected a wheel");
     assert_eq!(chosen.cpu_level, "v4");
 }
 
@@ -90,7 +92,7 @@ fn apple_silicon_m1_specific_match() {
         apple_m2: false,
     };
     let wheels = vec![make("aarch64-apple-darwin", "m1")];
-    let chosen = select_wheel(&host, &wheels).expect("expected a wheel");
+    let chosen = select_wheel(&host, &wheels, false).expect("expected a wheel");
     assert_eq!(chosen.cpu_level, "m1");
     assert_eq!(chosen.triple, "aarch64-apple-darwin");
 }
