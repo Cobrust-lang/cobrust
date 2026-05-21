@@ -1,6 +1,5 @@
 ---
 source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
-assertion_line: 71
 expression: diags
 snapshot_kind: text
 ---
@@ -37,6 +36,9 @@ snapshot_kind: text
         },
         "message": "change to `if x != 0:` (use `.is_some()` for Option)"
       }
-    ]
+    ],
+    "data": {
+      "fix_safety": 1
+    }
   }
 ]

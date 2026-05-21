@@ -683,10 +683,7 @@ impl LanguageServer for Backend {
     /// with title-only (message-only). Tiers that map to `None`
     /// (`TargetChanging`, `RequiresHumanReview`) emit no CodeAction at
     /// all — the diagnostic stays message-only.
-    async fn code_action(
-        &self,
-        params: CodeActionParams,
-    ) -> LspResult<Option<CodeActionResponse>> {
+    async fn code_action(&self, params: CodeActionParams) -> LspResult<Option<CodeActionResponse>> {
         let uri = params.text_document.uri.clone();
         let actions: Vec<CodeActionOrCommand> =
             code_action::build_code_actions(&params.context.diagnostics, &uri);

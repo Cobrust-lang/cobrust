@@ -1,0 +1,50 @@
+---
+source: crates/cobrust-lsp/tests/wave_3_e2e.rs
+expression: actions
+snapshot_kind: text
+---
+[
+  {
+    "title": "rename method",
+    "kind": "refactor",
+    "diagnostics": [
+      {
+        "range": {
+          "start": {
+            "line": 0,
+            "character": 0
+          },
+          "end": {
+            "line": 0,
+            "character": 5
+          }
+        },
+        "severity": 1,
+        "code": "synthetic",
+        "source": "cobrust",
+        "message": "api change",
+        "relatedInformation": [
+          {
+            "location": {
+              "uri": "cobrust://synthetic",
+              "range": {
+                "start": {
+                  "line": 0,
+                  "character": 0
+                },
+                "end": {
+                  "line": 0,
+                  "character": 5
+                }
+              }
+            },
+            "message": "rename method"
+          }
+        ],
+        "data": {
+          "fix_safety": 3
+        }
+      }
+    ]
+  }
+]

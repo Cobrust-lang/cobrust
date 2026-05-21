@@ -1,0 +1,6 @@
+---
+source: crates/cobrust-lsp/tests/wave_3_e2e.rs
+expression: result
+snapshot_kind: text
+---
+null

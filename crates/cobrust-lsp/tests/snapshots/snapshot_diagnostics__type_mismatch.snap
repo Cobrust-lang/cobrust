@@ -1,6 +1,5 @@
 ---
 source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
-assertion_line: 34
 expression: diags
 snapshot_kind: text
 ---
@@ -37,6 +36,9 @@ snapshot_kind: text
         },
         "message": "change to `: str` (or convert the value to `i64`)"
       }
-    ]
+    ],
+    "data": {
+      "fix_safety": 2
+    }
   }
 ]

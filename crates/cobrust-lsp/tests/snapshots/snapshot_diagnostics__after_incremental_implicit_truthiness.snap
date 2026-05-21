@@ -1,6 +1,5 @@
 ---
 source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
-assertion_line: 201
 expression: diags
 snapshot_kind: text
 ---
@@ -37,6 +36,9 @@ snapshot_kind: text
         },
         "message": "this Python feature is not part of Cobrust — see the language reference"
       }
-    ]
+    ],
+    "data": {
+      "fix_safety": 5
+    }
   }
 ]
