@@ -130,6 +130,22 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - run: bash scripts/cli-tempdir-guard.sh
 
+  # Tier-2 security P0-3: cargo-audit advisory check.
+  # Non-blocking (continue-on-error: true) on initial rollout so that new
+  # advisory-DB entries do not break CI without human review. When the team
+  # has validated the advisory baseline, remove continue-on-error to harden.
+  # See docs/agent/findings/tier2-security-audit-p0.md for rationale (F37).
+  security-audit:
+    name: cargo audit (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true  # non-blocking: see comment above
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: cargo audit --deny warnings
+
   # Optional: real-LLM smoke (gated by step-level env check;
   # job-level `if: ${{ secrets.X != '' }}` is rejected by GitHub Actions
   # validation — secrets context is restricted to env/with/run.)
