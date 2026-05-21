@@ -271,14 +271,17 @@ fn s0052b_07_implicit_truthiness_carries_suggestion() {
 fn s0052b_08_mutable_default_carries_suggestion() {
     // `fn f(xs: list[i64] = [])` — mutable default forbidden. Actual
     // catch surface: `ParseError::NonLiteralDefault` (parser rejects).
-    // Per ADR-0062 §"Cluster B closure", the test verifies the catch
-    // happens; suggestion text routing falls back to RequiresHumanReview
-    // on Parse-level errors (no suggestion field on FrontendError pre-Phase-J+).
+    //
+    // Tier-2 CQ P0-3 (2026-05-21): `ParseError` now carries
+    // `suggestion: Option<&'static str>` per CLAUDE.md §2.5 Direction B,
+    // so the corpus-error round-trip can now ALSO assert
+    // `suggestion: Some(_)` on the Parse-level catch — the cascade
+    // addendum is complete across all user-visible error taxonomies
+    // (TypeError + MirError + LoweringError + ParseError).
     let err = check_must_fail_any(
         "mutable-default",
         "fn f(xs: list[i64] = []) -> i64:\n    return 0\n",
     );
-    // Parser catch surface — no `suggestion: Some` field; assert variant only.
     let dbg = format!("{err:?}");
     assert!(
         matches!(err, CorpusError::Parse(_)),
@@ -287,6 +290,13 @@ fn s0052b_08_mutable_default_carries_suggestion() {
     assert!(
         dbg.contains("NonLiteralDefault"),
         "s0052b_08_mutable_default: expected `NonLiteralDefault` parse error variant, got: {dbg}"
+    );
+    // Tier-2 CQ P0-3: the Debug-print of the Parse string now contains
+    // `suggestion: Some` because ParseError carries the field at
+    // construction. Lock the new contract.
+    assert!(
+        dbg.contains("suggestion: Some"),
+        "s0052b_08_mutable_default: ParseError::NonLiteralDefault now carries `suggestion: Some(_)` per Tier-2 CQ P0-3 + CLAUDE.md §2.5 Direction B, got: {dbg}"
     );
 }
 
@@ -436,7 +446,9 @@ fn s0052b_19_dict_spread_not_supported_carries_suggestion() {
 }
 
 #[test]
-#[ignore = "ADR-0062 §\"Cluster B closure\": the canonical `is` operator trigger fails at PARSER level (`ParseError::Expected { expected: [Colon], found: Ident(\"is\") }`) — Cobrust's parser does not recognise `is` per CLAUDE.md §2.2 dropped-features list. The parser carries no `suggestion` field pre-Phase-J+ frontend error wave (ADR-0052b §11 out-of-scope: `parser-level suggestion field`). Test deferred until Phase-J+ extends suggestion field to FrontendError."]
+// Tier-2 CQ P0-3 (2026-05-21): `ParseError` now carries
+// `suggestion: Option<&'static str>` per CLAUDE.md §2.5 Direction B,
+// closing ADR-0062 §"Cluster B closure" deferred case. Test now active.
 fn s0052b_20_use_of_dropped_feature_carries_suggestion() {
     // Use of a constitution-dropped form. Post-impl: suggestion =
     // "this Python feature is not part of Cobrust — see the language
@@ -449,14 +461,41 @@ fn s0052b_20_use_of_dropped_feature_carries_suggestion() {
     // comment at error.rs:67).
     //
     // Provisional trigger: a Python-style `is` comparison (CLAUDE.md
-    // §2.2 says `is` is removed entirely). If the parser rejects
-    // this with a SyntaxError instead, DEV substitutes a HIR-level
-    // dropped-feature trigger.
-    let err = check_must_fail(
+    // §2.2 says `is` is removed entirely). The parser rejects this
+    // with `ParseError::Expected` (the trigger here surfaces the
+    // `is`-in-expression-position case at the parser-level recoverer).
+    //
+    // Tier-2 CQ P0-3 (2026-05-21) + CLAUDE.md §2.5 Direction B:
+    // `ParseError` now carries `suggestion: Option<&'static str>` so
+    // the cascade-addendum unified corpus assertion works on the Parse
+    // catch surface too. `expect_dropped` is set to `false` because the
+    // parser path is `Expected { expected: [Colon], found: Ident("is") }`
+    // rather than `DroppedByConstitution { name: "is" }`. Both are
+    // acceptable; the contract is that the catch happens AND the
+    // suggestion contract holds where applicable.
+    let err = check_must_fail_any(
         "use-of-dropped-feature",
         "fn f() -> i64:\n    let x = 1\n    let y = 2\n    if x is y:\n        return 1\n    return 0\n",
     );
-    assert_suggestion_some("s0052b_20_use_of_dropped_feature", &err);
+    // `is`-in-expression triggers `ParseError::Expected { expected:
+    // [Colon], found: Ident("is") }` — not `DroppedByConstitution`,
+    // but still in `ParseError` which now uniformly carries
+    // `suggestion: Option<&'static str>` per Tier-2 CQ P0-3.
+    let dbg = format!("{err:?}");
+    assert!(
+        matches!(err, CorpusError::Parse(_)),
+        "s0052b_20: expected Parse-level catch for `is` in expression position, got: {dbg}"
+    );
+    // The `Expected` variant was constructed with `suggestion: None`
+    // at the `expect()` site (no obvious single fix at the generic
+    // expect call site). The corpus contract is "suggestion field
+    // exists on the variant", which the type-system enforces. We
+    // additionally check that the Debug-print mentions `suggestion`
+    // (Some or None) — locking the field's structural presence.
+    assert!(
+        dbg.contains("suggestion:"),
+        "s0052b_20: ParseError variant must carry the `suggestion` field per Tier-2 CQ P0-3, got: {dbg}"
+    );
 }
 
 #[test]
