@@ -27,26 +27,26 @@
 //!   every host.
 //! - Vs numpy: distribution-level agreement (KS-test, χ², mean-bin).
 
-// CQ P1-4: consolidated from 18 separate inner attrs; translator-template fix deferred per F37.
+// CQ P1-4 + template-fix: single consolidated block; future emits use #[allow] at item level.
 #![allow(
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
-    clippy::float_cmp,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::must_use_candidate,
-    clippy::needless_pass_by_value,
-    clippy::imprecise_flops,
-    clippy::suboptimal_flops,
-    clippy::module_name_repetitions,
-    clippy::similar_names,
-    clippy::uninlined_format_args,
     clippy::collapsible_if,
     clippy::collapsible_match,
-    clippy::explicit_iter_loop
+    clippy::explicit_iter_loop,
+    clippy::float_cmp,
+    clippy::imprecise_flops,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::module_name_repetitions,
+    clippy::must_use_candidate,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::suboptimal_flops,
+    clippy::uninlined_format_args
 )]
 
 use ndarray::{ArrayD, IxDyn};

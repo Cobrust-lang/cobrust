@@ -13,12 +13,12 @@
 //! ADR-0014. The variant set itself is closed at M7.0 — adding `Int8`
 //! etc. is an ADR-bumpable decision.
 
-// CQ P1-4: consolidated from 5 separate inner attrs; translator-template fix deferred per F37.
+// CQ P1-4 + template-fix: single consolidated block; future emits use #[allow] at item level.
 #![allow(
+    clippy::cast_lossless,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_precision_loss,
-    clippy::cast_lossless,
     clippy::missing_errors_doc
 )]
 

@@ -19,7 +19,7 @@
 //! boolean mask, `np.where`) returns owned `Array` per the view-vs-copy
 //! contract documented in ADR-0015 §3.
 
-// CQ P1-4: consolidated from 9 separate inner attrs; translator-template fix deferred per F37.
+// CQ P1-4 + template-fix: single consolidated block; future emits use #[allow] at item level.
 #![allow(
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
@@ -28,8 +28,8 @@
     clippy::cast_sign_loss,
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
-    clippy::must_use_candidate,
-    clippy::module_name_repetitions
+    clippy::module_name_repetitions,
+    clippy::must_use_candidate
 )]
 
 use ndarray::{ArrayViewD, ArrayViewMutD};
