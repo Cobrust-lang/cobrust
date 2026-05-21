@@ -31,3 +31,6 @@ sha2        = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# Used by `tests/registry_client_tests.rs` to compute SHA-256 of mock-server
+# payloads. sha2 is already a runtime dep so this is a zero-cost dev addition.
+sha2 = { workspace = true }
