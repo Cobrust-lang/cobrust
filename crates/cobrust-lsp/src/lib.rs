@@ -46,25 +46,29 @@ use tower_lsp::Client;
 use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::{
+    CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CodeActionResponse,
     CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, Hover,
-    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    MessageType, OneOf, PrepareRenameResponse, RenameOptions, RenameParams, ServerCapabilities,
-    ServerInfo, TextDocumentContentChangeEvent, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkDoneProgressOptions, WorkspaceEdit,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, MessageType, OneOf,
+    PrepareRenameResponse, RenameOptions, RenameParams, ServerCapabilities, ServerInfo,
+    TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Url, WorkDoneProgressOptions, WorkspaceEdit,
 };
 
 pub mod code_action;
 pub mod completion;
 pub mod debounce;
 pub mod diagnostic;
+pub mod goto_def;
 pub mod hover;
 pub mod rename;
 pub mod span_convert;
 
 pub use code_action::{
-    code_action_kind_for_fix_safety, code_action_kind_for_lowering_error,
+    build_code_actions, code_action_kind_for_fix_safety, code_action_kind_for_lowering_error,
     code_action_kind_for_mir_error, code_action_kind_for_type_error, fix_safety_from_code,
+    fix_safety_from_diagnostic_data,
 };
 pub use completion::{
     build_completion_response, keyword_items, prefix_at_offset, prelude_items, scope_items,
@@ -73,8 +77,9 @@ pub use debounce::{DEFAULT_DEBOUNCE_MS, DebounceTokens};
 pub use diagnostic::{
     lowering_error_to_diagnostic, mir_error_to_diagnostic, type_error_to_diagnostics,
 };
+pub use goto_def::resolve_definition;
 pub use hover::{render_hover_markdown, resolve_hover, word_at_offset};
-pub use rename::{prepare_rename, rename_symbol};
+pub use rename::{prepare_rename, rename_symbol, rename_symbol_cross_file};
 pub use span_convert::{LineMap, span_to_lsp_range};
 
 /// Per-document state cached by the LSP server.
@@ -370,6 +375,10 @@ impl LanguageServer for Backend {
                     prepare_provider: Some(true),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 })),
+                // ADR-0057e §3.1 — goto-definition capability.
+                definition_provider: Some(OneOf::Left(true)),
+                // ADR-0057e §3.2 — codeAction capability (FixSafety-gated).
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -581,12 +590,73 @@ impl LanguageServer for Backend {
     /// occurrence of the symbol at `position` with `params.new_name`,
     /// or `None` if the symbol is not rename-able.
     ///
-    /// Single-document scope only (ADR-0057d §4 non-goal). Cross-file
-    /// rename deferred to ADR-0057e wave-3.
+    /// ADR-0057e wave-3 extends this to walk OTHER open documents in
+    /// `self.docs` and aggregate their `TextEdit`s into the
+    /// `WorkspaceEdit.changes` map. Honest scope: cross-file rename is
+    /// LIMITED to documents currently OPEN in the LSP session;
+    /// filesystem-walk workspace search is deferred to a follow-up
+    /// sub-ADR (ADR-0057e §4 non-goal).
     async fn rename(&self, params: RenameParams) -> LspResult<Option<WorkspaceEdit>> {
-        let uri = params.text_document_position.text_document.uri.clone();
+        let primary_uri = params.text_document_position.text_document.uri.clone();
         let position = params.text_document_position.position;
         let new_name = params.new_name;
+
+        // Snapshot the primary doc + every OTHER open doc under a single
+        // lock, then release before invoking the rename. Avoids holding
+        // the lock across the (synchronous but potentially long) word
+        // scan over cross-file sources.
+        let (primary_source, primary_line_map, other_docs) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            let Some(primary) = docs.get(&primary_uri) else {
+                return Ok(None);
+            };
+            let primary_source = primary.source.clone();
+            let primary_line_map = primary.line_map.clone();
+            let other_docs: Vec<(Url, String, LineMap)> = docs
+                .iter()
+                .filter_map(|(uri, doc)| {
+                    if *uri == primary_uri {
+                        None
+                    } else {
+                        Some((uri.clone(), doc.source.clone(), doc.line_map.clone()))
+                    }
+                })
+                .collect();
+            (primary_source, primary_line_map, other_docs)
+        };
+
+        let ctx = self.session_ctx_snapshot();
+        Ok(rename::rename_symbol_cross_file(
+            &primary_source,
+            &primary_line_map,
+            position,
+            &new_name,
+            &ctx,
+            primary_uri,
+            &other_docs,
+        ))
+    }
+
+    /// ADR-0057e §3.1 — go-to-definition handler.
+    ///
+    /// Returns `Some(GotoDefinitionResponse::Scalar(Location))` with
+    /// the def-site of the symbol under the cursor, or `None` if the
+    /// cursor is not on a known identifier (keyword, punctuation,
+    /// unbound).
+    ///
+    /// Honest scope: wave-3 uses same-document word-scan only —
+    /// cross-file def-site indexing via HIR `DefId` span map deferred
+    /// to wave-4 (ADR-0057e §3.1 + §4).
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> LspResult<Option<GotoDefinitionResponse>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let position = params.text_document_position_params.position;
 
         let (source, line_map) = {
             let docs = self.docs.lock().expect("docs mutex poisoned");
@@ -597,9 +667,31 @@ impl LanguageServer for Backend {
         };
 
         let ctx = self.session_ctx_snapshot();
-        Ok(rename::rename_symbol(
-            &source, &line_map, position, &new_name, &ctx, uri,
+        Ok(goto_def::resolve_definition(
+            &source, &line_map, position, &ctx, uri,
         ))
+    }
+
+    /// ADR-0057e §3.2 — codeAction handler (FixSafety-tier gated).
+    ///
+    /// For each `Diagnostic` in `params.context.diagnostics`, emits a
+    /// `CodeAction` whose `kind` is determined by ADR-0062 §3.5 tier
+    /// gating (via [`code_action::code_action_kind_for_fix_safety`]).
+    /// `BehaviorPreserving` + `LocalEdit` tiers attach a
+    /// `WorkspaceEdit` with the suggestion as replacement text; other
+    /// emitted tiers (`ApiChanging`, `FormatOnly`) attach a CodeAction
+    /// with title-only (message-only). Tiers that map to `None`
+    /// (`TargetChanging`, `RequiresHumanReview`) emit no CodeAction at
+    /// all — the diagnostic stays message-only.
+    async fn code_action(&self, params: CodeActionParams) -> LspResult<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri.clone();
+        let actions: Vec<CodeActionOrCommand> =
+            code_action::build_code_actions(&params.context.diagnostics, &uri);
+        if actions.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(actions))
+        }
     }
 }
 

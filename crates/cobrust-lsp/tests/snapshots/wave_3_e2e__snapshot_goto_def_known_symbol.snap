@@ -1,0 +1,18 @@
+---
+source: crates/cobrust-lsp/tests/wave_3_e2e.rs
+expression: result
+snapshot_kind: text
+---
+{
+  "uri": "file:///test.cb",
+  "range": {
+    "start": {
+      "line": 0,
+      "character": 4
+    },
+    "end": {
+      "line": 0,
+      "character": 5
+    }
+  }
+}

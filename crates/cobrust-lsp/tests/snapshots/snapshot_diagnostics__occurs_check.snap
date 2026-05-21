@@ -1,6 +1,5 @@
 ---
 source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
-assertion_line: 47
 expression: diags
 snapshot_kind: text
 ---
@@ -37,6 +36,9 @@ snapshot_kind: text
         },
         "message": "add an explicit type annotation to break the recursive constraint"
       }
-    ]
+    ],
+    "data": {
+      "fix_safety": 5
+    }
   }
 ]

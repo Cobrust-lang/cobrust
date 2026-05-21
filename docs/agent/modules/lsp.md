@@ -41,7 +41,79 @@ Wave-2.2 (ADR-0057c) adds `textDocument/hover` (inferred type at cursor)
 Wave-2.3 (ADR-0057d) adds `textDocument/prepareRename` + `textDocument/rename`
 (symbol rename with `WorkspaceEdit` response). Closes Phase J wave-2.
 
-Wave-3 (ADR-0057e, planned) adds go-to-definition + cross-file workspace rename.
+Wave-3 (ADR-0057e) adds `textDocument/definition` (go-to-def via
+same-document word-scan fallback), `textDocument/codeAction` (ADR-0062
+`FixSafety`-tier-gated Quick Fix emission), and extends `rename` to
+walk every OPEN document in `Backend.docs` for cross-file `WorkspaceEdit`
+aggregation. Closes Phase J wave-3 — v1.1 LSP server shipped.
+
+### Wave-3 public surface (ADR-0057e)
+
+| Symbol | Location | Shape |
+|---|---|---|
+| `goto_def::resolve_definition` | `crates/cobrust-lsp/src/goto_def.rs` | `(source: &str, line_map: &LineMap, position: Position, ctx: &TypeCheckCtx, uri: Url) -> Option<GotoDefinitionResponse>` |
+| `code_action::build_code_actions` | `crates/cobrust-lsp/src/code_action.rs` | `(diagnostics: &[Diagnostic], uri: &Url) -> Vec<CodeActionOrCommand>` |
+| `code_action::fix_safety_from_diagnostic_data` | `crates/cobrust-lsp/src/code_action.rs` | `(diag: &Diagnostic) -> Option<FixSafety>` |
+| `rename::rename_symbol_cross_file` | `crates/cobrust-lsp/src/rename.rs` | `(primary_source: &str, primary_line_map: &LineMap, position: Position, new_name: &str, ctx: &TypeCheckCtx, primary_uri: Url, other_docs: &[(Url, String, LineMap)]) -> Option<WorkspaceEdit>` |
+| `diagnostic::DIAG_DATA_FIX_SAFETY_KEY` | `crates/cobrust-lsp/src/diagnostic.rs` | `&'static str = "fix_safety"` |
+
+### Wave-3 wire-shape (`Diagnostic.data`)
+
+ADR-0057e §3.2 stamps the ADR-0062 `FixSafety` tier into
+`Diagnostic.data` as a JSON object `{"fix_safety": <u8>}` (key is
+`DIAG_DATA_FIX_SAFETY_KEY`). The codeAction handler reads this to
+route per-tier behaviour without re-classifying the original error.
+
+| Tier code (u8) | `FixSafety` | `CodeActionKind` | Edit payload |
+|---|---|---|---|
+| 0 | FormatOnly | SOURCE_FIX_ALL | — (title-only) |
+| 1 | BehaviorPreserving | QUICKFIX | `WorkspaceEdit` (suggestion text) |
+| 2 | LocalEdit | QUICKFIX | `WorkspaceEdit` (suggestion text) |
+| 3 | ApiChanging | REFACTOR | — (title-only) |
+| 4 | TargetChanging | — | no CodeAction emitted |
+| 5 | RequiresHumanReview | — | no CodeAction emitted |
+| other | (out-of-range) | RequiresHumanReview default | no CodeAction emitted |
+
+### Wave-3 dispatch paths
+
+**goto_definition (ADR-0057e §3.1):**
+
+1. Read `(source, line_map)` from `docs.lock()` for the URI; return
+   `Ok(None)` if absent.
+2. Snapshot `TypeCheckCtx` via `session_ctx_snapshot` (Arc-clone, O(1)).
+3. Call `goto_def::resolve_definition(...)`.
+4. `resolve_definition`:
+   a. `position → byte_offset` via `LineMap::position_to_byte`.
+   b. `word_at_offset` resolves the cursor word.
+   c. Guard: not in `KEYWORDS`, present in `ctx.lookup`.
+   d. `first_word_occurrence(source, name)` scans for the first
+      word-boundary occurrence (the def-site under wave-3 same-doc scope).
+   e. Range conversion → `GotoDefinitionResponse::Scalar(Location)`.
+
+**code_action (ADR-0057e §3.2):**
+
+1. Read `params.context.diagnostics` + `params.text_document.uri`.
+2. For each diagnostic:
+   a. `fix_safety_from_diagnostic_data(diag)?` — read tier from `data`.
+   b. `code_action_kind_for_fix_safety(tier)?` — skip if `None`.
+   c. Read suggestion from `related_information[0].message` — skip if absent.
+   d. For `BehaviorPreserving` / `LocalEdit`: emit CodeAction with
+      `WorkspaceEdit { changes: {uri: [TextEdit{range, new_text: suggestion}]} }`.
+   e. For `ApiChanging` / `FormatOnly`: emit CodeAction with no `edit`,
+      `title = suggestion`.
+   f. For `TargetChanging` / `RequiresHumanReview`: skip emission.
+3. Return `Ok(Some(actions))` or `Ok(None)` if vec empty.
+
+**rename (extended, ADR-0057e §3.3):**
+
+1. Under a single `docs.lock()`, gather `(primary_source, primary_line_map)`
+   for the cursor URI AND a `Vec<(Url, String, LineMap)>` of every OTHER
+   open URI. Release lock before scan.
+2. Call `rename::rename_symbol_cross_file(...)`.
+3. Function reuses wave-2.3 `resolve_rename_symbol` guards on the
+   primary doc, then runs `collect_occurrences` for every URI; URIs
+   with zero occurrences are omitted from the `changes` map.
+4. Returns `WorkspaceEdit { changes: HashMap<Url, Vec<TextEdit>> }`.
 
 ## Public surface
 

@@ -195,6 +195,68 @@ fn collect_occurrences(
     edits
 }
 
+/// ADR-0057e §3.3 — cross-file rename.
+///
+/// Extends [`rename_symbol`] to ALSO walk every `(uri, source, line_map)`
+/// in `other_docs` and aggregate their occurrences into a single
+/// `WorkspaceEdit.changes` map keyed by URI.
+///
+/// Algorithm:
+///
+/// 1. Run the wave-2.3 guards on the primary doc — keyword, unbound,
+///    cursor-on-punctuation guards fail-fast with `None`.
+/// 2. Collect occurrences in the primary doc (via [`collect_occurrences`]).
+/// 3. For each `(uri, source, line_map)` in `other_docs`, run
+///    [`collect_occurrences`] and (if non-empty) insert into the changes
+///    map under `uri`.
+/// 4. Wrap into `WorkspaceEdit { changes: Some(changes) }`.
+///
+/// Honest scope (per ADR-0057e §4): cross-file rename is LIMITED to
+/// documents currently OPEN in the LSP session — `other_docs` is
+/// gathered from `Backend.docs` at handler time. Filesystem-walk
+/// workspace search is deferred to a follow-up sub-ADR.
+///
+/// Scope-blindness: wave-3 retains the wave-2.3 word-boundary
+/// heuristic across all open docs. If the same identifier `x` exists
+/// in a separate scope in another file, both are renamed. True
+/// scope-aware rename (via HIR `DefId` cross-file resolution) is
+/// deferred to wave-4.
+#[must_use]
+pub fn rename_symbol_cross_file(
+    primary_source: &str,
+    primary_line_map: &LineMap,
+    position: Position,
+    new_name: &str,
+    ctx: &TypeCheckCtx,
+    primary_uri: Url,
+    other_docs: &[(Url, String, LineMap)],
+) -> Option<WorkspaceEdit> {
+    // 1. Guards on the primary doc.
+    let (old_name, _def_start, _def_end) =
+        resolve_rename_symbol(primary_source, primary_line_map, position, ctx)?;
+
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+
+    // 2. Primary doc occurrences.
+    let primary_edits = collect_occurrences(primary_source, old_name, new_name, primary_line_map);
+    if !primary_edits.is_empty() {
+        changes.insert(primary_uri, primary_edits);
+    }
+
+    // 3. Cross-file occurrences over every OTHER open doc.
+    for (uri, source, line_map) in other_docs {
+        let edits = collect_occurrences(source, old_name, new_name, line_map);
+        if !edits.is_empty() {
+            changes.insert(uri.clone(), edits);
+        }
+    }
+
+    Some(WorkspaceEdit {
+        changes: Some(changes),
+        ..Default::default()
+    })
+}
+
 // ─── unit tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]

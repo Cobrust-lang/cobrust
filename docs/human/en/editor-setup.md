@@ -198,9 +198,9 @@ Place the cursor on `count`, press **F2** (VSCode/Cursor) or
 `<space>rn` (Neovim), type `total`, and press Enter. The server
 returns two edits — both `count` references are replaced atomically.
 
-**Scope:** wave-2.3 covers single-document rename only. Cross-file
-workspace rename (all files in the project) is planned for wave-3
-(ADR-0057e).
+**Scope:** wave-2.3 covered single-document rename only. **Wave-3
+(ADR-0057e) extends rename to all OPEN documents** — see the
+"Go-to-definition + Quick Fix + cross-file rename" section below.
 
 **Not rename-able:**
 - Language keywords (`let`, `def`, `if`, `match`, etc.)
@@ -220,6 +220,89 @@ sequenceDiagram
     cobrust-lsp-->>Editor: WorkspaceEdit { changes: { uri: [TextEdit×2] } }
     Editor->>Editor: Apply edits atomically
 ```
+
+### Go-to-definition + Quick Fix + cross-file rename (wave-3, ADR-0057e)
+
+Wave-3 (v1.1 LSP server) polishes the v1 surface with three editor
+productivity essentials:
+
+#### `textDocument/definition` — F12 / Cmd+click navigation
+
+Place the cursor on any use-site identifier and press **F12**
+(VSCode/Cursor) or `gd` (Neovim). The server returns a `Location`
+pointing at the def-site:
+
+```cobrust
+let x = 42
+x + 1     # ← cursor here, press F12 → jumps to 'x' on line 1
+```
+
+Returns `null` (no navigation) when:
+
+- Cursor is on a Cobrust keyword (`let`, `fn`, `if`, `match`, etc.).
+- Cursor is on whitespace or punctuation.
+- The symbol is not bound in the type checker (unknown / unresolved).
+
+Wave-3 honest scope: same-document navigation only. Cross-file def-site
+indexing is deferred to wave-4 — for now, the def-site `Location` URI
+always equals the cursor URI.
+
+#### `textDocument/codeAction` — Quick Fix (ADR-0062 FixSafety-gated)
+
+Every diagnostic with an attached suggestion now also produces a
+**Quick Fix** code action whose behaviour depends on the ADR-0062
+FixSafety tier:
+
+| Tier | Quick-fix kind | Auto-apply edit? |
+|---|---|---|
+| `BehaviorPreserving` | `QuickFix` | Yes (suggestion = replacement text) |
+| `LocalEdit` | `QuickFix` | Yes (suggestion = replacement text) |
+| `ApiChanging` | `Refactor` | No (suggestion shown in title only) |
+| `FormatOnly` | `SourceFixAll` | No (suggestion shown in title only) |
+| `TargetChanging` | — | No code action emitted |
+| `RequiresHumanReview` | — | No code action emitted |
+
+Example: writing `if x:` where `x: i64` produces the ADR-0052b
+`ImplicitTruthiness` diagnostic with suggestion `change to 'if x != 0:'`.
+Wave-3 emits this as a `BehaviorPreserving` QuickFix — the editor shows
+a lightbulb and "Apply" replaces the source. The agent-LLM driving
+Cursor / Continue applies the fix via `workspace/applyEdit` without
+re-composing the patch.
+
+#### Cross-file `rename` (extends ADR-0057d)
+
+Wave-3 extends the rename verb to **every document currently OPEN** in
+the LSP session. Press **F2**, type the new name; the server scans
+every open URI for word-boundary occurrences and aggregates them into a
+single `WorkspaceEdit.changes` map. The editor applies all per-file
+`TextEdit[]`s atomically.
+
+```cobrust
+# file_a.cb (open)
+let widget = 1
+widget + 1
+
+# file_b.cb (open)
+widget * 2
+
+# file_c.cb (open) — does NOT contain 'widget'
+let other = 99
+```
+
+Rename `widget` → `gadget` from anywhere in `file_a.cb`: file-A
+receives 2 edits, file-B receives 1 edit, file-C is unchanged (not in
+the `WorkspaceEdit.changes` map at all).
+
+**Honest scope:**
+
+- Cross-file rename is LIMITED to documents OPEN in the LSP session.
+  Files not opened by the editor are not visited — filesystem-walk
+  workspace search is deferred to a follow-up sub-ADR.
+- Scope-blindness: the word-boundary scan does not yet resolve
+  identifier scopes across files. If `x` appears in two unrelated
+  scopes in different open files, both are renamed. True scope-aware
+  cross-file rename (via HIR `DefId` cross-file resolution) is
+  deferred to wave-4.
 
 ### Build and run
 

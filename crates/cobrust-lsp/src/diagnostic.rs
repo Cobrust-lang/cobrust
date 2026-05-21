@@ -20,12 +20,22 @@ use cobrust_frontend::span::Span;
 use cobrust_hir::LoweringError;
 use cobrust_mir::MirError;
 use cobrust_types::TypeError;
+use serde_json::json;
 use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString, Range,
     Url,
 };
 
 use crate::span_convert::{LineMap, span_to_lsp_range};
+
+/// JSON key under `Diagnostic.data` carrying the ADR-0062 FixSafety
+/// tier code as `u8`. Read by `code_action.rs::build_code_actions` to
+/// route quick-fix UI per tier without re-classifying the error.
+///
+/// ADR-0057e §3.2 wire-shape: `{"fix_safety": <u8>}`. Forward-compatible
+/// — future codeAction extensions add sibling JSON keys without
+/// breaking the tier read path.
+pub const DIAG_DATA_FIX_SAFETY_KEY: &str = "fix_safety";
 
 /// Source string written into every emitted `Diagnostic.source`.
 pub const DIAG_SOURCE: &str = "cobrust";
@@ -158,7 +168,9 @@ fn type_error_to_diagnostic_single(err: &TypeError, line_map: &LineMap) -> Diagn
     };
     let range = span_to_lsp_range(&span, line_map);
     let diag = make_diagnostic(range, err.to_string(), code);
-    with_suggestion(diag, suggestion, range)
+    let diag = with_suggestion(diag, suggestion, range);
+    let fix_safety_code: u8 = cobrust_types::type_error_fix_safety(err) as u8;
+    attach_fix_safety_data(diag, fix_safety_code)
 }
 
 /// Map a `MirError` to a single LSP `Diagnostic`.
@@ -211,7 +223,9 @@ pub fn mir_error_to_diagnostic(err: &MirError, line_map: &LineMap) -> Diagnostic
         .map(|s| span_to_lsp_range(&s, line_map))
         .unwrap_or_default();
     let diag = make_diagnostic(range, err.to_string(), code);
-    with_suggestion(diag, suggestion, range)
+    let diag = with_suggestion(diag, suggestion, range);
+    let fix_safety_code = cobrust_mir::mir_error_fix_safety_code(err);
+    attach_fix_safety_data(diag, fix_safety_code)
 }
 
 /// Map a `LoweringError` to a single LSP `Diagnostic`.
@@ -238,7 +252,21 @@ pub fn lowering_error_to_diagnostic(err: &LoweringError, line_map: &LineMap) -> 
     };
     let range = span_to_lsp_range(&span, line_map);
     let diag = make_diagnostic(range, err.to_string(), code);
-    with_suggestion(diag, suggestion, range)
+    let diag = with_suggestion(diag, suggestion, range);
+    let fix_safety_code = cobrust_hir::lowering_error_fix_safety_code(err);
+    attach_fix_safety_data(diag, fix_safety_code)
+}
+
+/// Attach the ADR-0062 FixSafety tier code (as u8) to a `Diagnostic.data`
+/// JSON object under the [`DIAG_DATA_FIX_SAFETY_KEY`] key.
+///
+/// ADR-0057e §3.2 wire-shape consumed by `code_action::build_code_actions`
+/// — the codeAction handler reads this key to decide which CodeAction
+/// kind to emit (or whether to skip emission entirely) without
+/// re-classifying the underlying error variant.
+fn attach_fix_safety_data(mut diag: Diagnostic, fix_safety_code: u8) -> Diagnostic {
+    diag.data = Some(json!({ DIAG_DATA_FIX_SAFETY_KEY: fix_safety_code }));
+    diag
 }
 
 /// Map a `FrontendError` (lex / parse) to a single LSP `Diagnostic`.

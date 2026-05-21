@@ -1,6 +1,5 @@
 ---
 source: crates/cobrust-lsp/tests/snapshot_diagnostics.rs
-assertion_line: 226
 expression: diags
 snapshot_kind: text
 ---
@@ -37,6 +36,9 @@ snapshot_kind: text
         },
         "message": "check the function signature; pass exactly the declared positional arity"
       }
-    ]
+    ],
+    "data": {
+      "fix_safety": 2
+    }
   }
 ]

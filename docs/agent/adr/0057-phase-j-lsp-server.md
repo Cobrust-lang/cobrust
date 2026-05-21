@@ -194,7 +194,7 @@ scoping spike §6):
 | **0057b** | didChange incremental + Session reuse (wave-2.1) — INCREMENTAL sync; 100ms debounce; shared TypeCheckCtx; FileId pool. **ACCEPTED** | day 4-5 |
 | **0057c** | Hover + completion (PRIORITY 2 + 3, wave-2.2) — word-boundary hover; PRELUDE + scope + keyword completion. **ACCEPTED** | day 6-7 |
 | **0057d** | Rename (wave-2.3) — `prepareRename` + `rename` (WorkspaceEdit); single-document scope; 9-test gate. **ACCEPTED `e5bb708`** — Phase J wave-2 FULL CLOSED | day 8 |
-| **0057e** | Definition + codeAction (wave-3) — go-to-def via `DefId`; paired `QuickFix` per `suggestion`; cross-file rename. | day 9-14 |
+| **0057e** | Definition + codeAction (wave-3) — go-to-def via `DefId`; paired `QuickFix` per `suggestion`; cross-file rename. **ACCEPTED** — Phase J wave-3 SHIPPED, v1.1 LSP server. Honest scope: same-doc word-scan goto-def + OPEN-doc cross-file rename; HIR `DefId` cross-file resolution deferred to wave-4. | day 9-14 |
 
 Sub-ADRs ratify sequentially. Frame ratifies on 0057a dispatch.
 

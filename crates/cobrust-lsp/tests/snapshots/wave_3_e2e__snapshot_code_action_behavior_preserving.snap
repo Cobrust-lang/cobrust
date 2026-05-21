@@ -1,0 +1,69 @@
+---
+source: crates/cobrust-lsp/tests/wave_3_e2e.rs
+expression: actions
+snapshot_kind: text
+---
+[
+  {
+    "title": "change to `if x != 0:`",
+    "kind": "quickfix",
+    "diagnostics": [
+      {
+        "range": {
+          "start": {
+            "line": 0,
+            "character": 3
+          },
+          "end": {
+            "line": 0,
+            "character": 4
+          }
+        },
+        "severity": 1,
+        "code": "synthetic",
+        "source": "cobrust",
+        "message": "truthiness",
+        "relatedInformation": [
+          {
+            "location": {
+              "uri": "cobrust://synthetic",
+              "range": {
+                "start": {
+                  "line": 0,
+                  "character": 3
+                },
+                "end": {
+                  "line": 0,
+                  "character": 4
+                }
+              }
+            },
+            "message": "change to `if x != 0:`"
+          }
+        ],
+        "data": {
+          "fix_safety": 1
+        }
+      }
+    ],
+    "edit": {
+      "changes": {
+        "file:///test.cb": [
+          {
+            "range": {
+              "start": {
+                "line": 0,
+                "character": 3
+              },
+              "end": {
+                "line": 0,
+                "character": 4
+              }
+            },
+            "newText": "change to `if x != 0:`"
+          }
+        ]
+      }
+    }
+  }
+]

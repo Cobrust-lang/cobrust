@@ -17,10 +17,16 @@
 //! LSP wire-shape sends the suggestion text in `related_information`
 //! only).
 
+use std::collections::HashMap;
+
 use cobrust_hir::LoweringError;
 use cobrust_mir::MirError;
 use cobrust_types::{FixSafety, TypeError, type_error_fix_safety};
-use tower_lsp::lsp_types::CodeActionKind;
+use tower_lsp::lsp_types::{
+    CodeAction, CodeActionKind, CodeActionOrCommand, Diagnostic, TextEdit, Url, WorkspaceEdit,
+};
+
+use crate::diagnostic::DIAG_DATA_FIX_SAFETY_KEY;
 
 /// Look up the LSP CodeAction kind for a given FixSafety tier.
 ///
@@ -79,6 +85,104 @@ pub fn fix_safety_from_code(code: u8) -> FixSafety {
         4 => FixSafety::TargetChanging,
         _ => FixSafety::RequiresHumanReview,
     }
+}
+
+/// Read the ADR-0062 FixSafety tier from a `Diagnostic.data` JSON
+/// payload written by `diagnostic.rs::attach_fix_safety_data`.
+///
+/// Returns `None` when the diagnostic carries no `data`, or when the
+/// payload's `fix_safety` key is missing / non-numeric / out-of-range.
+/// Out-of-range values default to `RequiresHumanReview` via
+/// [`fix_safety_from_code`]; this fn returns `None` in that case so
+/// callers can distinguish "not annotated" from "explicitly conservative".
+#[must_use]
+pub fn fix_safety_from_diagnostic_data(diag: &Diagnostic) -> Option<FixSafety> {
+    let data = diag.data.as_ref()?;
+    let code = data.get(DIAG_DATA_FIX_SAFETY_KEY)?.as_u64()?;
+    let code_u8: u8 = u8::try_from(code).ok()?;
+    Some(fix_safety_from_code(code_u8))
+}
+
+/// ADR-0057e §3.2 — build `CodeAction[]` for a slice of diagnostics.
+///
+/// For each diagnostic in `diagnostics`:
+///
+/// - Read the FixSafety tier from `Diagnostic.data` (written by
+///   `diagnostic.rs::attach_fix_safety_data`).
+/// - Map tier → [`CodeActionKind`] via [`code_action_kind_for_fix_safety`].
+/// - Read the suggestion text from `Diagnostic.relatedInformation[0].message`
+///   (written by `diagnostic.rs::with_suggestion`).
+/// - If the tier is `BehaviorPreserving` or `LocalEdit`, emit a
+///   `CodeAction` with a `WorkspaceEdit` replacing the diagnostic's
+///   range with the suggestion text.
+/// - If the tier is `ApiChanging` or `FormatOnly`, emit a CodeAction
+///   with title-only (no `edit` payload, suggestion-only).
+/// - If the tier maps to `None` (`TargetChanging` / `RequiresHumanReview`),
+///   skip — no CodeAction is emitted, the diagnostic stays
+///   message-only.
+///
+/// Honest scope: the suggestion text *is* the replacement text. This
+/// works for the §2.5-canonical `ImplicitTruthiness` case ("change to
+/// `if x != 0:`") but is naive for hint-style suggestions where the
+/// text is prose, not source. Future sub-ADRs may add per-variant
+/// edit factories; wave-3 ships the conservative-default common path.
+///
+/// Returns an empty vec if no diagnostic produces a CodeAction.
+#[must_use]
+pub fn build_code_actions(diagnostics: &[Diagnostic], uri: &Url) -> Vec<CodeActionOrCommand> {
+    let mut out: Vec<CodeActionOrCommand> = Vec::new();
+
+    for diag in diagnostics {
+        let Some(tier) = fix_safety_from_diagnostic_data(diag) else {
+            continue;
+        };
+        let Some(kind) = code_action_kind_for_fix_safety(tier) else {
+            continue; // TargetChanging / RequiresHumanReview → message-only
+        };
+        let Some(suggestion) = diag
+            .related_information
+            .as_ref()
+            .and_then(|infos| infos.first())
+            .map(|info| info.message.clone())
+        else {
+            continue; // no suggestion text → nothing to surface as title
+        };
+
+        let edit = match tier {
+            // Auto-apply-eligible tiers attach a WorkspaceEdit with the
+            // suggestion as replacement text.
+            FixSafety::BehaviorPreserving | FixSafety::LocalEdit => {
+                let text_edit = TextEdit {
+                    range: diag.range,
+                    new_text: suggestion.clone(),
+                };
+                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                changes.insert(uri.clone(), vec![text_edit]);
+                Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                })
+            }
+            // Suggest-only tiers: no edit payload, suggestion in title.
+            FixSafety::ApiChanging | FixSafety::FormatOnly => None,
+            // Filtered above; unreachable here.
+            FixSafety::TargetChanging | FixSafety::RequiresHumanReview => continue,
+        };
+
+        let action = CodeAction {
+            title: suggestion,
+            kind: Some(kind),
+            diagnostics: Some(vec![diag.clone()]),
+            edit,
+            command: None,
+            is_preferred: None,
+            disabled: None,
+            data: None,
+        };
+        out.push(CodeActionOrCommand::CodeAction(action));
+    }
+
+    out
 }
 
 #[cfg(test)]
