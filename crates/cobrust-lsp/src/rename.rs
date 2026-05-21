@@ -35,9 +35,7 @@
 
 use std::collections::HashMap;
 
-use tower_lsp::lsp_types::{
-    Position, PrepareRenameResponse, Range, TextEdit, Url, WorkspaceEdit,
-};
+use tower_lsp::lsp_types::{Position, PrepareRenameResponse, Range, TextEdit, Url, WorkspaceEdit};
 
 use cobrust_types::TypeCheckCtx;
 
@@ -102,8 +100,7 @@ pub fn prepare_rename(
     position: Position,
     ctx: &TypeCheckCtx,
 ) -> Option<PrepareRenameResponse> {
-    let (_name, word_start, word_end) =
-        resolve_rename_symbol(source, line_map, position, ctx)?;
+    let (_name, word_start, word_end) = resolve_rename_symbol(source, line_map, position, ctx)?;
 
     let start_pos = line_map.byte_to_position(word_start as u32);
     let end_pos = line_map.byte_to_position(word_end as u32);
@@ -133,8 +130,7 @@ pub fn rename_symbol(
     ctx: &TypeCheckCtx,
     uri: Url,
 ) -> Option<WorkspaceEdit> {
-    let (old_name, _def_start, _def_end) =
-        resolve_rename_symbol(source, line_map, position, ctx)?;
+    let (old_name, _def_start, _def_end) = resolve_rename_symbol(source, line_map, position, ctx)?;
 
     let edits = collect_occurrences(source, old_name, new_name, line_map);
 
