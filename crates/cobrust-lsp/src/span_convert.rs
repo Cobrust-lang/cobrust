@@ -31,6 +31,14 @@ pub struct LineMap {
 }
 
 impl LineMap {
+    /// Read-only accessor for the cached source. Wave-4 `semantic_tokens`
+    /// uses this to re-scan source spans for fn / class def-name pinning
+    /// without requiring the source to be passed through every helper.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
     /// Build a `LineMap` from a source string.
     ///
     /// Recognises `\n` as a line break. `\r\n` collapses to `\n`-only
