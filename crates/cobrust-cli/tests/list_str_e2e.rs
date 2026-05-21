@@ -612,7 +612,7 @@ fn f3ls21_heap_str_pointer_looks_like_zero_no_false_exit() {
 }
 
 #[test]
-#[ignore = "ADR-0050c §\"Cons\" drop-after-move detection — borrow-check currently does NOT fire cross-statement use-after-move under `cobrust check`; the test honestly documents the gap. Pre-existing red on main HEAD as of 2026-05-20, not introduced by this branch."]
+#[ignore = "finding:lc100-str-use-after-move-regression-from-adr0050c — ADR-0050c §Cons: borrow-check does not fire cross-statement use-after-move under `cobrust check`; intra-block only. Landing: Phase H+ borrow-check widening."]
 fn f3ls22_drop_after_move_use_after_move_rejected() {
     // Drop-after-move regression (Finding 1.3b).
     //
@@ -643,7 +643,7 @@ fn f3ls22_drop_after_move_use_after_move_rejected() {
 }
 
 #[test]
-#[ignore = "ADR-0050c partial-iteration drop schedule — codegen-time runtime failure on partial-iteration drop path. Pre-existing red on main HEAD as of 2026-05-20, not introduced by this branch."]
+#[ignore = "finding:lc100-str-use-after-move-regression-from-adr0050c — ADR-0050c partial-iteration drop schedule: codegen emits ImplicitTruthiness error on `while n > 0:` early-return path; codegen drop schedule for partial iteration not yet implemented. Landing: Phase H+ codegen drop schedule."]
 fn f3ls23_partial_iteration_via_early_return_drops_remaining() {
     // Partial-iteration drop regression (Finding 1.3c).
     //
@@ -681,7 +681,6 @@ fn f3ls24_nested_list_list_str_recursive_drop() {
 }
 
 #[test]
-#[ignore = "ADR-0050c shadowing-rebind drop schedule — codegen-time runtime failure on rebind drop path. Pre-existing red on main HEAD as of 2026-05-20, not introduced by this branch."]
 fn f3ls25_shadowing_rebind_old_list_dropped_before_new_binds() {
     // Shadowing rebind regression (Finding 1.3e).
     //
