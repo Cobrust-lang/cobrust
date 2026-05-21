@@ -42,6 +42,7 @@ mod debug;
 pub mod error_ux;
 mod exit_codes;
 mod fmt;
+pub mod install;
 mod new;
 mod pkg_build;
 mod repl;
@@ -213,6 +214,32 @@ enum Command {
         action: skills::SkillsArgs,
     },
 
+    /// Install a Cobrust package from the wheel registry (ADR-0065 §3.3).
+    ///
+    /// Detects host CPU, fetches the wheel index, selects the highest-tier
+    /// matching wheel, verifies SHA-256, and unpacks under
+    /// `$COBRUST_HOME/pkgs/<name>-<version>/`.
+    ///
+    /// Examples:
+    ///   cobrust install numpy-cb --version 0.1.0
+    ///   cobrust install hello-cb --version 0.1.0 --registry-url https://example.com
+    ///   cobrust install numpy-cb --version 0.1.0 --dry-run
+    Install {
+        /// Package name (e.g. `numpy-cb`, `hello-cb`).
+        pkg_name: String,
+        /// Package version (e.g. `0.1.0`). Required in wave-2 — transitive
+        /// resolution lands later.
+        #[arg(long)]
+        version: Option<String>,
+        /// Override the wheel registry URL (advanced; default points at
+        /// the official Cobrust GitHub Releases host).
+        #[arg(long)]
+        registry_url: Option<String>,
+        /// Resolve + select but don't download or write to disk.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Interactive lldb / DAP-stdio debugging launcher (Phase L wave-3,
     /// ADR-0059c). Builds the source with DWARF on, auto-imports the
     /// wave-1 lldb pretty-printers (`tools/lldb-cobrust/printers.py`),
@@ -328,6 +355,17 @@ fn main() -> ExitCode {
             out_dir,
         } => report_bug::run(include_mir, source_file.as_deref(), out_dir.as_deref()),
         Command::Skills { action } => skills::cmd_skills(&action),
+        Command::Install {
+            pkg_name,
+            version,
+            registry_url,
+            dry_run,
+        } => install::run(install::InstallArgs {
+            pkg_name,
+            version,
+            registry_url,
+            dry_run,
+        }),
         Command::Debug {
             file,
             dap,
