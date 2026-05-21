@@ -17,12 +17,13 @@
 //!   printed to stderr with a `suggestion:` field per §2.5 direction B.
 //!
 //! Designed to be called as a one-shot step in `release.yml` after all wheel
-//! assets are uploaded. W4 will wire this into the CI pipeline.
+//! assets are uploaded (including `SHA256SUMS`). W4 wires this into the CI
+//! pipeline so wheel index entries have populated `sha256` fields.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use cobrust_registry::generator::fetch_release_assets;
+use cobrust_registry::generator::{fetch_release_assets, fetch_sha256sums};
 use cobrust_registry::{generate_index, write_index_json};
 
 fn main() -> ExitCode {
@@ -79,7 +80,18 @@ fn main() -> ExitCode {
         }
     };
 
-    let index = generate_index(&pkg, &version, &assets);
+    // W4: fetch SHA256SUMS to populate wheel entry sha256 fields.
+    let sha256_map = match fetch_sha256sums(&assets) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!(
+                "warning: could not fetch SHA256SUMS ({e}); proceeding with empty sha256 fields"
+            );
+            std::collections::HashMap::new()
+        }
+    };
+
+    let index = generate_index(&pkg, &version, &assets, &sha256_map);
     let out_path = out_dir.join(format!("{pkg}-{version}.json"));
 
     if let Err(e) = write_index_json(&index, &out_path) {
@@ -88,9 +100,10 @@ fn main() -> ExitCode {
     }
 
     println!(
-        "wrote {} wheel entries to {}",
+        "wrote {} wheel entries to {} ({} with sha256)",
         index.wheels.len(),
-        out_path.display()
+        out_path.display(),
+        index.wheels.iter().filter(|w| !w.sha256.is_empty()).count(),
     );
     ExitCode::SUCCESS
 }

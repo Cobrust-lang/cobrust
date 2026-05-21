@@ -10,12 +10,28 @@
 //! GitHub is used as the static CDN for release assets per §3.4. The
 //! `GITHUB_TOKEN` env var is read for authenticated requests (higher rate
 //! limit); the generator still works unauthenticated for public repos.
+//!
+//! # W4 additions (ADR-0065 §7.4)
+//!
+//! - [`WheelEntry`] gains `cobrust_abi_version: u32` (default 1) and
+//!   `experimental: bool` (SVE wheels are `true`).
+//! - [`fetch_sha256sums`] downloads and parses the `SHA256SUMS` release asset,
+//!   populating `WheelEntry::sha256` that was `""` in W3.
+//! - [`generate_index`] accepts an optional SHA map and marks SVE wheels as
+//!   experimental.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+/// Current ABI version stamped into every freshly-generated wheel entry.
+///
+/// Mirrors `cobrust_pkg::wheel_select::COBRUST_ABI_VERSION`. Both constants
+/// must be bumped together when the ABI changes.
+pub const GENERATOR_ABI_VERSION: u32 = 1;
 
 /// Errors from the generator pipeline.
 #[derive(Debug, Error)]
@@ -79,26 +95,34 @@ struct GhAsset {
 /// One wheel entry in the generated `wheels.json`.
 ///
 /// Maps to the §3.4 JSON shape:
-/// `{ triple, cpu_level, sha256, url, size }`.
-/// `sha256` is the hex digest of the wheel archive. When generating from the
-/// GitHub Releases API (which does not expose SHA-256 in the asset metadata),
-/// the field is set to the empty string `""` as a placeholder; the CI
-/// post-processing step that calls this generator must patch the SHA values
-/// after downloading the assets. This behaviour is documented as a known gap
-/// in ADR-0065 §7.3 — W4 will add SHA computation to the release pipeline.
+/// `{ triple, cpu_level, sha256, url, size, cobrust_abi_version, experimental }`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WheelEntry {
     /// Target triple (e.g. `x86_64-unknown-linux-gnu`).
     pub triple: String,
-    /// CPU level suffix (e.g. `v3`, `neon`, `m2`).
+    /// CPU level suffix (e.g. `v3`, `neon`, `m1`).
     pub cpu_level: String,
-    /// SHA-256 of the wheel archive (lowercase hex). May be `""` if not yet
-    /// computed (see struct-level doc).
+    /// SHA-256 of the wheel archive (lowercase hex). Populated from the
+    /// `SHA256SUMS` release asset via [`fetch_sha256sums`] (W4); empty string
+    /// only when that asset is absent.
     pub sha256: String,
     /// HTTP(S) download URL.
     pub url: String,
     /// Archive size in bytes.
     pub size: u64,
+    /// Numeric ABI version for dependency-closure compatibility (ADR-0065 §6.4).
+    /// Default for all v0.4.0+ wheels is `1` ([`GENERATOR_ABI_VERSION`]).
+    #[serde(default = "default_abi_version")]
+    pub cobrust_abi_version: u32,
+    /// If `true` this wheel is experimental and must not be auto-selected
+    /// without `--allow-experimental` (ADR-0065 §3.1 / §6.5).
+    /// Currently `true` for `cpu_level == "sve"`.
+    #[serde(default)]
+    pub experimental: bool,
+}
+
+fn default_abi_version() -> u32 {
+    GENERATOR_ABI_VERSION
 }
 
 /// The canonical `wheels.json` index for one package version.
@@ -173,6 +197,69 @@ pub fn fetch_release_assets(repo: &str, version: &str) -> Result<Vec<ReleaseAsse
     Ok(assets)
 }
 
+/// Download and parse the `SHA256SUMS` release asset from the same asset list.
+///
+/// Looks for an asset named `SHA256SUMS` (exact match) in `assets`; if found,
+/// downloads its content and parses each line as `<hex>  <filename>` (the
+/// format produced by `sha256sum *.tar.gz > SHA256SUMS`).
+///
+/// Returns a map from archive filename → lowercase hex SHA-256. Returns an
+/// empty map when no `SHA256SUMS` asset is present (graceful degradation:
+/// the generator still works without it; wheel entries will have `sha256 = ""`).
+///
+/// # Errors
+/// Returns [`Error::Http`] on transport failure or [`Error::BadStatus`] if the
+/// download URL returns non-2xx.
+pub fn fetch_sha256sums(assets: &[ReleaseAsset]) -> Result<HashMap<String, String>, Error> {
+    let sums_asset = assets.iter().find(|a| a.name == "SHA256SUMS");
+    let Some(asset) = sums_asset else {
+        return Ok(HashMap::new());
+    };
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(concat!(
+            "cobrust-registry-gen/",
+            env!("CARGO_PKG_VERSION"),
+            " (+https://github.com/Cobrust-lang/cobrust)"
+        ))
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
+    let resp = client.get(&asset.browser_download_url).send()?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Error::BadStatus {
+            status: status.as_u16(),
+            url: asset.browser_download_url.clone(),
+        });
+    }
+
+    let text = resp.text()?;
+    Ok(parse_sha256sums_text(&text))
+}
+
+/// Parse the text content of a SHA256SUMS file into a filename → hex map.
+///
+/// Each line format: `<64-hex-chars>  <filename>` (two spaces, as produced by
+/// `sha256sum`). Lines that don't match are silently skipped.
+#[must_use]
+fn parse_sha256sums_text(text: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for line in text.lines() {
+        let mut parts = line.splitn(2, |c: char| c.is_whitespace());
+        let hex = match parts.next() {
+            Some(h) if h.len() == 64 => h.to_ascii_lowercase(),
+            _ => continue,
+        };
+        let filename = match parts.next() {
+            Some(f) => f.trim().to_owned(),
+            None => continue,
+        };
+        map.insert(filename, hex);
+    }
+    map
+}
+
 /// Parse a release asset filename and extract `(triple, cpu_level)` if it
 /// matches the Cobrust wheel naming convention.
 ///
@@ -180,7 +267,7 @@ pub fn fetch_release_assets(repo: &str, version: &str) -> Result<Vec<ReleaseAsse
 ///
 /// Known cpu_level values (§3.2): `v1`, `v3`, `v4`, `neon`, `sve`, `m1`, `m2`.
 ///
-/// Returns `None` for any asset that does not match (e.g. `sha256sums.txt`,
+/// Returns `None` for any asset that does not match (e.g. `SHA256SUMS`,
 /// source tarballs, or compiler binary packages that don't carry a cpu_level).
 ///
 /// # Design note
@@ -227,21 +314,34 @@ pub fn parse_wheel_asset(asset_name: &str) -> Option<(String, String)> {
 /// Filters to only the assets that parse as valid wheel filenames (via
 /// [`parse_wheel_asset`]). Non-wheel assets are silently skipped.
 ///
-/// `sha256` is left empty (`""`) for each entry because the GitHub Releases
-/// API does not expose SHA-256 in the asset metadata at this call site.
-/// See [`WheelEntry::sha256`] for the documented gap.
+/// `sha256_map` — result of [`fetch_sha256sums`]; if the map contains an
+/// entry for the asset filename, the `sha256` field is populated. Pass an
+/// empty map when SHA256SUMS is unavailable.
+///
+/// SVE wheels (`cpu_level == "sve"`) are automatically marked `experimental =
+/// true` per ADR-0065 §3.1 / §6.5. All other wheels are `experimental =
+/// false`.
 #[must_use]
-pub fn generate_index(pkg: &str, version: &str, assets: &[ReleaseAsset]) -> Index {
+pub fn generate_index<S: std::hash::BuildHasher>(
+    pkg: &str,
+    version: &str,
+    assets: &[ReleaseAsset],
+    sha256_map: &HashMap<String, String, S>,
+) -> Index {
     let wheels: Vec<WheelEntry> = assets
         .iter()
         .filter_map(|a| {
             let (triple, cpu_level) = parse_wheel_asset(&a.name)?;
+            let sha256 = sha256_map.get(&a.name).cloned().unwrap_or_default();
+            let experimental = cpu_level == "sve";
             Some(WheelEntry {
                 triple,
                 cpu_level,
-                sha256: String::new(),
+                sha256,
                 url: a.browser_download_url.clone(),
                 size: a.size,
+                cobrust_abi_version: GENERATOR_ABI_VERSION,
+                experimental,
             })
         })
         .collect();
@@ -307,6 +407,7 @@ mod tests {
     fn parse_wheel_asset_unrelated_skips() {
         // Non-wheel assets must return None.
         assert!(parse_wheel_asset("sha256sums.txt").is_none());
+        assert!(parse_wheel_asset("SHA256SUMS").is_none());
         assert!(parse_wheel_asset("cobrust-0.4.0-x86_64-unknown-linux-gnu.tar.gz").is_none());
         assert!(parse_wheel_asset("README.md").is_none());
     }
@@ -332,12 +433,12 @@ mod tests {
         }
         // Add one non-wheel asset that should be skipped.
         assets.push(make_asset(
-            "sha256sums.txt",
-            "https://example.com/sha256sums.txt",
+            "SHA256SUMS",
+            "https://example.com/SHA256SUMS",
             512,
         ));
 
-        let index = generate_index("hello-cb", "0.1.0", &assets);
+        let index = generate_index("hello-cb", "0.1.0", &assets, &HashMap::new());
 
         // 9 wheel assets, 1 non-wheel skipped → 9 wheel entries.
         assert_eq!(
@@ -353,5 +454,76 @@ mod tests {
         let json = serde_json::to_string(&index).expect("serialize");
         let back: Index = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(index, back);
+    }
+
+    #[test]
+    fn generate_index_sve_marked_experimental() {
+        let assets = vec![
+            make_asset(
+                &wheel_name("test-cb", "0.1.0", "aarch64-unknown-linux-gnu", "neon"),
+                "https://example.com/neon.tar.gz",
+                1024,
+            ),
+            make_asset(
+                &wheel_name("test-cb", "0.1.0", "aarch64-unknown-linux-gnu", "sve"),
+                "https://example.com/sve.tar.gz",
+                1024,
+            ),
+        ];
+        let index = generate_index("test-cb", "0.1.0", &assets, &HashMap::new());
+        let neon = index
+            .wheels
+            .iter()
+            .find(|w| w.cpu_level == "neon")
+            .expect("neon wheel must be in index");
+        let sve = index
+            .wheels
+            .iter()
+            .find(|w| w.cpu_level == "sve")
+            .expect("sve wheel must be in index");
+        assert!(!neon.experimental, "neon must NOT be experimental");
+        assert!(sve.experimental, "sve MUST be experimental");
+    }
+
+    #[test]
+    fn generate_index_sha256_map_populated() {
+        let asset_name = wheel_name("test-cb", "0.1.0", "x86_64-unknown-linux-gnu", "v3");
+        let assets = vec![make_asset(
+            &asset_name,
+            "https://example.com/v3.tar.gz",
+            2048,
+        )];
+        let expected_sha = "a".repeat(64);
+        let mut sha_map = HashMap::new();
+        sha_map.insert(asset_name, expected_sha.clone());
+        let index = generate_index("test-cb", "0.1.0", &assets, &sha_map);
+        assert_eq!(index.wheels[0].sha256, expected_sha);
+    }
+
+    #[test]
+    fn generate_index_abi_version_stamped() {
+        let assets = vec![make_asset(
+            &wheel_name("test-cb", "0.1.0", "x86_64-unknown-linux-gnu", "v1"),
+            "https://example.com/v1.tar.gz",
+            1024,
+        )];
+        let index = generate_index("test-cb", "0.1.0", &assets, &HashMap::new());
+        assert_eq!(index.wheels[0].cobrust_abi_version, GENERATOR_ABI_VERSION);
+    }
+
+    #[test]
+    fn parse_sha256sums_text_parses_two_entries() {
+        let content = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  cobrust-test-0.1.0-x86_64-unknown-linux-gnu-v3.tar.gz\n\
+                       deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  cobrust-test-0.1.0-aarch64-unknown-linux-gnu-neon.tar.gz\n";
+        let map = parse_sha256sums_text(content);
+        assert_eq!(
+            map.get("cobrust-test-0.1.0-x86_64-unknown-linux-gnu-v3.tar.gz"),
+            Some(&"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_owned())
+        );
+        assert_eq!(
+            map.get("cobrust-test-0.1.0-aarch64-unknown-linux-gnu-neon.tar.gz"),
+            Some(&"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned())
+        );
+        assert_eq!(map.len(), 2);
     }
 }

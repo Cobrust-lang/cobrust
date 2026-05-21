@@ -215,6 +215,8 @@ mod tests {
             cpu_level: "v3".to_owned(),
             sha256: "a1b2c3".to_owned(),
             cobrust_abi: "0.1".to_owned(),
+            cobrust_abi_version: crate::wheel_select::COBRUST_ABI_VERSION,
+            experimental: false,
             size_bytes: 4_194_304,
             download_url: "https://example.com/wheel.tar.gz".to_owned(),
         };

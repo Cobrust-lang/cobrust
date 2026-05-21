@@ -224,6 +224,7 @@ enum Command {
     ///   cobrust install numpy-cb --version 0.1.0
     ///   cobrust install hello-cb --version 0.1.0 --registry-url https://example.com
     ///   cobrust install numpy-cb --version 0.1.0 --dry-run
+    ///   cobrust install svecalc-cb --version 0.1.0 --allow-experimental
     Install {
         /// Package name (e.g. `numpy-cb`, `hello-cb`).
         pkg_name: String,
@@ -238,6 +239,11 @@ enum Command {
         /// Resolve + select but don't download or write to disk.
         #[arg(long)]
         dry_run: bool,
+        /// Allow installing experimental wheels such as SVE (ADR-0065 §3.1 /
+        /// §6.5). Experimental wheels may have unstable ABI or correctness
+        /// gaps. Default is `false`; must be set explicitly.
+        #[arg(long)]
+        allow_experimental: bool,
     },
 
     /// Interactive lldb / DAP-stdio debugging launcher (Phase L wave-3,
@@ -360,11 +366,13 @@ fn main() -> ExitCode {
             version,
             registry_url,
             dry_run,
+            allow_experimental,
         } => install::run(install::InstallArgs {
             pkg_name,
             version,
             registry_url,
             dry_run,
+            allow_experimental,
         }),
         Command::Debug {
             file,
