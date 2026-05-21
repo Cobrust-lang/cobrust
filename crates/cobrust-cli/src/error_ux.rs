@@ -422,11 +422,20 @@ impl From<LexError> for UserError {
 
 impl From<ParseError> for UserError {
     fn from(e: ParseError) -> Self {
+        // Tier-2 CQ P0-3 + CLAUDE.md §2.5 Direction B: every variant
+        // now carries a construction-time
+        // `suggestion: Option<&'static str>`. The renderer reads it
+        // verbatim and falls back to the legacy hard-coded hint string
+        // ONLY when `suggestion` is `None` (preserves existing user-
+        // visible hint prose where no construction-site fix was
+        // populated). Pattern mirrors `error_ux.rs` TypeError /
+        // MirError per ADR-0052b §"Renderer is structural".
         let (msg, hint, line, col) = match &e {
             ParseError::Expected {
                 expected,
                 found,
                 span,
+                suggestion,
             } => {
                 let (l, c) = span_to_line_col(span);
                 let expected_str = expected
@@ -436,58 +445,88 @@ impl From<ParseError> for UserError {
                     .join(", ");
                 (
                     format!("expected {expected_str}, found `{found:?}`"),
-                    None,
+                    suggestion.map(str::to_owned),
                     l,
                     c,
                 )
             }
-            ParseError::Syntax { message, span } => {
+            ParseError::Syntax {
+                message,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
-                (message.clone(), None, l, c)
+                (message.clone(), suggestion.map(str::to_owned), l, c)
             }
-            ParseError::UnexpectedEof { span } => {
+            ParseError::UnexpectedEof { span, suggestion } => {
                 let (l, c) = span_to_line_col(span);
-                (
-                    "unexpected end of file".to_owned(),
-                    Some("the file may be incomplete — check for unclosed blocks".to_owned()),
-                    l,
-                    c,
-                )
-            }
-            ParseError::DroppedByConstitution { name, span } => {
-                let (l, c) = span_to_line_col(span);
-                let hint = format!(
-                    "`{name}` is not part of Cobrust — see the language reference for alternatives"
+                let hint = suggestion.map_or_else(
+                    || Some("the file may be incomplete — check for unclosed blocks".to_owned()),
+                    |s| Some(s.to_owned()),
                 );
-                (format!("use of dropped feature `{name}`"), Some(hint), l, c)
+                ("unexpected end of file".to_owned(), hint, l, c)
             }
-            ParseError::NonLiteralDefault { span } => {
+            ParseError::DroppedByConstitution {
+                name,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
+                let hint = suggestion.map_or_else(
+                    || {
+                        Some(format!(
+                            "`{name}` is not part of Cobrust — see the language reference for alternatives"
+                        ))
+                    },
+                    |s| Some(s.to_owned()),
+                );
+                (format!("use of dropped feature `{name}`"), hint, l, c)
+            }
+            ParseError::NonLiteralDefault { span, suggestion } => {
+                let (l, c) = span_to_line_col(span);
+                let hint = suggestion.map_or_else(
+                    || Some("use `None` or a number / string literal as the default".to_owned()),
+                    |s| Some(s.to_owned()),
+                );
                 (
                     "default argument must be a literal value".to_owned(),
-                    Some("use `None` or a number / string literal as the default".to_owned()),
+                    hint,
                     l,
                     c,
                 )
             }
-            ParseError::IndentError { message, span } => {
+            ParseError::IndentError {
+                message,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
-                (
-                    format!("indentation error: {message}"),
-                    Some("check that the block body is indented consistently".to_owned()),
-                    l,
-                    c,
-                )
+                let hint = suggestion.map_or_else(
+                    || Some("check that the block body is indented consistently".to_owned()),
+                    |s| Some(s.to_owned()),
+                );
+                (format!("indentation error: {message}"), hint, l, c)
             }
-            ParseError::ExpressionTooDeep { depth, max, span } => {
+            ParseError::ExpressionTooDeep {
+                depth,
+                max,
+                span,
+                suggestion,
+            } => {
                 let (l, c) = span_to_line_col(span);
+                let hint = suggestion.map_or_else(
+                    || {
+                        Some(
+                            "flatten deeply nested parentheses or split the expression across \
+                         multiple let bindings"
+                                .to_owned(),
+                        )
+                    },
+                    |s| Some(s.to_owned()),
+                );
                 (
                     format!("expression nesting depth {depth} exceeds limit {max}"),
-                    Some(
-                        "flatten deeply nested parentheses or split the expression across \
-                         multiple let bindings"
-                            .to_owned(),
-                    ),
+                    hint,
                     l,
                     c,
                 )
