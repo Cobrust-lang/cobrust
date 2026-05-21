@@ -1,7 +1,7 @@
 ---
 module_id: lsp
-last_verified_commit: feature/0057c-hover-completion
-milestone: J.wave2.2
+last_verified_commit: feature/0057d-rename
+milestone: J.wave2.3
 dependencies:
   - crates/cobrust-frontend/src/lib.rs       # parse_str entrypoint
   - crates/cobrust-hir/src/lower.rs          # HIR Session + lower
@@ -15,6 +15,7 @@ adr:
   - 0057a  # Wave-1 publishDiagnostics
   - 0057b  # Wave-2.1 didChange incremental + Session reuse
   - 0057c  # Wave-2.2 hover + completion
+  - 0057d  # Wave-2.3 prepareRename + rename
   - 0052b  # suggestion: Option<&'static str> field
   - 0056b  # TypeCheckCtx Clone + Send + invalidate (Arc-COW contract)
 ---
@@ -37,7 +38,10 @@ Wave-2.1 (ADR-0057b) adds per-keystroke live diagnostics via
 Wave-2.2 (ADR-0057c) adds `textDocument/hover` (inferred type at cursor)
 + `textDocument/completion` (PRELUDE + scope + keywords).
 
-Wave-2+ (ADR-0057d) adds definition, rename, codeAction.
+Wave-2.3 (ADR-0057d) adds `textDocument/prepareRename` + `textDocument/rename`
+(symbol rename with `WorkspaceEdit` response). Closes Phase J wave-2.
+
+Wave-3 (ADR-0057e, planned) adds go-to-definition + cross-file workspace rename.
 
 ## Public surface
 
@@ -59,6 +63,9 @@ Wave-2+ (ADR-0057d) adds definition, rename, codeAction.
 | `scope_items(&TypeCheckCtx, &str) -> Vec<CompletionItem>` | `crates/cobrust-lsp/src/completion.rs::scope_items` | in-scope binding items |
 | `keyword_items(&str) -> Vec<CompletionItem>` | `crates/cobrust-lsp/src/completion.rs::keyword_items` | keyword items |
 | `build_completion_response(&str, usize, &TypeCheckCtx) -> CompletionResponse` | `crates/cobrust-lsp/src/completion.rs::build_completion_response` | full completion dispatcher |
+| `KEYWORDS: &[&str]` | `crates/cobrust-lsp/src/completion.rs::KEYWORDS` | keyword list (pub, used by rename guard) |
+| `prepare_rename(&str, &LineMap, Position, &TypeCheckCtx) -> Option<PrepareRenameResponse>` | `crates/cobrust-lsp/src/rename.rs::prepare_rename` | cursor → rename-able Range or None |
+| `rename_symbol(&str, &LineMap, Position, &str, &TypeCheckCtx, Url) -> Option<WorkspaceEdit>` | `crates/cobrust-lsp/src/rename.rs::rename_symbol` | all-occurrence WorkspaceEdit builder |
 | `LineMap` | `crates/cobrust-lsp/src/span_convert.rs::LineMap` | byte-offset → UTF-16 position |
 | `LineMap::from_source(&str) -> LineMap` | `crates/cobrust-lsp/src/span_convert.rs::LineMap::from_source` | constructor |
 | `LineMap::byte_to_position(u32) -> Position` | `crates/cobrust-lsp/src/span_convert.rs::LineMap::byte_to_position` | byte → position |
@@ -176,14 +183,16 @@ codepoints (e.g. 🦀 → 2 UTF-16 surrogates).
 
 - `cargo check -p cobrust-lsp` exits 0 on Mac single-crate scope.
 - `cargo clippy -p cobrust-lsp --all-targets -- -D warnings` clean.
-- `cargo test -p cobrust-lsp` PASS for 75 tests:
-  - 48 unit (code_action + debounce + diagnostic + span_convert +
-    hover + completion).
+- `cargo test -p cobrust-lsp` PASS for 88 tests:
+  - 52 unit (code_action + debounce + diagnostic + span_convert +
+    hover + completion + rename unit tests).
   - 5 integration in `tests/did_change_e2e.rs` (ADR-0057b §5 gate).
   - 12 integration + snapshot in `tests/hover_completion_e2e.rs`
     (ADR-0057c §5 gate: 3 hover + 3 completion + 3 hover snap + 3 completion snap).
+  - 9 integration + snapshot in `tests/rename_e2e.rs`
+    (ADR-0057d §5 gate: 3 prepare_rename + 3 rename + 3 snapshot).
   - 10 snapshot in `tests/snapshot_diagnostics.rs` (wave-1 + wave-2.1).
-- ADR-0057c status flips `proposed → accepted` on impl merge.
+- ADR-0057d status flips `proposed → accepted` on impl merge.
 
 ## Hover dispatch path (wave-2.2, ADR-0057c §3.1)
 
@@ -217,14 +226,49 @@ completion(CompletionParams):
 
 Prefix filtering is case-sensitive. Empty prefix returns all items.
 
-## Non-goals (wave-2.1 + wave-2.2)
+## prepareRename dispatch path (wave-2.3, ADR-0057d §3.1)
+
+```text
+prepare_rename(TextDocumentPositionParams):
+  1. docs[uri].source + line_map snapshot
+  2. session_ctx_snapshot()
+  3. resolve_rename_symbol(source, line_map, position, ctx):
+     3a. line_map.position_to_byte(pos) → byte_offset
+     3b. word_at_offset(source, byte_offset) → (start, end) or None
+     3c. source[start..end] → name
+     3d. KEYWORDS.contains(name) → None if keyword
+     3e. ctx.lookup(name) → None if unknown binding
+  4. line_map.byte_to_position(start/end) → LSP Range
+  5. Return PrepareRenameResponse::Range(range)
+```
+
+Unknown name / keyword / whitespace → `Ok(None)`.
+
+## rename dispatch path (wave-2.3, ADR-0057d §3.2)
+
+```text
+rename(RenameParams { position, new_name }):
+  1. docs[uri].source + line_map snapshot
+  2. session_ctx_snapshot()
+  3. resolve_rename_symbol(source, line_map, position, ctx) → old_name
+  4. collect_occurrences(source, old_name, new_name, line_map):
+     - O(n) scan: for i where source[i] == old_name[0]:
+         word_at_offset(source, i) == Some((i, i+len)) AND slice == old_name
+         → TextEdit { range, new_text: new_name }
+  5. WorkspaceEdit { changes: { uri: edits } }
+  6. Return Some(WorkspaceEdit)
+```
+
+Single-document scope. `changes` always has exactly one URI key.
+
+## Non-goals (wave-2.1 + wave-2.2 + wave-2.3)
 
 - No incremental parse — full re-parse on each debounced batch.
   AST-cache + incremental parse is wave-2.3 scope.
 - No per-DefId incremental type-check — full re-check via
   `TypeCheckCtx::invalidate + merge_module`. True incremental
   check is an ADR-0056c follow-up.
-- No definition / rename / codeAction — separate sub-ADRs.
+- No definition / codeAction — separate sub-ADRs (wave-3).
 - No CodeAction emission on `did_change` push — code actions surface
   on `textDocument/codeAction` request only.
 - No multi-file invalidation propagation — wave-2.1 invalidates
@@ -235,6 +279,11 @@ Prefix filtering is case-sensitive. Empty prefix returns all items.
 - No PRELUDE introspection from `TypeCheckCtx` — completion uses a
   hardcoded 23-item catalogue. Live query is wave-3 per
   `TODO(#hover-prelude-sync)` in `src/completion.rs`.
+- No cross-file / workspace rename — ADR-0057d §4 non-goal. Single-
+  document only. Cross-file deferred to ADR-0057e (wave-3).
+- No `new_name` uniqueness validation — duplicate-name check deferred;
+  the subsequent `publishDiagnostics` cycle surfaces the collision.
+- No non-ASCII identifier rename — ASCII heuristic only (same as hover).
 
 ## CodeAction gating by FixSafety tier (ADR-0062)
 

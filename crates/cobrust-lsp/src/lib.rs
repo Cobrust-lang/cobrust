@@ -49,8 +49,9 @@ use tower_lsp::lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, Hover,
     HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    MessageType, ServerCapabilities, ServerInfo, TextDocumentContentChangeEvent,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    MessageType, OneOf, PrepareRenameResponse, RenameOptions, RenameParams, ServerCapabilities,
+    ServerInfo, TextDocumentContentChangeEvent, TextDocumentPositionParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkspaceEdit,
 };
 
 pub mod code_action;
@@ -58,6 +59,7 @@ pub mod completion;
 pub mod debounce;
 pub mod diagnostic;
 pub mod hover;
+pub mod rename;
 pub mod span_convert;
 
 pub use code_action::{
@@ -72,6 +74,7 @@ pub use diagnostic::{
     lowering_error_to_diagnostic, mir_error_to_diagnostic, type_error_to_diagnostics,
 };
 pub use hover::{render_hover_markdown, resolve_hover, word_at_offset};
+pub use rename::{prepare_rename, rename_symbol};
 pub use span_convert::{LineMap, span_to_lsp_range};
 
 /// Per-document state cached by the LSP server.
@@ -350,6 +353,7 @@ impl LanguageServer for Backend {
     async fn initialize(&self, _params: InitializeParams) -> LspResult<InitializeResult> {
         // ADR-0057b §3.2 — advertise INCREMENTAL sync.
         // ADR-0057c §6 — advertise hover + completion capabilities.
+        // ADR-0057d §3 — advertise prepareRename + rename capabilities.
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -360,6 +364,12 @@ impl LanguageServer for Backend {
                     trigger_characters: Some(vec![".".to_string(), "_".to_string()]),
                     ..Default::default()
                 }),
+                // Advertise rename with prepare_rename support so clients
+                // pre-flight the request (ADR-0057d §3.1).
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                })),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -540,6 +550,57 @@ impl LanguageServer for Backend {
         let ctx = self.session_ctx_snapshot();
         let resp = completion::build_completion_response(&source, byte_offset, &ctx);
         Ok(Some(resp))
+    }
+
+    /// ADR-0057d §3.1 — prepareRename handler.
+    ///
+    /// Pre-flight check before a rename: returns `Some(Range)` covering
+    /// the symbol if it is rename-able, or `None` if it is not (keyword,
+    /// punctuation, unknown binding).
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> LspResult<Option<PrepareRenameResponse>> {
+        let uri = &params.text_document.uri;
+        let position = params.position;
+
+        let (source, line_map) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            match docs.get(uri) {
+                Some(s) => (s.source.clone(), s.line_map.clone()),
+                None => return Ok(None),
+            }
+        };
+
+        let ctx = self.session_ctx_snapshot();
+        Ok(rename::prepare_rename(&source, &line_map, position, &ctx))
+    }
+
+    /// ADR-0057d §3.2 — rename handler.
+    ///
+    /// Returns a `WorkspaceEdit` with `TextEdit[]` replacing every
+    /// occurrence of the symbol at `position` with `params.new_name`,
+    /// or `None` if the symbol is not rename-able.
+    ///
+    /// Single-document scope only (ADR-0057d §4 non-goal). Cross-file
+    /// rename deferred to ADR-0057e wave-3.
+    async fn rename(&self, params: RenameParams) -> LspResult<Option<WorkspaceEdit>> {
+        let uri = params.text_document_position.text_document.uri.clone();
+        let position = params.text_document_position.position;
+        let new_name = params.new_name;
+
+        let (source, line_map) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            match docs.get(&uri) {
+                Some(s) => (s.source.clone(), s.line_map.clone()),
+                None => return Ok(None),
+            }
+        };
+
+        let ctx = self.session_ctx_snapshot();
+        Ok(rename::rename_symbol(
+            &source, &line_map, position, &new_name, &ctx, uri,
+        ))
     }
 }
 

@@ -1,0 +1,15 @@
+---
+source: crates/cobrust-lsp/tests/rename_e2e.rs
+expression: result
+snapshot_kind: text
+---
+{
+  "start": {
+    "line": 0,
+    "character": 4
+  },
+  "end": {
+    "line": 0,
+    "character": 5
+  }
+}

@@ -1,0 +1,6 @@
+---
+source: crates/cobrust-lsp/tests/rename_e2e.rs
+expression: result
+snapshot_kind: text
+---
+null

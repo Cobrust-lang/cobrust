@@ -146,8 +146,38 @@ Inferred type.
 
 过滤规则为大小写敏感前缀匹配。输入 `pri` 后仅剩 `print`。
 
-**Wave-2+(后续):** 定义跳转、重命名、codeAction。
-roster 参见 ADR-0057。
+### 重命名 — 文件内符号重命名（wave-2.3，ADR-0057d）
+
+自 ADR-0057d 起，`cobrust-lsp` 支持 `textDocument/prepareRename` 和
+`textDocument/rename` 请求——即所有主流编辑器中的 F2"重命名符号"快捷键。
+
+**工作原理：**
+
+1. **预检（`prepareRename`）** — 编辑器在弹出重命名输入框之前先调用此请求。
+   服务器返回：
+   - 包含可重命名符号的 `Range`；
+   - 若光标位于关键字、空白符或未绑定的标识符上，则返回 `null`。
+2. **重命名** — 用户输入新名称并确认后，编辑器发送 `textDocument/rename`。
+   服务器返回一个 `WorkspaceEdit`，包含当前文件中该旧名称所有出现位置的
+   `TextEdit[]`——定义处与所有引用处均会被原子替换。
+
+**示例：**
+
+```cobrust
+let count = 0
+count + 1
+```
+
+将光标置于 `count`，按 **F2**（VSCode/Cursor）或 `<space>rn`（Neovim），
+输入 `total` 后回车。服务器返回两个编辑——两处 `count` 引用同时被替换。
+
+**作用域：** wave-2.3 仅支持单文档内重命名。跨文件工作区重命名计划在
+wave-3（ADR-0057e）中实现。
+
+**不可重命名的情况：**
+- 语言关键字（`let`、`def`、`if`、`match` 等）
+- 空白符与标点
+- 尚未被类型检查器解析的标识符
 
 ### 构建与运行
 

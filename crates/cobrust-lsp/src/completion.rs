@@ -122,7 +122,9 @@ static PRELUDE_FNS: &[PreludeFn] = &[
 ];
 
 /// Cobrust keywords (ADR-0057c §3.2 keyword tier).
-static KEYWORDS: &[&str] = &[
+/// `pub` so `rename.rs` can reuse the same list for the keyword guard
+/// (ADR-0057d §3.1 — keywords are not rename-able).
+pub static KEYWORDS: &[&str] = &[
     "def", "let", "mut", "if", "else", "elif", "for", "while", "break", "continue", "return",
     "class", "enum", "match", "with", "and", "or", "not", "True", "False", "None", "pass", "raise",
     "try", "except", "finally", "import", "from", "as", "in", "is", "yield", "async", "await",
