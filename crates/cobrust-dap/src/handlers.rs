@@ -37,7 +37,12 @@ pub enum DapHandlerError {
 pub struct DapHandlers;
 
 /// Parse the `arguments` field of a DAP request into a typed struct.
-fn parse_args<T: serde::de::DeserializeOwned>(request: &Request) -> Result<T, DapHandlerError> {
+///
+/// `pub(crate)` so sibling modules under `cobrust-dap` (e.g.
+/// `evaluate.rs` per ADR-0059f §3.1) can share the same parse path.
+pub(crate) fn parse_args<T: serde::de::DeserializeOwned>(
+    request: &Request,
+) -> Result<T, DapHandlerError> {
     let args = request
         .arguments
         .as_ref()
@@ -67,6 +72,7 @@ pub async fn handle_initialize(
         supports_set_variable: false,
         supports_restart_frame: false,
         supports_terminate_request: true,
+        exception_breakpoint_filters: Vec::new(),
     };
     Ok(serde_json::to_value(capabilities)?)
 }
