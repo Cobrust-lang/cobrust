@@ -67,27 +67,33 @@ Cobrust 是一门**静态类型**的语言,用 Rust 写成,语法对 Python 用�
 # Option A — 用 cargo install(需要 Rust 工具链 1.94+)
 $ cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
-# Option B — 下载预编译轮子(v0.5.0,9 种变体 — 按 CPU 等级选择)
-# Linux x86_64 基线(v1 — 任意 x86_64)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-x86_64-linux-gnu-v1.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux x86_64 AVX2(v3 — Haswell+,2013 年后大多数桌面/服务器)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-x86_64-linux-gnu-v3.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux x86_64 AVX-512(v4 — Skylake-X / Ice Lake 服务器)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-x86_64-linux-gnu-v4.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux x86_64 musl v1 — Alpine / distroless / 最小容器(无需 glibc)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-x86_64-linux-musl-v1.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux x86_64 musl v3 — Alpine + AVX2
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-x86_64-linux-musl-v3.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux aarch64 NEON(通用 ARM64 — Graviton2、Ampere、Pi 4)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-aarch64-linux-gnu-neon.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux aarch64 SVE(Neoverse V1/V2、Graviton3+)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-aarch64-linux-gnu-sve.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# macOS Apple Silicon M1(基线)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-aarch64-apple-darwin-m1.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# macOS Apple Silicon M2+(AMX)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-aarch64-apple-darwin-m2.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# Option B — 下载预编译轮子(v0.6.0,FHS bin/lib/share 布局,ADR-0069)
+# 每个 tarball 解包为自包含的 cobrust-v0.6.0/ 目录;
+# 把 bin/cobrust 软链到 $PATH,runtime + stdlib 留在 lib/ 和 share/ 同级目录。
+# 不要 `cp cobrust /usr/local/bin/` —— 那会破坏 wheel-layout 查找链(F46 修复点)。
 
-# SHA256SUMS: https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/SHA256SUMS
+# macOS Apple Silicon M1(tier-1)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-aarch64-apple-darwin-m1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.0/bin/cobrust $HOME/.local/bin/cobrust
+
+# Linux x86_64 基线(v1 — 任意 x86_64)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-x86_64-unknown-linux-gnu-v1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.0/bin/cobrust $HOME/.local/bin/cobrust
+
+# Linux x86_64 musl 静态(Alpine / distroless / 最小容器,无需 glibc)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-x86_64-unknown-linux-musl-v1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.0/bin/cobrust $HOME/.local/bin/cobrust
+
+# 每个 tarball 都打包了:
+#   bin/cobrust            — 主驱动(子命令:build/run/check/fmt/translate/new/test/repl/lsp/dap/...)
+#   bin/cobrust-lsp        — 过渡 shim 二进制(extension v0.1.x 兼容;ADR-0068 §4.2;v0.7.0 删除)
+#   bin/cobrust-dap        — 过渡 shim 二进制(extension v0.1.x 兼容;ADR-0068 §4.2;v0.7.0 删除)
+#   lib/cobrust/libcobrust_stdlib.a       — 预编译静态 stdlib 归档
+#   share/cobrust/runtime/cobrust_main.c  — runtime C 入口
+#   share/cobrust/runtime/cpu_features.c  — CPU 特性检测辅助
+
+# 9 种 CPU 变体:v1/v3/v4(x86_64 glibc)、v1/v3(x86_64 musl)、
+# neon/sve(aarch64 linux)、m1/m2(aarch64 darwin)。SHA256SUMS 一起发布。
 
 # Option C — cobrust install(Tier 3 轮子自动选择,端到端)
 cobrust install <pkg>

@@ -25,29 +25,54 @@ Works in:
 
 ## Prerequisites
 
-You need the `cobrust-lsp` binary on your `$PATH`. v0.5.2+ wheels bundle
-it alongside `cobrust`; v0.5.1 and earlier require building from source via
-`cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-lsp`
-or symlinking from a local cargo build (`target/release/cobrust-lsp`).
+You need a `cobrust` binary on your `$PATH`. The LSP server is reached via:
+
+- **v0.6.0+**: prefer the subcommand `cobrust lsp` (ADR-0068 canonical
+  entry). The transitional `cobrust-lsp` standalone shim is still
+  shipped under `bin/` of every v0.6.x wheel so this extension's
+  v0.1.0 wiring keeps working unchanged. Both paths invoke the same
+  lib entry — byte-for-byte identical behavior.
+- **v0.5.2**: `cobrust-lsp` standalone binary bundled in the wheel.
+  Extension v0.1.0 spawns it directly.
+- **v0.5.1 and earlier**: `cobrust-lsp` standalone binary was NOT
+  bundled in the wheel. Build from source via `cargo install --git
+  https://github.com/Cobrust-lang/cobrust cobrust-lsp` or symlink
+  from a local cargo build.
+
+Caveat about v0.5.x compile path: per F46
+(`docs/agent/findings/f46-wheel-not-installable-runtime-stdlib-gap.md`),
+v0.5.1 + v0.5.2 wheels were 100% broken for `cobrust run` because the
+binary baked the GH Actions runner workspace path. LSP-only usage
+(extension surface) was unaffected since the LSP server does not
+invoke the compile pipeline. Upgrade compiler to v0.6.0 for working
+`cobrust run` / `cobrust build`.
+
 Install one of:
 
 - **Cargo (Rust 1.94+)**
   ```bash
-  cargo install cobrust
+  cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
   ```
-- **Prebuilt wheel** (9 CPU-tier variants, see
-  [ADR-0065](../../docs/agent/adr/0065-tier-3-prebuilt-multi-wheel-distribution.md))
+- **Prebuilt wheel v0.6.0+** (9 CPU-tier variants, ADR-0065 +
+  ADR-0069 FHS layout)
   ```bash
-  pip install cobrust
+  curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-<triple>-<cpu>.tar.gz \
+    | tar xz -C $HOME/.local/
+  ln -sf $HOME/.local/cobrust-v0.6.0/bin/cobrust $HOME/.local/bin/cobrust
   ```
-  When installed via pip, ensure your venv is activated when launching the
-  editor (or pass `cobrust.lspPath` explicitly).
 
 Verify:
 ```bash
-which cobrust-lsp
-cobrust-lsp --version
+cobrust --version          # → cobrust 0.6.0
+cobrust lsp --help 2>&1 | head -1  # v0.6.0+ subcommand path; --help may not be wired but the command exists
+which cobrust-lsp || true  # v0.5.2 + v0.6.x shim binary path
 ```
+
+ADR + finding cross-refs:
+- [ADR-0067](../../docs/agent/adr/0067-vscode-cursor-extension.md) — original extension scaffold (extension v0.1.0)
+- [ADR-0068](../../docs/agent/adr/0068-single-binary-subcommand-collapse.md) — `cobrust lsp` / `cobrust dap` subcommand collapse
+- [ADR-0069](../../docs/agent/adr/0069-wheel-layout-standardization.md) — FHS bin/lib/share wheel layout
+- [F46](../../docs/agent/findings/f46-wheel-not-installable-runtime-stdlib-gap.md) — v0.5.x wheel runtime+stdlib bundle gap
 
 ## Installation
 

@@ -4,7 +4,7 @@ skill_id: cobrust-first-try
 title: "Write Cobrust correctly on the first try"
 audience: any LLM agent (Claude Code / Cursor / OpenClaw / Hermes / Aider / OpenAI Codex / etc.)
 load_when: before writing or editing any `.cb` source file
-last_verified_commit: 407c1df
+last_verified_commit: 3824971
 maintainers: P10/user; updated atomically with language-surface ADRs
 ---
 
@@ -273,15 +273,19 @@ session.invalidate(file_id);   // next type_ctx() access re-checks only this fil
 
 ## 9c. LSP integration (Phase J wave-1 / ADR-0057a)
 
-**Start the LSP server**:
+**Start the LSP server** (ADR-0068):
 ```bash
-cobrust lsp           # stdio transport; editor spawns as child process
-cobrust-lsp           # standalone binary (same binary, alternate entrypoint)
+cobrust lsp           # v0.6.0+ canonical: stdio LSP server subcommand
+cobrust-lsp           # transitional shim (v0.6.x; deleted v0.7.0; ADR-0068 §4.2)
 ```
 
+Both paths invoke the same `cobrust_lsp::run()` lib entry; behavior
+is byte-for-byte identical. Editor extension v0.1.x spawns
+`cobrust-lsp`; extension v0.2.0 (future) prefers `cobrust lsp`.
+
 **Editor wiring** (brief; full config at `docs/human/{zh,en}/editor-setup.md`):
-- **VSCode / Cursor**: add `cobrust-lsp` to `"cobrust.server.path"` in settings; language ID `"cobrust"`, file extension `.cb`.
-- **Neovim** (`nvim-lspconfig`): `require('lspconfig').cobrust_lsp.setup({})` — uses stdio transport by default.
+- **VSCode / Cursor**: extension v0.1.x autodetects `cobrust-lsp` on `$PATH`; v0.6.0 wheels bundle it under `bin/cobrust-lsp`.
+- **Neovim** (`nvim-lspconfig`): `require('lspconfig').cobrust_lsp.setup({cmd = {'cobrust', 'lsp'}})` for the subcommand path; `{cmd = {'cobrust-lsp'}}` for the shim path. Both work on v0.6.x.
 
 **Protocol surface (wave-1 only)**:
 - `textDocument/didOpen` → triggers parse + typecheck → `textDocument/publishDiagnostics`
@@ -306,7 +310,8 @@ Wave-1: lldb pretty-printers (ADR-0059a). Wave-2: cobrust-dap server 9-handler c
 cobrust debug src/main.cb                    # interactive; all 17 DAP handlers active
 cobrust debug attach <pid>                   # attach to running process
 cobrust debug --breakpoint 42 src/main.cb   # stop at line 42
-cobrust-dap                                  # raw DAP stdio server
+cobrust dap                                  # v0.6.0+ canonical: raw DAP stdio server subcommand (ADR-0068)
+cobrust-dap                                  # transitional shim (v0.6.x; deleted v0.7.0)
 ```
 
 **New in wave-4 (ADR-0059f)**:
@@ -424,26 +429,43 @@ All 41 error-suggestion variants (`TypeError` + `MirError` + `LoweringError`) ar
 
 LLM consumers routing via `cobrust skills get cobrust-language` receive the FixSafety tier per error variant in the structured output. Route `DefinitelySafe` fixes directly; route `Structural` fixes to P10/human.
 
-## 9j. v0.5.0 install paths
+## 9j. v0.6.0 install paths (current stable; FHS wheel layout)
 
-**v0.5.0 is the current stable release** (tag `v0.5.0`, commit `6b3905c`). 10 assets: 9 wheel variants + SHA256SUMS.
+**v0.6.0 is the current stable release** (tag `v0.6.0`). 10 assets: 9 wheel variants + SHA256SUMS.
+
+ADR-0069 wheel layout: every tarball extracts to a self-contained
+`cobrust-v0.6.0/{bin,lib/cobrust,share/cobrust/runtime}/` tree. The
+binary's lookup chain discovers `lib/` + `share/` siblings via
+`std::env::current_exe()` (Phase 0) — zero env vars or workspace
+context needed. DO NOT copy the binary out of its `bin/` directory.
 
 ```bash
-# Option A — cargo install (Rust 1.94+)
+# Option A — cargo install (Rust 1.94+; dev path, no wheel layout)
 cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
 # Option B — prebuilt wheel (9 variants; replace <variant> with your CPU tier)
-# Variants: x86_64-linux-gnu-v1 / -v3 / -v4  |  x86_64-linux-musl-v1 / -v3
-#           aarch64-linux-gnu-neon / -sve      |  aarch64-apple-darwin-m1 / -m2
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-<variant>.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# Variants: x86_64-unknown-linux-gnu-v1 / -v3 / -v4  |  x86_64-unknown-linux-musl-v1 / -v3
+#           aarch64-unknown-linux-gnu-neon / -sve      |  aarch64-apple-darwin-m1 / -m2
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-<variant>.tar.gz | tar xz -C $HOME/.local/
+ln -sf $HOME/.local/cobrust-v0.6.0/bin/cobrust $HOME/.local/bin/cobrust
 
-# SHA256SUMS: https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/SHA256SUMS
+# SHA256SUMS: https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/SHA256SUMS
 
 # Option C — cobrust install (Tier 3 auto-select; requires cobrust-cli already installed)
 cobrust install <pkg>
 ```
 
-Do NOT use `v0.4.0` URLs — that release is superseded by `v0.5.0`.
+Each wheel tarball bundles:
+- `bin/cobrust` — main driver with subcommands `build / run / check / fmt / translate / new / test / repl / lsp / dap / ...`
+- `bin/cobrust-lsp` + `bin/cobrust-dap` — transitional shim binaries (extension v0.1.x compat; ADR-0068 §4.2; deleted at v0.7.0)
+- `lib/cobrust/libcobrust_stdlib.a` — prebuilt static stdlib archive
+- `share/cobrust/runtime/{cobrust_main.c,cpu_features.c}` — runtime C entrypoint + CPU feature helpers
+
+**v0.5.x wheels are unusable for `cobrust run` (F46).** They baked the
+GH Actions runner workspace path into the binary AND did not bundle
+runtime/stdlib. Use v0.6.0+ for any non-`cargo install` flow.
+
+Do NOT use `v0.4.0` / `v0.5.0` / `v0.5.1` / `v0.5.2` URLs — those releases are superseded by `v0.6.0`.
 
 ## 9k. LLVM backend stdlib I/O — wave-2 landed, wave-3 roadmap (ADR-0058f/g)
 

@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue.svg)](#license)
-[![Stage](https://img.shields.io/badge/stage-0.5.0-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.5.0)
+[![Stage](https://img.shields.io/badge/stage-0.6.0-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.6.0)
 
 [**Why Cobrust?**](docs/post/why-cobrust.md) ·
 [**Quick Start**](#quick-start) ·
@@ -73,27 +73,33 @@ The wedge: **AI translates the existing Python ecosystem into Cobrust automatica
 # Option A — Via cargo (Rust toolchain required, 1.94+)
 cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
-# Option B — Download a prebuilt wheel (v0.5.0, 9 variants — pick your CPU tier)
-# Linux x86_64 baseline (v1 — any x86_64)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-x86_64-linux-gnu-v1.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux x86_64 AVX2 (v3 — Haswell+, most post-2013 desktops/servers)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-x86_64-linux-gnu-v3.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux x86_64 AVX-512 (v4 — Skylake-X / Ice Lake server)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-x86_64-linux-gnu-v4.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux x86_64 musl v1 — Alpine, distroless, minimal containers (no glibc required)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-x86_64-linux-musl-v1.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux x86_64 musl v3 — Alpine + AVX2
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-x86_64-linux-musl-v3.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux aarch64 NEON (generic ARM64 — Graviton2, Ampere, Pi 4)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-aarch64-linux-gnu-neon.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# Linux aarch64 SVE (Neoverse V1/V2, Graviton3+)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-aarch64-linux-gnu-sve.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# macOS Apple Silicon M1 (baseline)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-aarch64-apple-darwin-m1.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
-# macOS Apple Silicon M2+ (AMX)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-aarch64-apple-darwin-m2.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+# Option B — Download a prebuilt wheel (v0.6.0, FHS bin/lib/share layout per ADR-0069)
+# Each tarball extracts to a self-contained cobrust-v0.6.0/ directory.
+# Symlink bin/cobrust into your $PATH; the runtime + stdlib stay siblings.
+# Do NOT `cp cobrust /usr/local/bin/` — that breaks the wheel-layout lookup chain.
 
-# SHA256SUMS: https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/SHA256SUMS
+# macOS Apple Silicon M1 (tier-1)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-aarch64-apple-darwin-m1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.0/bin/cobrust $HOME/.local/bin/cobrust
+
+# Linux x86_64 baseline (v1 — any x86_64)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-x86_64-unknown-linux-gnu-v1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.0/bin/cobrust $HOME/.local/bin/cobrust
+
+# Linux x86_64 musl static (Alpine / distroless / minimal containers)
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-x86_64-unknown-linux-musl-v1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.0/bin/cobrust $HOME/.local/bin/cobrust
+
+# Each tarball bundles:
+#   bin/cobrust            — main driver (subcommands: build/run/check/fmt/translate/new/test/repl/lsp/dap/...)
+#   bin/cobrust-lsp        — transitional shim binary (extension v0.1.x compat; ADR-0068 §4.2; deleted at v0.7.0)
+#   bin/cobrust-dap        — transitional shim binary (extension v0.1.x compat; ADR-0068 §4.2; deleted at v0.7.0)
+#   lib/cobrust/libcobrust_stdlib.a       — prebuilt static stdlib archive
+#   share/cobrust/runtime/cobrust_main.c  — runtime C entrypoint
+#   share/cobrust/runtime/cpu_features.c  — CPU feature detection helpers
+
+# All 9 CPU-tier variants per release: v1/v3/v4 (x86_64 glibc), v1/v3 (x86_64 musl),
+# neon/sve (aarch64 linux), m1/m2 (aarch64 darwin). SHA256SUMS published alongside.
 
 # Option C — cobrust install (Tier 3 wheel auto-select, end-to-end)
 cobrust install <pkg>
