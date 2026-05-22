@@ -371,9 +371,11 @@ version = "0.5.1"
 dependencies = [
  "clap",
  "cobrust-codegen",
+ "cobrust-dap",
  "cobrust-frontend",
  "cobrust-hir",
  "cobrust-llm-router",
+ "cobrust-lsp",
  "cobrust-mir",
  "cobrust-pkg",
  "cobrust-translator",

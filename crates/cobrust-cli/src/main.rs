@@ -38,11 +38,13 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod add;
 mod build;
 mod check;
+mod dap;
 mod debug;
 pub mod error_ux;
 mod exit_codes;
 mod fmt;
 pub mod install;
+mod lsp;
 mod new;
 mod pkg_build;
 mod repl;
@@ -272,6 +274,25 @@ enum Command {
         #[arg(short, long)]
         quiet: bool,
     },
+
+    /// Run the Cobrust LSP server over stdio (ADR-0068).
+    ///
+    /// Editor integrations (VSCode, Cursor, Neovim, …) spawn `cobrust
+    /// lsp` and pipe LSP frames over stdin/stdout per LSP "Base
+    /// Protocol". Equivalent to the v0.5.x standalone `cobrust-lsp`
+    /// binary, which is retained as a transitional shim in v0.6.x
+    /// (deleted at v0.7.0 per ADR-0068 §4.4).
+    Lsp,
+
+    /// Run the Cobrust DAP server over stdio (ADR-0068).
+    ///
+    /// Editor integrations (VSCode, Cursor, Neovim DAP, Emacs DAP-mode,
+    /// …) spawn `cobrust dap` and pipe DAP frames over stdin/stdout
+    /// per DAP "Base Protocol" (Content-Length framed JSON). Equivalent
+    /// to the v0.5.x standalone `cobrust-dap` binary, which is retained
+    /// as a transitional shim in v0.6.x (deleted at v0.7.0 per ADR-0068
+    /// §4.4).
+    Dap,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -376,17 +397,19 @@ fn main() -> ExitCode {
         }),
         Command::Debug {
             file,
-            dap,
+            dap: dap_flag,
             bp,
             lldb_path,
             quiet,
         } => debug::run(debug::DebugArgs {
             file,
-            dap,
+            dap: dap_flag,
             bp,
             lldb_path,
             quiet,
         }),
+        Command::Lsp => lsp::run(),
+        Command::Dap => dap::run(),
     };
     ExitCode::from(code)
 }
