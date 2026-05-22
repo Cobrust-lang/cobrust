@@ -41,6 +41,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cobrust_frontend::span::FileId;
+use cobrust_frontend::{PRELUDE, PRELUDE_LINE_COUNT};
 use cobrust_types::{TypeCheckCtx, check_incremental};
 use tower_lsp::Client;
 use tower_lsp::LanguageServer;
@@ -306,23 +307,55 @@ impl Backend {
     /// 2. `cobrust_hir::lower` — AST → HIR.
     /// 3. `cobrust_types::check` — HIR → typed module.
     ///
+    /// Per F50 (2026-05-22) the LSP path prepends [`cobrust_frontend::
+    /// PRELUDE`] to `source` BEFORE invoking the frontend, matching
+    /// `crates/cobrust-cli/src/check.rs:36`. Without this every
+    /// `print(...)` / `range(...)` / `parse_int(...)` callsite lit up
+    /// as a `lower-unknown-name` red squiggle in Cursor while
+    /// `cobrust check <file>` reported `ok`. Diagnostic spans emerging
+    /// from the pipeline are in **composed-source** byte offsets;
+    /// [`shift_diagnostic_into_user_coords`] subtracts
+    /// [`cobrust_frontend::PRELUDE_LINE_COUNT`] from each
+    /// `Diagnostic.range.{start,end}.line` so the LSP wire shape
+    /// surfaces user-coordinate lines. Any diagnostic whose final line
+    /// would underflow (i.e., the span lay inside the synthetic PRELUDE
+    /// region) is filtered out as a defensive measure — PRELUDE stubs
+    /// are always well-typed by construction.
+    ///
+    /// The caller-supplied `line_map` argument is no longer consulted
+    /// for span conversion (the conversion now runs against a freshly
+    /// built composed-source LineMap inside this function); the
+    /// parameter is kept for source-API stability with existing tests.
+    ///
     /// Each stage's error variants are mapped to LSP `Diagnostic`s
     /// via the `From`-impls in [`diagnostic`]. Wave-1 emits `Error`
     /// severity only per ADR-0057a §5.
     ///
     /// Wave-1 stateless variant kept for snapshot tests + smoke tools.
     /// Wave-2.1's stateful path is [`Self::compile_diagnostics_with_session`].
-    pub fn compile_diagnostics(source: &str, line_map: &LineMap) -> Vec<Diagnostic> {
+    pub fn compile_diagnostics(source: &str, _line_map: &LineMap) -> Vec<Diagnostic> {
         use cobrust_frontend::parse_str;
 
+        // F50: prepend the synthetic PRELUDE so intrinsic names
+        // (`print`, `range`, `parse_int`, ...) resolve identically to
+        // the `cobrust check` CLI path. Build a composed-source
+        // LineMap so `span_to_lsp_range` lookups land in composed
+        // coordinates; we shift each emitted diagnostic back into
+        // user coordinates via `shift_diagnostic_into_user_coords` at
+        // the end.
+        let composed = format!("{PRELUDE}{source}");
+        let composed_line_map = LineMap::from_source(&composed);
         let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
         // Stage 1: parse.
-        let ast_module = match parse_str(source, FileId::SYNTHETIC) {
+        let ast_module = match parse_str(&composed, FileId::SYNTHETIC) {
             Ok(m) => m,
             Err(err) => {
-                diagnostics.push(diagnostic::frontend_error_to_diagnostic(&err, line_map));
-                return diagnostics;
+                diagnostics.push(diagnostic::frontend_error_to_diagnostic(
+                    &err,
+                    &composed_line_map,
+                ));
+                return shift_diagnostics_into_user_coords(diagnostics);
             }
         };
 
@@ -331,17 +364,23 @@ impl Backend {
         let hir_module = match cobrust_hir::lower::lower(&ast_module, &mut hir_sess) {
             Ok(m) => m,
             Err(err) => {
-                diagnostics.push(diagnostic::lowering_error_to_diagnostic(&err, line_map));
-                return diagnostics;
+                diagnostics.push(diagnostic::lowering_error_to_diagnostic(
+                    &err,
+                    &composed_line_map,
+                ));
+                return shift_diagnostics_into_user_coords(diagnostics);
             }
         };
 
         // Stage 3: type-check.
         if let Err(err) = cobrust_types::check(&hir_module) {
-            diagnostics.extend(diagnostic::type_error_to_diagnostics(&err, line_map));
+            diagnostics.extend(diagnostic::type_error_to_diagnostics(
+                &err,
+                &composed_line_map,
+            ));
         }
 
-        diagnostics
+        shift_diagnostics_into_user_coords(diagnostics)
     }
 
     /// Wave-2.1 stateful pipeline per ADR-0057b §3.4.
@@ -352,14 +391,26 @@ impl Backend {
     /// types back into the shared ctx. Diagnostics are produced from
     /// the same error path as wave-1 — only the symbol-table reuse is
     /// new.
+    ///
+    /// Per F50 (2026-05-22) prepends the same synthetic PRELUDE as
+    /// [`Self::compile_diagnostics`] before parsing, shifts emitted
+    /// diagnostic ranges back into user coordinates, and filters any
+    /// span that landed inside the PRELUDE prefix.
     pub fn compile_diagnostics_with_session(
         source: &str,
-        line_map: &LineMap,
+        _line_map: &LineMap,
         ctx: &mut TypeCheckCtx,
         file_id: u32,
     ) -> Vec<Diagnostic> {
         use cobrust_frontend::parse_str;
 
+        // F50: prepend PRELUDE for CLI-parity name resolution. See
+        // [`Self::compile_diagnostics`] for the rationale; this path
+        // applies the same construction so live `did_change` updates
+        // (which call this function via the debounced pipeline) see
+        // the same name table.
+        let composed = format!("{PRELUDE}{source}");
+        let composed_line_map = LineMap::from_source(&composed);
         let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
         // Drop stale type-cache rows for this file BEFORE re-checking
@@ -369,11 +420,14 @@ impl Backend {
         // Use the URI's `FileId` for span tracking so future cross-file
         // queries don't collide.
         let frontend_file_id = FileId(file_id);
-        let ast_module = match parse_str(source, frontend_file_id) {
+        let ast_module = match parse_str(&composed, frontend_file_id) {
             Ok(m) => m,
             Err(err) => {
-                diagnostics.push(diagnostic::frontend_error_to_diagnostic(&err, line_map));
-                return diagnostics;
+                diagnostics.push(diagnostic::frontend_error_to_diagnostic(
+                    &err,
+                    &composed_line_map,
+                ));
+                return shift_diagnostics_into_user_coords(diagnostics);
             }
         };
 
@@ -381,21 +435,31 @@ impl Backend {
         let hir_module = match cobrust_hir::lower::lower(&ast_module, &mut hir_sess) {
             Ok(m) => m,
             Err(err) => {
-                diagnostics.push(diagnostic::lowering_error_to_diagnostic(&err, line_map));
-                return diagnostics;
+                diagnostics.push(diagnostic::lowering_error_to_diagnostic(
+                    &err,
+                    &composed_line_map,
+                ));
+                return shift_diagnostics_into_user_coords(diagnostics);
             }
         };
 
         // Stage 3: incremental type-check merges fresh rows into ctx.
         if let Err(err) = check_incremental(ctx, &hir_module, file_id) {
-            diagnostics.extend(diagnostic::type_error_to_diagnostics(&err, line_map));
+            diagnostics.extend(diagnostic::type_error_to_diagnostics(
+                &err,
+                &composed_line_map,
+            ));
         }
 
-        diagnostics
+        shift_diagnostics_into_user_coords(diagnostics)
     }
 
     /// Apply LSP content-change events (incremental or full-replace) to
     /// a source string. Returns the spliced `String`.
+    //
+    // (Helpers `shift_diagnostics_into_user_coords` /
+    // `shift_diagnostic_into_user_coords` live as module-private free
+    // functions below the impl block.)
     ///
     /// Per ADR-0057b §3.2 + §3.3:
     ///   - If `change.range` is `Some`, splice `change.text` at the
@@ -431,6 +495,160 @@ impl Backend {
             source.replace_range(start..end, &change.text);
         }
         source
+    }
+}
+
+/// F50 helper: shift every diagnostic's `Range` from composed-source
+/// coordinates (PRELUDE + user) back into user-source coordinates.
+///
+/// Per `crates/cobrust-frontend/src/prelude.rs` the synthetic PRELUDE
+/// always ends with a `\n`, so user content begins at line index
+/// [`cobrust_frontend::PRELUDE_LINE_COUNT`] of the composed source.
+/// Subtracting that constant from each `range.{start,end}.line` is a
+/// pure line-shift; LSP `character` (UTF-16 column) is unchanged because
+/// the PRELUDE ends at column 0 of the next line.
+///
+/// Diagnostics whose `start.line` lies inside the PRELUDE prefix are
+/// filtered out as a defensive measure — PRELUDE stubs are always
+/// well-typed by construction, so a span landing there indicates either
+/// (a) an internal compiler bug in the PRELUDE source itself, or
+/// (b) a name-conflict where the user shadowed a PRELUDE symbol and
+/// the error referenced the PRELUDE declaration; in both cases
+/// surfacing a phantom span in the user's editor view would be more
+/// confusing than dropping it.
+fn shift_diagnostics_into_user_coords(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    diagnostics
+        .into_iter()
+        .filter_map(shift_diagnostic_into_user_coords)
+        .collect()
+}
+
+/// Single-diagnostic shift; returns `None` when the span lay inside
+/// the synthetic PRELUDE prefix (see [`shift_diagnostics_into_user_coords`]
+/// for the policy rationale).
+fn shift_diagnostic_into_user_coords(mut diag: Diagnostic) -> Option<Diagnostic> {
+    let prelude_lines = PRELUDE_LINE_COUNT;
+    if diag.range.start.line < prelude_lines {
+        // Inside PRELUDE prefix — should never happen for well-formed
+        // user source. Filter rather than surface a confusing range.
+        return None;
+    }
+    diag.range.start.line -= prelude_lines;
+    diag.range.end.line = diag.range.end.line.saturating_sub(prelude_lines);
+    // related_information ranges (suggestion locations) also live in
+    // composed coordinates. Shift them too so quick-fix overlays land
+    // on the right user line.
+    if let Some(related) = diag.related_information.as_mut() {
+        for info in related.iter_mut() {
+            info.location.range.start.line =
+                info.location.range.start.line.saturating_sub(prelude_lines);
+            info.location.range.end.line =
+                info.location.range.end.line.saturating_sub(prelude_lines);
+        }
+    }
+    // thiserror-rendered `#[error("... at {span}")]` messages embed the
+    // raw byte offsets as `file#K@N..M`. Those offsets are in composed-
+    // source coordinates; subtract `PRELUDE_BYTE_LEN` so the message
+    // surface matches the LSP `Range` user coordinates. Returns the
+    // original string unchanged when no `file#K@...` pattern is present.
+    diag.message = shift_offsets_in_message(&diag.message);
+    Some(diag)
+}
+
+/// Subtract [`cobrust_frontend::PRELUDE_BYTE_LEN`] from every
+/// `file#K@N..M` byte-offset pair embedded in `msg`. Used to keep
+/// thiserror-rendered error messages in user-source coordinates after
+/// the F50 PRELUDE-prepend.
+///
+/// State machine: scan for the literal prefix `file#`, then digits, `@`,
+/// digits, `..`, digits. Anything that doesn't match exactly is copied
+/// through verbatim, so identifiers that happen to contain `@` or `..`
+/// elsewhere in the message are unaffected.
+fn shift_offsets_in_message(msg: &str) -> String {
+    use cobrust_frontend::PRELUDE_BYTE_LEN;
+
+    let bytes = msg.as_bytes();
+    let mut out = String::with_capacity(msg.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // Try to match `file#`.
+        if bytes[i..].starts_with(b"file#") {
+            // Find `@` after digits.
+            let after_file_hash = i + b"file#".len();
+            let mut k = after_file_hash;
+            while k < bytes.len() && bytes[k].is_ascii_digit() {
+                k += 1;
+            }
+            if k > after_file_hash && k < bytes.len() && bytes[k] == b'@' {
+                // After `@`, parse `START..END`.
+                let after_at = k + 1;
+                let mut s = after_at;
+                while s < bytes.len() && bytes[s].is_ascii_digit() {
+                    s += 1;
+                }
+                if s > after_at && s + 1 < bytes.len() && &bytes[s..s + 2] == b".." {
+                    let after_dotdot = s + 2;
+                    let mut e = after_dotdot;
+                    while e < bytes.len() && bytes[e].is_ascii_digit() {
+                        e += 1;
+                    }
+                    if e > after_dotdot {
+                        // Parse the two offsets, subtract PRELUDE_BYTE_LEN,
+                        // emit the shifted form.
+                        let start_offset: u32 = msg[after_at..s].parse().unwrap_or(0);
+                        let end_offset: u32 = msg[after_dotdot..e].parse().unwrap_or(0);
+                        out.push_str(&msg[i..after_at]); // "file#K@"
+                        out.push_str(&start_offset.saturating_sub(PRELUDE_BYTE_LEN).to_string());
+                        out.push_str("..");
+                        out.push_str(&end_offset.saturating_sub(PRELUDE_BYTE_LEN).to_string());
+                        i = e;
+                        continue;
+                    }
+                }
+            }
+        }
+        // Default: copy the current byte through. UTF-8 multi-byte
+        // sequences cannot start with an ASCII byte we care about, so
+        // byte-by-byte copy preserves UTF-8 well-formedness.
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+#[cfg(test)]
+mod offset_shift_tests {
+    use super::shift_offsets_in_message;
+
+    #[test]
+    fn shifts_single_span_in_message() {
+        // PRELUDE_BYTE_LEN is a fixed constant; assert behavior by
+        // pinning to its current value. If the PRELUDE grows the
+        // assertion will need re-pinning — that's the desired signal.
+        let prelude_len = cobrust_frontend::PRELUDE_BYTE_LEN;
+        let composed = format!("unknown name `print` at file#0@{}..{}", prelude_len + 22, prelude_len + 27);
+        let shifted = shift_offsets_in_message(&composed);
+        assert_eq!(shifted, "unknown name `print` at file#0@22..27");
+    }
+
+    #[test]
+    fn leaves_non_matching_text_alone() {
+        let input = "no spans here, just text with @ and ..";
+        assert_eq!(shift_offsets_in_message(input), input);
+    }
+
+    #[test]
+    fn handles_multiple_spans() {
+        let prelude_len = cobrust_frontend::PRELUDE_BYTE_LEN;
+        let composed = format!(
+            "between file#1@{}..{} and file#2@{}..{}",
+            prelude_len + 1,
+            prelude_len + 5,
+            prelude_len + 10,
+            prelude_len + 20,
+        );
+        let shifted = shift_offsets_in_message(&composed);
+        assert_eq!(shifted, "between file#1@1..5 and file#2@10..20");
     }
 }
 
