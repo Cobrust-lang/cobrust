@@ -440,6 +440,8 @@ name = "cobrust-dap-shim"
 version = "0.6.0"
 dependencies = [
  "cobrust-dap",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

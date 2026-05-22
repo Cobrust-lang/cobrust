@@ -20,3 +20,16 @@ workspace = true
 
 [dependencies]
 cobrust-dap = { path = "../cobrust-dap", version = "=0.6.0" }
+
+# Dev-deps for the e2e smoke test (moved here from crates/cobrust-dap/
+# in v0.6.0 because env!("CARGO_BIN_EXE_cobrust-dap") only resolves
+# inside the bin-providing crate; the bin lives in this shim now).
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { version = "1.40", features = [
+    "macros",
+    "rt-multi-thread",
+    "io-util",
+    "process",
+    "time",
+] }

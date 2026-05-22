@@ -387,18 +387,9 @@ fn ensure_runtime_object(output_dir: &Path) -> Result<PathBuf, BuildError> {
 ///
 /// ADR-0069 wheel-layout-aware lookup chain (v0.6.0+):
 ///
-/// 1. **Phase 0 (wheel-layout, NEW)** — derive `<install_prefix>` from
-///    the running binary's own path via `current_exe()`. The wheel
-///    extracts to `cobrust-vX.Y.Z/{bin,lib/cobrust,share/cobrust/runtime}/`,
-///    so a binary at `<prefix>/bin/cobrust` finds its runtime sources at
-///    `<prefix>/share/cobrust/runtime/cobrust_main.c`.
-/// 2. **Phase 1 (dev fallback)** — `CARGO_MANIFEST_DIR/runtime/cobrust_main.c`
-///    bakes the workspace path at compile time. Works for `cargo install`
-///    + source-tree `cargo build`; broken for wheels (F46 — the GH
-///    Actions runner workspace path is gone by user run-time).
-/// 3. **Phase 2 (legacy current_exe-rooted)** — kept for compat with
-///    any future relocation experiment. Same shape as Phase 0 but the
-///    Phase 0 path is the canonical wheel-layout target.
+/// - **Phase 0 (wheel-layout, NEW)** — derive `<install_prefix>` from the running binary's own path via `current_exe()`. The wheel extracts to `cobrust-vX.Y.Z/{bin,lib/cobrust,share/cobrust/runtime}/`, so a binary at `<prefix>/bin/cobrust` finds its runtime sources at `<prefix>/share/cobrust/runtime/cobrust_main.c`.
+/// - **Phase 1 (dev fallback)** — `CARGO_MANIFEST_DIR/runtime/cobrust_main.c` bakes the workspace path at compile time. Works for `cargo install` + source-tree `cargo build`; broken for wheels per F46 (the GH Actions runner workspace path is gone by user run-time).
+/// - **Phase 2 (legacy `current_exe`-rooted)** — kept for compat with any future relocation experiment. Same shape as Phase 0 but the Phase 0 path is the canonical wheel-layout target.
 fn locate_runtime_source() -> Result<PathBuf, BuildError> {
     let mut checked: Vec<PathBuf> = Vec::new();
 
@@ -475,12 +466,10 @@ fn locate_wheel_lib_file(rel_path: &str) -> Option<PathBuf> {
 ///
 /// ADR-0069 wheel-layout-aware lookup chain (v0.6.0+):
 ///
-/// 0. **Phase 0 (wheel-layout, NEW)** — `<install_prefix>/lib/cobrust/libcobrust_stdlib.a`
-///    derived from `current_exe()`. Wheel users get a zero-config path
-///    (F46 closure).
-/// 1. `COBRUST_STDLIB_ARCHIVE_PATH` compile-time env var (baked in by `build.rs`).
-/// 2. `COBRUST_STDLIB_ARCHIVE` runtime env var override (for CI / test harness).
-/// 3. Walk workspace `target/{release,debug}/libcobrust_stdlib.a`.
+/// - **Phase 0 (wheel-layout, NEW)** — `<install_prefix>/lib/cobrust/libcobrust_stdlib.a` derived from `current_exe()`. Wheel users get a zero-config path (F46 closure).
+/// - **Phase 1** — `COBRUST_STDLIB_ARCHIVE_PATH` compile-time env var (baked in by `build.rs`).
+/// - **Phase 2** — `COBRUST_STDLIB_ARCHIVE` runtime env var override (for CI / test harness).
+/// - **Phase 3** — walk workspace `target/{release,debug}/libcobrust_stdlib.a`.
 fn locate_stdlib_archive(release: bool) -> Result<PathBuf, BuildError> {
     // 0. ADR-0069 §4.2 Phase 0 — wheel-layout lookup. Fires first so
     //    wheel users (F46 closure) hit a working path without env vars.
