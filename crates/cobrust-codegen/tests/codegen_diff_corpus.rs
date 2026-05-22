@@ -855,3 +855,380 @@ fn llvm_array_dyn_index_oob_panic() {
     #[cfg(feature = "llvm")]
     llvm_compile_ok("llvm_arr_dyn_oob", src);
 }
+
+// =====================================================================
+// ADR-0058f Phase K wave-2 — LLVM backend stdlib I/O hookup
+//
+// Each fixture builds a Module manually (bypassing PRELUDE + the
+// `intrinsics::rewrite_print` MIR pass that lives in cobrust-cli),
+// emits via LLVM backend, links against `libcobrust_stdlib.a` +
+// `runtime/cobrust_main.c`, runs the resulting binary, and asserts
+// the stdout matches a golden line.
+//
+// Why manual MIR (not source compile through the CLI's print rewrite
+// pass): `cobrust-cli` depends on `cobrust-codegen`, so making the
+// codegen tests use `cobrust-cli` would be a circular dependency.
+// The manually-built MIR also makes the test self-contained: a single
+// `Terminator::Call { func: Operand::Constant(Constant::Str(name)) }`
+// exercises the exact extern-name dispatch surface that ADR-0058f §3.4
+// ships. The MIR shape here matches what `rewrite_print` produces:
+// `print(x: i64)` becomes a Call to `Constant::Str("__cobrust_println_int")`.
+//
+// Pre-fix expectation: every fixture emits empty stdout (wave-1 stub
+// fallthrough swallowed the call). Post-fix: stdout matches.
+//
+// Each test gates on:
+//   - `#[cfg(feature = "llvm")]` (skipped on default Cranelift build)
+//   - `linker_available()` (cc on PATH)
+//   - `find_stdlib_archive()` returns Some (libcobrust_stdlib.a on disk)
+//   - `find_runtime_c()` returns Some (cobrust_main.c on disk)
+//
+// Gating exit is a `return` (the test passes); the LLVM-stdlib-linked
+// lane in CI / release flow runs them concretely.
+// =====================================================================
+
+#[cfg(feature = "llvm")]
+fn find_stdlib_archive() -> Option<std::path::PathBuf> {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let workspace = std::path::Path::new(&manifest).parent()?.parent()?;
+    for profile in ["debug", "release"] {
+        let p = workspace
+            .join("target")
+            .join(profile)
+            .join("libcobrust_stdlib.a");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(feature = "llvm")]
+fn find_runtime_c() -> Option<std::path::PathBuf> {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let workspace = std::path::Path::new(&manifest).parent()?.parent()?;
+    let p = workspace.join("crates/cobrust-cli/runtime/cobrust_main.c");
+    if p.exists() { Some(p) } else { None }
+}
+
+#[cfg(feature = "llvm")]
+fn stdlib_io_link_and_run(name: &str, module: cobrust_mir::Module) -> Option<String> {
+    use std::process::Command;
+    if !cobrust_codegen::linker::linker_available() {
+        return None;
+    }
+    let stdlib = find_stdlib_archive()?;
+    let runtime_c = find_runtime_c()?;
+
+    // Emit object via LLVM backend.
+    let spec = llvm_spec(name);
+    let artifact = emit(&module, spec).unwrap_or_else(|e| panic!("LLVM emit `{name}` failed: {e}"));
+    let user_obj = artifact.path().to_path_buf();
+
+    // Compile runtime C shim.
+    let dir = user_obj.parent().expect("user obj parent").to_path_buf();
+    let runtime_obj = dir.join("cobrust_main.o");
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let cc_status = Command::new(&cc)
+        .arg("-c")
+        .arg(&runtime_c)
+        .arg("-o")
+        .arg(&runtime_obj)
+        .status()
+        .ok()?;
+    if !cc_status.success() {
+        return None;
+    }
+
+    // Link user.o + runtime.o + libcobrust_stdlib.a → exe.
+    let exe = dir.join(format!("{name}.exe"));
+    let mut link_cmd = Command::new(&cc);
+    link_cmd
+        .arg(&user_obj)
+        .arg(&runtime_obj)
+        .arg(&stdlib)
+        .arg("-o")
+        .arg(&exe);
+    if cfg!(target_os = "linux") {
+        link_cmd.arg("-lpthread").arg("-ldl").arg("-lm");
+    }
+    let link_status = link_cmd.status().ok()?;
+    if !link_status.success() {
+        return None;
+    }
+
+    // Run and capture stdout.
+    let out = Command::new(&exe).output().ok()?;
+    if !out.status.success() {
+        let so = String::from_utf8_lossy(&out.stdout);
+        let se = String::from_utf8_lossy(&out.stderr);
+        panic!(
+            "`{name}` exited non-zero ({:?}); stdout={so:?} stderr={se:?}",
+            out.status
+        );
+    }
+    Some(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// Build a minimal `main` MIR body that calls `extern_name(arg)` then
+/// returns 0. `ret_ty_of_arg` lets the helper-call destination type
+/// match the runtime helper's return contract (`void` → i64 stub).
+#[cfg(feature = "llvm")]
+fn build_main_calling_extern(extern_name: &str, arg: cobrust_mir::Constant) -> cobrust_mir::Module {
+    use cobrust_frontend::span::{FileId, Span};
+    use cobrust_hir::DefId;
+    use cobrust_mir::{
+        BasicBlock as MirBlock, BlockId, Body, Constant, LocalDecl, LocalId, Module, Operand,
+        Place, Rvalue, Statement, StatementKind, Terminator,
+    };
+    use cobrust_types::Ty;
+
+    let span0 = Span::new(FileId::SYNTHETIC, 0, 0);
+    let arg_ty = match &arg {
+        Constant::Bool(_) => Ty::Bool,
+        Constant::Int(_) => Ty::Int,
+        Constant::Float(_) | Constant::Imag(_) => Ty::Float,
+        Constant::Str(_) | Constant::Bytes(_) => Ty::Str,
+        _ => Ty::Int,
+    };
+    // _0 = return slot (i64), _1 = call-result temp.
+    let locals = vec![
+        LocalDecl {
+            id: LocalId(0),
+            name: "_return".to_string(),
+            ty: Ty::Int,
+            mutable: true,
+            span: span0,
+        },
+        LocalDecl {
+            id: LocalId(1),
+            name: "_callret".to_string(),
+            ty: Ty::Int,
+            mutable: true,
+            span: span0,
+        },
+        LocalDecl {
+            id: LocalId(2),
+            name: "_arg".to_string(),
+            ty: arg_ty,
+            mutable: false,
+            span: span0,
+        },
+    ];
+    // bb0: arg = arg_const; call extern_name(arg) -> bb1
+    // bb1: _return = 0; return
+    let bb0 = MirBlock {
+        id: BlockId(0),
+        statements: vec![],
+        terminator: Terminator::Call {
+            func: Operand::Constant(Constant::Str(extern_name.to_string())),
+            args: vec![Operand::Constant(arg)],
+            destination: Place::local(LocalId(1)),
+            target: BlockId(1),
+            unwind: None,
+        },
+        span: span0,
+    };
+    let bb1 = MirBlock {
+        id: BlockId(1),
+        statements: vec![Statement {
+            kind: StatementKind::Assign {
+                place: Place::local(LocalId(0)),
+                rvalue: Rvalue::Use(Operand::Constant(Constant::Int(0))),
+            },
+            span: span0,
+        }],
+        terminator: Terminator::Return,
+        span: span0,
+    };
+    Module {
+        bodies: vec![Body {
+            def_id: DefId(0),
+            name: "main".to_string(),
+            locals,
+            blocks: vec![bb0, bb1],
+            return_local: LocalId(0),
+            param_count: 0,
+            span: span0,
+        }],
+    }
+}
+
+#[cfg(feature = "llvm")]
+fn assert_extern_io(name: &str, extern_name: &str, arg: cobrust_mir::Constant, expected: &str) {
+    let module = build_main_calling_extern(extern_name, arg);
+    let Some(stdout) = stdlib_io_link_and_run(name, module) else {
+        return; // Prereqs missing — skip.
+    };
+    assert_eq!(
+        stdout, expected,
+        "stdlib_io `{name}`: stdout mismatch\n  got:      {stdout:?}\n  expected: {expected:?}"
+    );
+}
+
+/// ADR-0058f §5 fixture 01: `__cobrust_println_int(42)` → "42\n"
+#[test]
+fn stdlib_io_01_println_int_42() {
+    #[cfg(feature = "llvm")]
+    assert_extern_io(
+        "stdlib_io_01",
+        "__cobrust_println_int",
+        cobrust_mir::Constant::Int(42),
+        "42\n",
+    );
+}
+
+/// ADR-0058f §5 fixture 02: `__cobrust_println_bool(True)` → "True\n"
+/// Exercises the i1 → i8 widening at the call site.
+#[test]
+fn stdlib_io_02_println_bool_true() {
+    #[cfg(feature = "llvm")]
+    assert_extern_io(
+        "stdlib_io_02",
+        "__cobrust_println_bool",
+        cobrust_mir::Constant::Bool(true),
+        "True\n",
+    );
+}
+
+/// ADR-0058f §5 fixture 03: `__cobrust_println_bool(False)` → "False\n"
+#[test]
+fn stdlib_io_03_println_bool_false() {
+    #[cfg(feature = "llvm")]
+    assert_extern_io(
+        "stdlib_io_03",
+        "__cobrust_println_bool",
+        cobrust_mir::Constant::Bool(false),
+        "False\n",
+    );
+}
+
+/// ADR-0058f §5 fixture 04: `__cobrust_println_float(1.5)` → "1.5\n"
+#[test]
+fn stdlib_io_04_println_float() {
+    #[cfg(feature = "llvm")]
+    assert_extern_io(
+        "stdlib_io_04",
+        "__cobrust_println_float",
+        cobrust_mir::Constant::Float(1.5_f64.to_bits()),
+        "1.5\n",
+    );
+}
+
+/// ADR-0058f §5 fixture 05: `__cobrust_println_str_buf("hello")` → "hello\n"
+/// Exercises the Constant::Str arg → materialize_str_buffer path.
+#[test]
+fn stdlib_io_05_println_str_literal() {
+    #[cfg(feature = "llvm")]
+    assert_extern_io(
+        "stdlib_io_05",
+        "__cobrust_println_str_buf",
+        cobrust_mir::Constant::Str("hello".to_string()),
+        "hello\n",
+    );
+}
+
+/// ADR-0058f §5 fixture 06: literal-bytes path via `__cobrust_println(ptr, len)`.
+/// Exercises the single-Str-arg → (ptr, len) expansion case.
+#[test]
+fn stdlib_io_06_println_literal_path() {
+    #[cfg(feature = "llvm")]
+    assert_extern_io(
+        "stdlib_io_06",
+        "__cobrust_println",
+        cobrust_mir::Constant::Str("world".to_string()),
+        "world\n",
+    );
+}
+
+/// ADR-0058f §5 fixture 07: round-trip `let s: str = "hi"; print(s)` via
+/// a synthetic two-block body — Assign(Str-typed local, Constant::Str)
+/// then call `__cobrust_println_str_buf(s)`. Exercises the
+/// `lower_statement` Assign-side cascade fix (str-buffer materialised
+/// at `let` time and the resulting buffer pointer fed straight into
+/// the runtime helper).
+#[test]
+fn stdlib_io_07_println_str_let_binding() {
+    #[cfg(feature = "llvm")]
+    {
+        use cobrust_frontend::span::{FileId, Span};
+        use cobrust_hir::DefId;
+        use cobrust_mir::{
+            BasicBlock as MirBlock, BlockId, Body, Constant, LocalDecl, LocalId, Module, Operand,
+            Place, Rvalue, Statement, StatementKind, Terminator,
+        };
+        use cobrust_types::Ty;
+        let span0 = Span::new(FileId::SYNTHETIC, 0, 0);
+        // _0 ret(i64), _1 s(str), _2 callret(i64)
+        let locals = vec![
+            LocalDecl {
+                id: LocalId(0),
+                name: "_return".into(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0,
+            },
+            LocalDecl {
+                id: LocalId(1),
+                name: "s".into(),
+                ty: Ty::Str,
+                mutable: false,
+                span: span0,
+            },
+            LocalDecl {
+                id: LocalId(2),
+                name: "_callret".into(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0,
+            },
+        ];
+        // bb0: s = "hi"; call println_str_buf(s) -> bb1
+        // bb1: _return = 0; return
+        let bb0 = MirBlock {
+            id: BlockId(0),
+            statements: vec![Statement {
+                kind: StatementKind::Assign {
+                    place: Place::local(LocalId(1)),
+                    rvalue: Rvalue::Use(Operand::Constant(Constant::Str("hi".into()))),
+                },
+                span: span0,
+            }],
+            terminator: Terminator::Call {
+                func: Operand::Constant(Constant::Str("__cobrust_println_str_buf".into())),
+                args: vec![Operand::Copy(Place::local(LocalId(1)))],
+                destination: Place::local(LocalId(2)),
+                target: BlockId(1),
+                unwind: None,
+            },
+            span: span0,
+        };
+        let bb1 = MirBlock {
+            id: BlockId(1),
+            statements: vec![Statement {
+                kind: StatementKind::Assign {
+                    place: Place::local(LocalId(0)),
+                    rvalue: Rvalue::Use(Operand::Constant(Constant::Int(0))),
+                },
+                span: span0,
+            }],
+            terminator: Terminator::Return,
+            span: span0,
+        };
+        let module = Module {
+            bodies: vec![Body {
+                def_id: DefId(0),
+                name: "main".into(),
+                locals,
+                blocks: vec![bb0, bb1],
+                return_local: LocalId(0),
+                param_count: 0,
+                span: span0,
+            }],
+        };
+        let Some(stdout) = stdlib_io_link_and_run("stdlib_io_07", module) else {
+            return; // Prereqs missing — skip.
+        };
+        assert_eq!(stdout, "hi\n");
+    }
+}
