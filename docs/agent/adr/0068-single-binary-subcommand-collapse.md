@@ -4,7 +4,7 @@ adr_id: 0068
 title: Single-binary subcommand collapse — cobrust-lsp / cobrust-dap → cobrust lsp / cobrust dap subcommands
 status: accepted
 date: 2026-05-22
-last_verified_commit: <closure-sprint-final>
+last_verified_commit: e23d66c
 supersedes: []
 superseded_by: []
 ---

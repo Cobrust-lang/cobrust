@@ -3,7 +3,7 @@ name: f48
 status: RATIFIED
 family: F35-sibling derivative
 date: 2026-05-22
-last_verified_commit: <closure-sprint-final>
+last_verified_commit: e23d66c
 ---
 
 # F48 — Version bump must tag discipline

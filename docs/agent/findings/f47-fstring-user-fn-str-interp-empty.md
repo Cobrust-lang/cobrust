@@ -3,7 +3,7 @@ name: f47
 status: RATIFIED
 family: F-language
 date: 2026-05-22
-last_verified_commit: <closure-sprint-final>
+last_verified_commit: e23d66c
 ---
 
 # F47 — F-string: user-fn-returned `str` interpolates as empty

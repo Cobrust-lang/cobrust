@@ -4,7 +4,7 @@ adr_id: 0069
 title: Wheel layout standardization — FHS bin/lib/share + bundled runtime + post-package smoke gate
 status: accepted
 date: 2026-05-22
-last_verified_commit: <closure-sprint-final>
+last_verified_commit: e23d66c
 supersedes: []
 superseded_by: []
 ---
