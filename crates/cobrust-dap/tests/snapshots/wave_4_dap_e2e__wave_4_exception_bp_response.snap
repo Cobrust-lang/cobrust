@@ -12,7 +12,7 @@ snapshot_kind: text
     },
     {
       "id": 2,
-      "message": "exception filter: result_err (symbol: cobrust_result_err_construct)",
+      "message": "exception filter: result_err (symbol: __cobrust_result_err_panic)",
       "verified": true
     },
     {

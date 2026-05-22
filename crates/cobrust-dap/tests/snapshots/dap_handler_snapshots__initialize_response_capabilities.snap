@@ -1,5 +1,6 @@
 ---
 source: crates/cobrust-dap/tests/dap_handler_snapshots.rs
+assertion_line: 43
 expression: response.body
 snapshot_kind: text
 ---
@@ -23,9 +24,11 @@ snapshot_kind: text
   ],
   "supportsConditionalBreakpoints": true,
   "supportsConfigurationDoneRequest": false,
+  "supportsDataBreakpoints": true,
   "supportsEvaluateForHovers": false,
   "supportsFunctionBreakpoints": false,
   "supportsHitConditionalBreakpoints": false,
+  "supportsLogPoints": true,
   "supportsRestartFrame": false,
   "supportsSetVariable": false,
   "supportsStepBack": false,

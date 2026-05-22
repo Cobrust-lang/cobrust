@@ -587,7 +587,9 @@ impl LldbDriver {
     ///
     /// Per-filter symbol mapping:
     /// - `"panic"` → `breakpoint set --name __cobrust_panic`
-    /// - `"result_err"` → `breakpoint set --name cobrust_result_err_construct`
+    /// - `"result_err"` → `breakpoint set --name __cobrust_result_err_panic`
+    ///   (per ADR-0059g §3.4; supersedes ADR-0059f §3.4 placeholder
+    ///   `cobrust_result_err_construct`)
     /// - `"unreachable"` → `breakpoint set --name core::intrinsics::unreachable_internal`
     ///
     /// If lldb reports the symbol is unavailable (e.g. stripped
@@ -597,7 +599,7 @@ impl LldbDriver {
     pub async fn set_exception_breakpoint(&mut self, filter: &str) -> Result<Breakpoint, DapError> {
         let symbol = match filter {
             "panic" => "__cobrust_panic",
-            "result_err" => "cobrust_result_err_construct",
+            "result_err" => "__cobrust_result_err_panic",
             "unreachable" => "core::intrinsics::unreachable_internal",
             other => {
                 tracing::warn!("unknown exception filter '{other}'");

@@ -161,13 +161,16 @@ wave-4 advertises three filters:
   symbol comes from the stdlib's panic runtime hook
   (`crates/cobrust-stdlib/src/panic.rs` if present; otherwise from
   `core::panicking::panic` for Rust-emitted panics).
-- **`"result_err"`** → `breakpoint set --name cobrust_result_err_construct`.
-  **Honest scope**: this symbol is **NOT** currently emitted by
-  cobrust-codegen. If the symbol is unavailable at bp-set time, the
-  handler **explicitly warns + skips** that filter; the response
-  reports `verified: false` with `message: "symbol not emitted in
-  current build"`. Future ADR (e.g. ADR-0059g) wires the runtime
-  symbol; wave-4 ships the DAP plumbing.
+- **`"result_err"`** → `breakpoint set --name __cobrust_result_err_panic`.
+  **Honest scope at wave-4 ship**: this symbol was **NOT** emitted by
+  cobrust-stdlib. Wave-4 shipped the DAP plumbing with the symbol
+  placeholder `cobrust_result_err_construct`; if the symbol was
+  unavailable at bp-set time, the handler emitted `verified: false`.
+  **RESOLVED at ADR-0059g §3.4** (2026-05-22): wave-5 added
+  `__cobrust_result_err_panic` as a `#[no_mangle] pub extern "C" fn`
+  in `crates/cobrust-stdlib/src/panic.rs` + remapped the filter to
+  the new symbol. Call-site lowering (codegen emitting calls to the
+  symbol) remains a separate followup per ADR-0059g §4 non-goal.
 - **`"unreachable"`** → `breakpoint set --name core::intrinsics::unreachable_internal`.
   Maps to LLVM's `unreachable` intrinsic via Rust core's symbol; if
   the symbol is stripped (release builds), reports `verified: false`.
