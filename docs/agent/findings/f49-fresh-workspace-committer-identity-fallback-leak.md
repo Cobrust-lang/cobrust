@@ -1,0 +1,103 @@
+---
+doc_kind: finding
+finding_id: f49
+title: Fresh-workspace committer identity fallback leaks OS user + device hostname
+status: RATIFIED
+family: F39 sibling (privacy class), F45a sibling (audit-scope class)
+date: 2026-05-22
+discovered_by: user (real-time)
+last_verified_commit: 6491614
+relates_to:
+  - feedback_no_device_names_in_commits
+  - f39-device-name-leakage-in-commits
+  - f45a-llvm-backend-wave3-scope-systemic
+  - cto_operations_runbook
+---
+
+## §1 Context
+
+2026-05-22 16:55 local time, while creating new helper repo `Cobrust-lang/cobrust-tmlanguage` (TextMate grammar mirror for the github-linguist PR), CTO ran `git init` in a fresh `/tmp/` workspace WITHOUT setting local `user.name` / `user.email`. Global `~/.gitconfig` was also empty for these fields. Git's silent fallback:
+
+1. `user.name` ← OS account display name (the user's real Chinese name)
+2. `user.email` ← `${shell_user}@${hostname}` (here: device hostname containing the user's real name in plaintext)
+
+Result: 3 commits pushed to **public** `Cobrust-lang/cobrust-tmlanguage` with author/committer fields exposing real name + device name. User caught immediately ("吴冰晶吴冰晶 ... 神经病啊,你又把我的名字放上去了").
+
+This is a **double-leak** (name + device) and a **public-repo permanent** leak (any clone or fork preserves history).
+
+## §2 Empirical proof
+
+Before fix:
+```
+cbc1e0e | author=<real-name> <user@<device-hostname>.local> | committer=<real-name> <user@<device-hostname>.local>
+575ef01 | author=<real-name> <user@<device-hostname>.local> | committer=<real-name> <user@<device-hostname>.local>
+```
+
+After Option-A-style rewrite (force-push to overwrite history; brand-new repo with no external dependents, so safe):
+```
+cd2fe04 | author=wbj010101 <wbj010101@gmail.com>
+```
+
+## §3 Root cause
+
+The Cobrust workspace at `/Users/hakureirm/codespace/Study/Cobrust/` has **local** `git config user.name = wbj010101` (set during initial project setup), so all 34 commits to the main repo today are clean. But **global** git config is empty, so any *new* repo created elsewhere (including `/tmp/` ad-hoc workspaces, helper-repo bootstrapping, etc.) falls back to the OS-derived identity.
+
+This is a class of leak the existing F39 ("device names in commits") rule did not explicitly anticipate — F39 was scoped to *commit-message and ADR-text content*, not to *commit metadata (author/committer fields)*.
+
+## §4 Detection rules (mandatory; CTO + dispatch templates)
+
+### §4.1 Per-dispatch pre-flight (machine-doable)
+
+Before running `git commit` or `git push` in *any* workspace that is not the canonical Cobrust workspace:
+
+```bash
+# Verify local identity is set to a neutral handle that does not leak.
+test "$(git config user.name)" = "wbj010101" \
+  && test "$(git config user.email)" = "wbj010101@gmail.com" \
+  || { echo "FAIL: local git identity not set; refusing to commit"; exit 1; }
+```
+
+### §4.2 Dispatch-template requirement
+
+Every dispatch prompt that includes `git init` OR `git clone` of a non-Cobrust-canonical repo MUST include the line:
+
+> "Before any commit, run: `git config user.name wbj010101 && git config user.email wbj010101@gmail.com`"
+
+(Sub-agents inherit no global state; this must be explicit per dispatch.)
+
+### §4.3 Post-author audit extension
+
+The mandatory post-author audit (per `feedback_post_author_audit_mandatory`) MUST extend its scope to include any external repo created or mutated by the sprint. Audit must fetch `git log --pretty='%an <%ae>'` on each external repo and verify all commits use the neutral identity.
+
+The 2026-05-22 retro audit (`aa85ca79a6c4dc469`) scanned only the Cobrust main repo and missed this leak because audit scope did not include `Cobrust-lang/cobrust-tmlanguage`. F49 codifies that audit scope MUST follow the dispatch's actual mutation surface, not the assumed-default surface.
+
+## §5 Why no global config fix
+
+Setting `~/.gitconfig` `user.name` / `user.email` globally is a user-side decision per CLAUDE.md safety protocol "NEVER update the git config". CTO does not silently mutate user's global identity. The user may choose to:
+
+```bash
+git config --global user.name wbj010101
+git config --global user.email wbj010101@gmail.com
+```
+
+If the user does set this, §4.1 pre-flight check becomes a no-op success — best of both worlds. Until then, per-dispatch explicit config is the discipline.
+
+## §6 Family
+
+- **F39** (device names in commit messages / ADR text) — sibling, scope = commit message text
+- **F49** (this) — sibling, scope = commit metadata (author / committer fields)
+- **F45a** (LLVM wave-3 systemic) — sibling, audit-scope-too-narrow class
+
+The three together define the rule: **F-privacy family = "any artifact reaching public surface — text, metadata, or external repo — must use neutral handles"**.
+
+## §7 Status
+
+RATIFIED 2026-05-22 by user real-time catch + immediate rewrite (force-push `cbc1e0e` → `cd2fe04` on `Cobrust-lang/cobrust-tmlanguage`).
+
+## §8 Cross-refs
+
+- ADR-0001 (license) — neutral identity policy precedent
+- `feedback_no_device_names_in_commits` (2026-05-19) — F39 ratification
+- `feedback_post_author_audit_mandatory` (2026-05-18) — audit-scope discipline
+- F39 finding (commit-text family)
+- F45a finding (audit-scope family)
