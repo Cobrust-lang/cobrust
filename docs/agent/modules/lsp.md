@@ -1,7 +1,7 @@
 ---
 module_id: lsp
-last_verified_commit: 9023f9d
-milestone: J.wave2.3
+last_verified_commit: d521b77
+milestone: J.wave5
 dependencies:
   - crates/cobrust-frontend/src/lib.rs       # parse_str entrypoint
   - crates/cobrust-hir/src/lower.rs          # HIR Session + lower
@@ -16,6 +16,9 @@ adr:
   - 0057b  # Wave-2.1 didChange incremental + Session reuse
   - 0057c  # Wave-2.2 hover + completion
   - 0057d  # Wave-2.3 prepareRename + rename
+  - 0057e  # Wave-3 goto-def + codeAction + cross-file rename
+  - 0057f  # Wave-4 inlay hints + semantic tokens + call hierarchy
+  - 0057g  # Wave-5 semantic-tokens delta + inlayHint/resolve + cross-file hierarchy (v1.3 feature-complete)
   - 0052b  # suggestion: Option<&'static str> field
   - 0056b  # TypeCheckCtx Clone + Send + invalidate (Arc-COW contract)
 ---
@@ -171,10 +174,85 @@ Phase J wave-4 polish: inlay hints + semantic tokens + call hierarchy.
 
 ### Wave-4 honest scope
 
-- Same-document only (cross-file deferred to wave-5).
+- Same-document only (cross-file resolved at wave-5).
 - Modifier bitmask is flat zero on every semantic token (declaration
-  / readonly / static deferred to wave-5).
+  / readonly / static deferred to wave-5+).
 - Parse-failure fallback: best-effort lex-only token output.
+
+### Wave-5 public surface (ADR-0057g) — v1.3 LSP feature-complete
+
+Phase J wave-5 closure: closes the three ADR-0057f §4 honest-cite
+deferrals (semantic-tokens delta + inlayHint/resolve + cross-file
+call hierarchy). 18 wave-5 e2e tests (+1 const-guard) + 6 insta
+snapshots; 162 crate tests PASS (143 baseline + 19 wave-5).
+
+| Symbol | Location | Shape |
+|---|---|---|
+| `semantic_tokens::build_semantic_tokens_delta` | `crates/cobrust-lsp/src/semantic_tokens.rs` | `(source, line_map, previous_result_id, cached_result_id, previous_tokens, new_result_id) -> SemanticTokensFullDeltaResult` |
+| `inlay::resolve_inlay_hint` | `crates/cobrust-lsp/src/inlay.rs` | `(hint: InlayHint, ctx: &TypeCheckCtx) -> InlayHint` |
+| `inlay::INLAY_DATA_KIND_TYPE` | `crates/cobrust-lsp/src/inlay.rs` | `&'static str = "type"` (data field discriminant) |
+| `inlay::INLAY_DATA_KIND_PARAM` | `crates/cobrust-lsp/src/inlay.rs` | `&'static str = "param"` |
+| `call_hierarchy::build_incoming_calls_cross_file` | `crates/cobrust-lsp/src/call_hierarchy.rs` | `(primary_source, primary_line_map, item, other_docs: &[(Url, String, LineMap)]) -> Vec<CallHierarchyIncomingCall>` |
+| `call_hierarchy::build_outgoing_calls_cross_file` | `crates/cobrust-lsp/src/call_hierarchy.rs` | `(primary_source, primary_line_map, item, other_docs) -> Vec<CallHierarchyOutgoingCall>` |
+| `Backend.semantic_tokens_cache` | `crates/cobrust-lsp/src/lib.rs::Backend` | `Mutex<HashMap<Url, (String, Vec<SemanticToken>)>>` |
+| `Backend.next_semantic_tokens_result_id` | `crates/cobrust-lsp/src/lib.rs::Backend` | monotone `st-N` allocator |
+
+### Wave-5 dispatch paths
+
+**semantic_tokens_full / full_delta (ADR-0057g §3.1):**
+
+1. `semantic_tokens_full` allocates a fresh `result_id` via
+   `next_semantic_tokens_result_id`, stamps it on the response,
+   writes `(result_id, tokens.data)` into `semantic_tokens_cache`.
+2. `semantic_tokens_full_delta` reads the cache for `(prev_id,
+   prev_tokens)`; calls `build_semantic_tokens_delta` which:
+   - Computes new tokens via `build_semantic_tokens`.
+   - Compares previous_result_id vs cached id; on mismatch returns
+     `Tokens` (full fallback).
+   - Otherwise computes longest common prefix + suffix on the token
+     vec, emits a single `SemanticTokensEdit { start, delete_count,
+     data }` measured in u32-field offsets (5 u32s per token).
+3. Handler refreshes the cache with the new tokens + result_id
+   before returning.
+
+**inlay_hint / inlay_hint_resolve (ADR-0057g §3.2):**
+
+1. `build_inlay_hints` populates `InlayHint.data` per kind:
+   - type hint: `{"kind": "type", "name": <binder>}`.
+   - param hint: `{"kind": "param", "callee", "param", "index"}`.
+2. Handler returns hints with `data` set and `tooltip: None`.
+3. Client may send `inlayHint/resolve` per hint; the resolve handler:
+   - Reads `data.kind`.
+   - For `"type"`: re-look up `ctx.lookup(name)`; build Markdown
+     tooltip `**name**: ` + type + `_Inferred at let-binding._`.
+   - For `"param"`: re-look up `ctx.lookup(callee)`; build Markdown
+     tooltip with callee signature + `Parameter <name> (slot N)`.
+   - On absent / malformed data, return hint unchanged.
+
+**incoming_calls / outgoing_calls (ADR-0057g §3.3):**
+
+1. Handler gathers `other_docs` under a single `docs.lock()`
+   (wave-3 cross-file rename pattern).
+2. Incoming: `build_incoming_calls_cross_file` runs same-doc walk
+   + per-other-doc walk with a synthetic CallHierarchyItem whose
+   `uri` is overridden so the wave-4 walker attributes callers to
+   the other URI. Results concatenate.
+3. Outgoing: `build_outgoing_calls_cross_file` runs the same-doc
+   walk; for any callee with a placeholder (zero-span) `to.range`,
+   parses each other doc and replaces the `to` item with the
+   cross-doc def location if found. If no doc has the def, the
+   placeholder stays (honest scope).
+
+### Wave-5 honest scope (per ADR-0057g §4)
+
+- OPEN documents only; closed-file filesystem walks excluded.
+- `previousResultId` out-of-sync → full Tokens fallback (no
+  partial-delta synthesis).
+- Trait-method call hierarchy: static dispatch only.
+- inlayHint resolve fills `tooltip` only; `text_edits` lazy-resolve
+  deferred to a future sub-ADR.
+- Semantic-tokens modifier bitmask remains flat zero (wave-4 scope
+  unchanged).
 
 ## Public surface
 

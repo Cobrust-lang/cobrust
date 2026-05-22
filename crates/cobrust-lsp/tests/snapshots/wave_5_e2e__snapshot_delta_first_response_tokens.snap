@@ -1,0 +1,36 @@
+---
+source: crates/cobrust-lsp/tests/wave_5_e2e.rs
+assertion_line: 446
+expression: result
+snapshot_kind: text
+---
+{
+  "resultId": "st-snap-1",
+  "data": [
+    0,
+    0,
+    3,
+    0,
+    0,
+    0,
+    4,
+    1,
+    5,
+    0,
+    0,
+    3,
+    3,
+    7,
+    0,
+    0,
+    4,
+    1,
+    4,
+    0,
+    0,
+    2,
+    2,
+    2,
+    0
+  ]
+}

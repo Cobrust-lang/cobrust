@@ -1,0 +1,47 @@
+---
+source: crates/cobrust-lsp/tests/wave_5_e2e.rs
+assertion_line: 518
+expression: calls
+snapshot_kind: text
+---
+[
+  {
+    "from": {
+      "name": "ext_caller",
+      "kind": 12,
+      "uri": "file:///other.cb",
+      "range": {
+        "start": {
+          "line": 1,
+          "character": 0
+        },
+        "end": {
+          "line": 1,
+          "character": 19
+        }
+      },
+      "selectionRange": {
+        "start": {
+          "line": 0,
+          "character": 3
+        },
+        "end": {
+          "line": 0,
+          "character": 13
+        }
+      }
+    },
+    "fromRanges": [
+      {
+        "start": {
+          "line": 1,
+          "character": 11
+        },
+        "end": {
+          "line": 1,
+          "character": 19
+        }
+      }
+    ]
+  }
+]

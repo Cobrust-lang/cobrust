@@ -364,10 +364,60 @@ Cursor on the `add` def-name → incomingCalls returns 2
 `CallHierarchyIncomingCall` items (`caller1` + `caller2`), each
 carrying its call-site range.
 
-Honest scope: same-document only (cross-file call graph deferred to
-wave-5). A synthetic `<module>` caller aggregates module-level call
-sites, but calls nested in fn bodies are NOT double-counted as both
-the fn caller and the `<module>` caller.
+Honest scope: same-document only at wave-4. Wave-5 broadens to every
+open document. A synthetic `<module>` caller aggregates module-level
+call sites, but calls nested in fn bodies are NOT double-counted as
+both the fn caller and the `<module>` caller.
+
+### Semantic-tokens delta + inlayHint/resolve + cross-file call hierarchy (wave-5, ADR-0057g)
+
+Wave-5 (v1.3 LSP server — **feature-complete**) closes the three
+ADR-0057f honest-cite deferrals.
+
+#### `textDocument/semanticTokens/full/delta` — incremental recoloring
+
+After the first `textDocument/semanticTokens/full` response, the
+server caches `(result_id, tokens)` per URI. Subsequent edits trigger
+`semanticTokens/full/delta` requests carrying the previous
+`result_id`; the server diffs the new token stream against the cache
+and returns a single `SemanticTokensEdit { start, deleteCount, data }`
+covering the differing window. Wire-byte cost drops from O(file) to
+O(edit) — a 1000-line file with a one-character change re-sends a
+handful of tokens, not the whole stream.
+
+If the client's `previousResultId` does not match the cache (e.g. the
+cache was evicted or the client missed a response), the server falls
+back to the full `Tokens` response. No partial-delta synthesis;
+honest scope per ADR-0057g §4.
+
+#### `inlayHint/resolve` — hover-on-inlay tooltips
+
+Each inlay hint carries a `data` field describing its kind + lookup
+keys. The initial `textDocument/inlayHint` response stays small; when
+the user hovers an inlay, the editor sends `inlayHint/resolve` for
+that single hint. The server reads `data` and renders a Markdown
+tooltip:
+
+- **Type hints**: `**x**: \`i64\`` plus `_Inferred at let-binding._`.
+- **Param-name hints**: `**\`add: (i64, i64) -> i64\`**` plus
+  `Parameter \`left\` (slot 0).`.
+
+Hints with absent or malformed `data` resolve to themselves unchanged.
+
+#### Cross-file `callHierarchy/incomingCalls` + `outgoingCalls`
+
+Wave-5 broadens the incoming + outgoing walks to every OPEN document
+in the LSP session (consistent with wave-3 cross-file rename).
+
+- Incoming: same-doc result is concatenated with one block per
+  other-doc URI; callers from another file surface with their
+  `from.uri` correctly set to the other doc.
+- Outgoing: a callee referenced by the primary fn but defined in
+  another open doc now resolves the `to` item to the cross-doc def
+  location instead of leaving a zero-span placeholder.
+
+Honest scope: closed files are invisible (filesystem walks excluded);
+trait-method resolution stays static-dispatch only.
 
 ### Build and run
 

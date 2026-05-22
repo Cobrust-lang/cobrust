@@ -24,7 +24,8 @@ use cobrust_frontend::ast::{
 use cobrust_frontend::span::{FileId, Span};
 use cobrust_frontend::token::{Token, TokenKind};
 use tower_lsp::lsp_types::{
-    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
+    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensDelta,
+    SemanticTokensEdit, SemanticTokensFullDeltaResult, SemanticTokensLegend,
 };
 
 use crate::span_convert::LineMap;
@@ -136,6 +137,119 @@ pub fn build_semantic_tokens(source: &str, line_map: &LineMap) -> SemanticTokens
         result_id: None,
         data,
     }
+}
+
+/// Build the LSP `semanticTokens/full/delta` response — ADR-0057g §3.1.
+///
+/// Compares the freshly-computed token stream for `source` against
+/// `previous_tokens` (if present + `previous_result_id` matches the
+/// caller's stored id). Returns either:
+///   - `SemanticTokensFullDeltaResult::TokensDelta` with a minimal
+///     `Vec<SemanticTokensEdit>` describing the delta between the two
+///     delta-encoded streams; or
+///   - `SemanticTokensFullDeltaResult::Tokens` with the full new stream
+///     (no previous cache, or `previous_result_id` is out-of-sync).
+///
+/// `new_result_id` is the freshly-allocated id the caller writes back
+/// into its per-URI cache before responding; it is also stamped onto
+/// the response so the client carries it forward to the next request.
+#[must_use]
+pub fn build_semantic_tokens_delta(
+    source: &str,
+    line_map: &LineMap,
+    previous_result_id: Option<&str>,
+    cached_result_id: Option<&str>,
+    previous_tokens: Option<&[SemanticToken]>,
+    new_result_id: String,
+) -> SemanticTokensFullDeltaResult {
+    let new_tokens = build_semantic_tokens(source, line_map);
+    let new_data: Vec<SemanticToken> = new_tokens.data;
+
+    // Decide whether we can emit a delta: caller must have supplied
+    // both `previous_result_id` AND its cache must hold the same id;
+    // otherwise we fall back to the full Tokens response.
+    let prev_matches =
+        matches!((previous_result_id, cached_result_id), (Some(a), Some(b)) if a == b);
+    let Some(prev_data) = previous_tokens.filter(|_| prev_matches) else {
+        return SemanticTokensFullDeltaResult::Tokens(SemanticTokens {
+            result_id: Some(new_result_id),
+            data: new_data,
+        });
+    };
+
+    // Compute the longest common prefix + suffix to bracket the diff
+    // window. Inside that window, emit a single `SemanticTokensEdit`
+    // that replaces `delete_count` tokens with the new data slice.
+    //
+    // LSP `start` + `delete_count` are measured in u32 fields of the
+    // delta-encoded stream (i.e. each `SemanticToken` is 5 u32s on the
+    // wire, but the spec counts whole tokens). We emit per-token edits
+    // by indexing tokens directly.
+    let prefix = common_prefix(prev_data, &new_data);
+    let suffix = common_suffix(&prev_data[prefix..], &new_data[prefix..]);
+    let prev_len = prev_data.len();
+    let new_len = new_data.len();
+
+    // If nothing changed, emit an empty edits vec.
+    if prefix + suffix == prev_len && prefix + suffix == new_len {
+        return SemanticTokensFullDeltaResult::TokensDelta(SemanticTokensDelta {
+            result_id: Some(new_result_id),
+            edits: Vec::new(),
+        });
+    }
+
+    // The `start` field is the per-u32 offset in the previous stream
+    // (each token = 5 u32s).
+    let start_u32 = u32::try_from(prefix.saturating_mul(5)).unwrap_or(u32::MAX);
+    let delete_count_u32 = u32::try_from(
+        prev_len
+            .saturating_sub(prefix)
+            .saturating_sub(suffix)
+            .saturating_mul(5),
+    )
+    .unwrap_or(u32::MAX);
+    let replacement: Vec<SemanticToken> =
+        new_data[prefix..(new_len.saturating_sub(suffix))].to_vec();
+    let edits = vec![SemanticTokensEdit {
+        start: start_u32,
+        delete_count: delete_count_u32,
+        data: Some(replacement),
+    }];
+    SemanticTokensFullDeltaResult::TokensDelta(SemanticTokensDelta {
+        result_id: Some(new_result_id),
+        edits,
+    })
+}
+
+/// Length of the longest common prefix of `a` and `b`.
+fn common_prefix(a: &[SemanticToken], b: &[SemanticToken]) -> usize {
+    let mut i = 0;
+    let n = a.len().min(b.len());
+    while i < n && tokens_equal(&a[i], &b[i]) {
+        i += 1;
+    }
+    i
+}
+
+/// Length of the longest common suffix of `a` and `b`.
+fn common_suffix(a: &[SemanticToken], b: &[SemanticToken]) -> usize {
+    let mut i = 0;
+    let n = a.len().min(b.len());
+    while i < n && tokens_equal(&a[a.len() - 1 - i], &b[b.len() - 1 - i]) {
+        i += 1;
+    }
+    i
+}
+
+/// Field-wise equality on a `SemanticToken` (the derived `PartialEq`
+/// is sufficient but we explicitly enumerate so the diff loop has
+/// inline-able semantics).
+fn tokens_equal(a: &SemanticToken, b: &SemanticToken) -> bool {
+    a.delta_line == b.delta_line
+        && a.delta_start == b.delta_start
+        && a.length == b.length
+        && a.token_type == b.token_type
+        && a.token_modifiers_bitset == b.token_modifiers_bitset
 }
 
 fn span_to_line_char(span: &Span, line_map: &LineMap) -> (u32, u32, u32) {

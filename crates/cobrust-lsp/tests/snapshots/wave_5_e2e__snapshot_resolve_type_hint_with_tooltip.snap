@@ -1,0 +1,26 @@
+---
+source: crates/cobrust-lsp/tests/wave_5_e2e.rs
+assertion_line: 480
+expression: resolved
+snapshot_kind: text
+---
+[
+  {
+    "position": {
+      "line": 0,
+      "character": 5
+    },
+    "label": ": i64",
+    "kind": 1,
+    "tooltip": {
+      "kind": "markdown",
+      "value": "**`y`**: `i64`\n\n_Inferred at let-binding (ADR-0057g §3.2)._"
+    },
+    "paddingLeft": false,
+    "paddingRight": false,
+    "data": {
+      "kind": "type",
+      "name": "y"
+    }
+  }
+]

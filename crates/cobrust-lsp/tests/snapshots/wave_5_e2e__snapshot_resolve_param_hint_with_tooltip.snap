@@ -1,0 +1,48 @@
+---
+source: crates/cobrust-lsp/tests/wave_5_e2e.rs
+assertion_line: 495
+expression: resolved
+snapshot_kind: text
+---
+[
+  {
+    "position": {
+      "line": 4,
+      "character": 18
+    },
+    "label": "first:",
+    "kind": 2,
+    "tooltip": {
+      "kind": "markdown",
+      "value": "**`pair: (i64, i64) -> i64`**\n\nParameter `first` (slot 0)."
+    },
+    "paddingLeft": false,
+    "paddingRight": true,
+    "data": {
+      "callee": "pair",
+      "index": 0,
+      "kind": "param",
+      "param": "first"
+    }
+  },
+  {
+    "position": {
+      "line": 4,
+      "character": 21
+    },
+    "label": "second:",
+    "kind": 2,
+    "tooltip": {
+      "kind": "markdown",
+      "value": "**`pair: (i64, i64) -> i64`**\n\nParameter `second` (slot 1)."
+    },
+    "paddingLeft": false,
+    "paddingRight": true,
+    "data": {
+      "callee": "pair",
+      "index": 1,
+      "kind": "param",
+      "param": "second"
+    }
+  }
+]

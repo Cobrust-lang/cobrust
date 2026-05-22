@@ -1,18 +1,25 @@
 //! `textDocument/prepareCallHierarchy` + `callHierarchy/incomingCalls`
-//! + `callHierarchy/outgoingCalls` handlers — ADR-0057f §3.3.
+//! + `callHierarchy/outgoingCalls` handlers — ADR-0057f §3.3 + ADR-0057g §3.3.
 //!
 //! Phase J wave-4 call hierarchy. Same-document fn-graph traversal:
 //! given a cursor on a fn name, resolve it to a [`CallHierarchyItem`],
 //! then find incoming callers + outgoing callees by AST walk over the
 //! same source.
 //!
-//! Honest scope (per ADR-0057f §3.3):
-//! - Same-document only. Cross-file caller / callee aggregation
-//!   deferred to wave-5.
+//! Wave-5 (ADR-0057g §3.3) extends the incoming + outgoing walks to
+//! every OPEN document in `Backend.documents`. `prepare` itself stays
+//! same-document — the cursor's URI identifies the resolved fn's
+//! home doc — but the walks aggregate cross-doc results so the agent
+//! sees the workspace-wide impact radius before applying refactors.
+//!
+//! Honest scope (per ADR-0057f §3.3 + ADR-0057g §4):
+//! - Walks OPEN documents only; filesystem-walk for closed files is
+//!   out of scope (consistent with wave-3 cross-file rename).
 //! - The fn def-name span is recovered by scanning the source for the
 //!   first word-boundary occurrence of the name within the fn def's
 //!   `Stmt.span` — the same `first_word_occurrence` heuristic
 //!   goto-def uses (ADR-0057e §3.1).
+//! - No trait-method resolution; static dispatch only.
 
 use cobrust_frontend::ast::{
     AccessKind, Block, CallArg, Expr, ExprKind, FnDef, Module, Stmt, StmtKind,
@@ -144,6 +151,91 @@ pub fn build_outgoing_calls(
             from_ranges: ranges,
         })
         .collect()
+}
+
+/// ADR-0057g §3.3 — cross-file incoming-calls aggregator.
+///
+/// Computes the wave-4 same-doc `build_incoming_calls` result against
+/// `(primary_source, primary_line_map)`, then walks every entry of
+/// `other_docs` and aggregates per-doc incoming calls. The returned
+/// vec is the concatenation: same-doc first, then one block per
+/// other-doc URI. Callers are de-duplicated PER DOC (a fn calling
+/// the target multiple times in the same doc collapses to one
+/// `from_ranges`-extended entry — wave-4 semantics) but NOT across
+/// docs (a fn named `caller1` defined in two open docs produces two
+/// entries).
+#[must_use]
+pub fn build_incoming_calls_cross_file(
+    primary_source: &str,
+    primary_line_map: &LineMap,
+    item: &CallHierarchyItem,
+    other_docs: &[(Url, String, LineMap)],
+) -> Vec<CallHierarchyIncomingCall> {
+    let mut all = build_incoming_calls(primary_source, primary_line_map, item);
+    for (other_uri, other_source, other_line_map) in other_docs {
+        // Build a synthetic CallHierarchyItem that carries the OTHER
+        // doc's URI so the wave-4 walker attributes callers to it.
+        let mut synth_item = item.clone();
+        synth_item.uri = other_uri.clone();
+        let mut other_calls = build_incoming_calls(other_source, other_line_map, &synth_item);
+        all.append(&mut other_calls);
+    }
+    all
+}
+
+/// ADR-0057g §3.3 — cross-file outgoing-calls aggregator.
+///
+/// Computes the wave-4 same-doc `build_outgoing_calls` result against
+/// the primary doc. For each callee whose `from_ranges` come from the
+/// primary fn body but whose `to.range`/`selection_range` are
+/// placeholders (no same-doc def matched, so the wave-4 helper
+/// produces a zero-span `(0,0)..(0,0)` CallHierarchyItem), this
+/// function searches `other_docs` for a fn def matching the callee
+/// name and overwrites the `to` item with the cross-doc def location.
+/// If no other doc defines the callee either, the placeholder stays.
+#[must_use]
+pub fn build_outgoing_calls_cross_file(
+    primary_source: &str,
+    primary_line_map: &LineMap,
+    item: &CallHierarchyItem,
+    other_docs: &[(Url, String, LineMap)],
+) -> Vec<CallHierarchyOutgoingCall> {
+    let mut calls = build_outgoing_calls(primary_source, primary_line_map, item);
+    for call in &mut calls {
+        // Placeholder detection: the wave-4 fallback emits zero-span
+        // ranges when same-doc has no matching def.
+        let is_placeholder = call.to.range
+            == Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
+            };
+        if !is_placeholder {
+            continue;
+        }
+        // Search other docs for a fn def with this callee name.
+        for (other_uri, other_source, other_line_map) in other_docs {
+            if let Ok(module) =
+                cobrust_frontend::parse_str(other_source, cobrust_frontend::span::FileId::SYNTHETIC)
+                && let Some(resolved) = find_fn_def(&module, &call.to.name)
+                && let Some(new_item) = fn_to_call_hierarchy_item(
+                    resolved.stmt,
+                    &call.to.name,
+                    other_line_map,
+                    other_uri.clone(),
+                )
+            {
+                call.to = new_item;
+                break;
+            }
+        }
+    }
+    calls
 }
 
 // ---------------------------------------------------------------------------
