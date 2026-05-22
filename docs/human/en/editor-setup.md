@@ -304,6 +304,71 @@ the `WorkspaceEdit.changes` map at all).
   cross-file rename (via HIR `DefId` cross-file resolution) is
   deferred to wave-4.
 
+### Inlay hints + semantic tokens + call hierarchy (wave-4, ADR-0057f)
+
+Wave-4 (v1.2 LSP server) adds three modern-editor expected polish features:
+
+#### `textDocument/inlayHint` — inline type + parameter-name hints
+
+The server emits inline hints at two positions:
+
+- **`let`-binding type**: append `: <inferred_type>` ghost text at the
+  end of a `let` statement whose annotation is absent.
+- **Function-call parameter name**: prepend `<param_name>:` ghost text
+  before each non-literal positional argument.
+
+```cobrust
+let x = 42               # rendered as: let x: i64 = 42
+fn add(left: i64, right: i64) -> i64:
+    return left + right
+let y = some_var
+add(y, 2)                # rendered as: add(left: y, 2)  — left: is the hint
+```
+
+Literal arguments (`add(1, 2)`) suppress the hint to avoid visual noise.
+
+#### `textDocument/semanticTokens/full` — semantic coloring (8 types)
+
+The server returns LSP delta-encoded `SemanticTokens` with an 8-type
+legend: `keyword` / `string` / `number` / `comment` / `operator` /
+`variable` / `function` / `type`.
+
+- Identifiers default to `variable`; AST refinement upgrades them to:
+  - `function`: fn / class def-names (located in the fn header by
+    extending the body-span search window backwards by 256 bytes).
+  - `type`: each path segment in a type annotation (pushed per-segment
+    to match the lexer's exact `(line, char, length)`).
+- `#`-to-EOL comments are emitted via an independent byte scan
+  (the lexer strips them).
+
+Honest scope: the modifier bitmask is flat zero on every token
+(declaration / readonly / static / etc. modifiers deferred to wave-5).
+
+#### `textDocument/prepareCallHierarchy` + `incomingCalls` + `outgoingCalls`
+
+Place the cursor on a fn def-name (VSCode: right-click → "Show Call
+Hierarchy"; Neovim: `vim.lsp.buf.incoming_calls()` /
+`outgoing_calls()`); the server returns the incoming (who calls me)
+and outgoing (who do I call) chains.
+
+```cobrust
+fn add(x: i64, y: i64) -> i64:
+    return x + y
+fn caller1() -> i64:
+    return add(1, 2)
+fn caller2() -> i64:
+    return add(3, 4)
+```
+
+Cursor on the `add` def-name → incomingCalls returns 2
+`CallHierarchyIncomingCall` items (`caller1` + `caller2`), each
+carrying its call-site range.
+
+Honest scope: same-document only (cross-file call graph deferred to
+wave-5). A synthetic `<module>` caller aggregates module-level call
+sites, but calls nested in fn bodies are NOT double-counted as both
+the fn caller and the `<module>` caller.
+
 ### Build and run
 
 ```bash

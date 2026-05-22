@@ -3,11 +3,11 @@ doc_kind: adr
 adr_id: 0057f
 parent_adr: 0057
 title: "Phase J wave-4 — inlay hints + semantic tokens + call hierarchy (v1.2 LSP polish)"
-status: proposed
+status: accepted
 date: 2026-05-21
-last_verified_commit: 657019e
-ratified_at: pending-merge
-ratified_on: 2026-05-21
+last_verified_commit: 52d8315
+ratified_at: 52d8315
+ratified_on: 2026-05-22
 phase: "Phase J wave-4"
 supersedes: []
 superseded_by: []

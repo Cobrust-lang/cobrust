@@ -115,6 +115,67 @@ route per-tier behaviour without re-classifying the original error.
    with zero occurrences are omitted from the `changes` map.
 4. Returns `WorkspaceEdit { changes: HashMap<Url, Vec<TextEdit>> }`.
 
+### Wave-4 public surface (ADR-0057f) — v1.2 LSP server
+
+Phase J wave-4 polish: inlay hints + semantic tokens + call hierarchy.
+20 e2e tests + 6 insta snapshots; 143 crate tests PASS.
+
+| Symbol | Location | Shape |
+|---|---|---|
+| `inlay::build_inlay_hints` | `crates/cobrust-lsp/src/inlay.rs` | `(source: &str, line_map: &LineMap, range: Range, ctx: &TypeCheckCtx) -> Vec<InlayHint>` |
+| `semantic_tokens::build_semantic_tokens` | `crates/cobrust-lsp/src/semantic_tokens.rs` | `(source: &str, line_map: &LineMap) -> SemanticTokens` |
+| `semantic_tokens::token_legend` | `crates/cobrust-lsp/src/semantic_tokens.rs` | `() -> SemanticTokensLegend` (8 types, 0 modifiers) |
+| `call_hierarchy::prepare_call_hierarchy` | `crates/cobrust-lsp/src/call_hierarchy.rs` | `(source: &str, line_map: &LineMap, position: Position, ctx: &TypeCheckCtx, uri: Url) -> Option<Vec<CallHierarchyItem>>` |
+| `call_hierarchy::build_incoming_calls` | `crates/cobrust-lsp/src/call_hierarchy.rs` | `(source: &str, line_map: &LineMap, item: &CallHierarchyItem) -> Vec<CallHierarchyIncomingCall>` |
+| `call_hierarchy::build_outgoing_calls` | `crates/cobrust-lsp/src/call_hierarchy.rs` | `(source: &str, line_map: &LineMap, item: &CallHierarchyItem) -> Vec<CallHierarchyOutgoingCall>` |
+
+### Wave-4 dispatch paths
+
+**inlay_hint (ADR-0057f §3.1):**
+
+1. `let`-binding hints — for each `StmtKind::Let { annot: None, .. }`,
+   resolve the inferred type from `ctx` and emit `InlayHint` with
+   `label = ": <Type>"` at the binding-name end position.
+2. Param-name hints — for each `Expr::Call { args, .. }` where the
+   arg is a non-literal positional, emit `InlayHint` with
+   `label = "<param_name>:"` at the arg start position.
+
+**semantic_tokens_full (ADR-0057f §3.2):**
+
+1. Lexer scan emits one `RawToken` per `Token` (keyword / literal /
+   operator / identifier-as-variable).
+2. Parser walk refines via `refine_with_ast`:
+   - Fn / class def-name → `function` (push_name_in_span finds the
+     name in the fn header by extending the body-span search window
+     backwards by 256 bytes).
+   - Type-annotation path segments → `type` (per-segment push, not
+     whole `Type.span` — because the parser includes trailing
+     whitespace in `Type.span`).
+3. Append `#`-to-EOL comments via byte scan.
+4. Sort by `(line, character)` ascending, then delta-encode per LSP.
+
+**call_hierarchy (ADR-0057f §3.3):**
+
+1. `prepare_call_hierarchy` — position → word → keyword guard →
+   `ctx.lookup` guard → `find_fn_def(module, name)` → build
+   `CallHierarchyItem` with `selection_range` via the same
+   header-aware `locate_name_in_span` (256-byte backwards window).
+2. `build_incoming_calls` — walk `module.items`; for each fn def,
+   walk its body for `Expr::Call { callee: Name(target), .. }` hits.
+   Recurse ONLY into nested fn / class / decorated items (not into
+   regular stmts) to avoid double-counting top-level fn-body calls
+   as `<module>` callers.
+3. `build_outgoing_calls` — find target fn; walk its body for every
+   `Expr::Call { callee: Name(callee_name), .. }`; aggregate per
+   callee name.
+
+### Wave-4 honest scope
+
+- Same-document only (cross-file deferred to wave-5).
+- Modifier bitmask is flat zero on every semantic token (declaration
+  / readonly / static deferred to wave-5).
+- Parse-failure fallback: best-effort lex-only token output.
+
 ## Public surface
 
 | Item | Anchor | Kind |
