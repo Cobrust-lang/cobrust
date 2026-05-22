@@ -1,0 +1,31 @@
+# bench_array_sum.cb — SIMD-vectorizable workload for --target-cpu demo bench.
+#
+# Computes sum-of-squares for i in 0..N.  The inner loop is purely:
+#   total += i * i
+# which maps cleanly to a 64-bit integer multiply-accumulate chain that
+# LLVM will auto-vectorize with AVX2 (vpmuld/vpaddq) or AVX-512 when
+# the target CPU allows.
+#
+# N = 50_000_000 chosen so runtime is ~50–300 ms on a modern x86 core
+# at the generic tier, giving hyperfine enough signal to distinguish tiers.
+#
+# This is a DEMO BENCH, not a production validation workload.
+#
+# Usage:
+#   cobrust build --release examples/bench_array_sum.cb -o /tmp/bench_array_sum
+#   /tmp/bench_array_sum
+#
+# Expected stdout (deterministic, same on all platforms):
+#   41666666791666675000
+#
+# Constitution alignment:
+#   §2.5 — maximize-overlap-with-training-data (plain for-range accumulator)
+#   §5.3 — allocations visible; no heap usage in hot loop
+
+fn main() -> i64:
+    let n: i64 = 50000000
+    let total: i64 = 0
+    for i in range(0, n):
+        total = total + i * i
+    print(total)
+    return 0

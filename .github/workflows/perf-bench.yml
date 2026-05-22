@@ -1,0 +1,93 @@
+# perf-bench.yml — Cobrust x86_64 SIMD --target-cpu demo bench (3 tiers)
+#
+# THIS IS A DEMO BENCH, not a production validation workload.
+# Purpose: empirically show --target-cpu speedup tiers on an integer
+# SIMD-vectorizable workload (sum-of-squares) on a GH Actions x86_64 runner.
+#
+# Trigger: manual dispatch or push to bench fixtures / this workflow file.
+# F35-sibling: no production validation claims are made here.
+# F39: no machine names hard-coded; runner is ubuntu-latest only.
+
+name: Perf Bench (x86_64 SIMD demo)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'examples/bench_*.cb'
+      - '.github/workflows/perf-bench.yml'
+
+jobs:
+  perf-bench:
+    name: Perf bench x86_64 (3 CPU tiers)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install hyperfine
+        run: sudo apt-get install -y hyperfine
+
+      - name: Build cobrust CLI (release)
+        run: cargo build --release -p cobrust-cli
+
+      - name: Compile bench fixture — 3 target-cpu tiers
+        run: |
+          ./target/release/cobrust build --release \
+            --target-cpu generic \
+            examples/bench_array_sum.cb -o /tmp/bench_generic
+
+          ./target/release/cobrust build --release \
+            --target-cpu x86-64-v3 \
+            examples/bench_array_sum.cb -o /tmp/bench_v3
+
+          ./target/release/cobrust build --release \
+            --target-cpu skylake-avx512 \
+            examples/bench_array_sum.cb -o /tmp/bench_avx512
+
+      - name: Hyperfine 3-way bench (warmup=10, runs=50)
+        run: |
+          hyperfine \
+            --warmup 10 \
+            --runs 50 \
+            --export-markdown /tmp/result.md \
+            --command-name 'generic' '/tmp/bench_generic' \
+            --command-name 'x86-64-v3 (AVX2)' '/tmp/bench_v3' \
+            --command-name 'skylake-avx512' '/tmp/bench_avx512'
+
+      - name: Write job summary
+        run: |
+          {
+            echo "## Cobrust x86_64 SIMD demo bench"
+            echo ""
+            echo "> Workload: \`bench_array_sum.cb\` — sum-of-squares i=0..50M"
+            echo "> **Demo bench only. Not a production validation.**"
+            echo ""
+            echo "### Hyperfine results"
+            echo ""
+            cat /tmp/result.md
+            echo ""
+            echo "### Binary sizes"
+            echo ""
+            echo "| Binary | Bytes |"
+            echo "|--------|-------|"
+            for b in /tmp/bench_generic /tmp/bench_v3 /tmp/bench_avx512; do
+              name=$(basename "$b")
+              size=$(stat -c%s "$b")
+              echo "| \`$name\` | $size |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bench result artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-bench-result
+          path: /tmp/result.md
+          retention-days: 30
