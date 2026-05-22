@@ -3,7 +3,7 @@ name: f50
 status: RATIFIED
 family: F-language
 date: 2026-05-22
-last_verified_commit: dfb379d
+last_verified_commit: 07159ce
 ---
 
 # F50 — `cobrust-lsp` / `cobrust check` diagnostic divergence on PRELUDE intrinsics
