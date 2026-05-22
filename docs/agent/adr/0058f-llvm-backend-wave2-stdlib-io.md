@@ -165,21 +165,31 @@ new `stdlib_io_*` section. Each fixture compiles + links a small
 Cobrust source via `Backend::Llvm` then runs the resulting binary and
 asserts the stdout matches a golden line.
 
-Coverage:
+Coverage (as-landed reality; F36-sibling spec-vs-code drift closed — original §5 described fixture-06 as `print(fib(10))` but landed code shipped `println_literal_path` instead; drift caught by Tier-2 audit aebbe278; closed here by amend + new fixture-08):
 
 - `stdlib_io_01_println_int_42` — `print(42)` → `"42\n"`.
 - `stdlib_io_02_println_bool_true` — `print(True)` → `"True\n"`.
 - `stdlib_io_03_println_bool_false` — `print(False)` → `"False\n"`.
 - `stdlib_io_04_println_float` — `print(1.5)` → `"1.5\n"`.
 - `stdlib_io_05_println_str_literal` — `print("hello")` → `"hello\n"`.
-- `stdlib_io_06_println_fib_result` — `print(fib(10))` → `"55\n"`.
+- `stdlib_io_06_println_literal_path` — `__cobrust_println("world")` →
+  `"world\n"`. Exercises the single-Str-arg → `(ptr, len)` expansion
+  case (extern-name + `Constant::Str` arg path — independent value,
+  retained as-landed).
 - `stdlib_io_07_println_str_let_binding` — `let s: str = "hi"; print(s)`
   → `"hi\n"`.
+- `stdlib_io_08_println_fib_result` — `print(fib(10))` → `"55\n"`.
+  Exercises the user-fn `FnRef` call chain (recursive `fib` body[0] +
+  `main` body[1] calling `fib(10)` then `__cobrust_println_int`). This
+  is the exact failure mode from the user bug report (2026-05-22
+  playground): `fib` computed correctly but the result was swallowed by
+  the wave-1 `println` stub. High-value fixture: tests the full
+  FnRef-recursive + extern-call integration path end-to-end.
 
 Each fixture is `#[cfg(feature = "llvm")]` + gates on `linker_available()`
-+ presence of `libcobrust_stdlib.a`. Tests `#[ignore]` when the
++ presence of `libcobrust_stdlib.a`. Tests skip gracefully when the
 staticlib isn't on disk (no false-fail in default CI matrix; the LLVM
-release-with-stdlib lane runs them).
+release-with-stdlib lane runs them concretely).
 
 Pre-fix expectation: every stdlib_io_* fixture FAILS — stdout empty
 or all-zero.
@@ -271,7 +281,8 @@ forward").
   `intern_str_payloads` method on `LlvmEmitter` + extern-name dispatch
   in `lower_call`.
 - `lower_constant(Str)` returns a heap StringBuffer pointer (not null).
-- 7 new stdlib_io_* fixtures in `codegen_diff_corpus.rs` PASS post-fix.
+- 8 stdlib_io_* fixtures in `codegen_diff_corpus.rs` PASS post-fix
+  (fixture-08 added to close F36-sibling spec drift).
 - F45 finding committed (cited in §2, §6, §7).
 - README + skill doc updated (no "feature-parity" claim; explicit
   "stdlib I/O hookup landed v0.5.1; wave-3 surfaces tracked here").
