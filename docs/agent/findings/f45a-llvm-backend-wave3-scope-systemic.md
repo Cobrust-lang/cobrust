@@ -2,7 +2,7 @@
 name: f45a
 status: ratified
 family: F45 child (systemic wave-3 catalogue) + F35-sibling (claim drift) + F37 (silent rot) + F44 (CI green != working)
-last_verified_commit: 85548f1
+last_verified_commit: 4425310
 date: 2026-05-22
 ---
 

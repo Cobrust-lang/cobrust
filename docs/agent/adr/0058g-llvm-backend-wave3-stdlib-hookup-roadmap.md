@@ -7,7 +7,7 @@ title: "LLVM backend wave-3 stdlib hookup roadmap — panic/argv/list/dict/input
 status: proposed
 date: 2026-05-22
 phase: Phase K wave-3 (LLVM backend full stdlib parity)
-last_verified_commit: bfa8210
+last_verified_commit: 4425310
 supersedes: []
 superseded_by: []
 relates_to: [adr:0058a, adr:0058f, adr:0030, adr:0044, adr:0050e, adr:0050c, adr:0049, adr:0051]

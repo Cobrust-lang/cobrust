@@ -7,7 +7,7 @@ title: "LLVM backend wave-2 stdlib I/O hookup — runtime helpers + str material
 status: accepted
 date: 2026-05-22
 phase: Phase K wave-2 (LLVM backend stdlib I/O)
-last_verified_commit: 407c1df
+last_verified_commit: 4425310
 supersedes: []
 superseded_by: []
 relates_to: [adr:0058a, adr:0058d, adr:0058e, adr:0030, adr:0064, adr:0044, adr:0047]
