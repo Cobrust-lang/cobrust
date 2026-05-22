@@ -475,13 +475,60 @@ cobrust debug --dap
 - `1` —— 用户错误(源文件缺失、lldb 二进制未找到、cobrust-dap 同目录缺失)。
 - `3` —— 构建失败(从 `cobrust build` 驱动透传)。
 
+## v1.1 DAP (ADR-0059f Phase L wave-4) — 进阶特性
+
+`cobrust-dap` 在 wave-4 通告四个新的 DAP 请求处理器。
+
+### 监视表达式 (`evaluate`)
+
+在编辑器的 debug REPL 或 WATCH 面板中输入任意表达式。表达式会被原
+样转发到 lldb 的 `expression` 命令;wave-1 pretty-printer 已经
+自动美化了 Cobrust 类型的输出。
+
+支持的表达式形态(透传到 lldb 的 C-like 解析器):
+
+- 算术运算: `i + 1`、`n * 2`、`i % len`
+- 比较运算: `i > 10`、`s == 0`
+- 字段访问: `p.name`、`point.x`
+- 数组下标: `xs[0]`、`arr[i + 1]`
+
+不支持(需要 Cobrust 源级求值器):`match` 表达式、推导式、泛型函数
+调用。
+
+### 条件断点
+
+在编辑器的 "Edit Breakpoint" UI 中给任意断点添加 `condition`(右
+键点击 gutter 红点 > "Edit Breakpoint" > "Expression")。条件只
+有在断点命中时为真,才会真正暂停。
+
+### 多线程调试
+
+ADR-0028 的结构化并发运行时会启动多个 OS 线程承载 task 工作。
+wave-4 在编辑器的 "Call Stack" 面板列出所有线程。单线程程序仍然只
+显示一个 "main" 项(对 v1.0 DAP 客户端向后兼容)。
+
+### 异常断点
+
+wave-4 在 "Breakpoints" 面板通告三个过滤器:
+
+- **Uncaught Panic**(默认开启)—— 在 Cobrust `panic!` 时停下。
+- **Result::Err Construction**(默认关闭)—— **honest scope**:当
+  前代码生成器尚未发出对应的运行时符号;断点会以 `verified: false`
+  + "symbol not emitted in current build" 消息返回。未来 ADR 补上。
+- **Unreachable! Intrinsic**(默认关闭)—— 在 `unreachable!()` 经
+  LLVM `unreachable` intrinsic 时停下。
+
 ## 不包含的功能
 
 - Wave-1 LSP 仅提供诊断。定义跳转、补全、悬浮提示、重命名、code-action
   快速修复均在 ADR-0057b/c/d 范围内。
-- Wave-2 DAP 仅承担单线程单步调试的核心表面。条件断点、表达式监视
-  (`evaluate`)、多线程调试、attach 模式、`setVariable` 是 Phase L
-  wave-3+ 的后续工作,详见 ADR-0059b §5。
+- Wave-2 DAP 承担单线程单步调试的核心表面;wave-4(ADR-0059f)补足
+  watch / 条件断点 / 多线程 / 异常断点。`setVariable` 与 `attach`
+  模式仍是 non-goal。
 - Wave-3 `cobrust debug` 仅支持行号断点。条件断点 / 函数名断点需要
   在 lldb 提示符内手动输入,详见 ADR-0059c §5。
+- Cobrust 源级表达式求值(watch 内写 `match` / 推导式)—— out-of-
+  scope;ADR-0059 §4 永久延期。
+- Logpoint(纯日志断点)+ 数据断点(内存观察点)—— 延期到 wave-5+,
+  详见 ADR-0059f §4。
 - 格式化集成 — 参见 `cobrust fmt` CLI 工具。

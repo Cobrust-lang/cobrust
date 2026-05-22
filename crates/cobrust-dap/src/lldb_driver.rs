@@ -306,6 +306,167 @@ impl LldbDriver {
         Ok(parse_stack_trace(&stdout))
     }
 
+    /// `evaluate` wrapper for ADR-0059f §3.1 watch expressions.
+    ///
+    /// Selects the frame (if `frame_id` is `Some(N)`) then issues
+    /// `expression <expr>` to lldb's REPL. The result is lldb's
+    /// stdout summary verbatim — the wave-1 pretty-printers already
+    /// shape the output for Cobrust types when wave-3 printer scripts
+    /// are loaded.
+    ///
+    /// Returns `(result_text, type_name_opt)`. The type name is parsed
+    /// from the leading `(<type>) $N = …` prefix when present.
+    pub async fn evaluate(
+        &mut self,
+        expression: &str,
+        frame_id: Option<i64>,
+    ) -> Result<(String, Option<String>), DapError> {
+        if let Some(fid) = frame_id {
+            let _ = self.send_command(&format!("frame select {fid}")).await?;
+        }
+        let stdout = self
+            .send_command(&format!("expression -- {expression}"))
+            .await?;
+        Ok(parse_evaluate(&stdout))
+    }
+
+    /// `set_conditional_breakpoint` wrapper for ADR-0059f §3.2.
+    ///
+    /// Issues `breakpoint set --file X --line N --condition '<expr>'`
+    /// to lldb. The file and condition are wrapped via [`lldb_quote`]
+    /// to escape embedded single quotes; lldb treats each wrapped
+    /// form as a single argument.
+    pub async fn set_conditional_breakpoint(
+        &mut self,
+        file: &str,
+        line: u32,
+        condition: &str,
+    ) -> Result<Breakpoint, DapError> {
+        if let DriverKind::Stub { breakpoint_seq, .. } = &mut self.kind {
+            let id = *breakpoint_seq;
+            *breakpoint_seq += 1;
+            return Ok(Breakpoint {
+                id: Some(id),
+                verified: true,
+                message: Some(format!("condition: {condition}")),
+                source: Some(Source {
+                    name: Some(file.to_string()),
+                    path: Some(file.to_string()),
+                    source_reference: None,
+                }),
+                line: Some(line),
+                column: None,
+            });
+        }
+
+        let stdout = self
+            .send_command(&format!(
+                "breakpoint set --file {} --line {line} --condition {}",
+                lldb_quote(file),
+                lldb_quote(condition)
+            ))
+            .await?;
+        let mut bp = parse_breakpoint(&stdout, file, line)?;
+        if bp.verified {
+            bp.message = Some(format!("condition: {condition}"));
+        }
+        Ok(bp)
+    }
+
+    /// `list_threads` wrapper for ADR-0059f §3.3 multi-thread.
+    ///
+    /// Issues `thread list` to lldb, parses each line of the form
+    /// `  thread #N: tid = 0x..., 0x..., name = '<name>'`, returns
+    /// the list of `(id, name)` pairs. NotSpawned drivers return an
+    /// empty vec so callers can fall back to single-thread shim.
+    pub async fn list_threads(&mut self) -> Result<Vec<crate::dap_types::ThreadInfo>, DapError> {
+        if matches!(self.kind, DriverKind::NotSpawned) {
+            return Ok(Vec::new());
+        }
+        let stdout = self.send_command("thread list").await?;
+        Ok(parse_threads(&stdout))
+    }
+
+    /// `stack_trace_for_thread` wrapper for ADR-0059f §3.3.
+    ///
+    /// Selects the thread, then issues `thread backtrace` and parses
+    /// frames. Same parser as the single-thread `stack_trace` path.
+    /// NotSpawned drivers return an empty frame list (graceful
+    /// degradation; callers see `totalFrames: 0`).
+    pub async fn stack_trace_for_thread(
+        &mut self,
+        thread_id: i64,
+    ) -> Result<Vec<StackFrame>, DapError> {
+        if matches!(self.kind, DriverKind::NotSpawned) {
+            return Ok(Vec::new());
+        }
+        let _ = self
+            .send_command(&format!("thread select {thread_id}"))
+            .await?;
+        let stdout = self.send_command("thread backtrace").await?;
+        Ok(parse_stack_trace(&stdout))
+    }
+
+    /// `set_exception_breakpoint` wrapper for ADR-0059f §3.4.
+    ///
+    /// Per-filter symbol mapping:
+    /// - `"panic"` → `breakpoint set --name __cobrust_panic`
+    /// - `"result_err"` → `breakpoint set --name cobrust_result_err_construct`
+    /// - `"unreachable"` → `breakpoint set --name core::intrinsics::unreachable_internal`
+    ///
+    /// If lldb reports the symbol is unavailable (e.g. stripped
+    /// release builds), the bp is returned `verified: false` with the
+    /// raw lldb stdout in the message field. Honest-scope-skip per
+    /// ADR-0059f §3.4 result_err caveat.
+    pub async fn set_exception_breakpoint(&mut self, filter: &str) -> Result<Breakpoint, DapError> {
+        let symbol = match filter {
+            "panic" => "__cobrust_panic",
+            "result_err" => "cobrust_result_err_construct",
+            "unreachable" => "core::intrinsics::unreachable_internal",
+            other => {
+                tracing::warn!("unknown exception filter '{other}'");
+                return Ok(Breakpoint {
+                    id: None,
+                    verified: false,
+                    message: Some(format!("unknown exception filter '{other}'")),
+                    source: None,
+                    line: None,
+                    column: None,
+                });
+            }
+        };
+
+        if let DriverKind::Stub { breakpoint_seq, .. } = &mut self.kind {
+            let id = *breakpoint_seq;
+            *breakpoint_seq += 1;
+            return Ok(Breakpoint {
+                id: Some(id),
+                verified: true,
+                message: Some(format!("exception filter: {filter} (symbol: {symbol})")),
+                source: None,
+                line: None,
+                column: None,
+            });
+        }
+
+        let stdout = self
+            .send_command(&format!("breakpoint set --name {}", lldb_quote(symbol)))
+            .await?;
+
+        let mut bp = parse_breakpoint(&stdout, symbol, 0)?;
+        if stdout.contains("no locations") || stdout.contains("pending") {
+            bp.verified = false;
+            bp.message = Some(format!(
+                "exception filter '{filter}' symbol '{symbol}' not emitted in current build"
+            ));
+        } else if bp.verified {
+            bp.message = Some(format!("exception filter: {filter} (symbol: {symbol})"));
+        }
+        bp.source = None;
+        bp.line = None;
+        Ok(bp)
+    }
+
     /// `variables` wrapper: `frame variable --no-args`.
     ///
     /// The pretty-printer summaries from wave-1 are already attached to
@@ -455,6 +616,61 @@ fn parse_stack_trace(stdout: &str) -> Vec<StackFrame> {
         });
     }
     frames
+}
+
+/// Parse a `expression --` stdout block per ADR-0059f §3.1.
+///
+/// lldb's `expression` prints results in two shapes:
+/// - `(<type>) $N = <value>` for typed results (the common case).
+/// - `<raw>` for parse errors / non-typed output.
+///
+/// Returns `(result_text, type_name_opt)`. On a typed match the
+/// `result_text` is the `<value>` portion (post `=` trimmed); the
+/// type name is extracted from the leading `(<type>)` prefix. On a
+/// non-match, the entire stdout (trimmed) becomes the result_text
+/// and the type is None.
+fn parse_evaluate(stdout: &str) -> (String, Option<String>) {
+    let re = Regex::new(r"\(([^)]+)\)\s+\$\d+\s*=\s*(.+)").expect("valid regex");
+    for line in stdout.lines() {
+        if let Some(caps) = re.captures(line.trim()) {
+            let type_name = caps.get(1).map(|m| m.as_str().trim().to_string());
+            let value = caps
+                .get(2)
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default();
+            return (value, type_name);
+        }
+    }
+    (stdout.trim().to_string(), None)
+}
+
+/// Parse a `thread list` stdout block per ADR-0059f §3.3.
+///
+/// lldb's `thread list` prints lines of the form:
+/// `  thread #1: tid = 0x..., 0x..., name = 'main', queue = '...'`
+/// or simpler `  thread #2: tid = 0x..., 0x...` (no name field).
+///
+/// Returns a `Vec<ThreadInfo>` with the parsed (id, name) pairs.
+/// If a thread line lacks a name, the name field falls back to
+/// `"thread-N"` where N is the parsed id.
+fn parse_threads(stdout: &str) -> Vec<crate::dap_types::ThreadInfo> {
+    let id_re = Regex::new(r"thread\s+#(\d+):").expect("valid regex");
+    let name_re = Regex::new(r"name\s*=\s*'([^']*)'").expect("valid regex");
+    let mut threads = Vec::new();
+    for line in stdout.lines() {
+        if let Some(id_caps) = id_re.captures(line) {
+            let id: i64 = id_caps
+                .get(1)
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(0);
+            let name = name_re
+                .captures(line)
+                .and_then(|caps| caps.get(1))
+                .map_or_else(|| format!("thread-{id}"), |m| m.as_str().to_string());
+            threads.push(crate::dap_types::ThreadInfo { id, name });
+        }
+    }
+    threads
 }
 
 /// Parse a `frame variable --no-args` stdout block.

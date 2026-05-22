@@ -89,6 +89,11 @@ pub struct InitializeResponse {
     /// The debug adapter supports the `terminate` request. Wave-2:
     /// true (graceful disconnect ends the lldb child).
     pub supports_terminate_request: bool,
+    /// Per ADR-0059f §3.4, the exception-breakpoint filters the
+    /// adapter advertises. Wave-4 emits three: panic / result_err /
+    /// unreachable. Wave-2..3 emit an empty list (skip-serializing).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exception_breakpoint_filters: Vec<ExceptionBreakpointsFilter>,
 }
 
 // ====================================================================
@@ -298,6 +303,117 @@ pub struct DisconnectArguments {
     pub terminate_debuggee: bool,
     #[serde(default)]
     pub suspend_debuggee: bool,
+}
+
+// ====================================================================
+// Evaluate (wave-4 ADR-0059f §3.1)
+// ====================================================================
+
+/// DAP `evaluate` request arguments.
+///
+/// Per ADR-0059f §3.1, wave-4 routes `expression` verbatim to lldb's
+/// REPL via the `expression` command. `context` selects the caller
+/// surface ("watch" / "repl" / "hover" / "clipboard") but wave-4
+/// treats all four identically.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluateArguments {
+    /// The expression source string to evaluate. Routed verbatim to
+    /// lldb's REPL — Cobrust syntax that coincides with C
+    /// (arithmetic, comparisons, field access via `.`, array indexing
+    /// via `[]`) works passthrough.
+    pub expression: String,
+    /// Optional frame id selecting which stack frame's locals are in
+    /// scope. `None` means the currently selected frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<i64>,
+    /// The caller context per DAP spec: `"watch" | "repl" | "hover" |
+    /// "clipboard"`. Wave-4 ignores this discriminant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+}
+
+/// DAP `evaluate` response body.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluateResponse {
+    /// The evaluation result — lldb's stdout summary verbatim (already
+    /// wave-1 pretty-printer-formatted where applicable).
+    pub result: String,
+    /// DWARF type name parsed from lldb's `(<type>) $N = …` prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "type")]
+    pub type_name: Option<String>,
+    /// Reference for drill-in (0 = leaf, no children). Wave-4 always
+    /// emits 0 — drill-in via `variables` request remains scoped to
+    /// frame-locals per wave-2 surface.
+    pub variables_reference: i64,
+}
+
+// ====================================================================
+// Threads (wave-4 ADR-0059f §3.3 — replaces wave-2 hardcoded stub)
+// ====================================================================
+
+/// DAP `threads` response body — the list of OS threads currently
+/// stopped under lldb's control.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadsResponse {
+    pub threads: Vec<ThreadInfo>,
+}
+
+/// DAP `Thread` per the spec.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadInfo {
+    pub id: i64,
+    pub name: String,
+}
+
+// ====================================================================
+// SetExceptionBreakpoints (wave-4 ADR-0059f §3.4)
+// ====================================================================
+
+/// DAP `setExceptionBreakpoints` arguments.
+///
+/// Per ADR-0059f §3.4, wave-4 advertises three filters in
+/// `InitializeResponse.exception_breakpoint_filters`: `"panic"`,
+/// `"result_err"`, `"unreachable"`. Editors send back the subset the
+/// user enabled.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetExceptionBreakpointsArguments {
+    /// The enabled filter identifiers. Wave-4: `"panic"` /
+    /// `"result_err"` / `"unreachable"` are recognised; others are
+    /// silently ignored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<String>,
+}
+
+/// DAP `setExceptionBreakpoints` response body.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetExceptionBreakpointsResponse {
+    /// Per-filter `Breakpoint` records mirroring the input order.
+    /// `verified: false` when the underlying lldb symbol is
+    /// unavailable (e.g. `result_err` filter in builds where the
+    /// runtime symbol is not emitted — honest-scope-skip per
+    /// ADR-0059f §3.4).
+    pub breakpoints: Vec<Breakpoint>,
+}
+
+/// Capability advertisement entry for an exception breakpoint filter.
+/// Wave-4 advertises three.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExceptionBreakpointsFilter {
+    /// Stable identifier (e.g. `"panic"`).
+    pub filter: String,
+    /// Human-readable label for the editor UI.
+    pub label: String,
+    /// Default-on (per `InitializeResponse` advertisement).
+    #[serde(default)]
+    pub default: bool,
 }
 
 #[cfg(test)]

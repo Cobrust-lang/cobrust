@@ -34,6 +34,7 @@
 #![allow(clippy::large_enum_variant)] // DriverKind variants differ in size by design (Real has child handles).
 
 pub mod dap_types;
+pub mod evaluate;
 pub mod handlers;
 pub mod lldb_driver;
 
@@ -44,10 +45,12 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
 pub use dap_types::{
-    Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments, InitializeArguments,
-    InitializeResponse, LaunchArguments, NextArguments, PauseArguments, Request, Response,
-    SetBreakpointsArguments, SetBreakpointsResponse, Source, SourceBreakpoint, StackFrame,
-    StackTraceArguments, StackTraceResponse, Variable, VariablesArguments, VariablesResponse,
+    Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments, EvaluateArguments,
+    EvaluateResponse, ExceptionBreakpointsFilter, InitializeArguments, InitializeResponse,
+    LaunchArguments, NextArguments, PauseArguments, Request, Response, SetBreakpointsArguments,
+    SetBreakpointsResponse, SetExceptionBreakpointsArguments, SetExceptionBreakpointsResponse,
+    Source, SourceBreakpoint, StackFrame, StackTraceArguments, StackTraceResponse, ThreadInfo,
+    ThreadsResponse, Variable, VariablesArguments, VariablesResponse,
 };
 pub use handlers::DapHandlers;
 pub use lldb_driver::{LldbDriver, StopReason};
@@ -204,6 +207,10 @@ impl Adapter {
             "variables" => handlers::handle_variables(self, request).await,
             "disconnect" => handlers::handle_disconnect(self, request).await,
             "threads" => handlers::handle_threads(self, request).await,
+            "evaluate" => evaluate::handle_evaluate(self, request).await,
+            "setExceptionBreakpoints" => {
+                handlers::handle_set_exception_breakpoints(self, request).await
+            }
             other => {
                 tracing::info!("unsupported DAP command (wave-2 scope): {other}");
                 Ok(serde_json::json!({

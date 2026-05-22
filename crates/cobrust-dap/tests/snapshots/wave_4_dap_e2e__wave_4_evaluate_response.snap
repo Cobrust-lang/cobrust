@@ -1,0 +1,10 @@
+---
+source: crates/cobrust-dap/tests/wave_4_dap_e2e.rs
+expression: response.body
+snapshot_kind: text
+---
+{
+  "result": "[1, 2, 3]",
+  "type": "cobrust::List",
+  "variablesReference": 0
+}

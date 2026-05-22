@@ -1,5 +1,5 @@
 ---
-source: crates/cobrust-dap/tests/dap_handler_snapshots.rs
+source: crates/cobrust-dap/tests/wave_4_dap_e2e.rs
 expression: response.body
 snapshot_kind: text
 ---

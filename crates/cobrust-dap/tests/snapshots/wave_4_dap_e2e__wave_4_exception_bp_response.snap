@@ -1,0 +1,24 @@
+---
+source: crates/cobrust-dap/tests/wave_4_dap_e2e.rs
+expression: response.body
+snapshot_kind: text
+---
+{
+  "breakpoints": [
+    {
+      "id": 1,
+      "message": "exception filter: panic (symbol: __cobrust_panic)",
+      "verified": true
+    },
+    {
+      "id": 2,
+      "message": "exception filter: result_err (symbol: cobrust_result_err_construct)",
+      "verified": true
+    },
+    {
+      "id": 3,
+      "message": "exception filter: unreachable (symbol: core::intrinsics::unreachable_internal)",
+      "verified": true
+    }
+  ]
+}

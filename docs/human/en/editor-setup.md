@@ -537,15 +537,63 @@ cobrust debug --dap
   cobrust-dap binary not located).
 - `3` — build failure (forwarded from `cobrust build` driver).
 
+## v1.1 DAP (ADR-0059f Phase L wave-4) — intermediate features
+
+`cobrust-dap` advertises the wave-4 capability set and answers four
+additional DAP requests.
+
+### Watch expressions (`evaluate`)
+
+Type any expression in the editor's debug REPL or attach a watch.
+The expression is routed verbatim to lldb's `expression` command;
+wave-1 pretty-printers shape the result for Cobrust types.
+
+Supported expression shapes (passthrough to lldb's C-like parser):
+
+- Arithmetic: `i + 1`, `n * 2`, `i % len`
+- Comparisons: `i > 10`, `s == 0`
+- Field access: `p.name`, `point.x`
+- Array indexing: `xs[0]`, `arr[i + 1]`
+
+Not supported (would require a Cobrust source-level evaluator):
+`match` expressions, comprehensions, generic function calls.
+
+### Conditional breakpoints
+
+Add a `condition` to any breakpoint via the editor's "Edit Breakpoint"
+UI (right-click gutter dot > "Edit Breakpoint" > "Expression"). The
+breakpoint only fires when the condition evaluates truthy.
+
+### Multi-thread debugging
+
+ADR-0028 structured-concurrency programs surface every OS thread in
+the editor's "Call Stack" panel. Single-thread programs still see
+one "main" entry (backward-compatible with v1.0 DAP).
+
+### Exception breakpoints
+
+Wave-4 advertises three filters in the "Breakpoints" panel:
+
+- **Uncaught Panic** (default on) — halts on Cobrust `panic!`.
+- **Result::Err Construction** (default off) — **honest scope**: the
+  runtime symbol is not emitted by current codegen; the breakpoint
+  reports `verified: false` with an explanatory message. Future ADR
+  closes the gap.
+- **Unreachable! Intrinsic** (default off) — halts on `unreachable!()`
+  via LLVM's `unreachable` intrinsic.
+
 ## What is NOT included
 
 - Wave-1 LSP only ships diagnostics. Go-to-definition, completion, hover,
   rename, and code-action quickfixes are scoped under ADR-0057b/c/d.
-- Wave-2 DAP supports the load-bearing single-thread step-debug surface
-  only. Conditional breakpoints, expression watch (`evaluate`),
-  multi-thread debug, attach mode, and `setVariable` are Phase L wave-3+
-  followups per ADR-0059b §5.
+- Wave-2 DAP shipped the load-bearing single-thread step-debug surface;
+  wave-4 (ADR-0059f) adds watch / conditional bp / multi-thread /
+  exception bp. `setVariable` and `attach` mode remain non-goals.
 - Wave-3 `cobrust debug` ships line-number breakpoints only. Conditional /
   function-name breakpoints stay inside the lldb prompt scope per
   ADR-0059c §5.
+- Cobrust-syntax expression evaluator (`match`, comprehensions inside
+  watch): out-of-scope; ADR-0059 §4 deferred indefinitely.
+- Logpoints (log-only) + data breakpoints (memory watchpoints) —
+  deferred wave-5+ per ADR-0059f §4.
 - Formatter integration — see the `cobrust fmt` CLI tool.

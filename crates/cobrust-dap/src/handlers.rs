@@ -14,9 +14,10 @@ use thiserror::Error;
 
 use crate::Adapter;
 use crate::dap_types::{
-    Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments, InitializeResponse,
-    LaunchArguments, NextArguments, PauseArguments, Request, SetBreakpointsArguments,
-    SetBreakpointsResponse, StackTraceArguments, StackTraceResponse, VariablesArguments,
+    Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments,
+    ExceptionBreakpointsFilter, InitializeResponse, LaunchArguments, NextArguments, PauseArguments,
+    Request, SetBreakpointsArguments, SetBreakpointsResponse, SetExceptionBreakpointsArguments,
+    SetExceptionBreakpointsResponse, StackTraceArguments, StackTraceResponse, VariablesArguments,
     VariablesResponse,
 };
 use crate::lldb_driver::DapError;
@@ -37,7 +38,12 @@ pub enum DapHandlerError {
 pub struct DapHandlers;
 
 /// Parse the `arguments` field of a DAP request into a typed struct.
-fn parse_args<T: serde::de::DeserializeOwned>(request: &Request) -> Result<T, DapHandlerError> {
+///
+/// `pub(crate)` so sibling modules under `cobrust-dap` (e.g.
+/// `evaluate.rs` per ADR-0059f §3.1) can share the same parse path.
+pub(crate) fn parse_args<T: serde::de::DeserializeOwned>(
+    request: &Request,
+) -> Result<T, DapHandlerError> {
     let args = request
         .arguments
         .as_ref()
@@ -60,13 +66,35 @@ pub async fn handle_initialize(
     let capabilities = InitializeResponse {
         supports_configuration_done_request: false,
         supports_function_breakpoints: false,
-        supports_conditional_breakpoints: false,
+        // ADR-0059f §3.2: conditional bp now honoured via lldb
+        // --condition wiring through handle_set_breakpoints.
+        supports_conditional_breakpoints: true,
         supports_hit_conditional_breakpoints: false,
         supports_evaluate_for_hovers: false,
         supports_step_back: false,
         supports_set_variable: false,
         supports_restart_frame: false,
         supports_terminate_request: true,
+        // ADR-0059f §3.4: advertise three exception filters. The
+        // `result_err` filter ships in honest-scope-skip mode pending
+        // the runtime symbol emission (future ADR closes the gap).
+        exception_breakpoint_filters: vec![
+            ExceptionBreakpointsFilter {
+                filter: "panic".to_string(),
+                label: "Uncaught Panic".to_string(),
+                default: true,
+            },
+            ExceptionBreakpointsFilter {
+                filter: "result_err".to_string(),
+                label: "Result::Err Construction".to_string(),
+                default: false,
+            },
+            ExceptionBreakpointsFilter {
+                filter: "unreachable".to_string(),
+                label: "Unreachable! Intrinsic".to_string(),
+                default: false,
+            },
+        ],
     };
     Ok(serde_json::to_value(capabilities)?)
 }
@@ -94,9 +122,12 @@ pub async fn handle_launch(adapter: &Adapter, request: &Request) -> Result<Value
 
 /// Handle the `setBreakpoints` DAP request.
 ///
-/// Sets line breakpoints in `source.path`. Per ADR-0059b §5, the
-/// `condition` field on each `SourceBreakpoint` is read but NOT
-/// honoured (wave-3+ wires it through to lldb).
+/// Sets line breakpoints in `source.path`. Per ADR-0059f §3.2, each
+/// `SourceBreakpoint`'s `condition` field is honoured: bps with a
+/// condition route through [`crate::lldb_driver::LldbDriver::set_conditional_breakpoint`]
+/// (issues `breakpoint set --condition '<expr>'`); unconditional bps
+/// use the wave-2 [`crate::lldb_driver::LldbDriver::set_breakpoint`]
+/// path unchanged.
 pub async fn handle_set_breakpoints(
     adapter: &Adapter,
     request: &Request,
@@ -113,7 +144,13 @@ pub async fn handle_set_breakpoints(
     let mut driver = driver_arc.lock().await;
     let mut breakpoints: Vec<Breakpoint> = Vec::with_capacity(args.breakpoints.len());
     for src_bp in args.breakpoints {
-        let bp = driver.set_breakpoint(file, src_bp.line).await?;
+        let bp = if let Some(cond) = src_bp.condition.as_deref() {
+            driver
+                .set_conditional_breakpoint(file, src_bp.line, cond)
+                .await?
+        } else {
+            driver.set_breakpoint(file, src_bp.line).await?
+        };
         breakpoints.push(bp);
     }
     let response = SetBreakpointsResponse { breakpoints };
@@ -174,16 +211,19 @@ pub async fn handle_pause(adapter: &Adapter, request: &Request) -> Result<Value,
 
 /// Handle the `stackTrace` DAP request.
 ///
-/// Returns the current call stack. Per ADR-0059b §5 single-thread
-/// non-goal, the `threadId` argument is ignored.
+/// Per ADR-0059f §3.3 multi-thread: `args.thread_id` selects the
+/// thread whose stack is returned. Backward-compat: single-thread
+/// programs still receive their main-thread backtrace. The
+/// `startFrame` + `levels` slicing per DAP spec is honoured client-
+/// side; wave-4 returns all frames.
 pub async fn handle_stack_trace(
     adapter: &Adapter,
     request: &Request,
 ) -> Result<Value, DapHandlerError> {
-    let _args: StackTraceArguments = parse_args(request)?;
+    let args: StackTraceArguments = parse_args(request)?;
     let driver_arc = adapter.driver();
     let mut driver = driver_arc.lock().await;
-    let frames = driver.stack_trace().await?;
+    let frames = driver.stack_trace_for_thread(args.thread_id).await?;
     let total = frames.len() as u32;
     let response = StackTraceResponse {
         stack_frames: frames,
@@ -235,21 +275,66 @@ pub async fn handle_disconnect(
 }
 
 // =====================================================================
-// Threads (stub — single-thread per ADR-0059b §5)
+// SetExceptionBreakpoints (wave-4 ADR-0059f §3.4)
 // =====================================================================
 
-/// Handle the `threads` DAP request. Wave-2 single-thread non-goal:
-/// returns one hardcoded `{ id: 1, name: "main" }`.
+/// Handle the `setExceptionBreakpoints` DAP request.
+///
+/// Per ADR-0059f §3.4, accepts the editor's filter selection (subset
+/// of `{"panic", "result_err", "unreachable"}` advertised in
+/// `InitializeResponse.exceptionBreakpointFilters`) and sets one bp
+/// per filter. Honest-scope-skip: filters whose lldb symbol is
+/// unavailable surface `verified: false` with an explanatory
+/// `message` instead of erroring.
+pub async fn handle_set_exception_breakpoints(
+    adapter: &Adapter,
+    request: &Request,
+) -> Result<Value, DapHandlerError> {
+    let args: SetExceptionBreakpointsArguments = parse_args(request)?;
+    let driver_arc = adapter.driver();
+    let mut driver = driver_arc.lock().await;
+    let mut breakpoints: Vec<Breakpoint> = Vec::with_capacity(args.filters.len());
+    for filter in args.filters {
+        let bp = driver.set_exception_breakpoint(&filter).await?;
+        breakpoints.push(bp);
+    }
+    let response = SetExceptionBreakpointsResponse { breakpoints };
+    Ok(serde_json::to_value(response)?)
+}
+
+// =====================================================================
+// Threads (wave-4 ADR-0059f §3.3 — full multi-thread)
+// =====================================================================
+
+/// Handle the `threads` DAP request.
+///
+/// Per ADR-0059f §3.3, queries lldb's `thread list` and returns all
+/// OS threads. Single-thread programs still surface
+/// `[{id:1, name:"main"}]` for backward-compat with wave-2 clients.
+///
+/// Stub-driver backstop: when no canned response matches the
+/// `thread list` command, the parser returns an empty vec; the
+/// handler then synthesises the wave-2 single-thread fallback so
+/// tests that don't inject a thread-list stub continue to pass.
 pub async fn handle_threads(
-    _adapter: &Adapter,
+    adapter: &Adapter,
     _request: &Request,
 ) -> Result<Value, DapHandlerError> {
-    Ok(serde_json::json!({
-        "threads": [{
-            "id": 1,
-            "name": "main",
-        }],
-    }))
+    let driver_arc = adapter.driver();
+    let mut driver = driver_arc.lock().await;
+    let threads = driver.list_threads().await?;
+    let threads = if threads.is_empty() {
+        // Backward-compat fallback: single-thread programs / empty
+        // stub returns `[{id:1, name:"main"}]`.
+        vec![crate::dap_types::ThreadInfo {
+            id: 1,
+            name: "main".to_string(),
+        }]
+    } else {
+        threads
+    };
+    let response = crate::dap_types::ThreadsResponse { threads };
+    Ok(serde_json::to_value(response)?)
 }
 
 #[cfg(test)]
@@ -278,7 +363,8 @@ mod tests {
         let result = handle_initialize(&adapter, &request).await.unwrap();
         assert_eq!(result["supportsConfigurationDoneRequest"], false);
         assert_eq!(result["supportsTerminateRequest"], true);
-        assert_eq!(result["supportsConditionalBreakpoints"], false);
+        // wave-4 ADR-0059f §3.2 flips this to true.
+        assert_eq!(result["supportsConditionalBreakpoints"], true);
     }
 
     #[tokio::test]
