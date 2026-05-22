@@ -73,6 +73,42 @@ pub unsafe extern "C" fn __cobrust_assert(cond: bool, ptr: *const u8, len: usize
     panic(msg);
 }
 
+/// C-ABI hookable symbol for `Result::unwrap_err()` runtime path
+/// (ADR-0059g §3.4).
+///
+/// **Purpose**: provides a named address that lldb can break on via
+/// the DAP `setExceptionBreakpoints` `result_err` filter (ADR-0059f
+/// §3.4). When a Cobrust `Result::unwrap_err()` codepath fires at
+/// runtime, the runtime calls this function just before panicking
+/// — lldb halts at the function entry, allowing the user / LLM
+/// agent to inspect the `Err(...)` value before the process exits.
+///
+/// **Codegen-side note**: codegen does NOT auto-emit calls to this
+/// symbol wave-5 — the call-site lowering of `?` / `unwrap_err` is
+/// out-of-scope per ADR-0059g §4 non-goal. Wave-5 ships the symbol
+/// so lldb has a target to break on; a future ADR closes the
+/// codegen lowering.
+///
+/// # Safety
+///
+/// `ptr` must be a valid pointer to `len` bytes of UTF-8-encoded
+/// text describing the `Err(...)` payload. Codegen always emits
+/// this with a `.rodata` pointer (when the codegen lowering ships).
+/// Until that ships, manual calls from tests or runtime helpers
+/// must observe the same precondition.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_result_err_panic(ptr: *const u8, len: usize) -> ! {
+    if ptr.is_null() || len == 0 {
+        panic("Result::Err panic (empty payload)");
+    }
+    // SAFETY: caller-attestation per the `# Safety` clause.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let msg = std::str::from_utf8(bytes).unwrap_or("Result::Err panic (non-utf8 payload)");
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "cobrust Result::Err panic: {msg}");
+    std::process::exit(crate::runtime::exit_codes::INTERNAL_PANIC as i32);
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -113,4 +149,18 @@ mod tests {
     // process; they're verified end-to-end via the examples
     // integration tests, not unit tests (a unit test cannot assert
     // process exit without forking).
+
+    /// ADR-0059g §3.4 — `__cobrust_result_err_panic` symbol smoke:
+    /// verify the symbol address is non-null. The exit path is
+    /// unit-test-unfriendly per the existing module comment; we just
+    /// confirm the symbol is reachable as a function pointer so lldb's
+    /// `breakpoint set --name __cobrust_result_err_panic` has a target.
+    #[test]
+    fn result_err_panic_symbol_is_exported() {
+        let f: unsafe extern "C" fn(*const u8, usize) -> ! = super::__cobrust_result_err_panic;
+        // Force the function-pointer comparison so the linker keeps
+        // the symbol present in the test binary.
+        let addr = f as *const ();
+        assert!(!addr.is_null());
+    }
 }

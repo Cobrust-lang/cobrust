@@ -1,0 +1,20 @@
+---
+source: crates/cobrust-dap/tests/wave_5_dap_e2e.rs
+assertion_line: 362
+expression: response.body
+snapshot_kind: text
+---
+{
+  "breakpoints": [
+    {
+      "id": 1,
+      "message": "watchpoint: counter (write)",
+      "verified": true
+    },
+    {
+      "id": 2,
+      "message": "watchpoint: buffer (read_write)",
+      "verified": true
+    }
+  ]
+}

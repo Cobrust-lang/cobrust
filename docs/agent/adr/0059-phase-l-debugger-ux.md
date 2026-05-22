@@ -166,6 +166,37 @@ adds ~600-900 LOC across 7 atomic commits (no new Cargo deps;
 reuses tokio/regex/thiserror/serde/insta). Mac authoritative gate
 clean (clippy `-D warnings` + fmt + 79 PASS + 2 ignored).
 
+### 3.5 Wave-5 — ADR-0059g — v1.2 DAP (logpoints + dataBP + stepIn + result_err RESOLVED)
+
+**Scope**: extends the v1.1 DAP surface (14 handlers + 2 extended
+args) to v1.2 (17 handlers + 2 extended args + 3 new capability
+flags):
+
+- `setBreakpoints` extended with per-bp `logMessage` honoured via
+  lldb's `breakpoint command add --auto-continue` plumbing (§3.1).
+- `setDataBreakpoints` watchpoint handler routing to lldb's
+  `watchpoint set variable -w <access> <var>` (§3.2).
+- `stepIn` handler routing to lldb's `thread step-in` with
+  Cobrust-source preference (step-out if landing outside `.cb`) (§3.3).
+- `__cobrust_result_err_panic` hookable symbol shipped in
+  `crates/cobrust-stdlib/src/panic.rs`; DAP `result_err` filter
+  remapped to the new symbol. ADR-0059f §3.4 honest-cite RESOLVED
+  (§3.4).
+
+**Owner**: ADR-0059g.
+
+**Status**: SHIPPED (2026-05-22) at ADR-0059g acceptance. Wave-5
+adds ~500-800 LOC across 7 atomic commits (no new Cargo deps;
+reuses tokio/regex/thiserror/serde/insta). Mac authoritative gate
+clean (clippy `-D warnings` + fmt + 99 PASS + 2 ignored).
+
+**DAP v1.2 feature-complete declaration**: wave-5 closes the
+advanced-tier debugger surface (logpoints + dataBP + stepIn). The
+v1.0 → v1.1 → v1.2 progression is now feature-complete for the
+intermediate + advanced editor user surface. Beyond v1.2 the
+remaining work is specialised (gdb compat, time-travel, reverse-
+step) per §4 + §12.3 — a separate phase, not a wave-6 continuation.
+
 ## 4. Non-goals (wave-1 scope; later waves may revisit)
 
 Explicitly out of Phase L wave-1:

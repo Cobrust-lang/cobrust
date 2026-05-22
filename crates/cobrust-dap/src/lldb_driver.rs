@@ -330,6 +330,65 @@ impl LldbDriver {
         Ok(parse_evaluate(&stdout))
     }
 
+    /// `set_log_breakpoint` wrapper for ADR-0059g §3.1.
+    ///
+    /// Sets a **logpoint**: a breakpoint that logs `log_msg` to lldb's
+    /// stdout and **auto-continues** without halting. Wave-5 routes the
+    /// template verbatim — DAP-spec `{expr}` placeholder interpolation
+    /// is deferred per ADR-0059g §4 non-goal.
+    ///
+    /// Wire: `breakpoint set --file X --line N --auto-continue 1` +
+    /// `breakpoint command add --script-type python -o "print('...')"`.
+    /// The two-command sequence is necessary because lldb's bare
+    /// `breakpoint set` does not accept a log message argument; the
+    /// log side-effect attaches via `breakpoint command add` to the
+    /// just-set bp (`breakpoint command add` defaults to the most-
+    /// recently-set bp when no id is given).
+    pub async fn set_log_breakpoint(
+        &mut self,
+        file: &str,
+        line: u32,
+        log_msg: &str,
+    ) -> Result<Breakpoint, DapError> {
+        if let DriverKind::Stub { breakpoint_seq, .. } = &mut self.kind {
+            let id = *breakpoint_seq;
+            *breakpoint_seq += 1;
+            return Ok(Breakpoint {
+                id: Some(id),
+                verified: true,
+                message: Some(format!("logpoint: {log_msg}")),
+                source: Some(Source {
+                    name: Some(file.to_string()),
+                    path: Some(file.to_string()),
+                    source_reference: None,
+                }),
+                line: Some(line),
+                column: None,
+            });
+        }
+
+        let set_stdout = self
+            .send_command(&format!(
+                "breakpoint set --file {} --line {line} --auto-continue 1",
+                lldb_quote(file)
+            ))
+            .await?;
+        let mut bp = parse_breakpoint(&set_stdout, file, line)?;
+        // Attach the print-and-continue command. Escape embedded
+        // double quotes in the message so the python `print("…")`
+        // call line stays well-formed.
+        let escaped = log_msg.replace('"', "\\\"");
+        let _ = self
+            .send_command(&format!(
+                "breakpoint command add --script-type python -o 'print(\"{escaped}\")'"
+            ))
+            .await?;
+        if bp.verified {
+            bp.message = Some(format!("logpoint: {log_msg}"));
+        }
+        Ok(bp)
+    }
+
     /// `set_conditional_breakpoint` wrapper for ADR-0059f §3.2.
     ///
     /// Issues `breakpoint set --file X --line N --condition '<expr>'`
@@ -373,6 +432,123 @@ impl LldbDriver {
         Ok(bp)
     }
 
+    /// `set_watchpoint` wrapper for ADR-0059g §3.2 data breakpoints.
+    ///
+    /// Issues `watchpoint set variable -w <access> <var>` to lldb. The
+    /// `access` arg maps from DAP `accessType`:
+    /// - `Some("read")` → `read`
+    /// - `Some("write")` | `None` → `write` (DAP-spec default)
+    /// - `Some("readWrite")` → `read_write`
+    /// - other → wave-5 honest-cite: emits `verified: false` with the
+    ///   unknown access value in the message field.
+    ///
+    /// Wave-5 honest scope: stack-resident value-semantic locals only.
+    /// If lldb fails to set (e.g. variable not found in scope), the
+    /// wrapper surfaces `verified: false` with the raw stdout instead
+    /// of erroring at the DAP layer.
+    pub async fn set_watchpoint(
+        &mut self,
+        variable: &str,
+        access: Option<&str>,
+    ) -> Result<Breakpoint, DapError> {
+        let access_arg = match access {
+            None | Some("write") => "write",
+            Some("read") => "read",
+            Some("readWrite") => "read_write",
+            Some(other) => {
+                tracing::warn!("unknown watchpoint access type '{other}'");
+                return Ok(Breakpoint {
+                    id: None,
+                    verified: false,
+                    message: Some(format!("unknown watchpoint access '{other}'")),
+                    source: None,
+                    line: None,
+                    column: None,
+                });
+            }
+        };
+
+        if let DriverKind::Stub { breakpoint_seq, .. } = &mut self.kind {
+            let id = *breakpoint_seq;
+            *breakpoint_seq += 1;
+            return Ok(Breakpoint {
+                id: Some(id),
+                verified: true,
+                message: Some(format!("watchpoint: {variable} ({access_arg})")),
+                source: None,
+                line: None,
+                column: None,
+            });
+        }
+
+        let stdout = self
+            .send_command(&format!(
+                "watchpoint set variable -w {access_arg} {}",
+                lldb_quote(variable)
+            ))
+            .await?;
+        // lldb prints "Watchpoint created: ..." on success or
+        // "error: ..." on failure.
+        let verified = stdout.contains("Watchpoint created");
+        let id_re = Regex::new(r"Watchpoint\s+(\d+)").expect("valid regex");
+        let id = id_re
+            .captures(&stdout)
+            .and_then(|caps| caps.get(1))
+            .and_then(|m| m.as_str().parse::<i64>().ok());
+        Ok(Breakpoint {
+            id,
+            verified,
+            message: Some(if verified {
+                format!("watchpoint: {variable} ({access_arg})")
+            } else {
+                stdout.lines().next().unwrap_or("").to_string()
+            }),
+            source: None,
+            line: None,
+            column: None,
+        })
+    }
+
+    /// `step_in` wrapper for ADR-0059g §3.3 step-into-source.
+    ///
+    /// Issues `thread select N` (if `thread_id` given) then
+    /// `thread step-in` to lldb. Cobrust-source preference: if the
+    /// resulting frame lands outside a `.cb` source (e.g. a stdlib
+    /// runtime helper compiled from Rust), the wrapper emits a
+    /// follow-up `thread step-out` so the user lands at the
+    /// **Cobrust-source bridge** instead of inside the helper.
+    ///
+    /// Stub-driver fast-path: returns `StopReason::Step` directly.
+    pub async fn step_in(&mut self, thread_id: i64) -> Result<StopReason, DapError> {
+        if matches!(self.kind, DriverKind::NotSpawned) {
+            return Ok(StopReason::Step);
+        }
+        if matches!(self.kind, DriverKind::Stub { .. }) {
+            // Stub fast-path: route through send_command so canned
+            // responses can shape the StopReason (e.g. tests
+            // simulating non-cb landing trigger the step-out path).
+            let stdout = self.send_command("thread step-in").await?;
+            return Ok(parse_stop_reason(&stdout));
+        }
+        let _ = self
+            .send_command(&format!("thread select {thread_id}"))
+            .await?;
+        let step_stdout = self.send_command("thread step-in").await?;
+        // Check whether the resulting frame's source file ends in
+        // `.cb`. The `frame info` lldb command reports the current
+        // source line.
+        let frame_info = self.send_command("frame info").await?;
+        if !frame_info.contains(".cb") && frame_info.contains(" at ") {
+            // Step-out so the user lands at the Cobrust-source bridge.
+            let out_stdout = self.send_command("thread step-out").await?;
+            tracing::info!(
+                "step-in landed outside .cb source; stepped out to bridge ({})",
+                out_stdout.lines().next().unwrap_or("")
+            );
+        }
+        Ok(parse_stop_reason(&step_stdout))
+    }
+
     /// `list_threads` wrapper for ADR-0059f §3.3 multi-thread.
     ///
     /// Issues `thread list` to lldb, parses each line of the form
@@ -411,7 +587,9 @@ impl LldbDriver {
     ///
     /// Per-filter symbol mapping:
     /// - `"panic"` → `breakpoint set --name __cobrust_panic`
-    /// - `"result_err"` → `breakpoint set --name cobrust_result_err_construct`
+    /// - `"result_err"` → `breakpoint set --name __cobrust_result_err_panic`
+    ///   (per ADR-0059g §3.4; supersedes ADR-0059f §3.4 placeholder
+    ///   `cobrust_result_err_construct`)
     /// - `"unreachable"` → `breakpoint set --name core::intrinsics::unreachable_internal`
     ///
     /// If lldb reports the symbol is unavailable (e.g. stripped
@@ -421,7 +599,7 @@ impl LldbDriver {
     pub async fn set_exception_breakpoint(&mut self, filter: &str) -> Result<Breakpoint, DapError> {
         let symbol = match filter {
             "panic" => "__cobrust_panic",
-            "result_err" => "cobrust_result_err_construct",
+            "result_err" => "__cobrust_result_err_panic",
             "unreachable" => "core::intrinsics::unreachable_internal",
             other => {
                 tracing::warn!("unknown exception filter '{other}'");

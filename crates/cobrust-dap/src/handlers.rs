@@ -16,8 +16,9 @@ use crate::Adapter;
 use crate::dap_types::{
     Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments,
     ExceptionBreakpointsFilter, InitializeResponse, LaunchArguments, NextArguments, PauseArguments,
-    Request, SetBreakpointsArguments, SetBreakpointsResponse, SetExceptionBreakpointsArguments,
-    SetExceptionBreakpointsResponse, StackTraceArguments, StackTraceResponse, VariablesArguments,
+    Request, SetBreakpointsArguments, SetBreakpointsResponse, SetDataBreakpointsArguments,
+    SetDataBreakpointsResponse, SetExceptionBreakpointsArguments, SetExceptionBreakpointsResponse,
+    StackTraceArguments, StackTraceResponse, StepInArguments, VariablesArguments,
     VariablesResponse,
 };
 use crate::lldb_driver::DapError;
@@ -77,7 +78,7 @@ pub async fn handle_initialize(
         supports_terminate_request: true,
         // ADR-0059f §3.4: advertise three exception filters. The
         // `result_err` filter ships in honest-scope-skip mode pending
-        // the runtime symbol emission (future ADR closes the gap).
+        // the runtime symbol emission (closed at wave-5 ADR-0059g §3.4).
         exception_breakpoint_filters: vec![
             ExceptionBreakpointsFilter {
                 filter: "panic".to_string(),
@@ -95,6 +96,15 @@ pub async fn handle_initialize(
                 default: false,
             },
         ],
+        // ADR-0059g §3.1 logpoints supported.
+        supports_log_points: true,
+        // ADR-0059g §3.2 data breakpoints supported.
+        supports_data_breakpoints: true,
+        // ADR-0059g §3.3 step-into-source supported. Note: target
+        // enumeration (`stepInTargets`) is NOT supported — that
+        // requires resolving multiple call sites on a single line,
+        // out-of-scope wave-5 per §4.
+        supports_step_in_targets_request: false,
     };
     Ok(serde_json::to_value(capabilities)?)
 }
@@ -144,7 +154,16 @@ pub async fn handle_set_breakpoints(
     let mut driver = driver_arc.lock().await;
     let mut breakpoints: Vec<Breakpoint> = Vec::with_capacity(args.breakpoints.len());
     for src_bp in args.breakpoints {
-        let bp = if let Some(cond) = src_bp.condition.as_deref() {
+        // Per ADR-0059g §3.1, `log_message` takes precedence: if both
+        // `condition` and `log_message` are present, the bp is treated
+        // as a logpoint (DAP spec) — the condition is then attached to
+        // the bp by the logpoint plumbing (best-effort; wave-5 ignores
+        // the combination and treats as plain logpoint for simplicity).
+        let bp = if let Some(log_msg) = src_bp.log_message.as_deref() {
+            driver
+                .set_log_breakpoint(file, src_bp.line, log_msg)
+                .await?
+        } else if let Some(cond) = src_bp.condition.as_deref() {
             driver
                 .set_conditional_breakpoint(file, src_bp.line, cond)
                 .await?
@@ -335,6 +354,54 @@ pub async fn handle_threads(
     };
     let response = crate::dap_types::ThreadsResponse { threads };
     Ok(serde_json::to_value(response)?)
+}
+
+// =====================================================================
+// SetDataBreakpoints (wave-5 ADR-0059g §3.2)
+// =====================================================================
+
+/// Handle the `setDataBreakpoints` DAP request.
+///
+/// Per ADR-0059g §3.2, sets a watchpoint per `DataBreakpoint` entry.
+/// Each entry's `data_id` maps to a variable name; `access_type`
+/// maps to lldb's `-w read|write|read_write`. Honest-scope: stack-
+/// resident value-semantic locals only.
+pub async fn handle_set_data_breakpoints(
+    adapter: &Adapter,
+    request: &Request,
+) -> Result<Value, DapHandlerError> {
+    let args: SetDataBreakpointsArguments = parse_args(request)?;
+    let driver_arc = adapter.driver();
+    let mut driver = driver_arc.lock().await;
+    let mut breakpoints: Vec<Breakpoint> = Vec::with_capacity(args.breakpoints.len());
+    for data_bp in args.breakpoints {
+        let bp = driver
+            .set_watchpoint(&data_bp.data_id, data_bp.access_type.as_deref())
+            .await?;
+        breakpoints.push(bp);
+    }
+    let response = SetDataBreakpointsResponse { breakpoints };
+    Ok(serde_json::to_value(response)?)
+}
+
+// =====================================================================
+// StepIn (wave-5 ADR-0059g §3.3)
+// =====================================================================
+
+/// Handle the `stepIn` DAP request.
+///
+/// Per ADR-0059g §3.3, steps into the next call on the current line.
+/// The driver-level Cobrust-source preference (step-out if landing
+/// outside `.cb` source) is applied transparently.
+pub async fn handle_step_in(
+    adapter: &Adapter,
+    request: &Request,
+) -> Result<Value, DapHandlerError> {
+    let args: StepInArguments = parse_args(request)?;
+    let driver_arc = adapter.driver();
+    let mut driver = driver_arc.lock().await;
+    let _stop = driver.step_in(args.thread_id).await?;
+    Ok(serde_json::json!({}))
 }
 
 #[cfg(test)]

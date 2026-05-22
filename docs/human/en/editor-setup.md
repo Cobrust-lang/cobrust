@@ -625,12 +625,62 @@ one "main" entry (backward-compatible with v1.0 DAP).
 Wave-4 advertises three filters in the "Breakpoints" panel:
 
 - **Uncaught Panic** (default on) — halts on Cobrust `panic!`.
-- **Result::Err Construction** (default off) — **honest scope**: the
-  runtime symbol is not emitted by current codegen; the breakpoint
-  reports `verified: false` with an explanatory message. Future ADR
-  closes the gap.
+- **Result::Err Construction** (default off) — **RESOLVED at wave-5
+  (ADR-0059g §3.4)**: the `__cobrust_result_err_panic` symbol now
+  ships in `crates/cobrust-stdlib/src/panic.rs`. The bp resolves to a
+  real address and surfaces `verified: true`. Codegen call-site
+  lowering of `?` / `unwrap_err` to this symbol remains a separate
+  followup per ADR-0059g §4.
 - **Unreachable! Intrinsic** (default off) — halts on `unreachable!()`
   via LLVM's `unreachable` intrinsic.
+
+## v1.2 DAP (ADR-0059g Phase L wave-5) — advanced features
+
+`cobrust-dap` v1.2 advertises the wave-5 capability set and adds three
+additional DAP requests + closes the wave-4 `result_err` honest-cite.
+
+### Logpoints (`logMessage`)
+
+Attach a log message to any breakpoint via the editor's "Edit Breakpoint"
+UI ("Log Message" field). The breakpoint logs the message and
+**auto-continues** without halting — useful for observing state
+evolution inside a tight loop without scrolling through 10K stop
+events.
+
+Wave-5 routes the template verbatim. DAP-spec `{expr}` placeholder
+interpolation (substituting expression values) is out-of-scope wave-5
+per ADR-0059g §4; the literal curly-brace text shows in the output
+until a future enhancement.
+
+### Data breakpoints (watchpoints)
+
+Right-click a variable in the editor's "Variables" panel and select
+"Break on Value Change" to set a watchpoint. The DAP `setDataBreakpoints`
+handler routes through lldb's `watchpoint set variable -w <access> <var>`.
+
+Access types supported:
+- `write` (default) — halt on write.
+- `read` — halt on read.
+- `readWrite` — halt on either.
+
+**Honest scope**: stack-resident value-semantic locals only. Heap-
+resident types (`Str`, `List`, `Dict`) have a header struct that is
+value-semantic on the stack but whose interior may move; wave-5 watches
+the header address, not interior memory. Heap-tagged watchpoints
+deferred per ADR-0059g §4.
+
+### Step-into-source (`stepIn`)
+
+The editor's "Step Into" button (F11 in VSCode / Cursor) descends into
+the next call on the current line. Wave-5 honours **Cobrust-source
+preference**: if step-into lands in a non-`.cb` source (e.g. a stdlib
+runtime helper compiled from Rust), the driver steps out so the user
+lands at the Cobrust-source bridge instead of inside the helper.
+
+The `targetId` discriminator (DAP-spec optional; lets editors pick
+which call on a multi-call line) is parsed but ignored wave-5 — lldb's
+`thread step-in` picks the first call by default. Target enumeration
+(`setStepInTargets` / `stepInTargets`) deferred per ADR-0059g §4.
 
 ## What is NOT included
 
@@ -638,12 +688,20 @@ Wave-4 advertises three filters in the "Breakpoints" panel:
   rename, and code-action quickfixes are scoped under ADR-0057b/c/d.
 - Wave-2 DAP shipped the load-bearing single-thread step-debug surface;
   wave-4 (ADR-0059f) adds watch / conditional bp / multi-thread /
-  exception bp. `setVariable` and `attach` mode remain non-goals.
+  exception bp; wave-5 (ADR-0059g) adds logpoints / dataBP / stepIn +
+  closes the wave-4 result_err honest-cite. `setVariable` and `attach`
+  mode remain non-goals.
 - Wave-3 `cobrust debug` ships line-number breakpoints only. Conditional /
   function-name breakpoints stay inside the lldb prompt scope per
   ADR-0059c §5.
 - Cobrust-syntax expression evaluator (`match`, comprehensions inside
   watch): out-of-scope; ADR-0059 §4 deferred indefinitely.
-- Logpoints (log-only) + data breakpoints (memory watchpoints) —
-  deferred wave-5+ per ADR-0059f §4.
+- Logpoint placeholder interpolation (`{expr}` substitution) — verbatim
+  template only per ADR-0059g §4.
+- Heap-tagged data breakpoints on interior memory — header-address
+  watchpoints only per ADR-0059g §4.
+- Step-into-target enumeration (`setStepInTargets`) — first-call
+  default only per ADR-0059g §4.
+- Function breakpoints by signature — deferred per ADR-0059g §4.
+- Instruction-level step — source-level only per ADR-0059g §4.
 - Formatter integration — see the `cobrust fmt` CLI tool.

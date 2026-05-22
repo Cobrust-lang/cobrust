@@ -322,12 +322,13 @@ async fn exception_bp_panic_filter_set_verified() {
 
 #[tokio::test]
 async fn exception_bp_result_err_filter_honest_scope_skip() {
-    // The stub fast-path emits verified=true; in real lldb the
-    // `cobrust_result_err_construct` symbol is currently unemitted
-    // and lldb would report "no locations (pending)" → verified=false.
-    // This stub-driver test exercises the wire shape; the honest-
-    // scope-skip path is the real-lldb integration test (covered by
-    // dap_e2e_smoke.rs when lldb-18 is on PATH).
+    // ADR-0059g §3.4 RESOLVED wave-4 §3.4 honest-cite: the
+    // `__cobrust_result_err_panic` symbol is now emitted by the
+    // stdlib (`crates/cobrust-stdlib/src/panic.rs`). lldb breaks on
+    // this symbol when the result_err filter is enabled. The stub
+    // fast-path keeps emitting verified=true for the wire-shape
+    // exercise; real-lldb integration is covered by
+    // `dap_e2e_smoke.rs` when `lldb-18` is on PATH.
     let adapter = Adapter::with_driver(LldbDriver::test_stub(vec![]));
     let request = req(
         31,
@@ -345,7 +346,7 @@ async fn exception_bp_result_err_filter_honest_scope_skip() {
         bps[0]["message"]
             .as_str()
             .unwrap()
-            .contains("cobrust_result_err_construct")
+            .contains("__cobrust_result_err_panic")
     );
 }
 

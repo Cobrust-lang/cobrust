@@ -1,6 +1,6 @@
 ---
-source: crates/cobrust-dap/tests/dap_handler_snapshots.rs
-assertion_line: 43
+source: crates/cobrust-dap/tests/wave_5_dap_e2e.rs
+assertion_line: 397
 expression: response.body
 snapshot_kind: text
 ---

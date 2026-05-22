@@ -142,11 +142,13 @@ fn set_breakpoints_arguments_round_trip_with_multiple_breakpoints() {
                 line: 7,
                 column: Some(1),
                 condition: None,
+                log_message: None,
             },
             SourceBreakpoint {
                 line: 12,
                 column: None,
                 condition: Some("x > 10".to_string()),
+                log_message: None,
             },
         ],
         source_modified: false,
