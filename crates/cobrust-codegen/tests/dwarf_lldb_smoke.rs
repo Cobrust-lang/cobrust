@@ -324,7 +324,9 @@ fn lldb_run_with_bp(lldb: &str, exe: &Path, batch_cmds: &[&str]) -> String {
 
 #[test]
 fn lldb_smoke_hello_world_subprogram_resolves() {
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
         return;
@@ -334,7 +336,9 @@ fn lldb_smoke_hello_world_subprogram_resolves() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("hello_lldb");
     let artifact = emit(&module, spec).expect("hello emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
 
     // `image dump symtab` lists every symbol in the object file's
     // symbol table. The DWARF subprogram emission attaches symbols
@@ -345,7 +349,9 @@ fn lldb_smoke_hello_world_subprogram_resolves() {
 
 #[test]
 fn lldb_smoke_fib_function_visible() {
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // Build a "fib-shaped" body (single fn, two params, sum
     // approximation — the DWARF surface is what we care about, not
     // the math).
@@ -358,7 +364,9 @@ fn lldb_smoke_fib_function_visible() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("fib_lldb");
     let artifact = emit(&module, spec).expect("fib emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
 
     let out = lldb_batch(&lldb, &path, "image dump symtab");
     assert_lldb_symbol(&out, "fib");
@@ -366,7 +374,9 @@ fn lldb_smoke_fib_function_visible() {
 
 #[test]
 fn lldb_smoke_multi_fn_module_lists_both() {
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
         return;
@@ -379,7 +389,9 @@ fn lldb_smoke_multi_fn_module_lists_both() {
     };
     let spec = object_spec("multi_fn_lldb");
     let artifact = emit(&module, spec).expect("multi-fn emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
 
     let out = lldb_batch(&lldb, &path, "image dump symtab");
     assert_lldb_symbol(&out, "fizzbuzz_a");
@@ -388,7 +400,9 @@ fn lldb_smoke_multi_fn_module_lists_both() {
 
 #[test]
 fn lldb_smoke_line_table_present() {
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // Verify the DWARF line table (.debug_line) is emitted. We can
     // assert this indirectly by asking lldb to list source line info
     // for the symbol's PC — if .debug_line is missing, lldb returns
@@ -402,7 +416,9 @@ fn lldb_smoke_line_table_present() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("line_table_lldb");
     let artifact = emit(&module, spec).expect("line table emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
 
     // `image dump line-table <name>` returns a non-empty table when
     // DWARF .debug_line is well-formed for the named symbol.
@@ -443,7 +459,9 @@ fn lldb_smoke_line_table_present() {
 
 #[test]
 fn lldb_smoke_str_variable_renders_content() {
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
         return;
@@ -455,7 +473,9 @@ fn lldb_smoke_str_variable_renders_content() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("str_pretty_lldb");
     let artifact = emit(&module, spec).expect("str pretty emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
 
     // `image lookup --type cobrust::Str` returns DIE info when the
     // named DIType is present in the object's DWARF.
@@ -470,7 +490,9 @@ fn lldb_smoke_str_variable_renders_content() {
 
 #[test]
 fn lldb_smoke_list_variable_renders_bracket() {
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
         return;
@@ -482,7 +504,9 @@ fn lldb_smoke_list_variable_renders_bracket() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("list_pretty_lldb");
     let artifact = emit(&module, spec).expect("list pretty emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
 
     let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::List");
     assert!(
@@ -495,7 +519,9 @@ fn lldb_smoke_list_variable_renders_bracket() {
 
 #[test]
 fn lldb_smoke_dict_variable_renders_braces() {
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
         return;
@@ -511,7 +537,9 @@ fn lldb_smoke_dict_variable_renders_braces() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("dict_pretty_lldb");
     let artifact = emit(&module, spec).expect("dict pretty emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
 
     let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::Dict");
     assert!(
@@ -569,7 +597,9 @@ fn lldb_smoke_str_runtime_frame_variable_renders_content() {
     // by the Python self-test (`tools/lldb-cobrust/tests/test_printers
     // .py`). This test re-runs the wave-1 DIE-presence assertion as a
     // regression guard against codegen drift.
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
         return;
@@ -578,7 +608,9 @@ fn lldb_smoke_str_runtime_frame_variable_renders_content() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("str_runtime_lldb_wave2");
     let artifact = emit(&module, spec).expect("str runtime emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
     let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::Str");
     assert!(
         out.contains("cobrust::Str"),
@@ -601,7 +633,9 @@ fn lldb_smoke_dict_iter_runtime_kv_walk_symbols_present() {
     // The accessor-resolution gate runs in the cobrust-stdlib unit
     // test suite (`cabi_dict_iter_*` — 7 wave-2 unit tests). Full
     // runtime smoke awaits wave-3 (linker harness + stdlib threading).
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
         return;
@@ -614,7 +648,9 @@ fn lldb_smoke_dict_iter_runtime_kv_walk_symbols_present() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("dict_iter_lldb_wave2");
     let artifact = emit(&module, spec).expect("dict iter emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
     let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::Dict");
     assert!(
         out.contains("cobrust::Dict"),
@@ -631,7 +667,9 @@ fn lldb_smoke_adt_variable_renders_naming() {
     // `cobrust_option_summary` on `cobrust::Adt` so the `None` /
     // `Some(<addr>)` ptr-tag rendering works today; per-Adt
     // variant DICompositeType is Phase L+ scope.
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb smoke test");
         return;
@@ -644,7 +682,9 @@ fn lldb_smoke_adt_variable_renders_naming() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("adt_naming_lldb_wave2");
     let artifact = emit(&module, spec).expect("adt naming emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
     let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::Adt");
     assert!(
         out.contains("cobrust::Adt"),
@@ -672,7 +712,9 @@ fn lldb_linked_str_frame_variable() {
     // (not available in a bare MIR fixture). This test closes the DIE
     // presence half of §6.1; the bp-hit content half is deferred to
     // ADR-0059c `cobrust debug` CLI path which wires stdlib linkage.
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb_linked_str_frame_variable");
         return;
@@ -700,7 +742,9 @@ fn lldb_linked_option_none() {
     // (the Option<T> shape). Asserts the `cobrust::Option` DICompositeType
     // DIE is present in the DWARF — meaning wave-3's `populate_di_basic_types`
     // extension (or `emit_option_di_composite`) fired correctly.
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb_linked_option_none");
         return;
@@ -735,7 +779,9 @@ fn lldb_linked_option_some_int() {
     // DICompositeType emission for `Option<Int>` in the linked binary
     // — a regression guard that the two-variant composite DI doesn't
     // break the linker step.
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!("SKIP: lldb-18 / lldb not on PATH; skipping lldb_linked_option_some_int");
         return;
@@ -769,7 +815,9 @@ fn lldb_option_di_composite_type_fields() {
     //
     // Uses object-level DWARF inspection (no linker required) since this
     // is purely a codegen gate.
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!(
             "SKIP: lldb-18 / lldb not on PATH; skipping lldb_option_di_composite_type_fields"
@@ -782,7 +830,9 @@ fn lldb_option_di_composite_type_fields() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("option_di_composite_w3");
     let artifact = emit(&module, spec).expect("option composite emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
     // The wave-3 codegen emits `cobrust::Option` as a named DI entry for
     // parametrised `Ty::Adt`. Fall back to the wave-2 `cobrust::Adt`
     // assertion if the per-variant composite is not yet wired —
@@ -809,7 +859,9 @@ fn lldb_option_di_composite_adt_regression() {
     // break the wave-2 `cobrust::Adt` generic DIE for non-parametrised
     // Adts (e.g. user-defined enums with no type params). The `take_adt_wave2`
     // fixture (Ty::Adt(AdtId(0), Vec::new())) must still emit `cobrust::Adt`.
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!(
             "SKIP: lldb-18 / lldb not on PATH; skipping lldb_option_di_composite_adt_regression"
@@ -821,7 +873,9 @@ fn lldb_option_di_composite_adt_regression() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("adt_wave3_regression");
     let artifact = emit(&module, spec).expect("adt regression emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
     let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::Adt");
     assert!(
         out.contains("cobrust::Adt"),
@@ -852,7 +906,9 @@ fn lldb_smoke_str_di_composite_type_fields() {
     // DIs). `image lookup --type cobrust::Str` should return a DIE
     // and `image dump types` should expose the member names somewhere
     // in the DWARF tree.
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!(
             "SKIP: lldb-18 / lldb not on PATH; skipping lldb_smoke_str_di_composite_type_fields"
@@ -864,7 +920,9 @@ fn lldb_smoke_str_di_composite_type_fields() {
     let module = Module { bodies: vec![body] };
     let spec = object_spec("str_di_composite_w3e");
     let artifact = emit(&module, spec).expect("str composite emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
     let out = lldb_batch(&lldb, &path, "image lookup --type cobrust::Str");
     assert!(
         out.contains("cobrust::Str"),
@@ -884,7 +942,9 @@ fn lldb_smoke_str_di_composite_regression_adt_preserved() {
     // Strategy: emit a module containing two functions — one with a
     // `Str` parameter, one with an `Adt(Option<Int>)` parameter — and
     // verify both DIEs are present after `image lookup`.
-    let _guard = LLDB_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = LLDB_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(lldb) = find_lldb() else {
         eprintln!(
             "SKIP: lldb-18 / lldb not on PATH; skipping lldb_smoke_str_di_composite_regression_adt_preserved"
@@ -900,7 +960,9 @@ fn lldb_smoke_str_di_composite_regression_adt_preserved() {
     };
     let spec = object_spec("str_composite_regression_w3e");
     let artifact = emit(&module, spec).expect("regression emit");
-    let Artifact::Object(path) = artifact else { panic!("expected Artifact::Object") };
+    let Artifact::Object(path) = artifact else {
+        panic!("expected Artifact::Object")
+    };
 
     // Check cobrust::Str DIE still present after coexistence.
     let out_str = lldb_batch(&lldb, &path, "image lookup --type cobrust::Str");

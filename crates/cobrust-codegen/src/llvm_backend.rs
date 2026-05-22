@@ -349,7 +349,9 @@ pub fn emit_multi_version_dispatch<'ctx>(
         .collect();
 
     for base_name in fn_names {
-        let Some(original_fn) = emitter.module.get_function(&base_name) else { continue };
+        let Some(original_fn) = emitter.module.get_function(&base_name) else {
+            continue;
+        };
 
         // Skip external declarations (no body to clone).
         if original_fn.get_first_basic_block().is_none() {
@@ -2964,7 +2966,8 @@ mod tests {
     }
 
     fn host_spec() -> TargetSpec {
-        let tmp = tempfile::tempdir().expect("invariant: tempdir creation must succeed in test environment");
+        let tmp = tempfile::tempdir()
+            .expect("invariant: tempdir creation must succeed in test environment");
         // Persist the temp dir for the test's duration via leaking the
         // handle; the directory is cleaned up by the OS at exit. (We
         // do this rather than `into_path()` which is deprecated.)
@@ -3296,7 +3299,9 @@ mod tests {
         let mut spec = host_spec();
         spec.module_name = "dwarf_empty".to_string();
         let result = emit(&module, &spec).expect("empty module emit");
-        let Artifact::Object(path) = result else { panic!("expected Artifact::Object") };
+        let Artifact::Object(path) = result else {
+            panic!("expected Artifact::Object")
+        };
         // Object file must exist + parse as an object.
         let bytes = std::fs::read(&path).expect("read object");
         let _ = object::File::parse(&*bytes).expect("parse object");
@@ -3321,7 +3326,9 @@ mod tests {
         let mut spec = host_spec();
         spec.module_name = "dwarf_return_42".to_string();
         let result = emit(&module, &spec).expect("return 42 emit");
-        let Artifact::Object(path) = result else { panic!("expected Artifact::Object") };
+        let Artifact::Object(path) = result else {
+            panic!("expected Artifact::Object")
+        };
         assert!(
             object_has_dwarf_sections(&path),
             "return-42 fixture: missing .debug_* sections"
@@ -3354,7 +3361,9 @@ mod tests {
         let mut spec = host_spec();
         spec.module_name = "dwarf_multi_fn".to_string();
         let result = emit(&module, &spec).expect("multi-fn emit");
-        let Artifact::Object(path) = result else { panic!("expected Artifact::Object") };
+        let Artifact::Object(path) = result else {
+            panic!("expected Artifact::Object")
+        };
         assert!(
             object_has_dwarf_sections(&path),
             "multi-fn fixture: missing .debug_* sections"
@@ -3417,7 +3426,9 @@ mod tests {
         let mut spec = host_spec();
         spec.module_name = "dwarf_drop".to_string();
         let result = emit(&module, &spec).expect("drop fn emit");
-        let Artifact::Object(path) = result else { panic!("expected Artifact::Object") };
+        let Artifact::Object(path) = result else {
+            panic!("expected Artifact::Object")
+        };
         assert!(
             object_has_dwarf_sections(&path),
             "drop-fn fixture: missing .debug_* sections"
@@ -3446,7 +3457,9 @@ mod tests {
         spec.opt_level = OptLevel::SpeedAndSize;
         spec.module_name = "dwarf_o3".to_string();
         let result = emit(&module, &spec).expect("O3 emit");
-        let Artifact::Object(path) = result else { panic!("expected Artifact::Object") };
+        let Artifact::Object(path) = result else {
+            panic!("expected Artifact::Object")
+        };
         assert!(
             object_has_dwarf_sections(&path),
             "O3 fixture: DWARF sections were stripped by the opt pipeline"

@@ -206,11 +206,12 @@ fn o3_median_under_70pct() {
             o3 as f64 / o0 as f64
         })
         .collect();
-    ratios.sort_by(|a, b| a.partial_cmp(b).expect("invariant: f64 bench ratios are finite"));
+    ratios.sort_by(|a, b| {
+        a.partial_cmp(b)
+            .expect("invariant: f64 bench ratios are finite")
+    });
     let median = ratios[ratios.len() / 2];
-    eprintln!(
-        "0058b-bench median O3/O0 ratio = {median:.3} (per-fixture sorted: {ratios:?})"
-    );
+    eprintln!("0058b-bench median O3/O0 ratio = {median:.3} (per-fixture sorted: {ratios:?})");
     assert!(
         median <= 0.70,
         "ADR-0023 §A3 bar: O3 median ratio {median:.3} > 0.70 (≥ 30% reduction required). \

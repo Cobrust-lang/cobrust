@@ -1186,18 +1186,67 @@ fn stdlib_io_08_build_fib_body() -> cobrust_mir::Body {
     use cobrust_types::Ty;
     let span0 = Span::new(FileId::SYNTHETIC, 0, 0);
     let fib_locals = vec![
-        LocalDecl { id: LocalId(0), name: "_return".into(), ty: Ty::Int,  mutable: true,  span: span0 },
-        LocalDecl { id: LocalId(1), name: "n".into(),       ty: Ty::Int,  mutable: false, span: span0 },
-        LocalDecl { id: LocalId(2), name: "_cmp".into(),    ty: Ty::Bool, mutable: true,  span: span0 },
-        LocalDecl { id: LocalId(3), name: "_nm1".into(),    ty: Ty::Int,  mutable: true,  span: span0 },
-        LocalDecl { id: LocalId(4), name: "_nm2".into(),    ty: Ty::Int,  mutable: true,  span: span0 },
-        LocalDecl { id: LocalId(5), name: "_r1".into(),     ty: Ty::Int,  mutable: true,  span: span0 },
-        LocalDecl { id: LocalId(6), name: "_r2".into(),     ty: Ty::Int,  mutable: true,  span: span0 },
+        LocalDecl {
+            id: LocalId(0),
+            name: "_return".into(),
+            ty: Ty::Int,
+            mutable: true,
+            span: span0,
+        },
+        LocalDecl {
+            id: LocalId(1),
+            name: "n".into(),
+            ty: Ty::Int,
+            mutable: false,
+            span: span0,
+        },
+        LocalDecl {
+            id: LocalId(2),
+            name: "_cmp".into(),
+            ty: Ty::Bool,
+            mutable: true,
+            span: span0,
+        },
+        LocalDecl {
+            id: LocalId(3),
+            name: "_nm1".into(),
+            ty: Ty::Int,
+            mutable: true,
+            span: span0,
+        },
+        LocalDecl {
+            id: LocalId(4),
+            name: "_nm2".into(),
+            ty: Ty::Int,
+            mutable: true,
+            span: span0,
+        },
+        LocalDecl {
+            id: LocalId(5),
+            name: "_r1".into(),
+            ty: Ty::Int,
+            mutable: true,
+            span: span0,
+        },
+        LocalDecl {
+            id: LocalId(6),
+            name: "_r2".into(),
+            ty: Ty::Int,
+            mutable: true,
+            span: span0,
+        },
     ];
     let mut blocks = fib_base_blocks(span0);
     blocks.extend(fib_rec_blocks(span0));
-    Body { def_id: DefId(0), name: "fib".into(), locals: fib_locals, blocks,
-           return_local: LocalId(0), param_count: 1, span: span0 }
+    Body {
+        def_id: DefId(0),
+        name: "fib".into(),
+        locals: fib_locals,
+        blocks,
+        return_local: LocalId(0),
+        param_count: 1,
+        span: span0,
+    }
 }
 
 /// bb0: _cmp=(n<2); SwitchInt. bb1: _return=n; Return.
@@ -1213,9 +1262,11 @@ fn fib_base_blocks(span0: cobrust_frontend::span::Span) -> Vec<cobrust_mir::Basi
             statements: vec![Statement {
                 kind: StatementKind::Assign {
                     place: Place::local(LocalId(2)),
-                    rvalue: Rvalue::BinaryOp(BinOp::Lt,
+                    rvalue: Rvalue::BinaryOp(
+                        BinOp::Lt,
                         Operand::Copy(Place::local(LocalId(1))),
-                        Operand::Constant(Constant::Int(2))),
+                        Operand::Constant(Constant::Int(2)),
+                    ),
                 },
                 span: span0,
             }],
@@ -1254,31 +1305,63 @@ fn fib_rec_blocks(span0: cobrust_frontend::span::Span) -> Vec<cobrust_mir::Basic
         MirBlock {
             id: BlockId(2),
             statements: vec![
-                Statement { kind: StatementKind::Assign { place: Place::local(LocalId(3)),
-                    rvalue: Rvalue::BinaryOp(BinOp::Sub, Operand::Copy(Place::local(LocalId(1))),
-                        Operand::Constant(Constant::Int(1))) }, span: s0 },
-                Statement { kind: StatementKind::Assign { place: Place::local(LocalId(4)),
-                    rvalue: Rvalue::BinaryOp(BinOp::Sub, Operand::Copy(Place::local(LocalId(1))),
-                        Operand::Constant(Constant::Int(2))) }, span: s0 },
+                Statement {
+                    kind: StatementKind::Assign {
+                        place: Place::local(LocalId(3)),
+                        rvalue: Rvalue::BinaryOp(
+                            BinOp::Sub,
+                            Operand::Copy(Place::local(LocalId(1))),
+                            Operand::Constant(Constant::Int(1)),
+                        ),
+                    },
+                    span: s0,
+                },
+                Statement {
+                    kind: StatementKind::Assign {
+                        place: Place::local(LocalId(4)),
+                        rvalue: Rvalue::BinaryOp(
+                            BinOp::Sub,
+                            Operand::Copy(Place::local(LocalId(1))),
+                            Operand::Constant(Constant::Int(2)),
+                        ),
+                    },
+                    span: s0,
+                },
             ],
-            terminator: Terminator::Call { func: Operand::Constant(Constant::FnRef(0)),
+            terminator: Terminator::Call {
+                func: Operand::Constant(Constant::FnRef(0)),
                 args: vec![Operand::Copy(Place::local(LocalId(3)))],
-                destination: Place::local(LocalId(5)), target: BlockId(3), unwind: None },
+                destination: Place::local(LocalId(5)),
+                target: BlockId(3),
+                unwind: None,
+            },
             span: s0,
         },
         MirBlock {
-            id: BlockId(3), statements: vec![],
-            terminator: Terminator::Call { func: Operand::Constant(Constant::FnRef(0)),
+            id: BlockId(3),
+            statements: vec![],
+            terminator: Terminator::Call {
+                func: Operand::Constant(Constant::FnRef(0)),
                 args: vec![Operand::Copy(Place::local(LocalId(4)))],
-                destination: Place::local(LocalId(6)), target: BlockId(4), unwind: None },
+                destination: Place::local(LocalId(6)),
+                target: BlockId(4),
+                unwind: None,
+            },
             span: s0,
         },
         MirBlock {
             id: BlockId(4),
-            statements: vec![Statement { kind: StatementKind::Assign { place: Place::local(LocalId(0)),
-                rvalue: Rvalue::BinaryOp(BinOp::Add,
-                    Operand::Copy(Place::local(LocalId(5))), Operand::Copy(Place::local(LocalId(6)))) },
-                span: s0 }],
+            statements: vec![Statement {
+                kind: StatementKind::Assign {
+                    place: Place::local(LocalId(0)),
+                    rvalue: Rvalue::BinaryOp(
+                        BinOp::Add,
+                        Operand::Copy(Place::local(LocalId(5))),
+                        Operand::Copy(Place::local(LocalId(6))),
+                    ),
+                },
+                span: s0,
+            }],
             terminator: Terminator::Return,
             span: s0,
         },
@@ -1297,9 +1380,27 @@ fn stdlib_io_08_build_main_body() -> cobrust_mir::Body {
     use cobrust_types::Ty;
     let span0 = Span::new(FileId::SYNTHETIC, 0, 0);
     let locals = vec![
-        LocalDecl { id: LocalId(0), name: "_return".into(),     ty: Ty::Int, mutable: true, span: span0 },
-        LocalDecl { id: LocalId(1), name: "_fib_ret".into(),    ty: Ty::Int, mutable: true, span: span0 },
-        LocalDecl { id: LocalId(2), name: "_println_ret".into(), ty: Ty::Int, mutable: true, span: span0 },
+        LocalDecl {
+            id: LocalId(0),
+            name: "_return".into(),
+            ty: Ty::Int,
+            mutable: true,
+            span: span0,
+        },
+        LocalDecl {
+            id: LocalId(1),
+            name: "_fib_ret".into(),
+            ty: Ty::Int,
+            mutable: true,
+            span: span0,
+        },
+        LocalDecl {
+            id: LocalId(2),
+            name: "_println_ret".into(),
+            ty: Ty::Int,
+            mutable: true,
+            span: span0,
+        },
     ];
     // bb0: Call fib(10)->_fib_ret→bb1
     let bb0 = MirBlock {
