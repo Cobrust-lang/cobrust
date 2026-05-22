@@ -157,7 +157,12 @@ jobs:
           # that lack AVX-512 support (e.g. ubuntu-latest for v4 wheel).
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
         run: |
-          cross build --release --locked -p cobrust-cli -p cobrust-lsp -p cobrust-dap --target ${{ matrix.target }}
+          # ADR-0068 v0.6.0: cobrust-lsp + cobrust-dap are now lib-only
+          # crates; the standalone binaries come from -shim crates.
+          # ADR-0069 v0.6.0: same release.yml builds the prebuilt
+          # libcobrust_stdlib.a (via cobrust-cli build.rs invoking
+          # cobrust-stdlib's staticlib target).
+          cross build --release --locked -p cobrust-cli -p cobrust-lsp-shim -p cobrust-dap-shim --target ${{ matrix.target }}
 
       - name: Build release binary (native)
         if: ${{ !matrix.use_cross }}
@@ -170,20 +175,75 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
           CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
         run: |
-          cargo build --release --locked -p cobrust-cli -p cobrust-lsp -p cobrust-dap --target ${{ matrix.target }}
+          # ADR-0068 v0.6.0: see cross build above for rationale.
+          cargo build --release --locked -p cobrust-cli -p cobrust-lsp-shim -p cobrust-dap-shim --target ${{ matrix.target }}
 
-      - name: Package tar.gz
+      - name: Package tar.gz (ADR-0069 FHS layout)
         shell: bash
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           # ADR-0065 §3.2 naming: cobrust-<version>-<triple>-<cpu_level>.tar.gz
           ARCHIVE="cobrust-v${VERSION}-${{ matrix.asset_suffix }}.tar.gz"
           RELEASE_DIR="target/${{ matrix.target }}/release"
-          for bin in cobrust cobrust-lsp cobrust-dap; do
-            cp "${RELEASE_DIR}/${bin}" .
-          done
-          tar czf "${ARCHIVE}" cobrust cobrust-lsp cobrust-dap
+          # ADR-0069 §4.1 wheel-layout: bin/, lib/cobrust/, share/cobrust/runtime/
+          STAGE="cobrust-v${VERSION}"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/bin" "$STAGE/lib/cobrust" "$STAGE/share/cobrust/runtime"
+          cp "${RELEASE_DIR}/cobrust" "$STAGE/bin/cobrust"
+          cp "${RELEASE_DIR}/cobrust-lsp" "$STAGE/bin/cobrust-lsp"
+          cp "${RELEASE_DIR}/cobrust-dap" "$STAGE/bin/cobrust-dap"
+          # libcobrust_stdlib.a is built by cobrust-cli's build.rs invoking
+          # the cobrust-stdlib staticlib target — locate it via the OUT_DIR
+          # bake artifact under target/<triple>/release/build/cobrust-cli-*/out/
+          STDLIB_ARCHIVE=$(find "target/${{ matrix.target }}/release/build" -path "*/cobrust-cli-*/out/cobrust-stdlib-build/release/libcobrust_stdlib.a" -print -quit)
+          if [[ -z "${STDLIB_ARCHIVE}" || ! -f "${STDLIB_ARCHIVE}" ]]; then
+            echo "::error::cannot locate libcobrust_stdlib.a built by cobrust-cli build.rs"
+            find "target/${{ matrix.target }}/release/build" -name "libcobrust_stdlib.a" -print 2>/dev/null || true
+            exit 1
+          fi
+          cp "${STDLIB_ARCHIVE}" "$STAGE/lib/cobrust/libcobrust_stdlib.a"
+          cp crates/cobrust-cli/runtime/cobrust_main.c "$STAGE/share/cobrust/runtime/"
+          cp crates/cobrust-cli/runtime/cpu_features.c "$STAGE/share/cobrust/runtime/"
+          # Tar the single top-level directory (ADR-0069 §4.1 self-contained tree).
+          tar czf "${ARCHIVE}" "$STAGE"
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+          echo "STAGE_DIR=${STAGE}" >> "$GITHUB_ENV"
+          echo "Packaged tree:"
+          (cd "$STAGE" && find . -maxdepth 4 | sort)
+
+      # ADR-0069 §4.3 + F46 §3 — post-package smoke gate. Extract the
+      # tarball at the same path users would (relative to a clean dir),
+      # write a one-line .cb source, run `cobrust run` on it, assert
+      # stdout matches "smoke". Failure fails the job BEFORE artifact
+      # upload, so broken wheels never reach the GH Release.
+      #
+      # Native-only: cross-compiled tarballs cannot execute their own
+      # binary on the build host. Cross-compile correctness is verified
+      # post-publish by user-side install tests.
+      - name: Post-package smoke gate (ADR-0069 §4.3 + F46 §3)
+        if: ${{ !matrix.use_cross }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SMOKE_DIR="$(mktemp -d)"
+          cp "${ARCHIVE}" "${SMOKE_DIR}/"
+          cd "${SMOKE_DIR}"
+          tar xzf "${ARCHIVE}"
+          ls -R "${STAGE_DIR}"
+          cat > t.cb <<'EOF_CB'
+          fn main() -> i64:
+              print("smoke")
+              return 0
+          EOF_CB
+          "${STAGE_DIR}/bin/cobrust" run t.cb 2>&1 | tee out.txt
+          if ! grep -q "^smoke$" out.txt; then
+            echo "::error::post-package smoke gate FAILED: 'smoke' not in stdout"
+            echo "stdout was:"
+            cat out.txt
+            exit 1
+          fi
+          echo "post-package smoke gate PASS"
 
       - name: Upload artifact
         uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b  # v4.5.0
@@ -246,39 +306,50 @@ jobs:
           body: |
             ## Installation
 
+            v0.6.0 adopts the FHS-ish `bin/lib/share` wheel layout per
+            ADR-0069. Tarballs extract to a single self-contained
+            `cobrust-${{ github.ref_name }}/` directory.
+
             ### Option A — cargo install (requires Rust toolchain)
 
             ```bash
             cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
-            # (crates.io publish queued for v0.2.0)
             ```
 
-            ### Option B — prebuilt binary (no Rust needed)
+            ### Option B — prebuilt wheel (no Rust needed; v0.6.0 layout)
+
+            Pick the tarball for your platform + CPU level, extract to a
+            stable location, and symlink the `cobrust` binary into your
+            `$PATH`. The runtime + stdlib live in `lib/` + `share/`
+            siblings; do NOT move the binary out of its `bin/` directory.
 
             ```bash
-            # macOS arm64 (tier-1)
-            curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz | tar xz
-            sudo mv cobrust /usr/local/bin/
+            # macOS Apple Silicon M1 (tier-1)
+            curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-aarch64-apple-darwin-m1.tar.gz | tar xz -C $HOME/.local/
+            ln -sf $HOME/.local/cobrust-${{ github.ref_name }}/bin/cobrust $HOME/.local/bin/cobrust
 
-            # Linux arm64 (tier-1)
-            curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz | tar xz
-            sudo mv cobrust /usr/local/bin/
+            # Linux x86_64 — glibc baseline (tier-1)
+            curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-gnu-v1.tar.gz | tar xz -C $HOME/.local/
+            ln -sf $HOME/.local/cobrust-${{ github.ref_name }}/bin/cobrust $HOME/.local/bin/cobrust
 
-            # Linux x86_64 — glibc (tier-1)
-            curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz | tar xz
-            sudo mv cobrust /usr/local/bin/
-
-            # Linux x86_64 — static musl (tier-1, Alpine / distroless / minimal containers)
-            curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-musl.tar.gz | tar xz
-            sudo mv cobrust /usr/local/bin/
+            # Linux x86_64 — static musl (Alpine / distroless / minimal containers)
+            curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-musl-v1.tar.gz | tar xz -C $HOME/.local/
+            ln -sf $HOME/.local/cobrust-${{ github.ref_name }}/bin/cobrust $HOME/.local/bin/cobrust
             ```
+
+            Each wheel tarball bundles:
+            - `bin/cobrust` — main driver (also exposes `cobrust lsp` + `cobrust dap` subcommands per ADR-0068)
+            - `bin/cobrust-lsp` + `bin/cobrust-dap` — transitional shim binaries (deleted at v0.7.0; extension v0.1.x compat)
+            - `lib/cobrust/libcobrust_stdlib.a` — prebuilt static stdlib archive
+            - `share/cobrust/runtime/{cobrust_main.c,cpu_features.c}` — runtime C entrypoint + CPU feature helpers
 
             ### Option C — Alpine / distroless container (musl static binary)
 
             ```dockerfile
             FROM alpine:latest
             RUN apk add --no-cache curl tar
-            RUN curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-musl.tar.gz | tar xz -C /usr/local/bin/
+            RUN curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-musl-v1.tar.gz | tar xz -C /opt/ \
+                && ln -s /opt/cobrust-${{ github.ref_name }}/bin/cobrust /usr/local/bin/cobrust
             ```
 
             ### Quick start
@@ -289,6 +360,15 @@ jobs:
             ```
 
             See [Getting Started](https://github.com/Cobrust-lang/cobrust/blob/main/docs/human/en/getting-started.md) for the full guide.
+
+            ### Breaking change from v0.5.x
+
+            Users who manually `cp cobrust /usr/local/bin/` from a flat
+            v0.5.x tarball MUST re-install via the new `tar xz` →
+            `ln -s` flow above. Per F46: the v0.5.x flat-binary wheel
+            was unusable for `cobrust run` regardless because the
+            runtime + stdlib were not bundled (binary baked the GH
+            Actions runner workspace path). v0.6.0 fixes both sides.
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
