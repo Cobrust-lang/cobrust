@@ -87,26 +87,36 @@ Pre-fix: 7/7 FAIL (empty stdout). Post-fix: 7/7 PASS.
 
 ---
 
-## What is NOT in v0.5.1 (wave-3 deferrals)
+## What is NOT in v0.5.1 — LLVM backend wave-3 stubs (experimental `--features llvm` users only)
 
-Per ADR-0058f §7, the LLVM backend keeps wave-1 stubs for these extern
-callees. Programs that use them compile under `--features llvm` but
-emit no observable side effect from those calls. The **default
-Cranelift backend handles all of these correctly today**.
+**Default user path = Cranelift = full stdlib parity.** The section below
+applies ONLY to the `--features llvm` experimental opt-in path. Release
+wheels distributed via `cobrust install` or the GitHub release page do NOT
+enable `--features llvm`. If you build without that flag, no action is needed
+and none of the stubs below affect you.
 
-- `input(prompt)` / `read_line()` / `input_no_prompt()` — stdin family
-- `argv()` — `sys.argv`
-- `list_new` / `list_set` / `list_get` / `list_len` / `list_is_empty` / `list_append`
-- `dict_*` family — Dict runtime
-- `set_*` / `tuple_*` family
-- `iter_init` / `iter_next` / `iter_drop` — iter runtime
-- `fmt_*` family — f-string runtime
-- `math.*` intrinsics — math family
-- `parse_int` / `str_eq` / `str_at` / `count_toks` / `parse_int_tok` family
-- ADR-0050e string method family (`split` / `join` / `replace` / `trim` / `find` / `contains` / `starts_with` / `ends_with` / `lower` / `upper` / `clone`)
-- LLM router intrinsics (`llm_complete` / `prompt_*` / `tool_*` — α surface)
+Per ADR-0058f §7 + F45a playground audit (2026-05-22), the LLVM backend keeps
+wave-1 stubs for the following extern callees. Programs that use them compile
+under `--features llvm` but emit no observable side effect from those calls.
+The **default Cranelift backend handles all of these correctly today**.
 
-Wave-3 closure tracked at ADR-0058f §7 + F45 finding §7.
+| Category | Helpers (silent under `--features llvm`) | Source-level shape |
+|---|---|---|
+| **input** | `__cobrust_input` / `__cobrust_input_str_buf` / `__cobrust_input_no_prompt` / `__cobrust_read_line` | `input("> ")`, `read_line()` |
+| **argv** | `__cobrust_argv` / `__cobrust_capture_argv` | `sys.argv` |
+| **list** | `__cobrust_list_new` / `_set` / `_get` / `_append` / `_len` / `_is_empty` | `[1, 2, 3]` construction + access |
+| **dict** | `__cobrust_dict_new` / `_set_*` / `_get_*` / `_contains_*` | `{k: v}` construction + access |
+| **set / tuple** | `__cobrust_set_*` / `__cobrust_tuple_*` | `{1, 2, 3}` / `(a, b)` |
+| **panic** | `__cobrust_panic` | `panic("msg")` / `unwrap_err()` |
+| **fmt** | `__cobrust_fmt_*` family | `f"x = {x}"` f-string runtime |
+| **iter** | `__cobrust_iter_init` / `_next` / `_drop` | `for x in [1,2,3]` |
+| **math** | `__cobrust_math_sqrt` / `_floor` / `_ceil` / `_round` / `_abs` / `_sin` / `_cos` / `_tan` / `_log` / `_exp` / `_pow` | `math.sqrt(2.0)` etc. |
+| **parse_int / str parsing** | `__cobrust_parse_int` / `_str_eq` / `_str_at` / `_str_len_src` / `_str_ord` / `_count_toks` / `_parse_int_tok` / `_str_eq_lit` | `int(s)`, `s == t`, `s[i]` |
+| **str methods (ADR-0050e)** | `__cobrust_str_split` / `_join` / `_replace` / `_trim` / `_find` / `_contains` / `_starts_with` / `_ends_with` / `_lower` / `_upper` / `_clone` | `s.split(",")` / `.join()` etc. |
+| **LLM router** | `__cobrust_llm_complete` / `_llm_dispatch` / `_llm_stream` / `_prompt_*` / `_tool_*` | `cobrust.llm.*` α surface (ADR-0049) |
+
+Wave-3 closure roadmap: [ADR-0058g](docs/agent/adr/0058g-llvm-backend-wave3-stdlib-hookup-roadmap.md)
+Full catalogue finding: [F45a](docs/agent/findings/f45a-llvm-backend-wave3-scope-systemic.md)
 
 ---
 

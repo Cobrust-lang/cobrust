@@ -445,36 +445,50 @@ cobrust install <pkg>
 
 Do NOT use `v0.4.0` URLs — that release is superseded by `v0.5.0`.
 
-## 9k. LLVM backend stdlib I/O — wave-2 status (ADR-0058f, v0.5.1)
+## 9k. LLVM backend stdlib I/O — wave-2 landed, wave-3 roadmap (ADR-0058f/g)
 
-The `--features llvm` backend in **v0.5.0 had a critical defect**: `print("hi")` AOT-compiled to an empty-stdout binary; `print(fib(40))` computed but the int was silently dropped. **v0.5.1 fixes this** by landing wave-2 of the LLVM backend extern-call surface (ADR-0058f). Default Cranelift backend was never affected.
+**Default backend = Cranelift = full stdlib parity.** `cobrust build foo.cb`
+(no flag) uses Cranelift. Release wheels do NOT enable `--features llvm`.
+End-users on `cobrust install` or `cargo install cobrust-cli` use Cranelift
+and all externs (list, dict, input, argv, panic, fmt, iter, math, parse_int,
+str methods, LLM router) work correctly today. This section only affects the
+`--features llvm` **experimental** opt-in path.
 
-What works in v0.5.1 LLVM AOT:
+**What happened**: v0.5.0 LLVM backend had a critical defect — `print("hi")`
+AOT-compiled to empty stdout; `print(fib(40))` computed silently with no output.
+**v0.5.1 (ADR-0058f wave-2) fixes the print system.** Default Cranelift was
+never affected.
+
+**What works in v0.5.1 LLVM AOT** (`--features llvm`):
 
 - `print(x: i64)` → `__cobrust_println_int(i64)`
-- `print(b: bool)` → `__cobrust_println_bool(i8)` (i1 → i8 widening at the call site)
+- `print(b: bool)` → `__cobrust_println_bool(i8)` (i1 → i8 widening at call site)
 - `print(f: f64)` → `__cobrust_println_float(f64)`
 - `print(s: str)` runtime path → `__cobrust_println_str_buf(*mut Str)`
 - `print("literal")` legacy path → `__cobrust_println(ptr, len)`
 - `print_no_nl(s)` runtime + literal paths
-- `let s: str = "hi"; print(s)` end-to-end (the Assign-side cascade)
+- `let s: str = "hi"; print(s)` end-to-end (Assign-side cascade)
 - `print(fib(N))` end-to-end (FnRef + extern dispatch composition)
 
-What remains wave-1 stub (compiles + no-ops at runtime) in the LLVM backend:
+**Wave-3 stub catalogue** (compiles under `--features llvm`, silently no-ops):
+See [F45a](docs/agent/findings/f45a-llvm-backend-wave3-scope-systemic.md) §2
+for the full per-category table. Summary:
 
-- `input(prompt)` / `read_line()` / `input_no_prompt()`
-- `argv()`
-- `list_new` / `list_set` / `list_get` / `list_len` / `list_is_empty` / `list_append`
-- `dict_*` family
-- `set_*` / `tuple_*` family
-- `iter_init` / `iter_next` / `iter_drop`
-- `fmt_*` family (f-string runtime)
-- `math.sqrt` / `math.floor` / `math.ceil` / `math.round` / `math.abs` / `math.sin` / `math.cos` / `math.tan` / `math.log` / `math.exp` / `math.pow`
-- `parse_int` / `str_eq` / `str_at` / `str_len_src` / `str_ord` / `count_toks` / `parse_int_tok` / `str_eq_lit`
-- str method family from ADR-0050e (`split` / `join` / `replace` / `trim` / `find` / `contains` / `starts_with` / `ends_with` / `lower` / `upper` / `clone`)
-- LLM router intrinsics (`llm_complete` / `llm_dispatch` / `llm_stream` / `prompt_*` / `tool_*`)
+- **input / argv**: `input("> ")`, `read_line()`, `sys.argv` — all silent
+- **list**: `list_new` / `_set` / `_get` / `_append` / `_len` / `_is_empty` — all silent
+- **dict**: `dict_new` + full CRUD family — silent
+- **set / tuple**: construction + access — silent
+- **panic**: `panic("msg")` / `unwrap_err()` — no abort signal
+- **fmt**: f-string runtime (`f"x = {x}"`) — empty string
+- **iter**: `for x in [1,2,3]` body never executes
+- **math**: all `math.*` intrinsics return 0 / no-op
+- **parse_int / str parsing**: `int(s)`, `s == t`, `s[i]` — silent
+- **str methods (ADR-0050e)**: `s.split(",")` / `.join()` / `.replace()` etc. — silent
+- **LLM router**: `cobrust.llm.*` α surface (ADR-0049) — fully silent
 
-These wave-3 surfaces use the **Cranelift backend** without issue today (default `cargo build` route). If your program uses any of them and you opt into `--features llvm`, the program builds but emits no observable side effects from those calls. Track wave-3 closure in ADR-0058f §7 + F45 finding.
+Wave-3 closure roadmap: [ADR-0058g](docs/agent/adr/0058g-llvm-backend-wave3-stdlib-hookup-roadmap.md)
+(6-wave phased plan: panic+argv → list → dict+set+tuple → input → fmt+iter+math+parse+str-methods → LLM router).
+Full catalogue finding: [F45a](docs/agent/findings/f45a-llvm-backend-wave3-scope-systemic.md).
 
 ## 9l. VSCode / Cursor extension v0.1.0 staged (ADR-0067)
 
@@ -536,4 +550,4 @@ A freshly-onboarded agent is ready when it can do all of the following without a
 - **Examples are load-bearing**: every example in §3-§5 must `cobrust check` clean. If it doesn't, fix the example or fix the language — never let the skill silently lie.
 - **Cross-platform fidelity**: this skill is plain Markdown — no Claude-Code-specific frontmatter, no Cursor-specific tags. Any agent system can paste this into a system prompt or treat it as a `read-first` doc.
 
-— P10 lineage 2026-05-18; seeded after Phase G Wave 2 (`25ee43f`). Refreshed 2026-05-19: added §9a fn-redef / §9b Session / §9c LSP / §9d JIT preview + §12 Done-means; Phase I FULL CLOSED + Phase J wave-1 closed (`793032d`). Refreshed 2026-05-19 (P7 maintenance #30/#34): added §9e Phase L debugger / §9f Phase M 6-gap / §10 LC-100 stress ref updated + §10a F-pattern caveats; Phase K/L/M closed + LC-100 真 100/100. Refreshed 2026-05-21 (P7 Tier-2 doc audit P0): §9c Phase J wave-2 FULL CLOSED at `53b5ed2`; §9e Phase L wave-2 landed at `171700b`+`05aa137`; added §9g Tier 1/2/3 W1 hardware tiering + §9h Cluster A let-rebind SHIPPED + §9i FixSafety ladder (ADR-0062); `last_verified_commit` sentinel → `6a25ec8`. Refreshed 2026-05-22 (P7 v0.5.0 refresh): §9c expanded wave-4+5 (LSP v1.3 feature-complete 13 handlers); §9d rewritten as DAP v1.2 wave-4+5 (17 handlers, 0059f+0059g); §9e condensed to Phase L full summary; §9j added v0.5.0 install paths; `last_verified_commit` → THIS commit SHA (post-commit update pending).
+— P10 lineage 2026-05-18; seeded after Phase G Wave 2 (`25ee43f`). Refreshed 2026-05-19: added §9a fn-redef / §9b Session / §9c LSP / §9d JIT preview + §12 Done-means; Phase I FULL CLOSED + Phase J wave-1 closed (`793032d`). Refreshed 2026-05-19 (P7 maintenance #30/#34): added §9e Phase L debugger / §9f Phase M 6-gap / §10 LC-100 stress ref updated + §10a F-pattern caveats; Phase K/L/M closed + LC-100 真 100/100. Refreshed 2026-05-21 (P7 Tier-2 doc audit P0): §9c Phase J wave-2 FULL CLOSED at `53b5ed2`; §9e Phase L wave-2 landed at `171700b`+`05aa137`; added §9g Tier 1/2/3 W1 hardware tiering + §9h Cluster A let-rebind SHIPPED + §9i FixSafety ladder (ADR-0062); `last_verified_commit` sentinel → `6a25ec8`. Refreshed 2026-05-22 (P7 v0.5.0 refresh): §9c expanded wave-4+5 (LSP v1.3 feature-complete 13 handlers); §9d rewritten as DAP v1.2 wave-4+5 (17 handlers, 0059f+0059g); §9e condensed to Phase L full summary; §9j added v0.5.0 install paths; `last_verified_commit` → THIS commit SHA (post-commit update pending). Refreshed 2026-05-22 (P7 F45a+ADR-0058g sprint): §9k rewritten — default Cranelift disclosure leads; wave-3 stub catalogue (F45a §2) + ADR-0058g roadmap link; `last_verified_commit` → post-commit-4 bump pending.
