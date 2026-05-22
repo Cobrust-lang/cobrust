@@ -452,12 +452,14 @@ fn refine_type(out: &mut Vec<RawToken>, ty: &Type, line_map: &LineMap) {
     }
 }
 
-/// Scan `source[span]` for the first occurrence of `name` and push an
-/// override RawToken with the upgraded `token_type`. The scan walks
-/// the full source between `span.start` and `span.end` and finds the
-/// first word-boundary match for `name`. wave-4 honest scope: fn /
-/// class def-names are pinned this way because the parser does not
-/// track the name span as a separate field.
+/// Scan `source` for the first word-boundary occurrence of `name`
+/// AFTER `span_start` (and within `span_end` if it's tighter than
+/// EOF) and push an override RawToken with the upgraded `token_type`.
+/// The scan walks the source bytes; fn / class def-names are pinned
+/// this way because the parser sets `Stmt.span` to `body.span` and
+/// the name lives in the header, OUTSIDE the body span — so we
+/// extend the search window backwards by a small slack to cover the
+/// header (`fn ` or `class ` prefix).
 fn push_name_in_span(
     out: &mut Vec<RawToken>,
     line_map: &LineMap,
@@ -465,31 +467,22 @@ fn push_name_in_span(
     name: &str,
     token_type: u32,
 ) {
-    // Source-byte scan: requires the caller to invoke this with a span
-    // covering text containing `name`. We re-fetch the source via the
-    // line_map's stored copy (the only LineMap public API doesn't
-    // expose source, so we reconstruct length-aware by deferring to
-    // the line-based scan).
-    let span_start = span.start;
-    let span_end = span.end;
+    let source = line_map.source();
+    if source.is_empty() || name.is_empty() {
+        return;
+    }
+    // Extend the search window backwards so the fn header (the
+    // `fn name(` part, up to ~256 bytes before the body span) is
+    // covered. The lexer's `fn`/`class` keyword is short, but
+    // signatures can be long; 256 bytes is conservative.
+    let span_end = (span.end as usize).min(source.len());
+    let span_start = (span.start as usize).saturating_sub(256);
     if span_end <= span_start {
         return;
     }
-
-    // Walk the source via the line_map. We accept that this is O(n)
-    // per call but n is bounded by the fn def's source extent (small).
-    let source = line_map_source(line_map);
-    if source.is_empty() {
-        return;
-    }
-    let start_idx = (span_start as usize).min(source.len());
-    let end_idx = (span_end as usize).min(source.len());
-    let segment = &source[start_idx..end_idx];
+    let segment = &source[span_start..span_end];
 
     let name_bytes = name.as_bytes();
-    if name_bytes.is_empty() {
-        return;
-    }
     let seg_bytes = segment.as_bytes();
     let nlen = name_bytes.len();
     let slen = seg_bytes.len();
@@ -510,8 +503,8 @@ fn push_name_in_span(
             let ok_before = before.is_none_or(|b| !is_ident(b));
             let ok_after = after.is_none_or(|b| !is_ident(b));
             if ok_before && ok_after {
-                let abs_start = u32::try_from(start_idx + i).unwrap_or(u32::MAX);
-                let abs_end = u32::try_from(start_idx + i + nlen).unwrap_or(u32::MAX);
+                let abs_start = u32::try_from(span_start + i).unwrap_or(u32::MAX);
+                let abs_end = u32::try_from(span_start + i + nlen).unwrap_or(u32::MAX);
                 let synthetic = Span::new(FileId::SYNTHETIC, abs_start, abs_end);
                 let (line, character, length) = span_to_line_char(&synthetic, line_map);
                 if length > 0 {
@@ -527,16 +520,6 @@ fn push_name_in_span(
         }
         i += 1;
     }
-}
-
-/// Recover the cached source from a [`LineMap`]. `LineMap` stores the
-/// source verbatim; the helper extracts it without a public accessor.
-fn line_map_source(line_map: &LineMap) -> String {
-    // Wave-4 honest-scope: LineMap exposes `byte_to_position` and
-    // `position_to_byte` but not the raw source. The simplest path is
-    // to round-trip via the byte-to-position inverse: not ergonomic.
-    // Instead we re-publish the source via a new public accessor.
-    line_map.source().to_string()
 }
 
 /// Scan `#`-to-EOL comments by byte and append RawTokens.
