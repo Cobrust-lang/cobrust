@@ -153,8 +153,7 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
         // structured error.
         if let Err(err) = emitter.module.verify() {
             return Err(CodegenError::LlvmError(format!(
-                "LLVM module verify failed: {}",
-                err
+                "LLVM module verify failed: {err}"
             )));
         }
     }
@@ -174,8 +173,7 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
             .run_passes(pipeline, &target_machine, options)
             .map_err(|e| {
                 CodegenError::LlvmError(format!(
-                    "LLVM PassBuilder pipeline `{}` failed: {}",
-                    pipeline, e
+                    "LLVM PassBuilder pipeline `{pipeline}` failed: {e}"
                 ))
             })?;
     }
@@ -351,10 +349,7 @@ pub fn emit_multi_version_dispatch<'ctx>(
         .collect();
 
     for base_name in fn_names {
-        let original_fn = match emitter.module.get_function(&base_name) {
-            Some(f) => f,
-            None => continue,
-        };
+        let Some(original_fn) = emitter.module.get_function(&base_name) else { continue };
 
         // Skip external declarations (no body to clone).
         if original_fn.get_first_basic_block().is_none() {
@@ -764,7 +759,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
         module.set_triple(&target_machine.get_triple());
         module.set_data_layout(&target_machine.get_target_data().get_data_layout());
         let builder = ctx.create_builder();
-        let opaque_ptr_ty = ctx.i8_type().ptr_type(AddressSpace::default());
+        let opaque_ptr_ty = ctx.ptr_type(AddressSpace::default());
 
         // --- ADR-0058c §3.1 DWARF scaffold -----------------------------
         // LLVM requires the module-level "Debug Info Version" + "Dwarf Version"
@@ -1426,7 +1421,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
     /// Build a function signature given param types + return type.
     fn fn_type_from(
-        &self,
         params: &[BasicTypeEnum<'ctx>],
         ret: BasicTypeEnum<'ctx>,
     ) -> FunctionType<'ctx> {
@@ -1470,7 +1464,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.lower_ty(&ret_local.ty)
         };
 
-        let fn_ty = self.fn_type_from(&param_tys, ret_ty);
+        let fn_ty = LlvmEmitter::fn_type_from(&param_tys, ret_ty);
         let func = self
             .module
             .add_function(&name, fn_ty, Some(Linkage::External));
@@ -1599,7 +1593,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
         for (idx, local) in param_locals.iter().enumerate() {
             let param = func
                 .get_nth_param(idx as u32)
-                .ok_or_else(|| CodegenError::Internal(format!("missing param {}", idx)))?;
+                .ok_or_else(|| CodegenError::Internal(format!("missing param {idx}")))?;
             let (alloca, _) = local_allocas[&local.id];
             self.builder
                 .build_store(alloca, param)
@@ -2970,7 +2964,7 @@ mod tests {
     }
 
     fn host_spec() -> TargetSpec {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("invariant: tempdir creation must succeed in test environment");
         // Persist the temp dir for the test's duration via leaking the
         // handle; the directory is cleaned up by the OS at exit. (We
         // do this rather than `into_path()` which is deprecated.)
@@ -3302,10 +3296,7 @@ mod tests {
         let mut spec = host_spec();
         spec.module_name = "dwarf_empty".to_string();
         let result = emit(&module, &spec).expect("empty module emit");
-        let path = match result {
-            Artifact::Object(p) => p,
-            _ => panic!("expected Artifact::Object"),
-        };
+        let Artifact::Object(path) = result else { panic!("expected Artifact::Object") };
         // Object file must exist + parse as an object.
         let bytes = std::fs::read(&path).expect("read object");
         let _ = object::File::parse(&*bytes).expect("parse object");
@@ -3330,10 +3321,7 @@ mod tests {
         let mut spec = host_spec();
         spec.module_name = "dwarf_return_42".to_string();
         let result = emit(&module, &spec).expect("return 42 emit");
-        let path = match result {
-            Artifact::Object(p) => p,
-            _ => panic!("expected Artifact::Object"),
-        };
+        let Artifact::Object(path) = result else { panic!("expected Artifact::Object") };
         assert!(
             object_has_dwarf_sections(&path),
             "return-42 fixture: missing .debug_* sections"
@@ -3366,10 +3354,7 @@ mod tests {
         let mut spec = host_spec();
         spec.module_name = "dwarf_multi_fn".to_string();
         let result = emit(&module, &spec).expect("multi-fn emit");
-        let path = match result {
-            Artifact::Object(p) => p,
-            _ => panic!("expected Artifact::Object"),
-        };
+        let Artifact::Object(path) = result else { panic!("expected Artifact::Object") };
         assert!(
             object_has_dwarf_sections(&path),
             "multi-fn fixture: missing .debug_* sections"
@@ -3432,10 +3417,7 @@ mod tests {
         let mut spec = host_spec();
         spec.module_name = "dwarf_drop".to_string();
         let result = emit(&module, &spec).expect("drop fn emit");
-        let path = match result {
-            Artifact::Object(p) => p,
-            _ => panic!("expected Artifact::Object"),
-        };
+        let Artifact::Object(path) = result else { panic!("expected Artifact::Object") };
         assert!(
             object_has_dwarf_sections(&path),
             "drop-fn fixture: missing .debug_* sections"
@@ -3464,10 +3446,7 @@ mod tests {
         spec.opt_level = OptLevel::SpeedAndSize;
         spec.module_name = "dwarf_o3".to_string();
         let result = emit(&module, &spec).expect("O3 emit");
-        let path = match result {
-            Artifact::Object(p) => p,
-            _ => panic!("expected Artifact::Object"),
-        };
+        let Artifact::Object(path) = result else { panic!("expected Artifact::Object") };
         assert!(
             object_has_dwarf_sections(&path),
             "O3 fixture: DWARF sections were stripped by the opt pipeline"

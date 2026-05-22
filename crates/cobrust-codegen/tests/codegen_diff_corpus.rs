@@ -1159,82 +1159,63 @@ fn stdlib_io_06_println_literal_path() {
 fn stdlib_io_08_println_fib_result() {
     #[cfg(feature = "llvm")]
     {
-        use cobrust_frontend::span::{FileId, Span};
-        use cobrust_hir::DefId;
-        use cobrust_mir::{
-            BasicBlock as MirBlock, BinOp, BlockId, Body, Constant, LocalDecl, LocalId, Module,
-            Operand, Place, Rvalue, Statement, StatementKind, SwitchValue, Terminator,
+        use cobrust_mir::Module;
+        let module = Module {
+            bodies: vec![
+                stdlib_io_08_build_fib_body(),
+                stdlib_io_08_build_main_body(),
+            ],
         };
-        use cobrust_types::Ty;
+        let Some(stdout) = stdlib_io_link_and_run("stdlib_io_08", module) else {
+            return; // Prereqs missing (no llvm feature, no stdlib, no linker) — skip.
+        };
+        assert_eq!(
+            stdout, "55\n",
+            "stdlib_io_08: fib(10) result not printed correctly\n  got: {stdout:?}\n  expected: \"55\\n\""
+        );
+    }
+}
 
-        let span0 = Span::new(FileId::SYNTHETIC, 0, 0);
+/// Helper: build `fib(n: i64) -> i64` body for stdlib_io_08.
+/// Split across fib_base_blocks (bb0+bb1) + fib_rec_blocks (bb2-bb4).
+#[cfg(feature = "llvm")]
+fn stdlib_io_08_build_fib_body() -> cobrust_mir::Body {
+    use cobrust_frontend::span::{FileId, Span};
+    use cobrust_hir::DefId;
+    use cobrust_mir::{Body, LocalDecl, LocalId};
+    use cobrust_types::Ty;
+    let span0 = Span::new(FileId::SYNTHETIC, 0, 0);
+    let fib_locals = vec![
+        LocalDecl { id: LocalId(0), name: "_return".into(), ty: Ty::Int,  mutable: true,  span: span0 },
+        LocalDecl { id: LocalId(1), name: "n".into(),       ty: Ty::Int,  mutable: false, span: span0 },
+        LocalDecl { id: LocalId(2), name: "_cmp".into(),    ty: Ty::Bool, mutable: true,  span: span0 },
+        LocalDecl { id: LocalId(3), name: "_nm1".into(),    ty: Ty::Int,  mutable: true,  span: span0 },
+        LocalDecl { id: LocalId(4), name: "_nm2".into(),    ty: Ty::Int,  mutable: true,  span: span0 },
+        LocalDecl { id: LocalId(5), name: "_r1".into(),     ty: Ty::Int,  mutable: true,  span: span0 },
+        LocalDecl { id: LocalId(6), name: "_r2".into(),     ty: Ty::Int,  mutable: true,  span: span0 },
+    ];
+    let mut blocks = fib_base_blocks(span0);
+    blocks.extend(fib_rec_blocks(span0));
+    Body { def_id: DefId(0), name: "fib".into(), locals: fib_locals, blocks,
+           return_local: LocalId(0), param_count: 1, span: span0 }
+}
 
-        // ── body[0]: fib(n: i64) -> i64 ────────────────────────────────
-        // Locals: _0=return(int), _1=n(int), _2=_cmp(bool),
-        //         _3=_n_minus_1(int), _4=_n_minus_2(int),
-        //         _5=_r1(int), _6=_r2(int)
-        let fib_locals = vec![
-            LocalDecl {
-                id: LocalId(0),
-                name: "_return".into(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-            },
-            LocalDecl {
-                id: LocalId(1),
-                name: "n".into(),
-                ty: Ty::Int,
-                mutable: false,
-                span: span0,
-            },
-            LocalDecl {
-                id: LocalId(2),
-                name: "_cmp".into(),
-                ty: Ty::Bool,
-                mutable: true,
-                span: span0,
-            },
-            LocalDecl {
-                id: LocalId(3),
-                name: "_nm1".into(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-            },
-            LocalDecl {
-                id: LocalId(4),
-                name: "_nm2".into(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-            },
-            LocalDecl {
-                id: LocalId(5),
-                name: "_r1".into(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-            },
-            LocalDecl {
-                id: LocalId(6),
-                name: "_r2".into(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-            },
-        ];
-        // bb0: _cmp = (n < 2); SwitchInt(_cmp, [(true→bb1)], otherwise→bb2)
-        let fib_bb0 = MirBlock {
+/// bb0: _cmp=(n<2); SwitchInt. bb1: _return=n; Return.
+#[cfg(feature = "llvm")]
+fn fib_base_blocks(span0: cobrust_frontend::span::Span) -> Vec<cobrust_mir::BasicBlock> {
+    use cobrust_mir::{
+        BasicBlock as MirBlock, BinOp, BlockId, Constant, LocalId, Operand, Place, Rvalue,
+        Statement, StatementKind, SwitchValue, Terminator,
+    };
+    vec![
+        MirBlock {
             id: BlockId(0),
             statements: vec![Statement {
                 kind: StatementKind::Assign {
                     place: Place::local(LocalId(2)),
-                    rvalue: Rvalue::BinaryOp(
-                        BinOp::Lt,
+                    rvalue: Rvalue::BinaryOp(BinOp::Lt,
                         Operand::Copy(Place::local(LocalId(1))),
-                        Operand::Constant(Constant::Int(2)),
-                    ),
+                        Operand::Constant(Constant::Int(2))),
                 },
                 span: span0,
             }],
@@ -1244,9 +1225,8 @@ fn stdlib_io_08_println_fib_result() {
                 otherwise: BlockId(2),
             },
             span: span0,
-        };
-        // bb1: _return = n; Return
-        let fib_bb1 = MirBlock {
+        },
+        MirBlock {
             id: BlockId(1),
             statements: vec![Statement {
                 kind: StatementKind::Assign {
@@ -1257,168 +1237,117 @@ fn stdlib_io_08_println_fib_result() {
             }],
             terminator: Terminator::Return,
             span: span0,
-        };
-        // bb2: _nm1 = n-1; _nm2 = n-2;
-        //      Call fib(_nm1) -> _r1 → bb3
-        // bb3: Call fib(_nm2) -> _r2 → bb4
-        // bb4: _return = _r1+_r2; Return
-        let fib_bb2 = MirBlock {
+        },
+    ]
+}
+
+/// bb2: _nm1=n-1; _nm2=n-2; Call fib(_nm1)->_r1→bb3.
+/// bb3: Call fib(_nm2)->_r2→bb4. bb4: _return=_r1+_r2; Return.
+#[cfg(feature = "llvm")]
+fn fib_rec_blocks(span0: cobrust_frontend::span::Span) -> Vec<cobrust_mir::BasicBlock> {
+    use cobrust_mir::{
+        BasicBlock as MirBlock, BinOp, BlockId, Constant, LocalId, Operand, Place, Rvalue,
+        Statement, StatementKind, Terminator,
+    };
+    let s0 = span0;
+    vec![
+        MirBlock {
             id: BlockId(2),
             statements: vec![
-                Statement {
-                    kind: StatementKind::Assign {
-                        place: Place::local(LocalId(3)),
-                        rvalue: Rvalue::BinaryOp(
-                            BinOp::Sub,
-                            Operand::Copy(Place::local(LocalId(1))),
-                            Operand::Constant(Constant::Int(1)),
-                        ),
-                    },
-                    span: span0,
-                },
-                Statement {
-                    kind: StatementKind::Assign {
-                        place: Place::local(LocalId(4)),
-                        rvalue: Rvalue::BinaryOp(
-                            BinOp::Sub,
-                            Operand::Copy(Place::local(LocalId(1))),
-                            Operand::Constant(Constant::Int(2)),
-                        ),
-                    },
-                    span: span0,
-                },
+                Statement { kind: StatementKind::Assign { place: Place::local(LocalId(3)),
+                    rvalue: Rvalue::BinaryOp(BinOp::Sub, Operand::Copy(Place::local(LocalId(1))),
+                        Operand::Constant(Constant::Int(1))) }, span: s0 },
+                Statement { kind: StatementKind::Assign { place: Place::local(LocalId(4)),
+                    rvalue: Rvalue::BinaryOp(BinOp::Sub, Operand::Copy(Place::local(LocalId(1))),
+                        Operand::Constant(Constant::Int(2))) }, span: s0 },
             ],
-            terminator: Terminator::Call {
-                func: Operand::Constant(Constant::FnRef(0)), // fib = body[0]
+            terminator: Terminator::Call { func: Operand::Constant(Constant::FnRef(0)),
                 args: vec![Operand::Copy(Place::local(LocalId(3)))],
-                destination: Place::local(LocalId(5)),
-                target: BlockId(3),
-                unwind: None,
-            },
-            span: span0,
-        };
-        let fib_bb3 = MirBlock {
-            id: BlockId(3),
-            statements: vec![],
-            terminator: Terminator::Call {
-                func: Operand::Constant(Constant::FnRef(0)),
+                destination: Place::local(LocalId(5)), target: BlockId(3), unwind: None },
+            span: s0,
+        },
+        MirBlock {
+            id: BlockId(3), statements: vec![],
+            terminator: Terminator::Call { func: Operand::Constant(Constant::FnRef(0)),
                 args: vec![Operand::Copy(Place::local(LocalId(4)))],
-                destination: Place::local(LocalId(6)),
-                target: BlockId(4),
-                unwind: None,
-            },
-            span: span0,
-        };
-        let fib_bb4 = MirBlock {
+                destination: Place::local(LocalId(6)), target: BlockId(4), unwind: None },
+            span: s0,
+        },
+        MirBlock {
             id: BlockId(4),
-            statements: vec![Statement {
-                kind: StatementKind::Assign {
-                    place: Place::local(LocalId(0)),
-                    rvalue: Rvalue::BinaryOp(
-                        BinOp::Add,
-                        Operand::Copy(Place::local(LocalId(5))),
-                        Operand::Copy(Place::local(LocalId(6))),
-                    ),
-                },
-                span: span0,
-            }],
+            statements: vec![Statement { kind: StatementKind::Assign { place: Place::local(LocalId(0)),
+                rvalue: Rvalue::BinaryOp(BinOp::Add,
+                    Operand::Copy(Place::local(LocalId(5))), Operand::Copy(Place::local(LocalId(6)))) },
+                span: s0 }],
             terminator: Terminator::Return,
-            span: span0,
-        };
-        let fib_body = Body {
-            def_id: DefId(0),
-            name: "fib".into(),
-            locals: fib_locals,
-            blocks: vec![fib_bb0, fib_bb1, fib_bb2, fib_bb3, fib_bb4],
-            return_local: LocalId(0),
-            param_count: 1,
-            span: span0,
-        };
+            span: s0,
+        },
+    ]
+}
 
-        // ── body[1]: main() -> i64 ──────────────────────────────────────
-        // Locals: _0=return(int), _1=_fib_ret(int), _2=_println_ret(int)
-        let main_locals = vec![
-            LocalDecl {
-                id: LocalId(0),
-                name: "_return".into(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-            },
-            LocalDecl {
-                id: LocalId(1),
-                name: "_fib_ret".into(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-            },
-            LocalDecl {
-                id: LocalId(2),
-                name: "_println_ret".into(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-            },
-        ];
-        // bb0: Call fib(10) -> _fib_ret → bb1
-        let main_bb0 = MirBlock {
-            id: BlockId(0),
-            statements: vec![],
-            terminator: Terminator::Call {
-                func: Operand::Constant(Constant::FnRef(0)), // fib = body[0]
-                args: vec![Operand::Constant(Constant::Int(10))],
-                destination: Place::local(LocalId(1)),
-                target: BlockId(1),
-                unwind: None,
+/// Helper: build `main() -> i64` body for stdlib_io_08.
+#[cfg(feature = "llvm")]
+fn stdlib_io_08_build_main_body() -> cobrust_mir::Body {
+    use cobrust_frontend::span::{FileId, Span};
+    use cobrust_hir::DefId;
+    use cobrust_mir::{
+        BasicBlock as MirBlock, BlockId, Body, Constant, LocalDecl, LocalId, Operand, Place,
+        Rvalue, Statement, StatementKind, Terminator,
+    };
+    use cobrust_types::Ty;
+    let span0 = Span::new(FileId::SYNTHETIC, 0, 0);
+    let locals = vec![
+        LocalDecl { id: LocalId(0), name: "_return".into(),     ty: Ty::Int, mutable: true, span: span0 },
+        LocalDecl { id: LocalId(1), name: "_fib_ret".into(),    ty: Ty::Int, mutable: true, span: span0 },
+        LocalDecl { id: LocalId(2), name: "_println_ret".into(), ty: Ty::Int, mutable: true, span: span0 },
+    ];
+    // bb0: Call fib(10)->_fib_ret→bb1
+    let bb0 = MirBlock {
+        id: BlockId(0),
+        statements: vec![],
+        terminator: Terminator::Call {
+            func: Operand::Constant(Constant::FnRef(0)),
+            args: vec![Operand::Constant(Constant::Int(10))],
+            destination: Place::local(LocalId(1)),
+            target: BlockId(1),
+            unwind: None,
+        },
+        span: span0,
+    };
+    // bb1: Call __cobrust_println_int(_fib_ret)->_println_ret→bb2
+    let bb1 = MirBlock {
+        id: BlockId(1),
+        statements: vec![],
+        terminator: Terminator::Call {
+            func: Operand::Constant(Constant::Str("__cobrust_println_int".into())),
+            args: vec![Operand::Copy(Place::local(LocalId(1)))],
+            destination: Place::local(LocalId(2)),
+            target: BlockId(2),
+            unwind: None,
+        },
+        span: span0,
+    };
+    // bb2: _return=0; Return
+    let bb2 = MirBlock {
+        id: BlockId(2),
+        statements: vec![Statement {
+            kind: StatementKind::Assign {
+                place: Place::local(LocalId(0)),
+                rvalue: Rvalue::Use(Operand::Constant(Constant::Int(0))),
             },
             span: span0,
-        };
-        // bb1: Call __cobrust_println_int(_fib_ret) -> _println_ret → bb2
-        let main_bb1 = MirBlock {
-            id: BlockId(1),
-            statements: vec![],
-            terminator: Terminator::Call {
-                func: Operand::Constant(Constant::Str("__cobrust_println_int".into())),
-                args: vec![Operand::Copy(Place::local(LocalId(1)))],
-                destination: Place::local(LocalId(2)),
-                target: BlockId(2),
-                unwind: None,
-            },
-            span: span0,
-        };
-        // bb2: _return = 0; Return
-        let main_bb2 = MirBlock {
-            id: BlockId(2),
-            statements: vec![Statement {
-                kind: StatementKind::Assign {
-                    place: Place::local(LocalId(0)),
-                    rvalue: Rvalue::Use(Operand::Constant(Constant::Int(0))),
-                },
-                span: span0,
-            }],
-            terminator: Terminator::Return,
-            span: span0,
-        };
-        let main_body = Body {
-            def_id: DefId(1),
-            name: "main".into(),
-            locals: main_locals,
-            blocks: vec![main_bb0, main_bb1, main_bb2],
-            return_local: LocalId(0),
-            param_count: 0,
-            span: span0,
-        };
-
-        let module = Module {
-            bodies: vec![fib_body, main_body],
-        };
-        let Some(stdout) = stdlib_io_link_and_run("stdlib_io_08", module) else {
-            return; // Prereqs missing (no llvm feature, no stdlib, no linker) — skip.
-        };
-        assert_eq!(
-            stdout, "55\n",
-            "stdlib_io_08: fib(10) result not printed correctly\n  got: {stdout:?}\n  expected: \"55\\n\""
-        );
+        }],
+        terminator: Terminator::Return,
+        span: span0,
+    };
+    Body {
+        def_id: DefId(1),
+        name: "main".into(),
+        locals,
+        blocks: vec![bb0, bb1, bb2],
+        return_local: LocalId(0),
+        param_count: 0,
+        span: span0,
     }
 }
 
