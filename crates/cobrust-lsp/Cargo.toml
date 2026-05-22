@@ -1,6 +1,6 @@
 [package]
 name = "cobrust-lsp"
-version = "0.4.0"
+version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -22,10 +22,10 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-cobrust-frontend = { path = "../cobrust-frontend", version = "=0.4.0" }
-cobrust-hir = { path = "../cobrust-hir", version = "=0.4.0" }
-cobrust-mir = { path = "../cobrust-mir", version = "=0.4.0" }
-cobrust-types = { path = "../cobrust-types", version = "=0.4.0" }
+cobrust-frontend = { path = "../cobrust-frontend", version = "=0.5.0" }
+cobrust-hir = { path = "../cobrust-hir", version = "=0.5.0" }
+cobrust-mir = { path = "../cobrust-mir", version = "=0.5.0" }
+cobrust-types = { path = "../cobrust-types", version = "=0.5.0" }
 tower-lsp = "0.20"
 tokio = { version = "1.40", features = [
     "macros",
@@ -47,4 +47,4 @@ insta = { version = "1", features = ["json"] }
 url = "2"
 # `cobrust-types::ty::Ty` used by the invalidate-session integration
 # test (Ty::Int / Ty::Str comparison).
-cobrust-types = { path = "../cobrust-types", version = "=0.4.0" }
+cobrust-types = { path = "../cobrust-types", version = "=0.5.0" }
