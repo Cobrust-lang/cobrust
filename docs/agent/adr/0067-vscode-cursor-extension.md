@@ -4,7 +4,7 @@ adr_id: 0067
 title: VSCode / Cursor editor extension (TextMate grammar + LSP client)
 status: accepted
 date: 2026-05-22
-last_verified_commit: TBD
+last_verified_commit: <closure-sprint-final>
 supersedes: []
 superseded_by: []
 ---

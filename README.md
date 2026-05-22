@@ -183,7 +183,7 @@ See [docs/human/en/getting-started.md](docs/human/en/getting-started.md) for the
 
 Want to solve LeetCode problems in Cobrust? Two steps:
 
-1. Install Cobrust v0.5.0+ (see [Install](#install) above)
+1. Install Cobrust v0.6.0+ (see [Install](#install) above)
 2. Read the guide:
    - English: [LeetCode with Cobrust](docs/human/en/getting-started-leetcode.md)
    - 中文: [用 Cobrust 刷 LeetCode](docs/human/zh/getting-started-leetcode.md)

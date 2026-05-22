@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue.svg)](#许可证)
-[![Stage](https://img.shields.io/badge/stage-0.5.0-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.5.0)
+[![Stage](https://img.shields.io/badge/stage-0.6.0-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.6.0)
 
 [**为什么是 Cobrust?**](docs/post/why-cobrust.md) ·
 [**快速开始**](#快速开始) ·
@@ -177,7 +177,7 @@ $ python -c "import tomli; tomli.loads('key = \"value\"')"
 
 想用 Cobrust 刷 LeetCode?两步:
 
-1. 装 Cobrust v0.5.0+(见上方 [安装](#安装))
+1. 装 Cobrust v0.6.0+(见上方 [安装](#安装))
 2. 看指南:
    - 中文:[用 Cobrust 刷 LeetCode](docs/human/zh/getting-started-leetcode.md)
    - English: [LeetCode with Cobrust](docs/human/en/getting-started-leetcode.md)
