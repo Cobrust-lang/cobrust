@@ -1,17 +1,20 @@
 ---
 module_id: dap
-last_verified_commit: feature/0059b-dev
-milestone: L.wave2
+last_verified_commit: feature/0059f-wave-4
+milestone: L.wave4
 dependencies:
   - tools/lldb-cobrust/printers.py             # wave-1 pretty-printers
   - tools/lldb-cobrust/.lldbinit               # auto-load snippet
   - crates/cobrust-frontend/src/lib.rs         # parse_str (held for future source-line mapping)
-  - crates/cobrust-types/src/check.rs          # TypeCheckCtx (held for future evaluate handler)
+  - crates/cobrust-types/src/check.rs          # TypeCheckCtx (held for future Cobrust-source evaluator)
 adr:
   - 0059   # Phase L frame
-  - 0059b  # Wave-2 DAP server (this module)
+  - 0059b  # Wave-2 DAP server (this module's wave-2 foundation)
   - 0059a  # Wave-1 pretty-printers (consumed via lldb auto-load)
+  - 0059e  # Phase L §6.1 wave-4 str-runtime + frame-variable + closure (post-wave-3 v1.0 closure)
+  - 0059f  # Phase L wave-4 watch + conditional bp + multi-thread + exception bp (v1.1)
   - 0058c  # DWARF v5 emission (prerequisite gate)
+  - 0028   # Structured-concurrency runtime (multi-thread debugger consumer)
   - 0012   # Bind-the-core (lldb is externally maintained)
 ---
 
@@ -47,8 +50,13 @@ breakpoints, attach mode, and source-level `evaluate` per ADR-0059b
 | `LldbDriver::next_step() -> Result<StopReason, DapError>` | `crates/cobrust-dap/src/lldb_driver.rs::LldbDriver::next_step` | `thread step-over` |
 | `LldbDriver::stack_trace() -> Result<Vec<StackFrame>, DapError>` | `crates/cobrust-dap/src/lldb_driver.rs::LldbDriver::stack_trace` | `thread backtrace` |
 | `LldbDriver::variables(i64) -> Result<Vec<Variable>, DapError>` | `crates/cobrust-dap/src/lldb_driver.rs::LldbDriver::variables` | `frame variable --no-args` |
-| `handle_initialize`, `handle_launch`, … (9 handlers) | `crates/cobrust-dap/src/handlers.rs` | per-command async dispatcher |
-| `Request`, `Response`, `InitializeResponse`, … | `crates/cobrust-dap/src/dap_types.rs` | hand-rolled DAP type structs |
+| `LldbDriver::evaluate(&str, Option<i64>) -> Result<(String, Option<String>), DapError>` | `crates/cobrust-dap/src/lldb_driver.rs::LldbDriver::evaluate` | wave-4 §3.1: `expression --` REPL routing |
+| `LldbDriver::set_conditional_breakpoint(&str, u32, &str) -> Result<Breakpoint, DapError>` | `crates/cobrust-dap/src/lldb_driver.rs::LldbDriver::set_conditional_breakpoint` | wave-4 §3.2: `--condition '<expr>'` wiring |
+| `LldbDriver::list_threads() -> Result<Vec<ThreadInfo>, DapError>` | `crates/cobrust-dap/src/lldb_driver.rs::LldbDriver::list_threads` | wave-4 §3.3: `thread list` parser |
+| `LldbDriver::stack_trace_for_thread(i64) -> Result<Vec<StackFrame>, DapError>` | `crates/cobrust-dap/src/lldb_driver.rs::LldbDriver::stack_trace_for_thread` | wave-4 §3.3: per-thread backtrace |
+| `LldbDriver::set_exception_breakpoint(&str) -> Result<Breakpoint, DapError>` | `crates/cobrust-dap/src/lldb_driver.rs::LldbDriver::set_exception_breakpoint` | wave-4 §3.4: per-filter symbol map |
+| `handle_initialize`, `handle_launch`, … (11 handlers + evaluate sibling) | `crates/cobrust-dap/src/{handlers.rs,evaluate.rs}` | per-command async dispatcher |
+| `Request`, `Response`, `InitializeResponse`, `EvaluateArguments`, `EvaluateResponse`, `ThreadInfo`, `ThreadsResponse`, `SetExceptionBreakpoints{Arguments,Response}`, `ExceptionBreakpointsFilter`, … | `crates/cobrust-dap/src/dap_types.rs` | hand-rolled DAP type structs |
 
 ## DAP request → lldb command mapping (per ADR-0059b §3.2)
 
@@ -63,7 +71,15 @@ breakpoints, attach mode, and source-level `evaluate` per ADR-0059b
 | `stackTrace` | `thread backtrace` | Regex-parsed; returns `stackFrames: [{ id, name, source, line, column }, ...]`. |
 | `variables` | `frame variable --no-args` | Wave-1 pretty-printer summaries pass through verbatim in `Variable::value`. |
 | `disconnect` | `process kill; quit` | Best-effort lldb cleanup. |
-| `threads` | (stub) | Single hardcoded `{ id: 1, name: "main" }` per §5. |
+| `threads` | `thread list` | wave-4: per-thread `{id, name}` from regex-parsed lldb stdout; empty-result falls back to single-thread shim. |
+| `evaluate` | `frame select N; expression -- <expr>` | wave-4 ADR-0059f §3.1; `expression` routed verbatim to lldb. |
+| `setExceptionBreakpoints` | `breakpoint set --name <symbol>` per filter | wave-4 ADR-0059f §3.4; 3 filters: panic / result_err (honest-scope-skip) / unreachable. |
+
+Wave-4 extends `setBreakpoints` to honour each `SourceBreakpoint`'s
+`condition` field via `LldbDriver::set_conditional_breakpoint`:
+`breakpoint set --file '<file>' --line <line> --condition '<expr>'`.
+Wave-4 extends `stackTrace` to call `LldbDriver::stack_trace_for_thread(thread_id)`
+which prefixes the `thread backtrace` with `thread select <thread_id>`.
 
 ## lldb-18 stdout parser surface (per ADR-0059b §3.3)
 
@@ -75,6 +91,8 @@ Regex-based parsers in `crates/cobrust-dap/src/lldb_driver.rs`:
 | `parse_stop_reason` | `stop reason = breakpoint 1.1` / `stop reason = step over` / `exited with status = 0` | `StopReason::{Breakpoint, Step, Exit, Pause, Unknown}` |
 | `parse_stack_trace` | `frame #0: 0x... fib`fib + 8 at fib.cb:8:5` | `Vec<StackFrame>` |
 | `parse_variables` | `(cobrust::List) xs = [1, 2, 3]` | `Vec<Variable>` with `value = "[1, 2, 3]"` + `type_name = Some("cobrust::List")` |
+| `parse_evaluate` | `(int) $0 = 42` or unrecognised fall-through | `(value_text, Option<type_name>)` |
+| `parse_threads` | `thread #N: tid = ..., name = '<name>'` | `Vec<ThreadInfo { id, name }>`; missing name → `thread-N` |
 
 Each parser has a unit-test in the same file covering both the happy
 path + a degraded path (unparseable input → unverified breakpoint or
@@ -115,28 +133,33 @@ Editor (Cursor/VSCode) -> Content-Length framed JSON -> cobrust-dap stdin
 ## Done means
 
 - `cargo check -p cobrust-dap` exits 0 on Mac single-crate scope.
-- `cargo test -p cobrust-dap` PASS for 28 tests (22 unit + 5 snapshot
-  + 1 ignored e2e).
-- 5 snapshot tests in `tests/dap_handler_snapshots.rs` lock the wire
-  shape for: Initialize, SetBreakpoints, Continue, StackTrace,
-  Variables (with wave-1 pretty-printer output).
-- 1 e2e smoke (`#[ignore]`-gated) in `tests/dap_e2e_smoke.rs` covers
-  the stdio handshake: Initialize → response shape check → Disconnect.
-  Run on DG via `cargo test -p cobrust-dap -- --ignored`.
-- ADR-0059b status flips `proposed → accepted` with
+- `cargo test -p cobrust-dap` PASS for 79 tests (27 lib + 8 + 5 + 12 +
+  5 + 22 wave-4) + 2 ignored (lldb-18-spawn-gated e2e).
+- 5 wave-2 snapshot tests + 6 wave-4 snapshot tests in
+  `tests/{dap_handler_snapshots.rs,wave_4_dap_e2e.rs}` lock the wire
+  shape across the v1.1 surface.
+- 2 e2e smokes (`#[ignore]`-gated) in `tests/dap_e2e_smoke.rs` +
+  `tests/lldb_driver_integration_e2e.rs` cover the stdio handshake
+  + real-lldb integration; run on a host with `lldb-18` on PATH via
+  `cargo test -p cobrust-dap -- --ignored`.
+- ADR-0059f status flips `proposed → accepted` with
   `last_verified_commit` after merge.
 
-## Non-goals (wave-2)
+## Non-goals (post-wave-4)
 
-- No conditional breakpoints (`SourceBreakpoint::condition` ignored).
-- No `evaluate` request (returns `"<not supported in wave-2>"`).
-- No multi-thread debug (single-thread hardcoded).
+- No `setVariable` request (read-only inspection; Cobrust ownership
+  makes mid-step rewrite semantically fraught per ADR-0059 §4).
 - No `attach` mode (only `launch`).
-- No `setVariable` request (read-only inspection).
 - No reverse step / time-travel.
 - No `loadedSources` enumeration.
-- No generic Adt pretty-print (Phase L+ wave; user-defined `class`
-  structs render as raw lldb struct dumps).
+- No generic Adt pretty-print for user-defined `class` structs
+  (deferred Phase L+ wave; renders as raw lldb struct dumps today).
+- No source-level Cobrust expression evaluator (`evaluate` routes
+  expressions verbatim to lldb's C-like parser; `match` /
+  comprehensions / generic-function calls in watch are out-of-scope
+  per ADR-0059 §4).
+- No logpoints (log-only bp) or data breakpoints (memory watchpoints);
+  deferred wave-5+ per ADR-0059f §4.
 
 ## See also
 

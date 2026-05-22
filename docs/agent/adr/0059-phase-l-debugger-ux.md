@@ -145,6 +145,27 @@ HARD-BANNED #1 (reuses `tempfile`, `clap`, `thiserror`,
 ignored DAP-handshake gated per ADR-0059b §6.2 precedent + 0 failed
 + 0 regression).
 
+### 3.4 Wave-4 — ADR-0059f — v1.1 DAP (watch + conditional bp + multi-thread + exception bp)
+
+**Scope**: extends the v1.0 DAP surface (10 basic handlers) to v1.1
+(14 handlers + 2 extended args):
+
+- `evaluate` watch expression handler routing to lldb's
+  `expression` REPL.
+- `setBreakpoints` extended with per-bp `condition` field honoured
+  via lldb's `--condition` arg.
+- `threads()` + per-thread `stackTrace` for ADR-0028 structured-
+  concurrency programs.
+- `setExceptionBreakpoints` advertising 3 filters: panic /
+  result_err (honest-scope-skip) / unreachable.
+
+**Owner**: ADR-0059f.
+
+**Status**: SHIPPED (2026-05-22) at ADR-0059f acceptance. Wave-4
+adds ~600-900 LOC across 7 atomic commits (no new Cargo deps;
+reuses tokio/regex/thiserror/serde/insta). Mac authoritative gate
+clean (clippy `-D warnings` + fmt + 79 PASS + 2 ignored).
+
 ## 4. Non-goals (wave-1 scope; later waves may revisit)
 
 Explicitly out of Phase L wave-1:

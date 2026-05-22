@@ -4,10 +4,10 @@ adr_id: 0059f
 name: 0059f
 parent_adr: 0059
 title: "Phase L wave-4 — Watch expressions + conditional bp + multi-thread + exception bp (v1.1 DAP)"
-status: proposed
+status: accepted
 phase: Phase L wave-4
 date: 2026-05-22
-last_verified_commit: 7fda081
+last_verified_commit: feature/0059f-wave-4
 supersedes: []
 superseded_by: []
 relates_to: [adr:0059, adr:0059a, adr:0059b, adr:0059c, adr:0059d, adr:0059e, adr:0057f, adr:0028]
