@@ -65,7 +65,9 @@ pub async fn handle_initialize(
     let capabilities = InitializeResponse {
         supports_configuration_done_request: false,
         supports_function_breakpoints: false,
-        supports_conditional_breakpoints: false,
+        // ADR-0059f §3.2: conditional bp now honoured via lldb
+        // --condition wiring through handle_set_breakpoints.
+        supports_conditional_breakpoints: true,
         supports_hit_conditional_breakpoints: false,
         supports_evaluate_for_hovers: false,
         supports_step_back: false,
@@ -100,9 +102,12 @@ pub async fn handle_launch(adapter: &Adapter, request: &Request) -> Result<Value
 
 /// Handle the `setBreakpoints` DAP request.
 ///
-/// Sets line breakpoints in `source.path`. Per ADR-0059b §5, the
-/// `condition` field on each `SourceBreakpoint` is read but NOT
-/// honoured (wave-3+ wires it through to lldb).
+/// Sets line breakpoints in `source.path`. Per ADR-0059f §3.2, each
+/// `SourceBreakpoint`'s `condition` field is honoured: bps with a
+/// condition route through [`crate::lldb_driver::LldbDriver::set_conditional_breakpoint`]
+/// (issues `breakpoint set --condition '<expr>'`); unconditional bps
+/// use the wave-2 [`crate::lldb_driver::LldbDriver::set_breakpoint`]
+/// path unchanged.
 pub async fn handle_set_breakpoints(
     adapter: &Adapter,
     request: &Request,
@@ -119,7 +124,11 @@ pub async fn handle_set_breakpoints(
     let mut driver = driver_arc.lock().await;
     let mut breakpoints: Vec<Breakpoint> = Vec::with_capacity(args.breakpoints.len());
     for src_bp in args.breakpoints {
-        let bp = driver.set_breakpoint(file, src_bp.line).await?;
+        let bp = if let Some(cond) = src_bp.condition.as_deref() {
+            driver.set_conditional_breakpoint(file, src_bp.line, cond).await?
+        } else {
+            driver.set_breakpoint(file, src_bp.line).await?
+        };
         breakpoints.push(bp);
     }
     let response = SetBreakpointsResponse { breakpoints };
@@ -284,7 +293,8 @@ mod tests {
         let result = handle_initialize(&adapter, &request).await.unwrap();
         assert_eq!(result["supportsConfigurationDoneRequest"], false);
         assert_eq!(result["supportsTerminateRequest"], true);
-        assert_eq!(result["supportsConditionalBreakpoints"], false);
+        // wave-4 ADR-0059f §3.2 flips this to true.
+        assert_eq!(result["supportsConditionalBreakpoints"], true);
     }
 
     #[tokio::test]

@@ -4,7 +4,7 @@ expression: response.body
 snapshot_kind: text
 ---
 {
-  "supportsConditionalBreakpoints": false,
+  "supportsConditionalBreakpoints": true,
   "supportsConfigurationDoneRequest": false,
   "supportsEvaluateForHovers": false,
   "supportsFunctionBreakpoints": false,

@@ -185,10 +185,9 @@ async fn initialize_response_advertises_wave_2_capabilities_only() {
     let adapter = Adapter::with_driver(LldbDriver::test_stub(vec![]));
     let request = req(10, "initialize", Some(serde_json::json!({})));
     let caps = handle_initialize(&adapter, &request).await.unwrap();
-    // ADR-0059b §3.2 non-goals: conditional / hit-count / step-back
-    // / set-variable / restart-frame / evaluate-for-hovers must all be
-    // false in wave-2. supportsTerminateRequest is the lone true.
-    assert_eq!(caps["supportsConditionalBreakpoints"], false);
+    // wave-4 ADR-0059f §3.2 promoted supportsConditionalBreakpoints
+    // to true; remaining wave-2 non-goals stay false.
+    assert_eq!(caps["supportsConditionalBreakpoints"], true);
     assert_eq!(caps["supportsHitConditionalBreakpoints"], false);
     assert_eq!(caps["supportsStepBack"], false);
     assert_eq!(caps["supportsSetVariable"], false);
