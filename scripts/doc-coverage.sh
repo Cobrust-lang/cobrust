@@ -1600,9 +1600,9 @@ grep -q -F 'M-F.3.3' "docs/agent/modules/cli.md" \
 [[ -f "crates/cobrust-cli/tests/f64_e2e.rs" ]] \
     || fail "crates/cobrust-cli/tests/f64_e2e.rs missing (M-F.3.3 corpus)"
 # PRELUDE must include sqrt/pow stubs.
-grep -q 'fn sqrt(x: f64) -> f64' "crates/cobrust-cli/src/build.rs" \
+grep -q 'fn sqrt(x: f64) -> f64' "crates/cobrust-frontend/src/prelude.rs" \
     || fail "M-F.3.3 sqrt PRELUDE stub missing from build.rs"
-grep -q 'fn pow(base: f64, exp: f64) -> f64' "crates/cobrust-cli/src/build.rs" \
+grep -q 'fn pow(base: f64, exp: f64) -> f64' "crates/cobrust-frontend/src/prelude.rs" \
     || fail "M-F.3.3 pow PRELUDE stub missing from build.rs"
 
 echo "doc-coverage: M-F.3.3 f64 + as-cast surface checks passed"
@@ -1653,7 +1653,7 @@ mf35_prelude_stubs=(
     'fn clone(s: str) -> str'
 )
 for stub in "${mf35_prelude_stubs[@]}"; do
-    grep -q -F "$stub" "crates/cobrust-cli/src/build.rs" \
+    grep -q -F "$stub" "crates/cobrust-frontend/src/prelude.rs" \
         || fail "M-F.3.5 PRELUDE stub '${stub}' missing from build.rs"
 done
 # Intrinsic-rewrite Kind enum entries.
@@ -1757,7 +1757,7 @@ grep -q -F 'M-F.3.4' "docs/agent/adr/0050d-dict-design.md" \
 [[ -f "crates/cobrust-cli/tests/dict_e2e.rs" ]] \
     || fail "crates/cobrust-cli/tests/dict_e2e.rs missing (M-F.3.4 corpus)"
 # PRELUDE must include dict_is_empty stub.
-grep -q 'fn dict_is_empty(d: dict\[i64, i64\]) -> bool' "crates/cobrust-cli/src/build.rs" \
+grep -q 'fn dict_is_empty(d: dict\[i64, i64\]) -> bool' "crates/cobrust-frontend/src/prelude.rs" \
     || fail "M-F.3.4 dict_is_empty PRELUDE stub missing from build.rs"
 
 # Sub-sprint c+d (ADR-0050d) — indexmap backing + typed (K, V) shims +
@@ -1794,7 +1794,7 @@ grep -q -F 'indexmap::IndexMap' "docs/agent/modules/stdlib.md" \
 grep -q -F '__cobrust_dict_set_str_i64' "docs/agent/modules/stdlib.md" \
     || fail "M-F.3.4 sub-sprint d: '__cobrust_dict_set_str_i64' shim missing from docs/agent/modules/stdlib.md"
 # 4. PRELUDE must declare the polymorphic len(d) stub.
-grep -q 'fn len(d: dict\[i64, i64\]) -> i64' "crates/cobrust-cli/src/build.rs" \
+grep -q 'fn len(d: dict\[i64, i64\]) -> i64' "crates/cobrust-frontend/src/prelude.rs" \
     || fail "M-F.3.4 sub-sprint c/d: 'len(d)' polymorphic PRELUDE stub missing from build.rs"
 # 5. codegen must declare the typed shim signatures.
 grep -q -F '__cobrust_dict_set_i64_str' "crates/cobrust-codegen/src/cranelift_backend.rs" \
@@ -1853,7 +1853,7 @@ mf36_prelude_stubs=(
     'fn stderr_write(s: str) -> i64'
 )
 for stub in "${mf36_prelude_stubs[@]}"; do
-    grep -q -F "$stub" "crates/cobrust-cli/src/build.rs" \
+    grep -q -F "$stub" "crates/cobrust-frontend/src/prelude.rs" \
         || fail "M-F.3.6 PRELUDE stub '${stub}' missing from build.rs"
 done
 # Intrinsic-rewrite Kind enum entries.
