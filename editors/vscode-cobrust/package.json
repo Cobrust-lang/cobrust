@@ -1,0 +1,100 @@
+{
+  "name": "cobrust",
+  "displayName": "Cobrust",
+  "description": "Syntax highlighting + language server for the Cobrust language (Rust-implemented Python successor)",
+  "version": "0.1.0",
+  "publisher": "cobrust-lang",
+  "license": "Apache-2.0 OR MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Linters"
+  ],
+  "keywords": [
+    "cobrust",
+    "python",
+    "rust",
+    "lsp",
+    "language-server"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cobrust-lang/cobrust.git",
+    "directory": "editors/vscode-cobrust"
+  },
+  "homepage": "https://github.com/Cobrust-lang/cobrust#readme",
+  "bugs": {
+    "url": "https://github.com/Cobrust-lang/cobrust/issues"
+  },
+  "activationEvents": [
+    "onLanguage:cobrust"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "cobrust",
+        "aliases": [
+          "Cobrust",
+          "cobrust"
+        ],
+        "extensions": [
+          ".cb"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cobrust",
+        "scopeName": "source.cobrust",
+        "path": "./syntaxes/cobrust.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "cobrust",
+        "path": "./snippets/cobrust.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Cobrust",
+      "properties": {
+        "cobrust.lspPath": {
+          "type": "string",
+          "default": "cobrust-lsp",
+          "description": "Path to the cobrust-lsp binary. Defaults to 'cobrust-lsp' (resolved on $PATH)."
+        },
+        "cobrust.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VSCode and the Cobrust language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^2.20.0",
+    "typescript": "^5.0.0"
+  }
+}

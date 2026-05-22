@@ -1,0 +1,109 @@
+{
+    "Function declaration": {
+        "prefix": "fn",
+        "body": [
+            "fn ${1:name}(${2:args}) -> ${3:None}:",
+            "    ${0:pass}"
+        ],
+        "description": "Top-level function with return type annotation"
+    },
+    "If / elif / else": {
+        "prefix": "if",
+        "body": [
+            "if ${1:cond}:",
+            "    ${2:pass}",
+            "elif ${3:cond2}:",
+            "    ${4:pass}",
+            "else:",
+            "    ${0:pass}"
+        ],
+        "description": "if / elif / else chain"
+    },
+    "For loop": {
+        "prefix": "for",
+        "body": [
+            "for ${1:item} in ${2:iter}:",
+            "    ${0:pass}"
+        ],
+        "description": "for loop over iterable"
+    },
+    "While loop": {
+        "prefix": "while",
+        "body": [
+            "while ${1:cond}:",
+            "    ${0:pass}"
+        ],
+        "description": "while loop"
+    },
+    "Class declaration": {
+        "prefix": "class",
+        "body": [
+            "class ${1:Name}:",
+            "    fn __init__(self, ${2:args}) -> None:",
+            "        self.${3:field} = ${4:value}",
+            "",
+            "    fn ${5:method}(self) -> ${6:None}:",
+            "        ${0:pass}"
+        ],
+        "description": "Class with __init__ + a method"
+    },
+    "Struct declaration": {
+        "prefix": "struct",
+        "body": [
+            "struct ${1:Name}:",
+            "    ${2:field}: ${3:i64}",
+            "    ${0}"
+        ],
+        "description": "Plain struct (no methods)"
+    },
+    "Match expression": {
+        "prefix": "match",
+        "body": [
+            "match ${1:scrutinee}:",
+            "    case ${2:pattern}:",
+            "        ${3:pass}",
+            "    case _:",
+            "        ${0:pass}"
+        ],
+        "description": "Structural pattern match"
+    },
+    "Result match (Ok / Err)": {
+        "prefix": "matchres",
+        "body": [
+            "match ${1:result}:",
+            "    case Ok(${2:value}):",
+            "        ${3:pass}",
+            "    case Err(${4:err}):",
+            "        ${0:pass}"
+        ],
+        "description": "Result<T, E> destructuring"
+    },
+    "Option match (Some / None)": {
+        "prefix": "matchopt",
+        "body": [
+            "match ${1:option}:",
+            "    case Some(${2:value}):",
+            "        ${3:pass}",
+            "    case None:",
+            "        ${0:pass}"
+        ],
+        "description": "Option<T> destructuring"
+    },
+    "py_compat decorator": {
+        "prefix": "@py",
+        "body": [
+            "@py_compat(${1|strict,semantic,numerical,none|})",
+            "fn ${2:name}(${3:args}) -> ${4:None}:",
+            "    ${0:pass}"
+        ],
+        "description": "Translation-tier annotated function (ADR-0037)"
+    },
+    "Main entrypoint": {
+        "prefix": "main",
+        "body": [
+            "fn main() -> None:",
+            "    ${0:pass}"
+        ],
+        "description": "Program entrypoint"
+    }
+}
