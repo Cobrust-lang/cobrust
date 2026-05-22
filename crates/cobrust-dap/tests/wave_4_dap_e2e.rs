@@ -11,6 +11,8 @@
 //! existing `lldb_driver_integration_e2e.rs` covers the real-lldb path
 //! when `lldb-18` is on PATH (ignored on Mac by default).
 
+#![allow(clippy::unwrap_used, clippy::missing_panics_doc)]
+
 use cobrust_dap::{Adapter, LldbDriver, Request};
 
 fn req(seq: i64, command: &str, args: serde_json::Value) -> Request {
@@ -68,11 +70,7 @@ async fn evaluate_bool_test_expression() {
         "expression --".to_string(),
         "(bool) $0 = true\n".to_string(),
     )]));
-    let request = req(
-        3,
-        "evaluate",
-        serde_json::json!({"expression": "i > 10"}),
-    );
+    let request = req(3, "evaluate", serde_json::json!({"expression": "i > 10"}));
     let response = adapter.dispatch(&request).await;
     assert!(response.success);
     let body = response.body.unwrap();
@@ -87,14 +85,9 @@ async fn evaluate_lookup_undefined_returns_untyped_fallthrough() {
     // pattern match) and returns the raw stdout as result text.
     let adapter = Adapter::with_driver(LldbDriver::test_stub(vec![(
         "expression --".to_string(),
-        "error: <user expression 0>:1:1: use of undeclared identifier 'qqq'\n"
-            .to_string(),
+        "error: <user expression 0>:1:1: use of undeclared identifier 'qqq'\n".to_string(),
     )]));
-    let request = req(
-        4,
-        "evaluate",
-        serde_json::json!({"expression": "qqq"}),
-    );
+    let request = req(4, "evaluate", serde_json::json!({"expression": "qqq"}));
     let response = adapter.dispatch(&request).await;
     assert!(response.success); // error text surfaces via result, not DAP failure
     let body = response.body.unwrap();
@@ -294,11 +287,7 @@ async fn multi_thread_id_out_of_bounds_returns_empty_frames() {
     // No canned response for `thread select 999` / `thread backtrace`
     // → stub returns empty stdout → parse_stack_trace returns empty.
     let adapter = Adapter::with_driver(LldbDriver::test_stub(vec![]));
-    let request = req(
-        23,
-        "stackTrace",
-        serde_json::json!({"threadId": 999}),
-    );
+    let request = req(23, "stackTrace", serde_json::json!({"threadId": 999}));
     let response = adapter.dispatch(&request).await;
     assert!(response.success);
     let body = response.body.unwrap();

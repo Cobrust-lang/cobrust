@@ -418,10 +418,7 @@ impl LldbDriver {
     /// release builds), the bp is returned `verified: false` with the
     /// raw lldb stdout in the message field. Honest-scope-skip per
     /// ADR-0059f §3.4 result_err caveat.
-    pub async fn set_exception_breakpoint(
-        &mut self,
-        filter: &str,
-    ) -> Result<Breakpoint, DapError> {
+    pub async fn set_exception_breakpoint(&mut self, filter: &str) -> Result<Breakpoint, DapError> {
         let symbol = match filter {
             "panic" => "__cobrust_panic",
             "result_err" => "cobrust_result_err_construct",
@@ -669,8 +666,7 @@ fn parse_threads(stdout: &str) -> Vec<crate::dap_types::ThreadInfo> {
             let name = name_re
                 .captures(line)
                 .and_then(|caps| caps.get(1))
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_else(|| format!("thread-{id}"));
+                .map_or_else(|| format!("thread-{id}"), |m| m.as_str().to_string());
             threads.push(crate::dap_types::ThreadInfo { id, name });
         }
     }

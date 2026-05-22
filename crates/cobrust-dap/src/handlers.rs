@@ -15,10 +15,10 @@ use thiserror::Error;
 use crate::Adapter;
 use crate::dap_types::{
     Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments,
-    ExceptionBreakpointsFilter, InitializeResponse, LaunchArguments, NextArguments,
-    PauseArguments, Request, SetBreakpointsArguments, SetBreakpointsResponse,
-    SetExceptionBreakpointsArguments, SetExceptionBreakpointsResponse, StackTraceArguments,
-    StackTraceResponse, VariablesArguments, VariablesResponse,
+    ExceptionBreakpointsFilter, InitializeResponse, LaunchArguments, NextArguments, PauseArguments,
+    Request, SetBreakpointsArguments, SetBreakpointsResponse, SetExceptionBreakpointsArguments,
+    SetExceptionBreakpointsResponse, StackTraceArguments, StackTraceResponse, VariablesArguments,
+    VariablesResponse,
 };
 use crate::lldb_driver::DapError;
 
@@ -145,7 +145,9 @@ pub async fn handle_set_breakpoints(
     let mut breakpoints: Vec<Breakpoint> = Vec::with_capacity(args.breakpoints.len());
     for src_bp in args.breakpoints {
         let bp = if let Some(cond) = src_bp.condition.as_deref() {
-            driver.set_conditional_breakpoint(file, src_bp.line, cond).await?
+            driver
+                .set_conditional_breakpoint(file, src_bp.line, cond)
+                .await?
         } else {
             driver.set_breakpoint(file, src_bp.line).await?
         };

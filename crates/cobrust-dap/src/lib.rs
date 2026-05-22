@@ -47,11 +47,10 @@ use tokio::sync::Mutex;
 pub use dap_types::{
     Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments, EvaluateArguments,
     EvaluateResponse, ExceptionBreakpointsFilter, InitializeArguments, InitializeResponse,
-    LaunchArguments, NextArguments, PauseArguments, Request, Response,
-    SetBreakpointsArguments, SetBreakpointsResponse, SetExceptionBreakpointsArguments,
-    SetExceptionBreakpointsResponse, Source, SourceBreakpoint, StackFrame, StackTraceArguments,
-    StackTraceResponse, ThreadInfo, ThreadsResponse, Variable, VariablesArguments,
-    VariablesResponse,
+    LaunchArguments, NextArguments, PauseArguments, Request, Response, SetBreakpointsArguments,
+    SetBreakpointsResponse, SetExceptionBreakpointsArguments, SetExceptionBreakpointsResponse,
+    Source, SourceBreakpoint, StackFrame, StackTraceArguments, StackTraceResponse, ThreadInfo,
+    ThreadsResponse, Variable, VariablesArguments, VariablesResponse,
 };
 pub use handlers::DapHandlers;
 pub use lldb_driver::{LldbDriver, StopReason};
