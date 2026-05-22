@@ -377,8 +377,12 @@ impl LldbDriver {
     ///
     /// Issues `thread list` to lldb, parses each line of the form
     /// `  thread #N: tid = 0x..., 0x..., name = '<name>'`, returns
-    /// the list of `(id, name)` pairs.
+    /// the list of `(id, name)` pairs. NotSpawned drivers return an
+    /// empty vec so callers can fall back to single-thread shim.
     pub async fn list_threads(&mut self) -> Result<Vec<crate::dap_types::ThreadInfo>, DapError> {
+        if matches!(self.kind, DriverKind::NotSpawned) {
+            return Ok(Vec::new());
+        }
         let stdout = self.send_command("thread list").await?;
         Ok(parse_threads(&stdout))
     }
@@ -387,10 +391,15 @@ impl LldbDriver {
     ///
     /// Selects the thread, then issues `thread backtrace` and parses
     /// frames. Same parser as the single-thread `stack_trace` path.
+    /// NotSpawned drivers return an empty frame list (graceful
+    /// degradation; callers see `totalFrames: 0`).
     pub async fn stack_trace_for_thread(
         &mut self,
         thread_id: i64,
     ) -> Result<Vec<StackFrame>, DapError> {
+        if matches!(self.kind, DriverKind::NotSpawned) {
+            return Ok(Vec::new());
+        }
         let _ = self
             .send_command(&format!("thread select {thread_id}"))
             .await?;

@@ -189,16 +189,19 @@ pub async fn handle_pause(adapter: &Adapter, request: &Request) -> Result<Value,
 
 /// Handle the `stackTrace` DAP request.
 ///
-/// Returns the current call stack. Per ADR-0059b §5 single-thread
-/// non-goal, the `threadId` argument is ignored.
+/// Per ADR-0059f §3.3 multi-thread: `args.thread_id` selects the
+/// thread whose stack is returned. Backward-compat: single-thread
+/// programs still receive their main-thread backtrace. The
+/// `startFrame` + `levels` slicing per DAP spec is honoured client-
+/// side; wave-4 returns all frames.
 pub async fn handle_stack_trace(
     adapter: &Adapter,
     request: &Request,
 ) -> Result<Value, DapHandlerError> {
-    let _args: StackTraceArguments = parse_args(request)?;
+    let args: StackTraceArguments = parse_args(request)?;
     let driver_arc = adapter.driver();
     let mut driver = driver_arc.lock().await;
-    let frames = driver.stack_trace().await?;
+    let frames = driver.stack_trace_for_thread(args.thread_id).await?;
     let total = frames.len() as u32;
     let response = StackTraceResponse {
         stack_frames: frames,
@@ -250,21 +253,38 @@ pub async fn handle_disconnect(
 }
 
 // =====================================================================
-// Threads (stub — single-thread per ADR-0059b §5)
+// Threads (wave-4 ADR-0059f §3.3 — full multi-thread)
 // =====================================================================
 
-/// Handle the `threads` DAP request. Wave-2 single-thread non-goal:
-/// returns one hardcoded `{ id: 1, name: "main" }`.
+/// Handle the `threads` DAP request.
+///
+/// Per ADR-0059f §3.3, queries lldb's `thread list` and returns all
+/// OS threads. Single-thread programs still surface
+/// `[{id:1, name:"main"}]` for backward-compat with wave-2 clients.
+///
+/// Stub-driver backstop: when no canned response matches the
+/// `thread list` command, the parser returns an empty vec; the
+/// handler then synthesises the wave-2 single-thread fallback so
+/// tests that don't inject a thread-list stub continue to pass.
 pub async fn handle_threads(
-    _adapter: &Adapter,
+    adapter: &Adapter,
     _request: &Request,
 ) -> Result<Value, DapHandlerError> {
-    Ok(serde_json::json!({
-        "threads": [{
-            "id": 1,
-            "name": "main",
-        }],
-    }))
+    let driver_arc = adapter.driver();
+    let mut driver = driver_arc.lock().await;
+    let threads = driver.list_threads().await?;
+    let threads = if threads.is_empty() {
+        // Backward-compat fallback: single-thread programs / empty
+        // stub returns `[{id:1, name:"main"}]`.
+        vec![crate::dap_types::ThreadInfo {
+            id: 1,
+            name: "main".to_string(),
+        }]
+    } else {
+        threads
+    };
+    let response = crate::dap_types::ThreadsResponse { threads };
+    Ok(serde_json::to_value(response)?)
 }
 
 #[cfg(test)]
