@@ -217,7 +217,7 @@ printf "4\n2\n7\n11\n15\n9\n" | cargo run -p cobrust-cli -- run examples/leetcod
 - ✅ **AI 翻译流水线** — 在 stateless + stateful tomli 函数上生产级验证通过(真实 LLM,12/12 + 14/14 严格确定性 5 次跑)。dateutil / msgpack:部分。
 - ✅ **硬件分级 Tier 1+2+3 全部交付** — Tier 1 运行时调度(ADR-0058b);Tier 2 `--target-cpu`(`5186c27` / `a4c2532`);Tier 3 `cobrust install <pkg>` 端到端可用:CPU 检测 + 轮子选择 + SHA256 验证 + 解包。每次 release 发布 9 种预编译轮子变体(linux-gnu v1/v3/v4 + linux-musl v1/v3 + linux-aarch64 neon/sve + darwin-arm64 m1/m2)。
 - 🚧 **工具链** — REPL JIT 骨架已落地(Phase I);完整交互式 REPL 循环待完成。LSP v1.3 功能完整:13 个 handler(publishDiagnostics + didChange + hover + completion + rename + goto-def + codeAction + inlay hints + semantic tokens + call hierarchy + delta 同步 + resolve + 跨文件);wave-6+ 提案中。DAP v1.2 功能完整:17 个 handler;wave-6+ 提案中。无 WASM target。
-- 🚧 **LLVM backend** — Phase K 关闭(LLVM IR + DWARF + JIT/AOT 收敛 + musl tier-1);stdlib I/O hookup wave-2 已在 v0.5.1 落地(ADR-0058f — `print` 系列 + str-buffer 子例程 + extern-name 派发);wave-3 surfaces(input / list / dict / iter / fmt / math / parse / str 方法 / LLM router)仍为 wave-1 stub,见 ADR-0058f §7 Open Questions;0058e AOT 统一 + 50MB+ 生产基准待完成。F45 finding 落实了 F35-sibling claim-vs-landed drift 模式,该模式掩盖了 v0.5.0 的严重缺陷(`print("hi")` LLVM AOT 输出空 stdout)。
+- 🚧 **LLVM backend** — **默认后端 = Cranelift = 全 stdlib 对等**(`cobrust build foo.cb` 不加 flag;release 发布轮子不开启 `--features llvm`)。LLVM 为 `--features llvm` **实验性** 可选路径。Phase K 关闭(LLVM IR + DWARF + JIT/AOT 收敛 + musl tier-1);stdlib I/O hookup wave-2 已在 v0.5.1 落地(ADR-0058f — `print` 系列 + str-buffer 子例程;8 个 `stdlib_io_*` 测试全部通过);wave-3(input / argv / list / dict / set / tuple / panic / fmt / iter / math / parse_int / str 方法 / LLM router)跟踪于 [ADR-0058g](docs/agent/adr/0058g-llvm-backend-wave3-stdlib-hookup-roadmap.md) + [F45a](docs/agent/findings/f45a-llvm-backend-wave3-scope-systemic.md)。**终端用户 `cobrust install` 路径使用 Cranelift — 不受 wave-3 stub 影响。**
 - 🚧 **Phase M 后续** — BinOp-IntN 拓宽 + 动态索引 Array(`#![forbid(unsafe_code)]` 阻塞 GEP)+ empty-dict K-flow。
 
 **这意味着什么**:Cobrust v0.5.0 — LSP v1.3 功能完整(13 个 handler)+ DAP v1.2 功能完整(17 个 handler)。LLM agents 写 `.cb` 文件可获得完整编辑器智能:诊断 + hover + completion + rename + goto-def + codeAction + inlay hints + semantic tokens + call hierarchy + delta 同步,在任意支持 LSP 的编辑器中可用。调试功能生产级完整:logpoints + 数据断点 + 多线程 + 条件断点 + stepIn 全部落地。O3 二进制比 O0 **小 70.7%**(实测生产数据,ADR-0023 §A3 已解决)。
@@ -255,6 +255,27 @@ printf "4\n2\n7\n11\n15\n9\n" | cargo run -p cobrust-cli -- run examples/leetcod
 | `examples/json_pretty.cb` | 美化 JSON |
 | `examples/notebook/` | 多模块包 |
 | `examples/notebook-config/` | 兄弟包(path dependency) |
+
+---
+
+## 编辑器集成
+
+VSCode / Cursor / VSCodium 扩展 v0.1.0 scaffold 位于
+[`editors/vscode-cobrust/`](editors/vscode-cobrust/)(ADR-0067)。包装
+`cobrust-lsp` v1.3(13 个 handler)+ 内嵌 TextMate 语法。
+
+```bash
+# 从源码 build(需要 Node 20+):
+cd editors/vscode-cobrust
+npm install && npx vsce package
+code   --install-extension ./cobrust-0.1.0.vsix   # VSCode
+cursor --install-extension ./cobrust-0.1.0.vsix   # Cursor
+codium --install-extension ./cobrust-0.1.0.vsix   # VSCodium
+```
+
+Marketplace + Open VSX 发布步骤见
+[`editors/vscode-cobrust/PUBLISHING.md`](editors/vscode-cobrust/PUBLISHING.md)
+(用户侧操作:需要 publisher 账号 + PAT)。
 
 ---
 

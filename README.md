@@ -225,7 +225,7 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
 - ✅ **AI translation pipeline** — production-validated on stateless + stateful tomli functions (real LLM, 12/12 + 14/14 strict deterministic over 5 runs). dateutil / msgpack: partial.
 - ✅ **Hardware tiering Tier 1+2+3 FULL SHIPPED** — Tier 1 runtime-dispatch (ADR-0058b); Tier 2 `--target-cpu` (`5186c27` / `a4c2532`); Tier 3 `cobrust install <pkg>` end-to-end works: CPU detect + wheel select + SHA256 verify + unpack. 9 prebuilt wheel variants per release (linux-gnu v1/v3/v4 + linux-musl v1/v3 + linux-aarch64 neon/sve + darwin-arm64 m1/m2).
 - 🚧 **Tooling** — REPL JIT scaffold landed (Phase I); full REPL interactive loop pending. LSP v1.3 feature complete: 13 handlers (publishDiagnostics + didChange + hover + completion + rename + goto-def + codeAction + inlay hints + semantic tokens + call hierarchy + delta sync + resolve + cross-file); wave-6+ proposed. DAP v1.2 feature complete: 17 handlers; wave-6+ proposed. No WASM target.
-- 🚧 **LLVM backend** — Phase K closed (LLVM IR + DWARF + JIT/AOT conv + musl tier-1); stdlib I/O hookup wave-2 LANDED in v0.5.1 (ADR-0058f — `print` system + str-buffer subroutines + extern-name dispatch); wave-3 surfaces (input / list / dict / iter / fmt / math / parse / str method / LLM router) remain wave-1 stubs per ADR-0058f §7 Open Questions; 0058e AOT unification + 50MB+ production bench pending. F45 finding ratified the F35-sibling claim-vs-landed drift that masked the v0.5.0 critical defect (`print("hi")` LLVM AOT emitted empty stdout).
+- 🚧 **LLVM backend** — **Default backend = Cranelift = full stdlib parity** (`cobrust build foo.cb` no flag; release wheels do NOT enable `--features llvm`). LLVM is `--features llvm` **experimental** opt-in only. Phase K closed (LLVM IR + DWARF + JIT/AOT conv + musl tier-1); stdlib I/O hookup wave-2 LANDED in v0.5.1 (ADR-0058f — `print` system + str-buffer subroutines; 8 `stdlib_io_*` fixtures PASS); wave-3 (input / argv / list / dict / set / tuple / panic / fmt / iter / math / parse_int / str methods / LLM router) tracked in [ADR-0058g](docs/agent/adr/0058g-llvm-backend-wave3-stdlib-hookup-roadmap.md) + [F45a](docs/agent/findings/f45a-llvm-backend-wave3-scope-systemic.md). **End-user `cobrust install` path uses Cranelift — not affected by wave-3 stubs.**
 - 🚧 **Phase M follow-ups** — BinOp-IntN widening + dynamic-index Array (`#![forbid(unsafe_code)]` blocks GEP) + empty-dict K-flow.
 
 **What this means**: Cobrust v0.5.0 — LSP v1.3 feature-complete (13 handlers) + DAP v1.2 feature-complete (17 handlers). LLM agents writing `.cb` get the full editor intelligence stack: diagnostics + hover + completion + rename + goto-def + codeAction + inlay hints + semantic tokens + call hierarchy + delta sync in any LSP-capable editor. Debugging is fully production-ready: logpoints + data breakpoints + multi-thread + conditional bp + stepIn all landed. O3 binary is **70.7% smaller** than O0 (empirical production measurement, ADR-0023 §A3 resolved).
@@ -263,6 +263,27 @@ Progressive examples in [`examples/`](examples/):
 | `examples/json_pretty.cb` | pretty-print JSON |
 | `examples/notebook/` | multi-module package |
 | `examples/notebook-config/` | sibling package (path dependency) |
+
+---
+
+## Editor integration
+
+VSCode / Cursor / VSCodium extension v0.1.0 scaffolded at
+[`editors/vscode-cobrust/`](editors/vscode-cobrust/) (ADR-0067). Wraps
+`cobrust-lsp` v1.3 (13 handlers) + bundles the TextMate grammar.
+
+```bash
+# Build from source (Node 20+ required):
+cd editors/vscode-cobrust
+npm install && npx vsce package
+code   --install-extension ./cobrust-0.1.0.vsix   # VSCode
+cursor --install-extension ./cobrust-0.1.0.vsix   # Cursor
+codium --install-extension ./cobrust-0.1.0.vsix   # VSCodium
+```
+
+Marketplace + Open VSX publish steps documented in
+[`editors/vscode-cobrust/PUBLISHING.md`](editors/vscode-cobrust/PUBLISHING.md)
+(user-side action: publisher account + PAT required).
 
 ---
 

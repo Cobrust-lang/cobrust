@@ -476,6 +476,26 @@ What remains wave-1 stub (compiles + no-ops at runtime) in the LLVM backend:
 
 These wave-3 surfaces use the **Cranelift backend** without issue today (default `cargo build` route). If your program uses any of them and you opt into `--features llvm`, the program builds but emits no observable side effects from those calls. Track wave-3 closure in ADR-0058f §7 + F45 finding.
 
+## 9l. VSCode / Cursor extension v0.1.0 staged (ADR-0067)
+
+Editor integration scaffold at `editors/vscode-cobrust/` (Node TS, not a Rust workspace member). Wraps `cobrust-lsp` v1.3 (§9c) via `vscode-languageclient/node` stdio transport; bundles TextMate grammar + Python-like indent rules + 11 snippets (`fn` / `if` / `for` / `while` / `class` / `struct` / `match` / `matchres` / `matchopt` / `@py` / `main`).
+
+Build + install (Node 20+):
+
+```bash
+cd editors/vscode-cobrust
+npm install && npx vsce package
+code   --install-extension ./cobrust-0.1.0.vsix   # VSCode
+cursor --install-extension ./cobrust-0.1.0.vsix   # Cursor (VSCode-API compatible)
+codium --install-extension ./cobrust-0.1.0.vsix   # VSCodium
+```
+
+Settings: `cobrust.lspPath` (default `cobrust-lsp` on `$PATH`) + `cobrust.trace.server` (`off` / `messages` / `verbose`).
+
+Marketplace publish is **user-side action** (Azure DevOps PAT + Open VSX token required); steps documented in `editors/vscode-cobrust/PUBLISHING.md`. Do NOT claim "marketplace LIVE" until user runs `vsce publish` and `ovsx publish` and the listings resolve.
+
+OOS for v0.1.0: DAP launch.json contribution (Phase L wave-6 follow-up), bundled binary (rejected per ADR-0067 §Options), REPL embed.
+
 ## 10. When in doubt — read the canonical example programs
 
 `examples/leetcode-stress/` is the production-validated stress corpus: **LC-100 真 100/100** (leetcode_corpus_e2e 12/0 + stress 100/0 as of 2026-05-19). When unsure of the idiomatic form, grep there first.
