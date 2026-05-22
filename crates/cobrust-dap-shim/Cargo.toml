@@ -1,0 +1,22 @@
+[package]
+name = "cobrust-dap-shim"
+version = "0.6.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Transitional `cobrust-dap` standalone binary (ADR-0068 §4.2) — delegates to cobrust-dap::run(). Deleted at v0.7.0."
+keywords = ["cobrust", "dap", "shim", "transitional"]
+categories = ["development-tools::debugging"]
+
+[[bin]]
+name = "cobrust-dap"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+cobrust-dap = { path = "../cobrust-dap", version = "=0.5.1" }

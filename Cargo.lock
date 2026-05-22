@@ -436,6 +436,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cobrust-dap-shim"
+version = "0.6.0"
+dependencies = [
+ "cobrust-dap",
+]
+
+[[package]]
 name = "cobrust-dateutil"
 version = "0.5.2"
 dependencies = [
@@ -516,6 +523,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "cobrust-lsp-shim"
+version = "0.6.0"
+dependencies = [
+ "cobrust-lsp",
 ]
 
 [[package]]

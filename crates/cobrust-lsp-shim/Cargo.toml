@@ -1,0 +1,22 @@
+[package]
+name = "cobrust-lsp-shim"
+version = "0.6.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Transitional `cobrust-lsp` standalone binary (ADR-0068 §4.2) — delegates to cobrust-lsp::run(). Deleted at v0.7.0."
+keywords = ["cobrust", "lsp", "shim", "transitional"]
+categories = ["development-tools"]
+
+[[bin]]
+name = "cobrust-lsp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+cobrust-lsp = { path = "../cobrust-lsp", version = "=0.5.1" }

@@ -21,7 +21,9 @@ members = [
     "crates/cobrust-types-parity",
     "crates/cobrust-types-cb",
     "crates/cobrust-lsp",
+    "crates/cobrust-lsp-shim",
     "crates/cobrust-dap",
+    "crates/cobrust-dap-shim",
     "crates/cobrust-registry",
 ]
 
