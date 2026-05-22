@@ -2,7 +2,7 @@
 name: f46
 status: ratified
 family: F46 (packaging discipline) — F45a sibling + F35-sibling (claim drift) + F37 (silent rot) + F44 (CI green != working)
-last_verified_commit: TBD
+last_verified_commit: <will-be-set-after-commit>
 date: 2026-05-22
 ---
 

@@ -269,8 +269,9 @@ when the following gates all pass:
 - [ ] `release.yml` builds all three packages (`cobrust-cli` +
       `cobrust-lsp-shim` + `cobrust-dap-shim`); wheel tarball schema
       unchanged from v0.5.2 (drop-in compatible).
-- [ ] All three smoke tests (`lsp_subcommand_smoke.rs`,
+- [x] All three smoke tests (`lsp_subcommand_smoke.rs`,
       `dap_subcommand_smoke.rs`, `shim_smoke.rs` × 2) PASS in CI.
+      (created + verified locally in commit 12b1507)
 - [ ] ADR-0067 §Editor-prereq updated to "compiler v0.6.0+ uses
       `cobrust lsp` subcommand; v0.5.x uses `cobrust-lsp` standalone".
 - [ ] ADR-0068 frontmatter `last_verified_commit:` set to impl HEAD
