@@ -178,8 +178,11 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           # ADR-0065 §3.2 naming: cobrust-<version>-<triple>-<cpu_level>.tar.gz
           ARCHIVE="cobrust-v${VERSION}-${{ matrix.asset_suffix }}.tar.gz"
-          BINARY="target/${{ matrix.target }}/release/cobrust"
-          tar czf "${ARCHIVE}" -C "$(dirname ${BINARY})" "$(basename ${BINARY})"
+          RELEASE_DIR="target/${{ matrix.target }}/release"
+          for bin in cobrust cobrust-lsp cobrust-dap; do
+            cp "${RELEASE_DIR}/${bin}" .
+          done
+          tar czf "${ARCHIVE}" cobrust cobrust-lsp cobrust-dap
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Upload artifact
