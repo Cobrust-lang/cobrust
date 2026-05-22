@@ -432,6 +432,123 @@ impl LldbDriver {
         Ok(bp)
     }
 
+    /// `set_watchpoint` wrapper for ADR-0059g §3.2 data breakpoints.
+    ///
+    /// Issues `watchpoint set variable -w <access> <var>` to lldb. The
+    /// `access` arg maps from DAP `accessType`:
+    /// - `Some("read")` → `read`
+    /// - `Some("write")` | `None` → `write` (DAP-spec default)
+    /// - `Some("readWrite")` → `read_write`
+    /// - other → wave-5 honest-cite: emits `verified: false` with the
+    ///   unknown access value in the message field.
+    ///
+    /// Wave-5 honest scope: stack-resident value-semantic locals only.
+    /// If lldb fails to set (e.g. variable not found in scope), the
+    /// wrapper surfaces `verified: false` with the raw stdout instead
+    /// of erroring at the DAP layer.
+    pub async fn set_watchpoint(
+        &mut self,
+        variable: &str,
+        access: Option<&str>,
+    ) -> Result<Breakpoint, DapError> {
+        let access_arg = match access {
+            None | Some("write") => "write",
+            Some("read") => "read",
+            Some("readWrite") => "read_write",
+            Some(other) => {
+                tracing::warn!("unknown watchpoint access type '{other}'");
+                return Ok(Breakpoint {
+                    id: None,
+                    verified: false,
+                    message: Some(format!("unknown watchpoint access '{other}'")),
+                    source: None,
+                    line: None,
+                    column: None,
+                });
+            }
+        };
+
+        if let DriverKind::Stub { breakpoint_seq, .. } = &mut self.kind {
+            let id = *breakpoint_seq;
+            *breakpoint_seq += 1;
+            return Ok(Breakpoint {
+                id: Some(id),
+                verified: true,
+                message: Some(format!("watchpoint: {variable} ({access_arg})")),
+                source: None,
+                line: None,
+                column: None,
+            });
+        }
+
+        let stdout = self
+            .send_command(&format!(
+                "watchpoint set variable -w {access_arg} {}",
+                lldb_quote(variable)
+            ))
+            .await?;
+        // lldb prints "Watchpoint created: ..." on success or
+        // "error: ..." on failure.
+        let verified = stdout.contains("Watchpoint created");
+        let id_re = Regex::new(r"Watchpoint\s+(\d+)").expect("valid regex");
+        let id = id_re
+            .captures(&stdout)
+            .and_then(|caps| caps.get(1))
+            .and_then(|m| m.as_str().parse::<i64>().ok());
+        Ok(Breakpoint {
+            id,
+            verified,
+            message: Some(if verified {
+                format!("watchpoint: {variable} ({access_arg})")
+            } else {
+                stdout.lines().next().unwrap_or("").to_string()
+            }),
+            source: None,
+            line: None,
+            column: None,
+        })
+    }
+
+    /// `step_in` wrapper for ADR-0059g §3.3 step-into-source.
+    ///
+    /// Issues `thread select N` (if `thread_id` given) then
+    /// `thread step-in` to lldb. Cobrust-source preference: if the
+    /// resulting frame lands outside a `.cb` source (e.g. a stdlib
+    /// runtime helper compiled from Rust), the wrapper emits a
+    /// follow-up `thread step-out` so the user lands at the
+    /// **Cobrust-source bridge** instead of inside the helper.
+    ///
+    /// Stub-driver fast-path: returns `StopReason::Step` directly.
+    pub async fn step_in(&mut self, thread_id: i64) -> Result<StopReason, DapError> {
+        if matches!(self.kind, DriverKind::NotSpawned) {
+            return Ok(StopReason::Step);
+        }
+        if matches!(self.kind, DriverKind::Stub { .. }) {
+            // Stub fast-path: route through send_command so canned
+            // responses can shape the StopReason (e.g. tests
+            // simulating non-cb landing trigger the step-out path).
+            let stdout = self.send_command("thread step-in").await?;
+            return Ok(parse_stop_reason(&stdout));
+        }
+        let _ = self
+            .send_command(&format!("thread select {thread_id}"))
+            .await?;
+        let step_stdout = self.send_command("thread step-in").await?;
+        // Check whether the resulting frame's source file ends in
+        // `.cb`. The `frame info` lldb command reports the current
+        // source line.
+        let frame_info = self.send_command("frame info").await?;
+        if !frame_info.contains(".cb") && frame_info.contains(" at ") {
+            // Step-out so the user lands at the Cobrust-source bridge.
+            let out_stdout = self.send_command("thread step-out").await?;
+            tracing::info!(
+                "step-in landed outside .cb source; stepped out to bridge ({})",
+                out_stdout.lines().next().unwrap_or("")
+            );
+        }
+        Ok(parse_stop_reason(&step_stdout))
+    }
+
     /// `list_threads` wrapper for ADR-0059f §3.3 multi-thread.
     ///
     /// Issues `thread list` to lldb, parses each line of the form

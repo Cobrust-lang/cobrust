@@ -440,6 +440,80 @@ pub struct ExceptionBreakpointsFilter {
     pub default: bool,
 }
 
+// ====================================================================
+// SetDataBreakpoints (wave-5 ADR-0059g §3.2)
+// ====================================================================
+
+/// DAP `setDataBreakpoints` arguments per ADR-0059g §3.2.
+///
+/// Each `DataBreakpoint` records the variable to watch + the access
+/// type. lldb's `watchpoint set variable -w <access> <var>` is the
+/// underlying wire surface. Wave-5 honest scope: stack-resident
+/// value-semantic locals only.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDataBreakpointsArguments {
+    /// The list of data breakpoints to set. Replaces any previously
+    /// set data breakpoints (DAP-spec semantics).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub breakpoints: Vec<DataBreakpoint>,
+}
+
+/// Per-watchpoint DAP data breakpoint shape per ADR-0059g §3.2.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataBreakpoint {
+    /// The data id identifying the variable to watch. Wave-5
+    /// interprets this as a variable name; lldb resolves the name
+    /// against the currently selected frame.
+    pub data_id: String,
+    /// Access type: `"read"` | `"write"` | `"readWrite"`. Wave-5
+    /// maps these to lldb's `-w read|write|read_write`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_type: Option<String>,
+    /// Optional condition expression. Wave-5 ignores per ADR-0059g §4
+    /// (condition on watchpoint deferred).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    /// Optional hit condition. Wave-5 ignores per ADR-0059g §4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hit_condition: Option<String>,
+}
+
+/// DAP `setDataBreakpoints` response body.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDataBreakpointsResponse {
+    /// Per-watchpoint `Breakpoint` records mirroring the input order.
+    pub breakpoints: Vec<Breakpoint>,
+}
+
+// ====================================================================
+// StepIn (wave-5 ADR-0059g §3.3)
+// ====================================================================
+
+/// DAP `stepIn` arguments per ADR-0059g §3.3.
+///
+/// Wave-5 honours `thread_id`; `target_id` (multi-call disambiguation)
+/// is parsed but ignored (out-of-scope per §4 non-goal).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepInArguments {
+    /// The thread for which to resume execution one step into a call.
+    pub thread_id: i64,
+    /// Optional target id (multi-call disambiguation). Wave-5 ignores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<i64>,
+    /// Optional `single_thread` discriminator. Wave-5 ignores.
+    #[serde(default)]
+    pub single_thread: bool,
+    /// Optional granularity (`"statement" | "line" | "instruction"`).
+    /// Wave-5 honest scope: source-level only — `instruction` is
+    /// silently coerced to statement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granularity: Option<String>,
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
 mod tests {

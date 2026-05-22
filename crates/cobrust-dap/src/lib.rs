@@ -45,12 +45,14 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
 pub use dap_types::{
-    Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments, EvaluateArguments,
-    EvaluateResponse, ExceptionBreakpointsFilter, InitializeArguments, InitializeResponse,
-    LaunchArguments, NextArguments, PauseArguments, Request, Response, SetBreakpointsArguments,
-    SetBreakpointsResponse, SetExceptionBreakpointsArguments, SetExceptionBreakpointsResponse,
-    Source, SourceBreakpoint, StackFrame, StackTraceArguments, StackTraceResponse, ThreadInfo,
-    ThreadsResponse, Variable, VariablesArguments, VariablesResponse,
+    Breakpoint, ContinueArguments, ContinueResponse, DataBreakpoint, DisconnectArguments,
+    EvaluateArguments, EvaluateResponse, ExceptionBreakpointsFilter, InitializeArguments,
+    InitializeResponse, LaunchArguments, NextArguments, PauseArguments, Request, Response,
+    SetBreakpointsArguments, SetBreakpointsResponse, SetDataBreakpointsArguments,
+    SetDataBreakpointsResponse, SetExceptionBreakpointsArguments,
+    SetExceptionBreakpointsResponse, Source, SourceBreakpoint, StackFrame, StackTraceArguments,
+    StackTraceResponse, StepInArguments, ThreadInfo, ThreadsResponse, Variable,
+    VariablesArguments, VariablesResponse,
 };
 pub use handlers::DapHandlers;
 pub use lldb_driver::{LldbDriver, StopReason};
@@ -211,6 +213,8 @@ impl Adapter {
             "setExceptionBreakpoints" => {
                 handlers::handle_set_exception_breakpoints(self, request).await
             }
+            "setDataBreakpoints" => handlers::handle_set_data_breakpoints(self, request).await,
+            "stepIn" => handlers::handle_step_in(self, request).await,
             other => {
                 tracing::info!("unsupported DAP command (wave-2 scope): {other}");
                 Ok(serde_json::json!({
