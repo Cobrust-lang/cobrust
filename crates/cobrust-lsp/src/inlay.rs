@@ -33,8 +33,8 @@ use cobrust_frontend::span::{FileId, Span};
 use cobrust_types::TypeCheckCtx;
 use serde_json::json;
 use tower_lsp::lsp_types::{
-    InlayHint, InlayHintKind, InlayHintLabel, InlayHintTooltip, MarkupContent, MarkupKind, Position,
-    Range,
+    InlayHint, InlayHintKind, InlayHintLabel, InlayHintTooltip, MarkupContent, MarkupKind,
+    Position, Range,
 };
 
 use crate::span_convert::LineMap;
@@ -376,10 +376,10 @@ pub fn resolve_inlay_hint(mut hint: InlayHint, ctx: &TypeCheckCtx) -> InlayHint 
             let index_field = data.get("index").and_then(serde_json::Value::as_u64);
             // Try to look up the callee's signature; fall back to a
             // minimal tooltip if absent.
-            let sig_line = ctx
-                .lookup(callee)
-                .map(|ty| format!("**`{callee}: {ty}`**"))
-                .unwrap_or_else(|| format!("**`{callee}`**"));
+            let sig_line = ctx.lookup(callee).map_or_else(
+                || format!("**`{callee}`**"),
+                |ty| format!("**`{callee}: {ty}`**"),
+            );
             let slot_line = match index_field {
                 Some(n) => format!("Parameter `{param}` (slot {n})."),
                 None => format!("Parameter `{param}`."),

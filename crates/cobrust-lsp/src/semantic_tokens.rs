@@ -168,7 +168,8 @@ pub fn build_semantic_tokens_delta(
     // Decide whether we can emit a delta: caller must have supplied
     // both `previous_result_id` AND its cache must hold the same id;
     // otherwise we fall back to the full Tokens response.
-    let prev_matches = matches!((previous_result_id, cached_result_id), (Some(a), Some(b)) if a == b);
+    let prev_matches =
+        matches!((previous_result_id, cached_result_id), (Some(a), Some(b)) if a == b);
     let Some(prev_data) = previous_tokens.filter(|_| prev_matches) else {
         return SemanticTokensFullDeltaResult::Tokens(SemanticTokens {
             result_id: Some(new_result_id),
@@ -200,10 +201,15 @@ pub fn build_semantic_tokens_delta(
     // The `start` field is the per-u32 offset in the previous stream
     // (each token = 5 u32s).
     let start_u32 = u32::try_from(prefix.saturating_mul(5)).unwrap_or(u32::MAX);
-    let delete_count_u32 =
-        u32::try_from(prev_len.saturating_sub(prefix).saturating_sub(suffix).saturating_mul(5))
-            .unwrap_or(u32::MAX);
-    let replacement: Vec<SemanticToken> = new_data[prefix..(new_len.saturating_sub(suffix))].to_vec();
+    let delete_count_u32 = u32::try_from(
+        prev_len
+            .saturating_sub(prefix)
+            .saturating_sub(suffix)
+            .saturating_mul(5),
+    )
+    .unwrap_or(u32::MAX);
+    let replacement: Vec<SemanticToken> =
+        new_data[prefix..(new_len.saturating_sub(suffix))].to_vec();
     let edits = vec![SemanticTokensEdit {
         start: start_u32,
         delete_count: delete_count_u32,

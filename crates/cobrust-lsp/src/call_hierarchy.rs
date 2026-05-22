@@ -1,6 +1,5 @@
 //! `textDocument/prepareCallHierarchy` + `callHierarchy/incomingCalls`
-//! + `callHierarchy/outgoingCalls` handlers — ADR-0057f §3.3 +
-//! ADR-0057g §3.3.
+//! + `callHierarchy/outgoingCalls` handlers — ADR-0057f §3.3 + ADR-0057g §3.3.
 //!
 //! Phase J wave-4 call hierarchy. Same-document fn-graph traversal:
 //! given a cursor on a fn name, resolve it to a [`CallHierarchyItem`],
@@ -207,8 +206,14 @@ pub fn build_outgoing_calls_cross_file(
         // ranges when same-doc has no matching def.
         let is_placeholder = call.to.range
             == Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: 0 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
             };
         if !is_placeholder {
             continue;

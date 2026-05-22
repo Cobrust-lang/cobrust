@@ -422,12 +422,12 @@ impl LanguageServer for Backend {
                 // Wave-5 flips from `OneOf::Left(true)` to the Options form so
                 // `resolve_provider: true` advertises the `inlayHint/resolve`
                 // path; clients pre-flight resolve before requesting tooltips.
-                inlay_hint_provider: Some(OneOf::Right(
-                    InlayHintServerCapabilities::Options(InlayHintOptions {
+                inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
+                    InlayHintOptions {
                         work_done_progress_options: WorkDoneProgressOptions::default(),
                         resolve_provider: Some(true),
-                    }),
-                )),
+                    },
+                ))),
                 // ADR-0057f §3.2 + ADR-0057g §3.1 — semantic tokens with
                 // delta support. Wave-5 flips `full` from `Bool(true)` to
                 // `Delta { delta: Some(true) }` so clients call the delta
@@ -439,9 +439,7 @@ impl LanguageServer for Backend {
                             work_done_progress_options: WorkDoneProgressOptions::default(),
                             legend: semantic_tokens::token_legend(),
                             range: Some(false),
-                            full: Some(SemanticTokensFullOptions::Delta {
-                                delta: Some(true),
-                            }),
+                            full: Some(SemanticTokensFullOptions::Delta { delta: Some(true) }),
                         },
                     ),
                 ),
@@ -842,10 +840,9 @@ impl LanguageServer for Backend {
                 .semantic_tokens_cache
                 .lock()
                 .expect("semantic_tokens_cache poisoned");
-            cache
-                .get(uri)
-                .map(|(id, toks)| (Some(id.clone()), Some(toks.clone())))
-                .unwrap_or((None, None))
+            cache.get(uri).map_or((None, None), |(id, toks)| {
+                (Some(id.clone()), Some(toks.clone()))
+            })
         };
 
         let new_id = self.next_semantic_tokens_result_id();
