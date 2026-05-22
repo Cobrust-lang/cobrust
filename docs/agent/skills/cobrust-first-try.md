@@ -4,7 +4,7 @@ skill_id: cobrust-first-try
 title: "Write Cobrust correctly on the first try"
 audience: any LLM agent (Claude Code / Cursor / OpenClaw / Hermes / Aider / OpenAI Codex / etc.)
 load_when: before writing or editing any `.cb` source file
-last_verified_commit: 6a25ec8
+last_verified_commit: v0.5.0-refresh
 maintainers: P10/user; updated atomically with language-surface ADRs
 ---
 
@@ -289,9 +289,41 @@ cobrust-lsp           # standalone binary (same binary, alternate entrypoint)
 - Suggestion text (from `help:` field in compiler diagnostics) → `relatedInformation[0].message`.
 - `textDocument/didChange`, `textDocument/hover`, `textDocument/completion` — **NOT yet implemented** in wave-1.
 
-**Scope caution**: Phase J wave-2 (didChange + snapshot reuse) and wave-3 (hover, completion, rename) are FULLY CLOSED at `53b5ed2` — ADR-0057a/b/c/d all accepted. publishDiagnostics + didChange + hover + completion + rename are all available. Wave-3 next iteration (go-to-def + codeAction + cross-file) is PROPOSED but not yet landed.
+**LSP v1.3 is feature-complete at v0.5.0. All 13 handlers shipped.**
 
-## 9d. JIT (preview / wave-1 only) (ADR-0056a)
+Wave-1: `textDocument/publishDiagnostics` (ADR-0057a). Wave-2: `didChange` + snapshot reuse (ADR-0057b). Wave-3: `hover` + `completion` + `rename` + goto-def + codeAction + cross-file rename (ADR-0057c/d/e). Wave-4: inlay hints + semantic tokens + call hierarchy (ADR-0057f). Wave-5: delta sync + resolve + cross-file refactor (ADR-0057g) — ALL CLOSED at v0.5.0 (`6b3905c`). Wave-6+: proposed.
+
+Full 13-handler surface available to any LSP-capable editor (Cursor, Neovim, VSCode, Continue, Cody).
+
+## 9d. DAP v1.2 — debugger protocol (Phase L wave-1 through wave-5 / ADR-0059a-g)
+
+**DAP v1.2 is feature-complete at v0.5.0. All 17 handlers shipped.**
+
+Wave-1: lldb pretty-printers (ADR-0059a). Wave-2: cobrust-dap server 9-handler core + cobrust debug CLI (ADR-0059b/c). Wave-3: advanced debugger UX (ADR-0059d/e). Wave-4: `evaluate` request + conditional breakpoints + multi-thread support + exception breakpoints (ADR-0059f). Wave-5: logpoints + data breakpoints + stepIn + result_err transport; 0059f §3.4 RESOLVED (ADR-0059g) — ALL CLOSED at v0.5.0. Wave-6+: proposed.
+
+**User-facing surfaces (all available)**:
+```bash
+cobrust debug src/main.cb                    # interactive; all 17 DAP handlers active
+cobrust debug attach <pid>                   # attach to running process
+cobrust debug --breakpoint 42 src/main.cb   # stop at line 42
+cobrust-dap                                  # raw DAP stdio server
+```
+
+**New in wave-4 (ADR-0059f)**:
+- `evaluate` — inspect expressions in stopped frames
+- Conditional breakpoints (`--condition "x > 0"`)
+- Multi-thread: thread list + per-thread stack traces
+- Exception breakpoints: break on `panic!` or any unhandled `Result::Err`
+
+**New in wave-5 (ADR-0059g)**:
+- Logpoints: non-breaking print on hit (`--logpoint 42 "x={x}"`)
+- Data breakpoints: break on memory address write
+- `stepIn` for function call stepping
+- `result_err` transport: structured error on DAP response failure (0059f §3.4 RESOLVED)
+
+Do not claim wave-6+ features exist — they are proposed, not shipped.
+
+## 9d-jit. JIT (preview / wave-1 only) (ADR-0056a)
 
 **Availability**:
 ```bash
@@ -317,34 +349,18 @@ match cobrust_jit::compile(&mir_fn) {
 
 **AOT path (`cobrust build`) is canonical for production.** JIT is preview/experimental; never use it in the translation pipeline or L2 verification gates. Wave-2 scope (loops, function calls, closures) has NOT landed.
 
-## 9e. Debugger (Phase L wave-1 / ADR-0059a/b/c)
+## 9e. Phase L summary — DAP v1.2 feature-complete
 
-**Phase L wave-1 is closed.** Wave-2 (runtime frame variable + Dict iteration + Option Adt DI) merged at `171700b` + `05aa137`; §6.1 Str runtime full closure deferred to ADR-0059e (sub-ADR follow-up). Three user-facing surfaces:
+Phase L is TRULY FULL CLOSED at v0.5.0. See §9d for the complete handler inventory and wave-by-wave breakdown.
 
-**lldb pretty-printers** (0059a): Install once, then `cobrust` types print readably in lldb/gdb.
-```bash
-# Enable pretty-printers in ~/.lldbinit (done once):
-command script import /path/to/cobrust/tools/lldb/cobrust_printers.py
+**Quick reference**:
+- Wave-1 (0059a): lldb pretty-printers — install `cobrust_printers.py` in `~/.lldbinit`
+- Wave-2 (0059b/c): `cobrust-dap` server + `cobrust debug` CLI (3-mode)
+- Wave-3 (0059d/e): Str runtime §6.1 closure + advanced debugger UX
+- Wave-4 (0059f): evaluate + conditional bp + multi-thread + exception bp — SHIPPED
+- Wave-5 (0059g): logpoints + data bp + stepIn + result_err; 0059f §3.4 RESOLVED — SHIPPED
 
-# Then in lldb:
-(lldb) p my_list   # prints: CobList<i64>[1, 2, 3]  (not raw memory)
-(lldb) p my_dict   # prints: CobDict{"a": 1, "b": 2}
-```
-
-**cobrust-dap server** (0059b): DAP protocol over stdio; attach any DAP-capable editor.
-```bash
-cobrust-dap           # starts DAP server on stdio
-# Neovim nvim-dap / VSCode launch.json: "type": "cobrust", "request": "launch"
-```
-
-**cobrust debug CLI** (0059c): Command-line debugging without an editor.
-```bash
-cobrust debug src/main.cb          # launch with debugger attached; interactive
-cobrust debug attach <pid>         # attach to running process
-cobrust debug --breakpoint 42 src/main.cb   # stop at line 42
-```
-
-**Scope caution (honest-debt per ADR-0059a §6)**: Wave-1 did not include runtime frame variable inspection, Dict iteration display, or Option Adt DI — these were queued. Wave-2 landed at `171700b` + `05aa137`; §6.1 Str runtime full closure deferred to ADR-0059e.
+All 17 DAP handlers are live. Wave-6+ is proposed, not shipped.
 
 ## 9f. Phase M language-surface gaps now supported
 
@@ -408,6 +424,27 @@ All 41 error-suggestion variants (`TypeError` + `MirError` + `LoweringError`) ar
 
 LLM consumers routing via `cobrust skills get cobrust-language` receive the FixSafety tier per error variant in the structured output. Route `DefinitelySafe` fixes directly; route `Structural` fixes to P10/human.
 
+## 9j. v0.5.0 install paths
+
+**v0.5.0 is the current stable release** (tag `v0.5.0`, commit `6b3905c`). 10 assets: 9 wheel variants + SHA256SUMS.
+
+```bash
+# Option A — cargo install (Rust 1.94+)
+cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
+
+# Option B — prebuilt wheel (9 variants; replace <variant> with your CPU tier)
+# Variants: x86_64-linux-gnu-v1 / -v3 / -v4  |  x86_64-linux-musl-v1 / -v3
+#           aarch64-linux-gnu-neon / -sve      |  aarch64-apple-darwin-m1 / -m2
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/cobrust-v0.5.0-<variant>.tar.gz | tar xz && sudo mv cobrust /usr/local/bin/
+
+# SHA256SUMS: https://github.com/Cobrust-lang/cobrust/releases/download/v0.5.0/SHA256SUMS
+
+# Option C — cobrust install (Tier 3 auto-select; requires cobrust-cli already installed)
+cobrust install <pkg>
+```
+
+Do NOT use `v0.4.0` URLs — that release is superseded by `v0.5.0`.
+
 ## 10. When in doubt — read the canonical example programs
 
 `examples/leetcode-stress/` is the production-validated stress corpus: **LC-100 真 100/100** (leetcode_corpus_e2e 12/0 + stress 100/0 as of 2026-05-19). When unsure of the idiomatic form, grep there first.
@@ -448,4 +485,4 @@ A freshly-onboarded agent is ready when it can do all of the following without a
 - **Examples are load-bearing**: every example in §3-§5 must `cobrust check` clean. If it doesn't, fix the example or fix the language — never let the skill silently lie.
 - **Cross-platform fidelity**: this skill is plain Markdown — no Claude-Code-specific frontmatter, no Cursor-specific tags. Any agent system can paste this into a system prompt or treat it as a `read-first` doc.
 
-— P10 lineage 2026-05-18; seeded after Phase G Wave 2 (`25ee43f`). Refreshed 2026-05-19: added §9a fn-redef / §9b Session / §9c LSP / §9d JIT preview + §12 Done-means; Phase I FULL CLOSED + Phase J wave-1 closed (`793032d`). Refreshed 2026-05-19 (P7 maintenance #30/#34): added §9e Phase L debugger / §9f Phase M 6-gap / §10 LC-100 stress ref updated + §10a F-pattern caveats; Phase K/L/M closed + LC-100 真 100/100. Refreshed 2026-05-21 (P7 Tier-2 doc audit P0): §9c Phase J wave-2 FULL CLOSED at `53b5ed2`; §9e Phase L wave-2 landed at `171700b`+`05aa137`; added §9g Tier 1/2/3 W1 hardware tiering + §9h Cluster A let-rebind SHIPPED + §9i FixSafety ladder (ADR-0062); `last_verified_commit` sentinel → `6a25ec8`.
+— P10 lineage 2026-05-18; seeded after Phase G Wave 2 (`25ee43f`). Refreshed 2026-05-19: added §9a fn-redef / §9b Session / §9c LSP / §9d JIT preview + §12 Done-means; Phase I FULL CLOSED + Phase J wave-1 closed (`793032d`). Refreshed 2026-05-19 (P7 maintenance #30/#34): added §9e Phase L debugger / §9f Phase M 6-gap / §10 LC-100 stress ref updated + §10a F-pattern caveats; Phase K/L/M closed + LC-100 真 100/100. Refreshed 2026-05-21 (P7 Tier-2 doc audit P0): §9c Phase J wave-2 FULL CLOSED at `53b5ed2`; §9e Phase L wave-2 landed at `171700b`+`05aa137`; added §9g Tier 1/2/3 W1 hardware tiering + §9h Cluster A let-rebind SHIPPED + §9i FixSafety ladder (ADR-0062); `last_verified_commit` sentinel → `6a25ec8`. Refreshed 2026-05-22 (P7 v0.5.0 refresh): §9c expanded wave-4+5 (LSP v1.3 feature-complete 13 handlers); §9d rewritten as DAP v1.2 wave-4+5 (17 handlers, 0059f+0059g); §9e condensed to Phase L full summary; §9j added v0.5.0 install paths; `last_verified_commit` → THIS commit SHA (post-commit update pending).
