@@ -1,0 +1,30 @@
+---
+source: crates/cobrust-dap/tests/wave_4_dap_e2e.rs
+expression: response.body
+snapshot_kind: text
+---
+{
+  "stackFrames": [
+    {
+      "column": 5,
+      "id": 0,
+      "line": 8,
+      "name": "fib",
+      "source": {
+        "name": "fib.cb",
+        "path": "fib.cb"
+      }
+    },
+    {
+      "column": 5,
+      "id": 1,
+      "line": 24,
+      "name": "worker_main",
+      "source": {
+        "name": "fib.cb",
+        "path": "fib.cb"
+      }
+    }
+  ],
+  "totalFrames": 2
+}
