@@ -162,6 +162,7 @@ fn perf_budget() -> f64 {
 }
 
 #[test]
+#[ignore = "finding:task-perf-ci-jitter; M13 concurrency budget flaky on GH macos shared runner — run locally or nightly (cargo test -- --ignored task_perf_concurrency_producer_consumer_within_budget)"]
 fn task_perf_concurrency_producer_consumer_within_budget() {
     let mut cobrust_durs = Vec::with_capacity(TRIALS);
     let mut tokio_durs = Vec::with_capacity(TRIALS);
