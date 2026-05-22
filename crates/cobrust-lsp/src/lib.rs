@@ -96,6 +96,48 @@ pub use rename::{prepare_rename, rename_symbol, rename_symbol_cross_file};
 pub use semantic_tokens::{build_semantic_tokens, build_semantic_tokens_delta, token_legend};
 pub use span_convert::{LineMap, span_to_lsp_range};
 
+/// Run the Cobrust LSP server over stdio.
+///
+/// ADR-0068 §4.1: this is the unified entry point both the `cobrust lsp`
+/// subcommand (`crates/cobrust-cli/src/lsp.rs`) and the transitional
+/// `cobrust-lsp` shim binary (`crates/cobrust-lsp-shim/src/main.rs`)
+/// dispatch through. Calls into the wave-2.1 `Backend` per ADR-0057b
+/// and serves until stdin EOF.
+///
+/// Initializes a `tracing` subscriber that writes to stderr (LSP stdout
+/// is reserved for JSON-RPC frames). Returns `Ok(())` on graceful
+/// client disconnect.
+///
+/// # Errors
+///
+/// Returns the underlying tokio runtime build error if the multi-thread
+/// runtime cannot be created; otherwise never returns an error in
+/// normal operation (the LSP `Server` loop exits on stdin EOF and the
+/// run function returns `Ok(())`).
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async move {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .with_writer(std::io::stderr)
+            .init();
+
+        let stdin = tokio::io::stdin();
+        let stdout = tokio::io::stdout();
+
+        let (service, socket) = tower_lsp::LspService::new(Backend::new);
+        tower_lsp::Server::new(stdin, stdout, socket)
+            .serve(service)
+            .await;
+    });
+    Ok(())
+}
+
 /// Per-document state cached by the LSP server.
 ///
 /// Wave-1 keeps the cached source + `LineMap` so `did_change` can

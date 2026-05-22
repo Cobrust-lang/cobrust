@@ -11,10 +11,10 @@ description = "Cobrust LSP server (Phase J wave-2.1 textDocument/didChange + Ses
 keywords = ["cobrust", "lsp", "language-server", "ide"]
 categories = ["development-tools"]
 
-[[bin]]
-name = "cobrust-lsp"
-path = "src/main.rs"
-
+# ADR-0068: bin section removed; lib-only crate exposing pub fn run().
+# Transitional `cobrust-lsp` standalone binary lives in
+# `crates/cobrust-lsp-shim/` (v0.6.x); v0.7.0 drops the shim entirely
+# and `cobrust lsp` subcommand becomes the only entry.
 [lib]
 path = "src/lib.rs"
 

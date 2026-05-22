@@ -11,10 +11,10 @@ description = "Cobrust DAP (Debug Adapter Protocol) server (wave-2 per ADR-0059b
 keywords = ["cobrust", "dap", "debug-adapter", "lldb"]
 categories = ["development-tools::debugging"]
 
-[[bin]]
-name = "cobrust-dap"
-path = "src/main.rs"
-
+# ADR-0068: bin section removed; lib-only crate exposing pub fn run().
+# Transitional `cobrust-dap` standalone binary lives in
+# `crates/cobrust-dap-shim/` (v0.6.x); v0.7.0 drops the shim entirely
+# and `cobrust dap` subcommand becomes the only entry.
 [lib]
 path = "src/lib.rs"
 

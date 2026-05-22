@@ -56,6 +56,42 @@ pub use dap_types::{
 pub use handlers::DapHandlers;
 pub use lldb_driver::{LldbDriver, StopReason};
 
+/// Run the Cobrust DAP server over stdio.
+///
+/// ADR-0068 §4.1: unified entry point shared by the `cobrust dap`
+/// subcommand (`crates/cobrust-cli/src/dap.rs`) and the transitional
+/// `cobrust-dap` shim binary (`crates/cobrust-dap-shim/src/main.rs`).
+/// Builds a tokio runtime, starts a tracing subscriber that writes to
+/// stderr (DAP stdout is reserved for Content-Length framed JSON), and
+/// runs [`run_stdio_loop`] with a fresh [`Adapter`] until the client
+/// sends a `disconnect` request or closes stdin.
+///
+/// # Errors
+///
+/// Returns the underlying tokio runtime build error if the multi-thread
+/// runtime cannot be created, or any I/O error surfaced by the stdio
+/// loop (typically `BrokenPipe` on abnormal client exit).
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async move {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .with_writer(std::io::stderr)
+            .init();
+
+        let adapter = Adapter::new();
+        let stdin = tokio::io::stdin();
+        let stdout = tokio::io::stdout();
+        run_stdio_loop(adapter, stdin, stdout).await
+    })?;
+    Ok(())
+}
+
 /// The Cobrust DAP `Adapter`.
 ///
 /// Routes incoming DAP requests through the 9 wave-2 handlers (per
