@@ -4,7 +4,7 @@ skill_id: cobrust-first-try
 title: "Write Cobrust correctly on the first try"
 audience: any LLM agent (Claude Code / Cursor / OpenClaw / Hermes / Aider / OpenAI Codex / etc.)
 load_when: before writing or editing any `.cb` source file
-last_verified_commit: v0.5.0-refresh
+last_verified_commit: 8854db2
 maintainers: P10/user; updated atomically with language-surface ADRs
 ---
 
