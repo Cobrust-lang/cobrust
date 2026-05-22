@@ -71,16 +71,18 @@ The mandatory post-author audit (per `feedback_post_author_audit_mandatory`) MUS
 
 The 2026-05-22 retro audit (`aa85ca79a6c4dc469`) scanned only the Cobrust main repo and missed this leak because audit scope did not include `Cobrust-lang/cobrust-tmlanguage`. F49 codifies that audit scope MUST follow the dispatch's actual mutation surface, not the assumed-default surface.
 
-## §5 Why no global config fix
+## §5 Global config — set 2026-05-22 (post-incident escalation)
 
-Setting `~/.gitconfig` `user.name` / `user.email` globally is a user-side decision per CLAUDE.md safety protocol "NEVER update the git config". CTO does not silently mutate user's global identity. The user may choose to:
+Initial draft of this finding deferred `~/.gitconfig` edits to user-side decision per CLAUDE.md safety protocol "NEVER update the git config". But after a **second leak** the same day (PLDB PR #643 fork branch in `Hakureirm/pldb` — same root cause, same `/tmp/` fresh-workspace fallback to OS user), the user explicitly authorized the permanent fix:
 
 ```bash
 git config --global user.name wbj010101
 git config --global user.email wbj010101@gmail.com
 ```
 
-If the user does set this, §4.1 pre-flight check becomes a no-op success — best of both worlds. Until then, per-dispatch explicit config is the discipline.
+Verified post-set: `git init` in a brand-new `/tmp/` workspace inherits `wbj010101 <wbj010101@gmail.com>` for both author and committer. The §4.1 pre-flight check now resolves as no-op success on this machine — defense in depth.
+
+CLAUDE.md's "NEVER update the git config" protocol applies to autonomous mutation without permission. User explicit authorization (this incident) lifts that restriction for the specific change.
 
 ## §6 Family
 
@@ -93,6 +95,18 @@ The three together define the rule: **F-privacy family = "any artifact reaching 
 ## §7 Status
 
 RATIFIED 2026-05-22 by user real-time catch + immediate rewrite (force-push `cbc1e0e` → `cd2fe04` on `Cobrust-lang/cobrust-tmlanguage`).
+
+## §7a Incident log (2026-05-22)
+
+Three independent fresh-workspace leaks fired the same day before global config was set:
+
+1. **`Cobrust-lang/cobrust-tmlanguage`** (grammar repo for github-linguist PR #7977 follow-up). `/tmp/cobrust-tmlanguage` workspace created by CTO directly. 3 commits leaked. **RESCUED**: force-push `cbc1e0e` → `cd2fe04` (brand-new repo, no external dependents).
+
+2. **`Hakureirm/linguist` fork branch `add-cobrust-language`** (linguist PR #7977). `/tmp/linguist-clone` workspace created by P7 sub-agent via `gh repo fork --clone`. 1 commit leaked at `2974f8e`. **RESCUED JIT**: force-push `2974f8e` → `09d5e36` while PR was still `OPEN` / `mergedAt: null` / `reviewDecision: REVIEW_REQUIRED`. PR auto-syncs from fork; maintainer sees `wbj010101` author.
+
+3. **`breck7/pldb` PR #643 merge commit `94fd077`** (third-party PLDB upstream). `/tmp/pldb-fork` workspace created by P7 sub-agent. Commit was merged to upstream main before leak was discovered. **PERMANENT LOSS** — `breck7/pldb` main history contains real-name commit; cannot force-push third-party repo.
+
+Pattern of the 2 sub-agent leaks: dispatch prompt **did not** include the §4.2 identity-config requirement (because §4.2 was being authored just-in-time during the same day). Future dispatch templates must inline the config command, AND now that global config is set, defense in depth means the leak no longer fires by default.
 
 ## §8 Cross-refs
 
