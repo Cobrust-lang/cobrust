@@ -35,27 +35,13 @@ pub mod intrinsics;
 /// `__cobrust_println_static`. M11 stdlib supersedes by lifting this
 /// declaration into `std.io`.
 ///
-/// ADR-0064: `print_int` removed from PRELUDE source-face. The single
-/// `print(s: str)` stub is kept; the type-checker treats it as a
-/// polymorphic intrinsic (accepting any type) via
-/// `is_print_polymorphic_intrinsic_name`. The intrinsic-rewrite pass
-/// dispatches to `__cobrust_println_int` / `__cobrust_println_bool` /
-/// `__cobrust_println_float` at MIR time based on the resolved arg type.
-///
-/// ADR-0050b M-F.3.1: `range(start, stop) -> list[i64]` is a real
-/// Cobrust fn body (not an intrinsic stub) — it materializes a
-/// `list[i64]` of `stop - start` slots using `list_new` / `list_set`
-/// (both intrinsic-rewritten on every callsite). The body survives
-/// the intrinsic-rewrite pass and is compiled through normal MIR /
-/// codegen. The for-loop then iterates the returned list via the
-/// ADR-0050b length-bound index lowering (`__cobrust_list_len` +
-/// `__cobrust_list_get` per `crates/cobrust-mir/src/lower.rs`
-/// `LoopKind::For`), NOT the ADR-0044 W2 Phase 2 `__cobrust_iter_*`
-/// runtime path. The iter-protocol path remains shipped for
-/// comprehension lowering (see `lower.rs:1493-1576` and finding
-/// `comp-lowering-zero-sentinel-collision.md` for the open scope
-/// gap that Phase G will close).
-pub const PRELUDE: &str = "fn print(s: str) -> i64:\n    return 0\n\nfn input(prompt: str) -> str:\n    return \"\"\n\nfn input_no_prompt() -> str:\n    return \"\"\n\nfn read_line() -> str:\n    return \"\"\n\nfn argv() -> list[str]:\n    let xs: list[str] = []\n    return xs\n\nfn parse_int(s: str) -> i64:\n    return 0\n\nfn str_len(s: str) -> i64:\n    return 0\n\nfn str_at(s: str, i: i64) -> str:\n    return \"\"\n\nfn str_eq(a: str, b: str) -> i64:\n    return 0\n\nfn str_eq_lit(s: str, lit: str) -> i64:\n    return 0\n\nfn str_ord(s: str) -> i64:\n    return 0\n\nfn parse_int_tok(line: str, i: i64) -> i64:\n    return 0\n\nfn count_toks(line: str) -> i64:\n    return 0\n\nfn list_set(lst: list[i64], i: i64, v: i64) -> i64:\n    return 0\n\nfn list_get(lst: list[i64], i: i64) -> i64:\n    return 0\n\nfn list_len(lst: list[i64]) -> i64:\n    return 0\n\nfn list_is_empty(lst: list[i64]) -> bool:\n    return False\n\nfn dict_is_empty(d: dict[i64, i64]) -> bool:\n    return False\n\nfn len(d: dict[i64, i64]) -> i64:\n    return 0\n\nfn list_new(capacity: i64) -> list[i64]:\n    let xs: list[i64] = []\n    return xs\n\nfn print_no_nl(s: str) -> i64:\n    return 0\n\nfn range(start: i64, stop: i64) -> list[i64]:\n    let n: i64 = stop - start\n    let xs: list[i64] = list_new(n)\n    let i: i64 = 0\n    while i < n:\n        let _ = list_set(xs, i, start + i)\n        i = i + 1\n    return xs\n\nfn sqrt(x: f64) -> f64:\n    return 0.0\n\nfn floor(x: f64) -> f64:\n    return 0.0\n\nfn ceil(x: f64) -> f64:\n    return 0.0\n\nfn round(x: f64) -> f64:\n    return 0.0\n\nfn abs(x: f64) -> f64:\n    return 0.0\n\nfn pow(base: f64, exp: f64) -> f64:\n    return 0.0\n\nfn sin(x: f64) -> f64:\n    return 0.0\n\nfn cos(x: f64) -> f64:\n    return 0.0\n\nfn tan(x: f64) -> f64:\n    return 0.0\n\nfn log(x: f64) -> f64:\n    return 0.0\n\nfn exp(x: f64) -> f64:\n    return 0.0\n\nfn llm_complete(provider: str, model: str, prompt: str) -> str:\n    return \"\"\n\nfn llm_dispatch(task: str, prompt: str) -> str:\n    return \"\"\n\nfn llm_stream(provider: str, model: str, prompt: str) -> list[str]:\n    let xs: list[str] = []\n    return xs\n\nfn prompt_render(system: str, user: str, vars: list[str]) -> str:\n    return \"\"\n\nfn prompt_format_few_shot(examples_in: list[str], examples_out: list[str], current_input: str) -> str:\n    return \"\"\n\nfn prompt_format_system_user(system: str, user: str) -> str:\n    return \"\"\n\nfn prompt_escape_braces(text: str) -> str:\n    return \"\"\n\nfn llm_complete_structured(prompt: str, schema_json: str) -> str:\n    return \"\"\n\nfn tool_schema(name: str, description: str, parameters_json: str, return_type: str) -> str:\n    return \"\"\n\nfn tool_registry_new() -> str:\n    return \"\"\n\nfn tool_registry_register(registry_json: str, schema_json: str) -> str:\n    return \"\"\n\nfn tool_invoke(tool_name: str, args_json: str) -> str:\n    return \"\"\n\nfn llm_complete_with_tools(prompt: str, registry_json: str) -> str:\n    return \"\"\n\nfn split(s: str, sep: str) -> list[str]:\n    let xs: list[str] = []\n    return xs\n\nfn join(parts: list[str], sep: str) -> str:\n    return \"\"\n\nfn replace(s: str, old: str, new: str) -> str:\n    return \"\"\n\nfn trim(s: str) -> str:\n    return \"\"\n\nfn find(s: str, needle: str) -> i64:\n    return -1\n\nfn contains(s: str, needle: str) -> bool:\n    return False\n\nfn starts_with(s: str, prefix: str) -> bool:\n    return False\n\nfn ends_with(s: str, suffix: str) -> bool:\n    return False\n\nfn lower(s: str) -> str:\n    return \"\"\n\nfn upper(s: str) -> str:\n    return \"\"\n\nfn clone(s: str) -> str:\n    return s\n\nfn read_file(path: str) -> str:\n    return \"\"\n\nfn read_file_lines(path: str) -> list[str]:\n    let xs: list[str] = []\n    return xs\n\nfn write_file(path: str, contents: str) -> i64:\n    return 0\n\nfn append_file(path: str, contents: str) -> i64:\n    return 0\n\nfn stdin_read_all() -> str:\n    return \"\"\n\nfn stdout_write(s: str) -> i64:\n    return 0\n\nfn stderr_write(s: str) -> i64:\n    return 0\n\n";
+/// Re-exported from [`cobrust_frontend::PRELUDE`] per F50
+/// (2026-05-22): the LSP `cobrust-lsp` crate also prepends the same
+/// source before invoking the frontend so `textDocument/publishDiagnostics`
+/// reaches diagnostic parity with `cobrust check`. The single source-
+/// of-truth lives in `crates/cobrust-frontend/src/prelude.rs`; this
+/// re-export keeps the `crate::build::PRELUDE` call sites stable.
+pub use cobrust_frontend::PRELUDE;
 
 /// What `cobrust build` should emit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
