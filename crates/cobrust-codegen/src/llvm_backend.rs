@@ -127,6 +127,12 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
         emitter.declare_body(body)?;
     }
 
+    // --- ADR-0058f §3.2: intern Constant::Str payloads as module-level
+    //     rodata globals BEFORE body lowering, so `materialize_str_data`
+    //     / `materialize_str_buffer` can look up the global pointer for
+    //     any payload referenced by an Assign rvalue or Call arg.
+    emitter.intern_str_payloads(module);
+
     // --- now define each body --------------------------------------------
     for body in &module.bodies {
         emitter.define_body(body)?;
@@ -676,6 +682,18 @@ pub struct LlvmEmitter<'ctx> {
     body_return_types: HashMap<u32, BasicTypeEnum<'ctx>>,
     /// Declared runtime-helper externs (`__cobrust_str_drop`, etc.).
     runtime_helper_decls: HashMap<&'static str, FunctionValue<'ctx>>,
+    /// ADR-0058f wave-2: parallel param-count map for the runtime
+    /// helpers. Consumed by `lower_call` (extern-name branch) to
+    /// detect the `(*const u8, usize)` expansion case where a single
+    /// `Constant::Str` arg expands into two C params (ptr, len).
+    /// Mirrors `cranelift_backend::runtime_helper_param_counts`.
+    runtime_helper_param_counts: HashMap<&'static str, usize>,
+    /// ADR-0058f §3.2 module-level str-data interning. Maps each
+    /// unique `Constant::Str` payload to its rodata `i8*` global
+    /// pointer. Populated once in `intern_str_payloads` before
+    /// `define_body` is invoked per body. Consumed by
+    /// `materialize_str_data` / `materialize_str_buffer`.
+    str_data_globals: HashMap<String, PointerValue<'ctx>>,
     /// Cached `i8*` opaque pointer type used for str/list/dict/refs.
     opaque_ptr_ty: inkwell::types::PointerType<'ctx>,
     // ----- ADR-0058c wave-3 DWARF state ---------------------------------
@@ -785,6 +803,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             function_ids: HashMap::new(),
             body_return_types: HashMap::new(),
             runtime_helper_decls: HashMap::new(),
+            runtime_helper_param_counts: HashMap::new(),
+            str_data_globals: HashMap::new(),
             opaque_ptr_ty,
             di_builder,
             di_cu,
@@ -1125,6 +1145,218 @@ impl<'ctx> LlvmEmitter<'ctx> {
         );
         self.runtime_helper_decls
             .insert("__cobrust_array_get_bool", arr_get_bool);
+
+        // -----------------------------------------------------------------
+        // ADR-0058f wave-2 — stdlib print system runtime helpers.
+        // Mirrors the Cranelift backend's `runtime_helper_signatures`
+        // entries at `cranelift_backend.rs:2750-2836` for the print
+        // family + the str-buffer subroutines they depend on. Wave-3
+        // surfaces (input / list / dict / iter / fmt / math / parse /
+        // str method family) explicitly deferred per ADR-0058f §7.
+        // -----------------------------------------------------------------
+        let i8_ty_helpers = self.ctx.i8_type();
+        let f64_ty = self.ctx.f64_type();
+
+        // __cobrust_println_int(i64) -> void  (ADR-0030 §Decision step 5)
+        let println_int_ty = void_ty.fn_type(&[i64_ty.into()], false);
+        let println_int = self.module.add_function(
+            "__cobrust_println_int",
+            println_int_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_println_int", println_int);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_println_int", 1);
+
+        // __cobrust_println_bool(i8) -> void  (ADR-0064 §3.3)
+        // i8 (NOT i1) — bools widen at the call site via z_extend.
+        let println_bool_ty = void_ty.fn_type(&[i8_ty_helpers.into()], false);
+        let println_bool = self.module.add_function(
+            "__cobrust_println_bool",
+            println_bool_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_println_bool", println_bool);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_println_bool", 1);
+
+        // __cobrust_println_float(f64) -> void  (ADR-0064 §3.3)
+        let println_float_ty = void_ty.fn_type(&[f64_ty.into()], false);
+        let println_float = self.module.add_function(
+            "__cobrust_println_float",
+            println_float_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_println_float", println_float);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_println_float", 1);
+
+        // __cobrust_println_str_buf(*mut Str) -> void  (ADR-0044 W2)
+        let println_str_buf_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let println_str_buf = self.module.add_function(
+            "__cobrust_println_str_buf",
+            println_str_buf_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_println_str_buf", println_str_buf);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_println_str_buf", 1);
+
+        // __cobrust_println(*const u8, usize) -> void  (ADR-0025 §Runtime ABI)
+        let println_lit_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let println_lit =
+            self.module
+                .add_function("__cobrust_println", println_lit_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_println", println_lit);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_println", 2);
+
+        // __cobrust_print_no_nl(*mut Str) -> void
+        let print_no_nl_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let print_no_nl = self.module.add_function(
+            "__cobrust_print_no_nl",
+            print_no_nl_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_print_no_nl", print_no_nl);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_print_no_nl", 1);
+
+        // __cobrust_print_no_nl_lit(*const u8, usize) -> void  (ADR-0047 Option H)
+        let print_no_nl_lit_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let print_no_nl_lit = self.module.add_function(
+            "__cobrust_print_no_nl_lit",
+            print_no_nl_lit_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_print_no_nl_lit", print_no_nl_lit);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_print_no_nl_lit", 2);
+
+        // -----------------------------------------------------------------
+        // ADR-0058f §3.3 — str-buffer subroutines for materialize_str_buffer.
+        // -----------------------------------------------------------------
+        // __cobrust_str_new() -> *mut Str
+        let str_new_ty = ptr_ty.fn_type(&[], false);
+        let str_new =
+            self.module
+                .add_function("__cobrust_str_new", str_new_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_new", str_new);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_new", 0);
+
+        // __cobrust_str_push_static(*mut Str, *const u8, usize) -> void
+        let str_push_static_ty =
+            void_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        let str_push_static = self.module.add_function(
+            "__cobrust_str_push_static",
+            str_push_static_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_push_static", str_push_static);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_push_static", 3);
+
+        // Param counts for wave-1 helpers — needed so the extern-name
+        // dispatch path in `lower_call` can use a uniform lookup.
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_drop", 1);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_drop", 1);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_drop_elems", 2);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_panic", 2);
+    }
+
+    /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
+    ///
+    /// Walks every body's statements + terminator args and registers
+    /// each unique `Constant::Str` payload as a private `unnamed_addr`
+    /// `[N x i8]` rodata global. The resulting `i8*` pointer is cached
+    /// in `str_data_globals` and consumed by `materialize_str_data` /
+    /// `materialize_str_buffer` during body lowering.
+    ///
+    /// Mirrors Cranelift's per-body interning at
+    /// `cranelift_backend.rs:873-1013`, but at module scope (LLVM
+    /// globals are module-level).
+    pub fn intern_str_payloads(&mut self, module: &Module) {
+        // Local helper closure can't capture `&mut self` mutably + read
+        // it concurrently — collect payloads in a Vec first, then emit.
+        let mut payloads: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut push_unique = |p: &str, payloads: &mut Vec<String>| {
+            if seen.insert(p.to_string()) {
+                payloads.push(p.to_string());
+            }
+        };
+
+        for body in &module.bodies {
+            for mir_block in &body.blocks {
+                for stmt in &mir_block.statements {
+                    if let StatementKind::Assign { rvalue, .. } = &stmt.kind {
+                        collect_str_payloads_from_rvalue(rvalue, &mut |p| {
+                            push_unique(p, &mut payloads);
+                        });
+                    }
+                }
+                if let Terminator::Call { args, .. } = &mir_block.terminator {
+                    for arg in args {
+                        if let Operand::Constant(Constant::Str(payload)) = arg {
+                            push_unique(payload, &mut payloads);
+                        }
+                        if let Operand::Constant(Constant::Bytes(bytes)) = arg {
+                            // Bytes lower through the same str-buffer
+                            // path under wave-2 (lossy UTF-8). Intern.
+                            if let Ok(s) = std::str::from_utf8(bytes) {
+                                push_unique(s, &mut payloads);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Emit each unique payload as a private rodata `[N x i8]` global.
+        for (idx, payload) in payloads.into_iter().enumerate() {
+            let bytes = payload.as_bytes();
+            let i8_ty = self.ctx.i8_type();
+            let arr_ty = i8_ty.array_type(bytes.len() as u32);
+            let const_arr = i8_ty.const_array(
+                &bytes
+                    .iter()
+                    .map(|b| i8_ty.const_int(u64::from(*b), false))
+                    .collect::<Vec<_>>(),
+            );
+            let symbol = format!("__cobrust_str_data_{idx}");
+            let global = self.module.add_global(arr_ty, None, &symbol);
+            global.set_initializer(&const_arr);
+            global.set_constant(true);
+            global.set_linkage(Linkage::Private);
+            global.set_unnamed_addr(true);
+            // Cast the `[N x i8]*` global to `i8*` for the consumer side.
+            let ptr_val = self.builder.build_pointer_cast(
+                global.as_pointer_value(),
+                self.opaque_ptr_ty,
+                "str_data_ptr",
+            );
+            // build_pointer_cast can't fail in practice for opaque-ptr
+            // casts; fall back to the raw ptr on the error path.
+            let final_ptr = match ptr_val {
+                Ok(v) => v,
+                Err(_) => global.as_pointer_value(),
+            };
+            self.str_data_globals.insert(payload, final_ptr);
+        }
     }
 
     // =====================================================================
@@ -1460,6 +1692,25 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
     fn lower_statement(&mut self, stmt: &Statement) -> Result<(), CodegenError> {
         match &stmt.kind {
             StatementKind::Assign { place, rvalue } => {
+                // ADR-0058f §3.5 cascade fix (mirror of Cranelift's
+                // `lower_statement` at `cranelift_backend.rs:1266-1276`):
+                // `let v: str = "hello"` lowers to `Assign(v, Use(
+                // Constant::Str("hello")))`. The default `lower_constant`
+                // path returns a heap StringBuffer pointer (wave-2),
+                // but the explicit Str-typed Assign path is hot enough
+                // to deserve the direct route — same shape avoids the
+                // double-lookup in str_data_globals.
+                if let Rvalue::Use(Operand::Constant(Constant::Str(payload))) = rvalue {
+                    let dest_ty = self
+                        .body
+                        .locals
+                        .get(place.local.0 as usize)
+                        .map(|l| l.ty.clone());
+                    if matches!(dest_ty, Some(Ty::Str)) && place.projections.is_empty() {
+                        let value = self.materialize_str_buffer(payload)?;
+                        return self.write_place(place, value);
+                    }
+                }
                 let val = self.lower_rvalue(rvalue)?;
                 self.write_place(place, val)?;
                 Ok(())
@@ -1470,6 +1721,84 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 Ok(())
             }
         }
+    }
+
+    /// ADR-0058f §3.3 — return the rodata `i8*` pointer + i64 byte-length
+    /// pair for a str literal. The pointer is the module-level global
+    /// interned by `LlvmEmitter::intern_str_payloads`.
+    ///
+    /// Mirrors `cranelift_backend::EmitCtx::materialize_str_data`
+    /// (`cranelift_backend.rs:1130-1145`).
+    fn materialize_str_data(
+        &mut self,
+        payload: &str,
+    ) -> Result<(BasicValueEnum<'ctx>, BasicValueEnum<'ctx>), CodegenError> {
+        let ptr = self
+            .emitter
+            .str_data_globals
+            .get(payload)
+            .copied()
+            .ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "str payload {payload:?} not interned; intern_str_payloads pre-pass bug"
+                ))
+            })?;
+        let len = self
+            .emitter
+            .ctx
+            .i64_type()
+            .const_int(payload.len() as u64, false);
+        Ok((ptr.into(), len.into()))
+    }
+
+    /// ADR-0058f §3.3 — materialize a source-level string literal as a
+    /// Cobrust heap `Str` buffer. Calls `__cobrust_str_new()` then
+    /// `__cobrust_str_push_static(buf, ptr, len)` when payload is
+    /// non-empty. Returns the resulting `*mut Str` pointer.
+    ///
+    /// Mirrors `cranelift_backend::EmitCtx::materialize_str_buffer`
+    /// (`cranelift_backend.rs:1149-1163`).
+    fn materialize_str_buffer(
+        &mut self,
+        payload: &str,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let str_new = *self
+            .emitter
+            .runtime_helper_decls
+            .get("__cobrust_str_new")
+            .ok_or_else(|| {
+                CodegenError::Internal(
+                    "__cobrust_str_new not declared; declare_runtime_helpers wave-2 bug".into(),
+                )
+            })?;
+        let call = self
+            .emitter
+            .builder
+            .build_call(str_new, &[], "str_new")
+            .map_err(map_builder_err)?;
+        let buf: BasicValueEnum<'ctx> = call
+            .try_as_basic_value()
+            .basic()
+            .unwrap_or_else(|| self.emitter.opaque_ptr_ty.const_null().into());
+        if !payload.is_empty() {
+            let (ptr_val, len_val) = self.materialize_str_data(payload)?;
+            let push = *self
+                .emitter
+                .runtime_helper_decls
+                .get("__cobrust_str_push_static")
+                .ok_or_else(|| {
+                    CodegenError::Internal(
+                        "__cobrust_str_push_static not declared; wave-2 bug".into(),
+                    )
+                })?;
+            let args: [BasicMetadataValueEnum<'ctx>; 3] =
+                [buf.into(), ptr_val.into(), len_val.into()];
+            self.emitter
+                .builder
+                .build_call(push, &args, "str_push")
+                .map_err(map_builder_err)?;
+        }
+        Ok(buf)
     }
 
     fn lower_terminator(&mut self, term: &Terminator) -> Result<(), CodegenError> {
@@ -1579,7 +1908,19 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
                     Vec::with_capacity(args.len());
                 for arg in args {
-                    let v = self.lower_operand(arg)?;
+                    // ADR-0058f §3.5 cascade fix (mirror of Cranelift
+                    // `cranelift_backend.rs:1414-1420`): when a user-fn
+                    // call passes a `Constant::Str` literal arg into a
+                    // Str-typed parameter, the default `lower_operand`
+                    // would still work (lower_constant now materializes
+                    // a buffer), but going through the explicit path
+                    // here keeps parity with the Cranelift surface so
+                    // a future double-lookup elision is symmetric.
+                    let v = if let Operand::Constant(Constant::Str(payload)) = arg {
+                        self.materialize_str_buffer(payload)?
+                    } else {
+                        self.lower_operand(arg)?
+                    };
                     call_args.push(v.into());
                 }
                 let call_site = self
@@ -1603,9 +1944,105 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
             // ids (lambda placeholder `FnRef(0)`, await `FnRef(u32::MAX)`).
         }
 
+        // ADR-0058f §3.4 — extern-name dispatch. Mirrors Cranelift
+        // backend at `cranelift_backend.rs:1439-1521`. When `func` is
+        // `Constant::Str(name)`, look up the runtime-helper FunctionValue
+        // by name; if found, lower args + emit `build_call`.
+        if let Operand::Constant(Constant::Str(name)) = func {
+            if let Some(callee) = self
+                .emitter
+                .runtime_helper_decls
+                .get(name.as_str())
+                .copied()
+            {
+                let sig_param_count = self
+                    .emitter
+                    .runtime_helper_param_counts
+                    .get(name.as_str())
+                    .copied()
+                    .unwrap_or(args.len());
+                // Detect the `(*const u8, usize)` expansion case:
+                // single source Str arg → two C params (ptr, len).
+                let expand_str_to_ptr_len = args.len() == 1
+                    && sig_param_count == 2
+                    && matches!(args.first(), Some(Operand::Constant(Constant::Str(_))));
+                // Detect trailing Str arg expansion: source supplies
+                // N args ending in Str, C signature has N+1 params.
+                let expand_trailing_str_len = !expand_str_to_ptr_len
+                    && args.len() + 1 == sig_param_count
+                    && matches!(args.last(), Some(Operand::Constant(Constant::Str(_))));
+
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                    Vec::with_capacity(sig_param_count);
+                for (idx, arg) in args.iter().enumerate() {
+                    if let Operand::Constant(Constant::Str(payload)) = arg {
+                        let is_last = idx + 1 == args.len();
+                        if expand_str_to_ptr_len || (expand_trailing_str_len && is_last) {
+                            let (ptr, len) = self.materialize_str_data(payload)?;
+                            call_args.push(ptr.into());
+                            call_args.push(len.into());
+                        } else {
+                            let buf = self.materialize_str_buffer(payload)?;
+                            call_args.push(buf.into());
+                        }
+                    } else {
+                        let mut v = self.lower_operand(arg)?;
+                        // ADR-0058f §4 bool widening: `__cobrust_println_bool`
+                        // takes i8, but MIR `Constant::Bool` lowers to i1.
+                        // Detect narrow int args going into wider int
+                        // helper params and z_extend them. The callee's
+                        // signature param type comes back as
+                        // `BasicMetadataTypeEnum`; match on its IntType
+                        // variant to get the width.
+                        if let BasicValueEnum::IntValue(iv) = v {
+                            if let Some(param_ty) = callee.get_type().get_param_types().get(idx) {
+                                if let BasicMetadataTypeEnum::IntType(pt) = param_ty {
+                                    let pt_width = pt.get_bit_width();
+                                    let v_width = iv.get_type().get_bit_width();
+                                    if v_width < pt_width {
+                                        let widened = self
+                                            .emitter
+                                            .builder
+                                            .build_int_z_extend(iv, *pt, "argext")
+                                            .map_err(map_builder_err)?;
+                                        v = widened.into();
+                                    }
+                                }
+                            }
+                        }
+                        call_args.push(v.into());
+                    }
+                }
+                let call_site = self
+                    .emitter
+                    .builder
+                    .build_call(callee, &call_args, "extern_call")
+                    .map_err(map_builder_err)?;
+                // Many of the print helpers return `void`. Treat
+                // absent basic-value return as i64 zero (matches
+                // Cranelift `lower_terminator` extern path).
+                let ret_val: BasicValueEnum<'ctx> = call_site
+                    .try_as_basic_value()
+                    .basic()
+                    .unwrap_or_else(|| self.emitter.ctx.i64_type().const_zero().into());
+                self.write_place(destination, ret_val)?;
+                let blk = self.block_map[&target];
+                self.emitter
+                    .builder
+                    .build_unconditional_branch(blk)
+                    .map_err(map_builder_err)?;
+                return Ok(());
+            }
+            // Unknown extern name — fall through to wave-1 stub. Wave-3
+            // surfaces (input / file / list / dict / iter / fmt / math)
+            // tracked in ADR-0058f §7.
+        }
+
         // Wave-1 stub fallthrough — write 0 into destination, branch.
-        // Runtime-helper / extern-name Call lowering deferred to wave-2
-        // (sub-ADR 0058a-followup or 0058b) per ADR-0058a §8.
+        // Unknown FnRef ids (lambda placeholder `FnRef(0)`, await
+        // placeholder `FnRef(u32::MAX)`) AND unknown extern names from
+        // ADR-0058f §7 wave-3 surfaces both land here. Closes once
+        // wave-3 lands (or sooner if a wave-3 helper is dispatched).
         let zero: BasicValueEnum<'ctx> = self.emitter.ctx.i64_type().const_zero().into();
         self.write_place(destination, zero)?;
         let blk = self.block_map[&target];
@@ -1743,12 +2180,19 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
             // pass at write_place() narrows it to the destination's
             // declared type if different.
             Constant::None => Ok(ctx.i64_type().const_zero().into()),
-            Constant::Str(_) | Constant::Bytes(_) => {
-                // Wave-1 stub — Cranelift backend M9 emits zero for
-                // string literals at most callsites; matching that
-                // posture here keeps differential parity. The full
-                // str-buffer materialisation is M11 stdlib runtime.
-                Ok(self.emitter.opaque_ptr_ty.const_null().into())
+            Constant::Str(payload) => {
+                // ADR-0058f §3.5: materialize the literal as a heap
+                // StringBuffer pointer. Wave-1 returned `const_null`
+                // which left every Str slot null and broke
+                // `print(s)` / `let s: str = "hi"` / `fn f(s: str)`.
+                self.materialize_str_buffer(payload)
+            }
+            Constant::Bytes(payload) => {
+                // ADR-0058f wave-2 surface: bytes share the same
+                // str-buffer path under lossy UTF-8. Wave-3 may
+                // introduce a dedicated `__cobrust_bytes_*` family.
+                let s = std::str::from_utf8(payload).unwrap_or("");
+                self.materialize_str_buffer(s)
             }
             Constant::FnRef(_) => Ok(ctx.i64_type().const_zero().into()),
         }
@@ -2328,6 +2772,40 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
 /// Convert an inkwell builder error into our structured taxonomy.
 fn map_builder_err(e: inkwell::builder::BuilderError) -> CodegenError {
     CodegenError::LlvmError(format!("inkwell builder error: {e}"))
+}
+
+/// ADR-0058f §3.2 — collect every `Constant::Str` payload referenced
+/// in an Rvalue's operand tree. Pure traversal (no IR emission); used
+/// by `LlvmEmitter::intern_str_payloads` to enumerate the rodata
+/// surface during the module-level interning pre-pass.
+///
+/// Mirrors `cranelift_backend::collect_str_payloads_from_rvalue`
+/// (`cranelift_backend.rs:2504-2534`) but with an infallible visitor
+/// shape (LLVM-side interning doesn't use the Cranelift Result chain).
+fn collect_str_payloads_from_rvalue<F>(rvalue: &Rvalue, visit: &mut F)
+where
+    F: FnMut(&str),
+{
+    let visit_operand = |op: &Operand, visit: &mut F| {
+        if let Operand::Constant(Constant::Str(payload)) = op {
+            visit(payload);
+        }
+    };
+    match rvalue {
+        Rvalue::Use(op) | Rvalue::Cast(_, op, _) | Rvalue::UnaryOp(_, op) => {
+            visit_operand(op, visit);
+        }
+        Rvalue::BinaryOp(_, a, b) => {
+            visit_operand(a, visit);
+            visit_operand(b, visit);
+        }
+        Rvalue::Aggregate(_, ops) => {
+            for op in ops {
+                visit_operand(op, visit);
+            }
+        }
+        Rvalue::Ref(_, _) | Rvalue::Discriminant(_) | Rvalue::Len(_) | Rvalue::NullaryOp(_) => {}
+    }
 }
 
 // =====================================================================
