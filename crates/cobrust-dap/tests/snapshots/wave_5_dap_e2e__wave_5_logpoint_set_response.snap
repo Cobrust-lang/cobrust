@@ -1,0 +1,20 @@
+---
+source: crates/cobrust-dap/tests/wave_5_dap_e2e.rs
+assertion_line: 345
+expression: response.body
+snapshot_kind: text
+---
+{
+  "breakpoints": [
+    {
+      "id": 1,
+      "line": 7,
+      "message": "logpoint: iter: i",
+      "source": {
+        "name": "/tmp/fib.cb",
+        "path": "/tmp/fib.cb"
+      },
+      "verified": true
+    }
+  ]
+}

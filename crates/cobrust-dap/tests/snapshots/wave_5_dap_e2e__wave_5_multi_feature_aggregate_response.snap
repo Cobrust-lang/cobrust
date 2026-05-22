@@ -1,0 +1,41 @@
+---
+source: crates/cobrust-dap/tests/wave_5_dap_e2e.rs
+assertion_line: 447
+expression: results
+snapshot_kind: text
+---
+{
+  "data_bp": {
+    "breakpoints": [
+      {
+        "id": 2,
+        "message": "watchpoint: x (write)",
+        "verified": true
+      }
+    ]
+  },
+  "logpoint": {
+    "breakpoints": [
+      {
+        "id": 1,
+        "line": 7,
+        "message": "logpoint: iter",
+        "source": {
+          "name": "fib.cb",
+          "path": "fib.cb"
+        },
+        "verified": true
+      }
+    ]
+  },
+  "result_err": {
+    "breakpoints": [
+      {
+        "id": 3,
+        "message": "exception filter: result_err (symbol: __cobrust_result_err_panic)",
+        "verified": true
+      }
+    ]
+  },
+  "step_in": {}
+}

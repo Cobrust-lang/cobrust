@@ -1,0 +1,7 @@
+---
+source: crates/cobrust-dap/tests/wave_5_dap_e2e.rs
+assertion_line: 377
+expression: response.body
+snapshot_kind: text
+---
+{}

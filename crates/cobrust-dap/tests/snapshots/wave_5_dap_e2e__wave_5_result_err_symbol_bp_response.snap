@@ -1,0 +1,15 @@
+---
+source: crates/cobrust-dap/tests/wave_5_dap_e2e.rs
+assertion_line: 389
+expression: response.body
+snapshot_kind: text
+---
+{
+  "breakpoints": [
+    {
+      "id": 1,
+      "message": "exception filter: result_err (symbol: __cobrust_result_err_panic)",
+      "verified": true
+    }
+  ]
+}

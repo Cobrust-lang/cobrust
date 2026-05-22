@@ -1,0 +1,36 @@
+---
+source: crates/cobrust-dap/tests/wave_5_dap_e2e.rs
+assertion_line: 397
+expression: response.body
+snapshot_kind: text
+---
+{
+  "exceptionBreakpointFilters": [
+    {
+      "default": true,
+      "filter": "panic",
+      "label": "Uncaught Panic"
+    },
+    {
+      "default": false,
+      "filter": "result_err",
+      "label": "Result::Err Construction"
+    },
+    {
+      "default": false,
+      "filter": "unreachable",
+      "label": "Unreachable! Intrinsic"
+    }
+  ],
+  "supportsConditionalBreakpoints": true,
+  "supportsConfigurationDoneRequest": false,
+  "supportsDataBreakpoints": true,
+  "supportsEvaluateForHovers": false,
+  "supportsFunctionBreakpoints": false,
+  "supportsHitConditionalBreakpoints": false,
+  "supportsLogPoints": true,
+  "supportsRestartFrame": false,
+  "supportsSetVariable": false,
+  "supportsStepBack": false,
+  "supportsTerminateRequest": true
+}
