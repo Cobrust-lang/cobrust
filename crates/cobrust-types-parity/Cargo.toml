@@ -20,7 +20,7 @@ cb-impl = []
 snapshot = []
 
 [dependencies]
-cobrust-types = { path = "../cobrust-types", version = "=0.5.1" }
+cobrust-types = { path = "../cobrust-types", version = "=0.5.2" }
 cobrust-frontend = { path = "../cobrust-frontend" }
 cobrust-hir = { path = "../cobrust-hir" }
 serde = { workspace = true }
