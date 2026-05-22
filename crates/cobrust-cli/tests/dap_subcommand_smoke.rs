@@ -1,3 +1,7 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "test code; unwrap on test invariants is acceptable"
+)]
 //! Smoke test for `cobrust dap` subcommand (ADR-0068 §8 closure).
 //!
 //! Spawn `cobrust dap` with stdio piped, send a synthetic DAP `initialize`

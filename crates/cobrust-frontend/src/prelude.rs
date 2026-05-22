@@ -40,6 +40,10 @@ pub const PRELUDE: &str = "fn print(s: str) -> i64:\n    return 0\n\nfn input(pr
 /// the literal above. Consumed by `cobrust-lsp` to filter/shift LSP
 /// `Diagnostic` ranges back into user-source coordinates after running
 /// the pipeline against the composed source.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "PRELUDE compile-time literal well under u32::MAX"
+)]
 pub const PRELUDE_BYTE_LEN: u32 = PRELUDE.len() as u32;
 
 /// Number of newline-terminated lines in [`PRELUDE`].
@@ -81,7 +85,8 @@ mod tests {
 
     #[test]
     fn prelude_line_count_matches_literal() {
-        let actual = PRELUDE.bytes().filter(|&b| b == b'\n').count() as u32;
+        let actual = u32::try_from(PRELUDE.bytes().filter(|&b| b == b'\n').count())
+            .expect("PRELUDE line count fits in u32");
         assert_eq!(PRELUDE_LINE_COUNT, actual);
     }
 

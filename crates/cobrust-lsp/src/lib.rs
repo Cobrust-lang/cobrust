@@ -617,6 +617,10 @@ fn shift_offsets_in_message(msg: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::items_after_test_module,
+    reason = "F50 fix inserted offset-shift tests mid-file; lib internals follow"
+)]
 mod offset_shift_tests {
     use super::shift_offsets_in_message;
 
@@ -626,7 +630,11 @@ mod offset_shift_tests {
         // pinning to its current value. If the PRELUDE grows the
         // assertion will need re-pinning — that's the desired signal.
         let prelude_len = cobrust_frontend::PRELUDE_BYTE_LEN;
-        let composed = format!("unknown name `print` at file#0@{}..{}", prelude_len + 22, prelude_len + 27);
+        let composed = format!(
+            "unknown name `print` at file#0@{}..{}",
+            prelude_len + 22,
+            prelude_len + 27
+        );
         let shifted = shift_offsets_in_message(&composed);
         assert_eq!(shifted, "unknown name `print` at file#0@22..27");
     }

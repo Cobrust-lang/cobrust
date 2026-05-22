@@ -1,3 +1,7 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "test code; unwrap on test invariants is acceptable"
+)]
 //! Verify `cobrust-lsp` shim binary launches identically to `cobrust lsp`
 //! subcommand (ADR-0068 §4.2 + §8 closure).
 //!

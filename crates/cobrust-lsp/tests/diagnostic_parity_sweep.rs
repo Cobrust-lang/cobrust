@@ -1,3 +1,8 @@
+#![allow(
+    clippy::format_push_string,
+    clippy::manual_let_else,
+    reason = "test corpus-builder style; readability over micro-optim"
+)]
 //! ADR-0057a §3 + F50 — full-corpus sweep of LSP / CLI diagnostic
 //! parity across every `.cb` fixture in `examples/`.
 //!
@@ -49,7 +54,10 @@ fn lsp_cli_diagnostic_parity_sweep() {
 
     let mut report = String::new();
     report.push_str("# LSP / CLI diagnostic parity sweep\n\n");
-    report.push_str(&format!("Total `.cb` files under `examples/`: {}\n\n", files.len()));
+    report.push_str(&format!(
+        "Total `.cb` files under `examples/`: {}\n\n",
+        files.len()
+    ));
     report.push_str("| File | LSP diag count | First code | First message |\n");
     report.push_str("|---|---|---|---|\n");
 
@@ -89,7 +97,9 @@ fn lsp_cli_diagnostic_parity_sweep() {
         ));
     }
 
-    report.push_str(&format!("\nTotal: {total}, LSP-diagnostic-emitting: {divergent}\n"));
+    report.push_str(&format!(
+        "\nTotal: {total}, LSP-diagnostic-emitting: {divergent}\n"
+    ));
     report.push_str("\n## Diagnostic code histogram\n\n");
     for (code, count) in &code_counts {
         report.push_str(&format!("- `{code}`: {count}\n"));
