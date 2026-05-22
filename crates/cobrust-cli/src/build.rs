@@ -383,24 +383,87 @@ fn ensure_runtime_object(output_dir: &Path) -> Result<PathBuf, BuildError> {
     Ok(runtime_obj)
 }
 
+/// Locate the runtime C entrypoint (`runtime/cobrust_main.c`).
+///
+/// ADR-0069 wheel-layout-aware lookup chain (v0.6.0+):
+///
+/// 1. **Phase 0 (wheel-layout, NEW)** — derive `<install_prefix>` from
+///    the running binary's own path via `current_exe()`. The wheel
+///    extracts to `cobrust-vX.Y.Z/{bin,lib/cobrust,share/cobrust/runtime}/`,
+///    so a binary at `<prefix>/bin/cobrust` finds its runtime sources at
+///    `<prefix>/share/cobrust/runtime/cobrust_main.c`.
+/// 2. **Phase 1 (dev fallback)** — `CARGO_MANIFEST_DIR/runtime/cobrust_main.c`
+///    bakes the workspace path at compile time. Works for `cargo install`
+///    + source-tree `cargo build`; broken for wheels (F46 — the GH
+///    Actions runner workspace path is gone by user run-time).
+/// 3. **Phase 2 (legacy current_exe-rooted)** — kept for compat with
+///    any future relocation experiment. Same shape as Phase 0 but the
+///    Phase 0 path is the canonical wheel-layout target.
 fn locate_runtime_source() -> Result<PathBuf, BuildError> {
+    let mut checked: Vec<PathBuf> = Vec::new();
+
+    // Phase 0: wheel-layout lookup (ADR-0069 §4.2).
+    if let Some(p) = locate_wheel_share_file("runtime/cobrust_main.c") {
+        if p.exists() {
+            return Ok(p);
+        }
+        checked.push(p);
+    }
+
+    // Phase 1: workspace dev path (CARGO_MANIFEST_DIR compile-time const).
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let p = Path::new(manifest_dir).join("runtime/cobrust_main.c");
     if p.exists() {
         return Ok(p);
     }
+    checked.push(p);
+
+    // Phase 2: legacy current_exe-rooted relative-to-bin lookup.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let q = dir.join("../share/cobrust/runtime/cobrust_main.c");
             if q.exists() {
                 return Ok(q);
             }
+            checked.push(q);
         }
     }
+
     Err(BuildError::Internal(format!(
-        "cannot locate runtime/cobrust_main.c (checked {})",
-        p.display()
+        "cannot locate runtime/cobrust_main.c (ADR-0069 wheel-layout lookup); checked: {}",
+        checked
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     )))
+}
+
+/// ADR-0069 §4.2 Phase 0 helper: derive `<install_prefix>/share/cobrust/`
+/// from the running binary via `current_exe()`.
+///
+/// Wheel layout: `cobrust-vX.Y.Z/bin/cobrust` → prefix is the parent of
+/// `bin/`. Returns `Some(<prefix>/share/cobrust/<rel_path>)` if the
+/// derivation succeeds; the caller is responsible for `.exists()`
+/// confirmation. Returns `None` if `current_exe()` or the parent walks
+/// fail (typically only on unusual sandboxed installs).
+fn locate_wheel_share_file(rel_path: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let bin_dir = exe.parent()?;
+    let prefix = bin_dir.parent()?;
+    Some(prefix.join("share").join("cobrust").join(rel_path))
+}
+
+/// ADR-0069 §4.2 Phase 0 helper: derive `<install_prefix>/lib/cobrust/`
+/// from the running binary via `current_exe()`.
+///
+/// Same shape as [`locate_wheel_share_file`] but targets the `lib/`
+/// sibling (where `libcobrust_stdlib.a` lives in the wheel layout).
+fn locate_wheel_lib_file(rel_path: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let bin_dir = exe.parent()?;
+    let prefix = bin_dir.parent()?;
+    Some(prefix.join("lib").join("cobrust").join(rel_path))
 }
 
 /// Locate the prebuilt `libcobrust_stdlib.a` static archive.
@@ -410,13 +473,23 @@ fn locate_runtime_source() -> Result<PathBuf, BuildError> {
 /// `cargo install cobrust-cli` produces a self-contained binary that never
 /// needs a separate `cargo build -p cobrust-stdlib` step.
 ///
-/// Fallback chain (for development builds where `build.rs` may not have run
-/// or the baked-in path no longer exists):
+/// ADR-0069 wheel-layout-aware lookup chain (v0.6.0+):
 ///
+/// 0. **Phase 0 (wheel-layout, NEW)** — `<install_prefix>/lib/cobrust/libcobrust_stdlib.a`
+///    derived from `current_exe()`. Wheel users get a zero-config path
+///    (F46 closure).
 /// 1. `COBRUST_STDLIB_ARCHIVE_PATH` compile-time env var (baked in by `build.rs`).
 /// 2. `COBRUST_STDLIB_ARCHIVE` runtime env var override (for CI / test harness).
 /// 3. Walk workspace `target/{release,debug}/libcobrust_stdlib.a`.
 fn locate_stdlib_archive(release: bool) -> Result<PathBuf, BuildError> {
+    // 0. ADR-0069 §4.2 Phase 0 — wheel-layout lookup. Fires first so
+    //    wheel users (F46 closure) hit a working path without env vars.
+    if let Some(p) = locate_wheel_lib_file("libcobrust_stdlib.a") {
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
     // 1. Compile-time baked-in path from build.rs (preferred — works after
     //    `cargo install`). Uses option_env! so the crate compiles without build.rs.
     if let Some(baked) = option_env!("COBRUST_STDLIB_ARCHIVE_PATH") {
@@ -459,8 +532,9 @@ fn locate_stdlib_archive(release: bool) -> Result<PathBuf, BuildError> {
     Err(BuildError::Internal(format!(
         "cannot locate libcobrust_stdlib.a \
          (looked under {cand} and {alt_}); \
-         install via `cargo install cobrust-cli` \
-         or run `cargo build -p cobrust-stdlib` in the workspace first",
+         install via `cargo install cobrust-cli`, \
+         run `cargo build -p cobrust-stdlib` in the workspace first, \
+         or download a v0.6.0+ wheel tarball (ADR-0069)",
         cand = candidate.display(),
         alt_ = alt.display(),
     )))
