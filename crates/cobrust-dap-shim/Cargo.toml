@@ -19,4 +19,4 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-cobrust-dap = { path = "../cobrust-dap", version = "=0.5.1" }
+cobrust-dap = { path = "../cobrust-dap", version = "=0.6.0" }

@@ -1,6 +1,6 @@
 [package]
 name = "cobrust-cli"
-version = "0.5.1"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -21,16 +21,16 @@ workspace = true
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-cobrust-codegen = { path = "../cobrust-codegen", version = "=0.5.2" }
-cobrust-dap = { path = "../cobrust-dap", version = "=0.5.1" }
-cobrust-frontend = { path = "../cobrust-frontend", version = "=0.5.2" }
-cobrust-hir = { path = "../cobrust-hir", version = "=0.5.2" }
-cobrust-llm-router = { path = "../cobrust-llm-router", version = "=0.5.2" }
-cobrust-lsp = { path = "../cobrust-lsp", version = "=0.5.1" }
-cobrust-mir = { path = "../cobrust-mir", version = "=0.5.2" }
-cobrust-pkg = { path = "../cobrust-pkg", version = "=0.5.2" }
-cobrust-translator = { path = "../cobrust-translator", version = "=0.5.2" }
-cobrust-types = { path = "../cobrust-types", version = "=0.5.2" }
+cobrust-codegen = { path = "../cobrust-codegen", version = "=0.6.0" }
+cobrust-dap = { path = "../cobrust-dap", version = "=0.6.0" }
+cobrust-frontend = { path = "../cobrust-frontend", version = "=0.6.0" }
+cobrust-hir = { path = "../cobrust-hir", version = "=0.6.0" }
+cobrust-llm-router = { path = "../cobrust-llm-router", version = "=0.6.0" }
+cobrust-lsp = { path = "../cobrust-lsp", version = "=0.6.0" }
+cobrust-mir = { path = "../cobrust-mir", version = "=0.6.0" }
+cobrust-pkg = { path = "../cobrust-pkg", version = "=0.6.0" }
+cobrust-translator = { path = "../cobrust-translator", version = "=0.6.0" }
+cobrust-types = { path = "../cobrust-types", version = "=0.6.0" }
 # ADR-0065 §7.2 — `cobrust install` unpacks downloaded `.tar.gz` wheel
 # archives. flate2 + tar are workspace deps; cobrust-pkg also uses them.
 flate2 = { workspace = true }

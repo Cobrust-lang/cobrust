@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-cli"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "clap",
  "cobrust-codegen",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-click"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "clap",
  "pyo3",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-codegen"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "cobrust-frontend",
  "cobrust-hir",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-dap"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "cobrust-frontend",
  "cobrust-types",
@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-dateutil"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "pyo3",
  "serde_json",
@@ -452,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-frontend"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "proptest",
  "thiserror 1.0.69",
@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-hir"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "cobrust-frontend",
  "thiserror 1.0.69",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-jit"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "cobrust-codegen",
  "cobrust-frontend",
@@ -487,7 +487,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-llm-router"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "blake3",
@@ -510,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-lsp"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "cobrust-frontend",
  "cobrust-hir",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-mir"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "cobrust-frontend",
  "cobrust-hir",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-msgpack"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "pyo3",
  "serde_json",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-numpy"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "cobrust-llm-router",
  "cobrust-translator",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-pkg"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "blake3",
  "flate2",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-registry"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -601,7 +601,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-requests"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "pyo3",
  "reqwest",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-stdlib"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "cobrust-llm-router",
  "indexmap",
@@ -625,14 +625,14 @@ dependencies = [
 
 [[package]]
 name = "cobrust-tomli"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "cobrust-translator"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "blake3",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-types"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "cobrust-codegen",
  "cobrust-frontend",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-types-cb"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "cobrust-frontend",
  "cobrust-types",
@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "cobrust-types-parity"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "cobrust-frontend",
  "cobrust-hir",
