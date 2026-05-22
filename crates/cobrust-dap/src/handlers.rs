@@ -17,9 +17,9 @@ use crate::dap_types::{
     Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments,
     ExceptionBreakpointsFilter, InitializeResponse, LaunchArguments, NextArguments, PauseArguments,
     Request, SetBreakpointsArguments, SetBreakpointsResponse, SetDataBreakpointsArguments,
-    SetDataBreakpointsResponse, SetExceptionBreakpointsArguments,
-    SetExceptionBreakpointsResponse, StackTraceArguments, StackTraceResponse, StepInArguments,
-    VariablesArguments, VariablesResponse,
+    SetDataBreakpointsResponse, SetExceptionBreakpointsArguments, SetExceptionBreakpointsResponse,
+    StackTraceArguments, StackTraceResponse, StepInArguments, VariablesArguments,
+    VariablesResponse,
 };
 use crate::lldb_driver::DapError;
 

@@ -49,10 +49,9 @@ pub use dap_types::{
     EvaluateArguments, EvaluateResponse, ExceptionBreakpointsFilter, InitializeArguments,
     InitializeResponse, LaunchArguments, NextArguments, PauseArguments, Request, Response,
     SetBreakpointsArguments, SetBreakpointsResponse, SetDataBreakpointsArguments,
-    SetDataBreakpointsResponse, SetExceptionBreakpointsArguments,
-    SetExceptionBreakpointsResponse, Source, SourceBreakpoint, StackFrame, StackTraceArguments,
-    StackTraceResponse, StepInArguments, ThreadInfo, ThreadsResponse, Variable,
-    VariablesArguments, VariablesResponse,
+    SetDataBreakpointsResponse, SetExceptionBreakpointsArguments, SetExceptionBreakpointsResponse,
+    Source, SourceBreakpoint, StackFrame, StackTraceArguments, StackTraceResponse, StepInArguments,
+    ThreadInfo, ThreadsResponse, Variable, VariablesArguments, VariablesResponse,
 };
 pub use handlers::DapHandlers;
 pub use lldb_driver::{LldbDriver, StopReason};
