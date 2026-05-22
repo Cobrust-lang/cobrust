@@ -1,5 +1,6 @@
 ---
 source: crates/cobrust-lsp/tests/wave_4_e2e.rs
+assertion_line: 361
 expression: params
 snapshot_kind: text
 ---
@@ -12,7 +13,13 @@ snapshot_kind: text
     "label": "left:",
     "kind": 2,
     "paddingLeft": false,
-    "paddingRight": true
+    "paddingRight": true,
+    "data": {
+      "callee": "add",
+      "index": 0,
+      "kind": "param",
+      "param": "left"
+    }
   },
   {
     "position": {
@@ -22,6 +29,12 @@ snapshot_kind: text
     "label": "right:",
     "kind": 2,
     "paddingLeft": false,
-    "paddingRight": true
+    "paddingRight": true,
+    "data": {
+      "callee": "add",
+      "index": 1,
+      "kind": "param",
+      "param": "right"
+    }
   }
 ]

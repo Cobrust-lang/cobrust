@@ -1,4 +1,4 @@
-//! `textDocument/inlayHint` handler — ADR-0057f §3.1.
+//! `textDocument/inlayHint` handler — ADR-0057f §3.1 + ADR-0057g §3.2.
 //!
 //! Phase J wave-4 inlay hints. Emits inline type annotations for
 //! `let x = expr` bindings without explicit `: Type`, plus
@@ -9,6 +9,11 @@
 //! type-check; surfacing it inline lets the agent-LLM read the type
 //! at the cursor without provoking an error first.
 //!
+//! Wave-5 (ADR-0057g §3.2) adds `inlayHint/resolve`: each emitted
+//! hint carries a `data` field describing its kind + lookup keys so
+//! the resolve handler can fetch the full Markdown tooltip lazily
+//! (avoiding always-emit tooltip cost on the initial response).
+//!
 //! Honest scope:
 //! - `let` hints: single-binding patterns only (no tuple / sequence
 //!   destructuring at wave-4).
@@ -18,15 +23,28 @@
 //! - The visible-range filter from `InlayHintParams.range` is
 //!   honoured by intersecting each emit candidate's source span with
 //!   the requested range.
+//! - Resolve fills `tooltip` only; `text_edits` lazy-resolve deferred
+//!   to a future sub-ADR (ADR-0057g §4 non-goal).
 
 use cobrust_frontend::ast::{
     self, Expr, ExprKind, FnDef, Module, Pattern, PatternKind, Stmt, StmtKind,
 };
 use cobrust_frontend::span::{FileId, Span};
 use cobrust_types::TypeCheckCtx;
-use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Position, Range};
+use serde_json::json;
+use tower_lsp::lsp_types::{
+    InlayHint, InlayHintKind, InlayHintLabel, InlayHintTooltip, MarkupContent, MarkupKind, Position,
+    Range,
+};
 
 use crate::span_convert::LineMap;
+
+/// JSON `kind` discriminant on `InlayHint.data` for type hints —
+/// ADR-0057g §3.2. The resolve handler reads this to route the
+/// tooltip-shape decision.
+pub const INLAY_DATA_KIND_TYPE: &str = "type";
+/// JSON `kind` discriminant on `InlayHint.data` for param-name hints.
+pub const INLAY_DATA_KIND_PARAM: &str = "param";
 
 /// Build inlay hints for `source` constrained to the LSP `range`.
 ///
@@ -189,7 +207,9 @@ fn collect_hints_in_expr(
                         let Some(param_name) = param_names.get(idx) else {
                             continue;
                         };
-                        if let Some(hint) = param_name_hint(arg_expr, param_name, line_map, range) {
+                        if let Some(hint) =
+                            param_name_hint(arg_expr, name, param_name, idx, line_map, range)
+                        {
                             hints.push(hint);
                         }
                     }
@@ -242,6 +262,10 @@ fn arg_emits_param_hint(arg: &Expr, param_name: Option<&str>) -> bool {
 
 /// Build a `let`-binder type hint if the pattern is a single binding
 /// (the wave-4 honest-scope subset).
+///
+/// Wave-5 stamps `data = {"kind": "type", "name": <binder>}` so the
+/// resolve handler can re-lookup the type to render a Markdown
+/// tooltip lazily (ADR-0057g §3.2).
 fn let_type_hint(
     target: &Pattern,
     ctx: &TypeCheckCtx,
@@ -266,14 +290,24 @@ fn let_type_hint(
         tooltip: None,
         padding_left: Some(false),
         padding_right: Some(false),
-        data: None,
+        data: Some(json!({
+            "kind": INLAY_DATA_KIND_TYPE,
+            "name": name,
+        })),
     })
 }
 
 /// Build a parameter-name hint for a single positional call-arg.
+///
+/// Wave-5 stamps `data = {"kind": "param", "callee": <fn>, "param":
+/// <name>, "index": <slot>}` so the resolve handler can fetch the
+/// callee's signature and render a Markdown tooltip with the param
+/// slot in context (ADR-0057g §3.2).
 fn param_name_hint(
     arg: &Expr,
+    callee_name: &str,
     param_name: &str,
+    param_index: usize,
     line_map: &LineMap,
     range: &Range,
 ) -> Option<InlayHint> {
@@ -281,6 +315,7 @@ fn param_name_hint(
         return None;
     }
     let position = line_map.byte_to_position(arg.span.start);
+    let idx_u32 = u32::try_from(param_index).unwrap_or(u32::MAX);
     Some(InlayHint {
         position,
         label: InlayHintLabel::String(format!("{param_name}:")),
@@ -289,8 +324,75 @@ fn param_name_hint(
         tooltip: None,
         padding_left: Some(false),
         padding_right: Some(true),
-        data: None,
+        data: Some(json!({
+            "kind": INLAY_DATA_KIND_PARAM,
+            "callee": callee_name,
+            "param": param_name,
+            "index": idx_u32,
+        })),
     })
+}
+
+/// Lazily resolve an `InlayHint` to fill in the `tooltip` field —
+/// ADR-0057g §3.2.
+///
+/// Reads `hint.data` (populated during the initial response by
+/// `let_type_hint` / `param_name_hint`) and routes by the embedded
+/// `"kind"` discriminant:
+///
+/// - `"type"`: re-look up `ctx.lookup(name)` and build a Markdown
+///   tooltip `**name**: \`Type\`\n\n_Inferred at let-binding._`.
+/// - `"param"`: re-look up `ctx.lookup(callee)` for the fn signature,
+///   then build `**\`callee(<sig>)\`**\n\nParameter \`name\` (slot N).`.
+///
+/// If `data` is absent, malformed, or the lookup misses, the hint is
+/// returned unchanged (ADR-0057g §4 honest scope — resolve is a
+/// best-effort progressive enhancement, not a contract).
+#[must_use]
+pub fn resolve_inlay_hint(mut hint: InlayHint, ctx: &TypeCheckCtx) -> InlayHint {
+    let Some(data) = hint.data.as_ref() else {
+        return hint;
+    };
+    let Some(kind) = data.get("kind").and_then(|v| v.as_str()) else {
+        return hint;
+    };
+    let markdown = match kind {
+        INLAY_DATA_KIND_TYPE => {
+            let Some(name) = data.get("name").and_then(|v| v.as_str()) else {
+                return hint;
+            };
+            let Some(ty) = ctx.lookup(name) else {
+                return hint;
+            };
+            format!("**`{name}`**: `{ty}`\n\n_Inferred at let-binding (ADR-0057g §3.2)._")
+        }
+        INLAY_DATA_KIND_PARAM => {
+            let Some(callee) = data.get("callee").and_then(|v| v.as_str()) else {
+                return hint;
+            };
+            let Some(param) = data.get("param").and_then(|v| v.as_str()) else {
+                return hint;
+            };
+            let index_field = data.get("index").and_then(serde_json::Value::as_u64);
+            // Try to look up the callee's signature; fall back to a
+            // minimal tooltip if absent.
+            let sig_line = ctx
+                .lookup(callee)
+                .map(|ty| format!("**`{callee}: {ty}`**"))
+                .unwrap_or_else(|| format!("**`{callee}`**"));
+            let slot_line = match index_field {
+                Some(n) => format!("Parameter `{param}` (slot {n})."),
+                None => format!("Parameter `{param}`."),
+            };
+            format!("{sig_line}\n\n{slot_line}")
+        }
+        _ => return hint,
+    };
+    hint.tooltip = Some(InlayHintTooltip::MarkupContent(MarkupContent {
+        kind: MarkupKind::Markdown,
+        value: markdown,
+    }));
+    hint
 }
 
 /// Test whether the byte-span `span` intersects the LSP `range`.

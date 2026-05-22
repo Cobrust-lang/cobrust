@@ -1,5 +1,6 @@
 ---
 source: crates/cobrust-lsp/tests/wave_4_e2e.rs
+assertion_line: 341
 expression: hints
 snapshot_kind: text
 ---
@@ -12,6 +13,10 @@ snapshot_kind: text
     "label": ": i64",
     "kind": 1,
     "paddingLeft": false,
-    "paddingRight": false
+    "paddingRight": false,
+    "data": {
+      "kind": "type",
+      "name": "x"
+    }
   }
 ]
