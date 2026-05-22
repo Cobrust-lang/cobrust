@@ -206,9 +206,17 @@ fn fn_to_call_hierarchy_item(
 /// Find the first word-boundary occurrence of `name` inside the byte
 /// range `[span.start, span.end)` of `source`.
 fn locate_name_in_span(source: &str, span: &Span, name: &str) -> Option<Span> {
-    let start_idx = (span.start as usize).min(source.len());
+    if source.is_empty() || name.is_empty() {
+        return None;
+    }
+    // Extend the search window backwards so the fn header (the
+    // `fn name(` part, up to ~256 bytes before the body span) is
+    // covered. The parser sets `Stmt.span` to `body.span` for fn /
+    // class definitions — the def-name lives in the header, OUTSIDE
+    // the body span. 256 bytes is conservative for long signatures.
     let end_idx = (span.end as usize).min(source.len());
-    if start_idx >= end_idx || name.is_empty() {
+    let start_idx = (span.start as usize).saturating_sub(256);
+    if start_idx >= end_idx {
         return None;
     }
     let segment = &source[start_idx..end_idx];
@@ -267,9 +275,18 @@ fn walk_for_incoming(
                     .or_insert_with(|| (item.clone(), Vec::new()));
                 entry.1.extend(hits);
             }
-            // Recurse for nested fns (Cobrust allows fn-in-fn).
+            // Recurse only into nested fn / class / decorated items so
+            // calls inside an inner fn are attributed to that inner fn
+            // (not double-counted as module-level). Regular expression
+            // / let / return statements inside the body were already
+            // aggregated above via `collect_call_sites_in_block`.
             for inner in &body.stmts {
-                walk_for_incoming(inner, target, line_map, uri, callers);
+                match &inner.kind {
+                    StmtKind::Fn(_) | StmtKind::Class(_) | StmtKind::Decorated { .. } => {
+                        walk_for_incoming(inner, target, line_map, uri, callers);
+                    }
+                    _ => {}
+                }
             }
         }
         StmtKind::Decorated { inner, .. } => {

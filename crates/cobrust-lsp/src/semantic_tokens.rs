@@ -404,26 +404,23 @@ fn refine_expr(out: &mut Vec<RawToken>, expr: &Expr, line_map: &LineMap) {
 
 fn refine_type(out: &mut Vec<RawToken>, ty: &Type, line_map: &LineMap) {
     match &ty.kind {
-        TypeKind::Name(_)
-        | TypeKind::Generic { .. }
-        | TypeKind::Union(_)
+        TypeKind::Name(path) | TypeKind::Generic { base: path, .. } => {
+            // Wave-4: name / generic-base — push one TYPE override per
+            // path segment. The parser sets `ty.span` to start..next_token
+            // (so it spans trailing whitespace before `=` or `,`); using
+            // `push_name_in_span` per-segment finds the actual identifier
+            // bytes so the override matches the lexer-emitted RawToken
+            // exactly on `(line, character, length)`.
+            for segment in path {
+                push_name_in_span(out, line_map, &ty.span, segment, TT_TYPE);
+            }
+        }
+        TypeKind::Union(_)
         | TypeKind::Fn { .. }
         | TypeKind::Tuple(_)
         | TypeKind::Ref(_)
         | TypeKind::Array { .. } => {
-            // Wave-4 simplification: mark the whole type-annotation span
-            // as `type`. Editors expecting per-segment coloring still
-            // render correctly — the contiguous-span case for `Int` /
-            // `Str` is the dominant path.
-            let (line, character, length) = span_to_line_char(&ty.span, line_map);
-            if length > 0 {
-                out.push(RawToken {
-                    line,
-                    character,
-                    length,
-                    token_type: TT_TYPE,
-                });
-            }
+            // Composite forms recurse below to emit per-leaf overrides.
         }
     }
     // Recurse into nested type forms so generic arguments + unions
