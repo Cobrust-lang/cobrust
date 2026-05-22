@@ -25,8 +25,11 @@ Works in:
 
 ## Prerequisites
 
-You need the `cobrust-lsp` binary on your `$PATH`. It ships with the
-`cobrust` compiler. Install one of:
+You need the `cobrust-lsp` binary on your `$PATH`. v0.5.2+ wheels bundle
+it alongside `cobrust`; v0.5.1 and earlier require building from source via
+`cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-lsp`
+or symlinking from a local cargo build (`target/release/cobrust-lsp`).
+Install one of:
 
 - **Cargo (Rust 1.94+)**
   ```bash

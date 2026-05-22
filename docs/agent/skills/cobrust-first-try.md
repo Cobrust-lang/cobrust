@@ -506,9 +506,11 @@ codium --install-extension ./cobrust-0.1.0.vsix   # VSCodium
 
 Settings: `cobrust.lspPath` (default `cobrust-lsp` on `$PATH`) + `cobrust.trace.server` (`off` / `messages` / `verbose`).
 
+**LSP binary availability by version**: v0.5.2+ wheel tarballs bundle `cobrust-lsp` + `cobrust-dap` alongside `cobrust`; v0.5.1 and earlier wheel tarballs only contained `cobrust` (F35-sibling, fixed in v0.5.2). For v0.5.1 or earlier, build `cobrust-lsp` from source: `cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-lsp`.
+
 Marketplace publish is **user-side action** (Azure DevOps PAT + Open VSX token required); steps documented in `editors/vscode-cobrust/PUBLISHING.md`. Do NOT claim "marketplace LIVE" until user runs `vsce publish` and `ovsx publish` and the listings resolve.
 
-OOS for v0.1.0: DAP launch.json contribution (Phase L wave-6 follow-up), bundled binary (rejected per ADR-0067 §Options), REPL embed.
+OOS for v0.1.0: DAP launch.json contribution (Phase L wave-6 follow-up), REPL embed.
 
 ## 10. When in doubt — read the canonical example programs
 
