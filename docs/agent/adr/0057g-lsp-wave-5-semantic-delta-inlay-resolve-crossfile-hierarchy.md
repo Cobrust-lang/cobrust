@@ -3,9 +3,11 @@ doc_kind: adr
 adr_id: 0057g
 parent_adr: 0057
 title: "Phase J wave-5 — semantic-tokens delta + inlayHint/resolve + cross-file call hierarchy (v1.3 LSP feature-complete)"
-status: proposed
+status: accepted
 date: 2026-05-22
-last_verified_commit: e54f6d9
+last_verified_commit: d521b77
+ratified_at: d521b77
+ratified_on: 2026-05-22
 phase: "Phase J wave-5"
 supersedes: []
 superseded_by: []

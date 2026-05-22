@@ -309,9 +309,53 @@ fn caller2() -> i64:
 光标置于 `add` 定义名上 → incomingCalls 返回 `caller1` + `caller2`
 两个 `CallHierarchyIncomingCall`，每个包含其调用点 range。
 
-诚实作用域：仅同文档分析（跨文件调用图延后至 wave-5）。`<module>`
-调用方（模块顶层语句）作为合成调用方汇总，但 fn 内部嵌套调用不会
-被双重计入。
+诚实作用域：wave-4 仅同文档分析。wave-5 已扩展到所有打开文档。
+`<module>` 调用方（模块顶层语句）作为合成调用方汇总,但 fn 内部
+嵌套调用不会被双重计入。
+
+### 语义高亮增量 + inlayHint/resolve + 跨文件调用层次（wave-5,ADR-0057g）
+
+wave-5(v1.3 LSP server —— **功能完备**)闭合 ADR-0057f 的三项
+honest-cite 延期。
+
+#### `textDocument/semanticTokens/full/delta` —— 增量重着色
+
+首次 `textDocument/semanticTokens/full` 响应后,服务器为每个 URI
+缓存 `(result_id, tokens)`。后续编辑触发的 `semanticTokens/full/delta`
+请求携带上次的 `result_id`,服务器将新 token 流与缓存做 diff,返回
+单个 `SemanticTokensEdit { start, deleteCount, data }` 仅覆盖差异
+窗口。线缆字节成本从 O(file) 降至 O(edit) —— 1000 行文件单字符
+编辑只重发少数 token,不必重发整流。
+
+若客户端 `previousResultId` 与缓存不匹配(缓存被淘汰或客户端漏读响应),
+服务器回退到完整 `Tokens` 响应,不做部分 delta 合成(ADR-0057g §4
+诚实作用域)。
+
+#### `inlayHint/resolve` —— 悬停内联提示弹出工具提示
+
+每个内联提示携带 `data` 字段描述其 kind + 查询键。初始
+`textDocument/inlayHint` 响应保持小;用户悬停内联提示时,编辑器
+发送单个 `inlayHint/resolve` 请求。服务器读取 `data` 渲染 Markdown
+工具提示:
+
+- **类型提示**:`**x**: \`i64\`` + `_Inferred at let-binding._`。
+- **参数名提示**:`**\`add: (i64, i64) -> i64\`**` +
+  `Parameter \`left\` (slot 0).`。
+
+无 `data` 字段或字段格式异常的提示保持原样返回。
+
+#### 跨文件 `callHierarchy/incomingCalls` + `outgoingCalls`
+
+wave-5 将 incoming + outgoing 遍历扩展到 LSP 会话中所有打开的文档
+(与 wave-3 跨文件 rename 一致)。
+
+- Incoming:同文档结果与每个其他文档 URI 的一块结果拼接;其他文件
+  的调用方 `from.uri` 正确指向该文件。
+- Outgoing:主文档 fn 引用但定义在另一打开文档的 callee 现在能
+  resolve 到跨文档定义位置,而不是停留在零跨度占位。
+
+诚实作用域:已关闭文件不可见(排除文件系统遍历);trait-method
+解析仍然仅支持静态分派。
 
 ### 构建与运行
 
