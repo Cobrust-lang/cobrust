@@ -4,7 +4,7 @@ adr_id: 0059g
 name: 0059g
 parent_adr: 0059
 title: "Phase L wave-5 — Logpoints + data breakpoints + step-into-source + result_err runtime symbol (v1.2 DAP)"
-status: proposed
+status: accepted
 phase: Phase L wave-5
 date: 2026-05-22
 last_verified_commit: feature/0059g-wave-5
