@@ -1,0 +1,17 @@
+---
+source: crates/cobrust-lsp/tests/wave_4_e2e.rs
+expression: hints
+snapshot_kind: text
+---
+[
+  {
+    "position": {
+      "line": 0,
+      "character": 5
+    },
+    "label": ": i64",
+    "kind": 1,
+    "paddingLeft": false,
+    "paddingRight": false
+  }
+]

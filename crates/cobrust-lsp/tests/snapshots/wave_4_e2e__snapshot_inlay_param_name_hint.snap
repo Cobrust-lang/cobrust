@@ -1,0 +1,27 @@
+---
+source: crates/cobrust-lsp/tests/wave_4_e2e.rs
+expression: params
+snapshot_kind: text
+---
+[
+  {
+    "position": {
+      "line": 4,
+      "character": 17
+    },
+    "label": "left:",
+    "kind": 2,
+    "paddingLeft": false,
+    "paddingRight": true
+  },
+  {
+    "position": {
+      "line": 4,
+      "character": 20
+    },
+    "label": "right:",
+    "kind": 2,
+    "paddingLeft": false,
+    "paddingRight": true
+  }
+]
