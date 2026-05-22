@@ -77,7 +77,7 @@ pub async fn handle_initialize(
         supports_terminate_request: true,
         // ADR-0059f §3.4: advertise three exception filters. The
         // `result_err` filter ships in honest-scope-skip mode pending
-        // the runtime symbol emission (future ADR closes the gap).
+        // the runtime symbol emission (closed at wave-5 ADR-0059g §3.4).
         exception_breakpoint_filters: vec![
             ExceptionBreakpointsFilter {
                 filter: "panic".to_string(),
@@ -95,6 +95,15 @@ pub async fn handle_initialize(
                 default: false,
             },
         ],
+        // ADR-0059g §3.1 logpoints supported.
+        supports_log_points: true,
+        // ADR-0059g §3.2 data breakpoints supported.
+        supports_data_breakpoints: true,
+        // ADR-0059g §3.3 step-into-source supported. Note: target
+        // enumeration (`stepInTargets`) is NOT supported — that
+        // requires resolving multiple call sites on a single line,
+        // out-of-scope wave-5 per §4.
+        supports_step_in_targets_request: false,
     };
     Ok(serde_json::to_value(capabilities)?)
 }
@@ -144,7 +153,16 @@ pub async fn handle_set_breakpoints(
     let mut driver = driver_arc.lock().await;
     let mut breakpoints: Vec<Breakpoint> = Vec::with_capacity(args.breakpoints.len());
     for src_bp in args.breakpoints {
-        let bp = if let Some(cond) = src_bp.condition.as_deref() {
+        // Per ADR-0059g §3.1, `log_message` takes precedence: if both
+        // `condition` and `log_message` are present, the bp is treated
+        // as a logpoint (DAP spec) — the condition is then attached to
+        // the bp by the logpoint plumbing (best-effort; wave-5 ignores
+        // the combination and treats as plain logpoint for simplicity).
+        let bp = if let Some(log_msg) = src_bp.log_message.as_deref() {
+            driver
+                .set_log_breakpoint(file, src_bp.line, log_msg)
+                .await?
+        } else if let Some(cond) = src_bp.condition.as_deref() {
             driver
                 .set_conditional_breakpoint(file, src_bp.line, cond)
                 .await?

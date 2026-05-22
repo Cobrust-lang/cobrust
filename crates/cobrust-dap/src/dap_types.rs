@@ -94,6 +94,22 @@ pub struct InitializeResponse {
     /// unreachable. Wave-2..3 emit an empty list (skip-serializing).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exception_breakpoint_filters: Vec<ExceptionBreakpointsFilter>,
+    /// Per ADR-0059g §3.1, the debug adapter supports logpoints
+    /// (breakpoints with a `logMessage` that fire without halting).
+    /// Wave-5: true. Wave-1..4: false (skip-serializing default).
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub supports_log_points: bool,
+    /// Per ADR-0059g §3.2, the debug adapter supports data
+    /// breakpoints (watchpoints via `setDataBreakpoints`). Wave-5:
+    /// true. Wave-1..4: false (skip-serializing default).
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub supports_data_breakpoints: bool,
+    /// Per ADR-0059g §3.3, the debug adapter supports the
+    /// `stepInTargets` request (enumerating call targets on a multi-
+    /// call line). Wave-5 emits the bare `stepIn` handler but does
+    /// NOT support target enumeration; this flag remains false.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub supports_step_in_targets_request: bool,
 }
 
 // ====================================================================
@@ -155,6 +171,14 @@ pub struct SourceBreakpoint {
     /// through to lldb's `--condition` arg.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
+    /// Log message template (DAP `logMessage`). Per ADR-0059g §3.1,
+    /// when present the breakpoint becomes a **logpoint**: lldb logs
+    /// the message and auto-continues without halting. Wave-5 routes
+    /// the template verbatim to lldb's `breakpoint command add` with
+    /// `--auto-continue 1`. Placeholder interpolation (`{expr}`) is
+    /// out-of-scope wave-5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

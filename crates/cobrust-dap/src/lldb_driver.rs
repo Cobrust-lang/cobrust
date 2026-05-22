@@ -330,6 +330,65 @@ impl LldbDriver {
         Ok(parse_evaluate(&stdout))
     }
 
+    /// `set_log_breakpoint` wrapper for ADR-0059g §3.1.
+    ///
+    /// Sets a **logpoint**: a breakpoint that logs `log_msg` to lldb's
+    /// stdout and **auto-continues** without halting. Wave-5 routes the
+    /// template verbatim — DAP-spec `{expr}` placeholder interpolation
+    /// is deferred per ADR-0059g §4 non-goal.
+    ///
+    /// Wire: `breakpoint set --file X --line N --auto-continue 1` +
+    /// `breakpoint command add --script-type python -o "print('...')"`.
+    /// The two-command sequence is necessary because lldb's bare
+    /// `breakpoint set` does not accept a log message argument; the
+    /// log side-effect attaches via `breakpoint command add` to the
+    /// just-set bp (`breakpoint command add` defaults to the most-
+    /// recently-set bp when no id is given).
+    pub async fn set_log_breakpoint(
+        &mut self,
+        file: &str,
+        line: u32,
+        log_msg: &str,
+    ) -> Result<Breakpoint, DapError> {
+        if let DriverKind::Stub { breakpoint_seq, .. } = &mut self.kind {
+            let id = *breakpoint_seq;
+            *breakpoint_seq += 1;
+            return Ok(Breakpoint {
+                id: Some(id),
+                verified: true,
+                message: Some(format!("logpoint: {log_msg}")),
+                source: Some(Source {
+                    name: Some(file.to_string()),
+                    path: Some(file.to_string()),
+                    source_reference: None,
+                }),
+                line: Some(line),
+                column: None,
+            });
+        }
+
+        let set_stdout = self
+            .send_command(&format!(
+                "breakpoint set --file {} --line {line} --auto-continue 1",
+                lldb_quote(file)
+            ))
+            .await?;
+        let mut bp = parse_breakpoint(&set_stdout, file, line)?;
+        // Attach the print-and-continue command. Escape embedded
+        // double quotes in the message so the python `print("…")`
+        // call line stays well-formed.
+        let escaped = log_msg.replace('"', "\\\"");
+        let _ = self
+            .send_command(&format!(
+                "breakpoint command add --script-type python -o 'print(\"{escaped}\")'"
+            ))
+            .await?;
+        if bp.verified {
+            bp.message = Some(format!("logpoint: {log_msg}"));
+        }
+        Ok(bp)
+    }
+
     /// `set_conditional_breakpoint` wrapper for ADR-0059f §3.2.
     ///
     /// Issues `breakpoint set --file X --line N --condition '<expr>'`
