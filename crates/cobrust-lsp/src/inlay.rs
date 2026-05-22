@@ -189,9 +189,7 @@ fn collect_hints_in_expr(
                         let Some(param_name) = param_names.get(idx) else {
                             continue;
                         };
-                        if let Some(hint) =
-                            param_name_hint(arg_expr, param_name, line_map, range)
-                        {
+                        if let Some(hint) = param_name_hint(arg_expr, param_name, line_map, range) {
                             hints.push(hint);
                         }
                     }

@@ -160,7 +160,10 @@ fn semantic_tokens_keyword_coloring() {
         .iter()
         .filter(|t| t.token_type == TT_KEYWORD)
         .count();
-    assert!(keyword_count >= 4, "expected >=4 KEYWORD tokens; got {keyword_count}");
+    assert!(
+        keyword_count >= 4,
+        "expected >=4 KEYWORD tokens; got {keyword_count}"
+    );
 }
 
 /// Test 7: `"hello"` string literal → STRING token.
@@ -301,11 +304,7 @@ fn call_hierarchy_outgoing_calls_three_callees() {
     let items = prepare_call_hierarchy(source, &line_map, pos, &ctx, u.clone()).expect("item");
     let target = &items[0];
     let calls = build_outgoing_calls(source, &line_map, target);
-    assert_eq!(
-        calls.len(),
-        3,
-        "expected 3 distinct callees; got {calls:?}"
-    );
+    assert_eq!(calls.len(), 3, "expected 3 distinct callees; got {calls:?}");
     let names: Vec<&str> = calls.iter().map(|c| c.to.name.as_str()).collect();
     assert!(names.contains(&"a"));
     assert!(names.contains(&"b"));
@@ -411,8 +410,8 @@ fn snapshot_call_hierarchy_outgoing_calls_multi() {
         line: 4,
         character: 3,
     };
-    let items = prepare_call_hierarchy(source, &line_map, pos, &ctx, u.clone())
-        .expect("item must be Some");
+    let items =
+        prepare_call_hierarchy(source, &line_map, pos, &ctx, u.clone()).expect("item must be Some");
     let calls = build_outgoing_calls(source, &line_map, &items[0]);
     // Sort by callee name for deterministic snapshot ordering.
     let mut calls_sorted = calls;

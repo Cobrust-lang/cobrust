@@ -398,7 +398,12 @@ fn collect_call_sites_in_stmt(
     }
 }
 
-fn collect_call_sites_in_expr(expr: &Expr, target: &str, line_map: &LineMap, hits: &mut Vec<Range>) {
+fn collect_call_sites_in_expr(
+    expr: &Expr,
+    target: &str,
+    line_map: &LineMap,
+    hits: &mut Vec<Range>,
+) {
     if let ExprKind::Call { callee, args } = &expr.kind {
         if let ExprKind::Name(name) = &callee.kind
             && name == target
@@ -414,7 +419,9 @@ fn collect_call_sites_in_expr(expr: &Expr, target: &str, line_map: &LineMap, hit
                 CallArg::Positional(e)
                 | CallArg::Keyword(_, e)
                 | CallArg::StarArgs(e)
-                | CallArg::StarStarKwargs(e) => collect_call_sites_in_expr(e, target, line_map, hits),
+                | CallArg::StarStarKwargs(e) => {
+                    collect_call_sites_in_expr(e, target, line_map, hits);
+                }
             }
         }
     } else if let ExprKind::Binary { lhs, rhs, .. } = &expr.kind {
@@ -506,44 +513,42 @@ fn walk_expr_for_outgoing(
                 start: line_map.byte_to_position(expr.span.start),
                 end: line_map.byte_to_position(expr.span.end),
             };
-            let entry = callees
-                .entry(callee_name.clone())
-                .or_insert_with(|| {
-                    let item = if let Some(found) = find_fn_def(module, callee_name) {
-                        fn_to_call_hierarchy_item(found.stmt, callee_name, line_map, uri.clone())
-                    } else {
-                        None
-                    };
-                    let item = item.unwrap_or_else(|| CallHierarchyItem {
-                        name: callee_name.clone(),
-                        kind: SymbolKind::FUNCTION,
-                        tags: None,
-                        detail: None,
-                        uri: uri.clone(),
-                        range: Range {
-                            start: Position {
-                                line: 0,
-                                character: 0,
-                            },
-                            end: Position {
-                                line: 0,
-                                character: 0,
-                            },
+            let entry = callees.entry(callee_name.clone()).or_insert_with(|| {
+                let item = if let Some(found) = find_fn_def(module, callee_name) {
+                    fn_to_call_hierarchy_item(found.stmt, callee_name, line_map, uri.clone())
+                } else {
+                    None
+                };
+                let item = item.unwrap_or_else(|| CallHierarchyItem {
+                    name: callee_name.clone(),
+                    kind: SymbolKind::FUNCTION,
+                    tags: None,
+                    detail: None,
+                    uri: uri.clone(),
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
                         },
-                        selection_range: Range {
-                            start: Position {
-                                line: 0,
-                                character: 0,
-                            },
-                            end: Position {
-                                line: 0,
-                                character: 0,
-                            },
+                        end: Position {
+                            line: 0,
+                            character: 0,
                         },
-                        data: None,
-                    });
-                    (item, Vec::new())
+                    },
+                    selection_range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                    },
+                    data: None,
                 });
+                (item, Vec::new())
+            });
             entry.1.push(call_range);
         }
         walk_expr_for_outgoing(callee, line_map, uri, module, callees);

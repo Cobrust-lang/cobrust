@@ -72,9 +72,7 @@ pub mod rename;
 pub mod semantic_tokens;
 pub mod span_convert;
 
-pub use call_hierarchy::{
-    build_incoming_calls, build_outgoing_calls, prepare_call_hierarchy,
-};
+pub use call_hierarchy::{build_incoming_calls, build_outgoing_calls, prepare_call_hierarchy};
 pub use code_action::{
     build_code_actions, code_action_kind_for_fix_safety, code_action_kind_for_lowering_error,
     code_action_kind_for_mir_error, code_action_kind_for_type_error, fix_safety_from_code,
@@ -726,10 +724,7 @@ impl LanguageServer for Backend {
     /// Returns the inline type + parameter-name hints visible inside
     /// `params.range` for the document at `params.text_document.uri`.
     /// Returns `Ok(None)` for unknown URIs.
-    async fn inlay_hint(
-        &self,
-        params: InlayHintParams,
-    ) -> LspResult<Option<Vec<InlayHint>>> {
+    async fn inlay_hint(&self, params: InlayHintParams) -> LspResult<Option<Vec<InlayHint>>> {
         let uri = &params.text_document.uri;
         let (source, line_map) = {
             let docs = self.docs.lock().expect("docs mutex poisoned");

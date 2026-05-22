@@ -328,7 +328,10 @@ fn refine_stmt(out: &mut Vec<RawToken>, stmt: &Stmt, line_map: &LineMap) {
         StmtKind::Assign { value, .. } | StmtKind::Expr(value) => {
             refine_expr(out, value, line_map);
         }
-        StmtKind::Return(Some(expr)) | StmtKind::Raise { exc: Some(expr), .. } => {
+        StmtKind::Return(Some(expr))
+        | StmtKind::Raise {
+            exc: Some(expr), ..
+        } => {
             refine_expr(out, expr, line_map);
         }
         StmtKind::If {
@@ -435,7 +438,11 @@ fn refine_type(out: &mut Vec<RawToken>, ty: &Type, line_map: &LineMap) {
             refine_type(out, p, line_map);
         }
     }
-    if let TypeKind::Fn { params, return_type } = &ty.kind {
+    if let TypeKind::Fn {
+        params,
+        return_type,
+    } = &ty.kind
+    {
         for p in params {
             refine_type(out, p, line_map);
         }
