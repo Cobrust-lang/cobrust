@@ -1174,13 +1174,55 @@ fn stdlib_io_08_println_fib_result() {
         //         _3=_n_minus_1(int), _4=_n_minus_2(int),
         //         _5=_r1(int), _6=_r2(int)
         let fib_locals = vec![
-            LocalDecl { id: LocalId(0), name: "_return".into(), ty: Ty::Int, mutable: true,  span: span0 },
-            LocalDecl { id: LocalId(1), name: "n".into(),       ty: Ty::Int, mutable: false, span: span0 },
-            LocalDecl { id: LocalId(2), name: "_cmp".into(),    ty: Ty::Bool, mutable: true, span: span0 },
-            LocalDecl { id: LocalId(3), name: "_nm1".into(),    ty: Ty::Int, mutable: true,  span: span0 },
-            LocalDecl { id: LocalId(4), name: "_nm2".into(),    ty: Ty::Int, mutable: true,  span: span0 },
-            LocalDecl { id: LocalId(5), name: "_r1".into(),     ty: Ty::Int, mutable: true,  span: span0 },
-            LocalDecl { id: LocalId(6), name: "_r2".into(),     ty: Ty::Int, mutable: true,  span: span0 },
+            LocalDecl {
+                id: LocalId(0),
+                name: "_return".into(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0,
+            },
+            LocalDecl {
+                id: LocalId(1),
+                name: "n".into(),
+                ty: Ty::Int,
+                mutable: false,
+                span: span0,
+            },
+            LocalDecl {
+                id: LocalId(2),
+                name: "_cmp".into(),
+                ty: Ty::Bool,
+                mutable: true,
+                span: span0,
+            },
+            LocalDecl {
+                id: LocalId(3),
+                name: "_nm1".into(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0,
+            },
+            LocalDecl {
+                id: LocalId(4),
+                name: "_nm2".into(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0,
+            },
+            LocalDecl {
+                id: LocalId(5),
+                name: "_r1".into(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0,
+            },
+            LocalDecl {
+                id: LocalId(6),
+                name: "_r2".into(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0,
+            },
         ];
         // bb0: _cmp = (n < 2); SwitchInt(_cmp, [(true→bb1)], otherwise→bb2)
         let fib_bb0 = MirBlock {
@@ -1296,9 +1338,27 @@ fn stdlib_io_08_println_fib_result() {
         // ── body[1]: main() -> i64 ──────────────────────────────────────
         // Locals: _0=return(int), _1=_fib_ret(int), _2=_println_ret(int)
         let main_locals = vec![
-            LocalDecl { id: LocalId(0), name: "_return".into(),     ty: Ty::Int, mutable: true,  span: span0 },
-            LocalDecl { id: LocalId(1), name: "_fib_ret".into(),    ty: Ty::Int, mutable: true,  span: span0 },
-            LocalDecl { id: LocalId(2), name: "_println_ret".into(), ty: Ty::Int, mutable: true, span: span0 },
+            LocalDecl {
+                id: LocalId(0),
+                name: "_return".into(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0,
+            },
+            LocalDecl {
+                id: LocalId(1),
+                name: "_fib_ret".into(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0,
+            },
+            LocalDecl {
+                id: LocalId(2),
+                name: "_println_ret".into(),
+                ty: Ty::Int,
+                mutable: true,
+                span: span0,
+            },
         ];
         // bb0: Call fib(10) -> _fib_ret → bb1
         let main_bb0 = MirBlock {
@@ -1349,7 +1409,9 @@ fn stdlib_io_08_println_fib_result() {
             span: span0,
         };
 
-        let module = Module { bodies: vec![fib_body, main_body] };
+        let module = Module {
+            bodies: vec![fib_body, main_body],
+        };
         let Some(stdout) = stdlib_io_link_and_run("stdlib_io_08", module) else {
             return; // Prereqs missing (no llvm feature, no stdlib, no linker) — skip.
         };
