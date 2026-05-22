@@ -53,11 +53,12 @@ use tower_lsp::lsp_types::{
     CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
     HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, InlayHint,
-    InlayHintParams, MessageType, OneOf, PrepareRenameResponse, RenameOptions, RenameParams,
-    SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
-    SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
-    TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Url, WorkDoneProgressOptions, WorkspaceEdit,
+    InlayHintOptions, InlayHintParams, InlayHintServerCapabilities, MessageType, OneOf,
+    PrepareRenameResponse, RenameOptions, RenameParams, SemanticToken, SemanticTokensDeltaParams,
+    SemanticTokensFullDeltaResult, SemanticTokensFullOptions, SemanticTokensOptions,
+    SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities,
+    ServerCapabilities, ServerInfo, TextDocumentContentChangeEvent, TextDocumentPositionParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Url, WorkDoneProgressOptions, WorkspaceEdit,
 };
 
 pub mod call_hierarchy;
@@ -72,7 +73,10 @@ pub mod rename;
 pub mod semantic_tokens;
 pub mod span_convert;
 
-pub use call_hierarchy::{build_incoming_calls, build_outgoing_calls, prepare_call_hierarchy};
+pub use call_hierarchy::{
+    build_incoming_calls, build_incoming_calls_cross_file, build_outgoing_calls,
+    build_outgoing_calls_cross_file, prepare_call_hierarchy,
+};
 pub use code_action::{
     build_code_actions, code_action_kind_for_fix_safety, code_action_kind_for_lowering_error,
     code_action_kind_for_mir_error, code_action_kind_for_type_error, fix_safety_from_code,
@@ -87,9 +91,9 @@ pub use diagnostic::{
 };
 pub use goto_def::resolve_definition;
 pub use hover::{render_hover_markdown, resolve_hover, word_at_offset};
-pub use inlay::build_inlay_hints;
+pub use inlay::{build_inlay_hints, resolve_inlay_hint};
 pub use rename::{prepare_rename, rename_symbol, rename_symbol_cross_file};
-pub use semantic_tokens::{build_semantic_tokens, token_legend};
+pub use semantic_tokens::{build_semantic_tokens, build_semantic_tokens_delta, token_legend};
 pub use span_convert::{LineMap, span_to_lsp_range};
 
 /// Per-document state cached by the LSP server.
@@ -156,6 +160,17 @@ pub struct Backend {
     /// the latest scheduled version; a spawned debounce task checks
     /// against the map before running the pipeline.
     debounce_tokens: Arc<DebounceTokens>,
+    /// Per-URI semantic-tokens cache for `textDocument/semanticTokens/
+    /// full/delta` (ADR-0057g §3.1). Each entry stores the last
+    /// emitted `result_id` and the delta-encoded token vec; the delta
+    /// handler reads the cache, computes a diff against the new
+    /// tokens, and writes the new cache before responding. A miss on
+    /// `previous_result_id` falls back to the full response.
+    semantic_tokens_cache: Mutex<HashMap<Url, (String, Vec<SemanticToken>)>>,
+    /// Monotone counter for `result_id` allocation. Each emission
+    /// allocates a unique id so the cache lookup is well-defined.
+    /// `String` form keeps the LSP wire shape; opaque to clients.
+    semantic_tokens_result_counter: Mutex<u64>,
 }
 
 /// Per-`Backend` allocator that assigns a stable `u32` `FileId` to each
@@ -204,7 +219,21 @@ impl Backend {
             session_ctx: Arc::new(Mutex::new(TypeCheckCtx::new())),
             uri_file_ids: Mutex::new(UriFileIdPool::default()),
             debounce_tokens: Arc::new(DebounceTokens::new(Duration::from_millis(debounce_ms))),
+            semantic_tokens_cache: Mutex::new(HashMap::new()),
+            semantic_tokens_result_counter: Mutex::new(0),
         }
+    }
+
+    /// Allocate a fresh monotone `result_id` for semantic-tokens
+    /// responses. Each call returns a stringified u64 unique within
+    /// this `Backend`'s lifetime.
+    fn next_semantic_tokens_result_id(&self) -> String {
+        let mut counter = self
+            .semantic_tokens_result_counter
+            .lock()
+            .expect("semantic_tokens_result_counter poisoned");
+        *counter = counter.saturating_add(1);
+        format!("st-{counter}")
     }
 
     /// Read-only accessor for the shared `TypeCheckCtx`. Phase J+
@@ -389,20 +418,36 @@ impl LanguageServer for Backend {
                 definition_provider: Some(OneOf::Left(true)),
                 // ADR-0057e §3.2 — codeAction capability (FixSafety-gated).
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
-                // ADR-0057f §3.1 — inlay hint capability (Phase J wave-4).
-                inlay_hint_provider: Some(OneOf::Left(true)),
-                // ADR-0057f §3.2 — semantic tokens (full-doc, 8-type legend).
+                // ADR-0057f §3.1 + ADR-0057g §3.2 — inlay hint with resolve.
+                // Wave-5 flips from `OneOf::Left(true)` to the Options form so
+                // `resolve_provider: true` advertises the `inlayHint/resolve`
+                // path; clients pre-flight resolve before requesting tooltips.
+                inlay_hint_provider: Some(OneOf::Right(
+                    InlayHintServerCapabilities::Options(InlayHintOptions {
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                        resolve_provider: Some(true),
+                    }),
+                )),
+                // ADR-0057f §3.2 + ADR-0057g §3.1 — semantic tokens with
+                // delta support. Wave-5 flips `full` from `Bool(true)` to
+                // `Delta { delta: Some(true) }` so clients call the delta
+                // path after the first full response, dropping wire bytes
+                // from O(file) to O(edit).
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
                             work_done_progress_options: WorkDoneProgressOptions::default(),
                             legend: semantic_tokens::token_legend(),
                             range: Some(false),
-                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            full: Some(SemanticTokensFullOptions::Delta {
+                                delta: Some(true),
+                            }),
                         },
                     ),
                 ),
                 // ADR-0057f §3.3 — call hierarchy (prepare + incoming + outgoing).
+                // ADR-0057g §3.3 — wave-5 broadens incoming + outgoing to walk
+                // every OPEN document via `Backend.documents` (cross-file).
                 call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
@@ -417,7 +462,7 @@ impl LanguageServer for Backend {
         self.client
             .log_message(
                 MessageType::INFO,
-                "cobrust-lsp wave-4 initialized (ADR-0057f v1.2: inlay hints + semantic tokens + call hierarchy)",
+                "cobrust-lsp wave-5 initialized (ADR-0057g v1.3: semantic-tokens delta + inlayHint/resolve + cross-file call hierarchy — feature-complete)",
             )
             .await;
     }
@@ -738,10 +783,13 @@ impl LanguageServer for Backend {
         Ok(Some(hints))
     }
 
-    /// ADR-0057f §3.2 — semantic-tokens full-document handler.
+    /// ADR-0057f §3.2 + ADR-0057g §3.1 — semantic-tokens full-document
+    /// handler.
     ///
-    /// Computes the SemanticTokens response for the full document at
-    /// `params.text_document.uri`. Returns `Ok(None)` for unknown URIs.
+    /// Wave-5 extends the response with a fresh `result_id` and writes
+    /// the new `(result_id, tokens)` pair into the per-URI cache so a
+    /// subsequent `semanticTokens/full/delta` can diff against it.
+    /// Returns `Ok(None)` for unknown URIs.
     async fn semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
@@ -754,8 +802,80 @@ impl LanguageServer for Backend {
                 None => return Ok(None),
             }
         };
-        let tokens = semantic_tokens::build_semantic_tokens(&source, &line_map);
+        let mut tokens = semantic_tokens::build_semantic_tokens(&source, &line_map);
+        let result_id = self.next_semantic_tokens_result_id();
+        tokens.result_id = Some(result_id.clone());
+        // Cache the (result_id, tokens) pair for the upcoming delta request.
+        {
+            let mut cache = self
+                .semantic_tokens_cache
+                .lock()
+                .expect("semantic_tokens_cache poisoned");
+            cache.insert(uri.clone(), (result_id, tokens.data.clone()));
+        }
         Ok(Some(SemanticTokensResult::Tokens(tokens)))
+    }
+
+    /// ADR-0057g §3.1 — `textDocument/semanticTokens/full/delta` handler.
+    ///
+    /// Reads `(previous_result_id, previous_tokens)` from the per-URI
+    /// cache. If the client's `previous_result_id` matches the cached
+    /// id, computes the minimal `SemanticTokensEdit` vec via the
+    /// `build_semantic_tokens_delta` helper. Otherwise falls back to
+    /// the full response (per ADR-0057g §4 honest-scope: no graceful
+    /// partial-synthesis when the cache misses).
+    async fn semantic_tokens_full_delta(
+        &self,
+        params: SemanticTokensDeltaParams,
+    ) -> LspResult<Option<SemanticTokensFullDeltaResult>> {
+        let uri = &params.text_document.uri;
+        let (source, line_map) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            match docs.get(uri) {
+                Some(s) => (s.source.clone(), s.line_map.clone()),
+                None => return Ok(None),
+            }
+        };
+
+        let (cached_id, prev_tokens) = {
+            let cache = self
+                .semantic_tokens_cache
+                .lock()
+                .expect("semantic_tokens_cache poisoned");
+            cache
+                .get(uri)
+                .map(|(id, toks)| (Some(id.clone()), Some(toks.clone())))
+                .unwrap_or((None, None))
+        };
+
+        let new_id = self.next_semantic_tokens_result_id();
+        let prev_id_arg: Option<&str> = Some(params.previous_result_id.as_str());
+        let cached_id_arg: Option<&str> = cached_id.as_deref();
+        let prev_tokens_arg: Option<&[SemanticToken]> = prev_tokens.as_deref();
+
+        let result = semantic_tokens::build_semantic_tokens_delta(
+            &source,
+            &line_map,
+            prev_id_arg,
+            cached_id_arg,
+            prev_tokens_arg,
+            new_id.clone(),
+        );
+
+        // Update the cache with the freshly computed token vec so the
+        // next delta request can diff against this one. We have to
+        // recompute the new tokens because the helper returns a delta
+        // (which doesn't carry the full new stream).
+        let new_tokens = semantic_tokens::build_semantic_tokens(&source, &line_map);
+        {
+            let mut cache = self
+                .semantic_tokens_cache
+                .lock()
+                .expect("semantic_tokens_cache poisoned");
+            cache.insert(uri.clone(), (new_id, new_tokens.data));
+        }
+
+        Ok(Some(result))
     }
 
     /// ADR-0057f §3.3 — `textDocument/prepareCallHierarchy` handler.
@@ -787,38 +907,96 @@ impl LanguageServer for Backend {
         ))
     }
 
-    /// ADR-0057f §3.3 — `callHierarchy/incomingCalls` handler.
+    /// ADR-0057f §3.3 + ADR-0057g §3.3 — `callHierarchy/incomingCalls`
+    /// handler.
+    ///
+    /// Wave-5 broadens the walk to every OPEN document in
+    /// `self.docs`: the wave-4 same-doc result is concatenated with
+    /// the result of walking each other open URI for callers of the
+    /// target fn. Honest scope: closed files are invisible
+    /// (consistent with wave-3 cross-file rename).
     async fn incoming_calls(
         &self,
         params: CallHierarchyIncomingCallsParams,
     ) -> LspResult<Option<Vec<CallHierarchyIncomingCall>>> {
-        let uri = &params.item.uri;
-        let (source, line_map) = {
+        let uri = params.item.uri.clone();
+        let (source, line_map, other_docs) = {
             let docs = self.docs.lock().expect("docs mutex poisoned");
-            match docs.get(uri) {
-                Some(s) => (s.source.clone(), s.line_map.clone()),
-                None => return Ok(None),
-            }
+            let Some(primary) = docs.get(&uri) else {
+                return Ok(None);
+            };
+            let primary_source = primary.source.clone();
+            let primary_line_map = primary.line_map.clone();
+            let other: Vec<(Url, String, LineMap)> = docs
+                .iter()
+                .filter_map(|(u, doc)| {
+                    if *u == uri {
+                        None
+                    } else {
+                        Some((u.clone(), doc.source.clone(), doc.line_map.clone()))
+                    }
+                })
+                .collect();
+            (primary_source, primary_line_map, other)
         };
-        let calls = call_hierarchy::build_incoming_calls(&source, &line_map, &params.item);
+        let calls = call_hierarchy::build_incoming_calls_cross_file(
+            &source,
+            &line_map,
+            &params.item,
+            &other_docs,
+        );
         Ok(Some(calls))
     }
 
-    /// ADR-0057f §3.3 — `callHierarchy/outgoingCalls` handler.
+    /// ADR-0057f §3.3 + ADR-0057g §3.3 — `callHierarchy/outgoingCalls`
+    /// handler.
+    ///
+    /// Wave-5 resolves callees against every OPEN document so a fn
+    /// calling a helper defined in another file surfaces the correct
+    /// `to` location instead of a zero-span placeholder.
     async fn outgoing_calls(
         &self,
         params: CallHierarchyOutgoingCallsParams,
     ) -> LspResult<Option<Vec<CallHierarchyOutgoingCall>>> {
-        let uri = &params.item.uri;
-        let (source, line_map) = {
+        let uri = params.item.uri.clone();
+        let (source, line_map, other_docs) = {
             let docs = self.docs.lock().expect("docs mutex poisoned");
-            match docs.get(uri) {
-                Some(s) => (s.source.clone(), s.line_map.clone()),
-                None => return Ok(None),
-            }
+            let Some(primary) = docs.get(&uri) else {
+                return Ok(None);
+            };
+            let primary_source = primary.source.clone();
+            let primary_line_map = primary.line_map.clone();
+            let other: Vec<(Url, String, LineMap)> = docs
+                .iter()
+                .filter_map(|(u, doc)| {
+                    if *u == uri {
+                        None
+                    } else {
+                        Some((u.clone(), doc.source.clone(), doc.line_map.clone()))
+                    }
+                })
+                .collect();
+            (primary_source, primary_line_map, other)
         };
-        let calls = call_hierarchy::build_outgoing_calls(&source, &line_map, &params.item);
+        let calls = call_hierarchy::build_outgoing_calls_cross_file(
+            &source,
+            &line_map,
+            &params.item,
+            &other_docs,
+        );
         Ok(Some(calls))
+    }
+
+    /// ADR-0057g §3.2 — `inlayHint/resolve` handler.
+    ///
+    /// Lazily fills in the `tooltip` field on a hint that was emitted
+    /// with `data` populated by `build_inlay_hints`. The resolve
+    /// handler re-uses the shared `TypeCheckCtx` snapshot to render
+    /// a Markdown tooltip with the inferred type (for `let` hints)
+    /// or the callee signature (for param-name hints).
+    async fn inlay_hint_resolve(&self, params: InlayHint) -> LspResult<InlayHint> {
+        let ctx = self.session_ctx_snapshot();
+        Ok(inlay::resolve_inlay_hint(params, &ctx))
     }
 }
 
