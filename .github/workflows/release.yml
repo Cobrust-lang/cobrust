@@ -157,7 +157,7 @@ jobs:
           # that lack AVX-512 support (e.g. ubuntu-latest for v4 wheel).
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
         run: |
-          cross build --release --locked -p cobrust-cli --target ${{ matrix.target }}
+          cross build --release --locked -p cobrust-cli -p cobrust-lsp -p cobrust-dap --target ${{ matrix.target }}
 
       - name: Build release binary (native)
         if: ${{ !matrix.use_cross }}
@@ -170,7 +170,7 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
           CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
         run: |
-          cargo build --release --locked -p cobrust-cli --target ${{ matrix.target }}
+          cargo build --release --locked -p cobrust-cli -p cobrust-lsp -p cobrust-dap --target ${{ matrix.target }}
 
       - name: Package tar.gz
         shell: bash
