@@ -14,12 +14,12 @@ description = "Cobrust JIT — Cranelift-backed JIT engine for REPL incremental 
 workspace = true
 
 [dependencies]
-cobrust-mir = { path = "../cobrust-mir", version = "=0.5.0" }
-cobrust-types = { path = "../cobrust-types", version = "=0.5.0" }
+cobrust-mir = { path = "../cobrust-mir", version = "=0.5.1" }
+cobrust-types = { path = "../cobrust-types", version = "=0.5.1" }
 # ADR-0058d: cobrust-jit's MIR→Cranelift lowering is a thin wrapper
 # over cobrust-codegen::lowering wave-1 substrate. Closes 0056a §13
 # noted-debt (JIT/AOT drift surface).
-cobrust-codegen = { path = "../cobrust-codegen", version = "=0.5.0" }
+cobrust-codegen = { path = "../cobrust-codegen", version = "=0.5.1" }
 # Cranelift quartet pinned to 0.131 family per ADR-0056a §"3.1
 # Dependency add"; matches the already-pinned versions in
 # cobrust-codegen for ABI consistency.
@@ -31,5 +31,5 @@ cranelift-native = "0.131"
 thiserror = { workspace = true }
 
 [dev-dependencies]
-cobrust-frontend = { path = "../cobrust-frontend", version = "=0.5.0" }
-cobrust-hir = { path = "../cobrust-hir", version = "=0.5.0" }
+cobrust-frontend = { path = "../cobrust-frontend", version = "=0.5.1" }
+cobrust-hir = { path = "../cobrust-hir", version = "=0.5.1" }
