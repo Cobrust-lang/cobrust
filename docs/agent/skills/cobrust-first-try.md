@@ -4,7 +4,7 @@ skill_id: cobrust-first-try
 title: "Write Cobrust correctly on the first try"
 audience: any LLM agent (Claude Code / Cursor / OpenClaw / Hermes / Aider / OpenAI Codex / etc.)
 load_when: before writing or editing any `.cb` source file
-last_verified_commit: 8854db2
+last_verified_commit: f0863fe
 maintainers: P10/user; updated atomically with language-surface ADRs
 ---
 
@@ -444,6 +444,37 @@ cobrust install <pkg>
 ```
 
 Do NOT use `v0.4.0` URLs — that release is superseded by `v0.5.0`.
+
+## 9k. LLVM backend stdlib I/O — wave-2 status (ADR-0058f, v0.5.1)
+
+The `--features llvm` backend in **v0.5.0 had a critical defect**: `print("hi")` AOT-compiled to an empty-stdout binary; `print(fib(40))` computed but the int was silently dropped. **v0.5.1 fixes this** by landing wave-2 of the LLVM backend extern-call surface (ADR-0058f). Default Cranelift backend was never affected.
+
+What works in v0.5.1 LLVM AOT:
+
+- `print(x: i64)` → `__cobrust_println_int(i64)`
+- `print(b: bool)` → `__cobrust_println_bool(i8)` (i1 → i8 widening at the call site)
+- `print(f: f64)` → `__cobrust_println_float(f64)`
+- `print(s: str)` runtime path → `__cobrust_println_str_buf(*mut Str)`
+- `print("literal")` legacy path → `__cobrust_println(ptr, len)`
+- `print_no_nl(s)` runtime + literal paths
+- `let s: str = "hi"; print(s)` end-to-end (the Assign-side cascade)
+- `print(fib(N))` end-to-end (FnRef + extern dispatch composition)
+
+What remains wave-1 stub (compiles + no-ops at runtime) in the LLVM backend:
+
+- `input(prompt)` / `read_line()` / `input_no_prompt()`
+- `argv()`
+- `list_new` / `list_set` / `list_get` / `list_len` / `list_is_empty` / `list_append`
+- `dict_*` family
+- `set_*` / `tuple_*` family
+- `iter_init` / `iter_next` / `iter_drop`
+- `fmt_*` family (f-string runtime)
+- `math.sqrt` / `math.floor` / `math.ceil` / `math.round` / `math.abs` / `math.sin` / `math.cos` / `math.tan` / `math.log` / `math.exp` / `math.pow`
+- `parse_int` / `str_eq` / `str_at` / `str_len_src` / `str_ord` / `count_toks` / `parse_int_tok` / `str_eq_lit`
+- str method family from ADR-0050e (`split` / `join` / `replace` / `trim` / `find` / `contains` / `starts_with` / `ends_with` / `lower` / `upper` / `clone`)
+- LLM router intrinsics (`llm_complete` / `llm_dispatch` / `llm_stream` / `prompt_*` / `tool_*`)
+
+These wave-3 surfaces use the **Cranelift backend** without issue today (default `cargo build` route). If your program uses any of them and you opt into `--features llvm`, the program builds but emits no observable side effects from those calls. Track wave-3 closure in ADR-0058f §7 + F45 finding.
 
 ## 10. When in doubt — read the canonical example programs
 
