@@ -14,10 +14,11 @@ use thiserror::Error;
 
 use crate::Adapter;
 use crate::dap_types::{
-    Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments, InitializeResponse,
-    LaunchArguments, NextArguments, PauseArguments, Request, SetBreakpointsArguments,
-    SetBreakpointsResponse, StackTraceArguments, StackTraceResponse, VariablesArguments,
-    VariablesResponse,
+    Breakpoint, ContinueArguments, ContinueResponse, DisconnectArguments,
+    ExceptionBreakpointsFilter, InitializeResponse, LaunchArguments, NextArguments,
+    PauseArguments, Request, SetBreakpointsArguments, SetBreakpointsResponse,
+    SetExceptionBreakpointsArguments, SetExceptionBreakpointsResponse, StackTraceArguments,
+    StackTraceResponse, VariablesArguments, VariablesResponse,
 };
 use crate::lldb_driver::DapError;
 
@@ -74,7 +75,26 @@ pub async fn handle_initialize(
         supports_set_variable: false,
         supports_restart_frame: false,
         supports_terminate_request: true,
-        exception_breakpoint_filters: Vec::new(),
+        // ADR-0059f §3.4: advertise three exception filters. The
+        // `result_err` filter ships in honest-scope-skip mode pending
+        // the runtime symbol emission (future ADR closes the gap).
+        exception_breakpoint_filters: vec![
+            ExceptionBreakpointsFilter {
+                filter: "panic".to_string(),
+                label: "Uncaught Panic".to_string(),
+                default: true,
+            },
+            ExceptionBreakpointsFilter {
+                filter: "result_err".to_string(),
+                label: "Result::Err Construction".to_string(),
+                default: false,
+            },
+            ExceptionBreakpointsFilter {
+                filter: "unreachable".to_string(),
+                label: "Unreachable! Intrinsic".to_string(),
+                default: false,
+            },
+        ],
     };
     Ok(serde_json::to_value(capabilities)?)
 }
@@ -250,6 +270,34 @@ pub async fn handle_disconnect(
     let mut driver = driver_arc.lock().await;
     driver.disconnect().await?;
     Ok(serde_json::json!({}))
+}
+
+// =====================================================================
+// SetExceptionBreakpoints (wave-4 ADR-0059f §3.4)
+// =====================================================================
+
+/// Handle the `setExceptionBreakpoints` DAP request.
+///
+/// Per ADR-0059f §3.4, accepts the editor's filter selection (subset
+/// of `{"panic", "result_err", "unreachable"}` advertised in
+/// `InitializeResponse.exceptionBreakpointFilters`) and sets one bp
+/// per filter. Honest-scope-skip: filters whose lldb symbol is
+/// unavailable surface `verified: false` with an explanatory
+/// `message` instead of erroring.
+pub async fn handle_set_exception_breakpoints(
+    adapter: &Adapter,
+    request: &Request,
+) -> Result<Value, DapHandlerError> {
+    let args: SetExceptionBreakpointsArguments = parse_args(request)?;
+    let driver_arc = adapter.driver();
+    let mut driver = driver_arc.lock().await;
+    let mut breakpoints: Vec<Breakpoint> = Vec::with_capacity(args.filters.len());
+    for filter in args.filters {
+        let bp = driver.set_exception_breakpoint(&filter).await?;
+        breakpoints.push(bp);
+    }
+    let response = SetExceptionBreakpointsResponse { breakpoints };
+    Ok(serde_json::to_value(response)?)
 }
 
 // =====================================================================

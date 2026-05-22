@@ -209,6 +209,9 @@ impl Adapter {
             "disconnect" => handlers::handle_disconnect(self, request).await,
             "threads" => handlers::handle_threads(self, request).await,
             "evaluate" => evaluate::handle_evaluate(self, request).await,
+            "setExceptionBreakpoints" => {
+                handlers::handle_set_exception_breakpoints(self, request).await
+            }
             other => {
                 tracing::info!("unsupported DAP command (wave-2 scope): {other}");
                 Ok(serde_json::json!({

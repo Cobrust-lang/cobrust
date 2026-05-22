@@ -4,6 +4,23 @@ expression: response.body
 snapshot_kind: text
 ---
 {
+  "exceptionBreakpointFilters": [
+    {
+      "default": true,
+      "filter": "panic",
+      "label": "Uncaught Panic"
+    },
+    {
+      "default": false,
+      "filter": "result_err",
+      "label": "Result::Err Construction"
+    },
+    {
+      "default": false,
+      "filter": "unreachable",
+      "label": "Unreachable! Intrinsic"
+    }
+  ],
   "supportsConditionalBreakpoints": true,
   "supportsConfigurationDoneRequest": false,
   "supportsEvaluateForHovers": false,
