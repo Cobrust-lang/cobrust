@@ -46,25 +46,33 @@ use tower_lsp::Client;
 use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::{
-    CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CodeActionResponse,
-    CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, MessageType, OneOf,
-    PrepareRenameResponse, RenameOptions, RenameParams, ServerCapabilities, ServerInfo,
+    CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem,
+    CallHierarchyOutgoingCall, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
+    CallHierarchyServerCapability, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CodeActionResponse, CompletionOptions, CompletionParams,
+    CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, InlayHint,
+    InlayHintParams, MessageType, OneOf, PrepareRenameResponse, RenameOptions, RenameParams,
+    SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
     TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
     TextDocumentSyncKind, Url, WorkDoneProgressOptions, WorkspaceEdit,
 };
 
+pub mod call_hierarchy;
 pub mod code_action;
 pub mod completion;
 pub mod debounce;
 pub mod diagnostic;
 pub mod goto_def;
 pub mod hover;
+pub mod inlay;
 pub mod rename;
+pub mod semantic_tokens;
 pub mod span_convert;
 
+pub use call_hierarchy::{build_incoming_calls, build_outgoing_calls, prepare_call_hierarchy};
 pub use code_action::{
     build_code_actions, code_action_kind_for_fix_safety, code_action_kind_for_lowering_error,
     code_action_kind_for_mir_error, code_action_kind_for_type_error, fix_safety_from_code,
@@ -79,7 +87,9 @@ pub use diagnostic::{
 };
 pub use goto_def::resolve_definition;
 pub use hover::{render_hover_markdown, resolve_hover, word_at_offset};
+pub use inlay::build_inlay_hints;
 pub use rename::{prepare_rename, rename_symbol, rename_symbol_cross_file};
+pub use semantic_tokens::{build_semantic_tokens, token_legend};
 pub use span_convert::{LineMap, span_to_lsp_range};
 
 /// Per-document state cached by the LSP server.
@@ -379,6 +389,21 @@ impl LanguageServer for Backend {
                 definition_provider: Some(OneOf::Left(true)),
                 // ADR-0057e §3.2 — codeAction capability (FixSafety-gated).
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                // ADR-0057f §3.1 — inlay hint capability (Phase J wave-4).
+                inlay_hint_provider: Some(OneOf::Left(true)),
+                // ADR-0057f §3.2 — semantic tokens (full-doc, 8-type legend).
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            work_done_progress_options: WorkDoneProgressOptions::default(),
+                            legend: semantic_tokens::token_legend(),
+                            range: Some(false),
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                        },
+                    ),
+                ),
+                // ADR-0057f §3.3 — call hierarchy (prepare + incoming + outgoing).
+                call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -392,7 +417,7 @@ impl LanguageServer for Backend {
         self.client
             .log_message(
                 MessageType::INFO,
-                "cobrust-lsp wave-2.1 initialized (ADR-0057b textDocument/didChange + Session reuse)",
+                "cobrust-lsp wave-4 initialized (ADR-0057f v1.2: inlay hints + semantic tokens + call hierarchy)",
             )
             .await;
     }
@@ -692,6 +717,108 @@ impl LanguageServer for Backend {
         } else {
             Ok(Some(actions))
         }
+    }
+
+    /// ADR-0057f §3.1 — inlayHint handler (Phase J wave-4).
+    ///
+    /// Returns the inline type + parameter-name hints visible inside
+    /// `params.range` for the document at `params.text_document.uri`.
+    /// Returns `Ok(None)` for unknown URIs.
+    async fn inlay_hint(&self, params: InlayHintParams) -> LspResult<Option<Vec<InlayHint>>> {
+        let uri = &params.text_document.uri;
+        let (source, line_map) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            match docs.get(uri) {
+                Some(s) => (s.source.clone(), s.line_map.clone()),
+                None => return Ok(None),
+            }
+        };
+        let ctx = self.session_ctx_snapshot();
+        let hints = inlay::build_inlay_hints(&source, &line_map, params.range, &ctx);
+        Ok(Some(hints))
+    }
+
+    /// ADR-0057f §3.2 — semantic-tokens full-document handler.
+    ///
+    /// Computes the SemanticTokens response for the full document at
+    /// `params.text_document.uri`. Returns `Ok(None)` for unknown URIs.
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> LspResult<Option<SemanticTokensResult>> {
+        let uri = &params.text_document.uri;
+        let (source, line_map) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            match docs.get(uri) {
+                Some(s) => (s.source.clone(), s.line_map.clone()),
+                None => return Ok(None),
+            }
+        };
+        let tokens = semantic_tokens::build_semantic_tokens(&source, &line_map);
+        Ok(Some(SemanticTokensResult::Tokens(tokens)))
+    }
+
+    /// ADR-0057f §3.3 — `textDocument/prepareCallHierarchy` handler.
+    ///
+    /// Resolves the symbol at the cursor to a `CallHierarchyItem` if
+    /// it names a same-document fn def, or returns `Ok(None)` if the
+    /// cursor is not on a known fn name.
+    async fn prepare_call_hierarchy(
+        &self,
+        params: CallHierarchyPrepareParams,
+    ) -> LspResult<Option<Vec<CallHierarchyItem>>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let position = params.text_document_position_params.position;
+
+        let (source, line_map) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            match docs.get(&uri) {
+                Some(s) => (s.source.clone(), s.line_map.clone()),
+                None => return Ok(None),
+            }
+        };
+        let ctx = self.session_ctx_snapshot();
+        Ok(call_hierarchy::prepare_call_hierarchy(
+            &source, &line_map, position, &ctx, uri,
+        ))
+    }
+
+    /// ADR-0057f §3.3 — `callHierarchy/incomingCalls` handler.
+    async fn incoming_calls(
+        &self,
+        params: CallHierarchyIncomingCallsParams,
+    ) -> LspResult<Option<Vec<CallHierarchyIncomingCall>>> {
+        let uri = &params.item.uri;
+        let (source, line_map) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            match docs.get(uri) {
+                Some(s) => (s.source.clone(), s.line_map.clone()),
+                None => return Ok(None),
+            }
+        };
+        let calls = call_hierarchy::build_incoming_calls(&source, &line_map, &params.item);
+        Ok(Some(calls))
+    }
+
+    /// ADR-0057f §3.3 — `callHierarchy/outgoingCalls` handler.
+    async fn outgoing_calls(
+        &self,
+        params: CallHierarchyOutgoingCallsParams,
+    ) -> LspResult<Option<Vec<CallHierarchyOutgoingCall>>> {
+        let uri = &params.item.uri;
+        let (source, line_map) = {
+            let docs = self.docs.lock().expect("docs mutex poisoned");
+            match docs.get(uri) {
+                Some(s) => (s.source.clone(), s.line_map.clone()),
+                None => return Ok(None),
+            }
+        };
+        let calls = call_hierarchy::build_outgoing_calls(&source, &line_map, &params.item);
+        Ok(Some(calls))
     }
 }
 

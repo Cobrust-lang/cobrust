@@ -253,6 +253,66 @@ file-B 收到 1 处编辑、file-C 完全不变（根本不在 `WorkspaceEdit.ch
   打开文件的不同作用域中出现，两者都会被改名。真正支持跨文件作用域
   感知的重命名（基于 HIR `DefId` 跨文件解析）延后至 wave-4。
 
+### 内联类型提示 + 语义高亮 + 调用层次（wave-4，ADR-0057f）
+
+Wave-4（v1.2 LSP 服务器）补齐三项现代编辑器期待的能力：
+
+#### `textDocument/inlayHint` —— 内联类型与参数名提示
+
+服务器为以下两类位置发出内联提示：
+
+- **`let` 绑定类型**：未带显式类型注解的 `let` 语句末尾追加
+  `: <推断类型>` 灰显文字。
+- **函数调用参数名**：非字面量位置参数前追加 `<参数名>:` 灰显文字。
+
+```cobrust
+let x = 42               # 显示为：let x: i64 = 42
+fn add(left: i64, right: i64) -> i64:
+    return left + right
+let y = some_var
+add(y, 2)                # 显示为：add(left: y, 2)  —— left: 是提示
+```
+
+字面量参数（`add(1, 2)`）不会显示提示，避免视觉噪声。
+
+#### `textDocument/semanticTokens/full` —— 语义高亮（8 类）
+
+服务器返回 LSP delta-encoded `SemanticTokens`，使用 8 个类型的 legend：
+`keyword` / `string` / `number` / `comment` / `operator` / `variable` /
+`function` / `type`。
+
+- 标识符默认 `variable`，AST refine 将其升级为：
+  - `function`：fn / class 定义名（在 fn header 中位置由扫描 stmt.span
+    向前回溯 256 字节定位）。
+  - `type`：类型注解中的路径段（按段单独 push 以匹配 lexer 发出的
+    精确 `(line, char, length)`）。
+- `#` 注释由独立字节扫描发出（lexer 会剥离）。
+
+诚实作用域：modifier 位掩码全为零（declaration / readonly / static
+等 modifier 延后至 wave-5）。
+
+#### `textDocument/prepareCallHierarchy` + `incomingCalls` + `outgoingCalls`
+
+将光标置于函数定义名上（VSCode：右键 → "Show Call Hierarchy"；
+Neovim：`vim.lsp.buf.incoming_calls()` / `outgoing_calls()`），服务器
+返回该函数的 incoming（谁调用了我）与 outgoing（我调用了谁）链。
+
+```cobrust
+fn add(x: i64, y: i64) -> i64:
+    return x + y
+fn caller1() -> i64:
+    return add(1, 2)
+fn caller2() -> i64:
+    return add(3, 4)
+```
+
+光标置于 `add` 定义名上 → incomingCalls 返回 `caller1` + `caller2`
+两个 `CallHierarchyIncomingCall`，每个包含其调用点 range。
+
+诚实作用域：仅同文档分析（跨文件调用图延后至 wave-5）。`<module>`
+调用方（模块顶层语句）作为合成调用方汇总，但 fn 内部嵌套调用不会
+被双重计入。
+
 ### 构建与运行
 
 ```bash

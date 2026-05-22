@@ -1,0 +1,8 @@
+---
+source: crates/cobrust-lsp/tests/wave_4_e2e.rs
+expression: tokens
+snapshot_kind: text
+---
+{
+  "data": []
+}
