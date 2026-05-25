@@ -19,7 +19,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-cobrust-dap = { path = "../cobrust-dap", version = "=0.6.0" }
+cobrust-dap = { path = "../cobrust-dap", version = "=0.6.1" }
 
 # Dev-deps for the e2e smoke test (moved here from crates/cobrust-dap/
 # in v0.6.0 because env!("CARGO_BIN_EXE_cobrust-dap") only resolves
