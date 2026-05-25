@@ -10,7 +10,7 @@ Works in:
 - VSCodium
 - code-server / GitHub Codespaces
 
-## Features (v0.1.0)
+## Features (v0.2.0)
 
 - TextMate grammar for `.cb` files (comments, strings incl. f-strings with
   embedded expressions, numeric literals with type suffixes, decorators
@@ -19,25 +19,29 @@ Works in:
   goto-def, references, rename, code-action, semantic tokens, inlay hints,
   call hierarchy, diagnostics, formatting, workspace symbols, signature
   help — see [ADR-0057a](../../docs/agent/adr/0057a-lsp-implementation.md))
+- **DAP debugger** (new in 0.2.0): F5 / "Run and Debug" launches a
+  `cobrust dap` session against the current `.cb` file. Launch-config
+  template + snippet contributed via `contributes.debuggers`.
 - Python-like indentation rules and bracket auto-close
 - Snippets: `fn`, `if`, `for`, `while`, `class`, `struct`, `match`,
   `matchres`, `matchopt`, `@py`, `main`
 
 ## Prerequisites
 
-You need a `cobrust` binary on your `$PATH`. The LSP server is reached via:
+You need a `cobrust` binary on your `$PATH`. Both LSP and DAP servers are
+reached via subcommands of the single binary (per ADR-0068):
 
-- **v0.6.0+**: prefer the subcommand `cobrust lsp` (ADR-0068 canonical
-  entry). The transitional `cobrust-lsp` standalone shim is still
-  shipped under `bin/` of every v0.6.x wheel so this extension's
-  v0.1.0 wiring keeps working unchanged. Both paths invoke the same
-  lib entry — byte-for-byte identical behavior.
-- **v0.5.2**: `cobrust-lsp` standalone binary bundled in the wheel.
-  Extension v0.1.0 spawns it directly.
-- **v0.5.1 and earlier**: `cobrust-lsp` standalone binary was NOT
-  bundled in the wheel. Build from source via `cargo install --git
-  https://github.com/Cobrust-lang/cobrust cobrust-lsp` or symlink
-  from a local cargo build.
+- **v0.6.0+ (recommended)**: extension spawns `cobrust lsp` and
+  `cobrust dap` subcommands. This is the default and matches
+  `cobrust.lsp.useSubcommand=true` + `cobrust.dap.useSubcommand=true`.
+- **v0.5.2**: standalone `cobrust-lsp` binary bundled in the wheel;
+  `cobrust-dap` v1.2 server also exists as a separate shim. Toggle
+  `cobrust.lsp.useSubcommand=false` and/or `cobrust.dap.useSubcommand=false`
+  to fall back to those shims.
+- **v0.5.1 and earlier**: `cobrust-lsp` / `cobrust-dap` standalone binaries
+  were NOT bundled in the wheel. Build from source via `cargo install --git
+  https://github.com/Cobrust-lang/cobrust cobrust-cli` or symlink from a
+  local cargo build.
 
 Caveat about v0.5.x compile path: per F46
 (`docs/agent/findings/f46-wheel-not-installable-runtime-stdlib-gap.md`),
@@ -63,14 +67,16 @@ Install one of:
 
 Verify:
 ```bash
-cobrust --version          # → cobrust 0.6.0
-cobrust lsp --help 2>&1 | head -1  # v0.6.0+ subcommand path; --help may not be wired but the command exists
-which cobrust-lsp || true  # v0.5.2 + v0.6.x shim binary path
+cobrust --version           # → cobrust 0.6.0
+cobrust lsp --help 2>&1 | head -1   # v0.6.0+ LSP subcommand path
+cobrust dap --help 2>&1 | head -1   # v0.6.0+ DAP subcommand path
+which cobrust-lsp || true   # v0.5.2 + v0.6.x shim binary path (fallback)
+which cobrust-dap || true   # v0.5.2 + v0.6.x DAP shim path (fallback)
 ```
 
 ADR + finding cross-refs:
 - [ADR-0067](../../docs/agent/adr/0067-vscode-cursor-extension.md) — original extension scaffold (extension v0.1.0)
-- [ADR-0068](../../docs/agent/adr/0068-single-binary-subcommand-collapse.md) — `cobrust lsp` / `cobrust dap` subcommand collapse
+- [ADR-0068](../../docs/agent/adr/0068-single-binary-subcommand-collapse.md) — `cobrust lsp` / `cobrust dap` subcommand collapse (extension v0.2.0 activates this)
 - [ADR-0069](../../docs/agent/adr/0069-wheel-layout-standardization.md) — FHS bin/lib/share wheel layout
 - [F46](../../docs/agent/findings/f46-wheel-not-installable-runtime-stdlib-gap.md) — v0.5.x wheel runtime+stdlib bundle gap
 
@@ -79,19 +85,19 @@ ADR + finding cross-refs:
 ### VSCode (from a `.vsix` file)
 
 ```bash
-code --install-extension cobrust-0.1.0.vsix
+code --install-extension cobrust-0.2.0.vsix
 ```
 
 ### Cursor (from a `.vsix` file)
 
 ```bash
-cursor --install-extension ./cobrust-0.1.0.vsix
+cursor --install-extension ./cobrust-0.2.0.vsix
 ```
 
 ### VSCodium (from a `.vsix` file)
 
 ```bash
-codium --install-extension ./cobrust-0.1.0.vsix
+codium --install-extension ./cobrust-0.2.0.vsix
 ```
 
 ### From a marketplace
@@ -105,8 +111,37 @@ Once published (see [PUBLISHING.md](./PUBLISHING.md) — currently user-side):
 
 | Setting | Default | Description |
 |---|---|---|
-| `cobrust.lspPath` | `"cobrust-lsp"` | Path to the `cobrust-lsp` binary. Absolute paths recommended for pip installs in non-activated venvs. |
+| `cobrust.lspPath` | `"cobrust"` | Path to the `cobrust` binary used for LSP. With `lsp.useSubcommand=true` (default), the extension spawns `<lspPath> lsp`. Absolute paths recommended for pip installs in non-activated venvs. |
+| `cobrust.lsp.useSubcommand` | `true` | When `true`, spawn `cobrust lsp` (v0.6.0+ canonical path per ADR-0068). When `false`, spawn the standalone `cobrust-lsp` shim (v0.5.x compat). |
+| `cobrust.dapPath` | `"cobrust"` | Path to the `cobrust` binary used for DAP. With `dap.useSubcommand=true` (default), the extension spawns `<dapPath> dap`. |
+| `cobrust.dap.useSubcommand` | `true` | When `true`, spawn `cobrust dap` (v0.6.0+ canonical path per ADR-0068). When `false`, spawn the standalone `cobrust-dap` shim (v0.5.x compat). |
 | `cobrust.trace.server` | `"off"` | LSP wire trace level: `off` / `messages` / `verbose`. Output appears in the "Cobrust LSP Trace" output channel. |
+
+## Debug
+
+The extension contributes a `cobrust` debug type. Create
+`.vscode/launch.json` with:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "cobrust",
+      "request": "launch",
+      "name": "Debug current Cobrust file",
+      "program": "${file}",
+      "stopOnEntry": false
+    }
+  ]
+}
+```
+
+Then press F5 (or Run → Start Debugging) with a `.cb` file open. The
+extension spawns `cobrust dap` over stdio. Add `"args": ["foo", "bar"]`
+to pass CLI args to the program; set `"stopOnEntry": true` to break on
+the first instruction. Requires `cobrust` v0.6.0+ on `$PATH` (for the
+subcommand path) — see ADR-0068.
 
 ## Troubleshooting
 
@@ -134,19 +169,18 @@ cd editors/vscode-cobrust
 npm install
 npm run compile
 npx vsce package --no-dependencies
-# yields cobrust-0.1.0.vsix
+# yields cobrust-0.2.0.vsix
 ```
 
-## Out of scope for 0.1.0
+## Out of scope for 0.2.0
 
-- DAP debugger integration (deferred to Phase L wave-6 follow-up;
-  `cobrust-dap` v1.2 server exists but extension-side `launch.json`
-  contribution is pending a separate ADR)
 - Bundled binary (kept external per ADR-0067 §Options)
-- REPL embed
+- REPL embed inside VSCode terminal
+- Inline diagnostic decoration beyond what LSP / DAP publish by default
 
-See [ADR-0067](../../docs/agent/adr/0067-vscode-cursor-extension.md) for the
-full design rationale.
+See [ADR-0067](../../docs/agent/adr/0067-vscode-cursor-extension.md) and
+[ADR-0068](../../docs/agent/adr/0068-single-binary-subcommand-collapse.md)
+for the full design rationale (scaffold + subcommand collapse).
 
 ## License
 

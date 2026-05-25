@@ -1,8 +1,8 @@
 {
   "name": "cobrust",
   "displayName": "Cobrust",
-  "description": "Syntax highlighting + language server for the Cobrust language (Rust-implemented Python successor)",
-  "version": "0.1.0",
+  "description": "Syntax highlighting + language server + DAP debugger for the Cobrust language (Rust-implemented Python successor)",
+  "version": "0.2.0",
   "publisher": "cobrust-lang",
   "license": "Apache-2.0 OR MIT",
   "engines": {
@@ -11,14 +11,17 @@
   "categories": [
     "Programming Languages",
     "Snippets",
-    "Linters"
+    "Linters",
+    "Debuggers"
   ],
   "keywords": [
     "cobrust",
     "python",
     "rust",
     "lsp",
-    "language-server"
+    "language-server",
+    "dap",
+    "debugger"
   ],
   "repository": {
     "type": "git",
@@ -30,7 +33,8 @@
     "url": "https://github.com/Cobrust-lang/cobrust/issues"
   },
   "activationEvents": [
-    "onLanguage:cobrust"
+    "onLanguage:cobrust",
+    "onDebug"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -60,14 +64,78 @@
         "path": "./snippets/cobrust.json"
       }
     ],
+    "debuggers": [
+      {
+        "type": "cobrust",
+        "label": "Cobrust",
+        "program": "./out/extension.js",
+        "languages": ["cobrust"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to .cb source file"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": false
+              },
+              "args": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "cobrust",
+            "request": "launch",
+            "name": "Debug current Cobrust file",
+            "program": "${file}",
+            "stopOnEntry": false
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Cobrust: Launch",
+            "description": "Debug a .cb file via cobrust dap",
+            "body": {
+              "type": "cobrust",
+              "request": "launch",
+              "name": "Debug ${1:file.cb}",
+              "program": "^\"\\${workspaceFolder}/${1:file.cb}\"",
+              "stopOnEntry": false
+            }
+          }
+        ]
+      }
+    ],
     "configuration": {
       "type": "object",
       "title": "Cobrust",
       "properties": {
         "cobrust.lspPath": {
           "type": "string",
-          "default": "cobrust-lsp",
-          "description": "Path to the cobrust-lsp binary. Defaults to 'cobrust-lsp' (resolved on $PATH)."
+          "default": "cobrust",
+          "description": "Path to cobrust binary for LSP server. Defaults to `cobrust lsp` subcommand (v0.6.0+); fallback `cobrust-lsp` shim (v0.5.2)."
+        },
+        "cobrust.lsp.useSubcommand": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use `cobrust lsp` subcommand (v0.6.0+) over `cobrust-lsp` standalone binary (v0.5.x compat)."
+        },
+        "cobrust.dapPath": {
+          "type": "string",
+          "default": "cobrust",
+          "description": "Path to cobrust binary for DAP server. Defaults to `cobrust dap` subcommand (v0.6.0+); fallback `cobrust-dap` shim (v0.5.2)."
+        },
+        "cobrust.dap.useSubcommand": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use `cobrust dap` subcommand (v0.6.0+) over `cobrust-dap` standalone binary (v0.5.x compat)."
         },
         "cobrust.trace.server": {
           "type": "string",
