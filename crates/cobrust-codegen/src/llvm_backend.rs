@@ -1382,6 +1382,335 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_list_is_empty", 1);
         self.runtime_helper_param_counts
             .insert("__cobrust_list_append", 2);
+
+        // -----------------------------------------------------------------
+        // ADR-0058g sub-wave-3 — dict + set + tuple runtime extern hookup.
+        // Mirrors Cranelift `cranelift_backend.rs:2684-2758` ABI verbatim
+        // (sigs cross-verified against stdlib exports at
+        // `cobrust-stdlib/src/collections.rs:781-1359`).
+        //
+        // Drop schedule context (ADR-0050c TD-1; ADR-0058g §6.1 dict portion):
+        // Cranelift `lower_drop` (see `cranelift_backend.rs:1232-1241`)
+        // dispatches `__cobrust_dict_drop` on `Ty::Dict(_, _)` but treats
+        // `Ty::Set(_)` / `Ty::Tuple(_)` as no-op (comment: "Tuple/Set drops
+        // are not yet plumbed; M12.x leaves these as no-op"). To preserve
+        // strict parity, this wave-3 hookup:
+        //   - DECLARES `__cobrust_dict_drop` AND extends `emit_drop_for_ty`
+        //     to call it on `Ty::Dict(_, _)` (mirrors Cranelift).
+        //   - DECLARES `__cobrust_set_drop` + `__cobrust_tuple_drop`
+        //     (needed if MIR ever routes them through `lower_call` as an
+        //     extern; Cranelift's `runtime_helper_signatures` declares
+        //     them analogously) but DOES NOT extend `emit_drop_for_ty` for
+        //     `Ty::Set` / `Ty::Tuple` — Cranelift no-ops these, so LLVM
+        //     matches. Future Phase G widening (see Cranelift comment
+        //     line 1238-1240) will widen both backends together.
+        //
+        // Dict (K, V) shim coverage: 10 typed shims + 4 untyped/erased
+        // (new, drop, len, is_empty) + 2 legacy (untyped set/get). Total
+        // 16 dict externs declared.
+        //
+        // Set: 5 externs (new, insert, contains, len, drop).
+        //
+        // Tuple: 4 externs (new, set, get, drop).
+        // -----------------------------------------------------------------
+
+        // --- Dict erased / untyped helpers ----------------------------------
+
+        // __cobrust_dict_new(k_size: i64, v_size: i64, len: i64) -> *mut DictBuffer
+        let dict_new_ty = ptr_ty.fn_type(&[i64_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let dict_new_fn =
+            self.module
+                .add_function("__cobrust_dict_new", dict_new_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_new", dict_new_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_new", 3);
+
+        // __cobrust_dict_drop(*mut DictBuffer) -> void
+        let dict_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let dict_drop_fn =
+            self.module
+                .add_function("__cobrust_dict_drop", dict_drop_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_drop", dict_drop_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_drop", 1);
+
+        // __cobrust_dict_len(*mut DictBuffer) -> i64
+        let dict_len_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let dict_len_fn =
+            self.module
+                .add_function("__cobrust_dict_len", dict_len_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_len", dict_len_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_len", 1);
+
+        // __cobrust_dict_is_empty(*mut DictBuffer) -> i64 (0/1)
+        let dict_is_empty_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let dict_is_empty_fn = self.module.add_function(
+            "__cobrust_dict_is_empty",
+            dict_is_empty_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_is_empty", dict_is_empty_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_is_empty", 1);
+
+        // --- Dict legacy untyped (i64, i64) shims --------------------------
+
+        // __cobrust_dict_set(p, k: i64, v: i64) -> void
+        let dict_set_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let dict_set_fn =
+            self.module
+                .add_function("__cobrust_dict_set", dict_set_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_set", dict_set_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_set", 3);
+
+        // __cobrust_dict_get(p, k: i64) -> i64
+        let dict_get_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let dict_get_fn =
+            self.module
+                .add_function("__cobrust_dict_get", dict_get_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_get", dict_get_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_get", 2);
+
+        // --- Dict typed (K, V) shims — ADR-0050d Decision 7A ---------------
+
+        // (i64, i64) typed shims.
+        // __cobrust_dict_set_i64_i64(p, i64, i64) -> void
+        let dict_set_i64_i64_ty =
+            void_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let dict_set_i64_i64_fn = self.module.add_function(
+            "__cobrust_dict_set_i64_i64",
+            dict_set_i64_i64_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_set_i64_i64", dict_set_i64_i64_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_set_i64_i64", 3);
+
+        // __cobrust_dict_get_i64_i64(p, i64) -> i64
+        let dict_get_i64_i64_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let dict_get_i64_i64_fn = self.module.add_function(
+            "__cobrust_dict_get_i64_i64",
+            dict_get_i64_i64_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_get_i64_i64", dict_get_i64_i64_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_get_i64_i64", 2);
+
+        // __cobrust_dict_contains_i64(p, i64) -> i64 (0/1)
+        let dict_contains_i64_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let dict_contains_i64_fn = self.module.add_function(
+            "__cobrust_dict_contains_i64",
+            dict_contains_i64_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_contains_i64", dict_contains_i64_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_contains_i64", 2);
+
+        // (i64, str) typed shims.
+        // __cobrust_dict_set_i64_str(p, i64, *mut Str) -> void
+        let dict_set_i64_str_ty =
+            void_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), ptr_ty.into()], false);
+        let dict_set_i64_str_fn = self.module.add_function(
+            "__cobrust_dict_set_i64_str",
+            dict_set_i64_str_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_set_i64_str", dict_set_i64_str_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_set_i64_str", 3);
+
+        // __cobrust_dict_get_i64_str(p, i64) -> *mut Str
+        let dict_get_i64_str_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let dict_get_i64_str_fn = self.module.add_function(
+            "__cobrust_dict_get_i64_str",
+            dict_get_i64_str_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_get_i64_str", dict_get_i64_str_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_get_i64_str", 2);
+
+        // (str, i64) typed shims.
+        // __cobrust_dict_set_str_i64(p, *mut Str, i64) -> void
+        let dict_set_str_i64_ty =
+            void_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        let dict_set_str_i64_fn = self.module.add_function(
+            "__cobrust_dict_set_str_i64",
+            dict_set_str_i64_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_set_str_i64", dict_set_str_i64_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_set_str_i64", 3);
+
+        // __cobrust_dict_get_str_i64(p, *mut Str) -> i64
+        let dict_get_str_i64_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let dict_get_str_i64_fn = self.module.add_function(
+            "__cobrust_dict_get_str_i64",
+            dict_get_str_i64_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_get_str_i64", dict_get_str_i64_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_get_str_i64", 2);
+
+        // __cobrust_dict_contains_str(p, *mut Str) -> i64 (0/1)
+        let dict_contains_str_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let dict_contains_str_fn = self.module.add_function(
+            "__cobrust_dict_contains_str",
+            dict_contains_str_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_contains_str", dict_contains_str_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_contains_str", 2);
+
+        // (str, str) typed shims.
+        // __cobrust_dict_set_str_str(p, *mut Str, *mut Str) -> void
+        let dict_set_str_str_ty =
+            void_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let dict_set_str_str_fn = self.module.add_function(
+            "__cobrust_dict_set_str_str",
+            dict_set_str_str_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_set_str_str", dict_set_str_str_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_set_str_str", 3);
+
+        // __cobrust_dict_get_str_str(p, *mut Str) -> *mut Str
+        let dict_get_str_str_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let dict_get_str_str_fn = self.module.add_function(
+            "__cobrust_dict_get_str_str",
+            dict_get_str_str_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_dict_get_str_str", dict_get_str_str_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_dict_get_str_str", 2);
+
+        // --- Set<i64> ------------------------------------------------------
+
+        // __cobrust_set_new(elem_size: i64, len: i64) -> *mut SetBuffer
+        let set_new_ty = ptr_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false);
+        let set_new_fn =
+            self.module
+                .add_function("__cobrust_set_new", set_new_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_set_new", set_new_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_set_new", 2);
+
+        // __cobrust_set_insert(*mut SetBuffer, i64) -> void
+        let set_insert_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let set_insert_fn = self.module.add_function(
+            "__cobrust_set_insert",
+            set_insert_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_set_insert", set_insert_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_set_insert", 2);
+
+        // __cobrust_set_contains(*mut SetBuffer, i64) -> i64 (0/1)
+        let set_contains_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let set_contains_fn = self.module.add_function(
+            "__cobrust_set_contains",
+            set_contains_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_set_contains", set_contains_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_set_contains", 2);
+
+        // __cobrust_set_len(*mut SetBuffer) -> i64
+        let set_len_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let set_len_fn =
+            self.module
+                .add_function("__cobrust_set_len", set_len_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_set_len", set_len_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_set_len", 1);
+
+        // __cobrust_set_drop(*mut SetBuffer) -> void
+        let set_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let set_drop_fn =
+            self.module
+                .add_function("__cobrust_set_drop", set_drop_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_set_drop", set_drop_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_set_drop", 1);
+
+        // --- Tuple<i64, ...> -----------------------------------------------
+
+        // __cobrust_tuple_new(n: i64) -> *mut TupleBuffer
+        let tuple_new_ty = ptr_ty.fn_type(&[i64_ty.into()], false);
+        let tuple_new_fn =
+            self.module
+                .add_function("__cobrust_tuple_new", tuple_new_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_tuple_new", tuple_new_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_tuple_new", 1);
+
+        // __cobrust_tuple_set(*mut TupleBuffer, i64, i64) -> void
+        let tuple_set_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let tuple_set_fn =
+            self.module
+                .add_function("__cobrust_tuple_set", tuple_set_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_tuple_set", tuple_set_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_tuple_set", 3);
+
+        // __cobrust_tuple_get(*mut TupleBuffer, i64) -> i64
+        let tuple_get_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let tuple_get_fn =
+            self.module
+                .add_function("__cobrust_tuple_get", tuple_get_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_tuple_get", tuple_get_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_tuple_get", 2);
+
+        // __cobrust_tuple_drop(*mut TupleBuffer, n: i64) -> void
+        // NOTE: Cranelift sig `[p, i64] -> ()` — tuple_drop takes the
+        // arity as a second arg, unlike list_drop (single arg).
+        let tuple_drop_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let tuple_drop_fn = self.module.add_function(
+            "__cobrust_tuple_drop",
+            tuple_drop_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_tuple_drop", tuple_drop_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_tuple_drop", 2);
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
@@ -2194,11 +2523,18 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         //   - Ty::Str → __cobrust_str_drop(ptr)
         //   - Ty::List(Ty::Str) → __cobrust_list_drop_elems(ptr, str_drop)
         //   - Ty::List(_) → __cobrust_list_drop(ptr)
+        //   - Ty::Dict(_, _) → __cobrust_dict_drop(ptr)   (ADR-0058g sub-wave-3,
+        //     ADR-0058g §6.1 dict TD-1 closure; mirrors Cranelift
+        //     `cranelift_backend.rs:1232-1237`)
+        //   - Ty::Set / Ty::Tuple → no-op (matches Cranelift no-op at
+        //     `cranelift_backend.rs:1238-1240`; widening tracked as Phase G
+        //     followup per ADR-0050c §"Phase G followup" comment)
         //   - other → no-op
         let helper = match ty {
             Ty::Str => Some("__cobrust_str_drop"),
             Ty::List(elem) if matches!(**elem, Ty::Str) => Some("__cobrust_list_drop_elems"),
             Ty::List(_) => Some("__cobrust_list_drop"),
+            Ty::Dict(_, _) => Some("__cobrust_dict_drop"),
             _ => None,
         };
         if let Some(name) = helper {
