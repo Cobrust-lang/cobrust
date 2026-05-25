@@ -1,3 +1,8 @@
+#![allow(
+    clippy::items_after_statements,
+    clippy::similar_names,
+    reason = "test corpus style; readability over micro-optim (F44-sibling silent-rot fix post sub-wave-3)"
+)]
 //! ADR-0058g sub-wave-2 — LLVM backend list runtime extern hookup smoke
 //! fixtures.
 //!
