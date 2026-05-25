@@ -279,17 +279,27 @@ Progressive examples in [`examples/`](examples/):
 
 ## Editor integration
 
-VSCode / Cursor / VSCodium extension v0.1.0 scaffolded at
-[`editors/vscode-cobrust/`](editors/vscode-cobrust/) (ADR-0067). Wraps
-`cobrust-lsp` v1.3 (13 handlers) + bundles the TextMate grammar.
+VSCode / Cursor / VSCodium extension **v0.2.0** at
+[`editors/vscode-cobrust/`](editors/vscode-cobrust/) (ADR-0067 + ADR-0068).
+Wraps `cobrust-lsp` v1.3 (13 handlers) + `cobrust-dap` v1.2 (17 handlers)
++ bundles the TextMate grammar.
+
+New in 0.2.0 (per ADR-0068):
+- **DAP debugger** wired (F5 "Run and Debug" launches `cobrust dap` over
+  stdio). Launch-config template + snippet contributed via
+  `contributes.debuggers`.
+- LSP path migrated to `cobrust lsp` subcommand (v0.6.0+ canonical entry).
+  Both LSP and DAP have `*.useSubcommand` settings (default `true`) with
+  fallback to the standalone `cobrust-lsp` / `cobrust-dap` shims for
+  v0.5.x compatibility.
 
 ```bash
 # Build from source (Node 20+ required):
 cd editors/vscode-cobrust
 npm install && npx vsce package
-code   --install-extension ./cobrust-0.1.0.vsix   # VSCode
-cursor --install-extension ./cobrust-0.1.0.vsix   # Cursor
-codium --install-extension ./cobrust-0.1.0.vsix   # VSCodium
+code   --install-extension ./cobrust-0.2.0.vsix   # VSCode
+cursor --install-extension ./cobrust-0.2.0.vsix   # Cursor
+codium --install-extension ./cobrust-0.2.0.vsix   # VSCodium
 ```
 
 Marketplace + Open VSX publish steps documented in

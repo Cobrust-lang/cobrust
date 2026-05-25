@@ -271,17 +271,25 @@ printf "4\n2\n7\n11\n15\n9\n" | cargo run -p cobrust-cli -- run examples/leetcod
 
 ## 编辑器集成
 
-VSCode / Cursor / VSCodium 扩展 v0.1.0 scaffold 位于
-[`editors/vscode-cobrust/`](editors/vscode-cobrust/)(ADR-0067)。包装
-`cobrust-lsp` v1.3(13 个 handler)+ 内嵌 TextMate 语法。
+VSCode / Cursor / VSCodium 扩展 **v0.2.0** 位于
+[`editors/vscode-cobrust/`](editors/vscode-cobrust/)(ADR-0067 + ADR-0068)。
+包装 `cobrust-lsp` v1.3(13 个 handler)+ `cobrust-dap` v1.2(17 个 handler)
++ 内嵌 TextMate 语法。
+
+0.2.0 新增(ADR-0068):
+- **DAP 调试器**接线(F5 “运行和调试”通过 stdio 启动 `cobrust dap`)。
+  Launch-config 模板 + snippet 通过 `contributes.debuggers` 贡献。
+- LSP 路径迁移到 `cobrust lsp` 子命令(v0.6.0+ 规范入口)。LSP 和 DAP
+  各有 `*.useSubcommand` 设置(默认 `true`),可回退到独立的
+  `cobrust-lsp` / `cobrust-dap` shim 二进制以兼容 v0.5.x。
 
 ```bash
 # 从源码 build(需要 Node 20+):
 cd editors/vscode-cobrust
 npm install && npx vsce package
-code   --install-extension ./cobrust-0.1.0.vsix   # VSCode
-cursor --install-extension ./cobrust-0.1.0.vsix   # Cursor
-codium --install-extension ./cobrust-0.1.0.vsix   # VSCodium
+code   --install-extension ./cobrust-0.2.0.vsix   # VSCode
+cursor --install-extension ./cobrust-0.2.0.vsix   # Cursor
+codium --install-extension ./cobrust-0.2.0.vsix   # VSCodium
 ```
 
 Marketplace + Open VSX 发布步骤见
