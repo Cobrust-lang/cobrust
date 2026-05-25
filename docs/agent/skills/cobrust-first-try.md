@@ -4,7 +4,7 @@ skill_id: cobrust-first-try
 title: "Write Cobrust correctly on the first try"
 audience: any LLM agent (Claude Code / Cursor / OpenClaw / Hermes / Aider / OpenAI Codex / etc.)
 load_when: before writing or editing any `.cb` source file
-last_verified_commit: 3824971
+last_verified_commit: ffc0b46
 maintainers: P10/user; updated atomically with language-surface ADRs
 ---
 
@@ -429,12 +429,12 @@ All 41 error-suggestion variants (`TypeError` + `MirError` + `LoweringError`) ar
 
 LLM consumers routing via `cobrust skills get cobrust-language` receive the FixSafety tier per error variant in the structured output. Route `DefinitelySafe` fixes directly; route `Structural` fixes to P10/human.
 
-## 9j. v0.6.0 install paths (current stable; FHS wheel layout)
+## 9j. v0.6.1 install paths (current stable; FHS wheel layout)
 
-**v0.6.0 is the current stable release** (tag `v0.6.0`). 10 assets: 9 wheel variants + SHA256SUMS.
+**v0.6.1 is the current stable release** (tag `v0.6.1`; patch on v0.6.0 — F47 f-string fix). 10 assets: 9 wheel variants + SHA256SUMS.
 
 ADR-0069 wheel layout: every tarball extracts to a self-contained
-`cobrust-v0.6.0/{bin,lib/cobrust,share/cobrust/runtime}/` tree. The
+`cobrust-v0.6.1/{bin,lib/cobrust,share/cobrust/runtime}/` tree. The
 binary's lookup chain discovers `lib/` + `share/` siblings via
 `std::env::current_exe()` (Phase 0) — zero env vars or workspace
 context needed. DO NOT copy the binary out of its `bin/` directory.
@@ -454,10 +454,10 @@ cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 # Option C — prebuilt wheel (9 variants; replace <variant> with your CPU tier)
 # Variants: x86_64-unknown-linux-gnu-v1 / -v3 / -v4  |  x86_64-unknown-linux-musl-v1 / -v3
 #           aarch64-unknown-linux-gnu-neon / -sve      |  aarch64-apple-darwin-m1 / -m2
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-<variant>.tar.gz | tar xz -C $HOME/.local/
-ln -sf $HOME/.local/cobrust-v0.6.0/bin/cobrust $HOME/.local/bin/cobrust
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/cobrust-v0.6.1-<variant>.tar.gz | tar xz -C $HOME/.local/
+ln -sf $HOME/.local/cobrust-v0.6.1/bin/cobrust $HOME/.local/bin/cobrust
 
-# SHA256SUMS: https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/SHA256SUMS
+# SHA256SUMS: https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/SHA256SUMS
 
 # Option D — cobrust install (Tier 3 auto-select; requires cobrust-cli already installed)
 cobrust install <pkg>
