@@ -1696,6 +1696,34 @@ impl<'a> BodyBuilder<'a> {
                     | "stderr_write"
             )
         );
+        // F47 fix (2026-05-25): synthesise the callee's return type so
+        // the `_callret` destination carries the correct MIR `Ty` instead
+        // of the bug-prone default `Ty::None`. Downstream consumers
+        // (f-string `lower_aggregate_format_string`, drop scheduling,
+        // etc.) inspect `body.locals[dest].ty` to decide dispatch — a
+        // `Ty::None` _callret holding a Str pointer was being formatted
+        // through the `__cobrust_fmt_int` integer-decimal arm (printing
+        // the raw heap pointer as a number) instead of `__cobrust_fmt_str`.
+        //
+        // Pattern: `f"{count_word(0)}"` lowered the hole as
+        // `Move(_callret_n)` where `_callret_n: Ty::None`; the codegen
+        // saw `mir_ty = Ty::None` → `is_str = false` and dispatched the
+        // int path. By declaring `_callret_n: Ty::Str` here, the codegen
+        // recovers the correct `is_str` branch and emits
+        // `__cobrust_str_ptr` / `__cobrust_str_len` / `__cobrust_fmt_str`.
+        //
+        // Sibling site `lower_rewritten_method_call` (line ~1796) also
+        // declares `_callret: Ty::None` and gets the parallel patch.
+        let callee_return_ty = if let ExprKind::Name(rn) = &callee.kind {
+            let callee_ty = self.ctx.lookup_ty(rn.def_id);
+            if let Ty::Fn(fn_ty) = callee_ty {
+                (*fn_ty.return_ty).clone()
+            } else {
+                Ty::None
+            }
+        } else {
+            Ty::None
+        };
         let callee_op = if let ExprKind::Name(rn) = &callee.kind {
             let ty = self.ctx.lookup_ty(rn.def_id);
             if matches!(ty, Ty::Fn(_)) {
@@ -1726,7 +1754,7 @@ impl<'a> BodyBuilder<'a> {
                 }
             }
         }
-        let dest = self.declare_local("_callret".to_string(), Ty::None, span, true);
+        let dest = self.declare_local("_callret".to_string(), callee_return_ty, span, true);
         let cur = self.current_block_id();
         let target = self.start_new_block();
         self.cur_block = Some(cur.0 as usize);
@@ -1789,7 +1817,18 @@ impl<'a> BodyBuilder<'a> {
                 }
             }
         }
-        let dest = self.declare_local("_callret".to_string(), Ty::None, span, true);
+        // F47 sibling-site fix: propagate the PRELUDE-fn's return type to
+        // the method-form `_callret` so downstream f-string / drop /
+        // print dispatch sees the correct `Ty` instead of `Ty::None`.
+        let callee_return_ty = {
+            let callee_ty = self.ctx.lookup_ty(prelude_def_id);
+            if let Ty::Fn(fn_ty) = callee_ty {
+                (*fn_ty.return_ty).clone()
+            } else {
+                Ty::None
+            }
+        };
+        let dest = self.declare_local("_callret".to_string(), callee_return_ty, span, true);
         let cur = self.current_block_id();
         let target = self.start_new_block();
         self.cur_block = Some(cur.0 as usize);

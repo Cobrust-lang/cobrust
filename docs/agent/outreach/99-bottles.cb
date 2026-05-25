@@ -1,0 +1,26 @@
+# 99 bottles of beer in Cobrust
+# For submission to https://www.99-bottles-of-beer.net (site TLS currently
+# broken from our network; submit user-side when site reachable).
+
+fn line_count(n: i64) -> str:
+    if n == 0:
+        return "no more bottles"
+    if n == 1:
+        return "1 bottle"
+    return f"{n} bottles"
+
+fn main() -> i64:
+    let n: i64 = 99
+    while n > 0:
+        let c: str = line_count(n)
+        let nxt: str = line_count(n - 1)
+        print(f"{c} of beer on the wall, {c} of beer.")
+        if n == 1:
+            print(f"Take it down and pass it around, {nxt} of beer on the wall.")
+        else:
+            print(f"Take one down and pass it around, {nxt} of beer on the wall.")
+        print("")
+        n = n - 1
+    print("No more bottles of beer on the wall, no more bottles of beer.")
+    print("Go to the store and buy some more, 99 bottles of beer on the wall.")
+    return 0

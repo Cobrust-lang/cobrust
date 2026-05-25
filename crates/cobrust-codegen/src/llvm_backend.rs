@@ -1696,13 +1696,26 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 // but the explicit Str-typed Assign path is hot enough
                 // to deserve the direct route — same shape avoids the
                 // double-lookup in str_data_globals.
+                //
+                // F47 fix (2026-05-25): also fire on `_return =
+                // Use(Constant::Str(_))` so user-fn `str` returns
+                // produce a real `StringBuffer` pointer instead of
+                // the M9 stub zero pointer. Mirrors the parallel fix
+                // in `cranelift_backend.rs`. Without this, the
+                // caller's `let s: str = make_str()` binds null,
+                // any downstream `__cobrust_str_ptr(s)` /
+                // `__cobrust_str_len(s)` reads zero, producing empty
+                // f-string interpolation (`f"got {s}!"` →
+                // `"got !"`).
                 if let Rvalue::Use(Operand::Constant(Constant::Str(payload))) = rvalue {
                     let dest_ty = self
                         .body
                         .locals
                         .get(place.local.0 as usize)
                         .map(|l| l.ty.clone());
-                    if matches!(dest_ty, Some(Ty::Str)) && place.projections.is_empty() {
+                    let is_str_dest = matches!(dest_ty, Some(Ty::Str));
+                    let is_return_slot = place.local == self.body.return_local;
+                    if (is_str_dest || is_return_slot) && place.projections.is_empty() {
                         let value = self.materialize_str_buffer(payload)?;
                         return self.write_place(place, value);
                     }

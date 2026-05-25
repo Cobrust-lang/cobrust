@@ -1263,13 +1263,34 @@ impl<'a, 'b> EmitCtx<'a, 'b> {
                 // as a heap `StringBuffer` via the existing
                 // `materialize_str_buffer` (mirror of f-string + list
                 // literal materialisation paths).
+                //
+                // F47 fix (2026-05-25): the same materialisation must
+                // fire when the destination is the function's return
+                // slot (`_return`, declared `Ty::None` per
+                // `BodyBuilder::new`) regardless of its declared MIR
+                // `Ty`. Source pattern `fn f() -> str: return "literal"`
+                // lowers as `_return = Use(Constant::Str("literal"))`
+                // with `_return: Ty::None`; without the return-local
+                // branch the codegen falls through to
+                // `lower_constant(Constant::Str(_))` which returns
+                // `iconst(I64, 0)` — the function returns a null
+                // pointer, the caller's `let s: str = f()` binds null,
+                // and any downstream `__cobrust_str_ptr(s)` /
+                // `__cobrust_str_len(s)` reads zero, producing empty
+                // f-string interpolation (`f"got {s}!"` →
+                // `"got !"`). The return-local discriminator is safe
+                // because `Use(Constant::Str(_))` to `_return` only
+                // arises when the function's declared return type is
+                // `str` (the type checker rejects mismatched returns).
                 if let Rvalue::Use(Operand::Constant(Constant::Str(payload))) = rvalue {
                     let dest_ty = self
                         .body
                         .locals
                         .get(place.local.0 as usize)
                         .map(|l| l.ty.clone());
-                    if matches!(dest_ty, Some(Ty::Str)) && place.projections.is_empty() {
+                    let is_str_dest = matches!(dest_ty, Some(Ty::Str));
+                    let is_return_slot = place.local == self.body.return_local;
+                    if (is_str_dest || is_return_slot) && place.projections.is_empty() {
                         let value = self.materialize_str_buffer(payload)?;
                         return self.write_place(place, value);
                     }
