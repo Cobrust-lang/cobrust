@@ -440,10 +440,18 @@ binary's lookup chain discovers `lib/` + `share/` siblings via
 context needed. DO NOT copy the binary out of its `bin/` directory.
 
 ```bash
-# Option A — cargo install (Rust 1.94+; dev path, no wheel layout)
+# Option A (recommended on macOS/Linux) — Homebrew tap
+brew tap cobrust-lang/cobrust
+brew install cobrust
+# Pulls aarch64-apple-darwin-m1 (macOS arm64), x86_64-unknown-linux-gnu-v3
+# (Linux x86_64 AVX2), or aarch64-unknown-linux-gnu-neon (Linux arm64) and
+# installs cobrust + cobrust-lsp + cobrust-dap + libcobrust_stdlib.a + runtime.
+# Tap source: https://github.com/Cobrust-lang/homebrew-cobrust
+
+# Option B — cargo install (Rust 1.94+; dev path, no wheel layout)
 cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
-# Option B — prebuilt wheel (9 variants; replace <variant> with your CPU tier)
+# Option C — prebuilt wheel (9 variants; replace <variant> with your CPU tier)
 # Variants: x86_64-unknown-linux-gnu-v1 / -v3 / -v4  |  x86_64-unknown-linux-musl-v1 / -v3
 #           aarch64-unknown-linux-gnu-neon / -sve      |  aarch64-apple-darwin-m1 / -m2
 curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-<variant>.tar.gz | tar xz -C $HOME/.local/
@@ -451,7 +459,7 @@ ln -sf $HOME/.local/cobrust-v0.6.0/bin/cobrust $HOME/.local/bin/cobrust
 
 # SHA256SUMS: https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/SHA256SUMS
 
-# Option C — cobrust install (Tier 3 auto-select; requires cobrust-cli already installed)
+# Option D — cobrust install (Tier 3 auto-select; requires cobrust-cli already installed)
 cobrust install <pkg>
 ```
 

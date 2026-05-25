@@ -70,10 +70,15 @@ The wedge: **AI translates the existing Python ecosystem into Cobrust automatica
 ### Install
 
 ```bash
-# Option A — Via cargo (Rust toolchain required, 1.94+)
+# Option A (recommended on macOS/Linux) — Via Homebrew tap
+brew tap cobrust-lang/cobrust
+brew install cobrust
+# Installs cobrust + cobrust-lsp + cobrust-dap to $(brew --prefix)/bin (FHS layout per ADR-0069).
+
+# Option B — Via cargo (Rust toolchain required, 1.94+)
 cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
-# Option B — Download a prebuilt wheel (v0.6.0, FHS bin/lib/share layout per ADR-0069)
+# Option C — Download a prebuilt wheel (v0.6.0, FHS bin/lib/share layout per ADR-0069)
 # Each tarball extracts to a self-contained cobrust-v0.6.0/ directory.
 # Symlink bin/cobrust into your $PATH; the runtime + stdlib stay siblings.
 # Do NOT `cp cobrust /usr/local/bin/` — that breaks the wheel-layout lookup chain.
