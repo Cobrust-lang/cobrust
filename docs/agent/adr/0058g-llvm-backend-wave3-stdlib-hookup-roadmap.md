@@ -4,7 +4,7 @@ adr_id: 0058g
 parent_adr: 0058f
 name: 0058g
 title: "LLVM backend wave-3 stdlib hookup roadmap — panic/argv/list/dict/input/fmt/iter/math/parse/str-methods/LLM router"
-status: proposed (sub-wave-1 + sub-wave-2 RATIFIED 2026-05-25)
+status: proposed (sub-wave-1 + sub-wave-2 + sub-wave-3 RATIFIED 2026-05-25)
 date: 2026-05-22
 phase: Phase K wave-3 (LLVM backend full stdlib parity)
 last_verified_commit: cb8893c
@@ -145,18 +145,81 @@ of 12 categories** are resolved post sub-wave-2. The remaining 9
 str-methods / LLM router) remain wave-1 stub fallthrough; do NOT read
 sub-wave-2 closure as wave-3 closure.
 
-### Wave 0058g-3: dict + set + tuple
+### Wave 0058g-3: dict + set + tuple — **RATIFIED 2026-05-25**
 
-**Scope**: full `__cobrust_dict_*`, `__cobrust_set_*`, `__cobrust_tuple_*`
-families.
+**Status**: closed by sub-wave-3 impl commit (see git log on this file). The
+implementation landed 25 extern hookups (16 dict + 5 set + 4 tuple) + 6
+regression fixtures + extension of `emit_drop_for_ty` to dispatch
+`__cobrust_dict_drop` on `Ty::Dict(_, _)` (closes ADR-0058g §6.1 TD-1
+dict portion below).
 
-**Rationale**: dict + set are the next most common collections after list.
-Tuple is lighter (often stack-allocated in Cranelift; verify ABI before
-implementing LLVM path).
+**Scope** (as landed):
 
-**Done means**: `codegen_diff_corpus::category_dict_*` + `category_set_*` +
-`category_tuple_*` fixtures cover construction + access + membership test +
-iteration for each type; all PASS.
+*Dict family — 16 externs, mirrors Cranelift `cranelift_backend.rs:2684-2742`:*
+- Erased helpers (4): `__cobrust_dict_new(i64, i64, i64) -> *mut` /
+  `__cobrust_dict_drop(*mut) -> void` / `__cobrust_dict_len(*mut) -> i64` /
+  `__cobrust_dict_is_empty(*mut) -> i64`.
+- Legacy untyped (i64, i64) shims (2): `__cobrust_dict_set` /
+  `__cobrust_dict_get` (M12.x backward-compat per ADR-0050d Decision 7).
+- Typed (K, V) shims (10, per ADR-0050d Decision 7A): the cross-product
+  `_set_K_V` / `_get_K_V` / `_contains_K` across `K ∈ {i64, str}` ×
+  `V ∈ {i64, str}` — `_set_i64_i64`, `_set_i64_str`, `_set_str_i64`,
+  `_set_str_str` + matching `_get_*` + 2 `_contains_*` shims.
+
+*Set<i64> family — 5 externs, mirrors Cranelift `cranelift_backend.rs:2745-2752`:*
+- `__cobrust_set_new(i64, i64) -> *mut` /
+  `__cobrust_set_insert(*mut, i64) -> void` /
+  `__cobrust_set_contains(*mut, i64) -> i64` /
+  `__cobrust_set_len(*mut) -> i64` /
+  `__cobrust_set_drop(*mut) -> void`.
+
+*Tuple family — 4 externs, mirrors Cranelift `cranelift_backend.rs:2755-2758`:*
+- `__cobrust_tuple_new(i64) -> *mut` /
+  `__cobrust_tuple_set(*mut, i64, i64) -> void` /
+  `__cobrust_tuple_get(*mut, i64) -> i64` /
+  `__cobrust_tuple_drop(*mut, i64) -> void` (note: 2-arg ABI; arity is
+  passed as the second arg, unlike `list_drop`'s 1-arg ABI).
+
+All 25 added to `runtime_helper_decls` + `runtime_helper_param_counts` in
+`LlvmEmitter::declare_runtime_helpers`. The `lower_call` extern-name
+dispatch path (added in sub-wave-1) routes by name to these decls without
+any per-helper special-case needed.
+
+**Resolved complexity** (§6.1 below, dict portion): `emit_drop_for_ty`
+gained a `Ty::Dict(_, _) → __cobrust_dict_drop(ptr)` arm matching
+Cranelift's `lower_drop` at `cranelift_backend.rs:1232-1237`. `Ty::Set`
+/ `Ty::Tuple` Drop stays as no-op fallthrough — Cranelift explicitly
+no-ops these ("Tuple/Set drops are not yet plumbed; M12.x leaves these
+as no-op" at `cranelift_backend.rs:1238-1240`); strict parity preserved.
+Phase G widening will lift both backends together.
+
+**Done means** (landed): 6 fixtures in
+`crates/cobrust-codegen/tests/llvm_wave3_dict_set_tuple.rs`:
+1. `llvm_emits_dict_new_len_is_empty` — `dict_new + len + is_empty` →
+   exit 1 (empty dict: len=0 + is_empty=1).
+2. `llvm_emits_dict_set_then_get_i64_i64` — typed `_set_i64_i64 + _get_i64_i64`
+   round-trip → exit 77.
+3. `llvm_emits_dict_contains_after_set` — `_set_i64_i64 + _contains_i64`
+   → exit 1.
+4. `llvm_emits_set_end_to_end` — `set_new + insert(11) + insert(22) +
+   insert(11) [dup] + contains(11) + len` → exit 3 (contains=1 +
+   distinct=2).
+5. `llvm_emits_tuple_end_to_end` — `tuple_new(3) + set × 3 + get × 2 +
+   tuple_drop(p, 3)` → exit 150 (200 - 50). Verifies tuple_drop's
+   2-arg ABI lowers correctly.
+6. `llvm_emits_dict_end_to_end_with_drop` — capstone exercising every
+   untyped + typed-i64-i64 helper, ending with `Terminator::Drop` on the
+   dict local so `emit_drop_for_ty`'s new `Ty::Dict → dict_drop` arm
+   fires → exit 33 (10+20+2+0+1).
+
+All 6 PASS on Mac arm64 + LLVM 18 (`--features llvm`).
+
+**F35-sibling discipline**: sub-wave-3 closes 2 of the 12 F45a §2
+categories (dict; set+tuple combined). Combined with sub-wave-1 + 2
+(panic + argv + list), **5 of 12 categories** are resolved post
+sub-wave-3. The remaining 7 (input / fmt / iter / math /
+parse_int+str-parsing / str-methods / LLM router) remain wave-1 stub
+fallthrough; do NOT read sub-wave-3 closure as wave-3 closure.
 
 ### Wave 0058g-4: input + read_line
 
@@ -256,7 +319,7 @@ Wave-3 is closed when ALL of the following hold simultaneously:
 
 ## 6. Open questions
 
-### 6.1 Drop schedule interaction with List/Dict allocations (ADR-0050c TD-1) — **RESOLVED FOR LIST 2026-05-25**
+### 6.1 Drop schedule interaction with List/Dict allocations (ADR-0050c TD-1) — **RESOLVED FOR LIST + DICT 2026-05-25**
 
 The Cranelift list/dict allocations interact with the drop schedule
 (ADR-0050c TD-1 tracked debt). The pre-sub-wave-2 open question was
@@ -275,10 +338,22 @@ at `llvm_backend.rs:1903-1907`, which emits `__cobrust_list_drop` for
 `llvm_backend.rs:1077-1093`). Sub-wave-2 confirmed this path requires
 no change for list constructor/accessor wiring.
 
-**Dict portion (still open)**: the same audit must be repeated for
-`__cobrust_dict_drop` / `__cobrust_set_drop` / `__cobrust_tuple_drop`
-when wave-3 dict+set+tuple lands. Cranelift signatures at
-`cranelift_backend.rs:2684-2750` are the authoritative reference.
+**Dict portion (RESOLVED 2026-05-25 via sub-wave-3)**: same audit
+repeated. Sub-wave-3 declared `__cobrust_dict_drop` / `__cobrust_set_drop`
+/ `__cobrust_tuple_drop` externs (mirroring Cranelift signatures at
+`cranelift_backend.rs:2684-2758`) AND extended `emit_drop_for_ty` with a
+`Ty::Dict(_, _) → __cobrust_dict_drop(ptr)` arm. The MIR
+`compute_drop_schedule` pass already emits `Terminator::Drop` for owning
+dict locals — same path as list, no MIR change required. `Ty::Set` /
+`Ty::Tuple` Drop kept as no-op for strict parity with Cranelift
+`lower_drop` (`cranelift_backend.rs:1238-1240` explicit no-op comment
+"Tuple/Set drops are not yet plumbed; M12.x leaves these as no-op").
+Both backends widen together in Phase G. Test:
+`llvm_wave3_dict_set_tuple::llvm_emits_dict_end_to_end_with_drop` builds
+MIR ending in `Terminator::Drop { place: _d, ... }` and asserts the
+binary exits with the expected value (the bug-trigger would be a
+double-free or use-after-free if the dispatch were broken, manifesting
+as non-zero exit / signal).
 
 ### 6.2 Panic semantics: does LLVM unwind table need wiring? — **RESOLVED 2026-05-25**
 
