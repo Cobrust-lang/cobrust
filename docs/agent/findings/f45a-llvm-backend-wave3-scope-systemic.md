@@ -1,6 +1,6 @@
 ---
 name: f45a
-status: ratified (panic + argv + list + dict + set/tuple + input/read_line runtime categories resolved 2026-05-25 via ADR-0058g sub-wave-1 + sub-wave-2 + sub-wave-3 + sub-wave-4)
+status: ratified (panic + argv + list + dict + set/tuple + input/read_line + fmt + iter + math + parse_int/str-parsing + str-methods runtime categories resolved 2026-05-25 via ADR-0058g sub-wave-1 + sub-wave-2 + sub-wave-3 + sub-wave-4 + sub-wave-5)
 family: F45 child (systemic wave-3 catalogue) + F35-sibling (claim drift) + F37 (silent rot) + F44 (CI green != working)
 last_verified_commit: cb8893c
 date: 2026-05-22
@@ -47,27 +47,29 @@ Cranelift handles all of these correctly at the same commit.
 | **dict** | `__cobrust_dict_new` / `__cobrust_dict_set_*` / `__cobrust_dict_get_*` / `__cobrust_dict_contains_*` / `__cobrust_dict_len` / `__cobrust_dict_is_empty` / `__cobrust_dict_drop` | Dict runtime fully silent; key/value stores return nothing | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-3; 16 dict externs hooked (4 erased + 2 legacy untyped + 10 typed K×V shims); covered by `llvm_wave3_dict_set_tuple::{llvm_emits_dict_new_len_is_empty, llvm_emits_dict_set_then_get_i64_i64, llvm_emits_dict_contains_after_set, llvm_emits_dict_end_to_end_with_drop}` (4 dict-focused fixtures incl. `dict_drop` via `Terminator::Drop` Ty::Dict arm — ADR-0058g §6.1 TD-1 dict portion closure); end-to-end exit 33 capstone |
 | **set / tuple** | `__cobrust_set_*` / `__cobrust_tuple_*` | Set + tuple construction + access all silent | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-3; 5 set externs + 4 tuple externs hooked; covered by `llvm_wave3_dict_set_tuple::{llvm_emits_set_end_to_end, llvm_emits_tuple_end_to_end}` (set exit 3 = contains(1)+distinct(2); tuple exit 150 = 200-50 + 2-arg `tuple_drop(p, n)` ABI verified); `Ty::Set` / `Ty::Tuple` Drop is NO-OP on both backends (parity matches Cranelift `cranelift_backend.rs:1238-1240`), widening tracked for Phase G |
 | **panic** | `__cobrust_panic` | `panic("msg")` source-level does not abort; `unwrap_err()` on Err paths produces no signal | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-1; covered by `llvm_wave3_panic_argv::llvm_emits_panic_extern_call_with_unreachable` |
-| **fmt** | `__cobrust_fmt_*` family | f-string runtime (`f"x = {x}"`) silently produces empty string | wave-1 stub |
-| **iter** | `__cobrust_iter_init` / `__cobrust_iter_next` / `__cobrust_iter_drop` | `for x in [1,2,3]` body never executes | wave-1 stub |
-| **math** | `__cobrust_math_sqrt` / `__cobrust_math_floor` / `__cobrust_math_ceil` / `__cobrust_math_round` / `__cobrust_math_abs` / `__cobrust_math_sin` / `__cobrust_math_cos` / `__cobrust_math_tan` / `__cobrust_math_log` / `__cobrust_math_exp` / `__cobrust_math_pow` | All `math.*` intrinsics return 0 or no-op | wave-1 stub |
-| **parse_int / str parsing** | `__cobrust_parse_int` / `__cobrust_str_eq` / `__cobrust_str_at` / `__cobrust_str_len_src` / `__cobrust_str_ord` / `__cobrust_count_toks` / `__cobrust_parse_int_tok` / `__cobrust_str_eq_lit` | Integer parsing from stdin and string comparisons all silent | wave-1 stub |
-| **str methods (ADR-0050e)** | `__cobrust_str_split` / `__cobrust_str_join` / `__cobrust_str_replace` / `__cobrust_str_trim` / `__cobrust_str_find` / `__cobrust_str_contains` / `__cobrust_str_starts_with` / `__cobrust_str_ends_with` / `__cobrust_str_lower` / `__cobrust_str_upper` / `__cobrust_str_clone` | `s.split(",")` / `.join()` / all str method calls silently return nothing | wave-1 stub |
-| **LLM router** | `__cobrust_llm_complete` / `__cobrust_llm_dispatch` / `__cobrust_llm_stream` / `__cobrust_prompt_*` / `__cobrust_tool_*` | Full AI-native surface of ADR-0049 alpha silently no-ops under LLVM | wave-1 stub |
+| **fmt** | `__cobrust_fmt_int` / `__cobrust_fmt_float` / `__cobrust_fmt_float_prec` / `__cobrust_fmt_bool` / `__cobrust_fmt_str` / `__cobrust_fmt_repr` / `__cobrust_str_len` / `__cobrust_str_ptr` / `__cobrust_str_clone` | f-string runtime (`f"x = {x}"`) silently produces empty string | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-5; 9 fmt externs hooked (covers `fmt_int`, `fmt_float`, `fmt_float_prec`, `fmt_bool`, `fmt_str`, `fmt_repr`, `str_len`, `str_ptr`, `str_clone`); covered by `llvm_wave3_fmt_iter_math_str::{llvm_emits_fmt_int_then_str_len, llvm_emits_fmt_bool_then_str_len, llvm_emits_fmt_str_then_str_len}` (3 combo fixtures, each chains `fmt_*(buf, val)` → `str_len(buf)` for an observable exit-code signal) |
+| **iter** | `__cobrust_iter_init` / `__cobrust_iter_next` / `__cobrust_iter_drop` | `for x in [1,2,3]` body never executes | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-5; 3 iter externs hooked; covered by `llvm_wave3_fmt_iter_math_str::llvm_emits_iter_init_next_drop_empty` (full three-helper chain via the empty-iter sentinel `iter_init(0)` → `iter_next == 0` → `iter_drop`; uses `Ty::Str` ptr-typed alloca for the handle local to match wave-4 `input_str_buf` opaque-ptr round-trip pattern) |
+| **math** | `__cobrust_math_sqrt` / `__cobrust_math_floor` / `__cobrust_math_ceil` / `__cobrust_math_round` / `__cobrust_math_abs` / `__cobrust_math_sin` / `__cobrust_math_cos` / `__cobrust_math_tan` / `__cobrust_math_log` / `__cobrust_math_exp` / `__cobrust_math_pow` | All `math.*` intrinsics return 0 or no-op | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-5; 11 math externs hooked (10 single-arg f64→f64 + 1 two-arg pow); covered by `llvm_wave3_fmt_iter_math_str::{llvm_emits_math_sqrt_16, llvm_emits_math_abs_neg7, llvm_emits_math_pow_2_3}` (3 fixtures spanning single-arg sqrt + abs + 2-arg pow; each casts the f64 return via `Rvalue::Cast(FloatToInt, _, Ty::Int)` to expose an exit-code signal) |
+| **parse_int / str parsing** | `__cobrust_parse_int` / `__cobrust_str_eq` / `__cobrust_str_at` / `__cobrust_str_len_src` / `__cobrust_str_ord` / `__cobrust_count_toks` / `__cobrust_parse_int_tok` / `__cobrust_str_eq_lit` | Integer parsing from stdin and string comparisons all silent | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-5; 8 parse_int + str-parsing externs hooked; covered by `llvm_wave3_fmt_iter_math_str::{llvm_emits_parse_int_42, llvm_emits_str_ord_uppercase_a, llvm_emits_count_toks_three}` (3 fixtures, each uses single-arg `Constant::Str` literal routed through the wave-2 `materialize_str_buffer` path — confirms 1-param-Str literal dispatch surface for the parsing family) |
+| **str methods (ADR-0050e)** | `__cobrust_str_split` / `__cobrust_str_join` / `__cobrust_str_replace` / `__cobrust_str_trim` / `__cobrust_str_find` / `__cobrust_str_contains` / `__cobrust_str_starts_with` / `__cobrust_str_ends_with` / `__cobrust_str_lower` / `__cobrust_str_upper` | `s.split(",")` / `.join()` / all str method calls silently return nothing | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-5; 10 str-method externs hooked (`str_clone` declared with fmt family for cohesion); covered by `llvm_wave3_fmt_iter_math_str::{llvm_emits_str_lower_then_len, llvm_emits_str_contains_present, llvm_emits_str_find_present, llvm_emits_str_starts_with_true}` (4 fixtures: 1 mutator → `str_len` chain for `str_lower`, 3 predicate-return cases for `contains` / `find` / `starts_with`; positive-result coverage — `find` -1 sentinel deferred since Unix exit code is unsigned 0-255) |
+| **LLM router** | `__cobrust_llm_complete` / `__cobrust_llm_dispatch` / `__cobrust_llm_stream` / `__cobrust_prompt_*` / `__cobrust_tool_*` | Full AI-native surface of ADR-0049 alpha silently no-ops under LLVM | wave-1 stub (tracked for ADR-0058g sub-wave-6) |
 
-**Coverage summary**: as of 2026-05-25, **6 of 12 categories** (panic +
+**Coverage summary**: as of 2026-05-25, **11 of 12 categories** (panic +
 argv via sub-wave-1; list runtime via sub-wave-2; dict + set/tuple via
-sub-wave-3; input + read_line via sub-wave-4) are resolved by
-ADR-0058g. The remaining 6 categories (fmt / iter / math /
-parse_int+str-parsing / str-methods / LLM router) continue to silently
-misbehave under `--features llvm` until subsequent waves land. The
-print system + panic + argv + list + dict + set + tuple runtime +
-input + read_line + pure numeric computation (arithmetic + FnRef
-recursion) are the surfaces that work correctly today in LLVM AOT.
+sub-wave-3; input + read_line via sub-wave-4; fmt + iter + math +
+parse_int/str-parsing + str-methods via sub-wave-5) are resolved by
+ADR-0058g. The remaining 1 category (LLM router — `__cobrust_llm_complete`
+/ `__cobrust_llm_dispatch` / `__cobrust_llm_stream` and the prompt/tool
+families) continues to silently misbehave under `--features llvm` until
+sub-wave-6 lands. The print system + panic + argv + list + dict + set +
+tuple runtime + input + read_line + fmt + iter + math + parse_int +
+str-parsing + str-methods + pure numeric computation (arithmetic +
+FnRef recursion) are the surfaces that work correctly today in LLVM AOT.
 
-**F35-sibling discipline**: sub-wave-4 closure is NOT wave-3 closure.
+**F35-sibling discipline**: sub-wave-5 closure is NOT wave-3 closure.
 The §5 ADR-0058g "Done means (full wave-3 closure)" criteria still
-require every category in §2 to have a passing fixture; 6 categories
-remain. Doc updates and release notes downstream of this finding MUST
+require every category in §2 to have a passing fixture; 1 category
+(LLM router) remains. Doc updates and release notes downstream of this finding MUST
 distinguish "panic + argv + list + dict + set + tuple + input/read_line
 landed" from "wave-3 closed". The input+read_line closure unblocks
 interactive + stdin-parsing programs in LC-100 corpus but leaves

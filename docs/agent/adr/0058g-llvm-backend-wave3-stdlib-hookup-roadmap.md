@@ -4,7 +4,7 @@ adr_id: 0058g
 parent_adr: 0058f
 name: 0058g
 title: "LLVM backend wave-3 stdlib hookup roadmap — panic/argv/list/dict/input/fmt/iter/math/parse/str-methods/LLM router"
-status: proposed (sub-wave-1 + sub-wave-2 + sub-wave-3 + sub-wave-4 RATIFIED 2026-05-25)
+status: proposed (sub-wave-1 + sub-wave-2 + sub-wave-3 + sub-wave-4 + sub-wave-5 RATIFIED 2026-05-25)
 date: 2026-05-22
 phase: Phase K wave-3 (LLVM backend full stdlib parity)
 last_verified_commit: cb8893c
@@ -286,25 +286,109 @@ remain wave-1 stubs after this sprint (fmt / iter / math /
 parse_int+str-parsing / str-methods / LLM router). DO NOT read
 sub-wave-4 closure as wave-3 closure.
 
-### Wave 0058g-5: fmt + iter + math + parse_int + str methods
+### Wave 0058g-5: fmt + iter + math + parse_int + str methods — **RATIFIED 2026-05-25**
 
-**Scope**: `__cobrust_fmt_*` / `__cobrust_iter_*` / `__cobrust_math_*` /
-`__cobrust_parse_int` + str-parsing family / ADR-0050e str method family.
+**Status**: closed by sub-wave-5 impl commit (see git log on this file). The
+LLVM `declare_runtime_helpers` now also pre-declares the 41 sub-wave-5
+runtime-helper externs (9 fmt + 3 iter + 11 math + 8 parse_int/str-parsing
++ 10 str-methods); the extern-name dispatch path (added in sub-wave-1)
+routes by name to these decls without further dispatch-site change.
 
-**Rationale**: this is the largest batch by extern count but each individual
-helper is mechanically similar to the wave-2 pattern (declare → lower_call
-dispatch → test). Grouped as one wave for ADR cleanliness; may be split into
-sub-waves at implementation time if complexity warrants.
+**Scope (RATIFIED)**:
 
-**F35-sibling discipline**: each sub-batch within this wave must list
-which helpers LANDED and which remain stub in its merge commit message.
-Do not claim "wave-5 complete" until every extern in the scope list passes
-its `codegen_diff_corpus` fixture.
+- **fmt** (9 helpers): `__cobrust_fmt_int` (`[p, i64] -> ()`),
+  `__cobrust_fmt_float` (`[p, f64] -> ()`), `__cobrust_fmt_float_prec`
+  (`[p, f64, p, i64] -> ()`), `__cobrust_fmt_bool` (`[p, i64] -> ()`),
+  `__cobrust_fmt_str` (`[p, p, i64] -> ()`), `__cobrust_fmt_repr`
+  (`[p, p, i64] -> ()`), `__cobrust_str_len` (`[p] -> i64`),
+  `__cobrust_str_ptr` (`[p] -> p`), `__cobrust_str_clone` (`[p] -> p`).
+- **iter** (3 helpers): `__cobrust_iter_init` (`[i64] -> p`),
+  `__cobrust_iter_next` (`[p] -> i64`), `__cobrust_iter_drop`
+  (`[p] -> ()`).
+- **math** (11 helpers): 10 single-arg `[f64] -> f64` shims
+  (`__cobrust_math_{sqrt,floor,ceil,round,abs,sin,cos,tan,log,exp}`)
+  + 1 two-arg `__cobrust_math_pow` (`[f64, f64] -> f64`).
+- **parse_int + str-parsing** (8 helpers): `__cobrust_parse_int`
+  (`[p] -> i64`), `__cobrust_str_len_src` (`[p] -> i64`),
+  `__cobrust_str_at` (`[p, i64] -> p`), `__cobrust_str_eq`
+  (`[p, p] -> i64`), `__cobrust_str_eq_lit` (`[p, p, i64] -> i64`),
+  `__cobrust_str_ord` (`[p] -> i64`), `__cobrust_parse_int_tok`
+  (`[p, i64] -> i64`), `__cobrust_count_toks` (`[p] -> i64`).
+- **str-methods** (10 helpers, `str_clone` declared with fmt for cohesion):
+  `__cobrust_str_split` (`[p, p] -> p`), `__cobrust_str_join`
+  (`[p, p] -> p`), `__cobrust_str_replace` (`[p, p, p] -> p`),
+  `__cobrust_str_trim` (`[p] -> p`), `__cobrust_str_find`
+  (`[p, p] -> i64`), `__cobrust_str_contains` (`[p, p] -> i64`),
+  `__cobrust_str_starts_with` (`[p, p] -> i64`),
+  `__cobrust_str_ends_with` (`[p, p] -> i64`), `__cobrust_str_lower`
+  (`[p] -> p`), `__cobrust_str_upper` (`[p] -> p`).
 
-**Done means**: `codegen_diff_corpus::category_fmt_01_fstring_int` +
-`category_iter_01_for_loop_list` + `category_math_01_sqrt` +
-`category_parse_int_01_from_str` + `category_str_methods_01_split` all PASS
-on Mac arm64 + LLVM 18.
+All signatures mirror Cranelift backend at
+`cranelift_backend.rs:2765-2894` verbatim and stdlib exports at
+`cobrust-stdlib/src/{fmt,iter,math,io,string}.rs`.
+
+**Float-typed args + FloatToInt cast**: the math fixtures cast the f64
+return through `Rvalue::Cast(CastKind::FloatToInt, _, Ty::Int)` so the
+process exit code carries an observable signal. The existing
+`lower_call` dispatch already handles f64 args via the default
+`lower_operand` path (`Constant::Float` lowers to `f64`) and f64
+returns via `try_as_basic_value().basic()` (returns whatever LLVM
+produces; no special case needed).
+
+**Iter handle local typing**: the iter chain stores the
+`iter_init` handle in a `Ty::Str` local so the alloca lowers to
+`opaque_ptr_ty` — required because `iter_next`/`iter_drop` expect a
+ptr arg. Matches the wave-4 `input_str_buf` opaque-ptr round-trip
+pattern at `llvm_wave3_input_readline.rs:378-393`.
+
+**Test surface (14 fixtures across 5 categories — `crates/cobrust-codegen/tests/llvm_wave3_fmt_iter_math_str.rs`)**:
+
+- **fmt** (3): `llvm_emits_fmt_int_then_str_len` (chain `fmt_int(buf, 42)`
+  → `str_len == 2`), `llvm_emits_fmt_bool_then_str_len` (chain
+  `fmt_bool(buf, 1)` → `str_len == 4`), `llvm_emits_fmt_str_then_str_len`
+  (chain `fmt_str(buf, "hi")` → `str_len == 2` via the wave-2
+  `expand_trailing_str_len` path).
+- **iter** (1): `llvm_emits_iter_init_next_drop_empty` (three-helper
+  chain via `iter_init(0)` empty-list sentinel → `iter_next == 0` →
+  `iter_drop`; exit 0).
+- **math** (3): `llvm_emits_math_sqrt_16` (single-arg sqrt + FloatToInt
+  cast → exit 4), `llvm_emits_math_abs_neg7` (abs(-7) → exit 7),
+  `llvm_emits_math_pow_2_3` (two-arg pow(2, 3) → exit 8).
+- **parse_int + str-parsing** (3): `llvm_emits_parse_int_42`
+  (parse_int("42") → exit 42), `llvm_emits_str_ord_uppercase_a`
+  (str_ord("A") → exit 65), `llvm_emits_count_toks_three`
+  (count_toks("a b c") → exit 3).
+- **str-methods** (4): `llvm_emits_str_lower_then_len` (str_lower("ABC")
+  → str_len → exit 3), `llvm_emits_str_contains_present`
+  (contains("hello", "ell") → exit 1), `llvm_emits_str_find_present`
+  (find("hello", "ll") → exit 2; -1 sentinel deferred since Unix exit
+  code is unsigned 0-255), `llvm_emits_str_starts_with_true`
+  (starts_with("hello", "he") → exit 1).
+
+**Done means** (sub-wave-5 closure):
+
+- [x] 41 sub-wave-5 externs declared via `add_function(... Linkage::External)`
+  and `runtime_helper_param_counts` set in `LlvmEmitter::declare_runtime_helpers`.
+- [x] 14 fixtures pass on Mac arm64 + LLVM 18 (`cargo test -p cobrust-codegen
+  --test llvm_wave3_fmt_iter_math_str --features llvm`).
+- [x] No regression: sub-wave-1-4 fixtures (`llvm_wave3_panic_argv` +
+  `llvm_wave3_list_runtime` + `llvm_wave3_dict_set_tuple` +
+  `llvm_wave3_input_readline`) all PASS unchanged.
+- [x] No regression in `codegen_diff_corpus::stdlib_io_*` subset
+  (8 fixtures, all PASS).
+- [x] F45a §2 table updated: 5 categories (fmt, iter, math,
+  parse_int/str-parsing, str-methods) marked **RESOLVED 2026-05-25 via
+  ADR-0058g sub-wave-5**.
+- [x] F45a §"Coverage summary" updated: 6/12 → 11/12 RESOLVED.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` clean
+  + `cargo fmt --all -- --check` clean (F51 vigilance).
+
+**F35-sibling discipline**: sub-wave-5 closes 5 of the 12 F45a §2
+categories (fmt; iter; math; parse_int+str-parsing; str-methods).
+Combined with sub-wave-1 + 2 + 3 + 4 (panic + argv + list + dict +
+set/tuple + input + read_line), **11 of 12 categories** are resolved
+post sub-wave-5. The remaining 1 (LLM router) continues as wave-1 stub
+fallthrough; do NOT read sub-wave-5 closure as wave-3 closure.
 
 ### Wave 0058g-6: LLM router intrinsics (gated, special)
 
@@ -320,8 +404,10 @@ on Mac arm64 + LLVM 18.
    hitting the wave-3 collection gaps.
 
 **Gate**: wave-6 impl MUST wait until waves 0058g-1 through 0058g-5 are
-merged. The LLM router intrinsic ABI must be specified in a separate
-sub-ADR (0058g-6a or equivalent) before implementation begins.
+merged. **Status as of 2026-05-25**: sub-wave-1 through sub-wave-5
+ratified; sub-wave-6 unblocked. The LLM router intrinsic ABI must be
+specified in a separate sub-ADR (0058g-6a or equivalent) before
+implementation begins.
 
 **Done means**: `codegen_diff_corpus::category_llm_router_01_llm_complete_stub`
 fixture compiles + links under `--features llvm,cobrust-llm-router`; LLVM AOT
