@@ -1,8 +1,8 @@
 ---
 name: f45a
-status: ratified
+status: ratified (panic + argv categories resolved 2026-05-25 via ADR-0058g sub-wave-1)
 family: F45 child (systemic wave-3 catalogue) + F35-sibling (claim drift) + F37 (silent rot) + F44 (CI green != working)
-last_verified_commit: 4425310
+last_verified_commit: cb8893c
 date: 2026-05-22
 ---
 
@@ -39,25 +39,33 @@ Full table of extern callees that compile under `--features llvm` but emit
 no observable side effect (wave-1 stub fallthrough in `lower_call`).
 Cranelift handles all of these correctly at the same commit.
 
-| Category | Runtime helpers (extern names) | Source-level impact |
-|---|---|---|
-| **input** | `__cobrust_input` / `__cobrust_input_str_buf` / `__cobrust_input_no_prompt` / `__cobrust_read_line` | `input("> ")` and `read_line()` silently return nothing; stdin family fully silent under LLVM |
-| **argv** | `__cobrust_argv` / `__cobrust_capture_argv` | `sys.argv` evaluates to NULL / empty; command-line programs cannot read arguments |
-| **list** | `__cobrust_list_new` / `__cobrust_list_set` / `__cobrust_list_get` / `__cobrust_list_append` / `__cobrust_list_len` / `__cobrust_list_is_empty` | All list operations silently no-op; list-based programs produce no output |
-| **dict** | `__cobrust_dict_new` / `__cobrust_dict_set_*` / `__cobrust_dict_get_*` / `__cobrust_dict_contains_*` | Dict runtime fully silent; key/value stores return nothing |
-| **set / tuple** | `__cobrust_set_*` / `__cobrust_tuple_*` | Set + tuple construction + access all silent |
-| **panic** | `__cobrust_panic` | `panic("msg")` source-level does not abort; `unwrap_err()` on Err paths produces no signal |
-| **fmt** | `__cobrust_fmt_*` family | f-string runtime (`f"x = {x}"`) silently produces empty string |
-| **iter** | `__cobrust_iter_init` / `__cobrust_iter_next` / `__cobrust_iter_drop` | `for x in [1,2,3]` body never executes |
-| **math** | `__cobrust_math_sqrt` / `__cobrust_math_floor` / `__cobrust_math_ceil` / `__cobrust_math_round` / `__cobrust_math_abs` / `__cobrust_math_sin` / `__cobrust_math_cos` / `__cobrust_math_tan` / `__cobrust_math_log` / `__cobrust_math_exp` / `__cobrust_math_pow` | All `math.*` intrinsics return 0 or no-op |
-| **parse_int / str parsing** | `__cobrust_parse_int` / `__cobrust_str_eq` / `__cobrust_str_at` / `__cobrust_str_len_src` / `__cobrust_str_ord` / `__cobrust_count_toks` / `__cobrust_parse_int_tok` / `__cobrust_str_eq_lit` | Integer parsing from stdin and string comparisons all silent |
-| **str methods (ADR-0050e)** | `__cobrust_str_split` / `__cobrust_str_join` / `__cobrust_str_replace` / `__cobrust_str_trim` / `__cobrust_str_find` / `__cobrust_str_contains` / `__cobrust_str_starts_with` / `__cobrust_str_ends_with` / `__cobrust_str_lower` / `__cobrust_str_upper` / `__cobrust_str_clone` | `s.split(",")` / `.join()` / all str method calls silently return nothing |
-| **LLM router** | `__cobrust_llm_complete` / `__cobrust_llm_dispatch` / `__cobrust_llm_stream` / `__cobrust_prompt_*` / `__cobrust_tool_*` | Full AI-native surface of ADR-0049 alpha silently no-ops under LLVM |
+| Category | Runtime helpers (extern names) | Source-level impact | Status |
+|---|---|---|---|
+| **input** | `__cobrust_input` / `__cobrust_input_str_buf` / `__cobrust_input_no_prompt` / `__cobrust_read_line` | `input("> ")` and `read_line()` silently return nothing; stdin family fully silent under LLVM | wave-1 stub |
+| **argv** | `__cobrust_argv` (`__cobrust_capture_argv` is C-shim-only — Cranelift+LLVM both intentionally omit at MIR level) | `sys.argv` evaluates to NULL / empty; command-line programs cannot read arguments | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-1; covered by `llvm_wave3_panic_argv::llvm_emits_argv_extern_call_and_exits_zero` |
+| **list** | `__cobrust_list_new` / `__cobrust_list_set` / `__cobrust_list_get` / `__cobrust_list_append` / `__cobrust_list_len` / `__cobrust_list_is_empty` | All list operations silently no-op; list-based programs produce no output | wave-1 stub |
+| **dict** | `__cobrust_dict_new` / `__cobrust_dict_set_*` / `__cobrust_dict_get_*` / `__cobrust_dict_contains_*` | Dict runtime fully silent; key/value stores return nothing | wave-1 stub |
+| **set / tuple** | `__cobrust_set_*` / `__cobrust_tuple_*` | Set + tuple construction + access all silent | wave-1 stub |
+| **panic** | `__cobrust_panic` | `panic("msg")` source-level does not abort; `unwrap_err()` on Err paths produces no signal | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-1; covered by `llvm_wave3_panic_argv::llvm_emits_panic_extern_call_with_unreachable` |
+| **fmt** | `__cobrust_fmt_*` family | f-string runtime (`f"x = {x}"`) silently produces empty string | wave-1 stub |
+| **iter** | `__cobrust_iter_init` / `__cobrust_iter_next` / `__cobrust_iter_drop` | `for x in [1,2,3]` body never executes | wave-1 stub |
+| **math** | `__cobrust_math_sqrt` / `__cobrust_math_floor` / `__cobrust_math_ceil` / `__cobrust_math_round` / `__cobrust_math_abs` / `__cobrust_math_sin` / `__cobrust_math_cos` / `__cobrust_math_tan` / `__cobrust_math_log` / `__cobrust_math_exp` / `__cobrust_math_pow` | All `math.*` intrinsics return 0 or no-op | wave-1 stub |
+| **parse_int / str parsing** | `__cobrust_parse_int` / `__cobrust_str_eq` / `__cobrust_str_at` / `__cobrust_str_len_src` / `__cobrust_str_ord` / `__cobrust_count_toks` / `__cobrust_parse_int_tok` / `__cobrust_str_eq_lit` | Integer parsing from stdin and string comparisons all silent | wave-1 stub |
+| **str methods (ADR-0050e)** | `__cobrust_str_split` / `__cobrust_str_join` / `__cobrust_str_replace` / `__cobrust_str_trim` / `__cobrust_str_find` / `__cobrust_str_contains` / `__cobrust_str_starts_with` / `__cobrust_str_ends_with` / `__cobrust_str_lower` / `__cobrust_str_upper` / `__cobrust_str_clone` | `s.split(",")` / `.join()` / all str method calls silently return nothing | wave-1 stub |
+| **LLM router** | `__cobrust_llm_complete` / `__cobrust_llm_dispatch` / `__cobrust_llm_stream` / `__cobrust_prompt_*` / `__cobrust_tool_*` | Full AI-native surface of ADR-0049 alpha silently no-ops under LLVM | wave-1 stub |
 
-**Coverage summary**: every Cobrust program beyond pure arithmetic + print
-will silently misbehave under `--features llvm` until wave-3 lands.
-The print system and pure numeric computation (arithmetic + FnRef recursion)
-are the only surfaces that work correctly today in LLVM AOT.
+**Coverage summary**: as of 2026-05-25, **2 of 12 categories** (panic +
+argv) are resolved by ADR-0058g sub-wave-1. The remaining 10 categories
+continue to silently misbehave under `--features llvm` until subsequent
+waves land. The print system + panic + argv + pure numeric computation
+(arithmetic + FnRef recursion) are the surfaces that work correctly
+today in LLVM AOT.
+
+**F35-sibling discipline**: sub-wave-1 closure is NOT wave-3 closure.
+The §5 ADR-0058g "Done means (full wave-3 closure)" criteria still
+require every category in §2 to have a passing fixture; 10 categories
+remain. Doc updates and release notes downstream of this finding MUST
+distinguish "panic + argv landed" from "wave-3 closed".
 
 ## §3 Systemic fix recommendations (promoted from playground audit §4)
 

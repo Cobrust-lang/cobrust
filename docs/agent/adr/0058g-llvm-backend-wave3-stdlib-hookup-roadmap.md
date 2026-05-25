@@ -4,10 +4,10 @@ adr_id: 0058g
 parent_adr: 0058f
 name: 0058g
 title: "LLVM backend wave-3 stdlib hookup roadmap — panic/argv/list/dict/input/fmt/iter/math/parse/str-methods/LLM router"
-status: proposed
+status: proposed (sub-wave-1 RATIFIED 2026-05-25)
 date: 2026-05-22
 phase: Phase K wave-3 (LLVM backend full stdlib parity)
-last_verified_commit: 4425310
+last_verified_commit: cb8893c
 supersedes: []
 superseded_by: []
 relates_to: [adr:0058a, adr:0058f, adr:0030, adr:0044, adr:0050e, adr:0050c, adr:0049, adr:0051]
@@ -64,26 +64,38 @@ difficulty. Each wave:
 
 ## 3. Phasing
 
-### Wave 0058g-1: panic + argv (small, high-signal)
+### Wave 0058g-1: panic + argv (small, high-signal) — **RATIFIED 2026-05-25**
 
-**Scope**: wire `__cobrust_panic` call emission + `__cobrust_argv` /
-`__cobrust_capture_argv`.
+**Status**: closed by sub-wave-1 impl commit (see git log on this file). The
+implementation landed two extern hookups + two regression fixtures, matching
+the wave-2 pattern.
 
-**Rationale**: smallest category; unblocks two high-signal runtime behaviours
-that make test programs fail silently:
-- `unwrap_err()` / `assert` / `panic("msg")` source-level currently
-  produces no abort signal under LLVM — programs that should crash continue
-  executing with undefined state.
-- Command-line programs reading `sys.argv` silently see NULL / empty.
+**Scope** (as landed):
+- `__cobrust_argv() -> ptr` extern declaration in `runtime_helper_decls`
+  (mirrors Cranelift `cranelift_backend.rs:2822` zero-arg ptr-return shape).
+- `__cobrust_panic` `unreachable` terminator special case in `lower_call`'s
+  extern-dispatch branch (the panic decl already existed from wave-2 prep at
+  `llvm_backend.rs:1095-1101`).
+- `__cobrust_capture_argv` deliberately NOT declared at LLVM level: it is
+  invoked exclusively from the C shim (`cobrust-cli/runtime/cobrust_main.c:21-25`),
+  not from MIR; Cranelift also omits it; LLVM matches for parity.
 
-**Known complexity**: `__cobrust_panic` needs to emit an `unreachable`
-terminator after the call (the call is `noreturn`); LLVM requires explicit
-CFG termination that Cranelift's `build_unreachable_inst()` handles.
-Unwind table interaction is an open question (see §6).
+**Resolved complexity**: per §6.2 below, the panic dispatch emits
+`call` + `unreachable` (no `invoke` / EH unwind table). This matches
+Cranelift's `InstructionData::Unreachable` and is consistent with
+CLAUDE.md §2.2 ("exceptions reserved for truly unrecoverable").
 
-**Done means**: `codegen_diff_corpus::category_panic_01_abort_on_panic` and
-`category_argv_01_first_arg` fixtures PASS; LLVM AOT binary aborts on
-`panic("msg")` with non-zero exit; `argv[0]` is accessible.
+**Done means** (landed): `llvm_wave3_panic_argv::llvm_emits_argv_extern_call_and_exits_zero`
++ `llvm_wave3_panic_argv::llvm_emits_panic_extern_call_with_unreachable`
+fixtures PASS on Mac arm64 + LLVM 18 (`--features llvm`). Argv binary
+exits 0; panic binary exits with `INTERNAL_PANIC = 3` and writes the
+panic message to stderr.
+
+**F35-sibling discipline**: sub-wave-1 closes 2 of the 12 F45a §2
+categories (panic + argv). The remaining 10 categories (list / dict /
+set / tuple / input / fmt / iter / math / parse_int+str-parsing /
+str-methods / LLM router) remain wave-1 stub fallthrough; do NOT
+read sub-wave-1 closure as wave-3 closure.
 
 ### Wave 0058g-2: list runtime (largest, deepest)
 
@@ -228,20 +240,38 @@ can catch generically.
 for a Cobrust program that creates + drops a list; confirm whether an explicit
 `__cobrust_list_drop` call appears in the MIR terminator stream.
 
-### 6.2 Panic semantics: does LLVM unwind table need wiring?
+### 6.2 Panic semantics: does LLVM unwind table need wiring? — **RESOLVED 2026-05-25**
 
 `__cobrust_panic` is a `noreturn` C function. In LLVM IR, a `noreturn`
 call must be followed by an `unreachable` instruction to satisfy the basic
 block terminator constraint. The Cranelift path uses
 `cranelift_ir::InstructionData::Unreachable` for this.
 
-Additionally: should the LLVM backend emit `invoke` (with unwind table) or
-`call` + `unreachable` for panic? Cobrust does not use exceptions as the
-default error path (CLAUDE.md §2.2), but LLVM's EH mechanisms may still
-be needed for C++ interop or for DWARF unwind propagation.
+**Resolution**: the LLVM backend emits `call` + `unreachable` (NOT
+`invoke` / EH unwind table) for `__cobrust_panic`. Rationale:
+- Cobrust does not use exceptions as the default error path
+  (CLAUDE.md §2.2 — "exceptions reserved for truly unrecoverable";
+  ADR-0049 alpha honesty contract — `Result<T, E>` is default).
+- The stdlib `__cobrust_panic` handler (`cobrust-stdlib/src/panic.rs:47`)
+  calls `std::process::exit(INTERNAL_PANIC)` directly; there is no
+  unwind path to propagate. An `invoke` instruction with a landing pad
+  would be dead infrastructure.
+- DWARF unwind propagation for debugger backtrace is handled by the
+  C runtime's `crt0` + stdlib's panic handler emitting frames before
+  `_exit`; the LLVM-level CFG only needs `unreachable` to satisfy
+  the verifier.
 
-**Resolution before wave-3-1 impl**: decision must be captured in a
-sub-note to this ADR (or a sub-ADR) before 0058g-1 impl begins.
+**Implementation**: in `BodyLowerer::lower_call`, after the extern-name
+dispatch path emits the `build_call`, special-case `name ==
+"__cobrust_panic"` to emit `build_unreachable()` and return early
+(skipping the post-call `write_place` + `build_unconditional_branch`,
+which would be dead code after a noreturn callee). See sub-wave-1 impl
+commit on this file.
+
+Future panic-family helpers (`__cobrust_assert` non-cond branch,
+`__cobrust_result_err_panic`) that are also `-> !` should follow the
+same pattern — extend the special case to a name-set match when those
+hookups land.
 
 ### 6.3 LLM router LLVM ABI (wave-3-6 only)
 
