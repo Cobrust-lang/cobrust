@@ -1787,6 +1787,376 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_read_line", read_line_fn);
         self.runtime_helper_param_counts
             .insert("__cobrust_read_line", 0);
+
+        // -----------------------------------------------------------------
+        // ADR-0058g sub-wave-5 — fmt / iter / math / parse_int+str-parsing /
+        // str-methods runtime extern hookup. Mirrors Cranelift backend at
+        // `cranelift_backend.rs:2765-2894` ABI verbatim. Each helper sig is
+        // cross-verified against the stdlib export at
+        // `cobrust-stdlib/src/{fmt,iter,math,io,string}.rs`.
+        //
+        // F35-sibling discipline: this sub-wave lands the FIVE listed
+        // categories ONLY. After merge, F45a §2 status becomes 11/12
+        // RESOLVED — the LLM router family (sub-wave-6) continues as
+        // wave-1 stubs. DO NOT read sub-wave-5 closure as wave-3 closure.
+        // -----------------------------------------------------------------
+
+        // -- fmt family (ADR-0064 §3.3 + ADR-0044 W2 + M-F.3.3) -----------
+        // __cobrust_fmt_int(buf: *mut Str, v: i64) -> void
+        let fmt_int_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let fmt_int_fn =
+            self.module
+                .add_function("__cobrust_fmt_int", fmt_int_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_fmt_int", fmt_int_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_fmt_int", 2);
+
+        // __cobrust_fmt_float(buf: *mut Str, v: f64) -> void
+        let fmt_float_ty = void_ty.fn_type(&[ptr_ty.into(), f64_ty.into()], false);
+        let fmt_float_fn =
+            self.module
+                .add_function("__cobrust_fmt_float", fmt_float_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_fmt_float", fmt_float_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_fmt_float", 2);
+
+        // __cobrust_fmt_float_prec(buf: *mut Str, v: f64, spec_ptr: *const u8, spec_len: i64) -> void
+        let fmt_float_prec_ty = void_ty.fn_type(
+            &[ptr_ty.into(), f64_ty.into(), ptr_ty.into(), i64_ty.into()],
+            false,
+        );
+        let fmt_float_prec_fn = self.module.add_function(
+            "__cobrust_fmt_float_prec",
+            fmt_float_prec_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_fmt_float_prec", fmt_float_prec_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_fmt_float_prec", 4);
+
+        // __cobrust_fmt_bool(buf: *mut Str, v: i64) -> void
+        let fmt_bool_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let fmt_bool_fn =
+            self.module
+                .add_function("__cobrust_fmt_bool", fmt_bool_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_fmt_bool", fmt_bool_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_fmt_bool", 2);
+
+        // __cobrust_fmt_str(buf: *mut Str, ptr: *const u8, len: i64) -> void
+        let fmt_str_ty = void_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        let fmt_str_fn =
+            self.module
+                .add_function("__cobrust_fmt_str", fmt_str_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_fmt_str", fmt_str_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_fmt_str", 3);
+
+        // __cobrust_fmt_repr(buf: *mut Str, _ptr: *mut u8, type_id: i64) -> void
+        let fmt_repr_ty = void_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        let fmt_repr_fn =
+            self.module
+                .add_function("__cobrust_fmt_repr", fmt_repr_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_fmt_repr", fmt_repr_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_fmt_repr", 3);
+
+        // __cobrust_str_len(buf: *mut Str) -> i64
+        let str_len_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let str_len_fn =
+            self.module
+                .add_function("__cobrust_str_len", str_len_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_len", str_len_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_len", 1);
+
+        // __cobrust_str_ptr(buf: *mut Str) -> *const u8
+        let str_ptr_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let str_ptr_fn =
+            self.module
+                .add_function("__cobrust_str_ptr", str_ptr_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_ptr", str_ptr_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_ptr", 1);
+
+        // __cobrust_str_clone(buf: *mut Str) -> *mut Str  (ADR-0050c §"Phase 3")
+        let str_clone_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let str_clone_fn =
+            self.module
+                .add_function("__cobrust_str_clone", str_clone_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_clone", str_clone_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_clone", 1);
+
+        // -- iter family (for-protocol; ADR-0044 W2 Phase 2) --------------
+        // __cobrust_iter_init(iter_val: i64) -> *mut IterHandle
+        let iter_init_ty = ptr_ty.fn_type(&[i64_ty.into()], false);
+        let iter_init_fn =
+            self.module
+                .add_function("__cobrust_iter_init", iter_init_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_iter_init", iter_init_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_iter_init", 1);
+
+        // __cobrust_iter_next(handle: *mut IterHandle) -> i64  (0 = end)
+        let iter_next_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let iter_next_fn =
+            self.module
+                .add_function("__cobrust_iter_next", iter_next_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_iter_next", iter_next_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_iter_next", 1);
+
+        // __cobrust_iter_drop(handle: *mut IterHandle) -> void
+        let iter_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let iter_drop_fn =
+            self.module
+                .add_function("__cobrust_iter_drop", iter_drop_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_iter_drop", iter_drop_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_iter_drop", 1);
+
+        // -- math family (M-F.3.3 gap (b)) --------------------------------
+        // Single-arg f64 → f64 shims.
+        for sym in [
+            "__cobrust_math_sqrt",
+            "__cobrust_math_floor",
+            "__cobrust_math_ceil",
+            "__cobrust_math_round",
+            "__cobrust_math_abs",
+            "__cobrust_math_sin",
+            "__cobrust_math_cos",
+            "__cobrust_math_tan",
+            "__cobrust_math_log",
+            "__cobrust_math_exp",
+        ] {
+            let ty = f64_ty.fn_type(&[f64_ty.into()], false);
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, 1);
+        }
+
+        // Two-arg f64 × f64 → f64.
+        let math_pow_ty = f64_ty.fn_type(&[f64_ty.into(), f64_ty.into()], false);
+        let math_pow_fn =
+            self.module
+                .add_function("__cobrust_math_pow", math_pow_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_math_pow", math_pow_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_math_pow", 2);
+
+        // -- parse_int + str-parsing family (ADR-0044 W2 Phase 3) ---------
+        // __cobrust_parse_int(s: *mut Str) -> i64
+        let parse_int_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let parse_int_fn =
+            self.module
+                .add_function("__cobrust_parse_int", parse_int_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_parse_int", parse_int_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_parse_int", 1);
+
+        // __cobrust_str_len_src(s: *mut Str) -> i64
+        let str_len_src_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let str_len_src_fn = self.module.add_function(
+            "__cobrust_str_len_src",
+            str_len_src_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_len_src", str_len_src_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_len_src", 1);
+
+        // __cobrust_str_at(s: *mut Str, i: i64) -> *mut Str
+        let str_at_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let str_at_fn =
+            self.module
+                .add_function("__cobrust_str_at", str_at_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_at", str_at_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_at", 2);
+
+        // __cobrust_str_eq(a: *mut Str, b: *mut Str) -> i64
+        let str_eq_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let str_eq_fn =
+            self.module
+                .add_function("__cobrust_str_eq", str_eq_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_eq", str_eq_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_eq", 2);
+
+        // __cobrust_str_eq_lit(s: *mut Str, lit: *const u8, lit_len: i64) -> i64
+        let str_eq_lit_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        let str_eq_lit_fn = self.module.add_function(
+            "__cobrust_str_eq_lit",
+            str_eq_lit_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_eq_lit", str_eq_lit_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_eq_lit", 3);
+
+        // __cobrust_str_ord(s: *mut Str) -> i64
+        let str_ord_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let str_ord_fn =
+            self.module
+                .add_function("__cobrust_str_ord", str_ord_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_ord", str_ord_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_ord", 1);
+
+        // __cobrust_parse_int_tok(line: *mut Str, i: i64) -> i64
+        let parse_int_tok_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let parse_int_tok_fn = self.module.add_function(
+            "__cobrust_parse_int_tok",
+            parse_int_tok_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_parse_int_tok", parse_int_tok_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_parse_int_tok", 2);
+
+        // __cobrust_count_toks(line: *mut Str) -> i64
+        let count_toks_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let count_toks_fn = self.module.add_function(
+            "__cobrust_count_toks",
+            count_toks_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_count_toks", count_toks_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_count_toks", 1);
+
+        // -- str-method family (M-F.3.5 string stdlib, ADR-0050e) ---------
+        // All Str pointers are `ptr_ty`. Predicate fns return i64 (0/1);
+        // find returns i64 (-1 sentinel for not-found).
+        // __cobrust_str_split(s: *mut Str, sep: *mut Str) -> *mut List
+        let str_split_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let str_split_fn =
+            self.module
+                .add_function("__cobrust_str_split", str_split_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_split", str_split_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_split", 2);
+
+        // __cobrust_str_join(parts: *mut List, sep: *mut Str) -> *mut Str
+        let str_join_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let str_join_fn =
+            self.module
+                .add_function("__cobrust_str_join", str_join_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_join", str_join_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_join", 2);
+
+        // __cobrust_str_replace(s, old, new) -> *mut Str
+        let str_replace_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let str_replace_fn = self.module.add_function(
+            "__cobrust_str_replace",
+            str_replace_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_replace", str_replace_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_replace", 3);
+
+        // __cobrust_str_trim(s: *mut Str) -> *mut Str
+        let str_trim_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let str_trim_fn =
+            self.module
+                .add_function("__cobrust_str_trim", str_trim_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_trim", str_trim_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_trim", 1);
+
+        // __cobrust_str_find(s, needle) -> i64  (-1 sentinel for not-found)
+        let str_find_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let str_find_fn =
+            self.module
+                .add_function("__cobrust_str_find", str_find_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_find", str_find_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_find", 2);
+
+        // __cobrust_str_contains(s, needle) -> i64  (0/1)
+        let str_contains_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let str_contains_fn = self.module.add_function(
+            "__cobrust_str_contains",
+            str_contains_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_contains", str_contains_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_contains", 2);
+
+        // __cobrust_str_starts_with(s, prefix) -> i64  (0/1)
+        let str_starts_with_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let str_starts_with_fn = self.module.add_function(
+            "__cobrust_str_starts_with",
+            str_starts_with_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_starts_with", str_starts_with_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_starts_with", 2);
+
+        // __cobrust_str_ends_with(s, suffix) -> i64  (0/1)
+        let str_ends_with_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let str_ends_with_fn = self.module.add_function(
+            "__cobrust_str_ends_with",
+            str_ends_with_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_ends_with", str_ends_with_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_ends_with", 2);
+
+        // __cobrust_str_lower(s: *mut Str) -> *mut Str
+        let str_lower_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let str_lower_fn =
+            self.module
+                .add_function("__cobrust_str_lower", str_lower_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_lower", str_lower_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_lower", 1);
+
+        // __cobrust_str_upper(s: *mut Str) -> *mut Str
+        let str_upper_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let str_upper_fn =
+            self.module
+                .add_function("__cobrust_str_upper", str_upper_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_upper", str_upper_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_upper", 1);
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
