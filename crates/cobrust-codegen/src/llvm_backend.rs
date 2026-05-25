@@ -1100,6 +1100,20 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_decls
             .insert("__cobrust_panic", panic_fn);
 
+        // ADR-0058g sub-wave-1 — __cobrust_argv() -> *mut ListBuffer<*mut StrBuffer>
+        // Mirrors Cranelift `cranelift_backend.rs:2822` zero-arg ptr-return shape.
+        // The extern is dispatched from MIR via `Kind::Argv` rewrite at
+        // `cobrust-cli/src/build/intrinsics.rs:1439-1447` (ARGV_RUNTIME_SYMBOL).
+        // Stdlib export: `cobrust-stdlib/src/env.rs:64`. The companion
+        // `__cobrust_capture_argv` symbol is invoked exclusively from the C
+        // shim `cobrust-cli/runtime/cobrust_main.c`, NOT from MIR; Cranelift
+        // also omits its extern decl, so LLVM matches (parity intentional).
+        let argv_ty = ptr_ty.fn_type(&[], false);
+        let argv_fn = self
+            .module
+            .add_function("__cobrust_argv", argv_ty, Some(Linkage::External));
+        self.runtime_helper_decls.insert("__cobrust_argv", argv_fn);
+
         // ADR-0060b dynamic-index Array runtime helpers.
         // __cobrust_array_get_i64(*const i64, usize, usize) -> i64
         let arr_get_i64_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
@@ -1273,6 +1287,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_list_drop_elems", 2);
         self.runtime_helper_param_counts
             .insert("__cobrust_panic", 2);
+        // ADR-0058g sub-wave-1 — argv is a zero-arg helper. Recorded
+        // explicitly (not relying on `.unwrap_or(args.len())` fallback) so
+        // a future maintainer reading the helper-decl block sees the
+        // contract beside the rest of the wave-1/2 surface.
+        self.runtime_helper_param_counts.insert("__cobrust_argv", 0);
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
@@ -2027,6 +2046,24 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                     .builder
                     .build_call(callee, &call_args, "extern_call")
                     .map_err(map_builder_err)?;
+                // ADR-0058g sub-wave-1 — `__cobrust_panic` diverges
+                // (`-> !` at the Rust side; stdlib export at
+                // `cobrust-stdlib/src/panic.rs:47`). Per ADR-0058g §6.2
+                // resolution (Cobrust does NOT use exceptions as the
+                // default error path — CLAUDE.md §2.2), we emit
+                // `call` + `unreachable` (no `invoke` / EH table). This
+                // matches Cranelift's `InstructionData::Unreachable`
+                // terminator for the same call site and satisfies LLVM's
+                // basic-block terminator constraint without going through
+                // the unconditional-branch path below (which would be
+                // dead code after a noreturn callee).
+                if name.as_str() == "__cobrust_panic" {
+                    self.emitter
+                        .builder
+                        .build_unreachable()
+                        .map_err(map_builder_err)?;
+                    return Ok(());
+                }
                 // Many of the print helpers return `void`. Treat
                 // absent basic-value return as i64 zero (matches
                 // Cranelift `lower_terminator` extern path).
