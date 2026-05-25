@@ -114,8 +114,8 @@ the literal-return shape (`return "..."` inside the callee).
 
 ### §6.1 Resolution commits
 
-- `<sha-a>` — MIR + codegen fix + corpus
-- `<sha-b>` — finding update (this commit)
+- `cf0864c` — MIR + codegen fix + corpus + outreach file
+- `dcb1714` — finding update (this commit)
 
 ### §6.2 Regression corpus
 
