@@ -1114,6 +1114,75 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .add_function("__cobrust_argv", argv_ty, Some(Linkage::External));
         self.runtime_helper_decls.insert("__cobrust_argv", argv_fn);
 
+        // -----------------------------------------------------------------
+        // ADR-0058g sub-wave-2 — list runtime extern hookup.
+        // Mirrors Cranelift `cranelift_backend.rs:2670-2682` ABI verbatim
+        // (sigs cross-verified against stdlib exports at
+        // `cobrust-stdlib/src/collections.rs:390,419,440,459,477,595`).
+        //
+        // Drop schedule context (ADR-0050c TD-1): `__cobrust_list_drop` +
+        // `__cobrust_list_drop_elems` were already declared above for the
+        // wave-1 Drop terminator path (see `emit_drop_for_ty` at the
+        // corresponding `Terminator::Drop` arm). Sub-wave-2 adds only the
+        // 6 constructor/accessor/mutator helpers that the MIR `Constant::Str`
+        // extern-name dispatch routes to via `lower_call`.
+        // -----------------------------------------------------------------
+
+        // __cobrust_list_new(elem_size: i64, len: i64) -> *mut ListBuffer
+        let list_new_ty = ptr_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false);
+        let list_new_fn =
+            self.module
+                .add_function("__cobrust_list_new", list_new_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_list_new", list_new_fn);
+
+        // __cobrust_list_set(list: *mut ListBuffer, i: i64, v: i64) -> void
+        let list_set_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let list_set_fn =
+            self.module
+                .add_function("__cobrust_list_set", list_set_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_list_set", list_set_fn);
+
+        // __cobrust_list_get(list: *const ListBuffer, i: i64) -> i64
+        let list_get_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let list_get_fn =
+            self.module
+                .add_function("__cobrust_list_get", list_get_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_list_get", list_get_fn);
+
+        // __cobrust_list_len(list: *const ListBuffer) -> i64
+        let list_len_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let list_len_fn =
+            self.module
+                .add_function("__cobrust_list_len", list_len_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_list_len", list_len_fn);
+
+        // __cobrust_list_is_empty(list: *const ListBuffer) -> i64 (0/1)
+        // Returns i64 per the SwitchInt codegen convention (ADR-0050c
+        // §"Phase 6" / F5 §2.2 uniformity addendum).
+        let list_is_empty_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let list_is_empty_fn = self.module.add_function(
+            "__cobrust_list_is_empty",
+            list_is_empty_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_list_is_empty", list_is_empty_fn);
+
+        // __cobrust_list_append(list: *mut ListBuffer, v: i64) -> void
+        // ADR-0041 §H6: comprehension lowering uses runtime append.
+        let list_append_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let list_append_fn = self.module.add_function(
+            "__cobrust_list_append",
+            list_append_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_list_append", list_append_fn);
+
         // ADR-0060b dynamic-index Array runtime helpers.
         // __cobrust_array_get_i64(*const i64, usize, usize) -> i64
         let arr_get_i64_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
@@ -1292,6 +1361,27 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // a future maintainer reading the helper-decl block sees the
         // contract beside the rest of the wave-1/2 surface.
         self.runtime_helper_param_counts.insert("__cobrust_argv", 0);
+
+        // ADR-0058g sub-wave-2 — list runtime param counts. Mirrors
+        // Cranelift `cranelift_backend.rs:2670-2682` ABI. Recorded
+        // explicitly so the `expand_str_to_ptr_len` detection in
+        // `lower_call` (which uses `sig_param_count` for the (ptr, len)
+        // expansion case) sees the true C-signature arity — none of the
+        // list helpers take a Str arg, so no expansion path applies, but
+        // recording the counts uniformly keeps the dispatch contract
+        // explicit (F37 silent-rot avoidance).
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_new", 2);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_set", 3);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_get", 2);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_len", 1);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_is_empty", 1);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_append", 2);
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
