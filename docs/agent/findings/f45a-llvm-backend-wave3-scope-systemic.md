@@ -1,6 +1,6 @@
 ---
 name: f45a
-status: ratified (panic + argv + list + dict + set/tuple runtime categories resolved 2026-05-25 via ADR-0058g sub-wave-1 + sub-wave-2 + sub-wave-3)
+status: ratified (panic + argv + list + dict + set/tuple + input/read_line runtime categories resolved 2026-05-25 via ADR-0058g sub-wave-1 + sub-wave-2 + sub-wave-3 + sub-wave-4)
 family: F45 child (systemic wave-3 catalogue) + F35-sibling (claim drift) + F37 (silent rot) + F44 (CI green != working)
 last_verified_commit: cb8893c
 date: 2026-05-22
@@ -41,7 +41,7 @@ Cranelift handles all of these correctly at the same commit.
 
 | Category | Runtime helpers (extern names) | Source-level impact | Status |
 |---|---|---|---|
-| **input** | `__cobrust_input` / `__cobrust_input_str_buf` / `__cobrust_input_no_prompt` / `__cobrust_read_line` | `input("> ")` and `read_line()` silently return nothing; stdin family fully silent under LLVM | wave-1 stub |
+| **input** | `__cobrust_input` / `__cobrust_input_str_buf` / `__cobrust_input_no_prompt` / `__cobrust_read_line` | `input("> ")` and `read_line()` silently return nothing; stdin family fully silent under LLVM | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-4; 4 externs hooked (2 zero-arg + 1 str-buf overload + 1 literal-prompt path through the wave-2 `expand_str_to_ptr_len` dispatch); covered by `llvm_wave3_input_readline::{llvm_emits_input_extern_call_with_prompt, llvm_emits_input_no_prompt_extern_call, llvm_emits_read_line_extern_call, llvm_emits_input_str_buf_extern_call}` (4 fixtures, all use `Stdio::piped()` + `stdin.write_all(...)` + `wait_with_output()` for stdin feed; matches `cobrust-cli/tests/intrinsics_input.rs:164-183` stdin handling pattern) |
 | **argv** | `__cobrust_argv` (`__cobrust_capture_argv` is C-shim-only — Cranelift+LLVM both intentionally omit at MIR level) | `sys.argv` evaluates to NULL / empty; command-line programs cannot read arguments | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-1; covered by `llvm_wave3_panic_argv::llvm_emits_argv_extern_call_and_exits_zero` |
 | **list** | `__cobrust_list_new` / `__cobrust_list_set` / `__cobrust_list_get` / `__cobrust_list_append` / `__cobrust_list_len` / `__cobrust_list_is_empty` | All list operations silently no-op; list-based programs produce no output | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-2; covered by `llvm_wave3_list_runtime::{llvm_emits_list_new_extern_call, llvm_emits_list_append_then_len, llvm_emits_list_set_then_get, llvm_emits_list_is_empty_after_new, llvm_emits_list_end_to_end_roundtrip}` (5 fixtures, 6 helpers, end-to-end exit 243 capstone) |
 | **dict** | `__cobrust_dict_new` / `__cobrust_dict_set_*` / `__cobrust_dict_get_*` / `__cobrust_dict_contains_*` / `__cobrust_dict_len` / `__cobrust_dict_is_empty` / `__cobrust_dict_drop` | Dict runtime fully silent; key/value stores return nothing | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-3; 16 dict externs hooked (4 erased + 2 legacy untyped + 10 typed K×V shims); covered by `llvm_wave3_dict_set_tuple::{llvm_emits_dict_new_len_is_empty, llvm_emits_dict_set_then_get_i64_i64, llvm_emits_dict_contains_after_set, llvm_emits_dict_end_to_end_with_drop}` (4 dict-focused fixtures incl. `dict_drop` via `Terminator::Drop` Ty::Dict arm — ADR-0058g §6.1 TD-1 dict portion closure); end-to-end exit 33 capstone |
@@ -54,24 +54,25 @@ Cranelift handles all of these correctly at the same commit.
 | **str methods (ADR-0050e)** | `__cobrust_str_split` / `__cobrust_str_join` / `__cobrust_str_replace` / `__cobrust_str_trim` / `__cobrust_str_find` / `__cobrust_str_contains` / `__cobrust_str_starts_with` / `__cobrust_str_ends_with` / `__cobrust_str_lower` / `__cobrust_str_upper` / `__cobrust_str_clone` | `s.split(",")` / `.join()` / all str method calls silently return nothing | wave-1 stub |
 | **LLM router** | `__cobrust_llm_complete` / `__cobrust_llm_dispatch` / `__cobrust_llm_stream` / `__cobrust_prompt_*` / `__cobrust_tool_*` | Full AI-native surface of ADR-0049 alpha silently no-ops under LLVM | wave-1 stub |
 
-**Coverage summary**: as of 2026-05-25, **5 of 12 categories** (panic +
+**Coverage summary**: as of 2026-05-25, **6 of 12 categories** (panic +
 argv via sub-wave-1; list runtime via sub-wave-2; dict + set/tuple via
-sub-wave-3) are resolved by ADR-0058g. The remaining 7 categories
-(input / fmt / iter / math / parse_int+str-parsing / str-methods /
-LLM router) continue to silently misbehave under `--features llvm`
-until subsequent waves land. The print system + panic + argv + list +
-dict + set + tuple runtime + pure numeric computation (arithmetic +
-FnRef recursion) are the surfaces that work correctly today in LLVM
-AOT.
+sub-wave-3; input + read_line via sub-wave-4) are resolved by
+ADR-0058g. The remaining 6 categories (fmt / iter / math /
+parse_int+str-parsing / str-methods / LLM router) continue to silently
+misbehave under `--features llvm` until subsequent waves land. The
+print system + panic + argv + list + dict + set + tuple runtime +
+input + read_line + pure numeric computation (arithmetic + FnRef
+recursion) are the surfaces that work correctly today in LLVM AOT.
 
-**F35-sibling discipline**: sub-wave-3 closure is NOT wave-3 closure.
+**F35-sibling discipline**: sub-wave-4 closure is NOT wave-3 closure.
 The §5 ADR-0058g "Done means (full wave-3 closure)" criteria still
-require every category in §2 to have a passing fixture; 7 categories
+require every category in §2 to have a passing fixture; 6 categories
 remain. Doc updates and release notes downstream of this finding MUST
-distinguish "panic + argv + list + dict + set + tuple landed" from
-"wave-3 closed". The dict+set+tuple closure unblocks aggregate-data
-programs in LC-100 corpus but leaves iter / fmt / math / parse /
-str-methods / LLM router still no-op under LLVM AOT.
+distinguish "panic + argv + list + dict + set + tuple + input/read_line
+landed" from "wave-3 closed". The input+read_line closure unblocks
+interactive + stdin-parsing programs in LC-100 corpus but leaves
+iter / fmt / math / parse / str-methods / LLM router still no-op
+under LLVM AOT.
 
 ## §3 Systemic fix recommendations (promoted from playground audit §4)
 

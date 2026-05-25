@@ -4,7 +4,7 @@ adr_id: 0058g
 parent_adr: 0058f
 name: 0058g
 title: "LLVM backend wave-3 stdlib hookup roadmap — panic/argv/list/dict/input/fmt/iter/math/parse/str-methods/LLM router"
-status: proposed (sub-wave-1 + sub-wave-2 + sub-wave-3 RATIFIED 2026-05-25)
+status: proposed (sub-wave-1 + sub-wave-2 + sub-wave-3 + sub-wave-4 RATIFIED 2026-05-25)
 date: 2026-05-22
 phase: Phase K wave-3 (LLVM backend full stdlib parity)
 last_verified_commit: cb8893c
@@ -221,21 +221,70 @@ sub-wave-3. The remaining 7 (input / fmt / iter / math /
 parse_int+str-parsing / str-methods / LLM router) remain wave-1 stub
 fallthrough; do NOT read sub-wave-3 closure as wave-3 closure.
 
-### Wave 0058g-4: input + read_line
+### Wave 0058g-4: input + read_line — **RATIFIED 2026-05-25**
 
-**Scope**: `__cobrust_input` / `__cobrust_input_str_buf` /
-`__cobrust_input_no_prompt` / `__cobrust_read_line`.
+**Status**: closed by sub-wave-4 impl commit (see git log on this file). The
+implementation landed four extern hookups + four regression fixtures.
 
-**Rationale**: stdin family deferred until after collection runtimes are stable
-(input result is often stored in a list or dict). Lower priority than
-collections but blocking for any interactive or stdin-parsing program.
+**Scope** (as landed):
+- `__cobrust_input(prompt_ptr, prompt_len) -> *mut Str` extern declaration in
+  `runtime_helper_decls` (mirrors Cranelift `cranelift_backend.rs:2811`
+  `[p, i64] -> p`). The single source-Str arg routes through the wave-2
+  `expand_str_to_ptr_len` path in `lower_call` (literal prompt → ptr/len pair).
+- `__cobrust_input_str_buf(prompt_buf) -> *mut Str` extern declaration
+  (mirrors Cranelift `cranelift_backend.rs:2813` `[p] -> p`). The runtime
+  Str-buffer overload — single ptr param, no expansion.
+- `__cobrust_input_no_prompt() -> *mut Str` zero-arg extern declaration
+  (mirrors Cranelift `cranelift_backend.rs:2815` `[] -> p`).
+- `__cobrust_read_line() -> *mut Str` zero-arg extern declaration
+  (mirrors Cranelift `cranelift_backend.rs:2819` `[] -> p`). W2 cap;
+  typed `Result[str, IoError]` deferred to ADR-0044a per
+  `cobrust-codegen/src/cranelift_backend.rs:2816-2818` comment.
 
-**Known complexity**: stdin helpers allocate heap `Str` objects; requires
-`__cobrust_str_new` + push chain already wired in wave-2. The LLVM path
-should reuse the wave-2 str-buffer subroutines.
+**Stdlib ABI cross-confirmed** at `cobrust-stdlib/src/io.rs:224,248,268,343`.
+All four helpers return `*mut StrBuffer` (`ptr_ty`); none Drop-schedule at
+this layer (the str return value is owned by the caller; the existing
+`__cobrust_str_drop` covers the Drop path).
 
-**Done means**: `codegen_diff_corpus::category_input_*` fixture reads a
-hardcoded stdin via pipe, produces a string, prints it; PASS.
+**Test fixtures** (4 fixtures shipped in
+`crates/cobrust-codegen/tests/llvm_wave3_input_readline.rs`):
+- `llvm_emits_input_extern_call_with_prompt` — `__cobrust_input("> ")` with
+  piped stdin `b"hello\n"`; verifies the wave-2 `expand_str_to_ptr_len`
+  dispatch path handles the single-Str-arg → (ptr, len) expansion for the
+  input family.
+- `llvm_emits_input_no_prompt_extern_call` — zero-arg variant with piped
+  stdin `b"world\n"`.
+- `llvm_emits_read_line_extern_call` — zero-arg low-level reader with
+  piped stdin `b"line one\n"`.
+- `llvm_emits_input_str_buf_extern_call` — Str-buffer prompt overload
+  using a fresh `__cobrust_str_new()`-allocated buf passed by-pointer.
+  The buf local is declared `Ty::Str` so its alloca lowers to
+  `opaque_ptr_ty` (matches the wave-2 list fixture pattern where
+  `Ty::List(...)` also lowers to opaque ptr); this avoids the LLVM
+  verifier rejecting an i64→ptr arg mismatch.
+
+**Stdin handling pattern**: `Command::stdin(Stdio::piped())` +
+`child.stdin.as_mut().write_all(...)` + `wait_with_output()`. Mirrors
+`cobrust-cli/tests/intrinsics_input.rs:164-183`.
+
+**Done means** (sub-wave-4 closure):
+- Both Mac arm64 and Linux x86_64 PASS the four fixtures under
+  `--features llvm`.
+- F35-sibling honest cite: input + read_line are RESOLVED in F45a §2.
+- F37 silent-rot guard: each fixture asserts `status.success()` AND
+  surfaces stdout/stderr on assertion failure (no silent skip when
+  binary misbehaves).
+- F51 vigilance: test file ships with module-level
+  `#![allow(clippy::items_after_statements, clippy::similar_names,
+  clippy::unwrap_used, clippy::expect_used, reason = "test corpus style
+  (F51 lint discipline)")]` to prevent clippy lint silent-rot under
+  `--features llvm`.
+
+**Sub-wave-4 narrowly scoped (F35-sibling discipline)**: this wave
+addresses input + read_line ONLY. Six of twelve F45a §2 categories
+remain wave-1 stubs after this sprint (fmt / iter / math /
+parse_int+str-parsing / str-methods / LLM router). DO NOT read
+sub-wave-4 closure as wave-3 closure.
 
 ### Wave 0058g-5: fmt + iter + math + parse_int + str methods
 
