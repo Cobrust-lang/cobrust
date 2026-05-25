@@ -4,7 +4,7 @@ adr_id: 0058g
 parent_adr: 0058f
 name: 0058g
 title: "LLVM backend wave-3 stdlib hookup roadmap — panic/argv/list/dict/input/fmt/iter/math/parse/str-methods/LLM router"
-status: proposed (sub-wave-1 RATIFIED 2026-05-25)
+status: proposed (sub-wave-1 + sub-wave-2 RATIFIED 2026-05-25)
 date: 2026-05-22
 phase: Phase K wave-3 (LLVM backend full stdlib parity)
 last_verified_commit: cb8893c
@@ -97,24 +97,53 @@ set / tuple / input / fmt / iter / math / parse_int+str-parsing /
 str-methods / LLM router) remain wave-1 stub fallthrough; do NOT
 read sub-wave-1 closure as wave-3 closure.
 
-### Wave 0058g-2: list runtime (largest, deepest)
+### Wave 0058g-2: list runtime (largest, deepest) — **RATIFIED 2026-05-25**
 
-**Scope**: `__cobrust_list_new` / `__cobrust_list_set` / `__cobrust_list_get` /
-`__cobrust_list_append` / `__cobrust_list_len` / `__cobrust_list_is_empty`.
+**Status**: closed by sub-wave-2 impl commit (see git log on this file). The
+implementation landed 6 extern hookups + 5 regression fixtures.
 
-**Rationale**: list is the most pervasive collection; without it, effectively
-no real Cobrust program works under LLVM AOT. LC-100 corpus depends on list
-almost universally.
+**Scope** (as landed):
+- `__cobrust_list_new(elem_size: i64, len: i64) -> *mut ListBuffer` —
+  mirrors Cranelift `cranelift_backend.rs:2670` ABI verbatim.
+- `__cobrust_list_set(list, i, v) -> void` — mirrors Cranelift line 2671.
+- `__cobrust_list_get(list, i) -> i64` — mirrors Cranelift line 2672.
+- `__cobrust_list_len(list) -> i64` — mirrors Cranelift line 2673.
+- `__cobrust_list_is_empty(list) -> i64` (0/1 per SwitchInt convention) —
+  mirrors Cranelift line 2680.
+- `__cobrust_list_append(list, v) -> void` — mirrors Cranelift line 2682.
 
-**Known complexity**: list allocation interacts with the Drop schedule
-(ADR-0050c TD-1 open question — see §6). The LLVM lowering must decide how to
-handle the `__cobrust_list_drop` / `__cobrust_list_clone` ABI. The Cranelift
-path is authoritative; consult `cranelift_backend.rs` List category before
-implementing.
+All 6 added to `runtime_helper_decls` + `runtime_helper_param_counts` in
+`LlvmEmitter::declare_runtime_helpers`. The `lower_call` extern-name
+dispatch path (added in sub-wave-1) routes by name to these decls without
+any per-helper special-case needed.
 
-**Done means**: `codegen_diff_corpus::category_list_*` fixtures cover
-`list_new` / `list_append` / `list_get` / `list_len` / `list_is_empty` +
-a round-trip `[1, 2, 3]` → `print(list[1])` end-to-end; all PASS.
+**Resolved complexity** (§6.1 below): list allocation/Drop interaction is
+already handled at the wave-1 layer. `__cobrust_list_drop` +
+`__cobrust_list_drop_elems` were declared and wired in
+`emit_drop_for_ty` (see `llvm_backend.rs::emit_drop_for_ty` Drop dispatch
+arm; the corresponding `Terminator::Drop` lowering at `lower_terminator`
+emits the right helper for `Ty::List(Ty::Str)` vs `Ty::List(_)`). The
+MIR `compute_drop_schedule` pass inserts `Terminator::Drop` for owning
+locals reaching end-of-scope. Sub-wave-2 adds only the
+constructor/accessor surface; no Drop-path change required.
+
+**Done means** (landed): 5 fixtures in
+`crates/cobrust-codegen/tests/llvm_wave3_list_runtime.rs`:
+1. `llvm_emits_list_new_extern_call` — `list_new(8, 0)` lowers + links, exits 0.
+2. `llvm_emits_list_append_then_len` — `new + append + len` → exit 1.
+3. `llvm_emits_list_set_then_get` — `new(3) + set(1, 99) + get(1)` → exit 99.
+4. `llvm_emits_list_is_empty_after_new` — `new(0) + is_empty` → exit 1.
+5. `llvm_emits_list_end_to_end_roundtrip` — all 6 helpers chained →
+   exit 243 (10+200+30+3+0). Acts as the integration capstone.
+
+All 5 PASS on Mac arm64 + LLVM 18 (`--features llvm`).
+
+**F35-sibling discipline**: sub-wave-2 closes 1 of the 12 F45a §2
+categories (list runtime). Combined with sub-wave-1 (panic + argv), **3
+of 12 categories** are resolved post sub-wave-2. The remaining 9
+(dict / set+tuple / input / fmt / iter / math / parse_int+str-parsing /
+str-methods / LLM router) remain wave-1 stub fallthrough; do NOT read
+sub-wave-2 closure as wave-3 closure.
 
 ### Wave 0058g-3: dict + set + tuple
 
@@ -227,18 +256,29 @@ Wave-3 is closed when ALL of the following hold simultaneously:
 
 ## 6. Open questions
 
-### 6.1 Drop schedule interaction with List/Dict allocations (ADR-0050c TD-1)
+### 6.1 Drop schedule interaction with List/Dict allocations (ADR-0050c TD-1) — **RESOLVED FOR LIST 2026-05-25**
 
 The Cranelift list/dict allocations interact with the drop schedule
-(ADR-0050c TD-1 tracked debt). It is not yet clear whether the LLVM lowering
-of `list_new` / `dict_new` needs a corresponding `list_drop` / `dict_drop`
-call at scope-exit in the LLVM CFG, or whether the Cranelift drop-schedule
-MIR lowering produces explicit `Drop(list)` terminators that `lower_call`
-can catch generically.
+(ADR-0050c TD-1 tracked debt). The pre-sub-wave-2 open question was
+whether the LLVM lowering of `list_new` needs a corresponding
+`list_drop` call at scope-exit in the LLVM CFG, or whether the
+drop-schedule MIR lowering produces explicit `Drop(list)` terminators
+that `lower_call` can catch generically.
 
-**Resolution before wave-3-2 impl**: read ADR-0050c §TD-1 + audit the MIR
-for a Cobrust program that creates + drops a list; confirm whether an explicit
-`__cobrust_list_drop` call appears in the MIR terminator stream.
+**Resolution (list portion)**: the MIR `compute_drop_schedule` pass at
+`crates/cobrust-mir/src/drop.rs` inserts explicit `Terminator::Drop`
+nodes for owning locals reaching end-of-scope. The LLVM backend's
+`lower_terminator` dispatches `Terminator::Drop` to `emit_drop_for_ty`
+at `llvm_backend.rs:1903-1907`, which emits `__cobrust_list_drop` for
+`Ty::List(_)` and `__cobrust_list_drop_elems` for `Ty::List(Ty::Str)`
+(both decls already in `runtime_helper_decls` from wave-1 prep at
+`llvm_backend.rs:1077-1093`). Sub-wave-2 confirmed this path requires
+no change for list constructor/accessor wiring.
+
+**Dict portion (still open)**: the same audit must be repeated for
+`__cobrust_dict_drop` / `__cobrust_set_drop` / `__cobrust_tuple_drop`
+when wave-3 dict+set+tuple lands. Cranelift signatures at
+`cranelift_backend.rs:2684-2750` are the authoritative reference.
 
 ### 6.2 Panic semantics: does LLVM unwind table need wiring? — **RESOLVED 2026-05-25**
 

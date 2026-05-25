@@ -1,6 +1,6 @@
 ---
 name: f45a
-status: ratified (panic + argv categories resolved 2026-05-25 via ADR-0058g sub-wave-1)
+status: ratified (panic + argv + list runtime categories resolved 2026-05-25 via ADR-0058g sub-wave-1 + sub-wave-2)
 family: F45 child (systemic wave-3 catalogue) + F35-sibling (claim drift) + F37 (silent rot) + F44 (CI green != working)
 last_verified_commit: cb8893c
 date: 2026-05-22
@@ -43,7 +43,7 @@ Cranelift handles all of these correctly at the same commit.
 |---|---|---|---|
 | **input** | `__cobrust_input` / `__cobrust_input_str_buf` / `__cobrust_input_no_prompt` / `__cobrust_read_line` | `input("> ")` and `read_line()` silently return nothing; stdin family fully silent under LLVM | wave-1 stub |
 | **argv** | `__cobrust_argv` (`__cobrust_capture_argv` is C-shim-only — Cranelift+LLVM both intentionally omit at MIR level) | `sys.argv` evaluates to NULL / empty; command-line programs cannot read arguments | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-1; covered by `llvm_wave3_panic_argv::llvm_emits_argv_extern_call_and_exits_zero` |
-| **list** | `__cobrust_list_new` / `__cobrust_list_set` / `__cobrust_list_get` / `__cobrust_list_append` / `__cobrust_list_len` / `__cobrust_list_is_empty` | All list operations silently no-op; list-based programs produce no output | wave-1 stub |
+| **list** | `__cobrust_list_new` / `__cobrust_list_set` / `__cobrust_list_get` / `__cobrust_list_append` / `__cobrust_list_len` / `__cobrust_list_is_empty` | All list operations silently no-op; list-based programs produce no output | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-2; covered by `llvm_wave3_list_runtime::{llvm_emits_list_new_extern_call, llvm_emits_list_append_then_len, llvm_emits_list_set_then_get, llvm_emits_list_is_empty_after_new, llvm_emits_list_end_to_end_roundtrip}` (5 fixtures, 6 helpers, end-to-end exit 243 capstone) |
 | **dict** | `__cobrust_dict_new` / `__cobrust_dict_set_*` / `__cobrust_dict_get_*` / `__cobrust_dict_contains_*` | Dict runtime fully silent; key/value stores return nothing | wave-1 stub |
 | **set / tuple** | `__cobrust_set_*` / `__cobrust_tuple_*` | Set + tuple construction + access all silent | wave-1 stub |
 | **panic** | `__cobrust_panic` | `panic("msg")` source-level does not abort; `unwrap_err()` on Err paths produces no signal | **RESOLVED 2026-05-25** via ADR-0058g sub-wave-1; covered by `llvm_wave3_panic_argv::llvm_emits_panic_extern_call_with_unreachable` |
@@ -54,18 +54,23 @@ Cranelift handles all of these correctly at the same commit.
 | **str methods (ADR-0050e)** | `__cobrust_str_split` / `__cobrust_str_join` / `__cobrust_str_replace` / `__cobrust_str_trim` / `__cobrust_str_find` / `__cobrust_str_contains` / `__cobrust_str_starts_with` / `__cobrust_str_ends_with` / `__cobrust_str_lower` / `__cobrust_str_upper` / `__cobrust_str_clone` | `s.split(",")` / `.join()` / all str method calls silently return nothing | wave-1 stub |
 | **LLM router** | `__cobrust_llm_complete` / `__cobrust_llm_dispatch` / `__cobrust_llm_stream` / `__cobrust_prompt_*` / `__cobrust_tool_*` | Full AI-native surface of ADR-0049 alpha silently no-ops under LLVM | wave-1 stub |
 
-**Coverage summary**: as of 2026-05-25, **2 of 12 categories** (panic +
-argv) are resolved by ADR-0058g sub-wave-1. The remaining 10 categories
-continue to silently misbehave under `--features llvm` until subsequent
-waves land. The print system + panic + argv + pure numeric computation
-(arithmetic + FnRef recursion) are the surfaces that work correctly
-today in LLVM AOT.
+**Coverage summary**: as of 2026-05-25, **3 of 12 categories** (panic +
+argv via sub-wave-1; list runtime via sub-wave-2) are resolved by
+ADR-0058g. The remaining 9 categories (dict / set+tuple / input / fmt /
+iter / math / parse_int+str-parsing / str-methods / LLM router) continue
+to silently misbehave under `--features llvm` until subsequent waves
+land. The print system + panic + argv + list runtime + pure numeric
+computation (arithmetic + FnRef recursion) are the surfaces that work
+correctly today in LLVM AOT.
 
-**F35-sibling discipline**: sub-wave-1 closure is NOT wave-3 closure.
+**F35-sibling discipline**: sub-wave-2 closure is NOT wave-3 closure.
 The §5 ADR-0058g "Done means (full wave-3 closure)" criteria still
-require every category in §2 to have a passing fixture; 10 categories
+require every category in §2 to have a passing fixture; 9 categories
 remain. Doc updates and release notes downstream of this finding MUST
-distinguish "panic + argv landed" from "wave-3 closed".
+distinguish "panic + argv + list landed" from "wave-3 closed". The
+list runtime closure unblocks LC-100 corpus list-based programs but
+leaves dict / set / tuple / iter / fmt / math / parse / str-methods /
+LLM router still no-op under LLVM AOT.
 
 ## §3 Systemic fix recommendations (promoted from playground audit §4)
 
