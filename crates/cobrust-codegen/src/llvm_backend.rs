@@ -1711,6 +1711,82 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_tuple_drop", tuple_drop_fn);
         self.runtime_helper_param_counts
             .insert("__cobrust_tuple_drop", 2);
+
+        // -----------------------------------------------------------------
+        // ADR-0058g sub-wave-4 — input + read_line runtime extern hookup.
+        // Mirrors Cranelift `cranelift_backend.rs:2811-2819` ABI verbatim
+        // (sigs cross-verified against stdlib exports at
+        // `cobrust-stdlib/src/io.rs:224,248,268,343`).
+        //
+        // Source-level surface (ADR-0044 W2 Phase 2):
+        //   - `input(prompt: str_literal) -> str` lowers to
+        //     `__cobrust_input(prompt_ptr, prompt_len)` — the prompt is a
+        //     string literal split into (ptr, len) via the wave-2
+        //     `expand_str_to_ptr_len` path in `lower_call`.
+        //   - `input(prompt: str_buffer) -> str` lowers to
+        //     `__cobrust_input_str_buf(prompt_buf)` — the runtime Str
+        //     buffer overload (handles non-literal prompts).
+        //   - `input_no_prompt() -> str` lowers to
+        //     `__cobrust_input_no_prompt()` — zero-arg empty-prompt path.
+        //   - `read_line() -> str` lowers to `__cobrust_read_line()` —
+        //     low-level stdin line reader (preserves trailing `\n`;
+        //     EOF returns empty Str). W2 cap; typed `Result[str, IoError]`
+        //     deferred to ADR-0044a.
+        //
+        // All four helpers return `*mut StrBuffer` (`ptr_ty`); none Drop-
+        // schedule at this layer (the str return value is owned by the
+        // caller; existing `__cobrust_str_drop` covers the Drop path).
+        //
+        // F35-sibling discipline: this sub-wave lands input + read_line
+        // ONLY. Six of twelve F45a §2 categories will be resolved post-
+        // merge (panic + argv + list + dict + set/tuple + input). The
+        // remaining 6 (fmt / iter / math / parse_int+str-parsing /
+        // str-methods / LLM router) continue as wave-1 stubs.
+        // -----------------------------------------------------------------
+
+        // __cobrust_input(prompt_ptr: *const u8, prompt_len: i64) -> *mut Str
+        let input_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let input_fn =
+            self.module
+                .add_function("__cobrust_input", input_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_input", input_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_input", 2);
+
+        // __cobrust_input_str_buf(prompt_buf: *mut Str) -> *mut Str
+        let input_str_buf_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let input_str_buf_fn = self.module.add_function(
+            "__cobrust_input_str_buf",
+            input_str_buf_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_input_str_buf", input_str_buf_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_input_str_buf", 1);
+
+        // __cobrust_input_no_prompt() -> *mut Str
+        let input_no_prompt_ty = ptr_ty.fn_type(&[], false);
+        let input_no_prompt_fn = self.module.add_function(
+            "__cobrust_input_no_prompt",
+            input_no_prompt_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_input_no_prompt", input_no_prompt_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_input_no_prompt", 0);
+
+        // __cobrust_read_line() -> *mut Str
+        let read_line_ty = ptr_ty.fn_type(&[], false);
+        let read_line_fn =
+            self.module
+                .add_function("__cobrust_read_line", read_line_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_read_line", read_line_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_read_line", 0);
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
