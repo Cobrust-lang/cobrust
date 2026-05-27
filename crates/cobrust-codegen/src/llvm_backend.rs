@@ -2366,6 +2366,53 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_llm_complete_with_tools", llm_with_tools_fn);
         self.runtime_helper_param_counts
             .insert("__cobrust_llm_complete_with_tools", 2);
+
+        // -- v0.7.0 Stream Z.5: std.json source-level binding --------
+        // The `(*mut Str) -> *mut Str` opaque-pointer ABI, mirroring the
+        // str->str helpers above. Symbols exported unconditionally by
+        // `cobrust-stdlib/src/json.rs` (`__cobrust_json_dumps` /
+        // `__cobrust_json_dumps_indent` / `__cobrust_json_loads`); failure
+        // paths return a sentinel Str so they resolve at link time without
+        // a live config. `json_dumps_indent`'s second param is `i64`
+        // (the indent width), marshalled directly by the extern-call path
+        // (no str expansion). Closes the Z.5 codegen-wiring gap (the stdlib
+        // module + frontend prelude + cli intrinsic-rewrite were landed in
+        // the Z.5 merge; this is the missing lowering).
+        // `json_dumps(json_input) -> str`.
+        let json_dumps_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let json_dumps_fn = self.module.add_function(
+            "__cobrust_json_dumps",
+            json_dumps_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_json_dumps", json_dumps_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_json_dumps", 1);
+
+        // `json_dumps_indent(json_input, indent: i64) -> str`.
+        let json_dumps_indent_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let json_dumps_indent_fn = self.module.add_function(
+            "__cobrust_json_dumps_indent",
+            json_dumps_indent_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_json_dumps_indent", json_dumps_indent_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_json_dumps_indent", 2);
+
+        // `json_loads(s) -> str`.
+        let json_loads_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let json_loads_fn = self.module.add_function(
+            "__cobrust_json_loads",
+            json_loads_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_json_loads", json_loads_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_json_loads", 1);
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.

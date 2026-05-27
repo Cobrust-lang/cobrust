@@ -378,12 +378,14 @@ pub unsafe extern "C" fn __cobrust_json_loads(s: *mut u8) -> *mut u8;
   differential corpus (oracle = CPython stdlib `json`), `indent=` parity, escape
   edge cases, surrogate pairs, and a 1500-input reproducible-LCG differential
   round-trip fuzz (§4.2 ≥1000 inputs).
-- **Codegen status (honest debt)**: the PRELUDE stubs (`json_dumps` /
-  `json_dumps_indent` / `json_loads`) + cli intrinsic-rewrite arms are wired, but
-  the LLVM/Cranelift extern declaration for the three `__cobrust_json_*` symbols
-  is owned by the codegen Stream X.3 sprint (`llvm_backend.rs` declares each
-  intrinsic symbol explicitly). Until that lands the `.cb` source surface
-  parses + type-checks but is not lowered, so no E2E `.cb` test ships yet.
+- **Codegen status (fully wired)**: the full source→binary path is live — PRELUDE
+  stubs (`json_dumps` / `json_dumps_indent` / `json_loads`) + cli intrinsic-rewrite
+  arms + the three `__cobrust_json_*` extern declarations in `llvm_backend.rs`
+  `declare_runtime_helpers` (the `(*mut Str)->*mut Str` opaque-pointer ABI mirroring
+  the `std.tool`/`std.prompt` helpers; `json_dumps_indent`'s second param is `i64`,
+  marshalled directly). E2E coverage: `crates/cobrust-cli/tests/intrinsics_json.rs`
+  (`.cb` source → compile → run, asserting canonical key-sorted output, CPython
+  separators, `indent=` pretty-print, and the malformed-input empty sentinel).
 
 ### `std.collections`
 
