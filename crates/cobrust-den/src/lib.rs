@@ -26,7 +26,12 @@
 //!
 //! # Example
 //!
-//! ```
+//! (Marked `ignore`, not run as a doctest: the bare `[lib] name = "den"` — required
+//! for the PyO3 `den` module — trips Rust 1.94 merged-doctests' rlib resolution on a
+//! clean build. The same code paths are compile-run-verified by the integration suite
+//! `tests/sqlite3_downstream.rs`. See docs/agent/findings/f62-*.md.)
+//!
+//! ```ignore
 //! use den::{connect, Value, MEMORY};
 //!
 //! let conn = connect(MEMORY).expect("open in-memory db");
