@@ -294,6 +294,26 @@ pub const STDOUT_WRITE_RUNTIME_SYMBOL: &str = "__cobrust_stdout_write";
 /// Writes `s` to stderr WITHOUT trailing newline; returns 0/1 sentinel.
 pub const STDERR_WRITE_RUNTIME_SYMBOL: &str = "__cobrust_stderr_write";
 
+// ---- v0.7.0 Z.5 std.json user surface (roadmap §4.1 JSON row) -------
+
+/// Z.5 — `json_dumps(json_input: str) -> str`.
+/// CPython-canonical compact serialize. Exported by
+/// `cobrust-stdlib::json`. NOTE: the LLVM/Cranelift extern declaration
+/// for this symbol is owned by the codegen Stream X.3 sprint; until it
+/// lands the `.cb` source surface declared here is parse/type-checked
+/// but not yet lowered.
+pub const JSON_DUMPS_RUNTIME_SYMBOL: &str = "__cobrust_json_dumps";
+
+/// Z.5 — `json_dumps_indent(json_input: str, indent: i64) -> str`.
+/// CPython `indent=` pretty-print parity. Exported by
+/// `cobrust-stdlib::json`.
+pub const JSON_DUMPS_INDENT_RUNTIME_SYMBOL: &str = "__cobrust_json_dumps_indent";
+
+/// Z.5 — `json_loads(s: str) -> str`.
+/// Validate + canonicalize; empty Str on malformed input. Exported by
+/// `cobrust-stdlib::json`.
+pub const JSON_LOADS_RUNTIME_SYMBOL: &str = "__cobrust_json_loads";
+
 /// Errors from the print-intrinsic rewrite.
 #[derive(Debug, thiserror::Error)]
 pub enum IntrinsicError {
@@ -441,6 +461,13 @@ struct IntrinsicDefIds {
     stdout_write: HashSet<u32>,
     /// M-F.3.6 — `stderr_write(s: str) -> i64`.
     stderr_write: HashSet<u32>,
+    // ---- v0.7.0 Z.5 std.json user surface ----
+    /// Z.5 — `json_dumps(json_input: str) -> str`.
+    json_dumps: HashSet<u32>,
+    /// Z.5 — `json_dumps_indent(json_input: str, indent: i64) -> str`.
+    json_dumps_indent: HashSet<u32>,
+    /// Z.5 — `json_loads(s: str) -> str`.
+    json_loads: HashSet<u32>,
 }
 
 impl IntrinsicDefIds {
@@ -511,6 +538,10 @@ impl IntrinsicDefIds {
         out.extend(&self.stdin_read_all);
         out.extend(&self.stdout_write);
         out.extend(&self.stderr_write);
+        // Z.5 std.json user surface.
+        out.extend(&self.json_dumps);
+        out.extend(&self.json_dumps_indent);
+        out.extend(&self.json_loads);
         out
     }
 
@@ -578,6 +609,9 @@ impl IntrinsicDefIds {
             && self.stdin_read_all.is_empty()
             && self.stdout_write.is_empty()
             && self.stderr_write.is_empty()
+            && self.json_dumps.is_empty()
+            && self.json_dumps_indent.is_empty()
+            && self.json_loads.is_empty()
     }
 }
 
@@ -652,6 +686,10 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         stdin_read_all: HashSet::new(),
         stdout_write: HashSet::new(),
         stderr_write: HashSet::new(),
+        // Z.5 std.json user surface.
+        json_dumps: HashSet::new(),
+        json_dumps_indent: HashSet::new(),
+        json_loads: HashSet::new(),
     };
     // Track names already collected to detect user-defined shadowing of
     // PRELUDE stubs (M-F.3.3). For non-math intrinsics (print, parse_int,
@@ -914,6 +952,16 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
             "stderr_write" => {
                 ids.stderr_write.insert(body.def_id.0);
             }
+            // ---- v0.7.0 Z.5 std.json user surface ----
+            "json_dumps" => {
+                ids.json_dumps.insert(body.def_id.0);
+            }
+            "json_dumps_indent" => {
+                ids.json_dumps_indent.insert(body.def_id.0);
+            }
+            "json_loads" => {
+                ids.json_loads.insert(body.def_id.0);
+            }
             _ => {}
         }
     }
@@ -1019,6 +1067,10 @@ enum Kind {
     StdinReadAll,
     StdoutWrite,
     StderrWrite,
+    // ---- v0.7.0 Z.5 std.json user surface ----
+    JsonDumps,
+    JsonDumpsIndent,
+    JsonLoads,
 }
 
 fn kind_for_name(name: &str) -> Option<Kind> {
@@ -1090,6 +1142,10 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "stdin_read_all" => Some(Kind::StdinReadAll),
         "stdout_write" => Some(Kind::StdoutWrite),
         "stderr_write" => Some(Kind::StderrWrite),
+        // v0.7.0 Z.5 std.json user surface.
+        "json_dumps" => Some(Kind::JsonDumps),
+        "json_dumps_indent" => Some(Kind::JsonDumpsIndent),
+        "json_loads" => Some(Kind::JsonLoads),
         _ => None,
     }
 }
@@ -1221,6 +1277,12 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::StdoutWrite)
     } else if ids.stderr_write.contains(&id) {
         Some(Kind::StderrWrite)
+    } else if ids.json_dumps.contains(&id) {
+        Some(Kind::JsonDumps)
+    } else if ids.json_dumps_indent.contains(&id) {
+        Some(Kind::JsonDumpsIndent)
+    } else if ids.json_loads.contains(&id) {
+        Some(Kind::JsonLoads)
     } else {
         None
     }
@@ -2199,6 +2261,58 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     let s = move_to_copy(args[0].clone());
                     *func =
                         Operand::Constant(Constant::Str(STDERR_WRITE_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(s);
+                }
+                // ---- v0.7.0 Z.5 std.json user surface ----
+                //
+                // Copy-at-operand discipline for str args (mirrors file-IO):
+                // the C-ABI shims READ the Str pointer via `read_str_buf`
+                // without freeing it; ownership of the str local stays with
+                // the caller's scope.
+                Kind::JsonDumps => {
+                    // json_dumps(json_input: str) -> str
+                    // → __cobrust_json_dumps(input_ptr) -> *mut u8
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("json_dumps: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let input = move_to_copy(args[0].clone());
+                    *func = Operand::Constant(Constant::Str(JSON_DUMPS_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(input);
+                }
+                Kind::JsonDumpsIndent => {
+                    // json_dumps_indent(json_input: str, indent: i64) -> str
+                    // → __cobrust_json_dumps_indent(input_ptr, indent) -> *mut u8
+                    if args.len() != 2 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!(
+                                "json_dumps_indent: expected 2 args, got {}",
+                                args.len()
+                            ),
+                        });
+                    }
+                    let input = move_to_copy(args[0].clone());
+                    let indent = args[1].clone();
+                    *func = Operand::Constant(Constant::Str(
+                        JSON_DUMPS_INDENT_RUNTIME_SYMBOL.to_string(),
+                    ));
+                    args.clear();
+                    args.push(input);
+                    args.push(indent);
+                }
+                Kind::JsonLoads => {
+                    // json_loads(s: str) -> str
+                    // → __cobrust_json_loads(s_ptr) -> *mut u8
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("json_loads: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let s = move_to_copy(args[0].clone());
+                    *func = Operand::Constant(Constant::Str(JSON_LOADS_RUNTIME_SYMBOL.to_string()));
                     args.clear();
                     args.push(s);
                 }
