@@ -2413,6 +2413,34 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_json_loads", json_loads_fn);
         self.runtime_helper_param_counts
             .insert("__cobrust_json_loads", 1);
+
+        // -- M-F.3.6: file IO source-level binding (ADR-0050f) --------
+        // F60: these were declared in the deleted cranelift_backend.rs
+        // `runtime_helper_signatures` but never in the LLVM backend —
+        // latent because `file_io_e2e.rs` is all-#[ignore]'d (pre-impl)
+        // and the doc-coverage M-F.3.6 check grepped the Cranelift
+        // backend. The §X.4 removal surfaced the asymmetry; restore the
+        // codegen scaffolding here (sole AOT backend) so file IO can lower
+        // under LLVM. Signatures verbatim from `cranelift_backend.rs`
+        // (commit f16bdab): read_file/read_file_lines `(ptr)->ptr`,
+        // write/append_file `(ptr,ptr)->i64`, stdin_read_all `()->ptr`,
+        // stdout/stderr_write `(ptr)->i64`.
+        let ptr_to_ptr_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let ptr_ptr_to_i64_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let ptr_to_i64_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_read_file", ptr_to_ptr_ty, 1usize),
+            ("__cobrust_read_file_lines", ptr_to_ptr_ty, 1),
+            ("__cobrust_write_file", ptr_ptr_to_i64_ty, 2),
+            ("__cobrust_append_file", ptr_ptr_to_i64_ty, 2),
+            ("__cobrust_stdin_read_all", ptr_ty.fn_type(&[], false), 0),
+            ("__cobrust_stdout_write", ptr_to_i64_ty, 1),
+            ("__cobrust_stderr_write", ptr_to_i64_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.

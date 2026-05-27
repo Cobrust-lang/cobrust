@@ -1690,8 +1690,8 @@ mf35_syms=(
 for sym in "${mf35_syms[@]}"; do
     grep -q -F "$sym" "crates/cobrust-cli/src/build/intrinsics.rs" \
         || fail "M-F.3.5 runtime symbol '${sym}' missing from intrinsics.rs"
-    grep -q -F "$sym" "crates/cobrust-codegen/src/cranelift_backend.rs" \
-        || fail "M-F.3.5 runtime symbol '${sym}' missing from cranelift_backend.rs (runtime_helper_signatures)"
+    grep -q -F "$sym" "crates/cobrust-codegen/src/llvm_backend.rs" \
+        || fail "M-F.3.5 runtime symbol '${sym}' missing from llvm_backend.rs (runtime_helper_signatures)"
     grep -q -F "$sym" "crates/cobrust-stdlib/src/string.rs" \
         || fail "M-F.3.5 C-ABI shim '${sym}' missing from stdlib/src/string.rs"
 done
@@ -1797,8 +1797,8 @@ grep -q -F '__cobrust_dict_set_str_i64' "docs/agent/modules/stdlib.md" \
 grep -q 'fn len(d: dict\[i64, i64\]) -> i64' "crates/cobrust-frontend/src/prelude.rs" \
     || fail "M-F.3.4 sub-sprint c/d: 'len(d)' polymorphic PRELUDE stub missing from build.rs"
 # 5. codegen must declare the typed shim signatures.
-grep -q -F '__cobrust_dict_set_i64_str' "crates/cobrust-codegen/src/cranelift_backend.rs" \
-    || fail "M-F.3.4 sub-sprint d: '__cobrust_dict_set_i64_str' signature missing from cranelift_backend.rs"
+grep -q -F '__cobrust_dict_set_i64_str' "crates/cobrust-codegen/src/llvm_backend.rs" \
+    || fail "M-F.3.4 sub-sprint d: '__cobrust_dict_set_i64_str' signature missing from llvm_backend.rs"
 
 echo "doc-coverage: M-F.3.4 dict surface checks passed"
 
@@ -1883,8 +1883,8 @@ mf36_syms=(
 for sym in "${mf36_syms[@]}"; do
     grep -q -F "$sym" "crates/cobrust-cli/src/build/intrinsics.rs" \
         || fail "M-F.3.6 runtime symbol '${sym}' missing from intrinsics.rs"
-    grep -q -F "$sym" "crates/cobrust-codegen/src/cranelift_backend.rs" \
-        || fail "M-F.3.6 runtime symbol '${sym}' missing from cranelift_backend.rs (runtime_helper_signatures)"
+    grep -q -F "$sym" "crates/cobrust-codegen/src/llvm_backend.rs" \
+        || fail "M-F.3.6 runtime symbol '${sym}' missing from llvm_backend.rs (runtime_helper_signatures)"
     grep -q -F "$sym" "crates/cobrust-stdlib/src/io.rs" \
         || fail "M-F.3.6 C-ABI shim '${sym}' missing from stdlib/src/io.rs"
 done
