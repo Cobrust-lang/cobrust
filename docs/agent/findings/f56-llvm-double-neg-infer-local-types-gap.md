@@ -1,7 +1,7 @@
 ---
 finding_id: F56
 title: LLVM backend mis-codegens nested `UnaryOp(Neg)` on float — missing fixed-point infer_local_types — surfaced by ADR-0070 §X.3 LLVM-default flip
-status: open (fr14 #[ignore]'d with deferred-fix cite per F37 discipline)
+status: RESOLVED (fr14 un-ignored + green; LLVM `infer_local_types` fixed-point ported)
 date: 2026-05-27
 severity: medium
 siblings: [F53, F54, F55, F37]
@@ -67,26 +67,63 @@ case (fr14) has no float-typed sibling operand to key off.
 
 ## Resolution (this commit)
 
-Per F37 (no silent rot; cite a specific deferred `#[ignore]`), `fr14` is
-`#[ignore]`'d with a full-rationale reason string pointing here and at the real
-fix (LLVM `infer_local_types` port). fr15/fr16 stay live (they pass and guard the
-binop path).
+The Cranelift fixed-point `infer_local_types` dataflow was **ported to the LLVM
+backend** (`llvm_backend.rs`), and `fr14` was un-`#[ignore]`'d. `fr14` now passes;
+the whole `cobrust-codegen` suite stays green with no new failures/ignores.
 
-## Real fix (deferred)
+What was added to `llvm_backend.rs` (new §4.0 block, immediately before
+`lower_ty`):
 
-Port the Cranelift fixed-point `infer_local_types` dataflow to the LLVM backend
-so `Ty::None` synthetic temps converge to their real scalar type (F64), making
-their allocas f64 slots and `lower_unop`/`lower_place_load` see FloatValues
-directly. This is an ADR-worthy backend change (touches alloca typing, place
-load/store coercion, and the binop bitcast-fix can then be simplified). Tracked
-as an ADR-0070 §X.3 follow-on (LLVM type-inference parity), prerequisite for
-removing the §X.3 binop bitcast workaround.
+- `llvm_scalar_ty(&Ty) -> Option<BasicTypeEnum>` — the LLVM analogue of
+  `abi::cranelift_scalar_ty(..).is_some()`. Returns the resolved scalar
+  `BasicTypeEnum` for `Bool/Int/IntN/Float/Imag` (and, transparently,
+  `Ref(scalar)`); returns `None` for `Ty::None` and every pointer-lowered
+  indirect type, so those stay *candidates*.
+- `llvm_rvalue_ty` + `llvm_operand_ty` — 1:1 ports of `cranelift_backend::{rvalue_ty,
+  operand_ty}`. `UnaryOp(_, a) → operand_ty(a)`; `BinaryOp(cmp/bool/in → i1, else →
+  operand_ty(a))`; `Use(op) → operand_ty(op)`; `Copy/Move(p)` prefers the `inferred`
+  map then the declared scalar type then the opaque pointer; `Constant` maps
+  Bool/None→i1, Int→i64, Float/Imag→f64, Str/Bytes/FnRef→`i8*`.
+- `infer_local_types(&Body) -> HashMap<LocalId, BasicTypeEnum>` — the bounded
+  fixed-point: a `Constant::FnRef`-destination pre-pass (via `body_return_types`),
+  then iterate over candidates resolving each from the first `Assign` rvalue (or
+  known-body Call destination) that yields a type under the current partial map,
+  until a fixed point or `candidates.len()+1` iterations. **The fixed-point — not a
+  single pass — is what resolves the chain-depth-2 case**: `_outer ← Copy(_inner)`
+  only resolves to f64 once `_inner` (resolved from `UnaryOp(Neg, Float)` in an
+  earlier iteration) is in the map.
 
-Interim narrower option (if the full port is deferred further): pass the MIR
-operand's declared type into `lower_unop` and, when the result/operand is part of
-a float chain, bitcast the i64 operand to f64 before `fneg` — but the `Ty::None`
-operand type means even this needs *some* float-ness propagation, so the
-fixed-point port is the principled fix.
+Integration (the actual behavior change), in `define_body`'s alloca loop: the
+inferred map is computed once before the loop; for each non-return local, the
+alloca type is `inferred_local_tys.get(&local.id)` when present, else
+`lower_ty(&local.ty)` (preserving the historical `Ty::None → i64` fallback for
+genuinely-untyped pointer / `_callret` slots). The return slot keeps `ret_ty`,
+and locals with a real declared scalar type keep `lower_ty` (they are not
+candidates). With `_inner` / `_outer` now allocated as `double`, store/load
+round-trip on the float path and `lower_unop` sees a `FloatValue` →
+`build_float_neg` (fneg). fr15/fr16 still pass via the existing binop bitcast-fix
+(now redundant for inferred locals, but left intact as belt-and-suspenders).
+
+### Divergence from the Cranelift reference
+
+- **No runtime-helper-return map on the LLVM side.** Cranelift's pre-pass +
+  fixed-point also resolve `Constant::Str(helper)` call destinations via
+  `runtime_helper_return_types`; the LLVM emitter only caches
+  `runtime_helper_param_counts`, so that branch is omitted. The `FnRef(known body)`
+  branch (`body_return_types`) and the `Assign` fixed-point are retained — sufficient
+  for fr14 and the whole-crate suite. Runtime-call destinations of `Ty::None` type
+  keep today's `i64` fallback (unchanged).
+- **`Ty::Ref(inner)` is scalar under the LLVM `lower_ty`** (transparent recursion),
+  whereas Cranelift treats it as non-scalar. `llvm_scalar_ty` mirrors `lower_ty`'s
+  notion so alloca/load/store types stay consistent.
+
+### Note for X.4 (Cranelift removal)
+
+The §X.3 `lower_binop` bitcast-fix is now superseded for inferred locals (their
+operands carry real float types), but it is **not** removed in this commit (out of
+scope; the whole-crate suite is the only guard and removing it risks regressing a
+path the inference doesn't cover, e.g. a runtime-call-fed binop). Revisit during
+X.4 when Cranelift parity is the explicit deliverable.
 
 ## Prevention
 

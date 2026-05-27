@@ -2459,6 +2459,232 @@ impl<'ctx> LlvmEmitter<'ctx> {
     }
 
     // =====================================================================
+    // §4.0 — F56: LLVM port of Cranelift's `infer_local_types` fixed-point
+    // =====================================================================
+    //
+    // The MIR lowering spills sub-expressions into synthetic temporaries
+    // declared `Ty::None` (e.g. `-(-3.25)` lowers to an inner temp
+    // `_inner = UnaryOp(Neg, Float(3.25))` and an outer temp
+    // `_outer = UnaryOp(Neg, Copy(_inner))`, both `Ty::None`). `lower_ty`
+    // maps `Ty::None → i64`, so without inference the float bits land in
+    // an i64 alloca and `lower_unop` sees an `IntValue` → `build_int_neg`
+    // on the IEEE bit-pattern (garbage) rather than `build_float_neg`.
+    //
+    // This is a 1:1 port of `cranelift_backend::{infer_local_types,
+    // rvalue_ty, operand_ty}` (the ADR-0033 / ADR-0034 / ADR-0044
+    // fixed-point), adapted from `cranelift::ir::Type` to inkwell
+    // `BasicTypeEnum`. The resolved-type concept is mapped to LLVM using
+    // the SAME mapping `lower_ty` uses, so alloca / store / load types
+    // stay consistent. The fixed-point (not a single pass) is what
+    // resolves chain depth ≥ 2: `_outer` depends on `_inner`'s inferred
+    // type, which may only materialize in a later iteration.
+    //
+    // Divergence from the Cranelift reference (documented per F56):
+    //   * The LLVM emitter has no `runtime_helper_return_types` map (only
+    //     `runtime_helper_param_counts`), so the `Constant::Str(helper)`
+    //     branch of the Call-destination pre-pass + fixed-point is
+    //     omitted. The `Constant::FnRef(known body)` branch (via
+    //     `body_return_types`) and the `Assign` fixed-point are retained —
+    //     sufficient for the arithmetic-spill case (fr14) and every
+    //     candidate that resolves through an Assign rvalue. Runtime-call
+    //     destinations of `Ty::None` type keep today's `i64` fallback
+    //     (unchanged behavior).
+    //   * `Ty::Ref(inner)` is scalar under the LLVM `lower_ty` (transparent
+    //     recursion) whereas Cranelift treats it as non-scalar. The LLVM
+    //     scalar predicate below mirrors `lower_ty`'s notion of "resolves
+    //     to a direct (non-pointer-fallback) LLVM scalar".
+
+    /// LLVM analogue of `cranelift_scalar_ty(..).is_some()`: returns the
+    /// resolved scalar `BasicTypeEnum` for a `Ty` that `lower_ty` maps to
+    /// a direct scalar (Bool/Int/IntN/Float/Imag, plus transparent
+    /// `Ref(scalar)`), or `None` for `Ty::None` and every type that
+    /// `lower_ty` lowers to the opaque pointer. Pointer-lowered types are
+    /// excluded so they remain *candidates* (their codegen type is the
+    /// opaque `i8*`, recovered via the inferred map / the pointer
+    /// fallback) — matching the Cranelift posture where indirect types
+    /// have `cranelift_scalar_ty == None`.
+    fn llvm_scalar_ty(&self, ty: &Ty) -> Option<BasicTypeEnum<'ctx>> {
+        match ty {
+            Ty::Bool => Some(self.ctx.bool_type().as_basic_type_enum()),
+            Ty::Int => Some(self.ctx.i64_type().as_basic_type_enum()),
+            Ty::Float | Ty::Imag => Some(self.ctx.f64_type().as_basic_type_enum()),
+            Ty::IntN(8) => Some(self.ctx.i8_type().as_basic_type_enum()),
+            Ty::IntN(16) => Some(self.ctx.i16_type().as_basic_type_enum()),
+            Ty::IntN(32) => Some(self.ctx.i32_type().as_basic_type_enum()),
+            Ty::IntN(_) => Some(self.ctx.i64_type().as_basic_type_enum()),
+            // `Ref(T)` is transparent in `lower_ty`: scalar iff `T` is.
+            Ty::Ref(inner) => self.llvm_scalar_ty(inner),
+            // `Ty::None` (placeholder) + all pointer-lowered indirect
+            // types are NOT scalars for inference purposes.
+            _ => None,
+        }
+    }
+
+    /// Resolve an rvalue to its codegen `BasicTypeEnum` given the
+    /// in-progress `inferred` map (1:1 with `cranelift_backend::rvalue_ty`).
+    fn llvm_rvalue_ty(
+        &self,
+        body: &Body,
+        rvalue: &Rvalue,
+        inferred: &HashMap<LocalId, BasicTypeEnum<'ctx>>,
+    ) -> Option<BasicTypeEnum<'ctx>> {
+        match rvalue {
+            Rvalue::Use(op) => self.llvm_operand_ty(body, op, inferred),
+            Rvalue::BinaryOp(op, a, _b) => match op {
+                BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::Lt
+                | BinOp::LtEq
+                | BinOp::Gt
+                | BinOp::GtEq
+                | BinOp::And
+                | BinOp::Or
+                | BinOp::In
+                | BinOp::NotIn => Some(self.ctx.bool_type().as_basic_type_enum()),
+                _ => self.llvm_operand_ty(body, a, inferred),
+            },
+            Rvalue::UnaryOp(_, a) => self.llvm_operand_ty(body, a, inferred),
+            Rvalue::Cast(_, _, ty) => self.llvm_scalar_ty(ty),
+            Rvalue::Aggregate(_, _) | Rvalue::Ref(_, _) => {
+                Some(self.opaque_ptr_ty.as_basic_type_enum())
+            }
+            Rvalue::Discriminant(_) | Rvalue::Len(_) | Rvalue::NullaryOp(_) => {
+                Some(self.ctx.i64_type().as_basic_type_enum())
+            }
+        }
+    }
+
+    /// Resolve an operand to its codegen `BasicTypeEnum` (1:1 with
+    /// `cranelift_backend::operand_ty`). `Copy`/`Move` prefer the
+    /// `inferred` map, then fall back to the declared scalar type, then to
+    /// the opaque pointer for indirect types.
+    fn llvm_operand_ty(
+        &self,
+        body: &Body,
+        op: &Operand,
+        inferred: &HashMap<LocalId, BasicTypeEnum<'ctx>>,
+    ) -> Option<BasicTypeEnum<'ctx>> {
+        match op {
+            Operand::Copy(p) | Operand::Move(p) => {
+                if let Some(ty) = inferred.get(&p.local) {
+                    return Some(*ty);
+                }
+                body.locals.get(p.local.0 as usize).map(|l| {
+                    self.llvm_scalar_ty(&l.ty)
+                        .unwrap_or_else(|| self.opaque_ptr_ty.as_basic_type_enum())
+                })
+            }
+            Operand::Constant(c) => Some(match c {
+                Constant::Bool(_) | Constant::None => self.ctx.bool_type().as_basic_type_enum(),
+                Constant::Int(_) => self.ctx.i64_type().as_basic_type_enum(),
+                Constant::Float(_) | Constant::Imag(_) => self.ctx.f64_type().as_basic_type_enum(),
+                Constant::Str(_) | Constant::Bytes(_) | Constant::FnRef(_) => {
+                    self.opaque_ptr_ty.as_basic_type_enum()
+                }
+            }),
+        }
+    }
+
+    /// Fixed-point inference of codegen types for candidate locals
+    /// (declared `Ty::None`, or non-scalar per `llvm_scalar_ty`). Returns
+    /// a map containing ONLY candidate locals that resolved; callers fall
+    /// back to `lower_ty` (i.e. the `Ty::None → i64` default) for absent
+    /// entries, preserving today's behavior for genuinely-untyped
+    /// pointer / `_callret` slots.
+    ///
+    /// 1:1 port of `cranelift_backend::infer_local_types` (ADR-0033
+    /// fixed-point + ADR-0034 / ADR-0044 Call-destination pre-pass). The
+    /// runtime-helper (`Constant::Str`) branch is omitted on the LLVM side
+    /// (no `runtime_helper_return_types` map) — see the §4.0 divergence
+    /// note.
+    fn infer_local_types(&self, body: &Body) -> HashMap<LocalId, BasicTypeEnum<'ctx>> {
+        let mut candidates: Vec<LocalId> = Vec::new();
+        for local in &body.locals {
+            if matches!(local.ty, Ty::None) || self.llvm_scalar_ty(&local.ty).is_none() {
+                candidates.push(local.id);
+            }
+        }
+
+        let mut out: HashMap<LocalId, BasicTypeEnum<'ctx>> = HashMap::new();
+
+        // Call-destination pre-pass: resolve every `Terminator::Call`
+        // whose func is a known-body `Constant::FnRef` into `out` before
+        // the scan-based fixed-point, so the scan never pins a wrong type
+        // for a call destination via iteration order (ADR-0044 rationale).
+        for &local_id in &candidates {
+            for block in &body.blocks {
+                if let Terminator::Call {
+                    func, destination, ..
+                } = &block.terminator
+                {
+                    if destination.local != local_id || !destination.projections.is_empty() {
+                        continue;
+                    }
+                    if let Operand::Constant(Constant::FnRef(id)) = func {
+                        if let Some(ty) = self.body_return_types.get(id).copied() {
+                            out.insert(local_id, ty);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fixed-point. Terminates because each iteration only adds
+        // entries, the candidate set is finite, and an iteration that
+        // adds nothing ends the loop. Bound at `candidates.len() + 1`
+        // defensively against a malformed self-referential chain.
+        let max_iters = candidates.len() + 1;
+        for _ in 0..max_iters {
+            let before = out.len();
+            for &local_id in &candidates {
+                if out.contains_key(&local_id) {
+                    continue;
+                }
+                // Call-destination via known-body FnRef (Assign-less local).
+                let mut found = false;
+                'tscan: for block in &body.blocks {
+                    if let Terminator::Call {
+                        func, destination, ..
+                    } = &block.terminator
+                    {
+                        if destination.local == local_id && destination.projections.is_empty() {
+                            if let Operand::Constant(Constant::FnRef(id)) = func {
+                                if let Some(ty) = self.body_return_types.get(id).copied() {
+                                    out.insert(local_id, ty);
+                                    found = true;
+                                    break 'tscan;
+                                }
+                            }
+                        }
+                    }
+                }
+                if found {
+                    continue;
+                }
+                // First Assign to this local that yields a resolvable type
+                // given the current `out` snapshot.
+                'scan: for block in &body.blocks {
+                    for stmt in &block.statements {
+                        if let StatementKind::Assign { place, rvalue } = &stmt.kind {
+                            if place.local == local_id && place.projections.is_empty() {
+                                if let Some(ty) = self.llvm_rvalue_ty(body, rvalue, &out) {
+                                    out.insert(local_id, ty);
+                                    break 'scan;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if out.len() == before {
+                break;
+            }
+        }
+        out
+    }
+
+    // =====================================================================
     // §4 — MIR Ty → LLVM type mapping
     // =====================================================================
 
@@ -2666,6 +2892,14 @@ impl<'ctx> LlvmEmitter<'ctx> {
         );
         self.builder.set_current_debug_location(body_entry_loc);
 
+        // F56: port of Cranelift's `infer_local_types` fixed-point. Compute
+        // the inferred codegen type for every candidate `Ty::None` /
+        // non-scalar temp BEFORE the alloca loop, so synthetic float spill
+        // temps (e.g. the `_inner` / `_outer` of `-(-3.25)`) get `double`
+        // alloca slots instead of the `Ty::None → i64` default — keeping
+        // store / load / `lower_unop` on the float path (`build_float_neg`).
+        let inferred_local_tys = self.infer_local_types(body);
+
         let mut local_allocas: HashMap<LocalId, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)> =
             HashMap::new();
         for local in &body.locals {
@@ -2673,6 +2907,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
             // (parallels Cranelift's inferred_ret).
             let ty: BasicTypeEnum<'ctx> = if local.id == body.return_local {
                 ret_ty
+            } else if let Some(inferred) = inferred_local_tys.get(&local.id) {
+                // Candidate `Ty::None` / non-scalar local whose effective
+                // type the fixed-point resolved. Falls through to
+                // `lower_ty` only for locals with no inferred entry
+                // (genuinely-untyped pointer / `_callret` slots), which
+                // keeps the historical `Ty::None → i64` fallback.
+                *inferred
             } else {
                 self.lower_ty(&local.ty)
             };
