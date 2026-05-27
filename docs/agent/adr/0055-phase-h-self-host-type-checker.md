@@ -2,7 +2,7 @@
 doc_kind: adr
 adr_id: 0055
 title: "Phase H — Self-host cobrust-types in Cobrust (frame ADR: arena-vs-recursive disposition / crate split / parity-harness contract / completion bar)"
-status: proposed
+status: accepted (umbrella; sub-ADRs 0055a..0055e all accepted)
 date: 2026-05-18
 last_verified_commit: fd263f4
 supersedes: []

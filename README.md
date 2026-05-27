@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue.svg)](#license)
-[![Stage](https://img.shields.io/badge/stage-0.6.1-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.6.2)
+[![Stage](https://img.shields.io/badge/stage-0.6.2-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.6.2)
 
 [**Why Cobrust?**](docs/post/why-cobrust.md) ·
 [**Quick Start**](#quick-start) ·
