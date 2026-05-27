@@ -2357,6 +2357,77 @@ Total: 51 net new M14 tests; 72 cobrust-cli tests total green.
 
 ---
 
+## numpy P0 gap-list subset (v0.7.0 Stream W — delivered)
+
+User mandate (2026-05-25): "基本的科学计算也要有了,像 numpy" — basic
+scientific computing must be ready. Stream W closes a cohesive subset
+of the v0.7.0 numpy P0 gap-list. Oracle for every example below:
+numpy 2.0.2.
+
+Examples first (the LLM-first §2.5 surfaces match numpy exactly):
+
+```text
+np.eye(3)              -> [[1,0,0],[0,1,0],[0,0,1]]   (float64)
+np.eye(3, 4, k=1)      -> diagonal shifted one column right
+np.tri(3)              -> lower-triangular ones (incl. diagonal)
+np.tril(m)             -> zero the strictly-upper triangle of m
+np.triu(m)             -> zero the strictly-lower triangle of m
+np.diag([1,2,3])       -> 3x3 matrix with [1,2,3] on the diagonal
+np.diag(m)             -> extract the main diagonal of a 2-D m
+
+np.linspace(0, 1, 5)               -> [0, 0.25, 0.5, 0.75, 1.0]
+np.linspace(0, 1, 5, retstep=True) -> ([...], 0.25)
+np.logspace(0, 2, 3)               -> [1, 10, 100]
+np.logspace(0, 2, 3, base=2)       -> [1, 2, 4]
+
+np.iinfo(np.int8).max   -> 127
+np.iinfo(np.uint8).max  -> 255
+np.finfo(np.float64).eps -> 2.220446049250313e-16
+np.finfo(np.float32).eps -> 1.1920929e-07
+
+np.isnan([1, nan, inf]) -> [False, True, False]
+np.isinf([1, nan, inf]) -> [False, False, True]
+np.iscomplex([1, 2, 3]) -> [False, False, False]
+np.isreal([1, 2, 3])    -> [True, True, True]
+```
+
+What ships:
+
+- **2-D base constructors** (`eye / tri / tril / triu / diag`) in
+  `constructors.rs`. `@py_compat(strict)` — values are exactly 0/1 or
+  copied integers, so even the default-`Float64` forms are bit-exact
+  vs numpy. `diag` is bidirectional: 1-D input builds a diagonal
+  matrix; 2-D input extracts the diagonal.
+- **`linspace` / `logspace`** in `constructors.rs`.
+  `@py_compat(numerical(rtol=1e-12))`. `linspace` returns a
+  `LinspaceResult { array, step }` so the `retstep=True` step is
+  available. numpy's exact float behavior is preserved: the endpoint
+  is pinned to `stop` (so `linspace(0,1,5)[4]` is exactly `1.0`), and
+  `linspace(0,1,5,endpoint=False)[3]` is `0.6000000000000001` — the
+  literal numpy output. `num == 1` gives a `NaN` step (no consecutive
+  pair to measure).
+- **`iinfo` / `finfo`** in `dtype.rs`. `iinfo` is
+  `@py_compat(strict)`; `finfo` is `@py_compat(numerical(rtol=1e-15))`.
+  These span the full numpy named-scalar-type space (`int8`, `uint16`,
+  ...) via dedicated `IntKind` / `FloatKind` enums, so
+  `np.iinfo(np.int8)` works even though the `Array` tagged-union
+  cannot store an `int8`.
+- **`isnan` / `isinf` / `iscomplex` / `isreal`** in `ufunc.rs`.
+  `@py_compat(strict)` — element-wise boolean predicates returning a
+  `Bool`-dtype array of the input's shape. Because the `Array`
+  tagged-union is real-only, `iscomplex` is always all-`False` and
+  `isreal` always all-`True`, which is exactly numpy's answer for
+  real-dtype inputs.
+
+Deferred follow-ons (not Stream W scope): a genuine complex `Array`
+storage (so `iscomplex` checks `imag != 0` per element), `.cb`-language
+extern wiring through `cobrust-codegen`, and adding these to the PyO3
+Python extension. See
+[the numpy module spec](../../agent/modules/numpy.md) and
+[the v0.7.0 roadmap](../../agent/strategy/v0.7.0-numpy-translation-roadmap.md).
+
+---
+
 ## full_pipeline_corpus CI gate (B3 fix)
 
 **Why it matters**: `crates/cobrust-tomli/tests/full_pipeline_corpus.rs` is the

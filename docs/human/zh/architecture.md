@@ -2229,6 +2229,70 @@ REPL 在以下情形显示续行提示（`...`）—— 输入结构不完整：
 
 ---
 
+## numpy P0 缺口清单子集（v0.7.0 Stream W — 已交付）
+
+用户要求（2026-05-25）："基本的科学计算也要有了,像 numpy"——基础科学计算
+必须就绪。Stream W 收口 v0.7.0 numpy P0 缺口清单中一个内聚的子集。下面
+每个示例的对照基准（oracle）均为 numpy 2.0.2。
+
+先看示例（按 LLM-first §2.5,表面与 numpy 完全一致）：
+
+```text
+np.eye(3)              -> [[1,0,0],[0,1,0],[0,0,1]]   （float64）
+np.eye(3, 4, k=1)      -> 对角线右移一列
+np.tri(3)              -> 下三角全 1（含对角线）
+np.tril(m)             -> 将 m 的严格上三角置零
+np.triu(m)             -> 将 m 的严格下三角置零
+np.diag([1,2,3])       -> 以 [1,2,3] 为对角线的 3x3 矩阵
+np.diag(m)             -> 抽取二维 m 的主对角线
+
+np.linspace(0, 1, 5)               -> [0, 0.25, 0.5, 0.75, 1.0]
+np.linspace(0, 1, 5, retstep=True) -> ([...], 0.25)
+np.logspace(0, 2, 3)               -> [1, 10, 100]
+np.logspace(0, 2, 3, base=2)       -> [1, 2, 4]
+
+np.iinfo(np.int8).max   -> 127
+np.iinfo(np.uint8).max  -> 255
+np.finfo(np.float64).eps -> 2.220446049250313e-16
+np.finfo(np.float32).eps -> 1.1920929e-07
+
+np.isnan([1, nan, inf]) -> [False, True, False]
+np.isinf([1, nan, inf]) -> [False, False, True]
+np.iscomplex([1, 2, 3]) -> [False, False, False]
+np.isreal([1, 2, 3])    -> [True, True, True]
+```
+
+交付内容：
+
+- **二维基础构造器**（`eye / tri / tril / triu / diag`),位于
+  `constructors.rs`。`@py_compat(strict)`——取值恰为 0/1 或拷贝的整数,
+  因此即便是默认 `Float64` 形式也与 numpy 逐位一致。`diag` 是双向的:
+  一维输入构造对角矩阵;二维输入抽取对角线。
+- **`linspace` / `logspace`**,位于 `constructors.rs`。
+  `@py_compat(numerical(rtol=1e-12))`。`linspace` 返回
+  `LinspaceResult { array, step }`,因此可拿到 `retstep=True` 的步长。
+  保留 numpy 的精确浮点行为:终点被钉到 `stop`(所以
+  `linspace(0,1,5)[4]` 恰为 `1.0`),而
+  `linspace(0,1,5,endpoint=False)[3]` 为 `0.6000000000000001`——这是
+  numpy 的字面输出。`num == 1` 时步长为 `NaN`(没有相邻对可测量)。
+- **`iinfo` / `finfo`**,位于 `dtype.rs`。`iinfo` 为
+  `@py_compat(strict)`;`finfo` 为 `@py_compat(numerical(rtol=1e-15))`。
+  二者通过专用的 `IntKind` / `FloatKind` 枚举覆盖 numpy 完整的命名标量
+  类型空间(`int8`、`uint16` 等),因此 `np.iinfo(np.int8)` 可用,即便
+  `Array` 标签联合体本身无法存储 `int8`。
+- **`isnan` / `isinf` / `iscomplex` / `isreal`**,位于 `ufunc.rs`。
+  `@py_compat(strict)`——逐元素布尔谓词,返回与输入同形状的 `Bool`
+  数组。由于 `Array` 标签联合体只支持实数,`iscomplex` 恒为全 `False`、
+  `isreal` 恒为全 `True`,这正是 numpy 对实数 dtype 输入的答案。
+
+延后的后续项(不在 Stream W 范围):真正的复数 `Array` 存储(使
+`iscomplex` 逐元素检查 `imag != 0`)、经由 `cobrust-codegen` 的
+`.cb` 语言 extern 接线,以及把这些函数加入 PyO3 Python 扩展。详见
+[numpy 模块规范](../../agent/modules/numpy.md) 与
+[v0.7.0 路线图](../../agent/strategy/v0.7.0-numpy-translation-roadmap.md)。
+
+---
+
 ## full_pipeline_corpus CI 闸门（B3 修复）
 
 **背景**：`crates/cobrust-tomli/tests/full_pipeline_corpus.rs` 是 T1.1 差分回归闸门——

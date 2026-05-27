@@ -92,10 +92,11 @@ mod view;
 pub use crate::array::Array;
 pub use crate::broadcast::broadcast_shape;
 pub use crate::constructors::{
-    NestedList, arange, arange_count, array, array_bool, array_f32, array_f64, array_from_nested,
-    array_i32, array_i64, ones, zeros,
+    LinspaceResult, NestedList, arange, arange_count, array, array_bool, array_f32, array_f64,
+    array_from_nested, array_i32, array_i64, diag, eye, linspace, logspace, ones, tri, tril, triu,
+    zeros,
 };
-pub use crate::dtype::Dtype;
+pub use crate::dtype::{Dtype, FloatInfo, FloatKind, IntInfo, IntKind, finfo, iinfo};
 pub use crate::error::{NumpyError, NumpyErrorKind};
 pub use crate::index::{Index, SliceSpec, index_get, np_where};
 pub use crate::linalg::{EighResult, SvdResult, cholesky, det, dot, eigh, inv, matmul, solve, svd};
@@ -105,7 +106,10 @@ pub use crate::random::{Generator, default_rng};
 pub use crate::reduce::{
     argmax, argmin, max, mean, min, pairwise_sum_f32, pairwise_sum_f64, prod, std, sum, var,
 };
-pub use crate::ufunc::{add, cos, div, eq, exp, ge, gt, le, log, lt, mul, ne, pow, sin, sqrt, sub};
+pub use crate::ufunc::{
+    add, cos, div, eq, exp, ge, gt, iscomplex, isinf, isnan, isreal, le, log, lt, mul, ne, pow,
+    sin, sqrt, sub,
+};
 pub use crate::view::{ArrayView, ArrayViewMut};
 
 #[cfg(feature = "pyo3")]

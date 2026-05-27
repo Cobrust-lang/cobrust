@@ -1226,3 +1226,98 @@ inputs and triple-tree doc sync are met by this sprint.
 - Upstream `num_complex` 0.4 — https://crates.io/crates/num-complex
   (MIT OR Apache-2.0; license-compatible per `adr:0001`). M7.7+
   storage type for `Array::Complex64 / Complex128`.
+
+## Public surface (v0.7.0 Stream W — P0 gap-list subset)
+
+> Closes a cohesive subset of the v0.7.0 numpy P0 gap-list
+> (`docs/agent/strategy/v0.7.0-numpy-translation-roadmap.md` §3.1).
+> Oracle: numpy 2.0.2. LLM-first §2.5: surfaces match
+> `np.eye(3)` / `np.linspace(0,1,5)` / `np.iinfo(np.int32)` /
+> `np.isnan(x)` priors exactly.
+
+### Item 1 — 2-D base constructors (`lib/_twodim_base_impl.py`)
+
+`@py_compat(strict)` — values are exactly 0/1 or copied integers; the
+float-dtype forms are bit-exact vs numpy (no tolerance).
+
+- `eye(n, m_cols: Option<usize>, k: i64, dtype) -> Result<Array>` —
+  `np.eye(N, M=None, k=0, dtype=float)`. `M` defaults to `N`. `k > 0`
+  upper diagonal, `k < 0` lower. Default dtype `Float64`.
+- `tri(n, m_cols: Option<usize>, k: i64, dtype) -> Result<Array>` —
+  `np.tri`. Lower-triangular indicator (ones at/below `k`-th diag).
+- `tril(m: &Array, k: i64) -> Result<Array>` — `np.tril`. Zeroes
+  strictly-above-`k` elements; preserves input dtype. Non-2-D →
+  `LinalgShapeError`.
+- `triu(m: &Array, k: i64) -> Result<Array>` — `np.triu`. Mirror of
+  `tril`.
+- `diag(v: &Array, k: i64) -> Result<Array>` — `np.diag`. 1-D → 2-D
+  (place `v` on the `k`-th diagonal); 2-D → 1-D (extract the `k`-th
+  diagonal). Preserves input dtype. ndim ∉ {1,2} → `LinalgShapeError`.
+
+### Item 3 — `linspace` / `logspace` (`_core/function_base.py`)
+
+`@py_compat(numerical(rtol=1e-12))` — float-producing, agreement to
+1e-12 relative vs numpy on the docstring corpus.
+
+- `linspace(start, stop, num, endpoint, dtype) -> Result<LinspaceResult>`
+  — `np.linspace`. `LinspaceResult { array, step }` mirrors numpy's
+  `(samples, step)` (the `retstep=True` return). When `endpoint`, the
+  final sample is pinned to `stop` exactly. `num == 1` → step `NaN`;
+  `num == 0` → empty array + step `NaN`. Integer `dtype` truncates
+  toward zero (`linspace(0,1,5,dtype=int)` → `[0,0,0,0,1]`).
+- `logspace(start, stop, num, endpoint, base, dtype) -> Result<Array>`
+  — `np.logspace`. `base ** linspace(start, stop, num, endpoint)`.
+
+### Item 6 — `iinfo` / `finfo` (`_core/getlimits.py`)
+
+`iinfo`: `@py_compat(strict)`. `finfo`: `@py_compat(numerical(rtol=1e-15))`.
+
+These span the full numpy named-scalar-type space via dedicated
+`IntKind` / `FloatKind` enums (NOT the `Array` `Dtype` tier), so
+`np.iinfo(np.int8)` works even though `Array` cannot store `int8`.
+
+- `IntKind` — `Int8/16/32/64`, `UInt8/16/32/64`.
+- `FloatKind` — `Float32`, `Float64`.
+- `IntInfo { kind, bits, min, max }`; `IntInfo::new(kind)`. Bounds are
+  `i128` so the full `uint64` range and `int64` min both fit
+  losslessly. `iinfo(int8).max == 127`.
+- `FloatInfo { kind, bits, eps, epsneg, max, min, tiny, resolution,
+  nmant, nexp, precision }`; `FloatInfo::new(kind)`. Constants captured
+  from numpy 2.0.2 (`finfo(float64).eps == 2.220446049250313e-16`,
+  `finfo(float32).eps == 1.1920929e-07`).
+- `iinfo(name: &str) -> Result<IntInfo>` / `finfo(name: &str) ->
+  Result<FloatInfo>` — name-string wrappers; wrong family →
+  `UnsupportedDtype`.
+
+### Item 7 — type-check predicates (`lib/_type_check_impl.py`)
+
+`@py_compat(strict)` — exact boolean predicates. Each returns a
+`Dtype::Bool` array of the input's shape (`ufunc.rs`).
+
+- `isnan(a) -> Result<Array>` — element-wise NaN test; integer/bool
+  inputs always `false`.
+- `isinf(a) -> Result<Array>` — element-wise `±inf` test; integer/bool
+  always `false`.
+- `iscomplex(a) -> Result<Array>` — "nonzero imaginary part". `Array`
+  is real-only, so always all-`false` (matches numpy for real-dtype
+  inputs).
+- `isreal(a) -> Result<Array>` — "zero imaginary part". Always
+  all-`true` (matches numpy for real-dtype inputs, including NaN which
+  numpy treats as real).
+
+### Stream W known divergences and follow-ups
+
+- **Complex `Array` storage** — `iscomplex` / `isreal` are exact for
+  the real-dtype inputs `Array` can hold. A genuine complex-`Array`
+  widening (where `iscomplex` checks `imag != 0` per element) is the
+  same deferred follow-on as M7.6's `Array::Complex64/128` (ADR-0021
+  §3). Not in Stream W scope.
+- **`.cb`-language wiring** — Stream W lands the Rust + pyo3-free
+  native surface + tests + docs. Exposing these as `.cb` extern
+  surfaces (codegen extern wiring in `cobrust-codegen/llvm_backend.rs`)
+  is a deferred follow-on owned by the codegen sprint; not touched here
+  per scope boundary.
+- **PyO3 bindings** — Stream W functions are not yet wired into
+  `pyo3_bindings.rs` (the M7.0 wrapper exposes only `zeros/ones/
+  arange/array`). Adding `eye/diag/tri/linspace/iinfo/finfo/is*` to the
+  Python extension is a mechanical follow-on.

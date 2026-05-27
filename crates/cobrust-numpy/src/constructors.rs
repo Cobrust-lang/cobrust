@@ -449,6 +449,303 @@ pub fn arange(start: f64, stop: f64, step: f64, dtype: Dtype) -> Result<Array, N
     array(&raw, &[count], dtype)
 }
 
+// ---- Stream W item 3: linspace / logspace (numpy `_core/function_base.py`) --
+//
+// `@py_compat(numerical(rtol=1e-12))` per ADR-0070 §W — float-producing,
+// agreement with numpy 2.0.2 to 1e-12 relative on the docstring corpus.
+
+/// Result of `linspace(..., retstep=true)`: the materialised array plus
+/// the step between consecutive samples. Mirrors numpy's
+/// `(samples, step)` tuple return.
+///
+/// Per numpy 2.0.2: when `num == 1` the step is `NaN` (no consecutive
+/// pair to measure), and when `num == 0` the array is empty and the
+/// step is `NaN`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinspaceResult {
+    /// The materialised samples.
+    pub array: Array,
+    /// Spacing between consecutive samples (`NaN` when `num <= 1`).
+    pub step: f64,
+}
+
+/// Compute the `num` evenly-spaced sample values over `[start, stop]`
+/// as an `f64` buffer plus the step, mirroring numpy's float arithmetic.
+///
+/// numpy computes `step = delta / div` where `div = num - 1` when
+/// `endpoint` else `num`, then `y[i] = start + i * step` for the bulk
+/// and pins `y[num-1] = stop` exactly when `endpoint && num > 1`
+/// (avoids float drift on the last element). The endpoint-pin is why
+/// `linspace(0, 1, 5)[4]` is exactly `1.0` while
+/// `linspace(0, 1, 5, endpoint=False)[3]` is `0.6000000000000001`.
+fn linspace_values(start: f64, stop: f64, num: usize, endpoint: bool) -> (Vec<f64>, f64) {
+    if num == 0 {
+        return (Vec::new(), f64::NAN);
+    }
+    if num == 1 {
+        return (vec![start], f64::NAN);
+    }
+    let div = if endpoint {
+        (num - 1) as f64
+    } else {
+        num as f64
+    };
+    let delta = stop - start;
+    let step = delta / div;
+    let mut out: Vec<f64> = (0..num).map(|i| start + (i as f64) * step).collect();
+    if endpoint {
+        // Pin the final sample to `stop` exactly (numpy does this).
+        out[num - 1] = stop;
+    }
+    (out, step)
+}
+
+/// `numpy.linspace(start, stop, num=50, endpoint=True, retstep=False,
+/// dtype=None)`-equivalent. Returns `num` evenly-spaced samples over
+/// `[start, stop]` (inclusive of `stop` when `endpoint`).
+///
+/// `dtype` selects the output dtype; numpy defaults to `Float64`. When
+/// an integer dtype is requested the float samples are truncated toward
+/// zero per numpy's cast (`linspace(0, 1, 5, dtype=int)` →
+/// `[0, 0, 0, 0, 1]`).
+///
+/// `@py_compat(numerical(rtol=1e-12))`.
+///
+/// # Errors
+/// - `NumpyError::CastFailed` if `num` would overflow `usize` (caller
+///   passes `usize` so this is currently unreachable; reserved).
+/// - Forwarded errors from `array(...)`.
+pub fn linspace(
+    start: f64,
+    stop: f64,
+    num: usize,
+    endpoint: bool,
+    dtype: Dtype,
+) -> Result<LinspaceResult, NumpyError> {
+    let (values, step) = linspace_values(start, stop, num, endpoint);
+    let arr = array(&values, &[num], dtype)?;
+    Ok(LinspaceResult { array: arr, step })
+}
+
+/// `numpy.logspace(start, stop, num=50, endpoint=True, base=10.0,
+/// dtype=None)`-equivalent. Returns `num` samples spaced evenly on a
+/// log scale: `base ** linspace(start, stop, num, endpoint)`.
+///
+/// `@py_compat(numerical(rtol=1e-12))`.
+///
+/// # Errors
+/// Forwarded errors from `array(...)`.
+pub fn logspace(
+    start: f64,
+    stop: f64,
+    num: usize,
+    endpoint: bool,
+    base: f64,
+    dtype: Dtype,
+) -> Result<Array, NumpyError> {
+    let (exponents, _step) = linspace_values(start, stop, num, endpoint);
+    let values: Vec<f64> = exponents.iter().map(|&e| base.powf(e)).collect();
+    array(&values, &[num], dtype)
+}
+
+// ---- Stream W item 1: eye / diag / tri / tril / triu ------------------------
+// (numpy `lib/_twodim_base_impl.py`)
+//
+// `@py_compat(strict)` for the integer/structural shape; the default
+// `Float64` fill values (1.0 / 0.0) are exact, so even the float-dtype
+// forms are bit-exact vs numpy (no `numerical` tolerance needed).
+
+/// `numpy.eye(N, M=None, k=0, dtype=float)`-equivalent. Returns an
+/// `N x M` array with ones on the `k`-th diagonal and zeros elsewhere.
+///
+/// `M` defaults to `N` when `m_cols` is `None`. `k > 0` is an upper
+/// diagonal; `k < 0` a lower diagonal. numpy's default dtype is
+/// `Float64`; pass `Dtype::Int64` for the integer form.
+///
+/// `@py_compat(strict)` (values are exactly 0/1; bit-exact vs numpy).
+///
+/// # Errors
+/// Forwarded errors from `array(...)`.
+pub fn eye(n: usize, m_cols: Option<usize>, k: i64, dtype: Dtype) -> Result<Array, NumpyError> {
+    let m = m_cols.unwrap_or(n);
+    let mut values = vec![0.0_f64; n * m];
+    for row in 0..n {
+        // Column on the k-th diagonal for this row: col = row + k.
+        let col = (row as i64) + k;
+        if col >= 0 && (col as usize) < m {
+            values[row * m + (col as usize)] = 1.0;
+        }
+    }
+    array(&values, &[n, m], dtype)
+}
+
+/// `numpy.tri(N, M=None, k=0, dtype=float)`-equivalent. Returns an
+/// `N x M` array with ones at and below the `k`-th diagonal and zeros
+/// elsewhere (a lower-triangular indicator matrix).
+///
+/// `@py_compat(strict)`.
+///
+/// # Errors
+/// Forwarded errors from `array(...)`.
+pub fn tri(n: usize, m_cols: Option<usize>, k: i64, dtype: Dtype) -> Result<Array, NumpyError> {
+    let m = m_cols.unwrap_or(n);
+    let mut values = vec![0.0_f64; n * m];
+    for row in 0..n {
+        for col in 0..m {
+            // numpy: tri[i, j] = 1 if j <= i + k else 0.
+            if (col as i64) <= (row as i64) + k {
+                values[row * m + col] = 1.0;
+            }
+        }
+    }
+    array(&values, &[n, m], dtype)
+}
+
+/// Read a 2-D `Array` element at `(row, col)` as `f64`, preserving the
+/// integer/bool bit pattern through the `f64` lane the constructors use.
+/// Helper for `diag` / `tril` / `triu` (which preserve input dtype).
+fn elem_f64(arr: &Array, row: usize, col: usize) -> f64 {
+    let ix = IxDyn(&[row, col]);
+    match arr {
+        Array::Int32(a) => f64::from(a[&ix]),
+        Array::Int64(a) => a[&ix] as f64,
+        Array::Float32(a) => f64::from(a[&ix]),
+        Array::Float64(a) => a[&ix],
+        Array::Bool(a) => f64::from(u8::from(a[&ix])),
+    }
+}
+
+/// `numpy.tril(m, k=0)`-equivalent. Returns a copy of the 2-D array `m`
+/// with the elements strictly above the `k`-th diagonal zeroed.
+/// Preserves the input dtype.
+///
+/// `@py_compat(strict)`.
+///
+/// # Errors
+/// `NumpyError::LinalgShapeError` if `m` is not 2-D.
+pub fn tril(m: &Array, k: i64) -> Result<Array, NumpyError> {
+    require_2d(m, "tril")?;
+    let shape = m.shape();
+    let (rows, cols) = (shape[0], shape[1]);
+    let mut values = vec![0.0_f64; rows * cols];
+    for row in 0..rows {
+        for col in 0..cols {
+            if (col as i64) <= (row as i64) + k {
+                values[row * cols + col] = elem_f64(m, row, col);
+            }
+        }
+    }
+    array(&values, &[rows, cols], m.dtype())
+}
+
+/// `numpy.triu(m, k=0)`-equivalent. Returns a copy of the 2-D array `m`
+/// with the elements strictly below the `k`-th diagonal zeroed.
+/// Preserves the input dtype.
+///
+/// `@py_compat(strict)`.
+///
+/// # Errors
+/// `NumpyError::LinalgShapeError` if `m` is not 2-D.
+pub fn triu(m: &Array, k: i64) -> Result<Array, NumpyError> {
+    require_2d(m, "triu")?;
+    let shape = m.shape();
+    let (rows, cols) = (shape[0], shape[1]);
+    let mut values = vec![0.0_f64; rows * cols];
+    for row in 0..rows {
+        for col in 0..cols {
+            if (col as i64) >= (row as i64) + k {
+                values[row * cols + col] = elem_f64(m, row, col);
+            }
+        }
+    }
+    array(&values, &[rows, cols], m.dtype())
+}
+
+/// `numpy.diag(v, k=0)`-equivalent. Two behaviors per numpy:
+/// - If `v` is 1-D (length `len`), construct a 2-D array of side
+///   `len + |k|` with `v` on the `k`-th diagonal (zeros elsewhere).
+/// - If `v` is 2-D, extract the `k`-th diagonal as a 1-D array.
+///
+/// Preserves the input dtype in both directions.
+///
+/// `@py_compat(strict)`.
+///
+/// # Errors
+/// `NumpyError::LinalgShapeError` if `v.ndim()` is neither 1 nor 2.
+pub fn diag(v: &Array, k: i64) -> Result<Array, NumpyError> {
+    match v.ndim() {
+        1 => diag_construct(v, k),
+        2 => diag_extract(v, k),
+        nd => Err(NumpyError {
+            kind: NumpyErrorKind::LinalgShapeError,
+            message: format!("diag: input must be 1-D or 2-D, got {nd}-D"),
+        }),
+    }
+}
+
+/// 1-D → 2-D: place `v` on the `k`-th diagonal of a zeros matrix.
+fn diag_construct(v: &Array, k: i64) -> Result<Array, NumpyError> {
+    let len = v.shape()[0];
+    let side = len + (k.unsigned_abs() as usize);
+    let mut values = vec![0.0_f64; side * side];
+    for i in 0..len {
+        // numpy: result[i, i + k] = v[i] for k >= 0; result[i - k, i] for k < 0.
+        let (row, col) = if k >= 0 {
+            (i, i + (k as usize))
+        } else {
+            (i + (k.unsigned_abs() as usize), i)
+        };
+        values[row * side + col] = elem_f64_1d(v, i);
+    }
+    array(&values, &[side, side], v.dtype())
+}
+
+/// 2-D → 1-D: extract the `k`-th diagonal.
+fn diag_extract(v: &Array, k: i64) -> Result<Array, NumpyError> {
+    let shape = v.shape();
+    let (rows, cols) = (shape[0], shape[1]);
+    // numpy: diagonal starts at (0, k) for k >= 0, (-k, 0) for k < 0.
+    let (start_row, start_col) = if k >= 0 {
+        (0_usize, k as usize)
+    } else {
+        (k.unsigned_abs() as usize, 0_usize)
+    };
+    let mut out = Vec::new();
+    let mut row = start_row;
+    let mut col = start_col;
+    while row < rows && col < cols {
+        out.push(elem_f64(v, row, col));
+        row += 1;
+        col += 1;
+    }
+    let len = out.len();
+    array(&out, &[len], v.dtype())
+}
+
+/// Read a 1-D `Array` element as `f64`. Helper for `diag_construct`.
+fn elem_f64_1d(arr: &Array, i: usize) -> f64 {
+    let ix = IxDyn(&[i]);
+    match arr {
+        Array::Int32(a) => f64::from(a[&ix]),
+        Array::Int64(a) => a[&ix] as f64,
+        Array::Float32(a) => f64::from(a[&ix]),
+        Array::Float64(a) => a[&ix],
+        Array::Bool(a) => f64::from(u8::from(a[&ix])),
+    }
+}
+
+/// Validate that `arr` is 2-D, returning a `LinalgShapeError` otherwise.
+fn require_2d(arr: &Array, op: &str) -> Result<(), NumpyError> {
+    if arr.ndim() == 2 {
+        Ok(())
+    } else {
+        Err(NumpyError {
+            kind: NumpyErrorKind::LinalgShapeError,
+            message: format!("{op}: input must be 2-D, got {}-D", arr.ndim()),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::cast_possible_truncation)]
@@ -508,5 +805,297 @@ mod tests {
     fn typed_constructor_shape_mismatch_errors() {
         let err = array_i32(&[1, 2, 3], &[2, 3]).unwrap_err();
         assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
+    }
+
+    // ---- Stream W item 1: eye / diag / tri / tril / triu ----------------
+    // Oracle: numpy 2.0.2 (`python3 -c "import numpy; print(numpy.__version__)"`).
+
+    fn as_f64(a: &Array) -> Vec<f64> {
+        match a {
+            Array::Float64(arr) => arr.iter().copied().collect(),
+            Array::Float32(arr) => arr.iter().map(|v| f64::from(*v)).collect(),
+            Array::Int64(arr) => arr.iter().map(|v| *v as f64).collect(),
+            Array::Int32(arr) => arr.iter().map(|v| f64::from(*v)).collect(),
+            Array::Bool(arr) => arr.iter().map(|v| f64::from(u8::from(*v))).collect(),
+        }
+    }
+
+    #[test]
+    fn eye_3_identity() {
+        // np.eye(3) -> [[1,0,0],[0,1,0],[0,0,1]], dtype float64
+        let e = eye(3, None, 0, Dtype::Float64).unwrap();
+        assert_eq!(e.shape(), vec![3, 3]);
+        assert_eq!(e.dtype(), Dtype::Float64);
+        assert_eq!(
+            as_f64(&e),
+            vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn eye_3_4_k1() {
+        // np.eye(3,4,k=1) -> diagonal shifted up by 1
+        let e = eye(3, Some(4), 1, Dtype::Float64).unwrap();
+        assert_eq!(e.shape(), vec![3, 4]);
+        assert_eq!(
+            as_f64(&e),
+            vec![
+                0.0, 1.0, 0.0, 0.0, // row 0
+                0.0, 0.0, 1.0, 0.0, // row 1
+                0.0, 0.0, 0.0, 1.0, // row 2
+            ]
+        );
+    }
+
+    #[test]
+    fn eye_3_k_neg1() {
+        // np.eye(3,k=-1)
+        let e = eye(3, None, -1, Dtype::Float64).unwrap();
+        assert_eq!(
+            as_f64(&e),
+            vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn eye_2_3_rectangular() {
+        // np.eye(2,3) -> [[1,0,0],[0,1,0]]
+        let e = eye(2, Some(3), 0, Dtype::Float64).unwrap();
+        assert_eq!(e.shape(), vec![2, 3]);
+        assert_eq!(as_f64(&e), vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn eye_int_dtype() {
+        // np.eye(3,dtype=int) -> int64 identity
+        let e = eye(3, None, 0, Dtype::Int64).unwrap();
+        assert_eq!(e.dtype(), Dtype::Int64);
+        assert_eq!(
+            as_f64(&e),
+            vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn tri_3_lower_indicator() {
+        // np.tri(3) -> lower-triangular ones (incl diag)
+        let t = tri(3, None, 0, Dtype::Float64).unwrap();
+        assert_eq!(
+            as_f64(&t),
+            vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn tri_3_4_rectangular() {
+        // np.tri(3,4)
+        let t = tri(3, Some(4), 0, Dtype::Float64).unwrap();
+        assert_eq!(t.shape(), vec![3, 4]);
+        assert_eq!(
+            as_f64(&t),
+            vec![
+                1.0, 0.0, 0.0, 0.0, //
+                1.0, 1.0, 0.0, 0.0, //
+                1.0, 1.0, 1.0, 0.0, //
+            ]
+        );
+    }
+
+    #[test]
+    fn tri_3_k1_and_kneg1() {
+        // np.tri(3,k=1)
+        let t1 = tri(3, None, 1, Dtype::Float64).unwrap();
+        assert_eq!(
+            as_f64(&t1),
+            vec![1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        );
+        // np.tri(3,k=-1)
+        let tm1 = tri(3, None, -1, Dtype::Float64).unwrap();
+        assert_eq!(
+            as_f64(&tm1),
+            vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn tril_preserves_dtype_and_zeros_upper() {
+        // m2 = [[1,2,3],[4,5,6],[7,8,9]] int64
+        let m = array_i64(&[1, 2, 3, 4, 5, 6, 7, 8, 9], &[3, 3]).unwrap();
+        let l = tril(&m, 0).unwrap();
+        assert_eq!(l.dtype(), Dtype::Int64);
+        assert_eq!(
+            as_f64(&l),
+            vec![1.0, 0.0, 0.0, 4.0, 5.0, 0.0, 7.0, 8.0, 9.0]
+        );
+        // np.tril(m2,k=1)
+        let l1 = tril(&m, 1).unwrap();
+        assert_eq!(
+            as_f64(&l1),
+            vec![1.0, 2.0, 0.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+        );
+        // np.tril(m2,k=-1)
+        let lm1 = tril(&m, -1).unwrap();
+        assert_eq!(
+            as_f64(&lm1),
+            vec![0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 7.0, 8.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn triu_preserves_dtype_and_zeros_lower() {
+        let m = array_i64(&[1, 2, 3, 4, 5, 6, 7, 8, 9], &[3, 3]).unwrap();
+        let u = triu(&m, 0).unwrap();
+        assert_eq!(
+            as_f64(&u),
+            vec![1.0, 2.0, 3.0, 0.0, 5.0, 6.0, 0.0, 0.0, 9.0]
+        );
+        // np.triu(m2,k=1)
+        let u1 = triu(&m, 1).unwrap();
+        assert_eq!(
+            as_f64(&u1),
+            vec![0.0, 2.0, 3.0, 0.0, 0.0, 6.0, 0.0, 0.0, 0.0]
+        );
+        // np.triu(m2,k=-1)
+        let um1 = triu(&m, -1).unwrap();
+        assert_eq!(
+            as_f64(&um1),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 8.0, 9.0]
+        );
+    }
+
+    #[test]
+    fn tril_rejects_non_2d() {
+        let v = array_i64(&[1, 2, 3], &[3]).unwrap();
+        let err = tril(&v, 0).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::LinalgShapeError);
+    }
+
+    #[test]
+    fn diag_extract_from_2d() {
+        // m = arange(9).reshape(3,3) = [[0,1,2],[3,4,5],[6,7,8]]
+        let m = array_i64(&[0, 1, 2, 3, 4, 5, 6, 7, 8], &[3, 3]).unwrap();
+        assert_eq!(as_f64(&diag(&m, 0).unwrap()), vec![0.0, 4.0, 8.0]);
+        assert_eq!(as_f64(&diag(&m, 1).unwrap()), vec![1.0, 5.0]);
+        assert_eq!(as_f64(&diag(&m, -1).unwrap()), vec![3.0, 7.0]);
+    }
+
+    #[test]
+    fn diag_construct_from_1d() {
+        // np.diag([1,2,3]) -> 3x3 with diagonal
+        let v = array_i64(&[1, 2, 3], &[3]).unwrap();
+        let d = diag(&v, 0).unwrap();
+        assert_eq!(d.shape(), vec![3, 3]);
+        assert_eq!(
+            as_f64(&d),
+            vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]
+        );
+        // np.diag([1,2,3],k=1) -> 4x4
+        let d1 = diag(&v, 1).unwrap();
+        assert_eq!(d1.shape(), vec![4, 4]);
+        assert_eq!(
+            as_f64(&d1),
+            vec![
+                0.0, 1.0, 0.0, 0.0, //
+                0.0, 0.0, 2.0, 0.0, //
+                0.0, 0.0, 0.0, 3.0, //
+                0.0, 0.0, 0.0, 0.0, //
+            ]
+        );
+        // np.diag([1,2],k=-1) -> 3x3
+        let v2 = array_i64(&[1, 2], &[2]).unwrap();
+        let dm1 = diag(&v2, -1).unwrap();
+        assert_eq!(dm1.shape(), vec![3, 3]);
+        assert_eq!(
+            as_f64(&dm1),
+            vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn diag_rejects_3d() {
+        let v = array_i64(&[1, 2, 3, 4, 5, 6, 7, 8], &[2, 2, 2]).unwrap();
+        let err = diag(&v, 0).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::LinalgShapeError);
+    }
+
+    // ---- Stream W item 3: linspace / logspace ---------------------------
+    // Oracle: numpy 2.0.2.
+
+    #[test]
+    fn linspace_0_1_5_endpoint() {
+        // np.linspace(0,1,5) -> [0,0.25,0.5,0.75,1.0], step 0.25
+        let r = linspace(0.0, 1.0, 5, true, Dtype::Float64).unwrap();
+        assert_eq!(r.array.shape(), vec![5]);
+        assert_eq!(as_f64(&r.array), vec![0.0, 0.25, 0.5, 0.75, 1.0]);
+        assert!((r.step - 0.25).abs() < 1e-15);
+        assert_eq!(r.array.dtype(), Dtype::Float64);
+    }
+
+    #[test]
+    fn linspace_endpoint_false_rounding() {
+        // np.linspace(0,1,5,endpoint=False) -> [0,0.2,0.4,0.6000000000000001,0.8]
+        // step 0.2. The 0.6000000000000001 is numpy's exact float output.
+        let r = linspace(0.0, 1.0, 5, false, Dtype::Float64).unwrap();
+        let v = as_f64(&r.array);
+        assert_eq!(v[0], 0.0);
+        assert_eq!(v[1], 0.2);
+        assert_eq!(v[2], 0.4);
+        assert_eq!(v[3], 0.600_000_000_000_000_1);
+        assert_eq!(v[4], 0.8);
+        assert!((r.step - 0.2).abs() < 1e-15);
+    }
+
+    #[test]
+    fn linspace_num_1_step_is_nan() {
+        // np.linspace(2,3,num=1) -> [2.0], step nan
+        let r = linspace(2.0, 3.0, 1, true, Dtype::Float64).unwrap();
+        assert_eq!(as_f64(&r.array), vec![2.0]);
+        assert!(r.step.is_nan());
+    }
+
+    #[test]
+    fn linspace_num_0_empty() {
+        // np.linspace(0,10,num=0) -> []
+        let r = linspace(0.0, 10.0, 0, true, Dtype::Float64).unwrap();
+        assert_eq!(r.array.size(), 0);
+        assert!(r.step.is_nan());
+    }
+
+    #[test]
+    fn linspace_int_dtype_truncates() {
+        // np.linspace(0,1,5,dtype=int) -> [0,0,0,0,1] int64
+        let r = linspace(0.0, 1.0, 5, true, Dtype::Int64).unwrap();
+        assert_eq!(r.array.dtype(), Dtype::Int64);
+        assert_eq!(as_f64(&r.array), vec![0.0, 0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn logspace_default_base10() {
+        // np.logspace(0,2,3) -> [1,10,100]
+        let l = logspace(0.0, 2.0, 3, true, 10.0, Dtype::Float64).unwrap();
+        let v = as_f64(&l);
+        assert!((v[0] - 1.0).abs() < 1e-12);
+        assert!((v[1] - 10.0).abs() < 1e-12);
+        assert!((v[2] - 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn logspace_base2() {
+        // np.logspace(0,2,3,base=2) -> [1,2,4]
+        let l = logspace(0.0, 2.0, 3, true, 2.0, Dtype::Float64).unwrap();
+        let v = as_f64(&l);
+        assert!((v[0] - 1.0).abs() < 1e-12);
+        assert!((v[1] - 2.0).abs() < 1e-12);
+        assert!((v[2] - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn logspace_endpoint_false() {
+        // np.logspace(0,2,3,endpoint=False) -> [1, 4.641588833612778, 21.544346900318832]
+        let l = logspace(0.0, 2.0, 3, false, 10.0, Dtype::Float64).unwrap();
+        let v = as_f64(&l);
+        assert!((v[0] - 1.0).abs() < 1e-12);
+        assert!((v[1] - 4.641_588_833_612_778).abs() < 1e-12);
+        assert!((v[2] - 21.544_346_900_318_832).abs() < 1e-12);
     }
 }

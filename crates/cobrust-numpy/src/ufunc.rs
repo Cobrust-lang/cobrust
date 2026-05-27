@@ -579,6 +579,97 @@ pub fn sqrt(a: &Array) -> Result<Array, NumpyError> {
     unary_float_op(a, f32::sqrt, f64::sqrt)
 }
 
+// ---- Stream W item 7: is* predicates (numpy `lib/_type_check_impl.py`) ------
+//
+// `@py_compat(strict)` — these are exact boolean predicates, no
+// tolerance. Each returns a `Dtype::Bool` array of the same shape as
+// the input (scalar-shape is preserved). Per numpy:
+//   - `isnan(x)`  : element is NaN.
+//   - `isinf(x)`  : element is +inf or -inf.
+//   - `iscomplex(x)`: element has a nonzero imaginary part.
+//   - `isreal(x)` : element has a zero imaginary part.
+//
+// The cobrust-numpy `Array` tagged-union is real-only (the M7.6
+// `Dtype::Complex*` widening did not extend `Array` — see ADR-0021 §3).
+// Therefore `iscomplex` always yields all-`false` and `isreal` always
+// all-`true` on any `Array` we can hold, which is exactly numpy's
+// answer for real-dtype inputs. A complex-`Array` widening is a
+// deferred follow-on (would make `iscomplex` check `imag != 0` per
+// element); flagged in the module doc + report.
+
+/// Map every element of a float array through a `f64 -> bool` predicate,
+/// producing a `Dtype::Bool` array of the same shape. Integer / bool
+/// inputs (which can never be NaN or inf) short-circuit to all-`false`.
+fn float_predicate(arr: &Array, pred: impl Fn(f64) -> bool) -> Array {
+    match arr {
+        Array::Float32(a) => Array::Bool(a.mapv(|v| pred(f64::from(v)))),
+        Array::Float64(a) => Array::Bool(a.mapv(pred)),
+        // Integers and bools are always finite, never NaN.
+        Array::Int32(a) => Array::Bool(a.mapv(|_| false)),
+        Array::Int64(a) => Array::Bool(a.mapv(|_| false)),
+        Array::Bool(a) => Array::Bool(a.mapv(|_| false)),
+    }
+}
+
+/// `numpy.isnan(x)`-equivalent. Element-wise NaN test. Integer / bool
+/// inputs are always `false` (matches numpy). Returns a `Dtype::Bool`
+/// array of the same shape.
+///
+/// `@py_compat(strict)`.
+///
+/// # Errors
+/// Currently total — never errors.
+pub fn isnan(a: &Array) -> Result<Array, NumpyError> {
+    Ok(float_predicate(a, f64::is_nan))
+}
+
+/// `numpy.isinf(x)`-equivalent. Element-wise `±inf` test. Integer /
+/// bool inputs are always `false`. Returns a `Dtype::Bool` array.
+///
+/// `@py_compat(strict)`.
+///
+/// # Errors
+/// Currently total.
+pub fn isinf(a: &Array) -> Result<Array, NumpyError> {
+    Ok(float_predicate(a, f64::is_infinite))
+}
+
+/// `numpy.iscomplex(x)`-equivalent. Element-wise "has nonzero imaginary
+/// part" test. The cobrust-numpy `Array` is real-only, so this always
+/// yields all-`false` — which matches numpy for every real-dtype input
+/// (`np.iscomplex([1,2,3])` → `[False, False, False]`). Returns a
+/// `Dtype::Bool` array of the same shape.
+///
+/// `@py_compat(strict)` (for the real-dtype inputs `Array` can hold).
+///
+/// # Errors
+/// Currently total.
+pub fn iscomplex(a: &Array) -> Result<Array, NumpyError> {
+    Ok(constant_bool(a, false))
+}
+
+/// `numpy.isreal(x)`-equivalent. Element-wise "has zero imaginary part"
+/// test. The cobrust-numpy `Array` is real-only, so this always yields
+/// all-`true` — which matches numpy for every real-dtype input
+/// (`np.isreal([1,2,3])` → `[True, True, True]`; note numpy also treats
+/// `NaN` as real). Returns a `Dtype::Bool` array of the same shape.
+///
+/// `@py_compat(strict)` (for the real-dtype inputs `Array` can hold).
+///
+/// # Errors
+/// Currently total.
+pub fn isreal(a: &Array) -> Result<Array, NumpyError> {
+    Ok(constant_bool(a, true))
+}
+
+/// Produce a `Dtype::Bool` array of `a`'s shape filled with `value`.
+fn constant_bool(a: &Array, value: bool) -> Array {
+    Array::Bool(ndarray::ArrayD::<bool>::from_elem(
+        ndarray::IxDyn(&a.shape()),
+        value,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::cast_possible_truncation)]
@@ -597,7 +688,7 @@ mod tests {
     #![allow(clippy::approx_constant)]
     #![allow(clippy::uninlined_format_args)]
     use super::*;
-    use crate::constructors::{array_f64, array_i32};
+    use crate::constructors::{array_f32, array_f64, array_i32, array_i64};
 
     #[test]
     fn add_int32_int32_preserves_int32() {
@@ -685,5 +776,96 @@ mod tests {
         } else {
             panic!("expected Bool");
         }
+    }
+
+    // ---- Stream W item 7: is* predicates --------------------------------
+    // Oracle: numpy 2.0.2.
+
+    fn as_bool(a: &Array) -> Vec<bool> {
+        if let Array::Bool(arr) = a {
+            arr.iter().copied().collect()
+        } else {
+            panic!("expected Bool dtype, got {:?}", a.dtype());
+        }
+    }
+
+    #[test]
+    fn isnan_mixed_array() {
+        // np.isnan([1,nan,inf,-inf,0]) -> [F,T,F,F,F]
+        let a = array_f64(
+            &[1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0],
+            &[5],
+        )
+        .unwrap();
+        let r = isnan(&a).unwrap();
+        assert_eq!(r.dtype(), Dtype::Bool);
+        assert_eq!(as_bool(&r), vec![false, true, false, false, false]);
+    }
+
+    #[test]
+    fn isnan_int_array_all_false() {
+        // np.isnan(int array) -> all False
+        let a = array_i32(&[1, 2, 3], &[3]).unwrap();
+        let r = isnan(&a).unwrap();
+        assert_eq!(as_bool(&r), vec![false, false, false]);
+    }
+
+    #[test]
+    fn isnan_f32_array() {
+        let a = array_f32(&[1.0, f32::NAN, 2.0], &[3]).unwrap();
+        let r = isnan(&a).unwrap();
+        assert_eq!(as_bool(&r), vec![false, true, false]);
+    }
+
+    #[test]
+    fn isinf_mixed_array() {
+        // np.isinf([1,nan,inf,-inf,0]) -> [F,F,T,T,F]
+        let a = array_f64(
+            &[1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0],
+            &[5],
+        )
+        .unwrap();
+        let r = isinf(&a).unwrap();
+        assert_eq!(as_bool(&r), vec![false, false, true, true, false]);
+    }
+
+    #[test]
+    fn isinf_int_array_all_false() {
+        let a = array_i64(&[1, 2, 3], &[3]).unwrap();
+        let r = isinf(&a).unwrap();
+        assert_eq!(as_bool(&r), vec![false, false, false]);
+    }
+
+    #[test]
+    fn iscomplex_real_array_all_false() {
+        // np.iscomplex([1,2,3]) -> [F,F,F]
+        let a = array_i32(&[1, 2, 3], &[3]).unwrap();
+        let r = iscomplex(&a).unwrap();
+        assert_eq!(r.dtype(), Dtype::Bool);
+        assert_eq!(as_bool(&r), vec![false, false, false]);
+        // float array too
+        let f = array_f64(&[1.0, 2.0], &[2]).unwrap();
+        assert_eq!(as_bool(&iscomplex(&f).unwrap()), vec![false, false]);
+    }
+
+    #[test]
+    fn isreal_real_array_all_true() {
+        // np.isreal([1,2,3]) -> [T,T,T]
+        let a = array_i32(&[1, 2, 3], &[3]).unwrap();
+        let r = isreal(&a).unwrap();
+        assert_eq!(r.dtype(), Dtype::Bool);
+        assert_eq!(as_bool(&r), vec![true, true, true]);
+        // numpy treats NaN as real too
+        let f = array_f64(&[1.0, f64::NAN], &[2]).unwrap();
+        assert_eq!(as_bool(&isreal(&f).unwrap()), vec![true, true]);
+    }
+
+    #[test]
+    fn is_predicates_preserve_shape() {
+        let a = array_f64(&[1.0, f64::NAN, 2.0, 3.0], &[2, 2]).unwrap();
+        assert_eq!(isnan(&a).unwrap().shape(), vec![2, 2]);
+        assert_eq!(isinf(&a).unwrap().shape(), vec![2, 2]);
+        assert_eq!(iscomplex(&a).unwrap().shape(), vec![2, 2]);
+        assert_eq!(isreal(&a).unwrap().shape(), vec![2, 2]);
     }
 }
