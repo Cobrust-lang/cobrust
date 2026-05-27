@@ -20,6 +20,10 @@ pub struct TargetSpec {
     pub opt_level: OptLevel,
     /// Backend selection. [`Backend::Cranelift`] is the default
     /// for `cargo build`; [`Backend::Llvm`] requires `--features llvm`.
+    ///
+    /// ADR-0070 §X.3 flip to LLVM-default was attempted 2026-05-26 and
+    /// rolled back; see `docs/agent/findings/f53-llvm-default-flip-aggregate-gap.md`
+    /// for the LLVM `lower_aggregate(List | FormatString)` prerequisites.
     pub backend: Backend,
     /// Artifact kind (`Object` / `Executable` / `DynamicLibrary`).
     pub artifact: ArtifactKind,

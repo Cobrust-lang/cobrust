@@ -3085,6 +3085,48 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                                             .map_err(map_builder_err)?;
                                         v = widened.into();
                                     }
+                                } else if matches!(param_ty, BasicMetadataTypeEnum::PointerType(_))
+                                {
+                                    // ADR-0070 §X.3 sibling-fix (2026-05-26):
+                                    // MIR represents list / heap-string values
+                                    // as i64 stack-slot encodings of host
+                                    // pointers; runtime helpers like
+                                    // `__cobrust_list_len`, `__cobrust_list_get`,
+                                    // `__cobrust_str_clone` etc. declare their
+                                    // first argument as `ptr` (opaque pointer
+                                    // in LLVM 15+). When the lowered Operand
+                                    // resolves to an IntValue but the callee
+                                    // signature expects a PointerType, emit
+                                    // an `inttoptr` cast — mirrors the existing
+                                    // `Drop`-call coercion at the `Drop`
+                                    // terminator handler above.
+                                    let ptr_v = self
+                                        .emitter
+                                        .builder
+                                        .build_int_to_ptr(iv, self.emitter.opaque_ptr_ty, "argi2p")
+                                        .map_err(map_builder_err)?;
+                                    v = ptr_v.into();
+                                } else if matches!(param_ty, BasicMetadataTypeEnum::FloatType(_)) {
+                                    // ADR-0070 §X.3 sibling-fix (2026-05-26):
+                                    // MIR's `Rvalue::BinaryOp` allocates its
+                                    // result as `Ty::None` → `i64` (see
+                                    // `cobrust-mir/src/lower.rs:1945`), so a
+                                    // float arithmetic chain like `(a + b) /
+                                    // 2.0` produces an `i64`-typed `_bin` slot
+                                    // holding the f64 bit-pattern. When this
+                                    // i64 then flows into `__cobrust_math_abs`
+                                    // / `__cobrust_math_sqrt` / etc. (whose
+                                    // C signature is `f64 -> f64`), we must
+                                    // reinterpret the i64 bits as f64 via
+                                    // `bitcast`. Matches the Cranelift backend
+                                    // tolerance which simply forwards the
+                                    // 64-bit value through the ABI register.
+                                    let fv = self
+                                        .emitter
+                                        .builder
+                                        .build_bit_cast(iv, self.emitter.ctx.f64_type(), "argi2f")
+                                        .map_err(map_builder_err)?;
+                                    v = fv;
                                 }
                             }
                         }
@@ -3523,7 +3565,37 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         a: BasicValueEnum<'ctx>,
         b: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-        let is_float = a.is_float_value();
+        // ADR-0070 §X.3 sibling-fix (2026-05-26): MIR represents the
+        // result of every binop as `Ty::None` (-> i64) per
+        // `cobrust-mir/src/lower.rs:1945`. When the binop participates
+        // in float arithmetic, one operand may still be a FloatValue
+        // (the constant rhs from the source) while the other is an
+        // IntValue load (the binop chain's intermediate). Match
+        // float-ness by inspecting either operand and, when a mismatch
+        // exists, bitcast the i64 operand to f64. This preserves
+        // round-trip semantics: the i64 stack slot held the f64
+        // bit-pattern produced by an earlier float binop. Matches
+        // Cranelift's `Type::F64` widening at the SSA layer.
+        let either_float = a.is_float_value() || b.is_float_value();
+        let (a, b) = if either_float && (!a.is_float_value() || !b.is_float_value()) {
+            let bitcast_to_f64 =
+                |v: BasicValueEnum<'ctx>| -> Result<BasicValueEnum<'ctx>, CodegenError> {
+                    if let BasicValueEnum::IntValue(iv) = v {
+                        let fv = self
+                            .emitter
+                            .builder
+                            .build_bit_cast(iv, self.emitter.ctx.f64_type(), "binop_i2f")
+                            .map_err(map_builder_err)?;
+                        Ok(fv)
+                    } else {
+                        Ok(v)
+                    }
+                };
+            (bitcast_to_f64(a)?, bitcast_to_f64(b)?)
+        } else {
+            (a, b)
+        };
+        let is_float = either_float;
         let builder = &self.emitter.builder;
         let val: BasicValueEnum<'ctx> = match (op, is_float) {
             (BinOp::Add, false) => builder
@@ -3714,8 +3786,16 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 .map_err(map_builder_err)?
                 .into(),
             (BinOp::NotEq, true) => builder
+                // ADR-0070 §X.3 sibling-fix (2026-05-26): use UNE
+                // (unordered not-equal) so that `nan != nan` evaluates
+                // to `true` per IEEE 754 + Python `==` parity. Matches
+                // Cranelift's `FloatCC::NotEqual` which means "UN OR
+                // a != b" (see cranelift-codegen docs). The previous
+                // `ONE` (ordered not-equal) returned false on NaN
+                // operands which broke `f64e16_nan_not_equal_to_itself`
+                // under the X.3 LLVM-default flip.
                 .build_float_compare(
-                    FloatPredicate::ONE,
+                    FloatPredicate::UNE,
                     a.into_float_value(),
                     b.into_float_value(),
                     "fne",
@@ -3834,15 +3914,56 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         let v = self.lower_operand(op)?;
         let builder = &self.emitter.builder;
         let ctx = self.emitter.ctx;
+        // ADR-0070 §X.3 sibling-fix (2026-05-26): MIR represents the
+        // result of every `Rvalue::BinaryOp` as `Ty::None`-typed local
+        // (`_bin` in `cobrust-mir/src/lower.rs:1945`), which maps to
+        // LLVM `i64` in `lower_ty`. When the source expression of a
+        // `FloatToInt` or `IntToBool` cast traces back through a
+        // float-typed binop, the loaded operand is an `IntValue`
+        // (i64 stack-slot) holding a float bit-pattern. Mirror
+        // Cranelift's defensive fall-through (see
+        // `cranelift_backend.rs:lower_cast` 2023-2055) — when the
+        // direction of the cast disagrees with the value's LLVM type,
+        // re-interpret via `bitcast` rather than panicking with
+        // `into_float_value()` / `into_int_value()`.
+        let v_was_int = v.is_int_value();
+        let v_was_float = v.is_float_value();
         let val: BasicValueEnum<'ctx> = match kind {
-            CastKind::IntToFloat => builder
-                .build_signed_int_to_float(v.into_int_value(), ctx.f64_type(), "i2f")
-                .map_err(map_builder_err)?
-                .into(),
-            CastKind::FloatToInt => builder
-                .build_float_to_signed_int(v.into_float_value(), ctx.i64_type(), "f2i")
-                .map_err(map_builder_err)?
-                .into(),
+            CastKind::IntToFloat => {
+                if v_was_float {
+                    // Already a float; defensive identity.
+                    v
+                } else {
+                    builder
+                        .build_signed_int_to_float(v.into_int_value(), ctx.f64_type(), "i2f")
+                        .map_err(map_builder_err)?
+                        .into()
+                }
+            }
+            CastKind::FloatToInt => {
+                if v_was_int {
+                    // Operand is already i64 (binop-result encoded as
+                    // Ty::None → i64 per the MIR shape above). Cobrust
+                    // float types are 64-bit (`Ty::Float` → `f64`);
+                    // bitcast the i64 stack-slot to f64 first, then
+                    // emit the proper FloatToInt conversion. Without
+                    // this, the cast becomes a silent no-op which is
+                    // observably wrong for non-integral float values.
+                    let iv = v.into_int_value();
+                    let fv = builder
+                        .build_bit_cast(iv, ctx.f64_type(), "f2i_reinterp")
+                        .map_err(map_builder_err)?;
+                    builder
+                        .build_float_to_signed_int(fv.into_float_value(), ctx.i64_type(), "f2i")
+                        .map_err(map_builder_err)?
+                        .into()
+                } else {
+                    builder
+                        .build_float_to_signed_int(v.into_float_value(), ctx.i64_type(), "f2i")
+                        .map_err(map_builder_err)?
+                        .into()
+                }
+            }
             CastKind::BoolToInt => builder
                 .build_int_z_extend(v.into_int_value(), ctx.i64_type(), "b2i")
                 .map_err(map_builder_err)?
