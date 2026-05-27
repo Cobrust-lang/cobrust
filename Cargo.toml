@@ -18,6 +18,7 @@ members = [
     "crates/cobrust-translator",
     "crates/cobrust-strike",
     "crates/cobrust-den",
+    "crates/cobrust-pit",
     "crates/cobrust-hood",
     "crates/cobrust-types-parity",
     "crates/cobrust-types-cb",
@@ -85,6 +86,12 @@ tokio = { version = "1.40", features = [
 ] }
 futures = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+# v0.7.0 Stream Z.1.a — `cobrust-pit` (translated flask) HTTP-server backend.
+# Roadmap §4.1 (flask row: axum sync-style via task::block_on) + §5
+# (MUST-ship HTTP server). axum brings hyper/tower (already in the tree
+# via reqwest's transitive deps); the `pit` surface stays sync by driving
+# the axum server under a singleton tokio runtime (ADR-0028 precedent).
+axum = "0.7"
 # v0.7.0 Stream Z.7.c — `cobrust-den` (translated sqlite3) PEP 249 surface backend.
 # `bundled` compiles libsqlite3 from source so no system libsqlite3 is
 # required (deterministic build, CI-portable per F40/F44 discipline).

@@ -1,0 +1,70 @@
+[source]
+library = "flask"
+# Flask release whose web-server surface shape is mirrored.
+version = "3.0"
+# The sync web-server surface translated; backend bound to axum/tokio.
+# The public API stays sync via a `Runtime::block_on` bridge (ADR-0028
+# §A precedent) so there is no async/sync coloring (constitution §2.2).
+backend = "axum 0.7 (hyper/tower) over a singleton tokio runtime"
+file_count = 6
+
+[oracle]
+runtime = "cpython"
+runtime_version = "3.11"
+oracle_module = "flask"
+# The differential oracle is the SHAPE of Flask's web-server surface —
+# `@app.route("/path")` route registration, path-param capture
+# (`<name>`), the request accessors (method/path/args/headers/body/json)
+# and the response constructors (text + `jsonify`). The expectations are
+# encoded in tests/pit_downstream.rs as a real ephemeral-port axum
+# server exercised by an in-process reqwest client. Byte-for-byte WSGI
+# parity is NOT claimed (see divergences); the contract is "an LLM that
+# writes Flask writes pit" (constitution §2.5 + ADR-0071 §3).
+
+[verification]
+seeds = [42, 1337, 3735928559]
+fuzz_inputs_per_fn = 450
+# @py_compat tier: `semantic`. The surface preserves the Flask routing /
+# request / response *shape* and observable behaviour for the common
+# REST path, but it is not `strict` byte-for-byte WSGI parity.
+py_compat = "semantic"
+divergences = [
+    "Route registration is a method API (app.route(method, path, handler) / app.get / app.post / app.put / app.delete), NOT the @app.route decorator. The decorator + `import pit` on the .cb surface is a deferred follow-on (codegen layer), like cobrust-den's .cb wiring. The method API is the same shape minus the decorator sugar.",
+    "Sync-only: App::run blocks the calling thread and drives axum under a singleton tokio runtime via Runtime::block_on (ADR-0028 §A). The user surface has no async fn (constitution §2.2 — no async/sync coloring). Matches Flask's own sync (WSGI) model.",
+    "Errors are returned as Result::Err(PitError) with a closed PitErrorKind taxonomy (Bind/DuplicateRoute/InvalidRoute/Runtime), not raised as Python exceptions (constitution §2.2).",
+    "Route matching is segment-by-segment for literal + `<name>` capture segments only. Werkzeug converters (`<int:id>`, `<path:p>`), regex rules, and optional-trailing-slash redirects are out of scope for Z.1.a; `/a/` and `/a` are distinct.",
+    "A bare string handler return maps to a 200 text/html response and a dict maps to jsonify; Flask's full return-value coercion protocol (tuples with headers, Response subclasses, generators/streaming) is narrowed to text + JSON + an explicit (status, headers, body) constructor.",
+    "404 for an unmatched route returns a minimal `404 Not Found` body rather than Flask's HTML error page; method mismatch on a known path yields 404 (not 405) in this increment.",
+]
+known_failures = []
+
+[router]
+# Translation was synthetic-LLM (hand-authored to the Flask surface
+# shape, not produced by the closed-loop production pipeline),
+# consistent with the ecosystem-batch precedent (cobrust-strike /
+# cobrust-den). Real-LLM pipeline rerun is queued for a later phase.
+strategy = "synthetic-llm"
+models_used = ["synthetic:flask-surface-v1"]
+ledger_entries = 0
+notes = "Translation was synthetic-LLM; real-LLM pipeline rerun pending."
+
+[build]
+toolchain = "rustc 1.94.1"
+deterministic_id = "synthetic:hand-authored"
+crate_layout_version = 1
+
+[gates]
+l0_spec_emitted = true
+l1_files_emitted = 6
+l2_build = "pass (cargo build -p cobrust-pit zero warnings)"
+l2_behavior = "pass (tests/pit_downstream.rs real ephemeral-port axum server exercised by an in-process reqwest::blocking client: routing, path params, GET/POST, JSON request->response round-trip, 404, status codes + tests/pit_fuzz.rs seeded round-trip fuzz >= 450 inputs/fn across 3 seeds)"
+l2_perf = "pass (surface-translate / Rust-binding tier per ADR-0022 §6; axum/hyper is the perf reference)"
+l3_pyo3_wrapper = "pass (tests/pit_pyo3_compiles.rs); --features pyo3 build path per ADR-0011 + ADR-0022"
+l3_downstream_dependents = "deferred — first HTTP server of the v0.7.0 Z.1 stream; downstream web frameworks / the Z.8 REST demo widen once the .cb-source @pit.route + `import pit` wiring lands"
+
+[gates.dependents]
+covered = []
+deferred = ["z.8-rest-demo", "flask-restful", "flask-cors"]
+deferred_reason = "v0.7.0 Z.1.a ships the minimum HTTP server surface; downstream dependents + the .cb REST demo widen after the .cb-language @pit.route decorator + `import pit` wiring follow-on"
+skipped = []
+skipped_reason = ""

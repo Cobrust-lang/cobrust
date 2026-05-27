@@ -46,6 +46,7 @@ flowchart TD
 | `cobrust-coil` | 翻译产物 `numpy` 核心子集（BSD） | M7.0..M7.5 |
 | `cobrust-strike` | 翻译产物 `requests` 2.31（Apache-2.0）— surface-translate / reqwest-blocking-bind 按 ADR-0022 §2 | M-batch（ADR-0022） |
 | `cobrust-hood` | 翻译产物 `click` 8.1.7（BSD-3-Clause）— 装饰器链 → clap-derive 按 ADR-0022 §3 | M-batch（ADR-0022） |
+| `cobrust-pit` | 翻译产物 `flask` 3.0 Web 服务器接口（BSD-3-Clause）— 同步接口,通过 `block_on` 桥接架在 axum/tokio 之上,按 ADR-0071 | v0.7.0（Z.1.a） |
 
 ## 前端（M1 — 已交付）
 

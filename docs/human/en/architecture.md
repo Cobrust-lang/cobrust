@@ -46,6 +46,7 @@ flowchart TD
 | `cobrust-coil` | Translated `numpy` core subset (BSD) | M7.0..M7.5 |
 | `cobrust-strike` | Translated `requests` 2.31 (Apache-2.0) — surface-translate / reqwest-blocking-bind per ADR-0022 §2 | M-batch (ADR-0022) |
 | `cobrust-hood` | Translated `click` 8.1.7 (BSD-3-Clause) — decorator-chain → clap-derive per ADR-0022 §3 | M-batch (ADR-0022) |
+| `cobrust-pit` | Translated `flask` 3.0 web-server surface (BSD-3-Clause) — sync surface over axum/tokio via a `block_on` bridge per ADR-0071 | v0.7.0 (Z.1.a) |
 
 ## Frontend (M1 — delivered)
 
