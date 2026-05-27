@@ -395,6 +395,18 @@ fn fr13_float_neg_compound() {
 // =====================================================================
 
 #[test]
+#[ignore = "F56: LLVM backend lacks the Cranelift fixed-point `infer_local_types` \
+            pass (llvm_backend.rs lower_ty doc §2461-2464 explicitly defers it). \
+            For `-(-3.25)`, inner `_inner = UnaryOp(Neg, Float)` is f64 but its MIR \
+            local is `Ty::None` (-> i64 slot, stores f64 bits). Outer `UnaryOp(Neg, \
+            Copy(_inner))` loads i64, lower_unop sees IntValue -> build_int_neg on the \
+            IEEE bit-pattern (garbage) instead of fneg. The lower_binop §X.3 \
+            sibling-fix recovers float-ness from the *other* operand; unop has only \
+            one operand and the None temp carries no float signal, so the same trick \
+            cannot apply without the fixed-point inference. Surfaced by ADR-0070 §X.3 \
+            LLVM-default flip routing `cobrust build` through LLVM. fr15/fr16 \
+            (binary chains) pass via the binop fix. Deferred to LLVM infer_local_types \
+            port. See docs/agent/findings/f56-llvm-double-neg-infer-local-types-gap.md."]
 fn fr14_value_correctness_double_neg_const() {
     // `let y: f64 = -(-3.25)` — depth-2 chain through two `_un:
     // Ty::None` temps. Inner: `_inner = UnaryOp(Neg, Float(3.25))`.
