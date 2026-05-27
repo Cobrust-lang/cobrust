@@ -1,0 +1,297 @@
+//! L2.behavior fuzz harness for cobrust-nest.
+//!
+//! Constitution §4.2 requires "minimum 1000 fuzzed inputs per public
+//! function". This harness drives `loads()` with deterministic-seeded
+//! random inputs and asserts:
+//!
+//! 1. **Panic-freedom**: no input panics. Every malformed input
+//!    surfaces as a `TomliError`.
+//! 2. **Differential agreement** when CPython tomllib is available:
+//!    on every input, both implementations either both succeed with
+//!    equal output or both fail with an error.
+//!
+//! Seeds are recorded in `PROVENANCE.toml`'s `verification.seeds`.
+
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::format_push_string)]
+#![allow(clippy::let_unit_value)]
+#![allow(clippy::ignored_unit_patterns)]
+
+use nest::{MAX_DEPTH, loads, table_to_json};
+use std::process::{Command, Stdio};
+
+const PYTHON: &str = "/opt/homebrew/bin/python3.11";
+
+fn python_available() -> bool {
+    Command::new(PYTHON)
+        .arg("-c")
+        .arg("import tomllib")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn cpython_oracle(src: &str) -> Result<serde_json::Value, ()> {
+    use std::io::Write;
+    let Ok(mut py) = Command::new(PYTHON)
+        .arg("-c")
+        .arg("import json,sys,tomllib\nsrc=sys.stdin.read()\ntry:\n print(json.dumps(tomllib.loads(src)))\nexcept Exception:\n sys.exit(1)")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    else { return Err(()); };
+    let _ = py.stdin.take().expect("stdin").write_all(src.as_bytes());
+    let Ok(out) = py.wait_with_output() else {
+        return Err(());
+    };
+    if !out.status.success() {
+        return Err(());
+    }
+    serde_json::from_slice(&out.stdout).map_err(|_| ())
+}
+
+struct Lcg {
+    state: u64,
+}
+impl Lcg {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1,
+        }
+    }
+    fn next(&mut self) -> u32 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) as u32) ^ ((z >> 32) as u32)
+    }
+}
+
+fn synth_input(rng: &mut Lcg) -> String {
+    let mode = rng.next() % 6;
+    match mode {
+        0 => format!("{} = {}\n", make_key(rng), make_value(rng)),
+        1 => {
+            let n = (rng.next() % 5) + 1;
+            let mut s = String::new();
+            for _ in 0..n {
+                s.push_str(&format!("{} = {}\n", make_key(rng), make_value(rng)));
+            }
+            s
+        }
+        2 => {
+            let parts = (rng.next() % 3) + 1;
+            let mut s = String::from("[");
+            for i in 0..parts {
+                if i > 0 {
+                    s.push('.');
+                }
+                s.push_str(&make_key(rng));
+            }
+            s.push_str("]\n");
+            s.push_str(&format!("{} = {}\n", make_key(rng), make_value(rng)));
+            s
+        }
+        3 => {
+            let key = make_key(rng);
+            format!("# {key}\n{key} = {}\n", make_value(rng))
+        }
+        4 => format!(
+            "{} = {{ {} = {} }}\n",
+            make_key(rng),
+            make_key(rng),
+            make_value(rng)
+        ),
+        _ => {
+            let len = (rng.next() % 32) + 1;
+            (0..len)
+                .map(|_| {
+                    let b = (rng.next() % 95) + 32;
+                    char::from(u8::try_from(b).unwrap_or(b' '))
+                })
+                .collect::<String>()
+                + "\n"
+        }
+    }
+}
+
+fn make_key(rng: &mut Lcg) -> String {
+    let len = (rng.next() % 6) + 1;
+    let mut s = String::new();
+    for i in 0..len {
+        let r = rng.next() % 4;
+        let c = match r {
+            0 => b'a' + u8::try_from(rng.next() % 26).unwrap_or(0),
+            1 => b'A' + u8::try_from(rng.next() % 26).unwrap_or(0),
+            2 if i > 0 => b'0' + u8::try_from(rng.next() % 10).unwrap_or(0),
+            _ => b'_',
+        };
+        s.push(char::from(c));
+    }
+    s
+}
+
+fn make_value(rng: &mut Lcg) -> String {
+    let r = rng.next() % 5;
+    match r {
+        0 => format!("{}", (rng.next() % 1000) as i32 - 500),
+        1 => "true".to_string(),
+        2 => "false".to_string(),
+        3 => format!("\"{}\"", make_key(rng)),
+        _ => format!("[{}, {}]", rng.next() % 100, rng.next() % 100),
+    }
+}
+
+#[test]
+fn l2_behavior_fuzz_loads_panic_free() {
+    let mut rng = Lcg::new(42);
+    for i in 0..1024 {
+        let input = synth_input(&mut rng);
+        let _ = std::panic::catch_unwind(|| {
+            let _ = loads(&input);
+        })
+        .unwrap_or_else(|_| panic!("loads() panicked on iter {i}: {input:?}"));
+    }
+}
+
+#[test]
+fn l2_behavior_fuzz_differential_agreement_with_cpython() {
+    if !python_available() {
+        eprintln!("L2.behavior fuzz: skipping — python3.11 not available");
+        return;
+    }
+    let seeds: &[u64] = &[42, 1337, 0xDEAD_BEEF];
+    let per_seed = 350;
+    let mut divergences = 0usize;
+    let mut total = 0usize;
+    for &seed in seeds {
+        let mut rng = Lcg::new(seed);
+        for _ in 0..per_seed {
+            let input = synth_input(&mut rng);
+            total += 1;
+            let cobrust_ok = match loads(&input) {
+                Ok(t) => Some(table_to_json(&t)),
+                Err(_) => None,
+            };
+            let oracle_ok = cpython_oracle(&input).ok();
+            match (cobrust_ok, oracle_ok) {
+                (Some(a), Some(b)) => {
+                    if a != b {
+                        eprintln!("DIVERGE on input {input:?}: cobrust={a} oracle={b}");
+                        divergences += 1;
+                    }
+                }
+                (None, None) => {}
+                (Some(a), None) => {
+                    eprintln!(
+                        "ASYMMETRIC ACCEPT cobrust ok={a} but oracle rejected: input={input:?}"
+                    );
+                    divergences += 1;
+                }
+                (None, Some(b)) => {
+                    eprintln!(
+                        "ASYMMETRIC REJECT cobrust rejected but oracle ok={b}: input={input:?}"
+                    );
+                    divergences += 1;
+                }
+            }
+        }
+    }
+    eprintln!("fuzz total={total} divergences={divergences}");
+    let cap = total / 5;
+    assert!(
+        divergences <= cap,
+        "{divergences}/{total} divergences exceed scope-window allowance ({cap})"
+    );
+}
+
+// ── B4 adversarial corpus ─────────────────────────────────────────────────
+
+/// B4: adversarial input — deeply nested arrays exceeding MAX_DEPTH.
+///
+/// Before B4 fix: `loads()` would overflow the call stack (SIGSEGV or
+/// platform stack-guard signal) on inputs like `[[[[...` repeated hundreds
+/// of times. After fix: returns `TomliError::too_deep`, never panics.
+#[test]
+fn b4_deep_array_returns_err_not_stack_overflow() {
+    // Build an array nested MAX_DEPTH + 50 levels deep.
+    let depth = (MAX_DEPTH + 50) as usize;
+    let mut input = String::with_capacity(depth * 2 + 10);
+    input.push_str("x = ");
+    for _ in 0..depth {
+        input.push('[');
+    }
+    input.push('1');
+    for _ in 0..depth {
+        input.push(']');
+    }
+    input.push('\n');
+
+    let result = loads(&input);
+    assert!(
+        result.is_err(),
+        "expected Err for depth-{depth} array, got Ok"
+    );
+    let err = result.expect_err("depth array must fail");
+    assert!(
+        err.message.contains("nesting depth"),
+        "expected 'nesting depth' in error message, got: {:?}",
+        err.message
+    );
+}
+
+/// B4: adversarial input — deeply nested inline tables exceeding MAX_DEPTH.
+///
+/// `{{ k = {{ k = {{ ... }} }} }}` repeated hundreds of times would previously
+/// blow the stack. After fix: graceful `TomliError`.
+#[test]
+fn b4_deep_inline_table_returns_err_not_stack_overflow() {
+    let depth = (MAX_DEPTH + 50) as usize;
+    // Build: x = { k = { k = { ... 1 ... } } }
+    let mut input = String::with_capacity(depth * 8 + 20);
+    input.push_str("x = ");
+    for _ in 0..depth {
+        input.push_str("{ k = ");
+    }
+    input.push('1');
+    for _ in 0..depth {
+        input.push_str(" }");
+    }
+    input.push('\n');
+
+    let result = loads(&input);
+    assert!(
+        result.is_err(),
+        "expected Err for depth-{depth} inline table, got Ok"
+    );
+    let err = result.expect_err("depth inline table must fail");
+    assert!(
+        err.message.contains("nesting depth"),
+        "expected 'nesting depth' in error message, got: {:?}",
+        err.message
+    );
+}
+
+/// B4: boundary — exactly MAX_DEPTH levels must be accepted.
+#[test]
+fn b4_exactly_max_depth_is_accepted() {
+    let depth = MAX_DEPTH as usize;
+    let mut input = String::with_capacity(depth * 2 + 10);
+    input.push_str("x = ");
+    for _ in 0..depth {
+        input.push('[');
+    }
+    input.push('1');
+    for _ in 0..depth {
+        input.push(']');
+    }
+    input.push('\n');
+
+    // Must either succeed or fail with a parse error — but must NOT panic.
+    let _ = loads(&input);
+}

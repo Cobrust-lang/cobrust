@@ -238,7 +238,7 @@ error[Internal]: CraneliftError: inst441 has type i64, expected i8
 经翻译的生态系统 crate 对不可信输入强制执行安全限制。这些错误以 `Result::Err` 形式返回——
 不会发生 panic 或进程终止。
 
-### `cobrust-tomli` — `TomliError`
+### `cobrust-nest` — `TomliError`
 
 | 条件 | 错误消息 | 原因 |
 |---|---|---|
@@ -246,9 +246,9 @@ error[Internal]: CraneliftError: inst441 has type i64, expected i8
 | 无效语法 | `"unexpected character '…' at pos N"` | 标准解析错误。 |
 | 未关闭的字符串 | `"unterminated string"` | 标准解析错误。 |
 
-**常量**：`cobrust_tomli::MAX_DEPTH = 100`（已导出，调用方可引用）。
+**常量**：`nest::MAX_DEPTH = 100`（已导出，调用方可引用）。
 
-### `cobrust-requests` — `HttpError` / `HttpErrorKind`
+### `cobrust-strike` — `HttpError` / `HttpErrorKind`
 
 | `HttpErrorKind` | 含义 | 处理方法 |
 |---|---|---|
@@ -258,9 +258,9 @@ error[Internal]: CraneliftError: inst441 has type i64, expected i8
 | `DecodeBody` | 响应体不是有效 UTF-8 或 JSON | 检查服务器的 `Content-Type`。 |
 | `BodyTooLarge` | 响应体超出 64 MiB 上限 | 服务器发送数据过多；使用流式处理或提高上限（B5 修复）。 |
 
-**常量**：`cobrust_requests::MAX_BODY_BYTES = 64 * 1024 * 1024`（64 MiB）。
+**常量**：`strike::MAX_BODY_BYTES = 64 * 1024 * 1024`（64 MiB）。
 
-### `cobrust-msgpack` — `MsgError` / `MsgErrorKind`
+### `cobrust-scale` — `MsgError` / `MsgErrorKind`
 
 | `MsgErrorKind` | 含义 | 处理方法 |
 |---|---|---|

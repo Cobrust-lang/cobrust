@@ -1,0 +1,195 @@
+//! L3 differential gate for cobrust-nest.
+//!
+//! Runs upstream test fixture + 27 positive + 5 negative cases against:
+//!  1. The translated Rust crate (this crate).
+//!  2. CPython's `tomllib` (the L3 oracle), invoked via subprocess.
+//!
+//! Pure-Rust subprocess oracle keeps the M4 gate hermetic — no PyO3
+//! build step required at M4. M5+ will flip on the native PyO3
+//! extension under `--features pyo3`.
+
+use nest::{loads, table_to_json, to_json};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+
+const PYTHON: &str = "/opt/homebrew/bin/python3.11";
+
+fn python_available() -> bool {
+    Command::new(PYTHON)
+        .arg("-c")
+        .arg("import tomllib")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn cpython_oracle(src: &str) -> Result<serde_json::Value, String> {
+    use std::io::Write;
+    let mut py = Command::new(PYTHON)
+        .arg("-c")
+        .arg("import json,sys,tomllib\nsrc=sys.stdin.read()\nprint(json.dumps(tomllib.loads(src)))")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn: {e}"))?;
+    py.stdin
+        .take()
+        .expect("stdin")
+        .write_all(src.as_bytes())
+        .expect("write stdin");
+    let out = py.wait_with_output().map_err(|e| format!("wait: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "python exit {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    serde_json::from_slice(&out.stdout).map_err(|e| format!("json: {e}"))
+}
+
+fn cobrust_loads_json(src: &str) -> Result<serde_json::Value, String> {
+    match loads(src) {
+        Ok(t) => Ok(table_to_json(&t)),
+        Err(e) => Err(format!("{e}")),
+    }
+}
+
+fn positive_cases() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("empty", ""),
+        ("single_int", "x = 1\n"),
+        ("negative_int", "x = -42\n"),
+        ("plus_int", "x = +7\n"),
+        ("two_keys", "a = 1\nb = 2\n"),
+        ("bool_true", "k = true\n"),
+        ("bool_false", "k = false\n"),
+        ("basic_string", "k = \"hi\"\n"),
+        ("basic_string_escape", "k = \"a\\nb\"\n"),
+        ("literal_string", "k = 'hi'\n"),
+        ("empty_array", "k = []\n"),
+        ("int_array", "k = [1, 2, 3]\n"),
+        ("trailing_comma_array", "k = [1, 2,]\n"),
+        ("inline_table", "k = { a = 1, b = 2 }\n"),
+        ("table_header", "[s]\nx = 1\n"),
+        ("nested_table_header", "[a.b]\nx = 1\n"),
+        ("multiple_tables", "[a]\nx = 1\n[b]\ny = 2\n"),
+        ("comment_line", "# comment\nx = 1\n"),
+        ("inline_comment", "x = 1 # tail comment\n"),
+        ("dashed_key", "my-key = 1\n"),
+        ("underscore_key", "my_key = 1\n"),
+        ("string_with_escape", "k = \"tab\\there\"\n"),
+        ("array_of_strings", "k = [\"a\", \"b\"]\n"),
+        ("array_of_bools", "k = [true, false]\n"),
+        ("nested_inline_table", "k = { a = { b = 1 } }\n"),
+        ("whitespace_around_eq", "x   =    1\n"),
+        ("crlf_line_endings", "x = 1\r\ny = 2\r\n"),
+    ]
+}
+
+fn negative_cases() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("unterminated_string", "x = \"abc\n"),
+        ("bad_escape", "x = \"\\q\"\n"),
+        ("trailing_dot", "[a.]\n"),
+        ("unclosed_array", "x = [1, 2\n"),
+        ("bare_value", "= 1\n"),
+    ]
+}
+
+#[test]
+fn l3_positive_cases_match_cpython_tomllib() {
+    if !python_available() {
+        eprintln!(
+            "L3 differential gate: skipping — python3.11 with tomllib not on PATH ({PYTHON})"
+        );
+        return;
+    }
+    let mut failures: Vec<String> = Vec::new();
+    for (name, src) in positive_cases() {
+        let oracle = match cpython_oracle(src) {
+            Ok(v) => v,
+            Err(e) => {
+                failures.push(format!("{name}: oracle failed: {e}"));
+                continue;
+            }
+        };
+        let ours = match cobrust_loads_json(src) {
+            Ok(v) => v,
+            Err(e) => {
+                failures.push(format!("{name}: cobrust failed: {e}"));
+                continue;
+            }
+        };
+        if ours != oracle {
+            failures.push(format!("{name}: cobrust={ours} oracle={oracle}"));
+        }
+    }
+    if !failures.is_empty() {
+        for f in &failures {
+            eprintln!("{f}");
+        }
+        panic!(
+            "{} positive case(s) diverged from CPython tomllib",
+            failures.len()
+        );
+    }
+}
+
+#[test]
+fn l3_negative_cases_both_implementations_reject() {
+    if !python_available() {
+        eprintln!("L3 differential gate: skipping negatives — python3.11 with tomllib not on PATH");
+        return;
+    }
+    let mut failures: Vec<String> = Vec::new();
+    for (name, src) in negative_cases() {
+        let oracle_raised = cpython_oracle(src).is_err();
+        let cobrust_raised = cobrust_loads_json(src).is_err();
+        if !(oracle_raised && cobrust_raised) {
+            failures.push(format!(
+                "{name}: oracle_raised={oracle_raised} cobrust_raised={cobrust_raised}"
+            ));
+        }
+    }
+    if !failures.is_empty() {
+        for f in &failures {
+            eprintln!("{f}");
+        }
+        panic!(
+            "{} negative case(s) diverged from CPython tomllib",
+            failures.len()
+        );
+    }
+}
+
+#[test]
+fn l3_to_json_round_trips_for_value_kinds() {
+    use nest::Value;
+    use std::collections::BTreeMap;
+    assert_eq!(to_json(&Value::Bool(true)), serde_json::json!(true));
+    assert_eq!(to_json(&Value::Int(42)), serde_json::json!(42));
+    assert_eq!(to_json(&Value::Str("x".into())), serde_json::json!("x"));
+    assert_eq!(
+        to_json(&Value::Array(vec![Value::Int(1), Value::Int(2)])),
+        serde_json::json!([1, 2])
+    );
+    let mut t = BTreeMap::new();
+    t.insert("k".into(), Value::Int(7));
+    assert_eq!(
+        to_json(&Value::Table(t.clone())),
+        serde_json::json!({"k": 7})
+    );
+    assert_eq!(table_to_json(&t), serde_json::json!({"k": 7}));
+}
+
+#[test]
+fn l3_pyo3_wrapper_directory_layout() {
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    assert!(crate_dir.join("python/nest_init.py").exists());
+    assert!(crate_dir.join("python/setup.py").exists());
+    assert!(crate_dir.join("PROVENANCE.toml").exists());
+}

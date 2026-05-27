@@ -1,0 +1,183 @@
+// AUTO-GENERATED — DO NOT EDIT BY HAND.
+// Translated by cobrust-translator (synthetic-LLM mode).
+// source-library: numpy 2.0.2
+// oracle: cpython 3.11 (module: numpy)
+// scope: M7.0 dtype tier per ADR-0013 §3 + M7.1 ufuncs per ADR-0014 + M7.2 indexing per ADR-0015 + M7.3 reductions per ADR-0016 + M7.4 linalg per ADR-0017 + M7.5 random per ADR-0018 + M7.6 expansion per ADR-0021.
+// see PROVENANCE.toml for the full manifest.
+
+//! Single error type for cobrust-coil.
+//!
+//! Per constitution §2.2 (Result<T,E> default error path), every
+//! fallible cobrust-coil public-API call returns `Result<_,
+//! NumpyError>`. The kind is structured (closed enum) so callers can
+//! match on it cleanly rather than parsing the message.
+//!
+//! M7.0 (per ADR-0013) shipped six variants. M7.1 (per ADR-0014 §4)
+//! added three more. M7.2 (per ADR-0015 §4) added four more for the
+//! indexing surface. M7.3 (per ADR-0016 §5) added one more for the
+//! reduction surface. M7.4 (per ADR-0017 §4) adds four more for the
+//! linalg surface. M7.5 (per ADR-0018) adds four more for the
+//! random surface. M7.6 (per ADR-0021 §11) adds three more for the
+//! expansion surface. Merge order: M7.3 → M7.4 → M7.5 → M7.6.
+
+// CQ P1-4 + template-fix: single consolidated block; future emits use #[allow] at item level.
+#![allow(clippy::uninlined_format_args)]
+
+use std::fmt;
+
+/// Single error type for all cobrust-coil operations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumpyError {
+    pub kind: NumpyErrorKind,
+    pub message: String,
+}
+
+/// Closed enum of error categories emitted by cobrust-coil.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NumpyErrorKind {
+    // ---- M7.0 (per ADR-0013) ----
+    /// Python dtype string not in the closed set per ADR-0013 §3 +
+    /// ADR-0021 §3 (which widened the set to seven dtypes).
+    UnsupportedDtype,
+    /// `array(values, shape, dtype)`: `values.len()` does not match
+    /// `shape_size(shape)`.
+    ShapeMismatch,
+    /// Negative dimension supplied to `zeros` / `ones` / `array`.
+    NegativeDimension,
+    /// `arange(start, stop, step, dtype)` with `step == 0` (matches
+    /// numpy's `ZeroDivisionError`). Reused by M7.2 `slice` for
+    /// `step == 0` per ADR-0015 §5.
+    ZeroStep,
+    /// `arange(...)` invoked with `dtype=bool` (matches numpy's
+    /// `TypeError`).
+    BoolArangeUnsupported,
+    /// Values supplied to `array(...)` could not be cast to the
+    /// requested dtype without precision loss in a way that violates
+    /// the `@py_compat(strict)` contract.
+    CastFailed,
+
+    // ---- M7.1 (per ADR-0014 §4) ----
+    /// Integer-dtype `Array::div` with a divisor element equal to 0.
+    /// Matches numpy's `ZeroDivisionError` outcome (operation fails);
+    /// shape of failure is Cobrust-native (`Result::Err`) per
+    /// constitution §2.2.
+    IntegerDivisionByZero,
+    /// Two arrays' shapes cannot be broadcast together per the numpy
+    /// rules (right-aligned, size-1-expand, equal-or-mismatch). See
+    /// ADR-0014 §2 + https://numpy.org/doc/stable/user/basics.broadcasting.html.
+    BroadcastShapeMismatch,
+    /// `result_type(a, b)` could not produce a valid promoted dtype.
+    /// Reserved for future widening; the current closed set is total.
+    TypePromotionFailure,
+
+    // ---- M7.2 (per ADR-0015 §4) ----
+    /// Umbrella for indexing errors not covered by more specific
+    /// variants below — for example, applying multi-axis `index_get`
+    /// with more axes than the array has.
+    IndexError,
+    /// Single-int or int-array index out of `[-len, len)`. Matches
+    /// numpy's `IndexError`.
+    OutOfBoundsIndex,
+    /// Boolean mask passed to `mask` has shape != self.shape().
+    /// Matches numpy's `IndexError`.
+    BoolMaskShapeMismatch,
+    /// Index array passed to `take` / `Index::IntArray` is not
+    /// integer-dtype (must be `Int32` or `Int64`).
+    IndexDtypeNotInteger,
+
+    // ---- M7.3 (per ADR-0016 §5) ----
+    /// Empty-array passed to `min` / `max` / `argmin` / `argmax`.
+    /// Matches numpy's `ValueError: zero-size array to reduction
+    /// operation` (and its argmin/argmax `attempt to get argmin of
+    /// an empty sequence` cousin); cobrust-native shape is
+    /// `Result::Err` per constitution §2.2.
+    ReductionEmptyArray,
+
+    // ---- M7.4 (per ADR-0017 §4) ----
+    /// LU pivot zero / `det == 0` on `solve` / `inv` paths. Matches
+    /// numpy's `LinAlgError("Singular matrix")`.
+    SingularMatrix,
+    /// Cholesky on a non-PSD matrix. Matches numpy's
+    /// `LinAlgError("Matrix is not positive definite")`.
+    NotPositiveDefinite,
+    /// `matmul` shape mismatch, non-square `det / inv / solve / eigh
+    /// / cholesky`, batch-rank > 2, non-symmetric `eigh` input,
+    /// or solve `b` rank > 2. Umbrella for shape-related linalg
+    /// errors. Matches numpy's `ValueError` / `LinAlgError` shape
+    /// messages.
+    LinalgShapeError,
+    /// Linalg op invoked with non-float dtype (`Int32 / Int64 /
+    /// Bool`). Per ADR-0017 §3 — strict M7.4 contract. M7.6 lifts
+    /// this only for `eigh` (Hermitian path); `matmul / dot / det
+    /// / solve / inv / svd / cholesky` still raise this for complex
+    /// inputs at M7.6.
+    LinalgDtypeUnsupported,
+
+    // ---- M7.5 (per ADR-0018 §"Error variants") ----
+    /// `integers(low, high, ...)` with `low >= high`. Matches numpy's
+    /// `ValueError: low >= high`.
+    InvalidIntegerRange,
+    /// `uniform(low, high, ...)` with `low >= high` or non-finite
+    /// bounds; or `normal(loc, scale, ...)` with `scale <= 0` or
+    /// non-finite parameters; or `choice` with `replace=false` and
+    /// `size.product() > values.size()`. Matches numpy's `ValueError`.
+    InvalidDistributionParams,
+    /// `choice(p=...)` with `p` not summing to 1, length mismatch
+    /// against `values`, or negative entries. Matches numpy's
+    /// `ValueError`.
+    InvalidProbabilities,
+    /// `choice(values, ...)` with `values.size() == 0`. Matches
+    /// numpy's `ValueError: a must be non-empty`.
+    EmptyChoicePopulation,
+
+    // ---- M7.6 (per ADR-0021 §11) ----
+    /// `lt / le / gt / ge` invoked on a complex-dtype array. Per
+    /// ADR-0021 §5 — matches numpy's `TypeError: '<' not supported
+    /// between instances of 'complex' and 'complex'`. Cobrust shape:
+    /// `Result::Err` per constitution §2.2.
+    ComplexNotOrderable,
+    /// `percentile(q, ...)` invoked with `q < 0` or `q > 100`.
+    /// Matches numpy's `ValueError: Percentiles must be in the range
+    /// [0, 100]`.
+    PercentileOutOfRange,
+    /// Tuple-axis reduction (`sum_axes / prod_axes / mean_axes /
+    /// min_axes / max_axes`) invoked with an empty axis tuple or a
+    /// tuple containing duplicate axes. Matches numpy's
+    /// `numpy.AxisError`.
+    EmptyAxisTuple,
+}
+
+impl fmt::Display for NumpyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind_name = match self.kind {
+            NumpyErrorKind::UnsupportedDtype => "unsupported_dtype",
+            NumpyErrorKind::ShapeMismatch => "shape_mismatch",
+            NumpyErrorKind::NegativeDimension => "negative_dimension",
+            NumpyErrorKind::ZeroStep => "zero_step",
+            NumpyErrorKind::BoolArangeUnsupported => "bool_arange_unsupported",
+            NumpyErrorKind::CastFailed => "cast_failed",
+            NumpyErrorKind::IntegerDivisionByZero => "integer_division_by_zero",
+            NumpyErrorKind::BroadcastShapeMismatch => "broadcast_shape_mismatch",
+            NumpyErrorKind::TypePromotionFailure => "type_promotion_failure",
+            NumpyErrorKind::IndexError => "index_error",
+            NumpyErrorKind::OutOfBoundsIndex => "out_of_bounds_index",
+            NumpyErrorKind::BoolMaskShapeMismatch => "bool_mask_shape_mismatch",
+            NumpyErrorKind::IndexDtypeNotInteger => "index_dtype_not_integer",
+            NumpyErrorKind::ReductionEmptyArray => "reduction_empty_array",
+            NumpyErrorKind::SingularMatrix => "singular_matrix",
+            NumpyErrorKind::NotPositiveDefinite => "not_positive_definite",
+            NumpyErrorKind::LinalgShapeError => "linalg_shape_error",
+            NumpyErrorKind::LinalgDtypeUnsupported => "linalg_dtype_unsupported",
+            NumpyErrorKind::InvalidIntegerRange => "invalid_integer_range",
+            NumpyErrorKind::InvalidDistributionParams => "invalid_distribution_params",
+            NumpyErrorKind::InvalidProbabilities => "invalid_probabilities",
+            NumpyErrorKind::EmptyChoicePopulation => "empty_choice_population",
+            NumpyErrorKind::ComplexNotOrderable => "complex_not_orderable",
+            NumpyErrorKind::PercentileOutOfRange => "percentile_out_of_range",
+            NumpyErrorKind::EmptyAxisTuple => "empty_axis_tuple",
+        };
+        write!(f, "NumpyError({kind_name}): {}", self.message)
+    }
+}
+
+impl std::error::Error for NumpyError {}

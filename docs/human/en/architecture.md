@@ -40,12 +40,12 @@ flowchart TD
 | `cobrust-codegen` | LLVM / Cranelift backend | M3+ |
 | `cobrust-llm-router` | LLM Router | M3 |
 | `cobrust-translator` | AI translation subsystem | M4+ |
-| `cobrust-tomli` | Translated `tomli` (Apache-2.0/MIT) | M4 |
-| `cobrust-dateutil` | Translated `dateutil` (PSF/Apache) — L3 widened to 5/5 by ADR-0022 | M5 (L3 5/5 at M-batch) |
-| `cobrust-msgpack` | Translated `msgpack-python` (Apache-2.0) — L3 widened to 3/3 by ADR-0022 | M6 (L3 3/3 at M-batch) |
-| `cobrust-numpy` | Translated `numpy` core subset (BSD) | M7.0..M7.5 |
-| `cobrust-requests` | Translated `requests` 2.31 (Apache-2.0) — surface-translate / reqwest-blocking-bind per ADR-0022 §2 | M-batch (ADR-0022) |
-| `cobrust-click` | Translated `click` 8.1.7 (BSD-3-Clause) — decorator-chain → clap-derive per ADR-0022 §3 | M-batch (ADR-0022) |
+| `cobrust-nest` | Translated `tomli` (Apache-2.0/MIT) | M4 |
+| `cobrust-molt` | Translated `dateutil` (PSF/Apache) — L3 widened to 5/5 by ADR-0022 | M5 (L3 5/5 at M-batch) |
+| `cobrust-scale` | Translated `msgpack-python` (Apache-2.0) — L3 widened to 3/3 by ADR-0022 | M6 (L3 3/3 at M-batch) |
+| `cobrust-coil` | Translated `numpy` core subset (BSD) | M7.0..M7.5 |
+| `cobrust-strike` | Translated `requests` 2.31 (Apache-2.0) — surface-translate / reqwest-blocking-bind per ADR-0022 §2 | M-batch (ADR-0022) |
+| `cobrust-hood` | Translated `click` 8.1.7 (BSD-3-Clause) — decorator-chain → clap-derive per ADR-0022 §3 | M-batch (ADR-0022) |
 
 ## Frontend (M1 — delivered)
 
@@ -306,7 +306,7 @@ mode as the default gate path. Real-LLM mode is reachable behind the
 ### Worked example
 
 ```bash
-# Regenerate the cobrust-tomli crate from the corpus.
+# Regenerate the cobrust-nest crate from the corpus.
 COBRUST_REGENERATE_TOMLI=1 cargo test \
     -p cobrust-translator --test tomli_pipeline \
     pipeline_regenerates_cobrust_tomli_when_env_set
@@ -320,11 +320,11 @@ The pipeline reads:
 
 …and writes:
 
-- `crates/cobrust-tomli/Cargo.toml`
-- `crates/cobrust-tomli/src/{lib.rs, parser.rs}` — every file carries a provenance header
-- `crates/cobrust-tomli/PROVENANCE.toml` — the manifest
-- `crates/cobrust-tomli/python/{tomli_init.py, setup.py}` — PyO3-shaped wrapper scaffolding
-- `crates/cobrust-tomli/tests/upstream_tests/test_loads.py` — verbatim copy of the upstream tests
+- `crates/cobrust-nest/Cargo.toml`
+- `crates/cobrust-nest/src/{lib.rs, parser.rs}` — every file carries a provenance header
+- `crates/cobrust-nest/PROVENANCE.toml` — the manifest
+- `crates/cobrust-nest/python/{tomli_init.py, setup.py}` — PyO3-shaped wrapper scaffolding
+- `crates/cobrust-nest/tests/upstream_tests/test_loads.py` — verbatim copy of the upstream tests
 
 ### Public API
 
@@ -432,14 +432,14 @@ crate's `Cargo.toml`. Top-level sections:
 
 ## tomli (M4 — delivered)
 
-`cobrust-tomli` is the first crate emitted by the translator pipeline.
+`cobrust-nest` is the first crate emitted by the translator pipeline.
 Pure-Rust subset of `tomli`/CPython `tomllib`'s `loads()`. Auto-generated
 — do not hand-edit.
 
 ### Public API
 
 ```rust
-use cobrust_tomli::{loads, table_to_json, to_json, TomliError, Value};
+use nest::{loads, table_to_json, to_json, TomliError, Value};
 use std::collections::BTreeMap;
 
 let parsed: BTreeMap<String, Value> = loads("x = 1\n").expect("parse");
@@ -533,13 +533,13 @@ human-readable summary string. The [`DownstreamReport`] +
 
 ## dateutil (M5 — delivered)
 
-Second translated library. Crate name `cobrust-dateutil`. Vendored
+Second translated library. Crate name `cobrust-molt`. Vendored
 upstream subset under `corpus/dateutil/upstream/`.
 
 ### Public API
 
 ```rust
-pub use cobrust_dateutil::{
+pub use molt::{
     parse_iso, relativedelta_add, DateTuple, ParserError,
     days_in_month, is_leap_year, normalize_datetime, is_digit,
 };
@@ -575,7 +575,7 @@ the first end-to-end exercise of the closed loop.
 ### Verification
 
 - L0 spec at `corpus/dateutil/spec.toml`.
-- L1 emission committed at `crates/cobrust-dateutil/src/parser.rs`.
+- L1 emission committed at `crates/cobrust-molt/src/parser.rs`.
 - L2.build green; L2.behavior 9 + 5 + 6 cases green; 3072-input
   fuzz panic-free.
 - L2.perf report at `target/cobrust-bench/dateutil/<commit>/report.json`.
@@ -593,7 +593,7 @@ The M6 milestone (constitution §7) closes the loop on libraries
 that use a Cython accelerator alongside a pure-Python fallback. The
 deliverables:
 
-- New module `mod:msgpack` (crate `cobrust-msgpack`) translating
+- New module `mod:msgpack` (crate `cobrust-scale`) translating
   `msgpack-python` 1.0.8 (17 pure-Python + 2 Cython-typed entrypoints).
 - Cython lexical shim at `crate::cython` exposing
   `parse_cython(...)` + `CythonSource`, `CythonFunction`,
@@ -613,15 +613,15 @@ deliverables:
   attempt-2 within the escalation budget.
 - dateutil L3 widened from 2/5 to 4/5 + 1 skipped per ADR-0010 §5
   (pandas + sqlalchemy added; pendulum tz out of scope skip).
-- `--features pyo3` build path lit up for both `cobrust-dateutil`
-  and `cobrust-msgpack` per ADR-0011: the crate compiles to a
-  `cdylib` and exposes a `cobrust_msgpack` / `cobrust_dateutil`
+- `--features pyo3` build path lit up for both `cobrust-molt`
+  and `cobrust-scale` per ADR-0011: the crate compiles to a
+  `cdylib` and exposes a `scale` / `molt`
   Python module.
 
 ### msgpack public surface
 
 ```rust
-pub use cobrust_msgpack::{
+pub use scale::{
     pack, pack_to_vec, unpack, MsgValue, MsgError, MsgErrorKind,
     pack_array, pack_bin, pack_float, pack_int, pack_map,
     pack_str, pack_uint, pack_uint_cython,
@@ -649,7 +649,7 @@ pub enum MsgValue {
 ### Verification
 
 - L0 spec at `corpus/msgpack/spec.toml` + harness/.
-- L1 emission committed at `crates/cobrust-msgpack/src/parser.rs`.
+- L1 emission committed at `crates/cobrust-scale/src/parser.rs`.
 - L2.build green; L2.behavior bytes-identical fuzz green
   (≥ 1000 inputs across 3 seeds; round-trip pack→unpack identity).
 - L2.perf at native-ext tier (0.7×) per ADR-0010 §3; report at
@@ -670,7 +670,7 @@ load-bearing decisions.
 
 Per [ADR-0012](../../agent/adr/0012-m7-numpy-plan.md), upstream
 numpy's core is hand-tuned C with SIMD/BLAS — **not** a viable
-pure-Rust reimplementation target. Instead, cobrust-numpy
+pure-Rust reimplementation target. Instead, cobrust-coil
 **translates the public Python surface** (dtype strings, error
 taxonomy, Python-shaped signatures) and **binds the numerical
 core** to Rust's [`ndarray = "0.16"`](https://crates.io/crates/ndarray)
@@ -684,9 +684,9 @@ this is the M7.0..M7.5 default; later sub-milestones extend it:
 A concrete example from M7.0:
 
 ```rust
-// User-facing call: cobrust_numpy::zeros(&[3, 4], Dtype::Float64)
+// User-facing call: coil::zeros(&[3, 4], Dtype::Float64)
 //
-// 1. cobrust-numpy dispatches on dtype:
+// 1. cobrust-coil dispatches on dtype:
 match dtype {
     Dtype::Float64 => Array::Float64(
         // 2. ndarray actually allocates + zero-fills the buffer:
@@ -696,12 +696,12 @@ match dtype {
 }
 ```
 
-We do not reimplement `zeros`. We call it. cobrust-numpy owns the
+We do not reimplement `zeros`. We call it. cobrust-coil owns the
 **Python contract**; ndarray owns the **storage layout**.
 
 ### M7.0 ndarray foundation
 
-cobrust-numpy's M7.0 surface (per ADR-0013):
+cobrust-coil's M7.0 surface (per ADR-0013):
 
 ```rust
 // Closed dtype tier — adding Int8 / Float16 etc. is an explicit ADR
@@ -755,7 +755,7 @@ impl Array {
 
 - L0 spec at `corpus/numpy/M7.0/spec.toml` + harness at
   `corpus/numpy/M7.0/harness/h_array.py`.
-- L1 emission committed at `crates/cobrust-numpy/src/`.
+- L1 emission committed at `crates/cobrust-coil/src/`.
 - L2.build green; L2.behavior:
   - 55 well-typed + 56 ill-typed programs (`tests/well_typed.rs`,
     `tests/ill_typed.rs`).
@@ -830,7 +830,7 @@ pub fn array_from_nested(nested: &NestedList, dtype: Dtype) -> Result<Array, Num
 ### A concrete end-to-end example
 
 ```rust
-use cobrust_numpy::{Array, Dtype, array_i32, array_f32};
+use coil::{Array, Dtype, array_i32, array_f32};
 
 let a = array_i32(&[1, 2, 3], &[3]).unwrap();        // dtype=int32
 let b = array_f32(&[0.5, 1.5, 2.5], &[3]).unwrap();  // dtype=float32
@@ -878,7 +878,7 @@ auto-vectorised inner loop satisfies constitution sec.5.3.
 
 - L0 spec at `corpus/numpy/M7.1/spec.toml` + harness at
   `corpus/numpy/M7.1/harness/h_ufunc.py`.
-- L1 emission at `crates/cobrust-numpy/src/{ufunc,broadcast,promote}.rs`.
+- L1 emission at `crates/cobrust-coil/src/{ufunc,broadcast,promote}.rs`.
 - L2.build: workspace clippy zero warnings.
 - L2.behavior:
   - 50 well-typed + 50 ill-typed ufunc programs
@@ -1044,10 +1044,10 @@ M7.1 (ufuncs) + M7.2 (indexing). Per ADR-0016:
 
 ```rust
 // Free functions (idiomatic Rust):
-cobrust_numpy::sum(&arr, Some(0))
-cobrust_numpy::mean(&arr, None)
-cobrust_numpy::var(&arr, Some(1), 1)   // axis=1, ddof=1 (Bessel)
-cobrust_numpy::argmax(&arr, Some(-1))   // last axis (negative-axis aware)
+coil::sum(&arr, Some(0))
+coil::mean(&arr, None)
+coil::var(&arr, Some(1), 1)   // axis=1, ddof=1 (Bessel)
+coil::argmax(&arr, Some(-1))   // last axis (negative-axis aware)
 
 // Method-style API (mirrors numpy idiom a.sum(axis=k)):
 arr.sum(None)             // reduce all
@@ -1057,8 +1057,8 @@ arr.std(None, 1)          // sample std (Bessel)
 arr.argmin(Some(-1))      // first occurrence per lane
 
 // Pairwise summation helpers — match numpy's accuracy floor:
-cobrust_numpy::pairwise_sum_f64(&values)
-cobrust_numpy::pairwise_sum_f32(&values)
+coil::pairwise_sum_f64(&values)
+coil::pairwise_sum_f32(&values)
 ```
 
 ### M7.3 nine reductions
@@ -1161,14 +1161,14 @@ M7.1 (ufuncs) + M7.2 (indexing) + M7.3 (reductions). Per ADR-0017:
 
 ```rust
 // Free functions:
-cobrust_numpy::matmul(&a, &b)?
-cobrust_numpy::dot(&a, &b)?
-cobrust_numpy::det(&a)?
-cobrust_numpy::solve(&a, &b)?
-cobrust_numpy::inv(&a)?
-cobrust_numpy::cholesky(&a)?
-let SvdResult { u, s, vt } = cobrust_numpy::svd(&a)?;
-let EighResult { w, v } = cobrust_numpy::eigh(&a)?;
+coil::matmul(&a, &b)?
+coil::dot(&a, &b)?
+coil::det(&a)?
+coil::solve(&a, &b)?
+coil::inv(&a)?
+coil::cholesky(&a)?
+let SvdResult { u, s, vt } = coil::svd(&a)?;
+let EighResult { w, v } = coil::eigh(&a)?;
 
 // Method-style API on Array:
 a.matmul(&b)?
@@ -1407,14 +1407,14 @@ for the load-bearing decisions.
 ## Ecosystem-batch (ADR-0022 — delivered)
 
 The ecosystem-batch sprint per ADR-0022 ships **two new translated
-crates** (`cobrust-requests`, `cobrust-click`) plus closes the
-remaining L3 dependent gaps for `cobrust-dateutil` (now 5/5) and
-`cobrust-msgpack` (now 3/3). It deliberately adds **breadth** rather
+crates** (`cobrust-strike`, `cobrust-hood`) plus closes the
+remaining L3 dependent gaps for `cobrust-molt` (now 5/5) and
+`cobrust-scale` (now 3/3). It deliberately adds **breadth** rather
 than new compiler infrastructure — proving Cobrust's translation
 pipeline scales beyond the M5/M6/M7 numerical-tier tower into the
 "typical Python CLI tool" stack (HTTP + CLI parsing).
 
-### `cobrust-requests` — HTTP client
+### `cobrust-strike` — HTTP client
 
 Translates the public surface of `requests` 2.31.0 onto
 `reqwest::blocking::Client`. Constitution §2.2 forbids async / sync
@@ -1428,10 +1428,10 @@ error type `HttpError { kind: HttpErrorKind, message: String }` with
 4 closed variants (`InvalidUrl / Network / Timeout / DecodeBody`). The `HttpMethod` enum (`Get / Post / Put / Patch / Delete / Head`) closes the verb taxonomy.
 
 The L3 differential gate spins an in-process HTTP/1.1 wiremock on a
-random localhost port and dispatches the cobrust-requests verbs at
+random localhost port and dispatches the cobrust-strike verbs at
 it; an optional `httpbin.org` smoke runs when network is reachable.
 
-### `cobrust-click` — CLI parsing
+### `cobrust-hood` — CLI parsing
 
 Translates the public surface of `click` 8.1.7 onto `clap = "4"`. The
 translation challenge per ADR-0022 §3 is the
@@ -1974,7 +1974,7 @@ license = "Apache-2.0 OR MIT"            # optional
 description = "Short description"        # optional
 
 [dependencies]
-cobrust-tomli = { path = "../cobrust-tomli" }                     # path source
+cobrust-nest = { path = "../cobrust-nest" }                     # path source
 my_lib       = { git = "https://...", rev = "abc123" }            # git source
 serde-like   = "1.2"                                              # registry source (M12 stub)
 
@@ -2015,9 +2015,9 @@ manifest_hash = "blake3:<hex>"
 lockfile_version = 1
 
 [[package]]
-name = "cobrust-tomli"
+name = "cobrust-nest"
 version = "2.0.1"
-source = "path+file:///abs/path/to/cobrust-tomli"
+source = "path+file:///abs/path/to/cobrust-nest"
 hash = "blake3:39e9e2d3..."
 provenance_hash = "blake3:39e9e2d3..."     # ADR-0007 chain-of-custody
 dependencies = ["serde-like 1.2.3"]
@@ -2027,7 +2027,7 @@ name = "my_app"
 version = "0.1.0"
 source = "path+file:///abs/path/to/my_app"
 hash = "blake3:root"
-dependencies = ["cobrust-tomli 2.0.1"]
+dependencies = ["cobrust-nest 2.0.1"]
 ```
 
 **Determinism contract** (ADR-0026 §C):
@@ -2044,7 +2044,7 @@ dependencies = ["cobrust-tomli 2.0.1"]
 ```text
 ~/.cobrust/registry/
 ├── blake3/
-│   ├── 39e9e2d3...0069/      # cobrust-tomli 2.0.1
+│   ├── 39e9e2d3...0069/      # cobrust-nest 2.0.1
 │   │   ├── cobrust.toml
 │   │   ├── PROVENANCE.toml   # ADR-0007 chain-of-custody
 │   │   └── src/...
@@ -2430,9 +2430,9 @@ Python extension. See
 
 ## full_pipeline_corpus CI gate (B3 fix)
 
-**Why it matters**: `crates/cobrust-tomli/tests/full_pipeline_corpus.rs` is the
+**Why it matters**: `crates/cobrust-nest/tests/full_pipeline_corpus.rs` is the
 T1.1 differential regression gate — it drives 1024 deterministic-seeded TOML
-inputs through `cobrust-tomli::loads()` and compares results byte-for-byte
+inputs through `cobrust-nest::loads()` and compares results byte-for-byte
 against CPython `tomllib`. Before B3 the gate silently skipped on Linux because
 the Python binary path was hardcoded to `/opt/homebrew/bin/python3.11` (macOS
 Homebrew only). A silent skip means CI is green even though the differential

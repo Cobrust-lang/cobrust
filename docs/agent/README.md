@@ -43,10 +43,13 @@ All cross-references use stable IDs, never page positions:
 | `mod:codegen` | [`modules/codegen.md`](modules/codegen.md) | `cobrust-codegen` | M3+ |
 | `mod:llm_router` | [`modules/llm-router.md`](modules/llm-router.md) | `cobrust-llm-router` | M3 |
 | `mod:translator` | [`modules/translator.md`](modules/translator.md) | `cobrust-translator` | M4+ |
-| `mod:tomli` | [`modules/tomli.md`](modules/tomli.md) | `cobrust-tomli` | M4 |
-| `mod:dateutil` | [`modules/dateutil.md`](modules/dateutil.md) | `cobrust-dateutil` | M5 |
-| `mod:msgpack` | [`modules/msgpack.md`](modules/msgpack.md) | `cobrust-msgpack` | M6 |
-| `mod:numpy` | [`modules/numpy.md`](modules/numpy.md) | `cobrust-numpy` | M7.0 |
+| `mod:nest` | [`modules/nest.md`](modules/nest.md) | `cobrust-nest` (translated tomli) | M4 |
+| `mod:molt` | [`modules/molt.md`](modules/molt.md) | `cobrust-molt` (translated dateutil) | M5 |
+| `mod:scale` | [`modules/scale.md`](modules/scale.md) | `cobrust-scale` (translated msgpack) | M6 |
+| `mod:coil` | [`modules/coil.md`](modules/coil.md) | `cobrust-coil` (translated numpy) | M7.0 |
+| `mod:strike` | [`modules/strike.md`](modules/strike.md) | `cobrust-strike` (translated requests) | M-batch |
+| `mod:den` | [`modules/den.md`](modules/den.md) | `cobrust-den` (translated sqlite3) | v0.7.0 |
+| `mod:hood` | [`modules/hood.md`](modules/hood.md) | `cobrust-hood` (translated click) | M-batch |
 
 ## ADR index
 

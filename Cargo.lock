@@ -404,14 +404,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cobrust-click"
-version = "0.6.2"
-dependencies = [
- "clap",
- "pyo3",
-]
-
-[[package]]
 name = "cobrust-codegen"
 version = "0.6.2"
 dependencies = [
@@ -426,6 +418,23 @@ dependencies = [
  "target-lexicon",
  "tempfile",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cobrust-coil"
+version = "0.6.2"
+dependencies = [
+ "cobrust-llm-router",
+ "cobrust-translator",
+ "ndarray 0.16.1",
+ "ndarray-linalg",
+ "pyo3",
+ "rand 0.8.6",
+ "rand_distr",
+ "rand_pcg",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -452,11 +461,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "cobrust-dateutil"
+name = "cobrust-den"
 version = "0.6.2"
 dependencies = [
  "pyo3",
- "serde_json",
+ "rusqlite",
 ]
 
 [[package]]
@@ -475,6 +484,14 @@ version = "0.6.2"
 dependencies = [
  "cobrust-frontend",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cobrust-hood"
+version = "0.6.2"
+dependencies = [
+ "clap",
+ "pyo3",
 ]
 
 [[package]]
@@ -552,7 +569,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cobrust-msgpack"
+name = "cobrust-molt"
 version = "0.6.2"
 dependencies = [
  "pyo3",
@@ -560,20 +577,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "cobrust-numpy"
+name = "cobrust-nest"
 version = "0.6.2"
 dependencies = [
- "cobrust-llm-router",
- "cobrust-translator",
- "ndarray 0.16.1",
- "ndarray-linalg",
- "pyo3",
- "rand 0.8.6",
- "rand_distr",
- "rand_pcg",
  "serde_json",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -606,20 +613,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "cobrust-requests"
+name = "cobrust-scale"
 version = "0.6.2"
 dependencies = [
  "pyo3",
- "reqwest",
  "serde_json",
-]
-
-[[package]]
-name = "cobrust-sqlite3"
-version = "0.6.2"
-dependencies = [
- "pyo3",
- "rusqlite",
 ]
 
 [[package]]
@@ -637,9 +635,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "cobrust-tomli"
+name = "cobrust-strike"
 version = "0.6.2"
 dependencies = [
+ "pyo3",
+ "reqwest",
  "serde_json",
 ]
 

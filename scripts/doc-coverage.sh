@@ -61,12 +61,12 @@ expected_modules=(
     mir
     codegen
     llm-router
-    tomli
+    nest
     translator
-    dateutil
-    msgpack
-    requests
-    click
+    molt
+    scale
+    strike
+    hood
     stdlib
     pkg
 )
@@ -245,7 +245,7 @@ if grep -q '^- \*\*M4 — delivered.\*\*' "docs/agent/modules/translator.md"; th
         "to_json"
     )
     m4_tomli_files=(
-        "docs/agent/modules/tomli.md"
+        "docs/agent/modules/nest.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -264,9 +264,9 @@ if grep -q '^- \*\*M4 — delivered.\*\*' "docs/agent/modules/translator.md"; th
     fi
 
     # PROVENANCE.toml must exist on the generated crate.
-    if [[ -d crates/cobrust-tomli ]]; then
-        [[ -f crates/cobrust-tomli/PROVENANCE.toml ]] \
-            || fail "crates/cobrust-tomli/PROVENANCE.toml missing — regenerate via COBRUST_REGENERATE_TOMLI=1"
+    if [[ -d crates/cobrust-nest ]]; then
+        [[ -f crates/cobrust-nest/PROVENANCE.toml ]] \
+            || fail "crates/cobrust-nest/PROVENANCE.toml missing — regenerate via COBRUST_REGENERATE_TOMLI=1"
     fi
 
     # Corpus directory layout per ADR-0007.
@@ -319,7 +319,7 @@ if grep -q '^- \*\*M5 — delivered.\*\*' "docs/agent/modules/translator.md"; th
         "ParserError"
     )
     m5_dateutil_files=(
-        "docs/agent/modules/dateutil.md"
+        "docs/agent/modules/molt.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -343,9 +343,9 @@ if grep -q '^- \*\*M5 — delivered.\*\*' "docs/agent/modules/translator.md"; th
     fi
 
     # PROVENANCE.toml must exist on the generated dateutil crate.
-    if [[ -d crates/cobrust-dateutil ]]; then
-        [[ -f crates/cobrust-dateutil/PROVENANCE.toml ]] \
-            || fail "crates/cobrust-dateutil/PROVENANCE.toml missing"
+    if [[ -d crates/cobrust-molt ]]; then
+        [[ -f crates/cobrust-molt/PROVENANCE.toml ]] \
+            || fail "crates/cobrust-molt/PROVENANCE.toml missing"
     fi
 
     # Corpus directory layout per ADR-0007 (extended for M5 dependents).
@@ -398,7 +398,7 @@ if grep -q '^- \*\*M6 — delivered.\*\*' "docs/agent/modules/translator.md"; th
         "unpack_uint_cython"
     )
     m6_msgpack_files=(
-        "docs/agent/modules/msgpack.md"
+        "docs/agent/modules/scale.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -422,8 +422,8 @@ if grep -q '^- \*\*M6 — delivered.\*\*' "docs/agent/modules/translator.md"; th
     fi
 
     # PROVENANCE.toml must exist on the generated msgpack crate.
-    if [[ -d crates/cobrust-msgpack ]]; then
-        [[ -f crates/cobrust-msgpack/PROVENANCE.toml ]]             || fail "crates/cobrust-msgpack/PROVENANCE.toml missing"
+    if [[ -d crates/cobrust-scale ]]; then
+        [[ -f crates/cobrust-scale/PROVENANCE.toml ]]             || fail "crates/cobrust-scale/PROVENANCE.toml missing"
     fi
 
     # Corpus directory layout per ADR-0010.
@@ -477,7 +477,7 @@ if grep -q '^- \*\*M7.0 — delivered.\*\*' "docs/agent/modules/translator.md"; 
         "ndarray"
     )
     m7_0_numpy_files=(
-        "docs/agent/modules/numpy.md"
+        "docs/agent/modules/coil.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -501,9 +501,9 @@ if grep -q '^- \*\*M7.0 — delivered.\*\*' "docs/agent/modules/translator.md"; 
     fi
 
     # PROVENANCE.toml must exist on the generated numpy crate.
-    if [[ -d crates/cobrust-numpy ]]; then
-        [[ -f crates/cobrust-numpy/PROVENANCE.toml ]] \
-            || fail "crates/cobrust-numpy/PROVENANCE.toml missing"
+    if [[ -d crates/cobrust-coil ]]; then
+        [[ -f crates/cobrust-coil/PROVENANCE.toml ]] \
+            || fail "crates/cobrust-coil/PROVENANCE.toml missing"
     fi
 
     # Corpus directory layout per ADR-0013.
@@ -522,7 +522,7 @@ echo "doc-coverage: M0 + M1 + M2 + M4 + M5 + M6 + M7.0 + M7.1 + M7.2 + M7.3 + M7
 # + promotion surface terms + ADR-0014 anchors must appear in all three
 # doc trees.
 
-if grep -q '^- \*\*M7.1 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
+if grep -q '^- \*\*M7.1 — delivered.\*\*' "docs/agent/modules/coil.md"; then
     m7_1_numpy_terms=(
         "add"
         "sub"
@@ -543,7 +543,7 @@ if grep -q '^- \*\*M7.1 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
         "ADR-0014"
     )
     m7_1_numpy_files=(
-        "docs/agent/modules/numpy.md"
+        "docs/agent/modules/coil.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -576,7 +576,7 @@ echo "doc-coverage: M7.1 ufunc surface checks passed"
 # When the numpy module declares M7.2 delivered, the indexing + view + np.where
 # surface terms + ADR-0015 anchors must appear in all three doc trees.
 
-if grep -q '^- \*\*M7.2 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
+if grep -q '^- \*\*M7.2 — delivered.\*\*' "docs/agent/modules/coil.md"; then
     m7_2_numpy_terms=(
         "Index"
         "SliceSpec"
@@ -592,7 +592,7 @@ if grep -q '^- \*\*M7.2 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
         "ADR-0015"
     )
     m7_2_numpy_files=(
-        "docs/agent/modules/numpy.md"
+        "docs/agent/modules/coil.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -624,7 +624,7 @@ echo "doc-coverage: M7.2 indexing surface checks passed"
 # When the numpy module declares M7.3 delivered, the reduction surface
 # terms + ADR-0016 anchors must appear in all three doc trees.
 
-if grep -q '^- \*\*M7.3 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
+if grep -q '^- \*\*M7.3 — delivered.\*\*' "docs/agent/modules/coil.md"; then
     m7_3_numpy_terms=(
         "sum"
         "prod"
@@ -641,7 +641,7 @@ if grep -q '^- \*\*M7.3 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
         "ADR-0016"
     )
     m7_3_numpy_files=(
-        "docs/agent/modules/numpy.md"
+        "docs/agent/modules/coil.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -673,7 +673,7 @@ echo "doc-coverage: M7.3 reduction surface checks passed"
 # When the numpy module declares M7.4 delivered, the linalg surface
 # terms + ADR-0017 anchors must appear in all three doc trees.
 
-if grep -q '^- \*\*M7.4 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
+if grep -q '^- \*\*M7.4 — delivered.\*\*' "docs/agent/modules/coil.md"; then
     m7_4_numpy_terms=(
         "matmul"
         "dot"
@@ -693,7 +693,7 @@ if grep -q '^- \*\*M7.4 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
         "ADR-0017"
     )
     m7_4_numpy_files=(
-        "docs/agent/modules/numpy.md"
+        "docs/agent/modules/coil.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -725,7 +725,7 @@ echo "doc-coverage: M7.4 linalg surface checks passed"
 # When the numpy module declares M7.5 delivered, the random surface
 # terms + ADR-0018 anchors must appear in all three doc trees.
 
-if grep -q '^- \*\*M7.5 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
+if grep -q '^- \*\*M7.5 — delivered.\*\*' "docs/agent/modules/coil.md"; then
     m7_5_numpy_terms=(
         "Generator"
         "default_rng"
@@ -741,7 +741,7 @@ if grep -q '^- \*\*M7.5 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
         "ADR-0018"
     )
     m7_5_numpy_files=(
-        "docs/agent/modules/numpy.md"
+        "docs/agent/modules/coil.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -772,7 +772,7 @@ echo "doc-coverage: M7.5 random surface checks passed"
 # When the requests module declares M-batch delivered, the public-surface
 # terms + ADR-0022 anchors must appear in all three doc trees.
 
-if grep -q '^- \*\*M-batch — delivered.\*\*' "docs/agent/modules/requests.md"; then
+if grep -q '^- \*\*M-batch — delivered.\*\*' "docs/agent/modules/strike.md"; then
     mb_requests_terms=(
         "Session"
         "Response"
@@ -783,7 +783,7 @@ if grep -q '^- \*\*M-batch — delivered.\*\*' "docs/agent/modules/requests.md";
         "ADR-0022"
     )
     mb_requests_files=(
-        "docs/agent/modules/requests.md"
+        "docs/agent/modules/strike.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -802,7 +802,7 @@ echo "doc-coverage: M-batch requests surface checks passed"
 # When the numpy module declares M7.6 delivered, the M7.6 expansion surface
 # terms + ADR-0021 anchors must appear in all three doc trees.
 
-if grep -q '^- \*\*M7.6 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
+if grep -q '^- \*\*M7.6 — delivered.\*\*' "docs/agent/modules/coil.md"; then
     m7_6_numpy_terms=(
         "Complex64"
         "Complex128"
@@ -826,7 +826,7 @@ if grep -q '^- \*\*M7.6 — delivered.\*\*' "docs/agent/modules/numpy.md"; then
         "ADR-0021"
     )
     m7_6_numpy_files=(
-        "docs/agent/modules/numpy.md"
+        "docs/agent/modules/coil.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -883,12 +883,12 @@ if grep -q '^- \*\*M8 — delivered.\*\*' "docs/agent/modules/mir.md"; then
     [[ -d corpus/requests/harness ]] || fail "corpus/requests/harness missing"
     [[ -f corpus/requests/perf.toml ]] || fail "corpus/requests/perf.toml missing"
 
-    if [[ -d crates/cobrust-requests ]]; then
-        [[ -f crates/cobrust-requests/PROVENANCE.toml ]]             || fail "crates/cobrust-requests/PROVENANCE.toml missing"
+    if [[ -d crates/cobrust-strike ]]; then
+        [[ -f crates/cobrust-strike/PROVENANCE.toml ]]             || fail "crates/cobrust-strike/PROVENANCE.toml missing"
     fi
 fi
 
-if grep -q '^- \*\*M-batch — delivered.\*\*' "docs/agent/modules/click.md"; then
+if grep -q '^- \*\*M-batch — delivered.\*\*' "docs/agent/modules/hood.md"; then
     mb_click_terms=(
         "Command"
         "OptionSpec"
@@ -900,7 +900,7 @@ if grep -q '^- \*\*M-batch — delivered.\*\*' "docs/agent/modules/click.md"; th
         "ADR-0022"
     )
     mb_click_files=(
-        "docs/agent/modules/click.md"
+        "docs/agent/modules/hood.md"
         "docs/human/en/architecture.md"
         "docs/human/zh/architecture.md"
     )
@@ -919,8 +919,8 @@ if grep -q '^- \*\*M-batch — delivered.\*\*' "docs/agent/modules/click.md"; th
     [[ -d corpus/click/harness ]] || fail "corpus/click/harness missing"
     [[ -f corpus/click/perf.toml ]] || fail "corpus/click/perf.toml missing"
 
-    if [[ -d crates/cobrust-click ]]; then
-        [[ -f crates/cobrust-click/PROVENANCE.toml ]]             || fail "crates/cobrust-click/PROVENANCE.toml missing"
+    if [[ -d crates/cobrust-hood ]]; then
+        [[ -f crates/cobrust-hood/PROVENANCE.toml ]]             || fail "crates/cobrust-hood/PROVENANCE.toml missing"
     fi
 
     # Verify the L3 closure files exist with non-skipped pendulum + non-deferred pyspark.

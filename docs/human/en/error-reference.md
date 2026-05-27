@@ -240,7 +240,7 @@ with a `cobrust report-bug` hint instead of the raw IR dump.
 The translated ecosystem crates enforce safety limits on untrusted input. These
 errors are returned as `Result::Err` — they never panic or abort the process.
 
-### `cobrust-tomli` — `TomliError`
+### `cobrust-nest` — `TomliError`
 
 | Condition | Error message | Why |
 |---|---|---|
@@ -248,9 +248,9 @@ errors are returned as `Result::Err` — they never panic or abort the process.
 | Invalid syntax | `"unexpected character '…' at pos N"` | Standard parse error. |
 | Unterminated string | `"unterminated string"` | Standard parse error. |
 
-**Constant**: `cobrust_tomli::MAX_DEPTH = 100` (exported; callers can reference it).
+**Constant**: `nest::MAX_DEPTH = 100` (exported; callers can reference it).
 
-### `cobrust-requests` — `HttpError` / `HttpErrorKind`
+### `cobrust-strike` — `HttpError` / `HttpErrorKind`
 
 | `HttpErrorKind` | Meaning | Action |
 |---|---|---|
@@ -260,9 +260,9 @@ errors are returned as `Result::Err` — they never panic or abort the process.
 | `DecodeBody` | Response body is not valid UTF-8 or JSON | Check server's `Content-Type`. |
 | `BodyTooLarge` | Response body exceeded 64 MiB cap | The server sent too much data; use streaming or raise the cap (B5 fix). |
 
-**Constant**: `cobrust_requests::MAX_BODY_BYTES = 64 * 1024 * 1024` (64 MiB).
+**Constant**: `strike::MAX_BODY_BYTES = 64 * 1024 * 1024` (64 MiB).
 
-### `cobrust-msgpack` — `MsgError` / `MsgErrorKind`
+### `cobrust-scale` — `MsgError` / `MsgErrorKind`
 
 | `MsgErrorKind` | Meaning | Action |
 |---|---|---|

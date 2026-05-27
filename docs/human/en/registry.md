@@ -30,7 +30,7 @@ to select the best wheel for their host CPU.
       "triple": "x86_64-unknown-linux-gnu",
       "cpu_level": "v3",
       "sha256": "a1b2c3...",
-      "url": "https://github.com/.../cobrust-numpy-0.1.0-x86_64-unknown-linux-gnu-v3.tar.gz",
+      "url": "https://github.com/.../cobrust-coil-0.1.0-x86_64-unknown-linux-gnu-v3.tar.gz",
       "size": 4194304
     }
   ]

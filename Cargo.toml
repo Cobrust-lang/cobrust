@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/cobrust-cli",
-    "crates/cobrust-dateutil",
+    "crates/cobrust-molt",
     "crates/cobrust-frontend",
     "crates/cobrust-hir",
     "crates/cobrust-mir",
@@ -10,15 +10,15 @@ members = [
     "crates/cobrust-codegen",
     "crates/cobrust-jit",
     "crates/cobrust-llm-router",
-    "crates/cobrust-msgpack",
+    "crates/cobrust-scale",
     "crates/cobrust-pkg",
-    "crates/cobrust-tomli",
-    "crates/cobrust-numpy",
+    "crates/cobrust-nest",
+    "crates/cobrust-coil",
     "crates/cobrust-stdlib",
     "crates/cobrust-translator",
-    "crates/cobrust-requests",
-    "crates/cobrust-sqlite3",
-    "crates/cobrust-click",
+    "crates/cobrust-strike",
+    "crates/cobrust-den",
+    "crates/cobrust-hood",
     "crates/cobrust-types-parity",
     "crates/cobrust-types-cb",
     "crates/cobrust-lsp",
@@ -85,7 +85,7 @@ tokio = { version = "1.40", features = [
 ] }
 futures = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
-# v0.7.0 Stream Z.7.c — `cobrust-sqlite3` PEP 249 surface backend.
+# v0.7.0 Stream Z.7.c — `cobrust-den` (translated sqlite3) PEP 249 surface backend.
 # `bundled` compiles libsqlite3 from source so no system libsqlite3 is
 # required (deterministic build, CI-portable per F40/F44 discipline).
 # Z.0.b was slated to pin this in the workspace audit; landed here with

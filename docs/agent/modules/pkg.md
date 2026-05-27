@@ -91,7 +91,7 @@ license = "Apache-2.0 OR MIT"            # optional
 description = "Short description"        # optional
 
 [dependencies]
-cobrust-tomli = { path = "../cobrust-tomli" }                           # path
+cobrust-nest = { path = "../cobrust-nest" }                           # path
 my_lib       = { git = "https://...", rev = "abc123" }                  # git
 serde-like   = "1.2"                                                    # registry
 
@@ -136,9 +136,9 @@ manifest_hash = "blake3:<hex>"
 lockfile_version = 1
 
 [[package]]
-name = "cobrust-tomli"
+name = "cobrust-nest"
 version = "2.0.1"
-source = "path+file:///abs/path/to/cobrust-tomli"
+source = "path+file:///abs/path/to/cobrust-nest"
 hash = "blake3:39e9e2d3..."
 provenance_hash = "blake3:39e9e2d3..."
 dependencies = ["serde-like 1.2.3"]
@@ -148,7 +148,7 @@ name = "my_app"
 version = "0.1.0"
 source = "path+file:///abs/path/to/my_app"
 hash = "blake3:root"
-dependencies = ["cobrust-tomli 2.0.1"]
+dependencies = ["cobrust-nest 2.0.1"]
 ```
 
 ### Determinism contract
@@ -191,7 +191,7 @@ solver replaces the strategy without breaking the public surface.
 ```text
 ~/.cobrust/registry/
 ├── blake3/
-│   ├── 39e9e2d3...0069/      # cobrust-tomli 2.0.1
+│   ├── 39e9e2d3...0069/      # cobrust-nest 2.0.1
 │   │   ├── cobrust.toml
 │   │   ├── PROVENANCE.toml   # ADR-0007 chain-of-custody
 │   │   └── src/...
