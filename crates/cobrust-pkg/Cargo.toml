@@ -20,7 +20,6 @@ toml        = { workspace = true }
 thiserror   = { workspace = true }
 tracing     = { workspace = true }
 blake3      = { workspace = true }
-hex         = { workspace = true }
 semver      = { workspace = true }
 flate2      = { workspace = true }
 tar         = { workspace = true }

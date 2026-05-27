@@ -397,7 +397,6 @@ version = "0.6.2"
 dependencies = [
  "clap",
  "pyo3",
- "tempfile",
 ]
 
 [[package]]
@@ -423,8 +422,6 @@ dependencies = [
 name = "cobrust-dap"
 version = "0.6.2"
 dependencies = [
- "cobrust-frontend",
- "cobrust-types",
  "insta",
  "regex",
  "serde",
@@ -494,7 +491,6 @@ dependencies = [
  "async-trait",
  "blake3",
  "futures",
- "hex",
  "rand 0.8.6",
  "reqwest",
  "serde",
@@ -551,7 +547,6 @@ version = "0.6.2"
 dependencies = [
  "pyo3",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -577,7 +572,6 @@ version = "0.6.2"
 dependencies = [
  "blake3",
  "flate2",
- "hex",
  "reqwest",
  "semver",
  "serde",
@@ -608,7 +602,6 @@ dependencies = [
  "pyo3",
  "reqwest",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -682,7 +675,6 @@ dependencies = [
  "cobrust-frontend",
  "cobrust-hir",
  "cobrust-types",
- "insta",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
