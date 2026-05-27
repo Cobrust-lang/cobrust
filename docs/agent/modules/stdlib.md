@@ -330,6 +330,61 @@ Decision references (spike `m-ai-2-cobrust-tool-spike.md` + ADR-0048 §M-AI.2):
 - **Deferred future surface**: `@cobrust.tool.expose`, function `.schema()`, `cobrust.tool.Registry`, `registry.register(...)`, arbitrary user-function reflection/invocation, dict-literal args, and JSON-to-typed-Cobrust decoding are not implemented in M-AI.2 α.
 - **Error surface**: all five helpers return `""` on malformed JSON, invalid schema, unknown tool, router failure, or unavailable feature, matching M-AI.0/M-AI.1 α convention.
 
+### `std.json` (v0.7.0 Z.5 — network-backend roadmap §4.1 JSON row)
+
+`@py_compat(semantic)`. Python-`json`-compatible encode/decode, HYBRID
+surface (native binding + LLM-first surface) over `serde_json`. Reuses the
+internal `serde_json::Value` precedent from `std.tool`.
+
+```rust
+// Rust-side typed surface:
+pub enum Error { Parse(String) }                 // §2.2: Result, not exceptions
+pub fn loads(s: &str) -> Result<Value, Error>;   // parse to serde_json::Value
+pub fn dumps(value: &Value) -> String;           // CPython-exact compact
+pub fn dumps_indent(value: &Value, indent: usize) -> String; // CPython indent= parity
+
+// Rust-side str->str helpers (what the .cb surface binds onto):
+pub fn loads_str(s: &str) -> String;             // validate + canonicalize; "" on error
+pub fn dumps_str(json_input: &str) -> String;    // "" on malformed input
+pub fn dumps_str_indent(json_input: &str, indent: usize) -> String;
+
+// C ABI (cobrust-cli intrinsic-rewrite pass + PRELUDE stubs target these):
+pub unsafe extern "C" fn __cobrust_json_dumps(json_input: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_json_dumps_indent(json_input: *mut u8, indent: i64) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_json_loads(s: *mut u8) -> *mut u8;
+```
+
+- **Surface shape**: `str -> str`. Cobrust has no dynamic `value` type, so the
+  `.cb` surface is string-to-string (one JSON document in, canonical form out),
+  exactly the `std.tool` shim shape. `json_dumps(s)` parses then re-emits
+  CPython-canonical; `json_loads(s)` validates + canonicalizes; `json_dumps_indent(s, n)`
+  is the `indent=` stretch surface.
+- **CPython 3.11 parity (matched)**: default separators `", "` (item) / `": "`
+  (key) — NOT serde_json's compact `,`/`:`; `ensure_ascii=True` (`\uXXXX` escapes,
+  surrogate pairs for astral code points); integer-valued floats render `3.0`;
+  `indent=N` collapses item separator to `,` and keeps empty containers inline.
+- **`semantic`-tier divergences (declared per §2.4)**:
+  1. **Object key order** — serde_json default `Map` is a `BTreeMap` → keys come
+     out *alphabetically sorted*; CPython preserves insertion order. Closing this
+     needs serde_json `preserve_order` (workspace-wide blast radius on `tool.rs`),
+     deferred out of Z.5.
+  2. **Float formatting** — Rust `{}` (Ryū/Grisu) vs CPython `dtoa`; differs only
+     in pathological last-digit ties.
+- **Error surface (§2.2)**: typed `loads` returns `Err(Error::Parse(msg))`,
+  never panics. The `str` shims return `""` on malformed input (α empty-string
+  sentinel, matching `std.tool`).
+- **Tests**: `crates/cobrust-stdlib/src/json.rs` `#[cfg(test)]` — value-type matrix
+  (null/bool/int/float/str/unicode/empty+nested list+dict), CPython-exact
+  differential corpus (oracle = CPython stdlib `json`), `indent=` parity, escape
+  edge cases, surrogate pairs, and a 1500-input reproducible-LCG differential
+  round-trip fuzz (§4.2 ≥1000 inputs).
+- **Codegen status (honest debt)**: the PRELUDE stubs (`json_dumps` /
+  `json_dumps_indent` / `json_loads`) + cli intrinsic-rewrite arms are wired, but
+  the LLVM/Cranelift extern declaration for the three `__cobrust_json_*` symbols
+  is owned by the codegen Stream X.3 sprint (`llvm_backend.rs` declares each
+  intrinsic symbol explicitly). Until that lands the `.cb` source surface
+  parses + type-checks but is not lowered, so no E2E `.cb` test ships yet.
+
 ### `std.collections`
 
 ```rust

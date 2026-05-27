@@ -39,6 +39,9 @@
 //!   upper / format helpers.
 //! - [`math`] — sqrt / pow / sin / cos / abs / floor / ceil / round
 //!   plus PI / E constants.
+//! - [`json`] (v0.7.0 Z.5) — `dumps` / `loads` Python-`json`-compatible
+//!   encode/decode over `serde_json`. HYBRID surface per the v0.7.0
+//!   network-backend roadmap §4.1; `@py_compat(semantic)`.
 //! - [`panic`] — panic / assert; runtime ABI for codegen.
 //! - [`env`] — args / var.
 //! - [`fmt`] — f-string formatting helpers.
@@ -100,6 +103,7 @@ pub mod env;
 pub mod fmt;
 pub mod io;
 pub mod iter;
+pub mod json;
 pub mod math;
 pub mod panic;
 pub mod prompt;
