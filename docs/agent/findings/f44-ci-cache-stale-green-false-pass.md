@@ -112,5 +112,28 @@ deferred to a paired sprint with the audit upgrade since both follow the same
 F37-debt-resolution pattern.
 
 **Action items**:
-- ADR-TBD: PyO3 0.22.6 → 0.24.1 upgrade across cobrust-{requests,numpy,msgpack,dateutil,click}
-- After ADR-TBD lands clean: re-run baseline checks, promote both jobs blocking, ratify F44.
+- ~~ADR-TBD: PyO3 0.22.6 → 0.24.1 upgrade across cobrust-{requests,numpy,msgpack,dateutil,click}~~ **DONE** (see §7.2)
+- After upgrade lands clean: re-run baseline checks, promote both jobs blocking, ratify F44. — `cargo-audit` promotion: see §7.2; `cargo-udeps` still pending nightly toolchain.
+
+### §7.2 pyo3 blocker RESOLVED 2026-05-27
+
+The §7.1 pyo3 upgrade landed in commit `41fbef3` (`fix(deps): upgrade pyo3 0.22 ->
+0.24.2`). All 5 wrapping crates moved to pyo3 **0.24.2** (≥ 0.24.1 fix threshold).
+
+Decision: targeted **0.24.2** (latest 0.24.x, minimum-safe) rather than dora-aligned
+0.28 — smallest API delta from 0.22, keeps the security fix low-risk for a P0. The
+msgpack `&PyAny` gil-ref → `&Bound<'_, PyAny>` migration plus `IntoPy::into_py` →
+`IntoPyObject` and `*_bound` → `*` renames were required regardless of 0.24-vs-0.28
+target (gil-refs removal predates both); 0.28 adds only further `IntoPyObject`
+strictness, deferrable to a future dora-cb integration sprint.
+
+Verification at `41fbef3`:
+- `cargo audit` → **count=0** (JSON verdict); RUSTSEC-2025-0020 no longer present.
+- `cargo check --features pyo3` clean for all 5 crates (0 errors, 0 deprecation warns).
+- Default-feature tests PASS for all 5 crates; workspace clippy `-D warnings` clean; fmt clean.
+
+**RUSTSEC-2025-0020 is the blocker that aborted the §7.1 cargo-audit promotion. It is
+now CLEARED.** `cargo-audit` CAN be promoted from `continue-on-error: true` to blocking.
+Promotion queued as a separate follow-up (kept off this security commit to keep the
+diff scoped); `cargo-udeps` promotion still blocked on local nightly toolchain
+(unchanged from §7.1).
