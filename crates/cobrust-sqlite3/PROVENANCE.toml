@@ -1,0 +1,63 @@
+[source]
+library = "sqlite3"
+# CPython stdlib module version (sqlite3.version) used as the oracle.
+version = "3.11"
+# The DB-API 2.0 surface translated; backend bound to rusqlite.
+backend = "rusqlite 0.32 (bundled libsqlite3)"
+file_count = 4
+
+[oracle]
+runtime = "cpython"
+runtime_version = "3.11"
+oracle_module = "sqlite3"
+# Differential expectations were captured from CPython sqlite3 (qmark
+# paramstyle) and hardcoded in tests/sqlite3_downstream.rs with `oracle:`
+# comments recording each exact CPython output. The DB-API 2.0 surface
+# under test is identical across every CPython 3.x.
+
+[verification]
+seeds = [42, 1337, 3735928559]
+fuzz_inputs_per_fn = 1000
+# @py_compat tier: `semantic`. The surface preserves PEP 249 DB-API 2.0
+# behaviour and SQLite's five-storage-class type mapping, but it is not
+# `strict` byte-for-byte parity (see divergences below).
+py_compat = "semantic"
+divergences = [
+    "Eager result-set materialization: a SELECT's rows are fully read into an owned Vec at execute() time, whereas CPython's sqlite3 fetches lazily. Observationally identical for fetchone/fetchmany/fetchall/iteration; differs only for extremely large result sets (memory) and for mid-iteration concurrent writes (not a supported pattern).",
+    "Errors are returned as Result::Err(SqliteError) with a closed SqliteErrorKind taxonomy, not raised as the sqlite3 exception hierarchy (constitution §2.2). Kind mapping: OperationalError/ProgrammingError(SQL) -> Sql; IntegrityError -> Constraint; ProgrammingError(param count) -> Parameter; connect failure -> CannotOpen.",
+    "Rows are positional (Row::get(index) / Row::cells()); the sqlite3.Row name-mapping factory and row_factory hook are out of scope for Z.7.c.",
+    "Text cells with non-utf8 bytes are decoded lossily (matching sqlite3's default text_factory=str utf-8-with-replacement) rather than erroring.",
+    "Connection.commit()/rollback() treat the 'no transaction is active' backend message as a benign no-op, matching sqlite3's tolerant autocommit commit.",
+]
+known_failures = []
+
+[router]
+# Translation was synthetic-LLM (hand-authored to the PEP 249 spec, not
+# produced by the closed-loop production pipeline), consistent with the
+# ecosystem-batch precedent (cobrust-requests B8 demote). Real-LLM
+# pipeline rerun is queued for a later phase.
+strategy = "synthetic-llm"
+models_used = ["synthetic:sqlite3-pep249-v1"]
+ledger_entries = 0
+notes = "Translation was synthetic-LLM; real-LLM pipeline rerun pending."
+
+[build]
+toolchain = "rustc 1.94.1"
+deterministic_id = "synthetic:hand-authored"
+crate_layout_version = 1
+
+[gates]
+l0_spec_emitted = true
+l1_files_emitted = 4
+l2_build = "pass (cargo build -p cobrust-sqlite3 zero warnings)"
+l2_behavior = "pass (tests/sqlite3_downstream.rs CPython-oracle differential + tests/sqlite3_fuzz.rs seeded round-trip fuzz >= 1000 inputs/fn across 3 seeds)"
+l2_perf = "pass (surface-translate / Rust-binding tier per ADR-0022 §6; binding overhead negligible — rusqlite/libsqlite3 is the perf reference)"
+l3_pyo3_wrapper = "pass (tests/sqlite3_pyo3_compiles.rs); --features pyo3 build path per ADR-0011 + ADR-0022"
+l3_downstream_dependents = "deferred — first DB connector of the v0.7.0 Z.7 stream; downstream ORMs (sqlalchemy/peewee) widen once the .cb-source intrinsic wiring lands"
+
+[gates.dependents]
+covered = []
+deferred = ["sqlalchemy", "peewee", "django-orm"]
+deferred_reason = "v0.7.0 Z.7.c ships the minimum DB connector surface; downstream ORM dependents widen after the .cb-language extern wiring follow-on"
+skipped = []
+skipped_reason = ""

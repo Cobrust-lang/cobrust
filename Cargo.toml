@@ -17,6 +17,7 @@ members = [
     "crates/cobrust-stdlib",
     "crates/cobrust-translator",
     "crates/cobrust-requests",
+    "crates/cobrust-sqlite3",
     "crates/cobrust-click",
     "crates/cobrust-types-parity",
     "crates/cobrust-types-cb",
@@ -84,6 +85,12 @@ tokio = { version = "1.40", features = [
 ] }
 futures = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+# v0.7.0 Stream Z.7.c — `cobrust-sqlite3` PEP 249 surface backend.
+# `bundled` compiles libsqlite3 from source so no system libsqlite3 is
+# required (deterministic build, CI-portable per F40/F44 discipline).
+# Z.0.b was slated to pin this in the workspace audit; landed here with
+# the first DB-connector crate since the audit had not reached this branch.
+rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 blake3 = "1.5"
 hex = "0.4"
