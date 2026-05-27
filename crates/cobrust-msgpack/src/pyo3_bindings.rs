@@ -20,11 +20,11 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use crate::{MsgValue, pack_to_vec, unpack as native_unpack};
 
 #[pyfunction]
-fn pack(py: Python<'_>, obj: &PyAny) -> PyResult<Py<PyBytes>> {
+fn pack(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Py<PyBytes>> {
     let value = py_to_msg(obj)?;
     let bytes =
         pack_to_vec(&value).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))?;
-    Ok(PyBytes::new_bound(py, &bytes).unbind())
+    Ok(PyBytes::new(py, &bytes).unbind())
 }
 
 #[pyfunction]
@@ -34,7 +34,7 @@ fn unpack(py: Python<'_>, data: &[u8]) -> PyResult<PyObject> {
     msg_to_py(py, &value)
 }
 
-fn py_to_msg(obj: &PyAny) -> PyResult<MsgValue> {
+fn py_to_msg(obj: &Bound<'_, PyAny>) -> PyResult<MsgValue> {
     if obj.is_none() {
         return Ok(MsgValue::Nil);
     }
@@ -59,14 +59,14 @@ fn py_to_msg(obj: &PyAny) -> PyResult<MsgValue> {
     if let Ok(list) = obj.downcast::<PyList>() {
         let mut items: Vec<MsgValue> = Vec::with_capacity(list.len());
         for item in list.iter() {
-            items.push(py_to_msg(item.as_gil_ref())?);
+            items.push(py_to_msg(&item)?);
         }
         return Ok(MsgValue::Array(items));
     }
     if let Ok(tuple) = obj.downcast::<PyTuple>() {
         let mut items: Vec<MsgValue> = Vec::with_capacity(tuple.len());
         for item in tuple.iter() {
-            items.push(py_to_msg(item.as_gil_ref())?);
+            items.push(py_to_msg(&item)?);
         }
         return Ok(MsgValue::Array(items));
     }
@@ -74,7 +74,7 @@ fn py_to_msg(obj: &PyAny) -> PyResult<MsgValue> {
         let mut items: Vec<(String, MsgValue)> = Vec::with_capacity(dict.len());
         for (k, v) in dict.iter() {
             let key: String = k.extract()?;
-            items.push((key, py_to_msg(v.as_gil_ref())?));
+            items.push((key, py_to_msg(&v)?));
         }
         return Ok(MsgValue::Map(items));
     }
@@ -86,25 +86,25 @@ fn py_to_msg(obj: &PyAny) -> PyResult<MsgValue> {
 fn msg_to_py(py: Python<'_>, value: &MsgValue) -> PyResult<PyObject> {
     match value {
         MsgValue::Nil => Ok(py.None()),
-        MsgValue::Bool(b) => Ok(b.into_py(py)),
-        MsgValue::Int(i) => Ok(i.into_py(py)),
-        MsgValue::UInt(u) => Ok(u.into_py(py)),
-        MsgValue::Float(f) => Ok(f.into_py(py)),
-        MsgValue::Str(s) => Ok(s.into_py(py)),
-        MsgValue::Bin(b) => Ok(PyBytes::new_bound(py, b).unbind().into_py(py)),
+        MsgValue::Bool(b) => Ok(b.into_pyobject(py)?.to_owned().into_any().unbind()),
+        MsgValue::Int(i) => Ok(i.into_pyobject(py)?.into_any().unbind()),
+        MsgValue::UInt(u) => Ok(u.into_pyobject(py)?.into_any().unbind()),
+        MsgValue::Float(f) => Ok(f.into_pyobject(py)?.into_any().unbind()),
+        MsgValue::Str(s) => Ok(s.into_pyobject(py)?.into_any().unbind()),
+        MsgValue::Bin(b) => Ok(PyBytes::new(py, b).into_any().unbind()),
         MsgValue::Array(items) => {
-            let list = PyList::empty_bound(py);
+            let list = PyList::empty(py);
             for v in items {
                 list.append(msg_to_py(py, v)?)?;
             }
-            Ok(list.unbind().into_py(py))
+            Ok(list.into_any().unbind())
         }
         MsgValue::Map(items) => {
-            let dict = PyDict::new_bound(py);
+            let dict = PyDict::new(py);
             for (k, v) in items {
                 dict.set_item(k, msg_to_py(py, v)?)?;
             }
-            Ok(dict.unbind().into_py(py))
+            Ok(dict.into_any().unbind())
         }
     }
 }

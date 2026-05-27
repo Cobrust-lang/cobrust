@@ -29,7 +29,7 @@ fn parse_dtype(s: &str) -> PyResult<Dtype> {
 }
 
 fn array_to_pydict<'py>(py: Python<'py>, arr: &Array) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new_bound(py);
+    let dict = PyDict::new(py);
     dict.set_item("dtype", arr.dtype().to_rust_variant_name())?;
     dict.set_item("shape", arr.shape())?;
     let data = arr.to_json()["data"].clone();

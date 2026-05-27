@@ -31,7 +31,7 @@ serde_json = { workspace = true }
 # runtime, per ADR-0019, after which the public surface here can flip
 # to the runtime-driven path without breaking callers).
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
-pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.24.2", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.10"

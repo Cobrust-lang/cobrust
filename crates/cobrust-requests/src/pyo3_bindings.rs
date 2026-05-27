@@ -18,16 +18,16 @@ use pyo3::types::{PyBytes, PyDict};
 use crate::{HttpError, Session};
 
 fn response_to_py(py: Python<'_>, resp: crate::Response) -> PyResult<PyObject> {
-    let dict = PyDict::new_bound(py);
+    let dict = PyDict::new(py);
     dict.set_item("status", resp.status_code())?;
-    let headers_py = PyDict::new_bound(py);
+    let headers_py = PyDict::new(py);
     for (k, v) in resp.headers() {
         headers_py.set_item(k, v)?;
     }
     dict.set_item("headers", headers_py)?;
     let body = resp.bytes();
-    dict.set_item("body", PyBytes::new_bound(py, &body))?;
-    Ok(dict.unbind().into_py(py))
+    dict.set_item("body", PyBytes::new(py, &body))?;
+    Ok(dict.into_any().unbind())
 }
 
 fn http_err_to_py(err: HttpError) -> PyErr {

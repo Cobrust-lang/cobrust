@@ -23,6 +23,6 @@ pyo3 = ["dep:pyo3"]
 
 [dependencies]
 serde_json = { workspace = true }
-pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.24.2", features = ["extension-module"], optional = true }
 
 [dev-dependencies]

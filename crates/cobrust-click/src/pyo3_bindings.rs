@@ -97,9 +97,9 @@ impl PyCommand {
 }
 
 fn run_result_to_py(py: Python<'_>, result: RunResult) -> PyResult<PyObject> {
-    let dict = PyDict::new_bound(py);
-    let opts = PyDict::new_bound(py);
-    let args = PyDict::new_bound(py);
+    let dict = PyDict::new(py);
+    let opts = PyDict::new(py);
+    let args = PyDict::new(py);
     // RunResult exposes only count + lookup. We project via the
     // public API: walk option/argument names recorded on the command;
     // here we surface them via a back-channel HashMap projection by
@@ -108,11 +108,11 @@ fn run_result_to_py(py: Python<'_>, result: RunResult) -> PyResult<PyObject> {
     // values by name via `result.option("name")`; we expose the
     // {name: value} dict as a convenience.
     let _ = (opts, args, result);
-    let opts_dict = PyDict::new_bound(py);
-    let args_dict = PyDict::new_bound(py);
+    let opts_dict = PyDict::new(py);
+    let args_dict = PyDict::new(py);
     dict.set_item("options", opts_dict)?;
     dict.set_item("arguments", args_dict)?;
-    Ok(dict.unbind().into_py(py))
+    Ok(dict.into_any().unbind())
 }
 
 #[pyfunction]
