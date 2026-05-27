@@ -1,8 +1,9 @@
 ---
 module_id: findings/f40
 title: Single-point-of-failure heavy-build host (DG dead 2026-05-20)
-status: filed
+status: resolved
 date_filed: 2026-05-20
+date_resolved: 2026-05-26
 related_findings: [f37-silent-rot-on-accepted-debt, f39-device-name-leakage-in-commits]
 related_memory: [feedback_heavy_build_offload_to_workstation.md, reference_x86_workstation.md]
 ---
@@ -65,8 +66,13 @@ abandonment — both are hygiene failures from over-reliance on a named private 
 
 ## §6 Status
 
-Filed 2026-05-20. Resolution adopted immediately (memory + spike doc updated in same
-session). No open action items.
+Filed 2026-05-20. Resolution policy adopted immediately (memory + spike doc updated in
+same session). **RESOLVED 2026-05-26** via Tier-B audit P2 batch fix-1: dead
+`.github/workflows/self-hosted-gates.yml` workflow deleted from repo. The orphaned
+workflow had referenced `[self-hosted, dg-workstation, cobrust-heavy, linux, x64]`
+runner labels for 6 days after DG abandonment — its presence risked confusing future
+contributors. All five jobs (fmt/clippy/build/test/doc-coverage) duplicate ci.yml on
+GH Actions hosted runners, so deletion is loss-free.
 
 Archaeology: `feedback_heavy_build_offload_to_workstation.md` + `reference_x86_workstation.md`
 preserve the DG history for root-cause archaeology.
