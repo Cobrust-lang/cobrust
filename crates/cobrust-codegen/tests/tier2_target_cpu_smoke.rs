@@ -1,8 +1,10 @@
 //! Tier-2 `--target-cpu` smoke tests.
 //!
 //! Validates:
-//! 1. `target_cpu = Some("native")` succeeds — LLVM auto-detects the host CPU
-//!    and emits an object; at least one symbol is present.
+//! 1. `target_cpu = Some("native")` succeeds — the backend expands `"native"`
+//!    to the host CPU name + host features (F58: LLVM's `create_target_machine`
+//!    does not itself resolve the literal `"native"`) and emits an object with
+//!    at least one symbol present.
 //! 2. `target_cpu = Some("skylake")` (or `"apple-m1"` on aarch64) succeeds.
 //!    Skipped when the named CPU is not recognized by the host LLVM build.
 //! 3. `target_cpu = Some("native")` + `runtime_dispatch = false` produces a

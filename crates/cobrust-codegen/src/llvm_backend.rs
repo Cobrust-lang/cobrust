@@ -660,7 +660,14 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
         None => ("generic".to_string(), String::new()),
     };
     target
-        .create_target_machine(&triple, &cpu, &features, opt, RelocMode::PIC, CodeModel::Default)
+        .create_target_machine(
+            &triple,
+            &cpu,
+            &features,
+            opt,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
         .ok_or_else(|| {
             CodegenError::LlvmError(format!(
                 "failed to create LLVM TargetMachine for {} (cpu={cpu})",
