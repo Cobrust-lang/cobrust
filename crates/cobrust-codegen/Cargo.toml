@@ -14,19 +14,16 @@ description = "Cobrust codegen — Cranelift (default) and LLVM (opt-in) backend
 workspace = true
 
 [features]
-# ADR-0070 §X.3 BLOCKED 2026-05-26 — the default flip to `["llvm"]`
-# was rolled back after the local workspace test sweep revealed
-# substantial LLVM `lower_aggregate` gaps for `List` and `FormatString`
-# variants (~30+ tests across f64_e2e + list_str_e2e + fstring corpora
-# silently relied on Cranelift's defensive lowering). See
-# `docs/agent/findings/f53-llvm-default-flip-aggregate-gap.md` for the
-# full surface inventory + the prerequisite sprint scope.
-#
-# Re-flip requires: LLVM backend implements `lower_aggregate(List)` +
-# `lower_aggregate(FormatString)` to at least feature parity with the
-# Cranelift backend's existing `lower_aggregate_format_string` (1882-2050)
-# + `lower_aggregate_list` (1653+).
-default = []
+# ADR-0070 §X.3 RATIFIED 2026-05-26 — LLVM is now the default backend.
+# Prior flip attempt (af474a9e) discovered 36-test silent regression in
+# `lower_aggregate(List | FormatString)` LLVM codegen, surfaced as F53.
+# F53 RESOLVED at 9967a4e + 9aec0fc (lower_aggregate impl + F45a §8
+# over-claim amendment). All 4 corpora that failed at the prior attempt
+# (cli_stdin_argv 15/15, f64_e2e 33/33, list_str_e2e 31/31,
+# fstring_user_fn_str_corpus 6/6) verified PASS via P10 ground-truth.
+# Opt-out via --no-default-features (Cranelift-only build), per ADR-0070
+# §6 Q2 option (a) — cobrust-jit JIT path retained for v0.8.x port.
+default = ["llvm"]
 # Optional LLVM backend; pulls in inkwell + system LLVM 18+.
 llvm = ["dep:inkwell"]
 # Use lld via -fuse-ld=lld for the linker delegate.

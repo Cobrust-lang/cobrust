@@ -632,11 +632,18 @@ fn p055_pow_of_two_count() {
 // --- Backend selection cases ---------------------------------------------
 
 #[test]
-fn p056_default_backend_is_cranelift() {
+fn p056_default_backend_follows_llvm_feature() {
+    // ADR-0070 §X.3 RATIFIED 2026-05-26: default_for_dev returns LLVM when
+    // the `llvm` feature is active (now the workspace default).
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
     let mut spec = host_object_spec("p056");
     spec.backend = Backend::default_for_dev();
-    assert_eq!(spec.backend, Backend::Cranelift);
+    let expected = if cfg!(feature = "llvm") {
+        Backend::Llvm
+    } else {
+        Backend::Cranelift
+    };
+    assert_eq!(spec.backend, expected);
     let _ = emit(&mir, spec).expect("emit");
 }
 

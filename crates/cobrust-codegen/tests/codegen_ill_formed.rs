@@ -399,9 +399,17 @@ fn ill_019_invalid_mir_dangling_in_terminator_call_destination() {
 // =====================================================================
 
 #[test]
-fn ill_020_default_backend_is_cranelift() {
-    assert_eq!(Backend::default(), Backend::Cranelift);
-    assert_eq!(Backend::default_for_dev(), Backend::Cranelift);
+fn ill_020_default_backend_follows_llvm_feature() {
+    // ADR-0070 §X.3 RATIFIED 2026-05-26: LLVM is the default backend when
+    // the `llvm` feature is active (now the workspace default). Cranelift
+    // remains the fallback under `--no-default-features`.
+    if cfg!(feature = "llvm") {
+        assert_eq!(Backend::default(), Backend::Llvm);
+        assert_eq!(Backend::default_for_dev(), Backend::Llvm);
+    } else {
+        assert_eq!(Backend::default(), Backend::Cranelift);
+        assert_eq!(Backend::default_for_dev(), Backend::Cranelift);
+    }
 }
 
 #[test]
@@ -641,7 +649,14 @@ fn ill_039_artifact_dylib_path_accessor() {
 fn ill_040_targetspec_host_dev() {
     let dir = std::env::temp_dir().join("cobrust-m9-helper");
     let spec = TargetSpec::host_dev(dir, "h");
-    assert_eq!(spec.backend, Backend::Cranelift);
+    // ADR-0070 §X.3: host_dev backend follows default_for_dev (LLVM when
+    // the `llvm` feature is active — now the workspace default).
+    let expected = if cfg!(feature = "llvm") {
+        Backend::Llvm
+    } else {
+        Backend::Cranelift
+    };
+    assert_eq!(spec.backend, expected);
     assert_eq!(spec.opt_level, OptLevel::None);
 }
 

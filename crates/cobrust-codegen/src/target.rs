@@ -164,11 +164,16 @@ pub enum Backend {
 }
 
 impl Backend {
-    /// Recommended default for development / debug builds:
-    /// always Cranelift (fast compile).
+    /// Recommended default for development / debug builds.
+    /// Post ADR-0070 §X.3 RATIFIED 2026-05-26: LLVM when available
+    /// (now default per `default = ["llvm"]`), else Cranelift.
     #[must_use]
     pub fn default_for_dev() -> Self {
-        Backend::Cranelift
+        if cfg!(feature = "llvm") {
+            Backend::Llvm
+        } else {
+            Backend::Cranelift
+        }
     }
 
     /// Recommended default for release builds: LLVM if available,
@@ -185,6 +190,11 @@ impl Backend {
 
 impl Default for Backend {
     fn default() -> Self {
-        Backend::Cranelift
+        // ADR-0070 §X.3 RATIFIED — LLVM default when feature available.
+        if cfg!(feature = "llvm") {
+            Backend::Llvm
+        } else {
+            Backend::Cranelift
+        }
     }
 }

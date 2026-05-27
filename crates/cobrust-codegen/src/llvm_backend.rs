@@ -2364,6 +2364,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
             if seen.insert(p.to_string()) {
                 payloads.push(p.to_string());
             }
+            // F54: f-string precision sentinels arrive as `FMTSPEC:.2f`
+            // but `lower_aggregate_format_string` materializes the STRIPPED
+            // spec (`.2f`) for `__cobrust_fmt_float_prec`. Intern both so
+            // the stripped form resolves in `str_data_ptr_for`.
+            if let Some(stripped) = p.strip_prefix("FMTSPEC:") {
+                if seen.insert(stripped.to_string()) {
+                    payloads.push(stripped.to_string());
+                }
+            }
         };
 
         for body in &module.bodies {
