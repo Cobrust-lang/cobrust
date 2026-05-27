@@ -2157,6 +2157,191 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_str_upper", str_upper_fn);
         self.runtime_helper_param_counts
             .insert("__cobrust_str_upper", 1);
+
+        // ===========================================================
+        // ADR-0058g sub-wave-6 — LLM router intrinsics (final wave-3
+        // category, F45a §2 row 12). Cranelift parity verbatim:
+        //   `cranelift_backend.rs:2896-2961` (M-AI.0/AI.1/AI.2).
+        //
+        // Stdlib ABI cross-confirmed at:
+        //   - `cobrust-stdlib/src/llm.rs:422,444,466`
+        //   - `cobrust-stdlib/src/prompt.rs:247,270,291,308,324`
+        //   - `cobrust-stdlib/src/tool.rs:254,278,289,306,321`
+        //
+        // All 13 helpers use the `(*mut Str | *mut List) -> *mut Str | *mut List`
+        // opaque-pointer ABI. Decision 7 (M-AI.0 α Phase 2): every
+        // failure path returns an empty `Str` (or empty List for
+        // `llm_stream` / `tool_registry_new`) — symbols are
+        // unconditionally exported by `cobrust-stdlib` and resolve
+        // cleanly at link time without requiring a configured
+        // `cobrust.toml` or live LLM provider.
+        // ===========================================================
+
+        // -- M-AI.0 (α Phase 2): cobrust.llm source-level binding -----
+        // `llm_complete(provider, model, prompt) -> str`.
+        let llm_complete_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let llm_complete_fn = self.module.add_function(
+            "__cobrust_llm_complete",
+            llm_complete_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_llm_complete", llm_complete_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_llm_complete", 3);
+
+        // `llm_dispatch(task, prompt) -> str`.
+        let llm_dispatch_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let llm_dispatch_fn = self.module.add_function(
+            "__cobrust_llm_dispatch",
+            llm_dispatch_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_llm_dispatch", llm_dispatch_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_llm_dispatch", 2);
+
+        // `llm_stream(provider, model, prompt) -> list[str]`.
+        let llm_stream_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let llm_stream_fn = self.module.add_function(
+            "__cobrust_llm_stream",
+            llm_stream_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_llm_stream", llm_stream_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_llm_stream", 3);
+
+        // -- M-AI.1 (α Phase 3): cobrust.prompt source-level binding --
+        // `prompt_render(system, user, vars) -> str`.
+        let prompt_render_ty =
+            ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let prompt_render_fn = self.module.add_function(
+            "__cobrust_prompt_render",
+            prompt_render_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_prompt_render", prompt_render_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_prompt_render", 3);
+
+        // `prompt_format_few_shot(examples_in, examples_out, current_input) -> str`.
+        let prompt_few_shot_ty =
+            ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let prompt_few_shot_fn = self.module.add_function(
+            "__cobrust_prompt_format_few_shot",
+            prompt_few_shot_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_prompt_format_few_shot", prompt_few_shot_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_prompt_format_few_shot", 3);
+
+        // `prompt_format_system_user(system, user) -> str`.
+        let prompt_sys_user_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let prompt_sys_user_fn = self.module.add_function(
+            "__cobrust_prompt_format_system_user",
+            prompt_sys_user_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_prompt_format_system_user", prompt_sys_user_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_prompt_format_system_user", 2);
+
+        // `prompt_escape_braces(text) -> str`.
+        let prompt_escape_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let prompt_escape_fn = self.module.add_function(
+            "__cobrust_prompt_escape_braces",
+            prompt_escape_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_prompt_escape_braces", prompt_escape_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_prompt_escape_braces", 1);
+
+        // `llm_complete_structured(prompt, schema_json) -> str`.
+        let llm_structured_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let llm_structured_fn = self.module.add_function(
+            "__cobrust_llm_complete_structured",
+            llm_structured_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_llm_complete_structured", llm_structured_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_llm_complete_structured", 2);
+
+        // -- M-AI.2 (α Phase 4): cobrust.tool source-level binding ---
+        // `tool_schema(name, description, params_json, returns_json) -> str`.
+        let tool_schema_ty = ptr_ty.fn_type(
+            &[ptr_ty.into(), ptr_ty.into(), ptr_ty.into(), ptr_ty.into()],
+            false,
+        );
+        let tool_schema_fn = self.module.add_function(
+            "__cobrust_tool_schema",
+            tool_schema_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_tool_schema", tool_schema_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_tool_schema", 4);
+
+        // `tool_registry_new() -> *mut Registry`.
+        let tool_registry_new_ty = ptr_ty.fn_type(&[], false);
+        let tool_registry_new_fn = self.module.add_function(
+            "__cobrust_tool_registry_new",
+            tool_registry_new_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_tool_registry_new", tool_registry_new_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_tool_registry_new", 0);
+
+        // `tool_registry_register(registry, schema_json) -> *mut Registry`.
+        let tool_registry_register_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let tool_registry_register_fn = self.module.add_function(
+            "__cobrust_tool_registry_register",
+            tool_registry_register_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls.insert(
+            "__cobrust_tool_registry_register",
+            tool_registry_register_fn,
+        );
+        self.runtime_helper_param_counts
+            .insert("__cobrust_tool_registry_register", 2);
+
+        // `tool_invoke(tool_name, args_json) -> str`.
+        let tool_invoke_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let tool_invoke_fn = self.module.add_function(
+            "__cobrust_tool_invoke",
+            tool_invoke_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_tool_invoke", tool_invoke_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_tool_invoke", 2);
+
+        // `llm_complete_with_tools(prompt, registry_json) -> str`.
+        let llm_with_tools_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let llm_with_tools_fn = self.module.add_function(
+            "__cobrust_llm_complete_with_tools",
+            llm_with_tools_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_llm_complete_with_tools", llm_with_tools_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_llm_complete_with_tools", 2);
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
