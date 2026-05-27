@@ -108,19 +108,28 @@ fn ill_002_unsupported_backend_message_mentions_feature() {
 //
 //    ADR-0070 §X.4 note: the former SPARC64 probe asserted Cranelift's
 //    narrower ISA matrix. LLVM 18 *does* register SPARC + RISC-V, so
-//    those triples now compile successfully. `xtensa-unknown-none-elf`
-//    is parsed by `target-lexicon` into a valid `Triple` but has no
-//    backend in stock LLVM 18 → `Target::from_triple` errors →
-//    `CodegenError::UnsupportedTarget`. This keeps the variant under
-//    regression coverage against the real (LLVM-only) backend.
+//    those triples now compile successfully. F61: a *real* experimental
+//    arch (e.g. `xtensa`) is NOT platform-invariant — ubuntu's apt
+//    llvm-18 registers Xtensa while macOS's brew llvm@18 does not, so a
+//    triple-specific probe flakes across CI runners. Use an `unknown`
+//    architecture instead: it has NO LLVM backend in ANY build, so
+//    `Target::from_triple` rejects it everywhere → deterministic
+//    `CodegenError::UnsupportedTarget` coverage against the real backend.
 // =====================================================================
+
+/// A host triple with its architecture forced to `Unknown` — parses as a
+/// valid `Triple` but has no LLVM backend on any platform (F61).
+fn unsupported_triple() -> Triple {
+    let mut t = Triple::host();
+    t.architecture = target_lexicon::Architecture::Unknown;
+    t
+}
 
 #[test]
 fn ill_003_unsupported_target_arbitrary_triple() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
     let mut spec = host_object_spec("ill_003");
-    // Xtensa is not in stock LLVM 18's registered targets.
-    spec.triple = Triple::from_str("xtensa-unknown-none-elf").expect("triple parse");
+    spec.triple = unsupported_triple();
     let err = emit(&mir, spec).unwrap_err();
     assert!(
         matches!(err, CodegenError::UnsupportedTarget(_)),
@@ -132,9 +141,15 @@ fn ill_003_unsupported_target_arbitrary_triple() {
 fn ill_004_unsupported_target_carries_triple_in_message() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
     let mut spec = host_object_spec("ill_004");
-    spec.triple = Triple::from_str("xtensa-unknown-none-elf").unwrap();
+    let triple = unsupported_triple();
+    let triple_str = triple.to_string();
+    spec.triple = triple;
     let err = emit(&mir, spec).unwrap_err();
-    assert!(err.to_string().contains("xtensa"));
+    assert!(
+        err.to_string().contains(&triple_str),
+        "message {:?} should carry triple {triple_str:?}",
+        err.to_string()
+    );
 }
 
 // =====================================================================
