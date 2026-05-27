@@ -75,7 +75,42 @@ tagging the milestone SHA.
 
 ## §7 Status
 
-**Candidate.**  
+**Candidate (promotion blocked 2026-05-26).**  
 Promote to **ratified** once:
 - `cargo-udeps` CI gate lands (this commit), and
 - next Phase closure runs clean-target clippy sweep with zero errors.
+
+### §7.1 Blocking-promotion investigation 2026-05-26
+
+Tier-B audit P2 batch fix-2 attempted to promote `cargo-audit` + `cargo-udeps` from
+`continue-on-error: true` to blocking. Local baseline check (`cargo audit --deny warnings`
+at HEAD `1e76a8f`) revealed:
+
+```
+Crate:     pyo3
+Version:   0.22.6
+Title:     Risk of buffer overflow in `PyString::from_object`
+Date:      2025-04-01
+ID:        RUSTSEC-2025-0020
+Solution:  Upgrade to >=0.24.1
+Dependency tree:
+pyo3 0.22.6
+├── cobrust-requests 0.6.2
+├── cobrust-numpy 0.6.2
+├── cobrust-msgpack 0.6.2
+├── cobrust-dateutil 0.6.2
+└── cobrust-click 0.6.2
+```
+
+Per F37 honest-debt rule + task-spec "Don't promote if existing issues silent",
+promotion to blocking was aborted to avoid silent F37-sibling rot. The pyo3 0.22 →
+0.24 upgrade spans 5 PyO3-wrapping crates and is a substantive sprint, not a
+mechanical fix. Queued as separate ADR.
+
+`cargo-udeps` baseline-check requires nightly toolchain (not installed locally);
+deferred to a paired sprint with the audit upgrade since both follow the same
+F37-debt-resolution pattern.
+
+**Action items**:
+- ADR-TBD: PyO3 0.22.6 → 0.24.1 upgrade across cobrust-{requests,numpy,msgpack,dateutil,click}
+- After ADR-TBD lands clean: re-run baseline checks, promote both jobs blocking, ratify F44.
