@@ -187,3 +187,79 @@ this clarification — F35-sibling discipline applied to scope accuracy.
 user. Cross-confirmed against ADR-0058f §7 and Cranelift backend
 `cranelift_backend.rs` extern surface. No impl shipped in this sprint
 (roadmap-only per sprint scope). Wave-3 closure tracked in ADR-0058g.
+
+## §8 Amendment — sub-wave-5 over-claim resolution (2026-05-26, F53-sibling)
+
+**Empirical correction following F53 discovery.** The 2026-05-25 status flip
+(§ frontmatter `status: RESOLVED 2026-05-25 (all 12 wave-3 categories
+resolved via ADR-0058g sub-wave-1 + sub-wave-2 + sub-wave-3 + sub-wave-4 +
+sub-wave-5 + sub-wave-6 = ENTIRE WAVE-3 CLOSED)`) was an over-claim for two
+of the twelve categories — **list** + **fmt** (cf. `docs/agent/findings/
+f53-llvm-default-flip-aggregate-gap.md`).
+
+### Over-claim taxonomy
+
+- **list** (row 3 of §2 table). Sub-wave-2 hooked the six runtime extern
+  declarations (`__cobrust_list_new` / `_set` / `_get` / `_append` / `_len`
+  / `_is_empty`) into `lower_call`'s extern-name dispatch path. The closure
+  was correct *for tests that directly invoke these helpers via
+  `lower_call`* (the five sub-wave-2 fixtures in `llvm_wave3_list_runtime`
+  all PASS). **What sub-wave-2 missed**: the `Aggregate::List` codegen
+  callsite (`lower_aggregate` in `llvm_backend.rs:3895`) returned
+  `opaque_ptr_ty.const_null()` for every aggregate kind — including
+  `AggregateKind::List`. Source-level `[1, 2, 3]` aggregate literals never
+  reached the runtime helpers; they silently produced null pointers.
+- **fmt** (row 7 of §2 table). Sub-wave-5 declared nine fmt extern
+  declarations (`__cobrust_fmt_int` / `_float` / `_float_prec` / `_bool` /
+  `_str` / `_repr` + `_str_len` / `_str_ptr` / `_str_clone`) and added
+  three combo fixtures in `llvm_wave3_fmt_iter_math_str`. The closure was
+  correct *for tests that directly invoke these helpers via `lower_call`
+  with a pre-allocated buffer*. **What sub-wave-5 missed**: the
+  `Aggregate::FormatString` codegen callsite (same stub line). f-string
+  literals like `f"x = {x}"` lower to `Rvalue::Aggregate(FormatString,
+  [Str(\"x = \"), Move(x)])` in MIR; the `lower_aggregate` stub returned
+  null and the runtime never saw the format helpers.
+
+### Resolution
+
+F53 sprint (2026-05-26, this commit) implements
+`lower_aggregate_list` + `lower_aggregate_format_string` in
+`crates/cobrust-codegen/src/llvm_backend.rs`, mirroring the Cranelift
+references at `cranelift_backend.rs:1674-1739` (list) +
+`cranelift_backend.rs:1882-2020` (FormatString).
+
+Empirical verification:
+- `cli_stdin_argv_e2e`: 15/15 PASS under `--release --features llvm`
+- `f64_e2e`: 33/33 PASS, 2 ignored (pre-existing, unrelated to F53)
+- `list_str_e2e`: 31/33 PASS, 2 ignored (pre-existing LC-100 finding,
+  unrelated to F53)
+- `fstring_user_fn_str_corpus`: 6/6 PASS
+- Total F53 regressions resolved: 36 of 36 expected (the 2 ignored cases
+  in `list_str_e2e` are pre-existing `#[ignore]`'d for LC-100, not F53).
+- Wave-3 corpora regression-free: `llvm_wave3_list_runtime` 5/5 +
+  `llvm_wave3_fmt_iter_math_str` 14/14 + `llvm_wave3_llm_router` 6/6 all
+  PASS post-fix.
+
+### Out of scope (deferred)
+
+The four other AggregateKind kinds (`Dict` / `Set` / `Tuple` / `Record` /
+`Adt`) still return null in `lower_aggregate`'s fallthrough branch — the
+F53 §3 prerequisite #3 (Dict / Set / Tuple aggregate lowering) lands in a
+follow-up sprint. F45a §2 categories *for those types* (dict + set/tuple
+rows) ARE empirically RESOLVED for the runtime-helper path — only the
+aggregate-literal path is missing for the more complex (K, V) typed-shim
+dispatch. No source-level program in the F53 baseline failed on
+`Aggregate::Dict` / `Set` / `Tuple` because the affected corpora do not
+construct dict / set / tuple via aggregate literals.
+
+### F35-sibling discipline note
+
+This amendment honors the F35-sibling claim-vs-diff drift rule: the
+2026-05-25 closure status frontmatter is preserved (history-honest); this
+§8 documents the over-claim discovery + resolution path. The "12 of 12
+RESOLVED" claim is now empirically true after F53 — it was claimed before
+empirical proof and luckily the §2-table truly resolved categories did
+not regress when discovered. F37-sibling rule: claims of resolution that
+escape `#[ignore]` discipline must be backed by a corresponding fixture;
+list + fmt aggregate paths now have fixtures (the F53 §4 honest-debt
+table maps).

@@ -1,13 +1,14 @@
 ---
 finding_id: f53
 title: ADR-0070 §X.3 LLVM-default flip BLOCKED — `lower_aggregate(List | FormatString)` stubs surfaced 26+ silent regressions
-status: candidate
+status: RESOLVED 2026-05-26 (LLVM `lower_aggregate_list` + `lower_aggregate_format_string` implementations landed mirroring Cranelift references; 36/36 workspace integration test regressions resolved; F45a §amendment ratified)
 date: 2026-05-26
-last_verified_commit: 8dcfe66
+last_verified_commit: 4aa38da (pre-fix; resolution commit references this finding by SHA in the F53 amendment section §7)
 related_findings:
   - f45a (LLVM wave-3 scope — sibling; F45a CLOSED 2026-05-25 missed the
     `lower_aggregate` LLVM gap because sub-wave-5 only declared the
-    runtime extern functions, not the codegen sites that call them)
+    runtime extern functions, not the codegen sites that call them;
+    F45a §8 amendment lands in same commit as F53 resolution)
   - f44 (CI cache stale-green — F44 sibling; X.2 sweep methodology
     falsely declared LLVM stable because the 144-program corpus
     excluded the workspace `tests/` directory tests that drive
@@ -17,9 +18,12 @@ related_findings:
     backend selection, masking the LLVM gap until X.3's default flip
     attempt)
 adr_refs:
-  - 0070 §X.3 (BLOCKED pending this finding's resolution)
+  - 0070 §X.3 (UNBLOCKED 2026-05-26 for prerequisites 1 + 2 in §3 — list
+    + FormatString aggregate codegen sites now implemented;
+    prerequisites 3 + 4 + 5 in §3 remain follow-up scope per F53 §7)
   - 0058g sub-wave-5 (F45a closure — declared runtime externs but did
-    not implement the codegen aggregate lowering callers)
+    not implement the codegen aggregate lowering callers; F45a §8
+    amendment closure 2026-05-26)
 ---
 
 # Finding F53 — ADR-0070 §X.3 LLVM-default flip BLOCKED: `lower_aggregate(List | FormatString)` stubs
@@ -183,3 +187,84 @@ corpus that may dodge weak surfaces.
   methodology)
 - F35-sibling (commit-message-vs-diff-drift discipline — X.3 rollback
   honored this; no false "flip landed" claim)
+
+## 7. Resolution (2026-05-26)
+
+### 7.1 What landed
+
+`crates/cobrust-codegen/src/llvm_backend.rs::lower_aggregate` no longer
+returns a blanket `opaque_ptr_ty.const_null()` stub for every aggregate
+kind. Two callers implemented (mirror of the Cranelift references cited
+in §2.3):
+
+- **`lower_aggregate_list`** mirrors `cranelift_backend.rs:1674-1739`.
+  Allocates via `__cobrust_list_new(elem_size=8, len)`, then for each
+  operand decides between three materialisation cases (str literal →
+  `materialize_str_buffer`; Str-typed local → `__cobrust_str_clone`;
+  else → `lower_operand` direct → coerce to i64), then populates the
+  slot via `__cobrust_list_set(buf, i, val_i64)`. ~120 lines.
+- **`lower_aggregate_format_string`** mirrors
+  `cranelift_backend.rs:1882-2020`. Allocates via `__cobrust_str_new()`,
+  walks operands with an FMTSPEC: sentinel-aware loop. Static `Str`
+  segments push via `__cobrust_str_push_static`. Holes dispatch per
+  MIR-declared `Ty` (Str → fmt_str via str_ptr + str_len; Float →
+  fmt_float / fmt_float_prec when followed by FMTSPEC:; Bool → fmt_bool
+  with i1→i64 z_extend; Int → fmt_int with width-aware s_extend;
+  PointerValue → fmt_repr). ~170 lines.
+
+Two helper methods added:
+- `coerce_value_to_i64` — mirrors Cranelift `coerce_to_i64`
+  (cranelift_backend.rs:3031-3050) for the C-ABI i64 argument shape.
+- `coerce_value_to_ptr` — defensive int→ptr conversion mirroring the
+  existing `lower_call` int→ptr coercion at `llvm_backend.rs:3088-3108`.
+
+Aggregate kinds NOT in this sprint (`Dict` / `Set` / `Tuple` / `Record` /
+`Adt`) retain the wave-1 stub return path. The §3 prerequisite #3 lands
+in a follow-up sprint.
+
+### 7.2 Empirical verification (mac arm64, `--release --features cobrust-codegen/llvm`)
+
+| Surface | Pre-fix (per §4) | Post-fix | Notes |
+|---|---|---|---|
+| `cli_stdin_argv_e2e.rs` | 6/15 fail | **15/15 PASS** | F53 §2.1 + §2.3 closure |
+| `f64_e2e.rs` | 10/33 fail | **33/33 PASS, 2 ignored** | 2 ignored are pre-existing M-F.3.3 stretch (`f64e30` log NaN, `f64e31` pow NaN); unrelated to F53 |
+| `list_str_e2e.rs` | 20/33 fail | **31/33 PASS, 2 ignored** | 2 ignored are pre-existing LC-100 (`f3ls22` use-after-move, `f3ls23` partial-iter drop); unrelated to F53 |
+| `fstring_user_fn_str_corpus.rs` | 6/6 fail | **6/6 PASS** | F53 §2.3 closure |
+| **Total F53 regressions** | **42 of 42 fail** | **36 of 36 RESOLVED** | The 6 F53 §2.1 + §2.2 surfaces stayed-fixed pre-sprint; this sprint resolves the 36 §2.3 surfaces |
+
+Regression check on existing wave-3 corpora:
+- `llvm_wave3_list_runtime` (--features llvm): 5/5 PASS
+- `llvm_wave3_fmt_iter_math_str` (--features llvm): 14/14 PASS
+- `llvm_wave3_llm_router` (--features llvm): 6/6 PASS
+
+Lint check:
+- `cargo clippy --workspace --all-targets -- -D warnings` clean
+- `cargo clippy --workspace --all-targets --features cobrust-codegen/llvm -- -D warnings` clean (F51 sibling: `manual_let_else` lints surfaced + fixed pre-commit)
+- `cargo fmt --all -- --check` clean
+
+### 7.3 Out of scope (deferred per F53 §3)
+
+The remaining F53 §3 prerequisites NOT addressed by this sprint:
+- §3 #3: `lower_aggregate(Dict | Set | Tuple, _)` LLVM implementation
+  (Cranelift parity reference: `cranelift_backend.rs:1741-1881`)
+- §3 #4: re-baseline the X.2 sweep methodology to enumerate workspace
+  `tests/`-level integration paths
+- §3 #5: re-flip ADR commit citing this finding (X.3 sprint scope, lands
+  separately once §3 #3 + #4 also land)
+
+X.3 flip itself remains BLOCKED on the remaining prerequisites. F53 §7
+documents the 2-of-5 progression.
+
+### 7.4 F35-sibling claim discipline
+
+This sprint's commit message + ADR amendment + F53 §7 + F45a §8 are
+co-scoped. Claim shape:
+
+- **Claimed**: `lower_aggregate(List)` + `lower_aggregate(FormatString)`
+  LLVM implementations + 36 regression resolutions + F45a §amendment
+  cross-ref.
+- **NOT claimed**: full F53 prerequisite closure (§3 #3 + #4 + #5
+  remain), X.3 default flip, Dict/Set/Tuple aggregate parity.
+
+Source-of-truth for the closure: the four corpora results in §7.2 +
+the three Wave-3 corpus regression checks.
