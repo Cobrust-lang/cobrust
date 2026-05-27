@@ -1,5 +1,11 @@
 # Rust build output
 /target
+# Phase X.1 multi-backend benchmark: bench/ harness builds Cranelift and
+# LLVM cobrust-cli into isolated target dirs so both can be invoked from
+# the same workspace without re-linking. Both dirs are local-only build
+# caches, never source.
+/target-cranelift
+/target-llvm
 **/*.rs.bk
 
 # Cobrust per-package build output — `cobrust build` emits under
