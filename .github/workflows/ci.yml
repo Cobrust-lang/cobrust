@@ -39,6 +39,20 @@ jobs:
         with:
           toolchain: 1.94.1
           components: clippy
+      # LLVM 18 is required since ADR-0070 §X.3 flipped cobrust-codegen
+      # `default = ["llvm"]`; inkwell `llvm18-1` links system LLVM via
+      # llvm-sys, which reads LLVM_SYS_181_PREFIX. See ADR-0070 §4.
+      - name: Install LLVM 18 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+      - name: Install LLVM 18 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@18 || brew upgrade llvm@18 || true
+          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2  # v2.7.8
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -54,6 +68,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
         with:
           toolchain: 1.94.1
+      # LLVM 18 required since ADR-0070 §X.3 flip — see clippy job comment.
+      - name: Install LLVM 18 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+      - name: Install LLVM 18 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@18 || brew upgrade llvm@18 || true
+          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2  # v2.7.8
       - run: cargo build --workspace --all-targets --locked
 
@@ -69,6 +95,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
         with:
           toolchain: 1.94.1
+      # LLVM 18 required since ADR-0070 §X.3 flip — see clippy job comment.
+      - name: Install LLVM 18 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+      - name: Install LLVM 18 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@18 || brew upgrade llvm@18 || true
+          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2  # v2.7.8
       # Probe Python 3 availability for full_pipeline_corpus differential gate.
       # On ubuntu-latest the runner ships python3 but not necessarily python3.11;
@@ -158,6 +196,13 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - uses: dtolnay/rust-toolchain@nightly
+      # LLVM 18 required since ADR-0070 §X.3 flip — udeps compiles the
+      # full workspace (ubuntu-only job). See clippy job comment.
+      - name: Install LLVM 18 (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2  # v2.7.8
       - name: Install cargo-udeps
         run: cargo install cargo-udeps --locked
