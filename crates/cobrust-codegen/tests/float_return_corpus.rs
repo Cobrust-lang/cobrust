@@ -91,7 +91,7 @@ fn host_object_spec(name: &str) -> TargetSpec {
     TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
-        backend: Backend::Cranelift,
+        backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
         output_dir: dir,
         module_name: name.to_string(),

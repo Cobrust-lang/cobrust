@@ -222,7 +222,7 @@ impl UserError {
 
     /// Build a codegen / linker / invariant `Internal` error.
     ///
-    /// `kind` is a one-line summary (e.g. `"CraneliftError"`,
+    /// `kind` is a one-line summary (e.g. `"LlvmError"`,
     /// `"LinkerFailed"`); `repro_cmd` is the full command that
     /// triggered the failure.
     #[must_use]
@@ -1081,12 +1081,6 @@ impl From<CodegenError> for UserError {
                 let summary: String = m.chars().take(120).collect();
                 format!("InvalidMir: {summary}")
             }
-            CodegenError::CraneliftError(m) => {
-                // The raw Cranelift error may be hundreds of lines.
-                // Surface only the first line (the high-level description).
-                let first_line = m.lines().next().unwrap_or("(no detail)");
-                format!("CraneliftError: {first_line}")
-            }
             CodegenError::LlvmError(m) => {
                 let first_line = m.lines().next().unwrap_or("(no detail)");
                 format!("LlvmError: {first_line}")
@@ -1215,7 +1209,7 @@ mod tests {
     #[test]
     fn internal_renders_within_budget() {
         let e = UserError::internal(
-            "CraneliftError: inst441 has type i64, expected i8",
+            "LlvmError: instruction %441 has type i64, expected i8",
             "cobrust build src/main.cb",
         );
         assert_within_line_budget(&e);
@@ -1226,14 +1220,15 @@ mod tests {
     }
 
     #[test]
-    fn codegen_cranelift_truncates_ir_dump() {
-        // Simulate a 3000-line Cranelift verifier dump being received.
-        let long_ir = "Verifier errors: - inst441 (v520 = iadd.i8 v515, v518): arg 1 (v518) has type i64, expected i8\n".repeat(300);
-        let ce = CodegenError::CraneliftError(long_ir);
+    fn codegen_llvm_truncates_ir_dump() {
+        // ADR-0070 §X.4: LLVM is the sole AOT backend. A large LLVM
+        // verifier dump must still be truncated to the line budget.
+        let long_ir = "LLVM verify failed: instruction %520 = add i8 %515, %518: operand 1 (%518) has type i64, expected i8\n".repeat(300);
+        let ce = CodegenError::LlvmError(long_ir);
         let ue = UserError::from(ce);
         assert_within_line_budget(&ue);
         let s = format!("{ue}");
-        assert!(s.contains("CraneliftError"));
+        assert!(s.contains("LlvmError"));
         assert!(s.contains("cobrust report-bug"));
     }
 

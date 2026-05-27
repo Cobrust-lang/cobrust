@@ -8,23 +8,24 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
-description = "Cobrust codegen — Cranelift (default) and LLVM (opt-in) backends per ADR-0023."
+description = "Cobrust codegen — LLVM is the sole AOT backend per ADR-0023 + ADR-0070 §X.4."
 
 [lints]
 workspace = true
 
 [features]
-# ADR-0070 §X.3 RATIFIED 2026-05-26 — LLVM is now the default backend.
-# Prior flip attempt (af474a9e) discovered 36-test silent regression in
-# `lower_aggregate(List | FormatString)` LLVM codegen, surfaced as F53.
-# F53 RESOLVED at 9967a4e + 9aec0fc (lower_aggregate impl + F45a §8
-# over-claim amendment). All 4 corpora that failed at the prior attempt
-# (cli_stdin_argv 15/15, f64_e2e 33/33, list_str_e2e 31/31,
-# fstring_user_fn_str_corpus 6/6) verified PASS via P10 ground-truth.
-# Opt-out via --no-default-features (Cranelift-only build), per ADR-0070
-# §6 Q2 option (a) — cobrust-jit JIT path retained for v0.8.x port.
+# ADR-0070 §X.4 RATIFIED 2026-05-27 — LLVM is the SOLE AOT backend.
+# The Cranelift AOT backend (`cranelift_backend.rs` + `abi.rs`) was
+# removed; the LLVM column was proven green under LLVM-default at X.3
+# (F53/F54/F55/F56/F58 resolved). `inkwell` stays OPTIONAL (Option C,
+# not Option A): building `--no-default-features` yields a JIT-substrate
+# / frontend-only crate whose `emit()` returns `UnsupportedBackend` but
+# whose `lowering.rs` (Cranelift IR substrate) + `cranelift-codegen` /
+# `cranelift-frontend` deps remain — that substrate is hard-depended on
+# by the RETAINED `cobrust-jit` (ADR-0070 §6 Q2 option a).
 default = ["llvm"]
-# Optional LLVM backend; pulls in inkwell + system LLVM 18+.
+# LLVM AOT backend; pulls in inkwell + system LLVM 18+. Disabling it
+# leaves no functional AOT backend (deliberate substrate-only mode).
 llvm = ["dep:inkwell"]
 # Use lld via -fuse-ld=lld for the linker delegate.
 lld = []
@@ -34,10 +35,11 @@ cobrust-mir = { path = "../cobrust-mir" }
 cobrust-types = { path = "../cobrust-types" }
 cobrust-frontend = { path = "../cobrust-frontend" }
 cobrust-hir = { path = "../cobrust-hir" }
+# Cranelift IR-construction substrate — retained ONLY for `lowering.rs`,
+# the shared MIR→Cranelift-IR lowering that the cobrust-jit (REPL/JIT)
+# crate hard-depends on (ADR-0070 §X.4 Option C). NOT an AOT backend.
 cranelift-codegen = "0.131"
 cranelift-frontend = "0.131"
-cranelift-module = "0.131"
-cranelift-object = "0.131"
 target-lexicon = "0.13"
 inkwell = { version = "0.9", optional = true, features = ["llvm18-1"] }
 thiserror = { workspace = true }

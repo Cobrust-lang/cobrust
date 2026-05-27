@@ -98,6 +98,17 @@ gate (every "core 30" form's compiled output produces identical
 
 Adopt **option 3**: both backends behind a feature flag.
 
+> **AMENDED by ADR-0070 §X.4 (RATIFIED 2026-05-27).** The two-backend
+> layout below is M9-historical. As of v0.7.0, **LLVM is the sole AOT
+> backend**: the Cranelift AOT backend (`cranelift_backend.rs` + `abi.rs`)
+> was removed, and `cranelift-module` / `cranelift-object` were dropped.
+> Cranelift is retained **only** as the `cobrust-jit` IR substrate
+> (`lowering.rs` + `cranelift-codegen` / `cranelift-frontend`), not as an
+> AOT backend. The `llvm` feature remains default-on (Option C); building
+> `--no-default-features` yields a JIT-substrate / frontend-only crate
+> whose `emit()` returns `UnsupportedBackend`. Read the layout below as
+> the original M9 design, not current behaviour.
+
 ### Backend feature flag layout
 
 ```toml

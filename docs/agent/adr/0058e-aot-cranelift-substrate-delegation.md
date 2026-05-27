@@ -17,6 +17,16 @@ ratification_path: P9 ADR review; ratifies on impl-merge gate
 
 # ADR-0058e: AOT cranelift_backend substrate delegation
 
+> **SUPERSEDED IN PART by ADR-0070 §X.4 (RATIFIED 2026-05-27).** The AOT
+> `cranelift_backend.rs` this ADR delegated into the `lowering.rs`
+> substrate was **removed** in §X.4 (LLVM is now the sole AOT backend).
+> The subject of this ADR's "AOT-side delegation" no longer exists.
+> What is **retained** is the `cobrust-codegen::lowering` substrate
+> itself (+ the `cranelift-codegen` / `cranelift-frontend` crates) — it
+> remains the live IR-construction substrate for the retained
+> `cobrust-jit` (REPL/JIT) path. Read this ADR for the substrate's
+> design history, not as a description of a current AOT backend.
+
 ## 1. Motivation
 
 ADR-0058d shipped the shared MIR→Cranelift lowering substrate in

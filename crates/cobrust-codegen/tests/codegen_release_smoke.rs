@@ -1,9 +1,8 @@
 //! M9 release smoke — exercise the `--release` codegen path.
 //!
-//! Per ADR-0023 §"Backend feature flag layout":
-//! - `cargo build` → Cranelift (`OptLevel::None`)
-//! - `cargo build --release` → if `--features llvm` then LLVM `-O3`,
-//!    else Cranelift `OptLevel::Speed`
+//! Per ADR-0070 §X.4 (LLVM is the sole AOT backend):
+//! - `cargo build` → LLVM (`OptLevel::None`)
+//! - `cargo build --release` → LLVM `-O3`
 //!
 //! The release smoke test ensures: the release-default backend
 //! produces a valid object file, the artifact path exists, and
@@ -100,12 +99,9 @@ fn smoke_003_release_default_compiles_loops() {
 }
 
 #[test]
-fn smoke_004_release_default_backend_is_correct() {
-    if cfg!(feature = "llvm") {
-        assert_eq!(Backend::default_for_release(), Backend::Llvm);
-    } else {
-        assert_eq!(Backend::default_for_release(), Backend::Cranelift);
-    }
+fn smoke_004_release_default_backend_is_llvm() {
+    // ADR-0070 §X.4: LLVM is the sole AOT backend.
+    assert_eq!(Backend::default_for_release(), Backend::Llvm);
 }
 
 #[test]
@@ -134,7 +130,7 @@ fn smoke_006_linker_smoke_when_cc_available() {
     let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
-        backend: Backend::Cranelift,
+        backend: Backend::Llvm,
         artifact: ArtifactKind::DynamicLibrary,
         output_dir: dir,
         module_name: "linksmoke".to_string(),
@@ -159,9 +155,10 @@ fn smoke_006_linker_smoke_when_cc_available() {
                 matches!(
                     e,
                     cobrust_codegen::CodegenError::LinkerFailed { .. }
-                        | cobrust_codegen::CodegenError::CraneliftError(_)
+                        | cobrust_codegen::CodegenError::LlvmError(_)
+                        | cobrust_codegen::CodegenError::ObjectEmission(_)
                 ),
-                "expected LinkerFailed or CraneliftError, got {e:?}"
+                "expected LinkerFailed / LlvmError / ObjectEmission, got {e:?}"
             );
         }
     }
@@ -179,7 +176,7 @@ fn smoke_007_release_object_not_dramatically_larger_than_dev() {
     let dev_spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
-        backend: Backend::Cranelift,
+        backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
         output_dir: dev_dir,
         module_name: "smoke_007_dev".to_string(),

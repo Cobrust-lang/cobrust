@@ -3054,6 +3054,38 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         );
         self.emitter.builder.set_current_debug_location(loc);
     }
+
+    /// Checked lookup of a local's `(alloca, type)`. Returns
+    /// [`CodegenError::InvalidMir`] when the `LocalId` is not declared
+    /// in the body (dangling MIR) instead of panicking on a missing
+    /// `HashMap` key. ADR-0070 §X.4: with the Cranelift AOT backend
+    /// removed, this restores the structured-error contract the
+    /// `codegen_ill_formed` regression suite validates (the Cranelift
+    /// backend rejected dangling locals via its IR verifier).
+    fn local_alloca(
+        &self,
+        local: LocalId,
+    ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), CodegenError> {
+        self.local_allocas.get(&local).copied().ok_or_else(|| {
+            CodegenError::InvalidMir(format!(
+                "reference to undeclared local _{} in body `{}`",
+                local.0, self.body.name
+            ))
+        })
+    }
+
+    /// Checked lookup of a basic block. Returns
+    /// [`CodegenError::InvalidMir`] when the `BlockId` is not present
+    /// (a terminator targeting a non-existent block) instead of
+    /// panicking. See [`Self::local_alloca`] for the §X.4 rationale.
+    fn block(&self, id: BlockId) -> Result<BasicBlock<'ctx>, CodegenError> {
+        self.block_map.get(&id).copied().ok_or_else(|| {
+            CodegenError::InvalidMir(format!(
+                "terminator targets non-existent block bb{} in body `{}`",
+                id.0, self.body.name
+            ))
+        })
+    }
 }
 
 impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
@@ -3203,7 +3235,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
     fn lower_terminator(&mut self, term: &Terminator) -> Result<(), CodegenError> {
         match term {
             Terminator::Goto(target) => {
-                let blk = self.block_map[target];
+                let blk = self.block(*target)?;
                 self.emitter
                     .builder
                     .build_unconditional_branch(blk)
@@ -3211,7 +3243,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 Ok(())
             }
             Terminator::Return => {
-                let (alloca, _) = self.local_allocas[&self.body.return_local];
+                let (alloca, _) = self.local_alloca(self.body.return_local)?;
                 let val = self
                     .emitter
                     .builder
@@ -3245,7 +3277,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 target,
             } => {
                 let cond_val = self.lower_operand(cond)?.into_int_value();
-                let target_blk = self.block_map[target];
+                let target_blk = self.block(*target)?;
                 let trap_blk = self
                     .emitter
                     .ctx
@@ -3277,7 +3309,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                     let ty = decl.ty.clone();
                     self.emit_drop_for_ty(place, &ty)?;
                 }
-                let blk = self.block_map[target];
+                let blk = self.block(*target)?;
                 self.emitter
                     .builder
                     .build_unconditional_branch(blk)
@@ -3332,7 +3364,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                     .basic()
                     .unwrap_or_else(|| self.emitter.ctx.i64_type().const_zero().into());
                 self.write_place(destination, ret_val)?;
-                let blk = self.block_map[&target];
+                let blk = self.block(target)?;
                 self.emitter
                     .builder
                     .build_unconditional_branch(blk)
@@ -3485,7 +3517,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                     .basic()
                     .unwrap_or_else(|| self.emitter.ctx.i64_type().const_zero().into());
                 self.write_place(destination, ret_val)?;
-                let blk = self.block_map[&target];
+                let blk = self.block(target)?;
                 self.emitter
                     .builder
                     .build_unconditional_branch(blk)
@@ -3504,7 +3536,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         // wave-3 lands (or sooner if a wave-3 helper is dispatched).
         let zero: BasicValueEnum<'ctx> = self.emitter.ctx.i64_type().const_zero().into();
         self.write_place(destination, zero)?;
-        let blk = self.block_map[&target];
+        let blk = self.block(target)?;
         self.emitter
             .builder
             .build_unconditional_branch(blk)
@@ -3570,7 +3602,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         cases: &[(SwitchValue, BlockId)],
         otherwise: BlockId,
     ) -> Result<(), CodegenError> {
-        let otherwise_blk = self.block_map[&otherwise];
+        let otherwise_blk = self.block(otherwise)?;
         if cases.is_empty() {
             self.emitter
                 .builder
@@ -3589,9 +3621,9 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                     SwitchValue::Adt(d) => i64::from(*d),
                 };
                 let case_val = scrutinee_ty.const_int(payload as u64, true);
-                (case_val, self.block_map[target])
+                Ok((case_val, self.block(*target)?))
             })
-            .collect();
+            .collect::<Result<Vec<_>, CodegenError>>()?;
         self.emitter
             .builder
             .build_switch(scrutinee_int, otherwise_blk, &case_pairs)
@@ -3665,7 +3697,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
     }
 
     fn lower_place_load(&mut self, place: &Place) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-        let (alloca, ty) = self.local_allocas[&place.local];
+        let (alloca, ty) = self.local_alloca(place.local)?;
         // Wave-1: projections (Field / Index / Deref / Discriminant) are
         // not yet materialised in the LLVM backend — Cranelift backend
         // also only supports a narrow subset of projection paths at M9.
@@ -3808,7 +3840,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         place: &Place,
         val: BasicValueEnum<'ctx>,
     ) -> Result<(), CodegenError> {
-        let (alloca, ty) = self.local_allocas[&place.local];
+        let (alloca, ty) = self.local_alloca(place.local)?;
         // Cast value to alloca's expected type if needed (handles the
         // i1↔i8↔i64 + zero-fallthrough cases the lowering hands us).
         let val_cast = self.coerce_value_to(val, ty)?;
@@ -4771,7 +4803,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
 
     fn lower_ref(&mut self, place: &Place) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         // Wave-1: Ref of a bare local is the alloca pointer itself.
-        let (alloca, _) = self.local_allocas[&place.local];
+        let (alloca, _) = self.local_alloca(place.local)?;
         Ok(alloca.into())
     }
 }

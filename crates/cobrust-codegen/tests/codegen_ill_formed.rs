@@ -60,7 +60,7 @@ fn host_object_spec(name: &str) -> TargetSpec {
     TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
-        backend: Backend::Cranelift,
+        backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
         output_dir: dir,
         module_name: name.to_string(),
@@ -103,15 +103,24 @@ fn ill_002_unsupported_backend_message_mentions_feature() {
 }
 
 // =====================================================================
-// 2. UnsupportedTarget — synthetic triple that Cranelift refuses.
+// 2. UnsupportedTarget — a triple `target-lexicon` parses but the
+//    LLVM 18 backend has no registered target for.
+//
+//    ADR-0070 §X.4 note: the former SPARC64 probe asserted Cranelift's
+//    narrower ISA matrix. LLVM 18 *does* register SPARC + RISC-V, so
+//    those triples now compile successfully. `xtensa-unknown-none-elf`
+//    is parsed by `target-lexicon` into a valid `Triple` but has no
+//    backend in stock LLVM 18 → `Target::from_triple` errors →
+//    `CodegenError::UnsupportedTarget`. This keeps the variant under
+//    regression coverage against the real (LLVM-only) backend.
 // =====================================================================
 
 #[test]
 fn ill_003_unsupported_target_arbitrary_triple() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
     let mut spec = host_object_spec("ill_003");
-    // SPARC is not supported by Cranelift; this triple should error.
-    spec.triple = Triple::from_str("sparc64-unknown-linux-gnu").expect("triple parse");
+    // Xtensa is not in stock LLVM 18's registered targets.
+    spec.triple = Triple::from_str("xtensa-unknown-none-elf").expect("triple parse");
     let err = emit(&mir, spec).unwrap_err();
     assert!(
         matches!(err, CodegenError::UnsupportedTarget(_)),
@@ -123,9 +132,9 @@ fn ill_003_unsupported_target_arbitrary_triple() {
 fn ill_004_unsupported_target_carries_triple_in_message() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
     let mut spec = host_object_spec("ill_004");
-    spec.triple = Triple::from_str("sparc64-unknown-linux-gnu").unwrap();
+    spec.triple = Triple::from_str("xtensa-unknown-none-elf").unwrap();
     let err = emit(&mir, spec).unwrap_err();
-    assert!(err.to_string().contains("sparc"));
+    assert!(err.to_string().contains("xtensa"));
 }
 
 // =====================================================================
@@ -198,13 +207,14 @@ fn ill_006_invalid_mir_message_cites_local() {
 }
 
 // =====================================================================
-// 4. CraneliftError — programmatically force a Cranelift verifier
-//    failure by emitting a Body whose terminator has a target
-//    block that doesn't exist.
+// 4. Broken IR — emit a Body whose terminator targets a block that
+//    doesn't exist. ADR-0070 §X.4: the Cranelift AOT backend (and its
+//    `CraneliftError` variant) was removed; the LLVM backend / MIR
+//    validation surfaces this as InvalidMir / Internal / LlvmError.
 // =====================================================================
 
 #[test]
-fn ill_007_cranelift_error_dangling_block_target() {
+fn ill_007_broken_ir_dangling_block_target() {
     use cobrust_frontend::span::Span;
     use cobrust_hir::DefId;
     let span = Span::new(cobrust_frontend::span::FileId::SYNTHETIC, 0, 0);
@@ -235,13 +245,12 @@ fn ill_007_cranelift_error_dangling_block_target() {
     let module = build_bare_module(body);
     let spec = host_object_spec("ill_007");
     let err = emit(&module, spec).unwrap_err();
-    // Either InvalidMir or CraneliftError or a panic-coerced error;
-    // accept anything that signals "broken IR".
+    // Accept anything that signals "broken IR": MIR validation rejects
+    // it (InvalidMir), or the LLVM backend / verifier flags it
+    // (LlvmError / Internal).
     match err {
-        CodegenError::CraneliftError(_)
-        | CodegenError::InvalidMir(_)
-        | CodegenError::Internal(_) => {}
-        other => panic!("expected Cranelift / InvalidMir / Internal, got {other:?}"),
+        CodegenError::InvalidMir(_) | CodegenError::Internal(_) | CodegenError::LlvmError(_) => {}
+        other => panic!("expected InvalidMir / Internal / LlvmError, got {other:?}"),
     }
 }
 
@@ -287,11 +296,9 @@ fn ill_011_codegen_error_display_invalid_mir() {
     assert!(e.to_string().contains("MIR"));
 }
 
-#[test]
-fn ill_012_codegen_error_display_cranelift_error() {
-    let e = CodegenError::CraneliftError("synthetic".to_string());
-    assert!(e.to_string().contains("Cranelift"));
-}
+// ill_012 (CraneliftError Display) removed — ADR-0070 §X.4 deleted the
+// `CodegenError::CraneliftError` variant along with the Cranelift AOT
+// backend. The LLVM-error Display path is covered by ill_013 below.
 
 #[test]
 fn ill_013_codegen_error_display_llvm_error() {
@@ -399,24 +406,19 @@ fn ill_019_invalid_mir_dangling_in_terminator_call_destination() {
 // =====================================================================
 
 #[test]
-fn ill_020_default_backend_follows_llvm_feature() {
-    // ADR-0070 §X.3 RATIFIED 2026-05-26: LLVM is the default backend when
-    // the `llvm` feature is active (now the workspace default). Cranelift
-    // remains the fallback under `--no-default-features`.
-    if cfg!(feature = "llvm") {
-        assert_eq!(Backend::default(), Backend::Llvm);
-        assert_eq!(Backend::default_for_dev(), Backend::Llvm);
-    } else {
-        assert_eq!(Backend::default(), Backend::Cranelift);
-        assert_eq!(Backend::default_for_dev(), Backend::Cranelift);
-    }
+fn ill_020_default_backend_is_llvm() {
+    // ADR-0070 §X.4 RATIFIED 2026-05-27: LLVM is the SOLE AOT backend.
+    // `Backend` has a single variant, so every default is `Llvm`
+    // regardless of feature flags (the feature only gates whether
+    // `emit()` is functional, not which backend is selected).
+    assert_eq!(Backend::default(), Backend::Llvm);
+    assert_eq!(Backend::default_for_dev(), Backend::Llvm);
 }
 
 #[test]
-fn ill_021_release_default_when_no_llvm_is_cranelift() {
-    if !cfg!(feature = "llvm") {
-        assert_eq!(Backend::default_for_release(), Backend::Cranelift);
-    }
+fn ill_021_release_default_is_llvm() {
+    // ADR-0070 §X.4: the release default is LLVM (the sole AOT backend).
+    assert_eq!(Backend::default_for_release(), Backend::Llvm);
 }
 
 // =====================================================================
@@ -577,7 +579,7 @@ fn ill_033_read_nonexistent_place_in_assign() {
 
 #[test]
 fn ill_034_backend_eq_clone_debug() {
-    let a = Backend::Cranelift;
+    let a = Backend::Llvm;
     let b = a;
     assert_eq!(a, b);
     let _ = format!("{a:?}");
@@ -608,7 +610,9 @@ fn ill_036_triple_parse_failure_is_error() {
         if let Err(e) = r {
             assert!(matches!(
                 e,
-                CodegenError::UnsupportedTarget(_) | CodegenError::CraneliftError(_)
+                CodegenError::UnsupportedTarget(_)
+                    | CodegenError::LlvmError(_)
+                    | CodegenError::ObjectEmission(_)
             ));
         }
     }
@@ -649,14 +653,9 @@ fn ill_039_artifact_dylib_path_accessor() {
 fn ill_040_targetspec_host_dev() {
     let dir = std::env::temp_dir().join("cobrust-m9-helper");
     let spec = TargetSpec::host_dev(dir, "h");
-    // ADR-0070 §X.3: host_dev backend follows default_for_dev (LLVM when
-    // the `llvm` feature is active — now the workspace default).
-    let expected = if cfg!(feature = "llvm") {
-        Backend::Llvm
-    } else {
-        Backend::Cranelift
-    };
-    assert_eq!(spec.backend, expected);
+    // ADR-0070 §X.4: host_dev backend follows default_for_dev, which is
+    // unconditionally LLVM (the sole AOT backend).
+    assert_eq!(spec.backend, Backend::Llvm);
     assert_eq!(spec.opt_level, OptLevel::None);
 }
 

@@ -3,8 +3,9 @@
 //! Mach-O on macOS, the expected sections + at least one exported
 //! symbol must be present.
 //!
-//! Per ADR-0023 §"Object emission":
-//! - **ELF on Linux**: emitted directly via `cranelift-object`.
+//! Per ADR-0023 §"Object emission" (ADR-0070 §X.4: LLVM is the sole
+//! AOT backend, so emission routes through the inkwell object writer):
+//! - **ELF on Linux**: emitted via the LLVM TargetMachine object writer.
 //! - **Mach-O on macOS**: same path; format selected from triple.
 
 #![allow(clippy::cast_possible_truncation)]
@@ -56,7 +57,7 @@ fn host_object_spec(name: &str) -> TargetSpec {
     TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
-        backend: Backend::Cranelift,
+        backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
         output_dir: dir,
         module_name: name.to_string(),
@@ -227,7 +228,7 @@ fn layout_007_object_file_reasonable_size() {
 }
 
 // =====================================================================
-// 8. Cranelift backend produces relocations for function calls.
+// 8. LLVM backend produces relocations for function calls.
 // =====================================================================
 
 #[test]
@@ -245,68 +246,16 @@ fn layout_008_call_emits_relocation_or_direct_call() {
 }
 
 // =====================================================================
-// 9..15: ABI / calling convention spot checks.
+// 9..15: ABI / calling-convention spot checks — REMOVED (ADR-0070 §X.4).
+//
+// The former layout_009..015 exercised `cobrust_codegen::abi::*`
+// (cranelift_call_conv / cranelift_scalar_ty / pointer_ty / is_copy_ty).
+// `abi.rs` was consumed solely by the deleted Cranelift AOT backend and
+// was removed in §X.4. The LLVM backend computes its calling convention
+// + scalar widths internally via inkwell, so there is no standalone
+// public ABI surface left to unit-test here. The object-layout tests
+// above (1..8) now exercise the LLVM object writer end-to-end.
 // =====================================================================
-
-#[test]
-fn layout_009_aarch64_uses_apple_aarch64_call_conv() {
-    use cobrust_codegen::abi::cranelift_call_conv;
-    use std::str::FromStr;
-    let triple = Triple::from_str("aarch64-apple-darwin").unwrap();
-    let cc = cranelift_call_conv(&triple);
-    assert_eq!(cc, cranelift_codegen::isa::CallConv::AppleAarch64);
-}
-
-#[test]
-fn layout_010_linux_x86_64_uses_systemv() {
-    use cobrust_codegen::abi::cranelift_call_conv;
-    use std::str::FromStr;
-    let triple = Triple::from_str("x86_64-unknown-linux-gnu").unwrap();
-    let cc = cranelift_call_conv(&triple);
-    assert_eq!(cc, cranelift_codegen::isa::CallConv::SystemV);
-}
-
-#[test]
-fn layout_011_pointer_ty_is_i64_on_64bit() {
-    use cobrust_codegen::abi::pointer_ty;
-    use cranelift_codegen::ir::types;
-    let triple = Triple::host();
-    assert_eq!(pointer_ty(&triple), types::I64);
-}
-
-#[test]
-fn layout_012_scalar_ty_int() {
-    use cobrust_codegen::abi::cranelift_scalar_ty;
-    use cobrust_types::Ty;
-    use cranelift_codegen::ir::types;
-    assert_eq!(cranelift_scalar_ty(&Ty::Int), Some(types::I64));
-}
-
-#[test]
-fn layout_013_scalar_ty_float() {
-    use cobrust_codegen::abi::cranelift_scalar_ty;
-    use cobrust_types::Ty;
-    use cranelift_codegen::ir::types;
-    assert_eq!(cranelift_scalar_ty(&Ty::Float), Some(types::F64));
-}
-
-#[test]
-fn layout_014_scalar_ty_bool() {
-    use cobrust_codegen::abi::cranelift_scalar_ty;
-    use cobrust_types::Ty;
-    use cranelift_codegen::ir::types;
-    assert_eq!(cranelift_scalar_ty(&Ty::Bool), Some(types::I8));
-}
-
-#[test]
-fn layout_015_is_copy_ty() {
-    use cobrust_codegen::abi::is_copy_ty;
-    use cobrust_types::Ty;
-    assert!(is_copy_ty(&Ty::Int));
-    assert!(is_copy_ty(&Ty::Float));
-    assert!(is_copy_ty(&Ty::Bool));
-    assert!(is_copy_ty(&Ty::None));
-}
 
 // =====================================================================
 // 16. Linker availability sanity check.

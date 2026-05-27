@@ -1,14 +1,15 @@
 //! Module-generic MIR→Cranelift IR lowering substrate (ADR-0058d).
 //!
-//! Phase K Strand #4 deliverable. Extracted from
-//! `cranelift_backend.rs` to provide a single source of truth for
-//! the wave-1 lowering shape consumed by both:
+//! Phase K Strand #4 deliverable. Originally extracted from
+//! `cranelift_backend.rs` to provide a single source of truth for the
+//! wave-1 lowering shape. Post ADR-0070 §X.4 the AOT
+//! `cranelift_backend` was removed (LLVM is the sole AOT backend), so
+//! this substrate now has exactly one consumer:
 //!
-//! - `cobrust-codegen::cranelift_backend` (AOT path, via
-//!   `CraneliftCtx::define_body`'s stateful dispatcher — does NOT
-//!   call into this module today; the wave-1 helpers exist primarily
-//!   to anchor a public contract).
-//! - `cobrust-jit::lower` (JIT path, thin wrapper consumer).
+//! - `cobrust-jit::lower` (JIT/REPL path, thin wrapper consumer). This
+//!   is why `cranelift-codegen` / `cranelift-frontend` are retained as
+//!   `cobrust-codegen` dependencies — the JIT hard-depends on them
+//!   through this module.
 //!
 //! ## Wave-1 surface (binding per ADR-0058d §2.1)
 //!

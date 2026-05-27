@@ -1,6 +1,6 @@
 //! M9 well-formed codegen tests — every program here lowers from
 //! Cobrust source → AST → HIR → typed-HIR → MIR → object file
-//! cleanly via the Cranelift backend.
+//! cleanly via the LLVM backend (ADR-0070 §X.4: sole AOT backend).
 //!
 //! ADR-0023 §"Differential gate (acceptance contract)" pins the
 //! M9 acceptance bar at ≥ 50 well-formed programs.
@@ -56,7 +56,7 @@ fn host_object_spec(name: &str) -> TargetSpec {
     TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
-        backend: Backend::Cranelift,
+        backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
         output_dir: dir,
         module_name: name.to_string(),
@@ -66,7 +66,7 @@ fn host_object_spec(name: &str) -> TargetSpec {
     }
 }
 
-/// Compile `src` to an object file via Cranelift; assert the artifact
+/// Compile `src` to an object file via LLVM; assert the artifact
 /// path exists + is non-empty.
 fn compile_ok(name: &str, src: &str) {
     let mir = lower_to_mir(src);
@@ -108,7 +108,7 @@ fn code_section_size(obj_bytes: &[u8]) -> u64 {
     let obj = object::File::parse(obj_bytes).expect("parse object");
     obj.sections()
         .filter(|s| {
-            // Accept both ELF `.text` and Mach-O `__text` (and Cranelift `$d.0`).
+            // Accept both ELF `.text` and Mach-O `__text` (and `$d.0` data refs).
             s.name()
                 .map(|n| n.contains("text") || n.starts_with('$'))
                 .unwrap_or(false)
@@ -632,35 +632,28 @@ fn p055_pow_of_two_count() {
 // --- Backend selection cases ---------------------------------------------
 
 #[test]
-fn p056_default_backend_follows_llvm_feature() {
-    // ADR-0070 §X.3 RATIFIED 2026-05-26: default_for_dev returns LLVM when
-    // the `llvm` feature is active (now the workspace default).
+fn p056_default_dev_backend_is_llvm() {
+    // ADR-0070 §X.4 RATIFIED 2026-05-27: LLVM is the sole AOT backend,
+    // so default_for_dev unconditionally returns Llvm.
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
     let mut spec = host_object_spec("p056");
     spec.backend = Backend::default_for_dev();
-    let expected = if cfg!(feature = "llvm") {
-        Backend::Llvm
-    } else {
-        Backend::Cranelift
-    };
-    assert_eq!(spec.backend, expected);
+    assert_eq!(spec.backend, Backend::Llvm);
     let _ = emit(&mir, spec).expect("emit");
 }
 
 #[test]
-fn p057_release_backend_falls_back_when_no_llvm() {
+fn p057_default_release_backend_is_llvm() {
+    // ADR-0070 §X.4: default_for_release is LLVM (the sole AOT backend).
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
     let mut spec = host_object_spec("p057");
     spec.backend = Backend::default_for_release();
-    // Without `--features llvm` the release default is still Cranelift.
-    if !cfg!(feature = "llvm") {
-        assert_eq!(spec.backend, Backend::Cranelift);
-        let _ = emit(&mir, spec).expect("emit");
-    }
+    assert_eq!(spec.backend, Backend::Llvm);
+    let _ = emit(&mir, spec).expect("emit");
 }
 
 #[test]
-fn p058_optlevel_speed_cranelift() {
+fn p058_optlevel_speed_compiles() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
     let mut spec = host_object_spec("p058");
     spec.opt_level = OptLevel::Speed;
@@ -668,7 +661,7 @@ fn p058_optlevel_speed_cranelift() {
 }
 
 #[test]
-fn p059_optlevel_speed_and_size_cranelift() {
+fn p059_optlevel_speed_and_size_compiles() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
     let mut spec = host_object_spec("p059");
     spec.opt_level = OptLevel::SpeedAndSize;

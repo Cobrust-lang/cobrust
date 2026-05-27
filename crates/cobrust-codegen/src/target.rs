@@ -15,13 +15,14 @@ use crate::artifact::ArtifactKind;
 pub struct TargetSpec {
     /// Target triple (e.g. `x86_64-unknown-linux-gnu`).
     pub triple: Triple,
-    /// Optimization level. Cranelift maps this to its own opt
-    /// settings; LLVM maps to `-O0` / `-O2` / `-Oz`.
+    /// Optimization level. LLVM maps this to `-O0` / `-O2` / `-Oz`.
     pub opt_level: OptLevel,
-    /// Backend selection. Post ADR-0070 §X.3 (RATIFIED 2026-05-26),
-    /// [`Backend::Llvm`] is the default when the crate is built with
-    /// the `llvm` feature (now in `default = ["llvm"]`); [`Backend::Cranelift`]
-    /// remains the fallback when the feature is disabled.
+    /// Backend selection. Post ADR-0070 §X.4 (RATIFIED 2026-05-27),
+    /// [`Backend::Llvm`] is the sole AOT backend; it is functional only
+    /// when the crate is built with the `llvm` feature (in
+    /// `default = ["llvm"]`). With the feature disabled, [`emit`](crate::emit)
+    /// returns [`CodegenError::UnsupportedBackend`](crate::CodegenError::UnsupportedBackend)
+    /// — the intended JIT-substrate / frontend-only build mode.
     pub backend: Backend,
     /// Artifact kind (`Object` / `Executable` / `DynamicLibrary`).
     pub artifact: ArtifactKind,
@@ -40,8 +41,6 @@ pub struct TargetSpec {
     /// emission falls back to `module_name` as the filename + `.` as
     /// the directory; line table collapses to 0/0 for every statement
     /// (DI structure still validates per `llvm-dwarfdump`).
-    ///
-    /// Cranelift backend ignores this field.
     pub source_path: Option<PathBuf>,
     /// Tier 1 runtime-dispatch multi-versioning
     /// (numerical-compute-hardware-tiering.md §Tier1).
@@ -62,8 +61,6 @@ pub struct TargetSpec {
     ///
     /// **Default**: `true` when `opt_level != OptLevel::None`
     /// (i.e. `cobrust build --release`). False on debug builds.
-    ///
-    /// Cranelift backend ignores this field.
     pub runtime_dispatch: bool,
     /// Tier 2 host-specific CPU tuning
     /// (numerical-compute-hardware-tiering.md §Tier 2).
@@ -80,14 +77,12 @@ pub struct TargetSpec {
     /// - `None` + `runtime_dispatch=true`  → Tier 1 only (default `--release`).
     /// - `Some("native")` + `runtime_dispatch=false` → Tier 2 only.
     /// - `Some("native")` + `runtime_dispatch=true`  → both layers active.
-    ///
-    /// Cranelift backend ignores this field.
     pub target_cpu: Option<String>,
 }
 
 impl TargetSpec {
     /// A "host development build" target — uses the host triple,
-    /// no opt, Cranelift, executable artifact, output to a temp dir.
+    /// no opt, LLVM, executable artifact, output to a temp dir.
     ///
     /// Useful for tests + CLI smoke checks.
     #[must_use]
@@ -106,7 +101,7 @@ impl TargetSpec {
     }
 
     /// A "host release build" target — host triple, full opt,
-    /// LLVM if `--features llvm` else Cranelift, executable.
+    /// LLVM, executable.
     #[must_use]
     pub fn host_release(output_dir: PathBuf, module_name: impl Into<String>) -> Self {
         Self {
@@ -145,54 +140,39 @@ pub enum OptLevel {
     /// `-O0` — no opt; fastest compile, slowest run.
     #[default]
     None,
-    /// Speed-focused opt (Cranelift `speed`, LLVM `-O2`).
+    /// Speed-focused opt (LLVM `-O2`).
     Speed,
-    /// Speed + size opt (Cranelift `speed_and_size`, LLVM `-Oz`).
+    /// Speed + size opt (LLVM `-Oz`).
     SpeedAndSize,
 }
 
-/// Backend selector — Cranelift is the default; LLVM is opt-in
-/// via `--features llvm`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Backend selector. Post ADR-0070 §X.4 (RATIFIED 2026-05-27),
+/// [`Backend::Llvm`] is the sole AOT backend (the Cranelift AOT
+/// backend was removed; Cranelift is retained only as the
+/// `cobrust-jit` IR substrate). The enum is kept (with its single
+/// variant) so the `backend` field + a future backend remain
+/// forward-compatible.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum Backend {
-    /// Pure-Rust Cranelift backend (default for `cargo build`).
-    Cranelift,
-    /// LLVM via inkwell (requires `--features llvm`).
+    /// LLVM via inkwell. Functional only when the crate is built with
+    /// the `llvm` feature (in `default = ["llvm"]`); otherwise
+    /// [`emit`](crate::emit) returns
+    /// [`CodegenError::UnsupportedBackend`](crate::CodegenError::UnsupportedBackend).
+    #[default]
     Llvm,
 }
 
 impl Backend {
     /// Recommended default for development / debug builds.
-    /// Post ADR-0070 §X.3 RATIFIED 2026-05-26: LLVM when available
-    /// (now default per `default = ["llvm"]`), else Cranelift.
+    /// Post ADR-0070 §X.4 RATIFIED 2026-05-27: LLVM is the sole AOT backend.
     #[must_use]
     pub fn default_for_dev() -> Self {
-        if cfg!(feature = "llvm") {
-            Backend::Llvm
-        } else {
-            Backend::Cranelift
-        }
+        Backend::Llvm
     }
 
-    /// Recommended default for release builds: LLVM if available,
-    /// else Cranelift.
+    /// Recommended default for release builds: LLVM (the sole AOT backend).
     #[must_use]
     pub fn default_for_release() -> Self {
-        if cfg!(feature = "llvm") {
-            Backend::Llvm
-        } else {
-            Backend::Cranelift
-        }
-    }
-}
-
-impl Default for Backend {
-    fn default() -> Self {
-        // ADR-0070 §X.3 RATIFIED — LLVM default when feature available.
-        if cfg!(feature = "llvm") {
-            Backend::Llvm
-        } else {
-            Backend::Cranelift
-        }
+        Backend::Llvm
     }
 }

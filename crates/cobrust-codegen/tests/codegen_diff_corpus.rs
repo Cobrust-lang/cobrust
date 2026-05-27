@@ -17,12 +17,19 @@
 //! to a valid object file and (for the executable subset) **link
 //! + run yields exit code 0** when the program returns 0 from `main`.
 //!
-//! ## ADR-0058a LLVM column (Phase K wave-1)
+//! ## ADR-0070 §X.4 — collapsed to LLVM-only
 //!
-//! The second section of this file adds 30 LLVM-backend fixtures that
-//! mirror the Cranelift forms above. Each test is `#[ignore]` until
-//! the DEV agent un-stubs `llvm_backend::emit` per ADR-0058a. The
-//! fixture naming convention is `llvm_<category>_<N>_<description>`.
+//! The Cranelift AOT backend was removed in ADR-0070 §X.4; LLVM is the
+//! sole AOT backend. The `diff_form_*` "core 30 form" fixtures below
+//! (formerly the "Cranelift column") now route through `Backend::Llvm`
+//! via `host_object_spec`. The `llvm_*` fixtures (second section) remain
+//! the ADR-0058a explicit LLVM coverage matrix; both columns now exercise
+//! the same (LLVM) backend.
+//!
+//! ## ADR-0058a LLVM coverage matrix (Phase K wave-1)
+//!
+//! The second section adds 30 LLVM-backend fixtures. The fixture naming
+//! convention is `llvm_<category>_<N>_<description>`.
 //!
 //! Coverage matrix:
 //! - **Type table** (12 fixtures): ADR-0058a §4 scalar + aggregate types.
@@ -83,7 +90,7 @@ fn host_object_spec(name: &str) -> TargetSpec {
     TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
-        backend: Backend::Cranelift,
+        backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
         output_dir: dir,
         module_name: name.to_string(),
@@ -109,8 +116,8 @@ fn compile_to_object(name: &str, src: &str) -> Artifact {
 // =====================================================================
 #[test]
 fn diff_form_01_module() {
-    // Empty docstring-only module compiles to an empty Cranelift
-    // object (just a synthetic init body).
+    // Empty docstring-only module compiles to an empty LLVM object
+    // (just a synthetic init body).
     compile_to_object("diff_form_01", r#""""mod""""#);
 }
 
@@ -389,11 +396,12 @@ fn diff_reference_factorial_compiles() {
 }
 
 // =====================================================================
-// ADR-0058a Phase K wave-1 — LLVM backend column
+// ADR-0058a Phase K wave-1 — LLVM backend coverage matrix
 //
-// All 30 tests below are #[ignore] until the DEV agent un-stubs
-// llvm_backend::emit. The ignore string encodes the rationale so
-// `cargo test -- --ignored --list` surfaces them cleanly.
+// These fixtures exercise the explicit ADR-0058a type/operand/
+// terminator/calling-conv matrix. Each test body is gated on
+// `#[cfg(feature = "llvm")]`; on a `--no-default-features` build the
+// body is a no-op (the substrate-only mode has no AOT backend).
 //
 // Helper: same shape as compile_to_object but routes to Backend::Llvm.
 // =====================================================================

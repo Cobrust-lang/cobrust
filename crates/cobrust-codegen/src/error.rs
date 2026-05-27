@@ -27,17 +27,11 @@ pub enum CodegenError {
     #[error("MIR rejected: {0}")]
     InvalidMir(String),
 
-    /// Cranelift returned an error. The wrapped string is the
-    /// `Display` form of the underlying Cranelift error.
-    #[error("Cranelift error: {0}")]
-    CraneliftError(String),
-
     /// LLVM (inkwell) returned an error.
     #[error("LLVM error: {0}")]
     LlvmError(String),
 
-    /// `cranelift-object` (or the inkwell object writer) failed to
-    /// emit the object file.
+    /// The inkwell object writer failed to emit the object file.
     #[error("object emission failed: {0}")]
     ObjectEmission(String),
 

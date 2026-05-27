@@ -10,8 +10,10 @@ dependencies: [mod:mir, mod:types, adr:0023, adr:0027, adr:0041, adr:0058, adr:0
 
 ## Purpose
 
-Lower MIR to native code. Two backends behind a feature flag;
-default depends on the build profile (per ADR-0023).
+Lower MIR to native code. **LLVM is the sole AOT backend** (ADR-0070
+§X.4, RATIFIED 2026-05-27); it is gated behind the `llvm` feature
+(in `default = ["llvm"]`). Cranelift is retained **only** as the
+`cobrust-jit` IR substrate (`lowering.rs`), not as an AOT backend.
 
 ## Status
 
@@ -22,14 +24,21 @@ default depends on the build profile (per ADR-0023).
 
 ## Backend matrix
 
-| Backend | Default for | Pros | Cons |
-|---|---|---|---|
-| Cranelift (`Backend::Cranelift`) | `cargo build` (dev) | Pure Rust, fast compile, no system deps | Less mature optimization |
-| LLVM (`Backend::Llvm`) — `--features llvm` | `cargo build --release` (when feature on) | Best codegen quality, broad target support | Slow build, large dep tree, requires system LLVM |
+Post ADR-0070 §X.4, the `Backend` enum has a single variant. LLVM is
+the only AOT backend; the `llvm` feature (default-on) gates whether
+`emit()` is functional.
 
-`Backend::default_for_dev()` always returns `Cranelift`.
-`Backend::default_for_release()` returns `Llvm` if `cfg!(feature =
-"llvm")` is on, otherwise `Cranelift`.
+| Backend | Default for | Notes |
+|---|---|---|
+| LLVM (`Backend::Llvm`) | all profiles (`cargo build` + `--release`) | Best codegen quality, broad target support; requires system LLVM 18+. With `--no-default-features` (`llvm` off), `emit()` returns `UnsupportedBackend` — the JIT-substrate / frontend-only build mode. |
+
+`Backend::default_for_dev()` and `Backend::default_for_release()` both
+return `Backend::Llvm` unconditionally (the feature flag gates
+functionality, not selection). The Cranelift AOT backend
+(`cranelift_backend.rs` + `abi.rs`) and the `CodegenError::CraneliftError`
+variant were removed in §X.4; `cranelift-module` / `cranelift-object`
+were dropped. `cranelift-codegen` / `cranelift-frontend` are retained for
+`lowering.rs` (the `cobrust-jit` substrate) only.
 
 ## Public surface (M9)
 
@@ -54,10 +63,10 @@ impl TargetSpec {
 
 pub enum OptLevel { None, Speed, SpeedAndSize }
 
-pub enum Backend { Cranelift, Llvm }
+pub enum Backend { Llvm }                    // sole AOT backend (ADR-0070 §X.4)
 impl Backend {
-    pub fn default_for_dev() -> Self;       // always Cranelift
-    pub fn default_for_release() -> Self;   // Llvm if feature else Cranelift
+    pub fn default_for_dev() -> Self;       // always Llvm
+    pub fn default_for_release() -> Self;   // always Llvm
 }
 
 pub enum ArtifactKind { Object, Executable, DynamicLibrary }
@@ -77,7 +86,7 @@ pub enum CodegenError {
     UnsupportedBackend(Backend),
     UnsupportedTarget(String),
     InvalidMir(String),
-    CraneliftError(String),
+    // CraneliftError removed in ADR-0070 §X.4 (Cranelift AOT backend gone).
     LlvmError(String),
     ObjectEmission(String),
     LinkerFailed { exit_code: i32, stderr: String },
@@ -335,8 +344,12 @@ Per ADR-0025 §"Codegen amendments":
 
 ## Done means (M9 — DONE)
 
-- [x] `Backend::Cranelift` produces correct object files for ≥ 60
-      well-formed MIR programs.
+> Historical M9 record. Per ADR-0070 §X.4 the Cranelift AOT backend was
+> removed; the object-file criteria below are now satisfied by
+> `Backend::Llvm` (the sole AOT backend).
+
+- [x] The AOT backend produces correct object files for ≥ 60
+      well-formed MIR programs (M9: Cranelift; post-§X.4: LLVM).
 - [x] `Backend::Llvm` is feature-gated; without `--features llvm`,
       the backend returns `CodegenError::UnsupportedBackend`.
 - [x] Object files parse via the `object` crate; symbols + sections
@@ -745,7 +758,13 @@ Mac verify (this session, 2026-05-21): `python3 tools/lldb-cobrust/tests/test_pr
 
 ## Phase K Strand #4 — JIT/AOT lowering convergence (ADR-0058d)
 
-`crates/cobrust-codegen/src/lowering.rs` is the module-generic MIR→Cranelift IR lowering substrate extracted in ADR-0058d. It anchors a single source of truth for the wave-1 lowering shape consumed by both the AOT path (`cranelift_backend::CraneliftCtx::define_body`'s stateful dispatcher) and the JIT path (`cobrust-jit::lower`, which is a thin wrapper consumer).
+> **ADR-0070 §X.4 note:** the AOT consumer (`cranelift_backend.rs`)
+> referenced below was removed; LLVM is now the sole AOT backend.
+> `lowering.rs` is **retained** as the Cranelift IR substrate for the
+> JIT path (`cobrust-jit::lower`) only. The §X.4-era reading: the
+> "single source of truth" now has exactly one consumer (the JIT).
+
+`crates/cobrust-codegen/src/lowering.rs` is the module-generic MIR→Cranelift IR lowering substrate extracted in ADR-0058d. It anchors a single source of truth for the wave-1 lowering shape historically consumed by both the AOT path (`cranelift_backend::CraneliftCtx::define_body`'s stateful dispatcher, **removed in §X.4**) and the JIT path (`cobrust-jit::lower`, which is a thin wrapper consumer — the sole remaining consumer post-§X.4).
 
 ### Public surface (stable for wave-1 per ADR-0058d §5.1)
 

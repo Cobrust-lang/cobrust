@@ -3,16 +3,19 @@
 //! M9 deliverable. ADR-0023 is the authoritative design document
 //! and pins:
 //!
-//! - **Backend feature flags**: Cranelift is the default;
-//!   `--features llvm` opts into the inkwell / LLVM 18+ backend
-//!   for `--release` opt quality.
+//! - **Backend**: LLVM (via inkwell / LLVM 18+) is the sole AOT
+//!   backend (ADR-0070 §X.4). It is gated behind the `llvm` feature
+//!   (in `default = ["llvm"]`); building `--no-default-features`
+//!   yields a JIT-substrate / frontend-only crate whose `emit()`
+//!   returns `UnsupportedBackend`. Cranelift is retained only as the
+//!   `cobrust-jit` IR substrate (`lowering.rs`), not as an AOT backend.
 //! - **`extern "Cobrust"` ABI**: System V AMD64 on Linux,
 //!   AAPCS64 on macOS — the host's standard C ABI.
 //! - **Linker delegation**: invoke `cc` (or `lld` via `--features
 //!   lld`); never bundle a linker.
 //! - **Target matrix**: `x86_64-unknown-linux-gnu` (ELF) +
 //!   `aarch64-apple-darwin` (Mach-O) at M9; expansion-friendly
-//!   via `target-lexicon` parsing + Cranelift's `isa::lookup`.
+//!   via `target-lexicon` parsing + LLVM's target registry.
 //! - **Differential gate**: every "core 30" form's compiled
 //!   output produces identical `stdout` to a hand-written Rust
 //!   reference program; LLVM `-O3` ≥ 30% smaller binary on a
@@ -64,9 +67,7 @@
 #![allow(clippy::ignored_unit_patterns)]
 #![allow(clippy::elidable_lifetime_names)]
 
-pub mod abi;
 pub mod artifact;
-pub mod cranelift_backend;
 pub mod error;
 pub mod linker;
 /// Module-generic MIR→Cranelift IR lowering substrate (ADR-0058d).
@@ -83,11 +84,12 @@ pub use target::{Backend, OptLevel, TargetSpec};
 
 /// Top-level entry — MIR module → native artifact.
 ///
-/// Per ADR-0023, the backend is chosen by `spec.backend`:
+/// Post ADR-0070 §X.4, [`Backend::Llvm`] is the sole AOT backend:
 ///
-/// - [`Backend::Cranelift`] always works (pure Rust dep tree).
-/// - [`Backend::Llvm`] requires `--features llvm`; otherwise
-///   returns [`CodegenError::UnsupportedBackend`].
+/// - With the `llvm` feature (in `default = ["llvm"]`), lowers via
+///   the inkwell / LLVM 18+ backend.
+/// - Without it, returns [`CodegenError::UnsupportedBackend`] — the
+///   intended JIT-substrate / frontend-only build mode.
 ///
 /// On success, the returned [`Artifact`] carries the path to the
 /// emitted file (object / executable / dynamic library).
@@ -95,11 +97,10 @@ pub use target::{Backend, OptLevel, TargetSpec};
 /// # Errors
 ///
 /// Returns [`CodegenError`] for any failure mode: unsupported
-/// backend / target, MIR rejected, Cranelift / LLVM error,
-/// object-emission failure, linker failure, I/O error.
+/// backend / target, MIR rejected, LLVM error, object-emission
+/// failure, linker failure, I/O error.
 pub fn emit(module: &cobrust_mir::Module, spec: TargetSpec) -> Result<Artifact, CodegenError> {
     match spec.backend {
-        Backend::Cranelift => cranelift_backend::emit(module, &spec),
         Backend::Llvm => {
             #[cfg(feature = "llvm")]
             {
