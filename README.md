@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue.svg)](#license)
-[![Stage](https://img.shields.io/badge/stage-0.6.1-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.6.1)
+[![Stage](https://img.shields.io/badge/stage-0.6.1-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.6.2)
 
 [**Why Cobrust?**](docs/post/why-cobrust.md) ·
 [**Quick Start**](#quick-start) ·
@@ -78,22 +78,22 @@ brew install cobrust
 # Option B — Via cargo (Rust toolchain required, 1.94+)
 cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
-# Option C — Download a prebuilt wheel (v0.6.1, FHS bin/lib/share layout per ADR-0069)
-# Each tarball extracts to a self-contained cobrust-v0.6.1/ directory.
+# Option C — Download a prebuilt wheel (v0.6.2, FHS bin/lib/share layout per ADR-0069)
+# Each tarball extracts to a self-contained cobrust-v0.6.2/ directory.
 # Symlink bin/cobrust into your $PATH; the runtime + stdlib stay siblings.
 # Do NOT `cp cobrust /usr/local/bin/` — that breaks the wheel-layout lookup chain.
 
 # macOS Apple Silicon M1 (tier-1)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/cobrust-v0.6.1-aarch64-apple-darwin-m1.tar.gz | tar xz -C $HOME/.local/ \
-  && ln -sf $HOME/.local/cobrust-v0.6.1/bin/cobrust $HOME/.local/bin/cobrust
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.2/cobrust-v0.6.2-aarch64-apple-darwin-m1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.2/bin/cobrust $HOME/.local/bin/cobrust
 
 # Linux x86_64 baseline (v1 — any x86_64)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/cobrust-v0.6.1-x86_64-unknown-linux-gnu-v1.tar.gz | tar xz -C $HOME/.local/ \
-  && ln -sf $HOME/.local/cobrust-v0.6.1/bin/cobrust $HOME/.local/bin/cobrust
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.2/cobrust-v0.6.2-x86_64-unknown-linux-gnu-v1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.2/bin/cobrust $HOME/.local/bin/cobrust
 
 # Linux x86_64 musl static (Alpine / distroless / minimal containers)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/cobrust-v0.6.1-x86_64-unknown-linux-musl-v1.tar.gz | tar xz -C $HOME/.local/ \
-  && ln -sf $HOME/.local/cobrust-v0.6.1/bin/cobrust $HOME/.local/bin/cobrust
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.2/cobrust-v0.6.2-x86_64-unknown-linux-musl-v1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.2/bin/cobrust $HOME/.local/bin/cobrust
 
 # Each tarball bundles:
 #   bin/cobrust            — main driver (subcommands: build/run/check/fmt/translate/new/test/repl/lsp/dap/...)

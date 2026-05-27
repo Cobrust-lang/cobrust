@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Cobrust-lang/cobrust/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue.svg)](#许可证)
-[![Stage](https://img.shields.io/badge/stage-0.6.1-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.6.1)
+[![Stage](https://img.shields.io/badge/stage-0.6.1-brightgreen.svg)](https://github.com/Cobrust-lang/cobrust/releases/tag/v0.6.2)
 
 [**为什么是 Cobrust?**](docs/post/why-cobrust.md) ·
 [**快速开始**](#快速开始) ·
@@ -72,22 +72,22 @@ $ brew install cobrust
 # Option B — 用 cargo install(需要 Rust 工具链 1.94+)
 $ cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
-# Option C — 下载预编译轮子(v0.6.1,FHS bin/lib/share 布局,ADR-0069)
-# 每个 tarball 解包为自包含的 cobrust-v0.6.1/ 目录;
+# Option C — 下载预编译轮子(v0.6.2,FHS bin/lib/share 布局,ADR-0069)
+# 每个 tarball 解包为自包含的 cobrust-v0.6.2/ 目录;
 # 把 bin/cobrust 软链到 $PATH,runtime + stdlib 留在 lib/ 和 share/ 同级目录。
 # 不要 `cp cobrust /usr/local/bin/` —— 那会破坏 wheel-layout 查找链(F46 修复点)。
 
 # macOS Apple Silicon M1(tier-1)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/cobrust-v0.6.1-aarch64-apple-darwin-m1.tar.gz | tar xz -C $HOME/.local/ \
-  && ln -sf $HOME/.local/cobrust-v0.6.1/bin/cobrust $HOME/.local/bin/cobrust
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.2/cobrust-v0.6.2-aarch64-apple-darwin-m1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.2/bin/cobrust $HOME/.local/bin/cobrust
 
 # Linux x86_64 基线(v1 — 任意 x86_64)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/cobrust-v0.6.1-x86_64-unknown-linux-gnu-v1.tar.gz | tar xz -C $HOME/.local/ \
-  && ln -sf $HOME/.local/cobrust-v0.6.1/bin/cobrust $HOME/.local/bin/cobrust
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.2/cobrust-v0.6.2-x86_64-unknown-linux-gnu-v1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.2/bin/cobrust $HOME/.local/bin/cobrust
 
 # Linux x86_64 musl 静态(Alpine / distroless / 最小容器,无需 glibc)
-curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/cobrust-v0.6.1-x86_64-unknown-linux-musl-v1.tar.gz | tar xz -C $HOME/.local/ \
-  && ln -sf $HOME/.local/cobrust-v0.6.1/bin/cobrust $HOME/.local/bin/cobrust
+curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.2/cobrust-v0.6.2-x86_64-unknown-linux-musl-v1.tar.gz | tar xz -C $HOME/.local/ \
+  && ln -sf $HOME/.local/cobrust-v0.6.2/bin/cobrust $HOME/.local/bin/cobrust
 
 # 每个 tarball 都打包了:
 #   bin/cobrust            — 主驱动(子命令:build/run/check/fmt/translate/new/test/repl/lsp/dap/...)
