@@ -5,7 +5,7 @@ status: RESOLVED (fr14 un-ignored + green; LLVM `infer_local_types` fixed-point 
 date: 2026-05-27
 severity: medium
 siblings: [F53, F54, F55, F37]
-last_verified_commit: 41a859b
+last_verified_commit: b5b7318
 ---
 
 # F56 — LLVM double-negation of a float constant returns garbage
