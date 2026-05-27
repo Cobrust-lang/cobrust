@@ -636,14 +636,31 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
         OptLevel::SpeedAndSize => OptimizationLevel::Aggressive,
     };
     // Tier 2 host-specific CPU tuning (numerical-compute-hardware-tiering.md §Tier 2).
-    // `"native"` asks LLVM to auto-detect the host CPU and enables all available
-    // ISA extensions — zero dispatch overhead, host-only binary.
+    // `"native"` is expanded to the concrete host CPU name + full host feature
+    // string via LLVM's host-detection helpers, enabling all available ISA
+    // extensions with zero dispatch overhead (host-only binary).
+    //
+    // F58: LLVM's `create_target_machine` does NOT interpret the literal string
+    // `"native"` (unlike clang/llc, which call `sys::getHostCPUName()` themselves).
+    // Passing `"native"` verbatim yields an "unknown CPU" subtarget that, on some
+    // cloud x86_64 runners (e.g. GH Actions ubuntu), aborts with
+    // "LLVM ERROR: 64-bit code requested on a subtarget that doesn't support it!".
+    // We therefore expand `"native"` ourselves so LLVM receives a recognised CPU
+    // name (e.g. "znver3") plus an explicit feature string carrying 64-bit mode.
+    //
     // Any other string (e.g. `"skylake"`, `"apple-m1"`, `"neoverse-v1"`) is passed
-    // verbatim to LLVM as the target CPU name.
-    // When `None`, fall back to the `"generic"` baseline (pre-Tier-2 behaviour).
-    let cpu = spec.target_cpu.as_deref().unwrap_or("generic");
+    // verbatim with empty features. `None` falls back to the `"generic"` baseline
+    // (pre-Tier-2 behaviour).
+    let (cpu, features): (String, String) = match spec.target_cpu.as_deref() {
+        Some("native") => (
+            TargetMachine::get_host_cpu_name().to_string(),
+            TargetMachine::get_host_cpu_features().to_string(),
+        ),
+        Some(name) => (name.to_string(), String::new()),
+        None => ("generic".to_string(), String::new()),
+    };
     target
-        .create_target_machine(&triple, cpu, "", opt, RelocMode::PIC, CodeModel::Default)
+        .create_target_machine(&triple, &cpu, &features, opt, RelocMode::PIC, CodeModel::Default)
         .ok_or_else(|| {
             CodegenError::LlvmError(format!(
                 "failed to create LLVM TargetMachine for {} (cpu={cpu})",

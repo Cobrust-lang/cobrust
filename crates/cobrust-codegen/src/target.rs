@@ -18,12 +18,10 @@ pub struct TargetSpec {
     /// Optimization level. Cranelift maps this to its own opt
     /// settings; LLVM maps to `-O0` / `-O2` / `-Oz`.
     pub opt_level: OptLevel,
-    /// Backend selection. [`Backend::Cranelift`] is the default
-    /// for `cargo build`; [`Backend::Llvm`] requires `--features llvm`.
-    ///
-    /// ADR-0070 §X.3 flip to LLVM-default was attempted 2026-05-26 and
-    /// rolled back; see `docs/agent/findings/f53-llvm-default-flip-aggregate-gap.md`
-    /// for the LLVM `lower_aggregate(List | FormatString)` prerequisites.
+    /// Backend selection. Post ADR-0070 §X.3 (RATIFIED 2026-05-26),
+    /// [`Backend::Llvm`] is the default when the crate is built with
+    /// the `llvm` feature (now in `default = ["llvm"]`); [`Backend::Cranelift`]
+    /// remains the fallback when the feature is disabled.
     pub backend: Backend,
     /// Artifact kind (`Object` / `Executable` / `DynamicLibrary`).
     pub artifact: ArtifactKind,
