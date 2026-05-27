@@ -3894,15 +3894,481 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
 
     fn lower_aggregate(
         &mut self,
-        _kind: &AggregateKind,
-        _operands: &[Operand],
+        kind: &AggregateKind,
+        operands: &[Operand],
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-        // Wave-1 stub — Aggregate lowering for List/Dict/Set/Tuple/Record
-        // requires the stdlib runtime helpers (`__cobrust_list_new`,
-        // `__cobrust_dict_new`, etc.) which land in M11 + sub-ADR 0058b.
-        // Matches the Cranelift backend's mid-M9 stub posture at the
-        // wave-1 ratification SHA.
-        Ok(self.emitter.opaque_ptr_ty.const_null().into())
+        // F53 resolution (2026-05-26): the wave-1 stub returned
+        // `const_null` for every aggregate kind, which silently broke
+        // 36 workspace integration tests once the LLVM backend became
+        // reachable through `cobrust build` driver paths (cf.
+        // `docs/agent/findings/f53-llvm-default-flip-aggregate-gap.md`).
+        //
+        // This sprint lands `List` + `FormatString` lowering only;
+        // the remaining aggregate kinds (`Dict` / `Set` / `Tuple` /
+        // `Record` / `Adt`) keep the wave-1 stub posture pending a
+        // follow-up sprint (F53 §3 prerequisite #3). Mirrors
+        // Cranelift's `lower_aggregate_list` (cranelift_backend.rs:1674)
+        // + `lower_aggregate_format_string` (cranelift_backend.rs:1882).
+        match kind {
+            AggregateKind::List => self.lower_aggregate_list(operands),
+            AggregateKind::FormatString => self.lower_aggregate_format_string(operands),
+            // Wave-1 stub fallthrough for kinds not in F53 §3 scope.
+            // `Dict` / `Set` / `Tuple` / `Record` / `Adt(_, _)` keep
+            // returning `null` until their dedicated sprints land
+            // (still need the `__cobrust_dict_new` / `__cobrust_set_new`
+            // / `__cobrust_tuple_new` typed-shim dispatch tables —
+            // Cranelift's `lower_aggregate_dict_typed` is the reference).
+            AggregateKind::Tuple
+            | AggregateKind::Dict
+            | AggregateKind::Set
+            | AggregateKind::Record
+            | AggregateKind::Adt(_, _) => Ok(self.emitter.opaque_ptr_ty.const_null().into()),
+        }
+    }
+
+    /// LLVM mirror of `cranelift_backend::lower_aggregate_list`
+    /// (cranelift_backend.rs:1674-1739).
+    ///
+    /// Lowering pattern:
+    ///   1. `__cobrust_list_new(elem_size=8, len)` → buffer ptr.
+    ///   2. For each operand, materialise to an i64-encoded value
+    ///      (str literal → fresh str buffer; Str-typed local →
+    ///      `__cobrust_str_clone`; other → direct lower_operand).
+    ///   3. `__cobrust_list_set(buf, idx, val)` to populate the slot.
+    ///
+    /// Returns the buffer pointer as a `BasicValueEnum` (PointerValue
+    /// for the success path, opaque-ptr null when the runtime helpers
+    /// are not declared — defensive parity with the str-buf path).
+    fn lower_aggregate_list(
+        &mut self,
+        operands: &[Operand],
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let i64_ty = self.emitter.ctx.i64_type();
+        let elem_size = i64_ty.const_int(8, false);
+        let len_val = i64_ty.const_int(operands.len() as u64, false);
+        // 1. Allocate list buffer.
+        let Some(list_new) = self
+            .emitter
+            .runtime_helper_decls
+            .get("__cobrust_list_new")
+            .copied()
+        else {
+            return Ok(self.emitter.opaque_ptr_ty.const_null().into());
+        };
+        let alloc_args: [BasicMetadataValueEnum<'ctx>; 2] = [elem_size.into(), len_val.into()];
+        let alloc_call = self
+            .emitter
+            .builder
+            .build_call(list_new, &alloc_args, "list_new")
+            .map_err(map_builder_err)?;
+        let buf = alloc_call
+            .try_as_basic_value()
+            .basic()
+            .unwrap_or_else(|| self.emitter.opaque_ptr_ty.const_null().into());
+        // 2 + 3. Populate slots via `__cobrust_list_set`.
+        if let Some(list_set) = self
+            .emitter
+            .runtime_helper_decls
+            .get("__cobrust_list_set")
+            .copied()
+        {
+            for (idx, op) in operands.iter().enumerate() {
+                // Three materialisation cases — verbatim mirror of
+                // Cranelift's `lower_aggregate_list` (cf. ADR-0050c
+                // Phase 2 + Phase 4 — TD-1 closure):
+                //
+                //   1. `Constant::Str(payload)` literal → fresh heap
+                //      str-buffer via `materialize_str_buffer`.
+                //   2. Non-literal Str-typed operand (`Move(p)` or
+                //      `Copy(p)` where local p: Ty::Str) → clone the
+                //      pointer via `__cobrust_str_clone` so the slot
+                //      owns a fresh copy and the source local stays
+                //      valid for any subsequent uses (including more
+                //      list slots in the same literal — `[s, s, s]`
+                //      becomes three independent allocations).
+                //   3. Anything else (Int / Bool / nested list pointer)
+                //      → `lower_operand` direct (i64 by value).
+                let val_raw: BasicValueEnum<'ctx> =
+                    if let Operand::Constant(Constant::Str(payload)) = op {
+                        self.materialize_str_buffer(payload)?
+                    } else {
+                        let is_str_operand = match op {
+                            Operand::Copy(p) | Operand::Move(p) => self
+                                .body
+                                .locals
+                                .get(p.local.0 as usize)
+                                .map(|l| matches!(l.ty, Ty::Str))
+                                .unwrap_or(false),
+                            Operand::Constant(_) => false,
+                        };
+                        if is_str_operand {
+                            let raw = self.lower_operand(op)?;
+                            if let Some(clone_fr) = self
+                                .emitter
+                                .runtime_helper_decls
+                                .get("__cobrust_str_clone")
+                                .copied()
+                            {
+                                let clone_args: [BasicMetadataValueEnum<'ctx>; 1] = [raw.into()];
+                                let clone_call = self
+                                    .emitter
+                                    .builder
+                                    .build_call(clone_fr, &clone_args, "str_clone_for_list")
+                                    .map_err(map_builder_err)?;
+                                clone_call.try_as_basic_value().basic().unwrap_or(raw)
+                            } else {
+                                raw
+                            }
+                        } else {
+                            self.lower_operand(op)?
+                        }
+                    };
+                // Coerce to i64 for the C-ABI third arg of
+                // `__cobrust_list_set(buf, i, v)`. Mirrors Cranelift's
+                // `coerce_to_i64` (cranelift_backend.rs:3031-3050).
+                let val_i64 = self.coerce_value_to_i64(val_raw)?;
+                let idx_val = i64_ty.const_int(idx as u64, false);
+                let set_args: [BasicMetadataValueEnum<'ctx>; 3] =
+                    [buf.into(), idx_val.into(), val_i64.into()];
+                self.emitter
+                    .builder
+                    .build_call(list_set, &set_args, "list_set")
+                    .map_err(map_builder_err)?;
+            }
+        }
+        Ok(buf)
+    }
+
+    /// LLVM mirror of `cranelift_backend::lower_aggregate_format_string`
+    /// (cranelift_backend.rs:1882-2020).
+    ///
+    /// f-string lowering: allocate a fresh `__cobrust_str_new()` buffer
+    /// then walk operands. Static `Constant::Str` segments map to
+    /// `__cobrust_str_push_static`. Non-static "holes" dispatch per the
+    /// operand's MIR-declared type (Str → `fmt_str` via str_ptr/str_len;
+    /// Float → `fmt_float` or `fmt_float_prec` when followed by an
+    /// `FMTSPEC:...` sentinel; Bool/Int → `fmt_bool`/`fmt_int`; else
+    /// `fmt_repr`). Returns the buffer pointer.
+    fn lower_aggregate_format_string(
+        &mut self,
+        operands: &[Operand],
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let i64_ty = self.emitter.ctx.i64_type();
+        // Allocate buffer via __cobrust_str_new().
+        let Some(str_new) = self
+            .emitter
+            .runtime_helper_decls
+            .get("__cobrust_str_new")
+            .copied()
+        else {
+            return Ok(self.emitter.opaque_ptr_ty.const_null().into());
+        };
+        let new_call = self
+            .emitter
+            .builder
+            .build_call(str_new, &[], "fstr_new")
+            .map_err(map_builder_err)?;
+        let buf = new_call
+            .try_as_basic_value()
+            .basic()
+            .unwrap_or_else(|| self.emitter.opaque_ptr_ty.const_null().into());
+
+        let mut idx = 0;
+        while idx < operands.len() {
+            let op = &operands[idx];
+            // Static string literal? Push via __cobrust_str_push_static.
+            // Skip stray FMTSPEC: sentinels (the preceding float
+            // operand's handler consumed it via idx += 2).
+            if let Operand::Constant(Constant::Str(payload)) = op {
+                if payload.starts_with("FMTSPEC:") {
+                    idx += 1;
+                    continue;
+                }
+                if !payload.is_empty() {
+                    let (ptr_v, len_v) = self.materialize_str_data(payload)?;
+                    if let Some(push_fr) = self
+                        .emitter
+                        .runtime_helper_decls
+                        .get("__cobrust_str_push_static")
+                        .copied()
+                    {
+                        let push_args: [BasicMetadataValueEnum<'ctx>; 3] =
+                            [buf.into(), ptr_v.into(), len_v.into()];
+                        self.emitter
+                            .builder
+                            .build_call(push_fr, &push_args, "fstr_push_lit")
+                            .map_err(map_builder_err)?;
+                    }
+                }
+                idx += 1;
+                continue;
+            }
+            // Hole — codegen the value + dispatch by MIR-declared type
+            // when possible, falling back to the LLVM value type for
+            // anonymous operands. ADR-0050c Phase 2 cascade fix mirror:
+            // inspect `op`'s MIR-declared Ty FIRST so Str-typed locals
+            // (which arrive as opaque-ptr / i64 stack slots) dispatch
+            // to `__cobrust_fmt_str` via str_ptr / str_len rather than
+            // through `__cobrust_fmt_int` of the raw pointer.
+            let mir_ty: Option<Ty> = match op {
+                Operand::Copy(p) | Operand::Move(p) => self
+                    .body
+                    .locals
+                    .get(p.local.0 as usize)
+                    .map(|l| l.ty.clone()),
+                Operand::Constant(_) => None,
+            };
+            let is_str = matches!(mir_ty, Some(Ty::Str));
+            let v = self.lower_operand(op)?;
+            // Trailing FMTSPEC: sentinel for float precision specs.
+            let maybe_spec: Option<String> = operands.get(idx + 1).and_then(|next| {
+                if let Operand::Constant(Constant::Str(s)) = next {
+                    s.strip_prefix("FMTSPEC:").map(|s| s.to_string())
+                } else {
+                    None
+                }
+            });
+
+            if is_str {
+                // `__cobrust_fmt_str(buf, ptr, len)` expects raw bytes;
+                // extract (ptr, len) from the StringBuffer via the
+                // accessor helpers. f-string precision spec doesn't
+                // apply to str holes — only floats.
+                let str_ptr_fr = self
+                    .emitter
+                    .runtime_helper_decls
+                    .get("__cobrust_str_ptr")
+                    .copied();
+                let str_len_fr = self
+                    .emitter
+                    .runtime_helper_decls
+                    .get("__cobrust_str_len")
+                    .copied();
+                let fmt_str_fr = self
+                    .emitter
+                    .runtime_helper_decls
+                    .get("__cobrust_fmt_str")
+                    .copied();
+                if let (Some(ptr_fr), Some(len_fr), Some(fmt_fr)) =
+                    (str_ptr_fr, str_len_fr, fmt_str_fr)
+                {
+                    // Coerce IntValue → PointerValue for the str-buffer
+                    // arg if MIR encoded the slot as i64. Mirrors
+                    // `lower_call`'s extern-call int→ptr coercion at
+                    // line ~3088.
+                    let v_ptr_arg = self.coerce_value_to_ptr(v)?;
+                    let ptr_call = self
+                        .emitter
+                        .builder
+                        .build_call(ptr_fr, &[v_ptr_arg.into()], "fstr_str_ptr")
+                        .map_err(map_builder_err)?;
+                    let ptr_v_acc = ptr_call
+                        .try_as_basic_value()
+                        .basic()
+                        .unwrap_or_else(|| self.emitter.opaque_ptr_ty.const_null().into());
+                    let len_call = self
+                        .emitter
+                        .builder
+                        .build_call(len_fr, &[v_ptr_arg.into()], "fstr_str_len")
+                        .map_err(map_builder_err)?;
+                    let len_v_acc = len_call
+                        .try_as_basic_value()
+                        .basic()
+                        .unwrap_or_else(|| i64_ty.const_zero().into());
+                    let fmt_args: [BasicMetadataValueEnum<'ctx>; 3] =
+                        [buf.into(), ptr_v_acc.into(), len_v_acc.into()];
+                    self.emitter
+                        .builder
+                        .build_call(fmt_fr, &fmt_args, "fstr_fmt_str")
+                        .map_err(map_builder_err)?;
+                }
+                idx += 1;
+            } else if v.is_float_value() {
+                let v_f64 = v.into_float_value();
+                if let Some(spec) = maybe_spec {
+                    // M-F.3.3 gap (c): route to the precision formatter.
+                    if let Some(fr) = self
+                        .emitter
+                        .runtime_helper_decls
+                        .get("__cobrust_fmt_float_prec")
+                        .copied()
+                    {
+                        let (spec_ptr, spec_len) = self.materialize_str_data(&spec)?;
+                        let prec_args: [BasicMetadataValueEnum<'ctx>; 4] =
+                            [buf.into(), v_f64.into(), spec_ptr.into(), spec_len.into()];
+                        self.emitter
+                            .builder
+                            .build_call(fr, &prec_args, "fstr_fmt_float_prec")
+                            .map_err(map_builder_err)?;
+                    }
+                    idx += 2; // consume value + sentinel
+                } else {
+                    if let Some(fr) = self
+                        .emitter
+                        .runtime_helper_decls
+                        .get("__cobrust_fmt_float")
+                        .copied()
+                    {
+                        let float_args: [BasicMetadataValueEnum<'ctx>; 2] =
+                            [buf.into(), v_f64.into()];
+                        self.emitter
+                            .builder
+                            .build_call(fr, &float_args, "fstr_fmt_float")
+                            .map_err(map_builder_err)?;
+                    }
+                    idx += 1;
+                }
+            } else if matches!(mir_ty, Some(Ty::Bool))
+                || (v.is_int_value() && v.into_int_value().get_type().get_bit_width() == 1)
+            {
+                // Bool path — widen i1 → i64 for the C ABI.
+                let v_int = v.into_int_value();
+                let v_i64 = if v_int.get_type().get_bit_width() < 64 {
+                    self.emitter
+                        .builder
+                        .build_int_z_extend(v_int, i64_ty, "fstr_bool_zext")
+                        .map_err(map_builder_err)?
+                } else {
+                    v_int
+                };
+                if let Some(fr) = self
+                    .emitter
+                    .runtime_helper_decls
+                    .get("__cobrust_fmt_bool")
+                    .copied()
+                {
+                    let bool_args: [BasicMetadataValueEnum<'ctx>; 2] = [buf.into(), v_i64.into()];
+                    self.emitter
+                        .builder
+                        .build_call(fr, &bool_args, "fstr_fmt_bool")
+                        .map_err(map_builder_err)?;
+                }
+                idx += 1;
+            } else if v.is_int_value() {
+                // Int / unknown-i64 path.
+                let v_int = v.into_int_value();
+                let v_i64 = if v_int.get_type().get_bit_width() < 64 {
+                    self.emitter
+                        .builder
+                        .build_int_s_extend(v_int, i64_ty, "fstr_int_sext")
+                        .map_err(map_builder_err)?
+                } else {
+                    v_int
+                };
+                if let Some(fr) = self
+                    .emitter
+                    .runtime_helper_decls
+                    .get("__cobrust_fmt_int")
+                    .copied()
+                {
+                    let int_args: [BasicMetadataValueEnum<'ctx>; 2] = [buf.into(), v_i64.into()];
+                    self.emitter
+                        .builder
+                        .build_call(fr, &int_args, "fstr_fmt_int")
+                        .map_err(map_builder_err)?;
+                }
+                idx += 1;
+            } else {
+                // Pointer-typed value — assume List/Dict/Set repr.
+                if let Some(fr) = self
+                    .emitter
+                    .runtime_helper_decls
+                    .get("__cobrust_fmt_repr")
+                    .copied()
+                {
+                    let v_ptr_arg = self.coerce_value_to_ptr(v)?;
+                    let type_id = i64_ty.const_zero();
+                    let repr_args: [BasicMetadataValueEnum<'ctx>; 3] =
+                        [buf.into(), v_ptr_arg.into(), type_id.into()];
+                    self.emitter
+                        .builder
+                        .build_call(fr, &repr_args, "fstr_fmt_repr")
+                        .map_err(map_builder_err)?;
+                }
+                idx += 1;
+            }
+        }
+        Ok(buf)
+    }
+
+    /// Coerce a `BasicValueEnum` to `i64` for runtime-helper i64 args.
+    /// Mirrors Cranelift `coerce_to_i64` (cranelift_backend.rs:3031).
+    ///
+    /// - IntValue 64-bit → unchanged.
+    /// - IntValue < 64 bits → s_extend to i64.
+    /// - FloatValue f32 → fpromote to f64 then bitcast.
+    /// - FloatValue f64 → bitcast i64.
+    /// - PointerValue → ptr_to_int via i64.
+    /// - Other → defensive fall through to i64 zero.
+    fn coerce_value_to_i64(
+        &mut self,
+        v: BasicValueEnum<'ctx>,
+    ) -> Result<IntValue<'ctx>, CodegenError> {
+        let i64_ty = self.emitter.ctx.i64_type();
+        let f64_ty = self.emitter.ctx.f64_type();
+        match v {
+            BasicValueEnum::IntValue(iv) => {
+                let w = iv.get_type().get_bit_width();
+                if w == 64 {
+                    Ok(iv)
+                } else if w < 64 {
+                    self.emitter
+                        .builder
+                        .build_int_s_extend(iv, i64_ty, "agg_sext_i64")
+                        .map_err(map_builder_err)
+                } else {
+                    self.emitter
+                        .builder
+                        .build_int_truncate(iv, i64_ty, "agg_trunc_i64")
+                        .map_err(map_builder_err)
+                }
+            }
+            BasicValueEnum::FloatValue(fv) => {
+                let f_promoted = if fv.get_type() == self.emitter.ctx.f32_type() {
+                    self.emitter
+                        .builder
+                        .build_float_ext(fv, f64_ty, "agg_fpromote")
+                        .map_err(map_builder_err)?
+                } else {
+                    fv
+                };
+                self.emitter
+                    .builder
+                    .build_bit_cast(f_promoted, i64_ty, "agg_f2i_bitcast")
+                    .map_err(map_builder_err)
+                    .map(|bv| bv.into_int_value())
+            }
+            BasicValueEnum::PointerValue(pv) => self
+                .emitter
+                .builder
+                .build_ptr_to_int(pv, i64_ty, "agg_p2i")
+                .map_err(map_builder_err),
+            _ => Ok(i64_ty.const_zero()),
+        }
+    }
+
+    /// Coerce a `BasicValueEnum` to `*ptr` (opaque ptr) for runtime
+    /// helpers whose C signature is `*StringBuffer` / `*ListBuffer` /
+    /// etc. MIR encodes these as i64 stack-slot pointers; the LLVM
+    /// verifier rejects an i64 arg into a `ptr` param, so emit
+    /// `inttoptr` defensively. Mirror of `lower_call`'s int→ptr coercion
+    /// at line ~3088.
+    fn coerce_value_to_ptr(
+        &mut self,
+        v: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        match v {
+            BasicValueEnum::IntValue(iv) => {
+                let ptr_v = self
+                    .emitter
+                    .builder
+                    .build_int_to_ptr(iv, self.emitter.opaque_ptr_ty, "agg_i2p")
+                    .map_err(map_builder_err)?;
+                Ok(ptr_v.into())
+            }
+            BasicValueEnum::PointerValue(_) => Ok(v),
+            _ => Ok(self.emitter.opaque_ptr_ty.const_null().into()),
+        }
     }
 
     fn lower_cast(
