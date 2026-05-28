@@ -32,9 +32,13 @@ fn pyo3_feature_build_succeeds_or_skips_cleanly() {
         cargo_toml.contains(r#"pyo3 = ["dep:pyo3"]"#),
         "Cargo.toml must declare `pyo3 = [\"dep:pyo3\"]` per ADR-0011 §3"
     );
+    // Accept both old (ADR-0011 §3) and new (ADR-0072 §"8/8 coil staticlib" — 8f64ff1)
+    // crate-type literals: cdylib is the required surface; staticlib is the addition
+    // for `.cb` ecosystem-import wiring. Mirrors hood/strike pyo3 test's flip pattern.
     assert!(
-        cargo_toml.contains(r#"crate-type = ["rlib", "cdylib"]"#),
-        "Cargo.toml must declare cdylib crate-type per ADR-0011 §3"
+        cargo_toml.contains(r#"crate-type = ["rlib", "cdylib"]"#)
+            || cargo_toml.contains(r#"crate-type = ["rlib", "cdylib", "staticlib"]"#),
+        "Cargo.toml must declare cdylib crate-type per ADR-0011 §3 (with or without ADR-0072 staticlib)"
     );
     // Verify ndarray pin per ADR-0013 §2.
     assert!(
