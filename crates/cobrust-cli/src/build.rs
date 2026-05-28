@@ -792,8 +792,16 @@ fn locate_or_build_cross_stdlib(release: bool, triple: &str) -> Result<PathBuf, 
              See docs/agent/setup/cross-toolchain.md"
         )));
     }
-    if candidate.exists() {
-        return Ok(candidate);
+    // macOS fs visibility race (CI #26580282088 2026-05-28): when parallel
+    // `cobrust build` processes contend on `target/<triple>/.cargo-lock`, the
+    // winning cargo's archive write may not be visible to the losing cargo's
+    // `exists()` check for tens of milliseconds. Brief retry-with-backoff
+    // before erroring; if still absent after 3×50ms, it really is missing.
+    for _ in 0..3 {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
     Err(BuildError::Internal(format!(
         "cross-built cobrust-stdlib for `{triple}` but the archive is missing at {}",
@@ -936,8 +944,16 @@ fn locate_ecosystem_archive(
             "failed to build ecosystem archive {archive_name} (`{cargo} build -p {crate_name}`)"
         )));
     }
-    if candidate.exists() {
-        return Ok(candidate);
+    // macOS fs visibility race (CI #26580282088 2026-05-28 `libscale.a`):
+    // when parallel `cobrust build` processes contend on cargo's package-cache
+    // / target-dir lock, the winning cargo's archive write may not be visible
+    // to the losing cargo's `exists()` check for tens of milliseconds. Brief
+    // retry-with-backoff before erroring; same pattern as `locate_or_build_cross_stdlib`.
+    for _ in 0..3 {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
     Err(BuildError::Internal(format!(
         "cannot locate {archive_name} for ecosystem module `{module}` \
