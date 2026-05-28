@@ -98,27 +98,37 @@ fn lower_to_mir(src: &str) -> Result<MirModule, Box<dyn std::error::Error>> {
     Ok(mir)
 }
 
-fn host_object_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!("cobrust-h1h8-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// F63 (2026-05-27): RAII tempdir. Caller binds the guard.
+fn host_object_spec(name: &str) -> (TargetSpec, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for target spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
-fn compile(name: &str, src: &str) -> Result<Artifact, Box<dyn std::error::Error>> {
+/// Compile the source; returns `Ok(artifact)`. The artifact's path is
+/// read inside (via `std::fs::metadata`) by each caller, so the
+/// `_guard` may drop at this function's exit — the metadata read
+/// happens before the artifact path is dereferenced after we return.
+/// Wait: callers DO check `metadata(art.path())` AFTER `compile` returns.
+/// So we must keep the dir alive until each caller is done. Return guard + artifact.
+fn compile(
+    name: &str,
+    src: &str,
+) -> Result<(tempfile::TempDir, Artifact), Box<dyn std::error::Error>> {
     let mir = lower_to_mir(src)?;
-    let spec = host_object_spec(name);
+    let (spec, guard) = host_object_spec(name);
     let artifact = emit(&mir, spec).map_err(|e| format!("emit: {e}"))?;
-    Ok(artifact)
+    Ok((guard, artifact))
 }
 
 // =====================================================================
@@ -135,7 +145,7 @@ fn compile(name: &str, src: &str) -> Result<Artifact, Box<dyn std::error::Error>
 #[test]
 fn h1_1_negative_dividend_compiles() {
     let src = "fn r(x: i64) -> i64:\n    return (x % 3)\n";
-    let art = compile("h1_1_neg_dividend", src).expect("H1.1 must compile");
+    let (_guard, art) = compile("h1_1_neg_dividend", src).expect("H1.1 must compile");
     let meta = std::fs::metadata(art.path()).expect("artifact present");
     assert!(
         meta.len() > 16,
@@ -149,7 +159,7 @@ fn h1_1_negative_dividend_compiles() {
 #[test]
 fn h1_2_negative_divisor_compiles() {
     let src = "fn r(x: i64) -> i64:\n    return (x % (-3))\n";
-    let art = compile("h1_2_neg_divisor", src).expect("H1.2 must compile");
+    let (_guard, art) = compile("h1_2_neg_divisor", src).expect("H1.2 must compile");
     let meta = std::fs::metadata(art.path()).expect("artifact present");
     assert!(meta.len() > 16, "H1.2: object file too small");
 }
@@ -162,7 +172,7 @@ fn h1_3_div_by_zero_assert_still_present() {
     // `% 0` literal compiles; runtime asserts. We assert MIR emits an
     // assert+srem chain by checking the artifact materializes.
     let src = "fn r(x: i64) -> i64:\n    let z: i64 = 0\n    return (x % z)\n";
-    let art = compile("h1_3_modz_assert", src).expect("H1.3 must compile");
+    let (_guard, art) = compile("h1_3_modz_assert", src).expect("H1.3 must compile");
     let meta = std::fs::metadata(art.path()).expect("artifact present");
     assert!(meta.len() > 16, "H1.3: object file too small");
 }
@@ -258,7 +268,7 @@ fn h3_1_pow_codegen_error() {
     let src = "fn f(a: i64, b: i64) -> i64:\n    return (a ** b)\n";
     let typed = type_check(src).expect("H3.1: type-check accepts ** (numeric arith)");
     let mir = mir_lower(&typed).expect("H3.1: MIR lowering accepts **");
-    let spec = host_object_spec("h3_1_pow");
+    let (spec, _guard) = host_object_spec("h3_1_pow");
     let result = emit(&mir, spec);
     match result {
         Err(CodegenError::UnimplementedBinOp { op: "**", .. }) => {}
@@ -277,7 +287,7 @@ fn h3_2_matmul_codegen_error() {
         Err(_) => return, // type-check rejects it; accept that as drift-closed
     };
     let mir = mir_lower(&typed).expect("H3.2: MIR lowering accepts @");
-    let spec = host_object_spec("h3_2_matmul");
+    let (spec, _guard) = host_object_spec("h3_2_matmul");
     match emit(&mir, spec) {
         Err(CodegenError::UnimplementedBinOp { op: "@", .. }) => {}
         Err(other) => panic!("H3.2: expected UnimplementedBinOp(@), got {other:?}"),
@@ -295,7 +305,7 @@ fn h3_3_in_codegen_error() {
     let src = "fn f(xs: List[i64], target: i64) -> bool:\n    return (target in xs)\n";
     let typed = type_check(src).expect("H3.3: type-check accepts `in`");
     let mir = mir_lower(&typed).expect("H3.3: MIR lowering accepts `in`");
-    let spec = host_object_spec("h3_3_in");
+    let (spec, _guard) = host_object_spec("h3_3_in");
     match emit(&mir, spec) {
         Err(CodegenError::UnimplementedBinOp { op: "in", .. }) => {}
         Err(other) => panic!("H3.3: expected UnimplementedBinOp(in), got {other:?}"),

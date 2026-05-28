@@ -87,21 +87,21 @@ mod llvm {
     use std::process::{Command, ExitStatus};
     use target_lexicon::Triple;
 
-    fn llvm_spec(name: &str) -> TargetSpec {
-        let dir =
-            std::env::temp_dir().join(format!("cobrust-0058g-w3-{name}-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        TargetSpec {
+    // F63 (2026-05-27): RAII tempdir.
+    fn llvm_spec(name: &str) -> (TargetSpec, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("create tempdir for llvm spec");
+        let spec = TargetSpec {
             triple: Triple::host(),
             opt_level: OptLevel::None,
             backend: Backend::Llvm,
             artifact: ArtifactKind::Object,
-            output_dir: dir,
+            output_dir: dir.path().to_path_buf(),
             module_name: name.to_string(),
             source_path: None,
             runtime_dispatch: false,
             target_cpu: None,
-        }
+        };
+        (spec, dir)
     }
 
     fn find_stdlib_archive() -> Option<PathBuf> {
@@ -136,7 +136,7 @@ mod llvm {
         let stdlib = find_stdlib_archive()?;
         let runtime_c = find_runtime_c()?;
 
-        let spec = llvm_spec(name);
+        let (spec, _spec_guard) = llvm_spec(name);
         let artifact =
             emit(module, spec).unwrap_or_else(|e| panic!("LLVM emit `{name}` failed: {e}"));
         let user_obj = artifact.path().to_path_buf();

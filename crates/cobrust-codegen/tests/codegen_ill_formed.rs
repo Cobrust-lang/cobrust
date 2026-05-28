@@ -45,6 +45,7 @@ use cobrust_mir::{
 };
 use cobrust_types::{Ty, check};
 use target_lexicon::Triple;
+use tempfile::TempDir;
 
 fn lower_to_mir(src: &str) -> MirModule {
     let module = parse_str(src, FileId::SYNTHETIC).expect("parse");
@@ -54,20 +55,24 @@ fn lower_to_mir(src: &str) -> MirModule {
     mir_lower(&typed).expect("mir lower")
 }
 
-fn host_object_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!("cobrust-m9-ill-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// Build a `TargetSpec` rooted in a fresh RAII `TempDir`. Caller must
+/// keep the returned `TempDir` alive until after `emit()` is consumed.
+/// F63 (2026-05-27): RAII cleanup replaces the legacy
+/// `std::env::temp_dir().join(...)` leak.
+fn host_object_spec(name: &str) -> (TargetSpec, TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for target spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
 // =====================================================================
@@ -80,7 +85,7 @@ fn ill_001_llvm_without_feature() {
         return; // LLVM is enabled; this case is unreachable.
     }
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("ill_001");
+    let (mut spec, _guard) = host_object_spec("ill_001");
     spec.backend = Backend::Llvm;
     let err = emit(&mir, spec).expect_err("LLVM should fail without feature");
     assert!(matches!(
@@ -95,7 +100,7 @@ fn ill_002_unsupported_backend_message_mentions_feature() {
         return;
     }
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("ill_002");
+    let (mut spec, _guard) = host_object_spec("ill_002");
     spec.backend = Backend::Llvm;
     let err = emit(&mir, spec).unwrap_err();
     let msg = err.to_string();
@@ -128,7 +133,7 @@ fn unsupported_triple() -> Triple {
 #[test]
 fn ill_003_unsupported_target_arbitrary_triple() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("ill_003");
+    let (mut spec, _guard) = host_object_spec("ill_003");
     spec.triple = unsupported_triple();
     let err = emit(&mir, spec).unwrap_err();
     assert!(
@@ -140,7 +145,7 @@ fn ill_003_unsupported_target_arbitrary_triple() {
 #[test]
 fn ill_004_unsupported_target_carries_triple_in_message() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("ill_004");
+    let (mut spec, _guard) = host_object_spec("ill_004");
     let triple = unsupported_triple();
     let triple_str = triple.to_string();
     spec.triple = triple;
@@ -201,7 +206,7 @@ fn dangling_local_body() -> Body {
 #[test]
 fn ill_005_invalid_mir_dangling_local() {
     let module = build_bare_module(dangling_local_body());
-    let spec = host_object_spec("ill_005");
+    let (spec, _guard) = host_object_spec("ill_005");
     let err = emit(&module, spec).unwrap_err();
     assert!(
         matches!(err, CodegenError::InvalidMir(_)),
@@ -212,7 +217,7 @@ fn ill_005_invalid_mir_dangling_local() {
 #[test]
 fn ill_006_invalid_mir_message_cites_local() {
     let module = build_bare_module(dangling_local_body());
-    let spec = host_object_spec("ill_006");
+    let (spec, _guard) = host_object_spec("ill_006");
     let err = emit(&module, spec).unwrap_err();
     let msg = err.to_string();
     assert!(
@@ -258,7 +263,7 @@ fn ill_007_broken_ir_dangling_block_target() {
         span,
     };
     let module = build_bare_module(body);
-    let spec = host_object_spec("ill_007");
+    let (spec, _guard) = host_object_spec("ill_007");
     let err = emit(&module, spec).unwrap_err();
     // Accept anything that signals "broken IR": MIR validation rejects
     // it (InvalidMir), or the LLVM backend / verifier flags it
@@ -279,7 +284,7 @@ fn ill_007_broken_ir_dangling_block_target() {
 fn ill_008_empty_module_emits_nothing_useful_but_does_not_panic() {
     // An empty module is still a *valid* shape — codegen must not panic.
     let module = MirModule { bodies: vec![] };
-    let spec = host_object_spec("ill_008");
+    let (spec, _guard) = host_object_spec("ill_008");
     let result = emit(&module, spec);
     assert!(
         matches!(result, Ok(Artifact::Object(_))),
@@ -408,7 +413,7 @@ fn ill_019_invalid_mir_dangling_in_terminator_call_destination() {
         span,
     };
     let module = build_bare_module(body);
-    let spec = host_object_spec("ill_019");
+    let (spec, _guard) = host_object_spec("ill_019");
     let err = emit(&module, spec).unwrap_err();
     assert!(
         matches!(err, CodegenError::InvalidMir(_)),
@@ -444,7 +449,7 @@ fn ill_021_release_default_is_llvm() {
 #[test]
 fn ill_022_unsupported_target_riscv() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("ill_022");
+    let (mut spec, _guard) = host_object_spec("ill_022");
     if let Ok(t) = Triple::from_str("riscv64gc-unknown-linux-gnu") {
         spec.triple = t;
         // Cranelift may or may not have RISC-V depending on cargo features;
@@ -504,7 +509,7 @@ fn ill_028_optlevel_none_default() {
 #[test]
 fn ill_029_optlevel_compiles_speed() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("ill_029");
+    let (mut spec, _guard) = host_object_spec("ill_029");
     spec.opt_level = OptLevel::Speed;
     let _ = emit(&mir, spec).unwrap();
 }
@@ -512,7 +517,7 @@ fn ill_029_optlevel_compiles_speed() {
 #[test]
 fn ill_030_optlevel_compiles_speed_and_size() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("ill_030");
+    let (mut spec, _guard) = host_object_spec("ill_030");
     spec.opt_level = OptLevel::SpeedAndSize;
     let _ = emit(&mir, spec).unwrap();
 }
@@ -524,7 +529,7 @@ fn ill_030_optlevel_compiles_speed_and_size() {
 #[test]
 fn ill_031_artifact_object_path() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("ill_031");
+    let (mut spec, _guard) = host_object_spec("ill_031");
     spec.artifact = ArtifactKind::Object;
     let a = emit(&mir, spec).unwrap();
     assert!(matches!(a, Artifact::Object(_)));
@@ -534,7 +539,7 @@ fn ill_031_artifact_object_path() {
 #[test]
 fn ill_032_artifact_path_exists() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let spec = host_object_spec("ill_032");
+    let (spec, _guard) = host_object_spec("ill_032");
     let a = emit(&mir, spec).unwrap();
     assert!(a.path().exists());
 }
@@ -580,7 +585,7 @@ fn ill_033_read_nonexistent_place_in_assign() {
         span,
     };
     let module = build_bare_module(body);
-    let spec = host_object_spec("ill_033");
+    let (spec, _guard) = host_object_spec("ill_033");
     let err = emit(&module, spec).unwrap_err();
     assert!(
         matches!(err, CodegenError::InvalidMir(_)),
@@ -619,7 +624,7 @@ fn ill_036_triple_parse_failure_is_error() {
         // target-lexicon is permissive; just ensure no panic and the
         // emit step yields a structured error.
         let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-        let mut spec = host_object_spec("ill_036");
+        let (mut spec, _guard) = host_object_spec("ill_036");
         spec.triple = t;
         let r = emit(&mir, spec);
         if let Err(e) = r {
@@ -666,8 +671,14 @@ fn ill_039_artifact_dylib_path_accessor() {
 
 #[test]
 fn ill_040_targetspec_host_dev() {
-    let dir = std::env::temp_dir().join("cobrust-m9-helper");
-    let spec = TargetSpec::host_dev(dir, "h");
+    // F63: RAII TempDir replaces the legacy shared "cobrust-m9-helper"
+    // path. These tests construct a `TargetSpec` but never call
+    // `emit()`, so the dir is never written to — but pre-F63 the
+    // `temp_dir().join(...)` path was constant across runs so it
+    // never actually leaked here. We keep the cleanup-by-default
+    // policy for consistency.
+    let guard = tempfile::tempdir().expect("create tempdir for helper");
+    let spec = TargetSpec::host_dev(guard.path().to_path_buf(), "h");
     // ADR-0070 §X.4: host_dev backend follows default_for_dev, which is
     // unconditionally LLVM (the sole AOT backend).
     assert_eq!(spec.backend, Backend::Llvm);
@@ -676,15 +687,15 @@ fn ill_040_targetspec_host_dev() {
 
 #[test]
 fn ill_041_targetspec_host_release() {
-    let dir = std::env::temp_dir().join("cobrust-m9-helper");
-    let spec = TargetSpec::host_release(dir, "h");
+    let guard = tempfile::tempdir().expect("create tempdir for helper");
+    let spec = TargetSpec::host_release(guard.path().to_path_buf(), "h");
     assert_eq!(spec.opt_level, OptLevel::Speed);
 }
 
 #[test]
 fn ill_042_targetspec_host_object() {
-    let dir = std::env::temp_dir().join("cobrust-m9-helper");
-    let spec = TargetSpec::host_object(dir, "h");
+    let guard = tempfile::tempdir().expect("create tempdir for helper");
+    let spec = TargetSpec::host_object(guard.path().to_path_buf(), "h");
     assert_eq!(spec.artifact, ArtifactKind::Object);
 }
 
@@ -695,8 +706,8 @@ fn ill_042_targetspec_host_object() {
 #[test]
 fn ill_043_two_different_module_names_dont_collide() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let s1 = host_object_spec("ill_043_a");
-    let s2 = host_object_spec("ill_043_b");
+    let (s1, _g1) = host_object_spec("ill_043_a");
+    let (s2, _g2) = host_object_spec("ill_043_b");
     let a1 = emit(&mir, s1).unwrap();
     let a2 = emit(&mir, s2).unwrap();
     assert_ne!(a1.path(), a2.path());
@@ -774,7 +785,7 @@ fn run_dangling_in_position(name: &str, position: usize) {
         span,
     };
     let module = MirModule { bodies: vec![body] };
-    let spec = host_object_spec(name);
+    let (spec, _guard) = host_object_spec(name);
     let err = emit(&module, spec).unwrap_err();
     assert!(
         matches!(err, CodegenError::InvalidMir(_)),

@@ -24,3 +24,6 @@ thiserror = { workspace = true }
 cobrust-mir = { path = "../cobrust-mir" }
 cobrust-codegen = { path = "../cobrust-codegen" }
 target-lexicon = "0.13"
+# F63 (2026-05-27): RAII tempdir for the H1-H8 corpus's host_object_spec
+# helper (replaces the leaking std::env::temp_dir().join(...) pattern).
+tempfile = "3"

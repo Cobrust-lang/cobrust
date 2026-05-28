@@ -41,6 +41,7 @@ use cobrust_hir::{Session, lower as hir_lower};
 use cobrust_mir::{Module as MirModule, lower as mir_lower};
 use cobrust_types::check;
 use target_lexicon::Triple;
+use tempfile::TempDir;
 
 fn lower_to_mir(src: &str) -> MirModule {
     let module = parse_str(src, FileId::SYNTHETIC).expect("parse");
@@ -50,27 +51,27 @@ fn lower_to_mir(src: &str) -> MirModule {
     mir_lower(&typed).expect("mir lower")
 }
 
-fn release_object_spec(name: &str) -> TargetSpec {
-    let dir =
-        std::env::temp_dir().join(format!("cobrust-m9-release-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// F63 (2026-05-27): RAII tempdir.
+fn release_object_spec(name: &str) -> (TargetSpec, TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for release spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::Speed,
         backend: Backend::default_for_release(),
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
 #[test]
 fn smoke_001_release_default_compiles_simple_program() {
     let mir = lower_to_mir("fn add(a: i64, b: i64) -> i64:\n    return (a + b)\n");
-    let spec = release_object_spec("smoke_001");
+    let (spec, _guard) = release_object_spec("smoke_001");
     let artifact = emit(&mir, spec).expect("release emit");
     assert!(matches!(artifact, Artifact::Object(_)));
     assert!(artifact.path().exists());
@@ -81,7 +82,7 @@ fn smoke_002_release_default_compiles_recursion() {
     let mir = lower_to_mir(
         "fn fib(n: i64) -> i64:\n    if (n < 2):\n        return n\n    return (fib((n - 1)) + fib((n - 2)))\n",
     );
-    let spec = release_object_spec("smoke_002");
+    let (spec, _guard) = release_object_spec("smoke_002");
     let artifact = emit(&mir, spec).expect("release emit");
     let meta = std::fs::metadata(artifact.path()).unwrap();
     assert!(meta.len() > 0);
@@ -92,7 +93,7 @@ fn smoke_003_release_default_compiles_loops() {
     let mir = lower_to_mir(
         "fn fact(n: i64) -> i64:\n    let acc: i64 = 1\n    let i: i64 = 1\n    while (i <= n):\n        acc *= i\n        i += 1\n    return acc\n",
     );
-    let spec = release_object_spec("smoke_003");
+    let (spec, _guard) = release_object_spec("smoke_003");
     let artifact = emit(&mir, spec).expect("release emit");
     let meta = std::fs::metadata(artifact.path()).unwrap();
     assert!(meta.len() > 0);
@@ -107,7 +108,7 @@ fn smoke_004_release_default_backend_is_llvm() {
 #[test]
 fn smoke_005_speed_and_size_compiles() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 42\n");
-    let mut spec = release_object_spec("smoke_005");
+    let (mut spec, _guard) = release_object_spec("smoke_005");
     spec.opt_level = OptLevel::SpeedAndSize;
     let artifact = emit(&mir, spec).expect("release emit");
     let meta = std::fs::metadata(artifact.path()).unwrap();
@@ -125,14 +126,13 @@ fn smoke_006_linker_smoke_when_cc_available() {
         return;
     }
     let mir = lower_to_mir("fn add(a: i64, b: i64) -> i64:\n    return (a + b)\n");
-    let dir = std::env::temp_dir().join(format!("cobrust-m9-link-smoke-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir for link smoke");
     let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::DynamicLibrary,
-        output_dir: dir,
+        output_dir: dir_guard.path().to_path_buf(),
         module_name: "linksmoke".to_string(),
         source_path: None,
         runtime_dispatch: false,
@@ -171,14 +171,13 @@ fn smoke_006_linker_smoke_when_cc_available() {
 #[test]
 fn smoke_007_release_object_not_dramatically_larger_than_dev() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let dev_dir = std::env::temp_dir().join(format!("cobrust-m9-dev-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dev_dir);
+    let dev_dir_guard = tempfile::tempdir().expect("create tempdir for dev spec");
     let dev_spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dev_dir,
+        output_dir: dev_dir_guard.path().to_path_buf(),
         module_name: "smoke_007_dev".to_string(),
         source_path: None,
         runtime_dispatch: false,
@@ -187,14 +186,13 @@ fn smoke_007_release_object_not_dramatically_larger_than_dev() {
     let dev_artifact = emit(&mir, dev_spec).unwrap();
     let dev_size = std::fs::metadata(dev_artifact.path()).unwrap().len();
 
-    let rel_dir = std::env::temp_dir().join(format!("cobrust-m9-rel-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&rel_dir);
+    let rel_dir_guard = tempfile::tempdir().expect("create tempdir for rel spec");
     let rel_spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::SpeedAndSize,
         backend: Backend::default_for_release(),
         artifact: ArtifactKind::Object,
-        output_dir: rel_dir,
+        output_dir: rel_dir_guard.path().to_path_buf(),
         module_name: "smoke_007_rel".to_string(),
         source_path: None,
         runtime_dispatch: false,
@@ -214,7 +212,7 @@ fn smoke_007_release_object_not_dramatically_larger_than_dev() {
 #[test]
 fn smoke_008_release_handles_assert_emitting_program() {
     let mir = lower_to_mir("fn divsafe(a: i64, b: i64) -> i64:\n    return a / b\n");
-    let spec = release_object_spec("smoke_008");
+    let (spec, _guard) = release_object_spec("smoke_008");
     let _ = emit(&mir, spec).expect("release emit");
 }
 
@@ -223,7 +221,7 @@ fn smoke_009_release_handles_branchy_program() {
     let mir = lower_to_mir(
         "fn classify(x: i64) -> i64:\n    if (x > 100):\n        return 1\n    elif (x > 10):\n        return 2\n    elif (x > 0):\n        return 3\n    else:\n        return 0\n",
     );
-    let spec = release_object_spec("smoke_009");
+    let (spec, _guard) = release_object_spec("smoke_009");
     let _ = emit(&mir, spec).expect("release emit");
 }
 
@@ -232,6 +230,6 @@ fn smoke_010_release_handles_recursive_call_program() {
     let mir = lower_to_mir(
         "fn ack(m: i64, n: i64) -> i64:\n    if (m == 0):\n        return (n + 1)\n    if (n == 0):\n        return ack((m - 1), 1)\n    return ack((m - 1), ack(m, (n - 1)))\n",
     );
-    let spec = release_object_spec("smoke_010");
+    let (spec, _guard) = release_object_spec("smoke_010");
     let _ = emit(&mir, spec).expect("release emit");
 }

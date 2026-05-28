@@ -39,6 +39,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use tempfile::TempDir;
+
 fn cobrust_binary() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest
@@ -65,28 +67,19 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
-fn write_temp(name: &str, contents: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-m11-3-if-cond-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    let p = dir.join(format!("{name}.cb"));
+/// F63 (2026-05-27): RAII tempdir.
+fn write_temp(name: &str, contents: &str) -> (TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("create tempdir for source");
+    let p = dir.path().join(format!("{name}.cb"));
     std::fs::write(&p, contents).expect("write temp .cb");
-    p
+    (dir, p)
 }
 
-fn build(name: &str, src_path: &Path) -> PathBuf {
+fn build(name: &str, src_path: &Path) -> (TempDir, PathBuf) {
     let bin = cobrust_binary();
     let workspace = workspace_root();
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-m11-3-if-cond-exe-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe_path = exe_dir.join(name);
+    let exe_dir = tempfile::tempdir().expect("create tempdir for exe");
+    let exe_path = exe_dir.path().join(name);
     let out = Command::new(&bin)
         .arg("build")
         .arg(src_path)
@@ -102,7 +95,7 @@ fn build(name: &str, src_path: &Path) -> PathBuf {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    exe_path
+    (exe_dir, exe_path)
 }
 
 fn run(exe_path: &Path) -> String {
@@ -125,7 +118,7 @@ fn run(exe_path: &Path) -> String {
 
 #[test]
 fn if_binop_mod_eq_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_binop_mod_eq_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 6\n\
@@ -135,7 +128,7 @@ fn if_binop_mod_eq_zero() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_binop_mod_eq_zero", &src);
+    let (_exe_guard, exe) = build("if_binop_mod_eq_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-1 stdout mismatch: {stdout:?}");
 }
@@ -146,7 +139,7 @@ fn if_binop_mod_eq_zero() {
 
 #[test]
 fn if_binop_mod_ne_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_binop_mod_ne_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 7\n\
@@ -156,7 +149,7 @@ fn if_binop_mod_ne_zero() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_binop_mod_ne_zero", &src);
+    let (_exe_guard, exe) = build("if_binop_mod_ne_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-2 stdout mismatch: {stdout:?}");
 }
@@ -167,7 +160,7 @@ fn if_binop_mod_ne_zero() {
 
 #[test]
 fn if_binop_add_eq_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_binop_add_eq_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = -3\n\
@@ -178,7 +171,7 @@ fn if_binop_add_eq_zero() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_binop_add_eq_zero", &src);
+    let (_exe_guard, exe) = build("if_binop_add_eq_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-3 stdout mismatch: {stdout:?}");
 }
@@ -189,7 +182,7 @@ fn if_binop_add_eq_zero() {
 
 #[test]
 fn if_binop_sub_ne_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_binop_sub_ne_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = 5\n\
@@ -200,7 +193,7 @@ fn if_binop_sub_ne_zero() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_binop_sub_ne_zero", &src);
+    let (_exe_guard, exe) = build("if_binop_sub_ne_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-4 stdout mismatch: {stdout:?}");
 }
@@ -211,7 +204,7 @@ fn if_binop_sub_ne_zero() {
 
 #[test]
 fn if_binop_mul_eq_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_binop_mul_eq_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = 0\n\
@@ -222,7 +215,7 @@ fn if_binop_mul_eq_zero() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_binop_mul_eq_zero", &src);
+    let (_exe_guard, exe) = build("if_binop_mul_eq_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-5 stdout mismatch: {stdout:?}");
 }
@@ -233,7 +226,7 @@ fn if_binop_mul_eq_zero() {
 
 #[test]
 fn if_binop_div_eq_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_binop_div_eq_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = 1\n\
@@ -244,7 +237,7 @@ fn if_binop_div_eq_zero() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_binop_div_eq_zero", &src);
+    let (_exe_guard, exe) = build("if_binop_div_eq_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-6 stdout mismatch: {stdout:?}");
 }
@@ -255,7 +248,7 @@ fn if_binop_div_eq_zero() {
 
 #[test]
 fn if_compare_lt() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_compare_lt",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 2\n\
@@ -265,7 +258,7 @@ fn if_compare_lt() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_compare_lt", &src);
+    let (_exe_guard, exe) = build("if_compare_lt", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-7 stdout mismatch: {stdout:?}");
 }
@@ -276,7 +269,7 @@ fn if_compare_lt() {
 
 #[test]
 fn if_compare_eq() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_compare_eq",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 5\n\
@@ -286,7 +279,7 @@ fn if_compare_eq() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_compare_eq", &src);
+    let (_exe_guard, exe) = build("if_compare_eq", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-8 stdout mismatch: {stdout:?}");
 }
@@ -297,7 +290,7 @@ fn if_compare_eq() {
 
 #[test]
 fn if_through_temp() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_through_temp",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 4\n\
@@ -308,7 +301,7 @@ fn if_through_temp() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_through_temp", &src);
+    let (_exe_guard, exe) = build("if_through_temp", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-9 stdout mismatch: {stdout:?}");
 }
@@ -319,7 +312,7 @@ fn if_through_temp() {
 
 #[test]
 fn if_nested_binop() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_nested_binop",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = 4\n\
@@ -331,7 +324,7 @@ fn if_nested_binop() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_nested_binop", &src);
+    let (_exe_guard, exe) = build("if_nested_binop", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-10 stdout mismatch: {stdout:?}");
 }
@@ -342,7 +335,7 @@ fn if_nested_binop() {
 
 #[test]
 fn if_binop_with_function_call() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_binop_with_function_call",
         "fn step(x: i64) -> i64:\n\
          \x20\x20\x20\x20return x - 1\n\
@@ -354,7 +347,7 @@ fn if_binop_with_function_call() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_binop_with_function_call", &src);
+    let (_exe_guard, exe) = build("if_binop_with_function_call", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-11 stdout mismatch: {stdout:?}");
 }
@@ -365,7 +358,7 @@ fn if_binop_with_function_call() {
 
 #[test]
 fn if_condition_through_inferred_locals_chain() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "if_condition_through_inferred_locals_chain",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 5\n\
@@ -375,7 +368,7 @@ fn if_condition_through_inferred_locals_chain() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"no\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("if_condition_through_inferred_locals_chain", &src);
+    let (_exe_guard, exe) = build("if_condition_through_inferred_locals_chain", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "yes\n", "if-12 stdout mismatch: {stdout:?}");
 }

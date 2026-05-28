@@ -40,6 +40,7 @@ use cobrust_hir::{Session, lower as hir_lower};
 use cobrust_mir::{Module as MirModule, lower as mir_lower};
 use cobrust_types::check;
 use target_lexicon::Triple;
+use tempfile::TempDir;
 
 /// 5-fixture bench corpus per ADR-0058b §A3.
 struct Fixture {
@@ -117,23 +118,21 @@ fn lower_to_mir(src: &str) -> MirModule {
     mir_lower(&typed).expect("mir lower")
 }
 
-fn llvm_spec(name: &str, opt: OptLevel) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-0058b-binsize-{name}-{opt:?}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// F63 (2026-05-27): RAII tempdir.
+fn llvm_spec(name: &str, opt: OptLevel) -> (TargetSpec, TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for binsize spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: opt,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
 /// Compile fixture at given opt level, return CODE size in bytes
@@ -148,7 +147,7 @@ fn llvm_spec(name: &str, opt: OptLevel) -> TargetSpec {
 fn compile_and_size(fixture: &Fixture, opt: OptLevel) -> u64 {
     use object::{Object, ObjectSection};
     let mir = lower_to_mir(fixture.source);
-    let spec = llvm_spec(fixture.name, opt);
+    let (spec, _guard) = llvm_spec(fixture.name, opt);
     let artifact =
         emit(&mir, spec).unwrap_or_else(|e| panic!("emit `{}` @ {:?}: {}", fixture.name, opt, e));
     let Artifact::Object(path) = artifact else {

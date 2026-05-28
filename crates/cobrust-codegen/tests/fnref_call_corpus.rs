@@ -82,6 +82,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use tempfile::TempDir;
+
 fn cobrust_binary() -> PathBuf {
     // `CARGO_BIN_EXE_cobrust` is only set when the test runner is the
     // `cobrust-cli` package. From within `cobrust-codegen` we cannot
@@ -113,28 +115,22 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
-/// Write a `.cb` source file to a temp dir; return its path.
-fn write_temp(name: &str, contents: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-m11-2-corpus-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    let p = dir.join(format!("{name}.cb"));
+/// Write a `.cb` source file to a temp dir; return (guard, path).
+/// F63 (2026-05-27): RAII tempdir.
+fn write_temp(name: &str, contents: &str) -> (TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("create tempdir for source");
+    let p = dir.path().join(format!("{name}.cb"));
     std::fs::write(&p, contents).expect("write temp .cb");
-    p
+    (dir, p)
 }
 
-/// Build the source file with the `cobrust` binary; return the path to
-/// the produced executable. Panics with a helpful message on failure.
-fn build(name: &str, src_path: &Path) -> PathBuf {
+/// Build the source file with the `cobrust` binary; return (guard,
+/// exe_path). Panics with a helpful message on failure.
+fn build(name: &str, src_path: &Path) -> (TempDir, PathBuf) {
     let bin = cobrust_binary();
     let workspace = workspace_root();
-    let exe_dir =
-        std::env::temp_dir().join(format!("cobrust-m11-2-exe-{}-{}", name, std::process::id()));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe_path = exe_dir.join(name);
+    let exe_dir = tempfile::tempdir().expect("create tempdir for exe");
+    let exe_path = exe_dir.path().join(name);
 
     let out = Command::new(&bin)
         .arg("build")
@@ -151,7 +147,7 @@ fn build(name: &str, src_path: &Path) -> PathBuf {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    exe_path
+    (exe_dir, exe_path)
 }
 
 /// Run a produced executable; return its stdout as a String.
@@ -175,7 +171,7 @@ fn run(exe_path: &Path) -> String {
 
 #[test]
 fn fnref_single_arg_recursive() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fnref_single_arg_recursive",
         "fn fib(n: i64) -> i64:\n\
          \x20\x20\x20\x20if n < 2:\n\
@@ -186,7 +182,7 @@ fn fnref_single_arg_recursive() {
          \x20\x20\x20\x20print(fib(10))\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fnref_single_arg_recursive", &src);
+    let (_exe_guard, exe) = build("fnref_single_arg_recursive", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "55\n", "fib(10) stdout mismatch: {stdout:?}");
 }
@@ -200,7 +196,7 @@ fn fnref_single_arg_recursive() {
 fn fnref_multi_arg_recursive() {
     // Truncated Ackermann: ack_t(m, n) returns A(m, n) for small values
     // but caps recursion via the explicit base cases. ack_t(2, 2) = 7.
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fnref_multi_arg_recursive",
         "fn ack_t(m: i64, n: i64) -> i64:\n\
          \x20\x20\x20\x20if m == 0:\n\
@@ -213,7 +209,7 @@ fn fnref_multi_arg_recursive() {
          \x20\x20\x20\x20print(ack_t(2, 2))\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fnref_multi_arg_recursive", &src);
+    let (_exe_guard, exe) = build("fnref_multi_arg_recursive", &src);
     let stdout = run(&exe);
     // A(2, 2) = 7.
     assert_eq!(stdout, "7\n", "ack_t(2,2) stdout mismatch: {stdout:?}");
@@ -228,7 +224,7 @@ fn fnref_multi_arg_recursive() {
 fn fnref_zero_arg_recursive() {
     // depth_3() calls depth_2() calls depth_1() calls depth_0() returns
     // 42. This exercises zero-arg fn references at every level.
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fnref_zero_arg_recursive",
         "fn depth_0() -> i64:\n\
          \x20\x20\x20\x20return 42\n\
@@ -246,7 +242,7 @@ fn fnref_zero_arg_recursive() {
          \x20\x20\x20\x20print(depth_3())\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fnref_zero_arg_recursive", &src);
+    let (_exe_guard, exe) = build("fnref_zero_arg_recursive", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "42\n", "depth_3() stdout mismatch: {stdout:?}");
 }
@@ -260,7 +256,7 @@ fn fnref_direct_recursion() {
     // sum_to(n) = n + sum_to(n-1) with base case sum_to(0) = 0.
     // sum_to(5) = 0+1+2+3+4+5 = 15. Variant of fib's shape: same self-
     // recursion + base case + arithmetic but different recurrence.
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fnref_direct_recursion",
         "fn sum_to(n: i64) -> i64:\n\
          \x20\x20\x20\x20if n <= 0:\n\
@@ -271,7 +267,7 @@ fn fnref_direct_recursion() {
          \x20\x20\x20\x20print(sum_to(5))\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fnref_direct_recursion", &src);
+    let (_exe_guard, exe) = build("fnref_direct_recursion", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "15\n", "sum_to(5) stdout mismatch: {stdout:?}");
 }
@@ -289,7 +285,7 @@ fn fnref_mutual_recursion() {
     // base out at n == 0. Without forward declaration, is_even cannot
     // call is_odd because is_odd's FuncId would not yet exist. With
     // ADR-0034 §"Decision" pass-1 declare-then-define, this works.
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fnref_mutual_recursion",
         "fn is_even(n: i64) -> i64:\n\
          \x20\x20\x20\x20if n == 0:\n\
@@ -308,7 +304,7 @@ fn fnref_mutual_recursion() {
          \x20\x20\x20\x20print(is_odd(7))\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fnref_mutual_recursion", &src);
+    let (_exe_guard, exe) = build("fnref_mutual_recursion", &src);
     let stdout = run(&exe);
     // is_even(4) = 1, is_odd(4) = 0, is_even(7) = 0, is_odd(7) = 1.
     assert_eq!(
@@ -328,7 +324,7 @@ fn fnref_chain_call() {
     // leaf returns 1; c calls leaf; b calls c; a calls b; main calls a.
     // No recursion, but every fn references the next via FnRef. Ensures
     // the fix doesn't break linear chains.
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fnref_chain_call",
         "fn leaf() -> i64:\n\
          \x20\x20\x20\x20return 1\n\
@@ -346,7 +342,7 @@ fn fnref_chain_call() {
          \x20\x20\x20\x20print(a())\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fnref_chain_call", &src);
+    let (_exe_guard, exe) = build("fnref_chain_call", &src);
     let stdout = run(&exe);
     // 1 + 10 + 100 + 1000 = 1111.
     assert_eq!(stdout, "1111\n", "chain stdout mismatch: {stdout:?}");
@@ -369,7 +365,7 @@ fn fnref_inferred_locals_recursive_chain() {
     // ADR-0033's fixed-point.
     //
     // Expected: dbl(3) = 6 + 4 + 2 + 0 = 12.
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fnref_inferred_locals_recursive_chain",
         "fn dbl_rec(n: i64) -> i64:\n\
          \x20\x20\x20\x20if n <= 0:\n\
@@ -380,7 +376,7 @@ fn fnref_inferred_locals_recursive_chain() {
          \x20\x20\x20\x20print(dbl_rec(3))\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fnref_inferred_locals_recursive_chain", &src);
+    let (_exe_guard, exe) = build("fnref_inferred_locals_recursive_chain", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "12\n", "dbl_rec(3) stdout mismatch: {stdout:?}");
 }
@@ -398,7 +394,7 @@ fn fnref_no_args_no_return() {
     // side_effect prints a literal then returns 0. main calls it twice.
     // Verifies that a void-shaped (constant-i64-return) fn is callable
     // through FnRef.
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fnref_no_args_no_return",
         "fn side_effect() -> i64:\n\
          \x20\x20\x20\x20print(\"side\")\n\
@@ -409,7 +405,7 @@ fn fnref_no_args_no_return() {
          \x20\x20\x20\x20print(side_effect())\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fnref_no_args_no_return", &src);
+    let (_exe_guard, exe) = build("fnref_no_args_no_return", &src);
     let stdout = run(&exe);
     // Two side-effect prints + two zero returns.
     assert_eq!(
@@ -428,7 +424,7 @@ fn fnref_no_args_no_return() {
 fn fnref_returns_call_of_other() {
     // produces_seven returns 7 directly; relay returns
     // produces_seven() unchanged. main prints relay().
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fnref_returns_call_of_other",
         "fn produces_seven() -> i64:\n\
          \x20\x20\x20\x20return 7\n\
@@ -440,7 +436,7 @@ fn fnref_returns_call_of_other() {
          \x20\x20\x20\x20print(relay())\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fnref_returns_call_of_other", &src);
+    let (_exe_guard, exe) = build("fnref_returns_call_of_other", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "7\n", "relay stdout mismatch: {stdout:?}");
 }
@@ -457,7 +453,7 @@ fn fnref_negative_arg() {
     // n <= 0. The `n - 1` argument lowers to a `_bin` temp typed
     // `Ty::None` whose actual value is i64. The new lower_call path
     // must read that value with the right type via inferred_locals.
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fnref_negative_arg",
         "fn countdown(n: i64) -> i64:\n\
          \x20\x20\x20\x20if n <= 0:\n\
@@ -470,7 +466,7 @@ fn fnref_negative_arg() {
          \x20\x20\x20\x20print(result)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fnref_negative_arg", &src);
+    let (_exe_guard, exe) = build("fnref_negative_arg", &src);
     let stdout = run(&exe);
     // 3, 2, 1 printed during recursion; final return value 0 printed
     // by main.

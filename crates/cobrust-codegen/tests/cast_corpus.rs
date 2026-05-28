@@ -36,21 +36,25 @@ use cobrust_mir::{
 };
 use cobrust_types::Ty;
 use target_lexicon::Triple;
+use tempfile::TempDir;
 
-fn host_object_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!("cobrust-m12x-cast-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// Build a `TargetSpec` rooted in a fresh RAII `TempDir`. F63
+/// (2026-05-27): RAII cleanup replaces the legacy
+/// `std::env::temp_dir().join(...)` leak.
+fn host_object_spec(name: &str) -> (TargetSpec, TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for target spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
 fn span() -> Span {
@@ -126,7 +130,7 @@ fn body(name: &str, locals: Vec<LocalDecl>, stmts: Vec<Statement>) -> Body {
 
 fn compile(name: &str, body: Body) {
     let module = MirModule { bodies: vec![body] };
-    let spec = host_object_spec(name);
+    let (spec, _guard) = host_object_spec(name);
     let artifact = emit(&module, spec).unwrap_or_else(|e| panic!("emit `{name}`: {e}"));
     let path = artifact.path();
     let meta = std::fs::metadata(path).unwrap();

@@ -32,6 +32,8 @@ use cobrust_types::check;
 use object::{Object as _, ObjectSymbol as _};
 #[cfg(feature = "llvm")]
 use target_lexicon::Triple;
+#[cfg(feature = "llvm")]
+use tempfile::TempDir;
 
 #[cfg(feature = "llvm")]
 fn lower_to_mir(src: &str) -> MirModule {
@@ -48,20 +50,26 @@ fn add_src() -> &'static str {
 }
 
 #[cfg(feature = "llvm")]
-fn make_tier2_spec(name: &str, target_cpu: Option<&str>, runtime_dispatch: bool) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!("cobrust-tier2-cpu-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+fn make_tier2_spec(
+    name: &str,
+    target_cpu: Option<&str>,
+    runtime_dispatch: bool,
+) -> (TargetSpec, TempDir) {
+    // F63 (2026-05-27): RAII tempdir replaces the legacy
+    // `std::env::temp_dir().join(...)` leak.
+    let dir = tempfile::tempdir().expect("create tempdir for tier2 spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::Speed,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch,
         target_cpu: target_cpu.map(str::to_owned),
-    }
+    };
+    (spec, dir)
 }
 
 #[cfg(feature = "llvm")]
@@ -79,7 +87,7 @@ fn read_object_symbols(path: &std::path::Path) -> Vec<String> {
 #[cfg(feature = "llvm")]
 fn smoke_target_cpu_native() {
     let mir = lower_to_mir(add_src());
-    let spec = make_tier2_spec("tier2_native", Some("native"), false);
+    let (spec, _guard) = make_tier2_spec("tier2_native", Some("native"), false);
     let artifact = emit(&mir, spec).expect("emit with target-cpu=native");
     let symbols = read_object_symbols(artifact.path());
     assert!(
@@ -103,7 +111,7 @@ fn smoke_target_cpu_named() {
         return;
     }
     let mir = lower_to_mir(add_src());
-    let spec = make_tier2_spec("tier2_named", Some(cpu), false);
+    let (spec, _guard) = make_tier2_spec("tier2_named", Some(cpu), false);
     match emit(&mir, spec) {
         Ok(artifact) => {
             let symbols = read_object_symbols(artifact.path());
@@ -127,7 +135,7 @@ fn smoke_target_cpu_named() {
 #[cfg(feature = "llvm")]
 fn smoke_target_cpu_native_no_dispatch_overhead() {
     let mir = lower_to_mir(add_src());
-    let spec = make_tier2_spec("tier2_native_nodispatch", Some("native"), false);
+    let (spec, _guard) = make_tier2_spec("tier2_native_nodispatch", Some("native"), false);
     let artifact = emit(&mir, spec).expect("emit Tier-2-only");
     let symbols = read_object_symbols(artifact.path());
     let dispatch_symbols: Vec<&str> = symbols

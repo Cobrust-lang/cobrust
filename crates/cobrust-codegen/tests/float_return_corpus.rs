@@ -68,6 +68,7 @@ use cobrust_hir::{Session, lower as hir_lower};
 use cobrust_mir::{Module as MirModule, lower as mir_lower};
 use cobrust_types::check;
 use target_lexicon::Triple;
+use tempfile::TempDir;
 
 // =====================================================================
 // In-process compile-only helpers (compile_ok shape — same as
@@ -85,25 +86,29 @@ fn lower_to_mir(src: &str) -> MirModule {
     mir_lower(&typed).expect("mir lower")
 }
 
-fn host_object_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!("cobrust-adr0033-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// Build a `TargetSpec` rooted in a fresh RAII `TempDir`. Caller
+/// must keep the returned `TempDir` alive at least until the
+/// `emit()` artifact is consumed. F63 (2026-05-27): RAII cleanup
+/// replaces the legacy `std::env::temp_dir().join(...)` leak.
+fn host_object_spec(name: &str) -> (TargetSpec, TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for target spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
 fn compile_ok(name: &str, src: &str) {
     let mir = lower_to_mir(src);
-    let spec = host_object_spec(name);
+    let (spec, _guard) = host_object_spec(name);
     let artifact = emit(&mir, spec).unwrap_or_else(|e| panic!("emit `{name}`: {e}"));
     let path = artifact.path();
     let meta =
@@ -144,28 +149,18 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
-fn write_temp(name: &str, contents: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-adr0033-corpus-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    let p = dir.join(format!("{name}.cb"));
+fn write_temp(name: &str, contents: &str) -> (TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("create tempdir for source");
+    let p = dir.path().join(format!("{name}.cb"));
     std::fs::write(&p, contents).expect("write temp .cb");
-    p
+    (dir, p)
 }
 
-fn build(name: &str, src_path: &Path) -> PathBuf {
+fn build(name: &str, src_path: &Path) -> (TempDir, PathBuf) {
     let bin = cobrust_binary();
     let workspace = workspace_root();
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-adr0033-exe-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe_path = exe_dir.join(name);
+    let exe_dir = tempfile::tempdir().expect("create tempdir for exe");
+    let exe_path = exe_dir.path().join(name);
     let out = Command::new(&bin)
         .arg("build")
         .arg(src_path)
@@ -181,7 +176,7 @@ fn build(name: &str, src_path: &Path) -> PathBuf {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    exe_path
+    (exe_dir, exe_path)
 }
 
 fn run(exe_path: &Path) -> String {
@@ -406,7 +401,7 @@ fn fr14_value_correctness_double_neg_const() {
     // truncates to {-128..127}; -(-3.25) → 3.25 → fcvt_to_sint_sat
     // → 3 → fcvt_from_sint(F64, 3) → 3.0 (close to 3.25 but
     // outside the ±0.01 bracket).
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fr14",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let y: f64 = -(-3.25)\n\
@@ -417,7 +412,7 @@ fn fr14_value_correctness_double_neg_const() {
          \x20\x20\x20\x20print(0)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fr14", &src);
+    let (_exe_guard, exe) = build("fr14", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "1\n", "fr14 stdout mismatch: {stdout:?}");
 }
@@ -440,7 +435,7 @@ fn fr15_value_correctness_compound_arith() {
     // Note: arithmetic intentionally uses non-integer-valued result
     // so the i8 saturation truncates visibly. (1.5 + 2.5) * 2.0 = 8.0
     // would round-trip cleanly through i8 and mask the bug.
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fr15",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: f64 = 0.5\n\
@@ -454,7 +449,7 @@ fn fr15_value_correctness_compound_arith() {
          \x20\x20\x20\x20print(0)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fr15", &src);
+    let (_exe_guard, exe) = build("fr15", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "1\n", "fr15 stdout mismatch: {stdout:?}");
 }
@@ -469,7 +464,7 @@ fn fr16_value_correctness_neg_plus() {
     // `_bin`'s rvalue_ty pre-fix consults operand_ty(Copy(_un)) →
     // declared(_un)=None → I8. Post-fix, fixed-point converges to
     // F64. -1.0 + 4.5 = 3.5; bracket around 3.5.
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fr16",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: f64 = 1.0\n\
@@ -482,7 +477,7 @@ fn fr16_value_correctness_neg_plus() {
          \x20\x20\x20\x20print(0)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fr16", &src);
+    let (_exe_guard, exe) = build("fr16", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "1\n", "fr16 stdout mismatch: {stdout:?}");
 }

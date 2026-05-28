@@ -75,6 +75,7 @@ use cobrust_hir::{Session, lower as hir_lower};
 use cobrust_mir::{Module as MirModule, lower as mir_lower};
 use cobrust_types::check;
 use target_lexicon::Triple;
+use tempfile::TempDir;
 
 fn lower_to_mir(src: &str) -> MirModule {
     let module = parse_str(src, FileId::SYNTHETIC).expect("parse");
@@ -84,26 +85,32 @@ fn lower_to_mir(src: &str) -> MirModule {
     mir_lower(&typed).expect("mir lower")
 }
 
-fn host_object_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!("cobrust-m9-diff-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// F63 (2026-05-27): RAII `TempDir` replaces the legacy
+/// `std::env::temp_dir().join(...)` leak. Caller binds the guard.
+fn host_object_spec(name: &str) -> (TargetSpec, TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for target spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
-/// Compile + assert artifact emission OK + non-empty.
+/// Compile + assert artifact emission OK + non-empty. The artifact's
+/// path stops being valid when this function returns — the `_guard`
+/// drops with its dir. Callers in this file only invoke this helper
+/// for its assertions side-effect, so no caller dereferences the
+/// returned `Artifact` after return.
 fn compile_to_object(name: &str, src: &str) -> Artifact {
     let mir = lower_to_mir(src);
-    let spec = host_object_spec(name);
+    let (spec, _guard) = host_object_spec(name);
     let artifact = emit(&mir, spec).unwrap_or_else(|e| panic!("emit `{name}`: {e}"));
     let path = artifact.path();
     let meta = std::fs::metadata(path).unwrap();
@@ -331,11 +338,9 @@ fn diff_form_30_await_yield() {}
 // =====================================================================
 
 fn rust_reference_compiles(name: &str, body: &str) {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-m9-diff-rust-{name}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    // F63: RAII tempdir.
+    let dir_guard = tempfile::tempdir().expect("create tempdir for rust reference");
+    let dir = dir_guard.path();
     let path = dir.join(format!("{name}.rs"));
     std::fs::write(
         &path,
@@ -347,7 +352,7 @@ fn rust_reference_compiles(name: &str, body: &str) {
         .arg("--crate-type=lib")
         .arg("-O")
         .arg("--out-dir")
-        .arg(&dir)
+        .arg(dir)
         .arg(&path)
         .output();
     if let Ok(o) = out {
@@ -407,21 +412,21 @@ fn diff_reference_factorial_compiles() {
 // =====================================================================
 
 #[cfg(feature = "llvm")]
-fn llvm_spec(name: &str) -> TargetSpec {
-    let dir =
-        std::env::temp_dir().join(format!("cobrust-0058a-llvm-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+fn llvm_spec(name: &str) -> (TargetSpec, TempDir) {
+    // F63: RAII tempdir.
+    let dir = tempfile::tempdir().expect("create tempdir for llvm spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
 /// Emit via LLVM backend + assert object non-empty.
@@ -429,7 +434,7 @@ fn llvm_spec(name: &str) -> TargetSpec {
 #[cfg(feature = "llvm")]
 fn llvm_compile_ok(name: &str, src: &str) {
     let mir = lower_to_mir(src);
-    let spec = llvm_spec(name);
+    let (spec, _guard) = llvm_spec(name);
     let artifact = emit(&mir, spec).unwrap_or_else(|e| panic!("llvm emit `{name}`: {e}"));
     let path = artifact.path();
     let meta = std::fs::metadata(path).unwrap();
@@ -929,7 +934,7 @@ fn stdlib_io_link_and_run(name: &str, module: cobrust_mir::Module) -> Option<Str
     let runtime_c = find_runtime_c()?;
 
     // Emit object via LLVM backend.
-    let spec = llvm_spec(name);
+    let (spec, _spec_guard) = llvm_spec(name);
     let artifact = emit(&module, spec).unwrap_or_else(|e| panic!("LLVM emit `{name}` failed: {e}"));
     let user_obj = artifact.path().to_path_buf();
 

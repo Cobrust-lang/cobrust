@@ -47,6 +47,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use tempfile::TempDir;
+
 fn cobrust_binary() -> PathBuf {
     // `CARGO_BIN_EXE_cobrust` is only set when the test runner is the
     // `cobrust-cli` package (which owns the binary). In the
@@ -82,28 +84,26 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
-/// Write a `.cb` source file to a temp dir; return its path.
-fn write_temp(name: &str, contents: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-m11-1-corpus-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    let p = dir.join(format!("{name}.cb"));
+/// Write a `.cb` source file to a temp dir; return the guard + path.
+/// F63 (2026-05-27): RAII `TempDir` so the dir is removed when the
+/// guard drops at the caller's scope exit. Previously leaked via
+/// `std::env::temp_dir().join(...)` with no cleanup.
+fn write_temp(name: &str, contents: &str) -> (TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("create tempdir for source");
+    let p = dir.path().join(format!("{name}.cb"));
     std::fs::write(&p, contents).expect("write temp .cb");
-    p
+    (dir, p)
 }
 
-/// Build the source file with the `cobrust` binary; return the path to the
-/// produced executable. Panics with a helpful message on failure.
-fn build(name: &str, src_path: &Path) -> PathBuf {
+/// Build the source file with the `cobrust` binary; return the guard
+/// and path to the produced executable. Caller must keep the guard
+/// alive until after `run()` returns. Panics with a helpful message
+/// on failure.
+fn build(name: &str, src_path: &Path) -> (TempDir, PathBuf) {
     let bin = cobrust_binary();
     let workspace = workspace_root();
-    let exe_dir =
-        std::env::temp_dir().join(format!("cobrust-m11-1-exe-{}-{}", name, std::process::id()));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe_path = exe_dir.join(name);
+    let exe_dir = tempfile::tempdir().expect("create tempdir for exe");
+    let exe_path = exe_dir.path().join(name);
 
     let out = Command::new(&bin)
         .arg("build")
@@ -120,7 +120,7 @@ fn build(name: &str, src_path: &Path) -> PathBuf {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    exe_path
+    (exe_dir, exe_path)
 }
 
 /// Run a produced executable; return its stdout as a String.
@@ -144,7 +144,7 @@ fn run(exe_path: &Path) -> String {
 
 #[test]
 fn test1_top_level_if_else() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "test1",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 5\n\
@@ -154,7 +154,7 @@ fn test1_top_level_if_else() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"small\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("test1", &src);
+    let (_exe_guard, exe) = build("test1", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "big\n", "test1 stdout mismatch: {stdout:?}");
 }
@@ -165,7 +165,7 @@ fn test1_top_level_if_else() {
 
 #[test]
 fn test2_modulo_if() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "test2",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 6\n\
@@ -174,7 +174,7 @@ fn test2_modulo_if() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"Fizz\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("test2", &src);
+    let (_exe_guard, exe) = build("test2", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "Fizz\n", "test2 stdout mismatch: {stdout:?}");
 }
@@ -185,7 +185,7 @@ fn test2_modulo_if() {
 
 #[test]
 fn test3_while_no_if() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "test3",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 0\n\
@@ -194,7 +194,7 @@ fn test3_while_no_if() {
          \x20\x20\x20\x20\x20\x20\x20\x20n = n + 1\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("test3", &src);
+    let (_exe_guard, exe) = build("test3", &src);
     let stdout = run(&exe);
     assert_eq!(
         stdout, "loop\nloop\nloop\n",
@@ -208,7 +208,7 @@ fn test3_while_no_if() {
 
 #[test]
 fn test6_while_if_else() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "test6",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 1\n\
@@ -220,7 +220,7 @@ fn test6_while_if_else() {
          \x20\x20\x20\x20\x20\x20\x20\x20n = n + 1\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("test6", &src);
+    let (_exe_guard, exe) = build("test6", &src);
     let stdout = run(&exe);
     assert_eq!(
         stdout, "not-two\ntwo\nnot-two\n",
@@ -235,7 +235,7 @@ fn test6_while_if_else() {
 
 #[test]
 fn test7_while_leading_print_if() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "test7",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 1\n\
@@ -246,7 +246,7 @@ fn test7_while_leading_print_if() {
          \x20\x20\x20\x20\x20\x20\x20\x20n = n + 1\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("test7", &src);
+    let (_exe_guard, exe) = build("test7", &src);
     let stdout = run(&exe);
     assert_eq!(
         stdout, "loop\nloop\ntwo\nloop\n",
@@ -260,7 +260,7 @@ fn test7_while_leading_print_if() {
 
 #[test]
 fn test8_while_if_no_else() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "test8",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 1\n\
@@ -270,7 +270,7 @@ fn test8_while_if_no_else() {
          \x20\x20\x20\x20\x20\x20\x20\x20n = n + 1\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("test8", &src);
+    let (_exe_guard, exe) = build("test8", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "two\n", "test8 stdout mismatch: {stdout:?}");
 }
@@ -283,7 +283,7 @@ fn test8_while_if_no_else() {
 fn test_fizzbuzz_short() {
     // FizzBuzz 1..=15 using while + if/elif/elif/else + modulo.
     // Uses polymorphic print(n) for the plain-number case (ADR-0064).
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "fizzbuzz_short",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 1\n\
@@ -299,7 +299,7 @@ fn test_fizzbuzz_short() {
          \x20\x20\x20\x20\x20\x20\x20\x20n = n + 1\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("fizzbuzz_short", &src);
+    let (_exe_guard, exe) = build("fizzbuzz_short", &src);
     let stdout = run(&exe);
     let expected = "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz\n";
     assert_eq!(

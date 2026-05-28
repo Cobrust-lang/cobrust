@@ -42,6 +42,7 @@ use cobrust_mir::{Module as MirModule, lower as mir_lower};
 use cobrust_types::check;
 use object::{Object, ObjectSection, ObjectSymbol};
 use target_lexicon::{OperatingSystem, Triple};
+use tempfile::TempDir;
 
 fn lower_to_mir(src: &str) -> MirModule {
     let module = parse_str(src, FileId::SYNTHETIC).expect("parse");
@@ -51,28 +52,34 @@ fn lower_to_mir(src: &str) -> MirModule {
     mir_lower(&typed).expect("mir lower")
 }
 
-fn host_object_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!("cobrust-m9-layout-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// Build a `TargetSpec` rooted in a fresh RAII `TempDir`. Caller must
+/// keep the returned `TempDir` alive until after the emitted artifact
+/// is consumed. F63 (2026-05-27): RAII cleanup replaces the legacy
+/// `std::env::temp_dir().join(...)` leak.
+fn host_object_spec(name: &str) -> (TargetSpec, TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for target spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
-fn compile_object(name: &str, src: &str) -> std::path::PathBuf {
+/// Compile `src` and return `(guard, path)`. Caller must keep the
+/// `TempDir` guard alive while reading bytes from the path.
+fn compile_object(name: &str, src: &str) -> (TempDir, std::path::PathBuf) {
     let mir = lower_to_mir(src);
-    let spec = host_object_spec(name);
+    let (spec, guard) = host_object_spec(name);
     let artifact = emit(&mir, spec).unwrap();
     match artifact {
-        Artifact::Object(p) => p,
+        Artifact::Object(p) => (guard, p),
         other => panic!("expected Object artifact, got {other:?}"),
     }
 }
@@ -83,7 +90,7 @@ fn compile_object(name: &str, src: &str) -> std::path::PathBuf {
 
 #[test]
 fn layout_001_object_file_parseable() {
-    let path = compile_object(
+    let (_guard, path) = compile_object(
         "layout_001",
         "fn add(a: i64, b: i64) -> i64:\n    return (a + b)\n",
     );
@@ -100,7 +107,7 @@ fn layout_001_object_file_parseable() {
 #[test]
 fn layout_002_architecture_matches_host() {
     use object::Architecture;
-    let path = compile_object("layout_002", "fn f() -> i64:\n    return 0\n");
+    let (_guard, path) = compile_object("layout_002", "fn f() -> i64:\n    return 0\n");
     let bytes = std::fs::read(&path).unwrap();
     let obj = object::File::parse(&*bytes).unwrap();
     let host = Triple::host();
@@ -122,7 +129,7 @@ fn layout_002_architecture_matches_host() {
 #[test]
 fn layout_003_object_format_matches_host() {
     use object::BinaryFormat;
-    let path = compile_object("layout_003", "fn f() -> i64:\n    return 0\n");
+    let (_guard, path) = compile_object("layout_003", "fn f() -> i64:\n    return 0\n");
     let bytes = std::fs::read(&path).unwrap();
     let obj = object::File::parse(&*bytes).unwrap();
     let host = Triple::host();
@@ -143,7 +150,7 @@ fn layout_003_object_format_matches_host() {
 
 #[test]
 fn layout_004_function_symbol_exported() {
-    let path = compile_object(
+    let (_guard, path) = compile_object(
         "layout_004",
         "fn add(a: i64, b: i64) -> i64:\n    return (a + b)\n",
     );
@@ -168,7 +175,7 @@ fn layout_004_function_symbol_exported() {
 
 #[test]
 fn layout_005_text_section_exists() {
-    let path = compile_object("layout_005", "fn f() -> i64:\n    return 0\n");
+    let (_guard, path) = compile_object("layout_005", "fn f() -> i64:\n    return 0\n");
     let bytes = std::fs::read(&path).unwrap();
     let obj = object::File::parse(&*bytes).unwrap();
     let names: Vec<String> = obj
@@ -188,7 +195,7 @@ fn layout_005_text_section_exists() {
 
 #[test]
 fn layout_006_two_functions_two_symbols() {
-    let path = compile_object(
+    let (_guard, path) = compile_object(
         "layout_006",
         "fn double(x: i64) -> i64:\n    return (x + x)\n\nfn quad(x: i64) -> i64:\n    return double(double(x))\n",
     );
@@ -213,7 +220,7 @@ fn layout_006_two_functions_two_symbols() {
 
 #[test]
 fn layout_007_object_file_reasonable_size() {
-    let path = compile_object("layout_007", "fn f() -> i64:\n    return 0\n");
+    let (_guard, path) = compile_object("layout_007", "fn f() -> i64:\n    return 0\n");
     let meta = std::fs::metadata(&path).unwrap();
     assert!(
         meta.len() >= 64,
@@ -233,7 +240,7 @@ fn layout_007_object_file_reasonable_size() {
 
 #[test]
 fn layout_008_call_emits_relocation_or_direct_call() {
-    let path = compile_object(
+    let (_guard, path) = compile_object(
         "layout_008",
         "fn double(x: i64) -> i64:\n    return (x + x)\n\nfn quad(x: i64) -> i64:\n    return double(double(x))\n",
     );

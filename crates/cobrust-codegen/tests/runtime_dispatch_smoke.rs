@@ -41,23 +41,21 @@ fn fib_src() -> &'static str {
 }
 
 // F34 anchor: runtime_dispatch_smoke::make_llvm_spec
-fn make_llvm_spec(name: &str, runtime_dispatch: bool) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-tier1-dispatch-{name}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+// F63 (2026-05-27): RAII tempdir.
+fn make_llvm_spec(name: &str, runtime_dispatch: bool) -> (TargetSpec, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for dispatch spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::Speed,
         backend: Backend::Llvm,
         artifact: cobrust_codegen::ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
 /// Read all exported / defined symbols from an object file using the
@@ -88,12 +86,15 @@ fn smoke_dispatch_enabled_emits_3_versioned_symbols() {
     }
     // Skip on non-x86_64 hosts — the dispatcher is a no-op on aarch64.
     #[cfg(feature = "llvm")]
-    if !cobrust_codegen::llvm_backend::triple_is_x86_64(&make_llvm_spec("skip", false)) {
-        return;
+    {
+        let (skip_spec, _skip_guard) = make_llvm_spec("skip", false);
+        if !cobrust_codegen::llvm_backend::triple_is_x86_64(&skip_spec) {
+            return;
+        }
     }
 
     let mir = lower_to_mir(fib_src());
-    let spec = make_llvm_spec("dispatch_on", true);
+    let (spec, _guard) = make_llvm_spec("dispatch_on", true);
     let artifact = emit(&mir, spec).expect("emit with runtime_dispatch=true");
 
     let syms = object_symbols(artifact.path());
@@ -125,7 +126,7 @@ fn smoke_dispatch_disabled_emits_single_symbol() {
     }
 
     let mir = lower_to_mir(fib_src());
-    let spec = make_llvm_spec("dispatch_off", false);
+    let (spec, _guard) = make_llvm_spec("dispatch_off", false);
     let artifact = emit(&mir, spec).expect("emit with runtime_dispatch=false");
 
     let syms = object_symbols(artifact.path());

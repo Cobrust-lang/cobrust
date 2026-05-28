@@ -45,6 +45,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use tempfile::TempDir;
+
 fn cobrust_binary() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest
@@ -71,28 +73,19 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
-fn write_temp(name: &str, contents: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-m11-3-while-cond-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    let p = dir.join(format!("{name}.cb"));
+/// F63 (2026-05-27): RAII tempdir.
+fn write_temp(name: &str, contents: &str) -> (TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("create tempdir for source");
+    let p = dir.path().join(format!("{name}.cb"));
     std::fs::write(&p, contents).expect("write temp .cb");
-    p
+    (dir, p)
 }
 
-fn build(name: &str, src_path: &Path) -> PathBuf {
+fn build(name: &str, src_path: &Path) -> (TempDir, PathBuf) {
     let bin = cobrust_binary();
     let workspace = workspace_root();
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-m11-3-while-cond-exe-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe_path = exe_dir.join(name);
+    let exe_dir = tempfile::tempdir().expect("create tempdir for exe");
+    let exe_path = exe_dir.path().join(name);
     let out = Command::new(&bin)
         .arg("build")
         .arg(src_path)
@@ -108,7 +101,7 @@ fn build(name: &str, src_path: &Path) -> PathBuf {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    exe_path
+    (exe_dir, exe_path)
 }
 
 fn run(exe_path: &Path) -> String {
@@ -137,7 +130,7 @@ fn run(exe_path: &Path) -> String {
 
 #[test]
 fn while_binop_mod_eq_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_binop_mod_eq_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 6\n\
@@ -147,7 +140,7 @@ fn while_binop_mod_eq_zero() {
          \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_binop_mod_eq_zero", &src);
+    let (_exe_guard, exe) = build("while_binop_mod_eq_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "loop\n9999\n", "case 1 stdout mismatch: {stdout:?}");
 }
@@ -162,7 +155,7 @@ fn while_binop_mod_eq_zero() {
 
 #[test]
 fn while_binop_mod_ne_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_binop_mod_ne_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 7\n\
@@ -172,7 +165,7 @@ fn while_binop_mod_ne_zero() {
          \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_binop_mod_ne_zero", &src);
+    let (_exe_guard, exe) = build("while_binop_mod_ne_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "loop\n8\n", "case 2 stdout mismatch: {stdout:?}");
 }
@@ -189,7 +182,7 @@ fn while_binop_mod_ne_zero() {
 
 #[test]
 fn while_binop_add_eq_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_binop_add_eq_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = -3\n\
@@ -200,7 +193,7 @@ fn while_binop_add_eq_zero() {
          \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_binop_add_eq_zero", &src);
+    let (_exe_guard, exe) = build("while_binop_add_eq_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "loop\n1\n", "case 3 stdout mismatch: {stdout:?}");
 }
@@ -213,7 +206,7 @@ fn while_binop_add_eq_zero() {
 
 #[test]
 fn while_binop_sub_ne_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_binop_sub_ne_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = 5\n\
@@ -224,7 +217,7 @@ fn while_binop_sub_ne_zero() {
          \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_binop_sub_ne_zero", &src);
+    let (_exe_guard, exe) = build("while_binop_sub_ne_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "loop\n3\n", "case 4 stdout mismatch: {stdout:?}");
 }
@@ -237,7 +230,7 @@ fn while_binop_sub_ne_zero() {
 
 #[test]
 fn while_binop_mul_eq_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_binop_mul_eq_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = 0\n\
@@ -248,7 +241,7 @@ fn while_binop_mul_eq_zero() {
          \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_binop_mul_eq_zero", &src);
+    let (_exe_guard, exe) = build("while_binop_mul_eq_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "loop\n1\n", "case 5 stdout mismatch: {stdout:?}");
 }
@@ -263,7 +256,7 @@ fn while_binop_mul_eq_zero() {
 
 #[test]
 fn while_binop_div_eq_zero() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_binop_div_eq_zero",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = 1\n\
@@ -274,7 +267,7 @@ fn while_binop_div_eq_zero() {
          \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_binop_div_eq_zero", &src);
+    let (_exe_guard, exe) = build("while_binop_div_eq_zero", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "loop\n100\n", "case 6 stdout mismatch: {stdout:?}");
 }
@@ -289,7 +282,7 @@ fn while_binop_div_eq_zero() {
 
 #[test]
 fn while_compare_lt() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_compare_lt",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 0\n\
@@ -298,7 +291,7 @@ fn while_compare_lt() {
          \x20\x20\x20\x20\x20\x20\x20\x20n = n + 1\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_compare_lt", &src);
+    let (_exe_guard, exe) = build("while_compare_lt", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "x\nx\nx\n", "case 7 stdout mismatch: {stdout:?}");
 }
@@ -313,7 +306,7 @@ fn while_compare_lt() {
 
 #[test]
 fn while_compare_eq() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_compare_eq",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 5\n\
@@ -323,7 +316,7 @@ fn while_compare_eq() {
          \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_compare_eq", &src);
+    let (_exe_guard, exe) = build("while_compare_eq", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "five\n0\n", "case 8 stdout mismatch: {stdout:?}");
 }
@@ -339,7 +332,7 @@ fn while_compare_eq() {
 
 #[test]
 fn while_through_temp() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_through_temp",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 4\n\
@@ -350,7 +343,7 @@ fn while_through_temp() {
          \x20\x20\x20\x20print(\"done\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_through_temp", &src);
+    let (_exe_guard, exe) = build("while_through_temp", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "step\ndone\n", "case 9 stdout mismatch: {stdout:?}");
 }
@@ -367,7 +360,7 @@ fn while_through_temp() {
 
 #[test]
 fn while_nested_binop() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_nested_binop",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = 4\n\
@@ -379,7 +372,7 @@ fn while_nested_binop() {
          \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_nested_binop", &src);
+    let (_exe_guard, exe) = build("while_nested_binop", &src);
     let stdout = run(&exe);
     // First iter: (4+2)%3 = 0 → enter; a=5; back to header.
     // Second iter: (5+2)%3 = 7%3 = 1 → exit.
@@ -398,7 +391,7 @@ fn while_nested_binop() {
 
 #[test]
 fn while_binop_with_function_call() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_binop_with_function_call",
         "fn step(x: i64) -> i64:\n\
          \x20\x20\x20\x20return x - 1\n\
@@ -410,7 +403,7 @@ fn while_binop_with_function_call() {
          \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_binop_with_function_call", &src);
+    let (_exe_guard, exe) = build("while_binop_with_function_call", &src);
     let stdout = run(&exe);
     // step(3)=2>0 ✓ tick, n=2; step(2)=1>0 ✓ tick, n=1; step(1)=0 → exit.
     assert_eq!(
@@ -434,7 +427,7 @@ fn while_binop_with_function_call() {
 
 #[test]
 fn while_condition_through_inferred_locals_chain() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "while_condition_through_inferred_locals_chain",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 5\n\
@@ -444,7 +437,7 @@ fn while_condition_through_inferred_locals_chain() {
          \x20\x20\x20\x20print(n)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("while_condition_through_inferred_locals_chain", &src);
+    let (_exe_guard, exe) = build("while_condition_through_inferred_locals_chain", &src);
     let stdout = run(&exe);
     // -(5-5)=0 → enter, n=99; -(99-5) = -94 ≠ 0 → exit.
     assert_eq!(stdout, "loop\n99\n", "case 12 stdout mismatch: {stdout:?}");

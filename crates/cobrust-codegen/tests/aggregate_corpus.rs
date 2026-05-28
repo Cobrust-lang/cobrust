@@ -31,6 +31,7 @@ use cobrust_hir::{Session, lower as hir_lower};
 use cobrust_mir::{Module, lower as mir_lower};
 use cobrust_types::check;
 use target_lexicon::Triple;
+use tempfile::TempDir;
 
 fn lower_to_mir(src: &str) -> Module {
     let module = parse_str(src, FileId::SYNTHETIC).expect("parse");
@@ -40,25 +41,28 @@ fn lower_to_mir(src: &str) -> Module {
     mir_lower(&typed).expect("mir lower")
 }
 
-fn host_object_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!("cobrust-m12x-agg-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// Build a `TargetSpec` rooted in a fresh RAII `TempDir`. F63
+/// (2026-05-27): RAII cleanup replaces the legacy
+/// `std::env::temp_dir().join(...)` leak.
+fn host_object_spec(name: &str) -> (TargetSpec, TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for target spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
 fn compile_ok(name: &str, src: &str) {
     let mir = lower_to_mir(src);
-    let spec = host_object_spec(name);
+    let (spec, _guard) = host_object_spec(name);
     let artifact = emit(&mir, spec).unwrap_or_else(|e| panic!("emit `{name}`: {e}"));
     let path = artifact.path();
     let meta = std::fs::metadata(path).unwrap();

@@ -62,22 +62,23 @@ fn find_lldb() -> Option<String> {
 
 /// Build a `TargetSpec` for an emitted object (no linker step — the
 /// smoke gates inspect the object directly, which is enough for lldb
-/// symbol resolution).
-fn object_spec(name: &str) -> TargetSpec {
-    let dir =
-        std::env::temp_dir().join(format!("cobrust-0058c-lldb-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// symbol resolution). F63 (2026-05-27): RAII `TempDir` replaces the
+/// legacy `std::env::temp_dir().join(...)` leak. Caller must keep
+/// the returned guard alive until lldb has consumed the artifact.
+fn object_spec(name: &str) -> (TargetSpec, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for object spec");
+    let spec = TargetSpec {
         triple: target_lexicon::Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
 /// Run `lldb-18 -b -o "<command>" -- <object>` and capture stdout.
@@ -247,36 +248,37 @@ fn body_summing_params(def_id: u32, name: &str) -> Body {
 // =====================================================================
 
 /// Build a `TargetSpec` for a linked executable (vs. `object_spec` which
-/// emits a relocatable object). Uses a distinct tmp dir to avoid races
-/// with the object-level fixtures.
-fn executable_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!("cobrust-0059d-exe-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// emits a relocatable object). F63: RAII `TempDir` so caller owns
+/// cleanup.
+fn executable_spec(name: &str) -> (TargetSpec, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for executable spec");
+    let spec = TargetSpec {
         triple: target_lexicon::Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Executable,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
-/// Emit a MIR `Body` to a linked executable. Returns the `PathBuf` of the
-/// produced binary. The MIR fixture must be self-contained (no stdlib
-/// symbol references) so that `cc` can link it without a runtime library.
+/// Emit a MIR `Body` to a linked executable. Returns `(guard, PathBuf)`;
+/// caller must keep the guard alive until lldb has finished with the
+/// binary. The MIR fixture must be self-contained (no stdlib symbol
+/// references) so that `cc` can link it without a runtime library.
 ///
 /// On linker failure, the test panics with the captured error.
-fn build_linked_executable(body: cobrust_mir::Body) -> std::path::PathBuf {
+fn build_linked_executable(body: cobrust_mir::Body) -> (tempfile::TempDir, std::path::PathBuf) {
     let name = body.name.clone();
     let module = cobrust_mir::Module { bodies: vec![body] };
-    let spec = executable_spec(&name);
+    let (spec, guard) = executable_spec(&name);
     let artifact = emit(&module, spec).expect("emit linked executable");
     match artifact {
-        Artifact::Executable(p) => p,
+        Artifact::Executable(p) => (guard, p),
         other => panic!("expected Artifact::Executable, got {other:?}"),
     }
 }
@@ -334,7 +336,7 @@ fn lldb_smoke_hello_world_subprogram_resolves() {
 
     let body = body_returning_const(1, "hello", 42);
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("hello_lldb");
+    let (spec, _dir_guard) = object_spec("hello_lldb");
     let artifact = emit(&module, spec).expect("hello emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -362,7 +364,7 @@ fn lldb_smoke_fib_function_visible() {
 
     let body = body_summing_params(2, "fib");
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("fib_lldb");
+    let (spec, _dir_guard) = object_spec("fib_lldb");
     let artifact = emit(&module, spec).expect("fib emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -387,7 +389,7 @@ fn lldb_smoke_multi_fn_module_lists_both() {
     let module = Module {
         bodies: vec![body_a, body_b],
     };
-    let spec = object_spec("multi_fn_lldb");
+    let (spec, _dir_guard) = object_spec("multi_fn_lldb");
     let artifact = emit(&module, spec).expect("multi-fn emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -414,7 +416,7 @@ fn lldb_smoke_line_table_present() {
 
     let body = body_returning_const(3, "with_line_info", 7);
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("line_table_lldb");
+    let (spec, _dir_guard) = object_spec("line_table_lldb");
     let artifact = emit(&module, spec).expect("line table emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -471,7 +473,7 @@ fn lldb_smoke_str_variable_renders_content() {
     // `cobrust::Str` named DIType per ADR-0059a §3.3.1.
     let body = body_with_typed_signature(20, "take_str", Ty::Str);
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("str_pretty_lldb");
+    let (spec, _dir_guard) = object_spec("str_pretty_lldb");
     let artifact = emit(&module, spec).expect("str pretty emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -502,7 +504,7 @@ fn lldb_smoke_list_variable_renders_bracket() {
     // the `cobrust::List` named DIType.
     let body = body_with_typed_signature(21, "take_list", Ty::List(Box::new(Ty::Int)));
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("list_pretty_lldb");
+    let (spec, _dir_guard) = object_spec("list_pretty_lldb");
     let artifact = emit(&module, spec).expect("list pretty emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -535,7 +537,7 @@ fn lldb_smoke_dict_variable_renders_braces() {
         Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Str)),
     );
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("dict_pretty_lldb");
+    let (spec, _dir_guard) = object_spec("dict_pretty_lldb");
     let artifact = emit(&module, spec).expect("dict pretty emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -606,7 +608,7 @@ fn lldb_smoke_str_runtime_frame_variable_renders_content() {
     };
     let body = body_with_typed_signature(30, "take_str_wave2", Ty::Str);
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("str_runtime_lldb_wave2");
+    let (spec, _dir_guard) = object_spec("str_runtime_lldb_wave2");
     let artifact = emit(&module, spec).expect("str runtime emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -646,7 +648,7 @@ fn lldb_smoke_dict_iter_runtime_kv_walk_symbols_present() {
         Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Str)),
     );
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("dict_iter_lldb_wave2");
+    let (spec, _dir_guard) = object_spec("dict_iter_lldb_wave2");
     let artifact = emit(&module, spec).expect("dict iter emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -680,7 +682,7 @@ fn lldb_smoke_adt_variable_renders_naming() {
     // specific AdtId, so any id suffices.
     let body = body_with_typed_signature(32, "take_adt_wave2", Ty::Adt(AdtId(0), Vec::new()));
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("adt_naming_lldb_wave2");
+    let (spec, _dir_guard) = object_spec("adt_naming_lldb_wave2");
     let artifact = emit(&module, spec).expect("adt naming emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -733,7 +735,7 @@ fn lldb_linked_str_frame_variable() {
     }
 
     let body = body_with_typed_signature(40, "str_bp_smoke", Ty::Str);
-    let exe = build_linked_executable(body);
+    let (_dir_guard, exe) = build_linked_executable(body);
     let out = lldb_run_with_bp(&lldb, &exe, &["image lookup --type cobrust::Str"]);
     assert!(
         out.contains("cobrust::Str"),
@@ -768,7 +770,7 @@ fn lldb_linked_option_none() {
 
     // `Ty::Adt(AdtId(0), vec![Ty::Int])` — the future `Option<Int>` shape.
     let body = body_with_typed_signature(41, "option_none_smoke", Ty::Adt(AdtId(0), vec![Ty::Int]));
-    let exe = build_linked_executable(body);
+    let (_dir_guard, exe) = build_linked_executable(body);
     // The wave-3 codegen emits `cobrust::Option` DICompositeType for
     // `Ty::Adt(_, non_empty_params)`. For generic/non-parametrised Adts
     // it falls back to `cobrust::Adt`.
@@ -812,7 +814,7 @@ fn lldb_linked_option_some_int() {
         "option_some_int_smoke",
         Ty::Adt(AdtId(0), vec![Ty::Int]),
     );
-    let exe = build_linked_executable(body);
+    let (_dir_guard, exe) = build_linked_executable(body);
     let out = lldb_run_with_bp(&lldb, &exe, &["image dump symtab"]);
     assert!(
         out.contains("option_some_int_smoke"),
@@ -844,7 +846,7 @@ fn lldb_option_di_composite_type_fields() {
     let body =
         body_with_typed_signature(43, "take_option_int_w3", Ty::Adt(AdtId(0), vec![Ty::Int]));
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("option_di_composite_w3");
+    let (spec, _dir_guard) = object_spec("option_di_composite_w3");
     let artifact = emit(&module, spec).expect("option composite emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -887,7 +889,7 @@ fn lldb_option_di_composite_adt_regression() {
 
     let body = body_with_typed_signature(44, "take_adt_wave3_reg", Ty::Adt(AdtId(0), Vec::new()));
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("adt_wave3_regression");
+    let (spec, _dir_guard) = object_spec("adt_wave3_regression");
     let artifact = emit(&module, spec).expect("adt regression emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -934,7 +936,7 @@ fn lldb_smoke_str_di_composite_type_fields() {
 
     let body = body_with_typed_signature(50, "take_str_w3e", Ty::Str);
     let module = Module { bodies: vec![body] };
-    let spec = object_spec("str_di_composite_w3e");
+    let (spec, _dir_guard) = object_spec("str_di_composite_w3e");
     let artifact = emit(&module, spec).expect("str composite emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")
@@ -974,7 +976,7 @@ fn lldb_smoke_str_di_composite_regression_adt_preserved() {
     let module = Module {
         bodies: vec![body_str, body_adt],
     };
-    let spec = object_spec("str_composite_regression_w3e");
+    let (spec, _dir_guard) = object_spec("str_composite_regression_w3e");
     let artifact = emit(&module, spec).expect("regression emit");
     let Artifact::Object(path) = artifact else {
         panic!("expected Artifact::Object")

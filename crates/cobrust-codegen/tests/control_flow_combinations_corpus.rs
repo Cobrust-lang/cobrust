@@ -31,6 +31,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use tempfile::TempDir;
+
 fn cobrust_binary() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest
@@ -57,31 +59,22 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
-/// Write a `.cb` source file to a temp dir; return its path.
-fn write_temp(name: &str, contents: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "cobrust-m11-1-1-corpus-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    let p = dir.join(format!("{name}.cb"));
+/// Write a `.cb` source file to a temp dir; return (guard, path).
+/// F63 (2026-05-27): RAII tempdir.
+fn write_temp(name: &str, contents: &str) -> (TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("create tempdir for source");
+    let p = dir.path().join(format!("{name}.cb"));
     std::fs::write(&p, contents).expect("write temp .cb");
-    p
+    (dir, p)
 }
 
-/// Build the source file with the `cobrust` binary; return the path to the
-/// produced executable. Panics with a helpful message on failure.
-fn build(name: &str, src_path: &Path) -> PathBuf {
+/// Build the source file with the `cobrust` binary; return (guard,
+/// exe_path). Panics with a helpful message on failure.
+fn build(name: &str, src_path: &Path) -> (TempDir, PathBuf) {
     let bin = cobrust_binary();
     let workspace = workspace_root();
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-m11-1-1-exe-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&exe_dir);
-    let exe_path = exe_dir.join(name);
+    let exe_dir = tempfile::tempdir().expect("create tempdir for exe");
+    let exe_path = exe_dir.path().join(name);
 
     let out = Command::new(&bin)
         .arg("build")
@@ -98,7 +91,7 @@ fn build(name: &str, src_path: &Path) -> PathBuf {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    exe_path
+    (exe_dir, exe_path)
 }
 
 /// Run a produced executable; return its stdout as a String.
@@ -124,7 +117,7 @@ fn run(exe_path: &Path) -> String {
 // Outer i=0..2 (3 iters), inner j=0..3 (4 iters): total increments = 12.
 #[test]
 fn a1_while_inside_while_sum() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "a1_nested_while_sum",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let total: i64 = 0\n\
@@ -138,7 +131,7 @@ fn a1_while_inside_while_sum() {
          \x20\x20\x20\x20print(total)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("a1_nested_while_sum", &src);
+    let (_exe_guard, exe) = build("a1_nested_while_sum", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "12\n", "a1 stdout mismatch: {stdout:?}");
 }
@@ -147,7 +140,7 @@ fn a1_while_inside_while_sum() {
 // i=0..1 (2), j=0..2 (3), k=0..3 (4): count = 2*3*4 = 24.
 #[test]
 fn a2_three_deep_nested_while() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "a2_three_deep",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let count: i64 = 0\n\
@@ -164,7 +157,7 @@ fn a2_three_deep_nested_while() {
          \x20\x20\x20\x20print(count)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("a2_three_deep", &src);
+    let (_exe_guard, exe) = build("a2_three_deep", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "24\n", "a2 stdout mismatch: {stdout:?}");
 }
@@ -174,7 +167,7 @@ fn a2_three_deep_nested_while() {
 // inner_sum += j for j in 0..i: i=0 → 0, i=1 → 0, i=2 → 0+1=1. Total inner=1.
 #[test]
 fn a3_nested_while_mutation_both_levels() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "a3_nested_mutation",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let outer_sum: i64 = 0\n\
@@ -191,7 +184,7 @@ fn a3_nested_while_mutation_both_levels() {
          \x20\x20\x20\x20print(inner_sum)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("a3_nested_mutation", &src);
+    let (_exe_guard, exe) = build("a3_nested_mutation", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "3\n1\n", "a3 stdout mismatch: {stdout:?}");
 }
@@ -202,7 +195,7 @@ fn a3_nested_while_mutation_both_levels() {
 // outer_count=3, total_inner=6.
 #[test]
 fn a4_nested_while_inner_flag_exit() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "a4_nested_flag",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let outer_count: i64 = 0\n\
@@ -224,7 +217,7 @@ fn a4_nested_while_inner_flag_exit() {
          \x20\x20\x20\x20print(total_inner)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("a4_nested_flag", &src);
+    let (_exe_guard, exe) = build("a4_nested_flag", &src);
     let stdout = run(&exe);
     // outer_count=3; per iteration inner: j=0→total+1, j=1→total+1, j=2→done=1, j=3→skip → +2 each
     assert_eq!(stdout, "3\n6\n", "a4 stdout mismatch: {stdout:?}");
@@ -238,7 +231,7 @@ fn a4_nested_while_inner_flag_exit() {
 // evens={2,4,6}→3, odds={1,3,5}→3.
 #[test]
 fn b1_if_else_inside_while_even_odd() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "b1_if_else_while",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let evens: i64 = 0\n\
@@ -254,7 +247,7 @@ fn b1_if_else_inside_while_even_odd() {
          \x20\x20\x20\x20print(odds)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("b1_if_else_while", &src);
+    let (_exe_guard, exe) = build("b1_if_else_while", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "3\n3\n", "b1 stdout mismatch: {stdout:?}");
 }
@@ -263,7 +256,7 @@ fn b1_if_else_inside_while_even_odd() {
 // low (≤3): 3, mid (4..6): 3, high (7..9): 3.
 #[test]
 fn b2_if_elif_else_inside_while() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "b2_elif_while",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let low: i64 = 0\n\
@@ -283,7 +276,7 @@ fn b2_if_elif_else_inside_while() {
          \x20\x20\x20\x20print(high)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("b2_elif_while", &src);
+    let (_exe_guard, exe) = build("b2_elif_while", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "3\n3\n3\n", "b2 stdout mismatch: {stdout:?}");
 }
@@ -292,7 +285,7 @@ fn b2_if_elif_else_inside_while() {
 // n=5 ≥ 0 → sum 0+1+2+3+4 = 10; else path prints 0.
 #[test]
 fn b3_while_inside_if_branch() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "b3_while_in_if",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 5\n\
@@ -307,7 +300,7 @@ fn b3_while_inside_if_branch() {
          \x20\x20\x20\x20print(sum)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("b3_while_in_if", &src);
+    let (_exe_guard, exe) = build("b3_while_in_if", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "10\n", "b3 stdout mismatch: {stdout:?}");
 }
@@ -316,7 +309,7 @@ fn b3_while_inside_if_branch() {
 // n=4 ≥ 0 → else branch: sum 1+2+3+4 = 10.
 #[test]
 fn b4_while_inside_else_branch() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "b4_while_in_else",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 4\n\
@@ -331,7 +324,7 @@ fn b4_while_inside_else_branch() {
          \x20\x20\x20\x20print(result)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("b4_while_in_else", &src);
+    let (_exe_guard, exe) = build("b4_while_in_else", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "10\n", "b4 stdout mismatch: {stdout:?}");
 }
@@ -340,7 +333,7 @@ fn b4_while_inside_else_branch() {
 // mode=1 → outer if taken; inner loop 1..5, add even (2+4=6).
 #[test]
 fn b5_nested_if_while_if() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "b5_nested_if_while_if",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let mode: i64 = 1\n\
@@ -356,7 +349,7 @@ fn b5_nested_if_while_if() {
          \x20\x20\x20\x20print(result)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("b5_nested_if_while_if", &src);
+    let (_exe_guard, exe) = build("b5_nested_if_while_if", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "6\n", "b5 stdout mismatch: {stdout:?}");
 }
@@ -370,7 +363,7 @@ fn b5_nested_if_while_if() {
 // i=0..9; break at i==5. count incremented for i=0..4 → 5.
 #[test]
 fn c1_break_inside_while() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "c1_break",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let count: i64 = 0\n\
@@ -383,7 +376,7 @@ fn c1_break_inside_while() {
          \x20\x20\x20\x20print(count)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("c1_break", &src);
+    let (_exe_guard, exe) = build("c1_break", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "5\n", "c1 stdout mismatch: {stdout:?}");
 }
@@ -392,7 +385,7 @@ fn c1_break_inside_while() {
 // flag=1 → first branch: break at i==3, count=3 (i=0,1,2).
 #[test]
 fn c2_break_inside_while_inside_if() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "c2_break_in_if",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let flag: i64 = 1\n\
@@ -414,7 +407,7 @@ fn c2_break_inside_while_inside_if() {
          \x20\x20\x20\x20print(count)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("c2_break_in_if", &src);
+    let (_exe_guard, exe) = build("c2_break_in_if", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "3\n", "c2 stdout mismatch: {stdout:?}");
 }
@@ -424,7 +417,7 @@ fn c2_break_inside_while_inside_if() {
 // Per outer iteration: j=0,1 counted (+2), then j==2 breaks. outer_count=3, inner_count=6.
 #[test]
 fn c3_break_inner_only_nested_while() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "c3_break_inner",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let outer_count: i64 = 0\n\
@@ -443,7 +436,7 @@ fn c3_break_inner_only_nested_while() {
          \x20\x20\x20\x20print(inner_count)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("c3_break_inner", &src);
+    let (_exe_guard, exe) = build("c3_break_inner", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "3\n6\n", "c3 stdout mismatch: {stdout:?}");
 }
@@ -452,7 +445,7 @@ fn c3_break_inner_only_nested_while() {
 // Sum 1..10 excluding {3,6,9}: 55 - 18 = 37.
 #[test]
 fn c4_continue_inside_while() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "c4_continue",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let sum: i64 = 0\n\
@@ -466,7 +459,7 @@ fn c4_continue_inside_while() {
          \x20\x20\x20\x20print(sum)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("c4_continue", &src);
+    let (_exe_guard, exe) = build("c4_continue", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "37\n", "c4 stdout mismatch: {stdout:?}");
 }
@@ -475,7 +468,7 @@ fn c4_continue_inside_while() {
 // Sum 1..8 excluding {3,6}: 1+2+4+5+7+8 = 27.
 #[test]
 fn c5_continue_inside_if_inside_while() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "c5_continue_if",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let sum: i64 = 0\n\
@@ -489,7 +482,7 @@ fn c5_continue_inside_if_inside_while() {
          \x20\x20\x20\x20print(sum)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("c5_continue_if", &src);
+    let (_exe_guard, exe) = build("c5_continue_if", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "27\n", "c5 stdout mismatch: {stdout:?}");
 }
@@ -498,7 +491,7 @@ fn c5_continue_inside_if_inside_while() {
 // i=0..8; break at i==4; result = i * 10 = 40.
 #[test]
 fn c6_break_then_post_loop_computation() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "c6_break_post",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let i: i64 = 0\n\
@@ -510,7 +503,7 @@ fn c6_break_then_post_loop_computation() {
          \x20\x20\x20\x20print(result)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("c6_break_post", &src);
+    let (_exe_guard, exe) = build("c6_break_post", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "40\n", "c6 stdout mismatch: {stdout:?}");
 }
@@ -523,7 +516,7 @@ fn c6_break_then_post_loop_computation() {
 // First n where n*n > 50: 7*7=49 ≤ 50, 8*8=64 > 50 → prints 8.
 #[test]
 fn d1_return_inside_while() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "d1_return_while",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 1\n\
@@ -535,7 +528,7 @@ fn d1_return_inside_while() {
          \x20\x20\x20\x20print(\"not found\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("d1_return_while", &src);
+    let (_exe_guard, exe) = build("d1_return_while", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "8\n", "d1 stdout mismatch: {stdout:?}");
 }
@@ -544,7 +537,7 @@ fn d1_return_inside_while() {
 // Sum 1..N; stop when sum > 15. 1+2+3+4+5+6=21 > 15 → prints 6.
 #[test]
 fn d2_return_inside_if_inside_while() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "d2_return_if_while",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let sum: i64 = 0\n\
@@ -558,7 +551,7 @@ fn d2_return_inside_if_inside_while() {
          \x20\x20\x20\x20print(0)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("d2_return_if_while", &src);
+    let (_exe_guard, exe) = build("d2_return_if_while", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "6\n", "d2 stdout mismatch: {stdout:?}");
 }
@@ -568,7 +561,7 @@ fn d2_return_inside_if_inside_while() {
 // i=1, j=2..12: 1*12=12 ✓ → prints 1 then 12.
 #[test]
 fn d3_return_inside_nested_while() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "d3_return_nested",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let i: i64 = 1\n\
@@ -584,7 +577,7 @@ fn d3_return_inside_nested_while() {
          \x20\x20\x20\x20print(\"none\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("d3_return_nested", &src);
+    let (_exe_guard, exe) = build("d3_return_nested", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "1\n12\n", "d3 stdout mismatch: {stdout:?}");
 }
@@ -596,7 +589,7 @@ fn d3_return_inside_nested_while() {
 // E1: counter accumulator — sum 1..100 = 5050.
 #[test]
 fn e1_counter_accumulator() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "e1_accumulator",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let sum: i64 = 0\n\
@@ -607,7 +600,7 @@ fn e1_counter_accumulator() {
          \x20\x20\x20\x20print(sum)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("e1_accumulator", &src);
+    let (_exe_guard, exe) = build("e1_accumulator", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "5050\n", "e1 stdout mismatch: {stdout:?}");
 }
@@ -616,7 +609,7 @@ fn e1_counter_accumulator() {
 // fib(10) = 55 (a=0, b=1, 10 iterations).
 #[test]
 fn e2_two_variable_fibonacci_like() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "e2_fib_like",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let a: i64 = 0\n\
@@ -630,7 +623,7 @@ fn e2_two_variable_fibonacci_like() {
          \x20\x20\x20\x20print(a)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("e2_fib_like", &src);
+    let (_exe_guard, exe) = build("e2_fib_like", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "55\n", "e2 stdout mismatch: {stdout:?}");
 }
@@ -639,7 +632,7 @@ fn e2_two_variable_fibonacci_like() {
 // sum of i+j for i in 0..1, j in 0..1 = (0+0)+(0+1)+(1+0)+(1+1) = 4.
 #[test]
 fn e3_nested_counter_double_loop() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "e3_nested_counter",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let total: i64 = 0\n\
@@ -653,7 +646,7 @@ fn e3_nested_counter_double_loop() {
          \x20\x20\x20\x20print(total)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("e3_nested_counter", &src);
+    let (_exe_guard, exe) = build("e3_nested_counter", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "4\n", "e3 stdout mismatch: {stdout:?}");
 }
@@ -662,7 +655,7 @@ fn e3_nested_counter_double_loop() {
 // Sequence [3,1,4,1,5,9,2,6]: running max after all = 9.
 #[test]
 fn e4_conditional_mutation_running_max() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "e4_running_max",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let mx: i64 = 0\n\
@@ -693,7 +686,7 @@ fn e4_conditional_mutation_running_max() {
          \x20\x20\x20\x20print(mx)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("e4_running_max", &src);
+    let (_exe_guard, exe) = build("e4_running_max", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "9\n", "e4 stdout mismatch: {stdout:?}");
 }
@@ -705,7 +698,7 @@ fn e4_conditional_mutation_running_max() {
 // F1: modulo cascade inside while — FizzBuzz extended to 1..20.
 #[test]
 fn f1_fizzbuzz_extended_to_20() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "f1_fizzbuzz20",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 1\n\
@@ -721,7 +714,7 @@ fn f1_fizzbuzz_extended_to_20() {
          \x20\x20\x20\x20\x20\x20\x20\x20n = n + 1\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("f1_fizzbuzz20", &src);
+    let (_exe_guard, exe) = build("f1_fizzbuzz20", &src);
     let stdout = run(&exe);
     let expected = "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz\n16\n17\nFizz\n19\nBuzz\n";
     assert_eq!(
@@ -733,7 +726,7 @@ fn f1_fizzbuzz_extended_to_20() {
 // F2: modulo + if + break — find first multiple of 7 in 1..100 (= 7).
 #[test]
 fn f2_modulo_if_break_find_first_multiple() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "f2_find_mult7",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 1\n\
@@ -744,7 +737,7 @@ fn f2_modulo_if_break_find_first_multiple() {
          \x20\x20\x20\x20\x20\x20\x20\x20n = n + 1\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("f2_find_mult7", &src);
+    let (_exe_guard, exe) = build("f2_find_mult7", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "7\n", "f2 stdout mismatch: {stdout:?}");
 }
@@ -753,7 +746,7 @@ fn f2_modulo_if_break_find_first_multiple() {
 // Divisors: 1,2,3,4,6,12 → count = 6.
 #[test]
 fn f3_nested_modulo_count_divisors() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "f3_divisors",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let target: i64 = 12\n\
@@ -766,7 +759,7 @@ fn f3_nested_modulo_count_divisors() {
          \x20\x20\x20\x20print(count)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("f3_divisors", &src);
+    let (_exe_guard, exe) = build("f3_divisors", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "6\n", "f3 stdout mismatch: {stdout:?}");
 }
@@ -779,7 +772,7 @@ fn f3_nested_modulo_count_divisors() {
 // n=0, while n > 10 → false immediately. print 42.
 #[test]
 fn g1_empty_while_body_pass() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "g1_empty_while",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 0\n\
@@ -788,7 +781,7 @@ fn g1_empty_while_body_pass() {
          \x20\x20\x20\x20print(42)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("g1_empty_while", &src);
+    let (_exe_guard, exe) = build("g1_empty_while", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "42\n", "g1 stdout mismatch: {stdout:?}");
 }
@@ -796,7 +789,7 @@ fn g1_empty_while_body_pass() {
 // G2: while with always-false condition — body never executes; sentinel stays 99.
 #[test]
 fn g2_while_always_false_condition() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "g2_always_false_while",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let sentinel: i64 = 99\n\
@@ -807,7 +800,7 @@ fn g2_while_always_false_condition() {
          \x20\x20\x20\x20print(sentinel)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("g2_always_false_while", &src);
+    let (_exe_guard, exe) = build("g2_always_false_while", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "99\n", "g2 stdout mismatch: {stdout:?}");
 }
@@ -816,7 +809,7 @@ fn g2_while_always_false_condition() {
 // n=10: first two branches miss, third (elif n==10) fires → "ten".
 #[test]
 fn g3_if_elif_unreachable_else() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "g3_unreachable_else",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 10\n\
@@ -830,7 +823,7 @@ fn g3_if_elif_unreachable_else() {
          \x20\x20\x20\x20\x20\x20\x20\x20print(\"other\")\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("g3_unreachable_else", &src);
+    let (_exe_guard, exe) = build("g3_unreachable_else", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "ten\n", "g3 stdout mismatch: {stdout:?}");
 }
@@ -839,7 +832,7 @@ fn g3_if_elif_unreachable_else() {
 // n=5, condition n < 6: true once (n=5), then n=6 → false. count=1.
 #[test]
 fn g4_while_runs_exactly_once() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "g4_once",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let n: i64 = 5\n\
@@ -850,7 +843,7 @@ fn g4_while_runs_exactly_once() {
          \x20\x20\x20\x20print(count)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("g4_once", &src);
+    let (_exe_guard, exe) = build("g4_once", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "1\n", "g4 stdout mismatch: {stdout:?}");
 }
@@ -860,7 +853,7 @@ fn g4_while_runs_exactly_once() {
 // count_zero=2, count_one=2, count_two=2.
 #[test]
 fn g5_nested_if_all_branches_covered() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "g5_all_branches",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let count_zero: i64 = 0\n\
@@ -880,7 +873,7 @@ fn g5_nested_if_all_branches_covered() {
          \x20\x20\x20\x20print(count_two)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("g5_all_branches", &src);
+    let (_exe_guard, exe) = build("g5_all_branches", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "2\n2\n2\n", "g5 stdout mismatch: {stdout:?}");
 }
@@ -893,7 +886,7 @@ fn g5_nested_if_all_branches_covered() {
 // {6, 8, 10} → 3.
 #[test]
 fn x1_compound_condition_doubly_nested_if() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "x1_compound_cond",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let count: i64 = 0\n\
@@ -906,7 +899,7 @@ fn x1_compound_condition_doubly_nested_if() {
          \x20\x20\x20\x20print(count)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("x1_compound_cond", &src);
+    let (_exe_guard, exe) = build("x1_compound_cond", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "3\n", "x1 stdout mismatch: {stdout:?}");
 }
@@ -915,7 +908,7 @@ fn x1_compound_condition_doubly_nested_if() {
 // Loop1: n=1..4 → sum=10. Loop2: m=1..10, count m%3==0: {3,6,9} → 3.
 #[test]
 fn x2_sequential_loops_result_chaining() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "x2_sequential_loops",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let sum: i64 = 0\n\
@@ -933,7 +926,7 @@ fn x2_sequential_loops_result_chaining() {
          \x20\x20\x20\x20print(count)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("x2_sequential_loops", &src);
+    let (_exe_guard, exe) = build("x2_sequential_loops", &src);
     let stdout = run(&exe);
     assert_eq!(stdout, "10\n3\n", "x2 stdout mismatch: {stdout:?}");
 }
@@ -942,7 +935,7 @@ fn x2_sequential_loops_result_chaining() {
 // n*(n+1) for n=1..5 → 2+6+12+20+30 = 70. Condition n*(n+1)%2==0 always true.
 #[test]
 fn x3_while_conditional_accumulation_always_fires() {
-    let src = write_temp(
+    let (_src_guard, src) = write_temp(
         "x3_cond_accum",
         "fn main() -> i64:\n\
          \x20\x20\x20\x20let total: i64 = 0\n\
@@ -955,7 +948,7 @@ fn x3_while_conditional_accumulation_always_fires() {
          \x20\x20\x20\x20print(total)\n\
          \x20\x20\x20\x20return 0\n",
     );
-    let exe = build("x3_cond_accum", &src);
+    let (_exe_guard, exe) = build("x3_cond_accum", &src);
     let stdout = run(&exe);
     // n*(n+1) is always even; t = n^2+n for n=1..5: 2+6+12+20+30 = 70.
     assert_eq!(stdout, "70\n", "x3 stdout mismatch: {stdout:?}");

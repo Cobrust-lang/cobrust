@@ -39,6 +39,7 @@ use cobrust_mir::{Module, lower as mir_lower};
 use cobrust_types::check;
 use object::{Object, ObjectSection, ObjectSymbol};
 use target_lexicon::Triple;
+use tempfile::TempDir;
 
 /// Compile `src` end-to-end through the pipeline up to MIR.
 fn lower_to_mir(src: &str) -> Module {
@@ -50,27 +51,30 @@ fn lower_to_mir(src: &str) -> Module {
 }
 
 /// Spec for a host-targeted relocatable object file.
-fn host_object_spec(name: &str) -> TargetSpec {
-    let dir = std::env::temp_dir().join(format!("cobrust-m9-{name}-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    TargetSpec {
+/// F63 (2026-05-27): RAII `TempDir` so the dir is cleaned up when
+/// the caller's guard drops. Caller must keep the guard alive until
+/// after `emit()` is consumed.
+fn host_object_spec(name: &str) -> (TargetSpec, TempDir) {
+    let dir = tempfile::tempdir().expect("create tempdir for target spec");
+    let spec = TargetSpec {
         triple: Triple::host(),
         opt_level: OptLevel::None,
         backend: Backend::Llvm,
         artifact: ArtifactKind::Object,
-        output_dir: dir,
+        output_dir: dir.path().to_path_buf(),
         module_name: name.to_string(),
         source_path: None,
         runtime_dispatch: false,
         target_cpu: None,
-    }
+    };
+    (spec, dir)
 }
 
 /// Compile `src` to an object file via LLVM; assert the artifact
 /// path exists + is non-empty.
 fn compile_ok(name: &str, src: &str) {
     let mir = lower_to_mir(src);
-    let spec = host_object_spec(name);
+    let (spec, _guard) = host_object_spec(name);
     let artifact = emit(&mir, spec).unwrap_or_else(|e| panic!("emit `{name}`: {e}"));
     let path = artifact.path();
     let meta = std::fs::metadata(path)
@@ -82,7 +86,7 @@ fn compile_ok(name: &str, src: &str) {
 /// Compile `src` and return the raw object bytes for structural inspection.
 fn compile_to_bytes(name: &str, src: &str) -> Vec<u8> {
     let mir = lower_to_mir(src);
-    let spec = host_object_spec(name);
+    let (spec, _guard) = host_object_spec(name);
     let artifact = emit(&mir, spec).unwrap_or_else(|e| panic!("emit `{name}`: {e}"));
     let path = artifact.path();
     std::fs::read(path).unwrap_or_else(|e| panic!("read object `{}`: {e}", path.display()))
@@ -636,7 +640,7 @@ fn p056_default_dev_backend_is_llvm() {
     // ADR-0070 §X.4 RATIFIED 2026-05-27: LLVM is the sole AOT backend,
     // so default_for_dev unconditionally returns Llvm.
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("p056");
+    let (mut spec, _guard) = host_object_spec("p056");
     spec.backend = Backend::default_for_dev();
     assert_eq!(spec.backend, Backend::Llvm);
     let _ = emit(&mir, spec).expect("emit");
@@ -646,7 +650,7 @@ fn p056_default_dev_backend_is_llvm() {
 fn p057_default_release_backend_is_llvm() {
     // ADR-0070 §X.4: default_for_release is LLVM (the sole AOT backend).
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("p057");
+    let (mut spec, _guard) = host_object_spec("p057");
     spec.backend = Backend::default_for_release();
     assert_eq!(spec.backend, Backend::Llvm);
     let _ = emit(&mir, spec).expect("emit");
@@ -655,7 +659,7 @@ fn p057_default_release_backend_is_llvm() {
 #[test]
 fn p058_optlevel_speed_compiles() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("p058");
+    let (mut spec, _guard) = host_object_spec("p058");
     spec.opt_level = OptLevel::Speed;
     let _ = emit(&mir, spec).expect("emit");
 }
@@ -663,7 +667,7 @@ fn p058_optlevel_speed_compiles() {
 #[test]
 fn p059_optlevel_speed_and_size_compiles() {
     let mir = lower_to_mir("fn f() -> i64:\n    return 0\n");
-    let mut spec = host_object_spec("p059");
+    let (mut spec, _guard) = host_object_spec("p059");
     spec.opt_level = OptLevel::SpeedAndSize;
     let _ = emit(&mir, spec).expect("emit");
 }

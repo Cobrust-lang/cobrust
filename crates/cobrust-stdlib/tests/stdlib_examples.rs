@@ -73,18 +73,17 @@ fn cobrust_binary() -> PathBuf {
 }
 
 /// Compile + run an example, return (stdout, exit_code).
+/// F63 (2026-05-27): RAII tempdir replaces the legacy
+/// `std::env::temp_dir().join(...)` leak. The guard drops at function
+/// exit — after the produced binary has been run and stdout captured.
 fn build_and_run(example: &str) -> (String, i32) {
     let bin = cobrust_binary();
     let workspace = workspace_root();
     let cb_path = workspace.join("examples").join(format!("{example}.cb"));
     assert!(cb_path.exists(), "examples/{example}.cb missing");
 
-    let exe_dir = std::env::temp_dir().join(format!(
-        "cobrust-m11-{example}-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    let exe_path = exe_dir.join(example);
+    let exe_dir_guard = tempfile::tempdir().expect("create tempdir for example exe");
+    let exe_path = exe_dir_guard.path().join(example);
 
     // Build.
     let build_output = Command::new(&bin)
