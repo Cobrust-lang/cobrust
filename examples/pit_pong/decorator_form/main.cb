@@ -1,0 +1,43 @@
+# ADR-0074 first proof — `.cb` ecosystem-decorator desugar.
+#
+# This is the DECORATOR-FORM variant of the ADR-0073 pit "pong" first
+# proof. The explicit-form version of the same program is:
+#
+#   fn main() -> i64:
+#       let app = pit.App()
+#       let _ = app.route("GET", "/ping", handle_ping)
+#       let _server = app.serve_in_background("127.0.0.1", 0)
+#       ...
+#
+# In the decorator form below, the explicit `app.route("GET", ...)` call
+# is replaced by `@app.route("/ping")` over the `fn handle_ping(...)`
+# definition. The HIR desugar synthesises an equivalent register-call
+# and prepends it into `fn main()`'s prologue (immediately after the
+# `let app = pit.App()` binding), so the registered route is in place
+# before `app.serve_in_background(...)` starts the listener.
+#
+# The synthetic call then flows through ADR-0073's existing callback
+# chain — same MIR lowering (`Constant::FnRef(handle_ping)`), same
+# codegen fn-pointer materialisation, same Rust trampoline in
+# `cobrust-pit/src/cabi.rs`. NO compiler-layer changes below HIR.
+#
+# Run the E2E test (`crates/cobrust-cli/tests/decorator_pit_e2e.rs`) to
+# exercise the full compile → link → run → real HTTP round-trip path.
+# The E2E rebuilds this source with a port baked in via `format!`.
+
+import pit
+
+@app.route("/ping")
+fn handle_ping(req: pit.Request) -> pit.Response:
+    return pit.text_response(200, "pong")
+
+fn main() -> i64:
+    let app = pit.App()
+    # SYNTHETIC `let _ = app.route("GET", "/ping", handle_ping)` is
+    # inserted here by the HIR ecosystem-decorator desugar pass
+    # (ADR-0074, see cobrust-hir/src/lower.rs::inject_pending_eco_decorators).
+    let _server = app.serve_in_background("127.0.0.1", 0)
+    let i: i64 = 0
+    while i < 10000000000:
+        i = i + 1
+    return 0

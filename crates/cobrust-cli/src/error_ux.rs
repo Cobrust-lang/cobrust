@@ -600,6 +600,15 @@ impl From<LoweringError> for UserError {
                 suggestion.map(str::to_owned),
                 *span,
             ),
+            L::EcosystemDecoratorShape {
+                detail,
+                span,
+                suggestion,
+            } => (
+                format!("ecosystem-decorator shape error: {detail}"),
+                suggestion.map(str::to_owned),
+                *span,
+            ),
         };
         let (line, col) = span_to_line_col(&span);
         Self::Type {

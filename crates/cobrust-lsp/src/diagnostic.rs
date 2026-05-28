@@ -255,6 +255,9 @@ pub fn lowering_error_to_diagnostic(err: &LoweringError, line_map: &LineMap) -> 
         AssignToUnknown {
             span, suggestion, ..
         } => (*span, *suggestion, "lower-assign-unknown"),
+        EcosystemDecoratorShape {
+            span, suggestion, ..
+        } => (*span, *suggestion, "lower-eco-decorator-shape"),
     };
     let range = span_to_lsp_range(&span, line_map);
     let diag = make_diagnostic(range, err.to_string(), code);

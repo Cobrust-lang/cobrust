@@ -1,5 +1,9 @@
 //! AST → HIR lowering.
 //!
+//! ADR-0074 — extends `Decorated` lowering at module scope to desugar
+//! ecosystem decorators (`@app.route("/x")`) into synthetic register-call
+//! ExprStmt siblings appended after the inner fn item.
+//!
 //! The lowering is total in the sense documented at ADR-0005:
 //! every well-formed AST yields either a well-formed HIR or a
 //! [`LoweringError`]. The lowering never panics on any AST that the
@@ -53,6 +57,48 @@ struct Lowerer<'s> {
     /// scope was later shadowed by a same-name function (M-F.3.3 Fn→Fn
     /// shadowing: user code can override PRELUDE stubs).
     stmt_def_ids: std::collections::HashMap<u32, DefId>,
+    /// ADR-0074 §6 — depth counter for "inside a class body". When > 0,
+    /// `lower_module_stmt` is processing a class member (which also
+    /// routes through that method per the standard module-stmt dispatch
+    /// pattern). Ecosystem-decorator desugar is disabled in class bodies
+    /// per §6 scope cap ("Decorating a class is OUT OF SCOPE") — the
+    /// decorator stays a no-op `ItemKind::Decorated` wrapper.
+    in_class_body: u32,
+    /// ADR-0074 — pending ecosystem decorators collected during the
+    /// module-stmt pass. Each entry stores enough to synthesise a
+    /// register-call `<recv>.<method>(<prefix><dec_args><fn_ref>)` once
+    /// `fn main()` is lowered. The synthetic call is prepended into
+    /// main's body immediately after the first `let <recv> = ...`
+    /// binding (so the receiver is in scope and the route is registered
+    /// before `app.serve_in_background(...)` is reached).
+    ///
+    /// Spec-deviation note: ADR-0074 §2 Q1 places the synthetic call in
+    /// the "module init body". The init body exists in MIR
+    /// (`<init>` symbol per `cobrust-mir/src/lower.rs::lower_init`) but
+    /// is NOT wired into the runtime entry path (`_cobrust_user_main`
+    /// is the sole entry per `cobrust-cli/runtime/cobrust_main.c`), so
+    /// stmts emitted into the init body are dead code. Per the strict
+    /// file scope of the ADR-0074 first-proof sprint (HIR-only; ZERO
+    /// changes to runtime / codegen / MIR), the synthesis target shifts
+    /// to `fn main()`'s prologue. Once init-body invocation is wired
+    /// (follow-up), the desugar can move back to module-level placement.
+    pending_eco_decorators: Vec<PendingEcoDecorator>,
+}
+
+/// ADR-0074 — captured state for a deferred ecosystem decorator desugar.
+struct PendingEcoDecorator {
+    /// The decorator AST expression as written (`@app.route("/x")` etc.).
+    /// Reborrowed in `synth_ecosystem_register_call` to extract the
+    /// receiver name, method, and call args.
+    decorator: ast::Expr,
+    /// The decorated fn's name (for the synthetic call's last arg).
+    fn_name: String,
+    /// The decorated fn's resolved DefId (so the synth call's last
+    /// argument has `ResolvedName { def_id, kind: DefKind::Fn }`).
+    fn_def_id: DefId,
+    /// The decorated fn's span (for diagnostic provenance on the synth
+    /// fn-ref argument).
+    fn_span: Span,
 }
 
 impl<'s> Lowerer<'s> {
@@ -61,6 +107,8 @@ impl<'s> Lowerer<'s> {
             sess,
             scopes: vec![Scope::new()],
             stmt_def_ids: std::collections::HashMap::new(),
+            in_class_body: 0,
+            pending_eco_decorators: Vec::new(),
         }
     }
 
@@ -137,11 +185,115 @@ impl<'s> Lowerer<'s> {
             }
         }
 
+        // ADR-0074 post-pass — inject each pending ecosystem-decorator
+        // register-call into `fn main()`'s body. See the field comment
+        // on `pending_eco_decorators` for the spec-deviation note.
+        self.inject_pending_eco_decorators(&mut items)?;
+
         Ok(h::Module {
             docstring: m.docstring.clone(),
             items,
             span: m.span,
         })
+    }
+
+    /// ADR-0074 — post-process the lowered module to inject the pending
+    /// synthetic register-calls. For each pending entry:
+    ///
+    /// 1. Locate `fn main()` in the module items. Error if absent.
+    /// 2. Resolve the receiver (e.g. `app`) by scanning main's body
+    ///    top-level stmts for a `Stmt::Let(LetBody { pattern:
+    ///    Binding(<recv>, def_id), .. })`. Error if absent.
+    /// 3. Build the synthetic call expression using the resolved
+    ///    receiver DefId + the decorated fn's DefId.
+    /// 4. Insert as `Stmt::Expr(call)` immediately after the receiver's
+    ///    `let` binding so the route is registered before any later
+    ///    `app.serve_in_background(...)` is invoked.
+    fn inject_pending_eco_decorators(
+        &mut self,
+        items: &mut [h::Item],
+    ) -> Result<(), LoweringError> {
+        if self.pending_eco_decorators.is_empty() {
+            return Ok(());
+        }
+        let pending = std::mem::take(&mut self.pending_eco_decorators);
+
+        // Locate `fn main()` (mutably).
+        let main_fn = items.iter_mut().find_map(|it| {
+            if let h::ItemKind::Fn(ref mut f) = it.kind {
+                if f.name == "main" { Some(f) } else { None }
+            } else {
+                None
+            }
+        });
+        let Some(main_fn) = main_fn else {
+            // Error span: the first pending decorator's span.
+            let span = pending[0].decorator.span;
+            return Err(LoweringError::EcosystemDecoratorShape {
+                detail: "ecosystem decorator requires a `fn main()` to host the synthetic register-call",
+                span,
+                suggestion: Some(
+                    "add a `fn main() -> i64:` to the module — the synthetic register-call lives at main's prologue",
+                ),
+            });
+        };
+
+        for entry in pending {
+            // Peel the receiver name from the decorator AST. The
+            // `is_ecosystem_decorator_shape` predicate already vetted the
+            // shape, but we re-extract here for the post-pass synthesis.
+            let (base_name, method, decorator_args) = peel_eco_decorator(&entry.decorator)?;
+
+            // Locate `let <base_name> = ...` in main's top-level stmts so
+            // we can both resolve its DefId and pick the insertion point
+            // (immediately after the let).
+            let mut recv_def_id: Option<DefId> = None;
+            let mut insert_idx: Option<usize> = None;
+            for (i, stmt) in main_fn.body.stmts.iter().enumerate() {
+                if let h::StmtKind::Let(lb) = &stmt.kind
+                    && let h::PatternKind::Binding(name, id) = &lb.pattern.kind
+                    && name == &base_name
+                {
+                    recv_def_id = Some(*id);
+                    insert_idx = Some(i + 1);
+                    break;
+                }
+            }
+            let (Some(recv_def_id), Some(insert_idx)) = (recv_def_id, insert_idx) else {
+                return Err(LoweringError::EcosystemDecoratorShape {
+                    detail: "ecosystem decorator's receiver must be `let`-bound inside `fn main()`",
+                    span: entry.decorator.span,
+                    suggestion: Some(
+                        "declare the receiver in `main`: `let app = pit.App()` BEFORE the route registers",
+                    ),
+                });
+            };
+
+            // Build the synthetic call expression. Method-specific prefix
+            // args + the decorator's call args + the fn-ref are
+            // concatenated; the receiver is `Name(rn_recv)`.
+            let synth_call = build_eco_register_call(
+                &entry.decorator,
+                &base_name,
+                recv_def_id,
+                method,
+                decorator_args,
+                &entry.fn_name,
+                entry.fn_def_id,
+                entry.fn_span,
+            )?;
+
+            // Insert `Stmt::Expr(synth_call)` at `insert_idx`.
+            let span = entry.decorator.span;
+            main_fn.body.stmts.insert(
+                insert_idx,
+                h::Stmt {
+                    span,
+                    kind: h::StmtKind::Expr(synth_call),
+                },
+            );
+        }
+        Ok(())
     }
 
     fn prebind_items(&mut self, stmts: &[ast::Stmt]) -> Result<(), LoweringError> {
@@ -249,21 +401,89 @@ impl<'s> Lowerer<'s> {
                                 "this Python feature is not part of Cobrust — see the language reference",
                             ),
                         })?;
-                let mut decorator_exprs = Vec::with_capacity(decorators.len());
+                // ADR-0074 §2 — split decorators into ecosystem-desugar
+                // candidates and non-ecosystem decorators (status-quo
+                // `ItemKind::Decorated` wrappers). Ecosystem-decorator
+                // desugar is gated on module scope (§6 cap "Decorating a
+                // class is OUT OF SCOPE"); inside a class body, the
+                // recognised shape stays a no-op wrapper.
+                let eco_desugar_active = self.in_class_body == 0;
+                let mut ecosystem_decorators: Vec<&ast::Expr> = Vec::new();
+                let mut other_decorators: Vec<&ast::Expr> = Vec::new();
                 for d in decorators {
-                    decorator_exprs.push(self.lower_expr(d)?);
+                    if eco_desugar_active && is_ecosystem_decorator_shape(d) {
+                        ecosystem_decorators.push(d);
+                    } else {
+                        other_decorators.push(d);
+                    }
                 }
-                let mut wrapped = Vec::new();
-                for inner in inner_items {
-                    wrapped.push(h::Item {
-                        span: stmt.span,
-                        kind: h::ItemKind::Decorated {
-                            decorators: decorator_exprs.clone(),
-                            inner: Box::new(inner),
-                        },
-                    });
+
+                // Ecosystem desugar fires only on a single `Fn` inner item
+                // (ADR-0074 §6 scope cap "Top-level fns only").
+                let single_fn_inner: Option<(DefId, String, Span)> = if inner_items.len() == 1 {
+                    if let h::ItemKind::Fn(f) = &inner_items[0].kind {
+                        Some((f.def_id, f.name.clone(), f.span))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Lower non-ecosystem decorators (status-quo wrapper path).
+                let mut other_exprs = Vec::with_capacity(other_decorators.len());
+                for d in &other_decorators {
+                    other_exprs.push(self.lower_expr(d)?);
                 }
-                Ok(Some(wrapped))
+
+                // ADR-0074 — DEFER ecosystem-decorator synthesis to the
+                // post-module-pass (`inject_pending_eco_decorators`). The
+                // synthesised register-call is prepended into `fn main()`'s
+                // prologue, NOT emitted as an `ItemKind::ExprStmt` sibling
+                // at module level (see `pending_eco_decorators` field
+                // comment for the init-body-dead-code spec deviation).
+                if !ecosystem_decorators.is_empty() {
+                    let Some((fn_def_id, fn_name, fn_span)) = single_fn_inner else {
+                        return Err(LoweringError::EcosystemDecoratorShape {
+                            detail: "ecosystem decorator requires a `fn` definition",
+                            span: stmt.span,
+                            suggestion: Some(
+                                "attach `@app.route(\"/path\")` to a top-level `fn handler(req: pit.Request) -> pit.Response:` definition",
+                            ),
+                        });
+                    };
+                    for d in &ecosystem_decorators {
+                        // Shape pre-flight — surface the same diagnostics
+                        // here so a bad-shape decorator (e.g. `@app.route`
+                        // without args) is caught at lowering time rather
+                        // than deferred to post-pass.
+                        validate_eco_decorator_shape(d)?;
+                        self.pending_eco_decorators.push(PendingEcoDecorator {
+                            decorator: (*d).clone(),
+                            fn_name: fn_name.clone(),
+                            fn_def_id,
+                            fn_span,
+                        });
+                    }
+                }
+
+                // Emit the inner items (wrapped in `ItemKind::Decorated`
+                // if non-ecosystem decorators remain, else raw).
+                let mut out = Vec::new();
+                if other_exprs.is_empty() {
+                    out.extend(inner_items);
+                } else {
+                    for inner in inner_items {
+                        out.push(h::Item {
+                            span: stmt.span,
+                            kind: h::ItemKind::Decorated {
+                                decorators: other_exprs.clone(),
+                                inner: Box::new(inner),
+                            },
+                        });
+                    }
+                }
+                Ok(Some(out))
             }
             ast::StmtKind::Import(imp) => {
                 let mut items = Vec::new();
@@ -405,6 +625,7 @@ impl<'s> Lowerer<'s> {
         // module scope via the parent chain (modulo `self` access,
         // which is type-check work — not lowering work).
         self.enter_scope();
+        self.in_class_body += 1;
         // Pre-bind member names so that mutual reference inside the
         // class works the same way module-level mutual recursion
         // works.
@@ -415,6 +636,7 @@ impl<'s> Lowerer<'s> {
                 members.extend(items);
             }
         }
+        self.in_class_body -= 1;
         self.leave_scope();
 
         Ok(h::ClassBody {
@@ -827,6 +1049,22 @@ impl<'s> Lowerer<'s> {
                 });
             }
             ast::StmtKind::Decorated { decorators, inner } => {
+                // ADR-0074 §2 Q1 — ecosystem decorators must be at module
+                // scope. A nested-fn decorator with an ecosystem shape is
+                // rejected with a fix-suggesting diagnostic per §2.5
+                // Direction B. Non-ecosystem decorators on nested fns stay
+                // as `ItemKind::Decorated` no-op wrappers.
+                for d in decorators {
+                    if is_ecosystem_decorator_shape(d) {
+                        return Err(LoweringError::EcosystemDecoratorShape {
+                            detail: "ecosystem decorators must be at module scope",
+                            span: d.span,
+                            suggestion: Some(
+                                "move the `@app.route(...)` + its `fn` to the module top-level (outside any other fn)",
+                            ),
+                        });
+                    }
+                }
                 let mut decorator_exprs = Vec::with_capacity(decorators.len());
                 for d in decorators {
                     decorator_exprs.push(self.lower_expr(d)?);
@@ -1763,4 +2001,268 @@ fn ast_kind_name(k: &ast::StmtKind) -> &'static str {
         Pass => "pass",
         Expr(_) => "expr",
     }
+}
+
+/// ADR-0074 §2 — syntactic predicate for whether a decorator expression
+/// looks like an ecosystem-decorator candidate. Two shapes are recognised:
+///
+/// - Call form: `Call { callee: Access(Attribute { base: Name(_), name: M }), args }`
+///   where `M ∈ DECORATABLE_METHODS` ("route").
+/// - Bare form: `Access(Attribute { base: Name(_), name: M })` where
+///   `M ∈ DECORATABLE_BARE_METHODS` ("handler").
+///
+/// The HIR pass cannot consult type information (it runs before the
+/// typechecker), so this predicate is purely structural — the typechecker
+/// is the load-bearing gate for "is `base` actually a pit.App?". When this
+/// predicate returns `true` but the receiver is the wrong type, the
+/// downstream `try_synth_ecosystem_call` raises `UnknownMethod` (or
+/// equivalent) with a fix-suggesting diagnostic.
+///
+/// The first-proof method list is intentionally tiny — `route` from
+/// pit.App, plus the bare `handler` form for the hood-manifest follow-up
+/// (currently bare-rejected at typecheck since hood isn't wired). Other
+/// decorators stay as no-op `ItemKind::Decorated` wrappers (status quo).
+fn is_ecosystem_decorator_shape(d: &ast::Expr) -> bool {
+    // Call form: `@app.route(...)` / `@cmd.handler(...)`.
+    if let ast::ExprKind::Call { callee, .. } = &d.kind
+        && let ast::ExprKind::Access(ast::AccessKind::Attribute { base, name }) = &callee.kind
+        && matches!(&base.kind, ast::ExprKind::Name(_))
+        && is_decoratable_call_method(name.as_str())
+    {
+        return true;
+    }
+    // Bare form: `@cmd.handler`.
+    if let ast::ExprKind::Access(ast::AccessKind::Attribute { base, name }) = &d.kind
+        && matches!(&base.kind, ast::ExprKind::Name(_))
+        && is_decoratable_bare_method(name.as_str())
+    {
+        return true;
+    }
+    false
+}
+
+/// Call-form decoratable method names (ADR-0074 §2 first-proof scope).
+/// "route" comes from pit.App's manifest (`EcoParam::Callback`). Adding to
+/// this set extends the desugar to more decorators — keep the list in sync
+/// with the manifest's `EcoParam::Callback`-bearing entries.
+fn is_decoratable_call_method(name: &str) -> bool {
+    matches!(name, "route")
+}
+
+/// Bare-form decoratable method names (ADR-0074 §2 Q2 bare-form).
+/// "handler" is the planned hood.Command bare decorator; until hood
+/// manifest lands, this catches the syntax but downstream typecheck
+/// rejects the unknown method. Listed here so the HIR shape predicate
+/// is symmetric and pre-existing programs don't accidentally rely on
+/// `@x.handler` staying a no-op.
+fn is_decoratable_bare_method(name: &str) -> bool {
+    matches!(name, "handler")
+}
+
+/// ADR-0074 — peel an ecosystem-decorator AST expr into its surface
+/// pieces: `(receiver_name, method, decorator_call_args)`.
+fn peel_eco_decorator(
+    decorator: &ast::Expr,
+) -> Result<(String, &str, &[ast::CallArg]), LoweringError> {
+    let (base_expr, method, decorator_args): (&ast::Expr, &str, &[ast::CallArg]) = match &decorator
+        .kind
+    {
+        ast::ExprKind::Call { callee, args } => match &callee.kind {
+            ast::ExprKind::Access(ast::AccessKind::Attribute { base, name }) => {
+                (base.as_ref(), name.as_str(), args.as_slice())
+            }
+            _ => {
+                return Err(LoweringError::EcosystemDecoratorShape {
+                    detail: "ecosystem decorator must be `@<receiver>.<method>(args...)` or `@<receiver>.<method>`",
+                    span: decorator.span,
+                    suggestion: Some(
+                        "use `@app.route(\"/path\")` (call form) or `@cmd.handler` (bare form)",
+                    ),
+                });
+            }
+        },
+        ast::ExprKind::Access(ast::AccessKind::Attribute { base, name }) => {
+            (base.as_ref(), name.as_str(), [].as_slice())
+        }
+        _ => {
+            return Err(LoweringError::EcosystemDecoratorShape {
+                detail: "ecosystem decorator shape unrecognised",
+                span: decorator.span,
+                suggestion: Some(
+                    "use `@app.route(\"/path\")` (call form) or `@cmd.handler` (bare form)",
+                ),
+            });
+        }
+    };
+    let base_name = match &base_expr.kind {
+        ast::ExprKind::Name(n) => n.clone(),
+        _ => {
+            return Err(LoweringError::EcosystemDecoratorShape {
+                detail: "ecosystem decorator receiver must be a bare name",
+                span: base_expr.span,
+                suggestion: Some(
+                    "declare the receiver with `let app = pit.App()` and use `@app.route(\"/x\")`",
+                ),
+            });
+        }
+    };
+    Ok((base_name, method, decorator_args))
+}
+
+/// ADR-0074 — eager shape validation for an ecosystem decorator. Runs at
+/// the `lower_module_stmt::Decorated` arm so a misshapen decorator
+/// (`@app.route` without args; `@cmd.handler(...)` with args) fails at
+/// lowering time rather than getting deferred to the post-pass.
+fn validate_eco_decorator_shape(d: &ast::Expr) -> Result<(), LoweringError> {
+    let (_base, method, decorator_args) = peel_eco_decorator(d)?;
+    match method {
+        "route" => {
+            if decorator_args.is_empty() {
+                return Err(LoweringError::EcosystemDecoratorShape {
+                    detail: "`@app.route` requires a path argument — `@app.route(\"/path\")`",
+                    span: d.span,
+                    suggestion: Some(
+                        "add a string path: change `@app.route` to `@app.route(\"/path\")`",
+                    ),
+                });
+            }
+        }
+        "handler" => {
+            if !decorator_args.is_empty() {
+                return Err(LoweringError::EcosystemDecoratorShape {
+                    detail: "`@cmd.handler` is a bare decorator and takes no call args",
+                    span: d.span,
+                    suggestion: Some(
+                        "drop the parentheses: change `@cmd.handler(...)` to `@cmd.handler`",
+                    ),
+                });
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// ADR-0074 — build the synthetic register-call HIR expression. Called
+/// from `inject_pending_eco_decorators` after the inner fn + main are
+/// lowered, with `recv_def_id` resolved from main's body and
+/// `fn_def_id` known at the decorator-parse site.
+///
+/// Synthesises `<recv>.<method>(<prefix><dec_args><fn_ref>)`:
+/// - For `route`: prefix = `["GET"]` (ADR-0074 §6 default).
+/// - For `handler`: prefix = `[]` (bare form).
+/// - `<dec_args>` = the decorator's positional call args (string literal
+///   path etc.). Keyword + *args are currently not threaded — pit's
+///   manifest entry doesn't take kwargs in this proof (ADR-0074 §3 Q4
+///   defer).
+/// - `<fn_ref>` = `ResolvedName { name: fn_name, def_id: fn_def_id,
+///   kind: DefKind::Fn }` (ADR-0073 §2 D2 — MIR
+///   `try_lower_ecosystem_call` materialises `Constant::FnRef(def_id)`).
+#[allow(clippy::too_many_arguments)]
+fn build_eco_register_call(
+    decorator: &ast::Expr,
+    base_name: &str,
+    recv_def_id: DefId,
+    method: &str,
+    decorator_args: &[ast::CallArg],
+    fn_name: &str,
+    fn_def_id: DefId,
+    fn_span: Span,
+) -> Result<h::Expr, LoweringError> {
+    let prefix_args: Vec<h::CallArg> = match method {
+        "route" => vec![h::CallArg::Positional(h::Expr {
+            span: decorator.span,
+            kind: h::ExprKind::Lit(h::Lit::Str("GET".to_string())),
+        })],
+        "handler" => vec![],
+        _ => {
+            return Err(LoweringError::EcosystemDecoratorShape {
+                detail: "ecosystem decorator method is not recognised",
+                span: decorator.span,
+                suggestion: Some(
+                    "the first-proof manifest supports `@app.route(\"/path\")` (and the hood-blocked `@cmd.handler`)",
+                ),
+            });
+        }
+    };
+
+    // Lower decorator call args through a minimal expression lowering
+    // path. The post-pass doesn't have `Lowerer` access, so we lower
+    // ONLY the shapes the first-proof manifest needs (string literals;
+    // numeric literals; bare names that resolve to top-level imports).
+    // For a `route` decorator first proof, this is just `Str("/path")`.
+    let mut lowered_dec_args: Vec<h::CallArg> = Vec::with_capacity(decorator_args.len());
+    for ca in decorator_args {
+        let lowered = match ca {
+            ast::CallArg::Positional(e) => h::CallArg::Positional(lower_eco_decorator_arg(e)?),
+            ast::CallArg::Keyword(k, v) => {
+                h::CallArg::Keyword(k.clone(), lower_eco_decorator_arg(v)?)
+            }
+            ast::CallArg::StarArgs(_) | ast::CallArg::StarStarKwargs(_) => {
+                return Err(LoweringError::EcosystemDecoratorShape {
+                    detail: "ecosystem decorator does not support *args / **kwargs",
+                    span: decorator.span,
+                    suggestion: Some("pass positional arguments directly: `@app.route(\"/path\")`"),
+                });
+            }
+        };
+        lowered_dec_args.push(lowered);
+    }
+
+    let recv_expr = h::Expr {
+        span: decorator.span,
+        kind: h::ExprKind::Name(ResolvedName {
+            name: base_name.to_string(),
+            def_id: recv_def_id,
+            kind: DefKind::LetBinding,
+        }),
+    };
+    let callee_expr = h::Expr {
+        span: decorator.span,
+        kind: h::ExprKind::Attr {
+            base: Box::new(recv_expr),
+            name: method.to_string(),
+        },
+    };
+    let fn_ref_expr = h::Expr {
+        span: fn_span,
+        kind: h::ExprKind::Name(ResolvedName {
+            name: fn_name.to_string(),
+            def_id: fn_def_id,
+            kind: DefKind::Fn,
+        }),
+    };
+    let mut call_args: Vec<h::CallArg> =
+        Vec::with_capacity(prefix_args.len() + lowered_dec_args.len() + 1);
+    call_args.extend(prefix_args);
+    call_args.extend(lowered_dec_args);
+    call_args.push(h::CallArg::Positional(fn_ref_expr));
+
+    Ok(h::Expr {
+        span: decorator.span,
+        kind: h::ExprKind::Call {
+            callee: Box::new(callee_expr),
+            args: call_args,
+        },
+    })
+}
+
+/// ADR-0074 — minimal expression lowering for decorator call args used
+/// from the post-pass (where `Lowerer` is not available). The first-proof
+/// scope is string literals (the path on `@app.route("/path")`); numeric
+/// and bool literals are also accepted for forward-compat. More complex
+/// shapes (function calls, attribute access, etc.) get rejected with a
+/// fix-suggesting diagnostic.
+fn lower_eco_decorator_arg(e: &ast::Expr) -> Result<h::Expr, LoweringError> {
+    let kind = match &e.kind {
+        ast::ExprKind::Literal(l) => h::ExprKind::Lit(crate::desugar::lower_literal(l.clone())),
+        _ => {
+            return Err(LoweringError::EcosystemDecoratorShape {
+                detail: "ecosystem-decorator call args must be literals in the first-proof scope",
+                span: e.span,
+                suggestion: Some("pass a string literal path: `@app.route(\"/path\")`"),
+            });
+        }
+    };
+    Ok(h::Expr { span: e.span, kind })
 }

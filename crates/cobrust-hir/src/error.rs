@@ -76,6 +76,19 @@ pub enum LoweringError {
         span: Span,
         suggestion: Option<&'static str>,
     },
+
+    /// ADR-0074 — an ecosystem decorator (`@app.route(...)` / `@cmd.handler`)
+    /// failed its HIR-level shape gate. The decorator looked like an
+    /// ecosystem decorator by method-name (e.g. `route`) but its shape was
+    /// invalid: nested below module scope, missing the required call args,
+    /// or attached to a non-fn item. Per §2.5 Direction B the diagnostic
+    /// prints the fix the LLM should apply.
+    #[error("ecosystem-decorator shape error at {span}: {detail}")]
+    EcosystemDecoratorShape {
+        detail: &'static str,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 }
 
 /// Extract the construction-time `suggestion: Option<&'static str>`
@@ -90,7 +103,8 @@ pub fn lowering_error_suggestion_text(err: &LoweringError) -> Option<&'static st
         | MutableDefault { suggestion, .. }
         | OrPatternBindingMismatch { suggestion, .. }
         | DuplicateBinding { suggestion, .. }
-        | AssignToUnknown { suggestion, .. } => *suggestion,
+        | AssignToUnknown { suggestion, .. }
+        | EcosystemDecoratorShape { suggestion, .. } => *suggestion,
     }
 }
 
@@ -119,5 +133,7 @@ pub fn lowering_error_fix_safety_code(err: &LoweringError) -> u8 {
         DuplicateBinding { .. } => 2,
         // Add `let <name> = …` declaration first — local edit.
         AssignToUnknown { .. } => 2,
+        // Ecosystem-decorator shape — local edit (reshape `@app.route(...)`).
+        EcosystemDecoratorShape { .. } => 2,
     }
 }
