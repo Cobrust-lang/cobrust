@@ -54,3 +54,47 @@ qemu-riscv64 -L /usr/riscv64-linux-gnu ./hello_rv
 
 完整的环境变量覆写钩子与 CI 钉版配方见
 `docs/agent/setup/cross-toolchain.md`。
+
+## 交叉编译到 WebAssembly / WASI(Phase 2)
+
+Cobrust v0.7.0 同时支持 `--target=wasm32-wasip1` —— 把 `.cb` 程序构建为
+自包含的 `.wasm` 模块,可在 `wasmtime`(WASI preview 1)或任何 WASI
+兼容 host 上运行。
+
+### 快速开始(wasm32)
+
+```bash
+# 0. 一次性的宿主环境准备
+rustup target add wasm32-wasip1
+# Debian / Ubuntu:
+sudo apt-get install clang-18
+cargo install wasmtime-cli --locked
+# macOS(Homebrew):
+brew install llvm@18 wasmtime
+
+# 1. 写一个程序
+cat > hello_wasm.cb <<'CB'
+fn main() -> i64:
+    print("hello from wasm32")
+    return 0
+CB
+
+# 2. 交叉构建
+cobrust build --target=wasm32-wasip1 hello_wasm.cb -o hello_wasm.wasm
+
+# 3. 在 wasmtime 中运行
+wasmtime run ./hello_wasm.wasm
+# → hello from wasm32
+```
+
+### 注意事项(wasm32)
+
+- WASI preview 1 **没有线程**也**没有 socket**。在 wasm32 上导入
+  `pit` / `strike`(网络)或 `std.task` / `std.sync`(并发)在 v0.7.0
+  里暂不支持 —— Sprint E 将按 ADR-0075 §Q2 加入 `task::spawn` →
+  inline 静默降级,以及生态可用性的 typecheck 闸门。
+- Sprint D 落地的是**构建路径**。cobrust-stdlib 在 wasm32 上目前用
+  `--no-default-features` 构建,绕开 mimalloc / tokio / llm-router
+  (host-only 表面);按 feature 启用 wasm32 是 Sprint E 的范围。
+- 产出的 `.wasm` 在所有 WASI preview 1 host 之间可移植
+  (wasmtime / wasmer / wasmedge / 浏览器 polyfill)。

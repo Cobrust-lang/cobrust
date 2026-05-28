@@ -57,3 +57,49 @@ it natively if you have one.
 
 See `docs/agent/setup/cross-toolchain.md` for the full env-var override
 hooks and CI-pinning recipes.
+
+## Cross-compile to WebAssembly / WASI (Phase 2)
+
+Cobrust v0.7.0 also ships with `--target=wasm32-wasip1` support — build
+your `.cb` programs into a self-contained `.wasm` module runnable under
+`wasmtime` (WASI preview 1) or any WASI-compatible host.
+
+### Quick start (wasm32)
+
+```bash
+# 0. One-time host setup
+rustup target add wasm32-wasip1
+# Debian / Ubuntu:
+sudo apt-get install clang-18
+cargo install wasmtime-cli --locked
+# macOS (Homebrew):
+brew install llvm@18 wasmtime
+
+# 1. Write a program
+cat > hello_wasm.cb <<'CB'
+fn main() -> i64:
+    print("hello from wasm32")
+    return 0
+CB
+
+# 2. Cross-build
+cobrust build --target=wasm32-wasip1 hello_wasm.cb -o hello_wasm.wasm
+
+# 3. Run under wasmtime
+wasmtime run ./hello_wasm.wasm
+# → hello from wasm32
+```
+
+### Caveats (wasm32)
+
+- WASI preview 1 has **no threads** and **no sockets**. Importing
+  `pit` / `strike` (network) or `std.task` / `std.sync` (concurrency)
+  on wasm32 is not yet supported in v0.7.0 — Sprint E will add the
+  silent `task::spawn` → inline degrade per ADR-0075 §Q2 plus
+  ecosystem-availability typecheck gates.
+- Sprint D ships **the build path**. The cobrust-stdlib cross-build for
+  wasm32 currently uses `--no-default-features` to avoid mimalloc /
+  tokio / llm-router (host-only surfaces); per-feature wasm32
+  enablement is Sprint E scope.
+- The produced `.wasm` is portable across any WASI preview 1 host
+  (wasmtime / wasmer / wasmedge / browser polyfill).

@@ -317,6 +317,87 @@ jobs:
           qemu-riscv64 -L /usr/riscv64-linux-gnu target/hello-rv64 | tee /tmp/rv.out
           grep -q "hello, world" /tmp/rv.out
 
+  # ADR-0075 §6 Sprint D — wasm32-wasip1 cross-build + wasmtime smoke.
+  #
+  # Gating policy: option (D) per ADR-0075 §Q3 — runs every push/PR with
+  # `continue-on-error: true`. Same shape as rv64-cross-smoke (Sprint B).
+  # Non-blocking initially to avoid stalling the LLM write-and-commit
+  # loop on a fresh cross surface; promote to blocking after 7 days
+  # consecutive clean runs.
+  #
+  # What it exercises:
+  # 1. Installs clang-18 (LLVM 18 driver knows the wasm32-wasip1 triple
+  #    natively + bundles wasi-libc sysroot) + `wasmtime-cli` via cargo
+  #    install (the apt `wasmtime` package isn't on ubuntu-latest).
+  # 2. Adds the `wasm32-wasip1` rustup target via the `targets:` field of
+  #    `dtolnay/rust-toolchain`.
+  # 3. Cross-builds `cobrust-stdlib` for the target with
+  #    `--no-default-features` — Sprint D scope is the build-path
+  #    plumbing; the default features (`mimalloc-alloc`, `tokio-runtime`,
+  #    `llm-router`) introduce threads + mio sockets + mimalloc which
+  #    wasm32-wasip1 doesn't yet support. The minimal feature set
+  #    exercises the cross-link path; per-feature wasm32 enablement is
+  #    Sprint E scope (F70 candidate flagged in the Sprint D report).
+  # 4. Builds the host `cobrust-cli` so the E2E test + smoke step can
+  #    invoke the binary at `target/debug/cobrust`.
+  # 5. Runs the gated E2E test live (rustup target + clang-18 +
+  #    wasmtime all installed; the live branch executes).
+  # 6. Smoke: `cobrust build --target=wasm32-wasip1 examples/hello.cb` →
+  #    run under `wasmtime`, grep stdout.
+  wasm32-cross-smoke:
+    name: WASM32 cross-build + wasmtime (ADR-0075 §6 Sprint D)
+    runs-on: ubuntu-latest
+    continue-on-error: true  # non-blocking — see comment above
+    needs: [build]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      # Disk-full mitigation — see `test` job comment. WASM cross-build
+      # adds `target/wasm32-wasip1/` plus a wasmtime install (~80MB) on
+      # top of the host target; free disk space FIRST.
+      - name: Free disk space (ubuntu disk-full mitigation)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+      - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
+        with:
+          toolchain: 1.94.1
+          targets: wasm32-wasip1
+      - name: Install LLVM 18 + wasmtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev \
+            clang-18
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+          # wasmtime: apt has no recent package on ubuntu-latest 24.04;
+          # cargo install picks the latest crates.io release (~2-3 min build).
+          # `--locked` for reproducibility per workspace policy.
+          cargo install wasmtime-cli --locked
+      - uses: Swatinem/rust-cache@v2  # v2.7.8
+      - name: Cross-build cobrust-stdlib (wasm32-wasip1, --no-default-features)
+        # Sprint D scope: build-path plumbing only. Default features
+        # (mimalloc-alloc / tokio-runtime / llm-router) require host
+        # thread + socket + alloc surfaces wasm32-wasip1 doesn't yet
+        # support; per-feature wasm32 enablement is Sprint E (F70).
+        run: cargo build -p cobrust-stdlib --target=wasm32-wasip1 --no-default-features --locked
+      - name: Build host cobrust-cli
+        run: cargo build -p cobrust-cli --locked
+      - name: cross_compile_wasm32_e2e (live)
+        run: cargo test -p cobrust-cli --test cross_compile_wasm32_e2e --locked -- --nocapture
+      - name: Smoke — cross-build + wasmtime-run examples/hello.cb
+        run: |
+          ./target/debug/cobrust build \
+            --target=wasm32-wasip1 \
+            examples/hello.cb -o target/hello.wasm
+          file target/hello.wasm
+          wasmtime run target/hello.wasm | tee /tmp/wasm.out
+          grep -q "hello, world" /tmp/wasm.out
+
   # Optional: real-LLM smoke (gated by step-level env check;
   # job-level `if: ${{ secrets.X != '' }}` is rejected by GitHub Actions
   # validation — secrets context is restricted to env/with/run.)

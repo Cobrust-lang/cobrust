@@ -362,7 +362,21 @@ pub fn build(
             } else {
                 cfg!(target_os = "linux")
             };
-            if target_is_linux && !eco_archives.is_empty() {
+            // ADR-0075 Phase 2 Sprint D — wasm32-wasip1 path. `wasm-ld`
+            // (clang's default for wasm32) is single-pass but link order
+            // is irrelevant: WASM is a self-contained module without the
+            // archive ordering hazard GNU `ld` exhibits. Avoid emitting
+            // GNU-ld-specific flags (`-Wl,--start-group/--end-group`)
+            // and Linux-only libs (`-lpthread -ldl -lm`); the wasi-libc
+            // sysroot bundled in clang's wasm32-wasip1 target already
+            // provides the libc/mathlib surface, and there are no
+            // threads in WASI preview 1.
+            let target_is_wasm = if let Some(t) = cross_target {
+                t.contains("wasm")
+            } else {
+                cfg!(target_arch = "wasm32") || cfg!(target_arch = "wasm64")
+            };
+            if target_is_linux && !target_is_wasm && !eco_archives.is_empty() {
                 cmd.arg("-Wl,--start-group").arg(&stdlib_archive);
                 for archive in &eco_archives {
                     cmd.arg(archive);
@@ -379,7 +393,11 @@ pub fn build(
             // libpthread + libdl + libm pulled in for std + mimalloc.
             // ADR-0075 Phase 1 — apply Linux libs by *target* not host so a
             // macOS host targeting riscv64-linux-gnu pulls libpthread/dl/m.
-            if target_is_linux {
+            // ADR-0075 Phase 2 Sprint D — explicitly skip on wasm32 even
+            // when the triple contains "linux"-ish substrings (none do
+            // today, but the guard is cheap and protects future variants
+            // like `wasm32-wasi-linux`).
+            if target_is_linux && !target_is_wasm {
                 cmd.arg("-lpthread").arg("-ldl").arg("-lm");
             }
             let status = cmd
@@ -509,6 +527,28 @@ fn select_cc_resolved(cross_target: Option<&str>) -> Result<(String, Vec<String>
         }
     }
     if let Some(triple) = cross_target {
+        // ADR-0075 Phase 2 Sprint D — wasm32 targets short-circuit to
+        // `clang --target=<triple>`. WASM has no GNU cross-prefix
+        // convention (there is no `wasm32-wasi-gcc`); clang is the
+        // canonical wasm32-wasip1 driver, bundling `wasm-ld` + wasi-libc
+        // sysroot automatically when invoked with `--target=wasm32-wasip1`.
+        // Try `clang-18` (LLVM 18 ships current wasi headers) first, then
+        // plain `clang` as fallback.
+        let is_wasm = triple.starts_with("wasm32") || triple.starts_with("wasm64");
+        if is_wasm {
+            for cand in ["clang-18", "clang"] {
+                if probe_cc_available(cand) {
+                    return Ok((cand.to_string(), vec![format!("--target={triple}")]));
+                }
+            }
+            return Err(BuildError::User(format!(
+                "no wasm C compiler found for target `{triple}`. Tried: \
+                 $COBRUST_CC_{} env, $CC env, `clang-18`, `clang`. \
+                 Install LLVM 18+ clang (see docs/agent/setup/cross-toolchain.md) \
+                 or set $CC.",
+                triple.replace('-', "_").to_uppercase(),
+            )));
+        }
         // Convention: GNU cross-cc prefix derived from the triple's first 3
         // components (arch-vendor/os-libc → arch-libc/os-prefix style).
         //
