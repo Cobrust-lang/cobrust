@@ -746,6 +746,7 @@ dependencies = [
  "cobrust-hir",
  "cobrust-mir",
  "target-lexicon",
+ "tempfile",
  "thiserror 1.0.69",
 ]
 
