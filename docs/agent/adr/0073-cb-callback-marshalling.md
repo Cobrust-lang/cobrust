@@ -119,8 +119,13 @@ Per Plan output §c — critical files:
    `serve_in_background` flow; no API exposes route handles outliving `App`.
 4. **Type-check error UX** — ≥5 negative-test corpus cases required (rejected shapes:
    lambda, call-result, parenthesized, method-ref, fn-typed local).
-5. **Cranelift/LLVM parity** — BOTH backends' fn-ptr materialisation must land in lock-
-   step; shared corpus test prevents drift.
+5. **Cranelift/LLVM parity** — **N/A in this repo** (drift caught by the impl agent
+   2026-05-28). `cobrust-codegen/src/cranelift_backend.rs` was removed in ADR-0070 §X.4
+   (commit `09f57ba`); LLVM is the sole AOT backend. Cranelift survives only as the
+   `cobrust-jit` IR substrate (`lowering.rs`), which doesn't materialise `Constant::FnRef`.
+   So the fn-ptr materialisation lands in LLVM only. The "lock-step" wording in the
+   original draft is doc drift from pre-X.4 — kept here as a process note (catch by the
+   first-proof impl agent).
 6. **Manifest drift** — accepted per ADR-0072 §5 R4; pit/hood add ~15 entries.
 
 ## 6. Done-means (first proof — pit only, hood ADR-0073-sibling sprint follows)

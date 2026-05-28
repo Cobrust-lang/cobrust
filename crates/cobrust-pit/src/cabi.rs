@@ -296,36 +296,30 @@ pub unsafe extern "C" fn __cobrust_pit_app_route(
         // dropping is sound.
         unsafe { drop(Box::from_raw(req_raw.cast::<Request>())) };
 
-        match resp_raw {
-            Ok(resp_raw) => {
-                if resp_raw.is_null() {
-                    // Handler returned null (bug or fail-clean). Yield
-                    // a 500 sentinel rather than dereferencing null.
-                    return Response::from_parts(500, HashMap::new(), Vec::new());
-                }
-                // SAFETY: A non-null pointer the `.cb` handler returns
-                // came from `__cobrust_pit_text_response` (or a future
-                // response constructor) and is a `Box::into_raw`'d
-                // Response. Reclaim ownership to extract the Response;
-                // the `.cb` source's drop schedule would have called
-                // `__cobrust_pit_response_drop` but Return-of-handle
-                // suppresses that drop (ADR-0073 §2 D6 — operand
-                // feeding `Terminator::Return` is moved-out per
-                // `drop.rs::globally_moved`, no foreign drop fires).
-                unsafe { *Box::from_raw(resp_raw.cast::<Response>()) }
-            }
-            Err(_) => {
-                // Panic in the `.cb` handler. ADR-0073 §3 Q5 says
-                // abort. Forward to the existing `__cobrust_panic`
-                // shim by aborting; the symbol may not be linked when
-                // the test harness exercises just this crate, so we
-                // call `std::process::abort` directly.
-                eprintln!(
-                    "cobrust-pit: panic in .cb handler crossed the C ABI — aborting (ADR-0073 §3 Q5)"
-                );
-                std::process::abort();
-            }
+        // Err arm = panic crossed the C ABI; abort per ADR-0073 §3 Q5
+        // (forward to `__cobrust_panic` would be cleaner but the symbol
+        // is not linked when the test harness exercises just this crate,
+        // so we call `std::process::abort` directly). Err arm diverges →
+        // use `let-Ok-else` (clippy::single_match_else).
+        let Ok(resp_raw) = resp_raw else {
+            eprintln!(
+                "cobrust-pit: panic in .cb handler crossed the C ABI — aborting (ADR-0073 §3 Q5)"
+            );
+            std::process::abort();
+        };
+        if resp_raw.is_null() {
+            // Handler returned null (bug or fail-clean). Yield
+            // a 500 sentinel rather than dereferencing null.
+            return Response::from_parts(500, HashMap::new(), Vec::new());
         }
+        // SAFETY: A non-null pointer the `.cb` handler returns came from
+        // `__cobrust_pit_text_response` (or a future response constructor)
+        // and is a `Box::into_raw`'d Response. Reclaim ownership to extract
+        // the Response; the `.cb` source's drop schedule would have called
+        // `__cobrust_pit_response_drop` but Return-of-handle suppresses
+        // that drop (ADR-0073 §2 D6 — operand feeding `Terminator::Return`
+        // is moved-out per `drop.rs::globally_moved`, no foreign drop fires).
+        unsafe { *Box::from_raw(resp_raw.cast::<Response>()) }
     };
 
     // Register on the App. The .route Result is intentionally
