@@ -54,7 +54,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
       - name: Install LLVM 18 (macOS)
         if: runner.os == 'macOS'
@@ -81,7 +81,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
       - name: Install LLVM 18 (macOS)
         if: runner.os == 'macOS'
@@ -122,7 +122,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
       - name: Install LLVM 18 (macOS)
         if: runner.os == 'macOS'
@@ -234,7 +234,7 @@ jobs:
       - name: Install LLVM 18 (Ubuntu)
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2  # v2.7.8
       - name: Install cargo-udeps
@@ -293,7 +293,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            llvm-18 llvm-18-dev libpolly-18-dev \
+            llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev \
             gcc-riscv64-linux-gnu qemu-user-static
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2  # v2.7.8
