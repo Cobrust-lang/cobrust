@@ -1,0 +1,35 @@
+[package]
+name = "cobrust-dora"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Apache-2.0 OR MIT"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Cobrust ↔ dora-rs robotics dataflow runtime bridge (ADR-0076 Stream Y). Phase 1: SYNTHETIC runtime — proves the C-ABI callback chain end-to-end with a canned 1-event mock. Phase 2 wires the real dora-node-api crate. DO NOT EDIT BY HAND."
+
+[lib]
+name = "dora"
+# ADR-0076 Phase 1 — ninth ecosystem-module proof. `staticlib` produces
+# `libdora.a` for per-import static linking by `cobrust build`. `cdylib`
+# stays for the (future) PyO3 native module path (kept symmetric with
+# pit / hood / coil even though no `pyo3` feature is wired in Phase 1).
+# `rlib` for in-workspace Rust consumers + the cabi unit tests.
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Phase 1 is synthetic — no `dora-node-api` dep yet. Phase 2 will pin
+# an exact `dora-node-api = "=0.2.x"` per ADR-0076 §8 risk 1 + §6 Phase 2.
+
+[dev-dependencies]
+# ADR-0072 Q5 + ADR-0073 §4: the `cabi` shims declare the
+# `__cobrust_str_*` primitives `extern "C"` and bind them from
+# `libcobrust_stdlib.a` at the `cobrust build` link step (NO Rust-level
+# production dependency). For the in-crate `cabi` unit tests, link
+# cobrust-stdlib's rlib as a dev-dependency so those `extern "C"` decls
+# resolve under `cargo test`.
+cobrust-stdlib = { path = "../cobrust-stdlib" }

@@ -93,13 +93,43 @@ pub const PIT_SERVER_HANDLE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x403);
 /// block `0xE000_0500..0xE000_05FF`).
 pub const HOOD_COMMAND_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x500);
 
+// ADR-0076 Phase 1 — `dora` (dora-rs robotics dataflow, ninth ecosystem
+// module) handle ADT block reservation. The SEVENTH per-module 256-slot
+// block (`0xE000_0600..0xE000_06FF`). `dora` ships TWO handles in its
+// Phase-1 first proof:
+// - `Node`            — the dataflow node handle the `.cb` source builds
+//                       via `dora.Node("detector")`; owns the registered
+//                       handler closure.
+// - `Event`           — incoming dataflow event passed to a handler fn
+//                       (Rust-owned per ADR-0073 §2 D6, mirrors
+//                       pit.Request — `.cb` side never drops).
+//
+// THIRD module exercising the ADR-0073 cross-boundary callback chain
+// (after pit + hood). Phase 1 runtime is SYNTHETIC — `dora.node(handler)`
+// installs into a process-global slot and `node.run()` mocks one canned
+// message arrival without the real dora-rs daemon (mirrors F65 synthetic-
+// LLM provider pattern). Phase 2+3 will wire real dora-rs orchestration.
+//
+// Reserved-but-unused slots `0x602..0x6FF` are saved for Phase 2 follow-
+// ups (ArrowArray, Metadata, Ros2Subscription, Operator handles).
+
+/// `AdtId` for the `dora.Node` handle (ADR-0076 Phase 1; the SEVENTH
+/// per-module 256-slot block `0xE000_0600..0xE000_06FF`).
+pub const DORA_NODE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x600);
+/// `AdtId` for the `dora.Event` handle (ADR-0076 Phase 1). Rust-owned
+/// per ADR-0073 §2 D6 — the trampoline allocates + frees the `Box<Event>`
+/// per callback invocation; the `.cb` side must not drop a `dora.Event`
+/// local (`handle_drop_symbol` returns `None`).
+pub const DORA_EVENT_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x601);
+
 // ADR-0072 — `coil` (numpy-rebrand, ndarray foundation) handle ADT
 // block reservation. The EIGHTH per-module 256-slot block
 // (`0xE000_0700..0xE000_07FF`). The seventh block (`0xE000_0600..`)
-// is reserved for `dora` per ADR-0076 (4 ADT slots claimed there),
-// so `coil` takes the next block. `coil` ships ONE handle in its
-// first proof — `Buffer`, a thin wrapper over `coil::Array` — wired
-// off the proven data-module value-handle chain (no callbacks).
+// is reserved for `dora` per ADR-0076 (2 ADT slots claimed in Phase 1,
+// remaining 0x602..0x6FF reserved for Phase 2 ArrowArray/Metadata
+// follow-ups), so `coil` takes the next block. `coil` ships ONE handle
+// in its first proof — `Buffer`, a thin wrapper over `coil::Array` —
+// wired off the proven data-module value-handle chain (no callbacks).
 // Operator dispatch (`a + b`) + index dispatch (`a[i]`) are
 // explicitly deferred to a sub-ADR per ADR-0072 §"coil deep
 // operator/index" — first proof scope is constructors + repr only.
@@ -206,6 +236,36 @@ pub fn coil_buffer_ty() -> Ty {
     Ty::Adt(COIL_BUFFER_ADT, vec![])
 }
 
+/// The Cobrust `Ty` for the `dora.Node` opaque handle (ADR-0076 Phase 1).
+#[must_use]
+pub fn dora_node_ty() -> Ty {
+    Ty::Adt(DORA_NODE_ADT, vec![])
+}
+
+/// The Cobrust `Ty` for the `dora.Event` opaque handle (ADR-0076 Phase 1).
+#[must_use]
+pub fn dora_event_ty() -> Ty {
+    Ty::Adt(DORA_EVENT_ADT, vec![])
+}
+
+/// The handler `FnTy` `dora.node` expects in its callback argument
+/// (ADR-0076 Phase 1 + ADR-0073 §2 D1+D4): a top-level fn taking a
+/// single `dora.Event` and returning an `i64` (the user-level exit-code
+/// intent surfaces here, mirroring hood's `() -> i64` shape but with a
+/// receiver-style Event arg like pit). The cross-boundary trampoline in
+/// `cobrust-dora/src/cabi.rs` enforces the same C-ABI shape
+/// (`extern "C" fn(*mut u8) -> *mut u8`) as pit + hood per ADR-0073 §5.1.
+#[must_use]
+pub fn dora_event_handler_fn_ty() -> FnTy {
+    FnTy {
+        positional: vec![dora_event_ty()],
+        named: vec![],
+        var_positional: None,
+        var_keyword: None,
+        return_ty: Box::new(Ty::Int),
+    }
+}
+
 /// Is this `AdtId` one of the reserved ecosystem-handle ids?
 #[must_use]
 pub fn is_ecosystem_handle(id: AdtId) -> bool {
@@ -238,6 +298,12 @@ pub fn handle_drop_symbol(id: AdtId) -> Option<&'static str> {
         // EIGHTH and final ecosystem module — completes the
         // workspace-vendored cobra batch).
         COIL_BUFFER_ADT => Some("__cobrust_coil_buffer_drop"),
+        // ADR-0076 Phase 1 — dora.Node opaque handle (ninth module).
+        DORA_NODE_ADT => Some("__cobrust_dora_node_drop"),
+        // DORA_EVENT_ADT — Rust-owned, never dropped from `.cb`
+        // (ADR-0073 §2 D6, mirrors PIT_REQUEST_ADT pattern). The
+        // trampoline allocates + frees the `Box<DoraEventHandle>` per
+        // callback invocation.
         _ => None,
     }
 }
@@ -474,6 +540,35 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Int,
             PyCompatTier::Semantic,
         )),
+        // ADR-0076 Phase 1 — `dora` (dora-rs robotics dataflow,
+        // ninth ecosystem module). Phase 1 ships SYNTHETIC runtime;
+        // the explicit registration form `dora.node(handler)` stands in
+        // for the Phase 2 `@dora.node(inputs=..., outputs=...)`
+        // decorator desugar (see findings/f68-dora-phase1-followups).
+        //
+        // - `dora.Node(name) -> Node`    — construct a synthetic Node.
+        // - `dora.node(handler) -> i64`  — install handler in the
+        //                                  process-global slot
+        //                                  (Phase 1 single-handler).
+        //   The callback FnTy is `fn(dora.Event) -> i64` — `Event` arg
+        //   matches pit.Request's borrow shape; `i64` return matches
+        //   hood's exit-code intent.
+        //
+        // The handle methods (`Node.run`, `Node.shutdown`,
+        // `Event.id`, `Event.data_str`) are wired in
+        // `lookup_handle_method`.
+        ("dora", "Node") => Some(EcoSig::from_values(
+            "__cobrust_dora_node_new",
+            vec![Ty::Str],
+            dora_node_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("dora", "node") => Some(EcoSig {
+            runtime_symbol: "__cobrust_dora_node_node",
+            params: vec![EcoParam::Callback(dora_event_handler_fn_ty())],
+            ret: Ty::Int,
+            tier: PyCompatTier::Semantic,
+        }),
         _ => None,
     }
 }
@@ -648,6 +743,45 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             Ty::Int,
             PyCompatTier::Semantic,
         )),
+        // ADR-0076 Phase 1 — `dora.Node` handle methods (synthetic
+        // runtime).
+        //
+        // `node.run()` invokes the registered handler exactly once with
+        // a canned ("camera", "frame_001") Event (Phase 1 single-tick
+        // mock; Phase 2 replaces with the real `EventStream` loop).
+        //
+        // `node.shutdown()` flips a soft flag on the Node (Phase 1 no-op
+        // toward dora coordinator; Phase 2 sends the real signal).
+        (DORA_NODE_ADT, "run") => Some(EcoSig::from_values(
+            "__cobrust_dora_node_run",
+            vec![],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (DORA_NODE_ADT, "shutdown") => Some(EcoSig::from_values(
+            "__cobrust_dora_node_shutdown",
+            vec![],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        // ADR-0076 Phase 1 — `dora.Event` borrow methods (mirror pit's
+        // Request body() / path_param() pattern). Both borrow the
+        // receiver; both allocate fresh Cobrust `Str` buffers the caller
+        // owns + scope-exit drops via `__cobrust_str_drop`. The Event
+        // itself stays Rust-owned (ADR-0073 §2 D6); only the returned
+        // Strs are on the `.cb` drop schedule.
+        (DORA_EVENT_ADT, "id") => Some(EcoSig::from_values(
+            "__cobrust_dora_event_id",
+            vec![],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        (DORA_EVENT_ADT, "data_str") => Some(EcoSig::from_values(
+            "__cobrust_dora_event_data_str",
+            vec![],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -660,7 +794,7 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
 pub fn is_ecosystem_module(name: &str) -> bool {
     matches!(
         name,
-        "den" | "nest" | "strike" | "scale" | "molt" | "pit" | "hood" | "coil"
+        "den" | "nest" | "strike" | "scale" | "molt" | "pit" | "hood" | "coil" | "dora"
     )
 }
 
@@ -1256,5 +1390,137 @@ mod tests {
     #[test]
     fn unknown_coil_fn_is_none() {
         assert!(lookup_module_fn("coil", "nope").is_none());
+    }
+
+    // ADR-0076 Phase 1 first proof — `dora` (dora-rs robotics dataflow,
+    // ninth ecosystem module). Third module on the ADR-0073 callback
+    // chain (after pit + hood).
+
+    #[test]
+    fn dora_is_a_known_module() {
+        assert!(is_ecosystem_module("dora"));
+    }
+
+    #[test]
+    fn dora_node_handle_id_is_in_reserved_seventh_block() {
+        assert!(is_ecosystem_handle(DORA_NODE_ADT));
+        assert!(is_ecosystem_handle(DORA_EVENT_ADT));
+        // Per-module 256-slot reservation: dora lives in the SEVENTH
+        // block (`0xE000_0600..0xE000_06FF`). Const-block so the
+        // compile-time-constant comparisons trip a real ABI mistake
+        // (someone bumping `ECO_ADT_BASE` without resizing) rather than a
+        // clippy::assertions_on_constants false-positive at test time.
+        const _: () = {
+            assert!(DORA_NODE_ADT.0 >= ECO_ADT_BASE + 0x600);
+            assert!(DORA_NODE_ADT.0 < ECO_ADT_BASE + 0x700);
+            assert!(DORA_EVENT_ADT.0 >= ECO_ADT_BASE + 0x600);
+            assert!(DORA_EVENT_ADT.0 < ECO_ADT_BASE + 0x700);
+        };
+    }
+
+    #[test]
+    fn dora_handle_drop_symbols_resolve() {
+        assert_eq!(
+            handle_drop_symbol(DORA_NODE_ADT),
+            Some("__cobrust_dora_node_drop")
+        );
+        // ADR-0073 §2 D6 — Event is Rust-owned, never dropped from
+        // `.cb`. Mirrors PIT_REQUEST_ADT's None entry.
+        assert_eq!(handle_drop_symbol(DORA_EVENT_ADT), None);
+    }
+
+    #[test]
+    fn dora_node_constructor_takes_name_returns_node_handle() {
+        let sig = lookup_module_fn("dora", "Node").expect("dora.Node in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_dora_node_new");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str]);
+        assert_eq!(sig.ret, dora_node_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn dora_node_free_fn_carries_callback_slot() {
+        let sig = lookup_module_fn("dora", "node").expect("dora.node in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_dora_node_node");
+        assert_eq!(sig.params.len(), 1);
+        match &sig.params[0] {
+            EcoParam::Callback(fn_ty) => {
+                assert_eq!(fn_ty.positional, vec![dora_event_ty()]);
+                assert_eq!(*fn_ty.return_ty, Ty::Int);
+            }
+            EcoParam::Value(other) => {
+                panic!("dora.node param must be Callback; got Value({other:?})")
+            }
+        }
+        // Returns Ty::Int sentinel — matches hood.handler's "no
+        // double-alias of the receiver" pattern (here the
+        // "receiver" is the process-global handler slot).
+        assert_eq!(sig.ret, Ty::Int);
+    }
+
+    #[test]
+    fn dora_node_run_and_shutdown_return_i64() {
+        let run = lookup_handle_method(&dora_node_ty(), "run").expect("Node.run in manifest");
+        assert_eq!(run.runtime_symbol, "__cobrust_dora_node_run");
+        assert!(run.params.is_empty());
+        assert_eq!(run.ret, Ty::Int);
+
+        let shutdown =
+            lookup_handle_method(&dora_node_ty(), "shutdown").expect("Node.shutdown in manifest");
+        assert_eq!(shutdown.runtime_symbol, "__cobrust_dora_node_shutdown");
+        assert!(shutdown.params.is_empty());
+        assert_eq!(shutdown.ret, Ty::Int);
+    }
+
+    #[test]
+    fn dora_event_borrow_methods_return_str() {
+        let id = lookup_handle_method(&dora_event_ty(), "id").expect("Event.id in manifest");
+        assert_eq!(id.runtime_symbol, "__cobrust_dora_event_id");
+        assert!(id.params.is_empty());
+        assert_eq!(id.ret, Ty::Str);
+
+        let data =
+            lookup_handle_method(&dora_event_ty(), "data_str").expect("Event.data_str in manifest");
+        assert_eq!(data.runtime_symbol, "__cobrust_dora_event_data_str");
+        assert!(data.params.is_empty());
+        assert_eq!(data.ret, Ty::Str);
+    }
+
+    #[test]
+    fn dora_methods_only_match_correct_receiver() {
+        // Cross-handle: pit.App + hood.Command must never resolve dora
+        // methods.
+        assert!(lookup_handle_method(&pit_app_ty(), "run").is_some()); // pit's own
+        assert!(lookup_handle_method(&hood_command_ty(), "run").is_some()); // hood's own
+        // But Node methods are NOT exposed on pit/hood handles.
+        assert!(lookup_handle_method(&pit_app_ty(), "data_str").is_none());
+        assert!(lookup_handle_method(&hood_command_ty(), "data_str").is_none());
+        assert!(lookup_handle_method(&strike_response_ty(), "data_str").is_none());
+        // Event methods are NOT exposed on Node receiver.
+        assert!(lookup_handle_method(&dora_node_ty(), "id").is_none());
+        assert!(lookup_handle_method(&dora_node_ty(), "data_str").is_none());
+        // Node methods are NOT exposed on Event receiver.
+        assert!(lookup_handle_method(&dora_event_ty(), "run").is_none());
+        assert!(lookup_handle_method(&dora_event_ty(), "shutdown").is_none());
+        // Non-handle receivers never match.
+        assert!(lookup_handle_method(&Ty::Str, "id").is_none());
+        // Unknown method on the right receiver is None.
+        assert!(lookup_handle_method(&dora_node_ty(), "nope").is_none());
+        assert!(lookup_handle_method(&dora_event_ty(), "nope").is_none());
+    }
+
+    #[test]
+    fn unknown_dora_fn_is_none() {
+        assert!(lookup_module_fn("dora", "nope").is_none());
+    }
+
+    #[test]
+    fn dora_event_handler_fn_ty_is_event_to_int() {
+        let fnty = dora_event_handler_fn_ty();
+        assert_eq!(fnty.positional, vec![dora_event_ty()]);
+        assert!(fnty.named.is_empty());
+        assert!(fnty.var_positional.is_none());
+        assert!(fnty.var_keyword.is_none());
+        assert_eq!(*fnty.return_ty, Ty::Int);
     }
 }

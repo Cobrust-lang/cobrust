@@ -2790,6 +2790,52 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_param_counts.insert(sym, params);
         }
 
+        // -- ADR-0076 Phase 1: dora ecosystem-module C-ABI binding ---------
+        // `dora` (dora-rs robotics dataflow, ninth ecosystem module).
+        // Third module exercising the ADR-0073 cross-boundary callback
+        // chain (after pit + hood). Phase 1 ships SYNTHETIC runtime:
+        // `dora.node(handler)` installs the callback in a process-global
+        // slot and `node.run()` mocks one canned ("camera", "frame_001")
+        // Event arrival, mirroring F65's synthetic-LLM provider pattern.
+        // The callback shape is `fn(dora.Event) -> i64` (Event arg
+        // matches pit.Request's borrow shape; i64 return matches hood's
+        // exit-code intent). At the wire level the callback uses the
+        // SAME C-ABI as pit + hood (`unsafe extern "C" fn(*mut u8) ->
+        // *mut u8`) per ADR-0073 §5.1.
+        //
+        //   __cobrust_dora_node_new(name: *mut Str) -> *mut Node
+        //   __cobrust_dora_node_node(
+        //       handler: *const c_void
+        //   ) -> i64 = 0   (Ty::Int sentinel — registration is a
+        //                   side-effect on the global handler slot)
+        //   __cobrust_dora_node_run(node: *mut Node) -> i64
+        //   __cobrust_dora_node_shutdown(node: *mut Node) -> i64
+        //   __cobrust_dora_event_id(event: *mut Event) -> *mut Str
+        //   __cobrust_dora_event_data_str(event: *mut Event) -> *mut Str
+        //   __cobrust_dora_node_drop(node: *mut Node) -> void
+        //   __cobrust_dora_event_drop(event: *mut Event) -> void
+        let dora_node_new_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let dora_node_node_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let dora_node_run_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let dora_node_shutdown_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let dora_event_id_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let dora_event_data_str_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let dora_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_dora_node_new", dora_node_new_ty, 1usize),
+            ("__cobrust_dora_node_node", dora_node_node_ty, 1),
+            ("__cobrust_dora_node_run", dora_node_run_ty, 1),
+            ("__cobrust_dora_node_shutdown", dora_node_shutdown_ty, 1),
+            ("__cobrust_dora_event_id", dora_event_id_ty, 1),
+            ("__cobrust_dora_event_data_str", dora_event_data_str_ty, 1),
+            ("__cobrust_dora_node_drop", dora_drop_ty, 1),
+            ("__cobrust_dora_event_drop", dora_drop_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
+
         // -- ADR-0072 8/8 first proof: coil ecosystem-module C-ABI binding ----
         // `coil` (numpy ndarray foundation, ecosystem rebrand of Python's
         // `numpy` library). EIGHTH and final cobra-batch module — completes

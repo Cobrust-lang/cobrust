@@ -1,0 +1,43 @@
+# ADR-0076 Phase 1 first proof — `.cb` ecosystem-import callback chain
+# generalized to dora-rs robotics dataflow.
+#
+# A `.cb` program that imports dora (ecosystem rebrand of Python's
+# dora-rs node API), constructs a synthetic Node, registers a top-level
+# `fn detect(event: dora.Event) -> i64:` callback via
+# `dora.node(detect)` (Phase 1 explicit-registration form; the
+# `@dora.node(inputs=..., outputs=...)` decorator desugar is a Phase 2
+# follow-up tracked in findings/f68-dora-phase1-followups.md), and
+# dispatches via `node.run()`. The synthetic runtime mocks one canned
+# `("camera", "frame_001")` Event tick — the handler prints
+# `got frame: frame_001` and returns 0.
+#
+# This is the THIRD module on the ADR-0073 callback chain (after pit's
+# pong handler and hood's command-callback). The MIR lowering emits
+# `Constant::FnRef(detect)` for the callback slot; codegen materialises
+# it as a real fn-pointer via `function_ids`; the trampoline in
+# `crates/cobrust-dora/src/cabi.rs` transmutes it back to the fixed
+# C-ABI shape `unsafe extern "C" fn(*mut u8) -> *mut u8`, allocates a
+# canned Event Box, invokes the .cb fn, and frees the Event.
+#
+# Phase 2 will replace the synthetic mock with the real `dora-node-api`
+# `EventStream::into_iter()` loop driven by an actual dora coordinator,
+# and grow the surface to multi-input/output via the
+# `@dora.node(inputs=[...], outputs=[...])` decorator desugar.
+
+import dora
+
+fn detect(event: dora.Event) -> i64:
+    let frame: str = event.data_str()
+    print_no_nl("got frame: ")
+    print(frame)
+    return 0
+
+fn main() -> i64:
+    let node = dora.Node("detector")
+    # Phase 1: explicit registration form. Phase 2 follow-up replaces
+    # this with `@dora.node(inputs=["camera"], outputs=["detections"])`
+    # over `fn detect(...)`. `dora.node` returns Ty::Int — the
+    # `let _ = ...` pattern discards the sentinel zero.
+    let _ = dora.node(detect)
+    let _ = node.run()
+    return 0

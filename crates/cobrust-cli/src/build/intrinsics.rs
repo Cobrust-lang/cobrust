@@ -1360,6 +1360,11 @@ pub fn collect_ecosystem_modules(module: &Module) -> std::collections::BTreeSet<
 ///   8/8 first proof; pure value-handle pattern — three constructors
 ///   `zeros`/`ones`/`eye` + `print_buffer`. Operator/index dispatch
 ///   are sub-ADR follow-ups).
+/// - `dora` — ninth-module generalization (dora-rs robotics dataflow,
+///   ADR-0076 Phase 1 first proof; third module on the callback chain
+///   after pit + hood. SYNTHETIC runtime — `dora.node(handler)` +
+///   `node.run()` mock one canned event arrival without the real
+///   dora-rs daemon; Phase 2 wires real orchestration).
 ///
 /// New modules extend this table off the proven chain.
 fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
@@ -1379,6 +1384,8 @@ fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
         Some("hood")
     } else if sym.starts_with("__cobrust_coil_") {
         Some("coil")
+    } else if sym.starts_with("__cobrust_dora_") {
+        Some("dora")
     } else {
         None
     }

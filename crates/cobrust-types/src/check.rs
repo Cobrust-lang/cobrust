@@ -2704,6 +2704,11 @@ impl Ctx {
             "hood.Command" => return crate::ecosystem::hood_command_ty(),
             // ADR-0072 8/8 first proof — coil.Buffer opaque handle.
             "coil.Buffer" => return crate::ecosystem::coil_buffer_ty(),
+            // ADR-0076 Phase 1 first proof — dora.Node + dora.Event
+            // opaque handles (ninth ecosystem module, third on the
+            // ADR-0073 callback chain after pit + hood).
+            "dora.Node" => return crate::ecosystem::dora_node_ty(),
+            "dora.Event" => return crate::ecosystem::dora_event_ty(),
             _ => {}
         }
         match s {

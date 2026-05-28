@@ -630,3 +630,136 @@ nest/strike/scale/molt walked through the data-module chain off den.
 - Follow-ups: `row -> list[tuple]` marshalling, handle-escape rules,
   `coil.Array` ABI, and generalizing the remaining cobra modules off
   this proven chain.
+
+## ADR-0076 ninth-module proof — `dora` (the NINTH module, THIRD with a callback; SYNTHETIC runtime Phase 1)
+
+After pit/hood walked the callback chain through `fn(Request) ->
+Response` and `fn() -> i64` respectively, `dora` (dora-rs robotics
+dataflow runtime bridge) is the NINTH ecosystem module — and the
+THIRD to cross a callback through the C ABI. The shape here is
+`fn(dora.Event) -> i64`, mixing pit's Event-receiver borrow pattern
+with hood's i64 exit-code intent. The MIR / HIR / drop / link-locate
+layers are **unchanged** — chain generality holds for the ninth time.
+
+Phase 1 is intentionally SYNTHETIC: `__cobrust_dora_node_run` mocks
+one canned `("camera", "frame_001")` Event arrival without depending
+on the real dora-rs daemon, mirroring F65's synthetic-LLM provider
+precedent. The C-ABI chain is proven end-to-end; the real `dora-node-
+api` integration is a Phase 2 deliverable.
+
+### Scope discipline (Phase 1 first proof only)
+
+This proof intentionally scopes to a 1-source 1-handler synthetic
+runtime. Explicit out-of-scope surfaces are deferred to Phase 2 / 3:
+
+- Real `dora-node-api` dependency + real coordinator orchestration
+  (Phase 2).
+- Multi-input / multi-output per-node handler vector (Phase 2).
+- `@dora.node(inputs=[...], outputs=[...])` decorator desugar — extends
+  ADR-0074 for module-receiver decorators (Phase 2, finding F68).
+- Yaml-loaded dataflows (`dora.run("dataflow.yml")` — Phase 2).
+- Arrow `RecordBatch` payload accessors beyond `data_str` (Phase 2 /
+  sub-ADR 0076c).
+- ROS2 bridge publish surface (sub-ADR 0076a — Phase 3).
+- riscv64 cross-build of `cobrust-dora` (ADR-0075 Phase 1 dependency
+  — Phase 3 stretch).
+- Real-robotics CartPole simulation demo (Phase 3 deliverable).
+
+Same scope discipline as nest's first proof (str→str only) and coil's
+first proof (constructors + repr only).
+
+### New machinery (mirrors ADR-0072 §4 for dora)
+
+- `cobrust-types/src/ecosystem.rs`: dora handles reserved in the
+  SEVENTH 256-slot AdtId block (`0xE000_0600..0xE000_06FF`); 2 handle
+  ids (`DORA_NODE_ADT` 0x600 + `DORA_EVENT_ADT` 0x601) + 1 drop symbol
+  (Event is Rust-owned per ADR-0073 §2 D6 — `handle_drop_symbol`
+  returns `None` for `DORA_EVENT_ADT`, mirrors `PIT_REQUEST_ADT`) +
+  `dora_event_handler_fn_ty()` returning `fn(dora.Event) -> i64` +
+  6 manifest rows: `dora.Node(str) -> Node`, `dora.node(callback) -> i64`,
+  `Node.run() -> i64`, `Node.shutdown() -> i64`, `Event.id() -> str`,
+  `Event.data_str() -> str`. The Phase-2-reserved slots
+  `0x602..0x6FF` stay open for ArrowArray / Metadata / Ros2Subscription
+  follow-ups.
+- `cobrust-types/src/check.rs::lower_named_type`: adds `dora.Node` +
+  `dora.Event` arms so `fn detect(event: dora.Event) -> i64:` lowers
+  correctly.
+- `cobrust-types/src/lib.rs`: re-exports `DORA_NODE_ADT`,
+  `DORA_EVENT_ADT`, `dora_node_ty`, `dora_event_ty`,
+  `dora_event_handler_fn_ty`.
+- `cobrust-codegen/src/llvm_backend.rs::declare_runtime_helpers`:
+  8 new `__cobrust_dora_*` extern decls (`node_new` shape
+  `*mut Str -> *mut Node`; `node_node` shape
+  `*const c_void -> i64`; `node_run` / `node_shutdown` shape
+  `*mut Node -> i64`; `event_id` / `event_data_str` shape
+  `*mut Event -> *mut Str`; `node_drop` / `event_drop` shape
+  `*mut Node -> void`).
+- `cobrust-cli/src/build/intrinsics.rs::ecosystem_module_for_symbol`:
+  `__cobrust_dora_*` recognizer arm (one-line; `locate_ecosystem_archive`
+  picks up `libdora.a` out of the box).
+- `cobrust-dora/src/cabi.rs` (NEW): the callback-bearing trampolines.
+  `__cobrust_dora_node_node` stores the fn pointer in a process-global
+  `AtomicPtr` slot; `__cobrust_dora_node_run` reads the slot, allocates
+  a canned `DoraEventHandle { id: "camera", data_str: "frame_001" }`,
+  invokes the handler via `std::mem::transmute` to the
+  `CbHandlerAbi` shape (`unsafe extern "C" fn(*mut u8) -> *mut u8`),
+  catches panics with `catch_unwind` + aborts per ADR-0073 §3 Q5, and
+  frees the Event box on return. `event_id` / `event_data_str` are
+  borrow shims that allocate fresh Cobrust `Str` buffers from the
+  Rust-owned Event.
+- `cobrust-dora/Cargo.toml`: `staticlib` + `cdylib` + `rlib` crate-type;
+  `cobrust-stdlib` as dev-dep for in-crate cabi unit tests; no
+  production deps in Phase 1 (`dora-node-api` is a Phase 2 add).
+- `cobrust-dora/build.rs` (NEW): macOS
+  `-Wl,-undefined,dynamic_lookup` for the `__cobrust_str_*` extern
+  resolution at PyO3 cdylib build time.
+
+### `dora.node(handler)` is the Phase 1 explicit-registration form
+
+Phase 1 ships `dora.node(handler)` as a module-level free fn with
+`EcoParam::Callback(dora_event_handler_fn_ty())`. The Phase 2 follow-
+up replaces this with `@dora.node(inputs=[...], outputs=[...])`
+decorator-form over the handler fn (extends ADR-0074 — see finding
+F68 for the desugar-extension design). Until Phase 2 ships, the
+explicit-form discards the i64-zero sentinel via
+`let _ = dora.node(detect)`.
+
+### `event.data_str()` is the Phase 1 payload primitive (NOT `event.data_arrow()`)
+
+The first-proof `event.data_str()` returns a fresh Cobrust `Str`
+buffer carrying the canned `"frame_001"` payload. A Phase 2
+`event.data_arrow()` shape would surface Arrow `RecordBatch` accessors
+for typed multi-element payloads (i64 array, f64 array, dict). Same
+scope discipline as coil's `print_buffer`-not-`repr()`.
+
+### E2E (ADR-0076 Phase 1 first-proof done-means)
+
+`crates/cobrust-cli/tests/dora_hello_e2e.rs::test_e2e_dora_hello_synthetic_runtime_round_trip`:
+compiles + runs the `.cb` hello program as a subprocess via
+`std::process::Command`, asserts stdout contains
+`"got frame: frame_001"` + exit code 0. 2 negative cases ship
+alongside:
+
+- `test_neg_dora_callback_rejects_zero_arity_fn` — `dora.node(bad)`
+  where `bad() -> i64` (missing the `dora.Event` arg) is rejected at
+  type-check via the SHARED `check_callback_arg` gate.
+- `test_neg_dora_callback_rejects_wrong_return_type` — `dora.node(bad)`
+  where `bad(event) -> str` is rejected at type-check.
+
+`cobrust-dora/src/cabi.rs::tests`: 5 in-crate cabi unit tests
+(node new/drop proves drop-once via `DROP_COUNT`; null-drop tolerance;
+run-without-handler returns -1 sentinel; trampoline-invokes-handler
+with canned event asserts the borrow shims surface the expected
+strings; shutdown-returns-clean-sentinel idempotency).
+`crates/cobrust-dora/tests/dora_pyo3_compiles.rs`: 1 shape-regression
+test asserting the `crate-type = ["rlib", "cdylib", "staticlib"]`
+literal in Cargo.toml.
+
+### Chain-generality metric
+
+`git diff --stat crates/cobrust-{mir,hir}/` after the dora Phase 1
+sprint: **zero HIR changes, zero MIR changes**, ~40 lines codegen
+(extern decls only). The mir / hir / drop / link-locate layers are
+unchanged — proving the chain generalizes off the proven callback
+pattern for the third time. Same metric profile as hood walked the
+callback chain off pit's first proof.
