@@ -4451,7 +4451,7 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
             (BinOp::MatMul, _) => {
                 return Err(CodegenError::UnimplementedBinOp {
                     op: "@",
-                    note: "matrix multiplication requires cobrust-numpy runtime (ADR-0041 §H3)",
+                    note: "matrix multiplication requires cobrust-coil runtime (ADR-0041 §H3, ADR-0071 cobra-rebrand: numpy → coil)",
                 });
             }
             (BinOp::In, _) => {
