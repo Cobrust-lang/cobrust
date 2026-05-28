@@ -1,16 +1,23 @@
 ---
 doc_kind: reference
 module_id: cb-ecosystem-import
-title: .cb ecosystem-import wiring (ADR-0072 first proof — den)
+title: .cb ecosystem-import wiring (ADR-0072 first proof — den; second-module proof — nest)
 last_verified_commit: HEAD
 relates_to: [adr:0072, adr:0019, adr:0028, adr:0050c, adr:0071]
-dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-cli]
+dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-cli]
 ---
 
-# `.cb` ecosystem-import wiring — `import den` end-to-end
+# `.cb` ecosystem-import wiring — `import den` / `import nest` end-to-end
 
-Status: ADR-0072 first proof landed. `import den` + `den.connect` /
-`Connection.execute` / `Cursor.fetchall` compile → link → run.
+Status:
+- ADR-0072 **first proof** landed. `import den` + `den.connect` /
+  `Connection.execute` / `Cursor.fetchall` compile → link → run.
+- ADR-0072 **second-module generalization** landed. `import nest` +
+  `nest.loads_str` compile → link → run, proving the chain is not
+  den-specific. The second wiring touched only the manifest + the new
+  shim crate + the per-symbol-prefix recognizer in
+  `collect_ecosystem_modules`; the typecheck / MIR / drop / link-locate
+  layers stayed untouched.
 
 ## Surface (manifest-defined)
 
@@ -21,13 +28,21 @@ Status: ADR-0072 first proof landed. `import den` + `den.connect` /
 | `cur.fetchall()` | `__cobrust_den_cursor_fetchall` | `(den.Cursor) -> str` |
 | scope-exit drop | `__cobrust_den_connection_drop` | `(den.Connection) -> ()` |
 | scope-exit drop | `__cobrust_den_cursor_drop` | `(den.Cursor) -> ()` |
+| `nest.loads_str(toml)` | `__cobrust_nest_loads_str` | `(str) -> str` |
 
 - `den.Connection` / `den.Cursor` are **nominal handle types**:
   `Ty::Adt(AdtId)` with reserved ids `>= 0xE000_0000`
   (`cobrust_types::ecosystem::ECO_ADT_BASE`). Non-`Copy`, drop-scheduled.
 - `fetchall` returns a `str` rendering for the first proof
   (`[(42,)]`); `row -> list[tuple]` is the immediate follow-up.
-- Tier: `den` first proof = `strict` (Q6; L2-verifier bind deferred).
+- `nest.loads_str` is **pure value-in-value-out** (`str -> str`): the
+  TOML source goes in, its canonical-JSON rendering comes out. No
+  handles, no callbacks; the returned `Str` is freed by the existing
+  Str drop schedule. Parse errors are returned as a JSON sentinel
+  `{"err":"…"}` (matching the `cobrust-nest-json` subprocess bridge);
+  a typed `Result[str, E]` surface is a follow-up.
+- Tier: `den` first proof = `strict`; `nest.loads_str` = `semantic`
+  (TOML→JSON canonicalization, Q6; L2-verifier bind deferred).
 
 ## Layer map (the proven flat-intrinsic chain, keyed on ecosystem alias)
 
@@ -85,16 +100,19 @@ flowchart TD
 ### L5 — link (`cobrust-cli/src/build.rs`)
 - `collect_ecosystem_modules(&mir)` (in `build/intrinsics.rs`) scans
   retargeted `Constant::Str` callees for the `__cobrust_<mod>_*` prefix.
+  Currently recognized prefixes: `__cobrust_den_*` → `den`,
+  `__cobrust_nest_*` → `nest`. New modules extend `ecosystem_module_for_symbol`.
 - `locate_ecosystem_archive(module, release)` finds (or dev-builds)
   `lib<mod>.a`; the link line appends only the imported modules'
   archives, AFTER `libcobrust_stdlib.a` (both are Rust staticlibs that
   embed libstd; this order de-dups it). On Linux the stdlib + ecosystem
   archives are wrapped in `--start-group/--end-group` for single-pass
-  GNU ld. den crate-type gains `staticlib`. Only imported modules link
-  (risk 3: no link bloat).
+  GNU ld. `cobrust-den` + `cobrust-nest` crate-types include `staticlib`.
+  Only imported modules link (risk 3: no link bloat).
 
 ## Done-means (ADR-0072 §4) — verification state
 
+### `den` first proof
 1. Type-checks against the manifest, no `AmbiguousType`. ✅
 2. MIR retargets to `__cobrust_den_*`. ✅ (`nm` shows all 5 symbols)
 3. `cc` links `prog.o + cobrust_main.o + libcobrust_stdlib.a + libden.a`
@@ -106,6 +124,38 @@ flowchart TD
    exit 0. ✅ (`crates/cobrust-cli/tests/ecosystem_den_e2e.rs`)
 5. No leak/UAF — handle drops fire once at scope exit. ✅
    (`cobrust-den::cabi::tests::cabi_round_trip_prints_42_and_drops_once`)
+
+### `nest` second-module proof
+1. Type-checks against the manifest, no `AmbiguousType`. ✅
+2. MIR retargets to `__cobrust_nest_loads_str`. ✅
+3. `cc` links `prog.o + cobrust_main.o + libcobrust_stdlib.a + libnest.a`
+   (same link policy as den). ✅
+4. Binary parses `title = "hello"` + `[server]\nport=8080`, prints the
+   canonical JSON `{"title":"hello"}` / `{"server":{"port":8080}}`,
+   exit 0. ✅ (`crates/cobrust-cli/tests/ecosystem_nest_e2e.rs`)
+5. Drop correctness: no handles in this surface; the input + output
+   `Str` buffers are freed by the existing Str drop schedule (the
+   "easy case" the chain handles natively — ADR-0072 §5 risk 1 is a
+   non-concern for pure value-in-value-out shims). ✅ (cabi unit
+   tests in `cobrust-nest/src/cabi.rs`)
+
+### Generalization finding
+
+The second-module wiring touched 4 source files and added 2 (the new
+shim crate + its E2E test). Of those edits:
+- 3 were strictly additive (manifest row, codegen extern block,
+  collected-module recognizer) — pure data, no logic change.
+- 1 was a true generalization: `ecosystem_module_for_symbol` in
+  `cobrust-cli/src/build/intrinsics.rs` was den-specific (single
+  `starts_with("__cobrust_den_")` branch). Generalized to an alternation
+  per recognized module prefix. New modules extend this in one place.
+
+No changes were needed in `check.rs` `try_synth_ecosystem_call`, in
+`lower.rs` `try_lower_ecosystem_call`, in `emit_drop_for_ty`, in
+`locate_ecosystem_archive`, or in the linker policy. Those layers were
+already manifest-driven and module-name-agnostic. The first-proof
+mechanism was genuinely general; the only den-specific surface was the
+symbol-prefix table.
 
 ## Constraints / follow-ups
 

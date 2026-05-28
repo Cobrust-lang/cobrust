@@ -2475,6 +2475,30 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0072 second-module proof: nest ecosystem-module C-ABI -
+        // `nest` (TOML, rebrand of tomli) — pure value-in-value-out
+        // (`Str → Str`); no handles, no drops. Exported by
+        // `cobrust-nest/src/cabi.rs`, linked as `libnest.a` only when
+        // the program imports `nest`.
+        //
+        //   __cobrust_nest_loads_str(toml: *mut Str) -> *mut Str
+        //
+        // The returned Str buffer is owned by the caller and dropped by
+        // the existing Str drop schedule — no new drop wiring needed.
+        // (One symbol today; an array+for like den's above would trip
+        // clippy::single_element_loop, so direct binding is used. New
+        // nest fns extend this with the same shape.)
+        let nest_loads_str_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let nest_loads_str_sym = "__cobrust_nest_loads_str";
+        let f = self.module.add_function(
+            nest_loads_str_sym,
+            nest_loads_str_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls.insert(nest_loads_str_sym, f);
+        self.runtime_helper_param_counts
+            .insert(nest_loads_str_sym, 1);
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.

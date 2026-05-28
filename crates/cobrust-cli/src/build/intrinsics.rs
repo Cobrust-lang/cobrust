@@ -1339,11 +1339,16 @@ pub fn collect_ecosystem_modules(module: &Module) -> std::collections::BTreeSet<
 }
 
 /// Map a retargeted ecosystem C-ABI symbol to its module name, or `None`
-/// for a non-ecosystem symbol. First proof recognizes only `den`'s
-/// symbols; new modules extend this off the proven chain.
+/// for a non-ecosystem symbol. Recognized modules:
+/// - `den` — first proof (ADR-0072 §4).
+/// - `nest` — second-module generalization (TOML, rebrand of tomli).
+///
+/// New modules extend this table off the proven chain.
 fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
     if sym.starts_with("__cobrust_den_") {
         Some("den")
+    } else if sym.starts_with("__cobrust_nest_") {
+        Some("nest")
     } else {
         None
     }

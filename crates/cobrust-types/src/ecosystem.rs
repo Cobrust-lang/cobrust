@@ -116,6 +116,20 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             ret: den_connection_ty(),
             tier: PyCompatTier::Strict,
         }),
+        // ADR-0072 second-module generalization — `nest` (TOML, the
+        // rebrand of `tomli`). Pure value-in-value-out (`Str → Str`):
+        // parses the TOML source and returns its canonical JSON
+        // rendering. No handles, no callbacks; the chain handles this
+        // case natively via the existing Str drop schedule.
+        // Tier `Semantic` — nest produces a JSON canonicalization of
+        // CPython `tomllib`'s parse output (behaviorally equivalent;
+        // not a bit-for-bit CPython parity surface).
+        ("nest", "loads_str") => Some(EcoSig {
+            runtime_symbol: "__cobrust_nest_loads_str",
+            params: vec![Ty::Str],
+            ret: Ty::Str,
+            tier: PyCompatTier::Semantic,
+        }),
         _ => None,
     }
 }
@@ -156,7 +170,7 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
 /// `den.attr` accesses resolve against the manifest.
 #[must_use]
 pub fn is_ecosystem_module(name: &str) -> bool {
-    matches!(name, "den")
+    matches!(name, "den" | "nest")
 }
 
 #[cfg(test)]
@@ -229,5 +243,26 @@ mod tests {
     fn den_is_a_known_module() {
         assert!(is_ecosystem_module("den"));
         assert!(!is_ecosystem_module("os"));
+    }
+
+    // ADR-0072 second-module proof — `nest` (TOML, rebrand of tomli).
+
+    #[test]
+    fn nest_is_a_known_module() {
+        assert!(is_ecosystem_module("nest"));
+    }
+
+    #[test]
+    fn nest_loads_str_signature_is_str_to_str() {
+        let sig = lookup_module_fn("nest", "loads_str").expect("nest.loads_str in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_nest_loads_str");
+        assert_eq!(sig.params, vec![Ty::Str]);
+        assert_eq!(sig.ret, Ty::Str);
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn unknown_nest_fn_is_none() {
+        assert!(lookup_module_fn("nest", "nope").is_none());
     }
 }

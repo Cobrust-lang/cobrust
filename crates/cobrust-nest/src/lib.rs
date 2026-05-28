@@ -25,3 +25,10 @@
 mod parser;
 
 pub use crate::parser::{MAX_DEPTH, TomliError, Value, loads, table_to_json, to_json};
+
+// ADR-0072 second-module generalization — C-ABI shims so a `.cb`
+// program can `import nest` + `nest.loads_str(toml)`. The shims live
+// behind `pub mod cabi` so `cobrust-nest-json` (the subprocess bridge)
+// and downstream users continue to depend on the high-level surface;
+// the C-ABI is an independent layer over the same `loads` + `table_to_json`.
+pub mod cabi;
