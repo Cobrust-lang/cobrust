@@ -11,7 +11,12 @@ description = "Cobrust translation of requests 2.31.0 (ecosystem batch). Surface
 
 [lib]
 name = "strike"
-crate-type = ["rlib", "cdylib"]
+# ADR-0072 Q5: `staticlib` produces `libstrike.a` for per-import static
+# linking by `cobrust build` (third-module generalization off the den
+# first proof + nest second-module proof). `cdylib` stays for the PyO3
+# native module; `rlib` for in-workspace Rust consumers + the cabi unit
+# tests. cargo permits the three side by side.
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [lints]
 workspace = true
@@ -33,3 +38,11 @@ serde_json = { workspace = true }
 # to the runtime-driven path without breaking callers).
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 pyo3 = { version = "0.24.2", features = ["extension-module"], optional = true }
+
+[dev-dependencies]
+# ADR-0072 §4 + Q5: the `cabi` shims declare the `__cobrust_str_*`
+# primitives `extern "C"` and bind them from `libcobrust_stdlib.a` at
+# the `cobrust build` link step (NO Rust-level production dependency).
+# For the in-crate `cabi` unit tests, link cobrust-stdlib's rlib as a
+# dev-dependency so those `extern "C"` decls resolve under `cargo test`.
+cobrust-stdlib = { path = "../cobrust-stdlib" }

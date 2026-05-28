@@ -444,6 +444,7 @@ dependencies = [
  "cobrust-llm-router",
  "cobrust-lsp",
  "cobrust-mir",
+ "cobrust-pit",
  "cobrust-pkg",
  "cobrust-translator",
  "cobrust-types",
@@ -706,6 +707,7 @@ dependencies = [
 name = "cobrust-strike"
 version = "0.6.2"
 dependencies = [
+ "cobrust-stdlib",
  "pyo3",
  "reqwest",
  "serde_json",

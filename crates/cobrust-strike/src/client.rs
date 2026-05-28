@@ -250,6 +250,20 @@ impl Response {
     pub fn bytes(self) -> Vec<u8> {
         self.body
     }
+
+    /// Borrowing view of the response body bytes. Mirrors how
+    /// [`Response::status_code`] / [`Response::headers`] project the
+    /// inner state without consuming the receiver — needed by the
+    /// `cabi` shims (ADR-0072 third-module proof), which borrow a
+    /// boxed handle and may project the body multiple times across
+    /// `text() / json()` calls.
+    ///
+    /// Prefer the consuming [`Response::text`] / [`Response::json`] /
+    /// [`Response::bytes`] surface in normal Rust use; this accessor
+    /// exists for the C-ABI handle pattern.
+    pub fn body_bytes(&self) -> &[u8] {
+        &self.body
+    }
 }
 
 // fn:Session::new provider=synthetic model=requests-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate

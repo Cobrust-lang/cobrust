@@ -47,3 +47,12 @@ serde_json = "1"
 tempfile = "3"
 thiserror = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+# ADR-0072 third-module proof (strike) — the `ecosystem_strike_e2e`
+# integration test spins a real loopback HTTP server in-process via
+# `pit::App`, then drives the compiled `.cb` binary against it. `pit`
+# is a workspace member (cobrust-pit), so this is a dev-only path —
+# the test asserts the strike ecosystem-import chain round-trips
+# through a real HTTP stack without needing the network.
+cobrust-pit = { path = "../cobrust-pit", version = "=0.6.2" }

@@ -1342,6 +1342,8 @@ pub fn collect_ecosystem_modules(module: &Module) -> std::collections::BTreeSet<
 /// for a non-ecosystem symbol. Recognized modules:
 /// - `den` — first proof (ADR-0072 §4).
 /// - `nest` — second-module generalization (TOML, rebrand of tomli).
+/// - `strike` — third-module generalization (HTTP client, rebrand of
+///   requests; handle pattern like `den`).
 ///
 /// New modules extend this table off the proven chain.
 fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
@@ -1349,6 +1351,8 @@ fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
         Some("den")
     } else if sym.starts_with("__cobrust_nest_") {
         Some("nest")
+    } else if sym.starts_with("__cobrust_strike_") {
+        Some("strike")
     } else {
         None
     }

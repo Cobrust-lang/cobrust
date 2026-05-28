@@ -26,6 +26,7 @@
 //! - `Response` with `.status_code() / .ok() / .headers() / .text() / .json()`.
 //! - Single error type: `HttpError { kind, message }`.
 
+pub mod cabi;
 mod client;
 
 pub use crate::client::{

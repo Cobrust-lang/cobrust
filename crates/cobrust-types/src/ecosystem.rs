@@ -45,6 +45,17 @@ pub const DEN_CONNECTION_ADT: AdtId = AdtId(ECO_ADT_BASE);
 /// `AdtId` for the `den.Cursor` handle.
 pub const DEN_CURSOR_ADT: AdtId = AdtId(ECO_ADT_BASE + 1);
 
+/// `AdtId` for the `strike.Response` handle (ADR-0072 third-module
+/// generalization — HTTP client, rebrand of `requests`).
+///
+/// Per-module reservation convention: each ecosystem module reserves a
+/// 256-slot block starting at `ECO_ADT_BASE + N*0x100`. `den` occupies
+/// the first block (`0xE000_0000..0xE000_00FF`); `strike` occupies the
+/// second (`0xE000_0100..0xE000_01FF`). This leaves ample room for new
+/// handles per module without colliding across modules. When a third
+/// handle-typed module lands, allocate the next 256-slot block.
+pub const STRIKE_RESPONSE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x100);
+
 /// The Cobrust `Ty` for the `den.Connection` opaque handle.
 #[must_use]
 pub fn den_connection_ty() -> Ty {
@@ -55,6 +66,12 @@ pub fn den_connection_ty() -> Ty {
 #[must_use]
 pub fn den_cursor_ty() -> Ty {
     Ty::Adt(DEN_CURSOR_ADT, vec![])
+}
+
+/// The Cobrust `Ty` for the `strike.Response` opaque handle.
+#[must_use]
+pub fn strike_response_ty() -> Ty {
+    Ty::Adt(STRIKE_RESPONSE_ADT, vec![])
 }
 
 /// Is this `AdtId` one of the reserved ecosystem-handle ids?
@@ -72,6 +89,7 @@ pub fn handle_drop_symbol(id: AdtId) -> Option<&'static str> {
     match id {
         DEN_CONNECTION_ADT => Some("__cobrust_den_connection_drop"),
         DEN_CURSOR_ADT => Some("__cobrust_den_cursor_drop"),
+        STRIKE_RESPONSE_ADT => Some("__cobrust_strike_response_drop"),
         _ => None,
     }
 }
@@ -130,6 +148,25 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             ret: Ty::Str,
             tier: PyCompatTier::Semantic,
         }),
+        // ADR-0072 third-module generalization — `strike` (HTTP client,
+        // the rebrand of `requests`). Pairs handle-pattern (Response,
+        // like `den.Connection`/`Cursor`) with free-function entrypoints
+        // (`get`/`post`, like `den.connect`). Tier `Semantic` — HTTP is
+        // not a bit-for-bit parity surface (timing, headers ordering,
+        // connection-pool side effects); behaviorally equivalent for
+        // the supported verb/method set.
+        ("strike", "get") => Some(EcoSig {
+            runtime_symbol: "__cobrust_strike_get",
+            params: vec![Ty::Str],
+            ret: strike_response_ty(),
+            tier: PyCompatTier::Semantic,
+        }),
+        ("strike", "post") => Some(EcoSig {
+            runtime_symbol: "__cobrust_strike_post",
+            params: vec![Ty::Str, Ty::Str],
+            ret: strike_response_ty(),
+            tier: PyCompatTier::Semantic,
+        }),
         _ => None,
     }
 }
@@ -160,6 +197,31 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             ret: Ty::Str,
             tier: PyCompatTier::Strict,
         }),
+        // ADR-0072 third-module generalization — `strike.Response`
+        // methods. All borrow the receiver; `status_code` returns an
+        // i64 (u16 widened to i64 at the C-ABI boundary); `text`/`json`
+        // allocate fresh Cobrust `Str` buffers the caller owns. `json`
+        // returns the canonicalized JSON rendering of the body (mirrors
+        // den's `fetchall() -> str` first-proof rendering shape; a
+        // structured-value surface is a tracked follow-up).
+        (STRIKE_RESPONSE_ADT, "text") => Some(EcoSig {
+            runtime_symbol: "__cobrust_strike_response_text",
+            params: vec![],
+            ret: Ty::Str,
+            tier: PyCompatTier::Semantic,
+        }),
+        (STRIKE_RESPONSE_ADT, "status_code") => Some(EcoSig {
+            runtime_symbol: "__cobrust_strike_response_status_code",
+            params: vec![],
+            ret: Ty::Int,
+            tier: PyCompatTier::Semantic,
+        }),
+        (STRIKE_RESPONSE_ADT, "json") => Some(EcoSig {
+            runtime_symbol: "__cobrust_strike_response_json",
+            params: vec![],
+            ret: Ty::Str,
+            tier: PyCompatTier::Semantic,
+        }),
         _ => None,
     }
 }
@@ -170,7 +232,7 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
 /// `den.attr` accesses resolve against the manifest.
 #[must_use]
 pub fn is_ecosystem_module(name: &str) -> bool {
-    matches!(name, "den" | "nest")
+    matches!(name, "den" | "nest" | "strike")
 }
 
 #[cfg(test)]
@@ -264,5 +326,86 @@ mod tests {
     #[test]
     fn unknown_nest_fn_is_none() {
         assert!(lookup_module_fn("nest", "nope").is_none());
+    }
+
+    // ADR-0072 third-module proof — `strike` (HTTP, rebrand of requests).
+
+    #[test]
+    fn strike_is_a_known_module() {
+        assert!(is_ecosystem_module("strike"));
+    }
+
+    #[test]
+    fn strike_response_handle_id_recognized_and_in_reserved_block() {
+        assert!(is_ecosystem_handle(STRIKE_RESPONSE_ADT));
+        // Per-module 256-slot reservation: strike lives in the second
+        // block, well outside den's first block. Const-block so the
+        // compile-time-constant comparisons trip a real ABI mistake
+        // (someone bumping ECO_ADT_BASE without resizing) rather than a
+        // clippy::assertions_on_constants false-positive at test time.
+        const _: () = {
+            assert!(STRIKE_RESPONSE_ADT.0 >= ECO_ADT_BASE + 0x100);
+            assert!(STRIKE_RESPONSE_ADT.0 < ECO_ADT_BASE + 0x200);
+        };
+    }
+
+    #[test]
+    fn strike_response_drop_symbol_resolves() {
+        assert_eq!(
+            handle_drop_symbol(STRIKE_RESPONSE_ADT),
+            Some("__cobrust_strike_response_drop")
+        );
+    }
+
+    #[test]
+    fn strike_get_signature_returns_response_handle() {
+        let sig = lookup_module_fn("strike", "get").expect("strike.get in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_strike_get");
+        assert_eq!(sig.params, vec![Ty::Str]);
+        assert_eq!(sig.ret, strike_response_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn strike_post_signature_takes_url_and_body() {
+        let sig = lookup_module_fn("strike", "post").expect("strike.post in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_strike_post");
+        assert_eq!(sig.params, vec![Ty::Str, Ty::Str]);
+        assert_eq!(sig.ret, strike_response_ty());
+    }
+
+    #[test]
+    fn strike_response_methods_resolve() {
+        let text =
+            lookup_handle_method(&strike_response_ty(), "text").expect("Response.text in manifest");
+        assert_eq!(text.runtime_symbol, "__cobrust_strike_response_text");
+        assert!(text.params.is_empty());
+        assert_eq!(text.ret, Ty::Str);
+
+        let code = lookup_handle_method(&strike_response_ty(), "status_code")
+            .expect("Response.status_code in manifest");
+        assert_eq!(code.runtime_symbol, "__cobrust_strike_response_status_code");
+        assert!(code.params.is_empty());
+        assert_eq!(code.ret, Ty::Int);
+
+        let json =
+            lookup_handle_method(&strike_response_ty(), "json").expect("Response.json in manifest");
+        assert_eq!(json.runtime_symbol, "__cobrust_strike_response_json");
+        assert!(json.params.is_empty());
+        assert_eq!(json.ret, Ty::Str);
+    }
+
+    #[test]
+    fn strike_methods_only_match_response_receiver() {
+        // Cross-handle: den.Connection should never resolve strike methods.
+        assert!(lookup_handle_method(&den_connection_ty(), "text").is_none());
+        assert!(lookup_handle_method(&Ty::Str, "status_code").is_none());
+        // Unknown method on the right receiver is None.
+        assert!(lookup_handle_method(&strike_response_ty(), "nope").is_none());
+    }
+
+    #[test]
+    fn unknown_strike_fn_is_none() {
+        assert!(lookup_module_fn("strike", "nope").is_none());
     }
 }

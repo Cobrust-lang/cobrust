@@ -2499,6 +2499,42 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_decls.insert(nest_loads_str_sym, f);
         self.runtime_helper_param_counts
             .insert(nest_loads_str_sym, 1);
+
+        // -- ADR-0072 third-module proof: strike ecosystem-module C-ABI -
+        // `strike` (HTTP client, rebrand of requests) — pairs handle
+        // pattern (Response, like den's Connection/Cursor) with free-
+        // function entrypoints (`get`/`post`, like den's `connect`).
+        // Exported by `cobrust-strike/src/cabi.rs`, linked as
+        // `libstrike.a` only when the program imports `strike`.
+        //
+        //   __cobrust_strike_get(url: *mut Str) -> *mut Response
+        //   __cobrust_strike_post(url, body: *mut Str) -> *mut Response
+        //   __cobrust_strike_response_text(resp) -> *mut Str
+        //   __cobrust_strike_response_status_code(resp) -> i64
+        //   __cobrust_strike_response_json(resp) -> *mut Str
+        //   __cobrust_strike_response_drop(resp) -> void
+        //
+        // The `_drop` symbol is emitted by `emit_drop_for_ty` at the
+        // handle local's scope exit via `handle_drop_symbol(id)` (chain
+        // is already general — no new drop wiring needed).
+        let strike_get_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let strike_post_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let strike_text_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let strike_status_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let strike_json_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let strike_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_strike_get", strike_get_ty, 1usize),
+            ("__cobrust_strike_post", strike_post_ty, 2),
+            ("__cobrust_strike_response_text", strike_text_ty, 1),
+            ("__cobrust_strike_response_status_code", strike_status_ty, 1),
+            ("__cobrust_strike_response_json", strike_json_ty, 1),
+            ("__cobrust_strike_response_drop", strike_drop_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
