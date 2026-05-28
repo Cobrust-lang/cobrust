@@ -100,6 +100,20 @@ jobs:
         os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      # ubuntu-latest disk-full mitigation (CI 26581236359 + 26584878883 2026-05-28):
+      # GH runner ~14GB free isn't enough for LLVM 18 + cargo cache (~1.6GB) +
+      # cargo test --workspace artifacts. Reclaim ~30GB by purging unused
+      # pre-installed software (haskell/android/dotnet/etc) BEFORE LLVM install.
+      - name: Free disk space (ubuntu disk-full mitigation)
+        if: runner.os == 'Linux'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
       - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
         with:
           toolchain: 1.94.1
@@ -203,6 +217,17 @@ jobs:
     continue-on-error: true  # non-blocking initially — see comment above
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      # Disk-full mitigation — see `test` job comment. udeps compiles
+      # the FULL workspace + needs `cargo install cargo-udeps` overhead.
+      - name: Free disk space (ubuntu disk-full mitigation)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
       - uses: dtolnay/rust-toolchain@nightly
       # LLVM 18 required since ADR-0070 §X.3 flip — udeps compiles the
       # full workspace (ubuntu-only job). See clippy job comment.
@@ -248,6 +273,18 @@ jobs:
     needs: [build]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      # Disk-full mitigation — see `test` job comment. RV cross-build adds
+      # `target/riscv64gc-unknown-linux-gnu/` on top of the host target,
+      # doubling disk pressure; free disk space FIRST.
+      - name: Free disk space (ubuntu disk-full mitigation)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
       - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
         with:
           toolchain: 1.94.1
