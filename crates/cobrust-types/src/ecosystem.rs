@@ -33,7 +33,7 @@
 //! `Cursor.fetchall`. The remaining cobra modules generalize off this
 //! proven chain.
 
-use crate::ty::{AdtId, Ty};
+use crate::ty::{AdtId, FnTy, Ty};
 
 /// Base for reserved ecosystem-handle [`AdtId`]s. User `class` ADTs use
 /// `AdtId == DefId` which is allocated densely from 0, so a high base
@@ -68,6 +68,25 @@ pub const STRIKE_RESPONSE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x100);
 /// molt).
 pub const MOLT_DATETIME_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x300);
 
+// ADR-0073 — `pit` (Flask, web-server) handle ADT block reservation.
+// The FIFTH per-module 256-slot block (`0xE000_0400..0xE000_04FF`).
+// `pit` ships FOUR handles in its first proof:
+// - `App`             — the application object the `.cb` source builds.
+// - `Request`         — incoming HTTP request passed to a handler fn.
+// - `Response`        — outbound HTTP response a handler returns.
+// - `ServerHandle`    — the `serve_in_background` join handle.
+// hood (rebrand of click) gets the SIXTH block (`0xE000_0500..0x05FF`)
+// in its sibling sprint.
+
+/// `AdtId` for the `pit.App` handle (ADR-0073 §2 D1).
+pub const PIT_APP_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x400);
+/// `AdtId` for the `pit.Request` handle (ADR-0073).
+pub const PIT_REQUEST_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x401);
+/// `AdtId` for the `pit.Response` handle (ADR-0073).
+pub const PIT_RESPONSE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x402);
+/// `AdtId` for the `pit.ServerHandle` handle (ADR-0073).
+pub const PIT_SERVER_HANDLE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x403);
+
 /// The Cobrust `Ty` for the `den.Connection` opaque handle.
 #[must_use]
 pub fn den_connection_ty() -> Ty {
@@ -92,6 +111,46 @@ pub fn molt_datetime_ty() -> Ty {
     Ty::Adt(MOLT_DATETIME_ADT, vec![])
 }
 
+/// The Cobrust `Ty` for the `pit.App` opaque handle (ADR-0073).
+#[must_use]
+pub fn pit_app_ty() -> Ty {
+    Ty::Adt(PIT_APP_ADT, vec![])
+}
+
+/// The Cobrust `Ty` for the `pit.Request` opaque handle (ADR-0073).
+#[must_use]
+pub fn pit_request_ty() -> Ty {
+    Ty::Adt(PIT_REQUEST_ADT, vec![])
+}
+
+/// The Cobrust `Ty` for the `pit.Response` opaque handle (ADR-0073).
+#[must_use]
+pub fn pit_response_ty() -> Ty {
+    Ty::Adt(PIT_RESPONSE_ADT, vec![])
+}
+
+/// The Cobrust `Ty` for the `pit.ServerHandle` opaque handle (ADR-0073).
+#[must_use]
+pub fn pit_server_handle_ty() -> Ty {
+    Ty::Adt(PIT_SERVER_HANDLE_ADT, vec![])
+}
+
+/// The handler `FnTy` `pit.App.route` expects in its 3rd argument
+/// (ADR-0073 §2 D1+D4): a top-level fn taking a single `pit.Request`
+/// and returning a `pit.Response`. The cross-boundary trampoline in
+/// `cobrust-pit/src/cabi.rs` enforces the same C-ABI shape (`extern "C"
+/// fn(*mut u8) -> *mut u8`).
+#[must_use]
+pub fn pit_handler_fn_ty() -> FnTy {
+    FnTy {
+        positional: vec![pit_request_ty()],
+        named: vec![],
+        var_positional: None,
+        var_keyword: None,
+        return_ty: Box::new(pit_response_ty()),
+    }
+}
+
 /// Is this `AdtId` one of the reserved ecosystem-handle ids?
 #[must_use]
 pub fn is_ecosystem_handle(id: AdtId) -> bool {
@@ -102,6 +161,11 @@ pub fn is_ecosystem_handle(id: AdtId) -> bool {
 /// when the id is not a known handle. Consumed by codegen's
 /// `emit_drop_for_ty` to schedule the foreign drop at scope exit
 /// (ADR-0072 §3 / §5 risk 1).
+///
+/// Note `PIT_REQUEST_ADT` returns `None` deliberately (ADR-0073 §2 D6):
+/// a `.cb` handler receives a `Request` borrowed from Rust through the
+/// trampoline (the trampoline owns the `Box<Request>` and frees it on
+/// the callback return) — the `.cb` side must not free it.
 #[must_use]
 pub fn handle_drop_symbol(id: AdtId) -> Option<&'static str> {
     match id {
@@ -109,6 +173,10 @@ pub fn handle_drop_symbol(id: AdtId) -> Option<&'static str> {
         DEN_CURSOR_ADT => Some("__cobrust_den_cursor_drop"),
         STRIKE_RESPONSE_ADT => Some("__cobrust_strike_response_drop"),
         MOLT_DATETIME_ADT => Some("__cobrust_molt_datetime_drop"),
+        PIT_APP_ADT => Some("__cobrust_pit_app_drop"),
+        // PIT_REQUEST_ADT — Rust-owned, never dropped from `.cb` (ADR-0073 §2 D6).
+        PIT_RESPONSE_ADT => Some("__cobrust_pit_response_drop"),
+        PIT_SERVER_HANDLE_ADT => Some("__cobrust_pit_server_handle_drop"),
         _ => None,
     }
 }
@@ -125,6 +193,28 @@ pub enum PyCompatTier {
     Numerical,
 }
 
+/// One ecosystem-call parameter slot. Most parameters are plain values
+/// crossing the C-ABI as scalars or opaque pointers (the `Value` variant
+/// is the source of truth for all den / nest / strike / scale / molt
+/// rows). ADR-0073 adds `Callback`: a `.cb` top-level `fn` name passed
+/// across the boundary as a raw C-ABI fn-pointer.
+#[derive(Clone, Debug)]
+pub enum EcoParam {
+    /// A plain Cobrust `Ty` crossing the boundary as a value (scalar
+    /// or opaque handle pointer). The pre-ADR-0073 shape — every
+    /// existing manifest row uses this variant.
+    Value(Ty),
+    /// A callback fn pointer crossing the boundary as a C-ABI
+    /// `extern "C" fn(*mut u8) -> *mut u8`. The argument MUST be a
+    /// top-level `fn` name (no closures, no fn-typed locals, no
+    /// call-results) whose signature unifies with the embedded
+    /// `FnTy` (ADR-0073 §2 D1+D8). The MIR lowering emits
+    /// `Operand::Constant(Constant::FnRef(def_id))` for this slot
+    /// so codegen materialises the fn pointer via the
+    /// `function_ids` table at the call site.
+    Callback(FnTy),
+}
+
 /// One ecosystem-module function or method signature.
 #[derive(Clone, Debug)]
 pub struct EcoSig {
@@ -132,13 +222,33 @@ pub struct EcoSig {
     /// `__cobrust_den_connect`). Used verbatim by the MIR
     /// intrinsic-rewrite and the codegen extern declaration.
     pub runtime_symbol: &'static str,
-    /// Parameter types (the receiver, for a method, is implicit and
-    /// NOT listed here — it is the base of the `.attr` access).
-    pub params: Vec<Ty>,
+    /// Parameter slots (the receiver, for a method, is implicit and
+    /// NOT listed here — it is the base of the `.attr` access). Most
+    /// rows pass `EcoParam::Value(Ty)`; ADR-0073 callback slots use
+    /// `EcoParam::Callback(FnTy)`.
+    pub params: Vec<EcoParam>,
     /// Return type.
     pub ret: Ty,
     /// `@py_compat` tier (Q6).
     pub tier: PyCompatTier,
+}
+
+impl EcoSig {
+    /// Helper for the common all-`Value` case — builds an `EcoSig`
+    /// from a flat `Vec<Ty>` so existing manifest rows stay terse.
+    fn from_values(
+        runtime_symbol: &'static str,
+        params: Vec<Ty>,
+        ret: Ty,
+        tier: PyCompatTier,
+    ) -> Self {
+        Self {
+            runtime_symbol,
+            params: params.into_iter().map(EcoParam::Value).collect(),
+            ret,
+            tier,
+        }
+    }
 }
 
 /// Resolve a module-level free function `<module>.<fn>` (e.g.
@@ -147,12 +257,12 @@ pub struct EcoSig {
 #[must_use]
 pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
     match (module, func) {
-        ("den", "connect") => Some(EcoSig {
-            runtime_symbol: "__cobrust_den_connect",
-            params: vec![Ty::Str],
-            ret: den_connection_ty(),
-            tier: PyCompatTier::Strict,
-        }),
+        ("den", "connect") => Some(EcoSig::from_values(
+            "__cobrust_den_connect",
+            vec![Ty::Str],
+            den_connection_ty(),
+            PyCompatTier::Strict,
+        )),
         // ADR-0072 second-module generalization — `nest` (TOML, the
         // rebrand of `tomli`). Pure value-in-value-out (`Str → Str`):
         // parses the TOML source and returns its canonical JSON
@@ -161,12 +271,12 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
         // Tier `Semantic` — nest produces a JSON canonicalization of
         // CPython `tomllib`'s parse output (behaviorally equivalent;
         // not a bit-for-bit CPython parity surface).
-        ("nest", "loads_str") => Some(EcoSig {
-            runtime_symbol: "__cobrust_nest_loads_str",
-            params: vec![Ty::Str],
-            ret: Ty::Str,
-            tier: PyCompatTier::Semantic,
-        }),
+        ("nest", "loads_str") => Some(EcoSig::from_values(
+            "__cobrust_nest_loads_str",
+            vec![Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
         // ADR-0072 third-module generalization — `strike` (HTTP client,
         // the rebrand of `requests`). Pairs handle-pattern (Response,
         // like `den.Connection`/`Cursor`) with free-function entrypoints
@@ -174,18 +284,18 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
         // not a bit-for-bit parity surface (timing, headers ordering,
         // connection-pool side effects); behaviorally equivalent for
         // the supported verb/method set.
-        ("strike", "get") => Some(EcoSig {
-            runtime_symbol: "__cobrust_strike_get",
-            params: vec![Ty::Str],
-            ret: strike_response_ty(),
-            tier: PyCompatTier::Semantic,
-        }),
-        ("strike", "post") => Some(EcoSig {
-            runtime_symbol: "__cobrust_strike_post",
-            params: vec![Ty::Str, Ty::Str],
-            ret: strike_response_ty(),
-            tier: PyCompatTier::Semantic,
-        }),
+        ("strike", "get") => Some(EcoSig::from_values(
+            "__cobrust_strike_get",
+            vec![Ty::Str],
+            strike_response_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("strike", "post") => Some(EcoSig::from_values(
+            "__cobrust_strike_post",
+            vec![Ty::Str, Ty::Str],
+            strike_response_ty(),
+            PyCompatTier::Semantic,
+        )),
         // ADR-0072 fourth-module generalization — `scale` (msgpack,
         // the rebrand of `msgpack-python`). Pure value-in-value-out
         // (`Str → Str`) for the first proof — the JSON-string-in /
@@ -199,18 +309,18 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
         // unpack output) but the str-rendering wrapper here is
         // Cobrust-specific (hex over the canonical msgpack bytes,
         // for a printable Str surface).
-        ("scale", "dumps_str") => Some(EcoSig {
-            runtime_symbol: "__cobrust_scale_dumps_str",
-            params: vec![Ty::Str],
-            ret: Ty::Str,
-            tier: PyCompatTier::Semantic,
-        }),
-        ("scale", "loads_str") => Some(EcoSig {
-            runtime_symbol: "__cobrust_scale_loads_str",
-            params: vec![Ty::Str],
-            ret: Ty::Str,
-            tier: PyCompatTier::Semantic,
-        }),
+        ("scale", "dumps_str") => Some(EcoSig::from_values(
+            "__cobrust_scale_dumps_str",
+            vec![Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        ("scale", "loads_str") => Some(EcoSig::from_values(
+            "__cobrust_scale_loads_str",
+            vec![Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
         // ADR-0072 fifth-module generalization — `molt` (datetime,
         // the rebrand of `python-dateutil`). Handle-pattern (DateTime,
         // like `den.Connection`/`Cursor`) with free-function
@@ -218,12 +328,32 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
         // datetime parsing / formatting variants (ISO-8601 vs Python
         // strftime defaults vs locale) are behavior-equivalent rather
         // than bit-for-bit CPython parity.
-        ("molt", "now") => Some(EcoSig {
-            runtime_symbol: "__cobrust_molt_now",
-            params: vec![],
-            ret: molt_datetime_ty(),
-            tier: PyCompatTier::Semantic,
-        }),
+        ("molt", "now") => Some(EcoSig::from_values(
+            "__cobrust_molt_now",
+            vec![],
+            molt_datetime_ty(),
+            PyCompatTier::Semantic,
+        )),
+        // ADR-0073 — `pit` (Flask, web-server) ecosystem-module wiring.
+        // First proof exposes the trio sufficient to register a route and
+        // serve it on an ephemeral port:
+        // - `pit.App()`                — construct an empty App.
+        // - `pit.text_response(i, s)`  — build a Response with `i` status
+        //                                and `s` as the text body.
+        // The handle methods (`App.route`, `App.serve_in_background`) are
+        // wired in `lookup_handle_method`.
+        ("pit", "App") => Some(EcoSig::from_values(
+            "__cobrust_pit_app_new",
+            vec![],
+            pit_app_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("pit", "text_response") => Some(EcoSig::from_values(
+            "__cobrust_pit_text_response",
+            vec![Ty::Int, Ty::Str],
+            pit_response_ty(),
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -239,21 +369,21 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
         return None;
     };
     match (*id, method) {
-        (DEN_CONNECTION_ADT, "execute") => Some(EcoSig {
-            runtime_symbol: "__cobrust_den_connection_execute",
+        (DEN_CONNECTION_ADT, "execute") => Some(EcoSig::from_values(
+            "__cobrust_den_connection_execute",
             // Receiver is implicit; the explicit param is the SQL str.
-            params: vec![Ty::Str],
-            ret: den_cursor_ty(),
-            tier: PyCompatTier::Strict,
-        }),
-        (DEN_CURSOR_ADT, "fetchall") => Some(EcoSig {
-            runtime_symbol: "__cobrust_den_cursor_fetchall",
+            vec![Ty::Str],
+            den_cursor_ty(),
+            PyCompatTier::Strict,
+        )),
+        (DEN_CURSOR_ADT, "fetchall") => Some(EcoSig::from_values(
+            "__cobrust_den_cursor_fetchall",
             // First proof: fetchall renders the rows to a `str`
             // (ADR-0072 §4; row→list[tuple] is the immediate follow-up).
-            params: vec![],
-            ret: Ty::Str,
-            tier: PyCompatTier::Strict,
-        }),
+            vec![],
+            Ty::Str,
+            PyCompatTier::Strict,
+        )),
         // ADR-0072 third-module generalization — `strike.Response`
         // methods. All borrow the receiver; `status_code` returns an
         // i64 (u16 widened to i64 at the C-ABI boundary); `text`/`json`
@@ -261,42 +391,78 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
         // returns the canonicalized JSON rendering of the body (mirrors
         // den's `fetchall() -> str` first-proof rendering shape; a
         // structured-value surface is a tracked follow-up).
-        (STRIKE_RESPONSE_ADT, "text") => Some(EcoSig {
-            runtime_symbol: "__cobrust_strike_response_text",
-            params: vec![],
-            ret: Ty::Str,
-            tier: PyCompatTier::Semantic,
-        }),
-        (STRIKE_RESPONSE_ADT, "status_code") => Some(EcoSig {
-            runtime_symbol: "__cobrust_strike_response_status_code",
-            params: vec![],
-            ret: Ty::Int,
-            tier: PyCompatTier::Semantic,
-        }),
-        (STRIKE_RESPONSE_ADT, "json") => Some(EcoSig {
-            runtime_symbol: "__cobrust_strike_response_json",
-            params: vec![],
-            ret: Ty::Str,
-            tier: PyCompatTier::Semantic,
-        }),
+        (STRIKE_RESPONSE_ADT, "text") => Some(EcoSig::from_values(
+            "__cobrust_strike_response_text",
+            vec![],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        (STRIKE_RESPONSE_ADT, "status_code") => Some(EcoSig::from_values(
+            "__cobrust_strike_response_status_code",
+            vec![],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (STRIKE_RESPONSE_ADT, "json") => Some(EcoSig::from_values(
+            "__cobrust_strike_response_json",
+            vec![],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
         // ADR-0072 fifth-module generalization — `molt.DateTime`
         // methods. Both borrow the receiver; `isoformat` allocates a
         // fresh Cobrust `Str` (RFC3339 rendering — the canonical
         // ISO-8601 subset Python's `datetime.isoformat()` produces);
         // `unix_timestamp` returns an i64 (seconds since the UNIX
         // epoch in UTC).
-        (MOLT_DATETIME_ADT, "isoformat") => Some(EcoSig {
-            runtime_symbol: "__cobrust_molt_datetime_isoformat",
-            params: vec![],
-            ret: Ty::Str,
+        (MOLT_DATETIME_ADT, "isoformat") => Some(EcoSig::from_values(
+            "__cobrust_molt_datetime_isoformat",
+            vec![],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        (MOLT_DATETIME_ADT, "unix_timestamp") => Some(EcoSig::from_values(
+            "__cobrust_molt_datetime_unix_timestamp",
+            vec![],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        // ADR-0073 — `pit.App` handle methods.
+        //
+        // `app.route(method, path, handler)` is the load-bearing
+        // callback site: the 3rd parameter is an `EcoParam::Callback`
+        // whose `FnTy` is `fn(pit.Request) -> pit.Response`. The MIR
+        // lowering emits `Constant::FnRef(def_id)` for this slot and
+        // codegen materialises the fn pointer via `function_ids`.
+        //
+        // `app.serve_in_background(host, port)` consumes the App via
+        // `std::mem::take` in the trampoline (the empty `App::default()`
+        // that replaces it is still safe to `_drop` later), returning a
+        // boxed `ServerHandle` whose drop aborts the server task.
+        //
+        // `route` returns `Ty::None` (NOT another App handle) to avoid
+        // double-drop on the `let app2 = app.route(...)` chaining form —
+        // the trampoline mutates the receiver in place; returning the
+        // same pointer through a second binding would have both `app`
+        // and `app2` schedule `__cobrust_pit_app_drop` at scope exit on
+        // the same box. The canonical .cb shape is therefore
+        // `let _ = app.route("GET", "/x", handler)` (Ty::None discard).
+        (PIT_APP_ADT, "route") => Some(EcoSig {
+            runtime_symbol: "__cobrust_pit_app_route",
+            params: vec![
+                EcoParam::Value(Ty::Str),
+                EcoParam::Value(Ty::Str),
+                EcoParam::Callback(pit_handler_fn_ty()),
+            ],
+            ret: Ty::None,
             tier: PyCompatTier::Semantic,
         }),
-        (MOLT_DATETIME_ADT, "unix_timestamp") => Some(EcoSig {
-            runtime_symbol: "__cobrust_molt_datetime_unix_timestamp",
-            params: vec![],
-            ret: Ty::Int,
-            tier: PyCompatTier::Semantic,
-        }),
+        (PIT_APP_ADT, "serve_in_background") => Some(EcoSig::from_values(
+            "__cobrust_pit_app_serve_in_background",
+            vec![Ty::Str, Ty::Int],
+            pit_server_handle_ty(),
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -307,12 +473,25 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
 /// `den.attr` accesses resolve against the manifest.
 #[must_use]
 pub fn is_ecosystem_module(name: &str) -> bool {
-    matches!(name, "den" | "nest" | "strike" | "scale" | "molt")
+    matches!(name, "den" | "nest" | "strike" | "scale" | "molt" | "pit")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test helper: extract the `Ty` from a `Value` slot, panicking on
+    /// `Callback` (these tests assert pre-ADR-0073 manifest rows whose
+    /// every slot is a `Value`).
+    fn value_tys(params: &[EcoParam]) -> Vec<Ty> {
+        params
+            .iter()
+            .map(|p| match p {
+                EcoParam::Value(t) => t.clone(),
+                EcoParam::Callback(_) => panic!("expected Value, got Callback"),
+            })
+            .collect()
+    }
 
     #[test]
     fn reserved_handle_ids_are_recognized() {
@@ -338,7 +517,7 @@ mod tests {
     fn connect_signature_returns_connection_handle() {
         let sig = lookup_module_fn("den", "connect").expect("den.connect in manifest");
         assert_eq!(sig.runtime_symbol, "__cobrust_den_connect");
-        assert_eq!(sig.params, vec![Ty::Str]);
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str]);
         assert_eq!(sig.ret, den_connection_ty());
         assert_eq!(sig.tier, PyCompatTier::Strict);
     }
@@ -354,7 +533,7 @@ mod tests {
         let sig =
             lookup_handle_method(&den_connection_ty(), "execute").expect("Connection.execute");
         assert_eq!(sig.runtime_symbol, "__cobrust_den_connection_execute");
-        assert_eq!(sig.params, vec![Ty::Str]);
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str]);
         assert_eq!(sig.ret, den_cursor_ty());
     }
 
@@ -393,7 +572,7 @@ mod tests {
     fn nest_loads_str_signature_is_str_to_str() {
         let sig = lookup_module_fn("nest", "loads_str").expect("nest.loads_str in manifest");
         assert_eq!(sig.runtime_symbol, "__cobrust_nest_loads_str");
-        assert_eq!(sig.params, vec![Ty::Str]);
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str]);
         assert_eq!(sig.ret, Ty::Str);
         assert_eq!(sig.tier, PyCompatTier::Semantic);
     }
@@ -436,7 +615,7 @@ mod tests {
     fn strike_get_signature_returns_response_handle() {
         let sig = lookup_module_fn("strike", "get").expect("strike.get in manifest");
         assert_eq!(sig.runtime_symbol, "__cobrust_strike_get");
-        assert_eq!(sig.params, vec![Ty::Str]);
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str]);
         assert_eq!(sig.ret, strike_response_ty());
         assert_eq!(sig.tier, PyCompatTier::Semantic);
     }
@@ -445,7 +624,7 @@ mod tests {
     fn strike_post_signature_takes_url_and_body() {
         let sig = lookup_module_fn("strike", "post").expect("strike.post in manifest");
         assert_eq!(sig.runtime_symbol, "__cobrust_strike_post");
-        assert_eq!(sig.params, vec![Ty::Str, Ty::Str]);
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str, Ty::Str]);
         assert_eq!(sig.ret, strike_response_ty());
     }
 
@@ -496,7 +675,7 @@ mod tests {
     fn scale_dumps_str_signature_is_str_to_str() {
         let sig = lookup_module_fn("scale", "dumps_str").expect("scale.dumps_str in manifest");
         assert_eq!(sig.runtime_symbol, "__cobrust_scale_dumps_str");
-        assert_eq!(sig.params, vec![Ty::Str]);
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str]);
         assert_eq!(sig.ret, Ty::Str);
         assert_eq!(sig.tier, PyCompatTier::Semantic);
     }
@@ -505,7 +684,7 @@ mod tests {
     fn scale_loads_str_signature_is_str_to_str() {
         let sig = lookup_module_fn("scale", "loads_str").expect("scale.loads_str in manifest");
         assert_eq!(sig.runtime_symbol, "__cobrust_scale_loads_str");
-        assert_eq!(sig.params, vec![Ty::Str]);
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str]);
         assert_eq!(sig.ret, Ty::Str);
         assert_eq!(sig.tier, PyCompatTier::Semantic);
     }
@@ -588,5 +767,119 @@ mod tests {
     #[test]
     fn unknown_molt_fn_is_none() {
         assert!(lookup_module_fn("molt", "nope").is_none());
+    }
+
+    // ADR-0073 — `pit` (Flask, web-server). First module with a
+    // callback-typed parameter slot.
+
+    #[test]
+    fn pit_is_a_known_module() {
+        assert!(is_ecosystem_module("pit"));
+    }
+
+    #[test]
+    fn pit_app_handle_id_is_in_reserved_fifth_block() {
+        assert!(is_ecosystem_handle(PIT_APP_ADT));
+        assert!(is_ecosystem_handle(PIT_REQUEST_ADT));
+        assert!(is_ecosystem_handle(PIT_RESPONSE_ADT));
+        assert!(is_ecosystem_handle(PIT_SERVER_HANDLE_ADT));
+        const _: () = {
+            assert!(PIT_APP_ADT.0 >= ECO_ADT_BASE + 0x400);
+            assert!(PIT_SERVER_HANDLE_ADT.0 < ECO_ADT_BASE + 0x500);
+        };
+    }
+
+    #[test]
+    fn pit_handle_drop_symbols_resolve() {
+        assert_eq!(
+            handle_drop_symbol(PIT_APP_ADT),
+            Some("__cobrust_pit_app_drop")
+        );
+        assert_eq!(
+            handle_drop_symbol(PIT_RESPONSE_ADT),
+            Some("__cobrust_pit_response_drop")
+        );
+        assert_eq!(
+            handle_drop_symbol(PIT_SERVER_HANDLE_ADT),
+            Some("__cobrust_pit_server_handle_drop")
+        );
+        // ADR-0073 §2 D6 — Request is Rust-owned, never dropped from
+        // `.cb`. The drop pass therefore must NOT schedule a foreign drop
+        // for a `pit.Request` local.
+        assert_eq!(handle_drop_symbol(PIT_REQUEST_ADT), None);
+    }
+
+    #[test]
+    fn pit_app_constructor_returns_app() {
+        let sig = lookup_module_fn("pit", "App").expect("pit.App in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_pit_app_new");
+        assert!(sig.params.is_empty());
+        assert_eq!(sig.ret, pit_app_ty());
+    }
+
+    #[test]
+    fn pit_text_response_takes_status_and_body() {
+        let sig = lookup_module_fn("pit", "text_response").expect("pit.text_response in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_pit_text_response");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Int, Ty::Str]);
+        assert_eq!(sig.ret, pit_response_ty());
+    }
+
+    #[test]
+    fn pit_app_route_carries_callback_slot() {
+        let sig = lookup_handle_method(&pit_app_ty(), "route").expect("App.route");
+        assert_eq!(sig.runtime_symbol, "__cobrust_pit_app_route");
+        assert_eq!(sig.params.len(), 3);
+        // First two slots are Str values; third is the Callback. Use
+        // explicit-variant matches over wildcards so a future EcoParam
+        // variant doesn't silently widen the test's intent.
+        match &sig.params[0] {
+            EcoParam::Value(Ty::Str) => {}
+            EcoParam::Value(other) => {
+                panic!("first param must be Value(Str); got Value({other:?})")
+            }
+            EcoParam::Callback(_) => panic!("first param must be Value(Str), not Callback"),
+        }
+        match &sig.params[1] {
+            EcoParam::Value(Ty::Str) => {}
+            EcoParam::Value(other) => {
+                panic!("second param must be Value(Str); got Value({other:?})")
+            }
+            EcoParam::Callback(_) => panic!("second param must be Value(Str), not Callback"),
+        }
+        match &sig.params[2] {
+            EcoParam::Callback(fn_ty) => {
+                assert_eq!(fn_ty.positional, vec![pit_request_ty()]);
+                assert_eq!(*fn_ty.return_ty, pit_response_ty());
+            }
+            EcoParam::Value(other) => panic!("third param must be Callback; got Value({other:?})"),
+        }
+        // Returns `Ty::None` (not App) so `let _ = app.route(...)` is
+        // the canonical single-binding form, dodging the double-drop
+        // hazard from a hypothetical `let app2 = app.route(...)`
+        // (route's trampoline mutates the receiver in place; the same
+        // pointer flowing into two drop-eligible locals would
+        // double-free at scope exit).
+        assert_eq!(sig.ret, Ty::None);
+    }
+
+    #[test]
+    fn pit_app_serve_in_background_takes_host_and_port() {
+        let sig = lookup_handle_method(&pit_app_ty(), "serve_in_background")
+            .expect("App.serve_in_background");
+        assert_eq!(sig.runtime_symbol, "__cobrust_pit_app_serve_in_background");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str, Ty::Int]);
+        assert_eq!(sig.ret, pit_server_handle_ty());
+    }
+
+    #[test]
+    fn pit_request_has_no_methods_today() {
+        // ADR-0073 §5 / first proof: the .cb handler receives a Request
+        // and returns a Response; reading Request fields (path/method/
+        // body) lands in a paired follow-up sprint along with the borrow
+        // shims. The handler can still ignore the Request and emit a
+        // canned Response (`pit.text_response(200, "pong")`) — the
+        // "pong" first proof.
+        assert!(lookup_handle_method(&pit_request_ty(), "path").is_none());
     }
 }

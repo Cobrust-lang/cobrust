@@ -252,6 +252,25 @@ pub enum TypeErrorCb {
         suggestion: Option<String>,
     },
 
+    /// ADR-0073 — ecosystem callback slot took a non-fn-name shape.
+    /// Mirrors `TypeError::CallbackArgMustBeFnName { span, suggestion }`.
+    CallbackArgMustBeFnName {
+        span: Span,
+        suggestion: Option<String>,
+    },
+
+    /// ADR-0073 — ecosystem callback slot took a fn name whose
+    /// signature does not unify with the manifest `FnTy`. Mirrors
+    /// `TypeError::CallbackSignatureMismatch { expected: Ty, actual: Ty, span, suggestion }`
+    /// (Ty payloads dense-packed as `i64` handles per the ADR-0055b
+    /// arena workaround; the Rust side carries full `Ty`).
+    CallbackSignatureMismatch {
+        expected: i64,
+        actual: i64,
+        span: Span,
+        suggestion: Option<String>,
+    },
+
     /// Composite error container — flat list of errors.
     ///
     /// ADR-0055b §3: `Multiple(list[TypeError])` — the only recursive
@@ -488,6 +507,25 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 .map(|e| type_error_cb_from_rust(e, arena))
                 .collect(),
         ),
+        // ADR-0073 callback-slot mirrors.
+        TypeError::CallbackArgMustBeFnName { span, suggestion } => {
+            TypeErrorCb::CallbackArgMustBeFnName {
+                span: *span,
+                suggestion: opt_string(*suggestion),
+            }
+        }
+        TypeError::CallbackSignatureMismatch {
+            span, suggestion, ..
+        } => {
+            let expected = i64::from(arena.fresh_ty_payload_id());
+            let actual = i64::from(arena.fresh_ty_payload_id());
+            TypeErrorCb::CallbackSignatureMismatch {
+                expected,
+                actual,
+                span: *span,
+                suggestion: opt_string(*suggestion),
+            }
+        }
     }
 }
 
@@ -591,7 +629,12 @@ impl Canonicalize for TypeErrorCb {
             | TypeErrorCb::ReturnOutsideFn { .. }
             | TypeErrorCb::YieldOutsideFn { .. }
             | TypeErrorCb::DictSpreadNotSupported { .. }
-            | TypeErrorCb::BorrowOfNonPlace { .. } => vec![],
+            | TypeErrorCb::BorrowOfNonPlace { .. }
+            // ADR-0073 callback-slot variants — mirror the Rust-side
+            // payload-free canonicalization (FnTy elided per parity
+            // §6 risk).
+            | TypeErrorCb::CallbackArgMustBeFnName { .. }
+            | TypeErrorCb::CallbackSignatureMismatch { .. } => vec![],
         };
         CanonicalKey::node(variant, children)
     }
@@ -761,6 +804,25 @@ impl std::fmt::Display for TypeErrorCb {
                     "method `{method_name}` not found on `{type_name}` at {span}"
                 )
             }
+            TypeErrorCb::CallbackArgMustBeFnName { span, .. } => {
+                write!(
+                    f,
+                    "callback argument must be a top-level `fn` name at {span}"
+                )
+            }
+            TypeErrorCb::CallbackSignatureMismatch {
+                expected,
+                actual,
+                span,
+                ..
+            } => {
+                write!(
+                    f,
+                    "callback signature mismatch: expected `{}`, found `{}` at {span}",
+                    handle_to_ty_display(*expected),
+                    handle_to_ty_display(*actual)
+                )
+            }
         }
     }
 }
@@ -830,5 +892,7 @@ pub fn type_error_cb_variant_name(err: &TypeErrorCb) -> &'static str {
         TypeErrorCb::Multiple(_) => "Multiple",
         TypeErrorCb::BorrowOfNonPlace { .. } => "BorrowOfNonPlace",
         TypeErrorCb::UnknownMethod { .. } => "UnknownMethod",
+        TypeErrorCb::CallbackArgMustBeFnName { .. } => "CallbackArgMustBeFnName",
+        TypeErrorCb::CallbackSignatureMismatch { .. } => "CallbackSignatureMismatch",
     }
 }

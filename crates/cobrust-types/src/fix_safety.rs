@@ -170,7 +170,9 @@ pub fn type_error_suggestion_text(err: &TypeError) -> Option<&'static str> {
         | NotHashable { suggestion, .. }
         | DictSpreadNotSupported { suggestion, .. }
         | BorrowOfNonPlace { suggestion, .. }
-        | UnknownMethod { suggestion, .. } => *suggestion,
+        | UnknownMethod { suggestion, .. }
+        | CallbackArgMustBeFnName { suggestion, .. }
+        | CallbackSignatureMismatch { suggestion, .. } => *suggestion,
         Multiple(_) => None,
     }
 }
@@ -227,6 +229,10 @@ pub fn type_error_fix_safety(err: &TypeError) -> FixSafety {
         BorrowOfNonPlace { .. } => FixSafety::LocalEdit,
         // Method name typo — call-site only.
         UnknownMethod { .. } => FixSafety::LocalEdit,
+        // ADR-0073 — callback shape / signature mismatch. Fix is a local
+        // rewrite (define the handler at module scope; change the
+        // declared signature). No semantics carry-over to worry about.
+        CallbackArgMustBeFnName { .. } | CallbackSignatureMismatch { .. } => FixSafety::LocalEdit,
         // Multiple — children carry their own tiers; the aggregate has no
         // singular safety classification.
         Multiple(_) => FixSafety::RequiresHumanReview,

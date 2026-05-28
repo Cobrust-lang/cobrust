@@ -2098,6 +2098,15 @@ impl Ctx {
     /// Arity- + arg-type-check an [`crate::ecosystem::EcoSig`] against a
     /// call's positional `args`, returning the signature's return type.
     /// The receiver (for a method) is implicit and not in `sig.params`.
+    ///
+    /// ADR-0073 §2 D1+D8 — parameter slots are now `EcoParam` (either
+    /// `Value(Ty)` — every den/nest/strike/scale/molt row plus the
+    /// non-callback pit slots — or `Callback(FnTy)` for the
+    /// `app.route(method, path, handler)` callback slot). `Value` slots
+    /// dispatch through the existing `unify_call_arg` path; `Callback`
+    /// slots require the source argument to be a top-level `fn` NAME
+    /// (no closures, no fn-typed locals, no call-results) whose
+    /// signature unifies with the embedded `FnTy`.
     fn check_eco_sig(
         &mut self,
         sig: &crate::ecosystem::EcoSig,
@@ -2120,10 +2129,120 @@ impl Ctx {
             });
         }
         for (a, p) in pos_args.iter().zip(sig.params.iter()) {
-            let at = self.synth_expr(a)?;
-            self.unify_call_arg(p, &at, a.span)?;
+            match p {
+                crate::ecosystem::EcoParam::Value(expected) => {
+                    let at = self.synth_expr(a)?;
+                    self.unify_call_arg(expected, &at, a.span)?;
+                }
+                crate::ecosystem::EcoParam::Callback(expected_fn) => {
+                    self.check_callback_arg(a, expected_fn)?;
+                }
+            }
         }
         Ok(sig.ret.clone())
+    }
+
+    /// ADR-0073 §2 D1+D8 — type-check a `Callback` parameter slot.
+    ///
+    /// The argument MUST be a bare `ExprKind::Name(rn)` whose
+    /// `rn.kind == DefKind::Fn` (a top-level fn defined in this
+    /// program). The recorded `Ty::Fn(actual)` must unify with the
+    /// manifest-declared `expected` `FnTy`. Every other shape
+    /// (lambda, call-result, non-fn name, parenthesized, fn-typed
+    /// local) is rejected with a fix-suggesting diagnostic per §2.5
+    /// Direction B.
+    fn check_callback_arg(
+        &mut self,
+        arg: &Expr,
+        expected: &crate::ty::FnTy,
+    ) -> Result<(), TypeError> {
+        // Shape gate: must be a bare Name resolving to a top-level fn.
+        let rn = match &arg.kind {
+            ExprKind::Name(rn) => rn,
+            _ => {
+                return Err(TypeError::CallbackArgMustBeFnName {
+                    span: arg.span,
+                    suggestion: Some(
+                        "callback slots accept only a top-level `fn` NAME — \
+                         define `fn handler(req: pit.Request) -> pit.Response: …` \
+                         at module scope and pass `handler` (no lambda, no `f(...)`)",
+                    ),
+                });
+            }
+        };
+        if !matches!(rn.kind, cobrust_hir::DefKind::Fn) {
+            return Err(TypeError::CallbackArgMustBeFnName {
+                span: arg.span,
+                suggestion: Some(
+                    "callback slots accept only a top-level `fn` NAME, not a let / param / \
+                     import alias — define `fn handler(...) -> ...: …` at module scope",
+                ),
+            });
+        }
+        // Look up the resolved fn signature. ADR-0073 §2 D1 — reuse `Ty::Fn`.
+        let actual = self
+            .lookup_def(rn.def_id)
+            .unwrap_or_else(|| self.fresh_var());
+        let actual = self.subst.apply(&actual);
+        let actual_fn = match &actual {
+            Ty::Fn(fn_ty) => fn_ty.clone(),
+            _ => {
+                return Err(TypeError::CallbackArgMustBeFnName {
+                    span: arg.span,
+                    suggestion: Some(
+                        "the resolved binding is not a function — pass a top-level \
+                         `fn handler(...) -> ...: …` name",
+                    ),
+                });
+            }
+        };
+        // Compare arity + positional shape + return type.
+        if actual_fn.positional.len() != expected.positional.len()
+            || !actual_fn.named.is_empty()
+            || actual_fn.var_positional.is_some()
+            || actual_fn.var_keyword.is_some()
+        {
+            return Err(TypeError::CallbackSignatureMismatch {
+                expected: Ty::Fn(expected.clone()),
+                actual: actual.clone(),
+                span: arg.span,
+                suggestion: Some(
+                    "the handler arity / shape doesn't match — declare exactly the \
+                     positional parameters the callback slot expects",
+                ),
+            });
+        }
+        // Unify positional types + return type via the normal path; on
+        // mismatch re-emit as a CallbackSignatureMismatch so the agent
+        // sees the callback-specific phrasing.
+        for (e, a) in expected.positional.iter().zip(actual_fn.positional.iter()) {
+            if self.unify_call_arg(e, a, arg.span).is_err() {
+                return Err(TypeError::CallbackSignatureMismatch {
+                    expected: Ty::Fn(expected.clone()),
+                    actual: actual.clone(),
+                    span: arg.span,
+                    suggestion: Some(
+                        "handler parameter type doesn't match — declare the parameter \
+                         with the type the callback slot expects",
+                    ),
+                });
+            }
+        }
+        if self
+            .unify_call_arg(&expected.return_ty, &actual_fn.return_ty, arg.span)
+            .is_err()
+        {
+            return Err(TypeError::CallbackSignatureMismatch {
+                expected: Ty::Fn(expected.clone()),
+                actual: actual.clone(),
+                span: arg.span,
+                suggestion: Some(
+                    "handler return type doesn't match — declare `-> pit.Response` (or \
+                     the type the callback slot expects)",
+                ),
+            });
+        }
+        Ok(())
     }
 
     fn synth_call(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
@@ -2569,6 +2688,19 @@ impl Ctx {
     fn lower_named_type(&self, s: &str) -> Ty {
         if let Some(t) = self.alias_map.get(s) {
             return t.clone();
+        }
+        // ADR-0073 — recognise dotted ecosystem-handle annotations so
+        // `fn handle_ping(req: pit.Request) -> pit.Response: …`
+        // lowers to the same `Ty::Adt` ids the manifest emits for
+        // method returns / callback FnTy slots. Without this the
+        // typechecker would lower `pit.Request` to a synthetic
+        // `Ty::Alias` and the callback-arg unification would fail.
+        match s {
+            "pit.App" => return crate::ecosystem::pit_app_ty(),
+            "pit.Request" => return crate::ecosystem::pit_request_ty(),
+            "pit.Response" => return crate::ecosystem::pit_response_ty(),
+            "pit.ServerHandle" => return crate::ecosystem::pit_server_handle_ty(),
+            _ => {}
         }
         match s {
             "bool" => Ty::Bool,

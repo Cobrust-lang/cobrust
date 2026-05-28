@@ -1897,18 +1897,14 @@ impl<'a> BodyBuilder<'a> {
                 let Some(sig) = cobrust_types::lookup_module_fn(rn.name.as_str(), name) else {
                     return Ok(None);
                 };
-                // Module fn: no receiver; args lowered (str args Copy).
-                let mut arg_ops = Vec::with_capacity(args.len());
-                for a in args {
-                    match a {
-                        CallArg::Positional(e)
-                        | CallArg::Keyword(_, e)
-                        | CallArg::StarArgs(e)
-                        | CallArg::StarStarKwargs(e) => {
-                            let op = self.lower_expr(e)?;
-                            arg_ops.push(upgrade_move_to_copy_for_str(self, op));
-                        }
-                    }
+                // Module fn: no receiver. Args lowered per param-kind:
+                // `Value` → normal lower + Str copy upgrade; `Callback`
+                // → `Constant::FnRef(def_id)` directly from the source
+                // `ExprKind::Name(rn)` (ADR-0073 §2 D2).
+                let pos_args = collect_positional_args(args);
+                let mut arg_ops = Vec::with_capacity(pos_args.len());
+                for (a, p) in pos_args.iter().zip(sig.params.iter()) {
+                    arg_ops.push(lower_eco_arg(self, a, p)?);
                 }
                 let op =
                     self.emit_ecosystem_call(sig.runtime_symbol, sig.ret.clone(), arg_ops, span);
@@ -1916,7 +1912,8 @@ impl<'a> BodyBuilder<'a> {
             }
         }
 
-        // Case 2: handle method (`conn.execute`, `cur.fetchall`).
+        // Case 2: handle method (`conn.execute`, `cur.fetchall`,
+        // `app.route`, `app.serve_in_background`).
         let base_ty = synth_expr_ty(self, base);
         if let Ty::Adt(id, _) = &base_ty {
             if cobrust_types::is_ecosystem_handle(*id) {
@@ -1928,18 +1925,11 @@ impl<'a> BodyBuilder<'a> {
                 // exit (ADR-0072 §5 risk 1).
                 let recv_op = self.lower_expr(base)?;
                 let recv_op = upgrade_move_to_copy_handle(recv_op);
-                let mut arg_ops = Vec::with_capacity(args.len() + 1);
+                let pos_args = collect_positional_args(args);
+                let mut arg_ops = Vec::with_capacity(pos_args.len() + 1);
                 arg_ops.push(recv_op);
-                for a in args {
-                    match a {
-                        CallArg::Positional(e)
-                        | CallArg::Keyword(_, e)
-                        | CallArg::StarArgs(e)
-                        | CallArg::StarStarKwargs(e) => {
-                            let op = self.lower_expr(e)?;
-                            arg_ops.push(upgrade_move_to_copy_for_str(self, op));
-                        }
-                    }
+                for (a, p) in pos_args.iter().zip(sig.params.iter()) {
+                    arg_ops.push(lower_eco_arg(self, a, p)?);
                 }
                 let op =
                     self.emit_ecosystem_call(sig.runtime_symbol, sig.ret.clone(), arg_ops, span);
@@ -2481,6 +2471,57 @@ fn un_to_mir(op: UnaryOp) -> UnOp {
 /// drop schedule handles freeing at the caller's scope exit.
 ///
 /// Constant operands (string literals etc.) are returned unchanged.
+/// Collect positional argument expressions from a `[CallArg]` slice.
+/// Keyword / *args / **kwargs args are filtered out — ecosystem calls
+/// (ADR-0072 / ADR-0073) accept positional args only.
+fn collect_positional_args(args: &[CallArg]) -> Vec<&Expr> {
+    args.iter()
+        .filter_map(|a| match a {
+            CallArg::Positional(e) => Some(e),
+            _ => None,
+        })
+        .collect()
+}
+
+/// ADR-0073 §2 D2 — lower one ecosystem-call argument per its declared
+/// [`cobrust_types::EcoParam`] kind.
+///
+/// - `Value(_)` slots use the existing path: `lower_expr` + Str
+///   copy-upgrade. The receiver-borrow upgrade for handle args is
+///   ecosystem-call-wide (the receiver itself, not the args).
+/// - `Callback(_)` slots emit `Operand::Constant(Constant::FnRef(rn.def_id.0))`
+///   directly from the source `ExprKind::Name(rn)`. The type-checker has
+///   already verified that the argument is a top-level `fn` name with a
+///   compatible signature ([`cobrust_types::check::Ctx::check_callback_arg`]),
+///   so the MIR lowering can assume that shape.
+fn lower_eco_arg(
+    b: &mut BodyBuilder<'_>,
+    arg: &Expr,
+    kind: &cobrust_types::EcoParam,
+) -> Result<Operand, MirError> {
+    match kind {
+        cobrust_types::EcoParam::Value(_) => {
+            let op = b.lower_expr(arg)?;
+            Ok(upgrade_move_to_copy_for_str(b, op))
+        }
+        cobrust_types::EcoParam::Callback(_) => {
+            // The typechecker pre-checked that `arg` is a bare
+            // `ExprKind::Name` whose `DefKind` is `Fn`. We mirror that
+            // pattern in defense-in-depth: any deviation surfaces as a
+            // codegen-time `MirError::UnsupportedExpr` (which the
+            // typechecker should have caught first).
+            match &arg.kind {
+                ExprKind::Name(rn) if rn.kind == DefKind::Fn => {
+                    Ok(Operand::Constant(Constant::FnRef(rn.def_id.0)))
+                }
+                _ => Err(MirError::Internal(
+                    "ecosystem callback slot expects a top-level `fn` NAME at MIR (ADR-0073 §2 D2 — the typechecker should have rejected this)".to_string(),
+                )),
+            }
+        }
+    }
+}
+
 fn upgrade_move_to_copy_for_str(b: &BodyBuilder<'_>, op: Operand) -> Operand {
     match op {
         Operand::Move(ref p) => {

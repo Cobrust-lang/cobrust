@@ -11,7 +11,13 @@ description = "Cobrust translation of Flask 3.0's sync web-server surface. Backe
 
 [lib]
 name = "pit"
-crate-type = ["rlib", "cdylib"]
+# ADR-0073 Q5/§4 — `staticlib` produces `libpit.a` for per-import
+# static linking by `cobrust build` (pit is the SIXTH module in the
+# proven ecosystem-import chain, first to carry a callback parameter).
+# `cdylib` stays for the PyO3 native module; `rlib` for in-workspace
+# Rust consumers + the cabi unit tests. cargo permits the three side
+# by side.
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [lints]
 workspace = true
@@ -38,3 +44,9 @@ pyo3 = { version = "0.24.2", features = ["extension-module"], optional = true }
 # In-process HTTP client for the L3 downstream gate — bind on
 # 127.0.0.1:0, serve, and round-trip with a real client.
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+# ADR-0073 §4 + Q5: the `cabi` shims declare the `__cobrust_str_*`
+# primitives `extern "C"` and bind them from `libcobrust_stdlib.a` at
+# the `cobrust build` link step (NO Rust-level production dependency).
+# For the in-crate `cabi` unit tests, link cobrust-stdlib's rlib as a
+# dev-dependency so those `extern "C"` decls resolve under `cargo test`.
+cobrust-stdlib = { path = "../cobrust-stdlib" }

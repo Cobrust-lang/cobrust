@@ -932,6 +932,30 @@ impl From<TypeError> for UserError {
                     col,
                 )
             }
+            // ADR-0073 §2 D1+D8 — callback parameter slot shape errors.
+            E::CallbackArgMustBeFnName { span, suggestion } => {
+                let (line, col) = span_to_line_col(span);
+                (
+                    "callback argument must be a top-level `fn` name".to_owned(),
+                    suggestion.map(str::to_owned),
+                    line,
+                    col,
+                )
+            }
+            E::CallbackSignatureMismatch {
+                expected,
+                actual,
+                span,
+                suggestion,
+            } => {
+                let (line, col) = span_to_line_col(span);
+                (
+                    format!("callback signature mismatch: expected `{expected}`, found `{actual}`"),
+                    suggestion.map(str::to_owned),
+                    line,
+                    col,
+                )
+            }
         };
         Self::Type {
             file: PathBuf::from("<source>"),

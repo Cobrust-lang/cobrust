@@ -236,4 +236,30 @@ pub enum TypeError {
         span: Span,
         suggestion: Option<&'static str>,
     },
+
+    /// ADR-0073 §2 D1+D8 — a `Callback` parameter slot at an ecosystem
+    /// call (`app.route("GET", "/x", handler)`) requires a top-level
+    /// `fn` NAME argument. The actual expression was something else
+    /// (lambda, call-result, fn-typed local, non-fn name). Per §2.5
+    /// Direction B the diagnostic prints the fix the LLM should
+    /// apply.
+    #[error("callback argument must be a top-level `fn` name at {span}")]
+    CallbackArgMustBeFnName {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
+
+    /// ADR-0073 §2 D1+D8 — a `Callback` parameter slot at an
+    /// ecosystem call took a top-level `fn` name, but its signature
+    /// does not unify with the manifest-declared callback shape (the
+    /// `expected` `FnTy`). The diagnostic carries the rendered
+    /// expected vs. actual `FnTy` so the LLM agent sees exactly how
+    /// to fix the handler signature.
+    #[error("callback signature mismatch: expected `{expected}`, found `{actual}` at {span}")]
+    CallbackSignatureMismatch {
+        expected: Ty,
+        actual: Ty,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 }

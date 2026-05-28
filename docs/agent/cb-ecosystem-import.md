@@ -1,10 +1,10 @@
 ---
 doc_kind: reference
 module_id: cb-ecosystem-import
-title: .cb ecosystem-import wiring (ADR-0072 — 5-module proof: den + nest + strike + scale + molt)
+title: .cb ecosystem-import wiring (ADR-0072 — 5 data modules; ADR-0073 — pit callback marshalling 6th module)
 last_verified_commit: HEAD
-relates_to: [adr:0072, adr:0019, adr:0028, adr:0050c, adr:0071]
-dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-strike, cobrust-scale, cobrust-molt, cobrust-cli]
+relates_to: [adr:0072, adr:0073, adr:0019, adr:0028, adr:0050c, adr:0071, adr:0034]
+dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-strike, cobrust-scale, cobrust-molt, cobrust-pit, cobrust-cli]
 ---
 
 # `.cb` ecosystem-import wiring — `import den` / `nest` / `strike` / `scale` / `molt` end-to-end
@@ -351,6 +351,90 @@ path should consult `is_ecosystem_module(base) && lookup_handle_method`
 to ADR-0072; not blocking the third-module proof (the no-annotation
 form works identically and is what real-LLM-written code tends to use,
 per CLAUDE.md §2.5 training-data-overlap).
+
+## ADR-0073 — `pit` first proof (the SIXTH module, FIRST with a callback)
+
+After the 5-module data-only generalization, `pit` (Flask web-server,
+ADR-0071 rebrand) brings the next qualitatively new pattern: a
+**callback parameter** crossing the C ABI. `App.route(method, path,
+handler)` takes a top-level `.cb` fn as its third argument; the
+codegen materialises the fn pointer via the `function_ids` table
+(ADR-0073 §2 D3) and the Rust trampoline transmutes it back into a
+`move |req| -> resp` closure satisfying axum's `Send + Sync + 'static`
+handler bound.
+
+### New machinery (ADR-0073 §4)
+
+- `cobrust-types/src/ecosystem.rs`: new `EcoParam { Value(Ty),
+  Callback(FnTy) }` enum; `EcoSig::params` migrated from `Vec<Ty>` to
+  `Vec<EcoParam>`. pit handles reserved in the FIFTH 256-slot AdtId
+  block (`0xE000_0400..0xE000_04FF`). 4 handle ids (App, Request,
+  Response, ServerHandle) + 6 drop symbols + 4 manifest rows
+  (`pit.App`, `pit.text_response`, `App.route`, `App.serve_in_background`).
+  `PIT_REQUEST_ADT` deliberately returns `None` from
+  `handle_drop_symbol` — Rust owns the Request box around each callback
+  invocation; the `.cb` side must not drop it (ADR-0073 §2 D6).
+- `cobrust-types/src/check.rs::check_eco_sig`: dispatches on `EcoParam`
+  per slot. `Callback(expected_fn)` requires the source arg to be a
+  bare `ExprKind::Name(rn)` whose `DefKind == Fn`; unifies the resolved
+  `Ty::Fn(actual)` against `expected_fn`. New TypeError variants
+  `CallbackArgMustBeFnName` + `CallbackSignatureMismatch`.
+- `cobrust-types/src/check.rs::lower_named_type`: recognises dotted
+  ecosystem-handle annotations (`pit.Request`, `pit.Response`, etc.)
+  so `fn handle(req: pit.Request) -> pit.Response: …` lowers to the
+  matching `Ty::Adt` ids the manifest emits.
+- `cobrust-mir/src/lower.rs::try_lower_ecosystem_call`: per-slot
+  dispatch via new `lower_eco_arg(b, arg, kind)` helper. `Callback`
+  slot extracts `rn.def_id.0` from the source `Name` and emits
+  `Operand::Constant(Constant::FnRef(def_id))` directly.
+- `cobrust-codegen/src/llvm_backend.rs:3876` (the ADR-0034-preserved
+  zero stub): now materialises `Constant::FnRef(id)` as
+  `function_ids[id].as_global_value().as_pointer_value()`. Unknown ids
+  (lambda placeholder `FnRef(0)`, await placeholder `FnRef(u32::MAX)`)
+  keep the legacy i64-zero stub for defense in depth.
+- `cobrust-codegen/src/llvm_backend.rs::declare_runtime_helpers`:
+  7 new `__cobrust_pit_*` extern decls — `app_new`, `text_response`,
+  `app_route` (4 args incl fn-ptr slot), `app_serve_in_background`,
+  `app_drop`, `response_drop`, `server_handle_drop`.
+- `cobrust-pit/src/cabi.rs` (NEW): the load-bearing trampoline. The
+  closure captures only the raw fn pointer (auto-`Send + Sync + Copy`),
+  satisfies `'static` because the `.cb` fn lives in the binary text
+  segment for the process lifetime (ADR-0073 §5 risk 1), and wraps
+  the callback in `std::panic::catch_unwind` to abort cleanly on
+  cross-boundary unwinding (ADR-0073 §3 Q5).
+- `cobrust-pit/Cargo.toml`: `staticlib` added to crate-type for
+  `libpit.a`; `cobrust-stdlib` as dev-dep for cabi unit-test linkage.
+- `cobrust-pit/build.rs` (NEW): macOS `-Wl,-undefined,dynamic_lookup`
+  for `__cobrust_str_*` extern resolution at PyO3 cdylib build time.
+- `cobrust-cli/src/build/intrinsics.rs::ecosystem_module_for_symbol`:
+  `__cobrust_pit_*` recognizer arm (one-line; the chain stays
+  module-agnostic otherwise).
+
+### `App.route` returns `Ty::None` (NOT App handle)
+
+The trampoline mutates the receiver in place; identity-returning the
+App pointer would alias it into a second drop-eligible local
+(`let app2 = app.route(...)`), causing `__cobrust_pit_app_drop` to
+fire twice at scope exit. The canonical .cb shape is
+`let _ = app.route("GET", "/x", handler)`.
+
+### Negative-callback corpus (ADR-0073 §5 R4 — ≥5 cases)
+
+`crates/cobrust-cli/tests/pit_pong_e2e.rs` ships 5 negatives:
+lambda / 0-arg fn / wrong-return / non-fn name / call-result — each
+prints either `CallbackArgMustBeFnName` or `CallbackSignatureMismatch`
+with a §2.5-B fix suggestion.
+
+### E2E (ADR-0073 §6 done-means)
+
+`crates/cobrust-cli/tests/pit_pong_e2e.rs::test_e2e_pit_pong_full_round_trip`:
+picks a free port, compiles + runs the .cb pong program as a subprocess,
+polls until the server binds, issues `GET /ping` via `reqwest::blocking`,
+asserts body == "pong" + status 200, then asserts `GET /missing` → 404.
+
+`cobrust-pit/src/cabi.rs::tests::trampoline_invokes_handler_and_drops_handles_once`:
+drives the trampoline directly (not through .cb), proving the
+transmute + closure-wrap + drop discipline in isolation.
 
 ## Constraints / follow-ups
 

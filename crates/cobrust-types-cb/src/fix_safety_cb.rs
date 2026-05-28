@@ -163,7 +163,12 @@ pub fn type_error_cb_fix_safety(err: &TypeErrorCb) -> FixSafetyCb {
         | ReturnOutsideFn { .. }
         | YieldOutsideFn { .. }
         | BorrowOfNonPlace { .. }
-        | UnknownMethod { .. } => FixSafetyCb::LocalEdit,
+        | UnknownMethod { .. }
+        // ADR-0073 callback-slot variants — same LocalEdit safety tier
+        // as the Rust side (define handler at module scope; change the
+        // declared signature; both are local rewrites).
+        | CallbackArgMustBeFnName { .. }
+        | CallbackSignatureMismatch { .. } => FixSafetyCb::LocalEdit,
         ImplicitTruthiness { .. } | MutableDefault { .. } | NotHashable { .. } => {
             FixSafetyCb::BehaviorPreserving
         }

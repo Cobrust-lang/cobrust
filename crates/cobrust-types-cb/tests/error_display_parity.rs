@@ -351,6 +351,8 @@ impl SuggestionText for TypeError {
             TypeError::Multiple(_) => None,
             TypeError::BorrowOfNonPlace { suggestion, .. } => suggestion.as_deref(),
             TypeError::UnknownMethod { suggestion, .. } => suggestion.as_deref(),
+            TypeError::CallbackArgMustBeFnName { suggestion, .. } => suggestion.as_deref(),
+            TypeError::CallbackSignatureMismatch { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }
@@ -383,6 +385,8 @@ impl SuggestionText for TypeErrorCb {
             TypeErrorCb::Multiple(_) => None,
             TypeErrorCb::BorrowOfNonPlace { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::UnknownMethod { suggestion, .. } => suggestion.as_deref(),
+            TypeErrorCb::CallbackArgMustBeFnName { suggestion, .. } => suggestion.as_deref(),
+            TypeErrorCb::CallbackSignatureMismatch { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }

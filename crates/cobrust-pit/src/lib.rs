@@ -73,6 +73,13 @@
 //!   (constitution §2.2 — `Result<T, E>`, never exceptions).
 
 mod app;
+// ADR-0073 — the `.cb`-callable C-ABI surface. `pub` so the
+// `__cobrust_pit_*` `#[no_mangle]` symbols are exported by the
+// `staticlib` crate output for `cobrust build` to link against, and
+// so the `DROP_COUNT` / `drop_count` test instruments are reachable
+// from the integration suite (`crates/cobrust-cli/tests/
+// pit_pong_e2e.rs`).
+pub mod cabi;
 mod error;
 mod request;
 mod response;

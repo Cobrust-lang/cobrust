@@ -2589,6 +2589,51 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0073: pit ecosystem-module C-ABI binding ------------
+        // `pit` (Flask, web-server). First ecosystem module that takes
+        // a CALLBACK in one of its method args (App.route's 4th param).
+        // The callback crosses as a raw fn pointer (`*const c_void` at
+        // the LLVM IR level it's `ptr`); the trampoline in
+        // `cobrust-pit/src/cabi.rs::__cobrust_pit_app_route` transmutes
+        // it to the fixed `unsafe extern "C" fn(*mut u8) -> *mut u8`
+        // shape and wraps it in a `move |req| { … }` closure satisfying
+        // axum's `Arc<dyn Fn + Send + Sync + 'static>` bound.
+        //
+        //   __cobrust_pit_app_new() -> *mut App
+        //   __cobrust_pit_text_response(status: i64, body: *mut Str) -> *mut Response
+        //   __cobrust_pit_app_route(
+        //       app: *mut App, method: *mut Str, path: *mut Str,
+        //       handler: *const c_void
+        //   ) -> *mut u8 = null   (Ty::None — discard channel; the
+        //                          route() effect is on `app` in place)
+        //   __cobrust_pit_app_serve_in_background(
+        //       app: *mut App, host: *mut Str, port: i64
+        //   ) -> *mut ServerHandle
+        //   __cobrust_pit_app_drop(app) -> void
+        //   __cobrust_pit_response_drop(resp) -> void
+        //   __cobrust_pit_server_handle_drop(handle) -> void
+        let pit_app_new_ty = ptr_ty.fn_type(&[], false);
+        let pit_text_response_ty = ptr_ty.fn_type(&[i64_ty.into(), ptr_ty.into()], false);
+        let pit_app_route_ty = ptr_ty.fn_type(
+            &[ptr_ty.into(), ptr_ty.into(), ptr_ty.into(), ptr_ty.into()],
+            false,
+        );
+        let pit_serve_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        let pit_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_pit_app_new", pit_app_new_ty, 0usize),
+            ("__cobrust_pit_text_response", pit_text_response_ty, 2),
+            ("__cobrust_pit_app_route", pit_app_route_ty, 4),
+            ("__cobrust_pit_app_serve_in_background", pit_serve_ty, 3),
+            ("__cobrust_pit_app_drop", pit_drop_ty, 1),
+            ("__cobrust_pit_response_drop", pit_drop_ty, 1),
+            ("__cobrust_pit_server_handle_drop", pit_drop_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
@@ -3873,7 +3918,31 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 let s = std::str::from_utf8(payload).unwrap_or("");
                 self.materialize_str_buffer(s)
             }
-            Constant::FnRef(_) => Ok(ctx.i64_type().const_zero().into()),
+            Constant::FnRef(id) => {
+                // ADR-0073 §2 D3 — materialise the user fn pointer as a
+                // first-class C-ABI pointer value. Pre-ADR-0073 this arm
+                // returned `i64 0` (the ADR-0034-preserved stub) because
+                // no MIR consumer materialised a fn pointer as a VALUE
+                // operand — `Terminator::Call` short-circuits via the
+                // `function_ids` lookup in `lower_call`. ADR-0073 lights
+                // up the value-operand path so ecosystem-callback args
+                // (`app.route("GET", "/x", handle_ping)`) cross the C
+                // ABI as a real fn-pointer value to the runtime
+                // trampoline.
+                //
+                // For an unknown id (lambda placeholder `FnRef(0)`,
+                // await placeholder `FnRef(u32::MAX)`) keep the legacy
+                // zero stub — those paths are not yet wired through to
+                // a real value-use site. The ADR-0073 callback path
+                // emits only ids registered in `function_ids` (because
+                // the typechecker rejects everything but a top-level
+                // fn name).
+                if let Some(func) = self.emitter.function_ids.get(id) {
+                    Ok(func.as_global_value().as_pointer_value().into())
+                } else {
+                    Ok(ctx.i64_type().const_zero().into())
+                }
+            }
         }
     }
 

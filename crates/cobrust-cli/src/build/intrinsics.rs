@@ -1348,6 +1348,11 @@ pub fn collect_ecosystem_modules(module: &Module) -> std::collections::BTreeSet<
 ///   msgpack-python; value pattern like `nest`).
 /// - `molt` — fifth-module generalization (datetime, rebrand of
 ///   python-dateutil; handle pattern like `den`/`strike`).
+/// - `pit` — sixth-module generalization (Flask web-server, ADR-0073;
+///   first module with a CALLBACK parameter slot — the `.cb`
+///   `app.route(method, path, handle_ping)` form lowers `handle_ping`
+///   to `Constant::FnRef(def_id)` and codegen materialises it as a
+///   real fn pointer via `function_ids`).
 ///
 /// New modules extend this table off the proven chain.
 fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
@@ -1361,6 +1366,8 @@ fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
         Some("scale")
     } else if sym.starts_with("__cobrust_molt_") {
         Some("molt")
+    } else if sym.starts_with("__cobrust_pit_") {
+        Some("pit")
     } else {
         None
     }

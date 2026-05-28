@@ -56,3 +56,9 @@ tokio = { workspace = true }
 # the test asserts the strike ecosystem-import chain round-trips
 # through a real HTTP stack without needing the network.
 cobrust-pit = { path = "../cobrust-pit", version = "=0.6.2" }
+# ADR-0073 first proof (pit pong E2E) — the `pit_pong_e2e` test
+# spawns the compiled `.cb` binary (which itself binds an axum server
+# via `pit::App::serve_in_background`) and issues real HTTP via
+# `reqwest::blocking` to assert the round-trip works. Mirrors the
+# `cobrust-pit` dev-dep on reqwest for its in-process test path.
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }

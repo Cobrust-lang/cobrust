@@ -414,7 +414,14 @@ impl Canonicalize for TypeError {
             | TypeError::ReturnOutsideFn { .. }
             | TypeError::YieldOutsideFn { .. }
             | TypeError::DictSpreadNotSupported { .. }
-            | TypeError::BorrowOfNonPlace { .. } => vec![],
+            | TypeError::BorrowOfNonPlace { .. }
+            // ADR-0073 callback-slot variants — also payload-free for
+            // parity canonicalization (the FnTy payload of
+            // CallbackSignatureMismatch is intentionally elided here;
+            // child keys would over-key on FnTy renderings that
+            // legitimately differ across runs).
+            | TypeError::CallbackArgMustBeFnName { .. }
+            | TypeError::CallbackSignatureMismatch { .. } => vec![],
         };
         CanonicalKey::node(variant, children)
     }
@@ -554,6 +561,9 @@ pub fn type_error_variant_name(err: &TypeError) -> &'static str {
         TypeError::Multiple(_) => "Multiple",
         TypeError::BorrowOfNonPlace { .. } => "BorrowOfNonPlace",
         TypeError::UnknownMethod { .. } => "UnknownMethod",
+        // ADR-0073 callback-slot variants.
+        TypeError::CallbackArgMustBeFnName { .. } => "CallbackArgMustBeFnName",
+        TypeError::CallbackSignatureMismatch { .. } => "CallbackSignatureMismatch",
     }
 }
 

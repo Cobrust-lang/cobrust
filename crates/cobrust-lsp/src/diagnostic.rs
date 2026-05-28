@@ -164,6 +164,12 @@ fn type_error_to_diagnostic_single(err: &TypeError, line_map: &LineMap) -> Diagn
         UnknownMethod {
             span, suggestion, ..
         } => (*span, *suggestion, "unknown-method"),
+        CallbackArgMustBeFnName { span, suggestion } => {
+            (*span, *suggestion, "callback-arg-must-be-fn-name")
+        }
+        CallbackSignatureMismatch {
+            span, suggestion, ..
+        } => (*span, *suggestion, "callback-signature-mismatch"),
         Multiple(_) => unreachable!("Multiple flattened by type_error_to_diagnostics"),
     };
     let range = span_to_lsp_range(&span, line_map);
