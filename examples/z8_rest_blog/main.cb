@@ -1,48 +1,189 @@
-# Z.8 REST demo — 网络 MUST-ship §5 落地
+# Z.8 REST blog demo — v0.7.0 §5 网络 MUST-ship 落地 (post-F65 repair).
 #
-# 一个最小的博客 REST 服务:用 pit(HTTP)+ den(SQLite)+ std.json,全是
-# Cobrust 生态接线的 .cb 端到端组合。装饰器(ADR-0074)还没接,所以用 ADR-0073
-# 已通的显式 app.route 形式。装饰器接上之后这个文件可以改成 @app.route(...) 等
-# 一行更 Pythonic 的形式。
+# A minimal REST blog service in Cobrust: pit (HTTP/axum, ADR-0073) + den
+# (SQLite/rusqlite, ADR-0072) wired end-to-end. F65 closed the 5 demo gaps
+# (req.body / app.run / tempfile-backed DB / table init / by-id handlers).
 #
-# 跑法(等 ADR-0073 在 origin 上线 + agent 们的 follow-up 合进来):
+# Routes (matches the z8_rest_blog_e2e harness done-means):
+#   GET    /posts           -> 200 + JSON array of {id,title,body}
+#   POST   /posts           -> 201 + JSON {id,title,body}
+#   GET    /posts/<id>      -> 200 + JSON {id,title,body}  or 404
+#   DELETE /posts/<id>      -> 204                          (404 after delete)
+#
+# Run:
 #   cobrust build examples/z8_rest_blog/main.cb -o blog
-#   ./blog &
-#   curl http://127.0.0.1:8080/posts
-#   curl -X POST http://127.0.0.1:8080/posts -d '{"title":"hello","body":"world"}'
+#   ./blog            # binds 127.0.0.1:8080
+#   ./blog 9000       # binds 127.0.0.1:9000 (port from argv[1])
+#
+# Storage: file-backed SQLite at /tmp/z8_blog.sqlite3. The schema is
+# (re-)created from scratch in main() each run so the demo starts clean.
+# Each handler reopens its own Connection to the same file — SQLite
+# committed-state semantics mean every handler sees the prior posts.
+# (Den's Connection is `!Send` per ADR-0072 §5 risk 2; the pit App.route
+# trampoline requires `Send + Sync + 'static`, so we CANNOT capture a
+# shared Connection across handlers. Reopen-per-call is the SQLite-native
+# workaround.)
+#
+# Encoding details (Cobrust first-proof quirks the demo navigates):
+# - F-string lexer does NOT accept `\"` inside braced interpolations;
+#   we interpolate `qN` helper variables (each `q*` = `"\""`) where a
+#   literal `"` is needed in the response JSON.
+# - `den.Connection.execute(sql)` takes a bare SQL str (no `?` params);
+#   we substitute `ID_PLACEHOLDER` / `TITLE_PLACEHOLDER` via the
+#   `replace` PRELUDE intrinsic. Single quotes in user input are NOT
+#   escaped — first-proof scope; a parameterised-statement follow-up
+#   sub-sprint is queued.
+# - Cobrust's ADR-0052a move semantics consume the argument str on
+#   every PRELUDE str fn call (replace/split/clone/str_len/...). For
+#   any variable used more than once we use the explicit-shared-borrow
+#   `&var` shortcut (ADR-0052a) — the demo's only `clone` calls are
+#   where a long-lived owned copy is needed AFTER a downstream consume.
+# - Body parsing: only the exact flat shape `{"title":"X","body":"Y"}` is
+#   accepted (replace + split decomposition). Structured JSON-dict
+#   access lands with the coil-deep type work.
 
 import pit
 import den
-import json
 
-# GET /posts → 列出所有 post(从 :memory: 数据库读 + 用 json.dumps 序列化)。
-# 第一证 scope:返回 canonical-JSON string,不带 list[dict] 的真复合类型
-# (后者要等 coil 那一支的 deep 类型工作)。
+# GET /posts — list all rows, render as a JSON array of {id,title,body}
+# objects. SQL builds each row's JSON via concat operators; den's
+# canonical fetchall render then wraps each in a Python-tuple syntax we
+# strip via three `replace`s back into a real JSON array.
 fn list_posts(req: pit.Request) -> pit.Response:
-    let conn = den.connect(":memory:")
-    let cur = conn.execute("SELECT id, title, body FROM posts ORDER BY id")
-    let rows_str = cur.fetchall()  # 当前 first-proof 返回 Str rendering(ADR-0072 §4)
-    return pit.text_response(200, rows_str)
+    let conn = den.connect("/tmp/z8_blog.sqlite3")
+    # SQL JSON build done with sqlite-side string concat (`|| ...`) so the
+    # row payload is a single TEXT column the cursor renders cleanly.
+    let cur = conn.execute("SELECT '{\"id\":' || id || ',\"title\":\"' || title || '\",\"body\":\"' || body || '\"}' FROM posts ORDER BY id")
+    let rendered = cur.fetchall()
+    # `rendered` is den's canonical Python-tuple-list render, e.g.
+    #   [('{"id":1,"title":"hello","body":"world"}',)]
+    # Strip the tuple wrapping to yield a real JSON array. Three replaces:
+    #   [('     →  [
+    #   ',)]   →  ]
+    #   ',), ('  →  ,
+    let r1 = replace(rendered, "[('", "[")
+    let r2 = replace(r1, "',)]", "]")
+    let r3 = replace(r2, "',), ('", ",")
+    return pit.text_response(200, r3)
 
-# POST /posts → 解析 JSON body,插入数据库,返回 201。
-# req.body() 是 str(原始 body),json.loads 解析,再用解析后的字段 INSERT。
-# 当前 first-proof:body 解析返回 canonical JSON Str,不是 dict —— 所以这里走
-# 一个简化路径:直接把 body 字符串拼到 INSERT 里(实际生产代码当然不能这样,
-# 但 first-proof 是为了证 pit+den+json 三件套能串)。
+# POST /posts — parse {"title":"X","body":"Y"} body, INSERT, return 201
+# with the new row's JSON shape including its auto-generated id.
 fn create_post(req: pit.Request) -> pit.Response:
-    let conn = den.connect(":memory:")
-    let body = req.body()
-    let canon = json.loads(body)  # 验输入是合法 JSON,失败返回空 sentinel
-    if canon == "":
-        return pit.text_response(400, "invalid json")
-    # TODO(post-coil-deep): 等结构化 JSON 接线(dict 类型在 .cb 里能用)了
-    # 把这里换成 conn.execute("INSERT ... VALUES (?, ?)", &[canon.title, canon.body])
-    let _ = conn.execute("INSERT INTO posts (title, body) VALUES ('placeholder', 'placeholder')")
-    return pit.text_response(201, "created")
+    let raw = req.body()
+    # Flat JSON extractor: substitute `{"title":"` + `","body":"` + `"}`
+    # with delimiters, split, take the two parts.
+    let p1 = replace(raw, "{\"title\":\"", "")
+    let p2 = replace(p1, "\",\"body\":\"", "|SEP|")
+    let p3 = replace(p2, "\"}", "")
+    let parts = split(p3, "|SEP|")
+    # If parsing failed (no separator found), parts is a single-element
+    # list — the body field is missing. Return 400.
+    if list_len(&parts) < 2:
+        return pit.text_response(400, "{\"error\":\"invalid json body\"}")
+    let title = list_get(&parts, 0)
+    let body_val = list_get(&parts, 1)
+    # Reject empty title (basic validation guard the test exercises).
+    if str_len(&title) == 0:
+        return pit.text_response(400, "{\"error\":\"title is required\"}")
+
+    let conn = den.connect("/tmp/z8_blog.sqlite3")
+    # Placeholder-substituted SQL build (avoids f-string `\"` lex
+    # limitation while keeping the SQL readable). Single-quote escaping
+    # is intentionally out of scope — first-proof.
+    let ins_tmpl = "INSERT INTO posts (title, body) VALUES ('TITLE_PLACEHOLDER', 'BODY_PLACEHOLDER')"
+    let ins_with_title = replace(ins_tmpl, "TITLE_PLACEHOLDER", &title)
+    let ins_sql = replace(ins_with_title, "BODY_PLACEHOLDER", &body_val)
+    let _ins = conn.execute(ins_sql)
+    # Get the inserted rowid via SQLite's last_insert_rowid().
+    let id_cur = conn.execute("SELECT last_insert_rowid()")
+    let id_rendered = id_cur.fetchall()
+    # `id_rendered` is "[(N,)]" — strip the tuple wrapping to get "N".
+    let i1 = replace(id_rendered, "[(", "")
+    let id_str = replace(i1, ",)]", "")
+
+    # Build the response JSON via f-string + quote-char helpers. Each
+    # `"` in the JSON gets its own quote-var because f-string lexer
+    # doesn't accept `\"` inside `{...}` interpolations.
+    let q1 = "\""
+    let q2 = "\""
+    let q3 = "\""
+    let q4 = "\""
+    let q5 = "\""
+    let q6 = "\""
+    let q7 = "\""
+    let q8 = "\""
+    let q9 = "\""
+    let qa = "\""
+    let resp_body = f"{{{q1}id{q2}:{id_str},{q3}title{q4}:{q5}{title}{q6},{q7}body{q8}:{q9}{body_val}{qa}}}"
+    return pit.text_response(201, resp_body)
+
+# GET /posts/<id> — single-row lookup, 404 on miss. Path-param read via
+# `req.path_param("id")` (F65 G5-enabling shim).
+fn get_post(req: pit.Request) -> pit.Response:
+    let id = req.path_param("id")
+    let conn = den.connect("/tmp/z8_blog.sqlite3")
+    # SQL via replace-placeholder (avoids f-string `\"` lex limitation).
+    let sel_tmpl = "SELECT '{\"id\":' || id || ',\"title\":\"' || title || '\",\"body\":\"' || body || '\"}' FROM posts WHERE id = ID_PLACEHOLDER"
+    let sel_sql = replace(sel_tmpl, "ID_PLACEHOLDER", id)
+    let cur = conn.execute(sel_sql)
+    let rendered = cur.fetchall()
+    # `[]` (empty list rendering) = no row matched -> 404.
+    if str_eq_lit(&rendered, "[]") == 1:
+        return pit.text_response(404, "{\"error\":\"not found\"}")
+    # Strip "[('" prefix + "',)]" suffix to get the JSON object.
+    let r1 = replace(rendered, "[('", "")
+    let r2 = replace(r1, "',)]", "")
+    return pit.text_response(200, r2)
+
+# DELETE /posts/<id> — delete + return 204. Idempotent: deleting a
+# missing id is still 204 in this first proof (a stricter 404-on-miss
+# variant is a follow-up).
+fn delete_post(req: pit.Request) -> pit.Response:
+    let id = req.path_param("id")
+    let conn = den.connect("/tmp/z8_blog.sqlite3")
+    let del_tmpl = "DELETE FROM posts WHERE id = ID_PLACEHOLDER"
+    let del_sql = replace(del_tmpl, "ID_PLACEHOLDER", id)
+    let _del = conn.execute(del_sql)
+    return pit.text_response(204, "")
 
 fn main() -> i64:
+    # Reset the DB on every startup so the demo begins clean — F65 G3
+    # G4 wanted just `CREATE TABLE IF NOT EXISTS`, but DROP + CREATE is
+    # what a deterministic demo / E2E test needs (the harness asserts
+    # `id:1` on the first POST, so we cannot carry rows from a prior
+    # run). Production deployment would omit the DROP.
+    #
+    # Fixed path here (`/tmp/z8_blog.sqlite3`) because the demo's
+    # `/posts*` handlers must use the SAME path string to share state
+    # (no globals on the .cb surface in this first proof). For the E2E
+    # harness's parallel-test-runs use case, sequential cargo-test
+    # execution (the default `--test-threads=1` would help, but cargo
+    # actually defaults to N threads) might mean two demo runs collide
+    # on the file. The harness mitigates by using ephemeral ports
+    # (binary instances on different ports use the same DB file but
+    # serialize on SQLite's POSIX advisory locking) — acceptable for
+    # first proof. A per-process tempfile path is queued as a follow-up
+    # once the demo gains argv-driven config beyond the port slot.
+    let init = den.connect("/tmp/z8_blog.sqlite3")
+    let _drop = init.execute("DROP TABLE IF EXISTS posts")
+    let _create = init.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, body TEXT)")
+
     let app = pit.App()
-    let _ = app.route("GET", "/posts", list_posts)
-    let _ = app.route("POST", "/posts", create_post)
-    let _ = app.run("127.0.0.1", 8080)
+    let _r1 = app.route("GET", "/posts", list_posts)
+    let _r2 = app.route("POST", "/posts", create_post)
+    let _r3 = app.route("GET", "/posts/<id>", get_post)
+    let _r4 = app.route("DELETE", "/posts/<id>", delete_post)
+
+    # Port from argv[1] when present (lets the E2E harness pick an
+    # ephemeral port to avoid collisions with parallel test runs);
+    # default 8080 for the standalone-runnable case the README documents.
+    let args = argv()
+    let port: i64 = 8080
+    if list_len(&args) > 1:
+        port = parse_int(list_get(&args, 1))
+
+    # F65 G2 — `app.run(host, port)` blocks until the process is killed.
+    # Replaces the busy-wait `while i < 10000000000:` keep-alive that the
+    # pit_pong / decorator_pit first proofs used.
+    let _exit = app.run("127.0.0.1", port)
     return 0

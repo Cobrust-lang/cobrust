@@ -583,6 +583,42 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             pit_server_handle_ty(),
             PyCompatTier::Semantic,
         )),
+        // F65 G2 — `app.run(host, port) -> i64`. Blocking variant of
+        // `serve_in_background`: drives the singleton tokio runtime via
+        // `Runtime::block_on` and returns 0 on a clean shutdown (currently
+        // unreachable: the loop only exits on process kill). Mirrors the
+        // Rust `App::run` ergonomic shape — the `.cb` source's
+        // `return app.run("127.0.0.1", 8080)` replaces a busy-wait keep-
+        // alive (the pit_pong_e2e first proof's `while i < 10000000000:`
+        // counter loop) with the natural blocking call.
+        (PIT_APP_ADT, "run") => Some(EcoSig::from_values(
+            "__cobrust_pit_app_run",
+            vec![Ty::Str, Ty::Int],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        // F65 G1 — `req.body() -> str`. Borrow-shim returning a freshly-
+        // allocated Cobrust `Str` carrying the request body as a UTF-8
+        // string. Non-UTF-8 bytes are lossily replaced (the `.cb` `str`
+        // contract is "always valid UTF-8"). The Request itself stays
+        // Rust-owned (ADR-0073 §2 D6); only the returned Str is on the
+        // `.cb` drop schedule.
+        (PIT_REQUEST_ADT, "body") => Some(EcoSig::from_values(
+            "__cobrust_pit_request_body",
+            vec![],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        // F65 G5 enabling — `req.path_param(name: str) -> str`. Returns
+        // the captured value for `<name>` in the matched route pattern,
+        // or empty string when the name is not a registered param (fail-
+        // clean sentinel — matches the other shim discard channels).
+        (PIT_REQUEST_ADT, "path_param") => Some(EcoSig::from_values(
+            "__cobrust_pit_request_path_param",
+            vec![Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
         // ADR-0073 second proof — `hood.Command` handle methods.
         //
         // `command.handler(fn)` is the load-bearing callback site:
@@ -1024,15 +1060,51 @@ mod tests {
         assert_eq!(sig.ret, pit_server_handle_ty());
     }
 
+    // F65 G1 — `req.body() -> str` Request borrow shim lands. The
+    // previously-ratified `pit_request_has_no_methods_today` test is
+    // superseded by the positive tests below (F65 explicitly directs
+    // the demo-repair sprint to remove that test as part of closing G1).
+    //
+    // The other ADR-0073 §5 follow-ups (`req.method()`, `req.path()`)
+    // are NOT in scope for the F65 sprint — the demo only needs `body()`
+    // and `path_param()` to close. They land as a separate sprint when
+    // the next demo / proof needs them.
     #[test]
-    fn pit_request_has_no_methods_today() {
-        // ADR-0073 §5 / first proof: the .cb handler receives a Request
-        // and returns a Response; reading Request fields (path/method/
-        // body) lands in a paired follow-up sprint along with the borrow
-        // shims. The handler can still ignore the Request and emit a
-        // canned Response (`pit.text_response(200, "pong")`) — the
-        // "pong" first proof.
-        assert!(lookup_handle_method(&pit_request_ty(), "path").is_none());
+    fn pit_request_body_method_returns_str() {
+        let sig =
+            lookup_handle_method(&pit_request_ty(), "body").expect("Request.body in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_pit_request_body");
+        assert!(sig.params.is_empty());
+        assert_eq!(sig.ret, Ty::Str);
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn pit_request_path_param_method_takes_name_returns_str() {
+        let sig = lookup_handle_method(&pit_request_ty(), "path_param")
+            .expect("Request.path_param in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_pit_request_path_param");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str]);
+        assert_eq!(sig.ret, Ty::Str);
+    }
+
+    #[test]
+    fn pit_app_run_takes_host_and_port_returns_i64() {
+        let sig = lookup_handle_method(&pit_app_ty(), "run").expect("App.run in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_pit_app_run");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str, Ty::Int]);
+        assert_eq!(sig.ret, Ty::Int);
+    }
+
+    #[test]
+    fn pit_request_still_has_no_drop_symbol() {
+        // F65 closes the manifest gap for `body` + `path_param` but the
+        // Request handle is STILL Rust-owned (ADR-0073 §2 D6 — the
+        // trampoline allocates + frees the Box<Request> per callback
+        // invocation). The drop schedule MUST therefore continue to
+        // return None for PIT_REQUEST_ADT so the `.cb` side does not
+        // double-free a Request local.
+        assert_eq!(handle_drop_symbol(PIT_REQUEST_ADT), None);
     }
 
     // ADR-0073 second proof — `hood` (click, CLI commands). First module
@@ -1098,9 +1170,15 @@ mod tests {
 
     #[test]
     fn hood_methods_only_match_command_receiver() {
-        // Cross-handle: pit.App / strike.Response must never resolve
-        // hood methods.
-        assert!(lookup_handle_method(&pit_app_ty(), "run").is_none());
+        // Cross-handle: strike.Response must never resolve hood methods.
+        //
+        // F65 G2 note: `App.run` USED TO BE an exclusive hood method
+        // proving cross-handle isolation, but F65 graduated `App.run` to
+        // a real `pit.App` method (the demo's blocking `app.run(host,
+        // port)` keep-alive). The isolation invariant is now proven via
+        // `handler` (hood-only — pit's callback site is `route`, not
+        // `handler`) and `nope` (unknown name).
+        assert!(lookup_handle_method(&pit_app_ty(), "handler").is_none());
         assert!(lookup_handle_method(&strike_response_ty(), "handler").is_none());
         // Non-handle receivers never match.
         assert!(lookup_handle_method(&Ty::Str, "handler").is_none());

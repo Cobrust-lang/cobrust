@@ -121,10 +121,16 @@ unsafe fn read_str_buf(buf: *mut u8) -> String {
 }
 
 /// Allocate a fresh Cobrust `Str` buffer carrying `s`'s bytes. Used
-/// only by the in-crate cabi tests (the production trampoline reads
-/// Str buffers but does not allocate them — `pit.text_response`'s body
-/// arrives pre-allocated by the `.cb` codegen).
-#[cfg(test)]
+/// both by `__cobrust_pit_request_body` / `__cobrust_pit_request_path_param`
+/// to materialise the borrowed Request field as a `.cb`-owned `Str`, and by
+/// the in-crate cabi tests.
+///
+/// Originally this helper was `#[cfg(test)]`-gated because the first proof
+/// trampoline only READ Str buffers (`text_response`'s body arrived pre-
+/// allocated by `.cb` codegen). F65 G1 adds a SHIM-ALLOCATED Str path —
+/// `req.body() -> str` produces a fresh buffer carrying a snapshot of the
+/// Rust-owned Request bytes — so the helper graduates to a production
+/// helper.
 fn alloc_str_buffer(s: &str) -> *mut u8 {
     // SAFETY: `__cobrust_str_new` returns a valid buffer;
     // `__cobrust_str_push_static` copies `s` into it.
@@ -372,6 +378,107 @@ pub unsafe extern "C" fn __cobrust_pit_app_serve_in_background(
         Ok(handle) => Box::into_raw(Box::new(handle)).cast::<u8>(),
         Err(_) => std::ptr::null_mut(),
     }
+}
+
+/// `app.run(host: str, port: i64) -> i64` (F65 G2). Bind on `host:port`
+/// and serve REQUESTS FOREVER (blocking the calling thread until the
+/// process is killed). Returns `0` on a clean shutdown (currently
+/// unreachable: the blocking loop only exits on process kill) or
+/// non-zero on a bind / serve error.
+///
+/// Mirrors `serve_in_background`'s App-take pattern: the underlying
+/// `App::run(self, ...)` consumes the App by value, but the `.cb` caller
+/// still owns the `app` handle. The trampoline `std::mem::take`'s the
+/// App's interior — the original `Box<App>` stays valid (now holding an
+/// empty `App::default()`), the scope-exit `__cobrust_pit_app_drop`
+/// later frees that empty App cleanly, and the taken App is moved into
+/// `App::run`.
+///
+/// # Safety
+///
+/// - `app` must be a live `App` handle from `__cobrust_pit_app_new`.
+/// - `host` must be a valid Cobrust `Str` buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_app_run(app: *mut u8, host: *mut u8, port: i64) -> i64 {
+    if app.is_null() {
+        return 1;
+    }
+    // SAFETY: caller per `# Safety`.
+    let app_mut: &mut App = unsafe { &mut *app.cast::<App>() };
+    let taken = std::mem::take(app_mut);
+    // SAFETY: `host` per `# Safety`.
+    let host_s = unsafe { read_str_buf(host) };
+    let port_u16 = u16::try_from(port).unwrap_or(0);
+    match taken.run(&host_s, port_u16) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+// =====================================================================
+// pit C-ABI surface — Request handle methods (F65 G1 + path-param).
+// =====================================================================
+
+/// `req.body() -> str` (F65 G1). Returns a freshly-allocated Cobrust
+/// `Str` buffer carrying the request body bytes as a UTF-8 string.
+/// Non-UTF-8 bytes are lossily replaced (the resulting str is always
+/// valid UTF-8 for the `.cb` side).
+///
+/// The Rust [`Request`] is borrowed (NOT consumed); the trampoline owns
+/// the `Box<Request>` and will free it on callback return per ADR-0073
+/// §2 D6. The returned `*mut Str` is a `.cb`-owned buffer; the `.cb`
+/// scope-exit drop schedule frees it via `__cobrust_str_drop`.
+///
+/// # Safety
+///
+/// `req` must be a valid `Request` handle the pit trampoline allocated
+/// for the current callback invocation. The returned pointer is null on
+/// a null receiver (defense in depth — the typechecker rules this out)
+/// or a freshly-Boxed Cobrust `Str` buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_request_body(req: *mut u8) -> *mut u8 {
+    if req.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: caller per `# Safety`. We only BORROW the Request — the
+    // trampoline retains ownership of the Box and frees it after the
+    // callback returns.
+    let req_ref: &Request = unsafe { &*req.cast::<Request>() };
+    let body_bytes = req_ref.body();
+    // Lossy UTF-8 — bad bytes become U+FFFD. The `.cb` source's `str`
+    // contract is "always valid UTF-8"; presenting raw non-UTF-8 bytes
+    // through the str surface would violate it. A future `bytes` ABI
+    // could expose the raw form.
+    let body_str = std::str::from_utf8(body_bytes).map_or_else(
+        |_| String::from_utf8_lossy(body_bytes).into_owned(),
+        std::borrow::ToOwned::to_owned,
+    );
+    alloc_str_buffer(&body_str)
+}
+
+/// `req.path_param(name: str) -> str` (F65 G5 enabling — by-id GET /
+/// DELETE handlers read `<id>` from the route pattern). Returns a
+/// freshly-allocated Cobrust `Str` buffer carrying the path parameter's
+/// captured value, or an empty Str when the name is not a registered
+/// param on the matched route (the fail-clean sentinel convention).
+///
+/// # Safety
+///
+/// `req` must be a valid `Request` handle the pit trampoline allocated
+/// for the current callback invocation. `name` must be a valid Cobrust
+/// `Str` buffer. The returned pointer is null on a null receiver or a
+/// freshly-Boxed Cobrust `Str`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_request_path_param(req: *mut u8, name: *mut u8) -> *mut u8 {
+    if req.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: caller per `# Safety`.
+    let req_ref: &Request = unsafe { &*req.cast::<Request>() };
+    // SAFETY: `name` per `# Safety`.
+    let name_s = unsafe { read_str_buf(name) };
+    let captured = req_ref.path_param(&name_s).unwrap_or("");
+    alloc_str_buffer(captured)
 }
 
 // =====================================================================

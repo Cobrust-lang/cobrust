@@ -1,15 +1,23 @@
 ---
 finding_id: F65
 title: Z.8 REST blog demo doesn't compile + multiple manifest/state gaps block end-to-end demo
-status: candidate
+status: ratified_2026-05-29
 date: 2026-05-28
+last_verified_commit: head-of-branch (F65 resolution commit; circular SHA-pin issue resolved by referencing the commit's title)
 discovered_by: P9 (Z.8 E2E harness retry sprint)
+resolved_by: P9 (F65 resolution sprint, 2026-05-29)
 related_commit: a6ee367 (Z.8 demo draft) → discovered while authoring the E2E harness in z8_rest_blog_e2e.rs
 sibling_findings: [F36, F37]
 ratification_criteria: |
   Promote candidate→ratified once the demo compiles + serves a real HTTP request
   end-to-end (i.e., gaps G1-G5 below close in follow-up sprints) and the
   z8_rest_blog_e2e.rs primary tests pass without #[ignore].
+ratification_evidence: |
+  - examples/z8_rest_blog/main.cb compiles via `cobrust build` (LLVM backend);
+  - 4/4 tests in crates/cobrust-cli/tests/z8_rest_blog_e2e.rs pass live,
+    NONE ignored;
+  - manual `curl` smoke (see §Resolution below) confirms the full
+    POST→GET-by-id→GET-list→DELETE→GET-404 sequence.
 ---
 
 # F65 — Z.8 REST blog demo `main.cb` has 5 distinct gaps blocking end-to-end execution
@@ -182,15 +190,127 @@ The fastest path to closing F65 is a paired sprint:
 ETA: 2-3 sprints (G1 is the load-bearing piece; G2-G5 are mechanical once G1
 lands).
 
+## Resolution (2026-05-29, F65 demo-repair sprint — single sprint, not paired)
+
+The two phases were collapsed into one sprint because the manifest-side
+work + demo rewrite + harness re-enablement all touched the same files.
+
+### G1 — Request.body() (+ path_param) shipped
+- `crates/cobrust-pit/src/cabi.rs` — new `__cobrust_pit_request_body` +
+  `__cobrust_pit_request_path_param` shims (the alloc_str_buffer helper
+  graduated from `#[cfg(test)]` to production since the shim produces a
+  Cobrust Str buffer the .cb caller owns).
+- `crates/cobrust-types/src/ecosystem.rs` — `Request.body()` +
+  `Request.path_param(name)` rows in `lookup_handle_method`. The
+  ratified `pit_request_has_no_methods_today` test was replaced by
+  positive `pit_request_body_method_returns_str` +
+  `pit_request_path_param_method_takes_name_returns_str` tests; the
+  `pit_request_still_has_no_drop_symbol` test preserves the Rust-
+  ownership invariant (ADR-0073 §2 D6 — Request still does NOT get a
+  .cb drop schedule).
+- `crates/cobrust-codegen/src/llvm_backend.rs` — extern decls for the
+  two new symbols, mirroring the existing pit decl block.
+
+ADR-0073 §5 follow-ups for `Request.method()` / `Request.path()` are
+NOT in F65 scope (the demo only needs `body` + `path_param`); they
+land when the next proof needs them.
+
+### G2 — App.run shipped
+- `crates/cobrust-pit/src/cabi.rs` — new `__cobrust_pit_app_run` shim
+  using the same `mem::take` App-interior consume pattern as
+  `serve_in_background` (so the .cb scope-exit `_drop` still frees a
+  clean empty App).
+- `crates/cobrust-types/src/ecosystem.rs` — `App.run(host: str, port:
+  i64) -> i64` row. The hood cross-handle isolation test
+  (`hood_methods_only_match_command_receiver`) had been asserting
+  `lookup_handle_method(&pit_app_ty(), "run").is_none()` as a side
+  invariant; F65 graduates `App.run` to a real pit method, so the
+  invariant test was rewritten to probe `handler` (hood-only, not in
+  pit) instead — preserves the isolation proof.
+- `crates/cobrust-codegen/src/llvm_backend.rs` — extern decl
+  (`i64_ty.fn_type(&[ptr_ty, ptr_ty, i64_ty], false)`).
+
+### G3 + G4 — file-backed DB + table init
+- `examples/z8_rest_blog/main.cb` — schema (re-)created in `main()`
+  via `den.connect("/tmp/z8_blog.sqlite3")` + `DROP TABLE IF EXISTS`
+  + `CREATE TABLE`. Each handler reopens its own Connection to the
+  same path (Connection is `!Send` per ADR-0072 §5 risk 2; pit's
+  trampoline requires `Send + Sync + 'static`, so we can't capture a
+  shared Connection — but SQLite's file-backed committed-state
+  semantics make reopen-per-call equivalent for the demo's load).
+
+### G5 — by-id GET + DELETE
+- Path params consumed via the F65 G1 sibling `req.path_param("id")`
+  shim. Two new handlers + two new `app.route(...)` calls. The demo's
+  E2E harness exercises POST → GET-by-id → GET-list → DELETE →
+  GET-by-id-404 covering all four routes plus the negative.
+
+### Sub-finding NOT filed (path-param surface IS supported)
+
+The dispatch spec hedged: "If pit doesn't support `<id>` path params
+today, that's an additional architectural gap (F67-candidate). In
+that case, use query-string fallback." It turns out pit's underlying
+Rust `Request::path_param(name)` IS wired (the routing engine
+captures `<name>` segments into `path_params`); only the `.cb`
+manifest binding was missing. F65 G1's `path_param` shim addition
+closes the surface gap entirely, so NO F67-candidate is filed.
+
+### Demo encoding workarounds (queued as follow-ups, NOT scope creep)
+
+These five quirks the demo navigates were discovered IN-FLIGHT and
+are documented in the demo's header + README §Known limitations:
+
+1. F-string lexer does not accept `\"` inside braced interpolations
+   — the demo uses `let qN = "\""` helper variables for response
+   JSON building. F-string-escape sub-sprint is queued (separate
+   finding when its proof case demands closure).
+2. `den.execute(sql)` takes a bare string with no `?` params — the
+   demo substitutes via `replace("ID_PLACEHOLDER", id)` etc. A
+   parameterised SQL API on den is the canonical follow-up.
+3. `cur.fetchall()` returns canonical Python-tuple-list str render
+   `[(N, 'X', 'Y')]` — the demo strips the wrapping via three
+   `replace`s back into JSON. A `fetchall_json()` / `fetchall_rows()`
+   shape is the follow-up.
+4. JSON body parsing accepts ONLY the exact flat shape
+   `{"title":"X","body":"Y"}` (via replace + split). Real structured
+   `dict[str, str]` json_loads needs the coil-deep type work.
+5. PRELUDE str fns consume by Move; for multi-use variables the demo
+   uses `&var` explicit-shared-borrow shortcut (ADR-0052a) — the
+   canonical LLM-first §2.5-A pattern. No `clone` calls remain in the
+   demo (per the constitution's "compile-time-catch + training-data-
+   overlap" rule).
+
+### Test artifact — UN-IGNORED
+
+`crates/cobrust-cli/tests/z8_rest_blog_e2e.rs` ships four LIVE tests
+(0 ignored):
+- `test_e2e_z8_demo_compiles` — floor smoke (cobrust build passes).
+- `test_e2e_z8_demo_full_round_trip` — full POST→GET-by-id→GET-list→
+  DELETE→GET-404 round-trip against the real demo binary.
+- `test_e2e_z8_harness_pattern_proof_inline` — pit-only minimal
+  scaffolded harness (regression floor — if pit's chain breaks while
+  the demo's storage layer is also broken, this test fires first).
+- `test_e2e_z8_harness_method_mismatch_returns_404` — negative-sanity
+  (GET-on-POST-only + POST-on-GET-only → 404 / 405).
+
+The harness invokes the demo with `port` as `argv[1]` (the demo
+falls back to 8080 when absent, for the standalone-runnable README
+flow). Each test run picks an ephemeral port to avoid parallel-run
+collisions.
+
+### Resolution commit
+
+The commit whose title is `fix(pit+demo): F65 resolution — Z.8 demo
+lives (req.body + app.run + tempfile + table init + by-id)` —
+referenced by title rather than by SHA to avoid the circular pin
+issue (amending the commit to record its own SHA changes the SHA).
+Locate via `git log --oneline --grep='F65 resolution'`.
+
 ## Test artifact
 
-`crates/cobrust-cli/tests/z8_rest_blog_e2e.rs` ships:
-- `test_e2e_z8_demo_full_round_trip` (`#[ignore]` — cites F65 G1+G2+G3+G4)
-- `test_e2e_z8_demo_compiles` (`#[ignore]` — cites F65 G1+G2: even the build
-  fails today)
-- Inline "scaffolded variant" tests that DO pass today, proving the harness
-  pattern (compile a minimal pit-only `.cb` source + port-baked-in + real
-  HTTP round-trip) works once the demo gaps close.
+(see Resolution above — `crates/cobrust-cli/tests/z8_rest_blog_e2e.rs`
+ships 4 LIVE tests, 0 ignored. The "scaffolded variant" tests stay
+as the regression floor below the primary demo round-trip.)
 
 ## Cross-references
 

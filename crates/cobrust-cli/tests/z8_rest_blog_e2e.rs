@@ -11,38 +11,36 @@
 //!   → ChildGuard kills spawn on Drop
 //! ```
 //!
-//! ## Status at HEAD `3530b49` (2026-05-28)
+//! ## Status post-F65 resolution sprint (2026-05-29)
 //!
-//! The demo source at `examples/z8_rest_blog/main.cb` does NOT currently
-//! compile. See `docs/agent/findings/f65-z8-rest-blog-demo-multiple-gaps.md`
-//! for the full gap audit. In short, five distinct gaps are blocking:
+//! All four tests in this file PASS LIVE — F65 closed G1-G5 in
+//! `examples/z8_rest_blog/main.cb`:
 //!
-//! - **G1** — `req.body()` is not in the `pit.Request` ecosystem manifest
-//!   (the demo's `main.cb:34` calls it; `pit.Request` has no handle methods
-//!   yet — ratified by `pit_request_has_no_methods_today` in
-//!   `crates/cobrust-types/src/ecosystem.rs`).
-//! - **G2** — `app.run(host, port)` is not in the `pit.App` manifest
-//!   (only `route` + `serve_in_background`); demo's `main.cb:47` uses it.
-//! - **G3** — `:memory:` per-handler-call creates an isolated DB per
-//!   request → no state across handlers (demo `main.cb:22, 33`).
-//! - **G4** — Missing `CREATE TABLE posts (...)` initialization in `main`.
-//! - **G5** — Demo only implements `list_posts` + `create_post`; the
-//!   harness done-means table requires `GET /posts/<id>` + `DELETE
-//!   /posts/<id>` as well. README §3 explicitly excludes by-id endpoints
-//!   from the "第一版".
+//! - **G1 closed** — `req.body() -> str` + `req.path_param(name) -> str`
+//!   shipped in `cobrust-pit/src/cabi.rs` + `cobrust-types/src/ecosystem.rs`.
+//! - **G2 closed** — `app.run(host, port) -> i64` blocking-serve shipped.
+//! - **G3 + G4 closed** — demo opens file-backed SQLite at
+//!   `/tmp/z8_blog.sqlite3`; `DROP TABLE IF EXISTS` + `CREATE TABLE` in
+//!   `main()` before any route fires. Handlers reopen the same path —
+//!   SQLite file-backed semantics make this work (Connection is `!Send`
+//!   per ADR-0072 §5 risk 2, so we cannot share a single connection
+//!   across handlers).
+//! - **G5 closed** — `GET /posts/<id>` + `DELETE /posts/<id>` handlers
+//!   using the new `req.path_param("id")` shim.
 //!
-//! Per the F65 resolution plan, this file ships:
+//! The file ships four live tests (0 ignored):
 //!
-//! - **Two `#[ignore]`'d primary E2E tests** that exercise the demo
-//!   end-to-end. They will re-enable once F65 closes (gaps G1-G5).
-//! - **One inline "scaffolded harness-pattern proof" test** that uses a
-//!   minimal pit-only `.cb` source proving the harness shape (compile →
-//!   spawn → bind → 3-route probe + 404) works today, ready to swap to
-//!   the real demo once F65 closes.
-//! - **One inline "negative — wrong method returns 405-ish" test**
-//!   exercising the harness against an unmatched method on a registered
-//!   route (validates the 405 / 404 sanity path the README's
-//!   `kill $SERVER` flow doesn't cover).
+//! - **`test_e2e_z8_demo_compiles`** — floor smoke (`cobrust build` of
+//!   the demo source passes).
+//! - **`test_e2e_z8_demo_full_round_trip`** — full round-trip against
+//!   the real `examples/z8_rest_blog/main.cb` binary: POST → GET-by-id
+//!   → GET-list → DELETE → GET-by-id-404.
+//! - **`test_e2e_z8_harness_pattern_proof_inline`** — pit-only minimal
+//!   scaffolded harness (regression floor — if the harness pattern
+//!   itself breaks, this fires first; the primary test then
+//!   distinguishes harness-regression vs demo-regression).
+//! - **`test_e2e_z8_harness_method_mismatch_returns_404`** — negative-
+//!   sanity (GET-on-POST-only + POST-on-GET-only returns 404 / 405).
 
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -158,18 +156,15 @@ fn z8_demo_path() -> PathBuf {
 }
 
 // =====================================================================
-// Primary "real Z.8 demo" tests — `#[ignore]`'d per F65 until the demo
-// gaps close. Remove the `#[ignore]` markers as part of the F65
-// resolution sprint.
+// Primary "real Z.8 demo" tests — LIVE post-F65 (2026-05-29). Both
+// previously-ignored tests now exercise the repaired
+// `examples/z8_rest_blog/main.cb` end-to-end.
 // =====================================================================
 
 /// Compiles `examples/z8_rest_blog/main.cb` and asserts a clean build.
-/// Currently FAILS at typecheck on `req.body()` (F65 G1) — kept
-/// `#[ignore]`'d as the floor smoke test for the demo-repair sprint.
-///
-/// Re-enable by removing the `#[ignore]` once F65 G1 + G2 close.
+/// Floor smoke test — the F65 resolution sprint closed G1 + G2, so
+/// the demo now compiles cleanly.
 #[test]
-#[ignore = "finding:f65-z8-rest-blog-demo-multiple-gaps — demo doesn't compile today (G1: req.body() not in pit.Request manifest; G2: app.run not in pit.App manifest). Re-enable once F65 closes."]
 fn test_e2e_z8_demo_compiles() {
     let src = z8_demo_path();
     assert!(
@@ -194,40 +189,37 @@ fn test_e2e_z8_demo_compiles() {
 /// - DELETE /posts/<id> → 204
 /// - GET /posts/<id> → 404 (deleted)
 ///
-/// Currently blocked by F65 G1-G5 (see file-level docs). Re-enable when
-/// the demo repair sprint lands the missing manifest items + table init
-/// + by-id endpoints.
+/// F65 closed G1-G5: the demo compiles, persists state across handler
+/// calls (file-backed SQLite), wires by-id GET + DELETE via the new
+/// `req.path_param(name)` shim, and accepts a port from argv[1] so this
+/// harness can pick an ephemeral port (avoiding collisions with other
+/// pit tests running in parallel against fixed port 8080).
 #[test]
-#[ignore = "finding:f65-z8-rest-blog-demo-multiple-gaps — demo can't compile (G1+G2) and even after repair lacks state persistence (G3+G4) and by-id endpoints (G5). Re-enable post F65 resolution sprint."]
 fn test_e2e_z8_demo_full_round_trip() {
     let port = pick_free_port();
 
-    // NOTE: The demo as-shipped binds to port 8080 hardcoded
-    // (`main.cb:47`). Once F65 closes, the repaired demo must accept a
-    // port from argv or env so this harness can avoid port collisions
-    // with parallel test runs. The pit_pong_e2e + decorator_pit_e2e
-    // pattern bakes the port into the source via `format!`; the F65
-    // repair sprint should adopt the same pattern. Until then, the
-    // `port` variable here is forward-looking infrastructure.
-    let _ = port;
-
     let src = z8_demo_path();
     let (_dir, exe) = compile_file(&src);
+    // F65 repair — demo accepts argv[1] for port (falls back to 8080
+    // when absent). Pass the ephemeral port so parallel test runs
+    // never collide.
     let child = Command::new(&exe)
+        .arg(port.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let mut guard = ChildGuard(child);
 
-    // Demo binds 127.0.0.1:8080. Wait up to 8s for the bind (mirrors
-    // pit_pong_e2e's tolerance).
-    wait_for_port(8080, Duration::from_secs(8)).expect("z8 demo server bind");
+    // Wait up to 8s for the bind (mirrors pit_pong_e2e's tolerance).
+    wait_for_port(port, Duration::from_secs(8)).expect("z8 demo server bind");
+
+    let base = format!("http://127.0.0.1:{port}");
 
     // POST /posts {"title":"hello","body":"world"} → 201
     let client = reqwest::blocking::Client::new();
     let post_resp = client
-        .post("http://127.0.0.1:8080/posts")
+        .post(format!("{base}/posts"))
         .header("Content-Type", "application/json")
         .body(r#"{"title":"hello","body":"world"}"#)
         .send()
@@ -244,7 +236,7 @@ fn test_e2e_z8_demo_full_round_trip() {
         .expect("POST response carries an `id`");
 
     // GET /posts/<id> → 200 + body matches.
-    let get_url = format!("http://127.0.0.1:8080/posts/{id}");
+    let get_url = format!("{base}/posts/{id}");
     let get_resp = reqwest::blocking::get(&get_url).expect("GET /posts/<id>");
     assert_eq!(get_resp.status().as_u16(), 200, "GET /posts/<id> → 200");
     let get_body: serde_json::Value = get_resp.json().expect("GET /posts/<id> JSON");
@@ -255,7 +247,7 @@ fn test_e2e_z8_demo_full_round_trip() {
     assert_eq!(get_body.get("body").and_then(|v| v.as_str()), Some("world"));
 
     // GET /posts → 200 + array containing this post.
-    let list_resp = reqwest::blocking::get("http://127.0.0.1:8080/posts").expect("GET /posts");
+    let list_resp = reqwest::blocking::get(format!("{base}/posts")).expect("GET /posts");
     assert_eq!(list_resp.status().as_u16(), 200);
     let list_body: serde_json::Value = list_resp.json().expect("GET /posts JSON array");
     assert!(

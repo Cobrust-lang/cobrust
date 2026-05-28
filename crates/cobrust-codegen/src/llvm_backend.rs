@@ -2722,12 +2722,33 @@ impl<'ctx> LlvmEmitter<'ctx> {
             false,
         );
         let pit_serve_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        // F65 G2 — `__cobrust_pit_app_run(app: *mut App, host: *mut Str, port: i64) -> i64`.
+        // Blocking variant of `serve_in_background`; returns 0 on clean
+        // shutdown, non-zero on bind/serve error. The App is taken via
+        // `mem::take` inside the trampoline (the original `Box<App>` stays
+        // live so the `.cb` scope-exit drop frees the empty App cleanly).
+        let pit_app_run_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        // F65 G1 — `__cobrust_pit_request_body(req: *mut Request) -> *mut Str`.
+        // Borrow-shim returning a freshly-allocated Cobrust Str. The
+        // Request stays Rust-owned (ADR-0073 §2 D6).
+        let pit_request_body_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        // F65 G5 enabling — `__cobrust_pit_request_path_param(req: *mut Request,
+        // name: *mut Str) -> *mut Str`. Returns the captured path param value
+        // or empty Str.
+        let pit_request_path_param_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let pit_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_pit_app_new", pit_app_new_ty, 0usize),
             ("__cobrust_pit_text_response", pit_text_response_ty, 2),
             ("__cobrust_pit_app_route", pit_app_route_ty, 4),
             ("__cobrust_pit_app_serve_in_background", pit_serve_ty, 3),
+            ("__cobrust_pit_app_run", pit_app_run_ty, 3),
+            ("__cobrust_pit_request_body", pit_request_body_ty, 1),
+            (
+                "__cobrust_pit_request_path_param",
+                pit_request_path_param_ty,
+                2,
+            ),
             ("__cobrust_pit_app_drop", pit_drop_ty, 1),
             ("__cobrust_pit_response_drop", pit_drop_ty, 1),
             ("__cobrust_pit_server_handle_drop", pit_drop_ty, 1),
