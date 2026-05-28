@@ -32,6 +32,13 @@ pub use crate::parser::{
     unpack_float, unpack_int, unpack_map, unpack_one, unpack_str, unpack_uint, unpack_uint_cython,
 };
 
+// ADR-0072 fourth-module proof — C-ABI shims for `.cb` programs doing
+// `import scale` + `scale.dumps_str(json)` / `scale.loads_str(packed)`.
+// The shims are `#[no_mangle] extern "C"` and live behind their own
+// module so the rlib / cdylib paths still compile cleanly; the
+// `staticlib` archive carries the symbols out to `cobrust build`.
+pub mod cabi;
+
 #[cfg(feature = "pyo3")]
 mod pyo3_bindings;
 

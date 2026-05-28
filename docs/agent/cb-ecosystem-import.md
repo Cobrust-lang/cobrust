@@ -1,13 +1,13 @@
 ---
 doc_kind: reference
 module_id: cb-ecosystem-import
-title: .cb ecosystem-import wiring (ADR-0072 first proof — den; second-module proof — nest; third-module proof — strike)
+title: .cb ecosystem-import wiring (ADR-0072 — 5-module proof: den + nest + strike + scale + molt)
 last_verified_commit: HEAD
 relates_to: [adr:0072, adr:0019, adr:0028, adr:0050c, adr:0071]
-dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-strike, cobrust-cli]
+dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-strike, cobrust-scale, cobrust-molt, cobrust-cli]
 ---
 
-# `.cb` ecosystem-import wiring — `import den` / `import nest` / `import strike` end-to-end
+# `.cb` ecosystem-import wiring — `import den` / `nest` / `strike` / `scale` / `molt` end-to-end
 
 Status:
 - ADR-0072 **first proof** landed. `import den` + `den.connect` /
@@ -25,6 +25,20 @@ Status:
   reserved-AdtId `0xE000_0000+N*0x100` block convention scales. The
   third wiring again touched only the manifest, the codegen extern
   block, the recognizer alternation, and the new shim crate.
+- ADR-0072 **fourth-module generalization** landed. `import scale` +
+  `scale.dumps_str` / `scale.loads_str` compile → link → run, proving
+  the chain handles a SECOND value-pattern module (independent of
+  `nest`'s) — msgpack JSON round-trip via the proven str→str shape.
+  Touched manifest + codegen extern + recognizer alternation + new
+  shim crate; the chain-logic layers stayed untouched.
+- ADR-0072 **fifth-module generalization** landed. `import molt` +
+  `molt.now()` + `DateTime.isoformat` / `DateTime.unix_timestamp`
+  compile → link → run, proving the chain handles a THIRD
+  handle-pattern module — datetime/RFC3339 via the proven Box-into-raw
+  / Box-from-raw + drop-once instrument pattern. Touched the same
+  surfaces as scale + reserved a new 256-slot AdtId block (the FOURTH
+  block; scale stays in the THIRD block reserved for its future
+  bytes-ABI handles).
 
 ## Surface (manifest-defined)
 
@@ -42,14 +56,24 @@ Status:
 | `resp.status_code()` | `__cobrust_strike_response_status_code` | `(strike.Response) -> i64` |
 | `resp.json()` | `__cobrust_strike_response_json` | `(strike.Response) -> str` |
 | scope-exit drop | `__cobrust_strike_response_drop` | `(strike.Response) -> ()` |
+| `scale.dumps_str(json_input)` | `__cobrust_scale_dumps_str` | `(str) -> str` |
+| `scale.loads_str(packed)` | `__cobrust_scale_loads_str` | `(str) -> str` |
+| `molt.now()` | `__cobrust_molt_now` | `() -> molt.DateTime` |
+| `dt.isoformat()` | `__cobrust_molt_datetime_isoformat` | `(molt.DateTime) -> str` |
+| `dt.unix_timestamp()` | `__cobrust_molt_datetime_unix_timestamp` | `(molt.DateTime) -> i64` |
+| scope-exit drop | `__cobrust_molt_datetime_drop` | `(molt.DateTime) -> ()` |
 
-- `den.Connection` / `den.Cursor` / `strike.Response` are **nominal
-  handle types**: `Ty::Adt(AdtId)` with reserved ids `>= 0xE000_0000`
-  (`cobrust_types::ecosystem::ECO_ADT_BASE`). Non-`Copy`, drop-scheduled.
-  Per-module reservation convention: each module gets a 256-slot block
-  starting at `ECO_ADT_BASE + N*0x100` (`den`: 0xE000_0000..0xE000_00FF;
-  `strike`: 0xE000_0100..0xE000_01FF; new handle-typed modules take the
-  next block).
+- `den.Connection` / `den.Cursor` / `strike.Response` / `molt.DateTime`
+  are **nominal handle types**: `Ty::Adt(AdtId)` with reserved ids
+  `>= 0xE000_0000` (`cobrust_types::ecosystem::ECO_ADT_BASE`).
+  Non-`Copy`, drop-scheduled. Per-module reservation convention: each
+  module gets a 256-slot block starting at `ECO_ADT_BASE + N*0x100`
+  (`den`: 0xE000_0000..0xE000_00FF;
+  `strike`: 0xE000_0100..0xE000_01FF;
+  `scale`: 0xE000_0200..0xE000_02FF (reserved for a future bytes-ABI
+  handle; no handles in the first proof);
+  `molt`: 0xE000_0300..0xE000_03FF;
+  new handle-typed modules take the next block).
 - `fetchall` returns a `str` rendering for the first proof
   (`[(42,)]`); `row -> list[tuple]` is the immediate follow-up.
 - `nest.loads_str` is **pure value-in-value-out** (`str -> str`): the
@@ -62,7 +86,11 @@ Status:
   (TOML→JSON canonicalization, Q6; L2-verifier bind deferred);
   `strike` = `semantic` (HTTP is not a bit-for-bit parity surface —
   timing, header ordering, connection-pool side effects are
-  behavior-equivalent rather than identical).
+  behavior-equivalent rather than identical);
+  `scale` = `semantic` (msgpack canonical-form behavioral parity for
+  the unpack value tree; the HEX wrapper is Cobrust-specific);
+  `molt` = `semantic` (datetime parsing / formatting variants are
+  behavior-equivalent rather than bit-for-bit CPython parity).
 - `strike.get` / `strike.post` and the Response methods all fail
   **cleanly** at the C-ABI boundary: any network error / invalid URL
   / non-JSON body returns a sentinel Response (`status_code == 0`,
@@ -127,15 +155,17 @@ flowchart TD
 - `collect_ecosystem_modules(&mir)` (in `build/intrinsics.rs`) scans
   retargeted `Constant::Str` callees for the `__cobrust_<mod>_*` prefix.
   Currently recognized prefixes: `__cobrust_den_*` → `den`,
-  `__cobrust_nest_*` → `nest`, `__cobrust_strike_*` → `strike`. New
+  `__cobrust_nest_*` → `nest`, `__cobrust_strike_*` → `strike`,
+  `__cobrust_scale_*` → `scale`, `__cobrust_molt_*` → `molt`. New
   modules extend `ecosystem_module_for_symbol`.
 - `locate_ecosystem_archive(module, release)` finds (or dev-builds)
   `lib<mod>.a`; the link line appends only the imported modules'
   archives, AFTER `libcobrust_stdlib.a` (both are Rust staticlibs that
   embed libstd; this order de-dups it). On Linux the stdlib + ecosystem
   archives are wrapped in `--start-group/--end-group` for single-pass
-  GNU ld. `cobrust-den` / `cobrust-nest` / `cobrust-strike` crate-types
-  include `staticlib`. Only imported modules link (risk 3: no link bloat).
+  GNU ld. `cobrust-den` / `cobrust-nest` / `cobrust-strike` /
+  `cobrust-scale` / `cobrust-molt` crate-types include `staticlib`.
+  Only imported modules link (risk 3: no link bloat).
 
 ## Done-means (ADR-0072 §4) — verification state
 
@@ -188,6 +218,39 @@ flowchart TD
    `cabi_get_with_invalid_url_returns_status_zero_sentinel` both
    assert `delta == 1` under a serialized counter lock).
 
+### `scale` fourth-module proof
+1. Type-checks against the manifest, no `AmbiguousType`. ✅
+2. MIR retargets to `__cobrust_scale_*`. ✅
+3. `cc` links `prog.o + cobrust_main.o + libcobrust_stdlib.a + libscale.a`
+   (same link policy as den / nest / strike). ✅
+4. The compiled `.cb` binary round-trips `{"key":"value"}` and
+   `{"items":[1,2,3],"name":"x"}` through `scale.dumps_str` (JSON →
+   msgpack-HEX) → `scale.loads_str` (HEX → canonical JSON) and prints
+   the inputs back unchanged. ✅
+   (`crates/cobrust-cli/tests/ecosystem_scale_e2e.rs`)
+5. Drop correctness: no handles in this surface; the input + output
+   `Str` buffers are freed by the existing Str drop schedule (the
+   "easy case" the chain handles natively, same as `nest`). ✅
+   (cabi unit tests in `cobrust-scale/src/cabi.rs`)
+
+### `molt` fifth-module proof
+1. Type-checks against the manifest, no `AmbiguousType`. ✅ (the
+   `molt.DateTime` handle is a fresh reserved-AdtId block in the
+   FOURTH 256-slot range; method inference for `now.isoformat()` /
+   `.unix_timestamp()` routes through `lookup_handle_method`).
+2. MIR retargets to `__cobrust_molt_*`. ✅
+3. `cc` links `prog.o + cobrust_main.o + libcobrust_stdlib.a + libmolt.a`
+   (same link policy as den / strike). ✅
+4. The compiled `.cb` binary captures the current UTC time, prints
+   the RFC3339 isoformat + UNIX epoch seconds, and a twin-invocation
+   variant proves the wall clock is monotone across two scope-local
+   handles. ✅ (`crates/cobrust-cli/tests/ecosystem_molt_e2e.rs`)
+5. Drop correctness: the `DateTime` handle drops exactly once at
+   scope exit via `__cobrust_molt_datetime_drop`. ✅
+   (cabi unit tests in `cobrust-molt/src/cabi.rs::DROP_COUNT`
+   instrument; `cabi_round_trip_drops_once` asserts `delta == 1`
+   under a serialized counter lock).
+
 ### Generalization finding
 
 The second-module (nest) wiring touched 4 source files and added 2 (the
@@ -225,6 +288,46 @@ NO chain-logic changes were needed: `check.rs` `try_synth_ecosystem_call`,
 `upgrade_move_to_copy_handle` receiver-borrow pass all stayed UNTOUCHED.
 The reserved-AdtId block convention (`ECO_ADT_BASE + N*0x100`) lets new
 handle-typed modules coexist with den without collision.
+
+### `scale` + `molt` 5-module proof — generalization finding
+
+The fourth (`scale`) + fifth (`molt`) wiring landed in ONE batch and
+**confirms the chain is fully general** after the strike third-module
+proof. Per-layer cost:
+
+- `cobrust-types/src/ecosystem.rs`: pure additive — 2 free-fn rows for
+  scale (`dumps_str` + `loads_str`), 1 handle-id constant
+  (`MOLT_DATETIME_ADT`, FOURTH 256-slot block), 1 handle-`Ty`
+  constructor, 1 drop-symbol arm, 1 free-fn row + 2 method rows for
+  molt, and `is_ecosystem_module` alternation extended from 3 → 5.
+  9 new unit tests.
+- `cobrust-codegen/src/llvm_backend.rs`: pure additive — 2 extern
+  decls for scale (str → str), 4 extern decls for molt
+  (`now() -> ptr`, `isoformat(ptr) -> ptr`, `unix_timestamp(ptr) -> i64`,
+  `drop(ptr)`). `emit_drop_for_ty` picks up `MOLT_DATETIME_ADT` via
+  `handle_drop_symbol` with no code change.
+- `cobrust-cli/src/build/intrinsics.rs`: 2 lines added to the
+  `ecosystem_module_for_symbol` alternation (`__cobrust_scale_*` /
+  `__cobrust_molt_*` prefix arms).
+- `cobrust-scale/src/cabi.rs` (new) + `cobrust-molt/src/cabi.rs` (new):
+  the L4 runtime shims, mirroring nest (scale, value pattern) and
+  den/strike (molt, handle pattern + DROP_COUNT). Both add
+  `staticlib` to crate-type + `cobrust-stdlib` dev-dep + macOS
+  cdylib `-Wl,-undefined,dynamic_lookup` build.rs.
+- 2 new E2E tests (`ecosystem_scale_e2e.rs` + `ecosystem_molt_e2e.rs`),
+  compile → link → run, both passing. den/nest/strike E2E regression
+  green.
+
+**Chain-logic edits this batch**: ZERO. The chain genuinely supports
+N modules off pure-data additions; the only generalization step
+required was the recognizer alternation (one new line per module, same
+as nest already established). The 256-slot AdtId block convention also
+extends to a "block-per-module-even-if-no-handles-yet" rule (scale
+reserves the THIRD block without populating it, so a future raw-bytes
+ABI handle can land without renumbering molt's block) — this is the
+honest finding from a 5-module proof: when the chain is general, the
+constraint that shows up next is **address-space reservation
+discipline**, not generalization debt.
 
 ### Honest finding — source-level `<module>.<HandleType>` annotation gap
 

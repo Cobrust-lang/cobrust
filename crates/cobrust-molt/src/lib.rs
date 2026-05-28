@@ -24,6 +24,14 @@ pub use crate::parser::{
     relativedelta_add,
 };
 
+// ADR-0072 fifth-module proof — C-ABI shims for `.cb` programs doing
+// `import molt` + `molt.now()` / `DateTime.isoformat()` /
+// `.unix_timestamp()`. The shims are `#[no_mangle] extern "C"` and live
+// behind their own module so the rlib / cdylib paths still compile
+// cleanly; the `staticlib` archive carries the symbols out to
+// `cobrust build`.
+pub mod cabi;
+
 #[cfg(feature = "pyo3")]
 mod pyo3_bindings;
 

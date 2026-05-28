@@ -11,7 +11,12 @@ description = "Cobrust translation of msgpack-python 1.0.8 (M6 native-ext scope 
 
 [lib]
 name = "scale"
-crate-type = ["rlib", "cdylib"]
+# ADR-0072 Q5: `staticlib` produces `libscale.a` for per-import static
+# linking by `cobrust build` (fourth-module generalization off the den
+# first proof + nest + strike). `cdylib` stays for the PyO3 native
+# module; `rlib` for in-workspace Rust consumers + the cabi unit
+# tests. cargo permits the three side by side.
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [lints]
 workspace = true
@@ -25,3 +30,11 @@ pyo3 = ["dep:pyo3"]
 [dependencies]
 serde_json = { workspace = true }
 pyo3 = { version = "0.24.2", features = ["extension-module"], optional = true }
+
+[dev-dependencies]
+# ADR-0072 §4 + Q5: the `cabi` shims declare the `__cobrust_str_*`
+# primitives `extern "C"` and bind them from `libcobrust_stdlib.a` at
+# the `cobrust build` link step (NO Rust-level production dependency).
+# For the in-crate `cabi` unit tests, link cobrust-stdlib's rlib as a
+# dev-dependency so those `extern "C"` decls resolve under `cargo test`.
+cobrust-stdlib = { path = "../cobrust-stdlib" }

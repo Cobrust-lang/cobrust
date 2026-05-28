@@ -11,7 +11,12 @@ description = "Cobrust translation of python-dateutil 2.9.0.post0 (M5 scope wind
 
 [lib]
 name = "molt"
-crate-type = ["rlib", "cdylib"]
+# ADR-0072 Q5: `staticlib` produces `libmolt.a` for per-import static
+# linking by `cobrust build` (fifth-module generalization off the den
+# first proof + nest + strike + scale). `cdylib` stays for the PyO3
+# native module; `rlib` for in-workspace Rust consumers + the cabi
+# unit tests. cargo permits the three side by side.
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [lints]
 workspace = true
@@ -24,6 +29,17 @@ pyo3 = ["dep:pyo3"]
 
 [dependencies]
 serde_json = { workspace = true }
+# `time` 0.3 is already a workspace dep (used by cobrust-llm-router for
+# Rfc3339 ledger timestamps). Shared rust-version-compatible. The
+# `formatting` feature gives us `OffsetDateTime::format` with the
+# Rfc3339 well-known description.
+time = { version = "0.3", features = ["formatting", "macros"] }
 pyo3 = { version = "0.24.2", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
+# ADR-0072 §4 + Q5: the `cabi` shims declare the `__cobrust_str_*`
+# primitives `extern "C"` and bind them from `libcobrust_stdlib.a` at
+# the `cobrust build` link step (NO Rust-level production dependency).
+# For the in-crate `cabi` unit tests, link cobrust-stdlib's rlib as a
+# dev-dependency so those `extern "C"` decls resolve under `cargo test`.
+cobrust-stdlib = { path = "../cobrust-stdlib" }

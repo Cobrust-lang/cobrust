@@ -629,8 +629,10 @@ dependencies = [
 name = "cobrust-molt"
 version = "0.6.2"
 dependencies = [
+ "cobrust-stdlib",
  "pyo3",
  "serde_json",
+ "time",
 ]
 
 [[package]]
@@ -685,6 +687,7 @@ dependencies = [
 name = "cobrust-scale"
 version = "0.6.2"
 dependencies = [
+ "cobrust-stdlib",
  "pyo3",
  "serde_json",
 ]

@@ -1344,6 +1344,10 @@ pub fn collect_ecosystem_modules(module: &Module) -> std::collections::BTreeSet<
 /// - `nest` — second-module generalization (TOML, rebrand of tomli).
 /// - `strike` — third-module generalization (HTTP client, rebrand of
 ///   requests; handle pattern like `den`).
+/// - `scale` — fourth-module generalization (msgpack, rebrand of
+///   msgpack-python; value pattern like `nest`).
+/// - `molt` — fifth-module generalization (datetime, rebrand of
+///   python-dateutil; handle pattern like `den`/`strike`).
 ///
 /// New modules extend this table off the proven chain.
 fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
@@ -1353,6 +1357,10 @@ fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
         Some("nest")
     } else if sym.starts_with("__cobrust_strike_") {
         Some("strike")
+    } else if sym.starts_with("__cobrust_scale_") {
+        Some("scale")
+    } else if sym.starts_with("__cobrust_molt_") {
+        Some("molt")
     } else {
         None
     }

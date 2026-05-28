@@ -2535,6 +2535,60 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0072 fourth-module proof: scale ecosystem-module C-ABI -
+        // `scale` (msgpack, rebrand of msgpack-python) — pure value-in-
+        // value-out (`Str → Str`); the first-proof shape mirrors nest's
+        // (no handles, no drops; the returned `Str` is freed by the
+        // existing Str drop schedule). The str→str round-trip carries
+        // a JSON string in, returns its msgpack-hex rendering out
+        // (`dumps_str`) or accepts hex-rendered msgpack and returns
+        // canonical JSON (`loads_str`). A raw bytes ABI is a tracked
+        // follow-up. Exported by `cobrust-scale/src/cabi.rs`, linked as
+        // `libscale.a` only when the program imports `scale`.
+        //
+        //   __cobrust_scale_dumps_str(json: *mut Str) -> *mut Str
+        //   __cobrust_scale_loads_str(packed: *mut Str) -> *mut Str
+        let scale_dumps_str_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let scale_loads_str_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_scale_dumps_str", scale_dumps_str_ty, 1usize),
+            ("__cobrust_scale_loads_str", scale_loads_str_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
+
+        // -- ADR-0072 fifth-module proof: molt ecosystem-module C-ABI --
+        // `molt` (datetime, rebrand of python-dateutil) — pairs handle
+        // pattern (DateTime, like den's Connection/Cursor and strike's
+        // Response) with a free-function entrypoint (`now()`, like
+        // den's `connect`). Exported by `cobrust-molt/src/cabi.rs`,
+        // linked as `libmolt.a` only when the program imports `molt`.
+        //
+        //   __cobrust_molt_now() -> *mut DateTime
+        //   __cobrust_molt_datetime_isoformat(dt) -> *mut Str
+        //   __cobrust_molt_datetime_unix_timestamp(dt) -> i64
+        //   __cobrust_molt_datetime_drop(dt) -> void
+        //
+        // The `_drop` symbol is emitted by `emit_drop_for_ty` at the
+        // handle local's scope exit via `handle_drop_symbol(id)` (chain
+        // is already general — no new drop wiring needed).
+        let molt_now_ty = ptr_ty.fn_type(&[], false);
+        let molt_iso_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let molt_unix_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let molt_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_molt_now", molt_now_ty, 0usize),
+            ("__cobrust_molt_datetime_isoformat", molt_iso_ty, 1),
+            ("__cobrust_molt_datetime_unix_timestamp", molt_unix_ty, 1),
+            ("__cobrust_molt_datetime_drop", molt_drop_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
