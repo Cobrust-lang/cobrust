@@ -217,6 +217,64 @@ jobs:
       - name: Run cargo udeps
         run: cargo +nightly udeps --workspace --all-targets --backend depinfo
 
+  # ADR-0075 §6 Sprint B — riscv64gc-unknown-linux-gnu cross-build + qemu smoke.
+  #
+  # Gating policy: option (D) per ADR-0075 §Q3 — runs every push/PR with
+  # `continue-on-error: true`. Non-blocking to avoid stalling the LLM
+  # write-and-commit loop on a fresh cross surface, while still giving
+  # continuous regression signal. Same pattern as the cargo-udeps job
+  # (F44 lesson). Promote to blocking once the baseline is clean for 7
+  # consecutive days.
+  #
+  # What it exercises:
+  # 1. Installs gcc-riscv64-linux-gnu + qemu-user-static via apt (the test
+  #    gate keys on `riscv64-linux-gnu-gcc` + `qemu-riscv64` PATH probes;
+  #    cf. `crates/cobrust-cli/tests/cross_compile_riscv64_e2e.rs:89,104`).
+  # 2. Adds the `riscv64gc-unknown-linux-gnu` rustup target via the
+  #    `targets:` field of `dtolnay/rust-toolchain`.
+  # 3. Cross-builds `cobrust-stdlib` for the target (the CLI subprocesses
+  #    the same command on first cross use; pre-building short-circuits
+  #    that path so the smoke step is fast).
+  # 4. Builds the host `cobrust-cli` so the E2E test + smoke step can
+  #    invoke the binary at `target/debug/cobrust`.
+  # 5. Runs the gated E2E test live (all three skip-gates now satisfied —
+  #    rustup target, cross-cc, qemu — so the live branch executes).
+  # 6. Smoke: `cobrust build --target=riscv64gc-unknown-linux-gnu
+  #    examples/hello.cb` → run under `qemu-riscv64`, grep stdout.
+  rv64-cross-smoke:
+    name: RV64 cross-build + qemu (ADR-0075 §6 Sprint B)
+    runs-on: ubuntu-latest
+    continue-on-error: true  # non-blocking — see comment above
+    needs: [build]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: dtolnay/rust-toolchain@stable  # stable 2025-01
+        with:
+          toolchain: 1.94.1
+          targets: riscv64gc-unknown-linux-gnu
+      - name: Install LLVM 18 + RV cross-toolchain + qemu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            llvm-18 llvm-18-dev libpolly-18-dev \
+            gcc-riscv64-linux-gnu qemu-user-static
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2  # v2.7.8
+      - name: Cross-build cobrust-stdlib (riscv64gc-unknown-linux-gnu)
+        run: cargo build -p cobrust-stdlib --target=riscv64gc-unknown-linux-gnu --locked
+      - name: Build host cobrust-cli
+        run: cargo build -p cobrust-cli --locked
+      - name: cross_compile_riscv64_e2e (live)
+        run: cargo test -p cobrust-cli --test cross_compile_riscv64_e2e --locked -- --nocapture
+      - name: Smoke — cross-build + qemu-run examples/hello.cb
+        run: |
+          ./target/debug/cobrust build \
+            --target=riscv64gc-unknown-linux-gnu \
+            examples/hello.cb -o target/hello-rv64
+          file target/hello-rv64
+          qemu-riscv64 -L /usr/riscv64-linux-gnu target/hello-rv64 | tee /tmp/rv.out
+          grep -q "hello, world" /tmp/rv.out
+
   # Optional: real-LLM smoke (gated by step-level env check;
   # job-level `if: ${{ secrets.X != '' }}` is rejected by GitHub Actions
   # validation — secrets context is restricted to env/with/run.)
