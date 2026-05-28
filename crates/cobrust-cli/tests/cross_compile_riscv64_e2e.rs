@@ -124,7 +124,18 @@ fn cross_compile_riscv64_hello() {
     let tmp = tempfile::tempdir().expect("tempdir for cross E2E");
     let src_path = tmp.path().join("hello_rv.cb");
     let out_path = tmp.path().join("hello_rv");
-    std::fs::write(&src_path, "print(\"hello cobrust riscv64\")\n").expect("write hello_rv.cb");
+    // F67: source MUST declare `fn main` — codegen only emits the
+    // `_cobrust_user_main` symbol for bare-name `main`. Module-level
+    // `print(...)` lowers to `_cobrust_init_<n>` (see
+    // `cobrust-codegen/src/llvm_backend.rs:3221-3229`) which the C
+    // runtime shim never calls, leaving `_cobrust_user_main` undefined
+    // at link time. Same wrapping discipline as
+    // `ecosystem_den_e2e.rs:18-19` and `examples/hello.cb`.
+    std::fs::write(
+        &src_path,
+        "fn main() -> i64:\n    print(\"hello cobrust riscv64\")\n    return 0\n",
+    )
+    .expect("write hello_rv.cb");
 
     let mut build_cmd = Command::new(&cobrust);
     build_cmd
