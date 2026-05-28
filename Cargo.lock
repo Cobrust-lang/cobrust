@@ -549,6 +549,7 @@ name = "cobrust-hood"
 version = "0.6.2"
 dependencies = [
  "clap",
+ "cobrust-stdlib",
  "pyo3",
 ]
 

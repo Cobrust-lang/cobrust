@@ -11,7 +11,12 @@ description = "Cobrust translation of click 8.1.7 (ecosystem batch). Decorator-s
 
 [lib]
 name = "hood"
-crate-type = ["rlib", "cdylib"]
+# ADR-0073 second proof — `staticlib` produces `libhood.a` for per-
+# import static linking by `cobrust build` (hood is the SEVENTH module
+# in the proven ecosystem-import chain, the second to carry a callback
+# parameter — first was pit). `cdylib` stays for the PyO3 native
+# module; `rlib` for in-workspace Rust consumers + the cabi unit tests.
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [lints]
 workspace = true
@@ -25,3 +30,11 @@ pyo3 = ["dep:pyo3"]
 [dependencies]
 clap = { version = "4", features = ["std", "error-context"], default-features = false }
 pyo3 = { version = "0.24.2", features = ["extension-module"], optional = true }
+
+[dev-dependencies]
+# ADR-0073 §4 + Q5: the `cabi` shims declare the `__cobrust_str_*`
+# primitives `extern "C"` and bind them from `libcobrust_stdlib.a` at
+# the `cobrust build` link step (NO Rust-level production dependency).
+# For the in-crate `cabi` unit tests, link cobrust-stdlib's rlib as a
+# dev-dependency so those `extern "C"` decls resolve under `cargo test`.
+cobrust-stdlib = { path = "../cobrust-stdlib" }

@@ -41,6 +41,14 @@
 
 mod decorators;
 
+// ADR-0073 second proof — `.cb` ecosystem-import C-ABI shims. The
+// `cabi` module declares the `__cobrust_hood_*` symbols `.cb` programs
+// bind to at link time after `cobrust build` retargets `hood.Command(...)`
+// + `cmd.handler(...)` + `cmd.run()` calls onto these symbols. See
+// `cabi::DROP_COUNT` for the drop-once instrument used by the test
+// suite.
+pub mod cabi;
+
 pub use crate::decorators::{
     ArgumentSpec, ClickError, ClickErrorKind, Command, OptionSpec, ParamType, RunResult,
 };

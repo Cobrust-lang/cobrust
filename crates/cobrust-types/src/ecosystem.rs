@@ -75,8 +75,9 @@ pub const MOLT_DATETIME_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x300);
 // - `Request`         — incoming HTTP request passed to a handler fn.
 // - `Response`        — outbound HTTP response a handler returns.
 // - `ServerHandle`    — the `serve_in_background` join handle.
-// hood (rebrand of click) gets the SIXTH block (`0xE000_0500..0x05FF`)
-// in its sibling sprint.
+// hood (rebrand of click) reserves the SIXTH block
+// (`0xE000_0500..0xE000_05FF`) — second proof of the ADR-0073
+// callback chain (`Command.handler(fn_name)`).
 
 /// `AdtId` for the `pit.App` handle (ADR-0073 §2 D1).
 pub const PIT_APP_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x400);
@@ -86,6 +87,11 @@ pub const PIT_REQUEST_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x401);
 pub const PIT_RESPONSE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x402);
 /// `AdtId` for the `pit.ServerHandle` handle (ADR-0073).
 pub const PIT_SERVER_HANDLE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x403);
+
+/// `AdtId` for the `hood.Command` handle (ADR-0073 second proof —
+/// click-style command-callback wiring; the SIXTH per-module 256-slot
+/// block `0xE000_0500..0xE000_05FF`).
+pub const HOOD_COMMAND_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x500);
 
 /// The Cobrust `Ty` for the `den.Connection` opaque handle.
 #[must_use]
@@ -151,6 +157,32 @@ pub fn pit_handler_fn_ty() -> FnTy {
     }
 }
 
+/// The Cobrust `Ty` for the `hood.Command` opaque handle (ADR-0073
+/// second proof).
+#[must_use]
+pub fn hood_command_ty() -> Ty {
+    Ty::Adt(HOOD_COMMAND_ADT, vec![])
+}
+
+/// The handler `FnTy` `hood.Command.handler` expects in its argument
+/// (ADR-0073 second proof — click-style command callback). The
+/// `.cb` source's `fn handle_greet() -> i64: …` compiles to a fn
+/// with the fixed C-ABI shape (`extern "C" fn(*mut u8) -> *mut u8`)
+/// per ADR-0073 §5.1 — the trampoline calls it with a null pointer
+/// arg and discards the return pointer (the source-level
+/// `-> i64` return is the user's exit-code intent; the wire-level
+/// `*mut u8` is the marshalling shim).
+#[must_use]
+pub fn hood_command_handler_fn_ty() -> FnTy {
+    FnTy {
+        positional: vec![],
+        named: vec![],
+        var_positional: None,
+        var_keyword: None,
+        return_ty: Box::new(Ty::Int),
+    }
+}
+
 /// Is this `AdtId` one of the reserved ecosystem-handle ids?
 #[must_use]
 pub fn is_ecosystem_handle(id: AdtId) -> bool {
@@ -177,6 +209,8 @@ pub fn handle_drop_symbol(id: AdtId) -> Option<&'static str> {
         // PIT_REQUEST_ADT — Rust-owned, never dropped from `.cb` (ADR-0073 §2 D6).
         PIT_RESPONSE_ADT => Some("__cobrust_pit_response_drop"),
         PIT_SERVER_HANDLE_ADT => Some("__cobrust_pit_server_handle_drop"),
+        // ADR-0073 second proof — hood.Command opaque handle.
+        HOOD_COMMAND_ADT => Some("__cobrust_hood_command_drop"),
         _ => None,
     }
 }
@@ -354,6 +388,20 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             pit_response_ty(),
             PyCompatTier::Semantic,
         )),
+        // ADR-0073 second proof — `hood` (click, CLI command parsing,
+        // ecosystem rebrand of Python's `click` library) `.cb` wiring.
+        // First proof exposes the trio sufficient to register a single
+        // command with a callback and dispatch it:
+        // - `hood.Command(name, help) -> Command` — construct a Command.
+        // - `Command.handler(fn)`     — bind the click-style callback.
+        // - `Command.run() -> i64`    — invoke the bound callback.
+        // The handle methods are wired in `lookup_handle_method`.
+        ("hood", "Command") => Some(EcoSig::from_values(
+            "__cobrust_hood_command_new",
+            vec![Ty::Str, Ty::Str],
+            hood_command_ty(),
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -463,6 +511,35 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             pit_server_handle_ty(),
             PyCompatTier::Semantic,
         )),
+        // ADR-0073 second proof — `hood.Command` handle methods.
+        //
+        // `command.handler(fn)` is the load-bearing callback site:
+        // the parameter is an `EcoParam::Callback` whose `FnTy` is
+        // `fn() -> i64`. The MIR lowering emits `Constant::FnRef(def_id)`
+        // for this slot and codegen materialises the fn pointer via the
+        // `function_ids` table.
+        //
+        // `command.run()` dispatches the bound callback. Returns the
+        // i64 the callback returned (exit-code intent at the source
+        // level), so a `.cb` `fn main() -> i64:` can directly
+        // `return cmd.run()`.
+        //
+        // `handler` returns `Ty::Int` (not Command) to match pit's
+        // `route -> Ty::None` discipline (mutation on the receiver in
+        // place; the return-value channel is a no-op sentinel — i64
+        // zero is harmless when the source pattern is `let _ = cmd.handler(...)`).
+        (HOOD_COMMAND_ADT, "handler") => Some(EcoSig {
+            runtime_symbol: "__cobrust_hood_command_handler",
+            params: vec![EcoParam::Callback(hood_command_handler_fn_ty())],
+            ret: Ty::Int,
+            tier: PyCompatTier::Semantic,
+        }),
+        (HOOD_COMMAND_ADT, "run") => Some(EcoSig::from_values(
+            "__cobrust_hood_command_run",
+            vec![],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -473,7 +550,10 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
 /// `den.attr` accesses resolve against the manifest.
 #[must_use]
 pub fn is_ecosystem_module(name: &str) -> bool {
-    matches!(name, "den" | "nest" | "strike" | "scale" | "molt" | "pit")
+    matches!(
+        name,
+        "den" | "nest" | "strike" | "scale" | "molt" | "pit" | "hood"
+    )
 }
 
 #[cfg(test)]
@@ -881,5 +961,83 @@ mod tests {
         // canned Response (`pit.text_response(200, "pong")`) — the
         // "pong" first proof.
         assert!(lookup_handle_method(&pit_request_ty(), "path").is_none());
+    }
+
+    // ADR-0073 second proof — `hood` (click, CLI commands). First module
+    // wired off pit's proven callback chain.
+
+    #[test]
+    fn hood_is_a_known_module() {
+        assert!(is_ecosystem_module("hood"));
+    }
+
+    #[test]
+    fn hood_command_handle_id_is_in_reserved_sixth_block() {
+        assert!(is_ecosystem_handle(HOOD_COMMAND_ADT));
+        const _: () = {
+            assert!(HOOD_COMMAND_ADT.0 >= ECO_ADT_BASE + 0x500);
+            assert!(HOOD_COMMAND_ADT.0 < ECO_ADT_BASE + 0x600);
+        };
+    }
+
+    #[test]
+    fn hood_command_drop_symbol_resolves() {
+        assert_eq!(
+            handle_drop_symbol(HOOD_COMMAND_ADT),
+            Some("__cobrust_hood_command_drop")
+        );
+    }
+
+    #[test]
+    fn hood_command_constructor_takes_name_and_help() {
+        let sig = lookup_module_fn("hood", "Command").expect("hood.Command in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_hood_command_new");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str, Ty::Str]);
+        assert_eq!(sig.ret, hood_command_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn hood_command_handler_carries_callback_slot() {
+        let sig = lookup_handle_method(&hood_command_ty(), "handler").expect("Command.handler");
+        assert_eq!(sig.runtime_symbol, "__cobrust_hood_command_handler");
+        assert_eq!(sig.params.len(), 1);
+        match &sig.params[0] {
+            EcoParam::Callback(fn_ty) => {
+                assert!(fn_ty.positional.is_empty());
+                assert_eq!(*fn_ty.return_ty, Ty::Int);
+            }
+            EcoParam::Value(other) => {
+                panic!("handler param must be Callback; got Value({other:?})")
+            }
+        }
+        // Returns Ty::Int (zero sentinel) — matches pit.route's "no
+        // double-alias of the receiver" pattern.
+        assert_eq!(sig.ret, Ty::Int);
+    }
+
+    #[test]
+    fn hood_command_run_returns_i64() {
+        let sig = lookup_handle_method(&hood_command_ty(), "run").expect("Command.run");
+        assert_eq!(sig.runtime_symbol, "__cobrust_hood_command_run");
+        assert!(sig.params.is_empty());
+        assert_eq!(sig.ret, Ty::Int);
+    }
+
+    #[test]
+    fn hood_methods_only_match_command_receiver() {
+        // Cross-handle: pit.App / strike.Response must never resolve
+        // hood methods.
+        assert!(lookup_handle_method(&pit_app_ty(), "run").is_none());
+        assert!(lookup_handle_method(&strike_response_ty(), "handler").is_none());
+        // Non-handle receivers never match.
+        assert!(lookup_handle_method(&Ty::Str, "handler").is_none());
+        // Unknown method on the right receiver is None.
+        assert!(lookup_handle_method(&hood_command_ty(), "nope").is_none());
+    }
+
+    #[test]
+    fn unknown_hood_fn_is_none() {
+        assert!(lookup_module_fn("hood", "nope").is_none());
     }
 }

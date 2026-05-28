@@ -35,9 +35,16 @@ fn pyo3_feature_build_succeeds_or_skips_cleanly() {
         cargo_toml.contains(r#"pyo3 = ["dep:pyo3"]"#),
         "Cargo.toml must declare `pyo3 = [\"dep:pyo3\"]` per ADR-0011 §3 + ADR-0022"
     );
+    // ADR-0073 second-proof sprint added `staticlib` to the crate-type
+    // list (the `libhood.a` archive cobrust build links per-import;
+    // seventh-module generalization of the proven chain — second
+    // module exercising the cross-boundary callback chain). Both
+    // forms are accepted — pit's pyo3-compile test made the same
+    // flip ahead of hood.
     assert!(
-        cargo_toml.contains(r#"crate-type = ["rlib", "cdylib"]"#),
-        "Cargo.toml must declare cdylib crate-type per ADR-0011 §3 + ADR-0022"
+        cargo_toml.contains(r#"crate-type = ["rlib", "cdylib", "staticlib"]"#)
+            || cargo_toml.contains(r#"crate-type = ["rlib", "cdylib"]"#),
+        "Cargo.toml must declare cdylib crate-type per ADR-0011 §3 + ADR-0022 (ADR-0073 adds staticlib)"
     );
 
     let out = Command::new("cargo")

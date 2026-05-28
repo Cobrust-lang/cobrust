@@ -1,10 +1,10 @@
 ---
 doc_kind: reference
 module_id: cb-ecosystem-import
-title: .cb ecosystem-import wiring (ADR-0072 — 5 data modules; ADR-0073 — pit callback marshalling 6th module)
+title: .cb ecosystem-import wiring (ADR-0072 — 5 data modules; ADR-0073 — pit callback marshalling 6th module + hood 7th module second proof)
 last_verified_commit: HEAD
 relates_to: [adr:0072, adr:0073, adr:0019, adr:0028, adr:0050c, adr:0071, adr:0034]
-dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-strike, cobrust-scale, cobrust-molt, cobrust-pit, cobrust-cli]
+dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-strike, cobrust-scale, cobrust-molt, cobrust-pit, cobrust-hood, cobrust-cli]
 ---
 
 # `.cb` ecosystem-import wiring — `import den` / `nest` / `strike` / `scale` / `molt` end-to-end
@@ -62,10 +62,15 @@ Status:
 | `dt.isoformat()` | `__cobrust_molt_datetime_isoformat` | `(molt.DateTime) -> str` |
 | `dt.unix_timestamp()` | `__cobrust_molt_datetime_unix_timestamp` | `(molt.DateTime) -> i64` |
 | scope-exit drop | `__cobrust_molt_datetime_drop` | `(molt.DateTime) -> ()` |
+| `hood.Command(name, help)` | `__cobrust_hood_command_new` | `(str, str) -> hood.Command` |
+| `cmd.handler(fn)` | `__cobrust_hood_command_handler` | `(hood.Command, Callback(fn() -> i64)) -> i64` |
+| `cmd.run()` | `__cobrust_hood_command_run` | `(hood.Command) -> i64` |
+| scope-exit drop | `__cobrust_hood_command_drop` | `(hood.Command) -> ()` |
 
 - `den.Connection` / `den.Cursor` / `strike.Response` / `molt.DateTime`
-  are **nominal handle types**: `Ty::Adt(AdtId)` with reserved ids
-  `>= 0xE000_0000` (`cobrust_types::ecosystem::ECO_ADT_BASE`).
+  / `pit.App` / `pit.Request` / `pit.Response` / `pit.ServerHandle`
+  / `hood.Command` are **nominal handle types**: `Ty::Adt(AdtId)` with
+  reserved ids `>= 0xE000_0000` (`cobrust_types::ecosystem::ECO_ADT_BASE`).
   Non-`Copy`, drop-scheduled. Per-module reservation convention: each
   module gets a 256-slot block starting at `ECO_ADT_BASE + N*0x100`
   (`den`: 0xE000_0000..0xE000_00FF;
@@ -73,6 +78,8 @@ Status:
   `scale`: 0xE000_0200..0xE000_02FF (reserved for a future bytes-ABI
   handle; no handles in the first proof);
   `molt`: 0xE000_0300..0xE000_03FF;
+  `pit`: 0xE000_0400..0xE000_04FF;
+  `hood`: 0xE000_0500..0xE000_05FF;
   new handle-typed modules take the next block).
 - `fetchall` returns a `str` rendering for the first proof
   (`[(42,)]`); `row -> list[tuple]` is the immediate follow-up.
@@ -435,6 +442,77 @@ asserts body == "pong" + status 200, then asserts `GET /missing` → 404.
 `cobrust-pit/src/cabi.rs::tests::trampoline_invokes_handler_and_drops_handles_once`:
 drives the trampoline directly (not through .cb), proving the
 transmute + closure-wrap + drop discipline in isolation.
+
+## ADR-0073 second proof — `hood` (the SEVENTH module, SECOND with a callback)
+
+After pit proved the callback chain crosses a `fn(Request) -> Response`
+through the C ABI, `hood` (click-rebrand, CLI commands) reuses the
+SAME chain for a different callback shape: `fn() -> i64`. Same
+trampoline pattern, same drop discipline, same compile-time-catch
+gate. The MIR / typecheck / drop / link-locate layers are
+**unchanged** — chain generality holds.
+
+### New machinery (mirrors ADR-0073 §4 for hood)
+
+- `cobrust-types/src/ecosystem.rs`: hood handles reserved in the SIXTH
+  256-slot AdtId block (`0xE000_0500..0xE000_05FF`). 1 handle id
+  (`HOOD_COMMAND_ADT`) + 1 drop symbol + 3 manifest rows
+  (`hood.Command(name, help)`, `Command.handler(fn)`, `Command.run()`).
+  `Command.handler` is the load-bearing site — uses the existing
+  `EcoParam::Callback(FnTy)` variant with a `fn() -> i64` FnTy.
+- `cobrust-types/src/check.rs::lower_named_type`: adds `hood.Command`
+  arm so the (rare today, future-proof) annotation
+  `fn x(cmd: hood.Command) -> ...:` lowers correctly.
+- `cobrust-codegen/src/llvm_backend.rs::declare_runtime_helpers`:
+  4 new `__cobrust_hood_*` extern decls — `command_new`,
+  `command_handler` (2 args incl fn-ptr slot), `command_run`,
+  `command_drop`.
+- `cobrust-hood/src/cabi.rs` (NEW): the trampoline. Stores the bound
+  callback as a `Box<dyn Fn() -> i64 + Send + Sync + 'static>` closure
+  capturing `raw: CbHandlerAbi` (auto-`Send + Sync + Copy`). Same
+  panic-abort + `'static` AOT text-segment claim as pit. The closure
+  invokes the fn-ptr with a null `*mut u8` placeholder per ADR-0073
+  §5.1's zero-arg-zero-result pattern (the source-level `-> i64`
+  return is the user's exit-code intent; the handler's printf side-
+  effect IS the value for the first proof).
+- `cobrust-hood/Cargo.toml`: `staticlib` added to crate-type for
+  `libhood.a`; `cobrust-stdlib` as dev-dep for cabi unit-test linkage.
+- `cobrust-hood/build.rs` (NEW): macOS `-Wl,-undefined,dynamic_lookup`
+  for `__cobrust_str_*` extern resolution at PyO3 cdylib build time.
+- `cobrust-cli/src/build/intrinsics.rs::ecosystem_module_for_symbol`:
+  `__cobrust_hood_*` recognizer arm (one-line; the chain stays
+  module-agnostic otherwise — `locate_ecosystem_archive` picks up
+  `libhood.a` out of the box).
+
+### `Command.handler` returns `Ty::Int` (NOT Command)
+
+Same discipline as pit's `App.route -> Ty::None`: the trampoline
+mutates the receiver in place; identity-returning the Command pointer
+would alias it into a second drop-eligible local
+(`let cmd2 = cmd.handler(...)`), causing `__cobrust_hood_command_drop`
+to fire twice at scope exit. The canonical .cb shape is
+`let _ = cmd.handler(handle_greet)`. Zero is the sentinel.
+
+### E2E (ADR-0073 second-proof done-means)
+
+`crates/cobrust-cli/tests/hood_cmd_e2e.rs::test_e2e_hood_cmd_handler_round_trip`:
+compiles + runs the .cb greet program as a subprocess via
+`std::process::Command`, asserts stdout contains "hello from hood"
++ exit code 0. 3 negative-callback cases ship alongside
+(wrong-arity / wrong-return / lambda); each reuses the SHARED
+`check_callback_arg` gate so the diagnostic phrasing matches pit's.
+
+`cobrust-hood/src/cabi.rs::tests::trampoline_invokes_handler_and_drops_once`:
+drives the trampoline directly (not through .cb), proves the
+transmute + closure-wrap + drop discipline in isolation.
+
+### Chain-generality metric
+
+`git diff --stat crates/cobrust-{mir,hir,codegen}/` after the hood
+sprint: zero hir changes, zero MIR changes, ~30 lines codegen
+(extern decls only). The mir / hir / drop / link-locate layers are
+unchanged — proving the chain generalizes off pit's pattern, the
+same way ADR-0072's data-modules generalized off den.
 
 ## Constraints / follow-ups
 

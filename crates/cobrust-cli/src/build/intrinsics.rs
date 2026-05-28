@@ -1353,6 +1353,9 @@ pub fn collect_ecosystem_modules(module: &Module) -> std::collections::BTreeSet<
 ///   `app.route(method, path, handle_ping)` form lowers `handle_ping`
 ///   to `Constant::FnRef(def_id)` and codegen materialises it as a
 ///   real fn pointer via `function_ids`).
+/// - `hood` — seventh-module generalization (click CLI, ADR-0073
+///   second proof; second module exercising the callback chain via
+///   `cmd.handler(handle_greet)`).
 ///
 /// New modules extend this table off the proven chain.
 fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
@@ -1368,6 +1371,8 @@ fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
         Some("molt")
     } else if sym.starts_with("__cobrust_pit_") {
         Some("pit")
+    } else if sym.starts_with("__cobrust_hood_") {
+        Some("hood")
     } else {
         None
     }

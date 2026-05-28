@@ -2634,6 +2634,38 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0073 second proof: hood ecosystem-module C-ABI binding -----
+        // `hood` (click, CLI commands). Second module exercising the
+        // ADR-0073 cross-boundary callback chain — proves chain
+        // generality off the pit "pong" precedent. The callback shape
+        // here is `fn() -> i64` (no positional args; i64 return is the
+        // user's exit-code intent). At the wire level the callback uses
+        // the SAME C-ABI as pit (`unsafe extern "C" fn(*mut u8) -> *mut u8`)
+        // per ADR-0073 §5.1 — the trampoline calls the fn-ptr with a
+        // null pointer placeholder and discards the return pointer.
+        //
+        //   __cobrust_hood_command_new(name: *mut Str, help: *mut Str) -> *mut Command
+        //   __cobrust_hood_command_handler(
+        //       cmd: *mut Command, handler: *const c_void
+        //   ) -> i64 = 0   (Ty::Int sentinel — registration is a
+        //                   side-effect on the receiver in place)
+        //   __cobrust_hood_command_run(cmd: *mut Command) -> i64
+        //   __cobrust_hood_command_drop(cmd) -> void
+        let hood_command_new_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let hood_command_handler_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let hood_command_run_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let hood_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_hood_command_new", hood_command_new_ty, 2usize),
+            ("__cobrust_hood_command_handler", hood_command_handler_ty, 2),
+            ("__cobrust_hood_command_run", hood_command_run_ty, 1),
+            ("__cobrust_hood_command_drop", hood_drop_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.

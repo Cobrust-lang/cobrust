@@ -2700,6 +2700,8 @@ impl Ctx {
             "pit.Request" => return crate::ecosystem::pit_request_ty(),
             "pit.Response" => return crate::ecosystem::pit_response_ty(),
             "pit.ServerHandle" => return crate::ecosystem::pit_server_handle_ty(),
+            // ADR-0073 second proof — hood.Command opaque handle.
+            "hood.Command" => return crate::ecosystem::hood_command_ty(),
             _ => {}
         }
         match s {

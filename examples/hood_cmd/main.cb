@@ -1,0 +1,33 @@
+# ADR-0073 second proof — `.cb` ecosystem-import callback chain
+# generalized to click-style command-callback wiring.
+#
+# A `.cb` program that imports hood (cobra-rebrand of Python's click),
+# constructs a Command with a name + help-text, binds a top-level
+# `fn handle_greet() -> i64:` callback via `cmd.handler(handle_greet)`,
+# and dispatches via `cmd.run()`. The callback prints "hello from hood"
+# and returns 0; the user's exit-code intent flows through `cmd.run()`
+# back into `main`.
+#
+# This is the SECOND module on the proven ADR-0073 callback chain
+# (the first was pit's pong handler). The MIR lowering emits
+# `Constant::FnRef(handle_greet)` for the callback slot; codegen
+# materialises it as a real fn-pointer via `function_ids`; the
+# trampoline in `crates/cobrust-hood/src/cabi.rs` transmutes it
+# back to the fixed C-ABI shape and wraps it in a
+# `Box<dyn Fn() -> i64 + Send + Sync + 'static>` closure stored on
+# the Command handle.
+
+import hood
+
+fn handle_greet() -> i64:
+    print("hello from hood")
+    return 0
+
+fn main() -> i64:
+    let cmd = hood.Command("greet", "Print a friendly greeting")
+    # handler() returns Ty::Int — the let _ = ... pattern discards
+    # the sentinel zero so the Command handle stays the sole owner
+    # of the underlying box (no double-drop at scope exit).
+    let _ = cmd.handler(handle_greet)
+    let _ = cmd.run()
+    return 0
