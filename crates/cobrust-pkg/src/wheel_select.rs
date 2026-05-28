@@ -36,7 +36,7 @@ pub const COBRUST_ABI_VERSION: u32 = 1;
 /// JSON wire names (snake_case) per the §3.4 JSON sample.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WheelMeta {
-    /// Wheel archive filename (e.g. `cobrust-numpy-0.1.0-x86_64-...-v3.tar.gz`).
+    /// Wheel archive filename (e.g. `cobrust-coil-0.1.0-x86_64-...-v3.tar.gz`).
     pub filename: String,
     /// Target triple this wheel targets (e.g. `x86_64-unknown-linux-gnu`).
     pub triple: String,

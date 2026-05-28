@@ -218,7 +218,8 @@ async fn dateutil_pipeline_writes_python_wrapper_and_provenance() {
     assert!(result.crate_dir.join("src/lib.rs").exists());
     assert!(result.crate_dir.join("src/parser.rs").exists());
     assert!(result.crate_dir.join("PROVENANCE.toml").exists());
-    assert!(result.crate_dir.join("python/dateutil_init.py").exists());
+    // Cobra-named per ADR-0071 §3 (`dateutil` → `molt`).
+    assert!(result.crate_dir.join("python/molt_init.py").exists());
 }
 
 /// Drives the L3 downstream subset against the *real* upstream
@@ -336,6 +337,7 @@ async fn dateutil_pipeline_escalates_when_attempt_2_also_broken() {
         other => panic!("expected EscalationExceeded, got {other:?}"),
     }
     // failure_report.md exists.
-    let report = dir.path().join("out/cobrust-dateutil/failure_report.md");
+    // Cobra-named per ADR-0071 §3 (`dateutil` → `molt`).
+    let report = dir.path().join("out/cobrust-molt/failure_report.md");
     assert!(report.exists(), "failure_report.md not at {report:?}");
 }

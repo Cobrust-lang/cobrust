@@ -42,6 +42,7 @@
 //! spec.
 
 pub mod bench;
+pub mod cobra_naming;
 pub mod config;
 pub mod cython;
 pub mod deterministic;
@@ -59,6 +60,7 @@ pub use crate::bench::{
     BenchmarkReport, BenchmarkResult, PerfTarget, classify_result, hardware_tag, short_commit_sha,
     time_median,
 };
+pub use crate::cobra_naming::{cobra_crate_name, source_to_cobra};
 pub use crate::config::TranslatorConfig;
 pub use crate::cython::{
     CythonFunction, CythonFunctionKind, CythonParam, CythonSource, CythonType,

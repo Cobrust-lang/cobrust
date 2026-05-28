@@ -6,7 +6,7 @@
 //! ```text
 //! ~/.cobrust/registry/
 //! ├── blake3/
-//! │   ├── 39e9e2d3...0069/      # cobrust-tomli 2.0.1
+//! │   ├── 39e9e2d3...0069/      # cobrust-nest 2.0.1 (source: tomli)
 //! │   │   ├── cobrust.toml
 //! │   │   ├── PROVENANCE.toml
 //! │   │   └── src/...

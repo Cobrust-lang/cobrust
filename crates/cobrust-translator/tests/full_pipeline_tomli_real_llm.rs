@@ -25,9 +25,11 @@
 //! ## Output artefacts
 //!
 //! On success the harness writes:
-//! - `crates/cobrust-tomli/src/parser.rs` — replaced with the LLM
-//!   emission (provenance header per ADR-0007).
-//! - `crates/cobrust-tomli/tests/full_pipeline_corpus.rs` — emitted as
+//! - `crates/cobrust-nest/src/parser.rs` — replaced with the LLM
+//!   emission (provenance header per ADR-0007). Per ADR-0071 §3 the
+//!   Cobrust-facing crate identity is `cobrust-nest`; the source
+//!   library (`tomli`) is preserved in PROVENANCE.toml + headers.
+//! - `crates/cobrust-nest/tests/full_pipeline_corpus.rs` — emitted as
 //!   a sibling test target so the LLM emission can be re-verified
 //!   without the API key.
 //! - `docs/agent/findings/0.1.0-beta-tomli-full-translation.md` —
@@ -40,7 +42,7 @@
 //!
 //! If < 3/5 canonical entrypoints PASS, the harness:
 //! - Writes the finding showing the gap data verbatim.
-//! - Does NOT replace `crates/cobrust-tomli/src/parser.rs`.
+//! - Does NOT replace `crates/cobrust-nest/src/parser.rs`.
 //! - Returns cleanly so CI doesn't go red on infra issues; CTO inspects
 //!   the finding and decides whether to escalate to a follow-up sprint.
 
@@ -770,9 +772,10 @@ async fn t1_1_full_pipeline_tomli_real_llm() {
         perf_numbers.ratio_10m()
     );
 
-    // ---- Promote successful crate to /crates/cobrust-tomli/src/parser.rs ---
+    // ---- Promote successful crate to /crates/cobrust-nest/src/parser.rs ---
+    // Cobra-named per ADR-0071 §3 (`tomli` → `nest`).
     let promoted = if canonical_pass_count >= 4 {
-        println!("\n--- Promoting LLM-emitted parser.rs to crates/cobrust-tomli/ ---");
+        println!("\n--- Promoting LLM-emitted parser.rs to crates/cobrust-nest/ ---");
         match promote_emission(&emissions) {
             Ok(_) => {
                 println!("  promotion        : PASS");
@@ -819,7 +822,7 @@ async fn t1_1_full_pipeline_tomli_real_llm() {
     );
     println!("  Canonical 5                 : {canonical_pass_count}/5");
     println!(
-        "  Promoted to cobrust-tomli/  : {}",
+        "  Promoted to cobrust-nest/   : {}",
         if promoted { "yes" } else { "no" }
     );
     println!("  OVERALL                     : {overall}");
@@ -940,8 +943,11 @@ fn synthesize_full_crate(crate_dir: &Path, emissions: &[FnEmission]) -> std::io:
     std::fs::create_dir_all(crate_dir.join("src"))?;
     std::fs::create_dir_all(crate_dir.join("tests"))?;
 
+    // Cobra-named per ADR-0071 §3 (`tomli` → `nest`); the `-llm-synth`
+    // suffix marks this as the in-tempdir verification crate, not the
+    // production cobrust-nest crate.
     let cargo_toml = r#"[package]
-name = "cobrust-tomli-llm-synth"
+name = "cobrust-nest-llm-synth"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -1705,7 +1711,8 @@ fn classify_canonical_results(
         .collect()
 }
 
-// ---- Promotion: write LLM-emitted parser to crates/cobrust-tomli/src/parser.rs
+// ---- Promotion: write LLM-emitted parser to crates/cobrust-nest/src/parser.rs
+// (cobra-named per ADR-0071 §3).
 
 fn promote_emission(emissions: &[FnEmission]) -> Result<(), String> {
     let mut parser_rs = String::new();
@@ -1749,7 +1756,7 @@ fn promote_emission(emissions: &[FnEmission]) -> Result<(), String> {
         parser_rs.push('\n');
     }
 
-    let dest = workspace_root().join("crates/cobrust-tomli/src/parser.rs");
+    let dest = workspace_root().join("crates/cobrust-nest/src/parser.rs");
     std::fs::write(&dest, parser_rs).map_err(|e| format!("write parser.rs: {e}"))?;
 
     // Run rustfmt over the promoted parser.rs so workspace fmt-check passes.
@@ -2046,10 +2053,10 @@ fn record_finding(
              Constitution §1.2 — first time a complete public API of a real \
              Python library has been LLM-translated and verified against \
              CPython oracle on canonical + 1024-fuzz inputs.\n\n\
-             Cobrust-tomli now ships with the LLM-emitted `parser.rs` \
+             Cobrust-nest now ships with the LLM-emitted `parser.rs` \
              {promoted_clause}.",
             promoted_clause = if promoted {
-                "(promoted into crates/cobrust-tomli/src/parser.rs)"
+                "(promoted into crates/cobrust-nest/src/parser.rs)"
             } else {
                 "(promotion blocked by partial-pass policy)"
             }
@@ -2059,22 +2066,22 @@ fn record_finding(
              partial-pass acceptance policy. The 0.1.0-beta release is shippable \
              as 'tomli (4/5 fns; 1 falls back to CPython)'. Promotion {promoted_clause}.",
             promoted_clause = if promoted {
-                "wrote the LLM emission to crates/cobrust-tomli/src/parser.rs"
+                "wrote the LLM emission to crates/cobrust-nest/src/parser.rs"
             } else {
-                "did NOT replace crates/cobrust-tomli/src/parser.rs"
+                "did NOT replace crates/cobrust-nest/src/parser.rs"
             }
         ),
         "PARTIAL-PASS-3OF5" => format!(
             "3/5 canonical entrypoints PASS L2.behavior — under the 4/5 threshold. \
              0.1.0-beta release does NOT auto-ship under T1.1; CTO inspects the \
              per-fn divergence below and decides scope. Promotion {promoted_clause}.",
-            promoted_clause = "did NOT replace crates/cobrust-tomli/src/parser.rs"
+            promoted_clause = "did NOT replace crates/cobrust-nest/src/parser.rs"
         ),
         _ => format!(
             "FAIL — fewer than 3/5 canonical entrypoints PASS. Escalation per \
              T1.1 policy. Per-fn divergence below should drive a follow-up sprint \
              (prompt tweak, repair-loop dispatch, or scope reduction).\n\n\
-             Promotion blocked. crates/cobrust-tomli/src/parser.rs unchanged."
+             Promotion blocked. crates/cobrust-nest/src/parser.rs unchanged."
         ),
     };
 
@@ -2096,7 +2103,7 @@ audit-1 / audit-3a single-function PASS to all 12 functions of `tomli`
 each, gluing the emissions into one parser module, and verifying with
 the canonical oracle (CPython `tomllib`) produces a working,
 behaviorally-equivalent Cobrust port suitable for promotion into
-`crates/cobrust-tomli/src/parser.rs` for the 0.1.0-beta release.
+`crates/cobrust-nest/src/parser.rs` for the 0.1.0-beta release.
 
 ## Method
 
@@ -2219,11 +2226,11 @@ ledger Ok entries inspected for `cache_hit=false, provider_kind="openai"`.
         total_completion_tokens = total_completion_tokens,
         total_tokens = total_tokens,
         promoted_clause = if promoted {
-            "wrote LLM emission to `crates/cobrust-tomli/src/parser.rs`; \
+            "wrote LLM emission to `crates/cobrust-nest/src/parser.rs`; \
              tomli 0.1.0-beta ships LLM-emitted code"
         } else {
-            "did NOT replace `crates/cobrust-tomli/src/parser.rs`; \
-             cobrust-tomli falls back to the M4 synthetic-translated parser"
+            "did NOT replace `crates/cobrust-nest/src/parser.rs`; \
+             cobrust-nest falls back to the M4 synthetic-translated parser"
         },
     );
     let path = finding_path();

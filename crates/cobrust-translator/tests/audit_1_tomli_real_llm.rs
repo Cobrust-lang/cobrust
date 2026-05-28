@@ -170,7 +170,7 @@ const PARSE_BOOL_PY: &str = r#"def _parse_bool(state):
 "#;
 
 /// Workspace preamble — a near-byte-equal copy of
-/// `crates/cobrust-tomli/src/parser.rs:1..130`. This is what the
+/// `crates/cobrust-nest/src/parser.rs:1..130`. This is what the
 /// emitted code is glued to in the synthesized G2 crate, AND what the
 /// LLM is told to use in the prompt. Keeping the strings identical is
 /// the audit's load-bearing simplifying assumption: the LLM has all the
@@ -548,7 +548,7 @@ pedantic = { level = "allow", priority = -1 }
     };
     let mut lib_rs = String::new();
     lib_rs.push_str(
-        "// Workspace preamble (canned, byte-equal to crates/cobrust-tomli/src/parser.rs).\n",
+        "// Workspace preamble (canned, byte-equal to crates/cobrust-nest/src/parser.rs).\n",
     );
     lib_rs.push_str("#![allow(dead_code, unused_imports, clippy::all)]\n\n");
     lib_rs.push_str(WORKSPACE_PREAMBLE);
@@ -1445,7 +1445,7 @@ a few-shot example produces a port of `tomli_loads._parse_bool` that:
 - **Prompt** (rich, ADR-0032 §4b):
   - Verbatim Python source of `_parse_bool`.
   - Workspace API contract: `State` struct + `TomliError` constructor +
-    `Value` enum (verbatim from `crates/cobrust-tomli/src/parser.rs`).
+    `Value` enum (verbatim from `crates/cobrust-nest/src/parser.rs`).
   - Few-shot example: `parse_basic_string` workspace helper.
   - Explicit return-type contract: `Result<bool, TomliError>`.
   - Prompt size: {prompt_chars} chars, {prompt_lines} lines.

@@ -98,8 +98,10 @@ impl DownstreamReport {
 /// (parser_core invocation) and the L3 dependents driver.
 ///
 /// `pythonpath` is prepended to `PYTHONPATH` so the dependent's
-/// `from cobrust_dateutil import parse_iso` import resolves to the
-/// PyO3-shaped wrapper at `crates/cobrust-dateutil/python/`.
+/// `from molt import parse_iso` import resolves to the PyO3-shaped
+/// wrapper at `crates/cobrust-molt/python/` (cobra-named per
+/// ADR-0071 §3; source library `dateutil` is preserved in
+/// provenance).
 ///
 /// # Errors
 /// I/O errors that prevent spawning Python bubble up; the dependent's

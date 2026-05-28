@@ -229,7 +229,8 @@ async fn msgpack_pipeline_writes_python_wrapper_and_provenance() {
     assert!(result.crate_dir.join("src/lib.rs").exists());
     assert!(result.crate_dir.join("src/parser.rs").exists());
     assert!(result.crate_dir.join("PROVENANCE.toml").exists());
-    assert!(result.crate_dir.join("python/msgpack_init.py").exists());
+    // Cobra-named per ADR-0071 §3 (`msgpack` → `scale`).
+    assert!(result.crate_dir.join("python/scale_init.py").exists());
 }
 
 #[tokio::test]
@@ -337,7 +338,8 @@ async fn msgpack_pipeline_escalates_when_perf_always_fails() {
         }
         other => panic!("expected EscalationExceeded, got {other:?}"),
     }
-    let report = dir.path().join("out/cobrust-msgpack/failure_report.md");
+    // Cobra-named per ADR-0071 §3 (`msgpack` → `scale`).
+    let report = dir.path().join("out/cobrust-scale/failure_report.md");
     assert!(report.exists(), "failure_report.md not at {report:?}");
 }
 

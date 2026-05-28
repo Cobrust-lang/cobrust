@@ -22,7 +22,7 @@ use crate::error::{ManifestError, PkgError};
 /// description = "..."
 ///
 /// [dependencies]
-/// cobrust-tomli = { path = "../cobrust-tomli" }
+/// cobrust-nest = { path = "../cobrust-nest" }
 /// my_lib       = { git = "https://...", rev = "abc123" }
 /// serde-like   = "1.2"
 ///
@@ -419,7 +419,7 @@ version = "0.1.0"
 cobrust-version = "0.0.1"
 
 [dependencies]
-cobrust-tomli = { path = "../cobrust-tomli" }
+cobrust-nest = { path = "../cobrust-nest" }
 serde-like = "1.2"
 
 [bin]
@@ -429,7 +429,7 @@ path = "src/main.cb"
         let m = Manifest::parse_str(toml_str).unwrap();
         assert_eq!(m.dependencies.len(), 2);
         assert!(matches!(
-            m.dependencies["cobrust-tomli"].spec,
+            m.dependencies["cobrust-nest"].spec,
             DependencySpec::Path { .. }
         ));
         assert!(matches!(

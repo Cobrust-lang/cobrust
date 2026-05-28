@@ -68,7 +68,7 @@ pub enum Error {
 /// A GitHub Releases API asset entry (subset of fields we consume).
 #[derive(Clone, Debug, Deserialize)]
 pub struct ReleaseAsset {
-    /// Asset filename as uploaded (e.g. `cobrust-numpy-0.1.0-x86_64-...-v3.tar.gz`).
+    /// Asset filename as uploaded (e.g. `cobrust-coil-0.1.0-x86_64-...-v3.tar.gz`).
     pub name: String,
     /// Direct download URL (`browser_download_url` in the API response).
     pub browser_download_url: String,

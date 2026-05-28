@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn wheel_meta_round_trips_through_json() {
         let original = WheelMeta {
-            filename: "cobrust-numpy-0.1.0-x86_64-unknown-linux-gnu-v3.tar.gz".to_owned(),
+            filename: "cobrust-coil-0.1.0-x86_64-unknown-linux-gnu-v3.tar.gz".to_owned(),
             triple: "x86_64-unknown-linux-gnu".to_owned(),
             cpu_level: "v3".to_owned(),
             sha256: "a1b2c3".to_owned(),

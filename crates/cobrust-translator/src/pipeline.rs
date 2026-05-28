@@ -683,7 +683,15 @@ pub async fn translate_with_verifiers(
     };
 
     // ---- Write crate to disk -----------------------------------------------
-    let crate_dir = cfg.out_dir.join(format!("cobrust-{}", library.library));
+    // Per ADR-0071 §3, the *Cobrust-facing* crate identity is the bare
+    // cobra word (e.g. `numpy` → `cobrust-coil`), while the source
+    // library name stays the Python name everywhere it documents what
+    // was translated (PROVENANCE.toml, oracle, corpus paths). The
+    // `cobra_naming::cobra_crate_name` helper is the single mapping
+    // boundary; sources not in the table fall through unchanged.
+    let crate_dir = cfg
+        .out_dir
+        .join(crate::cobra_naming::cobra_crate_name(&library.library));
     write_crate(&crate_dir, library, &spec, &translation)?;
 
     // ---- Build manifest ----------------------------------------------------
@@ -899,7 +907,9 @@ async fn run_repair_loop(
                     if attempt >= escalation_threshold {
                         // Write failure report and return
                         // EscalationExceeded.
-                        let crate_dir = out_dir.join(format!("cobrust-{library}"));
+                        // Cobra-named per ADR-0071 §3 (see `cobra_naming`).
+                        let crate_dir =
+                            out_dir.join(crate::cobra_naming::cobra_crate_name(library));
                         std::fs::create_dir_all(&crate_dir)?;
                         write_failure_report(
                             &crate_dir,
@@ -1189,9 +1199,16 @@ fn write_crate(
     std::fs::create_dir_all(crate_dir.join("tests"))?;
 
     // Cargo.toml — plain workspace member, no PyO3 dep at M4/M5.
+    //
+    // Per ADR-0071 §3 / §4: the Cargo `name` is the Cobrust-facing
+    // identity (cobra-named, e.g. `cobrust-coil`), while the
+    // `description` keeps the *source* Python library name (e.g.
+    // "Cobrust translation of numpy 2.0.1 …") — that field documents
+    // *what* was translated, not the Cobrust crate's identity.
+    let cobra = crate::cobra_naming::source_to_cobra(&library.library);
     let cargo_toml = format!(
         r#"[package]
-name = "cobrust-{lib}"
+name = "cobrust-{cobra}"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -1214,6 +1231,7 @@ serde_json = {{ workspace = true }}
 
 [dev-dependencies]
 "#,
+        cobra = cobra,
         lib = library.library,
         version = library.version,
     );
@@ -1252,37 +1270,40 @@ serde_json = {{ workspace = true }}
         .arg(crate_dir.join("src/parser.rs"))
         .status();
 
-    // python/<lib>_init.py — placeholder for M5 PyO3 wiring.
+    // python/<cobra>_init.py — placeholder for M5 PyO3 wiring.
+    //
+    // Per ADR-0071 §3: the Python wrapper module name is the bare
+    // cobra word (`coil_init.py`, `nest_init.py`, …), matching the
+    // PyO3 `#[pymodule] fn <cobra>(…)` convention. The docstring
+    // surface ("Cobrust nest — translated parser") uses the cobra
+    // name (user-facing identity); the PROVENANCE.toml retains the
+    // source library name (provenance).
     let py_init = format!(
         r#"# SPDX-License-Identifier: Apache-2.0 OR MIT
-# Auto-generated for cobrust-{lib}. DO NOT EDIT BY HAND.
-"""Cobrust {lib} — translated parser (PyO3 placeholder)."""
+# Auto-generated for cobrust-{cobra}. DO NOT EDIT BY HAND.
+"""Cobrust {cobra} — translated parser (PyO3 placeholder)."""
 
 __version__ = "{version}+cobrust"
 
-# At M6+ these will be re-exports from a native `cobrust_{lib}_pyo3` extension.
+# At M6+ these will be re-exports from a native `cobrust_{cobra}_pyo3` extension.
 "#,
-        lib = library.library,
+        cobra = cobra,
         version = library.version,
     );
-    std::fs::write(
-        crate_dir.join(format!("python/{}_init.py", library.library)),
-        py_init,
-    )?;
+    std::fs::write(crate_dir.join(format!("python/{cobra}_init.py")), py_init)?;
 
     // python/setup.py — placeholder so M6 can flip on PyO3 build.
     let setup_py = format!(
         r#"# SPDX-License-Identifier: Apache-2.0 OR MIT
-# Auto-generated for cobrust-{lib}. DO NOT EDIT BY HAND.
+# Auto-generated for cobrust-{cobra}. DO NOT EDIT BY HAND.
 from setuptools import setup
 
 setup(
-    name="cobrust-{lib}",
+    name="cobrust-{cobra}",
     version="0.0.1.dev0",
-    py_modules=["{lib}_init"],
+    py_modules=["{cobra}_init"],
 )
-"#,
-        lib = library.library,
+"#
     );
     std::fs::write(crate_dir.join("python/setup.py"), setup_py)?;
 
@@ -1608,7 +1629,8 @@ tolerance = "exact"
         assert!(result.crate_dir.join("src/lib.rs").exists());
         assert!(result.crate_dir.join("src/parser.rs").exists());
         assert!(result.crate_dir.join("PROVENANCE.toml").exists());
-        assert!(result.crate_dir.join("python/tomli_init.py").exists());
+        // Cobra-named per ADR-0071 §3 (`tomli` → `nest`).
+        assert!(result.crate_dir.join("python/nest_init.py").exists());
         result.manifest.validate().unwrap();
         assert_eq!(result.manifest.gates.l1_files_emitted, 1);
         // M5 contract: tomli has no repair attempts and no covered dependents.
@@ -1891,8 +1913,9 @@ tolerance = "exact"
             }
             other => panic!("expected EscalationExceeded, got {other:?}"),
         }
-        // failure_report.md was written.
-        let report_path = dir.path().join("out/cobrust-tomli/failure_report.md");
+        // failure_report.md was written. Cobra-named per ADR-0071 §3
+        // (`tomli` → `nest`).
+        let report_path = dir.path().join("out/cobrust-nest/failure_report.md");
         assert!(report_path.exists());
     }
 }

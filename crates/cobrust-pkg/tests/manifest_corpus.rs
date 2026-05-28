@@ -256,12 +256,12 @@ path = "src/main.cb"
             "hyphenated-name",
             r#"
 [package]
-name = "cobrust-tomli"
+name = "cobrust-nest"
 version = "2.0.1"
 cobrust-version = "0.0.1"
 
 [lib]
-name = "cobrust_tomli"
+name = "cobrust_nest"
 path = "src/lib.cb"
 "#,
         ),
@@ -531,19 +531,20 @@ name = "rg"
 path = "src/main.cb"
 "#,
         ),
-        // 31. cobrust-tomli style
+        // 31. cobrust-nest style (cobra-named per ADR-0071 §3;
+        // source library `tomli` preserved in description).
         (
-            "cobrust-tomli-style",
+            "cobrust-nest-style",
             r#"
 [package]
-name = "cobrust-tomli"
+name = "cobrust-nest"
 version = "2.0.1"
 cobrust-version = "0.0.1"
 license = "Apache-2.0 OR MIT"
 description = "TOML parser, translated from Python tomli."
 
 [lib]
-name = "cobrust_tomli"
+name = "cobrust_nest"
 path = "src/lib.cb"
 "#,
         ),
@@ -558,7 +559,7 @@ cobrust-version = "0.0.1"
 description = "M12 notebook example"
 
 [dependencies]
-cobrust-tomli = { path = "../../crates/cobrust-tomli" }
+cobrust-nest = { path = "../../crates/cobrust-nest" }
 
 [bin]
 name = "notebook"

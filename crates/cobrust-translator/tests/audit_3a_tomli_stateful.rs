@@ -147,7 +147,7 @@ preferred = ["{PROVIDER_KEY}:{MODEL}"]
 
 // ---- Workspace context (audit-3a tomli stateful) ----------------------------
 
-/// Workspace preamble — verbatim from `crates/cobrust-tomli/src/parser.rs`
+/// Workspace preamble — verbatim from `crates/cobrust-nest/src/parser.rs`
 /// with `pub` widened on `State` and helpers so the synthesized G2 crate
 /// can construct values from its `tests/` integration target.
 const WORKSPACE_PREAMBLE: &str = r#"use std::collections::BTreeMap;
@@ -503,7 +503,7 @@ pedantic = { level = "allow", priority = -1 }
 
     let mut lib_rs = String::new();
     lib_rs.push_str(
-        "// Workspace preamble (canned, byte-equal to crates/cobrust-tomli/src/parser.rs).\n",
+        "// Workspace preamble (canned, byte-equal to crates/cobrust-nest/src/parser.rs).\n",
     );
     lib_rs.push_str("#![allow(dead_code, unused_imports, clippy::all)]\n\n");
     lib_rs.push_str(WORKSPACE_PREAMBLE);
@@ -1374,7 +1374,7 @@ those gaps are closed structurally for a stateful function too.
   `cobrust_translator::build_translation_prompt_rich(unit, ctx)` per
   ADR-0036 §"Decision".
 - **Workspace context**: tomli `Value` + `TomliError` + `State`
-  preamble (verbatim from `crates/cobrust-tomli/src/parser.rs`),
+  preamble (verbatim from `crates/cobrust-nest/src/parser.rs`),
   `parse_bool` few-shot example (audit-1's PASS-validated leaf),
   return-type contract `Result<i64, TomliError>`, error contract
   `Err(TomliError::new("expected digit", start))`.

@@ -1,12 +1,13 @@
 //! Integration test for the M4 pipeline against the `tomli` corpus.
 //!
 //! Runs the full L0 → L1 pipeline in synthetic-LLM mode, generates the
-//! `cobrust-tomli` crate, and verifies:
+//! `cobrust-nest` crate (cobra-named per ADR-0071 §3; source library
+//! `tomli` is preserved in provenance), and verifies:
 //!
 //! - Manifest validates and is well-formed.
 //! - `deterministic_id` is stable across two independent runs.
 //! - Every spec function has an emitted block in `parser.rs`.
-//! - The generated crate writes to `<workspace>/crates/cobrust-tomli/`
+//! - The generated crate writes to `<workspace>/crates/cobrust-nest/`
 //!   when the env var `COBRUST_REGENERATE_TOMLI=1` is set; otherwise
 //!   it writes to a temp dir and only verifies invariants.
 
@@ -147,10 +148,12 @@ fn pipeline_writes_buildable_crate_layout() {
     assert!(result.crate_dir.join("src/lib.rs").exists());
     assert!(result.crate_dir.join("src/parser.rs").exists());
     assert!(result.crate_dir.join("PROVENANCE.toml").exists());
-    assert!(result.crate_dir.join("python/tomli_init.py").exists());
+    // Cobra-named per ADR-0071 §3 (`tomli` → `nest`); the source library
+    // (`tomli`) is still recorded in PROVENANCE.toml + provenance prose.
+    assert!(result.crate_dir.join("python/nest_init.py").exists());
     assert!(result.crate_dir.join("python/setup.py").exists());
     let cargo = std::fs::read_to_string(result.crate_dir.join("Cargo.toml")).expect("read");
-    assert!(cargo.contains("name = \"cobrust-tomli\""));
+    assert!(cargo.contains("name = \"cobrust-nest\""));
     assert!(cargo.contains("DO NOT EDIT BY HAND"));
     let parser = std::fs::read_to_string(result.crate_dir.join("src/parser.rs")).expect("read");
     assert!(parser.contains("// fn:loads"));
