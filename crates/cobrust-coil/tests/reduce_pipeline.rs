@@ -262,6 +262,7 @@ async fn reduce_pipeline_escalates_when_perf_always_fails() {
         }
         other => panic!("expected EscalationExceeded, got {other:?}"),
     }
-    let report = dir.path().join("out/cobrust-numpy/failure_report.md");
+    // ADR-0071 §cobra-rebrand + #149 mapping: numpy → coil crate-dir.
+    let report = dir.path().join("out/cobrust-coil/failure_report.md");
     assert!(report.exists(), "failure_report.md not at {report:?}");
 }
