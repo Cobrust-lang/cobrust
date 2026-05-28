@@ -10,6 +10,14 @@ on:
   pull_request:
     branches: [main]
 
+# When a new push lands on main (or a PR), cancel any in-progress run on the
+# same ref. Stops the strike/pit-pong/scale+molt "fix on top of fix" pattern
+# where the old run's Post-Run cache-upload step hangs while the new run runs.
+# (2026-05-28: we manually `gh run cancel`-d twice this day; this automates it.)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"

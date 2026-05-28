@@ -1,0 +1,48 @@
+# Z.8 REST demo — 网络 MUST-ship §5 落地
+#
+# 一个最小的博客 REST 服务:用 pit(HTTP)+ den(SQLite)+ std.json,全是
+# Cobrust 生态接线的 .cb 端到端组合。装饰器(ADR-0074)还没接,所以用 ADR-0073
+# 已通的显式 app.route 形式。装饰器接上之后这个文件可以改成 @app.route(...) 等
+# 一行更 Pythonic 的形式。
+#
+# 跑法(等 ADR-0073 在 origin 上线 + agent 们的 follow-up 合进来):
+#   cobrust build examples/z8_rest_blog/main.cb -o blog
+#   ./blog &
+#   curl http://127.0.0.1:8080/posts
+#   curl -X POST http://127.0.0.1:8080/posts -d '{"title":"hello","body":"world"}'
+
+import pit
+import den
+import json
+
+# GET /posts → 列出所有 post(从 :memory: 数据库读 + 用 json.dumps 序列化)。
+# 第一证 scope:返回 canonical-JSON string,不带 list[dict] 的真复合类型
+# (后者要等 coil 那一支的 deep 类型工作)。
+fn list_posts(req: pit.Request) -> pit.Response:
+    let conn = den.connect(":memory:")
+    let cur = conn.execute("SELECT id, title, body FROM posts ORDER BY id")
+    let rows_str = cur.fetchall()  # 当前 first-proof 返回 Str rendering(ADR-0072 §4)
+    return pit.text_response(200, rows_str)
+
+# POST /posts → 解析 JSON body,插入数据库,返回 201。
+# req.body() 是 str(原始 body),json.loads 解析,再用解析后的字段 INSERT。
+# 当前 first-proof:body 解析返回 canonical JSON Str,不是 dict —— 所以这里走
+# 一个简化路径:直接把 body 字符串拼到 INSERT 里(实际生产代码当然不能这样,
+# 但 first-proof 是为了证 pit+den+json 三件套能串)。
+fn create_post(req: pit.Request) -> pit.Response:
+    let conn = den.connect(":memory:")
+    let body = req.body()
+    let canon = json.loads(body)  # 验输入是合法 JSON,失败返回空 sentinel
+    if canon == "":
+        return pit.text_response(400, "invalid json")
+    # TODO(post-coil-deep): 等结构化 JSON 接线(dict 类型在 .cb 里能用)了
+    # 把这里换成 conn.execute("INSERT ... VALUES (?, ?)", &[canon.title, canon.body])
+    let _ = conn.execute("INSERT INTO posts (title, body) VALUES ('placeholder', 'placeholder')")
+    return pit.text_response(201, "created")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route("GET", "/posts", list_posts)
+    let _ = app.route("POST", "/posts", create_post)
+    let _ = app.run("127.0.0.1", 8080)
+    return 0
