@@ -540,6 +540,76 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Int,
             PyCompatTier::Semantic,
         )),
+        // Stream W P0 增量 (2026-05-29) — 8 free functions extending
+        // coil toward "basic scientific computing" surface coverage
+        // per the numpy-translation roadmap. All composed from the
+        // existing reduce + constructors machinery; same value-handle
+        // ABI as the first proof.
+        //
+        // Grid + broadcast + split (Buffer-returning):
+        // - `coil.mgrid(start, stop) -> Buffer`    — 1-D form of mgrid.
+        // - `coil.ogrid(start, stop) -> Buffer`    — 1-D form of ogrid.
+        // - `coil.broadcast_to(a, n) -> Buffer`    — 1-D tile-to-n.
+        // - `coil.split(a, n) -> Buffer`           — first chunk of n-way.
+        //
+        // Aggregate reductions (f64-returning):
+        // - `coil.mean(a) -> f64`                  — arithmetic mean.
+        // - `coil.median(a) -> f64`                — order statistic.
+        // - `coil.std(a) -> f64`                   — population std.
+        // - `coil.var(a) -> f64`                   — population variance.
+        //
+        // Tier `Semantic` — numpy's bit-exact reductions depend on
+        // implementation-defined pairwise grouping; the values agree
+        // to `rtol = 1e-12` on the M7.3 reduce corpus and that is the
+        // contractual semantic-tier shape per ADR-0016.
+        ("coil", "mgrid") => Some(EcoSig::from_values(
+            "__cobrust_coil_mgrid",
+            vec![Ty::Int, Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "ogrid") => Some(EcoSig::from_values(
+            "__cobrust_coil_ogrid",
+            vec![Ty::Int, Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "broadcast_to") => Some(EcoSig::from_values(
+            "__cobrust_coil_broadcast_to",
+            vec![coil_buffer_ty(), Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "split") => Some(EcoSig::from_values(
+            "__cobrust_coil_split",
+            vec![coil_buffer_ty(), Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "mean") => Some(EcoSig::from_values(
+            "__cobrust_coil_mean",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "median") => Some(EcoSig::from_values(
+            "__cobrust_coil_median",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "std") => Some(EcoSig::from_values(
+            "__cobrust_coil_std",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "var") => Some(EcoSig::from_values(
+            "__cobrust_coil_var",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
         // ADR-0076 Phase 1 — `dora` (dora-rs robotics dataflow,
         // ninth ecosystem module). Phase 1 ships SYNTHETIC runtime;
         // the explicit registration form `dora.node(handler)` stands in
@@ -1390,6 +1460,69 @@ mod tests {
     #[test]
     fn unknown_coil_fn_is_none() {
         assert!(lookup_module_fn("coil", "nope").is_none());
+    }
+
+    // Stream W P0 增量 (2026-05-29) — 8 free-function manifest tests.
+
+    #[test]
+    fn coil_mgrid_signature() {
+        let sig = lookup_module_fn("coil", "mgrid").expect("coil.mgrid in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_mgrid");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Int, Ty::Int]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    #[test]
+    fn coil_ogrid_signature() {
+        let sig = lookup_module_fn("coil", "ogrid").expect("coil.ogrid in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_ogrid");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Int, Ty::Int]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    #[test]
+    fn coil_broadcast_to_signature() {
+        let sig = lookup_module_fn("coil", "broadcast_to").expect("coil.broadcast_to in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_broadcast_to");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Int]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    #[test]
+    fn coil_split_signature() {
+        let sig = lookup_module_fn("coil", "split").expect("coil.split in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_split");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Int]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    #[test]
+    fn coil_mean_returns_float() {
+        let sig = lookup_module_fn("coil", "mean").expect("coil.mean in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_mean");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_median_returns_float() {
+        let sig = lookup_module_fn("coil", "median").expect("coil.median in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_median");
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_std_returns_float() {
+        let sig = lookup_module_fn("coil", "std").expect("coil.std in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_std");
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_var_returns_float() {
+        let sig = lookup_module_fn("coil", "var").expect("coil.var in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_var");
+        assert_eq!(sig.ret, Ty::Float);
     }
 
     // ADR-0076 Phase 1 first proof — `dora` (dora-rs robotics dataflow,

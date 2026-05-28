@@ -75,8 +75,10 @@
 //!   stream across runs.
 //! - `NumpyError` / `NumpyErrorKind` — closed error taxonomy.
 
+mod aggregates;
 mod array;
 mod broadcast;
+mod broadcast_extra;
 // ADR-0072 8/8 first proof — `.cb`-side C-ABI shims for the
 // `coil.Buffer` opaque handle (the EIGHTH and final cobra-batch
 // ecosystem module — completes the workspace-vendored ecosystem chain).
@@ -84,10 +86,15 @@ mod broadcast;
 // (`zeros`/`ones`/`eye`) + one read method (`print_buffer`). Operator
 // dispatch (`a + b`) + index dispatch (`a[i]`) are explicitly deferred
 // to a sub-ADR per ADR-0072 §"coil deep operator/index".
+//
+// Stream W P0 增量 (2026-05-29) extends the surface with 8 free
+// functions (mgrid/ogrid/broadcast_to/mean/median/std/var/split)
+// composed from the existing reduce + constructors machinery.
 pub mod cabi;
 mod constructors;
 mod dtype;
 mod error;
+mod grid;
 mod index;
 mod linalg;
 mod print;
@@ -97,8 +104,12 @@ mod reduce;
 mod ufunc;
 mod view;
 
+pub use crate::aggregates::{
+    mean_scalar, median_scalar, split_first_chunk, std_scalar, var_scalar,
+};
 pub use crate::array::Array;
 pub use crate::broadcast::broadcast_shape;
+pub use crate::broadcast_extra::broadcast_to_1d;
 pub use crate::constructors::{
     LinspaceResult, NestedList, arange, arange_count, array, array_bool, array_f32, array_f64,
     array_from_nested, array_i32, array_i64, diag, eye, linspace, logspace, ones, tri, tril, triu,
@@ -106,6 +117,7 @@ pub use crate::constructors::{
 };
 pub use crate::dtype::{Dtype, FloatInfo, FloatKind, IntInfo, IntKind, finfo, iinfo};
 pub use crate::error::{NumpyError, NumpyErrorKind};
+pub use crate::grid::{mgrid_1d, ogrid_1d};
 pub use crate::index::{Index, SliceSpec, index_get, np_where};
 pub use crate::linalg::{EighResult, SvdResult, cholesky, det, dot, eigh, inv, matmul, solve, svd};
 pub use crate::print::array_repr;

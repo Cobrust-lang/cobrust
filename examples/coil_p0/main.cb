@@ -1,0 +1,28 @@
+# Stream W P0 增量 (2026-05-29) — first user-level proof that coil's
+# new aggregate-reduction surface (mean/std + the grid+broadcast+split
+# constructors) round-trips through cobrust build + link + run.
+#
+# Demonstrates the LLM-friendly numpy idiom per CLAUDE.md §2.5
+# (training-data-overlap): `coil.mgrid(0, 10)` builds a Buffer, then
+# the scalar aggregates `coil.mean(&a)` / `coil.std(&a)` reduce it to
+# f64. Each `&a` is an explicit ADR-0052a shared borrow — the handle
+# is non-Copy so explicit borrows are required when used by more than
+# one callsite. Cast-to-i64 prints avoid f-string precision drift in
+# the snapshot assertion.
+#
+# Expected output:
+#   4
+#   2
+#
+# `mean(mgrid(0..10)) = (0+1+...+9)/10 = 4.5` → `(4.5 as i64)` → "4".
+# `std(mgrid(0..10)) = sqrt(8.25) ≈ 2.872` → `(2.872 as i64)` → "2".
+
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.mgrid(0, 10)
+    let m: f64 = coil.mean(&a)
+    let s: f64 = coil.std(&a)
+    print((m as i64))
+    print((s as i64))
+    return 0

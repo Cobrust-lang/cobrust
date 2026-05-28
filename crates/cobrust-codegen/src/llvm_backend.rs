@@ -2865,6 +2865,34 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- Stream W P0 增量 (2026-05-29): 8 free functions extending
+        // the coil surface toward "basic scientific computing"
+        // coverage. Same value-handle pattern as the first proof.
+        //
+        //   __cobrust_coil_mgrid(start: i64, stop: i64) -> *mut Buffer
+        //   __cobrust_coil_ogrid(start: i64, stop: i64) -> *mut Buffer
+        //   __cobrust_coil_broadcast_to(a: *mut Buffer, n: i64) -> *mut Buffer
+        //   __cobrust_coil_split(a: *mut Buffer, n: i64) -> *mut Buffer
+        //   __cobrust_coil_mean / median / std / var (a: *mut Buffer) -> f64
+        let f64_ty = self.ctx.f64_type();
+        let coil_grid_ty = ptr_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false);
+        let coil_bcast_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let coil_agg_ty = f64_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_coil_mgrid", coil_grid_ty, 2usize),
+            ("__cobrust_coil_ogrid", coil_grid_ty, 2),
+            ("__cobrust_coil_broadcast_to", coil_bcast_ty, 2),
+            ("__cobrust_coil_split", coil_bcast_ty, 2),
+            ("__cobrust_coil_mean", coil_agg_ty, 1),
+            ("__cobrust_coil_median", coil_agg_ty, 1),
+            ("__cobrust_coil_std", coil_agg_ty, 1),
+            ("__cobrust_coil_var", coil_agg_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.

@@ -67,9 +67,12 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::aggregates::{mean_scalar, median_scalar, split_first_chunk, std_scalar, var_scalar};
 use crate::array::Array;
+use crate::broadcast_extra::broadcast_to_1d;
 use crate::constructors::{eye as coil_eye, ones as coil_ones, zeros as coil_zeros};
 use crate::dtype::Dtype;
+use crate::grid::{mgrid_1d, ogrid_1d};
 use crate::print::array_repr;
 
 // =====================================================================
@@ -200,7 +203,9 @@ pub unsafe extern "C" fn __cobrust_coil_print_buffer(b: *mut u8) -> i64 {
 /// # Safety
 ///
 /// `b` must be null or a `Buffer` handle from one of `coil.zeros` /
-/// `coil.ones` / `coil.eye` that has not already been dropped.
+/// `coil.ones` / `coil.eye` / `coil.mgrid` / `coil.ogrid` /
+/// `coil.broadcast_to` / `coil.split` that has not already been
+/// dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_coil_buffer_drop(b: *mut u8) {
     if b.is_null() {
@@ -211,6 +216,146 @@ pub unsafe extern "C" fn __cobrust_coil_buffer_drop(b: *mut u8) {
     // owns its `Vec<T>`; dropping the Box reclaims the whole chain.
     drop(unsafe { Box::from_raw(b.cast::<Array>()) });
     DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+}
+
+// =====================================================================
+// Stream W P0 增量 (2026-05-29) — handle-returning grid + broadcast +
+// split constructors.
+// =====================================================================
+
+/// `coil.mgrid(start, stop) -> Buffer` 1-D form. See `grid::mgrid_1d`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_zeros`. Returns a freshly-Boxed handle the
+/// `.cb` caller owns; freed once via `__cobrust_coil_buffer_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_mgrid(start: i64, stop: i64) -> *mut u8 {
+    let arr = mgrid_1d(start, stop)
+        .unwrap_or_else(|_| Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[0]))));
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+/// `coil.ogrid(start, stop) -> Buffer` 1-D form. See `grid::ogrid_1d`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_mgrid`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_ogrid(start: i64, stop: i64) -> *mut u8 {
+    let arr = ogrid_1d(start, stop)
+        .unwrap_or_else(|_| Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[0]))));
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+/// `coil.broadcast_to(a, n) -> Buffer` 1-D tile to `n`. See
+/// `broadcast_extra::broadcast_to_1d`.
+///
+/// BORROWS its input handle (never frees it) — the caller's scope-
+/// exit drop schedule still owns `a`. Returns a fresh handle.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped). The returned
+/// pointer is a freshly-Boxed handle the `.cb` caller owns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_broadcast_to(a: *mut u8, n: i64) -> *mut u8 {
+    if a.is_null() {
+        let empty = Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[0])));
+        return Box::into_raw(Box::new(empty)).cast::<u8>();
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    let out = broadcast_to_1d(arr_ref, n)
+        .unwrap_or_else(|_| Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[0]))));
+    Box::into_raw(Box::new(out)).cast::<u8>()
+}
+
+/// `coil.split(a, n) -> Buffer` first-proof — first chunk of an n-way
+/// `array_split`. See `aggregates::split_first_chunk`.
+///
+/// BORROWS its input handle. Returns a fresh handle.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_broadcast_to`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_split(a: *mut u8, n: i64) -> *mut u8 {
+    if a.is_null() {
+        let empty = Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[0])));
+        return Box::into_raw(Box::new(empty)).cast::<u8>();
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    let out = split_first_chunk(arr_ref, n)
+        .unwrap_or_else(|_| Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[0]))));
+    Box::into_raw(Box::new(out)).cast::<u8>()
+}
+
+// =====================================================================
+// Stream W P0 增量 (2026-05-29) — scalar-returning aggregate reductions.
+// =====================================================================
+
+/// `coil.mean(a) -> f64`. BORROWS the handle arg. NaN on empty input.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_mean(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return f64::NAN;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    mean_scalar(arr_ref).unwrap_or(f64::NAN)
+}
+
+/// `coil.median(a) -> f64`. BORROWS the handle arg. NaN on empty input.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_median(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return f64::NAN;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    median_scalar(arr_ref).unwrap_or(f64::NAN)
+}
+
+/// `coil.std(a) -> f64`. Population standard deviation (ddof=0).
+/// BORROWS the handle arg.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_std(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return f64::NAN;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    std_scalar(arr_ref).unwrap_or(f64::NAN)
+}
+
+/// `coil.var(a) -> f64`. Population variance (ddof=0). BORROWS the
+/// handle arg.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_var(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return f64::NAN;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    var_scalar(arr_ref).unwrap_or(f64::NAN)
 }
 
 #[cfg(test)]
@@ -319,5 +464,149 @@ mod tests {
             __cobrust_coil_buffer_drop(buf);
         }
         assert_eq!(drop_count() - before, 1, "Buffer must drop exactly once");
+    }
+
+    // =====================================================================
+    // Stream W P0 增量 shim tests.
+    // =====================================================================
+
+    /// `coil.mgrid(0, 5)` returns a 5-elem buffer; drops once at scope.
+    #[test]
+    fn mgrid_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let buf = __cobrust_coil_mgrid(0, 5);
+            assert!(!buf.is_null());
+            __cobrust_coil_buffer_drop(buf);
+        }
+        assert_eq!(drop_count() - before, 1);
+    }
+
+    /// `coil.ogrid(0, 5)` returns a 5-elem buffer; drops once.
+    #[test]
+    fn ogrid_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let buf = __cobrust_coil_ogrid(0, 5);
+            assert!(!buf.is_null());
+            __cobrust_coil_buffer_drop(buf);
+        }
+        assert_eq!(drop_count() - before, 1);
+    }
+
+    /// `coil.broadcast_to(a, 4)` borrows `a` and yields a fresh
+    /// handle; both drop exactly once.
+    #[test]
+    fn broadcast_to_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_ones(2);
+            let b = __cobrust_coil_broadcast_to(a, 4);
+            assert!(!a.is_null());
+            assert!(!b.is_null());
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+        }
+        assert_eq!(drop_count() - before, 2);
+    }
+
+    /// `coil.split(a, 3)` first chunk + drop discipline.
+    #[test]
+    fn split_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_mgrid(0, 6);
+            let c = __cobrust_coil_split(a, 3);
+            assert!(!c.is_null());
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(c);
+        }
+        assert_eq!(drop_count() - before, 2);
+    }
+
+    /// `coil.mean(mgrid(0,5))` borrows the handle (counter unchanged
+    /// until the explicit drop) and yields `(0+1+2+3+4)/5 = 2.0`.
+    #[test]
+    fn mean_of_mgrid_0_5_is_two() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_mgrid(0, 5);
+            let m = __cobrust_coil_mean(a);
+            assert!((m - 2.0).abs() < 1e-12, "mean got {m}");
+            __cobrust_coil_buffer_drop(a);
+        }
+        assert_eq!(drop_count() - before, 1);
+    }
+
+    /// `coil.median(mgrid(0,5))` = 2.0 (middle of [0,1,2,3,4]).
+    #[test]
+    fn median_of_mgrid_0_5_is_two() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_mgrid(0, 5);
+            let m = __cobrust_coil_median(a);
+            assert!((m - 2.0).abs() < 1e-12, "median got {m}");
+            __cobrust_coil_buffer_drop(a);
+        }
+    }
+
+    /// `coil.std(mgrid(0,5))` = sqrt(2) ≈ 1.41421.
+    #[test]
+    fn std_of_mgrid_0_5_is_sqrt_two() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_mgrid(0, 5);
+            let s = __cobrust_coil_std(a);
+            assert!((s - 2.0_f64.sqrt()).abs() < 1e-12, "std got {s}");
+            __cobrust_coil_buffer_drop(a);
+        }
+    }
+
+    /// `coil.var(mgrid(0,5))` = 2.0.
+    #[test]
+    fn var_of_mgrid_0_5_is_two() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_mgrid(0, 5);
+            let v = __cobrust_coil_var(a);
+            assert!((v - 2.0).abs() < 1e-12, "var got {v}");
+            __cobrust_coil_buffer_drop(a);
+        }
+    }
+
+    /// Aggregates on null handle yield NaN sentinel rather than
+    /// panic. Drop on null is a no-op.
+    #[test]
+    fn aggregates_on_null_yield_nan() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            assert!(__cobrust_coil_mean(std::ptr::null_mut()).is_nan());
+            assert!(__cobrust_coil_median(std::ptr::null_mut()).is_nan());
+            assert!(__cobrust_coil_std(std::ptr::null_mut()).is_nan());
+            assert!(__cobrust_coil_var(std::ptr::null_mut()).is_nan());
+        }
     }
 }
