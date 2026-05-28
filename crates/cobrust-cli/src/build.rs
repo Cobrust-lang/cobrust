@@ -202,6 +202,26 @@ pub fn build(
         None => final_output_dir.clone(),
     };
 
+    // ADR-0075 Phase 1 — F58-sibling guard: `target_cpu = native` resolves
+    // to *host* CPU via LLVM `get_host_cpu_name`. That's meaningless when
+    // cross-targeting (host == macOS-arm64 → "apple-m1"; target == riscv64
+    // → must be a generic-rv64 baseline). When the triple isn't host AND
+    // the caller passed `native`, rebind to `None` (generic baseline) and
+    // emit a one-line stderr note so the override is auditable.
+    let is_cross = triple != Triple::host();
+    let effective_target_cpu: Option<String> = match (is_cross, target_cpu) {
+        (true, Some("native")) => {
+            if !quiet {
+                eprintln!(
+                    "cobrust build: ignoring `--target-cpu=native` on cross-target `{triple}` \
+                     (host-CPU resolution is meaningless cross-arch); using generic baseline"
+                );
+            }
+            None
+        }
+        (_, Some(s)) => Some(s.to_owned()),
+        (_, None) => None,
+    };
     let spec = TargetSpec {
         triple,
         opt_level,
@@ -212,9 +232,12 @@ pub fn build(
         source_path: None,
         // Tier 1 runtime-dispatch: default true on --release, false on debug.
         // `enable_runtime_dispatch` overrides when explicitly set.
+        // ADR-0075 Phase 1 — runtime dispatch emits x86-feature dispatchers.
+        // On cross-targets that aren't x86_64, the dispatcher is a no-op
+        // already (`triple_is_x86_64` check); leaving the flag honest.
         runtime_dispatch: enable_runtime_dispatch.unwrap_or(release),
         // Tier 2: pass caller-supplied CPU string (or None for generic baseline).
-        target_cpu: target_cpu.map(str::to_owned),
+        target_cpu: effective_target_cpu,
     };
 
     // Emit the user's object file.
@@ -266,7 +289,14 @@ pub fn build(
                 )));
             }
 
-            let runtime_obj = ensure_runtime_object(&codegen_output_dir)?;
+            // ADR-0075 Phase 1 — cross-target derived from `is_cross` computed
+            // above the spec. Declared early so `ensure_runtime_object` +
+            // `locate_stdlib_archive` + `locate_ecosystem_archive` +
+            // `select_cc_resolved` all share the same value (single source of
+            // truth — flipping host vs cross at any link-stage boundary
+            // would leave host objects mixed with target objects).
+            let cross_target: Option<&str> = if is_cross { target } else { None };
+            let runtime_obj = ensure_runtime_object(&codegen_output_dir, cross_target)?;
             let exe_path = match output {
                 Some(p) => p.to_path_buf(),
                 None => {
@@ -284,8 +314,9 @@ pub fn build(
                 }
             };
 
-            let stdlib_archive = locate_stdlib_archive(release)?;
-            let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+            // `cross_target` was declared above ensure_runtime_object; reuse it.
+            let stdlib_archive = locate_stdlib_archive(release, cross_target)?;
+            let (cc, cc_prefix_args) = select_cc_resolved(cross_target)?;
             // Per ADR-0025 §"Runtime ABI": link order matters — user
             // object provides forward references resolved by stdlib
             // archive (which provides `__cobrust_print`,
@@ -295,6 +326,9 @@ pub fn build(
             // print/panic callsite, so plain archive resolution
             // suffices).
             let mut cmd = Command::new(&cc);
+            for a in &cc_prefix_args {
+                cmd.arg(a);
+            }
             cmd.arg(&user_obj_path).arg(&runtime_obj);
             // ADR-0072 §2/§3 Q5 — per-import ecosystem static linking.
             // Both `libcobrust_stdlib.a` and each ecosystem `lib<mod>.a`
@@ -316,9 +350,19 @@ pub fn build(
             // (risk 3).
             let eco_archives = eco_modules
                 .iter()
-                .map(|m| locate_ecosystem_archive(m, release))
+                .map(|m| locate_ecosystem_archive(m, release, cross_target))
                 .collect::<Result<Vec<_>, _>>()?;
-            if cfg!(target_os = "linux") && !eco_archives.is_empty() {
+            // ADR-0075 Phase 1 — `target_os == "linux"` is a *host*-cfg
+            // predicate; for cross-targets we must look at the *target*
+            // OS instead so a macOS host targeting riscv64-linux-gnu
+            // still emits the GNU `--start-group/--end-group` for the
+            // archive ordering hazard.
+            let target_is_linux = if let Some(t) = cross_target {
+                t.contains("linux")
+            } else {
+                cfg!(target_os = "linux")
+            };
+            if target_is_linux && !eco_archives.is_empty() {
                 cmd.arg("-Wl,--start-group").arg(&stdlib_archive);
                 for archive in &eco_archives {
                     cmd.arg(archive);
@@ -333,7 +377,9 @@ pub fn build(
             cmd.arg("-o").arg(&exe_path);
             // Platform: macOS doesn't need --no-as-needed; Linux needs
             // libpthread + libdl + libm pulled in for std + mimalloc.
-            if cfg!(target_os = "linux") {
+            // ADR-0075 Phase 1 — apply Linux libs by *target* not host so a
+            // macOS host targeting riscv64-linux-gnu pulls libpthread/dl/m.
+            if target_is_linux {
                 cmd.arg("-lpthread").arg("-ldl").arg("-lm");
             }
             let status = cmd
@@ -361,47 +407,172 @@ pub fn build(
 ///
 /// T1.3: checks the compile-time baked `COBRUST_RUNTIME_OBJ_PATH` env
 /// (set by `build.rs`) before falling back to compiling from source.
-fn ensure_runtime_object(output_dir: &Path) -> Result<PathBuf, BuildError> {
+fn ensure_runtime_object(
+    output_dir: &Path,
+    cross_target: Option<&str>,
+) -> Result<PathBuf, BuildError> {
     // T1.3: use the pre-compiled object baked in at build time (set by build.rs).
     // Uses option_env! so the crate compiles even without the build script having run.
-    if let Some(baked) = option_env!("COBRUST_RUNTIME_OBJ_PATH") {
-        if !baked.is_empty() {
-            let p = PathBuf::from(baked);
+    //
+    // ADR-0075 Phase 1 — baked + env-override paths reflect the HOST
+    // build's `cobrust_main.o`. A cross-target build must NEVER reuse
+    // them; the embedded ELF header would mismatch the target arch.
+    // Skip both fast paths when cross_target is set; fall through to a
+    // fresh cross-cc compile under `output_dir`.
+    if cross_target.is_none() {
+        if let Some(baked) = option_env!("COBRUST_RUNTIME_OBJ_PATH") {
+            if !baked.is_empty() {
+                let p = PathBuf::from(baked);
+                if p.exists() {
+                    return Ok(p);
+                }
+            }
+        }
+
+        // Fallback: runtime env override (CI / test harness).
+        if let Ok(p) = std::env::var("COBRUST_RUNTIME_OBJ") {
+            let p = PathBuf::from(p);
             if p.exists() {
                 return Ok(p);
             }
         }
     }
 
-    // Fallback: runtime env override (CI / test harness).
-    if let Ok(p) = std::env::var("COBRUST_RUNTIME_OBJ") {
-        let p = PathBuf::from(p);
-        if p.exists() {
-            return Ok(p);
-        }
-    }
-
-    // Development fallback: compile from source.
-    let runtime_obj = output_dir.join("cobrust_main.o");
+    // Development fallback (and cross-target path): compile from source.
+    let runtime_obj_name = match cross_target {
+        // Suffix the cross artifact so it doesn't collide with the host
+        // shim if the same `output_dir` is reused by tests / repeat runs.
+        Some(t) => format!("cobrust_main.{t}.o"),
+        None => "cobrust_main.o".to_string(),
+    };
+    let runtime_obj = output_dir.join(&runtime_obj_name);
     if runtime_obj.exists() {
         return Ok(runtime_obj);
     }
     let runtime_src = locate_runtime_source()?;
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    let status = Command::new(&cc)
-        .arg("-c")
+    let (cc, cc_prefix_args) = select_cc_resolved(cross_target)?;
+    let mut cmd = Command::new(&cc);
+    for a in &cc_prefix_args {
+        cmd.arg(a);
+    }
+    cmd.arg("-c")
         .arg(&runtime_src)
         .arg("-O0")
         .arg("-o")
-        .arg(&runtime_obj)
+        .arg(&runtime_obj);
+    let status = cmd
         .status()
-        .map_err(|e| BuildError::Internal(format!("compiling runtime helper: {e}")))?;
+        .map_err(|e| BuildError::Internal(format!("compiling runtime helper with `{cc}`: {e}")))?;
     if !status.success() {
         return Err(BuildError::Internal(format!(
-            "runtime-helper compilation failed: status {status:?}"
+            "runtime-helper compilation failed via `{cc}`: status {status:?}; \
+             (cross-target: {cross_target:?}; ensure the cross-cc is on PATH — \
+             see docs/agent/setup/cross-toolchain.md)"
         )));
     }
     Ok(runtime_obj)
+}
+
+/// ADR-0075 Phase 1 — pick the C compiler driver for a given target.
+///
+/// Returns `(program, prefix_args)` so that `clang --target=<triple>`
+/// (driver + leading args) can coexist with a plain `riscv64-linux-gnu-gcc`
+/// driver (no prefix args).
+///
+/// Resolution order:
+///
+/// 1. **Per-target env override** — `COBRUST_CC_<TRIPLE>` where `<TRIPLE>` is
+///    the upper-cased triple with `-` → `_` (e.g.
+///    `COBRUST_CC_RISCV64GC_UNKNOWN_LINUX_GNU`). Highest priority so CI
+///    can pin a specific cross-cc on a per-job basis.
+/// 2. **Global `CC` env** — when set, used regardless of target. Matches
+///    historical behaviour for host builds; on cross-targets, the user
+///    is asserting "this CC handles the triple" (e.g.
+///    `CC=clang` plus the appropriate `--target=` flag).
+/// 3. **Convention-based cross-cc** — for cross-targets, derive from the
+///    triple: `riscv64-linux-gnu-gcc` for `riscv64gc-unknown-linux-gnu`,
+///    `aarch64-linux-gnu-gcc` for `aarch64-unknown-linux-gnu`, etc.
+///    Probed with `--version`. Falls back to `clang --target=<triple>`.
+/// 4. **Host default** — `cc`.
+fn select_cc_resolved(cross_target: Option<&str>) -> Result<(String, Vec<String>), BuildError> {
+    if let Some(triple) = cross_target {
+        let env_key = format!("COBRUST_CC_{}", triple.replace('-', "_").to_uppercase());
+        if let Ok(v) = std::env::var(&env_key) {
+            if !v.is_empty() {
+                return Ok((v, Vec::new()));
+            }
+        }
+    }
+    if let Ok(v) = std::env::var("CC") {
+        if !v.is_empty() {
+            return Ok((v, Vec::new()));
+        }
+    }
+    if let Some(triple) = cross_target {
+        // Convention: GNU cross-cc prefix derived from the triple's first 3
+        // components (arch-vendor/os-libc → arch-libc/os-prefix style).
+        //
+        // riscv64gc-unknown-linux-gnu → riscv64-linux-gnu-gcc
+        // aarch64-unknown-linux-gnu  → aarch64-linux-gnu-gcc
+        if let Some(prefix) = derive_gnu_cross_prefix(triple) {
+            let gcc = format!("{prefix}-gcc");
+            if probe_cc_available(&gcc) {
+                return Ok((gcc, Vec::new()));
+            }
+        }
+        // Fallback: clang knows every triple as `--target=`. Caller will
+        // hit a clean error if clang lacks the sysroot.
+        if probe_cc_available("clang") {
+            return Ok(("clang".to_string(), vec![format!("--target={triple}")]));
+        }
+        return Err(BuildError::User(format!(
+            "no cross C compiler found for target `{triple}`. Tried: \
+             $COBRUST_CC_{} env, $CC env, \
+             `{}-gcc`, `clang --target={triple}`. \
+             Install one (see docs/agent/setup/cross-toolchain.md) or set $CC.",
+            triple.replace('-', "_").to_uppercase(),
+            derive_gnu_cross_prefix(triple).unwrap_or_else(|| triple.to_string()),
+        )));
+    }
+    Ok(("cc".to_string(), Vec::new()))
+}
+
+/// Convert an LLVM-style triple `<arch>-<vendor>-<os>-<env>` to the
+/// canonical GNU cross-cc prefix `<arch>-<os>-<env>` (drops `<vendor>`,
+/// strips the rust-specific `gc` ISA-extension suffix on riscv).
+///
+/// `riscv64gc-unknown-linux-gnu` → `riscv64-linux-gnu`
+/// `aarch64-unknown-linux-gnu`   → `aarch64-linux-gnu`
+/// `x86_64-unknown-linux-gnu`    → `x86_64-linux-gnu`
+fn derive_gnu_cross_prefix(triple: &str) -> Option<String> {
+    let parts: Vec<&str> = triple.split('-').collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    // Strip the rust-flavor ISA-extension suffix on riscv arches: `riscv64gc`
+    // / `riscv32imc` etc. → `riscv64` / `riscv32` for the GNU prefix that the
+    // Debian `gcc-riscv64-linux-gnu` package installs.
+    let arch = parts[0];
+    let arch_stripped = if arch.starts_with("riscv64") {
+        "riscv64"
+    } else if arch.starts_with("riscv32") {
+        "riscv32"
+    } else {
+        arch
+    };
+    Some(format!("{}-{}-{}", arch_stripped, parts[2], parts[3]))
+}
+
+/// Returns `true` when `cc --version` runs successfully (binary present
+/// + executable). Cheap probe; suppresses stdout/stderr.
+fn probe_cc_available(cc: &str) -> bool {
+    Command::new(cc)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Locate the runtime C entrypoint (`runtime/cobrust_main.c`).
@@ -491,7 +662,14 @@ fn locate_wheel_lib_file(rel_path: &str) -> Option<PathBuf> {
 /// - **Phase 1** — `COBRUST_STDLIB_ARCHIVE_PATH` compile-time env var (baked in by `build.rs`).
 /// - **Phase 2** — `COBRUST_STDLIB_ARCHIVE` runtime env var override (for CI / test harness).
 /// - **Phase 3** — walk workspace `target/{release,debug}/libcobrust_stdlib.a`.
-fn locate_stdlib_archive(release: bool) -> Result<PathBuf, BuildError> {
+fn locate_stdlib_archive(release: bool, cross_target: Option<&str>) -> Result<PathBuf, BuildError> {
+    // ADR-0075 Phase 1 — when cross-targeting, skip baked + wheel-layout
+    // fast paths (host arch object code) and look directly under
+    // `target/<triple>/<profile>/`. Build via subprocess when absent.
+    if let Some(triple) = cross_target {
+        return locate_or_build_cross_stdlib(release, triple);
+    }
+
     // 0. ADR-0069 §4.2 Phase 0 — wheel-layout lookup. Fires first so
     //    wheel users (F46 closure) hit a working path without env vars.
     if let Some(p) = locate_wheel_lib_file("libcobrust_stdlib.a") {
@@ -550,6 +728,79 @@ fn locate_stdlib_archive(release: bool) -> Result<PathBuf, BuildError> {
     )))
 }
 
+/// ADR-0075 Phase 1 — locate (or cross-build) `libcobrust_stdlib.a`
+/// for a non-host target.
+///
+/// Lookup chain:
+///
+/// 1. Env override `COBRUST_STDLIB_ARCHIVE_<TRIPLE>` (CI prebuilt).
+/// 2. `target/<triple>/<profile>/libcobrust_stdlib.a`.
+/// 3. If missing: subprocess `cargo build -p cobrust-stdlib --target=<triple>
+///    [--release]` and re-look. Requires the user to have already run
+///    `rustup target add <triple>`; subprocess failure surfaces a clear
+///    error pointing at the install command.
+fn locate_or_build_cross_stdlib(release: bool, triple: &str) -> Result<PathBuf, BuildError> {
+    let env_key = format!(
+        "COBRUST_STDLIB_ARCHIVE_{}",
+        triple.replace('-', "_").to_uppercase()
+    );
+    if let Ok(p) = std::env::var(&env_key) {
+        let p = PathBuf::from(p);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let workspace = Path::new(manifest_dir)
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            BuildError::Internal("cannot derive workspace root from CARGO_MANIFEST_DIR".into())
+        })?;
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| workspace.join("target"), PathBuf::from);
+    let profile = if release { "release" } else { "debug" };
+    let candidate = target_dir
+        .join(triple)
+        .join(profile)
+        .join("libcobrust_stdlib.a");
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+
+    // Build via subprocess (dev convenience).
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let mut cmd = Command::new(&cargo);
+    cmd.current_dir(workspace)
+        .arg("build")
+        .arg("-p")
+        .arg("cobrust-stdlib")
+        .arg("--target")
+        .arg(triple);
+    if release {
+        cmd.arg("--release");
+    }
+    let status = cmd
+        .status()
+        .map_err(|e| BuildError::Internal(format!("invoking `{cargo} build`: {e}")))?;
+    if !status.success() {
+        return Err(BuildError::User(format!(
+            "cross-build of cobrust-stdlib for target `{triple}` failed \
+             (`{cargo} build -p cobrust-stdlib --target {triple}` exited {status:?}). \
+             Did you run `rustup target add {triple}` first? \
+             See docs/agent/setup/cross-toolchain.md"
+        )));
+    }
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+    Err(BuildError::Internal(format!(
+        "cross-built cobrust-stdlib for `{triple}` but the archive is missing at {}",
+        candidate.display()
+    )))
+}
+
 /// ADR-0072 §2/§3 Q5 — locate (and, in a dev workspace, build) the
 /// static archive `lib<module>.a` for an imported ecosystem module.
 ///
@@ -563,8 +814,73 @@ fn locate_stdlib_archive(release: bool) -> Result<PathBuf, BuildError> {
 ///   if absent, run `cargo build -p cobrust-<mod>` to produce it (dev
 ///   convenience so `cobrust build prog.cb` works against a source tree
 ///   without a manual pre-build).
-fn locate_ecosystem_archive(module: &str, release: bool) -> Result<PathBuf, BuildError> {
+fn locate_ecosystem_archive(
+    module: &str,
+    release: bool,
+    cross_target: Option<&str>,
+) -> Result<PathBuf, BuildError> {
     let archive_name = format!("lib{module}.a");
+
+    // ADR-0075 Phase 1 — cross-target ecosystem archives are sourced from
+    // `target/<triple>/<profile>/`; built via subprocess when missing.
+    if let Some(triple) = cross_target {
+        let env_key = format!(
+            "COBRUST_ECOSYSTEM_ARCHIVE_{}_{}",
+            module.to_uppercase(),
+            triple.replace('-', "_").to_uppercase()
+        );
+        if let Ok(p) = std::env::var(&env_key) {
+            let p = PathBuf::from(p);
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace = Path::new(manifest_dir)
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| {
+                BuildError::Internal("cannot derive workspace root from CARGO_MANIFEST_DIR".into())
+            })?;
+        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+            .map_or_else(|| workspace.join("target"), PathBuf::from);
+        let profile = if release { "release" } else { "debug" };
+        let candidate = target_dir.join(triple).join(profile).join(&archive_name);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+
+        let crate_name = format!("cobrust-{module}");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let mut cmd = Command::new(&cargo);
+        cmd.current_dir(workspace)
+            .arg("build")
+            .arg("-p")
+            .arg(&crate_name)
+            .arg("--target")
+            .arg(triple);
+        if release {
+            cmd.arg("--release");
+        }
+        let status = cmd
+            .status()
+            .map_err(|e| BuildError::Internal(format!("invoking `{cargo} build`: {e}")))?;
+        if !status.success() {
+            return Err(BuildError::User(format!(
+                "cross-build of ecosystem module `{module}` for target `{triple}` failed \
+                 (`{cargo} build -p {crate_name} --target {triple}` exited {status:?}). \
+                 Did you run `rustup target add {triple}` first? \
+                 See docs/agent/setup/cross-toolchain.md"
+            )));
+        }
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        return Err(BuildError::Internal(format!(
+            "cross-built ecosystem `{module}` for `{triple}` but the archive is missing at {}",
+            candidate.display()
+        )));
+    }
 
     // 0. Wheel-layout lookup (parity with libcobrust_stdlib.a).
     if let Some(p) = locate_wheel_lib_file(&archive_name) {
