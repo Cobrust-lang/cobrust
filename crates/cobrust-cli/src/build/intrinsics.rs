@@ -1356,6 +1356,10 @@ pub fn collect_ecosystem_modules(module: &Module) -> std::collections::BTreeSet<
 /// - `hood` — seventh-module generalization (click CLI, ADR-0073
 ///   second proof; second module exercising the callback chain via
 ///   `cmd.handler(handle_greet)`).
+/// - `coil` — eighth-module generalization (numpy ndarray, ADR-0072
+///   8/8 first proof; pure value-handle pattern — three constructors
+///   `zeros`/`ones`/`eye` + `print_buffer`. Operator/index dispatch
+///   are sub-ADR follow-ups).
 ///
 /// New modules extend this table off the proven chain.
 fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
@@ -1373,6 +1377,8 @@ fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
         Some("pit")
     } else if sym.starts_with("__cobrust_hood_") {
         Some("hood")
+    } else if sym.starts_with("__cobrust_coil_") {
+        Some("coil")
     } else {
         None
     }

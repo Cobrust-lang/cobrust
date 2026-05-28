@@ -1,0 +1,27 @@
+# ADR-0072 8/8 first proof — `.cb` ecosystem-import value-handle chain
+# completed for the EIGHTH and FINAL cobra-batch module.
+#
+# A `.cb` program that imports coil (cobra-rebrand of Python's numpy),
+# constructs an f64 buffer via `coil.zeros(3)`, and prints its
+# numpy-compatible repr to stdout. The handle drops once at scope exit
+# via `__cobrust_coil_buffer_drop`, freeing the underlying
+# `ndarray::ArrayD<f64>` + its `Vec<f64>`.
+#
+# Operator dispatch (`a + b`) and index dispatch (`a[i]`) are
+# explicitly OUT of first-proof scope per ADR-0072 §"coil deep
+# operator/index" — those want their own sub-ADR (the EcoParam manifest
+# doesn't yet model binary operators, and the .cb-side BinOp dispatch
+# needs a method-form lowering). Same scope discipline as nest's first
+# proof (str→str only; no structured TOML value surface).
+#
+# Same value-handle chain as den/molt/strike: MIR retargets `coil.zeros`
+# to `__cobrust_coil_zeros`; codegen declares the extern + handle-drop;
+# `cobrust build` static-links `libcoil.a` after `libcobrust_stdlib.a`;
+# the cabi shim Boxes a fresh `coil::Array` and returns the raw pointer.
+
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.zeros(3)
+    let _ = coil.print_buffer(a)
+    return 0

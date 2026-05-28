@@ -93,6 +93,22 @@ pub const PIT_SERVER_HANDLE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x403);
 /// block `0xE000_0500..0xE000_05FF`).
 pub const HOOD_COMMAND_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x500);
 
+// ADR-0072 — `coil` (numpy-rebrand, ndarray foundation) handle ADT
+// block reservation. The EIGHTH per-module 256-slot block
+// (`0xE000_0700..0xE000_07FF`). The seventh block (`0xE000_0600..`)
+// is reserved for `dora` per ADR-0076 (4 ADT slots claimed there),
+// so `coil` takes the next block. `coil` ships ONE handle in its
+// first proof — `Buffer`, a thin wrapper over `coil::Array` — wired
+// off the proven data-module value-handle chain (no callbacks).
+// Operator dispatch (`a + b`) + index dispatch (`a[i]`) are
+// explicitly deferred to a sub-ADR per ADR-0072 §"coil deep
+// operator/index" — first proof scope is constructors + repr only.
+
+/// `AdtId` for the `coil.Buffer` handle (ADR-0072 8/8 module proof —
+/// numpy ndarray foundation; the EIGHTH per-module 256-slot block
+/// `0xE000_0700..0xE000_07FF`).
+pub const COIL_BUFFER_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x700);
+
 /// The Cobrust `Ty` for the `den.Connection` opaque handle.
 #[must_use]
 pub fn den_connection_ty() -> Ty {
@@ -183,6 +199,13 @@ pub fn hood_command_handler_fn_ty() -> FnTy {
     }
 }
 
+/// The Cobrust `Ty` for the `coil.Buffer` opaque handle (ADR-0072
+/// 8/8 first proof — numpy ndarray foundation; wraps `coil::Array`).
+#[must_use]
+pub fn coil_buffer_ty() -> Ty {
+    Ty::Adt(COIL_BUFFER_ADT, vec![])
+}
+
 /// Is this `AdtId` one of the reserved ecosystem-handle ids?
 #[must_use]
 pub fn is_ecosystem_handle(id: AdtId) -> bool {
@@ -211,6 +234,10 @@ pub fn handle_drop_symbol(id: AdtId) -> Option<&'static str> {
         PIT_SERVER_HANDLE_ADT => Some("__cobrust_pit_server_handle_drop"),
         // ADR-0073 second proof — hood.Command opaque handle.
         HOOD_COMMAND_ADT => Some("__cobrust_hood_command_drop"),
+        // ADR-0072 8/8 first proof — coil.Buffer opaque handle (the
+        // EIGHTH and final ecosystem module — completes the
+        // workspace-vendored cobra batch).
+        COIL_BUFFER_ADT => Some("__cobrust_coil_buffer_drop"),
         _ => None,
     }
 }
@@ -402,6 +429,51 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             hood_command_ty(),
             PyCompatTier::Semantic,
         )),
+        // ADR-0072 8/8 first proof — `coil` (numpy ndarray, ecosystem
+        // rebrand of Python's `numpy` library) `.cb` wiring. Pure
+        // value-handle pattern (no callbacks): three constructors that
+        // each return a fresh `Buffer` handle the caller owns +
+        // scope-exit drops via `__cobrust_coil_buffer_drop`, plus one
+        // read method that borrows the handle for printing.
+        // - `coil.zeros(n) -> Buffer`        — n-element f64-zero
+        //   buffer (1-D shape `[n]`).
+        // - `coil.ones(n) -> Buffer`         — n-element f64-one buffer.
+        // - `coil.eye(n) -> Buffer`          — `n x n` identity matrix
+        //   (f64; the 2-D shape proves the chain handles non-1-D too).
+        // - `coil.print_buffer(b) -> i64`    — print the buffer's repr
+        //   to stdout (verifies handle pass-through; the `-> i64`
+        //   return is a 0 sentinel for `let _ = ...` discard).
+        //
+        // Tier `Semantic` — numpy's bit-stable repr depends on a
+        // column-aligned multi-line layout coil does NOT reproduce
+        // (ADR-0013 §4); the values + shape + dtype are equivalent.
+        // Operator dispatch (`a + b`) + index dispatch (`a[i]`) are
+        // explicitly OUT of first-proof scope per ADR-0072
+        // §"coil deep operator/index" — those want their own sub-ADR.
+        ("coil", "zeros") => Some(EcoSig::from_values(
+            "__cobrust_coil_zeros",
+            vec![Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "ones") => Some(EcoSig::from_values(
+            "__cobrust_coil_ones",
+            vec![Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "eye") => Some(EcoSig::from_values(
+            "__cobrust_coil_eye",
+            vec![Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "print_buffer") => Some(EcoSig::from_values(
+            "__cobrust_coil_print_buffer",
+            vec![coil_buffer_ty()],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -552,7 +624,7 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
 pub fn is_ecosystem_module(name: &str) -> bool {
     matches!(
         name,
-        "den" | "nest" | "strike" | "scale" | "molt" | "pit" | "hood"
+        "den" | "nest" | "strike" | "scale" | "molt" | "pit" | "hood" | "coil"
     )
 }
 
@@ -1039,5 +1111,72 @@ mod tests {
     #[test]
     fn unknown_hood_fn_is_none() {
         assert!(lookup_module_fn("hood", "nope").is_none());
+    }
+
+    // ADR-0072 8/8 first proof — `coil` (numpy, ndarray foundation).
+    // Last and EIGHTH ecosystem module — completes the cobra batch.
+
+    #[test]
+    fn coil_is_a_known_module() {
+        assert!(is_ecosystem_module("coil"));
+    }
+
+    #[test]
+    fn coil_buffer_handle_id_is_in_reserved_eighth_block() {
+        assert!(is_ecosystem_handle(COIL_BUFFER_ADT));
+        // Per-module 256-slot reservation: coil lives in the EIGHTH
+        // block (`0xE000_0700..0xE000_07FF`); the SEVENTH block
+        // (`0xE000_0600..0xE000_06FF`) is reserved for dora per
+        // ADR-0076 (4 ADT slots claimed there).
+        const _: () = {
+            assert!(COIL_BUFFER_ADT.0 >= ECO_ADT_BASE + 0x700);
+            assert!(COIL_BUFFER_ADT.0 < ECO_ADT_BASE + 0x800);
+        };
+    }
+
+    #[test]
+    fn coil_buffer_drop_symbol_resolves() {
+        assert_eq!(
+            handle_drop_symbol(COIL_BUFFER_ADT),
+            Some("__cobrust_coil_buffer_drop")
+        );
+    }
+
+    #[test]
+    fn coil_zeros_signature_returns_buffer_handle() {
+        let sig = lookup_module_fn("coil", "zeros").expect("coil.zeros in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_zeros");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Int]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn coil_ones_signature_returns_buffer_handle() {
+        let sig = lookup_module_fn("coil", "ones").expect("coil.ones in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_ones");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Int]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    #[test]
+    fn coil_eye_signature_returns_buffer_handle() {
+        let sig = lookup_module_fn("coil", "eye").expect("coil.eye in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_eye");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Int]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    #[test]
+    fn coil_print_buffer_takes_buffer_returns_int() {
+        let sig = lookup_module_fn("coil", "print_buffer").expect("coil.print_buffer in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_print_buffer");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        assert_eq!(sig.ret, Ty::Int);
+    }
+
+    #[test]
+    fn unknown_coil_fn_is_none() {
+        assert!(lookup_module_fn("coil", "nope").is_none());
     }
 }

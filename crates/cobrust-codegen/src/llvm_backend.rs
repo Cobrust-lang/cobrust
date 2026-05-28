@@ -2666,6 +2666,36 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0072 8/8 first proof: coil ecosystem-module C-ABI binding ----
+        // `coil` (numpy ndarray foundation, ecosystem rebrand of Python's
+        // `numpy` library). EIGHTH and final cobra-batch module — completes
+        // the workspace-vendored ecosystem. Pure value-handle pattern (no
+        // callbacks); chain generality matches den/molt/strike's
+        // value-handle precedent. Operator dispatch (`a + b`) + index
+        // dispatch (`a[i]`) are explicitly deferred to a sub-ADR per
+        // ADR-0072 §"coil deep operator/index" — first proof scope is
+        // constructors + repr only.
+        //
+        //   __cobrust_coil_zeros(n: i64) -> *mut Buffer
+        //   __cobrust_coil_ones(n: i64) -> *mut Buffer
+        //   __cobrust_coil_eye(n: i64) -> *mut Buffer
+        //   __cobrust_coil_print_buffer(b: *mut Buffer) -> i64
+        //   __cobrust_coil_buffer_drop(b: *mut Buffer) -> void
+        let coil_ctor_ty = ptr_ty.fn_type(&[i64_ty.into()], false);
+        let coil_print_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let coil_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_coil_zeros", coil_ctor_ty, 1usize),
+            ("__cobrust_coil_ones", coil_ctor_ty, 1),
+            ("__cobrust_coil_eye", coil_ctor_ty, 1),
+            ("__cobrust_coil_print_buffer", coil_print_ty, 1),
+            ("__cobrust_coil_buffer_drop", coil_drop_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.

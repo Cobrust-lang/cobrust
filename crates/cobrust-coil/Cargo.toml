@@ -11,7 +11,12 @@ description = "Cobrust translation of NumPy 2.0.2 (M7.0 ndarray foundation per A
 
 [lib]
 name = "coil"
-crate-type = ["rlib", "cdylib"]
+# ADR-0072 8/8 first proof — `staticlib` produces `libcoil.a` for per-
+# import static linking by `cobrust build` (coil is the EIGHTH and final
+# cobra-batch ecosystem module — completes the workspace-vendored
+# ecosystem chain). `cdylib` stays for the PyO3 native module; `rlib`
+# for in-workspace Rust consumers + the cabi unit tests.
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [lints]
 workspace = true
@@ -49,3 +54,10 @@ tempfile = "3.10"
 cobrust-translator = { path = "../cobrust-translator" }
 cobrust-llm-router = { path = "../cobrust-llm-router" }
 tokio = { workspace = true }
+# ADR-0072 8/8 first proof: the `cabi` shims do not currently declare
+# any `__cobrust_str_*` primitives (the coil first proof has no string
+# args at the boundary), but cobrust-stdlib is reserved here as a
+# dev-dep for future cabi unit tests that may need str-buffer
+# allocations (e.g. when `Buffer.tolist() -> str` lands). Mirrors the
+# den / hood pattern.
+cobrust-stdlib = { path = "../cobrust-stdlib" }

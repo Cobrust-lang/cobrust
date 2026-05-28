@@ -1,10 +1,10 @@
 ---
 doc_kind: reference
 module_id: cb-ecosystem-import
-title: .cb ecosystem-import wiring (ADR-0072 — 5 data modules; ADR-0073 — pit callback marshalling 6th module + hood 7th module second proof)
+title: .cb ecosystem-import wiring (ADR-0072 — 5 data modules + coil 8th module first proof; ADR-0073 — pit callback marshalling 6th module + hood 7th module second proof)
 last_verified_commit: HEAD
 relates_to: [adr:0072, adr:0073, adr:0019, adr:0028, adr:0050c, adr:0071, adr:0034]
-dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-strike, cobrust-scale, cobrust-molt, cobrust-pit, cobrust-hood, cobrust-cli]
+dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-strike, cobrust-scale, cobrust-molt, cobrust-pit, cobrust-hood, cobrust-coil, cobrust-cli]
 ---
 
 # `.cb` ecosystem-import wiring — `import den` / `nest` / `strike` / `scale` / `molt` end-to-end
@@ -513,6 +513,109 @@ sprint: zero hir changes, zero MIR changes, ~30 lines codegen
 (extern decls only). The mir / hir / drop / link-locate layers are
 unchanged — proving the chain generalizes off pit's pattern, the
 same way ADR-0072's data-modules generalized off den.
+
+## ADR-0072 eighth-module proof — `coil` (the EIGHTH and FINAL cobra-batch module)
+
+After den/nest/strike/scale/molt walked the value-handle chain and
+pit/hood walked the callback chain, `coil` (numpy-rebrand) takes
+the EIGHTH and final cobra-batch slot. Wired off the proven
+value-handle precedent — pure value-handle (no callbacks) — coil
+completes the workspace-vendored ecosystem chain v0.7.0 shipped.
+The MIR / HIR / drop / link-locate layers are **unchanged** —
+chain generality holds for the eighth time.
+
+### Scope discipline (first proof only)
+
+This proof intentionally scopes to constructors + repr ONLY. Three
+explicit out-of-scope surfaces are deferred to a sub-ADR (per
+ADR-0072 §"coil deep operator/index"):
+
+- `a + b` (BinOp dispatch for Buffer — deep operator work; the
+  `EcoParam` manifest doesn't model binary operators today, and the
+  .cb-side BinOp dispatch needs a method-form lowering).
+- `a[i]` (IndexExpr dispatch for Buffer — deep index work).
+- `a.shape` (Attr access on handle — needs a handle-attr sub-ADR).
+- `Buffer.dot(other)` (multi-handle methods — manifest extension).
+
+Same scope discipline as nest's first proof (str→str only, no
+structured TOML value surface).
+
+### New machinery (mirrors ADR-0072 §4 for coil)
+
+- `cobrust-types/src/ecosystem.rs`: coil handles reserved in the
+  EIGHTH 256-slot AdtId block (`0xE000_0700..0xE000_07FF`); the
+  SEVENTH block (`0xE000_0600..0xE000_06FF`) is claimed for dora
+  per ADR-0076. 1 handle id (`COIL_BUFFER_ADT`) + 1 drop symbol +
+  4 manifest rows (`coil.zeros(i64)`, `coil.ones(i64)`,
+  `coil.eye(i64)`, `coil.print_buffer(Buffer)`).
+- `cobrust-types/src/check.rs::lower_named_type`: adds `coil.Buffer`
+  arm so the annotation `let a: coil.Buffer = …` lowers correctly.
+- `cobrust-types/src/lib.rs`: re-exports `COIL_BUFFER_ADT` +
+  `coil_buffer_ty`.
+- `cobrust-codegen/src/llvm_backend.rs::declare_runtime_helpers`:
+  5 new `__cobrust_coil_*` extern decls (`zeros`/`ones`/`eye`
+  ctor shape `i64 -> *mut Buffer`; `print_buffer` shape
+  `*mut Buffer -> i64`; `buffer_drop` shape `*mut Buffer -> void`).
+- `cobrust-cli/src/build/intrinsics.rs::ecosystem_module_for_symbol`:
+  `__cobrust_coil_*` recognizer arm (one-line; the chain stays
+  module-agnostic otherwise — `locate_ecosystem_archive` picks up
+  `libcoil.a` out of the box).
+- `cobrust-coil/src/cabi.rs` (NEW): the value-handle shims. Each
+  constructor calls the existing `coil::constructors::*` function
+  with `Dtype::Float64` (zeros/ones/eye are all f64 in the first
+  proof) and `Box::into_raw`s the resulting `Array`. `print_buffer`
+  borrows the handle, calls `coil::print::array_repr`, and prints to
+  stdout. `_drop` reclaims the Box (which owns the entire chain:
+  Array → ArrayD → Vec<T>).
+- `cobrust-coil/Cargo.toml`: `staticlib` added to crate-type for
+  `libcoil.a`; `cobrust-stdlib` as dev-dep (reserved for future
+  cabi unit tests that may need str-buffer allocations — e.g. when
+  `Buffer.tolist() -> str` lands).
+- `cobrust-coil/build.rs` (NEW): macOS `-Wl,-undefined,dynamic_lookup`
+  for future `__cobrust_str_*` extern resolution at PyO3 cdylib
+  build time (the first proof has no str args at the wire, but the
+  flag is in place for the str-extension follow-up).
+
+### `print_buffer` is the read primitive (NOT `Buffer.repr() -> str`)
+
+The first-proof `print_buffer` directly prints via Rust-side
+`println!` — it does NOT return a `.cb`-owned `Str` buffer. The
+intent is the printed bytes (the user's side effect), matching pit's
+"the handler's printf IS the user's intent" discipline for the
+first-proof scope.
+
+A future `Buffer.tolist() -> str` shape would lift the den-style
+`__cobrust_str_*` extern wiring per ADR-0072 Q5. The `build.rs`
+deferral flag is already in place for that extension, so the
+follow-up sprint just adds the extern decls + the den-style
+`read_str_buf` / `alloc_str_buffer` helpers without touching the
+chain shape.
+
+### E2E (ADR-0072 8/8 first-proof done-means)
+
+`crates/cobrust-cli/tests/coil_hello_e2e.rs::test_e2e_coil_hello_zeros_round_trip`:
+compiles + runs the .cb hello program as a subprocess via
+`std::process::Command`, asserts stdout contains numpy's `array(`
+prefix + `dtype=float64` marker + exit code 0. 2 negative cases
+ship alongside:
+- `test_neg_coil_rejects_unknown_function` — `coil.flatten(a)` is
+  rejected at type-check (not in manifest).
+- `test_neg_coil_zeros_rejects_str_argument` — `coil.zeros("three")`
+  is rejected at type-check (wrong arg type).
+
+`cobrust-coil/src/cabi.rs::tests`: 6 in-crate cabi unit tests
+(zeros / ones / eye each prove drop-once via `DROP_COUNT`;
+print_buffer borrows and returns 0 sentinel; null tolerance;
+negative-n clamp).
+
+### Chain-generality metric
+
+`git diff --stat crates/cobrust-{mir,hir,codegen}/` after the coil
+8/8 sprint: zero HIR changes, zero MIR changes, +40 lines codegen
+(extern decls only). The mir / hir / drop / link-locate layers are
+unchanged — proving the chain generalizes off the proven
+value-handle pattern for the eighth time. Same metric profile as
+nest/strike/scale/molt walked through the data-module chain off den.
 
 ## Constraints / follow-ups
 

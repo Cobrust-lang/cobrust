@@ -59,11 +59,12 @@ pub mod ty;
 
 pub use check::{TypeCheckCtx, TypedModule, check, check_incremental};
 pub use ecosystem::{
-    DEN_CONNECTION_ADT, DEN_CURSOR_ADT, EcoParam, EcoSig, HOOD_COMMAND_ADT, MOLT_DATETIME_ADT,
-    PIT_APP_ADT, PIT_REQUEST_ADT, PIT_RESPONSE_ADT, PIT_SERVER_HANDLE_ADT, PyCompatTier,
-    STRIKE_RESPONSE_ADT, handle_drop_symbol, hood_command_handler_fn_ty, hood_command_ty,
-    is_ecosystem_handle, is_ecosystem_module, lookup_handle_method, lookup_module_fn, pit_app_ty,
-    pit_handler_fn_ty, pit_request_ty, pit_response_ty, pit_server_handle_ty,
+    COIL_BUFFER_ADT, DEN_CONNECTION_ADT, DEN_CURSOR_ADT, EcoParam, EcoSig, HOOD_COMMAND_ADT,
+    MOLT_DATETIME_ADT, PIT_APP_ADT, PIT_REQUEST_ADT, PIT_RESPONSE_ADT, PIT_SERVER_HANDLE_ADT,
+    PyCompatTier, STRIKE_RESPONSE_ADT, coil_buffer_ty, handle_drop_symbol,
+    hood_command_handler_fn_ty, hood_command_ty, is_ecosystem_handle, is_ecosystem_module,
+    lookup_handle_method, lookup_module_fn, pit_app_ty, pit_handler_fn_ty, pit_request_ty,
+    pit_response_ty, pit_server_handle_ty,
 };
 pub use error::TypeError;
 pub use fix_safety::{FixSafety, Suggestion, type_error_fix_safety, type_error_suggestion_text};

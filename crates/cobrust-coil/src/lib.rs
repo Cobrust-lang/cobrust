@@ -77,6 +77,14 @@
 
 mod array;
 mod broadcast;
+// ADR-0072 8/8 first proof — `.cb`-side C-ABI shims for the
+// `coil.Buffer` opaque handle (the EIGHTH and final cobra-batch
+// ecosystem module — completes the workspace-vendored ecosystem chain).
+// Pure value-handle pattern (no callbacks): three constructors
+// (`zeros`/`ones`/`eye`) + one read method (`print_buffer`). Operator
+// dispatch (`a + b`) + index dispatch (`a[i]`) are explicitly deferred
+// to a sub-ADR per ADR-0072 §"coil deep operator/index".
+pub mod cabi;
 mod constructors;
 mod dtype;
 mod error;

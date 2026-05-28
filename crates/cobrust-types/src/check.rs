@@ -2702,6 +2702,8 @@ impl Ctx {
             "pit.ServerHandle" => return crate::ecosystem::pit_server_handle_ty(),
             // ADR-0073 second proof — hood.Command opaque handle.
             "hood.Command" => return crate::ecosystem::hood_command_ty(),
+            // ADR-0072 8/8 first proof — coil.Buffer opaque handle.
+            "coil.Buffer" => return crate::ecosystem::coil_buffer_ty(),
             _ => {}
         }
         match s {

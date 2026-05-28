@@ -482,6 +482,7 @@ name = "cobrust-coil"
 version = "0.6.2"
 dependencies = [
  "cobrust-llm-router",
+ "cobrust-stdlib",
  "cobrust-translator",
  "ndarray 0.16.1",
  "ndarray-linalg",
