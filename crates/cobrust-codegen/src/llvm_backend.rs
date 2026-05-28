@@ -2441,6 +2441,40 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0072: den ecosystem-module C-ABI binding ------------
+        // The first-proof `den` shims over the opaque-pointer ABI
+        // (handles are `*mut u8` Boxed pointers; str args/returns are
+        // Cobrust Str buffers). Exported by `cobrust-den/src/cabi.rs`,
+        // linked as `libden.a` only when the program imports `den`
+        // (per-import link in `cobrust-cli/src/build.rs`).
+        //
+        //   __cobrust_den_connect(path: *mut Str) -> *mut Connection
+        //   __cobrust_den_connection_execute(conn, sql: *mut Str) -> *mut Cursor
+        //   __cobrust_den_cursor_fetchall(cur) -> *mut Str
+        //   __cobrust_den_connection_drop(conn) -> void
+        //   __cobrust_den_cursor_drop(cur) -> void
+        //
+        // The two `*_drop` symbols are emitted by `emit_drop_for_ty` at
+        // a handle local's scope exit (the nominal `Ty::Adt` handle is
+        // non-Copy → drop-scheduled). All handle/str values cross as
+        // opaque pointers; no ptr+len expansion (no string-literal
+        // expansion path — `connect`'s param_count is 1, not 2).
+        let den_connect_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let den_execute_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let den_fetchall_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let den_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_den_connect", den_connect_ty, 1usize),
+            ("__cobrust_den_connection_execute", den_execute_ty, 2),
+            ("__cobrust_den_cursor_fetchall", den_fetchall_ty, 1),
+            ("__cobrust_den_connection_drop", den_drop_ty, 1),
+            ("__cobrust_den_cursor_drop", den_drop_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
@@ -3589,6 +3623,11 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
             Ty::List(elem) if matches!(**elem, Ty::Str) => Some("__cobrust_list_drop_elems"),
             Ty::List(_) => Some("__cobrust_list_drop"),
             Ty::Dict(_, _) => Some("__cobrust_dict_drop"),
+            // ADR-0072 §3 / §5 risk 1 — ecosystem nominal handle drop.
+            // The reserved-id `Ty::Adt` (e.g. `den.Connection`/`Cursor`)
+            // maps to its foreign drop symbol, emitted exactly once at
+            // scope exit by the (Str/List-template) drop schedule.
+            Ty::Adt(id, _) => cobrust_types::handle_drop_symbol(*id),
             _ => None,
         };
         if let Some(name) = helper {

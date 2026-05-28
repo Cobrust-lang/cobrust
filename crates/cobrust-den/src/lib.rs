@@ -64,6 +64,7 @@
 //! - [`SqliteError`] / [`SqliteErrorKind`]: closed error taxonomy
 //!   (constitution §2.2 — `Result<T, E>`, never exceptions).
 
+pub mod cabi;
 mod connection;
 mod error;
 mod value;

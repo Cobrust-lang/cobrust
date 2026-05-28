@@ -17,9 +17,9 @@ use std::collections::HashMap;
 use cobrust_frontend::span::Span;
 use cobrust_hir::{
     BinOp as HirBinOp, Block as HirBlock, CallArg, ClassBody, Comp, CompClause, CompElem, CompKind,
-    DefId, DictEntry, Expr, ExprKind, FnBody, FormatPart, IndexKind, Item, ItemKind, LetBody, Lit,
-    LoopKind, MatchArm, Module as HirModule, Pattern, PatternKind, ResolvedName, Stmt, StmtKind,
-    UnaryOp,
+    DefId, DefKind, DictEntry, Expr, ExprKind, FnBody, FormatPart, IndexKind, Item, ItemKind,
+    LetBody, Lit, LoopKind, MatchArm, Module as HirModule, Pattern, PatternKind, ResolvedName,
+    Stmt, StmtKind, UnaryOp,
 };
 use cobrust_types::{Ty, TypedModule};
 
@@ -1649,6 +1649,17 @@ impl<'a> BodyBuilder<'a> {
         // verification time. Phase H+ may add the missing PRELUDE-fns
         // to close this gap; Wave-2 ships the partial coverage with
         // the gap documented in ADR-0052d-prereq §"Consequences".
+        // ADR-0072 §2/§3 — ecosystem-module call lowering fires first.
+        // `den.connect(...)` / `conn.execute(...)` / `cur.fetchall()`
+        // retarget onto the `__cobrust_den_*` C-ABI symbols. The type
+        // checker has already validated the call against the manifest;
+        // here we emit the `Call` with a `Constant::Str` callee and the
+        // manifest's return type (so the handle local gets its nominal
+        // `Ty::Adt`, driving drop scheduling).
+        if let Some(op) = self.try_lower_ecosystem_call(callee, args, span)? {
+            return Ok(op);
+        }
+
         if let ExprKind::Attr { base, name } = &callee.kind {
             if let Some(rewritten_name) = method_form_rewrite_name(self, base, name.as_str()) {
                 if let Some(prelude_def_id) = self.ctx.lookup_fn_def_id(&rewritten_name) {
@@ -1841,6 +1852,127 @@ impl<'a> BodyBuilder<'a> {
         });
         self.cur_block = Some(target.0 as usize);
         Ok(Operand::Move(Place::local(dest)))
+    }
+
+    /// ADR-0072 §2/§3 — lower an ecosystem-module call to a `Call`
+    /// terminator whose callee is the `Constant::Str` C-ABI symbol.
+    ///
+    /// Two shapes, mirroring the type-checker's `try_synth_ecosystem_call`:
+    ///
+    /// 1. **Module function** — `den.connect(path)`: callee is
+    ///    `Attr { base: Name(import-alias to den), name }`. The args are
+    ///    the explicit call args.
+    /// 2. **Handle method** — `conn.execute(sql)` / `cur.fetchall()`:
+    ///    callee is `Attr { base, name }` where `synth_expr_ty(base)` is
+    ///    an ecosystem-handle `Ty::Adt`. The receiver `base` is prepended
+    ///    as the first arg.
+    ///
+    /// ## Ownership (ADR-0072 §5 prime risk)
+    ///
+    /// `connect` returns a freshly-Boxed handle the caller owns (drop at
+    /// scope exit). `execute` / `fetchall` **borrow** their handle
+    /// receiver, so the receiver operand is upgraded `Move → Copy` —
+    /// otherwise the borrow checker would consume the handle local and
+    /// the drop schedule would skip its scope-exit drop. The handle is
+    /// freed exactly once by `__cobrust_den_*_drop` at scope exit. The
+    /// `path` / `sql` str args are likewise Copy-at-operand (the shim
+    /// reads the Str buffer without freeing it).
+    ///
+    /// Returns `Ok(None)` when the call is not an ecosystem call.
+    fn try_lower_ecosystem_call(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Operand>, MirError> {
+        let ExprKind::Attr { base, name } = &callee.kind else {
+            return Ok(None);
+        };
+
+        // Case 1: module-level free function (`den.connect`).
+        if let ExprKind::Name(rn) = &base.kind {
+            if rn.kind == DefKind::ImportAlias
+                && cobrust_types::is_ecosystem_module(rn.name.as_str())
+            {
+                let Some(sig) = cobrust_types::lookup_module_fn(rn.name.as_str(), name) else {
+                    return Ok(None);
+                };
+                // Module fn: no receiver; args lowered (str args Copy).
+                let mut arg_ops = Vec::with_capacity(args.len());
+                for a in args {
+                    match a {
+                        CallArg::Positional(e)
+                        | CallArg::Keyword(_, e)
+                        | CallArg::StarArgs(e)
+                        | CallArg::StarStarKwargs(e) => {
+                            let op = self.lower_expr(e)?;
+                            arg_ops.push(upgrade_move_to_copy_for_str(self, op));
+                        }
+                    }
+                }
+                let op =
+                    self.emit_ecosystem_call(sig.runtime_symbol, sig.ret.clone(), arg_ops, span);
+                return Ok(Some(op));
+            }
+        }
+
+        // Case 2: handle method (`conn.execute`, `cur.fetchall`).
+        let base_ty = synth_expr_ty(self, base);
+        if let Ty::Adt(id, _) = &base_ty {
+            if cobrust_types::is_ecosystem_handle(*id) {
+                let Some(sig) = cobrust_types::lookup_handle_method(&base_ty, name) else {
+                    return Ok(None);
+                };
+                // Receiver is BORROWED: upgrade Move → Copy so the handle
+                // local survives the call and is dropped once at scope
+                // exit (ADR-0072 §5 risk 1).
+                let recv_op = self.lower_expr(base)?;
+                let recv_op = upgrade_move_to_copy_handle(recv_op);
+                let mut arg_ops = Vec::with_capacity(args.len() + 1);
+                arg_ops.push(recv_op);
+                for a in args {
+                    match a {
+                        CallArg::Positional(e)
+                        | CallArg::Keyword(_, e)
+                        | CallArg::StarArgs(e)
+                        | CallArg::StarStarKwargs(e) => {
+                            let op = self.lower_expr(e)?;
+                            arg_ops.push(upgrade_move_to_copy_for_str(self, op));
+                        }
+                    }
+                }
+                let op =
+                    self.emit_ecosystem_call(sig.runtime_symbol, sig.ret.clone(), arg_ops, span);
+                return Ok(Some(op));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Emit a `Terminator::Call` for an ecosystem call: callee is a
+    /// `Constant::Str` runtime symbol, destination is a fresh `_ecoret`
+    /// local carrying the manifest return type (so a handle-typed return
+    /// is drop-scheduled).
+    fn emit_ecosystem_call(
+        &mut self,
+        runtime_symbol: &str,
+        ret_ty: Ty,
+        arg_ops: Vec<Operand>,
+        span: Span,
+    ) -> Operand {
+        let dest = self.declare_local("_ecoret".to_string(), ret_ty, span, true);
+        let cur = self.current_block_id();
+        let target = self.start_new_block();
+        self.cur_block = Some(cur.0 as usize);
+        self.terminate(Terminator::Call {
+            func: Operand::Constant(Constant::Str(runtime_symbol.to_string())),
+            args: arg_ops,
+            destination: Place::local(dest),
+            target,
+            unwind: None,
+        });
+        self.cur_block = Some(target.0 as usize);
+        Operand::Move(Place::local(dest))
     }
 
     fn lower_bin(
@@ -2364,6 +2496,20 @@ fn upgrade_move_to_copy_for_str(b: &BodyBuilder<'_>, op: Operand) -> Operand {
     }
 }
 
+/// ADR-0072 §5 risk 1 — upgrade an ecosystem-handle receiver operand
+/// `Move → Copy`. The `__cobrust_den_*` shims BORROW their handle
+/// receiver (`&mut *(ptr as *mut T)`); they never rebox/free it. Passing
+/// the receiver by Copy keeps the handle local live so the drop schedule
+/// still inserts its single scope-exit drop. (A `Move` would consume the
+/// local and the drop pass would treat it as moved-out — skipping the
+/// drop and leaking the Boxed handle.)
+fn upgrade_move_to_copy_handle(op: Operand) -> Operand {
+    match op {
+        Operand::Move(ref p) => Operand::Copy(p.clone()),
+        other => other,
+    }
+}
+
 fn is_copy_type(ty: &Ty) -> bool {
     // ADR-0050c TD-1 closure: Str is non-Copy at the operand-read level —
     // every `ExprKind::Name` reading a `Ty::Str` local produces
@@ -2497,6 +2643,29 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
                 let callee_ty = b.ctx.lookup_ty(rn.def_id);
                 if let Ty::Fn(fn_ty) = callee_ty {
                     return (*fn_ty.return_ty).clone();
+                }
+            }
+            // ADR-0072 §2/§3 — ecosystem call return types so a chained
+            // `conn.execute(sql).fetchall()` resolves the inner call to
+            // its handle `Ty::Adt` (driving the outer method dispatch +
+            // the let-binding's drop schedule).
+            if let ExprKind::Attr { base, name } = &callee.kind {
+                if let ExprKind::Name(rn) = &base.kind {
+                    if rn.kind == DefKind::ImportAlias
+                        && cobrust_types::is_ecosystem_module(rn.name.as_str())
+                    {
+                        if let Some(sig) = cobrust_types::lookup_module_fn(rn.name.as_str(), name) {
+                            return sig.ret;
+                        }
+                    }
+                }
+                let base_ty = synth_expr_ty(b, base);
+                if let Ty::Adt(id, _) = &base_ty {
+                    if cobrust_types::is_ecosystem_handle(*id) {
+                        if let Some(sig) = cobrust_types::lookup_handle_method(&base_ty, name) {
+                            return sig.ret;
+                        }
+                    }
                 }
             }
             Ty::None

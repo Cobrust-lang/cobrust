@@ -1310,9 +1310,53 @@ fn move_to_copy(op: Operand) -> Operand {
     }
 }
 
+/// ADR-0072 §2/§3 / §6 Plan — collect the set of ecosystem modules an
+/// already-lowered MIR program actually uses, so `cobrust build` links
+/// ONLY those modules' archives (`lib<mod>.a`) and not the whole
+/// ecosystem (risk 3: link bloat).
+///
+/// The MIR lowering retargets ecosystem calls onto `Constant::Str`
+/// callees (`__cobrust_den_connect`, …). We scan every `Terminator::Call`
+/// callee symbol and map a recognized `__cobrust_<module>_*` prefix back
+/// to its module name. Returns the deduplicated module-name set.
+#[must_use]
+pub fn collect_ecosystem_modules(module: &Module) -> std::collections::BTreeSet<String> {
+    let mut mods = std::collections::BTreeSet::new();
+    for body in &module.bodies {
+        for block in &body.blocks {
+            if let Terminator::Call {
+                func: Operand::Constant(Constant::Str(sym)),
+                ..
+            } = &block.terminator
+            {
+                if let Some(m) = ecosystem_module_for_symbol(sym) {
+                    mods.insert(m.to_string());
+                }
+            }
+        }
+    }
+    mods
+}
+
+/// Map a retargeted ecosystem C-ABI symbol to its module name, or `None`
+/// for a non-ecosystem symbol. First proof recognizes only `den`'s
+/// symbols; new modules extend this off the proven chain.
+fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
+    if sym.starts_with("__cobrust_den_") {
+        Some("den")
+    } else {
+        None
+    }
+}
+
 pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
     let ids = collect_print_def_ids(module);
     if ids.is_empty() {
+        // ADR-0072: even when no PRELUDE stub callsites exist, an
+        // ecosystem-only program (e.g. all `den.*` calls) still needs
+        // the rewrite pass to be a no-op success — the ecosystem calls
+        // were already retargeted at MIR-lowering time. Return Ok so the
+        // linker-side `collect_ecosystem_modules` still sees them.
         return Ok(());
     }
     let all_stub_ids = ids.all();

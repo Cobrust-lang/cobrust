@@ -51,12 +51,17 @@
 #![allow(clippy::trivially_copy_pass_by_ref)]
 
 pub mod check;
+pub mod ecosystem;
 pub mod error;
 pub mod fix_safety;
 pub mod infer;
 pub mod ty;
 
 pub use check::{TypeCheckCtx, TypedModule, check, check_incremental};
+pub use ecosystem::{
+    DEN_CONNECTION_ADT, DEN_CURSOR_ADT, EcoSig, PyCompatTier, handle_drop_symbol,
+    is_ecosystem_handle, is_ecosystem_module, lookup_handle_method, lookup_module_fn,
+};
 pub use error::TypeError;
 pub use fix_safety::{FixSafety, Suggestion, type_error_fix_safety, type_error_suggestion_text};
 pub use infer::{Subst, finalize, unify};

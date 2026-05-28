@@ -121,6 +121,10 @@ pub fn build(
 
     intrinsics::rewrite_print(&mut mir).map_err(|e| BuildError::Type(format!("{e}")))?;
 
+    // ADR-0072 §2/§3 — the set of ecosystem modules this program imports
+    // (drives per-import static linking of `lib<mod>.a`; risk 3 link bloat).
+    let eco_modules = intrinsics::collect_ecosystem_modules(&mir);
+
     // --- target spec ----------------------------------------------------
     let triple = match target {
         Some(t) => t
@@ -291,11 +295,42 @@ pub fn build(
             // print/panic callsite, so plain archive resolution
             // suffices).
             let mut cmd = Command::new(&cc);
-            cmd.arg(&user_obj_path)
-                .arg(&runtime_obj)
-                .arg(&stdlib_archive)
-                .arg("-o")
-                .arg(&exe_path);
+            cmd.arg(&user_obj_path).arg(&runtime_obj);
+            // ADR-0072 §2/§3 Q5 — per-import ecosystem static linking.
+            // Both `libcobrust_stdlib.a` and each ecosystem `lib<mod>.a`
+            // are Rust staticlibs that EACH embed a copy of libstd /
+            // liballoc / panic runtime. Two ordering hazards therefore
+            // collide:
+            //   - ecosystem-AFTER-stdlib: macOS `ld` (multi-pass) resolves
+            //     den's `__cobrust_str_*` back-references against the
+            //     earlier stdlib fine, but single-pass GNU `ld` would not;
+            //   - ecosystem-BEFORE-stdlib: both archives' embedded-libstd
+            //     members get pulled → "duplicate symbols".
+            // The portable fix: keep ecosystem archives AFTER the stdlib
+            // archive (so the embedded-std de-dups against stdlib's, which
+            // is pulled first) AND, on Linux only, wrap all archives in a
+            // `--start-group/--end-group` so GNU ld iterates them to a
+            // fixpoint (resolving den's `__cobrust_str_*` back-refs without
+            // re-pulling duplicate std members). macOS `ld` is already
+            // multi-pass and needs no group. Only imported modules link
+            // (risk 3).
+            let eco_archives = eco_modules
+                .iter()
+                .map(|m| locate_ecosystem_archive(m, release))
+                .collect::<Result<Vec<_>, _>>()?;
+            if cfg!(target_os = "linux") && !eco_archives.is_empty() {
+                cmd.arg("-Wl,--start-group").arg(&stdlib_archive);
+                for archive in &eco_archives {
+                    cmd.arg(archive);
+                }
+                cmd.arg("-Wl,--end-group");
+            } else {
+                cmd.arg(&stdlib_archive);
+                for archive in &eco_archives {
+                    cmd.arg(archive);
+                }
+            }
+            cmd.arg("-o").arg(&exe_path);
             // Platform: macOS doesn't need --no-as-needed; Linux needs
             // libpthread + libdl + libm pulled in for std + mimalloc.
             if cfg!(target_os = "linux") {
@@ -512,6 +547,87 @@ fn locate_stdlib_archive(release: bool) -> Result<PathBuf, BuildError> {
          or download a v0.6.0+ wheel tarball (ADR-0069)",
         cand = candidate.display(),
         alt_ = alt.display(),
+    )))
+}
+
+/// ADR-0072 §2/§3 Q5 — locate (and, in a dev workspace, build) the
+/// static archive `lib<module>.a` for an imported ecosystem module.
+///
+/// Mirrors [`locate_stdlib_archive`]'s lookup chain shape but for a
+/// per-module archive:
+///
+/// - **Phase 0 (wheel-layout)** — `<install_prefix>/lib/cobrust/lib<mod>.a`.
+/// - **Phase 1 (env override)** — `COBRUST_ECOSYSTEM_ARCHIVE_<MOD>`
+///   (uppercased module name) for CI / test harnesses.
+/// - **Phase 2 (workspace fallback)** — `target/{profile}/lib<mod>.a`;
+///   if absent, run `cargo build -p cobrust-<mod>` to produce it (dev
+///   convenience so `cobrust build prog.cb` works against a source tree
+///   without a manual pre-build).
+fn locate_ecosystem_archive(module: &str, release: bool) -> Result<PathBuf, BuildError> {
+    let archive_name = format!("lib{module}.a");
+
+    // 0. Wheel-layout lookup (parity with libcobrust_stdlib.a).
+    if let Some(p) = locate_wheel_lib_file(&archive_name) {
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    // 1. Env override (CI / tests swap in a prebuilt archive).
+    let env_key = format!("COBRUST_ECOSYSTEM_ARCHIVE_{}", module.to_uppercase());
+    if let Ok(p) = std::env::var(&env_key) {
+        let p = PathBuf::from(p);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    // 2. Workspace-relative fallback (dev builds).
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let workspace = Path::new(manifest_dir)
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            BuildError::Internal("cannot derive workspace root from CARGO_MANIFEST_DIR".into())
+        })?;
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| workspace.join("target"), PathBuf::from);
+    let profile = if release { "release" } else { "debug" };
+    let candidate = target_dir.join(profile).join(&archive_name);
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+    // Try the other profile's prebuilt archive before building.
+    let other = if release { "debug" } else { "release" };
+    let alt = target_dir.join(other).join(&archive_name);
+    if alt.exists() {
+        return Ok(alt);
+    }
+
+    // Dev convenience: build the staticlib for the current profile.
+    let crate_name = format!("cobrust-{module}");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let mut build_cmd = Command::new(&cargo);
+    build_cmd.arg("build").arg("-p").arg(&crate_name);
+    if release {
+        build_cmd.arg("--release");
+    }
+    let status = build_cmd
+        .status()
+        .map_err(|e| BuildError::Internal(format!("building {crate_name}: {e}")))?;
+    if !status.success() {
+        return Err(BuildError::Internal(format!(
+            "failed to build ecosystem archive {archive_name} (`{cargo} build -p {crate_name}`)"
+        )));
+    }
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+    Err(BuildError::Internal(format!(
+        "cannot locate {archive_name} for ecosystem module `{module}` \
+         (looked under {cand}); ensure `cobrust-{module}` declares the \
+         `staticlib` crate-type (ADR-0072 Q5)",
+        cand = candidate.display(),
     )))
 }
 

@@ -442,6 +442,13 @@ struct Ctx {
     /// Populated during `prebind_item` by name match against
     /// `is_list_polymorphic_intrinsic_name`.
     poly_intrinsic_defs: HashSet<DefId>,
+    /// ADR-0072 §2/§3 — ecosystem-module aliases. Maps the `DefId` of
+    /// an `import den` alias (a `DefKind::ImportAlias`) to its module
+    /// name (`"den"`). Populated during `prebind_item` for `Import`
+    /// items whose `local_name` is a known built-in ecosystem module
+    /// (`ecosystem::is_ecosystem_module`). `synth_call` consults this so
+    /// `den.connect(...)` resolves against the ecosystem manifest.
+    ecosystem_module_defs: HashMap<DefId, String>,
 }
 
 impl Ctx {
@@ -528,8 +535,32 @@ impl Ctx {
                 self.alias_map.insert(a.name.clone(), resolved);
             }
             ItemKind::Decorated { inner, .. } => self.prebind_item(inner),
-            ItemKind::Import { def_id, .. } => {
-                self.record_def(*def_id, self.fresh_var());
+            ItemKind::Import {
+                def_id,
+                path,
+                local_name,
+                from_name,
+            } => {
+                // ADR-0072 §2 (Q1) — a bare `import den` whose resolved
+                // module is a built-in ecosystem namespace is recorded so
+                // `den.attr` accesses dispatch against the manifest. We
+                // only treat the plain `import <mod>` form (no `from`,
+                // single path segment matching the local name) as an
+                // ecosystem alias; `from den import X` re-export forms are
+                // out of the first-proof scope.
+                let module = path.last().map(String::as_str).unwrap_or(local_name);
+                if from_name.is_none() && crate::ecosystem::is_ecosystem_module(module) {
+                    self.ecosystem_module_defs
+                        .insert(*def_id, module.to_string());
+                    // The alias is never used as a runtime value (only as
+                    // an `.attr`-access base, intercepted in `synth_call`),
+                    // so record a concrete `Ty::None` rather than a fresh
+                    // var — otherwise the unresolved var would leak to the
+                    // `check()` finalize pass as `AmbiguousType`.
+                    self.record_def(*def_id, Ty::None);
+                } else {
+                    self.record_def(*def_id, self.fresh_var());
+                }
             }
             ItemKind::Let(_) | ItemKind::ExprStmt(_) => {}
         }
@@ -1996,7 +2027,114 @@ impl Ctx {
         Ok(None)
     }
 
+    /// ADR-0072 §2/§3 — ecosystem-module call dispatch. Handles two
+    /// shapes, both keyed on the manifest in `crate::ecosystem`:
+    ///
+    /// 1. **Module function** — `den.connect(path)`: the callee is
+    ///    `Attr { base: Name(rn), name }` where `rn.def_id` is a
+    ///    recorded ecosystem-module alias. Looks up `(module, name)` in
+    ///    `lookup_module_fn`.
+    /// 2. **Handle method** — `conn.execute(sql)` / `cur.fetchall()`:
+    ///    the callee is `Attr { base, name }` where `synth_expr(base)`
+    ///    resolves to an ecosystem-handle `Ty::Adt`. Looks up
+    ///    `(receiver-handle, name)` in `lookup_handle_method`.
+    ///
+    /// Returns `Ok(Some(ret))` on a manifest hit (after arity + arg-type
+    /// checks), `Ok(None)` when the callee is not an ecosystem call (so
+    /// the normal dispatch chain continues), or an `Err` on arity /
+    /// type mismatch (CLAUDE.md §2.5 compile-time-catch).
+    fn try_synth_ecosystem_call(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Attr { base, name } = &callee.kind else {
+            return Ok(None);
+        };
+
+        // Case 1: module-level free function (`den.connect`).
+        if let ExprKind::Name(rn) = &base.kind {
+            if let Some(module) = self.ecosystem_module_defs.get(&rn.def_id).cloned() {
+                let Some(sig) = crate::ecosystem::lookup_module_fn(&module, name) else {
+                    return Err(TypeError::UnknownName {
+                        name: format!("{module}.{name}"),
+                        span,
+                        suggestion: Some(
+                            "this ecosystem-module function is not in the manifest \
+                             (den first proof exposes `den.connect`)",
+                        ),
+                    });
+                };
+                let ret = self.check_eco_sig(&sig, args, span)?;
+                return Ok(Some(ret));
+            }
+        }
+
+        // Case 2: handle method (`conn.execute`, `cur.fetchall`). The
+        // base must resolve to an ecosystem-handle Adt.
+        let base_ty = self.synth_expr(base)?;
+        let base_ty = self.subst.apply(&base_ty);
+        if let Ty::Adt(id, _) = &base_ty {
+            if crate::ecosystem::is_ecosystem_handle(*id) {
+                let Some(sig) = crate::ecosystem::lookup_handle_method(&base_ty, name) else {
+                    return Err(TypeError::UnknownMethod {
+                        type_name: format!("{base_ty}"),
+                        method_name: name.clone(),
+                        span,
+                        suggestion: Some(
+                            "this method is not on this ecosystem handle \
+                             (den: Connection.execute, Cursor.fetchall)",
+                        ),
+                    });
+                };
+                let ret = self.check_eco_sig(&sig, args, span)?;
+                return Ok(Some(ret));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Arity- + arg-type-check an [`crate::ecosystem::EcoSig`] against a
+    /// call's positional `args`, returning the signature's return type.
+    /// The receiver (for a method) is implicit and not in `sig.params`.
+    fn check_eco_sig(
+        &mut self,
+        sig: &crate::ecosystem::EcoSig,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Ty, TypeError> {
+        let pos_args: Vec<&Expr> = args
+            .iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        if pos_args.len() != sig.params.len() {
+            return Err(TypeError::ArityMismatch {
+                expected: sig.params.len(),
+                actual: pos_args.len(),
+                span,
+                suggestion: Some("ecosystem call arity mismatch — pass exactly the declared arity"),
+            });
+        }
+        for (a, p) in pos_args.iter().zip(sig.params.iter()) {
+            let at = self.synth_expr(a)?;
+            self.unify_call_arg(p, &at, a.span)?;
+        }
+        Ok(sig.ret.clone())
+    }
+
     fn synth_call(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
+        // ADR-0072 §2/§3 — ecosystem-module call dispatch fires first so
+        // `den.connect(...)` / `conn.execute(...)` / `cur.fetchall()`
+        // resolve against the manifest before the generic method-table
+        // and fn-call paths (which would otherwise leave the handle
+        // attribute access as an unconstrained `fresh_var`).
+        if let Some(t) = self.try_synth_ecosystem_call(callee, args, span)? {
+            return Ok(t);
+        }
         // ADR-0052d-prereq §"Decision" — method-form dispatch via per-
         // type method tables (Dict / Str / List / Float / Int). Each
         // table guards on its receiver type; the chain returns

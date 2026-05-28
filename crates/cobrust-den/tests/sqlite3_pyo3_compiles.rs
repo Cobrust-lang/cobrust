@@ -26,9 +26,13 @@ fn pyo3_feature_build_succeeds_or_skips_cleanly() {
         cargo_toml.contains(r#"pyo3 = ["dep:pyo3"]"#),
         "Cargo.toml must declare `pyo3 = [\"dep:pyo3\"]` per ADR-0011 §3 + ADR-0022"
     );
+    // ADR-0072 Q5 added `"staticlib"` (→ libden.a for `.cb`
+    // ecosystem-import static linking) alongside the PyO3 `cdylib` and
+    // the in-workspace `rlib`. cargo permits all three side by side.
     assert!(
-        cargo_toml.contains(r#"crate-type = ["rlib", "cdylib"]"#),
-        "Cargo.toml must declare cdylib crate-type per ADR-0011 §3 + ADR-0022"
+        cargo_toml.contains(r#"crate-type = ["rlib", "cdylib", "staticlib"]"#),
+        "Cargo.toml must declare rlib + cdylib (PyO3, ADR-0011 §3 / ADR-0022) \
+         + staticlib (libden.a, ADR-0072 Q5) crate-types"
     );
 
     let out = Command::new("cargo")
