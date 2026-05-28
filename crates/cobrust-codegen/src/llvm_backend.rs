@@ -622,9 +622,23 @@ fn finalize_artifact(object: PathBuf, spec: &TargetSpec) -> Result<Artifact, Cod
 /// ADR-0058b §3.4 codifies parametric multi-target dispatch: `Target::from_triple`
 /// accepts any tier-1 triple per [`supported_tier1_triples`]. Tier-2+ triples
 /// may construct successfully at runtime when the LLVM backend is compiled in.
+///
+/// F66 (2026-05-28) — RISC-V triple normalization. Rust convention writes
+/// `riscv64gc-unknown-linux-gnu` (ISA flags baked into the architecture
+/// component); upstream LLVM only knows the plain `riscv64` / `riscv32`
+/// architecture names — ISA extensions are passed via `target-features`
+/// (`+m,+a,+f,+d,+c`). Without normalization, `Target::from_triple` returns
+/// "No available targets are compatible with triple" even though the RISC-V
+/// backend IS registered by `Target::initialize_all`. We translate the
+/// triple's architecture component to LLVM's vocabulary and synthesise the
+/// matching feature string. Same pattern applied to `riscv32gc` / `riscv32imc`
+/// / `riscv64imac` / `riscv64a23`. ADR-0075 §"Combined risk surfaces" cited
+/// the cross-target LLVM triple shape; this is its concrete first-proof
+/// resolution.
 fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError> {
     Target::initialize_all(&InitializationConfig::default());
-    let triple = TargetTriple::create(&spec.triple.to_string());
+    let (triple_str, isa_features) = normalize_triple_for_llvm(&spec.triple);
+    let triple = TargetTriple::create(&triple_str);
     let target = Target::from_triple(&triple)
         .map_err(|e| CodegenError::UnsupportedTarget(format!("{}: {}", spec.triple, e)))?;
     let opt = match spec.opt_level {
@@ -651,7 +665,11 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
     // Any other string (e.g. `"skylake"`, `"apple-m1"`, `"neoverse-v1"`) is passed
     // verbatim with empty features. `None` falls back to the `"generic"` baseline
     // (pre-Tier-2 behaviour).
-    let (cpu, features): (String, String) = match spec.target_cpu.as_deref() {
+    //
+    // F66: ISA features synthesised by `normalize_triple_for_llvm` (RISC-V `gc`,
+    // `imac`, etc.) are appended after the caller's features so the RISC-V ISA
+    // baseline always reflects the triple's intent. Empty for non-RISCV targets.
+    let (cpu, mut features): (String, String) = match spec.target_cpu.as_deref() {
         Some("native") => (
             TargetMachine::get_host_cpu_name().to_string(),
             TargetMachine::get_host_cpu_features().to_string(),
@@ -659,6 +677,14 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
         Some(name) => (name.to_string(), String::new()),
         None => ("generic".to_string(), String::new()),
     };
+    if !isa_features.is_empty() {
+        if features.is_empty() {
+            features = isa_features;
+        } else {
+            features.push(',');
+            features.push_str(&isa_features);
+        }
+    }
     target
         .create_target_machine(
             &triple,
@@ -674,6 +700,82 @@ fn build_target_machine(spec: &TargetSpec) -> Result<TargetMachine, CodegenError
                 spec.triple
             ))
         })
+}
+
+/// F66 — Normalize a `target_lexicon::Triple` for LLVM consumption.
+///
+/// Returns `(triple_string, isa_features)` where:
+///
+/// - `triple_string` is the triple with its architecture component
+///   rewritten to LLVM's vocabulary (RISC-V `Riscv64gc` / `Riscv64imac` /
+///   `Riscv64a23` → `riscv64`; same for `riscv32*` variants).
+/// - `isa_features` is a comma-separated LLVM feature string carrying the
+///   ISA extensions implied by the original architecture variant (e.g.
+///   `Riscv64gc` → `+m,+a,+f,+d,+c`). Empty for plain `riscv64`/`riscv32`
+///   and every non-RISC-V architecture.
+///
+/// Non-RISC-V triples pass through unchanged (no normalization, no features
+/// synthesised).
+///
+/// # Why
+///
+/// Rust convention writes RISC-V triples as `riscv64gc-unknown-linux-gnu`
+/// (the `gc` ISA flags are part of the architecture string). Upstream LLVM
+/// — what inkwell + llvm-sys bind to — only recognises the plain `riscv64`
+/// and `riscv32` architecture names; ISA extensions must be passed via the
+/// `TargetMachine` `features` parameter. `Target::from_triple("riscv64gc-...")`
+/// returns "No available targets are compatible with triple" even when the
+/// RISC-V backend is fully registered (`Target::initialize_all` was called).
+///
+/// `clang` / `llc` work because they call `Triple::normalize` internally;
+/// `LLVMGetTargetFromTriple` does not. This helper mirrors that normalization
+/// at the inkwell boundary so the codegen layer accepts the broader Rust
+/// triple vocabulary.
+fn normalize_triple_for_llvm(triple: &target_lexicon::Triple) -> (String, String) {
+    use target_lexicon::{Architecture, Riscv32Architecture, Riscv64Architecture};
+
+    let original = triple.to_string();
+    let (llvm_arch, features): (&str, &str) = match triple.architecture {
+        Architecture::Riscv64(variant) => match variant {
+            Riscv64Architecture::Riscv64 => ("riscv64", ""),
+            // `riscv64gc` = `g` (m,a,f,d) + `c` (compressed). The `g`
+            // baseline also implies `+zicsr,+zifencei` but LLVM 18
+            // accepts them implicitly via `+m,+a,+f,+d`; spelling them
+            // out matches the rustc target spec for parity.
+            Riscv64Architecture::Riscv64gc => ("riscv64", "+m,+a,+f,+d,+c"),
+            Riscv64Architecture::Riscv64imac => ("riscv64", "+m,+a,+c"),
+            // `riscv64a23` (RVA23 profile) — superset of `gc`; conservative
+            // baseline keeps the `gc` feature set. ISA extensions beyond
+            // `gc` (v, b, …) belong on a Tier-2 sub-ADR.
+            Riscv64Architecture::Riscv64a23 => ("riscv64", "+m,+a,+f,+d,+c"),
+            // `Riscv64Architecture` is `#[non_exhaustive]` — any future
+            // variant added upstream falls back to the conservative plain
+            // `riscv64` baseline with no features (i.e. RV64I). Caller can
+            // still override via `--target-cpu` if a richer baseline is
+            // needed; the build won't error out on unrecognised variants.
+            _ => ("riscv64", ""),
+        },
+        Architecture::Riscv32(variant) => match variant {
+            Riscv32Architecture::Riscv32 => ("riscv32", ""),
+            Riscv32Architecture::Riscv32gc => ("riscv32", "+m,+a,+f,+d,+c"),
+            Riscv32Architecture::Riscv32i => ("riscv32", ""),
+            Riscv32Architecture::Riscv32im => ("riscv32", "+m"),
+            Riscv32Architecture::Riscv32ima => ("riscv32", "+m,+a"),
+            Riscv32Architecture::Riscv32imac => ("riscv32", "+m,+a,+c"),
+            Riscv32Architecture::Riscv32imafc => ("riscv32", "+m,+a,+f,+c"),
+            Riscv32Architecture::Riscv32imc => ("riscv32", "+m,+c"),
+            // `Riscv32Architecture` is `#[non_exhaustive]` (mirror Riscv64
+            // arm above). Conservative RV32I baseline with no features.
+            _ => ("riscv32", ""),
+        },
+        _ => return (original, String::new()),
+    };
+
+    // Replace only the architecture prefix (first '-' separated component);
+    // preserve vendor + os + env unchanged (e.g. `unknown-linux-gnu`).
+    let suffix = original.find('-').map_or("", |i| &original[i..]);
+    let normalized = format!("{llvm_arch}{suffix}");
+    (normalized, features.to_string())
 }
 
 // =====================================================================
@@ -5559,6 +5661,52 @@ mod tests {
             let parsed = target_lexicon::Triple::from_str(triple_str)
                 .unwrap_or_else(|e| panic!("triple `{triple_str}` failed to parse: {e}"));
             assert_eq!(parsed.to_string(), *triple_str);
+        }
+    }
+
+    /// F66 — RISC-V triple normalization: `riscv64gc-...` → `riscv64-...`
+    /// with ISA features synthesised into the feature string. Tier-1
+    /// triples + non-RISCV cross triples pass through unchanged.
+    #[test]
+    fn normalize_triple_for_llvm_riscv_and_passthrough() {
+        use std::str::FromStr;
+        let cases: &[(&str, &str, &str)] = &[
+            // (input triple, expected LLVM triple, expected features)
+            (
+                "riscv64gc-unknown-linux-gnu",
+                "riscv64-unknown-linux-gnu",
+                "+m,+a,+f,+d,+c",
+            ),
+            ("riscv64-unknown-linux-gnu", "riscv64-unknown-linux-gnu", ""),
+            (
+                "riscv64imac-unknown-none-elf",
+                "riscv64-unknown-none-elf",
+                "+m,+a,+c",
+            ),
+            (
+                "riscv32gc-unknown-linux-gnu",
+                "riscv32-unknown-linux-gnu",
+                "+m,+a,+f,+d,+c",
+            ),
+            (
+                "riscv32imc-unknown-none-elf",
+                "riscv32-unknown-none-elf",
+                "+m,+c",
+            ),
+            // Non-RISCV pass-through (no features synthesised).
+            ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", ""),
+            ("aarch64-apple-darwin", "aarch64-apple-darwin", ""),
+            ("wasm32-wasip1", "wasm32-wasip1", ""),
+        ];
+        for (input, want_triple, want_features) in cases {
+            let parsed = target_lexicon::Triple::from_str(input)
+                .unwrap_or_else(|e| panic!("triple `{input}` failed to parse: {e}"));
+            let (got_triple, got_features) = normalize_triple_for_llvm(&parsed);
+            assert_eq!(&got_triple, want_triple, "triple mismatch for `{input}`");
+            assert_eq!(
+                &got_features, want_features,
+                "features mismatch for `{input}`"
+            );
         }
     }
 

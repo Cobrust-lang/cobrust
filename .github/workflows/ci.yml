@@ -296,6 +296,11 @@ jobs:
             llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev \
             gcc-riscv64-linux-gnu qemu-user-static
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+          # F66 — Ubuntu's `qemu-user-static` apt package ships the binary
+          # at `/usr/bin/qemu-riscv64-static`; the cross-test probes for
+          # plain `qemu-riscv64` (no `-static` suffix). Symlink so the
+          # E2E + smoke steps both find it on PATH.
+          sudo ln -sf /usr/bin/qemu-riscv64-static /usr/local/bin/qemu-riscv64
       - uses: Swatinem/rust-cache@v2  # v2.7.8
       - name: Cross-build cobrust-stdlib (riscv64gc-unknown-linux-gnu)
         run: cargo build -p cobrust-stdlib --target=riscv64gc-unknown-linux-gnu --locked
