@@ -4,9 +4,9 @@ finding_id: F68
 title: ADR-0076 Phase 1 follow-ups — @dora.node decorator desugar gap + Event-id equality demo simplification
 status: ratified
 date: 2026-05-29
-last_verified_commit: HEAD
+last_verified_commit: 971d4ce
 relates_to: [adr:0074, adr:0076, finding:F35, finding:F36]
-resolution_commit: 5adcef9
+resolution_commit: 971d4ce
 resolves: ["F68 §1 — @dora.node module-receiver decorator desugar"]
 ---
 

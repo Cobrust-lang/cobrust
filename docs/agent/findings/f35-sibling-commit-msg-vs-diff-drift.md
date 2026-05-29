@@ -86,3 +86,21 @@ Common triggers:
 Filed as new F-pattern candidate (commit-message surface drift), sibling of F35
 (post-merge claim drift in agent narrative). Queued for upstream ADSD catalogue
 follow-on PR.
+
+## Instances ledger
+
+Recurrences of the scope-tag / subject-vs-diff drift class, surfaced by the
+independent post-author audit. Recorded (not history-rewritten — landed commits
+stay as-is); the value is the accumulating evidence that the pre-commit rule
+above keeps getting skipped, which is the case for promoting it to a CI guard.
+
+- **2026-05-29 — `d29470f`** scope-tag `fix(cli/build)` + subject "RV cross-link
+  wires user .o + cross-stdlib .a" implied a `build.rs` link-wiring change. Actual
+  diff: 12+/1− in **only** `crates/cobrust-cli/tests/cross_compile_riscv64_e2e.rs`
+  — `build.rs` untouched. The real fix was wrapping the test's `.cb` source in
+  `fn main()` so codegen emits `_cobrust_user_main` (F66/F67 were codegen-solid;
+  the gate was a test-fixture shape). Mitigation present: the commit **body** was
+  honest ("not a plumbing gap, a test-source gap; candidates A/B/C all clean").
+  Correct tag would have been `test(cli)` / `fix(test/rv)`. Surfaced by the
+  retro-audit of arc `8a3e8bf..936f13c`; cosmetic/provenance (changelog readers
+  see a false `cli/build` scope), not functional.
