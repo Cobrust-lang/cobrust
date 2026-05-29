@@ -372,7 +372,7 @@ pub fn build(
             // provides the libc/mathlib surface, and there are no
             // threads in WASI preview 1.
             let target_is_wasm = if let Some(t) = cross_target {
-                t.contains("wasm")
+                triple_is_wasm(t)
             } else {
                 cfg!(target_arch = "wasm32") || cfg!(target_arch = "wasm64")
             };
@@ -513,32 +513,60 @@ fn ensure_runtime_object(
 ///    Probed with `--version`. Falls back to `clang --target=<triple>`.
 /// 4. **Host default** — `cc`.
 fn select_cc_resolved(cross_target: Option<&str>) -> Result<(String, Vec<String>), BuildError> {
+    // ADR-0075 Phase 2 Sprint E — wasm32 needs a wasi-sysroot. Compute it
+    // once here so EVERY cc-resolution branch below appends the same
+    // `--sysroot=<path>` to its prefix args. Apt-installed `clang-18`
+    // (`/usr/lib/llvm-18`) does NOT bundle a wasi-libc sysroot — it falls
+    // back to host glibc headers (`bits/libc-header-start.h` not found),
+    // which was the Sprint D live-CI failure. A real wasi-sysroot (from
+    // wasi-sdk) fixes it; discovered via $COBRUST_WASI_SYSROOT / $WASI_SDK_PATH.
+    let target_is_wasm = cross_target.is_some_and(triple_is_wasm);
+    let wasm_sysroot: Option<String> = if target_is_wasm {
+        Some(resolve_wasi_sysroot(
+            cross_target.unwrap_or("wasm32-wasip1"),
+        )?)
+    } else {
+        None
+    };
+    // Helper: fold the wasi `--sysroot` flag onto a base prefix-arg vec.
+    let with_sysroot = |mut args: Vec<String>| -> Vec<String> {
+        if let Some(sysroot) = &wasm_sysroot {
+            args.push(format!("--sysroot={sysroot}"));
+        }
+        args
+    };
+
     if let Some(triple) = cross_target {
         let env_key = format!("COBRUST_CC_{}", triple.replace('-', "_").to_uppercase());
         if let Ok(v) = std::env::var(&env_key) {
             if !v.is_empty() {
-                return Ok((v, Vec::new()));
+                // A user-set per-target CC may already embed `--sysroot`;
+                // appending ours is still safe (clang takes the last
+                // `--sysroot` wins / an identical path is idempotent).
+                return Ok((v, with_sysroot(Vec::new())));
             }
         }
     }
     if let Ok(v) = std::env::var("CC") {
         if !v.is_empty() {
-            return Ok((v, Vec::new()));
+            return Ok((v, with_sysroot(Vec::new())));
         }
     }
     if let Some(triple) = cross_target {
-        // ADR-0075 Phase 2 Sprint D — wasm32 targets short-circuit to
-        // `clang --target=<triple>`. WASM has no GNU cross-prefix
-        // convention (there is no `wasm32-wasi-gcc`); clang is the
-        // canonical wasm32-wasip1 driver, bundling `wasm-ld` + wasi-libc
-        // sysroot automatically when invoked with `--target=wasm32-wasip1`.
-        // Try `clang-18` (LLVM 18 ships current wasi headers) first, then
-        // plain `clang` as fallback.
-        let is_wasm = triple.starts_with("wasm32") || triple.starts_with("wasm64");
-        if is_wasm {
+        // ADR-0075 Phase 2 Sprint D/E — wasm32 targets short-circuit to
+        // `clang --target=<triple> --sysroot=<wasi-sysroot>`. WASM has no
+        // GNU cross-prefix convention (there is no `wasm32-wasi-gcc`);
+        // clang is the canonical wasm32-wasip1 driver. The `wasm-ld`
+        // linker ships with LLVM; the wasi-libc sysroot does NOT ship with
+        // apt's clang-18, so `--sysroot` (resolved above) is mandatory.
+        // Try `clang-18` (LLVM 18) first, then plain `clang` as fallback.
+        if target_is_wasm {
             for cand in ["clang-18", "clang"] {
                 if probe_cc_available(cand) {
-                    return Ok((cand.to_string(), vec![format!("--target={triple}")]));
+                    return Ok((
+                        cand.to_string(),
+                        with_sysroot(vec![format!("--target={triple}")]),
+                    ));
                 }
             }
             return Err(BuildError::User(format!(
@@ -577,6 +605,60 @@ fn select_cc_resolved(cross_target: Option<&str>) -> Result<(String, Vec<String>
     Ok(("cc".to_string(), Vec::new()))
 }
 
+/// ADR-0075 Phase 2 Sprint E — resolve the wasi-libc sysroot for a wasm
+/// cross-build.
+///
+/// Resolution order:
+///
+/// 1. **`COBRUST_WASI_SYSROOT`** — points directly at the sysroot dir
+///    (the one containing `include/` + `lib/wasm32-wasi/`). Highest
+///    priority so CI / users can pin an exact sysroot.
+/// 2. **`WASI_SDK_PATH`** — the wasi-sdk install root; the sysroot lives
+///    at `<WASI_SDK_PATH>/share/wasi-sysroot` (the canonical wasi-sdk
+///    layout). Convenient when the whole SDK is installed.
+///
+/// Errors with an actionable message (pointing at the install doc) when
+/// neither is set, OR when the resolved path doesn't exist on disk.
+/// This converts the opaque clang `bits/libc-header-start.h file not
+/// found` failure (Sprint D's live-CI break) into a clear, fix-shaped
+/// diagnostic per CLAUDE.md §2.5-B.
+fn resolve_wasi_sysroot(triple: &str) -> Result<String, BuildError> {
+    if let Ok(p) = std::env::var("COBRUST_WASI_SYSROOT") {
+        if !p.is_empty() {
+            if Path::new(&p).is_dir() {
+                return Ok(p);
+            }
+            return Err(BuildError::User(format!(
+                "$COBRUST_WASI_SYSROOT is set to `{p}` but that directory does not \
+                 exist. Point it at a real wasi-libc sysroot (the dir containing \
+                 `include/` + `lib/wasm32-wasi/`); see docs/agent/setup/cross-toolchain.md."
+            )));
+        }
+    }
+    if let Ok(sdk) = std::env::var("WASI_SDK_PATH") {
+        if !sdk.is_empty() {
+            let sysroot = Path::new(&sdk).join("share").join("wasi-sysroot");
+            if sysroot.is_dir() {
+                return Ok(sysroot.to_string_lossy().into_owned());
+            }
+            return Err(BuildError::User(format!(
+                "$WASI_SDK_PATH is `{sdk}` but `{}` (expected wasi-sysroot under the \
+                 SDK) does not exist. Re-install wasi-sdk or set $COBRUST_WASI_SYSROOT \
+                 to the sysroot dir directly; see docs/agent/setup/cross-toolchain.md.",
+                sysroot.display(),
+            )));
+        }
+    }
+    Err(BuildError::User(format!(
+        "cross-building for `{triple}` requires a wasi-libc sysroot, but neither \
+         $COBRUST_WASI_SYSROOT nor $WASI_SDK_PATH is set. Apt's `clang-18` does NOT \
+         bundle one (it falls back to host glibc headers and fails with \
+         `bits/libc-header-start.h file not found`). Install wasi-sdk and set \
+         $WASI_SDK_PATH (sysroot auto-derived at <SDK>/share/wasi-sysroot), or set \
+         $COBRUST_WASI_SYSROOT directly; see docs/agent/setup/cross-toolchain.md."
+    )))
+}
+
 /// Convert an LLVM-style triple `<arch>-<vendor>-<os>-<env>` to the
 /// canonical GNU cross-cc prefix `<arch>-<os>-<env>` (drops `<vendor>`,
 /// strips the rust-specific `gc` ISA-extension suffix on riscv).
@@ -601,6 +683,14 @@ fn derive_gnu_cross_prefix(triple: &str) -> Option<String> {
         arch
     };
     Some(format!("{}-{}-{}", arch_stripped, parts[2], parts[3]))
+}
+
+/// ADR-0075 Phase 2 — `true` when the cross triple targets WebAssembly
+/// (`wasm32-*` / `wasm64-*`). Single predicate so the sysroot resolution,
+/// the linker-flag guards, and the `--no-default-features` stdlib
+/// cross-build all agree on what "wasm" means.
+fn triple_is_wasm(triple: &str) -> bool {
+    triple.starts_with("wasm32") || triple.starts_with("wasm64")
 }
 
 /// Returns `true` when `cc --version` runs successfully (binary present
@@ -820,6 +910,18 @@ fn locate_or_build_cross_stdlib(release: bool, triple: &str) -> Result<PathBuf, 
         .arg(triple);
     if release {
         cmd.arg("--release");
+    }
+    // ADR-0075 Phase 2 Sprint E / F70 — the stdlib default feature trio
+    // (mimalloc-alloc / tokio-runtime / llm-router) does NOT build for
+    // wasm32-wasip1 (native mimalloc + mio sockets + a TLS network stack
+    // WASI preview 1 doesn't expose). The hello-world path needs none of
+    // them, so drop them for wasm targets — otherwise this subprocess
+    // fails on mimalloc and the user never reaches a working `.wasm`.
+    // (CI pre-builds the archive with the same flag; this makes a clean
+    // machine work too.) Full feature-on-wasm enablement is deferred per
+    // F70.
+    if triple_is_wasm(triple) {
+        cmd.arg("--no-default-features");
     }
     let status = cmd
         .status()
@@ -1058,9 +1160,116 @@ pub fn lower_to_mir(file: &Path) -> Result<MirModule, BuildError> {
 mod tests {
     use super::*;
 
+    /// Serialize the env-var-touching tests below. The functions
+    /// `resolve_wasi_sysroot` and `select_cc_resolved` read process-global
+    /// env vars such as `COBRUST_WASI_SYSROOT`, `WASI_SDK_PATH`, and `CC`.
+    /// Cargo runs tests in parallel by default, so a shared lock keeps
+    /// concurrent set/remove from racing (F37 anti-flakiness discipline).
+    static ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Snapshot + clear the wasm-related env vars; restore on drop. Keeps
+    /// each test hermetic regardless of the ambient CI environment (which
+    /// DOES set these in the wasm32-cross-smoke job).
+    struct WasmEnvScope {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+    impl WasmEnvScope {
+        fn clear() -> Self {
+            let keys = [
+                "COBRUST_WASI_SYSROOT",
+                "WASI_SDK_PATH",
+                "CC",
+                "COBRUST_CC_WASM32_WASIP1",
+            ];
+            let saved = keys
+                .iter()
+                .map(|k| (*k, std::env::var(k).ok()))
+                .collect::<Vec<_>>();
+            for (k, _) in &saved {
+                // SAFETY: test-only; serialized via ENV_GUARD. `remove_var`
+                // is unsafe in Rust 2024 (no concurrent readers under lock).
+                unsafe { std::env::remove_var(k) };
+            }
+            Self { saved }
+        }
+    }
+    impl Drop for WasmEnvScope {
+        fn drop(&mut self) {
+            for (k, v) in &self.saved {
+                // SAFETY: test-only restore under ENV_GUARD.
+                match v {
+                    Some(val) => unsafe { std::env::set_var(k, val) },
+                    None => unsafe { std::env::remove_var(k) },
+                }
+            }
+        }
+    }
+
     #[test]
     fn emit_kind_default_executable() {
         // Smoke: kind enum is correctly compared.
         assert_ne!(EmitKind::Object, EmitKind::Executable);
+    }
+
+    #[test]
+    fn host_target_never_gets_wasi_sysroot() {
+        // ADR-0075 Phase 2 Sprint E — the wasi `--sysroot` must NEVER leak
+        // onto a host build. `select_cc_resolved(None)` must return no
+        // sysroot prefix arg even when WASI env vars are ambiently set.
+        let _g = ENV_GUARD.lock().unwrap();
+        let _scope = WasmEnvScope::clear();
+        // SAFETY: serialized under ENV_GUARD; restored by `_scope` on drop.
+        unsafe { std::env::set_var("WASI_SDK_PATH", "/nonexistent/wasi-sdk") };
+        let (_cc, args) = select_cc_resolved(None).expect("host cc resolution");
+        assert!(
+            !args.iter().any(|a| a.starts_with("--sysroot")),
+            "host build must not carry a wasi --sysroot; got {args:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_wasi_sysroot_errors_when_unset() {
+        // No env set → clear, fix-shaped error (CLAUDE.md §2.5-B), NOT a
+        // silent fallback that would later fail deep in clang.
+        let _g = ENV_GUARD.lock().unwrap();
+        let _scope = WasmEnvScope::clear();
+        let err = resolve_wasi_sysroot("wasm32-wasip1").expect_err("must error when unset");
+        let msg = format!("{err}");
+        assert!(msg.contains("wasi-libc sysroot"), "msg: {msg}");
+        assert!(
+            msg.contains("WASI_SDK_PATH"),
+            "msg should name the env var: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_wasi_sysroot_from_sdk_path_layout() {
+        // $WASI_SDK_PATH → sysroot auto-derived at <SDK>/share/wasi-sysroot.
+        let _g = ENV_GUARD.lock().unwrap();
+        let _scope = WasmEnvScope::clear();
+        let tmp = tempfile::tempdir().unwrap();
+        let sysroot = tmp.path().join("share").join("wasi-sysroot");
+        std::fs::create_dir_all(&sysroot).unwrap();
+        // SAFETY: serialized under ENV_GUARD; restored on drop.
+        unsafe { std::env::set_var("WASI_SDK_PATH", tmp.path()) };
+        let resolved = resolve_wasi_sysroot("wasm32-wasip1").expect("derive from SDK path");
+        assert_eq!(PathBuf::from(resolved), sysroot);
+    }
+
+    #[test]
+    fn resolve_wasi_sysroot_direct_override_wins() {
+        // $COBRUST_WASI_SYSROOT (direct) takes priority over $WASI_SDK_PATH.
+        let _g = ENV_GUARD.lock().unwrap();
+        let _scope = WasmEnvScope::clear();
+        let tmp = tempfile::tempdir().unwrap();
+        let direct = tmp.path().join("my-sysroot");
+        std::fs::create_dir_all(&direct).unwrap();
+        // SAFETY: serialized under ENV_GUARD; restored on drop.
+        unsafe {
+            std::env::set_var("COBRUST_WASI_SYSROOT", &direct);
+            std::env::set_var("WASI_SDK_PATH", "/some/other/sdk");
+        }
+        let resolved = resolve_wasi_sysroot("wasm32-wasip1").expect("direct override");
+        assert_eq!(PathBuf::from(resolved), direct);
     }
 }

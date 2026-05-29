@@ -9,8 +9,13 @@
 //!
 //! Required toolchain (see `docs/agent/setup/cross-toolchain.md`):
 //! - `rustup target add wasm32-wasip1`
-//! - `clang` or `clang-18` on PATH (LLVM 18 driver knows the
-//!   `wasm32-wasip1` triple natively and bundles the wasi-libc sysroot).
+//! - A wasi-libc sysroot (ADR-0075 Phase 2 Sprint E): apt's `clang-18`
+//!   does NOT bundle one, so a real wasi-sdk is required. Install
+//!   wasi-sdk and set `$WASI_SDK_PATH` (sysroot auto-derived at
+//!   `<SDK>/share/wasi-sysroot`) OR set `$COBRUST_WASI_SYSROOT` directly.
+//!   Pin the cross-cc to the SDK's bundled clang via
+//!   `$COBRUST_CC_WASM32_WASIP1=<SDK>/bin/clang` (version-matched to the
+//!   sysroot); plain `clang` / `clang-18` also work IF a sysroot is set.
 //! - `wasmtime` on PATH (Linux: `cargo install wasmtime-cli --locked`;
 //!   macOS: `brew install wasmtime`).
 //!
@@ -38,6 +43,32 @@ fn binary_available(name: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// ADR-0075 Phase 2 Sprint E — returns `true` when a wasi-libc sysroot
+/// is discoverable via the same env vars `build.rs::resolve_wasi_sysroot`
+/// reads: `$COBRUST_WASI_SYSROOT` (direct) or `$WASI_SDK_PATH` (sysroot
+/// auto-derived at `<SDK>/share/wasi-sysroot`). Apt's `clang-18` does NOT
+/// bundle one, so without this the live build fails at the cross-cc step
+/// with `bits/libc-header-start.h file not found`. Gating on it keeps the
+/// macOS dev host (no wasi-sdk) skipping cleanly.
+fn wasi_sysroot_available() -> bool {
+    if let Ok(p) = std::env::var("COBRUST_WASI_SYSROOT")
+        && !p.is_empty()
+        && std::path::Path::new(&p).is_dir()
+    {
+        return true;
+    }
+    if let Ok(sdk) = std::env::var("WASI_SDK_PATH")
+        && !sdk.is_empty()
+        && std::path::Path::new(&sdk)
+            .join("share")
+            .join("wasi-sysroot")
+            .is_dir()
+    {
+        return true;
+    }
+    false
 }
 
 /// Returns `true` when `rustup target list --installed` reports the
@@ -101,6 +132,21 @@ fn cross_compile_wasm32_hello() {
              no wasm C compiler found (tried `clang-18`, `clang`, $CC, \
              $COBRUST_CC_WASM32_WASIP1). \
              Install LLVM 18+ (see docs/agent/setup/cross-toolchain.md)."
+        );
+        return;
+    }
+    // ADR-0075 Phase 2 Sprint E — a wasi-libc sysroot is mandatory; apt's
+    // `clang-18` doesn't ship one. Without `$WASI_SDK_PATH` /
+    // `$COBRUST_WASI_SYSROOT` the cross-cc would fail with
+    // `bits/libc-header-start.h file not found`. Skip cleanly here (matches
+    // the macOS dev host, which has no wasi-sdk) instead of hitting a hard
+    // error mid-build.
+    if !wasi_sysroot_available() {
+        eprintln!(
+            "cross_compile_wasm32_e2e: skipping cleanly: \
+             no wasi-libc sysroot found (set $WASI_SDK_PATH or \
+             $COBRUST_WASI_SYSROOT). Install wasi-sdk \
+             (see docs/agent/setup/cross-toolchain.md §6)."
         );
         return;
     }

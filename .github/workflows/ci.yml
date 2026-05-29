@@ -317,7 +317,7 @@ jobs:
           qemu-riscv64 -L /usr/riscv64-linux-gnu target/hello-rv64 | tee /tmp/rv.out
           grep -q "hello, world" /tmp/rv.out
 
-  # ADR-0075 §6 Sprint D — wasm32-wasip1 cross-build + wasmtime smoke.
+  # ADR-0075 §6 Sprint E — make the wasm32-wasip1 hello-world path GREEN.
   #
   # Gating policy: option (D) per ADR-0075 §Q3 — runs every push/PR with
   # `continue-on-error: true`. Same shape as rv64-cross-smoke (Sprint B).
@@ -325,35 +325,55 @@ jobs:
   # loop on a fresh cross surface; promote to blocking after 7 days
   # consecutive clean runs.
   #
+  # Sprint D (446016c) wired the build.rs cc/linker plumbing + this CI job,
+  # but the first live run failed at the runtime-helper cross-cc step:
+  #
+  #   /usr/include/stdint.h:26:10: fatal error: 'bits/libc-header-start.h'
+  #   file not found
+  #
+  # Root cause: apt's `clang-18` (`/usr/lib/llvm-18`) with
+  # `--target=wasm32-wasip1` but NO wasi-sysroot falls back to host glibc
+  # headers (which don't exist for wasm). Sprint D's ADR assumption that
+  # "clang bundles the wasi-libc sysroot automatically" holds only for some
+  # clang distributions, NOT the apt one. The fix is a real wasi-sysroot.
+  #
+  # Sprint E installs wasi-sdk-25 (ships a version-matched clang 19 + a
+  # wasm32-wasip1 sysroot) and points the cross-cc at the SDK's bundled
+  # clang via $COBRUST_CC_WASM32_WASIP1; build.rs additionally appends
+  # `--sysroot=$WASI_SDK_PATH/share/wasi-sysroot` (resolve_wasi_sysroot).
+  #
   # What it exercises:
-  # 1. Installs clang-18 (LLVM 18 driver knows the wasm32-wasip1 triple
-  #    natively + bundles wasi-libc sysroot) + `wasmtime-cli` via cargo
-  #    install (the apt `wasmtime` package isn't on ubuntu-latest).
-  # 2. Adds the `wasm32-wasip1` rustup target via the `targets:` field of
-  #    `dtolnay/rust-toolchain`.
+  # 1. Installs LLVM 18 (for cobrust-cli's llvm-sys link) + wasmtime-cli
+  #    (apt has no recent wasmtime on ubuntu-latest) + wasi-sdk-25 (the
+  #    wasm CROSS-cc + sysroot).
+  # 2. Adds the `wasm32-wasip1` rustup target.
   # 3. Cross-builds `cobrust-stdlib` for the target with
-  #    `--no-default-features` — Sprint D scope is the build-path
-  #    plumbing; the default features (`mimalloc-alloc`, `tokio-runtime`,
-  #    `llm-router`) introduce threads + mio sockets + mimalloc which
-  #    wasm32-wasip1 doesn't yet support. The minimal feature set
-  #    exercises the cross-link path; per-feature wasm32 enablement is
-  #    Sprint E scope (F70 candidate flagged in the Sprint D report).
-  # 4. Builds the host `cobrust-cli` so the E2E test + smoke step can
-  #    invoke the binary at `target/debug/cobrust`.
-  # 5. Runs the gated E2E test live (rustup target + clang-18 +
-  #    wasmtime all installed; the live branch executes).
+  #    `--no-default-features` (the default trio doesn't build for wasm; F70).
+  # 4. Builds the host `cobrust-cli`.
+  # 5. Runs the gated E2E test live (rustup target + cross-cc + sysroot +
+  #    wasmtime all present; the live branch executes).
   # 6. Smoke: `cobrust build --target=wasm32-wasip1 examples/hello.cb` →
-  #    run under `wasmtime`, grep stdout.
+  #    run under `wasmtime`, grep stdout for "hello, world".
   wasm32-cross-smoke:
-    name: WASM32 cross-build + wasmtime (ADR-0075 §6 Sprint D)
+    name: WASM32 cross-build + wasmtime (ADR-0075 §6 Sprint E)
     runs-on: ubuntu-latest
     continue-on-error: true  # non-blocking — see comment above
     needs: [build]
+    env:
+      # wasi-sdk release pin (immutable GitHub release tag). x86_64-linux
+      # asset; SHA256 verified in the install step below. Bump deliberately.
+      WASI_SDK_VERSION: "25"
+      WASI_SDK_FULL: "wasi-sdk-25.0-x86_64-linux"
+      # SHA256 of wasi-sdk-25.0-x86_64-linux.tar.gz (114450290 bytes),
+      # computed 2026-05-29 (Sprint E). No official SHA256SUMS is published
+      # by upstream, so this is pinned from a verified local download.
+      WASI_SDK_SHA256: "52640dde13599bf127a95499e61d6d640256119456d1af8897ab6725bcf3d89c"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       # Disk-full mitigation — see `test` job comment. WASM cross-build
-      # adds `target/wasm32-wasip1/` plus a wasmtime install (~80MB) on
-      # top of the host target; free disk space FIRST.
+      # adds `target/wasm32-wasip1/` plus a wasmtime install (~80MB) +
+      # wasi-sdk (~700MB extracted) on top of the host target; free disk
+      # space FIRST.
       - name: Free disk space (ubuntu disk-full mitigation)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
         with:
@@ -370,20 +390,48 @@ jobs:
       - name: Install LLVM 18 + wasmtime
         run: |
           sudo apt-get update
+          # llvm-18 + dev libs are needed for cobrust-cli's own llvm-sys
+          # link (LLVM_SYS_181_PREFIX). The wasm CROSS-cc is provided by
+          # wasi-sdk's bundled clang (next step), NOT apt clang-18 — apt
+          # clang-18 has no wasi-sysroot, which was the Sprint D break.
           sudo apt-get install -y \
-            llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev \
-            clang-18
+            llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
           # wasmtime: apt has no recent package on ubuntu-latest 24.04;
           # cargo install picks the latest crates.io release (~2-3 min build).
           # `--locked` for reproducibility per workspace policy.
           cargo install wasmtime-cli --locked
+      - name: Install wasi-sdk (wasi-libc sysroot + bundled clang)
+        # Downloads + checksum-verifies + extracts wasi-sdk-${WASI_SDK_VERSION}.
+        # The SDK ships a version-matched clang 19 (resource-dir stdint.h)
+        # AND a wasm32-wasip1 sysroot under share/wasi-sysroot. Using the
+        # bundled clang (via $COBRUST_CC_WASM32_WASIP1) sidesteps the
+        # apt-clang-18-without-sysroot failure entirely. build.rs's
+        # resolve_wasi_sysroot reads $WASI_SDK_PATH and derives the sysroot.
+        run: |
+          set -euo pipefail
+          url="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/${WASI_SDK_FULL}.tar.gz"
+          echo "Downloading $url"
+          curl -fsSL -o /tmp/wasi-sdk.tar.gz "$url"
+          echo "${WASI_SDK_SHA256}  /tmp/wasi-sdk.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt
+          sudo tar xzf /tmp/wasi-sdk.tar.gz -C /opt
+          rm -f /tmp/wasi-sdk.tar.gz
+          SDK_PATH="/opt/${WASI_SDK_FULL}"
+          test -x "${SDK_PATH}/bin/clang"               # bundled clang present
+          test -d "${SDK_PATH}/share/wasi-sysroot"      # sysroot present
+          echo "WASI_SDK_PATH=${SDK_PATH}" >> "$GITHUB_ENV"
+          echo "COBRUST_WASI_SYSROOT=${SDK_PATH}/share/wasi-sysroot" >> "$GITHUB_ENV"
+          # Pin the cross-cc to the SDK's version-matched clang. build.rs
+          # takes the $COBRUST_CC_WASM32_WASIP1 path + appends --sysroot.
+          echo "COBRUST_CC_WASM32_WASIP1=${SDK_PATH}/bin/clang" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2  # v2.7.8
       - name: Cross-build cobrust-stdlib (wasm32-wasip1, --no-default-features)
-        # Sprint D scope: build-path plumbing only. Default features
-        # (mimalloc-alloc / tokio-runtime / llm-router) require host
-        # thread + socket + alloc surfaces wasm32-wasip1 doesn't yet
-        # support; per-feature wasm32 enablement is Sprint E (F70).
+        # Sprint E scope (hello-world): keep --no-default-features. The
+        # default trio (mimalloc-alloc / tokio-runtime / llm-router) pulls
+        # mimalloc + mio sockets + threads that wasm32-wasip1 doesn't
+        # expose; per-feature wasm32 enablement is deferred (F70). The
+        # hello path (print → io::stdout) needs none of them.
         run: cargo build -p cobrust-stdlib --target=wasm32-wasip1 --no-default-features --locked
       - name: Build host cobrust-cli
         run: cargo build -p cobrust-cli --locked
