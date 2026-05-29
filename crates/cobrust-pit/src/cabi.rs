@@ -339,6 +339,163 @@ pub unsafe extern "C" fn __cobrust_pit_app_route(
     std::ptr::null_mut()
 }
 
+/// The fixed C-ABI shape every `.cb` VALIDATED pit handler exposes
+/// (ADR-0080 §5.4 step 3). The `.cb` source's
+/// `fn create(req: pit.Request, body: CreateScore) -> pit.Response: …`
+/// compiles to a function with this 2-arg ABI: it accepts a Boxed Request
+/// pointer AND a Boxed validated-body pointer (BOTH Rust-owned — the
+/// trampoline allocates and frees both) and returns a Boxed Response
+/// pointer (the trampoline's job to consume). The body pointer is the
+/// validated `serde_json::Value` boxed Rust-side; full `.cb`-struct field
+/// access on it is a §9-sub-ADR follow-up (the `.cb`↔serde bridge), out of
+/// Phase-1b-ii scope.
+type CbValidatedHandlerAbi = unsafe extern "C" fn(*mut u8, *mut u8) -> *mut u8;
+
+/// `app.route_validated(method, path, handler) -> None` (ADR-0080
+/// Phase-1b-ii — the type-driven request-validation route, Q5).
+///
+/// SIBLING of [`__cobrust_pit_app_route`] with two differences: (a) a
+/// FIFTH `schema` arg — the validated-body descriptor the Cobrust compiler
+/// synthesised from the handler's body-class field table + refinement
+/// side-table (the SAME source the type checker used; ADR-0080 §3 footgun
+/// #4, cannot drift) — and (b) the handler is the 2-arg
+/// [`CbValidatedHandlerAbi`] shape.
+///
+/// At each request the closure (ADR-0080 §5.4):
+///
+/// 1. boxes the `Request` (`Box::into_raw`, exactly as `route`);
+/// 2. parses `req.json()` and validates it against `schema`
+///    ([`crate::validation::validate_against_schema`] — the TOTAL boundary
+///    deserialization: missing/extra key, wrong type, out-of-range → Err);
+/// 3. on `Ok` boxes the validated `serde_json::Value` (Rust-owned, the
+///    SAME `Box::into_raw`/`from_raw` discipline as the Request — the `.cb`
+///    side NEVER drops it, mirroring `PIT_REQUEST_ADT`'s
+///    `handle_drop_symbol → None`) and calls the handler with BOTH raw
+///    pointers, then frees BOTH boxes exactly once on the way out;
+/// 4. on `Err(ve)` synthesises a typed **422** `Response` from the
+///    `ValidationError` WITHOUT entering the handler (footgun #2 — the
+///    Result-error path stays in Rust, surfaced as a `Response`, never a
+///    throw/panic), and frees the Request box (no body box was created);
+/// 5. `catch_unwind`s the handler invocation across the C ABI (as `route`).
+///
+/// # Ownership (no double-free, no leak)
+///
+/// - The Request box is created once per request and freed exactly once on
+///   EVERY path (Ok-after-handler, Err-422, null-handler-return,
+///   panic-abort). It is Rust-owned (ADR-0073 §2 D6); the `.cb` side never
+///   drops it (`handle_drop_symbol(PIT_REQUEST_ADT) == None`).
+/// - The body box is created ONLY on the Ok path and freed exactly once
+///   after the handler returns. It is likewise Rust-owned — the validated
+///   `serde_json::Value` is allocated here, handed to the `.cb` handler by
+///   raw pointer, and reclaimed here. There is no `.cb` drop schedule for
+///   it (the sentinel body type carries no `_drop` symbol).
+/// - The Response the handler returns came from
+///   `__cobrust_pit_text_response` (a `Box::into_raw`'d Response); we
+///   reclaim it once. Return-of-handle suppressed its `.cb`-side drop.
+///
+/// # Safety
+///
+/// - `app` must be a live `App` handle; `method`/`path`/`schema` valid
+///   Cobrust `Str` buffers; `handler` a real 2-arg C-ABI fn pointer
+///   (codegen guarantees this for the type-checked path).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_app_route_validated(
+    app: *mut u8,
+    method: *mut u8,
+    path: *mut u8,
+    handler: *const c_void,
+    schema: *mut u8,
+) -> *mut u8 {
+    if app.is_null() || handler.is_null() {
+        // Defense in depth (matching `route`): a null app/handler is
+        // impossible under the typechecker; tolerate as a clean no-op.
+        return std::ptr::null_mut();
+    }
+    // SAFETY: `handler` is a real 2-arg C-ABI fn pointer with the
+    // `CbValidatedHandlerAbi` shape — codegen emits `Constant::FnRef` only
+    // for a top-level fn name whose `FnTy` was unified with
+    // `pit_validated_handler_fn_ty()` (the ADR-0080 Q5 typechecker gate).
+    let raw: CbValidatedHandlerAbi = unsafe { std::mem::transmute(handler) };
+    // SAFETY: per `# Safety`.
+    let method_s = unsafe { read_str_buf(method) };
+    let path_s = unsafe { read_str_buf(path) };
+    let schema_s = unsafe { read_str_buf(schema) };
+    // SAFETY: `app` borrowed for the route registration; not consumed.
+    let app_mut: &mut App = unsafe { &mut *app.cast::<App>() };
+
+    // The closure captures `raw` (a Copy+Send+Sync fn pointer) + the owned
+    // `schema_s: String` (Send+Sync). `'static` holds under AOT (the `.cb`
+    // fn + the schema String outlive the server task).
+    let handler_closure = move |req: Request| -> Response {
+        // Parse + validate the body BEFORE touching the handler. A JSON
+        // parse failure is itself a validation failure (footgun #1 — a
+        // structurally-invalid body cannot reach the handler).
+        let validation = match req.json() {
+            Ok(value) => {
+                crate::validation::validate_against_schema(&schema_s, &value).map(|()| value)
+            }
+            Err(_) => Err(crate::validation::ValidationError::NotAnObject),
+        };
+
+        let validated_value = match validation {
+            Ok(value) => value,
+            Err(ve) => {
+                // ADR-0080 §5.4 step 4 — synthesise a typed 422 in Rust
+                // WITHOUT entering the handler. No body box is created on
+                // this path; the Request was never boxed here, so there is
+                // nothing to free (the inbound `req` is owned by this
+                // closure and dropped at scope end like any other arm).
+                let mut headers = HashMap::new();
+                headers.insert("content-type".to_owned(), "application/json".to_owned());
+                return Response::from_parts(422, headers, ve.to_json_body().into_bytes());
+            }
+        };
+
+        // Ok path — box BOTH the Request and the validated body (both
+        // Rust-owned; ADR-0080 §5.4 step 3).
+        let req_raw = Box::into_raw(Box::new(req)).cast::<u8>();
+        let body_raw = Box::into_raw(Box::new(validated_value)).cast::<u8>();
+
+        // Catch panics across the C ABI (ADR-0073 §3 Q5).
+        let resp_raw = std::panic::catch_unwind(|| {
+            // SAFETY: `raw` is a valid 2-arg `CbValidatedHandlerAbi`;
+            // `req_raw` + `body_raw` are freshly-boxed valid pointers.
+            unsafe { raw(req_raw, body_raw) }
+        });
+
+        // Free BOTH boxes exactly once on the way out (mirror
+        // `route`'s single Request free; the body box is the sibling).
+        // SAFETY: both were just `Box::into_raw`'d above and were NOT
+        // freed by the `.cb` side (Rust-owned). Reclaim + drop is sound.
+        unsafe {
+            drop(Box::from_raw(req_raw.cast::<Request>()));
+            drop(Box::from_raw(body_raw.cast::<serde_json::Value>()));
+        }
+
+        // Err arm = panic crossed the C ABI; abort (ADR-0073 §3 Q5).
+        let Ok(resp_raw) = resp_raw else {
+            eprintln!(
+                "cobrust-pit: panic in .cb validated handler crossed the C ABI — aborting (ADR-0073 §3 Q5)"
+            );
+            std::process::abort();
+        };
+        if resp_raw.is_null() {
+            return Response::from_parts(500, HashMap::new(), Vec::new());
+        }
+        // SAFETY: a non-null handler return is a `Box::into_raw`'d Response
+        // (from `__cobrust_pit_text_response`); reclaim ownership once.
+        unsafe { *Box::from_raw(resp_raw.cast::<Response>()) }
+    };
+
+    // Register on the App; discard the Result (benign no-op on dup/invalid
+    // — the fail-clean sentinel convention).
+    let _ = app_mut.route(&method_s, &path_s, handler_closure);
+
+    // Return null (Ty::None discard) — the registration is a side-effect
+    // on `app` in place (mirrors `route`).
+    std::ptr::null_mut()
+}
+
 /// `app.serve_in_background(host, port) -> ServerHandle`. Binds the
 /// underlying axum server on `host:port` (port `0` = ephemeral) on the
 /// singleton tokio runtime, returning a `ServerHandle` whose drop
@@ -789,6 +946,119 @@ mod tests {
             __cobrust_str_drop(body);
             resp
         }
+    }
+
+    /// ADR-0080 Phase-1b-ii — counts how many times the validated test
+    /// handler was ENTERED (the 422 path must never increment this).
+    static VALIDATED_HANDLER_ENTERED: AtomicU64 = AtomicU64::new(0);
+
+    /// A 2-arg validated test handler (same C-ABI shape the `.cb` codegen
+    /// emits for `fn create(req: pit.Request, body: CreateScore) ->
+    /// pit.Response`). Records entry, borrows both Rust-owned pointers
+    /// (NEVER frees them — the trampoline owns both), returns a 201.
+    #[unsafe(no_mangle)]
+    extern "C" fn _pit_test_validated_handler(req: *mut u8, body: *mut u8) -> *mut u8 {
+        VALIDATED_HANDLER_ENTERED.fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            assert!(
+                !req.is_null(),
+                "validated trampoline must pass non-null Request"
+            );
+            assert!(
+                !body.is_null(),
+                "validated trampoline must pass non-null body"
+            );
+            // Borrow both — do NOT free (the trampoline owns both boxes).
+            let _req_ref = &*req.cast::<Request>();
+            let _body_ref = &*body.cast::<serde_json::Value>();
+        }
+        unsafe {
+            let payload = alloc_str_buffer("validated-ok");
+            let resp = __cobrust_pit_text_response(201, payload);
+            __cobrust_str_drop(payload);
+            resp
+        }
+    }
+
+    /// ADR-0080 Phase-1b-ii — drive the `route_validated` trampoline
+    /// closure directly (no live server): a VALID body → 201 + handler
+    /// entered; an INVALID body (out-of-range) → 422 + handler NOT entered.
+    /// Proves the validate-or-422 split + the handler-not-entered-on-422
+    /// contract + the dual-box discipline (no double-free/leak across two
+    /// invocations) in isolation, before the full HTTP E2E.
+    #[test]
+    fn validated_trampoline_validates_then_dispatches_or_422() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entered_before = VALIDATED_HANDLER_ENTERED.load(Ordering::SeqCst);
+        let drop_before = drop_count();
+        unsafe {
+            let app = __cobrust_pit_app_new();
+            let method = alloc_str_buffer("POST");
+            let path = alloc_str_buffer("/scores");
+            // Schema: `name:str`, `rank:i64:0:100` (the §6 Phase-1 body).
+            let schema = alloc_str_buffer("name\tstr\nrank\ti64:0:100");
+            let handler_ptr = _pit_test_validated_handler as *const c_void;
+            let ret = __cobrust_pit_app_route_validated(app, method, path, handler_ptr, schema);
+            assert!(ret.is_null(), "route_validated returns null/None");
+            __cobrust_str_drop(method);
+            __cobrust_str_drop(path);
+            __cobrust_str_drop(schema);
+
+            let app_ref = &*app.cast::<App>();
+
+            // Valid body → 201, handler entered.
+            let ok = app_ref
+                .dispatch_and_invoke_for_test("POST", "/scores", br#"{"name":"a","rank":50}"#)
+                .expect("route resolves");
+            assert_eq!(ok.status_code(), 201, "valid body must be 201");
+            assert_eq!(
+                VALIDATED_HANDLER_ENTERED.load(Ordering::SeqCst) - entered_before,
+                1,
+                "valid body MUST enter the handler exactly once"
+            );
+
+            // Out-of-range body → 422, handler NOT entered (count unchanged).
+            let bad = app_ref
+                .dispatch_and_invoke_for_test("POST", "/scores", br#"{"name":"a","rank":200}"#)
+                .expect("route resolves");
+            assert_eq!(bad.status_code(), 422, "out-of-range body must be 422");
+            assert_eq!(
+                VALIDATED_HANDLER_ENTERED.load(Ordering::SeqCst) - entered_before,
+                1,
+                "422 path MUST NOT enter the handler (count still 1)"
+            );
+            // The 422 body is the typed validation error, never the
+            // handler's marker.
+            assert!(
+                !String::from_utf8_lossy(bad.body()).contains("validated-ok"),
+                "422 body must not carry the handler marker"
+            );
+
+            // Missing field + wrong type → 422 too.
+            let missing = app_ref
+                .dispatch_and_invoke_for_test("POST", "/scores", br#"{"rank":50}"#)
+                .expect("route resolves");
+            assert_eq!(missing.status_code(), 422, "missing field must be 422");
+            let wrongtype = app_ref
+                .dispatch_and_invoke_for_test("POST", "/scores", br#"{"name":"a","rank":"x"}"#)
+                .expect("route resolves");
+            assert_eq!(wrongtype.status_code(), 422, "wrong type must be 422");
+            assert_eq!(
+                VALIDATED_HANDLER_ENTERED.load(Ordering::SeqCst) - entered_before,
+                1,
+                "all three invalid bodies stayed out of the handler"
+            );
+
+            __cobrust_pit_app_drop(app);
+        }
+        // Only the App is `.cb`-scheduled-dropped here (Request + body
+        // boxes are Rust-owned, freed inside the trampoline, NOT counted by
+        // DROP_COUNT). The clean exit across 4 invocations (no abort, no
+        // panic) is the no-double-free / no-leak evidence for the dual-box
+        // discipline.
+        assert_eq!(drop_count() - drop_before, 1, "App drops exactly once");
     }
 
     #[test]

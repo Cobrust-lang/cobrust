@@ -2102,6 +2102,20 @@ impl<'a> BodyBuilder<'a> {
                 for (a, p) in pos_args.iter().zip(sig.params.iter()) {
                     arg_ops.push(lower_eco_arg(self, a, p)?);
                 }
+                // ADR-0080 Phase-1b-ii — `route_validated` retargets onto a
+                // DIFFERENT symbol (no new mechanism) but the trampoline
+                // needs the validated-body SCHEMA, which the user never
+                // writes. We SYNTHESISE it here from the handler's 2nd-param
+                // body class (its field table + refinement side-table on
+                // `TypedModule`, the SAME source the type checker resolved
+                // field access against — footgun #4, cannot drift) and
+                // append it as a trailing `Constant::Str` arg. The codegen
+                // extern declares 5 params; the trampoline parses this
+                // descriptor (ADR-0080 §5.4).
+                if sig.runtime_symbol == "__cobrust_pit_app_route_validated" {
+                    let schema = self.validated_body_schema_for_handler(&pos_args);
+                    arg_ops.push(Operand::Constant(Constant::Str(schema)));
+                }
                 let op =
                     self.emit_ecosystem_call(sig.runtime_symbol, sig.ret.clone(), arg_ops, span);
                 return Ok(Some(op));
@@ -2134,6 +2148,66 @@ impl<'a> BodyBuilder<'a> {
         });
         self.cur_block = Some(target.0 as usize);
         Operand::Move(Place::local(dest))
+    }
+
+    /// ADR-0080 Phase-1b-ii — synthesise the validated-body SCHEMA
+    /// descriptor for an `app.route_validated(method, path, handler)` call.
+    ///
+    /// `pos_args` are the call's positional args; the 3rd (`handler`) is a
+    /// bare `Name` whose resolved `Ty::Fn` 2nd positional is the body class
+    /// `Ty::Adt`. We read that class's field table + refinement side-table
+    /// off `TypedModule` (the SAME source the type checker used) and render
+    /// the compact line-per-field descriptor the trampoline parses
+    /// (ADR-0080 §5.4):
+    ///
+    /// ```text
+    /// name\tstr
+    /// rank\ti64:0:100
+    /// ```
+    ///
+    /// Each line is `field<TAB>kind[suffix]` where `kind ∈ {str,i64,f64,
+    /// bool}` and the optional int-range `suffix` is `:lo:hi` (an absent
+    /// bound is the empty string). Fields are emitted in the `BTreeMap`'s
+    /// deterministic name order. A field whose type is not a Phase-1b-ii
+    /// scalar is rendered with kind `any` (the validator only checks
+    /// presence for it). If the handler / body class cannot be resolved
+    /// (defensive — the type checker already accepted it), an empty schema
+    /// is emitted (the trampoline then validates JSON-object-ness only).
+    fn validated_body_schema_for_handler(&self, pos_args: &[&Expr]) -> String {
+        let Some(handler) = pos_args.get(2) else {
+            return String::new();
+        };
+        let ExprKind::Name(rn) = &handler.kind else {
+            return String::new();
+        };
+        let handler_ty = self.ctx.lookup_ty(rn.def_id);
+        let Ty::Fn(fn_ty) = &handler_ty else {
+            return String::new();
+        };
+        let Some(Ty::Adt(body_adt, _)) = fn_ty.positional.get(1) else {
+            return String::new();
+        };
+        let Some(fields) = self.ctx.typed.adt_fields.get(body_adt) else {
+            return String::new();
+        };
+        let mut lines = Vec::with_capacity(fields.len());
+        for (name, ty) in fields {
+            let kind = match ty {
+                Ty::Str => "str",
+                Ty::Int => "i64",
+                Ty::Float => "f64",
+                Ty::Bool => "bool",
+                _ => "any",
+            };
+            let suffix = self
+                .ctx
+                .typed
+                .adt_refinements
+                .get(&(*body_adt, name.clone()))
+                .map_or_else(String::new, cobrust_types::Refinement::schema_suffix);
+            lines.push(format!("{name}\t{kind}{suffix}"));
+        }
+        lines.join("\n")
     }
 
     fn lower_bin(

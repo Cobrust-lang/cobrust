@@ -676,6 +676,26 @@ impl<'s> Lowerer<'s> {
         self.in_class_body -= 1;
         self.leave_scope();
 
+        // ADR-0080 Phase-1b-ii — lower each field's `where`-refinement
+        // predicate. The predicate references `self` as a placeholder for
+        // the field value (`0 <= self and self <= 100`); we lower it in a
+        // throwaway scope where `self` is bound to a fresh synthetic
+        // `DefId` so name resolution succeeds. The predicate is INTERPRETED
+        // structurally at type-check (`check_class`), never type-synthed,
+        // so `self`'s type is irrelevant here — only that it resolves to a
+        // `Name`. A non-fixed predicate (e.g. `weird(self)`) lowers fine
+        // and is rejected with a FIX-bearing `TypeError` at check time
+        // (Q6), the §2.5-B compile-error feedback the dispatch mandates.
+        let mut field_refinements = Vec::with_capacity(c.field_refinements.len());
+        for (field, pred) in &c.field_refinements {
+            self.enter_scope();
+            let self_id = self.fresh();
+            self.bind("self", self_id, DefKind::Param, pred.span)?;
+            let pred_h = self.lower_expr(pred)?;
+            self.leave_scope();
+            field_refinements.push((field.clone(), pred_h));
+        }
+
         Ok(h::ClassBody {
             def_id,
             name: c.name.clone(),
@@ -683,6 +703,7 @@ impl<'s> Lowerer<'s> {
             traits,
             members,
             span,
+            field_refinements,
         })
     }
 

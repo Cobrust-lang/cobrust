@@ -988,6 +988,26 @@ impl From<TypeError> for UserError {
                     col,
                 )
             }
+            // ADR-0080 Phase-1b-ii — non-fixed-grammar refinement `where`
+            // predicate. The primary `msg` shows the accepted fixed-grammar
+            // forms (the §2.5-B FIX the LLM parses from stderr).
+            E::UnsupportedRefinement {
+                field,
+                span,
+                suggestion,
+            } => {
+                let (line, col) = span_to_line_col(span);
+                (
+                    format!(
+                        "unsupported refinement `where`-predicate on field `{field}`: \
+                         only the fixed int-range grammar is accepted in v1 \
+                         (`0 <= self`, `self <= 100`, `0 <= self and self <= 100` on an i64 field)"
+                    ),
+                    suggestion.map(str::to_owned),
+                    line,
+                    col,
+                )
+            }
         };
         Self::Type {
             file: PathBuf::from("<source>"),

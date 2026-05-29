@@ -89,6 +89,56 @@ fn main() -> i64:
 `serve_in_background` / `run` **之前** 调用:标志位在服务器构建 router
 时只读取一次,之后再调用即为 no-op。
 
+## 带校验的请求体(`route_validated`,ADR-0080)
+
+`app.route_validated(method, path, handler)` 是 FastAPI 的标志性能力,
+以 Cobrust 的方式实现:**请求体是一个带类型的 `class`,类型即契约。**
+字段是否存在、字段类型在编译期检查;值层面的约束(如取值范围)在请求
+边界处检查一次,失败时渲染成一个带类型的 **422** —— 既不抛异常,也不在
+handler 内部二次校验。
+
+```python
+import pit
+
+# 一个带校验的请求体就是一个字段带类型的 `class`。可选的 `where` 子句
+# 加上一个值约束(这里是闭区间整数范围)。
+class CreateScore:
+    name: str
+    rank: i64 where 0 <= self and self <= 100
+
+# handler 把请求体作为带类型的第二个参数。pit 在 handler 运行之前就把
+# JSON 请求体校验进它 —— 所以能进到 handler 就说明校验已通过。
+# `body.rank` 静态为 `i64`;写错的 `body.nonexistent` 是编译期错误,
+# 而不是运行期 KeyError。
+fn create_score(req: pit.Request, body: CreateScore) -> pit.Response:
+    return pit.text_response(201, "created")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/scores", create_score)
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+边界处的行为:
+
+- `POST /scores {"name":"a","rank":50}` → **201**,handler 运行。
+- `{"name":"a","rank":200}` → **422**(rank 超范围),handler **永不进入**。
+- `{"rank":50}`(缺 `name`)或 `{"name":"a","rank":"x"}`(类型错误)
+  → **422** —— 请求体必须与声明的形状完全一致(每个声明字段都在、类型
+  正确、没有多余的键)。
+
+本版本的 `where` 子句语法是 `i64` 字段上的固定整数范围形式:
+`0 <= self`、`self <= 100` 或 `0 <= self and self <= 100`(`self` 是字段
+的值;`>=` 也支持)。任何其他谓词都是编译错误,并会告诉你接受的形式。
+字符串长度(`len(self) <= n`)与正则模式校验属于后续阶段。
+
+为什么比 Flask/FastAPI 更优:结构由编译器捕获(你无法发布一个读取不存在
+字段的 handler),422 是渲染成 `Response` 的 `Result`(而不是 unwind 的
+异常),且连线是一次显式调用(没有隐藏的依赖注入注册表)。目前成功的
+handler 返回一个固定响应 —— 把校验后的请求体回显出去是后续工作(需要
+`.cb` 结构体 ↔ JSON 桥)。
+
 ## 为什么是这样的设计?
 
 - **统一的回调 ABI 形状**:每个 handler 都以
@@ -113,8 +163,13 @@ fn main() -> i64:
 - **没有装饰器糖**:`@app.route("/x")` 是 ADR-0074(下一个 sprint)。
 - **中间件仅支持固定预设**(ADR-0078 第一阶段):
   `use_cors()`/`use_trace()`/`use_compression()` 均不接受参数。
-  可配置的 CORS origin、自定义 `.cb` 中间件、请求校验、自动 OpenAPI
+  可配置的 CORS origin、自定义 `.cb` 中间件、自动 OpenAPI
   属于 ADR-0078 第二/三阶段。
+- **带校验的请求体**(`route_validated`,ADR-0080):当前只支持 `i64`
+  字段上的固定整数范围 `where` 校验;字符串长度 / 正则校验、嵌套类与
+  列表字段请求体、自动 `/openapi.json` schema,以及把校验后的请求体回显
+  到响应里(`json_response(body)`)都属于后续阶段。成功的 handler 目前
+  返回一个固定响应。
 - **`pit.Request` 访问器尚未接通**:handler 必须在不读取
   Request 的 path/method/body 的情况下构造 Response。配套 follow-up
   会补齐 borrow 接口。

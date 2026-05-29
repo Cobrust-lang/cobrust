@@ -292,6 +292,18 @@ pub enum TypeErrorCb {
         suggestion: Option<String>,
     },
 
+    /// ADR-0080 Phase-1b-ii — a class field's `where`-clause refinement
+    /// predicate is not in the FIXED int-range grammar v1 admits (Q6).
+    /// Mirrors `TypeError::UnsupportedRefinement { field: String, span,
+    /// suggestion }`. `field` carries through as a String so the §2.5-B
+    /// FIX (the accepted-grammar text) renders byte-identically across
+    /// the two impls.
+    UnsupportedRefinement {
+        field: String,
+        span: Span,
+        suggestion: Option<String>,
+    },
+
     /// Composite error container — flat list of errors.
     ///
     /// ADR-0055b §3: `Multiple(list[TypeError])` — the only recursive
@@ -564,6 +576,16 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(*suggestion),
             }
         }
+        // ADR-0080 Phase-1b-ii mirror — payload is field + span + hint.
+        TypeError::UnsupportedRefinement {
+            field,
+            span,
+            suggestion,
+        } => TypeErrorCb::UnsupportedRefinement {
+            field: field.clone(),
+            span: *span,
+            suggestion: opt_string(*suggestion),
+        },
     }
 }
 
@@ -669,6 +691,10 @@ impl Canonicalize for TypeErrorCb {
                 let mut keys = vec![CanonicalKey::leaf(field.as_str())];
                 keys.extend(known_fields.iter().map(|f| CanonicalKey::leaf(f.as_str())));
                 keys
+            }
+            // ADR-0080 Phase-1b-ii mirror — key on the offending field.
+            TypeErrorCb::UnsupportedRefinement { field, .. } => {
+                vec![CanonicalKey::leaf(field.as_str())]
             }
             // Variants with no extra payload (Span + suggestion only).
             TypeErrorCb::MutableDefault { .. }
@@ -892,6 +918,17 @@ impl std::fmt::Display for TypeErrorCb {
                     handle_to_ty_display(*adt)
                 )
             }
+            // ADR-0080 Phase-1b-ii — byte-mirror of the Rust `#[error]`
+            // message (the accepted-grammar list is the §2.5-B FIX).
+            TypeErrorCb::UnsupportedRefinement { field, span, .. } => {
+                write!(
+                    f,
+                    "unsupported refinement `where`-predicate on field `{field}` at {span}: \
+                     only the fixed int-range grammar is accepted in v1 \
+                     (`0 <= self`, `self <= 100`, or `0 <= self and self <= 100` on an i64 field); \
+                     `len(self) <= n` (str length) and `pattern(self, \"…\")` are later phases"
+                )
+            }
         }
     }
 }
@@ -964,5 +1001,6 @@ pub fn type_error_cb_variant_name(err: &TypeErrorCb) -> &'static str {
         TypeErrorCb::CallbackArgMustBeFnName { .. } => "CallbackArgMustBeFnName",
         TypeErrorCb::CallbackSignatureMismatch { .. } => "CallbackSignatureMismatch",
         TypeErrorCb::UnknownField { .. } => "UnknownField",
+        TypeErrorCb::UnsupportedRefinement { .. } => "UnsupportedRefinement",
     }
 }

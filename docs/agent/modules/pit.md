@@ -214,6 +214,71 @@ SHAPE and observable behaviour for the common REST path, but is not
   cross-sprint contention; the codegen `@pit.route` + `import pit`
   wiring is a deferred serial follow-on.
 
+## ADR-0080 Phase-1b-ii — `route_validated` (type-driven body validation + 422)
+
+`app.route_validated(method, path, handler)` is the type-driven
+request-validation route — the FastAPI-defining capability #156, the
+elegance-law PRIME target. SIBLING of `route`; the only differences are
+the runtime symbol (`__cobrust_pit_app_route_validated`) and a 2-arg
+handler shape.
+
+Surface (`.cb`):
+
+```python
+class CreateScore:                 # a validated request body = a typed class
+    name: str                      # field presence + base-type → compile-time (footgun #1)
+    rank: i64 where 0 <= self and self <= 100   # value range → runtime guard (Q3)
+
+fn create_score(req: pit.Request, body: CreateScore) -> pit.Response:
+    return pit.text_response(201, "ok")   # body is ALREADY validated here
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/scores", create_score)
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+Mechanism (the layered pipeline):
+
+- **Parse.** A bare class-body field `name: type` (no `let`/`=`) parses to
+  a synthetic `let` (so Phase-1a field-tracking records it); an optional
+  postfix `where <pred>` is captured per field. `where` is a soft keyword
+  (no lexer change) admitted only in the field-annotation position.
+- **Side-table (Q2).** `check_class` interprets each `where`-predicate into
+  a `(AdtId, field) → Refinement` side-table (`cobrust-types`), NOT into
+  `Ty`. Phase-1b-ii admits only the FIXED int-range grammar on an `i64`
+  field (`lo <= self`, `self <= hi`, `lo <= self and self <= hi`, `>=`
+  mirror, strict `<`/`>` ±1-shifted to inclusive). Anything else →
+  `TypeError::UnsupportedRefinement` with a §2.5-B FIX (the compile error).
+- **Callback gate (Q5).** The manifest callback `FnTy` is
+  `fn(pit.Request, <Body>) -> pit.Response` with a sentinel 2nd-param
+  (`PIT_VALIDATED_BODY_SENTINEL_ADT`); `check_callback_arg` accepts any
+  field-tracked user class there and rejects a 1-arg handler or a non-class
+  2nd param with `CallbackSignatureMismatch` + a FIX.
+- **Schema synthesis (MIR).** The retarget injects a 4th `Str` arg — the
+  validated-body SCHEMA descriptor (`field<TAB>kind[:lo:hi]` lines)
+  synthesised from the body class's field table + refinement side-table on
+  `TypedModule` (the SAME source the checker used — footgun #4, cannot
+  drift).
+- **Codegen.** `__cobrust_pit_app_route_validated(app, method, path,
+  handler, schema)` — 5 params, the FIFTH is the schema `Str`.
+- **Trampoline + 422 (the core, `cabi.rs`).** Per request the closure
+  parses `req.json()`, runs `validation::validate_against_schema` (TOTAL
+  boundary deserialization — missing/extra key, wrong type, out-of-range →
+  `Err`). On `Ok` it boxes BOTH the Request and the validated
+  `serde_json::Value` (both Rust-owned, dual-box, `handle_drop_symbol →
+  None`), calls the handler with both raw pointers, frees BOTH exactly once,
+  `catch_unwind`s across the C ABI. On `Err(ve)` it synthesises a typed
+  **422** `Response` from the `ValidationError` WITHOUT entering the handler
+  (footgun #2 — the Result-error path stays in Rust as a Response).
+
+Scope (Phase-1b-ii): the validation + 422 engine ONLY. NOT the OpenAPI emit
+(Phase-1b-iii — the side-table is carried for it). Body re-serialization
+(`json_response(201, body)`) is the deferred `.cb`↔serde bridge (ADR-0080
+§9); the success handler returns a fixed response. `len`/`pattern`
+refinements are Phase-2/3.
+
 ## Cross-references
 
 - `mod:strike` — sister ecosystem crate (HTTP-client precedent +

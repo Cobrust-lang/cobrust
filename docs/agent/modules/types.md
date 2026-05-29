@@ -26,6 +26,14 @@ pub fn check(module: &hir::Module) -> Result<TypedModule, TypeError>;
 pub struct TypedModule {
     pub def_types: HashMap<u32, Ty>,
     pub hir: hir::Module,
+    // ADR-0080 — carried for MIR's validated-body schema synthesis.
+    pub adt_fields: HashMap<AdtId, BTreeMap<String, Ty>>,           // Phase-1a field table
+    pub adt_refinements: HashMap<(AdtId, String), Refinement>,      // Phase-1b-ii side-table
+}
+
+// ADR-0080 Phase-1b-ii — a per-field value refinement (`where`-clause).
+pub enum Refinement {
+    IntRange { lo: Option<i64>, hi: Option<i64> },   // the only v1 kind
 }
 
 pub enum Ty {
@@ -104,6 +112,10 @@ bidirectional".
   instance named a field the class does not declare; carries
   `{ field, adt, known_fields, span, suggestion }`; the Display message
   lists `known_fields` as the §2.5-B FIX. FixSafety `LocalEdit`.)
+- `UnsupportedRefinement` (ADR-0080 Phase-1b-ii — a class field's `where`
+  refinement predicate is not the fixed int-range grammar on an `i64`
+  field; carries `{ field, span, suggestion }`; the Display message prints
+  the accepted forms as the §2.5-B FIX. FixSafety `LocalEdit`.)
 - `Multiple` (composite container for multi-error reporting)
 
 ### ADR-0080 Phase-1b-i — class NAME in a type-annotation resolves to its `Adt`
@@ -119,6 +131,20 @@ Invariants:
 - **Nominal distinctness preserved**: two DIFFERENT classes get two DISTINCT `AdtId`s and do NOT cross-unify (`ill_typed` i156); a non-instance RHS (`let s: Score = 5`) still rejects `TypeMismatch` (i155).
 - **No regression of real aliases / unknown names**: a `type Foo = Bar` alias is resolved earlier via `alias_map` (transparently to its RHS, never a class arm); a name that is NOT a class (typo, forward-ref to a non-class, generic-param spelling) is absent from `class_names` and still falls through to the opaque-`Alias` arm exactly as before.
 - No new error variant, no Display/error-UX change — a purely internal unification correctness fix (the rejection categories are unchanged `TypeMismatch`).
+
+### ADR-0080 Phase-1b-ii — validated-body refinement side-table + `route_validated` callback gate
+
+| Feature | Location | Notes |
+|---|---|---|
+| `adt_refinements` side-table | `types/src/check.rs` `Ctx::adt_refinements` + `TypedModule::adt_refinements` | `(AdtId, field) → Refinement`; the sibling of `adt_fields` (Q2 — refinements live BESIDE the field, NOT in `Ty`) |
+| refinement interpret | `types/src/check.rs` `check_class` → `interpret_refinement` / `parse_int_bound` | reads each `ClassBody::field_refinements` `where`-predicate; admits ONLY the fixed int-range grammar on an `i64` field (`lo <= self`, `self <= hi`, `lo <= self and self <= hi`, `>=` mirror, strict `<`/`>` ±1-shift inclusive); else `TypeError::UnsupportedRefinement` + §2.5-B FIX |
+| validated-handler callback | `types/src/ecosystem.rs` `pit_validated_handler_fn_ty` + `PIT_VALIDATED_BODY_SENTINEL_ADT`; the `route_validated` manifest row | callback `FnTy = fn(pit.Request, <Body>) -> pit.Response` with a sentinel 2nd-param |
+| sentinel-slot accept | `types/src/check.rs` `check_callback_arg` | the sentinel 2nd-param slot accepts ANY field-tracked user class (`Ty::Adt` outside the eco range with recorded fields); a non-class param or a 1-arg handler → `CallbackSignatureMismatch` + FIX |
+
+Invariants:
+- The refinement side-table + field table are CARRIED on `TypedModule` so MIR synthesises the validated-body schema descriptor for `route_validated` from the SAME source the checker used (footgun #4 — schema + validator cannot drift).
+- The `where`-predicate is interpreted STRUCTURALLY (the fixed grammar over the lowered HIR expr — `Bin{And}`, `Bin{LtEq/Lt/GtEq/Gt}`, `Lit(Int)`, `Name("self")`), never type-synthesised; `self`'s type is irrelevant.
+- The value-level constraint stays a RUNTIME guard (a 422 at the request boundary), not a compile-time-checked refinement (the §2.5-superior form is an ADR-0080 §9 follow-up).
 
 ## ADR-0041 §H8 — tuple Index returns indexed element type
 

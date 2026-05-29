@@ -171,7 +171,10 @@ pub fn type_error_cb_fix_safety(err: &TypeErrorCb) -> FixSafetyCb {
         | CallbackSignatureMismatch { .. }
         // ADR-0080 Phase-1a — field-name typo; LocalEdit, mirroring the
         // Rust-side `type_error_fix_safety` UnknownField tier.
-        | UnknownField { .. } => FixSafetyCb::LocalEdit,
+        | UnknownField { .. }
+        // ADR-0080 Phase-1b-ii — non-fixed refinement predicate; LocalEdit,
+        // mirroring the Rust-side `UnsupportedRefinement` tier.
+        | UnsupportedRefinement { .. } => FixSafetyCb::LocalEdit,
         ImplicitTruthiness { .. } | MutableDefault { .. } | NotHashable { .. } => {
             FixSafetyCb::BehaviorPreserving
         }

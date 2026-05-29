@@ -175,7 +175,10 @@ pub fn type_error_suggestion_text(err: &TypeError) -> Option<&'static str> {
         | CallbackSignatureMismatch { suggestion, .. }
         // ADR-0080 Phase-1a — field-name typo carries the uniform hint
         // (the declared-field list lives in the Display message itself).
-        | UnknownField { suggestion, .. } => *suggestion,
+        | UnknownField { suggestion, .. }
+        // ADR-0080 Phase-1b-ii — non-fixed-grammar refinement; the fix
+        // (the accepted forms) is in the Display message + this hint.
+        | UnsupportedRefinement { suggestion, .. } => *suggestion,
         Multiple(_) => None,
     }
 }
@@ -240,6 +243,10 @@ pub fn type_error_fix_safety(err: &TypeError) -> FixSafety {
         // rewrite (define the handler at module scope; change the
         // declared signature). No semantics carry-over to worry about.
         CallbackArgMustBeFnName { .. } | CallbackSignatureMismatch { .. } => FixSafety::LocalEdit,
+        // ADR-0080 Phase-1b-ii — non-fixed refinement predicate. Fix is a
+        // local rewrite of the `where`-clause into the accepted fixed
+        // grammar (or removing it). No cross-line semantics carry-over.
+        UnsupportedRefinement { .. } => FixSafety::LocalEdit,
         // Multiple — children carry their own tiers; the aggregate has no
         // singular safety classification.
         Multiple(_) => FixSafety::RequiresHumanReview,

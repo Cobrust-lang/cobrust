@@ -3128,3 +3128,51 @@ fn w202_class_typed_return_from_ctor() {
         "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn make() -> Score:\n    return Score()\n",
     );
 }
+
+// =====================================================================
+// ADR-0080 Phase-1b-ii — validated-body surface accepts (the positive
+// counterparts of i157..i160; the FULL suite covers both verdicts).
+// =====================================================================
+
+#[test]
+fn w203_bare_typed_field_class_accepts() {
+    // The bare typed-field declaration form (`name: str`, no `let`/`=`)
+    // parses (Phase-1b-ii) and type-checks: `body.rank` resolves to `i64`,
+    // `body.name` to `str` via the Phase-1a field table.
+    must_accept(
+        "bare-typed-field-class",
+        "class CreateScore:\n    name: str\n    rank: i64\nfn f(b: CreateScore) -> i64:\n    return b.rank\n",
+    );
+}
+
+#[test]
+fn w204_fixed_int_range_refinement_accepts() {
+    // The fixed int-range refinement (`0 <= self and self <= 100`) on an
+    // i64 field is admitted (interpreted into the side-table, no error).
+    must_accept(
+        "fixed-int-range-refinement",
+        "class CreateScore:\n    name: str\n    rank: i64 where 0 <= self and self <= 100\nfn f(b: CreateScore) -> i64:\n    return b.rank\n",
+    );
+}
+
+#[test]
+fn w205_one_sided_int_range_refinement_accepts() {
+    // One-sided bounds (`0 <= self`) and the upper-only form are both in
+    // the fixed grammar (ADR-0080 Q6).
+    must_accept(
+        "one-sided-int-range-refinement",
+        "class CreateScore:\n    low: i64 where 0 <= self\n    high: i64 where self <= 100\nfn f(b: CreateScore) -> i64:\n    return b.low\n",
+    );
+}
+
+#[test]
+fn w206_route_validated_two_arg_handler_accepts() {
+    // A 2-arg validated handler (`fn(req: pit.Request, body: CreateScore)
+    // -> pit.Response`) on `app.route_validated` type-checks: the existing
+    // callback gate validates arity + Request 1st param + Response return;
+    // the body-class 2nd param passes the sentinel-slot check.
+    must_accept(
+        "route-validated-two-arg-handler",
+        "import pit\nclass CreateScore:\n    name: str\n    rank: i64 where 0 <= self and self <= 100\nfn create_score(req: pit.Request, body: CreateScore) -> pit.Response:\n    return pit.text_response(201, \"ok\")\nfn main() -> i64:\n    let app = pit.App()\n    let _ = app.route_validated(\"POST\", \"/scores\", create_score)\n    return 0\n",
+    );
+}

@@ -93,6 +93,61 @@ All three return `None` (use the `let _ = …` form) and **must be called
 before** `serve_in_background` / `run`: the flag is read once, when the
 server builds its router. A call afterward is a no-op.
 
+## Validated request bodies (`route_validated`, ADR-0080)
+
+`app.route_validated(method, path, handler)` is FastAPI's defining
+feature done the Cobrust way: **the request body is a typed `class`, and
+the type IS the contract.** Field presence and field type are checked at
+compile time; value-level constraints (a range) are checked once at the
+request boundary and rendered to a typed **422** — never a thrown
+exception, never an in-handler re-check.
+
+```python
+import pit
+
+# A validated body is a `class` whose fields are typed. An optional
+# `where`-clause adds a value constraint (here, an inclusive int range).
+class CreateScore:
+    name: str
+    rank: i64 where 0 <= self and self <= 100
+
+# The handler takes the body as a TYPED second parameter. pit validates
+# the JSON body into it BEFORE the handler runs — so reaching the body
+# means validation passed. `body.rank` is statically `i64`; a typo'd
+# `body.nonexistent` is a COMPILE-TIME error, not a runtime KeyError.
+fn create_score(req: pit.Request, body: CreateScore) -> pit.Response:
+    return pit.text_response(201, "created")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/scores", create_score)
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+What happens at the boundary:
+
+- `POST /scores {"name":"a","rank":50}` → **201**, the handler runs.
+- `{"name":"a","rank":200}` → **422** (rank out of range), the handler is
+  **never entered**.
+- `{"rank":50}` (missing `name`) or `{"name":"a","rank":"x"}` (wrong type)
+  → **422** — the body must match the declared shape EXACTLY (every
+  declared field present, the right type, no extra keys).
+
+The `where`-clause grammar in this version is a fixed int-range form on an
+`i64` field: `0 <= self`, `self <= 100`, or `0 <= self and self <= 100`
+(`self` is the field's value; `>=` works too). Any other predicate is a
+compile error that tells you the accepted forms. String-length
+(`len(self) <= n`) and pattern refinements are later phases.
+
+Why this is better than Flask/FastAPI: the structure is caught by the
+compiler (you cannot ship a handler that reads a field that isn't there),
+the 422 is a `Result` rendered to a `Response` (not an exception that
+unwinds), and the wiring is an explicit call (no hidden dependency-injection
+registry). Today the success handler returns a fixed response — echoing the
+validated body back is a follow-up (it needs the `.cb`-struct ↔ JSON
+bridge).
+
 ## Why this design?
 
 - **One callback ABI shape**: every handler crosses as
@@ -119,8 +174,14 @@ server builds its router. A call afterward is a no-op.
 - **No decorator sugar**: `@app.route("/x")` is ADR-0074 (next sprint).
 - **Middleware is canned presets only** (ADR-0078 Phase 1):
   `use_cors()`/`use_trace()`/`use_compression()` take no arguments.
-  Configurable CORS origins, custom `.cb` middleware, request validation,
-  and auto OpenAPI are ADR-0078 Phases 2/3.
+  Configurable CORS origins, custom `.cb` middleware, and auto OpenAPI are
+  ADR-0078 Phases 2/3.
+- **Validated bodies** (`route_validated`, ADR-0080): only the fixed
+  int-range `where`-refinement on an `i64` field ships now; string-length /
+  pattern refinements, nested-class and list-field bodies, the auto
+  `/openapi.json` schema, and echoing the validated body back in the
+  response (`json_response(body)`) are later phases. The success handler
+  currently returns a fixed response.
 - **`pit.Request` accessors not yet wired**: the handler must construct
   the Response without reading the Request's path/method/body. A paired
   follow-up adds the borrow shims.

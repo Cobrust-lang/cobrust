@@ -289,4 +289,29 @@ pub enum TypeError {
         span: Span,
         suggestion: Option<&'static str>,
     },
+
+    /// ADR-0080 Phase-1b-ii — a class field's `where`-clause refinement
+    /// predicate is not in the FIXED grammar v1 admits (ADR-0080 Q6).
+    ///
+    /// Phase-1b-ii accepts ONLY the int-range form on an `i64` field:
+    /// `lo <= self <= hi`, `lo <= self`, or `self <= hi` (with `lo`/`hi`
+    /// integer literals). Any other shape — an arbitrary fn call
+    /// (`weird(self)`), a non-int field, `len(self)`/`pattern(self, …)`
+    /// (Phase-2/3 surfaces), or a malformed comparison — raises this
+    /// variant. Per §2.5-B the message PRINTS THE FIX: it names the field
+    /// and shows the accepted fixed-grammar forms (the `0 <= self` /
+    /// `len(self)` / `pattern(self` hint surface the negative-corpus
+    /// asserts on) so the LLM agent rewrites the predicate on the next
+    /// turn. `suggestion` carries the uniform static hint.
+    #[error(
+        "unsupported refinement `where`-predicate on field `{field}` at {span}: \
+         only the fixed int-range grammar is accepted in v1 \
+         (`0 <= self`, `self <= 100`, or `0 <= self and self <= 100` on an i64 field); \
+         `len(self) <= n` (str length) and `pattern(self, \"…\")` are later phases"
+    )]
+    UnsupportedRefinement {
+        field: String,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 }

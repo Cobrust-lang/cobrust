@@ -230,6 +230,35 @@ impl App {
             .map(|(_, params)| params)
     }
 
+    /// Test/diagnostic hook (ADR-0080 Phase-1b-ii): match `(method, path)`,
+    /// build a `Request` carrying `body`, INVOKE the registered handler
+    /// closure, and return its `Response`. Lets the `route_validated`
+    /// trampoline test drive the validate-or-422 path (and assert
+    /// handler-not-entered-on-422) without spinning a live server. Returns
+    /// `None` for an unmatched route. Not part of the Flask-shaped surface.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn dispatch_and_invoke_for_test(
+        &self,
+        method: &str,
+        path: &str,
+        body: &[u8],
+    ) -> Option<Response> {
+        let method_uc = method.to_ascii_uppercase();
+        let (handler, params) = self.dispatch(&method_uc, path)?;
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_owned(), "application/json".to_owned());
+        let req = Request::from_parts(
+            &method_uc,
+            path,
+            params,
+            HashMap::new(),
+            headers,
+            body.to_vec(),
+        );
+        Some(handler(req))
+    }
+
     /// Run the server on `host:port`, blocking the calling thread until
     /// the process is killed. Mirrors `app.run(host, port)`.
     ///

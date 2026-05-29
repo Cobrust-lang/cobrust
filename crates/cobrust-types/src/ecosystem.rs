@@ -89,6 +89,18 @@ pub const PIT_REQUEST_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x401);
 pub const PIT_RESPONSE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x402);
 /// `AdtId` for the `pit.ServerHandle` handle (ADR-0073).
 pub const PIT_SERVER_HANDLE_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x403);
+/// ADR-0080 Phase-1b-ii — SENTINEL `AdtId` for "any validated-body class"
+/// in the `app.route_validated` callback `FnTy` (Q5). It is NOT a real
+/// handle (no constructor, no `_drop` symbol — `handle_drop_symbol`
+/// returns `None`); it is a placeholder in the 2nd-param slot of
+/// [`pit_validated_handler_fn_ty`] that the callback-shape check
+/// (`check_validated_body_param`) special-cases: it accepts ANY
+/// field-tracked USER class (a `Ty::Adt` whose id is OUTSIDE the
+/// ecosystem-handle range) and rejects a non-class 2nd param (e.g. `i64`)
+/// or a 1-arg handler with `CallbackSignatureMismatch` (the §6 negatives).
+/// Lives in the pit block (`0xE000_0404`) so the pit-block range assertion
+/// still holds.
+pub const PIT_VALIDATED_BODY_SENTINEL_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x404);
 
 /// `AdtId` for the `hood.Command` handle (ADR-0073 second proof —
 /// click-style command-callback wiring; the SIXTH per-module 256-slot
@@ -198,6 +210,33 @@ pub fn pit_server_handle_ty() -> Ty {
 pub fn pit_handler_fn_ty() -> FnTy {
     FnTy {
         positional: vec![pit_request_ty()],
+        named: vec![],
+        var_positional: None,
+        var_keyword: None,
+        return_ty: Box::new(pit_response_ty()),
+    }
+}
+
+/// ADR-0080 Phase-1b-ii — the handler `FnTy` `pit.App.route_validated`
+/// expects in its 3rd argument (Q5): a 2-arg top-level fn
+/// `fn(pit.Request, <Body>) -> pit.Response`. The 2nd positional is the
+/// SENTINEL [`PIT_VALIDATED_BODY_SENTINEL_ADT`], NOT a concrete class —
+/// the manifest cannot name the user's body class. The callback-shape
+/// gate (`check_validated_body_param`, reached via the `route_validated`
+/// runtime-symbol special-case in `check_eco_sig`) substitutes the
+/// "any field-tracked user class" rule for this slot: a 2nd param that is
+/// a tracked class `Ty::Adt` (id OUTSIDE the ecosystem-handle range)
+/// passes; a non-class 2nd param or a 1-arg handler is a
+/// `CallbackSignatureMismatch` with a §2.5-B FIX (the §6 negatives). The
+/// 1st param (`pit.Request`) and the return (`pit.Response`) unify
+/// through the normal callback path.
+#[must_use]
+pub fn pit_validated_handler_fn_ty() -> FnTy {
+    FnTy {
+        positional: vec![
+            pit_request_ty(),
+            Ty::Adt(PIT_VALIDATED_BODY_SENTINEL_ADT, vec![]),
+        ],
         named: vec![],
         var_positional: None,
         var_keyword: None,
@@ -875,6 +914,32 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
                 EcoParam::Value(Ty::Str),
                 EcoParam::Value(Ty::Str),
                 EcoParam::Callback(pit_handler_fn_ty()),
+            ],
+            ret: Ty::None,
+            tier: PyCompatTier::Semantic,
+        }),
+        // ADR-0080 Phase-1b-ii — `app.route_validated(method, path,
+        // handler)`: the type-driven request-validation route (Q5). SIBLING
+        // of `route` — the only differences are (a) the runtime symbol
+        // (`__cobrust_pit_app_route_validated`) and (b) the callback `FnTy`
+        // is the 2-ARG validated-handler shape (`fn(pit.Request, <Body>) ->
+        // pit.Response`) whose 2nd param is the validated-body class. The
+        // existing `EcoParam::Callback` gate type-checks the 2-arg arity +
+        // the `pit.Request` 1st param + the `pit.Response` return for free;
+        // the body-class 2nd-param slot is special-cased (sentinel — see
+        // `pit_validated_handler_fn_ty` + `check_validated_body_param`).
+        // The MIR retarget injects a 4th schema-descriptor `Str` arg
+        // synthesised from the body class's field table + refinement
+        // side-table (ADR-0080 §5.4); the trampoline validates the JSON
+        // body against it, dispatching on `Ok` / synthesising a typed 422
+        // on `Err` WITHOUT entering the handler (footgun #1 + #2). `Ty::None`
+        // return mirrors `route`'s in-place-effect discard discipline.
+        (PIT_APP_ADT, "route_validated") => Some(EcoSig {
+            runtime_symbol: "__cobrust_pit_app_route_validated",
+            params: vec![
+                EcoParam::Value(Ty::Str),
+                EcoParam::Value(Ty::Str),
+                EcoParam::Callback(pit_validated_handler_fn_ty()),
             ],
             ret: Ty::None,
             tier: PyCompatTier::Semantic,

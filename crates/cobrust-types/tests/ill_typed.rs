@@ -52,6 +52,16 @@ enum Cat {
     /// compile-time error (with a §2.5-B FIX listing the declared
     /// fields), NOT a silent `fresh_var()`.
     UnknownField,
+    /// ADR-0080 Phase-1b-ii — `Cat::UnsupportedRefinement` pairs with
+    /// `TypeError::UnsupportedRefinement`. Used by i157: a class field
+    /// `where`-clause outside the fixed int-range grammar (Q6) is a
+    /// compile-time error with a §2.5-B FIX naming the accepted forms.
+    UnsupportedRefinement,
+    /// ADR-0080 Phase-1b-ii — `Cat::CallbackSignatureMismatch` pairs with
+    /// `TypeError::CallbackSignatureMismatch`. Used by i158/i159: a
+    /// `route_validated` handler with the wrong arity (1-arg) or a non-class
+    /// 2nd param is a callback-shape mismatch with a §2.5-B FIX.
+    CallbackSignatureMismatch,
 }
 
 fn matches_cat(err: &TypeError, cat: Cat) -> bool {
@@ -74,6 +84,8 @@ fn matches_cat(err: &TypeError, cat: Cat) -> bool {
         (Cat::UnknownMethod, TypeError::UnknownMethod { .. }) => true,
         (Cat::BorrowOfNonPlace, TypeError::BorrowOfNonPlace { .. }) => true,
         (Cat::UnknownField, TypeError::UnknownField { .. }) => true,
+        (Cat::UnsupportedRefinement, TypeError::UnsupportedRefinement { .. }) => true,
+        (Cat::CallbackSignatureMismatch, TypeError::CallbackSignatureMismatch { .. }) => true,
         _ => false,
     }
 }
@@ -2611,5 +2623,62 @@ fn i156_cross_class_binding_rejected() {
         "cross-class-binding",
         "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nclass Other:\n    let tag: i64 = 0\nfn f() -> i64:\n    let a: Score = Other()\n    return 0\n",
         Cat::TypeMismatch,
+    );
+}
+
+// =====================================================================
+// ADR-0080 Phase-1b-ii — validated-body refinement + route_validated
+// callback-shape negatives (the §6 Phase-1 done-means ≥3 negatives,
+// mirrored into the types harness so the FULL suite covers the surface).
+// =====================================================================
+
+#[test]
+fn i157_non_fixed_where_predicate_rejected() {
+    // A class field `where`-clause outside the fixed int-range grammar (an
+    // arbitrary user-fn call) → `UnsupportedRefinement` with a §2.5-B FIX
+    // (ADR-0080 Q6). The bare typed-field form (`rank: i64 where …`) parses
+    // (Phase-1b-ii) so this exercises the type-check rejection, not a
+    // parse error.
+    must_reject(
+        "non-fixed-where-predicate",
+        "fn weird(x: i64) -> bool:\n    return True\nclass CreateScore:\n    name: str\n    rank: i64 where weird(self)\nfn main() -> i64:\n    return 0\n",
+        Cat::UnsupportedRefinement,
+    );
+}
+
+#[test]
+fn i158_where_on_non_int_field_rejected() {
+    // The int-range refinement applies only to an `i64` field; a `where`
+    // bound on a `str` field is not the fixed grammar (Phase-1b-ii int
+    // range only — `len(self)` on str is a Phase-2 surface). Rejected with
+    // a FIX.
+    must_reject(
+        "where-on-str-field",
+        "class CreateScore:\n    name: str where 0 <= self and self <= 10\n    rank: i64\nfn main() -> i64:\n    return 0\n",
+        Cat::UnsupportedRefinement,
+    );
+}
+
+#[test]
+fn i159_route_validated_one_arg_handler_rejected() {
+    // `app.route_validated("POST","/s", h)` where `h` is a 1-arg handler
+    // (missing the `body` 2nd param) → CallbackSignatureMismatch (the
+    // 2-arg validated-handler shape, ADR-0080 Q5). The arity check fires.
+    must_reject(
+        "route-validated-one-arg-handler",
+        "import pit\nclass CreateScore:\n    name: str\n    rank: i64 where 0 <= self and self <= 100\nfn create_score(req: pit.Request) -> pit.Response:\n    return pit.text_response(201, \"ok\")\nfn main() -> i64:\n    let app = pit.App()\n    let _ = app.route_validated(\"POST\", \"/s\", create_score)\n    return 0\n",
+        Cat::CallbackSignatureMismatch,
+    );
+}
+
+#[test]
+fn i160_route_validated_non_class_body_param_rejected() {
+    // A 2nd param that is NOT a field-tracked body class (a bare `i64`) →
+    // CallbackSignatureMismatch (the validated-body sentinel slot rejects a
+    // non-class param, ADR-0080 §6 done-means third negative).
+    must_reject(
+        "route-validated-non-class-body",
+        "import pit\nfn create_score(req: pit.Request, body: i64) -> pit.Response:\n    return pit.text_response(201, \"ok\")\nfn main() -> i64:\n    let app = pit.App()\n    let _ = app.route_validated(\"POST\", \"/s\", create_score)\n    return 0\n",
+        Cat::CallbackSignatureMismatch,
     );
 }

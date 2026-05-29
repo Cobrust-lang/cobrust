@@ -73,6 +73,14 @@ pub struct ClassBody {
     pub traits: Vec<Type>,
     pub members: Vec<Item>,
     pub span: Span,
+    /// ADR-0080 Phase-1b-ii — per-field refinement `where`-clauses on a
+    /// validated-body class, lowered 1:1 from [`crate::ast`]'s
+    /// `ClassDef::field_refinements`. Each `(field_name, predicate_expr)`
+    /// carries the raw `where <pred>` boolean expression; the type checker
+    /// (`check_class`) interprets it into the `(AdtId, field)` refinement
+    /// side-table, admitting only the FIXED int-range grammar (ADR-0080 Q6)
+    /// and rejecting anything else with a FIX-bearing `TypeError`.
+    pub field_refinements: Vec<(String, Expr)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -84,11 +84,16 @@ mod error;
 mod request;
 mod response;
 mod routing;
+// ADR-0080 Phase-1b-ii — the request-body validation engine consumed by
+// the `route_validated` trampoline in `cabi`. `pub` so the validator +
+// `ValidationError` are reachable from the integration suite.
+pub mod validation;
 
 pub use crate::app::{App, Handler, MAX_BODY_BYTES, ServerHandle};
 pub use crate::error::{PitError, PitErrorKind};
 pub use crate::request::Request;
 pub use crate::response::Response;
+pub use crate::validation::{ValidationError, validate_against_schema};
 
 #[cfg(feature = "pyo3")]
 mod pyo3_bindings;

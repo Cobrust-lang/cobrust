@@ -2760,6 +2760,28 @@ impl<'ctx> LlvmEmitter<'ctx> {
             &[ptr_ty.into(), ptr_ty.into(), ptr_ty.into(), ptr_ty.into()],
             false,
         );
+        // ADR-0080 Phase-1b-ii — `__cobrust_pit_app_route_validated(
+        //     app: *mut App, method: *mut Str, path: *mut Str,
+        //     handler: *const c_void, schema: *mut Str
+        // ) -> *mut u8 = null`. SIBLING of `__cobrust_pit_app_route` with a
+        // FIFTH `schema` arg: the validated-body descriptor MIR synthesises
+        // from the handler's body-class field table + refinement side-table
+        // (ADR-0080 §5.4). The trampoline parses it, validates `req.json()`
+        // against it, and dispatches on Ok / synthesises a typed 422 on Err
+        // WITHOUT entering the handler (footgun #1 + #2). The handler crosses
+        // as the SAME `*const c_void` fn-pointer shape as `route`; the
+        // trampoline transmutes it to the 2-arg `fn(*mut u8, *mut u8) ->
+        // *mut u8` validated-handler ABI.
+        let pit_app_route_validated_ty = ptr_ty.fn_type(
+            &[
+                ptr_ty.into(),
+                ptr_ty.into(),
+                ptr_ty.into(),
+                ptr_ty.into(),
+                ptr_ty.into(),
+            ],
+            false,
+        );
         let pit_serve_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
         // F65 G2 — `__cobrust_pit_app_run(app: *mut App, host: *mut Str, port: i64) -> i64`.
         // Blocking variant of `serve_in_background`; returns 0 on clean
@@ -2787,6 +2809,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_pit_app_new", pit_app_new_ty, 0usize),
             ("__cobrust_pit_text_response", pit_text_response_ty, 2),
             ("__cobrust_pit_app_route", pit_app_route_ty, 4),
+            (
+                "__cobrust_pit_app_route_validated",
+                pit_app_route_validated_ty,
+                5,
+            ),
             ("__cobrust_pit_app_serve_in_background", pit_serve_ty, 3),
             ("__cobrust_pit_app_run", pit_app_run_ty, 3),
             ("__cobrust_pit_app_use_cors", pit_app_use_middleware_ty, 1),

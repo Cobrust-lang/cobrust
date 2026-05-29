@@ -290,6 +290,13 @@ fn norm_stmt(s: &Stmt) -> Stmt {
             base: cd.base.as_ref().map(norm_expr),
             traits: cd.traits.iter().map(norm_type).collect(),
             body: norm_block(&cd.body),
+            // ADR-0080 Phase-1b-ii — normalize each refinement predicate's
+            // spans so the round-trip equality ignores positions.
+            field_refinements: cd
+                .field_refinements
+                .iter()
+                .map(|(name, pred)| (name.clone(), norm_expr(pred)))
+                .collect(),
         }),
         ast::StmtKind::Let {
             target,

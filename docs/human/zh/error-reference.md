@@ -206,6 +206,36 @@ fn f() -> i64:
 
 ---
 
+### 示例 7 — 不受支持的 refinement `where` 谓词
+
+带校验的请求体(`route_validated`,ADR-0080)可以为每个字段带一个
+`where` 子句。本版本只接受 `i64` 字段上的固定整数范围语法;任何其他谓词
+都是编译期错误,并会打印出可接受的形式。
+
+```
+error[Type]: unsupported refinement `where`-predicate on field `rank`: only
+the fixed int-range grammar is accepted in v1 (`0 <= self`, `self <= 100`,
+`0 <= self and self <= 100` on an i64 field)
+  --> src/main.cb:3:20
+```
+
+```cobrust
+class CreateScore:
+    name: str
+    rank: i64 where weird(self)   # 错误 —— 不是固定语法
+
+# 修复:在 i64 字段上使用固定的闭区间整数范围。
+class CreateScore:
+    name: str
+    rank: i64 where 0 <= self and self <= 100
+```
+
+**可能的修复：** 把 `where` 子句改写成 `i64` 字段上的 `lo <= self`、
+`self <= hi` 或 `lo <= self and self <= hi`。字符串长度(`len(self) <= n`)
+与正则模式校验属于后续阶段。
+
+---
+
 ## 运行时错误（Runtime）
 
 **看到 `error[Runtime]` 时**，程序本身 panic 了，或者

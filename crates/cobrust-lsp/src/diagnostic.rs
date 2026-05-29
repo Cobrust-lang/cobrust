@@ -174,6 +174,10 @@ fn type_error_to_diagnostic_single(err: &TypeError, line_map: &LineMap) -> Diagn
         UnknownField {
             span, suggestion, ..
         } => (*span, *suggestion, "unknown-field"),
+        // ADR-0080 Phase-1b-ii — non-fixed-grammar refinement predicate.
+        UnsupportedRefinement {
+            span, suggestion, ..
+        } => (*span, *suggestion, "unsupported-refinement"),
         Multiple(_) => unreachable!("Multiple flattened by type_error_to_diagnostics"),
     };
     let range = span_to_lsp_range(&span, line_map);

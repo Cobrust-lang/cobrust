@@ -419,6 +419,12 @@ impl Canonicalize for TypeError {
                 keys.extend(known_fields.iter().map(|f| CanonicalKey::leaf(f.as_str())));
                 keys
             }
+            // ADR-0080 Phase-1b-ii — key on the offending field name (a
+            // mirror-able String). The accepted-grammar text lives in the
+            // Display message, not the canonical key.
+            TypeError::UnsupportedRefinement { field, .. } => {
+                vec![CanonicalKey::leaf(field.as_str())]
+            }
             // Variants with no extra payload (Span + suggestion only).
             TypeError::MutableDefault { .. }
             | TypeError::AmbiguousType { .. }
@@ -579,6 +585,8 @@ pub fn type_error_variant_name(err: &TypeError) -> &'static str {
         TypeError::CallbackSignatureMismatch { .. } => "CallbackSignatureMismatch",
         // ADR-0080 Phase-1a — typed-field-access variant.
         TypeError::UnknownField { .. } => "UnknownField",
+        // ADR-0080 Phase-1b-ii — non-fixed refinement-predicate variant.
+        TypeError::UnsupportedRefinement { .. } => "UnsupportedRefinement",
     }
 }
 

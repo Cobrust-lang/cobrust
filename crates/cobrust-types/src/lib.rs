@@ -55,20 +55,23 @@ pub mod ecosystem;
 pub mod error;
 pub mod fix_safety;
 pub mod infer;
+pub mod refinement;
 pub mod ty;
 
 pub use check::{TypeCheckCtx, TypedModule, check, check_incremental};
 pub use ecosystem::{
     COIL_BUFFER_ADT, DEN_CONNECTION_ADT, DEN_CURSOR_ADT, DORA_EVENT_ADT, DORA_NODE_ADT, EcoParam,
     EcoSig, HOOD_COMMAND_ADT, MOLT_DATETIME_ADT, PIT_APP_ADT, PIT_REQUEST_ADT, PIT_RESPONSE_ADT,
-    PIT_SERVER_HANDLE_ADT, PyCompatTier, STRIKE_RESPONSE_ADT, coil_buffer_getitem_symbol,
-    coil_buffer_setitem_symbol, coil_buffer_slice_symbol, coil_buffer_ty, dora_event_handler_fn_ty,
-    dora_event_ty, dora_node_ty, handle_drop_symbol, hood_command_handler_fn_ty, hood_command_ty,
-    is_ecosystem_handle, is_ecosystem_module, is_subnamespace, lookup_buffer_binop,
-    lookup_handle_attr, lookup_handle_method, lookup_module_fn, lookup_subnamespace_fn, pit_app_ty,
-    pit_handler_fn_ty, pit_request_ty, pit_response_ty, pit_server_handle_ty,
+    PIT_SERVER_HANDLE_ADT, PIT_VALIDATED_BODY_SENTINEL_ADT, PyCompatTier, STRIKE_RESPONSE_ADT,
+    coil_buffer_getitem_symbol, coil_buffer_setitem_symbol, coil_buffer_slice_symbol,
+    coil_buffer_ty, dora_event_handler_fn_ty, dora_event_ty, dora_node_ty, handle_drop_symbol,
+    hood_command_handler_fn_ty, hood_command_ty, is_ecosystem_handle, is_ecosystem_module,
+    is_subnamespace, lookup_buffer_binop, lookup_handle_attr, lookup_handle_method,
+    lookup_module_fn, lookup_subnamespace_fn, pit_app_ty, pit_handler_fn_ty, pit_request_ty,
+    pit_response_ty, pit_server_handle_ty, pit_validated_handler_fn_ty,
 };
 pub use error::TypeError;
 pub use fix_safety::{FixSafety, Suggestion, type_error_fix_safety, type_error_suggestion_text};
 pub use infer::{Subst, finalize, unify};
+pub use refinement::Refinement;
 pub use ty::{AdtId, AliasId, FnTy, GenericVar, Record, Ty, VarAllocator, VarId};

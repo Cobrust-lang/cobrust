@@ -158,6 +158,18 @@ pub struct ClassDef {
     pub base: Option<Expr>,
     pub traits: Vec<Type>,
     pub body: Block,
+    /// ADR-0080 Phase-1b-ii — per-field refinement `where`-clauses on a
+    /// validated-body class. Each entry is `(field_name, predicate_expr)`
+    /// where `predicate_expr` is the raw `where <pred>` boolean expression
+    /// (e.g. `0 <= self and self <= 100`). The predicate is parsed as a
+    /// normal expression here and INTERPRETED at type-check time
+    /// (`check_class`): only the FIXED int-range grammar of ADR-0080 Q6
+    /// (`lo <= self <= hi` / `lo <= self` / `self <= hi`) is admitted; any
+    /// other form raises a `TypeError::UnsupportedRefinement` with a FIX
+    /// suggestion (§2.5-B). Storing the raw `Expr` keeps the parser
+    /// grammar-agnostic (it accepts the field-with-`where` SHAPE) and lets
+    /// the checker own the fixed-grammar contract.
+    pub field_refinements: Vec<(String, Expr)>,
 }
 
 /// Type alias (form 6): `type Foo[T] = T | None`.

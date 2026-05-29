@@ -209,6 +209,37 @@ is also caught as a type mismatch.
 
 ---
 
+### Example 7 — unsupported refinement `where`-predicate
+
+A validated request body (`route_validated`, ADR-0080) may carry a per-field
+`where`-clause. In this version only a FIXED int-range grammar on an `i64`
+field is accepted; any other predicate is a compile-time error that prints
+the accepted forms.
+
+```
+error[Type]: unsupported refinement `where`-predicate on field `rank`: only
+the fixed int-range grammar is accepted in v1 (`0 <= self`, `self <= 100`,
+`0 <= self and self <= 100` on an i64 field)
+  --> src/main.cb:3:20
+```
+
+```cobrust
+class CreateScore:
+    name: str
+    rank: i64 where weird(self)   # ERROR — not the fixed grammar
+
+# Fix: a fixed inclusive int-range bound on the i64 field.
+class CreateScore:
+    name: str
+    rank: i64 where 0 <= self and self <= 100
+```
+
+**Likely fix:** rewrite the `where`-clause into `lo <= self`, `self <= hi`,
+or `lo <= self and self <= hi` on an `i64` field. String-length
+(`len(self) <= n`) and pattern refinements are later phases.
+
+---
+
 ## Runtime errors
 
 **When you see `error[Runtime]`**, the program itself panicked or the

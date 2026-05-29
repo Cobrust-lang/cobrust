@@ -37,6 +37,19 @@ pub struct TypedModule {
     pub def_types: HashMap<u32, Ty>,
     /// The HIR module that was checked, for downstream consumers.
     pub hir: Module,
+    /// ADR-0080 Phase-1a — per-Adt declared field types
+    /// (`AdtId → {field_name → field_ty}`), recorded by `check_class`.
+    /// Carried out of the checker so MIR can synthesise the validated-body
+    /// schema descriptor for `route_validated` (ADR-0080 §5.4) from the
+    /// SAME field table the type checker resolved field-access against
+    /// (footgun #4 — one source, cannot drift).
+    pub adt_fields: HashMap<crate::ty::AdtId, std::collections::BTreeMap<String, Ty>>,
+    /// ADR-0080 Phase-1b-ii — per-field value refinements keyed
+    /// `(AdtId, field_name)`, interpreted by `check_class` from each
+    /// field's `where`-clause (the fixed int-range grammar, Q6). The
+    /// SECOND projection of the one field table (the validator + the
+    /// OpenAPI emitter read it). Empty for any field with no `where`.
+    pub adt_refinements: HashMap<(crate::ty::AdtId, String), crate::refinement::Refinement>,
 }
 
 /// Incremental type-check context — the Phase I × J handoff primitive
@@ -412,9 +425,26 @@ pub fn check(module: &Module) -> Result<TypedModule, TypeError> {
             });
         }
     }
+    // ADR-0080 — carry the field table + refinement side-table out so MIR
+    // can synthesise the validated-body schema (the SAME source the
+    // checker resolved field access against). Field `Ty`s are
+    // `subst.apply`'d so they are fully resolved (no leaked inference var).
+    let adt_fields: HashMap<crate::ty::AdtId, std::collections::BTreeMap<String, Ty>> = ctx
+        .adt_fields
+        .iter()
+        .map(|(adt, fields)| {
+            let resolved_fields = fields
+                .iter()
+                .map(|(name, t)| (name.clone(), ctx.subst.apply(t)))
+                .collect();
+            (*adt, resolved_fields)
+        })
+        .collect();
     Ok(TypedModule {
         def_types: resolved,
         hir: module.clone(),
+        adt_fields,
+        adt_refinements: ctx.adt_refinements.clone(),
     })
 }
 
@@ -500,6 +530,16 @@ struct Ctx {
     /// intercepted earlier still (the `alias_map` lookup), so this map
     /// never sees an alias name and never regresses alias resolution.
     class_names: HashMap<String, crate::ty::AdtId>,
+    /// ADR-0080 Phase-1b-ii — per-field value refinement side-table,
+    /// keyed `(AdtId, field_name)` (the sibling of [`Self::adt_fields`]
+    /// the ADR §2 Q2 mandates — refinements live BESIDE the field, not in
+    /// `Ty`). Populated in `check_class` by interpreting each field's
+    /// `where`-clause predicate; only the fixed int-range grammar (Q6) is
+    /// admitted, anything else raises [`TypeError::UnsupportedRefinement`]
+    /// with a §2.5-B FIX. Read by the validator (via [`TypedModule`]) and
+    /// the OpenAPI emitter — two projections of the ONE field table that
+    /// therefore cannot drift (footgun #4).
+    adt_refinements: HashMap<(crate::ty::AdtId, String), crate::refinement::Refinement>,
 }
 
 impl Ctx {
@@ -855,6 +895,20 @@ impl Ctx {
                 _ => {}
             }
         }
+        // ADR-0080 Phase-1b-ii — interpret each field's `where`-clause
+        // predicate into the `(AdtId, field)` refinement side-table. Only
+        // the FIXED int-range grammar on an `i64` field is admitted (Q6);
+        // anything else raises `TypeError::UnsupportedRefinement` with a
+        // §2.5-B FIX (the compile-error feedback the dispatch mandates).
+        // Interpreted AFTER `fields` is built so the field's declared `Ty`
+        // is known (the grammar requires an `i64` field).
+        for (field, pred) in &c.field_refinements {
+            let field_ty = fields.get(field).cloned();
+            let refinement = self.interpret_refinement(field, pred, field_ty.as_ref())?;
+            self.adt_refinements
+                .insert((adt_id, field.clone()), refinement);
+        }
+
         self.adt_fields.insert(adt_id, fields);
         self.adt_methods.insert(adt_id, methods);
 
@@ -862,6 +916,71 @@ impl Ctx {
             self.check_item(m)?;
         }
         Ok(())
+    }
+
+    /// ADR-0080 Phase-1b-ii — interpret a class-field `where`-clause
+    /// predicate into a structured [`crate::refinement::Refinement`].
+    ///
+    /// The FIXED grammar v1 admits (Q6), over the lowered HIR predicate,
+    /// with `lo`/`hi` integer LITERALS and `>=` accepted as the mirror of
+    /// `<=`: `lo <= self` becomes `IntRange { lo: Some(lo), hi: None }`;
+    /// `self <= hi` becomes `IntRange { lo: None, hi: Some(hi) }`; and
+    /// `lo <= self and self <= hi` becomes
+    /// `IntRange { lo: Some(lo), hi: Some(hi) }`. The field MUST be declared
+    /// `i64` (the int-range kind). Any other shape — an arbitrary fn call
+    /// (`weird(self)`), a non-int field, `len(self)`/`pattern(self, …)`
+    /// (later phases), a float bound, or a malformed comparison — yields
+    /// `TypeError::UnsupportedRefinement` (the §2.5-B compile error). The
+    /// predicate is interpreted STRUCTURALLY (never type-synthesised), so
+    /// `self`'s type need not be resolved — only that it is a bare
+    /// `Name("self")`.
+    fn interpret_refinement(
+        &self,
+        field: &str,
+        pred: &Expr,
+        field_ty: Option<&Ty>,
+    ) -> Result<crate::refinement::Refinement, TypeError> {
+        let reject = || TypeError::UnsupportedRefinement {
+            field: field.to_string(),
+            span: pred.span,
+            suggestion: Some(
+                "use the fixed int-range grammar on an i64 field: \
+                 `0 <= self`, `self <= 100`, or `0 <= self and self <= 100` \
+                 (`len(self) <= n` / `pattern(self, \"…\")` are later phases)",
+            ),
+        };
+        // The int-range refinement applies only to an `i64` field.
+        if field_ty != Some(&Ty::Int) {
+            return Err(reject());
+        }
+        // A single bound, or two bounds joined by `and`.
+        match &pred.kind {
+            ExprKind::Bin {
+                op: BinOp::And,
+                lhs,
+                rhs,
+            } => {
+                let (lo1, hi1) = parse_int_bound(lhs).ok_or_else(reject)?;
+                let (lo2, hi2) = parse_int_bound(rhs).ok_or_else(reject)?;
+                // Combine: each side contributes one bound; reject a
+                // contradictory or redundant pairing (two los / two his).
+                let lo = match (lo1, lo2) {
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    _ => return Err(reject()),
+                };
+                let hi = match (hi1, hi2) {
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    _ => return Err(reject()),
+                };
+                Ok(crate::refinement::Refinement::IntRange { lo, hi })
+            }
+            _ => {
+                let (lo, hi) = parse_int_bound(pred).ok_or_else(reject)?;
+                Ok(crate::refinement::Refinement::IntRange { lo, hi })
+            }
+        }
     }
 
     // -------- statements -----------------------------------------------
@@ -2424,6 +2543,40 @@ impl Ctx {
         // mismatch re-emit as a CallbackSignatureMismatch so the agent
         // sees the callback-specific phrasing.
         for (e, a) in expected.positional.iter().zip(actual_fn.positional.iter()) {
+            // ADR-0080 Phase-1b-ii — the validated-body sentinel slot
+            // (`pit_validated_handler_fn_ty`'s 2nd param) accepts ANY
+            // field-tracked USER class rather than unifying with a concrete
+            // type (the manifest cannot name the user's body class, Q5). A
+            // tracked user class is a `Ty::Adt` whose id is OUTSIDE the
+            // ecosystem-handle range AND whose fields `check_class`
+            // recorded; a non-class 2nd param (e.g. `i64`) or an ecosystem
+            // handle is rejected with the callback-shape diagnostic (the §6
+            // negative-c). `self.subst.apply(a)` resolves the handler's
+            // declared 2nd-param `Ty` (the annotation lowered to the class
+            // `Ty::Adt` via Phase-1b-i's `class_names`).
+            if matches!(e, Ty::Adt(id, _) if *id == crate::ecosystem::PIT_VALIDATED_BODY_SENTINEL_ADT)
+            {
+                let actual_param = self.subst.apply(a);
+                let is_tracked_body = matches!(
+                    &actual_param,
+                    Ty::Adt(id, _)
+                        if !crate::ecosystem::is_ecosystem_handle(*id)
+                            && self.adt_fields.contains_key(id)
+                );
+                if !is_tracked_body {
+                    return Err(TypeError::CallbackSignatureMismatch {
+                        expected: Ty::Fn(expected.clone()),
+                        actual: actual.clone(),
+                        span: arg.span,
+                        suggestion: Some(
+                            "the validated-body parameter must be a `class` with typed \
+                             fields — declare `class Body: …` and use \
+                             `fn handler(req: pit.Request, body: Body) -> pit.Response`",
+                        ),
+                    });
+                }
+                continue;
+            }
             if self.unify_call_arg(e, a, arg.span).is_err() {
                 return Err(TypeError::CallbackSignatureMismatch {
                     expected: Ty::Fn(expected.clone()),
@@ -3535,6 +3688,57 @@ fn literal_int_value(e: &Expr) -> Option<i64> {
         }
         _ => None,
     }
+}
+
+/// ADR-0080 Phase-1b-ii — parse ONE comparison of the fixed refinement
+/// grammar into an `(lo, hi)` bound pair where exactly one of `lo`/`hi`
+/// is `Some` (the comparison constrains one side of `self`).
+///
+/// Accepted shapes, with `N` an integer literal and `self` the bare
+/// placeholder `Name("self")`: `N <= self` is a lower bound
+/// `(Some(N), None)`; `self <= N` is an upper bound `(None, Some(N))`;
+/// `self >= N` mirrors the lower bound; `N >= self` mirrors the upper.
+/// Strict `<`/`>` are converted to inclusive bounds by a ±1 SATURATING
+/// shift so the runtime guard + the OpenAPI `minimum`/`maximum` stay
+/// integer-inclusive (`self < 100` becomes `hi = 99`; `0 < self` becomes
+/// `lo = 1`). Any other shape (non-`self` operand, both-literal,
+/// both-`self`, a float literal, a `len`/`pattern` call) returns `None`,
+/// and `interpret_refinement` surfaces `TypeError::UnsupportedRefinement`.
+fn parse_int_bound(e: &Expr) -> Option<(Option<i64>, Option<i64>)> {
+    let ExprKind::Bin { op, lhs, rhs } = &e.kind else {
+        return None;
+    };
+    let lhs_self = is_self_name(lhs);
+    let rhs_self = is_self_name(rhs);
+    let lhs_int = literal_int_value(lhs);
+    let rhs_int = literal_int_value(rhs);
+    // Exactly one side is `self`, the other an int literal.
+    match (lhs_self, rhs_self, lhs_int, rhs_int) {
+        // `self <op> N`
+        (true, false, _, Some(n)) => match op {
+            BinOp::LtEq => Some((None, Some(n))), // self <= N
+            BinOp::Lt => Some((None, Some(n.saturating_sub(1)))), // self < N  (-> <= N-1)
+            BinOp::GtEq => Some((Some(n), None)), // self >= N
+            BinOp::Gt => Some((Some(n.saturating_add(1)), None)), // self > N  (-> >= N+1)
+            _ => None,
+        },
+        // `N <op> self`
+        (false, true, Some(n), _) => match op {
+            BinOp::LtEq => Some((Some(n), None)), // N <= self
+            BinOp::Lt => Some((Some(n.saturating_add(1)), None)), // N < self  (-> >= N+1)
+            BinOp::GtEq => Some((None, Some(n))), // N >= self
+            BinOp::Gt => Some((None, Some(n.saturating_sub(1)))), // N > self  (-> <= N-1)
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// ADR-0080 Phase-1b-ii — is this a bare `self` placeholder in a field
+/// refinement predicate? The HIR lowering binds a synthetic `self`
+/// (`DefKind::Param`); here we only need the surface name to be `self`.
+fn is_self_name(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Name(rn) if rn.name == "self")
 }
 
 /// ADR-0041 §H8: resolve a constant tuple index to an element type.

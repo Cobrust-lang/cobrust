@@ -288,6 +288,29 @@ Notes:
 
 ---
 
+### TypeError::UnsupportedRefinement
+
+**Since**: ADR-0080 Phase-1b-ii (type-driven body validation).
+**Message**: `unsupported refinement 'where'-predicate on field 'field' at <span>: only the fixed int-range grammar is accepted in v1 (...)`
+**FIX**: Use the FIXED int-range grammar on an `i64` field — `0 <= self`, `self <= 100`, or `0 <= self and self <= 100` (`self` is the field value; `>=` works). `len(self) <= n` (str length) and `pattern(self, "…")` are later phases.
+```cobrust
+class CreateScore:
+    name: str
+    rank: i64 where weird(self)   # ERROR: arbitrary fn call is not the fixed grammar
+
+# FIX: a fixed int-range bound on the i64 field
+class CreateScore:
+    name: str
+    rank: i64 where 0 <= self and self <= 100   # OK
+```
+Notes:
+- A validated-body field's `where`-clause is interpreted into a `(AdtId, field)` refinement side-table at type-check; the predicate is checked STRUCTURALLY (the fixed grammar), never type-synthesised.
+- A `where` on a non-`i64` field also trips this in Phase-1b-ii (the int-range kind requires an `i64` field; str-length is Phase-2).
+- The value-level constraint is a RUNTIME guard at the request boundary (a 422 on a miss), not a compile-time-checked refinement (the §2.5-superior form is an ADR-0080 §9 follow-up).
+- FixSafety tier: `LocalEdit` (a local `where`-clause rewrite).
+
+---
+
 ### TypeError::RowConflict
 
 **Message**: `conflicting field 'field' in record types at <span>: 'T1' vs 'T2'`

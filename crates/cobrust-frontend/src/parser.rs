@@ -70,6 +70,22 @@ struct Parser<'a> {
     /// Current recursive-descent nesting depth. Checked at every
     /// expression entry point via `enter_expr_depth`.
     depth: u32,
+    /// ADR-0080 Phase-1b-ii — class-body nesting depth. Bumped on entry
+    /// to a `class` body block, decremented on exit. When `> 0` the
+    /// statement parser admits the bare typed-field declaration form
+    /// `name: type` (and `name: type where <pred>`), synthesising a
+    /// `StmtKind::Let` with a default initializer so the existing
+    /// class-field tracking (which reads class-body `let`s) picks it up.
+    /// Outside a class body the bare-annotated form stays a syntax error
+    /// (the pre-ADR-0080 behavior — a bare `x: i64` at module/fn scope is
+    /// not a binding).
+    in_class_body: u32,
+    /// ADR-0080 Phase-1b-ii — per-field `where`-refinement predicates
+    /// collected while parsing the CURRENT class body. The bare-field
+    /// parser pushes `(field_name, predicate_expr)`; `parse_class_def`
+    /// drains this buffer (saving/restoring the outer-class buffer to
+    /// support nested classes) into `ClassDef::field_refinements`.
+    pending_field_refinements: Vec<(String, Expr)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -95,6 +111,8 @@ impl<'a> Parser<'a> {
             toks,
             pos: 0,
             depth: 0,
+            in_class_body: 0,
+            pending_field_refinements: Vec::new(),
         }
     }
 
@@ -510,12 +528,22 @@ impl<'a> Parser<'a> {
         if traits.is_empty() && !self.is_block_start() {
             self.expect(&TokenKind::Colon)?;
         }
+        // ADR-0080 Phase-1b-ii — parse the class body in a class-field
+        // context so bare typed-field declarations (`name: type [where
+        // <pred>]`) parse. Save/restore the outer-class refinement buffer
+        // so a NESTED class's fields don't leak into the enclosing class.
+        self.in_class_body += 1;
+        let saved_refinements = std::mem::take(&mut self.pending_field_refinements);
         let body = self.parse_block()?;
+        let field_refinements =
+            std::mem::replace(&mut self.pending_field_refinements, saved_refinements);
+        self.in_class_body -= 1;
         Ok(ClassDef {
             name,
             base,
             traits,
             body,
+            field_refinements,
         })
     }
 
@@ -842,6 +870,23 @@ impl<'a> Parser<'a> {
 
     fn parse_expr_or_assign_stmt(&mut self) -> Result<Stmt, ParseError> {
         let lhs = self.parse_expr()?;
+        // ADR-0080 Phase-1b-ii — bare typed-field declaration inside a
+        // class body: `name: type` and `name: type where <pred>`. This is
+        // the verbatim pydantic/dataclass field shape (§2.5 ~0.9, ADR-0080
+        // §7). Recognised ONLY inside a class body (`in_class_body > 0`) so
+        // a stray `x: i64` at module/fn scope stays the pre-existing syntax
+        // error. We synthesise a `StmtKind::Let` with a default initializer
+        // matching the annotation so the EXISTING class-field tracking
+        // (which reads class-body `let`s — `check_class`) records the field
+        // unchanged. An optional `where <pred>` is parsed as a normal
+        // expression and stashed in `pending_field_refinements`; the fixed-
+        // grammar contract (ADR-0080 Q6) is enforced at type-check, not here.
+        if self.in_class_body > 0
+            && matches!(&lhs.kind, ExprKind::Name(_))
+            && matches!(self.peek_kind(), TokenKind::Colon)
+        {
+            return self.parse_class_field(lhs);
+        }
         // Augmented assignment.
         if let Some(op) = self.peek_assign_op() {
             self.bump();
@@ -877,6 +922,61 @@ impl<'a> Parser<'a> {
         Ok(Stmt {
             kind: StmtKind::Expr(lhs),
             span,
+        })
+    }
+
+    /// ADR-0080 Phase-1b-ii — parse a bare class-body typed-field
+    /// declaration `name: type [where <pred>]` into a synthetic
+    /// `StmtKind::Let`. `name_expr` is the already-parsed bare-`Name` LHS;
+    /// the cursor is positioned at the `:`.
+    ///
+    /// The synthesised `let name: type = <default>` reuses the EXISTING
+    /// class-field tracking path (`check_class` reads class-body `let`s and
+    /// records the field type from its annotation — ADR-0080 Phase-1a). The
+    /// default initializer is a type-matching literal so the synthesised
+    /// `let` also type-checks as a statement. The `where`-predicate (when
+    /// present) is parsed with the normal Pratt expression parser and
+    /// recorded in `pending_field_refinements` keyed by the field name; the
+    /// FIXED int-range grammar (ADR-0080 Q6) is validated at type-check
+    /// (`check_class`), which rejects any other form with a §2.5-B FIX.
+    fn parse_class_field(&mut self, name_expr: Expr) -> Result<Stmt, ParseError> {
+        let ExprKind::Name(field_name) = &name_expr.kind else {
+            // Caller gates on `ExprKind::Name`; defensive.
+            return Err(ParseError::Syntax {
+                message: "class field declaration expects a bare field name".to_string(),
+                span: name_expr.span,
+                suggestion: Some("write `field_name: type` at class-body scope"),
+            });
+        };
+        let field_name = field_name.clone();
+        let start = name_expr.span;
+        self.expect(&TokenKind::Colon)?;
+        let annot = self.parse_type()?;
+        // Optional `where <pred>`. `where` is a SOFT keyword (a bare
+        // identifier), recognised only in this field-annotation position so
+        // a user binding named `where` elsewhere is unaffected (no lexer
+        // change, lowest blast radius).
+        if matches!(self.peek_kind(), TokenKind::Ident(w) if w == "where") {
+            self.bump(); // consume `where`
+            let pred = self.parse_expr()?;
+            self.pending_field_refinements
+                .push((field_name.clone(), pred));
+        }
+        let end = annot.span;
+        self.expect_eos()?;
+        // Synthesise a type-matching default initializer so the `let`
+        // statement type-checks.
+        let default_value = default_init_for_type(&annot, annot.span);
+        Ok(Stmt {
+            kind: StmtKind::Let {
+                target: Pattern {
+                    kind: PatternKind::Binding(field_name),
+                    span: start,
+                },
+                annot: Some(annot),
+                value: default_value,
+            },
+            span: start.merge(end),
         })
     }
 
@@ -2372,6 +2472,36 @@ fn is_cast_type_token(tok: &TokenKind) -> bool {
     }
 }
 
+/// ADR-0080 Phase-1b-ii — synthesise a default-value initializer literal
+/// for a bare class-body typed-field declaration `name: type`, so the
+/// desugared `let name: type = <default>` type-checks as a statement.
+///
+/// The default is chosen to UNIFY with the declared annotation's base
+/// type. Phase-1b-ii's validated-body fields are the primitive scalar
+/// types pydantic/dataclass bodies use (`str`, `i64`/`int`, `f64`/`float`,
+/// `bool`); for any other annotation a `None` literal is emitted (the
+/// type checker then enforces the annotation as usual — a non-primitive
+/// field on a validated body is out of Phase-1b-ii scope and surfaces a
+/// normal type error if used). This default is NEVER observed at runtime:
+/// the validated body value is constructed Rust-side at the trampoline
+/// from the request JSON (ADR-0080 §5.4), not via this initializer.
+fn default_init_for_type(annot: &Type, span: Span) -> Expr {
+    let lit = match &annot.kind {
+        TypeKind::Name(segs) if segs.len() == 1 => match segs[0].as_str() {
+            "str" => Literal::Str(String::new()),
+            "i64" | "int" | "i8" | "i16" | "i32" => Literal::Int("0".to_string()),
+            "f64" | "float" => Literal::Float("0.0".to_string()),
+            "bool" => Literal::Bool(false),
+            _ => Literal::None,
+        },
+        _ => Literal::None,
+    };
+    Expr {
+        kind: ExprKind::Literal(lit),
+        span,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2388,6 +2518,63 @@ mod tests {
         let m = parse_src("").expect("parse");
         assert!(m.items.is_empty());
         assert!(m.docstring.is_none());
+    }
+
+    // ADR-0080 Phase-1b-ii — bare class-body typed-field declarations.
+    #[test]
+    fn class_bare_typed_field_parses() {
+        let m = parse_src("class CreateScore:\n    name: str\n    rank: i64\n").expect("parse");
+        let StmtKind::Class(cd) = &m.items[0].kind else {
+            panic!("expected class");
+        };
+        // Two bare fields → two synthetic `let`s in the body.
+        assert_eq!(cd.body.stmts.len(), 2);
+        assert!(matches!(cd.body.stmts[0].kind, StmtKind::Let { .. }));
+        assert!(cd.field_refinements.is_empty());
+    }
+
+    #[test]
+    fn class_field_where_refinement_parses_into_sidebuffer() {
+        let m = parse_src(
+            "class CreateScore:\n    name: str\n    rank: i64 where 0 <= self and self <= 100\n",
+        )
+        .expect("parse");
+        let StmtKind::Class(cd) = &m.items[0].kind else {
+            panic!("expected class");
+        };
+        assert_eq!(cd.body.stmts.len(), 2);
+        // The `where`-bearing field is captured as one refinement.
+        assert_eq!(cd.field_refinements.len(), 1);
+        assert_eq!(cd.field_refinements[0].0, "rank");
+    }
+
+    #[test]
+    fn bare_typed_field_outside_class_is_still_a_syntax_error() {
+        // A stray `x: i64` at module scope stays the pre-ADR-0080 error
+        // (only class-body context admits the bare typed-field form).
+        let err = parse_src("x: i64\n").expect_err("module-scope bare field must error");
+        assert!(matches!(err, ParseError::Syntax { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn nested_class_refinements_do_not_leak() {
+        // A refinement inside an inner class must not bleed into the
+        // outer class's `field_refinements` (save/restore buffer).
+        let m = parse_src(
+            "class Outer:\n    a: i64\n    class Inner:\n        b: i64 where 0 <= self\n",
+        )
+        .expect("parse");
+        let StmtKind::Class(outer) = &m.items[0].kind else {
+            panic!("expected outer class");
+        };
+        // Outer has no `where`-field of its own; the inner `b` refinement
+        // lives on the inner class.
+        assert!(outer.field_refinements.is_empty());
+        let StmtKind::Class(inner) = &outer.body.stmts[1].kind else {
+            panic!("expected inner class as 2nd member");
+        };
+        assert_eq!(inner.field_refinements.len(), 1);
+        assert_eq!(inner.field_refinements[0].0, "b");
     }
 
     #[test]
