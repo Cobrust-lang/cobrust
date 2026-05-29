@@ -482,6 +482,24 @@ struct Ctx {
     /// raise [`TypeError::UnknownField`]; the dispatch contract is
     /// "only field NAMES newly resolve to a field `Ty`".
     adt_methods: HashMap<crate::ty::AdtId, HashSet<String>>,
+    /// ADR-0080 Phase-1b-i — user class NAME → its [`crate::ty::AdtId`].
+    ///
+    /// Maps a `class`'s source name to the SAME `AdtId(c.def_id.0)` that
+    /// [`Self::prebind_item`]'s `ItemKind::Class` arm gives the zero-arg
+    /// ctor's `return_ty`, so a class name used in a type-annotation
+    /// position (`let s: Score = …`, `fn f(s: Score)`, `-> Score`)
+    /// lowers via [`Self::lower_named_type`] to the same `Ty::Adt` the
+    /// ctor produces — the annotation and an instance then unify.
+    ///
+    /// Populated in **Pass 1** (`prebind_items`, before any body is
+    /// type-checked), so a forward reference to a class declared later
+    /// in the module resolves correctly. A name absent from this map
+    /// (a forward-ref to a NON-class, a typo, a generic-param name)
+    /// still falls through to `lower_named_type`'s opaque-`Alias` arm —
+    /// identical to pre-1b-i behavior. Real `type Foo = Bar` aliases are
+    /// intercepted earlier still (the `alias_map` lookup), so this map
+    /// never sees an alias name and never regresses alias resolution.
+    class_names: HashMap<String, crate::ty::AdtId>,
 }
 
 impl Ctx {
@@ -560,6 +578,15 @@ impl Ctx {
                         return_ty: Box::new(Ty::Adt(crate::ty::AdtId(c.def_id.0), vec![])),
                     }),
                 );
+                // ADR-0080 Phase-1b-i — register the class NAME → its
+                // `AdtId` so a `: Score` annotation lowers to the SAME
+                // `Ty::Adt` the ctor's `return_ty` (just above) carries.
+                // Recorded in Pass 1 (prebind), so it is fully populated
+                // before any function body's annotation is lowered in
+                // Pass 2 — a forward reference to a class declared later
+                // in the module resolves correctly.
+                self.class_names
+                    .insert(c.name.clone(), crate::ty::AdtId(c.def_id.0));
                 self.prebind_items(&c.members);
             }
             ItemKind::TypeAlias(a) => {
@@ -2904,6 +2931,23 @@ impl Ctx {
     fn lower_named_type(&self, s: &str) -> Ty {
         if let Some(t) = self.alias_map.get(s) {
             return t.clone();
+        }
+        // ADR-0080 Phase-1b-i — a name that names a user `class` in scope
+        // resolves to that class's `Ty::Adt(AdtId, [])` — the SAME id the
+        // zero-arg ctor's `return_ty` carries (`prebind_item`'s
+        // `ItemKind::Class` arm) — so a `: Score` annotation and a
+        // `Score()` instance UNIFY (the unifier's `(Adt(a), Adt(b)) if
+        // a == b` arm). Two DIFFERENT classes get two DISTINCT `AdtId`s,
+        // so they still do NOT cross-unify (nominal distinctness preserved
+        // — `ill_typed` i156). This is checked AFTER `alias_map` (a real
+        // `type Foo = Bar` alias keeps winning) and BEFORE the opaque-
+        // `Alias` fall-through below; a name that is NOT a class (a typo,
+        // a forward-ref to a non-class, a generic-param spelling) is
+        // absent from `class_names` and still falls through to the opaque
+        // arm exactly as before — so real-alias / unknown-name handling
+        // is untouched.
+        if let Some(adt_id) = self.class_names.get(s) {
+            return Ty::Adt(*adt_id, vec![]);
         }
         // ADR-0073 — recognise dotted ecosystem-handle annotations so
         // `fn handle_ping(req: pit.Request) -> pit.Response: …`

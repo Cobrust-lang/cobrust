@@ -2556,3 +2556,60 @@ fn i154_class_undeclared_field_in_expr_rejected() {
         Cat::UnknownField,
     );
 }
+
+// ============================================================
+// ADR-0080 Phase-1b-i — class NAME in a type-annotation position
+// resolves to the class's `Adt` (ill-typed guard side) (i155..i156)
+//
+// Companion to well_typed.rs w200..w202. Phase-1b-i makes a class-name
+// annotation resolve to the class's `Ty::Adt` (the same id the ctor's
+// `return_ty` carries) instead of the opaque `Ty::Alias` HEAD produces
+// in `lower_named_type` (check.rs:2950-2956). These two tests guard the
+// REJECTIONS that the fix MUST PRESERVE: resolving the annotation to an
+// `Adt` must not start ACCEPTING a wrong-typed RHS.
+//
+// Both use `Cat::TypeMismatch` — these are nominal/primitive mismatches,
+// no new error variant is needed (contrast i153/i154's `UnknownField`).
+//
+// HEAD STATUS (verified at e66dcfb via the parse→lower→check path):
+// both ALREADY REJECT today, but for the pre-fix Alias reason
+// (`expected: Alias(AliasId(2383749825), []), actual: <Int|Adt(1)>`).
+// They are LIVE `#[test]`s (not `#[ignore]`) because the category is
+// stable across the fix — only the `expected` side of the payload
+// changes (`Alias` → `Adt`). The DISCRIMINATING value is i156: it is
+// the nominal-distinctness guard — after the fix `Score` resolves to
+// `Adt(Score)` and `Other()` is `Adt(Other)`, two DISTINCT `AdtId`s
+// that must still NOT cross-unify (a regressing fix that resolved every
+// class name to one shared `Adt`, or back to a by-name `Alias` that
+// collides, would WRONGLY accept i156 — this test catches that).
+
+#[test]
+fn i155_noninstance_bound_to_class_type_rejected() {
+    // (a) `let s: Score = 5` — a non-instance (`i64` literal) assigned to
+    // a class-typed binding. constitution §2.2 "no silent coercion": an
+    // `i64` may not satisfy a `Score` binding. At HEAD this rejects as
+    // `Alias(Score)` vs `Int`; post-1b-i it rejects as `Adt(Score)` vs
+    // `Int`. Either way TypeMismatch — the binding annotation, however
+    // it lowers, must reject a primitive RHS.
+    must_reject(
+        "noninstance-bound-to-class-type",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> i64:\n    let s: Score = 5\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i156_cross_class_binding_rejected() {
+    // (b) `let a: Score = Other()` — two DISTINCT classes. A `Score`-typed
+    // binding must NOT accept an `Other` instance: distinct nominal
+    // classes do not cross-unify. At HEAD this rejects as `Alias(Score)`
+    // vs `Adt(Other)`; post-1b-i it MUST still reject as `Adt(Score)` vs
+    // `Adt(Other)` — the nominal-distinctness the fix is required to
+    // preserve (resolving the annotation to an `Adt` must keep each
+    // class a distinct `AdtId`, not collapse to one shared/by-name type).
+    must_reject(
+        "cross-class-binding",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nclass Other:\n    let tag: i64 = 0\nfn f() -> i64:\n    let a: Score = Other()\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}

@@ -2,7 +2,7 @@
 doc_kind: module
 module_id: mod:types
 crate: cobrust-types
-last_verified_commit: e85630f
+last_verified_commit: e66dcfb
 dependencies: [mod:hir, adr:0006, adr:0041]
 ---
 
@@ -105,6 +105,20 @@ bidirectional".
   `{ field, adt, known_fields, span, suggestion }`; the Display message
   lists `known_fields` as the §2.5-B FIX. FixSafety `LocalEdit`.)
 - `Multiple` (composite container for multi-error reporting)
+
+### ADR-0080 Phase-1b-i — class NAME in a type-annotation resolves to its `Adt`
+
+| Feature | Location | Notes |
+|---|---|---|
+| `class_names` table | `types/src/check.rs` `Ctx::class_names` | `class name → AdtId(c.def_id.0)` — the SAME id the zero-arg ctor's `return_ty` carries (`prebind_item` `ItemKind::Class` arm) |
+| population | `types/src/check.rs` `prebind_item` `ItemKind::Class` | recorded in **Pass 1** (prebind), before any body annotation is lowered → forward class refs resolve |
+| resolution | `types/src/check.rs` `lower_named_type` | a name in `class_names` lowers to `Ty::Adt(adt_id, [])`; checked AFTER `alias_map` and BEFORE the opaque-`Alias` fall-through |
+
+Invariants:
+- A `: Score` annotation and a `Score()` instance UNIFY (both `Ty::Adt(AdtId(score), [])`; unifier `(Adt(a), Adt(b)) if a == b`). Enables class-typed bindings (`let s: Score = Score()`), params (`fn f(s: Score)`), and returns (`-> Score`), combining with Phase-1a typed field access (`s.rank: i64`).
+- **Nominal distinctness preserved**: two DIFFERENT classes get two DISTINCT `AdtId`s and do NOT cross-unify (`ill_typed` i156); a non-instance RHS (`let s: Score = 5`) still rejects `TypeMismatch` (i155).
+- **No regression of real aliases / unknown names**: a `type Foo = Bar` alias is resolved earlier via `alias_map` (transparently to its RHS, never a class arm); a name that is NOT a class (typo, forward-ref to a non-class, generic-param spelling) is absent from `class_names` and still falls through to the opaque-`Alias` arm exactly as before.
+- No new error variant, no Display/error-UX change — a purely internal unification correctness fix (the rejection categories are unchanged `TypeMismatch`).
 
 ## ADR-0041 §H8 — tuple Index returns indexed element type
 

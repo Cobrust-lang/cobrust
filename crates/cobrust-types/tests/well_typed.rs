@@ -3039,3 +3039,92 @@ fn w199_class_field_returned_at_declared_type() {
         "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> i64:\n    let s = Score()\n    return s.rank\n",
     );
 }
+
+// ============================================================
+// ADR-0080 Phase-1b-i — class NAME in a type-annotation position
+// resolves to the class's `Adt` (well-typed side) (w200..w202)
+//
+// RED MECHANISM (verified at HEAD e66dcfb, via the parse→lower→check
+// harness path): a class-name annotation lowers through
+// `lower_named_type` (check.rs:2904); a USER class name is unrecognised
+// by every concrete arm, so it falls through to the opaque-alias arm
+// (check.rs:2950-2956) and becomes a synthetic
+// `Ty::Alias(AliasId(hash(name) | 0x8000_0000))`. The verbatim comment
+// there: this "only unifies with another opaque alias of the same
+// name." Meanwhile the zero-arg ctor `Score()` returns
+// `Ty::Adt(AdtId(c.def_id.0))` (prebind_item, the `ItemKind::Class` arm,
+// check.rs:552-562). `Alias` and `Adt` do NOT unify, so wherever the
+// annotation is unified against a ctor result the check fails with
+// `TypeMismatch { expected: Alias(AliasId(2383749825), []), actual:
+// Adt(AdtId(0), []) }` (the exact payload observed at HEAD for the
+// `Score` name).
+//
+// Phase-1b-i makes `lower_named_type` resolve a name that names a class
+// in scope to that class's `Ty::Adt(AdtId(def_id), …)` — the SAME id
+// the ctor's `return_ty` already carries — so the annotation and the
+// instance unify. This is the seam the Phase-1a header (w196..w199 +
+// i151..i154) called out as "a separate seam, out of 1a scope": those
+// tests had to bind instances INFERRED (`let s = Score()`, no `: Score`)
+// precisely because the explicit annotation was rejected here.
+//
+// SEAM NOTE (why the binding/call form, not a bare param): a bare param
+// annotation (`fn uses(s: Score)`) is merely RECORDED as the param's
+// type and is never contradicted on its own — at HEAD it silently
+// lowers to `Alias` and the fn body type-checks (a class-typed param
+// alone ACCEPTS today, masked further by the Phase-1a `fresh_var` Attr
+// hole). The Alias↔Adt gap is only OBSERVABLE where the annotation is
+// UNIFIED AGAINST a concrete `Adt` instance: a `let : Score = Score()`
+// binding (w200), an `-> Score` return of `Score()` (w202), or a
+// `uses(Score())` CALL whose `Score()` arg meets the `Score` param
+// (w201). All three REJECT at HEAD = the RED these tests flip.
+//
+// These MUST FAIL today (RED — `must_accept` PANICS: "should accept but
+// rejected: TypeMismatch { expected: Alias, actual: Adt }") and MUST
+// pass after Phase-1b-i lands.
+
+#[test]
+fn w200_class_typed_binding_from_ctor() {
+    // (a) The §2.5 happy path: an explicit `: Score` annotation on a
+    // binding initialised from the `Score()` ctor. At HEAD the `Score`
+    // annotation is `Ty::Alias` and the ctor is `Ty::Adt`, so the unify
+    // fails (TypeMismatch{expected: Alias, actual: Adt}) — this is the
+    // exact rejection the w196..w199 header documented as the reason
+    // Phase-1a had to bind instances inferred. Post-1b-i the `Score`
+    // annotation resolves to the ctor's `Adt`, so they unify.
+    must_accept(
+        "class-typed-binding-from-ctor",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> i64:\n    let s: Score = Score()\n    return 0\n",
+    );
+}
+
+#[test]
+fn w201_class_typed_param_reads_field() {
+    // (b) A fn with a class-typed PARAM that READS a field, exercised at
+    // a CALL site that forces the param annotation against a real
+    // instance: `uses(Score())`. This COMBINES the two seams — 1b-i
+    // (the `Score` param annotation must resolve to the class `Adt` so
+    // the `Score()` arg unifies with it) AND 1a (the `s.rank` field
+    // access must yield the declared `i64` to match `-> i64`). At HEAD
+    // the `Score()` arg (`Adt`) meets the `Score` param (`Alias`) and
+    // the call is REJECTED (TypeMismatch{expected: Alias, actual: Adt}
+    // on the arg). Post-fix both are the same `Adt` and `s.rank` is
+    // `i64`, so the whole program type-checks.
+    must_accept(
+        "class-typed-param-reads-field",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn uses(s: Score) -> i64:\n    return s.rank\nfn main() -> i64:\n    return uses(Score())\n",
+    );
+}
+
+#[test]
+fn w202_class_typed_return_from_ctor() {
+    // (c) A class-typed RETURN: `fn make() -> Score: return Score()`.
+    // At HEAD the declared return type `Score` is `Ty::Alias` while the
+    // returned `Score()` is `Ty::Adt`, so the return-type unify fails
+    // (TypeMismatch{expected: Alias, actual: Adt}). Post-1b-i the `Score`
+    // return annotation resolves to the ctor's `Adt`, so the returned
+    // instance matches the declared return type.
+    must_accept(
+        "class-typed-return-from-ctor",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn make() -> Score:\n    return Score()\n",
+    );
+}
