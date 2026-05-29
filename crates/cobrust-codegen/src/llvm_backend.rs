@@ -70,7 +70,7 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
-use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
 };
@@ -819,6 +819,17 @@ pub struct LlvmEmitter<'ctx> {
     str_data_globals: HashMap<String, PointerValue<'ctx>>,
     /// Cached `i8*` opaque pointer type used for str/list/dict/refs.
     opaque_ptr_ty: inkwell::types::PointerType<'ctx>,
+    /// Target-pointer-width integer type — the LLVM lowering of a C
+    /// `usize` / `size_t` argument. `i64` on x86_64 / aarch64 / riscv64,
+    /// `i32` on wasm32. F71: runtime-helper externs whose Rust `extern
+    /// "C"` definitions take a `usize` (e.g. `__cobrust_println(ptr,
+    /// usize)`) MUST declare that parameter — and materialise the value
+    /// passed at the call site — with this type, not a hardcoded `i64`.
+    /// wasm32-wasip1 enforces strict typed `call`/`call_indirect`
+    /// signatures: a `(ptr, i64)` declaration against a `(ptr, i32)`
+    /// definition traps `unreachable` at runtime ("signature_mismatch").
+    /// Native ELF linkers tolerate the width mismatch, masking the bug.
+    usize_ty: IntType<'ctx>,
     // ----- ADR-0058c wave-3 DWARF state ---------------------------------
     /// inkwell DWARF builder; one per LLVM module (per source file).
     di_builder: DebugInfoBuilder<'ctx>,
@@ -888,6 +899,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
         module.set_data_layout(&target_machine.get_target_data().get_data_layout());
         let builder = ctx.create_builder();
         let opaque_ptr_ty = ctx.ptr_type(AddressSpace::default());
+        // F71: the C `usize`/`size_t` width is target-driven — `i64` on
+        // x86_64 / aarch64 / riscv64, `i32` on wasm32-wasip1. Derive it
+        // from the target machine's data layout (already bound to the
+        // module above) so `usize`-typed runtime-helper externs declare
+        // and pass the width wasm strict typed calls demand.
+        let usize_ty = ctx.ptr_sized_int_type(&target_machine.get_target_data(), None);
 
         // --- ADR-0058c §3.1 DWARF scaffold -----------------------------
         // LLVM requires the module-level "Debug Info Version" + "Dwarf Version"
@@ -929,6 +946,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             runtime_helper_param_counts: HashMap::new(),
             str_data_globals: HashMap::new(),
             opaque_ptr_ty,
+            usize_ty,
             di_builder,
             di_cu,
             di_file,
@@ -1191,6 +1209,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
         let void_ty = self.ctx.void_type();
         let i64_ty = self.ctx.i64_type();
         let ptr_ty = self.opaque_ptr_ty;
+        // F71: target-pointer-width integer for C `usize` params. `i64`
+        // natively, `i32` on wasm32 — must match each runtime def's
+        // `extern "C" fn(.. usize ..)` exactly or wasm strict typed
+        // calls trap `unreachable`.
+        let usize_ty = self.usize_ty;
 
         // __cobrust_str_drop(*mut Str) -> void
         let str_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
@@ -1219,7 +1242,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_list_drop_elems", list_drop_elems);
 
         // __cobrust_panic(*const u8, usize) -> void (noreturn at runtime)
-        let panic_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        // F71: 2nd arg is `usize` (panic.rs:47) — pointer-width, not i64.
+        let panic_ty = void_ty.fn_type(&[ptr_ty.into(), usize_ty.into()], false);
         let panic_fn =
             self.module
                 .add_function("__cobrust_panic", panic_ty, Some(Linkage::External));
@@ -1311,7 +1335,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
         // ADR-0060b dynamic-index Array runtime helpers.
         // __cobrust_array_get_i64(*const i64, usize, usize) -> i64
-        let arr_get_i64_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        // F71: len + idx are `usize` (array.rs:42) — pointer-width.
+        let arr_get_i64_ty =
+            i64_ty.fn_type(&[ptr_ty.into(), usize_ty.into(), usize_ty.into()], false);
         let arr_get_i64 = self.module.add_function(
             "__cobrust_array_get_i64",
             arr_get_i64_ty,
@@ -1322,7 +1348,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
         // __cobrust_array_get_i32(*const i32, usize, usize) -> i32
         let i32_ty = self.ctx.i32_type();
-        let arr_get_i32_ty = i32_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_i32_ty =
+            i32_ty.fn_type(&[ptr_ty.into(), usize_ty.into(), usize_ty.into()], false);
         let arr_get_i32 = self.module.add_function(
             "__cobrust_array_get_i32",
             arr_get_i32_ty,
@@ -1333,7 +1360,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
         // __cobrust_array_get_i8(*const i8, usize, usize) -> i8
         let i8_ty = self.ctx.i8_type();
-        let arr_get_i8_ty = i8_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_i8_ty =
+            i8_ty.fn_type(&[ptr_ty.into(), usize_ty.into(), usize_ty.into()], false);
         let arr_get_i8 = self.module.add_function(
             "__cobrust_array_get_i8",
             arr_get_i8_ty,
@@ -1343,7 +1371,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_array_get_i8", arr_get_i8);
 
         // __cobrust_array_get_bool(*const u8, usize, usize) -> i64
-        let arr_get_bool_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let arr_get_bool_ty =
+            i64_ty.fn_type(&[ptr_ty.into(), usize_ty.into(), usize_ty.into()], false);
         let arr_get_bool = self.module.add_function(
             "__cobrust_array_get_bool",
             arr_get_bool_ty,
@@ -1413,7 +1442,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_println_str_buf", 1);
 
         // __cobrust_println(*const u8, usize) -> void  (ADR-0025 §Runtime ABI)
-        let println_lit_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        // F71: 2nd arg is `usize` (io.rs:72) — pointer-width, not i64.
+        // This is the exact extern hello_wasm.wasm trapped on under
+        // wasmtime's strict typed-call check before this fix.
+        let println_lit_ty = void_ty.fn_type(&[ptr_ty.into(), usize_ty.into()], false);
         let println_lit =
             self.module
                 .add_function("__cobrust_println", println_lit_ty, Some(Linkage::External));
@@ -1435,7 +1467,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_print_no_nl", 1);
 
         // __cobrust_print_no_nl_lit(*const u8, usize) -> void  (ADR-0047 Option H)
-        let print_no_nl_lit_ty = void_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        // F71: 2nd arg is `usize` (io.rs:723) — pointer-width, not i64.
+        let print_no_nl_lit_ty = void_ty.fn_type(&[ptr_ty.into(), usize_ty.into()], false);
         let print_no_nl_lit = self.module.add_function(
             "__cobrust_print_no_nl_lit",
             print_no_nl_lit_ty,
@@ -1870,8 +1903,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // str-methods / LLM router) continue as wave-1 stubs.
         // -----------------------------------------------------------------
 
-        // __cobrust_input(prompt_ptr: *const u8, prompt_len: i64) -> *mut Str
-        let input_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        // __cobrust_input(prompt_ptr: *const u8, prompt_len: usize) -> *mut Str
+        // F71: 2nd arg is `usize` (io.rs `__cobrust_input`) — pointer-width.
+        let input_ty = ptr_ty.fn_type(&[ptr_ty.into(), usize_ty.into()], false);
         let input_fn =
             self.module
                 .add_function("__cobrust_input", input_ty, Some(Linkage::External));
@@ -3920,8 +3954,24 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                         let is_last = idx + 1 == args.len();
                         if expand_str_to_ptr_len || (expand_trailing_str_len && is_last) {
                             let (ptr, len) = self.materialize_str_data(payload)?;
+                            // F71: `materialize_str_data` always returns an
+                            // i64 length, but the expanded `usize` C param
+                            // (`__cobrust_println`, `__cobrust_panic`, …) is
+                            // pointer-width — i32 on wasm32. Coerce the len
+                            // to the callee's declared param type so the
+                            // value matches the (now target-width) signature.
+                            // The len lands at param slot `call_args.len()`
+                            // (the ptr was just pushed at the slot before it).
                             call_args.push(ptr.into());
-                            call_args.push(len.into());
+                            let len_slot = call_args.len();
+                            let len_val = if let Some(BasicMetadataTypeEnum::IntType(pt)) =
+                                callee.get_type().get_param_types().get(len_slot)
+                            {
+                                self.coerce_value_to(len, (*pt).into())?
+                            } else {
+                                len
+                            };
+                            call_args.push(len_val.into());
                         } else {
                             let buf = self.materialize_str_buffer(payload)?;
                             call_args.push(buf.into());
@@ -4322,28 +4372,30 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                         _ => "__cobrust_array_get_i64", // fallback to i64
                     };
                     if let Some(&helper_fn) = self.emitter.runtime_helper_decls.get(helper_name) {
-                        let i64_ty = self.emitter.ctx.i64_type();
+                        // F71: `len` + `idx` are C `usize` (array.rs) —
+                        // pointer-width, i32 on wasm32. Materialise the
+                        // static N and coerce the runtime index to
+                        // `usize_ty` so both match the declared signature
+                        // (wasm strict typed calls reject an i64 here).
+                        let usize_ty = self.emitter.usize_ty;
                         // Array base alloca (PointerValue) as opaque ptr arg.
                         let arr_ptr_val: BasicMetadataValueEnum<'ctx> = alloca.into();
-                        // Static N as i64.
+                        // Static N as `usize`.
                         let len_val: BasicMetadataValueEnum<'ctx> =
-                            i64_ty.const_int(*n as u64, false).into();
-                        // Runtime index operand.
+                            usize_ty.const_int(*n as u64, false).into();
+                        // Runtime index operand, coerced to `usize`
+                        // (zext / trunc as the source width demands).
                         let idx_val = self.lower_operand(idx_op)?;
-                        // Widen to i64 if needed (Bool/i8/i32 index).
-                        let idx_i64: BasicMetadataValueEnum<'ctx> = match idx_val {
-                            BasicValueEnum::IntValue(iv) if iv.get_type() != i64_ty => self
-                                .emitter
-                                .builder
-                                .build_int_z_extend(iv, i64_ty, "idx_zext")
-                                .map_err(map_builder_err)?
-                                .into(),
-                            _ => idx_val.into(),
-                        };
+                        let idx_usize: BasicMetadataValueEnum<'ctx> =
+                            self.coerce_value_to(idx_val, usize_ty.into())?.into();
                         let call = self
                             .emitter
                             .builder
-                            .build_call(helper_fn, &[arr_ptr_val, len_val, idx_i64], "arr_dyn_get")
+                            .build_call(
+                                helper_fn,
+                                &[arr_ptr_val, len_val, idx_usize],
+                                "arr_dyn_get",
+                            )
                             .map_err(map_builder_err)?;
                         if let Some(v) = call.try_as_basic_value().basic() {
                             return Ok(v);
