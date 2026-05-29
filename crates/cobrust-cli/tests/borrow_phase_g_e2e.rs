@@ -144,6 +144,73 @@ fn run_exe(exe: &Path, args: &[&str], stdin_bytes: &[u8]) -> (i32, String, Strin
     )
 }
 
+/// Build a `.cb` that is expected to FAIL the MIR borrow-check. Returns
+/// `(exit_code, stderr_text)`. Runs with `NO_COLOR=1` so the rendered
+/// diagnostic is plain text for deterministic substring matching.
+fn run_build_expect_fail(name: &str, src: &str) -> (i32, String) {
+    let path = write_cb(name, src);
+    let bin = cobrust_binary();
+    let exe_dir = tempfile::tempdir().expect("create temp exe dir");
+    let exe = exe_dir.path().join(name);
+    let out = Command::new(&bin)
+        .arg("build")
+        .arg(&*path)
+        .arg("-o")
+        .arg(&exe)
+        .arg("--quiet")
+        .env("NO_COLOR", "1")
+        .current_dir(workspace_root())
+        .output()
+        .expect("invoke cobrust build");
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (code, stderr)
+}
+
+// =====================================================================
+// F69 / CLAUDE.md §2.5 Direction-B — MIR borrow-check errors render the
+// fix-suggestion via the error_ux layer, NOT the raw `{e:?}` Debug repr.
+//
+// Unlike the `error_ux_snapshot.rs` snap_03 case (which is `#[ignore]`d
+// because `cobrust check` does not run MIR-lowering and so misses the
+// cross-statement use-after-move), this exercises the `cobrust build`
+// path — `build::build()` calls `mir_lower`, whose `borrow_check` pass
+// DOES surface the violation. The pre-F69 call site at build.rs:120
+// stringified it with `format!("MIR error: {e:?}")`, dumping
+// `UseAfterMove { local: 2, span: Span {..}, suggestion: .. }` to the
+// terminal; F69 routes it through `UserError::from(mir_err)`.
+// =====================================================================
+
+#[test]
+fn e0069_use_after_move_renders_fix_suggestion_not_raw_debug() {
+    // `consume(s)` moves the owned `str` into a by-value parameter; the
+    // subsequent `str_len(s)` is a use-after-move. This reliably fires
+    // `MirError::UseAfterMove` through the full build pipeline.
+    let src = "fn consume(s: str) -> i64:\n    return str_len(s)\nfn main() -> i64:\n    let s = input(\"\")\n    let a = consume(s)\n    let b = str_len(s)\n    print(b)\n    return 0\n";
+    let (code, stderr) = run_build_expect_fail("e0069_use_after_move", src);
+
+    assert_eq!(
+        code, 2,
+        "use-after-move must exit with TYPE_ERROR (2) per ADR-0024; got {code}\nstderr:\n{stderr}"
+    );
+    // §2.5 Direction-B: the FIX must be printed.
+    assert!(
+        stderr.contains("&s") && stderr.contains("borrow without consuming"),
+        "stderr must contain the fix-suggestion `&s` to borrow without consuming;\nstderr:\n{stderr}"
+    );
+    // Human-readable message, not internal field names.
+    assert!(
+        stderr.contains("use of moved value"),
+        "stderr must contain the user-facing message;\nstderr:\n{stderr}"
+    );
+    // error_ux contract: the raw MirError Debug repr must NEVER reach the terminal.
+    assert!(
+        !stderr.contains("UseAfterMove {"),
+        "raw MirError Debug repr `UseAfterMove {{` leaked to stderr (§2.5 / error_ux \
+         contract violation);\nstderr:\n{stderr}"
+    );
+}
+
 fn assert_build_run(name: &str, src: &str, args: &[&str], stdin: &[u8], expected_stdout: &str) {
     let path = write_cb(name, src);
     let (build_code, exe, build_stderr) = run_build_exe(&path);

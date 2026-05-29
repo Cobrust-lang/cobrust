@@ -117,7 +117,24 @@ pub fn build(
         .map_err(|e| BuildError::Type(format!("HIR lower error: {e:?}")))?;
     let typed = type_check(&hir).map_err(|e| BuildError::Type(format!("type error: {e:?}")))?;
 
-    let mut mir = mir_lower(&typed).map_err(|e| BuildError::Type(format!("MIR error: {e:?}")))?;
+    // F69 / CLAUDE.md §2.5 Direction-B — route the MIR-lowering error
+    // (ownership / borrow / drop violations from `borrow_check`) through
+    // the `error_ux` renderer instead of dumping the raw `{e:?}` Debug
+    // repr (`UseAfterMove { local: 2, span: Span {..}, suggestion: ..}`).
+    // `From<MirError> for UserError` (error_ux.rs) maps each variant's
+    // construction-time `suggestion` to the rendered `hint:` line and
+    // preserves the source span via `span_to_line_col`, so a use-after-move
+    // prints the polished fix ("change to `&s` to borrow without
+    // consuming") rather than internal field names. This honours
+    // error_ux's own contract ("the raw internal representation … never
+    // reaches the terminal") that the adjacent type / HIR / parse errors
+    // already satisfy. The rendered text is carried in `BuildError::Type`
+    // so the existing `{e}` print sites in `run` / `run.rs` / `pkg_build`
+    // surface it verbatim (compiler-internal MirError variants —
+    // UnresolvedDefId / Internal — route through `UserError::internal`
+    // inside the From impl, keeping the bug-report path intact).
+    let mut mir = mir_lower(&typed)
+        .map_err(|e| BuildError::Type(crate::error_ux::UserError::from(e).to_string()))?;
 
     intrinsics::rewrite_print(&mut mir).map_err(|e| BuildError::Type(format!("{e}")))?;
 
@@ -1150,7 +1167,10 @@ pub fn lower_to_mir(file: &Path) -> Result<MirModule, BuildError> {
     let hir = hir_lower(&module, &mut sess)
         .map_err(|e| BuildError::Type(format!("HIR lower error: {e:?}")))?;
     let typed = type_check(&hir).map_err(|e| BuildError::Type(format!("type error: {e:?}")))?;
-    let mut mir = mir_lower(&typed).map_err(|e| BuildError::Type(format!("MIR: {e:?}")))?;
+    // F69 / §2.5 Direction-B — same error_ux routing as `build()` above so
+    // this programmatic-use helper never leaks the raw MirError Debug repr.
+    let mut mir = mir_lower(&typed)
+        .map_err(|e| BuildError::Type(crate::error_ux::UserError::from(e).to_string()))?;
     intrinsics::rewrite_print(&mut mir).map_err(|e| BuildError::Type(format!("{e}")))?;
     Ok(mir)
 }
@@ -1209,6 +1229,59 @@ mod tests {
     fn emit_kind_default_executable() {
         // Smoke: kind enum is correctly compared.
         assert_ne!(EmitKind::Object, EmitKind::Executable);
+    }
+
+    #[test]
+    fn mir_error_routes_through_error_ux_not_raw_debug() {
+        // F69 / CLAUDE.md §2.5 Direction-B regression guard.
+        //
+        // `build()` lowers MIR via `mir_lower`, whose `borrow_check` pass
+        // returns a structured `MirError` on an ownership violation. The
+        // pre-F69 call site stringified it with `{e:?}`, leaking the raw
+        // Debug repr (`UseAfterMove { local: 2, span: Span {..},
+        // suggestion: Some(..) }`) to stderr — violating error_ux's "raw
+        // internal representation never reaches the terminal" contract.
+        //
+        // This test reproduces the exact transformation the fixed call
+        // site applies — `UserError::from(mir_err).to_string()` carried in
+        // `BuildError::Type` — and asserts the rendered text is the
+        // polished fix-suggestion, NOT the Debug field dump. It is immune
+        // to the source-surface borrow-check gap that keeps the
+        // `error_ux_snapshot.rs` snap_03 E2E case `#[ignore]`d (cross-
+        // statement use-after-move is not yet flagged via `cobrust check`).
+        use cobrust_frontend::span::{FileId, Span};
+        use cobrust_mir::error::MirError;
+
+        let mir_err = MirError::UseAfterMove {
+            local: 2,
+            span: Span::new(FileId::SYNTHETIC, 10, 12),
+            suggestion: Some(
+                "change to `&s` to borrow without consuming (ADR-0052a explicit shared borrow)",
+            ),
+        };
+
+        // Exact path the fixed `build.rs` MIR call site takes.
+        let build_err = BuildError::Type(crate::error_ux::UserError::from(mir_err).to_string());
+        let rendered = format!("{build_err}");
+
+        // The polished fix-suggestion (§2.5 Direction-B: print the FIX).
+        assert!(
+            rendered.contains("&s") && rendered.contains("borrow without consuming"),
+            "MIR error must render the fix-suggestion via error_ux; got:\n{rendered}"
+        );
+        // The human-readable message, not internal field names.
+        assert!(
+            rendered.contains("use of moved value"),
+            "MIR error must render the user-facing message; got:\n{rendered}"
+        );
+        // The raw Debug repr MUST NOT reach the terminal (error_ux contract).
+        assert!(
+            !rendered.contains("UseAfterMove {"),
+            "raw MirError Debug repr leaked to user output (§2.5 / error_ux \
+             contract violation); got:\n{rendered}"
+        );
+        // It must classify as a Type-tier error (exit code 2 per ADR-0024).
+        assert_eq!(build_err.exit_code(), exit_codes::TYPE_ERROR);
     }
 
     #[test]
