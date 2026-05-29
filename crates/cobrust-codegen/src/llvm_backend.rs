@@ -2756,6 +2756,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
         //   __cobrust_pit_server_handle_drop(handle) -> void
         let pit_app_new_ty = ptr_ty.fn_type(&[], false);
         let pit_text_response_ty = ptr_ty.fn_type(&[i64_ty.into(), ptr_ty.into()], false);
+        // ADR-0081 §5.3 Phase-1a — `__cobrust_pit_json_response(status: i64,
+        // body: *mut serde_json::Value) -> *mut Response`. SIBLING of
+        // `__cobrust_pit_text_response` with the IDENTICAL `[i64, ptr] -> ptr`
+        // shape: the 1st arg is the status, the 2nd is the boxed validated
+        // body the `route_validated` trampoline owns (re-serialised, BORROWED
+        // — the trampoline still frees it once, `cabi.rs:479`).
+        let pit_json_response_ty = pit_text_response_ty;
         let pit_app_route_ty = ptr_ty.fn_type(
             &[ptr_ty.into(), ptr_ty.into(), ptr_ty.into(), ptr_ty.into()],
             false,
@@ -2818,6 +2825,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
         for (sym, ty, params) in [
             ("__cobrust_pit_app_new", pit_app_new_ty, 0usize),
             ("__cobrust_pit_text_response", pit_text_response_ty, 2),
+            ("__cobrust_pit_json_response", pit_json_response_ty, 2),
             ("__cobrust_pit_app_route", pit_app_route_ty, 4),
             (
                 "__cobrust_pit_app_route_validated",

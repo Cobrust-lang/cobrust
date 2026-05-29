@@ -2543,6 +2543,34 @@ impl Ctx {
             match p {
                 crate::ecosystem::EcoParam::Value(expected) => {
                     let at = self.synth_expr(a)?;
+                    // ADR-0081 §5.3 — the validated-body sentinel param slot
+                    // (`pit.json_response`'s 2nd param) accepts ANY
+                    // field-tracked USER class rather than unifying with a
+                    // concrete type (the manifest cannot name the user's body
+                    // class, Q3). This MIRRORS the callback-shape gate's
+                    // `is_tracked_body` rule (`check_callback_arg`, ~:2641):
+                    // a tracked user class is a `Ty::Adt` whose id is OUTSIDE
+                    // the ecosystem-handle range AND whose fields
+                    // `check_class` recorded; `json_response(201, body)` where
+                    // `body: CreateScore` is the route_validated handler's
+                    // tracked-body param thus type-checks. A non-class body
+                    // arg (e.g. `i64`) or an ecosystem handle falls through to
+                    // the normal `unify_call_arg` against the sentinel id,
+                    // which fails with a TypeMismatch (the sentinel id never
+                    // unifies with a non-tracked type).
+                    if matches!(expected, Ty::Adt(id, _) if *id == crate::ecosystem::PIT_VALIDATED_BODY_SENTINEL_ADT)
+                    {
+                        let resolved = self.subst.apply(&at);
+                        let is_tracked_body = matches!(
+                            &resolved,
+                            Ty::Adt(id, _)
+                                if !crate::ecosystem::is_ecosystem_handle(*id)
+                                    && self.adt_fields.contains_key(id)
+                        );
+                        if is_tracked_body {
+                            continue;
+                        }
+                    }
                     self.unify_call_arg(expected, &at, a.span)?;
                 }
                 crate::ecosystem::EcoParam::Callback(expected_fn) => {

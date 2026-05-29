@@ -275,9 +275,65 @@ Mechanism (the layered pipeline):
 
 Scope (Phase-1b-ii): the validation + 422 engine ONLY. The OpenAPI emit is
 Phase-1b-iii (below — it walks the SAME schema descriptor + side-table this
-phase carries). Body re-serialization (`json_response(201, body)`) is the
-deferred `.cb`↔serde bridge (ADR-0080 §9); the success handler returns a
-fixed response. `len`/`pattern` refinements land in Phase-2 (below).
+phase carries). Body re-serialization (`json_response(201, body)`) lands in
+ADR-0081 Phase-1a (below). `len`/`pattern` refinements land in Phase-2 (below).
+
+## ADR-0081 Phase-1a — `json_response` (re-serialise the validated body)
+
+`pit.json_response(status, body) -> Response` is the SIBLING of
+`text_response` — the only delta is the 2nd param. Instead of a `Str`
+body it takes the VALIDATED-BODY class the `route_validated` handler holds,
+re-serialising it to a JSON response. This is the body PASS-THROUGH the
+Phase-1b-ii harness explicitly deferred (the §6 Phase-1 handler now
+round-trips). NO field reads, NO dispatch gate, NO object-model change —
+`json_response` takes the WHOLE body, not a field (the field-READ work is
+ADR-0081 §5.2, a separate increment).
+
+Surface (`.cb`):
+
+```python
+fn create_score(req: pit.Request, body: CreateScore) -> pit.Response:
+    return pit.json_response(201, body)   # re-serialises the validated body
+```
+
+Mechanism (the layered pipeline — every layer a sibling of `text_response`):
+
+- **Manifest (`ecosystem.rs`).** `("pit", "json_response")` →
+  `__cobrust_pit_json_response`, params `[Ty::Int, Ty::Adt(PIT_VALIDATED_BODY_SENTINEL_ADT)]`,
+  ret `pit.Response`, `PyCompatTier::Semantic`. The 2nd param is the SAME
+  sentinel `route_validated`'s callback body slot uses — the manifest cannot
+  name the user's body class.
+- **Checker (`check.rs`, `check_eco_sig` `EcoParam::Value` arm).** When the
+  expected param is the `PIT_VALIDATED_BODY_SENTINEL_ADT`, the arm accepts any
+  field-tracked user `Ty::Adt` (id outside the handle range AND in
+  `adt_fields`) — the SAME `is_tracked_body` rule `check_callback_arg` uses.
+  So `json_response(201, body)` type-checks where `body: CreateScore` is the
+  handler's tracked-body param; a non-class body arg falls through to the
+  normal `unify_call_arg` (which fails against the sentinel id).
+- **MIR (`lower.rs`).** `json_response(...)` is a NORMAL free-fn call (Case 1
+  in `try_lower_ecosystem_call`) — NO new mechanism. It passes the status
+  `i64` + the body local's `*mut u8` (the body, a non-handle user `Ty::Adt`,
+  is NOT borrow-upgraded, but it carries no drop schedule, so Move vs Copy is
+  immaterial — the trampoline owns the box).
+- **Codegen (`llvm_backend.rs`).** `__cobrust_pit_json_response` declared with
+  the IDENTICAL `[i64, ptr] -> ptr` shape as `text_response`.
+- **CLI prefix (`intrinsics.rs`).** `__cobrust_pit_json_response` matches the
+  existing `__cobrust_pit_*` arm for free.
+- **Trampoline + cabi shim (`cabi.rs`).** `__cobrust_pit_json_response(status,
+  body)` reads the body `*mut u8` as `&serde_json::Value` (the box the
+  `route_validated` trampoline owns), builds `Response::json(&*body)`
+  (content-type `application/json` + `serde_json::to_vec`) `.with_status(status)`.
+
+Ownership (no double-free, no leak, no use-after-free): `json_response`
+**BORROWS** the body box — `Response::json` copies the bytes into an owned
+`Vec<u8>` (`response.rs:50`), so the box is never moved-from or freed by the
+shim. The `route_validated` trampoline retains sole ownership and frees the
+box exactly once as a `serde_json::Value` AFTER the handler returns
+(`cabi.rs` ~479). The returned `Response` box is reclaimed once by the
+trampoline (`cabi.rs` ~494), the same discipline `text_response` follows.
+`catch_unwind` across the C ABI is preserved (the handler invocation is
+unchanged). Footgun #4 dropped: re-serialising the SAME validated Value means
+the response body cannot drift from the validated body.
 
 ## ADR-0080 Phase-1b-iii — `serve_openapi` (OpenAPI emission, cannot drift)
 

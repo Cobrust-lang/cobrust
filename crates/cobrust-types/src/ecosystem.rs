@@ -522,6 +522,30 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             pit_response_ty(),
             PyCompatTier::Semantic,
         )),
+        // ADR-0081 §5.3 Phase-1a — `pit.json_response(status, body) ->
+        // Response`. SIBLING of `text_response`: the only delta is the 2nd
+        // param. Instead of a `Str` body it takes the VALIDATED-BODY class
+        // the `route_validated` handler holds — the boxed `serde_json::Value`
+        // the validator already produced (`cabi.rs:464`). The shim
+        // re-serialises that SAME Value via `Response::json(&*body)` +
+        // `.with_status(status)` (`response.rs:49`/`74`), so the response
+        // body cannot drift from the validated body (footgun #4 dropped).
+        //
+        // The 2nd param is the SENTINEL [`PIT_VALIDATED_BODY_SENTINEL_ADT`]
+        // — the manifest cannot name the user's body class, exactly as
+        // `route_validated`'s callback body slot. `check_eco_sig`'s
+        // `EcoParam::Value` arm special-cases this sentinel to accept any
+        // field-tracked user `Ty::Adt` (the SAME `is_tracked_body` rule the
+        // callback-shape gate uses), so `json_response(201, body)`
+        // type-checks where `body: CreateScore` is the tracked-body class.
+        // The shim BORROWS the body box; the `route_validated` trampoline
+        // still frees it exactly once (`cabi.rs:479`) — no double-free.
+        ("pit", "json_response") => Some(EcoSig::from_values(
+            "__cobrust_pit_json_response",
+            vec![Ty::Int, Ty::Adt(PIT_VALIDATED_BODY_SENTINEL_ADT, vec![])],
+            pit_response_ty(),
+            PyCompatTier::Semantic,
+        )),
         // ADR-0073 second proof — `hood` (click, CLI command parsing,
         // ecosystem rebrand of Python's `click` library) `.cb` wiring.
         // First proof exposes the trio sufficient to register a single

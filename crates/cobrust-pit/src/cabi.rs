@@ -207,6 +207,57 @@ pub unsafe extern "C" fn __cobrust_pit_text_response(status: i64, body: *mut u8)
     Box::into_raw(Box::new(resp)).cast::<u8>()
 }
 
+/// `pit.json_response(status: i64, body: <validated-body>) -> Response`
+/// (ADR-0081 §5.3 Phase-1a). SIBLING of [`__cobrust_pit_text_response`].
+///
+/// The only delta from `text_response`: the 2nd param is the boxed
+/// `serde_json::Value` the `route_validated` trampoline already produced
+/// for the handler (`__cobrust_pit_app_route_validated`, the `body_raw`
+/// box at `cabi.rs:464`). This shim re-serialises that SAME Value via
+/// `Response::json(&*body)` (sets `content-type: application/json` +
+/// `serde_json::to_vec`, `response.rs:49`) and overrides the code with
+/// `.with_status(status)` (`response.rs:74`). Re-serialising the validated
+/// Value (rather than a hand-rebuilt shape) is footgun #4 dropped (ADR-0081
+/// §3): the response body cannot drift from the validated body.
+///
+/// # Ownership (no double-free, no leak, no use-after-free)
+///
+/// This shim **BORROWS** the body box — it reads `&serde_json::Value` and
+/// `Response::json` copies the bytes into an OWNED `Vec<u8>`
+/// (`response.rs:50`), so the box is never moved-from or freed here. The
+/// `route_validated` trampoline retains sole ownership and frees the box
+/// exactly once as a `serde_json::Value` AFTER the handler returns
+/// (`cabi.rs:479`). The returned pointer is a freshly-`Box::into_raw`'d
+/// `Response` the trampoline reclaims exactly once (`cabi.rs:494`) — the
+/// SAME discipline `text_response`'s return follows.
+///
+/// # Safety
+///
+/// `body` must be null or a valid pointer to a Rust-owned boxed
+/// `serde_json::Value` (the trampoline guarantees this for the
+/// type-checked validated-handler path). The returned pointer is an owned
+/// `Response` handle, freed once by the trampoline / `__cobrust_pit_response_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_json_response(status: i64, body: *mut u8) -> *mut u8 {
+    if body.is_null() {
+        // Fail-clean sentinel (unreachable on the validated path — the
+        // trampoline only hands the handler a non-null boxed Value).
+        return std::ptr::null_mut();
+    }
+    // SAFETY: caller-attestation per `# Safety` — `body` is the trampoline's
+    // boxed `serde_json::Value`. We only BORROW it (shared `&`); the
+    // trampoline keeps ownership and frees it once (`cabi.rs:479`).
+    let value: &serde_json::Value = unsafe { &*body.cast::<serde_json::Value>() };
+    // Clamp status to the valid HTTP range (mirrors `text_response`'s
+    // no-panic-at-the-shim-boundary discipline, ADR-0073 §3 Q5).
+    let status_u16 = u16::try_from(status).unwrap_or(500);
+    // `Response::json` borrows the Value + copies into an owned Vec<u8>
+    // (`response.rs:50`); `.with_status` overrides the 200 default
+    // (`response.rs:74`). No ownership of the body box is taken.
+    let resp = Response::json(value).with_status(status_u16);
+    Box::into_raw(Box::new(resp)).cast::<u8>()
+}
+
 // =====================================================================
 // pit C-ABI surface — App handle methods.
 // =====================================================================
@@ -883,6 +934,76 @@ mod tests {
             drop_str_for_test(body);
         }
         assert_eq!(drop_count() - before, 1, "Response must drop exactly once");
+    }
+
+    /// ADR-0081 §5.3 — `pit.json_response(201, body)` re-serialises the
+    /// boxed validated `serde_json::Value` into a 201 JSON Response
+    /// (content-type application/json) WITHOUT taking ownership of the body
+    /// box. The CALLER (here, mirroring the trampoline) still owns + frees
+    /// the body box exactly once. This is the no-double-free proof in
+    /// isolation: json_response BORROWS, the owner frees once.
+    #[test]
+    fn json_response_reserialises_validated_body_and_borrows_box() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        // The body box exactly as the `route_validated` trampoline produces
+        // it (`cabi.rs:464`): a `Box::into_raw`'d `serde_json::Value` the
+        // CALLER owns. json_response must NOT free it.
+        let body_raw =
+            Box::into_raw(Box::new(serde_json::json!({"name": "a", "rank": 50}))).cast::<u8>();
+        unsafe {
+            let resp_raw = __cobrust_pit_json_response(201, body_raw);
+            assert!(!resp_raw.is_null());
+            // Peek the Response from the box without consuming.
+            {
+                let resp_ref = &*resp_raw.cast::<Response>();
+                assert_eq!(resp_ref.status_code(), 201, "with_status(201) override");
+                assert_eq!(
+                    resp_ref.headers().get("content-type").map(String::as_str),
+                    Some("application/json"),
+                    "Response::json sets content-type application/json"
+                );
+                // The body is the re-serialised SAME Value (footgun #4):
+                // round-trips back to the input fields.
+                let parsed: serde_json::Value =
+                    serde_json::from_slice(resp_ref.body()).expect("body is valid JSON");
+                assert_eq!(
+                    parsed.get("rank").and_then(serde_json::Value::as_i64),
+                    Some(50)
+                );
+                assert_eq!(
+                    parsed.get("name").and_then(serde_json::Value::as_str),
+                    Some("a")
+                );
+            }
+            __cobrust_pit_response_drop(resp_raw);
+            // The CALLER (trampoline) frees the body box exactly once —
+            // json_response only borrowed it (no double-free, no leak).
+            drop(Box::from_raw(body_raw.cast::<serde_json::Value>()));
+        }
+        // Only the Response box counts toward DROP_COUNT (the serde Value box
+        // freed via plain `Box::from_raw`/`drop`, not a `_drop` shim).
+        assert_eq!(
+            drop_count() - before,
+            1,
+            "json_response Response drops exactly once; the borrowed body box is freed by the caller"
+        );
+    }
+
+    /// ADR-0081 §5.3 — `json_response` is null-tolerant (defense in depth):
+    /// a null body returns null without a serde cast / panic. The
+    /// type-checked validated path never hits this (the trampoline only
+    /// passes a non-null boxed Value).
+    #[test]
+    fn json_response_null_body_returns_null() {
+        unsafe {
+            assert!(
+                __cobrust_pit_json_response(201, std::ptr::null_mut()).is_null(),
+                "null body must return null (fail-clean, no serde cast)"
+            );
+        }
     }
 
     /// ADR-0078 §6.1 — the `use_cors`/`use_trace`/`use_compression`

@@ -44,6 +44,12 @@ curl http://127.0.0.1:<port>/ping
 - **`pit.text_response(status, body) -> Response`** — build a canned text response
   with the given status code and body string. Status is clamped to the
   valid HTTP range; out-of-range values yield 500.
+- **`pit.json_response(status, body) -> Response`** (ADR-0081) — re-serialise
+  a **validated request body** to a JSON response with the given status. The
+  `body` is the typed body parameter your `route_validated` handler received;
+  the response carries it verbatim as `application/json`. Because it
+  re-serialises the SAME value validation produced, the response body cannot
+  drift from the validated body. See "Validated request bodies" below.
 - **`App.route(method, path, handler)`** — register a top-level `fn` as
   the handler for `method path`. The handler MUST be a top-level
   `fn handler(req: pit.Request) -> pit.Response: …`. Returns `None`;
@@ -116,7 +122,7 @@ class CreateScore:
 # means validation passed. `body.rank` is statically `i64`; a typo'd
 # `body.nonexistent` is a COMPILE-TIME error, not a runtime KeyError.
 fn create_score(req: pit.Request, body: CreateScore) -> pit.Response:
-    return pit.text_response(201, "created")
+    return pit.json_response(201, body)   # echo the validated body as JSON
 
 fn main() -> i64:
     let app = pit.App()
@@ -127,7 +133,9 @@ fn main() -> i64:
 
 What happens at the boundary:
 
-- `POST /scores {"name":"a","rank":50}` → **201**, the handler runs.
+- `POST /scores {"name":"a","rank":50}` → **201** with body
+  `{"name":"a","rank":50}` (the validated body, re-serialised by
+  `json_response`), the handler runs.
 - `{"name":"a","rank":200}` → **422** (rank out of range), the handler is
   **never entered**.
 - `{"rank":50}` (missing `name`) or `{"name":"a","rank":"x"}` (wrong type)
@@ -284,9 +292,9 @@ enforces. The array-length `maxItems` form for list fields is a later phase.
 - **Validated bodies** (`route_validated`, ADR-0080): the fixed int-range
   refinement on an `i64` field plus the string-length (`len(self)`) and
   pattern (`pattern(self, "…")`) refinements on a `str` field ship now.
-  Nested-class and list-field bodies, and echoing the validated body back in
-  the response (`json_response(body)`), are later phases. The success
-  handler currently returns a fixed response.
+  Echoing the validated body back in the response (`json_response(status,
+  body)`) now ships too (ADR-0081). Reading individual fields off the body
+  (`body.rank`), and nested-class / list-field bodies, are later phases.
 - **OpenAPI** (`serve_openapi`, ADR-0080): the doc covers the body schema of
   each validated route — type plus int-range `minimum`/`maximum`,
   str-length `minLength`/`maxLength`, and `pattern`. The list-field

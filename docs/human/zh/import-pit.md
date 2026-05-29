@@ -43,6 +43,11 @@ curl http://127.0.0.1:<port>/ping
 - **`pit.text_response(status, body) -> Response`** — 用给定的 status
   与 body 构造一个文本响应。status 会被钳制到合法 HTTP 范围内,
   越界值返回 500。
+- **`pit.json_response(status, body) -> Response`**(ADR-0081)—— 把一个
+  **已校验的请求体**用给定 status 重新序列化为 JSON 响应。这里的 `body`
+  就是你的 `route_validated` handler 收到的那个带类型的请求体参数;响应以
+  `application/json` 原样回显它。因为它重新序列化的是校验本身产出的同一个
+  值,所以响应体不可能与已校验的请求体发生漂移。详见下文「带校验的请求体」。
 - **`App.route(method, path, handler)`** — 将一个顶层 `fn` 注册为
   `method path` 的处理器。handler 必须是顶层
   `fn handler(req: pit.Request) -> pit.Response: …`。返回 `None`;
@@ -111,7 +116,7 @@ class CreateScore:
 # `body.rank` 静态为 `i64`;写错的 `body.nonexistent` 是编译期错误,
 # 而不是运行期 KeyError。
 fn create_score(req: pit.Request, body: CreateScore) -> pit.Response:
-    return pit.text_response(201, "created")
+    return pit.json_response(201, body)   # 把已校验的请求体作为 JSON 回显
 
 fn main() -> i64:
     let app = pit.App()
@@ -122,7 +127,9 @@ fn main() -> i64:
 
 边界处的行为:
 
-- `POST /scores {"name":"a","rank":50}` → **201**,handler 运行。
+- `POST /scores {"name":"a","rank":50}` → **201**,响应体为
+  `{"name":"a","rank":50}`(由 `json_response` 重新序列化的已校验请求体),
+  handler 运行。
 - `{"name":"a","rank":200}` → **422**(rank 超范围),handler **永不进入**。
 - `{"rank":50}`(缺 `name`)或 `{"name":"a","rank":"x"}`(类型错误)
   → **422** —— 请求体必须与声明的形状完全一致(每个声明字段都在、类型
@@ -265,9 +272,9 @@ fn main() -> i64:
   (自动 OpenAPI 现已落地 —— 见上面的 `serve_openapi`。)
 - **带校验的请求体**(`route_validated`,ADR-0080):`i64` 字段上的
   固定整数范围 refinement,以及 `str` 字段上的字符串长度(`len(self)`)与
-  模式(`pattern(self, "…")`)refinement 现已支持。嵌套类与列表字段请求体,
-  以及把校验后的请求体回显到响应里(`json_response(body)`)属于后续阶段。
-  成功的 handler 目前返回一个固定响应。
+  模式(`pattern(self, "…")`)refinement 现已支持。把校验后的请求体回显到
+  响应里(`json_response(status, body)`)现也已落地(ADR-0081)。从请求体上
+  读取单个字段(`body.rank`)、以及嵌套类 / 列表字段请求体属于后续阶段。
 - **OpenAPI**(`serve_openapi`,ADR-0080):文档覆盖每个带校验路由的请求体
   schema —— 类型,加上整数范围 `minimum`/`maximum`、字符串长度
   `minLength`/`maxLength`、以及 `pattern`。列表字段的 `maxItems` 形式跟随
