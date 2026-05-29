@@ -891,6 +891,28 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             Ty::Str,
             PyCompatTier::Semantic,
         )),
+        // ADR-0077 Q5 / Phase 2a — `coil.Buffer` method-form op `a.dot(b)`.
+        // The FIRST method-form ecosystem-handle operator (the §10 precedent
+        // for any handle wanting `.dot` / `.transpose` / `.matmul`). Reuses
+        // the ADR-0073 handle-method chain VERBATIM — no new mechanism: the
+        // receiver is the implicit LHS Buffer (borrowed via the
+        // `try_lower_ecosystem_call` Case-2 Move→Copy upgrade), the single
+        // explicit param is the RHS Buffer. Returns a plain `f64`: Phase 2a
+        // ships the 1-D dot product → scalar (`linalg::dot` at array.rs:494
+        // returns a 0-d Array for 1-D × 1-D; the shim extracts the scalar,
+        // mirroring `coil.mean`/`std`'s f64-scalar return ABI). The 2-D
+        // matmul → `Buffer` rank case is a Phase-3 follow-up (a manifest can
+        // carry only one return type; ADR-0077 §7 picks the scalar 1-D
+        // first-proof here, recorded as the per-rank divergence). Length
+        // mismatch is NOT in the type — the shim's runtime shape-check
+        // aborts via `coil_panic` (ADR-0077 Q4 panic-on-violation), exactly
+        // as `buffer_binop` does for `a + b`.
+        (COIL_BUFFER_ADT, "dot") => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_dot",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -959,6 +981,38 @@ pub fn lookup_buffer_binop(receiver: &Ty, op: BinOp) -> Option<EcoSig> {
 #[must_use]
 pub fn coil_buffer_getitem_symbol() -> &'static str {
     "__cobrust_coil_buffer_getitem"
+}
+
+/// The runtime symbol a `coil.Buffer` scalar index WRITE (`a[i] = v`)
+/// retargets onto (ADR-0077 Q2 write-path, Phase 2a). Kept as a
+/// dedicated const (the twin of [`coil_buffer_getitem_symbol`]) rather
+/// than a fake method row — the source surface is an index-assign
+/// statement `a[i] = v`, retargeted in the `lower_assign` Buffer branch
+/// beside the Dict `d[k] = v` precedent (lower.rs:594), NOT a method
+/// call. The shim is `(ptr, i64, f64) -> ()`: it borrows `a` mutably,
+/// bounds-checks `i`, and writes `v` in place (sound because the `.cb`
+/// scope owns the only handle to the box — ADR-0077 §4 / ADR-0072 Q4).
+/// An out-of-bounds index aborts via `coil_panic` (ADR-0077 Q4).
+#[must_use]
+pub fn coil_buffer_setitem_symbol() -> &'static str {
+    "__cobrust_coil_buffer_setitem"
+}
+
+/// The runtime symbol a `coil.Buffer` contiguous slice read
+/// (`a[lo:hi]`) retargets onto (ADR-0077 Q2 slice-path, Phase 2a).
+/// A dedicated const (the slice surface is `a[lo:hi]` index syntax with
+/// an `IndexKind::Slice`, retargeted in the `lower_expr` Index arm
+/// beside the scalar-getitem branch — NOT a method). The shim is
+/// `(ptr, i64, i64) -> ptr`: it borrows `a`, bounds-checks `[lo, hi)`
+/// against the first-axis length (an out-of-bounds `hi` aborts via
+/// `coil_panic` per ADR-0077 Q4 panic-on-violation — the Cobrust-honest
+/// trap rather than numpy's silent clamp), and returns a freshly-owned
+/// `Buffer` (a COPY of `a[lo..hi]`) the `.cb` scope drops once. Phase 2a
+/// is the simple contiguous `lo:hi` form only (step / negative bounds
+/// are ADR-0077 §12 deferrals).
+#[must_use]
+pub fn coil_buffer_slice_symbol() -> &'static str {
+    "__cobrust_coil_buffer_slice"
 }
 
 /// Resolve a parens-free attribute access `<receiver-handle>.<attr>`

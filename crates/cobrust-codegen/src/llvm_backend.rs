@@ -2963,6 +2963,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
         let coil_getitem_ty = f64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
         let coil_shape_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
         let coil_attr_i64_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        // -- ADR-0077 Phase 2a: a.dot(b) / a[i]=v / a[lo:hi]. Same MIR-
+        // retarget-to-Call discipline (codegen only declares the externs):
+        //   __cobrust_coil_buffer_dot(a, b: *mut Buffer) -> f64  (1-D dot)
+        //   __cobrust_coil_buffer_setitem(a: *mut Buffer, i: i64, v: f64) -> void
+        //   __cobrust_coil_buffer_slice(a: *mut Buffer, lo, hi: i64) -> *mut Buffer
+        let coil_dot_ty = f64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let coil_setitem_ty =
+            void_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), f64_ty.into()], false);
+        let coil_slice_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_coil_buffer_add", coil_binop_ty, 2usize),
             ("__cobrust_coil_buffer_sub", coil_binop_ty, 2),
@@ -2971,6 +2980,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_buffer_shape", coil_shape_ty, 1),
             ("__cobrust_coil_buffer_ndim", coil_attr_i64_ty, 1),
             ("__cobrust_coil_buffer_size", coil_attr_i64_ty, 1),
+            ("__cobrust_coil_buffer_dot", coil_dot_ty, 2),
+            ("__cobrust_coil_buffer_setitem", coil_setitem_ty, 3),
+            ("__cobrust_coil_buffer_slice", coil_slice_ty, 3),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

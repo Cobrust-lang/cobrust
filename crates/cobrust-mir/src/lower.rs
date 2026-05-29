@@ -593,6 +593,39 @@ impl<'a> BodyBuilder<'a> {
         // slot directly).
         if let ExprKind::Index { base, index } = &target.kind {
             let base_ty = synth_expr_ty(self, base);
+            // ADR-0077 Q2 write-path (Phase 2a) — `a[i] = v` on a
+            // `coil.Buffer`. Retarget to `__cobrust_coil_buffer_setitem(a,
+            // i, v) -> ()`, the sibling of the Dict `d[k] = v` branch
+            // below. The base handle is BORROWED (Move → Copy upgrade) so
+            // the source local survives + drops once at scope exit; the
+            // shim borrows `&mut Array` and writes `v` in place (sound —
+            // the `.cb` scope owns the only handle to the box, ADR-0077 §4
+            // / ADR-0072 Q4). NOT the legacy `Place::Index` projection
+            // (lower_lvalue), which is a Wave-1 no-op on an opaque handle
+            // pointer (the write would be silently dropped + the read-back
+            // segfaults — the HEAD RED state). Bounds are invisible to the
+            // type, so an out-of-bounds index traps at runtime in the shim
+            // (ADR-0077 Q4 panic-on-violation), NOT here.
+            if matches!(&base_ty, Ty::Adt(id, _) if *id == cobrust_types::COIL_BUFFER_ADT) {
+                let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                let idx_op = self.lower_index(index)?;
+                let val_op = self.lower_expr(value)?;
+                let scratch = self.declare_local("_coilset".to_string(), Ty::None, span, false);
+                let cur = self.current_block_id();
+                let next = self.start_new_block();
+                self.cur_block = Some(cur.0 as usize);
+                self.terminate(Terminator::Call {
+                    func: Operand::Constant(Constant::Str(
+                        cobrust_types::coil_buffer_setitem_symbol().to_string(),
+                    )),
+                    args: vec![base_op, idx_op, val_op],
+                    destination: Place::local(scratch),
+                    target: next,
+                    unwind: None,
+                });
+                self.cur_block = Some(next.0 as usize);
+                return Ok(());
+            }
             if let Ty::Dict(k_ty, v_ty) = &base_ty {
                 let key_is_str = matches!(**k_ty, Ty::Str);
                 let val_is_str = matches!(**v_ty, Ty::Str);
@@ -1570,33 +1603,80 @@ impl<'a> BodyBuilder<'a> {
                     self.cur_block = Some(next.0 as usize);
                     return Ok(Operand::Copy(Place::local(dest)));
                 }
-                // ADR-0077 Q2 — `coil.Buffer` scalar index read. `a[i]` on
-                // a Buffer retargets to `__cobrust_coil_buffer_getitem(a, i)
-                // -> f64`, beside the Dict/List arms above. The base handle
-                // is BORROWED (Move → Copy upgrade) so the source local
-                // survives + drops once at scope exit (ADR-0072 §5 risk 1);
-                // the result is a plain `f64` scalar (ADR-0077 §4). NOT the
-                // `Projection::Index` fall-through below, which is a Wave-1
-                // no-op stub that would segfault on a Buffer (ADR-0077 §4
-                // option (b) rejection). Typecheck guaranteed `f64`.
+                // ADR-0077 Q2 — `coil.Buffer` index read, beside the
+                // Dict/List arms above. The base handle is BORROWED (Move →
+                // Copy upgrade) so the source local survives + drops once at
+                // scope exit (ADR-0072 §5 risk 1). NOT the
+                // `Projection::Index` fall-through below (a Wave-1 no-op
+                // stub that would segfault / mis-type on a Buffer — ADR-0077
+                // §4 option (b) rejection). Two index shapes dispatch here:
+                //
+                //   - SCALAR `a[i]` (`IndexKind::Expr`, Phase 1) →
+                //     `__cobrust_coil_buffer_getitem(a, i) -> f64` (a plain
+                //     f64 scalar; numpy's 0-d scalar is not a Cobrust type,
+                //     ADR-0077 §4).
+                //   - SLICE `a[lo:hi]` (`IndexKind::Slice`, Phase 2a) →
+                //     `__cobrust_coil_buffer_slice(a, lo, hi) -> Buffer` (a
+                //     fresh OWNED Buffer the `.cb` scope drops once). The
+                //     `lo`/`hi` bounds are lowered DIRECTLY from the
+                //     `IndexKind::Slice` here — the generic `lower_index`
+                //     collapses a Slice to `Constant::Int(0)` (its scalar-
+                //     only contract), so the slice arm must read the bounds
+                //     itself. Phase 2a is the simple contiguous `lo:hi` form
+                //     (both bounds present, default step); step / open-ended
+                //     / negative bounds are ADR-0077 §12 deferrals — an
+                //     unsupported slice shape falls through (the typecheck
+                //     catch-all returned `coil.Buffer`, so this stays a
+                //     bounded gap rather than a miscompile).
                 if matches!(&base_ty, Ty::Adt(id, _) if *id == cobrust_types::COIL_BUFFER_ADT) {
-                    let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
-                    let idx_op = self.lower_index(index)?;
-                    let dest = self.declare_local("_coilidx".to_string(), Ty::Float, e.span, false);
-                    let cur = self.current_block_id();
-                    let next = self.start_new_block();
-                    self.cur_block = Some(cur.0 as usize);
-                    self.terminate(Terminator::Call {
-                        func: Operand::Constant(Constant::Str(
-                            cobrust_types::coil_buffer_getitem_symbol().to_string(),
-                        )),
-                        args: vec![base_op, idx_op],
-                        destination: Place::local(dest),
-                        target: next,
-                        unwind: None,
-                    });
-                    self.cur_block = Some(next.0 as usize);
-                    return Ok(Operand::Copy(Place::local(dest)));
+                    if let IndexKind::Slice { start, stop, step } = index.as_ref() {
+                        if step.is_none() {
+                            if let (Some(lo_e), Some(hi_e)) = (start.as_ref(), stop.as_ref()) {
+                                let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                                let lo_op = self.lower_expr(lo_e)?;
+                                let hi_op = self.lower_expr(hi_e)?;
+                                let dest = self.declare_local(
+                                    "_coilslice".to_string(),
+                                    cobrust_types::coil_buffer_ty(),
+                                    e.span,
+                                    true,
+                                );
+                                let cur = self.current_block_id();
+                                let next = self.start_new_block();
+                                self.cur_block = Some(cur.0 as usize);
+                                self.terminate(Terminator::Call {
+                                    func: Operand::Constant(Constant::Str(
+                                        cobrust_types::coil_buffer_slice_symbol().to_string(),
+                                    )),
+                                    args: vec![base_op, lo_op, hi_op],
+                                    destination: Place::local(dest),
+                                    target: next,
+                                    unwind: None,
+                                });
+                                self.cur_block = Some(next.0 as usize);
+                                return Ok(Operand::Move(Place::local(dest)));
+                            }
+                        }
+                    } else {
+                        let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                        let idx_op = self.lower_index(index)?;
+                        let dest =
+                            self.declare_local("_coilidx".to_string(), Ty::Float, e.span, false);
+                        let cur = self.current_block_id();
+                        let next = self.start_new_block();
+                        self.cur_block = Some(cur.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                cobrust_types::coil_buffer_getitem_symbol().to_string(),
+                            )),
+                            args: vec![base_op, idx_op],
+                            destination: Place::local(dest),
+                            target: next,
+                            unwind: None,
+                        });
+                        self.cur_block = Some(next.0 as usize);
+                        return Ok(Operand::Copy(Place::local(dest)));
+                    }
                 }
                 let base_op = self.lower_expr(base)?;
                 let base_local =
@@ -2577,7 +2657,21 @@ fn lower_eco_arg(
     match kind {
         cobrust_types::EcoParam::Value(_) => {
             let op = b.lower_expr(arg)?;
-            Ok(upgrade_move_to_copy_for_str(b, op))
+            // Str args borrow (M-F.3.6). ADR-0077 Phase 2a: an
+            // ecosystem-handle `Value` arg ALSO borrows — the coil shims
+            // that take a handle by `Value` (`coil.broadcast_to(a, n)`,
+            // `coil.mean(a)`, and the new `a.dot(b)` RHS) all take `&Array`
+            // and never rebox/free it, exactly like a handle receiver
+            // (ADR-0072 §5 risk 1). Upgrading Move→Copy keeps the source
+            // local live so its single scope-exit drop still fires — and,
+            // critically, lets the reused-handle form `a.dot(a)` pass the
+            // SAME live `a` as both the (already-Copy) receiver and the
+            // arg without a use-after-move / skipped-drop leak (the
+            // Phase-1 `&a * &a` reused-handle contract, now in method-arg
+            // form). No consuming shim takes a handle by `Value` (the App
+            // is consumed as a RECEIVER, not an arg), so this is sound
+            // across the whole manifest.
+            Ok(upgrade_move_to_copy_for_eco_value(b, op))
         }
         cobrust_types::EcoParam::Callback(_) => {
             // The typechecker pre-checked that `arg` is a bare
@@ -2603,6 +2697,30 @@ fn upgrade_move_to_copy_for_str(b: &BodyBuilder<'_>, op: Operand) -> Operand {
             // Look up the declared type of the local.
             if let Some(decl) = b.locals.get(p.local.0 as usize) {
                 if matches!(decl.ty, Ty::Str) {
+                    return Operand::Copy(p.clone());
+                }
+            }
+            op
+        }
+        other => other,
+    }
+}
+
+/// ADR-0077 Phase 2a — upgrade an ecosystem-call `Value` arg operand
+/// `Move → Copy` when it is a `Str` (M-F.3.6 borrow-not-move) OR an
+/// ecosystem-handle (the coil borrow-shims take `&Array`; see
+/// `lower_eco_arg`). Subsumes [`upgrade_move_to_copy_for_str`] for the
+/// `Value`-arg path: a handle arg must stay live so its scope-exit drop
+/// fires and the reused-handle form `a.dot(a)` does not move-out the
+/// local it also borrows as the receiver.
+fn upgrade_move_to_copy_for_eco_value(b: &BodyBuilder<'_>, op: Operand) -> Operand {
+    match op {
+        Operand::Move(ref p) => {
+            if let Some(decl) = b.locals.get(p.local.0 as usize) {
+                let borrow = matches!(decl.ty, Ty::Str)
+                    || matches!(&decl.ty, Ty::Adt(id, _)
+                        if cobrust_types::is_ecosystem_handle(*id));
+                if borrow {
                     return Operand::Copy(p.clone());
                 }
             }
@@ -2736,12 +2854,22 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
             let elem_ty = items.first().map_or(Ty::None, |it| synth_expr_ty(b, it));
             Ty::List(Box::new(elem_ty))
         }
-        ExprKind::Index { base, .. } => {
+        ExprKind::Index { base, index } => {
             // For `xs[i]`, the result is the element type of xs.
             match synth_expr_ty(b, base) {
                 Ty::List(elem) => *elem,
                 Ty::Dict(_, v) => *v,
                 Ty::Str => Ty::Str,
+                // ADR-0077 Q2 — `coil.Buffer` index: a SCALAR `a[i]`
+                // (`IndexKind::Expr`) yields an `f64` (NOT a Buffer — the
+                // drop schedule must not treat a scalar read as a
+                // drop-eligible handle); a SLICE `a[lo:hi]`
+                // (`IndexKind::Slice`) yields a fresh OWNED `coil.Buffer`
+                // (drop-scheduled once at scope exit).
+                Ty::Adt(id, args) if id == cobrust_types::COIL_BUFFER_ADT => match index.as_ref() {
+                    IndexKind::Slice { .. } => Ty::Adt(id, args),
+                    _ => Ty::Float,
+                },
                 other => other,
             }
         }

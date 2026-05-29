@@ -578,6 +578,163 @@ pub unsafe extern "C" fn __cobrust_coil_buffer_size(a: *mut u8) -> i64 {
     arr.size() as i64
 }
 
+// =====================================================================
+// ADR-0077 Phase 2a — Buffer method-op / index-write / slice-read.
+// `a.dot(b)` / `a[i] = v` / `a[lo:hi]` retarget (at MIR) onto these
+// symbols; codegen only declares them. Runtime shape / bounds
+// violations abort via `coil_panic` (ADR-0077 Q4 panic-on-violation) —
+// a bare scalar/Buffer is returned, never a `Result`, matching numpy's
+// raise + the §2.5 "looks like numpy" surface.
+// =====================================================================
+
+/// Extract the single `f64` from a 0-d (or 1-element) `Array`,
+/// promoting int / bool dtypes (the f64-only Phase-2a `dot` return
+/// contract — same promotion as `__cobrust_coil_buffer_getitem`).
+fn scalar_array_to_f64(arr: &Array) -> f64 {
+    match arr {
+        Array::Float64(x) => x.iter().next().copied().unwrap_or(f64::NAN),
+        Array::Float32(x) => x.iter().next().copied().map_or(f64::NAN, f64::from),
+        Array::Int64(x) => x.iter().next().copied().map_or(f64::NAN, |v| v as f64),
+        Array::Int32(x) => x.iter().next().copied().map_or(f64::NAN, f64::from),
+        Array::Bool(x) => x
+            .iter()
+            .next()
+            .copied()
+            .map_or(f64::NAN, |v| if v { 1.0 } else { 0.0 }),
+    }
+}
+
+/// `a.dot(b)` → `f64` (ADR-0077 Q5 / Phase 2a). BORROWS both handles.
+/// Phase 2a ships the 1-D dot product → scalar (`Array::dot` defers to
+/// `linalg::dot`, which for 1-D × 1-D returns a 0-d `Array`; this shim
+/// extracts the scalar). A length mismatch is NOT in the static type —
+/// `linalg::dot` raises `LinalgShapeError`, forwarded to `coil_panic`
+/// (ADR-0077 Q4). The 2-D matmul → `Buffer` rank case is a Phase-3
+/// follow-up (the manifest carries the f64 scalar return — recorded as
+/// the per-rank divergence, ADR-0077 §7).
+///
+/// # Safety
+///
+/// `a`, `b` must be live `Buffer` handles (borrowed, never freed here).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_dot(a: *mut u8, b: *mut u8) -> f64 {
+    if a.is_null() || b.is_null() {
+        coil_panic("coil.Buffer.dot: null operand handle");
+    }
+    // SAFETY: caller attests both are live Buffer handles. Borrow only.
+    let lhs: &Array = unsafe { &*a.cast::<Array>() };
+    let rhs: &Array = unsafe { &*b.cast::<Array>() };
+    match lhs.dot(rhs) {
+        Ok(scalar) => scalar_array_to_f64(&scalar),
+        Err(e) => coil_panic(&format!("coil.Buffer.dot: {}", e.message)),
+    }
+}
+
+/// `a[i] = v` scalar WRITE (ADR-0077 Q2 write-path, Phase 2a). BORROWS
+/// `a` mutably and writes `v` into slot `i` in place (sound — the `.cb`
+/// scope owns the only handle to the box, ADR-0077 §4 / ADR-0072 Q4).
+/// Negative indices are numpy-normalised; an out-of-bounds index aborts
+/// via `coil_panic` (ADR-0077 Q4 — NOT a silent no-op; the HEAD legacy
+/// `Place::Index` path dropped the write + segfaulted on read-back).
+/// `v` is an `f64`; non-f64-dtype buffers cast the written value to the
+/// element dtype (the f64-only Phase-2a write contract — int/bool
+/// buffers truncate, matching numpy's dtype-preserving assignment).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle. The mutable borrow is exclusive
+/// for the duration of the write (no other live alias — scope-local).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_setitem(a: *mut u8, i: i64, v: f64) {
+    if a.is_null() {
+        coil_panic("coil.Buffer[i] = v: null handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Exclusive
+    // borrow — the write site is the sole live reference (scope-local).
+    let arr: &mut Array = unsafe { &mut *a.cast::<Array>() };
+    let len = arr.shape().first().copied().unwrap_or(0) as i64;
+    let idx = if i < 0 { i + len } else { i };
+    if idx < 0 || idx >= len {
+        coil_panic(&format!(
+            "coil.Buffer[{i}] = v: index out of bounds for axis with length {len}"
+        ));
+    }
+    let ix = ndarray::IxDyn(&[idx as usize]);
+    match arr {
+        Array::Float64(x) => {
+            if let Some(slot) = x.get_mut(ix) {
+                *slot = v;
+            }
+        }
+        Array::Float32(x) => {
+            if let Some(slot) = x.get_mut(ix) {
+                *slot = v as f32;
+            }
+        }
+        Array::Int64(x) => {
+            if let Some(slot) = x.get_mut(ix) {
+                *slot = v as i64;
+            }
+        }
+        Array::Int32(x) => {
+            if let Some(slot) = x.get_mut(ix) {
+                *slot = v as i32;
+            }
+        }
+        Array::Bool(x) => {
+            if let Some(slot) = x.get_mut(ix) {
+                *slot = v != 0.0;
+            }
+        }
+    }
+}
+
+/// `a[lo:hi]` contiguous slice READ → fresh owned `Buffer` (ADR-0077 Q2
+/// slice-path, Phase 2a). BORROWS `a`, returns a COPY of `a[lo..hi]` the
+/// `.cb` scope drops once via `__cobrust_coil_buffer_drop`. Phase 2a is
+/// the simple `lo:hi` form (default step, both bounds present).
+///
+/// Bounds discipline (ADR-0077 Q4 panic-on-violation): `lo`/`hi` are
+/// numpy-normalised for negatives, but an out-of-bounds `hi > len` (or
+/// `lo > len`, or `lo > hi` after normalisation) ABORTS via `coil_panic`
+/// — the Cobrust-honest "out-of-bounds slice traps" contract, NOT
+/// numpy's silent clamp (numpy clamps an over-long stop; `coil::index::
+/// resolve_slice` would also clamp, so this shim pre-checks BEFORE
+/// delegating, to trap instead — the explicit choice ADR-0077 Q4
+/// records). The result is materialised to an owned `Array` (slicing
+/// returns a borrowing view; `to_owned` lifts it off `a`'s storage so
+/// the fresh handle is independently droppable).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle. The returned pointer is an owned
+/// `Buffer` the `.cb` caller drops once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_slice(a: *mut u8, lo: i64, hi: i64) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.Buffer[lo:hi]: null handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    let len = arr.shape().first().copied().unwrap_or(0) as i64;
+    let start = if lo < 0 { lo + len } else { lo };
+    let stop = if hi < 0 { hi + len } else { hi };
+    // ADR-0077 Q4 — trap on out-of-bounds rather than clamp. `start` may
+    // equal `len` (an empty slice `a[len:len]` is valid); `stop` may NOT
+    // exceed `len` (that is the out-of-bounds case the negative test
+    // pins). `start > stop` after normalisation is also a violation.
+    if start < 0 || start > len || stop < 0 || stop > len || start > stop {
+        coil_panic(&format!(
+            "coil.Buffer[{lo}:{hi}]: slice out of bounds for axis with length {len}"
+        ));
+    }
+    let view = match arr.slice(crate::index::SliceSpec::range(start, stop)) {
+        Ok(v) => v,
+        Err(e) => coil_panic(&format!("coil.Buffer[{lo}:{hi}]: {}", e.message)),
+    };
+    Box::into_raw(Box::new(view.to_owned())).cast::<u8>()
+}
+
 #[cfg(test)]
 #[allow(clippy::undocumented_unsafe_blocks)]
 mod tests {
