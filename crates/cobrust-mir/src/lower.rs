@@ -2018,6 +2018,48 @@ impl<'a> BodyBuilder<'a> {
             return Ok(None);
         };
 
+        // ADR-0079 Q4-a — sub-namespaced module function
+        // (`coil.linalg.solve`). Mirrors the typecheck dotted-of-dotted
+        // rule: `base` is itself `Attr { base: Name(rn import-alias),
+        // name: subns }` where `(module, subns)` is a known sub-namespace.
+        // The leaf resolves to a flat `__cobrust_coil_linalg_<fn>` symbol —
+        // NO new MIR mechanism, the sub-namespace leaf is just a different
+        // `runtime_symbol` string fed to the SAME `emit_ecosystem_call`
+        // borrow-Buffer-args-return-fresh-handle path (the Buffer args
+        // auto-borrow via `lower_eco_arg`'s `Value` handle Move→Copy
+        // upgrade, so the input handles stay live + drop once). Checked
+        // BEFORE Case 1, like the typechecker, so the inner-`Attr` base
+        // shape is matched before the `Name(rn)` base path.
+        if let ExprKind::Attr {
+            base: ns_base,
+            name: subns,
+        } = &base.kind
+        {
+            if let ExprKind::Name(rn) = &ns_base.kind {
+                if rn.kind == DefKind::ImportAlias
+                    && cobrust_types::is_subnamespace(rn.name.as_str(), subns)
+                {
+                    let Some(sig) =
+                        cobrust_types::lookup_subnamespace_fn(rn.name.as_str(), subns, name)
+                    else {
+                        return Ok(None);
+                    };
+                    let pos_args = collect_positional_args(args);
+                    let mut arg_ops = Vec::with_capacity(pos_args.len());
+                    for (a, p) in pos_args.iter().zip(sig.params.iter()) {
+                        arg_ops.push(lower_eco_arg(self, a, p)?);
+                    }
+                    let op = self.emit_ecosystem_call(
+                        sig.runtime_symbol,
+                        sig.ret.clone(),
+                        arg_ops,
+                        span,
+                    );
+                    return Ok(Some(op));
+                }
+            }
+        }
+
         // Case 1: module-level free function (`den.connect`).
         if let ExprKind::Name(rn) = &base.kind {
             if rn.kind == DefKind::ImportAlias
@@ -2894,6 +2936,28 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
             // its handle `Ty::Adt` (driving the outer method dispatch +
             // the let-binding's drop schedule).
             if let ExprKind::Attr { base, name } = &callee.kind {
+                // ADR-0079 Q4-a — sub-namespaced call return type
+                // (`coil.linalg.solve(...) -> Buffer`) so the let-binding's
+                // drop schedule sees the owned-handle return + drops it once
+                // at scope exit. Matches the inner-`Attr` base before the
+                // flat `Name(rn)` module-fn path below.
+                if let ExprKind::Attr {
+                    base: ns_base,
+                    name: subns,
+                } = &base.kind
+                {
+                    if let ExprKind::Name(rn) = &ns_base.kind {
+                        if rn.kind == DefKind::ImportAlias
+                            && cobrust_types::is_subnamespace(rn.name.as_str(), subns)
+                        {
+                            if let Some(sig) =
+                                cobrust_types::lookup_subnamespace_fn(rn.name.as_str(), subns, name)
+                            {
+                                return sig.ret;
+                            }
+                        }
+                    }
+                }
                 if let ExprKind::Name(rn) = &base.kind {
                     if rn.kind == DefKind::ImportAlias
                         && cobrust_types::is_ecosystem_module(rn.name.as_str())

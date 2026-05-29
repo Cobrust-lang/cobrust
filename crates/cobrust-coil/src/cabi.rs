@@ -75,9 +75,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::aggregates::{mean_scalar, median_scalar, split_first_chunk, std_scalar, var_scalar};
 use crate::array::Array;
 use crate::broadcast_extra::broadcast_to_1d;
-use crate::constructors::{eye as coil_eye, ones as coil_ones, zeros as coil_zeros};
+use crate::constructors::{array_f64, eye as coil_eye, ones as coil_ones, zeros as coil_zeros};
 use crate::dtype::Dtype;
 use crate::grid::{mgrid_1d, ogrid_1d};
+use crate::linalg::{det as linalg_det, inv as linalg_inv, solve as linalg_solve};
 use crate::print::array_repr;
 
 // =====================================================================
@@ -735,10 +736,186 @@ pub unsafe extern "C" fn __cobrust_coil_buffer_slice(a: *mut u8, lo: i64, hi: i6
     Box::into_raw(Box::new(view.to_owned())).cast::<u8>()
 }
 
+// =====================================================================
+// ADR-0079 Phase 1 — minimal 2-D / explicit-data constructors.
+//
+// The `coil.linalg.*` sub-namespace operates on 2-D matrices, but the
+// pre-ADR-0079 `.cb` constructor surface was almost entirely 1-D (the
+// sole 2-D ctor was `coil.eye(n)`, the identity — degenerate for
+// det/solve/inv proofs). These three all-scalar-arg shims build the
+// minimal NON-identity matrices the linalg proofs need, each delegating
+// to the EXISTING `coil::array_f64(values, shape)` Rust ctor (the
+// cheapest path — no `list[f64]`→coil marshalling). Each returns a
+// freshly-Boxed `Buffer` handle the `.cb` caller owns + drops once. Kept
+// deliberately minimal (fixed small shapes, no `np.matrix` legacy
+// footgun, §5 elegance ledger); a general nested-list `coil.array` is a
+// follow-up once `list[f64]`→coil marshalling lands.
+// =====================================================================
+
+/// `coil.array2x2(a, b, c, d) -> Buffer`. Row-major `2 x 2` f64 matrix
+/// `[[a, b], [c, d]]`.
+///
+/// # Safety
+///
+/// Returns an owned `Buffer` handle (boxed `coil::Array`), freed once via
+/// `__cobrust_coil_buffer_drop`. Safe to call concurrently — allocation-only.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_array2x2(a: f64, b: f64, c: f64, d: f64) -> *mut u8 {
+    let arr = array_f64(&[a, b, c, d], &[2, 2])
+        .unwrap_or_else(|_| Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[2, 2]))));
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+/// `coil.array2x3(a, b, c, d, e, f) -> Buffer`. Row-major `2 x 3` f64
+/// matrix `[[a, b, c], [d, e, f]]` — a NON-square matrix, used by the
+/// non-square `det` runtime-shape-error test (ADR-0079 §7 / ADR-0017).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_array2x2`.
+// The six scalar params `a..f` ARE the natural row-major matrix-element
+// labels (the `.cb` call is `coil.array2x3(1.0, 2.0, 3.0, 4.0, 5.0,
+// 6.0)`); renaming them to descriptive words would obscure, not clarify.
+#[allow(clippy::many_single_char_names)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_array2x3(
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    e: f64,
+    f: f64,
+) -> *mut u8 {
+    let arr = array_f64(&[a, b, c, d, e, f], &[2, 3])
+        .unwrap_or_else(|_| Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[2, 3]))));
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+/// `coil.array1d2(a, b) -> Buffer`. A 2-element 1-D f64 vector `[a, b]`
+/// with explicit data — an arbitrary RHS (e.g. `[5, 11]` / `[1, 1]`) the
+/// `coil.ones` / `coil.mgrid` ctors cannot produce.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_array2x2`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_array1d2(a: f64, b: f64) -> *mut u8 {
+    let arr = array_f64(&[a, b], &[2])
+        .unwrap_or_else(|_| Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[2]))));
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+// =====================================================================
+// ADR-0079 Phase 1 — coil.linalg.* sub-namespace C-ABI surface (the
+// FIRST dotted sub-namespace under an ecosystem module, mirroring numpy's
+// `np.linalg.*`). The `.cb`-side `coil.linalg.{solve,det,inv}(...)`
+// retarget (at MIR) onto these flat `__cobrust_coil_linalg_*` symbols;
+// codegen only declares the externs. ZERO new numerical code — each shim
+// borrows its handle arg(s) and forwards to the EXISTING pure-Rust kernel
+// `coil::linalg::{solve,det,inv}` (which pass the ADR-0017 rtol=1e-6
+// gate). Runtime shape / singularity violations (invisible to the static
+// type — a `coil.Buffer` carries no rank / conditioning) abort via
+// `coil_panic` (ADR-0079 Q4 / ADR-0017 `LinalgShapeError` /
+// `SingularMatrix`), matching numpy's raise + the §2.5 "looks like numpy"
+// surface (a bare scalar / Buffer is returned, never a `Result`).
+// =====================================================================
+
+/// `coil.linalg.solve(a, b) -> Buffer`. Solve `A · x = b` (LU partial
+/// pivot, numpy's `np.linalg.solve` / LAPACK `*gesv` analogue). BORROWS
+/// both handle args (never frees them); returns a freshly-Boxed solution
+/// `Buffer` the `.cb` caller owns. A non-square `A`, incompatible `b`
+/// shape, or singular `A` is a RUNTIME `coil_panic` (ADR-0079 Q4 — NOT a
+/// silent garbage result).
+///
+/// # Safety
+///
+/// `a`, `b` must be live `Buffer` handles (borrowed, never freed here).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_linalg_solve(a: *mut u8, b: *mut u8) -> *mut u8 {
+    if a.is_null() || b.is_null() {
+        coil_panic("coil.linalg.solve: null operand handle");
+    }
+    // SAFETY: caller attests both are live Buffer handles. Borrow only.
+    let a_ref: &Array = unsafe { &*a.cast::<Array>() };
+    let b_ref: &Array = unsafe { &*b.cast::<Array>() };
+    match linalg_solve(a_ref, b_ref) {
+        Ok(x) => Box::into_raw(Box::new(x)).cast::<u8>(),
+        Err(e) => coil_panic(&format!("coil.linalg.solve: {}", e.message)),
+    }
+}
+
+/// `coil.linalg.det(a) -> f64`. Determinant via LU partial pivot (numpy's
+/// `np.linalg.det` / LAPACK `*getrf` ∏-diag analogue). BORROWS the handle
+/// arg. Returns a plain `f64` — numpy's 0-d scalar is not a Cobrust type
+/// (ADR-0077 Q2 / ADR-0079 §9 honesty), extracted from the kernel's 0-d
+/// `Array` via `scalar_array_to_f64`. A NON-square input is a RUNTIME
+/// `coil_panic` (`LinalgShapeError`); a *singular* (but square) input is
+/// NOT a panic — `det` returns `0.0`, matching numpy + the kernel.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (borrowed, never freed here).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_linalg_det(a: *mut u8) -> f64 {
+    if a.is_null() {
+        coil_panic("coil.linalg.det: null handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let a_ref: &Array = unsafe { &*a.cast::<Array>() };
+    match linalg_det(a_ref) {
+        Ok(scalar) => scalar_array_to_f64(&scalar),
+        Err(e) => coil_panic(&format!("coil.linalg.det: {}", e.message)),
+    }
+}
+
+/// `coil.linalg.inv(a) -> Buffer`. Matrix inverse via `solve(a, I)`
+/// (numpy's `np.linalg.inv` / LAPACK `*getrf`+`*getri` analogue). BORROWS
+/// the handle arg; returns a freshly-Boxed inverse `Buffer` the `.cb`
+/// caller owns. A non-square or singular `A` is a RUNTIME `coil_panic`
+/// (`LinalgShapeError` / `SingularMatrix` — ADR-0079 Q4).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (borrowed, never freed here).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_linalg_inv(a: *mut u8) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.linalg.inv: null handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let a_ref: &Array = unsafe { &*a.cast::<Array>() };
+    match linalg_inv(a_ref) {
+        Ok(out) => Box::into_raw(Box::new(out)).cast::<u8>(),
+        Err(e) => coil_panic(&format!("coil.linalg.inv: {}", e.message)),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::undocumented_unsafe_blocks)]
 mod tests {
     use super::*;
+
+    // ADR-0079 Phase 1 — test-only definition of the stdlib `__cobrust_panic`
+    // ABI symbol. The real impl lives in `cobrust-stdlib` (linked as a static
+    // `.a` only at `.cb`-link time, NOT into this crate's lib-test binary);
+    // the coil cabi shims declare it `extern` (line ~92). Any unit test that
+    // exercises a `coil_panic`-referencing shim (the `coil.linalg.*` family
+    // forwards `LinalgShapeError` / `SingularMatrix` to it) would otherwise
+    // fail to LINK with an undefined `__cobrust_panic`. This stub aborts —
+    // honouring the `-> !` contract — so the panic-path is observable in-
+    // process via `#[should_panic]` if ever needed; the happy-path tests
+    // below never reach it. (The pre-ADR-0079 cabi panic-shims —
+    // `buffer_dot` / `buffer_add` etc. — had NO lib unit tests for exactly
+    // this reason; the stub lets the linalg shims gain in-process numeric
+    // coverage beyond the CLI E2E corpus.)
+    #[unsafe(no_mangle)]
+    extern "C" fn __cobrust_panic(ptr: *const u8, len: usize) -> ! {
+        // SAFETY: callers (the coil_panic helper) pass a valid UTF-8
+        // `&str`'s `(ptr, len)`. Reconstruct it for the abort message.
+        let msg = unsafe { std::slice::from_raw_parts(ptr, len) };
+        let msg = String::from_utf8_lossy(msg);
+        panic!("__cobrust_panic (test stub): {msg}");
+    }
 
     /// Serialize the count-asserting tests to keep `DROP_COUNT`
     /// deltas deterministic under cargo's default-parallel runner.
@@ -985,5 +1162,101 @@ mod tests {
             assert!(__cobrust_coil_std(std::ptr::null_mut()).is_nan());
             assert!(__cobrust_coil_var(std::ptr::null_mut()).is_nan());
         }
+    }
+
+    // -- ADR-0079 Phase 1: 2-D ctors + coil.linalg.* shims ------------
+
+    /// `coil.array2x2(1,2,3,4)` builds a `2 x 2`; drops once.
+    #[test]
+    fn array2x2_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array2x2(1.0, 2.0, 3.0, 4.0);
+            assert!(!a.is_null());
+            let arr: &Array = &*a.cast::<Array>();
+            assert_eq!(arr.shape(), &[2, 2]);
+            __cobrust_coil_buffer_drop(a);
+        }
+        assert_eq!(drop_count() - before, 1);
+    }
+
+    /// `coil.linalg.det(array2x2(1,2,3,4))` == `1*4 - 2*3` == `-2.0`.
+    /// BORROWS the handle (drop is explicit + once).
+    #[test]
+    fn linalg_det_known_2x2_is_minus_two() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array2x2(1.0, 2.0, 3.0, 4.0);
+            let d = __cobrust_coil_linalg_det(a);
+            assert!((d - (-2.0)).abs() < 1e-9, "det got {d}");
+            __cobrust_coil_buffer_drop(a);
+        }
+        assert_eq!(drop_count() - before, 1);
+    }
+
+    /// `coil.linalg.det(eye(3))` == `1.0` (the identity-tier positive).
+    #[test]
+    fn linalg_det_eye3_is_one() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_eye(3);
+            let d = __cobrust_coil_linalg_det(a);
+            assert!((d - 1.0).abs() < 1e-9, "det(eye3) got {d}");
+            __cobrust_coil_buffer_drop(a);
+        }
+    }
+
+    /// `coil.linalg.solve(array2x2(1,2,3,4), array1d2(5,11))` == `[1, 2]`.
+    /// Borrows both inputs; the fresh solution drops once (3 total drops).
+    #[test]
+    fn linalg_solve_known_2x2() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array2x2(1.0, 2.0, 3.0, 4.0);
+            let b = __cobrust_coil_array1d2(5.0, 11.0);
+            let x = __cobrust_coil_linalg_solve(a, b);
+            assert!(!x.is_null());
+            let xr: &Array = &*x.cast::<Array>();
+            assert_eq!(xr.shape(), &[2]);
+            assert!((__cobrust_coil_buffer_getitem(x, 0) - 1.0).abs() < 1e-9);
+            assert!((__cobrust_coil_buffer_getitem(x, 1) - 2.0).abs() < 1e-9);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(x);
+        }
+        assert_eq!(drop_count() - before, 3);
+    }
+
+    /// `coil.linalg.inv(array2x2(2,0,0,4))` == `[[0.5,0],[0,0.25]]`.
+    /// Borrows the input; the fresh inverse drops once (2 total drops).
+    #[test]
+    fn linalg_inv_diag_2x2() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array2x2(2.0, 0.0, 0.0, 4.0);
+            let i = __cobrust_coil_linalg_inv(a);
+            assert!(!i.is_null());
+            assert_eq!(
+                array_repr(&*i.cast::<Array>()),
+                "array([[0.5, 0], [0, 0.25]], dtype=float64)"
+            );
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(i);
+        }
+        assert_eq!(drop_count() - before, 2);
     }
 }

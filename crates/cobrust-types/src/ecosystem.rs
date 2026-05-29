@@ -612,6 +612,52 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Float,
             PyCompatTier::Semantic,
         )),
+        // ADR-0079 Phase 1 — minimal `.cb`-constructible 2-D / explicit-
+        // data buffers, the genuine prerequisite for exercising the
+        // `coil.linalg.*` sub-namespace on NON-identity matrices (the
+        // only 2-D `.cb` constructor before this was `coil.eye(n)`, the
+        // identity alone — degenerate for det/solve/inv proofs). Each is
+        // an all-scalar-arg shim over the EXISTING `coil::array_f64(values,
+        // shape)` Rust ctor (no `list[f64]`→coil marshalling — the cheapest
+        // path per ADR-0079 §8 / the TEST prerequisite banner). Kept
+        // deliberately minimal (fixed small shapes, no `np.matrix` legacy
+        // footgun, §5 elegance ledger): a general `coil.array([[..]])` over
+        // nested-list marshalling is a follow-up once `list[f64]`→coil
+        // lands. Tier `Numerical` (these feed the rtol=1e-6 linalg gate).
+        // - `coil.array2x2(a,b,c,d) -> Buffer`        — row-major `2 x 2`.
+        // - `coil.array2x3(a,b,c,d,e,f) -> Buffer`    — row-major `2 x 3`
+        //                                               (non-square, for the
+        //                                               det shape-error test).
+        // - `coil.array1d2(a,b) -> Buffer`            — 2-element 1-D vector
+        //                                               with explicit data
+        //                                               (an arbitrary RHS the
+        //                                               `ones`/`mgrid` ctors
+        //                                               cannot produce).
+        ("coil", "array2x2") => Some(EcoSig::from_values(
+            "__cobrust_coil_array2x2",
+            vec![Ty::Float, Ty::Float, Ty::Float, Ty::Float],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "array2x3") => Some(EcoSig::from_values(
+            "__cobrust_coil_array2x3",
+            vec![
+                Ty::Float,
+                Ty::Float,
+                Ty::Float,
+                Ty::Float,
+                Ty::Float,
+                Ty::Float,
+            ],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "array1d2") => Some(EcoSig::from_values(
+            "__cobrust_coil_array1d2",
+            vec![Ty::Float, Ty::Float],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
         // ADR-0076 Phase 1 — `dora` (dora-rs robotics dataflow,
         // ninth ecosystem module). Phase 1 ships SYNTHETIC runtime;
         // the explicit registration form `dora.node(handler)` stands in
@@ -641,6 +687,70 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             ret: Ty::Int,
             tier: PyCompatTier::Semantic,
         }),
+        _ => None,
+    }
+}
+
+/// ADR-0079 Q4-a — is `<module>.<subns>` a known ecosystem **sub-namespace**?
+///
+/// A sub-namespace is a numpy-style dotted grouping under an ecosystem
+/// module (`coil.linalg`, mirroring `np.linalg`). It is NOT a bindable
+/// handle (there is no state — ADR-0079 Q4-b rejected the handle form);
+/// it is purely a name in the import manifest's namespace, off which
+/// [`lookup_subnamespace_fn`] resolves a flat per-namespace-prefixed
+/// runtime symbol (`__cobrust_coil_linalg_<fn>`). The first proof ships
+/// exactly one: `coil.linalg`. Future numpy-style groupings
+/// (`coil.fft`, `coil.special`, a re-homed `coil.random`) extend this
+/// predicate + [`lookup_subnamespace_fn`] off the same rule.
+#[must_use]
+pub fn is_subnamespace(module: &str, subns: &str) -> bool {
+    matches!((module, subns), ("coil", "linalg"))
+}
+
+/// ADR-0079 Q4-a — resolve a sub-namespaced free function
+/// `<module>.<subns>.<fn>` (e.g. `coil.linalg.solve`) to its signature.
+///
+/// The `.cb` callee is `Attr(Attr(Name(coil-alias), "linalg"), "solve")`;
+/// the type checker ([`crate::check`]) + MIR lowering recognise the
+/// dotted base via [`is_subnamespace`] and dispatch the leaf here. The
+/// returned `runtime_symbol` is a flat `__cobrust_coil_linalg_<fn>` — the
+/// symbol space stays flat at the C-ABI (a new prefix sibling of the
+/// existing `__cobrust_coil_*`, already covered by the `__cobrust_coil_`
+/// build/intrinsics recognizer). The underlying numerical kernels
+/// (`coil::linalg::{solve, det, inv}`) ALREADY EXIST and pass the
+/// ADR-0017 `rtol=1e-6` differential gate — Phase 1 only WIRES them, so
+/// tier `Numerical`. Returns `None` for an unknown member (the
+/// `coil.linalg.solveX` typo case — surfaced as a compile-time
+/// `UnknownName` by the caller, §2.5 compile-time-catch).
+///
+/// `solve(a, b) -> Buffer` (LU solve, `*gesv` analogue), `det(a) -> f64`
+/// (LU determinant; the 0-d numpy scalar → `f64`, ADR-0077 Q2 / ADR-0079
+/// §9 honesty), `inv(a) -> Buffer` (`solve(a, I)`). Shape / singularity
+/// is invisible to the static type (a `coil.Buffer` carries no rank /
+/// conditioning) — a non-square or singular input is a RUNTIME panic in
+/// the shim (ADR-0079 Q4 / ADR-0017 `LinalgShapeError` / `SingularMatrix`),
+/// the inherited ADR-0077 §11 shape-correctness-is-runtime-only deficit.
+#[must_use]
+pub fn lookup_subnamespace_fn(module: &str, subns: &str, func: &str) -> Option<EcoSig> {
+    match (module, subns, func) {
+        ("coil", "linalg", "solve") => Some(EcoSig::from_values(
+            "__cobrust_coil_linalg_solve",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "linalg", "det") => Some(EcoSig::from_values(
+            "__cobrust_coil_linalg_det",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "linalg", "inv") => Some(EcoSig::from_values(
+            "__cobrust_coil_linalg_inv",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
         _ => None,
     }
 }

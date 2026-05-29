@@ -2988,6 +2988,53 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0079 Phase 1: coil.linalg.* sub-namespace + the minimal
+        // 2-D / explicit-data constructors that exercise it on NON-identity
+        // matrices. The MIR retarget turns `coil.linalg.solve(a, b)` /
+        // `coil.array2x2(...)` into `Terminator::Call`s onto these flat
+        // `__cobrust_coil_linalg_*` / `__cobrust_coil_array*` symbols
+        // (a new prefix sibling already covered by the `__cobrust_coil_`
+        // build/intrinsics recognizer), so codegen only declares the
+        // externs (no math here — the kernels are `coil::linalg::{solve,
+        // det, inv}`, wrapped in cabi.rs). Symbol shapes:
+        //   __cobrust_coil_linalg_solve(a, b: *mut Buffer) -> *mut Buffer
+        //   __cobrust_coil_linalg_inv(a: *mut Buffer)      -> *mut Buffer
+        //   __cobrust_coil_linalg_det(a: *mut Buffer)      -> f64  (0-d→f64)
+        //   __cobrust_coil_array2x2(a,b,c,d: f64)          -> *mut Buffer
+        //   __cobrust_coil_array2x3(a..f: f64)             -> *mut Buffer
+        //   __cobrust_coil_array1d2(a,b: f64)              -> *mut Buffer
+        let coil_array2x2_ty = ptr_ty.fn_type(
+            &[f64_ty.into(), f64_ty.into(), f64_ty.into(), f64_ty.into()],
+            false,
+        );
+        let coil_array2x3_ty = ptr_ty.fn_type(
+            &[
+                f64_ty.into(),
+                f64_ty.into(),
+                f64_ty.into(),
+                f64_ty.into(),
+                f64_ty.into(),
+                f64_ty.into(),
+            ],
+            false,
+        );
+        let coil_array1d2_ty = ptr_ty.fn_type(&[f64_ty.into(), f64_ty.into()], false);
+        for (sym, ty, params) in [
+            // solve: (ptr, ptr) -> ptr ≡ coil_binop_ty;
+            // inv:   (ptr) -> ptr      ≡ coil_shape_ty;
+            // det:   (ptr) -> f64      ≡ coil_agg_ty.
+            ("__cobrust_coil_linalg_solve", coil_binop_ty, 2usize),
+            ("__cobrust_coil_linalg_inv", coil_shape_ty, 1),
+            ("__cobrust_coil_linalg_det", coil_agg_ty, 1),
+            ("__cobrust_coil_array2x2", coil_array2x2_ty, 4),
+            ("__cobrust_coil_array2x3", coil_array2x3_ty, 6),
+            ("__cobrust_coil_array1d2", coil_array1d2_ty, 2),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.

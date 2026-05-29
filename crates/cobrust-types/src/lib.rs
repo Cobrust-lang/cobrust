@@ -64,9 +64,9 @@ pub use ecosystem::{
     PIT_SERVER_HANDLE_ADT, PyCompatTier, STRIKE_RESPONSE_ADT, coil_buffer_getitem_symbol,
     coil_buffer_setitem_symbol, coil_buffer_slice_symbol, coil_buffer_ty, dora_event_handler_fn_ty,
     dora_event_ty, dora_node_ty, handle_drop_symbol, hood_command_handler_fn_ty, hood_command_ty,
-    is_ecosystem_handle, is_ecosystem_module, lookup_buffer_binop, lookup_handle_attr,
-    lookup_handle_method, lookup_module_fn, pit_app_ty, pit_handler_fn_ty, pit_request_ty,
-    pit_response_ty, pit_server_handle_ty,
+    is_ecosystem_handle, is_ecosystem_module, is_subnamespace, lookup_buffer_binop,
+    lookup_handle_attr, lookup_handle_method, lookup_module_fn, lookup_subnamespace_fn, pit_app_ty,
+    pit_handler_fn_ty, pit_request_ty, pit_response_ty, pit_server_handle_ty,
 };
 pub use error::TypeError;
 pub use fix_safety::{FixSafety, Suggestion, type_error_fix_safety, type_error_suggestion_text};

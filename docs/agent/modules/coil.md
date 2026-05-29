@@ -996,6 +996,105 @@ corpus and asserts:
       (`linalg_pipeline_escalates_when_perf_always_fails`).
 - [x] ADR-0017 lands; doc tree updated; doc-coverage extended.
 
+## `.cb` `coil.linalg.*` sub-namespace (ADR-0079 Phase 1 — DONE)
+
+The FIRST *dotted sub-namespace* under an ecosystem module. `.cb`
+`coil.linalg.solve(a, b)` is `Attr(Attr(Name(coil-alias), "linalg"),
+"solve")`; the ONE new compiler mechanism is the dotted sub-namespace
+resolver (the rest rides the ADR-0072/0077 ecosystem-call chain
+verbatim). Q4-a: a dotted name in the import manifest namespace resolves
+to a FLAT runtime symbol `__cobrust_coil_linalg_<fn>` — NOT a bindable
+handle (Q4-b rejected — a namespace has no state).
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- `is_subnamespace(module, subns) -> bool` — `("coil","linalg")` is the
+  only true case (first proof).
+- `lookup_subnamespace_fn(module, subns, fn) -> Option<EcoSig>` —
+  - `("coil","linalg","solve") -> __cobrust_coil_linalg_solve`,
+    params `[Buffer, Buffer]`, ret `Buffer`, tier `Numerical`.
+  - `("coil","linalg","det") -> __cobrust_coil_linalg_det`,
+    params `[Buffer]`, ret `Ty::Float` (0-d → f64, ADR-0077 Q2 honesty).
+  - `("coil","linalg","inv") -> __cobrust_coil_linalg_inv`,
+    params `[Buffer]`, ret `Buffer`.
+- Three flat 2-D / explicit-data constructors added to
+  `lookup_module_fn` (the linalg surface needs non-identity matrices;
+  pre-ADR-0079 the only 2-D `.cb` ctor was `coil.eye`):
+  - `coil.array2x2(f64×4) -> Buffer` → `__cobrust_coil_array2x2`
+    (row-major `[2,2]`).
+  - `coil.array2x3(f64×6) -> Buffer` → `__cobrust_coil_array2x3`
+    (row-major `[2,3]`, non-square).
+  - `coil.array1d2(f64×2) -> Buffer` → `__cobrust_coil_array1d2`
+    (explicit 1-D `[2]`). All tier `Numerical`.
+
+### Typecheck (`cobrust-types/src/check.rs`)
+
+`try_synth_ecosystem_call` gains a sub-namespace case BEFORE Case 1:
+when `callee` is `Attr { base: Attr { base: Name(rn), name: subns },
+name }`, `rn.def_id` is a recorded ecosystem-module alias, and
+`is_subnamespace(module, subns)`, resolve the leaf via
+`lookup_subnamespace_fn`. Unknown member (`coil.linalg.solveX`) →
+compile-time `UnknownName` (§2.5 compile-time-catch). Arity / arg-type
+checked by the existing `check_eco_sig`.
+
+### MIR (`cobrust-mir/src/lower.rs`)
+
+`try_lower_ecosystem_call` mirrors the typecheck dotted-of-dotted match
+BEFORE Case 1 — the leaf is just a different `runtime_symbol` string
+fed to the SAME `emit_ecosystem_call`; Buffer args auto-borrow
+(`lower_eco_arg` `Value`-handle Move→Copy), so inputs stay live + drop
+once and the fresh return handle is drop-scheduled. `synth_expr_ty`
+(the drop-schedule return-type helper) gains the same dotted-of-dotted
+case so a `let x = coil.linalg.solve(...)` binding drops its owned
+Buffer once at scope exit. NO new MIR mechanism.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+Extern decls (the MIR retarget-to-Call discipline — codegen only
+declares): `__cobrust_coil_linalg_solve` (`ptr,ptr->ptr`), `_inv`
+(`ptr->ptr`), `_det` (`ptr->f64`); `__cobrust_coil_array2x2` (4×f64→ptr),
+`_array2x3` (6×f64→ptr), `_array1d2` (2×f64→ptr). All match the
+`__cobrust_coil_` build/intrinsics prefix (no CLI edit needed).
+
+### Runtime (`cobrust-coil/src/cabi.rs`)
+
+ZERO new numerical code — the shims borrow handle args and forward to
+the EXISTING pure-Rust kernels `crate::linalg::{solve, det, inv}` (which
+pass the ADR-0017 rtol=1e-6 gate). `det` extracts the 0-d scalar via
+`scalar_array_to_f64`. Shape / singularity errors (`LinalgShapeError`
+/ `SingularMatrix` — invisible to the static type) forward to
+`coil_panic` (ADR-0079 Q4 — clean abort, never silent garbage; a
+*singular* `det` returns `0.0` without panicking, per numpy). The 2-D
+ctors wrap `crate::constructors::array_f64(values, shape)`.
+
+### Portability + deferred
+
+Pure-Rust → ships on native / RISC-V / WASM with zero system BLAS
+(ADR-0079 §6 universal floor; `ndarray-linalg` stays a native-only
+opt-in, today an unwired stub — ADR-0079 §1.1). DEFERRED to ADR-0079
+later phases: FFT (`coil.fft.*` via rustfft), `qr`/`lstsq`, special fns,
+non-symmetric `eig` (needs the Complex tier), big-N svd/eigh, a general
+nested-list `coil.array([[..]])` (needs `list[f64]`→coil marshalling).
+
+### Done means (ADR-0079 Phase 1 — DONE)
+
+- [x] `is_subnamespace` + `lookup_subnamespace_fn` manifest functions;
+      3 `coil.linalg.*` rows + 3 flat 2-D/data-ctor rows.
+- [x] Dotted sub-namespace resolver in `check.rs` `try_synth_ecosystem_call`
+      (+ unknown-member compile-time `UnknownName`).
+- [x] MIR `try_lower_ecosystem_call` + `synth_expr_ty` dotted-of-dotted
+      retarget (reuses `emit_ecosystem_call`; no new mechanism).
+- [x] Codegen externs (6 new symbols, `__cobrust_coil_` prefix).
+- [x] cabi shims wrapping the existing kernels; runtime panic on
+      singular/non-square (Q4).
+- [x] CLI E2E corpus `coil_linalg_e2e` (9 tests): Tier A 3 identity
+      positives, Tier B 3 non-trivial positives (`det([[1,2],[3,4]])==-2`,
+      `solve` known 2×2, `inv` diag full-repr), Tier C 3 runtime panic
+      negatives (singular solve/inv, non-square det). + 5 cabi unit
+      tests (numeric + drop-once).
+- [x] ADR-0079 Phase 1; doc tree (zh/en/agent) updated in the same
+      commit.
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

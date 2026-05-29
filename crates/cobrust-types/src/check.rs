@@ -2080,6 +2080,46 @@ impl Ctx {
             return Ok(None);
         };
 
+        // ADR-0079 Q4-a — sub-namespaced module function
+        // (`coil.linalg.solve`). The callee is the dotted-of-dotted
+        // `Attr(Attr(Name(coil-alias), "linalg"), "solve")`: `base` is
+        // itself an `Attr { base: Name(rn), name: subns }` whose `rn` is a
+        // recorded ecosystem-module alias and whose `subns` names a known
+        // sub-namespace (`is_subnamespace`). This is the ONE new resolution
+        // mechanism Phase 1 adds — a dotted name in the import-manifest
+        // namespace, NOT a bindable handle (Q4-b rejected). It is checked
+        // BEFORE Case 1 because Case 1's `Name(rn)` base pattern does not
+        // match the inner-`Attr` shape (the pre-ADR-0079 fall-through left
+        // `coil.linalg.solve` resolving to `fresh_var()` → false green).
+        // An unknown member (`coil.linalg.solveX`) is a compile-time
+        // `UnknownName` (§2.5 compile-time-catch — NOT a runtime crash).
+        if let ExprKind::Attr {
+            base: ns_base,
+            name: subns,
+        } = &base.kind
+        {
+            if let ExprKind::Name(rn) = &ns_base.kind {
+                if let Some(module) = self.ecosystem_module_defs.get(&rn.def_id).cloned() {
+                    if crate::ecosystem::is_subnamespace(&module, subns) {
+                        let Some(sig) =
+                            crate::ecosystem::lookup_subnamespace_fn(&module, subns, name)
+                        else {
+                            return Err(TypeError::UnknownName {
+                                name: format!("{module}.{subns}.{name}"),
+                                span,
+                                suggestion: Some(
+                                    "this sub-namespace member is not in the manifest \
+                                     (coil.linalg exposes solve / det / inv)",
+                                ),
+                            });
+                        };
+                        let ret = self.check_eco_sig(&sig, args, span)?;
+                        return Ok(Some(ret));
+                    }
+                }
+            }
+        }
+
         // Case 1: module-level free function (`den.connect`).
         if let ExprKind::Name(rn) = &base.kind {
             if let Some(module) = self.ecosystem_module_defs.get(&rn.def_id).cloned() {
