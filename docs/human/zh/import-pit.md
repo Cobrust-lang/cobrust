@@ -53,6 +53,42 @@ curl http://127.0.0.1:<port>/ping
   server task。`pit.Request` 的访问器(path/method/body)是配套
   follow-up;当前 handler 可以忽略 Request 直接给出固定 Response。
 
+## 中间件(ADR-0078 第一阶段)
+
+在 **serve 之前** 调用 `app` 上的方法即可启用一个固定的中间件预设。
+每一个都是 `tower-http` 现成的 `Layer`,注册到 axum router 上:
+
+```python
+import pit
+
+fn handle_root(req: pit.Request) -> pit.Response:
+    return pit.text_response(200, "hello")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.use_cors()         # CORS —— 添加 Access-Control-Allow-Origin
+    let _ = app.use_trace()        # 请求追踪/日志(副作用)
+    let _ = app.use_compression()  # gzip/br/deflate/zstd 响应压缩
+    let _ = app.route("GET", "/", handle_root)
+    let _server = app.serve_in_background("127.0.0.1", 0)
+    let i: i64 = 0
+    while i < 10000000000:
+        i = i + 1
+    return 0
+```
+
+- **`app.use_cors()`** —— 应用 `CorsLayer::permissive()`;响应会带上
+  `Access-Control-Allow-Origin`。对应 FastAPI/Flask-CORS 的形态
+  (`app.add_middleware(CORSMiddleware, …)` / `CORS(app)`)。
+- **`app.use_trace()`** —— 应用 `TraceLayer::new_for_http()`;产生
+  tracing span/event(日志副作用,不是 HTTP 头)。
+- **`app.use_compression()`** —— 应用 `CompressionLayer`;当客户端协商
+  了可接受的编码时压缩响应体,否则原样透传。
+
+三者都返回 `None`(用 `let _ = …` 形式),且 **必须在**
+`serve_in_background` / `run` **之前** 调用:标志位在服务器构建 router
+时只读取一次,之后再调用即为 no-op。
+
 ## 为什么是这样的设计?
 
 - **统一的回调 ABI 形状**:每个 handler 都以
@@ -75,6 +111,10 @@ curl http://127.0.0.1:<port>/ping
 
 - **不支持闭包 / lambda 作为 handler**:必须是顶层 `fn`。
 - **没有装饰器糖**:`@app.route("/x")` 是 ADR-0074(下一个 sprint)。
+- **中间件仅支持固定预设**(ADR-0078 第一阶段):
+  `use_cors()`/`use_trace()`/`use_compression()` 均不接受参数。
+  可配置的 CORS origin、自定义 `.cb` 中间件、请求校验、自动 OpenAPI
+  属于 ADR-0078 第二/三阶段。
 - **`pit.Request` 访问器尚未接通**:handler 必须在不读取
   Request 的 path/method/body 的情况下构造 Response。配套 follow-up
   会补齐 borrow 接口。

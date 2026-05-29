@@ -416,6 +416,84 @@ pub unsafe extern "C" fn __cobrust_pit_app_run(app: *mut u8, host: *mut u8, port
 }
 
 // =====================================================================
+// pit C-ABI surface — App middleware methods (ADR-0078 §6.1 Phase-1).
+//
+// `app.use_cors()` / `app.use_trace()` / `app.use_compression()` flip a
+// flag on the LIVE `App` (borrowed `&mut`, NOT consumed). The flag is
+// read once by `App::serve`/`serve_in_background` when the axum `Router`
+// is constructed, applying the canned `tower_http` Layer preset. Each
+// shim returns `Ty::None` at the manifest layer (null at the C ABI) —
+// mirroring `__cobrust_pit_app_route`'s discard discipline so the
+// `let _ = app.use_cors()` form does NOT alias a second drop-eligible
+// App handle (which would double-fire `__cobrust_pit_app_drop`). The
+// middleware effect is a side-effect on the receiver in place; the
+// return channel is a discard.
+//
+// BEFORE-SERVE CONTRACT (ADR-0078 §6.1 + the audit LOW finding): these
+// set the flag on the App that `serve`/`serve_in_background` later reads
+// via `std::mem::take`. A call AFTER serve has bound the Router is a
+// no-op (the Router is already built). No new handle, no new `_drop`
+// shim, no `DROP_COUNT` change — the flags live inside the existing
+// `App` box (this is why tower-http is the cheapest ecosystem-chain
+// extension, ADR-0078 §6.1 "Honest difficulty read").
+// =====================================================================
+
+/// `app.use_cors() -> None` (ADR-0078 §6.1). Flip the CORS flag on the
+/// live `App`; `serve` applies `CorsLayer::permissive()`. Borrows
+/// `&mut App` (not consumed). Returns null (Ty::None discard).
+///
+/// # Safety
+///
+/// `app` must be a live `App` handle from `__cobrust_pit_app_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_app_use_cors(app: *mut u8) -> *mut u8 {
+    if app.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: `app` per `# Safety` — borrowed to flip the flag; not
+    // consumed (no `_drop` aliasing; the `.cb` scope still owns the box).
+    let app_mut: &mut App = unsafe { &mut *app.cast::<App>() };
+    app_mut.use_cors();
+    std::ptr::null_mut()
+}
+
+/// `app.use_trace() -> None` (ADR-0078 §6.1). Flip the trace flag;
+/// `serve` applies `TraceLayer::new_for_http()`. Borrows `&mut App`.
+/// Returns null (Ty::None discard).
+///
+/// # Safety
+///
+/// `app` must be a live `App` handle from `__cobrust_pit_app_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_app_use_trace(app: *mut u8) -> *mut u8 {
+    if app.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: `app` per `# Safety` — borrowed, not consumed.
+    let app_mut: &mut App = unsafe { &mut *app.cast::<App>() };
+    app_mut.use_trace();
+    std::ptr::null_mut()
+}
+
+/// `app.use_compression() -> None` (ADR-0078 §6.1). Flip the compression
+/// flag; `serve` applies `CompressionLayer::new()`. Borrows `&mut App`.
+/// Returns null (Ty::None discard).
+///
+/// # Safety
+///
+/// `app` must be a live `App` handle from `__cobrust_pit_app_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_app_use_compression(app: *mut u8) -> *mut u8 {
+    if app.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: `app` per `# Safety` — borrowed, not consumed.
+    let app_mut: &mut App = unsafe { &mut *app.cast::<App>() };
+    app_mut.use_compression();
+    std::ptr::null_mut()
+}
+
+// =====================================================================
 // pit C-ABI surface — Request handle methods (F65 G1 + path-param).
 // =====================================================================
 
@@ -600,6 +678,64 @@ mod tests {
             drop_str_for_test(body);
         }
         assert_eq!(drop_count() - before, 1, "Response must drop exactly once");
+    }
+
+    /// ADR-0078 §6.1 — the `use_cors`/`use_trace`/`use_compression`
+    /// shims flip a flag on the live `App` (borrowed, NOT consumed) and
+    /// return null (Ty::None discard). The App handle still drops exactly
+    /// once (no new handle, no double-free — the flags live inside the
+    /// existing box). Also asserts null-receiver tolerance.
+    #[test]
+    fn use_middleware_flips_flag_and_drops_once() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let app = __cobrust_pit_app_new();
+            assert!(!app.is_null(), "App handle must be non-null");
+
+            // Each shim returns null (Ty::None discard channel) — NOT the
+            // App pointer (which would alias a second drop-eligible handle
+            // and double-fire `__cobrust_pit_app_drop`).
+            assert!(
+                __cobrust_pit_app_use_cors(app).is_null(),
+                "use_cors must return null/None"
+            );
+            assert!(
+                __cobrust_pit_app_use_trace(app).is_null(),
+                "use_trace must return null/None"
+            );
+            assert!(
+                __cobrust_pit_app_use_compression(app).is_null(),
+                "use_compression must return null/None"
+            );
+
+            // Null-receiver tolerance (defense in depth — the typechecker
+            // rules this out, but a malicious caller could pass null).
+            assert!(__cobrust_pit_app_use_cors(std::ptr::null_mut()).is_null());
+
+            // The flag is read at serve time; bind on an ephemeral port to
+            // confirm the with-middleware serve path constructs cleanly
+            // (the layers apply without breaking the Router build).
+            let host = alloc_str_buffer("127.0.0.1");
+            let server = __cobrust_pit_app_serve_in_background(app, host, 0);
+            assert!(
+                !server.is_null(),
+                "serve_in_background with middleware flags set must succeed"
+            );
+            __cobrust_str_drop(host);
+
+            __cobrust_pit_server_handle_drop(server);
+            __cobrust_pit_app_drop(app);
+        }
+        // .cb-scheduled drops: App + ServerHandle = 2 (no new handle from
+        // the middleware setters — they mutate the App box in place).
+        assert_eq!(
+            drop_count() - before,
+            2,
+            "middleware setters add no new drop-eligible handle"
+        );
     }
 
     /// Null tolerance — every `_drop` is a no-op on null and never

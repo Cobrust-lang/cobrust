@@ -55,6 +55,44 @@ curl http://127.0.0.1:<port>/ping
   are a paired follow-up; today the handler can ignore the Request and
   emit a canned Response.
 
+## Middleware (ADR-0078 Phase 1)
+
+Enable a canned middleware preset by calling a method on `app` **before**
+you serve. Each is `tower-http`'s ready-made `Layer`, registered on the
+axum router:
+
+```python
+import pit
+
+fn handle_root(req: pit.Request) -> pit.Response:
+    return pit.text_response(200, "hello")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.use_cors()         # CORS — adds Access-Control-Allow-Origin
+    let _ = app.use_trace()        # request tracing/logging (side-effect)
+    let _ = app.use_compression()  # gzip/br/deflate/zstd response compression
+    let _ = app.route("GET", "/", handle_root)
+    let _server = app.serve_in_background("127.0.0.1", 0)
+    let i: i64 = 0
+    while i < 10000000000:
+        i = i + 1
+    return 0
+```
+
+- **`app.use_cors()`** — applies `CorsLayer::permissive()`; served
+  responses carry `Access-Control-Allow-Origin`. The FastAPI/Flask-CORS
+  shape (`app.add_middleware(CORSMiddleware, …)` / `CORS(app)`).
+- **`app.use_trace()`** — applies `TraceLayer::new_for_http()`; emits
+  tracing spans/events (a logging side-effect, not an HTTP header).
+- **`app.use_compression()`** — applies `CompressionLayer`; compresses
+  the response body when the client negotiates an accepted encoding,
+  passes it through untouched otherwise.
+
+All three return `None` (use the `let _ = …` form) and **must be called
+before** `serve_in_background` / `run`: the flag is read once, when the
+server builds its router. A call afterward is a no-op.
+
 ## Why this design?
 
 - **One callback ABI shape**: every handler crosses as
@@ -79,6 +117,10 @@ curl http://127.0.0.1:<port>/ping
 
 - **No closures / no lambdas as handlers**: must be a top-level `fn`.
 - **No decorator sugar**: `@app.route("/x")` is ADR-0074 (next sprint).
+- **Middleware is canned presets only** (ADR-0078 Phase 1):
+  `use_cors()`/`use_trace()`/`use_compression()` take no arguments.
+  Configurable CORS origins, custom `.cb` middleware, request validation,
+  and auto OpenAPI are ADR-0078 Phases 2/3.
 - **`pit.Request` accessors not yet wired**: the handler must construct
   the Response without reading the Request's path/method/body. A paired
   follow-up adds the borrow shims.

@@ -744,6 +744,43 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             ret: Ty::None,
             tier: PyCompatTier::Semantic,
         }),
+        // ADR-0078 §6.1 Phase-1 — tower-http canned-preset middleware.
+        //
+        // `app.use_cors()` / `app.use_trace()` / `app.use_compression()`
+        // are zero-value-arg, `Ty::None`-returning App methods that flip
+        // a middleware flag on the live `App` (the cabi shim borrows
+        // `&mut App`; the flag is read once by `serve` when the axum
+        // `Router` is built, applying `CorsLayer::permissive()` /
+        // `TraceLayer::new_for_http()` / `CompressionLayer::new()`).
+        //
+        // `Ty::None` return MIRRORS `route`'s discipline (NOT another App
+        // handle): the effect is a side-effect on the receiver in place,
+        // so returning the same pointer through a second binding would
+        // alias a second drop-eligible App and double-fire
+        // `__cobrust_pit_app_drop`. The canonical `.cb` shape is
+        // `let _ = app.use_cors()` (Ty::None discard). No new handle, no
+        // new `_drop` symbol — the cheapest ecosystem-chain extension
+        // (ADR-0078 §6.1 "Honest difficulty read"). MUST be called BEFORE
+        // serve (the before-serve contract — the flag is read at the
+        // moment the Router is constructed).
+        (PIT_APP_ADT, "use_cors") => Some(EcoSig::from_values(
+            "__cobrust_pit_app_use_cors",
+            vec![],
+            Ty::None,
+            PyCompatTier::Semantic,
+        )),
+        (PIT_APP_ADT, "use_trace") => Some(EcoSig::from_values(
+            "__cobrust_pit_app_use_trace",
+            vec![],
+            Ty::None,
+            PyCompatTier::Semantic,
+        )),
+        (PIT_APP_ADT, "use_compression") => Some(EcoSig::from_values(
+            "__cobrust_pit_app_use_compression",
+            vec![],
+            Ty::None,
+            PyCompatTier::Semantic,
+        )),
         (PIT_APP_ADT, "serve_in_background") => Some(EcoSig::from_values(
             "__cobrust_pit_app_serve_in_background",
             vec![Ty::Str, Ty::Int],

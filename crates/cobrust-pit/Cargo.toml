@@ -38,6 +38,15 @@ pyo3 = ["dep:pyo3"]
 axum = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
+# ADR-0078 §6.1 Phase-1 — tower-http canned-preset middleware
+# (`app.use_cors()` = CorsLayer::permissive(), `app.use_trace()` =
+# TraceLayer::new_for_http(), `app.use_compression()` =
+# CompressionLayer::new()). axum 0.7.9 ↔ tower-http 0.6 resolution is
+# clean (tower-http 0.6.11 is already transitively in the lock via
+# reqwest, WITHOUT these features — making it a direct dep with the
+# features adds them; finding F64: stage Cargo.lock in the same commit).
+# `compression-full` enables gzip/br/deflate/zstd for CompressionLayer.
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-full"] }
 pyo3 = { version = "0.24.2", features = ["extension-module"], optional = true }
 
 [dev-dependencies]

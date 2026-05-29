@@ -51,9 +51,29 @@ struct Route {
 ///
 /// Constitution §5.1: 0 public fields. Routes are registered through
 /// the method API and served by [`App::run`].
+///
+/// # Middleware flags (ADR-0078 §6.1 Phase-1)
+///
+/// `cors` / `trace` / `compress` are set by the `use_cors()` /
+/// `use_trace()` / `use_compression()` surface (cabi shims flip the
+/// flag on the live `App`). They are read ONCE in [`serve`] at the
+/// moment the axum `Router` is constructed, applying the corresponding
+/// `tower_http` `Layer` — the before-serve contract: a `use_cors()`
+/// call after `serve`/`serve_in_background` has already built the
+/// Router is a no-op (the Router is already bound). The `std::mem::take`
+/// in the cabi serve shims swaps the WHOLE `App` (flags included) into
+/// the value moved into `serve`, so flags set before serve survive the
+/// take. Default `false` (no middleware) — `#[derive(Default)]` gives
+/// `bool::default() == false` for free.
 #[derive(Default)]
 pub struct App {
     routes: Vec<Route>,
+    /// `CorsLayer::permissive()` applied at serve when set (ADR-0078 §6.1).
+    cors: bool,
+    /// `TraceLayer::new_for_http()` applied at serve when set.
+    trace: bool,
+    /// `CompressionLayer::new()` applied at serve when set.
+    compress: bool,
 }
 
 /// Lazy process-singleton tokio runtime backing the blocking `run`
@@ -67,9 +87,13 @@ fn runtime() -> &'static Runtime {
 
 impl App {
     /// Construct an empty app. Mirrors `app = Flask(__name__)`.
+    ///
+    /// All middleware flags default `false` (no CORS/trace/compression
+    /// until the corresponding `use_*` setter runs) — `Self::default()`
+    /// gives `Vec::new()` routes + `false` flags.
     #[must_use]
     pub fn new() -> Self {
-        Self { routes: Vec::new() }
+        Self::default()
     }
 
     /// Register a handler for `(method, path)`. The general form behind
@@ -145,6 +169,40 @@ impl App {
         F: Fn(Request) -> Response + Send + Sync + 'static,
     {
         self.route("DELETE", path, handler)
+    }
+
+    /// Enable the CORS middleware preset (ADR-0078 §6.1 Phase-1).
+    ///
+    /// Sets a flag read at serve time; [`serve`] then applies
+    /// `tower_http::cors::CorsLayer::permissive()` to the axum `Router`,
+    /// so served responses carry `Access-Control-Allow-Origin`. Mirrors
+    /// FastAPI's `app.add_middleware(CORSMiddleware, …)` / Flask-CORS
+    /// `CORS(app)` shape (constitution §2.5). MUST be called BEFORE
+    /// `run`/`serve_in_background` (the flag is read once when the
+    /// Router is built).
+    pub fn use_cors(&mut self) {
+        self.cors = true;
+    }
+
+    /// Enable the request-tracing middleware preset (ADR-0078 §6.1).
+    ///
+    /// Sets a flag read at serve time; [`serve`] then applies
+    /// `tower_http::trace::TraceLayer::new_for_http()`. The effect is a
+    /// logging side-effect (tracing spans/events), not an HTTP-observable
+    /// header. MUST be called BEFORE serve.
+    pub fn use_trace(&mut self) {
+        self.trace = true;
+    }
+
+    /// Enable the response-compression middleware preset (ADR-0078 §6.1).
+    ///
+    /// Sets a flag read at serve time; [`serve`] then applies
+    /// `tower_http::compression::CompressionLayer::new()`, which
+    /// compresses the response body when the client negotiates an
+    /// accepted encoding (e.g. `Accept-Encoding: gzip`) and passes the
+    /// body through untouched otherwise. MUST be called BEFORE serve.
+    pub fn use_compression(&mut self) {
+        self.compress = true;
     }
 
     /// Match an incoming `(method, path)` against the route table.
@@ -254,8 +312,30 @@ impl Drop for ServerHandle {
 
 /// The single axum service: every request flows through here, gets
 /// matched against the route table, and is dispatched (or 404'd).
+///
+/// # Middleware (ADR-0078 §6.1 Phase-1)
+///
+/// The `App`'s `cors`/`trace`/`compress` flags are read ONCE here when
+/// the `Router` is constructed (the before-serve contract — §6.1). Each
+/// set flag layers the corresponding canned `tower_http` preset. Layers
+/// are applied AFTER `with_state` so they wrap the whole service; the
+/// flags live behind the `Arc<App>` so they are read, not moved.
 async fn serve(listener: tokio::net::TcpListener, app: Arc<App>) -> Result<(), PitError> {
-    let router = axum::Router::new().fallback(handle_any).with_state(app);
+    let (cors, trace, compress) = (app.cors, app.trace, app.compress);
+    let mut router = axum::Router::new().fallback(handle_any).with_state(app);
+    // Apply the canned middleware presets for each set flag. The chain
+    // order is fixed (cors → trace → compress); Phase-1 ships canned
+    // presets only — configurable origins/levels are a follow-up
+    // (ADR-0078 §9 "configurable middleware builders").
+    if cors {
+        router = router.layer(tower_http::cors::CorsLayer::permissive());
+    }
+    if trace {
+        router = router.layer(tower_http::trace::TraceLayer::new_for_http());
+    }
+    if compress {
+        router = router.layer(tower_http::compression::CompressionLayer::new());
+    }
     axum::serve(listener, router)
         .await
         .map_err(|e| PitError::runtime(format!("server: {e}")))

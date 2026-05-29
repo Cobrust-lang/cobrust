@@ -2746,6 +2746,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
         //   __cobrust_pit_app_serve_in_background(
         //       app: *mut App, host: *mut Str, port: i64
         //   ) -> *mut ServerHandle
+        //   __cobrust_pit_app_use_cors(app: *mut App) -> *mut u8 = null
+        //   __cobrust_pit_app_use_trace(app: *mut App) -> *mut u8 = null
+        //   __cobrust_pit_app_use_compression(app: *mut App) -> *mut u8 = null
+        //       (ADR-0078 §6.1 — Ty::None discard; the effect is a
+        //        middleware flag flipped on `app`, read at serve time)
         //   __cobrust_pit_app_drop(app) -> void
         //   __cobrust_pit_response_drop(resp) -> void
         //   __cobrust_pit_server_handle_drop(handle) -> void
@@ -2762,6 +2767,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // `mem::take` inside the trampoline (the original `Box<App>` stays
         // live so the `.cb` scope-exit drop frees the empty App cleanly).
         let pit_app_run_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        // ADR-0078 §6.1 Phase-1 — tower-http middleware setters. Each is
+        // `__cobrust_pit_app_use_*(app: *mut App) -> *mut u8 = null`
+        // (Ty::None discard channel; the effect is the middleware flag
+        // flipped on `app` in place, read at serve time). Shape is the
+        // App-receiver / None-return form: one ptr arg, ptr return —
+        // identical to `pit_request_body_ty`.
+        let pit_app_use_middleware_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
         // F65 G1 — `__cobrust_pit_request_body(req: *mut Request) -> *mut Str`.
         // Borrow-shim returning a freshly-allocated Cobrust Str. The
         // Request stays Rust-owned (ADR-0073 §2 D6).
@@ -2777,6 +2789,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_pit_app_route", pit_app_route_ty, 4),
             ("__cobrust_pit_app_serve_in_background", pit_serve_ty, 3),
             ("__cobrust_pit_app_run", pit_app_run_ty, 3),
+            ("__cobrust_pit_app_use_cors", pit_app_use_middleware_ty, 1),
+            ("__cobrust_pit_app_use_trace", pit_app_use_middleware_ty, 1),
+            (
+                "__cobrust_pit_app_use_compression",
+                pit_app_use_middleware_ty,
+                1,
+            ),
             ("__cobrust_pit_request_body", pit_request_body_ty, 1),
             (
                 "__cobrust_pit_request_path_param",

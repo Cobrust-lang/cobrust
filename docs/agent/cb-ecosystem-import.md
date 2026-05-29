@@ -443,6 +443,77 @@ asserts body == "pong" + status 200, then asserts `GET /missing` → 404.
 drives the trampoline directly (not through .cb), proving the
 transmute + closure-wrap + drop discipline in isolation.
 
+### ADR-0078 Phase-1 — `pit` tower-http middleware (`app.use_cors` / `use_trace` / `use_compression`)
+
+`pit.App` gains three zero-value-arg, `Ty::None`-returning methods that
+register a canned `tower_http` `Layer` preset on the axum `Router`:
+`use_cors()` = `CorsLayer::permissive()`, `use_trace()` =
+`TraceLayer::new_for_http()`, `use_compression()` =
+`CompressionLayer::new()`. This is the cheapest ecosystem-chain
+extension to date — it rides ADR-0073's pit-method chain VERBATIM (NO
+new compiler mechanism, NO new handle, NO new async-收编):
+
+- `cobrust-types/src/ecosystem.rs`: 3 new `PIT_APP_ADT` rows
+  (`use_cors`/`use_trace`/`use_compression`) → `__cobrust_pit_app_use_*`,
+  zero value-args, `ret = Ty::None`. `Ty::None` MIRRORS `App.route`'s
+  discipline (side-effect on the receiver in place; returning an App
+  pointer would alias a second drop-eligible handle and double-fire
+  `__cobrust_pit_app_drop`). Canonical `.cb` shape: `let _ = app.use_cors()`.
+- `cobrust-types/src/check.rs`: NO new code — the rows resolve through
+  the existing `try_synth_ecosystem_call` Case-2 → `lookup_handle_method`
+  → `check_eco_sig` path; a zero-`params` sig type-checks the zero-arg
+  method call.
+- `cobrust-mir/src/lower.rs`: NO new mechanism — `try_lower_ecosystem_call`
+  Case-2 borrows the receiver (Move→Copy), zero positional args,
+  `emit_ecosystem_call("__cobrust_pit_app_use_cors", Ty::None, [recv], …)`,
+  identical to `app.route`.
+- `cobrust-codegen/src/llvm_backend.rs`: 3 new extern decls in the pit
+  block (shape `ptr -> ptr`, the App-receiver / None-return form,
+  identical to `__cobrust_pit_request_body`).
+- `cobrust-cli/src/build/intrinsics.rs`: NO change — the new symbols
+  match the existing `__cobrust_pit_` prefix recognizer.
+- `cobrust-pit/src/app.rs` (the real work): `App` gains `cors`/`trace`/
+  `compress` `bool` flags (default `false`); `use_cors`/`use_trace`/
+  `use_compression` setters flip them; `serve` reads the flags ONCE when
+  building the `Router` and conditionally `.layer(...)`'s each preset.
+- `cobrust-pit/src/cabi.rs` (the real work): 3 `__cobrust_pit_app_use_*`
+  shims borrow `&mut App` (NOT consumed), call the setter, return null
+  (Ty::None discard). No new `_drop` shim, no `DROP_COUNT` change.
+- `cobrust-pit/Cargo.toml`: `tower-http = { version = "0.6", features =
+  ["cors", "trace", "compression-full"] }`. tower-http 0.6.11 was already
+  transitively in the lock (via reqwest) WITHOUT these features; making
+  it a direct featured dep mutates `Cargo.lock` (+74 lines: brotli,
+  async-compression, compression-codecs/core — staged per finding F64).
+
+#### Before-serve contract (ADR-0078 §6.1 + audit LOW finding)
+
+The flag is read at the moment the `Router` is constructed in `serve`.
+A `use_cors()` call AFTER `serve`/`serve_in_background` has bound the
+Router is a no-op. The cabi `serve_in_background`/`run` shims
+`std::mem::take` the WHOLE `App` (flags included) into the value moved
+into `serve`, so flags set before serve survive the take. The DEV impl
+MUST NOT re-apply layers per-request (that would change the contract +
+risk double-application on the hot path).
+
+#### E2E (ADR-0078 §6.1 done-means)
+
+`crates/cobrust-cli/tests/pit_middleware_e2e.rs` (6 cases): the
+load-bearing PRIMARY proves `app.use_cors()` adds
+`Access-Control-Allow-Origin` to a served response, with a paired
+control (NO `use_cors` → header ABSENT) — the differential proof that
+`use_cors` is the cause. Plus `use_compression` (4 KiB body round-trips
+intact), `use_trace` (server still 200s), stacking (all three compose,
+CORS survives), and a before-serve ordering invariant.
+`cobrust-pit/src/cabi.rs::tests::use_middleware_flips_flag_and_drops_once`
+proves the shims flip the flag + the App still drops exactly once (no
+new handle).
+
+#### Phase scope + deferred
+
+Phase-1 ships the 3 canned presets ONLY. Configurable CORS origins /
+custom-`.cb` middleware / validator / utoipa are ADR-0078 Phases 2/3 +
+their own sub-ADRs (§9).
+
 ## ADR-0073 second proof — `hood` (the SEVENTH module, SECOND with a callback)
 
 After pit proved the callback chain crosses a `fn(Request) -> Response`
