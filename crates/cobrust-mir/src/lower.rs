@@ -2231,6 +2231,54 @@ impl<'a> BodyBuilder<'a> {
             );
             return Ok(op_out);
         }
+        // ADR-0078 backend Phase 2 (fang E2E sibling-fix) — `str == str` /
+        // `str != str` via the NATURAL operator. The codegen `lower_binop`
+        // Eq/NotEq arms assume integer operands (`into_int_value()`), so a
+        // bare comparison of two `Ty::Str` LOCALS (e.g. `h1 != h2`) would
+        // crash codegen with "Found PointerValue but expected IntValue".
+        // Retarget to the always-linked `__cobrust_str_eq(a, b) -> i64`
+        // (0/1) then materialise the bool: `!= 0` for Eq, `== 0` for NotEq.
+        // Sibling of the Dict `in`/`not in` block above (same call-then-
+        // compare shape). String-literal operands keep flowing through the
+        // existing `str_eq_lit` PRELUDE path (this guard fires only when
+        // the LHS resolves to a `Ty::Str` value); both operands are
+        // BORROWED (Move→Copy upgrade — `__cobrust_str_eq` reads but does
+        // not consume, so the source `str` locals survive for later uses
+        // and drop ONCE at scope exit, per the Str non-Copy discipline).
+        if matches!(op, HirBinOp::Eq | HirBinOp::NotEq) && matches!(lhs_ty, Ty::Str) {
+            let lhs_op = upgrade_move_to_copy_handle(self.lower_expr(lhs)?);
+            let rhs_op = upgrade_move_to_copy_handle(self.lower_expr(rhs)?);
+            let raw_dest = self.declare_local("_streq".to_string(), Ty::Int, span, false);
+            let cur = self.current_block_id();
+            let next = self.start_new_block();
+            self.cur_block = Some(cur.0 as usize);
+            self.terminate(Terminator::Call {
+                func: Operand::Constant(Constant::Str("__cobrust_str_eq".to_string())),
+                args: vec![lhs_op, rhs_op],
+                destination: Place::local(raw_dest),
+                target: next,
+                unwind: None,
+            });
+            self.cur_block = Some(next.0 as usize);
+            // `__cobrust_str_eq` returns i64 1 (equal) / 0 (unequal). For
+            // `==` the bool is `result != 0`; for `!=` it is `result == 0`.
+            let cmp_op = if matches!(op, HirBinOp::NotEq) {
+                BinOp::Eq
+            } else {
+                BinOp::NotEq
+            };
+            let bool_dest = self.declare_local("_streqb".to_string(), Ty::Bool, span, false);
+            self.emit_assign(
+                Place::local(bool_dest),
+                Rvalue::BinaryOp(
+                    cmp_op,
+                    Operand::Copy(Place::local(raw_dest)),
+                    Operand::Constant(Constant::Int(0)),
+                ),
+                span,
+            );
+            return Ok(Operand::Copy(Place::local(bool_dest)));
+        }
         let lhs_op = self.lower_expr(lhs)?;
         let rhs_op = self.lower_expr(rhs)?;
         let mir_op = bin_to_mir(op);

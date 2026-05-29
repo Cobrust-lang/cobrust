@@ -1,0 +1,44 @@
+[package]
+name = "cobrust-fang"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Apache-2.0 OR MIT"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Cobrust `fang` ecosystem module — password hashing / verification over the `argon2` crate (argon2id PHC). ADR-0078 backend Phase 2. DO NOT EDIT BY HAND beyond the cabi surface."
+
+[lib]
+name = "fang"
+# ADR-0078 backend Phase 2: `staticlib` produces `libfang.a` for
+# per-import static linking by `cobrust build` (tenth-module
+# generalization off the den first proof + nest/scale value pattern).
+# `cdylib` stays for a future PyO3 native module; `rlib` for
+# in-workspace Rust consumers + the cabi unit tests. cargo permits the
+# three side by side.
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# argon2id password hashing (OWASP-default params via `Argon2::default()`).
+# The `password-hash` + `rand` default features supply the PHC
+# `SaltString` salt type + the generic `SaltString::generate` RNG path.
+argon2 = "0.5"
+# argon2's `rand` feature only enables `password-hash/rand_core` (the
+# trait), NOT `password-hash/getrandom` (which exports `OsRng`). Depend
+# on the shared `password-hash` crate directly with `getrandom` so the
+# OS-CSPRNG salt source `SaltString::generate(&mut OsRng)` is available
+# (feature unification turns it on for argon2's copy too). Pinned to the
+# exact version argon2 0.5 re-exports so no second copy is linked.
+password-hash = { version = "0.5", features = ["getrandom"] }
+
+[dev-dependencies]
+# ADR-0072 §4 + Q5: the `cabi` shims declare the `__cobrust_str_*`
+# primitives `extern "C"` and bind them from `libcobrust_stdlib.a` at
+# the `cobrust build` link step (NO Rust-level production dependency).
+# For the in-crate `cabi` unit tests, link cobrust-stdlib's rlib as a
+# dev-dependency so those `extern "C"` decls resolve under `cargo test`.
+cobrust-stdlib = { path = "../cobrust-stdlib" }

@@ -687,6 +687,31 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             ret: Ty::Int,
             tier: PyCompatTier::Semantic,
         }),
+        // ADR-0078 backend Phase 2 — `fang` (auth/security, the
+        // cobra-themed wrapper over the `argon2` crate; the TENTH
+        // ecosystem module and FIRST backend Phase-2 crate). Pure
+        // value-pattern, no handles, no `AdtId`:
+        // - `hash_password(pw) -> str` returns the full argon2id PHC
+        //   string (`$argon2id$…`) with a fresh random salt embedded.
+        // - `verify_password(pw, hash) -> bool` is the FIRST `-> bool`
+        //   value-fn return on the chain (prior value-fns are str→str /
+        //   str→i64); constant-time, a wrong pw is a normal `false`.
+        // Tier `Semantic` — the PHC hash string is nondeterministic (a
+        // random salt per call), so this is behavioral parity (a hash
+        // verifies the password that produced it) NOT bit-for-bit
+        // output parity with any CPython oracle.
+        ("fang", "hash_password") => Some(EcoSig::from_values(
+            "__cobrust_fang_hash_password",
+            vec![Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        ("fang", "verify_password") => Some(EcoSig::from_values(
+            "__cobrust_fang_verify_password",
+            vec![Ty::Str, Ty::Str],
+            Ty::Bool,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -1174,7 +1199,7 @@ pub fn lookup_handle_attr(receiver: &Ty, attr: &str) -> Option<EcoSig> {
 pub fn is_ecosystem_module(name: &str) -> bool {
     matches!(
         name,
-        "den" | "nest" | "strike" | "scale" | "molt" | "pit" | "hood" | "coil" | "dora"
+        "den" | "nest" | "strike" | "scale" | "molt" | "pit" | "hood" | "coil" | "dora" | "fang"
     )
 }
 
@@ -1394,6 +1419,40 @@ mod tests {
     #[test]
     fn unknown_scale_fn_is_none() {
         assert!(lookup_module_fn("scale", "nope").is_none());
+    }
+
+    // ADR-0078 backend Phase 2 — `fang` (auth/security, argon2 wrapper).
+    // No handles; pure value pattern; FIRST `-> bool` value-fn return.
+
+    #[test]
+    fn fang_is_a_known_module() {
+        assert!(is_ecosystem_module("fang"));
+    }
+
+    #[test]
+    fn fang_hash_password_signature_is_str_to_str() {
+        let sig =
+            lookup_module_fn("fang", "hash_password").expect("fang.hash_password in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_fang_hash_password");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str]);
+        assert_eq!(sig.ret, Ty::Str);
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn fang_verify_password_signature_is_str_str_to_bool() {
+        // The FIRST `-> bool` value-fn return on the ecosystem chain.
+        let sig =
+            lookup_module_fn("fang", "verify_password").expect("fang.verify_password in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_fang_verify_password");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str, Ty::Str]);
+        assert_eq!(sig.ret, Ty::Bool);
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn unknown_fang_fn_is_none() {
+        assert!(lookup_module_fn("fang", "nope").is_none());
     }
 
     // ADR-0072 fifth-module proof — `molt` (datetime, rebrand of

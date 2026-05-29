@@ -21,6 +21,7 @@ members = [
     "crates/cobrust-pit",
     "crates/cobrust-hood",
     "crates/cobrust-dora",
+    "crates/cobrust-fang",
     "crates/cobrust-types-parity",
     "crates/cobrust-types-cb",
     "crates/cobrust-lsp",

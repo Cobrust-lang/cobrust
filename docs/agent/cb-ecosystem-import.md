@@ -1,10 +1,10 @@
 ---
 doc_kind: reference
 module_id: cb-ecosystem-import
-title: .cb ecosystem-import wiring (ADR-0072 — 5 data modules + coil 8th module first proof; ADR-0073 — pit callback marshalling 6th module + hood 7th module second proof)
+title: .cb ecosystem-import wiring (ADR-0072 — 5 data modules + coil 8th module first proof; ADR-0073 — pit callback marshalling 6th module + hood 7th module second proof; ADR-0076 — dora 9th module; ADR-0078 backend Phase 2 — fang 10th module, first -> bool value-fn)
 last_verified_commit: HEAD
-relates_to: [adr:0072, adr:0073, adr:0019, adr:0028, adr:0050c, adr:0071, adr:0034]
-dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-strike, cobrust-scale, cobrust-molt, cobrust-pit, cobrust-hood, cobrust-coil, cobrust-cli]
+relates_to: [adr:0072, adr:0073, adr:0076, adr:0078, adr:0019, adr:0028, adr:0050c, adr:0071, adr:0034]
+dependencies: [cobrust-types, cobrust-mir, cobrust-codegen, cobrust-den, cobrust-nest, cobrust-strike, cobrust-scale, cobrust-molt, cobrust-pit, cobrust-hood, cobrust-coil, cobrust-dora, cobrust-fang, cobrust-cli]
 ---
 
 # `.cb` ecosystem-import wiring — `import den` / `nest` / `strike` / `scale` / `molt` end-to-end
@@ -39,6 +39,21 @@ Status:
   surfaces as scale + reserved a new 256-slot AdtId block (the FOURTH
   block; scale stays in the THIRD block reserved for its future
   bytes-ABI handles).
+- ADR-0078 backend Phase 2 — **tenth-module generalization** landed.
+  `import fang` + `fang.hash_password(pw) -> str` +
+  `fang.verify_password(pw, hash) -> bool` compile → link → run, the
+  FIRST backend Phase-2 crate (auth/security, wrapping the `argon2`
+  crate). Pure value pattern like `nest`/`scale` (no handles, no
+  `AdtId`), and the FIRST module with a `-> bool` value-fn return.
+  Touched manifest + codegen extern (an `i1`-return extern) +
+  recognizer alternation + the new `cobrust-fang` shim crate. One
+  chain-logic change was required (NOT just data): a `str == str` /
+  `str != str` natural-operator MIR rewrite in `lower_bin` — the corpus
+  asserts `h1 != h2` (two PHC strings differ by salt), which previously
+  crashed codegen ("Found PointerValue but expected IntValue") because
+  the natural string-equality operator had no lowering (only the
+  explicit `str_eq(a, b)` builtin did). See "fang tenth-module proof"
+  below.
 
 ## Surface (manifest-defined)
 
@@ -66,6 +81,8 @@ Status:
 | `cmd.handler(fn)` | `__cobrust_hood_command_handler` | `(hood.Command, Callback(fn() -> i64)) -> i64` |
 | `cmd.run()` | `__cobrust_hood_command_run` | `(hood.Command) -> i64` |
 | scope-exit drop | `__cobrust_hood_command_drop` | `(hood.Command) -> ()` |
+| `fang.hash_password(pw)` | `__cobrust_fang_hash_password` | `(str) -> str` |
+| `fang.verify_password(pw, hash)` | `__cobrust_fang_verify_password` | `(str, str) -> bool` |
 
 - `den.Connection` / `den.Cursor` / `strike.Response` / `molt.DateTime`
   / `pit.App` / `pit.Request` / `pit.Response` / `pit.ServerHandle`
@@ -834,3 +851,115 @@ sprint: **zero HIR changes, zero MIR changes**, ~40 lines codegen
 unchanged — proving the chain generalizes off the proven callback
 pattern for the third time. Same metric profile as hood walked the
 callback chain off pit's first proof.
+
+## ADR-0078 backend Phase 2 — `fang` tenth-module proof (FIRST `-> bool` value-fn; auth/security over `argon2`)
+
+`fang` is the TENTH ecosystem module and the FIRST ADR-0078 backend
+Phase-2 crate. It is a **pure value-pattern** module (no handles, no
+`AdtId`, no callbacks — the `nest`/`scale` template) wrapping the
+`argon2` crate to expose two flat value-functions.
+
+### Surface + security choices (elegance law — no auth footguns)
+
+| Source form | Retargeted symbol | Signature | Tier |
+|---|---|---|---|
+| `fang.hash_password(pw)` | `__cobrust_fang_hash_password` | `(str) -> str` | semantic |
+| `fang.verify_password(pw, hash)` | `__cobrust_fang_verify_password` | `(str, str) -> bool` | semantic |
+
+- **argon2id only, defaults baked in.** `hash_password` always uses
+  `argon2::Argon2::default()` = argon2id with OWASP-recommended params.
+  NO algorithm / cost knob in Phase 1 → a weak algo/params cannot be
+  picked by accident.
+- **Full PHC string out.** The returned `str` is the self-describing
+  `$argon2id$v=…$m=…,t=…,p=…$<salt>$<hash>` — the random salt + params
+  travel WITH the hash. No separate-salt management.
+- **Constant-time verify** (`argon2::Argon2::verify_password`) → no
+  timing-attack footgun.
+- **A wrong / malformed-hash password is a normal `false`**, NOT a
+  panic / error across the boundary (CLAUDE.md §2.2: errors are not the
+  default control path). No plaintext logging.
+- Tier `semantic` — the PHC hash is nondeterministic (fresh salt per
+  call), so this is behavioral parity (a hash verifies the password
+  that produced it), NOT bit-for-bit output parity with any oracle.
+
+### `-> bool` value-fn return (first on the chain)
+
+`verify_password` is the FIRST ecosystem value-fn returning `Ty::Bool`.
+The MIR lowering carries `sig.ret = Ty::Bool` through the existing
+`emit_ecosystem_call` into the `_ecoret` bool local; codegen declares
+the extern with an `i1` (`bool_type()`) return that lands in the i1
+alloca (`write_place` → `coerce_value_to` bridges any i1/i8 width gap).
+No new MIR/codegen mechanism — only an `i1`-return extern row alongside
+the existing `i64`-return rows (`strike.status_code`, `molt.unix_timestamp`).
+
+### One chain-logic change: `str == str` / `str != str` natural operator
+
+The corpus asserts `h1 != h2` (two PHC strings differ by salt). This is
+the FIRST `.cb` test exercising the NATURAL string-equality operator on
+two `Ty::Str` LOCALS. It previously crashed codegen
+(`llvm_backend.rs` `lower_binop` Eq/NotEq arms call `into_int_value()`,
+but two str locals are `ptr` values → "Found PointerValue but expected
+IntValue"). Only the explicit `str_eq(a, b)` builtin had a lowering;
+the operator form had none.
+
+Fix (`cobrust-mir/src/lower.rs` `lower_bin`, sibling of the Dict
+`in`/`not in` arm): when `op ∈ {Eq, NotEq}` and the LHS resolves to
+`Ty::Str`, retarget to the always-linked `__cobrust_str_eq(a, b) -> i64`
+(0/1) then materialise the bool (`!= 0` for Eq, `== 0` for NotEq). Both
+operands are BORROWED (Move→Copy upgrade — `__cobrust_str_eq` reads but
+does not consume, so the source `str` locals survive for later uses and
+drop ONCE at scope exit per the Str non-Copy discipline). String-LITERAL
+comparisons keep flowing through the existing `str_eq_lit` PRELUDE path
+(the guard fires only when the LHS resolves to a `Ty::Str` value).
+
+### L4 runtime (`cobrust-fang/src/cabi.rs`)
+
+Two `#[no_mangle] extern "C"` shims mirroring the scale/nest str-buffer
+ABI (`__cobrust_str_new`/`_push_static`/`_ptr`/`_len` declared
+`extern "C"`, resolved from `libcobrust_stdlib.a` at link; cobrust-stdlib
+is a dev-dep only, for the in-crate cabi tests):
+
+- `__cobrust_fang_hash_password(pw) -> *mut Str` — `SaltString::generate(&mut OsRng)`
+  + `Argon2::default().hash_password(...)` → PHC string in a fresh Str
+  buffer (empty-Str sentinel on the unreachable hashing error).
+- `__cobrust_fang_verify_password(pw, hash) -> bool` —
+  `PasswordHash::new(hash)` (malformed → `false`) +
+  `Argon2::default().verify_password(...)` (`Ok` → `true`, any `Err` →
+  `false`).
+
+`cobrust-fang/Cargo.toml`: `[lib] crate-type = ["rlib", "cdylib",
+"staticlib"]` (libfang.a for per-import link), `argon2 = "0.5"` +
+`password-hash = { version = "0.5", features = ["getrandom"] }` (argon2's
+`rand` feature only enables `password-hash/rand_core`, NOT
+`/getrandom` — the explicit dep turns on `OsRng` via feature
+unification). `build.rs` mirrors scale (macOS cdylib
+`-undefined dynamic_lookup`).
+
+### E2E (ADR-0078 backend Phase-2 done-means)
+
+`crates/cobrust-cli/tests/ecosystem_fang_e2e.rs` (4 tests, all pass):
+
+- `test_e2e_fang_hash_then_verify_round_trip_true` — hash then verify
+  the same pw → `"1\n"` (TRUE).
+- `test_e2e_fang_wrong_password_rejects_false` — verify a wrong pw
+  against the hash → `"0\n"` (FALSE; the security property that
+  matters).
+- `test_e2e_fang_hash_is_argon2id_phc` — `h.starts_with("$argon2id$")`
+  → `"1\n"` (argon2id, salt embedded).
+- `test_e2e_fang_hash_is_nondeterministic_both_verify` — `h1 != h2`
+  (random salt) AND both verify TRUE → `"1\n1\n1\n"`.
+
+`cobrust-fang/src/cabi.rs::tests` (5 in-crate cabi unit tests):
+round-trip TRUE; wrong-pw FALSE; argon2id-PHC-prefix;
+nondeterministic-salt-both-verify; malformed/empty-hash-is-false-not-panic.
+
+### Chain-generality metric
+
+`git diff --stat crates/cobrust-hir/` after the fang sprint: **zero HIR
+changes**. MIR changed by ONE arm (the `str ==`/`!=` operator rewrite —
+a general capability gap surfaced by the corpus, not fang-specific
+plumbing); codegen +~15 lines (the two extern rows, one with an `i1`
+return). The drop / link-locate layers are unchanged — the per-import
+`cobrust-<mod>` / `lib<mod>.a` locate logic resolved `fang`/`libfang.a`
+with no edit. Tenth module on the chain; second value-pattern proof
+after nest/scale.

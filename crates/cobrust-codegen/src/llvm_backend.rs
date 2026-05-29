@@ -2889,6 +2889,33 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_param_counts.insert(sym, params);
         }
 
+        // -- ADR-0078 backend Phase 2: fang ecosystem-module C-ABI -----------
+        // `fang` (auth/security, rebrand-of-`argon2`) — pure value pattern
+        // (no handles, no drops), the TENTH ecosystem module. Exported by
+        // `cobrust-fang/src/cabi.rs`, linked as `libfang.a` only when the
+        // program imports `fang`.
+        //
+        //   __cobrust_fang_hash_password(pw: *mut Str) -> *mut Str
+        //   __cobrust_fang_verify_password(pw, hash: *mut Str) -> bool (i1)
+        //
+        // `verify_password` is the FIRST `-> bool` value-fn return on the
+        // chain: the LLVM extern declares an `i1` return that lands in the
+        // `_ecoret` bool local (`write_place` -> `coerce_value_to` bridges
+        // any i1/i8 width gap into the alloca). The `hash_password`-returned
+        // Str buffer is freed by the existing Str drop schedule — no new
+        // drop wiring needed.
+        let bool_ty = self.ctx.bool_type();
+        let fang_hash_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let fang_verify_ty = bool_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_fang_hash_password", fang_hash_ty, 1usize),
+            ("__cobrust_fang_verify_password", fang_verify_ty, 2),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
+
         // -- ADR-0072 8/8 first proof: coil ecosystem-module C-ABI binding ----
         // `coil` (numpy ndarray foundation, ecosystem rebrand of Python's
         // `numpy` library). EIGHTH and final cobra-batch module — completes

@@ -1365,6 +1365,10 @@ pub fn collect_ecosystem_modules(module: &Module) -> std::collections::BTreeSet<
 ///   after pit + hood. SYNTHETIC runtime — `dora.node(handler)` +
 ///   `node.run()` mock one canned event arrival without the real
 ///   dora-rs daemon; Phase 2 wires real orchestration).
+/// - `fang` — tenth-module generalization (auth/security, rebrand of
+///   the `argon2` crate; ADR-0078 backend Phase 2 first crate. Pure
+///   value pattern like `nest`/`scale`; FIRST module with a `-> bool`
+///   value-fn return — `fang.verify_password(pw, hash) -> bool`).
 ///
 /// New modules extend this table off the proven chain.
 fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
@@ -1386,6 +1390,8 @@ fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
         Some("coil")
     } else if sym.starts_with("__cobrust_dora_") {
         Some("dora")
+    } else if sym.starts_with("__cobrust_fang_") {
+        Some("fang")
     } else {
         None
     }
