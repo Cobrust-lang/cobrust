@@ -676,21 +676,39 @@ impl<'s> Lowerer<'s> {
         self.in_class_body -= 1;
         self.leave_scope();
 
-        // ADR-0080 Phase-1b-ii — lower each field's `where`-refinement
-        // predicate. The predicate references `self` as a placeholder for
-        // the field value (`0 <= self and self <= 100`); we lower it in a
-        // throwaway scope where `self` is bound to a fresh synthetic
-        // `DefId` so name resolution succeeds. The predicate is INTERPRETED
-        // structurally at type-check (`check_class`), never type-synthed,
-        // so `self`'s type is irrelevant here — only that it resolves to a
-        // `Name`. A non-fixed predicate (e.g. `weird(self)`) lowers fine
-        // and is rejected with a FIX-bearing `TypeError` at check time
-        // (Q6), the §2.5-B compile-error feedback the dispatch mandates.
+        // ADR-0080 Phase-1b-ii / Phase-2 — lower each field's
+        // `where`-refinement predicate. The predicate references `self` as a
+        // placeholder for the field value (`0 <= self and self <= 100`,
+        // `1 <= len(self) and len(self) <= 20`, `pattern(self, "<re>")`); we
+        // lower it in a throwaway scope where `self` is bound to a fresh
+        // synthetic `DefId` so name resolution succeeds. The predicate is
+        // INTERPRETED structurally at type-check (`check_class`), never
+        // type-synthed, so `self`'s type is irrelevant here — only that it
+        // resolves to a `Name`. A non-fixed predicate (e.g. `weird(self)`)
+        // lowers fine and is rejected with a FIX-bearing `TypeError` at
+        // check time (Q6), the §2.5-B compile-error feedback the dispatch
+        // mandates.
+        //
+        // `len` and `pattern` are fixed refinement KEYWORDS recognised
+        // STRUCTURALLY by `interpret_refinement` (`len(self)` length bound,
+        // `pattern(self, "<re>")` regex — ADR-0080 Phase-2). They are bound
+        // to synthetic `DefId`s in the same throwaway scope as `self` so the
+        // predicate name-resolves SELF-CONTAINED — independent of whether
+        // the prelude (which also defines a runtime `len`, ADR-0050d) is in
+        // scope at the bare type-checker tier. Without this, a `len(self)` /
+        // `pattern(self, …)` predicate would fail `UnknownName` before the
+        // structural check runs. These bindings are scoped to the predicate
+        // only; a user-written `len(...)` / `pattern(...)` elsewhere still
+        // resolves through the normal scopes.
         let mut field_refinements = Vec::with_capacity(c.field_refinements.len());
         for (field, pred) in &c.field_refinements {
             self.enter_scope();
             let self_id = self.fresh();
             self.bind("self", self_id, DefKind::Param, pred.span)?;
+            let len_id = self.fresh();
+            self.bind("len", len_id, DefKind::Fn, pred.span)?;
+            let pattern_id = self.fresh();
+            self.bind("pattern", pattern_id, DefKind::Fn, pred.span)?;
             let pred_h = self.lower_expr(pred)?;
             self.leave_scope();
             field_refinements.push((field.clone(), pred_h));

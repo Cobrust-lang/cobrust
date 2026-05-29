@@ -128,16 +128,62 @@ fn main() -> i64:
   → **422** —— 请求体必须与声明的形状完全一致(每个声明字段都在、类型
   正确、没有多余的键)。
 
-本版本的 `where` 子句语法是 `i64` 字段上的固定整数范围形式:
-`0 <= self`、`self <= 100` 或 `0 <= self and self <= 100`(`self` 是字段
-的值;`>=` 也支持)。任何其他谓词都是编译错误,并会告诉你接受的形式。
-字符串长度(`len(self) <= n`)与正则模式校验属于后续阶段。
+`where` 子句语法是一小组固定形式,按字段类型区分:
+
+- `i64` 字段上的**整数范围**:`0 <= self`、`self <= 100` 或
+  `0 <= self and self <= 100`(`self` 是字段的值;`>=` 也支持);
+- `str` 字段上的**字符串长度**:`len(self) <= 20`、`len(self) >= 1` 或
+  `1 <= len(self) and len(self) <= 20`(见下一节);
+- `str` 字段上的**字符串模式**:`pattern(self, "<正则>")`(见下一节)。
+
+任何其他谓词 —— 或在错误的字段类型上写长度/模式形式 —— 都是编译错误,
+并会告诉你接受的形式。
 
 为什么比 Flask/FastAPI 更优:结构由编译器捕获(你无法发布一个读取不存在
 字段的 handler),422 是渲染成 `Response` 的 `Result`(而不是 unwind 的
 异常),且连线是一次显式调用(没有隐藏的依赖注入注册表)。目前成功的
 handler 返回一个固定响应 —— 把校验后的请求体回显出去是后续工作(需要
 `.cb` 结构体 ↔ JSON 桥)。
+
+## 字符串校验:长度 + 模式(ADR-0080 第 2 阶段)
+
+`str` 字段可以再带两种 `where` 约束 —— **长度边界**与**正则模式**:
+
+```python
+import pit
+
+class SignupBody:
+    # 长度边界:1..=20 个字符(闭区间)。`len(self)` 是字段的长度;
+    # 单边形式 `len(self) <= 20` / `len(self) >= 1` 同样支持。
+    username: str where 1 <= len(self) and len(self) <= 20
+    # 模式:值必须匹配此正则(一个字符串字面量)。
+    email: str where pattern(self, ".+@.+")
+
+fn signup(req: pit.Request, body: SignupBody) -> pit.Response:
+    return pit.text_response(201, "created")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/signup", signup)
+    let _ = app.serve_openapi("/openapi.json")
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+在边界处:
+
+- `{"username":"bob","email":"b@x.com"}` → **201**,handler 运行。
+- 21 字符的 username → **422**(超过上限 20),handler **永不进入**。
+- 空的 username → **422**(低于下限 1)。
+- `"email":"notanemail"` → **422**(未匹配 `.+@.+` 模式)。
+
+两点遵循优雅法则的说明:
+
+- **错误的正则是编译错误,而非运行期意外。** 若你写 `pattern(self, "[")`
+  (未闭合的字符类),编译器会带着修复建议拒绝它 —— 你永远不会发布一个
+  每次请求都 panic 的服务器。
+- **OpenAPI schema 始终保持一致。** 长度边界呈现为 `minLength`/`maxLength`,
+  模式呈现为 `pattern` —— 与校验器检查的同一来源(见下一节),因此不会漂移。
 
 ## 自动 OpenAPI(`serve_openapi`,ADR-0080 第 1b-iii 阶段)
 
@@ -183,9 +229,13 @@ fn main() -> i64:
 
 `serve_openapi` 是一个**显式开关**(优雅法则:没有 import 期副作用,
 没有隐藏全局)。请在它要记录的那些 `route_validated` 注册之后调用它。
-本版本的映射:`str → {type:string}`、`i64 → {type:integer}`、
+映射:`str → {type:string}`、`i64 → {type:integer}`、
 `f64 → {type:number}`、`bool → {type:boolean}`;整数范围 refinement 追加
-`minimum`/`maximum`。字符串长度 / 正则边界属于后续阶段。
+`minimum`/`maximum`,字符串长度 refinement 追加 `minLength`/`maxLength`,
+模式追加 `pattern`。对于上面的 `SignupBody`,文档会显示
+`username: {type:string, minLength:1, maxLength:20}` 与
+`email: {type:string, pattern:".+@.+"}` —— 与校验器强制执行的边界一致。
+列表字段的 `maxItems` 形式属于后续阶段。
 
 ## 为什么是这样的设计?
 
@@ -213,15 +263,16 @@ fn main() -> i64:
   `use_cors()`/`use_trace()`/`use_compression()` 均不接受参数。
   可配置的 CORS origin、自定义 `.cb` 中间件属于 ADR-0078 第二/三阶段。
   (自动 OpenAPI 现已落地 —— 见上面的 `serve_openapi`。)
-- **带校验的请求体**(`route_validated`,ADR-0080):当前只支持 `i64`
-  字段上的固定整数范围 `where` 校验;字符串长度 / 正则校验、嵌套类与
-  列表字段请求体,以及把校验后的请求体回显到响应里(`json_response(body)`)
-  都属于后续阶段。成功的 handler 目前
-  返回一个固定响应。
-- **OpenAPI**(`serve_openapi`,ADR-0080 第 1b-iii 阶段):文档覆盖每个
-  带校验路由的请求体 schema(类型 + 整数范围 `minimum`/`maximum`)。
-  字符串长度(`minLength`/`maxLength`)与正则边界跟随校验器的后续阶段;
-  当前提供的文档是 Rust 组装出来的 JSON 字符串(尚未是 `.cb` 结构体序列化)。
+- **带校验的请求体**(`route_validated`,ADR-0080):`i64` 字段上的
+  固定整数范围 refinement,以及 `str` 字段上的字符串长度(`len(self)`)与
+  模式(`pattern(self, "…")`)refinement 现已支持。嵌套类与列表字段请求体,
+  以及把校验后的请求体回显到响应里(`json_response(body)`)属于后续阶段。
+  成功的 handler 目前返回一个固定响应。
+- **OpenAPI**(`serve_openapi`,ADR-0080):文档覆盖每个带校验路由的请求体
+  schema —— 类型,加上整数范围 `minimum`/`maximum`、字符串长度
+  `minLength`/`maxLength`、以及 `pattern`。列表字段的 `maxItems` 形式跟随
+  校验器的后续阶段;当前提供的文档是 Rust 组装出来的 JSON 字符串
+  (尚未是 `.cb` 结构体序列化)。
 - **`pit.Request` 访问器尚未接通**:handler 必须在不读取
   Request 的 path/method/body 的情况下构造 Response。配套 follow-up
   会补齐 borrow 接口。

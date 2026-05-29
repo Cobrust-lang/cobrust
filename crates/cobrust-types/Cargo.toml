@@ -17,6 +17,12 @@ workspace = true
 cobrust-frontend = { path = "../cobrust-frontend" }
 cobrust-hir = { path = "../cobrust-hir" }
 thiserror = { workspace = true }
+# ADR-0080 Phase-2 — compile-time validation of a `pattern(self, "<re>")`
+# refinement's regex, so a malformed pattern is a BUILD error (§2.5-B: the
+# diagnostic carries the fix), not a per-request runtime surprise. The same
+# `regex` 1.x is already in the workspace lock (cobrust-dap), so this resolves
+# to the locked version (finding F64: stage Cargo.lock).
+regex = "1"
 
 # ADR-0041 §H1-H8 acceptance corpus pulls in MIR + codegen at test time
 # only — production type-check has zero runtime dependency on either.

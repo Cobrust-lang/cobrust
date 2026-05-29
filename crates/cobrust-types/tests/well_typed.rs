@@ -3176,3 +3176,52 @@ fn w206_route_validated_two_arg_handler_accepts() {
         "import pit\nclass CreateScore:\n    name: str\n    rank: i64 where 0 <= self and self <= 100\nfn create_score(req: pit.Request, body: CreateScore) -> pit.Response:\n    return pit.text_response(201, \"ok\")\nfn main() -> i64:\n    let app = pit.App()\n    let _ = app.route_validated(\"POST\", \"/scores\", create_score)\n    return 0\n",
     );
 }
+
+// ---------------------------------------------------------------------
+// ADR-0080 Phase-2 — STRING refinements (str length + pattern). Positive
+// counterparts of the i161..i163 negatives; both fixed str forms on a
+// `str` field are admitted into the side-table without error.
+// ---------------------------------------------------------------------
+
+#[test]
+fn w207_str_length_two_sided_refinement_accepts() {
+    // `1 <= len(self) and len(self) <= 20` on a `str` field is the fixed
+    // str-LENGTH grammar (ADR-0080 Phase-2) — interpreted into the
+    // side-table, no error.
+    must_accept(
+        "str-length-two-sided-refinement",
+        "class SignupBody:\n    username: str where 1 <= len(self) and len(self) <= 20\nfn f(b: SignupBody) -> str:\n    return b.username\n",
+    );
+}
+
+#[test]
+fn w208_str_length_one_sided_refinement_accepts() {
+    // The one-sided forms `len(self) <= n` (upper) and `len(self) >= n`
+    // (lower) are both in the fixed grammar (ADR-0080 Phase-2 §6).
+    must_accept(
+        "str-length-one-sided-refinement",
+        "class Body:\n    title: str where len(self) <= 255\n    slug: str where len(self) >= 1\nfn f(b: Body) -> str:\n    return b.title\n",
+    );
+}
+
+#[test]
+fn w209_str_pattern_refinement_accepts() {
+    // `pattern(self, "<re>")` with a literal, VALID regex on a `str` field
+    // is the fixed str-PATTERN grammar (ADR-0080 Phase-2/3). `pattern`
+    // resolves as a refinement keyword (synthetic binding), and the regex
+    // compile-checks at type-check time.
+    must_accept(
+        "str-pattern-refinement",
+        "class SignupBody:\n    email: str where pattern(self, \".+@.+\")\nfn f(b: SignupBody) -> str:\n    return b.email\n",
+    );
+}
+
+#[test]
+fn w210_str_length_and_pattern_in_one_class_accepts() {
+    // Both str refinements coexist on different fields of one body class
+    // (the §6 Phase-2 program shape).
+    must_accept(
+        "str-length-and-pattern-one-class",
+        "class SignupBody:\n    username: str where 1 <= len(self) and len(self) <= 20\n    email: str where pattern(self, \".+@.+\")\nfn f(b: SignupBody) -> str:\n    return b.username\n",
+    );
+}

@@ -277,7 +277,7 @@ Scope (Phase-1b-ii): the validation + 422 engine ONLY. The OpenAPI emit is
 Phase-1b-iii (below — it walks the SAME schema descriptor + side-table this
 phase carries). Body re-serialization (`json_response(201, body)`) is the
 deferred `.cb`↔serde bridge (ADR-0080 §9); the success handler returns a
-fixed response. `len`/`pattern` refinements are Phase-2/3.
+fixed response. `len`/`pattern` refinements land in Phase-2 (below).
 
 ## ADR-0080 Phase-1b-iii — `serve_openapi` (OpenAPI emission, cannot drift)
 
@@ -337,10 +337,86 @@ the cannot-drift cross-check — `POST /scores {"rank":200}` → 422 (validator
 rejects, enforcing max 100) AND the doc advertises `maximum:100`, both from
 one source.
 
-Scope (Phase-1b-iii): int-range schema bounds only (`minimum`/`maximum`).
-`minLength`/`maxLength` + `pattern` follow the validator's Phase-2/3. The
+Scope (Phase-1b-iii): int-range schema bounds (`minimum`/`maximum`).
+`minLength`/`maxLength` + `pattern` are the Phase-2 addition (below). The
 doc is a Rust-assembled JSON string (`Response::json`), not a `.cb`-struct
 serialization (the deferred §9 bridge).
+
+## ADR-0080 Phase-2 — STRING refinements (str length + pattern)
+
+Two new fixed `where`-clause refinement kinds on a `str` field, alongside
+the Phase-1 int range. Same side-table, same descriptor, same single-source
+discipline — only new variants at each layer (a MIRROR of the int-range
+chain, no new mechanism).
+
+Surface (`.cb`):
+
+```python
+class SignupBody:
+    username: str where 1 <= len(self) and len(self) <= 20   # LENGTH bound
+    email:    str where pattern(self, ".+@.+")                # PATTERN (literal regex)
+
+fn signup(req: pit.Request, body: SignupBody) -> pit.Response:
+    return pit.text_response(201, "ok")
+```
+
+The fixed str forms (ADR-0080 Q6):
+
+- LENGTH — `lo <= len(self) and len(self) <= hi`, and the one-sided
+  `len(self) <= n` / `len(self) >= n`. The subject is `len(self)` (vs the
+  bare `self` of the int range); the same `±1`-saturating strict→inclusive
+  shift applies.
+- PATTERN — `pattern(self, "<literal-regex>")`. The regex is a STRING
+  LITERAL (a non-literal cannot be embedded in the descriptor).
+
+Mechanism (the layered MIRROR of the int-range chain):
+
+- **HIR name-resolution.** `len` and `pattern` are fixed refinement
+  KEYWORDS, recognised structurally — bound to synthetic `DefId`s in the
+  refinement-predicate lowering scope (alongside `self`) so the predicate
+  resolves SELF-CONTAINED, independent of the prelude (which also defines a
+  runtime `len`). Scoped to the predicate only.
+- **Side-table (`cobrust-types`).** `interpret_refinement` keys on the
+  field's BASE TYPE: `i64` → int range; `str` → `interpret_str_refinement`,
+  which recognises `pattern(self, "…")` → `Refinement::Pattern { regex }`
+  else a `len(self)` bound → `Refinement::StrLen { lo, hi }`. The regex is
+  COMPILE-CHECKED here (`regex::Regex::new`) — a malformed pattern is a
+  BUILD-time `TypeError::UnsupportedRefinement` with a FIX (§2.5-B), NOT a
+  per-request runtime panic. A `len`/`pattern` form on a non-`str` field, or
+  a bare-`self` int bound on a `str` field, is rejected with the FIX.
+- **Descriptor encoding (the ONE encoder).**
+  `Refinement::descriptor_payload(base_kind)` renders the payload after
+  `field<TAB>`: `StrLen` → `str:<lo>:<hi>` (reuses the int-range numeric
+  suffix; the `str` kind discriminates LENGTH from value range); `Pattern` →
+  `pat:<regex>` (replaces the kind token; the regex is everything after the
+  first `:`, so a `:` inside it is safe).
+- **Decoder (the ONE reader, `validation::parse_schema`).** Splits the kind
+  token off the FIRST `:`; a `pat` token takes the remainder as the raw
+  regex, every other token parses the `:lo:hi` numeric suffix.
+- **Validator (`validation::check_field`).** A `Str` field length-checks
+  `s.chars().count()` (Unicode scalar count = Python `len()`; `None` bound =
+  unbounded) → `LengthOutOfRange`. A `Pat` field re-compiles the (already
+  compile-checked) regex and matches → `PatternMismatch`. Both render a
+  typed 422 WITHOUT entering the handler.
+- **OpenAPI emitter (`openapi::field_schema`, cannot-drift).** Kind-aware:
+  `Str` field's `lo`/`hi` → `minLength`/`maxLength`; `Pat` field's regex →
+  `pattern` (the raw string). Read from the SAME `parse_schema` output the
+  validator checks — two projections of one source.
+
+Done-means (verified, the live string-refinement E2E):
+`POST /signup {"username":"bob","email":"b@x.com"}` → 201 + handler entered;
+a 21-char username → 422 (maxLength 20) NOT entered; an empty username →
+422 (minLength 1) NOT entered; `email:"notanemail"` → 422 (pattern miss)
+NOT entered. `GET /openapi.json` → `username:{type:string,minLength:1,
+maxLength:20}`, `email:{type:string,pattern:".+@.+"}`. Cannot-drift
+cross-check: the 21-char-username 422 AND the advertised `maxLength:20`, and
+the bad-email 422 AND the advertised `pattern:".+@.+"`, both from one source.
+
+Scope (Phase-2): str LENGTH + PATTERN. The array-length `maxItems` form for
+list fields stays Phase-4 (ADR-0080 §6). Per-request regex re-compile (tiny
+patterns, schema already re-parsed per request) is the accepted
+simplicity-over-micro-opt tradeoff; a process-wide compiled-regex cache is a
+future optimisation, not a correctness concern.
 
 ## Cross-references
 

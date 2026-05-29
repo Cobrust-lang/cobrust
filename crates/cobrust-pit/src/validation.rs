@@ -11,7 +11,10 @@
 //! - the JSON must be an object;
 //! - EVERY declared field must be present with the declared base type
 //!   (a missing key, an extra key, or a wrong JSON type → `Err`);
-//! - each int-range refinement (`minimum`/`maximum`) must hold.
+//! - each int-range refinement (`minimum`/`maximum`) must hold;
+//! - each str-LENGTH refinement (`minLength`/`maxLength`, ADR-0080 Phase-2)
+//!   must hold;
+//! - each str-PATTERN refinement (`pattern`, ADR-0080 Phase-2/3) must match.
 //!
 //! On success the value's structure provably matches the declared types, so
 //! it can never be re-checked in the handler. On failure the trampoline
@@ -22,21 +25,29 @@
 //!
 //! # Schema descriptor grammar (the compiler↔runtime contract)
 //!
-//! One line per field, `field<TAB>kind[suffix]`, optionally preceded by a
-//! single `# <BodyName>` header line naming the body class:
+//! One line per field, `field<TAB>payload`, optionally preceded by a single
+//! `# <BodyName>` header line naming the body class:
 //!
 //! ```text
-//! # CreateScore
+//! # SignupBody
 //! name\tstr
 //! rank\ti64:0:100
 //! low\ti64:0:
+//! username\tstr:1:20
+//! email\tpat:.+@.+
 //! ```
 //!
-//! - `kind ∈ {str, i64, f64, bool, any}` — the field's declared base type
-//!   (`any` = a non-Phase-1b-ii scalar; presence-only check);
-//! - the optional int-range `suffix` is `:<lo>:<hi>` (an absent bound is
-//!   the empty string). Emitted ONLY for an `i64` field carrying a `where`
-//!   int-range refinement ([`cobrust_types::Refinement::schema_suffix`]).
+//! The `payload` is `<kind-token>[<suffix>]` (rendered by the ONE encoder,
+//! [`cobrust_types::Refinement::descriptor_payload`]):
+//!
+//! - `kind-token ∈ {str, i64, f64, bool, pat, any}` — the field's base type
+//!   (`pat` = a `str` field with a regex pattern; `any` = a non-Phase-1b-ii
+//!   scalar, presence-only check);
+//! - the numeric `:<lo>:<hi>` suffix (absent bound = empty string) carries
+//!   the int RANGE for an `i64` field (`minimum`/`maximum`) and the LENGTH
+//!   bound for a `str` field (`minLength`/`maxLength`, ADR-0080 Phase-2);
+//! - a `pat` field's payload is `pat:<regex>` — the raw regex is EVERYTHING
+//!   after the first `:` (so a `:` inside the regex is preserved).
 //! - the optional `# <BodyName>` header line carries the body class's
 //!   source name (ADR-0080 Phase-1b-iii — used by the OpenAPI emitter to
 //!   key `components/schemas/<BodyName>`). The VALIDATOR ignores it for
@@ -55,10 +66,11 @@
 //! [`parse_schema`] + [`FieldSpec`] + [`FieldKind`] are `pub(crate)` so the
 //! sibling OpenAPI emitter ([`crate::openapi`]) derives the
 //! `components/schemas/<Body>` JSON by walking the EXACT SAME parsed
-//! representation this validator range-checks against — there is no second
-//! schema declaration to drift from. The int-range bound the validator
-//! enforces (`FieldSpec::lo`/`hi`) IS the bound the schema advertises
-//! (`minimum`/`maximum`).
+//! representation this validator checks against — there is no second schema
+//! declaration to drift from. The bound the validator enforces
+//! (`FieldSpec::lo`/`hi` for an int range OR str length;
+//! `FieldSpec::pattern` for a regex) IS the bound the schema advertises
+//! (`minimum`/`maximum`, `minLength`/`maxLength`, or `pattern`).
 
 use serde_json::Value;
 
@@ -85,6 +97,17 @@ pub enum ValidationError {
         lo: Option<i64>,
         hi: Option<i64>,
     },
+    /// A `str` field violated its length refinement bound (ADR-0080
+    /// Phase-2). `len` is the character count of the deserialized string.
+    LengthOutOfRange {
+        field: String,
+        len: i64,
+        lo: Option<i64>,
+        hi: Option<i64>,
+    },
+    /// A `str` field failed its regex pattern refinement (ADR-0080
+    /// Phase-2/Phase-3). `pattern` is the raw regex the schema declared.
+    PatternMismatch { field: String, pattern: String },
     /// The body contained a key the body class does not declare (total
     /// boundary deserialization rejects unknown keys — ADR-0080 footgun
     /// #1: a value that does not match the declared shape cannot reach the
@@ -130,6 +153,18 @@ impl ValidationError {
                 };
                 format!("field `{field}` value {value} must be {bound}")
             }
+            Self::LengthOutOfRange { field, len, lo, hi } => {
+                let bound = match (lo, hi) {
+                    (Some(l), Some(h)) => format!("between {l} and {h} characters"),
+                    (Some(l), None) => format!("at least {l} characters"),
+                    (None, Some(h)) => format!("at most {h} characters"),
+                    (None, None) => "within its declared length".to_string(),
+                };
+                format!("field `{field}` length {len} must be {bound}")
+            }
+            Self::PatternMismatch { field, pattern } => {
+                format!("field `{field}` must match pattern `{pattern}`")
+            }
             Self::UnknownField { field } => {
                 format!("unknown field `{field}` (not declared on the request body)")
             }
@@ -139,21 +174,35 @@ impl ValidationError {
 
 /// One parsed schema field descriptor. `pub(crate)` so the sibling
 /// OpenAPI emitter ([`crate::openapi`]) derives the field's JSON schema
-/// from the SAME parsed representation the validator range-checks (the
+/// from the SAME parsed representation the validator checks (the
 /// cannot-drift single source — ADR-0080 §5.3 / footgun #4).
+///
+/// `lo`/`hi` carry the int-range bound for an [`FieldKind::I64`] field
+/// (`minimum`/`maximum`) AND the length bound for an [`FieldKind::Str`]
+/// field (`minLength`/`maxLength`, ADR-0080 Phase-2) — the `kind`
+/// discriminates value-range from length. `pattern` carries the raw regex
+/// for a [`FieldKind::Pat`] field (`pattern`, ADR-0080 Phase-2/3).
 pub(crate) struct FieldSpec {
     pub(crate) name: String,
     pub(crate) kind: FieldKind,
     pub(crate) lo: Option<i64>,
     pub(crate) hi: Option<i64>,
+    /// The raw regex for a [`FieldKind::Pat`] field; `None` otherwise.
+    pub(crate) pattern: Option<String>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum FieldKind {
+    /// A `str` field. Carries an OPTIONAL length bound in `lo`/`hi`
+    /// (ADR-0080 Phase-2: `minLength`/`maxLength`).
     Str,
     I64,
     F64,
     Bool,
+    /// A `str` field with a regex PATTERN refinement (ADR-0080
+    /// Phase-2/Phase-3, descriptor token `pat`). The base JSON type is still
+    /// `string`; the raw regex lives in [`FieldSpec::pattern`].
+    Pat,
     /// A non-Phase-1b-ii scalar — presence-only (no type/range check).
     Any,
 }
@@ -165,14 +214,16 @@ impl FieldKind {
             "i64" => Self::I64,
             "f64" => Self::F64,
             "bool" => Self::Bool,
+            "pat" => Self::Pat,
             _ => Self::Any,
         }
     }
 
-    /// The validation-error label for a wrong-type 422 detail.
+    /// The validation-error label for a wrong-type 422 detail. A `pat` field
+    /// is a string (the pattern constrains a string value).
     fn type_name(self) -> &'static str {
         match self {
-            Self::Str => "string",
+            Self::Str | Self::Pat => "string",
             Self::I64 => "integer",
             Self::F64 => "number",
             Self::Bool => "boolean",
@@ -181,13 +232,14 @@ impl FieldKind {
     }
 
     /// The OpenAPI 3.1 `type` keyword for this field kind (ADR-0080 §5.3):
-    /// `str → string`, `i64 → integer`, `f64 → number`, `bool → boolean`.
-    /// An `Any` field (a non-Phase-1b-ii scalar) has no statically-known
-    /// OpenAPI type, so the emitter omits the `type` keyword for it
-    /// (`None` here). Consumed by [`crate::openapi`].
+    /// `str → string`, `i64 → integer`, `f64 → number`, `bool → boolean`,
+    /// `pat → string` (a pattern constrains a string). An `Any` field (a
+    /// non-Phase-1b-ii scalar) has no statically-known OpenAPI type, so the
+    /// emitter omits the `type` keyword for it (`None` here). Consumed by
+    /// [`crate::openapi`].
     pub(crate) fn openapi_type(self) -> Option<&'static str> {
         match self {
-            Self::Str => Some("string"),
+            Self::Str | Self::Pat => Some("string"),
             Self::I64 => Some("integer"),
             Self::F64 => Some("number"),
             Self::Bool => Some("boolean"),
@@ -216,6 +268,17 @@ pub(crate) fn body_name(schema: &str) -> Option<String> {
 /// defensively (the compiler emits well-formed descriptors; this never
 /// panics on bad input). `pub(crate)` so the OpenAPI emitter walks the
 /// SAME parse the validator does (the cannot-drift single source).
+///
+/// The payload after `field<TAB>` is `<kind-token>[<suffix>]` (mirroring
+/// [`cobrust_types::Refinement::descriptor_payload`], the ONE encoder):
+///
+/// - `i64[:lo:hi]` / `str[:lo:hi]` — a `:`-delimited numeric suffix. For
+///   `i64` the bounds are an int RANGE (`minimum`/`maximum`); for `str` they
+///   are a LENGTH bound (`minLength`/`maxLength`, ADR-0080 Phase-2). An
+///   absent bound is the empty string.
+/// - `pat:<regex>` — a regex PATTERN; the regex is EVERYTHING after the
+///   first `:` (so a `:` inside the regex is preserved). The base JSON type
+///   is `string`.
 pub(crate) fn parse_schema(schema: &str) -> Vec<FieldSpec> {
     let mut specs = Vec::new();
     for line in schema.lines() {
@@ -225,19 +288,50 @@ pub(crate) fn parse_schema(schema: &str) -> Vec<FieldSpec> {
         let Some((name, rest)) = line.split_once('\t') else {
             continue;
         };
-        // `rest` is `kind[:lo:hi]`.
-        let mut parts = rest.split(':');
-        let kind = FieldKind::parse(parts.next().unwrap_or("any"));
-        let lo = parts.next().and_then(|s| s.parse::<i64>().ok());
-        let hi = parts.next().and_then(|s| s.parse::<i64>().ok());
+        // The kind token is everything up to the FIRST `:`; the remainder
+        // is the kind-specific suffix (a `:lo:hi` numeric pair, or — for a
+        // `pat` field — the raw regex, which may itself contain `:`).
+        let (kind_token, suffix) = match rest.split_once(':') {
+            Some((k, s)) => (k, Some(s)),
+            None => (rest, None),
+        };
+        let kind = FieldKind::parse(kind_token);
+        let (lo, hi, pattern) = if let FieldKind::Pat = kind {
+            // The pattern payload is the raw regex (the whole remainder
+            // after the first `:`). An empty/absent remainder → no pattern.
+            (
+                None,
+                None,
+                suffix.filter(|s| !s.is_empty()).map(str::to_string),
+            )
+        } else {
+            // Every other kind carries the `:lo:hi` numeric suffix (an
+            // absent bound is the empty string).
+            let (lo, hi) = parse_numeric_suffix(suffix);
+            (lo, hi, None)
+        };
         specs.push(FieldSpec {
             name: name.to_string(),
             kind,
             lo,
             hi,
+            pattern,
         });
     }
     specs
+}
+
+/// Parse the `:lo:hi` numeric suffix (after the kind token's first `:` has
+/// already been split off, so `suffix` is `lo:hi`). Either bound may be the
+/// empty string (absent). A malformed bound parses to `None` (defensive).
+fn parse_numeric_suffix(suffix: Option<&str>) -> (Option<i64>, Option<i64>) {
+    let Some(suffix) = suffix else {
+        return (None, None);
+    };
+    let mut parts = suffix.split(':');
+    let lo = parts.next().and_then(|s| s.parse::<i64>().ok());
+    let hi = parts.next().and_then(|s| s.parse::<i64>().ok());
+    (lo, hi)
 }
 
 /// Validate `body` against `schema` (ADR-0080 §5.4). Returns `Ok(())` iff
@@ -277,13 +371,27 @@ pub fn validate_against_schema(schema: &str, body: &Value) -> Result<(), Validat
     Ok(())
 }
 
-/// Type-check (and range-check) one field's JSON value against its spec.
+/// Type-check (and range/length/pattern-check) one field's JSON value
+/// against its spec.
 fn check_field(spec: &FieldSpec, value: &Value) -> Result<(), ValidationError> {
     match spec.kind {
         FieldKind::Str => {
-            if !value.is_string() {
+            let Some(s) = value.as_str() else {
                 return Err(wrong_type(spec));
-            }
+            };
+            // Str-LENGTH refinement (ADR-0080 Phase-2). The length is the
+            // Unicode scalar count (Python `len()` / JSON Schema
+            // minLength/maxLength semantics — codepoints, not bytes). `lo`/
+            // `hi` are `None` for a plain `str` field (no length bound).
+            check_str_len(spec, s)?;
+        }
+        FieldKind::Pat => {
+            // A `str` field with a regex PATTERN refinement (ADR-0080
+            // Phase-2/3). Must be a string AND match the regex.
+            let Some(s) = value.as_str() else {
+                return Err(wrong_type(spec));
+            };
+            check_pattern(spec, s)?;
         }
         FieldKind::Bool => {
             if !value.is_boolean() {
@@ -314,6 +422,51 @@ fn check_field(spec: &FieldSpec, value: &Value) -> Result<(), ValidationError> {
         }
     }
     Ok(())
+}
+
+/// Enforce a `str` field's length refinement (ADR-0080 Phase-2). `lo`/`hi`
+/// are inclusive character-count bounds (`None` = unbounded on that side).
+fn check_str_len(spec: &FieldSpec, s: &str) -> Result<(), ValidationError> {
+    // Codepoint count (Python `len()` semantics). `i64` is safe: a string
+    // long enough to overflow `i64` is not representable in memory.
+    #[allow(clippy::cast_possible_wrap)]
+    let len = s.chars().count() as i64;
+    if spec.lo.is_some_and(|lo| len < lo) || spec.hi.is_some_and(|hi| len > hi) {
+        return Err(ValidationError::LengthOutOfRange {
+            field: spec.name.clone(),
+            len,
+            lo: spec.lo,
+            hi: spec.hi,
+        });
+    }
+    Ok(())
+}
+
+/// Enforce a `str` field's regex pattern refinement (ADR-0080 Phase-2/3).
+///
+/// The regex was already compile-checked at type-check time (cobrust-types
+/// `interpret_refinement` rejects a bad regex with a build-time
+/// `TypeError`), so a compile failure here is unexpected. We compile it once
+/// per call rather than caching: the regexes are tiny and the schema is
+/// already re-parsed per request, so this matches the existing per-request
+/// cost profile (a process-wide compiled-regex cache is a future
+/// optimisation, not a correctness concern). A defensive compile failure is
+/// treated as a mismatch (it never enters the handler — fail closed).
+fn check_pattern(spec: &FieldSpec, s: &str) -> Result<(), ValidationError> {
+    let Some(pattern) = &spec.pattern else {
+        // A `pat` field with no regex carries no constraint (defensive — the
+        // compiler always emits the regex for a Pattern refinement).
+        return Ok(());
+    };
+    let matches = regex::Regex::new(pattern).is_ok_and(|re| re.is_match(s));
+    if matches {
+        Ok(())
+    } else {
+        Err(ValidationError::PatternMismatch {
+            field: spec.name.clone(),
+            pattern: pattern.clone(),
+        })
+    }
 }
 
 fn wrong_type(spec: &FieldSpec) -> ValidationError {
@@ -485,5 +638,148 @@ mod tests {
         assert_eq!(parsed["error"], "validation_failed");
         let detail = parsed["detail"].as_str().expect("detail is a string");
         assert!(detail.contains("rank"));
+    }
+
+    // ----- ADR-0080 Phase-2: str LENGTH refinement (StrLen) ------------
+
+    /// `username: str where 1 <= len(self) and len(self) <= 20`
+    /// (descriptor `str:1:20`) + `email: str` (plain).
+    const STR_SCHEMA: &str = "# SignupBody\nemail\tstr\nusername\tstr:1:20";
+
+    #[test]
+    fn str_length_in_bounds_passes() {
+        let v = json!({"username": "bob", "email": "x"});
+        assert_eq!(validate_against_schema(STR_SCHEMA, &v), Ok(()));
+    }
+
+    #[test]
+    fn str_length_above_max_rejected() {
+        // 21 chars > max 20.
+        let v = json!({"username": "a".repeat(21), "email": "x"});
+        assert!(matches!(
+            validate_against_schema(STR_SCHEMA, &v),
+            Err(ValidationError::LengthOutOfRange {
+                len: 21,
+                hi: Some(20),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn str_length_below_min_rejected() {
+        // Empty string, len 0 < min 1.
+        let v = json!({"username": "", "email": "x"});
+        assert!(matches!(
+            validate_against_schema(STR_SCHEMA, &v),
+            Err(ValidationError::LengthOutOfRange {
+                len: 0,
+                lo: Some(1),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn str_length_counts_unicode_scalars_not_bytes() {
+        // "é" is 1 codepoint but 2 UTF-8 bytes; a one-sided `len <= 3`
+        // bound counts codepoints (Python `len()` semantics).
+        let schema = "s\tstr::3";
+        // "ééé" = 3 codepoints (6 bytes) → in bounds.
+        assert_eq!(
+            validate_against_schema(schema, &json!({"s": "ééé"})),
+            Ok(())
+        );
+        // "éééé" = 4 codepoints → over.
+        assert!(matches!(
+            validate_against_schema(schema, &json!({"s": "éééé"})),
+            Err(ValidationError::LengthOutOfRange { len: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn plain_str_field_has_no_length_bound() {
+        // `email: str` (no suffix) accepts any length.
+        let v = json!({"username": "bob", "email": "a".repeat(10000)});
+        assert_eq!(validate_against_schema(STR_SCHEMA, &v), Ok(()));
+    }
+
+    #[test]
+    fn str_length_non_string_value_is_wrong_type() {
+        let v = json!({"username": 42, "email": "x"});
+        assert!(matches!(
+            validate_against_schema(STR_SCHEMA, &v),
+            Err(ValidationError::WrongType { field, .. }) if field == "username"
+        ));
+    }
+
+    // ----- ADR-0080 Phase-2/3: str PATTERN refinement (Pattern) --------
+
+    /// `email: str where pattern(self, ".+@.+")` (descriptor `pat:.+@.+`).
+    const PAT_SCHEMA: &str = "# SignupBody\nemail\tpat:.+@.+";
+
+    #[test]
+    fn pattern_match_passes() {
+        assert_eq!(
+            validate_against_schema(PAT_SCHEMA, &json!({"email": "b@x.com"})),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn pattern_mismatch_rejected() {
+        assert!(matches!(
+            validate_against_schema(PAT_SCHEMA, &json!({"email": "notanemail"})),
+            Err(ValidationError::PatternMismatch { field, pattern })
+                if field == "email" && pattern == ".+@.+"
+        ));
+    }
+
+    #[test]
+    fn pattern_non_string_value_is_wrong_type() {
+        assert!(matches!(
+            validate_against_schema(PAT_SCHEMA, &json!({"email": 7})),
+            Err(ValidationError::WrongType { field, .. }) if field == "email"
+        ));
+    }
+
+    #[test]
+    fn pattern_with_colon_in_regex_preserved() {
+        // A `:` inside the regex must survive the descriptor's
+        // `kind:remainder` split (the regex is everything after the first
+        // `:`). The field separator is a real TAB; the regex `^\d+:\d+$`
+        // matches "12:34".
+        let schema = "port\tpat:^\\d+:\\d+$";
+        assert_eq!(
+            validate_against_schema(schema, &json!({"port": "12:34"})),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_against_schema(schema, &json!({"port": "nope"})),
+            Err(ValidationError::PatternMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn str_len_descriptor_parses_to_str_kind_with_bounds() {
+        // The decode side of the cannot-drift contract: `str:1:20` parses
+        // to a Str field carrying lo=1, hi=20 (the SAME bounds the OpenAPI
+        // emitter reads for minLength/maxLength).
+        let specs = parse_schema("u\tstr:1:20");
+        assert_eq!(specs.len(), 1);
+        assert!(matches!(specs[0].kind, FieldKind::Str));
+        assert_eq!(specs[0].lo, Some(1));
+        assert_eq!(specs[0].hi, Some(20));
+        assert_eq!(specs[0].pattern, None);
+    }
+
+    #[test]
+    fn pat_descriptor_parses_to_pat_kind_with_regex() {
+        let specs = parse_schema("e\tpat:.+@.+");
+        assert_eq!(specs.len(), 1);
+        assert!(matches!(specs[0].kind, FieldKind::Pat));
+        assert_eq!(specs[0].pattern.as_deref(), Some(".+@.+"));
+        assert_eq!(specs[0].lo, None);
+        assert_eq!(specs[0].hi, None);
     }
 }

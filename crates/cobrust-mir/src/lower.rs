@@ -2215,13 +2215,20 @@ impl<'a> BodyBuilder<'a> {
                 Ty::Bool => "bool",
                 _ => "any",
             };
-            let suffix = self
+            // The descriptor payload (`kind[suffix]`) is rendered by the
+            // ONE encoding source, `Refinement::descriptor_payload`
+            // (cobrust-types), so it cannot drift from `parse_schema`, the
+            // ONE decode source (ADR-0080 §3 footgun #4). A refinement may
+            // append a suffix to `kind` (int range / str length) or replace
+            // the kind token entirely (a `pat:<regex>` pattern). A field
+            // with no refinement carries just its base kind.
+            let payload = self
                 .ctx
                 .typed
                 .adt_refinements
                 .get(&(*body_adt, name.clone()))
-                .map_or_else(String::new, cobrust_types::Refinement::schema_suffix);
-            lines.push(format!("{name}\t{kind}{suffix}"));
+                .map_or_else(|| kind.to_string(), |r| r.descriptor_payload(kind));
+            lines.push(format!("{name}\t{payload}"));
         }
         lines.join("\n")
     }

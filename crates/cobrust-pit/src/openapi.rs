@@ -25,17 +25,22 @@
 //! # Field → OpenAPI mapping (ADR-0080 §5.3)
 //!
 //! ```text
-//! str                         → {"type":"string"}
-//! i64                         → {"type":"integer"}
-//! f64                         → {"type":"number"}
-//! bool                        → {"type":"boolean"}
-//! i64 where 0 <= self         → {"type":"integer","minimum":0}
-//! i64 where self <= 100       → {"type":"integer","maximum":100}
-//! i64 where 0 <= self <= 100  → {"type":"integer","minimum":0,"maximum":100}
+//! str                          → {"type":"string"}
+//! i64                          → {"type":"integer"}
+//! f64                          → {"type":"number"}
+//! bool                         → {"type":"boolean"}
+//! i64 where 0 <= self          → {"type":"integer","minimum":0}
+//! i64 where self <= 100        → {"type":"integer","maximum":100}
+//! i64 where 0 <= self <= 100   → {"type":"integer","minimum":0,"maximum":100}
+//! str where 1 <= len(self)<=20 → {"type":"string","minLength":1,"maxLength":20}
+//! str where len(self) <= 255   → {"type":"string","maxLength":255}
+//! str where pattern(self, re)  → {"type":"string","pattern":re}
 //! ```
 //!
-//! (str length / pattern bounds are Phase-2/3, ADR-0080 §6 — not emitted
-//! here.) The output is a `serde_json::Value` so the serving surface
+//! (Str LENGTH bounds → `minLength`/`maxLength` and the str PATTERN →
+//! `pattern` are the ADR-0080 Phase-2 additions; the array-length `maxItems`
+//! form for list fields is still deferred to Phase-4, §6.) The output is a
+//! `serde_json::Value` so the serving surface
 //! ([`crate::app::App::serve_openapi`]) can render it with
 //! `serde_json::to_string` — `openapi.json` is a Rust-assembled JSON
 //! string response, NOT a `.cb`-struct serialization (that is the deferred
@@ -43,7 +48,7 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::validation::{FieldSpec, body_name, parse_schema};
+use crate::validation::{FieldKind, FieldSpec, body_name, parse_schema};
 
 /// The OpenAPI version this emitter targets (ADR-0080 §5.3 — OpenAPI 3.1).
 const OPENAPI_VERSION: &str = "3.1.0";
@@ -75,10 +80,19 @@ fn schema_name(meta: &ValidatedRouteMeta) -> String {
 
 /// Derive ONE field's OpenAPI 3.1 schema object from its parsed
 /// [`FieldSpec`] (ADR-0080 §5.3). The `type` keyword comes from the field
-/// kind; an int-range refinement contributes `minimum` (from `lo`) and/or
-/// `maximum` (from `hi`) — the EXACT SAME `lo`/`hi` the validator
-/// range-checks against, so the advertised bound cannot drift from the
-/// enforced one (footgun #4).
+/// kind; a refinement contributes the KIND-APPROPRIATE keyword(s) — the
+/// EXACT SAME `lo`/`hi`/`pattern` the validator checks against, so the
+/// advertised bound cannot drift from the enforced one (footgun #4):
+///
+/// - an `i64` int-range → `minimum` (from `lo`) and/or `maximum` (from `hi`);
+/// - a `str` LENGTH bound → `minLength` (from `lo`) and/or `maxLength` (from
+///   `hi`) (ADR-0080 Phase-2 §5.3 line 331);
+/// - a `pat` PATTERN → `pattern` (the raw regex) (ADR-0080 §5.3 line 339).
+///
+/// `lo`/`hi` are interpreted as VALUE bounds (`minimum`/`maximum`) for an
+/// `i64` field and as LENGTH bounds (`minLength`/`maxLength`) for a `str`
+/// field — the SAME `kind`-discrimination the validator uses, so the schema
+/// keyword and the validator's check are two projections of ONE source.
 ///
 /// An `Any` field (a non-Phase-1b-ii scalar) has no statically-known type,
 /// so the emitter yields an empty schema `{}` (OpenAPI's "any value") —
@@ -94,14 +108,34 @@ pub(crate) fn field_schema(spec: &FieldSpec) -> Value {
     if let Some(ty) = spec.kind.openapi_type() {
         obj.insert("type".to_string(), Value::String(ty.to_string()));
     }
-    // The int-range refinement (`minimum`/`maximum`) — the SAME `lo`/`hi`
-    // the validator enforces (ADR-0080 §5.3, cannot drift). Only an i64
-    // field carries these; `parse_schema` leaves them `None` otherwise.
-    if let Some(lo) = spec.lo {
-        obj.insert("minimum".to_string(), Value::Number(lo.into()));
-    }
-    if let Some(hi) = spec.hi {
-        obj.insert("maximum".to_string(), Value::Number(hi.into()));
+    match spec.kind {
+        // A `str` field's `lo`/`hi` are LENGTH bounds → minLength/maxLength
+        // (ADR-0080 Phase-2). The SAME `lo`/`hi` the validator length-checks.
+        FieldKind::Str => {
+            if let Some(lo) = spec.lo {
+                obj.insert("minLength".to_string(), Value::Number(lo.into()));
+            }
+            if let Some(hi) = spec.hi {
+                obj.insert("maxLength".to_string(), Value::Number(hi.into()));
+            }
+        }
+        // A `pat` field → `pattern` (the raw regex the validator matches
+        // against — ADR-0080 Phase-2/3, cannot drift).
+        FieldKind::Pat => {
+            if let Some(pattern) = &spec.pattern {
+                obj.insert("pattern".to_string(), Value::String(pattern.clone()));
+            }
+        }
+        // An `i64` field's `lo`/`hi` are VALUE bounds → minimum/maximum
+        // (ADR-0080 Phase-1, cannot drift).
+        FieldKind::I64 | FieldKind::F64 | FieldKind::Bool | FieldKind::Any => {
+            if let Some(lo) = spec.lo {
+                obj.insert("minimum".to_string(), Value::Number(lo.into()));
+            }
+            if let Some(hi) = spec.hi {
+                obj.insert("maximum".to_string(), Value::Number(hi.into()));
+            }
+        }
     }
     Value::Object(obj)
 }
@@ -321,5 +355,74 @@ mod tests {
         let doc = build_openapi_doc(&routes);
         let schema = &doc["components"]["schemas"]["RequestBody"];
         assert_eq!(schema["properties"]["rank"]["maximum"], 100);
+    }
+
+    // ----- ADR-0080 Phase-2: str refinements → OpenAPI keywords --------
+
+    /// `username: str where 1 <= len(self) <= 20` (descriptor `str:1:20`) +
+    /// `email: str where pattern(self, ".+@.+")` (descriptor `pat:.+@.+`).
+    const STR_SCHEMA: &str = "# SignupBody\nemail\tpat:.+@.+\nusername\tstr:1:20";
+
+    #[test]
+    fn str_length_field_emits_min_max_length_not_minimum_maximum() {
+        // ADR-0080 §5.3 line 331 — a `str` length bound → minLength/maxLength
+        // (NOT minimum/maximum, which are the int-range keywords). The SAME
+        // lo/hi the validator length-checks.
+        let specs = parse_schema(STR_SCHEMA);
+        let u = specs
+            .iter()
+            .find(|s| s.name == "username")
+            .expect("username");
+        let v = field_schema(u);
+        assert_eq!(v["type"], "string");
+        assert_eq!(v["minLength"], 1);
+        assert_eq!(v["maxLength"], 20);
+        assert!(
+            v.get("minimum").is_none() && v.get("maximum").is_none(),
+            "a str length bound must NOT emit minimum/maximum; got {v}"
+        );
+    }
+
+    #[test]
+    fn pattern_field_emits_pattern_keyword_with_raw_regex() {
+        // ADR-0080 §5.3 line 339 — a `pat` field → {type:string,
+        // pattern:"<raw regex>"}. The SAME regex the validator matches.
+        let specs = parse_schema(STR_SCHEMA);
+        let e = specs.iter().find(|s| s.name == "email").expect("email");
+        let v = field_schema(e);
+        assert_eq!(v["type"], "string");
+        assert_eq!(v["pattern"], ".+@.+");
+    }
+
+    #[test]
+    fn str_refinements_cannot_drift_from_parsed_bounds() {
+        // The cannot-drift property for the str kinds: the bound/pattern the
+        // doc advertises is read from the SAME parse_schema output the
+        // validator would check. One source, so they are equal.
+        let specs = parse_schema(STR_SCHEMA);
+        let u = specs
+            .iter()
+            .find(|s| s.name == "username")
+            .expect("username");
+        let parsed_hi = u.hi.expect("username has a length upper bound");
+        let e = specs.iter().find(|s| s.name == "email").expect("email");
+        let parsed_pat = e.pattern.clone().expect("email has a pattern");
+
+        let doc = build_openapi_doc(&[ValidatedRouteMeta {
+            method: "POST".to_string(),
+            path: "/signup".to_string(),
+            schema: STR_SCHEMA.to_string(),
+        }]);
+        let props = &doc["components"]["schemas"]["SignupBody"]["properties"];
+        assert_eq!(
+            props["username"]["maxLength"].as_i64().expect("maxLength"),
+            parsed_hi,
+            "advertised maxLength must equal the parsed length bound — one source"
+        );
+        assert_eq!(
+            props["email"]["pattern"].as_str().expect("pattern"),
+            parsed_pat,
+            "advertised pattern must equal the parsed regex — one source"
+        );
     }
 }

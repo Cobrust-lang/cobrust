@@ -961,26 +961,96 @@ impl Ctx {
             field: field.to_string(),
             span: pred.span,
             suggestion: Some(
-                "use the fixed int-range grammar on an i64 field: \
-                 `0 <= self`, `self <= 100`, or `0 <= self and self <= 100` \
-                 (`len(self) <= n` / `pattern(self, \"…\")` are later phases)",
+                "use a fixed refinement grammar: an int-range on an i64 field \
+                 (`0 <= self`, `self <= 100`, or `0 <= self and self <= 100`); \
+                 a length bound on a str field (`len(self) <= 20`, \
+                 `len(self) >= 1`, or `1 <= len(self) and len(self) <= 20`); \
+                 or a pattern on a str field (`pattern(self, \"<regex>\")`)",
             ),
         };
-        // The int-range refinement applies only to an `i64` field.
-        if field_ty != Some(&Ty::Int) {
-            return Err(reject());
+        // The fixed grammar is keyed on the field's declared base type
+        // (ADR-0080 Q6): int-range on `i64`, length/pattern on `str`. A
+        // refinement whose SHAPE does not match the field's base type — a
+        // `len(self)`/`pattern(self, …)` on an `i64` field, or an int-range
+        // (`0 <= self`) on a `str` field — is rejected here with the FIX
+        // (§2.5-B), not silently mis-interpreted.
+        match field_ty {
+            Some(&Ty::Int) => self.interpret_int_range(pred, reject),
+            Some(&Ty::Str) => self.interpret_str_refinement(field, pred, reject),
+            _ => Err(reject()),
         }
-        // A single bound, or two bounds joined by `and`.
+    }
+
+    /// Interpret the fixed INT-RANGE grammar on an `i64` field (ADR-0080
+    /// Phase-1b-ii, Q6): `lo <= self`, `self <= hi`, or
+    /// `lo <= self and self <= hi`.
+    fn interpret_int_range(
+        &self,
+        pred: &Expr,
+        reject: impl Fn() -> TypeError + Copy,
+    ) -> Result<crate::refinement::Refinement, TypeError> {
+        let (lo, hi) = self.parse_bound_predicate(pred, is_self_name, reject)?;
+        Ok(crate::refinement::Refinement::IntRange { lo, hi })
+    }
+
+    /// Interpret the fixed STRING refinements on a `str` field (ADR-0080
+    /// Phase-2): a LENGTH bound (`lo <= len(self) <= hi` and its one-sided
+    /// forms `len(self) <= n` / `len(self) >= n`) → [`StrLen`], or a regex
+    /// PATTERN (`pattern(self, "<re>")` with a literal regex) → [`Pattern`].
+    ///
+    /// [`StrLen`]: crate::refinement::Refinement::StrLen
+    /// [`Pattern`]: crate::refinement::Refinement::Pattern
+    fn interpret_str_refinement(
+        &self,
+        field: &str,
+        pred: &Expr,
+        reject: impl Fn() -> TypeError + Copy,
+    ) -> Result<crate::refinement::Refinement, TypeError> {
+        // `pattern(self, "<literal-regex>")` — a single positional `self`
+        // followed by a single string-literal regex.
+        if let Some(regex) = parse_pattern_call(pred) {
+            // Reject a malformed regex at COMPILE time (build-time, not a
+            // per-request runtime panic) — §2.5-B: the diagnostic carries
+            // the fix. We compile-check the pattern here; the runtime
+            // validator re-compiles the SAME literal once at startup.
+            if regex::Regex::new(&regex).is_err() {
+                return Err(TypeError::UnsupportedRefinement {
+                    field: field.to_string(),
+                    span: pred.span,
+                    suggestion: Some(
+                        "the regex in `pattern(self, \"…\")` failed to compile; \
+                         use a valid regular expression (Rust `regex` crate syntax)",
+                    ),
+                });
+            }
+            return Ok(crate::refinement::Refinement::Pattern { regex });
+        }
+        // Otherwise a LENGTH bound over `len(self)`.
+        let (lo, hi) = self.parse_bound_predicate(pred, is_len_self_call, reject)?;
+        Ok(crate::refinement::Refinement::StrLen { lo, hi })
+    }
+
+    /// Parse a one- or two-sided fixed bound predicate into `(lo, hi)`,
+    /// shared by the int-range (`self`-keyed) and str-length
+    /// (`len(self)`-keyed) grammars. `is_subject` recognises the bound's
+    /// subject term (a bare `self` for int range; a `len(self)` call for str
+    /// length); everything else is an int literal. A single comparison
+    /// yields one bound; `A and B` combines one bound from each side,
+    /// rejecting a contradictory/redundant pairing (two los / two his).
+    fn parse_bound_predicate(
+        &self,
+        pred: &Expr,
+        is_subject: fn(&Expr) -> bool,
+        reject: impl Fn() -> TypeError + Copy,
+    ) -> Result<(Option<i64>, Option<i64>), TypeError> {
         match &pred.kind {
             ExprKind::Bin {
                 op: BinOp::And,
                 lhs,
                 rhs,
             } => {
-                let (lo1, hi1) = parse_int_bound(lhs).ok_or_else(reject)?;
-                let (lo2, hi2) = parse_int_bound(rhs).ok_or_else(reject)?;
-                // Combine: each side contributes one bound; reject a
-                // contradictory or redundant pairing (two los / two his).
+                let (lo1, hi1) = parse_subject_bound(lhs, is_subject).ok_or_else(reject)?;
+                let (lo2, hi2) = parse_subject_bound(rhs, is_subject).ok_or_else(reject)?;
                 let lo = match (lo1, lo2) {
                     (Some(a), None) => Some(a),
                     (None, Some(b)) => Some(b),
@@ -991,12 +1061,9 @@ impl Ctx {
                     (None, Some(b)) => Some(b),
                     _ => return Err(reject()),
                 };
-                Ok(crate::refinement::Refinement::IntRange { lo, hi })
+                Ok((lo, hi))
             }
-            _ => {
-                let (lo, hi) = parse_int_bound(pred).ok_or_else(reject)?;
-                Ok(crate::refinement::Refinement::IntRange { lo, hi })
-            }
+            _ => parse_subject_bound(pred, is_subject).ok_or_else(reject),
         }
     }
 
@@ -3707,44 +3774,51 @@ fn literal_int_value(e: &Expr) -> Option<i64> {
     }
 }
 
-/// ADR-0080 Phase-1b-ii — parse ONE comparison of the fixed refinement
-/// grammar into an `(lo, hi)` bound pair where exactly one of `lo`/`hi`
-/// is `Some` (the comparison constrains one side of `self`).
+/// ADR-0080 Phase-1b-ii / Phase-2 — parse ONE comparison of a fixed bound
+/// grammar into an `(lo, hi)` bound pair where exactly one of `lo`/`hi` is
+/// `Some` (the comparison constrains one side of the *subject*).
 ///
-/// Accepted shapes, with `N` an integer literal and `self` the bare
-/// placeholder `Name("self")`: `N <= self` is a lower bound
-/// `(Some(N), None)`; `self <= N` is an upper bound `(None, Some(N))`;
-/// `self >= N` mirrors the lower bound; `N >= self` mirrors the upper.
-/// Strict `<`/`>` are converted to inclusive bounds by a ±1 SATURATING
-/// shift so the runtime guard + the OpenAPI `minimum`/`maximum` stay
-/// integer-inclusive (`self < 100` becomes `hi = 99`; `0 < self` becomes
-/// `lo = 1`). Any other shape (non-`self` operand, both-literal,
-/// both-`self`, a float literal, a `len`/`pattern` call) returns `None`,
-/// and `interpret_refinement` surfaces `TypeError::UnsupportedRefinement`.
-fn parse_int_bound(e: &Expr) -> Option<(Option<i64>, Option<i64>)> {
+/// `is_subject` recognises the bound's subject term: a bare `self`
+/// ([`is_self_name`]) for the int-range grammar, or a `len(self)` call
+/// ([`is_len_self_call`]) for the str-length grammar. The other side is an
+/// integer literal `N`.
+///
+/// Accepted shapes (with `S` the subject, `N` an int literal): `N <= S` is a
+/// lower bound `(Some(N), None)`; `S <= N` is an upper bound
+/// `(None, Some(N))`; `S >= N` mirrors the lower bound; `N >= S` the upper.
+/// Strict `<`/`>` are converted to inclusive bounds by a ±1 SATURATING shift
+/// so the runtime guard + the OpenAPI `minimum`/`maximum`
+/// (`minLength`/`maxLength`) stay integer-inclusive (`S < 100` → `hi = 99`;
+/// `0 < S` → `lo = 1`). Any other shape (non-subject operand, both-literal,
+/// both-subject, a float literal) returns `None`, and the caller surfaces
+/// `TypeError::UnsupportedRefinement`.
+fn parse_subject_bound(
+    e: &Expr,
+    is_subject: fn(&Expr) -> bool,
+) -> Option<(Option<i64>, Option<i64>)> {
     let ExprKind::Bin { op, lhs, rhs } = &e.kind else {
         return None;
     };
-    let lhs_self = is_self_name(lhs);
-    let rhs_self = is_self_name(rhs);
+    let lhs_subj = is_subject(lhs);
+    let rhs_subj = is_subject(rhs);
     let lhs_int = literal_int_value(lhs);
     let rhs_int = literal_int_value(rhs);
-    // Exactly one side is `self`, the other an int literal.
-    match (lhs_self, rhs_self, lhs_int, rhs_int) {
-        // `self <op> N`
+    // Exactly one side is the subject, the other an int literal.
+    match (lhs_subj, rhs_subj, lhs_int, rhs_int) {
+        // `S <op> N`
         (true, false, _, Some(n)) => match op {
-            BinOp::LtEq => Some((None, Some(n))), // self <= N
-            BinOp::Lt => Some((None, Some(n.saturating_sub(1)))), // self < N  (-> <= N-1)
-            BinOp::GtEq => Some((Some(n), None)), // self >= N
-            BinOp::Gt => Some((Some(n.saturating_add(1)), None)), // self > N  (-> >= N+1)
+            BinOp::LtEq => Some((None, Some(n))),                 // S <= N
+            BinOp::Lt => Some((None, Some(n.saturating_sub(1)))), // S < N  (-> <= N-1)
+            BinOp::GtEq => Some((Some(n), None)),                 // S >= N
+            BinOp::Gt => Some((Some(n.saturating_add(1)), None)), // S > N  (-> >= N+1)
             _ => None,
         },
-        // `N <op> self`
+        // `N <op> S`
         (false, true, Some(n), _) => match op {
-            BinOp::LtEq => Some((Some(n), None)), // N <= self
-            BinOp::Lt => Some((Some(n.saturating_add(1)), None)), // N < self  (-> >= N+1)
-            BinOp::GtEq => Some((None, Some(n))), // N >= self
-            BinOp::Gt => Some((None, Some(n.saturating_sub(1)))), // N > self  (-> <= N-1)
+            BinOp::LtEq => Some((Some(n), None)),                 // N <= S
+            BinOp::Lt => Some((Some(n.saturating_add(1)), None)), // N < S  (-> >= N+1)
+            BinOp::GtEq => Some((None, Some(n))),                 // N >= S
+            BinOp::Gt => Some((None, Some(n.saturating_sub(1)))), // N > S  (-> <= N-1)
             _ => None,
         },
         _ => None,
@@ -3756,6 +3830,60 @@ fn parse_int_bound(e: &Expr) -> Option<(Option<i64>, Option<i64>)> {
 /// (`DefKind::Param`); here we only need the surface name to be `self`.
 fn is_self_name(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::Name(rn) if rn.name == "self")
+}
+
+/// ADR-0080 Phase-2 — is this a `len(self)` call (the subject of the
+/// str-LENGTH refinement grammar)? Recognises a call whose callee is the
+/// bare name `len` (the prelude builtin, ADR-0050d) with a single positional
+/// argument that is a bare `self` ([`is_self_name`]). Anything else
+/// (`len(other)`, `len()`, a method-form `self.len()`) is not the subject.
+fn is_len_self_call(e: &Expr) -> bool {
+    let ExprKind::Call { callee, args } = &e.kind else {
+        return false;
+    };
+    let ExprKind::Name(rn) = &callee.kind else {
+        return false;
+    };
+    if rn.name != "len" {
+        return false;
+    }
+    matches!(
+        args.as_slice(),
+        [CallArg::Positional(arg)] if is_self_name(arg)
+    )
+}
+
+/// ADR-0080 Phase-2/Phase-3 — recognise a `pattern(self, "<literal-regex>")`
+/// call (the str-PATTERN refinement grammar) and return the literal regex
+/// string. Accepts a call whose callee is the bare name `pattern` (bound as
+/// a synthetic placeholder in the refinement-predicate lowering scope, see
+/// `cobrust-hir`) with exactly two positional args: a bare `self`
+/// ([`is_self_name`]) and a string LITERAL. Any other shape — a non-`self`
+/// first arg, a non-literal second arg, the wrong arity — returns `None`, and
+/// `interpret_str_refinement` falls through to the length grammar (then
+/// `UnsupportedRefinement`).
+fn parse_pattern_call(e: &Expr) -> Option<String> {
+    let ExprKind::Call { callee, args } = &e.kind else {
+        return None;
+    };
+    let ExprKind::Name(rn) = &callee.kind else {
+        return None;
+    };
+    if rn.name != "pattern" {
+        return None;
+    }
+    let [CallArg::Positional(subject), CallArg::Positional(regex_arg)] = args.as_slice() else {
+        return None;
+    };
+    if !is_self_name(subject) {
+        return None;
+    }
+    // The regex must be a string LITERAL (the fixed grammar carries it
+    // verbatim into the descriptor; a non-literal cannot be embedded).
+    match &regex_arg.kind {
+        ExprKind::Lit(Lit::Str(s)) => Some(s.clone()),
+        _ => None,
+    }
 }
 
 /// ADR-0041 §H8: resolve a constant tuple index to an element type.

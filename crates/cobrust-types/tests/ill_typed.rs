@@ -2682,3 +2682,57 @@ fn i160_route_validated_non_class_body_param_rejected() {
         Cat::CallbackSignatureMismatch,
     );
 }
+
+// =====================================================================
+// ADR-0080 Phase-2 — STRING refinement NEGATIVES. The fixed str grammar
+// (`len(self)` length / `pattern(self, "<re>")`) applies ONLY to a `str`
+// field; a length/pattern form on a non-`str` field, or a malformed
+// regex, is a `TypeError::UnsupportedRefinement` with a FIX (§2.5-B).
+// =====================================================================
+
+#[test]
+fn i161_len_bound_on_int_field_rejected() {
+    // `len(self)` is the str-LENGTH subject; on an `i64` field it is not the
+    // int-range grammar (an `i64` field wants `lo <= self <= hi`, not
+    // `len(self)`). Rejected with a FIX.
+    must_reject(
+        "len-bound-on-int-field",
+        "class Body:\n    n: i64 where len(self) <= 10\nfn main() -> i64:\n    return 0\n",
+        Cat::UnsupportedRefinement,
+    );
+}
+
+#[test]
+fn i162_pattern_on_int_field_rejected() {
+    // `pattern(self, …)` is str-only; on an `i64` field it is rejected with
+    // a FIX (the int-range grammar does not admit a pattern call).
+    must_reject(
+        "pattern-on-int-field",
+        "class Body:\n    n: i64 where pattern(self, \".+\")\nfn main() -> i64:\n    return 0\n",
+        Cat::UnsupportedRefinement,
+    );
+}
+
+#[test]
+fn i163_malformed_regex_in_pattern_rejected() {
+    // A malformed regex in `pattern(self, "[")` (an unclosed character
+    // class) fails to compile; ADR-0080 Phase-2 §2.5-B makes this a
+    // BUILD-time `TypeError`, not a per-request runtime panic.
+    must_reject(
+        "malformed-regex-pattern",
+        "class Body:\n    s: str where pattern(self, \"[\")\nfn main() -> i64:\n    return 0\n",
+        Cat::UnsupportedRefinement,
+    );
+}
+
+#[test]
+fn i164_str_field_arbitrary_int_bound_rejected() {
+    // A bare `0 <= self` int-range bound on a `str` field is NOT a str
+    // refinement (the str grammar wants `len(self)` or `pattern`). Still
+    // rejected with a FIX (mirrors i158 with the Phase-2 str path active).
+    must_reject(
+        "str-field-arbitrary-int-bound",
+        "class Body:\n    s: str where 0 <= self and self <= 10\nfn main() -> i64:\n    return 0\n",
+        Cat::UnsupportedRefinement,
+    );
+}

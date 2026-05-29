@@ -47,6 +47,13 @@ serde_json = { workspace = true }
 # features adds them; finding F64: stage Cargo.lock in the same commit).
 # `compression-full` enables gzip/br/deflate/zstd for CompressionLayer.
 tower-http = { version = "0.6", features = ["cors", "trace", "compression-full"] }
+# ADR-0080 Phase-2/Phase-3 — regex PATTERN refinement (`pattern(self,
+# "<re>")`): the boundary validator regex-matches a `str` field's value. The
+# regex was already compile-checked at type-check (cobrust-types); the
+# validator re-compiles the SAME literal. `regex` 1.x is already in the
+# workspace lock (cobrust-dap), so this resolves to the locked version
+# (finding F64: stage Cargo.lock in the same commit).
+regex = "1"
 pyo3 = { version = "0.24.2", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
