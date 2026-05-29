@@ -54,10 +54,9 @@ tempfile = "3.10"
 cobrust-translator = { path = "../cobrust-translator" }
 cobrust-llm-router = { path = "../cobrust-llm-router" }
 tokio = { workspace = true }
-# ADR-0072 8/8 first proof: the `cabi` shims do not currently declare
-# any `__cobrust_str_*` primitives (the coil first proof has no string
-# args at the boundary), but cobrust-stdlib is reserved here as a
-# dev-dep for future cabi unit tests that may need str-buffer
-# allocations (e.g. when `Buffer.tolist() -> str` lands). Mirrors the
-# den / hood pattern.
-cobrust-stdlib = { path = "../cobrust-stdlib" }
+# Note (2026-05-29): a speculative `cobrust-stdlib` dev-dep was removed here
+# — it was reserved for future `__cobrust_str_*` cabi tests (e.g. when
+# `Buffer.tolist() -> str` lands) but is genuinely unused today, so
+# `cargo udeps` flagged it. Per the F44 "keep CI signals honest" lesson we
+# remove the real unused dep rather than mask it with cargo-udeps.ignore.
+# Re-add it in the same commit that introduces the str-boundary cabi test.
