@@ -1410,6 +1410,27 @@ impl<'a> BodyBuilder<'a> {
             }
             ExprKind::Call { callee, args } => self.lower_call(callee, args, e.span),
             ExprKind::Attr { base, name } => {
+                // ADR-0077 Q3 — `coil.Buffer` parens-free attribute access
+                // (`a.shape` / `a.ndim` / `a.size`). When the base resolves
+                // to a handle with a manifest attribute, retarget to the
+                // runtime symbol via `emit_ecosystem_call` (BORROWED
+                // receiver, Move → Copy upgrade — the handle drops once at
+                // scope exit). `shape` returns an owned `list[i64]` (the
+                // `_ecoret` local carries `Ty::List(Int)` so the drop pass
+                // schedules the list-drop); `ndim`/`size` return by-value
+                // `i64`. Falls through to the `Projection::Field(0)`
+                // placeholder for non-handle bases.
+                let base_ty = synth_expr_ty(self, base);
+                if let Some(sig) = cobrust_types::lookup_handle_attr(&base_ty, name) {
+                    let recv_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                    let op_out = self.emit_ecosystem_call(
+                        sig.runtime_symbol,
+                        sig.ret.clone(),
+                        vec![recv_op],
+                        e.span,
+                    );
+                    return Ok(op_out);
+                }
                 let base_op = self.lower_expr(base)?;
                 // Materialize base in a temp, project on .field(0) as a
                 // conservative placeholder — M11 stdlib resolves attrs.
@@ -1541,6 +1562,34 @@ impl<'a> BodyBuilder<'a> {
                     self.cur_block = Some(cur.0 as usize);
                     self.terminate(Terminator::Call {
                         func: Operand::Constant(Constant::Str("__cobrust_list_get".to_string())),
+                        args: vec![base_op, idx_op],
+                        destination: Place::local(dest),
+                        target: next,
+                        unwind: None,
+                    });
+                    self.cur_block = Some(next.0 as usize);
+                    return Ok(Operand::Copy(Place::local(dest)));
+                }
+                // ADR-0077 Q2 — `coil.Buffer` scalar index read. `a[i]` on
+                // a Buffer retargets to `__cobrust_coil_buffer_getitem(a, i)
+                // -> f64`, beside the Dict/List arms above. The base handle
+                // is BORROWED (Move → Copy upgrade) so the source local
+                // survives + drops once at scope exit (ADR-0072 §5 risk 1);
+                // the result is a plain `f64` scalar (ADR-0077 §4). NOT the
+                // `Projection::Index` fall-through below, which is a Wave-1
+                // no-op stub that would segfault on a Buffer (ADR-0077 §4
+                // option (b) rejection). Typecheck guaranteed `f64`.
+                if matches!(&base_ty, Ty::Adt(id, _) if *id == cobrust_types::COIL_BUFFER_ADT) {
+                    let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                    let idx_op = self.lower_index(index)?;
+                    let dest = self.declare_local("_coilidx".to_string(), Ty::Float, e.span, false);
+                    let cur = self.current_block_id();
+                    let next = self.start_new_block();
+                    self.cur_block = Some(cur.0 as usize);
+                    self.terminate(Terminator::Call {
+                        func: Operand::Constant(Constant::Str(
+                            cobrust_types::coil_buffer_getitem_symbol().to_string(),
+                        )),
                         args: vec![base_op, idx_op],
                         destination: Place::local(dest),
                         target: next,
@@ -2033,6 +2082,32 @@ impl<'a> BodyBuilder<'a> {
                 );
                 return Ok(Operand::Copy(Place::local(bool_dest)));
             }
+        }
+        // ADR-0077 Q1 — `coil.Buffer` operator dispatch (the FIRST
+        // ecosystem-handle operator). Sibling of the `in`/`not in` Dict
+        // guard above: when the LHS resolves to the Buffer handle (bare
+        // `a + b` → `Ty::Adt`, or borrowed `&a + &b` → `Ty::Ref(Adt)`),
+        // retarget `+`/`-`/`*` to `__cobrust_coil_buffer_{add,sub,mul}` via
+        // `emit_ecosystem_call` BEFORE the generic `Rvalue::BinaryOp` tail.
+        // Both operands are BORROWED handles (Move → Copy upgrade so the
+        // source locals survive the call and drop once at scope exit per
+        // ADR-0072 §5 risk 1); the shim returns a fresh handle the caller
+        // owns. Because this emits a `Terminator::Call`, codegen's
+        // `lower_binop` is never reached for Buffers (ADR-0077 §1.1) — no
+        // codegen type-switch. The typecheck `synth_bin` arm already
+        // rejected unsupported ops + non-Buffer operands, so a `Some` here
+        // is an accepted Phase-1 op.
+        let lhs_ty = synth_expr_ty(self, lhs);
+        if let Some(sig) = cobrust_types::lookup_buffer_binop(&lhs_ty, op) {
+            let lhs_op = upgrade_move_to_copy_handle(self.lower_expr(lhs)?);
+            let rhs_op = upgrade_move_to_copy_handle(self.lower_expr(rhs)?);
+            let op_out = self.emit_ecosystem_call(
+                sig.runtime_symbol,
+                sig.ret.clone(),
+                vec![lhs_op, rhs_op],
+                span,
+            );
+            return Ok(op_out);
         }
         let lhs_op = self.lower_expr(lhs)?;
         let rhs_op = self.lower_expr(rhs)?;
@@ -2708,6 +2783,24 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
                         }
                     }
                 }
+            }
+            Ty::None
+        }
+        // ADR-0052a Wave-1 — `&expr` borrow synthesises `Ty::Ref(inner)`
+        // (mirrors the type checker, check.rs `ExprKind::Borrow` arm). The
+        // `lower_bin` Buffer guard (ADR-0077 Q1) relies on this to detect
+        // `&a + &b` where both operands resolve to `Ty::Ref(Buffer)`; and
+        // `method_form_rewrite_name` already unwraps the `Ty::Ref` it
+        // expects from this helper.
+        ExprKind::Borrow(inner) => Ty::Ref(Box::new(synth_expr_ty(b, inner))),
+        // ADR-0077 Q3 — parens-free handle attribute (`a.shape` etc.).
+        // Resolve the manifest attr return type so the let-binding's drop
+        // schedule sees the right type (e.g. `a.shape` is an owned
+        // `list[i64]` that must drop once at scope exit).
+        ExprKind::Attr { base, name } => {
+            let base_ty = synth_expr_ty(b, base);
+            if let Some(sig) = cobrust_types::lookup_handle_attr(&base_ty, name) {
+                return sig.ret;
             }
             Ty::None
         }

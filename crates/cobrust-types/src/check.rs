@@ -1274,6 +1274,19 @@ impl Ctx {
                         });
                     }
                 }
+                // ADR-0077 Q3 — `coil.Buffer` parens-free attribute access
+                // (`a.shape` / `a.ndim` / `a.size`). Consult the
+                // `lookup_handle_attr` manifest twin of
+                // `lookup_handle_method`: `shape` → `list[i64]` (owned,
+                // existing List drop schedule), `ndim`/`size` → `i64`. The
+                // MIR `lower_expr` Attr arm retargets to the runtime symbol.
+                // Non-handle bases (and unknown attrs) still fall through to
+                // `fresh_var()` (the static core does not yet track ADT
+                // fields).
+                let resolved_base = self.subst.apply(&bt);
+                if let Some(sig) = crate::ecosystem::lookup_handle_attr(&resolved_base, name) {
+                    return Ok(sig.ret);
+                }
                 let _ = name;
                 Ok(self.fresh_var())
             }
@@ -1350,6 +1363,20 @@ impl Ctx {
                         let it = self.synth_expr(e)?;
                         unify(&Ty::Int, &it, &mut self.subst, e.span)?;
                         Ok(Ty::Int)
+                    }
+                    // ADR-0077 Q2 — `coil.Buffer` scalar index read. `a[i]`
+                    // on a Buffer with an Int index returns a plain `f64`
+                    // (numpy's 0-d scalar is not a Cobrust type — ADR-0077
+                    // §4, a known divergence). The MIR `lower_expr` Index
+                    // arm retargets to `__cobrust_coil_buffer_getitem(a, i)
+                    // -> f64`. Slice (`a[1:3]`) + write (`a[i] = v`) are
+                    // Phase 2 deferrals.
+                    (Ty::Adt(id, _), IndexKind::Expr(e))
+                        if *id == crate::ecosystem::COIL_BUFFER_ADT =>
+                    {
+                        let it = self.synth_expr(e)?;
+                        unify(&Ty::Int, &it, &mut self.subst, e.span)?;
+                        Ok(Ty::Float)
                     }
                     (other, IndexKind::Slice { .. }) => Ok(other.clone()),
                     (Ty::Var(_), _) => Ok(self.fresh_var()),
@@ -2444,6 +2471,41 @@ impl Ctx {
             | BinOp::MatMul => {
                 unify(&lt, &rt, &mut self.subst, span)?;
                 let resolved = self.subst.apply(&lt);
+                // ADR-0077 Q1 — `coil.Buffer` operator dispatch (the FIRST
+                // ecosystem-handle operator). After `unify` confirms both
+                // operands are the SAME type (so `a + 1` / `a + s` already
+                // fail above — Buffer never unifies with Int/Str), a
+                // resolved type that is the Buffer handle (bare or behind a
+                // `&` shared borrow) routes through `lookup_buffer_binop`:
+                // `Add`/`Sub`/`Mul` → `coil_buffer_ty()`; every other op
+                // (`Div`/`Mod`/`Pow`/`@`/...) is rejected with a §2.5-B
+                // fix-printing diagnostic. The bare `Ok(resolved)` numeric
+                // path below would mis-accept `Buffer ⊕ Buffer` (a Buffer
+                // is not in the numeric accept-set, so it would fall to the
+                // `other =>` reject) — this arm is the mandatory typecheck
+                // touch ADR-0077 §1.1 / §9 names. The MIR `lower_bin` guard
+                // (ADR-0077 §9) retargets the accepted op to the runtime
+                // symbol; codegen's `BinaryOp` arm is never reached.
+                let handle_ty = match &resolved {
+                    Ty::Ref(inner) => inner.as_ref().clone(),
+                    other => other.clone(),
+                };
+                if matches!(&handle_ty, Ty::Adt(id, _) if *id == crate::ecosystem::COIL_BUFFER_ADT)
+                {
+                    if crate::ecosystem::lookup_buffer_binop(&handle_ty, op).is_some() {
+                        return Ok(crate::ecosystem::coil_buffer_ty());
+                    }
+                    return Err(TypeError::TypeMismatch {
+                        expected: crate::ecosystem::coil_buffer_ty(),
+                        actual: handle_ty,
+                        span,
+                        suggestion: Some(
+                            "operator not yet supported on coil.Buffer — Phase 1 supports \
+                             `+`, `-`, `*` (same-shape elementwise); use `coil.Buffer + \
+                             coil.Buffer` with one of those operators",
+                        ),
+                    });
+                }
                 match resolved {
                     // ADR-0060a finding-closure 2026-05-19:
                     // `finding:adr0060a-binop-on-intn-narrow-int-debt`.

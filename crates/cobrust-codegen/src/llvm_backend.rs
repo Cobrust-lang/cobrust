@@ -2893,6 +2893,36 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0077 Phase 1: coil Buffer operator / index / attribute
+        // C-ABI binding — the FIRST ecosystem-handle operator surface.
+        // Because the MIR retarget turns `a + b` / `a[i]` / `a.shape` into
+        // `Terminator::Call`s, codegen only needs the extern decls (no
+        // `lower_binop` type-switch — ADR-0077 §1.1). Symbols match the
+        // `__cobrust_coil_` prefix recognizer in build/intrinsics.rs, so
+        // they link from libcoil.a alongside the existing coil surface.
+        //
+        //   __cobrust_coil_buffer_add/sub/mul(a, b: *mut Buffer) -> *mut Buffer
+        //   __cobrust_coil_buffer_getitem(a: *mut Buffer, i: i64) -> f64
+        //   __cobrust_coil_buffer_shape(a: *mut Buffer) -> *mut List<i64>
+        //   __cobrust_coil_buffer_ndim/size(a: *mut Buffer) -> i64
+        let coil_binop_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let coil_getitem_ty = f64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let coil_shape_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let coil_attr_i64_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_coil_buffer_add", coil_binop_ty, 2usize),
+            ("__cobrust_coil_buffer_sub", coil_binop_ty, 2),
+            ("__cobrust_coil_buffer_mul", coil_binop_ty, 2),
+            ("__cobrust_coil_buffer_getitem", coil_getitem_ty, 2),
+            ("__cobrust_coil_buffer_shape", coil_shape_ty, 1),
+            ("__cobrust_coil_buffer_ndim", coil_attr_i64_ty, 1),
+            ("__cobrust_coil_buffer_size", coil_attr_i64_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.

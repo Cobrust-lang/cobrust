@@ -33,6 +33,8 @@
 //! `Cursor.fetchall`. The remaining cobra modules generalize off this
 //! proven chain.
 
+use cobrust_hir::BinOp;
+
 use crate::ty::{AdtId, FnTy, Ty};
 
 /// Base for reserved ecosystem-handle [`AdtId`]s. User `class` ADTs use
@@ -850,6 +852,113 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             "__cobrust_dora_event_data_str",
             vec![],
             Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        _ => None,
+    }
+}
+
+/// Resolve a binary operator `lhs <op> rhs` where both operands are an
+/// ecosystem handle that overloads the operator (ADR-0077 Q1 — the
+/// FIRST ecosystem-handle operator). Returns the runtime symbol +
+/// result type the MIR `lower_bin` Buffer guard retargets onto, or
+/// `None` when the operator is not overloaded for the handle.
+///
+/// Phase 1 (ADR-0077 §3/§8) ships `coil.Buffer` `+` / `-` / `*` only —
+/// same-shape, f64-only, elementwise. `/` / `%` / `**` / `@` and the
+/// scalar-broadcast forms (`a + 1`) are explicit §12 deferrals and
+/// return `None` here so `synth_bin` rejects them with a clear "operator
+/// not yet supported on coil.Buffer" diagnostic rather than silently
+/// admitting them.
+///
+/// The implicit receiver is the LHS (mirroring `lookup_handle_method`'s
+/// receiver-is-implicit convention); the single `params` slot is the
+/// RHS handle. This is the precedent-setting first operator entry — a
+/// future `decimal.Decimal` / `fraction.Fraction` / matrix handle that
+/// wants `a + b` adds its own `(AdtId, op)` arm here (ADR-0077 §10).
+#[must_use]
+pub fn lookup_buffer_binop(receiver: &Ty, op: BinOp) -> Option<EcoSig> {
+    // Unwrap a shared borrow (`&a + &b` → both operands `Ty::Ref(Buffer)`)
+    // so the LLM-idiomatic explicit-borrow form resolves identically to
+    // the bare `a + b` form (ADR-0052a: `coil.Buffer` is non-Copy, so the
+    // training-data-frequent reuse pattern `&a * &a` requires borrows).
+    let resolved = match receiver {
+        Ty::Ref(inner) => inner.as_ref(),
+        other => other,
+    };
+    let Ty::Adt(id, _) = resolved else {
+        return None;
+    };
+    match (*id, op) {
+        (COIL_BUFFER_ADT, BinOp::Add) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_add",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        (COIL_BUFFER_ADT, BinOp::Sub) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_sub",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        (COIL_BUFFER_ADT, BinOp::Mul) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_mul",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        _ => None,
+    }
+}
+
+/// The runtime symbol a `coil.Buffer` scalar index read (`a[i]`)
+/// retargets onto (ADR-0077 Q2). Kept as a dedicated const rather than a
+/// fake `lookup_handle_method` row (the source surface is `a[i]`
+/// indexing, NOT an `a.getitem(i)` method call — §9 table row 3 picks
+/// this cleaner shape). The shim is `(ptr, i64) -> f64`; the result type
+/// is a plain `f64` (numpy's 0-d scalar is not a Cobrust type, ADR-0077
+/// §4 — a known divergence in the coil PROVENANCE manifest).
+#[must_use]
+pub fn coil_buffer_getitem_symbol() -> &'static str {
+    "__cobrust_coil_buffer_getitem"
+}
+
+/// Resolve a parens-free attribute access `<receiver-handle>.<attr>`
+/// (e.g. `a.shape`, `a.ndim`, `a.size`) to its runtime symbol + return
+/// type (ADR-0077 Q3). The structural twin of [`lookup_handle_method`]
+/// but for attributes (NO call parens) — numpy's `a.shape` is an
+/// attribute, `a.dot(b)` is a method, and §2.5 training-data overlap is
+/// higher when `a.shape` (parens-free) type-checks (that is exactly what
+/// LLMs write). Returns `None` for non-handle receivers / unknown attrs.
+///
+/// Phase 1 (ADR-0077 §5): `shape` → owned `list[i64]` (reuses the
+/// existing List drop schedule, ADR-0050c — the runtime allocates the
+/// list, the `.cb` scope drops it once); `ndim` / `size` → by-value
+/// `i64`. `dtype` is deferred to Phase 2+ (f64-only Phase 1 would ship a
+/// constant).
+#[must_use]
+pub fn lookup_handle_attr(receiver: &Ty, attr: &str) -> Option<EcoSig> {
+    let Ty::Adt(id, _) = receiver else {
+        return None;
+    };
+    match (*id, attr) {
+        (COIL_BUFFER_ADT, "shape") => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_shape",
+            vec![],
+            Ty::List(Box::new(Ty::Int)),
+            PyCompatTier::Semantic,
+        )),
+        (COIL_BUFFER_ADT, "ndim") => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_ndim",
+            vec![],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (COIL_BUFFER_ADT, "size") => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_size",
+            vec![],
+            Ty::Int,
             PyCompatTier::Semantic,
         )),
         _ => None,

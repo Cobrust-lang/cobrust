@@ -64,6 +64,11 @@
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_ptr_alignment)]
+// ADR-0077 Q2 getitem: int/bool-dtype elements promote to f64 (the
+// f64-only Phase-1 return contract). Same intrinsically-correct numpy
+// i64→f64 promotion as `aggregates::scalar_to_f64`, whose file shares
+// this allow.
+#![allow(clippy::cast_precision_loss)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -74,6 +79,37 @@ use crate::constructors::{eye as coil_eye, ones as coil_ones, zeros as coil_zero
 use crate::dtype::Dtype;
 use crate::grid::{mgrid_1d, ogrid_1d};
 use crate::print::array_repr;
+
+// =====================================================================
+// Cobrust stdlib ABI — declared here, resolved from libcobrust_stdlib.a
+// at link time (ADR-0072 Q5 cross-crate binding pattern; no Rust dep —
+// mirrors den's `__cobrust_str_*` extern block). ADR-0077 Q3 `a.shape`
+// is coil's FIRST use of the stdlib `list[i64]` ABI: the shim allocates
+// an owned `List<i64>` the `.cb` scope drops once.
+// =====================================================================
+
+unsafe extern "C" {
+    /// Allocate a `List<i64>` with `len` zeroed slots (`len == cap`).
+    /// `elem_size` is reserved (M12.x fixes the elem width at i64).
+    fn __cobrust_list_new(elem_size: i64, len: i64) -> *mut u8;
+    /// Write `list[i] = v` (out-of-bounds writes are silently dropped).
+    fn __cobrust_list_set(list: *mut u8, i: i64, v: i64);
+    /// Abort the process with a UTF-8 diagnostic (ADR-0077 Q4 panic-on-
+    /// shape-mismatch — the same `__cobrust_panic` shim the codegen
+    /// abort path uses; diverges, never returns).
+    fn __cobrust_panic(ptr: *const u8, len: usize) -> !;
+}
+
+/// Abort the process via the stdlib `__cobrust_panic` shim with `msg`
+/// (ADR-0077 Q4). Used by the Buffer operator shims on a shape mismatch
+/// — Phase 1 operators return a bare `Buffer` and a mismatch
+/// panics-and-aborts (matching numpy's raise, the §2.5 closest honest
+/// behavior; a fallible `a.checked_add(b) -> Result` escape is Phase 2).
+fn coil_panic(msg: &str) -> ! {
+    // SAFETY: `msg` is a valid UTF-8 `&str`; `__cobrust_panic` reads
+    // exactly `msg.len()` bytes at `msg.as_ptr()` and diverges.
+    unsafe { __cobrust_panic(msg.as_ptr(), msg.len()) }
+}
 
 // =====================================================================
 // Drop instrumentation (ADR-0072 §4 done-means 5 — drop-once evidence).
@@ -356,6 +392,190 @@ pub unsafe extern "C" fn __cobrust_coil_var(a: *mut u8) -> f64 {
     // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
     let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
     var_scalar(arr_ref).unwrap_or(f64::NAN)
+}
+
+// =====================================================================
+// ADR-0077 Phase 1 — Buffer operator / index / attribute C-ABI surface.
+// The FIRST ecosystem-handle operator. The `.cb`-side `a + b` / `a[i]`
+// / `a.shape` retarget (at MIR) onto these symbols; codegen only
+// declares them (no `lower_binop` type-switch — ADR-0077 §1.1).
+// =====================================================================
+
+/// Shared elementwise-binop body for `+` / `-` / `*` (ADR-0077 Q1).
+/// Borrows both handles, enforces the Phase-1 **same-shape** contract
+/// (a shape mismatch aborts via `coil_panic` per Q4 — Phase 1 does NOT
+/// broadcast; `(3,) + (1,)` is a Phase-2 surface), applies `f` (one of
+/// `Array::add` / `sub` / `mul`), and returns a freshly-Boxed result
+/// handle the `.cb` caller owns.
+///
+/// # Safety
+///
+/// `a` and `b` must be live `Buffer` handles (not yet dropped).
+unsafe fn buffer_binop(
+    a: *mut u8,
+    b: *mut u8,
+    op_name: &str,
+    f: fn(&Array, &Array) -> Result<Array, crate::error::NumpyError>,
+) -> *mut u8 {
+    if a.is_null() || b.is_null() {
+        coil_panic("coil.Buffer operator: null operand handle");
+    }
+    // SAFETY: caller attests both are live Buffer handles. Borrow only —
+    // neither is reboxed / freed; the `.cb` scope still owns + drops them.
+    let lhs: &Array = unsafe { &*a.cast::<Array>() };
+    let rhs: &Array = unsafe { &*b.cast::<Array>() };
+    // ADR-0077 Q4 — Phase-1 same-shape runtime check (Cobrust static
+    // types carry no shape, so this is the ONLY place the mismatch is
+    // catchable). Mismatch aborts — the operator returns a bare `Buffer`,
+    // not a `Result`, matching numpy's raise.
+    if lhs.shape() != rhs.shape() {
+        coil_panic(&format!(
+            "coil.Buffer {op_name}: shape mismatch {:?} vs {:?} (Phase 1 requires same-shape \
+             operands; broadcasting is deferred to Phase 2)",
+            lhs.shape(),
+            rhs.shape(),
+        ));
+    }
+    let out = match f(lhs, rhs) {
+        Ok(arr) => arr,
+        Err(e) => coil_panic(&format!("coil.Buffer {op_name}: {}", e.message)),
+    };
+    Box::into_raw(Box::new(out)).cast::<u8>()
+}
+
+/// `a + b` → fresh `Buffer`. Elementwise add (ADR-0077 Q1).
+///
+/// # Safety
+///
+/// `a`, `b` must be live `Buffer` handles. Returns an owned handle the
+/// `.cb` caller drops once via `__cobrust_coil_buffer_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_add(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop(a, b, "add", Array::add) }
+}
+
+/// `a - b` → fresh `Buffer`. Elementwise subtract (ADR-0077 Q1).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_add`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_sub(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop(a, b, "sub", Array::sub) }
+}
+
+/// `a * b` → fresh `Buffer`. Elementwise multiply (ADR-0077 Q1).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_add`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_mul(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop(a, b, "mul", Array::mul) }
+}
+
+/// `a[i]` scalar read → `f64` (ADR-0077 Q2). BORROWS the handle.
+/// Bounds-checked on the first axis (numpy-style negative indices
+/// allowed via `index_single`); an out-of-bounds index aborts via
+/// `coil_panic`. Returns a plain `f64` (numpy's 0-d scalar is not a
+/// Cobrust type — ADR-0077 §4 known divergence).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_getitem(a: *mut u8, i: i64) -> f64 {
+    if a.is_null() {
+        coil_panic("coil.Buffer[i]: null handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    let view = match arr.index_single(i) {
+        Ok(v) => v,
+        Err(e) => coil_panic(&format!("coil.Buffer[{i}]: {}", e.message)),
+    };
+    // `index_single` returns a 0-d (one fewer axis) view of the element.
+    // Materialise + extract the single f64 (mirrors `aggregates::
+    // scalar_to_f64` — int/bool dtypes promote, matching the f64-only
+    // Phase-1 return contract).
+    match view.to_owned() {
+        Array::Float64(x) => x.iter().next().copied().unwrap_or(f64::NAN),
+        Array::Float32(x) => x.iter().next().copied().map_or(f64::NAN, f64::from),
+        Array::Int64(x) => x.iter().next().copied().map_or(f64::NAN, |v| v as f64),
+        Array::Int32(x) => x.iter().next().copied().map_or(f64::NAN, f64::from),
+        Array::Bool(x) => x
+            .iter()
+            .next()
+            .copied()
+            .map_or(f64::NAN, |v| if v { 1.0 } else { 0.0 }),
+    }
+}
+
+/// `a.shape` → owned `list[i64]` (ADR-0077 Q3). BORROWS the handle;
+/// allocates a fresh `List<i64>` via the stdlib `__cobrust_list_*`
+/// externs (coil's first use of the cross-crate list ABI, ADR-0072 Q5).
+/// The `.cb` scope drops the list once via `__cobrust_list_drop`. numpy
+/// returns a tuple; the `list[i64]` divergence is recorded in the coil
+/// PROVENANCE manifest.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle. The returned pointer is an owned
+/// `List<i64>` the `.cb` caller drops once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_shape(a: *mut u8) -> *mut u8 {
+    let shape: Vec<usize> = if a.is_null() {
+        Vec::new()
+    } else {
+        // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+        let arr: &Array = unsafe { &*a.cast::<Array>() };
+        arr.shape()
+    };
+    let len = shape.len() as i64;
+    // SAFETY: the stdlib list externs are link-resolved from
+    // libcobrust_stdlib.a; `__cobrust_list_new` returns a list with `len`
+    // zeroed slots, `__cobrust_list_set` writes the in-bounds dims.
+    unsafe {
+        let list = __cobrust_list_new(8, len);
+        for (i, &dim) in shape.iter().enumerate() {
+            __cobrust_list_set(list, i as i64, dim as i64);
+        }
+        list
+    }
+}
+
+/// `a.ndim` → `i64` (number of axes; ADR-0077 Q3). BORROWS the handle.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_ndim(a: *mut u8) -> i64 {
+    if a.is_null() {
+        return 0;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    arr.ndim() as i64
+}
+
+/// `a.size` → `i64` (total element count; ADR-0077 Q3). BORROWS the
+/// handle.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_size(a: *mut u8) -> i64 {
+    if a.is_null() {
+        return 0;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    arr.size() as i64
 }
 
 #[cfg(test)]
