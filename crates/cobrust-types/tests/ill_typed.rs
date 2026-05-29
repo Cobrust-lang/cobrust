@@ -46,6 +46,12 @@ enum Cat {
     /// assert `&recv.method()` (non-Copy return) + `&free_fn(...)`
     /// rejections per ADR-0052g §4.2-§4.3.
     BorrowOfNonPlace,
+    /// ADR-0080 Phase-1a — `Cat::UnknownField` pairs with
+    /// `TypeError::UnknownField`. Used by i153/i154: accessing an
+    /// undeclared field on a field-tracked class instance is a
+    /// compile-time error (with a §2.5-B FIX listing the declared
+    /// fields), NOT a silent `fresh_var()`.
+    UnknownField,
 }
 
 fn matches_cat(err: &TypeError, cat: Cat) -> bool {
@@ -67,6 +73,7 @@ fn matches_cat(err: &TypeError, cat: Cat) -> bool {
         (Cat::UnknownName, TypeError::UnknownName { .. }) => true,
         (Cat::UnknownMethod, TypeError::UnknownMethod { .. }) => true,
         (Cat::BorrowOfNonPlace, TypeError::BorrowOfNonPlace { .. }) => true,
+        (Cat::UnknownField, TypeError::UnknownField { .. }) => true,
         _ => false,
     }
 }
@@ -2440,4 +2447,112 @@ fn i0052g_03_borrow_list_get_non_copy_rejected() {
         "{METHOD_STUBS_FOR_NON_COPY_BORROW}fn read_str(s: str) -> i64:\n    return 0\nfn f() -> i64:\n    let xs: list[str] = [\"a\", \"b\"]\n    let r: i64 = read_str(&xs.get(0))\n    return r\n",
     );
     must_reject("borrow-list-get-non-copy", &src, Cat::BorrowOfNonPlace);
+}
+
+// ============================================================
+// ADR-0080 Phase-1a — class field tracking (ill-typed side)
+// (i151..i154)
+//
+// ADR-0080 §1.1 ground-truth: the `Attr` arm (check.rs:1291) returns
+// `self.fresh_var()` for any user-class instance base — verbatim
+// comment "the static core does not yet track ADT fields"
+// (check.rs:1260/1283). A fresh type variable UNIFIES WITH ANYTHING,
+// so every field access below is WRONGLY ACCEPTED at HEAD (641e5f8).
+// THAT mis-acceptance is the RED these tests exist to flip.
+//
+// Phase-1a: `check_class` (check.rs:757-762) records each class-body
+// field (`let <name>: <ty>`) into a per-Adt field table, and the
+// `Attr` arm returns the DECLARED field `Ty` (i64 / str) instead of a
+// fresh var; an UNKNOWN field becomes a `TypeError` (not fresh_var).
+//
+// Class-field idiom + inferred-instance binding rationale: see the
+// matching well_typed.rs w196..w199 header (an explicit `let s: Score`
+// annotation is rejected at HEAD for the UNRELATED Alias↔Adt seam, so
+// the instance is bound inferred to isolate field tracking).
+//
+// Two discriminating families:
+//   (a) i151/i152 — a declared `i64` field used where a `str` is
+//       required. Expected `TypeError::TypeMismatch` AFTER 1a (the
+//       category EXISTS today, so these are LIVE `#[test]`s that FAIL
+//       at HEAD = the visible RED, and turn green when DEV makes the
+//       Attr arm yield the declared `i64`).
+//   (b) i153/i154 — access of an UNDECLARED field (`s.nonexistent`).
+//       Expected a TypeError WITH a §2.5-B FIX suggestion AFTER 1a.
+//       No `Cat::UnknownField` / `TypeError::UnknownField` exists yet,
+//       so per the i118+ NotHashable / DictSpreadNotSupported
+//       precedent these are `#[ignore]`'d with a placeholder
+//       `Cat::TypeMismatch`; DEV adds `TypeError::UnknownField`
+//       (+ suggestion) + `Cat::UnknownField` + the `matches_cat` row,
+//       then removes the `#[ignore]` and the test must turn green.
+
+// ---- Family (a): i64 field used as str — TypeMismatch
+//      (LIVE; PRE-IMPL: FAIL — fresh_var wrongly accepts)          ----
+
+#[test]
+fn i151_class_i64_field_bound_as_str_rejected() {
+    // `let bad: str = s.rank` where `rank` is the declared `i64` field —
+    // constitution §2.2 "no silent coercion": `i64` field flowing into
+    // a `str` binding must be `TypeMismatch`. At HEAD `s.rank` is a
+    // fresh var that unifies with `str`, so this is WRONGLY ACCEPTED
+    // (the RED). Post-1a `s.rank` is `i64` and the unify with `str`
+    // fails → TypeMismatch.
+    must_reject(
+        "class-i64-field-bound-as-str",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> str:\n    let s = Score()\n    let bad: str = s.rank\n    return bad\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i152_class_i64_field_in_str_concat_rejected() {
+    // `s.name + s.rank` — str `+` i64 is a TypeMismatch (mirrors i08
+    // str+int). At HEAD `s.rank` is a fresh var that unifies as the str
+    // operand, so the concat is WRONGLY ACCEPTED (the RED). Post-1a
+    // `s.rank` is `i64`, so the `str + i64` concat fails → TypeMismatch.
+    must_reject(
+        "class-i64-field-in-str-concat",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> str:\n    let s = Score()\n    return (s.name + s.rank)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+// ---- Family (b): undeclared field access — UnknownField
+//      (PRE-IMPL: FAIL — net-new variant; #[ignore] per i118+ idiom) ----
+//
+// When DEV lands `TypeError::UnknownField { field: String, adt: Ty,
+// span, suggestion: Option<&'static str> }` (the §2.5-B FIX channel
+// MUST be populated — e.g. "no field `nonexistent` on `Score`;
+// declared fields: name, rank") + the `Cat::UnknownField` enum variant
+// + the `matches_cat` row, the test author replaces the placeholder
+// `Cat::TypeMismatch` with `Cat::UnknownField` and removes the
+// `#[ignore]`; the test must then turn green.
+
+#[test]
+fn i153_class_undeclared_field_access_rejected() {
+    // `s.nonexistent` where `Score` declares only `name` + `rank` —
+    // post-1a accessing an undeclared field is a TypeError WITH a FIX
+    // suggestion (§2.5-B). At HEAD the Attr arm returned fresh_var, which
+    // unified with the `: i64` binding, so this was WRONGLY ACCEPTED;
+    // ADR-0080 Phase-1a flips it to `UnknownField` (the declared-field
+    // list is carried in the variant's `known_fields` + printed in the
+    // Display message).
+    must_reject(
+        "class-undeclared-field-access",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> i64:\n    let s = Score()\n    let x: i64 = s.nonexistent\n    return x\n",
+        Cat::UnknownField,
+    );
+}
+
+#[test]
+fn i154_class_undeclared_field_in_expr_rejected() {
+    // `return s.missing` — undeclared field accessed bare (no binding
+    // annotation to pin it). Post-1a still a TypeError (UnknownField);
+    // the field-existence check is independent of how the result is
+    // consumed. At HEAD fresh_var unified with the `-> i64` return type,
+    // so WRONGLY ACCEPTED (the RED ADR-0080 Phase-1a flips).
+    must_reject(
+        "class-undeclared-field-in-expr",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> i64:\n    let s = Score()\n    return s.missing\n",
+        Cat::UnknownField,
+    );
 }

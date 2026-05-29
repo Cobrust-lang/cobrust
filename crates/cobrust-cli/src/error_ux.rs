@@ -965,6 +965,29 @@ impl From<TypeError> for UserError {
                     col,
                 )
             }
+            // ADR-0080 Phase-1a — typed field access on a class instance.
+            // The primary `msg` carries the field + class + the declared-
+            // field list (the §2.5-B FIX the LLM parses from stderr).
+            E::UnknownField {
+                field,
+                adt,
+                known_fields,
+                span,
+                suggestion,
+            } => {
+                let (line, col) = span_to_line_col(span);
+                let declared = if known_fields.is_empty() {
+                    "(none)".to_owned()
+                } else {
+                    known_fields.join(", ")
+                };
+                (
+                    format!("no field `{field}` on `{adt}`; declared fields: {declared}"),
+                    suggestion.map(str::to_owned),
+                    line,
+                    col,
+                )
+            }
         };
         Self::Type {
             file: PathBuf::from("<source>"),

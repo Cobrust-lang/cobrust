@@ -175,6 +175,38 @@ error[Type]: use of moved value `_x` after it was moved
 **Likely fix:** clone the value before moving it, or restructure to avoid
 using it after the move.
 
+### Example 6 — unknown field on a class instance
+
+A `class`'s fields are tracked by the type checker (ADR-0080). Accessing a
+field the class does not declare is a compile-time error — never a runtime
+`KeyError`. The message lists the declared fields so you can pick the right
+one (or fix a typo).
+
+```
+error[Type]: no field `nonexistent` on `Score`; declared fields: name, rank
+  --> src/main.cb:6:14
+```
+
+```cobrust
+class Score:
+    let name: str = ""
+    let rank: i64 = 0
+
+fn f() -> i64:
+    let s = Score()
+    return s.nonexistent   # ERROR — see message above
+
+# Fix: use a declared field. Its type is known statically:
+#   s.rank is i64, s.name is str.
+fn f() -> i64:
+    let s = Score()
+    return s.rank
+```
+
+**Likely fix:** access one of the listed declared fields. Field types are
+known at compile time, so a wrong-typed use (e.g. `s.name + s.rank`, str + i64)
+is also caught as a type mismatch.
+
 ---
 
 ## Runtime errors
@@ -230,6 +262,7 @@ with a `cobrust report-bug` hint instead of the raw IR dump.
 | `let x: i64 = "hi"` | `Type` | 2 | Match types |
 | `if x:` where x is i64 | `Type` | 2 | Write `if x != 0:` |
 | `undefined_name` in expression | `Type` | 2 | Declare with `let` |
+| `s.typo` on a class instance | `Type` | 2 | Use a declared field (the error lists them) |
 | Program panics at runtime | `Runtime` | 4 | Debug program logic |
 | Cranelift / linker failure | `Internal` | 3 | Run `cobrust report-bug` |
 

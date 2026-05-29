@@ -168,7 +168,10 @@ pub fn type_error_cb_fix_safety(err: &TypeErrorCb) -> FixSafetyCb {
         // as the Rust side (define handler at module scope; change the
         // declared signature; both are local rewrites).
         | CallbackArgMustBeFnName { .. }
-        | CallbackSignatureMismatch { .. } => FixSafetyCb::LocalEdit,
+        | CallbackSignatureMismatch { .. }
+        // ADR-0080 Phase-1a — field-name typo; LocalEdit, mirroring the
+        // Rust-side `type_error_fix_safety` UnknownField tier.
+        | UnknownField { .. } => FixSafetyCb::LocalEdit,
         ImplicitTruthiness { .. } | MutableDefault { .. } | NotHashable { .. } => {
             FixSafetyCb::BehaviorPreserving
         }

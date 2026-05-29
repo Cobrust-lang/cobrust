@@ -262,4 +262,31 @@ pub enum TypeError {
         span: Span,
         suggestion: Option<&'static str>,
     },
+
+    /// ADR-0080 Phase-1a — attribute access on a class instance
+    /// (`Ty::Adt`) named a field that the class does not declare.
+    ///
+    /// Once `check_class` records each `class`-body field declaration
+    /// (`let <name>: <ty> = …`) into the per-Adt field table, the
+    /// `Attr` arm resolves a known field to its declared `Ty` and
+    /// raises this variant for an unknown one — *instead* of falling
+    /// back to `fresh_var()` (which silently unified with anything, so
+    /// a typo'd `body.titel` slipped through to a runtime surprise).
+    /// This is the §2.5-A compile-time-catch for a mistyped field
+    /// access; the `#[error]` message *prints the fix* (§2.5-B): it
+    /// names the offending field, the class, and the **declared field
+    /// list** so the LLM agent can correct the name on the next turn.
+    /// `suggestion` carries the uniform static hint (ADR-0052b §2).
+    #[error(
+        "no field `{field}` on `{adt}` at {span}; \
+         declared fields: {}",
+        if known_fields.is_empty() { "(none)".to_string() } else { known_fields.join(", ") }
+    )]
+    UnknownField {
+        field: String,
+        adt: Ty,
+        known_fields: Vec<String>,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 }

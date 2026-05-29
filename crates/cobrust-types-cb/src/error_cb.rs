@@ -7,7 +7,12 @@
 //!
 //! ## Surface invariants (ADR-0055b §4)
 //!
-//! - `TypeErrorCb` mirrors `TypeError` 1:1: 25 variants, identical names.
+//! - `TypeErrorCb` mirrors `TypeError` 1:1: one variant per
+//!   `TypeError` variant, identical names (the `type_error_cb_variant_name`
+//!   ⇔ `cobrust_types_parity::type_error_variant_name` pair is the
+//!   load-bearing invariant; the exact count tracks `TypeError` and so
+//!   is intentionally not hard-coded here — last extended for ADR-0080
+//!   Phase-1a `UnknownField`).
 //! - `Ty` payload fields → `i64` arena handles (TyArena per 0055a §3).
 //! - `VarId` payload (`OccursCheck::var`) → `i64` (per 0055a VarId-as-i64).
 //! - `suggestion: Option<&'static str>` (Rust) → `pub suggestion: Option<String>` (cb owned).
@@ -15,7 +20,7 @@
 //!
 //! ## Anchor symbols (F34)
 //!
-//! - `error_cb.rs::TypeErrorCb` — the 25-variant mirror enum
+//! - `error_cb.rs::TypeErrorCb` — the per-`TypeError`-variant mirror enum
 //! - `error_cb.rs::type_error_cb_from_rust` — bridge stub
 //! - `error_cb.rs::TypeErrorCb::Multiple` — the only recursive variant
 
@@ -27,7 +32,7 @@ use cobrust_types_parity::{
 };
 
 // =====================================================================
-// TypeErrorCb — 25-variant mirror enum (ADR-0055b §4 compliance matrix)
+// TypeErrorCb — per-`TypeError`-variant mirror enum (ADR-0055b §4 compliance matrix)
 // =====================================================================
 
 /// cb mirror of `cobrust_types::TypeError`.
@@ -267,6 +272,22 @@ pub enum TypeErrorCb {
     CallbackSignatureMismatch {
         expected: i64,
         actual: i64,
+        span: Span,
+        suggestion: Option<String>,
+    },
+
+    /// ADR-0080 Phase-1a — attribute access on a class instance named
+    /// a field the class does not declare. Mirrors
+    /// `TypeError::UnknownField { field: String, adt: Ty, known_fields:
+    /// Vec<String>, span, suggestion }` — the `adt` Ty payload is a
+    /// dense-packed `i64` arena handle per the ADR-0055b workaround;
+    /// the Rust side carries the full `Ty`. `field` + `known_fields`
+    /// carry through as Strings so the §2.5-B FIX (the declared-field
+    /// list) renders byte-identically across the two impls.
+    UnknownField {
+        field: String,
+        adt: i64,
+        known_fields: Vec<String>,
         span: Span,
         suggestion: Option<String>,
     },
@@ -526,6 +547,23 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(*suggestion),
             }
         }
+        // ADR-0080 Phase-1a mirror — `adt` Ty → fresh arena handle.
+        TypeError::UnknownField {
+            field,
+            known_fields,
+            span,
+            suggestion,
+            ..
+        } => {
+            let adt = i64::from(arena.fresh_ty_payload_id());
+            TypeErrorCb::UnknownField {
+                field: field.clone(),
+                adt,
+                known_fields: known_fields.clone(),
+                span: *span,
+                suggestion: opt_string(*suggestion),
+            }
+        }
     }
 }
 
@@ -621,6 +659,17 @@ impl Canonicalize for TypeErrorCb {
                 CanonicalKey::leaf(type_name.as_str()),
                 CanonicalKey::leaf(method_name.as_str()),
             ],
+            // ADR-0080 Phase-1a mirror — field + declared-field list
+            // (adt Ty payload elided, mirroring the Rust-side key).
+            TypeErrorCb::UnknownField {
+                field,
+                known_fields,
+                ..
+            } => {
+                let mut keys = vec![CanonicalKey::leaf(field.as_str())];
+                keys.extend(known_fields.iter().map(|f| CanonicalKey::leaf(f.as_str())));
+                keys
+            }
             // Variants with no extra payload (Span + suggestion only).
             TypeErrorCb::MutableDefault { .. }
             | TypeErrorCb::AmbiguousType { .. }
@@ -823,6 +872,26 @@ impl std::fmt::Display for TypeErrorCb {
                     handle_to_ty_display(*actual)
                 )
             }
+            // ADR-0080 Phase-1a — byte-mirror of the Rust `#[error]`
+            // message (the declared-field list is the §2.5-B FIX).
+            TypeErrorCb::UnknownField {
+                field,
+                adt,
+                known_fields,
+                span,
+                ..
+            } => {
+                let declared = if known_fields.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    known_fields.join(", ")
+                };
+                write!(
+                    f,
+                    "no field `{field}` on `{}` at {span}; declared fields: {declared}",
+                    handle_to_ty_display(*adt)
+                )
+            }
         }
     }
 }
@@ -894,5 +963,6 @@ pub fn type_error_cb_variant_name(err: &TypeErrorCb) -> &'static str {
         TypeErrorCb::UnknownMethod { .. } => "UnknownMethod",
         TypeErrorCb::CallbackArgMustBeFnName { .. } => "CallbackArgMustBeFnName",
         TypeErrorCb::CallbackSignatureMismatch { .. } => "CallbackSignatureMismatch",
+        TypeErrorCb::UnknownField { .. } => "UnknownField",
     }
 }

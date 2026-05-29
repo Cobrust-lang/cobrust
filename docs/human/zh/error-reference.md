@@ -174,6 +174,36 @@ error[Type]: use of moved value `_x` after it was moved
 
 **可能的修复：** 在移动之前克隆该值，或重构代码以避免在移动后使用。
 
+### 示例 6 — 类实例上的未知字段
+
+`class` 的字段由类型检查器跟踪（ADR-0080）。访问类未声明的字段是**编译期**
+错误，绝不会变成运行时 `KeyError`。错误消息会列出已声明的字段，便于你选择
+正确的字段（或修正拼写）。
+
+```
+error[Type]: no field `nonexistent` on `Score`; declared fields: name, rank
+  --> src/main.cb:6:14
+```
+
+```cobrust
+class Score:
+    let name: str = ""
+    let rank: i64 = 0
+
+fn f() -> i64:
+    let s = Score()
+    return s.nonexistent   # 错误 —— 见上面的消息
+
+# 修复：使用已声明字段。其类型在编译期已知：
+#   s.rank 是 i64，s.name 是 str。
+fn f() -> i64:
+    let s = Score()
+    return s.rank
+```
+
+**可能的修复：** 访问消息中列出的某个已声明字段。字段类型在编译期已知,
+因此类型错误的用法(如 `s.name + s.rank`,即 str + i64)同样会被捕获为类型不匹配。
+
 ---
 
 ## 运行时错误（Runtime）
@@ -228,6 +258,7 @@ error[Internal]: CraneliftError: inst441 has type i64, expected i8
 | `let x: i64 = "hi"` | `Type` | 2 | 匹配类型 |
 | `if x:` 其中 x 是 i64 | `Type` | 2 | 改写为 `if x != 0:` |
 | 表达式中有 `undefined_name` | `Type` | 2 | 用 `let` 声明 |
+| 类实例上访问 `s.typo` | `Type` | 2 | 使用已声明字段(错误消息会列出) |
 | 程序在运行时 panic | `Runtime` | 4 | 调试程序逻辑 |
 | Cranelift / 链接器错误 | `Internal` | 3 | 运行 `cobrust report-bug` |
 

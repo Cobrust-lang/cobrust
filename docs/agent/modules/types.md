@@ -100,6 +100,10 @@ bidirectional".
 - `NotCallable` / `NotIndexable` / `NotIterable`
 - `BreakOutsideLoop` / `ContinueOutsideLoop` / `ReturnOutsideFn` /
   `YieldOutsideFn`
+- `UnknownField` (ADR-0080 Phase-1a — attribute access on a class
+  instance named a field the class does not declare; carries
+  `{ field, adt, known_fields, span, suggestion }`; the Display message
+  lists `known_fields` as the §2.5-B FIX. FixSafety `LocalEdit`.)
 - `Multiple` (composite container for multi-error reporting)
 
 ## ADR-0041 §H8 — tuple Index returns indexed element type

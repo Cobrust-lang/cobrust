@@ -2962,3 +2962,80 @@ fn w0052g_05_borrow_str_len_at_fn_arg_one_way_coercion() {
         "fn read_i64(n: i64) -> i64:\n    return n + 1\nfn f() -> i64:\n    let s: str = \"abc\"\n    return read_i64(&s.len())\n",
     );
 }
+
+// ============================================================
+// ADR-0080 Phase-1a — class field tracking (well-typed side)
+// (w196..w199)
+//
+// ADR-0080 §1.1 ground-truth: today `check_class` (check.rs:757-762)
+// records NO field types into the Adt, and the `Attr` arm
+// (check.rs:1291) returns `self.fresh_var()` for any user-class base
+// — the verbatim comment "the static core does not yet track ADT
+// fields" (check.rs:1260/1283). Phase-1a makes `check_class` record
+// each class-body field declaration (`let <name>: <ty> = <init>`, the
+// idiom from `tests/syntax-corpus/01_keywords.cb:59-60` + the parsed
+// `ItemKind::Let` per ADR-0080 §1.1) into a per-Adt field table, and
+// makes the `Attr` arm return the DECLARED field `Ty`.
+//
+// The class-field declaration idiom is the EXISTING corpus idiom:
+//   `class Score:`
+//   `    let name: str = ""`   ← str field
+//   `    let rank: i64 = 0`    ← i64 field
+// (mirrors `class Counter:\n    let count: i64 = 0`).
+//
+// INSTANCE-BINDING NOTE (load-bearing): these tests bind the instance
+// WITHOUT a `: Score` type annotation (`let s = Score()`). An explicit
+// `let s: Score = Score()` annotation is REJECTED at HEAD for a reason
+// UNRELATED to field tracking — the class-name type annotation lowers
+// to `Ty::Alias(AliasId)` while the zero-arg ctor returns
+// `Ty::Adt(AdtId)` (prebind_item, check.rs:519-530), and the two do
+// not unify (verified at 641e5f8: `TypeMismatch { expected: Alias,
+// actual: Adt }`). The inferred binding lets `s` infer to the `Adt`
+// the ctor returns, isolating the field-tracking behavior under test.
+// (The Alias↔Adt unification gap is a separate seam, out of 1a scope.)
+//
+// These ACCEPT today (via fresh_var unifying with any annotation) and
+// MUST KEEP ACCEPTING after 1a — now for the RIGHT reason: `s.rank`
+// resolves to the declared `i64`, `s.name` to the declared `str`.
+
+#[test]
+fn w196_class_field_bound_at_declared_types() {
+    // The §2.5 happy path: declared `i64` field → `i64` binding,
+    // declared `str` field → `str` binding. Post-1a this passes because
+    // the Attr arm returns the recorded declared field Ty (today it
+    // passes only because fresh_var unifies with both annotations).
+    must_accept(
+        "class-field-bound-at-declared-types",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> i64:\n    let s = Score()\n    let r: i64 = s.rank\n    let n: str = s.name\n    return r\n",
+    );
+}
+
+#[test]
+fn w197_class_i64_field_in_i64_arith() {
+    // Declared `i64` field used in i64 arithmetic — post-1a the field
+    // type flows as `i64`, so `s.rank + 1` is well-typed `i64`.
+    must_accept(
+        "class-i64-field-in-i64-arith",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> i64:\n    let s = Score()\n    return (s.rank + 1)\n",
+    );
+}
+
+#[test]
+fn w198_class_str_field_in_str_concat() {
+    // Declared `str` field used in str concatenation — post-1a `s.name`
+    // is `str`, so `s.name + "!"` is well-typed `str`.
+    must_accept(
+        "class-str-field-in-str-concat",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> str:\n    let s = Score()\n    return (s.name + \"!\")\n",
+    );
+}
+
+#[test]
+fn w199_class_field_returned_at_declared_type() {
+    // Declared `i64` field returned from an `-> i64` fn directly —
+    // post-1a `s.rank` is `i64`, matching the return type.
+    must_accept(
+        "class-field-returned-at-declared-type",
+        "class Score:\n    let name: str = \"\"\n    let rank: i64 = 0\nfn f() -> i64:\n    let s = Score()\n    return s.rank\n",
+    );
+}

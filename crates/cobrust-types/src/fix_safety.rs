@@ -172,7 +172,10 @@ pub fn type_error_suggestion_text(err: &TypeError) -> Option<&'static str> {
         | BorrowOfNonPlace { suggestion, .. }
         | UnknownMethod { suggestion, .. }
         | CallbackArgMustBeFnName { suggestion, .. }
-        | CallbackSignatureMismatch { suggestion, .. } => *suggestion,
+        | CallbackSignatureMismatch { suggestion, .. }
+        // ADR-0080 Phase-1a — field-name typo carries the uniform hint
+        // (the declared-field list lives in the Display message itself).
+        | UnknownField { suggestion, .. } => *suggestion,
         Multiple(_) => None,
     }
 }
@@ -229,6 +232,10 @@ pub fn type_error_fix_safety(err: &TypeError) -> FixSafety {
         BorrowOfNonPlace { .. } => FixSafety::LocalEdit,
         // Method name typo — call-site only.
         UnknownMethod { .. } => FixSafety::LocalEdit,
+        // ADR-0080 Phase-1a — field name typo; fix is a local rename of
+        // the `.field` access against the declared-field list. No
+        // cross-line semantics carry-over.
+        UnknownField { .. } => FixSafety::LocalEdit,
         // ADR-0073 — callback shape / signature mismatch. Fix is a local
         // rewrite (define the handler at module scope; change the
         // declared signature). No semantics carry-over to worry about.

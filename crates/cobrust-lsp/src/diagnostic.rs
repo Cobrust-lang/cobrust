@@ -170,6 +170,10 @@ fn type_error_to_diagnostic_single(err: &TypeError, line_map: &LineMap) -> Diagn
         CallbackSignatureMismatch {
             span, suggestion, ..
         } => (*span, *suggestion, "callback-signature-mismatch"),
+        // ADR-0080 Phase-1a — typed field access on a class instance.
+        UnknownField {
+            span, suggestion, ..
+        } => (*span, *suggestion, "unknown-field"),
         Multiple(_) => unreachable!("Multiple flattened by type_error_to_diagnostics"),
     };
     let range = span_to_lsp_range(&span, line_map);

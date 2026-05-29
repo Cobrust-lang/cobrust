@@ -261,6 +261,33 @@ help: "did you mean '<closest_method>'?"  (when a close match exists)
 
 ---
 
+### TypeError::UnknownField
+
+**Since**: ADR-0080 Phase-1a (class field tracking).
+**Message**: `no field 'field' on 'AdtName' at <span>; declared fields: <name, name, …>`
+**FIX**: Access only fields the `class` declares. The message lists the declared field set — pick one (or correct the typo).
+```cobrust
+class Score:
+    let name: str = ""
+    let rank: i64 = 0
+
+fn f() -> i64:
+    let s = Score()
+    return s.nonexistent   # ERROR: no field `nonexistent` on `Score`; declared fields: name, rank
+
+# FIX: use a declared field
+fn f() -> i64:
+    let s = Score()
+    return s.rank          # OK: `rank` is declared `i64`
+```
+Notes:
+- A class instance's declared fields resolve to their **declared type** at compile time (`s.rank` is `i64`, `s.name` is `str`) — a wrong-typed use (`s.name + s.rank`) is a `TypeMismatch`, not a runtime surprise.
+- Method names on the instance are NOT fields and do not trip this (method dispatch on user-class instances is an ADR-0080 §9 follow-up).
+- Phase-1a tracks field **reads**; instances are still constructed via the zero-arg `Score()` ctor (a field-args ctor is the §9 follow-up).
+- FixSafety tier: `LocalEdit` (a local field-name rename).
+
+---
+
 ### TypeError::RowConflict
 
 **Message**: `conflicting field 'field' in record types at <span>: 'T1' vs 'T2'`

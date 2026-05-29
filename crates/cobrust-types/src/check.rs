@@ -449,6 +449,39 @@ struct Ctx {
     /// (`ecosystem::is_ecosystem_module`). `synth_call` consults this so
     /// `den.connect(...)` resolves against the ecosystem manifest.
     ecosystem_module_defs: HashMap<DefId, String>,
+    /// ADR-0080 Phase-1a — per-Adt declared-field table.
+    ///
+    /// Maps a user `class`'s [`crate::ty::AdtId`] to its declared
+    /// fields (`{ field_name → field Ty }`), recorded by
+    /// [`Self::check_class`] from every class-body `let <name>: <ty>`
+    /// member. The `Attr` arm consults this so `body.rank` on a
+    /// `Ty::Adt` base resolves to the declared field `Ty` (i64 / str /
+    /// …) instead of `fresh_var()`, and an unknown field raises
+    /// [`TypeError::UnknownField`] with a §2.5-B FIX listing the
+    /// declared fields. **A `BTreeMap` is deliberate**: the FIX text
+    /// (and every downstream consumer, e.g. the ADR-0080 §5.3 OpenAPI
+    /// emitter) reads the fields in a deterministic, source-stable order.
+    ///
+    /// Phase-1a records *field reads only*; the body value is still
+    /// constructed via the zero-arg `() -> Adt` ctor (ADR-0080 §1.1 /
+    /// the layer table note — a real field-args ctor is the §9
+    /// follow-up). The table is rebuilt per [`check`] call (it lives
+    /// on `Ctx`, not the cross-turn `TypeCheckCtx`), matching how
+    /// `def_types` is repopulated each run.
+    adt_fields: HashMap<crate::ty::AdtId, std::collections::BTreeMap<String, Ty>>,
+    /// ADR-0080 Phase-1a — per-Adt method-name set (companion to
+    /// [`Self::adt_fields`]).
+    ///
+    /// Records every class-body `fn` member name so the `Attr` arm can
+    /// distinguish a *field* (resolves to its declared `Ty`) from a
+    /// *method* (left to fall through to `fresh_var()`, preserving the
+    /// pre-ADR-0080 loose method-on-instance behavior — full method
+    /// dispatch on user-class instances is an ADR-0080 §9 follow-up,
+    /// out of Phase-1a scope). Without this exemption, accessing a
+    /// method name as a bare attribute (`s.increment`) would wrongly
+    /// raise [`TypeError::UnknownField`]; the dispatch contract is
+    /// "only field NAMES newly resolve to a field `Ty`".
+    adt_methods: HashMap<crate::ty::AdtId, HashSet<String>>,
 }
 
 impl Ctx {
@@ -755,6 +788,49 @@ impl Ctx {
     }
 
     fn check_class(&mut self, c: &cobrust_hir::ClassBody, _span: Span) -> Result<(), TypeError> {
+        // ADR-0080 Phase-1a — record this class's declared fields into
+        // the per-Adt field table BEFORE checking the member bodies, so
+        // a `self`-typed (annotated) method body that reads a sibling
+        // field resolves against the recorded table. The Adt id is the
+        // same one `prebind_item` allocated for the zero-arg ctor
+        // (`AdtId(c.def_id.0)`).
+        //
+        // A field is a class-body `ItemKind::Let` whose pattern is a
+        // simple `Binding(name, _)`. Its declared `Ty` is taken from the
+        // annotation (`let name: str = …`); an un-annotated member
+        // (`let n = 0`) takes the synthesised type of its initializer.
+        // Non-`Let` members (nested `fn` methods / `class`) are not
+        // fields and are skipped here — they remain ordinary
+        // module-scope items checked by the recursion below.
+        let adt_id = crate::ty::AdtId(c.def_id.0);
+        let mut fields: std::collections::BTreeMap<String, Ty> = std::collections::BTreeMap::new();
+        let mut methods: HashSet<String> = HashSet::new();
+        for m in &c.members {
+            match &m.kind {
+                ItemKind::Let(b) => {
+                    if let PatternKind::Binding(name, _) = &b.pattern.kind {
+                        let field_ty = match &b.annot {
+                            Some(t) => self.lower_type(t),
+                            None => self.synth_expr(&b.value)?,
+                        };
+                        fields.insert(name.clone(), field_ty);
+                    }
+                }
+                ItemKind::Fn(f) => {
+                    methods.insert(f.name.clone());
+                }
+                // A `@decorator`-wrapped method is still a method name.
+                ItemKind::Decorated { inner, .. } => {
+                    if let ItemKind::Fn(f) = &inner.kind {
+                        methods.insert(f.name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.adt_fields.insert(adt_id, fields);
+        self.adt_methods.insert(adt_id, methods);
+
         for m in &c.members {
             self.check_item(m)?;
         }
@@ -1286,6 +1362,44 @@ impl Ctx {
                 let resolved_base = self.subst.apply(&bt);
                 if let Some(sig) = crate::ecosystem::lookup_handle_attr(&resolved_base, name) {
                     return Ok(sig.ret);
+                }
+                // ADR-0080 Phase-1a — typed field access on a user-class
+                // instance. When the base resolves to a `Ty::Adt` of a
+                // class we recorded fields for (`check_class`), the
+                // attribute is either a declared FIELD (→ its declared
+                // `Ty`, the footgun-#1 compile-time-structure win) or an
+                // unknown name (→ `UnknownField` with a §2.5-B FIX that
+                // lists the declared fields — NOT a silent `fresh_var()`
+                // that unified with anything). Method names are exempt
+                // (left to fall through, preserving the loose
+                // method-on-instance behavior; ADR-0080 §9). The base
+                // must already be a *resolved* Adt: an un-annotated
+                // `self` is still a `Ty::Var` here, so a method body's
+                // `self.field` keeps its prior behavior until the
+                // self-typing / ctor follow-up lands.
+                if let Ty::Adt(adt_id, _) = &resolved_base {
+                    if let Some(field_map) = self.adt_fields.get(adt_id) {
+                        if let Some(field_ty) = field_map.get(name) {
+                            return Ok(field_ty.clone());
+                        }
+                        let is_method = self
+                            .adt_methods
+                            .get(adt_id)
+                            .is_some_and(|ms| ms.contains(name));
+                        if !is_method {
+                            let known_fields: Vec<String> = field_map.keys().cloned().collect();
+                            return Err(TypeError::UnknownField {
+                                field: name.clone(),
+                                adt: resolved_base.clone(),
+                                known_fields,
+                                span,
+                                suggestion: Some(
+                                    "check the field name against the class declaration \
+                                     (the declared fields are listed above)",
+                                ),
+                            });
+                        }
+                    }
                 }
                 let _ = name;
                 Ok(self.fresh_var())

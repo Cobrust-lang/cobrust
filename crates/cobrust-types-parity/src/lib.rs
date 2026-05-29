@@ -406,6 +406,19 @@ impl Canonicalize for TypeError {
                 CanonicalKey::leaf(type_name.as_str()),
                 CanonicalKey::leaf(method_name.as_str()),
             ],
+            // ADR-0080 Phase-1a — key on the offending field + the
+            // declared-field list (both String, mirror-able). The
+            // `adt` Ty payload is elided per the parity convention that
+            // avoids over-keying on Ty renderings that differ per run.
+            TypeError::UnknownField {
+                field,
+                known_fields,
+                ..
+            } => {
+                let mut keys = vec![CanonicalKey::leaf(field.as_str())];
+                keys.extend(known_fields.iter().map(|f| CanonicalKey::leaf(f.as_str())));
+                keys
+            }
             // Variants with no extra payload (Span + suggestion only).
             TypeError::MutableDefault { .. }
             | TypeError::AmbiguousType { .. }
@@ -564,6 +577,8 @@ pub fn type_error_variant_name(err: &TypeError) -> &'static str {
         // ADR-0073 callback-slot variants.
         TypeError::CallbackArgMustBeFnName { .. } => "CallbackArgMustBeFnName",
         TypeError::CallbackSignatureMismatch { .. } => "CallbackSignatureMismatch",
+        // ADR-0080 Phase-1a — typed-field-access variant.
+        TypeError::UnknownField { .. } => "UnknownField",
     }
 }
 

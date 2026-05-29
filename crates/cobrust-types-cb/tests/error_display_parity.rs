@@ -353,6 +353,7 @@ impl SuggestionText for TypeError {
             TypeError::UnknownMethod { suggestion, .. } => suggestion.as_deref(),
             TypeError::CallbackArgMustBeFnName { suggestion, .. } => suggestion.as_deref(),
             TypeError::CallbackSignatureMismatch { suggestion, .. } => suggestion.as_deref(),
+            TypeError::UnknownField { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }
@@ -387,6 +388,7 @@ impl SuggestionText for TypeErrorCb {
             TypeErrorCb::UnknownMethod { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::CallbackArgMustBeFnName { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::CallbackSignatureMismatch { suggestion, .. } => suggestion.as_deref(),
+            TypeErrorCb::UnknownField { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }
