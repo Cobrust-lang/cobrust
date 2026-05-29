@@ -1,15 +1,24 @@
-# ADR-0076 Phase 1 first proof — `.cb` ecosystem-import callback chain
-# generalized to dora-rs robotics dataflow.
+# ADR-0076 Phase 2 (F68) — `.cb` ecosystem-import callback chain
+# generalized to dora-rs robotics dataflow, in the IDIOMATIC
+# `@dora.node(...)` decorator form.
 #
 # A `.cb` program that imports dora (ecosystem rebrand of Python's
 # dora-rs node API), constructs a synthetic Node, registers a top-level
-# `fn detect(event: dora.Event) -> i64:` callback via
-# `dora.node(detect)` (Phase 1 explicit-registration form; the
-# `@dora.node(inputs=..., outputs=...)` decorator desugar is a Phase 2
-# follow-up tracked in findings/f68-dora-phase1-followups.md), and
+# `fn detect(event: dora.Event) -> i64:` callback via the
+# `@dora.node(inputs=["camera"], outputs=["detections"])` MODULE-RECEIVER
+# decorator (F68 resolution — ADR-0074's decorator desugar extended to
+# recognise module-alias receivers, see ADR-0074 + findings/f68), and
 # dispatches via `node.run()`. The synthetic runtime mocks one canned
 # `("camera", "frame_001")` Event tick — the handler prints
 # `got frame: frame_001` and returns 0.
+#
+# The HIR desugar lowers the decorator to a synthetic
+# `dora.node(detect)` module-fn call inserted at `main`'s prologue
+# (BEFORE `node.run()` so the handler is installed before dispatch). The
+# `inputs=`/`outputs=` port metadata is declarative — validated as
+# list-of-str literals at the desugar layer, then dropped (Phase 1's
+# synthetic `dora.node` manifest row takes only the callback slot; the
+# real dataflow-graph wiring is a Phase 2 manifest follow-up).
 #
 # This is the THIRD module on the ADR-0073 callback chain (after pit's
 # pong handler and hood's command-callback). The MIR lowering emits
@@ -21,11 +30,12 @@
 #
 # Phase 2 will replace the synthetic mock with the real `dora-node-api`
 # `EventStream::into_iter()` loop driven by an actual dora coordinator,
-# and grow the surface to multi-input/output via the
-# `@dora.node(inputs=[...], outputs=[...])` decorator desugar.
+# and grow the surface to multi-input/output by threading the
+# `inputs=`/`outputs=` metadata into a widened manifest row.
 
 import dora
 
+@dora.node(inputs=["camera"], outputs=["detections"])
 fn detect(event: dora.Event) -> i64:
     let frame: str = event.data_str()
     print_no_nl("got frame: ")
@@ -34,10 +44,5 @@ fn detect(event: dora.Event) -> i64:
 
 fn main() -> i64:
     let node = dora.Node("detector")
-    # Phase 1: explicit registration form. Phase 2 follow-up replaces
-    # this with `@dora.node(inputs=["camera"], outputs=["detections"])`
-    # over `fn detect(...)`. `dora.node` returns Ty::Int — the
-    # `let _ = ...` pattern discards the sentinel zero.
-    let _ = dora.node(detect)
     let _ = node.run()
     return 0

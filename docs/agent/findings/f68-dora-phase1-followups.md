@@ -2,11 +2,22 @@
 doc_kind: finding
 finding_id: F68
 title: ADR-0076 Phase 1 follow-ups — @dora.node decorator desugar gap + Event-id equality demo simplification
-status: candidate
+status: ratified
 date: 2026-05-29
 last_verified_commit: HEAD
 relates_to: [adr:0074, adr:0076, finding:F35, finding:F36]
+resolution_commit: 5adcef9
+resolves: ["F68 §1 — @dora.node module-receiver decorator desugar"]
 ---
+
+> **RESOLVED 2026-05-29 (§1 — decorator desugar gap).** The
+> `@dora.node(inputs=[...], outputs=[...])` module-receiver decorator now
+> desugars to a synthetic `dora.node(<handler>)` register-call. The
+> resolution is **HIR-only** (extends ADR-0074's decorator desugar to
+> module-alias receivers) — ZERO mir / codegen / dora-runtime change,
+> ZERO `cobrust-types/src/ecosystem.rs` manifest change. See §6 below for
+> the resolution detail. §2 (string-equality demo dispatch) remains a
+> Phase 2 follow-up tracked here and is NOT resolved by this sprint.
 
 # F68: ADR-0076 Phase 1 follow-ups (decorator-desugar gap + demo simplifications)
 
@@ -190,6 +201,18 @@ If Phase 2 instead chooses to permanently ship the explicit-form
 this finding promotes to `ratified` with a §"design pivot" note
 recording the surface change rationale.
 
+**OUTCOME (2026-05-29): path (a), HIR-only variant.** ADR-0074's desugar
+was extended to module-receiver decorators (`@dora.node`). The
+manifest-side inputs/outputs widening was **deferred** (manifest is the
+Phase 2 dataflow-graph wiring's concern): the `inputs=`/`outputs=` kwargs
+are validated as list-of-str literals at the desugar layer, then
+**dropped**, so the synthesised call is a single-arg `dora.node(handler)`
+— byte-identical to the explicit form, reusing the unchanged Phase 1
+manifest row + runtime. This keeps the user surface at the ADR-0076 §Q4
+idiomatic decorator form while the synthetic Phase 1 runtime stays
+single-handler. The metadata becomes load-bearing when Phase 2 wires the
+real `dora-node-api` dataflow graph + widens the manifest row.
+
 ## 4. Related findings
 
 - **F35 (commit-msg vs diff drift)** — separate concern, not implicated
@@ -211,3 +234,55 @@ recording the surface change rationale.
 - `examples/dora_hello/main.cb` (the Phase 1 explicit-form demo).
 - `crates/cobrust-cli/tests/dora_hello_e2e.rs` (the Phase 1 E2E
   test asserting `got frame: frame_001` stdout).
+
+## 6. §1 resolution detail (2026-05-29)
+
+### What changed (HIR-only)
+
+All in `crates/cobrust-hir/src/lower.rs`:
+
+| Element | Role |
+|---|---|
+| `is_decoratable_module_method("node")` (new free fn) | structural recognition of the module-receiver method name; `is_ecosystem_decorator_shape` now ORs it into both the call-form and bare-form branches |
+| `validate_module_node_decorator_shape` (new free fn) | shape gate for `@dora.node(...)`: rejects positional args (handler is the decorated fn), non-`inputs`/`outputs` kwargs, non-list / non-str-literal port values, `*args`/`**kwargs` — each with a §2.5 Direction B fix-suggesting diagnostic; accepts the bare `@dora.node` form |
+| `build_eco_module_register_call` (new free fn) | synthesises a MODULE-FN call `dora.node(<fn_ref>)` whose receiver `Name` carries the import-alias `DefId` + `DefKind::ImportAlias` (the SAME id the typechecker registers in `ecosystem_module_defs`), so `try_synth_ecosystem_call` Case 1 (module free-fn) fires — NOT Case 2 (handle method). The `inputs=`/`outputs=` kwargs are dropped. |
+| `inject_pending_eco_decorators` fork | resolves the receiver name against the module (top-level) scope; if it is an `ImportAlias` of a known ecosystem module + a module-decoratable method → module-fn synth at `main`'s **prologue** (index 0, so the handler installs before `node.run()` dispatches). Otherwise → the pre-existing handle-method synth (`let <recv>`-scan). |
+
+`crates/cobrust-hir/src/error.rs` — **NO change.** The existing
+`EcosystemDecoratorShape { detail, span, suggestion }` variant's
+free-text fields absorbed every module-receiver diagnostic; no new
+sub-variant was needed.
+
+### How module-receiver recognition differs from handle-receiver
+
+- **Handle receiver** (`@app.route(...)`): receiver is a `DefKind::
+  LetBinding` (`app = pit.App()`). The post-pass scans `fn main()`'s
+  body for `let app = ...`, resolves its `DefId`, and synthesises a
+  handle-METHOD call `app.route("GET", "/x", handler)` inserted right
+  after the `let`. Routes through `try_synth_ecosystem_call` **Case 2**.
+- **Module receiver** (`@dora.node(...)`): receiver is a `DefKind::
+  ImportAlias` (`import dora`). The post-pass resolves the alias `DefId`
+  via `lookup_top_level("dora")` (no `let` scan), and synthesises a
+  module-FN call `dora.node(handler)` inserted at `main`'s prologue.
+  Routes through `try_synth_ecosystem_call` **Case 1**.
+
+### Chain-generality (the §"why not Phase 1" prediction held)
+
+`git diff --stat` over `crates/cobrust-mir/`, `crates/cobrust-codegen/`,
+`crates/cobrust-dora/` is **EMPTY** — 0/0/0. Pure HIR sugar atop the
+proven ADR-0073 callback chain + ADR-0076 Phase 1 synthetic runtime, as
+§1 "Why not extend ADR-0074 in Phase 1?" point 3 predicted.
+
+### Tests
+
+- `crates/cobrust-cli/tests/decorator_dora_e2e.rs` (NEW): 2 positive
+  (full `@dora.node(inputs=..., outputs=...)` form + bare `@dora.node`
+  form, both print `got frame: frame_001` + exit 0) + 4 negative
+  (nested-fn → "module scope"; wrong handler sig →
+  `CallbackSignatureMismatch`; positional arg → rejected; non-list
+  `inputs=` → rejected).
+- `examples/dora_hello/main.cb` switched explicit-form
+  `let _ = dora.node(detect)` → decorator-form
+  `@dora.node(inputs=["camera"], outputs=["detections"])`.
+- No regression: `dora_hello_e2e` (explicit form still supported),
+  `decorator_pit_e2e`, `pit_pong_e2e`, `hood_cmd_e2e` all green.

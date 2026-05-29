@@ -244,44 +244,81 @@ impl<'s> Lowerer<'s> {
             // shape, but we re-extract here for the post-pass synthesis.
             let (base_name, method, decorator_args) = peel_eco_decorator(&entry.decorator)?;
 
-            // Locate `let <base_name> = ...` in main's top-level stmts so
-            // we can both resolve its DefId and pick the insertion point
-            // (immediately after the let).
-            let mut recv_def_id: Option<DefId> = None;
-            let mut insert_idx: Option<usize> = None;
-            for (i, stmt) in main_fn.body.stmts.iter().enumerate() {
-                if let h::StmtKind::Let(lb) = &stmt.kind
-                    && let h::PatternKind::Binding(name, id) = &lb.pattern.kind
-                    && name == &base_name
+            // F68 fork: resolve the receiver name against the module
+            // (top-level) scope. If it is an `ImportAlias` of a known
+            // ecosystem module (`import dora`), this is a MODULE-RECEIVER
+            // decorator (`@dora.node(...)`) — synthesise a module-fn call
+            // `dora.node(<handler>)` instead of a handle-method call. The
+            // module-alias DefId is the SAME one the typechecker records
+            // in `ecosystem_module_defs` (both go through `lookup_top_level`
+            // off the prebind), so `try_synth_ecosystem_call` Case 1 fires.
+            let module_recv = match self.lookup_top_level(&base_name) {
+                Some((alias_def_id, DefKind::ImportAlias))
+                    if is_decoratable_module_method(method) =>
                 {
-                    recv_def_id = Some(*id);
-                    insert_idx = Some(i + 1);
-                    break;
+                    Some(alias_def_id)
                 }
-            }
-            let (Some(recv_def_id), Some(insert_idx)) = (recv_def_id, insert_idx) else {
-                return Err(LoweringError::EcosystemDecoratorShape {
-                    detail: "ecosystem decorator's receiver must be `let`-bound inside `fn main()`",
-                    span: entry.decorator.span,
-                    suggestion: Some(
-                        "declare the receiver in `main`: `let app = pit.App()` BEFORE the route registers",
-                    ),
-                });
+                _ => None,
             };
 
-            // Build the synthetic call expression. Method-specific prefix
-            // args + the decorator's call args + the fn-ref are
-            // concatenated; the receiver is `Name(rn_recv)`.
-            let synth_call = build_eco_register_call(
-                &entry.decorator,
-                &base_name,
-                recv_def_id,
-                method,
-                decorator_args,
-                &entry.fn_name,
-                entry.fn_def_id,
-                entry.fn_span,
-            )?;
+            let (synth_call, insert_idx) = if let Some(alias_def_id) = module_recv {
+                // Module-receiver path. The synthetic register-call goes at
+                // main's PROLOGUE (index 0) so the handler is installed in
+                // the process-global slot BEFORE any later `node.run()`
+                // dispatches it (mirrors the explicit-form ordering where
+                // `dora.node(detect)` precedes `node.run()`).
+                let call = build_eco_module_register_call(
+                    &entry.decorator,
+                    &base_name,
+                    alias_def_id,
+                    method,
+                    &entry.fn_name,
+                    entry.fn_def_id,
+                    entry.fn_span,
+                )?;
+                (call, 0usize)
+            } else {
+                // Handle-receiver path (ADR-0074): locate `let <base_name>
+                // = ...` in main's top-level stmts so we can both resolve
+                // its DefId and pick the insertion point (right after the
+                // let).
+                let mut recv_def_id: Option<DefId> = None;
+                let mut insert_idx: Option<usize> = None;
+                for (i, stmt) in main_fn.body.stmts.iter().enumerate() {
+                    if let h::StmtKind::Let(lb) = &stmt.kind
+                        && let h::PatternKind::Binding(name, id) = &lb.pattern.kind
+                        && name == &base_name
+                    {
+                        recv_def_id = Some(*id);
+                        insert_idx = Some(i + 1);
+                        break;
+                    }
+                }
+                let (Some(recv_def_id), Some(insert_idx)) = (recv_def_id, insert_idx) else {
+                    return Err(LoweringError::EcosystemDecoratorShape {
+                        detail: "ecosystem decorator's receiver must be `let`-bound inside `fn main()` (or a known ecosystem module alias)",
+                        span: entry.decorator.span,
+                        suggestion: Some(
+                            "declare the receiver in `main`: `let app = pit.App()` BEFORE the route registers (or `import dora` for `@dora.node`)",
+                        ),
+                    });
+                };
+
+                // Build the synthetic handle-method call. Method-specific
+                // prefix args + the decorator's call args + the fn-ref are
+                // concatenated; the receiver is `Name(rn_recv)`.
+                let call = build_eco_register_call(
+                    &entry.decorator,
+                    &base_name,
+                    recv_def_id,
+                    method,
+                    decorator_args,
+                    &entry.fn_name,
+                    entry.fn_def_id,
+                    entry.fn_span,
+                )?;
+                (call, insert_idx)
+            };
 
             // Insert `Stmt::Expr(synth_call)` at `insert_idx`.
             let span = entry.decorator.span;
@@ -2003,38 +2040,51 @@ fn ast_kind_name(k: &ast::StmtKind) -> &'static str {
     }
 }
 
-/// ADR-0074 §2 — syntactic predicate for whether a decorator expression
-/// looks like an ecosystem-decorator candidate. Two shapes are recognised:
+/// ADR-0074 §2 (+ F68) — syntactic predicate for whether a decorator
+/// expression looks like an ecosystem-decorator candidate. Three shapes
+/// are recognised:
 ///
-/// - Call form: `Call { callee: Access(Attribute { base: Name(_), name: M }), args }`
-///   where `M ∈ DECORATABLE_METHODS` ("route").
+/// - Handle call form: `Call { callee: Access(Attribute { base: Name(_),
+///   name: M }), args }` where `M ∈ DECORATABLE_METHODS` ("route"). The
+///   receiver is a let-bound handle (`app = pit.App()`).
 /// - Bare form: `Access(Attribute { base: Name(_), name: M })` where
-///   `M ∈ DECORATABLE_BARE_METHODS` ("handler").
+///   `M ∈ DECORATABLE_BARE_METHODS` ("handler"). Receiver is a let-bound
+///   handle (`cmd = hood.Command(...)`).
+/// - Module call form (F68): `Call { callee: Access(Attribute { base:
+///   Name(_), name: M }), args }` where `M ∈ DECORATABLE_MODULE_METHODS`
+///   ("node"). The receiver is an ecosystem MODULE ALIAS (`dora`), not a
+///   let-bound handle. Resolved as a module-fn call at synthesis time.
 ///
 /// The HIR pass cannot consult type information (it runs before the
 /// typechecker), so this predicate is purely structural — the typechecker
-/// is the load-bearing gate for "is `base` actually a pit.App?". When this
-/// predicate returns `true` but the receiver is the wrong type, the
-/// downstream `try_synth_ecosystem_call` raises `UnknownMethod` (or
-/// equivalent) with a fix-suggesting diagnostic.
+/// is the load-bearing gate for "is `base` actually a pit.App / the dora
+/// module?". When this predicate returns `true` but the receiver is the
+/// wrong type, the downstream `try_synth_ecosystem_call` raises
+/// `UnknownMethod` / `UnknownName` with a fix-suggesting diagnostic. The
+/// post-pass `inject_pending_eco_decorators` additionally forks on the
+/// receiver's resolved `DefKind` (`ImportAlias` of a known ecosystem
+/// module → module-fn synth; let-binding → handle-method synth).
 ///
 /// The first-proof method list is intentionally tiny — `route` from
-/// pit.App, plus the bare `handler` form for the hood-manifest follow-up
-/// (currently bare-rejected at typecheck since hood isn't wired). Other
+/// pit.App, the bare `handler` form for the hood-manifest follow-up, and
+/// `node` from the dora module (F68 module-receiver decorator). Other
 /// decorators stay as no-op `ItemKind::Decorated` wrappers (status quo).
 fn is_ecosystem_decorator_shape(d: &ast::Expr) -> bool {
-    // Call form: `@app.route(...)` / `@cmd.handler(...)`.
+    // Call form: `@app.route(...)` / `@dora.node(...)`.
     if let ast::ExprKind::Call { callee, .. } = &d.kind
         && let ast::ExprKind::Access(ast::AccessKind::Attribute { base, name }) = &callee.kind
         && matches!(&base.kind, ast::ExprKind::Name(_))
-        && is_decoratable_call_method(name.as_str())
+        && (is_decoratable_call_method(name.as_str())
+            || is_decoratable_module_method(name.as_str()))
     {
         return true;
     }
-    // Bare form: `@cmd.handler`.
+    // Bare form: `@cmd.handler` / `@dora.node` (module bare form — single
+    // handler, no inputs/outputs metadata).
     if let ast::ExprKind::Access(ast::AccessKind::Attribute { base, name }) = &d.kind
         && matches!(&base.kind, ast::ExprKind::Name(_))
-        && is_decoratable_bare_method(name.as_str())
+        && (is_decoratable_bare_method(name.as_str())
+            || is_decoratable_module_method(name.as_str()))
     {
         return true;
     }
@@ -2047,6 +2097,19 @@ fn is_ecosystem_decorator_shape(d: &ast::Expr) -> bool {
 /// with the manifest's `EcoParam::Callback`-bearing entries.
 fn is_decoratable_call_method(name: &str) -> bool {
     matches!(name, "route")
+}
+
+/// Module-receiver decoratable method names (F68 — ADR-0076 Phase 2
+/// surface). "node" comes from the `dora` module's manifest free-fn
+/// (`dora.node(handler)`, `EcoParam::Callback`). Unlike
+/// [`is_decoratable_call_method`] / [`is_decoratable_bare_method`] the
+/// receiver is an ecosystem MODULE ALIAS, so the synthesised register-call
+/// is a module-fn call `dora.node(<handler>)` (routed through the
+/// typechecker's `try_synth_ecosystem_call` Case 1 module-fn arm), NOT a
+/// handle-method call. The post-pass confirms the receiver resolves to a
+/// `DefKind::ImportAlias` of a known ecosystem module before synthesising.
+fn is_decoratable_module_method(name: &str) -> bool {
+    matches!(name, "node")
 }
 
 /// Bare-form decoratable method names (ADR-0074 §2 Q2 bare-form).
@@ -2138,9 +2201,168 @@ fn validate_eco_decorator_shape(d: &ast::Expr) -> Result<(), LoweringError> {
                 });
             }
         }
+        // F68 — module-receiver `@dora.node(inputs=[...], outputs=[...])`.
+        // The handler is the DECORATED fn (synthesised as the sole
+        // positional arg to `dora.node`), so positional decorator args are
+        // a shape error. The `inputs=`/`outputs=` kwargs are declarative
+        // dataflow metadata — validated here as list-of-str literals, then
+        // DROPPED at synthesis (Phase 1's synthetic manifest `dora.node`
+        // takes only the `EcoParam::Callback` slot; the metadata wires the
+        // real dataflow graph in Phase 2). The bare `@dora.node` form is
+        // also accepted (single handler, no metadata).
+        "node" => validate_module_node_decorator_shape(d, decorator_args)?,
         _ => {}
     }
     Ok(())
+}
+
+/// F68 — shape gate for the module-receiver `@dora.node(...)` decorator.
+///
+/// Accepts:
+/// - bare `@dora.node` (no call args),
+/// - `@dora.node(inputs=[...], outputs=[...])` where the ONLY call args are
+///   the `inputs` / `outputs` keywords, each bound to a list-of-`str`
+///   literal.
+///
+/// Rejects (with a §2.5 Direction B fix-suggesting diagnostic):
+/// - any positional decorator arg (the handler is the decorated fn, not a
+///   decorator arg),
+/// - any keyword other than `inputs` / `outputs`,
+/// - an `inputs` / `outputs` value that is not a list literal of string
+///   literals,
+/// - `*args` / `**kwargs`.
+fn validate_module_node_decorator_shape(
+    d: &ast::Expr,
+    decorator_args: &[ast::CallArg],
+) -> Result<(), LoweringError> {
+    for ca in decorator_args {
+        match ca {
+            ast::CallArg::Positional(e) => {
+                return Err(LoweringError::EcosystemDecoratorShape {
+                    detail: "`@dora.node` takes no positional args — the handler is the decorated `fn`",
+                    span: e.span,
+                    suggestion: Some(
+                        "name the IO ports as keywords: `@dora.node(inputs=[\"camera\"], outputs=[\"detections\"])`",
+                    ),
+                });
+            }
+            ast::CallArg::Keyword(k, v) => {
+                if k != "inputs" && k != "outputs" {
+                    return Err(LoweringError::EcosystemDecoratorShape {
+                        detail: "`@dora.node` only accepts `inputs=` / `outputs=` keyword args",
+                        span: v.span,
+                        suggestion: Some(
+                            "use `@dora.node(inputs=[\"camera\"], outputs=[\"detections\"])`",
+                        ),
+                    });
+                }
+                let ast::ExprKind::Collection(ast::CollectionLit::List(elems)) = &v.kind else {
+                    return Err(LoweringError::EcosystemDecoratorShape {
+                        detail: "`@dora.node` `inputs=` / `outputs=` must be a list of string literals",
+                        span: v.span,
+                        suggestion: Some("wrap the port names in a list: `inputs=[\"camera\"]`"),
+                    });
+                };
+                for el in elems {
+                    if !matches!(&el.kind, ast::ExprKind::Literal(ast::Literal::Str(_))) {
+                        return Err(LoweringError::EcosystemDecoratorShape {
+                            detail: "`@dora.node` `inputs=` / `outputs=` entries must be string literals",
+                            span: el.span,
+                            suggestion: Some(
+                                "each port name is a string literal: `inputs=[\"camera\", \"lidar\"]`",
+                            ),
+                        });
+                    }
+                }
+            }
+            ast::CallArg::StarArgs(_) | ast::CallArg::StarStarKwargs(_) => {
+                return Err(LoweringError::EcosystemDecoratorShape {
+                    detail: "`@dora.node` does not support *args / **kwargs",
+                    span: d.span,
+                    suggestion: Some(
+                        "pass IO ports as keyword lists: `@dora.node(inputs=[\"camera\"], outputs=[\"detections\"])`",
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// F68 — build the synthetic MODULE-FN register-call HIR expression for a
+/// module-receiver decorator (`@dora.node(inputs=[...], outputs=[...])`).
+///
+/// Unlike [`build_eco_register_call`] (which synthesises a HANDLE-METHOD
+/// call `app.route(...)` whose receiver is a `DefKind::LetBinding`), this
+/// synthesises a MODULE-FN call `dora.node(<fn_ref>)` whose receiver is a
+/// `DefKind::ImportAlias` bearing the import-alias DefId. That receiver
+/// DefId is exactly the one the typechecker registered in
+/// `ecosystem_module_defs`, so `try_synth_ecosystem_call` Case 1 (module
+/// free-fn) — NOT Case 2 (handle method) — fires and validates the call
+/// against the `lookup_module_fn("dora", "node")` manifest row.
+///
+/// The decorator's `inputs=`/`outputs=` kwargs were validated in
+/// [`validate_module_node_decorator_shape`] and are DROPPED here: the
+/// Phase 1 synthetic `dora.node` manifest row takes only the
+/// `EcoParam::Callback` slot (single handler). The IO-port metadata wires
+/// the real dataflow graph in Phase 2 (manifest widening — out of this
+/// HIR-only sprint's scope). So the synthesised call is a single-arg
+/// `dora.node(<fn_ref>)`, byte-identical to the explicit form.
+///
+/// `<fn_ref>` = `ResolvedName { name: fn_name, def_id: fn_def_id, kind:
+/// DefKind::Fn }` (ADR-0073 §2 D2 — MIR materialises `Constant::FnRef`).
+#[allow(clippy::too_many_arguments)]
+fn build_eco_module_register_call(
+    decorator: &ast::Expr,
+    module_name: &str,
+    alias_def_id: DefId,
+    method: &str,
+    fn_name: &str,
+    fn_def_id: DefId,
+    fn_span: Span,
+) -> Result<h::Expr, LoweringError> {
+    // First-proof module-receiver method scope: only `dora.node`.
+    if !is_decoratable_module_method(method) {
+        return Err(LoweringError::EcosystemDecoratorShape {
+            detail: "module-receiver ecosystem decorator method is not recognised",
+            span: decorator.span,
+            suggestion: Some("the first-proof module-receiver decorator is `@dora.node(...)`"),
+        });
+    }
+
+    // Receiver: the module alias `Name` with the import-alias DefId.
+    let recv_expr = h::Expr {
+        span: decorator.span,
+        kind: h::ExprKind::Name(ResolvedName {
+            name: module_name.to_string(),
+            def_id: alias_def_id,
+            kind: DefKind::ImportAlias,
+        }),
+    };
+    let callee_expr = h::Expr {
+        span: decorator.span,
+        kind: h::ExprKind::Attr {
+            base: Box::new(recv_expr),
+            name: method.to_string(),
+        },
+    };
+    // Sole arg: the decorated fn as a `Constant::FnRef`-bearing operand.
+    let fn_ref_expr = h::Expr {
+        span: fn_span,
+        kind: h::ExprKind::Name(ResolvedName {
+            name: fn_name.to_string(),
+            def_id: fn_def_id,
+            kind: DefKind::Fn,
+        }),
+    };
+
+    Ok(h::Expr {
+        span: decorator.span,
+        kind: h::ExprKind::Call {
+            callee: Box::new(callee_expr),
+            args: vec![h::CallArg::Positional(fn_ref_expr)],
+        },
+    })
 }
 
 /// ADR-0074 — build the synthetic register-call HIR expression. Called
