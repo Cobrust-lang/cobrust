@@ -22,9 +22,11 @@
 //!
 //! # Schema descriptor grammar (the compiler↔runtime contract)
 //!
-//! One line per field, `field<TAB>kind[suffix]`:
+//! One line per field, `field<TAB>kind[suffix]`, optionally preceded by a
+//! single `# <BodyName>` header line naming the body class:
 //!
 //! ```text
+//! # CreateScore
 //! name\tstr
 //! rank\ti64:0:100
 //! low\ti64:0:
@@ -35,10 +37,28 @@
 //! - the optional int-range `suffix` is `:<lo>:<hi>` (an absent bound is
 //!   the empty string). Emitted ONLY for an `i64` field carrying a `where`
 //!   int-range refinement ([`cobrust_types::Refinement::schema_suffix`]).
+//! - the optional `# <BodyName>` header line carries the body class's
+//!   source name (ADR-0080 Phase-1b-iii — used by the OpenAPI emitter to
+//!   key `components/schemas/<BodyName>`). The VALIDATOR ignores it for
+//!   free: it carries no TAB, so [`parse_schema`]'s `split_once('\t')`
+//!   yields `None` and the line is skipped. This is the single-source
+//!   discipline — the body name lives in the SAME descriptor string the
+//!   validator reads, so the schema name and the validated fields cannot
+//!   come from two declarations (footgun #4).
 //!
 //! An EMPTY schema (no lines) means "validate JSON-object-ness only" (a
 //! defensive fallback when the compiler could not resolve the body class;
 //! the type checker has already accepted the program).
+//!
+//! # The ONE source the OpenAPI emitter walks (ADR-0080 §5.3, footgun #4)
+//!
+//! [`parse_schema`] + [`FieldSpec`] + [`FieldKind`] are `pub(crate)` so the
+//! sibling OpenAPI emitter ([`crate::openapi`]) derives the
+//! `components/schemas/<Body>` JSON by walking the EXACT SAME parsed
+//! representation this validator range-checks against — there is no second
+//! schema declaration to drift from. The int-range bound the validator
+//! enforces (`FieldSpec::lo`/`hi`) IS the bound the schema advertises
+//! (`minimum`/`maximum`).
 
 use serde_json::Value;
 
@@ -117,16 +137,19 @@ impl ValidationError {
     }
 }
 
-/// One parsed schema field descriptor.
-struct FieldSpec {
-    name: String,
-    kind: FieldKind,
-    lo: Option<i64>,
-    hi: Option<i64>,
+/// One parsed schema field descriptor. `pub(crate)` so the sibling
+/// OpenAPI emitter ([`crate::openapi`]) derives the field's JSON schema
+/// from the SAME parsed representation the validator range-checks (the
+/// cannot-drift single source — ADR-0080 §5.3 / footgun #4).
+pub(crate) struct FieldSpec {
+    pub(crate) name: String,
+    pub(crate) kind: FieldKind,
+    pub(crate) lo: Option<i64>,
+    pub(crate) hi: Option<i64>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum FieldKind {
+pub(crate) enum FieldKind {
     Str,
     I64,
     F64,
@@ -146,6 +169,7 @@ impl FieldKind {
         }
     }
 
+    /// The validation-error label for a wrong-type 422 detail.
     fn type_name(self) -> &'static str {
         match self {
             Self::Str => "string",
@@ -155,12 +179,44 @@ impl FieldKind {
             Self::Any => "any",
         }
     }
+
+    /// The OpenAPI 3.1 `type` keyword for this field kind (ADR-0080 §5.3):
+    /// `str → string`, `i64 → integer`, `f64 → number`, `bool → boolean`.
+    /// An `Any` field (a non-Phase-1b-ii scalar) has no statically-known
+    /// OpenAPI type, so the emitter omits the `type` keyword for it
+    /// (`None` here). Consumed by [`crate::openapi`].
+    pub(crate) fn openapi_type(self) -> Option<&'static str> {
+        match self {
+            Self::Str => Some("string"),
+            Self::I64 => Some("integer"),
+            Self::F64 => Some("number"),
+            Self::Bool => Some("boolean"),
+            Self::Any => None,
+        }
+    }
+}
+
+/// The body-class name carried by the optional `# <BodyName>` header line
+/// of a schema descriptor (see the module header). Returns `None` when the
+/// descriptor carries no header line (the defensive empty-schema fallback,
+/// or a pre-Phase-1b-iii descriptor). `pub(crate)` so the OpenAPI emitter
+/// keys `components/schemas/<BodyName>` from the SAME descriptor string the
+/// validator reads (footgun #4 — one source).
+pub(crate) fn body_name(schema: &str) -> Option<String> {
+    schema.lines().find_map(|line| {
+        line.strip_prefix("# ")
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+    })
 }
 
 /// Parse the compact schema descriptor (see the module header) into the
-/// field-spec list. Malformed lines are skipped defensively (the compiler
-/// emits well-formed descriptors; this never panics on bad input).
-fn parse_schema(schema: &str) -> Vec<FieldSpec> {
+/// field-spec list. Malformed lines — including the optional `# <BodyName>`
+/// header line (no TAB → `split_once` yields `None`) — are skipped
+/// defensively (the compiler emits well-formed descriptors; this never
+/// panics on bad input). `pub(crate)` so the OpenAPI emitter walks the
+/// SAME parse the validator does (the cannot-drift single source).
+pub(crate) fn parse_schema(schema: &str) -> Vec<FieldSpec> {
     let mut specs = Vec::new();
     for line in schema.lines() {
         if line.is_empty() {
@@ -373,6 +429,46 @@ mod tests {
             validate_against_schema("", &json!(5)),
             Err(ValidationError::NotAnObject)
         );
+    }
+
+    #[test]
+    fn body_name_header_line_parsed() {
+        // ADR-0080 Phase-1b-iii — the optional `# <BodyName>` header line
+        // names the schema; the body name lives in the SAME descriptor the
+        // validator reads (footgun #4 — one source).
+        let schema = "# CreateScore\nname\tstr\nrank\ti64:0:100";
+        assert_eq!(body_name(schema).as_deref(), Some("CreateScore"));
+        // No header line → None.
+        assert_eq!(body_name("name\tstr"), None);
+        assert_eq!(body_name(""), None);
+    }
+
+    #[test]
+    fn header_line_ignored_by_validator() {
+        // The `# CreateScore` header line carries no TAB, so the validator
+        // skips it — a body with exactly the declared fields still passes,
+        // and the bounds still enforce (the header changes nothing for the
+        // validator; it is metadata for the OpenAPI emitter).
+        let schema = "# CreateScore\nname\tstr\nrank\ti64:0:100";
+        assert_eq!(
+            validate_against_schema(schema, &json!({"name":"a","rank":50})),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_against_schema(schema, &json!({"name":"a","rank":200})),
+            Err(ValidationError::OutOfRange { value: 200, .. })
+        ));
+    }
+
+    #[test]
+    fn openapi_type_keywords() {
+        // ADR-0080 §5.3 — the field-kind → OpenAPI `type` mapping the
+        // emitter walks. `Any` has no statically-known type → None.
+        assert_eq!(FieldKind::Str.openapi_type(), Some("string"));
+        assert_eq!(FieldKind::I64.openapi_type(), Some("integer"));
+        assert_eq!(FieldKind::F64.openapi_type(), Some("number"));
+        assert_eq!(FieldKind::Bool.openapi_type(), Some("boolean"));
+        assert_eq!(FieldKind::Any.openapi_type(), None);
     }
 
     #[test]

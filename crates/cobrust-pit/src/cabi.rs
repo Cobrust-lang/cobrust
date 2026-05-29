@@ -423,6 +423,13 @@ pub unsafe extern "C" fn __cobrust_pit_app_route_validated(
     // SAFETY: `app` borrowed for the route registration; not consumed.
     let app_mut: &mut App = unsafe { &mut *app.cast::<App>() };
 
+    // ADR-0080 Phase-1b-iii — accumulate this route's {method, path, schema}
+    // on the App FIRST (while `schema_s` is still live — the handler closure
+    // below MOVES it), so an explicit `app.serve_openapi(...)` can derive the
+    // OpenAPI doc from the SAME descriptor the validator enforces (footgun
+    // #4, cannot drift). Adds no new handle (a side-effect on the live App).
+    app_mut.register_validated_meta(&method_s, &path_s, &schema_s);
+
     // The closure captures `raw` (a Copy+Send+Sync fn pointer) + the owned
     // `schema_s: String` (Send+Sync). `'static` holds under AOT (the `.cb`
     // fn + the schema String outlive the server task).
@@ -493,6 +500,47 @@ pub unsafe extern "C" fn __cobrust_pit_app_route_validated(
 
     // Return null (Ty::None discard) — the registration is a side-effect
     // on `app` in place (mirrors `route`).
+    std::ptr::null_mut()
+}
+
+/// `app.serve_openapi(doc_path) -> None` (ADR-0080 Phase-1b-iii — the
+/// EXPLICIT OpenAPI-serving opt-in, §5.3).
+///
+/// Registers a `GET <doc_path>` route serving the OpenAPI document derived
+/// from the validated routes accumulated on the App
+/// ([`App::serve_openapi`]). The doc is assembled by walking each
+/// `route_validated`'s body-schema descriptor through the SAME
+/// `validation::parse_schema` the validator reads — so the served schema
+/// and the runtime validation cannot drift (footgun #4).
+///
+/// EXPLICIT, NOT magic: the doc is served only because the `.cb` author
+/// wrote `app.serve_openapi("/openapi.json")`. No import-time side effect,
+/// no hidden global — the registration is a side-effect on the live `App`
+/// in place (mirrors `route` / `use_cors`).
+///
+/// Returns `Ty::None` (null at the C ABI) so a `let _ = app.serve_openapi(…)`
+/// form does NOT alias a second drop-eligible App handle (which would
+/// double-fire `__cobrust_pit_app_drop`).
+///
+/// # Safety
+///
+/// - `app` must be a live `App` handle from `__cobrust_pit_app_new`.
+/// - `path` must be a valid Cobrust `Str` buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_app_serve_openapi(app: *mut u8, path: *mut u8) -> *mut u8 {
+    if app.is_null() {
+        // Defense in depth (matching `route`/`use_cors`): a null app is
+        // impossible under the typechecker; tolerate as a clean no-op.
+        return std::ptr::null_mut();
+    }
+    // SAFETY: `path` per `# Safety`.
+    let path_s = unsafe { read_str_buf(path) };
+    // SAFETY: `app` per `# Safety` — borrowed to register the doc route;
+    // not consumed (no `_drop` aliasing; the `.cb` scope still owns the box).
+    let app_mut: &mut App = unsafe { &mut *app.cast::<App>() };
+    // Discard the Result (benign no-op on a malformed / duplicate path — the
+    // fail-clean sentinel convention; the typechecker accepted the program).
+    let _ = app_mut.serve_openapi(&path_s);
     std::ptr::null_mut()
 }
 

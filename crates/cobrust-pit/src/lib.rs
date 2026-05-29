@@ -88,9 +88,15 @@ mod routing;
 // the `route_validated` trampoline in `cabi`. `pub` so the validator +
 // `ValidationError` are reachable from the integration suite.
 pub mod validation;
+// ADR-0080 Phase-1b-iii — the OpenAPI emitter. Derives the
+// `components/schemas/<Body>` doc by walking the SAME `validation::parse_schema`
+// output the validator reads (footgun #4 — cannot drift). `pub` so the doc
+// builder is reachable from the integration suite.
+pub mod openapi;
 
 pub use crate::app::{App, Handler, MAX_BODY_BYTES, ServerHandle};
 pub use crate::error::{PitError, PitErrorKind};
+pub use crate::openapi::{ValidatedRouteMeta, build_openapi_doc, openapi_json};
 pub use crate::request::Request;
 pub use crate::response::Response;
 pub use crate::validation::{ValidationError, validate_against_schema};

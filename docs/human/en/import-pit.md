@@ -148,6 +148,56 @@ registry). Today the success handler returns a fixed response — echoing the
 validated body back is a follow-up (it needs the `.cb`-struct ↔ JSON
 bridge).
 
+## Auto OpenAPI (`serve_openapi`, ADR-0080 Phase-1b-iii)
+
+FastAPI's other defining feature is the free `/docs` — an OpenAPI schema
+derived from your model. Cobrust does the same, with one key property: the
+schema is derived from **the same source the validator reads**, so it
+**cannot drift** from what the server actually enforces.
+
+```python
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/scores", create_score)
+    # Explicitly opt in to serving the OpenAPI doc. NOT a magic auto-route:
+    # you write this line, so doc-serving is visible at the call site.
+    let _ = app.serve_openapi("/openapi.json")
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+`GET /openapi.json` then returns an OpenAPI 3.1 document. For the
+`CreateScore` body above:
+
+```json
+{
+  "openapi": "3.1.0",
+  "components": {
+    "schemas": {
+      "CreateScore": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "rank": { "type": "integer", "minimum": 0, "maximum": 100 }
+        }
+      }
+    }
+  }
+}
+```
+
+The `rank.maximum` of `100` is the EXACT same bound the validator enforces
+(it rejects `rank: 200` with a 422) — both are read from one field table +
+refinement side-table. There is no second, hand-kept schema declaration to
+fall out of sync (the utoipa/drf-spectacular drift footgun, dropped).
+
+`serve_openapi` is an **explicit opt-in** (the elegance-law: no import-time
+side effect, no hidden global). Call it AFTER the `route_validated`
+registrations it should document. The mapping in this version:
+`str → {type:string}`, `i64 → {type:integer}`, `f64 → {type:number}`,
+`bool → {type:boolean}`; an int-range refinement adds `minimum`/`maximum`.
+String length / pattern bounds are later phases.
+
 ## Why this design?
 
 - **One callback ABI shape**: every handler crosses as
@@ -174,14 +224,18 @@ bridge).
 - **No decorator sugar**: `@app.route("/x")` is ADR-0074 (next sprint).
 - **Middleware is canned presets only** (ADR-0078 Phase 1):
   `use_cors()`/`use_trace()`/`use_compression()` take no arguments.
-  Configurable CORS origins, custom `.cb` middleware, and auto OpenAPI are
-  ADR-0078 Phases 2/3.
+  Configurable CORS origins and custom `.cb` middleware are ADR-0078
+  Phases 2/3. (Auto OpenAPI now ships — see `serve_openapi` above.)
 - **Validated bodies** (`route_validated`, ADR-0080): only the fixed
   int-range `where`-refinement on an `i64` field ships now; string-length /
-  pattern refinements, nested-class and list-field bodies, the auto
-  `/openapi.json` schema, and echoing the validated body back in the
-  response (`json_response(body)`) are later phases. The success handler
-  currently returns a fixed response.
+  pattern refinements, nested-class and list-field bodies, and echoing the
+  validated body back in the response (`json_response(body)`) are later
+  phases. The success handler currently returns a fixed response.
+- **OpenAPI** (`serve_openapi`, ADR-0080 Phase-1b-iii): the doc covers the
+  body schema of each validated route (type + int-range `minimum`/`maximum`).
+  String-length (`minLength`/`maxLength`) and pattern bounds follow the
+  validator's later phases; the served doc is a Rust-assembled JSON string
+  (not yet a `.cb`-struct serialization).
 - **`pit.Request` accessors not yet wired**: the handler must construct
   the Response without reading the Request's path/method/body. A paired
   follow-up adds the borrow shims.

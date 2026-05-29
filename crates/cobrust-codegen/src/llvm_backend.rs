@@ -2796,6 +2796,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // App-receiver / None-return form: one ptr arg, ptr return —
         // identical to `pit_request_body_ty`.
         let pit_app_use_middleware_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        // ADR-0080 Phase-1b-iii — `__cobrust_pit_app_serve_openapi(
+        //     app: *mut App, path: *mut Str
+        // ) -> *mut u8 = null`. The EXPLICIT OpenAPI-serving opt-in (§5.3):
+        // registers a `GET <path>` route serving the OpenAPI doc derived
+        // from the App's accumulated `route_validated` schemas (the SAME
+        // source the validator reads — footgun #4). Ty::None discard return
+        // (the effect is a route registered on `app` in place, mirroring
+        // `route`/`use_*`). Shape is two ptr args, ptr return — identical to
+        // `pit_request_path_param_ty`.
+        let pit_app_serve_openapi_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         // F65 G1 — `__cobrust_pit_request_body(req: *mut Request) -> *mut Str`.
         // Borrow-shim returning a freshly-allocated Cobrust Str. The
         // Request stays Rust-owned (ADR-0073 §2 D6).
@@ -2822,6 +2832,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 "__cobrust_pit_app_use_compression",
                 pit_app_use_middleware_ty,
                 1,
+            ),
+            (
+                "__cobrust_pit_app_serve_openapi",
+                pit_app_serve_openapi_ty,
+                2,
             ),
             ("__cobrust_pit_request_body", pit_request_body_ty, 1),
             (

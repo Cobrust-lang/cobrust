@@ -273,11 +273,74 @@ Mechanism (the layered pipeline):
   **422** `Response` from the `ValidationError` WITHOUT entering the handler
   (footgun #2 — the Result-error path stays in Rust as a Response).
 
-Scope (Phase-1b-ii): the validation + 422 engine ONLY. NOT the OpenAPI emit
-(Phase-1b-iii — the side-table is carried for it). Body re-serialization
-(`json_response(201, body)`) is the deferred `.cb`↔serde bridge (ADR-0080
-§9); the success handler returns a fixed response. `len`/`pattern`
-refinements are Phase-2/3.
+Scope (Phase-1b-ii): the validation + 422 engine ONLY. The OpenAPI emit is
+Phase-1b-iii (below — it walks the SAME schema descriptor + side-table this
+phase carries). Body re-serialization (`json_response(201, body)`) is the
+deferred `.cb`↔serde bridge (ADR-0080 §9); the success handler returns a
+fixed response. `len`/`pattern` refinements are Phase-2/3.
+
+## ADR-0080 Phase-1b-iii — `serve_openapi` (OpenAPI emission, cannot drift)
+
+`app.serve_openapi(doc_path: str) -> None` is the EXPLICIT opt-in that
+registers a `GET <doc_path>` route serving an OpenAPI 3.1 doc DERIVED from
+the validated routes' body-schema descriptors (ADR-0080 §2 Q4, §5.3). The
+load-bearing property is footgun #4 (cannot drift): the schema is a second
+projection of the ONE source the validator reads.
+
+Surface (`.cb`):
+
+```python
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/scores", create_score)
+    let _ = app.serve_openapi("/openapi.json")   # EXPLICIT — no magic auto-route
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+Mechanism (the chain, sibling of `route_validated` / `use_cors`):
+
+- **Body name (MIR + types).** `TypedModule.adt_names` (the inverse of the
+  checker's `class_names`) lets MIR prepend a `# <BodyName>` header line to
+  the schema descriptor `validated_body_schema_for_handler` synthesises. The
+  validator skips it for free (no TAB → `parse_schema`'s `split_once('\t')`
+  is `None`); the OpenAPI emitter reads it to key
+  `components/schemas/<BodyName>`. One descriptor string, both consumers.
+- **Manifest.** `(PIT_APP_ADT, "serve_openapi")` →
+  `__cobrust_pit_app_serve_openapi`, `[Value(Str)] → None`,
+  `PyCompatTier::Semantic`. `Ty::None` return mirrors `route`/`use_cors`'s
+  in-place-effect discard (no second drop-eligible App handle).
+- **MIR.** No special-case — a plain value-arg method through the generic
+  eco-call path (the doc path is the one `Str` arg).
+- **Codegen.** `__cobrust_pit_app_serve_openapi(app, path) -> *mut u8 = null`
+  (2 ptr args, ptr return — same shape as `request_path_param`).
+- **CLI.** Matched by the `__cobrust_pit_*` prefix recognizer for free.
+- **App accumulation (`app.rs`).** The `route_validated` trampoline calls
+  `App::register_validated_meta(method, path, schema)` (with the SAME schema
+  string it hands the validator), pushing a `ValidatedRouteMeta` into the
+  App's `validated_routes` (NOT a hidden global — it lives inside the `App`,
+  read only by an explicit `serve_openapi`). `App::serve_openapi(doc_path)`
+  snapshots `validated_routes` into a `GET` handler closure that returns
+  `Response::json(build_openapi_doc(&routes))`.
+- **Emitter (`openapi.rs`, the cannot-drift core).** `build_openapi_doc`
+  walks each `ValidatedRouteMeta.schema` through
+  `validation::parse_schema` — the EXACT same parse the validator
+  range-checks — and projects each `FieldSpec` to OpenAPI:
+  `str→{type:string}`, `i64→{type:integer}`, `f64→{type:number}`,
+  `bool→{type:boolean}`; `FieldSpec.lo→minimum`, `FieldSpec.hi→maximum`.
+  The advertised `maximum` IS the `hi` the validator enforces — two
+  projections of one `parse_schema`, provably cannot diverge.
+
+Done-means (verified): `GET /openapi.json` → 200 + `components/schemas/CreateScore`
+shows `name:{type:string}`, `rank:{type:integer,minimum:0,maximum:100}`;
+the cannot-drift cross-check — `POST /scores {"rank":200}` → 422 (validator
+rejects, enforcing max 100) AND the doc advertises `maximum:100`, both from
+one source.
+
+Scope (Phase-1b-iii): int-range schema bounds only (`minimum`/`maximum`).
+`minLength`/`maxLength` + `pattern` follow the validator's Phase-2/3. The
+doc is a Rust-assembled JSON string (`Response::json`), not a `.cb`-struct
+serialization (the deferred §9 bridge).
 
 ## Cross-references
 

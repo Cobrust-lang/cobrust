@@ -981,6 +981,24 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             Ty::None,
             PyCompatTier::Semantic,
         )),
+        // ADR-0080 Phase-1b-iii — `app.serve_openapi(doc_path: str) -> None`:
+        // the EXPLICIT OpenAPI-serving opt-in (§5.3 / the elegance-law — NOT
+        // a magic auto-route, NOT an import-time side effect). Registers a
+        // `GET <doc_path>` route serving the OpenAPI doc DERIVED from the
+        // `route_validated` body-schema descriptors the App accumulated (the
+        // SAME source the validator reads — footgun #4, cannot drift). One
+        // `Ty::Str` value arg (the doc path), `Ty::None` return mirroring
+        // `route` / `use_cors`'s in-place-effect discard discipline so a
+        // `let _ = app.serve_openapi(...)` form does not alias a second
+        // drop-eligible App handle. The cabi shim
+        // (`__cobrust_pit_app_serve_openapi`) is in the `__cobrust_pit_*`
+        // family, so the CLI pit-prefix recognizer matches it for free.
+        (PIT_APP_ADT, "serve_openapi") => Some(EcoSig::from_values(
+            "__cobrust_pit_app_serve_openapi",
+            vec![Ty::Str],
+            Ty::None,
+            PyCompatTier::Semantic,
+        )),
         (PIT_APP_ADT, "serve_in_background") => Some(EcoSig::from_values(
             "__cobrust_pit_app_serve_in_background",
             vec![Ty::Str, Ty::Int],

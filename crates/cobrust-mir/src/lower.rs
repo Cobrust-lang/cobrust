@@ -2158,21 +2158,26 @@ impl<'a> BodyBuilder<'a> {
     /// `Ty::Adt`. We read that class's field table + refinement side-table
     /// off `TypedModule` (the SAME source the type checker used) and render
     /// the compact line-per-field descriptor the trampoline parses
-    /// (ADR-0080 §5.4):
+    /// (ADR-0080 §5.4), prefixed (ADR-0080 Phase-1b-iii) by a `# <BodyName>`
+    /// header line naming the body class for the OpenAPI emitter:
     ///
     /// ```text
+    /// # CreateScore
     /// name\tstr
     /// rank\ti64:0:100
     /// ```
     ///
-    /// Each line is `field<TAB>kind[suffix]` where `kind ∈ {str,i64,f64,
-    /// bool}` and the optional int-range `suffix` is `:lo:hi` (an absent
-    /// bound is the empty string). Fields are emitted in the `BTreeMap`'s
-    /// deterministic name order. A field whose type is not a Phase-1b-ii
-    /// scalar is rendered with kind `any` (the validator only checks
-    /// presence for it). If the handler / body class cannot be resolved
-    /// (defensive — the type checker already accepted it), an empty schema
-    /// is emitted (the trampoline then validates JSON-object-ness only).
+    /// The first line `# <BodyName>` (Phase-1b-iii) names the body class so
+    /// the OpenAPI emitter keys `components/schemas/<BodyName>` from the SAME
+    /// descriptor; the validator skips it (no TAB). Each field line is
+    /// `field<TAB>kind[suffix]` where `kind ∈ {str,i64,f64,bool}` and the
+    /// optional int-range `suffix` is `:lo:hi` (an absent bound is the empty
+    /// string). Fields are emitted in the `BTreeMap`'s deterministic name
+    /// order. A field whose type is not a Phase-1b-ii scalar is rendered with
+    /// kind `any` (the validator only checks presence for it). If the handler
+    /// / body class cannot be resolved (defensive — the type checker already
+    /// accepted it), an empty schema is emitted (the trampoline then
+    /// validates JSON-object-ness only).
     fn validated_body_schema_for_handler(&self, pos_args: &[&Expr]) -> String {
         let Some(handler) = pos_args.get(2) else {
             return String::new();
@@ -2190,7 +2195,18 @@ impl<'a> BodyBuilder<'a> {
         let Some(fields) = self.ctx.typed.adt_fields.get(body_adt) else {
             return String::new();
         };
-        let mut lines = Vec::with_capacity(fields.len());
+        let mut lines = Vec::with_capacity(fields.len() + 1);
+        // ADR-0080 Phase-1b-iii — prepend the body class's source name as a
+        // `# <BodyName>` header line, so the OpenAPI emitter can key
+        // `components/schemas/<BodyName>` from the SAME descriptor string the
+        // validator reads (footgun #4 — one source). The validator skips this
+        // line for free (no TAB → `parse_schema`'s `split_once('\t')` is
+        // `None`). Read from `adt_names` (the inverse of the checker's
+        // `class_names`). Absent only if the class somehow has no recorded
+        // name (defensive — the type checker accepted the program).
+        if let Some(body_name) = self.ctx.typed.adt_names.get(body_adt) {
+            lines.push(format!("# {body_name}"));
+        }
         for (name, ty) in fields {
             let kind = match ty {
                 Ty::Str => "str",

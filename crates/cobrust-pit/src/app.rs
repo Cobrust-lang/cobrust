@@ -74,6 +74,15 @@ pub struct App {
     trace: bool,
     /// `CompressionLayer::new()` applied at serve when set.
     compress: bool,
+    /// ADR-0080 Phase-1b-iii — the metadata for each `route_validated`
+    /// registration (`{method, path, body-schema descriptor}`), accumulated
+    /// by [`App::register_validated_meta`] from the `route_validated`
+    /// trampoline. The body-schema descriptor is the EXACT string the
+    /// validator parses, so the OpenAPI doc [`App::serve_openapi`] derives
+    /// from it cannot drift from the runtime validation (footgun #4). NOT a
+    /// hidden global — it lives inside this `App` and is read only by an
+    /// EXPLICIT `serve_openapi(...)` opt-in.
+    validated_routes: Vec<crate::openapi::ValidatedRouteMeta>,
 }
 
 /// Lazy process-singleton tokio runtime backing the blocking `run`
@@ -203,6 +212,62 @@ impl App {
     /// body through untouched otherwise. MUST be called BEFORE serve.
     pub fn use_compression(&mut self) {
         self.compress = true;
+    }
+
+    /// ADR-0080 Phase-1b-iii — record a `route_validated` registration's
+    /// metadata (`{method, path, schema}`) so an explicit
+    /// [`App::serve_openapi`] can derive the OpenAPI doc from it.
+    ///
+    /// Called by the `route_validated` trampoline ([`crate::cabi`]) with the
+    /// SAME compact body-schema descriptor it hands the validator — so the
+    /// schema the doc advertises is the same source the validator enforces
+    /// (footgun #4, cannot drift). `method` is uppercased to match the route
+    /// table. This is a side-effect on the live `App` (borrowed `&mut`); it
+    /// adds NO new handle.
+    pub fn register_validated_meta(&mut self, method: &str, path: &str, schema: &str) {
+        self.validated_routes
+            .push(crate::openapi::ValidatedRouteMeta {
+                method: method.to_ascii_uppercase(),
+                path: path.to_string(),
+                schema: schema.to_string(),
+            });
+    }
+
+    /// ADR-0080 Phase-1b-iii — register a `GET <doc_path>` route that serves
+    /// the OpenAPI document derived from the validated routes registered so
+    /// far (the EXPLICIT opt-in, ADR-0080 §5.3 / the elegance-law — NOT a
+    /// magic auto-route, NOT an import-time side effect; the `.cb` author
+    /// writes `app.serve_openapi("/openapi.json")` to enable it).
+    ///
+    /// The doc is assembled by [`crate::openapi::build_openapi_doc`], which
+    /// walks each registered route's body-schema descriptor through the SAME
+    /// [`crate::validation::parse_schema`] the validator reads — so the
+    /// served schema (e.g. `rank.maximum == 100`) and the bound the validator
+    /// enforces (rejects `rank == 200`) are two projections of ONE source and
+    /// cannot drift (footgun #4).
+    ///
+    /// # Registration-order contract
+    ///
+    /// The doc captures a SNAPSHOT of the validated routes at the moment of
+    /// this call (the registered handler closure owns the snapshot). Call
+    /// `serve_openapi` AFTER the `route_validated` registrations it should
+    /// document (the canonical `.cb` shape — all `route_validated(...)`
+    /// first, then `serve_openapi(...)`, then `run(...)`). A `route_validated`
+    /// added after this call is not reflected (mirrors the `use_*`
+    /// before-serve contract — explicit, no hidden re-derivation).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PitError`] (`InvalidRoute`) for a malformed `doc_path`, or
+    /// (`DuplicateRoute`) if `GET <doc_path>` is already registered.
+    pub fn serve_openapi(&mut self, doc_path: &str) -> Result<(), PitError> {
+        // Snapshot the validated routes registered so far; the closure owns
+        // it (Send + Sync + 'static — a Vec of owned Strings).
+        let routes = self.validated_routes.clone();
+        self.route("GET", doc_path, move |_req: Request| -> Response {
+            let doc = crate::openapi::build_openapi_doc(&routes);
+            Response::json(&doc)
+        })
     }
 
     /// Match an incoming `(method, path)` against the route table.

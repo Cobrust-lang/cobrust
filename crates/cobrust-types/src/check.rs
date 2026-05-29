@@ -50,6 +50,13 @@ pub struct TypedModule {
     /// SECOND projection of the one field table (the validator + the
     /// OpenAPI emitter read it). Empty for any field with no `where`.
     pub adt_refinements: HashMap<(crate::ty::AdtId, String), crate::refinement::Refinement>,
+    /// ADR-0080 Phase-1b-iii — the reverse of `Ctx::class_names`
+    /// (`AdtId → source class name`), carried out so MIR can name the
+    /// validated-body OpenAPI schema (`components/schemas/<name>`) in the
+    /// descriptor's `# <BodyName>` header line. Lets the OpenAPI emitter key
+    /// the schema by the body class's source name — derived from the SAME
+    /// `class_names` table the type checker resolved annotations through.
+    pub adt_names: HashMap<crate::ty::AdtId, String>,
 }
 
 /// Incremental type-check context — the Phase I × J handoff primitive
@@ -440,11 +447,21 @@ pub fn check(module: &Module) -> Result<TypedModule, TypeError> {
             (*adt, resolved_fields)
         })
         .collect();
+    // ADR-0080 Phase-1b-iii — invert `class_names` (name → AdtId) into
+    // `adt_names` (AdtId → name) so MIR can name the validated-body OpenAPI
+    // schema from the SAME table the checker resolved class annotations
+    // through (one source).
+    let adt_names: HashMap<crate::ty::AdtId, String> = ctx
+        .class_names
+        .iter()
+        .map(|(name, adt)| (*adt, name.clone()))
+        .collect();
     Ok(TypedModule {
         def_types: resolved,
         hir: module.clone(),
         adt_fields,
         adt_refinements: ctx.adt_refinements.clone(),
+        adt_names,
     })
 }
 
