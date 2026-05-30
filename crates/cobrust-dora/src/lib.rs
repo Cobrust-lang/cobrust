@@ -19,8 +19,13 @@
 //! # Module roster
 //!
 //! - [`cabi`] — `#[no_mangle] extern "C"` shims `.cb` programs bind
-//!   onto. Six trampolines + two drops; mirrors the hood/pit cabi.rs
-//!   shape.
+//!   onto. Node lifecycle (new / node / run / shutdown / drop) + Event
+//!   borrow methods (id / data_str / drop); mirrors the hood/pit cabi.rs
+//!   shape. ADR-0076 Phase 2 adds the multi-IO shims
+//!   (`declare_input` / `declare_output` / `event.send_output`) that
+//!   thread the `@dora.node(inputs=[...], outputs=[...])` decorator
+//!   metadata to the synthetic trampoline (multi-input dispatch +
+//!   send_output capture).
 //!
 //! # The chain (verbatim from ADR-0072 §"prior modules")
 //!

@@ -1,15 +1,18 @@
 # `import dora` — robotics dataflow nodes from Cobrust (callback marshalling third proof)
 
-> Status: ADR-0076 Phase 1 (synthetic runtime). The NINTH ecosystem
-> module — and the THIRD to cross a callback through the C ABI (after
-> pit's `fn(Request) -> Response` and hood's `fn() -> i64`). The shape
-> here is `fn(dora.Event) -> i64`, mixing pit's Event-receiver borrow
-> pattern with hood's i64 exit-code intent.
+> Status: ADR-0076 Phase 2 (synthetic runtime, multi-IO subset). The
+> NINTH ecosystem module — and the THIRD to cross a callback through the
+> C ABI (after pit's `fn(Request) -> Response` and hood's `fn() -> i64`).
+> The shape here is `fn(dora.Event) -> i64`, mixing pit's Event-receiver
+> borrow pattern with hood's i64 exit-code intent.
 >
-> Phase 1 is intentionally synthetic — `node.run()` mocks one canned
-> `("camera", "frame_001")` event arrival without depending on the real
-> dora-rs daemon. The chain is proven; Phase 2 wires the real dora-rs
-> orchestration (multi-IO, yaml-loaded dataflows, ROS2 bridge access).
+> The runtime is intentionally synthetic — `node.run()` injects canned
+> events without depending on the real dora-rs daemon or zenoh broker.
+> Phase 1 proved the single-input chain; Phase 2 adds **multi-input
+> dispatch** (the handler fires once per declared input) and
+> **`event.send_output(...)`** (emit on a declared output port). The real
+> dora-rs orchestration (real zenoh transport, Arrow list/dict payloads,
+> yaml-loaded dataflows, ROS2 bridge) is still a later phase.
 
 ## Example first
 
@@ -61,18 +64,72 @@ cobrust build prog.cb -o prog
 - **`Event.id() -> str`** — the input id this event arrived on (e.g.
   `"camera"`). Borrow shim — allocates a fresh Cobrust `str` buffer.
 - **`Event.data_str() -> str`** — the event payload as a UTF-8 string.
-  Phase 1 surface is `str`-only; Phase 2 widens to Arrow `RecordBatch`
-  accessors via `event.data_arrow()` for typed multi-element payloads.
+  The payload surface is `str`-only for now; Arrow `RecordBatch`
+  accessors for typed multi-element payloads are deferred (ADR-0076c).
 
-## What you don't get (Phase 1 — deferred)
+## Multi-IO: many inputs, one output (Phase 2)
 
-- Multi-input / multi-output orchestration (Phase 2 with
-  `@dora.node(inputs=["a", "b"], outputs=["c"])` decorator).
-- Real dora-rs daemon integration (Phase 2 with `dora-node-api` dep
-  + `tokio` runtime guest-mode).
-- Yaml-loaded dataflows (`dora.run("dataflow.yml")` — Phase 2).
-- Arrow `RecordBatch` payload accessors (`event.data_arrow()` +
-  primitive widening — Phase 2).
+Declare the node's input + output ports with the
+`@dora.node(inputs=[...], outputs=[...])` decorator. The handler then
+fires **once per declared input** — dispatch on `event.id()` — and emits
+results with **`event.send_output(output_id, payload)`**:
+
+```python
+import dora
+
+@dora.node(inputs=["tick", "camera"], outputs=["reading"])
+fn on_event(event: dora.Event) -> i64:
+    if str_eq_lit(event.id(), "camera") == 1:
+        let payload: str = event.data_str()
+        let _ = event.send_output("reading", payload)
+    print_no_nl("saw input: ")
+    print(event.id())
+    return 0
+
+fn main() -> i64:
+    let node = dora.Node("sensor")
+    let _ = node.run()
+    return 0
+```
+
+```bash
+cobrust build prog.cb -o prog
+./prog
+# saw input: tick
+# output[reading]=frame_001
+# saw input: camera
+```
+
+- **Multi-input dispatch** — declaring two inputs makes the synthetic
+  runtime inject one canned event per input id (in declaration order), so
+  the handler runs twice. `event.id()` tells the two apart. (The canned
+  payload is `frame_001` for `camera`, `frame_<id>` for other inputs —
+  a real broker supplies the actual data.)
+- **`event.send_output(output_id, payload) -> i64`** — emit a `str`
+  payload on a **declared** output port. The output id is validated
+  against the `outputs=[...]` you declared: an undeclared id is rejected
+  with a clear stderr message and a `-1` return (never a silent drop).
+  The synthetic runtime captures the emission to stdout as
+  `output[<id>]=<payload>`. Returns 0 on a successful emit.
+  `send_output` hangs off the **Event** (not the Node) because the Event
+  is the one handle in the handler's scope.
+
+> Why `str_eq_lit(event.id(), "camera") == 1` and not `event.id() ==
+> "camera"`? `str`-vs-`str` `==` is a separate language feature; the
+> `str_eq_lit(...)` helper is the proven dispatch form today.
+
+## What you don't get (deferred — honest)
+
+- Real dora-rs daemon integration + the real zenoh broker (the runtime
+  stays synthetic; `dora-node-api` dep + `tokio` guest-mode are a later
+  phase).
+- Arrow list/dict `RecordBatch` payloads beyond `str`/`i64` scalars
+  (`pa.array_i64(...)` — ADR-0076c).
+- Yaml-loaded dataflows (`dora.run("dataflow.yml")`).
+- Compile-time rejection of an undeclared output id — today an
+  undeclared `send_output` is caught at RUNTIME (the `-1` + stderr
+  message); a compile-time `DoraUnknownOutputId` error is a follow-up.
+- `for event in node:` polling iterator form.
 - ROS2 bridge publish surface (sub-ADR 0076a — Phase 3).
 - riscv64 cross-build of `cobrust-dora` (ADR-0075 Phase 1 dependency
   — Phase 3 stretch).

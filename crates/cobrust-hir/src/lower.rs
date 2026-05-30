@@ -261,22 +261,34 @@ impl<'s> Lowerer<'s> {
                 _ => None,
             };
 
-            let (synth_call, insert_idx) = if let Some(alias_def_id) = module_recv {
-                // Module-receiver path. The synthetic register-call goes at
-                // main's PROLOGUE (index 0) so the handler is installed in
-                // the process-global slot BEFORE any later `node.run()`
-                // dispatches it (mirrors the explicit-form ordering where
-                // `dora.node(detect)` precedes `node.run()`).
-                let call = build_eco_module_register_call(
+            // A decorator can synthesise MULTIPLE prologue statements: the
+            // module-receiver `@dora.node(inputs=[...], outputs=[...])` form
+            // emits one `dora.declare_input(id)` / `dora.declare_output(id)`
+            // call per declared port (ADR-0076 Phase 2 — threading the IO
+            // metadata to the synthetic trampoline) FOLLOWED by the
+            // `dora.node(handler)` register-call. They are inserted in order
+            // at `insert_idx` so the declarations precede the handler
+            // installation (and all precede any later `node.run()`).
+            let (synth_calls, insert_idx): (Vec<h::Expr>, usize) = if let Some(alias_def_id) =
+                module_recv
+            {
+                // Module-receiver path. The synthetic calls go at main's
+                // PROLOGUE (index 0) so the IO declarations + handler are
+                // installed in the process-global slots BEFORE any later
+                // `node.run()` dispatches them (mirrors the explicit-form
+                // ordering where `dora.node(detect)` precedes
+                // `node.run()`).
+                let calls = build_eco_module_register_calls(
                     &entry.decorator,
                     &base_name,
                     alias_def_id,
                     method,
+                    decorator_args,
                     &entry.fn_name,
                     entry.fn_def_id,
                     entry.fn_span,
                 )?;
-                (call, 0usize)
+                (calls, 0usize)
             } else {
                 // Handle-receiver path (ADR-0074): locate `let <base_name>
                 // = ...` in main's top-level stmts so we can both resolve
@@ -317,18 +329,23 @@ impl<'s> Lowerer<'s> {
                     entry.fn_def_id,
                     entry.fn_span,
                 )?;
-                (call, insert_idx)
+                (vec![call], insert_idx)
             };
 
-            // Insert `Stmt::Expr(synth_call)` at `insert_idx`.
+            // Insert each `Stmt::Expr(synth_call)` at `insert_idx`,
+            // preserving the build order (declarations precede the handler
+            // register-call). `enumerate` keeps successive inserts
+            // contiguous + ordered.
             let span = entry.decorator.span;
-            main_fn.body.stmts.insert(
-                insert_idx,
-                h::Stmt {
-                    span,
-                    kind: h::StmtKind::Expr(synth_call),
-                },
-            );
+            for (offset, synth_call) in synth_calls.into_iter().enumerate() {
+                main_fn.body.stmts.insert(
+                    insert_idx + offset,
+                    h::Stmt {
+                        span,
+                        kind: h::StmtKind::Expr(synth_call),
+                    },
+                );
+            }
         }
         Ok(())
     }
@@ -2340,26 +2357,37 @@ fn validate_module_node_decorator_shape(
 /// free-fn) — NOT Case 2 (handle method) — fires and validates the call
 /// against the `lookup_module_fn("dora", "node")` manifest row.
 ///
-/// The decorator's `inputs=`/`outputs=` kwargs were validated in
-/// [`validate_module_node_decorator_shape`] and are DROPPED here: the
-/// Phase 1 synthetic `dora.node` manifest row takes only the
-/// `EcoParam::Callback` slot (single handler). The IO-port metadata wires
-/// the real dataflow graph in Phase 2 (manifest widening — out of this
-/// HIR-only sprint's scope). So the synthesised call is a single-arg
-/// `dora.node(<fn_ref>)`, byte-identical to the explicit form.
+/// ADR-0076 Phase 2 — the decorator's `inputs=`/`outputs=` kwargs (already
+/// validated as list-of-str literals in
+/// [`validate_module_node_decorator_shape`]) are now THREADED to the
+/// synthetic trampoline. For each declared input id this emits a
+/// `dora.declare_input("<id>")` module-fn call; for each output id a
+/// `dora.declare_output("<id>")` call. The trampoline (`cobrust-dora/src/
+/// cabi.rs`) records these in process-global slots so `node.run()` fires
+/// the handler once per declared input (multi-input dispatch) and
+/// `event.send_output(...)` validates against the declared outputs. The
+/// declaration calls precede the `dora.node(<fn_ref>)` register-call in the
+/// returned `Vec` so the runtime sees the metadata before the handler
+/// installs (and all precede any later `node.run()`).
+///
+/// When NO `inputs=`/`outputs=` are present (the bare `@dora.node` form OR
+/// the explicit `dora.node(detect)` form), no declaration calls are emitted
+/// and the trampoline falls back to its Phase-1 single canned
+/// `("camera", "frame_001")` event — Phase-1 behavior preserved exactly.
 ///
 /// `<fn_ref>` = `ResolvedName { name: fn_name, def_id: fn_def_id, kind:
 /// DefKind::Fn }` (ADR-0073 §2 D2 — MIR materialises `Constant::FnRef`).
 #[allow(clippy::too_many_arguments)]
-fn build_eco_module_register_call(
+fn build_eco_module_register_calls(
     decorator: &ast::Expr,
     module_name: &str,
     alias_def_id: DefId,
     method: &str,
+    decorator_args: &[ast::CallArg],
     fn_name: &str,
     fn_def_id: DefId,
     fn_span: Span,
-) -> Result<h::Expr, LoweringError> {
+) -> Result<Vec<h::Expr>, LoweringError> {
     // First-proof module-receiver method scope: only `dora.node`.
     if !is_decoratable_module_method(method) {
         return Err(LoweringError::EcosystemDecoratorShape {
@@ -2369,7 +2397,63 @@ fn build_eco_module_register_call(
         });
     }
 
-    // Receiver: the module alias `Name` with the import-alias DefId.
+    // A small helper that builds a `<module>.<decl_fn>("<id>")` module-fn
+    // call (e.g. `dora.declare_input("tick")`). The receiver is the module
+    // alias `Name` with the import-alias DefId (so MIR Case 1 fires +
+    // `lookup_module_fn("dora", decl_fn)` resolves the str→i64 row).
+    let build_decl_call = |decl_fn: &str, id: &str| -> h::Expr {
+        let recv = h::Expr {
+            span: decorator.span,
+            kind: h::ExprKind::Name(ResolvedName {
+                name: module_name.to_string(),
+                def_id: alias_def_id,
+                kind: DefKind::ImportAlias,
+            }),
+        };
+        let callee = h::Expr {
+            span: decorator.span,
+            kind: h::ExprKind::Attr {
+                base: Box::new(recv),
+                name: decl_fn.to_string(),
+            },
+        };
+        let id_lit = h::Expr {
+            span: decorator.span,
+            kind: h::ExprKind::Lit(h::Lit::Str(id.to_string())),
+        };
+        h::Expr {
+            span: decorator.span,
+            kind: h::ExprKind::Call {
+                callee: Box::new(callee),
+                args: vec![h::CallArg::Positional(id_lit)],
+            },
+        }
+    };
+
+    // Walk the (already-shape-validated) decorator kwargs and synthesise a
+    // declaration call per port id, preserving declaration order so the
+    // trampoline injects inputs in the source-declared order.
+    let mut calls: Vec<h::Expr> = Vec::new();
+    for ca in decorator_args {
+        if let ast::CallArg::Keyword(k, v) = ca {
+            let decl_fn = match k.as_str() {
+                "inputs" => "declare_input",
+                "outputs" => "declare_output",
+                // `validate_module_node_decorator_shape` already rejected
+                // any other keyword; defense in depth — skip.
+                _ => continue,
+            };
+            if let ast::ExprKind::Collection(ast::CollectionLit::List(elems)) = &v.kind {
+                for el in elems {
+                    if let ast::ExprKind::Literal(ast::Literal::Str(s)) = &el.kind {
+                        calls.push(build_decl_call(decl_fn, s));
+                    }
+                }
+            }
+        }
+    }
+
+    // The register-call: `dora.node(<fn_ref>)`. Receiver = module alias.
     let recv_expr = h::Expr {
         span: decorator.span,
         kind: h::ExprKind::Name(ResolvedName {
@@ -2394,14 +2478,15 @@ fn build_eco_module_register_call(
             kind: DefKind::Fn,
         }),
     };
-
-    Ok(h::Expr {
+    calls.push(h::Expr {
         span: decorator.span,
         kind: h::ExprKind::Call {
             callee: Box::new(callee_expr),
             args: vec![h::CallArg::Positional(fn_ref_expr)],
         },
-    })
+    });
+
+    Ok(calls)
 }
 
 /// ADR-0074 — build the synthetic register-call HIR expression. Called

@@ -2930,12 +2930,27 @@ impl<'ctx> LlvmEmitter<'ctx> {
         //   __cobrust_dora_event_data_str(event: *mut Event) -> *mut Str
         //   __cobrust_dora_node_drop(node: *mut Node) -> void
         //   __cobrust_dora_event_drop(event: *mut Event) -> void
+        //
+        // ADR-0076 Phase 2 — multi-IO declaration + send_output shims:
+        //   __cobrust_dora_declare_input(id: *mut Str) -> i64
+        //   __cobrust_dora_declare_output(id: *mut Str) -> i64
+        //   __cobrust_dora_event_send_output(
+        //       event: *mut Event, output_id: *mut Str, payload: *mut Str
+        //   ) -> i64   (0 = emitted; -1 = undeclared output id)
+        // The two declare shims push the decorator-threaded port ids into
+        // process-global slots; `node.run()` then fires the handler once per
+        // declared input (falling back to the single canned event when none
+        // declared). `event_send_output` validates against the declared
+        // outputs + captures the payload for the synthetic-E2E stdout assert.
         let dora_node_new_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
         let dora_node_node_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
         let dora_node_run_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
         let dora_node_shutdown_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
         let dora_event_id_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
         let dora_event_data_str_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let dora_declare_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let dora_event_send_output_ty =
+            i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let dora_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_dora_node_new", dora_node_new_ty, 1usize),
@@ -2944,6 +2959,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_dora_node_shutdown", dora_node_shutdown_ty, 1),
             ("__cobrust_dora_event_id", dora_event_id_ty, 1),
             ("__cobrust_dora_event_data_str", dora_event_data_str_ty, 1),
+            ("__cobrust_dora_declare_input", dora_declare_ty, 1),
+            ("__cobrust_dora_declare_output", dora_declare_ty, 1),
+            (
+                "__cobrust_dora_event_send_output",
+                dora_event_send_output_ty,
+                3,
+            ),
             ("__cobrust_dora_node_drop", dora_drop_ty, 1),
             ("__cobrust_dora_event_drop", dora_drop_ty, 1),
         ] {

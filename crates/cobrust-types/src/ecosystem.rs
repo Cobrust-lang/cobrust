@@ -750,6 +750,37 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             ret: Ty::Int,
             tier: PyCompatTier::Semantic,
         }),
+        // ADR-0076 Phase 2 — multi-IO declaration shims. The
+        // `@dora.node(inputs=[...], outputs=[...])` decorator desugar
+        // (cobrust-hir) threads each declared port id through to the
+        // SYNTHETIC trampoline as a `dora.declare_input(id)` /
+        // `dora.declare_output(id)` register-call inserted at main's
+        // prologue BEFORE `dora.node(handler)`. This is how the decorator's
+        // IO metadata — VALIDATED-then-DROPPED in Phase 1 — finally reaches
+        // the runtime: `node.run()` reads the declared-input queue and
+        // fires the handler once per input (multi-input dispatch); the
+        // `event.send_output` shim validates against the declared-output
+        // set.
+        //
+        // Both are str→i64 value-fns (the `-> i64` is a 0 sentinel for the
+        // `let _ = ...` discard the desugar emits), routed through the SAME
+        // `lookup_module_fn` → `emit_ecosystem_call` chain as `dora.Node`.
+        // Phase-1 single-input behavior is preserved when NO inputs are
+        // declared (the explicit `dora.node(detect)` form in
+        // `dora_hello_e2e`): the trampoline falls back to the single canned
+        // `("camera", "frame_001")` event.
+        ("dora", "declare_input") => Some(EcoSig::from_values(
+            "__cobrust_dora_declare_input",
+            vec![Ty::Str],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        ("dora", "declare_output") => Some(EcoSig::from_values(
+            "__cobrust_dora_declare_output",
+            vec![Ty::Str],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
         // ADR-0078 backend Phase 2 — `fang` (auth/security, the
         // cobra-themed wrapper over the `argon2` crate; the TENTH
         // ecosystem module and FIRST backend Phase-2 crate). Pure
@@ -1131,6 +1162,31 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             "__cobrust_dora_event_data_str",
             vec![],
             Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        // ADR-0076 Phase 2 — `event.send_output(output_id, payload)`. The
+        // handler emits a Str payload on a DECLARED output port. The Event
+        // is the ONLY handle in the handler's scope (the `node` local lives
+        // in `main`, NOT in the callback — ADR-0076 §5 prose's
+        // `node.send_output` cannot type-check inside the handler without a
+        // separate ambient-node mechanism), so the send surface hangs off
+        // the Event handle: ZERO new scoping machinery, mirrors the
+        // existing `event.id()` / `event.data_str()` borrow-shim shape.
+        //
+        // Both args are `Ty::Str` values (output id + the str payload —
+        // Phase 1's Arrow surface is i64+str scalar only per ADR-0076 §4
+        // risk 3; `pa.array_i64(...)` list/dict payloads are deferred to
+        // ADR-0076c). Returns `Ty::Int` (a 0 sentinel for the
+        // `let _ = event.send_output(...)` discard; -1 on an UNDECLARED
+        // output id — the trampoline surfaces that as a clear stderr
+        // diagnostic, NOT a silent drop). The receiver borrows (Move→Copy
+        // upgrade in `try_lower_ecosystem_call` Case 2); the Event stays
+        // Rust-owned (the trampoline frees its `Box<Event>` on callback
+        // return per ADR-0073 §2 D6).
+        (DORA_EVENT_ADT, "send_output") => Some(EcoSig::from_values(
+            "__cobrust_dora_event_send_output",
+            vec![Ty::Str, Ty::Str],
+            Ty::Int,
             PyCompatTier::Semantic,
         )),
         // ADR-0077 Q5 / Phase 2a — `coil.Buffer` method-form op `a.dot(b)`.
@@ -2137,6 +2193,37 @@ mod tests {
         assert_eq!(data.runtime_symbol, "__cobrust_dora_event_data_str");
         assert!(data.params.is_empty());
         assert_eq!(data.ret, Ty::Str);
+    }
+
+    /// ADR-0076 Phase 2 — `event.send_output(output_id, payload)` is an
+    /// Event-handle method (NOT a `dora.Node` method): the Event is the
+    /// only handle in the handler's scope. Two Str args, i64 return.
+    #[test]
+    fn dora_event_send_output_takes_two_strs_returns_i64() {
+        let so = lookup_handle_method(&dora_event_ty(), "send_output")
+            .expect("Event.send_output in manifest");
+        assert_eq!(so.runtime_symbol, "__cobrust_dora_event_send_output");
+        assert_eq!(value_tys(&so.params), vec![Ty::Str, Ty::Str]);
+        assert_eq!(so.ret, Ty::Int);
+        assert_eq!(so.tier, PyCompatTier::Semantic);
+        // send_output is NOT a Node method — the surface hangs off Event.
+        assert!(lookup_handle_method(&dora_node_ty(), "send_output").is_none());
+    }
+
+    /// ADR-0076 Phase 2 — the multi-IO declaration free-fns the decorator
+    /// desugar threads from `@dora.node(inputs=[...], outputs=[...])`.
+    #[test]
+    fn dora_declare_input_output_are_str_to_i64_free_fns() {
+        let di = lookup_module_fn("dora", "declare_input").expect("dora.declare_input in manifest");
+        assert_eq!(di.runtime_symbol, "__cobrust_dora_declare_input");
+        assert_eq!(value_tys(&di.params), vec![Ty::Str]);
+        assert_eq!(di.ret, Ty::Int);
+
+        let dout =
+            lookup_module_fn("dora", "declare_output").expect("dora.declare_output in manifest");
+        assert_eq!(dout.runtime_symbol, "__cobrust_dora_declare_output");
+        assert_eq!(value_tys(&dout.params), vec![Ty::Str]);
+        assert_eq!(dout.ret, Ty::Int);
     }
 
     #[test]

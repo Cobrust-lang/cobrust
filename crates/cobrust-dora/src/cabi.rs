@@ -61,16 +61,40 @@
 //!   We wrap every callback invocation in `std::panic::catch_unwind` and
 //!   on panic abort the process.
 //!
-//! # Phase 1 handler registration model
+//! # Handler registration + multi-IO model (Phase 1 + Phase 2)
 //!
 //! Phase 1 ships the explicit registration form `dora.node(handler)` as a
 //! module-level free fn taking a callback. The function stores the fn
-//! pointer in a process-global slot (Phase 1 supports a single handler;
-//! multi-node-per-process is Phase 2 alongside the decorator-form
-//! `@dora.node(inputs=..., outputs=...)` desugar — see findings file
-//! `f68-dora-phase1-followups.md`). When `node.run()` fires, it reads
-//! the global slot, invokes it once with a canned `("camera",
-//! "frame_001")` Event, and returns 0.
+//! pointer in a process-global slot ([`REGISTERED_HANDLER`]; Phase 1
+//! supports a single handler). When `node.run()` fires with NO declared
+//! inputs, it reads the global slot, invokes the handler ONCE with a canned
+//! `("camera", "frame_001")` Event, and returns 0 (the proven Phase-1
+//! single-input path — `dora_hello_e2e`).
+//!
+//! ADR-0076 Phase 2 adds MULTI-IO via the `@dora.node(inputs=[...],
+//! outputs=[...])` decorator desugar. The desugar (cobrust-hir) threads
+//! each declared port id to this trampoline as a `dora.declare_input(id)` /
+//! `dora.declare_output(id)` register-call emitted at main's prologue
+//! BEFORE `dora.node(handler)`:
+//!
+//! - [`__cobrust_dora_declare_input`] pushes an input id onto the
+//!   process-global [`DECLARED_INPUTS`] queue.
+//! - [`__cobrust_dora_declare_output`] pushes an output id onto the
+//!   process-global [`DECLARED_OUTPUTS`] set.
+//! - When `node.run()` fires with a NON-EMPTY [`DECLARED_INPUTS`] queue, it
+//!   injects ONE canned event PER declared input id (each `event.id()`
+//!   returns its input id; the payload is a canned per-input Str), invoking
+//!   the handler once per input — the multi-input dispatch contract.
+//! - [`__cobrust_dora_event_send_output`] lets the handler emit a Str
+//!   payload on a declared output port. It validates the output id against
+//!   [`DECLARED_OUTPUTS`] (an UNDECLARED id is a clear `eprintln!` + `-1`
+//!   return, NOT a silent drop) and CAPTURES the emission to stdout as
+//!   `output[<id>]=<payload>` so the synthetic E2E can assert it.
+//!
+//! Phase 2 stays SYNTHETIC (no real zenoh broker / dora-rs daemon — that is
+//! a later phase). Arrow list/dict payloads (ADR-0076c), the dora-yaml
+//! config path, and the real zenoh runtime are DEFERRED; the canned-payload
+//! Str model carries the multi-IO proof.
 
 // C-ABI-boundary cast allows — mirror `cobrust-pit/src/cabi.rs`'s
 // crate-level allows (the casts are intrinsic to the opaque-pointer /
@@ -81,6 +105,7 @@
 #![allow(clippy::cast_ptr_alignment)]
 
 use std::ffi::c_void;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 // =====================================================================
@@ -170,15 +195,43 @@ pub fn drop_count() -> u64 {
 /// mirrors hood's `fn() -> i64` Phase-1 shape).
 type CbHandlerAbi = unsafe extern "C" fn(*mut u8) -> *mut u8;
 
-/// Process-global handler slot (Phase 1 single-node-per-process).
+/// Process-global handler slot (single handler per process).
 /// `dora.node(handler)` installs into this slot; `node.run()` reads it
-/// and dispatches the canned event. Phase 2 will replace this with a
-/// per-Node handler vector keyed by input id (`@dora.node(inputs=...)`).
+/// and dispatches the canned event(s).
 ///
 /// `AtomicPtr<()>` for `Send + Sync` across the synthetic-runtime
 /// boundary; the pointer value IS a `CbHandlerAbi` fn pointer (raw fn
 /// pointers `Copy + Send + Sync` so the transmute is sound).
 static REGISTERED_HANDLER: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// ADR-0076 Phase 2 — process-global queue of DECLARED input ids the
+/// `@dora.node(inputs=[...])` decorator threaded here via
+/// `dora.declare_input(id)` register-calls (one per id, in source order).
+/// `node.run()` injects one canned Event per id in this queue (multi-input
+/// dispatch). EMPTY ⇒ the trampoline falls back to the single canned
+/// `("camera", "frame_001")` event (Phase-1 single-input behavior).
+static DECLARED_INPUTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// ADR-0076 Phase 2 — process-global set of DECLARED output ids the
+/// `@dora.node(outputs=[...])` decorator threaded here via
+/// `dora.declare_output(id)` register-calls. `event.send_output(id, ...)`
+/// validates `id` against this set: an UNDECLARED id is rejected with a
+/// clear stderr diagnostic + a `-1` return (NOT a silent drop). Stored as a
+/// `Vec` (declared sets are tiny — a handful of ports) for `no_std`-free
+/// `const`-initialisable `Mutex` without pulling a `HashSet` ctor.
+static DECLARED_OUTPUTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// ADR-0076 Phase 2 — count of `send_output` emissions captured this
+/// process (across all declared output ports). Read by the cabi unit tests
+/// to assert the capture path fired; the synthetic E2E asserts the stdout
+/// `output[<id>]=<payload>` marker instead.
+pub static SEND_OUTPUT_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Current [`SEND_OUTPUT_COUNT`]. Test-only accessor.
+#[must_use]
+pub fn send_output_count() -> u64 {
+    SEND_OUTPUT_COUNT.load(Ordering::SeqCst)
+}
 
 /// Runtime form of a `Node` handle the `.cb` source owns. Phase 1
 /// captures only the node name; the registered handler lives in the
@@ -258,11 +311,58 @@ pub unsafe extern "C" fn __cobrust_dora_node_node(handler: *const c_void) -> i64
     0
 }
 
-/// `node.run() -> i64`. SYNTHETIC dispatcher: invokes the registered
-/// handler exactly once with a canned `("camera", "frame_001")` Event
-/// and returns 0. Mirrors what a real dora-rs `EventStream` loop would
-/// do for one tick; the Phase 2 sprint replaces this with the real
-/// `DoraNode::events().into_iter()` driven loop.
+/// `dora.declare_input(id: str) -> i64` (ADR-0076 Phase 2). Pushes a
+/// declared INPUT port id onto the process-global [`DECLARED_INPUTS`]
+/// queue. The `@dora.node(inputs=[...])` decorator desugar emits one such
+/// call per declared input (in source order) at main's prologue; `run`
+/// then injects one canned Event per queued id. Returns 0 (Ty::Int
+/// sentinel — declaration is a side-effect).
+///
+/// # Safety
+///
+/// `id` must be null or a valid Cobrust `Str` buffer (see [`read_str_buf`]).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dora_declare_input(id: *mut u8) -> i64 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let id_s = unsafe { read_str_buf(id) };
+    if let Ok(mut q) = DECLARED_INPUTS.lock() {
+        q.push(id_s);
+    }
+    0
+}
+
+/// `dora.declare_output(id: str) -> i64` (ADR-0076 Phase 2). Pushes a
+/// declared OUTPUT port id onto the process-global [`DECLARED_OUTPUTS`]
+/// set. The `@dora.node(outputs=[...])` decorator desugar emits one such
+/// call per declared output at main's prologue;
+/// [`__cobrust_dora_event_send_output`] validates against this set.
+/// Idempotent on a repeat id (a port declared twice is stored once).
+/// Returns 0.
+///
+/// # Safety
+///
+/// `id` must be null or a valid Cobrust `Str` buffer (see [`read_str_buf`]).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dora_declare_output(id: *mut u8) -> i64 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let id_s = unsafe { read_str_buf(id) };
+    if let Ok(mut set) = DECLARED_OUTPUTS.lock()
+        && !set.iter().any(|o| o == &id_s)
+    {
+        set.push(id_s);
+    }
+    0
+}
+
+/// `node.run() -> i64`. SYNTHETIC dispatcher. When [`DECLARED_INPUTS`] is
+/// EMPTY (the Phase-1 explicit `dora.node(detect)` form), invokes the
+/// registered handler exactly once with a canned `("camera", "frame_001")`
+/// Event and returns 0. When [`DECLARED_INPUTS`] is NON-EMPTY (the Phase-2
+/// `@dora.node(inputs=[...])` form), injects ONE canned Event per declared
+/// input id — invoking the handler once per input (multi-input dispatch) —
+/// and returns 0. Mirrors what a real dora-rs `EventStream` loop would do
+/// across one tick per input; a later phase replaces this with the real
+/// `DoraNode::events().into_iter()` driven loop over the zenoh broker.
 ///
 /// # Safety
 ///
@@ -291,42 +391,76 @@ pub unsafe extern "C" fn __cobrust_dora_node_run(node: *mut u8) -> i64 {
     // unified with `dora_event_handler_fn_ty()` — ADR-0073 §2 D1).
     let raw: CbHandlerAbi = unsafe { std::mem::transmute::<*mut (), CbHandlerAbi>(raw_ptr) };
 
-    // Allocate the canned Event. Phase 1 ships a single ("camera",
-    // "frame_001") tick — the smallest input that proves the chain.
-    let event = DoraEventHandle {
-        id: "camera".to_string(),
-        data_str: "frame_001".to_string(),
+    // Build the canned event QUEUE. ADR-0076 Phase 2: one `(id, payload)`
+    // per DECLARED input id (the decorator threaded them via
+    // `dora.declare_input`), preserving source-declaration order so the
+    // handler dispatches on `event.id()` deterministically. When NO inputs
+    // were declared (the Phase-1 explicit `dora.node(detect)` form), fall
+    // back to the single canned `("camera", "frame_001")` tick — the
+    // smallest input that proves the chain, keeping `dora_hello_e2e` green.
+    let declared: Vec<String> = DECLARED_INPUTS
+        .lock()
+        .map(|q| q.clone())
+        .unwrap_or_default();
+    let events: Vec<(String, String)> = if declared.is_empty() {
+        vec![("camera".to_string(), "frame_001".to_string())]
+    } else {
+        declared
+            .into_iter()
+            .map(|id| {
+                let payload = canned_payload_for(&id);
+                (id, payload)
+            })
+            .collect()
     };
-    // Box the Event so the .cb handler receives an opaque *mut u8
-    // Adt-pointer (ADR-0073 §2 D6 — Rust owns the box). The trampoline
-    // owns the Box for the callback invocation and frees it on return.
-    let event_raw = Box::into_raw(Box::new(event)).cast::<u8>();
 
-    // Catch panics across the C ABI (ADR-0073 §3 Q5).
-    let ret_raw = std::panic::catch_unwind(|| {
-        // SAFETY: `raw` is a valid `CbHandlerAbi`; `event_raw` is a
-        // valid Boxed Event pointer just constructed.
-        unsafe { raw(event_raw) }
-    });
+    // Fire the handler once per canned event.
+    for (id, data_str) in events {
+        let event = DoraEventHandle { id, data_str };
+        // Box the Event so the .cb handler receives an opaque *mut u8
+        // Adt-pointer (ADR-0073 §2 D6 — Rust owns the box). The trampoline
+        // owns the Box for the callback invocation and frees it on return.
+        let event_raw = Box::into_raw(Box::new(event)).cast::<u8>();
 
-    // Free the Event box exactly once on the way out. The .cb source
-    // NEVER drops a dora.Event local (manifest `handle_drop_symbol`
-    // returns None for DORA_EVENT_ADT — mirrors pit.Request).
-    // SAFETY: `event_raw` was just `Box::into_raw`'d above; reclaim and drop.
-    unsafe { drop(Box::from_raw(event_raw.cast::<DoraEventHandle>())) };
+        // Catch panics across the C ABI (ADR-0073 §3 Q5).
+        let ret_raw = std::panic::catch_unwind(|| {
+            // SAFETY: `raw` is a valid `CbHandlerAbi`; `event_raw` is a
+            // valid Boxed Event pointer just constructed.
+            unsafe { raw(event_raw) }
+        });
 
-    // Err arm = panic crossed the C ABI; abort per ADR-0073 §3 Q5.
-    if ret_raw.is_err() {
-        eprintln!(
-            "cobrust-dora: panic in .cb handler crossed the C ABI — aborting (ADR-0073 §3 Q5)"
-        );
-        std::process::abort();
+        // Free the Event box exactly once on the way out. The .cb source
+        // NEVER drops a dora.Event local (manifest `handle_drop_symbol`
+        // returns None for DORA_EVENT_ADT — mirrors pit.Request).
+        // SAFETY: `event_raw` was just `Box::into_raw`'d above; reclaim and drop.
+        unsafe { drop(Box::from_raw(event_raw.cast::<DoraEventHandle>())) };
+
+        // Err arm = panic crossed the C ABI; abort per ADR-0073 §3 Q5.
+        if ret_raw.is_err() {
+            eprintln!(
+                "cobrust-dora: panic in .cb handler crossed the C ABI — aborting (ADR-0073 §3 Q5)"
+            );
+            std::process::abort();
+        }
     }
-    // Phase 1 discards the handler return-pointer (mirrors hood's
-    // "side-effect IS the intent" pattern). Surface the manifest-declared
-    // 0 sentinel so the .cb source's `let _ = node.run()` discards a
-    // clean i64.
+    // Discard the handler return-pointer(s) (mirrors hood's "side-effect IS
+    // the intent" pattern). Surface the manifest-declared 0 sentinel so the
+    // .cb source's `let _ = node.run()` discards a clean i64.
     0
+}
+
+/// The canned payload Str for a declared input id (ADR-0076 Phase 2
+/// synthetic trampoline). The `camera` input keeps the Phase-1 canonical
+/// `"frame_001"` payload (so `event.data_str()` is stable across the
+/// single-input no-regression path); every other input id gets a distinct
+/// non-empty `"frame_<id>"` canned Str so the handler can tell injected
+/// events apart. A real broker replaces this with the actual Arrow payload.
+fn canned_payload_for(id: &str) -> String {
+    if id == "camera" {
+        "frame_001".to_string()
+    } else {
+        format!("frame_{id}")
+    }
 }
 
 /// `node.shutdown() -> i64`. Phase 1: idempotent soft flag (no real
@@ -405,6 +539,76 @@ pub unsafe extern "C" fn __cobrust_dora_event_data_str(event: *mut u8) -> *mut u
     alloc_str_buffer(&event_ref.data_str)
 }
 
+/// `event.send_output(output_id: str, payload: str) -> i64` (ADR-0076
+/// Phase 2). The handler emits a Str `payload` on the declared `output_id`
+/// port. The synthetic trampoline:
+///
+/// 1. VALIDATES `output_id` against the process-global [`DECLARED_OUTPUTS`]
+///    set (populated by `dora.declare_output` from the
+///    `@dora.node(outputs=[...])` decorator). An UNDECLARED id is rejected
+///    with a clear `eprintln!` diagnostic + a `-1` return — NOT a silent
+///    drop (ADR-0076 §6 Phase 2 done-means 2; the typed compile-time
+///    `DoraUnknownOutputId` reject is a tracked follow-up — Phase 2 catches
+///    it at RUNTIME via this sentinel).
+/// 2. CAPTURES the emission by printing `output[<id>]=<payload>` to stdout,
+///    so the synthetic E2E can assert the output reached the runtime, and
+///    bumps [`SEND_OUTPUT_COUNT`].
+///
+/// Returns 0 on a successful (declared) emission, `-1` on an undeclared
+/// output id. The Event receiver is BORROWED (the trampoline owns the
+/// `Box<Event>` and frees it on callback return per ADR-0073 §2 D6); the
+/// `.cb` side's `let _ = event.send_output(...)` discards the i64 sentinel.
+///
+/// NOTE: when NO outputs were declared at all (e.g. a node calling
+/// `send_output` with no `@dora.node(outputs=...)` decorator — not a shape
+/// the Phase-2 corpus exercises), the [`DECLARED_OUTPUTS`] set is empty so
+/// EVERY id is "undeclared" → `-1`. That is the honest fail-closed behavior;
+/// a node that emits MUST declare its outputs.
+///
+/// # Safety
+///
+/// `event` must be a valid Event handle the dora trampoline allocated for
+/// the current callback invocation; `output_id` / `payload` must be null or
+/// valid Cobrust `Str` buffers (see [`read_str_buf`]).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dora_event_send_output(
+    event: *mut u8,
+    output_id: *mut u8,
+    payload: *mut u8,
+) -> i64 {
+    // The Event is borrowed for symmetry with the other event shims (the
+    // synthetic capture validates against the GLOBAL declared-output set,
+    // not per-event state — but a real broker routes the send through the
+    // Event's originating node, so the borrow models that future shape).
+    // SAFETY: caller per `# Safety`. Borrow-only; tolerate null.
+    if !event.is_null() {
+        let _event_ref: &DoraEventHandle = unsafe { &*event.cast::<DoraEventHandle>() };
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let id_s = unsafe { read_str_buf(output_id) };
+    let payload_s = unsafe { read_str_buf(payload) };
+
+    // Validate against the declared-output set.
+    let declared = DECLARED_OUTPUTS
+        .lock()
+        .map(|set| set.iter().any(|o| o == &id_s))
+        .unwrap_or(false);
+    if !declared {
+        eprintln!(
+            "cobrust-dora: send_output on UNDECLARED output id {id_s:?} — declare it via \
+             `@dora.node(outputs=[{id_s:?}])` (ADR-0076 Phase 2). Output dropped."
+        );
+        return -1;
+    }
+
+    // Capture: print the marker line the synthetic E2E asserts, and bump the
+    // count instrument. A real broker would marshal `payload` into an Arrow
+    // RecordBatch + publish on the zenoh output channel here.
+    println!("output[{id_s}]={payload_s}");
+    SEND_OUTPUT_COUNT.fetch_add(1, Ordering::SeqCst);
+    0
+}
+
 /// Drop an `Event` handle. Phase 1 currently never invoked from the .cb
 /// side (Event is Rust-owned per ADR-0073 §2 D6 — manifest returns None
 /// for DORA_EVENT_ADT's drop symbol). Exported for completeness +
@@ -450,6 +654,21 @@ mod tests {
     // buffers we hand out under test).
     unsafe extern "C" {
         fn __cobrust_str_drop(buf: *mut u8);
+    }
+
+    /// Clear the process-global Phase-2 declared-IO slots + the handler
+    /// slot. Every count-asserting test runs under `DROP_COUNTER_LOCK` and
+    /// calls this first so a prior test's declared inputs/outputs don't
+    /// bleed in (the single-canned-event path requires an EMPTY
+    /// `DECLARED_INPUTS`).
+    fn reset_dora_globals() {
+        REGISTERED_HANDLER.store(std::ptr::null_mut(), Ordering::SeqCst);
+        if let Ok(mut q) = DECLARED_INPUTS.lock() {
+            q.clear();
+        }
+        if let Ok(mut s) = DECLARED_OUTPUTS.lock() {
+            s.clear();
+        }
     }
 
     /// Sentinel the test handler flips so we can confirm the trampoline
@@ -513,8 +732,8 @@ mod tests {
         let _guard = DROP_COUNTER_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Reset the global slot to ensure deterministic state.
-        REGISTERED_HANDLER.store(std::ptr::null_mut(), Ordering::SeqCst);
+        // Reset the global slots to ensure deterministic state.
+        reset_dora_globals();
         unsafe {
             let name = alloc_str_buffer("naked");
             let node = __cobrust_dora_node_new(name);
@@ -534,8 +753,9 @@ mod tests {
         let _guard = DROP_COUNTER_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Reset the global slot + sentinels.
-        REGISTERED_HANDLER.store(std::ptr::null_mut(), Ordering::SeqCst);
+        // Reset the global slots + sentinels (empty DECLARED_INPUTS ⇒ the
+        // single-canned-event Phase-1 path this test pins).
+        reset_dora_globals();
         let before_fire = HANDLER_FIRED.load(Ordering::SeqCst);
         let before_drop = drop_count();
         unsafe {
@@ -606,5 +826,160 @@ mod tests {
             assert_eq!(__cobrust_dora_node_shutdown(node), 0);
             __cobrust_dora_node_drop(node);
         }
+    }
+
+    // =================================================================
+    // ADR-0076 Phase 2 — multi-input dispatch + send_output capture.
+    // =================================================================
+
+    /// Records every input id the multi-input handler observed via
+    /// `event.id()`, so the test can assert the handler fired once per
+    /// declared input. Reset under `DROP_COUNTER_LOCK` per test.
+    static OBSERVED_INPUT_IDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    #[unsafe(no_mangle)]
+    extern "C" fn _dora_multi_input_handler(event: *mut u8) -> *mut u8 {
+        HANDLER_FIRED.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: the trampoline hands a valid Boxed Event pointer.
+        unsafe {
+            let id_buf = __cobrust_dora_event_id(event);
+            if !id_buf.is_null() {
+                let len = __cobrust_str_len(id_buf);
+                let bytes = std::slice::from_raw_parts(__cobrust_str_ptr(id_buf), len as usize);
+                let id = std::str::from_utf8(bytes).unwrap_or("").to_string();
+                if let Ok(mut v) = OBSERVED_INPUT_IDS.lock() {
+                    v.push(id);
+                }
+                __cobrust_str_drop(id_buf);
+            }
+        }
+        std::ptr::null_mut()
+    }
+
+    /// Two declared inputs ⇒ the handler fires twice, once per input id, in
+    /// declaration order. Pins the multi-input dispatch contract at the
+    /// runtime-shim level (the E2E pins it through the whole compile chain).
+    #[test]
+    fn declared_inputs_inject_one_event_each_in_order() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_dora_globals();
+        if let Ok(mut v) = OBSERVED_INPUT_IDS.lock() {
+            v.clear();
+        }
+        let before_fire = HANDLER_FIRED.load(Ordering::SeqCst);
+        unsafe {
+            // Declare two inputs (the decorator desugar emits these calls).
+            let tick = alloc_str_buffer("tick");
+            let camera = alloc_str_buffer("camera");
+            assert_eq!(__cobrust_dora_declare_input(tick), 0);
+            assert_eq!(__cobrust_dora_declare_input(camera), 0);
+            __cobrust_str_drop(tick);
+            __cobrust_str_drop(camera);
+
+            // Register + run.
+            assert_eq!(
+                __cobrust_dora_node_node(_dora_multi_input_handler as *const c_void),
+                0
+            );
+            let name = alloc_str_buffer("sensor");
+            let node = __cobrust_dora_node_new(name);
+            __cobrust_str_drop(name);
+            assert_eq!(__cobrust_dora_node_run(node), 0);
+            __cobrust_dora_node_drop(node);
+        }
+        assert_eq!(
+            HANDLER_FIRED.load(Ordering::SeqCst) - before_fire,
+            2,
+            "handler must fire once per declared input (2 inputs ⇒ 2 fires)"
+        );
+        let seen = OBSERVED_INPUT_IDS.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec!["tick".to_string(), "camera".to_string()],
+            "handler must see both inputs in declaration order"
+        );
+        reset_dora_globals();
+    }
+
+    /// `send_output` on a DECLARED output captures (returns 0 + bumps the
+    /// count); on an UNDECLARED output it fails CLOSED (returns -1, no
+    /// count bump) — never a silent drop.
+    #[test]
+    fn send_output_validates_against_declared_outputs() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_dora_globals();
+        let before = send_output_count();
+        unsafe {
+            // Declare one output `reading`.
+            let reading = alloc_str_buffer("reading");
+            assert_eq!(__cobrust_dora_declare_output(reading), 0);
+            __cobrust_str_drop(reading);
+
+            // A canned Event (the receiver — borrowed).
+            let event = Box::into_raw(Box::new(DoraEventHandle {
+                id: "camera".to_string(),
+                data_str: "frame_001".to_string(),
+            }))
+            .cast::<u8>();
+
+            // Declared output ⇒ 0.
+            let oid = alloc_str_buffer("reading");
+            let payload = alloc_str_buffer("frame_001");
+            assert_eq!(
+                __cobrust_dora_event_send_output(event, oid, payload),
+                0,
+                "send on a declared output must return 0"
+            );
+            __cobrust_str_drop(oid);
+            __cobrust_str_drop(payload);
+
+            // Undeclared output ⇒ -1, fail-closed.
+            let bad = alloc_str_buffer("redaing");
+            let payload2 = alloc_str_buffer("x");
+            assert_eq!(
+                __cobrust_dora_event_send_output(event, bad, payload2),
+                -1,
+                "send on an UNDECLARED output must return -1 (fail closed)"
+            );
+            __cobrust_str_drop(bad);
+            __cobrust_str_drop(payload2);
+
+            // Reclaim the test-owned Event box.
+            drop(Box::from_raw(event.cast::<DoraEventHandle>()));
+        }
+        assert_eq!(
+            send_output_count() - before,
+            1,
+            "only the DECLARED send is captured (undeclared does not bump the count)"
+        );
+        reset_dora_globals();
+    }
+
+    /// `declare_output` is idempotent — declaring the same id twice stores
+    /// it once (so a port re-declared by a noisy desugar still resolves).
+    #[test]
+    fn declare_output_is_idempotent() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_dora_globals();
+        unsafe {
+            let a = alloc_str_buffer("reading");
+            let b = alloc_str_buffer("reading");
+            __cobrust_dora_declare_output(a);
+            __cobrust_dora_declare_output(b);
+            __cobrust_str_drop(a);
+            __cobrust_str_drop(b);
+        }
+        assert_eq!(
+            DECLARED_OUTPUTS.lock().unwrap().len(),
+            1,
+            "a port declared twice is stored once"
+        );
+        reset_dora_globals();
     }
 }
