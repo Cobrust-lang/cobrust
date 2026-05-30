@@ -212,6 +212,7 @@ mod llvm {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         locals.extend(extra_locals);
         Module {
@@ -242,6 +243,7 @@ mod llvm {
                 ty: Ty::Str,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -249,6 +251,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let bb0 = MirBlock {
@@ -312,6 +315,7 @@ mod llvm {
                 ty: Ty::Str,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -319,6 +323,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let bb0 = MirBlock {
@@ -384,6 +389,7 @@ mod llvm {
                 ty: Ty::Str,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -391,6 +397,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let bb0 = MirBlock {
@@ -465,6 +472,7 @@ mod llvm {
                 ty: Ty::Str, // ptr-typed alloca (Str lowers to opaque_ptr_ty)
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -472,6 +480,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let bb0 = MirBlock {
@@ -533,6 +542,7 @@ mod llvm {
             ty: Ty::Float,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         let bb0 = MirBlock {
             id: BlockId(0),
@@ -574,6 +584,7 @@ mod llvm {
             ty: Ty::Float,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         let bb0 = MirBlock {
             id: BlockId(0),
@@ -705,6 +716,7 @@ mod llvm {
             ty: Ty::Str,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         let bb0 = MirBlock {
             id: BlockId(0),

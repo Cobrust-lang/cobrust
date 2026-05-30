@@ -2821,6 +2821,17 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // name: *mut Str) -> *mut Str`. Returns the captured path param value
         // or empty Str.
         let pit_request_path_param_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        // ADR-0081 §5.2 Phase-1b — validated-body field READ accessors.
+        // `__cobrust_pit_body_get_i64(body: *mut Value, name: *mut Str) -> i64`
+        // and `__cobrust_pit_body_get_str(body: *mut Value, name: *mut Str)
+        // -> *mut Str` — cloned from the `(ptr, ptr) -> <ret>` `path_param`
+        // shape (the str variant is type-identical to it). `body` is the boxed
+        // `serde_json::Value` the `route_validated` trampoline left; `name` is
+        // the compiler-synthesised field-name Str the MIR retarget passes. The
+        // MIR `Attr` sub-arm emits a `Terminator::Call` to these symbols ONLY
+        // for a registration-marked validated-body field read (the Q4 gate).
+        let pit_body_get_i64_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let pit_body_get_str_ty = pit_request_path_param_ty;
         let pit_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_pit_app_new", pit_app_new_ty, 0usize),
@@ -2852,6 +2863,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 pit_request_path_param_ty,
                 2,
             ),
+            ("__cobrust_pit_body_get_i64", pit_body_get_i64_ty, 2),
+            ("__cobrust_pit_body_get_str", pit_body_get_str_ty, 2),
             ("__cobrust_pit_app_drop", pit_drop_ty, 1),
             ("__cobrust_pit_response_drop", pit_drop_ty, 1),
             ("__cobrust_pit_server_handle_drop", pit_drop_ty, 1),
@@ -5795,6 +5808,7 @@ mod tests {
             ty: ret_ty,
             mutable: true,
             span: span0(),
+            validated_body_of: None,
         }];
         for (i, ty) in params.iter().enumerate() {
             locals.push(LocalDecl {
@@ -5803,6 +5817,7 @@ mod tests {
                 ty: ty.clone(),
                 mutable: false,
                 span: span0(),
+                validated_body_of: None,
             });
         }
         let param_count = params.len();
@@ -5909,6 +5924,7 @@ mod tests {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0(),
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(1),
@@ -5916,6 +5932,7 @@ mod tests {
                 ty: Ty::Str,
                 mutable: false,
                 span: span0(),
+                validated_body_of: None,
             },
         ];
         let block0 = MirBlock {
@@ -6222,6 +6239,7 @@ mod tests {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0(),
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(1),
@@ -6229,6 +6247,7 @@ mod tests {
                 ty: Ty::Str,
                 mutable: false,
                 span: span0(),
+                validated_body_of: None,
             },
         ];
         let block0 = MirBlock {

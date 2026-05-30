@@ -57,6 +57,20 @@ pub struct TypedModule {
     /// the schema by the body class's source name — derived from the SAME
     /// `class_names` table the type checker resolved annotations through.
     pub adt_names: HashMap<crate::ty::AdtId, String>,
+    /// ADR-0081 Phase-1b — per-handler validated-body registration.
+    /// Populated as each accepted `app.route_validated(_, _, handler)` is
+    /// checked: the handler's `DefId` → (body-param positional index, body
+    /// class `AdtId`). The SAME checker→MIR channel as [`Self::adt_fields`].
+    ///
+    /// This is the ONLY source of the fact "this handler param is a
+    /// validated body": route-shape validation is otherwise call-site-only
+    /// (`check_eco_sig` / `check_callback_arg`), recorded NOWHERE a per-fn
+    /// MIR body can read. MIR consumes this to MARK the body-param local
+    /// (`LocalDecl.validated_body_of`), and the serde-accessor shim for
+    /// `body.field` fires ONLY on a so-marked local (the Q4 registration
+    /// gate — NOT on `Ty::Adt`-with-a-field-table alone, which would
+    /// serde-cast a null/opaque `.cb`-constructed pointer → UB).
+    pub validated_handlers: HashMap<DefId, (usize, crate::ty::AdtId)>,
 }
 
 /// Incremental type-check context — the Phase I × J handoff primitive
@@ -462,6 +476,9 @@ pub fn check(module: &Module) -> Result<TypedModule, TypeError> {
         adt_fields,
         adt_refinements: ctx.adt_refinements.clone(),
         adt_names,
+        // ADR-0081 Phase-1b — carry the validated-body registration channel
+        // out exactly like `adt_fields`/`adt_names` (the Q4 gate's substrate).
+        validated_handlers: ctx.validated_handlers.clone(),
     })
 }
 
@@ -557,6 +574,16 @@ struct Ctx {
     /// the OpenAPI emitter — two projections of the ONE field table that
     /// therefore cannot drift (footgun #4).
     adt_refinements: HashMap<(crate::ty::AdtId, String), crate::refinement::Refinement>,
+    /// ADR-0081 Phase-1b — the Q4 registration channel: per-handler
+    /// validated-body record, populated as each accepted
+    /// `app.route_validated(_, _, handler)` callback arg is checked
+    /// ([`Self::check_callback_arg`]'s validated-body sentinel branch).
+    /// `handler DefId → (body-param positional index, body class AdtId)`.
+    /// Carried out of [`check`] into [`TypedModule::validated_handlers`]
+    /// (the SAME exit path as `adt_fields`/`adt_names`) so MIR can mark the
+    /// body-param local. The ONLY source of "this param is a validated
+    /// body" — route-shape validation is otherwise call-site-only.
+    validated_handlers: HashMap<DefId, (usize, crate::ty::AdtId)>,
 }
 
 impl Ctx {
@@ -2654,7 +2681,12 @@ impl Ctx {
         // Unify positional types + return type via the normal path; on
         // mismatch re-emit as a CallbackSignatureMismatch so the agent
         // sees the callback-specific phrasing.
-        for (e, a) in expected.positional.iter().zip(actual_fn.positional.iter()) {
+        for (idx, (e, a)) in expected
+            .positional
+            .iter()
+            .zip(actual_fn.positional.iter())
+            .enumerate()
+        {
             // ADR-0080 Phase-1b-ii — the validated-body sentinel slot
             // (`pit_validated_handler_fn_ty`'s 2nd param) accepts ANY
             // field-tracked USER class rather than unifying with a concrete
@@ -2669,13 +2701,16 @@ impl Ctx {
             if matches!(e, Ty::Adt(id, _) if *id == crate::ecosystem::PIT_VALIDATED_BODY_SENTINEL_ADT)
             {
                 let actual_param = self.subst.apply(a);
-                let is_tracked_body = matches!(
-                    &actual_param,
+                let body_adt_id = match &actual_param {
                     Ty::Adt(id, _)
                         if !crate::ecosystem::is_ecosystem_handle(*id)
-                            && self.adt_fields.contains_key(id)
-                );
-                if !is_tracked_body {
+                            && self.adt_fields.contains_key(id) =>
+                    {
+                        Some(*id)
+                    }
+                    _ => None,
+                };
+                let Some(body_adt_id) = body_adt_id else {
                     return Err(TypeError::CallbackSignatureMismatch {
                         expected: Ty::Fn(expected.clone()),
                         actual: actual.clone(),
@@ -2686,7 +2721,20 @@ impl Ctx {
                              `fn handler(req: pit.Request, body: Body) -> pit.Response`",
                         ),
                     });
-                }
+                };
+                // ADR-0081 Phase-1b — the Q4 registration. This handler
+                // (`rn.def_id`, a bare top-level fn NAME, gated at the top of
+                // this method) is being accepted as the callback of a
+                // `route_validated`-shaped slot, and its `idx`-th positional
+                // is the validated-body class `body_adt_id`. Record it so MIR
+                // marks THIS fn's `idx`-th param local `validated_body_of =
+                // Some(body_adt_id)` — the ONLY thing that later authorises
+                // the serde-accessor shim for `body.field` (§5.2). A
+                // non-registered fn carrying the same `Ty::Adt(body_adt_id)`
+                // param is NEVER recorded here, so its local stays
+                // `validated_body_of == None` (the no-UB invariant).
+                self.validated_handlers
+                    .insert(rn.def_id, (idx, body_adt_id));
                 continue;
             }
             if self.unify_call_arg(e, a, arg.span).is_err() {

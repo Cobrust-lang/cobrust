@@ -113,6 +113,7 @@ fn body_returning_const(def_id: u32, name: &str, value: i64) -> Body {
         ty: Ty::Int,
         mutable: true,
         span: span0(),
+        validated_body_of: None,
     }];
     let block0 = MirBlock {
         id: BlockId(0),
@@ -159,6 +160,7 @@ fn body_with_typed_signature(def_id: u32, name: &str, ty: Ty) -> Body {
             ty: ty.clone(),
             mutable: true,
             span: span0(),
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(1),
@@ -166,6 +168,7 @@ fn body_with_typed_signature(def_id: u32, name: &str, ty: Ty) -> Body {
             ty,
             mutable: false,
             span: span0(),
+            validated_body_of: None,
         },
     ];
     let block0 = MirBlock {
@@ -200,6 +203,7 @@ fn body_summing_params(def_id: u32, name: &str) -> Body {
             ty: Ty::Int,
             mutable: true,
             span: span0(),
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(1),
@@ -207,6 +211,7 @@ fn body_summing_params(def_id: u32, name: &str) -> Body {
             ty: Ty::Int,
             mutable: false,
             span: span0(),
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(2),
@@ -214,6 +219,7 @@ fn body_summing_params(def_id: u32, name: &str) -> Body {
             ty: Ty::Int,
             mutable: false,
             span: span0(),
+            validated_body_of: None,
         },
     ];
     let block0 = MirBlock {

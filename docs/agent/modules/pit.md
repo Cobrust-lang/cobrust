@@ -335,6 +335,100 @@ trampoline (`cabi.rs` ~494), the same discipline `text_response` follows.
 unchanged). Footgun #4 dropped: re-serialising the SAME validated Value means
 the response body cannot drift from the validated body.
 
+## ADR-0081 Phase-1b — `body.field` RUNTIME READ (the registration-gated serde accessor)
+
+`body.field` — where `body` is a `route_validated`-registered handler's
+validated-body param — now EXECUTES at runtime: it reads the field off the
+boxed `serde_json::Value` the validator left, via a TYPED accessor shim keyed
+on the field's declared `Ty`. At HEAD (Phase-1a) `body.field` type-checked
+(against `adt_fields`, ADR-0080) but lowered to the `Field(0)` no-op stub; this
+makes the read real.
+
+Surface (`.cb`):
+
+```python
+fn create_score(req: pit.Request, body: CreateScore) -> pit.Response:
+    let r: i64 = body.rank        # __cobrust_pit_body_get_i64(body, "rank")
+    let n: str = body.name        # __cobrust_pit_body_get_str(body, "name")
+    if r >= 50:
+        return pit.text_response(200, "high")
+    return pit.json_response(201, body)
+```
+
+**The dispatch gate is REGISTRATION-DRIVEN, NOT type-driven (the load-bearing
+correctness invariant, ADR-0081 §2-Q4 / §5.2).** The serde accessor fires ONLY
+for a base local the checker recorded as a `route_validated` body-param —
+NEVER for any `Ty::Adt`-with-a-field-table. A `.cb`-constructed `let s =
+Score()` (or a NON-registered fn's `b: CreateScore` param) has the SAME
+`Ty::Adt(real-id)` + the SAME field table, but its `*mut u8` is a null/opaque
+pointer (`AggregateKind::Adt → opaque_ptr_ty.const_null()`), NOT a boxed
+`serde_json::Value` — a serde cast over it would be UB. Gating on the type is
+that UB bug; gating on the registration mark makes the cast structurally
+unreachable for any unmarked local.
+
+Mechanism (the layered pipeline, BOTTOM-UP — the NEW channel is the Q4 gate's
+substrate):
+
+- **Checker channel (`check.rs`, NEW).** `TypedModule.validated_handlers:
+  HashMap<DefId, (usize, AdtId)>` — sibling of `adt_fields`. Populated in
+  `check_callback_arg`'s validated-body sentinel branch: as each accepted
+  `app.route_validated(_, _, handler)` callback arg is checked, record the
+  handler `DefId` → (body-param positional index, body class `AdtId`). The ONLY
+  source of "this param is a validated body" (route-shape validation is
+  otherwise call-site-only, recorded nowhere a fn body can read). Carried out of
+  `check()` exactly like `adt_fields`/`adt_names`.
+- **MIR mark (`tree.rs` + `lower.rs`, NEW).** `LocalDecl.validated_body_of:
+  Option<AdtId>`. `lower_fn`, lowering a fn whose `DefId` is in
+  `validated_handlers`, sets the body-param local's `validated_body_of =
+  Some(body_adt)`. Every OTHER local — a non-registered fn's param, a `let s =
+  Score()` binding — keeps the `declare_local` default `None`.
+- **Gated `Attr` sub-arm (`lower.rs`).** In the rvalue `ExprKind::Attr` arm,
+  BEFORE the `Field(0)` stub fallthrough: `lookup_validated_body_field_accessor`
+  fires ONLY when the base resolves to a local with `validated_body_of ==
+  Some(id)` AND the field is in that class's `adt_fields`. It reads the field's
+  declared `Ty`, picks the shim via `lookup_validated_body_accessor`, and lowers
+  through the existing borrowed-receiver `emit_ecosystem_call` (the
+  `coil.Buffer.shape` Move→Copy discipline), passing `(recv,
+  Constant::Str(field_name))`. The field-name `Str` is COMPILER-SYNTHESISED
+  (footgun #1 — never author-written). A base WITHOUT the mark takes the
+  pre-existing `Field(0)` stub path UNCHANGED (no serde cast — the no-UB
+  invariant).
+- **The seam (`ecosystem.rs`, §2-Q5).** `lookup_validated_body_accessor(field_ty)
+  -> Option<EcoSig>` names **a symbol + a `Ty`**, NEVER serde / a JSON key:
+  `Ty::Int → __cobrust_pit_body_get_i64`, `Ty::Str → __cobrust_pit_body_get_str`.
+  A future native-struct ABI (ADR-0081 §7) swaps the backing behind the SAME
+  symbol — zero `.cb`-source churn. `f64`/`bool` are Phase-2 (`None` here until
+  then → a `body.<f64-field>` read falls to the deferred stub, NOT a mis-read).
+- **Codegen (`llvm_backend.rs`).** `__cobrust_pit_body_get_i64`
+  (`[ptr, ptr] -> i64`) + `__cobrust_pit_body_get_str` (`[ptr, ptr] -> ptr`,
+  type-identical to `request_path_param`) declared in the pit extern block.
+- **CLI prefix (`intrinsics.rs`).** Both match the existing `__cobrust_pit_*`
+  arm for free.
+- **Accessor shims (`cabi.rs`).** Cloned from the `(ptr, ptr) -> <ret>`
+  `request_path_param` template: borrow `&serde_json::Value`, `read_str_buf`
+  the name, `v.get(name).and_then(as_i64 | as_str)`, `alloc_str_buffer`
+  strings. The i64 shim uses `serde_json::Value::as_i64` — **integer-only,
+  NEVER `as_f64`-then-truncate** (footgun #3; CLAUDE.md §2.2 no-silent-coercion).
+
+Totality + ownership: validation already proved presence + type + range BEFORE
+the handler ran (`validate_against_schema`), so each read is TOTAL — the
+`unwrap_or` fail-clean sentinel (`0` / empty `Str`) is UNREACHABLE on the
+validated path (a defense, mirroring `path_param`'s `unwrap_or("")`, NOT a
+`KeyError` surface — footgun #2 dropped). The shims BORROW the body box; the
+`route_validated` trampoline retains sole ownership and frees it exactly once
+as a `serde_json::Value` after the handler returns. The str shim's return is a
+fresh `.cb`-owned `Str` dropped once by the `.cb` scope.
+
+The no-UB invariant (the paired-ADSD-audit's primary focus): a tracked-body
+class used as anything OTHER than a registered handler's validated-body param —
+(a) a NON-registered fn param `fn helper(b: CreateScore): return b.rank`, or
+(b) a `let s = Score()` binding — has `validated_body_of == None`, so the serde
+shim NEVER fires and the base is NEVER `cast::<Value>()`-ed. It hits the
+pre-existing no-field-storage stub instead. The worst case degrades to the
+already-documented "no field storage yet" limitation — a stub read, NOT
+undefined behavior. (Test: `pit_body_field_read_e2e.rs` — the observable read
++ the no-UB negative, both green.)
+
 ## ADR-0080 Phase-1b-iii — `serve_openapi` (OpenAPI emission, cannot drift)
 
 `app.serve_openapi(doc_path: str) -> None` is the EXPLICIT opt-in that

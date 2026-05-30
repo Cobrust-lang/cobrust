@@ -68,6 +68,7 @@ fn local(id: u32, name: &str, ty: Ty, mutable: bool) -> LocalDecl {
         ty,
         mutable,
         span: span(),
+        validated_body_of: None,
     }
 }
 

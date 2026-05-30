@@ -216,6 +216,7 @@ mod llvm {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         locals.extend(extra_locals);
         Module {
@@ -250,6 +251,7 @@ mod llvm {
             ty: Ty::Str,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         let bb0 = MirBlock {
             id: BlockId(0),
@@ -299,6 +301,7 @@ mod llvm {
             ty: Ty::Str,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         let bb0 = MirBlock {
             id: BlockId(0),
@@ -347,6 +350,7 @@ mod llvm {
             ty: Ty::List(Box::new(Ty::Str)),
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         let bb0 = MirBlock {
             id: BlockId(0),
@@ -409,6 +413,7 @@ mod llvm {
             ty: Ty::Str,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         let bb0 = MirBlock {
             id: BlockId(0),
@@ -462,6 +467,7 @@ mod llvm {
             ty: Ty::Str,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         let bb0 = MirBlock {
             id: BlockId(0),
@@ -511,6 +517,7 @@ mod llvm {
             ty: Ty::Str, // opaque ptr — stored in a Str slot to keep MIR simple
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         let bb0 = MirBlock {
             id: BlockId(0),

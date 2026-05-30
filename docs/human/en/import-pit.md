@@ -50,6 +50,10 @@ curl http://127.0.0.1:<port>/ping
   the response carries it verbatim as `application/json`. Because it
   re-serialises the SAME value validation produced, the response body cannot
   drift from the validated body. See "Validated request bodies" below.
+- **`body.field` reads** (ADR-0081) — inside a `route_validated` handler,
+  read the validated body's fields by typed attribute access (`body.rank` →
+  `i64`, `body.name` → `str`), not a stringly-typed key. A typo'd field is a
+  compile error. See "Reading body fields" below.
 - **`App.route(method, path, handler)`** — register a top-level `fn` as
   the handler for `method path`. The handler MUST be a top-level
   `fn handler(req: pit.Request) -> pit.Response: …`. Returns `None`;
@@ -159,9 +163,51 @@ Why this is better than Flask/FastAPI: the structure is caught by the
 compiler (you cannot ship a handler that reads a field that isn't there),
 the 422 is a `Result` rendered to a `Response` (not an exception that
 unwinds), and the wiring is an explicit call (no hidden dependency-injection
-registry). Today the success handler returns a fixed response — echoing the
-validated body back is a follow-up (it needs the `.cb`-struct ↔ JSON
-bridge).
+registry).
+
+### Reading body fields (`body.rank`, ADR-0081)
+
+Inside a `route_validated` handler you can now **read the body's fields**
+and act on them. `body.rank` reads an `i64`, `body.name` reads a `str` —
+typed attribute access, never a stringly-typed `body["rank"]`:
+
+```python
+import pit
+
+class CreateScore:
+    name: str
+    rank: i64 where 0 <= self and self <= 100
+
+fn create_score(req: pit.Request, body: CreateScore) -> pit.Response:
+    let r: i64 = body.rank        # reads the validated rank, e.g. 50
+    let n: str = body.name        # reads the validated name, e.g. "alice"
+    if r >= 50:
+        return pit.text_response(200, "high")
+    return pit.json_response(201, body)   # or echo the whole body back
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/scores", create_score)
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+- `body.rank` is statically `i64`; a typo'd `body.nonexistent` is a
+  **compile-time** error (it lists the real fields), never a runtime
+  `KeyError`.
+- The read is **total**: validation already proved the field is present,
+  the right type, and in range before your handler ran — so there is no
+  `None` to unwrap, no missing-key surprise.
+- No silent coercion: an `i64` field reads as an integer; a JSON `1.5`
+  for an `i64` field was already rejected at the 422 boundary, so the read
+  never truncates a float.
+
+Phase-1 ships `i64` + `str` field reads; `f64`/`bool` and nested-class /
+list fields are later phases. Field reads work **only** on a body parameter
+your handler received from `route_validated` — a hand-constructed
+`CreateScore()` value does not yet carry field storage (that is the
+native-struct follow-up). The compiler tracks which is which, so you never
+get a surprise.
 
 ## String refinements: length + pattern (ADR-0080 Phase 2)
 
@@ -293,8 +339,9 @@ enforces. The array-length `maxItems` form for list fields is a later phase.
   refinement on an `i64` field plus the string-length (`len(self)`) and
   pattern (`pattern(self, "…")`) refinements on a `str` field ship now.
   Echoing the validated body back in the response (`json_response(status,
-  body)`) now ships too (ADR-0081). Reading individual fields off the body
-  (`body.rank`), and nested-class / list-field bodies, are later phases.
+  body)`) and reading individual `i64` / `str` fields off the body
+  (`body.rank`, `body.name`) now ship too (ADR-0081). `f64` / `bool` field
+  reads and nested-class / list-field bodies are later phases.
 - **OpenAPI** (`serve_openapi`, ADR-0080): the doc covers the body schema of
   each validated route — type plus int-range `minimum`/`maximum`,
   str-length `minLength`/`maxLength`, and `pattern`. The list-field

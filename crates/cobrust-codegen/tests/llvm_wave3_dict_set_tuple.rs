@@ -70,7 +70,12 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::items_after_statements,
-    clippy::similar_names
+    clippy::similar_names,
+    // ADR-0081 Phase-1b — the per-`LocalDecl` `validated_body_of: None,`
+    // field (mechanically added to every literal in this fixture) pushes a
+    // hand-built-MIR fixture fn just over the 100-line cap; the fixture
+    // logic is unchanged.
+    clippy::too_many_lines
 )]
 
 #[cfg(feature = "llvm")]
@@ -189,6 +194,7 @@ mod llvm {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         locals.extend(extra_locals);
         Module {
@@ -279,6 +285,7 @@ mod llvm {
                 ty: Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Int)),
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -286,6 +293,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(3),
@@ -293,6 +301,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
 
@@ -361,6 +370,7 @@ mod llvm {
                 ty: Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Int)),
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -368,6 +378,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(3),
@@ -375,6 +386,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
 
@@ -427,6 +439,7 @@ mod llvm {
                 ty: Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Int)),
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -434,6 +447,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(3),
@@ -441,6 +455,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
 
@@ -498,6 +513,7 @@ mod llvm {
                 ty: Ty::Set(Box::new(Ty::Int)),
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -505,6 +521,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(3),
@@ -512,6 +529,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(4),
@@ -519,6 +537,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
 
@@ -614,6 +633,7 @@ mod llvm {
                 ty: Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]),
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -621,6 +641,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(3),
@@ -628,6 +649,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(4),
@@ -635,6 +657,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
 
@@ -745,6 +768,7 @@ mod llvm {
                 ty: Ty::Dict(Box::new(Ty::Int), Box::new(Ty::Int)),
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -752,6 +776,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(3),
@@ -759,6 +784,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(4),
@@ -766,6 +792,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(5),
@@ -773,6 +800,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(6),
@@ -780,6 +808,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(7),
@@ -787,6 +816,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(8),
@@ -794,6 +824,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(9),
@@ -801,6 +832,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(10),
@@ -808,6 +840,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
 

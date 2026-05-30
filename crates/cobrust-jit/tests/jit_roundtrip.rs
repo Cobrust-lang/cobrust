@@ -72,6 +72,7 @@ where
         ty: Ty::None, // MIR return slot is always None; JIT pins to I64
         mutable: true,
         span: SPAN,
+        validated_body_of: None,
     }];
     let mut param_ids = Vec::with_capacity(param_count);
     for i in 0..param_count {
@@ -82,6 +83,7 @@ where
             ty: Ty::Int,
             mutable: false,
             span: SPAN,
+            validated_body_of: None,
         });
         param_ids.push(id);
     }
@@ -219,6 +221,7 @@ fn constant_arith_one_plus_two_times_three() {
                     ty: Ty::None,
                     mutable: true,
                     span: SPAN,
+                    validated_body_of: None,
                 },
                 LocalDecl {
                     id: tmp,
@@ -226,6 +229,7 @@ fn constant_arith_one_plus_two_times_three() {
                     ty: Ty::Int,
                     mutable: false,
                     span: SPAN,
+                    validated_body_of: None,
                 },
             ],
             blocks: vec![BasicBlock {
@@ -305,6 +309,7 @@ fn three_param_sum() {
                     ty: Ty::None,
                     mutable: true,
                     span: SPAN,
+                    validated_body_of: None,
                 },
                 LocalDecl {
                     id: a,
@@ -312,6 +317,7 @@ fn three_param_sum() {
                     ty: Ty::Int,
                     mutable: false,
                     span: SPAN,
+                    validated_body_of: None,
                 },
                 LocalDecl {
                     id: b,
@@ -319,6 +325,7 @@ fn three_param_sum() {
                     ty: Ty::Int,
                     mutable: false,
                     span: SPAN,
+                    validated_body_of: None,
                 },
                 LocalDecl {
                     id: c,
@@ -326,6 +333,7 @@ fn three_param_sum() {
                     ty: Ty::Int,
                     mutable: false,
                     span: SPAN,
+                    validated_body_of: None,
                 },
                 LocalDecl {
                     id: tmp,
@@ -333,6 +341,7 @@ fn three_param_sum() {
                     ty: Ty::Int,
                     mutable: false,
                     span: SPAN,
+                    validated_body_of: None,
                 },
             ],
             blocks: vec![BasicBlock {
@@ -441,6 +450,7 @@ fn unsupported_mir_feature_call_terminator() {
                     ty: Ty::None,
                     mutable: true,
                     span: SPAN,
+                    validated_body_of: None,
                 },
                 LocalDecl {
                     id: tmp,
@@ -448,6 +458,7 @@ fn unsupported_mir_feature_call_terminator() {
                     ty: Ty::Int,
                     mutable: false,
                     span: SPAN,
+                    validated_body_of: None,
                 },
             ],
             blocks: vec![
@@ -509,6 +520,7 @@ fn function_names_introspection() {
                     ty: Ty::None,
                     mutable: true,
                     span: SPAN,
+                    validated_body_of: None,
                 }],
                 blocks: vec![BasicBlock {
                     id: BlockId(0),
@@ -532,6 +544,7 @@ fn function_names_introspection() {
                     ty: Ty::None,
                     mutable: true,
                     span: SPAN,
+                    validated_body_of: None,
                 }],
                 blocks: vec![BasicBlock {
                     id: BlockId(0),

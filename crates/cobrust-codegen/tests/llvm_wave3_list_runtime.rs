@@ -178,6 +178,7 @@ mod llvm {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         locals.extend(extra_locals);
         Module {
@@ -216,6 +217,7 @@ mod llvm {
             ty: Ty::List(Box::new(Ty::Int)),
             mutable: true,
             span: span0,
+            validated_body_of: None,
         }];
         let bb0 = MirBlock {
             id: BlockId(0),
@@ -268,6 +270,7 @@ mod llvm {
                 ty: Ty::List(Box::new(Ty::Int)),
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -275,6 +278,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(3),
@@ -282,6 +286,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let bb0 = MirBlock {
@@ -361,6 +366,7 @@ mod llvm {
                 ty: Ty::List(Box::new(Ty::Int)),
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -368,6 +374,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(3),
@@ -375,6 +382,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let bb0 = MirBlock {
@@ -457,6 +465,7 @@ mod llvm {
                 ty: Ty::List(Box::new(Ty::Int)),
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -464,6 +473,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let bb0 = MirBlock {
@@ -536,6 +546,7 @@ mod llvm {
                 ty: Ty::List(Box::new(Ty::Int)),
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -543,6 +554,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(3),
@@ -550,6 +562,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(4),
@@ -557,6 +570,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(5),
@@ -564,6 +578,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(6),
@@ -571,6 +586,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(7),
@@ -578,6 +594,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(8),
@@ -585,6 +602,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(9),
@@ -592,6 +610,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(10),
@@ -599,6 +618,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let call = |func: &str,

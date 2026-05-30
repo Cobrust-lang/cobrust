@@ -555,6 +555,7 @@ fn make_local(id: u32, name: &str, ty: Ty) -> LocalDecl {
         ty,
         mutable: false,
         span: synth_span(),
+        validated_body_of: None,
     }
 }
 

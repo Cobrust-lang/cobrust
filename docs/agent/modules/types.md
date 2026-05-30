@@ -29,6 +29,13 @@ pub struct TypedModule {
     // ADR-0080 — carried for MIR's validated-body schema synthesis.
     pub adt_fields: HashMap<AdtId, BTreeMap<String, Ty>>,           // Phase-1a field table
     pub adt_refinements: HashMap<(AdtId, String), Refinement>,      // Phase-1b-ii side-table
+    pub adt_names: HashMap<AdtId, String>,                          // Phase-1b-iii AdtId → class name
+    // ADR-0081 Phase-1b — per-handler validated-body registration: handler
+    // DefId → (body-param positional index, body class AdtId). The ONLY source
+    // of "this param is a validated body"; MIR consumes it to MARK the
+    // body-param local (the Q4 registration gate for the `body.field` serde
+    // accessor — NOT type-driven; a type-only gate is the UB bug).
+    pub validated_handlers: HashMap<DefId, (usize, AdtId)>,
 }
 
 // ADR-0080 Phase-1b-ii / Phase-2 — a per-field value refinement
@@ -156,6 +163,20 @@ Invariants:
 - The `where`-predicate is interpreted STRUCTURALLY (the fixed grammar over the lowered HIR expr — `Bin{And}`, `Bin{LtEq/Lt/GtEq/Gt}`, `Lit(Int)`, `Lit(Str)`, `Name("self")`, `Call{Name("len"|"pattern"), …}`), never type-synthesised; `self`'s type is irrelevant.
 - The fixed grammar is keyed on the field BASE TYPE: a `len`/`pattern` form on a non-`str` field, or a bare-`self` int-range on a `str` field, is a clear `UnsupportedRefinement` (`ill_typed` i161-i164) — not silently mis-interpreted.
 - The value-level constraint (range / length / pattern) stays a RUNTIME guard (a 422 at the request boundary), not a compile-time-checked refinement (the §2.5-superior form is an ADR-0080 §9 follow-up). The regex's WELL-FORMEDNESS is the one part caught at compile time (Phase-2).
+
+### ADR-0081 Phase-1b — validated-body registration channel (`validated_handlers`)
+
+The Q4 gate's checker-side substrate: the ONLY place the fact "this handler param is a validated body" is recorded so a per-fn MIR body can read it (route-shape validation is otherwise call-site-only).
+
+| Feature | Location | Notes |
+|---|---|---|
+| `validated_handlers` channel | `types/src/check.rs` `Ctx::validated_handlers` + `TypedModule::validated_handlers` | `DefId → (body-param positional index, body class AdtId)`; the sibling of `adt_fields` — same checker→MIR carry-out path (`check()` ~439-470) |
+| populate point | `types/src/check.rs` `check_callback_arg`, the validated-body sentinel branch | when an `app.route_validated(_, _, handler)` callback arg is accepted (the `is_tracked_body` proof point), insert `rn.def_id → (idx, body_adt_id)` — the handler `DefId`, the sentinel slot's positional index, the resolved body class `AdtId` are all in hand there |
+| accessor seam | `types/src/ecosystem.rs` `lookup_validated_body_accessor(field_ty) -> Option<EcoSig>` | the §2-Q5 swappable seam: names a SYMBOL + a `Ty`, NEVER serde / a JSON key. `Ty::Int → __cobrust_pit_body_get_i64`, `Ty::Str → __cobrust_pit_body_get_str`; `f64`/`bool` Phase-2 (`None` → deferred stub, not a mis-read) |
+
+Invariants:
+- The channel records ONLY `route_validated`-accepted handlers (the `route` 1-arg path never enters the sentinel branch). A non-registered fn carrying a body-shaped param is NEVER recorded, so MIR never marks its local → the serde accessor never fires on it (the no-UB invariant — see `cobrust-mir`/`cobrust-pit` docs).
+- It is the Q4 gate's compile-side half; the MIR half (`LocalDecl.validated_body_of` mark + the registration-gated `Attr` sub-arm) lives in `cobrust-mir`. The gate is REGISTRATION-driven, NOT type-driven — a type-only gate (firing on `Ty::Adt`-with-fields) would serde-cast a null/opaque `.cb`-constructed pointer → UB.
 
 ## ADR-0041 §H8 — tuple Index returns indexed element type
 

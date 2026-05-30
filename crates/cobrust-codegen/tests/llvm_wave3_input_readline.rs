@@ -205,6 +205,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(1),
@@ -212,6 +213,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let bb0 = MirBlock {
@@ -262,6 +264,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(1),
@@ -269,6 +272,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let bb0 = MirBlock {
@@ -319,6 +323,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(1),
@@ -326,6 +331,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         let bb0 = MirBlock {
@@ -384,6 +390,7 @@ mod llvm {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(1),
@@ -391,6 +398,7 @@ mod llvm {
                 ty: Ty::Str,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -398,6 +406,7 @@ mod llvm {
                 ty: Ty::Str,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         // bb0: buf = __cobrust_str_new()

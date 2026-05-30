@@ -48,6 +48,9 @@ curl http://127.0.0.1:<port>/ping
   就是你的 `route_validated` handler 收到的那个带类型的请求体参数;响应以
   `application/json` 原样回显它。因为它重新序列化的是校验本身产出的同一个
   值,所以响应体不可能与已校验的请求体发生漂移。详见下文「带校验的请求体」。
+- **`body.field` 读取**(ADR-0081)—— 在 `route_validated` 的 handler 内部,
+  以带类型的属性访问读取已校验请求体的字段(`body.rank` → `i64`,`body.name`
+  → `str`),而不是字符串键。写错的字段是编译错误。详见下文「读取请求体字段」。
 - **`App.route(method, path, handler)`** — 将一个顶层 `fn` 注册为
   `method path` 的处理器。handler 必须是顶层
   `fn handler(req: pit.Request) -> pit.Response: …`。返回 `None`;
@@ -148,9 +151,46 @@ fn main() -> i64:
 
 为什么比 Flask/FastAPI 更优:结构由编译器捕获(你无法发布一个读取不存在
 字段的 handler),422 是渲染成 `Response` 的 `Result`(而不是 unwind 的
-异常),且连线是一次显式调用(没有隐藏的依赖注入注册表)。目前成功的
-handler 返回一个固定响应 —— 把校验后的请求体回显出去是后续工作(需要
-`.cb` 结构体 ↔ JSON 桥)。
+异常),且连线是一次显式调用(没有隐藏的依赖注入注册表)。
+
+### 读取请求体字段(`body.rank`,ADR-0081)
+
+在 `route_validated` 的 handler 内部,你现在可以**读取请求体的字段**并据此
+处理。`body.rank` 读出一个 `i64`,`body.name` 读出一个 `str` —— 是带类型的
+属性访问,绝不是字符串键 `body["rank"]`:
+
+```python
+import pit
+
+class CreateScore:
+    name: str
+    rank: i64 where 0 <= self and self <= 100
+
+fn create_score(req: pit.Request, body: CreateScore) -> pit.Response:
+    let r: i64 = body.rank        # 读出已校验的 rank,例如 50
+    let n: str = body.name        # 读出已校验的 name,例如 "alice"
+    if r >= 50:
+        return pit.text_response(200, "high")
+    return pit.json_response(201, body)   # 或把整个请求体回显出去
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/scores", create_score)
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+- `body.rank` 静态为 `i64`;写错的 `body.nonexistent` 是**编译期**错误
+  (它会列出真实字段),绝不是运行期 `KeyError`。
+- 读取是**全量**的:在你的 handler 运行之前,校验已经证明字段存在、类型
+  正确、且在范围内 —— 所以没有要 unwrap 的 `None`,没有缺键的意外。
+- 没有静默强转:`i64` 字段读成整数;`i64` 字段收到 JSON `1.5` 早已在 422
+  边界被拒,所以读取永远不会截断浮点数。
+
+第 1 阶段提供 `i64` + `str` 字段读取;`f64`/`bool` 以及嵌套类 / 列表字段
+属于后续阶段。字段读取**只**对你的 handler 从 `route_validated` 收到的请求
+体参数生效 —— 手动构造的 `CreateScore()` 值目前还没有字段存储(那是原生
+结构体的后续工作)。编译器会跟踪二者的区别,所以你不会遇到意外。
 
 ## 字符串校验:长度 + 模式(ADR-0080 第 2 阶段)
 
@@ -273,8 +313,9 @@ fn main() -> i64:
 - **带校验的请求体**(`route_validated`,ADR-0080):`i64` 字段上的
   固定整数范围 refinement,以及 `str` 字段上的字符串长度(`len(self)`)与
   模式(`pattern(self, "…")`)refinement 现已支持。把校验后的请求体回显到
-  响应里(`json_response(status, body)`)现也已落地(ADR-0081)。从请求体上
-  读取单个字段(`body.rank`)、以及嵌套类 / 列表字段请求体属于后续阶段。
+  响应里(`json_response(status, body)`)、以及从请求体上读取单个 `i64` /
+  `str` 字段(`body.rank`、`body.name`)现也已落地(ADR-0081)。`f64` /
+  `bool` 字段读取与嵌套类 / 列表字段请求体属于后续阶段。
 - **OpenAPI**(`serve_openapi`,ADR-0080):文档覆盖每个带校验路由的请求体
   schema —— 类型,加上整数范围 `minimum`/`maximum`、字符串长度
   `minLength`/`maxLength`、以及 `pattern`。列表字段的 `maxItems` 形式跟随

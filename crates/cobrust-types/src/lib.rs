@@ -67,8 +67,9 @@ pub use ecosystem::{
     coil_buffer_ty, dora_event_handler_fn_ty, dora_event_ty, dora_node_ty, handle_drop_symbol,
     hood_command_handler_fn_ty, hood_command_ty, is_ecosystem_handle, is_ecosystem_module,
     is_subnamespace, lookup_buffer_binop, lookup_handle_attr, lookup_handle_method,
-    lookup_module_fn, lookup_subnamespace_fn, pit_app_ty, pit_handler_fn_ty, pit_request_ty,
-    pit_response_ty, pit_server_handle_ty, pit_validated_handler_fn_ty,
+    lookup_module_fn, lookup_subnamespace_fn, lookup_validated_body_accessor, pit_app_ty,
+    pit_handler_fn_ty, pit_request_ty, pit_response_ty, pit_server_handle_ty,
+    pit_validated_handler_fn_ty,
 };
 pub use error::TypeError;
 pub use fix_safety::{FixSafety, Suggestion, type_error_fix_safety, type_error_suggestion_text};

@@ -176,6 +176,7 @@ fn dangling_local_body() -> Body {
         ty: Ty::Int,
         mutable: true,
         span,
+        validated_body_of: None,
     };
     // Exactly one block whose single statement assigns to a *non-existent*
     // local id (LocalId(99)) — codegen should refuse this with InvalidMir.
@@ -245,6 +246,7 @@ fn ill_007_broken_ir_dangling_block_target() {
         ty: Ty::Int,
         mutable: true,
         span,
+        validated_body_of: None,
     };
     // Single block whose terminator jumps to BlockId(99) — non-existent.
     let block = BasicBlock {
@@ -383,6 +385,7 @@ fn ill_019_invalid_mir_dangling_in_terminator_call_destination() {
         ty: Ty::Int,
         mutable: true,
         span,
+        validated_body_of: None,
     };
     // Block with Terminator::Call destination = LocalId(77) — non-existent.
     let block_a = BasicBlock {
@@ -560,6 +563,7 @@ fn ill_033_read_nonexistent_place_in_assign() {
         ty: Ty::Int,
         mutable: true,
         span,
+        validated_body_of: None,
     };
     // _return = copy _88
     let stmt = Statement {
@@ -746,6 +750,7 @@ fn run_dangling_in_position(name: &str, position: usize) {
         ty: Ty::Int,
         mutable: true,
         span,
+        validated_body_of: None,
     };
     let mut statements = Vec::new();
     for i in 0..position {

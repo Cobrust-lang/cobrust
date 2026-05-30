@@ -523,6 +523,7 @@ mod tests {
             ty,
             mutable,
             span: SPAN,
+            validated_body_of: None,
         }
     }
 

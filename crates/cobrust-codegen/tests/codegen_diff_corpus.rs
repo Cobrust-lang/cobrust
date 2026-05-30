@@ -1012,6 +1012,7 @@ fn build_main_calling_extern(extern_name: &str, arg: cobrust_mir::Constant) -> c
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(1),
@@ -1019,6 +1020,7 @@ fn build_main_calling_extern(extern_name: &str, arg: cobrust_mir::Constant) -> c
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(2),
@@ -1026,6 +1028,7 @@ fn build_main_calling_extern(extern_name: &str, arg: cobrust_mir::Constant) -> c
             ty: arg_ty,
             mutable: false,
             span: span0,
+            validated_body_of: None,
         },
     ];
     // bb0: arg = arg_const; call extern_name(arg) -> bb1
@@ -1205,6 +1208,7 @@ fn stdlib_io_08_build_fib_body() -> cobrust_mir::Body {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(1),
@@ -1212,6 +1216,7 @@ fn stdlib_io_08_build_fib_body() -> cobrust_mir::Body {
             ty: Ty::Int,
             mutable: false,
             span: span0,
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(2),
@@ -1219,6 +1224,7 @@ fn stdlib_io_08_build_fib_body() -> cobrust_mir::Body {
             ty: Ty::Bool,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(3),
@@ -1226,6 +1232,7 @@ fn stdlib_io_08_build_fib_body() -> cobrust_mir::Body {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(4),
@@ -1233,6 +1240,7 @@ fn stdlib_io_08_build_fib_body() -> cobrust_mir::Body {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(5),
@@ -1240,6 +1248,7 @@ fn stdlib_io_08_build_fib_body() -> cobrust_mir::Body {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(6),
@@ -1247,6 +1256,7 @@ fn stdlib_io_08_build_fib_body() -> cobrust_mir::Body {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
     ];
     let mut blocks = fib_base_blocks(span0);
@@ -1399,6 +1409,7 @@ fn stdlib_io_08_build_main_body() -> cobrust_mir::Body {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(1),
@@ -1406,6 +1417,7 @@ fn stdlib_io_08_build_main_body() -> cobrust_mir::Body {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
         LocalDecl {
             id: LocalId(2),
@@ -1413,6 +1425,7 @@ fn stdlib_io_08_build_main_body() -> cobrust_mir::Body {
             ty: Ty::Int,
             mutable: true,
             span: span0,
+            validated_body_of: None,
         },
     ];
     // bb0: Call fib(10)->_fib_ret→bb1
@@ -1491,6 +1504,7 @@ fn stdlib_io_07_println_str_let_binding() {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(1),
@@ -1498,6 +1512,7 @@ fn stdlib_io_07_println_str_let_binding() {
                 ty: Ty::Str,
                 mutable: false,
                 span: span0,
+                validated_body_of: None,
             },
             LocalDecl {
                 id: LocalId(2),
@@ -1505,6 +1520,7 @@ fn stdlib_io_07_println_str_let_binding() {
                 ty: Ty::Int,
                 mutable: true,
                 span: span0,
+                validated_body_of: None,
             },
         ];
         // bb0: s = "hi"; call println_str_buf(s) -> bb1

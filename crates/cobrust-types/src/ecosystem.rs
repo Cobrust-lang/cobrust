@@ -1298,6 +1298,50 @@ pub fn lookup_handle_attr(receiver: &Ty, attr: &str) -> Option<EcoSig> {
     }
 }
 
+/// ADR-0081 Phase-1b — resolve a validated-body field READ (`body.field`,
+/// where `body` is a `route_validated`-registered handler's validated-body
+/// param) to its typed accessor shim + return type, keyed on the field's
+/// DECLARED `Ty` (read by the caller from `adt_fields`).
+///
+/// This is the §2-Q5 swappable seam: the caller (MIR's `Attr` sub-arm)
+/// names **a symbol + a `Ty`**, NEVER `serde_json` or a JSON key. Today the
+/// symbol indexes the boxed `serde_json::Value` the validator left
+/// (`cabi.rs`'s `__cobrust_pit_body_get_*`); a future native-struct ABI
+/// (ADR-0081 §7/Phase-4) emits a real struct + a `Projection::Field` load
+/// behind the SAME symbol — the `.cb` source and the MIR shape are
+/// unchanged.
+///
+/// The shim shape mirrors `__cobrust_pit_request_path_param`
+/// (`(body: *mut u8, name: *mut u8) -> <ret>`): `body` is the boxed Value,
+/// `name` is the COMPILER-SYNTHESISED field name `Str` (footgun #1 — never
+/// author-written). Phase-1b ships `i64` + `str`; `f64`/`bool` are
+/// Phase-2 (`None` here until then, so a `body.<f64-field>` read falls
+/// through to the deferred no-field-storage stub rather than mis-reading).
+///
+/// Returns `None` for a field whose declared `Ty` has no Phase-1b accessor
+/// (the caller then takes the pre-existing `Field(0)` stub path — NOT a
+/// serde cast).
+#[must_use]
+pub fn lookup_validated_body_accessor(field_ty: &Ty) -> Option<EcoSig> {
+    let (symbol, ret) = match field_ty {
+        // Integer-only `as_i64` in the shim (footgun #3 — NEVER
+        // `as_f64`-truncate; CLAUDE.md §2.2 no-silent-coercion).
+        Ty::Int => ("__cobrust_pit_body_get_i64", Ty::Int),
+        Ty::Str => ("__cobrust_pit_body_get_str", Ty::Str),
+        _ => return None,
+    };
+    // The accessor's manifest signature carries ONE `Value` param — the
+    // compiler-synthesised field-name `Str`. The receiver (`body`) is the
+    // implicit borrowed first arg the MIR retarget prepends (mirroring the
+    // `lookup_handle_attr` → `emit_ecosystem_call` borrowed-receiver path).
+    Some(EcoSig {
+        runtime_symbol: symbol,
+        params: vec![EcoParam::Value(Ty::Str)],
+        ret,
+        tier: PyCompatTier::Semantic,
+    })
+}
+
 /// Is `name` a known built-in ecosystem-module alias (Q1)? The HIR
 /// binds `import den` as a `DefKind::ImportAlias` with surface name
 /// `den`; the typechecker uses this to mark the alias `def_id` so

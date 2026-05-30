@@ -46,7 +46,11 @@ pub struct Body {
 }
 
 pub struct LocalDecl { pub id: LocalId, pub name: String, pub ty: Ty,
-                      pub mutable: bool, pub span: Span }
+                      pub mutable: bool, pub span: Span,
+                      // ADR-0081 Phase-1b — Some(id) iff this local is a
+                      // route_validated-registered handler's validated-body
+                      // param (the Q4 mark). None for every other local.
+                      pub validated_body_of: Option<AdtId> }
 pub struct LocalId(pub u32);
 pub struct BlockId(pub u32);
 
@@ -477,3 +481,26 @@ Sub-sprint a+b additions in this milestone:
 Test corpus:
 - `crates/cobrust-cli/tests/list_str_e2e.rs` — 33 end-to-end tests (build + run + assert stdout) covering literal construction, iteration, argv interop, helper-fn pass + return, indexing, f-string interpolation, list_is_empty, nested list[list[str]].
 - `crates/cobrust-stdlib/tests/list_str_drop_corpus.rs` — 10 C-ABI link-time tests for `__cobrust_str_clone` / `__cobrust_list_drop_elems` / `__cobrust_list_is_empty`.
+
+## ADR-0081 Phase-1b — validated-body field READ mark + registration-gated `Attr` sub-arm
+
+The MIR half of the Q4 registration gate (the checker half is
+`TypedModule.validated_handlers` — see `types.md`). `body.field` on a
+`route_validated`-registered handler's body param lowers to a typed serde
+accessor shim; every OTHER `Ty::Adt` attribute access keeps the pre-existing
+`Field(0)` stub (the no-UB invariant).
+
+| Surface | Anchor | Notes |
+|---|---|---|
+| `LocalDecl.validated_body_of` (NEW) | `tree.rs` `LocalDecl` | `Option<AdtId>` — `Some(id)` iff this local is a registered handler's validated-body param. `declare_local` defaults it `None`; ONLY `lower_fn` overwrites it. |
+| the MARK | `lower.rs` `lower_fn` (after `set_param_count`) | when `f.def_id ∈ typed.validated_handlers`, set the `body_param_idx`-th positional param's local `validated_body_of = Some(body_adt)`. The index is the handler `FnTy`'s validated-body positional (1 for `fn(pit.Request, body)`), aligned with `f.params.positional[idx]`. |
+| the GATED sub-arm | `lower.rs` `ExprKind::Attr` rvalue arm, BEFORE the `Field(0)` fallthrough | `lookup_validated_body_field_accessor(base, name)` fires ONLY when the base is a `Name` whose ALREADY-declared local carries `validated_body_of == Some(id)` AND `name ∈ adt_fields[id]`. Picks the shim by the field's declared `Ty` (`lookup_validated_body_accessor`), lowers via the borrowed-receiver `emit_ecosystem_call` (Move→Copy, the `coil.Buffer.shape` discipline) passing `(recv, Constant::Str(field_name))`. The field name is COMPILER-SYNTHESISED (footgun #1). |
+| the no-UB fall-through | `lower.rs` `ExprKind::Attr` (unchanged `Field(0)` path) | a base WITHOUT the mark — a NON-registered fn's body-shaped param, a `let s = Body()` binding — takes the pre-existing `Field(0)` stub UNCHANGED. It is NEVER `cast::<Value>()`-ed: the gate is the MARK, not the `Ty`. A type-only gate would serde-cast the null/opaque `.cb`-constructed pointer → UB; this is the bug the design forbids. |
+
+Invariants:
+- The gate is REGISTRATION-driven (the `validated_body_of` mark), NOT type-driven. `lookup_validated_body_field_accessor` is read-only (`&self`) and resolves ONLY already-declared param locals — it never declares a forward-ref local, so a non-param `Ty::Adt` name cannot accidentally qualify.
+- The borrowed-receiver discipline keeps the body box live across multiple field reads in one handler; the `route_validated` trampoline frees the box exactly once (`cobrust-pit/src/cabi.rs`).
+- Only the rvalue `Attr` arm is gated (the Phase-1 surface is `let x = body.field`); the lvalue / callee `Attr` arms keep their `Field(0)` stub (no `body.field = …` / `body.field()` in scope), so no new serde cast is introduced there either.
+
+Test corpus:
+- `crates/cobrust-cli/tests/pit_body_field_read_e2e.rs` — the observable HTTP read (rank=50→"high", rank=10→"low" proving the branch flips with the value; name echo) + the no-UB negative (a non-registered `helper(b: CreateScore): b.rank` on a `.cb`-constructed instance runs to a CLEAN exit, no serde-cast crash) + a check-only well-defined-ness probe.

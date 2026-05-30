@@ -205,6 +205,26 @@ impl<'a> LowerCtx<'a> {
             b.declare_local_for_def(p.def_id, p.name.clone(), ty, p.span, false);
         }
         b.set_param_count();
+        // ADR-0081 Phase-1b — the Q4 MARK. If THIS fn's `DefId` was recorded
+        // by the checker as a `route_validated`-registered handler
+        // (`TypedModule.validated_handlers`), mark its body-param local
+        // `validated_body_of = Some(body_adt)`. `body_param_idx` is the
+        // handler `FnTy`'s positional index of the validated-body slot (1 for
+        // `fn(pit.Request, body: Body)`), which lines up with
+        // `f.params.positional[idx]` (the checker counts the same positionals
+        // — there is no implicit receiver on a top-level fn). This is the ONLY
+        // local that gets the mark; every other local (incl. a non-registered
+        // fn's `b: Body` param and a `let s = Body()` binding) keeps the
+        // `declare_local` default `None` — the no-UB invariant (§5.2).
+        if let Some(&(body_param_idx, body_adt)) = self.typed.validated_handlers.get(&f.def_id) {
+            if let Some(param) = f.params.positional.get(body_param_idx) {
+                if let Some(&local_id) = b.def_to_local.get(&param.def_id.0) {
+                    if let Some(decl) = b.locals.get_mut(local_id.0 as usize) {
+                        decl.validated_body_of = Some(body_adt);
+                    }
+                }
+            }
+        }
         // Body.
         b.lower_block(&f.body)?;
         // If the user didn't return explicitly, emit `Return`.
@@ -298,6 +318,10 @@ impl<'a> BodyBuilder<'a> {
             ty,
             mutable,
             span,
+            // ADR-0081 Phase-1b — default: NOT a validated body. `lower_fn`
+            // overwrites this to `Some(body_adt)` for the registered
+            // handler's body-param local only (the Q4 mark).
+            validated_body_of: None,
         });
         id
     }
@@ -682,6 +706,45 @@ impl<'a> BodyBuilder<'a> {
                 "non-lvalue assignment target".to_string(),
             )),
         }
+    }
+
+    /// ADR-0081 Phase-1b — resolve a `body.field` read to its typed
+    /// accessor `EcoSig`, gated on the Q4 registration MARK (§5.2).
+    ///
+    /// Returns `Some(accessor)` ONLY when ALL hold:
+    /// 1. `base` is a bare `ExprKind::Name` (a `body` param read);
+    /// 2. its local is ALREADY declared (a param — declared in `lower_fn`
+    ///    before the body is lowered) and carries
+    ///    `validated_body_of == Some(body_adt)` (the registration mark);
+    /// 3. `field` is a field in that class's `adt_fields` whose declared
+    ///    `Ty` has a Phase-1b accessor shim (`i64`/`str`).
+    ///
+    /// Returns `None` otherwise — for a NON-`Name` base, an UNMARKED local
+    /// (a non-registered fn's body-shaped param, a `let s = Body()`
+    /// binding), an unknown field, or a field type with no Phase-1b shim.
+    /// The caller then takes the pre-existing `Field(0)` stub path — NEVER
+    /// a serde cast (the no-UB invariant). Read-only (`&self`): it MUST NOT
+    /// declare a forward-ref local — only an already-marked param qualifies.
+    fn lookup_validated_body_field_accessor(
+        &self,
+        base: &Expr,
+        field: &str,
+    ) -> Option<cobrust_types::EcoSig> {
+        let ExprKind::Name(rn) = &base.kind else {
+            return None;
+        };
+        let local_id = self.def_to_local.get(&rn.def_id.0)?;
+        let decl = self.locals.get(local_id.0 as usize)?;
+        // The Q4 GATE: the local must carry the registration mark. An
+        // unmarked local (Ty::Adt-with-fields but `None` here) is NEVER
+        // serde-cast.
+        let body_adt = decl.validated_body_of?;
+        // The field must be a declared field of that class (the SAME
+        // `adt_fields` table the type checker resolved `body.field`
+        // against — footgun #1: the JSON key is compiler-derived, never
+        // author-written). Pick the shim by the field's declared `Ty`.
+        let field_ty = self.ctx.typed.adt_fields.get(&body_adt)?.get(field)?;
+        cobrust_types::lookup_validated_body_accessor(field_ty)
     }
 
     fn lookup_local_for_resolved(
@@ -1460,6 +1523,42 @@ impl<'a> BodyBuilder<'a> {
                         sig.runtime_symbol,
                         sig.ret.clone(),
                         vec![recv_op],
+                        e.span,
+                    );
+                    return Ok(op_out);
+                }
+                // ADR-0081 Phase-1b — the REGISTRATION-GATED validated-body
+                // field READ (the Q4 gate, §5.2). Fires ONLY when the base is
+                // a `Name` resolving to a local MARKED
+                // `validated_body_of == Some(body_adt)` (i.e. a
+                // `route_validated`-registered handler's body param, recorded
+                // by the checker + marked in `lower_fn`) AND `name` is a field
+                // in that class's `adt_fields`. The base is then the boxed
+                // `serde_json::Value` the validator left (`cabi.rs`), so the
+                // typed accessor shim (`__cobrust_pit_body_get_*`, picked by
+                // the field's DECLARED `Ty`) reads it safely.
+                //
+                // CRITICAL — this gates on the MARK, NOT on the `Ty`. A
+                // non-registered fn's `b: Body` param and a `let s = Body()`
+                // binding have the SAME `Ty::Adt(body_adt)` + the SAME field
+                // table, but `validated_body_of == None`, so they NEVER reach
+                // this arm — they fall through to the pre-existing
+                // `Field(0)` stub below and are NEVER `cast::<Value>()`-ed
+                // (the no-UB invariant). Gating on `Ty::Adt`-with-fields is
+                // the UB bug this design forbids.
+                if let Some(accessor) = self.lookup_validated_body_field_accessor(base, name) {
+                    // Borrowed receiver (Move → Copy, the `coil.Buffer.shape`
+                    // discipline): the shim reads `&serde_json::Value`; the
+                    // body box stays live + is freed exactly once by the
+                    // `route_validated` trampoline (`cabi.rs:530`). The field
+                    // name is the COMPILER-SYNTHESISED `Str` (footgun #1 —
+                    // never author-written), passed as the 2nd arg.
+                    let recv_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                    let name_op = Operand::Constant(Constant::Str(name.clone()));
+                    let op_out = self.emit_ecosystem_call(
+                        accessor.runtime_symbol,
+                        accessor.ret.clone(),
+                        vec![recv_op, name_op],
                         e.span,
                     );
                     return Ok(op_out);

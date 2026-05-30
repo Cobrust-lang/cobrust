@@ -10,7 +10,7 @@ use std::fmt;
 
 use cobrust_frontend::span::Span;
 use cobrust_hir::DefId;
-use cobrust_types::Ty;
+use cobrust_types::{AdtId, Ty};
 
 // =====================================================================
 // IDs
@@ -97,6 +97,19 @@ pub struct LocalDecl {
     /// `Statement::Assign` after the first.
     pub mutable: bool,
     pub span: Span,
+    /// ADR-0081 Phase-1b — `Some(id)` iff this local is the validated-body
+    /// parameter of a `route_validated`-registered handler (sourced from
+    /// [`cobrust_types::TypedModule::validated_handlers`]). This is the
+    /// ONLY thing that authorises the serde-accessor shim for `body.field`
+    /// (the Q4 registration gate, `lower.rs`'s `Attr` sub-arm).
+    ///
+    /// `None` for EVERY other local — including a `let s = Score()`
+    /// `.cb`-constructed binding and a NON-registered fn's `b: CreateScore`
+    /// param (both `Ty::Adt(same-id)`, but a null/opaque `*mut u8`, NOT a
+    /// boxed `serde_json::Value`). The serde shim gating on this mark (NOT
+    /// on the `Ty`) is what makes the serde-cast UB structurally unreachable
+    /// for any unmarked local (the §5.2 no-UB invariant).
+    pub validated_body_of: Option<AdtId>,
 }
 
 // =====================================================================

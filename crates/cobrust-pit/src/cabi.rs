@@ -816,6 +816,92 @@ pub unsafe extern "C" fn __cobrust_pit_request_path_param(req: *mut u8, name: *m
 }
 
 // =====================================================================
+// pit C-ABI surface — validated-body field READ accessors (ADR-0081
+// §5.2 Phase-1b). Cloned bit-for-bit from the `(ptr, ptr) -> <ret>`
+// `__cobrust_pit_request_path_param` template (above). `body` is the
+// boxed `serde_json::Value` the `route_validated` trampoline left for
+// the handler (`__cobrust_pit_app_route_validated`'s `body_raw` box,
+// `cabi.rs:515`); `name` is the COMPILER-SYNTHESISED field-name `Str`
+// the MIR retarget passes (footgun #1 — never author-written). Each
+// shim BORROWS the body box (shared `&Value`); the trampoline retains
+// sole ownership and frees it exactly once after the handler returns
+// (`cabi.rs:530`).
+//
+// The reads are TOTAL on the validated path: validation already proved
+// presence + type + range BEFORE the handler ran
+// (`validate_against_schema`, `cabi.rs:493`), so the `unwrap_or`
+// fail-clean sentinel is UNREACHABLE for a value that entered the
+// handler (it mirrors `path_param`'s `unwrap_or("")` — a defense, NOT a
+// `KeyError` surface; footgun #2 dropped).
+// =====================================================================
+
+/// `body.<i64-field>` — read an `i64` field off the validated body
+/// (ADR-0081 §5.2 Q2). Returns the field's integer value.
+///
+/// Uses `serde_json::Value::as_i64` — **integer-only**, NEVER
+/// `as_f64`-then-truncate (footgun #3; CLAUDE.md §2.2 no-silent-coercion).
+/// Validation already rejected a float for an `i64` field (the type /
+/// refinement check), so the shim inherits that guarantee and does NOT
+/// widen it. The `0` sentinel is fail-clean (unreachable on the validated
+/// path — the field is present + integral; it is a defense against a
+/// null body / a missing key, NOT a coercion).
+///
+/// # Safety
+///
+/// `body` must be null or a valid pointer to the Rust-owned boxed
+/// `serde_json::Value` the `route_validated` trampoline produced for the
+/// type-checked validated-handler path. `name` must be a valid Cobrust
+/// `Str` buffer (the compiler-synthesised field name). The shim only
+/// BORROWS `body`; the trampoline keeps ownership and frees it once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_body_get_i64(body: *mut u8, name: *mut u8) -> i64 {
+    if body.is_null() {
+        // Fail-clean sentinel (unreachable on the validated path).
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety` — `body` is the trampoline's
+    // boxed `serde_json::Value`. Shared `&` borrow only; the trampoline
+    // keeps ownership and frees it once (`cabi.rs:530`).
+    let value: &serde_json::Value = unsafe { &*body.cast::<serde_json::Value>() };
+    // SAFETY: `name` per `# Safety`.
+    let name_s = unsafe { read_str_buf(name) };
+    value
+        .get(&name_s)
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0)
+}
+
+/// `body.<str-field>` — read a `str` field off the validated body
+/// (ADR-0081 §5.2 Q2). Returns a freshly-allocated Cobrust `Str` buffer
+/// (caller-owned, dropped once by the `.cb` scope) carrying the field's
+/// string value, or an empty `Str` on a null body / missing key (the
+/// fail-clean sentinel — unreachable on the validated path, mirroring
+/// `path_param`'s `unwrap_or("")`).
+///
+/// # Safety
+///
+/// As [`__cobrust_pit_body_get_i64`]. The returned pointer is a freshly
+/// `Box`-allocated Cobrust `Str` the `.cb` side owns + drops once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_body_get_str(body: *mut u8, name: *mut u8) -> *mut u8 {
+    if body.is_null() {
+        // Fail-clean sentinel — an empty Str (unreachable on the validated
+        // path). Returns a real (empty) buffer, NOT null, so the `.cb` Str
+        // consumer never derefs null.
+        return alloc_str_buffer("");
+    }
+    // SAFETY: caller-attestation per `# Safety`. Shared `&` borrow only.
+    let value: &serde_json::Value = unsafe { &*body.cast::<serde_json::Value>() };
+    // SAFETY: `name` per `# Safety`.
+    let name_s = unsafe { read_str_buf(name) };
+    let captured = value
+        .get(&name_s)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    alloc_str_buffer(captured)
+}
+
+// =====================================================================
 // pit C-ABI surface — handle drops (mirror strike's _drop pattern).
 // =====================================================================
 
