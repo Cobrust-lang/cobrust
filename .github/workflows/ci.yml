@@ -207,7 +207,13 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
-        run: cargo audit --deny warnings
+        # Ignore RUSTSEC-2023-0071 (rsa 0.9 — Marvin timing-sidechannel, NO fixed
+        # release upstream): rsa is a transitive dep of jsonwebtoken's REQUIRED
+        # rust_crypto backend (cobrust-fang), but fang uses ONLY HS256 / HMAC and
+        # NEVER invokes any RSA code path — the advisory is unreachable here.
+        # Rationale in crates/cobrust-fang/Cargo.toml. Revisit if rsa ships a fix
+        # or fang ever adds an RS*/PS* algorithm (then the path becomes reachable).
+        run: cargo audit --deny warnings --ignore RUSTSEC-2023-0071
 
   # Code Quality P1: cargo-udeps unused-dependency check.
   # Requires nightly toolchain (uses unstable compiler APIs).
