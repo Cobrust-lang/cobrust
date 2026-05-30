@@ -1794,6 +1794,30 @@ tolerance = "exact"
         );
     }
 
+    /// ADR-0082: pin `render_divergence`'s exact `key="value"` record
+    /// shape. The real-oracle integration test
+    /// (`tests/production_loop_real_oracle.rs`) asserts against this
+    /// format via plain substrings (`input="0"`, `expected="1"`,
+    /// `actual="2"`). Pinning the shape here makes any format change go
+    /// RED so the two are co-updated deliberately, never silently
+    /// weakened (audit SUSPECT, 2026-05-30).
+    #[test]
+    fn render_divergence_pins_the_manifest_record_shape() {
+        let failure = GateFailure {
+            function: "incr".into(),
+            failed_gate: "l2_behavior".into(),
+            failure_summary: "strict-tier byte-identity drift".into(),
+            failed_inputs: vec!["0".into()],
+            expected: Some("1".into()),
+            actual: Some("2".into()),
+            attempt: 2,
+        };
+        assert_eq!(
+            render_divergence(&failure),
+            "incr: input=\"0\" expected=\"1\" actual=\"2\" (gate=l2_behavior, re-dispatched as attempt 2, repaired)"
+        );
+    }
+
     /// M5: a verifier that rejects the first attempt and accepts the
     /// second exercises the full repair loop without needing real LLM
     /// keys or a multi-attempt synthetic table.

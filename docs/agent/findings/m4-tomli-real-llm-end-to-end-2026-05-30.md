@@ -108,12 +108,25 @@ accepts them within tolerance (canonical 5/5 + 99.51 % ≥ threshold).
 - **NOW proven too (after f025dae):** full-surface *behavioral* parity — gpt-5.5's
   full-tomli translation is **99.51 % equivalent to CPython** (5 div / 1024 fuzz) + ~10×
   faster, measured by the restored gate (see RESOLUTION).
-- **STILL not proven:** the **production `pipeline::translate` repair loop** closing on a
-  *real* divergence — the live evidence comes from the bespoke audit/full_pipeline
-  harnesses, not the production path, whose default `BehaviorVerifier` is
-  `AcceptAll`→`Skip` (ADR-0040 + translator-real-vs-synthetic-status). The
-  narrative-vs-reality gap is now narrowed to exactly that — the *production repair loop* —
-  not the translation and not the full-surface behavioral verification (both demonstrated).
+- **NOW demonstrated (production repair loop, defect a):** the **production
+  `pipeline::translate_with_verifiers` repair loop** fires on a *real* differential —
+  `tests/production_loop_real_oracle.rs` wires the production `TierVerifier` to a
+  `CpythonOracleHarness` whose `expected` is REALLY run via `python3.11` and whose `actual`
+  is REALLY produced by `rustc`-compiling-and-running the emission. A broken attempt-1
+  (`n+2`) genuinely diverges from CPython (`n+1`) → `Reject` → `repair_translation_with_task`
+  re-dispatch → attempt-2 (`n+1`) converges, and the manifest records the live record
+  `incr: input="0" expected="1" actual="2" (gate=l2_behavior, …, repaired)`. Verified by a
+  3-lens adversarial audit (SHIP_WITH_NITS, isTheater=false) with **mutation probes** (flip
+  the canned body → `actual` tracks it; agree the oracle → no Reject fires). HONEST SCOPE:
+  the emissions are synthetic (`CannedTable`), not LLM-generated — by design, since the LLM
+  *translation* is already proven above; this isolates the loop-mechanism + real-oracle. The
+  test is macOS-local (skips on CI, where `python3.11` is absent); the loop + ADR-0082
+  *mechanism* is CI-guarded by the two synthetic sibling unit tests in `pipeline.rs`.
+- **Default still opt-in:** the production `translate` *default* `BehaviorVerifier` remains
+  `AcceptAll`→`Skip` (ADR-0040); the real oracle is wired by the caller/test, not on by
+  default. The narrative-vs-reality gap the review named is now fully closed in evidence:
+  translation, full-surface behavioral parity, AND the production repair loop on a real
+  differential are each demonstrated.
 
 ## Follow-ups (the genuinely-new work this surfaces)
 
@@ -121,11 +134,17 @@ accepts them within tolerance (canonical 5/5 + 99.51 % ≥ threshold).
    0-case regression was root-caused (the cobra-rebrand import drift, `0010653`) and fixed;
    a 0-case gate now hard-fails + refuses promotion; the restored gate was re-verified live
    (gpt-5.5, 99.51 % parity). See the RESOLUTION section above.
-2. **Production closed loop.** Wire a real differential `BehaviorVerifier` (against
-   `corpus/tomli/harness/h_loads.py`) + a real `cargo build` L2 gate into
-   `pipeline::translate_with_verifiers`, and run tomli through it so the L1→repair→
-   reconverge loop sees ≥1 real divergence with live diagnostic feedback (the manifest's
-   `verification.divergences` is always `vec![]` today).
+2. ✅ **DONE — production closed loop fires on a real differential.**
+   `tests/production_loop_real_oracle.rs` wires the production `TierVerifier` to a
+   `CpythonOracleHarness` (real `python3.11` `expected` + real `rustc`-compiled-and-run
+   `actual`) and drives the unmodified `pipeline::translate_with_verifiers`; the
+   L1→Reject→repair→reconverge loop sees a genuine CPython-vs-emission divergence and the
+   manifest records it (ADR-0082). 3-lens adversarial audit SHIP_WITH_NITS / isTheater=false
+   / mutation-proven; its three nits (CI-blindness doc note, `render_divergence` format-
+   pinning unit test, harness safety-pin comment) were all applied. Remaining genuine gap
+   (not blocking, lower priority): exercising the *same* path with a *live LLM* emission +
+   a real divergence (here the broken→fixed emissions are synthetic by design, since the
+   LLM translation itself is already proven in §"What is GENUINELY PROVEN").
 
 ## Provenance
 
