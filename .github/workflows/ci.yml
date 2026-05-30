@@ -154,6 +154,17 @@ jobs:
               break
             fi
           done
+      # Pre-build the workspace — crucially the ecosystem `lib<mod>.a`
+      # staticlibs (libcoil.a, libscale.a, libden.a, ...) — BEFORE the parallel
+      # `cargo test` phase. Each ecosystem e2e's `cobrust build` invokes
+      # `cargo build -p cobrust-<mod>` on-demand (cli/src/build.rs Phase-2); run
+      # concurrently across test binaries that RACES — one process truncates
+      # lib<mod>.a mid-write while a sibling `clang`-links it
+      # (`clang: error: no such file: libcoil.a`, CI 26693573627 + 26694248379;
+      # sibling libscale.a race CI 26580282088). Pre-building makes those
+      # on-demand builds NO-OPS (cargo sees the .a up-to-date → never rewrites
+      # it → no truncation window). `--jobs 2` keeps the F72 anti-OOM ceiling.
+      - run: cargo build --workspace --locked --jobs 2
       - run: cargo test --workspace --locked
         # Note: per `findings/m9-cross-arch-9ff481c-regression.md`,
         # Linux x86_64 is the gold-standard cross-arch validator;
