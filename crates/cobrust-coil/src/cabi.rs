@@ -607,6 +607,159 @@ pub unsafe extern "C" fn __cobrust_coil_buffer_div_scalar(a: *mut u8, k: f64) ->
     unsafe { buffer_binop_scalar(a, k, "div", Array::true_div) }
 }
 
+/// Shared body for the REVERSED `k ⊕ a` left-scalar shims (ADR-0077
+/// Phase-2/3). NumPy's `scalar ⊕ array` with a NON-commutative `⊕`
+/// (`-` / `/`) is `array([k]) ⊕ a` — the scalar is the LEFT operand, so
+/// `2 - a` is `2 - a[i]` (NOT `a[i] - 2`) and `6 / a` is `6 / a[i]`. The
+/// twin [`buffer_binop_scalar`] is the RIGHT-scalar form (`a ⊕ k` =
+/// `a ⊕ array([k])`); the ONLY difference here is operand ORDER: we
+/// materialise `k` as a length-1 `Float64` buffer and call `f(&k_buf, a)`
+/// (LHS = the scalar), reusing the SAME broadcast-aware array-array kernel
+/// `f`. Commutative ops (`+` / `*`) do NOT route here — they reuse the
+/// right-scalar `*_scalar` shims directly (the MIR retarget maps `k + a`
+/// onto `add_scalar`, ADR-0077 §"left-scalar"). The (1,)-vs-(N,) broadcast
+/// is always compatible, so the only abort the kernel can take is
+/// `Array::true_div`-internal (never — IEEE is total).
+///
+/// `k` is the scalar as `f64` (the `.cb`-side int / float literal is cast
+/// to `f64` at MIR-retarget time, mirroring the right-scalar contract).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped).
+unsafe fn buffer_binop_scalar_rev(
+    a: *mut u8,
+    k: f64,
+    op_name: &str,
+    f: fn(&Array, &Array) -> Result<Array, crate::error::NumpyError>,
+) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.Buffer left-scalar operator: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only —
+    // not reboxed / freed; the `.cb` scope still owns + drops it.
+    let rhs: &Array = unsafe { &*a.cast::<Array>() };
+    // The scalar as a 1-element f64 array — numpy's `k ⊕ a` IS `[k] ⊕ a`.
+    let lhs = array_f64(&[k], &[1]).unwrap_or_else(|e| {
+        coil_panic(&format!("coil.Buffer left-scalar {op_name}: {}", e.message));
+    });
+    // Operand ORDER is the whole point: the scalar buffer is the LEFT arg.
+    let out = match f(&lhs, rhs) {
+        Ok(arr) => arr,
+        Err(e) => coil_panic(&format!("coil.Buffer left-scalar {op_name}: {}", e.message)),
+    };
+    Box::into_raw(Box::new(out)).cast::<u8>()
+}
+
+/// `k - a` (python scalar - Buffer) → fresh `Buffer`. REVERSED subtract:
+/// every element becomes `k - a[i]` (NOT `a[i] - k` — that is the
+/// right-scalar `_sub_scalar`). ADR-0077 Phase-2/3 left-scalar surface.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_add_scalar`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_rsub_scalar(a: *mut u8, k: f64) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop_scalar_rev(a, k, "rsub", Array::sub) }
+}
+
+/// `k / a` (python scalar / Buffer) → fresh `Buffer`. REVERSED numpy
+/// **true division**: every element becomes `k / a[i]` (NOT `a[i] / k`).
+/// `/ 0` is IEEE `±inf` / `NaN`, never a trap. ADR-0077 Phase-2/3.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_add_scalar`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_rdiv_scalar(a: *mut u8, k: f64) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop_scalar_rev(a, k, "rdiv", Array::true_div) }
+}
+
+// ---- ADR-0077 Phase-2/3 — buffer-buffer COMPARISON ops -------------
+// `a cmp b` (cmp ∈ <, <=, >, >=, ==, !=) → a fresh `Buffer` of dtype
+// Bool (numpy semantics — an element-wise mask, NOT a Cobrust bool
+// scalar; ADR-0077 §"comparison-returns-Bool-Buffer"). Each forwards
+// through the SAME broadcast-aware shared `buffer_binop` body the
+// arithmetic ops use, onto the runtime `Array::{lt,le,gt,ge,eq_,ne_}`
+// kernels (array.rs:210-259), which ALWAYS return a `Dtype::Bool`
+// array. The owned handle is dropped once by the `.cb` scope. Note the
+// runtime method names: `eq_` / `ne_` carry a trailing underscore (the
+// `eq`/`ne` idents collide with the `PartialEq` trait); `lt`/`le`/`gt`/
+// `ge` do not.
+
+/// `a < b` → fresh Bool-dtype `Buffer` (element-wise less-than mask).
+///
+/// # Safety
+///
+/// `a`, `b` must be live `Buffer` handles. Returns an owned handle the
+/// `.cb` caller drops once via `__cobrust_coil_buffer_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_lt(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop(a, b, "lt", Array::lt) }
+}
+
+/// `a <= b` → fresh Bool-dtype `Buffer` (less-than-or-equal mask).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_lt`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_le(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop(a, b, "le", Array::le) }
+}
+
+/// `a > b` → fresh Bool-dtype `Buffer` (greater-than mask).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_lt`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_gt(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop(a, b, "gt", Array::gt) }
+}
+
+/// `a >= b` → fresh Bool-dtype `Buffer` (greater-than-or-equal mask).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_lt`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_ge(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop(a, b, "ge", Array::ge) }
+}
+
+/// `a == b` → fresh Bool-dtype `Buffer` (element-wise equality mask).
+/// NumPy semantics: `==` on two arrays is an ELEMENT-WISE mask, NOT a
+/// single bool (`np.array([1,2]) == np.array([1,3]) → [True, False]`).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_lt`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_eq(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation. `Array::eq_` (trailing `_`
+    // avoids the `PartialEq::eq` ident clash) returns a Bool array.
+    unsafe { buffer_binop(a, b, "eq", Array::eq_) }
+}
+
+/// `a != b` → fresh Bool-dtype `Buffer` (element-wise inequality mask).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_lt`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_ne(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation. `Array::ne_` returns a Bool
+    // array.
+    unsafe { buffer_binop(a, b, "ne", Array::ne_) }
+}
+
 /// `a[i]` scalar read → `f64` (ADR-0077 Q2). BORROWS the handle.
 /// Bounds-checked on the first axis (numpy-style negative indices
 /// allowed via `index_single`); an out-of-bounds index aborts via

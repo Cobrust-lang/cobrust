@@ -1259,12 +1259,16 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
 /// result type the MIR `lower_bin` Buffer guard retargets onto, or
 /// `None` when the operator is not overloaded for the handle.
 ///
-/// Phase 1 (ADR-0077 §3/§8) ships `coil.Buffer` `+` / `-` / `*` only —
-/// same-shape, f64-only, elementwise. `/` / `%` / `**` / `@` and the
-/// scalar-broadcast forms (`a + 1`) are explicit §12 deferrals and
-/// return `None` here so `synth_bin` rejects them with a clear "operator
-/// not yet supported on coil.Buffer" diagnostic rather than silently
-/// admitting them.
+/// Phase 1 (ADR-0077 §3/§8) shipped `coil.Buffer` `+` / `-` / `*`; the
+/// Phase-1 completion added `/` (true-division). ADR-0077 Phase-2/3 adds
+/// the six element-wise COMPARISON operators `<` / `<=` / `>` / `>=` /
+/// `==` / `!=` — note these still return a **`coil.Buffer`** (a NumPy
+/// Bool-dtype mask), NOT a Cobrust `bool` scalar (the runtime
+/// `Array::{lt,le,gt,ge,eq_,ne_}` kernels always yield `Dtype::Bool`).
+/// `//` / `%` / `**` / `@` remain explicit §12 deferrals and return
+/// `None` here so `synth_bin` rejects them with a clear "operator not yet
+/// supported on coil.Buffer" diagnostic rather than silently admitting
+/// them.
 ///
 /// The implicit receiver is the LHS (mirroring `lookup_handle_method`'s
 /// receiver-is-implicit convention); the single `params` slot is the
@@ -1315,6 +1319,53 @@ pub fn lookup_buffer_binop(receiver: &Ty, op: BinOp) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // ADR-0077 Phase-2/3 — element-wise COMPARISON `a cmp b`. The
+        // result is a `coil.Buffer` of dtype Bool (a NumPy mask), NOT a
+        // Cobrust `bool` scalar: `np.array([1,2,3]) < np.array([2,2,2])`
+        // is `array([True, False, False])`. `ret` is `coil_buffer_ty()`
+        // because the static handle type carries no dtype (the
+        // dtype-parameterized `Ty::Adt(COIL_BUFFER_ADT, [Bool])` is a §12
+        // deferral). Each forwards to `__cobrust_coil_buffer_<cmp>`,
+        // wrapping `Array::{lt,le,gt,ge,eq_,ne_}` through the shared
+        // broadcast-aware shim. NOTE: the `synth_bin` COMPARISON arm (not
+        // the arithmetic arm) hosts the typecheck guard for these — `<`
+        // etc. are matched separately from `+`/`-`/`*`/`/` there.
+        (COIL_BUFFER_ADT, BinOp::Lt) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_lt",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        (COIL_BUFFER_ADT, BinOp::LtEq) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_le",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        (COIL_BUFFER_ADT, BinOp::Gt) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_gt",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        (COIL_BUFFER_ADT, BinOp::GtEq) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_ge",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        (COIL_BUFFER_ADT, BinOp::Eq) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_eq",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        (COIL_BUFFER_ADT, BinOp::NotEq) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_ne",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -1337,6 +1388,41 @@ pub fn lookup_buffer_scalar_binop(op: BinOp) -> Option<&'static str> {
         BinOp::Sub => Some("__cobrust_coil_buffer_sub_scalar"),
         BinOp::Mul => Some("__cobrust_coil_buffer_mul_scalar"),
         BinOp::Div => Some("__cobrust_coil_buffer_div_scalar"),
+        _ => None,
+    }
+}
+
+/// The runtime symbol a `coil.Buffer` **LEFT-scalar** arithmetic op
+/// (`k ⊕ a`, scalar on the LEFT) retargets onto (ADR-0077 Phase-2/3 —
+/// the mirror of [`lookup_buffer_scalar_binop`]'s right-scalar `a ⊕ k`).
+///
+/// The dispatch turns on whether `⊕` COMMUTES:
+/// - `+` / `*` commute (`k + a == a + k`, `k * a == a * k`), so they
+///   reuse the EXISTING right-scalar shims — no new C-ABI symbol.
+/// - `-` / `/` do NOT commute (`k - a != a - k`); they need a REVERSED
+///   shim that computes `k - a[i]` / `k / a[i]` (NOT the right-scalar
+///   `a[i] - k`). These map onto the dedicated
+///   `__cobrust_coil_buffer_{rsub,rdiv}_scalar` shims, which materialise
+///   `k` as a length-1 buffer on the LEFT and reuse the array-array
+///   kernel (cabi `buffer_binop_scalar_rev`). Keeping the `(ptr, f64) ->
+///   ptr` ABI shape (same `coil_scalar_binop_ty` codegen extern) — only
+///   the operand order inside the shim flips — is why a reversed shim is
+///   cleaner than re-materialising `k` as a buffer at MIR-retarget time
+///   and routing through the array-array kernel (which would force the
+///   scalar onto the `(ptr, ptr)` path + a fresh handle to drop).
+///
+/// Returns `None` for any non-arithmetic op (the left-scalar surface is
+/// the four element-wise binops only — comparison `k < a` is a §12
+/// deferral, tracked with the right-scalar `a < 1` deferral).
+#[must_use]
+pub fn lookup_buffer_left_scalar_binop(op: BinOp) -> Option<&'static str> {
+    match op {
+        // Commutative — reuse the right-scalar shims verbatim.
+        BinOp::Add => Some("__cobrust_coil_buffer_add_scalar"),
+        BinOp::Mul => Some("__cobrust_coil_buffer_mul_scalar"),
+        // Non-commutative — REVERSED shims (`k - a[i]` / `k / a[i]`).
+        BinOp::Sub => Some("__cobrust_coil_buffer_rsub_scalar"),
+        BinOp::Div => Some("__cobrust_coil_buffer_rdiv_scalar"),
         _ => None,
     }
 }
@@ -2334,5 +2420,108 @@ mod tests {
         assert!(fnty.var_positional.is_none());
         assert!(fnty.var_keyword.is_none());
         assert_eq!(*fnty.return_ty, Ty::Int);
+    }
+
+    // ---- ADR-0077 Phase-2/3 — left-scalar + buffer comparison --------
+
+    #[test]
+    fn left_scalar_commutative_ops_reuse_right_scalar_shims() {
+        // `k + a == a + k`, `k * a == a * k` — the LEFT-scalar form reuses
+        // the EXISTING right-scalar shims (no new C-ABI symbol).
+        assert_eq!(
+            lookup_buffer_left_scalar_binop(BinOp::Add),
+            Some("__cobrust_coil_buffer_add_scalar")
+        );
+        assert_eq!(
+            lookup_buffer_left_scalar_binop(BinOp::Mul),
+            Some("__cobrust_coil_buffer_mul_scalar")
+        );
+    }
+
+    #[test]
+    fn left_scalar_noncommutative_ops_use_reversed_shims() {
+        // `k - a != a - k`, `k / a != a / k` — the LEFT-scalar form needs
+        // the REVERSED shims (`k - a[i]` / `k / a[i]`), DISTINCT from the
+        // right-scalar `_sub_scalar` / `_div_scalar`.
+        assert_eq!(
+            lookup_buffer_left_scalar_binop(BinOp::Sub),
+            Some("__cobrust_coil_buffer_rsub_scalar")
+        );
+        assert_eq!(
+            lookup_buffer_left_scalar_binop(BinOp::Div),
+            Some("__cobrust_coil_buffer_rdiv_scalar")
+        );
+        // The reversed symbols are NOT the right-scalar ones — the whole
+        // point of the left-scalar `-`/`/` is the flipped operand order.
+        assert_ne!(
+            lookup_buffer_left_scalar_binop(BinOp::Sub),
+            lookup_buffer_scalar_binop(BinOp::Sub)
+        );
+        assert_ne!(
+            lookup_buffer_left_scalar_binop(BinOp::Div),
+            lookup_buffer_scalar_binop(BinOp::Div)
+        );
+    }
+
+    #[test]
+    fn left_scalar_rejects_non_arithmetic_ops() {
+        // The left-scalar surface is the four arithmetic ops only —
+        // comparison `k < a` is a §12 deferral.
+        assert!(lookup_buffer_left_scalar_binop(BinOp::Mod).is_none());
+        assert!(lookup_buffer_left_scalar_binop(BinOp::Pow).is_none());
+        assert!(lookup_buffer_left_scalar_binop(BinOp::FloorDiv).is_none());
+        assert!(lookup_buffer_left_scalar_binop(BinOp::Lt).is_none());
+        assert!(lookup_buffer_left_scalar_binop(BinOp::Eq).is_none());
+        assert!(lookup_buffer_left_scalar_binop(BinOp::MatMul).is_none());
+    }
+
+    #[test]
+    fn buffer_comparison_ops_resolve_to_bool_buffer_symbols() {
+        // `a cmp b` resolves through the SAME `lookup_buffer_binop` path
+        // as `+`/`-`/`*`/`/`, mapping the six comparison ops onto the
+        // `__cobrust_coil_buffer_{lt,le,gt,ge,eq,ne}` shims. The `ret` is
+        // `coil_buffer_ty()` (a NumPy Bool-dtype mask — the static handle
+        // carries no dtype), NOT `Ty::Bool`.
+        let cases = [
+            (BinOp::Lt, "__cobrust_coil_buffer_lt"),
+            (BinOp::LtEq, "__cobrust_coil_buffer_le"),
+            (BinOp::Gt, "__cobrust_coil_buffer_gt"),
+            (BinOp::GtEq, "__cobrust_coil_buffer_ge"),
+            (BinOp::Eq, "__cobrust_coil_buffer_eq"),
+            (BinOp::NotEq, "__cobrust_coil_buffer_ne"),
+        ];
+        for (op, sym) in cases {
+            let sig = lookup_buffer_binop(&coil_buffer_ty(), op)
+                .unwrap_or_else(|| panic!("comparison op {op:?} must resolve on coil.Buffer"));
+            assert_eq!(sig.runtime_symbol, sym, "wrong symbol for {op:?}");
+            assert_eq!(
+                sig.ret,
+                coil_buffer_ty(),
+                "comparison must return a (Bool-dtype) coil.Buffer, not a scalar bool"
+            );
+            assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        }
+    }
+
+    #[test]
+    fn buffer_comparison_resolves_behind_shared_borrow() {
+        // `&a < &b` (the LLM-idiomatic explicit-borrow form, ADR-0052a)
+        // resolves identically to the bare `a < b` form.
+        let sig = lookup_buffer_binop(&Ty::Ref(Box::new(coil_buffer_ty())), BinOp::Lt)
+            .expect("comparison resolves behind &borrow");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_buffer_lt");
+    }
+
+    #[test]
+    fn buffer_binop_still_rejects_unsupported_ops() {
+        // The op-set boundary: `//`/`%`/`**`/`@` remain §12 deferrals —
+        // adding comparison must NOT blanket-accept every operator.
+        assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::FloorDiv).is_none());
+        assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::Mod).is_none());
+        assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::Pow).is_none());
+        assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::MatMul).is_none());
+        // The four arithmetic ops are still mapped (no regression).
+        assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::Add).is_some());
+        assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::Div).is_some());
     }
 }

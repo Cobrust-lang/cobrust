@@ -3070,6 +3070,40 @@ impl Ctx {
                         return Ok(crate::ecosystem::coil_buffer_ty());
                     }
                 }
+                // ADR-0077 Phase-2/3 — LEFT-scalar `k ⊕ a` (`2 * a` /
+                // `6 / a` / `1 + a` / `2 - a`). The MIRROR of the
+                // right-scalar block above: NumPy broadcasts a scalar on
+                // EITHER side, and `2 * a` is the form numpy users write
+                // (§2.5 training-data-overlap). This runs BEFORE `unify`
+                // for the same reason — an Int LHS never unifies with a
+                // Buffer RHS, so `2 * a` would otherwise fail at `unify`.
+                // The LHS must resolve to a numeric scalar (`Ty::Int` /
+                // `Ty::Float`, bare or `&`-borrowed), the RHS to the
+                // Buffer handle, and the op must have a left-scalar shim
+                // (`lookup_buffer_left_scalar_binop` — the four
+                // arithmetic ops; `+`/`*` commute onto the right-scalar
+                // shims, `-`/`/` use REVERSED shims so `2 - a` is
+                // `2 - a[i]` not `a[i] - 2`). The MIR `lower_bin` guard
+                // retargets accordingly. A non-Buffer RHS does NOT match
+                // here and falls through to `unify` (so `1 + s` with
+                // `s: str` is still a type error).
+                let lt_scalar = match &lt_resolved {
+                    Ty::Ref(inner) => inner.as_ref().clone(),
+                    other => other.clone(),
+                };
+                if matches!(lt_scalar, Ty::Int | Ty::Float)
+                    && crate::ecosystem::lookup_buffer_left_scalar_binop(op).is_some()
+                {
+                    let rt_resolved = self.subst.apply(&rt);
+                    let rt_handle = match &rt_resolved {
+                        Ty::Ref(inner) => inner.as_ref().clone(),
+                        other => other.clone(),
+                    };
+                    if matches!(&rt_handle, Ty::Adt(id, _) if *id == crate::ecosystem::COIL_BUFFER_ADT)
+                    {
+                        return Ok(crate::ecosystem::coil_buffer_ty());
+                    }
+                }
                 unify(&lt, &rt, &mut self.subst, span)?;
                 let resolved = self.subst.apply(&lt);
                 // ADR-0077 Q1 — `coil.Buffer` operator dispatch (the FIRST
@@ -3101,10 +3135,12 @@ impl Ctx {
                         actual: handle_ty,
                         span,
                         suggestion: Some(
-                            "operator not yet supported on coil.Buffer — supported elementwise \
-                             operators are `+`, `-`, `*`, `/` (broadcasting; `/` is numpy \
-                             true-division); use `coil.Buffer + coil.Buffer` with one of those, \
-                             or a scalar `coil.Buffer + 1`",
+                            "operator not yet supported on coil.Buffer — supported operators are \
+                             the elementwise arithmetic `+`, `-`, `*`, `/` (broadcasting; `/` is \
+                             numpy true-division) and the elementwise comparison `<`, `<=`, `>`, \
+                             `>=`, `==`, `!=` (each yields a bool-dtype coil.Buffer mask); `//`, \
+                             `%`, `**`, and `@` (matmul) are not yet supported. Use one of those, \
+                             or a scalar form like `coil.Buffer + 1` / `2 * coil.Buffer`",
                         ),
                     });
                 }
@@ -3133,6 +3169,63 @@ impl Ctx {
                 Ok(Ty::Int)
             }
             BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
+                // ADR-0077 Phase-2/3 — `coil.Buffer cmp coil.Buffer`
+                // (`a < b` / `a == b` / ...) is an ELEMENT-WISE comparison
+                // yielding a `coil.Buffer` of dtype Bool (a NumPy mask),
+                // NOT a Cobrust `bool` scalar: `np.array([1,2,3]) <
+                // np.array([2,2,2])` is `array([True, False, False])`.
+                // This MUST run BEFORE the `unify` below: a Buffer DOES
+                // unify with a Buffer (both `coil.Buffer`), so without this
+                // guard the arm would fall through to `Ok(Ty::Bool)` and
+                // mis-type the result as a scalar bool (which would then
+                // mis-compile — codegen's comparison arm assumes int
+                // operands). Both operands must resolve to the Buffer
+                // handle (bare or `&`-borrowed); the op must be one of the
+                // six comparison ops `lookup_buffer_binop` now maps
+                // (`Lt`/`LtEq`/`Gt`/`GtEq`/`Eq`/`NotEq` →
+                // `__cobrust_coil_buffer_{lt,le,gt,ge,eq,ne}`). The MIR
+                // `lower_bin` Buffer guard (the SAME `lookup_buffer_binop`
+                // path as `+`/`-`/`*`/`/`) retargets it. A Buffer-vs-SCALAR
+                // comparison (`a < 1`) is a §12 deferral; rather than let it
+                // fall to the generic `unify` "expected Adt, found i64"
+                // (which does NOT print a FIX — a §2.5-B miss), we detect a
+                // Buffer on EITHER side and emit a fix-printing diagnostic.
+                let lt_resolved = self.subst.apply(&lt);
+                let lt_handle = match &lt_resolved {
+                    Ty::Ref(inner) => inner.as_ref().clone(),
+                    other => other.clone(),
+                };
+                let rt_resolved = self.subst.apply(&rt);
+                let rt_handle = match &rt_resolved {
+                    Ty::Ref(inner) => inner.as_ref().clone(),
+                    other => other.clone(),
+                };
+                let lt_is_buf = matches!(&lt_handle, Ty::Adt(id, _) if *id == crate::ecosystem::COIL_BUFFER_ADT);
+                let rt_is_buf = matches!(&rt_handle, Ty::Adt(id, _) if *id == crate::ecosystem::COIL_BUFFER_ADT);
+                if lt_is_buf
+                    && rt_is_buf
+                    && crate::ecosystem::lookup_buffer_binop(&lt_handle, op).is_some()
+                {
+                    return Ok(crate::ecosystem::coil_buffer_ty());
+                }
+                if lt_is_buf || rt_is_buf {
+                    // One operand is a Buffer, the other is not (e.g.
+                    // `a < 1`). Buffer-vs-scalar comparison is a §12
+                    // deferral — print the FIX (§2.5-B), not the bare
+                    // unify mismatch.
+                    return Err(TypeError::TypeMismatch {
+                        expected: crate::ecosystem::coil_buffer_ty(),
+                        actual: if lt_is_buf { rt_handle } else { lt_handle },
+                        span,
+                        suggestion: Some(
+                            "comparing a coil.Buffer with a scalar is not yet supported — \
+                             comparison operators (`<`, `<=`, `>`, `>=`, `==`, `!=`) currently \
+                             require BOTH operands to be a coil.Buffer (yielding a bool-dtype \
+                             mask); compare against a same-shape buffer, e.g. `a < b` or \
+                             `a < coil.zeros(a.size)`",
+                        ),
+                    });
+                }
                 unify(&lt, &rt, &mut self.subst, span)?;
                 Ok(Ty::Bool)
             }

@@ -532,9 +532,20 @@ trade in the design, documented for audit.
 > `a * 2` / `a / 2`: a `synth_bin` arm admits `Buffer ⊕ Int/Float`, the MIR
 > retargets to `__cobrust_coil_buffer_<op>_scalar(a, k: f64)` reusing the
 > length-1-broadcast kernel). See `docs/agent/modules/coil.md` §"true-division
-> `a / b` + scalar `a ⊕ k`" for the full impl map. Still deferred: `//`
-> (floor-division — `a // b` rejects), `@` matmul, comparison→bool-Buffer,
-> the fallible `a.checked_add` escape, dtype-parameterized handle.
+> `a / b` + scalar `a ⊕ k`" for the full impl map.
+>
+> **Phase-2/3 update (this commit):** two MORE surfaces below have since
+> SHIPPED — **left-scalar `k ⊕ a`** (`2 * a` / `6 / a` / `1 + a` / `2 - a`:
+> the scalar on the LHS; `+`/`*` commute onto the right-scalar shims, `-`/`/`
+> use REVERSED shims `__cobrust_coil_buffer_{rsub,rdiv}_scalar` so `2 - a` is
+> `2 - a[i]` not `a[i] - 2`) and **buffer-buffer comparison `a cmp b`** (`<`
+> `<=` `>` `>=` `==` `!=` → a Bool-dtype `coil.Buffer` mask, via the SAME
+> `lookup_buffer_binop` path as the arithmetic ops →
+> `__cobrust_coil_buffer_{lt,le,gt,ge,eq,ne}` → `Array::{lt,le,gt,ge,eq_,ne_}`).
+> See the **Phase-2/3** section below for the full design + worked examples.
+> Still deferred: `//` (floor-division — `a // b` rejects), `@` matmul,
+> buffer-vs-SCALAR comparison (`a < 1`), the fallible `a.checked_add` escape,
+> dtype-parameterized handle.
 
 Deferred surfaces, each warranting its own design pass when reached:
 
@@ -549,8 +560,8 @@ Deferred surfaces, each warranting its own design pass when reached:
   `synth_bin` arm admitting `Buffer ⊕ Int/Float` + MIR retarget onto
   `__cobrust_coil_buffer_<op>_scalar(a, k: f64)` (scalar materialised as a
   length-1 buffer, reusing the array-array broadcast kernel). Covers
-  `+`/`-`/`*`/`/`. (Left-scalar `2 * a` — scalar on the LHS — is still a
-  later extension; today the buffer must be the LHS.)
+  `+`/`-`/`*`/`/`. **Left-scalar `2 * a` (scalar on the LHS) SHIPPED in
+  Phase-2/3** — see the Phase-2/3 section.
 - **ufunc broadcasting rules** — full numpy broadcasting semantics (trailing-dim
   alignment, dim-1 stretch); Phase 2 does the common cases, the full ruleset is its own
   spec.
@@ -561,12 +572,206 @@ Deferred surfaces, each warranting its own design pass when reached:
 - **dtype-parameterized `Ty::Adt`** — `Ty::Adt(COIL_BUFFER_ADT, [dtype])` to recover
   compile-time dtype-mismatch catch (the §11 §2.5-deficit mitigation). Touches the type
   system broadly; major sub-ADR.
-- **Comparison operators returning a bool `Buffer`** — `a < b` → element-wise bool mask.
-  numpy returns a bool array; Cobrust would need a bool-dtype Buffer. Deferred.
+- ~~**Comparison operators returning a bool `Buffer`** — `a < b` → element-wise bool mask.~~
+  **SHIPPED (Phase-2/3)**: the six `<`/`<=`/`>`/`>=`/`==`/`!=` route through
+  the SAME `lookup_buffer_binop` path as `+`/`-`/`*`/`/`, returning a
+  `coil.Buffer` of dtype Bool. See the Phase-2/3 section. (Buffer-vs-SCALAR
+  comparison `a < 1` remains deferred — rejected with a §2.5 fix.)
 - **`@` matmul operator** — `a @ b`. `HirBinOp::MatMul` / `BinOp::MatMul` already exist
   (lower.rs:2435) and currently reject; a Buffer arm could route `@` to
   `__cobrust_coil_buffer_matmul` exactly like `+`. Natural Phase-2/3 extension once
   `dot` lands (they share the runtime).
+
+## Phase-2/3 — left-scalar `k ⊕ a` + buffer-buffer comparison `a cmp b`
+
+Two additions to the `coil.Buffer` operator surface, both reusing the EXISTING
+`cobrust-coil` runtime (zero new numerics). They extend the precedented
+Phase-1 / Phase-1-completion mechanism (typecheck `synth_bin` guard → MIR
+`lower_bin` retarget-to-`Call` → cabi shim → `Array` kernel), so codegen's
+`lower_binop` is still never reached for a `coil.Buffer` (ADR-0077 §1.1) — only
+new extern declarations.
+
+### (A) Left-scalar `k ⊕ a` — the mirror of right-scalar `a ⊕ k`
+
+The Phase-1 completion shipped the RIGHT-scalar form `a ⊕ k` (buffer on the
+left). Phase-2/3 adds the LEFT-scalar form `k ⊕ a` (scalar on the left), which
+is the form numpy users actually write (`2 * a`, `6 / a`) — a §2.5
+training-data-overlap win.
+
+**The commute / reverse split (the design decision):**
+
+| op | commutes? | `k ⊕ a` retargets onto | computes |
+|----|-----------|------------------------|----------|
+| `+` | yes (`k + a == a + k`) | `__cobrust_coil_buffer_add_scalar(a, k)` *(reused)* | `a[i] + k` |
+| `*` | yes (`k * a == a * k`) | `__cobrust_coil_buffer_mul_scalar(a, k)` *(reused)* | `a[i] * k` |
+| `-` | **no** (`k - a != a - k`) | `__cobrust_coil_buffer_rsub_scalar(a, k)` *(new)* | `k - a[i]` |
+| `/` | **no** (`k / a != a / k`) | `__cobrust_coil_buffer_rdiv_scalar(a, k)` *(new)* | `k / a[i]` |
+
+- **`+` / `*` commute**, so the left-scalar form REUSES the existing
+  right-scalar shims verbatim — no new C-ABI symbol. `lookup_buffer_left_scalar_binop`
+  returns the SAME `*_scalar` symbol; the MIR retarget passes the buffer as the
+  handle arg and the scalar as `k: f64`.
+- **`-` / `/` do NOT commute.** Reversing them needs the scalar on the LEFT of
+  the kernel. **Decision: add two REVERSED shims** `__cobrust_coil_buffer_{rsub,
+  rdiv}_scalar(a, k: f64)` rather than re-materialise `k` as a length-1 buffer
+  at MIR-retarget time and route through the `(ptr, ptr)` array-array kernel.
+  Rationale:
+  - the reversed shim keeps the SAME `(ptr, f64) -> ptr` C-ABI shape as the
+    right-scalar shims, so it reuses the existing `coil_scalar_binop_ty` codegen
+    extry — only the operand order INSIDE the shim flips
+    (`buffer_binop_scalar_rev` calls `f(&array([k]), a)` instead of
+    `f(a, &array([k]))`);
+  - the alternative (materialise `k` as a buffer at MIR time + array-array
+    kernel) would force the scalar onto the `(ptr, ptr)` path AND mint a fresh
+    `k`-buffer handle the `.cb` scope must then drop — strictly more MIR + a
+    drop-schedule complication for no benefit.
+
+  The reversed shims forward to the SAME broadcast-aware array-array kernels
+  (`Array::sub` / `Array::true_div`) the rest of the surface uses, just with the
+  scalar buffer as the LEFT operand — so `/` is still numpy true-division
+  (`k / 0 → IEEE inf`, never a trap) and broadcasting is free.
+
+**Typecheck:** a new block in the `synth_bin` ARITHMETIC arm (mirror of the
+right-scalar block), running BEFORE `unify`: LHS resolves to a numeric
+`Int`/`Float` (bare or `&`-borrowed), RHS to the `COIL_BUFFER_ADT` handle, op
+has a left-scalar shim → returns `coil_buffer_ty()`. A non-Buffer RHS does NOT
+match (so `1 + s` with `s: str` still falls through to `unify` and is rejected).
+
+**Worked examples** (oracle: numpy 2.0.2):
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(2.0, 4.0)   # [2, 4]
+    let s: coil.Buffer = 2 - a                      # REVERSED: [2-2, 2-4] = [0, -2]
+    let d: coil.Buffer = 6 / a                       # REVERSED: [6/2, 6/4] = [3.0, 1.5]
+    let m: coil.Buffer = 3 * a                       # commutes:  [6, 12]
+    let p: coil.Buffer = 1 + a                       # commutes:  [3, 5]
+    return 0
+```
+
+The verifying obligation `2 - a == [2 - a[i]]` (NOT `[a[i] - 2]`) and
+`6 / a == [6 / a[i]]` is pinned by `coil_left_scalar_e2e::
+test_e2e_left_scalar_{sub,div}_is_reversed` (values chosen so the reversed and
+the wrong right-scalar results are distinguishable).
+
+### (B) Buffer-buffer comparison `a cmp b` → a Bool-dtype `coil.Buffer`
+
+The six comparison operators `<` / `<=` / `>` / `>=` / `==` / `!=` on two
+`coil.Buffer`s.
+
+**The load-bearing semantic — NumPy mask, NOT a Cobrust bool scalar.** `a < b`
+on two arrays is ELEMENT-WISE and yields a `coil.Buffer` of dtype **Bool** (a
+mask), NOT a single Cobrust `bool`: `np.array([1,5]) < np.array([3,2])` is
+`array([True, False])`, not `False`. The result is bindable as `let m:
+coil.Buffer = a < b` and prints `array([True, False], dtype=bool)`.
+
+This is why the typecheck guard lives in the **COMPARISON arm** of `synth_bin`
+(not the arithmetic arm), returning `coil_buffer_ty()` instead of the usual
+`Ty::Bool`. Critically it runs BEFORE `unify`: a `coil.Buffer` DOES unify with a
+`coil.Buffer` (same type), so without the guard the arm would fall through to
+`Ok(Ty::Bool)` and mis-type the mask as a scalar bool — which would then
+mis-compile (codegen's comparison arm assumes int operands). The `ret` is
+`coil_buffer_ty()` because the static handle carries no dtype; the
+dtype-parameterized `Ty::Adt(COIL_BUFFER_ADT, [Bool])` that would let the type
+system distinguish a bool-mask buffer from a float buffer is a §12 deferral.
+
+**Mechanism reuse.** The six ops are added directly to `lookup_buffer_binop`
+(the SAME manifest table as `+`/`-`/`*`/`/`), mapping
+`Lt`/`LtEq`/`Gt`/`GtEq`/`Eq`/`NotEq` → `__cobrust_coil_buffer_{lt,le,gt,ge,eq,ne}`.
+Because the MIR `lower_bin` Buffer guard already keys on `(lhs_ty, op)` through
+`lookup_buffer_binop`, comparison ops retarget AUTOMATICALLY once the manifest
+row exists — they reach that guard unintercepted (the `str ==` guard is gated on
+`Ty::Str`; the Dict `in`/`not in` guard on `In`/`NotIn`), so no separate MIR arm
+is needed. The cabi shims forward through the SAME shared broadcast-aware
+`buffer_binop` body onto `Array::{lt,le,gt,ge,eq_,ne_}` (array.rs:210-259), which
+ALWAYS return a `Dtype::Bool` array. (Note the runtime method names: `eq_`/`ne_`
+carry a trailing underscore — the bare `eq`/`ne` idents collide with
+`PartialEq`; `lt`/`le`/`gt`/`ge` do not.)
+
+**Worked example** (oracle: numpy 2.0.2):
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(1.0, 5.0)
+    let b: coil.Buffer = coil.array1d2(3.0, 2.0)
+    let lt: coil.Buffer = a < b      # [1<3, 5<2] = [True, False]  (dtype=bool)
+    let eq: coil.Buffer = a == b     # [1==3, 5==2] = [False, False] — ELEMENT-WISE, not a scalar
+    let ne: coil.Buffer = a != b     # [True, True]
+    let _ = coil.print_buffer(lt)    # -> array([True, False], dtype=bool)
+    return 0
+```
+
+Comparison broadcasts like the arithmetic ops (it shares `buffer_binop`):
+`coil.mgrid(0,3) < coil.ones(1)` broadcasts `(3,)` vs `(1,)` →
+`[True, False, False]`. Pinned by `coil_compare_e2e` (one positive per op, a
+broadcast case, the explicit-borrow `&a < &b` form, and the `==`-is-a-mask
+discriminator).
+
+### Out of scope (follow-ups, NOT implemented in Phase-2/3)
+
+- **Buffer-vs-SCALAR comparison** — `a < 1` (array vs python scalar → a mask
+  comparing every element to the scalar). NOT shipped. The comparison guard
+  detects a Buffer on EITHER side with a non-Buffer other operand and rejects
+  with a §2.5-B **fix-printing** diagnostic ("comparing a coil.Buffer with a
+  scalar is not yet supported … compare against a same-shape buffer, e.g.
+  `a < b`"), rather than the bare `unify` "expected Adt, found i64". The natural
+  sibling of the (shipped) Buffer⊕scalar ARITHMETIC form; a later increment adds
+  a scalar shim + the typecheck admit. Pinned (as a NEGATIVE) by
+  `coil_compare_e2e::test_neg_buffer_vs_scalar_compare_rejected_with_fix` +
+  `test_neg_scalar_vs_buffer_compare_rejected`.
+- **`@` matmul** — `a @ b`. Still rejects (now with the §2.5 reject naming the
+  full supported set: arithmetic `+`/`-`/`*`/`/` + comparison
+  `<`/`<=`/`>`/`>=`/`==`/`!=`, and listing `//`/`%`/`**`/`@` as unsupported).
+  `dot` (the method form) already lands the 1-D runtime; routing `@` to
+  `__cobrust_coil_buffer_matmul` is a natural next extension.
+
+### §2.5 — accurate FIX on every still-unsupported op
+
+Both deferrals above print the FIX, not just the diagnosis (§2.5-B). The
+arithmetic-arm reject (for `//`/`%`/`**`/`@`) was updated to name the comparison
+ops as supported (so it no longer misleads after Phase-2/3). Verified end-to-end:
+`a @ b`, `a // b`, `a < 1`, and `1 < a` each reject at exit 2 with a fix-printing
+`hint`.
+
+### Implementation map (Phase-2/3 touch-points)
+
+- `crates/cobrust-coil/src/cabi.rs` — `buffer_binop_scalar_rev` body + the two
+  reversed shims `__cobrust_coil_buffer_{rsub,rdiv}_scalar`; the six comparison
+  shims `__cobrust_coil_buffer_{lt,le,gt,ge,eq,ne}` (forwarding to
+  `Array::{lt,le,gt,ge,eq_,ne_}` through the shared `buffer_binop`).
+- `crates/cobrust-coil/src/array.rs` — UNCHANGED (the comparison kernels
+  already existed at 210-259; reversed `-`/`/` reuse `sub`/`true_div`).
+- `crates/cobrust-types/src/ecosystem.rs` — six comparison arms in
+  `lookup_buffer_binop`; the new `lookup_buffer_left_scalar_binop` helper
+  (commute → reuse `*_scalar`; non-commute → `r*_scalar`); 6 unit tests.
+- `crates/cobrust-types/src/check.rs` — left-scalar block in the `synth_bin`
+  arithmetic arm; Buffer-buffer guard in the comparison arm (+ the
+  Buffer-vs-scalar §2.5 reject); the arithmetic-arm reject message now names
+  comparison.
+- `crates/cobrust-mir/src/lower.rs` — left-scalar retarget block in `lower_bin`
+  (buffer = handle, scalar = `k: f64`, commute/reversed symbol via
+  `lookup_buffer_left_scalar_binop`); comparison needs NO new arm (the existing
+  `lookup_buffer_binop` guard picks it up).
+- `crates/cobrust-codegen/src/llvm_backend.rs` — 2 reversed-scalar extern rows
+  (`coil_scalar_binop_ty`) + 6 comparison extern rows (`coil_binop_ty`).
+- `crates/cobrust-cli/tests/coil_left_scalar_e2e.rs` (8 tests) +
+  `crates/cobrust-cli/tests/coil_compare_e2e.rs` (10 tests) — the `.cb` E2E
+  proofs.
+
+> **Flake note (build-harness, not code):** running TWO coil E2E binaries
+> concurrently can transiently fail with `ld: library 'libcoil.a' not found` —
+> a PRE-EXISTING race where `cobrust build`'s on-demand `cargo build -p
+> cobrust-coil` (build.rs Phase-2 path) truncates the staticlib mid-`clang` for
+> a sibling process. Reproduced on UNTOUCHED `coil_ops_e2e` + `coil_div_scalar_e2e`
+> too. The CI-authoritative path (the `COBRUST_ECOSYSTEM_ARCHIVE_COIL` env
+> override, build.rs:1059-1066) returns the prebuilt archive BEFORE the racy
+> cargo invocation → 100% stable. Sibling of the documented `libscale.a` race
+> (CI #26580282088, build.rs:1118). A wider lock fix is its own infra ADR, out
+> of scope here.
 
 ## 13. Consequences
 

@@ -192,6 +192,57 @@ The scalar may be an integer (`a + 1`) or a float (`a + 1.5`); an integer
 is promoted to a float automatically. A buffer combined with a *non-number*
 (e.g. `a + "x"`) is still a compile error.
 
+### Scalar on the *left*: `2 * a`, `6 / a` (and the catch with `-` and `/`)
+
+You can put the scalar on **either** side — `2 * a` works just like
+`a * 2`, exactly as you'd write it in numpy.
+
+```text
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(2.0, 4.0)   # [2, 4]
+    let p: coil.Buffer = 1 + a                      # [3, 5]   (same as a + 1)
+    let m: coil.Buffer = 3 * a                       # [6, 12]  (same as a * 3)
+    let s: coil.Buffer = 10 - a                      # [8, 6]   -> 10 - each, NOT each - 10
+    let d: coil.Buffer = 6 / a                       # [3, 1.5] -> 6 / each, NOT each / 6
+    return 0
+```
+
+The important catch: `+` and `*` **commute** (order doesn't matter), but
+`-` and `/` **do not**. `10 - a` means "10 minus each element"
+(`[10-2, 10-4] = [8, 6]`), NOT "each element minus 10". Likewise `6 / a`
+is "6 divided by each element" (`[6/2, 6/4] = [3, 1.5]`). Cobrust gets the
+direction right — it does not silently flip your operands.
+
+### Comparing two buffers: `a < b` gives a **mask**, not a single bool
+
+Comparing two buffers with `<`, `<=`, `>`, `>=`, `==`, `!=` is
+**element-wise**, exactly like numpy: the result is a *new buffer* of
+`True`/`False` values (a "boolean mask"), NOT a single `True`/`False`.
+
+```text
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(1.0, 5.0)
+    let b: coil.Buffer = coil.array1d2(3.0, 2.0)
+    let lt: coil.Buffer = a < b              # [1<3, 5<2] = [True, False]
+    let eq: coil.Buffer = a == b             # [1==3, 5==2] = [False, False]
+    let _ = coil.print_buffer(lt)            # array([True, False], dtype=bool)
+    return 0
+```
+
+Note the result type is `coil.Buffer` (a bool-dtype array), **not** a plain
+`bool`. That is why `a == b` does not collapse to a yes/no answer — it
+compares each pair of elements. Like the arithmetic operators, comparison
+**broadcasts** (`coil.mgrid(0, 3) < coil.ones(1)` → `[True, False, False]`).
+
+What is **not** supported yet: comparing a buffer with a *plain number*
+(`a < 1`). Cobrust rejects it at compile time with a message that tells you
+the fix — compare against a same-shape buffer instead (e.g. `a < b`). So is
+the `@` matrix-multiply operator.
+
 ### The broadcasting rule (numpy-exact)
 
 Cobrust uses the exact numpy rule. Align the two shapes from the
@@ -256,19 +307,18 @@ paying with a runtime check instead of a compile error.
 
 ## Today's limits
 
-- **Elementwise operators**: `a + b` / `a - b` / `a * b` DO compile and
-  now **broadcast** (ADR-0077 Phase 1 + Phase 3, see above). Still
-  unshipped: `a / b`, the `@` matmul operator, and comparison operators
-  (`a < b` → bool mask) — tracked in ADR-0077 §12.
-- **No scalar broadcast yet**: `a + 1` (Buffer ⊕ a bare scalar) does NOT
-  compile — only Buffer ⊕ Buffer broadcasts today (use a length-`1`
-  buffer, e.g. `a + coil.ones(1)`). The mixed-operand manifest entry is
-  a near-term follow-up.
-- **No slice / index-write**: `a[1:3]` (slice read) and `a[i] = v`
-  (index write) do NOT compile yet (scalar `a[i]` READ does). Tracked as
-  the remainder of the ADR-0077 Phase-2 bundle.
-- **No multi-handle methods**: `a.dot(b)` / `a.matmul(b)` etc do NOT
-  compile yet — needs the manifest to grow receiver-and-arg shapes.
+- **Elementwise operators**: `a + b` / `a - b` / `a * b` / `a / b` all
+  compile and **broadcast** (`/` is true division). The six comparison
+  operators (`a < b` … `a != b` → a bool mask) also compile (see above).
+  Still unshipped: the `@` matmul operator and the floor-division `//` —
+  tracked in ADR-0077 §12.
+- **Scalars work on either side**: `a + 1` / `a * 2` and `2 * a` / `6 / a`
+  all compile (numpy "array ⊕ scalar"). What is NOT supported is comparing
+  a buffer with a bare number — `a < 1` is rejected at compile time (with a
+  fix-message pointing you at `a < b`); use a same-shape buffer instead.
+- **No multi-handle methods beyond `dot`**: `a.dot(b)` compiles (1-D dot);
+  `a.matmul(b)` / the `@` operator do NOT yet — needs the manifest to grow
+  receiver-and-arg shapes.
 - **dtype is fixed to `float64`**: the first proof scopes to a single
   dtype to keep the wire surface minimal. A `coil.zeros(n, dtype)`
   shape with an explicit dtype tier is a follow-up.

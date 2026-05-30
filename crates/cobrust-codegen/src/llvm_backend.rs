@@ -3131,6 +3131,25 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_buffer_sub_scalar", coil_scalar_binop_ty, 2),
             ("__cobrust_coil_buffer_mul_scalar", coil_scalar_binop_ty, 2),
             ("__cobrust_coil_buffer_div_scalar", coil_scalar_binop_ty, 2),
+            // ADR-0077 Phase-2/3 left-scalar `k ⊕ a`: `+`/`*` reuse the
+            // commutative `*_scalar` rows above; `-`/`/` need REVERSED
+            // shims (`k - a[i]` / `k / a[i]`). Same `(ptr, f64) -> ptr`
+            // shape as the right-scalar shims (only operand order flips
+            // inside the shim), so they reuse `coil_scalar_binop_ty`.
+            ("__cobrust_coil_buffer_rsub_scalar", coil_scalar_binop_ty, 2),
+            ("__cobrust_coil_buffer_rdiv_scalar", coil_scalar_binop_ty, 2),
+            // ADR-0077 Phase-2/3 buffer-buffer COMPARISON `a cmp b` → a
+            // Bool-dtype Buffer. Same `(ptr, ptr) -> ptr` array-array
+            // shape as `add`/`sub`/`mul`/`div`, so they reuse
+            // `coil_binop_ty`. The MIR retarget (extended
+            // `lookup_buffer_binop`) turns `a < b` into a `Terminator::
+            // Call` onto these — codegen only declares the externs.
+            ("__cobrust_coil_buffer_lt", coil_binop_ty, 2),
+            ("__cobrust_coil_buffer_le", coil_binop_ty, 2),
+            ("__cobrust_coil_buffer_gt", coil_binop_ty, 2),
+            ("__cobrust_coil_buffer_ge", coil_binop_ty, 2),
+            ("__cobrust_coil_buffer_eq", coil_binop_ty, 2),
+            ("__cobrust_coil_buffer_ne", coil_binop_ty, 2),
             ("__cobrust_coil_buffer_getitem", coil_getitem_ty, 2),
             ("__cobrust_coil_buffer_shape", coil_shape_ty, 1),
             ("__cobrust_coil_buffer_ndim", coil_attr_i64_ty, 1),

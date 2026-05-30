@@ -2455,20 +2455,90 @@ impl<'a> BodyBuilder<'a> {
                 }
             }
         }
+        // ADR-0077 Phase-2/3 — LEFT-scalar `k ⊕ a` (`2 * a` / `6 / a` /
+        // `1 + a` / `2 - a`). The MIRROR of the right-scalar block above,
+        // with the operand roles SWAPPED: the LHS is the numeric scalar
+        // and the RHS is the Buffer handle. Checked BEFORE the array-array
+        // `lookup_buffer_binop` guard below (which keys on the LHS — but
+        // here the LHS is a scalar, not a Buffer, so it would NOT fire;
+        // this block is what gives `2 * a` a path at all). The retarget
+        // depends on whether `⊕` commutes:
+        //   - `+`/`*` commute → reuse the right-scalar shims
+        //     `__cobrust_coil_buffer_{add,mul}_scalar(a, k)` — pass the
+        //     BUFFER as the handle arg and the SCALAR as `k: f64`
+        //     (`k + a == a + k`, so the right-scalar shim is correct);
+        //   - `-`/`/` do NOT commute → REVERSED shims
+        //     `__cobrust_coil_buffer_{rsub,rdiv}_scalar(a, k)`, which
+        //     compute `k - a[i]` / `k / a[i]` (the cabi
+        //     `buffer_binop_scalar_rev` puts `k` on the LEFT). `2 - a` is
+        //     `2 - a[i]`, NOT `a[i] - 2`.
+        // In ALL four cases the C-ABI shape is `(buffer_ptr, k: f64) ->
+        // ptr` — `lookup_buffer_left_scalar_binop` picks the symbol; the
+        // BUFFER (RHS here) is the borrowed handle (Move→Copy upgrade) and
+        // the SCALAR (LHS) is cast i64→f64 like the right-scalar path. The
+        // typecheck `synth_bin` arm already accepted this exact shape
+        // (Int/Float ⊕ Buffer), so a `Some` left-scalar shim is accepted.
+        let rhs_ty_for_left_scalar = synth_expr_ty(self, rhs);
+        let rhs_handle_ty = match &rhs_ty_for_left_scalar {
+            Ty::Ref(inner) => inner.as_ref().clone(),
+            other => other.clone(),
+        };
+        let lhs_scalar_ty = match &lhs_ty {
+            Ty::Ref(inner) => inner.as_ref().clone(),
+            other => other.clone(),
+        };
+        if matches!(lhs_scalar_ty, Ty::Int | Ty::Float)
+            && matches!(&rhs_handle_ty, Ty::Adt(id, _) if *id == cobrust_types::COIL_BUFFER_ADT)
+        {
+            if let Some(scalar_sym) = cobrust_types::lookup_buffer_left_scalar_binop(op) {
+                // Argument ORDER matches the right-scalar shim ABI
+                // `(buffer_ptr, k: f64)`: the BUFFER (the RHS expr) is the
+                // borrowed handle, the SCALAR (the LHS expr) is `k`.
+                let buf_op = upgrade_move_to_copy_handle(self.lower_expr(rhs)?);
+                let scalar_op = self.lower_expr(lhs)?;
+                // Pass the scalar as f64 (an `Int` is cast i64→f64; a
+                // `Float` is already f64) — mirrors the right-scalar path.
+                let k_op = if matches!(lhs_scalar_ty, Ty::Int) {
+                    let kdest = self.declare_local("_coilk".to_string(), Ty::Float, span, false);
+                    self.emit_assign(
+                        Place::local(kdest),
+                        Rvalue::Cast(CastKind::IntToFloat, scalar_op, Ty::Float),
+                        span,
+                    );
+                    Operand::Copy(Place::local(kdest))
+                } else {
+                    scalar_op
+                };
+                let op_out = self.emit_ecosystem_call(
+                    scalar_sym,
+                    cobrust_types::coil_buffer_ty(),
+                    vec![buf_op, k_op],
+                    span,
+                );
+                return Ok(op_out);
+            }
+        }
         // ADR-0077 Q1 — `coil.Buffer` operator dispatch (the FIRST
         // ecosystem-handle operator). Sibling of the `in`/`not in` Dict
         // guard above: when the LHS resolves to the Buffer handle (bare
         // `a + b` → `Ty::Adt`, or borrowed `&a + &b` → `Ty::Ref(Adt)`),
         // retarget `+`/`-`/`*`/`/` to `__cobrust_coil_buffer_{add,sub,mul,
         // div}` via `emit_ecosystem_call` BEFORE the generic
-        // `Rvalue::BinaryOp` tail. Both operands are BORROWED handles
-        // (Move → Copy upgrade so the source locals survive the call and
-        // drop once at scope exit per ADR-0072 §5 risk 1); the shim returns
-        // a fresh handle the caller owns. Because this emits a
-        // `Terminator::Call`, codegen's `lower_binop` is never reached for
-        // Buffers (ADR-0077 §1.1) — no codegen type-switch. The typecheck
-        // `synth_bin` arm already rejected unsupported ops + non-Buffer
-        // operands, so a `Some` here is an accepted op.
+        // `Rvalue::BinaryOp` tail. ADR-0077 Phase-2/3 extends the SAME
+        // `lookup_buffer_binop` path to the six COMPARISON ops `<`/`<=`/
+        // `>`/`>=`/`==`/`!=` → `__cobrust_coil_buffer_{lt,le,gt,ge,eq,ne}`
+        // (returning a Bool-dtype Buffer); they reach here unintercepted
+        // (the `str ==` guard below is gated on `Ty::Str`, and the Dict
+        // `in`/`not in` guard above on `In`/`NotIn`), so no separate arm is
+        // needed — the extended manifest row drives both typecheck and MIR.
+        // Both operands are BORROWED handles (Move → Copy upgrade so the
+        // source locals survive the call and drop once at scope exit per
+        // ADR-0072 §5 risk 1); the shim returns a fresh handle the caller
+        // owns. Because this emits a `Terminator::Call`, codegen's
+        // `lower_binop` is never reached for Buffers (ADR-0077 §1.1) — no
+        // codegen type-switch. The typecheck `synth_bin` arms already
+        // rejected unsupported ops + non-Buffer operands, so a `Some` here
+        // is an accepted op.
         if let Some(sig) = cobrust_types::lookup_buffer_binop(&lhs_ty, op) {
             let lhs_op = upgrade_move_to_copy_handle(self.lower_expr(lhs)?);
             let rhs_op = upgrade_move_to_copy_handle(self.lower_expr(rhs)?);
