@@ -729,6 +729,46 @@ mod tests {
         assert_eq!(FieldKind::Any.openapi_type(), None);
     }
 
+    // ----- #156 Phase-3b lock: bool validated-body field -----------------
+    // bool is plumbed end-to-end (front-end lower.rs `Ty::Bool→"bool"`
+    // descriptor → `FieldKind::Bool` here → `is_boolean()` check), and
+    // registration is `route_validated`-driven, NOT refinement-driven (a
+    // body needs no `where` to be validated — every declared field's base
+    // kind is enforced). But the bool VALIDATION path (is_boolean → 422 on a
+    // non-bool) had NO direct test — only the OpenAPI-type mapping above.
+    // These pin it so it cannot silently regress.
+    const BOOL_SCHEMA: &str = "# Flags\nflag\tbool";
+
+    #[test]
+    fn bool_field_accepts_json_booleans() {
+        assert_eq!(
+            validate_against_schema(BOOL_SCHEMA, &json!({"flag": true})),
+            Ok(())
+        );
+        assert_eq!(
+            validate_against_schema(BOOL_SCHEMA, &json!({"flag": false})),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn bool_field_rejects_non_bool_with_wrong_type_422() {
+        // A string `"true"` and a number `1` are NOT JSON booleans → 422
+        // WrongType (NumPy-of-the-web semantics: the type is enforced even
+        // with no refinement). The string case is the classic footgun
+        // (`"true"` is truthy in many langs but is not a bool here).
+        for bad in [json!({"flag": "true"}), json!({"flag": 1})] {
+            assert!(
+                matches!(
+                    validate_against_schema(BOOL_SCHEMA, &bad),
+                    Err(ValidationError::WrongType { .. })
+                ),
+                "non-bool flag must be a WrongType 422; got {:?}",
+                validate_against_schema(BOOL_SCHEMA, &bad)
+            );
+        }
+    }
+
     #[test]
     fn error_body_is_valid_json() {
         let e = ValidationError::OutOfRange {
