@@ -41,10 +41,13 @@ pub struct TypedModule {
 // ADR-0080 Phase-1b-ii / Phase-2 — a per-field value refinement
 // (`where`-clause). One side-table entry per refined field; the variant set
 // grows by phase (ADR-0080 §6).
+// PartialEq-only (NOT Eq) since Phase-3a: FloatRange carries f64 bounds
+// (PartialEq-not-Eq). SAFE — Refinement is only a HashMap VALUE, never a key.
 pub enum Refinement {
-    IntRange { lo: Option<i64>, hi: Option<i64> },   // Phase-1: i64 value range → minimum/maximum
-    StrLen   { lo: Option<i64>, hi: Option<i64> },   // Phase-2: str length    → minLength/maxLength
-    Pattern  { regex: String },                      // Phase-2: str regex     → pattern
+    IntRange   { lo: Option<i64>, hi: Option<i64> },   // Phase-1: i64 value range  → minimum/maximum
+    FloatRange { lo: Option<f64>, hi: Option<f64> },   // Phase-3a: f64 value range → minimum/maximum ({type:number})
+    StrLen     { lo: Option<i64>, hi: Option<i64> },   // Phase-2: str length       → minLength/maxLength
+    Pattern    { regex: String },                      // Phase-2: str regex        → pattern
 }
 
 pub enum Ty {
@@ -152,7 +155,7 @@ Invariants:
 | Feature | Location | Notes |
 |---|---|---|
 | `adt_refinements` side-table | `types/src/check.rs` `Ctx::adt_refinements` + `TypedModule::adt_refinements` | `(AdtId, field) → Refinement`; the sibling of `adt_fields` (Q2 — refinements live BESIDE the field, NOT in `Ty`) |
-| refinement interpret | `types/src/check.rs` `check_class` → `interpret_refinement` → `interpret_int_range` / `interpret_str_refinement` / `parse_bound_predicate` / `parse_subject_bound` | reads each `ClassBody::field_refinements` `where`-predicate; dispatches on the field BASE TYPE — `i64` → int-range grammar (`lo <= self`, `self <= hi`, `lo <= self and self <= hi`, `>=` mirror, strict `<`/`>` ±1-shift inclusive); `str` → str-length (`len(self)`-subject bound, SAME shape) or str-pattern (`pattern(self, "<lit>")`); else `TypeError::UnsupportedRefinement` + §2.5-B FIX |
+| refinement interpret | `types/src/check.rs` `check_class` → `interpret_refinement` → `interpret_int_range` / `interpret_float_range` / `interpret_str_refinement` / `parse_bound_predicate{,_f64}` / `parse_subject_bound{,_f64}` / `literal_float_value` | reads each `ClassBody::field_refinements` `where`-predicate; dispatches on the field BASE TYPE — `i64` → int-range grammar (`lo <= self`, `self <= hi`, `lo <= self and self <= hi`, `>=` mirror, strict `<`/`>` ±1-shift inclusive); `f64` (Phase-3a) → float-range grammar (SAME shape, f64-or-int-literal bounds, inclusive `<=`/`>=` ONLY — strict `<`/`>` rejected, no clean ±1 float rewrite); `str` → str-length (`len(self)`-subject bound, SAME shape) or str-pattern (`pattern(self, "<lit>")`); else `TypeError::UnsupportedRefinement` + §2.5-B FIX |
 | str grammar (Phase-2) | `types/src/check.rs` `is_len_self_call` / `parse_pattern_call` | `is_len_self_call` recognises a `len(self)` call as the length-bound subject; `parse_pattern_call` recognises `pattern(self, "<string-literal>")` and returns the literal regex. `len`/`pattern` are bound as synthetic refinement keywords at HIR lowering (`cobrust-hir`) so the predicate resolves self-contained |
 | regex compile-check (Phase-2) | `types/src/check.rs` `interpret_str_refinement` (`regex::Regex::new`) | a MALFORMED regex in `pattern(...)` is a BUILD-time `TypeError::UnsupportedRefinement` with a FIX (§2.5-B), NOT a per-request runtime panic. New direct dep `regex = "1"` (already in the workspace lock; F64: Cargo.lock staged) |
 | validated-handler callback | `types/src/ecosystem.rs` `pit_validated_handler_fn_ty` + `PIT_VALIDATED_BODY_SENTINEL_ADT`; the `route_validated` manifest row | callback `FnTy = fn(pit.Request, <Body>) -> pit.Response` with a sentinel 2nd-param |
@@ -161,7 +164,7 @@ Invariants:
 Invariants:
 - The refinement side-table + field table are CARRIED on `TypedModule` so MIR synthesises the validated-body schema descriptor for `route_validated` from the SAME source the checker used (footgun #4 — schema + validator cannot drift). `Refinement::descriptor_payload(base_kind)` is the ONE encoder MIR calls; `cobrust-pit`'s `parse_schema` is the ONE decoder — they cannot drift.
 - The `where`-predicate is interpreted STRUCTURALLY (the fixed grammar over the lowered HIR expr — `Bin{And}`, `Bin{LtEq/Lt/GtEq/Gt}`, `Lit(Int)`, `Lit(Str)`, `Name("self")`, `Call{Name("len"|"pattern"), …}`), never type-synthesised; `self`'s type is irrelevant.
-- The fixed grammar is keyed on the field BASE TYPE: a `len`/`pattern` form on a non-`str` field, or a bare-`self` int-range on a `str` field, is a clear `UnsupportedRefinement` (`ill_typed` i161-i164) — not silently mis-interpreted.
+- The fixed grammar is keyed on the field BASE TYPE: a `len`/`pattern` form on a non-`str` field, or a bare-`self` int/float-range on a `str` field, is a clear `UnsupportedRefinement` (`ill_typed` i161-i164) — not silently mis-interpreted. Phase-3a adds `f64` value-range (`well_typed` w211-w214); a `len`/`pattern`/strict-`<`/arbitrary-call on an `f64` field is rejected (`ill_typed` i165-i168).
 - The value-level constraint (range / length / pattern) stays a RUNTIME guard (a 422 at the request boundary), not a compile-time-checked refinement (the §2.5-superior form is an ADR-0080 §9 follow-up). The regex's WELL-FORMEDNESS is the one part caught at compile time (Phase-2).
 
 ### ADR-0081 Phase-1b — validated-body registration channel (`validated_handlers`)

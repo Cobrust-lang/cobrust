@@ -568,6 +568,80 @@ patterns, schema already re-parsed per request) is the accepted
 simplicity-over-micro-opt tradeoff; a process-wide compiled-regex cache is a
 future optimisation, not a correctness concern.
 
+## ADR-0080 Phase-3a — f64 value-range refinement (`FloatRange`)
+
+ONE new fixed `where`-clause refinement kind on an `f64` field — the precise
+MIRROR of the Phase-1 `Refinement::IntRange`. Same side-table, same descriptor
+shape, same single-source discipline; only new variants at each layer (no new
+mechanism). `bool` value-validation is OUT (a later 3b).
+
+Surface (`.cb`):
+
+```python
+class Reading:
+    name:  str
+    ratio: f64 where 0.0 <= self and self <= 1.0   # VALUE RANGE (inclusive)
+
+fn submit(req: pit.Request, body: Reading) -> pit.Response:
+    return pit.text_response(201, "ok")            # reached only if 0 <= ratio <= 1
+```
+
+The fixed float form (ADR-0080 Q6 / Phase-3a D2):
+
+- VALUE RANGE — `lo <= self and self <= hi`, and the one-sided `lo <= self` /
+  `self <= hi`, with `lo`/`hi` FLOAT (or integer-widened) literals. The subject
+  is the bare `self` (as the int range). **Only inclusive `<=`/`>=` are
+  admitted** — a strict `<`/`>` is REJECTED with a FIX (the integer `±1`
+  inclusive rewrite has no clean float analog; the reals are dense). `NaN`/`inf`
+  are not producible by the grammar.
+
+Mechanism (the layered MIRROR of the int-range chain):
+
+- **Side-table (`cobrust-types`).** `interpret_refinement` keys on the field's
+  BASE TYPE: a new `f64` → `interpret_float_range`, which threads
+  `parse_bound_predicate_f64` (the `f64` dual of the int bound-parser, identical
+  contradiction detection) over `parse_subject_bound_f64` + `literal_float_value`
+  → `Refinement::FloatRange { lo, hi }`. An integer literal is accepted as a
+  float bound (`0 <= self` → `0.0`, the natural spelling, §2.5). A
+  `len`/`pattern`/strict-`<`/arbitrary-call form on an `f64` field is rejected
+  with the §2.5-B FIX.
+- **Descriptor encoding (the ONE encoder).** `descriptor_payload("f64",
+  FloatRange{lo,hi})` → `f64:<lo>:<hi>` via `float_suffix` (dual to `int_suffix`),
+  each bound rendered with `f64` `Display` (shortest round-trippable decimal):
+  `f64:0:1`, one-sided `f64:0.5:` / `f64::100`, fractional `f64:0.5:99.9`.
+- **Decoder (the ONE reader, `validation::parse_schema`).** The `f64` kind
+  parses its `:lo:hi` suffix with `parse_float_suffix` (`str::parse::<f64>()`,
+  accepts everything `f64` `Display` emits → the encode↔decode pair round-trips
+  exactly) into a SEPARATE `FieldSpec` pair `lo_f`/`hi_f: Option<f64>` (a
+  fractional bound is not an `i64`).
+- **Validator (`validation::check_field`).** An `F64` field extracts the JSON
+  number with `as_f64` (doubles as the type check + value), then range-checks
+  against `lo_f`/`hi_f` → `ValidationError::FloatOutOfRange`, rendered as a typed
+  422 WITHOUT entering the handler. The 422 detail PRINTS THE FIX (§2.5-D6):
+  ``field `ratio` value 1.5 must be in [0, 1]``.
+- **OpenAPI emitter (`openapi::field_schema`, cannot-drift).** The `F64` arm
+  emits `minimum`/`maximum` (from `lo_f`/`hi_f`, via `serde_json::Number::from_f64`)
+  on a `{type:number}` schema — read from the SAME `parse_schema` output the
+  validator checks.
+- **MIR — unchanged.** `lower.rs` already maps `Ty::Float → "f64"` and calls
+  `descriptor_payload(kind)` generically, so the FloatRange suffix renders with
+  no MIR edit.
+- **`Eq`-drop (D1).** `Refinement` + `ValidationError` derive `PartialEq` only
+  (an `f64` bound is `PartialEq`-not-`Eq`). SAFE — both are HashMap values /
+  `==`-compared, never keys; no site bounds them `: Eq`.
+
+Done-means (verified, the live float-refinement E2E):
+`POST /readings {"name":"a","ratio":0.5}` → 201 + handler entered (an integer
+`ratio:1` → 201, an integer is a valid f64); `ratio:1.5` (> max) and
+`ratio:-0.5` (< min) → 422 NOT entered; `ratio:"x"` → 422 wrong type
+(`must be of type number`). `GET /openapi.json` → `ratio:{type:number,
+minimum:0,maximum:1}` (NOT integer, NOT minLength/maxLength). Cannot-drift
+cross-check: the `ratio:1.5` 422 AND the advertised `maximum:1`, from one source.
+
+Scope (Phase-3a): f64 VALUE RANGE only. `bool` value-validation, the §2.5-A
+compile-time-checked-refinement upgrade, and cross-field constraints stay later
+phases (ADR-0080 §6/§9).
+
 ## Cross-references
 
 - `mod:strike` — sister ecosystem crate (HTTP-client precedent +

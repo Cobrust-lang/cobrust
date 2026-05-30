@@ -232,6 +232,51 @@ fn main() -> i64:
 - **OpenAPI schema 始终保持一致。** 长度边界呈现为 `minLength`/`maxLength`,
   模式呈现为 `pattern` —— 与校验器检查的同一来源(见下一节),因此不会漂移。
 
+## 浮点数值范围校验(ADR-0080 第 3a 阶段)
+
+`f64` 字段可以带一个 `where` **数值范围**约束 —— 这是整数范围
+(`i64 where 0 <= self and self <= 100`)在 `f64` 上的**精确镜像**:
+
+```python
+import pit
+
+class Reading:
+    name: str
+    # 闭区间数值范围:0.0 ..= 1.0。支持双边与单边形式
+    # (`0.5 <= self` / `self <= 100.0`)。整数字面量也可用作浮点边界
+    # (`0 <= self` 即 `0.0`,这是最自然、最贴近直觉的写法)。
+    ratio: f64 where 0.0 <= self and self <= 1.0
+
+fn submit(req: pit.Request, body: Reading) -> pit.Response:
+    return pit.text_response(201, "created")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/readings", submit)
+    let _ = app.serve_openapi("/openapi.json")
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+在边界处:
+
+- `{"name":"a","ratio":0.5}` → **201**,handler 运行;整数 `ratio:1` 同样
+  → **201**(整数是合法的 f64)。
+- `ratio:1.5`(超过上限 1.0)与 `ratio:-0.5`(低于下限 0.0)→ **422**,
+  handler **永不进入**;`ratio:"x"`(非数字)→ **422**(类型错误)。
+
+三点遵循优雅法则的说明:
+
+- **只接受闭区间 `<=`/`>=`。** 严格不等号 `<`/`>` 会被**编译期拒绝**并附带
+  修复建议:整数范围可以把 `S < N` 改写成 `<= N-1`,但实数是稠密的,浮点严格
+  边界没有干净的 `±1` 闭区间改写 —— 与其偷偷塞一个 epsilon(一个坑),不如让
+  修复建议引导你写闭区间形式。
+- **422 错误信息直接打印修复方案**(§2.5):
+  ``field `ratio` value 1.5 must be in [0, 1]`` —— 不只是诊断,而是告诉你
+  正确的取值范围。
+- **OpenAPI schema 始终一致。** 浮点范围呈现为 `{type:number, minimum,
+  maximum}` —— 与校验器检查的同一来源,因此不会漂移。
+
 ## 自动 OpenAPI(`serve_openapi`,ADR-0080 第 1b-iii 阶段)
 
 FastAPI 的另一个标志性能力是免费的 `/docs` —— 一份从你的模型派生出来的

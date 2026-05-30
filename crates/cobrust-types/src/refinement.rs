@@ -27,6 +27,10 @@
 //! - Phase-2 ([`Refinement::Pattern`]) — `pattern(self, "<re>")` (a LITERAL
 //!   regex) on a `str` field (ADR-0080 §6 Phase-3, landed together with the
 //!   length form as "Phase-2 string refinements").
+//! - Phase-3a ([`Refinement::FloatRange`]) — `lo <= self <= hi` and its
+//!   one-sided forms on an `f64` field (ADR-0080 §Phase-3a). The precise
+//!   MIRROR of [`Refinement::IntRange`] with `f64` bounds — INCLUSIVE
+//!   value-range, `minimum`/`maximum` in OpenAPI's `{type:number}`.
 //!
 //! Any non-fixed predicate — and any fixed form on the wrong base type — is
 //! rejected by the type checker with
@@ -35,9 +39,24 @@
 /// A structured value-level refinement on a class field. The variant set
 /// grows by phase (ADR-0080 §6).
 ///
-/// `IntRange`/`StrLen` carry only `Copy` integer bounds; `Pattern` carries an
-/// owned regex `String`, so the enum is `Clone` (not `Copy`).
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// `IntRange`/`StrLen` carry `Copy` integer bounds; `FloatRange` carries
+/// `Copy` `f64` bounds (ADR-0080 Phase-3a); `Pattern` carries an owned regex
+/// `String`. The enum is therefore `Clone` (not `Copy`).
+///
+/// # Why `PartialEq` only (not `Eq`) — ADR-0080 Phase-3a D1
+///
+/// [`Refinement::FloatRange`] carries `f64` bounds, and `f64` is `PartialEq`
+/// but NOT `Eq` (IEEE-754 `NaN != NaN`), so the derive DROPS `Eq` here as of
+/// Phase-3a. This is SAFE: `Refinement` is used EXCLUSIVELY as a `HashMap`
+/// VALUE (`adt_refinements: HashMap<(AdtId, String), Refinement>` —
+/// `check.rs` / `TypedModule`); it is never a `HashMap`/`HashSet` KEY and no
+/// site bounds it `: Eq`/`: Hash`. The fixed grammar (`parse_subject_bound_f64`)
+/// never produces a `NaN`/`inf` bound (those are not int/float *literals* the
+/// bound-parser admits), so the partial-equality is total in practice — but
+/// the derive must still be `PartialEq` for the type to compile with an `f64`
+/// field. Were any future site to need `Refinement: Eq`, it would fail to
+/// compile loudly at that site (no silent semantic change).
+#[derive(Clone, Debug, PartialEq)]
 pub enum Refinement {
     /// An integer range bound on an `i64` field. At least one of `lo`/`hi`
     /// is `Some` (a `where`-clause with neither bound is meaningless and is
@@ -46,6 +65,17 @@ pub enum Refinement {
     /// grammar admits (ADR-0080 Q6). The OpenAPI projection maps `lo` →
     /// `minimum` and `hi` → `maximum` (ADR-0080 §5.3).
     IntRange { lo: Option<i64>, hi: Option<i64> },
+    /// A floating-point value range bound on an `f64` field (ADR-0080
+    /// Phase-3a) — the precise MIRROR of [`Self::IntRange`] with `f64`
+    /// bounds. At least one of `lo`/`hi` is `Some` (a `where`-clause with
+    /// neither bound is meaningless and is rejected at parse-interpretation,
+    /// exactly as `IntRange`). Bounds are INCLUSIVE (`lo <= self`,
+    /// `self <= hi`). `NaN`/`inf` are NOT producible by the fixed grammar
+    /// (the bound-parser admits only finite float literals), so the
+    /// partial-order comparison the validator runs is total in practice. The
+    /// OpenAPI projection maps `lo` → `minimum` and `hi` → `maximum` on a
+    /// `{"type":"number"}` schema (ADR-0080 §5.3 / Phase-3a D4).
+    FloatRange { lo: Option<f64>, hi: Option<f64> },
     /// A string-LENGTH bound on a `str` field (ADR-0080 Phase-2). The fixed
     /// grammar is `lo <= len(self) <= hi` and its one-sided forms
     /// (`len(self) <= n` → `hi`; `len(self) >= n` → `lo`). Bounds are
@@ -71,6 +101,12 @@ impl Refinement {
     /// - [`Self::IntRange`] → `i64:<lo>:<hi>` (keeps `base_kind = i64`,
     ///   appends a `:lo:hi` numeric suffix; an absent bound is the empty
     ///   string — `0 <= self` → `i64:0:`, `self <= 100` → `i64::100`).
+    /// - [`Self::FloatRange`] → `f64:<lo>:<hi>` (keeps `base_kind = f64`,
+    ///   appends the SAME `:lo:hi` suffix SHAPE as `IntRange` but with `f64`
+    ///   `Display` bounds — `0 <= self and self <= 100` → `f64:0:100`,
+    ///   one-sided `0 <= self` → `f64:0:`, `self <= 100` → `f64::100`;
+    ///   ADR-0080 Phase-3a D3). The `f64` base kind tells the
+    ///   validator/emitter the bounds are FLOAT value ranges parsed as `f64`.
     /// - [`Self::StrLen`] → `str:<lo>:<hi>` (keeps `base_kind = str`, appends
     ///   the SAME `:lo:hi` numeric suffix shape, reusing the int-range
     ///   decode; the `str` kind tells the validator/emitter the bounds are
@@ -89,6 +125,11 @@ impl Refinement {
     pub fn descriptor_payload(&self, base_kind: &str) -> String {
         match self {
             Self::IntRange { lo, hi } => format!("{base_kind}{}", int_suffix(*lo, *hi)),
+            // FloatRange keeps the `f64` base kind and appends the SAME
+            // `:lo:hi` suffix shape as IntRange, but with `f64`-Display
+            // bounds (ADR-0080 Phase-3a D3). The `f64` kind discriminates a
+            // FLOAT value-range from the int range at decode.
+            Self::FloatRange { lo, hi } => format!("{base_kind}{}", float_suffix(*lo, *hi)),
             // StrLen reuses the int-range `:lo:hi` numeric suffix; the `str`
             // base kind discriminates LENGTH from value-range at decode.
             Self::StrLen { lo, hi } => format!("{base_kind}{}", int_suffix(*lo, *hi)),
@@ -103,6 +144,25 @@ impl Refinement {
 /// bound is the empty string (`Some(0), None` → `:0:`; `None, Some(100)` →
 /// `::100`; `Some(0), Some(100)` → `:0:100`).
 fn int_suffix(lo: Option<i64>, hi: Option<i64>) -> String {
+    let lo_s = lo.map_or(String::new(), |n| n.to_string());
+    let hi_s = hi.map_or(String::new(), |n| n.to_string());
+    format!(":{lo_s}:{hi_s}")
+}
+
+/// The `:lo:hi` numeric suffix for [`Refinement::FloatRange`] (ADR-0080
+/// Phase-3a D3) — the `f64` dual of [`int_suffix`]. An absent bound is the
+/// empty string (`Some(0.0), None` → `:0:`; `None, Some(100.0)` → `::100`;
+/// `Some(0.0), Some(99.9)` → `:0:99.9`).
+///
+/// Bounds are rendered with `f64`'s `Display` (`{}`), which emits the
+/// SHORTEST round-trippable decimal (`0.0` → `"0"`, `100.0` → `"100"`,
+/// `99.9` → `"99.9"`, `0.5` → `"0.5"`). This is the ENCODE half of the
+/// cannot-drift pair (ADR-0080 §3 footgun #4): `cobrust-pit`'s `parse_schema`
+/// DECODEs it with `str::parse::<f64>()`, which accepts every string `f64`
+/// `Display` emits — the two halves round-trip exactly. The fixed grammar
+/// (`check.rs::parse_subject_bound_f64`) never produces a `NaN`/`inf` bound,
+/// so the suffix is always a finite decimal both halves agree on.
+fn float_suffix(lo: Option<f64>, hi: Option<f64>) -> String {
     let lo_s = lo.map_or(String::new(), |n| n.to_string());
     let hi_s = hi.map_or(String::new(), |n| n.to_string());
     format!(":{lo_s}:{hi_s}")
@@ -137,6 +197,89 @@ mod tests {
             }
             .descriptor_payload("i64"),
             "i64::100"
+        );
+    }
+
+    #[test]
+    fn float_range_payload_keeps_f64_kind_and_appends_bounds() {
+        // ADR-0080 Phase-3a D3 — the precise MIRROR of the IntRange payload,
+        // with `f64`-Display bounds. Whole-valued bounds render WITHOUT a
+        // trailing `.0` (Rust `f64` Display: `100.0` → "100").
+        assert_eq!(
+            Refinement::FloatRange {
+                lo: Some(0.0),
+                hi: Some(100.0)
+            }
+            .descriptor_payload("f64"),
+            "f64:0:100"
+        );
+        assert_eq!(
+            Refinement::FloatRange {
+                lo: Some(0.0),
+                hi: None
+            }
+            .descriptor_payload("f64"),
+            "f64:0:"
+        );
+        assert_eq!(
+            Refinement::FloatRange {
+                lo: None,
+                hi: Some(100.0)
+            }
+            .descriptor_payload("f64"),
+            "f64::100"
+        );
+    }
+
+    #[test]
+    fn float_range_payload_preserves_fractional_bounds() {
+        // A genuinely-fractional bound round-trips through `f64` Display →
+        // `parse::<f64>` (the cannot-drift contract). `0.5` and `99.9` are
+        // representable exactly enough that Display emits the short form.
+        assert_eq!(
+            Refinement::FloatRange {
+                lo: Some(0.5),
+                hi: Some(99.9)
+            }
+            .descriptor_payload("f64"),
+            "f64:0.5:99.9"
+        );
+        // The encoded suffix bounds parse back to the SAME f64 (the DECODE
+        // half lives in cobrust-pit `parse_schema`; this asserts the encode
+        // is round-trippable so the pair cannot drift).
+        let payload = Refinement::FloatRange {
+            lo: Some(0.5),
+            hi: Some(99.9),
+        }
+        .descriptor_payload("f64");
+        // payload == "f64:0.5:99.9" → after the kind token the suffix is
+        // "0.5":"99.9".
+        let suffix = payload.strip_prefix("f64:").expect("f64 kind prefix");
+        let mut parts = suffix.split(':');
+        let lo: f64 = parts
+            .next()
+            .expect("lo segment present")
+            .parse()
+            .expect("lo parses as f64");
+        let hi: f64 = parts
+            .next()
+            .expect("hi segment present")
+            .parse()
+            .expect("hi parses as f64");
+        assert!((lo - 0.5).abs() < f64::EPSILON);
+        assert!((hi - 99.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn float_range_negative_bounds_render() {
+        // A negative float bound (`-1.5 <= self`) renders with the sign.
+        assert_eq!(
+            Refinement::FloatRange {
+                lo: Some(-1.5),
+                hi: Some(1.5)
+            }
+            .descriptor_payload("f64"),
+            "f64:-1.5:1.5"
         );
     }
 

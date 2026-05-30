@@ -292,7 +292,7 @@ Notes:
 
 **Since**: ADR-0080 Phase-1b-ii (type-driven body validation).
 **Message**: `unsupported refinement 'where'-predicate on field 'field' at <span>: only the fixed int-range grammar is accepted in v1 (...)`
-**FIX**: Use the FIXED int-range grammar on an `i64` field — `0 <= self`, `self <= 100`, or `0 <= self and self <= 100` (`self` is the field value; `>=` works). `len(self) <= n` (str length) and `pattern(self, "…")` are later phases.
+**FIX**: Use the FIXED grammar keyed on the field's base type — an int range on an `i64` field (`0 <= self`, `self <= 100`, or `0 <= self and self <= 100`; `self` is the field value, `>=` works); a FLOAT range on an `f64` field (the same shape, inclusive `<=`/`>=` only — ADR-0080 Phase-3a); a `len(self) <= n` length bound or a `pattern(self, "…")` regex on a `str` field.
 ```cobrust
 class CreateScore:
     name: str
@@ -302,10 +302,15 @@ class CreateScore:
 class CreateScore:
     name: str
     rank: i64 where 0 <= self and self <= 100   # OK
+
+# Phase-3a: a float range on an f64 field (inclusive only)
+class Reading:
+    ratio: f64 where 0.0 <= self and self <= 1.0   # OK
+    # ratio: f64 where 0.0 <= self and self < 1.0  # ERROR: strict `<` rejected (use `<=`)
 ```
 Notes:
 - A validated-body field's `where`-clause is interpreted into a `(AdtId, field)` refinement side-table at type-check; the predicate is checked STRUCTURALLY (the fixed grammar), never type-synthesised.
-- A `where` on a non-`i64` field also trips this in Phase-1b-ii (the int-range kind requires an `i64` field; str-length is Phase-2).
+- A `where` on a non-`i64`/`f64`/`str` field, OR a fixed form on the wrong base type (a `len(self)`/`pattern` on an `i64`/`f64` field; an int/float range on a `str` field), trips this. On an `f64` field a STRICT `<`/`>` bound also trips it (Phase-3a admits inclusive `<=`/`>=` only — the reals are dense, so there is no clean `±1` inclusive rewrite).
 - The value-level constraint is a RUNTIME guard at the request boundary (a 422 on a miss), not a compile-time-checked refinement (the §2.5-superior form is an ADR-0080 §9 follow-up).
 - FixSafety tier: `LocalEdit` (a local `where`-clause rewrite).
 

@@ -253,6 +253,56 @@ Two notes that follow from the elegance-law:
   `minLength`/`maxLength`, a pattern as `pattern` — read from the same
   source the validator checks (see the next section), so they cannot drift.
 
+## Float value-range refinement (ADR-0080 Phase 3a)
+
+An `f64` field can carry a `where` **value-range** constraint — the exact
+**mirror** of the integer range (`i64 where 0 <= self and self <= 100`) on an
+`f64` field:
+
+```python
+import pit
+
+class Reading:
+    name: str
+    # Inclusive value range: 0.0 ..= 1.0. The two-sided and one-sided
+    # (`0.5 <= self` / `self <= 100.0`) forms both work. An integer literal
+    # is accepted as a float bound (`0 <= self` means `0.0` — the natural
+    # spelling).
+    ratio: f64 where 0.0 <= self and self <= 1.0
+
+fn submit(req: pit.Request, body: Reading) -> pit.Response:
+    return pit.text_response(201, "created")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/readings", submit)
+    let _ = app.serve_openapi("/openapi.json")
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+At the boundary:
+
+- `{"name":"a","ratio":0.5}` → **201**, the handler runs; an integer `ratio:1`
+  → **201** too (an integer is a valid f64).
+- `ratio:1.5` (over the max of 1.0) and `ratio:-0.5` (under the min of 0.0) →
+  **422**, handler **not entered**; `ratio:"x"` (not a number) → **422** (wrong
+  type).
+
+Three notes that follow from the elegance-law:
+
+- **Only inclusive `<=`/`>=` are accepted.** A strict `<`/`>` bound is a
+  **compile error** with the fix: the integer grammar rewrites `S < N` to
+  `<= N-1`, but the reals are dense, so a float strict bound has no clean `±1`
+  inclusive rewrite — rather than silently inventing an epsilon (a footgun), the
+  fix steers you to the inclusive spelling.
+- **The 422 error prints the fix** (§2.5):
+  ``field `ratio` value 1.5 must be in [0, 1]`` — not just a diagnosis, but the
+  accepted range.
+- **The OpenAPI schema stays in lockstep.** A float range shows up as
+  `{type:number, minimum, maximum}` — read from the same source the validator
+  checks, so they cannot drift.
+
 ## Auto OpenAPI (`serve_openapi`, ADR-0080 Phase-1b-iii)
 
 FastAPI's other defining feature is the free `/docs` — an OpenAPI schema

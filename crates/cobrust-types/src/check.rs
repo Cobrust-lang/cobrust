@@ -966,18 +966,25 @@ impl Ctx {
     /// predicate into a structured [`crate::refinement::Refinement`].
     ///
     /// The FIXED grammar v1 admits (Q6), over the lowered HIR predicate,
-    /// with `lo`/`hi` integer LITERALS and `>=` accepted as the mirror of
-    /// `<=`: `lo <= self` becomes `IntRange { lo: Some(lo), hi: None }`;
-    /// `self <= hi` becomes `IntRange { lo: None, hi: Some(hi) }`; and
-    /// `lo <= self and self <= hi` becomes
-    /// `IntRange { lo: Some(lo), hi: Some(hi) }`. The field MUST be declared
-    /// `i64` (the int-range kind). Any other shape — an arbitrary fn call
-    /// (`weird(self)`), a non-int field, `len(self)`/`pattern(self, …)`
-    /// (later phases), a float bound, or a malformed comparison — yields
-    /// `TypeError::UnsupportedRefinement` (the §2.5-B compile error). The
-    /// predicate is interpreted STRUCTURALLY (never type-synthesised), so
-    /// `self`'s type need not be resolved — only that it is a bare
-    /// `Name("self")`.
+    /// keyed on the field's declared base type:
+    ///
+    /// - on an `i64` field, an INT range (`lo <= self`, `self <= hi`, or
+    ///   `lo <= self and self <= hi`) with integer LITERAL bounds →
+    ///   [`crate::refinement::Refinement::IntRange`];
+    /// - on an `f64` field (ADR-0080 Phase-3a), the SAME range shape with
+    ///   float LITERAL bounds → [`crate::refinement::Refinement::FloatRange`]
+    ///   (the precise mirror of the int range);
+    /// - on a `str` field, a LENGTH bound over `len(self)` or a
+    ///   `pattern(self, "<re>")` (ADR-0080 Phase-2).
+    ///
+    /// `>=` is accepted as the mirror of `<=`. Any other shape — an arbitrary
+    /// fn call (`weird(self)`), a refinement on a non-int/non-float/non-str
+    /// field, a fixed form on the WRONG base type (a `len(self)` on an `i64`
+    /// field, an int/float range on a `str` field), or a malformed
+    /// comparison — yields `TypeError::UnsupportedRefinement` (the §2.5-B
+    /// compile error). The predicate is interpreted STRUCTURALLY (never
+    /// type-synthesised), so `self`'s type need not be resolved — only that
+    /// it is a bare `Name("self")`.
     fn interpret_refinement(
         &self,
         field: &str,
@@ -996,13 +1003,15 @@ impl Ctx {
             ),
         };
         // The fixed grammar is keyed on the field's declared base type
-        // (ADR-0080 Q6): int-range on `i64`, length/pattern on `str`. A
-        // refinement whose SHAPE does not match the field's base type — a
-        // `len(self)`/`pattern(self, …)` on an `i64` field, or an int-range
-        // (`0 <= self`) on a `str` field — is rejected here with the FIX
-        // (§2.5-B), not silently mis-interpreted.
+        // (ADR-0080 Q6): int-range on `i64`, FLOAT-range on `f64` (Phase-3a),
+        // length/pattern on `str`. A refinement whose SHAPE does not match
+        // the field's base type — a `len(self)`/`pattern(self, …)` on an
+        // `i64`/`f64` field, or an int/float range (`0 <= self`) on a `str`
+        // field — is rejected here with the FIX (§2.5-B), not silently
+        // mis-interpreted.
         match field_ty {
             Some(&Ty::Int) => self.interpret_int_range(pred, reject),
+            Some(&Ty::Float) => self.interpret_float_range(pred, reject),
             Some(&Ty::Str) => self.interpret_str_refinement(field, pred, reject),
             _ => Err(reject()),
         }
@@ -1018,6 +1027,24 @@ impl Ctx {
     ) -> Result<crate::refinement::Refinement, TypeError> {
         let (lo, hi) = self.parse_bound_predicate(pred, is_self_name, reject)?;
         Ok(crate::refinement::Refinement::IntRange { lo, hi })
+    }
+
+    /// Interpret the fixed FLOAT-RANGE grammar on an `f64` field (ADR-0080
+    /// Phase-3a, the precise mirror of [`Self::interpret_int_range`]):
+    /// `lo <= self`, `self <= hi`, or `lo <= self and self <= hi`, with `lo`/
+    /// `hi` FLOAT literals. Produces
+    /// [`crate::refinement::Refinement::FloatRange`]. Integer literals are
+    /// also accepted as float bounds (`0 <= self` on an `f64` field is the
+    /// natural spelling and matches LLM priors — `0` widens to `0.0`); a
+    /// `len(self)`/`pattern(self, …)` shape is NOT the float-range grammar and
+    /// is rejected by the caller's `reject` (§2.5-B FIX).
+    fn interpret_float_range(
+        &self,
+        pred: &Expr,
+        reject: impl Fn() -> TypeError + Copy,
+    ) -> Result<crate::refinement::Refinement, TypeError> {
+        let (lo, hi) = self.parse_bound_predicate_f64(pred, is_self_name, reject)?;
+        Ok(crate::refinement::Refinement::FloatRange { lo, hi })
     }
 
     /// Interpret the fixed STRING refinements on a `str` field (ADR-0080
@@ -1091,6 +1118,43 @@ impl Ctx {
                 Ok((lo, hi))
             }
             _ => parse_subject_bound(pred, is_subject).ok_or_else(reject),
+        }
+    }
+
+    /// The `f64` dual of [`Self::parse_bound_predicate`] (ADR-0080 Phase-3a):
+    /// parse a one- or two-sided fixed bound predicate over an `f64` field
+    /// into `(Option<f64>, Option<f64>)`. Identical SHAPE-handling to the int
+    /// version — a single comparison yields one bound; `A and B` combines one
+    /// bound from each side, rejecting a contradictory/redundant pairing (two
+    /// los / two his) — only the literal type differs (`f64` via
+    /// [`parse_subject_bound_f64`]).
+    fn parse_bound_predicate_f64(
+        &self,
+        pred: &Expr,
+        is_subject: fn(&Expr) -> bool,
+        reject: impl Fn() -> TypeError + Copy,
+    ) -> Result<(Option<f64>, Option<f64>), TypeError> {
+        match &pred.kind {
+            ExprKind::Bin {
+                op: BinOp::And,
+                lhs,
+                rhs,
+            } => {
+                let (lo1, hi1) = parse_subject_bound_f64(lhs, is_subject).ok_or_else(reject)?;
+                let (lo2, hi2) = parse_subject_bound_f64(rhs, is_subject).ok_or_else(reject)?;
+                let lo = match (lo1, lo2) {
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    _ => return Err(reject()),
+                };
+                let hi = match (hi1, hi2) {
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    _ => return Err(reject()),
+                };
+                Ok((lo, hi))
+            }
+            _ => parse_subject_bound_f64(pred, is_subject).ok_or_else(reject),
         }
     }
 
@@ -3937,6 +4001,77 @@ fn parse_subject_bound(
         },
         _ => None,
     }
+}
+
+/// ADR-0080 Phase-3a — the `f64` analog of [`parse_subject_bound`]: parse ONE
+/// comparison of the fixed float-range grammar into an `(lo, hi)` `f64` bound
+/// pair where exactly one of `lo`/`hi` is `Some`.
+///
+/// Accepted shapes (with `S` the subject, `N` a float-or-int literal):
+/// `N <= S` is a lower bound `(Some(N), None)`; `S <= N` is an upper bound
+/// `(None, Some(N))`; `S >= N` mirrors the lower; `N >= S` the upper.
+///
+/// Only the INCLUSIVE operators `<=`/`>=` are admitted (ADR-0080 Phase-3a D2).
+/// Strict `<`/`>` are REJECTED (return `None`, surfaced as
+/// `UnsupportedRefinement`): unlike the integer grammar, a float strict bound
+/// has no clean ±1 inclusive rewrite (the reals are dense), so inventing an
+/// epsilon would be a silent footgun — the §2.5-B FIX steers the author to
+/// the inclusive spelling. Any other shape (non-subject operand,
+/// both-literal, both-subject, a non-finite literal which the grammar never
+/// produces) returns `None`.
+fn parse_subject_bound_f64(
+    e: &Expr,
+    is_subject: fn(&Expr) -> bool,
+) -> Option<(Option<f64>, Option<f64>)> {
+    let ExprKind::Bin { op, lhs, rhs } = &e.kind else {
+        return None;
+    };
+    let lhs_subj = is_subject(lhs);
+    let rhs_subj = is_subject(rhs);
+    let lhs_num = literal_float_value(lhs);
+    let rhs_num = literal_float_value(rhs);
+    // Exactly one side is the subject, the other a finite numeric literal.
+    match (lhs_subj, rhs_subj, lhs_num, rhs_num) {
+        // `S <op> N`
+        (true, false, _, Some(n)) => match op {
+            BinOp::LtEq => Some((None, Some(n))), // S <= N
+            BinOp::GtEq => Some((Some(n), None)), // S >= N
+            _ => None,                            // strict `<`/`>` rejected (D2)
+        },
+        // `N <op> S`
+        (false, true, Some(n), _) => match op {
+            BinOp::LtEq => Some((Some(n), None)), // N <= S
+            BinOp::GtEq => Some((None, Some(n))), // N >= S
+            _ => None,                            // strict `<`/`>` rejected (D2)
+        },
+        _ => None,
+    }
+}
+
+/// ADR-0080 Phase-3a — extract the `f64` value of an `Expr` that is a float
+/// literal OR an integer literal (with optional unary minus), for the
+/// float-range grammar. An integer literal is accepted as an `f64` bound
+/// (`0 <= self` on an `f64` field is the natural spelling — `0` widens to
+/// `0.0`, matching LLM priors). A non-finite result (`inf`/`nan`, which the
+/// fixed grammar's literals never produce as a *bound* here) is rejected so a
+/// `NaN`/`inf` bound can never enter a [`crate::refinement::Refinement::FloatRange`].
+/// Returns `None` for anything else.
+fn literal_float_value(e: &Expr) -> Option<f64> {
+    let v = match &e.kind {
+        ExprKind::Lit(Lit::Float(s) | Lit::Int(s)) => s.parse::<f64>().ok()?,
+        ExprKind::Un {
+            op: UnaryOp::Neg,
+            operand,
+        } => match &operand.kind {
+            ExprKind::Lit(Lit::Float(s) | Lit::Int(s)) => -s.parse::<f64>().ok()?,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    // The fixed grammar must never carry a NaN/inf bound into a FloatRange
+    // (those would break the cannot-drift suffix round-trip + the total
+    // partial-order the validator relies on).
+    v.is_finite().then_some(v)
 }
 
 /// ADR-0080 Phase-1b-ii — is this a bare `self` placeholder in a field

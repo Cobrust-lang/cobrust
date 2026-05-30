@@ -2736,3 +2736,62 @@ fn i164_str_field_arbitrary_int_bound_rejected() {
         Cat::UnsupportedRefinement,
     );
 }
+
+// =====================================================================
+// ADR-0080 Phase-3a — f64 value-range refinement NEGATIVES. The fixed
+// float-range grammar (`lo <= self <= hi`, inclusive `<=`/`>=` only)
+// applies ONLY to an `f64` field. A wrong-shape predicate, a strict
+// `<`/`>` bound (no clean inclusive rewrite for floats, D2), or an
+// arbitrary fn call is a `TypeError::UnsupportedRefinement` with a FIX
+// (§2.5-B). These MIRROR i161..i164 on the f64 base type.
+// =====================================================================
+
+#[test]
+fn i165_len_bound_on_float_field_rejected() {
+    // `len(self)` is the str-LENGTH subject; on an `f64` field it is not the
+    // float-range grammar (an `f64` field wants `lo <= self <= hi`). Rejected
+    // with a FIX. (Mirror of i161 on the f64 base type.)
+    must_reject(
+        "len-bound-on-float-field",
+        "class Body:\n    x: f64 where len(self) <= 10\nfn main() -> i64:\n    return 0\n",
+        Cat::UnsupportedRefinement,
+    );
+}
+
+#[test]
+fn i166_pattern_on_float_field_rejected() {
+    // `pattern(self, …)` is str-only; on an `f64` field it is rejected with a
+    // FIX (the float-range grammar does not admit a pattern call). (Mirror of
+    // i162 on the f64 base type.)
+    must_reject(
+        "pattern-on-float-field",
+        "class Body:\n    x: f64 where pattern(self, \".+\")\nfn main() -> i64:\n    return 0\n",
+        Cat::UnsupportedRefinement,
+    );
+}
+
+#[test]
+fn i167_arbitrary_call_on_float_field_rejected() {
+    // An arbitrary user-fn call (`weird(self)`) on an `f64` field is outside
+    // the fixed float-range grammar → `UnsupportedRefinement` + FIX. (Mirror
+    // of i157 on the f64 base type.)
+    must_reject(
+        "arbitrary-call-on-float-field",
+        "fn weird(x: f64) -> bool:\n    return True\nclass Body:\n    x: f64 where weird(self)\nfn main() -> i64:\n    return 0\n",
+        Cat::UnsupportedRefinement,
+    );
+}
+
+#[test]
+fn i168_strict_lt_bound_on_float_field_rejected() {
+    // A STRICT `<` bound on an `f64` field is rejected (ADR-0080 Phase-3a D2):
+    // unlike the integer grammar (which rewrites `S < N` to `<= N-1`), a float
+    // strict bound has no clean inclusive ±1 rewrite (the reals are dense), so
+    // the fixed grammar admits ONLY inclusive `<=`/`>=` and the §2.5-B FIX
+    // steers the author to the inclusive spelling.
+    must_reject(
+        "strict-lt-bound-on-float-field",
+        "class Body:\n    x: f64 where 0.0 <= self and self < 1.0\nfn main() -> i64:\n    return 0\n",
+        Cat::UnsupportedRefinement,
+    );
+}

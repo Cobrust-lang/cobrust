@@ -3225,3 +3225,53 @@ fn w210_str_length_and_pattern_in_one_class_accepts() {
         "class SignupBody:\n    username: str where 1 <= len(self) and len(self) <= 20\n    email: str where pattern(self, \".+@.+\")\nfn f(b: SignupBody) -> str:\n    return b.username\n",
     );
 }
+
+// ---------------------------------------------------------------------
+// ADR-0080 Phase-3a — f64 value-range refinement (FloatRange). The precise
+// MIRROR of the int-range well-typed cases (w204/w205) on an `f64` field;
+// the fixed float-range grammar is interpreted into the side-table without
+// error and `body.<field>` resolves to `f64`.
+// ---------------------------------------------------------------------
+
+#[test]
+fn w211_fixed_float_range_refinement_accepts() {
+    // `0.0 <= self and self <= 1.0` on an f64 field is the fixed
+    // float-range grammar (ADR-0080 Phase-3a) — interpreted into the
+    // side-table, no error; `b.ratio` resolves to `f64`.
+    must_accept(
+        "fixed-float-range-refinement",
+        "class Reading:\n    name: str\n    ratio: f64 where 0.0 <= self and self <= 1.0\nfn f(b: Reading) -> f64:\n    return b.ratio\n",
+    );
+}
+
+#[test]
+fn w212_one_sided_float_range_refinement_accepts() {
+    // One-sided float bounds (`0.5 <= self`) and the upper-only form
+    // (`self <= 100.0`) are both in the fixed grammar (ADR-0080 Phase-3a).
+    must_accept(
+        "one-sided-float-range-refinement",
+        "class Reading:\n    low: f64 where 0.5 <= self\n    high: f64 where self <= 100.0\nfn f(b: Reading) -> f64:\n    return b.low\n",
+    );
+}
+
+#[test]
+fn w213_float_range_with_integer_literal_bounds_accepts() {
+    // An integer literal is accepted as an f64 bound (`0 <= self` on an f64
+    // field — `0` widens to `0.0`, the natural spelling that matches LLM
+    // priors; ADR-0080 Phase-3a, §2.5 training-data-overlap).
+    must_accept(
+        "float-range-integer-literal-bounds",
+        "class Reading:\n    ratio: f64 where 0 <= self and self <= 100\nfn f(b: Reading) -> f64:\n    return b.ratio\n",
+    );
+}
+
+#[test]
+fn w214_route_validated_float_body_accepts() {
+    // A validated body with an f64-range field type-checks end-to-end
+    // through `app.route_validated` (the body-class 2nd-param + the
+    // float-range refinement coexist).
+    must_accept(
+        "route-validated-float-body",
+        "import pit\nclass Reading:\n    name: str\n    ratio: f64 where 0.0 <= self and self <= 1.0\nfn submit(req: pit.Request, body: Reading) -> pit.Response:\n    return pit.text_response(201, \"ok\")\nfn main() -> i64:\n    let app = pit.App()\n    let _ = app.route_validated(\"POST\", \"/readings\", submit)\n    return 0\n",
+    );
+}

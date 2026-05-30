@@ -672,3 +672,149 @@ claims are each tied to a verified source seam (§1.1).
   (https://spec.openapis.org/oas/v3.1.0#schema-object), Rust `validator` crate
   (https://docs.rs/validator/latest/validator/), `utoipa`
   (https://docs.rs/utoipa/latest/utoipa/).
+
+## Phase-3a (f64 / `FloatRange`) — amendment
+
+> **Status:** landed (impl + tests + dual docs). The precise MIRROR of the
+> Phase-1 `Refinement::IntRange` on an `f64` field. This amendment records the
+> CTO-decided design (D1–D6) and the cannot-drift encode↔decode contract. It is
+> a **pure addition** — the `i64`/`str` surface stays byte-identical.
+
+Phase-3a adds value-range validation to an `f64` field via a single new
+refinement variant `Refinement::FloatRange { lo: Option<f64>, hi: Option<f64> }`.
+`bool` value-validation is OUT of this scope (deferred to a later 3b).
+
+### Design (D1–D6)
+
+- **D1 — drop `Eq` from `Refinement`'s derive** (`#[derive(Clone, Debug, PartialEq)]`).
+  `f64` is `PartialEq` but not `Eq` (IEEE-754 `NaN != NaN`), so a `FloatRange`
+  carrying `f64` bounds forces `Refinement` to `PartialEq` only. **This is SAFE
+  and was verified at impl time:** `Refinement` is used EXCLUSIVELY as a
+  `HashMap` VALUE (`adt_refinements: HashMap<(AdtId, String), Refinement>` —
+  `check.rs:52/477/576` + `TypedModule`); it is NEVER a `HashMap`/`HashSet` key,
+  no site bounds it `: Eq`/`: Hash`, and the enclosing `TypedModule`/`Ctx`/
+  `TypeCheckCtx` derive only `Clone, Debug, Default` (no transitive `Eq`
+  requirement). The SAME `Eq`-drop applies to `cobrust-pit`'s `ValidationError`
+  (which now carries `FloatOutOfRange { value: f64, … }`) for the identical
+  reason — it is only `==`/`matches!`-compared in tests + flows through
+  `Result`/`Err`, never a key. Were any future site to need `Refinement: Eq`, it
+  would fail to compile loudly at that site (no silent semantic change).
+- **D2 — `Refinement::FloatRange { lo, hi }`**, INCLUSIVE, ≥1 bound `Some`
+  (both-`None` is meaningless and is rejected at parse-interpretation, exactly as
+  `IntRange`). The fixed grammar admits ONLY the inclusive operators `<=`/`>=`
+  on an `f64` field; a STRICT `<`/`>` bound is **rejected** with the §2.5-B FIX.
+  Rationale: the integer grammar rewrites `S < N` to `<= N-1`, but the reals are
+  dense — a float strict bound has no clean inclusive ±1 rewrite, so inventing an
+  epsilon would be a silent footgun. `NaN`/`inf` are not producible by the
+  grammar (`literal_float_value` rejects a non-finite literal), so the validator's
+  partial-order comparison is total in practice.
+- **D3 — the descriptor encode↔decode (cannot-drift pair, footgun #4).**
+  `descriptor_payload("f64", FloatRange{lo,hi})` → `f64:<lo>:<hi>` via a new
+  `float_suffix(lo, hi: Option<f64>)` dual to `int_suffix`, rendering each bound
+  with `f64`'s `Display` (shortest round-trippable decimal). Examples:
+  `0 <= self and self <= 100` → `f64:0:100`; one-sided `0 <= self` → `f64:0:`;
+  `self <= 100` → `f64::100`; a fractional `0.5 <= self <= 99.9` → `f64:0.5:99.9`.
+  `cobrust-pit`'s `parse_schema` DECODEs the `f64` kind with a new
+  `parse_float_suffix` (`str::parse::<f64>()`), which accepts every string `f64`
+  `Display` emits — the two halves round-trip exactly. The `f64` bounds live in a
+  SEPARATE `FieldSpec` pair (`lo_f`/`hi_f: Option<f64>`) because a fractional
+  bound (`0.5`) is not representable in the integer `lo`/`hi`.
+
+  **The encode↔decode contract string (the cannot-drift pair):**
+
+  ```text
+  cobrust-types  Refinement::FloatRange{lo,hi}.descriptor_payload("f64")
+                 = format!("f64{}", float_suffix(lo, hi))
+                 = "f64:" + lo.map(f64::Display).unwrap_or("") + ":" + hi.map(f64::Display).unwrap_or("")
+  cobrust-pit    parse_schema → FieldKind::F64 → parse_float_suffix(suffix)
+                 = (suffix[0].parse::<f64>().ok(), suffix[1].parse::<f64>().ok())
+  ```
+
+  round-trips because `∀ x: f64.is_finite() ⇒ x.to_string().parse::<f64>() == Ok(x)`.
+
+- **D4 — OpenAPI projection.** An `f64` `FloatRange` → `{"type":"number",
+  "minimum":lo, "maximum":hi}` (an absent bound is omitted), emitted from the
+  SAME `parse_schema` output the validator reads (`field_schema`'s new
+  `FieldKind::F64` arm reads `lo_f`/`hi_f` and emits them as JSON numbers via
+  `serde_json::Number::from_f64`, which only fails on NaN/inf — never produced).
+  Concrete: `ratio: f64 where 0 <= self <= 1 → {"type":"number","minimum":0,
+  "maximum":1}`; `score: f64 where 0.5 <= self → {"type":"number","minimum":0.5}`.
+- **D5 — the `where`-parse front-end (`check.rs`).** `interpret_refinement`
+  gains a `Some(&Ty::Float)` arm dispatching to a new `interpret_float_range`,
+  which threads a new `parse_bound_predicate_f64` (the `f64` dual of
+  `parse_bound_predicate`, identical contradiction-detection) over a new
+  `parse_subject_bound_f64` + `literal_float_value`. The float bound-parser
+  accepts BOTH float literals (`0.0`) and integer literals (`0` widens to `0.0`,
+  the natural spelling that matches LLM priors, §2.5). Without this front-end arm
+  no `.cb` source could ever produce a `FloatRange`.
+- **D6 — §2.5.** A range violation renders a typed 422 whose detail PRINTS THE
+  FIX (mirroring `IntRange`): `field \`ratio\` value 1.5 must be in [0, 1]`. A
+  refinement on the wrong base type (a `len(self)`/`pattern` on an `f64` field, a
+  strict `<`, an arbitrary fn call) is a **compile-time** `TypeError::Unsupported​Refinement`
+  with a FIX suggestion — the strong §2.5-A compile-time-catch signal.
+
+### Worked `.cb` examples
+
+```python
+# (1) two-sided inclusive float range — the canonical form
+class Reading:
+    name: str
+    ratio: f64 where 0.0 <= self and self <= 1.0
+# descriptor:  ratio<TAB>f64:0:1
+# OpenAPI:     ratio → {"type":"number","minimum":0,"maximum":1}
+# 422 detail:  field `ratio` value 1.5 must be in [0, 1]
+
+# (2) one-sided bounds + integer-literal bounds (widen to f64)
+class Sensor:
+    low:  f64 where 0.5 <= self          # descriptor f64:0.5:  → {minimum:0.5}
+    high: f64 where self <= 100          # descriptor f64::100  → {maximum:100}
+
+# (3) the validated route, end-to-end
+fn submit(req: pit.Request, body: Reading) -> pit.Response:
+    return pit.text_response(201, "ok")   # reached ONLY if 0.0 <= ratio <= 1.0
+fn main() -> i64:
+    let app = pit.App()
+    app.route_validated("POST", "/readings", submit)
+    app.serve_openapi("/openapi.json")
+    app.run("127.0.0.1", 8080)
+    return 0
+```
+
+### Done-means (Phase-3a) — all green
+
+- `POST /readings {"name":"a","ratio":0.5}` → 201, handler entered; an
+  integer-valued `ratio:1` → 201 (an integer is a valid f64).
+- `ratio:1.5` (> max) and `ratio:-0.5` (< min) → **422** with a FIX-printing
+  detail, handler **never entered**; `ratio:"x"` → 422 wrong type
+  (`must be of type number`).
+- `GET /openapi.json` shows `ratio → {"type":"number","minimum":0,"maximum":1}`
+  (NOT `integer`, NOT `minLength`/`maxLength`) — the SAME source the validator
+  used (cannot-drift, asserted by a paired 422-and-`maximum:1` test).
+- Negatives compile-rejected with a FIX: `len(self)`/`pattern` on an `f64`
+  field; a strict `<` bound (D2); an arbitrary `weird(self)` call.
+- `i64`/`str` surface byte-identical (pure addition); the encode↔decode pair
+  preserved; workspace gates green.
+
+### Evidence (Phase-3a)
+
+- **Encode:** `crates/cobrust-types/src/refinement.rs` — `Refinement::FloatRange`,
+  `float_suffix`, the `descriptor_payload` `f64` arm; the `#[derive(…, PartialEq)]`
+  Eq-drop + its safety rationale.
+- **Front-end:** `crates/cobrust-types/src/check.rs` — `interpret_refinement`
+  `Ty::Float` arm, `interpret_float_range`, `parse_bound_predicate_f64`,
+  `parse_subject_bound_f64`, `literal_float_value`.
+- **Decode + validate:** `crates/cobrust-pit/src/validation.rs` —
+  `ValidationError::FloatOutOfRange` (+ its FIX-printing `detail`), `FieldSpec`'s
+  `lo_f`/`hi_f`, `parse_float_suffix`, the `FieldKind::F64` range-check arm,
+  `float_out_of_range`; the `ValidationError` Eq-drop.
+- **OpenAPI:** `crates/cobrust-pit/src/openapi.rs` — `field_schema`'s
+  `FieldKind::F64` `minimum`/`maximum` arm.
+- **MIR:** unchanged — `lower.rs:2324` already computes `kind="f64"` for
+  `Ty::Float` and calls `descriptor_payload(kind)` generically, so the FloatRange
+  suffix renders with no MIR edit.
+- **Tests:** `crates/cobrust-types/src/refinement.rs` (`float_range_*` unit
+  tests); `crates/cobrust-pit/src/{validation,openapi}.rs` (`float_*` /
+  `f64_*` unit tests); `crates/cobrust-types/tests/well_typed.rs` (w211–w214);
+  `crates/cobrust-types/tests/ill_typed.rs` (i165–i168);
+  `crates/cobrust-cli/tests/pit_float_refinement_e2e.rs` (3 live-server
+  round-trips + 2 compile negatives).

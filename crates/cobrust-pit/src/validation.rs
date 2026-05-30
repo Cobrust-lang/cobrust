@@ -12,6 +12,8 @@
 //! - EVERY declared field must be present with the declared base type
 //!   (a missing key, an extra key, or a wrong JSON type → `Err`);
 //! - each int-range refinement (`minimum`/`maximum`) must hold;
+//! - each f64 value-range refinement (`minimum`/`maximum` on a `{type:number}`
+//!   field, ADR-0080 Phase-3a) must hold;
 //! - each str-LENGTH refinement (`minLength`/`maxLength`, ADR-0080 Phase-2)
 //!   must hold;
 //! - each str-PATTERN refinement (`pattern`, ADR-0080 Phase-2/3) must match.
@@ -44,7 +46,9 @@
 //!   (`pat` = a `str` field with a regex pattern; `any` = a non-Phase-1b-ii
 //!   scalar, presence-only check);
 //! - the numeric `:<lo>:<hi>` suffix (absent bound = empty string) carries
-//!   the int RANGE for an `i64` field (`minimum`/`maximum`) and the LENGTH
+//!   the int RANGE for an `i64` field (`minimum`/`maximum`), the FLOAT value
+//!   RANGE for an `f64` field (`minimum`/`maximum`, ADR-0080 Phase-3a — the
+//!   bounds parse as `f64`, so `f64:0.5:99.9` is admitted), and the LENGTH
 //!   bound for a `str` field (`minLength`/`maxLength`, ADR-0080 Phase-2);
 //! - a `pat` field's payload is `pat:<regex>` — the raw regex is EVERYTHING
 //!   after the first `:` (so a `:` inside the regex is preserved).
@@ -78,7 +82,13 @@ use serde_json::Value;
 /// (a small JSON document) by [`ValidationError::to_json_body`]. Closed
 /// enum — extends the `PitError`-style `Result`-default discipline
 /// (ADR-0080 §3 footgun #2; never an exception).
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// `PartialEq` only (not `Eq`) as of ADR-0080 Phase-3a: [`Self::FloatOutOfRange`]
+/// carries `f64` value + bounds, and `f64` is `PartialEq`-but-not-`Eq`. SAFE —
+/// `ValidationError` is only `==`/`matches!`-compared in tests + flows through
+/// `Result`/`Err`; it is never a `HashMap`/`HashSet` key and no site bounds it
+/// `: Eq` (mirrors the `Refinement` Eq-drop, same rationale).
+#[derive(Clone, Debug, PartialEq)]
 pub enum ValidationError {
     /// The request body was not a JSON object (e.g. an array, a scalar,
     /// or malformed JSON the trampoline already failed to parse).
@@ -96,6 +106,16 @@ pub enum ValidationError {
         value: i64,
         lo: Option<i64>,
         hi: Option<i64>,
+    },
+    /// An `f64` field violated its float value-range refinement bound
+    /// (ADR-0080 Phase-3a) — the precise MIRROR of [`Self::OutOfRange`] with
+    /// `f64` value + bounds. Bounds are INCLUSIVE; `lo`/`hi` are the same
+    /// finite bounds the OpenAPI schema advertised as `minimum`/`maximum`.
+    FloatOutOfRange {
+        field: String,
+        value: f64,
+        lo: Option<f64>,
+        hi: Option<f64>,
     },
     /// A `str` field violated its length refinement bound (ADR-0080
     /// Phase-2). `len` is the character count of the deserialized string.
@@ -153,6 +173,21 @@ impl ValidationError {
                 };
                 format!("field `{field}` value {value} must be {bound}")
             }
+            Self::FloatOutOfRange {
+                field,
+                value,
+                lo,
+                hi,
+            } => {
+                // Mirror `OutOfRange`'s §2.5-B FIX shape with `f64` bounds.
+                let bound = match (lo, hi) {
+                    (Some(l), Some(h)) => format!("in [{l}, {h}]"),
+                    (Some(l), None) => format!(">= {l}"),
+                    (None, Some(h)) => format!("<= {h}"),
+                    (None, None) => "within its declared range".to_string(),
+                };
+                format!("field `{field}` value {value} must be {bound}")
+            }
             Self::LengthOutOfRange { field, len, lo, hi } => {
                 let bound = match (lo, hi) {
                     (Some(l), Some(h)) => format!("between {l} and {h} characters"),
@@ -180,13 +215,24 @@ impl ValidationError {
 /// `lo`/`hi` carry the int-range bound for an [`FieldKind::I64`] field
 /// (`minimum`/`maximum`) AND the length bound for an [`FieldKind::Str`]
 /// field (`minLength`/`maxLength`, ADR-0080 Phase-2) — the `kind`
-/// discriminates value-range from length. `pattern` carries the raw regex
-/// for a [`FieldKind::Pat`] field (`pattern`, ADR-0080 Phase-2/3).
+/// discriminates value-range from length. `lo_f`/`hi_f` carry the FLOAT
+/// value-range bound for an [`FieldKind::F64`] field (`minimum`/`maximum` on
+/// a `{type:number}` schema, ADR-0080 Phase-3a) — a SEPARATE pair from the
+/// integer `lo`/`hi` because an `f64` bound (`0.5`) is not an `i64`.
+/// `pattern` carries the raw regex for a [`FieldKind::Pat`] field
+/// (`pattern`, ADR-0080 Phase-2/3).
 pub(crate) struct FieldSpec {
     pub(crate) name: String,
     pub(crate) kind: FieldKind,
     pub(crate) lo: Option<i64>,
     pub(crate) hi: Option<i64>,
+    /// The float value-range bounds for an [`FieldKind::F64`] field (ADR-0080
+    /// Phase-3a); `None` for every other kind. A `f64` bound (e.g. `0.5`) is
+    /// not representable as the integer `lo`/`hi`, so it lives in its own
+    /// pair — the validator float-range-checks against these, and the
+    /// OpenAPI emitter advertises them as `minimum`/`maximum`.
+    pub(crate) lo_f: Option<f64>,
+    pub(crate) hi_f: Option<f64>,
     /// The raw regex for a [`FieldKind::Pat`] field; `None` otherwise.
     pub(crate) pattern: Option<String>,
 }
@@ -276,6 +322,10 @@ pub(crate) fn body_name(schema: &str) -> Option<String> {
 ///   `i64` the bounds are an int RANGE (`minimum`/`maximum`); for `str` they
 ///   are a LENGTH bound (`minLength`/`maxLength`, ADR-0080 Phase-2). An
 ///   absent bound is the empty string.
+/// - `f64[:lo:hi]` — a `:`-delimited FLOAT suffix (ADR-0080 Phase-3a). The
+///   bounds parse as `f64` (so `f64:0.5:99.9` is admitted) into the SEPARATE
+///   `lo_f`/`hi_f` pair; they are a value RANGE (`minimum`/`maximum` on a
+///   `{type:number}` schema). An absent bound is the empty string.
 /// - `pat:<regex>` — a regex PATTERN; the regex is EVERYTHING after the
 ///   first `:` (so a `:` inside the regex is preserved). The base JSON type
 ///   is `string`.
@@ -296,25 +346,41 @@ pub(crate) fn parse_schema(schema: &str) -> Vec<FieldSpec> {
             None => (rest, None),
         };
         let kind = FieldKind::parse(kind_token);
-        let (lo, hi, pattern) = if let FieldKind::Pat = kind {
-            // The pattern payload is the raw regex (the whole remainder
-            // after the first `:`). An empty/absent remainder → no pattern.
-            (
-                None,
-                None,
-                suffix.filter(|s| !s.is_empty()).map(str::to_string),
-            )
-        } else {
-            // Every other kind carries the `:lo:hi` numeric suffix (an
+        let (lo, hi, lo_f, hi_f, pattern) = match kind {
+            FieldKind::Pat => {
+                // The pattern payload is the raw regex (the whole remainder
+                // after the first `:`). An empty/absent remainder → no pattern.
+                (
+                    None,
+                    None,
+                    None,
+                    None,
+                    suffix.filter(|s| !s.is_empty()).map(str::to_string),
+                )
+            }
+            FieldKind::F64 => {
+                // ADR-0080 Phase-3a — an `f64` field's bounds parse as `f64`
+                // into the SEPARATE float pair (an `i64` parse would reject a
+                // fractional bound like `0.5`). The DECODE half of the
+                // cannot-drift pair (the ENCODE is `float_suffix` in
+                // cobrust-types).
+                let (lo_f, hi_f) = parse_float_suffix(suffix);
+                (None, None, lo_f, hi_f, None)
+            }
+            // Every other kind carries the `:lo:hi` INTEGER suffix (an
             // absent bound is the empty string).
-            let (lo, hi) = parse_numeric_suffix(suffix);
-            (lo, hi, None)
+            FieldKind::Str | FieldKind::I64 | FieldKind::Bool | FieldKind::Any => {
+                let (lo, hi) = parse_numeric_suffix(suffix);
+                (lo, hi, None, None, None)
+            }
         };
         specs.push(FieldSpec {
             name: name.to_string(),
             kind,
             lo,
             hi,
+            lo_f,
+            hi_f,
             pattern,
         });
     }
@@ -334,9 +400,27 @@ fn parse_numeric_suffix(suffix: Option<&str>) -> (Option<i64>, Option<i64>) {
     (lo, hi)
 }
 
+/// Parse the `:lo:hi` FLOAT suffix of an `f64` field (ADR-0080 Phase-3a) —
+/// the `f64` dual of [`parse_numeric_suffix`]. Each bound is parsed with
+/// `str::parse::<f64>()`, which accepts every string the ENCODE half
+/// (`cobrust-types::float_suffix`, via `f64` `Display`) emits — so the pair
+/// round-trips exactly (the cannot-drift contract, ADR-0080 §3 footgun #4).
+/// Either bound may be the empty string (absent → `None`); a malformed bound
+/// parses to `None` (defensive — the compiler emits well-formed suffixes).
+fn parse_float_suffix(suffix: Option<&str>) -> (Option<f64>, Option<f64>) {
+    let Some(suffix) = suffix else {
+        return (None, None);
+    };
+    let mut parts = suffix.split(':');
+    let lo = parts.next().and_then(|s| s.parse::<f64>().ok());
+    let hi = parts.next().and_then(|s| s.parse::<f64>().ok());
+    (lo, hi)
+}
+
 /// Validate `body` against `schema` (ADR-0080 §5.4). Returns `Ok(())` iff
 /// the body is an object whose keys EXACTLY match the declared fields, each
-/// of the declared base type, with every int-range refinement satisfied.
+/// of the declared base type, with every int-range / f64 value-range /
+/// str-length / str-pattern refinement satisfied.
 ///
 /// This is the TOTAL boundary deserialization (footgun #1): a missing key,
 /// an extra key, a wrong JSON type, or an out-of-range value yields `Err`,
@@ -400,8 +484,18 @@ fn check_field(spec: &FieldSpec, value: &Value) -> Result<(), ValidationError> {
         }
         FieldKind::F64 => {
             // Accept any JSON number (an integer literal is a valid f64).
-            if !value.is_number() {
+            // `as_f64` returns `Some` for every JSON number (integer OR
+            // float) and `None` for a non-number, so it doubles as the
+            // type check and the value extraction.
+            let Some(n) = value.as_f64() else {
                 return Err(wrong_type(spec));
+            };
+            // Float value-range refinement (ADR-0080 Phase-3a) — the precise
+            // mirror of the i64 range-check, against the SEPARATE `lo_f`/`hi_f`
+            // bounds. Bounds are finite (the fixed grammar never emits
+            // NaN/inf), so the partial comparison is total here.
+            if spec.lo_f.is_some_and(|lo| n < lo) || spec.hi_f.is_some_and(|hi| n > hi) {
+                return Err(float_out_of_range(spec, n));
             }
         }
         FieldKind::I64 => {
@@ -482,6 +576,17 @@ fn out_of_range(spec: &FieldSpec, value: i64) -> ValidationError {
         value,
         lo: spec.lo,
         hi: spec.hi,
+    }
+}
+
+/// ADR-0080 Phase-3a — the `f64` mirror of [`out_of_range`], reading the
+/// SEPARATE float bound pair.
+fn float_out_of_range(spec: &FieldSpec, value: f64) -> ValidationError {
+    ValidationError::FloatOutOfRange {
+        field: spec.name.clone(),
+        value,
+        lo: spec.lo_f,
+        hi: spec.hi_f,
     }
 }
 
@@ -781,5 +886,144 @@ mod tests {
         assert_eq!(specs[0].pattern.as_deref(), Some(".+@.+"));
         assert_eq!(specs[0].lo, None);
         assert_eq!(specs[0].hi, None);
+    }
+
+    // ----- ADR-0080 Phase-3a: f64 value-range refinement (FloatRange) ---
+
+    /// `name: str` + `ratio: f64 where 0.0 <= self and self <= 1.0`
+    /// (descriptor `f64:0:1`). The MIRROR of the Phase-1 int SCHEMA.
+    const F64_SCHEMA: &str = "# Reading\nname\tstr\nratio\tf64:0:1";
+
+    #[test]
+    fn float_in_range_passes() {
+        // A float strictly inside [0, 1].
+        let v = json!({"name": "a", "ratio": 0.5});
+        assert_eq!(validate_against_schema(F64_SCHEMA, &v), Ok(()));
+        // The inclusive endpoints pass.
+        assert_eq!(
+            validate_against_schema(F64_SCHEMA, &json!({"name": "a", "ratio": 0.0})),
+            Ok(())
+        );
+        assert_eq!(
+            validate_against_schema(F64_SCHEMA, &json!({"name": "a", "ratio": 1.0})),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn float_above_max_out_of_range() {
+        let v = json!({"name": "a", "ratio": 1.5});
+        assert!(matches!(
+            validate_against_schema(F64_SCHEMA, &v),
+            Err(ValidationError::FloatOutOfRange { value, hi: Some(h), .. })
+                if (value - 1.5).abs() < f64::EPSILON && (h - 1.0).abs() < f64::EPSILON
+        ));
+    }
+
+    #[test]
+    fn float_below_min_out_of_range() {
+        let v = json!({"name": "a", "ratio": -0.5});
+        assert!(matches!(
+            validate_against_schema(F64_SCHEMA, &v),
+            Err(ValidationError::FloatOutOfRange { lo: Some(l), .. })
+                if (l - 0.0).abs() < f64::EPSILON
+        ));
+    }
+
+    #[test]
+    fn integer_json_accepted_for_f64_field() {
+        // A JSON integer literal is a valid f64 (0 is in [0, 1]); `as_f64`
+        // accepts it. This is the mirror of `float_for_int_field_rejected`
+        // in the OTHER direction — f64 is the permissive numeric kind.
+        let v = json!({"name": "a", "ratio": 1});
+        assert_eq!(validate_against_schema(F64_SCHEMA, &v), Ok(()));
+        // An integer OUT of range still fails (2 > 1).
+        assert!(matches!(
+            validate_against_schema(F64_SCHEMA, &json!({"name": "a", "ratio": 2})),
+            Err(ValidationError::FloatOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn non_number_for_f64_field_is_wrong_type() {
+        let v = json!({"name": "a", "ratio": "x"});
+        assert!(matches!(
+            validate_against_schema(F64_SCHEMA, &v),
+            Err(ValidationError::WrongType { field, expected: "number" }) if field == "ratio"
+        ));
+    }
+
+    #[test]
+    fn float_one_sided_lower_bound() {
+        // `0.5 <= self` (no upper) → descriptor `f64:0.5:`.
+        let schema = "x\tf64:0.5:";
+        assert_eq!(validate_against_schema(schema, &json!({"x": 0.5})), Ok(()));
+        assert!(validate_against_schema(schema, &json!({"x": 0.4})).is_err());
+        // No upper bound — a large float passes.
+        assert_eq!(validate_against_schema(schema, &json!({"x": 1e9})), Ok(()));
+    }
+
+    #[test]
+    fn float_one_sided_upper_bound() {
+        // `self <= 100.0` (no lower) → descriptor `f64::100`.
+        let schema = "x\tf64::100";
+        assert_eq!(
+            validate_against_schema(schema, &json!({"x": 100.0})),
+            Ok(())
+        );
+        assert!(validate_against_schema(schema, &json!({"x": 100.1})).is_err());
+        // No lower bound — a very negative float passes.
+        assert_eq!(validate_against_schema(schema, &json!({"x": -1e9})), Ok(()));
+    }
+
+    #[test]
+    fn plain_f64_field_has_no_range_bound() {
+        // `ratio: f64` (no `where`) → descriptor `f64` (no suffix) → any
+        // number passes. Confirms a bare f64 field is not constrained.
+        let schema = "x\tf64";
+        assert_eq!(validate_against_schema(schema, &json!({"x": 1e30})), Ok(()));
+        assert_eq!(
+            validate_against_schema(schema, &json!({"x": -1e30})),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn f64_range_descriptor_parses_to_f64_kind_with_float_bounds() {
+        // The DECODE side of the cannot-drift contract: `f64:0.5:99.9`
+        // parses to an F64 field carrying lo_f=0.5, hi_f=99.9 (the SAME
+        // bounds the OpenAPI emitter reads for minimum/maximum) — and the
+        // INTEGER `lo`/`hi` pair stays empty (the bounds live in the float
+        // pair, not the int pair).
+        let specs = parse_schema("r\tf64:0.5:99.9");
+        assert_eq!(specs.len(), 1);
+        assert!(matches!(specs[0].kind, FieldKind::F64));
+        assert_eq!(specs[0].lo_f, Some(0.5));
+        assert_eq!(specs[0].hi_f, Some(99.9));
+        assert_eq!(specs[0].lo, None);
+        assert_eq!(specs[0].hi, None);
+    }
+
+    #[test]
+    fn float_out_of_range_error_body_is_valid_json_with_fix() {
+        // §2.5-D6: the FloatOutOfRange detail PRINTS THE FIX (the bound),
+        // mirroring OutOfRange. The 422 body round-trips as JSON.
+        let e = ValidationError::FloatOutOfRange {
+            field: "ratio".to_string(),
+            value: 1.5,
+            lo: Some(0.0),
+            hi: Some(1.0),
+        };
+        let body = e.to_json_body();
+        let parsed: Value = serde_json::from_str(&body).expect("422 body is valid JSON");
+        assert_eq!(parsed["error"], "validation_failed");
+        let detail = parsed["detail"].as_str().expect("detail is a string");
+        // The detail names the field, the offending value, and the bound.
+        assert!(detail.contains("ratio"), "detail names the field: {detail}");
+        assert!(detail.contains("1.5"), "detail names the value: {detail}");
+        assert!(
+            detail.contains('[') && detail.contains(']'),
+            "detail prints the inclusive bound (the FIX): {detail}"
+        );
     }
 }

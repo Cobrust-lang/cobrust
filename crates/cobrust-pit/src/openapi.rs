@@ -32,6 +32,8 @@
 //! i64 where 0 <= self          → {"type":"integer","minimum":0}
 //! i64 where self <= 100        → {"type":"integer","maximum":100}
 //! i64 where 0 <= self <= 100   → {"type":"integer","minimum":0,"maximum":100}
+//! f64 where 0 <= self <= 100   → {"type":"number","minimum":0,"maximum":100}
+//! f64 where 0.5 <= self        → {"type":"number","minimum":0.5}
 //! str where 1 <= len(self)<=20 → {"type":"string","minLength":1,"maxLength":20}
 //! str where len(self) <= 255   → {"type":"string","maxLength":255}
 //! str where pattern(self, re)  → {"type":"string","pattern":re}
@@ -85,6 +87,8 @@ fn schema_name(meta: &ValidatedRouteMeta) -> String {
 /// advertised bound cannot drift from the enforced one (footgun #4):
 ///
 /// - an `i64` int-range → `minimum` (from `lo`) and/or `maximum` (from `hi`);
+/// - an `f64` value-range → `minimum` (from `lo_f`) and/or `maximum` (from
+///   `hi_f`) on a `{type:number}` schema (ADR-0080 Phase-3a D4);
 /// - a `str` LENGTH bound → `minLength` (from `lo`) and/or `maxLength` (from
 ///   `hi`) (ADR-0080 Phase-2 §5.3 line 331);
 /// - a `pat` PATTERN → `pattern` (the raw regex) (ADR-0080 §5.3 line 339).
@@ -126,9 +130,22 @@ pub(crate) fn field_schema(spec: &FieldSpec) -> Value {
                 obj.insert("pattern".to_string(), Value::String(pattern.clone()));
             }
         }
+        // An `f64` field's FLOAT value bounds → minimum/maximum on a
+        // `{type:number}` schema (ADR-0080 Phase-3a D4, cannot drift). Read
+        // from the SEPARATE `lo_f`/`hi_f` pair the validator float-checks.
+        // A finite `f64` always yields a JSON number (`from_f64` only fails
+        // on NaN/inf, which the fixed grammar never produces).
+        FieldKind::F64 => {
+            if let Some(lo) = spec.lo_f.and_then(serde_json::Number::from_f64) {
+                obj.insert("minimum".to_string(), Value::Number(lo));
+            }
+            if let Some(hi) = spec.hi_f.and_then(serde_json::Number::from_f64) {
+                obj.insert("maximum".to_string(), Value::Number(hi));
+            }
+        }
         // An `i64` field's `lo`/`hi` are VALUE bounds → minimum/maximum
         // (ADR-0080 Phase-1, cannot drift).
-        FieldKind::I64 | FieldKind::F64 | FieldKind::Bool | FieldKind::Any => {
+        FieldKind::I64 | FieldKind::Bool | FieldKind::Any => {
             if let Some(lo) = spec.lo {
                 obj.insert("minimum".to_string(), Value::Number(lo.into()));
             }
@@ -424,5 +441,82 @@ mod tests {
             parsed_pat,
             "advertised pattern must equal the parsed regex — one source"
         );
+    }
+
+    // ----- ADR-0080 Phase-3a: f64 value-range → OpenAPI keywords --------
+
+    /// Two f64 fields: `ratio: f64 where 0.0 <= self and self <= 1.0`
+    /// (descriptor `f64:0:1`) and `score: f64 where 0.5 <= self`
+    /// (descriptor `f64:0.5:`). The MIRROR of the int-range SCHEMA on `f64`.
+    const F64_SCHEMA: &str = "# Reading\nratio\tf64:0:1\nscore\tf64:0.5:";
+
+    #[test]
+    fn f64_range_field_emits_number_type_with_minimum_maximum() {
+        // ADR-0080 Phase-3a D4 — an `f64` value range → {type:number,
+        // minimum, maximum} (the SAME keywords as int range, but on a
+        // `number` type). The SAME lo_f/hi_f the validator range-checks.
+        let specs = parse_schema(F64_SCHEMA);
+        let r = specs.iter().find(|s| s.name == "ratio").expect("ratio");
+        let v = field_schema(r);
+        assert_eq!(v["type"], "number");
+        assert_eq!(v["minimum"], 0.0);
+        assert_eq!(v["maximum"], 1.0);
+    }
+
+    #[test]
+    fn f64_fractional_bound_emits_fractional_minimum() {
+        // A genuinely-fractional bound (`0.5`) survives encode → decode →
+        // emit as a JSON float `0.5` (not truncated to an integer). This is
+        // the property the SEPARATE float pair exists to preserve.
+        let specs = parse_schema("x\tf64:0.5:99.9");
+        let v = field_schema(&specs[0]);
+        assert_eq!(v["type"], "number");
+        assert_eq!(v["minimum"], 0.5);
+        assert_eq!(v["maximum"], 99.9);
+    }
+
+    #[test]
+    fn f64_one_sided_lower_bound_emits_only_minimum() {
+        // `0.5 <= self` (no upper) → minimum:0.5, NO maximum.
+        let specs = parse_schema("score\tf64:0.5:");
+        let v = field_schema(&specs[0]);
+        assert_eq!(v["minimum"], 0.5);
+        assert!(v.get("maximum").is_none());
+    }
+
+    #[test]
+    fn f64_range_does_not_emit_integer_keywords_or_lengths() {
+        // A `number` value range must NOT emit minLength/maxLength (those are
+        // str length keywords); it emits minimum/maximum on a `number` type.
+        let specs = parse_schema("x\tf64:0:1");
+        let v = field_schema(&specs[0]);
+        assert!(
+            v.get("minLength").is_none() && v.get("maxLength").is_none(),
+            "an f64 range must not emit length keywords; got {v}"
+        );
+    }
+
+    #[test]
+    fn f64_range_cannot_drift_from_parsed_bounds() {
+        // The cannot-drift property for the f64 kind: the bound the doc
+        // advertises (`maximum`) is read from the SAME parse_schema output
+        // the validator would range-check — one source, so they are equal.
+        let specs = parse_schema(F64_SCHEMA);
+        let ratio = specs.iter().find(|s| s.name == "ratio").expect("ratio");
+        let parsed_hi = ratio.hi_f.expect("ratio has a float upper bound");
+
+        let doc = build_openapi_doc(&[ValidatedRouteMeta {
+            method: "POST".to_string(),
+            path: "/readings".to_string(),
+            schema: F64_SCHEMA.to_string(),
+        }]);
+        let advertised = doc["components"]["schemas"]["Reading"]["properties"]["ratio"]["maximum"]
+            .as_f64()
+            .expect("maximum present");
+        assert!(
+            (advertised - parsed_hi).abs() < f64::EPSILON,
+            "advertised maximum {advertised} must equal the parsed bound {parsed_hi} — one source"
+        );
+        assert!((advertised - 1.0).abs() < f64::EPSILON);
     }
 }
