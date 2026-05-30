@@ -307,6 +307,17 @@ str-length refinement adds `minLength`/`maxLength`, and a pattern adds
 `email: {type:string, pattern:".+@.+"}` — the same bounds the validator
 enforces. The array-length `maxItems` form for list fields is a later phase.
 
+## Full worked example
+
+`examples/fastapi_real_demo/` is a complete, runnable REST API that exercises
+the whole validated-body surface **together**: one `class CreateUser` carrying
+all three refinement kinds (int range on `age`, string length on `name`,
+string pattern on `email`), a handler that **reads** `body.age` and branches on
+it (201 for adults, 403 for minors), `json_response` echoing the validated
+body, and `serve_openapi` deriving the schema. See its `README.md` for the
+endpoints, the curl session, and the live E2E
+(`crates/cobrust-cli/tests/fastapi_real_demo_e2e.rs`).
+
 ## Why this design?
 
 - **One callback ABI shape**: every handler crosses as

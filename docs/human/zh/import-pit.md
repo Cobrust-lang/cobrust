@@ -284,6 +284,15 @@ fn main() -> i64:
 `email: {type:string, pattern:".+@.+"}` —— 与校验器强制执行的边界一致。
 列表字段的 `maxItems` 形式属于后续阶段。
 
+## 完整示例
+
+`examples/fastapi_real_demo/` 是一个完整、可运行的 REST API,把整个校验请求体
+表面**组合在一起**演示:一个 `class CreateUser` 同时承载三种 refinement(`age`
+的整数范围、`name` 的字符串长度、`email` 的字符串模式),一个**读取** `body.age`
+并据此分支的 handler(成年人返回 201,未成年人返回 403),用 `json_response`
+回显校验后的请求体,并用 `serve_openapi` 派生 schema。端点、curl 会话以及实时
+E2E(`crates/cobrust-cli/tests/fastapi_real_demo_e2e.rs`)详见其 `README.md`。
+
 ## 为什么是这样的设计?
 
 - **统一的回调 ABI 形状**:每个 handler 都以

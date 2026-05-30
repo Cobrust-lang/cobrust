@@ -1,0 +1,90 @@
+# FastAPI-real capstone demo — a single type-driven validated REST API
+# that exercises the WHOLE #156 Phase-1 surface TOGETHER (ADR-0080 + ADR-0081).
+#
+# This is the completeness-critic check: the per-feature unit E2Es each pass
+# in isolation; this demo proves they COMPOSE in one running server:
+#
+#   * a validated body `class` carrying ALL THREE refinement kinds at once
+#     — int range, string length, and string pattern — on ONE body;
+#   * a `route_validated` handler that READS a validated field (`body.age`)
+#     and branches on it (a business rule: adults vs minors);
+#   * `json_response(201, body)` echoing the validated body verbatim;
+#   * `text_response(403, "...")` for the business-rule rejection;
+#   * `serve_openapi(...)` deriving the schema from the SAME field table
+#     the validator reads (so the schema and the validator cannot drift).
+#
+# Why this is "FastAPI-real done elegantly" (the elegance-law, no legacy debt):
+#   * structure (field presence + type) is caught at COMPILE time — you
+#     cannot ship a handler that reads a field that is not there;
+#   * value constraints (range/length/pattern) are ONE boundary guard that
+#     returns a typed 422 — never a thrown exception, never an in-handler
+#     re-check;
+#   * `body.age` is a typed attribute read, never a stringly-typed `body["age"]`;
+#   * the OpenAPI schema is a projection of the one field table — no second,
+#     hand-kept schema to fall out of sync.
+
+import pit
+
+# ---------------------------------------------------------------------------
+# The validated request body — ALL THREE Phase-1 refinement kinds on ONE class.
+#
+# Declared BEFORE the handler: a signature-position forward reference to a
+# class defined LATER is a known limitation, so the body class comes first.
+#
+# This ONE class is the single source the validator AND the OpenAPI schema are
+# both projected from (ADR-0080 footgun #4 — cannot drift).
+# ---------------------------------------------------------------------------
+class CreateUser:
+    # STRING LENGTH refinement: 1..=50 characters (inclusive).
+    # → validator length-checks; OpenAPI emits minLength:1, maxLength:50.
+    name:  str where 1 <= len(self) and len(self) <= 50
+    # INT RANGE refinement: 0..=150 (inclusive). `self` is the field's value.
+    # → validator range-checks; OpenAPI emits minimum:0, maximum:150.
+    age:   i64 where 0 <= self and self <= 150
+    # STRING PATTERN refinement: a literal regex the value must match.
+    # → validator regex-checks; OpenAPI emits pattern.
+    email: str where pattern(self, ".+@.+")
+
+
+# ---------------------------------------------------------------------------
+# The handler: the body is a TYPED second parameter. pit validates the JSON
+# body into `body: CreateUser` BEFORE this runs — so reaching here proves
+# every refinement (name length, age range, email pattern) already passed.
+#
+# It then READS a validated field (`body.age`) and branches on it — a business
+# rule layered ON TOP of the type-driven validation: only adults (age >= 18)
+# may be created. The minor case returns a 403 WITHOUT re-validating anything.
+# ---------------------------------------------------------------------------
+fn create_user(req: pit.Request, body: CreateUser) -> pit.Response:
+    # Runtime read of a validated field — `body.age` is statically `i64`;
+    # a typo'd `body.aeg` would be a COMPILE-TIME error, not a runtime KeyError.
+    let a: i64 = body.age
+    if a >= 18:
+        # Echo the validated body verbatim as application/json. json_response
+        # re-serialises the SAME serde value validation produced, so the
+        # response body cannot drift from the validated body.
+        return pit.json_response(201, body)
+    # The business-rule branch — proves `body.age` was genuinely READ at
+    # runtime (a minor and an adult differ ONLY in this field's value).
+    return pit.text_response(403, "must be 18 or older")
+
+
+fn main() -> i64:
+    let app = pit.App()
+    # One validated route — the 2-arg handler shape is type-checked.
+    let _ = app.route_validated("POST", "/users", create_user)
+    # Explicit OpenAPI opt-in (no magic auto-route). Serves the schema
+    # derived from CreateUser's field table + refinement side-table.
+    let _ = app.serve_openapi("/openapi.json")
+
+    # Port from argv[1] when present (lets the E2E harness pick an ephemeral
+    # port to avoid collisions with parallel test runs); default 8080 for the
+    # standalone-runnable case the README documents. Mirrors the z8 demo.
+    let args = argv()
+    let port: i64 = 8080
+    if list_len(&args) > 1:
+        port = parse_int(list_get(&args, 1))
+
+    # Blocking serve — `app.run(host, port)` blocks until the process is killed.
+    let _exit = app.run("127.0.0.1", port)
+    return 0
