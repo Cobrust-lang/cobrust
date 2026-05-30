@@ -36,6 +36,15 @@ linalg-backend = ["dep:ndarray-linalg"]
 linalg-openblas-static = ["linalg-backend", "ndarray-linalg/openblas-static"]
 linalg-intel-mkl-static = ["linalg-backend", "ndarray-linalg/intel-mkl-static"]
 
+# 3-tier element-wise-add performance benchmark (the FIRST increment of the
+# Cobrust perf-benchmark suite per CLAUDE.md §5.2 + §5.3). `harness = false`
+# = a plain `fn main` (no libtest / criterion), mirroring the `cobrust-nest`
+# `vs_cpython` bench. Re-run: `cargo bench -p cobrust-coil --bench
+# elementwise_add`. Methodology: `docs/agent/benchmarks/README.md`.
+[[bench]]
+name = "elementwise_add"
+harness = false
+
 [dependencies]
 serde_json = { workspace = true }
 ndarray = "0.16"
