@@ -89,7 +89,10 @@ jobs:
           brew install llvm@18 || brew upgrade llvm@18 || true
           echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2  # v2.7.8
-      - run: cargo build --workspace --all-targets --locked
+      # --jobs 2 caps build parallelism: the LLVM-statically-linked test binaries spike peak
+      # RAM under the default -j and intermittently OOM-kill the ubuntu runner (finding F72 —
+      # the killed-runner flake; --jobs only bounds concurrency, the --all-targets set is unchanged).
+      - run: cargo build --workspace --all-targets --locked --jobs 2
 
   test:
     name: cargo test
