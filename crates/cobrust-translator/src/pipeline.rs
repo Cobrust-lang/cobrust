@@ -655,6 +655,7 @@ pub async fn translate_with_verifiers(
         repair_attempts,
         behavior_outcome,
         perf_outcome,
+        divergences,
     } = run_repair_loop(
         &router,
         &library.library,
@@ -702,6 +703,7 @@ pub async fn translate_with_verifiers(
         &translation,
         repair_attempts,
         &gate_outcomes,
+        &divergences,
     );
     let manifest_path = crate_dir.join("PROVENANCE.toml");
     manifest
@@ -726,6 +728,13 @@ struct RepairLoopResult {
     repair_attempts: u32,
     behavior_outcome: GateOutcome,
     perf_outcome: GateOutcome,
+    /// Behavioral divergences the L2.behavior gate observed-and-repaired
+    /// along the way (one rendered record per `l2_behavior` Reject the
+    /// repair loop subsequently fixed). Empty when every function
+    /// converged on attempt 1. Pinned by ADR-0082: the manifest's
+    /// `verification.divergences` MUST mirror what the gate actually
+    /// saw — never a hardcoded `vec![]` (the prior bug, M4 Follow-up #2b).
+    divergences: Vec<String>,
 }
 
 /// Build the provenance manifest from the translation artefacts.
@@ -734,6 +743,7 @@ struct RepairLoopResult {
 /// (Pass / Fail / Skip) the orchestrator computed from the verifier
 /// hooks — *not* a hardcoded literal. Pinned by ADR-0040 §"Honest gate
 /// verdicts" (see also claude-desktop integrated handoff §1.B2).
+#[allow(clippy::too_many_arguments)]
 fn build_manifest(
     library: &PyLibrary,
     cfg: &TranslatorConfig,
@@ -741,6 +751,7 @@ fn build_manifest(
     translation: &TranslationOutput,
     repair_attempts: u32,
     gate_outcomes: &GateOutcomes,
+    divergences: &[String],
 ) -> ProvenanceManifest {
     let _ = repair_attempts; // detail already baked into the behavior outcome
     let toolchain = "rustc 1.94.1".to_string();
@@ -804,7 +815,10 @@ fn build_manifest(
         verification: VerificationSection {
             seeds: library.seeds.clone(),
             fuzz_inputs_per_fn: library.fuzz_inputs_per_fn,
-            divergences: vec![],
+            // ADR-0082: mirror the divergences the L2.behavior gate
+            // actually observed-and-repaired. Empty iff every function
+            // converged on attempt 1 (no behavioral Reject ever fired).
+            divergences: divergences.to_vec(),
             known_failures: vec![],
         },
         router: RouterSection {
@@ -859,6 +873,10 @@ async fn run_repair_loop(
     out_dir: &std::path::Path,
 ) -> Result<RepairLoopResult, TranslatorError> {
     let mut total_repair_attempts: u32 = 0;
+    // ADR-0082: every `l2_behavior` Reject the loop observes-and-repairs
+    // is rendered here so the manifest's `verification.divergences` can
+    // honestly mirror what the gate caught (was hardcoded `vec![]`).
+    let mut observed_divergences: Vec<String> = Vec::new();
     // Track whether the verifier ever produced a non-default verdict.
     // If any function went through a Reject/repair cycle, we know the
     // verifier is "live" and the success path is a real Pass; otherwise
@@ -900,6 +918,13 @@ async fn run_repair_loop(
                 VerifierVerdict::Accept => break,
                 VerifierVerdict::Reject(failure) => {
                     last_failed_gate = failure.failed_gate.clone();
+                    // ADR-0082: record behavioral (not perf) divergences
+                    // for the manifest. This Reject is about to be sent
+                    // to repair; the manifest must remember the gate
+                    // caught it, even after the repair loop fixes it.
+                    if failure.failed_gate == "l2_behavior" {
+                        observed_divergences.push(render_divergence(&failure));
+                    }
                     // Persist the diagnostic blob.
                     let _ = failure.write(out_dir, library)?;
                     diagnostics.push(failure.clone());
@@ -979,7 +1004,45 @@ async fn run_repair_loop(
         repair_attempts: total_repair_attempts,
         behavior_outcome,
         perf_outcome,
+        divergences: observed_divergences,
     })
+}
+
+/// Render one observed-and-repaired behavioral divergence into the
+/// terse one-line record the manifest's `verification.divergences`
+/// carries (ADR-0082). Long `expected` / `actual` payloads are
+/// truncated so a structured oracle output (e.g. a full parsed dict)
+/// cannot bloat the manifest. The `attempt` is the *re-dispatch* number
+/// the verifier stamped (= the failing attempt + 1), so the reader sees
+/// which retry the gate forced.
+fn render_divergence(failure: &GateFailure) -> String {
+    /// Cap a payload field so one large oracle output can't bloat the
+    /// manifest; appends `…(N more)` when truncated.
+    fn clip(s: &str) -> String {
+        const MAX: usize = 120;
+        let n = s.chars().count();
+        if n <= MAX {
+            return s.to_string();
+        }
+        let head: String = s.chars().take(MAX).collect();
+        format!("{head}…({} more)", n - MAX)
+    }
+    let input = failure
+        .failed_inputs
+        .first()
+        .map_or("<none>", String::as_str);
+    let expected = failure.expected.as_deref().unwrap_or("<none>");
+    let actual = failure.actual.as_deref().unwrap_or("<none>");
+    format!(
+        "{fname}: input={input:?} expected={exp:?} actual={act:?} \
+         (gate={gate}, re-dispatched as attempt {attempt}, repaired)",
+        fname = failure.function,
+        input = clip(input),
+        exp = clip(expected),
+        act = clip(actual),
+        gate = failure.failed_gate,
+        attempt = failure.attempt,
+    )
 }
 
 /// Default L2.build verdict for a library.
@@ -1714,6 +1777,21 @@ tolerance = "exact"
             r1.manifest.source.sha256, r2.manifest.source.sha256,
             "source sha must be stable"
         );
+        // ADR-0082 negative tripwire: a clean run (AcceptAll, no Reject
+        // ever fired) records NO divergences. Guards against a
+        // regression that always-populates the field — divergences must
+        // mirror what the gate observed, which here is nothing. Checked
+        // on both independent runs so the tripwire is symmetric.
+        assert!(
+            r1.manifest.verification.divergences.is_empty(),
+            "no-Reject run must record zero divergences, got {:?}",
+            r1.manifest.verification.divergences
+        );
+        assert!(
+            r2.manifest.verification.divergences.is_empty(),
+            "no-Reject run must record zero divergences, got {:?}",
+            r2.manifest.verification.divergences
+        );
     }
 
     /// M5: a verifier that rejects the first attempt and accepts the
@@ -1815,6 +1893,32 @@ tolerance = "exact"
         // Diagnostic blob was persisted.
         let diag_path = dir.path().join("out/tomli/diagnostics/loads__2.toml");
         assert!(diag_path.exists());
+
+        // ADR-0082: the manifest must HONESTLY record the behavioral
+        // divergence the gate observed-and-repaired — not the prior
+        // hardcoded `vec![]`. Exactly one `l2_behavior` Reject fired, so
+        // exactly one divergence record is written, naming the function,
+        // the failing input, and the expected/actual the fixture flagged.
+        let divs = &result.manifest.verification.divergences;
+        assert_eq!(
+            divs.len(),
+            1,
+            "one l2_behavior Reject must yield exactly one divergence record, got {divs:?}"
+        );
+        let rec = &divs[0];
+        assert!(rec.contains("loads"), "divergence names the function: {rec}");
+        assert!(
+            rec.contains("fixture-input"),
+            "divergence names the failing input: {rec}"
+        );
+        assert!(
+            rec.contains("ok") && rec.contains("err"),
+            "divergence carries expected+actual: {rec}"
+        );
+        assert!(
+            rec.contains("l2_behavior"),
+            "divergence names the gate: {rec}"
+        );
     }
 
     struct AlwaysReject;
