@@ -727,6 +727,56 @@ async fn t1_1_full_pipeline_tomli_real_llm() {
         g3_fuzz.total, g3_fuzz.divergences, g3_fuzz.panics
     );
 
+    // ---- FAIL-LOUD on a vacuous (0-case) L2.behavior gate ------------------
+    // A behavioral gate that ran 0 cases is "NOT RUN", never "PASS". This
+    // catches the M4 regression (commit 0010653 renamed the synth crate
+    // `cobrust-tomli-llm-synth` → `cobrust-nest-llm-synth` but left the
+    // smoke/fuzz `use cobrust_tomli_llm_synth::…` imports stale, so the
+    // synth smoke/fuzz targets failed to compile and the gate silently
+    // harvested 0 cases yet reported PASS + promoted parser.rs).
+    //
+    // Guard fires when G2 (build) passed — meaning the behavioral gate was
+    // *expected* to run real cases — yet smoke produced 0 positive cases OR
+    // fuzz produced 0 inputs. When G2 failed the gate is legitimately
+    // skipped (already reported FAIL via the build gate) and is not vacuous.
+    let smoke_vacuous = g2_outcome.passed && g3_smoke.is_vacuous();
+    let fuzz_vacuous = g3_fuzz.is_vacuous(g2_outcome.passed);
+    let behavioral_gate_vacuous = smoke_vacuous || fuzz_vacuous;
+    if behavioral_gate_vacuous {
+        println!("\n--- !!! VACUOUS L2.behavior GATE DETECTED !!! ---");
+        if smoke_vacuous {
+            println!(
+                "  G3.smoke produced 0 positive cases despite G2 build PASS \
+                 (smoke subprocess exit = {:?}).",
+                g3_smoke.subprocess_exit
+            );
+            if !g3_smoke.stderr_tail.is_empty() {
+                println!("  smoke stderr tail:");
+                for line in g3_smoke.stderr_tail.lines() {
+                    println!("    {line}");
+                }
+            }
+        }
+        if fuzz_vacuous {
+            println!(
+                "  G3.fuzz produced 0 inputs despite G2 build PASS \
+                 (fuzz subprocess exit = {:?}).",
+                g3_fuzz.subprocess_exit
+            );
+            if !g3_fuzz.stderr_tail.is_empty() {
+                println!("  fuzz stderr tail:");
+                for line in g3_fuzz.stderr_tail.lines() {
+                    println!("    {line}");
+                }
+            }
+        }
+        println!(
+            "  A 0-case behavioral gate is NOT a pass — refusing to certify \
+             or promote. See docs/agent/findings/\
+             m4-tomli-real-llm-end-to-end-2026-05-30.md."
+        );
+    }
+
     // ---- Per-canonical-fn pass/fail classification -------------------------
     let canonical_results = classify_canonical_results(&emissions, &g2_outcome, &g3_smoke);
     let canonical_pass_count = canonical_results
@@ -772,9 +822,17 @@ async fn t1_1_full_pipeline_tomli_real_llm() {
         perf_numbers.ratio_10m()
     );
 
+    // ---- Final verdict (pure; same logic the synthetic fail-loud tests
+    // exercise via `derive_verdict`). A vacuous behavioral gate forces
+    // FAIL + blocks promotion regardless of canonical count. ----------------
+    let (overall, may_promote) = derive_verdict(canonical_pass_count, behavioral_gate_vacuous);
+
     // ---- Promote successful crate to /crates/cobrust-nest/src/parser.rs ---
     // Cobra-named per ADR-0071 §3 (`tomli` → `nest`).
-    let promoted = if canonical_pass_count >= 4 {
+    let promoted = if behavioral_gate_vacuous {
+        println!("\n--- REFUSING promotion: L2.behavior gate was vacuous (0 cases) ---");
+        false
+    } else if may_promote {
         println!("\n--- Promoting LLM-emitted parser.rs to crates/cobrust-nest/ ---");
         match promote_emission(&emissions) {
             Ok(_) => {
@@ -789,14 +847,6 @@ async fn t1_1_full_pipeline_tomli_real_llm() {
     } else {
         println!("\n--- Skipping promotion: only {canonical_pass_count}/5 canonical PASS ---");
         false
-    };
-
-    // ---- Final verdict + finding write ------------------------------------
-    let overall = match canonical_pass_count {
-        5 => "PASS",
-        4 => "PARTIAL-PASS-4OF5",
-        n if n >= 3 => "PARTIAL-PASS-3OF5",
-        _ => "FAIL",
     };
 
     println!("\n=== T1.1 verdict ===");
@@ -851,6 +901,24 @@ async fn t1_1_full_pipeline_tomli_real_llm() {
         any_real_call,
         "G4: ledger must show at least one real openai call (cache_hit=false, provider_kind=openai)"
     );
+
+    // Hard assertion: a vacuous (0-case) behavioral gate is NEVER a pass.
+    // This is the load-bearing fail-loud guard — without it a future run
+    // where smoke/fuzz case-generation silently drops to 0 (the M4
+    // regression) would report green and promote unverified code.
+    assert!(
+        !behavioral_gate_vacuous,
+        "L2.behavior gate produced 0 cases (smoke positive_total={}, fuzz total={}, \
+         G2 build passed={}) — refusing to certify; a 0-case differential gate is \
+         vacuously green and proves no behavioral parity. Smoke subprocess exit={:?}, \
+         fuzz subprocess exit={:?}. See \
+         docs/agent/findings/m4-tomli-real-llm-end-to-end-2026-05-30.md.",
+        g3_smoke.positive_total,
+        g3_fuzz.total,
+        g2_outcome.passed,
+        g3_smoke.subprocess_exit,
+        g3_fuzz.subprocess_exit,
+    );
 }
 
 // ---- Data structures -------------------------------------------------------
@@ -884,6 +952,25 @@ struct SmokeOutcome {
     negative_total: u32,
     negative_pass: u32,
     failures: Vec<String>,
+    /// Exit code of the `cargo test --test smoke` subprocess. A non-zero
+    /// (or absent) exit means the synth crate / smoke target did NOT
+    /// compile-and-run, so any 0-case reading is a build failure — NOT a
+    /// vacuous pass. See [`SmokeOutcome::is_vacuous`].
+    subprocess_exit: Option<i32>,
+    /// Tail of the subprocess stderr — surfaces the compile error when the
+    /// gate produced 0 cases.
+    stderr_tail: String,
+}
+
+impl SmokeOutcome {
+    /// A smoke gate is **vacuous** (must NOT be treated as PASS) when it
+    /// ran but exercised 0 positive cases. This catches the M4 regression
+    /// where a wrong crate-name import made the synth smoke target fail to
+    /// compile, so the gate harvested 0 `SMOKE_POSITIVE` lines yet the
+    /// harness counted it as PASS. See finding m4-tomli-real-llm-end-to-end.
+    fn is_vacuous(&self) -> bool {
+        self.ran && self.positive_total == 0
+    }
 }
 
 #[derive(Default, Clone, Debug)]
@@ -892,6 +979,21 @@ struct FuzzOutcome {
     divergences: u32,
     panics: u32,
     examples: Vec<String>,
+    /// Exit code of the `cargo test --test fuzz` subprocess (see
+    /// [`SmokeOutcome::subprocess_exit`] for rationale).
+    subprocess_exit: Option<i32>,
+    /// Tail of the subprocess stderr — surfaces the compile error when the
+    /// gate produced 0 cases.
+    stderr_tail: String,
+}
+
+impl FuzzOutcome {
+    /// A fuzz gate is **vacuous** when the behavioral build compiled
+    /// (`g2_passed`) yet 0 inputs were exercised. A 0-case fuzz run proves
+    /// nothing — it must hard-fail, never PASS.
+    fn is_vacuous(&self, g2_passed: bool) -> bool {
+        g2_passed && self.total == 0
+    }
 }
 
 #[derive(Default, Clone, Debug)]
@@ -1151,7 +1253,7 @@ fn write_smoke_test_file(crate_dir: &Path) -> std::io::Result<()> {
 
 #![allow(clippy::all)]
 
-use cobrust_tomli_llm_synth::{loads, table_to_json};
+use cobrust_nest_llm_synth::{loads, table_to_json};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -1267,7 +1369,7 @@ fn write_fuzz_test_file(crate_dir: &Path) -> std::io::Result<()> {
 
 #![allow(clippy::all)]
 
-use cobrust_tomli_llm_synth::{loads, table_to_json};
+use cobrust_nest_llm_synth::{loads, table_to_json};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -1423,7 +1525,14 @@ fn run_smoke_test(crate_dir: &Path) -> SmokeOutcome {
         ..Default::default()
     };
     let stdout = match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+        Ok(o) => {
+            // Capture the subprocess exit + stderr tail so a *compile*
+            // failure (e.g. the M4 wrong-crate-name import) is recorded
+            // instead of silently producing a 0-case "pass".
+            outcome.subprocess_exit = o.status.code();
+            outcome.stderr_tail = tail(&String::from_utf8_lossy(&o.stderr), 40);
+            String::from_utf8_lossy(&o.stdout).to_string()
+        }
         Err(e) => {
             outcome.failures.push(format!("invocation: {e}"));
             return outcome;
@@ -1471,7 +1580,11 @@ fn run_fuzz_test(crate_dir: &Path) -> FuzzOutcome {
     let output = cmd.output();
     let mut outcome = FuzzOutcome::default();
     let stdout = match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+        Ok(o) => {
+            outcome.subprocess_exit = o.status.code();
+            outcome.stderr_tail = tail(&String::from_utf8_lossy(&o.stderr), 40);
+            String::from_utf8_lossy(&o.stdout).to_string()
+        }
         Err(e) => {
             outcome.examples.push(format!("invocation: {e}"));
             return outcome;
@@ -1501,7 +1614,7 @@ fn build_perf_test(crate_dir: &Path) -> std::io::Result<()> {
     let perf_rs = r##"//! Perf smoke: 1KB / 100KB / 10MB doc parse vs CPython tomllib timeit.
 #![allow(clippy::all)]
 
-use cobrust_tomli_llm_synth::loads;
+use cobrust_nest_llm_synth::loads;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -2237,5 +2350,132 @@ ledger Ok entries inspected for `cache_hit=false, provider_kind="openai"`.
     let _ = std::fs::create_dir_all(path.parent().expect("parent"));
     if let Err(e) = std::fs::write(&path, body) {
         eprintln!("T1.1: failed to write finding: {e}");
+    }
+}
+
+// ---- Verdict derivation (pure; shared by main test + synthetic gate tests) --
+
+/// Pure decision used by the main harness verdict and by the synthetic
+/// fail-loud tests below. Returns `(overall, may_promote)`.
+///
+/// The single non-negotiable rule: a **vacuous** behavioral gate
+/// (`behavioral_gate_vacuous == true`) forces `overall = FAIL-VACUOUS-
+/// BEHAVIOR-GATE` and `may_promote = false`, no matter how many canonical
+/// entrypoints "passed". A 0-case differential gate certifies nothing.
+fn derive_verdict(
+    canonical_pass_count: usize,
+    behavioral_gate_vacuous: bool,
+) -> (&'static str, bool) {
+    if behavioral_gate_vacuous {
+        return ("FAIL-VACUOUS-BEHAVIOR-GATE", false);
+    }
+    let overall = match canonical_pass_count {
+        5 => "PASS",
+        4 => "PARTIAL-PASS-4OF5",
+        n if n >= 3 => "PARTIAL-PASS-3OF5",
+        _ => "FAIL",
+    };
+    let may_promote = canonical_pass_count >= 4;
+    (overall, may_promote)
+}
+
+#[cfg(test)]
+mod fail_loud_tests {
+    use super::*;
+
+    /// A smoke gate that ran but exercised 0 positive cases is vacuous.
+    #[test]
+    fn smoke_zero_positive_is_vacuous() {
+        let smoke = SmokeOutcome {
+            ran: true,
+            positive_total: 0,
+            subprocess_exit: Some(101), // compile failure, the M4 shape
+            ..Default::default()
+        };
+        assert!(
+            smoke.is_vacuous(),
+            "a ran-but-0-positive-case smoke gate must be vacuous"
+        );
+    }
+
+    /// A smoke gate with real cases is NOT vacuous.
+    #[test]
+    fn smoke_with_cases_is_not_vacuous() {
+        let smoke = SmokeOutcome {
+            ran: true,
+            positive_total: 27,
+            positive_pass: 27,
+            subprocess_exit: Some(0),
+            ..Default::default()
+        };
+        assert!(
+            !smoke.is_vacuous(),
+            "a smoke gate that exercised 27 cases must NOT be vacuous"
+        );
+    }
+
+    /// A fuzz gate with 0 inputs after a passing build is vacuous.
+    #[test]
+    fn fuzz_zero_inputs_after_build_pass_is_vacuous() {
+        let fuzz = FuzzOutcome {
+            total: 0,
+            subprocess_exit: Some(101),
+            ..Default::default()
+        };
+        assert!(
+            fuzz.is_vacuous(/* g2_passed */ true),
+            "a 0-input fuzz gate after a passing build must be vacuous"
+        );
+        // But when the build FAILED, the fuzz gate is legitimately skipped,
+        // not vacuous (the build gate already reported FAIL).
+        assert!(
+            !fuzz.is_vacuous(/* g2_passed */ false),
+            "a 0-input fuzz gate is NOT vacuous when the build gate failed (legit skip)"
+        );
+    }
+
+    /// THE load-bearing guard: a vacuous behavioral gate forces FAIL and
+    /// refuses promotion, even when the canonical count looks like a pass.
+    /// This is exactly the M4 regression scenario: smoke/fuzz produced 0
+    /// cases (synth crate failed to compile from a stale import), the
+    /// canonical classifier still reported 5/5 (it gates on smoke
+    /// `failures`, which is empty when 0 cases ran), yet the verdict MUST
+    /// NOT be PASS and MUST NOT promote.
+    #[test]
+    fn vacuous_gate_forces_fail_and_blocks_promotion_even_at_5_of_5() {
+        let (overall, may_promote) = derive_verdict(
+            /* canonical_pass_count */ 5, /* behavioral_gate_vacuous */ true,
+        );
+        assert_eq!(
+            overall, "FAIL-VACUOUS-BEHAVIOR-GATE",
+            "a 0-case behavioral gate must force FAIL, never PASS — \
+             this is the M4 'green that lies' guard"
+        );
+        assert!(
+            !may_promote,
+            "a vacuous behavioral gate must NEVER promote parser.rs to cobrust-nest"
+        );
+    }
+
+    /// Control: a NON-vacuous 5/5 run still PASSes + may promote, so the
+    /// guard doesn't break the genuine green path.
+    #[test]
+    fn non_vacuous_5_of_5_still_passes_and_promotes() {
+        let (overall, may_promote) = derive_verdict(
+            /* canonical_pass_count */ 5, /* behavioral_gate_vacuous */ false,
+        );
+        assert_eq!(overall, "PASS");
+        assert!(may_promote, "a genuine 5/5 with real cases may promote");
+    }
+
+    /// Control: a NON-vacuous low-pass run FAILs on its own merits (not
+    /// the vacuous path) and does not promote.
+    #[test]
+    fn non_vacuous_low_pass_fails_without_promotion() {
+        let (overall, may_promote) = derive_verdict(
+            /* canonical_pass_count */ 2, /* behavioral_gate_vacuous */ false,
+        );
+        assert_eq!(overall, "FAIL");
+        assert!(!may_promote);
     }
 }
