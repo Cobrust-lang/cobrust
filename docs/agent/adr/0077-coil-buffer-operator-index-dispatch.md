@@ -5,7 +5,7 @@ title: coil Buffer operator + index + attribute dispatch — the first ecosystem
 status: draft
 date: 2026-05-29
 decision_owner: cto
-last_verified_commit: 936f13c
+last_verified_commit: 3aa32ae
 relates_to: [adr:0013, adr:0016, adr:0050c, adr:0050d, adr:0060a, adr:0060b, adr:0072, adr:0073, "claude.md:§2.2", "claude.md:§2.5"]
 ---
 
@@ -371,6 +371,57 @@ marshalling (the bounded sub-work from Q5); manifest rows; runtime (coil's
 `reduce.rs`/`view.rs` already implement these). **Done-means:** axis-reduction + reshape
 corpus passes. **Chain-generality:** keyword/tuple-arg marshalling unblocks every
 ecosystem method with non-scalar args (pit/strike future surfaces benefit).
+
+### Phase 3 — broadcasting LANDED (elementwise `+` / `-` / `*`)
+
+> **Sequencing note:** the original §6/§8 rollout bundled broadcasting into "Phase 2"
+> (with slice/write/dot). In execution it shipped *first*, as its own increment after the
+> Phase-1 first proof (commit `73c2747`) and the P0-functions increment (`936f13c`), and
+> is labelled **"Phase 3 (broadcasting)"** by its TEST corpus
+> (`broadcast_elementwise_corpus.rs` / `coil_broadcast_e2e.rs`). Slice / index-write /
+> `a.dot(b)` / the fallible `checked_add` escape remain the unshipped remainder of the
+> original Phase-2 bundle.
+
+**What shipped:** `a + b` / `a - b` / `a * b` over `coil.Buffer` now **broadcast** any
+numpy-compatible shape pair, not only equal shapes. This was a **one-site guard
+relaxation** in the shared shim body `buffer_binop`
+(`crates/cobrust-coil/src/cabi.rs`): the Phase-1 guard `if lhs.shape() != rhs.shape()`
+(blanket same-shape abort) became `if broadcast_shape(&lhs.shape(), &rhs.shape()).is_err()`
+— it now aborts ONLY on a genuinely non-broadcastable pair, and lets every broadcastable
+pair fall through to the kernel.
+
+**Why one site:** the elementwise math is computed by `Array::add` / `sub` / `mul`
+(`array.rs:156-179` → `ufunc::{add,sub,mul}` → `ufunc::binary_dispatch`), which **already
+broadcasts** via `broadcast_owned` (`ufunc.rs:136`, `ndarray::ArrayBase::broadcast`) +
+`broadcast_shape` (`broadcast.rs:35`). All elementwise ops route through the single
+`buffer_binop` body, so relaxing its guard makes `+`, `-`, and `*` broadcast uniformly
+(the factoring the corpus's `col3_times_row4_broadcasts_outer_product` pins for `*`).
+`broadcast_shape` is exactly the predicate the kernel consults internally; the Phase-1 gap
+was purely that the shim short-circuited *before* reaching it.
+
+**Broadcast rule (numpy, `broadcast.rs`):** right-align the two shapes; a missing leading
+dim counts as 1; two dims are compatible iff equal OR one is 1; the result dim is the max;
+otherwise `BroadcastShapeMismatch`. A size-1 axis repeats (idiomatically: a broadcast axis
+has stride 0 — `ndarray::broadcast` realises this).
+
+**Incompatible-shape error path (clear error, NOT a Rust panic on the user path):** a
+non-broadcastable pair (e.g. `(3,)+(4,)`, `(5,)+(2,)`) routes through `coil_panic` →
+the stdlib `__cobrust_panic` shim, carrying `broadcast_shape`'s numpy-style diagnostic
+`"coil.Buffer add: operands could not be broadcast together with shapes [3] [4]"`. This is
+the existing coil/runtime abort mechanism (the same `__cobrust_panic` the codegen abort
+path uses), matching numpy's raise — it is **not** an `unwrap`/`panic!` on raw Rust. Shape
+is invisible to the Cobrust static type (handles carry no shape — §11), so this is the
+only place the mismatch is catchable: build-succeeds, run-traps (non-zero exit).
+
+**Done-means (met):** `broadcast_elementwise_corpus.rs` (8/8 — `(3,1)+(1,4)->(3,4)`,
+`(1,3)+(3,1)->(3,3)`, `(3,)+(1,)->(3,)`, `(2,3)+(3,)->(2,3)`, `(3,1)*(1,4)` outer
+product, equal-shape no-regression, the `broadcast_shape` discriminator over 5 ok + 3 err
+pairs, the kernel cross-check) + `coil_broadcast_e2e.rs` (6/6 — 3 `.cb` broadcast
+positives incl. mul + non-uniform value-at-index, same-shape no-regression, 2
+incompatible-shape runtime traps), shape AND values numpy-exact. No regression to the
+Phase-1 same-shape path. **Remaining (original Phase-2 bundle):** slice read `a[1:3]`,
+index write `a[i] = v`, `a.dot(b)`, the `a.checked_add(b) -> Result` fallible escape, and
+scalar broadcast `a + 1` (still rejected at typecheck per §12).
 
 ## 9. Implementation map (Phase 1 — fill-in-the-blanks for the impl sprint)
 

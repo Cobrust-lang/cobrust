@@ -1095,6 +1095,71 @@ nested-list `coil.array([[..]])` (needs `list[f64]`→coil marshalling).
 - [x] ADR-0079 Phase 1; doc tree (zh/en/agent) updated in the same
       commit.
 
+## `.cb` `coil.Buffer` operators — broadcasting (ADR-0077 Phase 1 + Phase 3)
+
+The FIRST ecosystem-handle *operator* surface. `.cb` `a + b` / `a - b` /
+`a * b` over two `coil.Buffer` handles retarget (at MIR) onto
+`__cobrust_coil_buffer_{add,sub,mul}` (no codegen `lower_binop`
+type-switch — ADR-0077 §1.1). Phase 1 (`73c2747`) required EQUAL shapes.
+**Phase 3 (broadcasting)** makes all three elementwise ops broadcast any
+numpy-compatible shape pair.
+
+### Broadcast contract (Phase 3 — DONE)
+
+- **Rule (numpy, `broadcast.rs::broadcast_shape`):** right-align the two
+  shapes; a missing leading dim counts as 1; two dims are compatible iff
+  equal OR one is 1; result dim = `max`; otherwise
+  `NumpyErrorKind::BroadcastShapeMismatch`. A size-1 axis repeats
+  (idiomatic impl: a broadcast axis has **stride 0** — realised by
+  `ndarray::ArrayBase::broadcast`).
+- **One-site impl:** the shared shim body `buffer_binop`
+  (`cabi.rs`) is the ONLY place the shape relationship is knowable
+  (Cobrust static types carry no shape — §11). The Phase-1 guard
+  `if lhs.shape() != rhs.shape() { coil_panic(..) }` became
+  `if broadcast_shape(&lhs.shape(), &rhs.shape()).is_err() { coil_panic(..) }`.
+  All three ops route through `buffer_binop`, so `+`/`-`/`*` broadcast
+  uniformly (one guard, every op).
+- **ZERO new numerical code:** the kernels `Array::{add,sub,mul}`
+  (`array.rs:156-179` → `ufunc::{add,sub,mul}` → `ufunc::binary_dispatch`
+  → `broadcast_owned`, `ufunc.rs:136`) **already broadcast** — `Array::add`
+  on `(3,1)+(1,4)` yields the numpy-exact `(3,4)`. The Phase-1 gap was
+  purely the shim short-circuiting *before* the kernel; Phase 3 relaxes
+  that gate. `broadcast_shape` is exactly the predicate the kernel
+  consults internally.
+- **Incompatible-shape error path (clear coil error, NOT a raw Rust
+  panic):** a non-broadcastable pair (`(3,)+(4,)`, `(5,)+(2,)`) routes
+  through `coil_panic` → the stdlib `__cobrust_panic` shim — the SAME
+  abort mechanism the codegen abort path uses — carrying
+  `broadcast_shape`'s numpy-style message
+  `"coil.Buffer add: operands could not be broadcast together with shapes
+  [3] [4]"`. It is NOT an `unwrap`/`panic!` on raw Rust on the user path.
+  Shape is invisible to the static type, so this is build-succeeds /
+  run-traps (non-zero exit) — the strongest §2.5 compile-time-catch
+  signal is unavailable for shape (intrinsic deficit, ADR-0077 §11).
+
+### Done means (ADR-0077 Phase 3 broadcasting — DONE)
+
+- [x] One-site guard relaxation in `cabi.rs::buffer_binop`
+      (`shape() != shape()` → `broadcast_shape(..).is_err()`); the
+      `broadcast::broadcast_shape` import added to `cabi.rs`.
+- [x] All three elementwise ops (`+`/`-`/`*`) broadcast via the shared
+      body (no per-op bolt-on).
+- [x] Rust corpus `broadcast_elementwise_corpus.rs` (8 tests):
+      `(3,1)+(1,4)->(3,4)`, `(1,3)+(3,1)->(3,3)`, `(3,)+(1,)->(3,)`,
+      `(2,3)+(3,)->(2,3)`, `(3,1)*(1,4)` outer product, equal-shape
+      no-regression, the `broadcast_shape` discriminator (5 ok + 3 err
+      pairs), the kernel cross-check — shape AND values numpy-exact.
+- [x] `.cb` E2E corpus `coil_broadcast_e2e.rs` (6 tests): 3 `.cb`
+      broadcast positives (`ones(3)+ones(1)`, non-uniform
+      `mgrid(0,4)+ones(1)` value-at-index, `*`), same-shape
+      no-regression, 2 incompatible-shape runtime traps.
+- [x] No regression: Phase-1 same-shape path + nest/scale/pit unaffected.
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+- **Remaining (original ADR-0077 Phase-2 bundle, unshipped):** slice read
+  `a[1:3]`, index write `a[i] = v`, `a.dot(b)`, the fallible
+  `a.checked_add(b) -> Result` escape, scalar broadcast `a + 1` (still
+  typecheck-rejected, ADR-0077 §12).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

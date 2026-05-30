@@ -74,6 +74,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::aggregates::{mean_scalar, median_scalar, split_first_chunk, std_scalar, var_scalar};
 use crate::array::Array;
+use crate::broadcast::broadcast_shape;
 use crate::broadcast_extra::broadcast_to_1d;
 use crate::constructors::{array_f64, eye as coil_eye, ones as coil_ones, zeros as coil_zeros};
 use crate::dtype::Dtype;
@@ -102,10 +103,11 @@ unsafe extern "C" {
 }
 
 /// Abort the process via the stdlib `__cobrust_panic` shim with `msg`
-/// (ADR-0077 Q4). Used by the Buffer operator shims on a shape mismatch
-/// — Phase 1 operators return a bare `Buffer` and a mismatch
-/// panics-and-aborts (matching numpy's raise, the §2.5 closest honest
-/// behavior; a fallible `a.checked_add(b) -> Result` escape is Phase 2).
+/// (ADR-0077 Q4). Used by the Buffer operator shims on a non-broadcastable
+/// shape pair (ADR-0077 Phase 3) — the operators return a bare `Buffer`
+/// and an incompatible pair panics-and-aborts (matching numpy's raise, the
+/// §2.5 closest honest behavior; a fallible `a.checked_add(b) -> Result`
+/// escape is a later surface).
 fn coil_panic(msg: &str) -> ! {
     // SAFETY: `msg` is a valid UTF-8 `&str`; `__cobrust_panic` reads
     // exactly `msg.len()` bytes at `msg.as_ptr()` and diverges.
@@ -396,18 +398,42 @@ pub unsafe extern "C" fn __cobrust_coil_var(a: *mut u8) -> f64 {
 }
 
 // =====================================================================
-// ADR-0077 Phase 1 — Buffer operator / index / attribute C-ABI surface.
-// The FIRST ecosystem-handle operator. The `.cb`-side `a + b` / `a[i]`
-// / `a.shape` retarget (at MIR) onto these symbols; codegen only
-// declares them (no `lower_binop` type-switch — ADR-0077 §1.1).
+// ADR-0077 Phase 1 (+ Phase 3 broadcasting) — Buffer operator / index /
+// attribute C-ABI surface. The FIRST ecosystem-handle operator. The
+// `.cb`-side `a + b` / `a[i]` / `a.shape` retarget (at MIR) onto these
+// symbols; codegen only declares them (no `lower_binop` type-switch —
+// ADR-0077 §1.1). Phase 3 makes the elementwise binops (`+` / `-` / `*`)
+// broadcast numpy-compatible shapes (the guard consults `broadcast_shape`
+// instead of demanding equal shapes); see `buffer_binop`.
 // =====================================================================
 
-/// Shared elementwise-binop body for `+` / `-` / `*` (ADR-0077 Q1).
-/// Borrows both handles, enforces the Phase-1 **same-shape** contract
-/// (a shape mismatch aborts via `coil_panic` per Q4 — Phase 1 does NOT
-/// broadcast; `(3,) + (1,)` is a Phase-2 surface), applies `f` (one of
-/// `Array::add` / `sub` / `mul`), and returns a freshly-Boxed result
-/// handle the `.cb` caller owns.
+/// Shared elementwise-binop body for `+` / `-` / `*` (ADR-0077 Q1;
+/// **broadcasting relaxation** ADR-0077 Phase 3). Borrows both handles,
+/// enforces a **numpy-broadcast-compatibility** runtime contract (the
+/// guard aborts via `coil_panic` ONLY when the two shapes are not
+/// broadcastable per numpy rules — `broadcast_shape(..).is_err()`),
+/// applies `f` (one of `Array::add` / `sub` / `mul` — whose kernel
+/// already broadcasts compatible shapes per `ufunc::binary_dispatch`),
+/// and returns a freshly-Boxed result handle the `.cb` caller owns.
+///
+/// ## Broadcasting (Phase 3)
+///
+/// Cobrust's static types carry no shape, so the shape relationship is
+/// only knowable at runtime — this is the ONLY place an incompatible
+/// pair is catchable. The guard delegates the decision to
+/// [`broadcast_shape`] (the exact predicate `Array::add` already
+/// consults internally): broadcast-compatible pairs — equal shapes, a
+/// size-1 axis expanding (`(3,1)+(1,4) -> (3,4)`), a missing leading dim
+/// counting as 1 (`(2,3)+(3,) -> (2,3)`), the 1-D `(3,)+(1,) -> (3,)`
+/// scalar-stand-in — fall through to the broadcasting kernel; only a
+/// genuinely incompatible pair (a trailing axis that is neither equal
+/// nor 1, e.g. `(3,)+(4,)`) aborts. The diagnostic on the abort path is
+/// the numpy-style `"operands could not be broadcast together with
+/// shapes ..."` message carried by `broadcast_shape`'s `Err`. The
+/// operator returns a bare `Buffer` (not a `Result`), so an incompatible
+/// pair aborts — matching numpy's raise (the §2.5 closest honest
+/// behavior; a fallible `a.checked_add(b) -> Result` escape is a later
+/// surface).
 ///
 /// # Safety
 ///
@@ -425,17 +451,13 @@ unsafe fn buffer_binop(
     // neither is reboxed / freed; the `.cb` scope still owns + drops them.
     let lhs: &Array = unsafe { &*a.cast::<Array>() };
     let rhs: &Array = unsafe { &*b.cast::<Array>() };
-    // ADR-0077 Q4 — Phase-1 same-shape runtime check (Cobrust static
-    // types carry no shape, so this is the ONLY place the mismatch is
-    // catchable). Mismatch aborts — the operator returns a bare `Buffer`,
-    // not a `Result`, matching numpy's raise.
-    if lhs.shape() != rhs.shape() {
-        coil_panic(&format!(
-            "coil.Buffer {op_name}: shape mismatch {:?} vs {:?} (Phase 1 requires same-shape \
-             operands; broadcasting is deferred to Phase 2)",
-            lhs.shape(),
-            rhs.shape(),
-        ));
+    // ADR-0077 Phase 3 — broadcast-compatibility runtime check. Abort ONLY
+    // when the shapes are not numpy-broadcastable; broadcast-compatible
+    // pairs fall through to `f`, whose kernel broadcasts them. The abort
+    // path reuses `broadcast_shape`'s numpy-exact "operands could not be
+    // broadcast together with shapes ..." diagnostic.
+    if let Err(e) = broadcast_shape(&lhs.shape(), &rhs.shape()) {
+        coil_panic(&format!("coil.Buffer {op_name}: {}", e.message));
     }
     let out = match f(lhs, rhs) {
         Ok(arr) => arr,

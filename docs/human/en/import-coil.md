@@ -3,10 +3,11 @@
 > Status: ADR-0072 8/8 first proof — coil is the EIGHTH and FINAL
 > cobra-batch ecosystem module. Wired off the proven value-handle chain
 > (the same shape den / molt / strike use), it completes the
-> workspace-vendored ecosystem the v0.7.0 wave shipped. First-proof
-> scope is constructors + repr only; operator dispatch (`a + b`),
-> index dispatch (`a[i]`), and attribute access (`a.shape`) are
-> explicitly deferred to a sub-ADR.
+> workspace-vendored ecosystem the v0.7.0 wave shipped. The first proof
+> scoped to constructors + repr; ADR-0077 since added the operator /
+> index / attribute surface — elementwise `a + b` / `a - b` / `a * b`
+> (Phase 1, now with **numpy broadcasting** — Phase 3), scalar `a[i]`
+> read, and `a.shape` / `a.ndim` / `a.size`.
 
 ## Example first
 
@@ -113,6 +114,73 @@ Arity and unknown-member errors ARE caught at compile time:
 `coil.linalg.solve(a)` (wrong arity) and `coil.linalg.solveX(a)`
 (unknown member) are both type errors, not runtime crashes.
 
+## Elementwise operators + broadcasting (`a + b`, `a - b`, `a * b`)
+
+Two `coil.Buffer` handles add / subtract / multiply with the `+` / `-`
+/ `*` operators — and, like numpy, the shapes do NOT have to match: a
+**broadcastable** pair is stretched to a common shape first.
+
+```text
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.ones(3)     # shape (3,): [1, 1, 1]
+    let b: coil.Buffer = coil.ones(1)     # shape (1,): [1]
+    let c: coil.Buffer = a + b            # broadcasts (3,)+(1,) -> (3,): [2, 2, 2]
+    let m: f64 = coil.mean(c)             # 2.0
+    print((m as i64))                     # 2
+    return 0
+```
+
+Equal shapes still work unchanged (`coil.ones(3) + coil.ones(3)` →
+`[2, 2, 2]`), and `*` broadcasts identically (it shares the same code
+path as `+`, so anything `+` broadcasts, `*` and `-` broadcast too).
+
+### The broadcasting rule (numpy-exact)
+
+Cobrust uses the exact numpy rule. Align the two shapes from the
+**trailing** (rightmost) dimension; a missing leading dimension counts
+as `1`; two dimensions are compatible if they are **equal** OR **one of
+them is `1`** (the size-`1` dimension is repeated); the result dimension
+is the larger of the two.
+
+```mermaid
+flowchart TD
+    A["shape a = (3, 1)"] --> R{"align trailing dims<br/>compare each axis"}
+    B["shape b = (1, 4)"] --> R
+    R -->|"axis -1: 1 vs 4 → 4 (one is 1)"| OK1["compatible"]
+    R -->|"axis -2: 3 vs 1 → 3 (one is 1)"| OK2["compatible"]
+    OK1 --> RES["result shape = (3, 4)"]
+    OK2 --> RES
+    R -->|"e.g. 3 vs 4 (neither equal nor 1)"| ERR["INCOMPATIBLE → runtime trap"]
+```
+
+Worked examples (every value is what numpy produces):
+
+- `(3,1) + (1,4)` → `(3,4)` — the textbook outer sum.
+- `(2,3) + (3,)` → `(2,3)` — matrix + row (the missing leading dim of
+  `(3,)` counts as `1`).
+- `(3,) + (1,)` → `(3,)` — a length-`1` buffer is the honest stand-in
+  for "array + scalar" (a `coil.Buffer` holds no rank-0 scalar).
+
+### Incompatible shapes are a runtime trap
+
+Like `coil.linalg`, a `coil.Buffer` carries **no shape in its static
+type**, so a non-broadcastable pair can only be caught at **runtime**: a
+clean process abort with a numpy-style diagnostic, never a silently
+wrong buffer.
+
+- `coil.ones(3) + coil.ones(4)` → runtime abort: `operands could not be
+  broadcast together with shapes [3] [4]` (`3` vs `4` is neither equal
+  nor `1`). numpy raises the same error.
+- `coil.mgrid(0, 5) + coil.ones(2)` → runtime abort (`5` vs `2`).
+
+This is the one place §2.5's "catch it at compile time" cannot apply —
+shape correctness is intrinsically a runtime property here (the handle
+type is shape-agnostic). The trade is deliberate and documented in
+ADR-0077: the operator mirrors numpy's surface (`a + b`, no `?`),
+paying with a runtime check instead of a compile error.
+
 ## Why this design?
 
 - **One value-handle ABI shape across den, molt, strike, coil**: every
@@ -131,13 +199,17 @@ Arity and unknown-member errors ARE caught at compile time:
 
 ## Today's limits
 
-- **No operator dispatch**: `a + b` does NOT compile yet. The
-  `EcoParam` manifest doesn't model binary operators, and the .cb-side
-  `BinOp` dispatch needs a method-form lowering. Tracked as the "coil
-  deep operator/index" sub-ADR.
-- **No index dispatch**: `a[i]` does NOT compile yet — same sub-ADR.
-- **No attribute access on the handle**: `a.shape` does NOT compile
-  yet — needs a handle-attr design pass. Same sub-ADR.
+- **Elementwise operators**: `a + b` / `a - b` / `a * b` DO compile and
+  now **broadcast** (ADR-0077 Phase 1 + Phase 3, see above). Still
+  unshipped: `a / b`, the `@` matmul operator, and comparison operators
+  (`a < b` → bool mask) — tracked in ADR-0077 §12.
+- **No scalar broadcast yet**: `a + 1` (Buffer ⊕ a bare scalar) does NOT
+  compile — only Buffer ⊕ Buffer broadcasts today (use a length-`1`
+  buffer, e.g. `a + coil.ones(1)`). The mixed-operand manifest entry is
+  a near-term follow-up.
+- **No slice / index-write**: `a[1:3]` (slice read) and `a[i] = v`
+  (index write) do NOT compile yet (scalar `a[i]` READ does). Tracked as
+  the remainder of the ADR-0077 Phase-2 bundle.
 - **No multi-handle methods**: `a.dot(b)` / `a.matmul(b)` etc do NOT
   compile yet — needs the manifest to grow receiver-and-arg shapes.
 - **dtype is fixed to `float64`**: the first proof scopes to a single
