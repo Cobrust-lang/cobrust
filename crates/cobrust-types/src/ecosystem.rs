@@ -1265,6 +1265,40 @@ pub fn lookup_buffer_binop(receiver: &Ty, op: BinOp) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // ADR-0077 Phase-1 completion — `a / b` is numpy **true division**
+        // (`true_divide`): the `__cobrust_coil_buffer_div` shim forwards to
+        // `Array::true_div`, which promotes int operands to FLOAT (so
+        // int/int → float64, int/0 → IEEE inf, NOT the kernel's integer
+        // floor-div + `IntegerDivisionByZero`). Same Buffer→Buffer shape as
+        // Add/Sub/Mul; broadcasts free through the shared `buffer_binop`.
+        (COIL_BUFFER_ADT, BinOp::Div) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_div",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        _ => None,
+    }
+}
+
+/// The runtime symbol a `coil.Buffer` **scalar-broadcast** arithmetic op
+/// (`a ⊕ k`, where `k` is a python `int`/`float` literal) retargets onto
+/// (ADR-0077 Phase-1 completion). NumPy's `array ⊕ scalar` is exactly a
+/// length-1 broadcast (`a ⊕ array([k])`); the `*_scalar(a, k: f64)` shims
+/// materialise `k` as a 1-element f64 `Buffer` and reuse the SAME
+/// broadcast kernel as the array-array ops, so all four of `+`/`-`/`*`/`/`
+/// get scalar support (and `/` true-divides). Returns `None` for any
+/// non-arithmetic op (the scalar surface is the four elementwise binops
+/// only). A dedicated lookup (the twin of [`lookup_buffer_binop`]) — the
+/// scalar surface needs a distinct `(a, f64) -> ptr` shim, NOT the
+/// `(a, b) -> ptr` array-array shape.
+#[must_use]
+pub fn lookup_buffer_scalar_binop(op: BinOp) -> Option<&'static str> {
+    match op {
+        BinOp::Add => Some("__cobrust_coil_buffer_add_scalar"),
+        BinOp::Sub => Some("__cobrust_coil_buffer_sub_scalar"),
+        BinOp::Mul => Some("__cobrust_coil_buffer_mul_scalar"),
+        BinOp::Div => Some("__cobrust_coil_buffer_div_scalar"),
         _ => None,
     }
 }

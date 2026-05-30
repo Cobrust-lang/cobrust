@@ -500,6 +500,113 @@ pub unsafe extern "C" fn __cobrust_coil_buffer_mul(a: *mut u8, b: *mut u8) -> *m
     unsafe { buffer_binop(a, b, "mul", Array::mul) }
 }
 
+/// `a / b` → fresh `Buffer`. Elementwise NumPy **true division**
+/// (`true_divide`, ADR-0077 Phase-1 completion). `/` ALWAYS yields a
+/// FLOAT result: int operands promote to `Float64` first, so
+/// `int / int → float64` (`[1,2,3]/[2] → [0.5,1,1.5]`, NOT integer
+/// `[0,1,1]`) and `int / 0 → IEEE inf` (a NumPy RuntimeWarning, NEVER a
+/// `coil_panic`). Routes through the shared broadcast-aware
+/// [`buffer_binop`] body onto [`Array::true_div`] (the IEEE float-arm
+/// kernel), so it broadcasts free like `+`/`-`/`*`. Float div-by-zero is
+/// IEEE (`±inf` / `NaN`), so the only abort path is a non-broadcastable
+/// shape pair (matching numpy's raise).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_add`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_div(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop(a, b, "div", Array::true_div) }
+}
+
+/// Shared body for the `a ⊕ k` SCALAR-broadcast shims (ADR-0077 Phase-1
+/// completion). NumPy's `array ⊕ scalar` is exactly a length-1 broadcast
+/// (`a ⊕ array([k])`): we materialise the python scalar `k` as a
+/// 1-element `Float64` `Buffer`, then forward to the SAME broadcast-aware
+/// kernel `f` the array-array operators use, so `+`/`-`/`*`/`/` all get
+/// scalar support through one path (and `/` correctly true-divides). The
+/// (1,)-vs-(N,) broadcast is always compatible, so the only abort the
+/// kernel can take is `Array::true_div`-internal (never — IEEE is total).
+///
+/// `k` is the scalar as `f64` (the `.cb`-side int / float literal is cast
+/// to `f64` at MIR-retarget time, mirroring `a[i]`'s f64 scalar contract).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped).
+unsafe fn buffer_binop_scalar(
+    a: *mut u8,
+    k: f64,
+    op_name: &str,
+    f: fn(&Array, &Array) -> Result<Array, crate::error::NumpyError>,
+) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.Buffer scalar operator: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only —
+    // not reboxed / freed; the `.cb` scope still owns + drops it.
+    let lhs: &Array = unsafe { &*a.cast::<Array>() };
+    // The scalar as a 1-element f64 array — numpy's `a ⊕ k` IS `a ⊕ [k]`.
+    let rhs = array_f64(&[k], &[1]).unwrap_or_else(|e| {
+        coil_panic(&format!("coil.Buffer {op_name} scalar: {}", e.message));
+    });
+    let out = match f(lhs, &rhs) {
+        Ok(arr) => arr,
+        Err(e) => coil_panic(&format!("coil.Buffer {op_name} scalar: {}", e.message)),
+    };
+    Box::into_raw(Box::new(out)).cast::<u8>()
+}
+
+/// `a + k` (Buffer + python scalar) → fresh `Buffer`. Adds `k` to every
+/// element via a length-1 broadcast (ADR-0077 Phase-1 completion).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_add_scalar(a: *mut u8, k: f64) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop_scalar(a, k, "add", Array::add) }
+}
+
+/// `a - k` (Buffer - python scalar) → fresh `Buffer`. Subtracts `k` from
+/// every element via a length-1 broadcast (ADR-0077 Phase-1 completion).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_add_scalar`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_sub_scalar(a: *mut u8, k: f64) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop_scalar(a, k, "sub", Array::sub) }
+}
+
+/// `a * k` (Buffer * python scalar) → fresh `Buffer`. Scales every
+/// element by `k` via a length-1 broadcast (ADR-0077 Phase-1 completion).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_add_scalar`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_mul_scalar(a: *mut u8, k: f64) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop_scalar(a, k, "mul", Array::mul) }
+}
+
+/// `a / k` (Buffer / python scalar) → fresh `Buffer`. NumPy **true
+/// division** of every element by `k` via a length-1 broadcast (ADR-0077
+/// Phase-1 completion). `/ 0` is IEEE `±inf` / `NaN`, never a trap.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_add_scalar`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_div_scalar(a: *mut u8, k: f64) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_binop_scalar(a, k, "div", Array::true_div) }
+}
+
 /// `a[i]` scalar read → `f64` (ADR-0077 Q2). BORROWS the handle.
 /// Bounds-checked on the first axis (numpy-style negative indices
 /// allowed via `index_single`); an out-of-bounds index aborts via

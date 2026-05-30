@@ -402,7 +402,10 @@ M7.0 reuses the M4/M5/M6 task value; no new task is introduced.
 ## Done means (M7.1 — DONE)
 
 - [x] Universal functions: `+ - * / **` (`Array::add / sub / mul /
-      div / pow`).
+      div / pow`). `Array::div` is the integer-floor surface (numpy `//`:
+      int/int floor-divides, int/0 raises); `Array::true_div` (ADR-0077
+      Phase-1 completion) is the numpy-`/` true-division surface (int/bool
+      promote to float, int/0 → IEEE inf) — the `.cb` `/` operator.
 - [x] Comparison ufuncs (`eq_ / ne_ / lt / le / gt / ge`) -- always
       return `Dtype::Bool`.
 - [x] Element-wise math (`sin / cos / exp / log / sqrt`) -- integer
@@ -1157,8 +1160,103 @@ numpy-compatible shape pair.
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 - **Remaining (original ADR-0077 Phase-2 bundle, unshipped):** slice read
   `a[1:3]`, index write `a[i] = v`, `a.dot(b)`, the fallible
-  `a.checked_add(b) -> Result` escape, scalar broadcast `a + 1` (still
-  typecheck-rejected, ADR-0077 §12).
+  `a.checked_add(b) -> Result` escape. (Scalar broadcast `a + 1` and
+  true-division `a / b` SHIPPED — see below.)
+
+## `.cb` `coil.Buffer` — true-division `a / b` + scalar `a ⊕ k` (ADR-0077 Phase-1 completion)
+
+Completes the elementwise-arithmetic surface: the `/` operator (numpy
+**true division**) and the scalar-broadcast forms `a + 1` / `a - 1` /
+`a * 2` / `a / 2` (`coil.Buffer ⊕ python int|float`). Both ship through the
+SAME MIR-retarget-to-`Terminator::Call` discipline as `+`/`-`/`*` — codegen
+declares the externs only, no `lower_binop` type-switch.
+
+### `a / b` — true-division (numpy `/` = `true_divide`)
+
+- **Surface symbol:** `__cobrust_coil_buffer_div(a, b: *mut Buffer) -> *mut Buffer`
+  (`cabi.rs`), routed through the shared broadcast-aware `buffer_binop`
+  body onto **`Array::true_div`** (`array.rs` → `ufunc::true_div`).
+  Broadcasts free like `+`/`-`/`*` (one guard, every op).
+- **TRUE division, NOT floor-division — the heart of the gap.** numpy's `/`
+  is `true_divide`: it ALWAYS yields a FLOAT result. `ufunc::true_div`
+  promotes BOTH operands to the float dtype (`promote::true_div_dtype`:
+  int/bool → `Float64`; `float32/float32 → float32`; any `float64 →
+  float64`) BEFORE dividing, so:
+  - `int / int → float64` (`[1,2,3]/[2] → [0.5,1.0,1.5]`, NOT integer
+    floor `[0,1,1]`);
+  - `int / 0 → IEEE +inf`, `0 / 0 → NaN` (numpy RuntimeWarning, NEVER a
+    `coil_panic`/error).
+- **DISTINCT from `Array::div`.** `Array::div` (`ufunc::div`) is the
+  dtype-preserving integer-floor surface (numpy `//`): int/int floor-divides
+  in the integer dtype and raises `IntegerDivisionByZero` on int/0 — pinned
+  by `ufunc_well_typed::t14_div_int_int_returns_int` + the `ufunc_ill_typed`
+  `IntegerDivisionByZero` corpus. The completion adds `true_div` as the
+  numpy-`/` operator surface and leaves `div` UNCHANGED (no regression).
+  Only `true_div` is wired into the `/` operator.
+- **Manifest:** `lookup_buffer_binop(COIL_BUFFER_ADT, BinOp::Div)` →
+  `__cobrust_coil_buffer_div` (`ecosystem.rs`). The typecheck `synth_bin`
+  Buffer arm now enumerates `+`/`-`/`*`/`/` (resolved via
+  `lookup_buffer_binop`); `//`/`%`/`**`/`@` on a Buffer still reject with
+  the §2.5-B fix-printing diagnostic.
+
+### `a ⊕ k` — scalar broadcast (`+`/`-`/`*`/`/` with a python scalar)
+
+- **Surface symbols:** `__cobrust_coil_buffer_{add,sub,mul,div}_scalar(a:
+  *mut Buffer, k: f64) -> *mut Buffer` (`cabi.rs`). The shared body
+  `buffer_binop_scalar` materialises `k` as a 1-element `Float64` buffer
+  (`array_f64(&[k], &[1])`) and forwards to the SAME broadcast kernel the
+  array-array ops use — numpy's `array ⊕ scalar` IS exactly a `(1,)`
+  broadcast. So all four ops get scalar support through one path (and `/`
+  correctly true-divides). The `(1,)`-vs-`(N,)` broadcast is always
+  compatible → the only abort is a kernel error (never for IEEE division).
+- **Typecheck (`check.rs::synth_bin`):** a NEW arm BEFORE the
+  `unify(lt, rt)` step (a Buffer never unifies with Int/Float, so `a + 1`
+  would otherwise fail at `unify` — the pre-completion rejection). When the
+  LHS resolves to the Buffer handle (bare or `&`-borrowed) AND the RHS is a
+  numeric scalar (`Ty::Int`/`Ty::Float`, bare or `&`) AND
+  `lookup_buffer_scalar_binop(op).is_some()` (the four arith ops), it
+  returns `coil_buffer_ty()`. A non-numeric RHS (`a + s`, `s: str`) does NOT
+  match and falls through to `unify`, which rejects it
+  (`test_neg_buffer_plus_str_rejected` stays red).
+- **MIR (`lower.rs::lower_bin`):** a NEW scalar guard BEFORE the array-array
+  Buffer guard (the array-array guard keys only on the LHS type, so `a + 1`
+  would otherwise wrongly route to the `(a, b: *Buffer)` shim with `1`
+  lowered as i64). It retargets to `__cobrust_coil_buffer_<op>_scalar(a,
+  k: f64)`: the Buffer is a BORROWED handle (Move→Copy upgrade — survives +
+  drops once at scope exit), and the scalar is passed as `f64` (an `Int`
+  operand is cast i64→f64 via `CastKind::IntToFloat`; a `Float` is already
+  f64). Manifest helper: `lookup_buffer_scalar_binop` (`ecosystem.rs`).
+
+### Done means (ADR-0077 Phase-1 completion — DONE)
+
+- [x] `Array::true_div` (`ufunc::true_div` + `promote::true_div_dtype`):
+      int/bool promote to float, IEEE division, total (no error path except
+      broadcast-shape) — int/int → float64, int/0 → inf, 0/0 → nan.
+- [x] cabi `__cobrust_coil_buffer_div` (true-division) + the four
+      `__cobrust_coil_buffer_<op>_scalar` shims (length-1-broadcast reuse).
+- [x] Manifest `(COIL_BUFFER_ADT, BinOp::Div)` row + `lookup_buffer_scalar_binop`.
+- [x] Typecheck `synth_bin`: `/` accepted via `lookup_buffer_binop`; scalar
+      arm admits `Buffer ⊕ Int/Float`; `//`/`%`/`**`/`@` + `a + str` still
+      reject.
+- [x] MIR `lower_bin`: scalar retarget (i64→f64 cast) before the array-array
+      guard; `/` array-array retarget free via the existing guard.
+- [x] Codegen externs: `__cobrust_coil_buffer_div` (binop type) + four
+      `*_scalar` shims (`(ptr, f64) -> ptr`).
+- [x] Rust corpus `div_scalar_elementwise_corpus.rs` (13 tests): int/int →
+      float true-division (`[1,2,3]/[2]→[0.5,1,1.5]`, `[7,3]/[2,2]→[3.5,1.5]`),
+      int/0 → inf + 0/0 → nan, f64 value/broadcast/div-by-zero oracles,
+      scalar `+`/`-`/`*`/`/` value oracles, `+`/`*` shim no-regression.
+- [x] `.cb` E2E corpus `coil_div_scalar_e2e.rs` (10 tests): `/` exact
+      (`[10,20]/[2,4]→[5,5]`), fractional discriminator (`0.5` present),
+      broadcast, div-by-zero → `inf` (build + run, NOT trap); scalar `a+1`,
+      `a*2`, `a-1`, `a/2`; same-shape `+` + broadcast `*` no-regression.
+- [x] Inverted the two now-obsolete negatives in `coil_ops_e2e.rs`
+      (`a + 1` + `a / b` now ACCEPTED) + a NEW `a // b` (floor-div) negative
+      pinning the op-set boundary.
+- [x] No regression: `Array::div` integer-floor surface UNCHANGED (43
+      cobrust-coil suites green incl. `ufunc_well_typed`/`ufunc_ill_typed`);
+      `+`/`-`/`*` + broadcast E2E green; types/mir unit corpora green.
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
 ## Non-goals
 

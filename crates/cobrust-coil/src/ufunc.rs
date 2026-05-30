@@ -435,6 +435,47 @@ pub fn div(a: &Array, b: &Array) -> Result<Array, NumpyError> {
     )
 }
 
+/// Element-wise NumPy **true division** (`/`, the `true_divide` ufunc).
+///
+/// Unlike [`div`] (which dispatches in the dtype-preserving promoted
+/// dtype, so int/int floor-divides and raises on int/0), `true_div`
+/// ALWAYS yields a floating result: integer / boolean operands are cast
+/// to `Float64` BEFORE dividing (per [`true_div_dtype`]). Therefore
+///   - `int / int → float64` true-division (`[1,2,3]/[2] → [0.5,1,1.5]`,
+///     NOT integer `[0,1,1]`);
+///   - `int / 0 → IEEE +inf` and `0 / 0 → NaN` (NumPy's RuntimeWarning,
+///     NEVER an `IntegerDivisionByZero` error);
+///   - `float32 / float32 → float32`, any `float64 → float64`, all IEEE.
+///
+/// This is the operator surface for `a / b` on `coil.Buffer` (ADR-0077
+/// Phase 1 completion): `/` is `true_divide`, matching NumPy's `/`. The
+/// `f32`/`f64` arms are total (IEEE division never errors), so `true_div`
+/// is infallible for the floating promoted dtype — the `Result` is kept
+/// only for the shared `binary_dispatch` signature + the broadcast-shape
+/// `Err` (an incompatible shape is the ONLY error path).
+pub fn true_div(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    let promoted = crate::promote::true_div_dtype(a.dtype(), b.dtype());
+    binary_dispatch(
+        a,
+        b,
+        promoted,
+        // Integer arms are UNREACHABLE: `true_div_dtype` promotes every
+        // integer/bool operand to Float64, so `binary_dispatch` only ever
+        // takes the f32/f64 arm. They are present solely to satisfy the
+        // shared closure arity; if a caller somehow reached them (it
+        // cannot — the promoted dtype is always floating), fall back to
+        // wrapping integer division to stay total (no panic).
+        |x, y| Ok(if y == 0 { 0 } else { x.wrapping_div(y) }),
+        |x, y| Ok(if y == 0 { 0 } else { x.wrapping_div(y) }),
+        // The live arms — IEEE 754 true-division. `x / 0.0 → ±inf`,
+        // `0.0 / 0.0 → NaN`, never a trap (constitution §2.2 / numpy `/`).
+        |x, y| x / y,
+        |x, y| x / y,
+        // bool/bool is unreachable (bool promotes to Float64); keep total.
+        |x, _y| x,
+    )
+}
+
 /// Element-wise power. Float follows `f64::powf` / `f32::powf`. Integer
 /// follows numpy: `0**0 = 1`, negative exponents on integer dtypes
 /// yield 0 (numpy behavior — int**negative truncates to 0).

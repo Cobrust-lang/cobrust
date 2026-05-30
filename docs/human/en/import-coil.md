@@ -5,9 +5,10 @@
 > (the same shape den / molt / strike use), it completes the
 > workspace-vendored ecosystem the v0.7.0 wave shipped. The first proof
 > scoped to constructors + repr; ADR-0077 since added the operator /
-> index / attribute surface — elementwise `a + b` / `a - b` / `a * b`
-> (Phase 1, now with **numpy broadcasting** — Phase 3), scalar `a[i]`
-> read, and `a.shape` / `a.ndim` / `a.size`.
+> index / attribute surface — elementwise `a + b` / `a - b` / `a * b` /
+> `a / b` (numpy **true division**, with **broadcasting**), scalar forms
+> `a + 1` / `a * 2`, scalar `a[i]` read, and `a.shape` / `a.ndim` /
+> `a.size`.
 
 ## Example first
 
@@ -114,11 +115,13 @@ Arity and unknown-member errors ARE caught at compile time:
 `coil.linalg.solve(a)` (wrong arity) and `coil.linalg.solveX(a)`
 (unknown member) are both type errors, not runtime crashes.
 
-## Elementwise operators + broadcasting (`a + b`, `a - b`, `a * b`)
+## Elementwise operators + broadcasting (`a + b`, `a - b`, `a * b`, `a / b`)
 
-Two `coil.Buffer` handles add / subtract / multiply with the `+` / `-`
-/ `*` operators — and, like numpy, the shapes do NOT have to match: a
-**broadcastable** pair is stretched to a common shape first.
+Two `coil.Buffer` handles add / subtract / multiply / **divide** with the
+`+` / `-` / `*` / `/` operators — and, like numpy, the shapes do NOT have
+to match: a **broadcastable** pair is stretched to a common shape first.
+You can also write `a + 1` / `a - 1` / `a * 2` / `a / 2` — a buffer
+combined with a plain number (a **scalar**), exactly as in numpy.
 
 ```text
 import coil
@@ -133,8 +136,61 @@ fn main() -> i64:
 ```
 
 Equal shapes still work unchanged (`coil.ones(3) + coil.ones(3)` →
-`[2, 2, 2]`), and `*` broadcasts identically (it shares the same code
-path as `+`, so anything `+` broadcasts, `*` and `-` broadcast too).
+`[2, 2, 2]`), and `*` / `-` / `/` broadcast identically (they share the
+same code path as `+`, so anything `+` broadcasts, the others broadcast
+too).
+
+### Division is *true division* (`/` always gives a float)
+
+`a / b` is numpy's `/` — **true division** — so it ALWAYS produces a
+floating-point result, never an integer floor. `[1, 2, 3] / [2]` is
+`[0.5, 1.0, 1.5]`, NOT `[0, 1, 1]`. And division by zero follows IEEE 754
+(exactly like numpy): it does **not** crash — `1.0 / 0.0` is `inf`,
+`-1.0 / 0.0` is `-inf`, `0.0 / 0.0` is `nan`. The program keeps running.
+
+```text
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(10.0, 20.0)  # [10, 20]
+    let b: coil.Buffer = coil.array1d2(2.0, 4.0)    # [2, 4]
+    let c: coil.Buffer = a / b                       # [5.0, 5.0]  (10/2, 20/4)
+    let _ = coil.print_buffer(c)
+
+    let one: coil.Buffer = coil.ones(1)              # [1.0]
+    let zero: coil.Buffer = coil.zeros(1)            # [0.0]
+    let inf: coil.Buffer = one / zero                # [inf]  (IEEE, NOT a crash)
+    let _ = coil.print_buffer(inf)
+    return 0
+```
+
+> Note: `/` is *true division*, not floor division. Cobrust does not yet
+> wire `//` (floor division) on a buffer — `a // b` is a compile error
+> today.
+
+### Scalars: `a + 1`, `a * 2`, `a / 2`
+
+A buffer combined with a plain number adds / subtracts / multiplies /
+divides that number into **every element** — numpy's "array ⊕ scalar".
+Under the hood the scalar is treated as a length-`1` buffer and broadcast,
+so it reuses the exact same machinery as `a + b`.
+
+```text
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.mgrid(1, 4)   # [1.0, 2.0, 3.0]
+    let c: coil.Buffer = a + 1              # [2.0, 3.0, 4.0]
+    let d: coil.Buffer = a * 2              # [2.0, 4.0, 6.0]
+    let e: coil.Buffer = a / 2              # [0.5, 1.0, 1.5]  (true division)
+    let m: f64 = coil.mean(c)              # 3.0
+    print((m as i64))                       # 3
+    return 0
+```
+
+The scalar may be an integer (`a + 1`) or a float (`a + 1.5`); an integer
+is promoted to a float automatically. A buffer combined with a *non-number*
+(e.g. `a + "x"`) is still a compile error.
 
 ### The broadcasting rule (numpy-exact)
 
@@ -160,8 +216,9 @@ Worked examples (every value is what numpy produces):
 - `(3,1) + (1,4)` → `(3,4)` — the textbook outer sum.
 - `(2,3) + (3,)` → `(2,3)` — matrix + row (the missing leading dim of
   `(3,)` counts as `1`).
-- `(3,) + (1,)` → `(3,)` — a length-`1` buffer is the honest stand-in
-  for "array + scalar" (a `coil.Buffer` holds no rank-0 scalar).
+- `(3,) + (1,)` → `(3,)` — a length-`1` buffer broadcasts across the
+  longer one. (This is also exactly how a scalar `a + 1` works internally:
+  the `1` becomes a length-`1` buffer.)
 
 ### Incompatible shapes are a runtime trap
 

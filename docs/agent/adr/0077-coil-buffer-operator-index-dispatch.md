@@ -523,6 +523,19 @@ trade in the design, documented for audit.
 
 ## 12. Open questions for sub-ADRs
 
+> **Phase-1 completion update (post-`fbfe98b`):** two surfaces below have
+> since SHIPPED — **true-division `a / b`** (numpy `/` = `true_divide`:
+> int operands promote to FLOAT, `int/int → float64`, `int/0 → IEEE inf`,
+> NOT the integer-floor `Array::div` + `IntegerDivisionByZero`; wired via
+> `lookup_buffer_binop(.., BinOp::Div)` → `__cobrust_coil_buffer_div` →
+> `Array::true_div`) and **scalar broadcast `a ⊕ k`** (`a + 1` / `a - 1` /
+> `a * 2` / `a / 2`: a `synth_bin` arm admits `Buffer ⊕ Int/Float`, the MIR
+> retargets to `__cobrust_coil_buffer_<op>_scalar(a, k: f64)` reusing the
+> length-1-broadcast kernel). See `docs/agent/modules/coil.md` §"true-division
+> `a / b` + scalar `a ⊕ k`" for the full impl map. Still deferred: `//`
+> (floor-division — `a // b` rejects), `@` matmul, comparison→bool-Buffer,
+> the fallible `a.checked_add` escape, dtype-parameterized handle.
+
 Deferred surfaces, each warranting its own design pass when reached:
 
 - **Multi-D indexing tuples** — `a[i, j]` (numpy comma-index). Cobrust parses `a[i, j]`
@@ -531,9 +544,13 @@ Deferred surfaces, each warranting its own design pass when reached:
 - **Slice with step / negative indices** — `a[::2]`, `a[-1]`, `a[1:3, ::2]`. The
   start/stop/step + negative-normalization ABI; Phase 2 does the simple contiguous slice
   first.
-- **Scalar broadcast** — `a + 1`, `2 * a` (Buffer ⊕ scalar). Needs a mixed-operand
-  manifest entry + the typecheck arm to admit `Buffer + Int`/`Buffer + Float`. Common
-  enough in numpy that it is a strong Phase-2 candidate.
+- ~~**Scalar broadcast** — `a + 1`, `2 * a` (Buffer ⊕ scalar).~~ **SHIPPED**
+  (Phase-1 completion): `lookup_buffer_scalar_binop` manifest helper +
+  `synth_bin` arm admitting `Buffer ⊕ Int/Float` + MIR retarget onto
+  `__cobrust_coil_buffer_<op>_scalar(a, k: f64)` (scalar materialised as a
+  length-1 buffer, reusing the array-array broadcast kernel). Covers
+  `+`/`-`/`*`/`/`. (Left-scalar `2 * a` — scalar on the LHS — is still a
+  later extension; today the buffer must be the LHS.)
 - **ufunc broadcasting rules** — full numpy broadcasting semantics (trailing-dim
   alignment, dim-1 stretch); Phase 2 does the common cases, the full ruleset is its own
   spec.

@@ -3084,10 +3084,24 @@ impl<'ctx> LlvmEmitter<'ctx> {
         let coil_setitem_ty =
             void_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), f64_ty.into()], false);
         let coil_slice_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        // -- ADR-0077 Phase-1 completion: `a / b` (true-division) reuses the
+        // (ptr, ptr) -> ptr `coil_binop_ty`; the scalar forms `a ⊕ k` take
+        // `(ptr, f64) -> ptr` (the python scalar `k` is passed as f64 by the
+        // MIR retarget). The MIR-retarget-to-Call discipline holds (codegen
+        // only declares the externs):
+        //   __cobrust_coil_buffer_div(a, b: *mut Buffer)        -> *mut Buffer
+        //   __cobrust_coil_buffer_{add,sub,mul,div}_scalar(a: *mut Buffer,
+        //                                                   k: f64) -> *mut Buffer
+        let coil_scalar_binop_ty = ptr_ty.fn_type(&[ptr_ty.into(), f64_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_coil_buffer_add", coil_binop_ty, 2usize),
             ("__cobrust_coil_buffer_sub", coil_binop_ty, 2),
             ("__cobrust_coil_buffer_mul", coil_binop_ty, 2),
+            ("__cobrust_coil_buffer_div", coil_binop_ty, 2),
+            ("__cobrust_coil_buffer_add_scalar", coil_scalar_binop_ty, 2),
+            ("__cobrust_coil_buffer_sub_scalar", coil_scalar_binop_ty, 2),
+            ("__cobrust_coil_buffer_mul_scalar", coil_scalar_binop_ty, 2),
+            ("__cobrust_coil_buffer_div_scalar", coil_scalar_binop_ty, 2),
             ("__cobrust_coil_buffer_getitem", coil_getitem_ty, 2),
             ("__cobrust_coil_buffer_shape", coil_shape_ty, 1),
             ("__cobrust_coil_buffer_ndim", coil_attr_i64_ty, 1),

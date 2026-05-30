@@ -2963,6 +2963,43 @@ impl Ctx {
             | BinOp::Mod
             | BinOp::Pow
             | BinOp::MatMul => {
+                // ADR-0077 Phase-1 completion — `coil.Buffer ⊕ scalar`
+                // (`a + 1` / `a * 2` / `a - 1` / `a / 2`). NumPy's `array ⊕
+                // scalar` broadcasts the scalar across the array; the
+                // scalar shim materialises `k` as a length-1 buffer and
+                // reuses the array-array kernel. This MUST run BEFORE the
+                // `unify(lt, rt)` below — a Buffer never unifies with
+                // Int/Float, so `a + 1` would otherwise fail at `unify`
+                // (the pre-completion behavior pinned by
+                // `coil_ops_e2e::test_neg_buffer_plus_int_rejected`, now
+                // superseded). The LHS must resolve to the Buffer handle
+                // (bare `a` → `Ty::Adt`, or borrowed `&a` →
+                // `Ty::Ref(Adt)`), the RHS to a numeric scalar (`Ty::Int`
+                // /`Ty::Float`, bare or `&`-borrowed), and the op must be a
+                // scalar-supported one (`+`/`-`/`*`/`/` via
+                // `lookup_buffer_scalar_binop`). The MIR `lower_bin` guard
+                // retargets to `__cobrust_coil_buffer_<op>_scalar`. NOTE: a
+                // non-numeric RHS (`a + s` where `s: str`) does NOT match
+                // here and falls through to `unify`, which rejects it
+                // (`test_neg_buffer_plus_str_rejected`).
+                let lt_resolved = self.subst.apply(&lt);
+                let lt_handle = match &lt_resolved {
+                    Ty::Ref(inner) => inner.as_ref().clone(),
+                    other => other.clone(),
+                };
+                if matches!(&lt_handle, Ty::Adt(id, _) if *id == crate::ecosystem::COIL_BUFFER_ADT)
+                {
+                    let rt_resolved = self.subst.apply(&rt);
+                    let rt_scalar = match &rt_resolved {
+                        Ty::Ref(inner) => inner.as_ref().clone(),
+                        other => other.clone(),
+                    };
+                    if matches!(rt_scalar, Ty::Int | Ty::Float)
+                        && crate::ecosystem::lookup_buffer_scalar_binop(op).is_some()
+                    {
+                        return Ok(crate::ecosystem::coil_buffer_ty());
+                    }
+                }
                 unify(&lt, &rt, &mut self.subst, span)?;
                 let resolved = self.subst.apply(&lt);
                 // ADR-0077 Q1 — `coil.Buffer` operator dispatch (the FIRST
@@ -2994,9 +3031,10 @@ impl Ctx {
                         actual: handle_ty,
                         span,
                         suggestion: Some(
-                            "operator not yet supported on coil.Buffer — Phase 1 supports \
-                             `+`, `-`, `*` (same-shape elementwise); use `coil.Buffer + \
-                             coil.Buffer` with one of those operators",
+                            "operator not yet supported on coil.Buffer — supported elementwise \
+                             operators are `+`, `-`, `*`, `/` (broadcasting; `/` is numpy \
+                             true-division); use `coil.Buffer + coil.Buffer` with one of those, \
+                             or a scalar `coil.Buffer + 1`",
                         ),
                     });
                 }

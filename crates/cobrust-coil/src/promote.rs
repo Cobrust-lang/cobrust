@@ -102,6 +102,39 @@ pub fn unary_math_dtype(input: Dtype) -> Dtype {
     }
 }
 
+/// Compute the result dtype for NumPy **true division** (`/`, the
+/// `true_divide` ufunc) on operands of dtypes `a` and `b`.
+///
+/// Per NumPy: `/` ALWAYS yields a floating result — integer / boolean
+/// operands are promoted to `Float64` BEFORE the division, so
+/// `int / int → float64` (NOT integer floor-division) and `int / 0 →
+/// IEEE inf` (a RuntimeWarning, never an exception). This DIVERGES from
+/// the dtype-preserving [`result_type`] used by `+`/`-`/`*` (where
+/// `int + int → int`). The rule:
+/// - integer / boolean operands → promoted to `Float64` first;
+/// - `float32 / float32 → float32` (single precision preserved);
+/// - any `float64` (or mixed float32/float64) → `float64`;
+/// - complex tiers are preserved at their precision (`result_type`'s
+///   complex lattice on the float-promoted operands).
+///
+/// Implementation: map each integer/bool dtype to its floating promotion
+/// (`Float64`) then defer to [`result_type`] on the promoted pair (which
+/// already encodes the float-width + complex lattice).
+#[must_use]
+pub fn true_div_dtype(a: Dtype, b: Dtype) -> Dtype {
+    result_type(to_floating(a), to_floating(b))
+}
+
+/// Promote an integer / boolean dtype to its NumPy true-division
+/// floating counterpart (`Float64`); float + complex dtypes pass
+/// through unchanged. The helper for [`true_div_dtype`].
+fn to_floating(d: Dtype) -> Dtype {
+    match d {
+        Dtype::Bool | Dtype::Int32 | Dtype::Int64 => Dtype::Float64,
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::cast_possible_truncation)]

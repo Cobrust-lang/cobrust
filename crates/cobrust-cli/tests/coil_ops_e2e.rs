@@ -465,14 +465,16 @@ fn test_e2e_phase1_done_means_combined() {
 //  are the boundary the DEV's typecheck arms must NOT over-accept)
 // =====================================================================
 
-/// Negative #1 (Q1 reject — Buffer ⊕ scalar) — `a + 1` (Buffer + Int) must
-/// be REJECTED. ADR-0077 §3 Phase 1 supports only Buffer+Buffer same-shape;
-/// scalar-broadcast (`a + 1`) is an explicit §12 deferral. The DEV's
-/// `synth_bin` Buffer arm must accept `Buffer + Buffer` but still reject
-/// `Buffer + Int` (today's `unify(lhs,rhs)` already fails Buffer-vs-Int; the
-/// new arm must NOT widen to admit it). Expect a `TypeError` (exit 2).
+/// INVERTED #1 (was `test_neg_buffer_plus_int_rejected`) — `a + 1`
+/// (Buffer + Int scalar broadcast) is now ACCEPTED by `cobrust check`
+/// (ADR-0077 Phase-1 completion lifts the §12 deferral). NumPy's
+/// `array + scalar` is a length-1 broadcast; the `synth_bin` Buffer arm
+/// admits `Buffer ⊕ Int/Float` and retargets to
+/// `__cobrust_coil_buffer_add_scalar`. This guards that the scalar surface
+/// stays valid (the inverse of the original deferral negative). The
+/// runtime VALUES are pinned by `coil_div_scalar_e2e::test_e2e_scalar_*`.
 #[test]
-fn test_neg_buffer_plus_int_rejected() {
+fn test_buffer_plus_int_scalar_accepted() {
     let (ok, code, stderr) = try_check(concat!(
         "import coil\n",
         "fn main() -> i64:\n",
@@ -482,25 +484,22 @@ fn test_neg_buffer_plus_int_rejected() {
         "    return 0\n",
     ));
     assert!(
-        !ok,
-        "Buffer + Int (scalar-broadcast deferred per §12) must be rejected; stderr=\n{stderr}",
-    );
-    assert_eq!(
-        code,
-        Some(2),
-        "expected TYPE_ERROR exit 2 for `a + 1`; got {code:?}; stderr=\n{stderr}",
+        ok,
+        "Buffer + Int (scalar broadcast) must now typecheck (ADR-0077 Phase-1 \
+         completion); code={code:?}; stderr=\n{stderr}",
     );
 }
 
-/// Negative #2 (Q1 reject — unsupported operator) — `a / b` (Buffer ÷
-/// Buffer) must be REJECTED in Phase 1. ADR-0077 §3 supports only
-/// `Add`/`Sub`/`Mul` on Buffers; `Div` (and `Mod`/`Pow`/`FloorDiv`) must
-/// reject with a clear "operator not yet supported on coil.Buffer"
-/// suggestion. Expect a `TypeError` (exit 2). This guards the Phase-1
-/// op-set boundary: the DEV's Buffer arm must enumerate the supported ops,
-/// not blanket-accept every arithmetic operator.
+/// INVERTED #2 (was `test_neg_buffer_div_unsupported_rejected`) — `a / b`
+/// (Buffer ÷ Buffer) is now ACCEPTED by `cobrust check` (ADR-0077 Phase-1
+/// completion wires `/` as numpy true-division). The `synth_bin` Buffer
+/// arm enumerates `+`/`-`/`*`/`/`; `Div` resolves through
+/// `lookup_buffer_binop` to `__cobrust_coil_buffer_div`. This guards that
+/// the division surface stays valid (the inverse of the original
+/// unsupported-op negative). The runtime VALUES (true-division, div-by-0 →
+/// inf) are pinned by `coil_div_scalar_e2e::test_e2e_buffer_div_*`.
 #[test]
-fn test_neg_buffer_div_unsupported_rejected() {
+fn test_buffer_div_buffer_accepted() {
     let (ok, code, stderr) = try_check(concat!(
         "import coil\n",
         "fn main() -> i64:\n",
@@ -511,13 +510,36 @@ fn test_neg_buffer_div_unsupported_rejected() {
         "    return 0\n",
     ));
     assert!(
+        ok,
+        "Buffer / Buffer (true-division) must now typecheck (ADR-0077 Phase-1 \
+         completion); code={code:?}; stderr=\n{stderr}",
+    );
+}
+
+/// NEGATIVE (still rejected) — `a // b` (Buffer FLOOR-division) remains
+/// REJECTED: the Phase-1 completion wires `+`/`-`/`*`/`/` (true-division)
+/// but NOT `//` (floor-division), `%`, `**`, or `@`. This pins the op-set
+/// boundary — the Buffer arm must enumerate the supported ops, not
+/// blanket-accept every arithmetic operator. Expect a `TypeError` (exit 2).
+#[test]
+fn test_neg_buffer_floordiv_unsupported_rejected() {
+    let (ok, code, stderr) = try_check(concat!(
+        "import coil\n",
+        "fn main() -> i64:\n",
+        "    let a: coil.Buffer = coil.ones(3)\n",
+        "    let b: coil.Buffer = coil.ones(3)\n",
+        "    let c: coil.Buffer = a // b\n",
+        "    let _ = coil.print_buffer(c)\n",
+        "    return 0\n",
+    ));
+    assert!(
         !ok,
-        "Buffer / Buffer (Div unsupported in Phase 1) must be rejected; stderr=\n{stderr}",
+        "Buffer // Buffer (floor-division unsupported) must be rejected; stderr=\n{stderr}",
     );
     assert_eq!(
         code,
         Some(2),
-        "expected TYPE_ERROR exit 2 for `a / b`; got {code:?}; stderr=\n{stderr}",
+        "expected TYPE_ERROR exit 2 for `a // b`; got {code:?}; stderr=\n{stderr}",
     );
 }
 

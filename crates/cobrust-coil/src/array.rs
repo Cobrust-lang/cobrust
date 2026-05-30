@@ -183,6 +183,22 @@ impl Array {
         ufunc::div(self, other)
     }
 
+    /// Element-wise NumPy **true division** (`/`, the `true_divide`
+    /// ufunc — the operator surface for `coil.Buffer`'s `a / b`).
+    ///
+    /// ALWAYS yields a floating result: int/bool operands promote to
+    /// `Float64` first, so `int / int → float64` (`[1,2,3]/[2] →
+    /// [0.5,1,1.5]`, NOT integer floor `[0,1,1]`) and `int / 0 → IEEE
+    /// inf` (a NumPy RuntimeWarning, never an error). Unlike [`div`],
+    /// this NEVER raises `IntegerDivisionByZero`.
+    ///
+    /// # Errors
+    /// `NumpyError::BroadcastShapeMismatch` if the shapes can't
+    /// broadcast (the only error path — IEEE division is total).
+    pub fn true_div(&self, other: &Array) -> Result<Array, NumpyError> {
+        ufunc::true_div(self, other)
+    }
+
     /// Element-wise power (`a ** b`).
     ///
     /// # Errors

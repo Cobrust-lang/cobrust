@@ -2401,21 +2401,74 @@ impl<'a> BodyBuilder<'a> {
                 return Ok(Operand::Copy(Place::local(bool_dest)));
             }
         }
+        let lhs_ty = synth_expr_ty(self, lhs);
+        // ADR-0077 Phase-1 completion — `coil.Buffer ⊕ scalar`
+        // (`a + 1` / `a * 2` / `a - 1` / `a / 2`). Checked BEFORE the
+        // array-array Buffer guard below: that guard keys only on the LHS
+        // type, so `a + 1` (LHS Buffer) would otherwise wrongly route to
+        // the `(a, b: *Buffer)` array-array shim with `1` lowered as an
+        // i64. When the LHS resolves to the Buffer handle AND the RHS is a
+        // numeric scalar (`Ty::Int`/`Ty::Float`, bare or `&`-borrowed) AND
+        // the op has a scalar shim, retarget to
+        // `__cobrust_coil_buffer_<op>_scalar(a, k: f64)`: the Buffer is a
+        // BORROWED handle (Move→Copy upgrade — survives + drops once at
+        // scope exit), and the scalar `k` is passed as `f64` (an `Int`
+        // operand is cast i64→f64 via `CastKind::IntToFloat`, mirroring the
+        // `a[i]` f64 scalar contract). The typecheck `synth_bin` arm
+        // already accepted this exact shape (Buffer ⊕ Int/Float), so a
+        // `Some` scalar shim here is an accepted op.
+        let lhs_handle_ty = match &lhs_ty {
+            Ty::Ref(inner) => inner.as_ref().clone(),
+            other => other.clone(),
+        };
+        if matches!(&lhs_handle_ty, Ty::Adt(id, _) if *id == cobrust_types::COIL_BUFFER_ADT) {
+            let rhs_ty = synth_expr_ty(self, rhs);
+            let rhs_scalar_ty = match &rhs_ty {
+                Ty::Ref(inner) => inner.as_ref().clone(),
+                other => other.clone(),
+            };
+            if matches!(rhs_scalar_ty, Ty::Int | Ty::Float) {
+                if let Some(scalar_sym) = cobrust_types::lookup_buffer_scalar_binop(op) {
+                    let lhs_op = upgrade_move_to_copy_handle(self.lower_expr(lhs)?);
+                    let rhs_op = self.lower_expr(rhs)?;
+                    // Pass the scalar as f64. An `Int` operand is cast
+                    // i64→f64; a `Float` operand is already f64.
+                    let k_op = if matches!(rhs_scalar_ty, Ty::Int) {
+                        let kdest =
+                            self.declare_local("_coilk".to_string(), Ty::Float, span, false);
+                        self.emit_assign(
+                            Place::local(kdest),
+                            Rvalue::Cast(CastKind::IntToFloat, rhs_op, Ty::Float),
+                            span,
+                        );
+                        Operand::Copy(Place::local(kdest))
+                    } else {
+                        rhs_op
+                    };
+                    let op_out = self.emit_ecosystem_call(
+                        scalar_sym,
+                        cobrust_types::coil_buffer_ty(),
+                        vec![lhs_op, k_op],
+                        span,
+                    );
+                    return Ok(op_out);
+                }
+            }
+        }
         // ADR-0077 Q1 — `coil.Buffer` operator dispatch (the FIRST
         // ecosystem-handle operator). Sibling of the `in`/`not in` Dict
         // guard above: when the LHS resolves to the Buffer handle (bare
         // `a + b` → `Ty::Adt`, or borrowed `&a + &b` → `Ty::Ref(Adt)`),
-        // retarget `+`/`-`/`*` to `__cobrust_coil_buffer_{add,sub,mul}` via
-        // `emit_ecosystem_call` BEFORE the generic `Rvalue::BinaryOp` tail.
-        // Both operands are BORROWED handles (Move → Copy upgrade so the
-        // source locals survive the call and drop once at scope exit per
-        // ADR-0072 §5 risk 1); the shim returns a fresh handle the caller
-        // owns. Because this emits a `Terminator::Call`, codegen's
-        // `lower_binop` is never reached for Buffers (ADR-0077 §1.1) — no
-        // codegen type-switch. The typecheck `synth_bin` arm already
-        // rejected unsupported ops + non-Buffer operands, so a `Some` here
-        // is an accepted Phase-1 op.
-        let lhs_ty = synth_expr_ty(self, lhs);
+        // retarget `+`/`-`/`*`/`/` to `__cobrust_coil_buffer_{add,sub,mul,
+        // div}` via `emit_ecosystem_call` BEFORE the generic
+        // `Rvalue::BinaryOp` tail. Both operands are BORROWED handles
+        // (Move → Copy upgrade so the source locals survive the call and
+        // drop once at scope exit per ADR-0072 §5 risk 1); the shim returns
+        // a fresh handle the caller owns. Because this emits a
+        // `Terminator::Call`, codegen's `lower_binop` is never reached for
+        // Buffers (ADR-0077 §1.1) — no codegen type-switch. The typecheck
+        // `synth_bin` arm already rejected unsupported ops + non-Buffer
+        // operands, so a `Some` here is an accepted op.
         if let Some(sig) = cobrust_types::lookup_buffer_binop(&lhs_ty, op) {
             let lhs_op = upgrade_move_to_copy_handle(self.lower_expr(lhs)?);
             let rhs_op = upgrade_move_to_copy_handle(self.lower_expr(rhs)?);
