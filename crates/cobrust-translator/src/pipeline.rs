@@ -1906,7 +1906,10 @@ tolerance = "exact"
             "one l2_behavior Reject must yield exactly one divergence record, got {divs:?}"
         );
         let rec = &divs[0];
-        assert!(rec.contains("loads"), "divergence names the function: {rec}");
+        assert!(
+            rec.contains("loads"),
+            "divergence names the function: {rec}"
+        );
         assert!(
             rec.contains("fixture-input"),
             "divergence names the failing input: {rec}"
