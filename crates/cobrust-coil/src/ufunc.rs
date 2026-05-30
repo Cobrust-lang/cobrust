@@ -170,6 +170,94 @@ fn binary_dispatch(
     op_f64: impl Fn(f64, f64) -> f64,
     op_bool: impl Fn(bool, bool) -> bool,
 ) -> Result<Array, NumpyError> {
+    // ---- Fast path (task #166) --------------------------------------------
+    //
+    // The overwhelmingly common case: both operands are ALREADY the promoted
+    // dtype AND share an identical shape. Then there is nothing to cast (the
+    // slow path's `cast_to` would be a full N-element `clone`) and nothing to
+    // broadcast (the slow path's `broadcast_owned` `.to_owned()` would COPY an
+    // equal-shape no-op view). We operate DIRECTLY on the input views into a
+    // SINGLE freshly-allocated output, skipping the two cast clones, the two
+    // broadcast copies, AND — for the infallible f32/f64/bool arms — the
+    // output zero-fill (`map_collect` allocates the buffer exactly once and
+    // writes each element once, no zero-then-overwrite pass).
+    //
+    // This is EXACTLY equivalent to the slow path for this case: the same
+    // `op_*` closure runs over the same logical-order element stream
+    // (`Zip` iterates in the same order whether it writes into a pre-zeroed
+    // `out` or `map_collect`s a fresh one), producing bit-identical results.
+    //
+    // The mixed-dtype / broadcasting / shape-differing cases fall THROUGH to
+    // the existing slow path below, which still needs (and keeps) the
+    // `cast_to` + `broadcast_owned` machinery.
+    if a.dtype() == promoted && b.dtype() == promoted && a.shape() == b.shape() {
+        match (a, b) {
+            // Infallible arms: `map_collect` allocates the output ONCE and
+            // fills it in a single pass — no clone, no broadcast copy, no
+            // zero-fill.
+            (Array::Float32(av), Array::Float32(bv)) => {
+                let out = Zip::from(av).and(bv).map_collect(|&x, &y| op_f32(x, y));
+                return Ok(Array::Float32(out));
+            }
+            (Array::Float64(av), Array::Float64(bv)) => {
+                let out = Zip::from(av).and(bv).map_collect(|&x, &y| op_f64(x, y));
+                return Ok(Array::Float64(out));
+            }
+            (Array::Bool(av), Array::Bool(bv)) => {
+                let out = Zip::from(av).and(bv).map_collect(|&x, &y| op_bool(x, y));
+                return Ok(Array::Bool(out));
+            }
+            // Fallible arms (i32/i64: `op_*` returns `Result`, e.g. integer
+            // div-by-zero): we still drop the two cast clones + two broadcast
+            // copies (the big win), but keep the early-exit error handling.
+            // The output is allocated via `zeros` and overwritten — the
+            // zero-fill is retained here (correctness of the int arms matters
+            // more than shaving one write pass, and the dominant cost the
+            // bench measured was the 4 N-sized clones/copies, not the fill).
+            (Array::Int32(av), Array::Int32(bv)) => {
+                let mut out = ArrayD::<i32>::zeros(av.raw_dim());
+                let mut err: Option<NumpyError> = None;
+                Zip::from(&mut out).and(av).and(bv).for_each(|o, &x, &y| {
+                    if err.is_some() {
+                        return;
+                    }
+                    match op_i32(x, y) {
+                        Ok(v) => *o = v,
+                        Err(e) => err = Some(e),
+                    }
+                });
+                if let Some(e) = err {
+                    return Err(e);
+                }
+                return Ok(Array::Int32(out));
+            }
+            (Array::Int64(av), Array::Int64(bv)) => {
+                let mut out = ArrayD::<i64>::zeros(av.raw_dim());
+                let mut err: Option<NumpyError> = None;
+                Zip::from(&mut out).and(av).and(bv).for_each(|o, &x, &y| {
+                    if err.is_some() {
+                        return;
+                    }
+                    match op_i64(x, y) {
+                        Ok(v) => *o = v,
+                        Err(e) => err = Some(e),
+                    }
+                });
+                if let Some(e) = err {
+                    return Err(e);
+                }
+                return Ok(Array::Int64(out));
+            }
+            // `a.dtype() == promoted` proves `a` is the `promoted` variant, so
+            // every other combination is unreachable here.
+            _ => unreachable!(
+                "binary_dispatch fast path: a.dtype()==promoted && b.dtype()==promoted \
+                 guarantees both operands are the same `promoted` variant"
+            ),
+        }
+    }
+
+    // ---- Slow path: mixed-dtype OR broadcasting OR shape-differing ---------
     let a_cast = cast_to(a, promoted);
     let b_cast = cast_to(b, promoted);
     let target_shape = broadcast_shape(&a.shape(), &b.shape())?;

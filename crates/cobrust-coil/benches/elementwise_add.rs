@@ -279,9 +279,11 @@ fn into_handle(arr: Array) -> *mut u8 {
 /// region is `__cobrust_coil_buffer_add(ha, hb)` followed by
 /// `__cobrust_coil_buffer_drop(result)` — the full, honest per-op cost a
 /// `.cb` program pays: cross-in, broadcast-compat check, the kernel
-/// (which today clones both operands + zero-allocs the output, see the
-/// report's "why" section), cross-out, and the result free. The input
-/// handles are dropped once, after the loop, OUTSIDE timing.
+/// (post task #166: the same-dtype/same-shape fast path in
+/// `binary_dispatch` `map_collect`s the result in ONE pass — no operand
+/// clones, no broadcast copies, no zero-fill; see the report's §4.3),
+/// cross-out, and the result free. The input handles are dropped once,
+/// after the loop, OUTSIDE timing.
 fn bench_t3_coil(n: usize, iters: usize, warmup: usize) -> Stats {
     let ha = into_handle(array_f64(&ramp_a(n), &[n]).unwrap());
     let hb = into_handle(array_f64(&ramp_b(n), &[n]).unwrap());
