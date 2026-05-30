@@ -209,20 +209,31 @@ fn f() -> i64:
 ### 示例 7 — 不受支持的 refinement `where` 谓词
 
 带校验的请求体(`route_validated`,ADR-0080)可以为每个字段带一个
-`where` 子句。本版本只接受 `i64` 字段上的固定整数范围语法;任何其他谓词
-都是编译期错误,并会打印出可接受的形式。
+`where` 子句。只接受固定的 refinement 形式;任何其他谓词都是编译期错误,
+并会打印出可接受的形式,方便你下一次改对。
+
+四种可接受形式:
+
+- **i64 整数范围** —— `0 <= self and self <= 100`(闭区间)
+- **f64 浮点范围** —— `0.0 <= self and self <= 1.0`(**仅**闭区间 `<=`/`>=`
+  —— 严格 `<`/`>` 被拒绝,因为实数稠密,没有干净的 `±1` 改写)
+- **str 长度** —— `len(self) <= n`(或 `len(self) >= n`)
+- **str 正则** —— `pattern(self, "<regex>")`
 
 ```
-error[Type]: unsupported refinement `where`-predicate on field `rank`: only
-the fixed int-range grammar is accepted in v1 (`0 <= self`, `self <= 100`,
-`0 <= self and self <= 100` on an i64 field)
+error[Type]: unsupported refinement `where`-predicate on field `rank`: use one
+of the fixed refinement forms — an i64 int-range `0 <= self and self <= 100`
+(inclusive); an f64 float-range `0.0 <= self and self <= 1.0` (inclusive
+`<=`/`>=` ONLY — a strict `<`/`>` is rejected, the reals are dense); a str
+length `len(self) <= n` (or `len(self) >= n`); or a str pattern
+`pattern(self, "<regex>")`
   --> src/main.cb:3:20
 ```
 
 ```cobrust
 class CreateScore:
     name: str
-    rank: i64 where weird(self)   # 错误 —— 不是固定语法
+    rank: i64 where weird(self)   # 错误 —— 不是固定 refinement 形式
 
 # 修复:在 i64 字段上使用固定的闭区间整数范围。
 class CreateScore:
@@ -230,9 +241,9 @@ class CreateScore:
     rank: i64 where 0 <= self and self <= 100
 ```
 
-**可能的修复：** 把 `where` 子句改写成 `i64` 字段上的 `lo <= self`、
-`self <= hi` 或 `lo <= self and self <= hi`。字符串长度(`len(self) <= n`)
-与正则模式校验属于后续阶段。
+**可能的修复:** 把 `where` 子句改写成上面四种固定形式中与字段类型匹配的那种
+(`i64` 上的整数范围、`f64` 上的闭区间浮点范围、`str` 上的 `len(self)` 长度界
+或 `pattern(self, …)` 正则)。
 
 ---
 

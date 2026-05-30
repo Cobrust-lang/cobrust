@@ -212,21 +212,33 @@ is also caught as a type mismatch.
 ### Example 7 — unsupported refinement `where`-predicate
 
 A validated request body (`route_validated`, ADR-0080) may carry a per-field
-`where`-clause. In this version only a FIXED int-range grammar on an `i64`
-field is accepted; any other predicate is a compile-time error that prints
-the accepted forms.
+`where`-clause. Only the FIXED refinement forms are accepted; any other
+predicate is a compile-time error that prints the accepted forms so you can
+rewrite it on the next try.
+
+The four accepted forms are:
+
+- **i64 int-range** — `0 <= self and self <= 100` (inclusive)
+- **f64 float-range** — `0.0 <= self and self <= 1.0` (inclusive `<=`/`>=`
+  **only** — a strict `<`/`>` is rejected, because the reals are dense and
+  there is no clean `±1` rewrite)
+- **str length** — `len(self) <= n` (or `len(self) >= n`)
+- **str pattern** — `pattern(self, "<regex>")`
 
 ```
-error[Type]: unsupported refinement `where`-predicate on field `rank`: only
-the fixed int-range grammar is accepted in v1 (`0 <= self`, `self <= 100`,
-`0 <= self and self <= 100` on an i64 field)
+error[Type]: unsupported refinement `where`-predicate on field `rank`: use one
+of the fixed refinement forms — an i64 int-range `0 <= self and self <= 100`
+(inclusive); an f64 float-range `0.0 <= self and self <= 1.0` (inclusive
+`<=`/`>=` ONLY — a strict `<`/`>` is rejected, the reals are dense); a str
+length `len(self) <= n` (or `len(self) >= n`); or a str pattern
+`pattern(self, "<regex>")`
   --> src/main.cb:3:20
 ```
 
 ```cobrust
 class CreateScore:
     name: str
-    rank: i64 where weird(self)   # ERROR — not the fixed grammar
+    rank: i64 where weird(self)   # ERROR — not a fixed refinement form
 
 # Fix: a fixed inclusive int-range bound on the i64 field.
 class CreateScore:
@@ -234,9 +246,9 @@ class CreateScore:
     rank: i64 where 0 <= self and self <= 100
 ```
 
-**Likely fix:** rewrite the `where`-clause into `lo <= self`, `self <= hi`,
-or `lo <= self and self <= hi` on an `i64` field. String-length
-(`len(self) <= n`) and pattern refinements are later phases.
+**Likely fix:** rewrite the `where`-clause into one of the four fixed forms
+above that matches the field's type (an int-range on `i64`, an inclusive
+float-range on `f64`, a `len(self)` bound or a `pattern(self, …)` on `str`).
 
 ---
 

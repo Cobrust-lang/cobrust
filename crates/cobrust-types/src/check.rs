@@ -44,9 +44,10 @@ pub struct TypedModule {
     /// SAME field table the type checker resolved field-access against
     /// (footgun #4 — one source, cannot drift).
     pub adt_fields: HashMap<crate::ty::AdtId, std::collections::BTreeMap<String, Ty>>,
-    /// ADR-0080 Phase-1b-ii — per-field value refinements keyed
+    /// ADR-0080 Phase-1b-ii/2/3a — per-field value refinements keyed
     /// `(AdtId, field_name)`, interpreted by `check_class` from each
-    /// field's `where`-clause (the fixed int-range grammar, Q6). The
+    /// field's `where`-clause (the fixed refinement grammar: i64 int-range /
+    /// f64 float-range / str length / str pattern, Q6). The
     /// SECOND projection of the one field table (the validator + the
     /// OpenAPI emitter read it). Empty for any field with no `where`.
     pub adt_refinements: HashMap<(crate::ty::AdtId, String), crate::refinement::Refinement>,
@@ -568,9 +569,11 @@ struct Ctx {
     /// keyed `(AdtId, field_name)` (the sibling of [`Self::adt_fields`]
     /// the ADR §2 Q2 mandates — refinements live BESIDE the field, not in
     /// `Ty`). Populated in `check_class` by interpreting each field's
-    /// `where`-clause predicate; only the fixed int-range grammar (Q6) is
-    /// admitted, anything else raises [`TypeError::UnsupportedRefinement`]
-    /// with a §2.5-B FIX. Read by the validator (via [`TypedModule`]) and
+    /// `where`-clause predicate; only the fixed refinement grammar (Q6) is
+    /// admitted — an i64 int-range, an f64 float-range (inclusive only),
+    /// a str length bound, or a str pattern — anything else raises
+    /// [`TypeError::UnsupportedRefinement`] with a §2.5-B FIX naming all
+    /// four forms. Read by the validator (via [`TypedModule`]) and
     /// the OpenAPI emitter — two projections of the ONE field table that
     /// therefore cannot drift (footgun #4).
     adt_refinements: HashMap<(crate::ty::AdtId, String), crate::refinement::Refinement>,
@@ -997,6 +1000,9 @@ impl Ctx {
             suggestion: Some(
                 "use a fixed refinement grammar: an int-range on an i64 field \
                  (`0 <= self`, `self <= 100`, or `0 <= self and self <= 100`); \
+                 a float-range on an f64 field (`0.0 <= self`, `self <= 1.0`, or \
+                 `0.0 <= self and self <= 1.0` — inclusive `<=`/`>=` ONLY, a strict \
+                 `<`/`>` is rejected because the reals are dense); \
                  a length bound on a str field (`len(self) <= 20`, \
                  `len(self) >= 1`, or `1 <= len(self) and len(self) <= 20`); \
                  or a pattern on a str field (`pattern(self, \"<regex>\")`)",

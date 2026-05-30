@@ -110,6 +110,41 @@ fn must_reject(name: &str, src: &str, cat: Cat) {
     }
 }
 
+/// Like [`must_reject`] but ALSO asserts the rejection's RENDERED message
+/// (`TypeError`'s `Display`, i.e. `error.rs`'s `#[error(...)]`) contains every
+/// `needle`. For §2.5 FIX-text guarantees the error CATEGORY alone is
+/// insufficient — the message must STEER the author to a valid form. Pins the
+/// canonical Display content so it cannot silently regress (the 2026-05-30
+/// audit proved a category-only check stays green when the Display is gutted —
+/// an F36 fixture-name-vs-behavior gap). Mutation-verified for #161.
+fn must_reject_with_msg(name: &str, src: &str, cat: Cat, needles: &[&str]) {
+    let module = parse_str(src, FileId::SYNTHETIC)
+        .unwrap_or_else(|e| panic!("{name}: parse failed (snippet must parse): {e:?}\n{src}"));
+    let mut sess = Session::new();
+    match lower(&module, &mut sess) {
+        Err(e) => panic!(
+            "{name}: lowering caught it, but a message-text assertion needs the check-stage \
+             TypeError: {e:?}\n{src}"
+        ),
+        Ok(hir) => match check(&hir) {
+            Ok(_) => panic!("{name}: must reject but passed type check\nsource:\n{src}"),
+            Err(e) => {
+                assert!(
+                    matches_cat(&e, cat),
+                    "{name}: wrong category\n  expected: {cat:?}\n  got: {e:?}\n{src}"
+                );
+                let msg = e.to_string();
+                for needle in needles {
+                    assert!(
+                        msg.contains(needle),
+                        "{name}: §2.5 FIX-text must contain {needle:?}; got:\n{msg}"
+                    );
+                }
+            }
+        },
+    }
+}
+
 // ============================================================
 // Implicit truthiness
 // ============================================================
@@ -2789,9 +2824,13 @@ fn i168_strict_lt_bound_on_float_field_rejected() {
     // strict bound has no clean inclusive ±1 rewrite (the reals are dense), so
     // the fixed grammar admits ONLY inclusive `<=`/`>=` and the §2.5-B FIX
     // steers the author to the inclusive spelling.
-    must_reject(
+    // #161: assert the rendered FIX NAMES the f64 inclusive form (not just the
+    // category) — `f64 float-range` + `dense` are unique to the f64 clause, so
+    // a regression of the Display to i64-only turns this RED (mutation-verified).
+    must_reject_with_msg(
         "strict-lt-bound-on-float-field",
         "class Body:\n    x: f64 where 0.0 <= self and self < 1.0\nfn main() -> i64:\n    return 0\n",
         Cat::UnsupportedRefinement,
+        &["f64 float-range", "dense"],
     );
 }

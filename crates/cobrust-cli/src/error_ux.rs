@@ -1000,8 +1000,12 @@ impl From<TypeError> for UserError {
                 (
                     format!(
                         "unsupported refinement `where`-predicate on field `{field}`: \
-                         only the fixed int-range grammar is accepted in v1 \
-                         (`0 <= self`, `self <= 100`, `0 <= self and self <= 100` on an i64 field)"
+                         use one of the fixed refinement forms — \
+                         an i64 int-range `0 <= self and self <= 100` (inclusive); \
+                         an f64 float-range `0.0 <= self and self <= 1.0` (inclusive `<=`/`>=` ONLY — \
+                         a strict `<`/`>` is rejected, the reals are dense); \
+                         a str length `len(self) <= n` (or `len(self) >= n`); \
+                         or a str pattern `pattern(self, \"<regex>\")`"
                     ),
                     suggestion.map(str::to_owned),
                     line,

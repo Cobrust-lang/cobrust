@@ -552,6 +552,18 @@ fn test_neg_float_field_rejects_strict_lt_bound() {
         out.contains("Type") || out.contains("refinement") || out.contains("where"),
         "must be a type/refinement error; got:\n{out}"
     );
+    // §2.5 / #161 FIX-TEXT TRIPWIRE (mutation-verified): the rendered FIX must
+    // NAME THE f64 INCLUSIVE FORM, not just generic refinement vocab — else a
+    // strict-`<` f64 author is mis-steered to an i64/str fix (the exact §2.5
+    // violation #161 closes). `f64 float-range` + `dense` are tokens UNIQUE to
+    // the f64 clause, so this goes RED if the message regresses to i64-only
+    // (the prior generic `contains("Type"|"refinement"|"where")` did NOT — it
+    // stayed green under that regression, an F36 fixture-name-vs-behavior gap).
+    assert!(
+        out.contains("f64 float-range") && out.contains("dense"),
+        "the refinement FIX MUST name the f64 inclusive float-range form so a \
+         strict-`<` author is steered to `<=` (§2.5 #161); got:\n{out}"
+    );
 }
 
 // =====================================================================

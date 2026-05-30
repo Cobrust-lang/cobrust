@@ -293,21 +293,26 @@ pub enum TypeError {
     /// ADR-0080 Phase-1b-ii — a class field's `where`-clause refinement
     /// predicate is not in the FIXED grammar v1 admits (ADR-0080 Q6).
     ///
-    /// Phase-1b-ii accepts ONLY the int-range form on an `i64` field:
-    /// `lo <= self <= hi`, `lo <= self`, or `self <= hi` (with `lo`/`hi`
-    /// integer literals). Any other shape — an arbitrary fn call
-    /// (`weird(self)`), a non-int field, `len(self)`/`pattern(self, …)`
-    /// (Phase-2/3 surfaces), or a malformed comparison — raises this
-    /// variant. Per §2.5-B the message PRINTS THE FIX: it names the field
-    /// and shows the accepted fixed-grammar forms (the `0 <= self` /
-    /// `len(self)` / `pattern(self` hint surface the negative-corpus
-    /// asserts on) so the LLM agent rewrites the predicate on the next
-    /// turn. `suggestion` carries the uniform static hint.
+    /// The FIXED refinement forms accepted (ADR-0080 Q6 + Phase-2/3a) are:
+    /// an `i64` int-range (`lo <= self and self <= hi` + one-sided); an `f64`
+    /// float-range (the same shape, inclusive `<=`/`>=` ONLY — a strict
+    /// `<`/`>` is rejected, the reals are dense); a `str` length over
+    /// `len(self)`; and a `str` `pattern(self, "…")`. Any other shape — an
+    /// arbitrary fn call (`weird(self)`), a refinement on the WRONG base type
+    /// (`len(self)` on an `i64`, a strict `<` on an `f64`), or a malformed
+    /// comparison — raises this variant. Per §2.5-B the message PRINTS THE
+    /// FIX: it names the field and ALL FOUR accepted forms (the negative
+    /// corpus asserts the rendered text NAMES the relevant form — see #161
+    /// `must_reject_with_msg`) so the LLM agent rewrites the predicate on the
+    /// next turn. `suggestion` carries the uniform static hint.
     #[error(
         "unsupported refinement `where`-predicate on field `{field}` at {span}: \
-         only the fixed int-range grammar is accepted in v1 \
-         (`0 <= self`, `self <= 100`, or `0 <= self and self <= 100` on an i64 field); \
-         `len(self) <= n` (str length) and `pattern(self, \"…\")` are later phases"
+         use one of the fixed refinement forms — \
+         an i64 int-range `0 <= self and self <= 100` (inclusive); \
+         an f64 float-range `0.0 <= self and self <= 1.0` (inclusive `<=`/`>=` ONLY — \
+         a strict `<`/`>` is rejected, the reals are dense); \
+         a str length `len(self) <= n` (or `len(self) >= n`); \
+         or a str pattern `pattern(self, \"<regex>\")`"
     )]
     UnsupportedRefinement {
         field: String,
