@@ -203,7 +203,7 @@ printf "4\n2\n7\n11\n15\n9\n" | cargo run -p cobrust-cli -- run examples/leetcod
 
 ## 当前状态
 
-**v0.5.0 公开发布** — LSP v1.3 功能完整(13 个 handler + delta 同步 + resolve + 跨文件重构);DAP v1.2 功能完整(17 个 handler + logpoints + 数据断点 + stepIn + result_err);ADR-0057f wave-4 + 0057g wave-5 全部关闭;ADR-0059f wave-4 + 0059g wave-5 全部关闭(含 0059f §3.4 RESOLVED);ADR-0023 §A3 生产规模已解决(实测 O3/O0 比值 0.293)。Release notes:[docs/releases/v0.5.0.md](docs/releases/v0.5.0.md)。
+**v0.7.0-dev(开发中,基于 v0.6.2 release 之上)** — 在 v0.6.2 基线之上继续(LSP v1.3 功能完整,13 个 handler;DAP v1.2 功能完整,17 个 handler;ADR-0023 §A3 生产规模已解决,实测 O3/O0 比值 0.293)。当前重点:`.cb` 生态表面 —— #156 FastAPI-real **类型驱动的请求校验 + OpenAPI**(ADR-0080 / ADR-0081,CI 已验证;见下文)以及按 import 的生态静态链接路径(`pit` / `fang` / `coil` / …)。尚未打 release tag。最近一次 release notes:[docs/releases/v0.5.0.md](docs/releases/v0.5.0.md)。
 
 - ✅ **编译器核心** — lexer / parser / HIR / 类型检查 / MIR / Cranelift codegen;`-D warnings` 下零 clippy 警告。
 - ✅ **Phase F.3 语言完整性**(v0.2.0) — `break` / `continue`、`for` 循环、`list[str]`、`f64`(完整 IEEE-754 + f-string `{:.Nf}`)、`dict[K, V]`(insertion-ordered,见 [ADR-0050d](docs/agent/adr/0050d-dict-design.md))、字符串标准库(split/join/replace/trim/find/contains/...)、文件 IO(read/write/append、stdin/stdout/stderr)。
@@ -234,6 +234,44 @@ printf "4\n2\n7\n11\n15\n9\n" | cargo run -p cobrust-cli -- run examples/leetcod
 **这意味着什么**:Cobrust v0.5.0 — LSP v1.3 功能完整(13 个 handler)+ DAP v1.2 功能完整(17 个 handler)。LLM agents 写 `.cb` 文件可获得完整编辑器智能:诊断 + hover + completion + rename + goto-def + codeAction + inlay hints + semantic tokens + call hierarchy + delta 同步,在任意支持 LSP 的编辑器中可用。调试功能生产级完整:logpoints + 数据断点 + 多线程 + 条件断点 + stepIn 全部落地。O3 二进制比 O0 **小 70.7%**(实测生产数据,ADR-0023 §A3 已解决)。
 
 **§2.5 宪法支柱**([CLAUDE.md §2.5](CLAUDE.md) + [ADR-0051](docs/agent/adr/0051-llm-first-design-principle.md)):"Cobrust 不是为人类写得最爽的语言,是为 LLM 一次写对的语言。" Agent 入门 skill:[`docs/agent/skills/cobrust-first-try.md`](docs/agent/skills/cobrust-first-try.md)。
+
+---
+
+## §2.5 落地实例 —— 类型驱动的请求校验 + OpenAPI(FastAPI-real,不背历史债务)
+
+一个 `.cb` web handler 把请求体声明为一个 **带类型的 class**;类型 *就是* 契约。这是 §2.5 支柱在生态表面上的具体落地 —— 且端到端经 CI 验证([`examples/fastapi_real_demo/`](examples/fastapi_real_demo/) + `pit_validated_body` / `pit_string_refinement` / `pit_openapi` E2E;[ADR-0080](docs/agent/adr/0080-cb-native-type-driven-request-validation-and-openapi.md) + [ADR-0081](docs/agent/adr/0081-validated-body-field-read-serde-bridge.md))。
+
+```python
+import pit
+
+# 校验体:一个 class,字段携带 `where`-refinement。
+class CreateUser:
+    name:  str where 1 <= len(self) and len(self) <= 50   # 字符串长度
+    age:   i64 where 0 <= self and self <= 150            # 整数范围
+    email: str where pattern(self, ".+@.+")              # 字符串正则
+
+fn create_user(req: pit.Request, body: CreateUser) -> pit.Response:
+    let a: i64 = body.age              # 带类型的字段读取 —— `body.aeg` 是编译期错误
+    if a >= 18:
+        return pit.json_response(201, body)          # 回显已校验的 body
+    return pit.text_response(403, "must be 18 or older")  # 业务规则分支
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/users", create_user)
+    let _ = app.serve_openapi("/openapi.json")   # schema 从同一个类型派生
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+这给写代码的 LLM agent 带来什么(每一条都已落地、都有通过的 E2E 覆盖):
+
+- **结构在编译期就被抓住。** 字段是否存在 + 字段类型 *就是* class 字段表 —— 写错的 `body.aeg` 是 `TypeError`,不是运行时 `KeyError`。你不可能交付一个读取不存在字段的 handler(§2.5 编译期捕获)。
+- **值约束是 ONE 边界守卫 → 带类型的 422。** `where`-refinement(整数范围、字符串长度、字符串正则)在请求边界跑一次,渲染成 `Result` → **422** —— 永不抛异常,永不在 handler 内重复校验(丢掉 pydantic 把异常当控制流的坑)。
+- **`body.age` 是带类型的读取**,静态即 `i64` —— 而不是 stringly-typed 的 `body["age"]`。
+- **OpenAPI schema 不会漂移。** `serve_openapi` 从校验器读取的 *同一个* 字段表派生 `minimum`/`maximum`/`minLength`/`maxLength`/`pattern` —— 没有第二份手维护的 schema(不像 utoipa / drf-spectacular 那样的注解外壳)。
+
+**诚实边界**(v0.7.0-dev Phase-1–3):refinement 是固定文法(整数范围 / 字符串长度 / 字符串 `pattern`),作为 422 边界守卫在运行时强制;嵌套对象与列表体、以及编译期 *校验* 的 refinement 是后续工作([ADR-0080](docs/agent/adr/0080-cb-native-type-driven-request-validation-and-openapi.md) §9),尚未交付。
 
 **下一步**:
 - 商标检查 + Linguist PR 提交(草稿阶段)

@@ -1066,6 +1066,21 @@ fn locate_ecosystem_archive(
     }
 
     // 2. Workspace-relative fallback (dev builds).
+    //
+    // F44 (stale-green) — DO NOT short-circuit on a found
+    // `target/<profile>/lib<mod>.a` here: a previously-built archive may be
+    // STALE relative to the module's source (e.g. you edit `cobrust-pit`'s
+    // C-ABI shim then rebuild only the bin, or `cargo test -p cobrust-cli`
+    // rebuilds the module's rlib but NOT its staticlib). Linking the old
+    // archive yields `undefined reference: __cobrust_<mod>_*` while a clean
+    // full build is green — the classic stale-green that CI never catches.
+    // Reaching this Phase-2 path ALREADY implies a dev workspace: the
+    // installed/wheel case is served by Phase 0 (`locate_wheel_lib_file`)
+    // and CI by Phase 1 (the `COBRUST_ECOSYSTEM_ARCHIVE_*` env override),
+    // both of which return above before we get here. So it is safe — and
+    // correct — to let cargo arbitrate staleness: run `cargo build -p
+    // cobrust-<mod>` FIRST (a no-op when fresh; rebuilds the staticlib when
+    // the source changed), THEN resolve the now-fresh archive.
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let workspace = Path::new(manifest_dir)
         .parent()
@@ -1077,21 +1092,18 @@ fn locate_ecosystem_archive(
         .map_or_else(|| workspace.join("target"), PathBuf::from);
     let profile = if release { "release" } else { "debug" };
     let candidate = target_dir.join(profile).join(&archive_name);
-    if candidate.exists() {
-        return Ok(candidate);
-    }
-    // Try the other profile's prebuilt archive before building.
-    let other = if release { "debug" } else { "release" };
-    let alt = target_dir.join(other).join(&archive_name);
-    if alt.exists() {
-        return Ok(alt);
-    }
 
-    // Dev convenience: build the staticlib for the current profile.
+    // Dev convenience + F44 staleness arbitration: (re)build the staticlib
+    // for the current profile. cargo is a no-op when the archive is already
+    // fresh, so this does not regress incremental build times.
     let crate_name = format!("cobrust-{module}");
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let mut build_cmd = Command::new(&cargo);
-    build_cmd.arg("build").arg("-p").arg(&crate_name);
+    build_cmd
+        .current_dir(workspace)
+        .arg("build")
+        .arg("-p")
+        .arg(&crate_name);
     if release {
         build_cmd.arg("--release");
     }
@@ -1113,6 +1125,15 @@ fn locate_ecosystem_archive(
             return Ok(candidate);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Last-resort defensive fallback: if the requested profile somehow did
+    // not yield an archive but the OTHER profile has a prebuilt one, use it.
+    // (Pre-F44 this was checked before building; kept here so a no-archive
+    // edge case still degrades gracefully rather than hard-failing.)
+    let other = if release { "debug" } else { "release" };
+    let alt = target_dir.join(other).join(&archive_name);
+    if alt.exists() {
+        return Ok(alt);
     }
     Err(BuildError::Internal(format!(
         "cannot locate {archive_name} for ecosystem module `{module}` \

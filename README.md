@@ -211,7 +211,7 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
 
 ## Status
 
-**v0.5.0 PUBLIC RELEASE** — LSP v1.3 feature-complete (13 handlers + delta sync + resolve + cross-file); DAP v1.2 feature-complete (17 handlers + logpoints + data breakpoints + stepIn + result_err); ADR-0057f wave-4 + 0057g wave-5 ALL CLOSED; ADR-0059f wave-4 + 0059g wave-5 ALL CLOSED (incl. 0059f §3.4 RESOLVED); ADR-0023 §A3 production-scale resolved (0.293 O3/O0 ratio, empirical). Release notes: [docs/releases/v0.5.0.md](docs/releases/v0.5.0.md).
+**v0.7.0-dev (in development, on top of the v0.6.2 release)** — building on the v0.6.2 baseline (LSP v1.3 feature-complete, 13 handlers; DAP v1.2 feature-complete, 17 handlers; ADR-0023 §A3 production-scale resolved at 0.293 O3/O0 ratio, empirical). Current focus: the `.cb` ecosystem surface — #156 FastAPI-real **type-driven request validation + OpenAPI** (ADR-0080 / ADR-0081, CI-verified; see below) and the per-import ecosystem static-link path (`pit` / `fang` / `coil` / …). Not yet tagged as a release. Last release notes: [docs/releases/v0.5.0.md](docs/releases/v0.5.0.md).
 
 - ✅ **Compiler core** — lexer / parser / HIR / type checker / MIR / Cranelift codegen; zero clippy warnings under `-D warnings`.
 - ✅ **Phase F.3 language completeness** (v0.2.0) — `break` / `continue`, `for` loops, `list[str]`, `f64` (full IEEE-754 + f-string `{:.Nf}`), `dict[K, V]` (insertion-ordered per [ADR-0050d](docs/agent/adr/0050d-dict-design.md)), string stdlib (split/join/replace/trim/find/contains/...), file IO (read/write/append, stdin/stdout/stderr).
@@ -242,6 +242,44 @@ Full problem catalog and input formats: [`examples/leetcode/README.md`](examples
 **What this means**: Cobrust v0.5.0 — LSP v1.3 feature-complete (13 handlers) + DAP v1.2 feature-complete (17 handlers). LLM agents writing `.cb` get the full editor intelligence stack: diagnostics + hover + completion + rename + goto-def + codeAction + inlay hints + semantic tokens + call hierarchy + delta sync in any LSP-capable editor. Debugging is fully production-ready: logpoints + data breakpoints + multi-thread + conditional bp + stepIn all landed. O3 binary is **70.7% smaller** than O0 (empirical production measurement, ADR-0023 §A3 resolved).
 
 **§2.5 constitutional pillar** ([CLAUDE.md §2.5](CLAUDE.md) + [ADR-0051](docs/agent/adr/0051-llm-first-design-principle.md)): "Cobrust is not the language most pleasant for humans to write — it is the language LLM agents write correctly on the first try." See [`docs/agent/skills/cobrust-first-try.md`](docs/agent/skills/cobrust-first-try.md) for the agent-facing onboarding skill.
+
+---
+
+## §2.5 in action — type-driven request validation + OpenAPI (FastAPI-real, no legacy debt)
+
+A `.cb` web handler declares its request body as a **typed class**; the type *is* the contract. This is the §2.5 pillar made concrete on the ecosystem surface — and it is CI-verified end-to-end ([`examples/fastapi_real_demo/`](examples/fastapi_real_demo/) + the `pit_validated_body` / `pit_string_refinement` / `pit_openapi` E2Es; [ADR-0080](docs/agent/adr/0080-cb-native-type-driven-request-validation-and-openapi.md) + [ADR-0081](docs/agent/adr/0081-validated-body-field-read-serde-bridge.md)).
+
+```python
+import pit
+
+# The validated body: a class whose fields carry a `where`-refinement.
+class CreateUser:
+    name:  str where 1 <= len(self) and len(self) <= 50   # string LENGTH
+    age:   i64 where 0 <= self and self <= 150            # int RANGE
+    email: str where pattern(self, ".+@.+")              # string PATTERN
+
+fn create_user(req: pit.Request, body: CreateUser) -> pit.Response:
+    let a: i64 = body.age              # typed field read — `body.aeg` is a COMPILE error
+    if a >= 18:
+        return pit.json_response(201, body)          # echo the validated body
+    return pit.text_response(403, "must be 18 or older")  # business-rule branch
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/users", create_user)
+    let _ = app.serve_openapi("/openapi.json")   # schema derived from the SAME type
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+What this buys an LLM agent writing the code (each point ships and is exercised by a passing E2E):
+
+- **Structure is caught at compile time.** Field presence + field type *are* the class field table — a typo'd `body.aeg` is a `TypeError`, not a runtime `KeyError`. You cannot ship a handler that reads a field that is not there (§2.5 compile-time-catch).
+- **Value constraints are ONE boundary guard → a typed 422.** The `where`-refinements (int range, string length, string pattern) run once at the request boundary and render a `Result` → **422** — never a thrown exception, never an in-handler re-check (drops the pydantic exceptions-as-control-flow footgun).
+- **`body.age` is a typed read**, statically `i64` — never a stringly-typed `body["age"]`.
+- **The OpenAPI schema cannot drift.** `serve_openapi` derives `minimum`/`maximum`/`minLength`/`maxLength`/`pattern` from the *same* field table the validator reads — there is no second, hand-kept schema (unlike a utoipa / drf-spectacular annotation shell).
+
+**Honest scope** (v0.7.0-dev Phase-1–3): refinements are a fixed grammar (int range / string length / string `pattern`), enforced at runtime as the 422 boundary guard; nested-object and list bodies, and compile-time-*checked* refinements, are deferred follow-ups ([ADR-0080](docs/agent/adr/0080-cb-native-type-driven-request-validation-and-openapi.md) §9), not yet shipped.
 
 **What's next**:
 - Trademark check + Linguist PR submission (staged draft)
