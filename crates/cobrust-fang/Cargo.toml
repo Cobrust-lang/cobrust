@@ -34,6 +34,29 @@ argon2 = "0.5"
 # (feature unification turns it on for argon2's copy too). Pinned to the
 # exact version argon2 0.5 re-exports so no second copy is linked.
 password-hash = { version = "0.5", features = ["getrandom"] }
+# HS256-signed JSON Web Tokens (the `fang` JWT surface). The
+# `jwt_verify` / `jwt_decode` shims PIN the algorithm to HS256 via
+# `Validation::new(Algorithm::HS256)` — the token's own `alg` header is
+# NEVER trusted, so an `alg:none` / alg-swapped (e.g. RS256-header)
+# forgery is rejected (the classic JWT algorithm-confusion vuln).
+#
+# `jsonwebtoken` 10 gates its crypto backend behind a feature: with
+# NEITHER `rust_crypto` NOR `aws_lc_rs` enabled, the HMAC `encode` /
+# `decode` path PANICS at runtime ("Could not automatically determine
+# the process-level CryptoProvider") — which, inside an `extern "C"`
+# shim, is a non-unwinding ABORT (a NEVER-panic-across-the-C-ABI
+# violation). Select `rust_crypto` (pure-Rust hmac + sha2 — all HS256
+# needs) so the static `libfang.a` links with NO system C crypto
+# library. Drop the crate's `use_pem` default: HS256 keys are raw secret
+# bytes (`EncodingKey::from_secret`), so PEM parsing (`pem` +
+# `simple_asn1`) is dead weight here — trimming it shrinks the dep tree.
+jsonwebtoken = { version = "10", default-features = false, features = [
+    "rust_crypto",
+] }
+# Claims cross the C-ABI as a JSON object STRING; the shims parse /
+# re-serialize via `serde_json::Value` (an arbitrary JSON object, no
+# fixed claim schema imposed on `.cb` authors). Workspace-pinned 1.0.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # ADR-0072 §4 + Q5: the `cabi` shims declare the `__cobrust_str_*`

@@ -42,6 +42,14 @@
 //! - A WRONG password is a normal `false` return — NOT a panic, NOT an
 //!   error across the boundary (CLAUDE.md §2.2: exceptions are not the
 //!   default error path). No plaintext password is ever logged.
+//! - The JWT surface (`jwt_encode` / `jwt_verify` / `jwt_decode`) **PINS
+//!   the algorithm to HS256** ([`hs256_validation`]). The token's own
+//!   `alg` header is NEVER trusted, so an `alg:none` / alg-swapped (e.g.
+//!   RS256-header) forgery is REJECTED — the classic JWT algorithm-
+//!   confusion footgun (CVE-2015-9235 family) is closed by construction.
+//!   A tampered / wrong-secret / malformed / `alg:none` token is a clean
+//!   `false` (verify) or the empty-string sentinel (decode) — NEVER a
+//!   panic, NEVER an accept. No secret / claim / token is ever logged.
 //!
 //! # Ownership
 //!
@@ -64,6 +72,7 @@
 #![allow(clippy::cast_possible_wrap)]
 
 use argon2::Argon2;
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use password_hash::rand_core::OsRng;
 use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 
@@ -184,6 +193,174 @@ pub unsafe extern "C" fn __cobrust_fang_verify_password(pw: *mut u8, hash: *mut 
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok()
+}
+
+// =====================================================================
+// fang JWT surface — HS256-signed JSON Web Tokens.
+// =====================================================================
+
+/// Build the HS256-PINNED [`Validation`] used by `jwt_verify` /
+/// `jwt_decode` — **the single security-critical knob on this surface**.
+///
+/// # Algorithm pinning (the load-bearing security property)
+///
+/// `Validation::new(Algorithm::HS256)` sets `algorithms = [HS256]`. The
+/// `decode` path checks the token header's `alg` against this list AND
+/// selects the verifier by the EXPECTED algorithm — the token's own
+/// `alg` header is NEVER trusted to choose the verification path. Hence:
+///
+/// - an **`alg:none`** token (header `{"alg":"none"}`, empty signature)
+///   is REJECTED — `none ∉ [HS256]`, and there is no
+///   `insecure_disable_signature_validation` here;
+/// - an **alg-swapped** token (e.g. an RS256 header) is REJECTED —
+///   `RS256 ∉ [HS256]`, closing the RSA-pubkey-as-HMAC-secret confusion;
+/// - a **tampered payload / wrong secret** fails the HMAC check.
+///
+/// This is the canonical JWT algorithm-confusion footgun (CVE-2015-9235
+/// and the whole "JWT alg:none" family), closed by construction.
+///
+/// # What is intentionally relaxed (and why it is SAFE)
+///
+/// The crate default `Validation` additionally REQUIRES an `exp` claim
+/// and validates expiry / audience. The `fang` surface makes NO claim-
+/// schema demand on `.cb` authors (claims are an arbitrary JSON object),
+/// so a bare `{"sub":"alice"}` token MUST round-trip. We therefore clear
+/// `required_spec_claims` and disable `validate_exp` / `validate_aud`.
+/// The signature gate stays on and `algorithms` stays `[HS256]` — the
+/// relaxations touch ONLY claim-policy, never the signature/alg gate. (A
+/// future `fang` surface may add an opt-in `exp` policy; the secure
+/// default here is "the signature is always checked, pinned to HS256".)
+fn hs256_validation() -> Validation {
+    let mut validation = Validation::new(Algorithm::HS256);
+    // No mandatory claims — `.cb` authors pass arbitrary claim objects.
+    validation.required_spec_claims.clear();
+    // Expiry / audience are application policy, not a `fang` mandate.
+    validation.validate_exp = false;
+    validation.validate_aud = false;
+    // Defensive: the algorithm pin is the security core and must stay
+    // exactly `[HS256]`. (There is NO public API on this surface to
+    // disable signature verification, which is precisely why it is safe:
+    // a forged `alg:none` token cannot route around the HMAC check.)
+    debug_assert_eq!(
+        validation.algorithms,
+        vec![Algorithm::HS256],
+        "algorithm must stay pinned to HS256 (no alg-confusion)"
+    );
+    validation
+}
+
+/// `fang.jwt_encode(claims_json, secret) -> str`. Mints an **HS256**
+/// JSON Web Token whose payload is the JSON object parsed from
+/// `claims_json`, signed with `secret`, and returns the compact
+/// `header.payload.signature` token as a freshly-allocated Cobrust `Str`
+/// buffer.
+///
+/// The header algorithm is fixed to HS256 ([`Header::new`]) — no
+/// algorithm knob is exposed, so a `.cb` author cannot mint an
+/// `alg:none` or otherwise-weak token by accident.
+///
+/// On a **malformed** `claims_json` (not valid JSON), or on the
+/// (effectively impossible) internal signing error, the returned buffer
+/// carries the **empty-string sentinel** — matching `hash_password`'s
+/// fail-clean convention. NO panic, NO null across the boundary, NO
+/// secret / claim logging.
+///
+/// # Safety
+///
+/// `claims_json` and `secret` must each be null or a valid Cobrust `Str`
+/// buffer. The returned pointer is an owned Cobrust `Str` buffer, freed
+/// once by `__cobrust_str_drop` at the `.cb` scope exit.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_fang_jwt_encode(
+    claims_json: *mut u8,
+    secret: *mut u8,
+) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let claims_src = unsafe { read_str_buf(claims_json) };
+    // SAFETY: caller-attestation per `# Safety`.
+    let secret_bytes = unsafe { read_str_buf(secret) };
+    // Parse the claims to an arbitrary JSON value; malformed => sentinel.
+    let Ok(claims) = serde_json::from_str::<serde_json::Value>(&claims_src) else {
+        return alloc_str_buffer("");
+    };
+    // HS256 header (algorithm fixed); HMAC key from the raw secret bytes.
+    let header = Header::new(Algorithm::HS256);
+    let key = EncodingKey::from_secret(secret_bytes.as_bytes());
+    match encode(&header, &claims, &key) {
+        Ok(token) => alloc_str_buffer(&token),
+        // Fail clean — no panic, no secret/claim in the (absent) log.
+        Err(_) => alloc_str_buffer(""),
+    }
+}
+
+/// `fang.jwt_verify(token, secret) -> bool`. Returns `true` iff `token`
+/// is a well-formed **HS256** JWT whose signature validates against
+/// `secret` (algorithm PINNED to HS256 via [`hs256_validation`]).
+///
+/// Returns `false` — never a panic — for ANY of: a tampered payload, the
+/// wrong secret, a malformed / empty / wrong-segment-count token, or an
+/// **`alg:none` / alg-swapped forgery** (the token's `alg` header is not
+/// trusted; only HS256 is accepted). A failed verification is normal
+/// control flow (CLAUDE.md §2.2), not an exceptional condition. No
+/// secret / token is ever logged.
+///
+/// # Safety
+///
+/// `token` and `secret` must each be null or a valid Cobrust `Str`
+/// buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_fang_jwt_verify(token: *mut u8, secret: *mut u8) -> bool {
+    // SAFETY: caller-attestation per `# Safety`.
+    let token_str = unsafe { read_str_buf(token) };
+    // SAFETY: caller-attestation per `# Safety`.
+    let secret_bytes = unsafe { read_str_buf(secret) };
+    let key = DecodingKey::from_secret(secret_bytes.as_bytes());
+    // Decode into an arbitrary JSON object; `Ok` => signature valid AND
+    // algorithm == HS256, any `Err` (bad sig, alg:none, malformed, …) =>
+    // false. NEVER unwrap — a malformed token is `Err`, not a panic.
+    decode::<serde_json::Value>(&token_str, &key, &hs256_validation()).is_ok()
+}
+
+/// `fang.jwt_decode(token, secret) -> str`. Verifies `token` exactly as
+/// [`__cobrust_fang_jwt_verify`] does (HS256 signature, algorithm pinned)
+/// and, on success, returns the claims re-serialized to a JSON object
+/// string as a freshly-allocated Cobrust `Str` buffer.
+///
+/// On a token that does NOT verify (tampered / wrong-secret / malformed /
+/// `alg:none`), returns the **empty-string sentinel** — mirroring
+/// `hash_password`'s fail-clean convention. A decode therefore NEVER
+/// surfaces unverified claims: an attacker-supplied unsigned token yields
+/// the empty string, not its forged payload. NO panic, NO secret / token
+/// logging.
+///
+/// Note: the returned JSON is re-serialized from the parsed claims, so
+/// key order / whitespace may differ from the originally-encoded payload
+/// (a JWT payload carries no canonical text form).
+///
+/// # Safety
+///
+/// `token` and `secret` must each be null or a valid Cobrust `Str`
+/// buffer. The returned pointer is an owned Cobrust `Str` buffer, freed
+/// once by `__cobrust_str_drop` at the `.cb` scope exit.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_fang_jwt_decode(token: *mut u8, secret: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let token_str = unsafe { read_str_buf(token) };
+    // SAFETY: caller-attestation per `# Safety`.
+    let secret_bytes = unsafe { read_str_buf(secret) };
+    let key = DecodingKey::from_secret(secret_bytes.as_bytes());
+    // Same pinned-HS256 decode; only a VALID token's claims are surfaced.
+    match decode::<serde_json::Value>(&token_str, &key, &hs256_validation()) {
+        // Re-serialize the verified claims object. The serializer cannot
+        // fail for a value that just deserialized from JSON, but stay
+        // fail-clean anyway (empty sentinel, never a panic).
+        Ok(data) => match serde_json::to_string(&data.claims) {
+            Ok(json) => alloc_str_buffer(&json),
+            Err(_) => alloc_str_buffer(""),
+        },
+        // Invalid token => empty sentinel (no unverified claims leak out).
+        Err(_) => alloc_str_buffer(""),
+    }
 }
 
 #[cfg(test)]

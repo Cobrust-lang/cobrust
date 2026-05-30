@@ -1,11 +1,12 @@
-# `import fang` —— 在 Cobrust 中做密码哈希与校验
+# `import fang` —— 在 Cobrust 中做密码哈希与签发 JSON Web Token
 
 > 状态:ADR-0078 后端(backend)Phase 2,第一个后端 Phase-2 crate。
 > 继九个 cobra 批次模块(den / nest / strike / scale / molt / pit /
-> hood / coil / dora)之后,`fang`(认证/安全工具箱,对 `argon2`
-> crate 的一层安全薄封装)是接到同一条生态导入链路上的**第十个**模块
-> —— 像 `nest`/`scale` 一样的纯值模式模块,也是链路上**第一个**带
-> `-> bool` 返回的值函数。
+> hood / coil / dora)之后,`fang`(认证/安全工具箱,对 `argon2` 与
+> `jsonwebtoken` 两个 crate 的一层安全薄封装)是接到同一条生态导入链路
+> 上的**第十个**模块 —— 像 `nest`/`scale` 一样的纯值模式模块,也是链路
+> 上**第一个**带 `-> bool` 返回的值函数。它现在提供两套接口:**密码
+> 哈希**(argon2id)与 **JSON Web Token**(HS256)。
 
 ## 先看例子
 
@@ -41,8 +42,50 @@ cobrust build prog.cb -o prog
   `pw` 正是生成 `hash` 的那个密码时返回 `true`。比较是**常数时间**的。
   密码错误是正常的 `false`,而不是一个你必须去捕获的错误。
 
-目前接口就这两个:用最小可用的认证往返(哈希一个密码、之后再校验它)
-把链路自顶向下走通,作为第一个安全模块的验证。
+## JSON Web Token(HS256)
+
+`fang` 的第二套接口签发并校验 **JSON Web Token** —— 在你的各个服务之间
+传递一小撮带签名的声明(claims:用户是谁、令牌何时过期)的标准做法。
+
+```python
+import fang
+
+fn main() -> i64:
+    let token: str = fang.jwt_encode("{\"sub\":\"alice\"}", "s3cret")
+    let ok: bool = fang.jwt_verify(token, "s3cret")
+    if ok:
+        print(1)
+    else:
+        print(0)
+    return 0
+```
+
+```bash
+cobrust build prog.cb -o prog
+./prog
+# 1
+```
+
+- **`fang.jwt_encode(claims_json: str, secret: str) -> str`** —— 用
+  `secret` 以 **HS256** 对 `claims_json` 里的 JSON 声明对象签名,返回
+  紧凑的 `header.payload.signature` 令牌。若 `claims_json` 不是合法
+  JSON,你会拿回空字符串(绝不崩溃)。
+- **`fang.jwt_verify(token: str, secret: str) -> bool`** —— 当且仅当
+  `token` 是用 `secret` 签出的真正 HS256 令牌时返回 `true`。被篡改、
+  密钥不对、格式错误或 `alg:none` 的令牌都得到干净的 `false`。
+- **`fang.jwt_decode(token: str, secret: str) -> str`** —— 校验
+  `token`,若为真令牌则返回其声明 JSON,否则返回空字符串。解码**绝不**
+  把一个未通过校验的令牌的声明交给你。
+
+```python
+let claims: str = fang.jwt_decode(token, "s3cret")
+# claims == "{\"sub\":\"alice\"}"(重新序列化;键顺序可能不同)
+# 对伪造 / 被篡改的令牌,claims == ""(空哨兵)
+```
+
+这两套接口(上面的密码往返,加上这里的签发/校验令牌)就是目前的全部
+接口面:哈希一个密码,再签发并校验一个令牌 —— 把链路自顶向下走通,作为
+第一个安全模块的验证。
 
 ## 一个真实的登录校验
 
@@ -75,6 +118,24 @@ Cobrust 的生态接口面刻意丢掉了别的语言认证库背负的那些陷
   的控制流(`false`),符合 Cobrust「错误不是默认控制路径」的原则。
   你的代码永远不需要把登录校验包进异常处理里。
 - **绝不记录明文。** 这层封装从不打印或记录密码与哈希。
+
+### 至于 JWT:算法被钉死(那个经典踩坑,已堵死)
+
+JSON Web Token 有一个臭名昭著的陷阱。令牌的头部自带一个「算法」字段,
+而幼稚的校验器会去*信任*它,由此衍生两种攻击:
+
+- **`alg:none`** —— 攻击者发来一个头部写着 `{"alg":"none"}`、签名段留空
+  的令牌。一个听从头部的校验器会完全跳过签名校验,接受攻击者写下的
+  *任意*声明(管理员、随便谁都行)。这就是 CVE-2015-9235 那一类。
+- **算法替换** —— 攻击者拿一个校验 RS256(公钥)令牌的服务,改发一个
+  HS256 令牌,诱使校验器把*公*钥当成 HMAC *密钥*来用。
+
+`fang.jwt_verify` / `fang.jwt_decode` **把算法钉死为 HS256**,绝不去看
+令牌自己的 `alg` 字段来决定怎样校验。`alg:none` 令牌、RS256 头部的令牌、
+被篡改的载荷、错误的密钥,统统返回干净的 `false`(解码则返回空字符串)
+—— 这套接口上根本没有任何能关掉签名校验的 API,所以这个踩坑哪怕想不小心
+触发都做不到。而且因为 `fang.jwt_encode` 只会签出 HS256,你也无法签出
+一个弱令牌。
 
 ## 哈希串非法时会怎样?
 
@@ -113,8 +174,12 @@ let h2: str = fang.hash_password("x")
 - Phase 1 只暴露带默认参数的 argon2id。一个调参接口(按部署调整内存 /
   时间 / 并行度代价,面向慢硬件或高安全等级)是已记录的后续项 —— 把它
   挡在首个接口面之外,正是为了让默认值不会被不小心调弱。
-- `hash_password` 的错误路径(实际上不可达)是空字符串哨兵;带类型的
-  `Result[str, FangError]` 接口是已记录的后续项。
+- JWT 只支持 **HS256**(共享密钥)。非对称算法(RS256 / ES256)是已记录
+  的后续项 —— 它们会被*加入*被钉死的算法列表,而绝不会取代这个钉死。
+- JWT 校验器只校验**签名**;它尚未强制 `exp`(过期)声明,所以一个裸
+  `{"sub":"alice"}` 令牌可以往返通过。一个过期策略接口是已记录的后续项。
+- `hash_password` / `jwt_encode` / `jwt_decode` 的错误路径(非法输入)是
+  空字符串哨兵;带类型的 `Result[str, FangError]` 接口是已记录的后续项。
 
 这些都是已记录在案的后续项,而非死路 —— 这套接线方式从这里就可以推广
 到其余安全接口。

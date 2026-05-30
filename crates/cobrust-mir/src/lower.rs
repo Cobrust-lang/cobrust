@@ -2480,6 +2480,45 @@ impl<'a> BodyBuilder<'a> {
             );
             return Ok(op_out);
         }
+        // ADR-0078 backend Phase 2 (fang JWT E2E sibling-fix) — `str + str`
+        // via the NATURAL `+` operator (e.g. the append-tamper `t + "X"`).
+        // The codegen `lower_binop` Add arm assumes integer operands
+        // (`into_int_value()`), so concatenating two `Ty::Str` values would
+        // crash codegen with "Found PointerValue but expected IntValue".
+        // Retarget to the always-linked
+        // `__cobrust_str_concat(a, b) -> *mut Str`, which allocates a fresh
+        // Str buffer (freed once by the Str drop schedule at scope exit).
+        // Sibling of the `str == str` arm below (same retarget-to-primitive
+        // shape). Both operands are BORROWED (Move→Copy upgrade —
+        // `__cobrust_str_concat` reads but does not consume, so the source
+        // `str` locals survive for later uses and drop ONCE at scope exit,
+        // per the Str non-Copy discipline).
+        if matches!(op, HirBinOp::Add) && matches!(lhs_ty, Ty::Str) {
+            let lhs_op = upgrade_move_to_copy_handle(self.lower_expr(lhs)?);
+            let rhs_op = upgrade_move_to_copy_handle(self.lower_expr(rhs)?);
+            let dest = self.declare_local("_strcat".to_string(), Ty::Str, span, false);
+            let cur = self.current_block_id();
+            let next = self.start_new_block();
+            self.cur_block = Some(cur.0 as usize);
+            self.terminate(Terminator::Call {
+                func: Operand::Constant(Constant::Str("__cobrust_str_concat".to_string())),
+                args: vec![lhs_op, rhs_op],
+                destination: Place::local(dest),
+                target: next,
+                unwind: None,
+            });
+            self.cur_block = Some(next.0 as usize);
+            // `_strcat` owns a FRESHLY-allocated Str buffer (the concat
+            // shim's return). It must be MOVED out — exactly like
+            // `emit_ecosystem_call`'s freshly-allocated Str returns — so
+            // the single owner (the consuming binding) drops it ONCE. A
+            // `Copy` here would leave BOTH `_strcat` and the consuming
+            // local in the drop schedule → a double-free of the same
+            // buffer → allocator corruption / hang at scope exit. (Contrast
+            // the `str ==` arm below, which Copies an `Int`/`Bool` dest —
+            // a Copy type with no drop.)
+            return Ok(Operand::Move(Place::local(dest)));
+        }
         // ADR-0078 backend Phase 2 (fang E2E sibling-fix) — `str == str` /
         // `str != str` via the NATURAL operator. The codegen `lower_binop`
         // Eq/NotEq arms assume integer operands (`into_int_value()`), so a

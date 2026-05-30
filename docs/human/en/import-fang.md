@@ -1,12 +1,13 @@
-# `import fang` — hash and verify passwords from Cobrust
+# `import fang` — hash passwords and sign JSON Web Tokens from Cobrust
 
 > Status: ADR-0078 backend Phase 2, the FIRST backend Phase-2 crate.
 > After the nine cobra-batch modules (den / nest / strike / scale /
 > molt / pit / hood / coil / dora), `fang` (the auth/security toolkit,
-> a thin safe wrapper over the `argon2` crate) is the TENTH module
-> wired through the same ecosystem-import chain — a pure value-pattern
-> module like `nest`/`scale`, and the FIRST one with a `-> bool`
-> value-function return.
+> a thin safe wrapper over the `argon2` and `jsonwebtoken` crates) is
+> the TENTH module wired through the same ecosystem-import chain — a
+> pure value-pattern module like `nest`/`scale`, and the FIRST one with
+> a `-> bool` value-function return. It now offers two surfaces:
+> **password hashing** (argon2id) and **JSON Web Tokens** (HS256).
 
 ## Example first
 
@@ -44,9 +45,52 @@ cobrust build prog.cb -o prog
   is constant-time. A wrong password is a normal `false` — never an
   error you have to catch.
 
-That's the whole surface for now: the smallest-useful auth round trip
-(hash a password, verify it later), exercising the chain top-to-bottom
-for the first security module.
+## JSON Web Tokens (HS256)
+
+The second `fang` surface signs and verifies **JSON Web Tokens** — the
+standard way to carry a small, signed set of claims (who the user is,
+when the token expires) between your services.
+
+```python
+import fang
+
+fn main() -> i64:
+    let token: str = fang.jwt_encode("{\"sub\":\"alice\"}", "s3cret")
+    let ok: bool = fang.jwt_verify(token, "s3cret")
+    if ok:
+        print(1)
+    else:
+        print(0)
+    return 0
+```
+
+```bash
+cobrust build prog.cb -o prog
+./prog
+# 1
+```
+
+- **`fang.jwt_encode(claims_json: str, secret: str) -> str`** — sign the
+  JSON claims object in `claims_json` with `secret` using **HS256** and
+  return the compact `header.payload.signature` token. If `claims_json`
+  is not valid JSON you get the empty string back (never a crash).
+- **`fang.jwt_verify(token: str, secret: str) -> bool`** — `true` iff
+  `token` is a genuine HS256 token signed with `secret`. A tampered,
+  wrong-secret, malformed, or `alg:none` token is a clean `false`.
+- **`fang.jwt_decode(token: str, secret: str) -> str`** — verify `token`
+  and, if it is genuine, return its claims JSON; otherwise return the
+  empty string. A decode **never** hands you the claims of an unverified
+  token.
+
+```python
+let claims: str = fang.jwt_decode(token, "s3cret")
+# claims == "{\"sub\":\"alice\"}" (re-serialised; key order may differ)
+# for a forged / tampered token, claims == "" (the empty sentinel)
+```
+
+That, plus the password round trip above, is the whole surface for now:
+hash a password, and sign/verify a token — exercising the chain
+top-to-bottom for the first security module.
 
 ## A real login check
 
@@ -85,6 +129,29 @@ mechanical clone:
   path. Your code never wraps a login check in exception handling.
 - **No plaintext is ever logged.** The wrapper never prints or logs the
   password or the hash.
+
+### And for JWTs: the algorithm is pinned (the classic footgun, closed)
+
+JSON Web Tokens have one infamous trap. A token carries its OWN
+"algorithm" field in its header, and a naive verifier *trusts* it. Two
+attacks follow:
+
+- **`alg:none`** — an attacker sends a token whose header says
+  `{"alg":"none"}` and leaves the signature empty. A verifier that obeys
+  the header skips the signature check entirely and accepts *any* claims
+  the attacker writes (admin, anyone). This is the CVE-2015-9235 family.
+- **algorithm swap** — an attacker takes a service that verifies RS256
+  (public-key) tokens and sends an HS256 token, tricking the verifier
+  into using the *public* key as the HMAC *secret*.
+
+`fang.jwt_verify` / `fang.jwt_decode` **pin the algorithm to HS256** and
+never look at the token's own `alg` field to choose how to verify. An
+`alg:none` token, an RS256-header token, a tampered payload, or the
+wrong secret all come back as a clean `false` (or the empty string for
+decode) — there is no API on this surface to disable signature checking,
+so the footgun cannot be triggered even by accident. And because
+`fang.jwt_encode` only ever emits HS256, you cannot mint a weak token
+either.
 
 ## What happens with a bad hash string?
 
@@ -125,9 +192,15 @@ let h2: str = fang.hash_password("x")
   surface (per-deployment memory / time / parallelism cost, for slow
   hardware or high-security tiers) is a tracked follow-up — kept out of
   the first surface so the default cannot be weakened by accident.
-- The error path on `hash_password` (effectively unreachable) is the
-  empty-string sentinel; a typed `Result[str, FangError]` surface is a
-  tracked follow-up.
+- JWTs are **HS256** (a shared secret) only. Asymmetric algorithms
+  (RS256 / ES256) are a tracked follow-up — they would be *added* to the
+  pinned algorithm list, never replace the pin.
+- The JWT verifier checks the **signature** only; it does not yet
+  enforce an expiry (`exp`) claim, so a bare `{"sub":"alice"}` token
+  round-trips. An expiry-policy surface is a tracked follow-up.
+- The error path on `hash_password` / `jwt_encode` / `jwt_decode` (an
+  invalid input) is the empty-string sentinel; a typed
+  `Result[str, FangError]` surface is a tracked follow-up.
 
 These are tracked follow-ups, not dead ends — the wiring generalizes
 to the rest of the security surface from here.

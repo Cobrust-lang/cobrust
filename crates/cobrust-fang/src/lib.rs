@@ -3,8 +3,8 @@
 //! ADR-0078 backend Phase 2, the FIRST backend Phase-2 crate (tenth
 //! ecosystem module overall, after den/nest/strike/scale/molt/pit/hood/
 //! coil/dora). `fang` (cobra-themed name for the auth/security toolkit)
-//! wraps the [`argon2`] crate to expose two FLAT value-functions to
-//! `.cb` programs:
+//! wraps the [`argon2`] + [`jsonwebtoken`] crates to expose FLAT
+//! value-functions to `.cb` programs:
 //!
 //! - `fang.hash_password(pw: str) -> str` — argon2id PHC hash of `pw`,
 //!   with a fresh random salt embedded in the returned `$argon2id$…`
@@ -12,6 +12,16 @@
 //! - `fang.verify_password(pw: str, hash: str) -> bool` — constant-time
 //!   verification of `pw` against a PHC `hash`. A wrong password is a
 //!   normal `false` return (NOT a panic / error).
+//! - `fang.jwt_encode(claims_json: str, secret: str) -> str` — an
+//!   **HS256**-signed JSON Web Token for the claims JSON, signed with
+//!   `secret`. Malformed claims JSON → the empty-string sentinel.
+//! - `fang.jwt_verify(token: str, secret: str) -> bool` — TRUE iff the
+//!   HS256 signature validates against `secret`. The algorithm is PINNED
+//!   to HS256 (the token's `alg` header is NOT trusted), so an
+//!   `alg:none` / alg-swapped forgery is rejected. A tampered /
+//!   wrong-secret / malformed token is a normal `false` (NEVER a panic).
+//! - `fang.jwt_decode(token: str, secret: str) -> str` — the claims JSON
+//!   on a valid token, else the empty-string sentinel.
 //!
 //! # Why argon2id, no algo/params knob (elegance law)
 //!

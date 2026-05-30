@@ -2161,6 +2161,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_param_counts
             .insert("__cobrust_str_eq", 2);
 
+        // __cobrust_str_concat(a: *mut Str, b: *mut Str) -> *mut Str
+        // The runtime target of the `.cb` `str + str` operator (natural
+        // concatenation; sibling of `__cobrust_str_eq` for `str == str`).
+        // Returns a freshly-allocated Str buffer freed by the Str drop
+        // schedule at scope exit.
+        let str_concat_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let str_concat_fn = self.module.add_function(
+            "__cobrust_str_concat",
+            str_concat_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_concat", str_concat_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_concat", 2);
+
         // __cobrust_str_eq_lit(s: *mut Str, lit: *const u8, lit_len: i64) -> i64
         let str_eq_lit_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
         let str_eq_lit_fn = self.module.add_function(
@@ -2992,9 +3008,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
         let bool_ty = self.ctx.bool_type();
         let fang_hash_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
         let fang_verify_ty = bool_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        // The JWT surface (HS256-signed JSON Web Tokens) — twins of the
+        // hash/verify shape:
+        //   __cobrust_fang_jwt_encode(claims_json, secret: *mut Str) -> *mut Str
+        //   __cobrust_fang_jwt_verify(token, secret: *mut Str) -> bool (i1)
+        //   __cobrust_fang_jwt_decode(token, secret: *mut Str) -> *mut Str
+        // encode/decode return a freshly-allocated Str buffer freed by the
+        // existing Str drop schedule; verify returns an `i1` that lands in
+        // the `_ecoret` bool local exactly like `verify_password`.
+        let fang_jwt_strstr_str_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let fang_jwt_verify_ty = bool_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_fang_hash_password", fang_hash_ty, 1usize),
             ("__cobrust_fang_verify_password", fang_verify_ty, 2),
+            ("__cobrust_fang_jwt_encode", fang_jwt_strstr_str_ty, 2),
+            ("__cobrust_fang_jwt_verify", fang_jwt_verify_ty, 2),
+            ("__cobrust_fang_jwt_decode", fang_jwt_strstr_str_ty, 2),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

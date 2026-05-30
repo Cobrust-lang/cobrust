@@ -806,6 +806,44 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Bool,
             PyCompatTier::Semantic,
         )),
+        // ADR-0078 backend Phase 2 — `fang` JWT surface (HS256-signed
+        // JSON Web Tokens), the SECOND value-fn family on the auth/
+        // security module. Twins of the hash/verify rows: same flat
+        // value-pattern (no handles, no `AdtId`), str-in / str-or-bool-out.
+        // - `jwt_encode(claims_json, secret) -> str` mints an HS256 token
+        //   for the claims JSON, signed with `secret`. Malformed claims
+        //   JSON => the empty-string sentinel (fail-clean, never a panic).
+        // - `jwt_verify(token, secret) -> bool` is TRUE iff the HS256
+        //   signature validates against `secret`. The algorithm is PINNED
+        //   to HS256 (NOT taken from the token header), so an `alg:none` /
+        //   alg-swapped (RS256-header) forgery is REJECTED downstream in
+        //   the cabi shim — the classic JWT algorithm-confusion footgun is
+        //   closed. A tampered / wrong-secret / malformed token is a
+        //   normal `false`, never a panic.
+        // - `jwt_decode(token, secret) -> str` returns the claims JSON on
+        //   a valid token, else the empty-string sentinel.
+        // Tier `Semantic` — an HS256 token embeds no nondeterministic salt
+        // (so two encodes of the same claims+secret match), but the parity
+        // claim is behavioral (sign/verify round-trips, forgeries reject),
+        // not bit-for-bit against a CPython `PyJWT` oracle.
+        ("fang", "jwt_encode") => Some(EcoSig::from_values(
+            "__cobrust_fang_jwt_encode",
+            vec![Ty::Str, Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        ("fang", "jwt_verify") => Some(EcoSig::from_values(
+            "__cobrust_fang_jwt_verify",
+            vec![Ty::Str, Ty::Str],
+            Ty::Bool,
+            PyCompatTier::Semantic,
+        )),
+        ("fang", "jwt_decode") => Some(EcoSig::from_values(
+            "__cobrust_fang_jwt_decode",
+            vec![Ty::Str, Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }

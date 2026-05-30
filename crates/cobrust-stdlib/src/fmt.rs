@@ -315,6 +315,38 @@ pub unsafe extern "C" fn __cobrust_str_clone(buf: *mut u8) -> *mut u8 {
     Box::into_raw(copy).cast::<u8>()
 }
 
+/// Concatenate two string buffers into a fresh `StringBuffer` carrying
+/// `a`'s bytes followed by `b`'s bytes. NULL operands are treated as the
+/// empty string. The inputs are BORROWED (read-only) — the caller's drop
+/// schedule still frees them. The returned pointer is a freshly-allocated
+/// buffer the caller owns and must free exactly once via
+/// [`__cobrust_str_drop`].
+///
+/// The runtime target of the `.cb` `str + str` operator (the natural
+/// concatenation form, sibling of `__cobrust_str_eq` for `str == str`).
+///
+/// # Safety
+///
+/// `a` and `b` must each be NULL or a pointer returned by
+/// [`__cobrust_str_new`] and not yet dropped. The returned pointer must be
+/// passed to [`__cobrust_str_drop`] exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_concat(a: *mut u8, b: *mut u8) -> *mut u8 {
+    let mut bytes: Vec<u8> = Vec::new();
+    if !a.is_null() {
+        // SAFETY: caller-attestation — `a` is a valid StringBuffer.
+        let sa = unsafe { &*a.cast::<StringBuffer>() };
+        bytes.extend_from_slice(&sa.bytes);
+    }
+    if !b.is_null() {
+        // SAFETY: caller-attestation — `b` is a valid StringBuffer.
+        let sb = unsafe { &*b.cast::<StringBuffer>() };
+        bytes.extend_from_slice(&sb.bytes);
+    }
+    let out = Box::new(StringBuffer { bytes });
+    Box::into_raw(out).cast::<u8>()
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
