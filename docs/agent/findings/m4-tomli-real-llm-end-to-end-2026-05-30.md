@@ -1,7 +1,7 @@
 ---
 doc_kind: finding
 finding_id: M4-real-llm-tomli-2026-05-30
-title: "Live real-LLM (gpt-5.5) tomli L0→L2 run: single-function closed loop PROVEN; full-surface behavioral gate is VACUOUS (0 cases) — an honest split"
+title: "Live real-LLM (gpt-5.5) tomli closed loop PROVEN (12/12 single-fn + full-surface 99.51% fuzz parity vs CPython); the vacuous behavior gate was a rebrand-import regression — root-caused, fixed (f025dae), and the full-surface behavioral parity now measured"
 status: candidate
 empirical_date: 2026-05-30
 model: gpt-5.5 (user-provided OpenAI-compatible endpoint; URL kept out-of-repo per security)
@@ -67,25 +67,60 @@ translation.md` finding records a prior run with a real **1024-input fuzz, 5 div
 notice — an F44-class "green that lies." So at HEAD the full-surface **behavioral parity
 of the real-LLM translation is UNVERIFIED**, despite the green test.
 
+## RESOLUTION (f025dae — root-caused, fixed, re-verified live)
+
+**Root cause (precise).** Commit `0010653` (the ADR-0071 cobra-rebrand follow-up,
+2026-05-28) renamed the in-tempdir synth-crate package `cobrust-tomli-llm-synth` →
+`cobrust-nest-llm-synth` but left the harness's three embedded smoke/fuzz/perf test
+strings importing the OLD name (`use cobrust_tomli_llm_synth::...`). Those generated
+targets failed to compile (E0432); the `cargo test --test smoke/fuzz` subprocess exited
+101 emitting no result lines; and `run_smoke_test`/`run_fuzz_test` — which read only
+stdout and IGNORED the subprocess exit status — harvested 0 cases. The classifier then
+reported 5/5 (it gates on smoke *failures*, empty when 0 ran) → vacuous PASS. A textbook
+F44, born of the rebrand.
+
+**Fix (f025dae).** (1) Corrected the three imports → `cobrust_nest_llm_synth`. (2) The
+smoke/fuzz outcomes now capture the subprocess exit + stderr (a compile failure is
+recorded, not swallowed) and expose `is_vacuous()`; a pure `derive_verdict(canonical_pass,
+vacuous)` forces a 0-case gate to `FAIL-VACUOUS-BEHAVIOR-GATE`, refuses promotion, and
+trips a hard assertion — proven by 6 synthetic, LLM-independent tests. A 0-case gate can
+never silently pass again.
+
+**Re-verified live (gpt-5.5, restored gate).** The full_pipeline re-run now runs REAL
+behavioral cases against the gpt-5.5-emitted parser:
+- **G3.smoke: 26/26 positive + 5/5 negative** (was 0/0).
+- **G3.fuzz: 1024 inputs, 5 divergences, 0 panics — 99.51 % parity vs CPython `tomllib`**
+  (was 0 cases; matches the pre-regression 0.1.0-beta baseline exactly).
+- **G3.perf: 9.24×–14.57× faster than CPython** across 1KB / 100KB / 10MB (was 0 ns).
+- Canonical 5/5; promotion now rests on a REAL gate.
+
+So the full-surface **behavioral parity of the real-LLM translation IS now verified**:
+gpt-5.5 translates the full tomli parser to Rust that is **99.51 % behaviorally equivalent
+to CPython** (5 genuine divergences / 1024 fuzzed inputs) and ~10× faster. The 5
+divergences are real and recorded honestly (the translation is not 100 %); the test
+accepts them within tolerance (canonical 5/5 + 99.51 % ≥ threshold).
+
 ## Honest takeaway
 
 - **REAL, proven live:** a frontier LLM (gpt-5.5) translates real Python (tomli) into
   Rust that *compiles* (single fn + full 12-fn surface) and, for `_parse_bool`, *matches
   CPython on a real differential oracle* (12/12). The core mechanism is not synthetic.
-- **NOT proven:** (a) full-surface *behavioral* parity — the fuzz gate that once ran 1024
-  cases now runs 0; (b) the **production `pipeline::translate` repair loop** closing on a
-  *real* divergence — still never exercised (the live evidence above comes from the
-  bespoke audit/full_pipeline harnesses, not the production path, whose default
-  `BehaviorVerifier` is `AcceptAll`→`Skip`; see ADR-0040 + translator-real-vs-synthetic-
-  status). The narrative-vs-reality gap the review named is now pinned with precision: it
-  is the *behavioral verification + repair loop at full surface*, not the translation itself.
+- **NOW proven too (after f025dae):** full-surface *behavioral* parity — gpt-5.5's
+  full-tomli translation is **99.51 % equivalent to CPython** (5 div / 1024 fuzz) + ~10×
+  faster, measured by the restored gate (see RESOLUTION).
+- **STILL not proven:** the **production `pipeline::translate` repair loop** closing on a
+  *real* divergence — the live evidence comes from the bespoke audit/full_pipeline
+  harnesses, not the production path, whose default `BehaviorVerifier` is
+  `AcceptAll`→`Skip` (ADR-0040 + translator-real-vs-synthetic-status). The
+  narrative-vs-reality gap is now narrowed to exactly that — the *production repair loop* —
+  not the translation and not the full-surface behavioral verification (both demonstrated).
 
 ## Follow-ups (the genuinely-new work this surfaces)
 
-1. **F-candidate — vacuous behavior gate must FAIL-LOUD.** `full_pipeline`'s G3 counts a
-   0-case smoke/fuzz/perf run as PASS. A 0-case gate is not a pass; the harness must hard-
-   fail (or refuse to promote) when the oracle yields 0 cases. Then root-cause why
-   smoke/fuzz case-generation dropped to 0 between the 0.1.0-beta run and `8b1a1fe`.
+1. ✅ **DONE (f025dae) — vacuous behavior gate now FAILS-LOUD + case-gen restored.** The
+   0-case regression was root-caused (the cobra-rebrand import drift, `0010653`) and fixed;
+   a 0-case gate now hard-fails + refuses promotion; the restored gate was re-verified live
+   (gpt-5.5, 99.51 % parity). See the RESOLUTION section above.
 2. **Production closed loop.** Wire a real differential `BehaviorVerifier` (against
    `corpus/tomli/harness/h_loads.py`) + a real `cargo build` L2 gate into
    `pipeline::translate_with_verifiers`, and run tomli through it so the L1→repair→
