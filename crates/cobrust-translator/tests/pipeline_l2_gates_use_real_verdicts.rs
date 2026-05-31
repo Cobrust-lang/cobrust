@@ -44,8 +44,9 @@ use std::path::Path;
 
 use cobrust_llm_router::RouterConfig;
 use cobrust_translator::{
-    BehaviorVerifier, FunctionTranslation, GateFailure, GateOutcome, PyLibrary, TranslatorConfig,
-    TranslatorError, VerifierVerdict, translate, translate_with_verifier, translate_with_verifiers,
+    BehaviorVerifier, FunctionTranslation, GateFailure, GateKind, GateOutcome, PyLibrary,
+    TranslatorConfig, TranslatorError, VerifierVerdict, translate, translate_with_verifier,
+    translate_with_verifiers,
 };
 
 // ---- Fixtures ---------------------------------------------------------------
@@ -381,7 +382,7 @@ impl BehaviorVerifier for RejectFirstAcceptSecond {
         if attempt == 1 {
             VerifierVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_behavior".into(),
+                failed_gate: GateKind::Behavior,
                 failure_summary: "B2 test fixture rejection".into(),
                 failed_inputs: vec!["fixture-input".into()],
                 expected: Some("ok".into()),
@@ -487,7 +488,7 @@ impl BehaviorVerifier for AlwaysRejectLive {
     fn verify(&self, function: &FunctionTranslation, attempt: u32) -> VerifierVerdict {
         VerifierVerdict::Reject(GateFailure {
             function: function.name.clone(),
-            failed_gate: "l2_behavior".into(),
+            failed_gate: GateKind::Behavior,
             failure_summary: "B2 always-reject fixture".into(),
             failed_inputs: vec![],
             expected: None,
@@ -569,7 +570,7 @@ pub fn loads(_s: &str) {{}}
         } => {
             assert_eq!(function, "loads");
             assert_eq!(attempts, 2);
-            assert_eq!(failed_gate, "l2_behavior");
+            assert_eq!(failed_gate, GateKind::Behavior);
             println!(
                 "B2 PASS (Fail path) — EscalationExceeded(function={function}, gate={failed_gate}, attempts={attempts})"
             );
@@ -628,7 +629,7 @@ impl cobrust_translator::PerfVerifier for PerfRejectFirstAcceptSecond {
         if attempt == 1 {
             cobrust_translator::PerfVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_perf".into(),
+                failed_gate: GateKind::Perf,
                 failure_summary: "B2 perf fixture rejection".into(),
                 failed_inputs: vec![],
                 expected: None,

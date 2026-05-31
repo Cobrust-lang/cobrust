@@ -21,7 +21,7 @@
 #![allow(clippy::expect_used)]
 
 use cobrust_translator::{
-    BehaviorVerifier, FunctionTranslation, GateFailure, PyLibrary, TranslatorConfig,
+    BehaviorVerifier, FunctionTranslation, GateFailure, GateKind, PyLibrary, TranslatorConfig,
     TranslatorError, VerifierVerdict, dateutil_m5_dependents, run_dependent,
     translate_with_verifier,
 };
@@ -87,7 +87,7 @@ impl BehaviorVerifier for ParseIsoBrokenAttemptVerifier {
         if function.name == "parse_iso" && function.emitted_text.contains("BROKEN-V1") {
             VerifierVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_behavior".into(),
+                failed_gate: GateKind::Behavior,
                 failure_summary:
                     "parse_iso swapped year/month, returns wrong tuple on every L2.behavior input"
                         .into(),
@@ -300,7 +300,7 @@ async fn dateutil_pipeline_escalates_when_attempt_2_also_broken() {
             if function.name == "parse_iso" {
                 VerifierVerdict::Reject(GateFailure {
                     function: function.name.clone(),
-                    failed_gate: "l2_behavior".into(),
+                    failed_gate: GateKind::Behavior,
                     failure_summary: "synthetic: every attempt rejected".into(),
                     failed_inputs: vec!["x".into()],
                     expected: None,
@@ -332,7 +332,7 @@ async fn dateutil_pipeline_escalates_when_attempt_2_also_broken() {
         } => {
             assert_eq!(function, "parse_iso");
             assert_eq!(attempts, 2);
-            assert_eq!(failed_gate, "l2_behavior");
+            assert_eq!(failed_gate, GateKind::Behavior);
         }
         other => panic!("expected EscalationExceeded, got {other:?}"),
     }

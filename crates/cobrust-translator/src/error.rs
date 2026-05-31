@@ -3,6 +3,8 @@
 
 use cobrust_llm_router::RouterError;
 
+use crate::repair::GateKind;
+
 /// All errors the translation pipeline can surface.
 ///
 /// `SyntheticMiss` is the canonical failure mode for synthetic-LLM
@@ -49,7 +51,7 @@ pub enum TranslatorError {
     EscalationExceeded {
         function: String,
         attempts: u32,
-        failed_gate: String,
+        failed_gate: GateKind,
     },
 
     /// I/O failure (file read/write, mkdir).
@@ -123,7 +125,7 @@ mod tests {
         let e = TranslatorError::EscalationExceeded {
             function: "parse_iso".into(),
             attempts: 50,
-            failed_gate: "l2_behavior".into(),
+            failed_gate: GateKind::Behavior,
         };
         let msg = e.to_string();
         assert!(msg.contains("parse_iso"));

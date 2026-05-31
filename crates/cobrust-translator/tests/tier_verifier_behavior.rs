@@ -58,7 +58,7 @@
 use std::path::Path;
 
 use cobrust_translator::{
-    BehaviorVerifier, FunctionTranslation, GateFailure, PyLibrary, TranslatorConfig,
+    BehaviorVerifier, FunctionTranslation, GateFailure, GateKind, PyLibrary, TranslatorConfig,
     VerifierVerdict, translate,
 };
 
@@ -243,7 +243,7 @@ fn b2_strict_tier_rejects_any_divergence() {
         fn verify(&self, function: &FunctionTranslation, _attempt: u32) -> VerifierVerdict {
             VerifierVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_behavior".into(),
+                failed_gate: GateKind::Behavior,
                 failure_summary: "Strict-tier byte-identity check failed".into(),
                 failed_inputs: vec!["mock-input".into()],
                 expected: Some("expected".into()),
@@ -261,7 +261,7 @@ fn b2_strict_tier_rejects_any_divergence() {
     match verdict {
         VerifierVerdict::Reject(gf) => {
             // The failure must name the gate so repair.rs routes correctly.
-            assert_eq!(gf.failed_gate, "l2_behavior");
+            assert_eq!(gf.failed_gate, GateKind::Behavior);
             // The failure must mention Strict-tier semantics so repair LLM
             // sees the contract.
             assert!(
@@ -296,7 +296,7 @@ fn b3_strict_tier_rejects_single_char_drift() {
             // Mock: expected="abc", actual="ab c" — a single space drift.
             VerifierVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_behavior".into(),
+                failed_gate: GateKind::Behavior,
                 failure_summary: "Strict-tier rejected: 1-byte diff between oracle and emission"
                     .into(),
                 failed_inputs: vec!["single-char-drift-input".into()],
@@ -406,7 +406,7 @@ fn b6_semantic_tier_rejects_genuine_divergence() {
             // Mock: expected=[1,2,3], actual=[1,2,4]. Structural eq fails.
             VerifierVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_behavior".into(),
+                failed_gate: GateKind::Behavior,
                 failure_summary: "Semantic-tier rejected: list element divergence at index 2"
                     .into(),
                 failed_inputs: vec!["list-divergence-input".into()],
@@ -478,7 +478,7 @@ fn b8_numerical_tier_rejects_drift_exceeding_rtol() {
             // rtol 100x; assert_allclose fails.
             VerifierVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_behavior".into(),
+                failed_gate: GateKind::Behavior,
                 failure_summary: "Numerical(rtol=1e-7) rejected: drift 1e-5 exceeds tolerance"
                     .into(),
                 failed_inputs: vec!["numerical-overflow-input".into()],

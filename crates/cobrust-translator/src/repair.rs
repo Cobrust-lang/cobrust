@@ -12,15 +12,92 @@
 //! [`crate::error::TranslatorError::EscalationExceeded`].
 
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use cobrust_llm_router::{CompletionRequest, Message, Role, Router, SamplingParams, Task};
 use serde::{Deserialize, Serialize};
 
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 
 use crate::error::TranslatorError;
 use crate::synthetic::{PromptHeader, format_prompt_body};
 use crate::translate::FunctionTranslation;
+
+/// The L2 verification-gate identity space (constitution §4.2). This is
+/// the gate that *caught* a divergence — distinct from the gate
+/// *outcome* (`"pass"` / `"skipped"` / `"fail"`) carried by
+/// [`crate::manifest`]'s `l2_build` / `l2_behavior` / `l2_perf` fields.
+///
+/// §2.5 compile-time-catch: an invalid or typo'd gate name is
+/// unrepresentable, and every consumer must handle all variants
+/// exhaustively (no `_ =>` catch-all anywhere), so adding a fourth gate
+/// later fails to compile until each site is updated.
+///
+/// The on-disk / on-wire representation is the exact gate string
+/// (`"l2_build"` / `"l2_behavior"` / `"l2_perf"`), preserved via the
+/// [`serde`] attributes below so the TOML diagnostic round-trip and
+/// every rendered report stay byte-identical.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GateKind {
+    /// L2 build gate — `cargo build --release` must pass warning-clean.
+    #[serde(rename = "l2_build")]
+    Build,
+    /// L2 behavior gate — differential + property + fuzz oracle checks.
+    #[serde(rename = "l2_behavior")]
+    Behavior,
+    /// L2 performance gate — ≥ 0.8× of the original on the benchmark.
+    #[serde(rename = "l2_perf")]
+    Perf,
+}
+
+impl GateKind {
+    /// The load-bearing gate string. Exactly `"l2_build"` /
+    /// `"l2_behavior"` / `"l2_perf"`; downstream reports + tests pin
+    /// these byte-for-byte.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GateKind::Build => "l2_build",
+            GateKind::Behavior => "l2_behavior",
+            GateKind::Perf => "l2_perf",
+        }
+    }
+}
+
+impl fmt::Display for GateKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Error returned when a string does not name a known L2 gate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseGateKindError(pub String);
+
+impl fmt::Display for ParseGateKindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "unknown L2 gate `{}`; expected one of l2_build, l2_behavior, l2_perf",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for ParseGateKindError {}
+
+impl FromStr for GateKind {
+    type Err = ParseGateKindError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "l2_build" => Ok(GateKind::Build),
+            "l2_behavior" => Ok(GateKind::Behavior),
+            "l2_perf" => Ok(GateKind::Perf),
+            other => Err(ParseGateKindError(other.to_string())),
+        }
+    }
+}
 
 /// One gate-failure diagnostic blob, persisted to disk and shipped
 /// back to the LLM as the prompt body for the next attempt.
@@ -31,9 +108,9 @@ use crate::translate::FunctionTranslation;
 pub struct GateFailure {
     /// Function under repair (matches `FunctionTranslation::name`).
     pub function: String,
-    /// Gate that rejected the translation. Must be one of
-    /// `"l2_build"`, `"l2_behavior"`, `"l2_perf"`, `"l3_downstream"`.
-    pub failed_gate: String,
+    /// Gate that rejected the translation (the gate *identity*, one of
+    /// the three L2 gates — see [`GateKind`]).
+    pub failed_gate: GateKind,
     /// Single-sentence summary suitable for an LLM prompt.
     pub failure_summary: String,
     /// Minimal failing inputs (or build snippet), one per Vec entry.
@@ -215,7 +292,7 @@ fn classify_router_error(
 pub fn write_failure_report(
     crate_dir: &Path,
     function: &str,
-    failed_gate: &str,
+    failed_gate: GateKind,
     attempts: u32,
     diagnostics: &[GateFailure],
 ) -> Result<PathBuf, std::io::Error> {
@@ -263,7 +340,7 @@ mod tests {
     fn sample_failure() -> GateFailure {
         GateFailure {
             function: "parse_iso".into(),
-            failed_gate: "l2_behavior".into(),
+            failed_gate: GateKind::Behavior,
             failure_summary: "swapped year/month on every input".into(),
             failed_inputs: vec!["2026-04-30".into(), "2026-01-31".into()],
             expected: Some("(2026, 4, 30, ...)".into()),
@@ -319,7 +396,8 @@ mod tests {
             });
         }
         let path =
-            write_failure_report(&crate_dir, "parse_iso", "l2_behavior", 3, &diagnostics).unwrap();
+            write_failure_report(&crate_dir, "parse_iso", GateKind::Behavior, 3, &diagnostics)
+                .unwrap();
         assert!(path.exists());
         let body = std::fs::read_to_string(path).unwrap();
         assert!(body.contains("Attempt 1"));

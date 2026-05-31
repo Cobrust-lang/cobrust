@@ -39,8 +39,8 @@
 #![allow(clippy::needless_lifetimes)]
 
 use cobrust_translator::{
-    AcceptAll, AcceptAllPerf, FunctionTranslation, GateFailure, PerfVerdict, PerfVerifier,
-    PyLibrary, TranslatorConfig, TranslatorError, translate_with_verifiers,
+    AcceptAll, AcceptAllPerf, FunctionTranslation, GateFailure, GateKind, PerfVerdict,
+    PerfVerifier, PyLibrary, TranslatorConfig, TranslatorError, translate_with_verifiers,
 };
 use std::path::PathBuf;
 
@@ -227,7 +227,7 @@ impl PerfVerifier for PerfAlwaysRejectSliceBasic {
         if function.name == "slice_basic" {
             PerfVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_perf".into(),
+                failed_gate: GateKind::Perf,
                 failure_summary: format!(
                     "synthetic always-fail perf verifier (M7.2 enforced gate per ADR-0015 + ADR-0014 §5); attempt {attempt}"
                 ),
@@ -264,7 +264,7 @@ async fn index_pipeline_escalates_when_perf_always_fails() {
         } => {
             assert_eq!(function, "slice_basic");
             assert_eq!(attempts, 2);
-            assert_eq!(failed_gate, "l2_perf");
+            assert_eq!(failed_gate, GateKind::Perf);
         }
         other => panic!("expected EscalationExceeded, got {other:?}"),
     }

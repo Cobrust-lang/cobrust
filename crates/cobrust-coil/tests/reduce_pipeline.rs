@@ -35,8 +35,8 @@
 #![allow(clippy::uninlined_format_args)]
 
 use cobrust_translator::{
-    AcceptAll, AcceptAllPerf, FunctionTranslation, GateFailure, PerfVerdict, PerfVerifier,
-    PyLibrary, TranslatorConfig, TranslatorError, translate_with_verifiers,
+    AcceptAll, AcceptAllPerf, FunctionTranslation, GateFailure, GateKind, PerfVerdict,
+    PerfVerifier, PyLibrary, TranslatorConfig, TranslatorError, translate_with_verifiers,
 };
 use std::path::PathBuf;
 
@@ -221,7 +221,7 @@ impl PerfVerifier for PerfAlwaysRejectSumAll {
         if function.name == "sum_all" {
             PerfVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_perf".into(),
+                failed_gate: GateKind::Perf,
                 failure_summary: format!(
                     "synthetic always-fail perf verifier (M7.3 enforced gate per ADR-0016 + ADR-0014 §5); attempt {attempt}"
                 ),
@@ -258,7 +258,7 @@ async fn reduce_pipeline_escalates_when_perf_always_fails() {
         } => {
             assert_eq!(function, "sum_all");
             assert_eq!(attempts, 2);
-            assert_eq!(failed_gate, "l2_perf");
+            assert_eq!(failed_gate, GateKind::Perf);
         }
         other => panic!("expected EscalationExceeded, got {other:?}"),
     }

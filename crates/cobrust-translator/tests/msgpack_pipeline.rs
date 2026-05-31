@@ -25,7 +25,7 @@
 #![allow(clippy::expect_used)]
 
 use cobrust_translator::{
-    AcceptAll, FunctionTranslation, GateFailure, PerfVerdict, PerfVerifier, PyLibrary,
+    AcceptAll, FunctionTranslation, GateFailure, GateKind, PerfVerdict, PerfVerifier, PyLibrary,
     TranslatorConfig, TranslatorError, msgpack_m6_dependents, run_dependent,
     translate_with_verifiers,
 };
@@ -92,7 +92,7 @@ impl PerfVerifier for PackUintPerfBrokenVerifier {
         if function.name == "pack_uint" && function.emitted_text.contains("PERF-BROKEN") {
             PerfVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_perf".into(),
+                failed_gate: GateKind::Perf,
                 failure_summary: "pack_uint emitted with intermediate Vec-per-byte; fails native-ext 0.7x threshold".into(),
                 failed_inputs: vec!["pack_uint(0xff)".into(), "pack_uint(0xffff)".into()],
                 expected: Some("ratio >= 0.7".into()),
@@ -302,7 +302,7 @@ async fn msgpack_pipeline_escalates_when_perf_always_fails() {
             if function.name == "pack_uint" {
                 PerfVerdict::Reject(GateFailure {
                     function: function.name.clone(),
-                    failed_gate: "l2_perf".into(),
+                    failed_gate: GateKind::Perf,
                     failure_summary: "synthetic: every attempt rejected".into(),
                     failed_inputs: vec!["x".into()],
                     expected: None,
@@ -334,7 +334,7 @@ async fn msgpack_pipeline_escalates_when_perf_always_fails() {
         } => {
             assert_eq!(function, "pack_uint");
             assert_eq!(attempts, 2);
-            assert_eq!(failed_gate, "l2_perf");
+            assert_eq!(failed_gate, GateKind::Perf);
         }
         other => panic!("expected EscalationExceeded, got {other:?}"),
     }

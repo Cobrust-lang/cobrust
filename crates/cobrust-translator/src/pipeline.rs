@@ -37,7 +37,7 @@ use crate::manifest::{
     BuildSection, DependentsSection, GatesSection, OracleSection, ProvenanceManifest,
     RouterSection, SourceSection, VerificationSection,
 };
-use crate::repair::{GateFailure, write_failure_report};
+use crate::repair::{GateFailure, GateKind, write_failure_report};
 use crate::spec::{FunctionSpec, PyCompatTier, SpecToml};
 use crate::synthetic::{CannedTable, SyntheticProvider};
 use crate::translate::{FunctionTranslation, TranslationOutput, TranslationPlan, run_l1};
@@ -228,7 +228,7 @@ pub enum PerfVerdict {
     /// Report meets the threshold; pipeline proceeds.
     Accept,
     /// Report fails; pipeline ships `GateFailure { failed_gate:
-    /// "l2_perf", ... }` to the repair loop and re-dispatches the
+    /// GateKind::Perf, ... }` to the repair loop and re-dispatches the
     /// failing function with `attempt += 1`.
     Reject(GateFailure),
 }
@@ -388,7 +388,7 @@ impl TierVerifier {
             if obs.expected != obs.actual {
                 return VerifierVerdict::Reject(GateFailure {
                     function: function.name.clone(),
-                    failed_gate: "l2_behavior".into(),
+                    failed_gate: GateKind::Behavior,
                     failure_summary: format!(
                         "Strict-tier byte-identity check failed for {}: oracle vs emission diverge",
                         function.name
@@ -418,7 +418,7 @@ impl TierVerifier {
             if !semantic_equivalent(&obs.expected, &obs.actual) {
                 return VerifierVerdict::Reject(GateFailure {
                     function: function.name.clone(),
-                    failed_gate: "l2_behavior".into(),
+                    failed_gate: GateKind::Behavior,
                     failure_summary: format!(
                         "Semantic-tier structural check failed for {}: oracle vs emission diverge",
                         function.name
@@ -446,7 +446,7 @@ impl TierVerifier {
             let Ok(expected) = obs.expected.trim().parse::<f64>() else {
                 return VerifierVerdict::Reject(GateFailure {
                     function: function.name.clone(),
-                    failed_gate: "l2_behavior".into(),
+                    failed_gate: GateKind::Behavior,
                     failure_summary: format!(
                         "Numerical(rtol={rtol}) expected f64 oracle for {}, got non-numeric",
                         function.name
@@ -460,7 +460,7 @@ impl TierVerifier {
             let Ok(actual) = obs.actual.trim().parse::<f64>() else {
                 return VerifierVerdict::Reject(GateFailure {
                     function: function.name.clone(),
-                    failed_gate: "l2_behavior".into(),
+                    failed_gate: GateKind::Behavior,
                     failure_summary: format!(
                         "Numerical(rtol={rtol}) expected f64 emission for {}, got non-numeric",
                         function.name
@@ -474,7 +474,7 @@ impl TierVerifier {
             if !numpy_allclose(expected, actual, rtol) {
                 return VerifierVerdict::Reject(GateFailure {
                     function: function.name.clone(),
-                    failed_gate: "l2_behavior".into(),
+                    failed_gate: GateKind::Behavior,
                     failure_summary: format!(
                         "Numerical(rtol={rtol}) rejected: drift exceeds tolerance for {}",
                         function.name
@@ -509,7 +509,7 @@ impl BehaviorVerifier for TierVerifier {
             Err(msg) => {
                 return VerifierVerdict::Reject(GateFailure {
                     function: function.name.clone(),
-                    failed_gate: "l2_behavior".into(),
+                    failed_gate: GateKind::Behavior,
                     failure_summary: format!("oracle harness failed: {msg}"),
                     failed_inputs: vec![],
                     expected: None,
@@ -890,10 +890,12 @@ async fn run_repair_loop(
         let mut attempt: u32 = 1;
         let mut diagnostics: Vec<GateFailure> = Vec::new();
         // Tracks the last failed gate so the failure_report.md names it
-        // accurately if escalation is hit. Initialised at each function;
-        // unused-then-overwritten is intentional.
+        // accurately if escalation is hit. `None` until the first Reject;
+        // escalation can only fire after a Reject, so the unwrap below is
+        // unreachable-on-None by construction. The `None` init is
+        // overwritten-before-read on every escalation path.
         #[allow(unused_assignments)]
-        let mut last_failed_gate = String::new();
+        let mut last_failed_gate: Option<GateKind> = None;
         loop {
             // Borrow check: clone the current emission before deciding.
             let snapshot = translation.functions[idx].clone();
@@ -917,12 +919,12 @@ async fn run_repair_loop(
             match merged {
                 VerifierVerdict::Accept => break,
                 VerifierVerdict::Reject(failure) => {
-                    last_failed_gate = failure.failed_gate.clone();
+                    last_failed_gate = Some(failure.failed_gate);
                     // ADR-0082: record behavioral (not perf) divergences
                     // for the manifest. This Reject is about to be sent
                     // to repair; the manifest must remember the gate
                     // caught it, even after the repair loop fixes it.
-                    if failure.failed_gate == "l2_behavior" {
+                    if failure.failed_gate == GateKind::Behavior {
                         observed_divergences.push(render_divergence(&failure));
                     }
                     // Persist the diagnostic blob.
@@ -936,17 +938,21 @@ async fn run_repair_loop(
                         let crate_dir =
                             out_dir.join(crate::cobra_naming::cobra_crate_name(library));
                         std::fs::create_dir_all(&crate_dir)?;
+                        // Escalation can only be reached after at least one
+                        // Reject set `last_failed_gate`, so this is `Some`.
+                        let failed_gate = last_failed_gate
+                            .expect("escalation is reached only after a Reject sets the gate");
                         write_failure_report(
                             &crate_dir,
                             &snapshot.name,
-                            &last_failed_gate,
+                            failed_gate,
                             attempt,
                             &diagnostics,
                         )?;
                         return Err(TranslatorError::EscalationExceeded {
                             function: snapshot.name.clone(),
                             attempts: attempt,
-                            failed_gate: last_failed_gate,
+                            failed_gate,
                         });
                     }
                     // Re-dispatch with attempt += 1 (the failure blob
@@ -1805,7 +1811,7 @@ tolerance = "exact"
     fn render_divergence_pins_the_manifest_record_shape() {
         let failure = GateFailure {
             function: "incr".into(),
-            failed_gate: "l2_behavior".into(),
+            failed_gate: GateKind::Behavior,
             failure_summary: "strict-tier byte-identity drift".into(),
             failed_inputs: vec!["0".into()],
             expected: Some("1".into()),
@@ -1827,7 +1833,7 @@ tolerance = "exact"
             if attempt == 1 {
                 VerifierVerdict::Reject(GateFailure {
                     function: function.name.clone(),
-                    failed_gate: "l2_behavior".into(),
+                    failed_gate: GateKind::Behavior,
                     failure_summary: "deliberate first-attempt rejection (test fixture)".into(),
                     failed_inputs: vec!["fixture-input".into()],
                     expected: Some("ok".into()),
@@ -1953,7 +1959,7 @@ tolerance = "exact"
         fn verify(&self, function: &FunctionTranslation, attempt: u32) -> VerifierVerdict {
             VerifierVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_behavior".into(),
+                failed_gate: GateKind::Behavior,
                 failure_summary: "always rejected".into(),
                 failed_inputs: vec![],
                 expected: None,
@@ -2040,7 +2046,7 @@ tolerance = "exact"
             } => {
                 assert_eq!(function, "loads");
                 assert_eq!(attempts, 2);
-                assert_eq!(failed_gate, "l2_behavior");
+                assert_eq!(failed_gate, GateKind::Behavior);
             }
             other => panic!("expected EscalationExceeded, got {other:?}"),
         }

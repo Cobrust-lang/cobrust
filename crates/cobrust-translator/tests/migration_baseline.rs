@@ -36,7 +36,7 @@
 use std::path::{Path, PathBuf};
 
 use cobrust_translator::{
-    BehaviorVerifier, FunctionTranslation, GateFailure, VerifierVerdict,
+    BehaviorVerifier, FunctionTranslation, GateFailure, GateKind, VerifierVerdict,
     spec::{FunctionSpec, SpecToml},
 };
 
@@ -195,7 +195,7 @@ fn c4_tomli_strict_tighter_gate_rejects_divergent_oracle() {
         fn verify(&self, function: &FunctionTranslation, _attempt: u32) -> VerifierVerdict {
             VerifierVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_behavior".into(),
+                failed_gate: GateKind::Behavior,
                 failure_summary: format!(
                     "C4: tomli function {} Strict-tier byte-identity check failed \
                      (forecast regression per ADR-0052c §13)",
@@ -258,7 +258,7 @@ fn c5_msgpack_strict_tighter_gate_rejects_divergent_oracle() {
         fn verify(&self, function: &FunctionTranslation, _attempt: u32) -> VerifierVerdict {
             VerifierVerdict::Reject(GateFailure {
                 function: function.name.clone(),
-                failed_gate: "l2_behavior".into(),
+                failed_gate: GateKind::Behavior,
                 failure_summary: format!(
                     "C5: msgpack function {} Strict-tier byte-identity check failed \
                      (forecast M6 regression per ADR-0052c §Migration plan step 3)",
@@ -291,7 +291,7 @@ fn c5_msgpack_strict_tighter_gate_rejects_divergent_oracle() {
             // M6 msgpack rejection must be diagnosed enough for the
             // repair loop to retry (the pack_uint attempt-1 broken
             // emission pattern from existing pipeline_l2_gates test).
-            assert_eq!(gf.failed_gate, "l2_behavior");
+            assert_eq!(gf.failed_gate, GateKind::Behavior);
             assert!(
                 gf.failure_summary.contains("msgpack") || gf.failure_summary.contains("Strict"),
                 "C5 contract: msgpack rejection must name the library or tier; got {:?}",

@@ -83,7 +83,8 @@ pub use crate::pipeline::{
     VerifierVerdict, translate, translate_with_verifier, translate_with_verifiers,
 };
 pub use crate::repair::{
-    GateFailure, repair_translation, repair_translation_with_task, write_failure_report,
+    GateFailure, GateKind, ParseGateKindError, repair_translation, repair_translation_with_task,
+    write_failure_report,
 };
 pub use crate::spec::{FunctionSpec, PyCompatTier, SpecError, SpecToml};
 pub use crate::synthetic::{CannedResponse, CannedTable, PromptHeader, SyntheticProvider};
