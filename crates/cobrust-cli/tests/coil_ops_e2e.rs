@@ -517,10 +517,11 @@ fn test_buffer_div_buffer_accepted() {
 }
 
 /// NEGATIVE (still rejected) — `a // b` (Buffer FLOOR-division) remains
-/// REJECTED: the Phase-1 completion wires `+`/`-`/`*`/`/` (true-division)
-/// but NOT `//` (floor-division), `%`, `**`, or `@`. This pins the op-set
-/// boundary — the Buffer arm must enumerate the supported ops, not
-/// blanket-accept every arithmetic operator. Expect a `TypeError` (exit 2).
+/// REJECTED: the supported arithmetic ops are `+`/`-`/`*`/`/` (true-division)
+/// and `@` (matmul, ADR-0077 §"@-operator" — see `coil_matmul_e2e.rs`), but
+/// NOT `//` (floor-division), `%`, or `**`. This pins the op-set boundary —
+/// the Buffer arm must enumerate the supported ops, not blanket-accept every
+/// arithmetic operator. Expect a `TypeError` (exit 2).
 #[test]
 fn test_neg_buffer_floordiv_unsupported_rejected() {
     let (ok, code, stderr) = try_check(concat!(

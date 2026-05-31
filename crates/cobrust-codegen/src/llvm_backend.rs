@@ -3150,6 +3150,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_buffer_ge", coil_binop_ty, 2),
             ("__cobrust_coil_buffer_eq", coil_binop_ty, 2),
             ("__cobrust_coil_buffer_ne", coil_binop_ty, 2),
+            // ADR-0077 §"@-operator" buffer-buffer MATRIX multiply `a @ b`
+            // → a `coil.Buffer`. Same `(ptr, ptr) -> ptr` array-array shape
+            // as `add`/`sub`/`mul`/`div` + the comparisons, so it reuses
+            // `coil_binop_ty`. The MIR retarget (the `lookup_buffer_binop`
+            // MatMul arm) turns `a @ b` into a `Terminator::Call` onto this
+            // — codegen only declares the extern (no matmul-specific arm).
+            ("__cobrust_coil_buffer_matmul", coil_binop_ty, 2),
             ("__cobrust_coil_buffer_getitem", coil_getitem_ty, 2),
             ("__cobrust_coil_buffer_shape", coil_shape_ty, 1),
             ("__cobrust_coil_buffer_ndim", coil_attr_i64_ty, 1),

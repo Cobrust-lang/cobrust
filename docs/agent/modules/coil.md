@@ -1323,9 +1323,8 @@ The six `<`/`<=`/`>`/`>=`/`==`/`!=`. **Load-bearing semantic:** the result is a
   diagnostic ("comparing a coil.Buffer with a scalar is not yet supported …
   compare against a same-shape buffer, e.g. `a < b`"), not the bare `unify`
   mismatch. Follow-up: a scalar-comparison shim + admit.
-- **`@` matmul** — still rejects; the arithmetic-arm reject now NAMES the
-  supported set (arithmetic + comparison) and lists `//`/`%`/`**`/`@` as
-  unsupported.
+- **`@` matmul** — SHIPPED in the next increment below (the arithmetic-arm
+  reject set is now `//`/`%`/`**`; `@` is accepted between two buffers).
 
 ### Done means (ADR-0077 Phase-2/3 — DONE)
 
@@ -1346,6 +1345,104 @@ The six `<`/`<=`/`>`/`>=`/`==`/`!=`. **Load-bearing semantic:** the result is a
       inverse, broadcast, `&a < &b`, `a < 1` / `1 < a` §2.5 rejects).
 - [x] No regression: 9 coil E2E suites green (72 tests, env-override path);
       touched-crate unit corpora green; clippy clean on touched crates.
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
+## `.cb` `coil.Buffer` — matrix-multiply `a @ b` (ADR-0077 §"@-operator")
+
+The `@` operator (`BinOp::MatMul`) on two buffers, reusing the EXISTING
+runtime matmul (ZERO new numerics). Same mechanism as every prior op:
+`synth_bin` guard → `lower_bin` retarget-to-`Call` → cabi shim → `Array`
+kernel (codegen `lower_binop` never reached — ADR-0077 §1.1).
+
+**Load-bearing semantic:** `@` is MATRIX multiplication (`np.matmul`), NOT
+element-wise (`*` is element-wise). `Buffer @ Buffer -> Buffer` ALWAYS — the
+matrix `(m,k)@(k,n)->(m,n)` and matrix-vector `(m,k)@(k,)->(m,)` /
+`(k,)@(k,n)->(n,)` cases yield an array; the degenerate 1-D·1-D `(k,)@(k,)`
+yields numpy's 0-d scalar, but Cobrust has NO 0-d scalar type (ADR-0077 Q2),
+so the f64-returning `a.dot(b)` METHOD is the surface for that case and `@`
+always types to `coil.Buffer`. Shape conformability is a RUNTIME check
+(panic-on-mismatch, ADR-0077 Q4 — the static handle carries no shape).
+
+- **Manifest:** ONE arm added to `lookup_buffer_binop` (the SAME table as
+  `+`/`-`/`*`/`/` + the comparisons) → `(COIL_BUFFER_ADT, BinOp::MatMul)` =>
+  `__cobrust_coil_buffer_matmul`, `ret` = `coil_buffer_ty()`.
+- **Typecheck (`synth_bin` ARITHMETIC arm):** `a @ b` (both Buffer) `unify`s
+  (Buffer-vs-Buffer) then resolves through the existing `lookup_buffer_binop`
+  accept path. A NEW guard BEFORE `unify` rejects `Buffer @ scalar` /
+  `scalar @ Buffer` (XOR of the two `is_buf` flags, gated on `op == MatMul`)
+  with a §2.5 fix-printing diagnostic ("matrix multiplication `@` requires
+  BOTH operands to be a coil.Buffer … use `*` to scale … `a @ b` or
+  `a @ coil.eye(a.size)`") — without it a one-Buffer `@` would fall to the
+  bare `unify` "expected Adt, found i64" (a §2.5-B miss). The scalar-broadcast
+  shims intentionally do NOT cover `@` (`lookup_buffer_{,left_}scalar_binop`
+  return `None` for `MatMul`), so `+`/`-`/`*`/`/` with one scalar still take
+  their shim path and never hit this guard. The reject set named by the
+  arithmetic-arm message is now `//`/`%`/`**` (no longer `@`).
+- **MIR:** NO new arm — `a @ b` reaches the existing `lookup_buffer_binop`
+  array-array guard in `lower_bin` unintercepted (the scalar guards return
+  `None` for `MatMul`; `a @ scalar` was already rejected at typecheck so MIR
+  never sees it). Both operands borrowed (Move→Copy), one fresh handle out.
+- **cabi:** a DEDICATED `__cobrust_coil_buffer_matmul(a, b: *mut Buffer) ->
+  *mut Buffer` shim — NOT the shared `buffer_binop` body, because that runs a
+  `broadcast_shape` pre-check, but matmul conformability is the inner-dim
+  alignment rule (`a.shape[-1] == b.shape[-2]`), NOT broadcasting — a valid
+  `(2,3)@(3,4)` is NON-broadcastable and would be wrongly aborted. The shim
+  forwards STRAIGHT to `Array::matmul` (→ `linalg::matmul`, UNCHANGED) and
+  `coil_panic`s on its `Err` (shape-mismatch / dtype) — NEVER unwinding across
+  the C-ABI (ADR-0077 Q4 trap discipline, same abort path as `buffer_binop`).
+- **Codegen:** 1 extern row `__cobrust_coil_buffer_matmul` (`coil_binop_ty`,
+  the `(ptr, ptr) -> ptr` shape).
+
+### Out of scope (DEFERRED — NOT shipped)
+
+- **`Buffer @ scalar` / `scalar @ Buffer`** — rejected at typecheck with a
+  §2.5 FIX (above); matmul needs two arrays.
+- **Batched / N-D matmul, in-place `@=`, mixed-rank broadcasting matmul** —
+  noted, not implemented (`linalg::matmul` is rank-1/2 at M7.4 per ADR-0017;
+  a rank-≥3 input traps via the kernel's `_ => shape_err` arm).
+
+### Perf (CLAUDE.md §5.2/§5.3 — measured, HONEST)
+
+3-tier benchmark `crates/cobrust-coil/benches/matmul.rs` +
+`docs/agent/benchmarks/coil-matmul.md` (square `N x N`, N=16/64/256). HONEST
+result — coil LOSES both ratios (no fabricated win):
+
+- **`T3/T1` (coil vs numpy) `> 1` and grows** (`1.76×`→`3.43×`→`5.90×`):
+  numpy `@` is BLAS (Accelerate on the rig), coil's default backend is
+  `ndarray::Array2::dot` (pure-Rust, no BLAS). The gap is ndarray-vs-BLAS, NOT
+  coil's wiring — it MOTIVATES **#157** (pure-Rust BLAS-class linalg, e.g.
+  faer). Proven by `T2/T1` (raw ndarray, no Cobrust) ALSO `>1` and growing.
+- **`T3/T2` (coil vs its own ndarray ceiling) `> 1` and grows**
+  (`1.96×`→`2.88×`→`4.25×`): this IS coil's wrapping, but NOT the FFI floor
+  (that amortizes) — it is the FIVE O(N²) marshalling copies in
+  `linalg::matmul` (`to_f64`×2 + `to_vec`×2 + out-`collect`). Named follow-up:
+  a same-dtype 2-D fast path calling `Array2::dot` on the input views directly
+  (the #166-elementwise-fast-path analogue; a numerics change, out of THIS
+  task's "zero new numerics" scope).
+
+### Done means (ADR-0077 §"@-operator" — DONE)
+
+- [x] cabi: `__cobrust_coil_buffer_matmul` (dedicated; forwards to
+      `Array::matmul`, `coil_panic` on `Err`, NO `broadcast_shape` pre-check).
+- [x] `array.rs` / `linalg.rs` UNCHANGED (the matmul kernel pre-existed —
+      zero new numerics).
+- [x] Manifest: 1 `(COIL_BUFFER_ADT, BinOp::MatMul)` arm in
+      `lookup_buffer_binop`; 2 ecosystem unit tests (resolve + behind-borrow);
+      the obsolete `MatMul.is_none()` assertion removed from
+      `buffer_binop_still_rejects_unsupported_ops`.
+- [x] Typecheck: `a @ b` accepted via `lookup_buffer_binop`; `Buffer @ scalar`
+      / `scalar @ Buffer` §2.5 reject (MatMul-gated XOR guard); arithmetic
+      reject message reset to `//`/`%`/`**`.
+- [x] MIR: NO new arm (existing array-array guard drives it).
+- [x] Codegen: 1 `__cobrust_coil_buffer_matmul` extern row (`coil_binop_ty`).
+- [x] `.cb` E2E corpus `coil_matmul_e2e.rs` (7 tests): 2x2@2x2 exact product
+      `[[19,22],[43,50]]`, matrix-vector `[17,39]`, `a @ eye(2) == a`,
+      `&a @ &b` borrow form, `(2,3)@(2,2)` runtime shape-mismatch TRAP (clean
+      abort, "not aligned"), `a @ 2` + `2 @ a` §2.5 rejects.
+- [x] Perf: 3-tier `matmul` bench + `coil-matmul.md` report (HONEST loss,
+      root-caused to ndarray-vs-BLAS + matmul marshalling; motivates #157).
+- [x] No regression: all coil E2E suites green; types (`ecosystem`/`well`/
+      `ill`/`python_semantics`) green; touched crates build clean.
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
 ## Non-goals

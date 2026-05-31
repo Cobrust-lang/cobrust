@@ -45,6 +45,16 @@ linalg-intel-mkl-static = ["linalg-backend", "ndarray-linalg/intel-mkl-static"]
 name = "elementwise_add"
 harness = false
 
+# 3-tier matrix-multiply (`a @ b`, f64) benchmark — the SECOND increment of
+# the Cobrust perf-benchmark suite (ADR-0077 §"@-operator"). Same
+# `harness = false` plain-`fn main` + 3-tier methodology as elementwise_add.
+# Re-run: `cargo bench -p cobrust-coil --bench matmul`. Report:
+# `docs/agent/benchmarks/coil-matmul.md`. Methodology:
+# `docs/agent/benchmarks/README.md`.
+[[bench]]
+name = "matmul"
+harness = false
+
 [dependencies]
 serde_json = { workspace = true }
 ndarray = "0.16"

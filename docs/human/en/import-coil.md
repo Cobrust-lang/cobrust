@@ -6,9 +6,10 @@
 > workspace-vendored ecosystem the v0.7.0 wave shipped. The first proof
 > scoped to constructors + repr; ADR-0077 since added the operator /
 > index / attribute surface — elementwise `a + b` / `a - b` / `a * b` /
-> `a / b` (numpy **true division**, with **broadcasting**), scalar forms
-> `a + 1` / `a * 2`, scalar `a[i]` read, and `a.shape` / `a.ndim` /
-> `a.size`.
+> `a / b` (numpy **true division**, with **broadcasting**), the comparison
+> operators (`a < b` … → a bool mask), the **`a @ b` matrix-multiply**
+> operator, scalar forms `a + 1` / `a * 2`, scalar `a[i]` read, and
+> `a.shape` / `a.ndim` / `a.size`.
 
 ## Example first
 
@@ -240,8 +241,54 @@ compares each pair of elements. Like the arithmetic operators, comparison
 
 What is **not** supported yet: comparing a buffer with a *plain number*
 (`a < 1`). Cobrust rejects it at compile time with a message that tells you
-the fix — compare against a same-shape buffer instead (e.g. `a < b`). So is
-the `@` matrix-multiply operator.
+the fix — compare against a same-shape buffer instead (e.g. `a < b`).
+
+### Matrix multiply: `a @ b`
+
+`@` is **matrix multiplication** (numpy's `@` / `np.matmul`), not
+element-wise. `Buffer @ Buffer` gives a new `Buffer`: a `(m,k) @ (k,n)`
+product is `(m,n)`, and a matrix-times-vector `(m,k) @ (k,)` is `(m,)`.
+
+```text
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array2x2(1.0, 2.0, 3.0, 4.0)   # [[1,2],[3,4]]
+    let b: coil.Buffer = coil.array2x2(5.0, 6.0, 7.0, 8.0)   # [[5,6],[7,8]]
+    let c: coil.Buffer = a @ b           # [[19,22],[43,50]]  (matrix product)
+    let _ = coil.print_buffer(c)         # array([[19, 22], [43, 50]], dtype=float64)
+
+    let v: coil.Buffer = coil.array1d2(5.0, 6.0)   # [5, 6]
+    let mv: coil.Buffer = a @ v          # [1*5+2*6, 3*5+4*6] = [17, 39]
+    let _ = coil.print_buffer(mv)        # array([17, 39], dtype=float64)
+    return 0
+```
+
+Two things to remember:
+
+- **`@` is not `*`.** `a * b` multiplies element-by-element (and broadcasts);
+  `a @ b` contracts the inner dimension (the rows-times-columns dot products).
+  They give different answers — pick the one you mean.
+- **`@` needs two buffers.** You cannot `@` a buffer with a plain number —
+  `a @ 2` is rejected at compile time with a message that points you at the
+  fix (use `*` to *scale* a buffer; use `@` only between two buffers). To scale,
+  write `a * 2`; to matrix-multiply, make both sides buffers.
+- **The single-number dot product is a method.** A 1-D · 1-D dot like
+  `[1,2,3] · [4,5,6] = 32` is a plain number, and Cobrust has no zero-dimension
+  scalar array type — so that case is the `a.dot(b)` **method** (it returns an
+  `f64`), while `@` always returns a `coil.Buffer`.
+
+Like `+`, the shapes are **not** in the static type, so a non-conformable
+`a @ b` (inner dimensions that do not line up, e.g. a `(2,3)` times a `(2,2)`)
+is caught at **runtime** — a clean abort with a numpy-style `shapes ... not
+aligned` message, never a silently wrong answer (see the runtime-trap section
+below).
+
+> **A note on speed.** `@` is correct and ergonomic, but coil's default linalg
+> backend is `ndarray`'s own pure-Rust matrix multiply — *not* a tuned BLAS
+> like the one numpy uses. For large matrices numpy will be faster; the
+> measured gap (and the plan to close it with a pure-Rust BLAS-class backend)
+> is in `docs/agent/benchmarks/coil-matmul.md`.
 
 ### The broadcasting rule (numpy-exact)
 
@@ -282,6 +329,9 @@ wrong buffer.
   broadcast together with shapes [3] [4]` (`3` vs `4` is neither equal
   nor `1`). numpy raises the same error.
 - `coil.mgrid(0, 5) + coil.ones(2)` → runtime abort (`5` vs `2`).
+- For `@` the rule is matmul alignment (not broadcasting): a `(2,3) @ (2,2)`
+  aborts with `shapes [2, 3] and [2, 2] not aligned` (the inner dimensions
+  `3` and `2` must match). numpy raises the same.
 
 This is the one place §2.5's "catch it at compile time" cannot apply —
 shape correctness is intrinsically a runtime property here (the handle
@@ -310,15 +360,19 @@ paying with a runtime check instead of a compile error.
 - **Elementwise operators**: `a + b` / `a - b` / `a * b` / `a / b` all
   compile and **broadcast** (`/` is true division). The six comparison
   operators (`a < b` … `a != b` → a bool mask) also compile (see above).
-  Still unshipped: the `@` matmul operator and the floor-division `//` —
-  tracked in ADR-0077 §12.
+  Still unshipped: the floor-division `//`, the modulo `%`, and the power
+  `**` — tracked in ADR-0077 §12.
+- **Matrix multiply `a @ b` ships** (matrix and matrix-vector products →
+  a `coil.Buffer`). Still deferred for `@`: batched / N-D matmul, the
+  in-place `@=`, and mixed-rank broadcasting matmul.
 - **Scalars work on either side**: `a + 1` / `a * 2` and `2 * a` / `6 / a`
-  all compile (numpy "array ⊕ scalar"). What is NOT supported is comparing
-  a buffer with a bare number — `a < 1` is rejected at compile time (with a
-  fix-message pointing you at `a < b`); use a same-shape buffer instead.
-- **No multi-handle methods beyond `dot`**: `a.dot(b)` compiles (1-D dot);
-  `a.matmul(b)` / the `@` operator do NOT yet — needs the manifest to grow
-  receiver-and-arg shapes.
+  all compile (numpy "array ⊕ scalar"). What is NOT supported is mixing a
+  buffer with a bare number under `<` or `@` — `a < 1` and `a @ 2` are both
+  rejected at compile time (each with a fix-message: compare/multiply against
+  a same-shape buffer, or use `*` to scale).
+- **The 1-D dot product is the `a.dot(b)` method** (returns an `f64`); the
+  `@` operator covers the matrix / matrix-vector cases (returns a
+  `coil.Buffer`).
 - **dtype is fixed to `float64`**: the first proof scopes to a single
   dtype to keep the wire surface minimal. A `coil.zeros(n, dtype)`
   shape with an explicit dtype tier is a follow-up.

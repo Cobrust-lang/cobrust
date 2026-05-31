@@ -723,19 +723,19 @@ discriminator).
   a scalar shim + the typecheck admit. Pinned (as a NEGATIVE) by
   `coil_compare_e2e::test_neg_buffer_vs_scalar_compare_rejected_with_fix` +
   `test_neg_scalar_vs_buffer_compare_rejected`.
-- **`@` matmul** — `a @ b`. Still rejects (now with the §2.5 reject naming the
-  full supported set: arithmetic `+`/`-`/`*`/`/` + comparison
-  `<`/`<=`/`>`/`>=`/`==`/`!=`, and listing `//`/`%`/`**`/`@` as unsupported).
-  `dot` (the method form) already lands the 1-D runtime; routing `@` to
-  `__cobrust_coil_buffer_matmul` is a natural next extension.
+- **`@` matmul** — `a @ b`. **SHIPPED in the §"@-operator" increment below**
+  (routes to `__cobrust_coil_buffer_matmul`; the arithmetic-arm reject set is
+  now `//`/`%`/`**`). The 1-D·1-D scalar dot stays the `a.dot(b)` method.
 
 ### §2.5 — accurate FIX on every still-unsupported op
 
-Both deferrals above print the FIX, not just the diagnosis (§2.5-B). The
-arithmetic-arm reject (for `//`/`%`/`**`/`@`) was updated to name the comparison
-ops as supported (so it no longer misleads after Phase-2/3). Verified end-to-end:
-`a @ b`, `a // b`, `a < 1`, and `1 < a` each reject at exit 2 with a fix-printing
-`hint`.
+The Buffer-vs-scalar comparison deferral above prints the FIX, not just the
+diagnosis (§2.5-B). At Phase-2/3 the arithmetic-arm reject (then for
+`//`/`%`/`**`/`@`) was updated to name the comparison ops as supported (so it
+no longer misleads). The later §"@-operator" increment moved `@` OUT of that
+reject set (now `//`/`%`/`**`) and added a dedicated `Buffer @ scalar` /
+`scalar @ Buffer` §2.5 reject. Verified end-to-end: `a // b`, `a < 1`,
+`1 < a`, `a @ 2`, and `2 @ a` each reject at exit 2 with a fix-printing `hint`.
 
 ### Implementation map (Phase-2/3 touch-points)
 
@@ -772,6 +772,75 @@ ops as supported (so it no longer misleads after Phase-2/3). Verified end-to-end
 > cargo invocation → 100% stable. Sibling of the documented `libscale.a` race
 > (CI #26580282088, build.rs:1118). A wider lock fix is its own infra ADR, out
 > of scope here.
+
+## @-operator — matrix multiply `a @ b` (reuses the runtime matmul)
+
+The `@` operator (`BinOp::MatMul`) on two buffers, the natural extension §7's
+`a.dot(b)` note (line 289-293) anticipated. SAME mechanism as every prior op
+(zero new numerics; the runtime `Array::matmul` kernel pre-existed at M7.4 per
+ADR-0017): `synth_bin` guard → `lower_bin` retarget-to-`Call` → cabi shim →
+`Array::matmul` (codegen `lower_binop` never reached — §1.1).
+
+### Semantics (the locked design — CTO-decided)
+
+- **`Buffer @ Buffer -> Buffer` ALWAYS.** `@` is MATRIX multiply (`np.matmul`),
+  NOT element-wise (`*` is element-wise): `(m,k)@(k,n)->(m,n)`,
+  `(m,k)@(k,)->(m,)`, `(k,)@(k,n)->(n,)`. The degenerate 1-D·1-D `(k,)@(k,)`
+  produces numpy's 0-d scalar, but Cobrust has NO 0-d scalar type (Q2 / §4 — the
+  same divergence `a[i]: f64` records), so that case stays the f64-returning
+  **`a.dot(b)` METHOD** and `@` always types to `coil.Buffer`.
+- **Shape conformability is RUNTIME (Q4 panic-on-violation).** The static handle
+  carries no shape; a non-conformable `a @ b` (inner dims unaligned) aborts via
+  the cabi `coil_panic` → `__cobrust_panic` path with the kernel's numpy-style
+  `shapes ... not aligned` diagnostic — NEVER unwinding across the C-ABI. Same
+  trade as `+`'s broadcast check (§11): the one place §2.5 compile-catch can't
+  apply.
+- **`Buffer @ scalar` / `scalar @ Buffer` reject at typecheck with a §2.5 FIX.**
+  Matmul needs two arrays; the scalar-broadcast shims (which give `*`/`-` etc.
+  an either-sided scalar form) intentionally do NOT cover `@`.
+
+### Implementation map (@-operator touch-points)
+
+- `crates/cobrust-coil/src/cabi.rs` — a DEDICATED `__cobrust_coil_buffer_matmul`
+  shim. NOT the shared `buffer_binop` body: that runs a `broadcast_shape`
+  pre-check, but matmul conformability is inner-dim alignment (NOT
+  broadcasting), so a valid non-broadcastable `(2,3)@(3,4)` would be wrongly
+  aborted. Forwards straight to `Array::matmul`, `coil_panic` on its `Err`.
+- `crates/cobrust-coil/src/array.rs` + `linalg.rs` — **UNCHANGED** (the matmul
+  kernel pre-existed — `Array::matmul` @501 → `linalg::matmul`).
+- `crates/cobrust-types/src/ecosystem.rs` — ONE arm in `lookup_buffer_binop`
+  (`(COIL_BUFFER_ADT, BinOp::MatMul)` → `__cobrust_coil_buffer_matmul`,
+  `ret = coil_buffer_ty()`); 2 unit tests (resolve + behind-`&borrow`); the
+  obsolete `MatMul.is_none()` line dropped from
+  `buffer_binop_still_rejects_unsupported_ops`.
+- `crates/cobrust-types/src/check.rs` — `synth_bin` arithmetic arm: `a @ b`
+  accepted via `lookup_buffer_binop`; a MatMul-gated XOR guard rejects
+  `Buffer @ scalar` / `scalar @ Buffer` with a §2.5 fix (BEFORE `unify`); the
+  arithmetic-arm reject message reset to `//`/`%`/`**`.
+- `crates/cobrust-mir/src/lower.rs` — **NO new arm**: `a @ b` reaches the
+  existing `lookup_buffer_binop` array-array guard unintercepted (the scalar
+  guards return `None` for `MatMul`; `a @ scalar` was already typecheck-rejected
+  so MIR never sees it).
+- `crates/cobrust-codegen/src/llvm_backend.rs` — 1 extern row
+  `__cobrust_coil_buffer_matmul` (`coil_binop_ty`, `(ptr, ptr) -> ptr`).
+- `crates/cobrust-cli/tests/coil_matmul_e2e.rs` (7 tests) — the `.cb` E2E proof
+  (2x2@2x2 exact product, matrix-vector, `a @ eye(2) == a`, `&a @ &b` borrow,
+  `(2,3)@(2,2)` runtime trap, `a @ 2` + `2 @ a` §2.5 rejects).
+
+### Perf (CLAUDE.md §5.2/§5.3 — HONEST, no fabricated win)
+
+3-tier bench `crates/cobrust-coil/benches/matmul.rs` +
+`docs/agent/benchmarks/coil-matmul.md` (warm, N=16/64/256). The HEADLINE
+`T3/T1` (vs numpy) is a large BLAS gap that holds at non-trivial N
+(`~1.9× @ 16 → ~12× @ 64 → ~12× @ 256`) — numpy `@` is BLAS, coil's default is
+ndarray's pure-Rust GEMM (raw ndarray itself loses to numpy `T2/T1 ≈ 7× @ 256`),
+so the gap is ndarray-vs-BLAS and motivates **#157**. The diagnostic `T3/T2`
+(vs raw ndarray) is `>1` but **SHRINKS/amortizes** toward the ceiling as N grows
+(`~5.8× @ 16 → ~2.6× @ 64 → ~1.7× @ 256`) — coil's five O(N²) marshalling copies
+in `linalg::matmul` are an O(N²) tax against an O(N³) GEMM (`O(1/N)`), reclaimable
+by a named #166-analogue fast path (a numerics change out of this increment's
+"zero new numerics" scope). See the report for the warm numbers + the cold-capture
+caveat (warm-up=50).
 
 ## 13. Consequences
 

@@ -520,6 +520,50 @@ pub unsafe extern "C" fn __cobrust_coil_buffer_div(a: *mut u8, b: *mut u8) -> *m
     unsafe { buffer_binop(a, b, "div", Array::true_div) }
 }
 
+/// `a @ b` → fresh `Buffer`. Matrix multiplication (numpy `matmul`,
+/// ADR-0077 §"@-operator"): `(m,k)@(k,n) -> (m,n)`, `(m,k)@(k,) -> (m,)`,
+/// `(k,)@(k,n) -> (n,)`, and the 1-D·1-D `(k,)@(k,) -> ` 0-d scalar buffer.
+/// Wraps the EXISTING runtime kernel [`Array::matmul`] (→ `coil::linalg::
+/// matmul`, which promotes int operands to `Float64`, uses `ndarray`'s
+/// `Array2::dot` for the 2-D·2-D case, and is NOT BLAS by default — see the
+/// `coil-matmul` benchmark report).
+///
+/// **Why NOT the shared [`buffer_binop`] body**: that helper runs a
+/// `broadcast_shape` pre-check, but matmul conformability is the
+/// inner-dim-alignment rule (`a.shape[-1] == b.shape[-2]`), NOT numpy
+/// broadcasting — a valid `(2,3)@(3,4)` is NON-broadcastable and would be
+/// wrongly aborted. This shim therefore forwards STRAIGHT to `Array::matmul`
+/// and lets it own the shape check.
+///
+/// **Trap discipline (ADR-0077 Q4)**: a non-conformable pair (or an
+/// `LinalgDtypeUnsupported` — unreachable here since `matmul` coerces ints
+/// to float) makes `Array::matmul` return `Err`; we convert it to a
+/// `coil_panic` (the `__cobrust_panic` abort path) — NEVER letting a Rust
+/// `Err`/panic unwind across the C-ABI. Matches `buffer_binop`'s
+/// abort-on-incompatible-shape behavior (numpy raises) and the §2.5 closest
+/// honest semantics.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_buffer_add`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_buffer_matmul(a: *mut u8, b: *mut u8) -> *mut u8 {
+    if a.is_null() || b.is_null() {
+        coil_panic("coil.Buffer @ (matmul): null operand handle");
+    }
+    // SAFETY: caller attests both are live Buffer handles. Borrow only —
+    // neither is reboxed / freed; the `.cb` scope still owns + drops them.
+    let lhs: &Array = unsafe { &*a.cast::<Array>() };
+    let rhs: &Array = unsafe { &*b.cast::<Array>() };
+    let out = match lhs.matmul(rhs) {
+        Ok(arr) => arr,
+        // Shape-mismatch (`shapes ... not aligned`) or dtype — abort with
+        // the kernel's numpy-style diagnostic; diverges, never unwinds.
+        Err(e) => coil_panic(&format!("coil.Buffer @ (matmul): {}", e.message)),
+    };
+    Box::into_raw(Box::new(out)).cast::<u8>()
+}
+
 /// Shared body for the `a ⊕ k` SCALAR-broadcast shims (ADR-0077 Phase-1
 /// completion). NumPy's `array ⊕ scalar` is exactly a length-1 broadcast
 /// (`a ⊕ array([k])`): we materialise the python scalar `k` as a

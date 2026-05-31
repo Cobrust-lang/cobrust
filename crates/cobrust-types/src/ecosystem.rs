@@ -1260,15 +1260,18 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
 /// `None` when the operator is not overloaded for the handle.
 ///
 /// Phase 1 (ADR-0077 §3/§8) shipped `coil.Buffer` `+` / `-` / `*`; the
-/// Phase-1 completion added `/` (true-division). ADR-0077 Phase-2/3 adds
+/// Phase-1 completion added `/` (true-division). ADR-0077 Phase-2/3 added
 /// the six element-wise COMPARISON operators `<` / `<=` / `>` / `>=` /
 /// `==` / `!=` — note these still return a **`coil.Buffer`** (a NumPy
 /// Bool-dtype mask), NOT a Cobrust `bool` scalar (the runtime
 /// `Array::{lt,le,gt,ge,eq_,ne_}` kernels always yield `Dtype::Bool`).
-/// `//` / `%` / `**` / `@` remain explicit §12 deferrals and return
-/// `None` here so `synth_bin` rejects them with a clear "operator not yet
-/// supported on coil.Buffer" diagnostic rather than silently admitting
-/// them.
+/// ADR-0077 §"@-operator" added `@` (matrix multiplication) →
+/// `__cobrust_coil_buffer_matmul`, also returning a `coil.Buffer` (the
+/// matrix / matrix-vector result; the 1-D·1-D scalar dot stays the
+/// `a.dot(b)` method). `//` / `%` / `**` remain explicit §12 deferrals and
+/// return `None` here so `synth_bin` rejects them with a clear "operator
+/// not yet supported on coil.Buffer" diagnostic rather than silently
+/// admitting them.
 ///
 /// The implicit receiver is the LHS (mirroring `lookup_handle_method`'s
 /// receiver-is-implicit convention); the single `params` slot is the
@@ -1362,6 +1365,30 @@ pub fn lookup_buffer_binop(receiver: &Ty, op: BinOp) -> Option<EcoSig> {
         )),
         (COIL_BUFFER_ADT, BinOp::NotEq) => Some(EcoSig::from_values(
             "__cobrust_coil_buffer_ne",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        // ADR-0077 §"@-operator" addition — `a @ b` is numpy MATRIX
+        // multiplication (`np.matmul`): `Buffer @ Buffer -> Buffer`. Unlike
+        // the elementwise `+`/`-`/`*`/`/` and the comparison ops (whose
+        // result has the broadcast/operand shape), matmul CONTRACTS the
+        // inner dims — `(m,k)@(k,n) -> (m,n)`, `(m,k)@(k,) -> (m,)`,
+        // `(k,)@(k,n) -> (n,)` — and the 1-D·1-D `(k,)@(k,)` degenerate case
+        // yields a 0-d `Buffer` (numpy's scalar; Cobrust has no 0-d scalar
+        // type, ADR-0077 Q2 — the f64-returning `a.dot(b)` METHOD is the
+        // surface for that case, so `@` ALWAYS types to `coil.Buffer`). The
+        // static handle type carries no shape (Cobrust types are
+        // shape-erased), so inner-dim conformability is a RUNTIME check
+        // (panic-on-mismatch, like `a + b`'s broadcast guard — ADR-0077 Q4);
+        // the dedicated `__cobrust_coil_buffer_matmul` cabi shim wraps
+        // `Array::matmul` and `coil_panic`s on its shape `Err` (NEVER
+        // unwinding across the C-ABI). Same `(Buffer, Buffer) -> Buffer`
+        // manifest shape as `+`/`-`/`*`/`/`, so the MIR `lower_bin`
+        // array-array guard (`lookup_buffer_binop`) and the codegen
+        // `(ptr,ptr)->ptr` extern row drive it with NO matmul-specific arm.
+        (COIL_BUFFER_ADT, BinOp::MatMul) => Some(EcoSig::from_values(
+            "__cobrust_coil_buffer_matmul",
             vec![coil_buffer_ty()],
             coil_buffer_ty(),
             PyCompatTier::Semantic,
@@ -2514,14 +2541,42 @@ mod tests {
 
     #[test]
     fn buffer_binop_still_rejects_unsupported_ops() {
-        // The op-set boundary: `//`/`%`/`**`/`@` remain §12 deferrals —
-        // adding comparison must NOT blanket-accept every operator.
+        // The op-set boundary: `//`/`%`/`**` remain §12 deferrals — adding
+        // `@` (matmul, below) must NOT blanket-accept every operator.
         assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::FloorDiv).is_none());
         assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::Mod).is_none());
         assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::Pow).is_none());
-        assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::MatMul).is_none());
         // The four arithmetic ops are still mapped (no regression).
         assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::Add).is_some());
         assert!(lookup_buffer_binop(&coil_buffer_ty(), BinOp::Div).is_some());
+    }
+
+    #[test]
+    fn buffer_matmul_resolves_to_matmul_symbol() {
+        // ADR-0077 §"@-operator" — `a @ b` resolves through the SAME
+        // `lookup_buffer_binop` path as `+`/`-`/`*`/`/` and the comparison
+        // ops, mapping `MatMul` onto the dedicated
+        // `__cobrust_coil_buffer_matmul` shim. `@` ALWAYS returns a
+        // `coil.Buffer` (the matrix / matrix-vector result; the 1-D·1-D
+        // scalar case is the `a.dot(b)` method, ADR-0077 Q2).
+        let sig = lookup_buffer_binop(&coil_buffer_ty(), BinOp::MatMul)
+            .expect("`@` (matmul) must resolve on coil.Buffer");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_buffer_matmul");
+        assert_eq!(
+            sig.ret,
+            coil_buffer_ty(),
+            "matmul must return a coil.Buffer (matrix result), not a scalar"
+        );
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+    }
+
+    #[test]
+    fn buffer_matmul_resolves_behind_shared_borrow() {
+        // `&a @ &b` (the LLM-idiomatic explicit-borrow form, ADR-0052a —
+        // `coil.Buffer` is non-Copy) resolves identically to the bare
+        // `a @ b` form via the same Ref-unwrap as the arithmetic ops.
+        let sig = lookup_buffer_binop(&Ty::Ref(Box::new(coil_buffer_ty())), BinOp::MatMul)
+            .expect("matmul resolves behind &borrow");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_buffer_matmul");
     }
 }

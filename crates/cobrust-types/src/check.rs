@@ -3148,6 +3148,46 @@ impl Ctx {
                         return Ok(crate::ecosystem::coil_buffer_ty());
                     }
                 }
+                // ADR-0077 §"@-operator" — `coil.Buffer @ scalar` /
+                // `scalar @ coil.Buffer` rejection (the MatMul mirror of the
+                // comparison arm's Buffer-vs-scalar guard). Matrix
+                // multiplication requires TWO arrays; numpy raises on
+                // `array @ 3` / `3 @ array`. The two-Buffer `a @ b` case is
+                // ACCEPTED below (it `unify`s — Buffer-vs-Buffer — then
+                // resolves through `lookup_buffer_binop`'s MatMul arm). The
+                // scalar-broadcast shims above intentionally do NOT cover
+                // `@` (`lookup_buffer_{,left_}scalar_binop` return `None`
+                // for `MatMul`), so a one-Buffer `@` would otherwise fall to
+                // the generic `unify` "expected Adt, found i64" — a §2.5-B
+                // miss (no FIX). Detect a Buffer on EITHER side and emit a
+                // fix-printing diagnostic instead. The op MUST be `MatMul`:
+                // `+`/`-`/`*`/`/` with one Buffer operand DO have scalar
+                // shims and were handled (and accepted) above, so they never
+                // reach here; an `a + s` (Buffer + str) still falls through
+                // to `unify` and rejects there as before.
+                if matches!(op, BinOp::MatMul) {
+                    let rt_resolved = self.subst.apply(&rt);
+                    let rt_handle = match &rt_resolved {
+                        Ty::Ref(inner) => inner.as_ref().clone(),
+                        other => other.clone(),
+                    };
+                    let lt_is_buf = matches!(&lt_handle, Ty::Adt(id, _) if *id == crate::ecosystem::COIL_BUFFER_ADT);
+                    let rt_is_buf = matches!(&rt_handle, Ty::Adt(id, _) if *id == crate::ecosystem::COIL_BUFFER_ADT);
+                    if lt_is_buf ^ rt_is_buf {
+                        return Err(TypeError::TypeMismatch {
+                            expected: crate::ecosystem::coil_buffer_ty(),
+                            actual: if lt_is_buf { rt_handle } else { lt_handle },
+                            span,
+                            suggestion: Some(
+                                "matrix multiplication `@` requires BOTH operands to be a \
+                                 coil.Buffer (`Buffer @ Buffer -> Buffer`); you cannot `@` a \
+                                 coil.Buffer with a scalar. To scale a buffer use `*` (e.g. \
+                                 `a * 2` / `2 * a`); to matrix-multiply, make the other operand \
+                                 a buffer, e.g. `a @ b` or `a @ coil.eye(a.size)`",
+                            ),
+                        });
+                    }
+                }
                 unify(&lt, &rt, &mut self.subst, span)?;
                 let resolved = self.subst.apply(&lt);
                 // ADR-0077 Q1 — `coil.Buffer` operator dispatch (the FIRST
@@ -3181,10 +3221,11 @@ impl Ctx {
                         suggestion: Some(
                             "operator not yet supported on coil.Buffer — supported operators are \
                              the elementwise arithmetic `+`, `-`, `*`, `/` (broadcasting; `/` is \
-                             numpy true-division) and the elementwise comparison `<`, `<=`, `>`, \
-                             `>=`, `==`, `!=` (each yields a bool-dtype coil.Buffer mask); `//`, \
-                             `%`, `**`, and `@` (matmul) are not yet supported. Use one of those, \
-                             or a scalar form like `coil.Buffer + 1` / `2 * coil.Buffer`",
+                             numpy true-division), the elementwise comparison `<`, `<=`, `>`, \
+                             `>=`, `==`, `!=` (each yields a bool-dtype coil.Buffer mask), and \
+                             `@` (matrix multiplication, `Buffer @ Buffer -> Buffer`); `//`, `%`, \
+                             and `**` are not yet supported. Use one of those, or a scalar form \
+                             like `coil.Buffer + 1` / `2 * coil.Buffer`",
                         ),
                     });
                 }

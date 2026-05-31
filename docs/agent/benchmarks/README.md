@@ -6,6 +6,8 @@ last_verified_commit: HEAD
 dependencies:
   - crates/cobrust-coil/benches/elementwise_add.rs
   - docs/agent/benchmarks/coil-elementwise-add.md
+  - crates/cobrust-coil/benches/matmul.rs
+  - docs/agent/benchmarks/coil-matmul.md
 governs: CLAUDE.md §5.2, CLAUDE.md §5.3, ADR §"L2.perf gate"
 ---
 
@@ -20,8 +22,20 @@ translation pipeline's `L2.perf` gate (currently an `AcceptAllPerf` stub) a
 real number to gate on, per CLAUDE.md §4.2 ("Performance gate: ≥ 0.8× of
 original on representative benchmarks").
 
-> **Status of the suite.** First increment landed: **coil element-wise add**
-> (`coil-elementwise-add.md` report + `crates/cobrust-coil/benches/elementwise_add.rs`).
+> **Status of the suite.** Two increments landed:
+> 1. **coil element-wise add** (`coil-elementwise-add.md` +
+>    `benches/elementwise_add.rs`) — coil at the raw-`ndarray` ceiling,
+>    *faster* than numpy at small/mid N.
+> 2. **coil matrix multiply** (`coil-matmul.md` + `benches/matmul.rs`) — the
+>    `@` operator; an HONEST loss on the headline ratio: `T3/T1` (vs numpy) is a
+>    large BLAS gap (`~1.9×→~12×→~12×` over N=16/64/256), root-caused to the
+>    ndarray-GEMM-vs-BLAS backend gap (raw ndarray itself loses `T2/T1 ≈ 7×`),
+>    motivating #157. The diagnostic `T3/T2` (vs raw ndarray) is `>1` but
+>    **shrinks/amortizes** toward the ceiling (`~5.8×→~2.6×→~1.7×`) — coil's
+>    O(N²) matmul marshalling copies, an O(N²)-against-O(N³) tax (a named
+>    #166-analogue fast-path follow-up). A worked example of reporting a gap,
+>    not a win — incl. a corrected cold-capture (warm-up raised to 50).
+>
 > Future library benchmarks reuse the 3-tier model + honesty rules below.
 
 ---
@@ -176,5 +190,8 @@ Violating any one is the primary failure mode of a perf claim.
 |---|---|
 | `README.md` (this file) | Methodology — the single source of truth |
 | `coil-elementwise-add.md` | First report: coil `a + b` vs numpy vs raw `ndarray` |
-| `crates/cobrust-coil/benches/elementwise_add.rs` | The runnable 3-tier bench |
-| `scripts/bench/coil_elementwise_add.sh` | Hardware-tagged one-command wrapper |
+| `crates/cobrust-coil/benches/elementwise_add.rs` | The runnable 3-tier `a + b` bench |
+| `scripts/bench/coil_elementwise_add.sh` | Hardware-tagged one-command `a + b` wrapper |
+| `coil-matmul.md` | Second report: coil `a @ b` vs numpy(BLAS) vs raw `ndarray` |
+| `crates/cobrust-coil/benches/matmul.rs` | The runnable 3-tier `a @ b` bench |
+| `scripts/bench/coil_matmul.sh` | Hardware-tagged one-command `a @ b` wrapper |
