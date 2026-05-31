@@ -72,7 +72,10 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::aggregates::{mean_scalar, median_scalar, split_first_chunk, std_scalar, var_scalar};
+use crate::aggregates::{
+    mean_scalar, median_scalar, nanmean_scalar, nanstd_scalar, nansum_scalar, percentile_scalar,
+    ptp_scalar, split_first_chunk, std_scalar, var_scalar,
+};
 use crate::array::Array;
 use crate::broadcast::broadcast_shape;
 use crate::broadcast_extra::broadcast_to_1d;
@@ -395,6 +398,95 @@ pub unsafe extern "C" fn __cobrust_coil_var(a: *mut u8) -> f64 {
     // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
     let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
     var_scalar(arr_ref).unwrap_or(f64::NAN)
+}
+
+// =====================================================================
+// #145 statistics gap-closure (2026-06-01) — NaN-aware + spread scalar
+// aggregates (`ptp` / `nansum` / `nanmean` / `nanstd`, single-Buffer →
+// f64) plus `percentile` (Buffer + f64 → f64, the FIRST coil aggregate
+// taking a scalar arg beside the handle). All BORROW the handle arg.
+// =====================================================================
+
+/// `coil.ptp(a) -> f64`. Peak-to-peak (`max - min`). BORROWS the handle.
+/// NaN-propagating; `NaN` on empty input.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_ptp(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return f64::NAN;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    ptp_scalar(arr_ref).unwrap_or(f64::NAN)
+}
+
+/// `coil.nansum(a) -> f64`. Sum treating NaN as zero. BORROWS the
+/// handle. `0.0` on all-NaN / empty input (matches numpy `np.nansum`).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_nansum(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return 0.0;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    nansum_scalar(arr_ref).unwrap_or(0.0)
+}
+
+/// `coil.nanmean(a) -> f64`. Arithmetic mean ignoring NaN. BORROWS the
+/// handle. `NaN` on all-NaN / empty input.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_nanmean(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return f64::NAN;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    nanmean_scalar(arr_ref).unwrap_or(f64::NAN)
+}
+
+/// `coil.nanstd(a) -> f64`. Population std (ddof=0) ignoring NaN.
+/// BORROWS the handle. `NaN` on all-NaN / empty input.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_nanstd(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return f64::NAN;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    nanstd_scalar(arr_ref).unwrap_or(f64::NAN)
+}
+
+/// `coil.percentile(a, q) -> f64`. The `q`-th percentile (`q` in
+/// `[0, 100]`, `linear` interpolation). BORROWS the handle; `q` crosses
+/// by value. NaN-propagating; `NaN` on empty input; `q` clamped to
+/// `[0, 100]`.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_percentile(a: *mut u8, q: f64) -> f64 {
+    if a.is_null() {
+        return f64::NAN;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    percentile_scalar(arr_ref, q).unwrap_or(f64::NAN)
 }
 
 // =====================================================================
@@ -1487,6 +1579,99 @@ mod tests {
             assert!(__cobrust_coil_median(std::ptr::null_mut()).is_nan());
             assert!(__cobrust_coil_std(std::ptr::null_mut()).is_nan());
             assert!(__cobrust_coil_var(std::ptr::null_mut()).is_nan());
+        }
+    }
+
+    // -- #145 statistics gap-closure cabi shims ------------------------
+
+    /// `coil.ptp(mgrid(0,5))` = 4.0 (max 4 - min 0); borrows + drops once.
+    #[test]
+    fn ptp_of_mgrid_0_5_is_four() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_mgrid(0, 5);
+            let p = __cobrust_coil_ptp(a);
+            assert!((p - 4.0).abs() < 1e-12, "ptp got {p}");
+            __cobrust_coil_buffer_drop(a);
+        }
+        assert_eq!(drop_count() - before, 1);
+    }
+
+    /// `coil.nansum([1.0, NaN])` = 1.0 (NaN treated as zero).
+    #[test]
+    fn nansum_skips_nan_via_cabi() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, f64::NAN);
+            let s = __cobrust_coil_nansum(a);
+            assert!((s - 1.0).abs() < 1e-12, "nansum got {s}");
+            __cobrust_coil_buffer_drop(a);
+        }
+    }
+
+    /// `coil.nanmean([2.0, NaN])` = 2.0 (mean over the single non-NaN).
+    #[test]
+    fn nanmean_skips_nan_via_cabi() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(2.0, f64::NAN);
+            let m = __cobrust_coil_nanmean(a);
+            assert!((m - 2.0).abs() < 1e-12, "nanmean got {m}");
+            __cobrust_coil_buffer_drop(a);
+        }
+    }
+
+    /// `coil.nanstd([1.0, 3.0])` = 1.0 (population std, no NaN).
+    #[test]
+    fn nanstd_population_via_cabi() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 3.0);
+            let s = __cobrust_coil_nanstd(a);
+            assert!((s - 1.0).abs() < 1e-12, "nanstd got {s}");
+            __cobrust_coil_buffer_drop(a);
+        }
+    }
+
+    /// `coil.percentile(mgrid(0,5), 50)` = 2.0 (median of [0,1,2,3,4]).
+    /// The 2-arg `(Buffer, f64) -> f64` shim path.
+    #[test]
+    fn percentile_p50_of_mgrid_0_5_is_two() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_mgrid(0, 5);
+            let p = __cobrust_coil_percentile(a, 50.0);
+            assert!((p - 2.0).abs() < 1e-12, "percentile got {p}");
+            __cobrust_coil_buffer_drop(a);
+        }
+        assert_eq!(drop_count() - before, 1);
+    }
+
+    /// The new aggregates handle a null pointer: `nansum` → 0.0
+    /// sentinel; `ptp` / `nanmean` / `nanstd` / `percentile` → NaN.
+    #[test]
+    fn new_aggregates_on_null() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            assert!(__cobrust_coil_ptp(std::ptr::null_mut()).is_nan());
+            assert!((__cobrust_coil_nansum(std::ptr::null_mut())).abs() < 1e-12);
+            assert!(__cobrust_coil_nanmean(std::ptr::null_mut()).is_nan());
+            assert!(__cobrust_coil_nanstd(std::ptr::null_mut()).is_nan());
+            assert!(__cobrust_coil_percentile(std::ptr::null_mut(), 50.0).is_nan());
         }
     }
 

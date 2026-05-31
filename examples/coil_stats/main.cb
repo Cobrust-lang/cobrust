@@ -1,0 +1,35 @@
+# #145 statistics gap-closure (2026-06-01) — user-level proof that
+# coil's new NaN-aware + spread aggregate surface (ptp / nansum /
+# nanmean / nanstd + percentile) round-trips through cobrust build +
+# link + run.
+#
+# Demonstrates the LLM-friendly numpy idiom per CLAUDE.md §2.5
+# (training-data-overlap): `coil.mgrid(0, 5)` builds a Buffer holding
+# the range [0,1,2,3,4], then the scalar aggregates reduce it to f64.
+# Each `&a` is an explicit ADR-0052a shared borrow — the handle is
+# non-Copy so explicit borrows are required when used by more than one
+# callsite. `coil.percentile(&a, 50.0)` exercises the new 2-arg
+# `(Buffer, f64) -> f64` shape (the FIRST coil aggregate with a scalar
+# arg beside the handle). Cast-to-i64 prints avoid f-string precision
+# drift in the snapshot assertion.
+#
+# Expected output:
+#   4
+#   10
+#   2
+#
+# `ptp([0,1,2,3,4])  = max 4 - min 0 = 4`           → "4".
+# `nansum([0,1,2,3,4]) = 0+1+2+3+4 = 10`            → "10".
+# `percentile([0,1,2,3,4], 50) = median = 2.0`      → `(2.0 as i64)` → "2".
+
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.mgrid(0, 5)
+    let r: f64 = coil.ptp(&a)
+    let s: f64 = coil.nansum(&a)
+    let p: f64 = coil.percentile(&a, 50.0)
+    print((r as i64))
+    print((s as i64))
+    print((p as i64))
+    return 0

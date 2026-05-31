@@ -1445,6 +1445,82 @@ result — coil LOSES both ratios (no fabricated win):
       `ill`/`python_semantics`) green; touched crates build clean.
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## `.cb` `coil` scalar statistics — `ptp` / `nan*` / `percentile` (#145 — DONE)
+
+NaN-aware + spread scalar aggregates extending the Stream-W P0 `mean` /
+`median` / `std` / `var` family. Every member reduces the whole Buffer to
+one `f64` on the proven `coil_agg_ty` ABI (`ptp` / `nansum` / `nanmean` /
+`nanstd`), except `percentile`, which takes a trailing `f64` quantile —
+the FIRST coil aggregate with a scalar arg BESIDE the handle
+(`(Buffer, f64) -> f64`). All BORROW the handle (the shim never
+reboxes/frees it); the `.cb`-side form is `coil.ptp(&a)` /
+`coil.percentile(&a, 50.0)` (ADR-0052a explicit shared borrow; the
+non-Copy handle survives for later reductions).
+
+### Semantics (numpy 2.0.2 oracle — `coil::aggregates`)
+
+- `coil.ptp(a) -> f64` — peak-to-peak `max(a) - min(a)`. NaN-propagating;
+  single-elem → `0.0`; empty → `NaN` (numpy raises; we degrade for a
+  panic-free shim).
+- `coil.nansum(a) -> f64` — sum treating NaN as zero. All-NaN / empty →
+  `0.0` (NOT NaN — matches `np.nansum`).
+- `coil.nanmean(a) -> f64` — mean over the non-NaN elements only. All-NaN
+  / empty → `NaN`.
+- `coil.nanstd(a) -> f64` — population std (ddof=0) over the non-NaN
+  elements. Single finite → `0.0`; all-NaN / empty → `NaN`.
+- `coil.percentile(a, q) -> f64` — `q`-th percentile (`q` in `[0,100]`),
+  numpy default `linear` interpolation: sort, `pos = (n-1)·q/100`,
+  `sorted[⌊pos⌋] + frac·(sorted[⌈pos⌉] - sorted[⌊pos⌋])`. `q=0`→min,
+  `q=100`→max, `q=50`==median. NaN-propagating; `q` clamped to `[0,100]`;
+  empty → `NaN`. (NaN-SKIPPING `nanpercentile` deliberately NOT in this
+  batch.) Integer / bool inputs promote to `f64` for all five.
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- 5 `lookup_module_fn` arms; 4 are `[coil_buffer_ty()] -> Ty::Float`,
+  `percentile` is `[coil_buffer_ty(), Ty::Float] -> Ty::Float`. Tier
+  `Semantic` (rtol=1e-12 vs the oracle). 5 manifest unit tests.
+
+### Typecheck / MIR — ZERO new code
+
+- The generic module-fn path (`try_synth_ecosystem_call` Case 1 /
+  `try_lower_ecosystem_call` Case 1) already lowers any
+  `lookup_module_fn` signature. `percentile`'s mixed `[handle, f64]` arg
+  list rides the SAME `lower_eco_arg` per-param path the `array2x2(f64×4)`
+  ctor already proved (the handle auto-borrows Move→Copy; the `f64`
+  lowers verbatim). No `_ => "any"` gap, no new MIR arm.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+- 5 extern rows: 4 reuse `coil_agg_ty` (`f64 (ptr)`); `percentile` adds
+  `coil_agg2_ty` (`f64 (ptr, f64)`). Symbols ride the existing
+  `__cobrust_coil_` build/intrinsics prefix (no CLI edit needed).
+
+### Runtime (`cobrust-coil/src/cabi.rs`)
+
+- 5 shims `__cobrust_coil_{ptp,nansum,nanmean,nanstd,percentile}`
+  forwarding to `aggregates::{ptp,nansum,nanmean,nanstd,percentile}_scalar`.
+  Null-handle sentinel: `nansum` → `0.0`, the other four → `NaN`. 6 cabi
+  unit tests (incl. null-handle + drop-once accounting).
+
+### Done means (#145 — DONE)
+
+- [x] `aggregates.rs`: 5 `*_scalar` fns + shared `to_f64_vec` flatten/
+      promote helper; 24 unit tests with bit-confirmed numpy-2.0.2 literal
+      oracle values (incl. empty / NaN / single-elem / integer-promotion /
+      out-of-range-q-clamp edges).
+- [x] cabi: 5 shims + 6 cabi unit tests.
+- [x] Manifest: 5 ecosystem arms + 5 manifest unit tests.
+- [x] Typecheck / MIR: NO new code (generic module-fn path).
+- [x] Codegen: 5 extern rows (`coil_agg_ty` ×4 + new `coil_agg2_ty`).
+- [x] `.cb` E2E `coil_stats_e2e.rs` (4 tests): `mgrid+ptp+nansum+
+      percentile` (`4`/`10`/`2`), `array1d2+nanmean+nanstd` (`3`/`1`),
+      `percentile(_,25)` interpolation (`175` = 1.75×100), `str` quantile
+      §2.5 reject. + `examples/coil_stats/main.cb`.
+- [x] No regression: `coil_p0_e2e` / `coil_hello_e2e` green; types
+      (`ecosystem`) green; touched crates build + clippy + fmt clean.
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

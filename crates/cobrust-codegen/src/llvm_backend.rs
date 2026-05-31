@@ -3088,6 +3088,26 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_param_counts.insert(sym, params);
         }
 
+        // -- #145 statistics gap-closure (2026-06-01): NaN-aware + spread
+        // scalar aggregates. `ptp` / `nansum` / `nanmean` / `nanstd` reuse
+        // the `coil_agg_ty` (Buffer → f64) shape above; `percentile` takes
+        // a trailing f64 quantile (Buffer + f64 → f64, `coil_agg2_ty`):
+        //
+        //   __cobrust_coil_ptp / nansum / nanmean / nanstd (a: *mut Buffer) -> f64
+        //   __cobrust_coil_percentile(a: *mut Buffer, q: f64) -> f64
+        let coil_agg2_ty = f64_ty.fn_type(&[ptr_ty.into(), f64_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_coil_ptp", coil_agg_ty, 1usize),
+            ("__cobrust_coil_nansum", coil_agg_ty, 1),
+            ("__cobrust_coil_nanmean", coil_agg_ty, 1),
+            ("__cobrust_coil_nanstd", coil_agg_ty, 1),
+            ("__cobrust_coil_percentile", coil_agg2_ty, 2),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
+
         // -- ADR-0077 Phase 1: coil Buffer operator / index / attribute
         // C-ABI binding — the FIRST ecosystem-handle operator surface.
         // Because the MIR retarget turns `a + b` / `a[i]` / `a.shape` into

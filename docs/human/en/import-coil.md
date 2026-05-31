@@ -43,6 +43,53 @@ cobrust build prog.cb -o prog
   numpy-compatible `array_repr` to stdout. Returns `0` on success;
   `-1` if the receiver is null (defensive).
 
+## Statistics — scalar reductions (`mean` / `median` / `std` / `var` / `ptp` / `nan*` / `percentile`)
+
+Each of these reduces a whole buffer to **one `f64`** — the same shape an
+LLM writes for numpy (`np.mean(a)` → `coil.mean(&a)`). The `&a` is an
+explicit shared borrow: a `coil.Buffer` is a non-Copy handle, so passing
+`&a` (not bare `a`) lets you keep the buffer alive for the next call.
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.mgrid(0, 5)        # [0, 1, 2, 3, 4]
+    print((coil.mean(&a) as i64))                # 2  (mean = 2.0)
+    print((coil.ptp(&a) as i64))                 # 4  (max 4 - min 0)
+    print((coil.nansum(&a) as i64))              # 10 (0+1+2+3+4)
+    print((coil.percentile(&a, 50.0) as i64))    # 2  (50th pct = median)
+    return 0
+```
+
+The full reduction surface:
+
+- **`coil.mean(a: Buffer) -> f64`** — arithmetic mean. Empty → `NaN`.
+- **`coil.median(a: Buffer) -> f64`** — order-statistic middle (average of
+  the two middle elements for even length). NaN-propagating; empty → `NaN`.
+- **`coil.std(a: Buffer) -> f64`** — population standard deviation (ddof=0).
+- **`coil.var(a: Buffer) -> f64`** — population variance (ddof=0).
+- **`coil.ptp(a: Buffer) -> f64`** — peak-to-peak, i.e. `max(a) - min(a)`
+  (the data's range). A single element → `0.0`. NaN-propagating.
+- **`coil.nansum(a: Buffer) -> f64`** — sum, treating NaN as zero. An
+  all-NaN (or empty) buffer → `0.0`, **not** NaN (matches `np.nansum`).
+- **`coil.nanmean(a: Buffer) -> f64`** — mean over the non-NaN elements
+  only. All-NaN / empty → `NaN`.
+- **`coil.nanstd(a: Buffer) -> f64`** — population std (ddof=0) over the
+  non-NaN elements only. All-NaN / empty → `NaN`.
+- **`coil.percentile(a: Buffer, q: f64) -> f64`** — the `q`-th percentile
+  (`q` from `0` to `100`) using numpy's default **linear interpolation**.
+  `q=0` is the min, `q=100` the max, `q=50` equals the median. For
+  example `coil.percentile(&a, 25.0)` on `[1, 2, 3, 4]` is `1.75`.
+  NaN-propagating; `q` is clamped to `[0, 100]`; empty → `NaN`.
+
+Integer and bool buffers promote to `f64` first (same as numpy). The
+`nan*` family is the right tool when your data has holes; the plain
+`mean` / `ptp` / `percentile` propagate NaN so a single bad value is
+visible rather than silently absorbed. (numpy's NaN-skipping
+`nanpercentile` is a deliberate follow-up — only the propagating
+`percentile` ships today.)
+
 ## Linear algebra — the `coil.linalg.*` sub-namespace (ADR-0079 Phase 1)
 
 `coil.linalg.*` is the FIRST *dotted sub-namespace* under an ecosystem

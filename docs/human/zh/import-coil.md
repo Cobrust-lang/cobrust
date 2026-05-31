@@ -41,6 +41,52 @@ cobrust build prog.cb -o prog
   `array_repr` 打印到 stdout。成功返回 `0`;接收者为 null 时返回 `-1`
   (防御性)。
 
+## 统计 —— 标量归约(`mean` / `median` / `std` / `var` / `ptp` / `nan*` / `percentile`)
+
+这些函数都把整个 buffer 归约成**一个 `f64`** —— 与 LLM 为 numpy 写出的
+形状一致(`np.mean(a)` → `coil.mean(&a)`)。`&a` 是一个显式共享借用:
+`coil.Buffer` 是非 Copy 的句柄,所以传 `&a`(而不是裸 `a`)能让这个
+buffer 在下一次调用时仍然存活。
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.mgrid(0, 5)        # [0, 1, 2, 3, 4]
+    print((coil.mean(&a) as i64))                # 2  (均值 = 2.0)
+    print((coil.ptp(&a) as i64))                 # 4  (max 4 - min 0)
+    print((coil.nansum(&a) as i64))              # 10 (0+1+2+3+4)
+    print((coil.percentile(&a, 50.0) as i64))    # 2  (第 50 百分位 = 中位数)
+    return 0
+```
+
+完整的归约表面:
+
+- **`coil.mean(a: Buffer) -> f64`** —— 算术均值。空数组 → `NaN`。
+- **`coil.median(a: Buffer) -> f64`** —— 顺序统计量中位数(偶数长度取中间
+  两元素的平均)。遇 NaN 传播;空数组 → `NaN`。
+- **`coil.std(a: Buffer) -> f64`** —— 总体标准差(ddof=0)。
+- **`coil.var(a: Buffer) -> f64`** —— 总体方差(ddof=0)。
+- **`coil.ptp(a: Buffer) -> f64`** —— 峰峰值,即 `max(a) - min(a)`(数据的
+  极差)。单元素 → `0.0`。遇 NaN 传播。
+- **`coil.nansum(a: Buffer) -> f64`** —— 求和,把 NaN 当作零。全 NaN(或空)
+  → `0.0`,而**不是** NaN(与 `np.nansum` 一致)。
+- **`coil.nanmean(a: Buffer) -> f64`** —— 仅在非 NaN 元素上求均值。全 NaN /
+  空 → `NaN`。
+- **`coil.nanstd(a: Buffer) -> f64`** —— 仅在非 NaN 元素上求总体标准差
+  (ddof=0)。全 NaN / 空 → `NaN`。
+- **`coil.percentile(a: Buffer, q: f64) -> f64`** —— 第 `q` 百分位(`q` 从
+  `0` 到 `100`),使用 numpy 默认的**线性插值**。`q=0` 是最小值,`q=100`
+  是最大值,`q=50` 等于中位数。例如对 `[1, 2, 3, 4]` 调用
+  `coil.percentile(&a, 25.0)` 得到 `1.75`。遇 NaN 传播;`q` 被钳制到
+  `[0, 100]`;空数组 → `NaN`。
+
+整数和布尔 buffer 会先提升为 `f64`(与 numpy 一致)。当数据有缺口时,
+`nan*` 系列是正确的工具;而普通的 `mean` / `ptp` / `percentile` 会传播
+NaN,让一个坏值显式可见,而不是被悄悄吸收。(numpy 跳过 NaN 的
+`nanpercentile` 是有意的后续项 —— 今天只交付会传播 NaN 的
+`percentile`。)
+
 ## 线性代数 —— `coil.linalg.*` 子命名空间(ADR-0079 Phase 1)
 
 `coil.linalg.*` 是生态模块下的**第一个点分子命名空间** —— 它精确镜像

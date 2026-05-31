@@ -675,6 +675,58 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Float,
             PyCompatTier::Semantic,
         )),
+        // #145 statistics gap-closure (2026-06-01) — 5 scalar aggregates
+        // extending the mean/median/std/var family with the NaN-aware +
+        // spread reducers most-used in real numpy code. Same Buffer→f64
+        // value-handle ABI as mean/std/var (the borrow-shim path), except
+        // `percentile` which takes a trailing `f64` quantile arg — the
+        // FIRST coil aggregate with a scalar-besides-handle signature
+        // (`(Buffer, f64) -> f64`), lowered by the SAME generic
+        // `try_lower_ecosystem_call` (the `array2x2(f64,..)` path already
+        // proves `Ty::Float` args cross). All BORROW the handle (the
+        // shim never reboxes/frees it).
+        //
+        // - `coil.ptp(a) -> f64`              — peak-to-peak (max - min).
+        // - `coil.nansum(a) -> f64`           — sum treating NaN as zero.
+        // - `coil.nanmean(a) -> f64`          — mean ignoring NaN.
+        // - `coil.nanstd(a) -> f64`           — population std ignoring NaN.
+        // - `coil.percentile(a, q) -> f64`    — q-th percentile (linear).
+        //
+        // Tier `Semantic` — numpy's bit-exact reductions depend on
+        // implementation-defined accumulation order; the VALUES agree to
+        // `rtol = 1e-12` against the numpy 2.0.2 oracle (the `aggregates`
+        // unit tests carry the bit-confirmed literals), the contractual
+        // semantic-tier shape per ADR-0016.
+        ("coil", "ptp") => Some(EcoSig::from_values(
+            "__cobrust_coil_ptp",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "nansum") => Some(EcoSig::from_values(
+            "__cobrust_coil_nansum",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "nanmean") => Some(EcoSig::from_values(
+            "__cobrust_coil_nanmean",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "nanstd") => Some(EcoSig::from_values(
+            "__cobrust_coil_nanstd",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "percentile") => Some(EcoSig::from_values(
+            "__cobrust_coil_percentile",
+            vec![coil_buffer_ty(), Ty::Float],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
         // ADR-0079 Phase 1 — minimal `.cb`-constructible 2-D / explicit-
         // data buffers, the genuine prerequisite for exercising the
         // `coil.linalg.*` sub-namespace on NON-identity matrices (the
@@ -2283,6 +2335,51 @@ mod tests {
     fn coil_var_returns_float() {
         let sig = lookup_module_fn("coil", "var").expect("coil.var in manifest");
         assert_eq!(sig.runtime_symbol, "__cobrust_coil_var");
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    // #145 statistics gap-closure — ptp / nansum / nanmean / nanstd /
+    // percentile. The first four are Buffer→f64; `percentile` is
+    // (Buffer, f64)→f64 (the scalar-besides-handle ABI).
+
+    #[test]
+    fn coil_ptp_returns_float() {
+        let sig = lookup_module_fn("coil", "ptp").expect("coil.ptp in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_ptp");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_nansum_returns_float() {
+        let sig = lookup_module_fn("coil", "nansum").expect("coil.nansum in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_nansum");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_nanmean_returns_float() {
+        let sig = lookup_module_fn("coil", "nanmean").expect("coil.nanmean in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_nanmean");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_nanstd_returns_float() {
+        let sig = lookup_module_fn("coil", "nanstd").expect("coil.nanstd in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_nanstd");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_percentile_takes_buffer_and_float() {
+        let sig = lookup_module_fn("coil", "percentile").expect("coil.percentile in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_percentile");
+        // Buffer handle FIRST, then the f64 quantile arg.
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Float]);
         assert_eq!(sig.ret, Ty::Float);
     }
 
