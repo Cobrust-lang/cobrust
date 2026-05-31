@@ -590,3 +590,51 @@ External (dora-rs, verified 2026-06-01):
 - This doc supersedes the prior survey's §2 version facts; reconcile by
   re-fetching dora-rs HEAD and updating the survey before the impl sprint, per
   the architecture doc's own reconciliation rule.
+
+---
+
+## 9. Spike results — R2 BLOCKING gate RESOLVED (Phase-A Sprint-0, 2026-06-01)
+
+The R2 staticlib-link spike ran (real `dora-node-api 0.5.0` added behind a forced
+probe; tree REVERTED after — clean at HEAD `3879611`, 8 cabi tests pass).
+**VERDICT: NUANCED-YES — the C-ABI-staticlib approach is VIABLE.**
+
+- **`libdora.a` (real dora-node-api + tokio + arrow 54) LINKS into a `.cb` Mach-O
+  and the binary RUNS.** Honest, not DCE'd: a forced `node.run()` probe pulled
+  **28,376 real dora/arrow/tokio symbols** into the final image; it printed
+  `got frame: frame_001`, exit 0. No symbol/runtime/duplicate conflicts.
+- **The ONE required compiler-side change:** target-gated macOS framework link
+  flags — the real link first fails on `_CFArrayCreate`/IOKit symbols (from the
+  `sysinfo`/`machine-uid` telemetry tier); `-framework CoreFoundation -framework
+  IOKit -framework Security` → links + runs. ~3 net-new lines in
+  `cobrust-cli/src/build.rs` (Cobrust has ZERO framework-linking today → new
+  surface, gate per-target).
+- **WEIGHT (real):** `libdora.a` 17.2 MB → **450 MB** (lean 370); stripped binary
+  19 MB → **85 MB** (lean 75); lock 559 → **691 crates**; cold build ~11 min.
+- **`default-features = false` is a big win:** drops the telemetry tier
+  (opentelemetry-otlp + gRPC + sysinfo, ~40 crates) AND the IOKit framework need
+  (lean link needs only `-framework CoreFoundation`). Does NOT drop `ring`/`reqwest`.
+
+**CROSS-TARGET (portability/retirement angle):**
+- **wasm32-wasip1: FUNDAMENTAL FAIL** — `tokio` hard `compile_error!` (no net on
+  wasm); dora needs tokio-net for daemon IPC. **Real-dora nodes are NOT
+  wasm-targetable** — the wasm dora story stays SYNTHETIC-only.
+- **riscv64gc: toolchain gap, not source** — 83 crates deep, then `ring`'s build
+  needs `riscv64-linux-gnu-gcc` (absent on dev Mac; a CI runner with
+  `gcc-riscv64-linux-gnu` should proceed — plausible, unproven here).
+
+**cargo-audit delta:** +2 NEW *unmaintained* warnings (NOT CVEs) — `RUSTSEC-2025-0141`
+(bincode 1.3.3) + `RUSTSEC-2025-0057` (fxhash 0.2.1, via inquire); CI would need
+both ignored (alongside rsa + paste). Persist even lean.
+
+**PLAN CORRECTIONS (the spike read the real tree; supersede the body above):**
+dora-node-api 0.5.0 uses **tarpc + shared_memory_extended, NOT zenoh** (no zenoh
+in the tree); the wasm blocker is **tokio-net**, not zenoh; opentelemetry/metrics/
+tracing are **default** features (opt-OUT), not optional add-ins.
+
+**RECOMMENDATION: PROCEED to Phase A** with `default-features=false` + a
+`dora-real` feature gate (mirror `coil-faer`) + the `-framework CoreFoundation`
+link fix. ACCEPT the cost: 75 MB binaries, 691-crate lock, +2 audit ignores,
+wasm-real impossible (synthetic-only), riscv64 needs the CI cross-gcc. A HEAVY but
+WORKING commitment — a CTO/user go/no-go on the weight is warranted before the
+impl sprint.
