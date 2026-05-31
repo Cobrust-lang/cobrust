@@ -642,6 +642,73 @@ Scope (Phase-3a): f64 VALUE RANGE only. `bool` value-validation, the §2.5-A
 compile-time-checked-refinement upgrade, and cross-field constraints stay later
 phases (ADR-0080 §6/§9).
 
+## ADR-0080 §6 Phase-4 (b) / #156 — nested OBJECT bodies (the multi-block descriptor)
+
+A body field whose type is ANOTHER validated `class` is now RECURSIVELY validated
+and emitted as a nested OpenAPI `$ref` (previously: lowered to kind `any`,
+presence-only + empty schema). Scope = nested OBJECT only (one OR more levels deep —
+recursion handles depth); `list[T]` / `dict` / Optional nested fields stay DEFERRED.
+
+```text
+class Address:                       # the nested validated class
+    city: str
+    zip: i64 where 0 <= self and self <= 99999
+
+class CreateUser:                    # the ROOT: a flat field + a nested-class field
+    name: str
+    address: Address                 # type is another validated class → obj field
+
+fn create_user(req: pit.Request, body: CreateUser) -> pit.Response:
+    return pit.text_response(201, "ok")   # reached only if the nested object validated
+```
+
+The CTO-locked design (D1-D4), each preserving cannot-drift (footgun #4):
+
+- **D1 — MULTI-BLOCK descriptor (`mir::lower::validated_body_schema_for_handler` +
+  the new `emit_class_block`).** The descriptor is now ROOT block first
+  (`# CreateUser\naddress\tobj:Address\nname\tstr`), then one `# <Nested>`-headed block
+  per transitively-referenced validated class (`# Address\ncity\tstr\nzip\ti64:0:99999`),
+  collected by a deterministic BFS deduplicated by `AdtId`. A class-typed field's
+  payload is the NEW token `obj:<NestedClassName>` (the nested class's source name);
+  a truly-unknown type still maps to `any`. A FLAT-only body emits exactly ONE block —
+  BYTE-IDENTICAL to the pre-Phase-4 descriptor.
+- **D2 — multi-block decode (`validation::parse_schema_blocks` + `FieldKind::Obj(String)`).**
+  Parses the descriptor into an ordered `Vec<(class_name, Vec<FieldSpec>)>` (ROOT =
+  first block). The MIR ENCODE (`emit_class_block`) and this DECODE are mirror
+  inverses — pinned by `obj_token_round_trips`. `FieldKind` dropped `Copy` (the `Obj`
+  variant owns a `String`); every use site matches `&spec.kind`. `parse_schema` is a
+  back-compat shim returning the ROOT block.
+- **D3 — recursive `validate_against_schema` (`validation::validate_block`).** An
+  `Obj(name)` field's JSON value MUST be a JSON object (else `WrongType` 422,
+  `expected:"object"`); it is recursively validated against the named class's block.
+  Missing/extra nested fields use the SAME `MissingField`/`UnknownField` policy as
+  the flat validator. A depth cap (`MAX_NESTING_DEPTH = 64`) returns a clear
+  `NestingTooDeep` 422 guarding a pathological cyclic schema; recursion otherwise
+  terminates on any finite body.
+- **D4 — OpenAPI `$ref` + per-class components (`openapi::field_schema` +
+  `build_openapi_doc`).** An `Obj(name)` field renders as
+  `{"$ref":"#/components/schemas/<name>"}`; `build_openapi_doc` registers EACH
+  descriptor block (ROOT + every nested class) as its own `components/schemas/<Name>`
+  object schema, from the SAME `parse_schema_blocks` parse the validator reads (no
+  second source). The nested component advertises the SAME bound the recursive
+  validator enforces.
+
+The cleared PREREQUISITE: a class field typed as another class with no initializer
+(`address: Address`) did NOT type-check (`check_class` re-checked the synthetic
+`let address: Address = None` and unified `Ty::Adt` against `None`). The fix:
+`check_class` skips re-checking a FIELD `let` (its type already came from the
+annotation into `adt_fields`; field access resolves through `adt_fields`, not the
+`let` binding). Flat scalar fields are observationally identical.
+
+Done-means (verified, the live nested-body E2E `pit_nested_body_e2e.rs`):
+`POST /users {"name":"a","address":{"city":"NYC","zip":10001}}` → 201 + handler
+entered; four nested-invalidity classes (out-of-range zip 100000, missing nested
+`city`, wrong-typed nested `zip:"x"`, non-object `address:"oops"`) + a nested extra
+key → 422 NOT entered; `GET /openapi.json` shows `CreateUser.address` as a `$ref`
+to `Address` + a separate `Address` component with `zip:{minimum:0,maximum:99999}`.
+Cannot-drift cross-check: the nested-zip 422 AND the advertised nested `maximum:99999`,
+from one source.
+
 ## Cross-references
 
 - `mod:strike` — sister ecosystem crate (HTTP-client precedent +

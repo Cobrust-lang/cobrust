@@ -50,7 +50,7 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::validation::{FieldKind, FieldSpec, body_name, parse_schema};
+use crate::validation::{FieldKind, FieldSpec, body_name, parse_schema, parse_schema_blocks};
 
 /// The OpenAPI version this emitter targets (ADR-0080 §5.3 — OpenAPI 3.1).
 const OPENAPI_VERSION: &str = "3.1.0";
@@ -108,11 +108,19 @@ fn schema_name(meta: &ValidatedRouteMeta) -> String {
 /// [`build_openapi_doc`] / [`openapi_json`], which take `&str` / `&[…]`.
 #[must_use]
 pub(crate) fn field_schema(spec: &FieldSpec) -> Value {
+    // ADR-0080 §6 Phase-4 (b) / #156 (D4) — a nested validated-class field is
+    // a `$ref` to its component, NOT a `{type:…}` schema. Emit it BEFORE the
+    // `type`-keyword path (a `$ref` schema carries no sibling keywords). The
+    // referenced component is registered separately by `build_openapi_doc`
+    // (from the SAME parse — no second source).
+    if let FieldKind::Obj(class_name) = &spec.kind {
+        return json!({ "$ref": format!("#/components/schemas/{class_name}") });
+    }
     let mut obj = Map::new();
     if let Some(ty) = spec.kind.openapi_type() {
         obj.insert("type".to_string(), Value::String(ty.to_string()));
     }
-    match spec.kind {
+    match &spec.kind {
         // A `str` field's `lo`/`hi` are LENGTH bounds → minLength/maxLength
         // (ADR-0080 Phase-2). The SAME `lo`/`hi` the validator length-checks.
         FieldKind::Str => {
@@ -144,8 +152,10 @@ pub(crate) fn field_schema(spec: &FieldSpec) -> Value {
             }
         }
         // An `i64` field's `lo`/`hi` are VALUE bounds → minimum/maximum
-        // (ADR-0080 Phase-1, cannot drift).
-        FieldKind::I64 | FieldKind::Bool | FieldKind::Any => {
+        // (ADR-0080 Phase-1, cannot drift). `Obj` is handled by the early
+        // `$ref` return above (it never reaches here); it is listed for
+        // exhaustiveness only — it emits nothing through this `{type:…}` path.
+        FieldKind::I64 | FieldKind::Bool | FieldKind::Any | FieldKind::Obj(_) => {
             if let Some(lo) = spec.lo {
                 obj.insert("minimum".to_string(), Value::Number(lo.into()));
             }
@@ -157,17 +167,27 @@ pub(crate) fn field_schema(spec: &FieldSpec) -> Value {
     Value::Object(obj)
 }
 
-/// Walk the WHOLE body-schema descriptor (via [`parse_schema`] — the SAME
-/// parse the validator runs) into an OpenAPI `object` schema:
+/// Walk the ROOT body-schema block (via [`parse_schema`] — the SAME parse
+/// the validator runs) into an OpenAPI `object` schema:
 /// `{"type":"object","properties":{<field>:<field_schema>,…}}` (ADR-0080
 /// §5.3). The properties preserve `parse_schema`'s deterministic field
 /// order. The header line (`# <BodyName>`) is skipped by `parse_schema`
-/// for free (no TAB).
+/// for free (no TAB). Under the multi-block descriptor (ADR-0080 §6 Phase-4
+/// (b) / #156) this is the ROOT object schema; nested-class components are
+/// registered separately by [`build_openapi_doc`] (each from its own block).
 #[must_use]
 pub fn body_schema_object(schema: &str) -> Value {
-    let specs = parse_schema(schema);
+    object_schema_from_specs(&parse_schema(schema))
+}
+
+/// ADR-0080 §6 Phase-4 (b) / #156 (D4) — build the OpenAPI `object` schema
+/// for ONE block's field specs: `{"type":"object","properties":{…}}`. A
+/// nested `obj` field renders as a `$ref` (via [`field_schema`]); the
+/// referenced component is registered separately by [`build_openapi_doc`]
+/// from the SAME parse (no second source — cannot drift).
+fn object_schema_from_specs(specs: &[FieldSpec]) -> Value {
     let mut properties = Map::new();
-    for spec in &specs {
+    for spec in specs {
         properties.insert(spec.name.clone(), field_schema(spec));
     }
     json!({
@@ -182,10 +202,13 @@ pub fn body_schema_object(schema: &str) -> Value {
 /// - the `openapi` version marker (3.1.0);
 /// - an `info` block (title + version);
 /// - `paths` — one entry per route, each with its method's
-///   `requestBody` `$ref`-ing the body component;
-/// - `components/schemas/<BodyName>` — the body schema object derived by
-///   walking each route's descriptor through [`body_schema_object`] (the
-///   cannot-drift single source).
+///   `requestBody` `$ref`-ing the ROOT body component;
+/// - `components/schemas/<ClassName>` — ONE schema object per descriptor
+///   BLOCK (ADR-0080 §6 Phase-4 (b) / #156, D4): the ROOT body class AND
+///   every transitively-referenced nested validated class, each derived by
+///   walking its block through [`object_schema_from_specs`] (the SAME
+///   `parse_schema_blocks` parse the recursive validator reads — cannot
+///   drift, no second source).
 ///
 /// Every projection here reads only the accumulated [`ValidatedRouteMeta`]
 /// (method/path/descriptor) — the SAME descriptor strings the validator
@@ -197,8 +220,31 @@ pub fn build_openapi_doc(routes: &[ValidatedRouteMeta]) -> Value {
 
     for meta in routes {
         let name = schema_name(meta);
-        // The body component, derived from the descriptor (footgun #4).
-        schemas.insert(name.clone(), body_schema_object(&meta.schema));
+        // ADR-0080 §6 Phase-4 (b) / #156 (D4) — register a component for EACH
+        // block of the descriptor: the ROOT body class plus every nested
+        // validated class it transitively references. Both the components and
+        // the validator's recursion read the SAME `parse_schema_blocks`
+        // parse, so a nested bound the doc advertises (e.g.
+        // `Address.zip.maximum`) is the SAME bound the recursive validator
+        // enforces — they cannot drift (footgun #4). A FLAT-only descriptor
+        // has exactly one block, so this registers exactly the ROOT component
+        // (byte-identical to the pre-Phase-4 single-component output). The
+        // ROOT block's `# <Name>` equals `schema_name(meta)` (the
+        // `requestBody` `$ref` target); a nested block keys by its own
+        // `# <Name>`. A later route re-registering the same class name
+        // overwrites with an identical schema (same source), so the insert is
+        // idempotent.
+        for (block_name, specs) in &parse_schema_blocks(&meta.schema).blocks {
+            // An unnamed leading block (the defensive headerless case) keys
+            // under the route's fallback name so the `requestBody` `$ref`
+            // still resolves; a named block keys by its `# <Name>`.
+            let key = if block_name.is_empty() {
+                name.clone()
+            } else {
+                block_name.clone()
+            };
+            schemas.insert(key, object_schema_from_specs(specs));
+        }
 
         // The path-item: `{ <method-lowercase>: { requestBody: {...},
         // responses: {...} } }`. Multiple methods on one path merge into
@@ -518,5 +564,110 @@ mod tests {
             "advertised maximum {advertised} must equal the parsed bound {parsed_hi} — one source"
         );
         assert!((advertised - 1.0).abs() < f64::EPSILON);
+    }
+
+    // ----- ADR-0080 §6 Phase-4 (b) / #156: nested-object → $ref + component
+
+    /// The MULTI-BLOCK nested descriptor (the MIR encoder's output for a
+    /// `CreateUser` with a nested `address: Address`): ROOT block first, then
+    /// the `Address` block. Field lines in `BTreeMap` name order.
+    const NESTED_SCHEMA: &str =
+        "# CreateUser\naddress\tobj:Address\nname\tstr\n# Address\ncity\tstr\nzip\ti64:0:99999";
+
+    #[test]
+    fn obj_field_renders_as_ref_not_inline_schema() {
+        // D4 — a nested `obj` field is a `$ref` to its component, carrying NO
+        // `type`/`properties` sibling keywords.
+        let specs = parse_schema(NESTED_SCHEMA); // ROOT block
+        let addr = specs.iter().find(|s| s.name == "address").expect("address");
+        let v = field_schema(addr);
+        assert_eq!(
+            v.get("$ref").and_then(|r| r.as_str()),
+            Some("#/components/schemas/Address"),
+            "an obj field must render as a $ref to the nested component; got {v}"
+        );
+        assert!(
+            v.get("type").is_none() && v.get("properties").is_none(),
+            "a $ref schema carries no sibling type/properties; got {v}"
+        );
+    }
+
+    #[test]
+    fn nested_class_registered_as_its_own_component() {
+        // D4 — the served doc has BOTH the ROOT component (with `address` as a
+        // $ref) AND a SEPARATE `Address` component carrying the nested fields.
+        let doc = build_openapi_doc(&[ValidatedRouteMeta {
+            method: "POST".to_string(),
+            path: "/users".to_string(),
+            schema: NESTED_SCHEMA.to_string(),
+        }]);
+        let schemas = &doc["components"]["schemas"];
+
+        // ROOT: name is a plain string; address is a $ref.
+        let root = &schemas["CreateUser"];
+        assert_eq!(root["properties"]["name"]["type"], "string");
+        assert_eq!(
+            root["properties"]["address"]["$ref"],
+            "#/components/schemas/Address"
+        );
+
+        // Nested Address component: an object with city:{string} and
+        // zip:{integer, minimum:0, maximum:99999}.
+        let addr = &schemas["Address"];
+        assert_eq!(addr["type"], "object");
+        assert_eq!(addr["properties"]["city"]["type"], "string");
+        assert_eq!(addr["properties"]["zip"]["type"], "integer");
+        assert_eq!(addr["properties"]["zip"]["minimum"], 0);
+        assert_eq!(addr["properties"]["zip"]["maximum"], 99999);
+    }
+
+    #[test]
+    fn nested_component_bound_cannot_drift_from_parsed_bound() {
+        // The #156 load-bearing cannot-drift property: the bound the nested
+        // component advertises (`Address.zip.maximum`) is read from the SAME
+        // `parse_schema_blocks` parse the recursive validator range-checks —
+        // ONE source, so they are equal.
+        let blocks = parse_schema_blocks(NESTED_SCHEMA);
+        let addr_specs = blocks.block("Address").expect("Address block");
+        let zip = addr_specs.iter().find(|s| s.name == "zip").expect("zip");
+        let parsed_hi = zip.hi.expect("zip has an upper bound");
+
+        let doc = build_openapi_doc(&[ValidatedRouteMeta {
+            method: "POST".to_string(),
+            path: "/users".to_string(),
+            schema: NESTED_SCHEMA.to_string(),
+        }]);
+        let advertised = doc["components"]["schemas"]["Address"]["properties"]["zip"]["maximum"]
+            .as_i64()
+            .expect("Address.zip.maximum present");
+        assert_eq!(
+            advertised, parsed_hi,
+            "the nested component's advertised maximum must equal the parsed bound — one source"
+        );
+        assert_eq!(advertised, 99999);
+    }
+
+    #[test]
+    fn flat_body_emits_single_component_byte_identical() {
+        // The locked constraint: a FLAT body (no nested field) registers
+        // EXACTLY the ROOT component (no extra blocks) — byte-identical to the
+        // pre-Phase-4 single-component output.
+        let doc = build_openapi_doc(&[ValidatedRouteMeta {
+            method: "POST".to_string(),
+            path: "/scores".to_string(),
+            schema: SCHEMA.to_string(), // "# CreateScore\nname\tstr\nrank\ti64:0:100"
+        }]);
+        let schemas = doc["components"]["schemas"]
+            .as_object()
+            .expect("schemas object");
+        assert_eq!(schemas.len(), 1, "a flat body emits exactly one component");
+        assert!(schemas.contains_key("CreateScore"));
+        // No $ref anywhere in the flat body's schema (no nested field).
+        assert!(
+            doc["components"]["schemas"]["CreateScore"]["properties"]["rank"]
+                .get("$ref")
+                .is_none(),
+            "a flat field is never a $ref"
+        );
     }
 }

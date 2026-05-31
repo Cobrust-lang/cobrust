@@ -329,6 +329,80 @@ fn main() -> i64:
 `email: {type:string, pattern:".+@.+"}` —— 与校验器强制执行的边界一致。
 列表字段的 `maxItems` 形式属于后续阶段。
 
+## 嵌套对象请求体(ADR-0080 第 4 阶段,#156)
+
+请求体的一个字段可以是**另一个带校验的 class** —— 这就是 pydantic 的嵌套
+模型写法。pit 会**递归地**校验这个嵌套对象,OpenAPI 文档则用 `$ref`
+引用它,全部来自同一个单一来源(因此嵌套的边界也不会漂移)。
+
+```python
+class Address:                        # 嵌套的带校验 class
+    city: str
+    zip: i64 where 0 <= self and self <= 99999
+
+class CreateUser:                     # 根:一个平坦字段 + 一个嵌套类字段
+    name: str
+    address: Address
+
+fn create_user(req: pit.Request, body: CreateUser) -> pit.Response:
+    # 只有当根字段与嵌套 address 都校验通过时才会到达这里。
+    return pit.text_response(201, "ok")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/users", create_user)
+    let _ = app.serve_openapi("/openapi.json")
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+你将得到:
+
+- **嵌套对象被递归校验。** 下面每一种都是 `422`(且 handler 永不进入):
+  - `{"name":"a","address":{"city":"NYC","zip":100000}}` —— 嵌套 `zip` 超过
+    其 `99999` 边界(嵌套 refinement 同样被强制执行);
+  - `{"name":"a","address":{"zip":10001}}` —— 嵌套对象缺少 `city`;
+  - `{"name":"a","address":{"city":"NYC","zip":"x"}}` —— 嵌套 `zip` 类型错误;
+  - `{"name":"a","address":"oops"}` —— `address` 根本不是对象
+    (``field `address` must be of type object``);
+  - `{"name":"a","address":{"city":"NYC","zip":10001,"country":"US"}}` ——
+    嵌套**多余**键(未声明键的拒绝在每一层都适用)。
+  只有 `{"name":"a","address":{"city":"NYC","zip":10001}}` 返回 `201`。
+- **嵌套可以随模型一直深下去。** 一个 class 字段是 class、它的字段又是
+  class…… 会一路校验到底(一个 64 层的防御性深度上限以清晰的错误守护
+  病态的循环模型)。
+- **OpenAPI 文档使用 `$ref` + 一个独立组件。** `GET /openapi.json` 显示根
+  对象,其嵌套字段是一个引用,外加嵌套类的一个组件 —— 各自承载校验器强制
+  执行的同一边界:
+
+```json
+{
+  "components": {
+    "schemas": {
+      "CreateUser": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "address": { "$ref": "#/components/schemas/Address" }
+        }
+      },
+      "Address": {
+        "type": "object",
+        "properties": {
+          "city": { "type": "string" },
+          "zip": { "type": "integer", "minimum": 0, "maximum": 99999 }
+        }
+      }
+    }
+  }
+}
+```
+
+嵌套的 `Address.zip.maximum` 的 `99999` 与递归校验器强制执行的边界**完全
+一致**(它会拒绝嵌套的 `zip: 100000`)—— 二者都从同一来源读取,因此嵌套
+schema 也不会漂移。当前范围是嵌套**对象**;`list[T]` 字段与可选 / `None`
+嵌套字段属于后续阶段。
+
 ## 完整示例
 
 `examples/fastapi_real_demo/` 是一个完整、可运行的 REST API,把整个校验请求体
@@ -368,8 +442,10 @@ E2E(`crates/cobrust-cli/tests/fastapi_real_demo_e2e.rs`)详见其 `README.md`。
   固定整数范围 refinement,以及 `str` 字段上的字符串长度(`len(self)`)与
   模式(`pattern(self, "…")`)refinement 现已支持。把校验后的请求体回显到
   响应里(`json_response(status, body)`)、以及从请求体上读取单个 `i64` /
-  `str` 字段(`body.rank`、`body.name`)现也已落地(ADR-0081)。`f64` /
-  `bool` 字段读取与嵌套类 / 列表字段请求体属于后续阶段。
+  `str` 字段(`body.rank`、`body.name`)现也已落地(ADR-0081)。**嵌套类
+  请求体**(一个字段类型为另一个带校验的 class,被递归校验,可深入一层或
+  多层)现也已落地(ADR-0080 第 4 阶段,#156 —— 见上面的"嵌套对象请求体")。
+  `f64` / `bool` 字段读取与 `list[T]` / 可选嵌套字段属于后续阶段。
 - **OpenAPI**(`serve_openapi`,ADR-0080):文档覆盖每个带校验路由的请求体
   schema —— 类型,加上整数范围 `minimum`/`maximum`、字符串长度
   `minLength`/`maxLength`、以及 `pattern`。列表字段的 `maxItems` 形式跟随

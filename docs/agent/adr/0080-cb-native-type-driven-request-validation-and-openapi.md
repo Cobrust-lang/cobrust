@@ -476,6 +476,83 @@ predicates (`start <= end`), and the C-style codegen-emits-Rust derive — each 
 sub-ADR (§9). These are the genuinely-large type-system / build investments;
 Phase-1..4 deliberately keep all value-predicates as runtime guards.
 
+### Phase 4 (b) — DELIVERED (#156 nested OBJECT bodies) — the MULTI-BLOCK descriptor
+
+> Amendment landed for #156's nested-object slice (Phase-4 item (b) only). Phase-4
+> items (a) declarative-shape sugar and (c) `list[T]` / `dict` / Optional nested
+> fields remain DEFERRED follow-ups (§9). The scope here is a body field whose type
+> is ANOTHER validated `class` — one OR more levels deep (recursion handles depth).
+
+A body field typed as another validated class was, pre-amendment, lowered to the
+descriptor kind `any` (presence-only, `_ => "any"` at `crates/cobrust-mir/src/lower.rs`)
+— UNVALIDATED, and emitted as an empty OpenAPI schema `{}` with no `$ref`. This
+amendment makes such a field recursively validated and emits it as a nested `$ref`.
+The CTO-locked design is four parts (D1-D4), each preserving the cannot-drift
+single-source discipline (footgun #4):
+
+- **D1 — the descriptor is MULTI-BLOCK.** `validated_body_schema_for_handler` now
+  emits the ROOT class block first (`# Root` header + its `field<TAB>payload` lines),
+  then one `# Nested`-headed block per transitively-referenced validated class
+  (collected by a deterministic BFS over nested-class fields, deduplicated by
+  `AdtId`). A class-typed field's payload is the NEW kind token `obj:<NestedClassName>`
+  (the nested class's source name = its block's `# <Name>` header), replacing the old
+  `_ => "any"` arm for the class case; a truly-unknown type still maps to `any`. **A
+  FLAT-only body (no nested field) emits exactly ONE block — BYTE-IDENTICAL to the
+  pre-amendment single-block descriptor** (pinned by `flat_descriptor_is_byte_identical_single_block`
+  + the unchanged `pit_validated_body_e2e.rs` / `pit_openapi_e2e.rs`).
+
+- **D2 — `parse_schema` decodes the multi-block string.** `parse_schema_blocks`
+  (cobrust-pit `validation.rs`) parses the descriptor into an ORDERED
+  `Vec<(class_name, Vec<FieldSpec>)>` (ROOT = first block); a new `FieldKind::Obj(String)`
+  carries the nested class name. The MIR ENCODE (`emit_class_block`) and this DECODE
+  are mirror inverses — pinned by `obj_token_round_trips` (footgun #4). `parse_schema`
+  is retained as a back-compat shim returning the ROOT block.
+
+- **D3 — `validate_against_schema` recurses.** It validates the ROOT block; an
+  `Obj(name)` field's JSON value MUST be a JSON object (else a `WrongType` 422 with
+  `expected: "object"`) and is recursively validated against the named class's block.
+  Missing / extra nested fields follow the SAME policy the flat validator already uses
+  (`MissingField` / `UnknownField`). A defensive depth cap (`MAX_NESTING_DEPTH = 64`)
+  returns a clear `NestingTooDeep` 422 to guard a pathological cyclic schema (the
+  compiler enforces an acyclic class graph; the cap protects against an adversarial
+  deeply-nested body should one ever reach the validator). Recursion otherwise
+  terminates on any finite JSON body.
+
+- **D4 — OpenAPI emits `$ref` + per-class components.** `field_schema` renders an
+  `Obj(name)` field as `{"$ref":"#/components/schemas/<name>"}`; `build_openapi_doc`
+  registers EACH descriptor block (ROOT + every nested class) as its own
+  `components/schemas/<Name>` object schema, derived from the SAME
+  `parse_schema_blocks` parse the recursive validator reads (NO second source). The
+  served document carries `components/schemas/<RootName>` + `components/schemas/<NestedName>`,
+  and the nested component advertises the SAME bound the recursive validator enforces
+  (pinned by `nested_component_bound_cannot_drift_from_parsed_bound` + the e2e
+  `test_e2e_nested_body_validator_and_openapi_cannot_drift`).
+
+**The cleared prerequisite (the FIRST RED).** #156's nested surface was gated behind a
+pre-existing type-check limitation: a class field typed as another class with no
+initializer (`address: Address`) did NOT type-check — `check_class`'s member-recursion
+(`crates/cobrust-types/src/check.rs`) re-checked the parser-synthesised
+`let address: Address = <default>`, whose default for a class-typed annotation is
+`None` (`default_init_for_type`), and unifying `Ty::Adt` against `None` produced a
+spurious `TypeMismatch` (`expected Adt#NN, found None`). The fix: `check_class` no
+longer re-checks a FIELD `let` (a `Let` whose pattern is a simple `Binding`) as an
+ordinary statement — the field's declared `Ty` was already captured into `adt_fields`
+from the annotation, and field access resolves through `adt_fields` (never the field
+`let`'s def-binding). Method bodies + nested classes still recurse. This is
+observationally identical for the existing flat scalar fields (whose synthetic default
+already unified) and unblocks the class-typed field. (It incidentally also admits a
+no-value `list[T]` field — the correct end-state for the deferred list-field follow-up,
+which hits the same synthetic-`None` wall.)
+
+**Done-means (met):** a nested body validates (six nested-invalidity classes →
+422, fully-valid → 201, handler not entered on 422) + its schema emits `$ref` + a
+separate nested component; the flat-body descriptor + behavior are byte-identical;
+the validator's enforced bound and the schema's advertised bound on the nested field
+come from one source (cannot drift). Pinned end-to-end by
+`crates/cobrust-cli/tests/pit_nested_body_e2e.rs` (5 tests) + the cobrust-pit unit
+tests. The list-field `{"type":"array","items":…}` / `minItems` / `maxItems` form and
+Optional/None nested fields remain the named DEFERRED residual (§9).
+
 ## 7. §2.5 compliance note
 
 | Surface | Python idiom (pydantic/FastAPI) | Cobrust shape | §2.5 overlap | Forced divergence |

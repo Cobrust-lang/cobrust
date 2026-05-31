@@ -357,6 +357,82 @@ str-length refinement adds `minLength`/`maxLength`, and a pattern adds
 `email: {type:string, pattern:".+@.+"}` — the same bounds the validator
 enforces. The array-length `maxItems` form for list fields is a later phase.
 
+## Nested object bodies (ADR-0080 Phase 4, #156)
+
+A body field can be **another validated class** — the pydantic nested-model
+idiom. pit validates the nested object **recursively** and the OpenAPI doc
+references it with a `$ref`, all from the same single source (so the nested
+bounds cannot drift either).
+
+```python
+class Address:                        # the nested validated class
+    city: str
+    zip: i64 where 0 <= self and self <= 99999
+
+class CreateUser:                     # the root: a flat field + a nested-class field
+    name: str
+    address: Address
+
+fn create_user(req: pit.Request, body: CreateUser) -> pit.Response:
+    # Reached only if BOTH the root fields AND the nested address validated.
+    return pit.text_response(201, "ok")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/users", create_user)
+    let _ = app.serve_openapi("/openapi.json")
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+What you get:
+
+- **The nested object is validated recursively.** Each of these is a `422`
+  (and the handler is never entered):
+  - `{"name":"a","address":{"city":"NYC","zip":100000}}` — nested `zip` over
+    its `99999` bound (the nested refinement is enforced too);
+  - `{"name":"a","address":{"zip":10001}}` — nested object missing `city`;
+  - `{"name":"a","address":{"city":"NYC","zip":"x"}}` — nested `zip` wrong type;
+  - `{"name":"a","address":"oops"}` — `address` is not an object at all
+    (``field `address` must be of type object``);
+  - `{"name":"a","address":{"city":"NYC","zip":10001,"country":"US"}}` — a
+    nested **extra** key (the same unknown-key rejection applies at every level).
+  Only `{"name":"a","address":{"city":"NYC","zip":10001}}` returns `201`.
+- **Nesting goes as deep as your model.** A class field that is a class whose
+  field is a class … validates all the way down (a defensive depth cap of 64
+  levels guards a pathological cyclic model with a clear error).
+- **The OpenAPI doc uses a `$ref` + a separate component.** `GET /openapi.json`
+  shows the root with the nested field as a reference, plus a component for the
+  nested class — each carrying the same bounds the validator enforces:
+
+```json
+{
+  "components": {
+    "schemas": {
+      "CreateUser": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "address": { "$ref": "#/components/schemas/Address" }
+        }
+      },
+      "Address": {
+        "type": "object",
+        "properties": {
+          "city": { "type": "string" },
+          "zip": { "type": "integer", "minimum": 0, "maximum": 99999 }
+        }
+      }
+    }
+  }
+}
+```
+
+The nested `Address.zip.maximum` of `99999` is the **exact** bound the recursive
+validator enforces (it rejects a nested `zip: 100000`) — both read from one
+source, so the nested schema cannot drift either. Scope today is nested
+**objects**; `list[T]` fields and optional/`None` nested fields are later phases.
+
 ## Full worked example
 
 `examples/fastapi_real_demo/` is a complete, runnable REST API that exercises
@@ -401,8 +477,11 @@ endpoints, the curl session, and the live E2E
   pattern (`pattern(self, "…")`) refinements on a `str` field ship now.
   Echoing the validated body back in the response (`json_response(status,
   body)`) and reading individual `i64` / `str` fields off the body
-  (`body.rank`, `body.name`) now ship too (ADR-0081). `f64` / `bool` field
-  reads and nested-class / list-field bodies are later phases.
+  (`body.rank`, `body.name`) now ship too (ADR-0081). **Nested-class bodies**
+  (a field typed as another validated class, recursively validated, one or more
+  levels deep) now ship too (ADR-0080 Phase 4, #156 — see "Nested object
+  bodies" above). `f64` / `bool` field reads and `list[T]` / optional nested
+  fields are later phases.
 - **OpenAPI** (`serve_openapi`, ADR-0080): the doc covers the body schema of
   each validated route — type plus int-range `minimum`/`maximum`,
   str-length `minLength`/`maxLength`, and `pattern`. The list-field

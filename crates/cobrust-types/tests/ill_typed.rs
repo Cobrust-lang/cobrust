@@ -2834,3 +2834,21 @@ fn i168_strict_lt_bound_on_float_field_rejected() {
         &["f64 float-range", "dense"],
     );
 }
+
+#[test]
+fn i169_class_field_let_explicit_mismatched_value_rejected() {
+    // #156 nested-object prerequisite-tightening (audit 2026-05-31): clearing
+    // the no-initializer class-field wall narrowed `check_class`'s field-`let`
+    // re-check skip to ONLY the synthetic-`None` default (a NON-scalar field,
+    // whose `default_init_for_type` is `None`). A SCALAR field-`let` carrying an
+    // explicit MISMATCHED value is STILL type-checked — `let z: str = 42`
+    // (value `42`, not the synthetic `None`) is rejected with a TypeMismatch,
+    // NOT silently masked. Pins the §2.5 compile-time-catch the earlier broad
+    // skip (any Binding `let`) had lost; a regression to the broad skip turns
+    // this RED.
+    must_reject(
+        "class-field-let-explicit-str-eq-int",
+        "class C:\n    let z: str = 42\n\nfn main() -> i64:\n    return 0\n",
+        Cat::TypeMismatch,
+    );
+}

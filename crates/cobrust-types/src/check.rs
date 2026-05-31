@@ -960,6 +960,50 @@ impl Ctx {
         self.adt_methods.insert(adt_id, methods);
 
         for m in &c.members {
+            // ADR-0080 §6 Phase-4 (b) / #156 — a class-body FIELD declaration
+            // (`name: type [where …]`, a `Let` whose pattern is a simple
+            // `Binding`) is NOT re-checked as an ordinary statement-level
+            // `let`. Its declared `Ty` was already captured into `adt_fields`
+            // from the annotation (the loop above, line ~926); the parser
+            // synthesises a type-matching default INITIALIZER only so the
+            // pre-Phase-4 path could type-check the synthetic `let`
+            // (`default_init_for_type`). For a SCALAR field (`str`/`i64`/`f64`/
+            // `bool`) that synthetic default unifies with the annotation, so
+            // re-checking was a no-op; but for a field typed as ANOTHER class
+            // (`address: Address`) the default is `None`, which would unify
+            // against the `Ty::Adt` annotation and FAIL with a spurious
+            // `TypeMismatch` (the prerequisite wall #156's nested-object
+            // surface sits behind). Field access never reads this `let`'s
+            // def-binding — `self.field` / `instance.field` resolves through
+            // `adt_fields` (synth `ExprKind::Attr`, line ~1708) — so skipping
+            // the field-`let`'s re-check is observationally identical for the
+            // existing flat fields and unblocks the class-typed field. METHOD
+            // bodies (`Fn`) and NESTED classes (`Class`) still recurse, so a
+            // method body's type errors are unaffected. (Collection-typed
+            // fields `list[Item]` / `dict` are a DEFERRED follow-up — they hit
+            // the SAME synthetic-`None` wall but are out of #156's nested-
+            // OBJECT scope; this skip incidentally admits their no-value form
+            // too, which is the correct end-state for them as well.)
+            if let ItemKind::Let(b) = &m.kind {
+                // Skip re-checking ONLY when the field-`let`'s value is the
+                // parser's synthetic `None` default. `default_init_for_type`
+                // (parser.rs) emits `None` for a NON-SCALAR annotation (a
+                // class / collection field) — and unifying that `None`
+                // against the declared `Ty::Adt`/collection would spuriously
+                // fail (the prerequisite wall #156's nested-object surface
+                // sat behind). A SCALAR field's synthetic default is a
+                // type-matching literal (`""`/`0`/`0.0`/`false`, NOT `None`),
+                // so a scalar field still re-checks (a no-op pass) AND an
+                // explicit mismatched field-`let` like `let z: str = 42`
+                // (value is `42`, not `None`) is NOT skipped — its §2.5 type
+                // error is still caught. (The earlier broad skip — any
+                // Binding `let` — masked that mismatch; audit 2026-05-31.)
+                if matches!(b.pattern.kind, PatternKind::Binding(..))
+                    && matches!(b.value.kind, ExprKind::Lit(Lit::None))
+                {
+                    continue;
+                }
+            }
             self.check_item(m)?;
         }
         Ok(())

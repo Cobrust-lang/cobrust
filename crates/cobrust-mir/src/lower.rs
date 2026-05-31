@@ -2277,6 +2277,36 @@ impl<'a> BodyBuilder<'a> {
     /// / body class cannot be resolved (defensive — the type checker already
     /// accepted it), an empty schema is emitted (the trampoline then
     /// validates JSON-object-ness only).
+    ///
+    /// # ADR-0080 §6 Phase-4 (b) / #156 — the MULTI-BLOCK descriptor (D1)
+    ///
+    /// A field whose declared `Ty` is ANOTHER validated class (a `Ty::Adt`
+    /// present in `adt_fields`) is NO LONGER rendered as kind `any`
+    /// (presence-only, UNVALIDATED). Instead its payload is the NEW kind token
+    /// `obj:<NestedClassName>`, and the descriptor becomes MULTI-BLOCK: the
+    /// ROOT class block first (`# Root` header + its field lines), then one
+    /// `# Nested`-headed block per TRANSITIVELY-referenced validated class,
+    /// collected by walking nested-class fields, deduplicated by `AdtId`, in
+    /// deterministic discovery order (a BFS over the root's nested fields,
+    /// each class's nested fields in `BTreeMap` name order):
+    ///
+    /// ```text
+    /// # CreateUser
+    /// address\tobj:Address
+    /// name\tstr
+    /// # Address
+    /// city\tstr
+    /// zip\ti64:0:99999
+    /// ```
+    ///
+    /// The `obj:<Name>` token references the nested class by its SOURCE NAME
+    /// (the `# <Name>` header of its block) — so `parse_schema` (the ONE
+    /// decode source, footgun #4) resolves the nested field against the named
+    /// block, and the OpenAPI emitter keys `components/schemas/<Name>` from
+    /// the same name. A truly-unknown field type (not a scalar, not a
+    /// validated class) still maps to `any`. A FLAT-only body (no nested
+    /// field) emits exactly ONE block — BYTE-IDENTICAL to the pre-Phase-4
+    /// single-block descriptor.
     fn validated_body_schema_for_handler(&self, pos_args: &[&Expr]) -> String {
         let Some(handler) = pos_args.get(2) else {
             return String::new();
@@ -2291,22 +2321,81 @@ impl<'a> BodyBuilder<'a> {
         let Some(Ty::Adt(body_adt, _)) = fn_ty.positional.get(1) else {
             return String::new();
         };
-        let Some(fields) = self.ctx.typed.adt_fields.get(body_adt) else {
+        if !self.ctx.typed.adt_fields.contains_key(body_adt) {
+            return String::new();
+        }
+        // The ROOT block first, then one block per transitively-referenced
+        // validated class (BFS, deduplicated by `AdtId`). `emit_class_block`
+        // appends the named nested classes it discovered to `queue`, so the
+        // walk terminates on a finite class graph (a cyclic class graph would
+        // re-visit, but `seen` dedups, so the queue drains). Lines are joined
+        // by `\n` across ALL blocks into the one descriptor string.
+        let mut blocks: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<cobrust_types::AdtId> =
+            std::collections::HashSet::new();
+        let mut queue: std::collections::VecDeque<cobrust_types::AdtId> =
+            std::collections::VecDeque::new();
+        queue.push_back(*body_adt);
+        seen.insert(*body_adt);
+        while let Some(adt) = queue.pop_front() {
+            let mut nested: Vec<cobrust_types::AdtId> = Vec::new();
+            blocks.push(self.emit_class_block(adt, &mut nested));
+            // Enqueue not-yet-seen nested classes in discovery order (the
+            // root's nested fields first, then theirs — a deterministic BFS).
+            for n in nested {
+                if seen.insert(n) {
+                    queue.push_back(n);
+                }
+            }
+        }
+        blocks.join("\n")
+    }
+
+    /// ADR-0080 §6 Phase-4 (b) / #156 (D1) — render ONE validated class's
+    /// descriptor block: a `# <Name>` header line (from `adt_names`) followed
+    /// by one `field<TAB>payload` line per declared field, in the field
+    /// table's deterministic `BTreeMap` name order. A field whose declared
+    /// `Ty` is ANOTHER validated class (a `Ty::Adt` present in `adt_fields`)
+    /// emits the payload `obj:<NestedClassName>` and PUSHES that class's
+    /// `AdtId` onto `nested` so the caller's BFS visits it; a scalar field
+    /// emits its base kind (+ any refinement suffix, via the ONE encoder
+    /// `Refinement::descriptor_payload`); any other type emits `any`.
+    fn emit_class_block(
+        &self,
+        adt: cobrust_types::AdtId,
+        nested: &mut Vec<cobrust_types::AdtId>,
+    ) -> String {
+        let Some(fields) = self.ctx.typed.adt_fields.get(&adt) else {
+            // Defensive: a class with no recorded fields (the caller only
+            // enqueues `AdtId`s discovered from `adt_fields`, so this is
+            // unreachable for the root — guarded above — and for nested
+            // classes, which are pushed only when found in `adt_fields`).
             return String::new();
         };
         let mut lines = Vec::with_capacity(fields.len() + 1);
-        // ADR-0080 Phase-1b-iii — prepend the body class's source name as a
-        // `# <BodyName>` header line, so the OpenAPI emitter can key
-        // `components/schemas/<BodyName>` from the SAME descriptor string the
-        // validator reads (footgun #4 — one source). The validator skips this
-        // line for free (no TAB → `parse_schema`'s `split_once('\t')` is
-        // `None`). Read from `adt_names` (the inverse of the checker's
-        // `class_names`). Absent only if the class somehow has no recorded
-        // name (defensive — the type checker accepted the program).
-        if let Some(body_name) = self.ctx.typed.adt_names.get(body_adt) {
-            lines.push(format!("# {body_name}"));
+        // The `# <Name>` header (Phase-1b-iii): names the block for the
+        // OpenAPI emitter's `components/schemas/<Name>` key + the multi-block
+        // decoder's per-class map key. The validator skips it (no TAB).
+        if let Some(name) = self.ctx.typed.adt_names.get(&adt) {
+            lines.push(format!("# {name}"));
         }
-        for (name, ty) in fields {
+        for (field_name, ty) in fields {
+            // A field typed as ANOTHER validated class → `obj:<NestedName>`
+            // (replaces the pre-Phase-4 `_ => "any"` for this case). We read
+            // the nested class's SOURCE NAME from `adt_names` so the token
+            // matches its block's `# <Name>` header (the decode resolves it
+            // against that key). A `Ty::Adt` with NO recorded source name
+            // (defensive) falls back to `any` rather than emitting a dangling
+            // `obj:` token the decoder cannot resolve.
+            if let Ty::Adt(nested_adt, _) = ty {
+                if let Some(nested_name) = self.ctx.typed.adt_names.get(nested_adt) {
+                    if self.ctx.typed.adt_fields.contains_key(nested_adt) {
+                        lines.push(format!("{field_name}\tobj:{nested_name}"));
+                        nested.push(*nested_adt);
+                        continue;
+                    }
+                }
+            }
             let kind = match ty {
                 Ty::Str => "str",
                 Ty::Int => "i64",
@@ -2314,20 +2403,20 @@ impl<'a> BodyBuilder<'a> {
                 Ty::Bool => "bool",
                 _ => "any",
             };
-            // The descriptor payload (`kind[suffix]`) is rendered by the
-            // ONE encoding source, `Refinement::descriptor_payload`
-            // (cobrust-types), so it cannot drift from `parse_schema`, the
-            // ONE decode source (ADR-0080 §3 footgun #4). A refinement may
-            // append a suffix to `kind` (int range / str length) or replace
-            // the kind token entirely (a `pat:<regex>` pattern). A field
-            // with no refinement carries just its base kind.
+            // The scalar payload (`kind[suffix]`) is rendered by the ONE
+            // encoding source, `Refinement::descriptor_payload`
+            // (cobrust-types), so it cannot drift from `parse_schema`, the ONE
+            // decode source (ADR-0080 §3 footgun #4). A refinement may append
+            // a suffix to `kind` (int range / str length) or replace the kind
+            // token entirely (a `pat:<regex>` pattern). A field with no
+            // refinement carries just its base kind.
             let payload = self
                 .ctx
                 .typed
                 .adt_refinements
-                .get(&(*body_adt, name.clone()))
+                .get(&(adt, field_name.clone()))
                 .map_or_else(|| kind.to_string(), |r| r.descriptor_payload(kind));
-            lines.push(format!("{name}\t{payload}"));
+            lines.push(format!("{field_name}\t{payload}"));
         }
         lines.join("\n")
     }
