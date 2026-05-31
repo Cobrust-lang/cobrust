@@ -35,6 +35,16 @@ pyo3 = ["dep:pyo3"]
 linalg-backend = ["dep:ndarray-linalg"]
 linalg-openblas-static = ["linalg-backend", "ndarray-linalg/openblas-static"]
 linalg-intel-mkl-static = ["linalg-backend", "ndarray-linalg/intel-mkl-static"]
+# #157 faer SPIKE (ADR-0079 §11 / docs/agent/strategy/faer-adoption-survey.md).
+# Opt-in pure-Rust BLAS-class GEMM via `faer` for the f64 2-D matmul arm.
+# NOT in `default` — the spike is reversible. With this OFF the matmul arm
+# stays `Array2::dot` (unchanged behavior). With it ON, the f64 2-D·2-D arm
+# routes through faer's `&a * &b` GEMM (see linalg.rs `matmul_f64_2d`).
+# `default-features = false` on faer drops `rayon` (wasm has no threads) +
+# `npy`/`rand`/`sparse` bloat; we keep only `std` + `linalg` (the dense GEMM
+# path). faer-ext (ndarray interop) is NOT used — its latest 0.7.1 pins
+# `faer ^0.23`, incompatible with faer 0.24.0, so coil HAND-MARSHALS instead.
+coil-faer = ["dep:faer"]
 
 # 3-tier element-wise-add performance benchmark (the FIRST increment of the
 # Cobrust perf-benchmark suite per CLAUDE.md §5.2 + §5.3). `harness = false`
@@ -71,6 +81,12 @@ harness = false
 serde_json = { workspace = true }
 ndarray = "0.16"
 ndarray-linalg = { version = "0.16", optional = true }
+# #157 faer SPIKE — pure-Rust BLAS-class linalg behind `coil-faer` (NOT
+# default). Pinned to 0.24.0 (the only 0.24.x on crates.io as of 2026-05-31;
+# verified pure-Rust — its only blas/lapack refs are `kind=dev` benches
+# gated behind cfg(openblas)/cfg(mkl)). `default-features = false` drops
+# rayon/npy/rand/sparse; `std` + `linalg` give the dense `Mat` GEMM path.
+faer = { version = "0.24.0", default-features = false, features = ["std", "linalg"], optional = true }
 # M7.5 random backend per ADR-0018 §2: rand 0.8 + rand_pcg 0.3
 # (matches numpy's PCG64 algorithm family) + rand_distr 0.4
 # (Normal / Uniform distributions). All three crates are

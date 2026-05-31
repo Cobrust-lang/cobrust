@@ -256,17 +256,76 @@ fn matmul_f64(
                     a_shape, b_shape
                 )));
             }
-            // Use ndarray for efficiency.
-            let a_mat = Array2::from_shape_vec((m, k_dim), a.to_vec()).expect("shape OK");
-            let b_mat = Array2::from_shape_vec((k2, n), b.to_vec()).expect("shape OK");
-            let c = a_mat.dot(&b_mat);
-            let out: Vec<f64> = c.iter().copied().collect();
+            // The 2-D·2-D GEMM. Default = `ndarray::Array2::dot` (pure-Rust);
+            // with `--features coil-faer` = faer's BLAS-class `Mat` GEMM
+            // (#157 spike). Both consume + return ROW-MAJOR flat slices.
+            let out = matmul_f64_2d(a, m, k_dim, b, n);
             Ok((out, vec![m, n]))
         }
         _ => Err(shape_err(
             "matmul supports only rank 1 / 2 inputs at M7.4".into(),
         )),
     }
+}
+
+/// 2-D·2-D `f64` GEMM core, split out so the `coil-faer` spike can swap the
+/// backend at ONE site without touching the dispatch / shape-check logic.
+///
+/// Contract (identical for both backends — this is what the differential
+/// test pins): `a` is ROW-MAJOR flat with shape `(m, k)` (logical element
+/// `(i, j)` is `a[i * k + j]`); `b` is ROW-MAJOR flat with shape `(k, n)`;
+/// the returned `Vec<f64>` is ROW-MAJOR flat with shape `(m, n)`.
+#[cfg(not(feature = "coil-faer"))]
+fn matmul_f64_2d(a: &[f64], m: usize, k: usize, b: &[f64], n: usize) -> Vec<f64> {
+    // DEFAULT path — unchanged behavior: ndarray's own pure-Rust GEMM.
+    let a_mat = Array2::from_shape_vec((m, k), a.to_vec()).expect("shape OK");
+    let b_mat = Array2::from_shape_vec((k, n), b.to_vec()).expect("shape OK");
+    let c = a_mat.dot(&b_mat);
+    c.iter().copied().collect()
+}
+
+/// faer-backed 2-D·2-D `f64` GEMM (#157 spike — gated behind `coil-faer`).
+///
+/// # Layout (the survey's #1 footgun — handled EXPLICITLY here)
+///
+/// `ndarray`'s default storage is ROW-major; faer's `Mat` is COLUMN-major
+/// ("each individual column is stored contiguously in memory" —
+/// `docs.rs/faer/0.24.0` `mat::Mat`). We never touch raw faer storage: we
+/// build via `Mat::from_fn(rows, cols, |i, j| ...)`, which is indexed by
+/// LOGICAL `(i, j)` and so is layout-agnostic, and read back via
+/// `*c.get(i, j)` (also logical). Concretely:
+///
+/// - `a` row-major `(m, k)`: logical `a[i][j] = a[i * k + j]`.
+/// - `b` row-major `(k, n)`: logical `b[i][j] = b[i * n + j]`.
+/// - faer computes `&a_mat * &b_mat` → `(m, n)` Mat (logical `(i, j)`).
+/// - marshal back ROW-major: `out[i * n + j] = *c.get(i, j)`.
+///
+/// A transpose/layout bug here MUST surface in the rectangular differential
+/// test (`linalg_faer_differential.rs`) — a square-symmetric input would
+/// hide it.
+#[cfg(feature = "coil-faer")]
+fn matmul_f64_2d(a: &[f64], m: usize, k: usize, b: &[f64], n: usize) -> Vec<f64> {
+    use faer::Mat;
+
+    // ndarray row-major flat -> faer Mat via LOGICAL indexing (from_fn is
+    // layout-agnostic; faer stores column-major under the hood).
+    let a_mat: Mat<f64> = Mat::from_fn(m, k, |i, j| a[i * k + j]);
+    let b_mat: Mat<f64> = Mat::from_fn(k, n, |i, j| b[i * n + j]);
+
+    // faer GEMM via the operator overload (`&a * &b`, operands by reference
+    // so neither Mat is moved — the verbatim `docs.rs/faer/0.24.0` form).
+    let c: Mat<f64> = &a_mat * &b_mat;
+
+    // faer Mat (column-major) -> ROW-major flat, again by LOGICAL `(i, j)`
+    // read so the output matches the ndarray path byte-for-byte (modulo
+    // f64 rounding, which the differential test bounds at a tight tol).
+    let mut out = vec![0.0_f64; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            out[i * n + j] = *c.get(i, j);
+        }
+    }
+    out
 }
 
 fn matmul_f32(

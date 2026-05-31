@@ -43,6 +43,15 @@ matmul number on arm64 — the regime coil's gap was measured in — and (ii)
 faer's wasm32 / riscv64 builds were not independently verified; both are
 spike-gated below (§6).
 
+> **⚡ SPIKE UPDATE (2026-06-01, §7 below) — both `[CRITICAL]` uncertainties RESOLVED.**
+> The spike ran (faer wired into coil matmul behind `coil-faer`, differential-pinned).
+> **Single-threaded faer does NOT close the gap** (tracks ndarray, ~7.5× behind numpy
+> @ N=256); faer wins **only with `rayon`/threads** (8×→~2.4× @ N=512). But `rayon`
+> (threads) ⊥ `wasm32` (no threads). Cross-compile: wasm **GREEN**, RISC-V codegen
+> **GREEN** (host-link is a CI matter). So the *retirement* win STANDS (faer
+> cross-compiles where ndarray-linalg can't); the *perf* win is real but **native-only
+> (rayon-gated)**. Updated conditional recommendation in §7.3.
+
 ---
 
 ## 2. coil's current linalg (and where the matmul gap actually is)
@@ -393,6 +402,79 @@ are unverified (§6.3).
    read from docs prose, not line-by-line rustdoc — confirm before the spike.
 7. **License posture.** faer is MIT-only (not Apache-2.0-OR-MIT). Compatible with
    the repo bar, but confirm MIT-only inbound is acceptable (ADR-0001).
+
+---
+
+## 7. SPIKE RESULTS — both critical uncertainties RESOLVED (#157 spike, 2026-06-01)
+
+The §6.2 spike ran: faer 0.24.0 wired into coil's f64 matmul behind a new
+`coil-faer` feature flag (NOT default; `default-features = false` = no rayon).
+Hand-marshalled via logical `Mat::from_fn(i,j)` / `c.get(i,j)` — **faer-ext 0.7.1
+lags one faer minor (pins faer ^0.23) and does not support faer 0.24**, so it was
+not used (resolves RISK §6.3-4). Differential-pinned against `ndarray::dot` on
+**rectangular** matrices (3×4@4×2, 2×3@3×5, 64×64-asymmetric); a transpose bug was
+shown to make all three FAIL (negative control), so the row↔column-major layout
+is genuinely correct. Default build byte-identical, 784 tests green.
+
+### 7.1 Perf on arm64 (resolves RISK §6.3-1) — faer wins ONLY with threads
+
+CTO serial-warm capture, Apple M1, faer (TF) vs T2 (ndarray `.dot`) vs T1 (numpy
+2.0.2 / Accelerate). **Single-threaded** faer (the committed no-rayon config):
+
+| N | TF/T2 (vs ndarray) | TF/T1 (vs numpy) |
+|---:|---:|---:|
+| 16 | 1.78× | 0.62× (faer WINS — per-call floor) |
+| 64 | 1.18× | 4.99× |
+| 256 | 1.10× | 7.55× |
+
+**Single-threaded faer does NOT close the gap** — it merely *tracks* ndarray's own
+pure-Rust GEMM (TF/T2 ≈ 1.1–1.8×, the marshalling tax) and stays ~7.5× behind
+numpy at N=256 = essentially the original backend gap. Root cause: numpy-on-
+Accelerate is multi-threaded + hand-tuned; ndarray and single-threaded faer are
+both one-core pure-Rust.
+
+**WITH faer's `rayon` feature** (multi-threaded — measured in the spike, then
+reverted): the gap closes and *improves with N* — N=256 TF/T2 0.61× (faer 1.6×
+FASTER than ndarray), TF/T1 4.36×; **N=512 TF/T1 2.38×, TF/T2 0.33×** (faer 3×
+faster than ndarray; numpy gap 8×→2.4×, still narrowing). So faer's BLAS-class
+claim holds **only with threads**, and even then the N=512 residual vs Accelerate
+is ~2.4× (trend suggests further narrowing past N≈1000).
+
+### 7.2 Cross-compile (resolves RISK §6.3-2) — wasm GREEN, RISC-V codegen GREEN
+
+`--features coil-faer` (single-threaded):
+- **wasm32-wasip1: PASS** — the whole faer/gemm/nano-gemm/pulp tree compiles +
+  links to wasm (pulp carries a `pulp-wasm-simd-flag`). faer genuinely
+  cross-compiles to wasm with zero system deps.
+- **riscv64gc: codegen PASS, host-link FAIL** — every faer/gemm `.rlib` is
+  produced and `cargo check --target riscv64gc` is clean; only the final cdylib
+  `.so` link fails on the macOS host (no `riscv64-linux-gnu` cross-linker; Apple
+  `ld` rejects GNU flags). A **host-toolchain** gap, not a faer one — a Linux CI
+  runner links it. faer's RISC-V *codegen* is confirmed.
+
+### 7.3 The trade the survey could not see, and the updated recommendation
+
+**faer's perf win requires `rayon` (threads); `wasm32` has no threads.** You
+cannot have BOTH "faer closes the matmul gap" AND "the same config cross-compiles
+to wasm". This is the load-bearing spike finding.
+
+**UPDATED RECOMMENDATION — conditional, per target:**
+- **Native / server (x86_64, arm64, Linux RISC-V):** adopt faer **with `rayon`**
+  as the matmul (later solve/det/inv) backend — closes most of the gap
+  (8×→~2.4× @ N=512, narrowing), pure-Rust, no system dep; lets the dead
+  `ndarray-linalg` opt-in be deleted.
+- **wasm32 / any threadless target:** single-threaded faer gives **no perf win
+  over ndarray** — keep ndarray for wasm (or single-threaded faer purely for
+  code-unification), accepting the gap. Gate `rayon` on `not(wasm)`.
+- The committed spike is the **single-threaded, flag-gated** artifact (correct +
+  portable, no perf win) — the foundation for a `rayon`-on-native promotion.
+  **Do NOT default-enable `coil-faer`** until the rayon/target-split + an N≥1000
+  native bench land.
+
+The strategic win (retire `ndarray-linalg`; one pure-Rust accelerator across
+native+RV+WASM) **STANDS** — faer cross-compiles where ndarray-linalg cannot. The
+matmul *perf* win is real but **native-only** (rayon-gated). Both are now measured,
+not assumed.
 
 ---
 

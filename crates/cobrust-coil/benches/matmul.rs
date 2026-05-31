@@ -100,6 +100,13 @@
 // alignment-narrowing lint is a false positive — mirrors the production cabi
 // allow + the elementwise bench's sibling allow.
 #![allow(clippy::cast_ptr_alignment)]
+// #157 faer tier: the `tf_over_t2` / `tf_over_t1` ratio bindings read as "too
+// similar" to the existing `t3_over_t2` / `t3_over_t1`. The TF (faer) vs T3
+// (coil) naming is the deliberate, load-bearing distinction of the spike, so
+// the similarity is intended. These bindings exist in BOTH feature configs
+// (`tf: Option<Stats>` is `None` without the feature), so the allow is
+// unconditional to keep the default build's lint set passing too.
+#![allow(clippy::similar_names)]
 
 use std::hint::black_box;
 use std::process::{Command, Stdio};
@@ -257,6 +264,63 @@ fn bench_t2_ndarray(n: usize, iters: usize, warmup: usize) -> Stats {
         // Free the result INSIDE the timed region — symmetric with T3 (which
         // times `__cobrust_coil_buffer_drop`) and T1 (numpy frees its result).
         drop(c);
+        samples.push(t0.elapsed().as_nanos() as f64);
+    }
+    summarize(samples)
+}
+
+// =====================================================================
+// TF — faer GEMM (#157 SPIKE, `--features coil-faer` only).
+//
+// Times the EXACT faer path coil's `matmul_f64_2d` runs under the feature:
+// build two column-major `Mat<f64>` from the row-major ramps via
+// `Mat::from_fn` (logical (i,j) indexing — layout-agnostic), `&a * &b` (the
+// GEMM), and marshal the result back to a row-major `Vec<f64>` (the same
+// O(N²) in/out copies the production kernel pays). This is the faer analogue
+// of T2 (`a.dot(&b)`): it isolates the faer BACKEND so TF/T2 = the faer-vs-
+// ndarray-GEMM speedup and TF/T1 = the faer-vs-numpy(Accelerate) residual —
+// the number the survey (§3.3/§6.3 RISK #1) could not retrieve.
+//
+// Built ONCE per size outside the timed region; the result Mat is dropped
+// inside the loop (symmetric with T2's `drop(c)` and T1's numpy result free).
+// =====================================================================
+
+#[cfg(feature = "coil-faer")]
+fn bench_faer(n: usize, iters: usize, warmup: usize) -> Stats {
+    use faer::Mat;
+
+    let a = ramp_a(n);
+    let b = ramp_b(n);
+    // Row-major ramp -> faer Mat (column-major storage; from_fn is logical).
+    let a_mat: Mat<f64> = Mat::from_fn(n, n, |i, j| a[i * n + j]);
+    let b_mat: Mat<f64> = Mat::from_fn(n, n, |i, j| b[i * n + j]);
+
+    // Marshal the (n,n) faer result back to a row-major Vec<f64> — the same
+    // O(N²) copy-out the production kernel does, so TF is honest about the
+    // marshalling the faer path actually pays (NOT just the bare GEMM).
+    let marshal_out = |c: &Mat<f64>| -> Vec<f64> {
+        let mut out = vec![0.0_f64; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                out[i * n + j] = *c.get(i, j);
+            }
+        }
+        out
+    };
+
+    for _ in 0..warmup {
+        let c = black_box(&a_mat) * black_box(&b_mat);
+        black_box(marshal_out(&c));
+    }
+
+    let mut samples = Vec::with_capacity(iters);
+    for _ in 0..iters {
+        let t0 = Instant::now();
+        let c = black_box(&a_mat) * black_box(&b_mat);
+        let out = marshal_out(&c);
+        black_box(&out);
+        drop(c);
+        drop(out);
         samples.push(t0.elapsed().as_nanos() as f64);
     }
     summarize(samples)
@@ -435,8 +499,21 @@ fn main() {
             .as_ref()
             .and_then(|p| bench_t1_numpy(p, n, iters, warmup));
 
+        // TF — faer tier (#157). Only present under `--features coil-faer`.
+        #[cfg(feature = "coil-faer")]
+        let tf = Some(bench_faer(n, iters, warmup));
+        #[cfg(not(feature = "coil-faer"))]
+        let tf: Option<Stats> = None;
+
         let t3_over_t2 = t3.median_ns / t2.median_ns;
         let t3_over_t1 = t1.as_ref().map(|t| t3.median_ns / t.median_ns);
+        // faer ratios — the spike's headline numbers (gap-closure check):
+        // TF/T2 = faer vs ndarray-GEMM backend; TF/T1 = faer vs numpy-BLAS.
+        let tf_over_t2 = tf.as_ref().map(|t| t.median_ns / t2.median_ns);
+        let tf_over_t1 = tf
+            .as_ref()
+            .zip(t1.as_ref())
+            .map(|(tf, t1)| tf.median_ns / t1.median_ns);
 
         // Number of f64 multiply-adds per matmul = N^3 (NxN @ NxN).
         let flops = (n as f64).powi(3);
@@ -471,6 +548,24 @@ fn main() {
             }
         } else {
             println!("T1_MEDIAN_NS_N{n}=SKIPPED");
+        }
+        // TF — faer tier (#157 spike). Only emitted under `--features
+        // coil-faer`; the default build prints nothing here, so existing
+        // grep keys (T1_/T2_/T3_) are byte-stable.
+        if let Some(tf) = &tf {
+            println!("TF_MEDIAN_NS_N{n}={:.1}", tf.median_ns);
+            println!("TF_MEAN_NS_N{n}={:.1}", tf.mean_ns);
+            println!("TF_MIN_NS_N{n}={:.1}", tf.min_ns);
+            println!("TF_NS_PER_FLOP_N{n}={:.6}", tf.median_ns / flops);
+            if let Some(r) = tf_over_t2 {
+                // < 1.0 = faer FASTER than ndarray-GEMM (closes the T2/T1 gap).
+                println!("TF_OVER_T2_N{n}={r:.4}");
+            }
+            if let Some(r) = tf_over_t1 {
+                // The headline: faer vs numpy-Accelerate. ~1.0 = parity (gap
+                // CLOSED); > 1.0 = numpy still ahead by that factor.
+                println!("TF_OVER_T1_N{n}={r:.4}");
+            }
         }
         // Sample count sanity (honesty rule b: report N).
         println!("SAMPLES_N{n}={}", t3.n);
