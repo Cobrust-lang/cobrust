@@ -33,11 +33,13 @@
 //! - **T2 — raw Rust `coil::mean_scalar`** (the performance CEILING). Times
 //!   `coil::mean_scalar(&a)` on a `coil::Array` (an `ndarray::ArrayD<f64>`
 //!   under the hood) — the EXACT kernel the C-ABI shim calls internally
-//!   (`__cobrust_coil_mean` → `mean_scalar` → `reduce::mean` → ndarray's
-//!   `.mean()`), with NO C-ABI / Cobrust-handle layer. This is the best a Rust
-//!   program can do for this reduction on coil's backend; T3 cannot beat it,
-//!   only approach it. (`mean_scalar` is a free function, NOT a method — it
-//!   borrows `&Array` and returns `f64`; importable at the coil crate root.)
+//!   (`__cobrust_coil_mean` → `mean_scalar` → `reduce::mean` → `mean_all`, which
+//!   pairwise-sums the elements via `coil::pairwise_sum_f64` — coil's OWN
+//!   recursive leaf-8 pairwise sum, NOT ndarray's `.mean()`), with NO C-ABI /
+//!   Cobrust-handle layer. This is the best a Rust program can do for this
+//!   reduction on coil's kernel; T3 cannot beat it, only approach it.
+//!   (`mean_scalar` is a free function, NOT a method — it borrows `&Array` and
+//!   returns `f64`; importable at the coil crate root.)
 //! - **T3 — Cobrust `coil`** (the `.cb`-WRAPPING cost). Times the C-ABI shim
 //!   `__cobrust_coil_mean(a) -> f64` — the exact symbol a compiled `.cb`
 //!   program binds onto for `coil.mean(a)`. CRUCIALLY: a reduction returns a

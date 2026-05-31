@@ -45,9 +45,17 @@ original on representative benchmarks").
 >    scalar-return FFI cross is free and that the add/matmul wrapping tax was the
 >    *output copy*, not the boundary itself (the headline insight). The headline
 >    `T3/T1` is an HONEST loss at scale (`~0.17×→~6×→~13×`), a *kernel* gap —
->    ndarray's scalar `mean` fold vs numpy's SIMD pairwise sum (raw ndarray loses
->    by the same `T2/T1`) — NOT BLAS, NOT coil's wrapping; names a SIMD/pairwise
->    reduce-kernel follow-up (the reduction analogue of #166).
+>    coil's `mean_all`/`sum_all` collect (PRE-`as_slice`-WIN) then run a
+>    **recursive leaf-8 pairwise sum** (`coil::pairwise_sum_f64` — NOT ndarray's
+>    `.mean()`, NOT a scalar fold; coil already pairwise-sums), versus numpy's
+>    block-128 SIMD-unrolled pairwise sum; raw ndarray-backed coil loses by the
+>    same `T2/T1` — NOT BLAS, NOT coil's wrapping. A first WIN removed the
+>    contiguous collect-copy (`as_slice` fast path; small at the bench sizes
+>    because the collect was a cheap bulk copy, not the dominant term); the named
+>    follow-up is the recursion/leaf-8→flat-SIMD reduce kernel (a chunked
+>    pairwise accumulator, possibly `wide`/`std::simd`; the reduction analogue of
+>    #166). This bullet is the F74 honesty correction (was: "ndarray's scalar
+>    `mean` fold").
 >
 > Future library benchmarks reuse the 3-tier model + honesty rules below.
 
@@ -162,6 +170,23 @@ Violating any one is the primary failure mode of a perf claim.
     additionally stamps the hardware header into a report-ready block.
   - The benchmark is **seeded/deterministic** (the ramp is a pure function of
     the index; no RNG), so the *work* is identical across runs and machines.
+- **(f) MECHANISM VERIFIED AGAINST THE KERNEL — never inferred from the backend
+  crate's identity.**
+  - The report's "why these numbers" section (§3 step 4) makes a CLAIM about
+    *which code path runs and what it does*. That claim MUST be verified by
+    **reading the actual kernel the tier calls** — trace `cabi → wrapper →
+    backend` and read the function body, counting its real allocations/passes —
+    NOT inferred from the fact that "the wrapped crate is `ndarray`, so it must
+    call `ndarray`'s `X`". (A wrapper can collect-then-recurse, copy, promote,
+    or reimplement an algorithm rather than delegate to the backend crate's
+    same-named method.)
+  - **The audit reads the kernel and confirms the report's "why" matches the
+    code.** A direction-correct-but-mechanically-wrong explanation (the most
+    dangerous kind — it survives a numbers-only review) is a violation of this
+    rule. See `docs/agent/findings/f74-perf-report-mechanism-unverified-vs-kernel.md`
+    for the canonical incident: a report stated coil's `mean` was "ndarray's
+    `ArrayBase::mean`, a scalar fold" when the kernel actually did a `collect`
+    + recursive pairwise sum and never called `.mean()` at all.
 
 ### 2.1 CI behavior
 

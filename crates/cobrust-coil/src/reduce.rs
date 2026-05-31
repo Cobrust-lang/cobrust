@@ -206,13 +206,26 @@ fn sum_all(arr: &Array) -> Result<Array, NumpyError> {
             make_scalar_i64(s)
         }
         Array::Float32(a) => {
-            let v: Vec<f32> = a.iter().copied().collect();
-            make_scalar_f32(pairwise_sum_f32(&v))
+            // Contiguous fast path (no intermediate Vec): sum directly over
+            // the backing slice when the layout is standard-contiguous;
+            // `as_slice()` is `None` for non-contiguous views, where we fall
+            // back to the collect. Same `pairwise_sum_f32` over the same
+            // elements either way — behaviour is identical.
+            match a.as_slice() {
+                Some(s) => make_scalar_f32(pairwise_sum_f32(s)),
+                None => {
+                    let v: Vec<f32> = a.iter().copied().collect();
+                    make_scalar_f32(pairwise_sum_f32(&v))
+                }
+            }
         }
-        Array::Float64(a) => {
-            let v: Vec<f64> = a.iter().copied().collect();
-            make_scalar_f64(pairwise_sum_f64(&v))
-        }
+        Array::Float64(a) => match a.as_slice() {
+            Some(s) => make_scalar_f64(pairwise_sum_f64(s)),
+            None => {
+                let v: Vec<f64> = a.iter().copied().collect();
+                make_scalar_f64(pairwise_sum_f64(&v))
+            }
+        },
         Array::Bool(a) => {
             // numpy: sum(bool) → int64 count of true.
             let mut s: i64 = 0;
@@ -445,15 +458,29 @@ fn mean_all(arr: &Array) -> Result<Array, NumpyError> {
             if n == 0 {
                 return Ok(make_scalar_f32(f32::NAN));
             }
-            let v: Vec<f32> = a.iter().copied().collect();
-            make_scalar_f32(pairwise_sum_f32(&v) / n as f32)
+            // Contiguous fast path (no intermediate Vec): pairwise-sum the
+            // backing slice directly when standard-contiguous; fall back to
+            // the collect for non-contiguous views (`as_slice()` → `None`).
+            // Identical `pairwise_sum_f32` / `n` either way.
+            match a.as_slice() {
+                Some(s) => make_scalar_f32(pairwise_sum_f32(s) / n as f32),
+                None => {
+                    let v: Vec<f32> = a.iter().copied().collect();
+                    make_scalar_f32(pairwise_sum_f32(&v) / n as f32)
+                }
+            }
         }
         Array::Float64(a) => {
             if n == 0 {
                 return Ok(make_scalar_f64(f64::NAN));
             }
-            let v: Vec<f64> = a.iter().copied().collect();
-            make_scalar_f64(pairwise_sum_f64(&v) / n as f64)
+            match a.as_slice() {
+                Some(s) => make_scalar_f64(pairwise_sum_f64(s) / n as f64),
+                None => {
+                    let v: Vec<f64> = a.iter().copied().collect();
+                    make_scalar_f64(pairwise_sum_f64(&v) / n as f64)
+                }
+            }
         }
         // int / bool inputs promote to Float64.
         _ => {
@@ -1240,6 +1267,22 @@ mod tests {
             panic!("expected Int64");
         };
         assert_eq!(arr[IxDyn(&[])], 10);
+    }
+
+    #[test]
+    fn sum_all_f64_contiguous_via_as_slice() {
+        // Pins the F74 collect-elimination WIN path directly: a standard
+        // (row-major) contiguous f64 array has `as_slice() == Some`, so
+        // `sum_all` pairwise-sums the slice directly (the fast path), NOT the
+        // non-contiguous collect fallback. Guards the WIN'd arm against a
+        // future refactor — the audit flagged it as covered only transitively
+        // (via mean_all + the bench SAME_VALUE_GUARD) before this test.
+        let a = array_f64(&[1.0, 2.0, 3.0, 4.0, 5.0], &[5]).unwrap();
+        let r = sum(&a, None).unwrap();
+        let Array::Float64(arr) = r else {
+            panic!("expected Float64");
+        };
+        assert_eq!(arr[IxDyn(&[])], 15.0);
     }
 
     #[test]
