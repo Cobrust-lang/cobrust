@@ -55,6 +55,18 @@ harness = false
 name = "matmul"
 harness = false
 
+# 3-tier full-array reduction (`mean`, f64) benchmark — the THIRD increment of
+# the Cobrust perf-benchmark suite (Stream W P0 `coil.mean(a) -> f64`). Same
+# `harness = false` plain-`fn main` + 3-tier methodology. The scientifically
+# distinct case: a reduction is O(N)→O(1), so there is NO output array to
+# marshal across the FFI boundary (contrast the add/matmul result Buffer) —
+# the hypothesis is T3/T2 ≈ 1.0. Re-run: `cargo bench -p cobrust-coil --bench
+# reduce`. Report: `docs/agent/benchmarks/coil-mean.md`. Methodology:
+# `docs/agent/benchmarks/README.md`.
+[[bench]]
+name = "reduce"
+harness = false
+
 [dependencies]
 serde_json = { workspace = true }
 ndarray = "0.16"

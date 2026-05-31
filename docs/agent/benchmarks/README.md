@@ -8,6 +8,8 @@ dependencies:
   - docs/agent/benchmarks/coil-elementwise-add.md
   - crates/cobrust-coil/benches/matmul.rs
   - docs/agent/benchmarks/coil-matmul.md
+  - crates/cobrust-coil/benches/reduce.rs
+  - docs/agent/benchmarks/coil-mean.md
 governs: CLAUDE.md §5.2, CLAUDE.md §5.3, ADR §"L2.perf gate"
 ---
 
@@ -22,7 +24,7 @@ translation pipeline's `L2.perf` gate (currently an `AcceptAllPerf` stub) a
 real number to gate on, per CLAUDE.md §4.2 ("Performance gate: ≥ 0.8× of
 original on representative benchmarks").
 
-> **Status of the suite.** Two increments landed:
+> **Status of the suite.** Three increments landed:
 > 1. **coil element-wise add** (`coil-elementwise-add.md` +
 >    `benches/elementwise_add.rs`) — coil at the raw-`ndarray` ceiling,
 >    *faster* than numpy at small/mid N.
@@ -35,6 +37,17 @@ original on representative benchmarks").
 >    O(N²) matmul marshalling copies, an O(N²)-against-O(N³) tax (a named
 >    #166-analogue fast-path follow-up). A worked example of reporting a gap,
 >    not a win — incl. a corrected cold-capture (warm-up raised to 50).
+> 3. **coil full-array reduction `mean`** (`coil-mean.md` + `benches/reduce.rs`)
+>    — the scientifically-distinct case: a reduction is O(N)→O(1), so there is
+>    **NO output array to marshal** across the FFI boundary (contrast the
+>    add/matmul result `Buffer`). The diagnostic `T3/T2` (vs raw
+>    `coil::mean_scalar`) collapses to **~1.0× at ALL N** — proving the
+>    scalar-return FFI cross is free and that the add/matmul wrapping tax was the
+>    *output copy*, not the boundary itself (the headline insight). The headline
+>    `T3/T1` is an HONEST loss at scale (`~0.17×→~6×→~13×`), a *kernel* gap —
+>    ndarray's scalar `mean` fold vs numpy's SIMD pairwise sum (raw ndarray loses
+>    by the same `T2/T1`) — NOT BLAS, NOT coil's wrapping; names a SIMD/pairwise
+>    reduce-kernel follow-up (the reduction analogue of #166).
 >
 > Future library benchmarks reuse the 3-tier model + honesty rules below.
 
@@ -195,3 +208,6 @@ Violating any one is the primary failure mode of a perf claim.
 | `coil-matmul.md` | Second report: coil `a @ b` vs numpy(BLAS) vs raw `ndarray` |
 | `crates/cobrust-coil/benches/matmul.rs` | The runnable 3-tier `a @ b` bench |
 | `scripts/bench/coil_matmul.sh` | Hardware-tagged one-command `a @ b` wrapper |
+| `coil-mean.md` | Third report: coil `mean(a)` vs numpy vs raw `coil::mean_scalar` — the O(N)→O(1) reduction (no output to marshal; `T3/T2 ≈ 1.0`) |
+| `crates/cobrust-coil/benches/reduce.rs` | The runnable 3-tier `mean(a)` reduction bench |
+| `scripts/bench/coil_mean.sh` | Hardware-tagged one-command `mean(a)` wrapper |
