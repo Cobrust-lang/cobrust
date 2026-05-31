@@ -247,7 +247,15 @@ jobs:
         # NEVER invokes any RSA code path — the advisory is unreachable here.
         # Rationale in crates/cobrust-fang/Cargo.toml. Revisit if rsa ships a fix
         # or fang ever adds an RS*/PS* algorithm (then the path becomes reachable).
-        run: cargo audit --deny warnings --ignore RUSTSEC-2023-0071
+        #
+        # Ignore RUSTSEC-2024-0436 (paste 1.x — UNMAINTAINED, NOT a vulnerability):
+        # `paste` is a build-time proc-macro (token-paste substitution) with NO
+        # runtime or security surface; the advisory is "unmaintained" (author
+        # archived it), not a defect. Pulled transitively by faer's SIMD crate
+        # `pulp`; faer is OPTIONAL (behind the `coil-faer` feature, NOT in the
+        # default build — #157 spike), but Cargo.lock lists optional deps so the
+        # audit sees it regardless. Revisit if pulp drops paste / adopts a fork.
+        run: cargo audit --deny warnings --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436
 
   # Code Quality P1: cargo-udeps unused-dependency check.
   # Requires nightly toolchain (uses unstable compiler APIs).
