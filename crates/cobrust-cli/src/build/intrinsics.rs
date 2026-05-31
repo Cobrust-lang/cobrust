@@ -1392,6 +1392,8 @@ fn ecosystem_module_for_symbol(sym: &str) -> Option<&'static str> {
         Some("dora")
     } else if sym.starts_with("__cobrust_fang_") {
         Some("fang")
+    } else if sym.starts_with("__cobrust_redis_") {
+        Some("redis")
     } else {
         None
     }

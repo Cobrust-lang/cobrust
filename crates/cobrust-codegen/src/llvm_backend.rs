@@ -3030,6 +3030,46 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_param_counts.insert(sym, params);
         }
 
+        // -- ADR-0078 Phase-1c: redis ecosystem-module C-ABI binding ---------
+        // `redis` (cache/KV, the redis-py rebrand) — pairs the handle
+        // pattern (Client, a den.Connection-shaped stateful resource) with
+        // a free-function entrypoint (`connect`, like den's `connect`).
+        // Exported by `cobrust-redis/src/cabi.rs`, linked as `libredis.a`
+        // only when the program imports `redis`. The sync path means NO
+        // async runtime is pulled (ADR-0078 §3.5).
+        //
+        //   __cobrust_redis_connect(url: *mut Str) -> *mut Client
+        //   __cobrust_redis_client_set(c, key, value: *mut Str) -> void
+        //   __cobrust_redis_client_get(c, key: *mut Str) -> *mut Str
+        //   __cobrust_redis_client_delete(c, key: *mut Str) -> i64
+        //   __cobrust_redis_client_exists(c, key: *mut Str) -> bool (i1)
+        //   __cobrust_redis_client_drop(c) -> void
+        //
+        // The `_drop` symbol is emitted by `emit_drop_for_ty` at the
+        // handle local's scope exit via `handle_drop_symbol(id)` (chain is
+        // already general — no new drop wiring needed). `set` returns
+        // void (side-effect — the `.cb` `Ty::None` return); `exists`
+        // returns an `i1` bool (the fang `verify_password` precedent —
+        // `write_place` bridges the i1/alloca width gap).
+        let redis_connect_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let redis_set_ty = void_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let redis_get_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let redis_delete_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let redis_exists_ty = bool_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let redis_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_redis_connect", redis_connect_ty, 1usize),
+            ("__cobrust_redis_client_set", redis_set_ty, 3),
+            ("__cobrust_redis_client_get", redis_get_ty, 2),
+            ("__cobrust_redis_client_delete", redis_delete_ty, 2),
+            ("__cobrust_redis_client_exists", redis_exists_ty, 2),
+            ("__cobrust_redis_client_drop", redis_drop_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
+
         // -- ADR-0072 8/8 first proof: coil ecosystem-module C-ABI binding ----
         // `coil` (numpy ndarray foundation, ecosystem rebrand of Python's
         // `numpy` library). EIGHTH and final cobra-batch module — completes

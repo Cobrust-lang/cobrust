@@ -1,0 +1,141 @@
+//! ADR-0078 Phase-1c — the LIVE round-trip `.cb` e2e for the `redis`
+//! ecosystem-import wiring. Self-SKIPS when no redis server is reachable
+//! (CI has none), mirroring the cross-target / python-version self-skip
+//! pattern (a runtime probe + a clean `eprintln!` + `return`, since Rust
+//! has no first-class runtime `#[ignore]`).
+//!
+//! When a redis IS reachable (local dev, or a CI redis service-container
+//! reachable at `$REDIS_URL` or `127.0.0.1:6379`), this runs the full
+//! `set "greeting" "hello"` → `get` (prints `hello`) → `delete` (prints
+//! `1`) → `exists` (prints `False`) round-trip and asserts the printed
+//! values — the ADR-0078 Phase-1c done-means #2.
+//!
+//! The hermetic, always-on proof of the wiring + the error path is
+//! `redis_fail_clean_e2e.rs` (server-less); this file adds the
+//! best-effort live confirmation on top.
+
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+
+use std::net::{TcpStream, ToSocketAddrs};
+use std::process::Command;
+use std::time::Duration;
+
+/// The redis URL the live test targets. `$REDIS_URL` overrides the
+/// `127.0.0.1:6379` loopback default (so a CI service-container can point
+/// the test at its address). Loopback `127.0.0.1` is not a real host.
+fn redis_url() -> String {
+    std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string())
+}
+
+/// Extract `host:port` from a `redis://host:port/...` URL for the TCP
+/// reachability probe. Best-effort; defaults the port to 6379.
+fn host_port(url: &str) -> String {
+    let rest = url
+        .strip_prefix("redis://")
+        .or_else(|| url.strip_prefix("rediss://"))
+        .unwrap_or(url);
+    // Drop any `user:pass@` credentials prefix.
+    let rest = rest.rsplit('@').next().unwrap_or(rest);
+    // Drop the `/db` path + any query.
+    let authority = rest.split(['/', '?']).next().unwrap_or(rest);
+    if authority.contains(':') {
+        authority.to_string()
+    } else {
+        format!("{authority}:6379")
+    }
+}
+
+/// Probe whether a redis server is reachable at `host:port` within a
+/// short timeout. Returns `false` (→ self-skip) on any resolution /
+/// connect failure — the no-server CI path.
+fn redis_reachable(host_port: &str) -> bool {
+    let Ok(mut addrs) = host_port.to_socket_addrs() else {
+        return false;
+    };
+    let Some(addr) = addrs.next() else {
+        return false;
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+}
+
+/// Compile + link + run a `.cb` source, returning its stdout. Asserts
+/// the build and the run both succeed.
+fn build_and_run_source(source: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let src_path = dir.path().join("prog.cb");
+    std::fs::write(&src_path, source).unwrap();
+    let exe = dir.path().join("prog");
+    let bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_cobrust"));
+    let build = Command::new(&bin)
+        .arg("build")
+        .arg(&src_path)
+        .arg("-o")
+        .arg(&exe)
+        .arg("--quiet")
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&exe).current_dir(dir.path()).output().unwrap();
+    assert!(
+        run.status.success(),
+        "run failed: {:?}\nstderr: {}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    String::from_utf8_lossy(&run.stdout).into_owned()
+}
+
+/// ADR-0078 Phase-1c done-means #2 — the live KV round-trip. Self-skips
+/// (clean `return`) when no redis is reachable, so CI (no server) is
+/// green; runs the full assert when a server is present.
+///
+/// The `.cb` program uses a process-unique key so a shared dev/CI redis
+/// is not polluted across concurrent runs, and `delete`s it at the end.
+#[test]
+fn test_e2e_redis_live_round_trip_or_skip() {
+    let url = redis_url();
+    let hp = host_port(&url);
+    if !redis_reachable(&hp) {
+        eprintln!(
+            "redis_live_e2e: skipping cleanly: no redis server reachable at {hp} \
+             (set REDIS_URL to a reachable redis://host:port/ to run the live round-trip)"
+        );
+        return;
+    }
+
+    // Process-unique key so concurrent runs / a shared server don't
+    // collide. (std::process::id is stable for the test process.)
+    let key = format!("cobrust:redis_live_e2e:{}", std::process::id());
+
+    let source = format!(
+        concat!(
+            "import redis\n",
+            "\n",
+            "fn main() -> i64:\n",
+            "    let client = redis.connect(\"{url}\")\n",
+            "    client.set(\"{key}\", \"hello\")\n",
+            "    let v: str = client.get(\"{key}\")\n",
+            "    let n: i64 = client.delete(\"{key}\")\n",
+            "    let present: bool = client.exists(\"{key}\")\n",
+            "    print(v)\n",
+            "    print(n)\n",
+            "    print(present)\n",
+            "    return 0\n",
+        ),
+        url = url,
+        key = key,
+    );
+
+    let stdout = build_and_run_source(&source);
+    // get prints the stored value; delete removes exactly 1 key; exists
+    // is then False (the key was just deleted).
+    assert_eq!(
+        stdout, "hello\n1\nFalse\n",
+        "live redis round-trip: set/get/delete/exists"
+    );
+}

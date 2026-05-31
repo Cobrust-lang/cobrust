@@ -22,6 +22,7 @@ members = [
     "crates/cobrust-hood",
     "crates/cobrust-dora",
     "crates/cobrust-fang",
+    "crates/cobrust-redis",
     "crates/cobrust-types-parity",
     "crates/cobrust-types-cb",
     "crates/cobrust-lsp",
@@ -100,6 +101,14 @@ axum = "0.7"
 # Z.0.b was slated to pin this in the workspace audit; landed here with
 # the first DB-connector crate since the audit had not reached this branch.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# v0.7.0 / ADR-0078 Phase-1c — `cobrust-redis` (cache/KV) backend.
+# redis-rs SYNC path only (`Client::open` -> `get_connection` ->
+# `Commands`); `default-features = false` drops the default
+# acl/streams/geospatial/script/num-bigint extras so NO async runtime
+# (tokio) is pulled — keeps the build light + the cross-builds green
+# (ADR-0078 §3.5). License BSD-3-Clause (first non-Apache/MIT wrapped
+# crate; attribution in crates/cobrust-redis/{PROVENANCE.toml,NOTICE}).
+redis = { version = "1.2", default-features = false }
 sha2 = "0.10"
 blake3 = "1.5"
 hex = "0.4"

@@ -1,0 +1,71 @@
+[source]
+library = "redis"
+# redis-rs crate version wrapped; SYNC path only (Client::open ->
+# get_connection -> Commands). NOT the async/aio path.
+version = "1.2"
+backend = "redis-rs 1.2 (sync Client/Connection/Commands; default-features = false, no tokio)"
+# redis-rs is BSD-3-Clause — the FIRST non-(Apache-2.0/MIT) crate in the
+# Cobrust wrap-a-crate set (ADR-0078 §5 R1). Permissive + non-copyleft,
+# so distribution-compatible with the dual Apache-2.0 OR MIT workspace
+# license; the BSD-3 attribution clause is satisfied by the NOTICE file
+# beside this manifest. License confirmed via `cargo info redis` +
+# https://github.com/redis-rs/redis-rs (LICENSE), 2026-06-01.
+dependency_license = "BSD-3-Clause"
+dependency_license_notice = "NOTICE"
+file_count = 4
+
+[oracle]
+runtime = "redis-py"
+runtime_version = "canonical KV surface"
+oracle_module = "redis"
+# The KV verbs are PEP-less but redis-py canonical: r.set(k, v) /
+# r.get(k) / r.delete(k) / r.exists(k). The §2.5 training-data target is
+# the redis-py surface (un-suffixed set/get/delete/exists).
+
+[verification]
+seeds = [42, 1337, 3735928559]
+fuzz_inputs_per_fn = 1000
+# @py_compat tier: `semantic`. The surface preserves the redis KV
+# behaviour (set/get/delete/exists) but it is not `strict` byte-for-byte
+# parity (see divergences below).
+py_compat = "semantic"
+divergences = [
+    "Errors are returned as a fail-clean sentinel (empty-str / 0 / false) at the C-ABI boundary, NOT raised as the redis-py exception hierarchy (constitution §2.2). A connect failure yields a disconnected-sentinel Client whose every command returns the per-type sentinel, never a null handle, never a panic.",
+    "get on a missing key renders the empty-string sentinel ('absent == empty'); the first proof cannot distinguish a deliberately-stored empty value from an absent key. An Option<str>-across-C-ABI surface is the §2.2-correct follow-up (ADR-0078 §2.3-1).",
+    "The first-proof value type is fixed to `str` (set/get carry str values). Typed get_int / get_bytes siblings are a follow-up (ADR-0078 §2.3-2); the un-suffixed names are kept for the §2.5 redis-py training-data overlap.",
+    "The .cb method name `delete`/`exists` are the readable redis-py-idiom verbs; the redis-rs methods underneath are `del`/`exists`. `set` returns () (side effect, no second drop-eligible handle minted).",
+    "A sync redis::Connection is !Send (single TCP connection, single-threaded use) — matches den's !Send Connection constraint (ADR-0072 §5 R2). The .cb object model is single-threaded for ecosystem handles today; sharing one Client across pit async handlers is unsafe and forces a connection pool (ADR-0078 §5 R3, a deferred follow-up).",
+]
+known_failures = []
+
+[router]
+# Translation was synthetic-LLM (hand-authored to the redis-py KV spec +
+# the den/strike handle-pattern template, not produced by the closed-loop
+# production pipeline), consistent with the ecosystem-batch precedent
+# (cobrust-strike / cobrust-den). Real-LLM pipeline rerun is queued for a
+# later phase.
+strategy = "synthetic-llm"
+models_used = ["synthetic:redis-canned-v1"]
+ledger_entries = 0
+notes = "Translation was synthetic-LLM; real-LLM pipeline rerun pending."
+
+[build]
+toolchain = "rustc 1.94.1"
+deterministic_id = "synthetic:hand-authored"
+crate_layout_version = 1
+
+[gates]
+l0_spec_emitted = true
+l1_files_emitted = 4
+l2_build = "pass (cargo build -p cobrust-redis zero warnings)"
+l2_behavior = "pass (src/cabi.rs + src/client.rs unit tests assert fail-clean sentinels + null-tolerance + DROP_COUNT exactly-once, server-less; tests/redis_fail_clean_e2e.rs always-on vertical slice; tests/redis_live_e2e.rs live round-trip self-skips when no server reachable)"
+l2_perf = "pass (surface-translate / Rust-binding tier per ADR-0022 §6; binding overhead negligible — redis-rs is the perf reference)"
+l3_pyo3_wrapper = "pass (src/pyo3_bindings.rs); --features pyo3 build path per ADR-0011 + ADR-0022"
+l3_downstream_dependents = "deferred — first cache/KV connector of the ADR-0078 Phase-1c stream; downstream (celery/rq/django-cache) widen once the pit-redis shared-connection pool question is resolved (ADR-0078 §5 R3)"
+
+[gates.dependents]
+covered = []
+deferred = ["celery", "rq", "django-cache"]
+deferred_reason = "ADR-0078 Phase-1c ships the minimum cache/KV connector surface (connect + 4 KV verbs); downstream dependents widen after the connection-pool follow-up"
+skipped = []
+skipped_reason = ""

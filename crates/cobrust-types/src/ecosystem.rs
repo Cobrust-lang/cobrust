@@ -153,6 +153,22 @@ pub const DORA_EVENT_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x601);
 /// `0xE000_0700..0xE000_07FF`).
 pub const COIL_BUFFER_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x700);
 
+// ADR-0078 Phase-1c — `redis` (cache/KV, the redis-py rebrand) handle
+// ADT block reservation. The NINTH per-module 256-slot block
+// (`0xE000_0800..0xE000_08FF`) — the next free block past coil's
+// `0x700` (the `0x200` scale gap is deliberately NOT reused: blocks
+// stay monotonic with allocation order to match every existing comment
+// + the per-block range assertions). `redis` ships ONE handle in its
+// first proof — `Client`, a den.Connection-shaped wrapper over a single
+// sync `redis::Connection` — wired off the proven den/strike handle
+// chain (no callbacks; the sync path needs no async-收编, ADR-0078 §3.5).
+// `0x801`+ stay free for a future `redis.Pipeline` / `redis.PubSub`.
+
+/// `AdtId` for the `redis.Client` handle (ADR-0078 Phase-1c — cache/KV
+/// over redis-rs sync path; the NINTH per-module 256-slot block
+/// `0xE000_0800..0xE000_08FF`).
+pub const REDIS_CLIENT_ADT: AdtId = AdtId(ECO_ADT_BASE + 0x800);
+
 /// The Cobrust `Ty` for the `den.Connection` opaque handle.
 #[must_use]
 pub fn den_connection_ty() -> Ty {
@@ -277,6 +293,13 @@ pub fn coil_buffer_ty() -> Ty {
     Ty::Adt(COIL_BUFFER_ADT, vec![])
 }
 
+/// The Cobrust `Ty` for the `redis.Client` opaque handle (ADR-0078
+/// Phase-1c — cache/KV; wraps a sync `redis::Connection`).
+#[must_use]
+pub fn redis_client_ty() -> Ty {
+    Ty::Adt(REDIS_CLIENT_ADT, vec![])
+}
+
 /// The Cobrust `Ty` for the `dora.Node` opaque handle (ADR-0076 Phase 1).
 #[must_use]
 pub fn dora_node_ty() -> Ty {
@@ -345,6 +368,10 @@ pub fn handle_drop_symbol(id: AdtId) -> Option<&'static str> {
         // (ADR-0073 §2 D6, mirrors PIT_REQUEST_ADT pattern). The
         // trampoline allocates + frees the `Box<DoraEventHandle>` per
         // callback invocation.
+        // ADR-0078 Phase-1c — redis.Client opaque handle (eleventh
+        // ecosystem module). Dropping the Client closes the underlying
+        // sync TCP connection (RAII — no forgot-to-close footgun).
+        REDIS_CLIENT_ADT => Some("__cobrust_redis_client_drop"),
         _ => None,
     }
 }
@@ -896,6 +923,19 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Str,
             PyCompatTier::Semantic,
         )),
+        // ADR-0078 Phase-1c — `redis` (cache/KV, the redis-py rebrand).
+        // The free-function entrypoint `connect(url) -> Client` mirrors
+        // `den.connect` (a stateful-resource handle from a single URL).
+        // Tier `Semantic` — redis KV behaviour is preserved but not
+        // bit-for-bit CPython parity (errors are fail-clean sentinels per
+        // constitution §2.2, not the redis-py exception hierarchy). The
+        // four `Client` methods are wired in `lookup_handle_method`.
+        ("redis", "connect") => Some(EcoSig::from_values(
+            "__cobrust_redis_connect",
+            vec![Ty::Str],
+            redis_client_ty(),
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -1301,6 +1341,41 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             Ty::Float,
             PyCompatTier::Semantic,
         )),
+        // ADR-0078 Phase-1c — `redis.Client` handle methods (the four
+        // Phase-A KV verbs). All BORROW the receiver (the cabi shim takes
+        // `&mut` internally — redis sync command methods take `&mut self`;
+        // the borrow is invisible to the `.cb` aliasing model, exactly
+        // like sequential `conn.execute` calls). The `.cb` names are the
+        // readable redis-py-idiom verbs (`set`/`get`/`delete`/`exists`,
+        // §2.5-aligned); `set` returns `None` (side effect — no second
+        // drop-eligible handle minted, mirrors pit `app.route`); `get`
+        // returns the str value ("" sentinel if absent, ADR-0078 §2.3-1);
+        // `delete` returns the i64 count removed; `exists` returns a bool.
+        (REDIS_CLIENT_ADT, "set") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_set",
+            // Receiver implicit; explicit params are the key + value strs.
+            vec![Ty::Str, Ty::Str],
+            Ty::None,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "get") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_get",
+            vec![Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "delete") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_delete",
+            vec![Ty::Str],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "exists") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_exists",
+            vec![Ty::Str],
+            Ty::Bool,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -1643,7 +1718,17 @@ pub fn lookup_validated_body_accessor(field_ty: &Ty) -> Option<EcoSig> {
 pub fn is_ecosystem_module(name: &str) -> bool {
     matches!(
         name,
-        "den" | "nest" | "strike" | "scale" | "molt" | "pit" | "hood" | "coil" | "dora" | "fang"
+        "den"
+            | "nest"
+            | "strike"
+            | "scale"
+            | "molt"
+            | "pit"
+            | "hood"
+            | "coil"
+            | "dora"
+            | "fang"
+            | "redis"
     )
 }
 
@@ -2235,6 +2320,70 @@ mod tests {
             handle_drop_symbol(COIL_BUFFER_ADT),
             Some("__cobrust_coil_buffer_drop")
         );
+    }
+
+    // ADR-0078 Phase-1c — `redis` (cache/KV, the redis-py rebrand). The
+    // ELEVENTH ecosystem module; the NINTH per-module 256-slot ADT block
+    // (`0xE000_0800..0xE000_08FF`).
+
+    #[test]
+    fn redis_is_a_known_module() {
+        assert!(is_ecosystem_module("redis"));
+    }
+
+    #[test]
+    fn redis_client_id_recognized_and_in_reserved_block() {
+        assert!(is_ecosystem_handle(REDIS_CLIENT_ADT));
+        // Per-module 256-slot reservation: redis lives in the NINTH
+        // block (`0xE000_0800..0xE000_08FF`), the next free block past
+        // coil's `0x700` (the `0x200` scale gap is deliberately NOT
+        // reused — blocks stay monotonic with allocation order).
+        const _: () = {
+            assert!(REDIS_CLIENT_ADT.0 >= ECO_ADT_BASE + 0x800);
+            assert!(REDIS_CLIENT_ADT.0 < ECO_ADT_BASE + 0x900);
+        };
+    }
+
+    #[test]
+    fn redis_client_drop_symbol_resolves() {
+        assert_eq!(
+            handle_drop_symbol(REDIS_CLIENT_ADT),
+            Some("__cobrust_redis_client_drop")
+        );
+    }
+
+    #[test]
+    fn redis_connect_signature_returns_client_handle() {
+        let sig = lookup_module_fn("redis", "connect").expect("redis.connect in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_redis_connect");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Str]);
+        assert_eq!(sig.ret, redis_client_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn redis_client_methods_resolve_with_expected_shapes() {
+        let recv = redis_client_ty();
+
+        let set = lookup_handle_method(&recv, "set").expect("Client.set in manifest");
+        assert_eq!(set.runtime_symbol, "__cobrust_redis_client_set");
+        assert_eq!(value_tys(&set.params), vec![Ty::Str, Ty::Str]);
+        assert_eq!(set.ret, Ty::None);
+
+        let get = lookup_handle_method(&recv, "get").expect("Client.get in manifest");
+        assert_eq!(get.runtime_symbol, "__cobrust_redis_client_get");
+        assert_eq!(value_tys(&get.params), vec![Ty::Str]);
+        assert_eq!(get.ret, Ty::Str);
+
+        let delete = lookup_handle_method(&recv, "delete").expect("Client.delete in manifest");
+        assert_eq!(delete.runtime_symbol, "__cobrust_redis_client_delete");
+        assert_eq!(value_tys(&delete.params), vec![Ty::Str]);
+        assert_eq!(delete.ret, Ty::Int);
+
+        let exists = lookup_handle_method(&recv, "exists").expect("Client.exists in manifest");
+        assert_eq!(exists.runtime_symbol, "__cobrust_redis_client_exists");
+        assert_eq!(value_tys(&exists.params), vec![Ty::Str]);
+        assert_eq!(exists.ret, Ty::Bool);
     }
 
     #[test]
