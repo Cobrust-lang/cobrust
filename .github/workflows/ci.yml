@@ -154,17 +154,40 @@ jobs:
               break
             fi
           done
-      # Pre-build the workspace — crucially the ecosystem `lib<mod>.a`
-      # staticlibs (libcoil.a, libscale.a, libden.a, ...) — BEFORE the parallel
-      # `cargo test` phase. Each ecosystem e2e's `cobrust build` invokes
-      # `cargo build -p cobrust-<mod>` on-demand (cli/src/build.rs Phase-2); run
-      # concurrently across test binaries that RACES — one process truncates
-      # lib<mod>.a mid-write while a sibling `clang`-links it
-      # (`clang: error: no such file: libcoil.a`, CI 26693573627 + 26694248379;
-      # sibling libscale.a race CI 26580282088). Pre-building makes those
-      # on-demand builds NO-OPS (cargo sees the .a up-to-date → never rewrites
-      # it → no truncation window). `--jobs 2` keeps the F72 anti-OOM ceiling.
+      # Eliminate the ecosystem `lib<mod>.a` concurrent-rebuild race at its
+      # SOURCE. Each ecosystem e2e's `cobrust build` resolves the staticlib via
+      # cli/src/build.rs `locate_ecosystem_archive`: Phase-1 honours a
+      # `COBRUST_ECOSYSTEM_ARCHIVE_<MOD>` env override; Phase-2 (the dev
+      # fallback) shells out to `cargo build -p cobrust-<mod>`. Run concurrently
+      # across the parallel `cargo test` binaries, those Phase-2 cargo
+      # invocations RACE — one removes+rewrites lib<mod>.a while a sibling
+      # `clang`-links it (`ld: file cannot be open()ed, errno=2`, CI
+      # 26709832072; earlier `no such file: libcoil.a` 26693573627/26694248379;
+      # sibling libscale.a 26580282088).
+      #
+      # Pre-building ALONE does NOT close it: `cargo test`'s own compile phase
+      # re-fingerprints the staticlib crates, so the first wave of `cobrust
+      # build`s still judge them stale and all race to rebuild (proven by
+      # 26709832072 recurring AFTER the pre-build landed). The fix is to PRE-
+      # BUILD, then STAGE the fresh archives into the Phase-1 env so every
+      # `cobrust build` short-circuits to the prebuilt .a and NEVER spawns
+      # cargo. `--jobs 2` keeps the F72 anti-OOM ceiling.
       - run: cargo build --workspace --locked --jobs 2
+      # Stage every freshly-built ecosystem staticlib into its Phase-1 env
+      # override. The vars are read only for actually-imported modules, so
+      # over-setting is inert and auto-covers future ecosystem crates (zero
+      # per-module maintenance). In-job + same-commit ⇒ no F44 staleness.
+      - name: Stage prebuilt ecosystem archives (close cobrust-build race)
+        shell: bash
+        run: |
+          for a in target/debug/lib*.a; do
+            [ -e "$a" ] || continue
+            mod=$(basename "$a" .a); mod=${mod#lib}
+            case "$mod" in *stdlib*) continue;; esac  # stdlib: COBRUST_STDLIB_ARCHIVE
+            key="COBRUST_ECOSYSTEM_ARCHIVE_$(printf '%s' "$mod" | tr '[:lower:]' '[:upper:]')"
+            echo "$key=$PWD/$a" >> "$GITHUB_ENV"
+            echo "staged $key -> $PWD/$a"
+          done
       - run: cargo test --workspace --locked
         # Note: per `findings/m9-cross-arch-9ff481c-regression.md`,
         # Linux x86_64 is the gold-standard cross-arch validator;
