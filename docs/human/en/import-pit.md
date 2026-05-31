@@ -430,8 +430,95 @@ What you get:
 
 The nested `Address.zip.maximum` of `99999` is the **exact** bound the recursive
 validator enforces (it rejects a nested `zip: 100000`) — both read from one
-source, so the nested schema cannot drift either. Scope today is nested
-**objects**; `list[T]` fields and optional/`None` nested fields are later phases.
+source, so the nested schema cannot drift either. Scope is nested **objects**;
+`list[T]` collection fields now ship too (see below); optional/`None` nested
+fields are a later phase.
+
+## List (collection) bodies (ADR-0080 Phase 4 (c), #156)
+
+A body field can be a **list** — `list[str]`, `list[i64]`, or even a list of a
+validated class (`list[OrderLine]`). Real APIs are full of these (`tags`,
+`scores`, line-items). pit checks the field is a JSON **array** and validates
+**every element** against the element type — a scalar element by type (and any
+element-class refinement), a class element **recursively** (the same engine the
+nested-object section uses). The OpenAPI doc shows `{type: array, items: …}`.
+
+```python
+class OrderLine:                       # the element class
+    sku: str
+    qty: i64 where 1 <= self and self <= 999
+
+class CreateOrder:                     # flat + scalar-list + object-list fields
+    note: str
+    tags: list[str]
+    scores: list[i64]
+    lines: list[OrderLine]
+
+fn create_order(req: pit.Request, body: CreateOrder) -> pit.Response:
+    # Reached only if every element of every list validated.
+    return pit.text_response(201, "ok")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/orders", create_order)
+    let _ = app.serve_openapi("/openapi.json")
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+What you get:
+
+- **Each element is type-checked.** Each of these is a `422` (handler never
+  entered):
+  - `{"note":"x","tags":["a",42],…}` — a number in a `list[str]` (the failing
+    element is named — ``field `tags[1]` must be of type string``);
+  - `{"note":"x","scores":[1,"x"],…}` — a string in a `list[i64]` (the element
+    base type is enforced even with **no** element refinement);
+  - `{"note":"x","tags":"oops",…}` — the field is not an array at all
+    (``field `tags` must be of type array``).
+- **Class elements validate recursively.** For `lines: list[OrderLine]`, each
+  of these is a `422`:
+  - `{… ,"lines":[{"sku":"s1","qty":9999}]}` — element over the `qty <= 999`
+    bound (the element-class refinement is enforced);
+  - `{… ,"lines":[{"qty":5}]}` — element missing `sku`;
+  - `{… ,"lines":["oops"]}` — element is not an object;
+  - `{… ,"lines":[{"sku":"s1","qty":5,"color":"red"}]}` — element **extra** key.
+- **An empty list is valid.** `{"note":"x","tags":[],"scores":[],"lines":[]}`
+  returns `201` — an empty array is not "missing" and not "wrong type".
+- **The OpenAPI doc shows `array` + `items`.** A scalar list's items carry the
+  element type; an object list's items are a `$ref` to the element component,
+  which is registered separately (with the same bounds the validator enforces):
+
+```json
+{
+  "components": {
+    "schemas": {
+      "CreateOrder": {
+        "type": "object",
+        "properties": {
+          "note":   { "type": "string" },
+          "tags":   { "type": "array", "items": { "type": "string" } },
+          "scores": { "type": "array", "items": { "type": "integer" } },
+          "lines":  { "type": "array", "items": { "$ref": "#/components/schemas/OrderLine" } }
+        }
+      },
+      "OrderLine": {
+        "type": "object",
+        "properties": {
+          "sku": { "type": "string" },
+          "qty": { "type": "integer", "minimum": 1, "maximum": 999 }
+        }
+      }
+    }
+  }
+}
+```
+
+The element component's `OrderLine.qty.maximum` of `999` is the **exact** bound
+the per-element validator enforces — one source, so the element schema cannot
+drift. Scope is `list[<scalar>]` + `list[<class>]`; list-of-list
+(`list[list[T]]`), `dict`, optional/`None` lists, and element-count bounds
+(`minItems`/`maxItems`) are later phases.
 
 ## Full worked example
 
@@ -480,13 +567,18 @@ endpoints, the curl session, and the live E2E
   (`body.rank`, `body.name`) now ship too (ADR-0081). **Nested-class bodies**
   (a field typed as another validated class, recursively validated, one or more
   levels deep) now ship too (ADR-0080 Phase 4, #156 — see "Nested object
-  bodies" above). `f64` / `bool` field reads and `list[T]` / optional nested
-  fields are later phases.
+  bodies" above). **List (collection) bodies** (a `list[<scalar>]` or
+  `list[<class>]` field, every element validated) now ship too (ADR-0080
+  Phase 4 (c), #156 — see "List (collection) bodies" above). `f64` / `bool`
+  field reads, list / nested-class field reads, optional/`None` fields, and
+  `list[list[T]]` / `dict` are later phases.
 - **OpenAPI** (`serve_openapi`, ADR-0080): the doc covers the body schema of
   each validated route — type plus int-range `minimum`/`maximum`,
-  str-length `minLength`/`maxLength`, and `pattern`. The list-field
-  `maxItems` form follows the validator's later phase; the served doc is a
-  Rust-assembled JSON string (not yet a `.cb`-struct serialization).
+  str-length `minLength`/`maxLength`, `pattern`, nested-class `$ref`, and
+  list fields as `{type: array, items: …}` (scalar item type or an element
+  `$ref`). The element-COUNT `minItems`/`maxItems` form is a later phase; the
+  served doc is a Rust-assembled JSON string (not yet a `.cb`-struct
+  serialization).
 - **`pit.Request` accessors not yet wired**: the handler must construct
   the Response without reading the Request's path/method/body. A paired
   follow-up adds the borrow shims.

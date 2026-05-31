@@ -709,6 +709,83 @@ to `Address` + a separate `Address` component with `zip:{minimum:0,maximum:99999
 Cannot-drift cross-check: the nested-zip 422 AND the advertised nested `maximum:99999`,
 from one source.
 
+## ADR-0080 §6 Phase-4 (c) / #156 — list[T] COLLECTION bodies (the `list:` element token)
+
+A body field typed `list[T]` is now array-checked + EACH element recursively validated,
+and emitted as `{"type":"array","items":…}` (previously: lowered to kind `any`,
+presence-only + empty schema). REUSES the Phase-4 (b) machinery for `list[<Class>]`
+elements. Scope = `list[<scalar>]` (`str`/`i64`/`f64`/`bool`) + `list[<Class>]`;
+`list[list[T]]` / `dict[K,V]` / Optional list / element-COUNT (`minItems`/`maxItems`)
+stay DEFERRED.
+
+```text
+class OrderLine:                     # the element validated class
+    sku: str
+    qty: i64 where 1 <= self and self <= 999
+
+class CreateOrder:                   # flat + scalar-list + object-list fields
+    note: str
+    tags: list[str]                  # list[scalar]  → list:str
+    scores: list[i64]                # list[scalar]  → list:i64 (no elem refinement)
+    lines: list[OrderLine]           # list[Class]   → list:obj:OrderLine + an # OrderLine block
+
+fn create_order(req: pit.Request, body: CreateOrder) -> pit.Response:
+    return pit.text_response(201, "ok")   # reached only if every element validated
+```
+
+The CTO-locked design (D1-D4), each preserving cannot-drift (footgun #4):
+
+- **D1 — the `list:<elem-payload>` token (`mir::lower::emit_class_block` +
+  the new `element_payload` / `obj_element_payload`).** A `list[T]` field's payload is
+  `list:<elem-payload>`, where elem-payload is T's OWN payload: a scalar kind, OR
+  `obj:<ClassName>` for `list[SomeClass]` (whose block is emitted by the SAME BFS — the
+  shared `obj_element_payload` enqueues the element class, so the direct-nested and
+  list-element `obj:` token + enqueue have ONE source). Examples: `tags\tlist:str`,
+  `scores\tlist:i64`, `lines\tlist:obj:OrderLine` + an `# OrderLine` block. A list
+  element carries NO refinement suffix (element-level refinement is DEFERRED; a
+  `list[i64]` element is bare `i64`). A `list[<deferred-elem>]` (`list[list[T]]`) →
+  `any` (`element_payload` returns `None`). A FLAT/scalar/nested-object body with NO
+  list field is BYTE-IDENTICAL (the `Ty::List` arm never fires).
+- **D2 — recursive decode (`validation::parse_field_payload` + `FieldKind::List(Box<FieldSpec>)`).**
+  `list:<rest>` is parsed by RECURSIVELY parsing `<rest>` as the element spec (the
+  element shares the parent field's `name` placeholder). The MIR ENCODE
+  (`element_payload`) and this DECODE are mirror inverses — pinned by
+  `list_scalar_descriptor_round_trips` + `list_obj_element_descriptor_round_trips`.
+  `FieldKind` dropped `Eq` (the embedded `FieldSpec` carries `f64` bounds —
+  `PartialEq`-not-`Eq`); `FieldSpec` gained `Clone` + `PartialEq`. Every use site
+  matches `&spec.kind`; no `HashMap`/`HashSet` key bounds it `: Eq`.
+- **D3 — array + per-element validation (`validation::check_field` `List` arm).** A
+  `List(elem_spec)` field's JSON value MUST be a JSON ARRAY (else `WrongType` 422,
+  `expected:"array"`); EACH element is validated against a CLONE of the element spec
+  (name `<field>[<i>]`, §2.5-B) by RECURSING into `check_field` — a scalar element via
+  the scalar path, an `obj:<Name>` element by recursing into the named block (REUSING
+  `validate_block` + the SAME `MAX_NESTING_DEPTH` cap; `depth` is threaded unchanged
+  because the array is not a JSON-object nesting level). An EMPTY array is VALID.
+  Missing/extra/out-of-range object-element fields reuse the existing policies.
+- **D4 — OpenAPI `array`+`items` + element component (`openapi::field_schema` +
+  `build_openapi_doc`).** A `List(elem_spec)` field renders as
+  `{"type":"array","items":<elem-schema>}`, where `<elem-schema>` is the element spec's
+  own `field_schema` (a scalar `{type:…}` OR a `$ref` for a `list[SomeClass]` element).
+  The element class registers as its OWN `components/schemas/<name>` via the SAME
+  `parse_schema_blocks` BFS (no second source). The element component advertises the
+  SAME bound the per-element validator enforces.
+
+PREREQUISITE: already cleared by Phase-4 (b) — a no-value `list[T]` class field
+type-checks today via the SAME `check_class` field-`let` skip (it admits the no-value
+form for collection fields too). So there is NO type-check prerequisite for the
+collection slice; the RED was PURELY behavioral.
+
+Done-means (verified, the live collection-body E2E `pit_collection_body_e2e.rs`,
+5 tests): `POST /orders {"note":"x","tags":["a","b"],"scores":[1,2],"lines":[{"sku":"s1","qty":5}]}`
+→ 201 + handler entered; scalar-element classes (number in `list[str]` → `tags[1]`,
+string in `list[i64]` → `scores[1]`, non-array `tags:"oops"`) + object-element classes
+(element `qty:9999` > 999, element missing `sku`, non-object element, element extra
+`color`) → 422 NOT entered; empty lists → 201; `GET /openapi.json` shows
+`tags:{type:array,items:{type:string}}`, `scores:{type:array,items:{type:integer}}`,
+`lines:{type:array,items:{$ref:…/OrderLine}}` + a separate `OrderLine` component with
+`qty:{minimum:1,maximum:999}`. Cannot-drift cross-check: the element-qty 422 AND the
+advertised element `maximum:999`, from one source.
+
 ## Cross-references
 
 - `mod:strike` — sister ecosystem crate (HTTP-client precedent +

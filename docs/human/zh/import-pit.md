@@ -400,8 +400,91 @@ fn main() -> i64:
 
 嵌套的 `Address.zip.maximum` 的 `99999` 与递归校验器强制执行的边界**完全
 一致**(它会拒绝嵌套的 `zip: 100000`)—— 二者都从同一来源读取,因此嵌套
-schema 也不会漂移。当前范围是嵌套**对象**;`list[T]` 字段与可选 / `None`
-嵌套字段属于后续阶段。
+schema 也不会漂移。范围是嵌套**对象**;`list[T]` 集合字段现也已落地(见
+下文);可选 / `None` 嵌套字段属于后续阶段。
+
+## 列表(集合)请求体(ADR-0080 第 4(c) 阶段,#156)
+
+请求体的一个字段可以是**列表** —— `list[str]`、`list[i64]`,甚至是一个带
+校验 class 的列表(`list[OrderLine]`)。真实 API 里到处都是这种字段(`tags`、
+`scores`、订单行)。pit 会检查该字段是一个 JSON **数组**,并对**每个元素**
+按元素类型校验 —— 标量元素按类型(以及任意元素类的 refinement)校验,class
+元素则**递归**校验(与上面嵌套对象一节同一套引擎)。OpenAPI 文档显示
+`{type: array, items: …}`。
+
+```python
+class OrderLine:                       # 元素 class
+    sku: str
+    qty: i64 where 1 <= self and self <= 999
+
+class CreateOrder:                     # 平坦字段 + 标量列表 + 对象列表字段
+    note: str
+    tags: list[str]
+    scores: list[i64]
+    lines: list[OrderLine]
+
+fn create_order(req: pit.Request, body: CreateOrder) -> pit.Response:
+    # 只有当每个列表的每个元素都校验通过时才会到达这里。
+    return pit.text_response(201, "ok")
+
+fn main() -> i64:
+    let app = pit.App()
+    let _ = app.route_validated("POST", "/orders", create_order)
+    let _ = app.serve_openapi("/openapi.json")
+    let _exit = app.run("127.0.0.1", 8080)
+    return 0
+```
+
+你能用到的:
+
+- **每个元素都被类型检查。** 下面每一种都是 `422`(handler 永不进入):
+  - `{"note":"x","tags":["a",42],…}` —— `list[str]` 里出现数字(出错的元素被
+    点名 —— ``field `tags[1]` must be of type string``);
+  - `{"note":"x","scores":[1,"x"],…}` —— `list[i64]` 里出现字符串(即使**没有**
+    元素 refinement,元素基类型也被强制执行);
+  - `{"note":"x","tags":"oops",…}` —— 该字段根本不是数组
+    (``field `tags` must be of type array``)。
+- **class 元素被递归校验。** 对 `lines: list[OrderLine]`,下面每一种都是 `422`:
+  - `{… ,"lines":[{"sku":"s1","qty":9999}]}` —— 元素超过 `qty <= 999` 边界
+    (元素类的 refinement 被强制执行);
+  - `{… ,"lines":[{"qty":5}]}` —— 元素缺少 `sku`;
+  - `{… ,"lines":["oops"]}` —— 元素不是对象;
+  - `{… ,"lines":[{"sku":"s1","qty":5,"color":"red"}]}` —— 元素**多余**键。
+- **空列表是合法的。** `{"note":"x","tags":[],"scores":[],"lines":[]}` 返回
+  `201` —— 空数组既不是"缺失",也不是"类型错误"。
+- **OpenAPI 文档显示 `array` + `items`。** 标量列表的 items 承载元素类型;
+  对象列表的 items 是指向元素组件的 `$ref`,该组件被单独注册(承载与校验器
+  强制执行的同一边界):
+
+```json
+{
+  "components": {
+    "schemas": {
+      "CreateOrder": {
+        "type": "object",
+        "properties": {
+          "note":   { "type": "string" },
+          "tags":   { "type": "array", "items": { "type": "string" } },
+          "scores": { "type": "array", "items": { "type": "integer" } },
+          "lines":  { "type": "array", "items": { "$ref": "#/components/schemas/OrderLine" } }
+        }
+      },
+      "OrderLine": {
+        "type": "object",
+        "properties": {
+          "sku": { "type": "string" },
+          "qty": { "type": "integer", "minimum": 1, "maximum": 999 }
+        }
+      }
+    }
+  }
+}
+```
+
+元素组件的 `OrderLine.qty.maximum` 的 `999` 与逐元素校验器强制执行的边界**完全
+一致** —— 同一来源,因此元素 schema 也不会漂移。范围是 `list[<标量>]` +
+`list[<class>]`;列表套列表(`list[list[T]]`)、`dict`、可选 / `None` 列表、
+以及元素数量上限(`minItems`/`maxItems`)属于后续阶段。
 
 ## 完整示例
 
@@ -445,12 +528,16 @@ E2E(`crates/cobrust-cli/tests/fastapi_real_demo_e2e.rs`)详见其 `README.md`。
   `str` 字段(`body.rank`、`body.name`)现也已落地(ADR-0081)。**嵌套类
   请求体**(一个字段类型为另一个带校验的 class,被递归校验,可深入一层或
   多层)现也已落地(ADR-0080 第 4 阶段,#156 —— 见上面的"嵌套对象请求体")。
-  `f64` / `bool` 字段读取与 `list[T]` / 可选嵌套字段属于后续阶段。
+  **列表(集合)请求体**(一个 `list[<标量>]` 或 `list[<class>]` 字段,每个
+  元素都被校验)现也已落地(ADR-0080 第 4(c) 阶段,#156 —— 见上面的"列表
+  (集合)请求体")。`f64` / `bool` 字段读取、列表 / 嵌套类字段读取、可选 /
+  `None` 字段、以及 `list[list[T]]` / `dict` 属于后续阶段。
 - **OpenAPI**(`serve_openapi`,ADR-0080):文档覆盖每个带校验路由的请求体
   schema —— 类型,加上整数范围 `minimum`/`maximum`、字符串长度
-  `minLength`/`maxLength`、以及 `pattern`。列表字段的 `maxItems` 形式跟随
-  校验器的后续阶段;当前提供的文档是 Rust 组装出来的 JSON 字符串
-  (尚未是 `.cb` 结构体序列化)。
+  `minLength`/`maxLength`、`pattern`、嵌套类 `$ref`,以及列表字段的
+  `{type: array, items: …}`(标量元素类型或元素 `$ref`)。元素数量
+  `minItems`/`maxItems` 形式属于后续阶段;当前提供的文档是 Rust 组装出来的
+  JSON 字符串(尚未是 `.cb` 结构体序列化)。
 - **`pit.Request` 访问器尚未接通**:handler 必须在不读取
   Request 的 path/method/body 的情况下构造 Response。配套 follow-up
   会补齐 borrow 接口。

@@ -261,6 +261,13 @@ impl ValidationError {
 /// integer `lo`/`hi` because an `f64` bound (`0.5`) is not an `i64`.
 /// `pattern` carries the raw regex for a [`FieldKind::Pat`] field
 /// (`pattern`, ADR-0080 Phase-2/3).
+///
+/// `Clone` + `PartialEq` (NOT `Eq`, because `lo_f`/`hi_f` are `f64`) as of
+/// ADR-0080 §6 Phase-4 (c) / #156: a [`FieldKind::List`] embeds the element's
+/// `FieldSpec` (boxed), so the spec must be `Clone` (the validator clones it
+/// per element to name the element index in an error) and the enclosing
+/// `FieldKind` derives `PartialEq` through it.
+#[derive(Clone, PartialEq)]
 pub(crate) struct FieldSpec {
     pub(crate) name: String,
     pub(crate) kind: FieldKind,
@@ -278,11 +285,18 @@ pub(crate) struct FieldSpec {
 }
 
 /// `Clone` (not `Copy`) as of ADR-0080 §6 Phase-4 (b) / #156:
-/// [`Self::Obj`] carries an owned `String` (the nested class name), so the
-/// enum is no longer trivially copyable. SAFE — `FieldKind` is matched
+/// [`Self::Obj`] carries an owned `String` (the nested class name) and
+/// [`Self::List`] (Phase-4 (c)) carries a `Box<FieldSpec>` (the element spec),
+/// so the enum is no longer trivially copyable. SAFE — `FieldKind` is matched
 /// by-reference (`match &spec.kind`) at every use site, and its methods take
 /// `&self`; it is never a `HashMap`/`HashSet` key.
-#[derive(Clone, Eq, PartialEq)]
+/// `PartialEq` only (NOT `Eq`) as of ADR-0080 §6 Phase-4 (c) / #156:
+/// [`Self::List`] embeds a [`FieldSpec`], which carries `f64` bounds
+/// (`lo_f`/`hi_f`) — `f64` is `PartialEq`-but-not-`Eq`. SAFE — `FieldKind` is
+/// only `matches!`-/`==`-compared in tests; it is never a `HashMap`/`HashSet`
+/// key and no site bounds it `: Eq` (mirrors the `Refinement`/`ValidationError`
+/// Eq-drop, same rationale).
+#[derive(Clone, PartialEq)]
 pub(crate) enum FieldKind {
     /// A `str` field. Carries an OPTIONAL length bound in `lo`/`hi`
     /// (ADR-0080 Phase-2: `minLength`/`maxLength`).
@@ -300,6 +314,21 @@ pub(crate) enum FieldKind {
     /// class's block (looked up in the [`parse_schema_blocks`] map). The
     /// `String` is the nested class name (the `# <ClassName>` block header).
     Obj(String),
+    /// A `list[T]` field (ADR-0080 §6 Phase-4 (c) / #156, descriptor token
+    /// `list:<elem-payload>`). The base JSON type is `array`; the JSON value
+    /// MUST be a JSON array, and EACH element is validated against the boxed
+    /// ELEMENT [`FieldSpec`] (a scalar element via the scalar `check_field`
+    /// path, an `obj:<Name>` element by recursing into the named block — the
+    /// element spec's own `kind` discriminates). The `Box<FieldSpec>` is the
+    /// element spec parsed by RECURSIVELY parsing `<elem-payload>` (the part
+    /// after `list:`); its `name` is a placeholder (the descriptor stores no
+    /// element name — the validator/emitter use the PARENT field's name, plus
+    /// the element INDEX in a validation error). `Box` breaks the otherwise-
+    /// infinite type (a `FieldKind` containing a `FieldSpec` containing a
+    /// `FieldKind`); element-of-element (`list[list[T]]`) is OUT of #156 scope
+    /// (the encoder emits `any` for it — D1), so a `List` element spec's own
+    /// kind is never itself a `List` in practice.
+    List(Box<FieldSpec>),
     /// A non-Phase-1b-ii scalar — presence-only (no type/range check).
     Any,
 }
@@ -325,7 +354,7 @@ impl FieldKind {
 
     /// The validation-error label for a wrong-type 422 detail. A `pat` field
     /// is a string (the pattern constrains a string value); an `obj` field is
-    /// an object.
+    /// an object; a `list` field is an array.
     fn type_name(&self) -> &'static str {
         match self {
             Self::Str | Self::Pat => "string",
@@ -333,6 +362,7 @@ impl FieldKind {
             Self::F64 => "number",
             Self::Bool => "boolean",
             Self::Obj(_) => "object",
+            Self::List(_) => "array",
             Self::Any => "any",
         }
     }
@@ -343,16 +373,20 @@ impl FieldKind {
     /// rendered via a `type` keyword at all — the emitter renders it as a
     /// `$ref` to the nested component (ADR-0080 §6 Phase-4 (b), D4), so this
     /// returns `None` for it (the `$ref` path in [`crate::openapi`] handles
-    /// `Obj` before consulting the `type` keyword). An `Any` field (a
-    /// non-Phase-1b-ii scalar) has no statically-known OpenAPI type, so the
-    /// emitter likewise omits the `type` keyword (`None`).
+    /// `Obj` before consulting the `type` keyword). A `List` field is likewise
+    /// NOT rendered through this generic `type` keyword — the emitter renders
+    /// it as `{"type":"array","items":<elem-schema>}` (ADR-0080 §6 Phase-4
+    /// (c), D4), handling `List` before consulting the `type` keyword, so this
+    /// returns `None` for it. An `Any` field (a non-Phase-1b-ii scalar) has no
+    /// statically-known OpenAPI type, so the emitter likewise omits the `type`
+    /// keyword (`None`).
     pub(crate) fn openapi_type(&self) -> Option<&'static str> {
         match self {
             Self::Str | Self::Pat => Some("string"),
             Self::I64 => Some("integer"),
             Self::F64 => Some("number"),
             Self::Bool => Some("boolean"),
-            Self::Obj(_) | Self::Any => None,
+            Self::Obj(_) | Self::List(_) | Self::Any => None,
         }
     }
 }
@@ -480,20 +514,54 @@ pub(crate) fn parse_schema(schema: &str) -> Vec<FieldSpec> {
 ///   `object`.
 fn parse_field_line(line: &str) -> Option<FieldSpec> {
     let (name, rest) = line.split_once('\t')?;
+    Some(parse_field_payload(name, rest))
+}
+
+/// Parse a `<name>` + `<payload>` pair into a [`FieldSpec`] (the payload is
+/// everything after the `field<TAB>` prefix). Split out from
+/// [`parse_field_line`] so the `list:<elem-payload>` decode can RECURSIVELY
+/// parse its element payload (ADR-0080 §6 Phase-4 (c) / #156, D2) without
+/// re-synthesizing a TAB-bearing line: the element shares the parent field's
+/// `name` (the descriptor stores no element name) and its own `<elem-payload>`
+/// is parsed by the SAME grammar this function implements. The MIRROR of MIR
+/// `element_payload`'s ENCODE (footgun #4 — cannot drift). Always succeeds (an
+/// unrecognised kind token decodes to [`FieldKind::Any`], presence-only); the
+/// `Option` lives on [`parse_field_line`], which fails only on a missing TAB.
+fn parse_field_payload(name: &str, rest: &str) -> FieldSpec {
     // The kind token is everything up to the FIRST `:`; the remainder is the
     // kind-specific suffix (a `:lo:hi` numeric pair, the raw regex of a `pat`
-    // field, or the nested class name of an `obj` field — any of which may
-    // itself contain `:`).
+    // field, the nested class name of an `obj` field, or the element payload
+    // of a `list` field — any of which may itself contain `:`).
     let (kind_token, suffix) = match rest.split_once(':') {
         Some((k, s)) => (k, Some(s)),
         None => (rest, None),
     };
+    // `list:<elem-payload>` is decoded here (ADR-0080 §6 Phase-4 (c) / #156,
+    // D2): the element payload is EVERYTHING after the first `:`, parsed
+    // RECURSIVELY as an element spec (a scalar kind, OR `obj:<Name>`). The
+    // element spec shares this field's `name` (a placeholder — the descriptor
+    // carries no element name; the validator augments it with the element
+    // index). A `list` with an EMPTY/absent element payload (the encoder never
+    // emits it) decodes its element to `Any` via the recursive call (fail open
+    // to presence-only). The DECODE mirror of MIR `element_payload`'s ENCODE.
+    if kind_token == "list" {
+        let elem_spec = parse_field_payload(name, suffix.unwrap_or(""));
+        return FieldSpec {
+            name: name.to_string(),
+            kind: FieldKind::List(Box::new(elem_spec)),
+            lo: None,
+            hi: None,
+            lo_f: None,
+            hi_f: None,
+            pattern: None,
+        };
+    }
     // `obj:<ClassName>` is decoded here (it needs the suffix = the nested
     // class name, which `FieldKind::parse` cannot carry). The DECODE mirror
     // of MIR `emit_class_block`'s ENCODE (footgun #4, cannot drift).
     if kind_token == "obj" {
         let class_name = suffix.unwrap_or("").to_string();
-        return Some(FieldSpec {
+        return FieldSpec {
             name: name.to_string(),
             kind: FieldKind::Obj(class_name),
             lo: None,
@@ -501,7 +569,7 @@ fn parse_field_line(line: &str) -> Option<FieldSpec> {
             lo_f: None,
             hi_f: None,
             pattern: None,
-        });
+        };
     }
     let kind = FieldKind::parse(kind_token);
     let (lo, hi, lo_f, hi_f, pattern) = match kind {
@@ -526,13 +594,20 @@ fn parse_field_line(line: &str) -> Option<FieldSpec> {
             (None, None, lo_f, hi_f, None)
         }
         // Every other kind carries the `:lo:hi` INTEGER suffix (an absent
-        // bound is the empty string). `Obj` is handled above (early return).
-        FieldKind::Str | FieldKind::I64 | FieldKind::Bool | FieldKind::Obj(_) | FieldKind::Any => {
+        // bound is the empty string). `Obj` + `List` are handled above (early
+        // returns), so they never reach this arm; they are listed for
+        // exhaustiveness only.
+        FieldKind::Str
+        | FieldKind::I64
+        | FieldKind::Bool
+        | FieldKind::Obj(_)
+        | FieldKind::List(_)
+        | FieldKind::Any => {
             let (lo, hi) = parse_numeric_suffix(suffix);
             (lo, hi, None, None, None)
         }
     };
-    Some(FieldSpec {
+    FieldSpec {
         name: name.to_string(),
         kind,
         lo,
@@ -540,7 +615,7 @@ fn parse_field_line(line: &str) -> Option<FieldSpec> {
         lo_f,
         hi_f,
         pattern,
-    })
+    }
 }
 
 /// Parse the `:lo:hi` numeric suffix (after the kind token's first `:` has
@@ -726,6 +801,34 @@ fn check_field(
                 return Err(wrong_type(spec));
             };
             validate_block(nested_specs, value, blocks, depth + 1)?;
+        }
+        FieldKind::List(elem_spec) => {
+            // ADR-0080 §6 Phase-4 (c) / #156 (D3) — a `list[T]` field. The
+            // value MUST be a JSON ARRAY (a non-array is a WrongType 422 with
+            // `expected: "array"`, the SAME as any other type mismatch); EACH
+            // element is then validated against the boxed ELEMENT spec by
+            // RECURSING into `check_field`. A scalar element takes the scalar
+            // check path; an `obj:<Name>` element recurses into the named block
+            // (reusing the SAME `validate_block` + depth cap the direct-nested
+            // path uses). An EMPTY array is VALID (no elements to reject; the
+            // field IS an array). The first invalid element short-circuits.
+            //
+            // §2.5-B — the element INDEX is named in the error: each element is
+            // checked against a CLONE of the element spec whose `name` is
+            // `<field>[<i>]` (e.g. `tags[1]`), so a 422 detail points at the
+            // exact element that failed, not just the list field. The
+            // element-object recursion threads the SAME `depth` (the array
+            // itself is not a JSON-object nesting level — an `obj` element
+            // bumps `depth` inside its own `Obj` arm), so a `list[Class]`
+            // honours the depth cap without double-counting the array.
+            let Value::Array(items) = value else {
+                return Err(wrong_type(spec));
+            };
+            for (i, item) in items.iter().enumerate() {
+                let mut indexed = (**elem_spec).clone();
+                indexed.name = format!("{}[{i}]", spec.name);
+                check_field(&indexed, item, blocks, depth)?;
+            }
         }
         FieldKind::Any => {
             // Presence-only — any JSON value is accepted (no type/range
@@ -1477,5 +1580,201 @@ mod tests {
         assert_eq!(specs.len(), 2);
         assert!(specs.iter().any(|s| s.name == "name"));
         assert!(specs.iter().any(|s| s.name == "rank" && s.hi == Some(100)));
+    }
+
+    // ----- ADR-0080 §6 Phase-4 (c) / #156: list[T] collection validation ---
+
+    /// The MULTI-BLOCK collection descriptor (the MIR encoder's output for a
+    /// `CreateOrder` with `note: str`, `tags: list[str]`, `scores: list[i64]`,
+    /// and `lines: list[OrderLine]`): ROOT block first, then the `OrderLine`
+    /// block. Field lines in `BTreeMap` name order (`lines`, `note`, `scores`,
+    /// `tags`). The `OrderLine` element class carries a range-refined `qty`.
+    const LIST_SCHEMA: &str = "# CreateOrder\nlines\tlist:obj:OrderLine\nnote\tstr\nscores\tlist:i64\ntags\tlist:str\n# OrderLine\nqty\ti64:1:999\nsku\tstr";
+
+    #[test]
+    fn list_scalar_descriptor_round_trips() {
+        // The cannot-drift pin (footgun #4): the `list:str` / `list:i64` tokens
+        // the MIR encoder emits decode back to `FieldKind::List(<elem-spec>)`
+        // carrying the element's own kind. ENCODE (`element_payload`) ↔ DECODE
+        // (`parse_field_payload`) are mirror inverses.
+        let specs = parse_schema(LIST_SCHEMA); // ROOT block
+        let tags = specs.iter().find(|s| s.name == "tags").expect("tags");
+        match &tags.kind {
+            FieldKind::List(elem) => assert!(
+                matches!(elem.kind, FieldKind::Str),
+                "list[str] element decodes to Str"
+            ),
+            other => panic!("tags must decode to List(Str); got {:?}", other.type_name()),
+        }
+        let scores = specs.iter().find(|s| s.name == "scores").expect("scores");
+        match &scores.kind {
+            FieldKind::List(elem) => assert!(
+                matches!(elem.kind, FieldKind::I64),
+                "list[i64] element decodes to I64"
+            ),
+            other => panic!(
+                "scores must decode to List(I64); got {:?}",
+                other.type_name()
+            ),
+        }
+    }
+
+    #[test]
+    fn list_obj_element_descriptor_round_trips() {
+        // A `list[OrderLine]` element decodes to `List(Obj("OrderLine"))`, and
+        // the element class's block resolves by name carrying the refined qty.
+        let blocks = parse_schema_blocks(LIST_SCHEMA);
+        let lines = blocks
+            .root()
+            .iter()
+            .find(|s| s.name == "lines")
+            .expect("lines field");
+        match &lines.kind {
+            FieldKind::List(elem) => {
+                assert!(
+                    matches!(&elem.kind, FieldKind::Obj(n) if n == "OrderLine"),
+                    "list[OrderLine] element decodes to Obj(OrderLine)"
+                );
+            }
+            other => panic!(
+                "lines must decode to List(Obj); got {:?}",
+                other.type_name()
+            ),
+        }
+        let ol = blocks.block("OrderLine").expect("OrderLine block");
+        let qty = ol.iter().find(|s| s.name == "qty").expect("qty field");
+        assert!(matches!(qty.kind, FieldKind::I64));
+        assert_eq!(qty.hi, Some(999), "the element range bound survives");
+    }
+
+    #[test]
+    fn list_valid_body_passes() {
+        let v = json!({
+            "note": "x", "tags": ["a", "b"], "scores": [1, 2],
+            "lines": [{"sku": "s1", "qty": 5}]
+        });
+        assert_eq!(validate_against_schema(LIST_SCHEMA, &v), Ok(()));
+    }
+
+    #[test]
+    fn list_empty_arrays_are_valid() {
+        // An empty array is VALID (no elements to reject; the field IS an
+        // array). Not "missing", not "wrong type".
+        let v = json!({"note": "x", "tags": [], "scores": [], "lines": []});
+        assert_eq!(validate_against_schema(LIST_SCHEMA, &v), Ok(()));
+    }
+
+    #[test]
+    fn list_scalar_wrong_element_type_rejected() {
+        // A number element in a list[str] → WrongType (expected string), named
+        // at the failing element INDEX (§2.5-B).
+        let v = json!({
+            "note": "x", "tags": ["a", 42], "scores": [1],
+            "lines": [{"sku": "s1", "qty": 5}]
+        });
+        assert!(matches!(
+            validate_against_schema(LIST_SCHEMA, &v),
+            Err(ValidationError::WrongType { field, expected: "string" }) if field == "tags[1]"
+        ));
+        // A string element in a list[i64] → WrongType (expected integer), even
+        // with NO element refinement (the element base type is enforced).
+        let v2 = json!({
+            "note": "x", "tags": ["a"], "scores": [1, "x"],
+            "lines": [{"sku": "s1", "qty": 5}]
+        });
+        assert!(matches!(
+            validate_against_schema(LIST_SCHEMA, &v2),
+            Err(ValidationError::WrongType { field, expected: "integer" }) if field == "scores[1]"
+        ));
+    }
+
+    #[test]
+    fn list_field_not_an_array_is_wrong_type() {
+        // D3 — a list field's value MUST be a JSON array; a bare string is a
+        // WrongType 422 (expected `array`), named at the field.
+        let v = json!({
+            "note": "x", "tags": "oops", "scores": [1],
+            "lines": [{"sku": "s1", "qty": 5}]
+        });
+        assert!(matches!(
+            validate_against_schema(LIST_SCHEMA, &v),
+            Err(ValidationError::WrongType { field, expected: "array" }) if field == "tags"
+        ));
+    }
+
+    #[test]
+    fn list_obj_element_recursive_validation() {
+        // Each list[OrderLine] element is recursively validated against the
+        // OrderLine block (reusing validate_block + depth cap).
+        // (a) an element violates the class refinement (qty=9999 > 999).
+        let oor = json!({
+            "note": "x", "tags": ["a"], "scores": [1],
+            "lines": [{"sku": "s1", "qty": 9999}]
+        });
+        assert!(matches!(
+            validate_against_schema(LIST_SCHEMA, &oor),
+            Err(ValidationError::OutOfRange { value: 9999, .. })
+        ));
+        // (b) an element missing a field (no `sku`) — SAME MissingField policy
+        // as the flat validator, recursed.
+        let missing = json!({
+            "note": "x", "tags": ["a"], "scores": [1], "lines": [{"qty": 5}]
+        });
+        assert!(matches!(
+            validate_against_schema(LIST_SCHEMA, &missing),
+            Err(ValidationError::MissingField { field }) if field == "sku"
+        ));
+        // (c) an element is NOT a JSON object (a string) → WrongType object.
+        let notobj = json!({
+            "note": "x", "tags": ["a"], "scores": [1], "lines": ["oops"]
+        });
+        assert!(matches!(
+            validate_against_schema(LIST_SCHEMA, &notobj),
+            Err(ValidationError::WrongType { field, expected: "object" }) if field == "lines[0]"
+        ));
+        // (d) an element has an EXTRA undeclared key → UnknownField, recursed.
+        let extra = json!({
+            "note": "x", "tags": ["a"], "scores": [1],
+            "lines": [{"sku": "s1", "qty": 5, "color": "red"}]
+        });
+        assert!(matches!(
+            validate_against_schema(LIST_SCHEMA, &extra),
+            Err(ValidationError::UnknownField { field }) if field == "color"
+        ));
+    }
+
+    #[test]
+    fn list_root_flat_field_still_validated() {
+        // The ROOT's flat `note` field is still required + type-checked under
+        // the collection schema (D1 flat-byte-identical — a list field does not
+        // regress the root block).
+        let missing_note = json!({"tags": ["a"], "scores": [1], "lines": []});
+        assert!(matches!(
+            validate_against_schema(LIST_SCHEMA, &missing_note),
+            Err(ValidationError::MissingField { field }) if field == "note"
+        ));
+        let wrong_note = json!({"note": 42, "tags": ["a"], "scores": [1], "lines": []});
+        assert!(matches!(
+            validate_against_schema(LIST_SCHEMA, &wrong_note),
+            Err(ValidationError::WrongType { field, .. }) if field == "note"
+        ));
+    }
+
+    #[test]
+    fn list_of_scalar_descriptor_is_two_levels_not_more() {
+        // The decode of a list[scalar] is exactly two levels: List(elem) with
+        // elem a scalar. (Element-of-element list[list[T]] is out of #156
+        // scope — the encoder emits `any`, never `list:list:…`, so the decoder
+        // never sees a nested list in practice; but were it to, the recursive
+        // parse would still terminate.) A bare `list` with no element payload
+        // decodes its element to Any (fail open).
+        let specs = parse_schema("x\tlist");
+        match &specs[0].kind {
+            FieldKind::List(elem) => assert!(
+                matches!(elem.kind, FieldKind::Any),
+                "a bare `list` element fails open to Any"
+            ),
+            other => panic!("must decode to List(Any); got {:?}", other.type_name()),
+        }
     }
 }

@@ -2351,15 +2351,22 @@ impl<'a> BodyBuilder<'a> {
         blocks.join("\n")
     }
 
-    /// ADR-0080 §6 Phase-4 (b) / #156 (D1) — render ONE validated class's
+    /// ADR-0080 §6 Phase-4 (b)+(c) / #156 (D1) — render ONE validated class's
     /// descriptor block: a `# <Name>` header line (from `adt_names`) followed
     /// by one `field<TAB>payload` line per declared field, in the field
-    /// table's deterministic `BTreeMap` name order. A field whose declared
-    /// `Ty` is ANOTHER validated class (a `Ty::Adt` present in `adt_fields`)
-    /// emits the payload `obj:<NestedClassName>` and PUSHES that class's
-    /// `AdtId` onto `nested` so the caller's BFS visits it; a scalar field
-    /// emits its base kind (+ any refinement suffix, via the ONE encoder
-    /// `Refinement::descriptor_payload`); any other type emits `any`.
+    /// table's deterministic `BTreeMap` name order. The payload by field type:
+    ///
+    /// - a field whose declared `Ty` is ANOTHER validated class (a `Ty::Adt`
+    ///   present in `adt_fields`) → `obj:<NestedClassName>`, PUSHING that
+    ///   class's `AdtId` onto `nested` so the caller's BFS visits it;
+    /// - a `list[T]` field (Phase-4 (c)) → `list:<elem-payload>`, where
+    ///   elem-payload is T's own payload (a scalar kind, OR `obj:<ClassName>`
+    ///   for `list[SomeClass]` — the element class is likewise enqueued onto
+    ///   `nested`). Rendered by [`Self::element_payload`];
+    /// - a scalar field → its base kind (+ any refinement suffix, via the ONE
+    ///   encoder `Refinement::descriptor_payload`);
+    /// - any other type (incl. `list[<deferred-elem>]` like `list[list[T]]`)
+    ///   → `any` (presence-only).
     fn emit_class_block(
         &self,
         adt: cobrust_types::AdtId,
@@ -2388,12 +2395,31 @@ impl<'a> BodyBuilder<'a> {
             // (defensive) falls back to `any` rather than emitting a dangling
             // `obj:` token the decoder cannot resolve.
             if let Ty::Adt(nested_adt, _) = ty {
-                if let Some(nested_name) = self.ctx.typed.adt_names.get(nested_adt) {
-                    if self.ctx.typed.adt_fields.contains_key(nested_adt) {
-                        lines.push(format!("{field_name}\tobj:{nested_name}"));
-                        nested.push(*nested_adt);
-                        continue;
-                    }
+                if let Some(obj_payload) = self.obj_element_payload(*nested_adt, nested) {
+                    lines.push(format!("{field_name}\t{obj_payload}"));
+                    continue;
+                }
+            }
+            // ADR-0080 §6 Phase-4 (c) / #156 (D1) — a `list[T]` field's payload
+            // is the NEW token `list:<elem-payload>` where elem-payload is T's
+            // OWN payload: a scalar kind (`str`/`i64`/`f64`/`bool`/`pat:…`) OR
+            // `obj:<ClassName>` for `list[SomeClass]` (whose block is emitted
+            // into the multi-block descriptor exactly like a direct nested
+            // field — REUSING the BFS collector via `obj_element_payload`,
+            // which pushes the element class onto `nested`). The element
+            // payload is rendered by `element_payload` so the encode mirrors
+            // `parse_schema`'s recursive `list:<rest>` decode (footgun #4 —
+            // cannot drift). A `list[<truly-unknown>]` (e.g. `list[list[T]]`,
+            // out of #156 scope) falls back to `any` via `element_payload`
+            // returning `None`. The field's OWN refinement side-table entry
+            // (if any) is NOT consulted for a list field: element-level
+            // refinement is a DEFERRED follow-up (the element class/scalar
+            // carries its own constraints; a `list[i64]` has no element
+            // refinement, so its element renders as bare `i64`).
+            if let Ty::List(elem_ty) = ty {
+                if let Some(elem_payload) = self.element_payload(elem_ty, nested) {
+                    lines.push(format!("{field_name}\tlist:{elem_payload}"));
+                    continue;
                 }
             }
             let kind = match ty {
@@ -2419,6 +2445,63 @@ impl<'a> BodyBuilder<'a> {
             lines.push(format!("{field_name}\t{payload}"));
         }
         lines.join("\n")
+    }
+
+    /// ADR-0080 §6 Phase-4 (c) / #156 (D1) — render the `obj:<ClassName>`
+    /// payload for a field/element typed as a validated class `adt`, PUSHING
+    /// the class's `AdtId` onto `nested` so the caller's BFS visits it (its
+    /// block is emitted into the multi-block descriptor). Returns `None` for a
+    /// `Ty::Adt` with NO recorded source name OR no recorded field table
+    /// (defensive — the caller then falls back to `any` rather than emitting a
+    /// dangling `obj:` token the decoder cannot resolve). Shared by the
+    /// direct-nested-field path AND the `list[SomeClass]` element path, so the
+    /// two cannot diverge (one source for the `obj:` token + the BFS enqueue).
+    fn obj_element_payload(
+        &self,
+        adt: cobrust_types::AdtId,
+        nested: &mut Vec<cobrust_types::AdtId>,
+    ) -> Option<String> {
+        let name = self.ctx.typed.adt_names.get(&adt)?;
+        if !self.ctx.typed.adt_fields.contains_key(&adt) {
+            return None;
+        }
+        let payload = format!("obj:{name}");
+        nested.push(adt);
+        Some(payload)
+    }
+
+    /// ADR-0080 §6 Phase-4 (c) / #156 (D1) — render the ELEMENT payload of a
+    /// `list[T]` field: T's own payload, the part after `list:` in the
+    /// descriptor. The MIRROR of `parse_schema`'s recursive `list:<rest>`
+    /// decode (footgun #4 — cannot drift):
+    ///
+    /// - a SCALAR element (`str`/`i64`/`f64`/`bool`) → its base kind token. A
+    ///   list element carries NO refinement suffix (element-level refinement is
+    ///   a DEFERRED follow-up; the refinement side-table is keyed by
+    ///   `(adt, field_name)`, which an element type has no entry in), so a
+    ///   `list[i64]` element is the bare `i64` token;
+    /// - a validated-CLASS element (`list[SomeClass]`) → `obj:<ClassName>` via
+    ///   [`Self::obj_element_payload`] (which PUSHES the element class onto
+    ///   `nested` for the BFS, so its block is emitted exactly like a direct
+    ///   nested field);
+    /// - any OTHER element type (e.g. `list[list[T]]` / `list[dict]`, out of
+    ///   #156 scope) → `None`, so the caller falls back to `any` (presence-only
+    ///   — the DEFERRED forms stay UNVALIDATED rather than emitting a token the
+    ///   decoder cannot resolve).
+    fn element_payload(
+        &self,
+        elem_ty: &Ty,
+        nested: &mut Vec<cobrust_types::AdtId>,
+    ) -> Option<String> {
+        match elem_ty {
+            Ty::Str => Some("str".to_string()),
+            Ty::Int => Some("i64".to_string()),
+            Ty::Float => Some("f64".to_string()),
+            Ty::Bool => Some("bool".to_string()),
+            Ty::Adt(elem_adt, _) => self.obj_element_payload(*elem_adt, nested),
+            // DEFERRED element forms (list-of-list, dict, …) — presence-only.
+            _ => None,
+        }
     }
 
     fn lower_bin(

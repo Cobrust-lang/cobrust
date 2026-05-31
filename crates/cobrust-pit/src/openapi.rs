@@ -116,6 +116,22 @@ pub(crate) fn field_schema(spec: &FieldSpec) -> Value {
     if let FieldKind::Obj(class_name) = &spec.kind {
         return json!({ "$ref": format!("#/components/schemas/{class_name}") });
     }
+    // ADR-0080 §6 Phase-4 (c) / #156 (D4) — a `list[T]` field renders as
+    // `{"type":"array","items":<elem-schema>}`, where `<elem-schema>` is the
+    // ELEMENT spec's own `field_schema` (RECURSIVELY): a scalar `{type:…}` (+
+    // any element refinement keywords) OR a `$ref` for a `list[SomeClass]`
+    // element (the `Obj` arm above fires on the element spec). The referenced
+    // element class registers as its OWN `components/schemas/<name>` via
+    // `build_openapi_doc`'s BFS over the SAME `parse_schema_blocks` parse — no
+    // second source (cannot drift, footgun #4). Emitted BEFORE the generic
+    // `type`-keyword path (the array schema's only keywords are `type` +
+    // `items`).
+    if let FieldKind::List(elem_spec) = &spec.kind {
+        return json!({
+            "type": "array",
+            "items": field_schema(elem_spec),
+        });
+    }
     let mut obj = Map::new();
     if let Some(ty) = spec.kind.openapi_type() {
         obj.insert("type".to_string(), Value::String(ty.to_string()));
@@ -152,10 +168,14 @@ pub(crate) fn field_schema(spec: &FieldSpec) -> Value {
             }
         }
         // An `i64` field's `lo`/`hi` are VALUE bounds → minimum/maximum
-        // (ADR-0080 Phase-1, cannot drift). `Obj` is handled by the early
-        // `$ref` return above (it never reaches here); it is listed for
-        // exhaustiveness only — it emits nothing through this `{type:…}` path.
-        FieldKind::I64 | FieldKind::Bool | FieldKind::Any | FieldKind::Obj(_) => {
+        // (ADR-0080 Phase-1, cannot drift). `Obj` + `List` are handled by the
+        // early returns above (they never reach here); they are listed for
+        // exhaustiveness only — they emit nothing through this `{type:…}` path.
+        FieldKind::I64
+        | FieldKind::Bool
+        | FieldKind::Any
+        | FieldKind::Obj(_)
+        | FieldKind::List(_) => {
             if let Some(lo) = spec.lo {
                 obj.insert("minimum".to_string(), Value::Number(lo.into()));
             }
@@ -669,5 +689,103 @@ mod tests {
                 .is_none(),
             "a flat field is never a $ref"
         );
+    }
+
+    // ----- ADR-0080 §6 Phase-4 (c) / #156: list[T] → array+items + component
+
+    /// The MULTI-BLOCK collection descriptor: a `CreateOrder` ROOT with a flat
+    /// `note: str`, a `list[str]` (`tags`), a `list[i64]` with no element bound
+    /// (`scores`), and a `list[OrderLine]` (`lines`), plus the `OrderLine`
+    /// block carrying a range-refined `qty`. Field lines in `BTreeMap` order.
+    const LIST_SCHEMA: &str = "# CreateOrder\nlines\tlist:obj:OrderLine\nnote\tstr\nscores\tlist:i64\ntags\tlist:str\n# OrderLine\nqty\ti64:1:999\nsku\tstr";
+
+    #[test]
+    fn list_scalar_field_emits_array_with_typed_items() {
+        // D4 — a list[str] field → {type:array, items:{type:string}}; a
+        // list[i64] with no element bound → {type:array, items:{type:integer}}.
+        let specs = parse_schema(LIST_SCHEMA);
+        let tags = specs.iter().find(|s| s.name == "tags").expect("tags");
+        let v = field_schema(tags);
+        assert_eq!(v["type"], "array");
+        assert_eq!(v["items"]["type"], "string");
+        let scores = specs.iter().find(|s| s.name == "scores").expect("scores");
+        let v2 = field_schema(scores);
+        assert_eq!(v2["type"], "array");
+        assert_eq!(v2["items"]["type"], "integer");
+        // No element refinement → no minimum/maximum on the items schema.
+        assert!(
+            v2["items"].get("minimum").is_none() && v2["items"].get("maximum").is_none(),
+            "a list[i64] with no element bound emits no item minimum/maximum; got {v2}"
+        );
+    }
+
+    #[test]
+    fn list_obj_field_emits_array_with_ref_items() {
+        // D4 — a list[OrderLine] field → {type:array, items:{$ref:…/OrderLine}}.
+        let specs = parse_schema(LIST_SCHEMA);
+        let lines = specs.iter().find(|s| s.name == "lines").expect("lines");
+        let v = field_schema(lines);
+        assert_eq!(v["type"], "array");
+        assert_eq!(
+            v["items"]["$ref"].as_str(),
+            Some("#/components/schemas/OrderLine"),
+            "a list[Class] element renders as a $ref to its component; got {v}"
+        );
+        // The items $ref carries no sibling type/properties.
+        assert!(
+            v["items"].get("type").is_none() && v["items"].get("properties").is_none(),
+            "a $ref item carries no sibling keywords; got {v}"
+        );
+    }
+
+    #[test]
+    fn list_doc_has_array_items_and_separate_element_component() {
+        // The served doc has the ROOT CreateOrder (with list fields) AND a
+        // SEPARATE OrderLine element component (registered via the SAME BFS).
+        let doc = build_openapi_doc(&[ValidatedRouteMeta {
+            method: "POST".to_string(),
+            path: "/orders".to_string(),
+            schema: LIST_SCHEMA.to_string(),
+        }]);
+        let schemas = &doc["components"]["schemas"];
+        let root = &schemas["CreateOrder"];
+        assert_eq!(root["properties"]["note"]["type"], "string");
+        assert_eq!(root["properties"]["tags"]["type"], "array");
+        assert_eq!(root["properties"]["tags"]["items"]["type"], "string");
+        assert_eq!(
+            root["properties"]["lines"]["items"]["$ref"],
+            "#/components/schemas/OrderLine"
+        );
+        // The element class is its own object component with the refined qty.
+        let ol = &schemas["OrderLine"];
+        assert_eq!(ol["type"], "object");
+        assert_eq!(ol["properties"]["sku"]["type"], "string");
+        assert_eq!(ol["properties"]["qty"]["type"], "integer");
+        assert_eq!(ol["properties"]["qty"]["minimum"], 1);
+        assert_eq!(ol["properties"]["qty"]["maximum"], 999);
+    }
+
+    #[test]
+    fn list_element_component_bound_cannot_drift_from_parsed_bound() {
+        // The #156 load-bearing cannot-drift property: the bound the element
+        // component advertises (`OrderLine.qty.maximum`) is read from the SAME
+        // parse the per-element recursive validator range-checks — ONE source.
+        let blocks = parse_schema_blocks(LIST_SCHEMA);
+        let ol_specs = blocks.block("OrderLine").expect("OrderLine block");
+        let qty = ol_specs.iter().find(|s| s.name == "qty").expect("qty");
+        let parsed_hi = qty.hi.expect("qty has an upper bound");
+        let doc = build_openapi_doc(&[ValidatedRouteMeta {
+            method: "POST".to_string(),
+            path: "/orders".to_string(),
+            schema: LIST_SCHEMA.to_string(),
+        }]);
+        let advertised = doc["components"]["schemas"]["OrderLine"]["properties"]["qty"]["maximum"]
+            .as_i64()
+            .expect("OrderLine.qty.maximum present");
+        assert_eq!(
+            advertised, parsed_hi,
+            "the element component's advertised maximum must equal the parsed bound — one source"
+        );
+        assert_eq!(advertised, 999);
     }
 }

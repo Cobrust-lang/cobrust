@@ -550,8 +550,97 @@ separate nested component; the flat-body descriptor + behavior are byte-identica
 the validator's enforced bound and the schema's advertised bound on the nested field
 come from one source (cannot drift). Pinned end-to-end by
 `crates/cobrust-cli/tests/pit_nested_body_e2e.rs` (5 tests) + the cobrust-pit unit
-tests. The list-field `{"type":"array","items":…}` / `minItems` / `maxItems` form and
-Optional/None nested fields remain the named DEFERRED residual (§9).
+tests. The list-field `{"type":"array","items":…}` form is now DELIVERED in Phase 4
+(c) below; the `minItems`/`maxItems` element-COUNT bound, `dict[K,V]`, Optional/None
+nested fields, and `list[list[T]]` remain the named DEFERRED residual (§9).
+
+### Phase 4 (c) — DELIVERED (#156 list[T] collection bodies) — the `list:` element token
+
+> Amendment landed for #156's COLLECTION slice (Phase-4 item (c) `list[T]` fields).
+> Builds DIRECTLY on Phase 4 (b): the MULTI-BLOCK descriptor + `FieldKind::Obj` +
+> recursive `validate_block` + OpenAPI `$ref` are REUSED for `list[<Class>]` elements.
+> Scope: `list[<scalar>]` (`list[str]`/`list[i64]`/`list[f64]`/`list[bool]`) +
+> `list[<Class>]`. DEFERRED (still §9): `list[list[T]]`, `dict[K,V]`, Optional/None
+> list, element-COUNT bounds (`minItems`/`maxItems`), and element-level refinements
+> beyond what the element class/scalar already carries.
+
+A body field typed `list[T]` was, pre-amendment, lowered to the descriptor kind `any`
+(presence-only) — UNVALIDATED (any JSON value accepted, no element check), and emitted
+as an empty OpenAPI schema `{}` with no `array`/`items`. This amendment makes such a
+field require a JSON ARRAY and recursively validate EACH element, and emits it as
+`{"type":"array","items":<elem-schema>}`. The CTO-locked design is four parts (D1-D4),
+each preserving the cannot-drift single-source discipline (footgun #4):
+
+- **D1 — the descriptor carries a `list:<elem-payload>` token.** `emit_class_block`
+  (`crates/cobrust-mir/src/lower.rs`) renders a `list[T]` field's payload as
+  `list:<elem-payload>`, where elem-payload is T's OWN payload — a scalar kind
+  (`str` / `i64:lo:hi` / `f64:lo:hi` / `bool` / `pat:<re>`) via the SAME element
+  helper, OR `obj:<ClassName>` for `list[SomeClass]` (whose block is emitted into the
+  multi-block descriptor exactly like a direct nested field — REUSING the BFS collector
+  via the shared `obj_element_payload`, which both the direct-nested and list-element
+  paths call, so the `obj:` token + BFS enqueue have one source). Examples:
+  `tags\tlist:str`; `scores\tlist:i64`; `lines\tlist:obj:OrderLine` + an `# OrderLine`
+  block. A list element carries NO refinement suffix (element-level refinement is a
+  DEFERRED follow-up; the refinement side-table is keyed by `(adt, field_name)`, which
+  an element type has no entry in — a `list[i64]` element is the bare `i64` token).
+  **A flat / scalar / nested-OBJECT body with NO list field stays BYTE-IDENTICAL** (the
+  `Ty::List` arm never fires; pinned by the unchanged `pit_validated_body_e2e.rs` /
+  `pit_openapi_e2e.rs` / `pit_nested_body_e2e.rs`). A `list[<deferred-elem>]` (e.g.
+  `list[list[T]]`) falls back to `any` (`element_payload` returns `None`).
+
+- **D2 — `parse_field_payload` decodes `list:<rest>` recursively.** `FieldKind` gains
+  `List(Box<FieldSpec>)` carrying the ELEMENT spec; `list:<rest>` is parsed by
+  RECURSIVELY parsing `<rest>` as the element spec (a scalar kind OR `obj:<Name>`) via
+  the split-out `parse_field_payload` (the element shares the parent field's `name`
+  placeholder — the descriptor stores no element name). `FieldKind` drops `Eq` (the
+  embedded `FieldSpec` carries `f64` bounds — `PartialEq`-not-`Eq`, mirroring the
+  `Refinement`/`ValidationError` Eq-drop); `FieldSpec` gains `Clone` + `PartialEq`. The
+  MIR ENCODE (`element_payload`) and this DECODE are mirror inverses — pinned by
+  `list_scalar_descriptor_round_trips` + `list_obj_element_descriptor_round_trips`
+  (footgun #4).
+
+- **D3 — `check_field` validates the array + each element.** A `List(elem_spec)`
+  field's JSON value MUST be a JSON ARRAY (else a `WrongType` 422 with
+  `expected: "array"`); EACH element is then validated against a CLONE of the element
+  spec by RECURSING into `check_field`. A scalar element takes the scalar check path; an
+  `obj:<Name>` element recurses into the named block (REUSING the SAME `validate_block`
+  + `MAX_NESTING_DEPTH` cap the direct-nested path uses — the array itself is not a
+  JSON-object nesting level, so `depth` is threaded unchanged; an `obj` element bumps
+  `depth` inside its own `Obj` arm). An EMPTY array is VALID. The element INDEX is named
+  in the error (the element clone's `name` is `<field>[<i>]`, e.g. `tags[1]` — §2.5-B,
+  the FIX points at the exact element). Missing / extra / out-of-range object-element
+  fields reuse the existing `MissingField` / `UnknownField` / range policies. Pinned by
+  `list_scalar_wrong_element_type_rejected`, `list_field_not_an_array_is_wrong_type`,
+  `list_obj_element_recursive_validation`, `list_empty_arrays_are_valid`.
+
+- **D4 — OpenAPI emits `{type:array, items:<elem-schema>}` + element component.**
+  `field_schema` renders a `List(elem_spec)` field as
+  `{"type":"array","items":<elem-schema>}`, where `<elem-schema>` is the element spec's
+  own `field_schema` (RECURSIVELY): a scalar `{type:…}` (+ any element refinement
+  keywords) OR a `$ref` for a `list[SomeClass]` element. The referenced element class
+  registers as its OWN `components/schemas/<name>` via `build_openapi_doc`'s SAME BFS
+  over `parse_schema_blocks` (NO second source — a `list[OrderLine]` element class block
+  is just another descriptor block). The element component advertises the SAME bound the
+  per-element recursive validator enforces (pinned by
+  `list_element_component_bound_cannot_drift_from_parsed_bound` + the e2e
+  `test_e2e_collection_body_validator_and_openapi_cannot_drift`).
+
+**The prerequisite (already cleared by Phase 4 (b)).** A no-value `list[T]` class field
+type-checks today via the SAME `check_class` field-`let` skip Phase 4 (b) introduced
+(`crates/cobrust-types/src/check.rs` — "this skip incidentally admits their no-value
+form too"). So — UNLIKE the nested-object slice, whose first RED was a type-check wall —
+there is NO type-check prerequisite for #156's collection slice; the RED is PURELY
+behavioral (a list field's elements were UNVALIDATED).
+
+**Done-means (met):** a `list[<scalar>]` field requires an array + element-type-checks
+each element; a `list[<Class>]` field recursively validates each element object (range
+/ missing / extra / not-an-object → 422, named at the element index); the schema emits
+`{type:array, items:<scalar|$ref>}` + the element class component; a flat / scalar /
+nested-object body stays byte-identical; the per-element validator's enforced bound and
+the element component's advertised bound come from one source (cannot drift). Pinned
+end-to-end by `crates/cobrust-cli/tests/pit_collection_body_e2e.rs` (5 tests) + the
+cobrust-pit unit tests. `list[list[T]]`, `dict[K,V]`, Optional/None list, and
+`minItems`/`maxItems` remain the named DEFERRED residual (§9).
 
 ## 7. §2.5 compliance note
 
