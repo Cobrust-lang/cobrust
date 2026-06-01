@@ -3060,8 +3060,18 @@ impl<'ctx> LlvmEmitter<'ctx> {
         //   __cobrust_redis_client_srem(c, key, member: *mut Str) -> i64
         //   __cobrust_redis_client_sismember(c, key, member: *mut Str) -> bool (i1)
         //   __cobrust_redis_client_scard(c, key: *mut Str) -> i64
-        // (the LIST-of-str returns lrange/smembers/hgetall/hkeys are a
-        //  deferred follow-up — a new list-handle return shape.)
+        // Phase-1d LIST-of-str-return verbs (same handle, all return an
+        // owned `*mut List<i64>` the `.cb` scope drops via the
+        // Ty::List(Str) schedule — the SAME ptr-return shape coil's
+        // `__cobrust_coil_buffer_shape -> *mut List<i64>` + the stdlib's
+        // `__cobrust_llm_stream -> list[str]` already use; NO new codegen
+        // fn-type design — a Ty::List return maps to an LLVM ptr return):
+        //   __cobrust_redis_client_lrange(c, key, start, stop: i64) -> *mut List
+        //   __cobrust_redis_client_smembers(c, key: *mut Str) -> *mut List
+        //   __cobrust_redis_client_hkeys(c, key: *mut Str) -> *mut List
+        //   __cobrust_redis_client_hgetall(c, key: *mut Str) -> *mut List
+        //     (FLAT [k, v, k, v, ...] — the documented dict-vs-flat-list
+        //      divergence, mirroring coil.shape's list-vs-tuple note.)
         //
         // The `_drop` symbol is emitted by `emit_drop_for_ty` at the
         // handle local's scope exit via `handle_drop_symbol(id)` (chain is
@@ -3097,6 +3107,17 @@ impl<'ctx> LlvmEmitter<'ctx> {
         let redis_push_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let redis_sismember_ty =
             bool_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        // Phase-1d fn types. The single-key LIST-of-str returns
+        // (`smembers`/`hkeys`/`hgetall`) reuse `redis_get_ty`
+        // ((ptr, ptr) -> ptr — the List return is a ptr, exactly like
+        // `get`'s Str return is a ptr); only `lrange` needs the NEW
+        // (ptr, ptr, i64, i64) -> ptr shape (receiver + key + start + stop
+        // -> the owned List ptr). The `Ty::List(Str)` return + its drop
+        // schedule are codegen-generic (no list-specific return wiring).
+        let redis_lrange_ty = ptr_ty.fn_type(
+            &[ptr_ty.into(), ptr_ty.into(), i64_ty.into(), i64_ty.into()],
+            false,
+        );
         for (sym, ty, params) in [
             ("__cobrust_redis_connect", redis_connect_ty, 1usize),
             ("__cobrust_redis_client_set", redis_set_ty, 3),
@@ -3120,6 +3141,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_redis_client_srem", redis_push_ty, 3),
             ("__cobrust_redis_client_sismember", redis_sismember_ty, 3),
             ("__cobrust_redis_client_scard", redis_delete_ty, 2),
+            // Phase-1d LIST-of-str-return verbs (the List return is a ptr;
+            // smembers/hkeys/hgetall reuse `redis_get_ty`'s (ptr,ptr)->ptr,
+            // only lrange takes the (ptr,ptr,i64,i64)->ptr `redis_lrange_ty`).
+            ("__cobrust_redis_client_lrange", redis_lrange_ty, 4),
+            ("__cobrust_redis_client_smembers", redis_get_ty, 2),
+            ("__cobrust_redis_client_hkeys", redis_get_ty, 2),
+            ("__cobrust_redis_client_hgetall", redis_get_ty, 2),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

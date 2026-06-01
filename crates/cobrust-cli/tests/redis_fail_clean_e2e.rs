@@ -184,6 +184,58 @@ fn test_e2e_redis_phase_c_unreachable_server_yields_fail_clean_sentinels() {
     assert_eq!(stdout, "0\n0\n\n\n0\n0\n0\nFalse\n0\n");
 }
 
+/// ADR-0078 Phase-1c Phase-1d — the server-LESS fail-clean slice for the
+/// new LIST-of-str-return verbs (`lrange` / `smembers` / `hkeys` /
+/// `hgetall`). Connecting to an unreachable port yields the disconnected
+/// sentinel; each verb mints an EMPTY `list[str]` (len 0, never null,
+/// never a panic across the C ABI). This is the END-TO-END proof that the
+/// `list[str]` RETURN + the `.cb` for-loop + `.len()` + the
+/// `Ty::List(Str)` DROP schedule all work together server-less:
+///
+/// - `let xs: list[str] = client.lrange("k", 0, -1)` binds the minted
+///   empty list (proves the `Ty::List(Str)` return type-checks + the
+///   codegen ptr-return lands in the typed local).
+/// - `xs.len()` prints `0` (proves `__cobrust_list_len` on the minted list).
+/// - `for x in xs: print(x)` prints NOTHING (the empty list's loop body
+///   never runs — proves the for-loop lowering consumes a minted
+///   `list[str]`; the loop-var `__cobrust_str_clone` path is exercised by
+///   the live round-trip where the list is non-empty).
+/// - `smembers` / `hkeys` / `hgetall` each also `.len()` → `0`.
+/// - the four minted lists drop exactly once each at scope exit (the
+///   `Ty::List(Str)` schedule → `__cobrust_list_drop_elems`); a leak /
+///   double-free would crash the run (a non-zero exit fails the test).
+///
+/// Stays ALWAYS green in CI (no redis server).
+#[test]
+fn test_e2e_redis_phase_1d_unreachable_server_yields_empty_str_lists() {
+    let stdout = build_and_run_source(concat!(
+        "import redis\n",
+        "\n",
+        "fn main() -> i64:\n",
+        // Port 1 has nothing listening → connect fails clean → the
+        // disconnected sentinel Client (never null, never a panic).
+        "    let client = redis.connect(\"redis://127.0.0.1:1/\")\n",
+        // lrange on the dead connection → an EMPTY list[str].
+        "    let xs: list[str] = client.lrange(\"mylist\", 0, -1)\n",
+        // .len() → 0 (proves __cobrust_list_len on the minted list).
+        "    print(xs.len())\n",
+        // for over the empty list → no body iterations, no output (proves
+        // the for-loop lowering consumes the minted list[str]).
+        "    for x in xs:\n",
+        "        print(x)\n",
+        // smembers / hkeys / hgetall → EMPTY list[str] each; print len 0.
+        "    let ms: list[str] = client.smembers(\"myset\")\n",
+        "    print(ms.len())\n",
+        "    let hk: list[str] = client.hkeys(\"myhash\")\n",
+        "    print(hk.len())\n",
+        "    let hga: list[str] = client.hgetall(\"myhash\")\n",
+        "    print(hga.len())\n",
+        "    return 0\n",
+    ));
+    // Four empty lists → four `0` lines; the for-loop emits nothing.
+    assert_eq!(stdout, "0\n0\n0\n0\n");
+}
+
 /// A second fail-clean shape — connect with a bare unparseable URL (the
 /// invalid-URL branch of the fail-clean path, distinct from the
 /// unreachable-port branch). Must ALSO yield the non-null disconnected

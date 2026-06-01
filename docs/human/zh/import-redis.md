@@ -1,10 +1,12 @@
 # `import redis` —— 在 Cobrust 中使用 Redis 缓存 / 键值存储
 
-> 状态:ADR-0078 Phase-1c。这是第十一个可以在 `.cb` 程序里 `import` 并
-> 真正端到端调用(编译 → 链接 → 运行)的生态库。它把 `redis`(Cobrust
+> 状态:ADR-0078 Phase-1c/1d。这是第十一个可以在 `.cb` 程序里 `import`
+> 并真正端到端调用(编译 → 链接 → 运行)的生态库。它把 `redis`(Cobrust
 > 版的缓存 / KV 客户端,`redis-py` 的更名版)接到了编译器的 intrinsic /
 > C-ABI / 静态链接链路上,底层用的是 Rust `redis` crate(redis-rs)的
-> **同步路径** —— 因此完全不涉及任何异步运行时。
+> **同步路径** —— 因此完全不涉及任何异步运行时。Phase 1d 补上了一次性读
+> 回*整个*集合的几个动作(`lrange` / `smembers` / `hkeys` / `hgetall`),
+> 它们返回一个 `list[str]`。
 
 ## 先看例子
 
@@ -128,11 +130,62 @@ fn main() -> i64:
 这些同样正是 redis-py 的方法名(`lpush` / `rpush` / `lpop` / `rpop` /
 `llen` / `sadd` / `srem` / `sismember` / `scard`)。
 
-那些一次性读回*整个*列表或集合的动作 —— `lrange`、`smembers`(以及读取
-整个哈希的 `hgetall` / `hkeys`)—— 是已记录的后续项,尚未实现:它们返回
-的是*一个字符串列表*,而 redis 其余接口(始终只返回单个值)目前还没有
-这种返回形态。现在请用 `lpop` / `rpop` 逐个弹出元素,或用 `sismember`
-做成员判定。
+## 你能用到什么(Phase 1d —— 一次性读回整个列表 / 集合 / 哈希)
+
+一次性读回*整个*集合的几个动作。它们都返回一个 `list[str]`(字符串列
+表)—— 因此你可以用 `for` 循环遍历它、用下标取值(`xs[0]`)、问它的长度
+(`xs.len()`),和任何其他 Cobrust 列表一样。
+
+```python
+import redis
+
+fn main() -> i64:
+    let client = redis.connect("redis://127.0.0.1/")
+
+    client.rpush("tasks", "a")
+    client.rpush("tasks", "b")
+    client.rpush("tasks", "c")
+
+    # 把整个列表读回来。start=0、stop=-1 表示"全部"。
+    let xs: list[str] = client.lrange("tasks", 0, -1)   # -> ["a", "b", "c"]
+    print(xs.len())                                      # -> 3
+    for task in xs:
+        print(task)                                      # -> a / b / c
+
+    # 一个集合的全部成员。
+    client.sadd("tags", "x")
+    let tags: list[str] = client.smembers("tags")        # -> ["x"]
+
+    # 一个哈希的全部字段名。
+    client.hset("user:1", "name", "ada")
+    let fields: list[str] = client.hkeys("user:1")       # -> ["name"]
+
+    # 一个哈希的全部字段/值对 —— 见下面的说明。
+    let pairs: list[str] = client.hgetall("user:1")      # -> ["name", "ada"]
+    return 0
+```
+
+- **`client.lrange(key, start, stop)`** —— 列表里 `start..stop` 下标区间
+  内的元素(两端都含;负数下标从尾部倒数,所以 `0, -1` 就是整个列表 ——
+  正是 redis 自己的规则)。键不存在时给出空列表 `[]`。
+- **`client.smembers(key)`** —— 一个集合的全部成员,作为 `list[str]`
+  返回(redis 集合无序)。键不存在时给出 `[]`。
+- **`client.hkeys(key)`** —— 一个哈希的全部字段名,作为 `list[str]`
+  返回。键不存在时给出 `[]`。
+- **`client.hgetall(key)`** —— 一个哈希的全部字段/值对。
+
+这些还是 redis-py 的方法名(`lrange` / `smembers` / `hkeys` /
+`hgetall`)。
+
+### `hgetall` 返回的是扁平列表,而不是 dict
+
+Python 的 `redis` 把 `hgetall` 返回成一个 `dict`。Cobrust 把它返回成一个
+**扁平的** `list[str]` —— `[字段1, 值1, 字段2, 值2, ...]` —— 所以上面的
+例子给出 `["name", "ada"]`。请两两一组地读(先字段、后它的值)。这是一
+处有意为之、且已记录在案的差异,和 `coil` 的 `buffer.shape` 是同一种差异
+(numpy 返回元组,`coil` 返回 `list[i64]`):扁平列表是当前已经在用的列
+表机制能干净支持的诚实形态,无需为此发明一种跨边界返回 dict 的新形态。
+一个返回 `dict` 的 `hgetall` 是已记录的后续项。
 
 ## 为什么这样设计?
 
@@ -159,9 +212,11 @@ fn main() -> i64:
 `Client` —— 一个"未连接"的。对它的每个操作都返回安全的默认值(`get` /
 `hget` / `lpop` / `rpop` → `""`,`delete` / `incr` / `incr_by` /
 `lpush` / `rpush` / `llen` / `sadd` / `srem` / `scard` → `0`,`exists` /
-`expire` / `hset` / `sismember` → `false`),`set` 则安静地变成空操作。
-你的程序在边界处永远不会崩溃。正是这一点让测试套件无需真的跑一个 Redis
-服务器,就能证明整条流水线是通的。
+`expire` / `hset` / `sismember` → `false`,而一次性读回整个集合的
+`lrange` / `smembers` / `hkeys` / `hgetall` → 空列表 `[]`),`set` 则安静
+地变成空操作。你的程序在边界处永远不会崩溃。正是这一点让测试套件无需真
+的跑一个 Redis 服务器,就能证明整条流水线是通的 —— 包括对一个返回列表的
+`for` 循环。
 
 ## 当前的限制
 
@@ -174,10 +229,8 @@ fn main() -> i64:
   任务共享(连接池是后续项)。
 - 一步完成"设置并带过期"的 `SETEX`(`set_expiry`)是个小的后续项;现在
   请用 `set` 再 `expire`。
-- 一次性读回*整个*列表或集合(`lrange` / `smembers`,以及读取整个哈希的
-  `hgetall` / `hkeys`)是后续项 —— 它们返回的是一个字符串列表,这种返回
-  形态接口目前还没有。现在请用 `lpop` / `rpop` 逐个弹出,或用
-  `sismember` 做判定。
+- `hgetall` 返回的是扁平的 `list[str]`(`[字段, 值, ...]`),而不是
+  `dict`;一个返回 `dict` 的 `hgetall` 是已记录的后续项。
 
 这些都是已记录在案的后续项,而非死路。
 

@@ -1863,9 +1863,8 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
         // `sadd`/`srem`/`scard` return the i64 count/length; `lpop`/`rpop`
         // return the popped str ("" sentinel if the list is empty/absent,
         // mirroring `get`); `sismember` returns a bool. The multi-element
-        // LIST-of-str returns (`lrange`/`smembers`/`hgetall`/`hkeys`) are a
-        // DEFERRED follow-up (a NEW C-ABI list-handle return shape redis
-        // has no precedent for).
+        // LIST-of-str returns (`lrange`/`smembers`/`hgetall`/`hkeys`) ship
+        // in Phase-1d below.
         (REDIS_CLIENT_ADT, "lpush") => Some(EcoSig::from_values(
             "__cobrust_redis_client_lpush",
             // Key str + the value str to prepend (head).
@@ -1923,6 +1922,51 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             "__cobrust_redis_client_scard",
             vec![Ty::Str],
             Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        // ADR-0078 Phase-1c Phase-1d — the multi-element LIST-of-str
+        // returns. Same borrow-receiver discipline, same readable
+        // redis-py-idiom verbs (§2.5-aligned), same fail-clean surface (an
+        // absent key / disconnected sentinel / command error mints an
+        // EMPTY `list[str]`, never a panic). The return type is the
+        // first-class `Ty::List(Box::new(Ty::Str))` — the SAME shape
+        // `coil.shape -> Ty::List(Box::new(Ty::Int))` (above) prototypes
+        // and `__cobrust_llm_stream -> list[str]` produces: codegen derives
+        // the extern fn-type + return generically from this `EcoSig.ret`
+        // (a `Ty::List` return maps to an LLVM ptr return, NO new codegen
+        // fn-type), and the `.cb` for-loop / index / `Ty::List(Str)` drop
+        // schedule consume + free it with NO new code. (The stale Phase-C
+        // "redis has no list-handle precedent" deferral note is corrected
+        // here + in cabi.rs + the redis docs.) `hgetall` returns a FLAT
+        // `[k, v, k, v, ...]` list[str] — a documented Semantic divergence
+        // from Python's dict, mirroring `coil.shape`'s list-vs-tuple note.
+        (REDIS_CLIENT_ADT, "lrange") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_lrange",
+            // Key str + the start + stop indices (i64, inclusive,
+            // redis-native tail-relative on negatives; `0, -1` is the
+            // whole list).
+            vec![Ty::Str, Ty::Int, Ty::Int],
+            Ty::List(Box::new(Ty::Str)),
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "smembers") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_smembers",
+            vec![Ty::Str],
+            Ty::List(Box::new(Ty::Str)),
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "hkeys") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_hkeys",
+            vec![Ty::Str],
+            Ty::List(Box::new(Ty::Str)),
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "hgetall") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_hgetall",
+            vec![Ty::Str],
+            // FLAT [field, value, field, value, ...] — the documented
+            // dict-vs-flat-list divergence (mirrors coil.shape).
+            Ty::List(Box::new(Ty::Str)),
             PyCompatTier::Semantic,
         )),
         _ => None,

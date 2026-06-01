@@ -8,13 +8,21 @@
 //! `client.lpush(k, v)` / `client.rpush(k, v)` / `client.lpop(k)` /
 //! `client.rpop(k)` / `client.llen(k)` / `client.sadd(k, m)` /
 //! `client.srem(k, m)` / `client.sismember(k, m)` / `client.scard(k)`
-//! (ADR-0078 Phase-1c — cache/KV, rebrand of redis-py).
+//! (ADR-0078 Phase-1c — cache/KV, rebrand of redis-py), plus the Phase-1d
+//! LIST-of-str-return verbs `client.lrange(k, start, stop)` /
+//! `client.smembers(k)` / `client.hkeys(k)` / `client.hgetall(k)`.
 //!
-//! Phase-C ships ONLY the scalar/str-return list+set verbs (the
-//! get/hget/incr shapes); the multi-element LIST-of-str returns
-//! (`lrange` / `smembers` / `hgetall` / `hkeys`) are a deferred follow-up
-//! because they need a NEW C-ABI list-handle return shape redis has no
-//! precedent for.
+//! Phase-1d ships the multi-element `list[str]` returns. (The Phase-C
+//! deferral note here previously claimed redis had "no list-handle
+//! precedent" for these — that was STALE: a `Ty::List(Str)` return is
+//! first-class Cobrust, and the `__cobrust_list_*` C-ABI machinery + the
+//! `.cb` for-loop / index / drop schedule were ALL already shipping. The
+//! mint recipe is the SAME `__cobrust_llm_stream`
+//! (cobrust-stdlib/src/llm.rs) and `__cobrust_coil_buffer_shape`
+//! (cobrust-coil/src/cabi.rs) use for their list returns: allocate an
+//! owned list the `.cb` scope drops once. `hgetall` returns a FLAT
+//! `[k, v, k, v, ...]` list[str] — a documented Semantic divergence from
+//! Python's dict, mirroring coil.shape's list-vs-tuple divergence note.)
 //!
 //! # The chain
 //!
@@ -103,6 +111,57 @@ unsafe extern "C" {
     fn __cobrust_str_ptr(buf: *mut u8) -> *const u8;
     /// The buffer's byte length.
     fn __cobrust_str_len(buf: *mut u8) -> i64;
+}
+
+// =====================================================================
+// Cobrust List ABI — declared here, resolved from libcobrust_stdlib.a at
+// link time (ADR-0072 Q5; no Rust dep — mirrors the Str block above and
+// coil's `src/cabi.rs` list externs). The LIST-of-str return verbs
+// (`lrange`/`smembers`/`hkeys`/`hgetall`, ADR-0078 Phase-1d) mint an
+// owned `List<i64>` whose i64 slots store heap-`Str` pointers (one per
+// element, `elem_size=8`); the `.cb` scope owns + drops the list once
+// (via the `Ty::List(Str)` drop schedule → `__cobrust_list_drop_elems`),
+// so these shims must NOT free it. This is the SAME mint recipe
+// `__cobrust_llm_stream` (cobrust-stdlib/src/llm.rs) uses for its
+// `list[str]` return — the precedent the Phase-C deferral comment wrongly
+// claimed redis had none of.
+// =====================================================================
+
+unsafe extern "C" {
+    /// Allocate a `List<i64>` with `len` zeroed slots (`len == cap`).
+    /// `elem_size` is reserved (M12.x fixes the elem width at i64); for a
+    /// `list[str]` the i64 slots hold heap-`Str` pointers.
+    fn __cobrust_list_new(elem_size: i64, len: i64) -> *mut u8;
+    /// Write `list[i] = v` (out-of-bounds writes are silently dropped).
+    fn __cobrust_list_set(list: *mut u8, i: i64, v: i64);
+}
+
+/// Mint an owned Cobrust `list[str]` from `items`, the `__cobrust_llm_stream`
+/// recipe (cobrust-stdlib/src/llm.rs): `__cobrust_list_new(8, len)` for a
+/// `len`-slot `List<i64>`, then for each element allocate a fresh `Str`
+/// buffer (via [`alloc_str_buffer`]) and store its pointer as the i64 slot
+/// value. The returned list is OWNED by the `.cb` caller: its scope-exit
+/// drop schedule (selected by codegen from `Ty::List(Str)`) calls
+/// `__cobrust_list_drop_elems(list, __cobrust_str_drop)`, freeing each
+/// element `Str` then the list container. The shim therefore must NOT
+/// free it.
+///
+/// An empty `items` mints a valid empty list (len 0) — the fail-clean
+/// shape for a null handle / disconnected sentinel / command error /
+/// absent key, NEVER a null pointer and NEVER a panic across the C ABI.
+fn alloc_str_list(items: &[String]) -> *mut u8 {
+    // SAFETY: `__cobrust_list_new(8, len)` returns a valid `List<i64>`
+    // with `len` zeroed slots; `__cobrust_list_set` writes each in-bounds
+    // slot to a `Str`-buffer pointer produced by `alloc_str_buffer`.
+    unsafe {
+        let len = items.len() as i64;
+        let list = __cobrust_list_new(8, len);
+        for (i, s) in items.iter().enumerate() {
+            let buf = alloc_str_buffer(s);
+            __cobrust_list_set(list, i as i64, buf as i64);
+        }
+        list
+    }
 }
 
 /// Read a Cobrust `Str` buffer pointer into an owned `String`. Tolerates
@@ -719,6 +778,138 @@ pub unsafe extern "C" fn __cobrust_redis_client_scard(client: *mut u8, key: *mut
     client_ref.scard(&key).unwrap_or(0)
 }
 
+/// `Client.lrange(key, start, stop) -> list[str]`. BORROWS the `Client`
+/// handle `&mut` (never frees it), runs `LRANGE key start stop`, and
+/// returns the elements in the (inclusive, redis-native, tail-relative on
+/// negatives) index range as a freshly-minted owned Cobrust `list[str]`
+/// (`start=0, stop=-1` is the whole list).
+///
+/// Returns an EMPTY list (len 0) for an absent key, a null handle, the
+/// disconnected sentinel, or a command error (absent == empty list,
+/// the list analogue of `get`'s empty-str sentinel) — NEVER null, NEVER a
+/// panic. The `.cb` scope owns + drops the returned list (via the
+/// `Ty::List(Str)` drop schedule); this shim does NOT free it.
+///
+/// # Safety
+///
+/// `client` must be null or a live `Client` handle from
+/// `__cobrust_redis_connect` (not yet dropped); `key` must be null or a
+/// valid Cobrust `Str` buffer. `start` / `stop` are plain `i64` scalars.
+/// The returned pointer is an owned Cobrust `list[str]`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_redis_client_lrange(
+    client: *mut u8,
+    key: *mut u8,
+    start: i64,
+    stop: i64,
+) -> *mut u8 {
+    if client.is_null() {
+        return alloc_str_list(&[]);
+    }
+    // SAFETY: caller attests `client` is a live Client handle. BORROW
+    // `&mut` — no rebox / free.
+    let client_ref = unsafe { &mut *client.cast::<Client>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let key = unsafe { read_str_buf(key) };
+    // An absent key / any error renders the EMPTY list — the fail-clean
+    // convention, the list analogue of `get`'s empty-str sentinel.
+    let items = client_ref.lrange(&key, start, stop).unwrap_or_default();
+    alloc_str_list(&items)
+}
+
+/// `Client.smembers(key) -> list[str]`. BORROWS the `Client` handle
+/// `&mut` (never frees it), runs `SMEMBERS key`, and returns the set's
+/// members as a freshly-minted owned Cobrust `list[str]` (SMEMBERS has no
+/// defined order).
+///
+/// Returns an EMPTY list for an absent key, a null handle, the
+/// disconnected sentinel, or a command error — NEVER null, NEVER a panic.
+/// The `.cb` scope owns + drops the returned list; this shim does NOT
+/// free it.
+///
+/// # Safety
+///
+/// `client` must be null or a live `Client` handle from
+/// `__cobrust_redis_connect` (not yet dropped); `key` must be null or a
+/// valid Cobrust `Str` buffer. The returned pointer is an owned Cobrust
+/// `list[str]`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_redis_client_smembers(client: *mut u8, key: *mut u8) -> *mut u8 {
+    if client.is_null() {
+        return alloc_str_list(&[]);
+    }
+    // SAFETY: caller attests `client` is a live Client handle. BORROW
+    // `&mut` — no rebox / free.
+    let client_ref = unsafe { &mut *client.cast::<Client>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let key = unsafe { read_str_buf(key) };
+    let items = client_ref.smembers(&key).unwrap_or_default();
+    alloc_str_list(&items)
+}
+
+/// `Client.hkeys(key) -> list[str]`. BORROWS the `Client` handle `&mut`
+/// (never frees it), runs `HKEYS key`, and returns the hash's field names
+/// as a freshly-minted owned Cobrust `list[str]`.
+///
+/// Returns an EMPTY list for an absent key, a null handle, the
+/// disconnected sentinel, or a command error — NEVER null, NEVER a panic.
+/// The `.cb` scope owns + drops the returned list; this shim does NOT
+/// free it.
+///
+/// # Safety
+///
+/// `client` must be null or a live `Client` handle from
+/// `__cobrust_redis_connect` (not yet dropped); `key` must be null or a
+/// valid Cobrust `Str` buffer. The returned pointer is an owned Cobrust
+/// `list[str]`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_redis_client_hkeys(client: *mut u8, key: *mut u8) -> *mut u8 {
+    if client.is_null() {
+        return alloc_str_list(&[]);
+    }
+    // SAFETY: caller attests `client` is a live Client handle. BORROW
+    // `&mut` — no rebox / free.
+    let client_ref = unsafe { &mut *client.cast::<Client>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let key = unsafe { read_str_buf(key) };
+    let items = client_ref.hkeys(&key).unwrap_or_default();
+    alloc_str_list(&items)
+}
+
+/// `Client.hgetall(key) -> list[str]`. BORROWS the `Client` handle `&mut`
+/// (never frees it), runs `HGETALL key`, and returns the hash's
+/// field/value pairs as a freshly-minted owned Cobrust `list[str]` —
+/// FLAT `[field, value, field, value, ...]` (the documented Semantic
+/// divergence from Python's dict, mirroring `coil.shape`'s
+/// list-vs-tuple divergence: the flat list is the §2.5-closest honest
+/// shape the already-shipping `Ty::List(Str)` machinery supports without
+/// a `Dict`-across-C-ABI return shape).
+///
+/// Returns an EMPTY list for an absent key, a null handle, the
+/// disconnected sentinel, or a command error — NEVER null, NEVER a panic.
+/// The `.cb` scope owns + drops the returned list; this shim does NOT
+/// free it.
+///
+/// # Safety
+///
+/// `client` must be null or a live `Client` handle from
+/// `__cobrust_redis_connect` (not yet dropped); `key` must be null or a
+/// valid Cobrust `Str` buffer. The returned pointer is an owned Cobrust
+/// `list[str]`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_redis_client_hgetall(client: *mut u8, key: *mut u8) -> *mut u8 {
+    if client.is_null() {
+        return alloc_str_list(&[]);
+    }
+    // SAFETY: caller attests `client` is a live Client handle. BORROW
+    // `&mut` — no rebox / free.
+    let client_ref = unsafe { &mut *client.cast::<Client>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let key = unsafe { read_str_buf(key) };
+    let items = client_ref.hgetall(&key).unwrap_or_default();
+    alloc_str_list(&items)
+}
+
 /// Drop a `Client` handle. `Box::from_raw` + drop, exactly once, at the
 /// `.cb` scope exit (ADR-0072 §5 risk 1). Dropping the `Client` closes
 /// the underlying TCP connection (RAII — no forgot-to-close footgun).
@@ -754,6 +945,19 @@ mod tests {
     #[used]
     static _STDLIB_LINK_ANCHOR: unsafe extern "C" fn() -> *mut u8 =
         cobrust_stdlib::fmt::__cobrust_str_new;
+    // The Phase-1d `list[str]`-return verbs bind `__cobrust_list_new` /
+    // `__cobrust_list_set` (declared `extern "C"` above, resolved from
+    // libcobrust_stdlib.a at the `cobrust build` link step). A bare
+    // `extern "C"` decl alone does NOT create a crate-dependency link
+    // edge, so — exactly like the `__cobrust_str_new` anchor — these
+    // `#[used]` statics force cargo to put the `__cobrust_list_*` symbols
+    // on the test link line.
+    #[used]
+    static _LIST_NEW_LINK_ANCHOR: unsafe extern "C" fn(i64, i64) -> *mut u8 =
+        cobrust_stdlib::collections::__cobrust_list_new;
+    #[used]
+    static _LIST_SET_LINK_ANCHOR: unsafe extern "C" fn(*mut u8, i64, i64) =
+        cobrust_stdlib::collections::__cobrust_list_set;
 
     /// `DROP_COUNT` is a process-global counter. The "exactly once"
     /// assertion in the drop-counting tests would race under cargo's
@@ -765,9 +969,39 @@ mod tests {
     // buffers we hand out under test).
     unsafe extern "C" {
         fn __cobrust_str_drop(buf: *mut u8);
+        /// `list.len()` — used by the `list[str]`-return verb tests.
+        fn __cobrust_list_len(list: *mut u8) -> i64;
+        /// `list[i]` (the raw i64 slot — a `Str`-buffer pointer here).
+        fn __cobrust_list_get(list: *mut u8, i: i64) -> i64;
+        /// `list[str]` drop — frees each element `Str` then the container.
+        /// This is EXACTLY the drop the codegen `Ty::List(Str)` schedule
+        /// selects at `.cb` scope exit (llvm_backend.rs); under test we
+        /// invoke it ourselves to prove the minted list frees clean.
+        fn __cobrust_list_drop_elems(list: *mut u8, elem_drop_fn: unsafe extern "C" fn(*mut u8));
     }
     unsafe fn drop_str_for_test(buf: *mut u8) {
         unsafe { __cobrust_str_drop(buf) }
+    }
+
+    /// Read an owned `list[str]` (the shape the Phase-1d verbs mint) into
+    /// an owned `Vec<String>` WITHOUT consuming it (borrows each slot's
+    /// `Str` buffer via [`read_str_buf`]). The caller still owns the list
+    /// and must free it via [`drop_str_list_for_test`].
+    unsafe fn read_str_list_for_test(list: *mut u8) -> Vec<String> {
+        unsafe {
+            let len = __cobrust_list_len(list);
+            (0..len)
+                .map(|i| read_str_buf(__cobrust_list_get(list, i) as *mut u8))
+                .collect()
+        }
+    }
+
+    /// Free an owned `list[str]` via the SAME drop the codegen
+    /// `Ty::List(Str)` schedule emits (`__cobrust_list_drop_elems` with
+    /// `__cobrust_str_drop` per slot) — proves the minted list + its
+    /// element `Str`s free clean with no leak / double-free.
+    unsafe fn drop_str_list_for_test(list: *mut u8) {
+        unsafe { __cobrust_list_drop_elems(list, __cobrust_str_drop) }
     }
 
     /// The full fail-clean vertical slice WITHOUT a redis server: connect
@@ -894,6 +1128,67 @@ mod tests {
         );
     }
 
+    /// The Phase-1d LIST-of-str-return verbs on the disconnected sentinel:
+    /// each mints a VALID EMPTY `list[str]` (len 0, never null, never a
+    /// panic across the C ABI — the list analogue of `get`'s empty-str
+    /// sentinel), and each frees clean via the SAME
+    /// `__cobrust_list_drop_elems(list, __cobrust_str_drop)` drop the
+    /// codegen `Ty::List(Str)` schedule emits at `.cb` scope exit (proved
+    /// by `drop_str_list_for_test` — a leak / double-free would abort).
+    /// This is the cabi twin of the server-less Phase-1d e2e. Split from
+    /// the Phase-A/B/C fail-clean test to keep each test under the
+    /// 100-line lint ceiling (the four list verbs + their reads + drops).
+    #[test]
+    fn cabi_phase_1d_str_list_verbs_mint_empty_lists_on_disconnected() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            // Unreachable port → disconnected sentinel handle.
+            let url = alloc_str_buffer("redis://127.0.0.1:1/");
+            let client = __cobrust_redis_connect(url);
+            assert!(!client.is_null());
+            drop_str_for_test(url);
+            let key = alloc_str_buffer("k");
+
+            // lrange / smembers / hkeys / hgetall — each an EMPTY list[str]
+            // (len 0, never null), each freeing clean.
+            let lrange_list = __cobrust_redis_client_lrange(client, key, 0, -1);
+            assert!(!lrange_list.is_null(), "lrange never returns null");
+            assert_eq!(
+                read_str_list_for_test(lrange_list),
+                Vec::<String>::new(),
+                "disconnected lrange is an empty list"
+            );
+            drop_str_list_for_test(lrange_list);
+
+            let smembers_list = __cobrust_redis_client_smembers(client, key);
+            assert!(!smembers_list.is_null(), "smembers never returns null");
+            assert_eq!(__cobrust_list_len(smembers_list), 0);
+            drop_str_list_for_test(smembers_list);
+
+            let hkeys_list = __cobrust_redis_client_hkeys(client, key);
+            assert!(!hkeys_list.is_null(), "hkeys never returns null");
+            assert_eq!(__cobrust_list_len(hkeys_list), 0);
+            drop_str_list_for_test(hkeys_list);
+
+            // hgetall — the FLAT [k,v,...] divergence shape; empty here.
+            let hgetall_list = __cobrust_redis_client_hgetall(client, key);
+            assert!(!hgetall_list.is_null(), "hgetall never returns null");
+            assert_eq!(__cobrust_list_len(hgetall_list), 0);
+            drop_str_list_for_test(hgetall_list);
+
+            drop_str_for_test(key);
+            __cobrust_redis_client_drop(client);
+        }
+        assert_eq!(
+            drop_count() - before,
+            1,
+            "Client handle must drop exactly once"
+        );
+    }
+
     /// Null-pointer tolerance — every shim must return a well-defined
     /// sentinel rather than panic / segfault. Drops on null are no-ops
     /// (don't touch the counter).
@@ -962,6 +1257,29 @@ mod tests {
             let null_scard = __cobrust_redis_client_scard(std::ptr::null_mut(), key);
             assert_eq!(null_scard, 0);
 
+            // --- Phase-1d verbs on null — a VALID EMPTY list[str], NOT a
+            // null pointer (so the .cb for-loop / index / drop see a
+            // well-formed len-0 list), and each frees clean.
+            let null_lrange = __cobrust_redis_client_lrange(std::ptr::null_mut(), key, 0, -1);
+            assert!(!null_lrange.is_null(), "null lrange mints an empty list");
+            assert_eq!(__cobrust_list_len(null_lrange), 0);
+            drop_str_list_for_test(null_lrange);
+
+            let null_smembers = __cobrust_redis_client_smembers(std::ptr::null_mut(), key);
+            assert!(!null_smembers.is_null());
+            assert_eq!(__cobrust_list_len(null_smembers), 0);
+            drop_str_list_for_test(null_smembers);
+
+            let null_hkeys = __cobrust_redis_client_hkeys(std::ptr::null_mut(), key);
+            assert!(!null_hkeys.is_null());
+            assert_eq!(__cobrust_list_len(null_hkeys), 0);
+            drop_str_list_for_test(null_hkeys);
+
+            let null_hgetall = __cobrust_redis_client_hgetall(std::ptr::null_mut(), key);
+            assert!(!null_hgetall.is_null());
+            assert_eq!(__cobrust_list_len(null_hgetall), 0);
+            drop_str_list_for_test(null_hgetall);
+
             drop_str_for_test(key);
 
             let before = drop_count();
@@ -990,5 +1308,47 @@ mod tests {
             __cobrust_redis_client_drop(client);
         }
         assert_eq!(drop_count() - before, 1);
+    }
+
+    /// The `list[str]` mint + drop discipline with NON-empty content,
+    /// isolated from any redis I/O. Mints a `list[str]` via the exact
+    /// `alloc_str_list` helper the four Phase-1d shims use, reads its
+    /// elements back (order + content preserved), then frees it via the
+    /// SAME `__cobrust_list_drop_elems(list, __cobrust_str_drop)` drop the
+    /// codegen `Ty::List(Str)` schedule emits at `.cb` scope exit. Proves
+    /// the producer recipe (`__cobrust_list_new(8, len)` + per-element
+    /// `Str` buffer + `__cobrust_list_set`) round-trips and frees with no
+    /// leak / double-free — the server-less proof of the new return shape.
+    /// (A `hgetall`-shaped FLAT `[k, v, k, v]` payload doubles as the
+    /// documented flat-list divergence shape.)
+    #[test]
+    fn cabi_str_list_mint_roundtrips_and_drops_clean() {
+        unsafe {
+            // A flat [field, value, field, value] payload — the hgetall
+            // divergence shape (and a general non-empty list[str]).
+            let items = vec![
+                "name".to_string(),
+                "alice".to_string(),
+                "role".to_string(),
+                "admin".to_string(),
+            ];
+            let list = alloc_str_list(&items);
+            assert!(!list.is_null(), "a non-empty mint is never null");
+            assert_eq!(__cobrust_list_len(list), 4, "len == element count");
+            assert_eq!(
+                read_str_list_for_test(list),
+                items,
+                "the minted list preserves element order + content"
+            );
+            // Free via the codegen Ty::List(Str) drop — no leak / double-free.
+            drop_str_list_for_test(list);
+
+            // A 0-element mint is also valid (len 0, never null) and frees
+            // clean — the fail-clean empty-list shape.
+            let empty = alloc_str_list(&[]);
+            assert!(!empty.is_null(), "an empty mint is never null");
+            assert_eq!(__cobrust_list_len(empty), 0);
+            drop_str_list_for_test(empty);
+        }
     }
 }

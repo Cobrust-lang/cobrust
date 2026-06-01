@@ -62,10 +62,35 @@ across the C ABI (constitution §2.2).
   fail-clean discipline — no new mechanism over Phase A/B. The Phase-C
   fail-clean error paths are exercised by an always-on server-LESS e2e;
   the Phase-C live round-trips (list / set) self-skip when no server is
-  reachable. The multi-element LIST-of-str returns (`lrange` /
-  `smembers` / `hgetall` / `hkeys`) are **deferred** — they need a NEW
-  C-ABI list-handle return shape redis has no precedent for (see
-  Non-goals).
+  reachable.
+- **ADR-0078 Phase-1c (Phase 1d) — delivered.** The multi-element
+  LIST-of-str returns: `lrange` / `smembers` / `hkeys` / `hgetall`. Each
+  returns the first-class `Ty::List(Box::new(Ty::Str))` (`list[str]`). A
+  read-only design pass CONFIRMED this is a BOUNDED follow-the-pattern
+  batch, NOT a language increment: `Ty::List(Str)` + the C-ABI list
+  machinery (`__cobrust_list_new`/`_set`/`_get`/`_len`/`_drop_elems`) +
+  the `.cb` for-loop / index / `Ty::List(Str)` drop schedule were ALL
+  already shipping. The cabi shims mint the list with the SAME recipe
+  `__cobrust_llm_stream` (cobrust-stdlib/src/llm.rs:466-489) and
+  `__cobrust_coil_buffer_shape` (cobrust-coil/src/cabi.rs:1715-1734) use
+  for their list returns — `__cobrust_list_new(8, len)` + a per-element
+  `Str` buffer + `__cobrust_list_set`; the `.cb` scope owns + drops the
+  returned list once (codegen selects `__cobrust_list_drop_elems(list,
+  __cobrust_str_drop)` from `Ty::List(Str)`), so the shim does NOT free
+  it. Codegen derives the extern fn-type + return generically from
+  `EcoSig.ret` (a `Ty::List` return maps to an LLVM ptr return — NO new
+  codegen fn-type; only `lrange`'s extra `(start, stop)` i64 pair needs a
+  4-arg type, the other three reuse `get`'s `(ptr,ptr)->ptr`). The stale
+  Phase-C "redis has no list-handle precedent" deferral note (which lived
+  in cabi.rs:13-17 + the Non-goals below) is CORRECTED. `hgetall` returns
+  a FLAT `[k, v, k, v, ...]` `list[str]` — a documented Semantic
+  divergence from Python's dict, mirroring `coil.shape`'s list-vs-tuple
+  divergence note. The Phase-1d fail-clean error paths (each verb mints an
+  EMPTY `list[str]` on the disconnected sentinel) are exercised by an
+  always-on server-LESS e2e (including a `for x in xs` loop over the
+  returned list); the Phase-1d live round-trips (`lrange` → values +
+  iterate + index, `hgetall` → flat pairs) self-skip when no server is
+  reachable.
 
 ## The `.cb` surface (Phase A — the v0.7.0 MUST-ship)
 
@@ -165,17 +190,55 @@ fn main() -> i64:
 `lpush` prepends (head), `rpush` appends (tail); both return the list's
 NEW length. `lpop`/`rpop` pop one element from the head/tail and return
 it as a str, mirroring `get` (`""` for an empty or absent list — NOT the
-multi-element list `lrange` would return; that LIST-of-str return is the
-deferred follow-up). `llen` is the list length (`0` if absent). `sadd`
+multi-element list `lrange` returns; that LIST-of-str return is Phase-1d
+below). `llen` is the list length (`0` if absent). `sadd`
 returns the number ADDED (`1` if new, `0` if already present); `srem` the
 number removed; `sismember` membership as a bool; `scard` the set
 cardinality (`0` if absent).
 
-**Deferred** (NOT in Phase C): `lrange` / `smembers` / `hgetall` /
-`hkeys` — these return a LIST of strings, a NEW C-ABI list-of-str-handle
-return shape redis has no precedent for (every redis verb shipped so far
-returns a scalar / str / bool). They are a tracked follow-up, NOT a dead
-end (see Non-goals).
+## The `.cb` surface (Phase 1d — LIST-of-str returns)
+
+```text
+import redis
+
+fn main() -> i64:
+    let client = redis.connect("redis://127.0.0.1/")
+    client.rpush("tasks", "a")
+    client.rpush("tasks", "b")
+    let xs: list[str] = client.lrange("tasks", 0, -1)   # -> ["a", "b"] (0,-1 = whole list)
+    print(xs.len())                                      # -> 2
+    for t in xs:                                          # for-loop over the returned list
+        print(t)                                         # -> a / b
+    let m: list[str] = client.smembers("tags")           # -> all set members
+    let hk: list[str] = client.hkeys("user:1")           # -> all hash field names
+    let hga: list[str] = client.hgetall("user:1")        # -> FLAT [field, value, ...]
+    return 0
+```
+
+| `.cb` call | redis-rs sync call (Commands trait) | C-ABI shim | ret |
+|---|---|---|---|
+| `client.lrange(k, start, stop)` | `con.lrange::<_,Vec<String>>(k, start, stop)` | `__cobrust_redis_client_lrange(c, k, start, stop) -> *mut List` | `list[str]` |
+| `client.smembers(k)` | `con.smembers::<_,Vec<String>>(k)` | `__cobrust_redis_client_smembers(c, k) -> *mut List` | `list[str]` |
+| `client.hkeys(k)` | `con.hkeys::<_,Vec<String>>(k)` | `__cobrust_redis_client_hkeys(c, k) -> *mut List` | `list[str]` |
+| `client.hgetall(k)` | `con.hgetall::<_,Vec<String>>(k)` | `__cobrust_redis_client_hgetall(c, k) -> *mut List` | `list[str]` (FLAT) |
+
+Each returns the first-class `Ty::List(Box::new(Ty::Str))`. `lrange`
+takes the redis-native `(start, stop)` index pair (both inclusive,
+negative = tail-relative; `0, -1` is the whole list). An absent key /
+disconnected sentinel / command error mints an EMPTY `list[str]` (the
+list analogue of `get`'s `""` sentinel — never null, never a panic). The
+`.cb` scope owns + drops the returned list once (the `Ty::List(Str)` drop
+schedule → `__cobrust_list_drop_elems(list, __cobrust_str_drop)`); the
+shim does NOT free it. The `.cb` consumes it with the EXISTING for-loop /
+index / len machinery (NO new code).
+
+**`hgetall` flat-list divergence**: Python's `redis` returns `hgetall` as
+a `dict`; Cobrust returns a FLAT `list[str]` `[field, value, field,
+value, ...]`. This is a documented Semantic divergence mirroring
+`coil.shape`'s list-vs-tuple divergence (numpy tuple → coil `list[i64]`):
+the flat list is the §2.5-closest honest shape the already-shipping
+`Ty::List(Str)` machinery supports without a new `Dict`-across-C-ABI
+return shape. A `dict`-returning `hgetall` is a tracked follow-up.
 
 ## Rust public surface
 
@@ -207,6 +270,11 @@ impl Client {
     pub fn srem(&mut self, key: &str, member: &str) -> Result<i64, RedisError>;   // # removed
     pub fn sismember(&mut self, key: &str, member: &str) -> Result<bool, RedisError>;
     pub fn scard(&mut self, key: &str) -> Result<i64, RedisError>;               // cardinality
+    // Phase 1d — LIST-of-str returns (empty Vec on absent key):
+    pub fn lrange(&mut self, key: &str, start: i64, stop: i64) -> Result<Vec<String>, RedisError>;
+    pub fn smembers(&mut self, key: &str) -> Result<Vec<String>, RedisError>;
+    pub fn hkeys(&mut self, key: &str) -> Result<Vec<String>, RedisError>;
+    pub fn hgetall(&mut self, key: &str) -> Result<Vec<String>, RedisError>;      // FLAT [k,v,k,v,...]
 }
 
 #[derive(Clone, Debug)]
@@ -240,8 +308,24 @@ __cobrust_redis_client_sadd(c, key, member: *mut Str) -> i64          // &mut bo
 __cobrust_redis_client_srem(c, key, member: *mut Str) -> i64          // &mut borrow; 0 on error; # removed
 __cobrust_redis_client_sismember(c, key, member: *mut Str) -> bool    // &mut borrow; false on error
 __cobrust_redis_client_scard(c, key: *mut Str) -> i64                 // &mut borrow; 0 on error; cardinality
+// Phase 1d (LIST-of-str returns — mint an owned list[str] the .cb scope drops; EMPTY list on error):
+__cobrust_redis_client_lrange(c, key: *mut Str, start, stop: i64) -> *mut List   // &mut borrow; empty list[str] on absent/error
+__cobrust_redis_client_smembers(c, key: *mut Str) -> *mut List        // &mut borrow; empty list[str] on absent/error
+__cobrust_redis_client_hkeys(c, key: *mut Str) -> *mut List           // &mut borrow; empty list[str] on absent/error
+__cobrust_redis_client_hgetall(c, key: *mut Str) -> *mut List         // &mut borrow; FLAT [k,v,...] list[str]; empty on absent/error
 __cobrust_redis_client_drop(c)                             // Box::from_raw + DROP_COUNT, idempotent on null
 ```
+
+- **`list[str]` return** (Phase 1d): the shim mints an owned `List<i64>`
+  whose i64 slots store heap-`Str` pointers, via the `__cobrust_list_new`
+  / `__cobrust_list_set` externs (declared in `cabi.rs`, resolved from
+  `libcobrust_stdlib.a` — the SAME ADR-0072 Q5 cross-crate pattern the Str
+  externs use, and the SAME mint recipe `__cobrust_llm_stream` +
+  `__cobrust_coil_buffer_shape` use). The `.cb` scope OWNS the returned
+  list and drops it once at scope exit (`__cobrust_list_drop_elems(list,
+  __cobrust_str_drop)`, codegen-selected from `Ty::List(Str)`); the shim
+  does NOT free it. A null handle / disconnected sentinel / command error
+  mints an EMPTY list (len 0), NEVER null.
 
 - **Handle**: `Client` crosses as opaque `*mut u8`, `Box::into_raw`'d by
   `connect`, `Box::from_raw`'d once at scope-exit (`_drop`). Dropping
@@ -263,10 +347,10 @@ __cobrust_redis_client_drop(c)                             // Box::from_raw + DR
 |---|---|---|---|
 | Module registry | `cobrust-types/src/ecosystem.rs` | `is_ecosystem_module` | add `"redis"` to the alternation |
 | Free-fn manifest | same | `lookup_module_fn` | `("redis","connect") -> __cobrust_redis_connect : (Str) -> Client` |
-| Handle-method manifest | same | `lookup_handle_method` | Phase A `(REDIS_CLIENT_ADT, "set"/"get"/"delete"/"exists")` + Phase B `"expire"/"incr"/"incr_by"/"hset"/"hget"` + Phase C `"lpush"/"rpush"/"lpop"/"rpop"/"llen"/"sadd"/"srem"/"sismember"/"scard"` rows |
+| Handle-method manifest | same | `lookup_handle_method` | Phase A `(REDIS_CLIENT_ADT, "set"/"get"/"delete"/"exists")` + Phase B `"expire"/"incr"/"incr_by"/"hset"/"hget"` + Phase C `"lpush"/"rpush"/"lpop"/"rpop"/"llen"/"sadd"/"srem"/"sismember"/"scard"` + Phase 1d `"lrange"/"smembers"/"hkeys"/"hgetall"` (all `Ty::List(Box::new(Ty::Str))`) rows |
 | Drop symbol | same | `handle_drop_symbol` | `REDIS_CLIENT_ADT => Some("__cobrust_redis_client_drop")` |
 | ADT block | same | `REDIS_CLIENT_ADT` | `ECO_ADT_BASE + 0x800` (the NINTH 256-slot block, next-free past coil's `0x700`) |
-| Codegen externs | `cobrust-codegen/src/llvm_backend.rs` | `declare_runtime_helpers` | extern decls for the twenty `__cobrust_redis_*` symbols (six Phase-A + five Phase-B + nine Phase-C; the only NEW fn-types are the `lpush`/`rpush`/`sadd`/`srem` 3-ptr→i64 + `sismember` 3-ptr→bool — `lpop`/`rpop` reuse `get`'s ptr→ptr, `llen`/`scard` reuse `delete`'s ptr→i64) |
+| Codegen externs | `cobrust-codegen/src/llvm_backend.rs` | `declare_runtime_helpers` | extern decls for the twenty-four `__cobrust_redis_*` symbols (six Phase-A + five Phase-B + nine Phase-C + four Phase-1d; Phase-C NEW fn-types are the `lpush`/`rpush`/`sadd`/`srem` 3-ptr→i64 + `sismember` 3-ptr→bool; Phase-1d's only NEW fn-type is `lrange`'s `(ptr,ptr,i64,i64)→ptr` — `smembers`/`hkeys`/`hgetall` reuse `get`'s ptr→ptr since a `Ty::List` return is just a ptr; NO new codegen fn-type design, ret driven by `EcoSig.ret`) |
 | Link recognizer | `cobrust-cli/src/build/intrinsics.rs` | `ecosystem_module_for_symbol` | `sym.starts_with("__cobrust_redis_") => Some("redis")` |
 | MIR | `cobrust-mir/src/lower.rs` | `try_lower_ecosystem_call` | **no edit** — generic (consults the manifest by name) |
 | Archive locate | `cobrust-cli/src/build.rs` | `locate_ecosystem_archive` | **no edit** — module-name-generic (`lib{module}.a` + `cargo build -p cobrust-{module}`) |
@@ -297,19 +381,28 @@ usually carries:
 
 - **compile-time-catch-errors**: the manifest gives every verb
   (`connect`/`set`/`get`/`delete`/`exists` + `expire`/`incr`/`incr_by`/
-  `hset`/`hget`) a concrete typed signature; a wrong-arity or wrong-type
-  call is a typecheck error, not a runtime surprise (e.g. `expire(k)`
-  missing the `secs: i64` is rejected at typecheck). The `RedisErrorKind`
-  Rust enum is closed + exhaustively matchable.
+  `hset`/`hget` + the Phase-1d `lrange`/`smembers`/`hkeys`/`hgetall`) a
+  concrete typed signature; a wrong-arity or wrong-type call is a
+  typecheck error, not a runtime surprise (e.g. `expire(k)` missing the
+  `secs: i64`, or `lrange(k)` missing the `start`/`stop` indices, is
+  rejected at typecheck). The Phase-1d verbs' `list[str]` return type-
+  checks against a `for`/index/`.len()` use, so iterating a non-list by
+  mistake is a compile error too. The `RedisErrorKind` Rust enum is closed
+  + exhaustively matchable.
 - **maximize-overlap-with-training-data**: the verbs ARE the redis-py
   surface (`r.set`/`r.get`/`r.delete`/`r.exists`/`r.expire`/`r.incr`/
   `r.hset`/`r.hget` + the Phase-C `r.lpush`/`r.rpush`/`r.lpop`/`r.rpop`/
-  `r.llen`/`r.sadd`/`r.srem`/`r.sismember`/`r.scard`); the un-suffixed
+  `r.llen`/`r.sadd`/`r.srem`/`r.sismember`/`r.scard` + the Phase-1d
+  `r.lrange`/`r.smembers`/`r.hkeys`/`r.hgetall`); the un-suffixed
   names have strictly higher training-data overlap than a
   `set_str`/`get_str` type-suffix (the suffix only returns IF a
   `get_int`/`get_bytes` sibling ships). `incr_by` is the readable spelling
   of redis-py's `r.incr(k, n)` / the `INCRBY` command (the `_by` suffix
-  disambiguates the two-arg delta form from the bare one-arg `incr`).
+  disambiguates the two-arg delta form from the bare one-arg `incr`). The
+  ONE deliberate divergence is `hgetall` returning a FLAT `list[str]`
+  rather than a `dict` — a documented Semantic-tier divergence (mirroring
+  `coil.shape`'s list-vs-tuple note), the §2.5-closest honest shape the
+  shipping `Ty::List(Str)` machinery supports today.
 
 ## License / provenance
 
@@ -324,15 +417,30 @@ usually carries:
 
 ## Tests
 
-- `src/client.rs` `#[cfg(test)]`: disconnected-sentinel command behaviour,
-  invalid-URL vs unreachable-port error-kind classification, Display.
+- `src/client.rs` `#[cfg(test)]`: disconnected-sentinel command behaviour
+  (extended to the Phase-1d `lrange`/`smembers`/`hkeys`/`hgetall` →
+  `Disconnected`), invalid-URL vs unreachable-port error-kind
+  classification, Display.
 - `src/cabi.rs` `#[cfg(test)]`: the full fail-clean vertical slice
   (server-less) returns per-type sentinels + drops exactly once — extended
   to the Phase-B verbs (`expire`→false / `incr`,`incr_by`→0 / `hset`→false
   / `hget`→"") and the Phase-C verbs (`lpush`,`rpush`→0 / `lpop`,`rpop`→""
-  / `llen`→0 / `sadd`,`srem`→0 / `sismember`→false / `scard`→0);
-  null-pointer tolerance (all twenty shims); invalid-URL non-null
-  sentinel.
+  / `llen`→0 / `sadd`,`srem`→0 / `sismember`→false / `scard`→0); the
+  Phase-1d `list[str]`-return verbs in a dedicated test
+  (`cabi_phase_1d_str_list_verbs_mint_empty_lists_on_disconnected` — each
+  mints an EMPTY `list[str]` len 0, never null, each freed clean via the
+  codegen `Ty::List(Str)` drop, handle drops once; split out to stay under
+  the 100-line lint ceiling); a `list[str]` mint+drop discipline test
+  (`cabi_str_list_mint_roundtrips_and_drops_clean` — mints a NON-empty
+  flat `[k,v,k,v]` list via the exact `alloc_str_list` shim helper, reads
+  it back order+content-preserved, frees via
+  `__cobrust_list_drop_elems(list, __cobrust_str_drop)` — the server-less
+  proof of the new return shape + no-leak/double-free); null-pointer
+  tolerance (all twenty-four shims; the four Phase-1d shims mint an empty
+  list on null); invalid-URL non-null sentinel. The `__cobrust_list_*`
+  externs resolve under `cargo test` via `#[used]` static link anchors
+  (`_LIST_NEW_LINK_ANCHOR` / `_LIST_SET_LINK_ANCHOR`, mirroring the
+  existing `__cobrust_str_new` anchor).
 - `crates/cobrust-cli/tests/redis_fail_clean_e2e.rs` (ALWAYS-ON):
   `.cb` source → compile → link → run against an unreachable redis →
   prints the empty-str / `0` / `False` sentinels. Proves the chain + the
@@ -341,8 +449,15 @@ usually carries:
   `hget` (prints `False`/`0`/`0`/`False`/`""`); a third
   (`..._phase_c_...`) does the same for `lpush`/`rpush`/`lpop`/`rpop`/
   `llen`/`sadd`/`srem`/`sismember`/`scard` (prints
-  `0`/`0`/`""`/`""`/`0`/`0`/`0`/`False`/`0`), so the Phase-B + Phase-C
-  error paths are genuinely exercised server-less.
+  `0`/`0`/`""`/`""`/`0`/`0`/`0`/`False`/`0`); a fourth
+  (`..._phase_1d_...`) is the END-TO-END proof of the `list[str]` RETURN +
+  the `.cb` for-loop + `.len()` + the `Ty::List(Str)` DROP: `let xs:
+  list[str] = client.lrange("k", 0, -1)` mints an EMPTY list, `xs.len()`
+  prints `0`, `for x in xs: print(x)` emits nothing (empty list), and
+  `smembers`/`hkeys`/`hgetall` each `.len()`→`0` (prints `0\n0\n0\n0\n`) —
+  the four minted lists drop clean (a leak/double-free would crash the
+  run). So the Phase-B + Phase-C + Phase-1d paths are genuinely exercised
+  server-less.
 - `crates/cobrust-cli/tests/redis_live_e2e.rs` (SELF-SKIP): the live
   `set`→`get`→`delete`→`exists` round-trip; a second test does the
   Phase-B live round-trips — counter (`set "10"`→`incr`=11→`incr_by 5`=16),
@@ -350,12 +465,16 @@ usually carries:
   "a"→`hset` overwrite=False→`hget`="b"); a third does the Phase-C live
   round-trips — list (`lpush "a"`=1→`rpush "b"`=2→`llen`=2→`lpop`="a"→
   `rpop`="b"→`llen`=0), set (`sadd "x"`=1→`sadd "x"` dup=0→`sismember`=
-  True→`scard`=1→`srem "x"`=1→`sismember`=False). All run when
-  `$REDIS_URL` / `127.0.0.1:6379` is reachable, self-skip (clean `return`
-  + diagnostic) otherwise. The TTL-expiry timing is deliberately NOT
-  slept-through (only the `expire` return + immediate `exists` are
-  asserted) to avoid a flaky slow test (ADR-0078 §Phase-B heaviest-risk
-  note).
+  True→`scard`=1→`srem "x"`=1→`sismember`=False); a fourth does the
+  Phase-1d NON-EMPTY `list[str]` round-trips — list (`rpush a/b/c` →
+  `lrange 0 -1` = `[a,b,c]`, asserting `xs.len()`=3, `xs[0..2]`=a/b/c (the
+  index `__cobrust_str_clone` path), and `for s in xs` = a/b/c (the
+  loop-var clone path)), hash (`hset f1/f2` → `hgetall` flat list, asserts
+  `.len()`=4). All run when `$REDIS_URL` / `127.0.0.1:6379` is reachable,
+  self-skip (clean `return` + diagnostic) otherwise. The TTL-expiry timing
+  is deliberately NOT slept-through (only the `expire` return + immediate
+  `exists` are asserted) to avoid a flaky slow test (ADR-0078 §Phase-B
+  heaviest-risk note).
 
 ## Ownership / lifecycle (ADR-0078 §3.7)
 
@@ -370,16 +489,16 @@ usually carries:
 
 ## Non-goals (deferred follow-ups)
 
-- **LIST-of-str returns** — `lrange(k, start, stop)` / `smembers(k)` /
-  `hgetall(k)` / `hkeys(k)` return a LIST of strings. This is a NEW C-ABI
-  return shape (a list-of-str-handle) that redis has NO precedent for:
-  every redis verb shipped so far (Phase A/B/C) returns a scalar / str /
-  bool. Wiring it needs a Cobrust `list[str]` handle minted across the C
-  ABI (allocate + populate + the `.cb` drop schedule) + the codegen
-  fn-type for a `ptr -> *mut List` return + the typecheck `Ty::List`
-  result — the same list-handle design coil's `buffer.shape() -> *mut
-  List<i64>` already prototypes. Deferred to a dedicated follow-up so
-  Phase C stays the scalar/str-return increment (the proven shapes).
+- **`dict`-returning `hgetall`** — Phase 1d ships `hgetall` as a FLAT
+  `list[str]` `[field, value, ...]` (the documented Semantic divergence
+  mirroring `coil.shape`'s list-vs-tuple note). A `hgetall` that returns a
+  true `Dict[str, str]` is a tracked follow-up — it needs the first
+  `Dict`-across-the-C-ABI return shape (mint + populate a `__cobrust_dict_*`
+  handle the `.cb` scope drops via the existing `Ty::Dict` drop schedule),
+  the dict analogue of the `Ty::List(Str)` return Phase 1d just landed.
+  (Phase 1d itself is NOT deferred — the LIST-of-str returns `lrange` /
+  `smembers` / `hkeys` / `hgetall` are SHIPPED; the prior "redis has no
+  list-handle precedent" deferral note was stale and is corrected.)
 - `set_expiry(k, v, secs)` (the `SETEX` set-with-TTL one-shot — an
   additive manifest row + cabi shim, same pattern as `expire`; not in the
   Phase-B five but a trivial follow-up if a use-case wants the atomic

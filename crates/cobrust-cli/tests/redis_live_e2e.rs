@@ -304,3 +304,86 @@ fn test_e2e_redis_live_phase_c_round_trip_or_skip() {
         "live redis phase-c round-trip: lpush/rpush/llen/lpop/rpop, sadd/srem/sismember/scard"
     );
 }
+
+/// ADR-0078 Phase-1c Phase-1d — the LIVE round-trip for the new
+/// LIST-of-str-return verbs. Self-skips (clean `return`) when no redis is
+/// reachable. Proves the NON-EMPTY `list[str]` return end-to-end against a
+/// real server (the minted list carries actual values, exercising the
+/// for-loop loop-var `__cobrust_str_clone` path + the `xs[i]` index clone
+/// path + the `Ty::List(Str)` drop). On a process-unique key, cleaned up
+/// at the end:
+///
+/// 1. list: `rpush l "a"`, `rpush l "b"`, `rpush l "c"` (tail-append, so
+///    the list is `[a, b, c]`) → `lrange l 0 -1` → `[a, b, c]`. The `.cb`
+///    program prints `xs.len()` (`3`), `xs[0]` / `xs[1]` / `xs[2]`
+///    (`a`/`b`/`c`, proving the index clone), then iterates `for s in xs`
+///    printing each (`a`/`b`/`c` again, proving the loop-var clone).
+/// 2. hash: `hset h "f1" "v1"`, `hset h "f2" "v2"` → `hgetall h` → the
+///    FLAT `[f1, v1, f2, v2]` (the documented dict-vs-flat-list
+///    divergence). The program prints `hga.len()` (`4`). (The pair ORDER
+///    within the flat list follows redis's HGETALL reply; the two fields
+///    were inserted f1-then-f2, which redis's hash preserves for this
+///    small hash, but the test asserts only the `len`==4 to stay robust to
+///    redis's unordered-hash guarantee — the flat-shape itself is the
+///    contract under test.)
+#[test]
+fn test_e2e_redis_live_phase_1d_str_list_round_trip_or_skip() {
+    let url = redis_url();
+    let hp = host_port(&url);
+    if !redis_reachable(&hp) {
+        eprintln!(
+            "redis_live_e2e (phase-1d): skipping cleanly: no redis server reachable at {hp} \
+             (set REDIS_URL to a reachable redis://host:port/ to run the live round-trip)"
+        );
+        return;
+    }
+
+    // Process-unique key roots so concurrent runs / a shared server don't
+    // collide across the two round-trips.
+    let pid = std::process::id();
+    let kl = format!("cobrust:redis_live_e2e:phase1d:list:{pid}");
+    let kh = format!("cobrust:redis_live_e2e:phase1d:hash:{pid}");
+
+    let source = format!(
+        concat!(
+            "import redis\n",
+            "\n",
+            "fn main() -> i64:\n",
+            "    let client = redis.connect(\"{url}\")\n",
+            // 1. list round-trip: rpush a, b, c (tail) -> [a, b, c];
+            //    lrange 0 -1 -> the whole list[str].
+            "    let _r1: i64 = client.rpush(\"{kl}\", \"a\")\n",
+            "    let _r2: i64 = client.rpush(\"{kl}\", \"b\")\n",
+            "    let _r3: i64 = client.rpush(\"{kl}\", \"c\")\n",
+            "    let xs: list[str] = client.lrange(\"{kl}\", 0, -1)\n",
+            // .len() -> 3; xs[0..2] -> a/b/c (index clone path).
+            "    print(xs.len())\n",
+            "    print(xs[0])\n",
+            "    print(xs[1])\n",
+            "    print(xs[2])\n",
+            // for over the non-empty list -> a/b/c (loop-var clone path).
+            "    for s in xs:\n",
+            "        print(s)\n",
+            // 2. hash round-trip: hset two fields -> hgetall flat [f,v,f,v].
+            "    let _h1: bool = client.hset(\"{kh}\", \"f1\", \"v1\")\n",
+            "    let _h2: bool = client.hset(\"{kh}\", \"f2\", \"v2\")\n",
+            "    let hga: list[str] = client.hgetall(\"{kh}\")\n",
+            // .len() -> 4 (two field/value pairs, FLAT).
+            "    print(hga.len())\n",
+            // Clean up the two keys (deletes are not asserted on).
+            "    let _dl: i64 = client.delete(\"{kl}\")\n",
+            "    let _dh: i64 = client.delete(\"{kh}\")\n",
+            "    return 0\n",
+        ),
+        url = url,
+        kl = kl,
+        kh = kh,
+    );
+
+    let stdout = build_and_run_source(&source);
+    // len 3 + xs[0..2] a/b/c + for-loop a/b/c + hgetall flat len 4.
+    assert_eq!(
+        stdout, "3\na\nb\nc\na\nb\nc\n4\n",
+        "live redis phase-1d round-trip: lrange -> list[str] (index + for), hgetall -> flat list[str]"
+    );
+}

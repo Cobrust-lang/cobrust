@@ -454,6 +454,96 @@ impl Client {
         con.scard::<_, i64>(key)
             .map_err(|e| RedisError::from_redis(&e))
     }
+
+    // fn:Client::lrange provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `LRANGE key start stop` (list range slice). Mirrors redis-py
+    /// `r.lrange(key, start, stop)`. Returns the elements in the index
+    /// range `[start, stop]` (both inclusive, negative indices count from
+    /// the tail — redis's native semantics; `start=0, stop=-1` is the
+    /// whole list), as a `Vec<String>`. An absent key (or an out-of-range
+    /// slice) yields the empty vec (redis treats a missing key as an empty
+    /// list) — the cabi shim mints that as an empty `list[str]`. This is
+    /// the FIRST multi-element LIST-of-str return on the redis surface
+    /// (the `__cobrust_list_*` + `Ty::List(Str)` machinery is already
+    /// shipping — see `coil.shape`'s `list[i64]` precedent + the
+    /// `__cobrust_llm_stream` `list[str]` producer; ADR-0078 Phase-1d).
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed LRANGE (e.g. the key holds a non-list).
+    pub fn lrange(&mut self, key: &str, start: i64, stop: i64) -> Result<Vec<String>, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        // redis-rs's `Commands::lrange` takes `isize` indices. The `.cb`
+        // surface signature is `i64` (the canonical Cobrust integer); on
+        // the 64-bit targets the AOT backend supports `isize == i64`, so
+        // the conversion is lossless. `try_from` (rather than `as`) keeps
+        // the cast lint-clean WITHOUT a crate-level allow: a hypothetical
+        // 32-bit overflow saturates to the isize extreme (a redis index
+        // that large is meaningless — it simply addresses past either
+        // end, yielding the empty range, the same fail-clean shape an
+        // absent key gives).
+        let start =
+            isize::try_from(start).unwrap_or(if start < 0 { isize::MIN } else { isize::MAX });
+        let stop = isize::try_from(stop).unwrap_or(if stop < 0 { isize::MIN } else { isize::MAX });
+        con.lrange::<_, Vec<String>>(key, start, stop)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::smembers provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `SMEMBERS key` (all set members). Mirrors redis-py
+    /// `r.smembers(key)`. Returns the set's members as a `Vec<String>`
+    /// (redis SMEMBERS has no defined order; the cabi shim mints the vec
+    /// as a `list[str]`). An absent key yields the empty vec (a missing
+    /// key is an empty set).
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed SMEMBERS (e.g. the key holds a non-set).
+    pub fn smembers(&mut self, key: &str) -> Result<Vec<String>, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.smembers::<_, Vec<String>>(key)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::hkeys provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `HKEYS key` (all hash field names). Mirrors redis-py
+    /// `r.hkeys(key)`. Returns the hash's field names as a `Vec<String>`
+    /// (the cabi shim mints the vec as a `list[str]`). An absent key
+    /// yields the empty vec (a missing key is an empty hash).
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed HKEYS (e.g. the key holds a non-hash).
+    pub fn hkeys(&mut self, key: &str) -> Result<Vec<String>, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.hkeys::<_, Vec<String>>(key)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::hgetall provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `HGETALL key` (all hash field/value pairs). Mirrors redis-py
+    /// `r.hgetall(key)` — but with a documented Semantic divergence: where
+    /// redis-py returns a `dict`, the Cobrust first-proof returns a FLAT
+    /// `Vec<String>` `[field, value, field, value, ...]` (the cabi shim
+    /// mints it as a `list[str]`). This mirrors `coil.shape`'s
+    /// list-vs-tuple divergence (numpy returns a tuple, coil returns a
+    /// `list[i64]`): the flat list is the §2.5-closest honest shape the
+    /// already-shipping `Ty::List(Str)` machinery supports without a new
+    /// `Dict`-across-C-ABI return shape. The pairs preserve redis's
+    /// reply order (field then value, per pair). An absent key yields the
+    /// empty vec (a missing key is an empty hash).
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed HGETALL (e.g. the key holds a non-hash).
+    pub fn hgetall(&mut self, key: &str) -> Result<Vec<String>, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        // redis-rs deserialises HGETALL into a flat `Vec<String>`
+        // `[k, v, k, v, ...]` directly (the RESP reply IS a flat array);
+        // this IS the documented flat-list divergence shape.
+        con.hgetall::<_, Vec<String>>(key)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
 }
 
 #[cfg(test)]
@@ -543,6 +633,25 @@ mod tests {
         );
         assert_eq!(
             c.scard("k").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        // Phase-1d LIST-of-str verbs — same disconnected-sentinel
+        // short-circuit, every verb errors before any I/O (the cabi shim
+        // maps the Err to an EMPTY list[str], never a panic).
+        assert_eq!(
+            c.lrange("k", 0, -1).expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.smembers("k").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.hkeys("k").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.hgetall("k").expect_err("must error").kind,
             RedisErrorKind::Disconnected
         );
     }

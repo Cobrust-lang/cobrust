@@ -7,14 +7,17 @@
 //! KV verbs `set / get / delete / exists` (Phase-A), the cache/counter/
 //! hash verbs `expire / incr / incr_by / hset / hget` (Phase-B), and the
 //! list/set verbs `lpush / rpush / lpop / rpop / llen / sadd / srem /
-//! sismember / scard` (Phase-C), kept in lock-step with the `.cb` C-ABI
-//! surface (ADR-0078 Phase-1c). The Python-side `get` / `hget` / `lpop` /
-//! `rpop` return `Optional[str]` (None for an absent key/field / an
-//! empty list) — the §2.2-correct shape the C-ABI first proof renders as
-//! the empty-string sentinel but PyO3 can express natively.
-//!
-//! The multi-element LIST-of-str returns (`lrange` / `smembers` /
-//! `hgetall` / `hkeys`) are a deferred follow-up on BOTH surfaces.
+//! sismember / scard` (Phase-C), plus the multi-element LIST-of-str
+//! returns `lrange / smembers / hkeys / hgetall` (Phase-1d), kept in
+//! lock-step with the `.cb` C-ABI surface (ADR-0078 Phase-1c/1d). The
+//! Python-side `get` / `hget` / `lpop` / `rpop` return `Optional[str]`
+//! (None for an absent key/field / an empty list) — the §2.2-correct
+//! shape the C-ABI first proof renders as the empty-string sentinel but
+//! PyO3 can express natively. The Phase-1d verbs return a Python
+//! `list[str]` (`List<String>`); `hgetall` returns a FLAT
+//! `[field, value, field, value, ...]` list — the documented Semantic
+//! divergence from Python's dict (mirroring `coil.shape`'s list-vs-tuple
+//! divergence note).
 
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_errors_doc)]
@@ -115,6 +118,28 @@ impl PyClient {
 
     fn scard(&mut self, key: &str) -> PyResult<i64> {
         self.inner.scard(key).map_err(redis_err_to_py)
+    }
+
+    // Phase-1d — LIST-of-str returns (Python `list[str]`). Kept in
+    // lock-step with the `.cb` C-ABI surface (the review lesson). An
+    // absent key / disconnected sentinel yields the empty list.
+    fn lrange(&mut self, key: &str, start: i64, stop: i64) -> PyResult<Vec<String>> {
+        self.inner.lrange(key, start, stop).map_err(redis_err_to_py)
+    }
+
+    fn smembers(&mut self, key: &str) -> PyResult<Vec<String>> {
+        self.inner.smembers(key).map_err(redis_err_to_py)
+    }
+
+    fn hkeys(&mut self, key: &str) -> PyResult<Vec<String>> {
+        self.inner.hkeys(key).map_err(redis_err_to_py)
+    }
+
+    // `hgetall` returns a FLAT [field, value, field, value, ...] list —
+    // the documented Semantic divergence from Python's dict (mirroring
+    // `coil.shape`'s list-vs-tuple divergence note).
+    fn hgetall(&mut self, key: &str) -> PyResult<Vec<String>> {
+        self.inner.hgetall(key).map_err(redis_err_to_py)
     }
 }
 

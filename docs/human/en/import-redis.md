@@ -1,11 +1,13 @@
 # `import redis` — use a Redis cache / key-value store from Cobrust
 
-> Status: ADR-0078 Phase-1c. The eleventh ecosystem library you can
+> Status: ADR-0078 Phase-1c/1d. The eleventh ecosystem library you can
 > `import` from a `.cb` program and call end-to-end (compile → link →
 > run). It wires `redis` (Cobrust's cache / KV client, the redis-py
 > rebrand) onto the compiler's intrinsic / C-ABI / static-link chain,
 > using the synchronous path of the Rust `redis` crate (redis-rs) — so
-> there is no async runtime involved at all.
+> there is no async runtime involved at all. Phase 1d adds the
+> whole-collection reads (`lrange` / `smembers` / `hkeys` / `hgetall`)
+> that return a `list[str]`.
 
 ## Example first
 
@@ -140,12 +142,66 @@ fn main() -> i64:
 Again, exactly the redis-py names (`lpush` / `rpush` / `lpop` / `rpop` /
 `llen` / `sadd` / `srem` / `sismember` / `scard`).
 
-The verbs that read back a *whole* list or set at once — `lrange`,
-`smembers` (and the hash-wide `hgetall` / `hkeys`) — are a tracked
-follow-up, not yet shipped: they return a *list of strings*, a return
-shape the rest of the redis surface (which always returns a single value)
-does not yet have. For now, pop elements one at a time with `lpop` /
-`rpop`, or test membership with `sismember`.
+## What you get (Phase 1d — read back a whole list, set, or hash)
+
+The verbs that read back a *whole* collection at once. They each return a
+`list[str]` (a list of strings) — so you can iterate it with a `for`
+loop, index it (`xs[0]`), and ask its length (`xs.len()`), just like any
+other Cobrust list.
+
+```python
+import redis
+
+fn main() -> i64:
+    let client = redis.connect("redis://127.0.0.1/")
+
+    client.rpush("tasks", "a")
+    client.rpush("tasks", "b")
+    client.rpush("tasks", "c")
+
+    # Read the whole list back. start=0, stop=-1 means "everything".
+    let xs: list[str] = client.lrange("tasks", 0, -1)   # -> ["a", "b", "c"]
+    print(xs.len())                                      # -> 3
+    for task in xs:
+        print(task)                                      # -> a / b / c
+
+    # All members of a set.
+    client.sadd("tags", "x")
+    let tags: list[str] = client.smembers("tags")        # -> ["x"]
+
+    # All field names of a hash.
+    client.hset("user:1", "name", "ada")
+    let fields: list[str] = client.hkeys("user:1")       # -> ["name"]
+
+    # All field/value pairs of a hash — see the note below.
+    let pairs: list[str] = client.hgetall("user:1")      # -> ["name", "ada"]
+    return 0
+```
+
+- **`client.lrange(key, start, stop)`** — the elements of a list in the
+  index range `start..stop` (both ends inclusive; negative indices count
+  from the tail, so `0, -1` is the whole list — exactly redis's own rule).
+  A missing key gives the empty list `[]`.
+- **`client.smembers(key)`** — all members of a set, as a `list[str]`
+  (redis sets have no order). A missing key gives `[]`.
+- **`client.hkeys(key)`** — all field names of a hash, as a `list[str]`.
+  A missing key gives `[]`.
+- **`client.hgetall(key)`** — all field/value pairs of a hash.
+
+These are, once more, the redis-py names (`lrange` / `smembers` /
+`hkeys` / `hgetall`).
+
+### `hgetall` returns a flat list, not a dict
+
+Python's `redis` returns `hgetall` as a `dict`. Cobrust returns it as a
+**flat** `list[str]` — `[field1, value1, field2, value2, ...]` — so the
+example above gives `["name", "ada"]`. Read it two-at-a-time (a field
+then its value). This is a deliberate, documented difference, the same
+kind of difference `coil`'s `buffer.shape` makes (numpy returns a tuple,
+`coil` returns a `list[i64]`): the flat list is the honest shape the
+already-shipping list machinery supports cleanly today, without inventing
+a new dict-across-the-boundary return shape. A `dict`-returning
+`hgetall` is a tracked follow-up.
 
 ## Why this design?
 
@@ -177,9 +233,11 @@ you a usable `Client` — a "disconnected" one. Every operation on it
 returns the safe default (`get` / `hget` / `lpop` / `rpop` → `""`,
 `delete` / `incr` / `incr_by` / `lpush` / `rpush` / `llen` / `sadd` /
 `srem` / `scard` → `0`, `exists` / `expire` / `hset` / `sismember` →
-`false`), and `set` is silently a no-op. Your program never crashes at
-the boundary. This is what lets the test suite prove the whole pipeline
-works without needing a real Redis server running.
+`false`, and the whole-collection reads `lrange` / `smembers` / `hkeys` /
+`hgetall` → the empty list `[]`), and `set` is silently a no-op. Your
+program never crashes at the boundary. This is what lets the test suite
+prove the whole pipeline works — including the `for`-loop over a returned
+list — without needing a real Redis server running.
 
 ## Today's limits
 
@@ -193,10 +251,8 @@ works without needing a real Redis server running.
   one connection across spawned tasks (a connection pool is a follow-up).
 - A set-with-expiry one-shot (`SETEX`) is a small follow-up; for now use
   `set` then `expire`.
-- Reading back a *whole* list or set at once (`lrange` / `smembers`, and
-  the hash-wide `hgetall` / `hkeys`) is a follow-up — those return a list
-  of strings, a return shape the surface does not have yet. For now pop
-  with `lpop` / `rpop` or test with `sismember`.
+- `hgetall` returns a flat `list[str]` (`[field, value, ...]`), not a
+  `dict`; a `dict`-returning `hgetall` is a tracked follow-up.
 
 These are tracked follow-ups, not dead ends.
 
