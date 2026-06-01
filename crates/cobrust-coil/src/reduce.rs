@@ -1271,12 +1271,16 @@ mod tests {
 
     #[test]
     fn sum_all_f64_contiguous_via_as_slice() {
-        // Pins the F74 collect-elimination WIN path directly: a standard
-        // (row-major) contiguous f64 array has `as_slice() == Some`, so
-        // `sum_all` pairwise-sums the slice directly (the fast path), NOT the
-        // non-contiguous collect fallback. Guards the WIN'd arm against a
-        // future refactor — the audit flagged it as covered only transitively
-        // (via mean_all + the bench SAME_VALUE_GUARD) before this test.
+        // Value-correctness pin of `sum_all`'s f64 path on a standard
+        // (row-major) CONTIGUOUS input — `as_slice() == Some`, so this drives
+        // the F74 collect-elimination fast path (the WIN'd arm + the common
+        // case), which had been covered only transitively before this test.
+        // NOTE: this asserts the RESULT is correct; it cannot DISCRIMINATE the
+        // `Some` (slice) vs `None` (collect) arm, because the WIN is
+        // behaviour-preserving by construction — both arms compute the
+        // identical `pairwise_sum_f64` over the same elements, so any value
+        // test passes either way. Branch coverage of the two arms is a perf
+        // concern (the `benches/reduce.rs` T2/T3 ratios), not a value test.
         let a = array_f64(&[1.0, 2.0, 3.0, 4.0, 5.0], &[5]).unwrap();
         let r = sum(&a, None).unwrap();
         let Array::Float64(arr) = r else {

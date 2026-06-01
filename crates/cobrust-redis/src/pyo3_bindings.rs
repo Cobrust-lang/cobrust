@@ -4,10 +4,12 @@
 //! ecosystem batch by ADR-0022 §6). When compiled with the feature,
 //! this module exposes a `redis` Python extension whose public surface
 //! is a `connect(url) -> Client` function plus a `Client` class with the
-//! four Phase-A KV verbs `set / get / delete / exists` (ADR-0078
-//! Phase-1c). The Python-side `get` returns `Optional[str]` (None for an
-//! absent key) — the §2.2-correct shape the C-ABI first proof defers to
-//! a follow-up but PyO3 can express natively.
+//! nine KV verbs `set / get / delete / exists` (Phase-A) and
+//! `expire / incr / incr_by / hset / hget` (Phase-B), kept in lock-step
+//! with the `.cb` C-ABI surface (ADR-0078 Phase-1c). The Python-side `get`
+//! and `hget` return `Optional[str]` (None for an absent key/field) — the
+//! §2.2-correct shape the C-ABI first proof defers to a follow-up but PyO3
+//! can express natively.
 
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_errors_doc)]
@@ -47,6 +49,26 @@ impl PyClient {
 
     fn exists(&mut self, key: &str) -> PyResult<bool> {
         self.inner.exists(key).map_err(redis_err_to_py)
+    }
+
+    fn expire(&mut self, key: &str, seconds: i64) -> PyResult<bool> {
+        self.inner.expire(key, seconds).map_err(redis_err_to_py)
+    }
+
+    fn incr(&mut self, key: &str) -> PyResult<i64> {
+        self.inner.incr(key).map_err(redis_err_to_py)
+    }
+
+    fn incr_by(&mut self, key: &str, delta: i64) -> PyResult<i64> {
+        self.inner.incr_by(key, delta).map_err(redis_err_to_py)
+    }
+
+    fn hset(&mut self, key: &str, field: &str, value: &str) -> PyResult<bool> {
+        self.inner.hset(key, field, value).map_err(redis_err_to_py)
+    }
+
+    fn hget(&mut self, key: &str, field: &str) -> PyResult<Option<String>> {
+        self.inner.hget(key, field).map_err(redis_err_to_py)
     }
 }
 

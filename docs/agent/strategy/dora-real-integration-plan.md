@@ -610,7 +610,9 @@ probe; tree REVERTED after — clean at HEAD `3879611`, 8 cabi tests pass).
   `cobrust-cli/src/build.rs` (Cobrust has ZERO framework-linking today → new
   surface, gate per-target).
 - **WEIGHT (real):** `libdora.a` 17.2 MB → **450 MB** (lean 370); stripped binary
-  19 MB → **85 MB** (lean 75); lock 559 → **691 crates**; cold build ~11 min.
+  19 MB → **85 MB** (lean 75); lock 559 → **663 crates** (the SHIPPED lean
+  `default-features=false` config; the full-fat spike with the telemetry tier was
+  691); cold build ~11 min.
 - **`default-features = false` is a big win:** drops the telemetry tier
   (opentelemetry-otlp + gRPC + sysinfo, ~40 crates) AND the IOKit framework need
   (lean link needs only `-framework CoreFoundation`). Does NOT drop `ring`/`reqwest`.
