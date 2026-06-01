@@ -87,6 +87,69 @@ NaN,让一个坏值显式可见,而不是被悄悄吸收。(numpy 跳过 NaN 的
 `nanpercentile` 是有意的后续项 —— 今天只交付会传播 NaN 的
 `percentile`。)
 
+## 数组操作 —— 形状变换与拼接(`transpose` / `flatten` / `ravel` / `concatenate` / `vstack` / `hstack`)
+
+这些是返回 **新 `coil.Buffer`** 的「组合 + 变形」操作 —— 它们精确镜像
+numpy 中 LLM 最常用的那批数组操作习惯用法。它们的接线方式与 `@` 矩阵
+乘法运算符**完全一致**(借用 Buffer 参数 → 返回一个全新的 Buffer 句柄,
+该句柄由 `.cb` 作用域在退出时 drop 一次),而**不是**统计那批的标量返回。
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)  # (2,3)
+    let t: coil.Buffer = coil.transpose(a)        # (3,2):[[1,4],[2,5],[3,6]]
+    let _ = coil.print_buffer(t)
+    let f: coil.Buffer = coil.flatten(a)          # (6,):[1,2,3,4,5,6]
+    let _ = coil.print_buffer(f)
+    let b: coil.Buffer = coil.array2x3(7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
+    let c: coil.Buffer = coil.concatenate(a, b)   # (4,3):沿轴 0 拼接
+    let _ = coil.print_buffer(c)
+    let h: coil.Buffer = coil.hstack(a, b)        # (2,6):沿轴 1 拼接
+    let _ = coil.print_buffer(h)
+    return 0
+```
+
+**单参(变形,无条件成功)**:
+
+- **`coil.transpose(a: Buffer) -> Buffer`** —— 反转所有轴(`a.T`)。一维
+  数组原样返回(numpy 语义:`np.array([1,2,3]).T` 仍是 `(3,)`);二维
+  `(m, n)` 变成 `(n, m)`。dtype 与数值保持不变。
+- **`coil.flatten(a: Buffer) -> Buffer`** —— 折叠成一维 C 序(行主序)拷贝。
+- **`coil.ravel(a: Buffer) -> Buffer`** —— 同样折叠成一维 C 序拷贝。numpy
+  的 `ravel` 可能返回**视图**,但句柄 ABI 没有「视图指回父数组」的表面,
+  所以这里返回一份拥有所有权的拷贝(**数值与 numpy 完全一致**)。
+
+**双参(组合;非共形 / dtype 不匹配 → 干净 trap)**:
+
+- **`coil.concatenate(a: Buffer, b: Buffer) -> Buffer`** —— 沿轴 0 拼接两个
+  数组(`np.concatenate` 的默认轴)。两者必须同秩,且除轴 0 外每个轴
+  尺寸都要相等。
+- **`coil.vstack(a: Buffer, b: Buffer) -> Buffer`** —— 按行堆叠。一维
+  `(n,)` 参数先被提升为 `(1, n)`,然后沿轴 0 拼接(`vstack((n,),(n,)) ->
+  (2, n)`;`vstack((r,c),(s,c)) -> (r+s, c)`)。
+- **`coil.hstack(a: Buffer, b: Buffer) -> Buffer`** —— 按列堆叠。一维参数
+  沿轴 0 拼接(`hstack((p,),(q,)) -> (p+q,)`);二维及以上沿轴 1 拼接
+  (`hstack((r,c1),(r,c2)) -> (r, c1+c2)`)。
+
+> **dtype 约定**:单参操作(`transpose`/`flatten`/`ravel`)对全部五种 dtype
+> 通用,保持输入 variant。双参组合操作要求两个参数**同 dtype**,否则报错。
+> numpy 会把混合 dtype 提升到公共 dtype;我们保留干净的同 dtype 约定,因为
+> (a)今天每个 `.cb` Buffer 构造器都产出 `Float64`(所以常见路径永远是
+> `f64`+`f64`),(b)悄悄的跨 dtype 强制转换正是 §2.2 禁止的隐式强转。混合
+> dtype 的提升形式是有记录的后续项。
+>
+> **非共形 trap**:组合操作返回的是裸 `Buffer`(不是 `Result`),所以一对
+> 非共形(秩 / 非拼接轴维度 / dtype 不匹配)的输入会**中止进程**(干净
+> trap,绝不跨 C-ABI 栈展开),对应 numpy 抛 `ValueError`(§2.5 最接近的
+> 诚实语义;可失败的 `a.checked_concatenate(b) -> Result` 逃生口是后续
+> 表面)。
+>
+> **N 数组 / shape 元组形式被推迟**:`np.concatenate([a, b, c, ...])`(N 数组
+> 列表)和 `np.reshape(a, (m, n))`(shape 元组)需要 `list[Buffer]` / 元组
+> 编组,目前还不存在 —— 等那个落地后再补。本批只交付单参与双数组形式。
+
 ## 线性代数 —— `coil.linalg.*` 子命名空间(ADR-0079 Phase 1)
 
 `coil.linalg.*` 是生态模块下的**第一个点分子命名空间** —— 它精确镜像

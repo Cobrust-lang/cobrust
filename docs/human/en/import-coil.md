@@ -90,6 +90,81 @@ visible rather than silently absorbed. (numpy's NaN-skipping
 `nanpercentile` is a deliberate follow-up — only the propagating
 `percentile` ships today.)
 
+## Array manipulation — reshape & combine (`transpose` / `flatten` / `ravel` / `concatenate` / `vstack` / `hstack`)
+
+These are the "combine + reshape" ops that return a **fresh
+`coil.Buffer`** — they mirror exactly the array-manipulation idioms an
+LLM reaches for first in numpy. They are wired **identically** to the
+`@` matrix-multiply operator (borrow the Buffer args → return a fresh
+Buffer handle the `.cb` scope drops once at exit), NOT the scalar-return
+of the statistics batch.
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)  # (2,3)
+    let t: coil.Buffer = coil.transpose(a)        # (3,2): [[1,4],[2,5],[3,6]]
+    let _ = coil.print_buffer(t)
+    let f: coil.Buffer = coil.flatten(a)          # (6,): [1,2,3,4,5,6]
+    let _ = coil.print_buffer(f)
+    let b: coil.Buffer = coil.array2x3(7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
+    let c: coil.Buffer = coil.concatenate(a, b)   # (4,3): join along axis 0
+    let _ = coil.print_buffer(c)
+    let h: coil.Buffer = coil.hstack(a, b)        # (2,6): join along axis 1
+    let _ = coil.print_buffer(h)
+    return 0
+```
+
+**Single-arg (reshape; always succeeds):**
+
+- **`coil.transpose(a: Buffer) -> Buffer`** — reverse all axes (`a.T`). A
+  1-D array is returned unchanged (numpy: `np.array([1,2,3]).T` is still
+  `(3,)`); a 2-D `(m, n)` becomes `(n, m)`. Dtype + values preserved.
+- **`coil.flatten(a: Buffer) -> Buffer`** — collapse to a 1-D C-order
+  (row-major) copy.
+- **`coil.ravel(a: Buffer) -> Buffer`** — collapse to a 1-D C-order copy.
+  numpy's `ravel` may return a **view**; the handle ABI has no
+  view-into-parent surface, so this is an owned copy with **identical
+  values** to numpy's `ravel`.
+
+**Two-arg (combine; non-conformable / dtype-mismatch → clean trap):**
+
+- **`coil.concatenate(a: Buffer, b: Buffer) -> Buffer`** — join two
+  arrays along axis 0 (the default `np.concatenate` axis). Both must have
+  the same rank and matching sizes on every axis except axis 0.
+- **`coil.vstack(a: Buffer, b: Buffer) -> Buffer`** — stack row-wise. A
+  1-D `(n,)` operand is first promoted to `(1, n)`, then concatenated
+  along axis 0 (`vstack((n,),(n,)) -> (2, n)`; `vstack((r,c),(s,c)) ->
+  (r+s, c)`).
+- **`coil.hstack(a: Buffer, b: Buffer) -> Buffer`** — stack column-wise.
+  1-D operands concatenate along axis 0 (`hstack((p,),(q,)) -> (p+q,)`);
+  ≥2-D operands concatenate along axis 1 (`hstack((r,c1),(r,c2)) ->
+  (r, c1+c2)`).
+
+> **Dtype contract**: the single-arg ops (`transpose`/`flatten`/`ravel`)
+> are dtype-generic across all five dtypes (input variant preserved). The
+> two-arg combine ops require the operands to share a dtype and raise
+> otherwise. numpy promotes a mixed-dtype pair to a common dtype; we keep
+> the clean equal-dtype contract because (a) every `.cb` Buffer
+> constructor today emits `Float64` (so the common path is always
+> `f64`+`f64`), and (b) a silent cross-dtype promotion is exactly the
+> implicit coercion §2.2 forbids. A mixed-dtype promoting form is a
+> tracked follow-up.
+>
+> **Non-conformable trap**: the combine ops return a bare `Buffer` (not a
+> `Result`), so a non-conformable pair (rank / non-axis-dim / dtype
+> mismatch) **aborts the process** (a clean trap, NEVER unwinding across
+> the C-ABI) — matching numpy's `ValueError` raise (the §2.5 closest
+> honest semantics; a fallible `a.checked_concatenate(b) -> Result`
+> escape is a later surface).
+>
+> **N-array / shape-tuple forms are deferred**: `np.concatenate([a, b, c,
+> ...])` (an N-array list) and `np.reshape(a, (m, n))` (a shape tuple)
+> need `list[Buffer]` / tuple marshalling that does not exist yet — a
+> follow-up once that lands. This batch ships only the single-arg and
+> 2-array forms.
+
 ## Linear algebra — the `coil.linalg.*` sub-namespace (ADR-0079 Phase 1)
 
 `coil.linalg.*` is the FIRST *dotted sub-namespace* under an ecosystem

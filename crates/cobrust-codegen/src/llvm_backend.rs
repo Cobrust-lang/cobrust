@@ -3296,6 +3296,20 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_array2x2", coil_array2x2_ty, 4),
             ("__cobrust_coil_array2x3", coil_array2x3_ty, 6),
             ("__cobrust_coil_array1d2", coil_array1d2_ty, 2),
+            // #145 array-MANIPULATION Buffer-returning ops. The 1-arg
+            // reshape ops (`transpose`/`flatten`/`ravel`) are `(ptr) -> ptr`
+            // ≡ `coil_shape_ty`; the 2-array combine ops (`concatenate`/
+            // `vstack`/`hstack`) are `(ptr, ptr) -> ptr` ≡ `coil_binop_ty`.
+            // The MIR ecosystem-call lowering retargets `coil.transpose(a)` /
+            // `coil.concatenate(a, b)` onto these `Terminator::Call`s —
+            // codegen only declares the externs (no manipulation-specific
+            // arm; same flat `__cobrust_coil_*` recognizer prefix).
+            ("__cobrust_coil_transpose", coil_shape_ty, 1),
+            ("__cobrust_coil_flatten", coil_shape_ty, 1),
+            ("__cobrust_coil_ravel", coil_shape_ty, 1),
+            ("__cobrust_coil_concatenate", coil_binop_ty, 2),
+            ("__cobrust_coil_vstack", coil_binop_ty, 2),
+            ("__cobrust_coil_hstack", coil_binop_ty, 2),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

@@ -1521,6 +1521,122 @@ non-Copy handle survives for later reductions).
       (`ecosystem`) green; touched crates build + clippy + fmt clean.
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## `.cb` `coil` array manipulation — `transpose` / `flatten` / `ravel` / `concatenate` / `vstack` / `hstack` (#145 BATCH 2 — DONE)
+
+The Buffer-RETURNING combine + reshape surface — the array-manipulation
+ops most-used in real numpy code (§2.5 training-data overlap). Wired
+EXACTLY like the `@` matmul operator (borrow-Buffer-args →
+fresh-Buffer-return), NOT the scalar-return stats. The cut line is the
+ARITY CONTRACT: only the 1-arg (`transpose`/`flatten`/`ravel`) and the
+2-array (`concatenate`/`vstack`/`hstack`) forms ship; the N-array
+`concatenate([a,b,c,...])` and shape-tuple `reshape(a,(m,n))` forms are
+DEFERRED (need `list[Buffer]` / tuple marshalling that does not exist
+yet). The `.cb`-side form is `coil.transpose(a)` / `coil.concatenate(a,
+b)` — module free functions (NOT a sub-namespace).
+
+### Semantics (numpy 2.x oracle — `coil::manipulate`)
+
+- `coil.transpose(a) -> Buffer` — reverse all axes (`a.T`). A 1-D array
+  is returned UNCHANGED (numpy: `np.array([1,2,3]).T` is `(3,)`); a 2-D
+  `(m,n)` becomes `(n,m)`. Dtype + values preserved. Infallible.
+- `coil.flatten(a) -> Buffer` — 1-D C-order (row-major) copy. Infallible.
+- `coil.ravel(a) -> Buffer` — 1-D C-order copy. numpy returns a VIEW when
+  possible; the handle ABI has no view-into-parent surface, so this is an
+  owned copy with IDENTICAL values (Semantic tier). Delegates to
+  `flatten`. Infallible.
+- `coil.concatenate(a, b) -> Buffer` — join along axis 0 (default
+  `np.concatenate` axis). Same rank + matching sizes on every axis except
+  axis 0; mismatch → `ShapeMismatch` (numpy `ValueError`).
+- `coil.vstack(a, b) -> Buffer` — stack row-wise. 1-D `(n,)` operand
+  promoted to `(1,n)` (`atleast_2d`), then concat axis 0:
+  `vstack((n,),(n,)) -> (2,n)`, `vstack((r,c),(s,c)) -> (r+s,c)`.
+- `coil.hstack(a, b) -> Buffer` — stack column-wise. 1-D operands concat
+  axis 0 (`hstack((p,),(q,)) -> (p+q,)`); ≥2-D concat axis 1
+  (`hstack((r,c1),(r,c2)) -> (r,c1+c2)`).
+
+**Dtype contract**: 1-arg ops are dtype-generic (all five variants
+preserved). The 2-array combine ops require equal dtype and raise
+`ShapeMismatch` otherwise — numpy promotes a mixed pair; we keep the
+clean equal-dtype contract (every `.cb` Buffer ctor emits `Float64`, so
+the common path is always `f64`+`f64`; a silent cross-dtype promotion is
+the §2.2-forbidden implicit coercion). Mixed-dtype promotion is a tracked
+follow-up.
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- 6 `lookup_module_fn` arms. 3 are `[coil_buffer_ty()] -> coil_buffer_ty()`
+  (`transpose`/`flatten`/`ravel`); 3 are `[coil_buffer_ty(),
+  coil_buffer_ty()] -> coil_buffer_ty()` (`concatenate`/`vstack`/
+  `hstack`). Tier `Semantic` (pure layout/combine, no float arithmetic;
+  values/shape/dtype agree exactly, except `ravel`'s view-vs-copy + the
+  equal-dtype combine contract — both documented).
+
+### Typecheck / MIR — ZERO new code
+
+- The generic module-fn path (`try_synth_ecosystem_call` Case 1 /
+  `try_lower_ecosystem_call` Case 1) already lowers any `lookup_module_fn`
+  signature. The 2-Buffer-arg → Buffer combine ops ride the SAME
+  borrow-args → fresh-Buffer-return path proven by `coil.linalg.solve(a,
+  b)`'s identical `(Buffer, Buffer) -> Buffer` shape: `emit_ecosystem_call`
+  iterates `sig.params` regardless of arity, `lower_eco_arg` auto-borrows
+  each Buffer arg (Move→Copy, so both inputs stay live + drop once), and
+  the fresh return handle is drop-scheduled. NO `_ => "any"` gap, NO new
+  MIR arm.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+- 6 extern rows: the 3 single-arg reshape ops reuse `coil_shape_ty`
+  (`ptr -> ptr`); the 3 two-array combine ops reuse `coil_binop_ty`
+  (`ptr, ptr -> ptr`). Symbols ride the existing `__cobrust_coil_`
+  build/intrinsics prefix (no CLI edit needed).
+
+### Runtime (`cobrust-coil/src/manipulate.rs` + `cabi.rs`)
+
+- `manipulate.rs`: 6 kernels over the closed `Array` enum
+  (`transpose`/`flatten`/`ravel` dtype-generic per-variant;
+  `concatenate`/`vstack`/`hstack` via a shared `concat_axis` over
+  `ndarray::concatenate(Axis, &views)` with a dtype + rank + axis-bound
+  pre-guard). 17 unit tests, differential vs the numpy oracle.
+- `cabi.rs`: 6 shims `__cobrust_coil_{transpose,flatten,ravel,concatenate,
+  vstack,hstack}`. The 1-arg shims are infallible; the 2-array shims share
+  a `buffer_combine` body that `coil_panic`s on a non-conformable /
+  dtype-mismatch `Err` (numpy `ValueError`) — NEVER unwinding across the
+  C-ABI (mirrors `buffer_binop` + `buffer_matmul`). 7 cabi unit tests
+  (round-trip + drop-once accounting).
+
+### Deferred
+
+- N-array `concatenate([a,b,c,...])` + shape-tuple `reshape(a,(m,n))` —
+  need `list[Buffer]` / tuple marshalling (not yet present).
+- Axis-parameterized `concatenate(a, b, axis=k)` — needs a keyword/scalar
+  axis arg surface; today axis is fixed per-op (concat=0, vstack=0 post-
+  atleast_2d, hstack=1-for-2D/0-for-1D).
+- Mixed-dtype promoting combine — the equal-dtype contract is the §2.5
+  honest minimum (`.cb` ctors emit f64 only).
+
+### Done means (#145 BATCH 2 — DONE)
+
+- [x] `manipulate.rs`: 6 kernels + `concat_axis`/`atleast_2d_row`/
+      `reshape_to`/`flatten_c`/`owned_c` helpers; 17 unit tests with the
+      numpy-2.x oracle (incl. 1-D-unchanged transpose, transpose∘flatten
+      F-order values, non-conformable + rank-mismatch + dtype-mismatch
+      errors, empty).
+- [x] cabi: 6 shims (3 infallible + 3 via shared `buffer_combine` trap) +
+      7 cabi unit tests (round-trip + drop-once).
+- [x] Manifest: 6 ecosystem arms (3 `Buffer->Buffer`, 3 `Buffer,Buffer->
+      Buffer`).
+- [x] Typecheck / MIR: NO new code (generic module-fn path; 2-Buffer-arg
+      proven by `linalg.solve`).
+- [x] Codegen: 6 extern rows (`coil_shape_ty` ×3 + `coil_binop_ty` ×3).
+- [x] `.cb` E2E `coil_manipulate_e2e.rs` (8 tests): transpose `(2,3)->
+      (3,2)`, flatten/ravel `(2,2)->(4,)`, concatenate `(4,3)`, vstack
+      `(4,3)`, hstack `(2,6)`, transpose∘concatenate `(3,4)` chain, +
+      non-conformable concatenate RUNTIME trap (non-zero exit).
+- [x] No regression: full `cobrust-coil` suite green (212 lib unit +
+      every test binary); touched crates build + clippy `-D warnings` +
+      fmt clean; no new dep (F64 — `ndarray` already present).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

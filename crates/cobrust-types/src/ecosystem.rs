@@ -754,6 +754,69 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Float,
             PyCompatTier::Semantic,
         )),
+        // #145 array-MANIPULATION gap-closure (2026-06-01) — 6 Buffer-
+        // RETURNING combine + reshape ops, the array-manipulation surface
+        // most-used in real numpy code per §2.5. Same borrow-Buffer-args →
+        // fresh-Buffer-return value-handle ABI as the `@` matmul operator
+        // (`__cobrust_coil_buffer_matmul`) and `coil.linalg.solve` — the
+        // Buffer args auto-borrow (Move→Copy) in `lower_eco_arg` and the
+        // fresh return is drop-scheduled by `emit_ecosystem_call`. The
+        // 2-Buffer-arg path (`concatenate`/`vstack`/`hstack`) is proven by
+        // `coil.linalg.solve(a, b)`'s identical `(Buffer, Buffer) -> Buffer`
+        // shape (NO `_=>"any"` MIR gap — the generic ecosystem-call lowering
+        // iterates `sig.params` regardless of arity).
+        //
+        // - `coil.transpose(a) -> Buffer`        — reverse all axes (`a.T`).
+        // - `coil.flatten(a) -> Buffer`          — 1-D C-order copy.
+        // - `coil.ravel(a) -> Buffer`            — 1-D C-order copy (view-
+        //                                          valued in numpy; owned here).
+        // - `coil.concatenate(a, b) -> Buffer`   — join along axis 0.
+        // - `coil.vstack(a, b) -> Buffer`        — stack row-wise.
+        // - `coil.hstack(a, b) -> Buffer`        — stack column-wise.
+        //
+        // Tier `Semantic` — the VALUES + shape + dtype agree exactly with
+        // numpy (`transpose`/`flatten`/`ravel`/`concatenate`/`vstack`/
+        // `hstack` are pure layout/combine ops, no floating arithmetic); the
+        // one intentional divergence is `ravel`'s view-vs-copy (numpy may
+        // return a view, coil returns an owned copy with identical values)
+        // and the equal-dtype combine contract (numpy promotes a mixed pair;
+        // coil raises) — both documented in `manipulate.rs`.
+        ("coil", "transpose") => Some(EcoSig::from_values(
+            "__cobrust_coil_transpose",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "flatten") => Some(EcoSig::from_values(
+            "__cobrust_coil_flatten",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "ravel") => Some(EcoSig::from_values(
+            "__cobrust_coil_ravel",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "concatenate") => Some(EcoSig::from_values(
+            "__cobrust_coil_concatenate",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "vstack") => Some(EcoSig::from_values(
+            "__cobrust_coil_vstack",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "hstack") => Some(EcoSig::from_values(
+            "__cobrust_coil_hstack",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         // ADR-0079 Phase 1 — minimal `.cb`-constructible 2-D / explicit-
         // data buffers, the genuine prerequisite for exercising the
         // `coil.linalg.*` sub-namespace on NON-identity matrices (the

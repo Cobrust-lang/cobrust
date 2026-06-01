@@ -83,6 +83,10 @@ use crate::constructors::{array_f64, eye as coil_eye, ones as coil_ones, zeros a
 use crate::dtype::Dtype;
 use crate::grid::{mgrid_1d, ogrid_1d};
 use crate::linalg::{det as linalg_det, inv as linalg_inv, solve as linalg_solve};
+use crate::manipulate::{
+    concatenate as coil_concatenate, flatten as coil_flatten, hstack as coil_hstack,
+    ravel as coil_ravel, transpose as coil_transpose, vstack as coil_vstack,
+};
 use crate::print::array_repr;
 
 // =====================================================================
@@ -654,6 +658,145 @@ pub unsafe extern "C" fn __cobrust_coil_buffer_matmul(a: *mut u8, b: *mut u8) ->
         Err(e) => coil_panic(&format!("coil.Buffer @ (matmul): {}", e.message)),
     };
     Box::into_raw(Box::new(out)).cast::<u8>()
+}
+
+// =====================================================================
+// #145 array-MANIPULATION gap-closure (2026-06-01) — Buffer-RETURNING
+// combine + reshape ops (`transpose` / `flatten` / `ravel` 1-arg;
+// `concatenate` / `vstack` / `hstack` 2-arg). Each BORROWS its handle
+// arg(s) (the `.cb` scope still owns + drops them) and returns a FRESH
+// Boxed `Buffer` handle the scope drops via `__cobrust_coil_buffer_drop`
+// — the EXACT ownership shape of `__cobrust_coil_buffer_matmul` /
+// `__cobrust_coil_linalg_solve` (borrow-Buffer-args → fresh-Buffer-ret).
+// The 1-arg ops are infallible (dtype-generic reshape); the 2-arg
+// combine ops `coil_panic` on a non-conformable / dtype-mismatch pair
+// (numpy raises `ValueError`) — NEVER unwinding a Rust `Err` across the
+// C-ABI, matching `buffer_binop`'s abort-on-incompatible-shape.
+// =====================================================================
+
+/// `coil.transpose(a) -> Buffer`. Reverse all axes (`a.T`); a 1-D array
+/// is returned unchanged, a 2-D `(m, n)` becomes `(n, m)`. BORROWS `a`;
+/// returns a fresh owned handle. Infallible (dtype + size preserved).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped). The returned
+/// pointer is a freshly-Boxed handle the `.cb` caller owns; freed once
+/// via `__cobrust_coil_buffer_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_transpose(a: *mut u8) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.transpose: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only —
+    // not reboxed / freed; the `.cb` scope still owns + drops it.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    Box::into_raw(Box::new(coil_transpose(arr))).cast::<u8>()
+}
+
+/// `coil.flatten(a) -> Buffer`. Collapse to a 1-D C-order (row-major)
+/// copy. BORROWS `a`; returns a fresh owned handle. Infallible.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_transpose`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_flatten(a: *mut u8) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.flatten: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    Box::into_raw(Box::new(coil_flatten(arr))).cast::<u8>()
+}
+
+/// `coil.ravel(a) -> Buffer`. Collapse to a 1-D C-order copy (numpy's
+/// `ravel` returns a view; the handle ABI has no view-into-parent
+/// surface, so this is an owned copy with identical VALUES). BORROWS
+/// `a`; returns a fresh owned handle. Infallible.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_transpose`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_ravel(a: *mut u8) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.ravel: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    Box::into_raw(Box::new(coil_ravel(arr))).cast::<u8>()
+}
+
+/// Shared body for the 2-array combine shims (`concatenate` / `vstack` /
+/// `hstack`). BORROWS both handles, applies the `Result`-returning kernel
+/// `f`, and `coil_panic`s on a non-conformable / dtype-mismatch pair
+/// (numpy raises `ValueError`) — NEVER unwinding across the C-ABI.
+/// Returns a freshly-Boxed result handle the `.cb` caller owns.
+///
+/// # Safety
+///
+/// `a` and `b` must be live `Buffer` handles (not yet dropped).
+unsafe fn buffer_combine(
+    a: *mut u8,
+    b: *mut u8,
+    op_name: &str,
+    f: fn(&Array, &Array) -> Result<Array, crate::error::NumpyError>,
+) -> *mut u8 {
+    if a.is_null() || b.is_null() {
+        coil_panic(&format!("coil.{op_name}: null operand handle"));
+    }
+    // SAFETY: caller attests both are live Buffer handles. Borrow only —
+    // neither is reboxed / freed; the `.cb` scope still owns + drops them.
+    let lhs: &Array = unsafe { &*a.cast::<Array>() };
+    let rhs: &Array = unsafe { &*b.cast::<Array>() };
+    let out = match f(lhs, rhs) {
+        Ok(arr) => arr,
+        Err(e) => coil_panic(&format!("coil.{op_name}: {}", e.message)),
+    };
+    Box::into_raw(Box::new(out)).cast::<u8>()
+}
+
+/// `coil.concatenate(a, b) -> Buffer`. Join the two arrays along axis 0
+/// (the default `np.concatenate` axis). BORROWS both handles; returns a
+/// fresh owned handle. A non-conformable pair (rank / non-axis-dim /
+/// dtype mismatch) `coil_panic`s (numpy raises `ValueError`).
+///
+/// # Safety
+///
+/// `a` and `b` must be live `Buffer` handles (not yet dropped). The
+/// returned pointer is a freshly-Boxed handle the `.cb` caller owns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_concatenate(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_combine(a, b, "concatenate", coil_concatenate) }
+}
+
+/// `coil.vstack(a, b) -> Buffer`. Stack row-wise (1-D `(n,)` operands are
+/// promoted to `(1, n)`, then concatenated along axis 0). BORROWS both
+/// handles. A column-count / dtype mismatch `coil_panic`s.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_concatenate`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_vstack(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_combine(a, b, "vstack", coil_vstack) }
+}
+
+/// `coil.hstack(a, b) -> Buffer`. Stack column-wise (1-D operands concat
+/// along axis 0; ≥2-D along axis 1). BORROWS both handles. A
+/// non-conformable (e.g. differing row counts) / dtype mismatch
+/// `coil_panic`s.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_concatenate`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_hstack(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_combine(a, b, "hstack", coil_hstack) }
 }
 
 /// Shared body for the `a ⊕ k` SCALAR-broadcast shims (ADR-0077 Phase-1
@@ -1769,5 +1912,150 @@ mod tests {
             __cobrust_coil_buffer_drop(i);
         }
         assert_eq!(drop_count() - before, 2);
+    }
+
+    // -- #145 array-manipulation shims (transpose / flatten / ravel /
+    //    concatenate / vstack / hstack) — round-trip + drop-once -------
+
+    /// `coil.transpose(array2x3(...))` → a `(3, 2)` Buffer; borrows the
+    /// input, the fresh result drops once (2 total drops).
+    #[test]
+    fn transpose_shim_2x3_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+            let t = __cobrust_coil_transpose(a);
+            assert!(!t.is_null());
+            let arr: &Array = &*t.cast::<Array>();
+            assert_eq!(arr.shape(), &[3, 2]);
+            assert_eq!(
+                array_repr(arr),
+                "array([[1, 4], [2, 5], [3, 6]], dtype=float64)"
+            );
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(t);
+        }
+        assert_eq!(drop_count() - before, 2);
+    }
+
+    /// `coil.flatten(array2x3(...))` → a `(6,)` C-order Buffer.
+    #[test]
+    fn flatten_shim_2x3_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+            let f = __cobrust_coil_flatten(a);
+            let arr: &Array = &*f.cast::<Array>();
+            assert_eq!(arr.shape(), &[6]);
+            assert_eq!(array_repr(arr), "array([1, 2, 3, 4, 5, 6], dtype=float64)");
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(f);
+        }
+        assert_eq!(drop_count() - before, 2);
+    }
+
+    /// `coil.ravel(array2x2(...))` matches `coil.flatten` values.
+    #[test]
+    fn ravel_shim_matches_flatten() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array2x2(7.0, 8.0, 9.0, 10.0);
+            let r = __cobrust_coil_ravel(a);
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(array_repr(arr), "array([7, 8, 9, 10], dtype=float64)");
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    /// `coil.concatenate(array2x3, array2x3)` → a `(4, 3)` Buffer; borrows
+    /// both inputs, the fresh result drops once (3 total drops).
+    #[test]
+    fn concatenate_shim_axis0_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+            let b = __cobrust_coil_array2x3(7.0, 8.0, 9.0, 10.0, 11.0, 12.0);
+            let c = __cobrust_coil_concatenate(a, b);
+            let arr: &Array = &*c.cast::<Array>();
+            assert_eq!(arr.shape(), &[4, 3]);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(c);
+        }
+        assert_eq!(drop_count() - before, 3);
+    }
+
+    /// `coil.vstack(array2x3, array2x3)` → a `(4, 3)` Buffer.
+    #[test]
+    fn vstack_shim_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+            let b = __cobrust_coil_array2x3(7.0, 8.0, 9.0, 10.0, 11.0, 12.0);
+            let v = __cobrust_coil_vstack(a, b);
+            assert_eq!((*v.cast::<Array>()).shape(), &[4, 3]);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(v);
+        }
+    }
+
+    /// `coil.hstack(array2x3, array2x3)` → a `(2, 6)` Buffer (axis-1 join).
+    #[test]
+    fn hstack_shim_2d_axis1_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+            let b = __cobrust_coil_array2x3(7.0, 8.0, 9.0, 10.0, 11.0, 12.0);
+            let h = __cobrust_coil_hstack(a, b);
+            let arr: &Array = &*h.cast::<Array>();
+            assert_eq!(arr.shape(), &[2, 6]);
+            assert_eq!(
+                array_repr(arr),
+                "array([[1, 2, 3, 7, 8, 9], [4, 5, 6, 10, 11, 12]], dtype=float64)"
+            );
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(h);
+        }
+    }
+
+    /// Null-handle defense: the 1-arg shims abort (proven indirectly by
+    /// the `coil_panic` path); here we only assert the non-null inputs
+    /// produce non-null fresh handles (the abort path diverges and cannot
+    /// be unit-tested without a sub-process — covered by the `.cb` e2e
+    /// `_traps` cases instead).
+    #[test]
+    fn manip_shims_return_nonnull() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array2x2(1.0, 2.0, 3.0, 4.0);
+            let t = __cobrust_coil_transpose(a);
+            let f = __cobrust_coil_flatten(a);
+            let r = __cobrust_coil_ravel(a);
+            assert!(!t.is_null() && !f.is_null() && !r.is_null());
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(t);
+            __cobrust_coil_buffer_drop(f);
+            __cobrust_coil_buffer_drop(r);
+        }
     }
 }
