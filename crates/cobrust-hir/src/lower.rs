@@ -2262,10 +2262,15 @@ fn validate_eco_decorator_shape(d: &ast::Expr) -> Result<(), LoweringError> {
         // positional arg to `dora.node`), so positional decorator args are
         // a shape error. The `inputs=`/`outputs=` kwargs are declarative
         // dataflow metadata — validated here as list-of-str literals, then
-        // DROPPED at synthesis (Phase 1's synthetic manifest `dora.node`
-        // takes only the `EcoParam::Callback` slot; the metadata wires the
-        // real dataflow graph in Phase 2). The bare `@dora.node` form is
-        // also accepted (single handler, no metadata).
+        // LOWERED by `build_eco_module_register_calls` (this file, ~L2436)
+        // into one `dora.declare_input("<id>")` / `dora.declare_output("<id>")`
+        // register-call per port id. The `dora.node` call itself still takes
+        // only the `EcoParam::Callback` slot, but the metadata is NOT dropped:
+        // the declare-calls are load-bearing — the synthetic `node.run()`
+        // replays one event per declared input (multi-input dispatch) and
+        // `send_output` validates against `DECLARED_OUTPUTS` (see
+        // `cobrust-dora/src/cabi.rs`). The bare `@dora.node` form is also
+        // accepted (single handler, no metadata → Phase-1 single-event fallback).
         "node" => validate_module_node_decorator_shape(d, decorator_args)?,
         _ => {}
     }

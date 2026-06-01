@@ -282,9 +282,11 @@ type.
   before that ship as `bytes` (option C's accessor) — a clear, named fallback,
   not a footgun.
 - **Pro (smallest correct increment, §8 op-instructions):** B-1 is the plan
-  §4.3 option-1 `ndarray ↔ arrow` bridge for 5 dtypes + the dropped
-  `inputs/outputs` metadata threading (the one real compiler increment, plan
-  §4.5) — no new array TYPE, just a new accessor + the bridge.
+  §4.3 option-1 `ndarray ↔ arrow` bridge for 5 dtypes — no new array TYPE, just a
+  new accessor + the bridge. (The `inputs/outputs` metadata threading is already
+  DONE/load-bearing — F76; the one genuinely-remaining real-path compiler
+  increment is the compile-time `DoraUnknownOutputId` output-id check, orthogonal
+  to this payload surface — see plan §4.2 + §4.5.)
 - **Con (deferred dtype coverage):** camera-image `UInt8` typed arrays + `Utf8`
   typed arrays are NOT first-class in B-1 (str + bytes only). A pure image
   pipeline is partially served (bytes work; typed `UInt8` doesn't) until the
@@ -397,13 +399,19 @@ HEAD `936f13c`.**
   wants (an LLM picks `send_output_buffer` vs `send_output` unambiguously).
   This REUSES `coil_buffer_ty()` (`ecosystem.rs` L292) verbatim — no new ADT,
   no new `Ty` constructor.
-- **The ONE real compiler increment (plan §4.5 / §6 R9):** thread the F68-dropped
-  `@dora.node(inputs/outputs)` metadata into the manifest so the real loop
-  dispatches on `id.as_str()` per declared port AND a mistyped output id rejects
-  at `cobrust check` (`TypeError::DoraUnknownOutputId { id, declared, suggestion }`,
-  ADR-0076 §6 Phase-2 done-means 2). Small + additive; mirrors existing
-  ecosystem-id checks. This is orthogonal to the payload-surface choice but is
-  the Phase-B compiler work the surface increment rides alongside.
+- **The ONE genuinely-remaining real-path compiler increment (plan §4.5 / §6 R9):**
+  the **compile-time** `send_output` output-id check — a mistyped output id must
+  reject at `cobrust check`
+  (`TypeError::DoraUnknownOutputId { id, declared, suggestion }`, ADR-0076 §6
+  Phase-2 done-means 2), instead of today's runtime-only `eprintln + -1`. Small +
+  additive; mirrors existing ecosystem-id checks. This is orthogonal to the
+  payload-surface choice but is the Phase-B compiler work the surface increment
+  rides alongside. (NOTE — F76 correction: the `@dora.node(inputs/outputs)`
+  metadata threading is **already done / load-bearing**; the desugar lowers each
+  port id to a `dora.declare_input`/`declare_output` register-call, and the real
+  loop already dispatches on `id.as_str()` — the dataflow YAML wires routing
+  independent of the declared ports. Only the compile-time output-id check above
+  remains.)
 
 ### 4.3 No MIR / codegen change expected
 

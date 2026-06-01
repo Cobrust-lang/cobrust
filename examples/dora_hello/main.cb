@@ -16,9 +16,11 @@
 # `dora.node(detect)` module-fn call inserted at `main`'s prologue
 # (BEFORE `node.run()` so the handler is installed before dispatch). The
 # `inputs=`/`outputs=` port metadata is declarative — validated as
-# list-of-str literals at the desugar layer, then dropped (Phase 1's
-# synthetic `dora.node` manifest row takes only the callback slot; the
-# real dataflow-graph wiring is a Phase 2 manifest follow-up).
+# list-of-str literals at the desugar layer, then lowered into separate
+# `dora.declare_input`/`dora.declare_output` register-calls (one per port
+# id). These are load-bearing: the synthetic `node.run()` replays one
+# event per declared input. The `dora.node` call itself takes only the
+# callback slot.
 #
 # This is the THIRD module on the ADR-0073 callback chain (after pit's
 # pong handler and hood's command-callback). The MIR lowering emits

@@ -120,7 +120,7 @@ Verified by reading `crates/cobrust-dora/{Cargo.toml,build.rs,src/lib.rs,src/cab
 | L1 typecheck | `("dora","Node")`, `("dora","node")`, `("dora","declare_input")`, `("dora","declare_output")` module rows + `(DORA_NODE_ADT, "run"\|"shutdown")` + `(DORA_EVENT_ADT, "id"\|"data_str"\|"send_output")` handle rows; `DORA_NODE_ADT = 0xE000_0600`, `DORA_EVENT_ADT = 0xE000_0601` | `cobrust-types/src/ecosystem.rs` |
 | L2 MIR | intrinsic-retarget onto the `__cobrust_dora_*` symbols (reused ADR-0072 path; **no dora-specific code in `cobrust-mir/src/lower.rs`** — grep is empty) | (generic) |
 | L3 codegen | `Constant::FnRef` materialises the `.cb` `fn(dora.Event)->i64` callback as a raw C fn pointer (reused ADR-0073 path) | (generic) |
-| HIR sugar | `@dora.node(inputs=[...], outputs=[...])` module-receiver decorator → synthetic `dora.node(handler)` (F68 resolution; metadata validated then **dropped**) | `cobrust-hir/src/lower.rs` |
+| HIR sugar | `@dora.node(inputs=[...], outputs=[...])` module-receiver decorator → synthetic `dora.node(handler)` PLUS one `dora.declare_input`/`declare_output` register-call per port id (F68 + ADR-0076 Phase-2; metadata validated then **threaded** into the declare-calls — load-bearing, see §2.2/§2.3) | `cobrust-hir/src/lower.rs` |
 | L4 runtime | 11 `#[no_mangle] extern "C"` shims — the SYNTHETIC trampoline | `cobrust-dora/src/cabi.rs` |
 | L5 link | `locate_ecosystem_archive("dora")` → `libdora.a`, static-linked after `libcobrust_stdlib.a` | `cobrust-cli/src/build.rs` |
 
@@ -174,11 +174,20 @@ the ADR but ARE in the shipped code:
    `dora_event_handler_fn_ty()` sketches `Result[None, Str]`; the shipped
    `dora_event_handler_fn_ty()` (ecosystem.rs ~L300) returns `Ty::Int`. The
    trampoline discards the return (hood's "side-effect IS the intent" pattern).
-3. **`inputs=`/`outputs=` metadata is dropped at HIR** (F68 outcome) — validated
-   as list-of-str literals then discarded; the synthesised call is single-arg
-   `dora.node(handler)`. The metadata must become **load-bearing** in the real
-   path (it IS the node's port declaration + the compile-time `send_output` ID
-   check ADR-0076 §6 Phase-2 done-means 2 promises).
+3. **`inputs=`/`outputs=` metadata is THREADED into `declare_input`/`declare_output`
+   calls — ALREADY load-bearing** (ADR-0076 Phase-2; divergence **RESOLVED**, see
+   F76). The desugar lowers each port id to a `dora.declare_input("<id>")` /
+   `dora.declare_output("<id>")` register-call (as §2.2 describes — they populate
+   `DECLARED_INPUTS`/`DECLARED_OUTPUTS`); the `dora.node(handler)` call itself
+   stays single-arg (the callback slot). The metadata is NOT discarded: in the
+   synthetic path it drives multi-input replay (one canned event per declared
+   input — proven GREEN by `dora_multi_io_e2e.rs`), and `send_output` validates
+   the id against `DECLARED_OUTPUTS` at runtime. In the real path routing comes
+   from the dataflow YAML on `id.as_str()` regardless of declared ports, so no
+   further threading is needed there. The ONE genuinely-remaining real-path
+   compiler increment is the **compile-time** `send_output` output-id check
+   (`TypeError::DoraUnknownOutputId`, ADR-0076 §6 Phase-2 done-means 2) — still
+   runtime-only, see §4.2.
 
 ---
 

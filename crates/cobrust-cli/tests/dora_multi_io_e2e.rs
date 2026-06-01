@@ -1,6 +1,12 @@
 //! ADR-0076 Phase 2 — MULTI-IO end-to-end `.cb` source → compile → link →
 //! run → stdout-assert for the `dora` ecosystem-import wiring.
 //!
+//! STATUS: LANDED — GREEN at current HEAD (test is LIVE, not `#[ignore]`).
+//! The narration below ("RED at HEAD `8020f22`", "What Phase 1 ships today
+//! (the RED baseline)") is the TDD-origin (red-first) description from the
+//! pre-impl commit `8020f22`; the multi-IO sprint then landed it green. It
+//! is kept for provenance — do NOT read it as the current state (see F76).
+//!
 //! This is the TEST-FIRST (ADSD) corpus for the Phase 2 multi-IO scope
 //! (ADR-0076 §5 + §6 "Phase 2 — Multi-IO, ... decorator sugar"). It is
 //! RED at HEAD `8020f22`: the Phase 1 synthetic trampoline in
