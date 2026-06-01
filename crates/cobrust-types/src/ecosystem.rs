@@ -1855,6 +1855,76 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             Ty::Str,
             PyCompatTier::Semantic,
         )),
+        // ADR-0078 Phase-1c Phase-C — the LIST + SET verbs. Same
+        // borrow-receiver discipline (the cabi shim takes `&mut`
+        // internally), same readable redis-py-idiom verbs (§2.5-aligned),
+        // same Result/sentinel-not-exceptions surface. ALL scalar/str
+        // returns (the get/hget/incr shapes) — `lpush`/`rpush`/`llen`/
+        // `sadd`/`srem`/`scard` return the i64 count/length; `lpop`/`rpop`
+        // return the popped str ("" sentinel if the list is empty/absent,
+        // mirroring `get`); `sismember` returns a bool. The multi-element
+        // LIST-of-str returns (`lrange`/`smembers`/`hgetall`/`hkeys`) are a
+        // DEFERRED follow-up (a NEW C-ABI list-handle return shape redis
+        // has no precedent for).
+        (REDIS_CLIENT_ADT, "lpush") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_lpush",
+            // Key str + the value str to prepend (head).
+            vec![Ty::Str, Ty::Str],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "rpush") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_rpush",
+            // Key str + the value str to append (tail).
+            vec![Ty::Str, Ty::Str],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "lpop") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_lpop",
+            vec![Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "rpop") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_rpop",
+            vec![Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "llen") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_llen",
+            vec![Ty::Str],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "sadd") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_sadd",
+            // Key str + the member str to add.
+            vec![Ty::Str, Ty::Str],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "srem") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_srem",
+            // Key str + the member str to remove.
+            vec![Ty::Str, Ty::Str],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "sismember") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_sismember",
+            // Key str + the member str to test.
+            vec![Ty::Str, Ty::Str],
+            Ty::Bool,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "scard") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_scard",
+            vec![Ty::Str],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -2893,6 +2963,59 @@ mod tests {
         // key str + field str.
         assert_eq!(value_tys(&hget.params), vec![Ty::Str, Ty::Str]);
         assert_eq!(hget.ret, Ty::Str);
+
+        // Phase-C verbs — lists (lpush/rpush/lpop/rpop/llen) + sets
+        // (sadd/srem/sismember/scard). All scalar/str returns.
+        let lpush = lookup_handle_method(&recv, "lpush").expect("Client.lpush in manifest");
+        assert_eq!(lpush.runtime_symbol, "__cobrust_redis_client_lpush");
+        // key str + the value str to prepend.
+        assert_eq!(value_tys(&lpush.params), vec![Ty::Str, Ty::Str]);
+        assert_eq!(lpush.ret, Ty::Int);
+
+        let rpush = lookup_handle_method(&recv, "rpush").expect("Client.rpush in manifest");
+        assert_eq!(rpush.runtime_symbol, "__cobrust_redis_client_rpush");
+        // key str + the value str to append.
+        assert_eq!(value_tys(&rpush.params), vec![Ty::Str, Ty::Str]);
+        assert_eq!(rpush.ret, Ty::Int);
+
+        let lpop = lookup_handle_method(&recv, "lpop").expect("Client.lpop in manifest");
+        assert_eq!(lpop.runtime_symbol, "__cobrust_redis_client_lpop");
+        assert_eq!(value_tys(&lpop.params), vec![Ty::Str]);
+        assert_eq!(lpop.ret, Ty::Str);
+
+        let rpop = lookup_handle_method(&recv, "rpop").expect("Client.rpop in manifest");
+        assert_eq!(rpop.runtime_symbol, "__cobrust_redis_client_rpop");
+        assert_eq!(value_tys(&rpop.params), vec![Ty::Str]);
+        assert_eq!(rpop.ret, Ty::Str);
+
+        let llen = lookup_handle_method(&recv, "llen").expect("Client.llen in manifest");
+        assert_eq!(llen.runtime_symbol, "__cobrust_redis_client_llen");
+        assert_eq!(value_tys(&llen.params), vec![Ty::Str]);
+        assert_eq!(llen.ret, Ty::Int);
+
+        let sadd = lookup_handle_method(&recv, "sadd").expect("Client.sadd in manifest");
+        assert_eq!(sadd.runtime_symbol, "__cobrust_redis_client_sadd");
+        // key str + the member str.
+        assert_eq!(value_tys(&sadd.params), vec![Ty::Str, Ty::Str]);
+        assert_eq!(sadd.ret, Ty::Int);
+
+        let srem = lookup_handle_method(&recv, "srem").expect("Client.srem in manifest");
+        assert_eq!(srem.runtime_symbol, "__cobrust_redis_client_srem");
+        // key str + the member str.
+        assert_eq!(value_tys(&srem.params), vec![Ty::Str, Ty::Str]);
+        assert_eq!(srem.ret, Ty::Int);
+
+        let sismember =
+            lookup_handle_method(&recv, "sismember").expect("Client.sismember in manifest");
+        assert_eq!(sismember.runtime_symbol, "__cobrust_redis_client_sismember");
+        // key str + the member str.
+        assert_eq!(value_tys(&sismember.params), vec![Ty::Str, Ty::Str]);
+        assert_eq!(sismember.ret, Ty::Bool);
+
+        let scard = lookup_handle_method(&recv, "scard").expect("Client.scard in manifest");
+        assert_eq!(scard.runtime_symbol, "__cobrust_redis_client_scard");
+        assert_eq!(value_tys(&scard.params), vec![Ty::Str]);
+        assert_eq!(scard.ret, Ty::Int);
     }
 
     #[test]

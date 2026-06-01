@@ -3050,6 +3050,18 @@ impl<'ctx> LlvmEmitter<'ctx> {
         //   __cobrust_redis_client_incr_by(c, key: *mut Str, delta: i64) -> i64
         //   __cobrust_redis_client_hset(c, key, field, value: *mut Str) -> bool (i1)
         //   __cobrust_redis_client_hget(c, key, field: *mut Str) -> *mut Str
+        // Phase-C list/set verbs (same handle, all scalar/str returns):
+        //   __cobrust_redis_client_lpush(c, key, value: *mut Str) -> i64
+        //   __cobrust_redis_client_rpush(c, key, value: *mut Str) -> i64
+        //   __cobrust_redis_client_lpop(c, key: *mut Str) -> *mut Str
+        //   __cobrust_redis_client_rpop(c, key: *mut Str) -> *mut Str
+        //   __cobrust_redis_client_llen(c, key: *mut Str) -> i64
+        //   __cobrust_redis_client_sadd(c, key, member: *mut Str) -> i64
+        //   __cobrust_redis_client_srem(c, key, member: *mut Str) -> i64
+        //   __cobrust_redis_client_sismember(c, key, member: *mut Str) -> bool (i1)
+        //   __cobrust_redis_client_scard(c, key: *mut Str) -> i64
+        // (the LIST-of-str returns lrange/smembers/hgetall/hkeys are a
+        //  deferred follow-up — a new list-handle return shape.)
         //
         // The `_drop` symbol is emitted by `emit_drop_for_ty` at the
         // handle local's scope exit via `handle_drop_symbol(id)` (chain is
@@ -3077,6 +3089,14 @@ impl<'ctx> LlvmEmitter<'ctx> {
             false,
         );
         let redis_hget_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        // Phase-C fn types. `lpush`/`rpush`/`sadd`/`srem`: (ptr, ptr, ptr)
+        // -> i64 (the 3-ptr key+value/member shape returning a count);
+        // `sismember`: (ptr, ptr, ptr) -> i1. `lpop`/`rpop` reuse
+        // `redis_get_ty` ((ptr, ptr) -> ptr); `llen`/`scard` reuse
+        // `redis_delete_ty` ((ptr, ptr) -> i64).
+        let redis_push_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let redis_sismember_ty =
+            bool_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_redis_connect", redis_connect_ty, 1usize),
             ("__cobrust_redis_client_set", redis_set_ty, 3),
@@ -3089,6 +3109,17 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_redis_client_incr_by", redis_incr_by_ty, 3),
             ("__cobrust_redis_client_hset", redis_hset_ty, 4),
             ("__cobrust_redis_client_hget", redis_hget_ty, 3),
+            // Phase-C list verbs.
+            ("__cobrust_redis_client_lpush", redis_push_ty, 3),
+            ("__cobrust_redis_client_rpush", redis_push_ty, 3),
+            ("__cobrust_redis_client_lpop", redis_get_ty, 2),
+            ("__cobrust_redis_client_rpop", redis_get_ty, 2),
+            ("__cobrust_redis_client_llen", redis_delete_ty, 2),
+            // Phase-C set verbs.
+            ("__cobrust_redis_client_sadd", redis_push_ty, 3),
+            ("__cobrust_redis_client_srem", redis_push_ty, 3),
+            ("__cobrust_redis_client_sismember", redis_sismember_ty, 3),
+            ("__cobrust_redis_client_scard", redis_delete_ty, 2),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

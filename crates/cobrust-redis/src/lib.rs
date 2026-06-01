@@ -24,6 +24,12 @@
 //! - `client.delete(key) -> i64`    — `DEL` (count removed).
 //! - `client.exists(key) -> bool`   — `EXISTS`.
 //!
+//! Phase-B adds `expire`/`incr`/`incr_by`/`hset`/`hget`; Phase-C adds the
+//! list/set verbs `lpush`/`rpush`/`lpop`/`rpop`/`llen` +
+//! `sadd`/`srem`/`sismember`/`scard` (all scalar/str returns; the
+//! multi-element LIST-of-str returns lrange/smembers/hgetall/hkeys are a
+//! deferred follow-up).
+//!
 //! Error path (constitution §2.2 — no exceptions-as-control-flow): a
 //! connect failure yields a *disconnected sentinel* `Client` (never a
 //! null handle, never a panic across the C ABI); a missing key reads as

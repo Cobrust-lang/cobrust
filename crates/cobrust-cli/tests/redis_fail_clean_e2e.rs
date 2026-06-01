@@ -9,6 +9,8 @@
 //! ```text
 //! `import redis` + `redis.connect(url)` + `client.set/get/delete/exists`
 //!   + the Phase-B `client.expire/incr/incr_by/hset/hget` verbs
+//!   + the Phase-C `client.lpush/rpush/lpop/rpop/llen` (lists)
+//!     + `client.sadd/srem/sismember/scard` (sets) verbs
 //!   → cobrust-types ecosystem manifest (typecheck, no AmbiguousType)
 //!   → cobrust-mir lowering (retarget → __cobrust_redis_* Constant::Str)
 //!   → cobrust-codegen externs + Client handle drop schedule
@@ -132,6 +134,54 @@ fn test_e2e_redis_phase_b_unreachable_server_yields_fail_clean_sentinels() {
     ));
     // expire False + incr 0 + incr_by 0 + hset False + hget "" (blank).
     assert_eq!(stdout, "False\n0\n0\nFalse\n\n");
+}
+
+/// ADR-0078 Phase-1c Phase-C — the server-LESS fail-clean slice for the
+/// new list/set verbs. Connecting to an unreachable port yields the
+/// disconnected sentinel; `lpush`/`rpush` print `0` (no element pushed),
+/// `lpop`/`rpop` print the empty-string sentinel (blank line), `llen`
+/// prints `0`, `sadd`/`srem` print `0` (no member added/removed),
+/// `sismember` prints `False`, `scard` prints `0`. This proves the new
+/// shims' FULL `compile -> link -> run` chain + the no-panic-at-C-ABI
+/// guarantee with NO redis server — ALWAYS green in CI. This is the
+/// always-on proof that genuinely exercises the Phase-C error paths.
+#[test]
+fn test_e2e_redis_phase_c_unreachable_server_yields_fail_clean_sentinels() {
+    let stdout = build_and_run_source(concat!(
+        "import redis\n",
+        "\n",
+        "fn main() -> i64:\n",
+        // Port 1 has nothing listening → connect fails clean → the
+        // disconnected sentinel Client (never null, never a panic).
+        "    let client = redis.connect(\"redis://127.0.0.1:1/\")\n",
+        // lpush / rpush on the dead connection → 0 (no push).
+        "    let l1: i64 = client.lpush(\"mylist\", \"a\")\n",
+        "    let l2: i64 = client.rpush(\"mylist\", \"b\")\n",
+        // lpop / rpop → "" sentinel (empty/absent list).
+        "    let p1: str = client.lpop(\"mylist\")\n",
+        "    let p2: str = client.rpop(\"mylist\")\n",
+        // llen → 0 (absent list).
+        "    let n: i64 = client.llen(\"mylist\")\n",
+        // sadd / srem → 0 (no member added/removed).
+        "    let s1: i64 = client.sadd(\"myset\", \"x\")\n",
+        "    let s2: i64 = client.srem(\"myset\", \"x\")\n",
+        // sismember → False; scard → 0.
+        "    let member: bool = client.sismember(\"myset\", \"x\")\n",
+        "    let card: i64 = client.scard(\"myset\")\n",
+        "    print(l1)\n",
+        "    print(l2)\n",
+        "    print(p1)\n",
+        "    print(p2)\n",
+        "    print(n)\n",
+        "    print(s1)\n",
+        "    print(s2)\n",
+        "    print(member)\n",
+        "    print(card)\n",
+        "    return 0\n",
+    ));
+    // lpush 0 + rpush 0 + lpop "" + rpop "" + llen 0 + sadd 0 + srem 0 +
+    // sismember False + scard 0.
+    assert_eq!(stdout, "0\n0\n\n\n0\n0\n0\nFalse\n0\n");
 }
 
 /// A second fail-clean shape — connect with a bare unparseable URL (the

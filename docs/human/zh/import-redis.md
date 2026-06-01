@@ -84,6 +84,56 @@ fn main() -> i64:
 这些同样正是 redis-py 的方法名(`incr` / `expire` / `hset` / `hget`);
 `incr_by` 是 `r.incr(key, n)` 的更可读拼写。
 
+## 你能用到什么(Phase C —— 列表与集合)
+
+Redis 列表(一个双端队列)与集合(成员唯一):
+
+```python
+import redis
+
+fn main() -> i64:
+    let client = redis.connect("redis://127.0.0.1/")
+
+    # 列表 —— 两端都能 push / pop。
+    let n1: i64 = client.lpush("tasks", "a")   # -> 1(新长度;在头部前插)
+    let n2: i64 = client.rpush("tasks", "b")   # -> 2(在尾部追加)
+    let count: i64 = client.llen("tasks")      # -> 2
+    let head: str = client.lpop("tasks")       # -> "a"
+    let tail: str = client.rpop("tasks")       # -> "b"
+
+    # 集合 —— 成员唯一,成员判定很快。
+    let added: i64 = client.sadd("tags", "x")          # -> 1(已存在则 0)
+    let present: bool = client.sismember("tags", "x")  # -> true
+    let card: i64 = client.scard("tags")               # -> 1
+    let removed: i64 = client.srem("tags", "x")        # -> 1(不存在则 0)
+    print(head)
+    return 0
+```
+
+- **`client.lpush(key, value)`** —— 在列表头部前插一个值。返回列表的新
+  长度。
+- **`client.rpush(key, value)`** —— 在列表尾部追加一个值。返回列表的新
+  长度。
+- **`client.lpop(key)`** —— 从头部弹出一个元素,作为 `str` 返回。空列表
+  或键不存在时读作空字符串 `""`。
+- **`client.rpop(key)`** —— 从尾部弹出一个元素。同样的 `""` 规则。
+- **`client.llen(key)`** —— 列表里的元素个数(键不存在则为 `0`)。
+- **`client.sadd(key, member)`** —— 往集合里加一个成员。返回新增的个
+  数:成员是新的返回 `1`,已存在返回 `0`。
+- **`client.srem(key, member)`** —— 移除一个成员。返回移除的个数(`1`
+  或 `0`)。
+- **`client.sismember(key, member)`** —— 成员在集合中时返回 `true`。
+- **`client.scard(key)`** —— 集合里的成员个数(键不存在则为 `0`)。
+
+这些同样正是 redis-py 的方法名(`lpush` / `rpush` / `lpop` / `rpop` /
+`llen` / `sadd` / `srem` / `sismember` / `scard`)。
+
+那些一次性读回*整个*列表或集合的动作 —— `lrange`、`smembers`(以及读取
+整个哈希的 `hgetall` / `hkeys`)—— 是已记录的后续项,尚未实现:它们返回
+的是*一个字符串列表*,而 redis 其余接口(始终只返回单个值)目前还没有
+这种返回形态。现在请用 `lpop` / `rpop` 逐个弹出元素,或用 `sismember`
+做成员判定。
+
 ## 为什么这样设计?
 
 - **类型化方法,而非命令字符串。** 你调用的是 `client.set(k, v)`,而不是
@@ -107,10 +157,11 @@ fn main() -> i64:
 
 如果服务器不可达或 URL 非法,`connect` 仍然会交给你一个可用的
 `Client` —— 一个"未连接"的。对它的每个操作都返回安全的默认值(`get` /
-`hget` → `""`,`delete` / `incr` / `incr_by` → `0`,`exists` / `expire` /
-`hset` → `false`),`set` 则安静地变成空操作。你的程序在边界处永远不会
-崩溃。正是这一点让测试套件无需真的跑一个 Redis 服务器,就能证明整条流水
-线是通的。
+`hget` / `lpop` / `rpop` → `""`,`delete` / `incr` / `incr_by` /
+`lpush` / `rpush` / `llen` / `sadd` / `srem` / `scard` → `0`,`exists` /
+`expire` / `hset` / `sismember` → `false`),`set` 则安静地变成空操作。
+你的程序在边界处永远不会崩溃。正是这一点让测试套件无需真的跑一个 Redis
+服务器,就能证明整条流水线是通的。
 
 ## 当前的限制
 
@@ -123,6 +174,10 @@ fn main() -> i64:
   任务共享(连接池是后续项)。
 - 一步完成"设置并带过期"的 `SETEX`(`set_expiry`)是个小的后续项;现在
   请用 `set` 再 `expire`。
+- 一次性读回*整个*列表或集合(`lrange` / `smembers`,以及读取整个哈希的
+  `hgetall` / `hkeys`)是后续项 —— 它们返回的是一个字符串列表,这种返回
+  形态接口目前还没有。现在请用 `lpop` / `rpop` 逐个弹出,或用
+  `sismember` 做判定。
 
 这些都是已记录在案的后续项,而非死路。
 

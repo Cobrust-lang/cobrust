@@ -308,6 +308,152 @@ impl Client {
         con.hget::<_, _, Option<String>>(key, field)
             .map_err(|e| RedisError::from_redis(&e))
     }
+
+    // fn:Client::lpush provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `LPUSH key value` (list — prepend at the head). Mirrors redis-py
+    /// `r.lpush(key, value)`. Returns the list's NEW length after the push
+    /// (the `LPUSH` reply). The value type is fixed to `str` for the first
+    /// proof, mirroring `set` (ADR-0078 §2.3-2). redis-rs's
+    /// `Commands::lpush` replies with the list length (a `usize`), which we
+    /// narrow to the `.cb` `i64` (a redis list length is well under
+    /// `i64::MAX`).
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed LPUSH (e.g. the key holds a non-list).
+    pub fn lpush(&mut self, key: &str, value: &str) -> Result<i64, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.lpush::<_, _, i64>(key, value)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::rpush provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `RPUSH key value` (list — append at the tail). Mirrors redis-py
+    /// `r.rpush(key, value)`. Returns the list's NEW length after the push,
+    /// exactly like [`Client::lpush`] but pushing at the opposite end.
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed RPUSH.
+    pub fn rpush(&mut self, key: &str, value: &str) -> Result<i64, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.rpush::<_, _, i64>(key, value)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::lpop provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `LPOP key` (list — pop one element from the head). Mirrors redis-py
+    /// `r.lpop(key)`. Returns the popped value, or `None` when the list is
+    /// empty or the key is absent — so the cabi shim renders the
+    /// empty-string sentinel for "absent == empty", exactly mirroring
+    /// `get` / `hget` (ADR-0078 §2.3-1). redis-rs's `Commands::lpop` takes a
+    /// `count: Option<NonZeroUsize>`; the first proof always passes `None`
+    /// (pop exactly one), so the reply is a single bulk value (or nil)
+    /// deserialized as `Option<String>` (NOT the multi-element LIST shape
+    /// `lrange` would need — that LIST-return is the deferred Phase-C+
+    /// follow-up).
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed LPOP.
+    pub fn lpop(&mut self, key: &str) -> Result<Option<String>, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.lpop::<_, Option<String>>(key, None)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::rpop provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `RPOP key` (list — pop one element from the tail). Mirrors redis-py
+    /// `r.rpop(key)`. Returns the popped value, or `None` when the list is
+    /// empty / absent, exactly like [`Client::lpop`] but popping the
+    /// opposite end.
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed RPOP.
+    pub fn rpop(&mut self, key: &str) -> Result<Option<String>, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.rpop::<_, Option<String>>(key, None)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::llen provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `LLEN key` (list length). Mirrors redis-py `r.llen(key)`. Returns the
+    /// number of elements in the list, or `0` when the key is absent (redis
+    /// treats a missing key as an empty list). redis-rs's `Commands::llen`
+    /// replies with a `usize`, narrowed to the `.cb` `i64`.
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed LLEN (e.g. the key holds a non-list).
+    pub fn llen(&mut self, key: &str) -> Result<i64, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.llen::<_, i64>(key)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::sadd provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `SADD key member` (set — add a member). Mirrors redis-py
+    /// `r.sadd(key, member)`. Returns the number of members ADDED (`1` when
+    /// `member` was new to the set, `0` when it was already present) — the
+    /// `SADD` reply. The member type is fixed to `str` for the first proof,
+    /// mirroring `set`.
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed SADD (e.g. the key holds a non-set).
+    pub fn sadd(&mut self, key: &str, member: &str) -> Result<i64, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.sadd::<_, _, i64>(key, member)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::srem provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `SREM key member` (set — remove a member). Mirrors redis-py
+    /// `r.srem(key, member)`. Returns the number of members REMOVED (`1`
+    /// when `member` was present, `0` when it was absent / the set does not
+    /// exist) — the `SREM` reply.
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed SREM.
+    pub fn srem(&mut self, key: &str, member: &str) -> Result<i64, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.srem::<_, _, i64>(key, member)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::sismember provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `SISMEMBER key member` (set — membership test). Mirrors redis-py
+    /// `r.sismember(key, member)`. Returns `true` when `member` is in the
+    /// set, `false` when it is absent (or the set does not exist) — the
+    /// readable bool the `SISMEMBER` reply already is. redis-rs's
+    /// `Commands::sismember` returns a bool natively.
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed SISMEMBER.
+    pub fn sismember(&mut self, key: &str, member: &str) -> Result<bool, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.sismember::<_, _, bool>(key, member)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::scard provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `SCARD key` (set cardinality). Mirrors redis-py `r.scard(key)`.
+    /// Returns the number of members in the set, or `0` when the key is
+    /// absent (redis treats a missing key as an empty set). redis-rs's
+    /// `Commands::scard` replies with a `usize`, narrowed to the `.cb`
+    /// `i64`.
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed SCARD (e.g. the key holds a non-set).
+    pub fn scard(&mut self, key: &str) -> Result<i64, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.scard::<_, i64>(key)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
 }
 
 #[cfg(test)]
@@ -359,6 +505,44 @@ mod tests {
         );
         assert_eq!(
             c.hget("k", "f").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        // Phase-C verbs (lists + sets) — same disconnected-sentinel
+        // short-circuit, every verb errors before any I/O.
+        assert_eq!(
+            c.lpush("k", "v").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.rpush("k", "v").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.lpop("k").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.rpop("k").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.llen("k").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.sadd("k", "m").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.srem("k", "m").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.sismember("k", "m").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.scard("k").expect_err("must error").kind,
             RedisErrorKind::Disconnected
         );
     }

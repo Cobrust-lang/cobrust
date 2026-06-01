@@ -92,6 +92,61 @@ fn main() -> i64:
 These are, again, exactly the redis-py names (`incr` / `expire` / `hset`
 / `hget`); `incr_by` is the readable spelling of `r.incr(key, n)`.
 
+## What you get (Phase C — lists and sets)
+
+Redis lists (a double-ended queue) and sets (unique members):
+
+```python
+import redis
+
+fn main() -> i64:
+    let client = redis.connect("redis://127.0.0.1/")
+
+    # Lists — push and pop at either end.
+    let n1: i64 = client.lpush("tasks", "a")   # -> 1 (new length; prepend at head)
+    let n2: i64 = client.rpush("tasks", "b")   # -> 2 (append at tail)
+    let count: i64 = client.llen("tasks")      # -> 2
+    let head: str = client.lpop("tasks")       # -> "a"
+    let tail: str = client.rpop("tasks")       # -> "b"
+
+    # Sets — unique members, fast membership tests.
+    let added: i64 = client.sadd("tags", "x")          # -> 1 (0 if already there)
+    let present: bool = client.sismember("tags", "x")  # -> true
+    let card: i64 = client.scard("tags")               # -> 1
+    let removed: i64 = client.srem("tags", "x")        # -> 1 (0 if absent)
+    print(head)
+    return 0
+```
+
+- **`client.lpush(key, value)`** — prepend a value at the head of the
+  list. Returns the list's new length.
+- **`client.rpush(key, value)`** — append a value at the tail. Returns the
+  list's new length.
+- **`client.lpop(key)`** — pop one element off the head and return it as a
+  `str`. An empty or missing list reads as the empty string `""`.
+- **`client.rpop(key)`** — pop one element off the tail. Same `""` rule.
+- **`client.llen(key)`** — the number of elements in the list (`0` if the
+  key is absent).
+- **`client.sadd(key, member)`** — add a member to a set. Returns the
+  number added: `1` when the member is new, `0` when it was already
+  present.
+- **`client.srem(key, member)`** — remove a member. Returns the number
+  removed (`1` or `0`).
+- **`client.sismember(key, member)`** — returns `true` when the member is
+  in the set.
+- **`client.scard(key)`** — the number of members in the set (`0` if the
+  key is absent).
+
+Again, exactly the redis-py names (`lpush` / `rpush` / `lpop` / `rpop` /
+`llen` / `sadd` / `srem` / `sismember` / `scard`).
+
+The verbs that read back a *whole* list or set at once — `lrange`,
+`smembers` (and the hash-wide `hgetall` / `hkeys`) — are a tracked
+follow-up, not yet shipped: they return a *list of strings*, a return
+shape the rest of the redis surface (which always returns a single value)
+does not yet have. For now, pop elements one at a time with `lpop` /
+`rpop`, or test membership with `sismember`.
+
 ## Why this design?
 
 - **Typed methods, never a command string.** You call `client.set(k, v)`,
@@ -119,11 +174,12 @@ These are, again, exactly the redis-py names (`incr` / `expire` / `hset`
 
 If the server is unreachable or the URL is invalid, `connect` still hands
 you a usable `Client` — a "disconnected" one. Every operation on it
-returns the safe default (`get` / `hget` → `""`, `delete` / `incr` /
-`incr_by` → `0`, `exists` / `expire` / `hset` → `false`), and `set` is
-silently a no-op. Your program never crashes at the boundary. This is what
-lets the test suite prove the whole pipeline works without needing a real
-Redis server running.
+returns the safe default (`get` / `hget` / `lpop` / `rpop` → `""`,
+`delete` / `incr` / `incr_by` / `lpush` / `rpush` / `llen` / `sadd` /
+`srem` / `scard` → `0`, `exists` / `expire` / `hset` / `sismember` →
+`false`), and `set` is silently a no-op. Your program never crashes at
+the boundary. This is what lets the test suite prove the whole pipeline
+works without needing a real Redis server running.
 
 ## Today's limits
 
@@ -137,6 +193,10 @@ Redis server running.
   one connection across spawned tasks (a connection pool is a follow-up).
 - A set-with-expiry one-shot (`SETEX`) is a small follow-up; for now use
   `set` then `expire`.
+- Reading back a *whole* list or set at once (`lrange` / `smembers`, and
+  the hash-wide `hgetall` / `hkeys`) is a follow-up — those return a list
+  of strings, a return shape the surface does not have yet. For now pop
+  with `lpop` / `rpop` or test with `sismember`.
 
 These are tracked follow-ups, not dead ends.
 

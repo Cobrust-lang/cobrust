@@ -4,12 +4,17 @@
 //! ecosystem batch by ADR-0022 §6). When compiled with the feature,
 //! this module exposes a `redis` Python extension whose public surface
 //! is a `connect(url) -> Client` function plus a `Client` class with the
-//! nine KV verbs `set / get / delete / exists` (Phase-A) and
-//! `expire / incr / incr_by / hset / hget` (Phase-B), kept in lock-step
-//! with the `.cb` C-ABI surface (ADR-0078 Phase-1c). The Python-side `get`
-//! and `hget` return `Optional[str]` (None for an absent key/field) — the
-//! §2.2-correct shape the C-ABI first proof defers to a follow-up but PyO3
-//! can express natively.
+//! KV verbs `set / get / delete / exists` (Phase-A), the cache/counter/
+//! hash verbs `expire / incr / incr_by / hset / hget` (Phase-B), and the
+//! list/set verbs `lpush / rpush / lpop / rpop / llen / sadd / srem /
+//! sismember / scard` (Phase-C), kept in lock-step with the `.cb` C-ABI
+//! surface (ADR-0078 Phase-1c). The Python-side `get` / `hget` / `lpop` /
+//! `rpop` return `Optional[str]` (None for an absent key/field / an
+//! empty list) — the §2.2-correct shape the C-ABI first proof renders as
+//! the empty-string sentinel but PyO3 can express natively.
+//!
+//! The multi-element LIST-of-str returns (`lrange` / `smembers` /
+//! `hgetall` / `hkeys`) are a deferred follow-up on BOTH surfaces.
 
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_errors_doc)]
@@ -69,6 +74,47 @@ impl PyClient {
 
     fn hget(&mut self, key: &str, field: &str) -> PyResult<Option<String>> {
         self.inner.hget(key, field).map_err(redis_err_to_py)
+    }
+
+    // Phase-C — list verbs.
+    fn lpush(&mut self, key: &str, value: &str) -> PyResult<i64> {
+        self.inner.lpush(key, value).map_err(redis_err_to_py)
+    }
+
+    fn rpush(&mut self, key: &str, value: &str) -> PyResult<i64> {
+        self.inner.rpush(key, value).map_err(redis_err_to_py)
+    }
+
+    // `lpop`/`rpop` return `Optional[str]` (None for an empty/absent
+    // list) — the §2.2-correct shape PyO3 expresses natively, mirroring
+    // `get`/`hget`.
+    fn lpop(&mut self, key: &str) -> PyResult<Option<String>> {
+        self.inner.lpop(key).map_err(redis_err_to_py)
+    }
+
+    fn rpop(&mut self, key: &str) -> PyResult<Option<String>> {
+        self.inner.rpop(key).map_err(redis_err_to_py)
+    }
+
+    fn llen(&mut self, key: &str) -> PyResult<i64> {
+        self.inner.llen(key).map_err(redis_err_to_py)
+    }
+
+    // Phase-C — set verbs.
+    fn sadd(&mut self, key: &str, member: &str) -> PyResult<i64> {
+        self.inner.sadd(key, member).map_err(redis_err_to_py)
+    }
+
+    fn srem(&mut self, key: &str, member: &str) -> PyResult<i64> {
+        self.inner.srem(key, member).map_err(redis_err_to_py)
+    }
+
+    fn sismember(&mut self, key: &str, member: &str) -> PyResult<bool> {
+        self.inner.sismember(key, member).map_err(redis_err_to_py)
+    }
+
+    fn scard(&mut self, key: &str) -> PyResult<i64> {
+        self.inner.scard(key).map_err(redis_err_to_py)
     }
 }
 

@@ -10,7 +10,10 @@
 //! `1`) → `exists` (prints `False`) round-trip and asserts the printed
 //! values — the ADR-0078 Phase-1c done-means #2. A second live test
 //! (Phase-B) exercises `set`+`expire`(+post-`exists`), the `incr`/
-//! `incr_by` counter round-trip, and the `hset`/`hget` hash round-trip.
+//! `incr_by` counter round-trip, and the `hset`/`hget` hash round-trip. A
+//! third live test (Phase-C) exercises the list round-trip (`lpush`/
+//! `rpush`/`llen`/`lpop`/`rpop`) and the set round-trip (`sadd`/`srem`/
+//! `sismember`/`scard`).
 //!
 //! The hermetic, always-on proof of the wiring + the error path is
 //! `redis_fail_clean_e2e.rs` (server-less); this file adds the
@@ -219,5 +222,85 @@ fn test_e2e_redis_live_phase_b_round_trip_or_skip() {
     assert_eq!(
         stdout, "11\n16\nTrue\nTrue\nTrue\na\nFalse\nb\n",
         "live redis phase-b round-trip: incr/incr_by, expire+exists, hset/hget"
+    );
+}
+
+/// ADR-0078 Phase-1c Phase-C — the LIVE round-trip for the new list/set
+/// verbs. Self-skips (clean `return`) when no redis is reachable. Two
+/// independent round-trips, each on a process-unique key (cleaned up with
+/// `delete` at the end so a shared dev/CI redis is not polluted):
+///
+/// 1. list: `lpush l "a"` (prepend, len -> 1) → `rpush l "b"` (append,
+///    len -> 2) → `llen l` (-> 2) → `lpop l` (pop head -> "a") →
+///    `rpop l` (pop tail -> "b") → `llen l` (-> 0, now empty).
+/// 2. set: `sadd s "x"` (new -> 1) → `sadd s "x"` (already there -> 0) →
+///    `sismember s "x"` (-> True) → `scard s` (-> 1) → `srem s "x"`
+///    (removed -> 1) → `sismember s "x"` (-> False, now gone).
+#[test]
+fn test_e2e_redis_live_phase_c_round_trip_or_skip() {
+    let url = redis_url();
+    let hp = host_port(&url);
+    if !redis_reachable(&hp) {
+        eprintln!(
+            "redis_live_e2e (phase-c): skipping cleanly: no redis server reachable at {hp} \
+             (set REDIS_URL to a reachable redis://host:port/ to run the live round-trip)"
+        );
+        return;
+    }
+
+    // Process-unique key roots so concurrent runs / a shared server don't
+    // collide across the two round-trips.
+    let pid = std::process::id();
+    let kl = format!("cobrust:redis_live_e2e:phasec:list:{pid}");
+    let ks = format!("cobrust:redis_live_e2e:phasec:set:{pid}");
+
+    let source = format!(
+        concat!(
+            "import redis\n",
+            "\n",
+            "fn main() -> i64:\n",
+            "    let client = redis.connect(\"{url}\")\n",
+            // 1. list round-trip: lpush "a" (len 1), rpush "b" (len 2),
+            //    llen 2, lpop "a" (head), rpop "b" (tail), llen 0.
+            "    let len1: i64 = client.lpush(\"{kl}\", \"a\")\n",
+            "    let len2: i64 = client.rpush(\"{kl}\", \"b\")\n",
+            "    let len_full: i64 = client.llen(\"{kl}\")\n",
+            "    let head: str = client.lpop(\"{kl}\")\n",
+            "    let tail: str = client.rpop(\"{kl}\")\n",
+            "    let len_empty: i64 = client.llen(\"{kl}\")\n",
+            // 2. set round-trip: sadd "x" (new 1), sadd "x" (dup 0),
+            //    sismember "x" (True), scard 1, srem "x" (1), sismember False.
+            "    let added: i64 = client.sadd(\"{ks}\", \"x\")\n",
+            "    let dup: i64 = client.sadd(\"{ks}\", \"x\")\n",
+            "    let is_member: bool = client.sismember(\"{ks}\", \"x\")\n",
+            "    let card: i64 = client.scard(\"{ks}\")\n",
+            "    let removed: i64 = client.srem(\"{ks}\", \"x\")\n",
+            "    let still_member: bool = client.sismember(\"{ks}\", \"x\")\n",
+            // Clean up the two keys (deletes are not asserted on).
+            "    let _l: i64 = client.delete(\"{kl}\")\n",
+            "    let _s: i64 = client.delete(\"{ks}\")\n",
+            "    print(len1)\n",
+            "    print(len2)\n",
+            "    print(len_full)\n",
+            "    print(head)\n",
+            "    print(tail)\n",
+            "    print(len_empty)\n",
+            "    print(added)\n",
+            "    print(dup)\n",
+            "    print(is_member)\n",
+            "    print(card)\n",
+            "    print(removed)\n",
+            "    print(still_member)\n",
+            "    return 0\n",
+        ),
+        url = url,
+        kl = kl,
+        ks = ks,
+    );
+
+    let stdout = build_and_run_source(&source);
+    assert_eq!(
+        stdout, "1\n2\n2\na\nb\n0\n1\n0\nTrue\n1\n1\nFalse\n",
+        "live redis phase-c round-trip: lpush/rpush/llen/lpop/rpop, sadd/srem/sismember/scard"
     );
 }
