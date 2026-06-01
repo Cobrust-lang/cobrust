@@ -81,6 +81,11 @@ use crate::broadcast::broadcast_shape;
 use crate::broadcast_extra::broadcast_to_1d;
 use crate::constructors::{array_f64, eye as coil_eye, ones as coil_ones, zeros as coil_zeros};
 use crate::dtype::Dtype;
+use crate::elementwise::{
+    cbrt as coil_cbrt, cos as coil_cos, cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2,
+    log as coil_log, log2 as coil_log2, log10 as coil_log10, sin as coil_sin, sinh as coil_sinh,
+    sqrt as coil_sqrt, tan as coil_tan, tanh as coil_tanh,
+};
 use crate::grid::{mgrid_1d, ogrid_1d};
 use crate::linalg::{det as linalg_det, inv as linalg_inv, solve as linalg_solve};
 use crate::manipulate::{
@@ -797,6 +802,199 @@ pub unsafe extern "C" fn __cobrust_coil_vstack(a: *mut u8, b: *mut u8) -> *mut u
 pub unsafe extern "C" fn __cobrust_coil_hstack(a: *mut u8, b: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_combine(a, b, "hstack", coil_hstack) }
+}
+
+// =====================================================================
+// #145 unary TRANSCENDENTAL gap-closure (2026-06-01) — the FLOAT-
+// returning 1-arg elementwise ufunc family (`exp` / `log` (natural ln) /
+// `log10` / `sqrt` / `sin` / `cos` / `tan`, plus the trivial same-dtype-
+// rule `exp2` / `log2` / `cbrt` / `sinh` / `cosh` / `tanh`). Each BORROWS
+// its single handle arg (the `.cb` scope still owns + drops it) and
+// returns a FRESH Boxed `Buffer` handle the scope drops via
+// `__cobrust_coil_buffer_drop` — the EXACT ownership shape of the BATCH-2
+// `__cobrust_coil_transpose` / `_flatten` / `_ravel` 1-arg reshape shims
+// (borrow-Buffer-arg → fresh-Buffer-return). Unlike the 2-array combine
+// ops, these are TOTAL: there is NO conformability concept for a unary
+// op (a domain-error input — `log(-1)`, `sqrt(-1)`, `exp(710)` — yields
+// an IEEE-754 special VALUE, NOT an error), so there is NO `coil_panic`
+// path; the shim ALWAYS returns a fresh `Buffer`. Dtype promotion is
+// numpy-exact: int / bool inputs -> `Float64`, `Float32` stays `Float32`,
+// `Float64` stays `Float64` (see `elementwise.rs`).
+// =====================================================================
+
+/// Shared body for the 1-arg unary-transcendental shims. BORROWS the
+/// single handle, applies the infallible `Array -> Array` kernel `f`, and
+/// returns a freshly-Boxed result handle the `.cb` caller owns. Total —
+/// no `coil_panic` path (the kernels never fail; a null handle is the
+/// only abort, mirroring the BATCH-2 `__cobrust_coil_transpose` guard).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped).
+unsafe fn buffer_unary(a: *mut u8, op_name: &str, f: fn(&Array) -> Array) -> *mut u8 {
+    if a.is_null() {
+        coil_panic(&format!("coil.{op_name}: null operand handle"));
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only —
+    // not reboxed / freed; the `.cb` scope still owns + drops it.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    Box::into_raw(Box::new(f(arr))).cast::<u8>()
+}
+
+/// `coil.exp(a) -> Buffer`. `e**x` elementwise. `exp(710) -> +inf`
+/// (IEEE-754 overflow, a VALUE not an error). Int / bool -> Float64,
+/// Float32 stays Float32. BORROWS `a`; returns a fresh owned handle.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped). The returned
+/// pointer is a freshly-Boxed handle the `.cb` caller owns; freed once
+/// via `__cobrust_coil_buffer_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_exp(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "exp", coil_exp) }
+}
+
+/// `coil.log(a) -> Buffer`. NATURAL log (base e). `log(0) -> -inf`,
+/// `log(-1) -> NaN` (IEEE-754 domain VALUES, not errors). BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_log(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "log", coil_log) }
+}
+
+/// `coil.log10(a) -> Buffer`. Base-10 log. `log10(0) -> -inf`,
+/// `log10(-1) -> NaN`. BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_log10(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "log10", coil_log10) }
+}
+
+/// `coil.sqrt(a) -> Buffer`. Square root. `sqrt(-1) -> NaN` (IEEE-754
+/// domain VALUE, not an error). BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_sqrt(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "sqrt", coil_sqrt) }
+}
+
+/// `coil.sin(a) -> Buffer`. Sine (radians). BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_sin(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "sin", coil_sin) }
+}
+
+/// `coil.cos(a) -> Buffer`. Cosine (radians). BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_cos(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "cos", coil_cos) }
+}
+
+/// `coil.tan(a) -> Buffer`. Tangent (radians). BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_tan(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "tan", coil_tan) }
+}
+
+/// `coil.exp2(a) -> Buffer`. `2**x` elementwise (same dtype rule as
+/// `exp`). BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_exp2(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "exp2", coil_exp2) }
+}
+
+/// `coil.log2(a) -> Buffer`. Base-2 log (same dtype rule as `log`).
+/// `log2(0) -> -inf`, `log2(-1) -> NaN`. BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_log2(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "log2", coil_log2) }
+}
+
+/// `coil.cbrt(a) -> Buffer`. Cube root (same dtype rule as `sqrt`; unlike
+/// `sqrt`, defined for negatives — `cbrt(-8) -> -2`). BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_cbrt(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "cbrt", coil_cbrt) }
+}
+
+/// `coil.sinh(a) -> Buffer`. Hyperbolic sine (same dtype rule as `sin`).
+/// BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_sinh(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "sinh", coil_sinh) }
+}
+
+/// `coil.cosh(a) -> Buffer`. Hyperbolic cosine (same dtype rule as
+/// `cos`). BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_cosh(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "cosh", coil_cosh) }
+}
+
+/// `coil.tanh(a) -> Buffer`. Hyperbolic tangent (same dtype rule as
+/// `tan`). BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_tanh(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "tanh", coil_tanh) }
 }
 
 /// Shared body for the `a ⊕ k` SCALAR-broadcast shims (ADR-0077 Phase-1

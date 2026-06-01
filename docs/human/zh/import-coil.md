@@ -150,6 +150,55 @@ fn main() -> i64:
 > 列表)和 `np.reshape(a, (m, n))`(shape 元组)需要 `list[Buffer]` / 元组
 > 编组,目前还不存在 —— 等那个落地后再补。本批只交付单参与双数组形式。
 
+## 逐元素数学 —— 超越函数 ufunc(`exp` / `log` / `log10` / `sqrt` / `sin` / `cos` / `tan`)
+
+这些对**每个元素**施加一个数学函数,返回**新 `coil.Buffer`** —— 它们
+是 numpy 中 LLM 最常用的那批一元数学习惯用法。接线方式与上面的变形操作
+**完全一致**(借用 Buffer 参数 → 返回一个 `.cb` 作用域在退出时丢弃一次的
+新 Buffer 句柄)。
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(0.0, 1.0)
+    let e: coil.Buffer = coil.exp(a)              # [1, 2.718281828459045]
+    let _ = coil.print_buffer(e)
+
+    let b: coil.Buffer = coil.array2x2(0.0, 1.0, 4.0, 9.0)
+    let s: coil.Buffer = coil.sqrt(b)             # [[0, 1], [2, 3]]
+    let _ = coil.print_buffer(s)
+
+    # 链式:每个操作返回的新 Buffer 喂给下一个。
+    let r: coil.Buffer = coil.sqrt(coil.exp(a))   # sqrt([1, e]) = [1, 1.648...]
+    let _ = coil.print_buffer(r)
+    return 0
+```
+
+**七个核心操作**(全部 `Buffer -> Buffer`):
+
+- **`coil.exp(a)`** —— `e**x`。
+- **`coil.log(a)`** —— 自然对数(以 e 为底)。
+- **`coil.log10(a)`** —— 以 10 为底的对数。
+- **`coil.sqrt(a)`** —— 平方根。
+- **`coil.sin(a)` / `coil.cos(a)` / `coil.tan(a)`** —— 三角函数(弧度)。
+
+另有六个 **dtype 规则相同**的便捷操作:**`coil.exp2`**(`2**x`)、
+**`coil.log2`**、**`coil.cbrt`**(立方根 —— 与 `sqrt` 不同,对负数有定义:
+`cbrt(-8) = -2`)、**`coil.sinh`**、**`coil.cosh`**、**`coil.tanh`**。
+
+> **dtype 规则(唯一需要记住的)**:这些操作全部**返回浮点**。**整数**输入
+> 提升到 `float64`(`exp` 作用于整数数组得到 `float64` buffer);**`float32`**
+> 输入保持 `float32`;**`float64`** 输入保持 `float64`。(**`bool`** 输入也
+> 提升到 `float64` —— numpy 会用 `float16`,而 coil 没有对应类型;**值**完全
+> 一致,只是 dtype 层级不同。)
+>
+> **定义域错误是值,不是崩溃**:一元操作没有「形状不匹配」之说,所以这些
+> 操作**绝不 trap**。数学上未定义的输入产出 numpy 同样产出的 IEEE-754 特殊
+> 值 —— `log(0) = -inf`、`log(-1) = NaN`、`sqrt(-1) = NaN`、`exp(710) = +inf`
+> (溢出)—— 程序继续运行。(numpy 会打印 RuntimeWarning;数组的值是一样的。)
+> repr 把它们渲染为 `inf` / `-inf` / `NaN`。
+
 ## 线性代数 —— `coil.linalg.*` 子命名空间(ADR-0079 Phase 1)
 
 `coil.linalg.*` 是生态模块下的**第一个点分子命名空间** —— 它精确镜像

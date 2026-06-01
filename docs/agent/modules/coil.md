@@ -1637,6 +1637,122 @@ follow-up.
       fmt clean; no new dep (F64 — `ndarray` already present).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## `.cb` `coil` unary transcendental — `exp` / `log` / `log10` / `sqrt` / `sin` / `cos` / `tan` (+ `exp2`/`log2`/`cbrt`/`sinh`/`cosh`/`tanh`) (#145 BATCH 3 — DONE)
+
+The FLOAT-returning 1-arg elementwise ufunc family — the unary-math ops
+most-used in real numpy code (§2.5 training-data overlap). Wired EXACTLY
+like the BATCH-2 reshape ops (`transpose`/`flatten`/`ravel`):
+borrow-Buffer-arg → fresh-Buffer-return, the `(ptr) -> ptr`
+`coil_shape_ty` extern shape, NOT the scalar-return stats. The cut line
+is the ARITY + RETURN CONTRACT: only the 1-arg FLOAT-returning forms ship.
+The `.cb`-side form is `coil.exp(a)` — a module free function (NOT a
+sub-namespace). 7 core ops + 6 trivial same-dtype-rule optionals.
+
+### Semantics (numpy 2.4.6 oracle — `coil::elementwise`)
+
+- `coil.exp(a) -> Buffer` — `e**x`. `exp(710) -> +inf` (IEEE-754
+  overflow VALUE).
+- `coil.log(a) -> Buffer` — NATURAL log (base e). `log(0) -> -inf`,
+  `log(-1) -> NaN`.
+- `coil.log10(a) -> Buffer` — base-10 log. `log10(0) -> -inf`,
+  `log10(-1) -> NaN`.
+- `coil.sqrt(a) -> Buffer` — square root. `sqrt(-1) -> NaN`.
+- `coil.sin(a)` / `coil.cos(a)` / `coil.tan(a) -> Buffer` — trig
+  (radians).
+- (Optional, identical dtype rule:) `coil.exp2` (`2**x`) / `coil.log2`
+  (`log2(0) -> -inf`) / `coil.cbrt` (cube root, defined for negatives:
+  `cbrt(-8) -> -2`) / `coil.sinh` / `coil.cosh` / `coil.tanh`.
+
+All are TOTAL — a domain-error input is an IEEE-754 special VALUE, never
+an error (numpy emits a RuntimeWarning; the array value is identical).
+There is NO conformability concept for a unary op, so NO `coil_panic`
+path exists; the shim ALWAYS returns a fresh `Buffer`.
+
+**Dtype contract (the #1 nuance — numpy-confirmed)**: all FLOAT-returning.
+Integer input (any int dtype) PROMOTES to `Float64`
+(`exp(int_array) -> Float64`); `Float32` STAYS `Float32`
+(`sqrt(f32) -> Float32`); `Float64` STAYS `Float64`. Implemented via
+`promote::unary_math_dtype` (the SAME promotion `Array::sin`/`exp`/… use).
+**Bool**: numpy promotes `bool -> float16` for these ufuncs; the coil
+`Array` tagged-union has NO `float16` variant, so coil pins
+`bool -> Float64`. The VALUES are identical (`True=1.0`/`False=0.0`, so
+`exp(True)=e`, `sqrt(False)=0`) — only the dtype TIER differs (`Float64`
+vs numpy's `Float16`). A value-faithful divergence consistent with the
+existing `unary_math_dtype` contract.
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- 13 `lookup_module_fn` arms (7 core + 6 optional), each
+  `[coil_buffer_ty()] -> coil_buffer_ty()`. Tier `Numerical` — floating
+  arithmetic ufuncs whose VALUES agree with numpy at rtol 1e-12 (f64) /
+  1e-6 (f32).
+
+### Typecheck / MIR — ZERO new code
+
+- The generic module-fn path (`try_synth_ecosystem_call` Case 1 /
+  `try_lower_ecosystem_call` Case 1, `lower.rs:2162-2182`) already lowers
+  any `lookup_module_fn` signature. The 1-Buffer-arg → Buffer shape is
+  STRUCTURALLY IDENTICAL to `coil.transpose(a)` (BATCH 2): the single
+  Buffer arg auto-borrows (Move→Copy in `lower_eco_arg`, so the input
+  stays live + drops once) and the fresh return handle is drop-scheduled
+  by `emit_ecosystem_call`. NO `_ => "any"` gap, NO new MIR arm.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+- 13 extern rows, all reusing `coil_shape_ty` (`ptr -> ptr`) — the
+  IDENTICAL extern shape as the BATCH-2 `transpose`/`flatten`/`ravel`.
+  Symbols ride the existing `__cobrust_coil_` build/intrinsics prefix
+  recognizer (`intrinsics.rs:1389` — a pure `starts_with` match, no CLI/
+  linker edit needed).
+
+### Runtime (`cobrust-coil/src/elementwise.rs` + `cabi.rs`)
+
+- `elementwise.rs`: 13 kernels over the closed `Array` enum via a shared
+  `unary_float(arr, op_f32, op_f64)` helper (consults `unary_math_dtype`,
+  `mapv`s the matching monomorphic libm kernel onto a fresh owned
+  `ArrayD<T>`). 19 unit tests, differential vs the numpy 2.4.6 oracle
+  (incl. int->f64 + f32-stays-f32 + bool->f64 promotion + the
+  `log(0)=-inf` / `log(-1)=NaN` / `sqrt(-1)=NaN` / `exp(710)=+inf` edges +
+  a `sqrt(exp(a))` chain).
+- `cabi.rs`: 13 shims `__cobrust_coil_{exp,log,log10,sqrt,sin,cos,tan,
+  exp2,log2,cbrt,sinh,cosh,tanh}` sharing one `buffer_unary` body (borrow
+  handle → apply infallible kernel → fresh Boxed return). Total — no
+  `coil_panic` path (a null handle is the only abort, mirroring the
+  BATCH-2 `__cobrust_coil_transpose` guard).
+
+### Deferred
+
+- Scalar-returning reductions of a ufunc result (e.g. `np.sum(np.exp(a))`)
+  — already composable via the existing `coil.mean`/etc.; a fused form is
+  a follow-up.
+- The 2-arg `np.logaddexp` / `np.hypot` and the inverse-trig family
+  (`arcsin`/`arccos`/`arctan`/`arctan2`) — DEFERRED (arctan2 is 2-arg).
+- An int-DTYPE `.cb` constructor — the int->f64 promotion path is pinned
+  in the `elementwise.rs` Rust unit tests; the `.cb` E2E proves the
+  float-RETURNING contract those promotions serve (every `.cb` ctor emits
+  `Float64`).
+
+### Done means (#145 BATCH 3 — DONE)
+
+- [x] `elementwise.rs`: 13 kernels (7 core + 6 optional) + shared
+      `unary_float`/`as_f64`/`as_f32` helpers; 19 unit tests with the
+      numpy-2.4.6 oracle (int->f64, f32->f32, bool->f64, NaN/inf edges,
+      shape preservation, `sqrt(exp(a))` chain).
+- [x] cabi: 13 shims via shared `buffer_unary` (TOTAL — no trap path).
+- [x] Manifest: 13 ecosystem arms (`Buffer -> Buffer`, tier `Numerical`).
+- [x] Typecheck / MIR: NO new code (generic module-fn path; 1-Buffer-arg
+      proven by `transpose`).
+- [x] Codegen: 13 extern rows (`coil_shape_ty` ×13).
+- [x] `.cb` E2E `coil_ufunc_e2e.rs` (9 tests): basic `exp` `[1, e]`, `sqrt`
+      `(2,2)`, `sqrt(exp(a))` CHAIN, `log10` powers-of-ten `[[0,1,2],
+      [3,4,5]]`, `sqrt(mgrid)` integer-valued-float, `log` NaN/inf edges
+      (`[-inf, NaN]`), `exp` overflow (`[inf, 1]`), `cos(0)=1` / `sin(0)=0`.
+- [x] No regression: full `cobrust-coil` suite green (231 lib unit +
+      every test binary); touched crates build + clippy `-D warnings` +
+      fmt clean; no new dep (F64 — `ndarray` already present;
+      `Cargo.lock` unchanged).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

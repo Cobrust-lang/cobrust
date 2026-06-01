@@ -79,6 +79,13 @@ mod aggregates;
 mod array;
 mod broadcast;
 mod broadcast_extra;
+// #145 numpy gap-closure BATCH 3 — the unary TRANSCENDENTAL elementwise
+// ufunc family (`exp`/`log`/`log10`/`sqrt`/`sin`/`cos`/`tan` + optional
+// `exp2`/`log2`/`cbrt`/`sinh`/`cosh`/`tanh`), 1-arg Buffer -> Buffer
+// FLOAT-returning ops wired EXACTLY like the BATCH-2 manipulate reshape
+// ops (borrow-Buffer-arg → fresh-Buffer-return). Int/bool inputs promote
+// to Float64; Float32 stays Float32; Float64 stays Float64.
+mod elementwise;
 // ADR-0072 8/8 first proof — `.cb`-side C-ABI shims for the
 // `coil.Buffer` opaque handle (the EIGHTH and final cobra-batch
 // ecosystem module — completes the workspace-vendored ecosystem chain).
@@ -117,6 +124,20 @@ pub use crate::constructors::{
     zeros,
 };
 pub use crate::dtype::{Dtype, FloatInfo, FloatKind, IntInfo, IntKind, finfo, iinfo};
+pub use crate::elementwise::{
+    cbrt,
+    cosh,
+    exp2,
+    log2,
+    log10,
+    sinh,
+    tanh,
+    // NOTE: `exp` / `log` / `sin` / `cos` / `sqrt` are also re-exported
+    // from `ufunc` (the `Result`-returning `Array::*` method backers);
+    // the `elementwise` versions are the infallible `Array -> Array`
+    // cabi-shim backers. They live under the `elementwise` path
+    // (`elementwise::exp`) to avoid the name clash — see `cabi.rs`.
+};
 pub use crate::error::{NumpyError, NumpyErrorKind};
 pub use crate::grid::{mgrid_1d, ogrid_1d};
 pub use crate::index::{Index, SliceSpec, index_get, np_where};

@@ -165,6 +165,60 @@ fn main() -> i64:
 > follow-up once that lands. This batch ships only the single-arg and
 > 2-array forms.
 
+## Elementwise math — transcendental ufuncs (`exp` / `log` / `log10` / `sqrt` / `sin` / `cos` / `tan`)
+
+These apply a math function to **every element**, returning a **fresh
+`coil.Buffer`** — the unary-math idioms an LLM reaches for first in numpy.
+They are wired **identically** to the reshape ops above (borrow the Buffer
+arg → return a fresh Buffer handle the `.cb` scope drops once at exit).
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(0.0, 1.0)
+    let e: coil.Buffer = coil.exp(a)              # [1, 2.718281828459045]
+    let _ = coil.print_buffer(e)
+
+    let b: coil.Buffer = coil.array2x2(0.0, 1.0, 4.0, 9.0)
+    let s: coil.Buffer = coil.sqrt(b)             # [[0, 1], [2, 3]]
+    let _ = coil.print_buffer(s)
+
+    # Chain: each op returns a fresh Buffer that feeds the next.
+    let r: coil.Buffer = coil.sqrt(coil.exp(a))   # sqrt([1, e]) = [1, 1.648...]
+    let _ = coil.print_buffer(r)
+    return 0
+```
+
+**The seven core ops** (all `Buffer -> Buffer`):
+
+- **`coil.exp(a)`** — `e**x`.
+- **`coil.log(a)`** — natural log (base e).
+- **`coil.log10(a)`** — base-10 log.
+- **`coil.sqrt(a)`** — square root.
+- **`coil.sin(a)` / `coil.cos(a)` / `coil.tan(a)`** — trig (radians).
+
+There are also six convenience ops with the **same dtype rule**:
+**`coil.exp2`** (`2**x`), **`coil.log2`**, **`coil.cbrt`** (cube root —
+unlike `sqrt`, defined for negatives: `cbrt(-8) = -2`), **`coil.sinh`**,
+**`coil.cosh`**, **`coil.tanh`**.
+
+> **Dtype rule (the one thing to remember)**: these are all
+> **float-returning**. An **integer** input is promoted to `float64`
+> (`exp` of an int array gives a `float64` buffer); a **`float32`** input
+> stays `float32`; a **`float64`** input stays `float64`. (A `bool` input
+> is promoted to `float64` too — numpy would use `float16`, which coil has
+> no equivalent for; the *values* are identical, only the dtype tier
+> differs.)
+>
+> **Domain errors are values, not crashes**: there is no "shape mismatch"
+> for a one-argument op, so these **never trap**. A mathematically
+> undefined input produces the IEEE-754 special value numpy produces —
+> `log(0) = -inf`, `log(-1) = NaN`, `sqrt(-1) = NaN`, `exp(710) = +inf`
+> (overflow) — and the program keeps running. (numpy prints a
+> RuntimeWarning; the array value is the same.) The repr renders these as
+> `inf` / `-inf` / `NaN`.
+
 ## Linear algebra — the `coil.linalg.*` sub-namespace (ADR-0079 Phase 1)
 
 `coil.linalg.*` is the FIRST *dotted sub-namespace* under an ecosystem

@@ -817,6 +817,114 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // #145 unary TRANSCENDENTAL gap-closure (2026-06-01) — the FLOAT-
+        // returning 1-arg elementwise ufunc family, the unary-math surface
+        // most-used in real numpy code per §2.5. Same borrow-Buffer-arg →
+        // fresh-Buffer-return value-handle ABI as the BATCH-2 reshape ops
+        // (`__cobrust_coil_transpose` / `_flatten` / `_ravel`): the single
+        // Buffer arg auto-borrows (Move→Copy) in `lower_eco_arg` and the
+        // fresh return is drop-scheduled by `emit_ecosystem_call` (NO
+        // `_=>"any"` MIR gap — the generic ecosystem-call lowering iterates
+        // `sig.params` regardless of op, identical 1-Buffer-arg shape to
+        // `coil.transpose`).
+        //
+        // - `coil.exp(a)   -> Buffer`  — e**x.
+        // - `coil.log(a)   -> Buffer`  — natural log (base e).
+        // - `coil.log10(a) -> Buffer`  — base-10 log.
+        // - `coil.sqrt(a)  -> Buffer`  — square root.
+        // - `coil.sin(a)   -> Buffer`  — sine (radians).
+        // - `coil.cos(a)   -> Buffer`  — cosine (radians).
+        // - `coil.tan(a)   -> Buffer`  — tangent (radians).
+        //   (+ optional same-dtype-rule `exp2`/`log2`/`cbrt`/`sinh`/`cosh`/
+        //    `tanh`.)
+        //
+        // Tier `Numerical` — these are floating arithmetic ufuncs whose
+        // VALUES agree with numpy at rtol 1e-12 (f64) / 1e-6 (f32); the
+        // domain-error inputs (`log(0) -> -inf`, `log(-1) -> NaN`,
+        // `sqrt(-1) -> NaN`, `exp(710) -> +inf`) are IEEE-754 special
+        // VALUES, not errors (numpy emits a RuntimeWarning, the array value
+        // is identical). DTYPE: int / bool inputs promote to Float64,
+        // Float32 stays Float32, Float64 stays Float64 (numpy promotes bool
+        // to float16 — coil has no float16 so pins bool->Float64, a
+        // value-faithful divergence documented in `elementwise.rs`).
+        ("coil", "exp") => Some(EcoSig::from_values(
+            "__cobrust_coil_exp",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "log") => Some(EcoSig::from_values(
+            "__cobrust_coil_log",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "log10") => Some(EcoSig::from_values(
+            "__cobrust_coil_log10",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "sqrt") => Some(EcoSig::from_values(
+            "__cobrust_coil_sqrt",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "sin") => Some(EcoSig::from_values(
+            "__cobrust_coil_sin",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "cos") => Some(EcoSig::from_values(
+            "__cobrust_coil_cos",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "tan") => Some(EcoSig::from_values(
+            "__cobrust_coil_tan",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "exp2") => Some(EcoSig::from_values(
+            "__cobrust_coil_exp2",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "log2") => Some(EcoSig::from_values(
+            "__cobrust_coil_log2",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "cbrt") => Some(EcoSig::from_values(
+            "__cobrust_coil_cbrt",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "sinh") => Some(EcoSig::from_values(
+            "__cobrust_coil_sinh",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "cosh") => Some(EcoSig::from_values(
+            "__cobrust_coil_cosh",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "tanh") => Some(EcoSig::from_values(
+            "__cobrust_coil_tanh",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
         // ADR-0079 Phase 1 — minimal `.cb`-constructible 2-D / explicit-
         // data buffers, the genuine prerequisite for exercising the
         // `coil.linalg.*` sub-namespace on NON-identity matrices (the

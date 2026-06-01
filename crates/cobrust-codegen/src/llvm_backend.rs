@@ -3310,6 +3310,28 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_concatenate", coil_binop_ty, 2),
             ("__cobrust_coil_vstack", coil_binop_ty, 2),
             ("__cobrust_coil_hstack", coil_binop_ty, 2),
+            // #145 unary TRANSCENDENTAL Buffer-returning ops. All 1-arg
+            // FLOAT-returning ufuncs (`exp`/`log`/`log10`/`sqrt`/`sin`/
+            // `cos`/`tan` + optional `exp2`/`log2`/`cbrt`/`sinh`/`cosh`/
+            // `tanh`) are `(ptr) -> ptr` ≡ `coil_shape_ty` — the IDENTICAL
+            // extern shape as the BATCH-2 reshape ops `transpose`/`flatten`/
+            // `ravel` above. The MIR ecosystem-call lowering retargets
+            // `coil.exp(a)` onto these `Terminator::Call`s; codegen only
+            // declares the externs (no transcendental-specific arm; same
+            // flat `__cobrust_coil_*` recognizer prefix).
+            ("__cobrust_coil_exp", coil_shape_ty, 1),
+            ("__cobrust_coil_log", coil_shape_ty, 1),
+            ("__cobrust_coil_log10", coil_shape_ty, 1),
+            ("__cobrust_coil_sqrt", coil_shape_ty, 1),
+            ("__cobrust_coil_sin", coil_shape_ty, 1),
+            ("__cobrust_coil_cos", coil_shape_ty, 1),
+            ("__cobrust_coil_tan", coil_shape_ty, 1),
+            ("__cobrust_coil_exp2", coil_shape_ty, 1),
+            ("__cobrust_coil_log2", coil_shape_ty, 1),
+            ("__cobrust_coil_cbrt", coil_shape_ty, 1),
+            ("__cobrust_coil_sinh", coil_shape_ty, 1),
+            ("__cobrust_coil_cosh", coil_shape_ty, 1),
+            ("__cobrust_coil_tanh", coil_shape_ty, 1),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);
