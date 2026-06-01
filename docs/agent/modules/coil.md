@@ -2229,6 +2229,123 @@ deferral (it needs a tagged / 0-d-Buffer scalar return — its own pass).
       (`Cargo.lock` unchanged — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## #145 numpy gap-closure BATCH 8 — `coil.where(cond, a, b)` (DONE)
+
+The 3-arg elementwise conditional select — `result[i] = cond[i] truthy ?
+a[i] : b[i]`. The LAST simple bounded numpy op of #145 (the remaining gaps
+— fancy indexing, broadcasting-where, the 1-arg `np.where(cond)` index
+form — are heavier deferrals). This is the FIRST coil ecosystem fn
+borrowing **three** Buffer handles: it EXTENDS the 2-Buffer combine ops
+(`concatenate` / `vstack` / `hstack`) and `coil.linalg.solve` to a third
+borrowed arg.
+
+### Signature
+
+- `.cb`: `coil.where(cond: coil.Buffer, a: coil.Buffer, b: coil.Buffer) ->
+  coil.Buffer`
+- runtime symbol: `__cobrust_coil_where(cond, a, b: *mut Buffer) -> *mut
+  Buffer`
+
+### numpy semantics (numpy 2.4.6 oracle)
+
+- `np.where([True,False,True],[1,2,3],[4,5,6]) == [1,5,3]`.
+- `cond` truthiness: a **Bool**-dtype `cond` uses its value directly (the
+  clean case — the result of a `a < b` comparison per ADR-0077 is a
+  Bool-dtype Buffer); a numeric `cond` is truthy on any **nonzero** element
+  (numpy: `0`/`0.0` false, every other value incl. `NaN` true). Read by the
+  `where_to_bool` helper — mirrors the M7.2 `index::np_where`
+  `to_bool_array` cast.
+- Result dtype = `a`'s dtype (`a` and `b` must match — the equal-dtype
+  contract). The selected VALUES are copied verbatim, so a `NaN` in `a`/`b`
+  **flows through** as a value (it is selected, never inspected).
+- `all-True cond -> a`; `all-False cond -> b`.
+
+### Shape + dtype contract (the §2.5-honest minimal surface)
+
+- **Shape**: all three operands must share ONE shape (`cond.shape() ==
+  a.shape() == b.shape()`). numpy BROADCASTS cond/a/b; this batch keeps the
+  clean equal-shape contract and raises `ShapeMismatch` (numpy's
+  `ValueError`) on a non-conformable triple. Broadcasting is a tracked
+  follow-up (the existing M7.2 `index::np_where` already broadcasts; this
+  `manipulate::where_select` is the equal-shape ecosystem-surface form that
+  wires through the C-ABI).
+- **Dtype**: `a` and `b` must share a dtype (the result dtype) — the SAME
+  equal-dtype rule `concatenate` uses (no silent cross-dtype coercion,
+  §2.2). A mismatch raises `ShapeMismatch`. Cross-dtype promotion is a
+  tracked follow-up. `cond` may be ANY dtype (its truthiness is read; it
+  does not participate in the result dtype) — typically Bool from `a < b`.
+- This is the 3-arg `np.where(cond, a, b)` form ONLY; the 1-arg
+  `np.where(cond)` index form (variable-length index arrays) is a separate
+  deferral.
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- One arm: `("coil","where") => EcoSig::from_values("__cobrust_coil_where",
+  vec![coil_buffer_ty(); 3], coil_buffer_ty(), Semantic)`. The 3-Buffer
+  param vector is the only new shape.
+- Tier `Semantic` — the selected VALUES + shape + dtype agree exactly with
+  numpy (`where` copies a[i]/b[i] verbatim, no floating arithmetic). The
+  intentional divergences (vs numpy's broadcasting + cross-dtype promotion)
+  are the equal-shape + equal-dtype contracts.
+
+### Typecheck / MIR — ZERO new code
+
+- `where` rides the EXACT generic ecosystem-call path. `try_synth_
+  ecosystem_call` resolves the `(Buffer, Buffer, Buffer) -> Buffer` EcoSig;
+  the MIR `try_lower_ecosystem_call` Case-1 loop iterates `sig.params`
+  regardless of arity — 3 Buffer args is the SAME path as concatenate's 2
+  (each auto-borrows via `lower_eco_arg`'s Move→Copy upgrade, the fresh
+  return is drop-scheduled by `emit_ecosystem_call`). NO `_=>"any"` MIR gap.
+  VERIFIED via the E2E (cobrust-mir recompiled with no source change).
+- `where` is NOT a Cobrust keyword (`match_keyword` has no `where` arm), so
+  `coil.where(...)` parses cleanly as `Attr { base: coil, name: "where" }`
+  (attribute names after `.` are plain idents via `expect_ident`). NO
+  parser accommodation needed.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+- One row: `__cobrust_coil_where` → the NEW `coil_select3_ty` = `(ptr, ptr,
+  ptr) -> ptr` — the FIRST coil extern with three ptr args. Mirrors
+  `concatenate`'s `coil_binop_ty` `(ptr, ptr) -> ptr` + one more ptr. Rides
+  the `__cobrust_coil_` prefix recognizer.
+
+### Runtime (`cobrust-coil/src/manipulate.rs` + `cabi.rs`)
+
+- Kernel `manipulate::where_select(cond, a, b) -> Result<Array>` over the
+  closed `Array` enum: shape guard (all three equal) + dtype guard (a==b),
+  then `Zip`s the bool mask + a + b copying the selected element. 11 unit
+  tests vs numpy 2.4.6.
+- cabi `__cobrust_coil_where` borrows all THREE handles (none freed),
+  `coil_panic`s on a null / non-conformable / dtype-mismatch triple (clean
+  abort via `__cobrust_panic`, NEVER a Rust unwind across the FFI); 3 shim
+  tests (3-Buffer round-trip w/ cond from `buffer_lt`, borrow-not-free,
+  non-null return).
+
+### Done means (#145 BATCH 8 — DONE)
+
+- [x] `manipulate.rs`: `where_select` kernel + `where_to_bool` mask helper;
+      11 unit tests (bool-cond `[1,5,3]`, all-true→a, all-false→b,
+      numeric-cond nonzero, NaN-flows, 2-D, int-dtype, cond-from-`a.lt(b)`,
+      + 3 non-conformable/dtype-mismatch `Err`).
+- [x] cabi: 1 shim borrowing 3 handles (null/non-conformable → `coil_panic`,
+      NO unwind); 3 shim tests.
+- [x] Manifest: 1 ecosystem arm (`where` `(Buffer, Buffer, Buffer) ->
+      Buffer`), tier `Semantic`.
+- [x] Typecheck / MIR: NO new code (VERIFIED via E2E — the 3-Buffer arg
+      vector rides concatenate's generic Case-1 path). `where` needs NO
+      parser accommodation (not a keyword).
+- [x] Codegen: 1 row with the NEW `coil_select3_ty` `(ptr,ptr,ptr) -> ptr`
+      (the first 3-ptr coil extern).
+- [x] `.cb` E2E `coil_where_e2e.rs` (6 tests): comparison-driven `where(a<b,
+      [10,20], [30,40])=[10,40]` (bool-mask integration end-to-end),
+      all-true→a, all-false→b, NaN-flows-through `[NaN,NaN]`,
+      transpose∘where chain, + non-conformable clean-trap (non-zero exit).
+- [x] No regression: full `cobrust-coil` suite green; `coil_where_e2e` +
+      `coil_hello_e2e` all green (`where` does NOT collide with negative
+      placeholders); touched crates build + clippy `-D warnings` + fmt
+      clean; no new dep (`Cargo.lock` unchanged — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

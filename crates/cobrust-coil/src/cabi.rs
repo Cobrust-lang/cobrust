@@ -94,6 +94,7 @@ use crate::linalg::{det as linalg_det, inv as linalg_inv, solve as linalg_solve}
 use crate::manipulate::{
     concatenate as coil_concatenate, flatten as coil_flatten, hstack as coil_hstack,
     ravel as coil_ravel, transpose as coil_transpose, vstack as coil_vstack,
+    where_select as coil_where,
 };
 use crate::print::array_repr;
 use crate::reduce::{cumprod as coil_cumprod, cumsum as coil_cumsum};
@@ -965,6 +966,58 @@ pub unsafe extern "C" fn __cobrust_coil_vstack(a: *mut u8, b: *mut u8) -> *mut u
 pub unsafe extern "C" fn __cobrust_coil_hstack(a: *mut u8, b: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_combine(a, b, "hstack", coil_hstack) }
+}
+
+// =====================================================================
+// #145 gap-closure BATCH 8 (2026-06-01) — `coil.where(cond, a, b)`, the
+// THREE-Buffer elementwise conditional select (`result[i] = cond[i]
+// truthy ? a[i] : b[i]`). The FIRST coil shim borrowing THREE handles —
+// it EXTENDS the 2-Buffer `buffer_combine` (`concatenate` / `vstack` /
+// `hstack`) and the 2-Buffer `coil.linalg.solve` to a third borrowed
+// arg. Each of the three handles is BORROWED (none consumed / freed; the
+// `.cb` scope still owns + drops all three) and a FRESH Boxed `Buffer`
+// the scope drops is returned — the EXACT ownership shape of the 2-arg
+// combine ops, plus one more borrow. A non-conformable triple (a/b/cond
+// shape mismatch) or an `a`/`b` dtype mismatch `coil_panic`s (numpy
+// raises `ValueError`) — NEVER unwinding a Rust `Err` across the C-ABI.
+// `cond` is typically a Bool-dtype Buffer from a `a < b` comparison
+// (ADR-0077); a numeric cond is truthy on any nonzero element.
+// =====================================================================
+
+/// `coil.where(cond, a, b) -> Buffer`. Elementwise conditional select:
+/// `result[i] = cond[i] truthy ? a[i] : b[i]`. BORROWS all THREE handles
+/// (none consumed / freed); returns a fresh owned handle the `.cb` caller
+/// drops once via `__cobrust_coil_buffer_drop`. The result dtype is `a`'s
+/// dtype (`a` and `b` must match). A non-conformable triple (shapes not
+/// all equal) or an `a`/`b` dtype mismatch `coil_panic`s (numpy raises
+/// `ValueError`) — NEVER a Rust unwind across the C-ABI. `cond` is read
+/// as a truthiness mask (a `Bool`-dtype cond uses its value; a numeric
+/// cond is truthy on any nonzero element). A `NaN` in `a`/`b` FLOWS
+/// THROUGH as a selected value.
+///
+/// # Safety
+///
+/// `cond`, `a`, and `b` must each be a live `Buffer` handle (not yet
+/// dropped). The returned pointer is a freshly-Boxed handle the `.cb`
+/// caller owns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_where(cond: *mut u8, a: *mut u8, b: *mut u8) -> *mut u8 {
+    if cond.is_null() || a.is_null() || b.is_null() {
+        coil_panic("coil.where: null operand handle");
+    }
+    // SAFETY: caller attests all three are live Buffer handles. Borrow
+    // only — none is reboxed / freed; the `.cb` scope still owns + drops
+    // all three.
+    let cond_ref: &Array = unsafe { &*cond.cast::<Array>() };
+    let a_ref: &Array = unsafe { &*a.cast::<Array>() };
+    let b_ref: &Array = unsafe { &*b.cast::<Array>() };
+    let out = match coil_where(cond_ref, a_ref, b_ref) {
+        Ok(arr) => arr,
+        // Non-conformable shapes / dtype mismatch — abort with the
+        // kernel's numpy-style diagnostic; diverges, never unwinds.
+        Err(e) => coil_panic(&format!("coil.where: {}", e.message)),
+    };
+    Box::into_raw(Box::new(out)).cast::<u8>()
 }
 
 // =====================================================================
@@ -2698,6 +2751,89 @@ mod tests {
             __cobrust_coil_buffer_drop(a);
             __cobrust_coil_buffer_drop(t);
             __cobrust_coil_buffer_drop(f);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    // -- #145 BATCH 8: `coil.where(cond, a, b)` 3-Buffer select shim ----
+
+    /// `coil.where(cond, a, b)` with a bool-dtype cond from `a < b`: the
+    /// THREE-Buffer round-trip. cond=[1,5]<[3,2]=[True,False];
+    /// where(cond, [10,20], [30,40]) -> [10, 40]. Borrows all THREE inputs
+    /// (none freed); the fresh result drops once. Total drops: 5
+    /// (cond, x, y, the `a`/`b` comparison operands, the result) — we drop
+    /// each handle we create exactly once.
+    #[test]
+    #[allow(clippy::many_single_char_names)]
+    fn where_shim_three_buffer_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            // Build cond from a REAL comparison: a<b yields a Bool Buffer.
+            let a = __cobrust_coil_array1d2(1.0, 5.0);
+            let b = __cobrust_coil_array1d2(3.0, 2.0);
+            let cond = __cobrust_coil_buffer_lt(a, b); // [True, False]
+            let x = __cobrust_coil_array1d2(10.0, 20.0);
+            let y = __cobrust_coil_array1d2(30.0, 40.0);
+            let r = __cobrust_coil_where(cond, x, y);
+            let arr: &Array = &*r.cast::<Array>();
+            // [10, 40]: lane 0 True -> x[0]=10, lane 1 False -> y[1]=40.
+            assert_eq!(array_repr(arr), "array([10, 40], dtype=float64)");
+            // cond inputs survive (borrow-only); drop every created handle.
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(cond);
+            __cobrust_coil_buffer_drop(x);
+            __cobrust_coil_buffer_drop(y);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(drop_count() - before, 6);
+    }
+
+    /// `coil.where` borrows its inputs (does NOT free them): the inputs are
+    /// still readable AFTER the call, and the fresh result is independent.
+    #[test]
+    fn where_shim_borrows_inputs() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let cond = __cobrust_coil_array1d2(1.0, 0.0); // numeric truthy mask
+            let a = __cobrust_coil_array1d2(7.0, 8.0);
+            let b = __cobrust_coil_array1d2(9.0, 10.0);
+            let r = __cobrust_coil_where(cond, a, b);
+            // Inputs are NOT freed — still readable post-call.
+            let a_ref: &Array = &*a.cast::<Array>();
+            assert_eq!(array_repr(a_ref), "array([7, 8], dtype=float64)");
+            // result: cond=[1,0] -> [a[0]=7, b[1]=10].
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(array_repr(arr), "array([7, 10], dtype=float64)");
+            __cobrust_coil_buffer_drop(cond);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    /// Null-handle defense (indirect): non-null inputs produce a non-null
+    /// fresh handle. The `coil_panic` abort on a null / non-conformable
+    /// triple diverges and is covered by the `.cb` e2e `_traps` case.
+    #[test]
+    fn where_shim_returns_nonnull() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let cond = __cobrust_coil_array1d2(1.0, 1.0);
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let b = __cobrust_coil_array1d2(3.0, 4.0);
+            let r = __cobrust_coil_where(cond, a, b);
+            assert!(!r.is_null());
+            __cobrust_coil_buffer_drop(cond);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
             __cobrust_coil_buffer_drop(r);
         }
     }

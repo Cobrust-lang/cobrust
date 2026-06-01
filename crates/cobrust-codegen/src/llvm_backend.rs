@@ -3375,6 +3375,25 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_param_counts.insert(sym, params);
         }
 
+        // -- #145 gap-closure BATCH 8 (2026-06-01): `coil.where(cond, a, b)`,
+        // the THREE-Buffer elementwise conditional select. The FIRST coil
+        // extern with THREE ptr args — a NEW `(ptr, ptr, ptr) -> ptr` shape
+        // (`coil_select3_ty`) that EXTENDS the 2-Buffer `coil_binop_ty`
+        // (`concatenate` / `vstack` / `hstack` / `linalg.solve`) by one more
+        // borrowed handle. The MIR generic ecosystem-call lowering retargets
+        // `coil.where(cond, a, b)` onto this `Terminator::Call` (all three
+        // Buffer args auto-borrow via `lower_eco_arg`'s Move→Copy upgrade,
+        // EXACTLY like the 2-Buffer combine ops — NO batch-specific arm, NO
+        // `_=>"any"` gap); codegen only declares the extern (same flat
+        // `__cobrust_coil_*` recognizer prefix).
+        let coil_select3_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let where_sym = "__cobrust_coil_where";
+        let where_fn =
+            self.module
+                .add_function(where_sym, coil_select3_ty, Some(Linkage::External));
+        self.runtime_helper_decls.insert(where_sym, where_fn);
+        self.runtime_helper_param_counts.insert(where_sym, 3usize);
+
         // -- #145 SCALAR-ARG ufunc gap-closure BATCH 6 (2026-06-01): the
         // Buffer-RETURNING ops taking EXTRA f64 SCALAR args beside the
         // handle. `power(a, p)` is `(ptr, f64) -> ptr` ≡ the `coil_scalar_

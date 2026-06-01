@@ -159,6 +159,131 @@ pub fn hstack(a: &Array, b: &Array) -> Result<Array, NumpyError> {
     concat_axis(a, b, axis)
 }
 
+/// `np.where(cond, a, b)` — the THREE-argument elementwise conditional
+/// select: `result[i] = cond[i] truthy ? a[i] : b[i]`. This is the 3-arg
+/// `np.where` form (NOT the 1-arg `np.where(cond)` index form, which
+/// returns variable-length index arrays — a tracked follow-up).
+///
+/// ## numpy-exact semantics (the load-bearing contract)
+///
+/// - `cond` truthiness: a `Bool`-dtype `cond` uses the bool value
+///   directly (the clean case — the result of a `coil.Buffer` comparison
+///   `a < b` per ADR-0077 is a `Bool`-dtype Buffer); a numeric `cond`
+///   treats any NONZERO element as true (numpy: `0`/`0.0` false, every
+///   other value — incl. `NaN` — true). The `to_bool` helper mirrors the
+///   M7.2 `index::np_where` `to_bool_array` cast exactly.
+/// - Result dtype = `a`'s dtype (== `b`'s — see the dtype contract). The
+///   selected VALUES are copied verbatim, so a `NaN` in `a`/`b` FLOWS
+///   THROUGH as a value (it is never inspected, only selected).
+///
+/// ## Shape contract (the §2.5-honest minimal surface)
+///
+/// All three operands must have the SAME shape (`cond.shape() ==
+/// a.shape() == b.shape()`). numpy BROADCASTS `cond`/`a`/`b` to a common
+/// shape; we keep the clean equal-shape contract for this batch — a
+/// non-conformable triple raises `ShapeMismatch` (numpy's `ValueError`).
+/// Broadcasting is a tracked follow-up (the existing M7.2 `index::
+/// np_where` already broadcasts; this `manipulate` entry is the
+/// equal-shape ecosystem-surface form that wires through the C-ABI).
+///
+/// ## Dtype contract
+///
+/// `a` and `b` must share a dtype (the result dtype). numpy PROMOTES a
+/// mixed `a`/`b` pair to a common dtype; we raise `ShapeMismatch` on a
+/// mismatch — the SAME equal-dtype rule `concatenate` uses (no silent
+/// cross-dtype coercion, §2.2). A mixed-dtype promoting form is a tracked
+/// follow-up. `cond` may be ANY dtype (its truthiness is read; it does
+/// not participate in the result dtype) — typically `Bool` from `a < b`.
+///
+/// # Errors
+///
+/// `ShapeMismatch` (numpy's `ValueError`) when the three operands do not
+/// all share one shape, OR when `a` and `b` have different dtypes.
+pub fn where_select(cond: &Array, a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    // Shape contract — all three must agree (equal-shape; broadcasting is a
+    // tracked follow-up). numpy raises `ValueError` on a non-conformable
+    // triple; we raise `ShapeMismatch`.
+    let cs = cond.shape();
+    let as_ = a.shape();
+    let bs = b.shape();
+    if cs != as_ || as_ != bs {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: format!(
+                "where: all three operands must share one shape (equal-shape \
+                 contract; broadcasting is a tracked follow-up) — cond {cs:?}, \
+                 a {as_:?}, b {bs:?} differ"
+            ),
+        });
+    }
+    // Dtype contract — `a` and `b` must match (the result dtype). numpy's
+    // eventual promotion point; we raise instead (no silent coercion, §2.2).
+    if a.dtype() != b.dtype() {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: format!(
+                "where: dtype mismatch {:?} vs {:?} between `a` and `b` \
+                 (equal-dtype contract; cross-dtype promotion is a tracked \
+                 follow-up)",
+                a.dtype(),
+                b.dtype()
+            ),
+        });
+    }
+    // `cond` → a bool mask. A `Bool`-dtype cond uses the value directly;
+    // a numeric cond is truthy on any nonzero element (numpy parity). The
+    // shapes already match, so the mask aligns element-for-element with
+    // `a` / `b` in C-order. Mirrors `index::np_where`'s `to_bool_array`.
+    let mask = where_to_bool(cond);
+    // dtype(a) == dtype(b) is enforced above, so every match arm pairs
+    // like-with-like; the `select` macro `Zip`s the (already-same-shape)
+    // mask + a + b and copies the selected element verbatim (NaN flows
+    // through as a VALUE — it is selected, never inspected).
+    macro_rules! select {
+        ($va:expr, $vb:expr, $ctor:path, $zero:expr) => {{
+            let mut out = ArrayD::from_elem($va.raw_dim(), $zero);
+            ndarray::Zip::from(&mut out)
+                .and(&mask)
+                .and($va)
+                .and($vb)
+                .for_each(|o, &c, &x, &y| {
+                    *o = if c { x } else { y };
+                });
+            $ctor(out)
+        }};
+    }
+    Ok(match (a, b) {
+        (Array::Int32(x), Array::Int32(y)) => select!(x, y, Array::Int32, 0_i32),
+        (Array::Int64(x), Array::Int64(y)) => select!(x, y, Array::Int64, 0_i64),
+        (Array::Float32(x), Array::Float32(y)) => select!(x, y, Array::Float32, 0.0_f32),
+        (Array::Float64(x), Array::Float64(y)) => select!(x, y, Array::Float64, 0.0_f64),
+        (Array::Bool(x), Array::Bool(y)) => select!(x, y, Array::Bool, false),
+        // Unreachable: the dtype-equality guard above already returned on
+        // any mismatched (a, b) pair.
+        _ => {
+            return Err(NumpyError {
+                kind: NumpyErrorKind::ShapeMismatch,
+                message: "where: dtype mismatch between `a` and `b`".to_string(),
+            });
+        }
+    })
+}
+
+/// Cast any numeric / bool `cond` to a `bool` mask: a `Bool`-dtype array
+/// uses its value directly; a numeric array is truthy on any NONZERO
+/// element (numpy: `0`/`0.0` false, every other value incl. `NaN` true).
+/// Mirrors `index::to_bool_array` (the M7.2 `np_where` cast) so the two
+/// `where` surfaces read `cond` truthiness identically.
+fn where_to_bool(cond: &Array) -> ArrayD<bool> {
+    match cond {
+        Array::Int32(c) => c.mapv(|v| v != 0),
+        Array::Int64(c) => c.mapv(|v| v != 0),
+        Array::Float32(c) => c.mapv(|v| v != 0.0),
+        Array::Float64(c) => c.mapv(|v| v != 0.0),
+        Array::Bool(c) => c.clone(),
+    }
+}
+
 // ---- internals -----------------------------------------------------------
 
 /// Materialise an `ArrayView` as an owned C-standard-layout `ArrayD<T>`.
@@ -473,6 +598,148 @@ mod tests {
         let a = array_f64(&[1., 2.], &[2]).unwrap();
         let b = array_i64(&[1, 2], &[2]).unwrap();
         let err = concatenate(&a, &b).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
+    }
+
+    // ---- where_select (3-arg np.where) ----
+    // Oracle values captured from numpy 2.x via the allowed
+    // `/opt/homebrew/bin/python3.11` interpreter (numpy 2.4.6).
+
+    use crate::constructors::array_bool;
+
+    #[test]
+    fn where_bool_cond_selects_elementwise() {
+        // np.where([True,False,True],[1,2,3],[4,5,6]) -> [1,5,3].
+        let cond = array_bool(&[true, false, true], &[3]).unwrap();
+        let a = array_f64(&[1., 2., 3.], &[3]).unwrap();
+        let b = array_f64(&[4., 5., 6.], &[3]).unwrap();
+        let r = where_select(&cond, &a, &b).unwrap();
+        assert_eq!(r.shape(), vec![3]);
+        assert_eq!(f64_vals(&r), vec![1., 5., 3.]);
+        assert_eq!(r.dtype(), a.dtype());
+    }
+
+    #[test]
+    fn where_all_true_returns_a() {
+        // np.where([True,True,True], a, b) -> a (every lane picks a).
+        let cond = array_bool(&[true, true, true], &[3]).unwrap();
+        let a = array_f64(&[1., 2., 3.], &[3]).unwrap();
+        let b = array_f64(&[7., 8., 9.], &[3]).unwrap();
+        let r = where_select(&cond, &a, &b).unwrap();
+        assert_eq!(f64_vals(&r), vec![1., 2., 3.]);
+    }
+
+    #[test]
+    fn where_all_false_returns_b() {
+        // np.where([False,False,False], a, b) -> b (every lane picks b).
+        let cond = array_bool(&[false, false, false], &[3]).unwrap();
+        let a = array_f64(&[1., 2., 3.], &[3]).unwrap();
+        let b = array_f64(&[7., 8., 9.], &[3]).unwrap();
+        let r = where_select(&cond, &a, &b).unwrap();
+        assert_eq!(f64_vals(&r), vec![7., 8., 9.]);
+    }
+
+    #[test]
+    fn where_numeric_cond_nonzero_is_true() {
+        // A numeric (non-bool) cond: nonzero is true (numpy parity).
+        // np.where([0.,1.,0.],[1,2,3],[4,5,6]) -> [4,2,6].
+        let cond = array_f64(&[0., 1., 0.], &[3]).unwrap();
+        let a = array_f64(&[1., 2., 3.], &[3]).unwrap();
+        let b = array_f64(&[4., 5., 6.], &[3]).unwrap();
+        let r = where_select(&cond, &a, &b).unwrap();
+        assert_eq!(f64_vals(&r), vec![4., 2., 6.]);
+    }
+
+    #[test]
+    fn where_nan_flows_through_as_value() {
+        // NaN in a/b is SELECTED as a value (never inspected for truthiness).
+        // np.where([True,False],[NaN,2.],[5.,NaN]) -> [NaN, NaN].
+        let cond = array_bool(&[true, false], &[2]).unwrap();
+        let a = array_f64(&[f64::NAN, 2.], &[2]).unwrap();
+        let b = array_f64(&[5., f64::NAN], &[2]).unwrap();
+        let r = where_select(&cond, &a, &b).unwrap();
+        match r {
+            Array::Float64(arr) => {
+                let v: Vec<f64> = arr.iter().copied().collect();
+                assert!(v[0].is_nan(), "lane 0 picks a[0]=NaN; got {}", v[0]);
+                assert!(v[1].is_nan(), "lane 1 picks b[1]=NaN; got {}", v[1]);
+            }
+            _ => panic!("expected Float64 result"),
+        }
+    }
+
+    #[test]
+    fn where_2d_same_shape() {
+        // 3-arg where on a (2,2): mask picks per element, C-order.
+        // np.where([[T,F],[F,T]],[[1,2],[3,4]],[[5,6],[7,8]]) -> [[1,6],[7,4]].
+        let cond = array_bool(&[true, false, false, true], &[2, 2]).unwrap();
+        let a = array_f64(&[1., 2., 3., 4.], &[2, 2]).unwrap();
+        let b = array_f64(&[5., 6., 7., 8.], &[2, 2]).unwrap();
+        let r = where_select(&cond, &a, &b).unwrap();
+        assert_eq!(r.shape(), vec![2, 2]);
+        assert_eq!(f64_vals(&r), vec![1., 6., 7., 4.]);
+    }
+
+    #[test]
+    fn where_preserves_int_dtype() {
+        let cond = array_bool(&[true, false], &[2]).unwrap();
+        let a = array_i64(&[10, 20], &[2]).unwrap();
+        let b = array_i64(&[30, 40], &[2]).unwrap();
+        let r = where_select(&cond, &a, &b).unwrap();
+        assert_eq!(r.dtype(), crate::dtype::Dtype::Int64);
+        match r {
+            Array::Int64(arr) => {
+                assert_eq!(arr.iter().copied().collect::<Vec<_>>(), vec![10, 40]);
+            }
+            _ => panic!("dtype not preserved"),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::many_single_char_names)]
+    fn where_cond_built_from_comparison() {
+        // Prove the bool-mask integration: cond = (a < b) is a Bool-dtype
+        // Array (ADR-0077), fed straight into where_select.
+        // a=[1,5], b=[3,2] -> a<b=[True,False]; where(cond,[10,20],[30,40])
+        // -> [10, 40].
+        let a = array_f64(&[1., 5.], &[2]).unwrap();
+        let b = array_f64(&[3., 2.], &[2]).unwrap();
+        let cond = a.lt(&b).unwrap();
+        assert_eq!(cond.dtype(), crate::dtype::Dtype::Bool);
+        let x = array_f64(&[10., 20.], &[2]).unwrap();
+        let y = array_f64(&[30., 40.], &[2]).unwrap();
+        let r = where_select(&cond, &x, &y).unwrap();
+        assert_eq!(f64_vals(&r), vec![10., 40.]);
+    }
+
+    #[test]
+    fn where_nonconformable_shape_is_err() {
+        // cond (3,) vs a/b (2,) -> ShapeMismatch (equal-shape contract).
+        let cond = array_bool(&[true, false, true], &[3]).unwrap();
+        let a = array_f64(&[1., 2.], &[2]).unwrap();
+        let b = array_f64(&[3., 4.], &[2]).unwrap();
+        let err = where_select(&cond, &a, &b).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
+    }
+
+    #[test]
+    fn where_a_b_shape_mismatch_is_err() {
+        // a (2,) vs b (3,) -> ShapeMismatch even with a matching-len cond
+        // on one side (all three must agree).
+        let cond = array_bool(&[true, false], &[2]).unwrap();
+        let a = array_f64(&[1., 2.], &[2]).unwrap();
+        let b = array_f64(&[3., 4., 5.], &[3]).unwrap();
+        let err = where_select(&cond, &a, &b).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
+    }
+
+    #[test]
+    fn where_a_b_dtype_mismatch_is_err() {
+        // a f64 vs b i64 -> ShapeMismatch (equal-dtype contract).
+        let cond = array_bool(&[true, false], &[2]).unwrap();
+        let a = array_f64(&[1., 2.], &[2]).unwrap();
+        let b = array_i64(&[3, 4], &[2]).unwrap();
+        let err = where_select(&cond, &a, &b).unwrap_err();
         assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
     }
 }

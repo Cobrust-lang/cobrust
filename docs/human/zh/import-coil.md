@@ -586,6 +586,42 @@ fn main() -> i64:
 在编译期拒绝它,并给出告诉你修法的提示 —— 改成和一个同形状的 buffer
 比较(例如 `a < b`)。
 
+### 用掩码挑选取值:`coil.where(cond, a, b)`
+
+`coil.where(cond, a, b)` 逐元素地挑选:在 `cond` 为真的位置取 `a` 的值,
+否则取 `b` 的值。这就是 numpy 的三参数 `np.where`。`cond` 最自然的来源
+正是上面看到的比较掩码 —— `a < b` 给出的那个 bool 类型 buffer:
+
+```text
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(1.0, 5.0)
+    let b: coil.Buffer = coil.array1d2(3.0, 2.0)
+    let cond: coil.Buffer = a < b                  # [True, False]
+    let x: coil.Buffer = coil.array1d2(10.0, 20.0)
+    let y: coil.Buffer = coil.array1d2(30.0, 40.0)
+    let r: coil.Buffer = coil.where(cond, x, y)    # [x[0], y[1]] = [10, 40]
+    let _ = coil.print_buffer(r)                   # array([10, 40], dtype=float64)
+    return 0
+```
+
+- **`coil.where(cond: Buffer, a: Buffer, b: Buffer) -> Buffer`** —— 对每个
+  位置 `i`,当 `cond[i]` 为真时 `result[i]` 取 `a[i]`,否则取 `b[i]`。
+  全真的 `cond` 返回 `a`;全假的 `cond` 返回 `b`。
+- **`cond` 的真值判定**:bool 类型的掩码(来自 `a < b`)是最干净的情况
+  —— 直接用它的 `True`/`False`。数值类型的 `cond` 在**非零**处为真
+  (与 numpy 一致)。
+- **`a` 和 `b` 必须是同一种 dtype** —— 那个 dtype 就是结果的 dtype。
+  (今天每个 `.cb` buffer 都是 `float64`,所以这总是成立。)`a`/`b` 里的
+  `NaN` 会像普通值一样被**挑选**出来 —— 它原样流过。
+
+> **三者必须共享同一个形状。** numpy 会把 `cond`/`a`/`b` **广播**到一个
+> 公共形状;Cobrust 目前要求 `cond`、`a`、`b` 形状**相同**。形状不匹配的
+> 三元组是一次运行期陷阱(干净地中止,对应 numpy 的 `ValueError`)。带
+> 广播的 `where` —— 以及返回真值元素**下标**的单参数 `np.where(cond)`
+> 形式 —— 都是已记录的后续项。
+
 ### 矩阵乘法:`a @ b`
 
 `@` 是**矩阵乘法**(numpy 的 `@` / `np.matmul`),不是逐元素运算。

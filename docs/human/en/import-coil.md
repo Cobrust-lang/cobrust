@@ -633,6 +633,45 @@ What is **not** supported yet: comparing a buffer with a *plain number*
 (`a < 1`). Cobrust rejects it at compile time with a message that tells you
 the fix — compare against a same-shape buffer instead (e.g. `a < b`).
 
+### Picking values with a mask: `coil.where(cond, a, b)`
+
+`coil.where(cond, a, b)` selects element-by-element: wherever `cond` is
+true it takes the value from `a`, otherwise from `b`. This is numpy's
+3-argument `np.where`. The natural source of `cond` is a comparison mask —
+the bool-dtype buffer you just saw from `a < b`:
+
+```text
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(1.0, 5.0)
+    let b: coil.Buffer = coil.array1d2(3.0, 2.0)
+    let cond: coil.Buffer = a < b                  # [True, False]
+    let x: coil.Buffer = coil.array1d2(10.0, 20.0)
+    let y: coil.Buffer = coil.array1d2(30.0, 40.0)
+    let r: coil.Buffer = coil.where(cond, x, y)    # [x[0], y[1]] = [10, 40]
+    let _ = coil.print_buffer(r)                   # array([10, 40], dtype=float64)
+    return 0
+```
+
+- **`coil.where(cond: Buffer, a: Buffer, b: Buffer) -> Buffer`** — for each
+  position `i`, `result[i]` is `a[i]` when `cond[i]` is true, else `b[i]`.
+  An all-true `cond` returns `a`; an all-false `cond` returns `b`.
+- **`cond` truthiness**: a bool-dtype mask (from `a < b`) is the clean case
+  — its `True`/`False` are used directly. A numeric `cond` is "true"
+  wherever it is **nonzero** (matching numpy).
+- **`a` and `b` must have the same dtype** — that dtype is the result's
+  dtype. (Every `.cb` buffer is `float64` today, so this always holds.) A
+  `NaN` inside `a`/`b` is *selected* like any other value — it flows
+  through untouched.
+
+> **All three must share one shape.** numpy *broadcasts* `cond`/`a`/`b` to a
+> common shape; for now Cobrust requires `cond`, `a`, and `b` to have the
+> **same** shape. A mismatched trio is a runtime trap (it aborts cleanly,
+> matching numpy's `ValueError`). Broadcasting `where` — and the 1-argument
+> `np.where(cond)` form that returns the *indices* of the true elements —
+> are tracked follow-ups.
+
 ### Matrix multiply: `a @ b`
 
 `@` is **matrix multiplication** (numpy's `@` / `np.matmul`), not

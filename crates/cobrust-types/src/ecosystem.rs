@@ -817,6 +817,33 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // #145 gap-closure BATCH 8 (2026-06-01) — `coil.where(cond, a, b)`,
+        // the THREE-Buffer elementwise conditional select (`result[i] =
+        // cond[i] truthy ? a[i] : b[i]`). This EXTENDS the 2-Buffer combine
+        // ops above (and `coil.linalg.solve`) to a THIRD Buffer arg: the
+        // `(Buffer, Buffer, Buffer) -> Buffer` shape rides the IDENTICAL
+        // generic ecosystem-call machinery (the MIR Case-1 loop iterates
+        // `sig.params` regardless of arity — 3 borrowed handles auto-borrow
+        // via `lower_eco_arg`'s Move→Copy upgrade, the fresh return is
+        // drop-scheduled by `emit_ecosystem_call`; NO `_=>"any"` MIR gap).
+        // `cond` is typically a Bool-dtype Buffer from a `a < b` comparison
+        // (ADR-0077); a numeric cond is truthy on any nonzero element.
+        //
+        // Tier `Semantic` — the selected VALUES + shape + dtype agree
+        // exactly with numpy (`where` copies a[i]/b[i] verbatim, no
+        // floating arithmetic; a NaN in a/b flows through as a value). The
+        // intentional divergences (vs numpy's broadcasting + cross-dtype
+        // promotion) are the equal-shape + equal-dtype contracts documented
+        // in `manipulate::where_select` (both tracked follow-ups). This is
+        // the 3-arg `np.where(cond, a, b)` form ONLY; the 1-arg
+        // `np.where(cond)` index form (variable-length index arrays) is a
+        // separate deferral.
+        ("coil", "where") => Some(EcoSig::from_values(
+            "__cobrust_coil_where",
+            vec![coil_buffer_ty(), coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         // #145 unary TRANSCENDENTAL gap-closure (2026-06-01) — the FLOAT-
         // returning 1-arg elementwise ufunc family, the unary-math surface
         // most-used in real numpy code per §2.5. Same borrow-Buffer-arg →
