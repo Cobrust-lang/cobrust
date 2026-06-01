@@ -73,8 +73,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::aggregates::{
-    mean_scalar, median_scalar, nanmean_scalar, nanstd_scalar, nansum_scalar, percentile_scalar,
-    ptp_scalar, split_first_chunk, std_scalar, var_scalar,
+    all_scalar, any_scalar, argmax_scalar, argmin_scalar, mean_scalar, median_scalar,
+    nanmean_scalar, nanstd_scalar, nansum_scalar, percentile_scalar, ptp_scalar, split_first_chunk,
+    std_scalar, var_scalar,
 };
 use crate::array::Array;
 use crate::broadcast::broadcast_shape;
@@ -95,6 +96,7 @@ use crate::manipulate::{
     ravel as coil_ravel, transpose as coil_transpose, vstack as coil_vstack,
 };
 use crate::print::array_repr;
+use crate::reduce::{cumprod as coil_cumprod, cumsum as coil_cumsum};
 
 // =====================================================================
 // Cobrust stdlib ABI — declared here, resolved from libcobrust_stdlib.a
@@ -498,6 +500,92 @@ pub unsafe extern "C" fn __cobrust_coil_percentile(a: *mut u8, q: f64) -> f64 {
     // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
     let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
     percentile_scalar(arr_ref, q).unwrap_or(f64::NAN)
+}
+
+// =====================================================================
+// #145 gap-closure BATCH 5 (2026-06-01) — SCALAR-returning reductions.
+// `argmin` / `argmax` return an `i64` (the flat C-order index); `any` /
+// `all` return a `bool` (the C-ABI `bool`, i.e. an i8 that lands in the
+// `.cb` `Ty::Bool` local via the i1 extern — the SAME shape as
+// `fang.verify_password`). All BORROW the handle (no rebox / free).
+//
+// EMPTY-input contract (the load-bearing edge): numpy `argmin`/`argmax`
+// RAISE `ValueError` on an empty array — coil CANNOT raise across the
+// C-ABI, so the shim `coil_panic`s (a clean process abort via the stdlib
+// `__cobrust_panic`, which diverges — NEVER a Rust `panic!` unwind across
+// the FFI boundary, which would be UB). `any`/`all` are total: an empty
+// (or null) input yields `False` / `True` respectively (vacuous truth),
+// matching numpy + the f64 aggregates' graceful-null posture.
+// =====================================================================
+
+/// `coil.argmin(a) -> i64`. The FLAT (C-order) index of the first
+/// occurrence of the minimum. NaN propagates (its index is returned).
+/// BORROWS the handle. An EMPTY (or null) input `coil_panic`s — a clean
+/// abort (numpy raises `ValueError`), NEVER a Rust unwind across the FFI.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_argmin(a: *mut u8) -> i64 {
+    if a.is_null() {
+        coil_panic("coil.argmin: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    // Empty input → numpy ValueError → clean coil_panic (NOT an unwind).
+    argmin_scalar(arr_ref).unwrap_or_else(|e| coil_panic(&format!("coil.argmin: {}", e.message)))
+}
+
+/// `coil.argmax(a) -> i64`. The FLAT (C-order) index of the first
+/// occurrence of the maximum. NaN propagates. BORROWS the handle. EMPTY /
+/// null → clean `coil_panic` (NEVER a Rust unwind).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_argmax(a: *mut u8) -> i64 {
+    if a.is_null() {
+        coil_panic("coil.argmax: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    argmax_scalar(arr_ref).unwrap_or_else(|e| coil_panic(&format!("coil.argmax: {}", e.message)))
+}
+
+/// `coil.any(a) -> bool`. `True` iff ANY element is truthy. `any([]) ==
+/// False`; `NaN` is truthy (numpy). BORROWS the handle. A null handle is
+/// treated as empty → `False`. Total — never traps.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_any(a: *mut u8) -> bool {
+    if a.is_null() {
+        return false;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    any_scalar(arr_ref).unwrap_or(false)
+}
+
+/// `coil.all(a) -> bool`. `True` iff ALL elements are truthy. `all([]) ==
+/// True` (vacuous truth); `NaN` is truthy (numpy). BORROWS the handle. A
+/// null handle is treated as empty → `True`. Total — never traps.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_all(a: *mut u8) -> bool {
+    if a.is_null() {
+        return true;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    all_scalar(arr_ref).unwrap_or(true)
 }
 
 // =====================================================================
@@ -1105,6 +1193,44 @@ pub unsafe extern "C" fn __cobrust_coil_square(a: *mut u8) -> *mut u8 {
 pub unsafe extern "C" fn __cobrust_coil_sign(a: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_unary(a, "sign", coil_sign) }
+}
+
+// =====================================================================
+// #145 gap-closure BATCH 5 (2026-06-01) — the REDUCTIONS family in three
+// return shapes. `cumsum` / `cumprod` are Buffer-RETURNING (the no-axis
+// FLATTEN-to-1-D cumulative scan), riding the SAME `buffer_unary` body +
+// `coil_shape_ty` `(ptr) -> ptr` extern as the transcendental / rounding
+// ufuncs. They are TOTAL (no `coil_panic` path — a cumulative scan never
+// fails; an empty input yields an empty 1-D Buffer). `argmin` / `argmax`
+// (→ i64) + `any` / `all` (→ bool) are SCALAR-returning and live further
+// down beside the existing scalar-aggregate shims (`mean` / `ptp`).
+// =====================================================================
+
+/// `coil.cumsum(a) -> Buffer`. Cumulative sum over the C-order FLATTENED
+/// array → a fresh 1-D Buffer of length `a.size`. DTYPE (numpy): int32 /
+/// int64 / bool → Int64, float32 stays Float32, float64 stays Float64.
+/// BORROWS `a`; returns a fresh owned handle. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_cumsum(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "cumsum", coil_cumsum) }
+}
+
+/// `coil.cumprod(a) -> Buffer`. Cumulative product over the C-order
+/// FLATTENED array. Same DTYPE rule + 1-D shape as `cumsum`. BORROWS `a`.
+/// Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_cumprod(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "cumprod", coil_cumprod) }
 }
 
 /// Shared body for the `a ⊕ k` SCALAR-broadcast shims (ADR-0077 Phase-1

@@ -370,6 +370,60 @@ pub fn split_first_chunk(a: &Array, n: i64) -> Result<Array, NumpyError> {
     ))
 }
 
+// ---- #145 gap-closure BATCH 5 (2026-06-01) -------------------------------
+// Scalar-returning argmin / argmax (→ i64) + any / all (→ bool), the cabi
+// helpers the `__cobrust_coil_{argmin,argmax,any,all}` shims call. They
+// wrap the no-axis `reduce::{argmin_flat,argmax_flat,any,all}` kernels,
+// adapting the return type to the scalar C-ABI shape:
+//   - argmin / argmax → `i64` (the flat C-order index). The kernel's
+//     empty-input `Err` is PROPAGATED via `?` so the shim can map it to a
+//     clean `coil_panic` (numpy raises `ValueError`); a `usize` index is
+//     cast to `i64` (always non-negative, well under `i64::MAX`).
+//   - any / all → `bool` (infallible; wrapped in `Result` for ABI
+//     uniformity with the rest of this module, matching `nansum`/`ptp`).
+
+/// `coil.argmin(a) -> i64` — the FLAT (C-order) index of the first
+/// occurrence of the minimum. NaN propagates (its index is returned).
+///
+/// # Errors
+///
+/// `ReductionEmptyArray` on an empty input (numpy raises `ValueError`);
+/// the C-ABI shim maps this to a clean `coil_panic`.
+pub fn argmin_scalar(a: &Array) -> Result<i64, NumpyError> {
+    Ok(crate::reduce::argmin_flat(a)? as i64)
+}
+
+/// `coil.argmax(a) -> i64` — the FLAT (C-order) index of the first
+/// occurrence of the maximum. NaN propagates.
+///
+/// # Errors
+///
+/// `ReductionEmptyArray` on an empty input.
+pub fn argmax_scalar(a: &Array) -> Result<i64, NumpyError> {
+    Ok(crate::reduce::argmax_flat(a)? as i64)
+}
+
+/// `coil.any(a) -> bool` — `True` iff ANY element is truthy. `any([]) ==
+/// False`. `NaN` is truthy (numpy).
+///
+/// # Errors
+///
+/// Currently infallible — wrapped in `Result` for API uniformity with the
+/// rest of this module.
+pub fn any_scalar(a: &Array) -> Result<bool, NumpyError> {
+    Ok(crate::reduce::any(a))
+}
+
+/// `coil.all(a) -> bool` — `True` iff ALL elements are truthy. `all([]) ==
+/// True` (vacuous truth). `NaN` is truthy (numpy).
+///
+/// # Errors
+///
+/// Currently infallible — wrapped in `Result` for API uniformity.
+pub fn all_scalar(a: &Array) -> Result<bool, NumpyError> {
+    Ok(crate::reduce::all(a))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

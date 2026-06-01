@@ -257,6 +257,75 @@ fn main() -> i64:
 > 个 `.cb` 构造器都生成 `float64` buffer,所以整数值的结果打印时不带 `.0`
 > —— `[[0, 2], [2, -0]]`,`dtype=float64`。)
 
+## 归约 —— `cumsum` / `cumprod`(→ Buffer)、`argmin` / `argmax`(→ int)、`any` / `all`(→ bool)
+
+这些是你最常用到的归约操作。与上面所有操作不同,它们有**三种返回形态**
+—— 一个 buffer、一个整数,或一个布尔值 —— 取决于操作的语义:
+
+```python
+import coil
+
+fn main() -> i64:
+    # cumsum / cumprod 返回一个全新的 1-D Buffer(累加 / 累乘的运行值)。
+    let a: coil.Buffer = coil.array2x2(1.0, 2.0, 3.0, 4.0)
+    let r: coil.Buffer = coil.cumsum(a)    # [1, 3, 6, 10](已展平为 1-D!)
+    let _ = coil.print_buffer(r)
+
+    # argmin / argmax 返回 i64 —— 最小 / 最大元素的索引。
+    let b: coil.Buffer = coil.array2x2(3.0, 1.0, 1.0, 5.0)
+    let lo: i64 = coil.argmin(&b)          # 1(最小值的首次出现)
+    let hi: i64 = coil.argmax(&b)          # 3(那个 5)
+    print(lo)
+    print(hi)
+
+    # any / all 返回 bool。用 `if` 惯用法打印。
+    let c: coil.Buffer = coil.array1d2(0.0, 5.0)
+    let some: bool = coil.any(&c)          # True(5 是真值)
+    let every: bool = coil.all(&c)         # False(0 是假值)
+    if some:
+        print(1)
+    else:
+        print(0)
+    return 0
+```
+
+**这六个操作**:
+
+- **`coil.cumsum(a) -> Buffer`** —— 累加(running)和。
+- **`coil.cumprod(a) -> Buffer`** —— 累乘(running)积。
+- **`coil.argmin(a) -> i64`** —— 最小元素的索引。
+- **`coil.argmax(a) -> i64`** —— 最大元素的索引。
+- **`coil.any(a) -> bool`** —— **任一**元素为真值时返回 `True`。
+- **`coil.all(a) -> bool`** —— **所有**元素都为真值时返回 `True`。
+
+> **`cumsum` / `cumprod` 会先把多维数组展平** —— 在没有 axis 参数时,numpy
+> (与 coil)按行主序(C 序)遍历数组,返回长度为 `a.size` 的**一维**结果。
+> 所以 `cumsum([[1,2],[3,4]])` 是 `[1, 3, 6, 10]` —— 一个扁平的 4 元素 buffer,
+> **而不是** 2×2。
+>
+> **Dtype 说明**:整数累加器会扩宽到 64 位 —— `int32` 输入给出 `int64` 结果,
+> `bool` 输入同样给出 `int64`(`[True,False,True]` → `[1, 1, 2]`)。`float32`
+> 保持 `float32`,`float64` 保持 `float64`。(每个 `.cb` 构造器都生成 `float64`
+> buffer,所以例子打印整数值的浮点数时不带 `.0`。)
+
+> **`argmin` / `argmax` 给出*扁平*索引,平局取首次出现。** 对二维输入,索引按
+> 行主序计数(`argmax([[3,1],[1,5]]) = 3`,指向那个 `5`)。若最小 / 最大值出现
+> 多次,你得到的是**第一个**位置。`NaN` 被视为胜者(numpy 的规则 ——
+> `argmax([1, nan, 2]) = 1`)。
+>
+> **空输入是错误。** 对空 buffer 调用 `coil.argmin` / `coil.argmax` 会干净地
+> 中止程序(numpy 抛 `ValueError` —— “空的索引”无意义)。这是受控中止,不是崩溃。
+
+> **`any` / `all` 真值性**:0 是假值,其余都是真值 —— **包括 `NaN`**
+> (`any([nan]) = True`,与 numpy 一致)。空情形遵循逻辑:`any([]) = False`
+> (没有真值元素)、`all([]) = True`(空真 —— 没有任何元素失败)。打印 `bool`
+> 请用上面展示的 `if b:` 形式,而不是直接 `print(b)`。
+
+> **暂未提供**:*值*归约 `prod` / `min` / `max`(最小 / 最大*值*本身,而非其
+> 索引)是后续增量 —— 它们需要一个保持输入 dtype 的返回(`int` buffer 的 `min`
+> 是 `int`,`float` buffer 的是 `float`),这是一个独立的设计步骤。(`coil.mean` /
+> `coil.std` / `coil.var` / `coil.ptp` 等已经提供了今天常用的浮点归约。)
+
 ## 线性代数 —— `coil.linalg.*` 子命名空间(ADR-0079 Phase 1)
 
 `coil.linalg.*` 是生态模块下的**第一个点分子命名空间** —— 它精确镜像

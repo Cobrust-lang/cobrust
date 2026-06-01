@@ -997,6 +997,85 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Numerical,
         )),
+        // #145 REDUCTIONS gap-closure BATCH 5 (2026-06-01) — the reduction
+        // family in THREE distinct return shapes, all on a single Buffer
+        // arg. This batch is the FIRST coil surface to mix Buffer-return
+        // AND scalar-return (i64 / bool) ops in one wave:
+        //
+        //   - `coil.cumsum(a)  -> Buffer`  — cumulative sum (no-axis FLATTEN
+        //                                    to 1-D C-order, len a.size).
+        //   - `coil.cumprod(a) -> Buffer`  — cumulative product (ditto).
+        //   - `coil.argmin(a)  -> i64`     — flat C-order index of the min.
+        //   - `coil.argmax(a)  -> i64`     — flat C-order index of the max.
+        //   - `coil.any(a)     -> bool`    — True iff any element truthy.
+        //   - `coil.all(a)     -> bool`    — True iff all elements truthy.
+        //
+        // WIRING (all ride the SAME generic `try_lower_ecosystem_call`
+        // module-free-fn path — NO new MIR arm). The 3 return shapes differ
+        // ONLY in the `EcoSig` ret `Ty`, which drives the `_ecoret` local
+        // type + the codegen extern return type:
+        //   - cumsum/cumprod → `coil_buffer_ty()` (Buffer): the borrow-arg →
+        //     fresh-Buffer-return path proven by `coil.transpose`/`coil.exp`,
+        //     codegen extern `(ptr) -> ptr` ≡ `coil_shape_ty`.
+        //   - argmin/argmax → `Ty::Int` (i64): mirrors `coil.mean`'s scalar
+        //     return, adapting f64 → i64 (`__cobrust_coil_mean(a) -> f64`
+        //     becomes `__cobrust_coil_argmin(a) -> i64`); codegen extern
+        //     `(ptr) -> i64` ≡ the `coil.Buffer.size`/`.ndim` `coil_attr_i64`
+        //     shape.
+        //   - any/all → `Ty::Bool`: mirrors `coil.mean` scalar shape +
+        //     `fang.verify_password`'s `-> bool` return (the FIRST coil
+        //     `-> bool` value fn); codegen extern `(ptr) -> i1` (Rust C-ABI
+        //     `-> bool`), landing in the `_ecoret` Bool local.
+        //
+        // EMPTY-input semantics: `argmin`/`argmax` on an empty array RAISE
+        // `ValueError` in numpy — coil cannot raise across the C-ABI, so the
+        // shim `coil_panic`s (a clean abort, NEVER a Rust unwind across FFI;
+        // tested e2e). `any([])==False` / `all([])==True` (vacuous). NaN is
+        // TRUTHY for any/all (`np.any([nan])==True`) and PROPAGATES for
+        // argmin/argmax (`np.argmax([1,nan,2])==1`).
+        //
+        // Tier `Semantic` — the VALUES + flat-index + dtype agree exactly
+        // with numpy 2.x (the `reduce` / `aggregates` unit tests carry the
+        // bit-confirmed oracle literals). The one documented dtype note:
+        // `cumsum`/`cumprod` widen `int32` → `int64` (numpy's platform
+        // default accumulator) and `bool` → `int64`; `float32` stays
+        // `float32`, `float64` stays `float64` — see `reduce.rs`.
+        ("coil", "cumsum") => Some(EcoSig::from_values(
+            "__cobrust_coil_cumsum",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "cumprod") => Some(EcoSig::from_values(
+            "__cobrust_coil_cumprod",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "argmin") => Some(EcoSig::from_values(
+            "__cobrust_coil_argmin",
+            vec![coil_buffer_ty()],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "argmax") => Some(EcoSig::from_values(
+            "__cobrust_coil_argmax",
+            vec![coil_buffer_ty()],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "any") => Some(EcoSig::from_values(
+            "__cobrust_coil_any",
+            vec![coil_buffer_ty()],
+            Ty::Bool,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "all") => Some(EcoSig::from_values(
+            "__cobrust_coil_all",
+            vec![coil_buffer_ty()],
+            Ty::Bool,
+            PyCompatTier::Semantic,
+        )),
         // ADR-0079 Phase 1 — minimal `.cb`-constructible 2-D / explicit-
         // data buffers, the genuine prerequisite for exercising the
         // `coil.linalg.*` sub-namespace on NON-identity matrices (the

@@ -1202,6 +1202,208 @@ fn arg_axis_impl(arr: &Array, axis: usize, want_max: bool) -> Result<Array, Nump
     Ok(from_vec_i64(out, out_shape))
 }
 
+// =========================================================================
+// #145 numpy gap-closure BATCH 5 — the REDUCTIONS family that the C-ABI
+// `coil` surface exposes in three return shapes:
+//   - `cumsum` / `cumprod`  → a fresh 1-D `Array` (Buffer-returning).
+//   - `argmin_flat` / `argmax_flat` → a scalar flat index (`usize`).
+//   - `any` / `all`         → a scalar `bool`.
+//
+// `argmin` / `argmax` already exist above (the M7.3 `axis: Option<i64>`
+// forms returning a 0-d / shaped `Array::Int64`); the BATCH-5 additions
+// are the NO-AXIS, FLATTENED, scalar-returning variants the LLM reaches
+// for first (`np.cumsum(a)`, `np.argmin(a)`, `np.any(a)` per §2.5). They
+// share the tested `arg_extreme_iter_*` core (NaN / ties semantics).
+// =========================================================================
+
+// ---- cumsum / cumprod (no-axis: FLATTEN n-d → 1-D C-order) ---------------
+//
+// numpy 2.x with NO axis arg FLATTENS the n-d array to 1-D (C-order) then
+// accumulates → a 1-D result of length `a.size`. DTYPE (the accumulator):
+// `int32`/`int64` BOTH widen to `int64` (numpy's platform-default int
+// accumulator — `np.cumsum(np.int32([..])).dtype == int64`); `bool` →
+// `int64`; `float32` stays `float32`; `float64` stays `float64`. (`np
+// .cumsum([[1,2],[3,4]]) == [1,3,6,10]`, a 1-D `int64` of length 4.)
+
+/// `np.cumsum(a)` (no axis) — cumulative sum over the C-order FLATTENED
+/// array, returning a fresh 1-D `Array` of length `a.size`. DTYPE per
+/// numpy: `int32`/`int64`/`bool` → `Int64`, `float32` → `Float32`,
+/// `float64` → `Float64`. Total — never errors (an empty input yields an
+/// empty 1-D result, matching `np.cumsum([]) == array([], float64)` shape;
+/// the dtype of an empty int input is `Int64`).
+#[must_use]
+pub fn cumsum(arr: &Array) -> Array {
+    cumulative(arr, true)
+}
+
+/// `np.cumprod(a)` (no axis) — cumulative product over the C-order
+/// FLATTENED array. Same DTYPE rule + 1-D shape as [`cumsum`]. Total.
+#[must_use]
+pub fn cumprod(arr: &Array) -> Array {
+    cumulative(arr, false)
+}
+
+/// Shared cumulative-scan body. `is_sum` picks the accumulation op
+/// (`+` for cumsum, `*` for cumprod). Iterates the array in C-order
+/// (`ndarray`'s `.iter()` is logical C-order regardless of layout),
+/// running the scan and collecting into a fresh contiguous 1-D `Array`.
+/// The int / bool arms accumulate in `i64` (numpy's int64 accumulator);
+/// the float arms accumulate in their own width.
+fn cumulative(arr: &Array, is_sum: bool) -> Array {
+    let n = arr.size();
+    match arr {
+        // int32 + int64 + bool all accumulate in i64 (numpy widens the
+        // int accumulator to the platform-default int64).
+        Array::Int32(a) => {
+            let it = a.iter().map(|&v| i64::from(v));
+            from_vec_i64(scan_i64(it, n, is_sum), vec![n])
+        }
+        Array::Int64(a) => {
+            let it = a.iter().copied();
+            from_vec_i64(scan_i64(it, n, is_sum), vec![n])
+        }
+        Array::Bool(a) => {
+            let it = a.iter().map(|&v| i64::from(v));
+            from_vec_i64(scan_i64(it, n, is_sum), vec![n])
+        }
+        Array::Float32(a) => {
+            let it = a.iter().copied();
+            from_vec_f32(scan_f32(it, n, is_sum), vec![n])
+        }
+        Array::Float64(a) => {
+            let it = a.iter().copied();
+            from_vec_f64(scan_f64(it, n, is_sum), vec![n])
+        }
+    }
+}
+
+/// Running scan over an `i64` iterator. `wrapping_add` / `wrapping_mul`
+/// match numpy's two's-complement int overflow.
+fn scan_i64<I: Iterator<Item = i64>>(it: I, n: usize, is_sum: bool) -> Vec<i64> {
+    let mut out = Vec::with_capacity(n);
+    let mut acc: i64 = if is_sum { 0 } else { 1 };
+    for v in it {
+        acc = if is_sum {
+            acc.wrapping_add(v)
+        } else {
+            acc.wrapping_mul(v)
+        };
+        out.push(acc);
+    }
+    out
+}
+
+/// Running scan over an `f32` iterator (NaN propagates per IEEE-754).
+fn scan_f32<I: Iterator<Item = f32>>(it: I, n: usize, is_sum: bool) -> Vec<f32> {
+    let mut out = Vec::with_capacity(n);
+    let mut acc: f32 = if is_sum { 0.0 } else { 1.0 };
+    for v in it {
+        acc = if is_sum { acc + v } else { acc * v };
+        out.push(acc);
+    }
+    out
+}
+
+/// Running scan over an `f64` iterator (NaN propagates per IEEE-754).
+fn scan_f64<I: Iterator<Item = f64>>(it: I, n: usize, is_sum: bool) -> Vec<f64> {
+    let mut out = Vec::with_capacity(n);
+    let mut acc: f64 = if is_sum { 0.0 } else { 1.0 };
+    for v in it {
+        acc = if is_sum { acc + v } else { acc * v };
+        out.push(acc);
+    }
+    out
+}
+
+// ---- argmin / argmax (no-axis: FLATTEN, return scalar flat index) --------
+//
+// numpy with NO axis returns the FLAT (C-order) index of the FIRST
+// occurrence of the min/max. NaN propagates (numpy returns the NaN's
+// index — `np.argmax([1,nan,2]) == 1`). EMPTY input RAISES `ValueError`
+// in numpy → these return `Err(ReductionEmptyArray)`; the C-ABI shim maps
+// that to a `coil_panic` (a clean process abort, NEVER a Rust unwind
+// across the FFI boundary).
+
+/// `np.argmin(a)` (no axis) — the FLAT (C-order) index of the first
+/// occurrence of the minimum, as a `usize`. NaN propagates (its index is
+/// returned). Reuses the tested [`arg_extreme_iter_*`] core.
+///
+/// # Errors
+///
+/// `ReductionEmptyArray` on an empty input (numpy raises `ValueError`).
+pub fn argmin_flat(arr: &Array) -> Result<usize, NumpyError> {
+    arg_flat(arr, false)
+}
+
+/// `np.argmax(a)` (no axis) — the FLAT (C-order) index of the first
+/// occurrence of the maximum, as a `usize`. NaN propagates.
+///
+/// # Errors
+///
+/// `ReductionEmptyArray` on an empty input.
+pub fn argmax_flat(arr: &Array) -> Result<usize, NumpyError> {
+    arg_flat(arr, true)
+}
+
+/// Shared body for the flat (no-axis) argmin / argmax. Empty → `Err`
+/// (the cabi shim turns it into a clean `coil_panic`). `.iter()` is
+/// logical C-order regardless of the array's storage layout, so the
+/// returned index is the numpy flat index.
+fn arg_flat(arr: &Array, want_max: bool) -> Result<usize, NumpyError> {
+    if arr.size() == 0 {
+        return Err(empty_reduction_error(if want_max {
+            "argmax"
+        } else {
+            "argmin"
+        }));
+    }
+    Ok(match arr {
+        Array::Int32(a) => arg_extreme_iter_i32(a.iter().copied(), want_max),
+        Array::Int64(a) => arg_extreme_iter_i64(a.iter().copied(), want_max),
+        Array::Float32(a) => arg_extreme_iter_f32(a.iter().copied(), want_max),
+        Array::Float64(a) => arg_extreme_iter_f64(a.iter().copied(), want_max),
+        Array::Bool(a) => arg_extreme_iter_bool(a.iter().copied(), want_max),
+    })
+}
+
+// ---- any / all (scalar bool reductions) ----------------------------------
+//
+// numpy truthiness: nonzero for numeric (`0`/`0.0` falsy), `NaN` is
+// TRUTHY (`np.any([nan]) == True`), `True`/`False` for bool. `any([])
+// == False`; `all([]) == True` (vacuous truth). These reduce the WHOLE
+// (flattened) array to a single `bool`.
+
+/// `np.any(a)` — `True` iff ANY element is truthy. `any([]) == False`.
+/// `NaN` is truthy (numpy). Total — never errors.
+#[must_use]
+pub fn any(arr: &Array) -> bool {
+    match arr {
+        Array::Int32(a) => a.iter().any(|&v| v != 0),
+        Array::Int64(a) => a.iter().any(|&v| v != 0),
+        // NaN is truthy in numpy: `v != 0.0` is `true` for NaN (NaN
+        // compares unequal to everything, including 0.0), so the plain
+        // `!= 0.0` test already treats NaN as truthy — no special branch.
+        Array::Float32(a) => a.iter().any(|&v| v != 0.0),
+        Array::Float64(a) => a.iter().any(|&v| v != 0.0),
+        Array::Bool(a) => a.iter().any(|&v| v),
+    }
+}
+
+/// `np.all(a)` — `True` iff ALL elements are truthy. `all([]) == True`
+/// (vacuous truth). `NaN` is truthy (numpy). Total — never errors.
+#[must_use]
+pub fn all(arr: &Array) -> bool {
+    match arr {
+        Array::Int32(a) => a.iter().all(|&v| v != 0),
+        Array::Int64(a) => a.iter().all(|&v| v != 0),
+        // NaN is truthy: `v != 0.0` is `true` for NaN, so a NaN element
+        // does NOT make `all` false; only an actual `0.0` does.
+        Array::Float32(a) => a.iter().all(|&v| v != 0.0),
+        Array::Float64(a) => a.iter().all(|&v| v != 0.0),
+        Array::Bool(a) => a.iter().all(|&v| v),
+    }
+}
+
 // ---- Error helpers -------------------------------------------------------
 
 fn empty_reduction_error(op: &str) -> NumpyError {
@@ -1230,7 +1432,8 @@ mod tests {
     #![allow(clippy::suboptimal_flops)]
     #![allow(clippy::excessive_precision)]
     use super::*;
-    use crate::{array_bool, array_f64, array_i32, array_i64};
+    use crate::dtype::Dtype;
+    use crate::{array_bool, array_f32, array_f64, array_i32, array_i64};
 
     #[test]
     fn pairwise_sum_empty() {
@@ -1385,5 +1588,260 @@ mod tests {
             panic!("expected Int32");
         };
         assert_eq!(arr[IxDyn(&[])], 0);
+    }
+
+    // =====================================================================
+    // BATCH 5 — cumsum / cumprod (Buffer-return), argmin_flat / argmax_flat
+    // (scalar i64), any / all (scalar bool). Differential-vs-numpy 2.4.6;
+    // oracle values captured via `/opt/homebrew/bin/python3.11 -c 'import
+    // numpy'` (semantics identical to the coil-provenance numpy 2.0.2).
+    // =====================================================================
+
+    fn cum_i64_vals(a: &Array) -> Vec<i64> {
+        let Array::Int64(arr) = a else {
+            panic!("expected Int64, got {:?}", a.dtype());
+        };
+        arr.iter().copied().collect()
+    }
+
+    fn cum_f64_vals(a: &Array) -> Vec<f64> {
+        let Array::Float64(arr) = a else {
+            panic!("expected Float64, got {:?}", a.dtype());
+        };
+        arr.iter().copied().collect()
+    }
+
+    // ---- cumsum / cumprod: values + 1-D shape + dtype --------------------
+
+    #[test]
+    fn cumsum_1d_int64_values_and_dtype() {
+        // np.cumsum([1,2,3,4]) -> [1,3,6,10], int64, shape (4,).
+        let a = array_i64(&[1, 2, 3, 4], &[4]).unwrap();
+        let r = cumsum(&a);
+        assert_eq!(r.dtype(), Dtype::Int64);
+        assert_eq!(r.shape(), vec![4]);
+        assert_eq!(cum_i64_vals(&r), vec![1, 3, 6, 10]);
+    }
+
+    #[test]
+    fn cumprod_1d_int64_values() {
+        // np.cumprod([1,2,3,4]) -> [1,2,6,24].
+        let a = array_i64(&[1, 2, 3, 4], &[4]).unwrap();
+        assert_eq!(cum_i64_vals(&cumprod(&a)), vec![1, 2, 6, 24]);
+    }
+
+    #[test]
+    fn cumsum_2d_flattens_to_1d() {
+        // np.cumsum([[1,2],[3,4]]) -> [1,3,6,10] (1-D, C-order flatten), len 4.
+        let a = array_i64(&[1, 2, 3, 4], &[2, 2]).unwrap();
+        let r = cumsum(&a);
+        assert_eq!(r.shape(), vec![4], "2-D input must FLATTEN to 1-D len 4");
+        assert_eq!(cum_i64_vals(&r), vec![1, 3, 6, 10]);
+    }
+
+    #[test]
+    fn cumprod_2d_flattens_to_1d() {
+        // np.cumprod([[1,2],[3,4]]) -> [1,2,6,24] (1-D flatten).
+        let a = array_i64(&[1, 2, 3, 4], &[2, 2]).unwrap();
+        let r = cumprod(&a);
+        assert_eq!(r.shape(), vec![4]);
+        assert_eq!(cum_i64_vals(&r), vec![1, 2, 6, 24]);
+    }
+
+    #[test]
+    fn cumsum_int32_widens_to_int64() {
+        // np.cumsum(np.int32([1,2,3])).dtype == int64 (accumulator widens).
+        let a = array_i32(&[1, 2, 3], &[3]).unwrap();
+        let r = cumsum(&a);
+        assert_eq!(r.dtype(), Dtype::Int64, "int32 must WIDEN to int64");
+        assert_eq!(cum_i64_vals(&r), vec![1, 3, 6]);
+    }
+
+    #[test]
+    fn cumprod_int32_widens_to_int64() {
+        let a = array_i32(&[1, 2, 3], &[3]).unwrap();
+        let r = cumprod(&a);
+        assert_eq!(r.dtype(), Dtype::Int64);
+        assert_eq!(cum_i64_vals(&r), vec![1, 2, 6]);
+    }
+
+    #[test]
+    fn cumsum_bool_promotes_to_int64() {
+        // np.cumsum([True,False,True]) -> [1,1,2], int64.
+        let a = array_bool(&[true, false, true], &[3]).unwrap();
+        let r = cumsum(&a);
+        assert_eq!(r.dtype(), Dtype::Int64, "bool must promote to int64");
+        assert_eq!(cum_i64_vals(&r), vec![1, 1, 2]);
+    }
+
+    #[test]
+    fn cumprod_bool_promotes_to_int64() {
+        // np.cumprod([True,True,False]) -> [1,1,0], int64.
+        let a = array_bool(&[true, true, false], &[3]).unwrap();
+        let r = cumprod(&a);
+        assert_eq!(r.dtype(), Dtype::Int64);
+        assert_eq!(cum_i64_vals(&r), vec![1, 1, 0]);
+    }
+
+    #[test]
+    fn cumsum_f64_stays_f64() {
+        // np.cumsum([1.5,2.5,3.0]) -> [1.5,4.0,7.0], float64.
+        let a = array_f64(&[1.5, 2.5, 3.0], &[3]).unwrap();
+        let r = cumsum(&a);
+        assert_eq!(r.dtype(), Dtype::Float64);
+        assert_eq!(cum_f64_vals(&r), vec![1.5, 4.0, 7.0]);
+    }
+
+    #[test]
+    fn cumsum_f32_stays_f32() {
+        // np.cumsum(np.float32([1,2,3])).dtype == float32 -> [1,3,6].
+        let a = array_f32(&[1.0, 2.0, 3.0], &[3]).unwrap();
+        let r = cumsum(&a);
+        assert_eq!(r.dtype(), Dtype::Float32, "f32 must STAY f32");
+        let Array::Float32(arr) = &r else {
+            panic!("expected Float32");
+        };
+        assert_eq!(
+            arr.iter().copied().collect::<Vec<f32>>(),
+            vec![1.0, 3.0, 6.0]
+        );
+    }
+
+    #[test]
+    fn cumsum_empty_is_empty_1d() {
+        // np.cumsum([]) -> empty 1-D; an empty int input yields Int64 (the
+        // widened accumulator dtype). Total — no error.
+        let a = array_i64(&[], &[0]).unwrap();
+        let r = cumsum(&a);
+        assert_eq!(r.dtype(), Dtype::Int64);
+        assert_eq!(r.shape(), vec![0]);
+        assert_eq!(cum_i64_vals(&r), Vec::<i64>::new());
+    }
+
+    // ---- argmin_flat / argmax_flat: flat index + ties-first + NaN + empty
+
+    #[test]
+    fn argmin_flat_ties_first_occurrence() {
+        // np.argmin([3,1,2,1,5]) -> 1 (FIRST occurrence of min=1).
+        let a = array_i64(&[3, 1, 2, 1, 5], &[5]).unwrap();
+        assert_eq!(argmin_flat(&a).unwrap(), 1);
+    }
+
+    #[test]
+    fn argmax_flat_ties_first_occurrence() {
+        // np.argmax([1,5,2,5,1]) -> 1 (FIRST occurrence of max=5).
+        let a = array_i64(&[1, 5, 2, 5, 1], &[5]).unwrap();
+        assert_eq!(argmax_flat(&a).unwrap(), 1);
+    }
+
+    #[test]
+    fn argmax_flat_2d_is_c_order_flat_index() {
+        // np.argmax([[1,2],[9,3]]) -> 2 (flat C-order index of 9).
+        let a = array_i64(&[1, 2, 9, 3], &[2, 2]).unwrap();
+        assert_eq!(argmax_flat(&a).unwrap(), 2);
+    }
+
+    #[test]
+    fn argmin_flat_2d_is_c_order_flat_index() {
+        // np.argmin([[5,2],[9,3]]) -> 1 (flat index of 2).
+        let a = array_i64(&[5, 2, 9, 3], &[2, 2]).unwrap();
+        assert_eq!(argmin_flat(&a).unwrap(), 1);
+    }
+
+    #[test]
+    fn argmax_flat_nan_returns_nan_index() {
+        // np.argmax([1.0, nan, 2.0]) -> 1 (NaN's index, numpy propagation).
+        let a = array_f64(&[1.0, f64::NAN, 2.0], &[3]).unwrap();
+        assert_eq!(argmax_flat(&a).unwrap(), 1);
+    }
+
+    #[test]
+    fn argmin_flat_nan_returns_nan_index() {
+        // np.argmin([1.0, nan, 2.0]) -> 1 (NaN's index).
+        let a = array_f64(&[1.0, f64::NAN, 2.0], &[3]).unwrap();
+        assert_eq!(argmin_flat(&a).unwrap(), 1);
+    }
+
+    #[test]
+    fn argmax_flat_leading_nan_is_zero() {
+        // np.argmax([nan, 1.0, 2.0]) -> 0.
+        let a = array_f64(&[f64::NAN, 1.0, 2.0], &[3]).unwrap();
+        assert_eq!(argmax_flat(&a).unwrap(), 0);
+    }
+
+    #[test]
+    fn argmin_flat_empty_errs_reduction_empty() {
+        // np.argmin([]) RAISES ValueError -> coil returns Err
+        // (ReductionEmptyArray); the cabi shim maps this to a clean
+        // coil_panic (tested e2e). Pin the Err PATH here.
+        let a = array_i64(&[], &[0]).unwrap();
+        let err = argmin_flat(&a).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::ReductionEmptyArray);
+    }
+
+    #[test]
+    fn argmax_flat_empty_errs_reduction_empty() {
+        let a = array_f64(&[], &[0]).unwrap();
+        let err = argmax_flat(&a).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::ReductionEmptyArray);
+    }
+
+    // ---- any / all: empty + truthiness + NaN-is-truthy -------------------
+
+    #[test]
+    fn any_empty_is_false_all_empty_is_true() {
+        // np.any([]) == False; np.all([]) == True (vacuous truth).
+        let a = array_f64(&[], &[0]).unwrap();
+        assert!(!any(&a), "any([]) must be False");
+        assert!(all(&a), "all([]) must be True (vacuous)");
+    }
+
+    #[test]
+    fn any_all_int_truthiness() {
+        // np.any([0,0])=False; np.any([0,1])=True; np.all([1,1])=True;
+        // np.all([1,0])=False.
+        assert!(!any(&array_i64(&[0, 0], &[2]).unwrap()));
+        assert!(any(&array_i64(&[0, 1], &[2]).unwrap()));
+        assert!(all(&array_i64(&[1, 1], &[2]).unwrap()));
+        assert!(!all(&array_i64(&[1, 0], &[2]).unwrap()));
+    }
+
+    #[test]
+    fn any_all_float_zero_falsy() {
+        // np.any([0.0])=False; np.all([0.0])=False.
+        assert!(!any(&array_f64(&[0.0], &[1]).unwrap()));
+        assert!(!all(&array_f64(&[0.0], &[1]).unwrap()));
+    }
+
+    #[test]
+    fn any_all_nan_is_truthy() {
+        // numpy: NaN is TRUTHY. np.any([nan])=True; np.all([nan])=True;
+        // but np.all([nan,0.0])=False (the 0.0 is falsy).
+        assert!(
+            any(&array_f64(&[f64::NAN], &[1]).unwrap()),
+            "any([nan]) True"
+        );
+        assert!(
+            all(&array_f64(&[f64::NAN], &[1]).unwrap()),
+            "all([nan]) True"
+        );
+        assert!(
+            !all(&array_f64(&[f64::NAN, 0.0], &[2]).unwrap()),
+            "all([nan,0]) must be False (0.0 falsy)"
+        );
+    }
+
+    #[test]
+    fn any_all_bool_dtype() {
+        // np.any([False,False])=False; np.all([True,True])=True.
+        assert!(!any(&array_bool(&[false, false], &[2]).unwrap()));
+        assert!(all(&array_bool(&[true, true], &[2]).unwrap()));
+    }
+
+    #[test]
+    fn any_2d_reduces_whole_array() {
+        // np.any([[0,0],[0,1]]) == True (reduces the WHOLE flattened array).
+        let a = array_i64(&[0, 0, 0, 1], &[2, 2]).unwrap();
+        assert!(any(&a));
     }
 }

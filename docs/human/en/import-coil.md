@@ -282,6 +282,82 @@ fn main() -> i64:
 > makes a `float64` buffer, so the integer-valued results print without a
 > `.0` — `[[0, 2], [2, -0]]`, `dtype=float64`.)
 
+## Reductions — `cumsum` / `cumprod` (→ Buffer), `argmin` / `argmax` (→ int), `any` / `all` (→ bool)
+
+These are the reductions you reach for most often. Unlike everything above,
+they come in **three return shapes** — a buffer, an integer, or a boolean —
+depending on what the operation means:
+
+```python
+import coil
+
+fn main() -> i64:
+    # cumsum / cumprod return a fresh 1-D Buffer (a running total / product).
+    let a: coil.Buffer = coil.array2x2(1.0, 2.0, 3.0, 4.0)
+    let r: coil.Buffer = coil.cumsum(a)    # [1, 3, 6, 10]  (flattened to 1-D!)
+    let _ = coil.print_buffer(r)
+
+    # argmin / argmax return an i64 — the index of the smallest / largest.
+    let b: coil.Buffer = coil.array2x2(3.0, 1.0, 1.0, 5.0)
+    let lo: i64 = coil.argmin(&b)          # 1  (first occurrence of the min)
+    let hi: i64 = coil.argmax(&b)          # 3  (the 5)
+    print(lo)
+    print(hi)
+
+    # any / all return a bool. Print them with the `if` idiom.
+    let c: coil.Buffer = coil.array1d2(0.0, 5.0)
+    let some: bool = coil.any(&c)          # True  (the 5 is truthy)
+    let every: bool = coil.all(&c)         # False (the 0 is falsy)
+    if some:
+        print(1)
+    else:
+        print(0)
+    return 0
+```
+
+**The six ops**:
+
+- **`coil.cumsum(a) -> Buffer`** — cumulative (running) sum.
+- **`coil.cumprod(a) -> Buffer`** — cumulative (running) product.
+- **`coil.argmin(a) -> i64`** — the index of the smallest element.
+- **`coil.argmax(a) -> i64`** — the index of the largest element.
+- **`coil.any(a) -> bool`** — `True` if **any** element is truthy.
+- **`coil.all(a) -> bool`** — `True` if **all** elements are truthy.
+
+> **`cumsum` / `cumprod` flatten a multi-dimensional array first** — with no
+> axis argument, numpy (and coil) walk the array in row-major (C) order and
+> return a **1-D** result of length `a.size`. So `cumsum([[1,2],[3,4]])` is
+> `[1, 3, 6, 10]` — a flat 4-element buffer, **not** a 2×2.
+>
+> **Dtype note**: the integer accumulator widens to 64-bit — an `int32`
+> input gives an `int64` result, and a `bool` input gives `int64` too
+> (`[True,False,True]` → `[1, 1, 2]`). `float32` stays `float32`, `float64`
+> stays `float64`. (Every `.cb` constructor makes a `float64` buffer, so the
+> examples print integer-valued floats without a `.0`.)
+
+> **`argmin` / `argmax` give a *flat* index, and ties go to the first
+> occurrence.** On a 2-D input the index counts in row-major order
+> (`argmax([[3,1],[1,5]]) = 3`, pointing at the `5`). If the min/max appears
+> more than once, you get the **first** position. A `NaN` is treated as the
+> winner (numpy's rule — `argmax([1, nan, 2]) = 1`).
+>
+> **Empty input is an error.** `coil.argmin` / `coil.argmax` of an empty
+> buffer aborts the program cleanly (numpy raises `ValueError` — there is no
+> "index of nothing"). This is a controlled abort, not a crash.
+
+> **`any` / `all` truthiness**: zero is falsy, everything else is truthy —
+> **including `NaN`** (`any([nan]) = True`, matching numpy). The empty cases
+> follow logic: `any([]) = False` (no truthy element) and `all([]) = True`
+> (vacuously — nothing fails). To print a `bool`, use the `if b:` form shown
+> above rather than `print(b)` directly.
+
+> **Not yet here**: the *value* reductions `prod` / `min` / `max` (the
+> smallest/largest *value*, not its index) are a later addition — they need
+> a return that preserves the input's dtype (a `min` of an `int` buffer is
+> an `int`, of a `float` buffer a `float`), which is a separate design step.
+> (`coil.mean` / `coil.std` / `coil.var` / `coil.ptp` etc. already give you
+> the common float reductions today.)
+
 ## Linear algebra — the `coil.linalg.*` sub-namespace (ADR-0079 Phase 1)
 
 `coil.linalg.*` is the FIRST *dotted sub-namespace* under an ecosystem

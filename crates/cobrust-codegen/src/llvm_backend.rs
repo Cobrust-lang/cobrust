@@ -3348,6 +3348,46 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_trunc", coil_shape_ty, 1),
             ("__cobrust_coil_square", coil_shape_ty, 1),
             ("__cobrust_coil_sign", coil_shape_ty, 1),
+            // #145 REDUCTIONS BATCH 5 — the Buffer-RETURNING cumulative
+            // scans `cumsum`/`cumprod` (no-axis FLATTEN to 1-D). `(ptr) ->
+            // ptr` ≡ `coil_shape_ty`, the IDENTICAL extern shape as the
+            // transcendental / rounding ufuncs + the reshape ops above. The
+            // scalar-RETURNING siblings of this batch (`argmin`/`argmax` →
+            // i64, `any`/`all` → bool) are declared in the dedicated
+            // scalar-extern block below (they need NON-`coil_shape_ty`
+            // return types — i64 / i1 — so they cannot ride this `(ptr) ->
+            // ptr` loop). MIR retargets `coil.cumsum(a)` onto these `Call`s.
+            ("__cobrust_coil_cumsum", coil_shape_ty, 1),
+            ("__cobrust_coil_cumprod", coil_shape_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
+
+        // -- #145 REDUCTIONS gap-closure BATCH 5 (2026-06-01): the
+        // SCALAR-returning reductions, the NEW extern shapes of this batch.
+        // `argmin`/`argmax` return `i64` (the flat C-order index — mirrors
+        // `coil.mean`'s scalar return, adapting f64 → i64, i.e. the SAME
+        // `(ptr) -> i64` shape as the `coil.Buffer.size`/`.ndim` attribute
+        // accessors). `any`/`all` return `bool` — declared as an `i1` LLVM
+        // return (the Rust C-ABI `-> bool`), the FIRST coil `-> bool` value
+        // fn, mirroring `fang.verify_password`'s `bool_ty.fn_type(...)`; the
+        // i1 lands in the `.cb` `_ecoret` Bool local (`write_place` bridges
+        // any i1/i8 width gap into the alloca). The MIR generic ecosystem-
+        // call lowering drives the return TYPE off the `EcoSig` ret `Ty`
+        // (`Ty::Int` / `Ty::Bool`) — NO new MIR arm; codegen only declares
+        // the externs.
+        //
+        //   __cobrust_coil_argmin / argmax (a: *mut Buffer) -> i64
+        //   __cobrust_coil_any / all       (a: *mut Buffer) -> bool (i1)
+        let coil_arg_i64_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let coil_pred_bool_ty = self.ctx.bool_type().fn_type(&[ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_coil_argmin", coil_arg_i64_ty, 1usize),
+            ("__cobrust_coil_argmax", coil_arg_i64_ty, 1),
+            ("__cobrust_coil_any", coil_pred_bool_ty, 1),
+            ("__cobrust_coil_all", coil_pred_bool_ty, 1),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

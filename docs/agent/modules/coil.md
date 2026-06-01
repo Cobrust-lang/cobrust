@@ -1897,6 +1897,138 @@ choice.
       `Cargo.lock` unchanged — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## #145 numpy gap-closure BATCH 5 — the REDUCTIONS family (DONE)
+
+The reduction surface most-used in real numpy code per §2.5, spanning
+THREE return shapes on a single `coil.Buffer` arg — the FIRST coil wave to
+mix Buffer-return AND scalar-return (i64 / bool) ops:
+
+- `coil.cumsum(a)` / `coil.cumprod(a)` → `coil.Buffer` (the no-axis
+  FLATTEN-to-1-D cumulative scan).
+- `coil.argmin(a)` / `coil.argmax(a)` → `i64` (the flat C-order index).
+- `coil.any(a)` / `coil.all(a)` → `bool`.
+
+DEFERRED (a future batch): `prod` / `min` / `max` (no-axis scalar) need a
+dtype-PRESERVING scalar return (`min` of an i64 buffer is an i64, of an f64
+buffer an f64) — coil has no scalar-return precedent that preserves the
+input dtype (the scalar shims all return a FIXED `f64` / `i64` / `bool`).
+That design (a tagged scalar return, or a 0-d Buffer return) is its own
+pass.
+
+### numpy semantics (numpy 2.x oracle)
+
+- **cumsum/cumprod, no axis** — FLATTEN the n-d array to 1-D (C-order) then
+  accumulate → a 1-D result of length `a.size` (`np.cumsum([[1,2],[3,4]])
+  == array([1,3,6,10])`). DTYPE (the accumulator): `int32` AND `int64`
+  BOTH widen to `int64` (numpy's platform-default int accumulator —
+  `np.cumsum(np.int32([..])).dtype == int64`); `bool` → `int64`; `float32`
+  stays `float32`; `float64` stays `float64`.
+- **argmin/argmax, no axis** — the FLAT (C-order) index of the FIRST
+  occurrence of the min/max. Ties → first occurrence. NaN PROPAGATES (numpy
+  returns the NaN's index — `np.argmax([1,nan,2]) == 1`). EMPTY input
+  RAISES `ValueError` → coil `coil_panic`s (a clean abort, NEVER a Rust
+  unwind across the C-ABI). Return `i64`.
+- **any** — `True` iff ANY element truthy; `any([]) == False`. **all** —
+  `True` iff ALL truthy; `all([]) == True` (vacuous). Truthiness: nonzero
+  for numeric (`0`/`0.0` falsy), `NaN` is TRUTHY (`np.any([nan]) == True`),
+  `True`/`False` for bool. Return `bool`.
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- 6 `lookup_module_fn` arms, tier `Semantic`. The 3 return shapes differ
+  ONLY in the `EcoSig` ret `Ty` (which drives the `_ecoret` local type +
+  the codegen extern return type): `cumsum`/`cumprod` →
+  `coil_buffer_ty()`; `argmin`/`argmax` → `Ty::Int`; `any`/`all` →
+  `Ty::Bool`.
+
+### Typecheck / MIR — ZERO new code (the load-bearing claim, VERIFIED)
+
+- The generic module-fn path (`try_synth_ecosystem_call` Case 1 /
+  `try_lower_ecosystem_call` Case 1) already lowers ANY `lookup_module_fn`
+  signature regardless of its ret `Ty`. The Buffer-return half is
+  structurally identical to `coil.exp` (BATCH 3). The SCALAR-return half
+  (argmin → i64, any → bool) rides the EXACT path `coil.mean(a) -> f64`
+  proves: `emit_ecosystem_call` declares the `_ecoret` local with `sig.ret`
+  (Float / Int / Bool) and codegen reads the extern's declared return type.
+  The `.cb` E2E (incl. the scalar prints + the empty-arg traps) confirms
+  argmin→Int + any→Bool need NO new MIR arm — the EcoSig ret `Ty` is the
+  only driver.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+- `cumsum`/`cumprod`: 2 extern rows reusing `coil_shape_ty` (`ptr -> ptr`)
+  — the IDENTICAL shape as the transcendental / rounding ufuncs.
+- `argmin`/`argmax`: 2 NEW extern rows `coil_arg_i64_ty` (`(ptr) -> i64`)
+  — mirrors `coil.mean`'s `(ptr) -> f64`, adapting the return to `i64`
+  (the SAME shape as the `coil.Buffer.size`/`.ndim` `coil_attr_i64`
+  accessors).
+- `any`/`all`: 2 NEW extern rows `coil_pred_bool_ty`
+  (`bool_type().fn_type(...)` → an `i1` return, the Rust C-ABI `-> bool`)
+  — the FIRST coil `-> bool` value fn, mirroring `fang.verify_password`'s
+  `bool_ty.fn_type(...)`. The `i1` lands in the `.cb` `_ecoret` Bool local.
+- All 6 symbols ride the existing `__cobrust_coil_` build/intrinsics prefix
+  recognizer (`build/intrinsics.rs:1389`).
+
+### Runtime (`cobrust-coil/src/reduce.rs` + `aggregates.rs` + `cabi.rs`)
+
+- `reduce.rs`: the kernels over the closed `Array` enum. `cumsum`/`cumprod`
+  via a shared `cumulative(arr, is_sum)` (int / bool arms accumulate in
+  `i64`, float arms in their own width; `.iter()` is logical C-order so the
+  flatten is free). `argmin_flat`/`argmax_flat` (→ `Result<usize>`) reuse
+  the tested `arg_extreme_iter_*` core (NaN / ties semantics) and return
+  `Err(ReductionEmptyArray)` on empty. `any`/`all` (→ `bool`) — the plain
+  `!= 0.0` test treats NaN as truthy (NaN compares unequal to 0.0) with no
+  special branch. ~30 unit tests, differential vs the numpy 2.4.6 oracle
+  (incl. 2-D flatten, int32→int64 + bool→int64 widening, f32/f64
+  preservation, flat-index + ties-first + NaN-propagation + the empty Err
+  path, any/all empty + NaN-truthy).
+- `aggregates.rs`: 4 thin scalar wrappers (`argmin_scalar`/`argmax_scalar`
+  → `Result<i64>` propagating the empty Err; `any_scalar`/`all_scalar` →
+  `Result<bool>`), mirroring `mean_scalar` — the helpers the cabi shims
+  call.
+- `cabi.rs`: `cumsum`/`cumprod` via the SAME `buffer_unary` body (borrow
+  handle → fresh Boxed return; TOTAL — no trap). `argmin`/`argmax` →
+  `i64` shims mirroring `__cobrust_coil_mean`'s scalar shape; an EMPTY (or
+  null) input maps the kernel's `Err` to `coil_panic` (clean abort, NEVER
+  a Rust unwind across the FFI). `any`/`all` → `bool` shims (an empty /
+  null input yields `False` / `True` — vacuous, matching numpy + the f64
+  aggregates' graceful-null posture).
+
+### Done means (#145 BATCH 5 — DONE)
+
+- [x] `reduce.rs`: `cumsum`/`cumprod` (`cumulative`), `argmin_flat`/
+      `argmax_flat` (reuse `arg_extreme_iter_*`), `any`/`all`; ~30 unit
+      tests vs numpy 2.4.6 (2-D flatten, int32→int64 + bool→int64, f32/f64
+      preservation, ties-first + NaN-propagation + empty Err, any/all
+      empty + NaN-truthy).
+- [x] `aggregates.rs`: 4 scalar wrappers (`{argmin,argmax}_scalar` → i64
+      w/ Err-propagation, `{any,all}_scalar` → bool), mirroring
+      `mean_scalar`.
+- [x] cabi: `cumsum`/`cumprod` via `buffer_unary` (TOTAL); `argmin`/
+      `argmax` → i64 w/ empty → `coil_panic` (clean trap, NO unwind);
+      `any`/`all` → bool.
+- [x] Manifest: 6 ecosystem arms — `cumsum`/`cumprod` `Buffer -> Buffer`,
+      `argmin`/`argmax` `Buffer -> Int`, `any`/`all` `Buffer -> Bool`;
+      tier `Semantic`.
+- [x] Typecheck / MIR: NO new code (VERIFIED via E2E — the EcoSig ret `Ty`
+      drives the scalar-return; argmin→Int + any→Bool ride `coil.mean`'s
+      generic path).
+- [x] Codegen: 2 `coil_shape_ty` rows (cumsum/cumprod) + 2 NEW
+      `(ptr) -> i64` rows (argmin/argmax, mirror `mean`'s f64) + 2 NEW
+      `(ptr) -> i1` rows (any/all, mirror `fang.verify_password` bool).
+- [x] `.cb` E2E `coil_reduce_e2e.rs` (9 tests): cumsum 1-D `[2,5]`, cumsum
+      2-D FLATTENS to `[1,3,6,10]` (+ asserts NO nested `[[`), cumprod
+      `[1,2,6,24]`, argmin/argmax flat-index + ties-first (`1`/`3`),
+      argmin/argmax monotonic mgrid (`0`/`4`), any/all mixed buffer
+      (`1`/`0`), all-true (`1`/`1`), and the EMPTY-argmin + EMPTY-argmax
+      CLEAN-TRAP tests (non-zero exit, unreachable marker absent).
+- [x] No regression: full `cobrust-coil` suite green (282 lib unit + every
+      test binary); `coil_reduce_e2e` + `coil_round_e2e` + `coil_ufunc_e2e`
+      + `coil_hello_e2e` all green; touched crates build + clippy
+      `-D warnings` + fmt clean; no new dep (`ndarray` already present;
+      `Cargo.lock` unchanged — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend
