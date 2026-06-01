@@ -8,6 +8,7 @@
 //!
 //! ```text
 //! `import redis` + `redis.connect(url)` + `client.set/get/delete/exists`
+//!   + the Phase-B `client.expire/incr/incr_by/hset/hget` verbs
 //!   → cobrust-types ecosystem manifest (typecheck, no AmbiguousType)
 //!   → cobrust-mir lowering (retarget → __cobrust_redis_* Constant::Str)
 //!   → cobrust-codegen externs + Client handle drop schedule
@@ -94,6 +95,43 @@ fn test_e2e_redis_unreachable_server_yields_fail_clean_sentinels() {
     ));
     // empty-str sentinel (blank line) + 0 keys removed + not present.
     assert_eq!(stdout, "\n0\nFalse\n");
+}
+
+/// ADR-0078 Phase-1c Phase-B — the server-LESS fail-clean slice for the
+/// new cache/counter/hash verbs. Connecting to an unreachable port yields
+/// the disconnected sentinel; `expire` prints `False` (TTL not set),
+/// `incr` / `incr_by` print `0` (no atomic increment on a dead
+/// connection), `hset` prints `False` (no new field created), `hget`
+/// prints the empty-string sentinel (blank line). This proves the new
+/// shims' FULL `compile -> link -> run` chain + the no-panic-at-C-ABI
+/// guarantee with NO redis server — ALWAYS green in CI. This is the
+/// always-on proof that genuinely exercises the Phase-B error paths.
+#[test]
+fn test_e2e_redis_phase_b_unreachable_server_yields_fail_clean_sentinels() {
+    let stdout = build_and_run_source(concat!(
+        "import redis\n",
+        "\n",
+        "fn main() -> i64:\n",
+        // Port 1 has nothing listening → connect fails clean → the
+        // disconnected sentinel Client (never null, never a panic).
+        "    let client = redis.connect(\"redis://127.0.0.1:1/\")\n",
+        // expire on the dead connection → False (TTL not set).
+        "    let ttl_set: bool = client.expire(\"counter\", 60)\n",
+        // incr / incr_by → 0 sentinel (no atomic increment).
+        "    let n1: i64 = client.incr(\"counter\")\n",
+        "    let n2: i64 = client.incr_by(\"counter\", 5)\n",
+        // hset → False (no new field created); hget → "" sentinel.
+        "    let created: bool = client.hset(\"h\", \"field\", \"value\")\n",
+        "    let hv: str = client.hget(\"h\", \"field\")\n",
+        "    print(ttl_set)\n",
+        "    print(n1)\n",
+        "    print(n2)\n",
+        "    print(created)\n",
+        "    print(hv)\n",
+        "    return 0\n",
+    ));
+    // expire False + incr 0 + incr_by 0 + hset False + hget "" (blank).
+    assert_eq!(stdout, "False\n0\n0\nFalse\n\n");
 }
 
 /// A second fail-clean shape — connect with a bare unparseable URL (the

@@ -40,6 +40,15 @@ across the C ABI (constitution §2.2).
   The always-on, server-LESS fail-clean e2e
   (`tests/redis_fail_clean_e2e.rs`) is GREEN in CI; the live round-trip
   (`tests/redis_live_e2e.rs`) self-skips when no server is reachable.
+- **ADR-0078 Phase-1c (Phase B) — delivered.** The top cache/counter/hash
+  verbs after the KV core: `expire` (TTL), `incr` / `incr_by` (atomic
+  counter), `hset` / `hget` (hash field). Additive manifest rows + cabi
+  shims, same `Client` handle, same borrow-receiver + fail-clean
+  discipline — no new mechanism over Phase A (the 3-arg `hset` rides the
+  arity-generic MIR Case-2 lowering the 2-arg `set` already proved). The
+  Phase-B fail-clean error paths are exercised by an always-on server-LESS
+  e2e; the Phase-B live round-trips (counter / expire+exists / hash)
+  self-skip when no server is reachable.
 
 ## The `.cb` surface (Phase A — the v0.7.0 MUST-ship)
 
@@ -70,6 +79,38 @@ returns `None` (side effect — no second drop-eligible handle minted,
 mirrors pit `app.route`). `get` returns the str value, with `""` for an
 absent key ("absent == empty", ADR-0078 §2.3-1).
 
+## The `.cb` surface (Phase B — cache / counter / hash)
+
+```text
+import redis
+
+fn main() -> i64:
+    let client = redis.connect("redis://127.0.0.1/")
+    client.set("counter", "10")
+    let n: i64 = client.incr("counter")            # -> 11 (new value)
+    let m: i64 = client.incr_by("counter", 5)      # -> 16
+    let ttl_set: bool = client.expire("counter", 60)   # -> True (TTL applied)
+    let created: bool = client.hset("h", "field", "v") # -> True (new field)
+    let v: str = client.hget("h", "field")             # -> "v" ("" if absent)
+    print(v)
+    return 0
+```
+
+| `.cb` call | redis-rs sync call (Commands trait) | C-ABI shim | ret |
+|---|---|---|---|
+| `client.expire(k, secs)` | `con.expire::<_, bool>(k, secs)` | `__cobrust_redis_client_expire(c, k, secs) -> bool` | `bool` |
+| `client.incr(k)` | `con.incr::<_,_,i64>(k, 1)` | `__cobrust_redis_client_incr(c, k) -> i64` | `i64` |
+| `client.incr_by(k, n)` | `con.incr::<_,_,i64>(k, n)` | `__cobrust_redis_client_incr_by(c, k, n) -> i64` | `i64` |
+| `client.hset(k, f, v)` | `con.hset::<_,_,_,i64>(k, f, v)` | `__cobrust_redis_client_hset(c, k, f, v) -> bool` | `bool` |
+| `client.hget(k, f)` | `con.hget::<_,_,Option<String>>(k, f)` | `__cobrust_redis_client_hget(c, k, f) -> *mut u8` | `str` |
+
+`incr` / `incr_by` return the value AFTER the increment (the atomic-counter
+new value; a fresh key starts at `0`, so the first `incr` yields `1`).
+`expire` returns whether the TTL was set (`True` when the key exists).
+`hset` returns whether a NEW field was created (the `HSET` reply count
+rendered as a bool — `True` for a new field, `False` for an overwrite).
+`hget` mirrors `get`: the str value, `""` for an absent field/hash.
+
 ## Rust public surface
 
 ```rust
@@ -83,6 +124,12 @@ impl Client {
     pub fn get(&mut self, key: &str) -> Result<Option<String>, RedisError>;
     pub fn delete(&mut self, key: &str) -> Result<i64, RedisError>;
     pub fn exists(&mut self, key: &str) -> Result<bool, RedisError>;
+    // Phase B:
+    pub fn expire(&mut self, key: &str, seconds: i64) -> Result<bool, RedisError>;
+    pub fn incr(&mut self, key: &str) -> Result<i64, RedisError>;          // +1
+    pub fn incr_by(&mut self, key: &str, delta: i64) -> Result<i64, RedisError>;
+    pub fn hset(&mut self, key: &str, field: &str, value: &str) -> Result<bool, RedisError>;
+    pub fn hget(&mut self, key: &str, field: &str) -> Result<Option<String>, RedisError>;
 }
 
 #[derive(Clone, Debug)]
@@ -95,12 +142,18 @@ pub enum RedisErrorKind { InvalidUrl, Connection, Command, Disconnected }
 ## C-ABI shims (`src/cabi.rs`)
 
 ```
-__cobrust_redis_connect(url: *mut Str) -> *mut Client     // disconnected sentinel on failure (NEVER null)
-__cobrust_redis_client_set(c, key, value: *mut Str)       // &mut borrow; silent no-op on error
-__cobrust_redis_client_get(c, key: *mut Str) -> *mut Str  // &mut borrow; "" sentinel on absent/error
-__cobrust_redis_client_delete(c, key: *mut Str) -> i64    // &mut borrow; 0 on error
-__cobrust_redis_client_exists(c, key: *mut Str) -> bool   // &mut borrow; false on error
-__cobrust_redis_client_drop(c)                            // Box::from_raw + DROP_COUNT, idempotent on null
+__cobrust_redis_connect(url: *mut Str) -> *mut Client      // disconnected sentinel on failure (NEVER null)
+__cobrust_redis_client_set(c, key, value: *mut Str)        // &mut borrow; silent no-op on error
+__cobrust_redis_client_get(c, key: *mut Str) -> *mut Str   // &mut borrow; "" sentinel on absent/error
+__cobrust_redis_client_delete(c, key: *mut Str) -> i64     // &mut borrow; 0 on error
+__cobrust_redis_client_exists(c, key: *mut Str) -> bool    // &mut borrow; false on error
+// Phase B:
+__cobrust_redis_client_expire(c, key: *mut Str, secs: i64) -> bool    // &mut borrow; false on error
+__cobrust_redis_client_incr(c, key: *mut Str) -> i64                  // &mut borrow; 0 on error
+__cobrust_redis_client_incr_by(c, key: *mut Str, delta: i64) -> i64   // &mut borrow; 0 on error
+__cobrust_redis_client_hset(c, key, field, value: *mut Str) -> bool   // &mut borrow; false on error
+__cobrust_redis_client_hget(c, key, field: *mut Str) -> *mut Str      // &mut borrow; "" sentinel on absent/error
+__cobrust_redis_client_drop(c)                             // Box::from_raw + DROP_COUNT, idempotent on null
 ```
 
 - **Handle**: `Client` crosses as opaque `*mut u8`, `Box::into_raw`'d by
@@ -123,10 +176,10 @@ __cobrust_redis_client_drop(c)                            // Box::from_raw + DRO
 |---|---|---|---|
 | Module registry | `cobrust-types/src/ecosystem.rs` | `is_ecosystem_module` | add `"redis"` to the alternation |
 | Free-fn manifest | same | `lookup_module_fn` | `("redis","connect") -> __cobrust_redis_connect : (Str) -> Client` |
-| Handle-method manifest | same | `lookup_handle_method` | `(REDIS_CLIENT_ADT, "set"/"get"/"delete"/"exists")` rows |
+| Handle-method manifest | same | `lookup_handle_method` | Phase A `(REDIS_CLIENT_ADT, "set"/"get"/"delete"/"exists")` + Phase B `"expire"/"incr"/"incr_by"/"hset"/"hget"` rows |
 | Drop symbol | same | `handle_drop_symbol` | `REDIS_CLIENT_ADT => Some("__cobrust_redis_client_drop")` |
 | ADT block | same | `REDIS_CLIENT_ADT` | `ECO_ADT_BASE + 0x800` (the NINTH 256-slot block, next-free past coil's `0x700`) |
-| Codegen externs | `cobrust-codegen/src/llvm_backend.rs` | `declare_runtime_helpers` | extern decls for the six `__cobrust_redis_*` symbols |
+| Codegen externs | `cobrust-codegen/src/llvm_backend.rs` | `declare_runtime_helpers` | extern decls for the eleven `__cobrust_redis_*` symbols (six Phase-A + five Phase-B) |
 | Link recognizer | `cobrust-cli/src/build/intrinsics.rs` | `ecosystem_module_for_symbol` | `sym.starts_with("__cobrust_redis_") => Some("redis")` |
 | MIR | `cobrust-mir/src/lower.rs` | `try_lower_ecosystem_call` | **no edit** — generic (consults the manifest by name) |
 | Archive locate | `cobrust-cli/src/build.rs` | `locate_ecosystem_archive` | **no edit** — module-name-generic (`lib{module}.a` + `cargo build -p cobrust-{module}`) |
@@ -155,15 +208,20 @@ usually carries:
 
 ## §2.5 compliance (the audit checklist)
 
-- **compile-time-catch-errors**: the manifest gives `connect`/`set`/
-  `get`/`delete`/`exists` concrete typed signatures; a wrong-arity or
-  wrong-type call is a typecheck error, not a runtime surprise. The
-  `RedisErrorKind` Rust enum is closed + exhaustively matchable.
+- **compile-time-catch-errors**: the manifest gives every verb
+  (`connect`/`set`/`get`/`delete`/`exists` + `expire`/`incr`/`incr_by`/
+  `hset`/`hget`) a concrete typed signature; a wrong-arity or wrong-type
+  call is a typecheck error, not a runtime surprise (e.g. `expire(k)`
+  missing the `secs: i64` is rejected at typecheck). The `RedisErrorKind`
+  Rust enum is closed + exhaustively matchable.
 - **maximize-overlap-with-training-data**: the verbs ARE the redis-py
-  surface (`r.set`/`r.get`/`r.delete`/`r.exists`); the un-suffixed names
-  have strictly higher training-data overlap than a `set_str`/`get_str`
-  type-suffix (the suffix only returns IF a `get_int`/`get_bytes`
-  sibling ships — Phase C).
+  surface (`r.set`/`r.get`/`r.delete`/`r.exists`/`r.expire`/`r.incr`/
+  `r.hset`/`r.hget`); the un-suffixed names have strictly higher
+  training-data overlap than a `set_str`/`get_str` type-suffix (the
+  suffix only returns IF a `get_int`/`get_bytes` sibling ships — Phase C).
+  `incr_by` is the readable spelling of redis-py's `r.incr(k, n)` / the
+  `INCRBY` command (the `_by` suffix disambiguates the two-arg delta form
+  from the bare one-arg `incr`).
 
 ## License / provenance
 
@@ -181,16 +239,26 @@ usually carries:
 - `src/client.rs` `#[cfg(test)]`: disconnected-sentinel command behaviour,
   invalid-URL vs unreachable-port error-kind classification, Display.
 - `src/cabi.rs` `#[cfg(test)]`: the full fail-clean vertical slice
-  (server-less) returns per-type sentinels + drops exactly once;
-  null-pointer tolerance; invalid-URL non-null sentinel.
+  (server-less) returns per-type sentinels + drops exactly once — extended
+  to the Phase-B verbs (`expire`→false / `incr`,`incr_by`→0 / `hset`→false
+  / `hget`→""); null-pointer tolerance (all eleven shims); invalid-URL
+  non-null sentinel.
 - `crates/cobrust-cli/tests/redis_fail_clean_e2e.rs` (ALWAYS-ON):
   `.cb` source → compile → link → run against an unreachable redis →
   prints the empty-str / `0` / `False` sentinels. Proves the chain + the
-  no-panic-at-C-ABI guarantee with NO server. GREEN in CI.
+  no-panic-at-C-ABI guarantee with NO server. GREEN in CI. A second test
+  (`..._phase_b_...`) does the same for `expire`/`incr`/`incr_by`/`hset`/
+  `hget` (prints `False`/`0`/`0`/`False`/`""`), so the Phase-B error paths
+  are genuinely exercised server-less.
 - `crates/cobrust-cli/tests/redis_live_e2e.rs` (SELF-SKIP): the live
-  `set`→`get`→`delete`→`exists` round-trip; runs when `$REDIS_URL` /
-  `127.0.0.1:6379` is reachable, self-skips (clean `return` + diagnostic)
-  otherwise. Mirrors the cross-target / python-version self-skip pattern.
+  `set`→`get`→`delete`→`exists` round-trip; a second test does the
+  Phase-B live round-trips — counter (`set "10"`→`incr`=11→`incr_by 5`=16),
+  expire (`set`→`expire 100`=True→`exists`=True), hash (`hset`=True→`hget`=
+  "a"→`hset` overwrite=False→`hget`="b"). Both run when `$REDIS_URL` /
+  `127.0.0.1:6379` is reachable, self-skip (clean `return` + diagnostic)
+  otherwise. The TTL-expiry timing is deliberately NOT slept-through (only
+  the `expire` return + immediate `exists` are asserted) to avoid a flaky
+  slow test (ADR-0078 §Phase-B heaviest-risk note).
 
 ## Ownership / lifecycle (ADR-0078 §3.7)
 
@@ -203,12 +271,15 @@ usually carries:
   closes when the `Client` drops at `.cb` scope exit (TCP FIN on
   `Box::from_raw` drop). No explicit `.close()` needed (RAII default).
 
-## Non-goals (deferred follow-ups — ADR-0078 Phase B / C)
+## Non-goals (deferred follow-ups — ADR-0078 Phase C)
 
-- Phase B verbs: `set_expiry`/`expire`/`incr`/`incr_by`/`hset`/`hget`
-  (additive manifest rows + cabi shims, same handle, no new mechanism).
-- `Option<str>` return for `get` (distinguishes absent from stored-`""`
-  — the first `.cb` `Option`-across-C-ABI design; §2.2-correct upgrade).
+- `set_expiry(k, v, secs)` (the `SETEX` set-with-TTL one-shot — an
+  additive manifest row + cabi shim, same pattern as `expire`; not in the
+  Phase-B five but a trivial follow-up if a use-case wants the atomic
+  set-and-expire).
+- `Option<str>` return for `get` / `hget` (distinguishes absent from
+  stored-`""` — the first `.cb` `Option`-across-C-ABI design;
+  §2.2-correct upgrade).
 - Typed `get_int`/`get_bytes` siblings (then the `_str` suffix returns).
 - Connection **pooling** (`r2d2`/`deadpool-redis`) — needed only for a
   multi-threaded `.cb` server (pit) sharing one redis; the `!Send`

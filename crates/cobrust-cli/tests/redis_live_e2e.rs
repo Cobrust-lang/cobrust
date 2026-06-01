@@ -8,7 +8,9 @@
 //! reachable at `$REDIS_URL` or `127.0.0.1:6379`), this runs the full
 //! `set "greeting" "hello"` → `get` (prints `hello`) → `delete` (prints
 //! `1`) → `exists` (prints `False`) round-trip and asserts the printed
-//! values — the ADR-0078 Phase-1c done-means #2.
+//! values — the ADR-0078 Phase-1c done-means #2. A second live test
+//! (Phase-B) exercises `set`+`expire`(+post-`exists`), the `incr`/
+//! `incr_by` counter round-trip, and the `hset`/`hget` hash round-trip.
 //!
 //! The hermetic, always-on proof of the wiring + the error path is
 //! `redis_fail_clean_e2e.rs` (server-less); this file adds the
@@ -137,5 +139,85 @@ fn test_e2e_redis_live_round_trip_or_skip() {
     assert_eq!(
         stdout, "hello\n1\nFalse\n",
         "live redis round-trip: set/get/delete/exists"
+    );
+}
+
+/// ADR-0078 Phase-1c Phase-B — the LIVE round-trip for the new
+/// cache/counter/hash verbs. Self-skips (clean `return`) when no redis is
+/// reachable. Three independent round-trips, each on a process-unique key
+/// (cleaned up with `delete` at the end so a shared dev/CI redis is not
+/// polluted):
+///
+/// 1. counter: `set k "10"` → `incr k` (prints `11`) → `incr_by k 5`
+///    (prints `16`).
+/// 2. expire: `set k2 "v"` → `expire k2 100` (prints `True`) → `exists k2`
+///    (prints `True` — still present, well within the TTL; the actual
+///    TTL-expiry timing is deliberately NOT asserted to avoid a slow/flaky
+///    sleep, per ADR-0078 §Phase-B heaviest-risk note).
+/// 3. hash: `hset h f "a"` (prints `True` — new field) → `hget h f`
+///    (prints `a`) → `hset h f "b"` (prints `False` — overwrite) →
+///    `hget h f` (prints `b`).
+#[test]
+fn test_e2e_redis_live_phase_b_round_trip_or_skip() {
+    let url = redis_url();
+    let hp = host_port(&url);
+    if !redis_reachable(&hp) {
+        eprintln!(
+            "redis_live_e2e (phase-b): skipping cleanly: no redis server reachable at {hp} \
+             (set REDIS_URL to a reachable redis://host:port/ to run the live round-trip)"
+        );
+        return;
+    }
+
+    // Process-unique key roots so concurrent runs / a shared server don't
+    // collide across the three round-trips.
+    let pid = std::process::id();
+    let kc = format!("cobrust:redis_live_e2e:phaseb:counter:{pid}");
+    let ke = format!("cobrust:redis_live_e2e:phaseb:expire:{pid}");
+    let kh = format!("cobrust:redis_live_e2e:phaseb:hash:{pid}");
+
+    let source = format!(
+        concat!(
+            "import redis\n",
+            "\n",
+            "fn main() -> i64:\n",
+            "    let client = redis.connect(\"{url}\")\n",
+            // 1. counter round-trip: seed 10, +1 -> 11, +5 -> 16.
+            "    client.set(\"{kc}\", \"10\")\n",
+            "    let c1: i64 = client.incr(\"{kc}\")\n",
+            "    let c2: i64 = client.incr_by(\"{kc}\", 5)\n",
+            // 2. expire round-trip: set, set TTL (True), still-present (True).
+            "    client.set(\"{ke}\", \"v\")\n",
+            "    let ttl_set: bool = client.expire(\"{ke}\", 100)\n",
+            "    let still_present: bool = client.exists(\"{ke}\")\n",
+            // 3. hash round-trip: new field (True), read, overwrite (False), read.
+            "    let new_field: bool = client.hset(\"{kh}\", \"f\", \"a\")\n",
+            "    let h1: str = client.hget(\"{kh}\", \"f\")\n",
+            "    let overwrite: bool = client.hset(\"{kh}\", \"f\", \"b\")\n",
+            "    let h2: str = client.hget(\"{kh}\", \"f\")\n",
+            // Clean up the three keys (deletes are not asserted on).
+            "    let _c: i64 = client.delete(\"{kc}\")\n",
+            "    let _e: i64 = client.delete(\"{ke}\")\n",
+            "    let _h: i64 = client.delete(\"{kh}\")\n",
+            "    print(c1)\n",
+            "    print(c2)\n",
+            "    print(ttl_set)\n",
+            "    print(still_present)\n",
+            "    print(new_field)\n",
+            "    print(h1)\n",
+            "    print(overwrite)\n",
+            "    print(h2)\n",
+            "    return 0\n",
+        ),
+        url = url,
+        kc = kc,
+        ke = ke,
+        kh = kh,
+    );
+
+    let stdout = build_and_run_source(&source);
+    assert_eq!(
+        stdout, "11\n16\nTrue\nTrue\nTrue\na\nFalse\nb\n",
+        "live redis phase-b round-trip: incr/incr_by, expire+exists, hset/hget"
     );
 }

@@ -223,6 +223,91 @@ impl Client {
         con.exists::<_, bool>(key)
             .map_err(|e| RedisError::from_redis(&e))
     }
+
+    // fn:Client::expire provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `EXPIRE key seconds`. Mirrors redis-py `r.expire(key, seconds)`.
+    /// Sets a key's time-to-live; returns whether the timeout was set
+    /// (`True` when the key exists and the TTL was applied, `False` when
+    /// the key does not exist) — the readable Python-idiom verb (ADR-0078
+    /// §2.2). redis-rs's `Commands::expire` takes `seconds: i64` and
+    /// returns a bool natively.
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed EXPIRE.
+    pub fn expire(&mut self, key: &str, seconds: i64) -> Result<bool, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.expire::<_, bool>(key, seconds)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::incr provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `INCR key` (atomic counter — increment by 1). Mirrors redis-py
+    /// `r.incr(key)`. Returns the value AFTER the increment (the new
+    /// value), per the redis `INCR` reply. A non-existent key is treated
+    /// as `0` before the operation, so the first `incr` yields `1`. The
+    /// stored value must be parseable as an integer (redis enforces this;
+    /// a non-integer value surfaces a command error → the fail-clean
+    /// sentinel at the cabi boundary).
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed INCR (e.g. the value is not an integer).
+    pub fn incr(&mut self, key: &str) -> Result<i64, RedisError> {
+        self.incr_by(key, 1)
+    }
+
+    // fn:Client::incr_by provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `INCRBY key delta` (atomic counter — increment by `delta`). Mirrors
+    /// redis-py `r.incrby(key, delta)` / `r.incr(key, delta)`. Returns the
+    /// value AFTER the increment. redis-rs's `Commands::incr` routes to
+    /// `INCRBY` for an integer delta (and `INCRBYFLOAT` for a float — we
+    /// pass an `i64` so it is always the integer path).
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed INCRBY.
+    pub fn incr_by(&mut self, key: &str, delta: i64) -> Result<i64, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.incr::<_, _, i64>(key, delta)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::hset provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `HSET key field value` (hash set field). Mirrors redis-py
+    /// `r.hset(key, field, value)`. Returns whether a NEW field was
+    /// created (`True` when `field` did not previously exist in the hash,
+    /// `False` when an existing field's value was overwritten) — the
+    /// `HSET` reply is the count of newly-added fields (`0`/`1` for one
+    /// field), which we render as the readable bool. The value type is
+    /// fixed to `str` for the first proof (the typed-sibling story mirrors
+    /// `set`, ADR-0078 §2.3-2).
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed HSET.
+    pub fn hset(&mut self, key: &str, field: &str, value: &str) -> Result<bool, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.hset::<_, _, _, i64>(key, field, value)
+            .map(|added| added > 0)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
+
+    // fn:Client::hget provider=synthetic model=redis-canned-v1 cache_hit=false decision_id=blake3:committed-from-canned-v1 task=translate
+    /// `HGET key field` (hash get field). Mirrors redis-py
+    /// `r.hget(key, field)`. Returns the stored field value, or `None`
+    /// when the field (or the hash) is absent — so the cabi shim renders
+    /// the empty-string sentinel for "absent == empty", exactly mirroring
+    /// `get` (ADR-0078 §2.3-1).
+    ///
+    /// # Errors
+    /// [`RedisError::disconnected`] on the sentinel client; a command /
+    /// connection error on a failed HGET.
+    pub fn hget(&mut self, key: &str, field: &str) -> Result<Option<String>, RedisError> {
+        let con = self.inner.as_mut().ok_or_else(RedisError::disconnected)?;
+        con.hget::<_, _, Option<String>>(key, field)
+            .map_err(|e| RedisError::from_redis(&e))
+    }
 }
 
 #[cfg(test)]
@@ -253,6 +338,27 @@ mod tests {
         );
         assert_eq!(
             c.exists("k").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        // Phase-B verbs — same disconnected-sentinel short-circuit.
+        assert_eq!(
+            c.expire("k", 60).expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.incr("k").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.incr_by("k", 5).expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.hset("k", "f", "v").expect_err("must error").kind,
+            RedisErrorKind::Disconnected
+        );
+        assert_eq!(
+            c.hget("k", "f").expect_err("must error").kind,
             RedisErrorKind::Disconnected
         );
     }

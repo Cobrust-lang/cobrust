@@ -3044,19 +3044,39 @@ impl<'ctx> LlvmEmitter<'ctx> {
         //   __cobrust_redis_client_delete(c, key: *mut Str) -> i64
         //   __cobrust_redis_client_exists(c, key: *mut Str) -> bool (i1)
         //   __cobrust_redis_client_drop(c) -> void
+        // Phase-B cache/counter/hash verbs (same handle, same shapes):
+        //   __cobrust_redis_client_expire(c, key: *mut Str, secs: i64) -> bool (i1)
+        //   __cobrust_redis_client_incr(c, key: *mut Str) -> i64
+        //   __cobrust_redis_client_incr_by(c, key: *mut Str, delta: i64) -> i64
+        //   __cobrust_redis_client_hset(c, key, field, value: *mut Str) -> bool (i1)
+        //   __cobrust_redis_client_hget(c, key, field: *mut Str) -> *mut Str
         //
         // The `_drop` symbol is emitted by `emit_drop_for_ty` at the
         // handle local's scope exit via `handle_drop_symbol(id)` (chain is
         // already general — no new drop wiring needed). `set` returns
-        // void (side-effect — the `.cb` `Ty::None` return); `exists`
-        // returns an `i1` bool (the fang `verify_password` precedent —
-        // `write_place` bridges the i1/alloca width gap).
+        // void (side-effect — the `.cb` `Ty::None` return); `exists` /
+        // `expire` / `hset` return an `i1` bool (the fang `verify_password`
+        // precedent — `write_place` bridges the i1/alloca width gap);
+        // `expire` / `incr_by` carry a trailing `i64` scalar arg.
         let redis_connect_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
         let redis_set_ty = void_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         let redis_get_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let redis_delete_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let redis_exists_ty = bool_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let redis_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        // Phase-B fn types. `expire`: (ptr, ptr, i64) -> i1; `incr`:
+        // (ptr, ptr) -> i64; `incr_by`: (ptr, ptr, i64) -> i64; `hset`:
+        // (ptr, ptr, ptr, ptr) -> i1; `hget`: (ptr, ptr, ptr) -> ptr.
+        let redis_expire_ty =
+            bool_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        let redis_incr_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let redis_incr_by_ty =
+            i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+        let redis_hset_ty = bool_ty.fn_type(
+            &[ptr_ty.into(), ptr_ty.into(), ptr_ty.into(), ptr_ty.into()],
+            false,
+        );
+        let redis_hget_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_redis_connect", redis_connect_ty, 1usize),
             ("__cobrust_redis_client_set", redis_set_ty, 3),
@@ -3064,6 +3084,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_redis_client_delete", redis_delete_ty, 2),
             ("__cobrust_redis_client_exists", redis_exists_ty, 2),
             ("__cobrust_redis_client_drop", redis_drop_ty, 1),
+            ("__cobrust_redis_client_expire", redis_expire_ty, 3),
+            ("__cobrust_redis_client_incr", redis_incr_ty, 2),
+            ("__cobrust_redis_client_incr_by", redis_incr_by_ty, 3),
+            ("__cobrust_redis_client_hset", redis_hset_ty, 4),
+            ("__cobrust_redis_client_hget", redis_hget_ty, 3),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

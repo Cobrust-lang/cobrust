@@ -49,6 +49,49 @@ The method names are exactly the ones you already know from Python's
 `redis` package (`set` / `get` / `delete` / `exists`), so an LLM — or
 you — write them correctly on the first try.
 
+## What you get (Phase B — expiry, counters, hashes)
+
+The cache patterns you reach for right after the basic key-value verbs:
+
+```python
+import redis
+
+fn main() -> i64:
+    let client = redis.connect("redis://127.0.0.1/")
+
+    # Atomic counters — increment and read the new value in one step.
+    client.set("hits", "10")
+    let n: i64 = client.incr("hits")          # -> 11
+    let m: i64 = client.incr_by("hits", 5)    # -> 16
+
+    # Expiry (time-to-live) — make a key disappear after N seconds.
+    let ttl_set: bool = client.expire("hits", 60)  # -> true (TTL applied)
+
+    # Hashes — store named fields under a single key.
+    let created: bool = client.hset("user:1", "name", "ada")  # -> true (new field)
+    let name: str = client.hget("user:1", "name")             # -> "ada"
+    print(name)
+    return 0
+```
+
+- **`client.expire(key, seconds)`** — set a key's time-to-live. Returns
+  `true` when the key exists and the timeout was applied, `false`
+  otherwise.
+- **`client.incr(key)`** — atomically add `1` to a counter and return the
+  new value. A key that does not exist yet starts at `0`, so the first
+  `incr` returns `1`.
+- **`client.incr_by(key, n)`** — atomically add `n` and return the new
+  value.
+- **`client.hset(key, field, value)`** — set a field inside a hash.
+  Returns `true` when the field is new, `false` when it overwrites an
+  existing field.
+- **`client.hget(key, field)`** — read a hash field back as a `str`. A
+  missing field (or a missing hash) reads as the empty string `""`, just
+  like `get`.
+
+These are, again, exactly the redis-py names (`incr` / `expire` / `hset`
+/ `hget`); `incr_by` is the readable spelling of `r.incr(key, n)`.
+
 ## Why this design?
 
 - **Typed methods, never a command string.** You call `client.set(k, v)`,
@@ -76,10 +119,11 @@ you — write them correctly on the first try.
 
 If the server is unreachable or the URL is invalid, `connect` still hands
 you a usable `Client` — a "disconnected" one. Every operation on it
-returns the safe default (`get` → `""`, `delete` → `0`, `exists` →
-`false`), and `set` is silently a no-op. Your program never crashes at
-the boundary. This is what lets the test suite prove the whole pipeline
-works without needing a real Redis server running.
+returns the safe default (`get` / `hget` → `""`, `delete` / `incr` /
+`incr_by` → `0`, `exists` / `expire` / `hset` → `false`), and `set` is
+silently a no-op. Your program never crashes at the boundary. This is what
+lets the test suite prove the whole pipeline works without needing a real
+Redis server running.
 
 ## Today's limits
 
@@ -91,8 +135,8 @@ works without needing a real Redis server running.
   tracked follow-up).
 - Keep the `Client` local to the function; single-threaded — don't share
   one connection across spawned tasks (a connection pool is a follow-up).
-- `expire` / `incr` / hash operations (`hset` / `hget`) are the next
-  batch (Phase B).
+- A set-with-expiry one-shot (`SETEX`) is a small follow-up; for now use
+  `set` then `expire`.
 
 These are tracked follow-ups, not dead ends.
 

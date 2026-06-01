@@ -1,7 +1,10 @@
 //! C-ABI shims — the runtime surface a compiled `.cb` program binds
 //! onto when it does `import redis` and calls `redis.connect(url)` /
 //! `client.set(k, v)` / `client.get(k)` / `client.delete(k)` /
-//! `client.exists(k)` (ADR-0078 Phase-1c — cache/KV, rebrand of
+//! `client.exists(k)` (the Phase-A KV verbs), plus the Phase-B
+//! cache/counter/hash verbs `client.expire(k, secs)` / `client.incr(k)` /
+//! `client.incr_by(k, n)` / `client.hset(k, field, v)` /
+//! `client.hget(k, field)` (ADR-0078 Phase-1c — cache/KV, rebrand of
 //! redis-py).
 //!
 //! # The chain
@@ -35,13 +38,14 @@
 //! - `connect` **returns** a freshly-Boxed `Client` handle the `.cb`
 //!   caller owns; the caller's MIR drop schedule frees it once at scope
 //!   exit via the `_drop` shim.
-//! - `set` / `get` / `delete` / `exists` **borrow** the `Client` handle
-//!   `&mut` (redis sync `Connection` command methods take `&mut self` —
-//!   unlike strike's `&` read-only borrow on `Response`). The `&mut` is
-//!   entirely inside the shim, invisible to the `.cb` aliasing model:
-//!   each call is a separate borrow-then-release at the shim boundary,
-//!   exactly like two sequential `conn.execute` calls in the den e2e.
-//!   They never rebox or free the handle.
+//! - `set` / `get` / `delete` / `exists` / `expire` / `incr` /
+//!   `incr_by` / `hset` / `hget` **borrow** the `Client` handle `&mut`
+//!   (redis sync `Connection` command methods take `&mut self` — unlike
+//!   strike's `&` read-only borrow on `Response`). The `&mut` is entirely
+//!   inside the shim, invisible to the `.cb` aliasing model: each call is
+//!   a separate borrow-then-release at the shim boundary, exactly like
+//!   two sequential `conn.execute` calls in the den e2e. They never rebox
+//!   or free the handle.
 //! - A `DROP_COUNT` instrument lets the test suite assert each handle is
 //!   dropped exactly once (no leak, no double-free).
 //!
@@ -279,6 +283,166 @@ pub unsafe extern "C" fn __cobrust_redis_client_exists(client: *mut u8, key: *mu
     client_ref.exists(&key).unwrap_or(false)
 }
 
+/// `Client.expire(key, seconds) -> bool`. BORROWS the `Client` handle
+/// `&mut` (never frees it), runs `EXPIRE key seconds`, and returns
+/// whether the TTL was set (`true` when the key exists and the timeout
+/// was applied).
+///
+/// Returns `false` for a null handle, the disconnected sentinel, or a
+/// command error — never a panic.
+///
+/// # Safety
+///
+/// `client` must be null or a live `Client` handle from
+/// `__cobrust_redis_connect` (not yet dropped); `key` must be null or a
+/// valid Cobrust `Str` buffer. `seconds` is a plain `i64` scalar.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_redis_client_expire(
+    client: *mut u8,
+    key: *mut u8,
+    seconds: i64,
+) -> bool {
+    if client.is_null() {
+        return false;
+    }
+    // SAFETY: caller attests `client` is a live Client handle. BORROW
+    // `&mut` — no rebox / free.
+    let client_ref = unsafe { &mut *client.cast::<Client>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let key = unsafe { read_str_buf(key) };
+    client_ref.expire(&key, seconds).unwrap_or(false)
+}
+
+/// `Client.incr(key) -> i64`. BORROWS the `Client` handle `&mut` (never
+/// frees it), runs `INCR key`, and returns the value AFTER the increment
+/// (the atomic-counter new value; `1` on the first increment of a fresh
+/// key).
+///
+/// Returns `0` for a null handle, the disconnected sentinel, or a command
+/// error (e.g. the stored value is not an integer) — never a panic.
+///
+/// # Safety
+///
+/// `client` must be null or a live `Client` handle from
+/// `__cobrust_redis_connect` (not yet dropped); `key` must be null or a
+/// valid Cobrust `Str` buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_redis_client_incr(client: *mut u8, key: *mut u8) -> i64 {
+    if client.is_null() {
+        return 0;
+    }
+    // SAFETY: caller attests `client` is a live Client handle. BORROW
+    // `&mut` — no rebox / free.
+    let client_ref = unsafe { &mut *client.cast::<Client>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let key = unsafe { read_str_buf(key) };
+    client_ref.incr(&key).unwrap_or(0)
+}
+
+/// `Client.incr_by(key, delta) -> i64`. BORROWS the `Client` handle
+/// `&mut` (never frees it), runs `INCRBY key delta`, and returns the
+/// value AFTER the increment.
+///
+/// Returns `0` for a null handle, the disconnected sentinel, or a command
+/// error — never a panic.
+///
+/// # Safety
+///
+/// `client` must be null or a live `Client` handle from
+/// `__cobrust_redis_connect` (not yet dropped); `key` must be null or a
+/// valid Cobrust `Str` buffer. `delta` is a plain `i64` scalar.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_redis_client_incr_by(
+    client: *mut u8,
+    key: *mut u8,
+    delta: i64,
+) -> i64 {
+    if client.is_null() {
+        return 0;
+    }
+    // SAFETY: caller attests `client` is a live Client handle. BORROW
+    // `&mut` — no rebox / free.
+    let client_ref = unsafe { &mut *client.cast::<Client>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let key = unsafe { read_str_buf(key) };
+    client_ref.incr_by(&key, delta).unwrap_or(0)
+}
+
+/// `Client.hset(key, field, value) -> bool`. BORROWS the `Client` handle
+/// `&mut` (never frees it), runs `HSET key field value`, and returns
+/// whether a NEW field was created (`true` when `field` did not
+/// previously exist in the hash).
+///
+/// Returns `false` for a null handle, the disconnected sentinel, or a
+/// command error — never a panic.
+///
+/// # Safety
+///
+/// `client` must be null or a live `Client` handle from
+/// `__cobrust_redis_connect` (not yet dropped); `key` / `field` / `value`
+/// must be null or valid Cobrust `Str` buffers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_redis_client_hset(
+    client: *mut u8,
+    key: *mut u8,
+    field: *mut u8,
+    value: *mut u8,
+) -> bool {
+    if client.is_null() {
+        return false;
+    }
+    // SAFETY: caller attests `client` is a live Client handle. BORROW
+    // `&mut` — no rebox / free.
+    let client_ref = unsafe { &mut *client.cast::<Client>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let key = unsafe { read_str_buf(key) };
+    // SAFETY: caller-attestation per `# Safety`.
+    let field = unsafe { read_str_buf(field) };
+    // SAFETY: caller-attestation per `# Safety`.
+    let value = unsafe { read_str_buf(value) };
+    client_ref.hset(&key, &field, &value).unwrap_or(false)
+}
+
+/// `Client.hget(key, field) -> str`. BORROWS the `Client` handle `&mut`
+/// (never frees it), runs `HGET key field`, and returns the stored field
+/// value as a freshly-allocated Cobrust `Str` buffer.
+///
+/// Returns the empty-string sentinel for a missing field/hash, a null
+/// handle, the disconnected sentinel, or a command error (absent ==
+/// empty, mirroring `get`) — never a panic.
+///
+/// # Safety
+///
+/// `client` must be null or a live `Client` handle from
+/// `__cobrust_redis_connect` (not yet dropped); `key` / `field` must be
+/// null or valid Cobrust `Str` buffers. The returned pointer is an owned
+/// Cobrust `Str` buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_redis_client_hget(
+    client: *mut u8,
+    key: *mut u8,
+    field: *mut u8,
+) -> *mut u8 {
+    if client.is_null() {
+        return alloc_str_buffer("");
+    }
+    // SAFETY: caller attests `client` is a live Client handle. BORROW
+    // `&mut` — no rebox / free.
+    let client_ref = unsafe { &mut *client.cast::<Client>() };
+    // SAFETY: caller-attestation per `# Safety`.
+    let key = unsafe { read_str_buf(key) };
+    // SAFETY: caller-attestation per `# Safety`.
+    let field = unsafe { read_str_buf(field) };
+    // Missing field (`Ok(None)`) and any error both render the empty-str
+    // sentinel — the fail-clean convention, mirroring `get`.
+    let value = client_ref
+        .hget(&key, &field)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    alloc_str_buffer(&value)
+}
+
 /// Drop a `Client` handle. `Box::from_raw` + drop, exactly once, at the
 /// `.cb` scope exit (ADR-0072 §5 risk 1). Dropping the `Client` closes
 /// the underlying TCP connection (RAII — no forgot-to-close footgun).
@@ -372,6 +536,32 @@ mod tests {
             let present = __cobrust_redis_client_exists(client, key);
             assert!(!present, "disconnected exists is false");
 
+            // --- Phase-B verbs, same disconnected-sentinel fail-clean ---
+            let field = alloc_str_buffer("field");
+
+            // expire — false (TTL not set on the disconnected sentinel).
+            let set_ttl = __cobrust_redis_client_expire(client, key, 60);
+            assert!(!set_ttl, "disconnected expire is false");
+
+            // incr — 0 sentinel (no atomic increment on a dead connection).
+            let n1 = __cobrust_redis_client_incr(client, key);
+            assert_eq!(n1, 0, "disconnected incr is 0");
+
+            // incr_by — 0 sentinel.
+            let n2 = __cobrust_redis_client_incr_by(client, key, 5);
+            assert_eq!(n2, 0, "disconnected incr_by is 0");
+
+            // hset — false (no new field created on the sentinel).
+            let created = __cobrust_redis_client_hset(client, key, field, value);
+            assert!(!created, "disconnected hset is false");
+
+            // hget — empty-str sentinel (absent / disconnected).
+            let hgot = __cobrust_redis_client_hget(client, key, field);
+            assert_eq!(read_str_buf(hgot), "", "disconnected hget is empty-str");
+            drop_str_for_test(hgot);
+
+            drop_str_for_test(field);
+
             // A second get AGAIN — confirms the &mut borrows didn't
             // consume the handle (two sequential &mut method calls on the
             // same handle local, the den-e2e aliasing shape).
@@ -412,6 +602,23 @@ mod tests {
 
             let f = __cobrust_redis_client_exists(std::ptr::null_mut(), key);
             assert!(!f);
+
+            // --- Phase-B verbs on null — same per-type sentinels ---
+            let null_ttl = __cobrust_redis_client_expire(std::ptr::null_mut(), key, 60);
+            assert!(!null_ttl);
+
+            let null_incr = __cobrust_redis_client_incr(std::ptr::null_mut(), key);
+            assert_eq!(null_incr, 0);
+
+            let null_incr_by = __cobrust_redis_client_incr_by(std::ptr::null_mut(), key, 5);
+            assert_eq!(null_incr_by, 0);
+
+            let null_hset = __cobrust_redis_client_hset(std::ptr::null_mut(), key, key, key);
+            assert!(!null_hset);
+
+            let null_hget = __cobrust_redis_client_hget(std::ptr::null_mut(), key, key);
+            assert_eq!(read_str_buf(null_hget), "");
+            drop_str_for_test(null_hget);
 
             drop_str_for_test(key);
 

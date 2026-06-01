@@ -1376,6 +1376,48 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             Ty::Bool,
             PyCompatTier::Semantic,
         )),
+        // ADR-0078 Phase-1c Phase-B — the top cache/counter/hash verbs
+        // after the KV core. Same borrow-receiver discipline (the cabi
+        // shim takes `&mut` internally), same readable redis-py-idiom
+        // verbs (§2.5-aligned), same Result/sentinel-not-exceptions
+        // surface. `expire`/`hset` return a `bool` (TTL-set? / new-field?);
+        // `incr`/`incr_by` return the i64 new counter value; `hget`
+        // returns the str value ("" sentinel if absent, mirroring `get`).
+        (REDIS_CLIENT_ADT, "expire") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_expire",
+            // Receiver implicit; explicit params are the key str + the
+            // TTL seconds (i64).
+            vec![Ty::Str, Ty::Int],
+            Ty::Bool,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "incr") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_incr",
+            vec![Ty::Str],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "incr_by") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_incr_by",
+            // Key str + the integer delta to add.
+            vec![Ty::Str, Ty::Int],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "hset") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_hset",
+            // Key str + field str + value str.
+            vec![Ty::Str, Ty::Str, Ty::Str],
+            Ty::Bool,
+            PyCompatTier::Semantic,
+        )),
+        (REDIS_CLIENT_ADT, "hget") => Some(EcoSig::from_values(
+            "__cobrust_redis_client_hget",
+            // Key str + field str.
+            vec![Ty::Str, Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -2384,6 +2426,36 @@ mod tests {
         assert_eq!(exists.runtime_symbol, "__cobrust_redis_client_exists");
         assert_eq!(value_tys(&exists.params), vec![Ty::Str]);
         assert_eq!(exists.ret, Ty::Bool);
+
+        // Phase-B verbs — expire / incr / incr_by / hset / hget.
+        let expire = lookup_handle_method(&recv, "expire").expect("Client.expire in manifest");
+        assert_eq!(expire.runtime_symbol, "__cobrust_redis_client_expire");
+        // key str + the TTL seconds (i64).
+        assert_eq!(value_tys(&expire.params), vec![Ty::Str, Ty::Int]);
+        assert_eq!(expire.ret, Ty::Bool);
+
+        let incr = lookup_handle_method(&recv, "incr").expect("Client.incr in manifest");
+        assert_eq!(incr.runtime_symbol, "__cobrust_redis_client_incr");
+        assert_eq!(value_tys(&incr.params), vec![Ty::Str]);
+        assert_eq!(incr.ret, Ty::Int);
+
+        let incr_by = lookup_handle_method(&recv, "incr_by").expect("Client.incr_by in manifest");
+        assert_eq!(incr_by.runtime_symbol, "__cobrust_redis_client_incr_by");
+        // key str + the integer delta.
+        assert_eq!(value_tys(&incr_by.params), vec![Ty::Str, Ty::Int]);
+        assert_eq!(incr_by.ret, Ty::Int);
+
+        let hset = lookup_handle_method(&recv, "hset").expect("Client.hset in manifest");
+        assert_eq!(hset.runtime_symbol, "__cobrust_redis_client_hset");
+        // key str + field str + value str (the 3-arg shape).
+        assert_eq!(value_tys(&hset.params), vec![Ty::Str, Ty::Str, Ty::Str]);
+        assert_eq!(hset.ret, Ty::Bool);
+
+        let hget = lookup_handle_method(&recv, "hget").expect("Client.hget in manifest");
+        assert_eq!(hget.runtime_symbol, "__cobrust_redis_client_hget");
+        // key str + field str.
+        assert_eq!(value_tys(&hget.params), vec![Ty::Str, Ty::Str]);
+        assert_eq!(hget.ret, Ty::Str);
     }
 
     #[test]

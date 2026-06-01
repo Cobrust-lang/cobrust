@@ -46,6 +46,44 @@ cobrust build prog.cb -o prog
 这些方法名正是你在 Python `redis` 包里早已熟悉的那些(`set` / `get` /
 `delete` / `exists`),所以无论是 LLM 还是你,都能第一次就写对。
 
+## 你能用到什么(Phase B —— 过期、计数器、哈希)
+
+基础键值动作之后你最常用到的几类缓存模式:
+
+```python
+import redis
+
+fn main() -> i64:
+    let client = redis.connect("redis://127.0.0.1/")
+
+    # 原子计数器 —— 自增并一步读回新值。
+    client.set("hits", "10")
+    let n: i64 = client.incr("hits")          # -> 11
+    let m: i64 = client.incr_by("hits", 5)    # -> 16
+
+    # 过期(TTL)—— 让某个键在 N 秒后自动消失。
+    let ttl_set: bool = client.expire("hits", 60)  # -> true(已设置 TTL)
+
+    # 哈希 —— 在一个键下存放具名字段。
+    let created: bool = client.hset("user:1", "name", "ada")  # -> true(新字段)
+    let name: str = client.hget("user:1", "name")             # -> "ada"
+    print(name)
+    return 0
+```
+
+- **`client.expire(key, seconds)`** —— 设置一个键的存活时间(TTL)。当键
+  存在且超时被设置时返回 `true`,否则返回 `false`。
+- **`client.incr(key)`** —— 原子地给计数器加 `1` 并返回新值。尚不存在的
+  键从 `0` 起算,因此第一次 `incr` 返回 `1`。
+- **`client.incr_by(key, n)`** —— 原子地加 `n` 并返回新值。
+- **`client.hset(key, field, value)`** —— 在哈希里设置一个字段。字段是新
+  增的返回 `true`,覆盖已有字段则返回 `false`。
+- **`client.hget(key, field)`** —— 把哈希字段作为 `str` 读回来。字段(或
+  哈希本身)不存在时读作空字符串 `""`,与 `get` 一致。
+
+这些同样正是 redis-py 的方法名(`incr` / `expire` / `hset` / `hget`);
+`incr_by` 是 `r.incr(key, n)` 的更可读拼写。
+
 ## 为什么这样设计?
 
 - **类型化方法,而非命令字符串。** 你调用的是 `client.set(k, v)`,而不是
@@ -68,10 +106,11 @@ cobrust build prog.cb -o prog
 ## 关于"干净失败"(fail-clean)行为的说明
 
 如果服务器不可达或 URL 非法,`connect` 仍然会交给你一个可用的
-`Client` —— 一个"未连接"的。对它的每个操作都返回安全的默认值(`get` →
-`""`,`delete` → `0`,`exists` → `false`),`set` 则安静地变成空操作。
-你的程序在边界处永远不会崩溃。正是这一点让测试套件无需真的跑一个 Redis
-服务器,就能证明整条流水线是通的。
+`Client` —— 一个"未连接"的。对它的每个操作都返回安全的默认值(`get` /
+`hget` → `""`,`delete` / `incr` / `incr_by` → `0`,`exists` / `expire` /
+`hset` → `false`),`set` 则安静地变成空操作。你的程序在边界处永远不会
+崩溃。正是这一点让测试套件无需真的跑一个 Redis 服务器,就能证明整条流水
+线是通的。
 
 ## 当前的限制
 
@@ -82,7 +121,8 @@ cobrust build prog.cb -o prog
   `Option` 的 `get` 是已记录的后续项)。
 - 让 `Client` 保持在函数局部;单线程 —— 不要把同一个连接跨 spawn 出去的
   任务共享(连接池是后续项)。
-- `expire` / `incr` / 哈希操作(`hset` / `hget`)是下一批(Phase B)。
+- 一步完成"设置并带过期"的 `SETEX`(`set_expiry`)是个小的后续项;现在
+  请用 `set` 再 `expire`。
 
 这些都是已记录在案的后续项,而非死路。
 
