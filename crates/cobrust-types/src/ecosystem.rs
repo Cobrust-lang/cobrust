@@ -1076,6 +1076,47 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Bool,
             PyCompatTier::Semantic,
         )),
+        // #145 SCALAR-ARG ufunc gap-closure BATCH 6 (2026-06-01) — `clip` /
+        // `power`, the FIRST Buffer-RETURNING ops taking EXTRA f64 SCALAR
+        // args beside the handle. `clip(a, lo, hi)` is `(Buffer, Float,
+        // Float) -> Buffer`; `power(a, p)` is `(Buffer, Float) -> Buffer`
+        // (the SAME scalar-besides-handle shape as `coil.percentile(a, q)` —
+        // `(Buffer, Float)` — except these RETURN a fresh Buffer instead of
+        // an f64). The Buffer arg auto-borrows (Move→Copy) in `lower_eco_arg`
+        // and the trailing f64 scalar(s) lower as plain operands (the MIR
+        // retarget casts the `.cb` int / float literal to f64, exactly as
+        // `percentile`'s `q` does), so there is NO new MIR arm — the generic
+        // `try_lower_ecosystem_call` Case-1 loop iterates `sig.params`
+        // regardless of arity / mix. The fresh return is drop-scheduled by
+        // `emit_ecosystem_call`.
+        //
+        // - `coil.clip(a, lo, hi) -> Buffer`  — clamp to [lo, hi],
+        //   DTYPE-PRESERVING (int->int, f->f; numpy `np.clip(int_array, lo,
+        //   hi).dtype == int64`). Preserves NaN; the UPPER bound wins when
+        //   lo > hi (numpy `minimum(maximum(a, lo), hi)`).
+        // - `coil.power(a, p) -> Buffer`      — a ** p, FLOAT-PROMOTING with
+        //   an f64 exponent (int->f64, f32->f32, f64->f64; numpy
+        //   `np.power(int_array, 2.0).dtype == float64`). `power(x, 0.5) =
+        //   sqrt(x)`, `power(x, 0) = 1`, `power(neg, 0.5) = NaN` (real
+        //   branch). The f64 exponent sidesteps numpy's int**int<0 raise.
+        //
+        // Tier `Numerical` — floating arithmetic ufuncs (`power`) whose
+        // VALUES agree with numpy at rtol 1e-12 (f64) / 1e-6 (f32); `clip`
+        // is exact (a clamp, no arithmetic). Domain-error inputs
+        // (`power(neg, 0.5) -> NaN`) are IEEE-754 VALUES, not traps — the
+        // shims are TOTAL (no `coil_panic` domain path), see `elementwise.rs`.
+        ("coil", "clip") => Some(EcoSig::from_values(
+            "__cobrust_coil_clip",
+            vec![coil_buffer_ty(), Ty::Float, Ty::Float],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "power") => Some(EcoSig::from_values(
+            "__cobrust_coil_power",
+            vec![coil_buffer_ty(), Ty::Float],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
         // ADR-0079 Phase 1 — minimal `.cb`-constructible 2-D / explicit-
         // data buffers, the genuine prerequisite for exercising the
         // `coil.linalg.*` sub-namespace on NON-identity matrices (the
@@ -2924,6 +2965,32 @@ mod tests {
         // Buffer handle FIRST, then the f64 quantile arg.
         assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Float]);
         assert_eq!(sig.ret, Ty::Float);
+    }
+
+    // #145 SCALAR-ARG ufunc BATCH 6 — clip (Buffer, f64, f64) -> Buffer +
+    // power (Buffer, f64) -> Buffer (the FIRST Buffer-RETURNING scalar-arg
+    // ops; clip is the FIRST coil fn with TWO trailing f64 scalars).
+
+    #[test]
+    fn coil_clip_takes_buffer_and_two_floats_returns_buffer() {
+        let sig = lookup_module_fn("coil", "clip").expect("coil.clip in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_clip");
+        // Buffer handle FIRST, then the lo + hi f64 bounds.
+        assert_eq!(
+            value_tys(&sig.params),
+            vec![coil_buffer_ty(), Ty::Float, Ty::Float]
+        );
+        assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    #[test]
+    fn coil_power_takes_buffer_and_float_returns_buffer() {
+        let sig = lookup_module_fn("coil", "power").expect("coil.power in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_power");
+        // Buffer handle FIRST, then the f64 exponent (same shape as
+        // percentile's params, but Buffer-returning).
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Float]);
+        assert_eq!(sig.ret, coil_buffer_ty());
     }
 
     // ADR-0076 Phase 1 first proof — `dora` (dora-rs robotics dataflow,

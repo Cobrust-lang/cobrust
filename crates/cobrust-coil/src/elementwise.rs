@@ -469,6 +469,164 @@ pub fn sign(a: &Array) -> Array {
     unary_value(a, sign_i32, sign_i64, sign_f32, sign_f64)
 }
 
+// =========================================================================
+// #145 numpy gap-closure BATCH 6 — the SCALAR-ARG ufuncs `clip` / `power`.
+// Unlike every prior 1-arg `Array -> Array` op in this module, these take
+// EXTRA `f64` SCALAR args beside the Buffer (`clip(a, lo, hi)`,
+// `power(a, p)`) — the SAME Buffer + f64-scalar shape `coil.percentile(a, q)`
+// already wires through the ecosystem path. They split on the dtype contract:
+//
+//   - `clip` is DTYPE-PRESERVING (numpy 2.x: `np.clip(int_array, lo, hi)
+//     .dtype == int64` when the bounds are read as the array's dtype). For
+//     an int / bool `Array` the bounds are ROUNDED to the integer dtype
+//     (`np.clip([1,5,9], 2, 7) = [2,5,7]` int64); for a float `Array` the
+//     bounds clamp in that float type. `clip` PRESERVES NaN
+//     (`np.clip(nan, 0, 1) = nan`). When `lo > hi` the UPPER bound wins
+//     (numpy is `minimum(maximum(a, lo), hi)` — `np.clip([5], 7, 2) = [2]`).
+//   - `power` is FLOAT-PROMOTING with an f64 exponent (numpy:
+//     `np.power(int_array, 2.0).dtype == float64`; `np.power(f32, 2.0).dtype
+//     == float32`; `np.power(f64, 2.0).dtype == float64`). An f64 exponent
+//     is used DELIBERATELY — it sidesteps numpy's integers-to-negative-
+//     powers `ValueError` (an int**int<0 raise), since a float exponent
+//     always promotes the output to float. `power(x, 0.5) = sqrt(x)`,
+//     `power(x, 0) = 1` (even `0**0 = 1`), `power(neg, 0.5) = NaN` (the real
+//     branch). Total — a domain-error element yields an IEEE-754 special
+//     VALUE (NaN / inf), NEVER a trap, so the cabi shim has NO `coil_panic`
+//     path (a null handle is the only abort).
+//
+// ## NaN / clamp-order nuance pinned in tests
+//
+// numpy's `clip` is `minimum(maximum(a, lo), hi)`, so it (1) propagates a
+// NaN element (NaN survives the min/max because numpy's `maximum`/`minimum`
+// propagate NaN) and (2) lets the UPPER bound win when `lo > hi`. Rust's
+// `f64::clamp` PANICS when `lo > hi` and `f64::max`/`min` DROP a NaN operand,
+// so `clip_one` does NOT use `clamp`: it guards NaN explicitly and applies
+// `x.max(lo).min(hi)` (the numpy `minimum(maximum(...))` order — hi wins).
+
+/// numpy-exact `clip` for one IEEE float: clamp `x` to `[lo, hi]`,
+/// **preserving NaN** and letting the **upper bound win** when `lo > hi`.
+///
+/// numpy's `np.clip` is `minimum(maximum(a, lo), hi)`, NOT Rust's
+/// `f64::clamp` (which would `debug_assert!(lo <= hi)` PANIC on `lo > hi`
+/// and is built on `max`/`min` that DROP NaN). The explicit `is_nan` guard
+/// preserves a NaN element (`np.clip(nan, 0, 1) = nan`); the `max(lo).min(hi)`
+/// order reproduces numpy's hi-wins behavior for `lo > hi`
+/// (`np.clip([5], 7, 2) = [2]`).
+fn clip_f64(x: f64, lo: f64, hi: f64) -> f64 {
+    if x.is_nan() {
+        f64::NAN
+    } else {
+        x.max(lo).min(hi)
+    }
+}
+
+/// `f32` companion of [`clip_f64`] — identical numpy-exact semantics. The
+/// `f64` bounds are narrowed to `f32` (the array's dtype) before clamping,
+/// matching numpy reading the bounds AS the array's dtype.
+fn clip_f32(x: f32, lo: f32, hi: f32) -> f32 {
+    if x.is_nan() {
+        f32::NAN
+    } else {
+        x.max(lo).min(hi)
+    }
+}
+
+/// `coil.clip(a, lo, hi)` — clamp each element to `[lo, hi]`,
+/// **dtype-preserving** (numpy 2.x `np.clip(int_array, lo, hi).dtype ==
+/// int64`). For an int / bool `Array` the `f64` bounds are ROUNDED to the
+/// integer dtype (round-half-to-even via [`f64::round_ties_even`]) and the
+/// clamp stays integer; for a float `Array` the bounds clamp in that float
+/// type. **Preserves NaN** (`np.clip(nan, 0, 1) = nan`); the **upper bound
+/// wins** when `lo > hi` (numpy is `minimum(maximum(a, lo), hi)` —
+/// `np.clip([5], 7, 2) = [2]`). A `Bool` `Array` is returned UNCHANGED
+/// (`True`/`False` is the 0/1 fixed point; coil's documented Semantic-tier
+/// divergence — numpy clips bool to int). Total — never errors.
+///
+/// ## Integer bounds (the dtype subtlety)
+///
+/// coil's `clip` signature takes `f64` bounds (the `.cb` scalar contract).
+/// For an integer `Array`, numpy reads the bounds AS the array's dtype, so
+/// coil ROUNDS each bound to the integer dtype (`round_ties_even`, then
+/// saturating-cast to `i64` / `i32`) and clamps integrally — `np.clip([1,5,9],
+/// 2, 7) = [2,5,7]` (int64, PRESERVED). (numpy promotes to float ONLY when
+/// the bounds are passed AS a float literal that does not fit the int dtype;
+/// coil pins the dtype-preserving int-bounds reading, the `np.clip(a, 2, 7)`
+/// common case.)
+#[must_use]
+pub fn clip(a: &Array, lo: f64, hi: f64) -> Array {
+    match a {
+        // Integer dtypes: round the f64 bounds to the integer dtype and
+        // clamp integrally (dtype preserved). `round_ties_even` then a
+        // saturating cast to the int width matches numpy reading the bounds
+        // AS the array's dtype.
+        Array::Int64(arr) => {
+            let lo_i = saturating_i64(lo.round_ties_even());
+            let hi_i = saturating_i64(hi.round_ties_even());
+            Array::Int64(arr.mapv(|x| clip_int_i64(x, lo_i, hi_i)))
+        }
+        Array::Int32(arr) => {
+            let lo_i = saturating_i32(lo.round_ties_even());
+            let hi_i = saturating_i32(hi.round_ties_even());
+            Array::Int32(arr.mapv(|x| clip_int_i32(x, lo_i, hi_i)))
+        }
+        Array::Float64(arr) => Array::Float64(arr.mapv(|x| clip_f64(x, lo, hi))),
+        Array::Float32(arr) => {
+            let (lo32, hi32) = (lo as f32, hi as f32);
+            Array::Float32(arr.mapv(|x| clip_f32(x, lo32, hi32)))
+        }
+        // Bool: 0/1 fixed point; return unchanged (coil's documented
+        // Semantic-tier divergence — numpy clips bool to an int dtype).
+        Array::Bool(_) => a.clone(),
+    }
+}
+
+/// Clamp an `i64` to `[lo, hi]` with the **upper bound winning** when
+/// `lo > hi` (numpy `minimum(maximum(x, lo), hi)`). `Ord::clamp` PANICS on
+/// `lo > hi`, so this uses the explicit `max(lo).min(hi)` order instead.
+fn clip_int_i64(x: i64, lo: i64, hi: i64) -> i64 {
+    x.max(lo).min(hi)
+}
+
+/// `i32` companion of [`clip_int_i64`].
+fn clip_int_i32(x: i32, lo: i32, hi: i32) -> i32 {
+    x.max(lo).min(hi)
+}
+
+/// Saturating `f64 -> i64` cast (Rust `as i64` already saturates +∞ to
+/// `i64::MAX`, -∞ to `i64::MIN`, NaN to `0` since Rust 1.45). A bound far
+/// outside the int range therefore clamps to the int extremum (numpy reads
+/// an out-of-range bound as the dtype's saturated value); NaN bounds (numpy
+/// would error) saturate to `0` — a benign, total fallback.
+fn saturating_i64(x: f64) -> i64 {
+    x as i64
+}
+
+/// `i32` companion of [`saturating_i64`].
+fn saturating_i32(x: f64) -> i32 {
+    x as i32
+}
+
+/// `coil.power(a, p)` — raise each element to the `p`-th power,
+/// **float-promoting** with an f64 exponent (numpy: `np.power(int_array,
+/// 2.0).dtype == float64`, `np.power(f32, 2.0).dtype == float32`,
+/// `np.power(f64, 2.0).dtype == float64`). Int / bool inputs PROMOTE to
+/// `Float64`, `Float32` stays `Float32` (the exponent is narrowed to `f32`),
+/// `Float64` stays `Float64`. An f64 exponent is used DELIBERATELY — it
+/// sidesteps numpy's int**int<0 `ValueError` (a float exponent always
+/// promotes the output to float, so a negative exponent is total). Total:
+/// `power(x, 0.5) = sqrt(x)`, `power(x, 0) = 1` (even `0**0 = 1`, matching
+/// `f64::powf`), `power(neg, 0.5) = NaN` (the real branch, an IEEE-754 domain
+/// VALUE — never a trap). Mirrors the dtype rule of the BATCH-3 transcendental
+/// [`unary_float`] family (int->f64 / f32->f32 / f64->f64).
+#[must_use]
+pub fn power(a: &Array, p: f64) -> Array {
+    // `f64::powf(x, 0.0) == 1.0` for ALL x (including `0.0` and NaN), and
+    // `powf(neg, 0.5)` is NaN — bit-identical to numpy's real-branch power.
+    // The f32 path narrows the exponent to f32 (numpy `f32 ** f64 -> f32`).
+    let p32 = p as f32;
+    unary_float(a, move |x: f32| x.powf(p32), move |x: f64| x.powf(p))
+}
+
 #[cfg(test)]
 mod tests {
     // Differential-vs-numpy unit tests. Oracle values captured from
@@ -1047,5 +1205,169 @@ mod tests {
         let a = array_f64(&[-3.0, 0.0, 2.0], &[3]).unwrap();
         let r = sign(&square(&a));
         assert_eq!(f64_vals(&r), vec![1.0, 0.0, 1.0]);
+    }
+
+    // =====================================================================
+    // BATCH 6 — the SCALAR-ARG ufuncs `clip` (dtype-PRESERVING) + `power`
+    // (float-PROMOTING with an f64 exponent). Differential-vs-numpy 2.4.6
+    // (oracle values captured via `/opt/homebrew/bin/python3.11 -c 'import
+    // numpy'`). These assert on `.dtype()` (the preserve / promote contract)
+    // in ADDITION to values. NaN via `.is_nan()`, never `assert_eq!(x, NAN)`.
+    // =====================================================================
+
+    // ---- clip: clamp + dtype-preserving (int + float) ----
+
+    #[test]
+    fn clip_int64_clamps_and_preserves_dtype() {
+        // np.clip(np.array([1,5,9]), 2, 7) = [2,5,7], dtype int64 (PRESERVED).
+        let a = array_i64(&[1, 5, 9], &[3]).unwrap();
+        let r = clip(&a, 2.0, 7.0);
+        assert_eq!(r.dtype(), Dtype::Int64, "clip must PRESERVE int64");
+        assert_eq!(i64_vals(&r), vec![2, 5, 7]);
+    }
+
+    #[test]
+    fn clip_int32_preserves_dtype() {
+        // np.clip(np.int32([-5,0,5,12]), -1, 8) -> [-1,0,5,8], dtype int32.
+        let a = array_i32(&[-5, 0, 5, 12], &[4]).unwrap();
+        let r = clip(&a, -1.0, 8.0);
+        assert_eq!(r.dtype(), Dtype::Int32);
+        assert_eq!(i32_vals(&r), vec![-1, 0, 5, 8]);
+    }
+
+    #[test]
+    fn clip_f64_and_f32_preserve_dtype() {
+        // np.clip([0.5,5.5,9.5], 2.0, 7.0) -> [2,5.5,7] f64; f32 stays f32.
+        let r64 = clip(&array_f64(&[0.5, 5.5, 9.5], &[3]).unwrap(), 2.0, 7.0);
+        assert_eq!(r64.dtype(), Dtype::Float64);
+        assert_eq!(f64_vals(&r64), vec![2.0, 5.5, 7.0]);
+        let r32 = clip(&array_f32(&[0.5, 5.5, 9.5], &[3]).unwrap(), 2.0, 7.0);
+        assert_eq!(r32.dtype(), Dtype::Float32);
+        assert_eq!(f32_vals(&r32), vec![2.0, 5.5, 7.0]);
+    }
+
+    #[test]
+    fn clip_lo_greater_than_hi_clamps_to_hi() {
+        // numpy is minimum(maximum(a,lo),hi): when lo>hi the UPPER bound
+        // wins. np.clip([1,5,9], 7, 2) = [2,2,2]; np.clip([5], 7, 2) = [2].
+        let r = clip(&array_i64(&[1, 5, 9], &[3]).unwrap(), 7.0, 2.0);
+        assert_eq!(i64_vals(&r), vec![2, 2, 2]);
+        let rf = clip(&array_f64(&[5.0], &[1]).unwrap(), 7.0, 2.0);
+        assert_eq!(f64_vals(&rf), vec![2.0]);
+    }
+
+    #[test]
+    fn clip_preserves_nan() {
+        // np.clip([nan, 5.0, 9.0], 2.0, 7.0) = [nan, 5, 7] — NaN survives
+        // (Rust f64::max/min would DROP it; the is_nan guard preserves it).
+        let r = clip(&array_f64(&[f64::NAN, 5.0, 9.0], &[3]).unwrap(), 2.0, 7.0);
+        let v = f64_vals(&r);
+        assert!(v[0].is_nan(), "clip must PRESERVE a NaN element");
+        assert_eq!(v[1], 5.0);
+        assert_eq!(v[2], 7.0);
+    }
+
+    #[test]
+    fn clip_bool_returns_unchanged() {
+        // coil pins clip(bool) to the Bool array unchanged (0/1 fixed point;
+        // documented Semantic-tier divergence — numpy clips bool to int).
+        let a = array_bool(&[true, false, true], &[3]).unwrap();
+        let r = clip(&a, 0.0, 1.0);
+        assert_eq!(r.dtype(), Dtype::Bool);
+        assert_eq!(bool_vals(&r), vec![true, false, true]);
+    }
+
+    #[test]
+    fn clip_preserves_shape() {
+        let a = array_f64(&[0.5, 5.5, 9.5, -2.0], &[2, 2]).unwrap();
+        assert_eq!(clip(&a, 1.0, 6.0).shape(), vec![2, 2]);
+    }
+
+    // ---- power: float-promoting with f64 exponent ----
+
+    #[test]
+    fn power_half_is_sqrt() {
+        // np.power([4,9,16], 0.5) = [2,3,4] (sqrt); float64 output.
+        let r = power(&array_f64(&[4.0, 9.0, 16.0], &[3]).unwrap(), 0.5);
+        assert_eq!(r.dtype(), Dtype::Float64);
+        let v = f64_vals(&r);
+        assert!(approx_f64(v[0], 2.0, 1e-12));
+        assert!(approx_f64(v[1], 3.0, 1e-12));
+        assert!(approx_f64(v[2], 4.0, 1e-12));
+    }
+
+    #[test]
+    fn power_zero_exponent_is_one() {
+        // np.power([2,3,0], 0) = [1,1,1] (even 0**0 = 1 in numpy / f64::powf);
+        // np.power(-5.0, 0.0) = 1.
+        let r = power(&array_f64(&[2.0, 3.0, 0.0, -5.0], &[4]).unwrap(), 0.0);
+        assert_eq!(r.dtype(), Dtype::Float64);
+        assert_eq!(f64_vals(&r), vec![1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn power_two_is_square() {
+        // np.power([1,2,3,-4], 2.0) = [1,4,9,16] f64.
+        let r = power(&array_f64(&[1.0, 2.0, 3.0, -4.0], &[4]).unwrap(), 2.0);
+        assert_eq!(r.dtype(), Dtype::Float64);
+        assert_eq!(f64_vals(&r), vec![1.0, 4.0, 9.0, 16.0]);
+    }
+
+    #[test]
+    fn power_negative_base_half_is_nan() {
+        // np.power(-4.0, 0.5) = nan (the real branch; RuntimeWarning, VALUE).
+        let r = power(&array_f64(&[-4.0, 9.0], &[2]).unwrap(), 0.5);
+        let v = f64_vals(&r);
+        assert!(v[0].is_nan(), "power(neg, 0.5) must be NaN (real branch)");
+        assert!(approx_f64(v[1], 3.0, 1e-12));
+    }
+
+    #[test]
+    fn power_int_promotes_to_f64() {
+        // np.power(np.int64([1,2,3]), 2.0).dtype == float64 -> [1,4,9].
+        let r = power(&array_i64(&[1, 2, 3], &[3]).unwrap(), 2.0);
+        assert_eq!(r.dtype(), Dtype::Float64, "int input PROMOTES to f64");
+        assert_eq!(f64_vals(&r), vec![1.0, 4.0, 9.0]);
+        // int32 promotes too.
+        let r32 = power(&array_i32(&[2, 4], &[2]).unwrap(), 2.0);
+        assert_eq!(r32.dtype(), Dtype::Float64);
+        assert_eq!(f64_vals(&r32), vec![4.0, 16.0]);
+    }
+
+    #[test]
+    fn power_f32_stays_f32() {
+        // np.power(np.float32([4,9]), 0.5).dtype == float32 -> [2,3].
+        let r = power(&array_f32(&[4.0, 9.0], &[2]).unwrap(), 0.5);
+        assert_eq!(r.dtype(), Dtype::Float32, "f32 input STAYS f32");
+        let v = f32_vals(&r);
+        assert!(approx_f32(v[0], 2.0, 1e-6));
+        assert!(approx_f32(v[1], 3.0, 1e-6));
+    }
+
+    #[test]
+    fn power_bool_promotes_to_f64() {
+        // power(True, 2)=1, power(False, 2)=0. coil f64 (numpy float16; values
+        // match — bool is 0/1, the unary_float bool->f64 promotion).
+        let r = power(&array_bool(&[true, false], &[2]).unwrap(), 2.0);
+        assert_eq!(r.dtype(), Dtype::Float64);
+        assert_eq!(f64_vals(&r), vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn power_preserves_shape() {
+        let a = array_f64(&[1.0, 4.0, 9.0, 16.0], &[2, 2]).unwrap();
+        assert_eq!(power(&a, 0.5).shape(), vec![2, 2]);
+    }
+
+    // ---- chain (proves a fresh Array feeds the next scalar-arg op) ----
+
+    #[test]
+    fn chain_clip_of_power() {
+        // clip(power([1,2,3,4], 2.0), 2.0, 9.0) = clip([1,4,9,16], 2, 9)
+        // = [2,4,9,9].
+        let a = array_f64(&[1.0, 2.0, 3.0, 4.0], &[4]).unwrap();
+        let r = clip(&power(&a, 2.0), 2.0, 9.0);
+        assert_eq!(r.dtype(), Dtype::Float64);
+        assert_eq!(f64_vals(&r), vec![2.0, 4.0, 9.0, 9.0]);
     }
 }

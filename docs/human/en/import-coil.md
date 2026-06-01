@@ -358,6 +358,67 @@ fn main() -> i64:
 > (`coil.mean` / `coil.std` / `coil.var` / `coil.ptp` etc. already give you
 > the common float reductions today.)
 
+## Scalar-argument ufuncs — `clip(a, lo, hi)` and `power(a, p)`
+
+These are the first elementwise ops that take **extra scalar arguments**
+beside the buffer — a clamp range for `clip`, an exponent for `power`. Both
+return a **fresh `coil.Buffer`**.
+
+```python
+import coil
+
+fn main() -> i64:
+    # clip clamps every element into [lo, hi].
+    let a: coil.Buffer = coil.array1d2(1.0, 9.0)
+    let r: coil.Buffer = coil.clip(a, 2.0, 7.0)   # [2, 7]  (1 up to 2, 9 down to 7)
+    let _ = coil.print_buffer(r)
+
+    # power raises every element to the p-th power.
+    let b: coil.Buffer = coil.array1d2(2.0, 3.0)
+    let s: coil.Buffer = coil.power(b, 2.0)        # [4, 9]  (square)
+    let _ = coil.print_buffer(s)
+
+    # power(_, 0.5) is sqrt; chain a power into a clip.
+    let c: coil.Buffer = coil.array1d2(1.0, 4.0)
+    let d: coil.Buffer = coil.clip(coil.power(c, 2.0), 2.0, 9.0)  # clip([1,16],2,9)=[2,9]
+    let _ = coil.print_buffer(d)
+    return 0
+```
+
+**The two ops**:
+
+- **`coil.clip(a, lo, hi) -> Buffer`** — clamp each element to `[lo, hi]`.
+- **`coil.power(a, p) -> Buffer`** — raise each element to the `p`-th power.
+
+> **`clip`: when `lo > hi`, the *upper* bound wins.** numpy computes `clip`
+> as `minimum(maximum(a, lo), hi)`, so if you pass a `lo` bigger than `hi`,
+> everything ends up at `hi`: `clip([1, 9], 7, 2) = [2, 2]`. (This is the one
+> surprising case — most languages' `clamp` would *panic* on `lo > hi`; coil
+> matches numpy instead.) A `NaN` element passes through unchanged
+> (`clip(nan, 0, 1) = nan`).
+
+> **`clip` preserves the dtype; `power` promotes to float.** `clip` keeps the
+> input dtype (an `int` buffer stays `int` — the bounds are read as the
+> array's dtype, `clip([1,5,9], 2, 7) = [2,5,7]` int64; a `float32` stays
+> `float32`). `power`, in contrast, **always returns a float** — an `int`
+> buffer gives a `float64` result (`power([1,2,3], 2.0) = [1., 4., 9.]`), and
+> a `float32` stays `float32`. (Every `.cb` constructor here makes a
+> `float64` buffer, so the integer-valued results print without a `.0`.)
+
+> **`power` takes a *float* exponent — on purpose.** Using an `f64` exponent
+> (rather than an integer) sidesteps numpy's one footgun here: `int ** int`
+> with a *negative* integer exponent **raises** in numpy (you can't write
+> `1/n` as an integer). A float exponent always promotes to float, so a
+> negative exponent just works. The familiar cases hold: `power(x, 0.5)` is
+> `sqrt(x)`, `power(x, 0)` is `1` for every `x` (even `0 ** 0 = 1`, matching
+> numpy), and `power(x, 2.0)` is `x * x`. A negative base to a fractional
+> power has no real value, so `power(-4.0, 0.5) = NaN` (the real branch — a
+> value, never an error).
+
+> Like the other elementwise ops, these **never trap** (a one-argument-plus-
+> scalars op has no shape mismatch): a `NaN` / `inf` is a *value* that flows
+> through, not an error.
+
 ## Linear algebra — the `coil.linalg.*` sub-namespace (ADR-0079 Phase 1)
 
 `coil.linalg.*` is the FIRST *dotted sub-namespace* under an ecosystem

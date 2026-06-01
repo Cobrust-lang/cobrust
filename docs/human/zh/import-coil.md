@@ -326,6 +326,60 @@ fn main() -> i64:
 > 是 `int`,`float` buffer 的是 `float`),这是一个独立的设计步骤。(`coil.mean` /
 > `coil.std` / `coil.var` / `coil.ptp` 等已经提供了今天常用的浮点归约。)
 
+## 带标量参数的 ufunc —— `clip(a, lo, hi)` 与 `power(a, p)`
+
+这是**首批**在 buffer 之外还接受**额外标量参数**的逐元素操作 —— `clip` 接受一个
+钳制区间,`power` 接受一个指数。两者都返回一个**全新的 `coil.Buffer`**。
+
+```python
+import coil
+
+fn main() -> i64:
+    # clip 把每个元素钳制进 [lo, hi]。
+    let a: coil.Buffer = coil.array1d2(1.0, 9.0)
+    let r: coil.Buffer = coil.clip(a, 2.0, 7.0)   # [2, 7](1 上调到 2,9 下调到 7)
+    let _ = coil.print_buffer(r)
+
+    # power 把每个元素提升到 p 次幂。
+    let b: coil.Buffer = coil.array1d2(2.0, 3.0)
+    let s: coil.Buffer = coil.power(b, 2.0)        # [4, 9](平方)
+    let _ = coil.print_buffer(s)
+
+    # power(_, 0.5) 即 sqrt;把一个 power 链入 clip。
+    let c: coil.Buffer = coil.array1d2(1.0, 4.0)
+    let d: coil.Buffer = coil.clip(coil.power(c, 2.0), 2.0, 9.0)  # clip([1,16],2,9)=[2,9]
+    let _ = coil.print_buffer(d)
+    return 0
+```
+
+**这两个操作**:
+
+- **`coil.clip(a, lo, hi) -> Buffer`** —— 把每个元素钳制到 `[lo, hi]`。
+- **`coil.power(a, p) -> Buffer`** —— 把每个元素提升到 `p` 次幂。
+
+> **`clip`:当 `lo > hi` 时,*上*界胜出。** numpy 将 `clip` 计算为
+> `minimum(maximum(a, lo), hi)`,所以如果你传入的 `lo` 大于 `hi`,所有元素都会
+> 落到 `hi`:`clip([1, 9], 7, 2) = [2, 2]`。(这是唯一让人意外的情形 —— 多数语言
+> 的 `clamp` 在 `lo > hi` 时会 *panic*;coil 选择与 numpy 一致。)`NaN` 元素原样
+> 通过(`clip(nan, 0, 1) = nan`)。
+
+> **`clip` 保持 dtype;`power` 提升为浮点。** `clip` 保持输入 dtype(`int` buffer
+> 保持 `int` —— 边界被按数组的 dtype 读取,`clip([1,5,9], 2, 7) = [2,5,7]` int64;
+> `float32` 保持 `float32`)。`power` 则相反,**永远返回浮点** —— `int` buffer
+> 给出 `float64` 结果(`power([1,2,3], 2.0) = [1., 4., 9.]`),`float32` 保持
+> `float32`。(这里每个 `.cb` 构造器都生成 `float64` buffer,所以整数值结果打印时
+> 不带 `.0`。)
+
+> **`power` 接受*浮点*指数 —— 这是有意为之。** 使用 `f64` 指数(而非整数)避开了
+> numpy 在此处的一个坑:带*负*整数指数的 `int ** int` 在 numpy 中会**报错**(整数
+> 没法表示 `1/n`)。浮点指数总会提升为浮点,所以负指数自然可用。常见情形仍然成立:
+> `power(x, 0.5)` 即 `sqrt(x)`,`power(x, 0)` 对每个 `x` 都是 `1`(连 `0 ** 0 = 1`
+> 也与 numpy 一致),`power(x, 2.0)` 即 `x * x`。负底数的分数次幂没有实数值,所以
+> `power(-4.0, 0.5) = NaN`(实数分支 —— 是一个值,绝不是错误)。
+
+> 和其他逐元素操作一样,这两个操作**永不陷入陷阱**(一个「buffer + 标量」的操作
+> 没有形状不匹配的概念):`NaN` / `inf` 是一个流过去的*值*,而不是错误。
+
 ## 线性代数 —— `coil.linalg.*` 子命名空间(ADR-0079 Phase 1)
 
 `coil.linalg.*` 是生态模块下的**第一个点分子命名空间** —— 它精确镜像

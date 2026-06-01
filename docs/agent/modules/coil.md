@@ -2029,6 +2029,108 @@ pass.
       `Cargo.lock` unchanged — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## #145 numpy gap-closure BATCH 6 — the SCALAR-ARG ufuncs (DONE)
+
+The FIRST Buffer-RETURNING coil ops to take EXTRA `f64` SCALAR args beside
+the handle. They ride the SAME borrow-Buffer-arg → fresh-Buffer-return
+value-handle ABI as the BATCH-3/4 unary ufuncs, plus trailing f64 scalar(s)
+that cross by value (the exact precedent: `coil.percentile(a, q)`, a Buffer +
+f64 — except these RETURN a fresh Buffer instead of an f64).
+
+- `coil.clip(a, lo, hi)` → `coil.Buffer` — clamp each element to `[lo, hi]`,
+  **DTYPE-PRESERVING** (`np.clip(int_array, lo, hi).dtype == int64`).
+- `coil.power(a, p)` → `coil.Buffer` — `a ** p`, **FLOAT-PROMOTING** with an
+  f64 exponent (`np.power(int_array, 2.0).dtype == float64`).
+
+### Semantics (numpy 2.4.6 oracle)
+
+- **clip** — `np.clip([1,5,9], 2, 7) = [2,5,7]` (int64, dtype PRESERVED). For
+  an int / bool `Array` the f64 bounds ROUND to the integer dtype
+  (`round_ties_even` + saturating cast) and the clamp stays integral; for a
+  float `Array` the bounds clamp in that float type (`Float32` narrows the
+  bounds to f32). **PRESERVES NaN** (`np.clip(nan, 0, 1) = nan` — an explicit
+  `is_nan` guard, since Rust `f64::max`/`min` DROP a NaN operand). The
+  **UPPER bound wins when `lo > hi`** (`np.clip([5], 7, 2) = [2]`) — numpy is
+  `minimum(maximum(a, lo), hi)`, NOT Rust `f64::clamp` (which PANICS on
+  `lo > hi`); the kernel uses `x.max(lo).min(hi)`. A `Bool` `Array` returns
+  UNCHANGED (0/1 fixed point; coil's documented Semantic-tier divergence —
+  numpy clips bool to an int dtype).
+- **power** — FLOAT-PROMOTING with an f64 exponent: int / bool → `Float64`,
+  `Float32` stays `Float32` (the exponent narrows to f32 — `np.power(f32,
+  2.0).dtype == float32`), `Float64` stays `Float64`. The f64 exponent is
+  used DELIBERATELY: a float exponent always promotes the output to float, so
+  it SIDESTEPS numpy's int**int<0 `ValueError` (an `np.power(int, int<0)`
+  raise) — a negative exponent is total here. `power(x, 0.5) = sqrt(x)`,
+  `power(x, 0) = 1` (even `0**0 = 1`, the `f64::powf` identity),
+  `power(neg, 0.5) = NaN` (the real branch — an IEEE-754 domain VALUE, never
+  a trap). Mirrors the BATCH-3 transcendental `unary_float` dtype rule.
+
+Both are TOTAL — there is NO conformability / domain concept for these ops
+(NaN / inf are VALUES), so the cabi shims have NO `coil_panic` domain path; a
+null handle is the only abort.
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- 2 arms, tier `Numerical`. `clip` is `(Buffer, Float, Float) -> Buffer` (the
+  FIRST coil fn with TWO trailing f64 scalars); `power` is `(Buffer, Float) ->
+  Buffer` (the SAME `coil.percentile` arg shape, Buffer-returning).
+- The generic module-fn path (`try_synth_ecosystem_call` Case 1 /
+  `try_lower_ecosystem_call` Case 1) already lowers ANY `lookup_module_fn`
+  signature: the Buffer arg auto-borrows (Move→Copy) in `lower_eco_arg` and
+  the trailing f64 scalar(s) lower as plain operands (the MIR retarget casts
+  the `.cb` int / float literal to f64, exactly as `percentile`'s `q`). NO
+  new MIR arm — the Case-1 loop iterates `sig.params` regardless of arity.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+- `power` reuses the EXISTING `coil_scalar_binop_ty` `(ptr, f64) -> ptr` (the
+  `a ⊕ k` scalar-binop shape). `clip` needs a NEW `coil_clip_ty`
+  `(ptr, f64, f64) -> ptr` — the FIRST coil extern with two trailing f64
+  scalars.
+- Both symbols ride the existing `__cobrust_coil_` build/intrinsics prefix
+  recognizer (`cobrust-cli/src/build/intrinsics.rs` `starts_with`) — no
+  allowlist edit, link from `libcoil.a`.
+
+### Runtime (`cobrust-coil/src/elementwise.rs` + `cabi.rs`)
+
+- `elementwise.rs`: `clip(arr, lo, hi)` (dtype-split: int dtypes round the
+  bounds + clamp integrally via `clip_int_*`; float dtypes clamp via
+  `clip_f64`/`clip_f32` with the NaN guard + `max(lo).min(hi)` hi-wins order;
+  bool unchanged), `power(arr, p)` (`unary_float` with `x.powf(p)` —
+  int→f64 / f32→f32 / f64→f64). ~16 differential unit tests vs numpy 2.4.6
+  (clip clamp + dtype-preserve int32/int64/f32/f64, lo>hi clamps-to-hi,
+  NaN-preserve, bool-unchanged; power `**0.5`=sqrt, `**0`=1, `**2`=square,
+  neg`**0.5`=NaN, int→f64 + f32→f32 + bool→f64 promotion, chain).
+- `cabi.rs`: `__cobrust_coil_clip(a, lo, hi)` `(ptr, f64, f64) -> ptr` +
+  `__cobrust_coil_power(a, p)` `(ptr, f64) -> ptr` — borrow handle, compute,
+  fresh `Box::into_raw`. TOTAL (no domain trap); `coil_panic` only on null.
+  3 cabi shim tests (clip clamp + drop-once, clip lo>hi, power square +
+  drop-once, power 0.5=sqrt) via 1-D `array1d2` buffers (so `getitem` reads
+  flat elements).
+
+### Done means (#145 BATCH 6 — DONE)
+
+- [x] `elementwise.rs`: `clip` (dtype-preserving) + `power` (float-promoting,
+      f64 exponent); ~16 unit tests vs numpy 2.4.6.
+- [x] cabi: 2 shims (`clip` `(ptr,f64,f64)->ptr`, `power` `(ptr,f64)->ptr`);
+      TOTAL — no domain trap; `coil_panic` only on null. 3 shim tests.
+- [x] Manifest: 2 ecosystem arms (`clip` `(Buffer,Float,Float)->Buffer`,
+      `power` `(Buffer,Float)->Buffer`), tier `Numerical`; 2 sig tests.
+- [x] Typecheck / MIR: NO new code (VERIFIED via E2E — `clip`/`power` ride the
+      generic ecosystem-call path that `coil.percentile`'s `(Buffer, Float)`
+      already proves; the f64 scalars lower as plain operands).
+- [x] Codegen: 1 row reusing `coil_scalar_binop_ty` (power) + 1 NEW
+      `coil_clip_ty` `(ptr,f64,f64)->ptr` row (clip).
+- [x] `.cb` E2E `coil_scalararg_e2e.rs` (8 tests): clip clamp `[2,7]`, clip
+      lo>hi `[2,2]`, power square `[4,9]`, power 0.5=sqrt `[2,3]`, power 0=1
+      `[1,1]`, clip(power) chain `[2,9]`, + 2 negatives (clip / power reject a
+      `str` bound / exponent).
+- [x] No regression: full `cobrust-coil` suite green; `coil_scalararg_e2e` +
+      `coil_reduce_e2e` + `coil_round_e2e` + `coil_ufunc_e2e` +
+      `coil_hello_e2e` all green; touched crates build + clippy `-D warnings`
+      + fmt clean; no new dep (`Cargo.lock` unchanged — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

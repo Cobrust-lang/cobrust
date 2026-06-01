@@ -3365,6 +3365,29 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_param_counts.insert(sym, params);
         }
 
+        // -- #145 SCALAR-ARG ufunc gap-closure BATCH 6 (2026-06-01): the
+        // Buffer-RETURNING ops taking EXTRA f64 SCALAR args beside the
+        // handle. `power(a, p)` is `(ptr, f64) -> ptr` ≡ the `coil_scalar_
+        // binop_ty` declared for `a ⊕ k` above (the SAME shape as the
+        // scalar-RETURNING `__cobrust_coil_percentile(a, q)` — a Buffer +
+        // f64 — except Buffer-returning). `clip(a, lo, hi)` needs a NEW
+        // `(ptr, f64, f64) -> ptr` shape (`coil_clip_ty`) — the FIRST coil
+        // extern with TWO trailing f64 scalars. The MIR generic ecosystem-
+        // call lowering retargets `coil.power(a, p)` / `coil.clip(a, lo, hi)`
+        // onto these `Terminator::Call`s (the f64 scalars lower as plain
+        // operands via `lower_eco_arg`, like `percentile`'s `q`); codegen
+        // only declares the externs (no batch-specific arm; same flat
+        // `__cobrust_coil_*` recognizer prefix).
+        let coil_clip_ty = ptr_ty.fn_type(&[ptr_ty.into(), f64_ty.into(), f64_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_coil_power", coil_scalar_binop_ty, 2usize),
+            ("__cobrust_coil_clip", coil_clip_ty, 3),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
+
         // -- #145 REDUCTIONS gap-closure BATCH 5 (2026-06-01): the
         // SCALAR-returning reductions, the NEW extern shapes of this batch.
         // `argmin`/`argmax` return `i64` (the flat C-order index — mirrors

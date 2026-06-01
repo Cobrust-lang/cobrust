@@ -83,11 +83,11 @@ use crate::broadcast_extra::broadcast_to_1d;
 use crate::constructors::{array_f64, eye as coil_eye, ones as coil_ones, zeros as coil_zeros};
 use crate::dtype::Dtype;
 use crate::elementwise::{
-    abs as coil_abs, cbrt as coil_cbrt, ceil as coil_ceil, cos as coil_cos, cosh as coil_cosh,
-    exp as coil_exp, exp2 as coil_exp2, floor as coil_floor, log as coil_log, log2 as coil_log2,
-    log10 as coil_log10, round as coil_round, sign as coil_sign, sin as coil_sin,
-    sinh as coil_sinh, sqrt as coil_sqrt, square as coil_square, tan as coil_tan,
-    tanh as coil_tanh, trunc as coil_trunc,
+    abs as coil_abs, cbrt as coil_cbrt, ceil as coil_ceil, clip as coil_clip, cos as coil_cos,
+    cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2, floor as coil_floor, log as coil_log,
+    log2 as coil_log2, log10 as coil_log10, power as coil_power, round as coil_round,
+    sign as coil_sign, sin as coil_sin, sinh as coil_sinh, sqrt as coil_sqrt,
+    square as coil_square, tan as coil_tan, tanh as coil_tanh, trunc as coil_trunc,
 };
 use crate::grid::{mgrid_1d, ogrid_1d};
 use crate::linalg::{det as linalg_det, inv as linalg_inv, solve as linalg_solve};
@@ -1231,6 +1231,70 @@ pub unsafe extern "C" fn __cobrust_coil_cumsum(a: *mut u8) -> *mut u8 {
 pub unsafe extern "C" fn __cobrust_coil_cumprod(a: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_unary(a, "cumprod", coil_cumprod) }
+}
+
+// =====================================================================
+// #145 SCALAR-ARG ufunc gap-closure BATCH 6 (2026-06-01) — `clip` /
+// `power`, the FIRST Buffer-RETURNING ops to take EXTRA f64 SCALAR args
+// beside the handle. `clip(a, lo, hi)` is `(ptr, f64, f64) -> ptr`;
+// `power(a, p)` is `(ptr, f64) -> ptr` (the SAME shape as the scalar-
+// RETURNING `__cobrust_coil_percentile(a, q)` — a Buffer + f64 — except
+// these RETURN a fresh Buffer). They BORROW the handle (the `.cb` scope
+// still owns + drops it) and return a freshly-Boxed result handle the
+// scope drops via `__cobrust_coil_buffer_drop` — the EXACT ownership shape
+// of the BATCH-3/4 unary ufunc shims, plus the trailing f64 scalar(s) that
+// cross by value (the MIR retarget lowers the `.cb` int / float literal to
+// f64 via `lower_eco_arg`, exactly as `percentile`'s `q` does). TOTAL —
+// `clip` / `power` cannot fail (NaN / inf are VALUES, not errors; `power`'s
+// f64 exponent sidesteps numpy's int**int<0 ValueError), so there is NO
+// `coil_panic` domain trap; a null handle is the only abort.
+// =====================================================================
+
+/// `coil.clip(a, lo, hi) -> Buffer`. Clamp each element to `[lo, hi]`,
+/// **dtype-preserving** (`np.clip(int_array, lo, hi).dtype == int64`). For
+/// an int / bool `Array` the `f64` bounds are ROUNDED to the integer dtype;
+/// for a float `Array` they clamp in that float type. PRESERVES NaN
+/// (`clip(nan, 0, 1) = nan`); the UPPER bound wins when `lo > hi`
+/// (numpy `minimum(maximum(a, lo), hi)`). BORROWS `a`; returns a fresh owned
+/// handle. TOTAL — no domain trap (NaN / inf are VALUES); a null handle is
+/// the only abort.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped). The returned
+/// pointer is a freshly-Boxed handle the `.cb` caller owns; freed once via
+/// `__cobrust_coil_buffer_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_clip(a: *mut u8, lo: f64, hi: f64) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.clip: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only —
+    // not reboxed / freed; the `.cb` scope still owns + drops it.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    Box::into_raw(Box::new(coil_clip(arr, lo, hi))).cast::<u8>()
+}
+
+/// `coil.power(a, p) -> Buffer`. Raise each element to the `p`-th power,
+/// **float-promoting** with an f64 exponent (int / bool -> `Float64`,
+/// `Float32` stays `Float32`, `Float64` stays `Float64`). `power(x, 0.5) =
+/// sqrt(x)`, `power(x, 0) = 1` (even `0**0 = 1`), `power(neg, 0.5) = NaN`
+/// (the real branch). BORROWS `a`; returns a fresh owned handle. TOTAL — the
+/// f64 exponent sidesteps numpy's int**int<0 ValueError, so there is NO
+/// domain trap (a domain-error element yields an IEEE-754 special VALUE); a
+/// null handle is the only abort.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_clip`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_power(a: *mut u8, p: f64) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.power: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    Box::into_raw(Box::new(coil_power(arr, p))).cast::<u8>()
 }
 
 /// Shared body for the `a ⊕ k` SCALAR-broadcast shims (ADR-0077 Phase-1
@@ -2489,6 +2553,93 @@ mod tests {
             __cobrust_coil_buffer_drop(a);
             __cobrust_coil_buffer_drop(t);
             __cobrust_coil_buffer_drop(f);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    // -- #145 SCALAR-ARG ufunc BATCH 6: clip / power shims --------------
+    // Use the 1-D `array1d2(a, b)` ctor: `__cobrust_coil_buffer_getitem`
+    // reads a FLAT element only on a 1-D array (on a 2-D it would index a
+    // ROW view), so a 1-D buffer is the right per-element read surface.
+
+    /// `coil.clip(array1d2(1, 9), 2, 7)` clamps `[1, 9]` → `[2, 7]` (a 1-D
+    /// buffer). BORROWS the input; the fresh result drops once (2 total
+    /// drops). Proves the `(ptr, f64, f64) -> ptr` shim shape — the FIRST
+    /// coil shim with TWO trailing f64 scalars.
+    #[test]
+    fn clip_shim_clamps_and_drops_once() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 9.0);
+            let r = __cobrust_coil_clip(a, 2.0, 7.0);
+            assert!(!r.is_null());
+            // [1, 9] -> clip[2, 7] -> [2, 7].
+            assert!((__cobrust_coil_buffer_getitem(r, 0) - 2.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 1) - 7.0).abs() < 1e-12);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(
+            drop_count() - before,
+            2,
+            "input + fresh result drop once each"
+        );
+    }
+
+    /// `coil.clip(_, 7, 2)` with `lo > hi`: the UPPER bound wins (numpy
+    /// `minimum(maximum(a, lo), hi)`). `clip([1, 9], 7, 2) = [2, 2]`.
+    #[test]
+    fn clip_shim_lo_gt_hi_clamps_to_hi() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 9.0);
+            let r = __cobrust_coil_clip(a, 7.0, 2.0);
+            assert!((__cobrust_coil_buffer_getitem(r, 0) - 2.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 1) - 2.0).abs() < 1e-12);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    /// `coil.power(array1d2(2, 3), 2.0)` squares `[2, 3]` → `[4, 9]`.
+    /// BORROWS the input; the fresh result drops once (2 total drops).
+    /// Proves the `(ptr, f64) -> ptr` shim shape (percentile's shape, but
+    /// Buffer-returning).
+    #[test]
+    fn power_shim_squares_and_drops_once() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(2.0, 3.0);
+            let r = __cobrust_coil_power(a, 2.0);
+            assert!(!r.is_null());
+            assert!((__cobrust_coil_buffer_getitem(r, 0) - 4.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 1) - 9.0).abs() < 1e-12);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(drop_count() - before, 2);
+    }
+
+    /// `coil.power(_, 0.5)` is `sqrt`: `power([4, 9], 0.5) = [2, 3]`.
+    #[test]
+    fn power_shim_half_is_sqrt() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(4.0, 9.0);
+            let r = __cobrust_coil_power(a, 0.5);
+            assert!((__cobrust_coil_buffer_getitem(r, 0) - 2.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 1) - 3.0).abs() < 1e-12);
+            __cobrust_coil_buffer_drop(a);
             __cobrust_coil_buffer_drop(r);
         }
     }
