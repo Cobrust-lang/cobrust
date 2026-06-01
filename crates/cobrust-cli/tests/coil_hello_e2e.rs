@@ -135,22 +135,26 @@ fn try_build(source: &str) -> (bool, String) {
     )
 }
 
-/// Unknown coil function — `coil.flatten` is NOT in the manifest yet
-/// (deferred to the sub-ADR for deep coil surface). Rejected at the
-/// type-check arm.
+/// Unknown coil function — rejected at the type-check arm. Uses a
+/// PERMANENTLY-fake name (`coil.no_such_function`) so the test stays valid
+/// as the manifest grows: the original `coil.flatten` placeholder BECAME a
+/// real op when the array-manipulation batch landed, silently flipping this
+/// reject-path test green-to-red (F36 fixture-name-vs-behaviour). A name no
+/// real numpy surface will ever claim keeps the reject path under test
+/// regardless of future additions.
 #[test]
 fn test_neg_coil_rejects_unknown_function() {
     let (ok, stderr) = try_build(concat!(
         "import coil\n",
         "fn main() -> i64:\n",
         "    let a: coil.Buffer = coil.zeros(3)\n",
-        "    let b = coil.flatten(a)\n",
+        "    let b = coil.no_such_function(a)\n",
         "    let _ = coil.print_buffer(b)\n",
         "    return 0\n",
     ));
     assert!(
         !ok,
-        "unknown function coil.flatten must be rejected; stderr=\n{stderr}"
+        "unknown function coil.no_such_function must be rejected; stderr=\n{stderr}"
     );
 }
 
