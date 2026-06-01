@@ -85,6 +85,11 @@ mod broadcast_extra;
 // FLOAT-returning ops wired EXACTLY like the BATCH-2 manipulate reshape
 // ops (borrow-Buffer-arg → fresh-Buffer-return). Int/bool inputs promote
 // to Float64; Float32 stays Float32; Float64 stays Float64.
+// + #145 BATCH 4 — the unary ROUNDING / SIGN family (`abs`/`floor`/
+// `ceil`/`round`/`trunc`/`square`/`sign`), SAME 1-arg Buffer -> Buffer
+// shape but DTYPE-PRESERVING (int->int, f32->f32, f64->f64; floor/ceil/
+// round/trunc are int no-ops). `round` is round-half-to-EVEN (banker's);
+// `sign(0)=0` + `sign(NaN)=NaN`.
 mod elementwise;
 // ADR-0072 8/8 first proof — `.cb`-side C-ABI shims for the
 // `coil.Buffer` opaque handle (the EIGHTH and final cobra-batch
@@ -125,13 +130,22 @@ pub use crate::constructors::{
 };
 pub use crate::dtype::{Dtype, FloatInfo, FloatKind, IntInfo, IntKind, finfo, iinfo};
 pub use crate::elementwise::{
+    // #145 BATCH 4 — DTYPE-PRESERVING rounding / sign family. None of
+    // these clash with a `ufunc` re-export, so they re-export flat.
+    abs,
     cbrt,
+    ceil,
     cosh,
     exp2,
+    floor,
     log2,
     log10,
+    round,
+    sign,
     sinh,
+    square,
     tanh,
+    trunc,
     // NOTE: `exp` / `log` / `sin` / `cos` / `sqrt` are also re-exported
     // from `ufunc` (the `Result`-returning `Array::*` method backers);
     // the `elementwise` versions are the infallible `Array -> Array`

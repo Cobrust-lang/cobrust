@@ -82,9 +82,11 @@ use crate::broadcast_extra::broadcast_to_1d;
 use crate::constructors::{array_f64, eye as coil_eye, ones as coil_ones, zeros as coil_zeros};
 use crate::dtype::Dtype;
 use crate::elementwise::{
-    cbrt as coil_cbrt, cos as coil_cos, cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2,
-    log as coil_log, log2 as coil_log2, log10 as coil_log10, sin as coil_sin, sinh as coil_sinh,
-    sqrt as coil_sqrt, tan as coil_tan, tanh as coil_tanh,
+    abs as coil_abs, cbrt as coil_cbrt, ceil as coil_ceil, cos as coil_cos, cosh as coil_cosh,
+    exp as coil_exp, exp2 as coil_exp2, floor as coil_floor, log as coil_log, log2 as coil_log2,
+    log10 as coil_log10, round as coil_round, sign as coil_sign, sin as coil_sin,
+    sinh as coil_sinh, sqrt as coil_sqrt, square as coil_square, tan as coil_tan,
+    tanh as coil_tanh, trunc as coil_trunc,
 };
 use crate::grid::{mgrid_1d, ogrid_1d};
 use crate::linalg::{det as linalg_det, inv as linalg_inv, solve as linalg_solve};
@@ -995,6 +997,114 @@ pub unsafe extern "C" fn __cobrust_coil_cosh(a: *mut u8) -> *mut u8 {
 pub unsafe extern "C" fn __cobrust_coil_tanh(a: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_unary(a, "tanh", coil_tanh) }
+}
+
+// =====================================================================
+// #145 unary ROUNDING / SIGN gap-closure BATCH 4 (2026-06-01) — the
+// DTYPE-PRESERVING 1-arg elementwise ufunc family (`abs` / `floor` /
+// `ceil` / `round` / `trunc` / `square` / `sign`). SAME 1-arg
+// borrow-Buffer-arg → fresh-Buffer-return value-handle ABI as the
+// BATCH-3 transcendentals above, riding the SAME shared `buffer_unary`
+// body (TOTAL — no `coil_panic` path; a null handle is the only abort).
+// The ONLY difference from BATCH 3 is the kernel's dtype contract:
+// these PRESERVE the dtype (int->int, f32->f32, f64->f64; floor/ceil/
+// round/trunc are int no-ops) rather than promoting int -> Float64. The
+// ABI shape is byte-identical, so codegen rides the SAME `coil_shape_ty`
+// `(ptr) -> ptr` extern + the flat `__cobrust_coil_` recognizer; the
+// dtype rule is entirely inside the Rust kernel (`elementwise.rs`).
+// =====================================================================
+
+/// `coil.abs(a) -> Buffer`. Absolute value, **dtype-preserving**
+/// (`abs(int)->int`, `abs(float)->float`). BORROWS `a`; returns a fresh
+/// owned handle. Total (`abs(NaN)=NaN`, `i64::MIN` wraps to itself per
+/// numpy two's-complement). NOTE this is the coil MODULE fn
+/// `coil.abs(buf)` — distinct from any scalar `abs`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_abs(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "abs", coil_abs) }
+}
+
+/// `coil.floor(a) -> Buffer`. Largest integer `<= x`, **dtype-
+/// preserving**; a NO-OP on integer / bool input (numpy 2.x). BORROWS
+/// `a`. Total (`floor(NaN)=NaN`, `floor(±inf)=±inf`).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_floor(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "floor", coil_floor) }
+}
+
+/// `coil.ceil(a) -> Buffer`. Smallest integer `>= x`, **dtype-
+/// preserving**; a NO-OP on integer / bool input. BORROWS `a`. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_ceil(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "ceil", coil_ceil) }
+}
+
+/// `coil.round(a) -> Buffer`. Round to nearest with **round-half-to-EVEN**
+/// (banker's rounding — `0.5 -> 0`, `1.5 -> 2`, `2.5 -> 2`), **dtype-
+/// preserving**; a NO-OP on integer / bool input. BORROWS `a`. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_round(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "round", coil_round) }
+}
+
+/// `coil.trunc(a) -> Buffer`. Truncate toward zero, **dtype-preserving**;
+/// a NO-OP on integer / bool input. BORROWS `a`. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_trunc(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "trunc", coil_trunc) }
+}
+
+/// `coil.square(a) -> Buffer`. `x * x` elementwise, **dtype-preserving**
+/// (`square(int)->int`, `square(float)->float`). BORROWS `a`. Total
+/// (integer wrapping on overflow per numpy two's-complement).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_square(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "square", coil_square) }
+}
+
+/// `coil.sign(a) -> Buffer`. `-1` / `0` / `1`, **dtype-preserving**.
+/// numpy-exact `sign(0.0)=0.0`, `sign(-0.0)=0.0`, `sign(NaN)=NaN` (NOT
+/// Rust `f64::signum`). BORROWS `a`. Total (`sign(bool)` returns the
+/// bool array unchanged — a documented coil Semantic divergence; numpy
+/// raises).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_sign(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "sign", coil_sign) }
 }
 
 /// Shared body for the `a ⊕ k` SCALAR-broadcast shims (ADR-0077 Phase-1

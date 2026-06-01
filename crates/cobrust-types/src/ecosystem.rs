@@ -925,6 +925,78 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Numerical,
         )),
+        // #145 unary ROUNDING / SIGN gap-closure BATCH 4 (2026-06-01) — the
+        // DTYPE-PRESERVING 1-arg elementwise ufunc family. SAME borrow-
+        // Buffer-arg → fresh-Buffer-return value-handle ABI as the BATCH-3
+        // transcendentals + BATCH-2 reshape ops (`__cobrust_coil_transpose`
+        // / `_exp`): the single Buffer arg auto-borrows (Move→Copy) in
+        // `lower_eco_arg` and the fresh return is drop-scheduled by
+        // `emit_ecosystem_call` (NO `_=>"any"` MIR gap — the generic
+        // ecosystem-call lowering iterates `sig.params` regardless of op,
+        // identical 1-Buffer-arg shape to `coil.transpose` / `coil.exp`).
+        //
+        // - `coil.abs(a)    -> Buffer`  — absolute value (the MODULE fn
+        //                                 `coil.abs(buf)`, distinct from any
+        //                                 scalar `abs` method on Ty::Int /
+        //                                 Ty::Float — resolved here via the
+        //                                 `("coil", "abs")` module-fn path,
+        //                                 NOT `lookup_handle_method`).
+        // - `coil.floor(a)  -> Buffer`  — largest int <= x (int no-op).
+        // - `coil.ceil(a)   -> Buffer`  — smallest int >= x (int no-op).
+        // - `coil.round(a)  -> Buffer`  — round-half-to-EVEN (int no-op).
+        // - `coil.trunc(a)  -> Buffer`  — truncate toward zero (int no-op).
+        // - `coil.square(a) -> Buffer`  — x * x.
+        // - `coil.sign(a)   -> Buffer`  — -1 / 0 / 1.
+        //
+        // Tier `Numerical` — the VALUES agree with numpy 2.x exactly
+        // (`round` is banker's rounding, `sign(0)=0`, `sign(NaN)=NaN`); the
+        // DTYPE is PRESERVING (int->int, f32->f32, f64->f64 — NOT the
+        // BATCH-3 int->Float64 promotion) and `floor`/`ceil`/`round`/`trunc`
+        // are NO-OPS on integer input. `Bool` input is a documented
+        // value-faithful Semantic divergence (coil returns Bool unchanged;
+        // numpy would emit float16 / int8 / raise) — see `elementwise.rs`.
+        ("coil", "abs") => Some(EcoSig::from_values(
+            "__cobrust_coil_abs",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "floor") => Some(EcoSig::from_values(
+            "__cobrust_coil_floor",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "ceil") => Some(EcoSig::from_values(
+            "__cobrust_coil_ceil",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "round") => Some(EcoSig::from_values(
+            "__cobrust_coil_round",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "trunc") => Some(EcoSig::from_values(
+            "__cobrust_coil_trunc",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "square") => Some(EcoSig::from_values(
+            "__cobrust_coil_square",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "sign") => Some(EcoSig::from_values(
+            "__cobrust_coil_sign",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
         // ADR-0079 Phase 1 — minimal `.cb`-constructible 2-D / explicit-
         // data buffers, the genuine prerequisite for exercising the
         // `coil.linalg.*` sub-namespace on NON-identity matrices (the

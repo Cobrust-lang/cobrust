@@ -219,6 +219,69 @@ unlike `sqrt`, defined for negatives: `cbrt(-8) = -2`), **`coil.sinh`**,
 > RuntimeWarning; the array value is the same.) The repr renders these as
 > `inf` / `-inf` / `NaN`.
 
+## Elementwise math — rounding & sign ufuncs (`abs` / `floor` / `ceil` / `round` / `trunc` / `square` / `sign`)
+
+These also apply to **every element** and return a **fresh `coil.Buffer`**
+— wired identically to the transcendentals above. They differ in one
+important way: they **preserve the dtype** (see the box below).
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array2x2(0.5, 1.5, 2.5, -0.5)
+    let r: coil.Buffer = coil.round(a)            # [[0, 2], [2, -0]]  (banker's!)
+    let _ = coil.print_buffer(r)
+
+    let b: coil.Buffer = coil.array2x2(-2.5, 0.0, 3.0, -7.0)
+    let s: coil.Buffer = coil.sign(b)             # [[-1, 0], [1, -1]]
+    let _ = coil.print_buffer(s)
+
+    # Chain: each op returns a fresh Buffer that feeds the next.
+    let c: coil.Buffer = coil.array1d2(-1.5, 2.5)
+    let d: coil.Buffer = coil.abs(coil.floor(c))  # abs([-2, 2]) = [2, 2]
+    let _ = coil.print_buffer(d)
+    return 0
+```
+
+**The seven ops** (all `Buffer -> Buffer`):
+
+- **`coil.abs(a)`** — absolute value (`abs(-1.5) = 1.5`).
+- **`coil.floor(a)`** — round down (`floor(-1.5) = -2`).
+- **`coil.ceil(a)`** — round up (`ceil(-1.5) = -1`).
+- **`coil.round(a)`** — round to nearest, **half-to-even** (see below).
+- **`coil.trunc(a)`** — truncate toward zero (`trunc(-1.7) = -1`, unlike
+  `floor`).
+- **`coil.square(a)`** — `x * x` (`square(-3) = 9`).
+- **`coil.sign(a)`** — `-1` / `0` / `1`.
+
+> **`round` is banker's rounding (round-half-to-even)** — the one thing
+> people get wrong. A value exactly halfway rounds to the nearest **even**
+> integer, matching numpy's `np.round` (and Python 3's `round`): `round(0.5)
+> = 0`, `round(1.5) = 2`, `round(2.5) = 2`, `round(3.5) = 4`. This is
+> **not** the "always round .5 up" rule from school. (`round(-0.5)` gives
+> `-0`, which prints as `-0`.)
+
+> **`sign(0) = 0` and `sign(NaN) = NaN`** — zero has sign zero (not `+1`),
+> and a NaN stays NaN. `sign(x) = 1` for `x > 0`, `-1` for `x < 0`.
+
+> **Dtype rule (the one thing to remember)**: unlike the transcendentals,
+> these **preserve the dtype** — an `int` array stays `int`, a `float32`
+> stays `float32`, a `float64` stays `float64`. They do **not** promote int
+> to float. And `floor` / `ceil` / `round` / `trunc` are **no-ops on an
+> integer array** (an integer is already "rounded" — numpy returns it
+> unchanged). `abs` / `square` / `sign` do transform integers
+> (`abs(-3) = 3`, `square(2) = 4`, `sign(-5) = -1`). (A `bool` input is
+> returned unchanged in coil — numpy would promote to `float16` / `int8`
+> or, for `sign`, raise; coil keeps `bool`, and the values match since
+> `True`/`False` is the `1`/`0` these ops act on.)
+>
+> Like the transcendentals, these **never trap** (there is no shape
+> mismatch for a one-argument op): `floor(NaN) = NaN`, `floor(-inf) =
+> -inf`, `abs(NaN) = NaN`. (In the examples above every `.cb` constructor
+> makes a `float64` buffer, so the integer-valued results print without a
+> `.0` — `[[0, 2], [2, -0]]`, `dtype=float64`.)
+
 ## Linear algebra — the `coil.linalg.*` sub-namespace (ADR-0079 Phase 1)
 
 `coil.linalg.*` is the FIRST *dotted sub-namespace* under an ecosystem

@@ -1753,6 +1753,150 @@ existing `unary_math_dtype` contract.
       `Cargo.lock` unchanged).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## `.cb` `coil` unary rounding / sign — `abs` / `floor` / `ceil` / `round` / `trunc` / `square` / `sign` (#145 BATCH 4 — DONE)
+
+The DTYPE-PRESERVING 1-arg elementwise ufunc family — the rounding /
+absolute-value / sign ops an LLM reaches for after the transcendentals
+(§2.5). Wired BYTE-IDENTICALLY to the BATCH-3 transcendentals
+(`exp`/`log`/…): borrow-Buffer-arg → fresh-Buffer-return, the
+`(ptr) -> ptr` `coil_shape_ty` extern shape, the shared `buffer_unary`
+cabi body. The ONLY difference from BATCH 3 is the kernel's DTYPE contract
+(PRESERVING, not float-promoting — see below). The `.cb`-side form is
+`coil.abs(a)` — a module free function (NOT a sub-namespace, and the
+`coil.abs(buf)` MODULE fn is distinct from the scalar `abs` method on
+`Ty::Int`/`Ty::Float` in `lookup_handle_method`). 7 ops.
+
+### Semantics (numpy 2.4.6 oracle — `coil::elementwise`)
+
+- `coil.abs(a) -> Buffer` — absolute value. `abs(-1.5) -> 1.5`,
+  `abs(NaN) -> NaN`; `i64::MIN` wraps to itself (`wrapping_abs`, numpy
+  two's-complement).
+- `coil.floor(a) -> Buffer` — largest int `<= x`. `floor(-1.5) -> -2`.
+- `coil.ceil(a) -> Buffer` — smallest int `>= x`. `ceil(-1.5) -> -1`.
+- `coil.round(a) -> Buffer` — round to nearest, **round-half-to-EVEN**
+  (banker's). `round(0.5) -> 0`, `round(1.5) -> 2`, `round(2.5) -> 2`,
+  `round(-0.5) -> -0`.
+- `coil.trunc(a) -> Buffer` — truncate toward zero. `trunc(-1.7) -> -1`
+  (UNLIKE `floor`).
+- `coil.square(a) -> Buffer` — `x * x`. `square(-3) -> 9` (integer
+  wrapping on overflow per numpy two's-complement).
+- `coil.sign(a) -> Buffer` — `-1` / `0` / `1`. `sign(0.0) -> 0`,
+  `sign(-0.0) -> 0`, `sign(NaN) -> NaN`.
+
+All are TOTAL — there is NO conformability concept for a unary op, so NO
+`coil_panic` path exists; the shim ALWAYS returns a fresh `Buffer` (a null
+handle is the only abort, mirroring the BATCH-2/3 unary guard).
+
+**Two numpy-exact correctness nuances (the #1 + #2 places this batch could
+be WRONG — both pinned in tests):**
+
+1. **`round` = round-half-to-EVEN (banker's)** — Rust
+   `f64::round_ties_even` / `f32::round_ties_even`, NOT `f64::round`
+   (half-AWAY-from-zero: `round(0.5)=1`, WRONG vs numpy). numpy `np.round`:
+   `0.5->0`, `1.5->2`, `2.5->2`, `3.5->4`, `-0.5->-0`.
+2. **`sign(0)=0` and `sign(NaN)=NaN`** — an explicit `is_nan` / `>0` / `<0`
+   branch, NOT Rust `f64::signum` (which returns `+1.0` for `0.0` and
+   propagates the sign bit for `NaN`, WRONG vs numpy).
+
+**Dtype contract (the load-bearing difference from BATCH 3 — numpy-
+confirmed)**: all DTYPE-PRESERVING. `int64 -> int64`, `Float32 -> Float32`,
+`Float64 -> Float64` (`np.abs(np.int64([...])).dtype == int64`,
+`np.round(np.float32([...])).dtype == float32`). NO int->float promotion.
+**Integer no-op** (the #1 dtype subtlety): `floor`/`ceil`/`round`/`trunc`
+are NO-OPS on integer input — numpy 2.x `np.floor(int_array)` returns the
+int array UNCHANGED; coil returns the int / bool `Array` as-is (clone).
+`abs`/`square`/`sign` DO apply to integers (`abs(-3)=3`, `square(2)=4`,
+`sign(-5)=-1`). **Bool**: numpy DIVERGES per op (`round(bool)->float16`,
+`square(bool)->int8`, `sign(bool)` RAISES, `abs`/`floor`/`ceil` stay
+`bool`); coil's `Array` has no `float16`/`int8` and the unary surface is
+TOTAL, so coil pins a single uniform rule — **every op returns the `Bool`
+array UNCHANGED** (bool is the 0/1 fixed point of all seven ops:
+`round(True)=1=True`, `square(True)=1=True`, `sign(True)=1=True`). The
+VALUES match what each op means on the 0/1 numeric; only the dtype TIER
+differs from numpy's per-op promotion, and `sign(bool)` does NOT raise. A
+`Semantic`-tier divergence consistent with the BATCH-3 `bool -> Float64`
+choice.
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- 7 `lookup_module_fn` arms (`abs`/`floor`/`ceil`/`round`/`trunc`/`square`/
+  `sign`), each `[coil_buffer_ty()] -> coil_buffer_ty()`. Tier `Numerical`
+  — VALUES agree with numpy 2.x exactly (`round` banker's, `sign(0)=0`,
+  `sign(NaN)=NaN`); the DTYPE is PRESERVING (NOT the BATCH-3 int->Float64
+  promotion) and `floor`/`ceil`/`round`/`trunc` are int no-ops.
+
+### Typecheck / MIR — ZERO new code
+
+- The generic module-fn path (`try_synth_ecosystem_call` Case 1 /
+  `try_lower_ecosystem_call` Case 1) already lowers any `lookup_module_fn`
+  signature. The 1-Buffer-arg → Buffer shape is STRUCTURALLY IDENTICAL to
+  `coil.exp(a)` (BATCH 3) / `coil.transpose(a)` (BATCH 2): the single
+  Buffer arg auto-borrows (Move→Copy in `lower_eco_arg`, so the input stays
+  live + drops once) and the fresh return handle is drop-scheduled by
+  `emit_ecosystem_call`. NO `_ => "any"` gap, NO new MIR arm.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+- 7 extern rows, all reusing `coil_shape_ty` (`ptr -> ptr`) — the IDENTICAL
+  extern shape as the BATCH-3 transcendentals + BATCH-2 reshape ops.
+  Symbols ride the existing `__cobrust_coil_` build/intrinsics prefix
+  recognizer (`build/intrinsics.rs:1389` — a pure `starts_with` match, no
+  CLI/linker edit needed).
+
+### Runtime (`cobrust-coil/src/elementwise.rs` + `cabi.rs`)
+
+- `elementwise.rs`: 7 kernels over the closed `Array` enum via two shared
+  helpers — `unary_round_family(arr, op_f32, op_f64)` (int / bool arm
+  returns the input unchanged; float arms `mapv` the rounding kernel) for
+  `floor`/`ceil`/`round`/`trunc`, and `unary_value(arr, op_i32, op_i64,
+  op_f32, op_f64)` (every numeric arm transforms; bool arm unchanged) for
+  `abs`/`square`/`sign`. The numpy-exact `sign` uses explicit `sign_f64` /
+  `sign_f32` / `sign_i64` / `sign_i32` helpers (NOT `f64::signum`). 25 unit
+  tests, differential vs the numpy 2.4.6 oracle (incl. int->int + f32->f32
+  + f64->f64 preservation, the int no-op for floor/ceil/round/trunc,
+  banker's rounding `0.5->0`/`1.5->2`/`2.5->2`/`-0.5->-0`, `sign(0)=0` +
+  `sign(NaN)=NaN` + signs, abs/square negatives, the bool-unchanged rule,
+  shape preservation, an `abs(floor(a))` chain + a `sign(square(a))`
+  chain).
+- `cabi.rs`: 7 shims `__cobrust_coil_{abs,floor,ceil,round,trunc,square,
+  sign}` sharing the SAME `buffer_unary` body as BATCH 3 (borrow handle →
+  apply infallible kernel → fresh Boxed return). Total — no `coil_panic`
+  path.
+
+### Deferred
+
+- The 2-arg `np.copysign` / `np.fmod` and the `np.rint` / `np.fix` /
+  `np.around(decimals=k)` variants (decimal-place rounding) — DEFERRED.
+- An int-DTYPE `.cb` constructor — the int->int preservation + int no-op
+  contracts are pinned in the `elementwise.rs` Rust unit tests; the `.cb`
+  E2E proves the float-DTYPE value contract those rules serve (every `.cb`
+  ctor emits `Float64`).
+
+### Done means (#145 BATCH 4 — DONE)
+
+- [x] `elementwise.rs`: 7 kernels via `unary_round_family` (int no-op) +
+      `unary_value` (per-dtype) + `sign_{f64,f32,i64,i32}` helpers; 25 unit
+      tests with the numpy-2.4.6 oracle (dtype preservation, int no-op,
+      banker's rounding, `sign(0)=0`/`sign(NaN)=NaN`, negatives, bool-
+      unchanged, shape, `abs(floor(a))` + `sign(square(a))` chains).
+- [x] cabi: 7 shims via shared `buffer_unary` (TOTAL — no trap path).
+- [x] Manifest: 7 ecosystem arms (`Buffer -> Buffer`, tier `Numerical`,
+      DTYPE-PRESERVING).
+- [x] Typecheck / MIR: NO new code (generic module-fn path; 1-Buffer-arg
+      proven by `exp`/`transpose`).
+- [x] Codegen: 7 extern rows (`coil_shape_ty` ×7).
+- [x] `.cb` E2E `coil_round_e2e.rs` (8 tests): `round` banker's
+      `[[0,2],[2,-0]]`, `sign` neg/zero/pos `[[-1,0],[1,-1]]`, `abs`
+      negatives `[1.5,2.5]`, `floor` `[-2,1]` / `ceil` `[-1,2]` / `trunc`
+      `[-1,1]` (toward-zero contrast), `square` `(2,2)` `[[4,9],[0,16]]`,
+      `abs(floor(a))` CHAIN `[2,2]`.
+- [x] No regression: full `cobrust-coil` suite green (256 lib unit +
+      every test binary); `coil_round_e2e` + `coil_ufunc_e2e` +
+      `coil_hello_e2e` all green; touched crates build + clippy
+      `-D warnings` + fmt clean; no new dep (`ndarray` already present;
+      `Cargo.lock` unchanged — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

@@ -199,6 +199,64 @@ fn main() -> i64:
 > (溢出)—— 程序继续运行。(numpy 会打印 RuntimeWarning;数组的值是一样的。)
 > repr 把它们渲染为 `inf` / `-inf` / `NaN`。
 
+## 逐元素数学 —— 取整与符号 ufunc(`abs` / `floor` / `ceil` / `round` / `trunc` / `square` / `sign`)
+
+这些同样作用于**每个元素**并返回一个**全新的 `coil.Buffer`** —— 接线方式
+与上面的超越函数完全一致。它们有一个重要区别:**保留 dtype**(见下面的提
+示框)。
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array2x2(0.5, 1.5, 2.5, -0.5)
+    let r: coil.Buffer = coil.round(a)            # [[0, 2], [2, -0]]  (银行家舍入!)
+    let _ = coil.print_buffer(r)
+
+    let b: coil.Buffer = coil.array2x2(-2.5, 0.0, 3.0, -7.0)
+    let s: coil.Buffer = coil.sign(b)             # [[-1, 0], [1, -1]]
+    let _ = coil.print_buffer(s)
+
+    # 链式:每个操作返回一个全新的 Buffer,喂给下一个操作。
+    let c: coil.Buffer = coil.array1d2(-1.5, 2.5)
+    let d: coil.Buffer = coil.abs(coil.floor(c))  # abs([-2, 2]) = [2, 2]
+    let _ = coil.print_buffer(d)
+    return 0
+```
+
+**七个操作**(全部 `Buffer -> Buffer`):
+
+- **`coil.abs(a)`** —— 绝对值(`abs(-1.5) = 1.5`)。
+- **`coil.floor(a)`** —— 向下取整(`floor(-1.5) = -2`)。
+- **`coil.ceil(a)`** —— 向上取整(`ceil(-1.5) = -1`)。
+- **`coil.round(a)`** —— 四舍六入五成双(**银行家舍入**,见下)。
+- **`coil.trunc(a)`** —— 向零截断(`trunc(-1.7) = -1`,与 `floor` 不同)。
+- **`coil.square(a)`** —— `x * x`(`square(-3) = 9`)。
+- **`coil.sign(a)`** —— `-1` / `0` / `1`。
+
+> **`round` 是银行家舍入(四舍六入五成双)** —— 这是最容易搞错的地方。恰好
+> 处在中点的值舍入到最近的**偶数**,与 numpy 的 `np.round`(以及 Python 3 的
+> `round`)一致:`round(0.5) = 0`、`round(1.5) = 2`、`round(2.5) = 2`、
+> `round(3.5) = 4`。这**不是**学校里「0.5 一律进位」的规则。(`round(-0.5)`
+> 给出 `-0`,会被打印成 `-0`。)
+
+> **`sign(0) = 0` 且 `sign(NaN) = NaN`** —— 零的符号是零(不是 `+1`),NaN
+> 保持 NaN。`x > 0` 时 `sign(x) = 1`,`x < 0` 时 `sign(x) = -1`。
+
+> **dtype 规则(唯一需要记住的)**:与超越函数不同,这些操作**保留 dtype**
+> —— `int` 数组保持 `int`,`float32` 保持 `float32`,`float64` 保持 `float64`。
+> 它们**不会**把整数提升成浮点。而且 `floor` / `ceil` / `round` / `trunc` 对
+> **整数数组是空操作**(整数本就已经「取整」过了 —— numpy 原样返回)。`abs`
+> / `square` / `sign` 则会变换整数(`abs(-3) = 3`、`square(2) = 4`、
+> `sign(-5) = -1`)。(**`bool`** 输入在 coil 中原样返回 —— numpy 会提升到
+> `float16` / `int8`,而对 `sign` 则会报错;coil 保持 `bool`,且值一致,因为
+> `True`/`False` 正是这些操作所作用的 `1`/`0`。)
+>
+> 和超越函数一样,这些操作**绝不 trap**(一元操作没有形状不匹配):
+> `floor(NaN) = NaN`、`floor(-inf) = -inf`、`abs(NaN) = NaN`。(上面例子里每
+> 个 `.cb` 构造器都生成 `float64` buffer,所以整数值的结果打印时不带 `.0`
+> —— `[[0, 2], [2, -0]]`,`dtype=float64`。)
+
 ## 线性代数 —— `coil.linalg.*` 子命名空间(ADR-0079 Phase 1)
 
 `coil.linalg.*` 是生态模块下的**第一个点分子命名空间** —— 它精确镜像

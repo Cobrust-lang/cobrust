@@ -3332,6 +3332,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_sinh", coil_shape_ty, 1),
             ("__cobrust_coil_cosh", coil_shape_ty, 1),
             ("__cobrust_coil_tanh", coil_shape_ty, 1),
+            // #145 unary ROUNDING / SIGN Buffer-returning ops (BATCH 4). All
+            // 1-arg DTYPE-PRESERVING ufuncs (`abs`/`floor`/`ceil`/`round`/
+            // `trunc`/`square`/`sign`) are `(ptr) -> ptr` ≡ `coil_shape_ty`
+            // — the IDENTICAL extern shape as the BATCH-3 transcendentals +
+            // BATCH-2 reshape ops above. The dtype-preserving rule lives
+            // entirely in the Rust kernel (`elementwise.rs`); the ABI is
+            // byte-identical, so codegen rides the SAME extern shape + the
+            // flat `__cobrust_coil_*` recognizer prefix (no batch-specific
+            // arm). MIR retargets `coil.abs(a)` onto these `Call`s.
+            ("__cobrust_coil_abs", coil_shape_ty, 1),
+            ("__cobrust_coil_floor", coil_shape_ty, 1),
+            ("__cobrust_coil_ceil", coil_shape_ty, 1),
+            ("__cobrust_coil_round", coil_shape_ty, 1),
+            ("__cobrust_coil_trunc", coil_shape_ty, 1),
+            ("__cobrust_coil_square", coil_shape_ty, 1),
+            ("__cobrust_coil_sign", coil_shape_ty, 1),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);
