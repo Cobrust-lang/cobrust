@@ -3134,6 +3134,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
         //   __cobrust_coil_broadcast_to(a: *mut Buffer, n: i64) -> *mut Buffer
         //   __cobrust_coil_split(a: *mut Buffer, n: i64) -> *mut Buffer
         //   __cobrust_coil_mean / median / std / var (a: *mut Buffer) -> f64
+        //   __cobrust_coil_min / max / prod (a: *mut Buffer) -> f64 (BATCH 7)
         let f64_ty = self.ctx.f64_type();
         let coil_grid_ty = ptr_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false);
         let coil_bcast_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
@@ -3147,6 +3148,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_median", coil_agg_ty, 1),
             ("__cobrust_coil_std", coil_agg_ty, 1),
             ("__cobrust_coil_var", coil_agg_ty, 1),
+            // #145 BATCH 7 — the VALUE reductions `min`/`max`/`prod`. Each
+            // is `(ptr) -> f64`, the SAME `coil_agg_ty` shape as `mean`
+            // (coil's scalar-reduction convention; every `.cb` Buffer is
+            // Float64 so `min`/`max`/`prod -> f64` is numpy-exact). NO new
+            // extern type. `min`/`max` `coil_panic` on empty (numpy
+            // ValueError); `prod([]) == 1.0`; NaN propagates.
+            ("__cobrust_coil_min", coil_agg_ty, 1),
+            ("__cobrust_coil_max", coil_agg_ty, 1),
+            ("__cobrust_coil_prod", coil_agg_ty, 1),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

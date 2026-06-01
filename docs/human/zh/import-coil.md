@@ -41,7 +41,7 @@ cobrust build prog.cb -o prog
   `array_repr` 打印到 stdout。成功返回 `0`;接收者为 null 时返回 `-1`
   (防御性)。
 
-## 统计 —— 标量归约(`mean` / `median` / `std` / `var` / `ptp` / `nan*` / `percentile`)
+## 统计 —— 标量归约(`mean` / `median` / `std` / `var` / `min` / `max` / `prod` / `ptp` / `nan*` / `percentile`)
 
 这些函数都把整个 buffer 归约成**一个 `f64`** —— 与 LLM 为 numpy 写出的
 形状一致(`np.mean(a)` → `coil.mean(&a)`)。`&a` 是一个显式共享借用:
@@ -54,6 +54,9 @@ import coil
 fn main() -> i64:
     let a: coil.Buffer = coil.mgrid(0, 5)        # [0, 1, 2, 3, 4]
     print((coil.mean(&a) as i64))                # 2  (均值 = 2.0)
+    print((coil.min(&a) as i64))                 # 0  (最小元素)
+    print((coil.max(&a) as i64))                 # 4  (最大元素)
+    print((coil.prod(&a) as i64))                # 0  (0*1*2*3*4 = 0)
     print((coil.ptp(&a) as i64))                 # 4  (max 4 - min 0)
     print((coil.nansum(&a) as i64))              # 10 (0+1+2+3+4)
     print((coil.percentile(&a, 50.0) as i64))    # 2  (第 50 百分位 = 中位数)
@@ -67,6 +70,15 @@ fn main() -> i64:
   两元素的平均)。遇 NaN 传播;空数组 → `NaN`。
 - **`coil.std(a: Buffer) -> f64`** —— 总体标准差(ddof=0)。
 - **`coil.var(a: Buffer) -> f64`** —— 总体方差(ddof=0)。
+- **`coil.min(a: Buffer) -> f64`** —— 最小元素。遇 NaN 传播(单个 NaN 会让
+  整个结果变成 `NaN`,与 `mean` 一致)。**空** buffer 是 numpy 的
+  `ValueError`,所以会干净地中止进程(一次受控的 trap —— `np.min([])`
+  会抛异常)。
+- **`coil.max(a: Buffer) -> f64`** —— 最大元素。与 `min` 相同的 NaN 传播 +
+  空数组中止约定。
+- **`coil.prod(a: Buffer) -> f64`** —— 所有元素的乘积。遇 NaN 传播。**空**
+  buffer → `1.0`(乘法单位元,正是 numpy 的 `np.prod([]) == 1.0` ——
+  **不是** trap)。溢出饱和为 `+inf`(与 numpy 一致)。
 - **`coil.ptp(a: Buffer) -> f64`** —— 峰峰值,即 `max(a) - min(a)`(数据的
   极差)。单元素 → `0.0`。遇 NaN 传播。
 - **`coil.nansum(a: Buffer) -> f64`** —— 求和,把 NaN 当作零。全 NaN(或空)
@@ -321,10 +333,12 @@ fn main() -> i64:
 > (没有真值元素)、`all([]) = True`(空真 —— 没有任何元素失败)。打印 `bool`
 > 请用上面展示的 `if b:` 形式,而不是直接 `print(b)`。
 
-> **暂未提供**:*值*归约 `prod` / `min` / `max`(最小 / 最大*值*本身,而非其
-> 索引)是后续增量 —— 它们需要一个保持输入 dtype 的返回(`int` buffer 的 `min`
-> 是 `int`,`float` buffer 的是 `float`),这是一个独立的设计步骤。(`coil.mean` /
-> `coil.std` / `coil.var` / `coil.ptp` 等已经提供了今天常用的浮点归约。)
+> **`min` / `max` / `prod` 这几个*值*归约**(最小 / 最大*值*本身,或乘积 ——
+> 而非索引)位于上面的**统计 —— 标量归约**一节:它们返回 `f64`,与
+> `coil.mean` 完全一样。(每个 `.cb` buffer 都是 `float64`,所以 f64 返回是
+> numpy 精确的 —— `np.max(f64_array)` 就是一个浮点。)numpy 的*保持 dtype*
+> 形式 —— `np.max(int_array)` 返回 `int` —— 是一个独立的后续设计步骤;f64
+> 形式已覆盖今天你能构造的每一个 buffer。
 
 ## 带标量参数的 ufunc —— `clip(a, lo, hi)` 与 `power(a, p)`
 

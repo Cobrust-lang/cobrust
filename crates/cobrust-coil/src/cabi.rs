@@ -73,9 +73,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::aggregates::{
-    all_scalar, any_scalar, argmax_scalar, argmin_scalar, mean_scalar, median_scalar,
-    nanmean_scalar, nanstd_scalar, nansum_scalar, percentile_scalar, ptp_scalar, split_first_chunk,
-    std_scalar, var_scalar,
+    all_scalar, any_scalar, argmax_scalar, argmin_scalar, max_scalar, mean_scalar, median_scalar,
+    min_scalar, nanmean_scalar, nanstd_scalar, nansum_scalar, percentile_scalar, prod_scalar,
+    ptp_scalar, split_first_chunk, std_scalar, var_scalar,
 };
 use crate::array::Array;
 use crate::broadcast::broadcast_shape;
@@ -552,6 +552,79 @@ pub unsafe extern "C" fn __cobrust_coil_argmax(a: *mut u8) -> i64 {
     // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
     let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
     argmax_scalar(arr_ref).unwrap_or_else(|e| coil_panic(&format!("coil.argmax: {}", e.message)))
+}
+
+// =====================================================================
+// #145 gap-closure BATCH 7 (2026-06-01) — the VALUE reductions
+// `min` / `max` / `prod`. Each returns an `f64` SCALAR — the SAME
+// `(ptr) -> f64` extern shape as `coil.mean` (coil's established
+// scalar-reduction convention; every `.cb` Buffer is Float64 so
+// `min`/`max`/`prod -> f64` is numpy-EXACT for every `.cb` buffer). All
+// BORROW the handle (no rebox / free).
+//
+// EMPTY-input contract: `min`/`max` of an empty array RAISE `ValueError`
+// in numpy — coil cannot raise across the C-ABI, so the shim maps the
+// kernel's `Err` to a clean `coil_panic` (mirror `argmin`/`argmax`):
+// the stdlib `__cobrust_panic` diverges — NEVER a Rust `panic!` unwind
+// across the FFI (which would be UB). `prod` is TOTAL: `prod([]) == 1.0`
+// (the multiplicative identity, numpy parity — NOT a trap), so a null
+// handle yields the identity `1.0`; f64 overflow saturates to `+inf`.
+// =====================================================================
+
+/// `coil.min(a) -> f64`. The smallest element. NaN PROPAGATES (any NaN in
+/// a lane → `NaN`, like numpy `np.min`). BORROWS the handle. An EMPTY (or
+/// null) input `coil_panic`s — a clean abort (numpy raises `ValueError`),
+/// NEVER a Rust unwind across the FFI.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_min(a: *mut u8) -> f64 {
+    if a.is_null() {
+        coil_panic("coil.min: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    // Empty input → numpy ValueError → clean coil_panic (NOT an unwind).
+    min_scalar(arr_ref).unwrap_or_else(|e| coil_panic(&format!("coil.min: {}", e.message)))
+}
+
+/// `coil.max(a) -> f64`. The largest element. NaN PROPAGATES. BORROWS the
+/// handle. An EMPTY (or null) input `coil_panic`s (numpy `ValueError`),
+/// NEVER a Rust unwind across the FFI.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_max(a: *mut u8) -> f64 {
+    if a.is_null() {
+        coil_panic("coil.max: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    max_scalar(arr_ref).unwrap_or_else(|e| coil_panic(&format!("coil.max: {}", e.message)))
+}
+
+/// `coil.prod(a) -> f64`. The product of all elements. NaN PROPAGATES.
+/// EMPTY → `1.0` (the multiplicative identity — numpy `np.prod([]) ==
+/// 1.0`, NOT a trap). f64 overflow → `+inf` (numpy parity). BORROWS the
+/// handle. TOTAL — no `coil_panic` path; a null handle yields the identity
+/// `1.0`.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_prod(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return 1.0;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    // prod is infallible (empty → 1.0); the `Result` is for ABI uniformity.
+    prod_scalar(arr_ref).unwrap_or(1.0)
 }
 
 /// `coil.any(a) -> bool`. `True` iff ANY element is truthy. `any([]) ==
@@ -2313,6 +2386,78 @@ mod tests {
             assert!(__cobrust_coil_nanmean(std::ptr::null_mut()).is_nan());
             assert!(__cobrust_coil_nanstd(std::ptr::null_mut()).is_nan());
             assert!(__cobrust_coil_percentile(std::ptr::null_mut(), 50.0).is_nan());
+        }
+    }
+
+    // -- #145 BATCH 7: min / max / prod VALUE-reduction cabi shims ------
+    //
+    // (min/max of an EMPTY or NULL handle `coil_panic`s — a process abort
+    // that cannot be asserted from a unit test; the e2e suite's
+    // empty-min/max clean-trap tests cover that edge. Here we exercise the
+    // borrow + drop-once path for the value + NaN-propagate cases, plus
+    // prod's TOTAL null → 1.0 identity.)
+
+    /// `coil.min([2.0, 5.0]) = 2.0`, `coil.max(...) = 5.0`; each borrows the
+    /// handle (no rebox) and the buffer drops exactly once.
+    #[test]
+    fn min_max_via_cabi() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(2.0, 5.0);
+            let lo = __cobrust_coil_min(a);
+            let hi = __cobrust_coil_max(a);
+            assert!((lo - 2.0).abs() < 1e-12, "min got {lo}");
+            assert!((hi - 5.0).abs() < 1e-12, "max got {hi}");
+            __cobrust_coil_buffer_drop(a);
+        }
+        assert_eq!(drop_count() - before, 1);
+    }
+
+    /// `coil.prod([2.0, 3.0]) = 6.0`; borrows + drops once.
+    #[test]
+    fn prod_via_cabi() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(2.0, 3.0);
+            let p = __cobrust_coil_prod(a);
+            assert!((p - 6.0).abs() < 1e-12, "prod got {p}");
+            __cobrust_coil_buffer_drop(a);
+        }
+        assert_eq!(drop_count() - before, 1);
+    }
+
+    /// `min`/`max`/`prod` PROPAGATE NaN (any NaN lane → NaN), like `mean`.
+    #[test]
+    fn min_max_prod_propagate_nan_via_cabi() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, f64::NAN);
+            assert!(__cobrust_coil_min(a).is_nan(), "min([1,nan]) must be NaN");
+            assert!(__cobrust_coil_max(a).is_nan(), "max([1,nan]) must be NaN");
+            assert!(__cobrust_coil_prod(a).is_nan(), "prod([1,nan]) must be NaN");
+            __cobrust_coil_buffer_drop(a);
+        }
+    }
+
+    /// `coil.prod` is TOTAL: a NULL handle yields the multiplicative
+    /// identity `1.0` (numpy `np.prod([]) == 1.0`), NEVER a trap. (min/max
+    /// of null trap — not unit-testable; see the e2e empty-trap tests.)
+    #[test]
+    fn prod_on_null_is_one() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let p = __cobrust_coil_prod(std::ptr::null_mut());
+            assert!((p - 1.0).abs() < 1e-12, "prod(null) must be 1.0, got {p}");
         }
     }
 

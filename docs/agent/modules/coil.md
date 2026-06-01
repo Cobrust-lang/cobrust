@@ -1908,12 +1908,15 @@ mix Buffer-return AND scalar-return (i64 / bool) ops:
 - `coil.argmin(a)` / `coil.argmax(a)` → `i64` (the flat C-order index).
 - `coil.any(a)` / `coil.all(a)` → `bool`.
 
-DEFERRED (a future batch): `prod` / `min` / `max` (no-axis scalar) need a
-dtype-PRESERVING scalar return (`min` of an i64 buffer is an i64, of an f64
-buffer an f64) — coil has no scalar-return precedent that preserves the
-input dtype (the scalar shims all return a FIXED `f64` / `i64` / `bool`).
-That design (a tagged scalar return, or a 0-d Buffer return) is its own
-pass.
+SHIPPED IN BATCH 7 (f64-return form, see below): `min` / `max` / `prod`
+(no-axis scalar) now return an `f64` — coil's established scalar-reduction
+convention (the SAME shape as `mean`/`median`/`std`/`var`/`ptp`/
+`percentile`). Every `.cb` Buffer constructor yields a Float64 buffer, so
+`min`/`max`/`prod -> f64` is numpy-EXACT for every `.cb`-constructible
+buffer. STILL DEFERRED: the numpy int-dtype-PRESERVING form (`np.max(int)
+-> int`) — that needs a tagged scalar return (or a 0-d Buffer return) and
+is its own pass; the f64-return ships the common functionality now,
+value-faithfully.
 
 ### numpy semantics (numpy 2.x oracle)
 
@@ -2129,6 +2132,101 @@ null handle is the only abort.
       `coil_reduce_e2e` + `coil_round_e2e` + `coil_ufunc_e2e` +
       `coil_hello_e2e` all green; touched crates build + clippy `-D warnings`
       + fmt clean; no new dep (`Cargo.lock` unchanged — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
+## #145 numpy gap-closure BATCH 7 — the VALUE reductions (DONE)
+
+Completes the scalar-reduction family with the three VALUE reductions an
+LLM reaches for first in numpy: `min` / `max` / `prod`. Each is a
+`(Buffer) -> Float` op — the EXACT `(ptr) -> f64` extern shape `coil.mean`
+proves, so the wiring is the smallest possible increment (NO new MIR arm,
+NO new codegen extern type).
+
+- `coil.min(a)` / `coil.max(a)` → `f64` (the smallest / largest element).
+- `coil.prod(a)` → `f64` (the product of all elements).
+
+### Why f64-return now (supersedes the BATCH-5 "min/max/prod deferred" note)
+
+BATCH 5 deferred `min`/`max`/`prod` pending a dtype-PRESERVING scalar
+return. BATCH 7 reframes: coil's scalar reductions ALL return `f64`
+(`mean`/`median`/`std`/`var`/`ptp`/`percentile`) — f64 IS the established
+scalar-reduction convention. Every `.cb` Buffer constructor today yields a
+Float64 buffer (no int-dtype `.cb` constructor exists), so `min`/`max`/
+`prod -> f64` is numpy-EXACT for every `.cb`-constructible buffer
+(`np.max(f64_array) -> f64`). The f64-return ships the common
+functionality NOW, value-faithfully + consistent with `mean`. The numpy
+int-dtype-PRESERVING form (`np.max(int) -> int`) remains the documented
+deferral (it needs a tagged / 0-d-Buffer scalar return — its own pass).
+
+### numpy semantics (numpy 2.4.6 oracle)
+
+- **min / max, no axis** — the smallest / largest element as `f64`. NaN
+  PROPAGATES (any NaN in a lane → `NaN`; `np.max([1,nan,3])` is `nan`,
+  `np.min([1,nan])` is `nan`) — the SAME posture as `coil.mean`. EMPTY
+  input RAISES `ValueError` → coil `coil_panic`s (a clean abort, NEVER a
+  Rust unwind across the C-ABI; mirror `argmin`/`argmax`).
+- **prod, no axis** — the product of all elements as `f64`. NaN
+  PROPAGATES. EMPTY → `1.0` (the multiplicative identity — `np.prod([])
+  == 1.0`, NOT a trap). f64 overflow → `+inf` (numpy parity, a
+  RuntimeWarning not an exception — `np.prod([1e308, 1e308])` is `inf`).
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- 3 `lookup_module_fn` arms, tier `Semantic`, all `(Buffer) -> Float` (the
+  EcoSig ret `Ty::Float` is the only driver — the SAME as `mean`/`median`/
+  `std`/`var`).
+
+### Typecheck / MIR — ZERO new code
+
+- `min`/`max`/`prod` ride the EXACT generic ecosystem-call path
+  `coil.mean(a) -> f64` already proves: `emit_ecosystem_call` declares the
+  `_ecoret` local with `sig.ret` (Float) and codegen reads the extern's
+  declared return type. VERIFIED via the `.cb` E2E.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+- 3 extern rows reusing `coil_agg_ty` (`(ptr) -> f64`) — the IDENTICAL
+  shape as `mean`/`median`/`std`/`var`. NO new extern type.
+
+### Runtime (`cobrust-coil/src/aggregates.rs` + `cabi.rs`)
+
+- `aggregates.rs`: 3 thin scalar wrappers (`min_scalar`/`max_scalar` →
+  `Result<f64>` propagating the empty `Err`; `prod_scalar` → `Result<f64>`
+  infallible-today, `1.0` on empty). Each REUSES the existing
+  `reduce::{min,max,prod}` no-axis kernels (the SAME arms the M7.3
+  reduction surface exercises — NO reduction logic re-implemented): the
+  kernel produces a 0-d `Array`, the shared `scalar_to_f64` extracts the
+  value. 14 unit tests vs numpy 2.4.6 (values, int→f64 promotion,
+  NaN-propagate, min/max empty `Err`, prod empty `1.0`, prod overflow
+  `+inf`).
+- `cabi.rs`: 3 shims mirroring `__cobrust_coil_mean`'s `(ptr) -> f64`
+  shape. `min`/`max` map the kernel `Err` (empty / null) to `coil_panic`
+  (clean abort, NEVER a Rust unwind). `prod` is TOTAL — a null handle
+  yields the identity `1.0`. 4 shim tests (value + NaN-propagate +
+  drop-once + prod-null `1.0`).
+
+### Done means (#145 BATCH 7 — DONE)
+
+- [x] `aggregates.rs`: 3 scalar wrappers (`{min,max}_scalar` → f64 w/
+      empty-`Err`, `prod_scalar` → f64 w/ empty `1.0`), reusing
+      `reduce::{min,max,prod}` kernels; 14 unit tests vs numpy 2.4.6.
+- [x] cabi: 3 shims (`min`/`max` empty → `coil_panic`, NO unwind; `prod`
+      TOTAL, null → `1.0`); 4 shim tests.
+- [x] Manifest: 3 ecosystem arms (`min`/`max`/`prod` `(Buffer) -> Float`),
+      tier `Semantic`.
+- [x] Typecheck / MIR: NO new code (VERIFIED via E2E — the EcoSig ret
+      `Ty::Float` rides `coil.mean`'s generic path).
+- [x] Codegen: 3 rows reusing `coil_agg_ty` `(ptr) -> f64` (mirror
+      `mean`); NO new extern type.
+- [x] `.cb` E2E `coil_valuereduce_e2e.rs` (8 tests): min `2`, max `5`,
+      prod `6`, NaN-propagate `max([nan,0])=NaN`, prod-empty `1`,
+      prod-overflow `inf`, + 2 negatives (min / max of empty → clean trap,
+      non-zero exit + unreachable marker absent).
+- [x] No regression: full `cobrust-coil` suite green; `coil_valuereduce_e2e`
+      + `coil_reduce_e2e` + `coil_scalararg_e2e` + `coil_hello_e2e` all
+      green (min/max/prod do NOT collide with negative placeholders);
+      touched crates build + clippy `-D warnings` + fmt clean; no new dep
+      (`Cargo.lock` unchanged — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
 ## Non-goals

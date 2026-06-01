@@ -43,7 +43,7 @@ cobrust build prog.cb -o prog
   numpy-compatible `array_repr` to stdout. Returns `0` on success;
   `-1` if the receiver is null (defensive).
 
-## Statistics — scalar reductions (`mean` / `median` / `std` / `var` / `ptp` / `nan*` / `percentile`)
+## Statistics — scalar reductions (`mean` / `median` / `std` / `var` / `min` / `max` / `prod` / `ptp` / `nan*` / `percentile`)
 
 Each of these reduces a whole buffer to **one `f64`** — the same shape an
 LLM writes for numpy (`np.mean(a)` → `coil.mean(&a)`). The `&a` is an
@@ -56,6 +56,9 @@ import coil
 fn main() -> i64:
     let a: coil.Buffer = coil.mgrid(0, 5)        # [0, 1, 2, 3, 4]
     print((coil.mean(&a) as i64))                # 2  (mean = 2.0)
+    print((coil.min(&a) as i64))                 # 0  (smallest element)
+    print((coil.max(&a) as i64))                 # 4  (largest element)
+    print((coil.prod(&a) as i64))                # 0  (0*1*2*3*4 = 0)
     print((coil.ptp(&a) as i64))                 # 4  (max 4 - min 0)
     print((coil.nansum(&a) as i64))              # 10 (0+1+2+3+4)
     print((coil.percentile(&a, 50.0) as i64))    # 2  (50th pct = median)
@@ -69,6 +72,16 @@ The full reduction surface:
   the two middle elements for even length). NaN-propagating; empty → `NaN`.
 - **`coil.std(a: Buffer) -> f64`** — population standard deviation (ddof=0).
 - **`coil.var(a: Buffer) -> f64`** — population variance (ddof=0).
+- **`coil.min(a: Buffer) -> f64`** — the smallest element. NaN-propagating
+  (a single NaN makes the whole result `NaN`, like `mean`). An **empty**
+  buffer is a numpy `ValueError`, so it cleanly aborts the program (a
+  controlled trap — `np.min([])` raises).
+- **`coil.max(a: Buffer) -> f64`** — the largest element. Same NaN-propagate
+  + empty-aborts contract as `min`.
+- **`coil.prod(a: Buffer) -> f64`** — the product of every element.
+  NaN-propagating. An **empty** buffer → `1.0` (the multiplicative
+  identity, exactly numpy's `np.prod([]) == 1.0` — **not** a trap).
+  Overflow saturates to `+inf` (numpy parity).
 - **`coil.ptp(a: Buffer) -> f64`** — peak-to-peak, i.e. `max(a) - min(a)`
   (the data's range). A single element → `0.0`. NaN-propagating.
 - **`coil.nansum(a: Buffer) -> f64`** — sum, treating NaN as zero. An
@@ -351,12 +364,13 @@ fn main() -> i64:
 > (vacuously — nothing fails). To print a `bool`, use the `if b:` form shown
 > above rather than `print(b)` directly.
 
-> **Not yet here**: the *value* reductions `prod` / `min` / `max` (the
-> smallest/largest *value*, not its index) are a later addition — they need
-> a return that preserves the input's dtype (a `min` of an `int` buffer is
-> an `int`, of a `float` buffer a `float`), which is a separate design step.
-> (`coil.mean` / `coil.std` / `coil.var` / `coil.ptp` etc. already give you
-> the common float reductions today.)
+> **The *value* reductions `min` / `max` / `prod`** (the smallest / largest
+> *value*, or the product — not an index) live in the **Statistics —
+> scalar reductions** section above: they return an `f64`, exactly like
+> `coil.mean`. (Every `.cb` buffer is `float64`, so an f64 return is
+> numpy-exact — `np.max(f64_array)` is a float.) The numpy *dtype-
+> preserving* form — `np.max(int_array)` returning an `int` — is a separate
+> later design step; the f64 form covers every buffer you can build today.
 
 ## Scalar-argument ufuncs — `clip(a, lo, hi)` and `power(a, p)`
 

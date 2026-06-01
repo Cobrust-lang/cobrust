@@ -1076,6 +1076,53 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Bool,
             PyCompatTier::Semantic,
         )),
+        // #145 gap-closure BATCH 7 (2026-06-01) — the VALUE reductions
+        // `min` / `max` / `prod`, completing the scalar-reduction family.
+        // Each is `(Buffer) -> Float` — the EXACT shape `coil.mean` proves
+        // (codegen extern `(ptr) -> f64` ≡ `coil_agg_ty`), so there is NO
+        // new MIR arm + NO new codegen extern type (they reuse the
+        // `coil_agg_ty` rows beside `mean`/`median`/`std`/`var`).
+        //
+        // WHY f64-return now (superseding the BATCH-5 "min/max/prod
+        // deferred" note for the f64 case): coil's scalar reductions ALL
+        // return `f64` (mean/median/std/var/ptp/percentile) — f64 is the
+        // established scalar-reduction convention. Every `.cb` Buffer
+        // constructor today yields a Float64 buffer (no int-dtype `.cb`
+        // constructor exists), so `min`/`max`/`prod -> f64` is numpy-EXACT
+        // for every `.cb`-constructible buffer (`np.max(f64_array) -> f64`).
+        // The numpy int-dtype-PRESERVING form (`np.max(int) -> int`) is the
+        // SAME documented deferral as before (it needs a tagged / 0-d-Buffer
+        // scalar return — its own pass); the f64-return ships the common
+        // functionality NOW, value-faithfully + consistent with `mean`.
+        //
+        // EMPTY-input semantics: `min`/`max` of an empty array RAISE
+        // `ValueError` in numpy → coil maps the kernel `Err` to a clean
+        // `coil_panic` (mirror argmin/argmax; NEVER a Rust unwind across
+        // FFI; tested e2e). `prod([]) == 1.0` (the multiplicative identity —
+        // numpy parity, NOT a trap). NaN PROPAGATES for all three
+        // (`np.max([1,nan,3]) == nan`), like `coil.mean`. f64 prod overflow
+        // → `+inf` (numpy parity).
+        //
+        // Tier `Semantic` — the VALUES agree exactly with numpy 2.x (the
+        // `aggregates` unit tests carry the bit-confirmed oracle literals).
+        ("coil", "min") => Some(EcoSig::from_values(
+            "__cobrust_coil_min",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "max") => Some(EcoSig::from_values(
+            "__cobrust_coil_max",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "prod") => Some(EcoSig::from_values(
+            "__cobrust_coil_prod",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
         // #145 SCALAR-ARG ufunc gap-closure BATCH 6 (2026-06-01) — `clip` /
         // `power`, the FIRST Buffer-RETURNING ops taking EXTRA f64 SCALAR
         // args beside the handle. `clip(a, lo, hi)` is `(Buffer, Float,
@@ -2919,6 +2966,34 @@ mod tests {
     fn coil_var_returns_float() {
         let sig = lookup_module_fn("coil", "var").expect("coil.var in manifest");
         assert_eq!(sig.runtime_symbol, "__cobrust_coil_var");
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    // #145 BATCH 7 — the VALUE reductions min / max / prod. Each is
+    // (Buffer) -> Float, the SAME shape as mean (coil's scalar-reduction
+    // convention; the f64-return is numpy-exact for every .cb buffer).
+
+    #[test]
+    fn coil_min_returns_float() {
+        let sig = lookup_module_fn("coil", "min").expect("coil.min in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_min");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_max_returns_float() {
+        let sig = lookup_module_fn("coil", "max").expect("coil.max in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_max");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_prod_returns_float() {
+        let sig = lookup_module_fn("coil", "prod").expect("coil.prod in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_prod");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
         assert_eq!(sig.ret, Ty::Float);
     }
 

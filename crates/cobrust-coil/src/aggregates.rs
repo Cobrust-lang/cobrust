@@ -46,7 +46,10 @@
 
 use crate::array::Array;
 use crate::error::{NumpyError, NumpyErrorKind};
-use crate::reduce::{mean as reduce_mean, std as reduce_std, var as reduce_var};
+use crate::reduce::{
+    max as reduce_max, mean as reduce_mean, min as reduce_min, prod as reduce_prod,
+    std as reduce_std, var as reduce_var,
+};
 
 /// Convert a 0-d / 1-elem `Array` reduction result to `f64`. Helper
 /// shared by every aggregate wrapper below.
@@ -403,6 +406,66 @@ pub fn argmax_scalar(a: &Array) -> Result<i64, NumpyError> {
     Ok(crate::reduce::argmax_flat(a)? as i64)
 }
 
+// ---- min / max / prod (VALUE reductions, f64 scalar) ---------------------
+//
+// #145 gap-closure BATCH 7 (2026-06-01) — the VALUE reductions complete
+// the scalar-reduction family. Each reduces the WHOLE (flattened) buffer
+// to a single `f64`, the SAME established convention as
+// `mean`/`median`/`std`/`var`/`ptp`/`percentile` (every coil scalar
+// reduction returns `f64`). Every `.cb` Buffer constructor today yields a
+// Float64 buffer, so `min`/`max`/`prod -> f64` is numpy-EXACT for every
+// `.cb`-constructible buffer (`np.max(f64_array) -> f64`). The numpy
+// int-dtype-PRESERVING form (`np.max(int) -> int`) remains the documented
+// deferral (it needs a tagged / 0-d-Buffer scalar return — its own pass);
+// the f64-return ships the common functionality NOW, value-faithfully.
+//
+// These REUSE the existing `reduce::{min,max,prod}` kernels (the SAME
+// no-axis arms the M7.3 reduction surface + the axis-form reductions
+// already exercise — NO reduction logic is re-implemented here): the
+// kernel produces a 0-d `Array`, `scalar_to_f64` extracts the value.
+// `min`/`max` propagate NaN + `Err` on EMPTY (numpy `ValueError`); `prod`
+// is TOTAL — `prod([]) == 1.0` (the multiplicative identity) and f64
+// overflow saturates to `+inf` (numpy parity), so its `Result` wrapper is
+// infallible-today (kept for cabi-shim ABI uniformity with the family).
+
+/// `coil.min(a) -> f64` — the smallest element. NaN PROPAGATES (any NaN in
+/// a lane → `NaN`, like numpy `np.min`). Reuses `reduce::min`.
+///
+/// # Errors
+///
+/// `ReductionEmptyArray` on an empty input (numpy raises `ValueError`); the
+/// C-ABI shim maps this to a clean `coil_panic`.
+pub fn min_scalar(a: &Array) -> Result<f64, NumpyError> {
+    let r = reduce_min(a, None)?;
+    Ok(scalar_to_f64(&r))
+}
+
+/// `coil.max(a) -> f64` — the largest element. NaN PROPAGATES. Reuses
+/// `reduce::max`.
+///
+/// # Errors
+///
+/// `ReductionEmptyArray` on an empty input (numpy raises `ValueError`); the
+/// C-ABI shim maps this to a clean `coil_panic`.
+pub fn max_scalar(a: &Array) -> Result<f64, NumpyError> {
+    let r = reduce_max(a, None)?;
+    Ok(scalar_to_f64(&r))
+}
+
+/// `coil.prod(a) -> f64` — the product of all elements. NaN PROPAGATES.
+/// EMPTY → `1.0` (the multiplicative identity — numpy `np.prod([]) == 1.0`,
+/// NOT a trap). f64 overflow → `+inf` (numpy parity). Reuses `reduce::prod`.
+///
+/// # Errors
+///
+/// Currently infallible (the underlying `reduce::prod` reduce-all path
+/// never errors — empty yields `1.0`); wrapped in `Result` for ABI
+/// uniformity with `min`/`max` so the cabi shims share one shape.
+pub fn prod_scalar(a: &Array) -> Result<f64, NumpyError> {
+    let r = reduce_prod(a, None)?;
+    Ok(scalar_to_f64(&r))
+}
+
 /// `coil.any(a) -> bool` — `True` iff ANY element is truthy. `any([]) ==
 /// False`. `NaN` is truthy (numpy).
 ///
@@ -736,5 +799,127 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    // ---- min / max / prod (BATCH 7 VALUE reductions) ---------------------
+    //
+    // Differential vs numpy 2.4.6: `np.min([3,1,4,1,5]) == 1.0`,
+    // `np.max(...) == 5.0`, `np.prod([1,2,3,4]) == 24.0`; NaN propagates;
+    // min/max of empty raise ValueError (→ Err here); prod of empty == 1.0;
+    // f64 prod overflow → +inf.
+
+    #[test]
+    fn min_basic() {
+        let a = array_f64(&[3.0, 1.0, 4.0, 1.0, 5.0], &[5]).unwrap();
+        let m = min_scalar(&a).unwrap();
+        assert!(approx(m, 1.0, 1e-12), "min got {m}");
+    }
+
+    #[test]
+    fn max_basic() {
+        let a = array_f64(&[3.0, 1.0, 4.0, 1.0, 5.0], &[5]).unwrap();
+        let m = max_scalar(&a).unwrap();
+        assert!(approx(m, 5.0, 1e-12), "max got {m}");
+    }
+
+    #[test]
+    fn prod_basic() {
+        // np.prod([1.,2.,3.,4.]) == 24.0
+        let a = array_f64(&[1.0, 2.0, 3.0, 4.0], &[4]).unwrap();
+        let p = prod_scalar(&a).unwrap();
+        assert!(approx(p, 24.0, 1e-12), "prod got {p}");
+    }
+
+    #[test]
+    fn min_integer_promotes_to_f64() {
+        // Int buffers extract through scalar_to_f64 → value-faithful f64.
+        let a = array_i64(&[7, 2, 9, 2, 5], &[5]).unwrap();
+        let m = min_scalar(&a).unwrap();
+        assert!(approx(m, 2.0, 1e-12), "min(int) got {m}");
+    }
+
+    #[test]
+    fn max_integer_promotes_to_f64() {
+        let a = array_i64(&[7, 2, 9, 2, 5], &[5]).unwrap();
+        let m = max_scalar(&a).unwrap();
+        assert!(approx(m, 9.0, 1e-12), "max(int) got {m}");
+    }
+
+    #[test]
+    fn prod_integer_promotes_to_f64() {
+        // np.prod([2,3,4]) == 24; extracted as f64.
+        let a = array_i64(&[2, 3, 4], &[3]).unwrap();
+        let p = prod_scalar(&a).unwrap();
+        assert!(approx(p, 24.0, 1e-12), "prod(int) got {p}");
+    }
+
+    #[test]
+    fn min_propagates_nan() {
+        // np.min([1., nan]) is nan.
+        let a = array_f64(&[1.0, f64::NAN], &[2]).unwrap();
+        let m = min_scalar(&a).unwrap();
+        assert!(m.is_nan(), "min with NaN must be NaN, got {m}");
+    }
+
+    #[test]
+    fn max_propagates_nan() {
+        // np.max([1., nan, 3.]) is nan.
+        let a = array_f64(&[1.0, f64::NAN, 3.0], &[3]).unwrap();
+        let m = max_scalar(&a).unwrap();
+        assert!(m.is_nan(), "max with NaN must be NaN, got {m}");
+    }
+
+    #[test]
+    fn prod_propagates_nan() {
+        // np.prod([1., nan]) is nan.
+        let a = array_f64(&[1.0, f64::NAN], &[2]).unwrap();
+        let p = prod_scalar(&a).unwrap();
+        assert!(p.is_nan(), "prod with NaN must be NaN, got {p}");
+    }
+
+    #[test]
+    fn min_empty_errs() {
+        // np.min([]) raises ValueError → Err here (→ cabi coil_panic).
+        let a = array_f64(&[], &[0]).unwrap();
+        let r = min_scalar(&a);
+        assert!(matches!(
+            r,
+            Err(NumpyError {
+                kind: NumpyErrorKind::ReductionEmptyArray,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn max_empty_errs() {
+        let a = array_f64(&[], &[0]).unwrap();
+        let r = max_scalar(&a);
+        assert!(matches!(
+            r,
+            Err(NumpyError {
+                kind: NumpyErrorKind::ReductionEmptyArray,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn prod_empty_is_one() {
+        // np.prod([]) == 1.0 (multiplicative identity) — NOT a trap.
+        let a = array_f64(&[], &[0]).unwrap();
+        let p = prod_scalar(&a).unwrap();
+        assert!(approx(p, 1.0, 1e-12), "prod([]) must be 1.0, got {p}");
+    }
+
+    #[test]
+    fn prod_overflow_is_inf() {
+        // np.prod([1e308, 1e308]) overflows f64 → +inf (numpy parity).
+        let a = array_f64(&[1e308, 1e308], &[2]).unwrap();
+        let p = prod_scalar(&a).unwrap();
+        assert!(
+            p.is_infinite() && p > 0.0,
+            "prod overflow must be +inf, got {p}"
+        );
     }
 }
