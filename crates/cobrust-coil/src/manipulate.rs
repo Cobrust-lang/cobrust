@@ -115,6 +115,115 @@ pub fn ravel(a: &Array) -> Array {
     flatten(a)
 }
 
+// =====================================================================
+// #145 numpy gap-closure BATCH 9 (2026-06-01) — the FLAT search / order
+// surface (`sort` / `argsort` / `unique` / `flatnonzero`), each a 1-arg
+// `Array -> Array` op that FLATTENS to C-order first (numpy's no-axis
+// default) and returns a fresh owned 1-D `Array`. They wire through the
+// SAME borrow-Buffer-arg → fresh-Buffer-return value-handle ABI as the
+// reshape ops above (`transpose` / `flatten` / `ravel`), riding the
+// shared `cabi::buffer_unary` body + the `coil_shape_ty` `(ptr) -> ptr`
+// extern — NO new MIR arm.
+//
+// ## Return-dtype contract (the load-bearing split)
+//
+// - `sort` / `unique` PRESERVE the input dtype (numpy: `np.sort` /
+//   `np.unique` return the same dtype as the input).
+// - `argsort` / `flatnonzero` produce an `Int64` `Array` (the indices),
+//   REGARDLESS of input dtype (numpy: both return `intp`, an `int64` on
+//   the 64-bit targets the AOT backend supports).
+//
+// ## NaN semantics (numpy-exact, confirmed via `/opt/homebrew/bin/
+// python3.11 -c 'import numpy'`, numpy 2.4.6)
+//
+// - `sort`: ascending; for floats ALL `NaN` sort to the END regardless
+//   of sign-bit (`np.sort([nan,1,-nan,2]) == [1,2,nan,nan]`). We CANNOT
+//   use `f64::total_cmp` directly (it orders `NaN` by sign-bit, placing
+//   `-NaN` FIRST), so the float arm partitions non-NaN (sorted ascending
+//   via `total_cmp` on the finite/inf subset) ++ the `NaN`s (kept in
+//   input order). Int / bool arms are a plain ascending sort.
+// - `argsort`: STABLE (the reproducible, deterministic choice — numpy's
+//   default quicksort happens to agree on the test cases, but a stable
+//   sort PINS the tie-break for equal keys + the `NaN`-index tail). The
+//   `NaN`-bearing indices go last, in input order (consistent with
+//   `sort`'s `NaN` tail).
+// - `unique`: sorted ascending unique; numpy 1.21+ collapses MULTIPLE
+//   `NaN` to ONE trailing `NaN` (`np.unique([nan,nan,1,nan,2]) ==
+//   [1,2,nan]`). We replicate exactly: dedupe the non-NaN values, then
+//   append a single `NaN` iff the input contained any.
+// - `flatnonzero`: C-order flat indices where `a != 0`; for floats the
+//   predicate is `a != 0.0`, so `NaN` (being `!= 0.0`) IS included as
+//   nonzero (`np.flatnonzero([0.,nan,0.]) == [1]`).
+// =====================================================================
+
+/// `np.sort(a)` — return a fresh ASCENDING-sorted 1-D copy (numpy's
+/// no-axis default flattens to C-order first). DTYPE-PRESERVING. For
+/// floats, ALL `NaN` sort to the END regardless of sign-bit (numpy:
+/// `np.sort([3.,nan,1.]) == [1.,3.,nan]`); int / bool arms are a plain
+/// ascending sort. The result is always 1-D (a 2-D input is flattened).
+#[must_use]
+pub fn sort(a: &Array) -> Array {
+    match a {
+        Array::Int32(arr) => Array::Int32(sorted_total(arr)),
+        Array::Int64(arr) => Array::Int64(sorted_total(arr)),
+        Array::Float32(arr) => Array::Float32(sorted_float_nan_last(arr)),
+        Array::Float64(arr) => Array::Float64(sorted_float_nan_last(arr)),
+        Array::Bool(arr) => Array::Bool(sorted_total(arr)),
+    }
+}
+
+/// `np.argsort(a)` — return the `Int64` indices that would sort `a`
+/// (ascending, over the C-order FLATTENED array). STABLE (the
+/// deterministic, reproducible tie-break). For floats, the `NaN`-bearing
+/// indices go LAST in input order (consistent with [`sort`]'s `NaN`
+/// tail). Result dtype is ALWAYS `Int64` (numpy `intp`). numpy:
+/// `np.argsort([3.,1.,2.]) == [1,2,0]`.
+#[must_use]
+pub fn argsort(a: &Array) -> Array {
+    let idx: Vec<i64> = match a {
+        Array::Int32(arr) => argsort_total(&arr.iter().copied().collect::<Vec<_>>()),
+        Array::Int64(arr) => argsort_total(&arr.iter().copied().collect::<Vec<_>>()),
+        Array::Bool(arr) => argsort_total(&arr.iter().copied().collect::<Vec<_>>()),
+        Array::Float32(arr) => argsort_float_nan_last(&arr.iter().copied().collect::<Vec<_>>()),
+        Array::Float64(arr) => argsort_float_nan_last(&arr.iter().copied().collect::<Vec<_>>()),
+    };
+    int64_1d(idx)
+}
+
+/// `np.unique(a)` — return the SORTED unique values as a fresh 1-D copy
+/// (over the C-order FLATTENED array). DTYPE-PRESERVING. For floats,
+/// numpy 1.21+ collapses MULTIPLE `NaN` to ONE trailing `NaN`
+/// (`np.unique([nan,1.,nan]) == [1.,nan]`); we replicate exactly. numpy:
+/// `np.unique([3,1,2,1,3]) == [1,2,3]`.
+#[must_use]
+pub fn unique(a: &Array) -> Array {
+    match a {
+        Array::Int32(arr) => Array::Int32(unique_total(arr)),
+        Array::Int64(arr) => Array::Int64(unique_total(arr)),
+        Array::Float32(arr) => Array::Float32(unique_float_nan_collapse(arr)),
+        Array::Float64(arr) => Array::Float64(unique_float_nan_collapse(arr)),
+        Array::Bool(arr) => Array::Bool(unique_total(arr)),
+    }
+}
+
+/// `np.flatnonzero(a)` — return the `Int64` flat C-order indices where
+/// `a != 0`. Result dtype is ALWAYS `Int64` (numpy `intp`). For floats
+/// the predicate is `a != 0.0`, so `NaN` (being `!= 0.0`) IS counted as
+/// nonzero (`np.flatnonzero([0.,nan,0.]) == [1]`). numpy:
+/// `np.flatnonzero([0,5,0,2]) == [1,3]`; a 2-D input flattens C-order
+/// first.
+#[must_use]
+pub fn flatnonzero(a: &Array) -> Array {
+    let idx: Vec<i64> = match a {
+        Array::Int32(arr) => nonzero_idx(arr.iter(), |&v| v != 0),
+        Array::Int64(arr) => nonzero_idx(arr.iter(), |&v| v != 0),
+        Array::Float32(arr) => nonzero_idx(arr.iter(), |&v| v != 0.0),
+        Array::Float64(arr) => nonzero_idx(arr.iter(), |&v| v != 0.0),
+        Array::Bool(arr) => nonzero_idx(arr.iter(), |&v| v),
+    };
+    int64_1d(idx)
+}
+
 /// `np.concatenate((a, b))` along axis 0 (the default axis). The two
 /// arrays must have the SAME rank and matching sizes on every axis
 /// except axis 0.
@@ -305,6 +414,150 @@ fn flatten_c<T: Clone>(arr: &ArrayD<T>) -> ArrayD<T> {
     // infallible; the explicit shape is `[len]`.
     ArrayD::from_shape_vec(IxDyn(&[len]), flat)
         .expect("1-D from_shape_vec with matching length is infallible")
+}
+
+// ---- BATCH-9 sort / argsort / unique / flatnonzero internals ----------
+
+/// Wrap a `Vec<i64>` (already in result order) as a fresh owned 1-D
+/// `Array::Int64`. The shared back-end of [`argsort`] / [`flatnonzero`]
+/// (both produce `Int64` indices regardless of input dtype).
+fn int64_1d(idx: Vec<i64>) -> Array {
+    let len = idx.len();
+    Array::Int64(
+        ArrayD::from_shape_vec(IxDyn(&[len]), idx)
+            .expect("1-D from_shape_vec with matching length is infallible"),
+    )
+}
+
+/// Ascending sort of a totally-ordered (`Ord`) `ArrayD<T>` → a fresh 1-D
+/// `ArrayD<T>`. The int / bool [`sort`] arm; `T::cmp` is a total order so
+/// `sort` (a stable merge sort) suffices and is deterministic.
+fn sorted_total<T: Clone + Ord>(arr: &ArrayD<T>) -> ArrayD<T> {
+    let mut flat: Vec<T> = arr.iter().cloned().collect();
+    flat.sort();
+    let len = flat.len();
+    ArrayD::from_shape_vec(IxDyn(&[len]), flat)
+        .expect("1-D from_shape_vec with matching length is infallible")
+}
+
+/// Ascending sort of a float `ArrayD<T>` with ALL `NaN` placed LAST
+/// (numpy `np.sort` float semantics), regardless of `NaN` sign-bit. The
+/// finite/inf subset is sorted via `total_cmp` (a total order on
+/// non-NaN floats that agrees with `<`); the `NaN`s are appended in
+/// input order. `f64::total_cmp` alone is WRONG here (it orders `NaN` by
+/// sign-bit, placing `-NaN` first), so the partition is mandatory.
+fn sorted_float_nan_last<T>(arr: &ArrayD<T>) -> ArrayD<T>
+where
+    T: Float,
+{
+    let (mut finite, nans): (Vec<T>, Vec<T>) = arr.iter().copied().partition(|v| !v.is_nan());
+    finite.sort_by(T::total_cmp);
+    finite.extend(nans);
+    let len = finite.len();
+    ArrayD::from_shape_vec(IxDyn(&[len]), finite)
+        .expect("1-D from_shape_vec with matching length is infallible")
+}
+
+/// STABLE argsort of a totally-ordered (`Ord`) slice → the `Int64`
+/// indices that would sort it ascending. The int / bool [`argsort`] arm.
+/// `sort_by` is a stable sort, so equal keys keep their input order (the
+/// deterministic, reproducible tie-break).
+fn argsort_total<T: Ord>(flat: &[T]) -> Vec<i64> {
+    let mut idx: Vec<usize> = (0..flat.len()).collect();
+    idx.sort_by(|&i, &j| flat[i].cmp(&flat[j]));
+    idx.into_iter().map(|i| i as i64).collect()
+}
+
+/// STABLE argsort of a float slice with the `NaN`-bearing indices LAST
+/// (in input order), consistent with [`sorted_float_nan_last`]. The
+/// non-NaN indices are stably sorted by `total_cmp`; the `NaN` indices
+/// are appended in input order. The float [`argsort`] arm.
+fn argsort_float_nan_last<T>(flat: &[T]) -> Vec<i64>
+where
+    T: Float,
+{
+    let (mut finite, nans): (Vec<usize>, Vec<usize>) =
+        (0..flat.len()).partition(|&i| !flat[i].is_nan());
+    finite.sort_by(|&i, &j| flat[i].total_cmp(&flat[j]));
+    finite.extend(nans);
+    finite.into_iter().map(|i| i as i64).collect()
+}
+
+/// Sorted-unique of a totally-ordered (`Ord`) `ArrayD<T>` → a fresh 1-D
+/// `ArrayD<T>`. The int / bool [`unique`] arm: sort then `dedup` (which
+/// removes CONSECUTIVE duplicates — correct after a sort).
+fn unique_total<T: Clone + Ord>(arr: &ArrayD<T>) -> ArrayD<T> {
+    let mut flat: Vec<T> = arr.iter().cloned().collect();
+    flat.sort();
+    flat.dedup();
+    let len = flat.len();
+    ArrayD::from_shape_vec(IxDyn(&[len]), flat)
+        .expect("1-D from_shape_vec with matching length is infallible")
+}
+
+/// Sorted-unique of a float `ArrayD<T>` with the numpy 1.21+ `NaN`-
+/// collapse rule: MULTIPLE `NaN` collapse to ONE trailing `NaN`
+/// (`np.unique([nan,nan,1.,nan,2.]) == [1.,nan]`). The non-NaN values
+/// are sorted + deduped (via `total_cmp`, a total order on non-NaN
+/// floats); a SINGLE trailing `NaN` is appended iff the input held any.
+fn unique_float_nan_collapse<T>(arr: &ArrayD<T>) -> ArrayD<T>
+where
+    T: Float,
+{
+    let (mut finite, nans): (Vec<T>, Vec<T>) = arr.iter().copied().partition(|v| !v.is_nan());
+    finite.sort_by(T::total_cmp);
+    finite.dedup();
+    if let Some(&nan) = nans.first() {
+        // Collapse every NaN to the FIRST one (numpy keeps one trailing
+        // NaN; any NaN bit-pattern renders as `NaN`).
+        finite.push(nan);
+    }
+    let len = finite.len();
+    ArrayD::from_shape_vec(IxDyn(&[len]), finite)
+        .expect("1-D from_shape_vec with matching length is infallible")
+}
+
+/// Flat C-order indices of the elements satisfying `is_nonzero`. The
+/// shared body of every [`flatnonzero`] arm (`iter()` walks C-order, so
+/// the enumerated positions ARE the numpy flat indices). Returns `Int64`
+/// indices.
+fn nonzero_idx<'a, T, I, P>(iter: I, is_nonzero: P) -> Vec<i64>
+where
+    T: 'a,
+    I: Iterator<Item = &'a T>,
+    P: Fn(&T) -> bool,
+{
+    iter.enumerate()
+        .filter_map(|(i, v)| if is_nonzero(v) { Some(i as i64) } else { None })
+        .collect()
+}
+
+/// Minimal float abstraction over the two float dtypes (`f32` / `f64`)
+/// — just the `is_nan` predicate + the `total_cmp` total order the
+/// BATCH-9 float arms need (`PartialEq` for the `unique` `dedup`).
+/// Implemented for the two `ndarray` float element types; deliberately
+/// tiny (NOT a `num-traits` dependency — the no-new-dep constraint).
+trait Float: Copy + PartialEq {
+    fn is_nan(self) -> bool;
+    fn total_cmp(&self, other: &Self) -> std::cmp::Ordering;
+}
+
+impl Float for f32 {
+    fn is_nan(self) -> bool {
+        f32::is_nan(self)
+    }
+    fn total_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        f32::total_cmp(self, other)
+    }
+}
+
+impl Float for f64 {
+    fn is_nan(self) -> bool {
+        f64::is_nan(self)
+    }
+    fn total_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        f64::total_cmp(self, other)
+    }
 }
 
 /// Promote a 1-D `(n,)` array to a `(1, n)` row (numpy's `atleast_2d`
@@ -741,5 +994,268 @@ mod tests {
         let b = array_i64(&[3, 4], &[2]).unwrap();
         let err = where_select(&cond, &a, &b).unwrap_err();
         assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
+    }
+
+    // ---- BATCH 9: sort / argsort / unique / flatnonzero ----
+    // Oracle values captured from numpy 2.x via the allowed
+    // `/opt/homebrew/bin/python3.11` interpreter (numpy 2.4.6).
+    use crate::constructors::{array_f32, array_i32};
+
+    fn i64_vals(a: &Array) -> Vec<i64> {
+        match a {
+            Array::Int64(arr) => arr.iter().copied().collect(),
+            _ => panic!("expected Int64"),
+        }
+    }
+
+    // ---- sort ----
+
+    #[test]
+    fn sort_f64_ascending() {
+        // np.sort([3.,1.,2.]) == [1.,2.,3.] (1-D, float64 preserved).
+        let a = array_f64(&[3., 1., 2.], &[3]).unwrap();
+        let s = sort(&a);
+        assert_eq!(s.dtype(), crate::dtype::Dtype::Float64);
+        assert_eq!(s.shape(), vec![3]);
+        assert_eq!(f64_vals(&s), vec![1., 2., 3.]);
+    }
+
+    #[test]
+    fn sort_2d_flattens_then_sorts() {
+        // np.sort flattens the no-axis default: np.sort([[3,1],[2,0]],
+        // axis=None) == [0,1,2,3].
+        let a = array_f64(&[3., 1., 2., 0.], &[2, 2]).unwrap();
+        let s = sort(&a);
+        assert_eq!(s.shape(), vec![4]);
+        assert_eq!(f64_vals(&s), vec![0., 1., 2., 3.]);
+    }
+
+    #[test]
+    fn sort_f64_nan_last() {
+        // np.sort([3.,nan,1.]) == [1.,3.,nan] (NaN sorts to the END).
+        let a = array_f64(&[3., f64::NAN, 1.], &[3]).unwrap();
+        match sort(&a) {
+            Array::Float64(arr) => {
+                let v: Vec<f64> = arr.iter().copied().collect();
+                assert_eq!(v[0], 1.);
+                assert_eq!(v[1], 3.);
+                assert!(v[2].is_nan(), "NaN must be last; got {}", v[2]);
+            }
+            _ => panic!("dtype not preserved"),
+        }
+    }
+
+    #[test]
+    fn sort_signed_nan_all_last() {
+        // np.sort([nan,1.,-nan,2.]) == [1.,2.,nan,nan] — BOTH NaN last
+        // regardless of sign-bit (the total_cmp-alone trap this guards).
+        let neg_nan = f64::from_bits(f64::NAN.to_bits() | (1 << 63));
+        assert!(neg_nan.is_nan() && neg_nan.is_sign_negative());
+        let a = array_f64(&[f64::NAN, 1., neg_nan, 2.], &[4]).unwrap();
+        match sort(&a) {
+            Array::Float64(arr) => {
+                let v: Vec<f64> = arr.iter().copied().collect();
+                assert_eq!(&v[0..2], &[1., 2.]);
+                assert!(v[2].is_nan() && v[3].is_nan(), "both NaN last; got {v:?}");
+            }
+            _ => panic!("dtype not preserved"),
+        }
+    }
+
+    #[test]
+    fn sort_preserves_int_dtype() {
+        // np.sort([3,1,2]) == [1,2,3] (int64 preserved).
+        let a = array_i64(&[3, 1, 2], &[3]).unwrap();
+        let s = sort(&a);
+        assert_eq!(s.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(i64_vals(&s), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn sort_preserves_f32_dtype() {
+        // np.sort(float32([3,1,2])).dtype == float32.
+        let a = array_f32(&[3., 1., 2.], &[3]).unwrap();
+        let s = sort(&a);
+        assert_eq!(s.dtype(), crate::dtype::Dtype::Float32);
+        match s {
+            Array::Float32(arr) => {
+                assert_eq!(arr.iter().copied().collect::<Vec<_>>(), vec![1., 2., 3.]);
+            }
+            _ => panic!("dtype not preserved"),
+        }
+    }
+
+    #[test]
+    fn sort_int32_dtype() {
+        let a = array_i32(&[5, 2, 8, 1], &[4]).unwrap();
+        let s = sort(&a);
+        assert_eq!(s.dtype(), crate::dtype::Dtype::Int32);
+        match s {
+            Array::Int32(arr) => {
+                assert_eq!(arr.iter().copied().collect::<Vec<_>>(), vec![1, 2, 5, 8]);
+            }
+            _ => panic!("dtype not preserved"),
+        }
+    }
+
+    #[test]
+    fn sort_empty() {
+        let a = array_f64(&[], &[0]).unwrap();
+        let s = sort(&a);
+        assert_eq!(s.shape(), vec![0]);
+        assert!(f64_vals(&s).is_empty());
+    }
+
+    // ---- argsort ----
+
+    #[test]
+    fn argsort_basic_i64_indices() {
+        // np.argsort([3.,1.,2.]) == [1,2,0]; result dtype int64.
+        let a = array_f64(&[3., 1., 2.], &[3]).unwrap();
+        let s = argsort(&a);
+        assert_eq!(s.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(i64_vals(&s), vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn argsort_stable_on_duplicate_keys() {
+        // np.argsort([2,1,2,1,3]) == [1,3,0,2,4]: the two 1s keep input
+        // order (idx 1 before 3) and the two 2s keep input order (idx 0
+        // before 2) — PROVES the stable tie-break.
+        let a = array_i64(&[2, 1, 2, 1, 3], &[5]).unwrap();
+        let s = argsort(&a);
+        assert_eq!(i64_vals(&s), vec![1, 3, 0, 2, 4]);
+    }
+
+    #[test]
+    fn argsort_nan_indices_last() {
+        // np.argsort([5.,nan,3.,nan,1.]) == [4,2,0,1,3]: non-NaN sorted
+        // (1<3<5 -> idx 4,2,0), then NaN indices in input order (1,3).
+        let a = array_f64(&[5., f64::NAN, 3., f64::NAN, 1.], &[5]).unwrap();
+        let s = argsort(&a);
+        assert_eq!(i64_vals(&s), vec![4, 2, 0, 1, 3]);
+    }
+
+    #[test]
+    fn argsort_int_dtype_input_still_i64_indices() {
+        // The index dtype is ALWAYS int64, even for an int32 input.
+        let a = array_i32(&[30, 10, 20], &[3]).unwrap();
+        let s = argsort(&a);
+        assert_eq!(s.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(i64_vals(&s), vec![1, 2, 0]);
+    }
+
+    // ---- unique ----
+
+    #[test]
+    fn unique_int_sorted_dedupe() {
+        // np.unique([3,1,2,1,3]) == [1,2,3] (int64 preserved).
+        let a = array_i64(&[3, 1, 2, 1, 3], &[5]).unwrap();
+        let u = unique(&a);
+        assert_eq!(u.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(i64_vals(&u), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn unique_f64_preserves_dtype() {
+        // np.unique([3.,1.,2.,1.,3.]) == [1.,2.,3.] (float64 preserved).
+        let a = array_f64(&[3., 1., 2., 1., 3.], &[5]).unwrap();
+        let u = unique(&a);
+        assert_eq!(u.dtype(), crate::dtype::Dtype::Float64);
+        assert_eq!(f64_vals(&u), vec![1., 2., 3.]);
+    }
+
+    #[test]
+    fn unique_nan_collapses_to_one_trailing() {
+        // np.unique([nan,1.,nan]) == [1.,nan] (one trailing NaN).
+        let a = array_f64(&[f64::NAN, 1., f64::NAN], &[3]).unwrap();
+        match unique(&a) {
+            Array::Float64(arr) => {
+                let v: Vec<f64> = arr.iter().copied().collect();
+                assert_eq!(v.len(), 2, "one value + one NaN; got {v:?}");
+                assert_eq!(v[0], 1.);
+                assert!(v[1].is_nan(), "single trailing NaN; got {}", v[1]);
+            }
+            _ => panic!("dtype not preserved"),
+        }
+    }
+
+    #[test]
+    fn unique_multi_nan_collapses_to_one() {
+        // np.unique([nan,nan,1.,nan,2.]) == [1.,2.,nan] (one NaN despite 3).
+        let a = array_f64(&[f64::NAN, f64::NAN, 1., f64::NAN, 2.], &[5]).unwrap();
+        match unique(&a) {
+            Array::Float64(arr) => {
+                let v: Vec<f64> = arr.iter().copied().collect();
+                assert_eq!(v.len(), 3, "two values + one NaN; got {v:?}");
+                assert_eq!(&v[0..2], &[1., 2.]);
+                assert!(v[2].is_nan(), "single trailing NaN; got {}", v[2]);
+            }
+            _ => panic!("dtype not preserved"),
+        }
+    }
+
+    #[test]
+    fn unique_2d_flattens() {
+        // np.unique([[3,1],[2,1]]) == [1,2,3] (flattens C-order first).
+        let a = array_i64(&[3, 1, 2, 1], &[2, 2]).unwrap();
+        let u = unique(&a);
+        assert_eq!(u.shape(), vec![3]);
+        assert_eq!(i64_vals(&u), vec![1, 2, 3]);
+    }
+
+    // ---- flatnonzero ----
+
+    #[test]
+    fn flatnonzero_int_indices() {
+        // np.flatnonzero([0,5,0,2]) == [1,3]; result dtype int64.
+        let a = array_i64(&[0, 5, 0, 2], &[4]).unwrap();
+        let nz = flatnonzero(&a);
+        assert_eq!(nz.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(i64_vals(&nz), vec![1, 3]);
+    }
+
+    #[test]
+    fn flatnonzero_nan_is_nonzero() {
+        // np.flatnonzero([0.,nan,0.]) == [1] (NaN is != 0.0 -> included).
+        let a = array_f64(&[0., f64::NAN, 0.], &[3]).unwrap();
+        let nz = flatnonzero(&a);
+        assert_eq!(i64_vals(&nz), vec![1]);
+    }
+
+    #[test]
+    fn flatnonzero_2d_flattens_c_order() {
+        // np.flatnonzero([[0,5],[0,2]]) == [1,3] (C-order flat indices).
+        let a = array_i64(&[0, 5, 0, 2], &[2, 2]).unwrap();
+        let nz = flatnonzero(&a);
+        assert_eq!(i64_vals(&nz), vec![1, 3]);
+    }
+
+    #[test]
+    fn flatnonzero_float_input_still_i64_indices() {
+        // f64 input -> int64 index dtype (the index dtype never tracks input).
+        let a = array_f64(&[1., 0., 3.], &[3]).unwrap();
+        let nz = flatnonzero(&a);
+        assert_eq!(nz.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(i64_vals(&nz), vec![0, 2]);
+    }
+
+    #[test]
+    fn flatnonzero_all_zero_is_empty() {
+        let a = array_i64(&[0, 0, 0], &[3]).unwrap();
+        let nz = flatnonzero(&a);
+        assert_eq!(nz.dtype(), crate::dtype::Dtype::Int64);
+        assert!(i64_vals(&nz).is_empty());
+    }
+
+    // ---- chain: sort(unique(a)) ----
+
+    #[test]
+    fn chain_sort_of_unique() {
+        // unique already returns sorted, so sort(unique([3,1,2,1,3]))
+        // == [1,2,3] — proves the result Array feeds the next op.
+        let a = array_f64(&[3., 1., 2., 1., 3.], &[5]).unwrap();
+        let r = sort(&unique(&a));
+        assert_eq!(f64_vals(&r), vec![1., 2., 3.]);
     }
 }

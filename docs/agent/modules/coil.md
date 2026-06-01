@@ -2346,6 +2346,131 @@ borrowed arg.
       clean; no new dep (`Cargo.lock` unchanged — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## #145 numpy gap-closure BATCH 9 — the FLAT search / order ops (DONE)
+
+The FLAT search / order surface — `sort` / `argsort` / `unique` /
+`flatnonzero`. Four top-tier-common numpy ops, each a 1-arg `Buffer ->
+Buffer` op that FLATTENS to C-order first (numpy's no-axis default). They
+ride the EXACT BATCH-2/3/4 1-arg path (borrow-Buffer-arg →
+fresh-Buffer-return), reusing the shared `cabi::buffer_unary` body + the
+`coil_shape_ty` `(ptr) -> ptr` extern. The interesting wrinkle is the
+RETURN-DTYPE split (below).
+
+### Signatures
+
+- `.cb`: `coil.sort(a: coil.Buffer) -> coil.Buffer`,
+  `coil.argsort(a) -> coil.Buffer`, `coil.unique(a) -> coil.Buffer`,
+  `coil.flatnonzero(a) -> coil.Buffer`.
+- runtime symbols: `__cobrust_coil_{sort,argsort,unique,flatnonzero}(a:
+  *mut Buffer) -> *mut Buffer`.
+
+### Return-dtype split (the load-bearing contract)
+
+- `sort` / `unique` **PRESERVE** the input dtype (numpy: same dtype as
+  input).
+- `argsort` / `flatnonzero` ALWAYS produce an **Int64** Buffer (the
+  indices), REGARDLESS of input dtype (numpy `intp` = int64 on the 64-bit
+  AOT targets). Since every `.cb`-buildable Buffer is `Float64`, the
+  printed repr dtype literally FLIPS to `int64` for these two — the
+  observable E2E signal.
+- The split lives ENTIRELY in the Rust kernel (`manipulate.rs`); the handle
+  ABI is byte-identical for all four (an opaque `*mut Buffer`), so codegen
+  rides the SAME `coil_shape_ty` extern for every one.
+
+### numpy semantics (numpy 2.4.6 oracle via `/opt/homebrew/bin/python3.11`)
+
+- `sort`: ASCENDING; the no-axis default flattens C-order first
+  (`np.sort([[3,1],[4,2]], axis=None) == [1,2,3,4]`). For floats ALL `NaN`
+  sort to the END regardless of sign-bit — `np.sort([nan,1,-nan,2]) ==
+  [1,2,nan,nan]`. `f64::total_cmp` ALONE is WRONG (it orders `NaN` by
+  sign-bit, placing `-NaN` FIRST), so the float arm PARTITIONS non-NaN
+  (sorted via `total_cmp` on the finite/inf subset) ++ the `NaN`s (input
+  order). Int / bool arms are a plain ascending sort.
+- `argsort`: the int64 indices that would sort `a`; **STABLE** (the
+  deterministic, reproducible tie-break — numpy's default quicksort happens
+  to agree on the test cases, but stable PINS the equal-key + NaN-index
+  order). `np.argsort([3.,1.,2.]) == [1,2,0]`. `NaN`-bearing indices last,
+  in input order — `np.argsort([5,nan,3,nan,1]) == [4,2,0,1,3]`.
+- `unique`: SORTED ascending unique; `np.unique([3,1,2,1,3]) == [1,2,3]`.
+  numpy 1.21+ collapses MULTIPLE `NaN` to ONE trailing `NaN` —
+  `np.unique([nan,nan,1.,nan,2.]) == [1.,2.,nan]`. The non-NaN values are
+  sorted + deduped; a single trailing `NaN` is appended iff any was present.
+- `flatnonzero`: the int64 flat C-order indices where `a != 0`;
+  `np.flatnonzero([0,5,0,2]) == [1,3]`. For floats the predicate is `a !=
+  0.0`, so `NaN` (being `!= 0.0`) IS included — `np.flatnonzero([0.,nan,0.])
+  == [1]`. A 2-D input flattens C-order first.
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- Four arms: `("coil","{sort,argsort,unique,flatnonzero}") =>
+  EcoSig::from_values("__cobrust_coil_<op>", vec![coil_buffer_ty()],
+  coil_buffer_ty(), Semantic)`. The return type is `coil.Buffer` for all
+  four; the element-dtype split (sort/unique preserve, argsort/flatnonzero
+  → int64) is invisible to typecheck (it sees only the opaque handle).
+- Tier `Semantic` — VALUES + order + dtype agree exactly with numpy. The
+  only intentional divergence is the absent optional `axis` arg (we always
+  flatten no-axis), documented in `manipulate.rs`.
+
+### Typecheck / MIR — ZERO new code
+
+- All four ride the EXACT generic 1-Buffer-arg → Buffer-return path that
+  `coil.transpose` / `coil.exp` already prove. `try_lower_ecosystem_call`
+  Case-1 iterates `sig.params`; the single Buffer arg auto-borrows
+  (Move→Copy) via `lower_eco_arg` and the fresh return is drop-scheduled by
+  `emit_ecosystem_call`. NO `_=>"any"` MIR gap; VERIFIED via the E2E
+  (cobrust-mir recompiled with no source change).
+- None of `sort` / `argsort` / `unique` / `flatnonzero` is a Cobrust
+  keyword, so they parse cleanly as `Attr { base: coil, name: <op> }`. NO
+  parser accommodation needed.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+- Four rows: `__cobrust_coil_{sort,argsort,unique,flatnonzero}` →
+  `coil_shape_ty` `(ptr) -> ptr` — the IDENTICAL extern shape as the
+  reshape ops + unary ufuncs. Rides the `__cobrust_coil_` prefix recognizer.
+
+### Runtime (`cobrust-coil/src/manipulate.rs` + `cabi.rs`)
+
+- Kernels `manipulate::{sort,argsort,unique,flatnonzero}(a: &Array) ->
+  Array` over the closed `Array` enum. `sort`/`unique` match each dtype arm
+  preserving the variant; `argsort`/`flatnonzero` build an `Array::Int64`
+  via `int64_1d`. A tiny private `Float` trait (`is_nan` + `total_cmp` +
+  `PartialEq`) abstracts the f32/f64 NaN-partition arms WITHOUT a new dep.
+  24 unit tests vs numpy 2.4.6.
+- cabi: 4 shims via the SAME `buffer_unary` body (TOTAL — a sort / dedupe /
+  nonzero scan never fails on a valid Buffer; a null handle is the only
+  abort, via `buffer_unary`'s guard). NO `coil_panic` domain trap.
+
+### Done means (#145 BATCH 9 — DONE)
+
+- [x] `manipulate.rs`: `sort`/`argsort`/`unique`/`flatnonzero` kernels +
+      `sorted_total`/`sorted_float_nan_last`/`argsort_total`/
+      `argsort_float_nan_last`/`unique_total`/`unique_float_nan_collapse`/
+      `nonzero_idx`/`int64_1d` helpers + the private `Float` trait; 24 unit
+      tests (sort asc + NaN-last (incl. signed-NaN) + dtype-preserve
+      int/i32/f32, empty; argsort i64-indices + stable-dup + NaN-tail +
+      int-input-still-i64; unique sorted-dedupe + NaN-collapse (1 + multi) +
+      dtype-preserve + 2-D flatten; flatnonzero i64-indices + NaN-nonzero +
+      2-D flatten + float-input-still-i64 + all-zero-empty; sort∘unique
+      chain).
+- [x] cabi: 4 shims via `buffer_unary` (TOTAL — null is the only abort).
+- [x] Manifest: 4 ecosystem arms (each `Buffer -> Buffer`), tier `Semantic`.
+- [x] Typecheck / MIR: NO new code (VERIFIED via E2E — the 1-Buffer arg
+      rides the `coil.transpose` generic Case-1 path). No parser
+      accommodation (none is a keyword).
+- [x] Codegen: 4 `coil_shape_ty` `(ptr) -> ptr` rows.
+- [x] `.cb` E2E `coil_sort_e2e.rs` (6 tests): sort a 2x2 flattened to
+      `[1,2,3,4]` (float64), argsort → `[1,3,0,2]` `dtype=int64` (the
+      dtype-flip signal), unique → `[1,2,3]` (float64), flatnonzero →
+      `[1,3]` `dtype=int64`, NaN-last sort `[1, NaN]` (NaN built via IEEE
+      0.0/0.0), + the sort∘unique chain.
+- [x] No regression: full `cobrust-coil` suite green; `coil_sort_e2e` +
+      `coil_hello_e2e` all green (the four ops do NOT collide with the
+      `coil.no_such_function` negative placeholder); touched crates build +
+      clippy `-D warnings` + fmt clean; no new dep (`Cargo.lock` unchanged —
+      F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

@@ -844,6 +844,54 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // #145 gap-closure BATCH 9 (2026-06-01) — the FLAT search / order
+        // surface (`sort` / `argsort` / `unique` / `flatnonzero`), each a
+        // 1-arg `Buffer -> Buffer` op. SAME borrow-Buffer-arg →
+        // fresh-Buffer-return value-handle ABI as the BATCH-2 reshape ops
+        // (`__cobrust_coil_transpose` / `_flatten` / `_ravel`) and the
+        // unary ufunc family: the single Buffer arg auto-borrows (Move→Copy)
+        // in `lower_eco_arg` and the fresh return is drop-scheduled by
+        // `emit_ecosystem_call` (NO `_=>"any"` MIR gap — the generic
+        // ecosystem-call lowering iterates `sig.params` regardless of op,
+        // identical 1-Buffer-arg shape to `coil.transpose`).
+        //
+        // The RETURN TYPE is `coil.Buffer` for all four, but the *element*
+        // dtype split lives in the kernel (typecheck sees only the opaque
+        // `Buffer` handle): `sort` / `unique` PRESERVE the input dtype;
+        // `argsort` / `flatnonzero` produce an `Int64` Buffer (the indices).
+        //
+        // Tier `Semantic` — the VALUES + order + dtype agree exactly with
+        // numpy (confirmed via `/opt/homebrew/bin/python3.11`, numpy 2.4.6):
+        // `sort`/`argsort` place all `NaN` last; `unique` collapses multiple
+        // `NaN` to one trailing `NaN` (numpy 1.21+); `flatnonzero` counts
+        // `NaN` as nonzero (`!= 0.0`). `argsort` uses a STABLE sort (the
+        // deterministic, reproducible tie-break). The intentional divergence
+        // from numpy's optional `axis` arg (we always flatten no-axis) is
+        // documented in `manipulate.rs`.
+        ("coil", "sort") => Some(EcoSig::from_values(
+            "__cobrust_coil_sort",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "argsort") => Some(EcoSig::from_values(
+            "__cobrust_coil_argsort",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "unique") => Some(EcoSig::from_values(
+            "__cobrust_coil_unique",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "flatnonzero") => Some(EcoSig::from_values(
+            "__cobrust_coil_flatnonzero",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         // #145 unary TRANSCENDENTAL gap-closure (2026-06-01) — the FLOAT-
         // returning 1-arg elementwise ufunc family, the unary-math surface
         // most-used in real numpy code per §2.5. Same borrow-Buffer-arg →

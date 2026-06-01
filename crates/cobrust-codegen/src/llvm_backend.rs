@@ -3428,6 +3428,20 @@ impl<'ctx> LlvmEmitter<'ctx> {
             // ptr` loop). MIR retargets `coil.cumsum(a)` onto these `Call`s.
             ("__cobrust_coil_cumsum", coil_shape_ty, 1),
             ("__cobrust_coil_cumprod", coil_shape_ty, 1),
+            // #145 SEARCH / ORDER BATCH 9 — the FLAT `sort` / `argsort` /
+            // `unique` / `flatnonzero` ops. All 1-arg `(ptr) -> ptr` ≡
+            // `coil_shape_ty`, the IDENTICAL extern shape as the reshape
+            // ops + unary ufuncs above. The return-DTYPE split (`sort` /
+            // `unique` preserve dtype; `argsort` / `flatnonzero` produce an
+            // Int64 Buffer) is entirely inside the Rust kernel
+            // (`manipulate.rs`); the handle ABI is byte-identical, so
+            // codegen rides the SAME extern shape + the flat
+            // `__cobrust_coil_*` recognizer prefix (no batch-specific arm).
+            // MIR retargets `coil.sort(a)` onto these `Call`s.
+            ("__cobrust_coil_sort", coil_shape_ty, 1),
+            ("__cobrust_coil_argsort", coil_shape_ty, 1),
+            ("__cobrust_coil_unique", coil_shape_ty, 1),
+            ("__cobrust_coil_flatnonzero", coil_shape_ty, 1),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

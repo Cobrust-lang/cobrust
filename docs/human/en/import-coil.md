@@ -178,6 +178,62 @@ fn main() -> i64:
 > follow-up once that lands. This batch ships only the single-arg and
 > 2-array forms.
 
+## Sorting & search (`sort` / `argsort` / `unique` / `flatnonzero`)
+
+These are the four "flat search & order" ops an LLM reaches for first.
+Each takes one Buffer and returns a **fresh `coil.Buffer`** — wired
+identically to the reshape ops above. They all **flatten** a
+multi-dimensional input to 1-D (C-order) first, matching numpy's no-axis
+default.
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array2x2(3.0, 1.0, 4.0, 2.0)
+    let s: coil.Buffer = coil.sort(a)              # [1, 2, 3, 4]  (float64)
+    let _ = coil.print_buffer(s)
+
+    let lo: coil.Buffer = coil.array1d2(3.0, 1.0)
+    let hi: coil.Buffer = coil.array1d2(4.0, 2.0)
+    let v: coil.Buffer = coil.concatenate(lo, hi)  # [3, 1, 4, 2]
+    let idx: coil.Buffer = coil.argsort(v)         # [1, 3, 0, 2]  (int64!)
+    let _ = coil.print_buffer(idx)
+    return 0
+```
+
+- **`coil.sort(a: Buffer) -> Buffer`** — a fresh **ascending**-sorted 1-D
+  copy. **Dtype-preserving** (a float input stays float, an int input
+  stays int). For floats, every `NaN` sorts to the **end** (numpy:
+  `np.sort([3., nan, 1.]) == [1., 3., nan]`).
+- **`coil.argsort(a: Buffer) -> Buffer`** — the **indices** that would
+  sort `a` ascending. The result is **always an `int64` Buffer** (the
+  indices), whatever the input dtype. The sort is **stable**, so equal
+  keys keep their original order. For floats the `NaN`-bearing indices go
+  last. `np.argsort([3., 1., 2.]) == [1, 2, 0]`.
+- **`coil.unique(a: Buffer) -> Buffer`** — the **sorted unique** values.
+  **Dtype-preserving**. `np.unique([3, 1, 2, 1, 3]) == [1, 2, 3]`. For
+  floats, multiple `NaN` collapse to **one** trailing `NaN`
+  (`np.unique([nan, 1., nan]) == [1., nan]`).
+- **`coil.flatnonzero(a: Buffer) -> Buffer`** — the flat (C-order)
+  **indices** where `a != 0`. Always an **`int64` Buffer**.
+  `np.flatnonzero([0, 5, 0, 2]) == [1, 3]`. For floats the test is `a !=
+  0.0`, so a `NaN` (being `!= 0.0`) **is** counted as nonzero
+  (`np.flatnonzero([0., nan, 0.]) == [1]`).
+
+> **The dtype flip is the tell**: every `.cb` Buffer constructor builds a
+> `Float64` Buffer, so `sort` / `unique` print `dtype=float64` while
+> `argsort` / `flatnonzero` print `dtype=int64` — the result dtype
+> literally flips to `int64` for the index-returning ops.
+>
+> **All four are total** — a sort / dedupe / nonzero scan never fails on a
+> valid Buffer (there is no shape-conformability concept for a single
+> argument), so unlike the 2-array combine ops there is no trap path.
+>
+> **The `axis` argument is deferred**: numpy's `sort` / `argsort` /
+> `unique` take an optional `axis`; this batch always flattens (the
+> no-axis default). A per-axis form is a tracked follow-up.
+
 ## Elementwise math — transcendental ufuncs (`exp` / `log` / `log10` / `sqrt` / `sin` / `cos` / `tan`)
 
 These apply a math function to **every element**, returning a **fresh

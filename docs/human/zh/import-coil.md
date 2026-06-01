@@ -162,6 +162,53 @@ fn main() -> i64:
 > 列表)和 `np.reshape(a, (m, n))`(shape 元组)需要 `list[Buffer]` / 元组
 > 编组,目前还不存在 —— 等那个落地后再补。本批只交付单参与双数组形式。
 
+## 排序与搜索(`sort` / `argsort` / `unique` / `flatnonzero`)
+
+这是 LLM 在 numpy 里最先伸手去用的四个「扁平搜索与排序」操作。每个都接收一个
+Buffer 并返回一个**全新的 `coil.Buffer`** —— 接线方式与上面的形状变换操作完全
+一致。它们都会先把多维输入**展平**成一维(C 序),与 numpy 的无轴默认行为一致。
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array2x2(3.0, 1.0, 4.0, 2.0)
+    let s: coil.Buffer = coil.sort(a)              # [1, 2, 3, 4](float64)
+    let _ = coil.print_buffer(s)
+
+    let lo: coil.Buffer = coil.array1d2(3.0, 1.0)
+    let hi: coil.Buffer = coil.array1d2(4.0, 2.0)
+    let v: coil.Buffer = coil.concatenate(lo, hi)  # [3, 1, 4, 2]
+    let idx: coil.Buffer = coil.argsort(v)         # [1, 3, 0, 2](int64!)
+    let _ = coil.print_buffer(idx)
+    return 0
+```
+
+- **`coil.sort(a: Buffer) -> Buffer`** —— 全新的**升序**一维拷贝。**保留
+  dtype**(浮点输入仍是浮点,整数输入仍是整数)。对浮点而言,所有 `NaN` 都排到
+  **末尾**(numpy:`np.sort([3., nan, 1.]) == [1., 3., nan]`)。
+- **`coil.argsort(a: Buffer) -> Buffer`** —— 能把 `a` 升序排好的**下标**。结果
+  **永远是 `int64` Buffer**(下标),与输入 dtype 无关。排序是**稳定的**,相等键
+  保持原有顺序。对浮点而言,带 `NaN` 的下标排到末尾。
+  `np.argsort([3., 1., 2.]) == [1, 2, 0]`。
+- **`coil.unique(a: Buffer) -> Buffer`** —— **排序去重**后的值。**保留 dtype**。
+  `np.unique([3, 1, 2, 1, 3]) == [1, 2, 3]`。对浮点而言,多个 `NaN` 折叠为**一个**
+  末尾 `NaN`(`np.unique([nan, 1., nan]) == [1., nan]`)。
+- **`coil.flatnonzero(a: Buffer) -> Buffer`** —— `a != 0` 处的扁平(C 序)
+  **下标**。永远是 **`int64` Buffer**。`np.flatnonzero([0, 5, 0, 2]) == [1, 3]`。
+  对浮点而言判定是 `a != 0.0`,所以 `NaN`(因为 `!= 0.0`)**会**被算作非零
+  (`np.flatnonzero([0., nan, 0.]) == [1]`)。
+
+> **dtype 翻转就是信号**:每个 `.cb` Buffer 构造器都建出 `Float64` Buffer,所以
+> `sort` / `unique` 打印 `dtype=float64`,而 `argsort` / `flatnonzero` 打印
+> `dtype=int64` —— 返回下标的操作里,结果 dtype 会实实在在地翻成 `int64`。
+>
+> **四个操作都是全函数(total)** —— 排序 / 去重 / 找非零在合法 Buffer 上永不
+> 失败(单参没有形状相容性这一概念),所以不像双数组拼接操作那样有陷阱路径。
+>
+> **`axis` 参数被推迟**:numpy 的 `sort` / `argsort` / `unique` 接收可选 `axis`;
+> 本批永远展平(无轴默认)。按轴形式是已记录的后续项。
+
 ## 逐元素数学 —— 超越函数 ufunc(`exp` / `log` / `log10` / `sqrt` / `sin` / `cos` / `tan`)
 
 这些对**每个元素**施加一个数学函数,返回**新 `coil.Buffer`** —— 它们

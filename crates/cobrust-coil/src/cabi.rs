@@ -92,8 +92,9 @@ use crate::elementwise::{
 use crate::grid::{mgrid_1d, ogrid_1d};
 use crate::linalg::{det as linalg_det, inv as linalg_inv, solve as linalg_solve};
 use crate::manipulate::{
-    concatenate as coil_concatenate, flatten as coil_flatten, hstack as coil_hstack,
-    ravel as coil_ravel, transpose as coil_transpose, vstack as coil_vstack,
+    argsort as coil_argsort, concatenate as coil_concatenate, flatnonzero as coil_flatnonzero,
+    flatten as coil_flatten, hstack as coil_hstack, ravel as coil_ravel, sort as coil_sort,
+    transpose as coil_transpose, unique as coil_unique, vstack as coil_vstack,
     where_select as coil_where,
 };
 use crate::print::array_repr;
@@ -1357,6 +1358,79 @@ pub unsafe extern "C" fn __cobrust_coil_cumsum(a: *mut u8) -> *mut u8 {
 pub unsafe extern "C" fn __cobrust_coil_cumprod(a: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_unary(a, "cumprod", coil_cumprod) }
+}
+
+// =====================================================================
+// #145 gap-closure BATCH 9 (2026-06-01) — the FLAT search / order
+// surface (`sort` / `argsort` / `unique` / `flatnonzero`). Each is a
+// 1-arg Buffer -> Buffer op riding the SAME shared `buffer_unary` body +
+// `coil_shape_ty` `(ptr) -> ptr` extern as the transcendental / rounding
+// ufuncs + the BATCH-2 reshape ops (borrow-Buffer-arg → fresh-Buffer-
+// return). All are TOTAL (no `coil_panic` domain trap — a sort / dedupe /
+// nonzero scan never fails on a valid Buffer; a null handle is the only
+// abort, via `buffer_unary`'s guard). The RETURN-DTYPE split lives
+// entirely in the Rust kernel (`manipulate.rs`): `sort` / `unique`
+// PRESERVE the input dtype; `argsort` / `flatnonzero` ALWAYS produce an
+// `Int64` Buffer (the indices). The ABI shape is byte-identical for all
+// four, so codegen rides the SAME `coil_shape_ty` extern + the flat
+// `__cobrust_coil_*` recognizer prefix (no batch-specific arm).
+// =====================================================================
+
+/// `coil.sort(a) -> Buffer`. Fresh ASCENDING-sorted 1-D copy (numpy's
+/// no-axis default flattens C-order first), **dtype-preserving**. For
+/// floats ALL `NaN` sort LAST (sign-agnostic). BORROWS `a`; returns a
+/// fresh owned handle. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_sort(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "sort", coil_sort) }
+}
+
+/// `coil.argsort(a) -> Buffer`. The `Int64` indices that would sort `a`
+/// ascending (STABLE; over the C-order flattened array). For floats the
+/// `NaN`-bearing indices go LAST in input order. The result Buffer is
+/// ALWAYS `Int64`-dtype regardless of input dtype. BORROWS `a`; returns
+/// a fresh owned handle. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_argsort(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "argsort", coil_argsort) }
+}
+
+/// `coil.unique(a) -> Buffer`. The SORTED unique values as a fresh 1-D
+/// copy, **dtype-preserving**. For floats, MULTIPLE `NaN` collapse to ONE
+/// trailing `NaN` (numpy 1.21+). BORROWS `a`; returns a fresh owned
+/// handle. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_unique(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "unique", coil_unique) }
+}
+
+/// `coil.flatnonzero(a) -> Buffer`. The `Int64` flat C-order indices
+/// where `a != 0`. For floats the predicate is `a != 0.0`, so `NaN` (`!=
+/// 0.0`) IS included. The result Buffer is ALWAYS `Int64`-dtype. BORROWS
+/// `a`; returns a fresh owned handle. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_flatnonzero(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "flatnonzero", coil_flatnonzero) }
 }
 
 // =====================================================================
