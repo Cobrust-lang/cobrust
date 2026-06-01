@@ -10,6 +10,38 @@
 //! pattern as F65's synthetic-LLM provider — the chain is proven without
 //! the real infra wired.
 //!
+//! # `dora-real` feature — #146 Phase A (the synthetic → real swap)
+//!
+//! The DEFAULT build keeps the synthetic trampoline above. Building with
+//! `--features dora-real` swaps the L4 runtime body from the canned-event
+//! trampoline to a REAL `dora_node_api::DoraNode` + a blocking
+//! `events.recv()` loop firing the `.cb` callback once per real
+//! `Event::Input` (dora-real-integration-plan §9 spike-proven; mirrors how
+//! `coil` gates `faer` behind `coil-faer`). The **C-ABI symbol surface is
+//! IDENTICAL across both builds** — the 11 `#[unsafe(no_mangle)] extern
+//! "C"` shim signatures below are single-definition; only the private
+//! `*_impl` bodies + the two handle-struct shapes are
+//! `#[cfg]`-split (`real` / `synthetic` submodules). So the ecosystem
+//! manifest (`cobrust-types`), the MIR retarget, and the codegen
+//! `Constant::FnRef` callback never change — this is a `cabi.rs`-local
+//! body swap, NOT a compiler change (the spike's load-bearing insight).
+//!
+//! Under `dora-real`, `__cobrust_dora_node_new` calls
+//! `DoraNode::init_from_env()` (the daemon-spawned path; the dora
+//! `integration_testing` mode — driven by `DORA_TEST_WITH_INPUTS` — makes
+//! this run hermetically with NO daemon, which the F36-honest E2E uses for
+//! a real round-trip) and stashes the live `(DoraNode, EventStream)` in
+//! the Node handle; `node.run()` drains the REAL `EventStream` firing the
+//! callback per `Event::Input`; `event.data_str()` decodes the real
+//! `arrow::array::ArrayRef` payload; `event.send_output(id, payload)`
+//! publishes a real Arrow `StringArray` on the node's output port via the
+//! ambient-node handle (plan §4.4 option 1 — the live `DoraNode` is reached
+//! through the Node handle pointer the trampoline threads into a
+//! thread-local for the callback's duration). `node.shutdown()` /
+//! `node.run()` honor `Event::Stop` / a `None` recv (stream-closed) by
+//! breaking the loop. Real-dora is NATIVE-ONLY: tokio-net hard-fails on
+//! wasm32 (§9), so the wasm dora story stays synthetic-default.
+//!
 //! # The chain
 //!
 //! These `#[no_mangle] extern "C"` shims are the L4 (runtime) layer of
@@ -233,20 +265,32 @@ pub fn send_output_count() -> u64 {
     SEND_OUTPUT_COUNT.load(Ordering::SeqCst)
 }
 
-/// Runtime form of a `Node` handle the `.cb` source owns. Phase 1
-/// captures only the node name; the registered handler lives in the
-/// process-global [`REGISTERED_HANDLER`] slot. Phase 2 will fold the
-/// handler vector into per-Node state.
+/// Runtime form of a `Node` handle the `.cb` source owns.
+///
+/// **SYNTHETIC build** (`not(feature = "dora-real")`): captures only the
+/// node name; the registered handler lives in the process-global
+/// [`REGISTERED_HANDLER`] slot.
+///
+/// **REAL build** (`feature = "dora-real"`): additionally owns the live
+/// `(DoraNode, EventStream)` returned by `DoraNode::init_from_env()` plus
+/// the tokio runtime the event loop runs inside — see the
+/// [`real`] submodule. `shutdown_called` is read by both builds.
 struct DoraNodeHandle {
-    /// User-supplied node identifier (e.g. `"detector"`). Currently
-    /// unused at runtime by Phase 1's `run` synthetic loop — preserved
-    /// so a future `node.id() -> str` follow-up reads it without
-    /// re-allocating the Node.
+    /// User-supplied node identifier (e.g. `"detector"`). Under the
+    /// synthetic `run` loop it is unused at runtime — preserved so a
+    /// future `node.id() -> str` follow-up reads it without re-allocating
+    /// the Node. Under the real path it is informational.
     _name: String,
-    /// Whether `shutdown()` has been invoked on this Node. Phase 1's
-    /// shutdown is a soft flag the synthetic `run` honors (in Phase 2
-    /// it becomes a real signal to the dora coordinator).
+    /// Whether `shutdown()` has been invoked on this Node. The synthetic
+    /// shutdown is a soft flag; under the real path it also drops the live
+    /// `DoraNode` early (signalling the dora coordinator).
     shutdown_called: bool,
+    /// REAL build only — the live dora node + its event stream + the tokio
+    /// runtime guard. `None` when `init_from_env()` failed (the run shim
+    /// then surfaces the `-1` sentinel rather than aborting). Kept off the
+    /// synthetic build entirely so the default has zero real-dora state.
+    #[cfg(feature = "dora-real")]
+    real: Option<real::RealNode>,
 }
 
 /// Runtime form of an Event the trampoline allocates per-callback
@@ -254,11 +298,19 @@ struct DoraNodeHandle {
 /// Adt handle and calls borrow-shim methods (`event.id()` /
 /// `event.data_str()`) that materialise fresh Cobrust Str buffers from
 /// these fields.
+///
+/// Both builds carry the decoded `id` + `data_str` strings so the borrow
+/// shims are build-agnostic. Under the REAL build the trampoline decodes
+/// the real `arrow::array::ArrayRef` payload into `data_str` before boxing
+/// the Event (so `event.data_str()` returns the REAL wire payload, not a
+/// canned string — the load-bearing real-vs-synthetic delta).
 struct DoraEventHandle {
     /// Input id this event arrived on (e.g. `"camera"`).
     id: String,
-    /// Payload bytes as a UTF-8 string. Phase 1 ships Str only; Phase 2
-    /// widens to Arrow `RecordBatch` via `__cobrust_dora_event_data_arrow`
+    /// Payload bytes as a UTF-8 string. Synthetic build: the canned
+    /// per-input Str. Real build: the decoded Arrow payload (a Utf8
+    /// `StringArray` element, or a debug rendering of a non-string array).
+    /// Phase B widens this to a structured Arrow / `coil.Buffer` surface
     /// (sub-ADR 0076c).
     data_str: String,
 }
@@ -279,9 +331,14 @@ struct DoraEventHandle {
 pub unsafe extern "C" fn __cobrust_dora_node_new(name: *mut u8) -> *mut u8 {
     // SAFETY: caller-attestation per `# Safety`.
     let name_s = unsafe { read_str_buf(name) };
+    // SYNTHETIC build: a name-only handle (the canned `run` loop needs no
+    // live node). REAL build: also init a real `DoraNode` via
+    // `init_from_env()` and stash `(DoraNode, EventStream)` for `run`.
     let handle = DoraNodeHandle {
         _name: name_s,
         shutdown_called: false,
+        #[cfg(feature = "dora-real")]
+        real: real::init_node(),
     };
     Box::into_raw(Box::new(handle)).cast::<u8>()
 }
@@ -372,6 +429,32 @@ pub unsafe extern "C" fn __cobrust_dora_node_run(node: *mut u8) -> i64 {
     if node.is_null() {
         return -1;
     }
+    // REAL build: drive the live `EventStream` from the node handle.
+    // SYNTHETIC build: drive the canned-event trampoline. Both read the
+    // process-global [`REGISTERED_HANDLER`] and fire the same callback ABI.
+    // Exactly one `let ret` is active per build (cfg-mutually-exclusive),
+    // so the tail `ret` is unambiguous + clippy-clean (no needless return).
+    #[cfg(feature = "dora-real")]
+    // SAFETY: caller attests `node` is a live handle from `node_new`.
+    let ret = unsafe { real::run_node(node) };
+    #[cfg(not(feature = "dora-real"))]
+    // SAFETY: caller attests `node` is a live handle from `node_new`.
+    let ret = unsafe { run_node_synthetic(node) };
+    ret
+}
+
+/// The SYNTHETIC `node.run()` body — the canned-event trampoline. Unchanged
+/// from the Phase-1/2 synthetic runtime; called from
+/// `__cobrust_dora_node_run` under `not(feature = "dora-real")`. Kept as a
+/// private inner fn (rather than inline in the shim) so the REAL path can be
+/// `#[cfg]`-swapped without touching the exported shim signature.
+///
+/// # Safety
+///
+/// `node` must be a live, non-null Node handle from
+/// `__cobrust_dora_node_new`.
+#[cfg(not(feature = "dora-real"))]
+unsafe fn run_node_synthetic(node: *mut u8) -> i64 {
     // Borrow the Node for the duration of the synthetic loop; not consumed.
     // SAFETY: caller per `# Safety`.
     let _handle: &DoraNodeHandle = unsafe { &*node.cast::<DoraNodeHandle>() };
@@ -417,36 +500,54 @@ pub unsafe extern "C" fn __cobrust_dora_node_run(node: *mut u8) -> i64 {
     // Fire the handler once per canned event.
     for (id, data_str) in events {
         let event = DoraEventHandle { id, data_str };
-        // Box the Event so the .cb handler receives an opaque *mut u8
-        // Adt-pointer (ADR-0073 §2 D6 — Rust owns the box). The trampoline
-        // owns the Box for the callback invocation and frees it on return.
-        let event_raw = Box::into_raw(Box::new(event)).cast::<u8>();
-
-        // Catch panics across the C ABI (ADR-0073 §3 Q5).
-        let ret_raw = std::panic::catch_unwind(|| {
-            // SAFETY: `raw` is a valid `CbHandlerAbi`; `event_raw` is a
-            // valid Boxed Event pointer just constructed.
-            unsafe { raw(event_raw) }
-        });
-
-        // Free the Event box exactly once on the way out. The .cb source
-        // NEVER drops a dora.Event local (manifest `handle_drop_symbol`
-        // returns None for DORA_EVENT_ADT — mirrors pit.Request).
-        // SAFETY: `event_raw` was just `Box::into_raw`'d above; reclaim and drop.
-        unsafe { drop(Box::from_raw(event_raw.cast::<DoraEventHandle>())) };
-
-        // Err arm = panic crossed the C ABI; abort per ADR-0073 §3 Q5.
-        if ret_raw.is_err() {
-            eprintln!(
-                "cobrust-dora: panic in .cb handler crossed the C ABI — aborting (ADR-0073 §3 Q5)"
-            );
-            std::process::abort();
-        }
+        // SAFETY: `raw` is a valid handler; the shared dispatcher boxes +
+        // frees the Event and aborts on a callback panic per ADR-0073 §3 Q5.
+        unsafe { fire_callback(raw, event) };
     }
     // Discard the handler return-pointer(s) (mirrors hood's "side-effect IS
     // the intent" pattern). Surface the manifest-declared 0 sentinel so the
     // .cb source's `let _ = node.run()` discards a clean i64.
     0
+}
+
+/// Shared callback-dispatch core for ONE event — used by BOTH the synthetic
+/// trampoline and the real `EventStream` loop so the box / `catch_unwind` /
+/// abort-on-panic / free discipline is single-sourced (ADR-0073 §2 D6 +
+/// §3 Q5). Boxes `event` into an opaque `*mut u8` the `.cb` handler
+/// receives, invokes the handler under `catch_unwind`, frees the box
+/// exactly once, and **aborts the process** if the callback panicked
+/// (unwinding through the C ABI is UB).
+///
+/// # Safety
+///
+/// `raw` must be a valid `CbHandlerAbi` fn pointer (codegen guarantees this
+/// for the type-checked callback path).
+unsafe fn fire_callback(raw: CbHandlerAbi, event: DoraEventHandle) {
+    // Box the Event so the .cb handler receives an opaque *mut u8
+    // Adt-pointer (ADR-0073 §2 D6 — Rust owns the box). The trampoline owns
+    // the Box for the callback invocation and frees it on return.
+    let event_raw = Box::into_raw(Box::new(event)).cast::<u8>();
+
+    // Catch panics across the C ABI (ADR-0073 §3 Q5).
+    let ret_raw = std::panic::catch_unwind(|| {
+        // SAFETY: `raw` is a valid `CbHandlerAbi`; `event_raw` is a valid
+        // Boxed Event pointer just constructed.
+        unsafe { raw(event_raw) }
+    });
+
+    // Free the Event box exactly once on the way out. The .cb source NEVER
+    // drops a dora.Event local (manifest `handle_drop_symbol` returns None
+    // for DORA_EVENT_ADT — mirrors pit.Request).
+    // SAFETY: `event_raw` was just `Box::into_raw`'d above; reclaim and drop.
+    unsafe { drop(Box::from_raw(event_raw.cast::<DoraEventHandle>())) };
+
+    // Err arm = panic crossed the C ABI; abort per ADR-0073 §3 Q5.
+    if ret_raw.is_err() {
+        eprintln!(
+            "cobrust-dora: panic in .cb handler crossed the C ABI — aborting (ADR-0073 §3 Q5)"
+        );
+        std::process::abort();
+    }
 }
 
 /// The canned payload Str for a declared input id (ADR-0076 Phase 2
@@ -455,6 +556,11 @@ pub unsafe extern "C" fn __cobrust_dora_node_run(node: *mut u8) -> i64 {
 /// single-input no-regression path); every other input id gets a distinct
 /// non-empty `"frame_<id>"` canned Str so the handler can tell injected
 /// events apart. A real broker replaces this with the actual Arrow payload.
+///
+/// Synthetic-build only — the `dora-real` path decodes the REAL Arrow
+/// payload instead (`real::decode_arrow_payload`), so this canned helper is
+/// `#[cfg]`-gated off there to keep `clippy -D warnings` clean.
+#[cfg(not(feature = "dora-real"))]
 fn canned_payload_for(id: &str) -> String {
     if id == "camera" {
         "frame_001".to_string()
@@ -477,6 +583,13 @@ pub unsafe extern "C" fn __cobrust_dora_node_shutdown(node: *mut u8) -> i64 {
     // SAFETY: caller per `# Safety`.
     let handle: &mut DoraNodeHandle = unsafe { &mut *node.cast::<DoraNodeHandle>() };
     handle.shutdown_called = true;
+    // REAL build: drop the live `DoraNode`/`EventStream` now so the dora
+    // coordinator sees the node leave (idempotent — a second shutdown finds
+    // `real` already `None`). The synthetic build has no live node to drop.
+    #[cfg(feature = "dora-real")]
+    {
+        handle.real = None;
+    }
     0
 }
 
@@ -588,7 +701,9 @@ pub unsafe extern "C" fn __cobrust_dora_event_send_output(
     let id_s = unsafe { read_str_buf(output_id) };
     let payload_s = unsafe { read_str_buf(payload) };
 
-    // Validate against the declared-output set.
+    // Validate against the declared-output set (BOTH builds — the
+    // fail-closed contract is build-agnostic; the §2.5 compile-time-catch
+    // follow-up is the typed `DoraUnknownOutputId` reject, Phase B).
     let declared = DECLARED_OUTPUTS
         .lock()
         .map(|set| set.iter().any(|o| o == &id_s))
@@ -601,12 +716,23 @@ pub unsafe extern "C" fn __cobrust_dora_event_send_output(
         return -1;
     }
 
-    // Capture: print the marker line the synthetic E2E asserts, and bump the
-    // count instrument. A real broker would marshal `payload` into an Arrow
-    // RecordBatch + publish on the zenoh output channel here.
-    println!("output[{id_s}]={payload_s}");
+    // Count the emission on BOTH builds (the cabi unit tests read this).
     SEND_OUTPUT_COUNT.fetch_add(1, Ordering::SeqCst);
-    0
+
+    // REAL build: publish a real Arrow `StringArray` on the node's output
+    // port via the ambient live `DoraNode` (plan §4.4 option 1 — reached
+    // through the thread-local Node handle the run loop installed for the
+    // callback's duration). SYNTHETIC build: capture the emission by
+    // printing the `output[<id>]=<payload>` marker the synthetic E2E asserts.
+    // One `let ret` active per build → clippy-clean tail (no needless return).
+    #[cfg(feature = "dora-real")]
+    let ret = real::send_output(&id_s, &payload_s);
+    #[cfg(not(feature = "dora-real"))]
+    let ret = {
+        println!("output[{id_s}]={payload_s}");
+        0
+    };
+    ret
 }
 
 /// Drop an `Event` handle. Phase 1 currently never invoked from the .cb
@@ -631,7 +757,224 @@ pub unsafe extern "C" fn __cobrust_dora_event_drop(event: *mut u8) {
     // increment here to keep the instrument honest.
 }
 
-#[cfg(test)]
+// =====================================================================
+// REAL dora-node-api runtime — #146 Phase A (behind `feature = "dora-real"`).
+//
+// This submodule holds the REAL `DoraNode`-driven bodies the exported
+// C-ABI shims delegate to under `--features dora-real`. The synthetic
+// trampoline (above) is the DEFAULT; this is the opt-in real path
+// (mirrors `coil`'s `coil-faer` gate). NOTHING here changes the exported
+// symbol surface, the ecosystem manifest, or the codegen callback.
+//
+// dora-real-integration-plan §9 spike-proven: `libdora.a` with real
+// dora-node-api 0.5.0 + tokio + arrow LINKS into a `.cb` Mach-O and RUNS;
+// the one compiler-side change is the `-framework CoreFoundation` link flag
+// (cobrust-cli/src/build.rs). The dora `integration_testing` mode (driven
+// by `DORA_TEST_WITH_INPUTS`) lets `init_from_env()` run hermetically with
+// NO daemon — the F36-honest E2E uses it for a genuine real round-trip.
+// =====================================================================
+
+#[cfg(feature = "dora-real")]
+mod real {
+    use super::{CbHandlerAbi, DoraEventHandle, DoraNodeHandle, REGISTERED_HANDLER, fire_callback};
+    use std::cell::Cell;
+    use std::sync::atomic::Ordering;
+
+    use dora_node_api::dora_core::config::DataId;
+    use dora_node_api::{ArrowData, DoraNode, Event, EventStream, IntoArrow, MetadataParameters};
+
+    /// The live real-dora node state owned by a [`DoraNodeHandle`] under
+    /// `feature = "dora-real"`. Holds the `DoraNode` (for `send_output`),
+    /// the `EventStream` (drained by `run_node`), and the tokio runtime the
+    /// node's internal tasks live in. The runtime is `enter()`-ed for the
+    /// init + event-loop scopes (plan §3.2 — the canonical node enters a
+    /// multi-thread runtime; for the hermetic `integration_testing` path no
+    /// runtime is strictly required, but entering one is harmless and
+    /// matches the real daemon-spawned shape).
+    pub(super) struct RealNode {
+        node: DoraNode,
+        events: EventStream,
+        // The multi-thread tokio runtime the node's background tasks live
+        // in. `run_node` `.enter()`s it for the blocking recv/send window;
+        // it is also held for the node's lifetime so the runtime stays up,
+        // and dropped (shutting it down) when the Node handle drops.
+        rt: tokio::runtime::Runtime,
+    }
+
+    thread_local! {
+        /// Ambient live-node pointer for the duration of ONE callback
+        /// invocation (plan §4.4 option 1). `run_node` sets this to
+        /// `&mut self.node` immediately before firing the `.cb` handler and
+        /// clears it on return, so the synchronous `event.send_output`
+        /// shim — which only receives the Event pointer — can still reach
+        /// the live `DoraNode` to publish. Single-threaded within the loop,
+        /// so a thread-local raw pointer is sound (no aliasing: the borrow
+        /// in `run_node` is released for the callback window).
+        static AMBIENT_NODE: Cell<*mut DoraNode> = const { Cell::new(std::ptr::null_mut()) };
+    }
+
+    /// Build a multi-thread tokio runtime and initialise a REAL `DoraNode`
+    /// via `DoraNode::init_from_env()` inside the runtime context. Returns
+    /// `None` on any failure (e.g. no daemon env AND no testing env) so the
+    /// `run` shim surfaces the `-1` sentinel rather than aborting across the
+    /// C ABI — `node.run()` on a node that never initialised is a clean
+    /// fail, not UB.
+    pub(super) fn init_node() -> Option<RealNode> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        let init = {
+            let _guard = rt.enter();
+            // `init_from_env()` returns the real node when the dora daemon
+            // spawned us (DORA_NODE_CONFIG set) OR when the hermetic
+            // integration-testing env (DORA_TEST_WITH_INPUTS) is set; it
+            // falls back to interactive otherwise. We only keep the node on
+            // a clean `Ok` — a hard error (e.g. malformed config) yields
+            // `None` → the `-1` run sentinel.
+            DoraNode::init_from_env()
+        };
+        match init {
+            Ok((node, events)) => Some(RealNode { node, events, rt }),
+            Err(e) => {
+                eprintln!(
+                    "cobrust-dora (dora-real): DoraNode::init_from_env() failed: {e:#} \
+                     — node.run() will return -1 (no daemon / testing env?)"
+                );
+                None
+            }
+        }
+    }
+
+    /// REAL `node.run()` — drain the live `EventStream`, firing the `.cb`
+    /// callback once per `Event::Input` with the DECODED Arrow payload, until
+    /// `Event::Stop` or a `None` recv (stream closed). Returns 0 on a clean
+    /// drain, `-1` if the node never initialised or no handler was
+    /// registered (the same fail-clean sentinels as the synthetic path).
+    ///
+    /// # Safety
+    ///
+    /// `node` must be a live, non-null Node handle from
+    /// `__cobrust_dora_node_new`.
+    pub(super) unsafe fn run_node(node: *mut u8) -> i64 {
+        // SAFETY: caller per `# Safety`. Mutable borrow for the loop —
+        // `recv()` needs `&mut EventStream` and `send_output` needs
+        // `&mut DoraNode`; both are distinct fields of `RealNode`.
+        let handle: &mut DoraNodeHandle = unsafe { &mut *node.cast::<DoraNodeHandle>() };
+
+        // Read the global handler slot (same contract as the synthetic path).
+        let raw_ptr = REGISTERED_HANDLER.load(Ordering::SeqCst);
+        if raw_ptr.is_null() {
+            return -1;
+        }
+        // SAFETY: stored by `__cobrust_dora_node_node`, a real `CbHandlerAbi`.
+        let raw: CbHandlerAbi = unsafe { std::mem::transmute::<*mut (), CbHandlerAbi>(raw_ptr) };
+
+        let Some(real) = handle.real.as_mut() else {
+            // `init_from_env()` failed in `node_new`; clean -1 (no UB).
+            return -1;
+        };
+        // Split-borrow the distinct fields so the ambient `&mut node`, the
+        // `&mut events` recv, AND the runtime-enter guard coexist without a
+        // borrow conflict (entering `rt` borrows it while `node`/`events` are
+        // borrowed mutably — destructuring once binds all three disjointly).
+        let RealNode {
+            node: dora_node,
+            events,
+            rt,
+        } = real;
+        // Enter the runtime for the blocking `recv()`/`send_output` window.
+        let _guard = rt.enter();
+
+        loop {
+            // `recv()` blocks; `None` ⇒ the stream closed → end the loop.
+            let Some(event) = events.recv() else {
+                break;
+            };
+            match event {
+                Event::Input { id, data, .. } => {
+                    let id_s = id.as_str().to_string();
+                    let data_str = decode_arrow_payload(&data);
+                    let ev_handle = DoraEventHandle { id: id_s, data_str };
+
+                    // Install the ambient live-node pointer for the callback
+                    // window so `event.send_output` can publish, then clear.
+                    AMBIENT_NODE.with(|cell| cell.set(std::ptr::from_mut::<DoraNode>(dora_node)));
+                    // SAFETY: `raw` is a valid handler; `fire_callback` boxes
+                    // + frees the Event and aborts on a callback panic.
+                    unsafe { fire_callback(raw, ev_handle) };
+                    AMBIENT_NODE.with(|cell| cell.set(std::ptr::null_mut()));
+                }
+                Event::Stop(_) => break,
+                // Ignore unknown / non-input variants (Event is
+                // `#[non_exhaustive]`; the dora docs say ignore unknowns).
+                _ => {}
+            }
+        }
+        0
+    }
+
+    /// REAL `event.send_output(id, payload)` — publish a length-1 Arrow
+    /// `StringArray` on the node's `id` output port via the ambient live
+    /// `DoraNode` (plan §4.4 option 1; Phase A scalar/str payload — the
+    /// `coil.Buffer ↔ Arrow` widening is Phase B). The output-id validation
+    /// against the declared set already happened in the calling shim.
+    /// Returns 0 on a successful publish, `-1` if no ambient node is set
+    /// (a `send_output` called outside a `run` callback) or the publish
+    /// errored. The `MetadataParameters` are empty for Phase A (no metadata
+    /// echo yet).
+    pub(super) fn send_output(id: &str, payload: &str) -> i64 {
+        let node_ptr = AMBIENT_NODE.with(Cell::get);
+        if node_ptr.is_null() {
+            eprintln!(
+                "cobrust-dora (dora-real): send_output(\"{id}\", ...) called with no ambient \
+                 node — it must run inside a node.run() callback. Output dropped."
+            );
+            return -1;
+        }
+        // SAFETY: `run_node` set `AMBIENT_NODE` to a valid `&mut DoraNode`
+        // for the duration of THIS callback and clears it on return; we are
+        // synchronously inside that window, single-threaded, so the pointer
+        // is live and uniquely ours here.
+        let node: &mut DoraNode = unsafe { &mut *node_ptr };
+        let arr = payload.to_string().into_arrow();
+        match node.send_output(DataId::from(id), MetadataParameters::default(), arr) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("cobrust-dora (dora-real): send_output(\"{id}\") failed: {e:#}");
+                -1
+            }
+        }
+    }
+
+    /// Decode a real `arrow::array::ArrayRef` payload into a display string
+    /// for `event.data_str()`. The Phase-A wire carries a Utf8 `StringArray`
+    /// (the common hello-world payload) which decodes losslessly; any other
+    /// arrow type falls back to a debug rendering so the shim never panics
+    /// across the C ABI (Phase B adds structured `coil.Buffer` decode).
+    fn decode_arrow_payload(data: &ArrowData) -> String {
+        // `&ArrowData → String` succeeds for a length-1 Utf8 StringArray.
+        if let Ok(s) = String::try_from(data) {
+            return s;
+        }
+        // Fallback: a non-string / non-scalar array → a stable debug string
+        // (e.g. a numeric array prints its values) so `data_str()` is always
+        // well-defined. The array derefs to `arrow::array::ArrayRef`.
+        format!("{:?}", **data)
+    }
+}
+
+// These unit tests pin the SYNTHETIC trampoline contract (canned events,
+// `output[id]=payload` capture, the registration/drop discipline). They
+// assert behavior specific to the `not(feature = "dora-real")` build, so
+// they are gated OFF under `dora-real` — where `node.run()` drives a REAL
+// `EventStream` instead (no canned `frame_001`), and `node_new` calls
+// `init_from_env()`. The real path's correctness is proven end-to-end +
+// mutation-survivably by the F36-honest `dora_real_node_e2e.rs` (real
+// symbols in the binary + a hermetic `integration_testing` round-trip),
+// NOT by re-driving a real node from an in-process unit test. The shared
+// scaffolding (Str ABI, drop instrument) is identical across both builds.
+#[cfg(all(test, not(feature = "dora-real")))]
 #[allow(clippy::undocumented_unsafe_blocks)]
 #[allow(clippy::unwrap_used)]
 mod tests {

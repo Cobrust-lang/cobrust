@@ -417,6 +417,32 @@ pub fn build(
             if target_is_linux && !target_is_wasm {
                 cmd.arg("-lpthread").arg("-ldl").arg("-lm");
             }
+            // #146 dora-cb Phase A — macOS `-framework CoreFoundation` for a
+            // REAL-dora node. When `cobrust-dora` is built `--features
+            // dora-real`, `libdora.a` transitively contains the dora /
+            // arrow / tokio stack; on macOS that stack's `sysinfo` /
+            // `machine-uid` tier references `_CFArrayCreate` &c. from the
+            // CoreFoundation framework, which `ld` must be told to link
+            // (Cobrust links ZERO frameworks otherwise). The lean config
+            // (`default-features = false` on dora-node-api, which drops the
+            // telemetry tier) needs ONLY CoreFoundation — NOT IOKit /
+            // Security (dora-real-integration-plan §9 spike). The flag is
+            // emitted only when (a) the *target* is macOS AND (b) this
+            // program actually links `libdora.a` (`dora` ∈ eco_modules), so
+            // NON-dora and NON-macOS builds are entirely unaffected, and a
+            // SYNTHETIC-default `libdora.a` (no CoreFoundation symbols) is
+            // unharmed by an unused `-framework` flag (CoreFoundation is a
+            // system framework always present on macOS; `ld` does not
+            // force-load it). Gated by *target* (not host) so a future
+            // macOS-target cross-build still gets it.
+            let target_is_macos = if let Some(t) = cross_target {
+                t.contains("apple") || t.contains("darwin") || t.contains("macos")
+            } else {
+                cfg!(target_os = "macos")
+            };
+            if target_is_macos && eco_modules.iter().any(|m| m == "dora") {
+                cmd.arg("-framework").arg("CoreFoundation");
+            }
             let status = cmd
                 .status()
                 .map_err(|e| BuildError::Internal(format!("invoking {cc}: {e}")))?;

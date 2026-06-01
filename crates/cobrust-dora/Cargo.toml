@@ -21,9 +21,42 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 [lints]
 workspace = true
 
+[features]
+# DEFAULT is the SYNTHETIC trampoline — light, wasm-buildable, no real
+# dora dep (the `cabi::__cobrust_dora_node_run` canned-event path stays
+# the default build).
+default = []
+# `--features dora-real` swaps the L4 runtime shim from the synthetic
+# canned-event trampoline to a REAL `dora_node_api::DoraNode` +
+# `events.recv()` loop (cobrust-dora #146 Phase A; dora-real-integration
+# -plan §9 spike-proven). Mirrors how `coil` gates `faer` behind
+# `coil-faer` (ADR-0079 §11) — opt-in + reversible. The C-ABI symbol
+# surface + the ecosystem manifest + the codegen callback are UNCHANGED
+# (the spike's key insight: this is a `cabi.rs`-local body swap, not a
+# compiler change). NOT in `default` — real-dora is native-only (tokio-net
+# hard-fails on wasm32 per §9, so the wasm dora story stays synthetic).
+dora-real = ["dep:dora-node-api", "dep:tokio"]
+
 [dependencies]
-# Phase 1 is synthetic — no `dora-node-api` dep yet. Phase 2 will pin
-# an exact `dora-node-api = "=0.2.x"` per ADR-0076 §8 risk 1 + §6 Phase 2.
+# #146 Phase A — the REAL dora-rs node API, behind the OPTIONAL `dora-real`
+# feature (NOT default). Exact-pinned per dora-real-integration-plan §3.0
+# (F35-sibling version discipline: the crate is independently versioned at
+# `0.5.0` as of 2026-06-01, NOT the workspace `0.2.1` the stale ADR cited).
+# `default-features = false` is REQUIRED (plan §9 spike): it drops the
+# ~40-crate opentelemetry/metrics/tracing telemetry tier AND the macOS
+# IOKit/Security framework need, so the lean link requires ONLY
+# `-framework CoreFoundation` (see cobrust-cli/src/build.rs). With the
+# feature OFF this crate has ZERO real dora deps (the synthetic default).
+dora-node-api = { version = "=0.5.0", default-features = false, optional = true }
+# #146 Phase A — the dora node event loop enters a multi-thread tokio
+# runtime (plan §3.2: the canonical node builds + enters one; a real
+# daemon-spawned node's internal monitor tasks call `Handle::current()`).
+# OPTIONAL, only pulled by `dora-real` (tokio is already deep in the
+# dora-node-api tree, so this adds no NEW transitive weight — it just makes
+# the `tokio::runtime::Builder` path nameable from this crate). NOT in the
+# synthetic default (which is wasm-buildable; tokio-net is the wasm blocker
+# per §9 — but only the `dora-real` path references it).
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 # ADR-0072 Q5 + ADR-0073 §4: the `cabi` shims declare the

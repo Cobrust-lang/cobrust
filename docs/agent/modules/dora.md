@@ -42,8 +42,29 @@ dora-rs daemon + the CartPole control-loop demo.
   path, the real `dora-node-api` dep + zenoh runtime, the typed
   compile-time `DoraUnknownOutputId` reject (Phase 2 catches an undeclared
   output at RUNTIME via a `-1` sentinel + stderr diagnostic).
-- **Phase 3 — proposed.** Real-robotics CartPole simulation demo + real
-  dora-rs orchestration.
+- **#146 dora-cb Phase A — REAL `dora-node-api` runtime, behind an opt-in
+  feature (delivered).** `cobrust-dora` now grows an OPTIONAL
+  `dora-node-api = "=0.5.0"` dependency (exact-pinned, `default-features =
+  false`) gated behind a `dora-real` feature (NOT in `default` — mirrors how
+  `coil` gates `faer` behind `coil-faer`). With `--features dora-real`, the
+  L4 runtime body swaps from the synthetic canned-event trampoline to a REAL
+  `DoraNode::init_from_env()` + a blocking `events.recv()` loop firing the
+  `.cb` callback once per real `Event::Input`; `event.data_str()` decodes the
+  live `arrow::array::ArrayRef`; `event.send_output(id, payload)` publishes a
+  real Arrow `StringArray` via the ambient live node. The DEFAULT build stays
+  the SYNTHETIC trampoline (light, wasm-buildable, unchanged). **The C-ABI
+  symbol surface + the ecosystem manifest + the codegen callback do NOT
+  change** — only the `cabi.rs` bodies + two handle-struct shapes are
+  `#[cfg]`-split (the dora-real-integration-plan §9 spike's load-bearing
+  insight: a `cabi.rs`-local body swap, not a compiler change). The ONE
+  compiler-side change is a target-gated macOS `-framework CoreFoundation`
+  link flag in `cobrust-cli/src/build.rs` (emitted only when a `dora`-importing
+  program is linked on a macOS target). Real-dora is NATIVE-ONLY (tokio-net
+  hard-fails on wasm32 per §9, so the wasm dora story stays synthetic).
+- **Phase B / Phase 3 — proposed.** `coil.Buffer ↔ Arrow` array payloads +
+  multi-port routing + the typed compile-time `DoraUnknownOutputId` reject
+  (Phase B); the real-robotics CartPole simulation demo + cross-machine
+  orchestration (Phase 3).
 
 ## Public surface (Phase 1 + Phase 2)
 
@@ -179,9 +200,45 @@ slot + the `DECLARED_INPUTS` queue, then:
 `event.send_output(id, payload)` validates `id` against `DECLARED_OUTPUTS`
 and prints `output[<id>]=<payload>` (the synthetic capture the E2E
 asserts). This mirrors F65's synthetic-LLM provider precedent: the chain
-is proven without the heavy infra wired. A later phase replaces this
-synthetic loop with the real `DoraNode::events().into_iter()` driven
-dispatch over the zenoh broker.
+is proven without the heavy infra wired. The `dora-real` feature (below)
+replaces this synthetic loop with the real `DoraNode` + `events.recv()`
+driven dispatch.
+
+## REAL runtime contract — `dora-real` feature (#146 Phase A)
+
+Building `cobrust-dora --features dora-real` swaps the L4 bodies (in the
+`#[cfg(feature = "dora-real")] mod real` submodule of `cabi.rs`) from the
+synthetic trampoline to the real dora-node-api path. The exported
+`#[unsafe(no_mangle)]` shim signatures are SINGLE-DEFINITION across both
+builds (the ABI is identical); only the private bodies + the
+`DoraNodeHandle` / `DoraEventHandle` fields are `#[cfg]`-split.
+
+| Shim | synthetic (default) | real (`dora-real`) |
+|---|---|---|
+| `node_new` | name-only handle | `DoraNode::init_from_env()` → stash `(DoraNode, EventStream)` + a multi-thread tokio runtime in the handle (`None` on init failure → `run` returns `-1`) |
+| `node_run` | canned-event loop (one per declared input, or `("camera","frame_001")`) | enter the tokio runtime; drain the REAL `EventStream` via blocking `recv()`; fire the `.cb` callback per `Event::Input`; `break` on `Event::Stop` / `None` |
+| `event_id` / `event_data_str` | canned strings | `id.as_str()` + the DECODED Arrow `ArrayRef` payload (`String::try_from(&ArrowData)` for a Utf8 `StringArray`; debug fallback otherwise) |
+| `event_send_output` | declared-output validate + `println!("output[id]=...")` capture | declared-output validate + publish a length-1 Arrow `StringArray` on the `id` port via the ambient live `DoraNode` (plan §4.4 option 1 — the run loop installs `&mut node` in a thread-local for the callback window) |
+| `node_shutdown` / `node_drop` | soft flag / box-drop | additionally drop the live `DoraNode`/`EventStream` (leave the dora coordinator) |
+
+The callback box / `catch_unwind` / abort-on-panic / free discipline is
+SINGLE-SOURCED in `fire_callback` (shared by both loops), so panic safety +
+drop-once hold identically. No panic crosses the C ABI on either build.
+
+**Hermetic real testing (no daemon).** dora 0.5.0's `integration_testing`
+mode — driven by the `DORA_TEST_WITH_INPUTS` env var pointing at a JSON
+events file — makes `init_from_env()` construct a REAL node that feeds those
+events through the REAL `EventStream`, with NO coordinator/daemon. The
+F36-honest E2E (`crates/cobrust-cli/tests/dora_real_node_e2e.rs`) uses this
+for a genuine live round-trip (see Gates).
+
+**Weight / portability (plan §9 spike, accepted):** `libdora.a` 17 MB →
+~450 MB; stripped `.cb` binary ~85 MB; lock ~559 → ~663 crates; +2
+*unmaintained* (not CVE) audit ignores (`RUSTSEC-2025-0141` bincode +
+`RUSTSEC-2025-0057` fxhash, both behind the optional feature). Real-dora is
+NATIVE-ONLY — `tokio-net` hard-fails on wasm32, so the wasm dora story stays
+SYNTHETIC-default (the default `cargo build -p cobrust-dora --target
+wasm32-wasip1` is green; `--features dora-real` is not a wasm target).
 
 ## Gates (Phase 1 + Phase 2 — none optional)
 
@@ -192,6 +249,9 @@ dispatch over the zenoh broker.
 | L2.behavior | in-crate cabi tests | 8/8 — drop-once + null tolerance + trampoline + shutdown + multi-input dispatch + send_output validate + declare idempotent | passes |
 | L3.e2e.p1 | compile + link + run | `cargo test -p cobrust-cli --test dora_hello_e2e` 3/3 + `--test decorator_dora_e2e` 6/6 | passes |
 | L3.e2e.p2 | compile + link + run | `cargo test -p cobrust-cli --test dora_multi_io_e2e` 3/3 (multi-input dispatch + send_output capture + single-input no-regression) | passes |
+| L3.e2e.real | **F36-honest real proof** | `cargo test -p cobrust-cli --test dora_real_node_e2e` 2/2 — Part A: a `--features dora-real` `.cb` binary carries REAL `dora_node_api`+`arrow` symbols (`nm`), proving the real path LINKED (not the trampoline); Part B: a LIVE real `DoraNode`+`EventStream` round-trip via dora's hermetic `integration_testing` mode delivers a unique marker the handler prints (the synthetic trampoline would print canned `frame_tick`). Self-skips clean when the heavy real archive is unavailable; `COBRUST_DORA_REAL_E2E=1` makes a skip a hard failure (the CI real-gate lane). | passes (strict, macOS) |
+| L2.behavior.real | `cargo build/clippy -p cobrust-dora --features dora-real` | zero warnings; the synthetic-contract cabi unit tests are `#[cfg]`-gated to `not(dora-real)` (the real path is E2E-proven) | passes |
+| wasm | `cargo build -p cobrust-dora --target wasm32-wasip1` (DEFAULT) | synthetic-default cross-compiles to wasm32 (real-dora is native-only) | passes |
 
 ## Done means (Phase 1 — DONE)
 
@@ -226,13 +286,33 @@ Delivered (synthetic trampoline):
 - [x] E2E `crates/cobrust-cli/tests/dora_multi_io_e2e.rs` 3/3 + cabi
       unit tests 8/8.
 
-Open (real-infra Phase 2/3):
+Delivered (#146 Phase A — REAL runtime behind the `dora-real` feature):
 
-- [ ] Real `dora-node-api = "=0.2.x"` exact-pinned dep + tokio
-      runtime guest-mode integration (mirrors strike's pattern) +
-      real zenoh broker (replaces the synthetic trampoline).
-- [ ] Arrow list/dict `RecordBatch` payloads beyond i64+str scalar
-      (ADR-0076c) — `pa.array_i64(...)`.
+- [x] OPTIONAL `dora-node-api = "=0.5.0"` exact-pinned dep
+      (`default-features = false`) + an optional `tokio` dep, both gated
+      behind a `dora-real` feature NOT in `default` (mirrors `coil-faer`).
+      Pin corrected from the stale ADR's `0.2.x` per
+      dora-real-integration-plan §3.0 (F35-sibling: the crate is
+      independently versioned at 0.5.0 as of 2026-06-01).
+- [x] REAL `DoraNode::init_from_env()` + blocking `events.recv()` loop +
+      a self-owned multi-thread tokio runtime (plan §3.2) — replaces the
+      synthetic trampoline under the feature.
+- [x] Scalar/str `event.send_output` publishes a real Arrow `StringArray`
+      via the ambient live node (plan §4.4 option 1).
+- [x] Target-gated macOS `-framework CoreFoundation` link flag in
+      `cobrust-cli/src/build.rs` (the lean `default-features = false` config
+      needs ONLY CoreFoundation — NOT IOKit/Security — per §9).
+- [x] F36-honest E2E (`dora_real_node_e2e.rs`) — real-symbol link proof +
+      a live `integration_testing` round-trip (mutation-survivable).
+- [x] +2 audit ignores in `ci.yml` (`RUSTSEC-2025-0141` bincode +
+      `RUSTSEC-2025-0057` fxhash — unmaintained, behind the optional feature).
+
+Open (real-infra Phase B/3):
+
+- [ ] `coil.Buffer ↔ Arrow` array payloads (`ndarray::ArrayD<f64> ↔
+      arrow::Float64Array` bridge) beyond the Phase-A scalar/str
+      (ADR-0076c) — the payload-surface design question (`coil.Buffer` vs a
+      `pa`-shim) is the most consequential open choice (plan §4.3).
 - [ ] Yaml-loaded dataflows (`dora.run("dataflow.yml")`).
 - [ ] Typed compile-time `DoraUnknownOutputId` reject (Phase 2 catches an
       undeclared output at RUNTIME via the `-1` sentinel; a compile-time

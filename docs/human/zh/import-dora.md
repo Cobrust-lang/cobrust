@@ -6,12 +6,12 @@
 > `fn(dora.Event) -> i64`, 混合了 pit 的 Event 接收器借用模式与 hood 的
 > i64 退出码意图。
 >
-> 运行时故意采用合成方式 — `node.run()` 注入预设事件, 不依赖真正的
-> dora-rs 守护进程或 zenoh broker。Phase 1 证明了单输入链路; Phase 2 增加
-> **多输入分发**(处理器对每个声明的输入触发一次)与
-> **`event.send_output(...)`**(在声明的输出端口上发射)。真正的 dora-rs
-> 编排(真实 zenoh 传输, Arrow 列表/字典载荷, yaml 加载数据流, ROS2 桥)
-> 仍属后续阶段。
+> **默认**运行时故意采用合成方式 — `node.run()` 注入预设事件, 不依赖真正的
+> dora-rs 守护进程。Phase 1 证明了单输入链路; Phase 2 增加 **多输入分发** 与
+> **`event.send_output(...)`**。**#146 Phase A** 随后通过可选的 `dora-real`
+> 特性使其变为真实 — 一个真正的 `dora-node-api` `DoraNode` + `events.recv()`
+> 循环(见下文"走向真实")。真实的 Arrow 数组载荷, yaml 加载数据流, 以及
+> ROS2 桥仍属后续阶段。
 
 ## 示例先行
 
@@ -108,12 +108,52 @@ cobrust build prog.cb -o prog
 > "camera"`? `str` 对 `str` 的 `==` 是一个独立的语言特性; `str_eq_lit(...)`
 > 辅助函数是当前已证明的分发形式。
 
+## 走向真实 — `dora-real` 特性 (#146 Phase A)
+
+`cobrust-dora` 的默认构建是**合成的**(`node.run()` 循环注入预设事件,
+因此无需 dora 守护进程链路即可工作 — 适合快速测试 + wasm 目标)。用
+**`dora-real`** 特性构建会把该循环替换为一个**真正的 `dora-node-api`
+节点**:
+
+```bash
+# 构建真实 dora 运行时归档(重量级: 拉取 dora + arrow + tokio 栈 —
+# 首次构建约 11 分钟)
+cargo build -p cobrust-dora --features dora-real
+```
+
+开启该特性后, 上面**同一份** `.cb` 源码就成为一个真实的 dora 节点:
+
+- `dora.Node(name)` 调用真正的 `DoraNode::init_from_env()`(节点加入真实的
+  `dora start` 数据流 — dora 守护进程派生它并注入配置),
+- `node.run()` 排空**真实的** `EventStream`, 对每个真实的 `Event::Input`
+  触发你的处理器一次, 并在 `Event::Stop` 时停止,
+- `event.data_str()` 解码**真实的**到达载荷(Apache Arrow),
+- `event.send_output(id, payload)` 在节点的输出端口上发布**真实的** Arrow
+  数组(其他节点会收到)。
+
+**你写的源码不变** — 同一份 `import dora` 程序默认是合成的, 在特性下是
+真实的。C-ABI 表面, manifest 与 codegen 完全相同; 仅运行时主体被替换
+(`cabi.rs` 局部改动, 而非编译器改动)。唯一的编译器侧新增是一个 macOS
+`-framework CoreFoundation` 链接标志, 仅当在 macOS 上链接一个导入 `dora`
+的程序时自动发出。
+
+注意与限制:
+
+- **仅原生.** 真实 dora 节点使用 `tokio` 网络, 在 wasm32 上不存在 — 因此
+  `--features dora-real` 仅限原生。wasm 的 dora 故事保持合成(默认构建可
+  交叉编译到 `wasm32-wasip1`)。
+- **重量级.** 真实归档额外拉取约 100 个 crate; 二进制很大(剥离后约
+  85 MB)。这就是该特性是可选而非默认的原因(对照 `coil` 把 `faer` 收在
+  `coil-faer` 后面的做法)。
+- **Phase A 载荷 = 标量 / 字符串.** 真实数组载荷(`coil.Buffer ↔ Arrow`)
+  + 多端口路由属 Phase B。
+
 ## 你不会得到什么 (推迟 — 诚实说明)
 
-- 真正的 dora-rs 守护进程集成 + 真实 zenoh broker(运行时保持合成;
-  `dora-node-api` 依赖 + `tokio` 来宾模式属后续阶段)。
-- 超出 `str`/`i64` 标量的 Arrow 列表/字典 `RecordBatch` 载荷
-  (`pa.array_i64(...)` — ADR-0076c)。
+- 超出 `str`/`i64` 标量的 Arrow 数组 / `RecordBatch` 载荷 —
+  `coil.Buffer ↔ Arrow` 桥(`pa.array_i64(...)` / `coil.Buffer`)属 Phase B
+  (ADR-0076c)。(合成默认仅承载 `str`; `dora-real` 的 Phase-A 路径在真实
+  Arrow 上承载标量 `str`。)
 - yaml 加载的数据流 (`dora.run("dataflow.yml")`)。
 - 对未声明输出 id 的编译期拒绝 — 当前未声明的 `send_output` 在**运行时**
   被捕获(`-1` + stderr 消息); 编译期 `DoraUnknownOutputId` 错误是后续

@@ -255,7 +255,18 @@ jobs:
         # `pulp`; faer is OPTIONAL (behind the `coil-faer` feature, NOT in the
         # default build — #157 spike), but Cargo.lock lists optional deps so the
         # audit sees it regardless. Revisit if pulp drops paste / adopts a fork.
-        run: cargo audit --deny warnings --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436
+        #
+        # Ignore RUSTSEC-2025-0141 (bincode 1.3.3 — UNMAINTAINED, NOT a
+        # vulnerability) + RUSTSEC-2025-0057 (fxhash 0.2.1 — UNMAINTAINED, NOT a
+        # vulnerability): both are "unmaintained" advisories (no CVE / no defect),
+        # pulled transitively by the REAL dora-rs stack (`dora-node-api` →
+        # `bincode` for wire encoding; `fxhash` via `inquire`). dora-real is
+        # OPTIONAL — behind cobrust-dora's `dora-real` feature, NOT the default
+        # build (the default is the SYNTHETIC trampoline, #146 Phase A) — but
+        # Cargo.lock lists optional deps so the audit sees them regardless. Same
+        # discipline as the paste ignore above (unmaintained != CVE; behind an
+        # opt-in feature). Revisit if dora upgrades to bincode 2.x / drops fxhash.
+        run: cargo audit --deny warnings --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2025-0057
 
   # Code Quality P1: cargo-udeps unused-dependency check.
   # Requires nightly toolchain (uses unstable compiler APIs).

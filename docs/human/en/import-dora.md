@@ -6,13 +6,13 @@
 > The shape here is `fn(dora.Event) -> i64`, mixing pit's Event-receiver
 > borrow pattern with hood's i64 exit-code intent.
 >
-> The runtime is intentionally synthetic — `node.run()` injects canned
-> events without depending on the real dora-rs daemon or zenoh broker.
-> Phase 1 proved the single-input chain; Phase 2 adds **multi-input
-> dispatch** (the handler fires once per declared input) and
-> **`event.send_output(...)`** (emit on a declared output port). The real
-> dora-rs orchestration (real zenoh transport, Arrow list/dict payloads,
-> yaml-loaded dataflows, ROS2 bridge) is still a later phase.
+> The DEFAULT runtime is intentionally synthetic — `node.run()` injects
+> canned events without depending on the real dora-rs daemon. Phase 1 proved
+> the single-input chain; Phase 2 adds **multi-input dispatch** +
+> **`event.send_output(...)`**. **#146 Phase A** then makes it REAL behind an
+> opt-in `dora-real` feature — a genuine `dora-node-api` `DoraNode` +
+> `events.recv()` loop (see "Going real" below). Real Arrow array payloads,
+> yaml-loaded dataflows, and the ROS2 bridge remain later phases.
 
 ## Example first
 
@@ -118,13 +118,56 @@ cobrust build prog.cb -o prog
 > "camera"`? `str`-vs-`str` `==` is a separate language feature; the
 > `str_eq_lit(...)` helper is the proven dispatch form today.
 
+## Going real — the `dora-real` feature (#146 Phase A)
+
+The default `cobrust-dora` build is **synthetic** (the `node.run()` loop
+injects canned events, so the chain works with no dora daemon — ideal for
+fast tests + the wasm target). Building with the **`dora-real`** feature
+swaps that loop for a **genuine `dora-node-api` node**:
+
+```bash
+# build the REAL dora runtime archive (heavy: pulls the dora + arrow +
+# tokio stack — the first build is ~11 minutes)
+cargo build -p cobrust-dora --features dora-real
+```
+
+With the feature on, the SAME `.cb` source above becomes a real dora node:
+
+- `dora.Node(name)` calls the real `DoraNode::init_from_env()` (the node
+  joins a real `dora start` dataflow — the dora daemon spawns it and injects
+  its config),
+- `node.run()` drains the **real** `EventStream`, firing your handler once
+  per real `Event::Input` and stopping on `Event::Stop`,
+- `event.data_str()` decodes the **real** Apache Arrow payload that arrived
+  on the wire,
+- `event.send_output(id, payload)` publishes a **real** Arrow array on the
+  node's output port (other nodes receive it).
+
+**The source you write does not change** — the same `import dora` program is
+synthetic by default and real under the feature. The C-ABI surface, the
+manifest, and codegen are identical; only the runtime body swaps (a
+`cabi.rs`-local change, not a compiler change). The one compiler-side
+addition is a macOS `-framework CoreFoundation` link flag, emitted
+automatically only when a `dora`-importing program is linked on macOS.
+
+Notes + limits:
+
+- **Native-only.** A real dora node uses `tokio` networking, which does not
+  exist on wasm32 — so `--features dora-real` is native-only. The wasm dora
+  story stays synthetic (the default build cross-compiles to
+  `wasm32-wasip1`).
+- **Heavy.** The real archive pulls ~100 extra crates; binaries are large
+  (~85 MB stripped). This is why the feature is opt-in, not the default
+  (mirrors how `coil` gates `faer` behind `coil-faer`).
+- **Phase A payload = scalar / string.** Real array payloads
+  (`coil.Buffer ↔ Arrow`) + multi-port routing are Phase B.
+
 ## What you don't get (deferred — honest)
 
-- Real dora-rs daemon integration + the real zenoh broker (the runtime
-  stays synthetic; `dora-node-api` dep + `tokio` guest-mode are a later
-  phase).
-- Arrow list/dict `RecordBatch` payloads beyond `str`/`i64` scalars
-  (`pa.array_i64(...)` — ADR-0076c).
+- Arrow array / `RecordBatch` payloads beyond `str`/`i64` scalars — the
+  `coil.Buffer ↔ Arrow` bridge (`pa.array_i64(...)` / `coil.Buffer`) is
+  Phase B (ADR-0076c). (The synthetic default carries `str` only; the
+  `dora-real` Phase-A path carries scalar `str` over real Arrow.)
 - Yaml-loaded dataflows (`dora.run("dataflow.yml")`).
 - Compile-time rejection of an undeclared output id — today an
   undeclared `send_output` is caught at RUNTIME (the `-1` + stderr
