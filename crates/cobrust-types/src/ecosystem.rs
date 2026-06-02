@@ -817,6 +817,51 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // #163 gap-closure BATCH 13 (2026-06-02) — the elementwise BINARY
+        // min/max ufuncs `maximum` / `minimum` / `fmax` / `fmin`. Each is a
+        // 2-Buffer `(Buffer, Buffer) -> Buffer` op riding the IDENTICAL
+        // borrow-Buffer-args → fresh-Buffer-return value-handle ABI as the
+        // `concatenate` / `vstack` / `hstack` combine ops above (and
+        // `coil.linalg.solve`) — the Buffer args auto-borrow (Move→Copy) in
+        // `lower_eco_arg`, the fresh return is drop-scheduled by
+        // `emit_ecosystem_call` (NO `_=>"any"` MIR gap; the generic
+        // ecosystem-call lowering iterates `sig.params` regardless of arity).
+        //
+        // - `coil.maximum(a, b) -> Buffer`  — elementwise max, PROPAGATES NaN.
+        // - `coil.minimum(a, b) -> Buffer`  — elementwise min, PROPAGATES NaN.
+        // - `coil.fmax(a, b) -> Buffer`     — elementwise max, IGNORES NaN.
+        // - `coil.fmin(a, b) -> Buffer`     — elementwise min, IGNORES NaN.
+        //
+        // Tier `Numerical` (the elementwise-ufunc family tier) — the result
+        // VALUES + NaN placement agree exactly with numpy. The NaN split
+        // (`maximum`/`minimum` propagate; `fmax`/`fmin` ignore) + the
+        // same-shape / same-dtype combine contract (numpy broadcasts +
+        // promotes; coil raises `ValueError` via `coil_panic`) live entirely
+        // in the Rust kernel (`elementwise.rs`) — both documented there.
+        ("coil", "maximum") => Some(EcoSig::from_values(
+            "__cobrust_coil_maximum",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "minimum") => Some(EcoSig::from_values(
+            "__cobrust_coil_minimum",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "fmax") => Some(EcoSig::from_values(
+            "__cobrust_coil_fmax",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "fmin") => Some(EcoSig::from_values(
+            "__cobrust_coil_fmin",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
         // #145 gap-closure BATCH 8 (2026-06-01) — `coil.where(cond, a, b)`,
         // the THREE-Buffer elementwise conditional select (`result[i] =
         // cond[i] truthy ? a[i] : b[i]`). This EXTENDS the 2-Buffer combine

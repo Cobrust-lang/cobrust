@@ -3395,6 +3395,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_concatenate", coil_binop_ty, 2),
             ("__cobrust_coil_vstack", coil_binop_ty, 2),
             ("__cobrust_coil_hstack", coil_binop_ty, 2),
+            // #163 elementwise BINARY min/max ufuncs (BATCH 13). The 2-array
+            // `maximum`/`minimum`/`fmax`/`fmin` ops are `(ptr, ptr) -> ptr` ≡
+            // `coil_binop_ty` — the IDENTICAL extern shape as the 2-array
+            // combine ops `concatenate`/`vstack`/`hstack` above (and
+            // `linalg.solve`). The NaN split (`maximum`/`minimum` PROPAGATE
+            // NaN; `fmax`/`fmin` IGNORE NaN) + the same-shape / same-dtype
+            // combine contract live entirely in the Rust kernel
+            // (`elementwise.rs`); the handle ABI is byte-identical, so codegen
+            // rides the SAME extern shape + the flat `__cobrust_coil_*`
+            // recognizer prefix (no batch-specific arm). MIR retargets
+            // `coil.maximum(a, b)` onto these `Call`s via the SAME generic
+            // 2-Buffer-arg path (ZERO batch-specific MIR code).
+            ("__cobrust_coil_maximum", coil_binop_ty, 2),
+            ("__cobrust_coil_minimum", coil_binop_ty, 2),
+            ("__cobrust_coil_fmax", coil_binop_ty, 2),
+            ("__cobrust_coil_fmin", coil_binop_ty, 2),
             // #145 unary TRANSCENDENTAL Buffer-returning ops. All 1-arg
             // FLOAT-returning ufuncs (`exp`/`log`/`log10`/`sqrt`/`sin`/
             // `cos`/`tan` + optional `exp2`/`log2`/`cbrt`/`sinh`/`cosh`/

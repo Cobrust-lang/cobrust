@@ -87,11 +87,12 @@ use crate::constructors::{
 use crate::dtype::Dtype;
 use crate::elementwise::{
     abs as coil_abs, cbrt as coil_cbrt, ceil as coil_ceil, clip as coil_clip, cos as coil_cos,
-    cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2, floor as coil_floor,
-    isfinite as coil_isfinite, isinf as coil_isinf, isnan as coil_isnan, log as coil_log,
-    log2 as coil_log2, log10 as coil_log10, power as coil_power, round as coil_round,
-    sign as coil_sign, sin as coil_sin, sinh as coil_sinh, sqrt as coil_sqrt,
-    square as coil_square, tan as coil_tan, tanh as coil_tanh, trunc as coil_trunc,
+    cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2, floor as coil_floor, fmax as coil_fmax,
+    fmin as coil_fmin, isfinite as coil_isfinite, isinf as coil_isinf, isnan as coil_isnan,
+    log as coil_log, log2 as coil_log2, log10 as coil_log10, maximum as coil_maximum,
+    minimum as coil_minimum, power as coil_power, round as coil_round, sign as coil_sign,
+    sin as coil_sin, sinh as coil_sinh, sqrt as coil_sqrt, square as coil_square, tan as coil_tan,
+    tanh as coil_tanh, trunc as coil_trunc,
 };
 use crate::grid::{mgrid_1d, ogrid_1d};
 use crate::linalg::{det as linalg_det, inv as linalg_inv, solve as linalg_solve};
@@ -1047,6 +1048,76 @@ pub unsafe extern "C" fn __cobrust_coil_vstack(a: *mut u8, b: *mut u8) -> *mut u
 pub unsafe extern "C" fn __cobrust_coil_hstack(a: *mut u8, b: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_combine(a, b, "hstack", coil_hstack) }
+}
+
+// =====================================================================
+// #163 gap-closure BATCH 13 (2026-06-02) — the elementwise BINARY
+// min/max ufuncs `maximum` / `minimum` / `fmax` / `fmin`. Each is a
+// 2-Buffer `(ptr, ptr) -> ptr` shim riding the IDENTICAL `buffer_combine`
+// shared body as `concatenate` / `vstack` / `hstack`: BORROWS both
+// handles (the `.cb` scope still owns + drops them), applies the
+// `Result`-returning kernel, and `coil_panic`s on a non-conformable /
+// dtype-mismatch pair (numpy raises `ValueError`) — NEVER unwinding a
+// Rust `Err` across the C-ABI. The ONLY behavioural difference between
+// these four and the combine ops lives in the Rust kernel
+// (`elementwise.rs`): the elementwise min/max pick + the NaN split
+// (`maximum`/`minimum` PROPAGATE NaN; `fmax`/`fmin` IGNORE NaN). The ABI
+// is byte-identical, so codegen reuses the `coil_binop_ty` extern shape.
+// =====================================================================
+
+/// `coil.maximum(a, b) -> Buffer`. Elementwise maximum, **PROPAGATES
+/// NaN** (`maximum(1, nan) = nan`). BORROWS both handles; returns a fresh
+/// owned handle. A non-conformable (unequal-shape) / dtype-mismatch pair
+/// `coil_panic`s (numpy raises `ValueError`).
+///
+/// # Safety
+///
+/// `a` and `b` must be live `Buffer` handles (not yet dropped). The
+/// returned pointer is a freshly-Boxed handle the `.cb` caller owns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_maximum(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_combine(a, b, "maximum", coil_maximum) }
+}
+
+/// `coil.minimum(a, b) -> Buffer`. Elementwise minimum, **PROPAGATES
+/// NaN** (`minimum(1, nan) = nan`). BORROWS both handles. A
+/// non-conformable / dtype-mismatch pair `coil_panic`s.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_maximum`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_minimum(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_combine(a, b, "minimum", coil_minimum) }
+}
+
+/// `coil.fmax(a, b) -> Buffer`. Elementwise maximum, **IGNORES NaN**
+/// (picks the non-NaN operand; `fmax(1, nan) = 1`, `fmax(nan, nan) =
+/// nan`). BORROWS both handles. A non-conformable / dtype-mismatch pair
+/// `coil_panic`s.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_maximum`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_fmax(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_combine(a, b, "fmax", coil_fmax) }
+}
+
+/// `coil.fmin(a, b) -> Buffer`. Elementwise minimum, **IGNORES NaN**
+/// (`fmin(1, nan) = 1`, `fmin(nan, nan) = nan`). BORROWS both handles. A
+/// non-conformable / dtype-mismatch pair `coil_panic`s.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_maximum`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_fmin(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_combine(a, b, "fmin", coil_fmin) }
 }
 
 // =====================================================================
@@ -2414,6 +2485,10 @@ pub unsafe extern "C" fn __cobrust_coil_linalg_inv(a: *mut u8) -> *mut u8 {
 
 #[cfg(test)]
 #[allow(clippy::undocumented_unsafe_blocks)]
+// Shim round-trip tests assert EXACT buffer contents (e.g. the non-NaN
+// lane of a min/max result is exactly `3.0`); a strict float compare is
+// correct here — same as the `elementwise` test module.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -3168,6 +3243,87 @@ mod tests {
             __cobrust_coil_buffer_drop(a);
             __cobrust_coil_buffer_drop(b);
             __cobrust_coil_buffer_drop(h);
+        }
+    }
+
+    /// #163 BATCH 13 — `coil.maximum(a, b)` over two `(2,)` buffers,
+    /// borrows both, fresh result drops once (3 total drops). A NaN in `b`
+    /// PROPAGATES (`maximum([1,2],[3,nan]) = [3, nan]`).
+    #[test]
+    fn maximum_shim_round_trip_nan_propagates() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let b = __cobrust_coil_array1d2(3.0, f64::NAN);
+            let m = __cobrust_coil_maximum(a, b);
+            let arr: &Array = &*m.cast::<Array>();
+            assert_eq!(arr.shape(), &[2]);
+            match arr {
+                Array::Float64(v) => {
+                    assert_eq!(v[0], 3.0);
+                    assert!(v[1].is_nan(), "maximum PROPAGATES NaN");
+                }
+                _ => panic!("expected Float64"),
+            }
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(m);
+        }
+        assert_eq!(drop_count() - before, 3);
+    }
+
+    /// #163 BATCH 13 — `coil.fmax(a, b)` IGNORES NaN: `fmax([1,2],[3,nan])
+    /// = [3, 2]` (the non-NaN operand 2 wins at idx 1). The discriminating
+    /// shim test vs `maximum` above (SAME inputs, different idx-1 result).
+    #[test]
+    fn fmax_shim_round_trip_nan_ignored() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let b = __cobrust_coil_array1d2(3.0, f64::NAN);
+            let m = __cobrust_coil_fmax(a, b);
+            match &*m.cast::<Array>() {
+                Array::Float64(v) => {
+                    assert_eq!(v[0], 3.0);
+                    assert_eq!(v[1], 2.0, "fmax IGNORES NaN — picks 2.0");
+                }
+                _ => panic!("expected Float64"),
+            }
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(m);
+        }
+    }
+
+    /// #163 BATCH 13 — `coil.minimum` / `coil.fmin` round-trip (no NaN):
+    /// `minimum([2,5],[4,1]) = [2,1]`, `fmin = [2,1]` (agree).
+    #[test]
+    fn minimum_fmin_shim_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(2.0, 5.0);
+            let b = __cobrust_coil_array1d2(4.0, 1.0);
+            let mn = __cobrust_coil_minimum(a, b);
+            let fm = __cobrust_coil_fmin(a, b);
+            assert_eq!(
+                array_repr(&*mn.cast::<Array>()),
+                "array([2, 1], dtype=float64)"
+            );
+            assert_eq!(
+                array_repr(&*fm.cast::<Array>()),
+                "array([2, 1], dtype=float64)"
+            );
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(mn);
+            __cobrust_coil_buffer_drop(fm);
         }
     }
 

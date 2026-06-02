@@ -2869,6 +2869,91 @@ unary ufunc.
       fmt clean; no new dep (`Cargo.lock` unchanged — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## #163 numpy gap-closure BATCH 13 — the BINARY min/max ufuncs `maximum` / `minimum` / `fmax` / `fmin` (DONE)
+
+The four elementwise BINARY min/max ufuncs. Each is a 2-Buffer
+`(Buffer a, Buffer b) -> Buffer` op wired BYTE-IDENTICALLY to the
+BATCH-2 combine ops (`concatenate` / `vstack` / `hstack`): the cabi shim
+rides the SAME `buffer_combine` shared body (borrows BOTH handles → fresh
+`Box::into_raw`), the manifest is a `[Buffer, Buffer] -> Buffer` `EcoSig`,
+and codegen reuses the `coil_binop_ty` `(ptr, ptr) -> ptr` extern shape.
+The ONLY new logic lives in the Rust kernel (`elementwise.rs`): the
+elementwise min/max pick + the NaN-behaviour split.
+
+### The NaN split (the load-bearing nuance — numpy-confirmed + tested)
+
+- **`maximum` / `minimum` PROPAGATE NaN.** ANY NaN operand at a lane →
+  NaN result there. `np.maximum(1, nan) = nan`. The f32/f64 closure is an
+  explicit guard `if x.is_nan() || y.is_nan() { NaN } else { x.max(y) }`.
+- **`fmax` / `fmin` IGNORE NaN.** Pick the non-NaN operand; NaN ONLY when
+  BOTH are NaN. `np.fmax(1, nan) = 1`, `np.fmax(nan, nan) = nan`. The
+  float closure is a bare `f64::max` / `f64::min` — Rust `f64::max`
+  already IGNORES NaN (`f64::max(1.0, NaN) == 1.0`, `NaN.max(NaN) == NaN`),
+  so it matches `fmax`/`fmin` with no guard.
+- **int / bool: no NaN** — plain `Ord::max` / `Ord::min` (shared by all
+  four). `bool` max = OR (`True > False`), min = AND.
+
+### Shape / dtype contract (mirrors `concatenate`)
+
+- **Same-shape required.** A non-conformable (unequal-shape) pair raises
+  `ShapeMismatch` (numpy's `ValueError`); the cabi shim `coil_panic`s — a
+  clean trap, NEVER a C-ABI unwind. NO broadcasting (tracked follow-up).
+- **Same a/b dtype required.** A cross-dtype pair is a documented deferral
+  (mirrors `concatenate`'s same-dtype rule) → `ShapeMismatch` / trap. NO
+  promotion (tracked follow-up).
+- **Dtype-PRESERVING.** Result keeps the operands' dtype.
+
+### 5-layer wiring
+
+- `elementwise.rs`: `minmax_check` (shared same-shape + same-dtype guard)
+  + `minmax_dispatch` (Zips the two same-dtype arrays through per-dtype
+  pick closures, encoding the NaN split) + 4 `#[must_use]` wrappers
+  `maximum` / `minimum` / `fmax` / `fmin`. NEW unit tests: basic
+  elementwise + NaN-PROPAGATE (`maximum([1,nan],[2,3])` NaN at idx 1) vs
+  NaN-IGNORE (`fmax([1,nan],[2,3]) = [2,3]`, `fmax(nan,nan) = nan`) +
+  discriminating maximum-vs-fmax on a NaN input + dtype-preserve (int /
+  f32 / bool) + cross-dtype err + non-conformable err + negative-zero tie.
+- `cabi.rs`: 4 shims `__cobrust_coil_{maximum,minimum,fmax,fmin}`
+  `(ptr, ptr) -> ptr` via the shared `buffer_combine` body (borrow BOTH,
+  `coil_panic` on mismatch). NEW shim round-trip tests (maximum NaN-
+  propagate, fmax NaN-ignore, minimum/fmin).
+- `ecosystem.rs`: 4 arms `("coil", op) => EcoSig::from_values(symbol,
+  [Buffer, Buffer], Buffer)`, tier `Numerical` (NaN-bearing float). 1 sig
+  test (extends the combine-op signature assertions).
+- Typecheck / MIR: NO new code — the 2-Buffer-arg `[Buffer,Buffer] ->
+  Buffer` form rides the SAME generic lowering path as `concatenate`
+  (BATCH 2 precedent).
+- Codegen: 4 register rows `__cobrust_coil_{maximum,minimum,fmax,fmin}`
+  → `coil_binop_ty` (`(ptr, ptr) -> ptr`, the SAME extern fn-type as the
+  BATCH-2 `concatenate` / `vstack` / `hstack`; NO new extern shape).
+
+### Done means (#163 BATCH 13 — DONE)
+
+- [x] `elementwise.rs`: `minmax_check` + `minmax_dispatch` + 4 wrappers;
+      kernel unit tests pin the NaN split (propagate vs ignore), the
+      discriminating maximum-vs-fmax case, dtype-preserve (int/f32/bool),
+      and the cross-dtype + non-conformable error paths.
+- [x] cabi: 4 shims via shared `buffer_combine` (borrow both,
+      `coil_panic` clean-trap on shape / dtype mismatch — no unwind).
+- [x] Manifest: 4 ecosystem arms `[Buffer, Buffer] -> Buffer`, tier
+      `Numerical`. Sig test.
+- [x] Typecheck / MIR: NO new code (the 2-Buffer-arg generic path —
+      `concatenate` precedent).
+- [x] Codegen: 4 register rows, `coil_binop_ty` (NO new extern fn-type).
+- [x] `.cb` E2E `coil_minmax_e2e.rs` (6 tests): maximum/minimum basic
+      `[3,2]`/`[1,1]` + fmin basic `[2,5]` + the DISCRIMINATING
+      maximum-vs-fmax NaN split (`maximum(a,b)=[3,NaN]` vs `fmax(a,b)=[3,7]`
+      on the SAME `[1,NaN]`/`[3,7]` pair, exactly ONE NaN total) +
+      `fmax(NaN,NaN)=[NaN,NaN]` (the sole fmax NaN case) + transpose∘maximum
+      CHAIN + a non-conformable `(2,)` vs `(2,2)` TRAP. NaN built via IEEE
+      `0/0`.
+- [x] No regression: full `cobrust-coil` suite green; `coil_minmax_e2e`
+      + `coil_hello_e2e` all green, run ONE `--test` at a time (F73
+      libcoil.a build-race avoidance); touched crates (`cobrust-coil` +
+      `cobrust-codegen` + `cobrust-types`) build + clippy `-D warnings` +
+      fmt clean; no new dep (`Cargo.lock` unchanged — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

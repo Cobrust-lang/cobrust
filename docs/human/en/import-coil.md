@@ -587,6 +587,71 @@ fn main() -> i64:
 > scalars op has no shape mismatch): a `NaN` / `inf` is a *value* that flows
 > through, not an error.
 
+## Binary min/max ufuncs — `maximum` / `minimum` / `fmax` / `fmin`
+
+These four take **two buffers** and pick, lane by lane, the larger
+(`maximum` / `fmax`) or smaller (`minimum` / `fmin`) of the paired
+elements. They return a **fresh `coil.Buffer`** of the same shape and
+dtype. The pair must share one shape and one dtype — a mismatched pair
+**traps** (see the note below).
+
+The whole reason there are *four* of them — not two — is **how they treat
+`NaN`**:
+
+- **`maximum` / `minimum` PROPAGATE `NaN`.** If *either* operand at a lane
+  is `NaN`, the result there is `NaN`. (`maximum(1, NaN) = NaN`.)
+- **`fmax` / `fmin` IGNORE `NaN`.** They return the *non-`NaN`* operand,
+  and only yield `NaN` when **both** operands are `NaN`.
+  (`fmax(1, NaN) = 1`, `fmax(NaN, NaN) = NaN`.)
+
+```python
+import coil
+
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(1.0, 2.0)
+    let b: coil.Buffer = coil.array1d2(3.0, 1.0)
+    # Elementwise pick: lane 0 takes b's 3, lane 1 takes a's 2.
+    let mx: coil.Buffer = coil.maximum(a, b)        # [3, 2]
+    let mn: coil.Buffer = coil.minimum(a, b)        # [1, 1]
+
+    # The NaN split. Build a NaN with 0/0 (no NaN literal needed):
+    let znum: coil.Buffer = coil.array1d2(1.0, 0.0)
+    let zden: coil.Buffer = coil.array1d2(1.0, 0.0)
+    let an: coil.Buffer = znum / zden               # [1, NaN]
+    let bn: coil.Buffer = coil.array1d2(3.0, 7.0)
+    let p: coil.Buffer = coil.maximum(an, bn)       # [3, NaN]  (NaN PROPAGATES)
+    let q: coil.Buffer = coil.fmax(an, bn)          # [3, 7]    (NaN IGNORED)
+
+    let _ = coil.print_buffer(mx)
+    let _ = coil.print_buffer(q)
+    return 0
+```
+
+- **`coil.maximum(a, b) -> Buffer`** — elementwise max, propagates `NaN`.
+- **`coil.minimum(a, b) -> Buffer`** — elementwise min, propagates `NaN`.
+- **`coil.fmax(a, b) -> Buffer`** — elementwise max, ignores `NaN`.
+- **`coil.fmin(a, b) -> Buffer`** — elementwise min, ignores `NaN`.
+
+> **The `maximum`-vs-`fmax` split is the one nuance to internalize.** On a
+> lane where one operand is `NaN`: `maximum` / `minimum` keep the `NaN`
+> (any `NaN` in → `NaN` out, like the rest of IEEE arithmetic), while
+> `fmax` / `fmin` skip it and return the real number. So
+> `maximum([1, NaN], [3, 7]) = [3, NaN]` but
+> `fmax([1, NaN], [3, 7]) = [3, 7]`. The *only* time `fmax` / `fmin` give a
+> `NaN` is when **both** operands are `NaN`. (This matches numpy exactly:
+> `np.maximum`/`np.minimum` propagate, `np.fmax`/`np.fmin` ignore.)
+
+> **Dtype-preserving; same-shape + same-dtype required.** The result keeps
+> the operands' dtype (`maximum([1, 5], [3, 2]) = [3, 5]` stays `int64`; a
+> `bool` pair stays `bool`, where max is OR and min is AND). Unlike numpy,
+> coil does **not** broadcast or promote here: the two buffers must share
+> one shape *and* one dtype. A non-conformable pair (e.g. `(2,)` against
+> `(2, 2)`) or a cross-dtype pair **traps** — a clean abort, never a
+> silently-broadcast or garbage result. (Broadcasting and cross-dtype
+> promotion are tracked follow-ups, mirroring `concatenate`'s same-dtype
+> contract.)
+
 ## Rearranging & repeating — `diff` / `flip` / `roll` / `repeat` / `tile`
 
 These five rearrange or repeat the elements of a buffer. Each works over

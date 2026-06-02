@@ -534,6 +534,65 @@ fn main() -> i64:
 > 和其他逐元素操作一样,这两个操作**永不陷入陷阱**(一个「buffer + 标量」的操作
 > 没有形状不匹配的概念):`NaN` / `inf` 是一个流过去的*值*,而不是错误。
 
+## 二元 min/max ufunc —— `maximum` / `minimum` / `fmax` / `fmin`
+
+这四个操作接收**两个 buffer**,逐元素地在配对元素里挑出更大的
+(`maximum` / `fmax`)或更小的(`minimum` / `fmin`)那个,返回一个同形状、
+同 dtype 的**全新 `coil.Buffer`**。两个 buffer 必须同形状、同 dtype —— 不匹配的
+配对会**陷入陷阱**(见下方说明)。
+
+之所以是*四个*而不是两个,关键在于它们对 `NaN` 的处理**截然不同**:
+
+- **`maximum` / `minimum` 传播 `NaN`。** 某条 lane 上只要*有一个*操作数是
+  `NaN`,该 lane 的结果就是 `NaN`。(`maximum(1, NaN) = NaN`。)
+- **`fmax` / `fmin` 忽略 `NaN`。** 它们返回*非 `NaN`* 的那个操作数,只有当
+  **两个**操作数都是 `NaN` 时才给出 `NaN`。
+  (`fmax(1, NaN) = 1`,`fmax(NaN, NaN) = NaN`。)
+
+```python
+import coil
+
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(1.0, 2.0)
+    let b: coil.Buffer = coil.array1d2(3.0, 1.0)
+    # 逐元素挑选:lane 0 取 b 的 3,lane 1 取 a 的 2。
+    let mx: coil.Buffer = coil.maximum(a, b)        # [3, 2]
+    let mn: coil.Buffer = coil.minimum(a, b)        # [1, 1]
+
+    # NaN 分叉。用 0/0 造一个 NaN(无需 NaN 字面量):
+    let znum: coil.Buffer = coil.array1d2(1.0, 0.0)
+    let zden: coil.Buffer = coil.array1d2(1.0, 0.0)
+    let an: coil.Buffer = znum / zden               # [1, NaN]
+    let bn: coil.Buffer = coil.array1d2(3.0, 7.0)
+    let p: coil.Buffer = coil.maximum(an, bn)       # [3, NaN]  (NaN 传播)
+    let q: coil.Buffer = coil.fmax(an, bn)          # [3, 7]    (NaN 被忽略)
+
+    let _ = coil.print_buffer(mx)
+    let _ = coil.print_buffer(q)
+    return 0
+```
+
+- **`coil.maximum(a, b) -> Buffer`** —— 逐元素 max,传播 `NaN`。
+- **`coil.minimum(a, b) -> Buffer`** —— 逐元素 min,传播 `NaN`。
+- **`coil.fmax(a, b) -> Buffer`** —— 逐元素 max,忽略 `NaN`。
+- **`coil.fmin(a, b) -> Buffer`** —— 逐元素 min,忽略 `NaN`。
+
+> **`maximum`-对-`fmax` 的分叉是唯一需要记牢的细节。** 在某条 lane 上只有一个
+> 操作数是 `NaN` 时:`maximum` / `minimum` 保留 `NaN`(任何 `NaN` 进 → `NaN`
+> 出,与 IEEE 算术的其余部分一致),而 `fmax` / `fmin` 跳过它、返回那个实数。
+> 于是 `maximum([1, NaN], [3, 7]) = [3, NaN]`,但
+> `fmax([1, NaN], [3, 7]) = [3, 7]`。`fmax` / `fmin` *唯一*给出 `NaN` 的情形,
+> 是**两个**操作数都是 `NaN`。(这与 numpy 完全一致:`np.maximum`/`np.minimum`
+> 传播,`np.fmax`/`np.fmin` 忽略。)
+
+> **保持 dtype;要求同形状 + 同 dtype。** 结果保留操作数的 dtype
+> (`maximum([1, 5], [3, 2]) = [3, 5]` 仍是 `int64`;`bool` 配对仍是 `bool`,此时
+> max 即 OR、min 即 AND)。与 numpy 不同,coil 在这里**不**广播、**不**提升:
+> 两个 buffer 必须同形状*且*同 dtype。不可对齐的配对(例如 `(2,)` 对 `(2, 2)`)
+> 或跨 dtype 的配对会**陷入陷阱** —— 干净地中止,绝不会悄悄广播或产生垃圾结果。
+> (广播与跨 dtype 提升是已登记的后续工作,与 `concatenate` 的同 dtype 契约一致。)
+
 ## 重排与重复 —— `diff` / `flip` / `roll` / `repeat` / `tile`
 
 这五个操作重排或重复 buffer 中的元素。每个都在 **C 序展平**后的数组上工作

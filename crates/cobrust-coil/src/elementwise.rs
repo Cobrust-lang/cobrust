@@ -102,6 +102,7 @@ use ndarray::ArrayD;
 
 use crate::array::Array;
 use crate::dtype::Dtype;
+use crate::error::{NumpyError, NumpyErrorKind};
 use crate::promote::unary_math_dtype;
 
 /// Apply a unary float kernel elementwise with numpy dtype promotion.
@@ -712,6 +713,246 @@ pub fn power(a: &Array, p: f64) -> Array {
     // The f32 path narrows the exponent to f32 (numpy `f32 ** f64 -> f32`).
     let p32 = p as f32;
     unary_float(a, move |x: f32| x.powf(p32), move |x: f64| x.powf(p))
+}
+
+// =========================================================================
+// #163 numpy gap-closure BATCH 13 — the elementwise BINARY min/max ufunc
+// family (`maximum` / `minimum` / `fmax` / `fmin`). UNLIKE every prior
+// elementwise op in this module these are 2-ARRAY `(Array, Array) ->
+// Array` (the FIRST 2-Array kernels here; `power` is `(Array, f64)`).
+// They share the EXACT same-shape + same-dtype contract as
+// `manipulate::where_select` / `concatenate` and wire through the SAME
+// `buffer_combine` 2-handle cabi body — the ONLY new logic is the
+// elementwise min/max pick + the NaN behaviour.
+//
+// THE key nuance — NaN handling, the ONE axis that distinguishes the two
+// pairs (oracle: numpy 2.0.2, confirmed vs `/opt/homebrew/bin/python3.11`
+// numpy 2.4.6):
+//   - `maximum` / `minimum` PROPAGATE NaN: ANY NaN operand -> NaN result.
+//     `np.maximum(1, nan) = nan`, `np.maximum([1,nan],[2,3]) = [2, nan]`.
+//   - `fmax` / `fmin` IGNORE NaN: pick the NON-NaN operand; NaN ONLY when
+//     BOTH are NaN. `np.fmax(1, nan) = 1`, `np.fmax([1,nan],[2,3]) =
+//     [2, 3]`, `np.fmax(nan, nan) = nan`.
+//
+// Rust `f64::max` / `f64::min` ALREADY ignore NaN exactly like fmax/fmin
+// (verified: `1.0_f64.max(NaN) == 1.0`, `NaN.max(NaN)` is NaN), so the
+// fmax/fmin float arm is a bare `a.max(b)` / `a.min(b)`; the
+// maximum/minimum float arm needs the EXPLICIT propagate guard
+// (`if a.is_nan() || b.is_nan() { NaN } else { a.max(b) }`). Integer /
+// bool inputs have NO NaN, so all four reduce to the plain `Ord::max` /
+// `Ord::min` over the (already-same-shape) pair — `maximum` and `fmax`
+// agree, `minimum` and `fmin` agree.
+//
+// DTYPE-PRESERVING: `maximum(int,int)->int`, `fmax(f32,f32)->f32`, etc.
+// (numpy `maximum(int64,int64).dtype == int64`). SAME-SHAPE required (no
+// broadcasting in this batch — a non-conformable pair raises, mirroring
+// `concatenate`'s equal-shape combine contract; broadcasting is a tracked
+// follow-up). SAME-DTYPE required (a cross-dtype pair raises — the SAME
+// equal-dtype rule `concatenate` / `where_select` use; no silent
+// cross-dtype promotion, §2.2; a promoting form is a tracked follow-up).
+//
+// Tier `@py_compat(numerical)` — the result VALUES (incl. NaN placement)
+// agree exactly with numpy; the one intentional divergence is the
+// equal-shape / equal-dtype contract (numpy broadcasts + promotes; coil
+// raises `ShapeMismatch`). `-0.0`/`0.0` tie matches numpy
+// (`max(-0.0, 0.0) = 0.0`, via `f64::max`).
+// =========================================================================
+
+/// Validate the same-shape + same-dtype combine contract shared by every
+/// BATCH-13 min/max op (identical to `manipulate::where_select` /
+/// `concatenate`). Returns `Err(ShapeMismatch)` (numpy's `ValueError`) on
+/// a non-conformable (unequal-shape) pair OR a cross-dtype pair — the
+/// `op` name is woven into the diagnostic.
+fn minmax_check(op: &str, a: &Array, b: &Array) -> Result<(), NumpyError> {
+    let (as_, bs) = (a.shape(), b.shape());
+    if as_ != bs {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: format!(
+                "{op}: operands must share one shape (equal-shape contract; \
+                 broadcasting is a tracked follow-up) — a {as_:?}, b {bs:?} differ"
+            ),
+        });
+    }
+    if a.dtype() != b.dtype() {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: format!(
+                "{op}: dtype mismatch {:?} vs {:?} (equal-dtype contract; \
+                 cross-dtype promotion is a tracked follow-up)",
+                a.dtype(),
+                b.dtype()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Shared body for the four BATCH-13 elementwise min/max ops. Enforces
+/// the same-shape + same-dtype contract, then `Zip`s the two
+/// (already-same-shape, same-dtype) arrays element-for-element through
+/// the per-dtype pick closures. The float closures encode the
+/// NaN-behaviour split (the `f32`/`f64` arm differ between
+/// maximum/minimum and fmax/fmin); the int / bool arm is the plain
+/// `Ord::max` / `Ord::min` (no NaN), shared by all four.
+///
+/// `pick_f32` / `pick_f64` choose between two same-dtype floats per the
+/// op's NaN rule; `pick_int` chooses between two integers (also reused
+/// for `bool` via `u8`-free direct `Ord`). Result is `a`'s dtype.
+//
+// One closure per dtype family is the clearest way to thread the
+// per-op NaN split into the otherwise-identical Zip body (same pattern
+// as the `ufunc.rs` binop dispatch helpers, which carry the identical
+// allow).
+#[allow(clippy::too_many_arguments)]
+fn minmax_dispatch(
+    op: &str,
+    a: &Array,
+    b: &Array,
+    pick_f32: impl Fn(f32, f32) -> f32,
+    pick_f64: impl Fn(f64, f64) -> f64,
+    pick_i32: impl Fn(i32, i32) -> i32,
+    pick_i64: impl Fn(i64, i64) -> i64,
+    pick_bool: impl Fn(bool, bool) -> bool,
+) -> Result<Array, NumpyError> {
+    minmax_check(op, a, b)?;
+    macro_rules! zip2 {
+        ($va:expr, $vb:expr, $ctor:path, $zero:expr, $pick:expr) => {{
+            let mut out = ArrayD::from_elem($va.raw_dim(), $zero);
+            ndarray::Zip::from(&mut out)
+                .and($va)
+                .and($vb)
+                .for_each(|o, &x, &y| {
+                    *o = $pick(x, y);
+                });
+            $ctor(out)
+        }};
+    }
+    // The dtype-equality guard in `minmax_check` already returned on any
+    // mismatched pair, so every arm pairs like-with-like; the wildcard is
+    // unreachable but keeps the match total without an `unwrap`.
+    Ok(match (a, b) {
+        (Array::Int32(x), Array::Int32(y)) => zip2!(x, y, Array::Int32, 0_i32, &pick_i32),
+        (Array::Int64(x), Array::Int64(y)) => zip2!(x, y, Array::Int64, 0_i64, &pick_i64),
+        (Array::Float32(x), Array::Float32(y)) => zip2!(x, y, Array::Float32, 0.0_f32, &pick_f32),
+        (Array::Float64(x), Array::Float64(y)) => zip2!(x, y, Array::Float64, 0.0_f64, &pick_f64),
+        (Array::Bool(x), Array::Bool(y)) => zip2!(x, y, Array::Bool, false, &pick_bool),
+        _ => {
+            return Err(NumpyError {
+                kind: NumpyErrorKind::ShapeMismatch,
+                message: format!("{op}: dtype mismatch between `a` and `b`"),
+            });
+        }
+    })
+}
+
+/// `np.maximum(a, b)` — elementwise maximum, **PROPAGATES NaN** (ANY NaN
+/// operand yields a NaN result: `np.maximum(1, nan) = nan`). Dtype-
+/// preserving; same-shape + same-dtype required (a non-conformable /
+/// cross-dtype pair raises `ShapeMismatch`).
+///
+/// # Errors
+///
+/// `ShapeMismatch` (numpy's `ValueError`) when `a` / `b` shapes differ or
+/// their dtypes differ.
+pub fn maximum(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    minmax_dispatch(
+        "maximum",
+        a,
+        b,
+        |x: f32, y: f32| {
+            if x.is_nan() || y.is_nan() {
+                f32::NAN
+            } else {
+                x.max(y)
+            }
+        },
+        |x: f64, y: f64| {
+            if x.is_nan() || y.is_nan() {
+                f64::NAN
+            } else {
+                x.max(y)
+            }
+        },
+        Ord::max,
+        Ord::max,
+        |x, y| x | y, // bool max = OR (True > False)
+    )
+}
+
+/// `np.minimum(a, b)` — elementwise minimum, **PROPAGATES NaN** (ANY NaN
+/// operand yields a NaN result: `np.minimum(1, nan) = nan`). Dtype-
+/// preserving; same-shape + same-dtype required.
+///
+/// # Errors
+///
+/// `ShapeMismatch` when `a` / `b` shapes or dtypes differ.
+pub fn minimum(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    minmax_dispatch(
+        "minimum",
+        a,
+        b,
+        |x: f32, y: f32| {
+            if x.is_nan() || y.is_nan() {
+                f32::NAN
+            } else {
+                x.min(y)
+            }
+        },
+        |x: f64, y: f64| {
+            if x.is_nan() || y.is_nan() {
+                f64::NAN
+            } else {
+                x.min(y)
+            }
+        },
+        Ord::min,
+        Ord::min,
+        |x, y| x & y, // bool min = AND (False < True)
+    )
+}
+
+/// `np.fmax(a, b)` — elementwise maximum, **IGNORES NaN** (picks the
+/// non-NaN operand; NaN ONLY when BOTH are NaN: `np.fmax(1, nan) = 1`,
+/// `np.fmax(nan, nan) = nan`). Rust `f64::max` already ignores NaN, so
+/// the float arm is a bare `x.max(y)`. Dtype-preserving; same-shape +
+/// same-dtype required.
+///
+/// # Errors
+///
+/// `ShapeMismatch` when `a` / `b` shapes or dtypes differ.
+pub fn fmax(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    minmax_dispatch(
+        "fmax",
+        a,
+        b,
+        f32::max,
+        f64::max,
+        Ord::max,
+        Ord::max,
+        |x, y| x | y,
+    )
+}
+
+/// `np.fmin(a, b)` — elementwise minimum, **IGNORES NaN** (picks the
+/// non-NaN operand; NaN ONLY when BOTH are NaN: `np.fmin(1, nan) = 1`).
+/// Rust `f64::min` already ignores NaN. Dtype-preserving; same-shape +
+/// same-dtype required.
+///
+/// # Errors
+///
+/// `ShapeMismatch` when `a` / `b` shapes or dtypes differ.
+pub fn fmin(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    minmax_dispatch(
+        "fmin",
+        a,
+        b,
+        f32::min,
+        f64::min,
+        Ord::min,
+        Ord::min,
+        |x, y| x & y,
+    )
 }
 
 #[cfg(test)]
@@ -1560,5 +1801,192 @@ mod tests {
         assert_eq!(isnan(&a).shape(), vec![2, 2]);
         assert_eq!(isinf(&a).shape(), vec![2, 2]);
         assert_eq!(isfinite(&a).shape(), vec![2, 2]);
+    }
+
+    // ---- #163 BATCH 13 — maximum / minimum / fmax / fmin ----
+    // Oracle: numpy 2.0.2, confirmed vs `/opt/homebrew/bin/python3.11`
+    // numpy 2.4.6. THE discriminating axis is NaN behaviour:
+    //   maximum/minimum PROPAGATE NaN; fmax/fmin IGNORE NaN.
+    // Same-shape + same-dtype required (a non-conformable / cross-dtype
+    // pair raises ShapeMismatch — the concatenate combine contract).
+
+    #[test]
+    fn maximum_minimum_plain_no_nan() {
+        // np.maximum([1,2,5,3],[3,1,4,3]) = [3,2,5,3].
+        // np.minimum([1,2,5,3],[3,1,4,3]) = [1,1,4,3].
+        let a = array_f64(&[1.0, 2.0, 5.0, 3.0], &[4]).unwrap();
+        let b = array_f64(&[3.0, 1.0, 4.0, 3.0], &[4]).unwrap();
+        assert_eq!(
+            f64_vals(&maximum(&a, &b).unwrap()),
+            vec![3.0, 2.0, 5.0, 3.0]
+        );
+        assert_eq!(
+            f64_vals(&minimum(&a, &b).unwrap()),
+            vec![1.0, 1.0, 4.0, 3.0]
+        );
+        // fmax/fmin agree with maximum/minimum when there is no NaN.
+        assert_eq!(f64_vals(&fmax(&a, &b).unwrap()), vec![3.0, 2.0, 5.0, 3.0]);
+        assert_eq!(f64_vals(&fmin(&a, &b).unwrap()), vec![1.0, 1.0, 4.0, 3.0]);
+    }
+
+    #[test]
+    fn maximum_propagates_nan_fmax_ignores_it() {
+        // THE discriminating test — maximum-vs-fmax on a NaN input.
+        // np.maximum([1,nan],[2,3]) = [2., nan]  (NaN PROPAGATES at idx 1).
+        // np.fmax(   [1,nan],[2,3]) = [2., 3.]   (NaN IGNORED at idx 1).
+        let a = array_f64(&[1.0, f64::NAN], &[2]).unwrap();
+        let b = array_f64(&[2.0, 3.0], &[2]).unwrap();
+
+        let mx = f64_vals(&maximum(&a, &b).unwrap());
+        assert_eq!(mx[0], 2.0);
+        assert!(mx[1].is_nan(), "maximum PROPAGATES NaN at idx 1");
+
+        let fx = f64_vals(&fmax(&a, &b).unwrap());
+        assert_eq!(
+            fx,
+            vec![2.0, 3.0],
+            "fmax IGNORES NaN — picks the non-NaN 3.0"
+        );
+
+        // The symmetric minimum/fmin pair.
+        // np.minimum([1,nan],[2,3]) = [1., nan]; np.fmin = [1., 3.].
+        let mn = f64_vals(&minimum(&a, &b).unwrap());
+        assert_eq!(mn[0], 1.0);
+        assert!(mn[1].is_nan(), "minimum PROPAGATES NaN at idx 1");
+        assert_eq!(f64_vals(&fmin(&a, &b).unwrap()), vec![1.0, 3.0]);
+    }
+
+    #[test]
+    fn maximum_scalar_nan_propagates() {
+        // np.maximum(1, nan) = nan; np.minimum(1, nan) = nan (1-elem array).
+        let one = array_f64(&[1.0], &[1]).unwrap();
+        let nan = array_f64(&[f64::NAN], &[1]).unwrap();
+        assert!(f64_vals(&maximum(&one, &nan).unwrap())[0].is_nan());
+        assert!(f64_vals(&minimum(&one, &nan).unwrap())[0].is_nan());
+        // Order-independent: maximum(nan, 1) is also nan.
+        assert!(f64_vals(&maximum(&nan, &one).unwrap())[0].is_nan());
+    }
+
+    #[test]
+    fn fmax_scalar_nan_ignored_both_nan_is_nan() {
+        // np.fmax(1, nan) = 1; np.fmin(1, nan) = 1; np.fmax(nan, nan) = nan.
+        let one = array_f64(&[1.0], &[1]).unwrap();
+        let nan = array_f64(&[f64::NAN], &[1]).unwrap();
+        assert_eq!(f64_vals(&fmax(&one, &nan).unwrap()), vec![1.0]);
+        assert_eq!(f64_vals(&fmin(&one, &nan).unwrap()), vec![1.0]);
+        // Order-independent: fmax(nan, 1) = 1.
+        assert_eq!(f64_vals(&fmax(&nan, &one).unwrap()), vec![1.0]);
+        // BOTH NaN -> NaN (the ONLY NaN case for fmax/fmin).
+        assert!(
+            f64_vals(&fmax(&nan, &nan).unwrap())[0].is_nan(),
+            "fmax(nan, nan) is the ONLY fmax NaN case"
+        );
+        assert!(f64_vals(&fmin(&nan, &nan).unwrap())[0].is_nan());
+    }
+
+    #[test]
+    fn minmax_dtype_preserving_int() {
+        // np.maximum(int64,int64).dtype == int64 (NOT promoted to float).
+        // np.maximum([1,5,2],[3,1,2]) = [3,5,2]; minimum = [1,1,2].
+        let a = array_i64(&[1, 5, 2], &[3]).unwrap();
+        let b = array_i64(&[3, 1, 2], &[3]).unwrap();
+        let mx = maximum(&a, &b).unwrap();
+        assert_eq!(mx.dtype(), Dtype::Int64, "int64 PRESERVED (not float)");
+        assert_eq!(i64_vals(&mx), vec![3, 5, 2]);
+        assert_eq!(i64_vals(&minimum(&a, &b).unwrap()), vec![1, 1, 2]);
+        // fmax/fmin agree (no NaN in integers).
+        assert_eq!(i64_vals(&fmax(&a, &b).unwrap()), vec![3, 5, 2]);
+        assert_eq!(i64_vals(&fmin(&a, &b).unwrap()), vec![1, 1, 2]);
+
+        // int32 + f32 dtype preservation.
+        let a32 = array_i32(&[7, 2], &[2]).unwrap();
+        let b32 = array_i32(&[4, 9], &[2]).unwrap();
+        let m32 = maximum(&a32, &b32).unwrap();
+        assert_eq!(m32.dtype(), Dtype::Int32);
+        assert_eq!(i32_vals(&m32), vec![7, 9]);
+
+        let af = array_f32(&[1.5, 4.0], &[2]).unwrap();
+        let bf = array_f32(&[3.0, 2.0], &[2]).unwrap();
+        let mf = maximum(&af, &bf).unwrap();
+        assert_eq!(mf.dtype(), Dtype::Float32);
+        assert_eq!(f32_vals(&mf), vec![3.0, 4.0]);
+    }
+
+    #[test]
+    fn minmax_f32_nan_split() {
+        // f32 carries the SAME NaN split as f64 (the f32 arm differs
+        // between maximum/minimum and fmax/fmin).
+        let a = array_f32(&[1.0, f32::NAN], &[2]).unwrap();
+        let b = array_f32(&[2.0, 3.0], &[2]).unwrap();
+        let mx = f32_vals(&maximum(&a, &b).unwrap());
+        assert_eq!(mx[0], 2.0);
+        assert!(mx[1].is_nan(), "f32 maximum PROPAGATES NaN");
+        assert_eq!(f32_vals(&fmax(&a, &b).unwrap()), vec![2.0, 3.0]);
+    }
+
+    #[test]
+    fn minmax_bool_dtype() {
+        // numpy: maximum(bool,bool) = OR, minimum = AND (True>False).
+        // np.maximum([T,F,F],[F,T,F]) = [T,T,F]; np.minimum = [F,F,F].
+        let a = array_bool(&[true, false, false], &[3]).unwrap();
+        let b = array_bool(&[false, true, false], &[3]).unwrap();
+        let mx = maximum(&a, &b).unwrap();
+        assert_eq!(mx.dtype(), Dtype::Bool);
+        assert_eq!(bool_vals(&mx), vec![true, true, false]);
+        assert_eq!(
+            bool_vals(&minimum(&a, &b).unwrap()),
+            vec![false, false, false]
+        );
+    }
+
+    #[test]
+    fn minmax_negative_zero_tie() {
+        // np.maximum(-0.0, 0.0) = 0.0; np.fmax(-0.0, 0.0) = 0.0.
+        let a = array_f64(&[-0.0], &[1]).unwrap();
+        let b = array_f64(&[0.0], &[1]).unwrap();
+        // 0.0 == -0.0 numerically; check the bit-sign is +0.0 (numpy).
+        assert!(f64_vals(&maximum(&a, &b).unwrap())[0].is_sign_positive());
+        assert!(f64_vals(&fmax(&a, &b).unwrap())[0].is_sign_positive());
+    }
+
+    #[test]
+    fn minmax_preserves_shape_2d() {
+        // np.maximum on (2,2) keeps the shape.
+        let a = array_f64(&[1.0, 4.0, 2.0, 8.0], &[2, 2]).unwrap();
+        let b = array_f64(&[3.0, 2.0, 5.0, 1.0], &[2, 2]).unwrap();
+        let r = maximum(&a, &b).unwrap();
+        assert_eq!(r.shape(), vec![2, 2]);
+        assert_eq!(f64_vals(&r), vec![3.0, 4.0, 5.0, 8.0]);
+    }
+
+    #[test]
+    fn minmax_non_conformable_shape_errs() {
+        // (3,) vs (4,) is non-conformable — numpy raises ValueError; we
+        // return ShapeMismatch (the cabi shim coil_panics on this).
+        let a = array_f64(&[1.0, 2.0, 3.0], &[3]).unwrap();
+        let b = array_f64(&[1.0, 2.0, 3.0, 4.0], &[4]).unwrap();
+        let e = maximum(&a, &b).unwrap_err();
+        assert_eq!(e.kind, NumpyErrorKind::ShapeMismatch);
+        assert!(
+            e.message.contains("maximum"),
+            "msg names the op: {}",
+            e.message
+        );
+        // All four share the same-shape contract.
+        assert!(minimum(&a, &b).is_err());
+        assert!(fmax(&a, &b).is_err());
+        assert!(fmin(&a, &b).is_err());
+    }
+
+    #[test]
+    fn minmax_cross_dtype_errs() {
+        // int64 vs float64 — equal-dtype contract (concatenate rule); numpy
+        // PROMOTES, we raise ShapeMismatch (no silent coercion, §2.2).
+        let a = array_i64(&[1, 2], &[2]).unwrap();
+        let b = array_f64(&[3.0, 1.0], &[2]).unwrap();
+        let e = maximum(&a, &b).unwrap_err();
+        assert_eq!(e.kind, NumpyErrorKind::ShapeMismatch);
+        assert!(e.message.contains("dtype mismatch"), "msg: {}", e.message);
+        assert!(fmax(&a, &b).is_err());
     }
 }
