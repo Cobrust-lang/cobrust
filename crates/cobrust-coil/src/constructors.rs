@@ -1054,6 +1054,66 @@ mod tests {
         assert_eq!(err.kind, NumpyErrorKind::LinalgShapeError);
     }
 
+    // #163 BATCH 14 — additional differential-vs-numpy pins for the
+    // C-ABI-surfaced `k=0` main-diagonal forms (oracle `python3.11`).
+
+    #[test]
+    fn diag_extract_non_square_min_rc() {
+        // np.diag([[1,2,3],[4,5,6]]) -> [1, 5] (len min(2,3) = 2; the C-ABI
+        // shim's `k=0` extract path on a NON-SQUARE 2-D input).
+        let m = array_i64(&[1, 2, 3, 4, 5, 6], &[2, 3]).unwrap();
+        let d = diag(&m, 0).unwrap();
+        assert_eq!(d.shape(), vec![2]);
+        assert_eq!(as_f64(&d), vec![1.0, 5.0]);
+        assert_eq!(d.dtype(), Dtype::Int64);
+        // np.diag([[1,2],[3,4],[5,6]]) (3x2, tall) -> [1, 4] (len min(3,2)=2).
+        let tall = array_i64(&[1, 2, 3, 4, 5, 6], &[3, 2]).unwrap();
+        let dt = diag(&tall, 0).unwrap();
+        assert_eq!(dt.shape(), vec![2]);
+        assert_eq!(as_f64(&dt), vec![1.0, 4.0]);
+    }
+
+    #[test]
+    fn diag_construct_main_diagonal_f64_dtype_preserve() {
+        // np.diag([1.,2.,3.]) -> [[1,0,0],[0,2,0],[0,0,3]] (1-D->2-D, k=0,
+        // dtype preserved through the f64 lane). The C-ABI shim path.
+        let v = array_f64(&[1.0, 2.0, 3.0], &[3]).unwrap();
+        let d = diag(&v, 0).unwrap();
+        assert_eq!(d.shape(), vec![3, 3]);
+        assert_eq!(d.dtype(), Dtype::Float64);
+        assert_eq!(
+            as_f64(&d),
+            vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]
+        );
+    }
+
+    #[test]
+    fn diag_empty_1d_yields_empty_matrix() {
+        // np.diag([]) -> shape (0, 0) (empty 1-D -> empty matrix).
+        let v = array_f64(&[], &[0]).unwrap();
+        let d = diag(&v, 0).unwrap();
+        assert_eq!(d.shape(), vec![0, 0]);
+        assert_eq!(as_f64(&d), Vec::<f64>::new());
+    }
+
+    /// `tril` and `triu` must NOT be swapped: on an ASYMMETRIC matrix the
+    /// two produce DIFFERENT results (the off-diagonal corners differ).
+    /// `np.tril([[1,2],[3,4]]) == [[1,0],[3,4]]` (upper-right `2` zeroed);
+    /// `np.triu([[1,2],[3,4]]) == [[1,2],[0,4]]` (lower-left `3` zeroed).
+    #[test]
+    fn tril_vs_triu_discriminating_not_swapped() {
+        let m = array_i64(&[1, 2, 3, 4], &[2, 2]).unwrap();
+        let l = tril(&m, 0).unwrap();
+        let u = triu(&m, 0).unwrap();
+        // tril keeps the lower-left `3`, zeros the upper-right `2`.
+        assert_eq!(as_f64(&l), vec![1.0, 0.0, 3.0, 4.0], "tril zeros ABOVE");
+        // triu keeps the upper-right `2`, zeros the lower-left `3`.
+        assert_eq!(as_f64(&u), vec![1.0, 2.0, 0.0, 4.0], "triu zeros BELOW");
+        // The discriminator: the two are NOT equal (would be if swapped or
+        // if either were the identity). The diagonal agrees; corners flip.
+        assert_ne!(as_f64(&l), as_f64(&u), "tril and triu must differ");
+    }
+
     // ---- Stream W item 3: linspace / logspace ---------------------------
     // Oracle: numpy 2.0.2.
 

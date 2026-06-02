@@ -81,8 +81,9 @@ use crate::array::Array;
 use crate::broadcast::broadcast_shape;
 use crate::broadcast_extra::broadcast_to_1d;
 use crate::constructors::{
-    array_f64, eye as coil_eye, full as coil_full, linspace as coil_linspace,
-    logspace as coil_logspace, ones as coil_ones, zeros as coil_zeros,
+    array_f64, diag as coil_diag, eye as coil_eye, full as coil_full, linspace as coil_linspace,
+    logspace as coil_logspace, ones as coil_ones, tril as coil_tril, triu as coil_triu,
+    zeros as coil_zeros,
 };
 use crate::dtype::Dtype;
 use crate::elementwise::{
@@ -977,6 +978,112 @@ pub unsafe extern "C" fn __cobrust_coil_ravel(a: *mut u8) -> *mut u8 {
     // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
     let arr: &Array = unsafe { &*a.cast::<Array>() };
     Box::into_raw(Box::new(coil_ravel(arr))).cast::<u8>()
+}
+
+// =====================================================================
+// #163 gap-closure BATCH 14 (2026-06-02) — the LINALG-EXTRACT ops
+// `diag` / `tril` / `triu`. Each is a 1-arg `Buffer -> Buffer` op
+// riding the SAME borrow-Buffer-arg → fresh-Buffer-return value-handle
+// ABI as the BATCH-2 reshape ops (`transpose` / `flatten` / `ravel`)
+// above — EXCEPT the underlying kernel is FALLIBLE (a disallowed input
+// RANK is a numpy `ValueError`), so unlike the infallible `buffer_unary`
+// (transcendentals / rounding) these route through `buffer_unary_fallible`
+// — the 1-arg analogue of `buffer_combine` — which converts the kernel's
+// `Err` to a clean `coil_panic` (the `__cobrust_panic` abort path), NEVER
+// unwinding across the C-ABI.
+//
+// SHAPE contract (numpy `lib/_twodim_base_impl.py`, oracle `python3.11`):
+// - `coil.diag(a)` — SHAPE-DEPENDENT (`k=0` main diagonal). 1-D `(n,)`
+//   input → a fresh `(n,n)` matrix with `a` on the main diagonal, zeros
+//   elsewhere (`np.diag([1,2,3]) == [[1,0,0],[0,2,0],[0,0,3]]`). 2-D
+//   `(r,c)` input → the 1-D main-diagonal extract, length `min(r,c)`
+//   (`np.diag([[1,2],[3,4]]) == [1,4]`; non-square `(2,3)` → length 2).
+//   A 0-D / ≥3-D input → `coil_panic` (numpy raises `ValueError`).
+// - `coil.tril(a)` — LOWER triangle: keep elements ON and BELOW the main
+//   diagonal, ZERO those ABOVE; SAME shape, same dtype. Requires 2-D —
+//   a non-2-D input `coil_panic`s (numpy's batch-over-≥1-D behavior is a
+//   documented deferral; this batch clean-traps on rank ≠ 2).
+// - `coil.triu(a)` — UPPER triangle: keep ON and ABOVE, ZERO those BELOW.
+//   SAME shape, same dtype, 2-D-required (as `tril`).
+//
+// ALL THREE preserve the input dtype; the zero-fill is the dtype's zero
+// (the kernels live in `constructors.rs`). The optional numpy `k=`
+// diagonal-offset arg is a documented deferral (main diagonal `k=0`
+// only) — the kernels accept `k`, the shims pin it to `0`.
+// =====================================================================
+
+/// Shared body for the 1-arg FALLIBLE shims (`diag` / `tril` / `triu`).
+/// BORROWS the single handle, applies the `Result`-returning kernel `f`,
+/// and `coil_panic`s on the kernel's `Err` (a disallowed input RANK —
+/// numpy raises `ValueError`) — NEVER unwinding across the C-ABI. The
+/// 1-arg analogue of `buffer_combine`; the FALLIBLE counterpart to the
+/// infallible `buffer_unary`. Returns a freshly-Boxed result handle the
+/// `.cb` caller owns (freed once via `__cobrust_coil_buffer_drop`).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped).
+unsafe fn buffer_unary_fallible(
+    a: *mut u8,
+    op_name: &str,
+    f: fn(&Array) -> Result<Array, crate::error::NumpyError>,
+) -> *mut u8 {
+    if a.is_null() {
+        coil_panic(&format!("coil.{op_name}: null operand handle"));
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only —
+    // not reboxed / freed; the `.cb` scope still owns + drops it.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    let out = match f(arr) {
+        Ok(arr) => arr,
+        Err(e) => coil_panic(&format!("coil.{op_name}: {}", e.message)),
+    };
+    Box::into_raw(Box::new(out)).cast::<u8>()
+}
+
+/// `coil.diag(a) -> Buffer`. SHAPE-DEPENDENT (main diagonal, `k=0`): a
+/// 1-D `(n,)` input becomes the `(n,n)` matrix with `a` on the main
+/// diagonal; a 2-D `(r,c)` input becomes the 1-D main-diagonal extract
+/// (length `min(r,c)`). BORROWS `a`; returns a fresh owned handle. A 0-D
+/// / ≥3-D input `coil_panic`s (numpy `ValueError`). Dtype-preserving.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped). The returned
+/// pointer is a freshly-Boxed handle the `.cb` caller owns; freed once
+/// via `__cobrust_coil_buffer_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_diag(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation. `k = 0` (main diagonal).
+    unsafe { buffer_unary_fallible(a, "diag", |arr| coil_diag(arr, 0)) }
+}
+
+/// `coil.tril(a) -> Buffer`. LOWER triangle — keep elements ON and BELOW
+/// the main diagonal (`k=0`), ZERO those ABOVE; SAME shape, same dtype.
+/// BORROWS `a`; returns a fresh owned handle. A non-2-D input
+/// `coil_panic`s (numpy `ValueError`; the ≥1-D batch form is a deferral).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_diag`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_tril(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation. `k = 0` (main diagonal).
+    unsafe { buffer_unary_fallible(a, "tril", |arr| coil_tril(arr, 0)) }
+}
+
+/// `coil.triu(a) -> Buffer`. UPPER triangle — keep elements ON and ABOVE
+/// the main diagonal (`k=0`), ZERO those BELOW; SAME shape, same dtype.
+/// BORROWS `a`; returns a fresh owned handle. A non-2-D input
+/// `coil_panic`s (numpy `ValueError`; the ≥1-D batch form is a deferral).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_diag`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_triu(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation. `k = 0` (main diagonal).
+    unsafe { buffer_unary_fallible(a, "triu", |arr| coil_triu(arr, 0)) }
 }
 
 /// Shared body for the 2-array combine shims (`concatenate` / `vstack` /
@@ -3657,5 +3764,96 @@ mod tests {
             __cobrust_coil_buffer_drop(a);
             __cobrust_coil_buffer_drop(r);
         }
+    }
+
+    // ---- #163 BATCH 14 — diag / tril / triu shim tests ------------------
+    // The 1-arg FALLIBLE `(ptr) -> ptr` shims (the `buffer_unary_fallible`
+    // body). diag is SHAPE-DEPENDENT (1-D→2-D matrix / 2-D→1-D extract,
+    // `k=0`); tril/triu mask a 2-D matrix. Oracle: `python3.11`.
+
+    /// `coil.diag(array1d2(1, 2))` builds the 2-D matrix `[[1,0],[0,2]]`
+    /// (1-D→2-D, `k=0`). Verified via `array_repr` (proves both the shape
+    /// AND the off-diagonal zeros). BORROWS the input; the fresh result
+    /// drops once (2 total drops).
+    #[test]
+    fn diag_shim_constructs_matrix_from_1d_and_drops_once() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let r = __cobrust_coil_diag(a);
+            assert!(!r.is_null());
+            // np.diag([1., 2.]) -> [[1, 0], [0, 2]] (2x2, main diagonal).
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.shape(), vec![2, 2]);
+            assert_eq!(array_repr(arr), "array([[1, 0], [0, 2]], dtype=float64)");
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(
+            drop_count() - before,
+            2,
+            "input + fresh result drop once each"
+        );
+    }
+
+    /// `coil.diag(array2x2(1, 2, 3, 4))` EXTRACTS the main diagonal →
+    /// `[1, 4]` (2-D→1-D, `k=0`). The OTHER direction of the shape-
+    /// dependent shim from the test above. `np.diag([[1,2],[3,4]]) == [1,4]`.
+    #[test]
+    fn diag_shim_extracts_diagonal_from_2d() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array2x2(1.0, 2.0, 3.0, 4.0);
+            let r = __cobrust_coil_diag(a);
+            assert!(!r.is_null());
+            // np.diag([[1,2],[3,4]]) -> [1, 4] (1-D extract).
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.shape(), vec![2]);
+            assert_eq!(array_repr(arr), "array([1, 4], dtype=float64)");
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    /// `coil.tril(array2x2(1, 2, 3, 4))` → `[[1,0],[3,4]]` (ZERO the
+    /// upper-right `2`; keep ON+BELOW the diagonal). `coil.triu` of the
+    /// SAME input → `[[1,2],[0,4]]` (ZERO the lower-left `3`). The two
+    /// must NOT be swapped — the discriminating shim test.
+    #[test]
+    fn tril_triu_shims_discriminate_and_drop_once() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array2x2(1.0, 2.0, 3.0, 4.0);
+            let l = __cobrust_coil_tril(a);
+            let u = __cobrust_coil_triu(a);
+            assert!(!l.is_null() && !u.is_null());
+            // tril zeros ABOVE the diagonal: [[1,0],[3,4]].
+            let l_ref: &Array = &*l.cast::<Array>();
+            assert_eq!(
+                array_repr(l_ref),
+                "array([[1, 0], [3, 4]], dtype=float64)",
+                "tril zeros the upper-right corner"
+            );
+            // triu zeros BELOW the diagonal: [[1,2],[0,4]].
+            let u_ref: &Array = &*u.cast::<Array>();
+            assert_eq!(
+                array_repr(u_ref),
+                "array([[1, 2], [0, 4]], dtype=float64)",
+                "triu zeros the lower-left corner"
+            );
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(l);
+            __cobrust_coil_buffer_drop(u);
+        }
+        // a + l + u = 3 fresh handles, each dropped once.
+        assert_eq!(drop_count() - before, 3, "input + 2 results drop once each");
     }
 }

@@ -3498,6 +3498,23 @@ impl<'ctx> LlvmEmitter<'ctx> {
             // below. MIR retargets `coil.diff(a)` onto these `Call`s.
             ("__cobrust_coil_diff", coil_shape_ty, 1),
             ("__cobrust_coil_flip", coil_shape_ty, 1),
+            // #163 LINALG-EXTRACT BATCH 14 — the 1-arg `diag` / `tril` /
+            // `triu` ops. `(ptr) -> ptr` ≡ `coil_shape_ty`, the IDENTICAL
+            // extern shape as the reshape ops (`transpose` / `flatten` /
+            // `ravel`) + unary ufuncs above. The shape-dependent `diag`
+            // (1-D→2-D matrix / 2-D→1-D extract) + the `tril`/`triu`
+            // triangle masking + the dtype-preserve rule + the FALLIBLE
+            // rank-trap (a disallowed input RANK `coil_panic`s) all live
+            // entirely in the Rust kernel (`constructors.rs`) + the shim's
+            // `buffer_unary_fallible` body; the opaque `Buffer` handle ABI
+            // is byte-identical, so codegen rides the SAME extern shape +
+            // the flat `__cobrust_coil_*` recognizer prefix (no batch-
+            // specific arm). MIR retargets `coil.diag(a)` onto these
+            // `Call`s via the SAME generic 1-Buffer-arg path (ZERO batch-
+            // specific MIR code).
+            ("__cobrust_coil_diag", coil_shape_ty, 1),
+            ("__cobrust_coil_tril", coil_shape_ty, 1),
+            ("__cobrust_coil_triu", coil_shape_ty, 1),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

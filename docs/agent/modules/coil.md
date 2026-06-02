@@ -2954,6 +2954,100 @@ elementwise min/max pick + the NaN-behaviour split.
       fmt clean; no new dep (`Cargo.lock` unchanged — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## #163 numpy gap-closure BATCH 14 — the LINALG-EXTRACT ops `diag` / `tril` / `triu` (DONE)
+
+The three linalg-extract ops. Each is a 1-arg `(Buffer a) -> Buffer` op
+wired BYTE-IDENTICALLY to the BATCH-2 reshape ops (`transpose` /
+`flatten` / `ravel`): the manifest is a `[Buffer] -> Buffer` `EcoSig`,
+codegen reuses the `coil_shape_ty` `(ptr) -> ptr` extern, and MIR rides
+the SAME generic 1-Buffer-arg lowering (ZERO batch-specific MIR code).
+The kernels ALREADY existed (`constructors.rs`, Stream W, with full
+`k=` support); BATCH 14 is the cabi/manifest/codegen WIRING that surfaces
+them on the `.cb` `coil.Buffer` handle (the FIRST coil cabi shims with
+a FALLIBLE 1-arg body — see below). The cabi `k` is pinned to `0` (main
+diagonal); the `k=` offset is a documented deferral.
+
+### The shape contract (the load-bearing nuance — numpy-confirmed + tested)
+
+- **`diag` is SHAPE-DEPENDENT** (`k=0` main diagonal):
+  - a 1-D `(n,)` input → the `(n,n)` matrix with the vector on the main
+    diagonal, zeros elsewhere (`np.diag([1,2]) == [[1,0],[0,2]]`).
+  - a 2-D `(r,c)` input → the 1-D main-diagonal extract, length
+    `min(r,c)` (`np.diag([[1,2],[3,4]]) == [1,4]`; a NON-square `(2,3)`
+    extract has length 2). `diag(diag(v))` round-trips a vector.
+- **`tril` keeps ON+BELOW the diagonal, ZEROs ABOVE** (`np.tril([[1,2],
+  [3,4]]) == [[1,0],[3,4]]`); same shape, 2-D-required.
+- **`triu` keeps ON+ABOVE the diagonal, ZEROs BELOW** (`np.triu([[1,2],
+  [3,4]]) == [[1,2],[0,4]]`); same shape, 2-D-required. tri**l**=lower,
+  tri**u**=upper — on the SAME matrix they zero OPPOSITE corners (the
+  discriminating test pins they are NOT swapped).
+
+### Rank / dtype contract
+
+- **`diag` accepts 1-D OR 2-D.** A 0-D / ≥3-D input raises
+  `LinalgShapeError` (numpy `ValueError`); the cabi shim `coil_panic`s —
+  a clean trap, NEVER a C-ABI unwind.
+- **`tril` / `triu` REQUIRE 2-D.** A non-2-D input raises
+  `LinalgShapeError` → trap. numpy treats a ≥1-D input as a batch; this
+  batch clean-traps on rank ≠ 2 (the batch form is a documented deferral).
+- **Dtype-PRESERVING.** All three keep the input dtype; the zero-fill is
+  the dtype's zero (the kernels read through an `f64` lane that preserves
+  the int/bool bit pattern, then re-emit at the input dtype).
+- **`k=0` main diagonal only.** The kernels accept a `k` diagonal offset;
+  the cabi shims pin it to `0` (the offset surface is a deferral).
+
+### 5-layer wiring
+
+- `constructors.rs` (KERNELS, pre-existing — Stream W): `diag` (dispatch
+  on `ndim`: `diag_construct` 1-D→2-D / `diag_extract` 2-D→1-D), `tril`,
+  `triu`, `require_2d`. NEW unit tests added THIS batch: non-square
+  `diag_extract` (`2x3 -> [1,5]`, `3x2 -> [1,4]`), f64 dtype-preserve
+  construct, empty-1-D `diag` (`shape (0,0)`), and the DISCRIMINATING
+  `tril`-vs-`triu` not-swapped test.
+- `cabi.rs`: 3 shims `__cobrust_coil_{diag,tril,triu}` `(ptr) -> ptr` via
+  a NEW shared `buffer_unary_fallible` body — the 1-arg analogue of
+  `buffer_combine` (the FALLIBLE counterpart to the infallible
+  `buffer_unary` the transcendentals use): borrows the handle, applies
+  the `Result`-returning kernel with `k=0`, `coil_panic`s on the kernel's
+  `Err` (disallowed RANK). NEW shim round-trip tests: diag 1-D→matrix
+  (drop-once), diag 2-D→extract, the discriminating tril-vs-triu
+  (drop-once, 3 handles).
+- `ecosystem.rs`: 3 arms `("coil", op) => EcoSig::from_values(symbol,
+  [Buffer], Buffer)`, tier `Semantic` (pure structural extract/mask, no
+  floating arithmetic; dtype-preserving).
+- Typecheck / MIR: NO new code — the 1-Buffer-arg `[Buffer] -> Buffer`
+  form rides the SAME generic lowering path as `transpose` (BATCH 2
+  precedent; the `transpose`/`flatten`/`ravel` 1-arg path).
+- Codegen: 3 register rows `__cobrust_coil_{diag,tril,triu}` →
+  `coil_shape_ty` (`(ptr) -> ptr`, the SAME extern fn-type as the BATCH-2
+  `transpose` / `flatten` / `ravel`; NO new extern shape).
+
+### Done means (#163 BATCH 14 — DONE)
+
+- [x] `constructors.rs`: kernels pre-existing; NEW unit tests pin both
+      diag directions incl. NON-square extract, f64 dtype-preserve
+      construct, empty-1-D, and the DISCRIMINATING tril-vs-triu (not
+      swapped — corners flip).
+- [x] cabi: 3 shims via NEW `buffer_unary_fallible` (borrow, `coil_panic`
+      clean-trap on disallowed RANK — no unwind). NEW shim tests (diag
+      both directions + tril/triu discriminate, drop-once verified).
+- [x] Manifest: 3 ecosystem arms `[Buffer] -> Buffer`, tier `Semantic`.
+- [x] Typecheck / MIR: NO new code (the 1-Buffer-arg generic path —
+      `transpose` precedent).
+- [x] Codegen: 3 register rows, `coil_shape_ty` (NO new extern fn-type).
+- [x] `.cb` E2E `coil_triangle_e2e.rs` (7 tests): diag 1-D→matrix
+      `[[1,0],[0,2]]` + diag 2-D→extract `[1,4]` + diag NON-square
+      `2x3 -> [1,5]` + tril `[[1,0],[3,4]]` (zeros ABOVE) + triu
+      `[[1,2],[0,4]]` (zeros BELOW; the discriminating complement of
+      tril on the SAME input) + diag(diag(v)) round-trip `[5,7]` +
+      transpose∘tril CHAIN `[[1,3],[0,4]]`.
+- [x] No regression: full `cobrust-coil` suite green; `coil_triangle_e2e`
+      + `coil_hello_e2e` all green, run ONE `--test` at a time (F73
+      libcoil.a build-race avoidance); touched crates (`cobrust-coil` +
+      `cobrust-codegen` + `cobrust-types`) build + clippy `-D warnings` +
+      fmt clean; no new dep (`Cargo.lock` unchanged — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

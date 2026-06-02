@@ -817,6 +817,56 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // #163 gap-closure BATCH 14 (2026-06-02) — the LINALG-EXTRACT ops
+        // `diag` / `tril` / `triu`. Each is a 1-arg `Buffer -> Buffer` op
+        // riding the IDENTICAL borrow-Buffer-arg → fresh-Buffer-return
+        // value-handle ABI as the BATCH-2 reshape ops (`transpose` /
+        // `flatten` / `ravel`) + the unary ufuncs (`abs` / `exp`) — the
+        // Buffer arg auto-borrows (Move→Copy) in `lower_eco_arg`, the fresh
+        // return is drop-scheduled by `emit_ecosystem_call` (NO `_=>"any"`
+        // MIR gap; the generic ecosystem-call lowering iterates `sig.params`
+        // regardless of arity). Codegen rides the SAME `coil_shape_ty`
+        // `(ptr) -> ptr` extern as `transpose`. The only batch-specific
+        // wrinkle is the cabi shims being FALLIBLE (a disallowed input RANK
+        // `coil_panic`s) — fully inside the Rust kernel + the shim's
+        // `buffer_unary_fallible` body, INVISIBLE to the type/MIR/codegen
+        // layers (the opaque handle ABI is byte-identical).
+        //
+        // - `coil.diag(a) -> Buffer`  — SHAPE-DEPENDENT (`k=0`): a 1-D
+        //   `(n,)` input → the `(n,n)` matrix with `a` on the main diagonal
+        //   (`np.diag([1,2,3]) == [[1,0,0],[0,2,0],[0,0,3]]`); a 2-D `(r,c)`
+        //   input → the 1-D main-diagonal extract, length `min(r,c)`
+        //   (`np.diag([[1,2],[3,4]]) == [1,4]`).
+        // - `coil.tril(a) -> Buffer` — LOWER triangle: keep ON+BELOW the
+        //   main diagonal, ZERO ABOVE; SAME shape, 2-D-required.
+        // - `coil.triu(a) -> Buffer` — UPPER triangle: keep ON+ABOVE, ZERO
+        //   BELOW; SAME shape, 2-D-required.
+        //
+        // Tier `Semantic` — the VALUES + shape + dtype agree exactly with
+        // numpy (pure structural extract/mask, no floating arithmetic;
+        // dtype-preserving, the zero-fill is the dtype's zero). The two
+        // intentional contracts (the `k=` diagonal-offset deferral —
+        // `k=0` main diagonal only — and `tril`/`triu`'s 2-D requirement
+        // vs numpy's ≥1-D batch form, a clean `coil_panic` trap) live in
+        // the Rust kernel (`constructors.rs`) + are documented there.
+        ("coil", "diag") => Some(EcoSig::from_values(
+            "__cobrust_coil_diag",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "tril") => Some(EcoSig::from_values(
+            "__cobrust_coil_tril",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "triu") => Some(EcoSig::from_values(
+            "__cobrust_coil_triu",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         // #163 gap-closure BATCH 13 (2026-06-02) — the elementwise BINARY
         // min/max ufuncs `maximum` / `minimum` / `fmax` / `fmin`. Each is a
         // 2-Buffer `(Buffer, Buffer) -> Buffer` op riding the IDENTICAL

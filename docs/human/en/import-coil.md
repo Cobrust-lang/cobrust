@@ -737,6 +737,83 @@ fn main() -> i64:
 > Like the other ops, these **never trap** — an empty input or a zero count
 > is an empty buffer, never an error.
 
+## Triangle & diagonal extraction — `diag` / `tril` / `triu`
+
+These three pull the *diagonal* or a *triangle* out of a matrix. They are
+the closest thing in numpy to "look at one slice of a 2-D array", and they
+all return a **fresh `coil.Buffer`**. They each take just the buffer (no
+extra argument — the main diagonal only).
+
+```python
+import coil
+
+fn main() -> i64:
+    # diag is SHAPE-DEPENDENT — it does opposite things to a vector and a matrix.
+    let v: coil.Buffer = coil.array1d2(1.0, 2.0)
+    let m: coil.Buffer = coil.diag(v)        # [[1, 0], [0, 2]]   (vector -> diagonal matrix)
+    let _ = coil.print_buffer(m)
+
+    let a: coil.Buffer = coil.array2x2(1.0, 2.0, 3.0, 4.0)  # [[1,2],[3,4]]
+    let d: coil.Buffer = coil.diag(a)        # [1, 4]   (matrix -> its diagonal)
+    let _ = coil.print_buffer(d)
+
+    # tril keeps the lower triangle (zeros above); triu keeps the upper (zeros below).
+    let lo: coil.Buffer = coil.tril(a)       # [[1, 0], [3, 4]]
+    let _ = coil.print_buffer(lo)
+    let hi: coil.Buffer = coil.triu(a)       # [[1, 2], [0, 4]]
+    let _ = coil.print_buffer(hi)
+
+    # chain: diag(diag(v)) round-trips a vector through its diagonal matrix and back.
+    let back: coil.Buffer = coil.diag(coil.diag(v))   # [1, 2]
+    let _ = coil.print_buffer(back)
+    return 0
+```
+
+**The three ops**:
+
+- **`coil.diag(a) -> Buffer`** — *shape-dependent*:
+  - a **1-D** vector of length `n` becomes the `n × n` matrix with the
+    vector on the main diagonal and zeros elsewhere: `diag([1, 2]) =
+    [[1, 0], [0, 2]]`.
+  - a **2-D** matrix becomes its 1-D main diagonal: `diag([[1, 2], [3, 4]])
+    = [1, 4]`.
+- **`coil.tril(a) -> Buffer`** — the **lower triangle**: keep every element
+  on and *below* the main diagonal, set the ones *above* to zero (same
+  shape): `tril([[1, 2], [3, 4]]) = [[1, 0], [3, 4]]`.
+- **`coil.triu(a) -> Buffer`** — the **upper triangle**: keep every element
+  on and *above* the main diagonal, set the ones *below* to zero (same
+  shape): `triu([[1, 2], [3, 4]]) = [[1, 2], [0, 4]]`.
+
+> **`diag` does two opposite things depending on the input rank.** This is
+> numpy's exact behaviour, and it is the one thing to internalize: give it a
+> *vector* and you get a *matrix* (the vector laid on the diagonal); give it
+> a *matrix* and you get a *vector* (the diagonal pulled out). That is why
+> `diag(diag(v))` round-trips back to `v` — the outer call extracts what the
+> inner call constructed. For a non-square matrix the extracted diagonal has
+> length `min(rows, cols)`: `diag` of a `2 × 3` matrix gives 2 elements.
+
+> **`tril` zeros *above*, `triu` zeros *below* — don't swap them.** The
+> mnemonic: tri**l** = **l**ower (the lower triangle survives), tri**u** =
+> **u**pper. On the same matrix they zero *opposite* corners:
+> `tril([[1,2],[3,4]]) = [[1,0],[3,4]]` (upper-right `2` gone) while
+> `triu([[1,2],[3,4]]) = [[1,2],[0,4]]` (lower-left `3` gone).
+
+> **`tril` / `triu` require a 2-D matrix.** Passing a 1-D vector is a
+> **runtime trap** (a clean process abort with a numpy-style diagnostic,
+> never silent garbage). numpy itself treats a higher-rank input as a batch;
+> coil's first proof requires exactly 2-D and traps otherwise (the batch
+> form is a documented follow-up). `diag` accepts 1-D *or* 2-D; a 0-D scalar
+> or a ≥3-D array traps.
+
+> **Only the main diagonal (offset 0).** numpy's optional `k=` argument
+> (pick a diagonal above or below the main one) is a documented follow-up —
+> today all three operate on the main diagonal.
+
+> **The dtype is preserved**, and the zero-fill uses that dtype's zero
+> (`tril` of an integer matrix stays integer, with integer `0`s in the
+> zeroed corner). (Every `.cb` constructor here makes a `float64` buffer, so
+> the integer-valued results print without a `.0`.)
+
 ## Linear algebra — the `coil.linalg.*` sub-namespace (ADR-0079 Phase 1)
 
 `coil.linalg.*` is the FIRST *dotted sub-namespace* under an ecosystem
