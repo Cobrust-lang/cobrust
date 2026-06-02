@@ -846,6 +846,63 @@ fn minmax_dispatch(
     })
 }
 
+// ±0.0 SIGN determinism (constitution §2.4/§5.2 reproducibility): Rust
+// `f64::max`/`min` leave the SIGN of a ±0.0 tie platform-dependent (LLVM
+// `maxnum`/`minnum` differ across targets — a macOS-pass / ubuntu-fail caught
+// by CI). numpy IS deterministic: `maximum(-0.0,+0.0)=+0.0` (+0 unless BOTH -0),
+// `minimum(-0.0,+0.0)=-0.0` (-0 unless BOTH +0). Pin it. The `x==0 && y==0`
+// guard is naturally `false` for any NaN operand, so these helpers ALSO serve
+// the NaN-IGNORING `fmax`/`fmin` (a NaN falls through to `x.max(y)`, which
+// ignores NaN) AND the non-NaN branch of `maximum`/`minimum`.
+#[inline]
+fn max_f64_np(x: f64, y: f64) -> f64 {
+    if x == 0.0 && y == 0.0 {
+        if x.is_sign_negative() && y.is_sign_negative() {
+            -0.0
+        } else {
+            0.0
+        }
+    } else {
+        x.max(y)
+    }
+}
+#[inline]
+fn min_f64_np(x: f64, y: f64) -> f64 {
+    if x == 0.0 && y == 0.0 {
+        if x.is_sign_positive() && y.is_sign_positive() {
+            0.0
+        } else {
+            -0.0
+        }
+    } else {
+        x.min(y)
+    }
+}
+#[inline]
+fn max_f32_np(x: f32, y: f32) -> f32 {
+    if x == 0.0 && y == 0.0 {
+        if x.is_sign_negative() && y.is_sign_negative() {
+            -0.0
+        } else {
+            0.0
+        }
+    } else {
+        x.max(y)
+    }
+}
+#[inline]
+fn min_f32_np(x: f32, y: f32) -> f32 {
+    if x == 0.0 && y == 0.0 {
+        if x.is_sign_positive() && y.is_sign_positive() {
+            0.0
+        } else {
+            -0.0
+        }
+    } else {
+        x.min(y)
+    }
+}
+
 /// `np.maximum(a, b)` — elementwise maximum, **PROPAGATES NaN** (ANY NaN
 /// operand yields a NaN result: `np.maximum(1, nan) = nan`). Dtype-
 /// preserving; same-shape + same-dtype required (a non-conformable /
@@ -864,14 +921,14 @@ pub fn maximum(a: &Array, b: &Array) -> Result<Array, NumpyError> {
             if x.is_nan() || y.is_nan() {
                 f32::NAN
             } else {
-                x.max(y)
+                max_f32_np(x, y)
             }
         },
         |x: f64, y: f64| {
             if x.is_nan() || y.is_nan() {
                 f64::NAN
             } else {
-                x.max(y)
+                max_f64_np(x, y)
             }
         },
         Ord::max,
@@ -896,14 +953,14 @@ pub fn minimum(a: &Array, b: &Array) -> Result<Array, NumpyError> {
             if x.is_nan() || y.is_nan() {
                 f32::NAN
             } else {
-                x.min(y)
+                min_f32_np(x, y)
             }
         },
         |x: f64, y: f64| {
             if x.is_nan() || y.is_nan() {
                 f64::NAN
             } else {
-                x.min(y)
+                min_f64_np(x, y)
             }
         },
         Ord::min,
@@ -926,8 +983,8 @@ pub fn fmax(a: &Array, b: &Array) -> Result<Array, NumpyError> {
         "fmax",
         a,
         b,
-        f32::max,
-        f64::max,
+        max_f32_np,
+        max_f64_np,
         Ord::max,
         Ord::max,
         |x, y| x | y,
@@ -947,8 +1004,8 @@ pub fn fmin(a: &Array, b: &Array) -> Result<Array, NumpyError> {
         "fmin",
         a,
         b,
-        f32::min,
-        f64::min,
+        min_f32_np,
+        min_f64_np,
         Ord::min,
         Ord::min,
         |x, y| x & y,
