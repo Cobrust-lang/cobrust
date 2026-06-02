@@ -224,6 +224,245 @@ pub fn flatnonzero(a: &Array) -> Array {
     int64_1d(idx)
 }
 
+// =====================================================================
+// #145 numpy gap-closure BATCH 10 (2026-06-02) — the REARRANGE / REPEAT
+// family (`diff` / `flip` / `roll` / `repeat` / `tile`), each a
+// Buffer-RETURNING op over the C-order FLATTENED array. They split on
+// arity + the output-shape contract, all riding the SAME borrow-Buffer-
+// arg → fresh-Buffer-return value-handle ABI as the BATCH-2 reshape ops
+// (`transpose` / `flatten` / `ravel`) and the BATCH-6 scalar-arg ufuncs
+// (`clip` / `power`):
+//
+//   - `diff` / `flip` are 1-arg (`(ptr) -> ptr` ≡ `coil_shape_ty`).
+//   - `roll` / `repeat` / `tile` take a trailing i64 SCALAR
+//     (`(ptr, i64) -> ptr` — the SAME scalar-besides-handle shape as the
+//     BATCH-6 `clip` / `power` f64 scalar, but i64 not f64).
+//
+// ## numpy-exact shape + dtype contract (the load-bearing split)
+//
+// ALL FIVE are **DTYPE-PRESERVING** (numpy 2.x confirmed via the allowed
+// `/opt/homebrew/bin/python3.11` interpreter, numpy 2.4.6): `diff(int) ->
+// int`, `flip(f32) -> f32`, etc. The OUTPUT shape differs per op:
+//
+//   - `diff(a)`   — discrete difference `a[1:] - a[:-1]` over the C-order
+//     FLATTENED array; result is 1-D of length `max(size - 1, 0)`
+//     (`np.diff([1,4,9,16]) == [3,5,7]`). A len-≤1 / empty input yields
+//     an EMPTY 1-D Buffer (`np.diff([5]) == []`).
+//   - `flip(a)`   — reverse the C-order FLATTENED array; result is 1-D of
+//     the SAME length, reversed (`np.flip([1,2,3]) == [3,2,1]`;
+//     `np.flip([[1,2],[3,4]])` flat-reversed `== [4,3,2,1]`). Empty → empty.
+//   - `roll(a, k)` — cyclic shift by `k` over the flattened array, then
+//     reshaped BACK to the ORIGINAL shape (`np.roll([1,2,3,4],1) ==
+//     [4,1,2,3]`; `np.roll([[1,2],[3,4]],1) == [[4,1],[2,3]]` — SAME
+//     shape). Element at flat index `i` moves to `(i + k) mod size`;
+//     numpy uses Python-floor modulo so a NEGATIVE `k` rolls LEFT
+//     (`np.roll([1,2,3],-1) == [2,3,1]`) and `k` is normalised mod size
+//     (`k = 0` or `k % size == 0` → unchanged). An empty input → empty
+//     (no shift).
+//   - `repeat(a, n)` — repeat EACH element `n` times over the C-order
+//     flattened array; result is 1-D of length `n * size`
+//     (`np.repeat([1,2],2) == [1,1,2,2]`). `n <= 0` → empty
+//     (`np.repeat(a, 0) == []`); `n == 1` → a flat copy.
+//   - `tile(a, n)` — tile the WHOLE flattened array `n` times; result is
+//     1-D of length `n * size` (`np.tile([1,2],2) == [1,2,1,2]`).
+//     `n <= 0` → empty (`np.tile(a, 0) == []`); `n == 1` → a flat copy.
+//
+// `diff` / `flip` / `repeat` / `tile` always FLATTEN to 1-D; only `roll`
+// preserves the original (possibly multi-D) shape — it is the no-axis
+// `np.roll`, which shifts on the flattened view but keeps the shape.
+// =====================================================================
+
+/// `np.diff(a)` — the discrete first difference `a[1:] - a[:-1]` over the
+/// C-order FLATTENED array. **Dtype-preserving** (`diff(int) -> int`); the
+/// result is a fresh 1-D Buffer of length `max(size - 1, 0)`. A len-≤1 or
+/// empty input yields an EMPTY 1-D Buffer (numpy: `np.diff([5]) == []`).
+/// numpy: `np.diff([1,4,9,16]) == [3,5,7]`; a 2-D input flattens C-order
+/// first.
+#[must_use]
+pub fn diff(a: &Array) -> Array {
+    match a {
+        Array::Int32(arr) => Array::Int32(diff_flat(arr, i32::wrapping_sub)),
+        Array::Int64(arr) => Array::Int64(diff_flat(arr, i64::wrapping_sub)),
+        Array::Float32(arr) => Array::Float32(diff_flat(arr, |a, b| a - b)),
+        Array::Float64(arr) => Array::Float64(diff_flat(arr, |a, b| a - b)),
+        // numpy: `np.diff(bool_array)` is the XOR of adjacent elements
+        // (`a[1:] != a[:-1]`), dtype bool (`np.diff([True,True,False]) ==
+        // [False,True]`). coil keeps the Bool dtype (the value-faithful
+        // adjacent-XOR), consistent with the dtype-preserving contract.
+        Array::Bool(arr) => Array::Bool(diff_flat(arr, |a, b| a ^ b)),
+    }
+}
+
+/// `np.flip(a)` — reverse the C-order FLATTENED array. **Dtype-preserving**;
+/// the result is a fresh 1-D Buffer of the SAME length, reversed. An empty
+/// input yields an empty Buffer. numpy: `np.flip([1,2,3]) == [3,2,1]`;
+/// `np.flip([[1,2],[3,4]])` flat-reversed `== [4,3,2,1]` (a 2-D input
+/// flattens C-order first).
+#[must_use]
+pub fn flip(a: &Array) -> Array {
+    match a {
+        Array::Int32(arr) => Array::Int32(flip_flat(arr)),
+        Array::Int64(arr) => Array::Int64(flip_flat(arr)),
+        Array::Float32(arr) => Array::Float32(flip_flat(arr)),
+        Array::Float64(arr) => Array::Float64(flip_flat(arr)),
+        Array::Bool(arr) => Array::Bool(flip_flat(arr)),
+    }
+}
+
+/// `np.roll(a, k)` — cyclically shift the C-order flattened array by `k`,
+/// then reshape BACK to the ORIGINAL shape (the no-axis `np.roll` keeps the
+/// shape). **Dtype-preserving**. Element at flat index `i` moves to `(i + k)
+/// mod size`; numpy's Python-floor modulo makes a NEGATIVE `k` roll LEFT and
+/// normalises `k` mod size (`k = 0` / `k % size == 0` → unchanged). An empty
+/// input is returned unchanged. numpy: `np.roll([1,2,3,4],1) == [4,1,2,3]`;
+/// `np.roll([[1,2],[3,4]],1) == [[4,1],[2,3]]` (SAME shape).
+#[must_use]
+pub fn roll(a: &Array, k: i64) -> Array {
+    match a {
+        Array::Int32(arr) => Array::Int32(roll_keep_shape(arr, k)),
+        Array::Int64(arr) => Array::Int64(roll_keep_shape(arr, k)),
+        Array::Float32(arr) => Array::Float32(roll_keep_shape(arr, k)),
+        Array::Float64(arr) => Array::Float64(roll_keep_shape(arr, k)),
+        Array::Bool(arr) => Array::Bool(roll_keep_shape(arr, k)),
+    }
+}
+
+/// `np.repeat(a, n)` — repeat EACH element `n` times over the C-order
+/// flattened array. **Dtype-preserving**; the result is a fresh 1-D Buffer
+/// of length `n * size`. `n <= 0` yields an EMPTY Buffer (numpy:
+/// `np.repeat(a, 0) == []`); `n == 1` is a flat copy. numpy:
+/// `np.repeat([1,2],2) == [1,1,2,2]`; a 2-D input flattens C-order first.
+#[must_use]
+pub fn repeat(a: &Array, n: i64) -> Array {
+    match a {
+        Array::Int32(arr) => Array::Int32(repeat_each(arr, n)),
+        Array::Int64(arr) => Array::Int64(repeat_each(arr, n)),
+        Array::Float32(arr) => Array::Float32(repeat_each(arr, n)),
+        Array::Float64(arr) => Array::Float64(repeat_each(arr, n)),
+        Array::Bool(arr) => Array::Bool(repeat_each(arr, n)),
+    }
+}
+
+/// `np.tile(a, n)` — tile the WHOLE C-order flattened array `n` times.
+/// **Dtype-preserving**; the result is a fresh 1-D Buffer of length `n *
+/// size`. `n <= 0` yields an EMPTY Buffer (numpy: `np.tile(a, 0) == []`);
+/// `n == 1` is a flat copy. numpy: `np.tile([1,2],2) == [1,2,1,2]`; a 2-D
+/// input flattens C-order first (this is the scalar-reps `np.tile(a, n)`
+/// form, NOT the tuple-reps `np.tile(a, (r, c))`).
+#[must_use]
+pub fn tile(a: &Array, n: i64) -> Array {
+    match a {
+        Array::Int32(arr) => Array::Int32(tile_whole(arr, n)),
+        Array::Int64(arr) => Array::Int64(tile_whole(arr, n)),
+        Array::Float32(arr) => Array::Float32(tile_whole(arr, n)),
+        Array::Float64(arr) => Array::Float64(tile_whole(arr, n)),
+        Array::Bool(arr) => Array::Bool(tile_whole(arr, n)),
+    }
+}
+
+// ---- BATCH-10 diff / flip / roll / repeat / tile internals ------------
+
+/// Build a fresh owned 1-D `ArrayD<T>` from a `Vec<T>` (the shared tail of
+/// every BATCH-10 kernel; `from_shape_vec` on a 1-D shape with a matching-
+/// length vec is infallible).
+fn vec_1d<T>(flat: Vec<T>) -> ArrayD<T> {
+    let len = flat.len();
+    ArrayD::from_shape_vec(IxDyn(&[len]), flat)
+        .expect("1-D from_shape_vec with matching length is infallible")
+}
+
+/// `diff` body: the adjacent-pair combine `sub(a[i+1], a[i])` over the
+/// C-order FLATTENED array → a fresh 1-D `ArrayD<T>` of length
+/// `max(size - 1, 0)`. `iter()` walks C-order regardless of physical
+/// layout; a len-≤1 / empty input produces an empty result (the windows
+/// iterator yields nothing).
+fn diff_flat<T: Clone>(arr: &ArrayD<T>, sub: impl Fn(T, T) -> T) -> ArrayD<T> {
+    let flat: Vec<T> = arr.iter().cloned().collect();
+    // `windows(2)` yields nothing for len 0 / 1 → an empty diff (numpy
+    // parity); each window is `[a[i], a[i+1]]` so the difference is
+    // `sub(a[i+1], a[i])` (later − earlier).
+    let out: Vec<T> = flat
+        .windows(2)
+        .map(|w| sub(w[1].clone(), w[0].clone()))
+        .collect();
+    vec_1d(out)
+}
+
+/// `flip` body: reverse the C-order FLATTENED array → a fresh 1-D
+/// `ArrayD<T>` of the same length.
+fn flip_flat<T: Clone>(arr: &ArrayD<T>) -> ArrayD<T> {
+    // The dynamic-dim `ArrayD` iterator is not `DoubleEndedIterator`, so
+    // collect the C-order flat sequence first, then reverse it in place.
+    let mut flat: Vec<T> = arr.iter().cloned().collect();
+    flat.reverse();
+    vec_1d(flat)
+}
+
+/// `roll` body: cyclic shift by `k` over the C-order flattened array, then
+/// reshape BACK to the ORIGINAL shape (numpy's no-axis `np.roll` keeps the
+/// shape). Element at flat index `i` moves to `(i + k) mod size` with
+/// Python-floor modulo (so a negative `k` rolls left). An empty input is
+/// returned as an empty array of its original shape.
+fn roll_keep_shape<T: Clone>(arr: &ArrayD<T>, k: i64) -> ArrayD<T> {
+    let shape: Vec<usize> = arr.shape().to_vec();
+    let flat: Vec<T> = arr.iter().cloned().collect();
+    let n = flat.len();
+    if n == 0 {
+        // No elements to shift — return a fresh empty array of the same
+        // (degenerate) shape (matches `np.roll(empty, k)`).
+        return ArrayD::from_shape_vec(IxDyn(&shape), flat)
+            .expect("empty reshape with matching length is infallible");
+    }
+    // Python-floor modulo: `k.rem_euclid(n)` is in `[0, n)` for any sign of
+    // `k`, so a negative `k` rolls LEFT (numpy parity). `n` fits i64 on the
+    // 64-bit targets the AOT backend supports.
+    let shift = (k.rem_euclid(n as i64)) as usize;
+    let mut out: Vec<T> = Vec::with_capacity(n);
+    // Element originally at flat index `i` lands at `(i + shift) mod n`;
+    // equivalently `out[j] = flat[(j + n - shift) mod n]`. Building `out`
+    // by destination index keeps it a single linear pass.
+    for j in 0..n {
+        out.push(flat[(j + n - shift) % n].clone());
+    }
+    // Reshape back to the ORIGINAL shape (size is unchanged by a cyclic
+    // shift, so the reshape is always valid).
+    ArrayD::from_shape_vec(IxDyn(&shape), out)
+        .expect("roll preserves size, so the original-shape reshape is infallible")
+}
+
+/// `repeat` body: repeat EACH element `n` times over the C-order flattened
+/// array → a fresh 1-D `ArrayD<T>` of length `n * size`. `n <= 0` → empty
+/// (numpy `np.repeat(a, 0) == []`).
+fn repeat_each<T: Clone>(arr: &ArrayD<T>, n: i64) -> ArrayD<T> {
+    // `usize::try_from` fails on a NEGATIVE `n` (→ empty, numpy
+    // `np.repeat(a, 0) == []`); `n == 0` succeeds as `0` reps → an empty
+    // result too. Sidesteps the `i64 as usize` sign-loss lint cleanly.
+    let reps = usize::try_from(n).unwrap_or(0);
+    let mut out: Vec<T> = Vec::with_capacity(arr.len() * reps);
+    for v in arr {
+        for _ in 0..reps {
+            out.push(v.clone());
+        }
+    }
+    vec_1d(out)
+}
+
+/// `tile` body: tile the WHOLE C-order flattened array `n` times → a fresh
+/// 1-D `ArrayD<T>` of length `n * size`. `n <= 0` → empty (numpy
+/// `np.tile(a, 0) == []`).
+fn tile_whole<T: Clone>(arr: &ArrayD<T>, n: i64) -> ArrayD<T> {
+    // `usize::try_from` fails on a NEGATIVE `n` (→ empty, numpy
+    // `np.tile(a, 0) == []`); `n == 0` → `0` reps → an empty result too.
+    // Sidesteps the `i64 as usize` sign-loss lint cleanly.
+    let reps = usize::try_from(n).unwrap_or(0);
+    let flat: Vec<T> = arr.iter().cloned().collect();
+    let mut out: Vec<T> = Vec::with_capacity(flat.len() * reps);
+    for _ in 0..reps {
+        out.extend(flat.iter().cloned());
+    }
+    vec_1d(out)
+}
+
 /// `np.concatenate((a, b))` along axis 0 (the default axis). The two
 /// arrays must have the SAME rank and matching sizes on every axis
 /// except axis 0.
@@ -1257,5 +1496,212 @@ mod tests {
         let a = array_f64(&[3., 1., 2., 1., 3.], &[5]).unwrap();
         let r = sort(&unique(&a));
         assert_eq!(f64_vals(&r), vec![1., 2., 3.]);
+    }
+
+    // =====================================================================
+    // BATCH 10 — the REARRANGE / REPEAT family (`diff` / `flip` / `roll` /
+    // `repeat` / `tile`). Differential-vs-numpy 2.4.6 (oracle values
+    // captured via `/opt/homebrew/bin/python3.11 -c 'import numpy'`). Each
+    // test pins the output SHAPE + VALUES + dtype-PRESERVE contract.
+    // =====================================================================
+
+    // ---- diff: len n-1, dtype-preserving, edges ----
+
+    #[test]
+    fn diff_f64_values_and_shape() {
+        // np.diff([1.,4.,9.,16.]) == [3.,5.,7.] (len n-1 = 3, float64).
+        let a = array_f64(&[1., 4., 9., 16.], &[4]).unwrap();
+        let d = diff(&a);
+        assert_eq!(d.dtype(), crate::dtype::Dtype::Float64);
+        assert_eq!(d.shape(), vec![3]);
+        assert_eq!(f64_vals(&d), vec![3., 5., 7.]);
+    }
+
+    #[test]
+    fn diff_preserves_int_dtype() {
+        // np.diff(np.int64([1,2,4,7])) == [1,2,3], dtype int64 (PRESERVED).
+        let a = array_i64(&[1, 2, 4, 7], &[4]).unwrap();
+        let d = diff(&a);
+        assert_eq!(d.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(i64_vals(&d), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn diff_2d_flattens_first() {
+        // np.diff over the C-order flatten of [[1,2,3],[4,5,6]] =
+        // [1,2,3,4,5,6] -> diffs [1,1,1,1,1] (len 5).
+        let a = array_i64(&[1, 2, 3, 4, 5, 6], &[2, 3]).unwrap();
+        let d = diff(&a);
+        assert_eq!(d.shape(), vec![5]);
+        assert_eq!(i64_vals(&d), vec![1, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn diff_len1_and_empty_are_empty() {
+        // np.diff([5]) == [] and np.diff([]) == [] (len max(n-1,0)).
+        let one = diff(&array_i64(&[5], &[1]).unwrap());
+        assert_eq!(one.shape(), vec![0]);
+        assert!(i64_vals(&one).is_empty());
+        let empty = diff(&array_i64(&[], &[0]).unwrap());
+        assert_eq!(empty.shape(), vec![0]);
+        assert!(i64_vals(&empty).is_empty());
+    }
+
+    // ---- flip: same len reversed, dtype-preserving, edges ----
+
+    #[test]
+    fn flip_1d_reverses() {
+        // np.flip([1.,2.,3.]) == [3.,2.,1.] (same len, reversed).
+        let a = array_f64(&[1., 2., 3.], &[3]).unwrap();
+        let f = flip(&a);
+        assert_eq!(f.shape(), vec![3]);
+        assert_eq!(f64_vals(&f), vec![3., 2., 1.]);
+    }
+
+    #[test]
+    fn flip_2d_flat_reversed() {
+        // np.flip([[1,2],[3,4]]) flat-reversed == [4,3,2,1] (1-D, len 4).
+        let a = array_i64(&[1, 2, 3, 4], &[2, 2]).unwrap();
+        let f = flip(&a);
+        assert_eq!(f.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(f.shape(), vec![4]);
+        assert_eq!(i64_vals(&f), vec![4, 3, 2, 1]);
+    }
+
+    #[test]
+    fn flip_empty_is_empty() {
+        // np.flip([]) == [].
+        let f = flip(&array_f64(&[], &[0]).unwrap());
+        assert_eq!(f.shape(), vec![0]);
+        assert!(f64_vals(&f).is_empty());
+    }
+
+    // ---- roll: SAME shape, cyclic, negative-k, k-mod-size ----
+
+    #[test]
+    fn roll_1d_k1_cyclic() {
+        // np.roll([1.,2.,3.,4.],1) == [4.,1.,2.,3.] (SAME shape).
+        let a = array_f64(&[1., 2., 3., 4.], &[4]).unwrap();
+        let r = roll(&a, 1);
+        assert_eq!(r.shape(), vec![4]);
+        assert_eq!(f64_vals(&r), vec![4., 1., 2., 3.]);
+    }
+
+    #[test]
+    fn roll_negative_k_rolls_left() {
+        // np.roll([1.,2.,3.,4.],-1) == [2.,3.,4.,1.] (negative k -> left).
+        let a = array_f64(&[1., 2., 3., 4.], &[4]).unwrap();
+        let r = roll(&a, -1);
+        assert_eq!(f64_vals(&r), vec![2., 3., 4., 1.]);
+    }
+
+    #[test]
+    fn roll_2d_keeps_shape() {
+        // np.roll([[1,2],[3,4]],1) == [[4,1],[2,3]] — SAME (2,2) shape.
+        let a = array_i64(&[1, 2, 3, 4], &[2, 2]).unwrap();
+        let r = roll(&a, 1);
+        assert_eq!(r.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(r.shape(), vec![2, 2]);
+        // C-order flat of [[4,1],[2,3]] is [4,1,2,3].
+        assert_eq!(i64_vals(&r), vec![4, 1, 2, 3]);
+    }
+
+    #[test]
+    fn roll_k_mod_size_unchanged() {
+        // np.roll([1,2,3],0) and np.roll([1,2,3],3) are both unchanged
+        // (k % size == 0). np.roll([1,2,3],4) == np.roll(_,1) == [3,1,2].
+        let a = array_i64(&[1, 2, 3], &[3]).unwrap();
+        assert_eq!(i64_vals(&roll(&a, 0)), vec![1, 2, 3]);
+        assert_eq!(i64_vals(&roll(&a, 3)), vec![1, 2, 3]);
+        assert_eq!(i64_vals(&roll(&a, 4)), vec![3, 1, 2]);
+        // np.roll([1,2,3],-4) == np.roll(_,-1) == [2,3,1].
+        assert_eq!(i64_vals(&roll(&a, -4)), vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn roll_empty_is_empty() {
+        // np.roll([],1) == [].
+        let r = roll(&array_i64(&[], &[0]).unwrap(), 1);
+        assert_eq!(r.shape(), vec![0]);
+        assert!(i64_vals(&r).is_empty());
+    }
+
+    // ---- repeat: n*size interleaved, dtype-preserving, n=0/1 ----
+
+    #[test]
+    fn repeat_each_element_n_times() {
+        // np.repeat([1.,2.],2) == [1.,1.,2.,2.] (len n*size = 4).
+        let a = array_f64(&[1., 2.], &[2]).unwrap();
+        let r = repeat(&a, 2);
+        assert_eq!(r.shape(), vec![4]);
+        assert_eq!(f64_vals(&r), vec![1., 1., 2., 2.]);
+    }
+
+    #[test]
+    fn repeat_preserves_int_dtype_and_2d_flattens() {
+        // np.repeat(np.int64([[1,2],[3,4]]).flatten(),2) ==
+        // [1,1,2,2,3,3,4,4] (len 8, int64 preserved).
+        let a = array_i64(&[1, 2, 3, 4], &[2, 2]).unwrap();
+        let r = repeat(&a, 2);
+        assert_eq!(r.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(r.shape(), vec![8]);
+        assert_eq!(i64_vals(&r), vec![1, 1, 2, 2, 3, 3, 4, 4]);
+    }
+
+    #[test]
+    fn repeat_n0_empty_n1_copy() {
+        // np.repeat([1,2],0) == [] ; np.repeat([1,2],1) == [1,2].
+        let a = array_i64(&[1, 2], &[2]).unwrap();
+        let zero = repeat(&a, 0);
+        assert_eq!(zero.shape(), vec![0]);
+        assert!(i64_vals(&zero).is_empty());
+        let one = repeat(&a, 1);
+        assert_eq!(one.shape(), vec![2]);
+        assert_eq!(i64_vals(&one), vec![1, 2]);
+    }
+
+    // ---- tile: n*size whole-repeat, dtype-preserving, n=0/1 ----
+
+    #[test]
+    fn tile_whole_array_n_times() {
+        // np.tile([1.,2.],2) == [1.,2.,1.,2.] (len n*size = 4).
+        let a = array_f64(&[1., 2.], &[2]).unwrap();
+        let t = tile(&a, 2);
+        assert_eq!(t.shape(), vec![4]);
+        assert_eq!(f64_vals(&t), vec![1., 2., 1., 2.]);
+    }
+
+    #[test]
+    fn tile_preserves_int_dtype_and_2d_flattens() {
+        // np.tile(np.int64([[1,2],[3,4]]).flatten(),2) == [1,2,3,4,1,2,3,4]
+        // (len 8, int64 preserved).
+        let a = array_i64(&[1, 2, 3, 4], &[2, 2]).unwrap();
+        let t = tile(&a, 2);
+        assert_eq!(t.dtype(), crate::dtype::Dtype::Int64);
+        assert_eq!(t.shape(), vec![8]);
+        assert_eq!(i64_vals(&t), vec![1, 2, 3, 4, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn tile_n0_empty_n1_copy() {
+        // np.tile([1,2],0) == [] ; np.tile([1,2],1) == [1,2].
+        let a = array_i64(&[1, 2], &[2]).unwrap();
+        let zero = tile(&a, 0);
+        assert_eq!(zero.shape(), vec![0]);
+        assert!(i64_vals(&zero).is_empty());
+        let one = tile(&a, 1);
+        assert_eq!(one.shape(), vec![2]);
+        assert_eq!(i64_vals(&one), vec![1, 2]);
+    }
+
+    // ---- chain: flip(diff(a)) — proves a fresh Array feeds the next op ----
+
+    #[test]
+    fn chain_flip_of_diff() {
+        // np.flip(np.diff([1,4,9,16])) == np.flip([3,5,7]) == [7,5,3].
+        let a = array_i64(&[1, 4, 9, 16], &[4]).unwrap();
+        let r = flip(&diff(&a));
+        assert_eq!(r.shape(), vec![3]);
+        assert_eq!(i64_vals(&r), vec![7, 5, 3]);
     }
 }

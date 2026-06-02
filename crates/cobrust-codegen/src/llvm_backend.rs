@@ -3442,6 +3442,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_argsort", coil_shape_ty, 1),
             ("__cobrust_coil_unique", coil_shape_ty, 1),
             ("__cobrust_coil_flatnonzero", coil_shape_ty, 1),
+            // #145 REARRANGE / REPEAT BATCH 10 — the 1-arg `diff` / `flip`
+            // ops (over the C-order FLATTENED array). `(ptr) -> ptr` ≡
+            // `coil_shape_ty`, the IDENTICAL extern shape as the reshape
+            // ops + unary ufuncs above (DTYPE-PRESERVING, entirely inside
+            // the Rust kernel). The i64-SCALAR siblings of this batch
+            // (`roll` / `repeat` / `tile`) need a NON-`coil_shape_ty`
+            // `(ptr, i64) -> ptr` shape, declared in the dedicated block
+            // below. MIR retargets `coil.diff(a)` onto these `Call`s.
+            ("__cobrust_coil_diff", coil_shape_ty, 1),
+            ("__cobrust_coil_flip", coil_shape_ty, 1),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);
@@ -3488,6 +3498,32 @@ impl<'ctx> LlvmEmitter<'ctx> {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
+        }
+
+        // -- #145 REARRANGE / REPEAT BATCH 10 (2026-06-02): the i64-SCALAR
+        // Buffer-RETURNING ops `roll(a, k)` / `repeat(a, n)` / `tile(a, n)`.
+        // A NEW `(ptr, i64) -> ptr` shape (`coil_scalar_i64_ty`) — the
+        // i64-scalar mirror of the BATCH-6 `(ptr, f64) -> ptr`
+        // `coil_scalar_binop_ty` (`power` / `a ⊕ k`): the trailing scalar is
+        // an i64 (`shift` / `count`) not an f64. The MIR generic ecosystem-
+        // call lowering retargets `coil.roll(a, k)` onto these
+        // `Terminator::Call`s — the i64 scalar lowers DIRECTLY (the `EcoSig`
+        // param `Ty::Int` lowers the `.cb` int literal as an i64 operand;
+        // the extern-call int-width coercion at the `Constant::Str` dispatch
+        // forwards it into the i64 param — NO f64 cast, UNLIKE `percentile`'s
+        // `q`), so there is NO batch-specific MIR arm; codegen only declares
+        // the externs (same flat `__cobrust_coil_*` recognizer prefix).
+        let coil_scalar_i64_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        for sym in [
+            "__cobrust_coil_roll",
+            "__cobrust_coil_repeat",
+            "__cobrust_coil_tile",
+        ] {
+            let f = self
+                .module
+                .add_function(sym, coil_scalar_i64_ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, 2usize);
         }
 
         // -- #145 REDUCTIONS gap-closure BATCH 5 (2026-06-01): the

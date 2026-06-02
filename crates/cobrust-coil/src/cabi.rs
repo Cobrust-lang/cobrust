@@ -92,10 +92,11 @@ use crate::elementwise::{
 use crate::grid::{mgrid_1d, ogrid_1d};
 use crate::linalg::{det as linalg_det, inv as linalg_inv, solve as linalg_solve};
 use crate::manipulate::{
-    argsort as coil_argsort, concatenate as coil_concatenate, flatnonzero as coil_flatnonzero,
-    flatten as coil_flatten, hstack as coil_hstack, ravel as coil_ravel, sort as coil_sort,
-    transpose as coil_transpose, unique as coil_unique, vstack as coil_vstack,
-    where_select as coil_where,
+    argsort as coil_argsort, concatenate as coil_concatenate, diff as coil_diff,
+    flatnonzero as coil_flatnonzero, flatten as coil_flatten, flip as coil_flip,
+    hstack as coil_hstack, ravel as coil_ravel, repeat as coil_repeat, roll as coil_roll,
+    sort as coil_sort, tile as coil_tile, transpose as coil_transpose, unique as coil_unique,
+    vstack as coil_vstack, where_select as coil_where,
 };
 use crate::print::array_repr;
 use crate::reduce::{cumprod as coil_cumprod, cumsum as coil_cumsum};
@@ -1431,6 +1432,127 @@ pub unsafe extern "C" fn __cobrust_coil_unique(a: *mut u8) -> *mut u8 {
 pub unsafe extern "C" fn __cobrust_coil_flatnonzero(a: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_unary(a, "flatnonzero", coil_flatnonzero) }
+}
+
+// =====================================================================
+// #145 REARRANGE / REPEAT gap-closure BATCH 10 (2026-06-02) — `diff` /
+// `flip` / `roll` / `repeat` / `tile`, each Buffer-RETURNING over the
+// C-order FLATTENED array. `diff` / `flip` are 1-arg, riding the SHARED
+// `buffer_unary` body (`(ptr) -> ptr`) like the BATCH-2 reshape ops +
+// the unary ufuncs. `roll` / `repeat` / `tile` take a trailing i64 SCALAR
+// (`(ptr, i64) -> ptr`) — the SAME scalar-besides-handle shape as the
+// BATCH-6 `clip` / `power` f64 scalar, but i64 (`shift` / `count`). They
+// BORROW the handle (the `.cb` scope still owns + drops it) and return a
+// freshly-Boxed result handle the scope drops via
+// `__cobrust_coil_buffer_drop`. ALL FIVE are TOTAL — a rearrange / repeat
+// never fails (an empty input or `n <= 0` yields an empty Buffer; numpy
+// `np.repeat(a, 0) == []` / `np.tile(a, 0) == []`), so there is NO
+// `coil_panic` domain trap; a null handle is the only abort.
+// =====================================================================
+
+/// Shared body for the 1-arg-Buffer + trailing-i64-SCALAR shims (`roll` /
+/// `repeat` / `tile`). BORROWS the handle, applies the infallible
+/// `(&Array, i64) -> Array` kernel `f`, and returns a freshly-Boxed result
+/// handle the `.cb` caller owns. The i64 SCALAR mirror of the BATCH-6
+/// `clip` / `power` f64-scalar borrow pattern (`__cobrust_coil_clip` /
+/// `_power`); the `.cb`-side int literal crosses by value as an i64 (the
+/// MIR `EcoSig` param `Ty::Int` lowers it directly — no f64 cast, unlike
+/// `percentile`'s `q`). TOTAL — a null handle is the only abort.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped).
+unsafe fn buffer_unary_scalar_i64(
+    a: *mut u8,
+    k: i64,
+    op_name: &str,
+    f: fn(&Array, i64) -> Array,
+) -> *mut u8 {
+    if a.is_null() {
+        coil_panic(&format!("coil.{op_name}: null operand handle"));
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only —
+    // not reboxed / freed; the `.cb` scope still owns + drops it.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    Box::into_raw(Box::new(f(arr, k))).cast::<u8>()
+}
+
+/// `coil.diff(a) -> Buffer`. Discrete first difference `a[1:] - a[:-1]`
+/// over the C-order FLATTENED array → a fresh 1-D Buffer of length
+/// `max(size - 1, 0)`. **Dtype-preserving** (`diff(int) -> int`). A len-≤1
+/// / empty input yields an EMPTY Buffer. BORROWS `a`; returns a fresh owned
+/// handle. Total (a null handle is the only abort).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_diff(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "diff", coil_diff) }
+}
+
+/// `coil.flip(a) -> Buffer`. Reverse the C-order FLATTENED array → a fresh
+/// 1-D Buffer of the SAME length, reversed. **Dtype-preserving**. An empty
+/// input yields an empty Buffer. BORROWS `a`; returns a fresh owned handle.
+/// Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_flip(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "flip", coil_flip) }
+}
+
+/// `coil.roll(a, k) -> Buffer`. Cyclically shift the C-order flattened
+/// array by `k`, then reshape BACK to the ORIGINAL shape (numpy's no-axis
+/// `np.roll` keeps the shape). **Dtype-preserving**. A NEGATIVE `k` rolls
+/// LEFT; `k` is normalised mod size (`k = 0` / `k % size == 0` →
+/// unchanged). An empty input is returned unchanged. BORROWS `a`; returns a
+/// fresh owned handle. TOTAL — no domain trap (a cyclic shift never fails);
+/// a null handle is the only abort.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped). The returned
+/// pointer is a freshly-Boxed handle the `.cb` caller owns; freed once via
+/// `__cobrust_coil_buffer_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_roll(a: *mut u8, k: i64) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary_scalar_i64(a, k, "roll", coil_roll) }
+}
+
+/// `coil.repeat(a, n) -> Buffer`. Repeat EACH element `n` times over the
+/// C-order flattened array → a fresh 1-D Buffer of length `n * size`.
+/// **Dtype-preserving**. `n <= 0` yields an EMPTY Buffer (numpy
+/// `np.repeat(a, 0) == []`); `n == 1` is a flat copy. BORROWS `a`; returns
+/// a fresh owned handle. TOTAL — a null handle is the only abort.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_roll`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_repeat(a: *mut u8, n: i64) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary_scalar_i64(a, n, "repeat", coil_repeat) }
+}
+
+/// `coil.tile(a, n) -> Buffer`. Tile the WHOLE C-order flattened array `n`
+/// times → a fresh 1-D Buffer of length `n * size`. **Dtype-preserving**.
+/// `n <= 0` yields an EMPTY Buffer (numpy `np.tile(a, 0) == []`); `n == 1`
+/// is a flat copy. BORROWS `a`; returns a fresh owned handle. TOTAL — a
+/// null handle is the only abort.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_roll`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_tile(a: *mut u8, n: i64) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary_scalar_i64(a, n, "tile", coil_tile) }
 }
 
 // =====================================================================
@@ -2994,6 +3116,145 @@ mod tests {
             let r = __cobrust_coil_power(a, 0.5);
             assert!((__cobrust_coil_buffer_getitem(r, 0) - 2.0).abs() < 1e-12);
             assert!((__cobrust_coil_buffer_getitem(r, 1) - 3.0).abs() < 1e-12);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    // -- #145 REARRANGE / REPEAT BATCH 10: diff / flip / roll / repeat /
+    // tile shims. `diff` / `flip` ride `buffer_unary` (`(ptr) -> ptr`);
+    // `roll` / `repeat` / `tile` are `(ptr, i64) -> ptr` (the i64-scalar
+    // mirror of the BATCH-6 clip / power f64-scalar shims). Use the 1-D
+    // `array1d2(a, b)` ctor so `__cobrust_coil_buffer_getitem` reads a FLAT
+    // element. BORROW the input; the fresh result drops once (2 total
+    // drops on the drop-counted cases).
+
+    /// `coil.flip(array1d2(1, 2))` reverses `[1, 2]` → `[2, 1]`. BORROWS the
+    /// input; the fresh result drops once (2 total drops). Proves the 1-arg
+    /// `(ptr) -> ptr` shim shape (transpose's shape).
+    #[test]
+    fn flip_shim_reverses_and_drops_once() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let r = __cobrust_coil_flip(a);
+            assert!(!r.is_null());
+            // [1, 2] -> flip -> [2, 1].
+            assert!((__cobrust_coil_buffer_getitem(r, 0) - 2.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 1) - 1.0).abs() < 1e-12);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(
+            drop_count() - before,
+            2,
+            "input + fresh result drop once each"
+        );
+    }
+
+    /// `coil.diff(array1d2(1, 4))` → `[3]` (one element, `4 - 1`). Proves
+    /// the `diff` shim returns a fresh non-null handle of length size-1.
+    #[test]
+    fn diff_shim_adjacent_difference() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 4.0);
+            let r = __cobrust_coil_diff(a);
+            assert!(!r.is_null());
+            // diff([1, 4]) = [4 - 1] = [3] (a single element at flat idx 0).
+            assert!((__cobrust_coil_buffer_getitem(r, 0) - 3.0).abs() < 1e-12);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    /// `coil.roll(array1d2(1, 2), 1)` cyclically shifts `[1, 2]` → `[2, 1]`
+    /// (SAME shape). BORROWS the input; the fresh result drops once (2 total
+    /// drops). Proves the `(ptr, i64) -> ptr` shim shape — the FIRST coil
+    /// shim with a trailing i64 scalar.
+    #[test]
+    fn roll_shim_cyclic_shift_and_drops_once() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let r = __cobrust_coil_roll(a, 1);
+            assert!(!r.is_null());
+            // roll([1, 2], 1) = [2, 1] (last element wraps to the front).
+            assert!((__cobrust_coil_buffer_getitem(r, 0) - 2.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 1) - 1.0).abs() < 1e-12);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(drop_count() - before, 2);
+    }
+
+    /// `coil.roll(_, -1)` rolls LEFT: `roll([1, 2], -1) = [2, 1]`. Pins the
+    /// negative-k (left-roll) path of the i64-scalar shim.
+    #[test]
+    fn roll_shim_negative_k_rolls_left() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let r = __cobrust_coil_roll(a, -1);
+            // roll([1, 2], -1) shifts left: [2, 1].
+            assert!((__cobrust_coil_buffer_getitem(r, 0) - 2.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 1) - 1.0).abs() < 1e-12);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    /// `coil.repeat(array1d2(1, 2), 2)` repeats each element → `[1, 1, 2, 2]`
+    /// (len n*size = 4). BORROWS the input; the fresh result drops once (2
+    /// total drops).
+    #[test]
+    fn repeat_shim_each_element_and_drops_once() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let r = __cobrust_coil_repeat(a, 2);
+            assert!(!r.is_null());
+            // repeat([1, 2], 2) = [1, 1, 2, 2].
+            assert!((__cobrust_coil_buffer_getitem(r, 0) - 1.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 1) - 1.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 2) - 2.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 3) - 2.0).abs() < 1e-12);
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(drop_count() - before, 2);
+    }
+
+    /// `coil.tile(array1d2(1, 2), 2)` tiles the whole array → `[1, 2, 1, 2]`
+    /// (len n*size = 4). Pins the whole-repeat (vs. `repeat`'s per-element)
+    /// interleave of the i64-scalar shim.
+    #[test]
+    fn tile_shim_whole_array() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let r = __cobrust_coil_tile(a, 2);
+            assert!(!r.is_null());
+            // tile([1, 2], 2) = [1, 2, 1, 2].
+            assert!((__cobrust_coil_buffer_getitem(r, 0) - 1.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 1) - 2.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 2) - 1.0).abs() < 1e-12);
+            assert!((__cobrust_coil_buffer_getitem(r, 3) - 2.0).abs() < 1e-12);
             __cobrust_coil_buffer_drop(a);
             __cobrust_coil_buffer_drop(r);
         }

@@ -441,6 +441,80 @@ fn main() -> i64:
 > 和其他逐元素操作一样,这两个操作**永不陷入陷阱**(一个「buffer + 标量」的操作
 > 没有形状不匹配的概念):`NaN` / `inf` 是一个流过去的*值*,而不是错误。
 
+## 重排与重复 —— `diff` / `flip` / `roll` / `repeat` / `tile`
+
+这五个操作重排或重复 buffer 中的元素。每个都在 **C 序展平**后的数组上工作
+(numpy 的无 axis 默认行为),并返回一个**新的 `coil.Buffer`**。它们按参数形态
+分两类:`diff` 和 `flip` 只接受 buffer;`roll`、`repeat`、`tile` 额外接受一个
+**整数**(一个 `i64` —— 移位量或重复次数)。
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(1.0, 4.0)
+    let d: coil.Buffer = coil.diff(a)        # [3]   (a[1] - a[0] = 4 - 1)
+    let _ = coil.print_buffer(d)
+
+    let b: coil.Buffer = coil.array1d2(1.0, 2.0)
+    let f: coil.Buffer = coil.flip(b)        # [2, 1]   (反转)
+    let _ = coil.print_buffer(f)
+
+    # roll 接受一个整数移位;负的移位会朝反方向滚动。
+    let r: coil.Buffer = coil.roll(b, 1)     # [2, 1]   (末尾绕回开头)
+    let _ = coil.print_buffer(r)
+
+    # repeat 把每个元素重复 n 次;tile 把整个数组重复 n 次。
+    let p: coil.Buffer = coil.repeat(b, 2)   # [1, 1, 2, 2]
+    let _ = coil.print_buffer(p)
+    let t: coil.Buffer = coil.tile(b, 2)     # [1, 2, 1, 2]
+    let _ = coil.print_buffer(t)
+
+    # 链式:一个新 buffer 喂给下一个操作。flip(diff(...))。
+    let g: coil.Buffer = coil.array2x2(1.0, 4.0, 9.0, 16.0)  # [[1,4],[9,16]]
+    let c: coil.Buffer = coil.flip(coil.diff(g))             # diff→[3,5,7],flip→[7,5,3]
+    let _ = coil.print_buffer(c)
+    return 0
+```
+
+**这五个操作**:
+
+- **`coil.diff(a) -> Buffer`** —— *一阶差分* `a[1:] - a[:-1]`。结果比输入短一个
+  元素:`diff([1,4,9,16]) = [3,5,7]`。
+- **`coil.flip(a) -> Buffer`** —— 反转后的数组:`flip([1,2,3]) = [3,2,1]`。
+- **`coil.roll(a, k) -> Buffer`** —— *循环*移位 `k`:每个元素向右移 `k` 位,落出
+  末尾的绕回开头。`roll([1,2,3,4], 1) = [4,1,2,3]`。
+- **`coil.repeat(a, n) -> Buffer`** —— 把**每个元素**重复 `n` 次:
+  `repeat([1,2], 2) = [1,1,2,2]`。
+- **`coil.tile(a, n) -> Buffer`** —— 把**整个数组**重复 `n` 次:
+  `tile([1,2], 2) = [1,2,1,2]`。
+
+> **移位量与重复次数是*整数*,不是浮点。** `roll`、`repeat`、`tile` 接受一个整数
+> —— 写 `coil.roll(a, 1)`,而不是 `coil.roll(a, 1.0)`。传入浮点(或字符串)是一个
+> **编译期错误**,在程序运行前就被捕获(这正是 §2.5「在编译期捕获」的规则 —— 对比
+> `coil.power(a, p)`,它的指数确实*是*浮点)。`power` 的指数是浮点;这里的次数是
+> 整数 —— 类型签名让两者不会混淆。
+
+> **`roll` 保持原始形状;其余的展平为 1-D。** `roll` 是唯一保持多维形状的操作 ——
+> 它在展平视图上移位,但会重塑回去,所以 `roll([[1,2],[3,4]], 1) = [[4,1],[2,3]]`
+> (仍是 2×2)。`diff` / `flip` / `repeat` / `tile` 总是返回扁平的 1-D 结果(2-D
+> 输入会先被展平)。
+
+> **负的 `roll` 朝反方向移位;移位会绕回。** 负的次数向*左*滚动:
+> `roll([1,2,3], -1) = [2,3,1]`。次数会对长度取模,所以 `roll(a, 0)`(或任何长度的
+> 整数倍)让数组保持不变,而 `roll([1,2,3], 4)` 与 `roll([1,2,3], 1)` 相同。
+
+> **`repeat` / `tile` 次数为 0 时给出空 buffer**,与 numpy 一致
+> (`repeat(a, 0) = []`,`tile(a, 0) = []`);次数为 1 就是一份拷贝。`diff` 对长度为
+> 1(或空)的 buffer 是空的(没有相邻的成对元素可相减)。
+
+> **dtype 被保持。** 这五个都保持输入 dtype(整数 buffer 的 `diff` 仍是整数,等等)
+> —— 与 `power` 不同,它们都不提升为浮点。(这里每个 `.cb` 构造器都生成 `float64`
+> buffer,所以整数值结果打印时不带 `.0`。)
+
+> 和其他操作一样,这些操作**永不陷入陷阱** —— 空输入或零次数是一个空 buffer,而
+> 不是错误。
+
 ## 线性代数 —— `coil.linalg.*` 子命名空间(ADR-0079 Phase 1)
 
 `coil.linalg.*` 是生态模块下的**第一个点分子命名空间** —— 它精确镜像

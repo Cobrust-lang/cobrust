@@ -156,7 +156,9 @@ pub use crate::error::{NumpyError, NumpyErrorKind};
 pub use crate::grid::{mgrid_1d, ogrid_1d};
 pub use crate::index::{Index, SliceSpec, index_get, np_where};
 pub use crate::linalg::{EighResult, SvdResult, cholesky, det, dot, eigh, inv, matmul, solve, svd};
-pub use crate::manipulate::{concatenate, flatten, hstack, ravel, transpose, vstack};
+pub use crate::manipulate::{
+    concatenate, diff, flatten, flip, hstack, ravel, repeat, roll, tile, transpose, vstack,
+};
 pub use crate::print::array_repr;
 pub use crate::promote::{result_type, unary_math_dtype};
 pub use crate::random::{Generator, default_rng};

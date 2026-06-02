@@ -2471,6 +2471,161 @@ RETURN-DTYPE split (below).
       F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## #145 numpy gap-closure BATCH 10 — the REARRANGE / REPEAT family (DONE)
+
+The REARRANGE / REPEAT surface — `diff` / `flip` / `roll` / `repeat` /
+`tile`. Five top-tier-common numpy ops, each Buffer-RETURNING over the
+C-order FLATTENED array. They split on **arity + output-shape**, all
+riding proven paths (NO new MIR arm):
+
+- `diff` / `flip` are **1-arg** `Buffer -> Buffer` — the EXACT BATCH-2/9
+  1-arg path (borrow-arg → fresh-Buffer-return), reusing the shared
+  `cabi::buffer_unary` body + the `coil_shape_ty` `(ptr) -> ptr` extern.
+- `roll` / `repeat` / `tile` take a **trailing i64 SCALAR** —
+  `(Buffer, Int) -> Buffer`. The i64-scalar mirror of the BATCH-6
+  `clip(a, lo, hi)` / `power(a, p)` f64-scalar shape, but `Ty::Int` not
+  `Ty::Float`. The FIRST coil module fns with a trailing `Ty::Int` scalar.
+
+### Signatures
+
+- `.cb`: `coil.diff(a: coil.Buffer) -> coil.Buffer`,
+  `coil.flip(a) -> coil.Buffer`, `coil.roll(a, k: i64) -> coil.Buffer`,
+  `coil.repeat(a, n: i64) -> coil.Buffer`, `coil.tile(a, n: i64) ->
+  coil.Buffer`.
+- runtime symbols: `__cobrust_coil_{diff,flip}(a: *mut Buffer) -> *mut
+  Buffer`; `__cobrust_coil_{roll,repeat,tile}(a: *mut Buffer, k: i64) ->
+  *mut Buffer`.
+
+### Output-shape split (the load-bearing contract)
+
+- ALL FIVE are **DTYPE-PRESERVING** (numpy 2.x: `diff(int) -> int`, etc.).
+  The element-dtype is invisible to typecheck (the opaque handle).
+- `diff` / `flip` / `repeat` / `tile` always FLATTEN to a **1-D** result;
+  only `roll` PRESERVES the original (possibly multi-D) shape — it is the
+  no-axis `np.roll`, which shifts on the flattened view but keeps the shape.
+- Output lengths: `diff` → `max(size - 1, 0)`; `flip` → `size` (reversed);
+  `roll` → `size` (SAME shape); `repeat` / `tile` → `n * size`.
+
+### numpy semantics (numpy 2.4.6 oracle via `/opt/homebrew/bin/python3.11`)
+
+- `diff`: `a[1:] - a[:-1]` over the flattened array —
+  `np.diff([1,4,9,16]) == [3,5,7]`. A len-≤1 / empty input → EMPTY
+  (`np.diff([5]) == []`). A 2-D input flattens C-order first
+  (`np.diff([[1,2,3],[4,5,6]].flatten()) == [1,1,1,1,1]`). (bool input is
+  the adjacent-XOR, dtype bool — value-faithful, consistent with the
+  preserve rule.)
+- `flip`: reverse the flattened array — `np.flip([1,2,3]) == [3,2,1]`;
+  `np.flip([[1,2],[3,4]])` flat-reversed `== [4,3,2,1]`. Empty → empty.
+- `roll`: cyclic shift by `k`, reshaped BACK to the ORIGINAL shape —
+  `np.roll([1,2,3,4],1) == [4,1,2,3]`; `np.roll([[1,2],[3,4]],1) ==
+  [[4,1],[2,3]]` (SAME (2,2) shape). Element at flat index `i` moves to
+  `(i + k) mod size`; numpy's Python-floor modulo makes a NEGATIVE `k` roll
+  LEFT (`np.roll([1,2,3],-1) == [2,3,1]`) and normalises `k` mod size
+  (`k = 0` / `k % size == 0` → unchanged; `np.roll([1,2,3],4) == [3,1,2]`).
+  An empty input → empty (no shift). The kernel uses `k.rem_euclid(n)` for
+  the Python-floor normalisation.
+- `repeat`: repeat EACH element `n` times — `np.repeat([1,2],2) ==
+  [1,1,2,2]`; length `n * size`. `n <= 0` → empty (`np.repeat(a, 0) ==
+  []`); `n == 1` → a flat copy.
+- `tile`: tile the WHOLE flattened array `n` times — `np.tile([1,2],2) ==
+  [1,2,1,2]`; length `n * size`. `n <= 0` → empty (`np.tile(a, 0) == []`);
+  `n == 1` → a flat copy. (This is the scalar-reps `np.tile(a, n)` form,
+  NOT the tuple-reps `np.tile(a, (r, c))` — a tracked follow-up once
+  tuple-arg marshalling lands.)
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- Five arms. `diff` / `flip`: `EcoSig::from_values("__cobrust_coil_<op>",
+  vec![coil_buffer_ty()], coil_buffer_ty(), Semantic)`. `roll` / `repeat` /
+  `tile`: `vec![coil_buffer_ty(), Ty::Int]` — the trailing scalar is
+  `Ty::Int` (the `count` / `shift`), NOT `Ty::Float` (the load-bearing
+  dtype: the `.cb` int literal lowers DIRECTLY as i64, no f64 cast UNLIKE
+  `percentile` / `power`).
+- Tier `Semantic` — VALUES + shape + dtype agree exactly with numpy 2.x
+  (integer-exact rearrange / repeat — `diff` is an exact subtract, no
+  floating arithmetic). The only divergence is the absent tuple-reps `tile`
+  form (scalar-reps only), documented in `manipulate.rs`.
+
+### Typecheck / MIR — ZERO new code
+
+- All five ride the GENERIC `try_lower_ecosystem_call` Case-1 loop. The
+  1-arg ops follow `coil.transpose` (the BATCH-2 path); the i64-scalar ops
+  follow `coil.clip(a, lo, hi)` / `coil.power(a, p)` (the BATCH-6 scalar-arg
+  path) EXACTLY — the only delta is the scalar param's `Ty` (`Ty::Int` vs
+  `Ty::Float`). `lower_eco_arg` lowers the `.cb` int literal as a plain i64
+  operand (the `Value` arm; no f64 cast), and the codegen extern-call
+  int-width coercion (`build_int_z_extend` at the `Constant::Str` dispatch;
+  an i64-into-i64 param is a no-op) forwards it into the `(ptr, i64) -> ptr`
+  extern. The single Buffer arg auto-borrows (Move→Copy); the fresh return
+  is drop-scheduled by `emit_ecosystem_call`. NO `_=>"any"` MIR gap;
+  VERIFIED via E2E (cobrust-mir recompiled with no source change).
+- None of `diff` / `flip` / `roll` / `repeat` / `tile` is a Cobrust
+  keyword, so they parse cleanly as `Attr { base: coil, name: <op> }`. NO
+  parser accommodation needed.
+
+### Codegen (`cobrust-codegen/src/llvm_backend.rs`)
+
+- `diff` / `flip`: 2 rows on `coil_shape_ty` `(ptr) -> ptr` (the reshape /
+  ufunc shape). `roll` / `repeat` / `tile`: 3 rows on a NEW
+  `coil_scalar_i64_ty` `(ptr, i64) -> ptr` — the i64-scalar mirror of the
+  BATCH-6 `coil_scalar_binop_ty` `(ptr, f64) -> ptr`. All ride the
+  `__cobrust_coil_` prefix recognizer.
+
+### Runtime (`cobrust-coil/src/manipulate.rs` + `cabi.rs`)
+
+- Kernels `manipulate::{diff,flip,roll,repeat,tile}(a: &Array[, i64]) ->
+  Array` over the closed `Array` enum, all dtype-preserving. Helpers:
+  `diff_flat` (windows(2) adjacent-combine), `flip_flat` (collect + reverse
+  — the `ArrayD` dyn iterator is NOT `DoubleEndedIterator`), `roll_keep_
+  shape` (`k.rem_euclid(n)` cyclic shift + reshape-back), `repeat_each`,
+  `tile_whole`, and the shared `vec_1d` 1-D builder. 19 unit tests vs numpy
+  2.4.6.
+- cabi: `diff` / `flip` via the SAME `buffer_unary` body; `roll` / `repeat`
+  / `tile` via a new `buffer_unary_scalar_i64` shared body (the i64-scalar
+  mirror of the `clip` / `power` f64-scalar borrow pattern — borrow handle,
+  compute, fresh `Box::into_raw`). ALL TOTAL (a rearrange / repeat never
+  fails; an empty input or `n <= 0` yields an empty Buffer) — NO
+  `coil_panic` domain trap; a null handle is the only abort. 6 shim tests.
+
+### Done means (#145 BATCH 10 — DONE)
+
+- [x] `manipulate.rs`: `diff`/`flip`/`roll`/`repeat`/`tile` kernels +
+      `diff_flat`/`flip_flat`/`roll_keep_shape`/`repeat_each`/`tile_whole`/
+      `vec_1d` helpers; 19 unit tests (diff len-n-1 + values + int-preserve
+      + 2-D flatten + len-1/empty; flip reversed + 2-D flat-reversed +
+      empty; roll same-shape + cyclic + negative-k + k-mod-size + 2-D
+      keeps-shape + empty; repeat n*size interleaved + int-preserve + 2-D
+      flatten + n=0/n=1; tile n*size whole-repeat + int-preserve + 2-D
+      flatten + n=0/n=1; flip∘diff chain).
+- [x] cabi: `diff`/`flip` via `buffer_unary`; `roll`/`repeat`/`tile` via
+      `buffer_unary_scalar_i64` (TOTAL — null is the only abort). 6 shim
+      tests (drop-once on flip/roll/repeat; diff value; negative-k roll;
+      whole-array tile).
+- [x] Manifest: 5 ecosystem arms (diff/flip `Buffer -> Buffer`;
+      roll/repeat/tile `(Buffer, Int) -> Buffer`), tier `Semantic`. 2 sig
+      tests.
+- [x] Typecheck / MIR: NO new code (VERIFIED via E2E — the 1-arg ops ride
+      the `coil.transpose` path, the i64-scalar ops ride the `coil.clip`
+      scalar-arg path; only the scalar `Ty` differs). No parser
+      accommodation (none is a keyword).
+- [x] Codegen: 2 `coil_shape_ty` `(ptr) -> ptr` rows (diff/flip) + 3
+      `coil_scalar_i64_ty` `(ptr, i64) -> ptr` rows (roll/repeat/tile — the
+      NEW i64-scalar extern shape).
+- [x] `.cb` E2E `coil_rearrange_e2e.rs` (9 tests): diff `[1,4]→[3]`, flip
+      `[1,2]→[2,1]`, roll `[1,2]→[2,1]` (cyclic) + negative-k left-roll,
+      repeat `[1,2]→[1,1,2,2]`, tile `[1,2]→[1,2,1,2]`, the flip∘diff chain
+      over a 2x2-flattened `[1,4,9,16]→[7,5,3]` (proves the i64-scalar +
+      2-D-flatten + Buffer-feeds-Buffer paths), + 2 negative type-error
+      proofs (`roll(a, "x")` rejects a str scalar, `tile(a, 2.5)` rejects a
+      float scalar — pins the `Ty::Int` (not `Ty::Float`) param choice).
+- [x] No regression: full `cobrust-coil` suite green (381 lib tests);
+      `coil_rearrange_e2e` + `coil_hello_e2e` all green, run ONE `--test` at
+      a time (F73 libcoil.a build-race avoidance — no negative-placeholder
+      collision); touched crates (`cobrust-coil` + `cobrust-codegen` +
+      `cobrust-types`) build + clippy `-D warnings` + fmt clean; no new dep
+      (`Cargo.lock` unchanged — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

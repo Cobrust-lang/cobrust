@@ -1239,6 +1239,81 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Numerical,
         )),
+        // #145 REARRANGE / REPEAT gap-closure BATCH 10 (2026-06-02) —
+        // `diff` / `flip` / `roll` / `repeat` / `tile`, Buffer-RETURNING ops
+        // over the C-order FLATTENED array. They split on arity + output
+        // shape, all riding the SAME generic `try_lower_ecosystem_call`
+        // module-free-fn path (NO new MIR arm):
+        //
+        //   - `diff` / `flip` are 1-arg `(Buffer) -> Buffer` — the EXACT
+        //     shape the BATCH-2 reshape ops (`transpose` / `flatten` /
+        //     `ravel`) + the unary ufuncs prove (codegen extern `(ptr) ->
+        //     ptr` ≡ `coil_shape_ty`).
+        //   - `roll` / `repeat` / `tile` take a trailing i64 SCALAR
+        //     (`(Buffer, Int) -> Buffer`) — the SAME scalar-besides-handle
+        //     shape as the BATCH-6 `clip(a, lo, hi)` / `power(a, p)` f64
+        //     scalar, but `Ty::Int` not `Ty::Float`. The i64 scalar lowers
+        //     DIRECTLY (the MIR `EcoSig` param `Ty::Int` lowers the `.cb`
+        //     int literal as an i64 operand — NO f64 cast, UNLIKE
+        //     `percentile`'s `q`; the codegen extern-call int-width coercion
+        //     forwards the i64 into the `(ptr, i64) -> ptr` extern). So
+        //     there is NO new MIR arm — the generic Case-1 loop iterates
+        //     `sig.params` regardless of arity / scalar mix. The fresh
+        //     return is drop-scheduled by `emit_ecosystem_call`.
+        //
+        // SHAPE / DTYPE contract (numpy 2.x, oracle `python3.11`, numpy
+        // 2.4.6): ALL FIVE are DTYPE-PRESERVING (`diff(int) -> int`, etc.).
+        // - `coil.diff(a) -> Buffer`   — `a[1:] - a[:-1]` over the flattened
+        //   array, 1-D length `max(size - 1, 0)` (`np.diff([1,4,9,16]) ==
+        //   [3,5,7]`; len-≤1 / empty → empty).
+        // - `coil.flip(a) -> Buffer`   — reverse the flattened array, 1-D
+        //   same length reversed (`np.flip([1,2,3]) == [3,2,1]`).
+        // - `coil.roll(a, k) -> Buffer`  — cyclic shift by `k`, reshaped
+        //   BACK to the ORIGINAL shape (`np.roll([1,2,3,4],1) == [4,1,2,3]`;
+        //   negative `k` rolls LEFT; `k` normalised mod size; empty → empty).
+        // - `coil.repeat(a, n) -> Buffer` — repeat EACH element `n` times,
+        //   1-D length `n * size` (`np.repeat([1,2],2) == [1,1,2,2]`;
+        //   `n <= 0` → empty).
+        // - `coil.tile(a, n) -> Buffer`  — tile the WHOLE flattened array
+        //   `n` times, 1-D length `n * size` (`np.tile([1,2],2) ==
+        //   [1,2,1,2]`; `n <= 0` → empty).
+        //
+        // Tier `Semantic` — the VALUES + shape + dtype agree EXACTLY with
+        // numpy 2.x (the `manipulate` unit tests carry the bit-confirmed
+        // oracle literals); these are integer-exact rearrange / repeat ops
+        // (no floating arithmetic — `diff` is an exact subtract), so they
+        // are TOTAL (no `coil_panic` domain path — an empty input or
+        // `n <= 0` yields an empty Buffer), see `manipulate.rs`.
+        ("coil", "diff") => Some(EcoSig::from_values(
+            "__cobrust_coil_diff",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "flip") => Some(EcoSig::from_values(
+            "__cobrust_coil_flip",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "roll") => Some(EcoSig::from_values(
+            "__cobrust_coil_roll",
+            vec![coil_buffer_ty(), Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "repeat") => Some(EcoSig::from_values(
+            "__cobrust_coil_repeat",
+            vec![coil_buffer_ty(), Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "tile") => Some(EcoSig::from_values(
+            "__cobrust_coil_tile",
+            vec![coil_buffer_ty(), Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         // ADR-0079 Phase 1 — minimal `.cb`-constructible 2-D / explicit-
         // data buffers, the genuine prerequisite for exercising the
         // `coil.linalg.*` sub-namespace on NON-identity matrices (the
@@ -3308,6 +3383,36 @@ mod tests {
         // percentile's params, but Buffer-returning).
         assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Float]);
         assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    // #145 REARRANGE / REPEAT BATCH 10 — diff / flip (1-arg Buffer ->
+    // Buffer) + roll / repeat / tile (Buffer + i64-scalar -> Buffer; the
+    // i64-scalar mirror of the BATCH-6 clip / power f64-scalar shape, the
+    // FIRST coil module fns with a trailing `Ty::Int` scalar).
+
+    #[test]
+    fn coil_diff_and_flip_take_buffer_return_buffer() {
+        for op in ["diff", "flip"] {
+            let sig =
+                lookup_module_fn("coil", op).unwrap_or_else(|| panic!("coil.{op} in manifest"));
+            assert_eq!(sig.runtime_symbol, format!("__cobrust_coil_{op}"));
+            assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+            assert_eq!(sig.ret, coil_buffer_ty());
+        }
+    }
+
+    #[test]
+    fn coil_roll_repeat_tile_take_buffer_and_int_return_buffer() {
+        for op in ["roll", "repeat", "tile"] {
+            let sig =
+                lookup_module_fn("coil", op).unwrap_or_else(|| panic!("coil.{op} in manifest"));
+            assert_eq!(sig.runtime_symbol, format!("__cobrust_coil_{op}"));
+            // Buffer handle FIRST, then the i64 scalar (shift / count) —
+            // `Ty::Int`, NOT `Ty::Float` (the load-bearing dtype: the `.cb`
+            // int literal lowers DIRECTLY as i64, no f64 cast).
+            assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Int]);
+            assert_eq!(sig.ret, coil_buffer_ty());
+        }
     }
 
     // ADR-0076 Phase 1 first proof — `dora` (dora-rs robotics dataflow,

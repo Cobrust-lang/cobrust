@@ -489,6 +489,91 @@ fn main() -> i64:
 > scalars op has no shape mismatch): a `NaN` / `inf` is a *value* that flows
 > through, not an error.
 
+## Rearranging & repeating — `diff` / `flip` / `roll` / `repeat` / `tile`
+
+These five rearrange or repeat the elements of a buffer. Each works over
+the **C-order flattened** array (numpy's no-axis default) and returns a
+**fresh `coil.Buffer`**. They split by argument shape: `diff` and `flip`
+take just the buffer; `roll`, `repeat`, and `tile` take a trailing **whole
+number** (an `i64` — a shift count or a repeat count).
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array1d2(1.0, 4.0)
+    let d: coil.Buffer = coil.diff(a)        # [3]   (a[1] - a[0] = 4 - 1)
+    let _ = coil.print_buffer(d)
+
+    let b: coil.Buffer = coil.array1d2(1.0, 2.0)
+    let f: coil.Buffer = coil.flip(b)        # [2, 1]   (reversed)
+    let _ = coil.print_buffer(f)
+
+    # roll takes an integer shift; a negative shift rolls the other way.
+    let r: coil.Buffer = coil.roll(b, 1)     # [2, 1]   (last wraps to front)
+    let _ = coil.print_buffer(r)
+
+    # repeat each element n times; tile the whole array n times.
+    let p: coil.Buffer = coil.repeat(b, 2)   # [1, 1, 2, 2]
+    let _ = coil.print_buffer(p)
+    let t: coil.Buffer = coil.tile(b, 2)     # [1, 2, 1, 2]
+    let _ = coil.print_buffer(t)
+
+    # chain: a fresh buffer feeds the next op. flip(diff(...)).
+    let g: coil.Buffer = coil.array2x2(1.0, 4.0, 9.0, 16.0)  # [[1,4],[9,16]]
+    let c: coil.Buffer = coil.flip(coil.diff(g))             # diff→[3,5,7], flip→[7,5,3]
+    let _ = coil.print_buffer(c)
+    return 0
+```
+
+**The five ops**:
+
+- **`coil.diff(a) -> Buffer`** — the *first difference* `a[1:] - a[:-1]`.
+  The result is one element shorter than the input: `diff([1,4,9,16]) =
+  [3,5,7]`.
+- **`coil.flip(a) -> Buffer`** — the reversed array: `flip([1,2,3]) =
+  [3,2,1]`.
+- **`coil.roll(a, k) -> Buffer`** — a *cyclic* shift by `k`: each element
+  moves `k` places to the right, with the ones that fall off the end
+  wrapping back to the front. `roll([1,2,3,4], 1) = [4,1,2,3]`.
+- **`coil.repeat(a, n) -> Buffer`** — repeat **each element** `n` times:
+  `repeat([1,2], 2) = [1,1,2,2]`.
+- **`coil.tile(a, n) -> Buffer`** — tile the **whole array** `n` times:
+  `tile([1,2], 2) = [1,2,1,2]`.
+
+> **The shift count and repeat count are *integers*, not floats.** `roll`,
+> `repeat`, and `tile` take a whole number — write `coil.roll(a, 1)`, not
+> `coil.roll(a, 1.0)`. Passing a float (or a string) is a **compile error**,
+> caught before your program ever runs (this is the §2.5 "catch it at
+> compile time" rule — contrast `coil.power(a, p)`, whose exponent genuinely
+> *is* a float). The exponent for `power` is a float; the counts here are
+> integers — the type signatures keep the two from being confused.
+
+> **`roll` keeps the original shape; the others flatten to 1-D.** `roll` is
+> the one op that preserves a multi-dimensional shape — it shifts on the
+> flattened view but reshapes back, so `roll([[1,2],[3,4]], 1) =
+> [[4,1],[2,3]]` (still 2×2). `diff` / `flip` / `repeat` / `tile` always
+> return a flat 1-D result (a 2-D input is flattened first).
+
+> **A negative `roll` shifts the other way; the shift wraps around.** A
+> negative count rolls *left*: `roll([1,2,3], -1) = [2,3,1]`. The count is
+> taken modulo the length, so `roll(a, 0)` (or any multiple of the length)
+> leaves the array unchanged, and `roll([1,2,3], 4)` is the same as
+> `roll([1,2,3], 1)`.
+
+> **`repeat` / `tile` with a count of 0 give an empty buffer**, matching
+> numpy (`repeat(a, 0) = []`, `tile(a, 0) = []`); a count of 1 is just a
+> copy. `diff` of a length-1 (or empty) buffer is empty (there are no
+> adjacent pairs to subtract).
+
+> **The dtype is preserved.** All five keep the input dtype (`diff` of an
+> integer buffer stays integer, etc.) — unlike `power`, none of these
+> promotes to float. (Every `.cb` constructor here makes a `float64` buffer,
+> so the integer-valued results print without a `.0`.)
+
+> Like the other ops, these **never trap** — an empty input or a zero count
+> is an empty buffer, never an error.
+
 ## Linear algebra — the `coil.linalg.*` sub-namespace (ADR-0079 Phase 1)
 
 `coil.linalg.*` is the FIRST *dotted sub-namespace* under an ecosystem
