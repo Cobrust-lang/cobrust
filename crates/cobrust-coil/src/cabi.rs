@@ -87,7 +87,8 @@ use crate::constructors::{
 use crate::dtype::Dtype;
 use crate::elementwise::{
     abs as coil_abs, cbrt as coil_cbrt, ceil as coil_ceil, clip as coil_clip, cos as coil_cos,
-    cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2, floor as coil_floor, log as coil_log,
+    cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2, floor as coil_floor,
+    isfinite as coil_isfinite, isinf as coil_isinf, isnan as coil_isnan, log as coil_log,
     log2 as coil_log2, log10 as coil_log10, power as coil_power, round as coil_round,
     sign as coil_sign, sin as coil_sin, sinh as coil_sinh, sqrt as coil_sqrt,
     square as coil_square, tan as coil_tan, tanh as coil_tanh, trunc as coil_trunc,
@@ -1399,6 +1400,68 @@ pub unsafe extern "C" fn __cobrust_coil_square(a: *mut u8) -> *mut u8 {
 pub unsafe extern "C" fn __cobrust_coil_sign(a: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_unary(a, "sign", coil_sign) }
+}
+
+// =====================================================================
+// #163 PREDICATE gap-closure BATCH 12 (2026-06-02) — the per-element
+// predicate ufuncs `isnan` / `isinf` / `isfinite`. Each is a 1-arg
+// Buffer -> Buffer op riding the SAME shared `buffer_unary` body +
+// `coil_shape_ty` `(ptr) -> ptr` extern as every other unary ufunc
+// above. The ONLY difference is the kernel's RESULT DTYPE: these ALWAYS
+// produce a `Dtype::Bool` Buffer (the per-element MASK), REGARDLESS of
+// the input dtype (`np.isnan(x).dtype == bool`) — like the `a < b`
+// comparison, but unary. That bool-dtype result rides the IDENTICAL
+// opaque-`Buffer`-handle return as `transpose` / `abs`, so the ABI is
+// byte-identical; the bool rule lives entirely in the Rust kernel
+// (`elementwise.rs`). TOTAL — a predicate NEVER fails (no NaN / inf
+// "domain error"; it simply ANSWERS for every IEEE value), so there is
+// NO `coil_panic` path (a null handle is the only abort).
+// =====================================================================
+
+/// `coil.isnan(a) -> Buffer`. Per-element "is this NaN?". Returns a fresh
+/// `Dtype::Bool` Buffer (the MASK) of `a`'s shape, REGARDLESS of `a`'s
+/// dtype. Integer / bool input is ALL-`false` (integers are always finite
+/// — `np.isnan([1,2]) = [False, False]`). `isnan(nan)=True`,
+/// `isnan(inf)=False`. BORROWS `a`. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_isnan(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "isnan", coil_isnan) }
+}
+
+/// `coil.isinf(a) -> Buffer`. Per-element "is this +inf or -inf?".
+/// Returns a fresh `Dtype::Bool` Buffer (the MASK) of `a`'s shape,
+/// REGARDLESS of `a`'s dtype. Integer / bool input is ALL-`false`
+/// (integers are always finite). BOTH `+inf` and `-inf` are `True`;
+/// `isinf(nan)=False`. BORROWS `a`. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_isinf(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "isinf", coil_isinf) }
+}
+
+/// `coil.isfinite(a) -> Buffer`. Per-element "is this finite (NOT NaN,
+/// NOT inf)?". Returns a fresh `Dtype::Bool` Buffer (the MASK) of `a`'s
+/// shape, REGARDLESS of `a`'s dtype. Integer / bool input is ALL-`true`
+/// (integers are ALWAYS finite — `np.isfinite([1,2]) = [True, True]`).
+/// `isfinite(1.0)=True`, `isfinite(nan)=False`, `isfinite(inf)=False`.
+/// BORROWS `a`. Total.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_isfinite(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "isfinite", coil_isfinite) }
 }
 
 // =====================================================================

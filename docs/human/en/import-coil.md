@@ -393,6 +393,62 @@ fn main() -> i64:
 > makes a `float64` buffer, so the integer-valued results print without a
 > `.0` — `[[0, 2], [2, -0]]`, `dtype=float64`.)
 
+## Predicates — `isnan` / `isinf` / `isfinite` (→ a `bool` mask)
+
+When a computation can produce a NaN (`0/0`) or an infinity (`1/0`), you
+want to *check* for it before it silently poisons the rest of the math.
+These three predicates answer, per element, "is this value special?" — and
+the result is a **boolean mask** (a `Buffer` of `True`/`False`), the same
+shape as the input. This is the unary cousin of the `a < b` comparison
+(which also gives a mask).
+
+```cobrust
+import coil
+
+fn main() -> i64:
+    # No NaN/inf literal yet, so build them with IEEE division:
+    #   0.0/0.0 = NaN, 1.0/0.0 = +inf, x/1.0 = x (finite).
+    let num: coil.Buffer = coil.array1d2(0.0, 1.0)
+    let den: coil.Buffer = coil.array1d2(0.0, 1.0)
+    let mixed: coil.Buffer = num / den            # [NaN, 1.0]
+
+    let nans: coil.Buffer = coil.isnan(mixed)     # [True, False]
+    let _ = coil.print_buffer(nans)               # array([True, False], dtype=bool)
+
+    let fin: coil.Buffer = coil.isfinite(mixed)   # [False, True]  (the complement)
+    let _ = coil.print_buffer(fin)
+
+    # The "does this buffer have ANY NaN?" idiom — a mask feeds `any`.
+    let has_nan: bool = coil.any(&coil.isnan(mixed))
+    if has_nan:
+        print(1)                                  # 1  (yes, there is a NaN)
+    return 0
+```
+
+**The three ops** (all `Buffer -> Buffer`, result is a `bool` mask):
+
+- **`coil.isnan(a)`** — is the element NaN? `isnan(nan) = True`,
+  `isnan(inf) = False`, `isnan(1.0) = False`.
+- **`coil.isinf(a)`** — is the element `+inf` or `-inf`? Both signs count.
+  `isinf(inf) = True`, `isinf(-inf) = True`, `isinf(nan) = False`.
+- **`coil.isfinite(a)`** — is the element finite (**not** NaN and **not**
+  inf)? `isfinite(1.0) = True`, `isfinite(nan) = False`,
+  `isfinite(inf) = False`. It is exactly the opposite of "NaN or inf".
+
+> **The result is always a `bool` mask** — no matter the input dtype. Just
+> like `np.isnan(x).dtype` is always `bool`, `coil.isnan` /`isinf` /
+> `isfinite` always return a `True`/`False` buffer (it prints as
+> `dtype=bool`), never a number. Combine a mask with `coil.any` / `coil.all`
+> to collapse it to a single yes/no — `coil.any(coil.isnan(a))` is the
+> canonical "is my data NaN-clean?" check.
+
+> **Integers are always finite.** An integer can never be NaN or infinite,
+> so on an `int` (or `bool`) buffer `isnan` and `isinf` are **all `False`**
+> and `isfinite` is **all `True`** — matching numpy
+> (`np.isnan([1, 2]) = [False, False]`, `np.isfinite(int_array)` is all
+> `True`). Like the other one-argument ops, these **never trap** (a
+> predicate just answers for every value, NaN and inf included).
+
 ## Reductions — `cumsum` / `cumprod` (→ Buffer), `argmin` / `argmax` (→ int), `any` / `all` (→ bool)
 
 These are the reductions you reach for most often. Unlike everything above,

@@ -3433,6 +3433,20 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_trunc", coil_shape_ty, 1),
             ("__cobrust_coil_square", coil_shape_ty, 1),
             ("__cobrust_coil_sign", coil_shape_ty, 1),
+            // #163 PREDICATE Buffer-returning ops (BATCH 12). The 1-arg
+            // predicate ufuncs `isnan` / `isinf` / `isfinite` are `(ptr) ->
+            // ptr` ≡ `coil_shape_ty` — the IDENTICAL extern shape as every
+            // other unary ufunc above. UNLIKE the rounding ufuncs the
+            // result is a BOOL-dtype Buffer (the per-element MASK,
+            // REGARDLESS of input dtype — like `a < b`, but unary), but the
+            // opaque `Buffer` handle is dtype-agnostic so the ABI is
+            // byte-identical; the bool rule lives entirely in the Rust
+            // kernel (`elementwise.rs`). MIR retargets `coil.isnan(a)` onto
+            // these `Call`s via the SAME generic Buffer-arg path (ZERO
+            // batch-specific MIR code).
+            ("__cobrust_coil_isnan", coil_shape_ty, 1),
+            ("__cobrust_coil_isinf", coil_shape_ty, 1),
+            ("__cobrust_coil_isfinite", coil_shape_ty, 1),
             // #145 REDUCTIONS BATCH 5 — the Buffer-RETURNING cumulative
             // scans `cumsum`/`cumprod` (no-axis FLATTEN to 1-D). `(ptr) ->
             // ptr` ≡ `coil_shape_ty`, the IDENTICAL extern shape as the

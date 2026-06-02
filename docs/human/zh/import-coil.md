@@ -357,6 +357,58 @@ fn main() -> i64:
 > 个 `.cb` 构造器都生成 `float64` buffer,所以整数值的结果打印时不带 `.0`
 > —— `[[0, 2], [2, -0]]`,`dtype=float64`。)
 
+## 谓词 —— `isnan` / `isinf` / `isfinite`(→ 一个 `bool` 掩码)
+
+当一段计算可能产生 NaN(`0/0`)或无穷(`1/0`)时,你会想在它悄悄污染后续
+数学之前先**检查**出来。这三个谓词逐元素回答「这个值特殊吗?」 —— 结果是一个
+**布尔掩码**(一个由 `True`/`False` 组成的 `Buffer`),形状与输入相同。这是
+`a < b` 比较(同样给出掩码)的一元表亲。
+
+```cobrust
+import coil
+
+fn main() -> i64:
+    # 目前还没有 NaN/inf 字面量,所以用 IEEE 除法构造它们:
+    #   0.0/0.0 = NaN、1.0/0.0 = +inf、x/1.0 = x(有限)。
+    let num: coil.Buffer = coil.array1d2(0.0, 1.0)
+    let den: coil.Buffer = coil.array1d2(0.0, 1.0)
+    let mixed: coil.Buffer = num / den            # [NaN, 1.0]
+
+    let nans: coil.Buffer = coil.isnan(mixed)     # [True, False]
+    let _ = coil.print_buffer(nans)               # array([True, False], dtype=bool)
+
+    let fin: coil.Buffer = coil.isfinite(mixed)   # [False, True](取反)
+    let _ = coil.print_buffer(fin)
+
+    # 「这个 buffer 里有没有 NaN?」惯用法 —— 掩码喂给 `any`。
+    let has_nan: bool = coil.any(&coil.isnan(mixed))
+    if has_nan:
+        print(1)                                  # 1(是的,存在一个 NaN)
+    return 0
+```
+
+**这三个操作**(都是 `Buffer -> Buffer`,结果是 `bool` 掩码):
+
+- **`coil.isnan(a)`** —— 元素是 NaN 吗?`isnan(nan) = True`、
+  `isnan(inf) = False`、`isnan(1.0) = False`。
+- **`coil.isinf(a)`** —— 元素是 `+inf` 或 `-inf` 吗?两个符号都算。
+  `isinf(inf) = True`、`isinf(-inf) = True`、`isinf(nan) = False`。
+- **`coil.isfinite(a)`** —— 元素是有限的吗(**既不是** NaN **也不是** inf)?
+  `isfinite(1.0) = True`、`isfinite(nan) = False`、`isfinite(inf) = False`。
+  它正是「NaN 或 inf」的反面。
+
+> **结果永远是 `bool` 掩码** —— 无论输入是什么 dtype。正如 `np.isnan(x).dtype`
+> 永远是 `bool`,`coil.isnan` /`isinf` / `isfinite` 永远返回一个 `True`/`False`
+> buffer(打印为 `dtype=bool`),绝不是数字。把掩码和 `coil.any` / `coil.all`
+> 组合即可坍缩成单个是/否 —— `coil.any(coil.isnan(a))` 就是经典的「我的数据
+> 是否 NaN-干净?」检查。
+
+> **整数永远是有限的。** 一个整数绝不可能是 NaN 或无穷,所以在 `int`(或
+> `bool`)buffer 上,`isnan` 和 `isinf` **全为 `False`**,`isfinite` **全为
+> `True`** —— 与 numpy 一致(`np.isnan([1, 2]) = [False, False]`,
+> `np.isfinite(int_array)` 全为 `True`)。和其他一元操作一样,这些操作**绝不
+> trap**(谓词只是为每个值作答,NaN 和 inf 也不例外)。
+
 ## 归约 —— `cumsum` / `cumprod`(→ Buffer)、`argmin` / `argmax`(→ int)、`any` / `all`(→ bool)
 
 这些是你最常用到的归约操作。与上面所有操作不同,它们有**三种返回形态**

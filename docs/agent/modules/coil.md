@@ -2758,6 +2758,117 @@ family with a **MIXED-scalar-type** arg list (the FIRST coil ctors mixing
       fmt clean; no new dep (`Cargo.lock` unchanged — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## `.cb` `coil` predicate ufuncs — `isnan` / `isinf` / `isfinite` (#163 BATCH 12 — DONE)
+
+The per-element PREDICATE ufunc family — the "is this value special?"
+checks an LLM reaches for to guard against NaN / inf contamination
+(§2.5). Each is a 1-arg `Buffer -> Buffer` op wired BYTE-IDENTICALLY to
+every other unary ufunc (borrow-Buffer-arg → fresh-Buffer-return, the
+`(ptr) -> ptr` `coil_shape_ty` extern, the shared `buffer_unary` cabi
+body). The ONLY difference from the rounding / transcendental ufuncs is
+the kernel's RESULT DTYPE: these ALWAYS produce a `Dtype::Bool` Buffer
+(the per-element MASK), REGARDLESS of the input dtype — exactly like the
+`a < b` comparison (`ufunc::lt`), but as a UNARY op. The bool-dtype result
+rides the IDENTICAL opaque-`Buffer`-handle return as `transpose` / `abs`,
+so codegen + MIR are byte-identical with ZERO new code. The `.cb` form is
+`coil.isnan(a)` — a module free function. 3 ops.
+
+### Semantics (numpy 2.0.2 oracle — `coil::elementwise`)
+
+- `coil.isnan(a) -> Buffer` (bool mask) — element IS NaN.
+  `isnan(nan) -> True`, `isnan(inf) -> False`, `isnan(1.0) -> False`.
+- `coil.isinf(a) -> Buffer` (bool mask) — element IS +inf OR -inf. BOTH
+  signs are True. `isinf(inf) -> True`, `isinf(-inf) -> True`,
+  `isinf(nan) -> False`.
+- `coil.isfinite(a) -> Buffer` (bool mask) — element is FINITE
+  (= NOT NaN AND NOT inf, Rust `f64::is_finite`). `isfinite(1.0) -> True`,
+  `isfinite(nan) -> False`, `isfinite(inf) -> False`. The exact complement
+  of `isnan OR isinf`.
+
+All are TOTAL — a predicate NEVER fails (no NaN / inf "domain error"; it
+simply ANSWERS for every IEEE value), so NO `coil_panic` path exists; the
+shim ALWAYS returns a fresh bool `Buffer` (a null handle is the only
+abort).
+
+**Result dtype (the load-bearing difference from every prior unary ufunc
+— numpy-confirmed)**: ALL THREE return a `Dtype::Bool` Buffer (the mask),
+REGARDLESS of the input dtype (`np.isnan(x).dtype == bool`,
+`np.isfinite(np.int64([...])).dtype == bool`). NOT dtype-preserving, NOT
+float-promoting — ALWAYS Bool.
+
+**Integer / bool input (the #1 semantic subtlety — numpy-confirmed)**:
+integers are ALWAYS finite (they can never be NaN or inf), so `isnan` /
+`isinf` are ALL-`False` and `isfinite` is ALL-`True` over any int / bool
+`Array` (`np.isnan(np.array([1,2])) = [False, False]`,
+`np.isfinite(int_array) = all True`). The kernel short-circuits these to a
+constant-fill bool `Array` of the same shape.
+
+### Kernels (`elementwise.rs`)
+
+`bool_predicate(arr, pred, int_fill)` — the shared body: maps each float
+arm through `pred: f64 -> bool` into a `Array::Bool`; for int / bool arms
+fills with `int_fill` (the always-finite answer: `false` for isnan/isinf,
+`true` for isfinite). `isnan`/`isinf`/`isfinite` are thin `#[must_use]`
+wrappers over it (`f64::is_nan` / `f64::is_infinite` / `f64::is_finite`).
+NOTE: `ufunc.rs` ALSO has `Result`-returning `isnan`/`isinf` (the
+`Array::*`-method-style backers, Stream W Item 7); the `elementwise`
+versions are the infallible `Array -> Array` cabi-shim backers (same
+coexistence as `elementwise::exp` vs `ufunc::exp`). `isfinite` is NEW
+(no `ufunc` twin). 8 NEW unit tests (mixed-buffer values + `dtype==Bool`
+for each; isfinite = NOT(isnan OR isinf) complement; f32 mask; int-input
+all-finite; bool-input all-finite; shape-preserve).
+
+### cabi (`cabi.rs`)
+
+3 shims via the shared `buffer_unary` body (`__cobrust_coil_isnan` /
+`_isinf` / `_isfinite`), `(ptr) -> ptr`, TOTAL (no trap; `coil_panic` only
+on a null handle).
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+3 ecosystem arms (`[Buffer] -> Buffer`), tier **`Strict`** (EXACT boolean
+predicates, no tolerance — distinct from the rounding ufuncs' `Numerical`
+tier). The bool-dtype mask rides INSIDE the opaque `coil_buffer_ty()`
+handle, so the static ret type is still the Buffer ADT. 1 sig test
+(asserts symbol + params + ret + `Strict` tier for all 3).
+
+### Typecheck / MIR — ZERO new code
+
+All ride the GENERIC `try_lower_ecosystem_call` Case-1 module-free-fn loop
+(the SAME path `coil.transpose(a)` / `coil.abs(a)` prove). The bool-dtype
+result rides the IDENTICAL Buffer return as `transpose`; NO BATCH-12-
+specific MIR arm, NO `_=>"any"` gap.
+
+### Codegen (`llvm_backend.rs`)
+
+3 register rows (`__cobrust_coil_isnan` / `_isinf` / `_isfinite`),
+`coil_shape_ty` `(ptr) -> ptr` — the IDENTICAL extern shape as every other
+unary ufunc.
+
+### Done means (#163 BATCH 12 — DONE)
+
+- [x] `elementwise.rs`: `bool_predicate` helper + 3 `#[must_use]`
+      wrappers. 8 NEW unit tests (values + `Dtype::Bool` result +
+      int/bool all-finite + complement + shape).
+- [x] cabi: 3 shims via shared `buffer_unary` (TOTAL, no trap).
+- [x] Manifest: 3 ecosystem arms `[Buffer] -> Buffer`, tier `Strict`. 1
+      sig test.
+- [x] Typecheck / MIR: NO new code (the bool-dtype result rides the SAME
+      Buffer-return generic path as `transpose`).
+- [x] Codegen: 3 register rows, `coil_shape_ty` (NO new extern fn-type).
+- [x] `.cb` E2E `coil_predicate_e2e.rs` (5 tests): isnan `[NaN,1.0]` ->
+      `[True,False]` (bool repr) + isinf `[+inf,0.0]` -> `[True,False]` +
+      isfinite `[NaN,1.0]` -> `[False,True]` (the isnan complement) +
+      isfinite `[3.0,-4.0]` -> `[True,True]` (all-finite) + a
+      `coil.any(coil.isnan(a))` "has any NaN?" CHAIN (mask feeds the bool
+      reduction). NaN / inf built via IEEE `a / b` (`0/0`, `1/0`).
+- [x] No regression: full `cobrust-coil` suite green; `coil_predicate_e2e`
+      + `coil_hello_e2e` all green, run ONE `--test` at a time (F73
+      libcoil.a build-race avoidance); touched crates (`cobrust-coil` +
+      `cobrust-codegen` + `cobrust-types`) build + clippy `-D warnings` +
+      fmt clean; no new dep (`Cargo.lock` unchanged — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

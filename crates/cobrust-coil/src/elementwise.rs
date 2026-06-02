@@ -470,6 +470,93 @@ pub fn sign(a: &Array) -> Array {
 }
 
 // =========================================================================
+// #163 numpy gap-closure BATCH 12 — the PREDICATE ufunc family
+// (`isnan` / `isinf` / `isfinite`). UNLIKE every prior 1-arg `Array ->
+// Array` op in this module, the result dtype is ALWAYS `Dtype::Bool`
+// (the per-element MASK), REGARDLESS of the input dtype — exactly like
+// the `a < b` comparison kernel (`ufunc::lt`), but as a UNARY op. The
+// handle ABI is byte-identical to every other 1-arg Buffer -> Buffer op
+// (the bool-dtype result rides the SAME fresh-`Buffer` return as
+// `transpose` / `abs`), so codegen + MIR ride the SAME `(ptr) -> ptr`
+// path with ZERO new code; the bool-dtype rule lives entirely here.
+//
+// numpy-exact semantics (oracle: numpy 2.0.2):
+//   - `isnan(x)`    : element IS NaN.            `np.isnan([1.,nan,inf]) = [F,T,F]`.
+//   - `isinf(x)`    : element IS +inf OR -inf.   `np.isinf([1.,nan,inf,-inf]) = [F,F,T,T]`.
+//   - `isfinite(x)` : element is FINITE          `np.isfinite([1.,nan,inf]) = [T,F,F]`.
+//                     (= NOT NaN AND NOT inf).
+//
+// INTEGER / BOOL input: integers are ALWAYS finite — they can never be
+// NaN or inf — so `isnan` / `isinf` are ALL-`false` and `isfinite` is
+// ALL-`true` over any int / bool `Array` (`np.isnan(int_array)` is all
+// False, `np.isfinite(int_array)` is all True). These short-circuit to a
+// constant-fill bool `Array` of the same shape WITHOUT touching the
+// (always-finite) element values.
+//
+// Tier `@py_compat(strict)` — these are EXACT boolean predicates, no
+// tolerance. Total — a predicate NEVER fails (no NaN / inf "domain
+// error"; the predicate simply ANSWERS for every IEEE value), so the
+// cabi shim has NO `coil_panic` path (a null handle is the only abort).
+// =========================================================================
+
+/// Map every element of a float `Array` through a `f64 -> bool`
+/// predicate, producing a `Dtype::Bool` `Array` of the SAME shape.
+/// Integer / bool inputs (which are ALWAYS finite — never NaN or inf)
+/// short-circuit to a constant-fill bool `Array`: `int_fill` is the
+/// answer the predicate gives for every finite integer (`false` for
+/// `isnan` / `isinf`, `true` for `isfinite`).
+fn bool_predicate(arr: &Array, pred: impl Fn(f64) -> bool, int_fill: bool) -> Array {
+    match arr {
+        Array::Float32(a) => Array::Bool(a.mapv(|v| pred(f64::from(v)))),
+        Array::Float64(a) => Array::Bool(a.mapv(pred)),
+        // Integers and bools are ALWAYS finite — never NaN, never inf.
+        Array::Int32(a) => Array::Bool(a.mapv(|_| int_fill)),
+        Array::Int64(a) => Array::Bool(a.mapv(|_| int_fill)),
+        Array::Bool(a) => Array::Bool(a.mapv(|_| int_fill)),
+    }
+}
+
+/// `np.isnan(a)` — per-element "is this NaN?", elementwise. Result is
+/// ALWAYS a `Dtype::Bool` `Array` (the mask), of the same shape as `a`,
+/// REGARDLESS of the input dtype (`np.isnan(x).dtype == bool`). Integer /
+/// bool input is ALL-`false` (integers are always finite, never NaN —
+/// `np.isnan([1,2]) = [False, False]`). `isnan(nan)=True`,
+/// `isnan(inf)=False`, `isnan(1.0)=False`. Total.
+///
+/// `@py_compat(strict)`.
+#[must_use]
+pub fn isnan(a: &Array) -> Array {
+    bool_predicate(a, f64::is_nan, false)
+}
+
+/// `np.isinf(a)` — per-element "is this +inf or -inf?", elementwise.
+/// Result is ALWAYS a `Dtype::Bool` `Array` (the mask), of the same shape
+/// as `a`, REGARDLESS of the input dtype. Integer / bool input is
+/// ALL-`false` (integers are always finite, never inf —
+/// `np.isinf([1,2]) = [False, False]`). `isinf(inf)=True`,
+/// `isinf(-inf)=True`, `isinf(nan)=False`, `isinf(1.0)=False`. Total.
+///
+/// `@py_compat(strict)`.
+#[must_use]
+pub fn isinf(a: &Array) -> Array {
+    bool_predicate(a, f64::is_infinite, false)
+}
+
+/// `np.isfinite(a)` — per-element "is this finite (NOT NaN, NOT inf)?",
+/// elementwise. Result is ALWAYS a `Dtype::Bool` `Array` (the mask), of
+/// the same shape as `a`, REGARDLESS of the input dtype. Integer / bool
+/// input is ALL-`true` (integers are ALWAYS finite —
+/// `np.isfinite([1,2]) = [True, True]`). `isfinite(1.0)=True`,
+/// `isfinite(nan)=False`, `isfinite(inf)=False`, `isfinite(-inf)=False`.
+/// Defined as NOT NaN AND NOT inf (Rust [`f64::is_finite`]). Total.
+///
+/// `@py_compat(strict)`.
+#[must_use]
+pub fn isfinite(a: &Array) -> Array {
+    bool_predicate(a, f64::is_finite, true)
+}
+
+// =========================================================================
 // #145 numpy gap-closure BATCH 6 — the SCALAR-ARG ufuncs `clip` / `power`.
 // Unlike every prior 1-arg `Array -> Array` op in this module, these take
 // EXTRA `f64` SCALAR args beside the Buffer (`clip(a, lo, hi)`,
@@ -1369,5 +1456,109 @@ mod tests {
         let r = clip(&power(&a, 2.0), 2.0, 9.0);
         assert_eq!(r.dtype(), Dtype::Float64);
         assert_eq!(f64_vals(&r), vec![2.0, 4.0, 9.0, 9.0]);
+    }
+
+    // ---- #163 BATCH 12 — isnan / isinf / isfinite predicates ----
+    // Oracle: numpy 2.0.2. Each returns a Dtype::Bool MASK regardless of
+    // the input dtype (np.isnan(x).dtype == bool). Integers are ALWAYS
+    // finite: isnan/isinf -> all False, isfinite -> all True.
+    // (Reuses the module-level `bool_vals` helper defined above.)
+
+    /// A float buffer mixing finite / NaN / +inf / -inf / 0.0 — the
+    /// shared fixture for all three predicates.
+    fn mixed_f64() -> Array {
+        array_f64(
+            &[1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0],
+            &[5],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn isnan_mixed_values_and_bool_dtype() {
+        // np.isnan([1,nan,inf,-inf,0]) -> [F,T,F,F,F], dtype=bool.
+        let r = isnan(&mixed_f64());
+        assert_eq!(r.dtype(), Dtype::Bool, "result dtype is ALWAYS Bool");
+        assert_eq!(bool_vals(&r), vec![false, true, false, false, false]);
+    }
+
+    #[test]
+    fn isinf_mixed_values_and_bool_dtype() {
+        // np.isinf([1,nan,inf,-inf,0]) -> [F,F,T,T,F], dtype=bool. BOTH
+        // +inf and -inf are True; NaN is False.
+        let r = isinf(&mixed_f64());
+        assert_eq!(r.dtype(), Dtype::Bool, "result dtype is ALWAYS Bool");
+        assert_eq!(bool_vals(&r), vec![false, false, true, true, false]);
+    }
+
+    #[test]
+    fn isfinite_mixed_values_and_bool_dtype() {
+        // np.isfinite([1,nan,inf,-inf,0]) -> [T,F,F,F,T], dtype=bool.
+        // Finite = NOT NaN AND NOT inf: only 1.0 and 0.0 qualify.
+        let r = isfinite(&mixed_f64());
+        assert_eq!(r.dtype(), Dtype::Bool, "result dtype is ALWAYS Bool");
+        assert_eq!(bool_vals(&r), vec![true, false, false, false, true]);
+    }
+
+    #[test]
+    fn isfinite_is_complement_of_nan_or_inf() {
+        // isfinite == NOT (isnan OR isinf), element-wise — the definition.
+        let a = mixed_f64();
+        let fin = bool_vals(&isfinite(&a));
+        let nan = bool_vals(&isnan(&a));
+        let inf = bool_vals(&isinf(&a));
+        for i in 0..fin.len() {
+            assert_eq!(
+                fin[i],
+                !(nan[i] || inf[i]),
+                "isfinite[{i}] must equal NOT(isnan OR isinf)",
+            );
+        }
+    }
+
+    #[test]
+    fn isnan_f32_mask() {
+        // np.isnan(np.float32([1,nan,2])) -> [F,T,F], dtype=bool. f32 input
+        // still yields a Bool mask (not f32).
+        let a = array_f32(&[1.0, f32::NAN, 2.0], &[3]).unwrap();
+        let r = isnan(&a);
+        assert_eq!(r.dtype(), Dtype::Bool);
+        assert_eq!(bool_vals(&r), vec![false, true, false]);
+    }
+
+    #[test]
+    fn predicates_int_input_all_finite() {
+        // Integers are ALWAYS finite. np.isnan([1,2,3])=all False,
+        // np.isinf([1,2,3])=all False, np.isfinite([1,2,3])=all True.
+        // Result dtype is STILL Bool (np.isnan(int_array).dtype == bool).
+        let a = array_i32(&[1, 2, 3], &[3]).unwrap();
+        assert_eq!(isnan(&a).dtype(), Dtype::Bool);
+        assert_eq!(bool_vals(&isnan(&a)), vec![false, false, false]);
+        assert_eq!(bool_vals(&isinf(&a)), vec![false, false, false]);
+        assert_eq!(bool_vals(&isfinite(&a)), vec![true, true, true]);
+
+        // i64 too (the other integer width).
+        let b = array_i64(&[10, 20], &[2]).unwrap();
+        assert_eq!(bool_vals(&isnan(&b)), vec![false, false]);
+        assert_eq!(bool_vals(&isfinite(&b)), vec![true, true]);
+    }
+
+    #[test]
+    fn predicates_bool_input_all_finite() {
+        // Bool input: never NaN/inf. isnan/isinf -> all False, isfinite ->
+        // all True. Result dtype Bool.
+        let a = array_bool(&[true, false], &[2]).unwrap();
+        assert_eq!(bool_vals(&isnan(&a)), vec![false, false]);
+        assert_eq!(bool_vals(&isinf(&a)), vec![false, false]);
+        assert_eq!(bool_vals(&isfinite(&a)), vec![true, true]);
+    }
+
+    #[test]
+    fn predicates_preserve_shape() {
+        // np.isnan(2x2).shape == (2,2) — the mask is the SAME shape.
+        let a = array_f64(&[1.0, f64::NAN, f64::INFINITY, 3.0], &[2, 2]).unwrap();
+        assert_eq!(isnan(&a).shape(), vec![2, 2]);
+        assert_eq!(isinf(&a).shape(), vec![2, 2]);
+        assert_eq!(isfinite(&a).shape(), vec![2, 2]);
     }
 }

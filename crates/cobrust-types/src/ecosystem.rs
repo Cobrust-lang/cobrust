@@ -1072,6 +1072,43 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Numerical,
         )),
+        // #163 PREDICATE gap-closure BATCH 12 (2026-06-02) — the
+        // per-element predicate ufuncs `isnan` / `isinf` / `isfinite`.
+        // Each is a 1-arg `Buffer -> Buffer` op, but UNLIKE every prior
+        // unary ufunc the RESULT is a BOOL-dtype Buffer (the per-element
+        // MASK), REGARDLESS of the input dtype (`np.isnan(x).dtype ==
+        // bool`) — like the `a < b` comparison, but unary. The opaque
+        // `coil.Buffer` handle is dtype-agnostic, so the EcoSig return is
+        // the SAME `coil_buffer_ty()` as `transpose` / `abs` (the
+        // bool-ness rides INSIDE the handle); codegen + MIR ride the SAME
+        // `(ptr) -> ptr` generic path with ZERO new code. Tier `Strict` —
+        // these are EXACT boolean predicates (no tolerance):
+        //
+        //   - `coil.isnan(a)    -> Buffer` (bool mask) — element IS NaN.
+        //   - `coil.isinf(a)    -> Buffer` (bool mask) — element IS ±inf.
+        //   - `coil.isfinite(a) -> Buffer` (bool mask) — NOT NaN AND NOT inf.
+        //
+        // INT / BOOL input: integers are ALWAYS finite -> `isnan` /
+        // `isinf` are all-False, `isfinite` is all-True (the bool rule is
+        // entirely inside the Rust kernel — see `elementwise.rs`).
+        ("coil", "isnan") => Some(EcoSig::from_values(
+            "__cobrust_coil_isnan",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Strict,
+        )),
+        ("coil", "isinf") => Some(EcoSig::from_values(
+            "__cobrust_coil_isinf",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Strict,
+        )),
+        ("coil", "isfinite") => Some(EcoSig::from_values(
+            "__cobrust_coil_isfinite",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Strict,
+        )),
         // #145 REDUCTIONS gap-closure BATCH 5 (2026-06-01) — the reduction
         // family in THREE distinct return shapes, all on a single Buffer
         // arg. This batch is the FIRST coil surface to mix Buffer-return
@@ -3472,6 +3509,26 @@ mod tests {
             assert_eq!(sig.runtime_symbol, format!("__cobrust_coil_{op}"));
             assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
             assert_eq!(sig.ret, coil_buffer_ty());
+        }
+    }
+
+    // #163 PREDICATE BATCH 12 — `isnan` / `isinf` / `isfinite`. Each is a
+    // 1-arg `Buffer -> Buffer` op (the bool MASK rides INSIDE the opaque
+    // handle, so the manifest ret is the SAME `coil_buffer_ty()` as
+    // `transpose` / `diff`). The distinguishing trait vs the rounding /
+    // reshape ops is the `Strict` tier (EXACT boolean predicates, no
+    // numerical tolerance).
+    #[test]
+    fn coil_predicates_take_buffer_return_buffer_strict() {
+        for op in ["isnan", "isinf", "isfinite"] {
+            let sig =
+                lookup_module_fn("coil", op).unwrap_or_else(|| panic!("coil.{op} in manifest"));
+            assert_eq!(sig.runtime_symbol, format!("__cobrust_coil_{op}"));
+            assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+            // The bool-dtype result is carried INSIDE the opaque Buffer
+            // handle, so the static ret type is still the Buffer ADT.
+            assert_eq!(sig.ret, coil_buffer_ty());
+            assert_eq!(sig.tier, PyCompatTier::Strict, "exact boolean predicate");
         }
     }
 
