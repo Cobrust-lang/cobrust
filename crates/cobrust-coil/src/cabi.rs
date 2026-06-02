@@ -80,7 +80,10 @@ use crate::aggregates::{
 use crate::array::Array;
 use crate::broadcast::broadcast_shape;
 use crate::broadcast_extra::broadcast_to_1d;
-use crate::constructors::{array_f64, eye as coil_eye, ones as coil_ones, zeros as coil_zeros};
+use crate::constructors::{
+    array_f64, eye as coil_eye, full as coil_full, linspace as coil_linspace,
+    logspace as coil_logspace, ones as coil_ones, zeros as coil_zeros,
+};
 use crate::dtype::Dtype;
 use crate::elementwise::{
     abs as coil_abs, cbrt as coil_cbrt, ceil as coil_ceil, clip as coil_clip, cos as coil_cos,
@@ -222,6 +225,80 @@ pub unsafe extern "C" fn __cobrust_coil_eye(n: i64) -> *mut u8 {
 }
 
 // =====================================================================
+// #145 gap-closure BATCH 11 (2026-06-02) — the spacing / value
+// CONSTRUCTORS `linspace` / `logspace` / `full`. ALL-SCALAR-ARG
+// producers (NO Buffer input) that allocate a fresh `Float64` 1-D
+// `Buffer` the `.cb` caller owns + scope-exit drops. The mirror of the
+// `coil.zeros(n)` / `coil.array1d2(a, b)` all-scalar-arg ctor shape:
+// no borrow (nothing to free), fresh `Box::into_raw`, TOTAL (no trap —
+// a `num`/`n <= 0` yields an EMPTY buffer, like `coil.zeros(-1)`).
+// =====================================================================
+
+/// `coil.linspace(start, stop, num) -> Buffer`. `num` evenly-spaced f64
+/// samples over `[start, stop]` INCLUSIVE of `stop` (numpy's
+/// `endpoint=True` default). `np.linspace(0, 1, 5) == [0, .25, .5, .75,
+/// 1]`. `num == 1 -> [start]`; `num <= 0 -> []` (empty). The last sample
+/// is pinned to `stop` bit-exactly (see `constructors::linspace`).
+///
+/// Returns a freshly-Boxed `Array` handle the `.cb` caller owns; freed
+/// once via `__cobrust_coil_buffer_drop`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_zeros`. No borrow — an all-scalar-arg producer.
+/// Safe to call concurrently (allocation-only, no shared state).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_linspace(start: f64, stop: f64, num: i64) -> *mut u8 {
+    let num = clamp_to_usize(num);
+    // `endpoint = true` (numpy default). map-or-fallback: the only error
+    // branch in `linspace` is `array(...)`'s shape check, which cannot
+    // fail for a freshly-sized `[num]` Float64 buffer.
+    let arr = coil_linspace(start, stop, num, true, Dtype::Float64).map_or_else(
+        |_| Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[num]))),
+        |r| r.array,
+    );
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+/// `coil.logspace(start, stop, num) -> Buffer`. `10 ** linspace(start,
+/// stop, num)` — `num` samples spaced evenly on a base-10 log scale,
+/// INCLUSIVE of the `stop` exponent. `np.logspace(0, 2, 3) == [1, 10,
+/// 100]`. `num <= 0 -> []`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_linspace`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_logspace(start: f64, stop: f64, num: i64) -> *mut u8 {
+    let num = clamp_to_usize(num);
+    // base = 10.0, endpoint = true (numpy defaults).
+    let arr = coil_logspace(start, stop, num, true, 10.0, Dtype::Float64)
+        .unwrap_or_else(|_| Array::Float64(ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&[num]))));
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+/// `coil.full(n, value) -> Buffer`. A 1-D `Float64` buffer of `n` copies
+/// of `value`. `np.full(3, 5.0) == [5, 5, 5]`. `n <= 0 -> []` (empty,
+/// clamping a negative `n` to `0` like `coil.zeros`).
+///
+/// # Safety
+///
+/// As `__cobrust_coil_linspace`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_full(n: i64, value: f64) -> *mut u8 {
+    let n = clamp_to_usize(n);
+    // unwrap-or-fallback: the only error branch is the complex-dtype arm,
+    // unreachable for Float64.
+    let arr = coil_full(&[n], value, Dtype::Float64).unwrap_or_else(|_| {
+        Array::Float64(ndarray::ArrayD::<f64>::from_elem(
+            ndarray::IxDyn(&[n]),
+            value,
+        ))
+    });
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+// =====================================================================
 // coil C-ABI surface — Buffer read method (print_buffer).
 // =====================================================================
 
@@ -261,9 +338,10 @@ pub unsafe extern "C" fn __cobrust_coil_print_buffer(b: *mut u8) -> i64 {
 /// # Safety
 ///
 /// `b` must be null or a `Buffer` handle from one of `coil.zeros` /
-/// `coil.ones` / `coil.eye` / `coil.mgrid` / `coil.ogrid` /
-/// `coil.broadcast_to` / `coil.split` that has not already been
-/// dropped.
+/// `coil.ones` / `coil.eye` / `coil.linspace` / `coil.logspace` /
+/// `coil.full` / `coil.mgrid` / `coil.ogrid` / `coil.broadcast_to` /
+/// `coil.split` (or any other coil Buffer-returning op) that has not
+/// already been dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_coil_buffer_drop(b: *mut u8) {
     if b.is_null() {
@@ -2399,6 +2477,108 @@ mod tests {
             __cobrust_coil_buffer_drop(buf);
         }
         assert_eq!(drop_count() - before, 1, "Buffer must drop exactly once");
+    }
+
+    // =====================================================================
+    // #145 BATCH 11 — spacing/value constructor shim tests. ALL-scalar-arg
+    // producers (no Buffer input); values asserted via the `mean` reducer
+    // (proves the fresh constructor handle feeds another op) + drop-once.
+    // =====================================================================
+
+    /// `coil.linspace(0, 10, 5)` -> `[0, 2.5, 5, 7.5, 10]`; `mean == 5.0`.
+    /// Drops exactly once at scope exit (all-scalar-arg producer, no
+    /// borrow to balance).
+    #[test]
+    fn linspace_round_trip_mean() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let buf = __cobrust_coil_linspace(0.0, 10.0, 5);
+            assert!(!buf.is_null(), "linspace returned null");
+            let m = __cobrust_coil_mean(buf);
+            assert!((m - 5.0).abs() < 1e-12, "mean(linspace(0,10,5)) got {m}");
+            __cobrust_coil_buffer_drop(buf);
+        }
+        assert_eq!(drop_count() - before, 1, "Buffer must drop exactly once");
+    }
+
+    /// `coil.linspace(0, 1, 0)` -> empty buffer (num <= 0 clamps), `mean`
+    /// of an empty buffer is `NaN` (matches `coil.mean([])`).
+    #[test]
+    fn linspace_num_zero_is_empty() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let buf = __cobrust_coil_linspace(0.0, 1.0, 0);
+            assert!(!buf.is_null(), "linspace(0,1,0) must clamp to empty buffer");
+            assert!(
+                __cobrust_coil_mean(buf).is_nan(),
+                "mean of empty linspace must be NaN"
+            );
+            __cobrust_coil_buffer_drop(buf);
+        }
+    }
+
+    /// `coil.logspace(0, 2, 3)` -> `[1, 10, 100]`; `mean == 37.0`.
+    #[test]
+    fn logspace_round_trip_mean() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let buf = __cobrust_coil_logspace(0.0, 2.0, 3);
+            assert!(!buf.is_null(), "logspace returned null");
+            let m = __cobrust_coil_mean(buf);
+            assert!((m - 37.0).abs() < 1e-12, "mean(logspace(0,2,3)) got {m}");
+            __cobrust_coil_buffer_drop(buf);
+        }
+        assert_eq!(drop_count() - before, 1, "Buffer must drop exactly once");
+    }
+
+    /// `coil.full(4, 7.0)` -> `[7, 7, 7, 7]`; `mean == 7.0`.
+    #[test]
+    fn full_round_trip_mean() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let buf = __cobrust_coil_full(4, 7.0);
+            assert!(!buf.is_null(), "full returned null");
+            let m = __cobrust_coil_mean(buf);
+            assert!((m - 7.0).abs() < 1e-12, "mean(full(4,7)) got {m}");
+            __cobrust_coil_buffer_drop(buf);
+        }
+        assert_eq!(drop_count() - before, 1, "Buffer must drop exactly once");
+    }
+
+    /// `coil.full(0, 5.0)` and `coil.full(-1, 5.0)` both clamp to an empty
+    /// buffer (mirror `coil.zeros` negative-n clamp); `mean` is `NaN`.
+    #[test]
+    fn full_zero_and_negative_n_are_empty() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let z = __cobrust_coil_full(0, 5.0);
+            assert!(!z.is_null(), "full(0,5) must clamp to empty buffer");
+            assert!(
+                __cobrust_coil_mean(z).is_nan(),
+                "mean(full(0,5)) must be NaN"
+            );
+            __cobrust_coil_buffer_drop(z);
+            let neg = __cobrust_coil_full(-1, 5.0);
+            assert!(!neg.is_null(), "full(-1,5) must clamp to empty buffer");
+            assert!(
+                __cobrust_coil_mean(neg).is_nan(),
+                "mean(full(-1,5)) must be NaN"
+            );
+            __cobrust_coil_buffer_drop(neg);
+        }
     }
 
     // =====================================================================

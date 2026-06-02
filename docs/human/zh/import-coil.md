@@ -41,6 +41,47 @@ cobrust build prog.cb -o prog
   `array_repr` 打印到 stdout。成功返回 `0`;接收者为 null 时返回 `-1`
   (防御性)。
 
+## 等距 / 填充构造器(`linspace` / `logspace` / `full`)
+
+又是三个全标量参数构造器 —— 它们只接受**数字**(没有 buffer 输入),
+产出一个新的 `float64` 1-D buffer。这是真实代码里最常用的 numpy 等距 /
+填充构造器:
+
+```text
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.linspace(0.0, 1.0, 5)   # [0, 0.25, 0.5, 0.75, 1]
+    let _ = coil.print_buffer(a)                       # 含端点
+    let b: coil.Buffer = coil.logspace(0.0, 2.0, 3)   # [1, 10, 100]
+    let _ = coil.print_buffer(b)                       # = 10 ** linspace
+    let c: coil.Buffer = coil.full(3, 5.0)            # [5, 5, 5]
+    let _ = coil.print_buffer(c)                       # n 份 value 拷贝
+    let m: f64 = coil.mean(coil.linspace(0.0, 10.0, 5))  # mean([0,2.5,5,7.5,10])
+    print((m as i64))                                  # 5
+    return 0
+```
+
+- **`coil.linspace(start: f64, stop: f64, num: i64) -> Buffer`** —— 在
+  `[start, stop]` 上取 `num` 个等距样本,**含 `stop` 端点**(numpy 的
+  `endpoint=True` 默认 —— `linspace(0, 1, 5)` 是 `[0, 0.25, 0.5, 0.75,
+  1]`,且最后一个样本**精确**等于 `stop`,无浮点漂移)。步长为
+  `(stop - start) / (num - 1)`。边界情况与 numpy 一致:`num == 1` →
+  `[start]`;`num <= 0` → 空 buffer。
+- **`coil.logspace(start: f64, stop: f64, num: i64) -> Buffer`** —— 在
+  以 10 为底的**对数**刻度上取 `num` 个等距样本:`10 ** linspace(start,
+  stop, num)`。`logspace(0, 2, 3)` 是 `[1, 10, 100]`。`num <= 0` → 空。
+- **`coil.full(n: i64, value: f64) -> Buffer`** —— 一个含 `n` 份 `value`
+  拷贝的 1-D buffer。`full(3, 5.0)` 是 `[5, 5, 5]`。`n <= 0` → 空 buffer
+  (负 `n` clamp 到 `0`,与 `coil.zeros` 一致)。
+
+> 为什么没有 `endpoint` / `base` / `num=50` 这些默认关键字参数?`.cb`
+> 表面让这些构造器保持**位置参数且显式** —— numpy 的默认值
+> (`num=50`、`endpoint=True`、`base=10.0`)正是优雅账本要丢弃的、易踩坑
+> 的隐式状态。你总是显式写出数量;含端点 + 以 10 为底是常见情形,未来若
+> 真实代码需要 `endpoint=False` / 自定义 `base` 形式,会作为已记录的后续
+> 项跟进。
+
 ## 统计 —— 标量归约(`mean` / `median` / `std` / `var` / `min` / `max` / `prod` / `ptp` / `nan*` / `percentile`)
 
 这些函数都把整个 buffer 归约成**一个 `f64`** —— 与 LLM 为 numpy 写出的

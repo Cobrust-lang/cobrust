@@ -3355,6 +3355,17 @@ impl<'ctx> LlvmEmitter<'ctx> {
             false,
         );
         let coil_array1d2_ty = ptr_ty.fn_type(&[f64_ty.into(), f64_ty.into()], false);
+        // #145 BATCH 11 — spacing/value CONSTRUCTORS. All-scalar-arg Buffer
+        // producers (NO Buffer input). `linspace`/`logspace` are
+        // `(f64, f64, i64) -> ptr` (start, stop, num); `full` is
+        // `(i64, f64) -> ptr` (n, value). The MIXED-scalar-arg shape rides
+        // the SAME generic ecosystem-call lowering — codegen only declares
+        // the externs (no batch-specific arm; the flat `__cobrust_coil_*`
+        // recognizer prefix). `array2x2`'s 4×f64→ptr proves f64-scalar→ptr;
+        // `roll`'s (ptr, i64)→ptr proves the i64-scalar coercion.
+        let coil_linspace_ty =
+            ptr_ty.fn_type(&[f64_ty.into(), f64_ty.into(), i64_ty.into()], false);
+        let coil_full_ty = ptr_ty.fn_type(&[i64_ty.into(), f64_ty.into()], false);
         for (sym, ty, params) in [
             // solve: (ptr, ptr) -> ptr ≡ coil_binop_ty;
             // inv:   (ptr) -> ptr      ≡ coil_shape_ty;
@@ -3365,6 +3376,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_array2x2", coil_array2x2_ty, 4),
             ("__cobrust_coil_array2x3", coil_array2x3_ty, 6),
             ("__cobrust_coil_array1d2", coil_array1d2_ty, 2),
+            // #145 BATCH 11 spacing/value ctors: (f64, f64, i64) -> ptr +
+            // (i64, f64) -> ptr.
+            ("__cobrust_coil_linspace", coil_linspace_ty, 3),
+            ("__cobrust_coil_logspace", coil_linspace_ty, 3),
+            ("__cobrust_coil_full", coil_full_ty, 2),
             // #145 array-MANIPULATION Buffer-returning ops. The 1-arg
             // reshape ops (`transpose`/`flatten`/`ravel`) are `(ptr) -> ptr`
             // ≡ `coil_shape_ty`; the 2-array combine ops (`concatenate`/

@@ -1360,6 +1360,49 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Numerical,
         )),
+        // #145 gap-closure BATCH 11 (2026-06-02) — the spacing / value
+        // CONSTRUCTORS `linspace` / `logspace` / `full`. ALL-SCALAR-ARG
+        // Buffer producers (NO Buffer input) that allocate a fresh
+        // `Float64` 1-D buffer — the EXACT shape of `coil.zeros(n)` /
+        // `coil.array2x2(f64×4)` / `coil.array1d2(f64×2)`. They extend the
+        // all-scalar ctor family with a MIXED-scalar-type arg list:
+        // - `coil.linspace(start, stop, num) -> Buffer` —
+        //   `[Float, Float, Int]`. `num` evenly-spaced f64 samples over
+        //   `[start, stop]` INCLUSIVE (numpy `endpoint=True`). The FIRST
+        //   coil ctor mixing `Ty::Float` + `Ty::Int` scalar args (proven
+        //   to cross by `array2x2`'s f64 args + `roll`'s trailing i64).
+        // - `coil.logspace(start, stop, num) -> Buffer` — same arg shape;
+        //   `10 ** linspace(start, stop, num)`.
+        // - `coil.full(n, value) -> Buffer` — `[Int, Float]`. `n` copies
+        //   of `value` (`np.full(3, 5.0) == [5, 5, 5]`).
+        //
+        // Tier `Semantic` — `linspace` / `logspace` agree with numpy to
+        // `rtol = 1e-12` (the docstring-corpus shape, float-producing per
+        // `constructors.rs` `@py_compat(numerical(rtol=1e-12))`); `full`
+        // is bit-exact (an exact copy, no floating arithmetic) but rides
+        // the SAME tier for a uniform constructor surface. NO new MIR /
+        // typecheck code — the generic `try_lower_ecosystem_call` Case-1
+        // module-fn loop iterates `sig.params` regardless of arity or
+        // scalar `Ty` (the `array2x2(f64×4)` + `roll(a, i64)` paths prove
+        // both `Ty::Float` and `Ty::Int` scalar args lower + codegen).
+        ("coil", "linspace") => Some(EcoSig::from_values(
+            "__cobrust_coil_linspace",
+            vec![Ty::Float, Ty::Float, Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "logspace") => Some(EcoSig::from_values(
+            "__cobrust_coil_logspace",
+            vec![Ty::Float, Ty::Float, Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "full") => Some(EcoSig::from_values(
+            "__cobrust_coil_full",
+            vec![Ty::Int, Ty::Float],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         // ADR-0076 Phase 1 — `dora` (dora-rs robotics dataflow,
         // ninth ecosystem module). Phase 1 ships SYNTHETIC runtime;
         // the explicit registration form `dora.node(handler)` stands in
@@ -3208,6 +3251,37 @@ mod tests {
         assert_eq!(sig.runtime_symbol, "__cobrust_coil_eye");
         assert_eq!(value_tys(&sig.params), vec![Ty::Int]);
         assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    // #145 BATCH 11 — spacing/value constructor manifest tests. The FIRST
+    // coil ctors mixing `Ty::Float` + `Ty::Int` scalar args (linspace /
+    // logspace are `[Float, Float, Int]`; full is `[Int, Float]`).
+
+    #[test]
+    fn coil_linspace_signature_float_float_int_to_buffer() {
+        let sig = lookup_module_fn("coil", "linspace").expect("coil.linspace in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_linspace");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Float, Ty::Float, Ty::Int]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn coil_logspace_signature_float_float_int_to_buffer() {
+        let sig = lookup_module_fn("coil", "logspace").expect("coil.logspace in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_logspace");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Float, Ty::Float, Ty::Int]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn coil_full_signature_int_float_to_buffer() {
+        let sig = lookup_module_fn("coil", "full").expect("coil.full in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_full");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Int, Ty::Float]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
     }
 
     #[test]

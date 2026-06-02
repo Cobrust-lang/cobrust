@@ -125,8 +125,8 @@ pub use crate::broadcast::broadcast_shape;
 pub use crate::broadcast_extra::broadcast_to_1d;
 pub use crate::constructors::{
     LinspaceResult, NestedList, arange, arange_count, array, array_bool, array_f32, array_f64,
-    array_from_nested, array_i32, array_i64, diag, eye, linspace, logspace, ones, tri, tril, triu,
-    zeros,
+    array_from_nested, array_i32, array_i64, diag, eye, full, linspace, logspace, ones, tri, tril,
+    triu, zeros,
 };
 pub use crate::dtype::{Dtype, FloatInfo, FloatKind, IntInfo, IntKind, finfo, iinfo};
 pub use crate::elementwise::{

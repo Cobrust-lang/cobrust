@@ -43,6 +43,48 @@ cobrust build prog.cb -o prog
   numpy-compatible `array_repr` to stdout. Returns `0` on success;
   `-1` if the receiver is null (defensive).
 
+## Spacing & value constructors (`linspace` / `logspace` / `full`)
+
+Three more all-scalar-arg constructors — they take only **numbers**
+(no buffer input) and produce a fresh `float64` 1-D buffer. These are
+the numpy spacing / fill constructors most-used in real code:
+
+```text
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.linspace(0.0, 1.0, 5)   # [0, 0.25, 0.5, 0.75, 1]
+    let _ = coil.print_buffer(a)                       # endpoint-inclusive
+    let b: coil.Buffer = coil.logspace(0.0, 2.0, 3)   # [1, 10, 100]
+    let _ = coil.print_buffer(b)                       # = 10 ** linspace
+    let c: coil.Buffer = coil.full(3, 5.0)            # [5, 5, 5]
+    let _ = coil.print_buffer(c)                       # n copies of value
+    let m: f64 = coil.mean(coil.linspace(0.0, 10.0, 5))  # mean([0,2.5,5,7.5,10])
+    print((m as i64))                                  # 5
+    return 0
+```
+
+- **`coil.linspace(start: f64, stop: f64, num: i64) -> Buffer`** — `num`
+  evenly-spaced samples over `[start, stop]`, **inclusive of `stop`**
+  (numpy's `endpoint=True` default — `linspace(0, 1, 5)` is
+  `[0, 0.25, 0.5, 0.75, 1]`, and the last sample is **exactly** `stop`,
+  no float drift). The step is `(stop - start) / (num - 1)`. Edge cases
+  match numpy: `num == 1` → `[start]`; `num <= 0` → an empty buffer.
+- **`coil.logspace(start: f64, stop: f64, num: i64) -> Buffer`** — `num`
+  samples spaced evenly on a base-10 **log** scale: `10 ** linspace(start,
+  stop, num)`. `logspace(0, 2, 3)` is `[1, 10, 100]`. `num <= 0` → empty.
+- **`coil.full(n: i64, value: f64) -> Buffer`** — a 1-D buffer of `n`
+  copies of `value`. `full(3, 5.0)` is `[5, 5, 5]`. `n <= 0` → an empty
+  buffer (a negative `n` clamps to `0`, like `coil.zeros`).
+
+> Why no `endpoint` / `base` / `num=50` default keyword args? The `.cb`
+> surface keeps these constructors **positional and explicit** — numpy's
+> defaults (`num=50`, `endpoint=True`, `base=10.0`) are exactly the
+> footgun-prone implicit state the elegance ledger drops. You always
+> write the count; the endpoint-inclusive + base-10 behavior is the
+> common case, and a future `endpoint=False` / custom-`base` form is a
+> tracked follow-up if real code needs it.
+
 ## Statistics — scalar reductions (`mean` / `median` / `std` / `var` / `min` / `max` / `prod` / `ptp` / `nan*` / `percentile`)
 
 Each of these reduces a whole buffer to **one `f64`** — the same shape an

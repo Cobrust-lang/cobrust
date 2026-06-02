@@ -94,6 +94,42 @@ pub fn ones(shape: &[usize], dtype: Dtype) -> Result<Array, NumpyError> {
     })
 }
 
+/// `numpy.full(shape, fill_value, dtype=...)`-equivalent. Allocates an
+/// array of the given shape and dtype with every element set to
+/// `fill_value`.
+///
+/// The `.cb` surface `coil.full(n, value)` makes a 1-D `Float64` buffer
+/// of `n` copies of `value` (`np.full(3, 5.0) == [5., 5., 5.]`). The
+/// `fill_value` is taken as `f64` and cast to the target dtype for the
+/// integer variants (truncation toward zero, matching numpy's cast), so
+/// even the integer-dtype forms are value-faithful for integral fills.
+///
+/// `@py_compat(strict)` — the fill is an exact copy (no floating
+/// arithmetic), so every dtype form is bit-exact vs numpy.
+///
+/// # Errors
+/// Mirrors `zeros` / `ones` (the complex-dtype arm is unreachable for the
+/// `Float64` `.cb` surface; reserved for the `Array` tagged-union
+/// widening per M7.6 ADR-0021).
+pub fn full(shape: &[usize], fill_value: f64, dtype: Dtype) -> Result<Array, NumpyError> {
+    let dim = shape_to_ix_dyn(shape);
+    Ok(match dtype {
+        Dtype::Int32 => Array::Int32(ArrayD::<i32>::from_elem(dim, fill_value as i32)),
+        Dtype::Int64 => Array::Int64(ArrayD::<i64>::from_elem(dim, fill_value as i64)),
+        Dtype::Float32 => Array::Float32(ArrayD::<f32>::from_elem(dim, fill_value as f32)),
+        Dtype::Float64 => Array::Float64(ArrayD::<f64>::from_elem(dim, fill_value)),
+        Dtype::Bool => Array::Bool(ArrayD::<bool>::from_elem(dim, fill_value != 0.0)),
+        Dtype::Complex64 | Dtype::Complex128 => {
+            return Err(NumpyError {
+                kind: NumpyErrorKind::LinalgDtypeUnsupported,
+                message: format!(
+                    "full: complex dtype {dtype} requires Array tagged-union widening; M7.6 ADR-0021 ships dtype tier only"
+                ),
+            });
+        }
+    })
+}
+
 /// `numpy.array(values).reshape(shape).astype(dtype)`-equivalent.
 /// Takes a flat `f64` buffer (caller f64-casts integer inputs) plus a
 /// shape and dtype, and constructs the `Array`.
@@ -1097,5 +1133,67 @@ mod tests {
         assert!((v[0] - 1.0).abs() < 1e-12);
         assert!((v[1] - 4.641_588_833_612_778).abs() < 1e-12);
         assert!((v[2] - 21.544_346_900_318_832).abs() < 1e-12);
+    }
+
+    // ---- BATCH 11 — spacing/value constructor `.cb`-shim contracts ------
+    // The `coil.linspace(start, stop, num)` / `coil.logspace(...)` shims
+    // call the kernels with `endpoint=true` (numpy's default). These tests
+    // pin the BIT-EXACT endpoint-inclusive contract the shims rely on.
+    // Oracle: numpy 2.x via `/opt/homebrew/bin/python3.11`.
+
+    #[test]
+    fn linspace_endpoint_last_is_stop_bit_exact() {
+        // np.linspace(0,1,5)[4] is EXACTLY 1.0 (numpy pins the endpoint to
+        // `stop` to avoid float drift). Bit-exact, not within-tolerance.
+        let r = linspace(0.0, 1.0, 5, true, Dtype::Float64).unwrap();
+        let v = as_f64(&r.array);
+        assert_eq!(v[4], 1.0);
+        // Bit-identical to `stop` (no `start + 4*step` rounding residue).
+        assert_eq!(v[4].to_bits(), 1.0_f64.to_bits());
+    }
+
+    #[test]
+    fn linspace_2_3_2_both_endpoints() {
+        // np.linspace(2,3,2) -> [2.0, 3.0]: num==2 yields exactly the two
+        // endpoints, last == stop bit-exactly.
+        let r = linspace(2.0, 3.0, 2, true, Dtype::Float64).unwrap();
+        assert_eq!(as_f64(&r.array), vec![2.0, 3.0]);
+        assert_eq!(as_f64(&r.array)[1].to_bits(), 3.0_f64.to_bits());
+        assert!((r.step - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn linspace_0_10_5_step_is_2point5() {
+        // np.linspace(0,10,5) -> [0, 2.5, 5, 7.5, 10]; step = 10/(5-1) = 2.5.
+        let r = linspace(0.0, 10.0, 5, true, Dtype::Float64).unwrap();
+        assert_eq!(as_f64(&r.array), vec![0.0, 2.5, 5.0, 7.5, 10.0]);
+        assert!((r.step - 2.5).abs() < 1e-15);
+    }
+
+    // ---- BATCH 11 — `full` kernel (differential vs numpy) ----------------
+
+    #[test]
+    fn full_3_copies_of_5() {
+        // np.full(3, 5.0) -> [5., 5., 5.] float64.
+        let a = full(&[3], 5.0, Dtype::Float64).unwrap();
+        assert_eq!(a.shape(), vec![3]);
+        assert_eq!(as_f64(&a), vec![5.0, 5.0, 5.0]);
+        assert_eq!(a.dtype(), Dtype::Float64);
+    }
+
+    #[test]
+    fn full_0_is_empty() {
+        // np.full(0, 5.0) -> [] (empty, shape [0]).
+        let a = full(&[0], 5.0, Dtype::Float64).unwrap();
+        assert_eq!(a.size(), 0);
+        assert_eq!(a.shape(), vec![0]);
+        assert_eq!(a.dtype(), Dtype::Float64);
+    }
+
+    #[test]
+    fn full_negative_fill_value() {
+        // np.full(2, -1.5) -> [-1.5, -1.5] — the fill is an exact copy.
+        let a = full(&[2], -1.5, Dtype::Float64).unwrap();
+        assert_eq!(as_f64(&a), vec![-1.5, -1.5]);
     }
 }

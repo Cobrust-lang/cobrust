@@ -2626,6 +2626,138 @@ riding proven paths (NO new MIR arm):
       (`Cargo.lock` unchanged — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## #145 numpy gap-closure BATCH 11 — the spacing/value CONSTRUCTORS (DONE)
+
+The spacing / value CONSTRUCTORS `linspace` / `logspace` / `full`. Unlike
+every prior `#145` batch (which took a Buffer arg + returned a Buffer or
+scalar), these are **ALL-SCALAR-ARG producers** (NO Buffer input) that
+allocate a fresh `Float64` 1-D Buffer the caller owns + scope-exit drops —
+the EXACT shape of the `coil.zeros(n)` / `coil.array2x2(f64×4)` /
+`coil.array1d2(f64×2)` constructors. They extend the all-scalar ctor
+family with a **MIXED-scalar-type** arg list (the FIRST coil ctors mixing
+`Ty::Float` + `Ty::Int` in one signature).
+
+### Signatures
+
+- `.cb`: `coil.linspace(start: f64, stop: f64, num: i64) -> coil.Buffer`,
+  `coil.logspace(start: f64, stop: f64, num: i64) -> coil.Buffer`,
+  `coil.full(n: i64, value: f64) -> coil.Buffer`.
+- runtime symbols: `__cobrust_coil_linspace(start: f64, stop: f64, num:
+  i64) -> *mut Buffer`, `__cobrust_coil_logspace(...)` (same shape),
+  `__cobrust_coil_full(n: i64, value: f64) -> *mut Buffer`.
+
+### numpy semantics (numpy 2.x oracle via `/opt/homebrew/bin/python3.11`)
+
+- `linspace`: `num` evenly-spaced samples over `[start, stop]`, INCLUSIVE
+  of `stop` (numpy's `endpoint=True` default; the `.cb` shim always passes
+  `endpoint=true`). `np.linspace(0, 1, 5) == [0, 0.25, 0.5, 0.75, 1]`,
+  step = `(stop - start) / (num - 1)`. The LAST sample is pinned to `stop`
+  **bit-exactly** (`np.linspace(0,1,5)[4]` is EXACTLY `1.0`, not
+  `start + 4*step`'s rounding residue — the kernel `linspace_values` sets
+  `out[num-1] = stop`). Edge cases: `num == 1` → `[start]` (single sample);
+  `num <= 0` → EMPTY buffer (the shim clamps a negative/zero `num` via
+  `clamp_to_usize`, like `coil.zeros(-1)`). `np.linspace(2,3,2) == [2, 3]`
+  (both endpoints).
+- `logspace`: `10 ** linspace(start, stop, num)` — `num` samples on a
+  base-10 log scale, INCLUSIVE of the `stop` exponent. `np.logspace(0, 2,
+  3) == [1, 10, 100]`. `num <= 0` → empty. (The shim passes `base = 10.0`,
+  `endpoint = true`.)
+- `full`: a 1-D buffer of `n` copies of `value`. `np.full(3, 5.0) == [5,
+  5, 5]`. `n <= 0` → EMPTY (`np.full(0, x) == []`, `np.full(-1, x) == []`
+  — the shim clamps a negative `n` to `0`).
+
+### Kernels (`constructors.rs`)
+
+- `linspace` / `logspace` PRE-EXISTED (Stream W item 3) as
+  `linspace(start, stop, num: usize, endpoint, dtype) -> LinspaceResult`
+  and `logspace(..., base, dtype) -> Array`, sharing the `linspace_values`
+  helper (the endpoint-pin `out[num-1] = stop` lives there). BATCH 11 adds
+  the `.cb`-facing SHIMS that call them with numpy's defaults; the kernels
+  are unchanged. `@py_compat(numerical(rtol=1e-12))`.
+- `full(shape: &[usize], fill_value: f64, dtype) -> Array` is NEW —
+  mirrors `ones` (`ArrayD::from_elem`), taking a caller fill value;
+  `@py_compat(strict)` (an exact copy, no floating arithmetic). 3 NEW
+  kernel unit tests (3-copy + n=0 empty + negative fill) + 3 NEW shim-
+  contract tests on the linspace kernel (endpoint `[4]` bit-exact via
+  `to_bits`; the 2-point `[2,3]` both-endpoint; the `[0,2.5,5,7.5,10]`
+  step-2.5 case).
+
+### cabi (`cabi.rs`)
+
+- 3 shims, ALL all-scalar-arg producers (NO borrow — nothing to free),
+  fresh `Box::into_raw`, TOTAL (a `num`/`n <= 0` yields an EMPTY buffer; no
+  `coil_panic` domain trap — there is no null-handle path since there is no
+  handle arg). `linspace`/`logspace` clamp `num` via `clamp_to_usize` +
+  call the kernel with `endpoint=true` (`base=10.0` for logspace); `full`
+  clamps `n` + calls `coil_full(&[n], value, Float64)`. 5 NEW shim tests
+  (linspace mean==5 round-trip + drop-once; linspace num=0 empty → NaN
+  mean; logspace mean==37; full mean==7 + drop-once; full n=0/n=-1 empty →
+  NaN mean) — values asserted via `__cobrust_coil_mean` (proves the fresh
+  ctor handle feeds another op).
+
+### Manifest (`cobrust-types/src/ecosystem.rs`)
+
+- 3 module-fn arms: `linspace`/`logspace`
+  `EcoSig::from_values("__cobrust_coil_<op>", vec![Ty::Float, Ty::Float,
+  Ty::Int], coil_buffer_ty(), Semantic)`; `full` `vec![Ty::Int,
+  Ty::Float]`. Tier `Semantic` — `linspace`/`logspace` agree to `rtol =
+  1e-12` (float-producing); `full` is bit-exact but rides the same tier for
+  a uniform ctor surface. 3 sig tests.
+
+### Typecheck / MIR — ZERO new code
+
+- All 3 ride the GENERIC `try_lower_ecosystem_call` **Case-1** module-fn
+  loop (`base` is `Name(import-alias)`, no receiver) — the SAME path
+  `coil.zeros` / `coil.array2x2` / `coil.array1d2` use. The loop iterates
+  `sig.params` regardless of arity OR scalar `Ty`: `lower_eco_arg`'s
+  `Value` arm lowers each `.cb` scalar literal directly (the f64 args as
+  `Ty::Float` operands like `array2x2`; the i64 arg as a plain i64 operand
+  like `roll`'s trailing scalar), and the codegen extern-call width
+  coercion forwards them into the `(f64, f64, i64) -> ptr` /
+  `(i64, f64) -> ptr` externs. The fresh return is drop-scheduled by
+  `emit_ecosystem_call`. NO `_=>"any"` MIR gap; VERIFIED via E2E
+  (`cobrust-mir` recompiled with no source change). None of `linspace` /
+  `logspace` / `full` is a Cobrust keyword → clean `Attr { base: coil,
+  name: <op> }` parse, no parser accommodation.
+
+### Codegen (`llvm_backend.rs`)
+
+- 2 NEW extern fn-types: `coil_linspace_ty` = `(f64, f64, i64) -> ptr`
+  (shared by `linspace` + `logspace`), `coil_full_ty` = `(i64, f64) ->
+  ptr`. 3 register rows in the `__cobrust_coil_array*` cluster (same flat
+  `__cobrust_coil_*` recognizer prefix; no batch-specific arm). The
+  mixed-scalar `(f64, f64, i64)` shape is NEW (prior ctors were uniform
+  f64×N or i64×N); `array2x2`'s f64→ptr + `roll`'s (ptr, i64)→ptr together
+  prove both scalar widths lower + forward.
+
+### Done means (#145 BATCH 11 — DONE)
+
+- [x] `constructors.rs`: `full` kernel (NEW, mirrors `ones`); `linspace` /
+      `logspace` kernels reused (Stream W). 6 NEW unit tests (3 `full` +
+      3 linspace shim-contract: endpoint bit-exact, 2-point, step-2.5).
+- [x] cabi: 3 all-scalar-arg producer shims (NO borrow, TOTAL, clamp
+      `num`/`n` via `clamp_to_usize`). 5 shim tests (round-trip-mean +
+      empty + drop-once).
+- [x] Manifest: 3 ecosystem arms (`[Float, Float, Int] -> Buffer` ×2,
+      `[Int, Float] -> Buffer`), tier `Semantic`. 3 sig tests.
+- [x] Typecheck / MIR: NO new code (VERIFIED via E2E — all ride the
+      `coil.zeros`/`array2x2` Case-1 module-fn loop; the FIRST coil ctors
+      mixing `Ty::Float` + `Ty::Int` args). No parser accommodation.
+- [x] Codegen: 2 NEW extern fn-types (`(f64,f64,i64)->ptr` +
+      `(i64,f64)->ptr`); 3 register rows.
+- [x] `.cb` E2E `coil_construct_e2e.rs` (10 tests): linspace `[0,.25,.5,
+      .75,1]` (endpoint-inclusive) + `[0,2.5,5,7.5,10]` (step 2.5) +
+      `[2,3]` (2-point) + `[0]` (num=1); logspace `[1,10,100]`; full
+      `[5,5,5]`; mean(linspace)==5 + mean(full)==7 CHAINS (ctor feeds
+      reducer); 2 negative type-error proofs (linspace rejects str `num`,
+      full rejects str `value`).
+- [x] No regression: full `cobrust-coil` suite green; `coil_construct_e2e`
+      + `coil_hello_e2e` all green, run ONE `--test` at a time (F73
+      libcoil.a build-race avoidance); touched crates (`cobrust-coil` +
+      `cobrust-codegen` + `cobrust-types`) build + clippy `-D warnings` +
+      fmt clean; no new dep (`Cargo.lock` unchanged — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend
