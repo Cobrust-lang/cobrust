@@ -317,12 +317,18 @@ fn test_e2e_chain_sin_of_arcsin_round_trips() {
     let (_dir, exe) = compile_source(source);
     let (stdout, stderr, ok) = run(&exe);
     assert!(ok, "non-zero exit; stdout=\n{stdout}\nstderr=\n{stderr}");
-    // sin(arcsin(0.5)) = 0.49999999999999994 (IEEE round-trip — NOT exactly
-    // 0.5); sin(arcsin(-0.25)) = -0.25 (exact). We assert the leading digits
-    // of the round-trip rather than an exact 0.5 (the inner arcsin + outer
-    // sin each introduce one ULP).
+    // sin(arcsin(0.5)) round-trips to ~0.5, but the LAST ULP is
+    // PLATFORM-DEPENDENT: macOS libm gives 0.49999999999999994, ubuntu gives
+    // exactly 0.5 (the inner arcsin + outer sin each introduce one ULP, and the
+    // two platforms' libm round the boundary differently). Accept BOTH forms —
+    // the round-trip IDENTITY (~0.5) is the proof, not a platform-specific last
+    // digit. sin(arcsin(-0.25)) = -0.25 (exact on both).
+    // [transcendental e2e last-ULP lesson — assert the identity, not the exact
+    // float string; cf. the batch-13 ±0.0 platform-determinism fix.]
+    let first_ok =
+        stdout.contains("0.49999999999999") || stdout.contains("0.5,");
     assert!(
-        stdout.contains("0.4999999999999999") && stdout.contains("-0.25"),
+        first_ok && stdout.contains("-0.25"),
         "expected sin(arcsin([0.5,-0.25])) ~ [0.5, -0.25] (round-trip identity); \
          got stdout=\n{stdout}",
     );
