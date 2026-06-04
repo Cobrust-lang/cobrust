@@ -87,10 +87,11 @@ use crate::constructors::{
 };
 use crate::dtype::Dtype;
 use crate::elementwise::{
-    abs as coil_abs, cbrt as coil_cbrt, ceil as coil_ceil, clip as coil_clip, cos as coil_cos,
-    cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2, floor as coil_floor, fmax as coil_fmax,
-    fmin as coil_fmin, isfinite as coil_isfinite, isinf as coil_isinf, isnan as coil_isnan,
-    log as coil_log, log2 as coil_log2, log10 as coil_log10, maximum as coil_maximum,
+    abs as coil_abs, arctan2 as coil_arctan2, cbrt as coil_cbrt, ceil as coil_ceil,
+    clip as coil_clip, cos as coil_cos, cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2,
+    floor as coil_floor, fmax as coil_fmax, fmin as coil_fmin, hypot as coil_hypot,
+    isfinite as coil_isfinite, isinf as coil_isinf, isnan as coil_isnan, log as coil_log,
+    log2 as coil_log2, log10 as coil_log10, logaddexp as coil_logaddexp, maximum as coil_maximum,
     minimum as coil_minimum, power as coil_power, round as coil_round, sign as coil_sign,
     sin as coil_sin, sinh as coil_sinh, sqrt as coil_sqrt, square as coil_square, tan as coil_tan,
     tanh as coil_tanh, trunc as coil_trunc,
@@ -1225,6 +1226,70 @@ pub unsafe extern "C" fn __cobrust_coil_fmax(a: *mut u8, b: *mut u8) -> *mut u8 
 pub unsafe extern "C" fn __cobrust_coil_fmin(a: *mut u8, b: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_combine(a, b, "fmin", coil_fmin) }
+}
+
+// =====================================================================
+// #145 gap-closure BATCH 15 (2026-06-05) — the 2-Buffer FLOAT ufuncs
+// `arctan2` / `hypot` / `logaddexp`. Each is a 2-Buffer `(ptr, ptr) ->
+// ptr` shim riding the IDENTICAL `buffer_combine` shared body as the
+// BATCH-13 min/max family (`maximum` / `minimum` / `fmax` / `fmin`) and
+// the `concatenate` / `vstack` / `hstack` combine ops: BORROWS both
+// handles (the `.cb` scope still owns + drops them), applies the
+// `Result`-returning kernel, and `coil_panic`s on a non-conformable /
+// dtype-mismatch pair (numpy raises `ValueError`) — NEVER unwinding a
+// Rust `Err` across the C-ABI. The ONLY differences from the min/max
+// shims live in the Rust kernel (`elementwise.rs`): FLOAT-PROMOTING
+// output (int->f64, f32->f32) + the per-op float math
+// (`arctan2`/`hypot`/`logaddexp`). The ABI is byte-identical, so codegen
+// reuses the `coil_binop_ty` `(ptr,ptr)->ptr` extern shape (NO new
+// fn-type). `arctan2`'s arg order is `(y, x)` — Y FIRST (numpy) — and the
+// shim forwards `(a, b)` to `coil_arctan2(y=a, x=b)` so the `.cb`
+// `coil.arctan2(y, x)` call site is numpy-faithful.
+// =====================================================================
+
+/// `coil.arctan2(y, x) -> Buffer`. The angle (radians, `(-pi, pi]`) of the
+/// point `(x, y)`, elementwise — **arg order `(y, x)`, Y FIRST** (numpy;
+/// `arctan2(1,0)=pi/2`, NOT `0`). **Float-promoting** (int->f64, f32->f32).
+/// BORROWS both handles; returns a fresh owned handle. A non-conformable /
+/// dtype-mismatch pair `coil_panic`s (numpy raises `ValueError`).
+///
+/// # Safety
+///
+/// `y` and `x` must be live `Buffer` handles (not yet dropped). The
+/// returned pointer is a freshly-Boxed handle the `.cb` caller owns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_arctan2(y: *mut u8, x: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation. Arg order (y, x) — Y FIRST,
+    // forwarded verbatim so `coil_arctan2(y, x)` is numpy-faithful.
+    unsafe { buffer_combine(y, x, "arctan2", coil_arctan2) }
+}
+
+/// `coil.hypot(x, y) -> Buffer`. The Euclidean norm `sqrt(x*x + y*y)`
+/// (hypotenuse), elementwise, **OVERFLOW-SAFE** (`hypot(1e308,1e308)` is
+/// finite). **Float-promoting** (int->f64, f32->f32). BORROWS both handles.
+/// A non-conformable / dtype-mismatch pair `coil_panic`s.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_arctan2`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_hypot(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_combine(a, b, "hypot", coil_hypot) }
+}
+
+/// `coil.logaddexp(a, b) -> Buffer`. `log(exp(a) + exp(b))`, elementwise,
+/// computed **NUMERICALLY STABLY** (`logaddexp(1000,1000)=1000+ln2`, NOT
+/// `+inf`). **Float-promoting** (int->f64, f32->f32). BORROWS both handles.
+/// A non-conformable / dtype-mismatch pair `coil_panic`s.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_arctan2`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_logaddexp(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_combine(a, b, "logaddexp", coil_logaddexp) }
 }
 
 // =====================================================================
@@ -3855,5 +3920,89 @@ mod tests {
         }
         // a + l + u = 3 fresh handles, each dropped once.
         assert_eq!(drop_count() - before, 3, "input + 2 results drop once each");
+    }
+
+    // -- #145 BATCH 15: arctan2 / hypot / logaddexp 2-Buffer FLOAT shims ----
+
+    /// `coil.arctan2(y, x)` shim — the `(y, x)` ARG ORDER is load-bearing.
+    /// `arctan2([1,1],[1,0]) = [pi/4, pi/2]` (Y FIRST: lane 1 is `pi/2`, NOT
+    /// `0` as a swapped `atan2(0,1)` would give). Float-promoting f64 result;
+    /// borrows both, fresh result drops once (3 handles).
+    #[test]
+    fn arctan2_shim_arg_order_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            // y = [1, 1], x = [1, 0]  ->  [pi/4, pi/2]
+            let y = __cobrust_coil_array1d2(1.0, 1.0);
+            let x = __cobrust_coil_array1d2(1.0, 0.0);
+            let r = __cobrust_coil_arctan2(y, x);
+            // f64::to_string reprs: pi/4 = 0.7853981633974483,
+            // pi/2 = 1.5707963267948966. The lane-1 value pins Y FIRST.
+            assert_eq!(
+                array_repr(&*r.cast::<Array>()),
+                "array([0.7853981633974483, 1.5707963267948966], dtype=float64)",
+                "arctan2(y=[1,1], x=[1,0]) = [pi/4, pi/2] — lane 1 pi/2 proves Y FIRST",
+            );
+            __cobrust_coil_buffer_drop(y);
+            __cobrust_coil_buffer_drop(x);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(drop_count() - before, 3, "y + x + result drop once each");
+    }
+
+    /// `coil.hypot(x, y)` shim — `hypot([3,5],[4,12]) = [5, 13]` (the classic
+    /// Pythagorean triples). f64 result renders integer-valued floats without
+    /// `.0`. Borrows both, fresh result drops once (3 handles).
+    #[test]
+    fn hypot_shim_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let x = __cobrust_coil_array1d2(3.0, 5.0);
+            let y = __cobrust_coil_array1d2(4.0, 12.0);
+            let r = __cobrust_coil_hypot(x, y);
+            assert_eq!(
+                array_repr(&*r.cast::<Array>()),
+                "array([5, 13], dtype=float64)",
+                "hypot([3,5],[4,12]) = [5, 13]",
+            );
+            __cobrust_coil_buffer_drop(x);
+            __cobrust_coil_buffer_drop(y);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(drop_count() - before, 3, "x + y + result drop once each");
+    }
+
+    /// `coil.logaddexp(a, b)` shim — STABLE for large inputs:
+    /// `logaddexp([0,1000],[0,1000]) = [ln2, 1000+ln2]` (the lane-1 value is
+    /// FINITE; a naive `log(exp+exp)` overflows to `+inf`). f64 result.
+    /// Borrows both, fresh result drops once (3 handles).
+    #[test]
+    fn logaddexp_shim_stable_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(0.0, 1000.0);
+            let b = __cobrust_coil_array1d2(0.0, 1000.0);
+            let r = __cobrust_coil_logaddexp(a, b);
+            // f64 reprs: ln2 = 0.6931471805599453, 1000+ln2 = 1000.6931471805599.
+            // The lane-1 FINITE value is the stability proof.
+            assert_eq!(
+                array_repr(&*r.cast::<Array>()),
+                "array([0.6931471805599453, 1000.6931471805599], dtype=float64)",
+                "logaddexp([0,1000],[0,1000]) = [ln2, 1000+ln2] — lane 1 FINITE (STABLE)",
+            );
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(drop_count() - before, 3, "a + b + result drop once each");
     }
 }

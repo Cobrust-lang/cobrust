@@ -3048,6 +3048,117 @@ diagonal); the `k=` offset is a documented deferral.
       fmt clean; no new dep (`Cargo.lock` unchanged — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## #145 numpy gap-closure BATCH 15 — the 2-Buffer FLOAT ufuncs `arctan2` / `hypot` / `logaddexp` (DONE)
+
+The three 2-Buffer FLOAT ufuncs (geometry + ML; `arctan2`/`hypot` are
+robotics-relevant for the dora pillar). Each is a 2-Buffer
+`(Buffer a, Buffer b) -> Buffer` op wired BYTE-IDENTICALLY to the BATCH-13
+min/max family (`maximum` / `minimum` / `fmax` / `fmin`): the cabi shim
+rides the SAME `buffer_combine` shared body (borrows BOTH handles → fresh
+`Box::into_raw`), the manifest is a `[Buffer, Buffer] -> Buffer` `EcoSig`,
+and codegen reuses the `coil_binop_ty` `(ptr, ptr) -> ptr` extern shape.
+The ONLY differences from min/max live in the Rust kernel
+(`elementwise.rs`): FLOAT-PROMOTING output + the per-op float math.
+
+### The float math (load-bearing — numpy-confirmed + tested)
+
+- **`arctan2(y, x)`** — the angle (radians, `(-π, π]`) of the point
+  `(x, y)`. numpy ARG ORDER IS `(y, x)` — **Y FIRST** (= Rust `f64::atan2`,
+  `y.atan2(x)`); the shim forwards `(a, b)` to `coil_arctan2(y=a, x=b)`.
+  `arctan2(1,1)=π/4`, `arctan2(1,0)=π/2` (NOT `0` — a swapped y/x → `0`),
+  `arctan2(0,-1)=π`, `arctan2(-1,0)=-π/2`. Tested across all 4 quadrants +
+  a swap-detector.
+- **`hypot(x, y)`** — `sqrt(x*x + y*y)`, the Euclidean norm, OVERFLOW-SAFE
+  via Rust `f64::hypot` (scales to avoid the intermediate `x*x` overflow).
+  `hypot(3,4)=5`; `hypot(1e308,1e308)` FINITE (`≈1.41e308`) where a naive
+  `sqrt(x*x+y*y)` → `+inf`. The overflow-safety is pinned (tests confirm
+  the naive form WOULD overflow).
+- **`logaddexp(a, b)`** — `log(exp(a)+exp(b))`, computed STABLY as
+  `max(a,b) + ln_1p(exp(-|a-b|))` (the naive form overflows for large
+  inputs). `logaddexp(0,0)=ln2`; `logaddexp(1000,1000)=1000+ln2` FINITE
+  where naive `log(exp+exp)` → `+inf`. The `m.is_infinite()` guard returns
+  `m` for `±inf` (`logaddexp(-inf,-inf)=-inf`; without it `-inf - -inf =
+  NaN` poisons the `exp` term). Stability + the `-inf` case pinned.
+
+### DTYPE PROMOTION (the FLOAT-PROMOTING contract — supersedes min/max's preserve)
+
+UNLIKE the DTYPE-PRESERVING min/max family, these ALWAYS return a float
+(the BATCH-3 transcendental rule, applied BINARY / per-operand):
+
+- **int / bool → `Float64`** (`np.arctan2(int64,int64).dtype == float64`;
+  `bool` → `Float64`, coil's value-faithful Semantic divergence from
+  numpy's `float16` — `hypot(True,True)=sqrt(2)`, VALUE matches).
+- **`Float32` ⊕ `Float32` → `Float32`** (single precision preserved ONLY
+  when BOTH inputs are `Float32`).
+- **`Float64` ⊕ `Float64` → `Float64`**.
+
+The promotion uses `binary_float_dtype` = `unary_math_dtype` of the (already
+equal — `minmax_check` enforced it) operand dtype.
+
+### Shape / dtype contract (mirrors BATCH-13 / `concatenate`)
+
+- **Same-shape required.** A non-conformable pair raises `ShapeMismatch`
+  (numpy's `ValueError`); the cabi shim `coil_panic`s — a clean trap, NEVER
+  a C-ABI unwind. NO broadcasting (tracked follow-up).
+- **Same a/b dtype required.** A cross-dtype pair is a documented deferral
+  (reuses `minmax_check`) → `ShapeMismatch` / trap. NO cross-dtype promotion
+  (tracked follow-up); the SHARED dtype is then float-promoted per above.
+
+### 5-layer wiring
+
+- `elementwise.rs`: `logaddexp_f32` / `logaddexp_f64` (stable kernel) +
+  `binary_float_dtype` + `binary_float` (shared body: reuses `minmax_check`,
+  float-promotes BOTH operands via `as_f32`/`as_f64`, Zips the per-width
+  float kernel) + 3 `#[must_use]` fns `arctan2` (`f32::atan2`/`f64::atan2`) /
+  `hypot` (`f32::hypot`/`f64::hypot`) / `logaddexp`. NEW unit tests (10):
+  arctan2 4-quadrant arg order + swap-would-differ + hypot 3,4→5 +
+  hypot OVERFLOW-SAFE (with naive-overflow contrast) + logaddexp ln2 +
+  logaddexp STABLE for 1000,1000 (with naive-overflow contrast) + asymmetric
+  + `-inf` + int→f64 / f32→f32 promote (all three) + bool→f64 + 2-D shape +
+  chain-into-unary + non-conformable err + cross-dtype err.
+- `cabi.rs`: 3 shims `__cobrust_coil_{arctan2,hypot,logaddexp}`
+  `(ptr, ptr) -> ptr` via the shared `buffer_combine` body (borrow BOTH,
+  `coil_panic` on mismatch). `arctan2` forwards `(y, x)` verbatim (Y FIRST).
+  NEW shim round-trip tests (3): arctan2 arg-order (lane pins Y FIRST) +
+  hypot `[5,13]` + logaddexp STABLE `[ln2, 1000+ln2]` (drop-once verified).
+- `ecosystem.rs`: 3 arms `("coil", op) => EcoSig::from_values(symbol,
+  [Buffer, Buffer], Buffer)`, tier `Numerical` (floating arithmetic, rtol).
+- Typecheck / MIR: NO new code — the 2-Buffer-arg `[Buffer,Buffer] ->
+  Buffer` form rides the SAME generic lowering path as `concatenate` /
+  `maximum` (BATCH 2/13 precedent).
+- Codegen: 3 register rows `__cobrust_coil_{arctan2,hypot,logaddexp}` →
+  `coil_binop_ty` (`(ptr, ptr) -> ptr`, the SAME extern fn-type as the
+  BATCH-13 `maximum` family; NO new extern shape).
+
+### Done means (#145 BATCH 15 — DONE)
+
+- [x] `elementwise.rs`: `binary_float` (reuses `minmax_check`, float-promotes
+      both operands) + stable `logaddexp_*` + 3 fns; 10 kernel unit tests pin
+      the arctan2 `(y,x)` arg order (4 quadrants + swap-differ),
+      hypot OVERFLOW-safety, logaddexp STABILITY (both with naive-overflow
+      contrast), the float-promote rule (int→f64 / f32→f32 / bool→f64), and
+      the non-conformable + cross-dtype error paths.
+- [x] cabi: 3 shims via shared `buffer_combine` (borrow both, `coil_panic`
+      clean-trap on shape / dtype mismatch — no unwind); arctan2 forwards
+      `(y,x)` Y-FIRST. 3 shim round-trip tests, drop-once verified.
+- [x] Manifest: 3 ecosystem arms `[Buffer, Buffer] -> Buffer`, tier
+      `Numerical`.
+- [x] Typecheck / MIR: NO new code (the 2-Buffer-arg generic path —
+      `concatenate` / `maximum` precedent).
+- [x] Codegen: 3 register rows, `coil_binop_ty` (NO new extern fn-type).
+- [x] `.cb` E2E `coil_binfloat_e2e.rs` (6 tests): arctan2 4-quadrant
+      `[[π/4,π/2],[π,-π/2]]` (the `[0][1]=π/2` pins Y FIRST) + arctan2
+      swap-detector `[π/2, 0]` + hypot `[5,13]` + logaddexp STABLE
+      `[ln2, 1000+ln2]` (lane-1 FINITE, asserts no `inf`) + transpose∘hypot
+      CHAIN `[15,41]` + a non-conformable `(2,)` vs `(2,2)` TRAP.
+- [x] No regression: full `cobrust-coil` suite green (440 lib tests);
+      `coil_binfloat_e2e` (6) + `coil_hello_e2e` (3) all green, run ONE
+      `--test` at a time (F73 libcoil.a build-race avoidance); touched
+      crates (`cobrust-coil` + `cobrust-codegen` + `cobrust-types`) build +
+      clippy `-D warnings` + fmt clean; no new dep (`Cargo.lock` unchanged
+      — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

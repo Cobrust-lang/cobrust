@@ -37,9 +37,11 @@
 //! ecosystem path (the SAME path `coil.transpose(a)` / `coil.flatten(a)`
 //! prove), so codegen needs ZERO new arms (the flat `__cobrust_coil_*`
 //! recognizer + `coil_shape_ty` `(ptr) -> ptr` extern shape already
-//! covers them). Reductions that return a scalar (`np.sum` of `exp`),
-//! the 2-arg `np.logaddexp`, and the inverse-trig family
-//! (`arcsin`/`arctan2`) are DEFERRED follow-ups.
+//! covers them). Reductions that return a scalar (`np.sum` of `exp`) are
+//! a DEFERRED follow-up; the 2-arg `np.logaddexp` + `np.arctan2` (and the
+//! 2-arg `np.hypot`) SHIPPED in BATCH 15 (the 2-Buffer FLOAT ufunc section
+//! below); the single-arg inverse-trig family (`arcsin`/`arccos`/`arctan`)
+//! remains a DEFERRED follow-up.
 //!
 //! ## numpy-exact DTYPE PROMOTION (the load-bearing contract)
 //!
@@ -1010,6 +1012,214 @@ pub fn fmin(a: &Array, b: &Array) -> Result<Array, NumpyError> {
         Ord::min,
         |x, y| x & y,
     )
+}
+
+// =========================================================================
+// #145 numpy gap-closure BATCH 15 — the 2-Buffer FLOAT ufuncs
+// `arctan2` / `hypot` / `logaddexp`. UNLIKE the DTYPE-PRESERVING BATCH-13
+// min/max family (`maximum` / `minimum` / `fmax` / `fmin`) these are
+// 2-array `(Array, Array) -> Array` ops that are **FLOAT-PROMOTING** —
+// they ALWAYS return a float (geometry + ML; `arctan2`/`hypot` are the
+// robotics-relevant pair for the dora pillar). They marry the TWO proven
+// patterns:
+//   (A) the BATCH-13 2-Array same-shape + same-dtype combine contract +
+//       `Zip` body (identical `minmax_check` shape/dtype guard);
+//   (B) the BATCH-3 transcendental int->f64 / f32->f32 / f64->f64 promotion
+//       (`unary_math_dtype`), but BINARY — BOTH operands promote to the
+//       common float type.
+//
+// ## numpy-exact DTYPE PROMOTION (the load-bearing contract)
+//
+// Per numpy 2.x (oracle `python3.11` numpy 2.4.6): these always return a
+// float, and the float WIDTH is the common promotion of the two inputs:
+//   - `Float32` ⊕ `Float32` -> `Float32` (`np.hypot(f32, f32).dtype ==
+//     float32`); single precision is preserved ONLY when BOTH inputs are
+//     `Float32`.
+//   - ANY other same-dtype pair -> `Float64`: int ⊕ int -> `Float64`
+//     (`np.arctan2(int64, int64).dtype == float64`), `Float64` ⊕ `Float64`
+//     -> `Float64`, `Bool` ⊕ `Bool` -> `Float64` (numpy promotes bool to
+//     `float16` for these ufuncs — `np.hypot(True, True).dtype == float16`
+//     — but coil's `Array` has NO `float16`, so coil pins `bool -> Float64`,
+//     the SAME value-faithful Semantic-tier divergence as the BATCH-3
+//     transcendentals; `hypot(True,True)=sqrt(2)`, the VALUE matches).
+//
+// (This batch keeps the BATCH-13 EQUAL-DTYPE combine contract: a cross-dtype
+// pair `coil_panic`s rather than silently promoting one operand — §2.2 no
+// silent coercion. The two operands must share a dtype; that shared dtype is
+// then float-promoted per the rule above. A cross-dtype promoting form is a
+// tracked follow-up, exactly as for `concatenate` / `maximum`.)
+//
+// ## numpy-exact SEMANTICS (the three kernels)
+//
+//   - `arctan2(y, x)` — the angle (radians, in `(-pi, pi]`) of the point
+//     `(x, y)`. **numpy ARG ORDER IS `(y, x)` — Y FIRST** (the SAME order
+//     as Rust [`f64::atan2`], `y.atan2(x)`). UNLIKE single-arg `arctan`,
+//     `arctan2` uses the SIGNS of BOTH args to pick the correct QUADRANT:
+//     `arctan2(1,1)=pi/4`, `arctan2(1,0)=pi/2` (NOT `0` — a swapped y/x
+//     would give `0`), `arctan2(0,-1)=pi`, `arctan2(-1,0)=-pi/2`.
+//   - `hypot(x, y)` — the Euclidean norm / hypotenuse `sqrt(x*x + y*y)`,
+//     computed **OVERFLOW-SAFELY** via Rust [`f64::hypot`] (which scales to
+//     avoid the intermediate `x*x` overflow a naive `sqrt(x*x+y*y)` hits).
+//     `hypot(3,4)=5`; `hypot(1e308, 1e308)` is finite (`≈1.41e308`) where a
+//     naive square would overflow to `+inf`.
+//   - `logaddexp(a, b)` — `log(exp(a) + exp(b))`, computed **NUMERICALLY
+//     STABLY** as `max(a,b) + ln(1 + exp(-|a-b|))` (the naive
+//     `log(exp(a)+exp(b))` OVERFLOWS to `+inf` for large `a`/`b`). Common in
+//     ML (log-sum-exp). `logaddexp(0,0)=ln(2)≈0.693`,
+//     `logaddexp(1,1)=1+ln(2)`; `logaddexp(1000,1000)=1000+ln(2)` (finite,
+//     NOT `+inf` as the naive form gives). When BOTH inputs are `-inf` the
+//     stable formula yields `-inf` (numpy: `logaddexp(-inf,-inf) = -inf`),
+//     via the `max == -inf` short-circuit (the `exp(-|a-b|)` term is
+//     `exp(NaN)` for `-inf - -inf`, so it is guarded).
+//
+// Tier `@py_compat(numerical)` — the result VALUES agree with numpy within
+// rtol; the one intentional divergence is the BATCH-13 equal-shape /
+// equal-dtype contract (numpy broadcasts + promotes; coil raises
+// `ShapeMismatch` -> `coil_panic`). Total — a domain input yields an
+// IEEE-754 special VALUE, never a trap (the only abort is the
+// non-conformable / cross-dtype `ShapeMismatch`).
+// =========================================================================
+
+/// numpy-exact stable `logaddexp` for one IEEE-`f64` pair:
+/// `max(a,b) + ln(1 + exp(-|a-b|))`. The `max(a,b)` factoring keeps the
+/// exponent in `(-inf, 0]` so `exp` NEVER overflows (the naive
+/// `ln(exp(a)+exp(b))` overflows to `+inf` for large `a`/`b`). The
+/// `m.is_infinite()` guard returns `m` directly for the `±inf` cases
+/// (`logaddexp(-inf,-inf) = -inf`, `logaddexp(+inf, x) = +inf`) — without
+/// it, `-inf - -inf = NaN` would poison the `exp` term.
+#[inline]
+fn logaddexp_f64(a: f64, b: f64) -> f64 {
+    let m = a.max(b);
+    if m.is_infinite() {
+        // Both -inf -> -inf; any +inf -> +inf (the `1+exp(...)` term is
+        // irrelevant at an infinite max, and `m - m` would be NaN).
+        return m;
+    }
+    m + (-(a - b).abs()).exp().ln_1p()
+}
+
+/// `f32` companion of [`logaddexp_f64`] — identical numpy-exact stable
+/// semantics in single precision.
+#[inline]
+fn logaddexp_f32(a: f32, b: f32) -> f32 {
+    let m = a.max(b);
+    if m.is_infinite() {
+        return m;
+    }
+    m + (-(a - b).abs()).exp().ln_1p()
+}
+
+/// The common FLOAT promotion target for a BATCH-15 binary float ufunc
+/// over a same-dtype pair: `Float32` ONLY when BOTH inputs are `Float32`
+/// (numpy `hypot(f32,f32) -> f32`), else `Float64` (int/bool/`Float64`
+/// inputs all land here, the BATCH-3 [`unary_math_dtype`] rule applied
+/// per-operand). The two dtypes are already known equal (the caller's
+/// `minmax_check` enforced it), so this is `unary_math_dtype` of either.
+fn binary_float_dtype(a: &Array) -> Dtype {
+    unary_math_dtype(a.dtype())
+}
+
+/// `Zip` two same-shape, same-element-type `ArrayD<T>`s through a binary
+/// kernel into a fresh owned `ArrayD<T>` (a contiguous C-order copy). The
+/// monomorphic per-width worker shared by the [`binary_float`] dispatch —
+/// `zero` seeds the output buffer (`0.0` for either float width).
+fn zip_binary<T: Clone + Copy>(
+    x: &ArrayD<T>,
+    y: &ArrayD<T>,
+    zero: T,
+    op: impl Fn(T, T) -> T,
+) -> ArrayD<T> {
+    let mut out = ArrayD::from_elem(x.raw_dim(), zero);
+    ndarray::Zip::from(&mut out)
+        .and(x)
+        .and(y)
+        .for_each(|o, &xi, &yi| *o = op(xi, yi));
+    out
+}
+
+/// Shared body for the three BATCH-15 2-Buffer FLOAT ufuncs
+/// (`arctan2` / `hypot` / `logaddexp`). Enforces the SAME same-shape +
+/// same-dtype combine contract as the BATCH-13 min/max family (reusing
+/// [`minmax_check`]), then float-promotes BOTH (already-same-dtype)
+/// operands to the common float type ([`binary_float_dtype`]) and `Zip`s
+/// the per-element float kernel over the pair. `Float32`-promoted inputs
+/// run `op_f32` and stay `Float32`; every other input (int / bool /
+/// `Float64`) runs `op_f64` and yields `Float64`.
+///
+/// One closure per float width threads the exact IEEE kernel (the same
+/// pattern as `minmax_dispatch`); the SHARED cast helpers [`as_f32`] /
+/// [`as_f64`] do the int/bool->float promotion before the [`zip_binary`].
+fn binary_float(
+    op: &str,
+    a: &Array,
+    b: &Array,
+    op_f32: impl Fn(f32, f32) -> f32,
+    op_f64: impl Fn(f64, f64) -> f64,
+) -> Result<Array, NumpyError> {
+    minmax_check(op, a, b)?;
+    // `Float32` is reached ONLY when BOTH inputs are `Float32` (the
+    // equal-dtype guard + `unary_math_dtype` mean a `Float32` promotion
+    // implies both operands are `Float32`); single precision preserved.
+    // Every other input (int / bool / `Float64`) promotes to `Float64` (the
+    // BATCH-3 transcendental rule). The `==` check mirrors `unary_float`.
+    Ok(if binary_float_dtype(a) == Dtype::Float32 {
+        Array::Float32(zip_binary(&as_f32(a), &as_f32(b), 0.0_f32, op_f32))
+    } else {
+        Array::Float64(zip_binary(&as_f64(a), &as_f64(b), 0.0_f64, op_f64))
+    })
+}
+
+/// `np.arctan2(y, x)` — the angle (radians, in `(-pi, pi]`) of the point
+/// `(x, y)`, elementwise. **numpy ARG ORDER IS `(y, x)` — Y FIRST**
+/// (`y.atan2(x)`); the SIGNS of both args pick the QUADRANT
+/// (`arctan2(1,0)=pi/2` NOT `0`, `arctan2(0,-1)=pi`, `arctan2(-1,0)=-pi/2`).
+/// **Float-promoting**: int / bool -> `Float64`, `Float32` ⊕ `Float32` ->
+/// `Float32`. Same-shape + same-dtype required (a non-conformable /
+/// cross-dtype pair raises `ShapeMismatch`). Total.
+///
+/// `@py_compat(numerical)`.
+///
+/// # Errors
+///
+/// `ShapeMismatch` (numpy's `ValueError`) when `y` / `x` shapes differ or
+/// their dtypes differ.
+pub fn arctan2(y: &Array, x: &Array) -> Result<Array, NumpyError> {
+    binary_float("arctan2", y, x, f32::atan2, f64::atan2)
+}
+
+/// `np.hypot(x, y)` — the Euclidean norm `sqrt(x*x + y*y)` (the hypotenuse),
+/// elementwise, computed **OVERFLOW-SAFELY** via Rust [`f64::hypot`] (which
+/// scales to avoid the intermediate `x*x` overflow of a naive
+/// `sqrt(x*x+y*y)`). `hypot(3,4)=5`; `hypot(1e308,1e308)` is finite where a
+/// naive square overflows to `+inf`. **Float-promoting**: int / bool ->
+/// `Float64`, `Float32` ⊕ `Float32` -> `Float32`. Same-shape + same-dtype
+/// required. Total.
+///
+/// `@py_compat(numerical)`.
+///
+/// # Errors
+///
+/// `ShapeMismatch` when `x` / `y` shapes or dtypes differ.
+pub fn hypot(x: &Array, y: &Array) -> Result<Array, NumpyError> {
+    binary_float("hypot", x, y, f32::hypot, f64::hypot)
+}
+
+/// `np.logaddexp(a, b)` — `log(exp(a) + exp(b))`, elementwise, computed
+/// **NUMERICALLY STABLY** as `max(a,b) + ln(1 + exp(-|a-b|))` (the naive
+/// `log(exp(a)+exp(b))` OVERFLOWS to `+inf` for large `a`/`b`; the log-sum-exp
+/// trick keeps `exp`'s argument `<= 0`). Common in ML. `logaddexp(0,0)=ln(2)`,
+/// `logaddexp(1,1)=1+ln(2)`, `logaddexp(1000,1000)=1000+ln(2)` (finite, NOT
+/// `+inf`); `logaddexp(-inf,-inf)=-inf`. **Float-promoting**: int / bool ->
+/// `Float64`, `Float32` ⊕ `Float32` -> `Float32`. Same-shape + same-dtype
+/// required. Total.
+///
+/// `@py_compat(numerical)`.
+///
+/// # Errors
+///
+/// `ShapeMismatch` when `a` / `b` shapes or dtypes differ.
+pub fn logaddexp(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    binary_float("logaddexp", a, b, logaddexp_f32, logaddexp_f64)
 }
 
 #[cfg(test)]
@@ -2045,5 +2255,293 @@ mod tests {
         assert_eq!(e.kind, NumpyErrorKind::ShapeMismatch);
         assert!(e.message.contains("dtype mismatch"), "msg: {}", e.message);
         assert!(fmax(&a, &b).is_err());
+    }
+
+    // =====================================================================
+    // #145 BATCH 15 — the 2-Buffer FLOAT ufuncs arctan2 / hypot / logaddexp.
+    // Differential-vs-numpy 2.4.6 (oracle values captured via
+    // `/opt/homebrew/bin/python3.11 -c 'import numpy'`). These are
+    // FLOAT-PROMOTING (int->f64, f32->f32) — assert on `.dtype()` (the
+    // promote contract) in ADDITION to values. NaN via `.is_nan()`, inf via
+    // `.is_infinite()`, never `assert_eq!(x, NAN/inf)`.
+    //   THE arctan2 nuance: arg order is (y, x) — Y FIRST. arctan2(1,0)=pi/2
+    //   (a swapped y/x would give 0). All four quadrants pinned.
+    //   THE hypot nuance: OVERFLOW-SAFE (hypot(1e308,1e308) finite, a naive
+    //   sqrt(x*x+y*y) overflows to +inf).
+    //   THE logaddexp nuance: STABLE (logaddexp(1000,1000)=1000+ln2, a naive
+    //   log(exp+exp) overflows to +inf).
+
+    // ---- arctan2: the (y, x) ARG ORDER + all four quadrants ----
+
+    #[test]
+    fn arctan2_arg_order_y_first_all_quadrants() {
+        // np.arctan2(y, x) — Y FIRST. The discriminating cases:
+        //   arctan2(1,1)=pi/4, arctan2(1,0)=pi/2 (NOT 0 — swapped y/x→0),
+        //   arctan2(0,-1)=pi, arctan2(-1,0)=-pi/2.
+        let pi = std::f64::consts::PI;
+        let y = array_f64(&[1.0, 1.0, 0.0, -1.0], &[4]).unwrap();
+        let x = array_f64(&[1.0, 0.0, -1.0, 0.0], &[4]).unwrap();
+        let r = arctan2(&y, &x).unwrap();
+        assert_eq!(r.dtype(), Dtype::Float64);
+        let v = f64_vals(&r);
+        assert!(approx_f64(v[0], pi / 4.0, 1e-12), "arctan2(1,1)=pi/4");
+        // THE arg-order assertion: arctan2(1,0)=pi/2, NOT 0. A swapped
+        // (x,y) call would compute atan2(0,1)=0 here — this pins Y FIRST.
+        assert!(approx_f64(v[1], pi / 2.0, 1e-12), "arctan2(1,0)=pi/2 NOT 0");
+        assert!(approx_f64(v[2], pi, 1e-12), "arctan2(0,-1)=pi");
+        assert!(approx_f64(v[3], -pi / 2.0, 1e-12), "arctan2(-1,0)=-pi/2");
+    }
+
+    #[test]
+    fn arctan2_swapped_args_would_differ() {
+        // Proves the arg order is load-bearing: arctan2(1,0) != arctan2(0,1).
+        // np.arctan2(1,0)=pi/2 ; np.arctan2(0,1)=0.
+        let one = array_f64(&[1.0], &[1]).unwrap();
+        let zero = array_f64(&[0.0], &[1]).unwrap();
+        let pi = std::f64::consts::PI;
+        // (y=1, x=0) -> pi/2
+        assert!(approx_f64(
+            f64_vals(&arctan2(&one, &zero).unwrap())[0],
+            pi / 2.0,
+            1e-12
+        ));
+        // (y=0, x=1) -> 0 (the swapped operands)
+        assert!(f64_vals(&arctan2(&zero, &one).unwrap())[0].abs() < 1e-12);
+    }
+
+    #[test]
+    fn arctan2_int_promotes_to_f64() {
+        // np.arctan2(np.int64([1,1]), np.int64([1,0])).dtype == float64.
+        let y = array_i64(&[1, 1], &[2]).unwrap();
+        let x = array_i64(&[1, 0], &[2]).unwrap();
+        let r = arctan2(&y, &x).unwrap();
+        assert_eq!(r.dtype(), Dtype::Float64, "int input PROMOTES to f64");
+        let pi = std::f64::consts::PI;
+        let v = f64_vals(&r);
+        assert!(approx_f64(v[0], pi / 4.0, 1e-12));
+        assert!(approx_f64(v[1], pi / 2.0, 1e-12));
+    }
+
+    #[test]
+    fn arctan2_f32_stays_f32() {
+        // np.arctan2(np.float32([1]), np.float32([1])).dtype == float32 -> pi/4.
+        let y = array_f32(&[1.0], &[1]).unwrap();
+        let x = array_f32(&[1.0], &[1]).unwrap();
+        let r = arctan2(&y, &x).unwrap();
+        assert_eq!(r.dtype(), Dtype::Float32, "f32 ⊕ f32 STAYS f32");
+        assert!(approx_f32(
+            f32_vals(&r)[0],
+            std::f32::consts::PI / 4.0,
+            1e-6
+        ));
+    }
+
+    // ---- hypot: 3,4->5 + OVERFLOW-SAFE ----
+
+    #[test]
+    fn hypot_three_four_is_five() {
+        // np.hypot([3,5],[4,12]) = [5, 13] (the classic Pythagorean triples).
+        let x = array_f64(&[3.0, 5.0], &[2]).unwrap();
+        let y = array_f64(&[4.0, 12.0], &[2]).unwrap();
+        let r = hypot(&x, &y).unwrap();
+        assert_eq!(r.dtype(), Dtype::Float64);
+        let v = f64_vals(&r);
+        assert!(approx_f64(v[0], 5.0, 1e-12), "hypot(3,4)=5");
+        assert!(approx_f64(v[1], 13.0, 1e-12), "hypot(5,12)=13");
+    }
+
+    #[test]
+    fn hypot_is_overflow_safe() {
+        // np.hypot(1e308, 1e308) ≈ 1.414e308 (FINITE) — a naive
+        // sqrt(x*x+y*y) would overflow (1e308^2 = inf) → +inf. f64::hypot
+        // scales to stay finite. This is the WHOLE POINT of hypot vs sqrt.
+        let x = array_f64(&[1e308], &[1]).unwrap();
+        let y = array_f64(&[1e308], &[1]).unwrap();
+        let v = f64_vals(&hypot(&x, &y).unwrap());
+        assert!(
+            v[0].is_finite(),
+            "hypot must be OVERFLOW-SAFE: a naive sqrt(x*x+y*y) → +inf, got {}",
+            v[0]
+        );
+        // Sanity: the value is ~sqrt(2)*1e308.
+        assert!(approx_f64(v[0], std::f64::consts::SQRT_2 * 1e308, 1e-12));
+        // Confirm the naive form WOULD overflow (the contrast the kernel avoids).
+        let naive = (1e308_f64 * 1e308 + 1e308 * 1e308).sqrt();
+        assert!(naive.is_infinite(), "naive sqrt(x*x+y*y) DOES overflow");
+    }
+
+    #[test]
+    fn hypot_int_promotes_f32_stays() {
+        // np.hypot(int,int).dtype == float64; np.hypot(f32,f32).dtype == float32.
+        let xi = array_i64(&[3], &[1]).unwrap();
+        let yi = array_i64(&[4], &[1]).unwrap();
+        let ri = hypot(&xi, &yi).unwrap();
+        assert_eq!(ri.dtype(), Dtype::Float64, "int input PROMOTES to f64");
+        assert!(approx_f64(f64_vals(&ri)[0], 5.0, 1e-12));
+        let xf = array_f32(&[3.0], &[1]).unwrap();
+        let yf = array_f32(&[4.0], &[1]).unwrap();
+        let rf = hypot(&xf, &yf).unwrap();
+        assert_eq!(rf.dtype(), Dtype::Float32, "f32 ⊕ f32 STAYS f32");
+        assert!(approx_f32(f32_vals(&rf)[0], 5.0, 1e-6));
+    }
+
+    // ---- logaddexp: ln2 + STABLE for large inputs ----
+
+    #[test]
+    fn logaddexp_zero_zero_is_ln2() {
+        // np.logaddexp(0,0) = ln(2) ≈ 0.6931; np.logaddexp(1,1) = 1+ln(2).
+        let a = array_f64(&[0.0, 1.0], &[2]).unwrap();
+        let b = array_f64(&[0.0, 1.0], &[2]).unwrap();
+        let r = logaddexp(&a, &b).unwrap();
+        assert_eq!(r.dtype(), Dtype::Float64);
+        let v = f64_vals(&r);
+        let ln2 = std::f64::consts::LN_2;
+        assert!(approx_f64(v[0], ln2, 1e-12), "logaddexp(0,0)=ln2");
+        assert!(approx_f64(v[1], 1.0 + ln2, 1e-12), "logaddexp(1,1)=1+ln2");
+    }
+
+    #[test]
+    fn logaddexp_is_numerically_stable() {
+        // np.logaddexp(1000,1000) = 1000+ln(2) ≈ 1000.693 (FINITE) — a naive
+        // log(exp(1000)+exp(1000)) overflows (exp(1000)=inf) → +inf. The
+        // max(a,b)+ln1p(exp(-|a-b|)) form stays finite. The WHOLE POINT.
+        let a = array_f64(&[1000.0], &[1]).unwrap();
+        let b = array_f64(&[1000.0], &[1]).unwrap();
+        let v = f64_vals(&logaddexp(&a, &b).unwrap());
+        let ln2 = std::f64::consts::LN_2;
+        assert!(v[0].is_finite(), "logaddexp must be STABLE: naive → +inf");
+        assert!(
+            approx_f64(v[0], 1000.0 + ln2, 1e-12),
+            "logaddexp(1000,1000)=1000+ln2"
+        );
+        // Confirm the naive form WOULD overflow (the contrast the kernel avoids).
+        let naive = ((1000.0_f64).exp() + (1000.0_f64).exp()).ln();
+        assert!(
+            naive.is_infinite(),
+            "naive log(exp+exp) DOES overflow to +inf"
+        );
+    }
+
+    #[test]
+    fn logaddexp_asymmetric_and_neg_inf() {
+        // np.logaddexp(0,1) = log(1+e) ≈ 1.3133 (asymmetric — not just max).
+        let v = f64_vals(
+            &logaddexp(
+                &array_f64(&[0.0], &[1]).unwrap(),
+                &array_f64(&[1.0], &[1]).unwrap(),
+            )
+            .unwrap(),
+        );
+        assert!(approx_f64(
+            v[0],
+            (1.0_f64 + std::f64::consts::E).ln(),
+            1e-12
+        ));
+        // np.logaddexp(-inf, -inf) = -inf (both exp terms are 0 → log(0)).
+        // The is_infinite guard returns -inf cleanly (else -inf - -inf = NaN).
+        let ninf = f64_vals(
+            &logaddexp(
+                &array_f64(&[f64::NEG_INFINITY], &[1]).unwrap(),
+                &array_f64(&[f64::NEG_INFINITY], &[1]).unwrap(),
+            )
+            .unwrap(),
+        );
+        assert!(
+            ninf[0].is_infinite() && ninf[0] < 0.0,
+            "logaddexp(-inf,-inf)=-inf"
+        );
+    }
+
+    #[test]
+    fn logaddexp_int_promotes_f32_stays() {
+        // np.logaddexp(int,int).dtype == float64; f32 stays f32.
+        let ai = array_i64(&[0, 1], &[2]).unwrap();
+        let bi = array_i64(&[0, 1], &[2]).unwrap();
+        let ri = logaddexp(&ai, &bi).unwrap();
+        assert_eq!(ri.dtype(), Dtype::Float64, "int input PROMOTES to f64");
+        let ln2 = std::f64::consts::LN_2;
+        assert!(approx_f64(f64_vals(&ri)[0], ln2, 1e-12));
+        let af = array_f32(&[0.0], &[1]).unwrap();
+        let bf = array_f32(&[0.0], &[1]).unwrap();
+        let rf = logaddexp(&af, &bf).unwrap();
+        assert_eq!(rf.dtype(), Dtype::Float32, "f32 ⊕ f32 STAYS f32");
+        assert!(approx_f32(f32_vals(&rf)[0], std::f32::consts::LN_2, 1e-6));
+    }
+
+    // ---- bool -> f64 (coil divergence from numpy's float16; values match) ----
+
+    #[test]
+    fn batch15_bool_promotes_to_f64_values_match() {
+        // numpy promotes bool to float16 for these; coil has no f16 -> f64.
+        // VALUES match: hypot(True,True)=sqrt(2), arctan2(True,True)=pi/4,
+        // logaddexp(False,False)=ln2.
+        let t = array_bool(&[true], &[1]).unwrap();
+        let f = array_bool(&[false], &[1]).unwrap();
+        let h = hypot(&t, &t).unwrap();
+        assert_eq!(h.dtype(), Dtype::Float64);
+        assert!(approx_f64(f64_vals(&h)[0], std::f64::consts::SQRT_2, 1e-12));
+        let at = arctan2(&t, &t).unwrap();
+        assert_eq!(at.dtype(), Dtype::Float64);
+        assert!(approx_f64(
+            f64_vals(&at)[0],
+            std::f64::consts::FRAC_PI_4,
+            1e-12
+        ));
+        let la = logaddexp(&f, &f).unwrap();
+        assert!(approx_f64(f64_vals(&la)[0], std::f64::consts::LN_2, 1e-12));
+    }
+
+    // ---- shape preservation + chain ----
+
+    #[test]
+    fn batch15_preserves_shape_2d() {
+        // arctan2 / hypot / logaddexp on (2,2) keep the shape.
+        let a = array_f64(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let b = array_f64(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert_eq!(arctan2(&a, &b).unwrap().shape(), vec![2, 2]);
+        assert_eq!(hypot(&a, &b).unwrap().shape(), vec![2, 2]);
+        assert_eq!(logaddexp(&a, &b).unwrap().shape(), vec![2, 2]);
+    }
+
+    #[test]
+    fn batch15_chain_feeds_unary() {
+        // sqrt(hypot([3],[4])) = sqrt(5); proves the fresh Array feeds the
+        // next op. hypot([3,5],[4,12])=[5,13], then unary sqrt.
+        let x = array_f64(&[3.0, 5.0], &[2]).unwrap();
+        let y = array_f64(&[4.0, 12.0], &[2]).unwrap();
+        let r = sqrt(&hypot(&x, &y).unwrap());
+        assert_eq!(r.dtype(), Dtype::Float64);
+        let v = f64_vals(&r);
+        assert!(approx_f64(v[0], 5.0_f64.sqrt(), 1e-12));
+        assert!(approx_f64(v[1], 13.0_f64.sqrt(), 1e-12));
+    }
+
+    // ---- the non-conformable + cross-dtype traps (the combine contract) ----
+
+    #[test]
+    fn batch15_non_conformable_shape_errs() {
+        // (3,) vs (4,) is non-conformable — numpy raises ValueError; we
+        // return ShapeMismatch (the cabi shim coil_panics). All three share
+        // the same-shape combine contract (reused minmax_check).
+        let a = array_f64(&[1.0, 2.0, 3.0], &[3]).unwrap();
+        let b = array_f64(&[1.0, 2.0, 3.0, 4.0], &[4]).unwrap();
+        let e = arctan2(&a, &b).unwrap_err();
+        assert_eq!(e.kind, NumpyErrorKind::ShapeMismatch);
+        assert!(e.message.contains("arctan2"), "msg names op: {}", e.message);
+        assert!(hypot(&a, &b).is_err());
+        assert!(logaddexp(&a, &b).is_err());
+    }
+
+    #[test]
+    fn batch15_cross_dtype_errs() {
+        // int64 vs float64 — equal-dtype combine contract (no silent coercion,
+        // §2.2). numpy PROMOTES, we raise ShapeMismatch. All three trap.
+        let a = array_i64(&[1, 2], &[2]).unwrap();
+        let b = array_f64(&[3.0, 4.0], &[2]).unwrap();
+        let e = hypot(&a, &b).unwrap_err();
+        assert_eq!(e.kind, NumpyErrorKind::ShapeMismatch);
+        assert!(e.message.contains("dtype mismatch"), "msg: {}", e.message);
+        assert!(arctan2(&a, &b).is_err());
+        assert!(logaddexp(&a, &b).is_err());
     }
 }

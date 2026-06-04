@@ -3411,6 +3411,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_minimum", coil_binop_ty, 2),
             ("__cobrust_coil_fmax", coil_binop_ty, 2),
             ("__cobrust_coil_fmin", coil_binop_ty, 2),
+            // #145 2-Buffer FLOAT ufuncs (BATCH 15). `arctan2`/`hypot`/
+            // `logaddexp` are `(ptr, ptr) -> ptr` ≡ `coil_binop_ty` — the
+            // IDENTICAL extern shape as the BATCH-13 min/max family + the
+            // combine ops above (NO new fn-type). UNLIKE min/max these are
+            // FLOAT-PROMOTING (int->f64, f32->f32) + the per-op float math
+            // (`arctan2` arg order `(y, x)` Y FIRST; `hypot` OVERFLOW-SAFE;
+            // `logaddexp` NUMERICALLY STABLE) — all inside the Rust kernel
+            // (`elementwise.rs`). The handle ABI is byte-identical, so codegen
+            // rides the SAME extern shape + the flat `__cobrust_coil_*`
+            // recognizer prefix (no batch-specific arm). MIR retargets
+            // `coil.arctan2(y, x)` onto these `Call`s via the SAME generic
+            // 2-Buffer-arg path (ZERO batch-specific MIR code).
+            ("__cobrust_coil_arctan2", coil_binop_ty, 2),
+            ("__cobrust_coil_hypot", coil_binop_ty, 2),
+            ("__cobrust_coil_logaddexp", coil_binop_ty, 2),
             // #145 unary TRANSCENDENTAL Buffer-returning ops. All 1-arg
             // FLOAT-returning ufuncs (`exp`/`log`/`log10`/`sqrt`/`sin`/
             // `cos`/`tan` + optional `exp2`/`log2`/`cbrt`/`sinh`/`cosh`/

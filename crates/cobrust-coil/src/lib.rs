@@ -133,13 +133,18 @@ pub use crate::elementwise::{
     // #145 BATCH 4 — DTYPE-PRESERVING rounding / sign family. None of
     // these clash with a `ufunc` re-export, so they re-export flat.
     abs,
+    // #145 BATCH 15 — the 2-Buffer FLOAT ufuncs (`(Array, Array) -> Array`,
+    // float-PROMOTING). None clash with a `ufunc` re-export, so flat.
+    arctan2,
     cbrt,
     ceil,
     cosh,
     exp2,
     floor,
+    hypot,
     log2,
     log10,
+    logaddexp,
     round,
     sign,
     sinh,

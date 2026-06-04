@@ -593,6 +593,70 @@ fn main() -> i64:
 > 或跨 dtype 的配对会**陷入陷阱** —— 干净地中止,绝不会悄悄广播或产生垃圾结果。
 > (广播与跨 dtype 提升是已登记的后续工作,与 `concatenate` 的同 dtype 契约一致。)
 
+## 二元浮点 ufunc —— `arctan2` / `hypot` / `logaddexp`
+
+这三个操作接收**两个 buffer**,用一个**浮点**数学函数逐元素地合并配对元素 ——
+它们是几何与机器学习里的常客。与上面的 min/max 家族不同,它们是**浮点提升**的:
+结果永远是浮点(对两个整数 buffer 求 `arctan2`/`hypot` 也会回到 `float64`),
+与超越函数(`exp` / `sqrt`)是同一条 dtype 规则。
+
+```python
+import coil
+
+fn main() -> i64:
+    # arctan2(y, x):点 (x, y) 的角度(弧度)。参数顺序是 (y, x) —— Y 在前。
+    # 两个参数的符号共同决定落在哪个象限。
+    let y: coil.Buffer = coil.array1d2(1.0, 1.0)
+    let x: coil.Buffer = coil.array1d2(1.0, 0.0)
+    let a: coil.Buffer = coil.arctan2(y, x)     # [pi/4, pi/2]
+    let _ = coil.print_buffer(a)
+
+    # hypot(x, y):欧几里得范数 sqrt(x*x + y*y) —— 防溢出。
+    let p: coil.Buffer = coil.array1d2(3.0, 5.0)
+    let q: coil.Buffer = coil.array1d2(4.0, 12.0)
+    let h: coil.Buffer = coil.hypot(p, q)       # [5, 13]
+    let _ = coil.print_buffer(h)
+
+    # logaddexp(a, b):log(exp(a) + exp(b)) —— 数值稳定。
+    let u: coil.Buffer = coil.array1d2(0.0, 1000.0)
+    let v: coil.Buffer = coil.array1d2(0.0, 1000.0)
+    let g: coil.Buffer = coil.logaddexp(u, v)   # [ln2, 1000+ln2]  (有限!)
+    let _ = coil.print_buffer(g)
+    return 0
+```
+
+**这三个操作**:
+
+- **`coil.arctan2(y, x) -> Buffer`** —— 点 `(x, y)` 的角度(弧度,落在
+  `(-π, π]`)。例如 `arctan2(1, 0) = π/2`(正上方),`arctan2(0, -1) = π`
+  (正左方)。
+- **`coil.hypot(x, y) -> Buffer`** —— 斜边 / 欧几里得范数
+  `sqrt(x*x + y*y)`。`hypot(3, 4) = 5`。
+- **`coil.logaddexp(a, b) -> Buffer`** —— `log(exp(a) + exp(b))`,即
+  log-sum-exp 这一基础构件。`logaddexp(0, 0) = ln 2 ≈ 0.693`。
+
+> **`arctan2` 的参数顺序是 `(y, x)` —— Y 在前。** 这点常让人犯错,因为它读起来
+> 与 `(x, y)` 坐标「相反」。这是 numpy(以及 C 的 `atan2`)的顺序,如此选择是为了
+> 让*两个参数的符号*把角度放进正确的象限 —— 单参数的 `arctan(y/x)` 做不到这点。
+> 试金石:`arctan2(1, 0) = π/2`,**而非** `0`。如果你在那里看到 `0`,就是参数
+> 写反了。
+
+> **`hypot` 防溢出;`logaddexp` 数值稳定。** 两者都避开了朴素公式的陷阱。
+> `hypot(1e308, 1e308)` 返回一个*有限*的 `≈ 1.41e308`,而直白的
+> `sqrt(x*x + y*y)` 会溢出到 `+inf`(`x*x` 先爆掉)。`logaddexp(1000, 1000)`
+> 返回一个*有限*的 `1000 + ln 2`,而直白的 `log(exp(1000) + exp(1000))` 会溢出
+> (`exp(1000) = inf`)。这正是这两个操作要作为基本原语、而不是手写表达式存在的
+> 全部理由 —— 它们是机器人学(`hypot`/`arctan2`)与机器学习(`logaddexp`)的
+> 安全版本。
+
+> **浮点提升;要求同形状 + 同 dtype。** 结果永远是浮点 —— 整数 / `float64` 输入
+> 得 `float64`,只有当*两个*输入都是 `float32` 时才得 `float32`(与 `exp` /
+> `sqrt` 相同的逐操作数规则)。`bool` 配对回到 `float64`
+> (`hypot(True, True) = sqrt(2)`;numpy 会给 `float16`,但数值一致)。与 min/max
+> 家族一样,coil 在这里**不**广播、**不**跨 dtype 提升:两个 buffer 必须同形状
+> *且*同 dtype —— 不可对齐或跨 dtype 的配对会**陷入陷阱**(干净中止,绝不产生
+> 垃圾结果)。(广播与跨 dtype 提升是已登记的后续工作。)
+
 ## 重排与重复 —— `diff` / `flip` / `roll` / `repeat` / `tile`
 
 这五个操作重排或重复 buffer 中的元素。每个都在 **C 序展平**后的数组上工作

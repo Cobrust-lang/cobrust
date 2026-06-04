@@ -912,6 +912,48 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Numerical,
         )),
+        // #145 gap-closure BATCH 15 (2026-06-05) — the 2-Buffer FLOAT ufuncs
+        // `arctan2` / `hypot` / `logaddexp`. Each is a 2-Buffer `(Buffer,
+        // Buffer) -> Buffer` op riding the IDENTICAL borrow-Buffer-args →
+        // fresh-Buffer-return value-handle ABI as the BATCH-13 min/max family
+        // (`maximum` / `minimum` / `fmax` / `fmin`) + the `concatenate` /
+        // `vstack` / `hstack` combine ops above (and `coil.linalg.solve`) —
+        // the Buffer args auto-borrow (Move→Copy) in `lower_eco_arg`, the
+        // fresh return is drop-scheduled by `emit_ecosystem_call` (NO
+        // `_=>"any"` MIR gap; the generic ecosystem-call lowering iterates
+        // `sig.params` regardless of arity — ZERO new MIR code).
+        //
+        // - `coil.arctan2(y, x) -> Buffer` — angle of `(x, y)`, ARG ORDER
+        //   `(y, x)` Y FIRST (numpy); robotics-relevant (dora pillar).
+        // - `coil.hypot(x, y) -> Buffer`   — Euclidean norm, OVERFLOW-SAFE.
+        // - `coil.logaddexp(a, b) -> Buffer` — log-sum-exp, NUMERICALLY STABLE.
+        //
+        // Tier `Numerical` (the elementwise-ufunc family tier) — the result
+        // VALUES agree with numpy within rtol. UNLIKE the DTYPE-PRESERVING
+        // min/max family these are FLOAT-PROMOTING (int->f64, f32->f32 —
+        // the BATCH-3 transcendental rule, applied per-operand to a
+        // same-dtype pair). The float math + the same-shape / same-dtype
+        // combine contract (numpy broadcasts + promotes; coil raises
+        // `ValueError` via `coil_panic`) live entirely in the Rust kernel
+        // (`elementwise.rs`) — documented there.
+        ("coil", "arctan2") => Some(EcoSig::from_values(
+            "__cobrust_coil_arctan2",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "hypot") => Some(EcoSig::from_values(
+            "__cobrust_coil_hypot",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "logaddexp") => Some(EcoSig::from_values(
+            "__cobrust_coil_logaddexp",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
         // #145 gap-closure BATCH 8 (2026-06-01) — `coil.where(cond, a, b)`,
         // the THREE-Buffer elementwise conditional select (`result[i] =
         // cond[i] truthy ? a[i] : b[i]`). This EXTENDS the 2-Buffer combine

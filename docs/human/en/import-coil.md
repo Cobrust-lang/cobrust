@@ -652,6 +652,75 @@ fn main() -> i64:
 > promotion are tracked follow-ups, mirroring `concatenate`'s same-dtype
 > contract.)
 
+## Binary float ufuncs — `arctan2` / `hypot` / `logaddexp`
+
+These three take **two buffers** and combine the paired elements with a
+**float** math function — geometry and machine-learning staples. Unlike the
+min/max family above, they are **float-promoting**: the result is always a
+float (`arctan2`/`hypot` of two integer buffers come back as `float64`), the
+same dtype rule as the transcendentals (`exp` / `sqrt`).
+
+```python
+import coil
+
+fn main() -> i64:
+    # arctan2(y, x): the angle (radians) of the point (x, y). ARG ORDER IS
+    # (y, x) — Y FIRST. The signs of both pick the quadrant.
+    let y: coil.Buffer = coil.array1d2(1.0, 1.0)
+    let x: coil.Buffer = coil.array1d2(1.0, 0.0)
+    let a: coil.Buffer = coil.arctan2(y, x)     # [pi/4, pi/2]
+    let _ = coil.print_buffer(a)
+
+    # hypot(x, y): the Euclidean norm sqrt(x*x + y*y) — overflow-safe.
+    let p: coil.Buffer = coil.array1d2(3.0, 5.0)
+    let q: coil.Buffer = coil.array1d2(4.0, 12.0)
+    let h: coil.Buffer = coil.hypot(p, q)       # [5, 13]
+    let _ = coil.print_buffer(h)
+
+    # logaddexp(a, b): log(exp(a) + exp(b)) — numerically stable.
+    let u: coil.Buffer = coil.array1d2(0.0, 1000.0)
+    let v: coil.Buffer = coil.array1d2(0.0, 1000.0)
+    let g: coil.Buffer = coil.logaddexp(u, v)   # [ln2, 1000+ln2]  (finite!)
+    let _ = coil.print_buffer(g)
+    return 0
+```
+
+**The three ops**:
+
+- **`coil.arctan2(y, x) -> Buffer`** — the angle (radians, in `(-π, π]`) of
+  the point `(x, y)`. The `arctan2(1, 0) = π/2` (straight up), `arctan2(0,
+  -1) = π` (left), etc.
+- **`coil.hypot(x, y) -> Buffer`** — the hypotenuse / Euclidean norm
+  `sqrt(x*x + y*y)`. `hypot(3, 4) = 5`.
+- **`coil.logaddexp(a, b) -> Buffer`** — `log(exp(a) + exp(b))`, the
+  log-sum-exp building block. `logaddexp(0, 0) = ln 2 ≈ 0.693`.
+
+> **`arctan2`'s argument order is `(y, x)` — Y FIRST.** This trips people up
+> because it reads "backwards" from `(x, y)` coordinates. It is the numpy
+> (and C `atan2`) order, chosen so the *signs of both arguments* place the
+> angle in the correct quadrant — something single-argument `arctan(y/x)`
+> cannot do. The litmus test: `arctan2(1, 0) = π/2`, **not** `0`. If you ever
+> see `0` there, you swapped the arguments.
+
+> **`hypot` is overflow-safe; `logaddexp` is numerically stable.** Both avoid
+> the naive-formula trap. `hypot(1e308, 1e308)` returns a *finite* `≈
+> 1.41e308`, where a literal `sqrt(x*x + y*y)` would overflow to `+inf` (the
+> `x*x` blows up first). `logaddexp(1000, 1000)` returns a *finite* `1000 +
+> ln 2`, where a literal `log(exp(1000) + exp(1000))` overflows (`exp(1000) =
+> inf`). These are the whole reason the two ops exist as primitives rather
+> than hand-rolled expressions — they are the robotics (`hypot`/`arctan2`)
+> and ML (`logaddexp`) safe versions.
+
+> **Float-promoting; same-shape + same-dtype required.** The result is always
+> a float — `float64` for integer / `float64` inputs, `float32` only when
+> *both* inputs are `float32` (the same per-operand rule as `exp` / `sqrt`).
+> A `bool` pair comes back `float64` (`hypot(True, True) = sqrt(2)`; numpy
+> would give `float16`, but the value matches). Like the min/max family, coil
+> does **not** broadcast or promote across dtypes here: the two buffers must
+> share one shape *and* one dtype — a non-conformable or cross-dtype pair
+> **traps** (a clean abort, never a garbage result). (Broadcasting and
+> cross-dtype promotion are tracked follow-ups.)
+
 ## Rearranging & repeating — `diff` / `flip` / `roll` / `repeat` / `tile`
 
 These five rearrange or repeat the elements of a buffer. Each works over
