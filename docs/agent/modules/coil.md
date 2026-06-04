@@ -3372,6 +3372,82 @@ the `(n,m)` product matrix) — every wiring layer reuses an existing path.
       (`Cargo.lock` unchanged — F64); pure ndarray + std, NO ndarray-linalg.
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## `.cb` `coil.reshape(a, rows, cols) -> Buffer` (#163 BATCH 18 — DONE)
+
+The 2-D C / row-major **reshape** — the ADR-0077 Q5 two-scalar-arg honest
+first proof (the shape-tuple `np.reshape(a, (m,n))` form is a tracked
+deferral until tuple-arg marshalling lands). A HIGH-USE op (LLMs write
+`np.reshape` / `a.reshape` constantly). The `.cb`-side form is
+`coil.reshape(a, rows, cols)`.
+
+### Semantics (numpy 2.4.6 oracle — `coil::manipulate::reshape`)
+
+- `coil.reshape(a, rows, cols) -> Buffer` — flatten `a` in **C / row-major**
+  order, then lay the elements out as a 2-D `(rows, cols)` array.
+  **Dtype + values preserved** (reshape never changes data):
+  `np.arange(6).reshape(2,3) == [[0,1,2],[3,4,5]]` (NOT column-major).
+- `-1` inference: **exactly one** of `rows` / `cols` may be `-1`, inferred as
+  `a.size() / (the other)` (`reshape(-1,3)` on 6 → `(2,3)`; `reshape(3,-1)`
+  → `(3,2)`). FALLIBLE — a bad shape is numpy's `ValueError`:
+  - both `-1` → "can only specify one unknown dimension";
+  - a `-1` with a non-divisor other (`size % other != 0`) → unsatisfiable;
+  - a non-`-1` dim `<= 0` (for a non-empty array);
+  - after inference `rows * cols != a.size()` → "cannot reshape array of
+    size N into shape (rows,cols)".
+
+  The cabi shim converts the kernel `Err` to a clean `coil_panic` (the
+  `__cobrust_panic` abort) — NEVER unwinding across the C-ABI.
+
+### Wiring (mirror `broadcast_to` + the BATCH-2 reshape ops)
+
+- `manipulate.rs`: `reshape(a, rows, cols) -> Result<Array>` kernel +
+  `resolve_reshape_dims` (-1 inference + size validation) + `infer_dim` +
+  the generic `reshape_2d` helper (REUSE-extended alongside the existing
+  private `reshape_to`). Returns `Err(ShapeMismatch)` on a bad shape.
+- `cabi.rs`: `__cobrust_coil_reshape(a, rows, cols)` — borrows `a`, runs the
+  kernel, `coil_panic`s on `Err` (numpy `ValueError`), else single fresh
+  `Box::into_raw`. The fallible-with-2-extra-Int analogue of the infallible
+  1-arg `transpose` / `flatten` / `ravel` shims.
+- `ecosystem.rs`: `("coil","reshape")` → EcoSig `[coil_buffer_ty(), Ty::Int,
+  Ty::Int] -> coil_buffer_ty()`, `PyCompatTier::Semantic`. EXACTLY
+  `broadcast_to`'s `[Buffer, Int]` shape + one more `Int`.
+- Typecheck / MIR: **NO new code** — the generic `try_lower_ecosystem_call`
+  iterates `sig.params` (Buffer, Int, Int) over the SAME borrow-Buffer-arg
+  path as `broadcast_to`'s `[Buffer, Int]`, +1 Int.
+- Codegen: `__cobrust_coil_reshape` → a NEW `coil_reshape_ty`
+  (`(ptr, i64, i64) -> ptr`, the `coil_bcast_ty` Buffer+Int shape + one more
+  Int). Symbol rides the `__cobrust_coil_` prefix recognizer (pure
+  `starts_with`).
+
+### Done means (#163 BATCH 18 — DONE)
+
+- [x] `manipulate.rs`: `reshape` kernel + `resolve_reshape_dims` / `infer_dim`
+      / `reshape_2d` helpers; 10 unit tests with the numpy-2.4.6 oracle
+      (C-order `(2,3)` + the column-major NEGATIVE, `(3,2)`, `-1` inference
+      BOTH ways, both-`-1` Err, size-mismatch Err, `-1`-non-divisor Err,
+      0-dim Err, int-dtype-preserve, reshape∘flatten round-trip).
+- [x] cabi: `__cobrust_coil_reshape` (borrow → fresh-Box → `coil_panic`-on-Err
+      like `concatenate`). 2 shim tests: `(2,3)->(3,2)` C-order + drop-once
+      (2 drops), and `-1` inference. The size-mismatch trap is NOT a shim
+      `#[should_panic]` (the `coil_panic` → `__cobrust_panic` abort is nounwind
+      and would kill the test runner); it is covered at the kernel Err layer
+      (4 Err unit tests) + the `coil_reshape_e2e` non-zero-exit test.
+- [x] Manifest: `("coil","reshape")` `[Buffer, Int, Int] -> Buffer` Semantic.
+      1 manifest signature test.
+- [x] Typecheck / MIR: NO new code (the generic `sig.params`-iterating
+      ecosystem-call lowering, `broadcast_to` path + 1 Int).
+- [x] Codegen: `coil_reshape_ty` (`(ptr, i64, i64) -> ptr`) extern.
+- [x] `.cb` E2E `coil_reshape_e2e.rs` (5 tests): reshape `(2,3)->(3,2)`
+      C-order, `-1` inference `(3,2)`, reshape∘transpose `(2,3)` chain, a
+      size-mismatch `(2,4)` runtime trap (non-zero exit), and a `str`-dim
+      typecheck reject.
+- [x] No regression: full `cobrust-coil` lib suite green; `coil_reshape_e2e` +
+      `coil_hello_e2e` green, run ONE `--test` at a time (F73 libcoil.a
+      build-race avoidance); touched crates (`cobrust-coil` + `cobrust-codegen`
+      + `cobrust-types`) build + clippy `-D warnings --all-targets` + fmt
+      clean; no new dep (`Cargo.lock` unchanged — F64); pure ndarray + std.
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

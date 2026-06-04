@@ -104,8 +104,9 @@ use crate::manipulate::{
     argsort as coil_argsort, concatenate as coil_concatenate, diff as coil_diff,
     flatnonzero as coil_flatnonzero, flatten as coil_flatten, flip as coil_flip,
     hstack as coil_hstack, outer as coil_outer, ravel as coil_ravel, repeat as coil_repeat,
-    roll as coil_roll, sort as coil_sort, tile as coil_tile, transpose as coil_transpose,
-    unique as coil_unique, vstack as coil_vstack, where_select as coil_where,
+    reshape as coil_reshape, roll as coil_roll, sort as coil_sort, tile as coil_tile,
+    transpose as coil_transpose, unique as coil_unique, vstack as coil_vstack,
+    where_select as coil_where,
 };
 use crate::print::array_repr;
 use crate::reduce::{cumprod as coil_cumprod, cumsum as coil_cumsum};
@@ -1029,6 +1030,38 @@ pub unsafe extern "C" fn __cobrust_coil_ravel(a: *mut u8) -> *mut u8 {
     // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
     let arr: &Array = unsafe { &*a.cast::<Array>() };
     Box::into_raw(Box::new(coil_ravel(arr))).cast::<u8>()
+}
+
+/// `coil.reshape(a, rows, cols) -> Buffer`. Flatten `a` in C / row-major
+/// order, then lay the elements out as a 2-D `(rows, cols)` array (dtype +
+/// values preserved). Exactly one of `rows` / `cols` may be `-1` (inferred
+/// as `a.size() / (the other)`). BORROWS `a`; returns a fresh owned handle.
+///
+/// Unlike the infallible 1-arg `transpose` / `flatten` / `ravel`, reshape is
+/// FALLIBLE: a bad shape (both dims `-1`, a `-1` with a non-divisor other, a
+/// non-`-1` dim `<= 0`, or a final `rows * cols != size`) is a numpy
+/// `ValueError`, surfaced as a clean `coil_panic` (the `__cobrust_panic`
+/// abort) — NEVER unwinding across the C-ABI.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (not yet dropped). The returned
+/// pointer is a freshly-Boxed handle the `.cb` caller owns; freed once via
+/// `__cobrust_coil_buffer_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_reshape(a: *mut u8, rows: i64, cols: i64) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.reshape: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only —
+    // not reboxed / freed; the `.cb` scope still owns + drops it.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    match coil_reshape(arr, rows, cols) {
+        Ok(out) => Box::into_raw(Box::new(out)).cast::<u8>(),
+        // A bad shape is a clean trap (numpy `ValueError`), NOT a garbage
+        // buffer — it is a structural misuse the C-ABI must abort on.
+        Err(e) => coil_panic(&format!("coil.reshape: {}", e.message)),
+    }
 }
 
 // =====================================================================
@@ -3702,6 +3735,67 @@ mod tests {
             __cobrust_coil_buffer_drop(h);
         }
     }
+
+    // -- #163 BATCH 18 reshape shim (2026-06-05) — borrow `a`, fresh
+    //    `(rows,cols)` Buffer; bad shape traps via `coil_panic`. --------
+
+    /// `coil.reshape(array2x3(...), 3, 2)` → a `(3, 2)` C-order Buffer;
+    /// borrows the input, the fresh result drops once (2 total drops). The
+    /// (2,3) → (3,2) re-layout pins the C-order: `[[1,2,3],[4,5,6]]` flattens
+    /// to `[1..6]`, re-laid as `[[1,2],[3,4],[5,6]]`.
+    #[test]
+    fn reshape_shim_2x3_to_3x2_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+            let r = __cobrust_coil_reshape(a, 3, 2);
+            assert!(!r.is_null());
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.shape(), &[3, 2]);
+            assert_eq!(
+                array_repr(arr),
+                "array([[1, 2], [3, 4], [5, 6]], dtype=float64)"
+            );
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(drop_count() - before, 2);
+    }
+
+    /// `coil.reshape(array2x3(...), -1, 2)` infers rows = 6 / 2 = 3 → a
+    /// `(3, 2)` Buffer (the same layout as the explicit form above).
+    #[test]
+    fn reshape_shim_neg_one_inference() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+            let r = __cobrust_coil_reshape(a, -1, 2);
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.shape(), &[3, 2]);
+            assert_eq!(
+                array_repr(arr),
+                "array([[1, 2], [3, 4], [5, 6]], dtype=float64)"
+            );
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    // NOTE (reshape trap): `coil.reshape(array2x3(...), 2, 4)` on a 6-element
+    // buffer TRAPS (numpy `ValueError`): the shim `coil_panic`s. We do NOT
+    // exercise that abort path as a lib unit test — the `coil_panic` →
+    // `__cobrust_panic` shim diverges via the stdlib abort (an `extern "C"`
+    // `panic!` is nounwind, so `#[should_panic]` cannot catch it; it aborts the
+    // test runner). The bad-shape trap is covered at the KERNEL layer
+    // (`manipulate::reshape(..).unwrap_err()` — see the 4 Err unit tests in
+    // `manipulate.rs`) and end-to-end (`coil_reshape_e2e.rs` asserts the
+    // compiled binary exits NON-zero), which together pin the same
+    // numpy-`ValueError` contract without aborting this process.
 
     /// #163 BATCH 13 — `coil.maximum(a, b)` over two `(2,)` buffers,
     /// borrows both, fresh result drops once (3 total drops). A NaN in `b`

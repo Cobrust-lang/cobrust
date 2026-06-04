@@ -66,6 +66,7 @@
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
     clippy::module_name_repetitions
@@ -103,6 +104,38 @@ pub fn flatten(a: &Array) -> Array {
         Array::Float64(arr) => Array::Float64(flatten_c(arr)),
         Array::Bool(arr) => Array::Bool(flatten_c(arr)),
     }
+}
+
+/// `np.reshape(a, (rows, cols))` — flatten `a` in **C / row-major** order,
+/// then lay the elements out as a 2-D `(rows, cols)` array. **Dtype +
+/// values preserved** (reshape never changes data): `np.arange(6).reshape(2,
+/// 3) == [[0,1,2],[3,4,5]]` (NOT column-major). The returned array is a
+/// fresh owned C-standard-layout copy.
+///
+/// `-1` inference (numpy's "unknown dimension"): **exactly one** of `rows`
+/// / `cols` may be `-1`, which is inferred as `a.size() / (the other)`
+/// (`arange(6).reshape(-1, 3) == (2, 3)`; `.reshape(3, -1) == (3, 2)`).
+///
+/// # Errors
+///
+/// `ShapeMismatch` (numpy's `ValueError`) when:
+/// - **both** dims are `-1` (numpy: "can only specify one unknown
+///   dimension");
+/// - a `-1` dim is paired with a non-divisor other (`size % other != 0`),
+///   so no integer dimension fits;
+/// - a non-`-1` dim is `<= 0` (numpy rejects a 0 / negative explicit dim
+///   for a non-empty array);
+/// - after inference `rows * cols != a.size()` (numpy: "cannot reshape
+///   array of size N into shape (rows,cols)").
+pub fn reshape(a: &Array, rows: i64, cols: i64) -> Result<Array, NumpyError> {
+    let (r, c) = resolve_reshape_dims(rows, cols, a.size())?;
+    Ok(match a {
+        Array::Int32(arr) => Array::Int32(reshape_2d(arr, r, c)),
+        Array::Int64(arr) => Array::Int64(reshape_2d(arr, r, c)),
+        Array::Float32(arr) => Array::Float32(reshape_2d(arr, r, c)),
+        Array::Float64(arr) => Array::Float64(reshape_2d(arr, r, c)),
+        Array::Bool(arr) => Array::Bool(reshape_2d(arr, r, c)),
+    })
 }
 
 /// `np.ravel(a)` — collapse to a 1-D C-order copy. numpy's `ravel`
@@ -730,6 +763,81 @@ fn flatten_c<T: Clone>(arr: &ArrayD<T>) -> ArrayD<T> {
         .expect("1-D from_shape_vec with matching length is infallible")
 }
 
+/// 2-D C-order `(rows, cols)` reshape of an `ArrayD<T>` (the [`reshape`]
+/// body). `iter()` walks in C (row-major) logical order, so this flattens
+/// then re-lays-out exactly as numpy's `reshape(order='C')`. The caller
+/// ([`reshape`]) guarantees `rows * cols == arr.len()` via
+/// [`resolve_reshape_dims`], so `from_shape_vec` is infallible.
+fn reshape_2d<T: Clone>(arr: &ArrayD<T>, rows: usize, cols: usize) -> ArrayD<T> {
+    let flat: Vec<T> = arr.iter().cloned().collect();
+    ArrayD::from_shape_vec(IxDyn(&[rows, cols]), flat)
+        .expect("reshape_2d: caller guarantees rows * cols == size via resolve_reshape_dims")
+}
+
+/// Resolve a `(rows, cols)` reshape request against the source `size`,
+/// handling numpy's `-1` "unknown dimension" inference and validating the
+/// total size. Returns the concrete `(rows, cols)` on success.
+///
+/// # Errors
+///
+/// `ShapeMismatch` (numpy `ValueError`) on: both dims `-1`; a `-1` paired
+/// with a non-divisor other; a non-`-1` dim `<= 0`; or a final
+/// `rows * cols != size`. See [`reshape`] for the per-case numpy messages.
+fn resolve_reshape_dims(rows: i64, cols: i64, size: usize) -> Result<(usize, usize), NumpyError> {
+    // numpy: "can only specify one unknown dimension".
+    if rows == -1 && cols == -1 {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: "can only specify one unknown dimension".to_string(),
+        });
+    }
+    // Infer the single `-1` dim from the other (which must be a positive
+    // divisor of `size`). `size as i64` is exact for any realistic buffer.
+    let size_i = size as i64;
+    let (r, c) = match (rows, cols) {
+        (-1, c) => (infer_dim(size_i, c, rows, cols)?, c),
+        (r, -1) => (r, infer_dim(size_i, r, rows, cols)?),
+        (r, c) => (r, c),
+    };
+    // A non-`-1` explicit dim must be strictly positive (numpy rejects a 0
+    // or negative dim — for a non-empty array a 0 dim can never match the
+    // size, and a negative dim other than the single -1 is meaningless).
+    if r <= 0 || c <= 0 {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: format!("cannot reshape array of size {size} into shape ({rows},{cols})"),
+        });
+    }
+    // Final total-size check (numpy: "cannot reshape array of size N into
+    // shape (rows,cols)"). Guards the inferred path too (a non-divisor -1
+    // already returned above, so this catches the all-explicit mismatch).
+    // `r` / `c` are > 0 here, so `r * c` cannot overflow for any realistic
+    // buffer size and the `as usize` casts are non-negative.
+    if r * c != size_i {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: format!("cannot reshape array of size {size} into shape ({r},{c})"),
+        });
+    }
+    Ok((r as usize, c as usize))
+}
+
+/// Infer a `-1` dimension as `size / other`. `other` must be a strictly
+/// positive divisor of `size`, else the shape is unsatisfiable (numpy
+/// `ValueError`). `orig_rows` / `orig_cols` reproduce numpy's message,
+/// which echoes the originally-requested (pre-inference) shape.
+fn infer_dim(size: i64, other: i64, orig_rows: i64, orig_cols: i64) -> Result<i64, NumpyError> {
+    if other <= 0 || size % other != 0 {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: format!(
+                "cannot reshape array of size {size} into shape ({orig_rows},{orig_cols})"
+            ),
+        });
+    }
+    Ok(size / other)
+}
+
 // ---- BATCH-9 sort / argsort / unique / flatnonzero internals ----------
 
 /// Wrap a `Vec<i64>` (already in result order) as a fresh owned 1-D
@@ -1049,6 +1157,130 @@ mod tests {
         let a = array_f64(&[1., 2., 3., 4., 5., 6.], &[2, 3]).unwrap();
         let f = flatten(&transpose(&a));
         assert_eq!(f64_vals(&f), vec![1., 4., 2., 5., 3., 6.]);
+    }
+
+    // ---- #163 BATCH 18 reshape (numpy 2.4.6 confirmed) ----
+
+    #[test]
+    fn reshape_6_to_2x3_c_order() {
+        // np.arange(6).reshape(2,3) == [[0,1,2],[3,4,5]] (C/row-major).
+        // The C-order layout is load-bearing: a column-major mutation
+        // (which would give [[0,2,4],[1,3,5]]) MUST fail this assert.
+        let a = array_f64(&[0., 1., 2., 3., 4., 5.], &[6]).unwrap();
+        let r = reshape(&a, 2, 3).unwrap();
+        assert_eq!(r.shape(), vec![2, 3]);
+        // C-order flat values are the unchanged input sequence.
+        assert_eq!(f64_vals(&r), vec![0., 1., 2., 3., 4., 5.]);
+        // Pin the column-major NEGATIVE: an F-order layout would differ.
+        assert_ne!(f64_vals(&r), vec![0., 2., 4., 1., 3., 5.]);
+        assert_eq!(r.dtype(), a.dtype());
+    }
+
+    #[test]
+    fn reshape_6_to_3x2_c_order() {
+        // np.arange(6).reshape(3,2) == [[0,1],[2,3],[4,5]].
+        let a = array_f64(&[0., 1., 2., 3., 4., 5.], &[6]).unwrap();
+        let r = reshape(&a, 3, 2).unwrap();
+        assert_eq!(r.shape(), vec![3, 2]);
+        assert_eq!(f64_vals(&r), vec![0., 1., 2., 3., 4., 5.]);
+    }
+
+    #[test]
+    fn reshape_neg_one_rows_inferred() {
+        // np.arange(6).reshape(-1,3) == (2,3): rows inferred as 6/3 == 2.
+        let a = array_f64(&[0., 1., 2., 3., 4., 5.], &[6]).unwrap();
+        let r = reshape(&a, -1, 3).unwrap();
+        assert_eq!(r.shape(), vec![2, 3]);
+        assert_eq!(f64_vals(&r), vec![0., 1., 2., 3., 4., 5.]);
+    }
+
+    #[test]
+    fn reshape_neg_one_cols_inferred() {
+        // np.arange(6).reshape(3,-1) == (3,2): cols inferred as 6/3 == 2.
+        let a = array_f64(&[0., 1., 2., 3., 4., 5.], &[6]).unwrap();
+        let r = reshape(&a, 3, -1).unwrap();
+        assert_eq!(r.shape(), vec![3, 2]);
+        assert_eq!(f64_vals(&r), vec![0., 1., 2., 3., 4., 5.]);
+    }
+
+    #[test]
+    fn reshape_both_neg_one_errors() {
+        // np.reshape(a, (-1,-1)) -> ValueError "can only specify one
+        // unknown dimension".
+        let a = array_f64(&[0., 1., 2., 3., 4., 5.], &[6]).unwrap();
+        let err = reshape(&a, -1, -1).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
+        assert!(
+            err.message.contains("one unknown dimension"),
+            "message must echo numpy's both--1 error; got {:?}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn reshape_size_mismatch_errors() {
+        // np.arange(6).reshape(2,4) -> ValueError "cannot reshape array of
+        // size 6 into shape (2,4)".
+        let a = array_f64(&[0., 1., 2., 3., 4., 5.], &[6]).unwrap();
+        let err = reshape(&a, 2, 4).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
+        assert!(
+            err.message.contains("size 6") && err.message.contains("(2,4)"),
+            "message must echo numpy's size-mismatch error; got {:?}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn reshape_neg_one_non_divisor_errors() {
+        // np.arange(6).reshape(-1,4): 6 % 4 != 0, no integer rows fit ->
+        // ValueError.
+        let a = array_f64(&[0., 1., 2., 3., 4., 5.], &[6]).unwrap();
+        let err = reshape(&a, -1, 4).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
+        assert!(
+            err.message.contains("size 6"),
+            "message must echo numpy's reshape error; got {:?}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn reshape_zero_dim_errors() {
+        // A non--1 dim that is <= 0 (here 0) is rejected for a non-empty
+        // array (numpy: cannot reshape size 6 into shape (0,3)).
+        let a = array_f64(&[0., 1., 2., 3., 4., 5.], &[6]).unwrap();
+        assert_eq!(
+            reshape(&a, 0, 3).unwrap_err().kind,
+            NumpyErrorKind::ShapeMismatch
+        );
+    }
+
+    #[test]
+    fn reshape_preserves_int_dtype() {
+        // Reshape is dtype-preserving — an int64 input stays int64.
+        let a = array_i64(&[1, 2, 3, 4, 5, 6], &[6]).unwrap();
+        let r = reshape(&a, 2, 3).unwrap();
+        assert_eq!(r.shape(), vec![2, 3]);
+        assert_eq!(r.dtype(), crate::dtype::Dtype::Int64);
+        match r {
+            Array::Int64(arr) => {
+                assert_eq!(
+                    arr.iter().copied().collect::<Vec<_>>(),
+                    vec![1, 2, 3, 4, 5, 6]
+                );
+            }
+            _ => panic!("dtype not preserved"),
+        }
+    }
+
+    #[test]
+    fn reshape_then_flatten_round_trip() {
+        // Reshape to (2,3) then flatten back recovers the C-order sequence.
+        let a = array_f64(&[0., 1., 2., 3., 4., 5.], &[6]).unwrap();
+        let round = flatten(&reshape(&a, 2, 3).unwrap());
+        assert_eq!(round.shape(), vec![6]);
+        assert_eq!(f64_vals(&round), vec![0., 1., 2., 3., 4., 5.]);
     }
 
     #[test]

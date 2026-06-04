@@ -174,6 +174,31 @@ fn main() -> i64:
   的 `ravel` 可能返回**视图**,但句柄 ABI 没有「视图指回父数组」的表面,
   所以这里返回一份拥有所有权的拷贝(**数值与 numpy 完全一致**)。
 
+**变形为二维 `(rows, cols)`(支持 `-1` 推断;坏形状 → 干净 trap)**:
+
+- **`coil.reshape(a: Buffer, rows: i64, cols: i64) -> Buffer`** —— 先按
+  **C / 行主序**把 `a` 展平,再铺成二维 `(rows, cols)`。**dtype 与数值保持
+  不变** —— reshape 从不改变数据:`np.arange(6).reshape(2, 3) ==
+  [[0,1,2],[3,4,5]]`(**不是**列主序)。`rows` / `cols` 中**恰好一个**可以
+  是 `-1`,会被推断为 `a.size() / (另一个)`(size-6 buffer 上
+  `reshape(a, -1, 3)` 得 `(2, 3)`;`reshape(a, 3, -1)` 得 `(3, 2)`)。
+
+  ```python
+  let a: coil.Buffer = coil.array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)  # (2,3)
+  let r: coil.Buffer = coil.reshape(a, 3, 2)    # (3,2):[[1,2],[3,4],[5,6]]
+  let _ = coil.print_buffer(r)
+  let i: coil.Buffer = coil.reshape(a, -1, 2)   # rows 推断:6/2 = 3
+  let _ = coil.print_buffer(i)
+  ```
+
+  坏形状即 numpy 的 `ValueError`,会**中止进程**(非零退出,绝不跨 C-ABI
+  栈展开):两维都是 `-1`("can only specify one unknown dimension")、`-1`
+  搭配非整除的另一维、非 `-1` 维 `<= 0`,或推断后 `rows * cols != a.size()`
+  ("cannot reshape array of size N into shape (rows,cols)")。这是双标量
+  形式;shape **元组** `np.reshape(a, (m, n))` 是有记录的后续项(需要元组参
+  编组),`order='F'` / `≥3` 维 reshape 也是有记录的推迟项 —— 本次交付的是
+  压倒性最常见的二维 C 序场景。
+
 **双参(组合;非共形 / dtype 不匹配 → 干净 trap)**:
 
 - **`coil.concatenate(a: Buffer, b: Buffer) -> Buffer`** —— 沿轴 0 拼接两个
@@ -200,8 +225,9 @@ fn main() -> i64:
 > 表面)。
 >
 > **N 数组 / shape 元组形式被推迟**:`np.concatenate([a, b, c, ...])`(N 数组
-> 列表)和 `np.reshape(a, (m, n))`(shape 元组)需要 `list[Buffer]` / 元组
-> 编组,目前还不存在 —— 等那个落地后再补。本批只交付单参与双数组形式。
+> 列表)和 shape **元组** `np.reshape(a, (m, n))` 需要 `list[Buffer]` / 元组
+> 编组,目前还不存在 —— 等那个落地后再补。双标量 `coil.reshape(a, rows,
+> cols)` 形式(见上)**今天就已交付**,只有元组参写法被推迟。
 
 ## 排序与搜索(`sort` / `argsort` / `unique` / `flatnonzero`)
 

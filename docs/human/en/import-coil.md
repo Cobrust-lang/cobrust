@@ -183,6 +183,34 @@ fn main() -> i64:
   view-into-parent surface, so this is an owned copy with **identical
   values** to numpy's `ravel`.
 
+**Reshape to a 2-D `(rows, cols)` (`-1` inference; bad shape → clean trap):**
+
+- **`coil.reshape(a: Buffer, rows: i64, cols: i64) -> Buffer`** — flatten
+  `a` in **C / row-major** order, then lay the elements out as a 2-D
+  `(rows, cols)` array. **Dtype + values are preserved** — reshape never
+  changes data: `np.arange(6).reshape(2, 3) == [[0,1,2],[3,4,5]]` (NOT
+  column-major). Exactly **one** of `rows` / `cols` may be `-1`, which is
+  inferred as `a.size() / (the other)` (`reshape(a, -1, 3)` on a size-6
+  buffer gives `(2, 3)`; `reshape(a, 3, -1)` gives `(3, 2)`).
+
+  ```python
+  let a: coil.Buffer = coil.array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)  # (2,3)
+  let r: coil.Buffer = coil.reshape(a, 3, 2)    # (3,2): [[1,2],[3,4],[5,6]]
+  let _ = coil.print_buffer(r)
+  let i: coil.Buffer = coil.reshape(a, -1, 2)   # rows inferred: 6/2 = 3
+  let _ = coil.print_buffer(i)
+  ```
+
+  A bad shape is numpy's `ValueError` and **traps** (the program aborts
+  non-zero, never unwinds across the C-ABI): both dims `-1` ("can only
+  specify one unknown dimension"), a `-1` paired with a non-divisor other,
+  a non-`-1` dim `<= 0`, or a final `rows * cols != a.size()` ("cannot
+  reshape array of size N into shape (rows,cols)"). This is the two-scalar
+  form; the shape-**tuple** `np.reshape(a, (m, n))` is a tracked follow-up
+  (it needs tuple-arg marshalling), and `order='F'` / `≥3-D` reshape are
+  documented deferrals — this ships the overwhelmingly-common 2-D C-order
+  case.
+
 **Two-arg (combine; non-conformable / dtype-mismatch → clean trap):**
 
 - **`coil.concatenate(a: Buffer, b: Buffer) -> Buffer`** — join two
@@ -215,10 +243,10 @@ fn main() -> i64:
 > escape is a later surface).
 >
 > **N-array / shape-tuple forms are deferred**: `np.concatenate([a, b, c,
-> ...])` (an N-array list) and `np.reshape(a, (m, n))` (a shape tuple)
+> ...])` (an N-array list) and the shape-**tuple** `np.reshape(a, (m, n))`
 > need `list[Buffer]` / tuple marshalling that does not exist yet — a
-> follow-up once that lands. This batch ships only the single-arg and
-> 2-array forms.
+> follow-up once that lands. The two-scalar `coil.reshape(a, rows, cols)`
+> form (above) DOES ship today; only the tuple-arg spelling is deferred.
 
 ## Sorting & search (`sort` / `argsort` / `unique` / `flatnonzero`)
 

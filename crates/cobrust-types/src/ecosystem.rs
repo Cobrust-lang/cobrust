@@ -672,6 +672,21 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // #163 BATCH 18 — `coil.reshape(a, rows, cols) -> Buffer`. The 2-D
+        // C / row-major reshape (the ADR-0077 Q5 two-scalar-arg honest first
+        // proof; the shape-tuple `np.reshape(a, (m,n))` form is a deferral).
+        // EXACTLY `broadcast_to`'s `[Buffer, Int]` shape + one more `Int`:
+        // the GENERIC `try_lower_ecosystem_call` iterates these 3 params
+        // (Buffer, Int, Int) over the SAME borrow-Buffer-arg path, so ZERO
+        // batch-specific MIR. Exactly one of `rows` / `cols` may be `-1`
+        // (inferred); a bad shape `coil_panic`s at runtime (numpy
+        // `ValueError`). Tier `Semantic` (the manifest reshape-family tier).
+        ("coil", "reshape") => Some(EcoSig::from_values(
+            "__cobrust_coil_reshape",
+            vec![coil_buffer_ty(), Ty::Int, Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         ("coil", "split") => Some(EcoSig::from_values(
             "__cobrust_coil_split",
             vec![coil_buffer_ty(), Ty::Int],
@@ -3608,6 +3623,20 @@ mod tests {
         assert_eq!(sig.runtime_symbol, "__cobrust_coil_broadcast_to");
         assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Int]);
         assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    #[test]
+    fn coil_reshape_signature() {
+        // #163 BATCH 18 — `coil.reshape(a, rows, cols) -> Buffer`: the
+        // broadcast_to `[Buffer, Int]` shape + one more `Int`.
+        let sig = lookup_module_fn("coil", "reshape").expect("coil.reshape in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_reshape");
+        assert_eq!(
+            value_tys(&sig.params),
+            vec![coil_buffer_ty(), Ty::Int, Ty::Int]
+        );
+        assert_eq!(sig.ret, coil_buffer_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
     }
 
     #[test]

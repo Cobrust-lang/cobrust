@@ -3197,11 +3197,23 @@ impl<'ctx> LlvmEmitter<'ctx> {
         let f64_ty = self.ctx.f64_type();
         let coil_grid_ty = ptr_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false);
         let coil_bcast_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        // #163 BATCH 18 — `__cobrust_coil_reshape(a, rows, cols)`: a
+        // `(ptr, i64, i64) -> ptr` shim (the `coil_bcast_ty` Buffer+Int shape
+        // + one more Int). NEW fn-type because no prior coil free-function
+        // declares a 2-int-arg + Buffer shape in THIS block (the operator
+        // block's `coil_slice_ty` is the same shape but a separate `let`; a
+        // dedicated name keeps this batch self-contained).
+        let coil_reshape_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
         let coil_agg_ty = f64_ty.fn_type(&[ptr_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_coil_mgrid", coil_grid_ty, 2usize),
             ("__cobrust_coil_ogrid", coil_grid_ty, 2),
             ("__cobrust_coil_broadcast_to", coil_bcast_ty, 2),
+            // #163 BATCH 18 — `coil.reshape(a, rows, cols) -> Buffer`. Three
+            // params (Buffer, Int, Int) on the new `coil_reshape_ty`; the MIR
+            // ecosystem-call lowering retargets `coil.reshape(a, r, c)` onto
+            // this Call (generic 3-param path, ZERO batch-specific MIR).
+            ("__cobrust_coil_reshape", coil_reshape_ty, 3),
             ("__cobrust_coil_split", coil_bcast_ty, 2),
             ("__cobrust_coil_mean", coil_agg_ty, 1),
             ("__cobrust_coil_median", coil_agg_ty, 1),
