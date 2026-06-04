@@ -1725,8 +1725,10 @@ existing `unary_math_dtype` contract.
 - Scalar-returning reductions of a ufunc result (e.g. `np.sum(np.exp(a))`)
   — already composable via the existing `coil.mean`/etc.; a fused form is
   a follow-up.
-- The 2-arg `np.logaddexp` / `np.hypot` and the inverse-trig family
-  (`arcsin`/`arccos`/`arctan`/`arctan2`) — DEFERRED (arctan2 is 2-arg).
+- The 2-arg `np.logaddexp` / `np.hypot` / `np.arctan2` SHIPPED in BATCH 15;
+  the single-arg inverse-trig / -hyperbolic family (`arcsin` / `arccos` /
+  `arctan` / `arcsinh` / `arccosh` / `arctanh`) SHIPPED in BATCH 16 —
+  COMPLETING the unary transcendental family. (No longer deferred.)
 - An int-DTYPE `.cb` constructor — the int->f64 promotion path is pinned
   in the `elementwise.rs` Rust unit tests; the `.cb` E2E proves the
   float-RETURNING contract those promotions serve (every `.cb` ctor emits
@@ -3153,6 +3155,116 @@ equal — `minmax_check` enforced it) operand dtype.
       CHAIN `[15,41]` + a non-conformable `(2,)` vs `(2,2)` TRAP.
 - [x] No regression: full `cobrust-coil` suite green (440 lib tests);
       `coil_binfloat_e2e` (6) + `coil_hello_e2e` (3) all green, run ONE
+      `--test` at a time (F73 libcoil.a build-race avoidance); touched
+      crates (`cobrust-coil` + `cobrust-codegen` + `cobrust-types`) build +
+      clippy `-D warnings` + fmt clean; no new dep (`Cargo.lock` unchanged
+      — F64).
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
+## #145 numpy gap-closure BATCH 16 — the single-arg INVERSE trig / hyperbolic ufuncs `arcsin` / `arccos` / `arctan` / `arcsinh` / `arccosh` / `arctanh` (DONE)
+
+The six single-arg INVERSE forms, COMPLETING the unary transcendental
+family (the documented BATCH-3 deferral; BATCH 15 shipped the 2-arg
+`arctan2` / `hypot` / `logaddexp`). Each is a 1-arg `Buffer -> Buffer`
+op wired BYTE-IDENTICALLY to the BATCH-3 forward transcendentals
+(`exp`/`log`/`sqrt`/`sin`/`cos`/`tan` + `sinh`/`cosh`/`tanh`): the cabi
+shim rides the SAME `buffer_unary` shared body (borrow handle → fresh
+`Box::into_raw`), the manifest is a `[Buffer] -> Buffer` `EcoSig`, and
+codegen reuses the `coil_shape_ty` `(ptr) -> ptr` extern. The kernels are
+`f64::asin`/`acos`/`atan`/`asinh`/`acosh`/`atanh` (and `f32::*`), which
+produce the numpy-exact IEEE-754 values (incl. out-of-domain `NaN`)
+natively.
+
+### The float math + DOMAIN -> NaN (load-bearing — numpy 2.4.6 confirmed + tested)
+
+The CORRECTNESS FOCUS is the DOMAIN contract: an out-of-domain input is a
+`NaN` (or `±inf`) **VALUE** — numpy emits a RuntimeWarning but the array
+value IS the special float, NEVER a trap / error. Rust's `f64::asin` etc.
+emit bit-identical IEEE-754 results (verified vs `/opt/homebrew/bin/
+python3.11`, numpy 2.4.6):
+
+- **`arcsin(a)`** — inverse sine. Domain `[-1, 1] -> [-π/2, π/2]`;
+  `|x| > 1 -> NaN`. `arcsin(1) = π/2`, `arcsin(0) = 0`, `arcsin(2) = NaN`.
+- **`arccos(a)`** — inverse cosine. Domain `[-1, 1] -> [0, π]`;
+  `|x| > 1 -> NaN`. `arccos(1) = 0`, `arccos(0) = π/2`, `arccos(-1) = π`,
+  `arccos(2) = NaN`.
+- **`arctan(a)`** — inverse tangent. All reals `-> (-π/2, π/2)` (TOTAL, no
+  NaN domain). `arctan(1) = π/4`, `arctan(0) = 0`. UNLIKE 2-arg `arctan2`,
+  cannot disambiguate quadrant.
+- **`arcsinh(a)`** — inverse hyperbolic sine. All reals (TOTAL).
+  `arcsinh(0) = 0`.
+- **`arccosh(a)`** — inverse hyperbolic cosine. Domain `[1, inf) -> [0,
+  inf)`; `x < 1 -> NaN`. `arccosh(1) = 0`, `arccosh(0) = NaN`.
+- **`arctanh(a)`** — inverse hyperbolic tangent. Domain `(-1, 1)`;
+  `arctanh(±1) = ±inf`, `|x| > 1 -> NaN`. `arctanh(0) = 0`,
+  `arctanh(1) = +inf`, `arctanh(2) = NaN`.
+
+NaN asserted via `.is_nan()`, `±inf` via `.is_infinite()` — NEVER
+`assert_eq!(x, NaN/inf)`.
+
+### DTYPE PROMOTION (the FLOAT-PROMOTING transcendental rule, reuses `unary_math_dtype`)
+
+IDENTICAL to the BATCH-3 forward transcendentals (reuses the shared
+`unary_float` helper):
+
+- **int / bool → `Float64`** (`np.arcsin(int64).dtype == float64`; `bool`
+  → `Float64`, coil's value-faithful Semantic divergence from numpy's
+  `float16` — `arcsin(True) = arcsin(1) = π/2`, VALUE matches).
+- **`Float32` → `Float32`** (single precision preserved).
+- **`Float64` → `Float64`**.
+
+### 5-layer wiring
+
+- `elementwise.rs`: 6 `#[must_use]` fns via the EXISTING `unary_float`
+  helper (`arcsin` = `unary_float(a, f32::asin, f64::asin)`, etc.) — NO new
+  helper, NO new kernel infrastructure. NEW unit tests (12): the pinned
+  values (arcsin/arccos/arctan + arcsinh/arccosh/arctanh zero-points +
+  arccosh/arctanh round-trips) + DOMAIN->NaN (arcsin/arccos `|x|>1`,
+  arccosh `<1`) + arctanh `±1`→`±inf` / `2`→NaN + int→f64 (i64 + i32) /
+  f32→f32 (arcsin + arctan) / bool→f64 promote + 2-D shape preservation +
+  `sin(arcsin(a))` round-trip chain.
+- `cabi.rs`: 6 shims `__cobrust_coil_{arcsin,arccos,arctan,arcsinh,arccosh,
+  arctanh}` `(ptr) -> ptr` via the shared `buffer_unary` body. TOTAL — NO
+  domain trap (out-of-domain is a NaN value); the only `coil_panic` path is
+  a null handle (mirrors the BATCH-3 `__cobrust_coil_exp` guard). NEW shim
+  round-trip tests (2): `arcsin([1,0])=[π/2,0]` (drop-once) + `arctanh`
+  DOMAIN (`arctanh(2)`→NaN value `.is_nan()`, `arctanh(1)`→`+inf`
+  `.is_infinite()` — proves NO C-ABI trap on out-of-domain).
+- `ecosystem.rs`: 6 arms `("coil", op) => EcoSig::from_values(symbol,
+  [Buffer], Buffer)`, tier `Numerical` (floating arithmetic, rtol).
+- Typecheck / MIR: NO new code — the 1-Buffer-arg `[Buffer] -> Buffer`
+  form rides the SAME generic ecosystem-call lowering as `coil.exp` /
+  `coil.transpose` (BATCH 2/3 precedent; the generic Case-1 module-fn path
+  iterates `sig.params` regardless of op, NO `_=>"any"` gap).
+- Codegen: 6 register rows `__cobrust_coil_{arcsin,arccos,arctan,arcsinh,
+  arccosh,arctanh}` → `coil_shape_ty` (`(ptr) -> ptr`, the SAME extern
+  fn-type as the BATCH-3 `exp` family; NO new extern shape). Symbols ride
+  the existing `__cobrust_coil_` prefix recognizer (pure `starts_with`, no
+  CLI/linker edit).
+
+### Done means (#145 BATCH 16 — DONE)
+
+- [x] `elementwise.rs`: 6 fns reusing `unary_float` (kernels
+      `f64::asin`/`acos`/`atan`/`asinh`/`acosh`/`atanh`); 12 unit tests pin
+      the reference values, the DOMAIN->NaN contract (arcsin/arccos `|x|>1`,
+      arccosh `<1`, arctanh `2`), the `arctanh(±1)=±inf` boundary, the
+      float-promote rule (int→f64 / f32→f32 / bool→f64), 2-D shape
+      preservation, and the `sin(arcsin(a))` round-trip.
+- [x] cabi: 6 shims via shared `buffer_unary` (TOTAL — no trap path; null
+      handle the only abort). 2 shim round-trip tests, drop-once verified;
+      the arctanh test proves out-of-domain is a NaN/inf VALUE through the
+      C-ABI (no `coil_panic`).
+- [x] Manifest: 6 ecosystem arms `[Buffer] -> Buffer`, tier `Numerical`.
+- [x] Typecheck / MIR: NO new code (the 1-Buffer-arg generic path — `exp` /
+      `transpose` precedent).
+- [x] Codegen: 6 register rows, `coil_shape_ty` (NO new extern fn-type).
+- [x] `.cb` E2E `coil_invtrig_e2e.rs` (8 tests): arcsin `[π/2,0]` + arccos
+      `[0,π/2]` (lane-mirror of arcsin) + arctan `[π/4,0]` + arcsin
+      DOMAIN->NaN (exit 0, NaN VALUE not trap — the load-bearing case) +
+      arctanh `[0,inf]` boundary + arcsinh(0) on a 2x2 (shape) + arccosh(1)
+      =0 + `sin(arcsin([0.5,-0.25]))` round-trip CHAIN.
+- [x] No regression: full `cobrust-coil` suite green (454 lib tests);
+      `coil_invtrig_e2e` (8) + `coil_hello_e2e` (3) all green, run ONE
       `--test` at a time (F73 libcoil.a build-race avoidance); touched
       crates (`cobrust-coil` + `cobrust-codegen` + `cobrust-types`) build +
       clippy `-D warnings` + fmt clean; no new dep (`Cargo.lock` unchanged

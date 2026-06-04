@@ -721,6 +721,67 @@ fn main() -> i64:
 > **traps** (a clean abort, never a garbage result). (Broadcasting and
 > cross-dtype promotion are tracked follow-ups.)
 
+## Inverse trig & hyperbolic ufuncs — `arcsin` / `arccos` / `arctan` / `arcsinh` / `arccosh` / `arctanh`
+
+These six are the **inverses** of the trig / hyperbolic functions — they
+complete the unary-math family (the forward `sin` / `cos` / `tan` /
+`sinh` / `cosh` / `tanh` are above). Each takes **one buffer** and returns
+a **fresh `coil.Buffer`** of the same shape. They are **float-promoting**:
+the result is always a float (the same dtype rule as `exp` / `sqrt` — int /
+bool inputs come back `float64`, `float32` stays `float32`).
+
+```python
+import coil
+
+fn main() -> i64:
+    # arcsin(1) = pi/2, arctan(1) = pi/4 — the classic reference angles.
+    let a: coil.Buffer = coil.array1d2(1.0, 0.0)
+    let s: coil.Buffer = coil.arcsin(a)     # [pi/2, 0]
+    let t: coil.Buffer = coil.arctan(a)     # [pi/4, 0]
+    let _ = coil.print_buffer(s)
+    let _ = coil.print_buffer(t)
+
+    # Round-trip: sin(arcsin(x)) = x for x in [-1, 1].
+    let x: coil.Buffer = coil.array1d2(0.5, -0.25)
+    let r: coil.Buffer = coil.sin(coil.arcsin(x))   # [0.5, -0.25]
+    let _ = coil.print_buffer(r)
+    return 0
+```
+
+**The six ops**:
+
+- **`coil.arcsin(a) -> Buffer`** — inverse sine. Domain `[-1, 1]`, range
+  `[-π/2, π/2]`. `arcsin(1) = π/2`, `arcsin(0) = 0`.
+- **`coil.arccos(a) -> Buffer`** — inverse cosine. Domain `[-1, 1]`, range
+  `[0, π]`. `arccos(1) = 0`, `arccos(0) = π/2`, `arccos(-1) = π`.
+- **`coil.arctan(a) -> Buffer`** — inverse tangent. All reals, range
+  `(-π/2, π/2)`. `arctan(1) = π/4`. (Single-argument — for the
+  quadrant-aware two-argument form, use `arctan2(y, x)` above.)
+- **`coil.arcsinh(a) -> Buffer`** — inverse hyperbolic sine. All reals.
+  `arcsinh(0) = 0`.
+- **`coil.arccosh(a) -> Buffer`** — inverse hyperbolic cosine. Domain
+  `[1, ∞)`. `arccosh(1) = 0`.
+- **`coil.arctanh(a) -> Buffer`** — inverse hyperbolic tangent. Domain
+  `(-1, 1)`. `arctanh(0) = 0`; `arctanh(±1) = ±∞` (the boundary).
+
+> **Out-of-domain inputs return a `NaN` *value*, never an error.** `arcsin`
+> and `arccos` are only defined on `[-1, 1]`, `arccosh` only on `[1, ∞)`,
+> `arctanh` only on `(-1, 1)`. Feed one a value outside its domain and you
+> get **`NaN` back as a value** — the program keeps running, exactly as
+> numpy does (numpy prints a runtime warning, but the array value is
+> `NaN`). So `arcsin(2) = NaN`, `arccosh(0) = NaN`, `arctanh(2) = NaN`. The
+> boundary of `arctanh` is `±∞`: `arctanh(1) = +∞`, `arctanh(-1) = -∞`.
+> None of these traps — a `NaN` / `∞` is a value that flows through, just
+> like `sqrt(-1) = NaN` for the forward ops.
+
+> **Float-promoting (same rule as the forward transcendentals).** The
+> result is always a float — `float64` for integer / `float64` inputs,
+> `float32` only when the input is `float32`. A `bool` input comes back
+> `float64` (`arcsin(True) = arcsin(1) = π/2`; numpy would give `float16`,
+> but the value matches). Since there is no shape mismatch for a one-buffer
+> op, these **never trap** on shape; the only special outputs are the
+> domain `NaN` / `±∞` *values* above.
+
 ## Rearranging & repeating — `diff` / `flip` / `roll` / `repeat` / `tile`
 
 These five rearrange or repeat the elements of a buffer. Each works over

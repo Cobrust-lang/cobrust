@@ -1137,6 +1137,66 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Numerical,
         )),
+        // #145 unary INVERSE trig / hyperbolic gap-closure BATCH 16 — the
+        // single-arg inverse forms (`arcsin`/`arccos`/`arctan`/`arcsinh`/
+        // `arccosh`/`arctanh`), COMPLETING the unary transcendental family
+        // (the documented BATCH-3 deferral; BATCH 15 shipped the 2-arg
+        // `arctan2`). IDENTICAL 1-arg `Buffer -> Buffer` shape + FLOAT-
+        // promoting dtype contract as the forward transcendentals above —
+        // they ride the SAME generic ecosystem-call lowering (NO `_=>"any"`
+        // MIR gap, the 1-Buffer-arg shape `coil.exp` proves) and the SAME
+        // `coil_shape_ty` `(ptr) -> ptr` codegen extern.
+        //
+        // - `coil.arcsin(a)  -> Buffer`  — inverse sine ([-π/2,π/2]).
+        // - `coil.arccos(a)  -> Buffer`  — inverse cosine ([0,π]).
+        // - `coil.arctan(a)  -> Buffer`  — inverse tangent ((-π/2,π/2)).
+        // - `coil.arcsinh(a) -> Buffer`  — inverse hyperbolic sine.
+        // - `coil.arccosh(a) -> Buffer`  — inverse hyperbolic cosine.
+        // - `coil.arctanh(a) -> Buffer`  — inverse hyperbolic tangent.
+        //
+        // Tier `Numerical` — floating-arithmetic ufuncs whose VALUES agree
+        // with numpy at rtol 1e-12 (f64) / 1e-6 (f32). The out-of-domain
+        // inputs are IEEE-754 special VALUES, NOT errors (numpy emits a
+        // RuntimeWarning, the array value is identical): `arcsin(2)=NaN`,
+        // `arccosh(0)=NaN`, `arctanh(±1)=±inf`, `arctanh(2)=NaN`. DTYPE:
+        // int / bool -> Float64, Float32 stays Float32, Float64 stays
+        // Float64 (the BATCH-3 transcendental promotion).
+        ("coil", "arcsin") => Some(EcoSig::from_values(
+            "__cobrust_coil_arcsin",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "arccos") => Some(EcoSig::from_values(
+            "__cobrust_coil_arccos",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "arctan") => Some(EcoSig::from_values(
+            "__cobrust_coil_arctan",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "arcsinh") => Some(EcoSig::from_values(
+            "__cobrust_coil_arcsinh",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "arccosh") => Some(EcoSig::from_values(
+            "__cobrust_coil_arccosh",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "arctanh") => Some(EcoSig::from_values(
+            "__cobrust_coil_arctanh",
+            vec![coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Numerical,
+        )),
         // #145 unary ROUNDING / SIGN gap-closure BATCH 4 (2026-06-01) — the
         // DTYPE-PRESERVING 1-arg elementwise ufunc family. SAME borrow-
         // Buffer-arg → fresh-Buffer-return value-handle ABI as the BATCH-3

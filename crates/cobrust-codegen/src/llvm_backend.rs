@@ -3448,6 +3448,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_sinh", coil_shape_ty, 1),
             ("__cobrust_coil_cosh", coil_shape_ty, 1),
             ("__cobrust_coil_tanh", coil_shape_ty, 1),
+            // #145 unary INVERSE trig / hyperbolic Buffer-returning ops
+            // (BATCH 16) — `arcsin`/`arccos`/`arctan`/`arcsinh`/`arccosh`/
+            // `arctanh`, COMPLETING the unary transcendental family. All
+            // 1-arg FLOAT-returning ufuncs `(ptr) -> ptr` ≡ `coil_shape_ty`,
+            // the IDENTICAL extern shape as the BATCH-3 forward
+            // transcendentals above. The MIR ecosystem-call lowering
+            // retargets `coil.arcsin(a)` onto these `Terminator::Call`s;
+            // codegen only declares the externs (no inverse-trig-specific
+            // arm; same flat `__cobrust_coil_*` recognizer prefix).
+            ("__cobrust_coil_arcsin", coil_shape_ty, 1),
+            ("__cobrust_coil_arccos", coil_shape_ty, 1),
+            ("__cobrust_coil_arctan", coil_shape_ty, 1),
+            ("__cobrust_coil_arcsinh", coil_shape_ty, 1),
+            ("__cobrust_coil_arccosh", coil_shape_ty, 1),
+            ("__cobrust_coil_arctanh", coil_shape_ty, 1),
             // #145 unary ROUNDING / SIGN Buffer-returning ops (BATCH 4). All
             // 1-arg DTYPE-PRESERVING ufuncs (`abs`/`floor`/`ceil`/`round`/
             // `trunc`/`square`/`sign`) are `(ptr) -> ptr` ≡ `coil_shape_ty`

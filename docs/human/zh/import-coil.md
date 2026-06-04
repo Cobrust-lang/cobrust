@@ -657,6 +657,61 @@ fn main() -> i64:
 > *且*同 dtype —— 不可对齐或跨 dtype 的配对会**陷入陷阱**(干净中止,绝不产生
 > 垃圾结果)。(广播与跨 dtype 提升是已登记的后续工作。)
 
+## 反三角与反双曲 ufunc —— `arcsin` / `arccos` / `arctan` / `arcsinh` / `arccosh` / `arctanh`
+
+这六个是三角 / 双曲函数的**反函数** —— 它们补全了一元数学家族(正向的
+`sin` / `cos` / `tan` / `sinh` / `cosh` / `tanh` 在上文)。每个接收**一个
+buffer**,返回一个同形状的**新 `coil.Buffer`**。它们是**浮点提升**的:结果永远
+是浮点(与 `exp` / `sqrt` 相同的 dtype 规则 —— 整数 / bool 输入回到 `float64`,
+`float32` 保持 `float32`)。
+
+```python
+import coil
+
+fn main() -> i64:
+    # arcsin(1) = pi/2,arctan(1) = pi/4 —— 经典的参考角。
+    let a: coil.Buffer = coil.array1d2(1.0, 0.0)
+    let s: coil.Buffer = coil.arcsin(a)     # [pi/2, 0]
+    let t: coil.Buffer = coil.arctan(a)     # [pi/4, 0]
+    let _ = coil.print_buffer(s)
+    let _ = coil.print_buffer(t)
+
+    # 往返:对 x 属于 [-1, 1],sin(arcsin(x)) = x。
+    let x: coil.Buffer = coil.array1d2(0.5, -0.25)
+    let r: coil.Buffer = coil.sin(coil.arcsin(x))   # [0.5, -0.25]
+    let _ = coil.print_buffer(r)
+    return 0
+```
+
+**这六个操作**:
+
+- **`coil.arcsin(a) -> Buffer`** —— 反正弦。定义域 `[-1, 1]`,值域
+  `[-π/2, π/2]`。`arcsin(1) = π/2`,`arcsin(0) = 0`。
+- **`coil.arccos(a) -> Buffer`** —— 反余弦。定义域 `[-1, 1]`,值域
+  `[0, π]`。`arccos(1) = 0`,`arccos(0) = π/2`,`arccos(-1) = π`。
+- **`coil.arctan(a) -> Buffer`** —— 反正切。全体实数,值域 `(-π/2, π/2)`。
+  `arctan(1) = π/4`。(单参数 —— 需要象限感知的双参数形式时,用上文的
+  `arctan2(y, x)`。)
+- **`coil.arcsinh(a) -> Buffer`** —— 反双曲正弦。全体实数。`arcsinh(0) = 0`。
+- **`coil.arccosh(a) -> Buffer`** —— 反双曲余弦。定义域 `[1, ∞)`。
+  `arccosh(1) = 0`。
+- **`coil.arctanh(a) -> Buffer`** —— 反双曲正切。定义域 `(-1, 1)`。
+  `arctanh(0) = 0`;`arctanh(±1) = ±∞`(边界)。
+
+> **超出定义域的输入返回 `NaN` *值*,绝不是错误。** `arcsin` 和 `arccos` 只在
+> `[-1, 1]` 上有定义,`arccosh` 只在 `[1, ∞)` 上,`arctanh` 只在 `(-1, 1)` 上。
+> 喂给它们一个定义域之外的值,你会**得到 `NaN` 作为返回值** —— 程序继续运行,与
+> numpy 完全一致(numpy 打印一条运行时警告,但数组的值就是 `NaN`)。于是
+> `arcsin(2) = NaN`,`arccosh(0) = NaN`,`arctanh(2) = NaN`。`arctanh` 的边界是
+> `±∞`:`arctanh(1) = +∞`,`arctanh(-1) = -∞`。这些都不会陷入陷阱 —— `NaN` / `∞`
+> 是一个会流过去的值,正如正向操作里 `sqrt(-1) = NaN` 一样。
+
+> **浮点提升(与正向超越函数同一规则)。** 结果永远是浮点 —— 整数 / `float64`
+> 输入得 `float64`,只有 `float32` 输入才得 `float32`。`bool` 输入回到 `float64`
+> (`arcsin(True) = arcsin(1) = π/2`;numpy 会给 `float16`,但数值一致)。由于
+> 单 buffer 操作没有形状不匹配的问题,它们在形状上**绝不陷入陷阱**;唯一的特殊
+> 输出就是上面那些定义域 `NaN` / `±∞` 的*值*。
+
 ## 重排与重复 —— `diff` / `flip` / `roll` / `repeat` / `tile`
 
 这五个操作重排或重复 buffer 中的元素。每个都在 **C 序展平**后的数组上工作

@@ -87,11 +87,13 @@ use crate::constructors::{
 };
 use crate::dtype::Dtype;
 use crate::elementwise::{
-    abs as coil_abs, arctan2 as coil_arctan2, cbrt as coil_cbrt, ceil as coil_ceil,
-    clip as coil_clip, cos as coil_cos, cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2,
-    floor as coil_floor, fmax as coil_fmax, fmin as coil_fmin, hypot as coil_hypot,
-    isfinite as coil_isfinite, isinf as coil_isinf, isnan as coil_isnan, log as coil_log,
-    log2 as coil_log2, log10 as coil_log10, logaddexp as coil_logaddexp, maximum as coil_maximum,
+    abs as coil_abs, arccos as coil_arccos, arccosh as coil_arccosh, arcsin as coil_arcsin,
+    arcsinh as coil_arcsinh, arctan as coil_arctan, arctan2 as coil_arctan2,
+    arctanh as coil_arctanh, cbrt as coil_cbrt, ceil as coil_ceil, clip as coil_clip,
+    cos as coil_cos, cosh as coil_cosh, exp as coil_exp, exp2 as coil_exp2, floor as coil_floor,
+    fmax as coil_fmax, fmin as coil_fmin, hypot as coil_hypot, isfinite as coil_isfinite,
+    isinf as coil_isinf, isnan as coil_isnan, log as coil_log, log2 as coil_log2,
+    log10 as coil_log10, logaddexp as coil_logaddexp, maximum as coil_maximum,
     minimum as coil_minimum, power as coil_power, round as coil_round, sign as coil_sign,
     sin as coil_sin, sinh as coil_sinh, sqrt as coil_sqrt, square as coil_square, tan as coil_tan,
     tanh as coil_tanh, trunc as coil_trunc,
@@ -1535,6 +1537,92 @@ pub unsafe extern "C" fn __cobrust_coil_cosh(a: *mut u8) -> *mut u8 {
 pub unsafe extern "C" fn __cobrust_coil_tanh(a: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_unary(a, "tanh", coil_tanh) }
+}
+
+// =====================================================================
+// #145 unary INVERSE trig / hyperbolic gap-closure BATCH 16 — the
+// single-arg inverse forms (`arcsin`/`arccos`/`arctan`/`arcsinh`/
+// `arccosh`/`arctanh`), COMPLETING the unary transcendental family (the
+// documented BATCH-3 deferral; BATCH 15 shipped the 2-arg `arctan2`).
+// SAME 1-arg borrow-Buffer-arg → fresh-Buffer-return value-handle ABI as
+// the BATCH-3 forward transcendentals above, riding the SAME shared
+// `buffer_unary` body. TOTAL — NO domain trap: an out-of-domain input is
+// a `NaN` VALUE (`arcsin(2)=NaN`, `arccosh(0)=NaN`, `arctanh(2)=NaN`),
+// `arctanh(±1)=±inf`; the only `coil_panic` path is a null handle. The
+// dtype contract is the FLOAT-promoting transcendental rule (int->f64,
+// f32->f32, f64->f64).
+
+/// `coil.arcsin(a) -> Buffer`. Inverse sine (radians, `[-π/2, π/2]`; `|x|
+/// > 1 -> NaN`). Same dtype rule as `sin`. BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_arcsin(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "arcsin", coil_arcsin) }
+}
+
+/// `coil.arccos(a) -> Buffer`. Inverse cosine (radians, `[0, π]`; `|x| >
+/// 1 -> NaN`). Same dtype rule as `cos`. BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_arccos(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "arccos", coil_arccos) }
+}
+
+/// `coil.arctan(a) -> Buffer`. Inverse tangent (radians, `(-π/2, π/2)`;
+/// all reals). Same dtype rule as `tan`. BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_arctan(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "arctan", coil_arctan) }
+}
+
+/// `coil.arcsinh(a) -> Buffer`. Inverse hyperbolic sine (all reals).
+/// Same dtype rule as `sinh`. BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_arcsinh(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "arcsinh", coil_arcsinh) }
+}
+
+/// `coil.arccosh(a) -> Buffer`. Inverse hyperbolic cosine (`[1, inf)`; `x
+/// < 1 -> NaN`). Same dtype rule as `cosh`. BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_arccosh(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "arccosh", coil_arccosh) }
+}
+
+/// `coil.arctanh(a) -> Buffer`. Inverse hyperbolic tangent (`(-1, 1)`;
+/// `arctanh(±1) = ±inf`, `|x| > 1 -> NaN`). Same dtype rule as `tanh`.
+/// BORROWS `a`.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_exp`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_arctanh(a: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_unary(a, "arctanh", coil_arctanh) }
 }
 
 // =====================================================================
@@ -4004,5 +4092,62 @@ mod tests {
             __cobrust_coil_buffer_drop(r);
         }
         assert_eq!(drop_count() - before, 3, "a + b + result drop once each");
+    }
+
+    // -- #145 BATCH 16: inverse trig / hyperbolic 1-Buffer shims -------------
+
+    /// `coil.arcsin(a)` shim — `arcsin([1, 0]) = [pi/2, 0]`. Float-promoting
+    /// f64 result via the shared `buffer_unary` body; borrows the input,
+    /// fresh result drops once (2 handles). Pins the reference value the
+    /// `.cb` E2E observes.
+    #[test]
+    fn arcsin_shim_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 0.0);
+            let r = __cobrust_coil_arcsin(a);
+            // f64::to_string: pi/2 = 1.5707963267948966.
+            assert_eq!(
+                array_repr(&*r.cast::<Array>()),
+                "array([1.5707963267948966, 0], dtype=float64)",
+                "arcsin([1,0]) = [pi/2, 0]",
+            );
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(drop_count() - before, 2, "input + result drop once each");
+    }
+
+    /// `coil.arctanh(a)` shim — the DOMAIN contract through the C-ABI:
+    /// `arctanh(2)` is a `NaN` VALUE (NOT a trap — the shim NEVER `coil_panic`s
+    /// on an out-of-domain input), `arctanh(1)` is `+inf`. Inspect the result
+    /// Array directly via `.is_nan()` / `.is_infinite()` (NOT the repr string).
+    /// Borrows the input, fresh result drops once (2 handles).
+    #[test]
+    fn arctanh_shim_domain_nan_and_inf() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            // lane 0: arctanh(2) = NaN (|x|>1 out of domain);
+            // lane 1: arctanh(1) = +inf (boundary).
+            let a = __cobrust_coil_array1d2(2.0, 1.0);
+            let r = __cobrust_coil_arctanh(a);
+            match &*r.cast::<Array>() {
+                Array::Float64(arr) => {
+                    let v: Vec<f64> = arr.iter().copied().collect();
+                    assert!(v[0].is_nan(), "arctanh(2) is a NaN VALUE (no trap)");
+                    assert!(v[1].is_infinite() && v[1] > 0.0, "arctanh(1) = +inf");
+                }
+                other => panic!("expected Float64, got {:?}", other.dtype()),
+            }
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(drop_count() - before, 2, "input + result drop once each");
     }
 }

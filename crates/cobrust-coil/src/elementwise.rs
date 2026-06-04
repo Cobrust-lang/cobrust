@@ -40,8 +40,10 @@
 //! covers them). Reductions that return a scalar (`np.sum` of `exp`) are
 //! a DEFERRED follow-up; the 2-arg `np.logaddexp` + `np.arctan2` (and the
 //! 2-arg `np.hypot`) SHIPPED in BATCH 15 (the 2-Buffer FLOAT ufunc section
-//! below); the single-arg inverse-trig family (`arcsin`/`arccos`/`arctan`)
-//! remains a DEFERRED follow-up.
+//! below); the single-arg inverse-trig / -hyperbolic family (`arcsin` /
+//! `arccos` / `arctan` / `arcsinh` / `arccosh` / `arctanh`) SHIPPED in
+//! BATCH 16 (the inverse-trig section above, COMPLETING the unary
+//! transcendental family).
 //!
 //! ## numpy-exact DTYPE PROMOTION (the load-bearing contract)
 //!
@@ -255,6 +257,79 @@ pub fn cosh(a: &Array) -> Array {
 #[must_use]
 pub fn tanh(a: &Array) -> Array {
     unary_float(a, f32::tanh, f64::tanh)
+}
+
+// ---- the 6 INVERSE trig / hyperbolic ufuncs (#145 BATCH 16) --------------
+// The single-arg inverse forms COMPLETING the unary transcendental family —
+// the documented BATCH-3 deferral (BATCH 15 shipped the 2-arg `arctan2`).
+// Each rides the IDENTICAL `unary_float` int->f64 / f32->f32 / f64->f64
+// promotion as the forward transcendentals above (numpy-confirmed:
+// `np.arcsin(int64).dtype == float64`, `np.arcsin(f32).dtype == float32`).
+//
+// ## numpy-exact DOMAIN -> NaN (the load-bearing correctness contract)
+//
+// These are PARTIAL functions: an out-of-domain input yields an IEEE-754
+// special VALUE — `NaN` (numpy emits a RuntimeWarning, the array value IS
+// `NaN`), NEVER a trap / error. The Rust `f64::asin` / `acos` / `acosh` /
+// `atanh` kernels emit bit-identical IEEE-754 results (verified vs numpy
+// 2.4.6 via `/opt/homebrew/bin/python3.11`):
+//
+// - `arcsin` / `arccos` — domain `[-1, 1]`; `|x| > 1 -> NaN`
+//   (`np.arcsin(2) = nan`, `np.arccos(2) = nan`).
+// - `arccosh` — domain `[1, inf)`; `x < 1 -> NaN` (`np.arccosh(0) = nan`).
+// - `arctanh` — domain `(-1, 1)`; `arctanh(±1) = ±inf`, `|x| > 1 -> NaN`
+//   (`np.arctanh(1) = inf`, `np.arctanh(2) = nan`).
+// - `arctan` / `arcsinh` — TOTAL on all reals (no NaN domain).
+
+/// `np.arcsin(a)` — inverse sine, elementwise. Domain `[-1, 1] -> [-π/2,
+/// π/2]`; `|x| > 1 -> NaN` (IEEE-754 domain value, NOT an error —
+/// `arcsin(2) = NaN`). `arcsin(1) = π/2`, `arcsin(0) = 0`. Same dtype rule
+/// as [`sin`]. Total (out-of-domain is a `NaN` value).
+#[must_use]
+pub fn arcsin(a: &Array) -> Array {
+    unary_float(a, f32::asin, f64::asin)
+}
+
+/// `np.arccos(a)` — inverse cosine, elementwise. Domain `[-1, 1] -> [0,
+/// π]`; `|x| > 1 -> NaN`. `arccos(1) = 0`, `arccos(0) = π/2`, `arccos(-1)
+/// = π`. Same dtype rule as [`cos`]. Total.
+#[must_use]
+pub fn arccos(a: &Array) -> Array {
+    unary_float(a, f32::acos, f64::acos)
+}
+
+/// `np.arctan(a)` — inverse tangent, elementwise. All reals -> `(-π/2,
+/// π/2)`. `arctan(1) = π/4`, `arctan(0) = 0`. UNLIKE 2-arg [`arctan2`],
+/// this single-arg form cannot disambiguate the quadrant. Same dtype rule
+/// as [`tan`]. Total.
+#[must_use]
+pub fn arctan(a: &Array) -> Array {
+    unary_float(a, f32::atan, f64::atan)
+}
+
+/// `np.arcsinh(a)` — inverse hyperbolic sine, elementwise. All reals.
+/// `arcsinh(0) = 0`. Same dtype rule as [`sinh`]. Total.
+#[must_use]
+pub fn arcsinh(a: &Array) -> Array {
+    unary_float(a, f32::asinh, f64::asinh)
+}
+
+/// `np.arccosh(a)` — inverse hyperbolic cosine, elementwise. Domain `[1,
+/// inf) -> [0, inf)`; `x < 1 -> NaN` (`arccosh(0) = NaN`). `arccosh(1) =
+/// 0`. Same dtype rule as [`cosh`]. Total (out-of-domain is a `NaN`
+/// value).
+#[must_use]
+pub fn arccosh(a: &Array) -> Array {
+    unary_float(a, f32::acosh, f64::acosh)
+}
+
+/// `np.arctanh(a)` — inverse hyperbolic tangent, elementwise. Domain
+/// `(-1, 1)`; `arctanh(±1) = ±inf`, `|x| > 1 -> NaN` (`arctanh(2) = NaN`).
+/// `arctanh(0) = 0`. Same dtype rule as [`tanh`]. Total (the boundary +
+/// out-of-domain are IEEE-754 `±inf` / `NaN` values, not errors).
+#[must_use]
+pub fn arctanh(a: &Array) -> Array {
+    unary_float(a, f32::atanh, f64::atanh)
 }
 
 // =========================================================================
@@ -2543,5 +2618,209 @@ mod tests {
         assert!(e.message.contains("dtype mismatch"), "msg: {}", e.message);
         assert!(arctan2(&a, &b).is_err());
         assert!(logaddexp(&a, &b).is_err());
+    }
+
+    // =====================================================================
+    // #145 BATCH 16 — the single-arg INVERSE trig / hyperbolic ufuncs
+    // (`arcsin`/`arccos`/`arctan`/`arcsinh`/`arccosh`/`arctanh`), COMPLETING
+    // the unary transcendental family. Differential-vs-numpy 2.4.6 (oracle
+    // values via `/opt/homebrew/bin/python3.11 -c 'import numpy'`). These
+    // are FLOAT-PROMOTING (int->f64, f32->f32 — the BATCH-3 transcendental
+    // rule); assert on `.dtype()` in ADDITION to values. The LOAD-BEARING
+    // correctness focus is the DOMAIN -> NaN contract: an out-of-domain
+    // input is a `NaN` VALUE (via `.is_nan()`, NEVER `assert_eq!(x, NAN)`),
+    // and `arctanh(±1) = ±inf` (via `.is_infinite()`). Rust's f64::asin /
+    // acos / acosh / atanh produce these IEEE-754 values natively.
+
+    // ---- VALUES: the pinned reference points (radians) ----
+
+    #[test]
+    fn arcsin_arccos_arctan_values() {
+        // np.arcsin([1,0,-1]) = [pi/2, 0, -pi/2];
+        // np.arccos([1,0,-1]) = [0, pi/2, pi];
+        // np.arctan([1,0,-1]) = [pi/4, 0, -pi/4].
+        let pi = std::f64::consts::PI;
+        let a = array_f64(&[1.0, 0.0, -1.0], &[3]).unwrap();
+
+        let asn = arcsin(&a);
+        assert_eq!(asn.dtype(), Dtype::Float64);
+        let v = f64_vals(&asn);
+        assert!(approx_f64(v[0], pi / 2.0, 1e-12), "arcsin(1)=pi/2");
+        assert!(approx_f64(v[1], 0.0, 1e-12), "arcsin(0)=0");
+        assert!(approx_f64(v[2], -pi / 2.0, 1e-12), "arcsin(-1)=-pi/2");
+
+        let acs = arccos(&a);
+        let v = f64_vals(&acs);
+        assert!(approx_f64(v[0], 0.0, 1e-12), "arccos(1)=0");
+        assert!(approx_f64(v[1], pi / 2.0, 1e-12), "arccos(0)=pi/2");
+        assert!(approx_f64(v[2], pi, 1e-12), "arccos(-1)=pi");
+
+        let atn = arctan(&a);
+        let v = f64_vals(&atn);
+        assert!(approx_f64(v[0], pi / 4.0, 1e-12), "arctan(1)=pi/4");
+        assert!(approx_f64(v[1], 0.0, 1e-12), "arctan(0)=0");
+        assert!(approx_f64(v[2], -pi / 4.0, 1e-12), "arctan(-1)=-pi/4");
+    }
+
+    #[test]
+    fn arcsinh_arccosh_arctanh_values() {
+        // np.arcsinh(0)=0; np.arccosh(1)=0; np.arctanh(0)=0.
+        // Plus a non-trivial point: np.arccosh(cosh(2))=2 (round-trip),
+        // np.arctanh(tanh(0.5))=0.5.
+        let zeros = array_f64(&[0.0], &[1]).unwrap();
+        assert!(
+            approx_f64(f64_vals(&arcsinh(&zeros))[0], 0.0, 1e-12),
+            "arcsinh(0)=0"
+        );
+        assert!(
+            approx_f64(f64_vals(&arctanh(&zeros))[0], 0.0, 1e-12),
+            "arctanh(0)=0"
+        );
+
+        let one = array_f64(&[1.0], &[1]).unwrap();
+        assert!(
+            approx_f64(f64_vals(&arccosh(&one))[0], 0.0, 1e-12),
+            "arccosh(1)=0"
+        );
+
+        // Round-trips: arccosh(cosh(2))=2, arctanh(tanh(0.5))=0.5.
+        let ch2 = array_f64(&[2.0_f64.cosh()], &[1]).unwrap();
+        assert!(
+            approx_f64(f64_vals(&arccosh(&ch2))[0], 2.0, 1e-12),
+            "arccosh(cosh(2))=2"
+        );
+        let th = array_f64(&[0.5_f64.tanh()], &[1]).unwrap();
+        assert!(
+            approx_f64(f64_vals(&arctanh(&th))[0], 0.5, 1e-12),
+            "arctanh(tanh(0.5))=0.5"
+        );
+    }
+
+    // ---- DOMAIN -> NaN (the load-bearing correctness contract) ----
+
+    #[test]
+    fn arcsin_arccos_out_of_domain_is_nan() {
+        // np.arcsin(2) = nan, np.arccos(2) = nan (domain is [-1, 1]).
+        // A VALUE, not an error — assert via .is_nan(), NEVER == NaN.
+        let a = array_f64(&[2.0, -2.0], &[2]).unwrap();
+        let asn = f64_vals(&arcsin(&a));
+        assert!(asn[0].is_nan(), "arcsin(2) is NaN");
+        assert!(asn[1].is_nan(), "arcsin(-2) is NaN");
+        let acs = f64_vals(&arccos(&a));
+        assert!(acs[0].is_nan(), "arccos(2) is NaN");
+        assert!(acs[1].is_nan(), "arccos(-2) is NaN");
+    }
+
+    #[test]
+    fn arccosh_below_one_is_nan() {
+        // np.arccosh(0) = nan (domain is [1, inf)). arccosh(1)=0 (boundary OK).
+        let a = array_f64(&[0.0, 0.5, 1.0], &[3]).unwrap();
+        let v = f64_vals(&arccosh(&a));
+        assert!(v[0].is_nan(), "arccosh(0) is NaN");
+        assert!(v[1].is_nan(), "arccosh(0.5) is NaN");
+        assert!(approx_f64(v[2], 0.0, 1e-12), "arccosh(1)=0 (boundary)");
+    }
+
+    #[test]
+    fn arctanh_boundary_is_inf_outside_is_nan() {
+        // np.arctanh(1)=+inf, np.arctanh(-1)=-inf (boundary), np.arctanh(2)=nan
+        // (|x|>1 out of domain). The ±inf via .is_infinite(), NaN via .is_nan()
+        // — NEVER assert_eq! against inf / NaN.
+        let a = array_f64(&[1.0, -1.0, 2.0], &[3]).unwrap();
+        let v = f64_vals(&arctanh(&a));
+        assert!(v[0].is_infinite() && v[0] > 0.0, "arctanh(1)=+inf");
+        assert!(v[1].is_infinite() && v[1] < 0.0, "arctanh(-1)=-inf");
+        assert!(v[2].is_nan(), "arctanh(2) is NaN");
+    }
+
+    // ---- DTYPE: float-promote (int->f64) + f32-stays-f32 + bool->f64 ----
+
+    #[test]
+    fn arcsin_int_promotes_to_f64() {
+        // np.arcsin(np.int64([0,1])).dtype == float64 -> [0, pi/2].
+        let a = array_i64(&[0, 1], &[2]).unwrap();
+        let r = arcsin(&a);
+        assert_eq!(r.dtype(), Dtype::Float64, "int input PROMOTES to f64");
+        let v = f64_vals(&r);
+        assert!(approx_f64(v[0], 0.0, 1e-12));
+        assert!(approx_f64(v[1], std::f64::consts::PI / 2.0, 1e-12));
+    }
+
+    #[test]
+    fn arctan_int32_promotes_to_f64() {
+        // np.arctan(np.int32([0,1])).dtype == float64 -> [0, pi/4].
+        let a = array_i32(&[0, 1], &[2]).unwrap();
+        let r = arctan(&a);
+        assert_eq!(r.dtype(), Dtype::Float64, "int32 input PROMOTES to f64");
+        let v = f64_vals(&r);
+        assert!(approx_f64(v[0], 0.0, 1e-12));
+        assert!(approx_f64(v[1], std::f64::consts::PI / 4.0, 1e-12));
+    }
+
+    #[test]
+    fn arcsin_f32_stays_f32() {
+        // np.arcsin(np.float32([1.0])).dtype == float32 -> pi/2 (single prec).
+        let a = array_f32(&[1.0], &[1]).unwrap();
+        let r = arcsin(&a);
+        assert_eq!(r.dtype(), Dtype::Float32, "f32 input STAYS f32");
+        assert!(approx_f32(
+            f32_vals(&r)[0],
+            std::f32::consts::PI / 2.0,
+            1e-6
+        ));
+    }
+
+    #[test]
+    fn arctan_f32_stays_f32() {
+        // np.arctan(np.float32([1.0])).dtype == float32 -> pi/4.
+        let a = array_f32(&[1.0], &[1]).unwrap();
+        let r = arctan(&a);
+        assert_eq!(r.dtype(), Dtype::Float32, "f32 input STAYS f32");
+        assert!(approx_f32(
+            f32_vals(&r)[0],
+            std::f32::consts::FRAC_PI_4,
+            1e-6
+        ));
+    }
+
+    #[test]
+    fn arcsin_bool_promotes_to_f64_values_match() {
+        // bool -> Float64 (coil's value-faithful Semantic divergence from
+        // numpy's float16). arcsin(True)=arcsin(1)=pi/2, arcsin(False)=0.
+        let a = array_bool(&[true, false], &[2]).unwrap();
+        let r = arcsin(&a);
+        assert_eq!(r.dtype(), Dtype::Float64, "bool PROMOTES to f64");
+        let v = f64_vals(&r);
+        assert!(approx_f64(v[0], std::f64::consts::PI / 2.0, 1e-12));
+        assert!(approx_f64(v[1], 0.0, 1e-12));
+    }
+
+    // ---- shape preservation + chain (round-trip sin(arcsin(a))~a) ----
+
+    #[test]
+    fn batch16_preserves_shape_2d() {
+        // The 6 inverse ufuncs on a (2,2) buffer keep the shape.
+        let a = array_f64(&[0.1, 0.2, 0.3, 0.4], &[2, 2]).unwrap();
+        assert_eq!(arcsin(&a).shape(), vec![2, 2]);
+        assert_eq!(arccos(&a).shape(), vec![2, 2]);
+        assert_eq!(arctan(&a).shape(), vec![2, 2]);
+        assert_eq!(arcsinh(&a).shape(), vec![2, 2]);
+        assert_eq!(arctanh(&a).shape(), vec![2, 2]);
+        // arccosh wants x>=1 for finite values, but shape is shape regardless.
+        assert_eq!(arccosh(&a).shape(), vec![2, 2]);
+    }
+
+    #[test]
+    fn batch16_chain_sin_of_arcsin_round_trips() {
+        // sin(arcsin(a)) ~ a for a in [-1, 1] (the classic round-trip);
+        // proves the fresh Array of the inner inverse feeds the forward op.
+        // np.sin(np.arcsin([0.5, -0.25, 0.9])) = [0.5, -0.25, 0.9].
+        let a = array_f64(&[0.5, -0.25, 0.9], &[3]).unwrap();
+        let r = sin(&arcsin(&a));
+        assert_eq!(r.dtype(), Dtype::Float64);
+        let v = f64_vals(&r);
+        assert!(approx_f64(v[0], 0.5, 1e-12), "sin(arcsin(0.5))=0.5");
+        assert!(approx_f64(v[1], -0.25, 1e-12), "sin(arcsin(-0.25))=-0.25");
+        assert!(approx_f64(v[2], 0.9, 1e-12), "sin(arcsin(0.9))=0.9");
     }
 }

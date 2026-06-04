@@ -133,9 +133,18 @@ pub use crate::elementwise::{
     // #145 BATCH 4 — DTYPE-PRESERVING rounding / sign family. None of
     // these clash with a `ufunc` re-export, so they re-export flat.
     abs,
+    // #145 BATCH 16 — the single-arg INVERSE trig / hyperbolic ufuncs
+    // (`Array -> Array`, float-PROMOTING). None clash with a `ufunc`
+    // re-export, so flat. Complete the unary transcendental family.
+    arccos,
+    arccosh,
+    arcsin,
+    arcsinh,
+    arctan,
     // #145 BATCH 15 — the 2-Buffer FLOAT ufuncs (`(Array, Array) -> Array`,
     // float-PROMOTING). None clash with a `ufunc` re-export, so flat.
     arctan2,
+    arctanh,
     cbrt,
     ceil,
     cosh,
