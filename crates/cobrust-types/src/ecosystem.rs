@@ -710,6 +710,25 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // #numpy BATCH 20 (2026-06-05) — `coil.arange(n) -> Buffer`. The
+        // FINAL core numpy constructor; VERY HIGH-USE (LLMs write
+        // `np.arange(n)` constantly). The 1-ARG (`stop`-only) form, the
+        // EXACT `[Ty::Int] -> Buffer` arg shape as `coil.zeros(n)` (an
+        // all-scalar-arg producer, NO Buffer input). Lowers via the GENERIC
+        // `try_lower_ecosystem_call` `[Int] -> Buffer` path with ZERO new
+        // MIR, exactly like `zeros`/`ones`/`eye`. The result is an `Int64`
+        // buffer (`np.arange(<int>)` is `int64`-dtype, so a Float64 result
+        // would DIVERGE); `n <= 0` is a valid EMPTY int64 buffer (a NEGATIVE
+        // `n` gives empty, NOT an error). The 4-arg `arange(start, stop[,
+        // step])` is a documented deferral (this fixed-arity EcoSig ships
+        // only the dominant `arange(n)` form). Tier `Semantic` (the coil
+        // family tier — repr layout differs from numpy's, values agree).
+        ("coil", "arange") => Some(EcoSig::from_values(
+            "__cobrust_coil_arange",
+            vec![Ty::Int],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         ("coil", "split") => Some(EcoSig::from_values(
             "__cobrust_coil_split",
             vec![coil_buffer_ty(), Ty::Int],
@@ -3576,6 +3595,18 @@ mod tests {
         assert_eq!(sig.runtime_symbol, "__cobrust_coil_eye");
         assert_eq!(value_tys(&sig.params), vec![Ty::Int]);
         assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    /// #numpy BATCH 20 — `coil.arange(n)` is `[Ty::Int] -> Buffer` (the
+    /// EXACT `zeros` arg shape; an all-scalar-arg producer). The result is
+    /// a Buffer handle (an `Int64` one at runtime).
+    #[test]
+    fn coil_arange_signature_int_to_buffer_handle() {
+        let sig = lookup_module_fn("coil", "arange").expect("coil.arange in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_arange");
+        assert_eq!(value_tys(&sig.params), vec![Ty::Int]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
     }
 
     // #145 BATCH 11 — spacing/value constructor manifest tests. The FIRST

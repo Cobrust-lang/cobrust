@@ -286,6 +286,41 @@ constructor today emits `Float64`, so `astype` is the bridge to `int64`.
   runtime. The `complex64` / `complex128` targets are not supported by the
   Buffer's real-only dtype set and likewise trap (a tracked follow-up).
 
+## Range construction — `arange`
+
+`coil.arange(n)` builds the 1-D **int64** Buffer `[0, 1, ..., n-1]` — the
+op you reach for constantly (`np.arange(n)`). It is the one constructor that
+emits an **`int64`** Buffer directly (every other constructor emits
+`Float64`; pair it with `astype` to change dtype).
+
+- **`coil.arange(n: i64) -> Buffer`** — `n` values `[0, 1, ..., n-1]`,
+  C-order, 0-based, **stop-EXCLUSIVE** (`n` itself is not included), dtype
+  `int64`.
+
+  ```python
+  let a: coil.Buffer = coil.arange(5)              # int64 [0, 1, 2, 3, 4]
+  let _ = coil.print_buffer(a)                     # array([0, 1, 2, 3, 4], dtype=int64)
+
+  let g: coil.Buffer = coil.reshape(coil.arange(6), 2, 3)  # [[0,1,2],[3,4,5]] int64
+  let _ = coil.print_buffer(g)
+
+  let f: coil.Buffer = coil.astype(coil.arange(5), "float64")  # float64 [0..4]
+  let _ = coil.print_buffer(f)
+  ```
+
+  **Semantics (numpy 2.x):**
+  - `coil.arange(0)` is an **empty** int64 Buffer (`array([], dtype=int64)`).
+  - `coil.arange(-3)` — a **negative** `n` is also **empty**, NOT an error:
+    `np.arange(-3) == array([], dtype=int64)`. There is **no runtime trap**;
+    the program exits zero. (A non-`i64` argument like `coil.arange("x")` is
+    a **compile-time** type error — the §2.5 compile-time-catch path.)
+
+  > **One-argument form only.** Only `arange(stop)` is on the `.cb` surface.
+  > The three-argument `arange(start, stop, step)` is a **documented
+  > deferral** (the ecosystem signature is fixed-arity); it is not faked. To
+  > start elsewhere or step differently today, build with `arange` + a
+  > scalar op (e.g. `coil.arange(5) + 2` for `[2, 3, 4, 5, 6]`).
+
 ## Sorting & search (`sort` / `argsort` / `unique` / `flatnonzero`)
 
 These are the four "flat search & order" ops an LLM reaches for first.

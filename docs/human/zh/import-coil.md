@@ -265,6 +265,38 @@ Buffer 的方式:目前每个 Buffer 构造器都产出 `Float64`,所以 `astype
   编译期捕获路径),而不是在运行期。`complex64` / `complex128` 目标不在 Buffer
   的纯实数 dtype 集合内,同样会 trap(有记录的后续项)。
 
+## 区间构造 —— `arange`
+
+`coil.arange(n)` 构造一维 **int64** Buffer `[0, 1, ..., n-1]` —— 你会不断伸手
+去用的操作(`np.arange(n)`)。它是唯一一个直接产出 **`int64`** Buffer 的构造器
+(其它每个构造器都产出 `Float64`;需要换 dtype 时配合 `astype`)。
+
+- **`coil.arange(n: i64) -> Buffer`** —— `n` 个值 `[0, 1, ..., n-1]`,C 序、
+  以 0 起始、**右端开区间**(`n` 本身不包含),dtype 为 `int64`。
+
+  ```python
+  let a: coil.Buffer = coil.arange(5)              # int64 [0, 1, 2, 3, 4]
+  let _ = coil.print_buffer(a)                     # array([0, 1, 2, 3, 4], dtype=int64)
+
+  let g: coil.Buffer = coil.reshape(coil.arange(6), 2, 3)  # [[0,1,2],[3,4,5]] int64
+  let _ = coil.print_buffer(g)
+
+  let f: coil.Buffer = coil.astype(coil.arange(5), "float64")  # float64 [0..4]
+  let _ = coil.print_buffer(f)
+  ```
+
+  **语义(numpy 2.x):**
+  - `coil.arange(0)` 是一个**空** int64 Buffer(`array([], dtype=int64)`)。
+  - `coil.arange(-3)` —— **负数** `n` 同样是**空**,而不是错误:
+    `np.arange(-3) == array([], dtype=int64)`。**没有运行期 trap**;程序以零
+    退出。(像 `coil.arange("x")` 这样的非 `i64` 参数则是**编译期**类型错误 ——
+    §2.5 的编译期捕获路径。)
+
+  > **只有单参数形式。** `.cb` 表面上只有 `arange(stop)`。三参数的
+  > `arange(start, stop, step)` 是一个**有记录的延后项**(生态签名是定长的);
+  > 它不会被伪造。今天若要从别处起始或换步长,用 `arange` 加一个标量运算来构造
+  > (例如 `coil.arange(5) + 2` 得到 `[2, 3, 4, 5, 6]`)。
+
 ## 排序与搜索(`sort` / `argsort` / `unique` / `flatnonzero`)
 
 这是 LLM 在 numpy 里最先伸手去用的四个「扁平搜索与排序」操作。每个都接收一个

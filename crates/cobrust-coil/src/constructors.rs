@@ -485,6 +485,35 @@ pub fn arange(start: f64, stop: f64, step: f64, dtype: Dtype) -> Result<Array, N
     array(&raw, &[count], dtype)
 }
 
+/// `numpy.arange(n)`-equivalent — the SINGLE-ARGUMENT (`stop`-only) form
+/// LLMs reach for constantly (`np.arange(n)`). Returns the 1-D `Int64`
+/// buffer `[0, 1, ..., n-1]` (C-order, 0-based, `stop`-EXCLUSIVE).
+///
+/// This is a TOTAL, infallible constructor — distinct from the 4-arg
+/// [`arange`] (`start`/`stop`/`step`/`dtype`, which is fallible on a zero
+/// step or a `bool` dtype). The 1-arg form has no error path:
+///
+/// - `arange_int(5) == [0, 1, 2, 3, 4]` (`dtype=int64`).
+/// - `arange_int(0) == []` (an EMPTY `Int64` buffer — `np.arange(0)`).
+/// - `arange_int(-3) == []` — a NEGATIVE `n` yields EMPTY, NOT an error
+///   (matches `np.arange(-3) == array([], dtype=int64)`; never panics).
+///
+/// Returns `Int64` (NOT `Float64`): `np.arange(<int>)` is `int64`-dtype on
+/// a 64-bit host, so a `Float64` result would DIVERGE from numpy.
+///
+/// The fixed-arity ecosystem signature is why only this `arange(stop)` form
+/// ships on the `.cb` surface; `arange(start, stop[, step])` is a documented
+/// deferral routed through the 4-arg [`arange`] kernel at the library level.
+#[must_use]
+pub fn arange_int(n: i64) -> Array {
+    let count = if n < 0 { 0_usize } else { n as usize };
+    // 0..count as i64 — the C-order half-open range. `Array1::from_vec` is
+    // INFALLIBLE (a 1-D array is exactly the Vec's length — no shape can
+    // mismatch), so no unwrap/expect path: the constructor is total.
+    let data: Vec<i64> = (0..count as i64).collect();
+    Array::Int64(ndarray::Array1::from_vec(data).into_dyn())
+}
+
 // ---- Stream W item 3: linspace / logspace (numpy `_core/function_base.py`) --
 //
 // `@py_compat(numerical(rtol=1e-12))` per ADR-0070 §W — float-producing,
@@ -1255,5 +1284,73 @@ mod tests {
         // np.full(2, -1.5) -> [-1.5, -1.5] — the fill is an exact copy.
         let a = full(&[2], -1.5, Dtype::Float64).unwrap();
         assert_eq!(as_f64(&a), vec![-1.5, -1.5]);
+    }
+
+    // ---- arange_int (the 1-arg `np.arange(n)` form) ----------------------
+    // Differential vs numpy 2.4.6 (oracle `python3.11`). Each asserts BOTH
+    // the values AND `dtype == Int64` (a Float64 result would diverge).
+
+    /// Extract the `i64` values of an `Int64` buffer; panics if not `Int64`
+    /// (the assertion's intent is to PROVE the dtype, so a wrong dtype is a
+    /// test failure here, not a silent cast).
+    fn as_i64(a: &Array) -> Vec<i64> {
+        match a {
+            Array::Int64(arr) => arr.iter().copied().collect(),
+            other => panic!("expected Int64 buffer, got dtype {:?}", other.dtype()),
+        }
+    }
+
+    #[test]
+    fn arange_int_5_is_0_to_4_int64() {
+        // np.arange(5) == array([0, 1, 2, 3, 4]) ; dtype == int64.
+        let a = arange_int(5);
+        assert_eq!(a.dtype(), Dtype::Int64);
+        assert_eq!(a.shape(), vec![5]);
+        assert_eq!(as_i64(&a), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn arange_int_0_is_empty_int64() {
+        // np.arange(0) == array([], dtype=int64) — empty, shape [0].
+        let a = arange_int(0);
+        assert_eq!(a.dtype(), Dtype::Int64);
+        assert_eq!(a.shape(), vec![0]);
+        assert_eq!(a.size(), 0);
+        assert_eq!(as_i64(&a), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn arange_int_1_is_single_zero_int64() {
+        // np.arange(1) == array([0]) ; dtype == int64.
+        let a = arange_int(1);
+        assert_eq!(a.dtype(), Dtype::Int64);
+        assert_eq!(a.shape(), vec![1]);
+        assert_eq!(as_i64(&a), vec![0]);
+    }
+
+    #[test]
+    fn arange_int_negative_is_empty_not_panic() {
+        // np.arange(-3) == array([], dtype=int64) — a NEGATIVE n yields an
+        // EMPTY int64 buffer, NOT an error/panic. This test reaching its
+        // assertions at all proves the no-panic contract.
+        let a = arange_int(-3);
+        assert_eq!(a.dtype(), Dtype::Int64);
+        assert_eq!(a.shape(), vec![0]);
+        assert_eq!(a.size(), 0);
+        assert_eq!(as_i64(&a), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn arange_int_100_length_and_endpoints() {
+        // np.arange(100): len 100, first 0, last 99 (stop-EXCLUSIVE).
+        let a = arange_int(100);
+        assert_eq!(a.dtype(), Dtype::Int64);
+        assert_eq!(a.shape(), vec![100]);
+        let v = as_i64(&a);
+        assert_eq!(v.len(), 100);
+        assert_eq!(v[0], 0);
+        assert_eq!(v[99], 99);
+        // No off-by-one: 100 itself is NOT present (half-open).
+        assert!(!v.contains(&100));
     }
 }

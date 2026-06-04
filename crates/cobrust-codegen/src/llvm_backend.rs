@@ -3176,6 +3176,14 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_zeros", coil_ctor_ty, 1usize),
             ("__cobrust_coil_ones", coil_ctor_ty, 1),
             ("__cobrust_coil_eye", coil_ctor_ty, 1),
+            // #numpy BATCH 20 — `coil.arange(n) -> Buffer`. The FINAL core
+            // numpy constructor (LLMs write `np.arange(n)` constantly). The
+            // SAME `(i64) -> ptr` extern shape as `zeros`/`ones`/`eye`
+            // (`coil_ctor_ty`, REUSED — no new fn-type); the result is an
+            // `Int64` buffer at runtime. The MIR ecosystem-call lowering
+            // retargets `coil.arange(n)` onto this Call via the generic
+            // `[Int] -> Buffer` path (ZERO batch-specific MIR, like zeros).
+            ("__cobrust_coil_arange", coil_ctor_ty, 1),
             ("__cobrust_coil_print_buffer", coil_print_ty, 1),
             ("__cobrust_coil_buffer_drop", coil_drop_ty, 1),
         ] {

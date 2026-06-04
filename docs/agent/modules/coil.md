@@ -3551,6 +3551,93 @@ ABI) — NO new string convention.
       ndarray + std.
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## `.cb` `coil.arange(n) -> Buffer` (#numpy BATCH 20 — DONE)
+
+The FINAL core numpy constructor. VERY HIGH-USE — LLMs write `np.arange(n)`
+constantly and it was the LAST core constructor MISSING from the `.cb`
+surface. `arange(n)` is the 1-D `Int64` buffer `[0, 1, ..., n-1]` (C-order,
+0-based, `stop`-EXCLUSIVE); `print_buffer` renders `dtype=int64`. The
+`coil_arange_e2e` binaries prove that END-TO-END.
+
+### The shape — an all-scalar-arg `(i64) -> Buffer` producer (zeros' mirror)
+
+`arange` takes NO Buffer input — just the scalar `n` — so it MIRRORS
+`coil.zeros(n)` EXACTLY: the `[Ty::Int] -> Buffer` arg shape, the
+`coil_ctor_ty` `(i64) -> ptr` codegen extern (REUSED, no new fn-type), and
+the generic `[Int] -> Buffer` MIR lowering (ZERO new MIR). The ONLY
+difference from `zeros`/`ones`: the result is an `Array::Int64`, NOT a
+`Float64` (`np.arange(<int>)` is `int64`-dtype on a 64-bit host, so a
+Float64 result would DIVERGE from numpy).
+
+### Semantics (numpy 2.4.6, oracle `python3.11`)
+
+- `arange(5) == array([0, 1, 2, 3, 4], dtype=int64)` — `stop`-EXCLUSIVE
+  (`5` itself is NOT present; an off-by-one would append it).
+- `arange(1) == array([0], dtype=int64)`; `arange(100)` is len 100, first
+  `0`, last `99`.
+- `arange(0) == array([], dtype=int64)` (empty).
+- `arange(-3) == array([], dtype=int64)` — a NEGATIVE `n` gives an EMPTY
+  int64 buffer, NOT an error/panic (the kernel clamps `n < 0` to `0`; the
+  binary exits ZERO). **arange has NO runtime error path** (unlike
+  `astype`'s unknown-dtype trap) — the only negative gate is a compile-time
+  type reject.
+- **1-arg form only.** The fixed-arity EcoSig ships only the dominant
+  `arange(stop)` form. `arange(start, stop[, step])` is a DOCUMENTED
+  deferral — the 4-arg `arange(start, stop, step, dtype)` kernel still
+  exists at the LIBRARY level (`constructors::arange`), just not on the
+  `.cb` surface; it is NOT faked.
+
+### Wiring (mirror `coil.zeros(n)`)
+
+- `constructors.rs`: `arange_int(n: i64) -> Array` free fn — a TOTAL,
+  infallible constructor (DISTINCT from the 4-arg fallible `arange`). Builds
+  `Array::Int64(ArrayD::from_shape_vec([count], 0..count as i64))`; `n < 0`
+  clamps `count` to `0`. Re-exported from `lib.rs` as `arange_int`.
+- `cabi.rs`: `__cobrust_coil_arange(n: i64) -> *mut u8` — runs the kernel,
+  single fresh `Box::into_raw`. NO Buffer input to borrow, NO `coil_panic`
+  (the kernel never errors).
+- `ecosystem.rs`: `("coil","arange")` → EcoSig `[Ty::Int] -> coil_buffer_ty()`,
+  `PyCompatTier::Semantic` (the EXACT `zeros` arg shape).
+- Typecheck / MIR: **NO new code** — the generic `try_lower_ecosystem_call`
+  `[Int] -> Buffer` path lowers `coil.arange(n)` exactly like `zeros`/`ones`/
+  `eye`. A NON-Int arg is a COMPILE-TIME `unify_call_arg` reject (§2.5).
+- Codegen: `__cobrust_coil_arange` REUSES `coil_ctor_ty` (`(i64) -> ptr`,
+  the zeros/ones/eye extern shape) — no new fn-type. Symbol rides the
+  `__cobrust_coil_` prefix recognizer.
+
+### Done means (#numpy BATCH 20 — DONE)
+
+- [x] `constructors.rs`: `arange_int` free fn (TOTAL; negative → empty). 5
+      differential-vs-numpy unit tests asserting BOTH values AND
+      `dtype == Int64`: `arange(5) == [0,1,2,3,4]`, `arange(0)` empty,
+      `arange(1) == [0]`, `arange(-3)` empty (NEGATIVE → empty, not panic),
+      `arange(100)` length-100 + endpoints `0`/`99` + no-`100` half-open.
+- [x] cabi: `__cobrust_coil_arange` (run kernel → single fresh Box; no
+      borrow, no trap). 3 shim tests: `arange(5)` → `array([0, 1, 2, 3, 4],
+      dtype=int64)` repr + drop-once (1 drop — no Buffer input), `arange(0)`
+      empty `array([], dtype=int64)`, `arange(-3)` empty NON-trap (live
+      handle, process does not abort).
+- [x] Manifest: `("coil","arange")` `[Int] -> Buffer` Semantic. 1 manifest
+      signature test.
+- [x] Typecheck / MIR: NO new code (the generic `[Int] -> Buffer`
+      ecosystem-call lowering, like `zeros`).
+- [x] Codegen: `__cobrust_coil_arange` REUSES `coil_ctor_ty` (`(i64) -> ptr`)
+      extern — no new fn-type.
+- [x] `.cb` E2E `coil_arange_e2e.rs` (7 tests): `arange(5)` int64
+      `[0, 1, 2, 3, 4]` (the surface-completion `dtype=int64`), `arange(1)`
+      single `[0]`, `reshape(arange(6), 2, 3)` → `[[0,1,2],[3,4,5]]` int64
+      CHAIN (proves arange feeds reshape + the fresh Buffer drops),
+      `astype(arange(5), "float64")` CHAIN, `arange(0)` empty, `arange(-3)`
+      empty NON-trap (exits ZERO), and a non-Int (`"x"`) arg typecheck
+      reject. (NO runtime trap test — arange has no error path.)
+- [x] No regression: full `cobrust-coil` lib suite green (512 tests, +8 from
+      BATCH-19's 504); `coil_arange_e2e` (7) + `coil_hello_e2e` (3) green,
+      run ONE `--test` at a time (F73 libcoil.a build-race avoidance);
+      touched crates (`cobrust-coil` + `cobrust-codegen` + `cobrust-types`)
+      build + clippy `-D warnings --all-targets` + fmt clean; NO new dep
+      (`Cargo.lock` unchanged — F64); pure ndarray + std.
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

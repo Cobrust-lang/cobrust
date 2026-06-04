@@ -81,9 +81,9 @@ use crate::array::{Array, astype as coil_astype};
 use crate::broadcast::broadcast_shape;
 use crate::broadcast_extra::broadcast_to_1d;
 use crate::constructors::{
-    array_f64, diag as coil_diag, eye as coil_eye, full as coil_full, linspace as coil_linspace,
-    logspace as coil_logspace, ones as coil_ones, tril as coil_tril, triu as coil_triu,
-    zeros as coil_zeros,
+    arange_int as coil_arange_int, array_f64, diag as coil_diag, eye as coil_eye,
+    full as coil_full, linspace as coil_linspace, logspace as coil_logspace, ones as coil_ones,
+    tril as coil_tril, triu as coil_triu, zeros as coil_zeros,
 };
 use crate::dtype::Dtype;
 use crate::elementwise::{
@@ -340,6 +340,48 @@ pub unsafe extern "C" fn __cobrust_coil_full(n: i64, value: f64) -> *mut u8 {
             value,
         ))
     });
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+// =====================================================================
+// #numpy gap-closure BATCH 20 (2026-06-05) — `coil.arange(n)`, the FINAL
+// core numpy constructor. VERY HIGH-USE: LLMs write `np.arange(n)`
+// constantly. The 1-ARG (`stop`-only) form — the dominant LLM form. The
+// SAME all-scalar-arg `(i64) -> Buffer` shape as `coil.zeros(n)` (NO
+// Buffer input to borrow), EXCEPT the result is an `Int64` buffer (numpy:
+// `np.arange(<int>)` is `int64`-dtype, so a Float64 result would DIVERGE).
+// TOTAL — `n <= 0` yields an EMPTY int64 buffer (`np.arange(-3) ==
+// array([], dtype=int64)` — a NEGATIVE n is valid-empty, NOT an error;
+// NO `coil_panic` needed). The 4-arg `arange(start, stop, step, dtype)`
+// is a DOCUMENTED deferral (the fixed-arity EcoSig ships only `arange(n)`).
+// =====================================================================
+
+/// `coil.arange(n) -> Buffer`. The 1-D `Int64` buffer `[0, 1, ..., n-1]`
+/// (C-order, 0-based, `stop`-EXCLUSIVE) — `np.arange(n)`.
+///
+/// - `arange(5) -> array([0, 1, 2, 3, 4], dtype=int64)`.
+/// - `arange(0) -> array([], dtype=int64)` (empty).
+/// - `arange(-3) -> array([], dtype=int64)` — a NEGATIVE `n` gives EMPTY,
+///   NOT an error/panic.
+///
+/// Returns an `Int64`-dtype Buffer (`print_buffer` renders `dtype=int64`),
+/// NOT `Float64` — matching numpy's `int64` arange dtype. A fresh owned
+/// handle the `.cb` caller scope-exit drops; there is no Buffer input to
+/// borrow and no error path (so no `coil_panic`). Only the 1-arg form ships
+/// (the fixed-arity ecosystem signature); `arange(start, stop[, step])` is
+/// a documented deferral.
+///
+/// # Safety
+///
+/// As `__cobrust_coil_zeros`: no borrow (an all-scalar-arg producer); the
+/// returned pointer is a freshly-Boxed `Buffer` handle freed once via
+/// `__cobrust_coil_buffer_drop`. Safe to call concurrently (allocation-only,
+/// no shared state).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_arange(n: i64) -> *mut u8 {
+    // `arange_int` is TOTAL (a negative `n` clamps to an empty buffer); no
+    // unwrap-or-fallback needed — the kernel never errors.
+    let arr = coil_arange_int(n);
     Box::into_raw(Box::new(arr)).cast::<u8>()
 }
 
@@ -4683,4 +4725,94 @@ mod tests {
     // (`coil_astype_e2e.rs` asserts the compiled binary exits NON-zero on an
     // unknown dtype), which together pin the same honest-failure contract
     // without aborting this process.
+
+    // ---- #numpy BATCH 20 — `__cobrust_coil_arange(n)` shim --------------
+    // An all-scalar-arg `(i64) -> ptr` producer (zeros' shape) returning an
+    // INT64 buffer; NO Buffer input to borrow, NO error path. Drop balance
+    // is just the 1 fresh result. The print-side repr a `.cb` program
+    // observes via print_buffer shows `dtype=int64`.
+
+    /// `coil.arange(5)` → `array([0, 1, 2, 3, 4], dtype=int64)`. The
+    /// print-side repr proves both the int64 dtype + the exact values; the
+    /// fresh result drops exactly once.
+    #[test]
+    fn arange_shim_5_is_0_to_4_int64_and_drops_once() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let r = __cobrust_coil_arange(5);
+            assert!(!r.is_null(), "arange returned null");
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(
+                arr.dtype(),
+                Dtype::Int64,
+                "arange result dtype must be int64"
+            );
+            assert_eq!(
+                array_repr(arr),
+                "array([0, 1, 2, 3, 4], dtype=int64)",
+                "the print_buffer repr a .cb program sees"
+            );
+            match arr {
+                Array::Int64(v) => {
+                    let vals: Vec<i64> = v.iter().copied().collect();
+                    assert_eq!(vals, vec![0, 1, 2, 3, 4]);
+                }
+                _ => panic!("expected Int64"),
+            }
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(
+            drop_count() - before,
+            1,
+            "no Buffer input to borrow; only the fresh result drops once"
+        );
+    }
+
+    /// `coil.arange(0)` → `array([], dtype=int64)` (empty). A non-null
+    /// handle of size 0; the fresh result drops once.
+    #[test]
+    fn arange_shim_0_is_empty_int64() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let r = __cobrust_coil_arange(0);
+            assert!(!r.is_null(), "arange(0) returned null");
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.dtype(), Dtype::Int64);
+            assert_eq!(arr.size(), 0);
+            assert_eq!(array_repr(arr), "array([], dtype=int64)");
+            __cobrust_coil_buffer_drop(r);
+        }
+        assert_eq!(
+            drop_count() - before,
+            1,
+            "only the fresh empty result drops once"
+        );
+    }
+
+    /// `coil.arange(-3)` → `array([], dtype=int64)`. A NEGATIVE `n` is
+    /// valid-empty, NOT a trap — the shim returns a live empty handle (the
+    /// process does NOT abort), proving there is no error path.
+    #[test]
+    fn arange_shim_negative_is_empty_not_trap() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let r = __cobrust_coil_arange(-3);
+            assert!(
+                !r.is_null(),
+                "negative arange must yield an empty handle, not null"
+            );
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.dtype(), Dtype::Int64);
+            assert_eq!(arr.size(), 0);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
 }
