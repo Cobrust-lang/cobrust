@@ -507,6 +507,81 @@ pub fn hstack(a: &Array, b: &Array) -> Result<Array, NumpyError> {
     concat_axis(a, b, axis)
 }
 
+/// `np.outer(a, b)` — the outer product. Both operands are FLATTENED to
+/// 1-D first, then `result[i, j] = a_flat[i] * b_flat[j]`, producing a 2-D
+/// `(a.size, b.size)` matrix.
+///
+/// numpy semantics (`np.outer`):
+/// `np.outer([1, 2], [3, 4]) == [[3, 4], [6, 8]]` (shape `(2, 2)`);
+/// `np.outer([1, 2, 3], [4, 5]) == [[4, 5], [8, 10], [12, 15]]` (shape
+/// `(3, 2)`). A ≥2-D operand is flattened first (`np.outer([[1,2],[3,4]],
+/// [5,6])` flattens the lhs to `[1,2,3,4]` → shape `(4, 2)`). An empty
+/// operand yields a degenerate matrix: `np.outer([], [3,4])` → shape
+/// `(0, 2)`; `np.outer([1,2], [])` → shape `(2, 0)`.
+///
+/// DTYPE-PRESERVING with the SAME equal-dtype contract as `concatenate` /
+/// `vstack` / `hstack`: the two operands must share a dtype (the result
+/// dtype), and the products are computed in that dtype. A mixed pair raises
+/// `ShapeMismatch` (numpy promotes; we raise — no silent coercion, §2.2).
+///
+/// # Errors
+///
+/// `ShapeMismatch` (numpy's `ValueError` analogue) on a dtype mismatch.
+/// There is NO shape constraint beyond same-dtype — any two flatten-able
+/// operands (incl. empty) are conformable.
+pub fn outer(a: &Array, b: &Array) -> Result<Array, NumpyError> {
+    // `result[i*m + j] = a_flat[i] * b_flat[j]`, an `(n, m)` row-major
+    // buffer (`n = a.size`, `m = b.size`). `from_shape_vec` builds it from
+    // the flat product list — the only valid result shape (size n*m).
+    // Declared first (no captures) to keep the dtype-guard statement after
+    // the item (clippy::items_after_statements), mirroring `reshape_to`.
+    fn go<T: Clone + std::ops::Mul<Output = T>>(av: &ArrayD<T>, bv: &ArrayD<T>) -> ArrayD<T> {
+        let a_flat: Vec<T> = av.iter().cloned().collect();
+        let b_flat: Vec<T> = bv.iter().cloned().collect();
+        let (n, m) = (a_flat.len(), b_flat.len());
+        let mut out: Vec<T> = Vec::with_capacity(n * m);
+        for ai in &a_flat {
+            for bj in &b_flat {
+                out.push(ai.clone() * bj.clone());
+            }
+        }
+        ArrayD::from_shape_vec(IxDyn(&[n, m]), out)
+            .expect("outer: (n, m) shape holds exactly n*m products")
+    }
+    // Equal-dtype contract — mirror `concat_axis` (no silent promotion).
+    if a.dtype() != b.dtype() {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: format!(
+                "outer: dtype mismatch {:?} vs {:?} (equal-dtype contract; \
+                 cross-dtype promotion is a tracked follow-up)",
+                a.dtype(),
+                b.dtype()
+            ),
+        });
+    }
+    match (a, b) {
+        (Array::Int32(x), Array::Int32(y)) => Ok(Array::Int32(go(x, y))),
+        (Array::Int64(x), Array::Int64(y)) => Ok(Array::Int64(go(x, y))),
+        (Array::Float32(x), Array::Float32(y)) => Ok(Array::Float32(go(x, y))),
+        (Array::Float64(x), Array::Float64(y)) => Ok(Array::Float64(go(x, y))),
+        // `Bool * Bool` is not a numpy-meaningful product (numpy promotes
+        // bool outer to int8); raise rather than silently coerce.
+        (Array::Bool(_), Array::Bool(_)) => Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: "outer: bool operands unsupported (numpy promotes bool→int8; \
+                      cross-dtype promotion is a tracked follow-up)"
+                .to_string(),
+        }),
+        // Unreachable: the dtype-equality guard above already returned on
+        // any mismatched pair.
+        _ => Err(NumpyError {
+            kind: NumpyErrorKind::ShapeMismatch,
+            message: "outer: dtype mismatch".to_string(),
+        }),
+    }
+}
+
 /// `np.where(cond, a, b)` — the THREE-argument elementwise conditional
 /// select: `result[i] = cond[i] truthy ? a[i] : b[i]`. This is the 3-arg
 /// `np.where` form (NOT the 1-arg `np.where(cond)` index form, which
@@ -1090,6 +1165,84 @@ mod tests {
         let a = array_f64(&[1., 2.], &[2]).unwrap();
         let b = array_i64(&[1, 2], &[2]).unwrap();
         let err = concatenate(&a, &b).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
+    }
+
+    // ---- #163 BATCH 17: outer (vs numpy 2.4.6) ----
+
+    #[test]
+    fn outer_2x2() {
+        // np.outer([1,2],[3,4]) == [[3,4],[6,8]], shape (2,2).
+        let a = array_f64(&[1., 2.], &[2]).unwrap();
+        let b = array_f64(&[3., 4.], &[2]).unwrap();
+        let r = outer(&a, &b).unwrap();
+        assert_eq!(r.shape(), vec![2, 2]);
+        assert_eq!(f64_vals(&r), vec![3., 4., 6., 8.]);
+        assert_eq!(r.dtype(), a.dtype());
+    }
+
+    #[test]
+    fn outer_nonsquare_3x2() {
+        // np.outer([1,2,3],[4,5]) == [[4,5],[8,10],[12,15]], shape (3,2).
+        let a = array_f64(&[1., 2., 3.], &[3]).unwrap();
+        let b = array_f64(&[4., 5.], &[2]).unwrap();
+        let r = outer(&a, &b).unwrap();
+        assert_eq!(r.shape(), vec![3, 2]);
+        assert_eq!(f64_vals(&r), vec![4., 5., 8., 10., 12., 15.]);
+    }
+
+    #[test]
+    fn outer_flattens_2d_operand() {
+        // np.outer([[1,2],[3,4]],[5,6]) flattens lhs to [1,2,3,4] -> (4,2).
+        let a = array_f64(&[1., 2., 3., 4.], &[2, 2]).unwrap();
+        let b = array_f64(&[5., 6.], &[2]).unwrap();
+        let r = outer(&a, &b).unwrap();
+        assert_eq!(r.shape(), vec![4, 2]);
+        assert_eq!(f64_vals(&r), vec![5., 6., 10., 12., 15., 18., 20., 24.]);
+    }
+
+    #[test]
+    fn outer_preserves_int_dtype() {
+        // np.outer(int [1,2], int [3,4]) -> int [[3,4],[6,8]] (dtype kept).
+        let a = array_i64(&[1, 2], &[2]).unwrap();
+        let b = array_i64(&[3, 4], &[2]).unwrap();
+        let r = outer(&a, &b).unwrap();
+        assert_eq!(r.shape(), vec![2, 2]);
+        assert_eq!(r.dtype(), crate::dtype::Dtype::Int64);
+        match &r {
+            Array::Int64(arr) => {
+                assert_eq!(arr.iter().copied().collect::<Vec<_>>(), vec![3, 4, 6, 8]);
+            }
+            _ => panic!("expected Int64 result"),
+        }
+    }
+
+    #[test]
+    fn outer_empty_lhs_gives_0_by_m() {
+        // np.outer([],[3,4]) -> shape (0,2) (degenerate, no values).
+        let a = array_f64(&[], &[0]).unwrap();
+        let b = array_f64(&[3., 4.], &[2]).unwrap();
+        let r = outer(&a, &b).unwrap();
+        assert_eq!(r.shape(), vec![0, 2]);
+        assert_eq!(r.size(), 0);
+    }
+
+    #[test]
+    fn outer_empty_rhs_gives_n_by_0() {
+        // np.outer([1,2],[]) -> shape (2,0) (degenerate, no values).
+        let a = array_f64(&[1., 2.], &[2]).unwrap();
+        let b = array_f64(&[], &[0]).unwrap();
+        let r = outer(&a, &b).unwrap();
+        assert_eq!(r.shape(), vec![2, 0]);
+        assert_eq!(r.size(), 0);
+    }
+
+    #[test]
+    fn outer_dtype_mismatch_is_err() {
+        // Mixed dtype raises (equal-dtype contract, mirrors concatenate).
+        let a = array_f64(&[1., 2.], &[2]).unwrap();
+        let b = array_i64(&[3, 4], &[2]).unwrap();
+        let err = outer(&a, &b).unwrap_err();
         assert_eq!(err.kind, NumpyErrorKind::ShapeMismatch);
     }
 

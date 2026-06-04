@@ -569,3 +569,242 @@ fn test_runtime_linalg_det_nonsquare_traps() {
          LinalgShapeError → coil_panic); got success. stdout=\n{stdout}\nstderr=\n{stderr}",
     );
 }
+
+// =====================================================================
+// #163 gap-closure BATCH 17 (2026-06-05) — the TOP-LEVEL linalg ops
+// `coil.trace` / `coil.norm` (SCALAR-return f64, the mean/std family
+// shape) + `coil.outer` (MATRIX-return Buffer, the concatenate family
+// shape). UNLIKE the `coil.linalg.*` dotted sub-namespace above, these
+// are FLAT `coil.<op>` calls (same surface as `coil.mean` / `coil.
+// concatenate`). Oracle values vs numpy 2.4.6 (`/opt/homebrew/bin/
+// python3.11`): trace([[1,2],[3,4]])=5, trace([[1,2,3],[4,5,6]])=6,
+// norm([3,4])=5, norm([[1,2],[3,4]])=sqrt(30), outer([1,2],[3,4])=
+// [[3,4],[6,8]], trace(outer([1,2],[3,4]))=3+8=11.
+// =====================================================================
+
+/// `coil.trace(array2x2(1,2,3,4))` == 5 (main-diagonal sum 1 + 4). The
+/// scalar `f64` is printed `(t as i64)` — pins the diagonal-sum value.
+#[test]
+fn test_e2e_coil_trace_2x2() {
+    let source = concat!(
+        "import coil\n",
+        "\n",
+        "fn main() -> i64:\n",
+        "    let a: coil.Buffer = coil.array2x2(1.0, 2.0, 3.0, 4.0)\n",
+        "    let t: f64 = coil.trace(&a)\n",
+        "    print((t as i64))\n",
+        "    return 0\n",
+    );
+    let (_dir, exe) = compile_source(source);
+    let out = Command::new(&exe).output().expect("spawn trace-2x2");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "non-zero exit; stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+    assert_eq!(
+        stdout.trim(),
+        "5",
+        "expected trace([[1,2],[3,4]])=5; got stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+}
+
+/// `coil.trace(array2x3(1..6))` == 6 (NON-square wide; min(2,3)=2 diag
+/// entries 1 + 5). Distinguishes a true diagonal sum from a full sum (=21).
+#[test]
+fn test_e2e_coil_trace_nonsquare() {
+    let source = concat!(
+        "import coil\n",
+        "\n",
+        "fn main() -> i64:\n",
+        "    let a: coil.Buffer = coil.array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)\n",
+        "    let t: f64 = coil.trace(&a)\n",
+        "    print((t as i64))\n",
+        "    return 0\n",
+    );
+    let (_dir, exe) = compile_source(source);
+    let out = Command::new(&exe).output().expect("spawn trace-nonsquare");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "non-zero exit; stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+    assert_eq!(
+        stdout.trim(),
+        "6",
+        "expected trace([[1,2,3],[4,5,6]])=6 (1+5, NOT 21); got stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+}
+
+/// `coil.norm(array1d2(3, 4))` == 5 (vector L2, the 3-4-5 triangle).
+#[test]
+fn test_e2e_coil_norm_vector() {
+    let source = concat!(
+        "import coil\n",
+        "\n",
+        "fn main() -> i64:\n",
+        "    let a: coil.Buffer = coil.array1d2(3.0, 4.0)\n",
+        "    let n: f64 = coil.norm(&a)\n",
+        "    print((n as i64))\n",
+        "    return 0\n",
+    );
+    let (_dir, exe) = compile_source(source);
+    let out = Command::new(&exe).output().expect("spawn norm-vector");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "non-zero exit; stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+    assert_eq!(
+        stdout.trim(),
+        "5",
+        "expected norm([3,4])=5; got stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+}
+
+/// `coil.norm(array2x2(1,2,3,4))` == sqrt(30) ≈ 5.477 (Frobenius). Printed
+/// scaled-by-1000 then `i64`-cast (= 5477) to pin the fractional part
+/// without f-string precision drift (sqrt(30)*1000 = 5477.225...).
+#[test]
+fn test_e2e_coil_norm_frobenius() {
+    let source = concat!(
+        "import coil\n",
+        "\n",
+        "fn main() -> i64:\n",
+        "    let a: coil.Buffer = coil.array2x2(1.0, 2.0, 3.0, 4.0)\n",
+        "    let n: f64 = coil.norm(&a)\n",
+        "    let scaled: f64 = n * 1000.0\n",
+        "    print((scaled as i64))\n",
+        "    return 0\n",
+    );
+    let (_dir, exe) = compile_source(source);
+    let out = Command::new(&exe).output().expect("spawn norm-frobenius");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "non-zero exit; stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+    assert_eq!(
+        stdout.trim(),
+        "5477",
+        "expected norm([[1,2],[3,4]])=sqrt(30)≈5.477 (*1000=5477); \
+         got stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+}
+
+/// `coil.outer(array1d2(1,2), array1d2(3,4))` → a `(2, 2)` Buffer
+/// `[[3,4],[6,8]]`. Printed via `coil.print_buffer` — pins BOTH the values
+/// AND the 2-D shape (a wrong outer would give the 1-D `[3,4,6,8]` or a
+/// transposed `[[3,6],[4,8]]`).
+#[test]
+fn test_e2e_coil_outer_2d_shape() {
+    let source = concat!(
+        "import coil\n",
+        "\n",
+        "fn main() -> i64:\n",
+        "    let a: coil.Buffer = coil.array1d2(1.0, 2.0)\n",
+        "    let b: coil.Buffer = coil.array1d2(3.0, 4.0)\n",
+        "    let c: coil.Buffer = coil.outer(a, b)\n",
+        "    let _ = coil.print_buffer(c)\n",
+        "    return 0\n",
+    );
+    let (_dir, exe) = compile_source(source);
+    let out = Command::new(&exe).output().expect("spawn outer-2d");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "non-zero exit; stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+    assert!(
+        stdout.contains("[[3, 4], [6, 8]]") && stdout.contains("dtype=float64"),
+        "expected outer([1,2],[3,4])=[[3,4],[6,8]] (2,2); got stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+}
+
+/// CHAIN — `coil.trace(coil.outer(array1d2(1,2), array1d2(3,4)))` == 11
+/// (outer = [[3,4],[6,8]], its diagonal sum = 3 + 8 = 11). Proves the
+/// fresh 2-D `outer` Buffer is a first-class, drop-scheduled handle that
+/// feeds the scalar `trace` reduction.
+#[test]
+fn test_e2e_coil_trace_of_outer_chain() {
+    let source = concat!(
+        "import coil\n",
+        "\n",
+        "fn main() -> i64:\n",
+        "    let a: coil.Buffer = coil.array1d2(1.0, 2.0)\n",
+        "    let b: coil.Buffer = coil.array1d2(3.0, 4.0)\n",
+        "    let m: coil.Buffer = coil.outer(a, b)\n",
+        "    let t: f64 = coil.trace(&m)\n",
+        "    print((t as i64))\n",
+        "    return 0\n",
+    );
+    let (_dir, exe) = compile_source(source);
+    let out = Command::new(&exe).output().expect("spawn trace-of-outer");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "non-zero exit; stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+    assert_eq!(
+        stdout.trim(),
+        "11",
+        "expected trace(outer([1,2],[3,4]))=11 (3+8); got stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+}
+
+/// RUNTIME NEGATIVE — `coil.trace` on a NON-2-D (1-D) input traps. A 1-D
+/// `array1d2` is not a matrix; the shim `coil_panic`s (numpy raises
+/// `ValueError`) = a clean non-zero exit, never a garbage value / C-ABI
+/// unwind. The call BUILDS (rank is invisible to the type) then FAILS at
+/// run.
+#[test]
+fn test_e2e_coil_trace_non_2d_traps() {
+    let source = concat!(
+        "import coil\n",
+        "\n",
+        "fn main() -> i64:\n",
+        "    let a: coil.Buffer = coil.array1d2(1.0, 2.0)\n",
+        "    let t: f64 = coil.trace(&a)\n",
+        "    print((t as i64))\n",
+        "    return 0\n",
+    );
+    let (built, build_stderr) = try_build(source);
+    assert!(
+        built,
+        "trace of a 1-D buffer must BUILD (rank is not part of the type); \
+         build stderr=\n{build_stderr}",
+    );
+    let (_dir, exe) = compile_source(source);
+    let out = Command::new(&exe).output().expect("spawn trace-non-2d");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        !out.status.success(),
+        "trace of a 1-D (non-2-D) buffer must TRAP at runtime (non-zero exit per \
+         LinalgShapeError → coil_panic); got success. stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+}
+
+/// TYPECHECK NEGATIVE — `coil.norm` expects a `coil.Buffer`; a `str`
+/// argument must be rejected at the manifest-driven typecheck of the
+/// `[Buffer] -> Float` signature (mirrors the P0 negative corpus).
+#[test]
+fn test_neg_coil_norm_rejects_str_arg() {
+    let (ok, stderr) = try_build(concat!(
+        "import coil\n",
+        "fn main() -> i64:\n",
+        "    let n: f64 = coil.norm(\"not a buffer\")\n",
+        "    print((n as i64))\n",
+        "    return 0\n",
+    ));
+    assert!(
+        !ok,
+        "coil.norm(\"...\") must be rejected (Buffer expected); stderr=\n{stderr}",
+    );
+}

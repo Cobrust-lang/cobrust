@@ -3236,6 +3236,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_nanmean", coil_agg_ty, 1),
             ("__cobrust_coil_nanstd", coil_agg_ty, 1),
             ("__cobrust_coil_percentile", coil_agg2_ty, 2),
+            // #163 BATCH 17 — the SCALAR-return linalg reductions `trace` /
+            // `norm` ride the SAME `coil_agg_ty` (`(ptr) -> f64`) shape as
+            // `mean` / `ptp` (NO new fn-type). `trace` `coil_panic`s on a
+            // non-2-D input; `norm` is total — both invisible to codegen
+            // (the f64-return ABI is byte-identical). MIR retargets
+            // `coil.trace(a)` / `coil.norm(a)` onto these `Call`s via the
+            // SAME Buffer→f64 path as `mean` (ZERO batch-specific MIR code).
+            ("__cobrust_coil_trace", coil_agg_ty, 1),
+            ("__cobrust_coil_norm", coil_agg_ty, 1),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);
@@ -3395,6 +3404,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_concatenate", coil_binop_ty, 2),
             ("__cobrust_coil_vstack", coil_binop_ty, 2),
             ("__cobrust_coil_hstack", coil_binop_ty, 2),
+            // #163 BATCH 17 — the MATRIX-return linalg op `outer` is `(ptr,
+            // ptr) -> ptr` ≡ `coil_binop_ty`, the IDENTICAL extern shape as
+            // the combine ops above (NO new fn-type). The `(n, m)` outer
+            // product + the dtype-preserving equal-dtype contract live in the
+            // Rust kernel (`manipulate.rs`); the handle ABI is byte-identical,
+            // so codegen rides the SAME extern + the flat `__cobrust_coil_*`
+            // recognizer prefix. MIR retargets `coil.outer(a, b)` onto this
+            // `Call` via the SAME generic 2-Buffer-arg path (ZERO new MIR).
+            ("__cobrust_coil_outer", coil_binop_ty, 2),
             // #163 elementwise BINARY min/max ufuncs (BATCH 13). The 2-array
             // `maximum`/`minimum`/`fmax`/`fmin` ops are `(ptr, ptr) -> ptr` ≡
             // `coil_binop_ty` — the IDENTICAL extern shape as the 2-array

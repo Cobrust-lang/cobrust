@@ -1637,6 +1637,59 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // #163 gap-closure BATCH 17 (2026-06-05) — the LINALG ops `trace` /
+        // `norm` (SCALAR-return f64) + `outer` (MATRIX-return Buffer). Two
+        // distinct ABIs, both already proven:
+        //
+        // - `coil.trace(a) -> f64` + `coil.norm(a) -> f64` ride the SAME
+        //   `[Buffer] -> Float` shape + `(ptr) -> f64` `coil_agg_ty` extern
+        //   as `mean` / `std` / `ptp` (the scalar-reduction family). `trace`
+        //   = sum of the main diagonal `a[i,i]` for `i in 0..min(r,c)`,
+        //   2-D-REQUIRED (a non-2-D input is a clean `coil_panic` trap; the
+        //   offset/axes + ≥3-D forms are deferrals). `norm` = Frobenius / L2
+        //   = `sqrt(sum of EVERY element squared)`, 1-D + 2-D (the `ord=`
+        //   arg [L1, inf, nuclear] is a deferral — default L2 only). Both
+        //   PROMOTE int/bool lanes to f64 in the sum.
+        // - `coil.outer(a, b) -> Buffer` rides the SAME `[Buffer, Buffer] ->
+        //   Buffer` shape + `(ptr, ptr) -> ptr` `coil_binop_ty` extern as
+        //   `concatenate` / `vstack` / `maximum` (the 2-Buffer combine
+        //   family). `outer[i,j] = a_flat[i] * b_flat[j]`, a 2-D
+        //   `(a.size, b.size)` matrix (both flattened to 1-D first).
+        //   DTYPE-PRESERVING with the SAME equal-dtype contract as
+        //   `concatenate` (a mixed pair raises via `coil_panic`; numpy
+        //   promotes).
+        //
+        // NO new MIR code (the scalar-reduction Buffer→f64 path + the
+        // 2-Buffer→Buffer combine path both pre-exist — the generic
+        // ecosystem-call lowering iterates `sig.params` regardless of arity)
+        // and NO new codegen extern shape (both `coil_agg_ty` + `coil_binop_ty`
+        // already declared).
+        //
+        // Tier: `trace` / `outer` `Semantic` — the VALUES + shape + dtype
+        // agree exactly with numpy 2.4.6 (`trace` is an integer diagonal sum;
+        // `outer` is a pure dtype-preserving product, no floating-arithmetic
+        // accumulation order). `norm` `Numerical` — the `sqrt(sum-of-squares)`
+        // is floating arithmetic (rtol per ADR-0017); the VALUES agree with
+        // `np.linalg.norm` to `rtol = 1e-12` (the `aggregates` unit tests
+        // carry the bit-confirmed literals).
+        ("coil", "trace") => Some(EcoSig::from_values(
+            "__cobrust_coil_trace",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("coil", "norm") => Some(EcoSig::from_values(
+            "__cobrust_coil_norm",
+            vec![coil_buffer_ty()],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("coil", "outer") => Some(EcoSig::from_values(
+            "__cobrust_coil_outer",
+            vec![coil_buffer_ty(), coil_buffer_ty()],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         // ADR-0076 Phase 1 — `dora` (dora-rs robotics dataflow,
         // ninth ecosystem module). Phase 1 ships SYNTHETIC runtime;
         // the explicit registration form `dora.node(handler)` stands in
@@ -3690,6 +3743,38 @@ mod tests {
         // Buffer handle FIRST, then the f64 exponent (same shape as
         // percentile's params, but Buffer-returning).
         assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Float]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    // #163 BATCH 17 — trace / norm (Buffer -> Float, the scalar-reduction
+    // shape as mean/std) + outer (Buffer, Buffer -> Buffer, the 2-Buffer
+    // combine shape as concatenate).
+
+    #[test]
+    fn coil_trace_takes_buffer_returns_float() {
+        let sig = lookup_module_fn("coil", "trace").expect("coil.trace in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_trace");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_norm_takes_buffer_returns_float() {
+        let sig = lookup_module_fn("coil", "norm").expect("coil.norm in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_norm");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty()]);
+        assert_eq!(sig.ret, Ty::Float);
+    }
+
+    #[test]
+    fn coil_outer_takes_two_buffers_returns_buffer() {
+        let sig = lookup_module_fn("coil", "outer").expect("coil.outer in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_outer");
+        // Two Buffer handles -> a fresh Buffer (the concatenate shape).
+        assert_eq!(
+            value_tys(&sig.params),
+            vec![coil_buffer_ty(), coil_buffer_ty()]
+        );
         assert_eq!(sig.ret, coil_buffer_ty());
     }
 

@@ -74,8 +74,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::aggregates::{
     all_scalar, any_scalar, argmax_scalar, argmin_scalar, max_scalar, mean_scalar, median_scalar,
-    min_scalar, nanmean_scalar, nanstd_scalar, nansum_scalar, percentile_scalar, prod_scalar,
-    ptp_scalar, split_first_chunk, std_scalar, var_scalar,
+    min_scalar, nanmean_scalar, nanstd_scalar, nansum_scalar, norm_scalar, percentile_scalar,
+    prod_scalar, ptp_scalar, split_first_chunk, std_scalar, trace_scalar, var_scalar,
 };
 use crate::array::Array;
 use crate::broadcast::broadcast_shape;
@@ -103,9 +103,9 @@ use crate::linalg::{det as linalg_det, inv as linalg_inv, solve as linalg_solve}
 use crate::manipulate::{
     argsort as coil_argsort, concatenate as coil_concatenate, diff as coil_diff,
     flatnonzero as coil_flatnonzero, flatten as coil_flatten, flip as coil_flip,
-    hstack as coil_hstack, ravel as coil_ravel, repeat as coil_repeat, roll as coil_roll,
-    sort as coil_sort, tile as coil_tile, transpose as coil_transpose, unique as coil_unique,
-    vstack as coil_vstack, where_select as coil_where,
+    hstack as coil_hstack, outer as coil_outer, ravel as coil_ravel, repeat as coil_repeat,
+    roll as coil_roll, sort as coil_sort, tile as coil_tile, transpose as coil_transpose,
+    unique as coil_unique, vstack as coil_vstack, where_select as coil_where,
 };
 use crate::print::array_repr;
 use crate::reduce::{cumprod as coil_cumprod, cumsum as coil_cumsum};
@@ -498,6 +498,54 @@ pub unsafe extern "C" fn __cobrust_coil_var(a: *mut u8) -> f64 {
     // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
     let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
     var_scalar(arr_ref).unwrap_or(f64::NAN)
+}
+
+// =====================================================================
+// #163 linalg gap-closure BATCH 17 (2026-06-05) — two SCALAR-returning
+// linalg reductions on the SAME `(ptr) -> f64` `coil_agg_ty` ABI as
+// `mean` / `std`: `trace` (main-diagonal sum, 2-D-REQUIRED) and `norm`
+// (Frobenius / L2 = sqrt-sum-of-squares, 1-D + 2-D). Both BORROW the
+// handle arg. `norm` is TOTAL (NaN on null, like `mean`); `trace`
+// `coil_panic`s on a NON-2-D input (numpy `ValueError`; the offset/axes +
+// ≥3-D batch forms are deferrals) — NEVER unwinding across the C-ABI.
+// =====================================================================
+
+/// `coil.trace(a) -> f64`. Sum of the main diagonal `a[i, i]`. BORROWS the
+/// handle. A NON-2-D input `coil_panic`s (numpy raises `ValueError`); a null
+/// handle yields `NaN` (the family's empty-input contract).
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_trace(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return f64::NAN;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    match trace_scalar(arr_ref) {
+        Ok(v) => v,
+        // A non-2-D input is a clean trap (numpy `ValueError`), NOT a NaN —
+        // it is a structural misuse, not an empty reduction.
+        Err(e) => coil_panic(&format!("coil.trace: {}", e.message)),
+    }
+}
+
+/// `coil.norm(a) -> f64`. Frobenius / L2 norm (`sqrt(sum of squares)`).
+/// BORROWS the handle. TOTAL — `0.0` on empty, `NaN` on a null handle.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_norm(a: *mut u8) -> f64 {
+    if a.is_null() {
+        return f64::NAN;
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only.
+    let arr_ref: &Array = unsafe { &*a.cast::<Array>() };
+    norm_scalar(arr_ref).unwrap_or(f64::NAN)
 }
 
 // =====================================================================
@@ -1158,6 +1206,24 @@ pub unsafe extern "C" fn __cobrust_coil_vstack(a: *mut u8, b: *mut u8) -> *mut u
 pub unsafe extern "C" fn __cobrust_coil_hstack(a: *mut u8, b: *mut u8) -> *mut u8 {
     // SAFETY: forwarded caller attestation.
     unsafe { buffer_combine(a, b, "hstack", coil_hstack) }
+}
+
+/// `coil.outer(a, b) -> Buffer`. The outer product `result[i, j] =
+/// a_flat[i] * b_flat[j]`, a 2-D `(a.size, b.size)` matrix (both operands
+/// flattened to 1-D first). BORROWS both handles; returns a fresh owned
+/// handle. DTYPE-PRESERVING — a dtype mismatch `coil_panic`s (numpy
+/// promotes; coil raises). Rides the IDENTICAL `buffer_combine` shared body
+/// as `concatenate` / `vstack` / `hstack` (the only difference is the Rust
+/// kernel — the handle ABI is byte-identical).
+///
+/// # Safety
+///
+/// `a` and `b` must be live `Buffer` handles (not yet dropped). The
+/// returned pointer is a freshly-Boxed handle the `.cb` caller owns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_outer(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: forwarded caller attestation.
+    unsafe { buffer_combine(a, b, "outer", coil_outer) }
 }
 
 // =====================================================================
@@ -3465,6 +3531,137 @@ mod tests {
             __cobrust_coil_buffer_drop(c);
         }
         assert_eq!(drop_count() - before, 3);
+    }
+
+    // =====================================================================
+    // #163 BATCH 17 — trace / norm (scalar f64, mirror mean) + outer
+    // (2-Buffer, mirror concatenate). Values vs numpy 2.4.6.
+    // =====================================================================
+
+    /// `coil.trace(array2x2(1,2,3,4))` == 5 (1 + 4); BORROWS the handle,
+    /// drops once.
+    #[test]
+    fn trace_shim_2x2() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array2x2(1.0, 2.0, 3.0, 4.0);
+            let t = __cobrust_coil_trace(a);
+            assert!((t - 5.0).abs() < 1e-12, "trace 2x2 got {t}");
+            __cobrust_coil_buffer_drop(a);
+        }
+        assert_eq!(drop_count() - before, 1, "Buffer must drop exactly once");
+    }
+
+    /// `coil.trace(array2x3(...))` == 6 (non-square wide, 1 + 5).
+    #[test]
+    fn trace_shim_nonsquare() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+            let t = __cobrust_coil_trace(a);
+            assert!((t - 6.0).abs() < 1e-12, "trace 2x3 got {t}");
+            __cobrust_coil_buffer_drop(a);
+        }
+    }
+
+    /// `coil.trace(null)` is `NaN` (the family's empty-handle contract).
+    #[test]
+    fn trace_shim_null_is_nan() {
+        unsafe {
+            assert!(__cobrust_coil_trace(std::ptr::null_mut()).is_nan());
+        }
+    }
+
+    /// `coil.norm(array1d2(3, 4))` == 5 (vector L2, 3-4-5 triangle).
+    #[test]
+    fn norm_shim_vector() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(3.0, 4.0);
+            let n = __cobrust_coil_norm(a);
+            assert!((n - 5.0).abs() < 1e-12, "norm([3,4]) got {n}");
+            __cobrust_coil_buffer_drop(a);
+        }
+        assert_eq!(drop_count() - before, 1, "Buffer must drop exactly once");
+    }
+
+    /// `coil.norm(array2x2(1,2,3,4))` == sqrt(30) (Frobenius).
+    #[test]
+    fn norm_shim_2d_frobenius() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array2x2(1.0, 2.0, 3.0, 4.0);
+            let n = __cobrust_coil_norm(a);
+            assert!(
+                (n - 30.0_f64.sqrt()).abs() < 1e-12,
+                "norm 2x2 must be sqrt(30), got {n}"
+            );
+            __cobrust_coil_buffer_drop(a);
+        }
+    }
+
+    /// `coil.norm(null)` is `NaN`.
+    #[test]
+    fn norm_shim_null_is_nan() {
+        unsafe {
+            assert!(__cobrust_coil_norm(std::ptr::null_mut()).is_nan());
+        }
+    }
+
+    /// `coil.outer(array1d2(1,2), array1d2(3,4))` → a `(2, 2)` Buffer
+    /// `[[3,4],[6,8]]`; BORROWS both inputs, the fresh result drops once
+    /// (3 total drops).
+    #[test]
+    fn outer_shim_2x2_round_trip() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let b = __cobrust_coil_array1d2(3.0, 4.0);
+            let c = __cobrust_coil_outer(a, b);
+            let arr: &Array = &*c.cast::<Array>();
+            assert_eq!(arr.shape(), &[2, 2]);
+            assert_eq!(array_repr(arr), "array([[3, 4], [6, 8]], dtype=float64)");
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(c);
+        }
+        assert_eq!(drop_count() - before, 3);
+    }
+
+    /// `coil.trace(coil.outer(array1d2(1,2), array1d2(3,4)))` == 11 (3 + 8)
+    /// — the BATCH-17 chain (outer feeds trace; the 2-D result is a
+    /// first-class drop-scheduled Buffer).
+    #[test]
+    fn trace_of_outer_chain() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.0, 2.0);
+            let b = __cobrust_coil_array1d2(3.0, 4.0);
+            let c = __cobrust_coil_outer(a, b);
+            let t = __cobrust_coil_trace(c);
+            assert!(
+                (t - 11.0).abs() < 1e-12,
+                "trace(outer([1,2],[3,4])) got {t}"
+            );
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(b);
+            __cobrust_coil_buffer_drop(c);
+        }
     }
 
     /// `coil.vstack(array2x3, array2x3)` → a `(4, 3)` Buffer.

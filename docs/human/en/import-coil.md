@@ -1017,6 +1017,63 @@ Arity and unknown-member errors ARE caught at compile time:
 `coil.linalg.solve(a)` (wrong arity) and `coil.linalg.solveX(a)`
 (unknown member) are both type errors, not runtime crashes.
 
+## Top-level linalg ops — `trace` / `norm` / `outer`
+
+Three more linalg ops live at the **top level** (`coil.trace`, like
+`coil.mean`) rather than under `coil.linalg.*` — they mirror numpy's
+`np.trace` / `np.linalg.norm` / `np.outer`. Two give a scalar `f64`
+(`trace`, `norm`); `outer` gives a 2-D `Buffer`.
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array2x2(1.0, 2.0, 3.0, 4.0)  # [[1,2],[3,4]]
+    let t: f64 = coil.trace(&a)             # 1 + 4 = 5 (main-diagonal sum)
+    print((t as i64))                       # 5
+
+    let v: coil.Buffer = coil.array1d2(3.0, 4.0)  # [3, 4]
+    let n: f64 = coil.norm(&v)              # sqrt(3² + 4²) = 5  (L2 norm)
+    print((n as i64))                       # 5
+
+    let p: coil.Buffer = coil.outer(coil.array1d2(1.0, 2.0), v)  # [1,2] ⊗ [3,4]
+    let _ = coil.print_buffer(p)            # [[3, 4], [6, 8]]  (2×2)
+    return 0
+```
+
+- **`coil.trace(a: Buffer) -> f64`** — the sum of the main diagonal
+  `a[i, i]` for `i in 0 .. min(rows, cols)`. Needs a **2-D** matrix.
+  `trace([[1,2],[3,4]]) = 5`; non-square works too —
+  `trace([[1,2,3],[4,5,6]]) = 1 + 5 = 6` (it sums the shorter diagonal).
+  A non-2-D input is a **runtime trap** (numpy's `ValueError`); the
+  `offset=` / `axis1,axis2=` forms are a documented follow-up.
+- **`coil.norm(a: Buffer) -> f64`** — the Frobenius / L2 norm:
+  `sqrt(sum of every element squared)`. Works on a 1-D vector
+  (`norm([3,4]) = 5`) **and** a 2-D matrix (`norm([[1,2],[3,4]]) =
+  sqrt(30) ≈ 5.477`) — same formula either way. An empty buffer gives
+  `0.0`. The `ord=` argument (L1, ∞, nuclear) is a follow-up — this is
+  the default L2 / Frobenius norm only.
+- **`coil.outer(a: Buffer, b: Buffer) -> Buffer`** — the outer product:
+  `result[i, j] = a[i] * b[j]`, a 2-D `(a.size, b.size)` matrix (both
+  inputs are flattened to 1-D first). `outer([1,2],[3,4]) =
+  [[3,4],[6,8]]`. Like `concatenate`, both inputs must share a dtype
+  (the result keeps it — `int ⊗ int` stays `int`); a mixed pair is a
+  runtime trap. An empty input gives a degenerate matrix (`outer([],
+  [3,4])` → shape `(0,2)`).
+
+> **Why `&a` for `trace` / `norm` but a bare `a` for `outer`'s inputs?**
+> `trace` / `norm` only *read* the buffer, so you borrow it with `&a`
+> (the handle stays yours for later use — the same shared-borrow rule as
+> `coil.mean(&a)`). `outer` is wired like `concatenate`: it takes its two
+> operands by value (they auto-borrow at the call). Both are non-`Copy`
+> `Buffer` handles; the `&` on the read-only reductions is what lets you
+> reuse `a` afterwards.
+
+`trace` promotes integer inputs to `f64` in the sum (a value-faithful
+scalar return — numpy keeps the integer dtype). These wrap coil's
+pure-Rust kernels (no system BLAS, no `ndarray-linalg`), so they ship on
+every target coil cross-compiles to.
+
 ## Elementwise operators + broadcasting (`a + b`, `a - b`, `a * b`, `a / b`)
 
 Two `coil.Buffer` handles add / subtract / multiply / **divide** with the

@@ -3271,6 +3271,107 @@ IDENTICAL to the BATCH-3 forward transcendentals (reuses the shared
       — F64).
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## #163 numpy gap-closure BATCH 17 — the linalg ops `trace` / `norm` (scalar-return f64) + `outer` (matrix-return Buffer) (DONE)
+
+Three linalg ops spanning TWO already-proven ABIs. `trace` / `norm` are
+1-arg SCALAR-return `f64` (the `mean` / `std` family); `outer` is a
+2-Buffer combine returning a fresh Buffer (the `concatenate` family). The
+new logic is purely in the Rust kernels (diagonal sum, sqrt-sum-of-squares,
+the `(n,m)` product matrix) — every wiring layer reuses an existing path.
+
+### Semantics (load-bearing — numpy 2.4.6 confirmed + tested)
+
+- **`coil.trace(a) -> f64`** — sum of the main diagonal `a[i, i]` for `i in
+  0..min(rows, cols)`. 2-D-REQUIRED. `np.trace([[1,2],[3,4]]) == 5` (1+4);
+  NON-square `np.trace([[1,2,3],[4,5,6]]) == 6` (1+5, min(2,3)=2 entries),
+  `np.trace([[1,2],[3,4],[5,6]]) == 5` (1+4, min(3,2)=2). A non-2-D input is
+  a clean `coil_panic` trap (numpy's `ValueError` analogue); the `offset=`
+  (`k`) + `axis1=`/`axis2=` forms and the ≥3-D batch form are deferrals.
+  Integer / bool lanes PROMOTE to `f64` in the sum (numpy keeps the integer
+  dtype — coil's value-faithful scalar-return divergence, same shape as
+  `mean`).
+- **`coil.norm(a) -> f64`** — the Frobenius / L2 norm: `sqrt(sum of EVERY
+  element squared)`. Works on 1-D + 2-D (the SAME formula over the flattened
+  buffer). `np.linalg.norm([3,4]) == 5.0` (vector L2);
+  `np.linalg.norm([[1,2],[3,4]]) == sqrt(1+4+9+16) == sqrt(30)` (Frobenius).
+  EMPTY → `0.0` (numpy `np.linalg.norm([]) == 0.0`, NOT a trap). The `ord=`
+  arg (L1 / inf / nuclear / spectral) is a deferral — default L2 only.
+  Integer / bool lanes PROMOTE to `f64`.
+- **`coil.outer(a, b) -> Buffer`** — the outer product: `result[i, j] =
+  a_flat[i] * b_flat[j]`, a 2-D `(a.size, b.size)` matrix (both operands
+  flattened to 1-D first). `np.outer([1,2],[3,4]) == [[3,4],[6,8]]` (shape
+  `(2,2)`); `np.outer([1,2,3],[4,5]) == [[4,5],[8,10],[12,15]]` (shape
+  `(3,2)`). A ≥2-D operand is flattened first. EMPTY operand → a degenerate
+  matrix: `np.outer([],[3,4])` → `(0,2)`; `np.outer([1,2],[])` → `(2,0)`.
+  DTYPE-PRESERVING with the SAME equal-dtype contract as `concatenate` (a
+  mixed pair raises via `coil_panic`; numpy promotes). NO shape constraint
+  beyond same-dtype.
+
+### 5-layer wiring
+
+- `aggregates.rs`: `trace_scalar` / `norm_scalar` beside `mean_scalar`,
+  both `Result<f64, NumpyError>` reusing the EXISTING `to_f64_vec` promote
+  helper. `trace` reads `a[i,i]` at C-order flat index `i*cols + i`,
+  `LinalgShapeError` on non-2-D; `norm` maps-squares-sums over the flat
+  buffer then `sqrt`. 9 unit tests (trace square + non-square wide/tall +
+  int-promote + non-2-D `LinalgShapeError`; norm vector + Frobenius +
+  int-promote + empty→0.0).
+- `manipulate.rs`: `outer` beside `concatenate`, the equal-dtype guard +
+  a nested generic `go` (`(n,m)` product `from_shape_vec`). Bool operands
+  raise (numpy promotes bool→int8). 7 unit tests (2x2 + non-square 3x2 +
+  2-D-operand-flatten + int-dtype-preserve + empty-lhs `(0,m)` + empty-rhs
+  `(n,0)` + dtype-mismatch `ShapeMismatch`).
+- `cabi.rs`: `__cobrust_coil_trace` / `_norm` `(ptr) -> f64` (mirror
+  `mean` — borrow handle, NaN on null; `trace` `coil_panic`s on the
+  `LinalgShapeError` Err, `norm` is total). `__cobrust_coil_outer` `(ptr,
+  ptr) -> ptr` via the shared `buffer_combine` body (the SAME 2-Buffer
+  borrow → fresh-Box → `coil_panic`-on-Err path as `concatenate`). 8 shim
+  tests incl. the `trace(outer(a,b))=11` chain + drop-once balance (outer =
+  3 drops).
+- `ecosystem.rs`: 3 arms — `trace` / `norm` `[Buffer] -> Float`, `outer`
+  `[Buffer, Buffer] -> Buffer`. Tier `trace` / `outer` `Semantic` (exact
+  integer/structural values), `norm` `Numerical` (sqrt floating arithmetic,
+  rtol). 3 manifest tests.
+- Typecheck / MIR: NO new code — `trace` / `norm` ride the SAME Buffer→f64
+  generic path as `mean`; `outer` rides the SAME 2-Buffer→Buffer path as
+  `concatenate` (the generic ecosystem-call lowering iterates `sig.params`
+  regardless of arity — NO `_=>"any"` gap).
+- Codegen: `trace` / `norm` → `coil_agg_ty` (`(ptr) -> f64`, the `mean`
+  shape); `outer` → `coil_binop_ty` (`(ptr, ptr) -> ptr`, the `concatenate`
+  shape). NO new extern fn-type; symbols ride the `__cobrust_coil_` prefix
+  recognizer (pure `starts_with`).
+
+### Done means (#163 BATCH 17 — DONE)
+
+- [x] `aggregates.rs`: `trace_scalar` + `norm_scalar` (9 unit tests pin the
+      diagonal sum incl. NON-square, the Frobenius/L2 formula, int→f64
+      promote, the non-2-D `LinalgShapeError` trap, and norm-empty→0.0).
+- [x] `manipulate.rs`: `outer` (7 unit tests pin the `[[3,4],[6,8]]` 2-D
+      result + shape, non-square, 2-D-operand flatten, int-dtype-preserve,
+      both empty-degenerate shapes, and the dtype-mismatch raise).
+- [x] cabi: 3 shims (`trace`/`norm` borrow-scalar via the `mean` pattern;
+      `outer` 2-Buffer via the shared `buffer_combine`). 8 shim tests incl.
+      the `trace(outer)`=11 chain + drop-once (outer = 3 drops, trace/norm =
+      1 borrow).
+- [x] Manifest: 3 ecosystem arms (`trace`/`norm` Buffer→Float Semantic/
+      Numerical; `outer` 2-Buffer→Buffer Semantic). 3 manifest tests.
+- [x] Typecheck / MIR: NO new code (`mean` Buffer→f64 path + `concatenate`
+      2-Buffer path).
+- [x] Codegen: `trace`/`norm` → `coil_agg_ty`, `outer` → `coil_binop_ty`
+      (NO new extern fn-type).
+- [x] `.cb` E2E `coil_linalg_e2e.rs` (8 new tests): trace 2x2 (=5) + trace
+      non-square 2x3 (=6) + norm vector `array1d2(3,4)` (=5) + norm 2-D
+      Frobenius (sqrt(30), `*1000`→5477) + outer printed as 2-D `[[3,4],
+      [6,8]]` + the `trace(outer)`=11 CHAIN + trace non-2-D runtime trap +
+      `norm("…")` str-arg typecheck reject.
+- [x] No regression: full `cobrust-coil` suite green (478 lib tests);
+      `coil_linalg_e2e` (17) + `coil_hello_e2e` (3) all green, run ONE
+      `--test` at a time (F73 libcoil.a build-race avoidance); touched
+      crates (`cobrust-coil` + `cobrust-codegen` + `cobrust-types`) build +
+      clippy `-D warnings --all-targets` + fmt clean; no new dep
+      (`Cargo.lock` unchanged — F64); pure ndarray + std, NO ndarray-linalg.
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

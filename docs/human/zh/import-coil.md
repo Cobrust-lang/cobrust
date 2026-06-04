@@ -920,6 +920,58 @@ arity 和未知成员错误**在编译期**被捕获:`coil.linalg.solve(a)`
 (arity 错)和 `coil.linalg.solveX(a)`(未知成员)都是类型错误,不是运
 行期崩溃。
 
+## 顶层线性代数算子 —— `trace` / `norm` / `outer`
+
+还有三个线性代数算子放在**顶层**(`coil.trace`,和 `coil.mean` 一样),
+而不是 `coil.linalg.*` 下 —— 它们对应 numpy 的 `np.trace` /
+`np.linalg.norm` / `np.outer`。两个返回标量 `f64`(`trace`、`norm`);
+`outer` 返回一个 2-D `Buffer`。
+
+```python
+import coil
+
+fn main() -> i64:
+    let a: coil.Buffer = coil.array2x2(1.0, 2.0, 3.0, 4.0)  # [[1,2],[3,4]]
+    let t: f64 = coil.trace(&a)             # 1 + 4 = 5(主对角线之和)
+    print((t as i64))                       # 5
+
+    let v: coil.Buffer = coil.array1d2(3.0, 4.0)  # [3, 4]
+    let n: f64 = coil.norm(&v)              # sqrt(3² + 4²) = 5(L2 范数)
+    print((n as i64))                       # 5
+
+    let p: coil.Buffer = coil.outer(coil.array1d2(1.0, 2.0), v)  # [1,2] ⊗ [3,4]
+    let _ = coil.print_buffer(p)            # [[3, 4], [6, 8]](2×2)
+    return 0
+```
+
+- **`coil.trace(a: Buffer) -> f64`** —— 主对角线 `a[i, i]` 之和,`i` 取
+  `0 .. min(rows, cols)`。需要 **2-D** 矩阵。`trace([[1,2],[3,4]]) = 5`;
+  非方阵也行 —— `trace([[1,2,3],[4,5,6]]) = 1 + 5 = 6`(取较短的对角线)。
+  非 2-D 输入是**运行期陷阱**(numpy 的 `ValueError`);`offset=` /
+  `axis1,axis2=` 形式是已记录的后续项。
+- **`coil.norm(a: Buffer) -> f64`** —— Frobenius / L2 范数:
+  `sqrt(所有元素平方之和)`。对 1-D 向量(`norm([3,4]) = 5`)**和** 2-D
+  矩阵(`norm([[1,2],[3,4]]) = sqrt(30) ≈ 5.477`)都适用 —— 公式相同。
+  空 buffer 给 `0.0`。`ord=` 参数(L1、∞、核范数)是后续项 —— 这里只有
+  默认的 L2 / Frobenius 范数。
+- **`coil.outer(a: Buffer, b: Buffer) -> Buffer`** —— 外积:
+  `result[i, j] = a[i] * b[j]`,一个 2-D `(a.size, b.size)` 矩阵(两个
+  输入先被展平成 1-D)。`outer([1,2],[3,4]) = [[3,4],[6,8]]`。和
+  `concatenate` 一样,两个输入必须同 dtype(结果保留它 —— `int ⊗ int`
+  仍是 `int`);混合一对是运行期陷阱。空输入给一个退化矩阵
+  (`outer([], [3,4])` → 形状 `(0,2)`)。
+
+> **为什么 `trace` / `norm` 用 `&a`,而 `outer` 的输入用裸 `a`?**
+> `trace` / `norm` 只**读**取 buffer,所以用 `&a` 借用它(句柄仍归你所有,
+> 后面还能用 —— 和 `coil.mean(&a)` 的共享借用规则相同)。`outer` 的接线
+> 和 `concatenate` 一样:它按值接收两个操作数(在调用处自动借用)。两者
+> 都是非 `Copy` 的 `Buffer` 句柄;只读归约上的 `&` 正是让你之后能复用
+> `a` 的原因。
+
+`trace` 在求和时把整数输入提升到 `f64`(一个数值忠实的标量返回 —— numpy
+保留整数 dtype)。它们包装 coil 的纯 Rust kernel(无系统 BLAS,无
+`ndarray-linalg`),因此在 coil 交叉编译到的每个目标上都能用。
+
 ## 逐元素操作符 + 广播(`a + b`、`a - b`、`a * b`、`a / b`)
 
 两个 `coil.Buffer` 句柄可以用 `+` / `-` / `*` / `/` 做加 / 减 / 乘 /

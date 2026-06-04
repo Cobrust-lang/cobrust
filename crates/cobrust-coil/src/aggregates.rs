@@ -160,6 +160,84 @@ pub fn var_scalar(a: &Array) -> Result<f64, NumpyError> {
     Ok(scalar_to_f64(&r))
 }
 
+// ---- #163 linalg gap-closure BATCH 17 (2026-06-05) -----------------------
+// Two SCALAR-RETURNING (`f64`) linalg reductions extending the
+// mean/median/std/var/min/max/prod family with the same `coil_agg_ty`
+// (Buffer → f64) ABI: `trace` (main-diagonal sum, 2-D-required) and `norm`
+// (Frobenius / L2, the sqrt-sum-of-squares over EVERY element, 1-D + 2-D).
+// Both PROMOTE integer / bool lanes to `f64` in the sum (numpy's
+// default-float reduction shape). Differential-checked vs numpy 2.4.6
+// (`/opt/homebrew/bin/python3.11` oracle) — see the unit tests' literals.
+
+/// `coil.trace(a) -> f64` — the sum of the main diagonal `a[i, i]` for `i`
+/// in `0..min(rows, cols)`. REQUIRES a 2-D input.
+///
+/// numpy semantics (`np.trace`): the diagonal sum over a 2-D matrix.
+/// Square (`np.trace([[1,2],[3,4]]) == 5`) and NON-square
+/// (`np.trace([[1,2,3],[4,5,6]]) == 1 + 5 == 6`; `np.trace([[1,2],[3,4],
+/// [5,6]]) == 1 + 4 == 5`) both sum `min(r, c)` diagonal entries. Integer /
+/// bool inputs PROMOTE to `f64` (numpy keeps the integer dtype; coil's
+/// value-faithful scalar-return divergence, the same shape as `mean`).
+///
+/// The `offset=` (`k`) and `axis1=`/`axis2=` forms are a documented
+/// deferral — main diagonal of a 2-D matrix only.
+///
+/// # Errors
+///
+/// `LinalgShapeError` when the input is NOT 2-D (numpy's `np.trace` accepts
+/// ≥2-D with the axes selecting a 2-D sub-array; the ≥3-D batch form is the
+/// deferral — a non-2-D input is a clean trap, mapped by the cabi shim to
+/// `coil_panic`). A 1-D / 0-D input is rejected here, NOT silently summed.
+pub fn trace_scalar(a: &Array) -> Result<f64, NumpyError> {
+    let shape = a.shape();
+    if shape.len() != 2 {
+        return Err(NumpyError {
+            kind: NumpyErrorKind::LinalgShapeError,
+            message: format!(
+                "trace: expected a 2-D array, got {}-D (shape {:?}); the offset/axes \
+                 form and the ≥3-D batch form are tracked follow-ups",
+                shape.len(),
+                shape
+            ),
+        });
+    }
+    let (rows, cols) = (shape[0], shape[1]);
+    let diag_len = rows.min(cols);
+    // Promote to f64 + read the C-order flat buffer; element `a[i, i]` sits
+    // at flat index `i * cols + i` in row-major layout.
+    let flat = to_f64_vec(a);
+    let mut sum = 0.0_f64;
+    for i in 0..diag_len {
+        sum += flat[i * cols + i];
+    }
+    Ok(sum)
+}
+
+/// `coil.norm(a) -> f64` — the Frobenius / L2 norm: `sqrt(sum of EVERY
+/// element squared)`. Works on 1-D (vector L2) and 2-D (Frobenius).
+///
+/// numpy semantics (`np.linalg.norm`, default `ord=None`):
+/// `np.linalg.norm([3, 4]) == 5.0` (vector L2);
+/// `np.linalg.norm([[1, 2], [3, 4]]) == sqrt(1 + 4 + 9 + 16) == sqrt(30)`
+/// (Frobenius). The SAME `sqrt(sum-of-squares)` formula over the flattened
+/// buffer for either rank. EMPTY → `0.0` (numpy `np.linalg.norm([]) ==
+/// 0.0`). Integer / bool inputs PROMOTE to `f64` in the sum.
+///
+/// The `ord=` arg (`L1` / `inf` / nuclear / spectral) is a documented
+/// deferral — default `L2` / Frobenius only.
+///
+/// # Errors
+///
+/// Currently infallible (the sqrt-sum-of-squares is defined for every rank
+/// incl. empty); wrapped in `Result` for ABI uniformity with the rest of
+/// the scalar-reduction family so the cabi shim shares one shape.
+pub fn norm_scalar(a: &Array) -> Result<f64, NumpyError> {
+    // Sum of squares over EVERY element (rank-agnostic — the flattened
+    // buffer), promoting int / bool lanes to f64. EMPTY → 0.0 → sqrt → 0.0.
+    let sum_sq: f64 = to_f64_vec(a).iter().map(|&v| v * v).sum();
+    Ok(sum_sq.sqrt())
+}
+
 // ---- #145 statistics gap-closure (2026-06-01) ----------------------------
 // NaN-aware + spread scalar aggregates extending the mean/median/std/var
 // family. All reduce the whole buffer to one `f64` on the proven
@@ -921,5 +999,83 @@ mod tests {
             p.is_infinite() && p > 0.0,
             "prod overflow must be +inf, got {p}"
         );
+    }
+
+    // ---- #163 BATCH 17: trace / norm (vs numpy 2.4.6) --------------------
+
+    #[test]
+    fn trace_square_2x2() {
+        // np.trace([[1,2],[3,4]]) == 1 + 4 == 5.
+        let a = array_f64(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let t = trace_scalar(&a).unwrap();
+        assert!(approx(t, 5.0, 1e-12), "trace 2x2 must be 5, got {t}");
+    }
+
+    #[test]
+    fn trace_nonsquare_wide_2x3() {
+        // np.trace([[1,2,3],[4,5,6]]) == 1 + 5 == 6 (min(2,3)=2 diag entries).
+        let a = array_f64(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let t = trace_scalar(&a).unwrap();
+        assert!(approx(t, 6.0, 1e-12), "trace 2x3 must be 6, got {t}");
+    }
+
+    #[test]
+    fn trace_nonsquare_tall_3x2() {
+        // np.trace([[1,2],[3,4],[5,6]]) == 1 + 4 == 5 (min(3,2)=2 diag entries).
+        let a = array_f64(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]).unwrap();
+        let t = trace_scalar(&a).unwrap();
+        assert!(approx(t, 5.0, 1e-12), "trace 3x2 must be 5, got {t}");
+    }
+
+    #[test]
+    fn trace_integer_promotes_to_f64() {
+        // np.trace(int [[1,2],[3,4]]) == 5; coil promotes int -> f64.
+        let a = array_i64(&[1, 2, 3, 4], &[2, 2]).unwrap();
+        let t = trace_scalar(&a).unwrap();
+        assert!(approx(t, 5.0, 1e-12), "trace int 2x2 must be 5, got {t}");
+    }
+
+    #[test]
+    fn trace_non_2d_errors() {
+        // A 1-D input is a clean LinalgShapeError (not silently summed); the
+        // offset/axes + ≥3-D batch forms are deferrals.
+        let a = array_f64(&[1.0, 2.0, 3.0], &[3]).unwrap();
+        let err = trace_scalar(&a).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::LinalgShapeError);
+    }
+
+    #[test]
+    fn norm_vector_l2() {
+        // np.linalg.norm([3,4]) == 5.0 (3-4-5 triangle).
+        let a = array_f64(&[3.0, 4.0], &[2]).unwrap();
+        let n = norm_scalar(&a).unwrap();
+        assert!(approx(n, 5.0, 1e-12), "norm([3,4]) must be 5, got {n}");
+    }
+
+    #[test]
+    fn norm_2d_frobenius() {
+        // np.linalg.norm([[1,2],[3,4]]) == sqrt(1+4+9+16) == sqrt(30).
+        let a = array_f64(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let n = norm_scalar(&a).unwrap();
+        assert!(
+            approx(n, 30.0_f64.sqrt(), 1e-12),
+            "norm 2x2 must be sqrt(30), got {n}"
+        );
+    }
+
+    #[test]
+    fn norm_integer_promotes_to_f64() {
+        // np.linalg.norm(int [3,4]) == 5.0; coil promotes int -> f64.
+        let a = array_i64(&[3, 4], &[2]).unwrap();
+        let n = norm_scalar(&a).unwrap();
+        assert!(approx(n, 5.0, 1e-12), "norm int [3,4] must be 5, got {n}");
+    }
+
+    #[test]
+    fn norm_empty_is_zero() {
+        // np.linalg.norm([]) == 0.0 (sqrt of an empty sum) — NOT a trap.
+        let a = array_f64(&[], &[0]).unwrap();
+        let n = norm_scalar(&a).unwrap();
+        assert!(approx(n, 0.0, 1e-12), "norm([]) must be 0.0, got {n}");
     }
 }
