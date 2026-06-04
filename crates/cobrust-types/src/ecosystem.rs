@@ -687,6 +687,29 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // BATCH 19 — `coil.astype(a, dtype) -> Buffer`. The DTYPE-CONVERSION
+        // op; also COMPLETES the dtype story (coil HAS int-dtype Buffers but
+        // no `.cb` way to CREATE one until astype). The FIRST coil row whose
+        // arg list mixes a Buffer with a `Ty::Str` — `dtype` is a RUNTIME
+        // dtype NAME (`"int64"` / `"float64"` / `"float32"` / `"int32"` /
+        // `"bool"`). The `[Buffer, Str]` arg list lowers via the GENERIC
+        // `try_lower_ecosystem_call` Case-1 path with ZERO new MIR: each
+        // `EcoParam::Value` auto-borrows in `lower_eco_arg` —
+        // `upgrade_move_to_copy_for_eco_value` already upgrades BOTH a Str
+        // (M-F.3.6 borrow-not-move) AND a Buffer handle (ADR-0077) to Copy,
+        // exactly as dora `event.send_output(Str, Str)` proves the Str-arg
+        // lowering + `coil.broadcast_to(a, n)` proves the Buffer-arg borrow.
+        // The dtype Str crosses the C-ABI as a `*mut Str` buffer pointer (the
+        // send_output ABI). A float→int cast TRUNCATES TOWARD ZERO; an
+        // UNKNOWN dtype `coil_panic`s at runtime (the §2.5 honest-failure;
+        // a NON-Str dtype arg is a COMPILE-TIME `unify_call_arg` reject).
+        // Tier `Semantic` (the manifest's coil-family tier).
+        ("coil", "astype") => Some(EcoSig::from_values(
+            "__cobrust_coil_astype",
+            vec![coil_buffer_ty(), Ty::Str],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         ("coil", "split") => Some(EcoSig::from_values(
             "__cobrust_coil_split",
             vec![coil_buffer_ty(), Ty::Int],
@@ -3645,6 +3668,18 @@ mod tests {
         assert_eq!(sig.runtime_symbol, "__cobrust_coil_split");
         assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Int]);
         assert_eq!(sig.ret, coil_buffer_ty());
+    }
+
+    #[test]
+    fn coil_astype_signature_takes_buffer_and_str() {
+        // BATCH 19 — `coil.astype(a, dtype) -> Buffer`: the FIRST coil row
+        // mixing a Buffer with a `Ty::Str` (the runtime dtype name). Same
+        // Str-arg shape dora `event.send_output(Str, Str)` proves lowers.
+        let sig = lookup_module_fn("coil", "astype").expect("coil.astype in manifest");
+        assert_eq!(sig.runtime_symbol, "__cobrust_coil_astype");
+        assert_eq!(value_tys(&sig.params), vec![coil_buffer_ty(), Ty::Str]);
+        assert_eq!(sig.ret, coil_buffer_ty());
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
     }
 
     #[test]

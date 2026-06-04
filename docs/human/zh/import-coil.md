@@ -229,6 +229,42 @@ fn main() -> i64:
 > 编组,目前还不存在 —— 等那个落地后再补。双标量 `coil.reshape(a, rows,
 > cols)` 形式(见上)**今天就已交付**,只有元组参写法被推迟。
 
+## dtype 转换 —— `astype`
+
+`coil.astype(a, dtype)` 把 `a` 的每个元素转换为新的 dtype,返回一个**全新的**
+Buffer(对应 numpy 默认的 `copy=True`)。这也是从 `.cb` **创建**整型(或布尔型)
+Buffer 的方式:目前每个 Buffer 构造器都产出 `Float64`,所以 `astype` 是通往
+`int64` 的桥梁。
+
+- **`coil.astype(a: Buffer, dtype: str) -> Buffer`** —— `dtype` 是一个运行期
+  字符串名:`"int64"`、`"float64"`、`"float32"`、`"int32"`、`"bool"`(类型
+  字符简写 `"i4"`/`"i8"`/`"f4"`/`"f8"`/`"?"` 也可用)。
+
+  ```python
+  let a: coil.Buffer = coil.array1d2(1.7, -1.7)     # float64 [1.7, -1.7]
+  let r: coil.Buffer = coil.astype(a, "int64")      # int64 [1, -1]  (dtype=int64)
+  let _ = coil.print_buffer(r)
+  let m: coil.Buffer = coil.astype(a, "bool")        # bool [True, True]
+  let _ = coil.print_buffer(m)
+  ```
+
+  **转换语义(numpy 2.x):**
+  - **float → int** 向零截断(NOT 向下取整 floor):
+    `[1.7, -1.7, 2.9].astype('int64') == [1, -1, 2]` —— 注意 `-1.7 → -1`
+    (向下取整会得到 `-2`)。
+  - **int → float** 是精确加宽;**float64 → float32** 是损失精度的窄化转换。
+  - **→ bool** 是 `x != 0`:任何非零值(包括负数)都是 `True`,只有恰好的
+    `0` / `0.0` 才是 `False`
+    (`[0, 1, 2, 0].astype(bool) == [False, True, True, False]`)。
+  - **bool → 数值** 把 `False → 0`、`True → 1`。相同 dtype → 一份拷贝。
+
+  一个**未知**的 dtype 字符串(例如 `"not_a_dtype"`)会 **trap** —— 程序以非零
+  退出(对应 numpy 的「data type not understood」),绝不悄悄做错误的转换,也
+  绝不跨 C-ABI 栈展开。一个**非 `str`** 的 dtype 参数(例如
+  `coil.astype(a, 5)`)在**编译期**就被拒绝(类型检查器要求 `str` —— §2.5 的
+  编译期捕获路径),而不是在运行期。`complex64` / `complex128` 目标不在 Buffer
+  的纯实数 dtype 集合内,同样会 trap(有记录的后续项)。
+
 ## 排序与搜索(`sort` / `argsort` / `unique` / `flatnonzero`)
 
 这是 LLM 在 numpy 里最先伸手去用的四个「扁平搜索与排序」操作。每个都接收一个

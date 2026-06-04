@@ -248,6 +248,44 @@ fn main() -> i64:
 > follow-up once that lands. The two-scalar `coil.reshape(a, rows, cols)`
 > form (above) DOES ship today; only the tuple-arg spelling is deferred.
 
+## Dtype conversion — `astype`
+
+`coil.astype(a, dtype)` casts every element of `a` to a new dtype, returning
+a **fresh** Buffer (numpy's `copy=True` default). This is also how you
+**create** an int-dtype (or bool-dtype) Buffer from `.cb`: every Buffer
+constructor today emits `Float64`, so `astype` is the bridge to `int64`.
+
+- **`coil.astype(a: Buffer, dtype: str) -> Buffer`** — `dtype` is a runtime
+  string name: `"int64"`, `"float64"`, `"float32"`, `"int32"`, `"bool"` (the
+  type-char shorthands `"i4"`/`"i8"`/`"f4"`/`"f8"`/`"?"` work too).
+
+  ```python
+  let a: coil.Buffer = coil.array1d2(1.7, -1.7)     # float64 [1.7, -1.7]
+  let r: coil.Buffer = coil.astype(a, "int64")      # int64 [1, -1]  (dtype=int64)
+  let _ = coil.print_buffer(r)
+  let m: coil.Buffer = coil.astype(a, "bool")        # bool [True, True]
+  let _ = coil.print_buffer(m)
+  ```
+
+  **Cast semantics (numpy 2.x):**
+  - **float → int** TRUNCATES TOWARD ZERO (NOT floor):
+    `[1.7, -1.7, 2.9].astype('int64') == [1, -1, 2]` — note `-1.7 → -1`
+    (floor would give `-2`).
+  - **int → float** is an exact widen; **float64 → float32** is a
+    precision-narrowing cast.
+  - **→ bool** is `x != 0`: any nonzero value (including a negative) is
+    `True`, only an exact `0` / `0.0` is `False`
+    (`[0, 1, 2, 0].astype(bool) == [False, True, True, False]`).
+  - **bool → numeric** maps `False → 0`, `True → 1`. Same dtype → a copy.
+
+  An **unknown** dtype string (e.g. `"not_a_dtype"`) **traps** — the program
+  aborts non-zero (numpy's "data type not understood"), NEVER a silent wrong
+  cast and NEVER unwinding across the C-ABI. A **non-`str`** dtype argument
+  (e.g. `coil.astype(a, 5)`) is rejected at **compile time** (the type
+  checker requires `str` — the §2.5 compile-time-catch path), not at
+  runtime. The `complex64` / `complex128` targets are not supported by the
+  Buffer's real-only dtype set and likewise trap (a tracked follow-up).
+
 ## Sorting & search (`sort` / `argsort` / `unique` / `flatnonzero`)
 
 These are the four "flat search & order" ops an LLM reaches for first.

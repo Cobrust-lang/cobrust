@@ -3339,6 +3339,19 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_coil_buffer_dot", coil_dot_ty, 2),
             ("__cobrust_coil_buffer_setitem", coil_setitem_ty, 3),
             ("__cobrust_coil_buffer_slice", coil_slice_ty, 3),
+            // BATCH 19 — `coil.astype(a, dtype) -> Buffer`. The dtype is a
+            // `Ty::Str`, which (like dora `event.send_output(output_id: Str,
+            // payload: Str)` — `dora_event_send_output_ty` above declares its
+            // Str params as `ptr_ty`) crosses the C-ABI as a `*mut Str`
+            // buffer POINTER. So at the LLVM ABI level a Buffer-ptr AND a
+            // Str-ptr are BOTH `ptr_ty`, and the shape is IDENTICAL to the
+            // `(ptr, ptr) -> ptr` `coil_binop_ty` (NO new fn-type). The MIR
+            // ecosystem-call lowering retargets `coil.astype(a, "int64")`
+            // onto this `Call`; codegen's `lower_call` materialises the Str
+            // literal as a stdlib Str buffer + passes its pointer (the
+            // send_output path — `lower_call` `else` branch, NEITHER str
+            // expansion fires for a 2-arg/2-param Buffer+trailing-Str shape).
+            ("__cobrust_coil_astype", coil_binop_ty, 2),
         ] {
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);

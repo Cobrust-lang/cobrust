@@ -120,7 +120,7 @@ mod view;
 pub use crate::aggregates::{
     mean_scalar, median_scalar, split_first_chunk, std_scalar, var_scalar,
 };
-pub use crate::array::Array;
+pub use crate::array::{Array, astype};
 pub use crate::broadcast::broadcast_shape;
 pub use crate::broadcast_extra::broadcast_to_1d;
 pub use crate::constructors::{

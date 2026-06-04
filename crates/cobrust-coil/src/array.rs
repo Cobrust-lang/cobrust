@@ -523,4 +523,259 @@ impl Array {
             Self::Bool(a) => ArrayView::Bool(<ArrayViewD<'_, bool>>::from(a)),
         }
     }
+
+    /// `numpy.ndarray.astype(dtype)`-equivalent — cast every element to
+    /// `target`, returning a FRESH owned `Array` (numpy's `copy=True`
+    /// default; an identical source/target dtype still yields a new
+    /// allocation, never an alias).
+    ///
+    /// Cast semantics (numpy 2.x, oracle `python3.11`):
+    /// - **float → int** TRUNCATES TOWARD ZERO (`as i64` / `as i32`, the
+    ///   Rust float→int cast): `[1.7, -1.7, 2.9].astype(int64) ==
+    ///   [1, -1, 2]` (`-1.7 → -1`, NOT the `-2` a `floor` would give).
+    /// - **int → float** is an exact widen (`i64 → f64` may lose precision
+    ///   only above 2^53, matching numpy); **float64 → float32** is a
+    ///   precision-narrowing cast.
+    /// - **anything → bool** is the `x != 0` predicate (`[0, 1, 2, 0]
+    ///   .astype(bool) == [F, T, T, F]`; ANY nonzero — incl. negative — is
+    ///   `true`).
+    /// - **bool → numeric** maps `false → 0`, `true → 1`.
+    /// - same dtype → a value-identical copy.
+    ///
+    /// # Errors
+    /// `NumpyError::UnsupportedDtype` if `target` is a complex dtype
+    /// (`Complex64` / `Complex128`): the `Array` tagged-union holds only
+    /// the five real M7.0 dtypes (per ADR-0013 §4 + ADR-0021 §3 — complex
+    /// `Array` storage is a deferred sub-milestone), so a complex cast
+    /// target has no destination variant. Surfaced as a recoverable `Err`
+    /// (NOT a panic) so the C-ABI shim can convert it to a clean
+    /// `coil_panic` rather than risk a complex arm unwinding.
+    pub fn astype(&self, target: Dtype) -> Result<Array, NumpyError> {
+        astype(self, target)
+    }
+}
+
+/// `numpy.ndarray.astype(dtype)` free-function form — see
+/// [`Array::astype`] for the full cast-semantics contract. Casts each
+/// element of `arr` to `target`, returning a fresh owned `Array`.
+///
+/// The per-variant casts reuse Rust's primitive `as` conversions, whose
+/// numeric semantics MATCH numpy's: `as i64` / `as i32` truncate a float
+/// toward zero, `as f64` / `as f32` widen / narrow, and `x != 0`
+/// realises the bool cast. `bool` source values widen via `i32::from` /
+/// `i64::from` / `u8::from` (`false → 0`, `true → 1`).
+///
+/// # Errors
+/// `NumpyError::UnsupportedDtype` for a complex `target`: the real-only
+/// five-variant `Array` has no complex storage variant (per ADR-0013 §4 +
+/// ADR-0021 §3), and the cabi-shim caller converts this `Err` to a clean
+/// abort rather than risk a complex arm unwinding across the C-ABI.
+pub fn astype(arr: &Array, target: Dtype) -> Result<Array, NumpyError> {
+    Ok(match target {
+        Dtype::Int32 => Array::Int32(match arr {
+            Array::Int32(a) => a.clone(),
+            Array::Int64(a) => a.mapv(|v| v as i32),
+            Array::Float32(a) => a.mapv(|v| v as i32),
+            Array::Float64(a) => a.mapv(|v| v as i32),
+            Array::Bool(a) => a.mapv(i32::from),
+        }),
+        Dtype::Int64 => Array::Int64(match arr {
+            Array::Int32(a) => a.mapv(i64::from),
+            Array::Int64(a) => a.clone(),
+            // TRUNCATE TOWARD ZERO — `as i64` matches numpy's float→int
+            // (`-1.7 → -1`). NOT `floor` (which would give `-2`).
+            Array::Float32(a) => a.mapv(|v| v as i64),
+            Array::Float64(a) => a.mapv(|v| v as i64),
+            Array::Bool(a) => a.mapv(i64::from),
+        }),
+        Dtype::Float32 => Array::Float32(match arr {
+            Array::Int32(a) => a.mapv(|v| v as f32),
+            Array::Int64(a) => a.mapv(|v| v as f32),
+            Array::Float32(a) => a.clone(),
+            Array::Float64(a) => a.mapv(|v| v as f32),
+            Array::Bool(a) => a.mapv(|v| f32::from(u8::from(v))),
+        }),
+        Dtype::Float64 => Array::Float64(match arr {
+            Array::Int32(a) => a.mapv(f64::from),
+            Array::Int64(a) => a.mapv(|v| v as f64),
+            Array::Float32(a) => a.mapv(f64::from),
+            Array::Float64(a) => a.clone(),
+            Array::Bool(a) => a.mapv(|v| f64::from(u8::from(v))),
+        }),
+        Dtype::Bool => Array::Bool(match arr {
+            // ANY nonzero → true; zero → false (matches numpy's `!= 0`).
+            Array::Int32(a) => a.mapv(|v| v != 0),
+            Array::Int64(a) => a.mapv(|v| v != 0),
+            Array::Float32(a) => a.mapv(|v| v != 0.0),
+            Array::Float64(a) => a.mapv(|v| v != 0.0),
+            Array::Bool(a) => a.clone(),
+        }),
+        Dtype::Complex64 | Dtype::Complex128 => {
+            // The real-only `Array` (five M7.0 variants per ADR-0013 §4)
+            // has no complex storage; a complex cast target is a
+            // recoverable error, surfaced to the cabi shim as a clean
+            // `coil_panic` (NEVER an unreachable panic across the C-ABI).
+            return Err(NumpyError {
+                kind: NumpyErrorKind::UnsupportedDtype,
+                message: format!(
+                    "astype: complex target dtype {target} is unsupported — \
+                     coil's Array holds only the real dtypes int32 / int64 / \
+                     float32 / float64 / bool (ADR-0013 §4; complex Array \
+                     storage is a deferred sub-milestone per ADR-0021 §3)"
+                ),
+            });
+        }
+    })
+}
+
+#[cfg(test)]
+mod astype_tests {
+    //! Differential-vs-numpy unit tests for [`astype`] (numpy 2.4.6
+    //! oracle, `python3.11`). Each test pins the EXACT numpy result so a
+    //! cast-semantics mutation (e.g. `floor` instead of truncate-toward-
+    //! zero) fails.
+    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::float_cmp)]
+    use super::*;
+    use ndarray::{ArrayD, IxDyn};
+
+    fn f64_arr(v: &[f64]) -> Array {
+        Array::Float64(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap())
+    }
+    fn i64_arr(v: &[i64]) -> Array {
+        Array::Int64(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap())
+    }
+    fn bool_arr(v: &[bool]) -> Array {
+        Array::Bool(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap())
+    }
+    fn as_i64(a: &Array) -> Vec<i64> {
+        match a {
+            Array::Int64(x) => x.iter().copied().collect(),
+            _ => panic!("expected Int64, got {:?}", a.dtype()),
+        }
+    }
+    fn as_f64(a: &Array) -> Vec<f64> {
+        match a {
+            Array::Float64(x) => x.iter().copied().collect(),
+            _ => panic!("expected Float64, got {:?}", a.dtype()),
+        }
+    }
+    fn as_f32(a: &Array) -> Vec<f32> {
+        match a {
+            Array::Float32(x) => x.iter().copied().collect(),
+            _ => panic!("expected Float32, got {:?}", a.dtype()),
+        }
+    }
+    fn as_bool(a: &Array) -> Vec<bool> {
+        match a {
+            Array::Bool(x) => x.iter().copied().collect(),
+            _ => panic!("expected Bool, got {:?}", a.dtype()),
+        }
+    }
+
+    /// float64 → int64 TRUNCATES TOWARD ZERO **with a negative present**.
+    /// Oracle: `np.array([1.7,-1.7,2.9]).astype('int64') == [1,-1,2]`.
+    /// A `floor` mutation would give `[1,-2,2]` — this test FAILS it.
+    #[test]
+    fn astype_f64_to_i64_truncates_toward_zero_with_negative() {
+        let out = astype(&f64_arr(&[1.7, -1.7, 2.9]), Dtype::Int64).unwrap();
+        assert_eq!(out.dtype(), Dtype::Int64);
+        assert_eq!(as_i64(&out), vec![1, -1, 2], "trunc-toward-zero, NOT floor");
+    }
+
+    /// More negatives — every fractional magnitude rounds toward zero.
+    /// Oracle: `np.array([-0.9,-1.1,-2.99,3.99]).astype('int64') ==
+    /// [0,-1,-2,3]`.
+    #[test]
+    fn astype_f64_to_i64_more_negatives() {
+        let out = astype(&f64_arr(&[-0.9, -1.1, -2.99, 3.99]), Dtype::Int64).unwrap();
+        assert_eq!(as_i64(&out), vec![0, -1, -2, 3]);
+    }
+
+    /// int64 → float64 exact widen.
+    /// Oracle: `np.array([1,-2,3]).astype('float64') == [1.,-2.,3.]`.
+    #[test]
+    fn astype_i64_to_f64_widens() {
+        let out = astype(&i64_arr(&[1, -2, 3]), Dtype::Float64).unwrap();
+        assert_eq!(out.dtype(), Dtype::Float64);
+        assert_eq!(as_f64(&out), vec![1.0, -2.0, 3.0]);
+    }
+
+    /// → bool: `x != 0`; ANY nonzero (incl. NEGATIVE) is true, zero false.
+    /// Oracle: `np.array([0,1,2,0,-3]).astype(bool) ==
+    /// [F,T,T,F,T]`.
+    #[test]
+    fn astype_i64_to_bool_nonzero_is_true() {
+        let out = astype(&i64_arr(&[0, 1, 2, 0, -3]), Dtype::Bool).unwrap();
+        assert_eq!(out.dtype(), Dtype::Bool);
+        assert_eq!(
+            as_bool(&out),
+            vec![false, true, true, false, true],
+            "nonzero incl negative -> true"
+        );
+    }
+
+    /// float64 → bool: `0.0`/`-0.0` → false, any other → true.
+    /// Oracle: `np.array([0.0,0.5,-0.0,2.0]).astype(bool) ==
+    /// [F,T,F,T]`.
+    #[test]
+    fn astype_f64_to_bool() {
+        // `-2.0` (a NEGATIVE non-zero) MUST map to `true` — numpy's `!= 0`
+        // rule, NOT `> 0`: np.array([0.0,0.5,-0.0,2.0,-2.0]).astype(bool) ==
+        // [F,T,F,T,T]. The negative magnitude is the load-bearing case that
+        // distinguishes `v != 0.0` (correct) from a `v > 0.0` mutation.
+        let out = astype(&f64_arr(&[0.0, 0.5, -0.0, 2.0, -2.0]), Dtype::Bool).unwrap();
+        assert_eq!(as_bool(&out), vec![false, true, false, true, true]);
+    }
+
+    /// float64 → float32 precision-narrowing cast.
+    /// Oracle: `np.array([1.1,2.2]).astype('float32').tolist() ==
+    /// [1.100000023841858, 2.200000047683716]` — i.e. the f32-rounded
+    /// values, which equal `1.1_f32` / `2.2_f32`.
+    #[test]
+    fn astype_f64_to_f32_precision_cast() {
+        let out = astype(&f64_arr(&[1.1, 2.2]), Dtype::Float32).unwrap();
+        assert_eq!(out.dtype(), Dtype::Float32);
+        assert_eq!(as_f32(&out), vec![1.1_f32, 2.2_f32]);
+    }
+
+    /// bool → int64: `false → 0`, `true → 1`.
+    /// Oracle: `np.array([True,False,True]).astype('int64') == [1,0,1]`.
+    #[test]
+    fn astype_bool_to_i64() {
+        let out = astype(&bool_arr(&[true, false, true]), Dtype::Int64).unwrap();
+        assert_eq!(as_i64(&out), vec![1, 0, 1]);
+    }
+
+    /// same dtype → a value-identical COPY (fresh allocation, equal data).
+    /// Oracle: `np.array([1.5,2.5]).astype('float64') == [1.5,2.5]`.
+    #[test]
+    fn astype_same_dtype_is_copy() {
+        let src = f64_arr(&[1.5, 2.5]);
+        let out = astype(&src, Dtype::Float64).unwrap();
+        assert_eq!(out.dtype(), Dtype::Float64);
+        assert_eq!(as_f64(&out), vec![1.5, 2.5]);
+        assert_eq!(out, src, "value-equal copy");
+    }
+
+    /// The `Array::astype` method form agrees with the free function.
+    #[test]
+    fn astype_method_matches_free_fn() {
+        let src = f64_arr(&[1.7, -1.7, 2.9]);
+        assert_eq!(
+            src.astype(Dtype::Int64).unwrap(),
+            astype(&src, Dtype::Int64).unwrap()
+        );
+    }
+
+    /// A complex target dtype is a recoverable `Err` (the real-only
+    /// `Array` has no complex variant), NOT a panic — so the cabi shim
+    /// can convert it to a clean abort.
+    #[test]
+    fn astype_complex_target_is_err() {
+        let err = astype(&f64_arr(&[1.0, 2.0]), Dtype::Complex128).unwrap_err();
+        assert_eq!(err.kind, NumpyErrorKind::UnsupportedDtype);
+        let err32 = astype(&i64_arr(&[1, 2]), Dtype::Complex64).unwrap_err();
+        assert_eq!(err32.kind, NumpyErrorKind::UnsupportedDtype);
+    }
 }

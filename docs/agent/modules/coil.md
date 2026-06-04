@@ -3448,6 +3448,109 @@ deferral until tuple-arg marshalling lands). A HIGH-USE op (LLMs write
       clean; no new dep (`Cargo.lock` unchanged — F64); pure ndarray + std.
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## `.cb` `coil.astype(a, dtype) -> Buffer` (BATCH 19 — DONE)
+
+The DTYPE-CONVERSION op + the SURFACE-COMPLETION of the dtype story. coil
+HAS int-dtype Buffers (`Array::Int64`, `print.rs` emits `dtype=int64`) but
+until now had NO `.cb` way to CREATE one — `astype` is it. A FLOAT buffer
+astyped to `"int64"` produces an `Array::Int64` whose `print_buffer` repr
+shows `dtype=int64`; the `coil_astype_e2e` binaries prove that
+END-TO-END.
+
+### The NEW thing — a `Str` ARGUMENT on the coil surface
+
+`coil.astype`'s 2nd param is a `Ty::Str` (the runtime dtype NAME) — the
+FIRST coil op to take a Str arg. The dtype Str crosses the C-ABI as a
+`*mut Str` buffer POINTER: the **EXACT** ABI dora's
+`event.send_output(output_id: Str, payload: Str)` uses
+(`__cobrust_dora_event_send_output` declares its Str params as `*mut u8`,
+read via `cobrust-dora/src/cabi.rs::read_str_buf`). The coil shim mirrors
+`read_str_buf` VERBATIM (the stdlib `__cobrust_str_ptr` / `__cobrust_str_len`
+ABI) — NO new string convention.
+
+### Cast semantics (numpy 2.4.6, oracle `python3.11`)
+
+- **float → int** TRUNCATES TOWARD ZERO (`x as i64` / `as i32`):
+  `[1.7,-1.7,2.9].astype('int64') == [1,-1,2]` (`-1.7 → -1`, NOT the `-2`
+  a FLOOR would give). The kernel + e2e assert `-1`, so a floor-mutation
+  FAILS.
+- **int → float** exact widen; **float64 → float32** precision-narrowing.
+- **→ bool** is `x != 0` (ANY nonzero — incl. negative — is `true`).
+- **bool → numeric** `false → 0`, `true → 1`. same dtype → a copy.
+- Supported dtype strings = whatever `Dtype::from_python_string` parses:
+  `int32`/`int64`/`float32`/`float64`/`bool` + the type-char shorthands
+  (`i4`/`i8`/`f4`/`f8`/`?`). An UNKNOWN string `coil_panic`s (the
+  honest-failure trap); a complex target (`complex64`/`complex128`) is an
+  `Err` → `coil_panic` (the real-only `Array` has no complex variant).
+
+### Wiring (mirror `reshape` borrow-Buffer + the send_output Str-arg ABI)
+
+- `array.rs`: `astype(arr, target) -> Result<Array>` free fn + `Array::astype`
+  method. Per-variant `as`-casts (truncate-toward-zero for float→int);
+  complex target → `Err(UnsupportedDtype)` (the real-only Array has no
+  complex storage). Re-exported from `lib.rs`.
+- `cabi.rs`: `__cobrust_coil_astype(a, dtype)` — borrows `a` (`&Array`),
+  reads the `dtype` Str via the new `read_str_buf` (mirrored from dora),
+  parses it via `Dtype::from_python_string` (`coil_panic`-on-unknown),
+  casts, single fresh `Box::into_raw`. Adds the `__cobrust_str_ptr` /
+  `__cobrust_str_len` externs to the stdlib extern block (coil's FIRST
+  Str-READ).
+- `ecosystem.rs`: `("coil","astype")` → EcoSig `[coil_buffer_ty(), Ty::Str]
+  -> coil_buffer_ty()`, `PyCompatTier::Semantic`. The FIRST coil row mixing
+  a Buffer with a `Ty::Str`.
+- Typecheck / MIR: **NO new code** — the generic `try_lower_ecosystem_call`
+  iterates `sig.params` (Buffer, Str); `lower_eco_arg`'s
+  `upgrade_move_to_copy_for_eco_value` already borrows BOTH a `Ty::Str`
+  (M-F.3.6) AND a Buffer handle (ADR-0077). send_output's `[Str, Str]`
+  proves the Str-arg lowering; `broadcast_to`'s `[Buffer, Int]` proves the
+  Buffer-arg borrow. A NON-Str dtype arg is a COMPILE-TIME `unify_call_arg`
+  reject (§2.5).
+- Codegen: `__cobrust_coil_astype` reuses `coil_binop_ty` (`(ptr, ptr) ->
+  ptr`) — at the LLVM ABI a Buffer-ptr AND a Str-ptr are BOTH `ptr_ty`
+  (send_output declares its Str params as `ptr_ty`). `lower_call`
+  materialises the `.cb` string literal as a stdlib Str buffer + passes its
+  pointer (NEITHER str-expansion fires for a 2-arg/2-param Buffer+trailing-
+  Str shape). Symbol rides the `__cobrust_coil_` prefix recognizer.
+
+### Done means (BATCH 19 — DONE)
+
+- [x] `array.rs`: `astype` free fn + `Array::astype` method; 10 unit tests
+      with the numpy-2.4.6 oracle (float→int64 trunc-toward-zero WITH a
+      negative + the floor NEGATIVE, more negatives, int→f64 widen,
+      int→bool nonzero-incl-negative, f64→bool, f64→f32 precision, bool→i64,
+      same-dtype copy, method==free-fn, complex-target Err — Complex128 +
+      Complex64 in the one Err test).
+- [x] `dtype.rs`: 2 `from_python_string` tests (parses int32/int64/float32/
+      float64/bool + i8/f8/? shorthands; rejects garbage / int8 / "").
+- [x] cabi: `__cobrust_coil_astype` (borrow → read-Str → parse → cast →
+      fresh-Box → `coil_panic`-on-unknown/complex). 2 shim tests via a
+      `FakeStr` + test-only `__cobrust_str_ptr`/`_len` stubs (float→int64
+      trunc `array([1, -1], dtype=int64)` repr + drop-once (2 drops); →bool).
+      The unknown-dtype trap is NOT a shim `#[should_panic]` (the `coil_panic`
+      → `__cobrust_panic` abort is nounwind across the `extern "C"` boundary
+      and would kill the runner); covered at the kernel Err layer +
+      `coil_astype_e2e` non-zero-exit test.
+- [x] Manifest: `("coil","astype")` `[Buffer, Str] -> Buffer` Semantic. 1
+      manifest signature test.
+- [x] Typecheck / MIR: NO new code (the generic `sig.params`-iterating
+      ecosystem-call lowering; the Str arg auto-borrows like send_output's,
+      the Buffer arg like broadcast_to's).
+- [x] Codegen: `__cobrust_coil_astype` reuses `coil_binop_ty`
+      (`(ptr, ptr) -> ptr`) extern (the send_output Str-as-ptr convention).
+- [x] `.cb` E2E `coil_astype_e2e.rs` (7 tests): float→int64 trunc-toward-zero
+      (the surface-completion `dtype=int64` + `[1, -1]`), 2-D float→int64
+      `[[1,2,3],[-1,-2,-3]]`, →bool `[False, True]`, same-dtype copy,
+      astype∘transpose int64 chain, an unknown-dtype runtime trap (non-zero
+      exit), and a non-Str (`5`) dtype typecheck reject.
+- [x] No regression: full `cobrust-coil` lib suite green (504 tests);
+      `coil_astype_e2e` (7) + `coil_hello_e2e` (3) green, run ONE `--test` at
+      a time (F73 libcoil.a build-race avoidance); touched crates
+      (`cobrust-coil` + `cobrust-codegen` + `cobrust-types`) build + clippy
+      `-D warnings --all-targets` + fmt clean; NO new dep (`Cargo.lock`
+      unchanged — F64; the `FakeStr` stubs avoid the stdlib dev-dep); pure
+      ndarray + std.
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

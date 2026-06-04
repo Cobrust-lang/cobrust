@@ -448,4 +448,45 @@ mod tests {
             NumpyErrorKind::UnsupportedDtype
         );
     }
+
+    /// `from_python_string` parses the dtype names `coil.astype(a, dtype)`
+    /// accepts at the C-ABI boundary — the long form AND the type-char
+    /// shorthand. This is the parse layer the `__cobrust_coil_astype`
+    /// shim relies on; an UNKNOWN string is an `Err` (the shim turns that
+    /// into a clean `coil_panic`, NOT a silent wrong cast).
+    #[test]
+    fn from_python_string_parses_supported_dtypes() {
+        assert_eq!(Dtype::from_python_string("int32").unwrap(), Dtype::Int32);
+        assert_eq!(Dtype::from_python_string("int64").unwrap(), Dtype::Int64);
+        assert_eq!(
+            Dtype::from_python_string("float32").unwrap(),
+            Dtype::Float32
+        );
+        assert_eq!(
+            Dtype::from_python_string("float64").unwrap(),
+            Dtype::Float64
+        );
+        assert_eq!(Dtype::from_python_string("bool").unwrap(), Dtype::Bool);
+        // type-char shorthands.
+        assert_eq!(Dtype::from_python_string("i8").unwrap(), Dtype::Int64);
+        assert_eq!(Dtype::from_python_string("f8").unwrap(), Dtype::Float64);
+        assert_eq!(Dtype::from_python_string("?").unwrap(), Dtype::Bool);
+    }
+
+    /// An unsupported / garbage dtype string is an `Err`, not a panic and
+    /// not a silent fallback — the property the astype shim's
+    /// unknown-dtype trap depends on.
+    #[test]
+    fn from_python_string_rejects_unknown() {
+        assert_eq!(
+            Dtype::from_python_string("garbage").unwrap_err().kind,
+            NumpyErrorKind::UnsupportedDtype
+        );
+        assert_eq!(
+            Dtype::from_python_string("int8").unwrap_err().kind,
+            NumpyErrorKind::UnsupportedDtype,
+            "int8 is NOT in coil's closed Array dtype set"
+        );
+        assert!(Dtype::from_python_string("").is_err());
+    }
 }

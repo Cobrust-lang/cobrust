@@ -77,7 +77,7 @@ use crate::aggregates::{
     min_scalar, nanmean_scalar, nanstd_scalar, nansum_scalar, norm_scalar, percentile_scalar,
     prod_scalar, ptp_scalar, split_first_chunk, std_scalar, trace_scalar, var_scalar,
 };
-use crate::array::Array;
+use crate::array::{Array, astype as coil_astype};
 use crate::broadcast::broadcast_shape;
 use crate::broadcast_extra::broadcast_to_1d;
 use crate::constructors::{
@@ -129,6 +129,44 @@ unsafe extern "C" {
     /// shape-mismatch — the same `__cobrust_panic` shim the codegen
     /// abort path uses; diverges, never returns).
     fn __cobrust_panic(ptr: *const u8, len: usize) -> !;
+    /// Borrow a Cobrust `Str` buffer's byte pointer (valid until the next
+    /// mutation). #19 BATCH-19 `coil.astype(a, dtype)` is coil's FIRST use
+    /// of the stdlib `Str`-READ ABI: the `dtype` Str arg crosses the C-ABI
+    /// as a `*mut Str` buffer pointer (the EXACT shape dora's
+    /// `event.send_output(output_id: Str, payload: Str)` uses — `cobrust-
+    /// dora/src/cabi.rs::read_str_buf`), read here via ptr+len, NEVER freed
+    /// (the `.cb` scope owns + drops the Str literal). Resolved from
+    /// libcobrust_stdlib.a (`cobrust-stdlib/src/fmt.rs`).
+    fn __cobrust_str_ptr(buf: *mut u8) -> *const u8;
+    /// The Cobrust `Str` buffer's byte length.
+    fn __cobrust_str_len(buf: *mut u8) -> i64;
+}
+
+/// Read a Cobrust `Str` buffer pointer into an owned `String`. Tolerates
+/// null / empty. MIRRORS `cobrust-dora/src/cabi.rs::read_str_buf` (the
+/// `event.send_output` Str-arg reader) VERBATIM — the SAME ptr+len
+/// stdlib ABI, no new string convention. Used by
+/// [`__cobrust_coil_astype`] to read the runtime `dtype` name.
+///
+/// # Safety
+///
+/// `buf` must be null or a valid Cobrust `Str` buffer produced by the
+/// stdlib `__cobrust_str_*` allocator (the codegen materialises the
+/// `.cb`-side string literal as exactly such a buffer).
+unsafe fn read_str_buf(buf: *mut u8) -> String {
+    if buf.is_null() {
+        return String::new();
+    }
+    // SAFETY: caller attests `buf` is a valid Cobrust Str buffer.
+    unsafe {
+        let ptr = __cobrust_str_ptr(buf);
+        let len = __cobrust_str_len(buf);
+        if ptr.is_null() || len <= 0 {
+            return String::new();
+        }
+        let bytes = std::slice::from_raw_parts(ptr, len as usize);
+        std::str::from_utf8(bytes).unwrap_or("").to_string()
+    }
 }
 
 /// Abort the process via the stdlib `__cobrust_panic` shim with `msg`
@@ -1061,6 +1099,75 @@ pub unsafe extern "C" fn __cobrust_coil_reshape(a: *mut u8, rows: i64, cols: i64
         // A bad shape is a clean trap (numpy `ValueError`), NOT a garbage
         // buffer — it is a structural misuse the C-ABI must abort on.
         Err(e) => coil_panic(&format!("coil.reshape: {}", e.message)),
+    }
+}
+
+// =====================================================================
+// #numpy gap-closure BATCH 19 (2026-06-05) — `coil.astype(a, dtype)`, the
+// DTYPE-CONVERSION op. The op LLMs reach for constantly (`a.astype(int)` /
+// `a.astype('float64')`); also COMPLETES the dtype story — coil HAS
+// int-dtype Buffers (`Array::Int64`, `print.rs` emits `dtype=int64`) but
+// no `.cb` way to CREATE one until now.
+//
+// THE NEW THING — a `Str` ARGUMENT on the coil surface. The runtime
+// `dtype` name crosses the C-ABI as a `*mut Str` buffer pointer, the EXACT
+// ABI dora's `event.send_output(output_id: Str, payload: Str)` uses
+// (`cobrust-dora/src/cabi.rs::__cobrust_dora_event_send_output`): the
+// codegen materialises the `.cb`-side string literal as a stdlib `Str`
+// buffer, passes its pointer, and `read_str_buf` (above, mirrored VERBATIM
+// from dora) reads it via the `__cobrust_str_ptr`/`__cobrust_str_len`
+// stdlib ABI — NO new string convention. NO Buffer drop here: the arg is
+// BORROWED (`&Array`, like reshape/transpose), the Str arg is borrowed +
+// freed by the `.cb` scope, and the result is one FRESH `Box::into_raw`.
+// =====================================================================
+
+/// `coil.astype(a, dtype) -> Buffer`. Cast every element of `a` to the
+/// runtime `dtype` name (a `Str` — `"int64"` / `"float64"` / `"float32"` /
+/// `"int32"` / `"bool"`, plus the type-char shorthands `i8`/`f8`/… that
+/// `Dtype::from_python_string` parses), returning a FRESH owned `Buffer`
+/// (numpy's `copy=True` default).
+///
+/// Cast semantics (numpy 2.x, oracle `python3.11`; see [`crate::array::astype`]):
+/// float→int TRUNCATES TOWARD ZERO (`-1.7 → -1`, NOT `-2`); int→float
+/// widens; float64→float32 narrows; `→bool` is `x != 0` (any nonzero, incl.
+/// negative, is `true`); same dtype is a copy. THIS is how a `.cb` program
+/// produces an `Array::Int64` (`print_buffer` then renders `dtype=int64`).
+///
+/// BORROWS `a` (never reboxes/frees it); BORROWS the `dtype` Str (the
+/// `.cb` scope drops it). An UNKNOWN / garbage dtype string, OR a complex
+/// target the real-only `Array` cannot hold, is a clean `coil_panic` (the
+/// `__cobrust_panic` abort) — NEVER a silent wrong cast, NEVER an unwind
+/// across the C-ABI.
+///
+/// # Safety
+///
+/// `a` must be a live `Buffer` handle (boxed `coil::Array`, not yet
+/// dropped). `dtype` must be null or a valid Cobrust `Str` buffer (the
+/// dora `send_output` Str-arg shape). The returned pointer is a freshly-
+/// Boxed `Buffer` the `.cb` caller owns; freed once via
+/// `__cobrust_coil_buffer_drop`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_astype(a: *mut u8, dtype: *mut u8) -> *mut u8 {
+    if a.is_null() {
+        coil_panic("coil.astype: null operand handle");
+    }
+    // SAFETY: caller attests `a` is a live Buffer handle. Borrow only —
+    // not reboxed / freed; the `.cb` scope still owns + drops it.
+    let arr: &Array = unsafe { &*a.cast::<Array>() };
+    // SAFETY: caller attests `dtype` is null or a valid Cobrust Str buffer
+    // (the dora send_output Str-arg ABI). Borrow-read only — not freed.
+    let dtype_name = unsafe { read_str_buf(dtype) };
+    // An unknown / unsupported dtype string is a clean trap (NOT a silent
+    // fallback cast) — the §2.5 honest-failure path.
+    let target = match Dtype::from_python_string(&dtype_name) {
+        Ok(d) => d,
+        Err(e) => coil_panic(&format!("coil.astype: {}", e.message)),
+    };
+    match coil_astype(arr, target) {
+        Ok(out) => Box::into_raw(Box::new(out)).cast::<u8>(),
+        // A complex target the real-only Array cannot hold is a clean trap
+        // (matching numpy's "unsupported here"), NOT a garbage buffer.
+        Err(e) => coil_panic(&format!("coil.astype: {}", e.message)),
     }
 }
 
@@ -4441,4 +4548,139 @@ mod tests {
         }
         assert_eq!(drop_count() - before, 2, "input + result drop once each");
     }
+
+    // =====================================================================
+    // BATCH 19 — `coil.astype(a, dtype)` shim tests.
+    //
+    // The `dtype` Str arg crosses as a `*mut Str` buffer (the dora
+    // `send_output` Str-arg ABI). The REAL `__cobrust_str_ptr` /
+    // `__cobrust_str_len` live in `cobrust-stdlib` (linked only at
+    // `.cb`-link time, NOT into this lib-test binary), so — EXACTLY like
+    // the `__cobrust_panic` test stub above — we provide test-only
+    // definitions backed by a `FakeStr` (a heap `Vec<u8>` whose ptr+len the
+    // stubs return). This lets the shim's FULL Str-read → parse → cast →
+    // fresh-Box path run in-process. The `.cb` e2e (`coil_astype_e2e.rs`)
+    // proves the SAME path against the REAL stdlib Str buffer.
+    // =====================================================================
+
+    /// Heap-backed fake Cobrust `Str` buffer for the shim tests. The
+    /// test-only `__cobrust_str_ptr` / `__cobrust_str_len` stubs read its
+    /// bytes. Boxed + leaked-then-reclaimed via [`FakeStr::raw`] /
+    /// [`FakeStr::free`] so the pointer stays valid for the shim call.
+    struct FakeStr {
+        bytes: Vec<u8>,
+    }
+    impl FakeStr {
+        fn raw(s: &str) -> *mut u8 {
+            let b = Box::new(FakeStr {
+                bytes: s.as_bytes().to_vec(),
+            });
+            Box::into_raw(b).cast::<u8>()
+        }
+        /// SAFETY: `p` must be a pointer from a prior [`FakeStr::raw`].
+        unsafe fn free(p: *mut u8) {
+            if !p.is_null() {
+                drop(unsafe { Box::from_raw(p.cast::<FakeStr>()) });
+            }
+        }
+    }
+
+    /// Test-only `__cobrust_str_ptr` — mirrors the stdlib ABI by returning
+    /// the [`FakeStr`]'s byte pointer.
+    #[unsafe(no_mangle)]
+    extern "C" fn __cobrust_str_ptr(buf: *mut u8) -> *const u8 {
+        if buf.is_null() {
+            return std::ptr::null();
+        }
+        // SAFETY: shim/test callers pass a `FakeStr::raw` pointer.
+        let fs = unsafe { &*buf.cast::<FakeStr>() };
+        fs.bytes.as_ptr()
+    }
+
+    /// Test-only `__cobrust_str_len` — the [`FakeStr`]'s byte length.
+    #[unsafe(no_mangle)]
+    extern "C" fn __cobrust_str_len(buf: *mut u8) -> i64 {
+        if buf.is_null() {
+            return 0;
+        }
+        // SAFETY: shim/test callers pass a `FakeStr::raw` pointer.
+        let fs = unsafe { &*buf.cast::<FakeStr>() };
+        fs.bytes.len() as i64
+    }
+
+    /// `coil.astype(array1d2(1.7,-1.7), "int64")` → an `Int64` buffer
+    /// `[1, -1]` (TRUNCATE TOWARD ZERO; `-1.7 → -1`, NOT `-2`). Borrows the
+    /// Buffer + the dtype Str, returns ONE fresh handle; `print`-side repr
+    /// shows `dtype=int64`. Borrowed input + fresh result drop once each.
+    #[test]
+    fn astype_shim_float_to_int64_truncates_toward_zero() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let a = __cobrust_coil_array1d2(1.7, -1.7);
+            let dt = FakeStr::raw("int64");
+            let r = __cobrust_coil_astype(a, dt);
+            assert!(!r.is_null(), "astype returned null");
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.dtype(), Dtype::Int64, "result dtype must be int64");
+            // The print-side repr a `.cb` program observes via print_buffer.
+            assert_eq!(
+                array_repr(arr),
+                "array([1, -1], dtype=int64)",
+                "trunc-toward-zero int64 cast; floor would give [1, -2]"
+            );
+            match arr {
+                Array::Int64(v) => {
+                    let vals: Vec<i64> = v.iter().copied().collect();
+                    assert_eq!(vals, vec![1, -1]);
+                }
+                _ => panic!("expected Int64"),
+            }
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+            FakeStr::free(dt);
+        }
+        assert_eq!(
+            drop_count() - before,
+            2,
+            "borrowed input + fresh result drop once each"
+        );
+    }
+
+    /// `coil.astype(array1d2(0.0, 2.0), "bool")` → a `Bool` buffer
+    /// `[False, True]` (`0.0 → false`, nonzero → true). Proves the Str-arg
+    /// shim creates a non-float-dtype Buffer.
+    #[test]
+    fn astype_shim_to_bool() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let a = __cobrust_coil_array1d2(0.0, 2.0);
+            let dt = FakeStr::raw("bool");
+            let r = __cobrust_coil_astype(a, dt);
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.dtype(), Dtype::Bool);
+            assert_eq!(array_repr(arr), "array([False, True], dtype=bool)");
+            __cobrust_coil_buffer_drop(a);
+            __cobrust_coil_buffer_drop(r);
+            FakeStr::free(dt);
+        }
+    }
+
+    // NOTE (astype unknown-dtype trap): an UNKNOWN / garbage dtype string —
+    // and a complex target the real-only Array cannot hold — make the shim
+    // `coil_panic` (numpy-style raise). We do NOT exercise that abort path as
+    // a lib unit test: identical to the reshape-trap NOTE above, the
+    // `coil_panic` → `__cobrust_panic` test stub `panic!`s, but that panic
+    // tries to cross the `extern "C"` `__cobrust_coil_astype` boundary — a
+    // NON-unwinding panic that ABORTS the test runner (so `#[should_panic]`
+    // cannot catch it). The trap is covered at the KERNEL layer
+    // (`dtype::from_python_string("garbage").is_err()` +
+    // `array::astype(.., Complex128).unwrap_err()`) and END-TO-END
+    // (`coil_astype_e2e.rs` asserts the compiled binary exits NON-zero on an
+    // unknown dtype), which together pin the same honest-failure contract
+    // without aborting this process.
 }
