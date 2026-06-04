@@ -325,8 +325,7 @@ fn test_e2e_chain_sin_of_arcsin_round_trips() {
     // digit. sin(arcsin(-0.25)) = -0.25 (exact on both).
     // [transcendental e2e last-ULP lesson — assert the identity, not the exact
     // float string; cf. the batch-13 ±0.0 platform-determinism fix.]
-    let first_ok =
-        stdout.contains("0.49999999999999") || stdout.contains("0.5,");
+    let first_ok = stdout.contains("0.49999999999999") || stdout.contains("0.5,");
     assert!(
         first_ok && stdout.contains("-0.25"),
         "expected sin(arcsin([0.5,-0.25])) ~ [0.5, -0.25] (round-trip identity); \
