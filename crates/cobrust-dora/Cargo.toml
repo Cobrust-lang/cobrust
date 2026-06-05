@@ -17,6 +17,17 @@ name = "dora"
 # pit / hood / coil even though no `pyo3` feature is wired in Phase 1).
 # `rlib` for in-workspace Rust consumers + the cabi unit tests.
 crate-type = ["rlib", "cdylib", "staticlib"]
+# `doctest = false`: cobrust-dora is the FIRST cabi crate to depend on
+# another ecosystem cabi crate (`cobrust-coil`, for the ADR-0076c
+# Arrow↔coil.Buffer bridge — `coil::Array` in `cabi.rs`). Under
+# `cargo test --workspace`, feature unification builds `coil` with its
+# default `cabi` feature ON (other members request it), and rustdoc's
+# doctest compilation of `dora` then resolves `--extern coil` to a
+# `deps/libcoil.rlib` path that does not exist in that graph (a cargo
+# doctest + multi-crate-type + feature-unification quirk). This crate
+# carries ZERO runnable doc examples (it is a generated C-ABI surface), so
+# disabling the doctest target loses nothing and sidesteps the false red.
+doctest = false
 
 [lints]
 workspace = true
