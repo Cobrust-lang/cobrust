@@ -58,9 +58,10 @@ pub use lldb_driver::{LldbDriver, StopReason};
 
 /// Run the Cobrust DAP server over stdio.
 ///
-/// ADR-0068 §4.1: unified entry point shared by the `cobrust dap`
-/// subcommand (`crates/cobrust-cli/src/dap.rs`) and the transitional
-/// `cobrust-dap` shim binary (`crates/cobrust-dap-shim/src/main.rs`).
+/// ADR-0068 §4.1: unified entry point for the `cobrust dap` subcommand
+/// (`crates/cobrust-cli/src/dap.rs`). (ADR-0070 X.5 deleted the
+/// transitional `cobrust-dap` shim binary at v0.7.0; the subcommand is now
+/// the sole caller.)
 /// Builds a tokio runtime, starts a tracing subscriber that writes to
 /// stderr (DAP stdout is reserved for Content-Length framed JSON), and
 /// runs [`run_stdio_loop`] with a fresh [`Adapter`] until the client

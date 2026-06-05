@@ -157,9 +157,11 @@ Phase 1+ remains as fallback for `cargo install` and source-tree
 
 ### 4.3 release.yml restructure (v0.6.0+)
 
-- **Build step**: builds `cobrust-cli` + `cobrust-lsp-shim` +
-  `cobrust-dap-shim` (ADR-0068 §4.2) — three binaries renamed to
-  `cobrust`, `cobrust-lsp`, `cobrust-dap` at package time.
+- **Build step**: builds `cobrust-cli` → the single `cobrust` binary.
+  (v0.6.x also built `cobrust-lsp-shim` + `cobrust-dap-shim` for the
+  standalone `cobrust-lsp` / `cobrust-dap` binaries; ADR-0070 X.5 DELETED
+  those shims at v0.7.0 — the wheel now ships only `bin/cobrust`, whose
+  `cobrust lsp` / `cobrust dap` subcommands carry the LSP/DAP surfaces.)
 - **Package step**: creates the FHS tree on disk
   (`cobrust-v0.6.0/{bin,lib/cobrust,share/cobrust/runtime}/`),
   copies the three binaries into `bin/`, copies

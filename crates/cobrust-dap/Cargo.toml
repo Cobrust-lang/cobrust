@@ -12,9 +12,9 @@ keywords = ["cobrust", "dap", "debug-adapter", "lldb"]
 categories = ["development-tools::debugging"]
 
 # ADR-0068: bin section removed; lib-only crate exposing pub fn run().
-# Transitional `cobrust-dap` standalone binary lives in
-# `crates/cobrust-dap-shim/` (v0.6.x); v0.7.0 drops the shim entirely
-# and `cobrust dap` subcommand becomes the only entry.
+# ADR-0070 X.5 (v0.7.0): the transitional `cobrust-dap` standalone shim
+# binary was DELETED; `cobrust dap` (the cobrust-cli subcommand) is now the
+# only entry point into this crate's `run()`.
 [lib]
 path = "src/lib.rs"
 

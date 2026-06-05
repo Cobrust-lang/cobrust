@@ -157,12 +157,15 @@ jobs:
           # that lack AVX-512 support (e.g. ubuntu-latest for v4 wheel).
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
         run: |
-          # ADR-0068 v0.6.0: cobrust-lsp + cobrust-dap are now lib-only
-          # crates; the standalone binaries come from -shim crates.
+          # ADR-0070 X.5 (v0.7.0): the transitional -shim crates are DELETED.
+          # cobrust-lsp + cobrust-dap are lib-only crates reached via the
+          # `cobrust lsp` / `cobrust dap` subcommands of the single `cobrust`
+          # binary (ADR-0068 single-binary collapse). The wheel ships only
+          # `bin/cobrust`.
           # ADR-0069 v0.6.0: same release.yml builds the prebuilt
           # libcobrust_stdlib.a (via cobrust-cli build.rs invoking
           # cobrust-stdlib's staticlib target).
-          cross build --release --locked -p cobrust-cli -p cobrust-lsp-shim -p cobrust-dap-shim --target ${{ matrix.target }}
+          cross build --release --locked -p cobrust-cli --target ${{ matrix.target }}
 
       - name: Build release binary (native)
         if: ${{ !matrix.use_cross }}
@@ -175,8 +178,9 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
           CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: "-D warnings ${{ matrix.rustflags_extra }}"
         run: |
-          # ADR-0068 v0.6.0: see cross build above for rationale.
-          cargo build --release --locked -p cobrust-cli -p cobrust-lsp-shim -p cobrust-dap-shim --target ${{ matrix.target }}
+          # ADR-0070 X.5 (v0.7.0): see cross build above — single `cobrust`
+          # binary only; the -shim crates are deleted.
+          cargo build --release --locked -p cobrust-cli --target ${{ matrix.target }}
 
       - name: Package tar.gz (ADR-0069 FHS layout)
         shell: bash
@@ -190,9 +194,10 @@ jobs:
           STAGE="cobrust-v${VERSION}"
           rm -rf "$STAGE"
           mkdir -p "$STAGE/bin" "$STAGE/lib/cobrust" "$STAGE/share/cobrust/runtime"
+          # ADR-0070 X.5 (v0.7.0): single `cobrust` binary only — the
+          # standalone cobrust-lsp / cobrust-dap shim binaries are deleted;
+          # their surfaces live on as `cobrust lsp` / `cobrust dap` subcommands.
           cp "${RELEASE_DIR}/cobrust" "$STAGE/bin/cobrust"
-          cp "${RELEASE_DIR}/cobrust-lsp" "$STAGE/bin/cobrust-lsp"
-          cp "${RELEASE_DIR}/cobrust-dap" "$STAGE/bin/cobrust-dap"
           # libcobrust_stdlib.a is built by cobrust-cli's build.rs invoking
           # the cobrust-stdlib staticlib target — locate it via the OUT_DIR
           # bake artifact under target/<triple>/release/build/cobrust-cli-*/out/
@@ -338,8 +343,7 @@ jobs:
             ```
 
             Each wheel tarball bundles:
-            - `bin/cobrust` — main driver (also exposes `cobrust lsp` + `cobrust dap` subcommands per ADR-0068)
-            - `bin/cobrust-lsp` + `bin/cobrust-dap` — transitional shim binaries (deleted at v0.7.0; extension v0.1.x compat)
+            - `bin/cobrust` — the single driver binary; the LSP / DAP servers are the `cobrust lsp` / `cobrust dap` subcommands (ADR-0068). The transitional `cobrust-lsp` / `cobrust-dap` shim binaries were removed at v0.7.0 (ADR-0070 X.5) — IDE extensions must invoke the subcommands.
             - `lib/cobrust/libcobrust_stdlib.a` — prebuilt static stdlib archive
             - `share/cobrust/runtime/{cobrust_main.c,cpu_features.c}` — runtime C entrypoint + CPU feature helpers
 

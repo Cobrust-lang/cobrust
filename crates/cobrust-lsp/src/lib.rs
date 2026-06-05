@@ -99,11 +99,11 @@ pub use span_convert::{LineMap, span_to_lsp_range};
 
 /// Run the Cobrust LSP server over stdio.
 ///
-/// ADR-0068 §4.1: this is the unified entry point both the `cobrust lsp`
-/// subcommand (`crates/cobrust-cli/src/lsp.rs`) and the transitional
-/// `cobrust-lsp` shim binary (`crates/cobrust-lsp-shim/src/main.rs`)
-/// dispatch through. Calls into the wave-2.1 `Backend` per ADR-0057b
-/// and serves until stdin EOF.
+/// ADR-0068 §4.1: this is the unified entry point the `cobrust lsp`
+/// subcommand (`crates/cobrust-cli/src/lsp.rs`) dispatches through.
+/// (ADR-0070 X.5 deleted the transitional `cobrust-lsp` shim binary at
+/// v0.7.0; the subcommand is now the sole caller.) Calls into the wave-2.1
+/// `Backend` per ADR-0057b and serves until stdin EOF.
 ///
 /// Initializes a `tracing` subscriber that writes to stderr (LSP stdout
 /// is reserved for JSON-RPC frames). Returns `Ok(())` on graceful
