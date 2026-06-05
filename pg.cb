@@ -1,0 +1,8 @@
+fn mk() -> list[f64]:
+    let ys: list[f64] = [9.5, 2.5, 7.5]
+    return ys
+
+fn main() -> i64:
+    print(min(mk()))
+    print(sum(mk()))
+    return 0

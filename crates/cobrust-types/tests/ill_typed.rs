@@ -2956,3 +2956,67 @@ fn i174_range_three_args_rejected_arity() {
         Cat::ArityMismatch,
     );
 }
+
+// ============================================================
+// ADR-0090 rejection corpus — the list-reducer builtins `min`/`max`/`sum`
+// reject a NON-list arg (the canonical `NotIterable` variant, NO new
+// error type) and do NOT silently accept the DEFERRED multi-scalar-arg
+// form (which hits the canonical `ArityMismatch`). The inline stubs
+// mirror the PRELUDE shape so the special-case fires.
+// ============================================================
+
+/// PRELUDE list-reducer stub prefix for the rejection corpus.
+const REDUCE_STUB_REJ: &str = concat!(
+    "fn min(xs: list[i64]) -> i64:\n    return 0\n",
+    "fn max(xs: list[i64]) -> i64:\n    return 0\n",
+    "fn sum(xs: list[i64]) -> i64:\n    return 0\n",
+);
+
+#[test]
+fn i175_min_of_int_scalar_rejected_not_iterable() {
+    // `min(5)` — a non-list (non-iterable) arg. Reuses the canonical
+    // `NotIterable` variant (NO new error type — ADR-0090 §"reuse").
+    must_reject(
+        "min-of-int-scalar",
+        &format!("{REDUCE_STUB_REJ}fn f() -> i64:\n    return min(5)\n"),
+        Cat::NotIterable,
+    );
+}
+
+#[test]
+fn i176_sum_of_str_rejected_not_iterable() {
+    // `sum("abc")` — a str is not a list-reducer input here (the bare
+    // `sum` reduces a `list[T]`; CPython's str-iteration is out of scope).
+    must_reject(
+        "sum-of-str",
+        &format!("{REDUCE_STUB_REJ}fn f() -> i64:\n    return sum(\"abc\")\n"),
+        Cat::NotIterable,
+    );
+}
+
+#[test]
+fn i177_min_multi_scalar_args_rejected_arity() {
+    // The DEFERRED multi-scalar-arg form `min(1, 2, 3)` is NOT the
+    // list-reducer form; it falls through to the generic path and hits
+    // the canonical `ArityMismatch` (the PRELUDE `min` declares ONE
+    // param). ADR-0090 §"Deferred".
+    must_reject(
+        "min-multi-scalar-args",
+        &format!("{REDUCE_STUB_REJ}fn f() -> i64:\n    return min(1, 2, 3)\n"),
+        Cat::ArityMismatch,
+    );
+}
+
+#[test]
+fn i178_sum_of_str_list_rejected_type_mismatch() {
+    // `sum(["a", "b"])` — a `list[str]` whose element type is neither
+    // int nor float. The special-case unifies the elem against `i64`,
+    // raising the canonical `TypeMismatch` (NO new variant).
+    must_reject(
+        "sum-of-str-list",
+        &format!(
+            "{REDUCE_STUB_REJ}fn f() -> i64:\n    let xs: list[str] = [\"a\", \"b\"]\n    return sum(xs)\n"
+        ),
+        Cat::TypeMismatch,
+    );
+}

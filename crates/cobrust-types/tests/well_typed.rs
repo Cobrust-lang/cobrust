@@ -3427,3 +3427,91 @@ fn w229_range_two_arg_still_accepts_regression() {
         "fn f() -> i64:\n    for i in range(2, 7):\n        return i\n    return 0\n",
     );
 }
+
+// ---- ADR-0090: list-reducer builtins min / max / sum ----
+// The PRELUDE stubs declare a narrow `list[i64]` shape; the type-checker
+// special-case (`try_synth_reduce_builtin`) resolves the RETURN type
+// from the `list[T]` arg's ELEMENT type. These stubs mirror the PRELUDE
+// (named `min`/`max`/`sum` so `prebind_item` registers their def_ids in
+// `reduce_defs`).
+const REDUCE_STUB: &str = concat!(
+    "fn min(xs: List[i64]) -> i64:\n    return 0\n",
+    "fn max(xs: List[i64]) -> i64:\n    return 0\n",
+    "fn sum(xs: List[i64]) -> i64:\n    return 0\n",
+);
+
+#[test]
+fn w230_sum_of_int_list_returns_int() {
+    // `sum(list[int]) -> int`, usable in int arithmetic (the §2.5 win).
+    must_accept(
+        "sum-int-list",
+        &format!(
+            "{REDUCE_STUB}fn f() -> i64:\n    let xs: List[i64] = [1, 2, 3]\n    return sum(xs) + 1\n"
+        ),
+    );
+}
+
+#[test]
+fn w231_min_max_of_int_list_returns_int() {
+    must_accept(
+        "min-max-int-list",
+        &format!(
+            "{REDUCE_STUB}fn f() -> i64:\n    let xs: List[i64] = [3, 1, 2]\n    return min(xs) + max(xs)\n"
+        ),
+    );
+}
+
+#[test]
+fn w232_sum_of_float_list_returns_float() {
+    // `sum(list[float]) -> float` — the element-type dispatch. The
+    // PRELUDE stub declares `-> i64`, but the special-case returns Float
+    // for a `list[float]` arg (so the `-> f64` fn type-checks).
+    must_accept(
+        "sum-float-list",
+        &format!(
+            "{REDUCE_STUB}fn f() -> f64:\n    let fs: List[f64] = [1.5, 2.5]\n    return sum(fs)\n"
+        ),
+    );
+}
+
+#[test]
+fn w233_min_of_float_list_returns_float() {
+    must_accept(
+        "min-float-list",
+        &format!(
+            "{REDUCE_STUB}fn f() -> f64:\n    let fs: List[f64] = [1.5, 2.5, 3.0]\n    return min(fs)\n"
+        ),
+    );
+}
+
+#[test]
+fn w234_reduce_of_int_literal_accepts() {
+    // The list LITERAL passed inline (not bound first).
+    must_accept(
+        "reduce-int-literal",
+        &format!("{REDUCE_STUB}fn f() -> i64:\n    return min([5, 9, 2])\n"),
+    );
+}
+
+#[test]
+fn w235_sum_of_borrowed_int_list_returns_int() {
+    // `sum(&xs)` — the §2.5-A borrow shortcut routes by the inner list.
+    must_accept(
+        "sum-borrowed-int-list",
+        &format!(
+            "{REDUCE_STUB}fn f() -> i64:\n    let xs: List[i64] = [1, 2, 3]\n    return sum(&xs)\n"
+        ),
+    );
+}
+
+#[test]
+fn w236_reduce_list_reused_after_borrow() {
+    // The reducer BORROWS the list — it stays usable for a SECOND reduce
+    // (`sum(xs)` then `min(xs)`, no move/consume between them).
+    must_accept(
+        "reduce-list-reused",
+        &format!(
+            "{REDUCE_STUB}fn f() -> i64:\n    let xs: List[i64] = [1, 2, 3]\n    let s: i64 = sum(xs)\n    return s + min(xs)\n"
+        ),
+    );
+}

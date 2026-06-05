@@ -2010,6 +2010,40 @@ impl<'a> BodyBuilder<'a> {
         } else {
             callee_return_ty
         };
+        // ADR-0090 §5 — list-reducer `min`/`max`/`sum` return-type
+        // override. The PRELUDE stubs declare `-> i64` (a placeholder),
+        // but Python's `min`/`max`/`sum` return the ELEMENT type:
+        // `sum([1.5, 2.5]) == 4.0` (a `float`). The type-checker
+        // resolved the call to `Float` for a `list[float]` arg, yet this
+        // MIR layer re-derives the return from the (i64) prelude sig — so
+        // without this override the `_callret` alloca would be an i64
+        // while the float arm rewrites the call to
+        // `__cobrust_{min,max,sum}_float` (-> f64), corrupting
+        // `print(sum([1.5, 2.5]))`. We read the SINGLE list arg's element
+        // type from the type-checker's record (`synth_expr_ty`, NOT the
+        // arg's MIR temp — the ADR-0089 abs-miscompile lesson: a list
+        // BUILT then passed has a fine `Ty::List` synth type but its
+        // MIR-temp drop-bookkeeping is incidental). A `list[float]` →
+        // `Float`; otherwise the dest stays `Int` (the existing path).
+        // The intrinsic-rewrite `Kind::{Min,Max,Sum}` dispatch reads this
+        // SAME dest type as its one source of truth.
+        let callee_return_ty = if matches!(callee_name, Some("min" | "max" | "sum")) {
+            if let [CallArg::Positional(arg)] = args {
+                let arg_ty = match synth_expr_ty(self, arg) {
+                    Ty::Ref(inner) => *inner,
+                    other => other,
+                };
+                if matches!(arg_ty, Ty::List(elem) if matches!(*elem, Ty::Float)) {
+                    Ty::Float
+                } else {
+                    Ty::Int
+                }
+            } else {
+                callee_return_ty
+            }
+        } else {
+            callee_return_ty
+        };
         let callee_op = if let ExprKind::Name(rn) = &callee.kind {
             let ty = self.ctx.lookup_ty(rn.def_id);
             if matches!(ty, Ty::Fn(_)) {

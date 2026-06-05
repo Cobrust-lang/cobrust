@@ -230,6 +230,18 @@ pub const MATH_ABS_RUNTIME_SYMBOL: &str = "__cobrust_math_abs";
 /// `__cobrust_int_abs(i64) -> i64`. Picked (instead of the f64
 /// `__cobrust_math_abs`) when the `abs(x)` argument resolves to `Int`.
 pub const INT_ABS_RUNTIME_SYMBOL: &str = "__cobrust_int_abs";
+/// ADR-0090 — list-reducer builtins. Each takes a `list[T]` pointer and
+/// reduces it to a scalar of the element type. The int / float variant
+/// is picked by the call's DEST (== element) type at MIR-rewrite time.
+/// `(ptr) -> i64` (int) reads the raw slots; `(ptr) -> f64` (float)
+/// bitcasts the i64 slots to f64. The shims BORROW the list (read-only)
+/// — they do NOT free it.
+pub const MIN_INT_RUNTIME_SYMBOL: &str = "__cobrust_min_int";
+pub const MAX_INT_RUNTIME_SYMBOL: &str = "__cobrust_max_int";
+pub const SUM_INT_RUNTIME_SYMBOL: &str = "__cobrust_sum_int";
+pub const MIN_FLOAT_RUNTIME_SYMBOL: &str = "__cobrust_min_float";
+pub const MAX_FLOAT_RUNTIME_SYMBOL: &str = "__cobrust_max_float";
+pub const SUM_FLOAT_RUNTIME_SYMBOL: &str = "__cobrust_sum_float";
 /// `pow(base: f64, exp: f64) -> f64` → `__cobrust_math_pow(f64, f64) -> f64`.
 pub const MATH_POW_RUNTIME_SYMBOL: &str = "__cobrust_math_pow";
 /// `sin(x: f64) -> f64` → `__cobrust_math_sin(f64) -> f64`.
@@ -433,6 +445,14 @@ struct IntrinsicDefIds {
     math_log: HashSet<u32>,
     /// M-F.3.3.
     math_exp: HashSet<u32>,
+    // ---- ADR-0090 list-reducer builtins (min / max / sum) ----
+    /// ADR-0090 — the PRELUDE `min` stub's `DefId` (first-body-wins
+    /// guard for a user-defined `min` shadow).
+    reduce_min: HashSet<u32>,
+    /// ADR-0090 — the PRELUDE `max` stub's `DefId`.
+    reduce_max: HashSet<u32>,
+    /// ADR-0090 — the PRELUDE `sum` stub's `DefId`.
+    reduce_sum: HashSet<u32>,
     // ---- M-F.3.5 string stdlib (ADR-0050e) ----
     /// M-F.3.5.
     str_split: HashSet<u32>,
@@ -534,6 +554,10 @@ impl IntrinsicDefIds {
         out.extend(&self.math_tan);
         out.extend(&self.math_log);
         out.extend(&self.math_exp);
+        // ADR-0090 list-reducer builtins.
+        out.extend(&self.reduce_min);
+        out.extend(&self.reduce_max);
+        out.extend(&self.reduce_sum);
         // M-F.3.5 string stdlib.
         out.extend(&self.str_split);
         out.extend(&self.str_join);
@@ -610,6 +634,9 @@ impl IntrinsicDefIds {
             && self.math_tan.is_empty()
             && self.math_log.is_empty()
             && self.math_exp.is_empty()
+            && self.reduce_min.is_empty()
+            && self.reduce_max.is_empty()
+            && self.reduce_sum.is_empty()
             && self.str_split.is_empty()
             && self.str_join.is_empty()
             && self.str_replace.is_empty()
@@ -688,6 +715,10 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         math_tan: HashSet::new(),
         math_log: HashSet::new(),
         math_exp: HashSet::new(),
+        // ADR-0090 list-reducer builtins.
+        reduce_min: HashSet::new(),
+        reduce_max: HashSet::new(),
+        reduce_sum: HashSet::new(),
         // M-F.3.5 string stdlib.
         str_split: HashSet::new(),
         str_join: HashSet::new(),
@@ -728,6 +759,11 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
     // because names like `clone` / `find` / `trim` / `lower` / `upper`
     // are common enough that user-defined functions may collide.
     let mut str_names_seen: HashSet<&'static str> = HashSet::new();
+    // ADR-0090: same first-body-wins guard — `min` / `max` / `sum` are
+    // common enough that user-defined functions may collide with the
+    // PRELUDE stubs. The FIRST body (the PRELUDE stub) is the intrinsic;
+    // a user's same-named fn (the SECOND body) must NOT be rewritten.
+    let mut reduce_names_seen: HashSet<&'static str> = HashSet::new();
 
     for body in &module.bodies {
         match body.name.as_str() {
@@ -897,6 +933,22 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
             "exp" => {
                 if math_names_seen.insert("exp") {
                     ids.math_exp.insert(body.def_id.0);
+                }
+            }
+            // ---- ADR-0090 list-reducer builtins ----
+            "min" => {
+                if reduce_names_seen.insert("min") {
+                    ids.reduce_min.insert(body.def_id.0);
+                }
+            }
+            "max" => {
+                if reduce_names_seen.insert("max") {
+                    ids.reduce_max.insert(body.def_id.0);
+                }
+            }
+            "sum" => {
+                if reduce_names_seen.insert("sum") {
+                    ids.reduce_sum.insert(body.def_id.0);
                 }
             }
             // ---- M-F.3.5 string stdlib (ADR-0050e) ----
@@ -1087,6 +1139,16 @@ enum Kind {
     MathTan,
     MathLog,
     MathExp,
+    // ---- ADR-0090 list-reducer builtins (min / max / sum) ----
+    /// `min(xs: list[T]) -> T` — smallest element (borrow-read; empty
+    /// list traps). Int / float dispatch on the dest type.
+    Min,
+    /// `max(xs: list[T]) -> T` — largest element (borrow-read; empty
+    /// list traps).
+    Max,
+    /// `sum(xs: list[T]) -> T` — sum of elements (borrow-read;
+    /// `sum([]) == 0`).
+    Sum,
     // ---- M-F.3.5 string stdlib (ADR-0050e) ----
     StrSplit,
     StrJoin,
@@ -1168,6 +1230,10 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "tan" => Some(Kind::MathTan),
         "log" => Some(Kind::MathLog),
         "exp" => Some(Kind::MathExp),
+        // ADR-0090 — list-reducer builtins.
+        "min" => Some(Kind::Min),
+        "max" => Some(Kind::Max),
+        "sum" => Some(Kind::Sum),
         // M-F.3.5 string stdlib (ADR-0050e).
         "split" => Some(Kind::StrSplit),
         "join" => Some(Kind::StrJoin),
@@ -1290,6 +1356,12 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::MathLog)
     } else if ids.math_exp.contains(&id) {
         Some(Kind::MathExp)
+    } else if ids.reduce_min.contains(&id) {
+        Some(Kind::Min)
+    } else if ids.reduce_max.contains(&id) {
+        Some(Kind::Max)
+    } else if ids.reduce_sum.contains(&id) {
+        Some(Kind::Sum)
     } else if ids.str_split.contains(&id) {
         Some(Kind::StrSplit)
     } else if ids.str_join.contains(&id) {
@@ -2278,6 +2350,51 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     *func = Operand::Constant(Constant::Str(sym.to_string()));
                     args.clear();
                     args.push(x_arg);
+                }
+                // ---- ADR-0090: list-reducer builtins min / max / sum ----
+                // Python's `min`/`max` return the smallest/largest ELEMENT
+                // and `sum` the sum — all of the element type. The type-
+                // checker (`try_synth_reduce_builtin`) accepts a `list[T]`
+                // arg and returns `T` (Int / Float); `lower_call`'s
+                // `_callret` override sets the DEST local to that element
+                // type. Here we pick the runtime symbol from the call's
+                // DEST type (the ONE source of truth — NOT the list arg
+                // operand's MIR local, which carries the `Ty::List` shape
+                // but whose ELEMENT we'd otherwise have to re-derive; the
+                // dest IS the resolved element type). This is the
+                // ADR-0089 abs-miscompile-proof dispatch: a list BUILT
+                // then passed (`min(make_floats())`) has a `Ty::None`
+                // call-return arg-local at some tiers, but the DEST type
+                // is the type-checker's `Float`/`Int` record. The list
+                // operand passes UNCHANGED (Copy-at-call per
+                // `is_copy_type(Ty::List)` — the shim BORROWS it; the
+                // `.cb` scope drops it once).
+                //   list[int]   → __cobrust_{min,max,sum}_int   (i64 slots)
+                //   list[float] → __cobrust_{min,max,sum}_float (f64 bits)
+                Kind::Min | Kind::Max | Kind::Sum => {
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("min/max/sum: expected 1 list arg, got {}", args.len()),
+                        });
+                    }
+                    let dest_ty = local_ty.get(&destination.local.0).map(|t| match t {
+                        Ty::Ref(inner) => (**inner).clone(),
+                        other => other.clone(),
+                    });
+                    let is_float = matches!(dest_ty, Some(Ty::Float));
+                    let sym = match (kind, is_float) {
+                        (Kind::Min, false) => MIN_INT_RUNTIME_SYMBOL,
+                        (Kind::Min, true) => MIN_FLOAT_RUNTIME_SYMBOL,
+                        (Kind::Max, false) => MAX_INT_RUNTIME_SYMBOL,
+                        (Kind::Max, true) => MAX_FLOAT_RUNTIME_SYMBOL,
+                        (Kind::Sum, false) => SUM_INT_RUNTIME_SYMBOL,
+                        (Kind::Sum, true) => SUM_FLOAT_RUNTIME_SYMBOL,
+                        _ => unreachable!(),
+                    };
+                    let lst = args[0].clone();
+                    *func = Operand::Constant(Constant::Str(sym.to_string()));
+                    args.clear();
+                    args.push(lst);
                 }
                 Kind::MathPow => {
                     // pow(base: f64, exp: f64) -> f64

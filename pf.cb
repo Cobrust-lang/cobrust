@@ -1,0 +1,4 @@
+fn main() -> i64:
+    let xs: list[i64] = []
+    print(max(xs))
+    return 0

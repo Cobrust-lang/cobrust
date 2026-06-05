@@ -725,6 +725,39 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
 - `g` — shortest repr (default float display)
 - empty / unknown — falls back to `format_float(v)`
 
+## ADR-0090 — list-reducer builtins `min` / `max` / `sum` (`reduce.rs`)
+
+The first builtins that CONSUME (borrow-read) a `list[T]` ARGUMENT.
+`min`/`max` return the smallest/largest ELEMENT, `sum` the sum — all of
+the element type (`min(list[int]) -> int`, `min(list[float]) ->
+float`). The list is passed by POINTER (`is_copy_type(Ty::List)` is
+`true` → Copy-at-call; the `.cb` scope keeps ownership + drops it once);
+the shim BORROWS it (reads `__cobrust_list_len` + `__cobrust_list_get`
+per element) and does **NOT** free it. The int/float shim is picked at
+MIR-rewrite time from the call's DEST (== element) type (`Kind::{Min,
+Max, Sum}`, the ADR-0089 dest-type dispatch — miscompile-proof for
+computed args).
+
+| Symbol | C ABI | Notes |
+|---|---|---|
+| `__cobrust_min_int(list: *mut u8) -> i64` | `reduce.rs` | smallest i64 element. Empty list → TRAP (`crate::panic::panic`, CPython `ValueError` parity, §2.2 → non-zero exit). |
+| `__cobrust_max_int(list: *mut u8) -> i64` | `reduce.rs` | largest i64 element. Empty → TRAP. |
+| `__cobrust_sum_int(list: *mut u8) -> i64` | `reduce.rs` | `wrapping_add` over the i64 slots. `sum([]) == 0` (NOT a trap). |
+| `__cobrust_min_float(list: *mut u8) -> f64` | `reduce.rs` | smallest element; each i64 slot `f64::from_bits`. Empty → TRAP. |
+| `__cobrust_max_float(list: *mut u8) -> f64` | `reduce.rs` | largest element (f64 bits). Empty → TRAP. |
+| `__cobrust_sum_float(list: *mut u8) -> f64` | `reduce.rs` | sum over the f64-bit slots. `sum([]) == 0.0`. |
+
+- **Borrow-not-free** — the shim reads via the shared
+  `__cobrust_list_len`/`_get` accessors (NO `Box::from_raw`); the `.cb`
+  scope drops the list once. A list reused after `min(xs)` stays valid.
+- **Element-type dispatch** — the type-checker
+  (`try_synth_reduce_builtin`) reads the arg's `Ty::List(elem)` and
+  returns `elem`; a non-list arg → the canonical `NotIterable`. The
+  deferred forms (multi-scalar-arg `min(1, 2, 3)`, `key=` / `default=`
+  kwargs) hit `ArityMismatch`.
+- **Reuse target** — this borrow-read mechanism is what `sorted(xs)` /
+  `coil.array` (`np.array`) will consume. See ADR-0090.
+
 ## Cross-references
 
 - `mod:codegen` — emits calls into the C ABI symbols this module

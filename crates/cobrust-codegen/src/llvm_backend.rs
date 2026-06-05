@@ -2152,6 +2152,45 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_param_counts
             .insert("__cobrust_int_abs", 1);
 
+        // -- ADR-0090: list-reducer builtins `min` / `max` / `sum`.
+        // The first builtins that CONSUME (borrow-read) a `list[T]`
+        // argument. Each takes the list `*mut u8` pointer (Copy-at-call
+        // per `is_copy_type(Ty::List)`; the `.cb` scope still owns +
+        // drops it) and reduces it to a scalar. Two ABI shapes, keyed on
+        // the list's ELEMENT type (== the call's return type), picked by
+        // the intrinsic-rewrite pass (`Kind::{Min,Max,Sum}`):
+        //   list[int]   → `(ptr) -> i64`  (reads the raw i64 slots)
+        //   list[float] → `(ptr) -> f64`  (bitcasts the i64 slots to f64)
+        // The shims BORROW the list (read len + each slot via
+        // `__cobrust_list_len` / `__cobrust_list_get`) and do NOT free
+        // it. `min`/`max` of an empty list TRAP (CPython `ValueError`
+        // parity, §2.2 → clean non-zero exit); `sum` of an empty list is
+        // 0 / 0.0.
+        let reduce_ptr_i64_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        for sym in [
+            "__cobrust_min_int",
+            "__cobrust_max_int",
+            "__cobrust_sum_int",
+        ] {
+            let f = self
+                .module
+                .add_function(sym, reduce_ptr_i64_ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, 1);
+        }
+        let reduce_ptr_f64_ty = f64_ty.fn_type(&[ptr_ty.into()], false);
+        for sym in [
+            "__cobrust_min_float",
+            "__cobrust_max_float",
+            "__cobrust_sum_float",
+        ] {
+            let f = self
+                .module
+                .add_function(sym, reduce_ptr_f64_ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, 1);
+        }
+
         // -- ADR-0083 PART-2: BOOL-returning classification shims
         // (`(f64) -> i1`). `math.isnan` / `math.isinf` / `math.isfinite`.
         // The Rust C-ABI `-> bool` is declared as `bool_type()` (LLVM `i1`),

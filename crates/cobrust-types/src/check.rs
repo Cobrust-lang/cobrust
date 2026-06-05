@@ -514,6 +514,17 @@ struct Ctx {
     /// form (== `range(0, stop)`); a user-defined `range` shadows the
     /// def_id and is left to the generic path.
     range_def: Option<DefId>,
+    /// ADR-0090 — the `DefId`s of the PRELUDE list-reducer builtins
+    /// `min` / `max` / `sum` (each maps to its name). A DEDICATED slot
+    /// (NOT `poly_intrinsic_defs`) because `try_synth_reduce_builtin`
+    /// FULLY resolves the call type from the `list[T]` arg's element
+    /// type and never relies on the generic stub-unify — registering
+    /// them as poly intrinsics would widen the narrow PRELUDE `list[i64]`
+    /// arg to a fresh var and let `sum([1.5])` (a `list[float]`) slip
+    /// past unification, which the special-case rejects cleanly instead.
+    /// A user-defined `min`/`max`/`sum` shadows the def_id and is left to
+    /// the generic path.
+    reduce_defs: HashSet<DefId>,
     /// ADR-0072 §2/§3 — ecosystem-module aliases. Maps the `DefId` of
     /// an `import den` alias (a `DefKind::ImportAlias`) to its module
     /// name (`"den"`). Populated during `prebind_item` for `Import`
@@ -685,6 +696,18 @@ impl Ctx {
                 // form is left untouched on the generic stub path.
                 if f.name == "range" {
                     self.range_def = Some(f.def_id);
+                }
+                // ADR-0090 — list-reducer builtins `min` / `max` / `sum`.
+                // The PRELUDE stubs declare e.g. `min(xs: list[i64]) ->
+                // i64` (a placeholder narrow shape). Recorded in the
+                // dedicated `reduce_defs` slot (NOT `poly_intrinsic_defs`)
+                // so `try_synth_reduce_builtin` intercepts the bare call
+                // BEFORE the generic stub-unify and resolves the return
+                // type from the `list[T]` arg's ELEMENT type (Python's
+                // `min`/`max` return the element type; `sum` too). A
+                // user-defined `min`/`max`/`sum` shadows the def_id.
+                if matches!(f.name.as_str(), "min" | "max" | "sum") {
+                    self.reduce_defs.insert(f.def_id);
                 }
                 self.record_def(f.def_id, fn_ty);
             }
@@ -3151,6 +3174,99 @@ impl Ctx {
         Ok(Some(Ty::List(Box::new(Ty::Int))))
     }
 
+    /// ADR-0090 — Python-canonical list-reducer builtins `min(xs)` /
+    /// `max(xs)` / `sum(xs)`. These are the first builtins that CONSUME
+    /// (borrow-read) a `list[T]` argument; the list is already passed by
+    /// pointer (`is_copy_type(Ty::List)` is `true`, so the `.cb` scope
+    /// retains ownership) and the runtime shim reduces it to a scalar
+    /// WITHOUT freeing it.
+    ///
+    /// **Element-type dispatch (the return type).** Python's `min`/`max`
+    /// return the smallest/largest ELEMENT, and `sum` the sum — all of
+    /// the element type. This special-case reads the arg's
+    /// `Ty::List(elem)` and returns `elem`:
+    ///
+    /// - `min(list[int])` / `max(...)` / `sum(...)` → `Int`  (lowered to
+    ///   `__cobrust_{min,max,sum}_int`, reading the raw i64 slots).
+    /// - `min(list[float])` / … → `Float` (lowered to
+    ///   `__cobrust_{min,max,sum}_float`, bitcasting the i64 slots to
+    ///   f64).
+    ///
+    /// The MIR lowering (`lower_call`) dispatches on the DEST/return type
+    /// (== `elem`) — NOT a fragile arg-temp-type read — so a list BUILT
+    /// then passed (`min(build_list())`) routes correctly (the ADR-0089
+    /// abs-miscompile lesson).
+    ///
+    /// A non-list arg (`min(5)`) returns the canonical `NotIterable`
+    /// error (an existing variant — no renderer cascade); a `list[T]`
+    /// whose `T` is neither int nor float, or a still-unresolved
+    /// inference var (`min([])` where the empty literal's elem is
+    /// unanchored), unifies the elem against `i64` so an annotated empty
+    /// `let xs: list[i64] = []; min(xs)` traps at runtime (CPython
+    /// `ValueError` parity) while a bare unannotated `min([])` anchors to
+    /// the int path. Arity / keyword misuse (`min()`, `min(a, b)` — the
+    /// DEFERRED multi-scalar-arg form, `min(x=…)`, the DEFERRED `key=` /
+    /// `default=` kwargs) returns `Ok(None)` so the generic path emits
+    /// the canonical `ArityMismatch` / keyword diagnostic.
+    fn try_synth_reduce_builtin(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Name(rn) = &callee.kind else {
+            return Ok(None);
+        };
+        if !self.reduce_defs.contains(&rn.def_id) {
+            return Ok(None);
+        }
+        // Only the bare 1-positional-arg list-reducer form. The
+        // multi-scalar-arg form (`min(1, 2, 3)`) and the `key=` /
+        // `default=` kwargs are DEFERRED (ADR-0090 §"Deferred"); they
+        // fall through to the generic path's ArityMismatch / keyword
+        // diagnostic.
+        let [CallArg::Positional(arg)] = args else {
+            return Ok(None);
+        };
+        let arg_ty = self.synth_expr(arg)?;
+        let arg_ty = self.subst.apply(&arg_ty);
+        // `Ref(T)` unwraps once so `sum(&xs)` (the §2.5-A borrow
+        // shortcut) routes by the inner list type.
+        let resolved = match &arg_ty {
+            Ty::Ref(inner) => (**inner).clone(),
+            other => other.clone(),
+        };
+        match resolved {
+            Ty::List(elem) => {
+                let elem = self.subst.apply(&elem);
+                match elem {
+                    Ty::Int => Ok(Some(Ty::Int)),
+                    Ty::Float => Ok(Some(Ty::Float)),
+                    // An unresolved element var (e.g. an un-annotated
+                    // `min([])`) anchors to the int path — the default
+                    // numeric element type — so the call has a concrete
+                    // return type and the empty-list runtime trap fires
+                    // (min/max) or returns 0 (sum). A list of a
+                    // non-numeric element type (`min(["a"])`) unifies the
+                    // elem against `i64` here, raising the canonical
+                    // `TypeMismatch` (no new variant).
+                    other => {
+                        unify(&Ty::Int, &other, &mut self.subst, arg.span)?;
+                        Ok(Some(Ty::Int))
+                    }
+                }
+            }
+            // A non-list argument: `min`/`max`/`sum` require an iterable.
+            // Reuse the canonical `NotIterable` variant (no new error
+            // type), with a §2.5-B fix suggestion.
+            other => Err(TypeError::NotIterable {
+                actual: other,
+                span,
+                suggestion: Some("`min` / `max` / `sum` take a single list argument"),
+            }),
+        }
+    }
+
     fn synth_call(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
         // ADR-0072 §2/§3 — ecosystem-module call dispatch fires first so
         // `den.connect(...)` / `conn.execute(...)` / `cur.fetchall()`
@@ -3206,6 +3322,20 @@ impl Ctx {
         // stays on the generic stub path with its `list[i64]` return
         // anchored. See ADR-0089.
         if let Some(t) = self.try_synth_range_builtin(callee, args)? {
+            return Ok(t);
+        }
+        // ADR-0090 — Python-canonical list-reducer builtins `min(xs)` /
+        // `max(xs)` / `sum(xs)`. MUST run BEFORE the generic path: these
+        // are not in PRELUDE as polymorphic intrinsics (their stubs
+        // declare a narrow `list[i64]` arg), so the generic stub-unify
+        // would reject `sum([1.5, 2.5])` (a `list[float]`) against the
+        // `list[i64]` param. Intercepting here resolves the return type
+        // from the `list[T]` arg's ELEMENT type (`Int`/`Float`,
+        // matching Python's element-returning semantics); a non-list arg
+        // gets the canonical `NotIterable` (no new variant). The 1-arg
+        // list-reducer form only; the multi-scalar-arg + `key=` forms are
+        // deferred to the generic ArityMismatch path. See ADR-0090.
+        if let Some(t) = self.try_synth_reduce_builtin(callee, args, span)? {
             return Ok(t);
         }
         let callee_ty = self.synth_expr(callee)?;

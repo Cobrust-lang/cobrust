@@ -1,0 +1,9 @@
+fn sum(xs: list[i64]) -> list[i64]:
+    return xs
+
+fn main() -> i64:
+    let xs: list[i64] = [4, 5, 6]
+    let ys: list[i64] = sum(xs)
+    print(len(ys))
+    print(ys[0])
+    return 0

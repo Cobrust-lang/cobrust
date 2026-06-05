@@ -120,6 +120,10 @@ pub mod json;
 pub mod math;
 pub mod panic;
 pub mod prompt;
+// ADR-0090 — list-reducer builtins `min(xs)` / `max(xs)` / `sum(xs)`.
+// The first builtins that CONSUME (borrow-read) a `list[T]` argument;
+// the list-consume mechanism `sorted` / `coil.array` will reuse.
+pub mod reduce;
 // ADR-0086 — `import random` (pseudo-random sampling). A thread-local
 // `rand_pcg::Pcg64` module-global RNG: random / randint / uniform / seed.
 pub mod random;
