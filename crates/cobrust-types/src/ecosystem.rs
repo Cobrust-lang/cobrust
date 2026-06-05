@@ -2237,6 +2237,69 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Int,
             PyCompatTier::Semantic,
         )),
+        // -- ADR-0087: `import time` (timing + timestamps) ---------------
+        // The timing core of CPython's `time` — scalar-in / scalar-out,
+        // the SIMPLEST ecosystem-call shape (no Str/list buffer
+        // marshalling, like `random`). Backed by `cobrust-stdlib::time`
+        // over std `SystemTime` (wall clock) + a lazy-static `Instant`
+        // origin (monotonic) + `thread::sleep`. The 4th core stdlib after
+        // math / re / random.
+        //
+        // Each row reuses a PROVEN scalar shape (NO new MIR / codegen arm —
+        // the generic ecosystem-call path drives args + return off this
+        // `EcoSig`; codegen only declares the externs):
+        //   time         []      -> Float — current Unix-epoch SECONDS
+        //     (wall clock); 0-arg, the `random.random` 0-arg precedent.
+        //   monotonic    []      -> Float — process-relative seconds,
+        //     non-decreasing (a lazy-static `Instant`); for intervals.
+        //   perf_counter []      -> Float — the SAME high-res monotonic
+        //     clock as `monotonic` (one shared `START` Instant; CPython
+        //     names them distinctly, Cobrust unifies them — ADR-0087).
+        //   sleep        [Float] -> Int   — suspend the thread `secs` s;
+        //     `secs <= 0.0` / NaN is a NO-OP (the shim guards the
+        //     `Duration::from_secs_f64(neg)` panic; CPython raises
+        //     ValueError, a no-op is the gentler safe path). CPython
+        //     returns None; we return a discarded i64 SENTINEL (the
+        //     `random.seed` / dora `send_output` discard pattern),
+        //     avoiding the `Ty::None -> void` C-ABI mismatch.
+        //
+        // TIER `Semantic` (ADR-0087 §"Tier"): a clock is ENVIRONMENT STATE,
+        // NOT reproducible — `time()` advances every call, `monotonic()`'s
+        // origin is process-start, `sleep` is best-effort (the OS may
+        // oversleep). Cobrust does NOT reproduce CPython's exact float
+        // values (different epoch rounding, different monotonic origin).
+        // The CONTRACT is the clock SEMANTICS (wall vs monotonic,
+        // seconds-as-float, ordering/range), NOT bit-identity. Mirrors
+        // `random`'s honest "raw read non-deterministic; only the contract
+        // is assertable" posture.
+        ("time", "time") => Some(EcoSig::from_values(
+            "__cobrust_time_time",
+            vec![],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("time", "monotonic") => Some(EcoSig::from_values(
+            "__cobrust_time_monotonic",
+            vec![],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("time", "perf_counter") => Some(EcoSig::from_values(
+            "__cobrust_time_perf_counter",
+            vec![],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        // `sleep` returns an i64 SENTINEL (CPython returns None) — discarded
+        // by the caller (`let _ = time.sleep(d)`), the dora `event.send_output`
+        // discard pattern. Takes one Float (seconds); a non-positive arg is a
+        // shim-side no-op.
+        ("time", "sleep") => Some(EcoSig::from_values(
+            "__cobrust_time_sleep",
+            vec![Ty::Float],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -3223,6 +3286,7 @@ pub fn is_ecosystem_module(name: &str) -> bool {
             | "math"
             | "re"
             | "random"
+            | "time"
     )
 }
 
@@ -3529,6 +3593,91 @@ mod tests {
             assert!(
                 lookup_module_fn("random", name).is_none(),
                 "random.{name} must be deferred (not yet shipped)"
+            );
+        }
+    }
+
+    // -- ADR-0087 time (timing + timestamps) manifest tests ------------
+
+    #[test]
+    fn time_is_a_known_ecosystem_module() {
+        assert!(is_ecosystem_module("time"));
+    }
+
+    #[test]
+    fn time_time_is_zero_arg_float_semantic() {
+        // `time.time() -> Float`, no parameters (a 0-arg scalar fn like
+        // `random.random`). Semantic tier (a wall clock is environment
+        // state — not reproducible, not bit-identical to CPython).
+        let sig =
+            lookup_module_fn("time", "time").unwrap_or_else(|| panic!("time.time in manifest"));
+        assert_eq!(sig.runtime_symbol, "__cobrust_time_time");
+        assert!(
+            value_tys(&sig.params).is_empty(),
+            "time.time takes NO arguments"
+        );
+        assert_eq!(
+            sig.ret,
+            Ty::Float,
+            "time.time returns Float (epoch seconds)"
+        );
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn time_monotonic_and_perf_counter_are_zero_arg_float_semantic() {
+        // Both `monotonic` and `perf_counter` are `[] -> Float`, reading
+        // the SAME process-relative `Instant` origin (ADR-0087 unifies
+        // them). Distinct runtime symbols, identical signature + tier.
+        for (name, sym) in [
+            ("monotonic", "__cobrust_time_monotonic"),
+            ("perf_counter", "__cobrust_time_perf_counter"),
+        ] {
+            let sig =
+                lookup_module_fn("time", name).unwrap_or_else(|| panic!("time.{name} in manifest"));
+            assert_eq!(sig.runtime_symbol, sym, "time.{name} retargets to {sym}");
+            assert!(
+                value_tys(&sig.params).is_empty(),
+                "time.{name} takes NO arguments"
+            );
+            assert_eq!(sig.ret, Ty::Float, "time.{name} returns Float (seconds)");
+            assert_eq!(sig.tier, PyCompatTier::Semantic);
+        }
+    }
+
+    #[test]
+    fn time_sleep_is_float_to_int_sentinel_semantic() {
+        // CPython `time.sleep` returns None; Cobrust returns an i64
+        // SENTINEL (discarded by the caller, the dora `send_output`
+        // pattern), so the manifest ret is `Ty::Int`, NOT a None form.
+        // Takes one Float (seconds); a non-positive arg is a shim no-op.
+        let sig =
+            lookup_module_fn("time", "sleep").unwrap_or_else(|| panic!("time.sleep in manifest"));
+        assert_eq!(sig.runtime_symbol, "__cobrust_time_sleep");
+        assert_eq!(
+            value_tys(&sig.params),
+            vec![Ty::Float],
+            "time.sleep takes one Float (seconds) arg"
+        );
+        assert_eq!(
+            sig.ret,
+            Ty::Int,
+            "time.sleep returns an i64 sentinel (CPython None -> discarded Int)"
+        );
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn time_unknown_fn_is_none() {
+        // Calendar / struct-time machinery (`strftime` / `gmtime` /
+        // `localtime` / `time_ns` / `process_time`) is DEFERRED
+        // (ADR-0087 §"Deferred"); they must resolve to None so the type
+        // checker surfaces a compile-time UnknownName (§2.5), NOT a
+        // false-green binding.
+        for name in ["strftime", "gmtime", "localtime", "time_ns", "process_time"] {
+            assert!(
+                lookup_module_fn("time", name).is_none(),
+                "time.{name} must be deferred (not yet shipped)"
             );
         }
     }

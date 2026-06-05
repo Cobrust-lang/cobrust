@@ -47,6 +47,11 @@
 //!   the scalar core of Python's `random` over a thread-local
 //!   `rand_pcg::Pcg64` module-global RNG (seed-reproducible;
 //!   `choice`/`shuffle`/`sample` deferred). `@py_compat(semantic)`.
+//! - [`time`] (ADR-0087) — `time` / `monotonic` / `perf_counter` /
+//!   `sleep`, the timing core of Python's `time` over std `SystemTime`
+//!   (wall clock) + a lazy-static `Instant` origin (monotonic;
+//!   `perf_counter` ≡ `monotonic`) + `thread::sleep` (negative-sleep
+//!   no-op guard). Clocks are environment state — `@py_compat(semantic)`.
 //! - [`json`] (v0.7.0 Z.5) — `dumps` / `loads` Python-`json`-compatible
 //!   encode/decode over `serde_json`. HYBRID surface per the v0.7.0
 //!   network-backend roadmap §4.1; `@py_compat(semantic)`.
@@ -123,6 +128,10 @@ pub mod random;
 pub mod re;
 pub mod runtime;
 pub mod string;
+// ADR-0087 — `import time` (timing + timestamps). Scalar clock reads +
+// a thread-suspend over std `SystemTime` / `Instant` / `thread::sleep`:
+// time / monotonic / perf_counter / sleep. `@py_compat(semantic)`.
+pub mod time;
 pub mod tool;
 
 // =====================================================================

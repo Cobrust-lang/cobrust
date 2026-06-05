@@ -3901,6 +3901,48 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0087: `import time` (timing + timestamps) C-ABI -----------
+        // The timing core of CPython's `time`, exported by
+        // `cobrust-stdlib/src/time.rs` (ALWAYS linked — the stdlib
+        // staticlib) over std `SystemTime` (wall clock) + a lazy-static
+        // `Instant` origin (monotonic) + `thread::sleep`. All scalar-in /
+        // scalar-out — the SIMPLEST shape (no Str/list buffer marshalling,
+        // like `random`); NO new MIR arm (the generic ecosystem-call path
+        // drives args + return off the `EcoSig`, codegen only declares
+        // these externs):
+        //
+        //   __cobrust_time_time() -> f64
+        //     — current Unix-epoch SECONDS (wall clock); 0-arg, the
+        //       `__cobrust_random_random` 0-arg precedent. The `_ecoret`
+        //       Float local at the call site receives it.
+        //   __cobrust_time_monotonic() -> f64
+        //     — process-relative seconds, non-decreasing (a lazy-static
+        //       `Instant`); same `() -> f64` shape as `time`.
+        //   __cobrust_time_perf_counter() -> f64
+        //     — the SAME high-res monotonic clock as `monotonic` (one
+        //       shared `START` Instant; ADR-0087 unifies them).
+        //   __cobrust_time_sleep(secs: f64) -> i64
+        //     — suspend the thread `secs` s; `secs <= 0.0` / NaN is a shim
+        //       NO-OP (guards the `Duration::from_secs_f64(neg)` panic).
+        //       Returns a DISCARDED i64 sentinel (CPython `sleep` returns
+        //       None; the `random.seed` / dora discard pattern). The
+        //       `(f64) -> i64` shape mirrors `__cobrust_random_seed` with a
+        //       Float arg (like `math.sqrt`'s f64 input).
+        let time_time_ty = f64_ty.fn_type(&[], false);
+        let time_monotonic_ty = f64_ty.fn_type(&[], false);
+        let time_perf_counter_ty = f64_ty.fn_type(&[], false);
+        let time_sleep_ty = i64_ty.fn_type(&[f64_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_time_time", time_time_ty, 0usize),
+            ("__cobrust_time_monotonic", time_monotonic_ty, 0),
+            ("__cobrust_time_perf_counter", time_perf_counter_ty, 0),
+            ("__cobrust_time_sleep", time_sleep_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.
