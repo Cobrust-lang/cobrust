@@ -3863,6 +3863,44 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0086: `import random` (pseudo-random sampling) C-ABI -------
+        // The scalar core of CPython's `random`, exported by
+        // `cobrust-stdlib/src/random.rs` (ALWAYS linked — the stdlib
+        // staticlib) over a thread-local `rand_pcg::Pcg64` module-global
+        // RNG. All scalar-in / scalar-out — the SIMPLEST shape (no Str/list
+        // buffer marshalling, unlike `re`); NO new MIR arm (the generic
+        // ecosystem-call path drives args + return off the `EcoSig`, codegen
+        // only declares these externs):
+        //
+        //   __cobrust_random_random() -> f64
+        //     — the FIRST 0-arg scalar stdlib fn; the f64 (LLVM `double`)
+        //       return mirrors `__cobrust_math_sqrt`, here with NO arg. The
+        //       `_ecoret` Float local at the call site receives it.
+        //   __cobrust_random_randint(a: i64, b: i64) -> i64
+        //     — INCLUSIVE [a, b]; the `(i64, i64) -> i64` shape mirrors the
+        //       `__cobrust_math_*_int` int-returning shims.
+        //   __cobrust_random_uniform(a: f64, b: f64) -> f64
+        //     — uniform in [a, b]; the `(f64, f64) -> f64` shape mirrors
+        //       `__cobrust_math_pow`.
+        //   __cobrust_random_seed(n: i64) -> i64
+        //     — re-seed; returns a DISCARDED i64 sentinel (CPython `seed`
+        //       returns None; the dora `event.send_output` discard pattern,
+        //       ADR-0086). The reseed side effect is the payload.
+        let random_random_ty = f64_ty.fn_type(&[], false);
+        let random_randint_ty = i64_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false);
+        let random_uniform_ty = f64_ty.fn_type(&[f64_ty.into(), f64_ty.into()], false);
+        let random_seed_ty = i64_ty.fn_type(&[i64_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_random_random", random_random_ty, 0usize),
+            ("__cobrust_random_randint", random_randint_ty, 2),
+            ("__cobrust_random_uniform", random_uniform_ty, 2),
+            ("__cobrust_random_seed", random_seed_ty, 1),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.

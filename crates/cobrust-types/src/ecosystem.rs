@@ -2181,6 +2181,62 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Bool,
             PyCompatTier::Semantic,
         )),
+        // -- ADR-0086: `import random` (pseudo-random sampling) ----------
+        // The scalar core of CPython's `random` — scalar-in / scalar-out,
+        // the SIMPLEST ecosystem-call shape (no Str/list buffer marshalling,
+        // unlike `re`). Backed by a thread-local `rand_pcg::Pcg64` MODULE-
+        // GLOBAL RNG (`cobrust-stdlib::random`), mirroring CPython's hidden
+        // module-level `Random` instance — distinct from `coil.random`'s
+        // explicit `Generator` HANDLE.
+        //
+        // Each row reuses a PROVEN scalar shape (NO new MIR / codegen arm —
+        // the generic ecosystem-call path drives args + return off this
+        // `EcoSig`; codegen only declares the externs):
+        //   random  []            -> Float — the FIRST 0-arg scalar stdlib
+        //     fn; the f64 return mirrors `math.sqrt`'s `_ecoret` Float.
+        //   randint [Int, Int]    -> Int   — INCLUSIVE [a, b] (CPython
+        //     randint(1,6) can return 6; the shim uses `gen_range(a..=b)`).
+        //   uniform [Float, Float]-> Float — uniform in [a, b].
+        //   seed    [Int]         -> Int   — re-seed; reproducible stream.
+        //     CPython returns None; we return a discarded i64 SENTINEL (the
+        //     dora `event.send_output` pattern), discarded by the caller
+        //     (`let _ = random.seed(n)`), avoiding the `Ty::None -> void`
+        //     C-ABI mismatch.
+        //
+        // TIER `Semantic` (ADR-0086 §"Divergence"): CPython's `random` uses
+        // the Mersenne Twister; Cobrust uses `Pcg64`. The two produce
+        // DIFFERENT streams for the same seed — Cobrust does NOT reproduce
+        // CPython's exact values. The CONTRACT is the DISTRIBUTION + Cobrust-
+        // internal seed-reproducibility (`seed(k); x; seed(k); y => x == y`,
+        // every host), NOT bit-identical agreement with CPython. Mirrors
+        // `coil.random`'s honest "distribution-level, not bit-identical vs
+        // numpy" posture.
+        ("random", "random") => Some(EcoSig::from_values(
+            "__cobrust_random_random",
+            vec![],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        ("random", "randint") => Some(EcoSig::from_values(
+            "__cobrust_random_randint",
+            vec![Ty::Int, Ty::Int],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
+        ("random", "uniform") => Some(EcoSig::from_values(
+            "__cobrust_random_uniform",
+            vec![Ty::Float, Ty::Float],
+            Ty::Float,
+            PyCompatTier::Semantic,
+        )),
+        // `seed` returns an i64 SENTINEL (CPython returns None) — discarded
+        // by the caller, the dora `event.send_output` discard pattern.
+        ("random", "seed") => Some(EcoSig::from_values(
+            "__cobrust_random_seed",
+            vec![Ty::Int],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -3166,6 +3222,7 @@ pub fn is_ecosystem_module(name: &str) -> bool {
             | "redis"
             | "math"
             | "re"
+            | "random"
     )
 }
 
@@ -3385,6 +3442,95 @@ mod tests {
         // A constant lookup on a non-math module never resolves (the
         // function is math-only by design).
         assert_eq!(lookup_module_const("coil", "pi"), None);
+    }
+
+    // -- ADR-0086 random (scalar PRNG stdlib) manifest tests ------------
+
+    #[test]
+    fn random_is_a_known_ecosystem_module() {
+        assert!(is_ecosystem_module("random"));
+    }
+
+    #[test]
+    fn random_random_is_zero_arg_float_semantic() {
+        // The FIRST 0-arg scalar stdlib fn: `random.random() -> Float`,
+        // no parameters. Semantic tier (Pcg64 != CPython's Mersenne
+        // Twister — distribution + seed-reproducibility, not exact values).
+        let sig = lookup_module_fn("random", "random")
+            .unwrap_or_else(|| panic!("random.random in manifest"));
+        assert_eq!(sig.runtime_symbol, "__cobrust_random_random");
+        assert!(
+            value_tys(&sig.params).is_empty(),
+            "random.random takes NO arguments"
+        );
+        assert_eq!(sig.ret, Ty::Float, "random.random returns Float");
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn random_randint_is_int_int_to_int_semantic() {
+        // `random.randint(a, b) -> Int`, INCLUSIVE [a, b] (the inclusivity
+        // lives in the shim's `gen_range(a..=b)`, asserted by the stdlib
+        // unit tests + the .cb e2e — the manifest only pins the types).
+        let sig = lookup_module_fn("random", "randint")
+            .unwrap_or_else(|| panic!("random.randint in manifest"));
+        assert_eq!(sig.runtime_symbol, "__cobrust_random_randint");
+        assert_eq!(
+            value_tys(&sig.params),
+            vec![Ty::Int, Ty::Int],
+            "random.randint takes two Int args"
+        );
+        assert_eq!(sig.ret, Ty::Int, "random.randint returns Int");
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn random_uniform_is_float_float_to_float_semantic() {
+        let sig = lookup_module_fn("random", "uniform")
+            .unwrap_or_else(|| panic!("random.uniform in manifest"));
+        assert_eq!(sig.runtime_symbol, "__cobrust_random_uniform");
+        assert_eq!(
+            value_tys(&sig.params),
+            vec![Ty::Float, Ty::Float],
+            "random.uniform takes two Float args"
+        );
+        assert_eq!(sig.ret, Ty::Float, "random.uniform returns Float");
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn random_seed_is_int_to_int_sentinel_semantic() {
+        // CPython `random.seed` returns None; Cobrust returns an i64
+        // SENTINEL (discarded by the caller, the dora `send_output`
+        // pattern), so the manifest ret is `Ty::Int`, NOT a None form.
+        let sig =
+            lookup_module_fn("random", "seed").unwrap_or_else(|| panic!("random.seed in manifest"));
+        assert_eq!(sig.runtime_symbol, "__cobrust_random_seed");
+        assert_eq!(
+            value_tys(&sig.params),
+            vec![Ty::Int],
+            "random.seed takes one Int (the seed) arg"
+        );
+        assert_eq!(
+            sig.ret,
+            Ty::Int,
+            "random.seed returns an i64 sentinel (CPython None -> discarded Int)"
+        );
+        assert_eq!(sig.tier, PyCompatTier::Semantic);
+    }
+
+    #[test]
+    fn random_unknown_fn_is_none() {
+        // `choice` / `shuffle` / `sample` are DEFERRED (list arg / list
+        // mutation — ADR-0086 §"Deferred"); they must resolve to None so
+        // the type checker surfaces a compile-time UnknownName (§2.5),
+        // NOT a false-green binding.
+        for name in ["choice", "shuffle", "sample", "randrange", "gauss"] {
+            assert!(
+                lookup_module_fn("random", name).is_none(),
+                "random.{name} must be deferred (not yet shipped)"
+            );
+        }
     }
 
     #[test]

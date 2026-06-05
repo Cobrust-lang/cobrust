@@ -1083,6 +1083,8 @@ dependencies = [
  "indexmap",
  "mimalloc",
  "proptest",
+ "rand 0.8.6",
+ "rand_pcg",
  "regex",
  "serde",
  "serde_json",

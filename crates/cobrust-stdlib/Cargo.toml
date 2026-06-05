@@ -43,6 +43,15 @@ indexmap = { workspace = true }
 # crate download); the regenerated Cargo.lock is staged WITH this Cargo.toml
 # per the F64 lesson (CI `--locked` rejects an unstaged lockfile).
 regex = "1"
+# ADR-0086 — `import random` PRNG backend. `rand` (the `Rng` /
+# `SeedableRng` traits + `from_entropy`) + `rand_pcg::Pcg64` (the portable
+# PCG64 generator), the SAME versions `cobrust-coil` pins for `coil.random`
+# (rand 0.8 + rand_pcg 0.3), so these are new dependency EDGES only — both
+# crates (and their transitive `getrandom`) are ALREADY in the workspace
+# lock via coil. The regenerated Cargo.lock is staged WITH this Cargo.toml
+# per the F64 lesson (CI `--locked` rejects an unstaged lockfile).
+rand = "0.8"
+rand_pcg = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

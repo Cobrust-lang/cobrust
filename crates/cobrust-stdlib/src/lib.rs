@@ -43,6 +43,10 @@
 //!   `regex`-crate-backed stateless subset of Python's `re` module
 //!   (str/list[str]/bool returns; Match-object `.group()` deferred).
 //!   `@py_compat(semantic)`.
+//! - [`random`] (ADR-0086) — `random` / `randint` / `uniform` / `seed`,
+//!   the scalar core of Python's `random` over a thread-local
+//!   `rand_pcg::Pcg64` module-global RNG (seed-reproducible;
+//!   `choice`/`shuffle`/`sample` deferred). `@py_compat(semantic)`.
 //! - [`json`] (v0.7.0 Z.5) — `dumps` / `loads` Python-`json`-compatible
 //!   encode/decode over `serde_json`. HYBRID surface per the v0.7.0
 //!   network-backend roadmap §4.1; `@py_compat(semantic)`.
@@ -111,6 +115,9 @@ pub mod json;
 pub mod math;
 pub mod panic;
 pub mod prompt;
+// ADR-0086 — `import random` (pseudo-random sampling). A thread-local
+// `rand_pcg::Pcg64` module-global RNG: random / randint / uniform / seed.
+pub mod random;
 // ADR-0084 — `import re` (regular expressions). The `regex`-crate-backed
 // stateless subset: sub / findall / match / search.
 pub mod re;
