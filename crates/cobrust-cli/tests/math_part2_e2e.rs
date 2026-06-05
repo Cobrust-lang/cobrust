@@ -12,8 +12,8 @@
 //!     **`int`** (NOT a float). Via the `__cobrust_math_*_int`
 //!     (`f64 -> i64`) shims, mirroring `coil.argmin`'s `Buffer -> i64`.
 //!     On a NEGATIVE input the three DIVERGE — the load-bearing test:
-//!       floor(-1.5) == -2 (toward −∞), ceil(-1.5) == -1 (toward +∞),
-//!       trunc(-1.5) == -1 (toward ZERO).
+//!     floor(-1.5) == -2 (toward −∞), ceil(-1.5) == -1 (toward +∞),
+//!     trunc(-1.5) == -1 (toward ZERO).
 //!   - `math.isnan` / `math.isinf` / `math.isfinite` — return `bool`,
 //!     via the `__cobrust_math_is*` (`f64 -> i1`) shims, mirroring
 //!     `coil.any` / `coil.all`. Asserted via the `if b:` idiom (the bool
