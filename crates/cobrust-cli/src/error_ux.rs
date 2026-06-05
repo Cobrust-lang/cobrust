@@ -1012,6 +1012,28 @@ impl From<TypeError> for UserError {
                     col,
                 )
             }
+            // ADR-0088 §3 — `len(x)` on a non-sized argument. The primary
+            // `msg` names the accepted sized-type set (str / list / dict),
+            // the §2.5-B FIX the LLM parses from stderr — NOT the
+            // pre-ADR-0088 misleading "expected Dict[?,?]".
+            E::LenArgNotSized {
+                actual,
+                span,
+                suggestion,
+            } => {
+                let (line, col) = span_to_line_col(span);
+                (
+                    format!(
+                        "`len(x)` needs a sized argument but got `{actual}`: \
+                         the free-function `len` accepts a `str`, a `list[T]`, or a \
+                         `dict[K, V]` (for a number use a comparison; `len` is not \
+                         defined on `{actual}`)"
+                    ),
+                    suggestion.map(str::to_owned),
+                    line,
+                    col,
+                )
+            }
         };
         Self::Type {
             file: PathBuf::from("<source>"),

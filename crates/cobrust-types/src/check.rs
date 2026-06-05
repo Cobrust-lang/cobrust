@@ -2939,6 +2939,80 @@ impl Ctx {
         Ok(())
     }
 
+    /// ADR-0088 §3 — Python-canonical free-function `len(x)` sized-type
+    /// dispatch.
+    ///
+    /// Returns `Some(Ty::Int)` when `callee` is the bare PRELUDE `len`
+    /// builtin applied to a single positional argument whose resolved
+    /// type is a SIZED type — `Str`, `List(_)`, or `Dict(_, _)` (the
+    /// three types that ship a `len` runtime symbol:
+    /// `__cobrust_str_len_src` / `__cobrust_list_len` /
+    /// `__cobrust_dict_len`, picked per arg-shape by the CLI
+    /// intrinsic-rewrite, ADR-0088 §4). The argument is synthesised +
+    /// resolved but NOT unified against the dict-only PRELUDE stub, so
+    /// `len("abc")` / `len([1,2,3])` type-check (the pre-ADR-0088 bug
+    /// rejected both with `expected Dict[?,?]`).
+    ///
+    /// `Tuple` / `Set` are DEFERRED (ADR-0088 §"Deferred"): a fixed-size
+    /// `Tuple` has no `len` runtime symbol, and while `Set` has
+    /// `__cobrust_set_len` at the ABI, no verified source-level set
+    /// construction path exists yet — adding either unverified would be
+    /// a fixture-vs-behaviour gap (F36). They fall through to the
+    /// non-sized error below until a follow-up wires their lowering.
+    ///
+    /// A NON-sized argument (`len(5)` / `len(3.0)` / `len(true)`) raises
+    /// [`TypeError::LenArgNotSized`] whose §2.5-B message names the
+    /// accepted sized-type set (NOT the misleading `expected Dict`).
+    ///
+    /// Returns `Ok(None)` when `callee` is NOT the PRELUDE `len`
+    /// (a user-shadowed `len`, a method-form `s.len()`, or any other
+    /// callee), so the generic call path handles it. The PRELUDE `len`
+    /// is identified by `name == "len"` AND its `DefId` being registered
+    /// in `poly_intrinsic_defs` (so a user fn named `len` is untouched).
+    /// Arity / keyword misuse (`len()`, `len(a, b)`, `len(x=…)`) also
+    /// returns `Ok(None)` so the generic path reports the canonical
+    /// `ArityMismatch` / keyword diagnostic.
+    fn try_synth_len_builtin(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Name(rn) = &callee.kind else {
+            return Ok(None);
+        };
+        // Only the PRELUDE `len` (a registered polymorphic intrinsic);
+        // a user-defined fn named `len` shadows the def_id and is left
+        // to the generic call path.
+        if rn.name != "len" || !self.poly_intrinsic_defs.contains(&rn.def_id) {
+            return Ok(None);
+        }
+        // Exactly one positional argument, no keyword/star args. Any
+        // other arity/shape defers to the generic path's ArityMismatch.
+        let [CallArg::Positional(arg)] = args else {
+            return Ok(None);
+        };
+        let arg_ty = self.synth_expr(arg)?;
+        let arg_ty = self.subst.apply(&arg_ty);
+        // SIZED types that ship a `len` runtime symbol (ADR-0088 §4).
+        // `Ref(T)` unwraps once so `len(&s)` (a borrowed sized value,
+        // the §2.5-A borrow shortcut) is accepted too.
+        let resolved = match &arg_ty {
+            Ty::Ref(inner) => (**inner).clone(),
+            other => other.clone(),
+        };
+        match resolved {
+            Ty::Str | Ty::List(_) | Ty::Dict(_, _) => Ok(Some(Ty::Int)),
+            other => Err(TypeError::LenArgNotSized {
+                actual: other,
+                span,
+                suggestion: Some(
+                    "`len` accepts str / list / dict; for a number use a comparison instead",
+                ),
+            }),
+        }
+    }
+
     fn synth_call(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
         // ADR-0072 §2/§3 — ecosystem-module call dispatch fires first so
         // `den.connect(...)` / `conn.execute(...)` / `cur.fetchall()`
@@ -2955,6 +3029,23 @@ impl Ctx {
         // `ArityMismatch` / `TypeMismatch` errors, or falls through
         // when the receiver type is not in the recognised set.
         if let Some(t) = self.try_synth_method_call(callee, args, span)? {
+            return Ok(t);
+        }
+        // ADR-0088 §3 — Python-canonical free-function `len(x)` sized-type
+        // special-case. MUST run BEFORE the generic PRELUDE-stub-unify
+        // below: the bare `len` PRELUDE stub is declared `len:
+        // dict[i64,i64] -> i64` (build.rs PRELUDE), and the generic path
+        // widens it via `instantiate_list_polymorphic` to
+        // `Dict[?, ?] -> i64`, so the arg unify at the `Ty::Fn` arm
+        // (`unify_call_arg(p, &at, …)` ~line 3015, with `p = Dict[?,?]`)
+        // rejects `len("abc")` / `len([1,2,3])` with the misleading
+        // `expected Dict[?,?], found str/List`. Intercepting here lets
+        // `len` accept any SIZED type (`str` / `list` / `dict`, the
+        // types with a `len` runtime symbol) and return `Ty::Int`
+        // without unifying the arg against `Dict`. The method-form
+        // `s.len()` / `xs.len()` (try_synth_method_call above) is the
+        // Rust spelling and stays unchanged. See ADR-0088.
+        if let Some(t) = self.try_synth_len_builtin(callee, args, span)? {
             return Ok(t);
         }
         let callee_ty = self.synth_expr(callee)?;

@@ -62,6 +62,12 @@ enum Cat {
     /// `route_validated` handler with the wrong arity (1-arg) or a non-class
     /// 2nd param is a callback-shape mismatch with a §2.5-B FIX.
     CallbackSignatureMismatch,
+    /// ADR-0088 §3 — `Cat::LenArgNotSized` pairs with
+    /// `TypeError::LenArgNotSized`. Used by i170/i171: the Python-canonical
+    /// `len(x)` free-function on a NON-sized arg (`len(5)` / `len(3.0)`) is a
+    /// compile-time error whose §2.5-B FIX names the accepted sized types
+    /// (str / list / dict) — NOT the misleading "expected Dict".
+    LenArgNotSized,
 }
 
 fn matches_cat(err: &TypeError, cat: Cat) -> bool {
@@ -86,6 +92,7 @@ fn matches_cat(err: &TypeError, cat: Cat) -> bool {
         (Cat::UnknownField, TypeError::UnknownField { .. }) => true,
         (Cat::UnsupportedRefinement, TypeError::UnsupportedRefinement { .. }) => true,
         (Cat::CallbackSignatureMismatch, TypeError::CallbackSignatureMismatch { .. }) => true,
+        (Cat::LenArgNotSized, TypeError::LenArgNotSized { .. }) => true,
         _ => false,
     }
 }
@@ -2850,5 +2857,59 @@ fn i169_class_field_let_explicit_mismatched_value_rejected() {
         "class-field-let-explicit-str-eq-int",
         "class C:\n    let z: str = 42\n\nfn main() -> i64:\n    return 0\n",
         Cat::TypeMismatch,
+    );
+}
+
+// ============================================================
+// ADR-0088 — `len(x)` on a NON-sized argument
+//
+// The Python-canonical free-function `len` accepts only SIZED types
+// (str / list / dict). A number / bool argument is a compile-time error
+// (§2.5-A). The §2.5-B FIX-text NAMES the accepted sized-type set and
+// must NOT carry the pre-ADR-0088 misleading "expected Dict". The inline
+// `fn len(d: dict[i64,i64]) -> i64` stub mirrors the PRELUDE shape so the
+// `try_synth_len_builtin` special-case fires.
+// ============================================================
+
+/// PRELUDE `len` stub prefix for the rejection corpus.
+const LEN_STUB_REJ: &str = "fn len(d: dict[i64, i64]) -> i64:\n    return 0\n";
+
+#[test]
+fn i170_len_of_int_rejected_with_sized_fix() {
+    // `len(5)` — an i64 is not sized. The message names the accepted
+    // sized types and does NOT say "expected Dict" (§2.5-B).
+    must_reject_with_msg(
+        "len-of-int",
+        &format!("{LEN_STUB_REJ}fn main() -> i64:\n    return len(5)\n"),
+        Cat::LenArgNotSized,
+        &["len", "sized", "str", "list", "dict"],
+    );
+}
+
+#[test]
+fn i171_len_of_float_rejected() {
+    // `len(3.0)` — an f64 is not sized.
+    must_reject_with_msg(
+        "len-of-float",
+        &format!("{LEN_STUB_REJ}fn f(x: f64) -> i64:\n    return len(x)\n"),
+        Cat::LenArgNotSized,
+        &["len", "sized"],
+    );
+}
+
+#[test]
+fn i172_len_of_int_error_does_not_mention_dict_expectation() {
+    // Explicit §2.5-B negative: the misleading pre-ADR-0088 "expected
+    // Dict[?,?]" diagnostic must NOT appear (it steered the LLM toward a
+    // dict). The corpus asserts the rendered Display has no "expected Dict".
+    let src = format!("{LEN_STUB_REJ}fn main() -> i64:\n    return len(5)\n");
+    let module = parse_str(&src, FileId::SYNTHETIC).expect("parse");
+    let mut sess = Session::new();
+    let hir = lower(&module, &mut sess).expect("lower");
+    let err = check(&hir).expect_err("len(5) must be rejected");
+    let msg = err.to_string();
+    assert!(
+        !msg.contains("expected Dict") && !msg.contains("expected `Dict"),
+        "§2.5-B: len(5) message must NOT say 'expected Dict'; got:\n{msg}"
     );
 }

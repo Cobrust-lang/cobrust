@@ -174,7 +174,10 @@ pub fn type_error_cb_fix_safety(err: &TypeErrorCb) -> FixSafetyCb {
         | UnknownField { .. }
         // ADR-0080 Phase-1b-ii — non-fixed refinement predicate; LocalEdit,
         // mirroring the Rust-side `UnsupportedRefinement` tier.
-        | UnsupportedRefinement { .. } => FixSafetyCb::LocalEdit,
+        | UnsupportedRefinement { .. }
+        // ADR-0088 §3 — `len(x)` on a non-sized arg; LocalEdit, mirroring
+        // the Rust-side `LenArgNotSized` tier (local rewrite of the arg).
+        | LenArgNotSized { .. } => FixSafetyCb::LocalEdit,
         ImplicitTruthiness { .. } | MutableDefault { .. } | NotHashable { .. } => {
             FixSafetyCb::BehaviorPreserving
         }

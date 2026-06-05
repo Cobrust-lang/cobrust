@@ -178,6 +178,10 @@ fn type_error_to_diagnostic_single(err: &TypeError, line_map: &LineMap) -> Diagn
         UnsupportedRefinement {
             span, suggestion, ..
         } => (*span, *suggestion, "unsupported-refinement"),
+        // ADR-0088 §3 — `len(x)` on a non-sized argument.
+        LenArgNotSized {
+            span, suggestion, ..
+        } => (*span, *suggestion, "len-arg-not-sized"),
         Multiple(_) => unreachable!("Multiple flattened by type_error_to_diagnostics"),
     };
     let range = span_to_lsp_range(&span, line_map);

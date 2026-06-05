@@ -319,4 +319,28 @@ pub enum TypeError {
         span: Span,
         suggestion: Option<&'static str>,
     },
+
+    /// ADR-0088 §3 — the Python-canonical free-function `len(x)` builtin
+    /// was applied to a value whose type is NOT sized. The SIZED types
+    /// `len` accepts (the types that ship with a `len` runtime symbol)
+    /// are `str` (`__cobrust_str_len_src`), `list[T]` (`__cobrust_list_len`),
+    /// and `dict[K, V]` (`__cobrust_dict_len`). Calling `len(5)` /
+    /// `len(3.0)` / `len(true)` is a compile-time error per §2.5-A.
+    ///
+    /// Per §2.5-B the message PRINTS THE FIX: it names the offending
+    /// argument type AND the exact accepted sized-type set, so the LLM
+    /// agent corrects the call on the next turn — *instead* of the
+    /// pre-ADR-0088 `type mismatch: expected Dict[?,?], found <T>`
+    /// diagnostic, whose "expected Dict" leaked the dict-only PRELUDE
+    /// stub and mislead the agent toward a dict (§2.5-B violation).
+    #[error(
+        "`len(x)` needs a sized argument but got `{actual}` at {span}: \
+         the free-function `len` accepts a `str`, a `list[T]`, or a `dict[K, V]` \
+         (for a number use a comparison; `len` is not defined on `{actual}`)"
+    )]
+    LenArgNotSized {
+        actual: Ty,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 }

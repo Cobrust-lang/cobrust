@@ -1844,19 +1844,54 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     args.push(d);
                 }
                 Kind::LenPoly => {
-                    // ADR-0050d Decision 5 — polymorphic `len(d)` builtin.
-                    // Dispatches to `__cobrust_dict_len` (Phase F.3 scope cap:
-                    // only Dict args; future Phase G extends to List/Str via
-                    // operand-shape sniffing). The dict shim is type-erased
-                    // over (K, V) — it reads `DictLayout.map.len()` regardless
-                    // of K/V tag, so a single symbol suffices.
+                    // ADR-0088 §4 — Python-canonical `len(x)` per-arg-shape
+                    // dispatch. The type-checker (ADR-0088 §3
+                    // `try_synth_len_builtin`) accepts any SIZED arg — `str`
+                    // / `list[T]` / `dict[K, V]` — and returns `i64`. Here at
+                    // MIR-rewrite time we pick the matching runtime symbol
+                    // from the arg's resolved `LocalDecl.ty` (mirrors the
+                    // `Kind::Print` monomorphization at line ~1505):
+                    //   Str       → __cobrust_str_len_src  (byte count; the
+                    //               SAME symbol the str method-form `s.len()`
+                    //               rewrites to via `str_len`, so the two
+                    //               agree — ADR-0088 §4).
+                    //   List[T]   → __cobrust_list_len     (type-erased over T)
+                    //   Dict[K,V] → __cobrust_dict_len     (type-erased over
+                    //               (K, V); reads `DictLayout.map.len()`).
+                    // A `Constant::Str` literal arg (`len("abc")`) is the Str
+                    // path. The `_` fallback keeps the historical dict symbol
+                    // (Decision-5 behaviour) for an unresolved call-return
+                    // local, which at runtime is a pointer — but a non-sized
+                    // arg can never reach here (the type-checker rejected it).
                     if args.len() != 1 {
                         return Err(IntrinsicError::PrintArgUnsupported {
                             found: format!("len: expected 1 arg, got {}", args.len()),
                         });
                     }
+                    // Resolve the argument's effective type. `Ref(T)` unwraps
+                    // once so `len(&s)` routes by the inner sized type.
+                    let effective_ty: Option<Ty> = match &args[0] {
+                        Operand::Constant(Constant::Str(_)) => Some(Ty::Str),
+                        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                            local_ty.get(&p.local.0).map(|t| match t {
+                                Ty::Ref(inner) => (**inner).clone(),
+                                other => other.clone(),
+                            })
+                        }
+                        _ => None,
+                    };
+                    let symbol = match effective_ty {
+                        Some(Ty::Str) => STR_LEN_RUNTIME_SYMBOL,
+                        Some(Ty::List(_)) => LIST_LEN_RUNTIME_SYMBOL,
+                        // Dict (or any unresolved/other local) keeps the
+                        // historical dict-len symbol — the type-checker
+                        // guarantees the arg is a sized type, and Dict is the
+                        // only sized type whose local may surface as `Ty::None`
+                        // (a dict-returning call-return) at this tier.
+                        _ => "__cobrust_dict_len",
+                    };
                     let arg = args[0].clone();
-                    *func = Operand::Constant(Constant::Str("__cobrust_dict_len".to_string()));
+                    *func = Operand::Constant(Constant::Str(symbol.to_string()));
                     args.clear();
                     args.push(arg);
                 }

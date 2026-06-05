@@ -193,6 +193,37 @@ fn test_display_unknown_name() {
 }
 
 #[test]
+fn test_display_len_arg_not_sized() {
+    // Anchor: error_display_parity.rs::test_display_len_arg_not_sized
+    //
+    // ADR-0088 §3 — `len(x)` on a non-sized arg. The Rust side renders
+    // the `actual: Ty` payload (`Ty::Int` -> `i64`); the cb side renders
+    // the convention handle 0 -> `i64`. The §2.5-B FIX-text (the accepted
+    // sized-type set) must be byte-identical across the two impls.
+    let span = dummy_span();
+    let rust_err = TypeError::LenArgNotSized {
+        actual: Ty::Int,
+        span,
+        suggestion: None,
+    };
+    let cb_err = TypeErrorCb::LenArgNotSized {
+        actual: 0,
+        span,
+        suggestion: None,
+    };
+    let rendered = format!("{rust_err}");
+    assert_eq!(
+        rendered,
+        format!("{cb_err}"),
+        "LenArgNotSized Display must be byte-equal"
+    );
+    // The §2.5-B FIX names the accepted sized types and must NOT carry
+    // the misleading "expected Dict".
+    assert!(rendered.contains("str") && rendered.contains("list") && rendered.contains("dict"));
+    assert!(!rendered.contains("expected Dict"));
+}
+
+#[test]
 
 fn test_display_arity_mismatch() {
     let span = dummy_span();
@@ -355,6 +386,7 @@ impl SuggestionText for TypeError {
             TypeError::CallbackSignatureMismatch { suggestion, .. } => suggestion.as_deref(),
             TypeError::UnknownField { suggestion, .. } => suggestion.as_deref(),
             TypeError::UnsupportedRefinement { suggestion, .. } => suggestion.as_deref(),
+            TypeError::LenArgNotSized { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }
@@ -391,6 +423,7 @@ impl SuggestionText for TypeErrorCb {
             TypeErrorCb::CallbackSignatureMismatch { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::UnknownField { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::UnsupportedRefinement { suggestion, .. } => suggestion.as_deref(),
+            TypeErrorCb::LenArgNotSized { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }

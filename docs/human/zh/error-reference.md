@@ -247,6 +247,43 @@ class CreateScore:
 
 ---
 
+### 示例 8 —— 对非可测长类型调用 `len(x)`
+
+Python 风格的自由函数 `len(x)` 可作用于任何 **可测长(sized)** 值 —— `str`、
+`list[T]` 或 `dict[K, V]` —— 并返回 `i64`:
+
+```cobrust
+let n1: i64 = len("hello")     # 5
+let n2: i64 = len([1, 2, 3])   # 3
+let n3: i64 = len(d)           # dict 的条目数
+```
+
+对数字(或任何非可测长值)调用 `len` 是编译期错误,错误信息会列出接受的类型 ——
+它不会再把你误导向 dict(ADR-0088 的 §2.5-B 修复):
+
+```
+error[Type]: `len(x)` needs a sized argument but got `i64`: the free-function
+`len` accepts a `str`, a `list[T]`, or a `dict[K, V]` (for a number use a
+comparison; `len` is not defined on `i64`)
+  --> src/main.cb:2:18
+```
+
+```cobrust
+let bad = len(5)        # 错误 —— i64 不是可测长类型
+
+# 修复:数字用比较;len 作用于可测长值。
+let xs: list[i64] = [1, 2, 3]
+let ok = len(xs)        # 3
+```
+
+Rust 风格的方法形式 `s.len()` / `xs.len()` 同样可用,且与 `len(s)` / `len(xs)`
+逐字节一致。
+
+**可能的修复:** 给 `len` 传一个 `str` / `list` / `dict`;对数字则直接比较
+(`x >= 0`)而非取其长度。
+
+---
+
 ## 运行时错误（Runtime）
 
 **看到 `error[Runtime]` 时**，程序本身 panic 了，或者
@@ -300,6 +337,7 @@ error[Internal]: CraneliftError: inst441 has type i64, expected i8
 | `if x:` 其中 x 是 i64 | `Type` | 2 | 改写为 `if x != 0:` |
 | 表达式中有 `undefined_name` | `Type` | 2 | 用 `let` 声明 |
 | 类实例上访问 `s.typo` | `Type` | 2 | 使用已声明字段(错误消息会列出) |
+| 对非可测长值调用 `len(5)` | `Type` | 2 | 传 `str` / `list` / `dict`;数字直接比较 |
 | 程序在运行时 panic | `Runtime` | 4 | 调试程序逻辑 |
 | Cranelift / 链接器错误 | `Internal` | 3 | 运行 `cobrust report-bug` |
 
@@ -378,8 +416,9 @@ LLM 友好的。
 
 ### 覆盖的错误类型
 
-- `cobrust_types::TypeError` — 24 个变体（每个 S 类变体都携带
-  `Some(...)`；如 `Multiple` 这样的 N 类变体携带 `None`）。
+- `cobrust_types::TypeError` — 31 个变体（每个 S 类变体都携带
+  `Some(...)`；如 `Multiple` 这样的 N 类变体携带 `None`）。包含
+  `LenArgNotSized`（ADR-0088）—— 对非可测长值调用 `len(x)`。
 - `cobrust_mir::MirError` — 10 个变体（use-after-move、borrow 冲
   突、drop-schedule 违反）。
 - `cobrust_hir::LoweringError` — 6 个变体（未知名称、被弃用功

@@ -304,6 +304,17 @@ pub enum TypeErrorCb {
         suggestion: Option<String>,
     },
 
+    /// ADR-0088 §3 — the Python-canonical `len(x)` free-function applied
+    /// to a non-sized argument. Mirrors `TypeError::LenArgNotSized {
+    /// actual: Ty, span, suggestion }`; the `actual` Ty payload is
+    /// encoded as the dense-pack `i64` arena handle (per §6, like
+    /// `ImplicitTruthiness`) so the canonical key matches the Rust side.
+    LenArgNotSized {
+        actual: i64,
+        span: Span,
+        suggestion: Option<String>,
+    },
+
     /// Composite error container — flat list of errors.
     ///
     /// ADR-0055b §3: `Multiple(list[TypeError])` — the only recursive
@@ -586,6 +597,17 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             span: *span,
             suggestion: opt_string(*suggestion),
         },
+        // ADR-0088 §3 mirror — single `actual` Ty payload (i64 handle).
+        TypeError::LenArgNotSized {
+            span, suggestion, ..
+        } => {
+            let actual = i64::from(arena.fresh_ty_payload_id());
+            TypeErrorCb::LenArgNotSized {
+                actual,
+                span: *span,
+                suggestion: opt_string(*suggestion),
+            }
+        }
     }
 }
 
@@ -636,6 +658,8 @@ impl Canonicalize for TypeErrorCb {
             | TypeErrorCb::NotCallable { .. }
             | TypeErrorCb::NotIndexable { .. }
             | TypeErrorCb::NotIterable { .. }
+            // ADR-0088 §3 mirror — single `actual` Ty payload.
+            | TypeErrorCb::LenArgNotSized { .. }
             | TypeErrorCb::NotHashable { .. } => {
                 let a = arena.fresh_ty_payload_id();
                 vec![CanonicalKey::node(
@@ -932,6 +956,21 @@ impl std::fmt::Display for TypeErrorCb {
                      or a str pattern `pattern(self, \"<regex>\")`"
                 )
             }
+            // ADR-0088 §3 — byte-mirror of the Rust `#[error]` message.
+            // The accepted sized-type set is the §2.5-B FIX; `actual`
+            // renders twice (matching the Rust Display) via the
+            // convention-based handle→Ty renderer.
+            TypeErrorCb::LenArgNotSized { actual, span, .. } => {
+                write!(
+                    f,
+                    "`len(x)` needs a sized argument but got `{}` at {span}: \
+                     the free-function `len` accepts a `str`, a `list[T]`, or a \
+                     `dict[K, V]` (for a number use a comparison; `len` is not \
+                     defined on `{}`)",
+                    handle_to_ty_display(*actual),
+                    handle_to_ty_display(*actual)
+                )
+            }
         }
     }
 }
@@ -1005,5 +1044,7 @@ pub fn type_error_cb_variant_name(err: &TypeErrorCb) -> &'static str {
         TypeErrorCb::CallbackSignatureMismatch { .. } => "CallbackSignatureMismatch",
         TypeErrorCb::UnknownField { .. } => "UnknownField",
         TypeErrorCb::UnsupportedRefinement { .. } => "UnsupportedRefinement",
+        // ADR-0088 §3 — `len(x)` on a non-sized argument.
+        TypeErrorCb::LenArgNotSized { .. } => "LenArgNotSized",
     }
 }

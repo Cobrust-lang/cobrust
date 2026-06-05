@@ -3275,3 +3275,64 @@ fn w214_route_validated_float_body_accepts() {
         "import pit\nclass Reading:\n    name: str\n    ratio: f64 where 0.0 <= self and self <= 1.0\nfn submit(req: pit.Request, body: Reading) -> pit.Response:\n    return pit.text_response(201, \"ok\")\nfn main() -> i64:\n    let app = pit.App()\n    let _ = app.route_validated(\"POST\", \"/readings\", submit)\n    return 0\n",
     );
 }
+
+// ---- ADR-0088 — Python-canonical free-function `len(x)` on any SIZED
+// type (str / list / dict). The inline `fn len(d: dict[i64,i64]) -> i64`
+// stub mirrors the PRELUDE shape so the type-checker registers it in
+// `poly_intrinsic_defs` and the `try_synth_len_builtin` special-case
+// fires (the §2.5 fix). Pre-ADR-0088 `len("..")` / `len(list)` were
+// rejected with `expected Dict[?,?]`. ----
+
+/// The PRELUDE `len` stub prefix, prepended to each acceptance program.
+const LEN_STUB: &str = "fn len(d: dict[i64, i64]) -> i64:\n    return 0\n";
+
+#[test]
+fn w215_len_of_str_literal_accepts() {
+    must_accept(
+        "len-str-literal",
+        &format!("{LEN_STUB}fn main() -> i64:\n    return len(\"abc\")\n"),
+    );
+}
+
+#[test]
+fn w216_len_of_str_param_accepts() {
+    must_accept(
+        "len-str-param",
+        &format!("{LEN_STUB}fn f(s: str) -> i64:\n    return len(s)\n"),
+    );
+}
+
+#[test]
+fn w217_len_of_list_i64_accepts() {
+    must_accept(
+        "len-list-i64",
+        &format!("{LEN_STUB}fn f(xs: list[i64]) -> i64:\n    return len(xs)\n"),
+    );
+}
+
+#[test]
+fn w218_len_of_list_str_accepts() {
+    // The element type does not matter — `len` is type-erased over it.
+    must_accept(
+        "len-list-str",
+        &format!("{LEN_STUB}fn f(xs: list[str]) -> i64:\n    return len(xs)\n"),
+    );
+}
+
+#[test]
+fn w219_len_of_dict_accepts_regression() {
+    // The original dict-only path must keep type-checking (regression).
+    must_accept(
+        "len-dict",
+        &format!("{LEN_STUB}fn f(d: dict[i64, i64]) -> i64:\n    return len(d)\n"),
+    );
+}
+
+#[test]
+fn w220_len_of_borrowed_str_accepts() {
+    // `len(&s)` — the §2.5-A borrow shortcut on a sized value.
+    must_accept(
+        "len-borrowed-str",
+        &format!("{LEN_STUB}fn f(s: str) -> i64:\n    return len(&s)\n"),
+    );
+}

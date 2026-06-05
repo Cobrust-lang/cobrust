@@ -367,6 +367,9 @@ impl Canonicalize for TypeError {
             | TypeError::NotCallable { .. }
             | TypeError::NotIndexable { .. }
             | TypeError::NotIterable { .. }
+            // ADR-0088 §3 — `LenArgNotSized` carries a single `actual: Ty`
+            // payload, the same shape as the truthiness/not-callable group.
+            | TypeError::LenArgNotSized { .. }
             | TypeError::NotHashable { .. } => {
                 let a = arena.fresh_ty_payload_id();
                 vec![CanonicalKey::node(
@@ -587,6 +590,8 @@ pub fn type_error_variant_name(err: &TypeError) -> &'static str {
         TypeError::UnknownField { .. } => "UnknownField",
         // ADR-0080 Phase-1b-ii — non-fixed refinement-predicate variant.
         TypeError::UnsupportedRefinement { .. } => "UnsupportedRefinement",
+        // ADR-0088 §3 — `len(x)` on a non-sized argument.
+        TypeError::LenArgNotSized { .. } => "LenArgNotSized",
     }
 }
 

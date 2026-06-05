@@ -178,7 +178,10 @@ pub fn type_error_suggestion_text(err: &TypeError) -> Option<&'static str> {
         | UnknownField { suggestion, .. }
         // ADR-0080 Phase-1b-ii — non-fixed-grammar refinement; the fix
         // (the accepted forms) is in the Display message + this hint.
-        | UnsupportedRefinement { suggestion, .. } => *suggestion,
+        | UnsupportedRefinement { suggestion, .. }
+        // ADR-0088 §3 — `len(x)` on a non-sized arg; the accepted
+        // sized-type set is in the Display message + this hint.
+        | LenArgNotSized { suggestion, .. } => *suggestion,
         Multiple(_) => None,
     }
 }
@@ -247,6 +250,10 @@ pub fn type_error_fix_safety(err: &TypeError) -> FixSafety {
         // local rewrite of the `where`-clause into the accepted fixed
         // grammar (or removing it). No cross-line semantics carry-over.
         UnsupportedRefinement { .. } => FixSafety::LocalEdit,
+        // ADR-0088 §3 — `len(x)` on a non-sized arg. Fix is a local
+        // rewrite of the argument (use a sized value) or the call (use
+        // a comparison for a number). No cross-line semantics carry-over.
+        LenArgNotSized { .. } => FixSafety::LocalEdit,
         // Multiple — children carry their own tiers; the aggregate has no
         // singular safety classification.
         Multiple(_) => FixSafety::RequiresHumanReview,

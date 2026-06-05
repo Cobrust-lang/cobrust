@@ -252,6 +252,44 @@ float-range on `f64`, a `len(self)` bound or a `pattern(self, …)` on `str`).
 
 ---
 
+### Example 8 — `len(x)` on a non-sized type
+
+The Python-canonical free-function `len(x)` works on any **sized** value — a
+`str`, a `list[T]`, or a `dict[K, V]` — and returns an `i64`:
+
+```cobrust
+let n1: i64 = len("hello")     # 5
+let n2: i64 = len([1, 2, 3])   # 3
+let n3: i64 = len(d)           # entry count for a dict
+```
+
+Calling `len` on a number (or any non-sized value) is a compile-time error
+whose message names the accepted types — it does **not** mislead you toward a
+dict (an ADR-0088 §2.5-B fix):
+
+```
+error[Type]: `len(x)` needs a sized argument but got `i64`: the free-function
+`len` accepts a `str`, a `list[T]`, or a `dict[K, V]` (for a number use a
+comparison; `len` is not defined on `i64`)
+  --> src/main.cb:2:18
+```
+
+```cobrust
+let bad = len(5)        # ERROR — i64 is not sized
+
+# Fix: use a comparison for a number; use len on a sized value.
+let xs: list[i64] = [1, 2, 3]
+let ok = len(xs)        # 3
+```
+
+The Rust-style method-form `s.len()` / `xs.len()` also works and agrees with
+`len(s)` / `len(xs)` byte-for-byte.
+
+**Likely fix:** pass a `str` / `list` / `dict` to `len`; for a number, compare
+it directly (`x >= 0`) instead of taking its length.
+
+---
+
 ## Runtime errors
 
 **When you see `error[Runtime]`**, the program itself panicked or the
@@ -306,6 +344,7 @@ with a `cobrust report-bug` hint instead of the raw IR dump.
 | `if x:` where x is i64 | `Type` | 2 | Write `if x != 0:` |
 | `undefined_name` in expression | `Type` | 2 | Declare with `let` |
 | `s.typo` on a class instance | `Type` | 2 | Use a declared field (the error lists them) |
+| `len(5)` on a non-sized value | `Type` | 2 | Pass a `str` / `list` / `dict`; compare numbers directly |
 | Program panics at runtime | `Runtime` | 4 | Debug program logic |
 | Cranelift / linker failure | `Internal` | 3 | Run `cobrust report-bug` |
 
@@ -387,9 +426,10 @@ variant. The fix path is reproducible, structured, and LLM-friendly.
 
 ### Covered error types
 
-- `cobrust_types::TypeError` — 24 variants (every S-class variant
+- `cobrust_types::TypeError` — 31 variants (every S-class variant
   carries `Some(...)`; class-N variants such as `Multiple` carry
-  `None`).
+  `None`). Includes `LenArgNotSized` (ADR-0088) — `len(x)` on a
+  non-sized value.
 - `cobrust_mir::MirError` — 10 variants (use-after-move, borrow
   conflicts, drop-schedule violations).
 - `cobrust_hir::LoweringError` — 6 variants (unknown name, dropped
