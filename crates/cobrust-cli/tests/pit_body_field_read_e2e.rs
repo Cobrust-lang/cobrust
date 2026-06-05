@@ -1,53 +1,54 @@
-//! ADR-0081 Phase-1b — validated-body `body.field` RUNTIME READ, end-to-end.
+//! ADR-0081 validated-body `body.field` RUNTIME READ, end-to-end.
 //!
-//! TEST-FIRST (ADSD): this corpus is written RED, BEFORE the impl. At HEAD
-//! `984872e` (ADR-0081 Phase-1a `json_response` just landed) the surface it
-//! exercises *compiles* but the runtime read is a NO-OP STUB, so the
-//! behavioural assertions FAIL:
+//! STATUS (Phase-1b SHIPPED + Phase-2 SHIPPED): the runtime read is LIVE.
+//! `body.<i64|str>` (Phase-1b), `body.<f64|bool>` (Phase-2), and the NESTED
+//! chain `body.inner.x` / `body.mid.leaf.v` (Phase-2 nested) all read the
+//! REAL validated value, OBSERVABLE on the wire (the handler RESPONSE flips
+//! with the read value). This corpus, written TEST-FIRST and now GREEN,
+//! pins that behaviour against regression.
 //!
-//!   * a handler that does `let r: i64 = body.rank` and branches on `r`
-//!     returns the SAME branch for `rank:50` AND `rank:10` — because
-//!     `body.rank` does NOT read the real validated value. The MIR `Attr`
-//!     rvalue arm (`lower.rs:1445-1477`) routes a NON-handle base (a user
-//!     body class id `< ECO_ADT_BASE`, so `lookup_handle_attr` returns
-//!     `None`) into the placeholder `Projection::Field(0)` that DISCARDS
-//!     the field name (`let _ = name;`, `lower.rs:1476`); codegen's
-//!     `lower_place_load` has no `Projection::Field` arm at all
-//!     (`llvm_backend.rs:4435`), so `Field(_)` falls into the bare-local
-//!     stub-load `else` (`llvm_backend.rs:4564-4573`). The typed surface is
-//!     real (`body.rank` type-checks against `adt_fields`, ADR-0080), but
-//!     the runtime read loads the wrong slot.
-//!   * `body.name` (str) reads an empty/garbage `Str`, not the validated
-//!     `"hello"`.
+//! ## What "real read" means (the load-bearing assertion shape)
 //!
-//! RED EVIDENCE captured at `984872e` (manual probe, recorded in the
-//! dispatch report, reproduced by the assertions below):
-//!   POST {name:a,rank:50}  -> 200 "high"   (a correct impl would ALSO say "high" — coincidence)
-//!   POST {name:a,rank:10}  -> 200 "high"   (WRONG: a correct impl reads rank=10 -> "low")
-//!   POST {name:hello,...}  -> 200 ""        (WRONG: a correct impl echoes "hello")
-//! i.e. the branch is CONSTANT regardless of `body.rank`, and the str read
-//! is empty — proving `body.rank` / `body.name` are not read at runtime.
+//! Each read test drives ONE handler/route whose RESPONSE DEPENDS on the
+//! read value, then issues the SAME request to that route differing ONLY in
+//! the value of the field under test, and asserts the response FLIPS. A
+//! stub-load (the pre-impl `Projection::Field(0)` that discards the field
+//! name) makes the branch CONSTANT, so it CANNOT produce both arms — the
+//! flip is the proof the value was genuinely read at runtime.
 //!
-//! The feature this corpus pins (ADR-0081 §2 Q2/Q4/Q5, §5.2, §6 Phase-1
-//! items 2+3):
-//!   * 2 typed accessor shims `__cobrust_pit_body_get_i64` /
-//!     `__cobrust_pit_body_get_str`, cloned bit-for-bit from the
-//!     `(ptr,ptr)->ptr` `path_param` template (`cabi.rs:806`): borrow the
-//!     boxed `serde_json::Value` the validator left (`cabi.rs:464`), do a
-//!     typed get (`v.get(name).and_then(as_i64)` — NOT `as_f64`-truncate,
-//!     footgun #3), `alloc_str_buffer` strings;
-//!   * the NEW checker->MIR registration channel — `TypedModule
+//! HISTORICAL RED (captured at HEAD `984872e`, before Phase-1b landed — kept
+//! for provenance; the assertions below are now GREEN):
+//!   POST {name:a,rank:50}  -> 200 "high"   (correct + observed)
+//!   POST {name:a,rank:10}  -> 200 "high"   (WRONG then: a real read says "low")
+//!   POST {name:hello,...}  -> 200 ""        (WRONG then: a real read echoes "hello")
+//! i.e. the branch was CONSTANT and the str read empty — the stub. The
+//! shipped impl makes the branch flip ("high"/"low") and echoes "hello".
+//!
+//! The feature this corpus pins (ADR-0081 §2 Q2/Q4/Q5, §5.2, §6 Phase-1 +
+//! Phase-2):
+//!   * the typed accessor shims `__cobrust_pit_body_get_{i64,str}`
+//!     (Phase-1b) + `__cobrust_pit_body_get_{f64,bool,nested}` (Phase-2),
+//!     cloned from the `(ptr,ptr)->ret` `path_param` template (`cabi.rs`):
+//!     borrow the boxed `serde_json::Value` the validator left, do a typed
+//!     `v.get(name).and_then(as_{i64,str,f64,bool})` (NO coercion — the i64
+//!     shim deliberately does NOT widen via `as_f64`, footgun #3; the f64
+//!     shim reads `as_f64` of a DECLARED-f64 field; the bool shim is strict
+//!     `as_bool`). The NESTED shim returns the BORROWED interior `&Value`
+//!     for the nested object (no alloc/free — it lives in the parent box the
+//!     trampoline frees once, `cabi.rs:530`);
+//!   * the checker->MIR registration channel — `TypedModule
 //!     .validated_handlers: HashMap<DefId, (usize, AdtId)>` populated in
-//!     `check_eco_sig` + a NEW `LocalDecl.validated_body_of: Option<AdtId>`
+//!     `check_eco_sig` + the `LocalDecl.validated_body_of: Option<AdtId>`
 //!     mark set in MIR when lowering a registered handler's body param;
 //!   * the REGISTRATION-DRIVEN MIR `Attr` sub-arm (Q4): the serde-accessor
-//!     retarget fires ONLY when the base resolves to a local carrying
+//!     retarget fires ONLY when the base resolves (RECURSIVELY for nesting,
+//!     via `resolve_validated_body_base`) to a local carrying
 //!     `validated_body_of == Some(id)` AND the field is in that class's
-//!     `adt_fields` — NEVER on `Ty::Adt`-with-a-field-table alone. The
-//!     field-name `Str` is COMPILER-SYNTHESISED (footgun #1), passed via
-//!     the existing borrowed-receiver `emit_ecosystem_call`
-//!     (`lower.rs:1457`), and MIR names a SYMBOL + a `Ty`, never serde / a
-//!     JSON key (the §2-Q5 swappable seam).
+//!     `adt_fields` — NEVER on `Ty::Adt`-with-a-field-table alone. A nested
+//!     read re-marks its result temp `validated_body_of = Some(nested_adt)`
+//!     so a further `.field` recurses. The field-name `Str` is
+//!     COMPILER-SYNTHESISED (footgun #1), and MIR names a SYMBOL + a `Ty`,
+//!     never serde / a JSON key (the §2-Q5 swappable seam).
 //!
 //! Harness: mirrors `pit_json_response_e2e.rs` / `pit_validated_body_e2e.rs`
 //! EXACTLY — compile a `.cb` source to an exe, pick an ephemeral free port
@@ -62,9 +63,9 @@
 //! + branches/echoes + `app.route_validated(...)` + `app.run(...)`
 //!   → cobrust-frontend parse (`class` typed-field body + `where`-clause + `body.field`)
 //!   → cobrust-types check (body.field typed against adt_fields; validated_handlers registry — NEW)
-//!   → cobrust-mir (LocalDecl.validated_body_of mark — NEW; registration-gated Attr sub-arm — the RED point)
-//!   → cobrust-codegen (body_get externs `(ptr,ptr)->{i64|ptr}`)
-//!   → cobrust-pit C-ABI shims `__cobrust_pit_body_get_{i64,str}` (typed serde get over the boxed Value)
+//!   → cobrust-mir (LocalDecl.validated_body_of mark; registration-gated Attr sub-arm; recursive base resolve for nesting)
+//!   → cobrust-codegen (body_get externs `(ptr,ptr)->{i64|f64|i1|ptr}`)
+//!   → cobrust-pit C-ABI shims `__cobrust_pit_body_get_{i64,str,f64,bool,nested}` (typed serde get over the boxed Value)
 //!   → real HTTP socket bound by the compiled .cb binary
 //!   → reqwest::blocking client POSTs bodies; the RESPONSE depends on the READ value
 //! ```
@@ -678,5 +679,469 @@ fn test_no_ub_non_registered_param_check_is_well_defined() {
         "`cobrust check` on the no-UB negative must NOT panic / ICE — a \
          non-registered `b.rank` is either accepted (deferred stub) or a CLEAN \
          diagnostic, never an unhandled crash; combined output:\n{combined}"
+    );
+}
+
+// =====================================================================
+// (3) ADR-0081 Phase-2 — `f64` + `bool` validated-body field READs, live.
+//
+// Same "real read = the branch flips with the input" shape as (1), now for
+// the Phase-2 scalar types:
+//   * `body.<f64-field>` reads via `__cobrust_pit_body_get_f64` (serde
+//     `as_f64`). ratio=0.7 -> "high-ratio", ratio=0.2 -> "low-ratio".
+//   * `body.<bool-field>` reads via `__cobrust_pit_body_get_bool` (serde
+//     `as_bool`, the LLVM `i1` ABI — the `re.match` precedent). active=true
+//     -> "active", active=false -> "inactive".
+// A stub-load makes EACH branch constant, so it cannot produce BOTH arms.
+// =====================================================================
+
+/// One server, two routes: `/ratio` BRANCHES on the f64 `body.ratio`, and
+/// `/active` BRANCHES on the bool `body.active`. The body carries BOTH a
+/// refined f64 (`ratio: f64 where 0.0 <= self <= 1.0`, mirroring
+/// `pit_float_refinement_e2e.rs`) and a bool field, so the program also
+/// proves the f64+bool fields COEXIST in one validated body.
+fn scalar_read_program(port: u16) -> String {
+    format!(
+        concat!(
+            "import pit\n",
+            "\n",
+            "class Reading:\n",
+            "    name: str\n",
+            // FLOAT VALUE-RANGE refinement (the Phase-3a float-refinement
+            // shape), READ at runtime by `/ratio`.
+            "    ratio: f64 where 0.0 <= self and self <= 1.0\n",
+            // BOOL field, READ at runtime by `/active`.
+            "    active: bool\n",
+            "\n",
+            // The f64 read under test: response DEPENDS on `body.ratio`.
+            "fn check_ratio(req: pit.Request, body: Reading) -> pit.Response:\n",
+            "    let r: f64 = body.ratio\n",
+            "    if r >= 0.5:\n",
+            "        return pit.text_response(200, \"high-ratio\")\n",
+            "    return pit.text_response(200, \"low-ratio\")\n",
+            "\n",
+            // The bool read under test: response DEPENDS on `body.active`.
+            // `if a:` requires `a: bool` (CLAUDE.md §2.2 — no implicit
+            // truthiness), so this also pins that the bool read lands in a
+            // real `Bool` local usable as a condition.
+            "fn check_active(req: pit.Request, body: Reading) -> pit.Response:\n",
+            "    let a: bool = body.active\n",
+            "    if a:\n",
+            "        return pit.text_response(200, \"active\")\n",
+            "    return pit.text_response(200, \"inactive\")\n",
+            "\n",
+            "fn main() -> i64:\n",
+            "    let app = pit.App()\n",
+            "    let _ = app.route_validated(\"POST\", \"/ratio\", check_ratio)\n",
+            "    let _ = app.route_validated(\"POST\", \"/active\", check_active)\n",
+            "    let _exit = app.run(\"127.0.0.1\", {port})\n",
+            "    return 0\n",
+        ),
+        port = port,
+    )
+}
+
+#[test]
+fn test_e2e_body_field_read_f64_and_bool_branches() {
+    let port = pick_free_port();
+    let source = scalar_read_program(port);
+    let (_dir, exe) = compile_source(&source);
+
+    let child = Command::new(&exe)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut guard = ChildGuard(child);
+
+    wait_for_port(port, Duration::from_secs(8)).expect("pit f64/bool field-read server bind");
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::blocking::Client::new();
+
+    // --- f64 read, branch HIGH: ratio=0.7 (>= 0.5) -> "high-ratio". ---
+    let hi = client
+        .post(format!("{base}/ratio"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"name":"a","ratio":0.7,"active":true}"#)
+        .send()
+        .expect("POST /ratio ratio=0.7");
+    assert_eq!(hi.status().as_u16(), 200, "ratio=0.7 must be 200");
+    assert_eq!(
+        hi.text().unwrap(),
+        "high-ratio",
+        "ratio=0.7 (>= 0.5) must branch to \"high-ratio\" — a real `body.ratio` f64 read"
+    );
+
+    // --- f64 read, branch LOW: ratio=0.2 (< 0.5) -> "low-ratio". THE PROOF:
+    // same route, only the value differs — a stub-load cannot flip here. ---
+    let lo = client
+        .post(format!("{base}/ratio"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"name":"a","ratio":0.2,"active":true}"#)
+        .send()
+        .expect("POST /ratio ratio=0.2");
+    assert_eq!(lo.status().as_u16(), 200, "ratio=0.2 must be 200");
+    assert_eq!(
+        lo.text().unwrap(),
+        "low-ratio",
+        "ratio=0.2 (< 0.5) must branch to \"low-ratio\" — this PROVES `body.ratio` is \
+         read at RUNTIME via `__cobrust_pit_body_get_f64` (the branch flips with the \
+         input). A stub-load Field(0) makes the branch CONSTANT."
+    );
+
+    // --- bool read, branch TRUE: active=true -> "active". ---
+    let on = client
+        .post(format!("{base}/active"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"name":"a","ratio":0.5,"active":true}"#)
+        .send()
+        .expect("POST /active active=true");
+    assert_eq!(on.status().as_u16(), 200, "active=true must be 200");
+    assert_eq!(
+        on.text().unwrap(),
+        "active",
+        "active=true must branch to \"active\" — a real `body.active` bool read"
+    );
+
+    // --- bool read, branch FALSE: active=false -> "inactive". THE PROOF:
+    // the bool branch flips with the value. ---
+    let off = client
+        .post(format!("{base}/active"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"name":"a","ratio":0.5,"active":false}"#)
+        .send()
+        .expect("POST /active active=false");
+    assert_eq!(off.status().as_u16(), 200, "active=false must be 200");
+    assert_eq!(
+        off.text().unwrap(),
+        "inactive",
+        "active=false must branch to \"inactive\" — this PROVES `body.active` is read at \
+         RUNTIME via `__cobrust_pit_body_get_bool` (the i1 ABI; the branch flips with the \
+         input value)."
+    );
+
+    drop(guard.0.kill());
+    let _ = guard.0.wait();
+}
+
+// =====================================================================
+// (4) ADR-0081 Phase-2 (nested) — `body.inner.x` recursive READ, live.
+//
+// A body field whose type is ANOTHER field-tracked validated class. The
+// nested-OBJECT VALIDATION already shipped (ADR-0080 Phase-4(b),
+// `pit_nested_body_e2e.rs`); Phase-2 adds the RECURSIVE READ:
+//   * `body.inner` reads the BORROWED interior nested object via
+//     `__cobrust_pit_body_get_nested`, its result temp re-marked
+//     `validated_body_of = Some(Inner)`;
+//   * `.x` on THAT recurses into `__cobrust_pit_body_get_i64`.
+// Tested at TWO depths (one level: `body.inner.x`; three levels:
+// `body.mid.leaf.v`) so the recursion's generality is pinned, and across a
+// nested SCALAR-TYPE mix (i64 + bool leaf fields).
+// =====================================================================
+
+/// One server. `/one` reads the one-level-deep i64 `body.inner.x`; `/deep`
+/// reads the three-level-deep i64 `body.mid.leaf.v`; `/deepflag` reads the
+/// three-level-deep bool `body.mid.leaf.flag` — each BRANCHING on the read.
+fn nested_read_program(port: u16) -> String {
+    format!(
+        concat!(
+            "import pit\n",
+            "\n",
+            // Leaf carries an i64 (range-refined) + a bool — both READ at
+            // depth 3.
+            "class Leaf:\n",
+            "    v: i64 where 0 <= self and self <= 100\n",
+            "    flag: bool\n",
+            "\n",
+            "class Mid:\n",
+            "    leaf: Leaf\n",
+            "\n",
+            // Inner is the one-level-deep nested body (separate from the
+            // 3-level Mid/Leaf chain so both depths live in one program).
+            "class Inner:\n",
+            "    x: i64 where 0 <= self and self <= 100\n",
+            "\n",
+            "class Root:\n",
+            "    name: str\n",
+            "    inner: Inner\n",
+            "    mid: Mid\n",
+            "\n",
+            // One level: body.inner.x
+            "fn one(req: pit.Request, body: Root) -> pit.Response:\n",
+            "    let v: i64 = body.inner.x\n",
+            "    if v >= 50:\n",
+            "        return pit.text_response(200, \"one-high\")\n",
+            "    return pit.text_response(200, \"one-low\")\n",
+            "\n",
+            // Three levels: body.mid.leaf.v
+            "fn deep(req: pit.Request, body: Root) -> pit.Response:\n",
+            "    let v: i64 = body.mid.leaf.v\n",
+            "    if v >= 50:\n",
+            "        return pit.text_response(200, \"deep-high\")\n",
+            "    return pit.text_response(200, \"deep-low\")\n",
+            "\n",
+            // Three levels, nested BOOL: body.mid.leaf.flag
+            "fn deepflag(req: pit.Request, body: Root) -> pit.Response:\n",
+            "    let f: bool = body.mid.leaf.flag\n",
+            "    if f:\n",
+            "        return pit.text_response(200, \"flag-on\")\n",
+            "    return pit.text_response(200, \"flag-off\")\n",
+            "\n",
+            "fn main() -> i64:\n",
+            "    let app = pit.App()\n",
+            "    let _ = app.route_validated(\"POST\", \"/one\", one)\n",
+            "    let _ = app.route_validated(\"POST\", \"/deep\", deep)\n",
+            "    let _ = app.route_validated(\"POST\", \"/deepflag\", deepflag)\n",
+            "    let _exit = app.run(\"127.0.0.1\", {port})\n",
+            "    return 0\n",
+        ),
+        port = port,
+    )
+}
+
+#[test]
+fn test_e2e_body_field_read_nested_recurses() {
+    let port = pick_free_port();
+    let source = nested_read_program(port);
+    let (_dir, exe) = compile_source(&source);
+
+    let child = Command::new(&exe)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut guard = ChildGuard(child);
+
+    wait_for_port(port, Duration::from_secs(8)).expect("pit nested field-read server bind");
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::blocking::Client::new();
+
+    // Two full bodies differing only in the nested values, so each route's
+    // branch must flip between them.
+    let hi_body = r#"{"name":"a","inner":{"x":70},"mid":{"leaf":{"v":80,"flag":true}}}"#;
+    let lo_body = r#"{"name":"a","inner":{"x":10},"mid":{"leaf":{"v":20,"flag":false}}}"#;
+
+    // --- one level: body.inner.x. x=70 -> "one-high", x=10 -> "one-low". ---
+    let r1 = client
+        .post(format!("{base}/one"))
+        .header("Content-Type", "application/json")
+        .body(hi_body)
+        .send()
+        .expect("POST /one x=70");
+    assert_eq!(r1.status().as_u16(), 200, "nested x=70 must be 200");
+    assert_eq!(
+        r1.text().unwrap(),
+        "one-high",
+        "body.inner.x=70 (>= 50) must branch to \"one-high\" — a real ONE-level nested read"
+    );
+    let r2 = client
+        .post(format!("{base}/one"))
+        .header("Content-Type", "application/json")
+        .body(lo_body)
+        .send()
+        .expect("POST /one x=10");
+    assert_eq!(
+        r2.text().unwrap(),
+        "one-low",
+        "body.inner.x=10 (< 50) must branch to \"one-low\" — this PROVES `body.inner.x` \
+         recurses at RUNTIME (the nested accessor returns the borrowed inner object, then \
+         `.x` reads it; the branch flips with the nested value)."
+    );
+
+    // --- three levels: body.mid.leaf.v. v=80 -> "deep-high", v=20 -> "deep-low". ---
+    let r3 = client
+        .post(format!("{base}/deep"))
+        .header("Content-Type", "application/json")
+        .body(hi_body)
+        .send()
+        .expect("POST /deep v=80");
+    assert_eq!(
+        r3.text().unwrap(),
+        "deep-high",
+        "body.mid.leaf.v=80 (>= 50) must branch to \"deep-high\" — a real THREE-level read"
+    );
+    let r4 = client
+        .post(format!("{base}/deep"))
+        .header("Content-Type", "application/json")
+        .body(lo_body)
+        .send()
+        .expect("POST /deep v=20");
+    assert_eq!(
+        r4.text().unwrap(),
+        "deep-low",
+        "body.mid.leaf.v=20 (< 50) must branch to \"deep-low\" — PROVES the read recurses \
+         to depth 3 (two nested-object borrows, then the terminal i64 read)."
+    );
+
+    // --- three levels, nested bool: body.mid.leaf.flag. ---
+    let r5 = client
+        .post(format!("{base}/deepflag"))
+        .header("Content-Type", "application/json")
+        .body(hi_body)
+        .send()
+        .expect("POST /deepflag flag=true");
+    assert_eq!(
+        r5.text().unwrap(),
+        "flag-on",
+        "body.mid.leaf.flag=true must branch to \"flag-on\" — a real nested BOOL read at depth 3"
+    );
+    let r6 = client
+        .post(format!("{base}/deepflag"))
+        .header("Content-Type", "application/json")
+        .body(lo_body)
+        .send()
+        .expect("POST /deepflag flag=false");
+    assert_eq!(
+        r6.text().unwrap(),
+        "flag-off",
+        "body.mid.leaf.flag=false must branch to \"flag-off\" — PROVES the nested bool read \
+         flips at depth 3 (the recursion delivers a real `bool` to the `if` condition)."
+    );
+
+    drop(guard.0.kill());
+    let _ = guard.0.wait();
+}
+
+// =====================================================================
+// (5) ADR-0081 Phase-2 — the no-UB CODEGEN-PROPERTY tripwire EXTENDED to
+// the f64 / bool / nested accessors (the gold-standard gate-kind guard, the
+// sibling of (2b) above). A NON-registered `fn helper(b: <Body>): return
+// b.<field>` (or `b.inner.x`) on a `.cb`-constructed instance must NOT emit
+// a call to ANY `__cobrust_pit_body_get_*` shim — the serde accessor is
+// REGISTRATION-gated (`validated_body_of == Some`), not type-gated. Under
+// the shipped gate the read falls to the `Field(0)` stub (no external call);
+// a type-only-gate regression would emit `bl __cobrust_pit_body_get_{f64,
+// bool,nested}` and this goes RED.
+//
+// One `.o` per field-type so the ONLY possible accessor call site in each
+// program is the single non-registered helper read. (Separate single-helper
+// programs sidestep the move-checker rejecting one `.cb` instance consumed
+// by two helper calls — a borrow-check artefact unrelated to the gate.)
+// =====================================================================
+
+/// A non-registered f64 read. `helper(b: Reading): return b.ratio`.
+const NO_UB_F64_PROGRAM: &str = concat!(
+    "import pit\n",
+    "\n",
+    "class Reading:\n",
+    "    name: str\n",
+    "    ratio: f64 where 0.0 <= self and self <= 1.0\n",
+    "\n",
+    "fn helper(b: Reading) -> f64:\n",
+    "    return b.ratio\n",
+    "\n",
+    "fn main() -> i64:\n",
+    "    let s = Reading()\n",
+    "    let r: f64 = helper(s)\n",
+    "    print(r)\n",
+    "    return 0\n",
+);
+
+/// A non-registered bool read. `helper(b: Reading): return b.active`.
+const NO_UB_BOOL_PROGRAM: &str = concat!(
+    "import pit\n",
+    "\n",
+    "class Reading:\n",
+    "    name: str\n",
+    "    active: bool\n",
+    "\n",
+    "fn helper(b: Reading) -> bool:\n",
+    "    return b.active\n",
+    "\n",
+    "fn main() -> i64:\n",
+    "    let s = Reading()\n",
+    "    let a: bool = helper(s)\n",
+    "    return 0\n",
+);
+
+/// A non-registered NESTED read. `helper(b: Outer): return b.inner.x`. The
+/// nested accessor is registration-gated through the WHOLE chain: the
+/// recursive base resolver only succeeds when the chain bottoms out at a
+/// marked param, so `b.inner.x` on an unmarked `b` emits NEITHER
+/// `__cobrust_pit_body_get_nested` NOR `__cobrust_pit_body_get_i64`.
+const NO_UB_NESTED_PROGRAM: &str = concat!(
+    "import pit\n",
+    "\n",
+    "class Inner:\n",
+    "    x: i64 where 0 <= self and self <= 100\n",
+    "\n",
+    "class Outer:\n",
+    "    name: str\n",
+    "    inner: Inner\n",
+    "\n",
+    "fn helper(b: Outer) -> i64:\n",
+    "    return b.inner.x\n",
+    "\n",
+    "fn main() -> i64:\n",
+    "    let s = Outer()\n",
+    "    let v: i64 = helper(s)\n",
+    "    print(v)\n",
+    "    return 0\n",
+);
+
+/// Shared body for the Phase-2 no-UB codegen-property tripwires: compile the
+/// given non-registered-helper program to a `.o` and assert no
+/// `__cobrust_pit_body_get_*` symbol is referenced. SKIPs cleanly when no
+/// `nm`/`llvm-nm` is available (mirrors `(2b)`).
+fn assert_no_accessor_symbol(program: &str, label: &str) {
+    let Some(nm) = find_nm() else {
+        eprintln!(
+            "SKIP {label}: no runnable `nm`/`llvm-nm` found (set $NM or \
+             $LLVM_SYS_181_PREFIX). The Phase-2 registration-gate codegen property is \
+             unverified on this host."
+        );
+        return;
+    };
+    let (_dir, obj) = compile_object(program);
+    let nm_out = Command::new(&nm)
+        .arg(&obj)
+        .output()
+        .expect("run nm on the Phase-2 no-UB object");
+    assert!(
+        nm_out.status.success(),
+        "`{nm}` failed on {}: status={:?}, stderr={:?}",
+        obj.display(),
+        nm_out.status,
+        String::from_utf8_lossy(&nm_out.stderr),
+    );
+    let symbols = String::from_utf8_lossy(&nm_out.stdout);
+    let offending: Vec<&str> = symbols
+        .lines()
+        .filter(|l| l.contains("cobrust_pit_body_get_"))
+        .collect();
+    assert!(
+        offending.is_empty(),
+        "REGRESSION ({label}, type-only gate / serde-cast UB): a non-registered helper \
+         emitted a call to a `__cobrust_pit_body_get_*` accessor shim. The Phase-2 \
+         accessors (f64/bool/nested) are registration-gated EXACTLY like i64/str \
+         (ADR-0081 §5.2 Q4); a `.cb`-constructed / non-registered body must take the \
+         `Field(0)` stub. Offending `nm` symbol line(s):\n{}\nfull `{nm}` output:\n{symbols}",
+        offending.join("\n"),
+    );
+}
+
+#[test]
+fn test_no_ub_non_registered_f64_read_does_not_emit_accessor_call() {
+    assert_no_accessor_symbol(
+        NO_UB_F64_PROGRAM,
+        "test_no_ub_non_registered_f64_read_does_not_emit_accessor_call",
+    );
+}
+
+#[test]
+fn test_no_ub_non_registered_bool_read_does_not_emit_accessor_call() {
+    assert_no_accessor_symbol(
+        NO_UB_BOOL_PROGRAM,
+        "test_no_ub_non_registered_bool_read_does_not_emit_accessor_call",
+    );
+}
+
+#[test]
+fn test_no_ub_non_registered_nested_read_does_not_emit_accessor_call() {
+    assert_no_accessor_symbol(
+        NO_UB_NESTED_PROGRAM,
+        "test_no_ub_non_registered_nested_read_does_not_emit_accessor_call",
     );
 }

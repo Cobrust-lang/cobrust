@@ -395,10 +395,12 @@ substrate):
   invariant).
 - **The seam (`ecosystem.rs`, §2-Q5).** `lookup_validated_body_accessor(field_ty)
   -> Option<EcoSig>` names **a symbol + a `Ty`**, NEVER serde / a JSON key:
-  `Ty::Int → __cobrust_pit_body_get_i64`, `Ty::Str → __cobrust_pit_body_get_str`.
+  `Ty::Int → __cobrust_pit_body_get_i64`, `Ty::Str → __cobrust_pit_body_get_str`,
+  and (ADR-0081 Phase-2) `Ty::Float → __cobrust_pit_body_get_f64`, `Ty::Bool →
+  __cobrust_pit_body_get_bool`, plus a USER-class-typed field (`Ty::Adt(id, _)`
+  with `id` outside the ecosystem-handle range) → `__cobrust_pit_body_get_nested`.
   A future native-struct ABI (ADR-0081 §7) swaps the backing behind the SAME
-  symbol — zero `.cb`-source churn. `f64`/`bool` are Phase-2 (`None` here until
-  then → a `body.<f64-field>` read falls to the deferred stub, NOT a mis-read).
+  symbols — zero `.cb`-source churn. (See the ADR-0081 Phase-2 section below.)
 - **Codegen (`llvm_backend.rs`).** `__cobrust_pit_body_get_i64`
   (`[ptr, ptr] -> i64`) + `__cobrust_pit_body_get_str` (`[ptr, ptr] -> ptr`,
   type-identical to `request_path_param`) declared in the pit extern block.
@@ -428,6 +430,61 @@ pre-existing no-field-storage stub instead. The worst case degrades to the
 already-documented "no field storage yet" limitation — a stub read, NOT
 undefined behavior. (Test: `pit_body_field_read_e2e.rs` — the observable read
 + the no-UB negative, both green.)
+
+## ADR-0081 Phase-2 — `f64` / `bool` / nested `body.inner.x` field reads
+
+Phase-2 widens the Phase-1b read seam to the remaining scalar types AND nested
+objects. No new `.cb` syntax — `body.field` / `body.inner.x` are already what
+the type checker accepts (ADR-0080 typed nested attr chains).
+
+```python
+class Inner:
+    x: i64 where 0 <= self and self <= 100
+class Payload:
+    ratio: f64 where 0.0 <= self and self <= 1.0
+    active: bool
+    inner: Inner
+fn h(req: pit.Request, body: Payload) -> pit.Response:
+    let r: f64 = body.ratio          # __cobrust_pit_body_get_f64(body, "ratio")
+    let a: bool = body.active        # __cobrust_pit_body_get_bool(body, "active")
+    let v: i64 = body.inner.x        # nested(body,"inner") -> i64(.,"x") — recursive
+    ...
+```
+
+- **`f64` / `bool` (mechanical, mirror i64/str).** New arms in
+  `lookup_validated_body_accessor`: `Ty::Float → __cobrust_pit_body_get_f64`
+  (serde `as_f64`), `Ty::Bool → __cobrust_pit_body_get_bool` (serde `as_bool`,
+  STRICT — a JSON `true`/`false` only, no truthiness; §2.2). New shims in
+  `cabi.rs` (BORROW the box, fail-clean `0.0`/`false` sentinel). New codegen
+  externs: `f64` → LLVM `double` (the `math.sqrt` precedent), `bool` → LLVM `i1`
+  via `bool_type()` (the `re.match` / `fang.verify_password` / `coil.any`
+  precedent — the i1 lands in the `.cb` `_ecoret` Bool local, usable in
+  `if body.flag:`). The `__cobrust_pit_*` prefix recognizer covers them for free.
+- **Nested `body.inner.x` (recursive).** A field typed as ANOTHER field-tracked
+  validated class (`Ty::Adt(nested_adt, _)`, id OUTSIDE `ECO_ADT_BASE`) resolves
+  to `__cobrust_pit_body_get_nested`, which returns the **BORROWED interior**
+  `&serde_json::Value` for the nested JSON object (no allocation, no free). MIR's
+  `Attr` base resolution is now RECURSIVE (`resolve_validated_body_base`,
+  `lower.rs`): it walks a `body.inner.…` chain down to the marked param, emitting
+  a nested borrow at each hop and **re-marking each result temp**
+  `validated_body_of = Some(nested_adt)`, so `.field` on it recurses through the
+  SAME registration-gated arm. Verified at depth 1 (`body.inner.x`) AND depth 3
+  (`body.mid.leaf.v`, `body.mid.leaf.flag`).
+- **Soundness of the borrowed interior pointer.** It aliases the parent box the
+  `route_validated` trampoline owns + frees EXACTLY ONCE *after* the handler
+  returns (`cabi.rs`), so the borrow is valid for the whole handler. The
+  `_ecoret` temp is typed `Ty::Adt(user_class)`, whose codegen drop is a NO-OP
+  (`handle_drop_symbol(user_id) == None`), so even if the drop schedule
+  enumerates the temp, NO free is emitted on the borrowed pointer (no
+  double-free, no UB).
+- **No-UB gate preserved.** The recursive resolver only succeeds when the chain
+  bottoms out at a `validated_body_of`-marked param, so a non-registered helper
+  reading `b.ratio` / `b.active` / `b.inner.x` (or a `.cb`-constructed instance)
+  emits NEITHER the scalar NOR the nested accessor — pinned by three new
+  `nm`-on-`.o` codegen-property tripwires. The gate is REGISTRATION-driven, not
+  type-driven (§5.2 / §10). Tests: `pit_body_field_read_e2e.rs` (9 e2es) +
+  `cabi.rs` `#[cfg(test)]` shim unit tests (f64 fractional / bool strict / nested
+  borrow recursion) + `ecosystem.rs` accessor-lookup unit tests.
 
 ## ADR-0080 Phase-1b-iii — `serve_openapi` (OpenAPI emission, cannot drift)
 

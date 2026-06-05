@@ -52,8 +52,10 @@ curl http://127.0.0.1:<port>/ping
   drift from the validated body. See "Validated request bodies" below.
 - **`body.field` reads** (ADR-0081) — inside a `route_validated` handler,
   read the validated body's fields by typed attribute access (`body.rank` →
-  `i64`, `body.name` → `str`), not a stringly-typed key. A typo'd field is a
-  compile error. See "Reading body fields" below.
+  `i64`, `body.name` → `str`, `body.ratio` → `f64`, `body.active` → `bool`,
+  and nested `body.inner.x` recursing into a nested object), not a
+  stringly-typed key. A typo'd field is a compile error. See "Reading body
+  fields" below.
 - **`App.route(method, path, handler)`** — register a top-level `fn` as
   the handler for `method path`. The handler MUST be a top-level
   `fn handler(req: pit.Request) -> pit.Response: …`. Returns `None`;
@@ -202,12 +204,42 @@ fn main() -> i64:
   for an `i64` field was already rejected at the 422 boundary, so the read
   never truncates a float.
 
-Phase-1 ships `i64` + `str` field reads; `f64`/`bool` and nested-class /
-list fields are later phases. Field reads work **only** on a body parameter
-your handler received from `route_validated` — a hand-constructed
-`CreateScore()` value does not yet carry field storage (that is the
-native-struct follow-up). The compiler tracks which is which, so you never
-get a surprise.
+#### f64 / bool / nested fields (ADR-0081 Phase 2)
+
+Field reads now cover **every scalar type**, plus **nested objects**:
+
+```python
+class Inner:
+    x: i64 where 0 <= self and self <= 100
+
+class Payload:
+    ratio: f64 where 0.0 <= self and self <= 1.0
+    active: bool
+    inner: Inner
+
+fn handler(req: pit.Request, body: Payload) -> pit.Response:
+    let r: f64 = body.ratio          # reads an f64
+    let a: bool = body.active        # reads a bool (strict: only true/false, no truthiness)
+    let v: i64 = body.inner.x        # reads a nested object's field — at any depth
+    if a and r >= 0.5 and v >= 50:
+        return pit.text_response(200, "ok")
+    return pit.text_response(200, "no")
+```
+
+- `f64` / `bool` are real typed reads, exactly like `i64` / `str`; `bool` is
+  strict — it accepts only JSON `true`/`false`, never Python-style truthiness
+  (honoring §2.2).
+- **Nested**: when a field's type is itself a typed `class` (e.g.
+  `inner: Inner`), `body.inner.x` **recurses** into the nested object's
+  fields, to any depth (`body.a.b.c` works the same way). The nested object
+  was already validated by `route_validated` (ADR-0080); this just reads the
+  validated value back out.
+
+Field reads work **only** on a body parameter your handler received from
+`route_validated` — a hand-constructed `CreateScore()` value does not yet
+carry field storage (that is the native-struct follow-up). The compiler
+tracks which is which, so you never get a surprise. List fields
+(`tags: list[str]`) are a later phase.
 
 ## String refinements: length + pattern (ADR-0080 Phase 2)
 

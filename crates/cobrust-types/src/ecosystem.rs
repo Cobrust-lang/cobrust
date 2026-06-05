@@ -3303,13 +3303,20 @@ pub fn lookup_handle_attr(receiver: &Ty, attr: &str) -> Option<EcoSig> {
 /// The shim shape mirrors `__cobrust_pit_request_path_param`
 /// (`(body: *mut u8, name: *mut u8) -> <ret>`): `body` is the boxed Value,
 /// `name` is the COMPILER-SYNTHESISED field name `Str` (footgun #1 — never
-/// author-written). Phase-1b ships `i64` + `str`; `f64`/`bool` are
-/// Phase-2 (`None` here until then, so a `body.<f64-field>` read falls
-/// through to the deferred no-field-storage stub rather than mis-reading).
+/// author-written). Phase-1b shipped `i64` + `str`; ADR-0081 **Phase-2**
+/// extends this to `f64` (`as_f64`) and `bool` (`as_bool`), plus the NESTED
+/// case — a field whose declared `Ty` is itself a field-tracked validated
+/// `class` (`Ty::Adt(nested_adt, _)`) resolves to
+/// `__cobrust_pit_body_get_nested`, which returns the BORROWED interior
+/// `&serde_json::Value` for the nested object so `body.inner.x` recurses
+/// (the result temp is re-marked `validated_body_of = Some(nested_adt)`,
+/// `lower.rs`).
 ///
-/// Returns `None` for a field whose declared `Ty` has no Phase-1b accessor
-/// (the caller then takes the pre-existing `Field(0)` stub path — NOT a
-/// serde cast).
+/// Returns `None` for a field whose declared `Ty` has no accessor (the
+/// caller then takes the pre-existing `Field(0)` stub path — NOT a serde
+/// cast). The receiver (`body`) is gated on the registration MARK, never on
+/// the `Ty` (the §5.2 no-UB invariant), so this lookup is only ever reached
+/// for a `validated_body_of`-marked local.
 #[must_use]
 pub fn lookup_validated_body_accessor(field_ty: &Ty) -> Option<EcoSig> {
     let (symbol, ret) = match field_ty {
@@ -3317,6 +3324,33 @@ pub fn lookup_validated_body_accessor(field_ty: &Ty) -> Option<EcoSig> {
         // `as_f64`-truncate; CLAUDE.md §2.2 no-silent-coercion).
         Ty::Int => ("__cobrust_pit_body_get_i64", Ty::Int),
         Ty::Str => ("__cobrust_pit_body_get_str", Ty::Str),
+        // ADR-0081 Phase-2 — `f64` (`as_f64`) + `bool` (`as_bool`). The
+        // shims mirror the i64/str pair: a typed `serde_json::Value::as_*`
+        // get over the BORROWED boxed Value (no coercion — validation
+        // already proved the field is a JSON number / boolean of the
+        // declared type, §2.2). `bool` returns the `.cb` `Bool` repr
+        // (LLVM `i1` at the C ABI — the `re.match` / `fang.verify_password`
+        // precedent), `f64` returns LLVM `double` (the `math.sqrt`
+        // precedent).
+        Ty::Float => ("__cobrust_pit_body_get_f64", Ty::Float),
+        Ty::Bool => ("__cobrust_pit_body_get_bool", Ty::Bool),
+        // ADR-0081 Phase-2 (nested) — a field typed as ANOTHER field-tracked
+        // validated `class` (`Ty::Adt(nested_adt, _)`; its id is OUTSIDE the
+        // ecosystem-handle range, so it is a user body class, NOT a pit/coil
+        // handle). The accessor returns the BORROWED interior
+        // `&serde_json::Value` for the nested object (no allocation, no free
+        // — it lives inside the parent box that the `route_validated`
+        // trampoline owns + frees once at handler exit, `cabi.rs:530`). The
+        // caller re-marks the result temp `validated_body_of = Some(*id)` so
+        // a further `.field` on it recurses through THIS lookup again. The
+        // `_ecoret` carries `Ty::Adt(*id)`, whose codegen drop is a NO-OP
+        // (`handle_drop_symbol(user_id) == None`, `llvm_backend.rs:5212`) —
+        // so dropping a borrowed interior pointer is harmless (the §5.2
+        // no-UB invariant holds: the borrow never outlives the parent box,
+        // and no free is emitted on it).
+        Ty::Adt(id, _) if !is_ecosystem_handle(*id) => {
+            ("__cobrust_pit_body_get_nested", field_ty.clone())
+        }
         _ => return None,
     };
     // The accessor's manifest signature carries ONE `Value` param — the
@@ -5105,5 +5139,68 @@ mod tests {
         let sig = lookup_buffer_binop(&Ty::Ref(Box::new(coil_buffer_ty())), BinOp::MatMul)
             .expect("matmul resolves behind &borrow");
         assert_eq!(sig.runtime_symbol, "__cobrust_coil_buffer_matmul");
+    }
+
+    // -- ADR-0081 validated-body field accessor lookup ---------------------
+
+    /// Phase-1b: `i64`/`str` fields resolve to their shims; Phase-2: `f64`/
+    /// `bool` resolve to theirs. Each carries the field-name `Str` param +
+    /// the field's `Ty` as its return.
+    #[test]
+    fn validated_body_accessor_scalar_arms() {
+        let i = lookup_validated_body_accessor(&Ty::Int).expect("i64 field has an accessor");
+        assert_eq!(i.runtime_symbol, "__cobrust_pit_body_get_i64");
+        assert_eq!(i.ret, Ty::Int);
+        assert_eq!(value_tys(&i.params), vec![Ty::Str]);
+
+        let s = lookup_validated_body_accessor(&Ty::Str).expect("str field has an accessor");
+        assert_eq!(s.runtime_symbol, "__cobrust_pit_body_get_str");
+        assert_eq!(s.ret, Ty::Str);
+
+        // ADR-0081 Phase-2 — f64 + bool.
+        let f = lookup_validated_body_accessor(&Ty::Float).expect("f64 field has an accessor");
+        assert_eq!(f.runtime_symbol, "__cobrust_pit_body_get_f64");
+        assert_eq!(f.ret, Ty::Float, "the f64 accessor returns Ty::Float");
+
+        let b = lookup_validated_body_accessor(&Ty::Bool).expect("bool field has an accessor");
+        assert_eq!(b.runtime_symbol, "__cobrust_pit_body_get_bool");
+        assert_eq!(b.ret, Ty::Bool, "the bool accessor returns Ty::Bool");
+    }
+
+    /// ADR-0081 Phase-2 (nested): a field typed as a USER class (an AdtId
+    /// OUTSIDE the ecosystem-handle range) resolves to the nested accessor,
+    /// returning the SAME `Ty::Adt` so the result temp can be re-marked.
+    #[test]
+    fn validated_body_accessor_nested_arm() {
+        // A user body class id (well outside ECO_ADT_BASE).
+        let nested = Ty::Adt(AdtId(68), vec![]);
+        let n = lookup_validated_body_accessor(&nested).expect("a class-typed field recurses");
+        assert_eq!(n.runtime_symbol, "__cobrust_pit_body_get_nested");
+        assert_eq!(
+            n.ret, nested,
+            "the nested accessor returns the SAME Ty::Adt (the result temp re-mark target)"
+        );
+    }
+
+    /// The nested arm is gated on the id being a USER class: an ECOSYSTEM
+    /// handle (`pit.Request`, `coil.Buffer`, …) is NOT a validated body and
+    /// must NOT resolve to the nested accessor (it is a foreign opaque
+    /// handle, never a `serde_json::Value` object).
+    #[test]
+    fn validated_body_accessor_rejects_ecosystem_handle_and_unknown() {
+        assert!(
+            lookup_validated_body_accessor(&Ty::Adt(PIT_REQUEST_ADT, vec![])).is_none(),
+            "an ecosystem handle is not a nested validated body"
+        );
+        assert!(
+            lookup_validated_body_accessor(&Ty::Adt(COIL_BUFFER_ADT, vec![])).is_none(),
+            "coil.Buffer is not a nested validated body"
+        );
+        // A field type with no accessor (e.g. a list) → None (the caller
+        // takes the Field(0) stub, never a serde cast).
+        assert!(
+            lookup_validated_body_accessor(&Ty::List(Box::new(Ty::Int))).is_none(),
+            "a list field has no scalar accessor (deferred — not f64/bool/nested)"
+        );
     }
 }

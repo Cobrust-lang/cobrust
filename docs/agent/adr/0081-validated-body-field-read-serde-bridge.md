@@ -2,10 +2,10 @@
 doc_kind: adr
 adr_id: 0081
 title: Validated-body field READ + `json_response(status, body)` — the `.cb` ↔ serde bridge (ADR-0080 §9 made concrete). A validated body is the `serde_json::Value` it already is; `body.field` reads via a TYPED accessor shim keyed on the field's declared `Ty` (Value-backed, NOT a native struct, NOT a stringly-typed `.get`); the accessor SEAM names a symbol + a `Ty` (never serde/a JSON key in MIR) so a future native-struct ABI swaps the backing with zero `.cb`-source churn. Native struct layout + `.cb`-constructed-class field storage are the honest long-term endpoint, explicitly deferred.
-status: draft
+status: accepted
 date: 2026-05-30
 decision_owner: cto
-last_verified_commit: 8dae584
+last_verified_commit: ba8cca6
 relates_to: [adr:0006, adr:0060b, adr:0072, adr:0073, adr:0074, adr:0077, adr:0078, adr:0080, "claude.md:§2.2", "claude.md:§2.5", "claude.md:§5.1", "finding:F64", "feedback:elegant_ecosystem_surface_no_legacy_debt"]
 ---
 
@@ -303,9 +303,10 @@ pub unsafe extern "C" fn __cobrust_pit_body_get_i64(body: *mut u8, name: *mut u8
     let name_s = unsafe { read_str_buf(name) };
     v.get(&name_s).and_then(serde_json::Value::as_i64).unwrap_or(0)   // as_i64, NOT as_f64-truncate (footgun #3)
 }
-// __cobrust_pit_body_get_str  -> *mut u8 (alloc_str_buffer, like path_param)
-// __cobrust_pit_body_get_f64  -> f64
-// __cobrust_pit_body_get_bool -> i8/bool
+// __cobrust_pit_body_get_str    -> *mut u8 (alloc_str_buffer, like path_param)
+// __cobrust_pit_body_get_f64    -> f64   (serde as_f64; LLVM `double` extern — math.sqrt precedent)
+// __cobrust_pit_body_get_bool   -> bool  (serde as_bool, STRICT; LLVM `i1` extern via bool_type() — re.match precedent)
+// __cobrust_pit_body_get_nested -> *mut u8 (BORROWED interior &Value for a nested object; body.inner.x recurses)
 ```
 
 **The retarget.** A new MIR `Attr` sub-arm fires when the base is a **validated-body
@@ -502,11 +503,43 @@ The §6-Phase-1 handler from ADR-0080, now executing.
 - The shipped pit + `route_validated` + OpenAPI suites still pass (no regression);
   workspace gates green; `Cargo.lock` staged if a dep was added (F64).
 
-### Phase 2 — `f64` / `bool` field reads + nested-body reads
+### Phase 2 — `f64` / `bool` field reads + nested-body reads — **SHIPPED (`ba8cca6`→ this sprint)**
 
-`__cobrust_pit_body_get_f64` / `_bool`; and a body field that is itself a field-tracked
-class (the accessor returns a nested boxed `Value`, read recursively). **Done-means:** an
-`f64`/`bool` field reads correctly; a nested `body.inner.x` reads through the same seam.
+**Status: DELIVERED, all three.** `f64`, `bool`, AND nested-body reads land in one sprint
+(`pit_body_field_read_e2e.rs` extended to 9 tests, GREEN).
+
+- **`f64` / `bool` (mechanical):** two new arms in `lookup_validated_body_accessor`
+  (`ecosystem.rs`) — `Ty::Float → __cobrust_pit_body_get_f64` (`as_f64`), `Ty::Bool →
+  __cobrust_pit_body_get_bool` (`as_bool`, STRICT — no truthiness, §2.2). Two new shims in
+  `cabi.rs` (mirror the i64/str pair, BORROW the box). Two new codegen externs in
+  `llvm_backend.rs`: `f64` → LLVM `double` (the `math.sqrt` precedent), `bool` → LLVM `i1`
+  via `bool_type()` (the `re.match` / `fang.verify_password` / `coil.any` precedent — the
+  i1 lands in the `.cb` `_ecoret` Bool local, usable in `if body.flag:`). The
+  `__cobrust_pit_*` prefix recognizer in `intrinsics.rs` already covered the new symbols
+  (no edit).
+- **Nested `body.inner.x` (the design-heavy half, also DELIVERED):** a body field typed as
+  ANOTHER field-tracked validated class (`Ty::Adt(nested_adt, _)`, id OUTSIDE the
+  ecosystem-handle range) resolves to `__cobrust_pit_body_get_nested`, which returns the
+  **BORROWED interior** `&serde_json::Value` for the nested object (no allocation, no free
+  — it lives inside the parent box the trampoline owns + frees once, `cabi.rs:530`). The
+  MIR `Attr` base resolution became **recursive** (`resolve_validated_body_base`,
+  `lower.rs`): it walks a `body.inner` chain down to the marked param, emitting a nested
+  borrow at each hop and **re-marking each result temp** `validated_body_of =
+  Some(nested_adt)`, so `.field` on it recurses through the SAME registration-gated arm.
+  Verified at depth 1 (`body.inner.x`) AND depth 3 (`body.mid.leaf.v`, `body.mid.leaf.flag`).
+- **Soundness of the borrowed-interior pointer (the load-bearing argument):** the nested
+  pointer aliases the parent box, which the trampoline frees EXACTLY ONCE *after* the
+  handler returns — so the borrow is valid for the whole handler. The `_ecoret` temp is
+  typed `Ty::Adt(user_class)`, whose codegen drop is a **NO-OP**
+  (`handle_drop_symbol(user_id) == None`, `llvm_backend.rs:5212`), so even if the drop
+  schedule enumerates the temp, NO free is emitted on the borrowed pointer (no double-free,
+  no UB).
+- **No-UB gate preserved + extended:** the recursive resolver only succeeds when the chain
+  bottoms out at a `validated_body_of`-marked param, so a non-registered helper reading
+  `b.ratio` / `b.active` / `b.inner.x` (or a `.cb`-constructed instance) emits NEITHER the
+  scalar NOR the nested accessor — verified by three new `nm`-on-`.o` codegen-property
+  tripwires (the gate is REGISTRATION-driven, not type-driven; §5.2 / §10).
+- **No new dep** (serde_json was already a pit dep); `Cargo.lock` unchanged.
 
 ### Phase 3 — list-field reads + `body` as a function argument
 

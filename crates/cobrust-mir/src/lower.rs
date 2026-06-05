@@ -708,43 +708,119 @@ impl<'a> BodyBuilder<'a> {
         }
     }
 
-    /// ADR-0081 Phase-1b — resolve a `body.field` read to its typed
-    /// accessor `EcoSig`, gated on the Q4 registration MARK (§5.2).
+    /// ADR-0081 Phase-1b — resolve the BASE of a `body.field` read to a
+    /// `(body-Value, body-class)` pair, gated on the Q4 registration MARK
+    /// (§5.2). ADR-0081 **Phase-2 (nested)** makes this RECURSIVE so a
+    /// `body.inner.x` chain resolves `body.inner` to the nested object +
+    /// `Inner` class, then reads `x` off it.
     ///
-    /// Returns `Some(accessor)` ONLY when ALL hold:
-    /// 1. `base` is a bare `ExprKind::Name` (a `body` param read);
-    /// 2. its local is ALREADY declared (a param — declared in `lower_fn`
-    ///    before the body is lowered) and carries
-    ///    `validated_body_of == Some(body_adt)` (the registration mark);
-    /// 3. `field` is a field in that class's `adt_fields` whose declared
-    ///    `Ty` has a Phase-1b accessor shim (`i64`/`str`).
+    /// Returns `Some((value_op, body_adt))` where `value_op` is the operand
+    /// holding the boxed (root) OR borrowed-interior (nested) `serde_json::
+    /// Value`, and `body_adt` is the class whose `adt_fields` the FIELD must
+    /// then be looked up in. Two recursive arms:
     ///
-    /// Returns `None` otherwise — for a NON-`Name` base, an UNMARKED local
-    /// (a non-registered fn's body-shaped param, a `let s = Body()`
-    /// binding), an unknown field, or a field type with no Phase-1b shim.
-    /// The caller then takes the pre-existing `Field(0)` stub path — NEVER
-    /// a serde cast (the no-UB invariant). Read-only (`&self`): it MUST NOT
-    /// declare a forward-ref local — only an already-marked param qualifies.
-    fn lookup_validated_body_field_accessor(
-        &self,
+    /// 1. `base` is a bare `ExprKind::Name` whose local carries
+    ///    `validated_body_of == Some(body_adt)` (the registration mark, set
+    ///    in `lower_fn` for the handler's body param). The operand is the
+    ///    lowered param read (the boxed root Value).
+    /// 2. `base` is itself `Attr { inner_base, field }` where THIS resolver
+    ///    succeeds on `inner_base` (yielding `Some((_, outer_adt))`) AND
+    ///    `field` is a NESTED-class field of `outer_adt`
+    ///    (`adt_fields[outer_adt][field] == Ty::Adt(nested_adt, _)`). It
+    ///    emits the nested accessor (`__cobrust_pit_body_get_nested`) and
+    ///    returns `Some((nested_value_op, nested_adt))` — so a further
+    ///    `.field` recurses again.
+    ///
+    /// Returns `None` otherwise — for an UNMARKED local (a non-registered
+    /// fn's body-shaped param, a `let s = Body()` binding), a base whose
+    /// chain does not bottom out at a marked param, or a non-class
+    /// intermediate field. The caller then takes the pre-existing `Field(0)`
+    /// stub path — NEVER a serde cast (the no-UB invariant).
+    ///
+    /// `&mut self`: the nested arm declares an `_ecoret` temp + emits a Call
+    /// (the recursion's machinery). The root arm declares nothing new.
+    fn resolve_validated_body_base(
+        &mut self,
         base: &Expr,
-        field: &str,
-    ) -> Option<cobrust_types::EcoSig> {
-        let ExprKind::Name(rn) = &base.kind else {
-            return None;
-        };
-        let local_id = self.def_to_local.get(&rn.def_id.0)?;
-        let decl = self.locals.get(local_id.0 as usize)?;
-        // The Q4 GATE: the local must carry the registration mark. An
-        // unmarked local (Ty::Adt-with-fields but `None` here) is NEVER
-        // serde-cast.
-        let body_adt = decl.validated_body_of?;
-        // The field must be a declared field of that class (the SAME
-        // `adt_fields` table the type checker resolved `body.field`
-        // against — footgun #1: the JSON key is compiler-derived, never
-        // author-written). Pick the shim by the field's declared `Ty`.
-        let field_ty = self.ctx.typed.adt_fields.get(&body_adt)?.get(field)?;
-        cobrust_types::lookup_validated_body_accessor(field_ty)
+    ) -> Result<Option<(Operand, cobrust_types::AdtId)>, MirError> {
+        match &base.kind {
+            // Arm 1 (recursion base case) — a marked `body` param read.
+            ExprKind::Name(rn) => {
+                let Some(local_id) = self.def_to_local.get(&rn.def_id.0).copied() else {
+                    return Ok(None);
+                };
+                let Some(decl) = self.locals.get(local_id.0 as usize) else {
+                    return Ok(None);
+                };
+                // The Q4 GATE: the local must carry the registration mark. An
+                // unmarked local (Ty::Adt-with-fields but `None` here) is
+                // NEVER serde-cast.
+                let Some(body_adt) = decl.validated_body_of else {
+                    return Ok(None);
+                };
+                let op = self.lower_expr(base)?;
+                Ok(Some((op, body_adt)))
+            }
+            // Arm 2 (recursive step) — `outer.<nested-class-field>`. Resolve
+            // `outer` first; if it is a validated body AND `field` is a
+            // nested-class field of it, emit the nested accessor.
+            ExprKind::Attr {
+                base: inner_base,
+                name: field,
+            } => {
+                let Some((outer_op, outer_adt)) = self.resolve_validated_body_base(inner_base)?
+                else {
+                    return Ok(None);
+                };
+                // `field` must be a declared field of `outer_adt`, typed as
+                // ANOTHER field-tracked validated class. (A scalar field here
+                // is NOT a valid base for a further `.field` — the caller's
+                // outer arm handles the terminal scalar read directly.)
+                let Some(field_ty) = self
+                    .ctx
+                    .typed
+                    .adt_fields
+                    .get(&outer_adt)
+                    .and_then(|fields| fields.get(field))
+                else {
+                    return Ok(None);
+                };
+                let cobrust_types::Ty::Adt(nested_adt, _) = field_ty else {
+                    return Ok(None);
+                };
+                let nested_adt = *nested_adt;
+                // The nested accessor returns the BORROWED interior Value for
+                // the nested object. Pick it via the field's `Ty::Adt` (the
+                // `__cobrust_pit_body_get_nested` arm of
+                // `lookup_validated_body_accessor`). Borrowed receiver
+                // (Move → Copy — the body box is freed once by the
+                // trampoline); the field name is the compiler-synthesised Str.
+                let Some(accessor) = cobrust_types::lookup_validated_body_accessor(field_ty) else {
+                    return Ok(None);
+                };
+                let recv_op = upgrade_move_to_copy_handle(outer_op);
+                let name_op = Operand::Constant(Constant::Str(field.clone()));
+                let nested_op = self.emit_ecosystem_call(
+                    accessor.runtime_symbol,
+                    accessor.ret.clone(),
+                    vec![recv_op, name_op],
+                    base.span,
+                );
+                // Re-mark the `_ecoret` result temp `validated_body_of =
+                // Some(nested_adt)` so a FURTHER `.field` on it (the next
+                // recursion level, or the caller's terminal scalar read) fires
+                // the registration-gated path again. The temp was declared by
+                // `emit_ecosystem_call` and `nested_op` is a `Move`/`Copy` of
+                // it; recover its `LocalId` to set the mark.
+                if let Operand::Move(place) | Operand::Copy(place) = &nested_op {
+                    if let Some(slot) = self.locals.get_mut(place.local.0 as usize) {
+                        slot.validated_body_of = Some(nested_adt);
+                    }
+                }
+                Ok(Some((nested_op, nested_adt)))
+            }
+            _ => Ok(None),
+        }
     }
 
     fn lookup_local_for_resolved(
@@ -1546,22 +1622,57 @@ impl<'a> BodyBuilder<'a> {
                 // `Field(0)` stub below and are NEVER `cast::<Value>()`-ed
                 // (the no-UB invariant). Gating on `Ty::Adt`-with-fields is
                 // the UB bug this design forbids.
-                if let Some(accessor) = self.lookup_validated_body_field_accessor(base, name) {
-                    // Borrowed receiver (Move → Copy, the `coil.Buffer.shape`
-                    // discipline): the shim reads `&serde_json::Value`; the
-                    // body box stays live + is freed exactly once by the
-                    // `route_validated` trampoline (`cabi.rs:530`). The field
-                    // name is the COMPILER-SYNTHESISED `Str` (footgun #1 —
-                    // never author-written), passed as the 2nd arg.
-                    let recv_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
-                    let name_op = Operand::Constant(Constant::Str(name.clone()));
-                    let op_out = self.emit_ecosystem_call(
-                        accessor.runtime_symbol,
-                        accessor.ret.clone(),
-                        vec![recv_op, name_op],
-                        e.span,
-                    );
-                    return Ok(op_out);
+                //
+                // ADR-0081 **Phase-2** widens the field-`Ty` reach (f64 /
+                // bool) and makes the BASE resolution RECURSIVE (nested
+                // bodies): `resolve_validated_body_base` walks a `body.inner`
+                // chain down to the marked param, emitting a
+                // `__cobrust_pit_body_get_nested` borrow at each nested hop +
+                // re-marking the result temp, so `body.inner.x` reaches HERE
+                // with `base` resolved to `(nested-Value, Inner)` and `name`
+                // (`x`) read off it by the field's declared `Ty`.
+                if let Some((base_value_op, body_adt)) = self.resolve_validated_body_base(base)? {
+                    if let Some(field_ty) = self
+                        .ctx
+                        .typed
+                        .adt_fields
+                        .get(&body_adt)
+                        .and_then(|fields| fields.get(name))
+                    {
+                        if let Some(accessor) =
+                            cobrust_types::lookup_validated_body_accessor(field_ty)
+                        {
+                            // Borrowed receiver (Move → Copy, the
+                            // `coil.Buffer.shape` discipline): the shim reads
+                            // `&serde_json::Value`; the body box stays live +
+                            // is freed exactly once by the `route_validated`
+                            // trampoline (`cabi.rs:530`). The field name is the
+                            // COMPILER-SYNTHESISED `Str` (footgun #1 — never
+                            // author-written), passed as the 2nd arg.
+                            let recv_op = upgrade_move_to_copy_handle(base_value_op);
+                            let name_op = Operand::Constant(Constant::Str(name.clone()));
+                            let op_out = self.emit_ecosystem_call(
+                                accessor.runtime_symbol,
+                                accessor.ret.clone(),
+                                vec![recv_op, name_op],
+                                e.span,
+                            );
+                            // If THIS read is itself a nested-class field
+                            // (e.g. the `body.inner` in `body.inner.x`,
+                            // reached directly rather than via the recursive
+                            // base resolver — the terminal `.field` arm), mark
+                            // its result temp so a further `.field` recurses.
+                            if let cobrust_types::Ty::Adt(nested_adt, _) = field_ty {
+                                if let Operand::Move(place) | Operand::Copy(place) = &op_out {
+                                    if let Some(slot) = self.locals.get_mut(place.local.0 as usize)
+                                    {
+                                        slot.validated_body_of = Some(*nested_adt);
+                                    }
+                                }
+                            }
+                            return Ok(op_out);
+                        }
+                    }
                 }
                 // ADR-0083 — `math` module CONSTANT (`math.pi`, `math.e`,
                 // `math.tau`, `math.inf`, `math.nan`): a parens-free attribute

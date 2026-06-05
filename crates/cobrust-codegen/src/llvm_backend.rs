@@ -3029,6 +3029,23 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // for a registration-marked validated-body field read (the Q4 gate).
         let pit_body_get_i64_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let pit_body_get_str_ty = pit_request_path_param_ty;
+        // ADR-0081 Phase-2 — `f64` (LLVM `double` return, the `math.sqrt` /
+        // `random.random` precedent) + `bool` (LLVM `i1` return via
+        // `bool_type()`, the `re.match` / `fang.verify_password` / `coil.any`
+        // precedent — the i1 lands in the `.cb` `_ecoret` Bool local, usable
+        // in `if body.flag:`). Both take the SAME `(ptr, ptr)` args as the
+        // i64 shim (the boxed Value + the synthesised field-name Str).
+        let pit_body_get_f64_ty = f64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let pit_body_get_bool_ty = self
+            .ctx
+            .bool_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        // ADR-0081 Phase-2 (nested) — `body.<nested-class-field>` returns the
+        // BORROWED interior `*mut Value` for the nested object (so
+        // `body.inner.x` recurses). Shape is `(ptr, ptr) -> ptr`, type-
+        // identical to `pit_request_path_param_ty` (the Str-return shape — a
+        // raw pointer either way).
+        let pit_body_get_nested_ty = pit_request_path_param_ty;
         let pit_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_pit_app_new", pit_app_new_ty, 0usize),
@@ -3062,6 +3079,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ),
             ("__cobrust_pit_body_get_i64", pit_body_get_i64_ty, 2),
             ("__cobrust_pit_body_get_str", pit_body_get_str_ty, 2),
+            ("__cobrust_pit_body_get_f64", pit_body_get_f64_ty, 2),
+            ("__cobrust_pit_body_get_bool", pit_body_get_bool_ty, 2),
+            ("__cobrust_pit_body_get_nested", pit_body_get_nested_ty, 2),
             ("__cobrust_pit_app_drop", pit_drop_ty, 1),
             ("__cobrust_pit_response_drop", pit_drop_ty, 1),
             ("__cobrust_pit_server_handle_drop", pit_drop_ty, 1),

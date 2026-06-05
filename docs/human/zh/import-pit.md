@@ -50,7 +50,9 @@ curl http://127.0.0.1:<port>/ping
   值,所以响应体不可能与已校验的请求体发生漂移。详见下文「带校验的请求体」。
 - **`body.field` 读取**(ADR-0081)—— 在 `route_validated` 的 handler 内部,
   以带类型的属性访问读取已校验请求体的字段(`body.rank` → `i64`,`body.name`
-  → `str`),而不是字符串键。写错的字段是编译错误。详见下文「读取请求体字段」。
+  → `str`,`body.ratio` → `f64`,`body.active` → `bool`,以及嵌套的
+  `body.inner.x` 递归读取嵌套对象),而不是字符串键。写错的字段是编译错误。
+  详见下文「读取请求体字段」。
 - **`App.route(method, path, handler)`** — 将一个顶层 `fn` 注册为
   `method path` 的处理器。handler 必须是顶层
   `fn handler(req: pit.Request) -> pit.Response: …`。返回 `None`;
@@ -187,10 +189,39 @@ fn main() -> i64:
 - 没有静默强转:`i64` 字段读成整数;`i64` 字段收到 JSON `1.5` 早已在 422
   边界被拒,所以读取永远不会截断浮点数。
 
-第 1 阶段提供 `i64` + `str` 字段读取;`f64`/`bool` 以及嵌套类 / 列表字段
-属于后续阶段。字段读取**只**对你的 handler 从 `route_validated` 收到的请求
-体参数生效 —— 手动构造的 `CreateScore()` 值目前还没有字段存储(那是原生
-结构体的后续工作)。编译器会跟踪二者的区别,所以你不会遇到意外。
+#### f64 / bool / 嵌套字段(ADR-0081 第 2 阶段)
+
+字段读取现在覆盖**全部标量类型**,以及**嵌套对象**:
+
+```python
+class Inner:
+    x: i64 where 0 <= self and self <= 100
+
+class Payload:
+    ratio: f64 where 0.0 <= self and self <= 1.0
+    active: bool
+    inner: Inner
+
+fn handler(req: pit.Request, body: Payload) -> pit.Response:
+    let r: f64 = body.ratio          # 读出 f64
+    let a: bool = body.active        # 读出 bool(strict:仅 true/false,无真值性)
+    let v: i64 = body.inner.x        # 读出嵌套对象的字段——任意层级
+    if a and r >= 0.5 and v >= 50:
+        return pit.text_response(200, "ok")
+    return pit.text_response(200, "no")
+```
+
+- `f64` / `bool` 与 `i64` / `str` 同样是带类型的真实读取;`bool` 是严格的
+  (只接受 JSON `true`/`false`,没有 Python 的真值性 —— 符合 §2.2)。
+- **嵌套**:当某字段的类型本身是另一个带类型的 `class`(例如 `inner: Inner`),
+  `body.inner.x` 会**递归**读取嵌套对象的字段,深度不限(`body.a.b.c` 同样
+  可行)。嵌套对象的校验已经由 `route_validated` 完成(ADR-0080),这里只是把
+  已校验的值读出来。
+
+字段读取**只**对你的 handler 从 `route_validated` 收到的请求体参数生效 ——
+手动构造的 `CreateScore()` 值目前还没有字段存储(那是原生结构体的后续工作)。
+编译器会跟踪二者的区别,所以你不会遇到意外。列表字段(`tags: list[str]`)
+属于后续阶段。
 
 ## 字符串校验:长度 + 模式(ADR-0080 第 2 阶段)
 

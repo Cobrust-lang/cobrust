@@ -901,6 +901,133 @@ pub unsafe extern "C" fn __cobrust_pit_body_get_str(body: *mut u8, name: *mut u8
     alloc_str_buffer(captured)
 }
 
+/// `body.<f64-field>` — read an `f64` field off the validated body
+/// (ADR-0081 **Phase-2**). Returns the field's floating-point value.
+///
+/// Uses `serde_json::Value::as_f64` — a JSON number read, NEVER a string /
+/// bool coercion (CLAUDE.md §2.2 no-silent-coercion). Validation already
+/// rejected a non-numeric value for an `f64` field (the type / refinement
+/// check, ADR-0080), so the shim inherits that guarantee. The `0.0`
+/// sentinel is fail-clean (unreachable on the validated path — the field is
+/// present + numeric; it is a defense against a null body / a missing key,
+/// NOT a coercion). NOTE — this is the MIRROR of the i64 shim's `as_i64`
+/// (the i64 shim deliberately does NOT widen an integer to f64, footgun #3);
+/// here the field is DECLARED `f64`, so `as_f64` is the correct typed read
+/// and `serde_json` accepts both `3.14` and `42` for an `f64` field exactly
+/// as the validator does.
+///
+/// # Safety
+///
+/// As [`__cobrust_pit_body_get_i64`]. The shim only BORROWS `body`; the
+/// `route_validated` trampoline keeps ownership and frees it once
+/// (`cabi.rs:530`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_body_get_f64(body: *mut u8, name: *mut u8) -> f64 {
+    if body.is_null() {
+        // Fail-clean sentinel (unreachable on the validated path).
+        return 0.0;
+    }
+    // SAFETY: caller-attestation per `# Safety` — `body` is the trampoline's
+    // boxed `serde_json::Value`. Shared `&` borrow only.
+    let value: &serde_json::Value = unsafe { &*body.cast::<serde_json::Value>() };
+    // SAFETY: `name` per `# Safety`.
+    let name_s = unsafe { read_str_buf(name) };
+    value
+        .get(&name_s)
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0)
+}
+
+/// `body.<bool-field>` — read a `bool` field off the validated body
+/// (ADR-0081 **Phase-2**). Returns the field's boolean value as a Rust
+/// `bool` (LLVM `i1` at the C ABI — codegen declares the extern with
+/// `bool_type()`, the SAME ABI as `re.match` / `fang.verify_password` /
+/// `coil.any` so the `.cb` `Bool` local receives it directly).
+///
+/// Uses `serde_json::Value::as_bool` — STRICT (a JSON `true`/`false` only,
+/// never the truthiness of a number / string; CLAUDE.md §2.2
+/// no-silent-coercion + §2.2's "no implicit truthy/falsy"). Validation
+/// already rejected a non-boolean value for a `bool` field, so the shim
+/// inherits that guarantee. The `false` sentinel is fail-clean (unreachable
+/// on the validated path — a defense against a null body / a missing key,
+/// NOT a coercion).
+///
+/// # Safety
+///
+/// As [`__cobrust_pit_body_get_i64`]. The shim only BORROWS `body`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_body_get_bool(body: *mut u8, name: *mut u8) -> bool {
+    if body.is_null() {
+        // Fail-clean sentinel (unreachable on the validated path).
+        return false;
+    }
+    // SAFETY: caller-attestation per `# Safety` — `body` is the trampoline's
+    // boxed `serde_json::Value`. Shared `&` borrow only.
+    let value: &serde_json::Value = unsafe { &*body.cast::<serde_json::Value>() };
+    // SAFETY: `name` per `# Safety`.
+    let name_s = unsafe { read_str_buf(name) };
+    value
+        .get(&name_s)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// `body.<nested-class-field>` — read a NESTED OBJECT field off the
+/// validated body (ADR-0081 **Phase-2 nested**). Returns a BORROWED interior
+/// pointer to the nested `serde_json::Value` (the JSON object), cast to
+/// `*mut u8`, so a further `body.inner.field` recurses by calling another
+/// `__cobrust_pit_body_get_*` shim with THIS pointer as its `body` arg.
+///
+/// LIFETIME (the load-bearing soundness argument): the returned pointer
+/// ALIASES the parent `Value` box that the `route_validated` trampoline
+/// owns. That box is freed EXACTLY ONCE, AFTER the handler returns
+/// (`cabi.rs:530`); the interior borrow therefore stays valid for the whole
+/// handler invocation. The shim allocates NOTHING and frees NOTHING — the
+/// `.cb` side never owns the nested Value. On the `.cb` side the result temp
+/// is typed `Ty::Adt(nested_class)`, whose codegen drop is a NO-OP
+/// (`handle_drop_symbol(user_id) == None`), so even if the drop schedule
+/// enumerates the temp, no free is emitted on the borrowed pointer.
+///
+/// Returns null on a null body / a missing key / a non-object value
+/// (fail-clean — unreachable on the validated path, since validation already
+/// proved the nested field is present and is a JSON object, ADR-0080
+/// Phase-4(b)). A null return is safe: the recursive `get_*` shims all
+/// null-guard on entry.
+///
+/// # Safety
+///
+/// As [`__cobrust_pit_body_get_i64`]. The returned pointer is a BORROW of
+/// `body`'s interior — it must NOT be freed by the caller and must NOT
+/// outlive the parent box (it never does: the `.cb` temp lives within the
+/// handler scope, and the trampoline frees the parent only after the handler
+/// returns).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_body_get_nested(body: *mut u8, name: *mut u8) -> *mut u8 {
+    if body.is_null() {
+        // Fail-clean sentinel — a null nested object (unreachable on the
+        // validated path). The recursive `get_*` shims null-guard on entry.
+        return std::ptr::null_mut();
+    }
+    // SAFETY: caller-attestation per `# Safety` — `body` is the trampoline's
+    // boxed `serde_json::Value` (or a borrowed interior Value from a prior
+    // nested read). Shared `&` borrow only.
+    let value: &serde_json::Value = unsafe { &*body.cast::<serde_json::Value>() };
+    // SAFETY: `name` per `# Safety`.
+    let name_s = unsafe { read_str_buf(name) };
+    match value.get(&name_s) {
+        // Only an OBJECT is a valid nested body (the validator enforced
+        // this, ADR-0080 Phase-4(b)). Return the BORROWED interior pointer
+        // (a `&Value` reborrow → `*const` → `*mut u8`). The cast-away-const
+        // is sound: the recursive shims only ever `&`-borrow it (read-only).
+        Some(nested @ serde_json::Value::Object(_)) => {
+            (std::ptr::from_ref::<serde_json::Value>(nested) as *mut u8).cast()
+        }
+        // Missing / non-object — fail-clean null (unreachable on the
+        // validated path).
+        _ => std::ptr::null_mut(),
+    }
+}
+
 // =====================================================================
 // pit C-ABI surface — handle drops (mirror strike's _drop pattern).
 // =====================================================================
@@ -1089,6 +1216,173 @@ mod tests {
                 __cobrust_pit_json_response(201, std::ptr::null_mut()).is_null(),
                 "null body must return null (fail-clean, no serde cast)"
             );
+        }
+    }
+
+    // -- ADR-0081 Phase-2 validated-body field accessors --------------------
+    //
+    // Each shim BORROWS the boxed `serde_json::Value` (exactly as the
+    // `route_validated` trampoline produces it); the test owns + frees the
+    // box. The accessors allocate nothing (f64/bool/nested return by value /
+    // a borrowed interior pointer), so there is no `_drop`-shim bookkeeping
+    // except the freshly-allocated field-name Str arg, which the test frees.
+
+    /// `__cobrust_pit_body_get_f64` reads a JSON number field as `f64`,
+    /// INCLUDING fractional values (the `f64:0.5:99.9` fractional-bound
+    /// coverage). It borrows the box; the caller frees once.
+    #[test]
+    fn body_get_f64_reads_fractional_and_whole_and_null_guards() {
+        let body_raw = Box::into_raw(Box::new(serde_json::json!({
+            "ratio": 0.5,
+            "score": 99.9,
+            "whole": 42
+        })))
+        .cast::<u8>();
+        unsafe {
+            let name_ratio = alloc_str_buffer("ratio");
+            assert!(
+                (__cobrust_pit_body_get_f64(body_raw, name_ratio) - 0.5).abs() < f64::EPSILON,
+                "fractional f64 field must read 0.5"
+            );
+            drop_str_for_test(name_ratio);
+
+            let name_score = alloc_str_buffer("score");
+            assert!(
+                (__cobrust_pit_body_get_f64(body_raw, name_score) - 99.9).abs() < 1e-9,
+                "fractional f64 field must read 99.9"
+            );
+            drop_str_for_test(name_score);
+
+            // serde `as_f64` accepts a JSON integer for a DECLARED-f64 field
+            // (exactly as the validator accepts `42` for an `f64` field) —
+            // this is the f64 read, NOT the i64 shim's forbidden widening.
+            let name_whole = alloc_str_buffer("whole");
+            assert!(
+                (__cobrust_pit_body_get_f64(body_raw, name_whole) - 42.0).abs() < f64::EPSILON,
+                "a JSON integer in an f64 field reads as 42.0"
+            );
+            drop_str_for_test(name_whole);
+
+            // Null body → fail-clean 0.0 (unreachable on the validated path).
+            let name_x = alloc_str_buffer("ratio");
+            assert!(
+                __cobrust_pit_body_get_f64(std::ptr::null_mut(), name_x).abs() < f64::EPSILON,
+                "null body must return the 0.0 fail-clean sentinel"
+            );
+            drop_str_for_test(name_x);
+
+            drop(Box::from_raw(body_raw.cast::<serde_json::Value>()));
+        }
+    }
+
+    /// `__cobrust_pit_body_get_bool` reads a JSON boolean STRICTLY (no
+    /// truthiness of a number/string; CLAUDE.md §2.2). Borrows the box.
+    #[test]
+    fn body_get_bool_reads_true_false_and_null_guards() {
+        let body_raw = Box::into_raw(Box::new(serde_json::json!({
+            "active": true,
+            "disabled": false
+        })))
+        .cast::<u8>();
+        unsafe {
+            let name_active = alloc_str_buffer("active");
+            assert!(
+                __cobrust_pit_body_get_bool(body_raw, name_active),
+                "bool field `active` must read true"
+            );
+            drop_str_for_test(name_active);
+
+            let name_disabled = alloc_str_buffer("disabled");
+            assert!(
+                !__cobrust_pit_body_get_bool(body_raw, name_disabled),
+                "bool field `disabled` must read false"
+            );
+            drop_str_for_test(name_disabled);
+
+            // Null body → fail-clean false.
+            let name_x = alloc_str_buffer("active");
+            assert!(
+                !__cobrust_pit_body_get_bool(std::ptr::null_mut(), name_x),
+                "null body must return the false fail-clean sentinel"
+            );
+            drop_str_for_test(name_x);
+
+            drop(Box::from_raw(body_raw.cast::<serde_json::Value>()));
+        }
+    }
+
+    /// `__cobrust_pit_body_get_nested` returns the BORROWED interior `&Value`
+    /// for a nested OBJECT field; chaining a scalar accessor on THAT pointer
+    /// reads the nested field — the runtime mechanism behind `body.inner.x`.
+    /// A non-object / missing field returns null (fail-clean). The nested
+    /// pointer must NOT be freed (it aliases the parent box).
+    #[test]
+    fn body_get_nested_returns_borrowed_interior_and_recurses() {
+        let body_raw = Box::into_raw(Box::new(serde_json::json!({
+            "name": "a",
+            "inner": { "x": 70, "deep": { "y": 7 } },
+            "scalar": 5
+        })))
+        .cast::<u8>();
+        unsafe {
+            // body.inner → the nested object; then .x off it reads 70.
+            let name_inner = alloc_str_buffer("inner");
+            let inner_ptr = __cobrust_pit_body_get_nested(body_raw, name_inner);
+            drop_str_for_test(name_inner);
+            assert!(!inner_ptr.is_null(), "nested object field must be non-null");
+
+            let name_x = alloc_str_buffer("x");
+            assert_eq!(
+                __cobrust_pit_body_get_i64(inner_ptr, name_x),
+                70,
+                "body.inner.x must read 70 off the borrowed interior object"
+            );
+            drop_str_for_test(name_x);
+
+            // Two-level recursion: body.inner.deep → object; .y reads 7.
+            let name_inner2 = alloc_str_buffer("inner");
+            let inner2 = __cobrust_pit_body_get_nested(body_raw, name_inner2);
+            drop_str_for_test(name_inner2);
+            let name_deep = alloc_str_buffer("deep");
+            let deep_ptr = __cobrust_pit_body_get_nested(inner2, name_deep);
+            drop_str_for_test(name_deep);
+            assert!(
+                !deep_ptr.is_null(),
+                "two-level nested object must be non-null"
+            );
+            let name_y = alloc_str_buffer("y");
+            assert_eq!(
+                __cobrust_pit_body_get_i64(deep_ptr, name_y),
+                7,
+                "body.inner.deep.y must read 7 (depth-2 recursion)"
+            );
+            drop_str_for_test(name_y);
+
+            // A SCALAR field is not a valid nested object → null (fail-clean).
+            let name_scalar = alloc_str_buffer("scalar");
+            assert!(
+                __cobrust_pit_body_get_nested(body_raw, name_scalar).is_null(),
+                "a scalar field must NOT be treated as a nested object (null)"
+            );
+            drop_str_for_test(name_scalar);
+
+            // Missing field → null. Null body → null.
+            let name_missing = alloc_str_buffer("nope");
+            assert!(
+                __cobrust_pit_body_get_nested(body_raw, name_missing).is_null(),
+                "a missing field returns null"
+            );
+            drop_str_for_test(name_missing);
+            let name_z = alloc_str_buffer("inner");
+            assert!(
+                __cobrust_pit_body_get_nested(std::ptr::null_mut(), name_z).is_null(),
+                "null body returns null"
+            );
+            drop_str_for_test(name_z);
+
+            // The parent box is freed EXACTLY ONCE; the nested pointers were
+            // borrows of its interior (never separately freed → no double-free).
+            drop(Box::from_raw(body_raw.cast::<serde_json::Value>()));
         }
     }
 
