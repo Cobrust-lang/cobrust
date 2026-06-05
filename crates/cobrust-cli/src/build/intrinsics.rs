@@ -248,6 +248,12 @@ pub const STR_JOIN_RUNTIME_SYMBOL: &str = "__cobrust_str_join";
 pub const STR_REPLACE_RUNTIME_SYMBOL: &str = "__cobrust_str_replace";
 /// M-F.3.5 — `trim(s: str) -> str`.
 pub const STR_TRIM_RUNTIME_SYMBOL: &str = "__cobrust_str_trim";
+/// ADR-0085 — `lstrip(s: str) -> str` (Python `str.lstrip()`, left-only).
+pub const STR_LSTRIP_RUNTIME_SYMBOL: &str = "__cobrust_str_lstrip";
+/// ADR-0085 — `rstrip(s: str) -> str` (Python `str.rstrip()`, right-only).
+pub const STR_RSTRIP_RUNTIME_SYMBOL: &str = "__cobrust_str_rstrip";
+/// ADR-0085 — `count(s: str, sub: str) -> i64` (Python `str.count`, non-overlap).
+pub const STR_COUNT_RUNTIME_SYMBOL: &str = "__cobrust_str_count";
 /// M-F.3.5 — `find(s: str, needle: str) -> i64` (-1 sentinel).
 pub const STR_FIND_RUNTIME_SYMBOL: &str = "__cobrust_str_find";
 /// M-F.3.5 — `contains(s: str, needle: str) -> bool` (i64 0/1 at ABI).
@@ -432,6 +438,12 @@ struct IntrinsicDefIds {
     str_replace: HashSet<u32>,
     /// M-F.3.5.
     str_trim: HashSet<u32>,
+    /// ADR-0085 — `lstrip(s: str) -> str`.
+    str_lstrip: HashSet<u32>,
+    /// ADR-0085 — `rstrip(s: str) -> str`.
+    str_rstrip: HashSet<u32>,
+    /// ADR-0085 — `count(s: str, sub: str) -> i64`.
+    str_count: HashSet<u32>,
     /// M-F.3.5.
     str_find: HashSet<u32>,
     /// M-F.3.5.
@@ -523,6 +535,9 @@ impl IntrinsicDefIds {
         out.extend(&self.str_join);
         out.extend(&self.str_replace);
         out.extend(&self.str_trim);
+        out.extend(&self.str_lstrip);
+        out.extend(&self.str_rstrip);
+        out.extend(&self.str_count);
         out.extend(&self.str_find);
         out.extend(&self.str_contains);
         out.extend(&self.str_starts_with);
@@ -595,6 +610,9 @@ impl IntrinsicDefIds {
             && self.str_join.is_empty()
             && self.str_replace.is_empty()
             && self.str_trim.is_empty()
+            && self.str_lstrip.is_empty()
+            && self.str_rstrip.is_empty()
+            && self.str_count.is_empty()
             && self.str_find.is_empty()
             && self.str_contains.is_empty()
             && self.str_starts_with.is_empty()
@@ -671,6 +689,9 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         str_join: HashSet::new(),
         str_replace: HashSet::new(),
         str_trim: HashSet::new(),
+        str_lstrip: HashSet::new(),
+        str_rstrip: HashSet::new(),
+        str_count: HashSet::new(),
         str_find: HashSet::new(),
         str_contains: HashSet::new(),
         str_starts_with: HashSet::new(),
@@ -895,6 +916,21 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
                     ids.str_trim.insert(body.def_id.0);
                 }
             }
+            "lstrip" => {
+                if str_names_seen.insert("lstrip") {
+                    ids.str_lstrip.insert(body.def_id.0);
+                }
+            }
+            "rstrip" => {
+                if str_names_seen.insert("rstrip") {
+                    ids.str_rstrip.insert(body.def_id.0);
+                }
+            }
+            "count" => {
+                if str_names_seen.insert("count") {
+                    ids.str_count.insert(body.def_id.0);
+                }
+            }
             "find" => {
                 if str_names_seen.insert("find") {
                     ids.str_find.insert(body.def_id.0);
@@ -1052,6 +1088,12 @@ enum Kind {
     StrJoin,
     StrReplace,
     StrTrim,
+    /// ADR-0085 — `lstrip(s) -> str` (left-only whitespace strip).
+    StrLstrip,
+    /// ADR-0085 — `rstrip(s) -> str` (right-only whitespace strip).
+    StrRstrip,
+    /// ADR-0085 — `count(s, sub) -> i64` (non-overlapping).
+    StrCount,
     StrFind,
     StrContains,
     StrStartsWith,
@@ -1127,6 +1169,9 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "join" => Some(Kind::StrJoin),
         "replace" => Some(Kind::StrReplace),
         "trim" => Some(Kind::StrTrim),
+        "lstrip" => Some(Kind::StrLstrip),
+        "rstrip" => Some(Kind::StrRstrip),
+        "count" => Some(Kind::StrCount),
         "find" => Some(Kind::StrFind),
         "contains" => Some(Kind::StrContains),
         "starts_with" => Some(Kind::StrStartsWith),
@@ -1249,6 +1294,12 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::StrReplace)
     } else if ids.str_trim.contains(&id) {
         Some(Kind::StrTrim)
+    } else if ids.str_lstrip.contains(&id) {
+        Some(Kind::StrLstrip)
+    } else if ids.str_rstrip.contains(&id) {
+        Some(Kind::StrRstrip)
+    } else if ids.str_count.contains(&id) {
+        Some(Kind::StrCount)
     } else if ids.str_find.contains(&id) {
         Some(Kind::StrFind)
     } else if ids.str_contains.contains(&id) {
@@ -2159,7 +2210,8 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                 | Kind::StrFind
                 | Kind::StrContains
                 | Kind::StrStartsWith
-                | Kind::StrEndsWith => {
+                | Kind::StrEndsWith
+                | Kind::StrCount => {
                     if args.len() != 2 {
                         return Err(IntrinsicError::PrintArgUnsupported {
                             found: format!(
@@ -2176,6 +2228,7 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         Kind::StrContains => STR_CONTAINS_RUNTIME_SYMBOL,
                         Kind::StrStartsWith => STR_STARTS_WITH_RUNTIME_SYMBOL,
                         Kind::StrEndsWith => STR_ENDS_WITH_RUNTIME_SYMBOL,
+                        Kind::StrCount => STR_COUNT_RUNTIME_SYMBOL,
                         _ => unreachable!(),
                     };
                     *func = Operand::Constant(Constant::Str(sym.to_string()));
@@ -2217,7 +2270,12 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     args.push(new_);
                 }
                 // Single-arg Str→Str dispatch (trim / lower / upper / clone).
-                Kind::StrTrim | Kind::StrLower | Kind::StrUpper | Kind::StrClone => {
+                Kind::StrTrim
+                | Kind::StrLstrip
+                | Kind::StrRstrip
+                | Kind::StrLower
+                | Kind::StrUpper
+                | Kind::StrClone => {
                     if args.len() != 1 {
                         return Err(IntrinsicError::PrintArgUnsupported {
                             found: format!(
@@ -2229,6 +2287,8 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     let s = args[0].clone();
                     let sym = match kind {
                         Kind::StrTrim => STR_TRIM_RUNTIME_SYMBOL,
+                        Kind::StrLstrip => STR_LSTRIP_RUNTIME_SYMBOL,
+                        Kind::StrRstrip => STR_RSTRIP_RUNTIME_SYMBOL,
                         Kind::StrLower => STR_LOWER_RUNTIME_SYMBOL,
                         Kind::StrUpper => STR_UPPER_RUNTIME_SYMBOL,
                         Kind::StrClone => STR_CLONE_RUNTIME_SYMBOL,

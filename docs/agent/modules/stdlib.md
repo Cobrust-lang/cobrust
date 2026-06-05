@@ -418,7 +418,10 @@ pub fn len(s: &str) -> usize;
 pub fn find(s: &str, pat: &str) -> Option<usize>;
 pub fn replace(s: &str, from: &str, to: &str) -> String;
 pub fn split(s: &str, sep: &str) -> Vec<String>;
-pub fn trim(s: &str) -> &str;                            // ADR-0050e Decision 4 — renamed from `strip`
+pub fn trim(s: &str) -> &str;                            // ADR-0050e Decision 4; Python alias `strip`
+pub fn lstrip(s: &str) -> &str;                          // ADR-0085 — Python `str.lstrip()` (left-only)
+pub fn rstrip(s: &str) -> &str;                          // ADR-0085 — Python `str.rstrip()` (right-only)
+pub fn count(s: &str, sub: &str) -> usize;               // ADR-0085 — Python `str.count` (non-overlapping)
 pub fn lower(s: &str) -> String;
 pub fn upper(s: &str) -> String;
 pub fn join(parts: &[&str], sep: &str) -> String;        // ADR-0050e M-F.3.5
@@ -442,6 +445,9 @@ pub unsafe extern "C" fn __cobrust_str_split(s: *mut u8, sep: *mut u8) -> *mut u
 pub unsafe extern "C" fn __cobrust_str_join(parts: *mut u8, sep: *mut u8) -> *mut u8;  // -> str
 pub unsafe extern "C" fn __cobrust_str_replace(s: *mut u8, old: *mut u8, new_: *mut u8) -> *mut u8;
 pub unsafe extern "C" fn __cobrust_str_trim(s: *mut u8) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_str_lstrip(s: *mut u8) -> *mut u8;                  // ADR-0085 left-only
+pub unsafe extern "C" fn __cobrust_str_rstrip(s: *mut u8) -> *mut u8;                  // ADR-0085 right-only
+pub unsafe extern "C" fn __cobrust_str_count(s: *mut u8, sub: *mut u8) -> i64;         // ADR-0085 non-overlapping
 pub unsafe extern "C" fn __cobrust_str_find(s: *mut u8, needle: *mut u8) -> i64;       // -1 sentinel
 pub unsafe extern "C" fn __cobrust_str_contains(s: *mut u8, needle: *mut u8) -> i64;   // 0/1
 pub unsafe extern "C" fn __cobrust_str_starts_with(s: *mut u8, prefix: *mut u8) -> i64;
@@ -774,6 +780,50 @@ tests; 22 pass under `--include-ignored`. The 3 remaining
 source pattern `let s2 = clone(s); let n = str_len(s); ...` does
 NOT mitigate use-after-move under strict ADR-0050c Path D Option A
 — Phase G closure target).
+
+## ADR-0085 — Python-named str methods (§2.5 method-sugar)
+
+Cobrust is a Python successor (§2.1) and the language LLM agents write
+correctly first try (§2.5). An LLM writing Python reaches for
+`s.strip()` / `s.startswith()` / `s.endswith()`, not the Rust-named
+`trim` / `starts_with` / `ends_with`. ADR-0085 makes the Python names
+the CANONICAL source spelling; the Rust names stay accepted
+(non-breaking) as deprecated aliases.
+
+Three of the six are pure ALIASES — they route through
+`method_form_rewrite_name` (`crates/cobrust-mir/src/lower.rs`) to the
+SAME PRELUDE fn (and thus the SAME runtime symbol) as the Rust twin —
+NO new shim:
+
+| Python name | routes to | runtime symbol | return |
+|---|---|---|---|
+| `strip()` | `trim` | `__cobrust_str_trim` | str |
+| `startswith(p)` | `starts_with` | `__cobrust_str_starts_with` | bool |
+| `endswith(p)` | `ends_with` | `__cobrust_str_ends_with` | bool |
+
+Three are NEW PRELUDE fns + NEW shims:
+
+| PRELUDE fn | C-ABI shim | Return | Notes |
+|---|---|---|---|
+| `lstrip(s)` | `__cobrust_str_lstrip` | `*mut u8` (str) | Left-only whitespace (Rust `trim_start`). `'  hi  '.lstrip() == 'hi  '`. |
+| `rstrip(s)` | `__cobrust_str_rstrip` | `*mut u8` (str) | Right-only (Rust `trim_end`). `'  hi  '.rstrip() == '  hi'`. |
+| `count(s, sub)` | `__cobrust_str_count` | `i64` | Non-overlapping (Rust `str::matches(sub).count()`). `'banana'.count('a') == 3`; `'aaa'.count('aa') == 1`. |
+
+Semantics verified differentially against CPython 3.11. Wiring spans
+`cobrust-types/src/check.rs` (type arms + error-hint list),
+`cobrust-mir/src/lower.rs` (rewrite + borrow-set),
+`cobrust-frontend/src/prelude.rs` (new fn stubs),
+`cobrust-cli/src/build/intrinsics.rs` (Kind + symbol routing),
+`cobrust-codegen/src/llvm_backend.rs` (externs), and
+`cobrust-stdlib/src/string.rs` (the 3 new shims).
+
+E2E corpus: `crates/cobrust-cli/tests/str_methods_py_e2e.rs` (8 tests:
+strip both-ends, startswith/endswith true+false, lstrip/rstrip one-sided
+with F36 anti-swap sentinels, count non-overlapping, a regression family
+proving the Rust names still work, and a strip==trim equivalence check).
+
+Deferred to a follow-up: `join` / `title` / `capitalize` / `zfill` /
+`splitlines` / `isdigit`.
 
 ## ADR-0050d M-F.3.4 — dict surface C-ABI shims
 

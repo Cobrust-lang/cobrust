@@ -272,6 +272,47 @@ Surface:
 - `lower(s: str) -> str` / `upper(s: str) -> str`
 - `clone(s: str) -> str` (deep-copy; LC-100 honest-debt mitigation)
 
+#### Python-named string methods (ADR-0085, the §2.5-recommended spelling)
+
+Cobrust is a Python successor (§2.1) and the language LLM agents write
+correctly on the first try (§2.5). An LLM writing Python reaches for
+`s.strip()` / `s.startswith()` / `s.endswith()`, not the Rust-named
+`trim` / `starts_with` / `ends_with`. So the **Python names are the
+canonical spelling**; the Rust names stay accepted (non-breaking — they
+keep existing `.cb` programs working) but are documented as deprecated
+aliases.
+
+Six methods added:
+
+- `s.strip()` — strip whitespace from both ends (equivalent to
+  `s.trim()`; CPython `'  hi  '.strip() == 'hi'`).
+- `s.lstrip()` — strip the LEFT side only (`'  hi  '.lstrip() == 'hi  '`).
+- `s.rstrip()` — strip the RIGHT side only (`'  hi  '.rstrip() == '  hi'`).
+- `s.startswith(p) -> bool` — equivalent to `s.starts_with(p)`.
+- `s.endswith(p) -> bool` — equivalent to `s.ends_with(p)`.
+- `s.count(sub) -> i64` — NON-overlapping count (CPython
+  `'banana'.count('a') == 3`; `'aaa'.count('aa') == 1`, not 2).
+
+```cobrust
+fn main() -> i64:
+    let s: str = input("")        # "  hello  \n"
+    print(s.strip())              # "hello"
+    let n: i64 = "banana".count("a")
+    print(n)                      # 3
+    if "hello".startswith("he"):
+        print(1)                  # 1
+    return 0
+```
+
+`strip` / `startswith` / `endswith` are pure aliases: the MIR rewrite
+routes them to the SAME runtime symbol as the Rust twin
+(`__cobrust_str_trim` / `__cobrust_str_starts_with` /
+`__cobrust_str_ends_with`) — no new shim. `lstrip` / `rstrip` / `count`
+are new shims (`__cobrust_str_lstrip` / `_rstrip` / `_count`). All
+semantics are differentially verified against CPython 3.11. Deferred to
+a follow-up: `join` / `title` / `capitalize` / `zfill` / `splitlines` /
+`isdigit`.
+
 Example (`hello_csv.cb`):
 
 ```cobrust

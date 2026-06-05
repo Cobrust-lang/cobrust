@@ -2237,7 +2237,11 @@ impl Ctx {
                 unify(&Ty::Str, &a1, &mut self.subst, pos_args[1].span)?;
                 Ok(Some(Ty::Str))
             }
-            "trim" => {
+            // ADR-0085: `strip` is the Python-canonical alias for `trim`
+            // (CPython `'  hi  '.strip() == 'hi'` — whitespace, both ends;
+            // identical to Rust `str::trim`). `lstrip` / `rstrip` are the
+            // one-sided NEW methods (left / right whitespace only).
+            "trim" | "strip" | "lstrip" | "rstrip" => {
                 if !pos_args.is_empty() {
                     return Err(TypeError::ArityMismatch {
                         expected: 0,
@@ -2249,6 +2253,23 @@ impl Ctx {
                     });
                 }
                 Ok(Some(Ty::Str))
+            }
+            // ADR-0085: `count(sub) -> int` — non-overlapping occurrence
+            // count (CPython `'banana'.count('a') == 3`).
+            "count" => {
+                if pos_args.len() != 1 {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 1,
+                        actual: pos_args.len(),
+                        span,
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
+                    });
+                }
+                let at = self.synth_expr(pos_args[0])?;
+                unify(&Ty::Str, &at, &mut self.subst, pos_args[0].span)?;
+                Ok(Some(Ty::Int))
             }
             "find" => {
                 if pos_args.len() != 1 {
@@ -2265,7 +2286,9 @@ impl Ctx {
                 unify(&Ty::Str, &at, &mut self.subst, pos_args[0].span)?;
                 Ok(Some(Ty::Int))
             }
-            "contains" | "starts_with" | "ends_with" => {
+            // ADR-0085: `startswith` / `endswith` are the Python-canonical
+            // aliases for `starts_with` / `ends_with` (both `-> bool`).
+            "contains" | "starts_with" | "startswith" | "ends_with" | "endswith" => {
                 if pos_args.len() != 1 {
                     return Err(TypeError::ArityMismatch {
                         expected: 1,
@@ -4016,25 +4039,35 @@ fn str_method_suggestion(typo: &str) -> Option<&'static str> {
         Some("did you mean 'split'?")
     } else if typo.starts_with("len") || typo.contains("len") {
         Some("did you mean 'len'?")
-    } else if typo.contains("trim") {
-        Some("did you mean 'trim'?")
+    } else if typo.contains("lstrip") {
+        Some("did you mean 'lstrip'?")
+    } else if typo.contains("rstrip") {
+        Some("did you mean 'rstrip'?")
+    } else if typo.contains("strip") || typo.contains("trim") {
+        // ADR-0085 §2.5: `strip` is the Python-canonical spelling.
+        Some("did you mean 'strip'?")
     } else if typo.contains("find") {
         Some("did you mean 'find'?")
+    } else if typo.contains("count") {
+        Some("did you mean 'count'?")
     } else if typo.contains("replace") {
         Some("did you mean 'replace'?")
     } else if typo.contains("contain") {
         Some("did you mean 'contains'?")
     } else if typo.contains("start") {
-        Some("did you mean 'starts_with'?")
+        // ADR-0085 §2.5: `startswith` is the Python-canonical spelling.
+        Some("did you mean 'startswith'?")
     } else if typo.contains("end") {
-        Some("did you mean 'ends_with'?")
+        Some("did you mean 'endswith'?")
     } else if typo.contains("low") {
         Some("did you mean 'lower'?")
     } else if typo.contains("up") {
         Some("did you mean 'upper'?")
     } else {
+        // ADR-0085 §2.5: Python-canonical names lead; the Rust-named
+        // aliases (trim / starts_with / ends_with) remain accepted.
         Some(
-            "str methods: len, split, replace, trim, find, contains, starts_with, ends_with, lower, upper",
+            "str methods: len, split, replace, strip, lstrip, rstrip, find, count, contains, startswith, endswith, lower, upper",
         )
     }
 }

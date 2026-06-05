@@ -2048,6 +2048,14 @@ impl<'a> BodyBuilder<'a> {
                 | "split"
                 | "replace"
                 | "trim"
+                // ADR-0085 — lstrip / rstrip / count READ the receiver
+                // Str pointer without consuming it (same borrow discipline
+                // as trim / find). The Python aliases strip / startswith /
+                // endswith already arrive here as trim / starts_with /
+                // ends_with (rewritten upstream), so they are covered.
+                | "lstrip"
+                | "rstrip"
+                | "count"
                 | "find"
                 | "contains"
                 | "starts_with"
@@ -3675,11 +3683,19 @@ fn method_form_rewrite_name(b: &BodyBuilder<'_>, base: &Expr, method_name: &str)
             "len" => Some("str_len".to_string()),
             "split" => Some("split".to_string()),
             "replace" => Some("replace".to_string()),
-            "trim" => Some("trim".to_string()),
+            // ADR-0085: Python-canonical aliases route to the SAME PRELUDE
+            // fn (and thus the SAME runtime symbol) as their Rust twin —
+            // `strip` -> trim, `startswith` -> starts_with, `endswith` ->
+            // ends_with. No duplicate shim. `lstrip` / `rstrip` / `count`
+            // are NEW PRELUDE fns with their own shims.
+            "trim" | "strip" => Some("trim".to_string()),
+            "lstrip" => Some("lstrip".to_string()),
+            "rstrip" => Some("rstrip".to_string()),
+            "count" => Some("count".to_string()),
             "find" => Some("find".to_string()),
             "contains" => Some("contains".to_string()),
-            "starts_with" => Some("starts_with".to_string()),
-            "ends_with" => Some("ends_with".to_string()),
+            "starts_with" | "startswith" => Some("starts_with".to_string()),
+            "ends_with" | "endswith" => Some("ends_with".to_string()),
             "lower" => Some("lower".to_string()),
             "upper" => Some("upper".to_string()),
             _ => None,

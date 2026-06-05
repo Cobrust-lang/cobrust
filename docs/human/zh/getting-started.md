@@ -256,6 +256,45 @@ surface:
 - `lower(s: str) -> str` / `upper(s: str) -> str`
 - `clone(s: str) -> str`(深拷贝;LC-100 honest-debt 缓解手段)
 
+#### Python 风格的字符串方法(ADR-0085,§2.5 推荐写法)
+
+Cobrust 是 Python 的后继语言(§2.1),也是「LLM 第一次就能写对」的
+语言(§2.5)。LLM 写 Python 时会下意识地写 `s.strip()` /
+`s.startswith()` / `s.endswith()`,而不是 Rust 风格的 `trim` /
+`starts_with` / `ends_with`。所以 **Python 名字才是推荐写法**,而 Rust
+名字仍然可用(向后兼容,不会破坏既有 `.cb` 程序),只是标记为
+deprecated 别名。
+
+新增 6 个方法:
+
+- `s.strip()` —— 去掉两侧空白(等价于 `s.trim()`,CPython
+  `'  hi  '.strip() == 'hi'`)。
+- `s.lstrip()` —— **只**去掉左侧空白(`'  hi  '.lstrip() == 'hi  '`)。
+- `s.rstrip()` —— **只**去掉右侧空白(`'  hi  '.rstrip() == '  hi'`)。
+- `s.startswith(p) -> bool` —— 等价于 `s.starts_with(p)`。
+- `s.endswith(p) -> bool` —— 等价于 `s.ends_with(p)`。
+- `s.count(sub) -> i64` —— **非重叠** 计数(CPython
+  `'banana'.count('a') == 3`;`'aaa'.count('aa') == 1`,不是 2)。
+
+```cobrust
+fn main() -> i64:
+    let s: str = input("")        # "  hello  \n"
+    print(s.strip())              # "hello"
+    let n: i64 = "banana".count("a")
+    print(n)                      # 3
+    if "hello".startswith("he"):
+        print(1)                  # 1
+    return 0
+```
+
+其中 `strip` / `startswith` / `endswith` 是纯别名:它们在 MIR 改写阶段
+路由到与 Rust 名字 **同一个** runtime symbol(`__cobrust_str_trim` /
+`__cobrust_str_starts_with` / `__cobrust_str_ends_with`),不引入新的
+shim。`lstrip` / `rstrip` / `count` 是新增 shim
+(`__cobrust_str_lstrip` / `_rstrip` / `_count`)。语义全部对照
+CPython 3.11 做了差分测试。后续会再补 `join` / `title` /
+`capitalize` / `zfill` / `splitlines` / `isdigit`。
+
 示例(`hello_csv.cb`):
 
 ```cobrust

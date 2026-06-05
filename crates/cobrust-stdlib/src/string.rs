@@ -54,6 +54,35 @@ pub fn trim(s: &str) -> &str {
     s.trim()
 }
 
+/// Strip leading whitespace only (Python `str.lstrip()`, no-arg form).
+///
+/// Mirrors Rust's `str::trim_start`. ADR-0085 §"NEW shims": the
+/// one-sided counterpart to [`trim`]. `"  hi  ".lstrip() == "hi  "`
+/// (CPython 3.11 oracle). A chars-argument form is deferred per
+/// ADR-0085 §"Deferred methods".
+pub fn lstrip(s: &str) -> &str {
+    s.trim_start()
+}
+
+/// Strip trailing whitespace only (Python `str.rstrip()`, no-arg form).
+///
+/// Mirrors Rust's `str::trim_end`. `"  hi  ".rstrip() == "  hi"`
+/// (CPython 3.11 oracle). The right-side sibling of [`lstrip`].
+pub fn rstrip(s: &str) -> &str {
+    s.trim_end()
+}
+
+/// Count NON-overlapping occurrences of `sub` in `s` (Python
+/// `str.count(sub)`).
+///
+/// ADR-0085 §"NEW shims": mirrors Rust's `str::matches(sub).count()`,
+/// which is byte-level and non-overlapping — identical to CPython:
+/// `"banana".count("a") == 3`, `"aaa".count("aa") == 1` (NOT 2),
+/// `"abc".count("") == 4` (len + 1), `"".count("a") == 0`.
+pub fn count(s: &str, sub: &str) -> usize {
+    s.matches(sub).count()
+}
+
 /// Lowercase. ASCII fast-path is what Rust's `str::to_lowercase`
 /// gives us; full Unicode case-folding requires the `unicode-case`
 /// helper crate (post-M11).
@@ -336,6 +365,46 @@ pub unsafe extern "C" fn __cobrust_str_trim(s: *mut u8) -> *mut u8 {
     alloc_str_buffer_local(trim(s_str))
 }
 
+/// C-ABI shim for source-level `lstrip(s) -> str` (Python
+/// `str.lstrip()`, left-side-only whitespace strip). ADR-0085 §"NEW
+/// shims": str-returning `(ptr) -> ptr`, mirroring [`__cobrust_str_trim`].
+///
+/// # Safety
+///
+/// `s` must be a valid Str buffer pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_lstrip(s: *mut u8) -> *mut u8 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    alloc_str_buffer_local(lstrip(s_str))
+}
+
+/// C-ABI shim for source-level `rstrip(s) -> str` (Python
+/// `str.rstrip()`, right-side-only whitespace strip). ADR-0085 §"NEW
+/// shims": str-returning `(ptr) -> ptr`.
+///
+/// # Safety
+///
+/// `s` must be a valid Str buffer pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_rstrip(s: *mut u8) -> *mut u8 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    alloc_str_buffer_local(rstrip(s_str))
+}
+
+/// C-ABI shim for source-level `count(s, sub) -> i64` (Python
+/// `str.count(sub)`, non-overlapping). ADR-0085 §"NEW shims":
+/// `(ptr, ptr) -> i64`, mirroring [`__cobrust_str_find`]'s arity.
+///
+/// # Safety
+///
+/// `s` and `sub` must be valid Str buffer pointers or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_count(s: *mut u8, sub: *mut u8) -> i64 {
+    let s_str = unsafe { str_buf_as_str_local(s) };
+    let sub_str = unsafe { str_buf_as_str_local(sub) };
+    count(s_str, sub_str) as i64
+}
+
 /// C-ABI shim for source-level `find(s, needle) -> i64` with `-1`
 /// sentinel per ADR-0050e Decision 5. Empty needle yields `0` (matches
 /// Python's `str.find('')`).
@@ -548,6 +617,55 @@ mod tests {
     #[test]
     fn trim_empty_input() {
         assert_eq!(trim(""), "");
+    }
+
+    // ADR-0085 lstrip/rstrip/count — differential vs CPython 3.11.
+    // F36: the l/r tests are deliberately asymmetric so a swapped
+    // implementation (lstrip<->rstrip) FAILS rather than passing.
+
+    #[test]
+    fn lstrip_left_only() {
+        // CPython: '  hi  '.lstrip() == 'hi  ' (RIGHT whitespace kept).
+        assert_eq!(lstrip("  hi  "), "hi  ");
+    }
+
+    #[test]
+    fn rstrip_right_only() {
+        // CPython: '  hi  '.rstrip() == '  hi' (LEFT whitespace kept).
+        assert_eq!(rstrip("  hi  "), "  hi");
+    }
+
+    #[test]
+    fn lstrip_is_not_rstrip() {
+        // F36 anti-swap guard: on an asymmetric input the two diverge.
+        assert_ne!(lstrip("  hi  "), rstrip("  hi  "));
+        assert_eq!(lstrip("  hi  "), "hi  ");
+        assert_eq!(rstrip("  hi  "), "  hi");
+    }
+
+    #[test]
+    fn lstrip_rstrip_tabs_newlines() {
+        // CPython treats \t \n \r as whitespace for the no-arg form.
+        assert_eq!(lstrip("\t\n hi \n\t"), "hi \n\t");
+        assert_eq!(rstrip("\t\n hi \n\t"), "\t\n hi");
+    }
+
+    #[test]
+    fn count_non_overlapping() {
+        // CPython: 'banana'.count('a') == 3.
+        assert_eq!(count("banana", "a"), 3);
+        // CPython: 'aaa'.count('aa') == 1 (NON-overlapping, NOT 2).
+        assert_eq!(count("aaa", "aa"), 1);
+        assert_eq!(count("aaaa", "aa"), 2);
+        assert_eq!(count("hello", "l"), 2);
+    }
+
+    #[test]
+    fn count_absent_and_edge() {
+        assert_eq!(count("hello", "z"), 0);
+        // CPython: ''.count('a') == 0; 'abc'.count('') == 4 (len + 1).
+        assert_eq!(count("", "a"), 0);
+        assert_eq!(count("abc", ""), 4);
     }
 
     #[test]

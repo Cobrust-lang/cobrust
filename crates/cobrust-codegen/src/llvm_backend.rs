@@ -2356,6 +2356,43 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_param_counts
             .insert("__cobrust_str_trim", 1);
 
+        // ADR-0085 — __cobrust_str_lstrip(s: *mut Str) -> *mut Str
+        // (Python `str.lstrip()`; left-only whitespace; mirrors trim's ABI).
+        let str_lstrip_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let str_lstrip_fn = self.module.add_function(
+            "__cobrust_str_lstrip",
+            str_lstrip_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_lstrip", str_lstrip_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_lstrip", 1);
+
+        // ADR-0085 — __cobrust_str_rstrip(s: *mut Str) -> *mut Str
+        // (Python `str.rstrip()`; right-only whitespace).
+        let str_rstrip_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let str_rstrip_fn = self.module.add_function(
+            "__cobrust_str_rstrip",
+            str_rstrip_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_rstrip", str_rstrip_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_rstrip", 1);
+
+        // ADR-0085 — __cobrust_str_count(s, sub) -> i64  (non-overlapping;
+        // mirrors __cobrust_str_find's `(ptr, ptr) -> i64` ABI).
+        let str_count_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let str_count_fn =
+            self.module
+                .add_function("__cobrust_str_count", str_count_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_count", str_count_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_count", 2);
+
         // __cobrust_str_find(s, needle) -> i64  (-1 sentinel for not-found)
         let str_find_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let str_find_fn =
