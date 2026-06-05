@@ -181,7 +181,11 @@ pub fn type_error_suggestion_text(err: &TypeError) -> Option<&'static str> {
         | UnsupportedRefinement { suggestion, .. }
         // ADR-0088 §3 — `len(x)` on a non-sized arg; the accepted
         // sized-type set is in the Display message + this hint.
-        | LenArgNotSized { suggestion, .. } => *suggestion,
+        | LenArgNotSized { suggestion, .. }
+        // ADR-0092 — undeclared dora output id; the declared-output list
+        // + the nearest-match are in the Display message, this is the
+        // uniform static hint.
+        | DoraUnknownOutputId { suggestion, .. } => *suggestion,
         Multiple(_) => None,
     }
 }
@@ -254,6 +258,11 @@ pub fn type_error_fix_safety(err: &TypeError) -> FixSafety {
         // rewrite of the argument (use a sized value) or the call (use
         // a comparison for a number). No cross-line semantics carry-over.
         LenArgNotSized { .. } => FixSafety::LocalEdit,
+        // ADR-0092 — undeclared dora output id. Fix is a local rewrite of
+        // the `send_output(...)` id-arg string (correct the typo to a
+        // declared id, or add the id to `@dora.node(outputs=[...])`). Both
+        // are local edits; no cross-line semantics carry-over.
+        DoraUnknownOutputId { .. } => FixSafety::LocalEdit,
         // Multiple — children carry their own tiers; the aggregate has no
         // singular safety classification.
         Multiple(_) => FixSafety::RequiresHumanReview,

@@ -605,6 +605,31 @@ struct Ctx {
     /// body-param local. The ONLY source of "this param is a validated
     /// body" — route-shape validation is otherwise call-site-only.
     validated_handlers: HashMap<DefId, (usize, crate::ty::AdtId)>,
+    /// ADR-0092 — the set of dora output ids the module DECLARES, used to
+    /// compile-time-reject `event.send_output("<typo>", _)` on an
+    /// undeclared id (CLAUDE.md §2.5-A; lifts the runtime `cobrust-dora`
+    /// `-1` reject to a `cobrust check` `TypeError::DoraUnknownOutputId`).
+    ///
+    /// Collected by [`Self::collect_dora_declared_outputs`] in a module
+    /// PRE-PASS (after `prebind_items` records the `import dora` alias, so
+    /// a `dora.declare_output(...)` call is recognisable; before Pass-2
+    /// body checking, so the set is complete when any `send_output` is
+    /// checked). Every declare-call carries a STATIC string-literal id (the
+    /// `@dora.node(outputs=[...])` desugar — cobrust-hir `lower.rs`), so a
+    /// `Some(set)` is the COMPLETE declared-output set for the one node per
+    /// `.cb` program (one dora node = one process).
+    ///
+    /// - `None` — the module has NO `dora.declare_output(...)` call at all
+    ///   (a bare `@dora.node`, or a non-dora program). The check is INERT:
+    ///   the full declared set is unknown, so `send_output` is never
+    ///   rejected (the runtime backstop stays).
+    /// - `Some(set)` — the module declares outputs; a `send_output` whose
+    ///   id is a string literal NOT in `set` is rejected.
+    ///
+    /// A `BTreeSet` is deliberate (footgun-ledger): the §2.5-B FIX text
+    /// (the `declared outputs: [...]` list) renders in a deterministic,
+    /// source-stable order — the SAME elegance discipline as `adt_fields`.
+    dora_declared_outputs: Option<std::collections::BTreeSet<String>>,
 }
 
 impl Ctx {
@@ -631,11 +656,305 @@ impl Ctx {
         // unify).
         self.prebind_items(&m.items);
 
+        // ADR-0092 — between Pass 1 and Pass 2, collect the dora declared-
+        // output set (a module pre-pass). It runs AFTER `prebind_items`
+        // (so the `import dora` alias is in `ecosystem_module_defs` and a
+        // `dora.declare_output(...)` call is recognisable) and BEFORE
+        // Pass-2 body checking (so the set is COMPLETE when any
+        // `event.send_output("<id>", _)` is checked). On a non-dora
+        // program this leaves `dora_declared_outputs == None` → the
+        // §2.5-A output-id check is inert.
+        self.collect_dora_declared_outputs(&m.items);
+
         // Pass 2: type-check each item.
         for it in &m.items {
             self.check_item(it)?;
         }
         Ok(())
+    }
+
+    /// ADR-0092 — module pre-pass: walk every expression in the module and
+    /// collect the string-literal id of each `dora.declare_output("<id>")`
+    /// register-call into [`Self::dora_declared_outputs`].
+    ///
+    /// The `@dora.node(outputs=[...])` decorator desugars (cobrust-hir
+    /// `lower.rs`) into one `dora.declare_output("<id>")` module-fn call
+    /// per declared port, inserted at `main`'s prologue. This pre-pass
+    /// finds them ANYWHERE in the module (a recursive expr walk, not just
+    /// `main`'s top-level stmts) so the collection is robust to the
+    /// desugar's placement. Each declare-call is recognised the SAME way
+    /// the type-checker resolves it: an `Attr { base: Name(rn), name }`
+    /// where `rn.def_id` is a recorded `dora` module alias, `name ==
+    /// "declare_output"`, and the manifest row exists
+    /// (`lookup_module_fn("dora", "declare_output")` → runtime symbol
+    /// `__cobrust_dora_declare_output`). Only a STRING-LITERAL first arg is
+    /// collected (the desugar always emits one; defense-in-depth skips a
+    /// non-literal).
+    ///
+    /// `dora_declared_outputs` stays `None` when the module has NO such
+    /// call (a bare `@dora.node`, or a non-dora program) — the check is
+    /// then inert. The first declare-call seen flips it to `Some(set)`.
+    fn collect_dora_declared_outputs(&mut self, items: &[Item]) {
+        let mut declared: Option<std::collections::BTreeSet<String>> = None;
+        for it in items {
+            self.collect_dora_outputs_in_item(it, &mut declared);
+        }
+        self.dora_declared_outputs = declared;
+    }
+
+    fn collect_dora_outputs_in_item(
+        &self,
+        it: &Item,
+        declared: &mut Option<std::collections::BTreeSet<String>>,
+    ) {
+        match &it.kind {
+            ItemKind::Fn(f) => self.collect_dora_outputs_in_block(&f.body, declared),
+            ItemKind::Class(c) => {
+                for m in &c.members {
+                    self.collect_dora_outputs_in_item(m, declared);
+                }
+            }
+            ItemKind::TypeAlias(_) | ItemKind::Import { .. } => {}
+            ItemKind::Decorated { inner, .. } => {
+                self.collect_dora_outputs_in_item(inner, declared);
+            }
+            ItemKind::Let(lb) => self.collect_dora_outputs_in_expr(&lb.value, declared),
+            ItemKind::ExprStmt(e) => self.collect_dora_outputs_in_expr(e, declared),
+        }
+    }
+
+    fn collect_dora_outputs_in_block(
+        &self,
+        block: &Block,
+        declared: &mut Option<std::collections::BTreeSet<String>>,
+    ) {
+        for stmt in &block.stmts {
+            self.collect_dora_outputs_in_stmt(stmt, declared);
+        }
+    }
+
+    fn collect_dora_outputs_in_stmt(
+        &self,
+        stmt: &Stmt,
+        declared: &mut Option<std::collections::BTreeSet<String>>,
+    ) {
+        match &stmt.kind {
+            StmtKind::Let(lb) => self.collect_dora_outputs_in_expr(&lb.value, declared),
+            StmtKind::Assign { target, value } => {
+                self.collect_dora_outputs_in_expr(target, declared);
+                self.collect_dora_outputs_in_expr(value, declared);
+            }
+            StmtKind::If { arms, else_block } => {
+                for (cond, body) in arms {
+                    self.collect_dora_outputs_in_expr(cond, declared);
+                    self.collect_dora_outputs_in_block(body, declared);
+                }
+                if let Some(b) = else_block {
+                    self.collect_dora_outputs_in_block(b, declared);
+                }
+            }
+            StmtKind::Loop(lk) => match lk {
+                LoopKind::While {
+                    cond,
+                    body,
+                    else_block,
+                    ..
+                } => {
+                    self.collect_dora_outputs_in_expr(cond, declared);
+                    self.collect_dora_outputs_in_block(body, declared);
+                    if let Some(b) = else_block {
+                        self.collect_dora_outputs_in_block(b, declared);
+                    }
+                }
+                LoopKind::For {
+                    iter,
+                    body,
+                    else_block,
+                    ..
+                } => {
+                    self.collect_dora_outputs_in_expr(iter, declared);
+                    self.collect_dora_outputs_in_block(body, declared);
+                    if let Some(b) = else_block {
+                        self.collect_dora_outputs_in_block(b, declared);
+                    }
+                }
+            },
+            StmtKind::Match { scrutinee, arms } => {
+                self.collect_dora_outputs_in_expr(scrutinee, declared);
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        self.collect_dora_outputs_in_expr(g, declared);
+                    }
+                    self.collect_dora_outputs_in_block(&arm.body, declared);
+                }
+            }
+            StmtKind::With { item, body } => {
+                self.collect_dora_outputs_in_expr(&item.context, declared);
+                self.collect_dora_outputs_in_block(body, declared);
+            }
+            StmtKind::Try {
+                body,
+                handlers,
+                else_block,
+                finally_block,
+            } => {
+                self.collect_dora_outputs_in_block(body, declared);
+                for h in handlers {
+                    self.collect_dora_outputs_in_block(&h.body, declared);
+                }
+                if let Some(b) = else_block {
+                    self.collect_dora_outputs_in_block(b, declared);
+                }
+                if let Some(b) = finally_block {
+                    self.collect_dora_outputs_in_block(b, declared);
+                }
+            }
+            StmtKind::Return(Some(e)) | StmtKind::Expr(e) => {
+                self.collect_dora_outputs_in_expr(e, declared);
+            }
+            StmtKind::Raise { exc, cause } => {
+                if let Some(e) = exc {
+                    self.collect_dora_outputs_in_expr(e, declared);
+                }
+                if let Some(c) = cause {
+                    self.collect_dora_outputs_in_expr(c, declared);
+                }
+            }
+            StmtKind::Item(inner) => self.collect_dora_outputs_in_item(inner, declared),
+            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
+        }
+    }
+
+    fn collect_dora_outputs_in_expr(
+        &self,
+        e: &Expr,
+        declared: &mut Option<std::collections::BTreeSet<String>>,
+    ) {
+        // The recognition target: `dora.declare_output("<lit>")` — a
+        // `Call { callee: Attr { base: Name(rn), name: "declare_output" },
+        // args: [Positional(Lit(Str))] }` where `rn` is a `dora` module
+        // alias and the manifest row exists.
+        if let ExprKind::Call { callee, args } = &e.kind
+            && let ExprKind::Attr { base, name } = &callee.kind
+            && name == "declare_output"
+            && let ExprKind::Name(rn) = &base.kind
+            && let Some(module) = self.ecosystem_module_defs.get(&rn.def_id)
+            && crate::ecosystem::lookup_module_fn(module, name).is_some()
+            && let Some(CallArg::Positional(arg0)) = args.first()
+            && let ExprKind::Lit(Lit::Str(id)) = &arg0.kind
+        {
+            declared
+                .get_or_insert_with(std::collections::BTreeSet::new)
+                .insert(id.clone());
+        }
+        // Recurse into sub-expressions so a declare-call nested in any
+        // position is still found (defense-in-depth — the desugar emits a
+        // top-level stmt, but this keeps the pre-pass robust).
+        self.walk_expr_children(
+            e,
+            &mut |child, st| {
+                self.collect_dora_outputs_in_expr(child, st);
+            },
+            declared,
+        );
+    }
+
+    /// Apply `f` to every direct child expression of `e` (a structural
+    /// expr walk used by the ADR-0092 dora-output pre-pass). Threads the
+    /// `declared` accumulator through without cloning.
+    fn walk_expr_children(
+        &self,
+        e: &Expr,
+        f: &mut dyn FnMut(&Expr, &mut Option<std::collections::BTreeSet<String>>),
+        st: &mut Option<std::collections::BTreeSet<String>>,
+    ) {
+        match &e.kind {
+            ExprKind::Call { callee, args } => {
+                f(callee, st);
+                for a in args {
+                    match a {
+                        CallArg::Positional(x)
+                        | CallArg::StarArgs(x)
+                        | CallArg::StarStarKwargs(x)
+                        | CallArg::Keyword(_, x) => f(x, st),
+                    }
+                }
+            }
+            ExprKind::Attr { base, .. } => f(base, st),
+            ExprKind::Index { base, index } => {
+                f(base, st);
+                match index.as_ref() {
+                    IndexKind::Expr(x) => f(x, st),
+                    IndexKind::Slice { start, stop, step } => {
+                        for x in [start, stop, step].into_iter().flatten() {
+                            f(x, st);
+                        }
+                    }
+                    IndexKind::Tuple(parts) => {
+                        for p in parts {
+                            if let IndexKind::Expr(x) = p {
+                                f(x, st);
+                            }
+                        }
+                    }
+                }
+            }
+            ExprKind::Bin { lhs, rhs, .. } => {
+                f(lhs, st);
+                f(rhs, st);
+            }
+            ExprKind::Un { operand, .. }
+            | ExprKind::Borrow(operand)
+            | ExprKind::Await(operand)
+            | ExprKind::YieldFrom(operand) => f(operand, st),
+            ExprKind::Yield(opt) => {
+                if let Some(x) = opt {
+                    f(x, st);
+                }
+            }
+            ExprKind::Cast { expr, .. } => f(expr, st),
+            ExprKind::Tuple(xs) | ExprKind::List(xs) | ExprKind::Set(xs) => {
+                for x in xs {
+                    f(x, st);
+                }
+            }
+            ExprKind::Dict(entries) => {
+                for entry in entries {
+                    match entry {
+                        DictEntry::Pair(k, v) => {
+                            f(k, st);
+                            f(v, st);
+                        }
+                        DictEntry::Spread(x) => f(x, st),
+                    }
+                }
+            }
+            ExprKind::Format(parts) => {
+                for part in parts {
+                    if let FormatPart::Hole { expr, .. } = part {
+                        f(expr, st);
+                    }
+                }
+            }
+            ExprKind::Lambda { body, .. } => f(body, st),
+            ExprKind::Comp(comp) => {
+                match &comp.element {
+                    CompElem::Single(x) => f(x, st),
+                    CompElem::KeyValue(k, v) => {
+                        f(k, st);
+                        f(v, st);
+                    }
+                }
+                for clause in &comp.clauses {
+                    f(&clause.iter, st);
+                    for g in &clause.guards {
+                        f(g, st);
+                    }
+                }
+            }
+            // Leaves — no child expressions to visit.
+            ExprKind::Lit(_) | ExprKind::Name(_) => {}
+        }
     }
 
     fn prebind_items(&mut self, items: &[Item]) {
@@ -2770,6 +3089,21 @@ impl Ctx {
                         ),
                     });
                 };
+                // ADR-0092 — `event.send_output("<id>", payload)` output-id
+                // compile-time-catch (CLAUDE.md §2.5-A). Intercept BEFORE
+                // the generic `check_eco_sig` (the SAME shape as Case 1's
+                // `coil.array` special-case): when the receiver is a
+                // `dora.Event`, the method is `send_output`, the FIRST arg
+                // is a STRING LITERAL, and the module declares outputs
+                // (`dora_declared_outputs == Some(set)`), reject a literal
+                // id NOT in the set. A non-literal id / a None set skips
+                // this check (falls through to the unchanged `(Str,Str) ->
+                // i64` path) so there is no false-positive on the un-typed
+                // surface; the runtime `cobrust-dora` `-1` backstop covers
+                // the dynamic-id case.
+                if *id == crate::ecosystem::DORA_EVENT_ADT && name == "send_output" {
+                    self.check_dora_send_output_id(args)?;
+                }
                 let ret = self.check_eco_sig(&sig, args, span)?;
                 return Ok(Some(ret));
             }
@@ -2942,6 +3276,59 @@ impl Ctx {
             }
         }
         Ok(sig.ret.clone())
+    }
+
+    /// ADR-0092 — the `event.send_output("<id>", payload)` output-id
+    /// membership check (CLAUDE.md §2.5-A compile-time-catch).
+    ///
+    /// Raises [`TypeError::DoraUnknownOutputId`] when ALL hold:
+    /// - the FIRST positional arg is a string LITERAL (`"<id>"`), AND
+    /// - the module declares outputs ([`Self::dora_declared_outputs`] is
+    ///   `Some(set)` — at least one `@dora.node(outputs=[...])` port), AND
+    /// - that literal id is NOT in `set`.
+    ///
+    /// Otherwise returns `Ok(())` (the caller then runs the unchanged
+    /// `check_eco_sig` arg-type path). The two SKIP edges — a non-literal
+    /// id (cannot be proven statically) and a `None` set (no declared
+    /// outputs ⇒ the full set is unknown) — return `Ok(())` so there is no
+    /// false-positive; the runtime `cobrust-dora` `-1` reject is the
+    /// backstop for the dynamic-id case.
+    ///
+    /// The FIX (§2.5-B) is built into the `DoraUnknownOutputId` Display:
+    /// the declared-output list + a `did you mean "<nearest>"?` when one
+    /// declared id is a near edit-distance match (via
+    /// [`nearest_declared_output`]).
+    fn check_dora_send_output_id(&self, args: &[CallArg]) -> Result<(), TypeError> {
+        // Only a string-LITERAL first arg is provable statically. The
+        // diagnostic span is the id-arg's own span (more precise than the
+        // whole-call span — it points the LLM directly at the bad literal).
+        let Some(CallArg::Positional(arg0)) = args.first() else {
+            return Ok(());
+        };
+        let ExprKind::Lit(Lit::Str(id)) = &arg0.kind else {
+            return Ok(());
+        };
+        // No declared-output set (bare `@dora.node` / non-dora) ⇒ inert.
+        let Some(declared) = &self.dora_declared_outputs else {
+            return Ok(());
+        };
+        if declared.contains(id) {
+            return Ok(());
+        }
+        // The id is a literal NOT in a known, complete declared set →
+        // reject with the §2.5-B FIX (declared list + nearest match).
+        let declared_vec: Vec<String> = declared.iter().cloned().collect();
+        let nearest = nearest_declared_output(id, &declared_vec);
+        Err(TypeError::DoraUnknownOutputId {
+            id: id.clone(),
+            declared: declared_vec,
+            nearest,
+            span: arg0.span,
+            suggestion: Some(
+                "this output id is not declared — add it to \
+                 `@dora.node(outputs=[...])`, or fix the id to a declared one",
+            ),
+        })
     }
 
     /// ADR-0073 §2 D1+D8 — type-check a `Callback` parameter slot.
@@ -4873,6 +5260,61 @@ fn parse_pattern_call(e: &Expr) -> Option<String> {
         ExprKind::Lit(Lit::Str(s)) => Some(s.clone()),
         _ => None,
     }
+}
+
+/// ADR-0092 — pick the nearest declared dora output id to a mistyped
+/// `id`, for the `TypeError::DoraUnknownOutputId` §2.5-B "did you mean"
+/// FIX. Returns the closest declared id by Levenshtein edit distance when
+/// that distance is "close" (≤ a threshold scaled to the longer string,
+/// capped at 2 absolute), else `None` (no misleading suggestion for a
+/// wildly-different id). Ties break on the FIRST candidate in `declared`'s
+/// (sorted `BTreeSet`-derived) order, keeping the FIX deterministic.
+fn nearest_declared_output(id: &str, declared: &[String]) -> Option<String> {
+    let mut best: Option<(usize, &String)> = None;
+    for cand in declared {
+        let d = levenshtein(id, cand);
+        match best {
+            Some((bd, _)) if d >= bd => {}
+            _ => best = Some((d, cand)),
+        }
+    }
+    let (dist, cand) = best?;
+    // "Close enough" gate: allow edit distance up to half the longer
+    // length (so `twst`→`twist` and `pse`→`pose` qualify) but clamp into
+    // [1, 2] — a typo, not an unrelated word. The bounds are constants
+    // (`1 <= 2`), so `clamp` never panics.
+    let longest = id.chars().count().max(cand.chars().count());
+    let threshold = (longest / 2).clamp(1, 2);
+    if dist <= threshold {
+        Some(cand.clone())
+    } else {
+        None
+    }
+}
+
+/// ADR-0092 — classic two-row Levenshtein edit distance (char-wise). Kept
+/// inline (NO new dependency — the Cargo.lock-unchanged constraint) since
+/// the only consumer is the dora output-id nearest-match suggestion.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.is_empty() {
+        return b.len();
+    }
+    if b.is_empty() {
+        return a.len();
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr: Vec<usize> = vec![0; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
 }
 
 /// ADR-0041 §H8: resolve a constant tuple index to an element type.

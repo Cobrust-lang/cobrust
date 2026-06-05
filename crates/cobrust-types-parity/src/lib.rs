@@ -428,6 +428,15 @@ impl Canonicalize for TypeError {
             TypeError::UnsupportedRefinement { field, .. } => {
                 vec![CanonicalKey::leaf(field.as_str())]
             }
+            // ADR-0092 — key on the offending id + the declared-output
+            // list (both String, mirror-able). The `nearest` suggestion is
+            // a Display-only derivation, elided from the key (same shape as
+            // `UnknownField`'s `field` + `known_fields`).
+            TypeError::DoraUnknownOutputId { id, declared, .. } => {
+                let mut keys = vec![CanonicalKey::leaf(id.as_str())];
+                keys.extend(declared.iter().map(|d| CanonicalKey::leaf(d.as_str())));
+                keys
+            }
             // Variants with no extra payload (Span + suggestion only).
             TypeError::MutableDefault { .. }
             | TypeError::AmbiguousType { .. }
@@ -592,6 +601,8 @@ pub fn type_error_variant_name(err: &TypeError) -> &'static str {
         TypeError::UnsupportedRefinement { .. } => "UnsupportedRefinement",
         // ADR-0088 §3 — `len(x)` on a non-sized argument.
         TypeError::LenArgNotSized { .. } => "LenArgNotSized",
+        // ADR-0092 — undeclared dora output id.
+        TypeError::DoraUnknownOutputId { .. } => "DoraUnknownOutputId",
     }
 }
 

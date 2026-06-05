@@ -107,10 +107,15 @@ cobrust build prog.cb -o prog
   a real broker supplies the actual data.)
 - **`event.send_output(output_id, payload) -> i64`** — emit a `str`
   payload on a **declared** output port. The output id is validated
-  against the `outputs=[...]` you declared: an undeclared id is rejected
-  with a clear stderr message and a `-1` return (never a silent drop).
-  The synthetic runtime captures the emission to stdout as
-  `output[<id>]=<payload>`. Returns 0 on a successful emit.
+  against the `outputs=[...]` you declared. When the id is a **string
+  literal** (`send_output("pose", ...)`), an undeclared id is now caught
+  at **compile time** (ADR-0092): `cobrust check` / `cobrust build` fails
+  with `unknown dora output id …; declared outputs: [...]` and, on a near
+  typo, a `did you mean …?` suggestion — so you fix it before you ever
+  run. A **computed** id (a variable) cannot be checked statically, so it
+  keeps the runtime guard (a clear stderr message + a `-1` return, never a
+  silent drop). The synthetic runtime captures a successful emission to
+  stdout as `output[<id>]=<payload>`. Returns 0 on a successful emit.
   `send_output` hangs off the **Event** (not the Node) because the Event
   is the one handle in the handler's scope.
 
@@ -169,9 +174,11 @@ Notes + limits:
   Phase B (ADR-0076c). (The synthetic default carries `str` only; the
   `dora-real` Phase-A path carries scalar `str` over real Arrow.)
 - Yaml-loaded dataflows (`dora.run("dataflow.yml")`).
-- Compile-time rejection of an undeclared output id — today an
-  undeclared `send_output` is caught at RUNTIME (the `-1` + stderr
-  message); a compile-time `DoraUnknownOutputId` error is a follow-up.
+- ~~Compile-time rejection of an undeclared output id~~ — **shipped
+  (ADR-0092).** A **string-literal** undeclared `send_output` id is now a
+  `cobrust check` / `cobrust build` error (`DoraUnknownOutputId`) with a
+  declared-list + nearest-match FIX. Only a **computed** (non-literal) id
+  still relies on the runtime `-1` guard.
 - `for event in node:` polling iterator form.
 - ROS2 bridge publish surface (sub-ADR 0076a — Phase 3).
 - riscv64 cross-build of `cobrust-dora` (ADR-0075 Phase 1 dependency

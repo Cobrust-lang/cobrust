@@ -99,10 +99,15 @@ cobrust build prog.cb -o prog
   broker 提供实际数据。)
 - **`event.send_output(output_id, payload) -> i64`** — 在一个**已声明**的
   输出端口上发射 `str` 载荷。输出 id 会对照你声明的 `outputs=[...]`
-  校验: 未声明的 id 会被拒绝, 给出清晰的 stderr 消息并返回 `-1`(绝不
-  静默丢弃)。合成运行时将发射捕获到 stdout 为 `output[<id>]=<payload>`。
-  成功发射返回 0。`send_output` 挂在 **Event**(而非 Node)上, 因为
-  Event 是处理器作用域内唯一的句柄。
+  校验。当 id 是**字符串字面量**(`send_output("pose", ...)`)时, 未声明
+  的 id 现在会在**编译期**被捕获(ADR-0092): `cobrust check` / `cobrust
+  build` 报错 `unknown dora output id …; declared outputs: [...]`, 若是
+  近似拼写错误还会给出 `did you mean …?` 建议 — 所以你在运行之前就能
+  修正。**计算得到**的 id(变量)无法静态校验, 因此保留运行时守卫
+  (清晰的 stderr 消息 + `-1` 返回, 绝不静默丢弃)。合成运行时将一次成功
+  发射捕获到 stdout 为 `output[<id>]=<payload>`。成功发射返回 0。
+  `send_output` 挂在 **Event**(而非 Node)上, 因为 Event 是处理器
+  作用域内唯一的句柄。
 
 > 为什么用 `str_eq_lit(event.id(), "camera") == 1` 而不是 `event.id() ==
 > "camera"`? `str` 对 `str` 的 `==` 是一个独立的语言特性; `str_eq_lit(...)`
@@ -155,9 +160,11 @@ cargo build -p cobrust-dora --features dora-real
   (ADR-0076c)。(合成默认仅承载 `str`; `dora-real` 的 Phase-A 路径在真实
   Arrow 上承载标量 `str`。)
 - yaml 加载的数据流 (`dora.run("dataflow.yml")`)。
-- 对未声明输出 id 的编译期拒绝 — 当前未声明的 `send_output` 在**运行时**
-  被捕获(`-1` + stderr 消息); 编译期 `DoraUnknownOutputId` 错误是后续
-  工作。
+- ~~对未声明输出 id 的编译期拒绝~~ — **已交付 (ADR-0092)。** 一个
+  **字符串字面量**的未声明 `send_output` id 现在是 `cobrust check` /
+  `cobrust build` 错误(`DoraUnknownOutputId`), 并附带声明列表 + 近似
+  匹配的修复建议。仅**计算得到**(非字面量)的 id 仍依赖运行时 `-1`
+  守卫。
 - `for event in node:` 轮询迭代器形式。
 - ROS2 桥发布表面 (子-ADR 0076a — Phase 3)。
 - `cobrust-dora` 的 riscv64 交叉构建 (ADR-0075 Phase 1 依赖 — Phase 3

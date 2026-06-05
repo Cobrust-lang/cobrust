@@ -343,4 +343,43 @@ pub enum TypeError {
         span: Span,
         suggestion: Option<&'static str>,
     },
+
+    /// ADR-0092 — `event.send_output("<id>", payload)` named an output
+    /// id that the node's `@dora.node(outputs=[...])` decorator does NOT
+    /// declare. This LIFTS the dora send-output undeclared-id reject from
+    /// RUNTIME (a `cobrust-dora` `eprintln!` + a `-1` return; ADR-0076
+    /// Phase 2) to COMPILE TIME (CLAUDE.md §2.5-A compile-time-catch): a
+    /// mistyped output id is now a `cobrust check` error, not a silent
+    /// runtime drop.
+    ///
+    /// Raised ONLY when the id is a STRING LITERAL and the module DECLARES
+    /// outputs (one or more `dora.declare_output(...)` desugars from the
+    /// decorator). A non-literal id (a variable / computed `str`) cannot
+    /// be proven statically, so it is SKIPPED — the runtime backstop stays.
+    /// A bare `@dora.node` (no `outputs=`) declares NOTHING, so the check
+    /// is INERT (no false-positive on the un-typed surface).
+    ///
+    /// Per §2.5-B the message PRINTS THE FIX: it names the offending id,
+    /// the **declared output list**, and — when one declared id is a near
+    /// edit-distance match — a `did you mean "<nearest>"?` suggestion, so
+    /// the LLM agent rewrites the call on the next turn. `declared` +
+    /// `nearest` are owned (dynamic) `String`s so the FIX renders the real
+    /// per-node ids; `suggestion` carries the uniform ADR-0052b static
+    /// hint (the constant clause the LSP + fix-safety ladder consume).
+    #[error(
+        "unknown dora output id `{id}` — it is not declared in \
+         `@dora.node(outputs=[...])` at {span}; declared outputs: [{}]{}",
+        declared.join(", "),
+        match nearest {
+            Some(n) => format!("; did you mean `{n}`?"),
+            None => String::new(),
+        }
+    )]
+    DoraUnknownOutputId {
+        id: String,
+        declared: Vec<String>,
+        nearest: Option<String>,
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 }

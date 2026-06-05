@@ -1034,6 +1034,34 @@ impl From<TypeError> for UserError {
                     col,
                 )
             }
+            // ADR-0092 — undeclared dora output id. The primary `msg`
+            // names the offending id, the declared-output list, and the
+            // nearest-match `did you mean` clause — the §2.5-B FIX the LLM
+            // parses from stderr to correct the `send_output("...")` id in
+            // one step (declare it, or fix the typo to a declared id).
+            E::DoraUnknownOutputId {
+                id,
+                declared,
+                nearest,
+                span,
+                suggestion,
+            } => {
+                let (line, col) = span_to_line_col(span);
+                let did_you_mean = match nearest {
+                    Some(n) => format!("; did you mean `{n}`?"),
+                    None => String::new(),
+                };
+                (
+                    format!(
+                        "unknown dora output id `{id}` — it is not declared in \
+                         `@dora.node(outputs=[...])`; declared outputs: [{}]{did_you_mean}",
+                        declared.join(", ")
+                    ),
+                    suggestion.map(str::to_owned),
+                    line,
+                    col,
+                )
+            }
         };
         Self::Type {
             file: PathBuf::from("<source>"),

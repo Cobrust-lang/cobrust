@@ -224,6 +224,44 @@ fn test_display_len_arg_not_sized() {
 }
 
 #[test]
+fn test_display_dora_unknown_output_id() {
+    // Anchor: error_display_parity.rs::test_display_dora_unknown_output_id
+    //
+    // ADR-0092 — `event.send_output("<typo>", ...)` against a declared
+    // `@dora.node(outputs=[...])` set. The §2.5-B FIX names the declared
+    // output ids + the nearest-match "did you mean", all rendered from the
+    // owned (dynamic) `id`/`declared`/`nearest` fields, and MUST render
+    // byte-identically across the Rust and .cb Display impls — the byte-parity
+    // tripwire for the dynamic per-node ids, not just the static suggestion.
+    let span = dummy_span();
+    let rust_err = TypeError::DoraUnknownOutputId {
+        id: "twst".to_string(),
+        declared: vec!["pose".to_string(), "twist".to_string()],
+        nearest: Some("twist".to_string()),
+        span,
+        suggestion: None,
+    };
+    let cb_err = TypeErrorCb::DoraUnknownOutputId {
+        id: "twst".to_string(),
+        declared: vec!["pose".to_string(), "twist".to_string()],
+        nearest: Some("twist".to_string()),
+        span,
+        suggestion: None,
+    };
+    let rendered = format!("{rust_err}");
+    assert_eq!(
+        rendered,
+        format!("{cb_err}"),
+        "DoraUnknownOutputId Display must be byte-equal"
+    );
+    // The §2.5-B FIX names the unknown id, the declared set, and the
+    // nearest-match "did you mean".
+    assert!(rendered.contains("unknown dora output id `twst`"));
+    assert!(rendered.contains("declared outputs: [pose, twist]"));
+    assert!(rendered.contains("did you mean `twist`?"));
+}
+
+#[test]
 
 fn test_display_arity_mismatch() {
     let span = dummy_span();
@@ -387,6 +425,7 @@ impl SuggestionText for TypeError {
             TypeError::UnknownField { suggestion, .. } => suggestion.as_deref(),
             TypeError::UnsupportedRefinement { suggestion, .. } => suggestion.as_deref(),
             TypeError::LenArgNotSized { suggestion, .. } => suggestion.as_deref(),
+            TypeError::DoraUnknownOutputId { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }
@@ -424,6 +463,7 @@ impl SuggestionText for TypeErrorCb {
             TypeErrorCb::UnknownField { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::UnsupportedRefinement { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::LenArgNotSized { suggestion, .. } => suggestion.as_deref(),
+            TypeErrorCb::DoraUnknownOutputId { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }

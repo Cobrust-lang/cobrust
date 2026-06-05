@@ -177,7 +177,11 @@ pub fn type_error_cb_fix_safety(err: &TypeErrorCb) -> FixSafetyCb {
         | UnsupportedRefinement { .. }
         // ADR-0088 §3 — `len(x)` on a non-sized arg; LocalEdit, mirroring
         // the Rust-side `LenArgNotSized` tier (local rewrite of the arg).
-        | LenArgNotSized { .. } => FixSafetyCb::LocalEdit,
+        | LenArgNotSized { .. }
+        // ADR-0092 — undeclared dora output id; LocalEdit, mirroring the
+        // Rust-side `DoraUnknownOutputId` tier (local rewrite of the id
+        // string or the `outputs=[...]` decorator list).
+        | DoraUnknownOutputId { .. } => FixSafetyCb::LocalEdit,
         ImplicitTruthiness { .. } | MutableDefault { .. } | NotHashable { .. } => {
             FixSafetyCb::BehaviorPreserving
         }

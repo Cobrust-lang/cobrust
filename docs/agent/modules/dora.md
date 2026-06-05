@@ -61,10 +61,26 @@ dora-rs daemon + the CartPole control-loop demo.
   link flag in `cobrust-cli/src/build.rs` (emitted only when a `dora`-importing
   program is linked on a macOS target). Real-dora is NATIVE-ONLY (tokio-net
   hard-fails on wasm32 per §9, so the wasm dora story stays synthetic).
+- **ADR-0092 — typed compile-time `DoraUnknownOutputId` reject
+  (delivered).** Lifts the `event.send_output("<id>", _)` undeclared-id
+  reject from RUNTIME (the `cabi.rs` `-1` sentinel + stderr) to COMPILE
+  TIME (CLAUDE.md §2.5-A). A module PRE-PASS in `cobrust-types`
+  (`check.rs::collect_dora_declared_outputs`) collects every
+  `dora.declare_output("<lit>")` string-literal id (the
+  `@dora.node(outputs=[...])` desugar) into
+  `Ctx.dora_declared_outputs: Option<BTreeSet<String>>`; the
+  `event.send_output` method-synth (`try_synth_ecosystem_call` Case 2)
+  rejects a string-LITERAL id NOT in the set with
+  `TypeError::DoraUnknownOutputId`. SKIP edges (no false-positive): a
+  non-literal id (the runtime backstop stays) + a bare `@dora.node` (None
+  set ⇒ inert). The §2.5-B FIX prints the declared-output list + a
+  nearest-match (`did you mean \`twist\`?`, inline Levenshtein, NO new
+  dep). NO new IR field, NO new manifest op — reuses the existing
+  `lookup_module_fn("dora","declare_output")` recognition. The Arrow
+  payload surface stays a SEPARATE next dispatch.
 - **Phase B / Phase 3 — proposed.** `coil.Buffer ↔ Arrow` array payloads +
-  multi-port routing + the typed compile-time `DoraUnknownOutputId` reject
-  (Phase B); the real-robotics CartPole simulation demo + cross-machine
-  orchestration (Phase 3).
+  multi-port routing (Phase B); the real-robotics CartPole simulation demo
+  + cross-machine orchestration (Phase 3).
 
 ## Public surface (Phase 1 + Phase 2)
 
@@ -145,8 +161,10 @@ Out of scope (real-infra Phase 2 / Phase 3 follow-ups — DEFERRED honestly):
   real zenoh broker (the trampoline stays SYNTHETIC).
 - Arrow list/dict `RecordBatch` payloads beyond i64+str scalar (ADR-0076c).
 - Yaml-loaded dataflows (`dora.run("dataflow.yml")`).
-- Typed compile-time `DoraUnknownOutputId` reject (Phase 2 is RUNTIME
-  validation via the `-1` sentinel).
+- ~~Typed compile-time `DoraUnknownOutputId` reject~~ — **DONE (ADR-0092)**:
+  a string-literal undeclared `send_output` id now rejects at
+  `cobrust check` / `cobrust build`; a non-literal id keeps the runtime
+  `-1` backstop.
 - `for event in node:` polling iterator form.
 - ROS2 bridge surface (sub-ADR 0076a).
 - riscv64 cross-build (ADR-0075 Phase 1 dependency — Phase 3 stretch).
@@ -314,9 +332,12 @@ Open (real-infra Phase B/3):
       (ADR-0076c) — the payload-surface design question (`coil.Buffer` vs a
       `pa`-shim) is the most consequential open choice (plan §4.3).
 - [ ] Yaml-loaded dataflows (`dora.run("dataflow.yml")`).
-- [ ] Typed compile-time `DoraUnknownOutputId` reject (Phase 2 catches an
-      undeclared output at RUNTIME via the `-1` sentinel; a compile-time
-      check wants the static declared-output set on `TypedModule`).
+- [x] Typed compile-time `DoraUnknownOutputId` reject (ADR-0092) — a
+      module pre-pass collects the declared-output set on `Ctx`
+      (`Option<BTreeSet<String>>`), NOT on `TypedModule`; the
+      `event.send_output` synth rejects a string-literal undeclared id at
+      type-check with a §2.5-B FIX (declared list + nearest-match). A
+      non-literal id keeps the runtime `-1` backstop.
 - [ ] `for event in node:` polling iterator form.
 
 ## Non-goals

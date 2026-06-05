@@ -315,6 +315,21 @@ pub enum TypeErrorCb {
         suggestion: Option<String>,
     },
 
+    /// ADR-0092 — `event.send_output("<id>", _)` named an output id the
+    /// node's `@dora.node(outputs=[...])` does not declare. Mirrors
+    /// `TypeError::DoraUnknownOutputId { id: String, declared: Vec<String>,
+    /// nearest: Option<String>, span, suggestion }`. `id` + `declared` +
+    /// `nearest` carry through as owned Strings (no Ty payload — there is
+    /// nothing to dense-pack) so the §2.5-B FIX (the declared-output list
+    /// + the nearest-match) renders byte-identically across the two impls.
+    DoraUnknownOutputId {
+        id: String,
+        declared: Vec<String>,
+        nearest: Option<String>,
+        span: Span,
+        suggestion: Option<String>,
+    },
+
     /// Composite error container — flat list of errors.
     ///
     /// ADR-0055b §3: `Multiple(list[TypeError])` — the only recursive
@@ -608,6 +623,21 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(*suggestion),
             }
         }
+        // ADR-0092 mirror — NO Ty payload; id + declared + nearest carry
+        // through verbatim so the §2.5-B FIX renders byte-identically.
+        TypeError::DoraUnknownOutputId {
+            id,
+            declared,
+            nearest,
+            span,
+            suggestion,
+        } => TypeErrorCb::DoraUnknownOutputId {
+            id: id.clone(),
+            declared: declared.clone(),
+            nearest: nearest.clone(),
+            span: *span,
+            suggestion: opt_string(*suggestion),
+        },
     }
 }
 
@@ -719,6 +749,15 @@ impl Canonicalize for TypeErrorCb {
             // ADR-0080 Phase-1b-ii mirror — key on the offending field.
             TypeErrorCb::UnsupportedRefinement { field, .. } => {
                 vec![CanonicalKey::leaf(field.as_str())]
+            }
+            // ADR-0092 mirror — key on the offending id + the declared
+            // list (both String, mirror-able). The `nearest` suggestion is
+            // a Display-only derivation, elided from the key (mirrors the
+            // Rust side).
+            TypeErrorCb::DoraUnknownOutputId { id, declared, .. } => {
+                let mut keys = vec![CanonicalKey::leaf(id.as_str())];
+                keys.extend(declared.iter().map(|d| CanonicalKey::leaf(d.as_str())));
+                keys
             }
             // Variants with no extra payload (Span + suggestion only).
             TypeErrorCb::MutableDefault { .. }
@@ -971,6 +1010,28 @@ impl std::fmt::Display for TypeErrorCb {
                     handle_to_ty_display(*actual)
                 )
             }
+            // ADR-0092 — byte-mirror of the Rust `#[error]` message. The
+            // declared-output list + the optional `did you mean` clause are
+            // the §2.5-B FIX (NO Ty payload, so this renders identically to
+            // the Rust side with no handle-convention compromise).
+            TypeErrorCb::DoraUnknownOutputId {
+                id,
+                declared,
+                nearest,
+                span,
+                ..
+            } => {
+                let did_you_mean = match nearest {
+                    Some(n) => format!("; did you mean `{n}`?"),
+                    None => String::new(),
+                };
+                write!(
+                    f,
+                    "unknown dora output id `{id}` — it is not declared in \
+                     `@dora.node(outputs=[...])` at {span}; declared outputs: [{}]{did_you_mean}",
+                    declared.join(", ")
+                )
+            }
         }
     }
 }
@@ -1046,5 +1107,7 @@ pub fn type_error_cb_variant_name(err: &TypeErrorCb) -> &'static str {
         TypeErrorCb::UnsupportedRefinement { .. } => "UnsupportedRefinement",
         // ADR-0088 §3 — `len(x)` on a non-sized argument.
         TypeErrorCb::LenArgNotSized { .. } => "LenArgNotSized",
+        // ADR-0092 — undeclared dora output id.
+        TypeErrorCb::DoraUnknownOutputId { .. } => "DoraUnknownOutputId",
     }
 }

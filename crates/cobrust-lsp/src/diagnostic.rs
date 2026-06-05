@@ -182,6 +182,10 @@ fn type_error_to_diagnostic_single(err: &TypeError, line_map: &LineMap) -> Diagn
         LenArgNotSized {
             span, suggestion, ..
         } => (*span, *suggestion, "len-arg-not-sized"),
+        // ADR-0092 — undeclared dora output id.
+        DoraUnknownOutputId {
+            span, suggestion, ..
+        } => (*span, *suggestion, "dora-unknown-output-id"),
         Multiple(_) => unreachable!("Multiple flattened by type_error_to_diagnostics"),
     };
     let range = span_to_lsp_range(&span, line_map);
