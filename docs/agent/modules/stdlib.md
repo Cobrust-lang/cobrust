@@ -709,7 +709,8 @@ extern "C" { pub fn _cobrust_user_main() -> i64; }
 | `__cobrust_math_floor(f64) -> f64` | `math.rs` | `x.floor()` |
 | `__cobrust_math_ceil(f64) -> f64` | `math.rs` | `x.ceil()` |
 | `__cobrust_math_round(f64) -> f64` | `math.rs` | `x.round()` (half-away-from-zero) |
-| `__cobrust_math_abs(f64) -> f64` | `math.rs` | `x.abs()` |
+| `__cobrust_math_abs(f64) -> f64` | `math.rs` | `x.abs()` (the float arm of the type-preserving `abs(x)`) |
+| `__cobrust_int_abs(i64) -> i64` | `math.rs` | `abs_i64(x)` — **ADR-0089** type-preserving `abs(int)`. The bare `abs(x)` `Kind::MathAbs` rewrite picks this (vs `__cobrust_math_abs`) when the arg resolves to `Int` (`abs(-5) == 5`, an int). `i64::MIN` saturates at `i64::MAX`. |
 | `__cobrust_math_pow(f64, f64) -> f64` | `math.rs` | `base.powf(exp)` |
 | `__cobrust_math_sin(f64) -> f64` | `math.rs` | `x.sin()` |
 | `__cobrust_math_cos(f64) -> f64` | `math.rs` | `x.cos()` |

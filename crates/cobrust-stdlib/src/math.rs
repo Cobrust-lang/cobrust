@@ -120,6 +120,19 @@ pub extern "C" fn __cobrust_math_abs(x: f64) -> f64 {
     x.abs()
 }
 
+/// ADR-0089 §5 — type-preserving `abs(x) -> i64` C-ABI shim. The
+/// intrinsic-rewrite (`crates/cobrust-cli/src/build/intrinsics.rs`,
+/// `Kind::MathAbs`) targets this symbol when the `abs(x)` argument
+/// resolves to `Int` (Python's `abs` is type-preserving:
+/// `abs(-5) == 5` an int, NOT `5.0`). Delegates to [`abs_i64`], which
+/// saturates `i64::MIN` at `i64::MAX` to avoid the overflow panic
+/// (Constitution §2.2 forbids silent overflow). DISTINCT from
+/// `__cobrust_math_abs` (the f64 path).
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_int_abs(x: i64) -> i64 {
+    abs_i64(x)
+}
+
 /// `pow(base, exp) -> f64` C-ABI shim.
 #[unsafe(no_mangle)]
 pub extern "C" fn __cobrust_math_pow(base: f64, exp: f64) -> f64 {

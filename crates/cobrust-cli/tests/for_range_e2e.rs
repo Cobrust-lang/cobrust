@@ -429,17 +429,17 @@ fn f3r23_run_range_inside_if() {
 }
 
 #[test]
-fn f3r24_run_range_one_arg_rejected() {
-    // 1-arg range(N) — start defaults to 0 in Python but Cobrust
-    // ships only the 2-arg form at M-F.3.1 per ADR-0050b §"`range(a, b, step)`".
-    let src = write_cb(
+fn f3r24_run_range_one_arg_now_accepted() {
+    // ADR-0089 §4 — the 1-arg `range(N)` form is now VALID
+    // (`range(5) == range(0, 5)`), reversing the M-F.3.1 / ADR-0050b
+    // 2-arg-only cap this test originally asserted. The type-checker
+    // injects `start = 0` and the loop iterates 0..4.
+    assert_build_run(
         "f3r24_one-arg",
         "fn main() -> i64:\n    for i in range(5):\n        print(i)\n    return 0\n",
-    );
-    let (code, stderr) = run_check(&src);
-    assert_eq!(
-        code, 2,
-        "expected TYPE_ERROR (2) for 1-arg range; got code={code}, stderr={stderr}"
+        &[],
+        b"",
+        "0\n1\n2\n3\n4\n",
     );
 }
 

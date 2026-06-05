@@ -1980,6 +1980,36 @@ impl<'a> BodyBuilder<'a> {
         } else {
             Ty::None
         };
+        // ADR-0089 §5 — type-PRESERVING `abs(x)` return-type override. The
+        // PRELUDE `abs` stub declares `-> f64`, but Python's `abs` returns
+        // the SAME type as its argument: `abs(-5)` is an `i64`. The
+        // type-checker resolved the call to `Int`, yet this MIR layer
+        // re-derives the return from the (f64) prelude sig — so without
+        // this override the `_callret` alloca would be a `double` while
+        // the int arm rewrites the call to `__cobrust_int_abs` (i64 ->
+        // i64), corrupting `print(abs(-5))` (a `double` slot fed to
+        // `__cobrust_println_int`). When the single arg synths to `Int`
+        // (unwrapping one `Ref` for `abs(&n)`), the dest is `Int`;
+        // otherwise it stays `Float` (the existing path). Mirrors the
+        // intrinsic-rewrite `Kind::MathAbs` int dispatch (one source of
+        // truth: the arg's resolved type).
+        let callee_return_ty = if callee_name == Some("abs") {
+            if let [CallArg::Positional(arg)] = args {
+                let arg_ty = match synth_expr_ty(self, arg) {
+                    Ty::Ref(inner) => *inner,
+                    other => other,
+                };
+                if matches!(arg_ty, Ty::Int) {
+                    Ty::Int
+                } else {
+                    callee_return_ty
+                }
+            } else {
+                callee_return_ty
+            }
+        } else {
+            callee_return_ty
+        };
         let callee_op = if let ExprKind::Name(rn) = &callee.kind {
             let ty = self.ctx.lookup_ty(rn.def_id);
             if matches!(ty, Ty::Fn(_)) {
@@ -2009,6 +2039,18 @@ impl<'a> BodyBuilder<'a> {
                     arg_ops.push(op);
                 }
             }
+        }
+        // ADR-0089 §4 — Python-canonical 1-arg `range(stop)` lowering.
+        // The type-checker (`try_synth_range_builtin`) accepts the 1-arg
+        // form (== `range(0, stop)`) but the PRELUDE `range` body has two
+        // params (`start`, `stop`). Inject a `start = 0` operand at the
+        // front so the unchanged 2-param body runs, materialising
+        // `[0, 1, …, stop-1]`. Keyed on the prelude name `range` AND
+        // exactly one lowered positional operand (the 2-arg `range(a, b)`
+        // has two operands and is untouched). A user-shadowed `range`
+        // never reaches the 1-arg type-check arm, so this is safe.
+        if callee_name == Some("range") && arg_ops.len() == 1 {
+            arg_ops.insert(0, Operand::Constant(Constant::Int(0)));
         }
         let dest = self.declare_local("_callret".to_string(), callee_return_ty, span, true);
         let cur = self.current_block_id();
@@ -2876,7 +2918,18 @@ impl<'a> BodyBuilder<'a> {
     fn lower_un(&mut self, op: UnaryOp, operand: &Expr, span: Span) -> Result<Operand, MirError> {
         let op_val = self.lower_expr(operand)?;
         let mir_op = un_to_mir(op);
-        let temp = self.declare_local("_un".to_string(), Ty::None, span, false);
+        // ADR-0089 §5 — type the unary temp with the result type (instead
+        // of the bug-prone `Ty::None`) so downstream per-arg-shape
+        // dispatch (e.g. the intrinsic-rewrite `Kind::MathAbs` int arm,
+        // which reads `local_ty[_un]`) sees `Int` for `abs(-5)`. `-x` /
+        // `+x` preserve the operand numeric type; `~x` is `Int`; `not x`
+        // is `Bool`. Mirrors the `synth_expr_ty` `Un` arm exactly.
+        let temp_ty = match op {
+            UnaryOp::Neg | UnaryOp::Plus => synth_expr_ty(self, operand),
+            UnaryOp::BitNot => Ty::Int,
+            UnaryOp::Not => Ty::Bool,
+        };
+        let temp = self.declare_local("_un".to_string(), temp_ty, span, false);
         self.emit_assign(Place::local(temp), Rvalue::UnaryOp(mir_op, op_val), span);
         Ok(Operand::Copy(Place::local(temp)))
     }
@@ -3588,6 +3641,17 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
         // `method_form_rewrite_name` already unwraps the `Ty::Ref` it
         // expects from this helper.
         ExprKind::Borrow(inner) => Ty::Ref(Box::new(synth_expr_ty(b, inner))),
+        // ADR-0089 §5 — unary-op result type. `-x` / `+x` preserve the
+        // operand's numeric type (so `abs(-5)`'s arg synths to `Int`,
+        // driving the type-preserving int-abs dest + lowering); `~x` is
+        // `Int`; `not x` is `Bool`. Without this, a literal-neg
+        // `-5` synthesised `Ty::None` and `abs(-5)` fell through to the
+        // f64 path (re-interpreting the i64 bits as a double → NaN).
+        ExprKind::Un { op, operand } => match op {
+            UnaryOp::Neg | UnaryOp::Plus => synth_expr_ty(b, operand),
+            UnaryOp::BitNot => Ty::Int,
+            UnaryOp::Not => Ty::Bool,
+        },
         // ADR-0077 Q3 — parens-free handle attribute (`a.shape` etc.).
         // Resolve the manifest attr return type so the let-binding's drop
         // schedule sees the right type (e.g. `a.shape` is an owned
@@ -3610,6 +3674,59 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
                 return sig.ret;
             }
             Ty::None
+        }
+        // ADR-0089 §5 (extended to BINARY ops) — a COMPUTED scalar binary
+        // expression like `abs(a - b)` must synth its result to `Int` so the
+        // type-preserving int-abs dest + lowering fire (NOT the f64 path that
+        // re-interpreted the i64 bits as a double → NaN, the silent-miscompile
+        // class of the unary `-5` above but for binary expressions). CONSERVATIVE
+        // + Buffer-SAFE: only synthesises when BOTH operands already resolve to a
+        // scalar `Int`/`Float` — a `coil.Buffer` operand is a `Ty::Adt`, so
+        // Buffer arithmetic/comparison stays `Ty::None` and is resolved by the
+        // existing Buffer-binop path. Arithmetic → Float if either operand is
+        // Float else Int; scalar comparisons → Bool; bit/shift → Int.
+        ExprKind::Bin { op, lhs, rhs } => {
+            let lt = synth_expr_ty(b, lhs);
+            let rt = synth_expr_ty(b, rhs);
+            let both_scalar =
+                matches!(lt, Ty::Int | Ty::Float) && matches!(rt, Ty::Int | Ty::Float);
+            match op {
+                HirBinOp::Eq
+                | HirBinOp::NotEq
+                | HirBinOp::Lt
+                | HirBinOp::LtEq
+                | HirBinOp::Gt
+                | HirBinOp::GtEq
+                    if both_scalar =>
+                {
+                    Ty::Bool
+                }
+                HirBinOp::Add
+                | HirBinOp::Sub
+                | HirBinOp::Mul
+                | HirBinOp::Div
+                | HirBinOp::FloorDiv
+                | HirBinOp::Mod
+                | HirBinOp::Pow
+                    if both_scalar =>
+                {
+                    if matches!(lt, Ty::Float) || matches!(rt, Ty::Float) {
+                        Ty::Float
+                    } else {
+                        Ty::Int
+                    }
+                }
+                HirBinOp::Shl
+                | HirBinOp::Shr
+                | HirBinOp::BitAnd
+                | HirBinOp::BitOr
+                | HirBinOp::BitXor
+                    if matches!(lt, Ty::Int) && matches!(rt, Ty::Int) =>
+                {
+                    Ty::Int
+                }
+                _ => Ty::None,
+            }
         }
         _ => Ty::None,
     }

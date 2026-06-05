@@ -2135,6 +2135,23 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_param_counts.insert(sym, 1);
         }
 
+        // -- ADR-0089 §5: type-preserving INT `abs` shim (`(i64) -> i64`).
+        // The bare `abs(x)` with an INT argument lowers (via the
+        // intrinsic-rewrite `Kind::MathAbs` int arm) to this symbol —
+        // `abs(-5) == 5` an int, NOT the f64 `__cobrust_math_abs` path.
+        // DISTINCT shape from the `(f64) -> i64` rounding shims above
+        // (`_floor_int` etc.): this is `(i64) -> i64`.
+        let math_i64_i64_ty = i64_ty.fn_type(&[i64_ty.into()], false);
+        let int_abs_fn = self.module.add_function(
+            "__cobrust_int_abs",
+            math_i64_i64_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_int_abs", int_abs_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_int_abs", 1);
+
         // -- ADR-0083 PART-2: BOOL-returning classification shims
         // (`(f64) -> i1`). `math.isnan` / `math.isinf` / `math.isfinite`.
         // The Rust C-ABI `-> bool` is declared as `bool_type()` (LLVM `i1`),

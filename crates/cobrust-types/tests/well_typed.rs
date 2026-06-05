@@ -3336,3 +3336,94 @@ fn w220_len_of_borrowed_str_accepts() {
         &format!("{LEN_STUB}fn f(s: str) -> i64:\n    return len(&s)\n"),
     );
 }
+
+// ---- ADR-0089 §3/§4 — type-PRESERVING `abs(x)` (int->int / float->float)
+// + Python-canonical 1-arg `range(stop)`. The corpus does not prepend the
+// PRELUDE, so each test ships the inline `abs` / `range` stub identical in
+// shape to the prelude declaration (prebind registers them by name). ----
+
+/// The PRELUDE `abs` stub (f64-only signature; the special-case widens it
+/// to int->int / float->float per resolved arg type).
+const ABS_STUB: &str = "fn abs(x: f64) -> f64:\n    return 0.0\n";
+
+#[test]
+fn w221_abs_of_int_literal_returns_int() {
+    // ADR-0089 §3 — `abs(-5)` is type-preserving: it returns an `i64`,
+    // usable directly in int arithmetic (`abs(-5) + 1`). Pre-ADR-0089 this
+    // was rejected with `expected f64, found i64`.
+    must_accept(
+        "abs-int-literal",
+        &format!("{ABS_STUB}fn main() -> i64:\n    return abs(-5) + 1\n"),
+    );
+}
+
+#[test]
+fn w222_abs_of_int_param_returns_int() {
+    must_accept(
+        "abs-int-param",
+        &format!("{ABS_STUB}fn f(n: i64) -> i64:\n    return abs(n)\n"),
+    );
+}
+
+#[test]
+fn w223_abs_of_float_returns_float_regression() {
+    // The original f64 path must keep type-checking (regression).
+    must_accept(
+        "abs-float-param",
+        &format!("{ABS_STUB}fn f(x: f64) -> f64:\n    return abs(x)\n"),
+    );
+}
+
+#[test]
+fn w224_abs_of_float_literal_returns_float() {
+    must_accept(
+        "abs-float-literal",
+        &format!("{ABS_STUB}fn main() -> f64:\n    return abs(-5.0)\n"),
+    );
+}
+
+#[test]
+fn w225_abs_of_borrowed_int_returns_int() {
+    // `abs(&n)` — the §2.5-A borrow shortcut routes by the inner type.
+    must_accept(
+        "abs-borrowed-int",
+        &format!("{ABS_STUB}fn f(n: i64) -> i64:\n    return abs(&n)\n"),
+    );
+}
+
+#[test]
+fn w226_range_one_arg_accepts() {
+    // ADR-0089 §4 — `range(5)` == `range(0, 5)`. Pre-ADR-0089 the 1-arg
+    // form was rejected with `ArityMismatch { expected: 2, got 1 }`.
+    must_accept_with_range(
+        "range-one-arg",
+        "fn f() -> i64:\n    for i in range(5):\n        return i\n    return 0\n",
+    );
+}
+
+#[test]
+fn w227_range_one_arg_zero_accepts() {
+    must_accept_with_range(
+        "range-one-arg-zero",
+        "fn f() -> i64:\n    for i in range(0):\n        return i\n    return 0\n",
+    );
+}
+
+#[test]
+fn w228_range_one_arg_var_accepts() {
+    // `range(n)` with a variable stop.
+    must_accept_with_range(
+        "range-one-arg-var",
+        "fn f(n: i64) -> i64:\n    for i in range(n):\n        return i\n    return 0\n",
+    );
+}
+
+#[test]
+fn w229_range_two_arg_still_accepts_regression() {
+    // The 2-arg form is NOT intercepted — it stays on the generic path
+    // with its `list[i64]` return anchored (regression of every for-loop).
+    must_accept_with_range(
+        "range-two-arg-regression",
+        "fn f() -> i64:\n    for i in range(2, 7):\n        return i\n    return 0\n",
+    );
+}

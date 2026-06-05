@@ -507,6 +507,13 @@ struct Ctx {
     /// Populated during `prebind_item` by name match against
     /// `is_list_polymorphic_intrinsic_name`.
     poly_intrinsic_defs: HashSet<DefId>,
+    /// ADR-0089 §4 — the `DefId` of the PRELUDE `range(start, stop)`
+    /// builtin (a dedicated slot, NOT `poly_intrinsic_defs`, so the
+    /// `list[i64]` return stays anchored for the 2-arg for-loop path).
+    /// `synth_call` uses it to identify the bare 1-arg `range(stop)`
+    /// form (== `range(0, stop)`); a user-defined `range` shadows the
+    /// def_id and is left to the generic path.
+    range_def: Option<DefId>,
     /// ADR-0072 §2/§3 — ecosystem-module aliases. Maps the `DefId` of
     /// an `import den` alias (a `DefKind::ImportAlias`) to its module
     /// name (`"den"`). Populated during `prebind_item` for `Import`
@@ -651,6 +658,33 @@ impl Ctx {
                 // type of the argument's `LocalDecl.ty`.
                 if f.name == "print" {
                     self.poly_intrinsic_defs.insert(f.def_id);
+                }
+                // ADR-0089 §3 — Python-canonical type-PRESERVING `abs(x)`.
+                // The PRELUDE stub declares `abs(x: f64) -> f64`; that is
+                // too narrow for `abs(-5)` (Python's `abs` is
+                // type-preserving: `abs(-5) == 5` an int, `abs(-5.0) ==
+                // 5.0` a float). Registering `abs` here lets `synth_call`
+                // intercept it via `try_synth_abs_builtin` BEFORE the
+                // generic stub-unify (which would reject the int arg with
+                // `expected f64, found i64`). The intrinsic-rewrite pass
+                // at MIR time picks `__cobrust_int_abs` vs
+                // `__cobrust_math_abs` per the arg's resolved type.
+                if f.name == "abs" {
+                    self.poly_intrinsic_defs.insert(f.def_id);
+                }
+                // ADR-0089 §4 — Python-canonical 1-arg `range(stop)`.
+                // The PRELUDE stub declares `range(start: i64, stop:
+                // i64) -> list[i64]`; the 2-arg form already drives every
+                // `for i in range(a, b):`. We record `range`'s `DefId` in
+                // a DEDICATED slot (NOT `poly_intrinsic_defs` — that would
+                // widen the `list[i64]` return's elem to a fresh var,
+                // de-anchoring the 2-arg for-loop's `i64` loop var). The
+                // `try_synth_range_builtin` special-case intercepts the
+                // 1-arg `range(stop)` form (== `range(0, stop)`) BEFORE
+                // the generic path reports `ArityMismatch`; the 2-arg
+                // form is left untouched on the generic stub path.
+                if f.name == "range" {
+                    self.range_def = Some(f.def_id);
                 }
                 self.record_def(f.def_id, fn_ty);
             }
@@ -3013,6 +3047,110 @@ impl Ctx {
         }
     }
 
+    /// ADR-0089 §3 — Python-canonical type-PRESERVING free-function
+    /// `abs(x)`. Python's `abs` returns the SAME type as its argument:
+    /// `abs(-5) == 5` (an `int`), `abs(-5.0) == 5.0` (a `float`). The
+    /// PRELUDE stub declares `abs(x: f64) -> f64`, so the generic
+    /// stub-unify path rejected `abs(-5)` with the misleading
+    /// `type mismatch: expected f64, found i64` (a §2.5-B violation —
+    /// it steered the LLM toward `abs(-5.0)`). This special-case fires
+    /// for the bare PRELUDE `abs` (a registered poly intrinsic; a
+    /// user-defined `abs` shadows the def_id and is left to the generic
+    /// path) with exactly one positional argument, resolves the arg,
+    /// and returns:
+    ///
+    /// - `Int`  arg → `Int`  (lowered to `__cobrust_int_abs`).
+    /// - `Float` arg → `Float` (lowered to `__cobrust_math_abs`, the
+    ///   existing path).
+    ///
+    /// A non-numeric arg (`abs("x")`) defers to the existing
+    /// `f64`-unify behaviour by returning `Ok(None)` — the generic path
+    /// then reports the canonical `TypeMismatch { expected: f64, … }`,
+    /// so no new error variant is introduced. Arity / keyword misuse
+    /// (`abs()`, `abs(a, b)`, `abs(x=…)`) likewise returns `Ok(None)`
+    /// so the generic path emits the canonical diagnostic.
+    ///
+    /// Distinct from `coil.abs` (the Buffer ufunc) and `math.fabs` (the
+    /// `import math` scalar module) — this is the bare scalar `abs(x)`.
+    fn try_synth_abs_builtin(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Name(rn) = &callee.kind else {
+            return Ok(None);
+        };
+        if rn.name != "abs" || !self.poly_intrinsic_defs.contains(&rn.def_id) {
+            return Ok(None);
+        }
+        let [CallArg::Positional(arg)] = args else {
+            return Ok(None);
+        };
+        let arg_ty = self.synth_expr(arg)?;
+        let arg_ty = self.subst.apply(&arg_ty);
+        // `Ref(T)` unwraps once so `abs(&x)` (the §2.5-A borrow
+        // shortcut) routes by the inner numeric type.
+        let resolved = match &arg_ty {
+            Ty::Ref(inner) => (**inner).clone(),
+            other => other.clone(),
+        };
+        match resolved {
+            Ty::Int => Ok(Some(Ty::Int)),
+            Ty::Float => Ok(Some(Ty::Float)),
+            // A non-numeric arg (or an as-yet-unresolved inference var)
+            // preserves the pre-ADR-0089 behaviour: unify against the
+            // PRELUDE `f64` param. For `abs("x")` this raises the
+            // canonical `TypeMismatch { expected: f64, found str }` (so
+            // NO new error variant is introduced); for a bare `Ty::Var`
+            // it anchors the var to `f64` (the float path). The arg was
+            // already synth'd above, so we unify the resolved type
+            // directly here rather than returning `Ok(None)` and
+            // re-synthing through the generic path.
+            other => {
+                unify(&Ty::Float, &other, &mut self.subst, arg.span)?;
+                Ok(Some(Ty::Float))
+            }
+        }
+    }
+
+    /// ADR-0089 §4 — Python-canonical 1-arg `range(stop)` form, where
+    /// `range(stop) == range(0, stop)`. The 2-arg `range(start, stop)`
+    /// already type-checks + lowers (it drives every `for i in range(a,
+    /// b):`); this special-case adds ONLY the 1-arg arity. It fires for
+    /// the bare PRELUDE `range` (identified by the dedicated `range_def`
+    /// slot; a user-defined `range` shadows the def_id and is left to
+    /// the generic path) with exactly one positional argument. The arg
+    /// is synth'd + unified against `i64` (the PRELUDE `stop` param's
+    /// type), and the call returns `list[i64]` (the PRELUDE return).
+    ///
+    /// A 2-arg (or other-arity / keyword) `range` returns `Ok(None)` so
+    /// the generic stub-unify path handles it unchanged — preserving the
+    /// existing `range(a, b)` behaviour AND emitting the canonical
+    /// `ArityMismatch` for `range()` / `range(a, b, c)`. The MIR-lowering
+    /// (`lower_call`) injects the `start = 0` operand for this 1-arg
+    /// form so the 2-param PRELUDE body runs unchanged.
+    fn try_synth_range_builtin(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Name(rn) = &callee.kind else {
+            return Ok(None);
+        };
+        if Some(rn.def_id) != self.range_def {
+            return Ok(None);
+        }
+        // Only the 1-arg positional `range(stop)` form is special-cased;
+        // every other shape (the 2-arg form, keyword args, wrong arity)
+        // defers to the generic path.
+        let [CallArg::Positional(stop)] = args else {
+            return Ok(None);
+        };
+        let stop_ty = self.synth_expr(stop)?;
+        unify(&Ty::Int, &stop_ty, &mut self.subst, stop.span)?;
+        Ok(Some(Ty::List(Box::new(Ty::Int))))
+    }
+
     fn synth_call(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
         // ADR-0072 §2/§3 — ecosystem-module call dispatch fires first so
         // `den.connect(...)` / `conn.execute(...)` / `cur.fetchall()`
@@ -3046,6 +3184,28 @@ impl Ctx {
         // `s.len()` / `xs.len()` (try_synth_method_call above) is the
         // Rust spelling and stays unchanged. See ADR-0088.
         if let Some(t) = self.try_synth_len_builtin(callee, args, span)? {
+            return Ok(t);
+        }
+        // ADR-0089 §3 — type-PRESERVING free-function `abs(x)`. MUST run
+        // BEFORE the generic PRELUDE-stub-unify below: the bare `abs`
+        // PRELUDE stub is declared `abs: f64 -> f64`, so the generic
+        // path unifies the arg against `f64` and rejects `abs(-5)` with
+        // the misleading `expected f64, found i64`. Intercepting here
+        // returns `Int` for an int arg / `Float` for a float arg
+        // (type-preserving, matching Python); a non-numeric arg unifies
+        // against `f64` in-place (so `abs("x")` still gets the canonical
+        // `TypeMismatch` — no new variant). See ADR-0089.
+        if let Some(t) = self.try_synth_abs_builtin(callee, args)? {
+            return Ok(t);
+        }
+        // ADR-0089 §4 — Python-canonical 1-arg `range(stop)` (==
+        // `range(0, stop)`). MUST run BEFORE the generic path, which
+        // would reject the 1-arg form with `ArityMismatch { expected: 2,
+        // got 1 }` (the PRELUDE `range` declares two params). The 2-arg
+        // `range(a, b)` form is NOT intercepted (returns `Ok(None)`) and
+        // stays on the generic stub path with its `list[i64]` return
+        // anchored. See ADR-0089.
+        if let Some(t) = self.try_synth_range_builtin(callee, args)? {
             return Ok(t);
         }
         let callee_ty = self.synth_expr(callee)?;

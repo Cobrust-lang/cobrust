@@ -144,7 +144,9 @@ lower(s) / s.lower() -> str
 upper(s) / s.upper() -> str
 
 # Numeric
-abs(n: i64) / n.abs() -> i64
+abs(x) -> int|float            # ADR-0089: TYPE-PRESERVING free-function —
+                               #   abs(-5) == 5 (int), abs(-5.0) == 5.0 (float).
+                               #   Method-form n.abs() -> i64 also works.
 pow(n, k) / n.pow(k) -> i64
 min(a, b) / a.min(b) -> i64
 max(a, b) / a.max(b) -> i64
@@ -152,6 +154,11 @@ floor(f) / f.floor() -> f64
 ceil(f) / f.ceil() -> f64
 is_nan(f) / f.is_nan() -> bool
 is_finite(f) / f.is_finite() -> bool
+
+# Iteration — range (ADR-0050b + ADR-0089)
+range(stop) -> list[i64]       # ADR-0089: 1-arg == range(0, stop). range(5) = 0,1,2,3,4
+range(start, stop) -> list[i64]    # 2-arg; for i in range(a, b): ...
+                               # 3-arg range(a, b, step) deferred
 
 # List
 len(xs) / xs.len() -> i64

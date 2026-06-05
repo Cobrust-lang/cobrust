@@ -226,6 +226,10 @@ pub const MATH_CEIL_RUNTIME_SYMBOL: &str = "__cobrust_math_ceil";
 pub const MATH_ROUND_RUNTIME_SYMBOL: &str = "__cobrust_math_round";
 /// `abs(x: f64) -> f64` → `__cobrust_math_abs(f64) -> f64`.
 pub const MATH_ABS_RUNTIME_SYMBOL: &str = "__cobrust_math_abs";
+/// ADR-0089 §5 — type-preserving `abs(x: i64) -> i64` →
+/// `__cobrust_int_abs(i64) -> i64`. Picked (instead of the f64
+/// `__cobrust_math_abs`) when the `abs(x)` argument resolves to `Int`.
+pub const INT_ABS_RUNTIME_SYMBOL: &str = "__cobrust_int_abs";
 /// `pow(base: f64, exp: f64) -> f64` → `__cobrust_math_pow(f64, f64) -> f64`.
 pub const MATH_POW_RUNTIME_SYMBOL: &str = "__cobrust_math_pow";
 /// `sin(x: f64) -> f64` → `__cobrust_math_sin(f64) -> f64`.
@@ -1485,7 +1489,7 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
             let Terminator::Call {
                 func,
                 args,
-                destination: _,
+                destination,
                 target: _,
                 unwind: _,
             } = term
@@ -2195,7 +2199,6 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                 | Kind::MathFloor
                 | Kind::MathCeil
                 | Kind::MathRound
-                | Kind::MathAbs
                 | Kind::MathSin
                 | Kind::MathCos
                 | Kind::MathTan
@@ -2212,7 +2215,6 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         Kind::MathFloor => MATH_FLOOR_RUNTIME_SYMBOL,
                         Kind::MathCeil => MATH_CEIL_RUNTIME_SYMBOL,
                         Kind::MathRound => MATH_ROUND_RUNTIME_SYMBOL,
-                        Kind::MathAbs => MATH_ABS_RUNTIME_SYMBOL,
                         Kind::MathSin => MATH_SIN_RUNTIME_SYMBOL,
                         Kind::MathCos => MATH_COS_RUNTIME_SYMBOL,
                         Kind::MathTan => MATH_TAN_RUNTIME_SYMBOL,
@@ -2220,6 +2222,59 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         Kind::MathExp => MATH_EXP_RUNTIME_SYMBOL,
                         _ => unreachable!(),
                     };
+                    *func = Operand::Constant(Constant::Str(sym.to_string()));
+                    args.clear();
+                    args.push(x_arg);
+                }
+                // ---- ADR-0089 §5: type-preserving `abs(x)` per-shape ----
+                // Python's `abs` is type-preserving: `abs(-5) == 5` (int),
+                // `abs(-5.0) == 5.0` (float). The type-checker
+                // (`try_synth_abs_builtin`) accepts BOTH and returns Int /
+                // Float respectively; here we pick the matching runtime
+                // symbol from the arg's resolved type (mirrors the
+                // `Kind::Print` / `Kind::LenPoly` monomorphization):
+                //   Int  → __cobrust_int_abs (i64 -> i64; i64::MIN
+                //          saturates at i64::MAX per cobrust-stdlib
+                //          `abs_i64`).
+                //   else → __cobrust_math_abs (f64 -> f64; the historical
+                //          float path AND the fallback for a `Constant`
+                //          float / unresolved local — the type-checker
+                //          guarantees a non-numeric arg never reaches
+                //          here).
+                Kind::MathAbs => {
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("abs: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    // Resolve the arg's effective type. `Ref(T)` unwraps
+                    // once so `abs(&x)` routes by the inner numeric type.
+                    // A `Constant::Int` literal (`abs(-5)`) is the Int
+                    // path; a `Constant::Float` literal is the Float path.
+                    // `abs` is TYPE-PRESERVING, so the call's DESTINATION local
+                    // is typed `Int` for abs(int) / `Float` for abs(float) by
+                    // the type-checker (lower_call's `_callret` override). We
+                    // dispatch on the DEST type — NOT the arg operand's MIR
+                    // local type, which is `Ty::None` for a COMPUTED int
+                    // expression like `abs(a - b)` (a binary-op temp) and
+                    // misrouted such calls to the f64 shim = a SILENT MISCOMPILE
+                    // (the i64 bits reinterpreted as a double). The arg-literal
+                    // `Constant::Int` is the fallback if the dest is unresolved.
+                    let dest_ty = local_ty.get(&destination.local.0).map(|t| match t {
+                        Ty::Ref(inner) => (**inner).clone(),
+                        other => other.clone(),
+                    });
+                    let is_int = match dest_ty {
+                        Some(Ty::Int) => true,
+                        Some(Ty::Float) => false,
+                        _ => matches!(&args[0], Operand::Constant(Constant::Int(_))),
+                    };
+                    let sym = if is_int {
+                        INT_ABS_RUNTIME_SYMBOL
+                    } else {
+                        MATH_ABS_RUNTIME_SYMBOL
+                    };
+                    let x_arg = args[0].clone();
                     *func = Operand::Constant(Constant::Str(sym.to_string()));
                     args.clear();
                     args.push(x_arg);

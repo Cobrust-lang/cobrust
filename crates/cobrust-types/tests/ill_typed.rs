@@ -742,14 +742,17 @@ fn i57_for_iter_unknown_name() {
 }
 
 #[test]
-fn i58_for_range_called_with_one_arg() {
-    // Inline range stub takes 2 args; calling with 1 is an arity
-    // mismatch.
-    must_reject(
-        "for-range-arity-1",
-        "fn range(a: i64, b: i64) -> List[i64]:\n    let xs: List[i64] = []\n    return xs\nfn f() -> i64:\n    for i in range(5):\n        return i\n    return 0\n",
-        Cat::ArityMismatch,
-    );
+fn i58_for_range_called_with_one_arg_now_accepted() {
+    // ADR-0089 §4 — the 1-arg `range(stop)` form is now VALID
+    // (`range(5) == range(0, 5)`), reversing the pre-ADR-0089 arity
+    // rejection this test originally asserted. The `try_synth_range_builtin`
+    // special-case injects `start = 0`. (Kept in the ill_typed corpus as a
+    // behaviour-change marker; it now type-checks cleanly.)
+    let src = "fn range(a: i64, b: i64) -> List[i64]:\n    let xs: List[i64] = []\n    return xs\nfn f() -> i64:\n    for i in range(5):\n        return i\n    return 0\n";
+    let module = parse_str(src, FileId::SYNTHETIC).expect("parse");
+    let mut sess = Session::new();
+    let hir = lower(&module, &mut sess).expect("lower");
+    check(&hir).expect("ADR-0089: range(5) must now type-check (== range(0, 5))");
 }
 
 #[test]
@@ -2911,5 +2914,45 @@ fn i172_len_of_int_error_does_not_mention_dict_expectation() {
     assert!(
         !msg.contains("expected Dict") && !msg.contains("expected `Dict"),
         "§2.5-B: len(5) message must NOT say 'expected Dict'; got:\n{msg}"
+    );
+}
+
+// ============================================================
+// ADR-0089 §3/§4 rejection corpus — type-PRESERVING `abs(x)` rejects a
+// NON-numeric arg (falls through to the canonical `TypeMismatch`, NO new
+// variant), and 1-arg `range(stop)` does NOT loosen the 3-arg arity. The
+// inline `abs` / `range` stubs mirror the PRELUDE shape so the special-
+// cases fire.
+// ============================================================
+
+/// PRELUDE `abs` stub prefix for the rejection corpus (f64 signature).
+const ABS_STUB_REJ: &str = "fn abs(x: f64) -> f64:\n    return 0.0\n";
+/// PRELUDE `range` stub prefix for the rejection corpus.
+const RANGE_STUB_REJ: &str =
+    "fn range(start: i64, stop: i64) -> list[i64]:\n    let xs: list[i64] = []\n    return xs\n";
+
+#[test]
+fn i173_abs_of_str_rejected_type_mismatch() {
+    // `abs("x")` — a non-numeric arg falls through to the `f64`-unify,
+    // raising the canonical `TypeMismatch { expected: f64, found str }`
+    // (NO new error variant — ADR-0089 reuses TypeMismatch).
+    must_reject(
+        "abs-of-str",
+        &format!("{ABS_STUB_REJ}fn main() -> f64:\n    return abs(\"x\")\n"),
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i174_range_three_args_rejected_arity() {
+    // The 1-arg `range(stop)` special-case does NOT loosen the arity: a
+    // 3-arg `range(a, b, c)` still hits the canonical `ArityMismatch`
+    // (the PRELUDE `range` declares two params).
+    must_reject(
+        "range-three-args",
+        &format!(
+            "{RANGE_STUB_REJ}fn f() -> i64:\n    for i in range(0, 5, 1):\n        return i\n    return 0\n"
+        ),
+        Cat::ArityMismatch,
     );
 }
