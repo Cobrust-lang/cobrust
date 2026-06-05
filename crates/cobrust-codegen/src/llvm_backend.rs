@@ -2118,6 +2118,44 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_param_counts
             .insert("__cobrust_math_pow", 2);
 
+        // -- ADR-0083: `import math` (scalar stdlib) — BARE libm externs ---
+        // `math.X` lowers (via the ecosystem-call path → `Terminator::Call`
+        // onto a `Constant::Str` runtime symbol) to a DIRECT call into the
+        // standard C-library `libm`. The symbols are the BARE libm names
+        // (`sqrt`, `sin`, `atan2`, `hypot`, …) — NOT `__cobrust_math_*`
+        // shims. libm is ALWAYS linked: coil's Rust kernels + the embedded
+        // Rust std in `libcobrust_stdlib.a` pull it (macOS: libSystem;
+        // Linux: libm via the C runtime). NO new crate, NO cabi, NO
+        // ecosystem archive (ADR-0083 §"Lowering"). The extern-name dispatch
+        // in `lower_call` already handles the `f64 -> f64` / `(f64,f64) ->
+        // f64` ABI (incl. the i64-bits → f64 bitcast for a `Ty::None` binary-
+        // op-result arg) and the f64 return — identical to `__cobrust_math_*`.
+        //
+        // These names are DISTINCT from the `coil.sqrt`/`coil.sin` BUFFER
+        // ufuncs (`__cobrust_coil_*`, `Buffer -> Buffer`) — math is scalar.
+        // 15 single-arg `f64 -> f64`.
+        let libm_f64_f64_ty = f64_ty.fn_type(&[f64_ty.into()], false);
+        for sym in [
+            "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "exp",
+            "log", "log10", "log2", "fabs",
+        ] {
+            let f = self
+                .module
+                .add_function(sym, libm_f64_f64_ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, 1);
+        }
+        // 3 two-arg `(f64, f64) -> f64` — `pow(x,y)`, `atan2(y,x)`,
+        // `hypot(x,y)`.
+        let libm_f64f64_f64_ty = f64_ty.fn_type(&[f64_ty.into(), f64_ty.into()], false);
+        for sym in ["pow", "atan2", "hypot"] {
+            let f = self
+                .module
+                .add_function(sym, libm_f64f64_f64_ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, 2);
+        }
+
         // -- parse_int + str-parsing family (ADR-0044 W2 Phase 3) ---------
         // __cobrust_parse_int(s: *mut Str) -> i64
         let parse_int_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
@@ -4768,9 +4806,11 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                                     // float arithmetic chain like `(a + b) /
                                     // 2.0` produces an `i64`-typed `_bin` slot
                                     // holding the f64 bit-pattern. When this
-                                    // i64 then flows into `__cobrust_math_abs`
-                                    // / `__cobrust_math_sqrt` / etc. (whose
-                                    // C signature is `f64 -> f64`), we must
+                                    // i64 then flows into an `f64 -> f64`
+                                    // runtime fn — the bare libm `sqrt` /
+                                    // `hypot` / `atan2` / … (ADR-0083 `math`
+                                    // module) or the older `__cobrust_math_*`
+                                    // prelude shims — we must
                                     // reinterpret the i64 bits as f64 via
                                     // `bitcast`. Matches the Cranelift backend
                                     // tolerance which simply forwards the

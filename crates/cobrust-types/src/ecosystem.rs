@@ -1883,6 +1883,178 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             redis_client_ty(),
             PyCompatTier::Semantic,
         )),
+        // ADR-0083 — `math` (CPython `math`, the FIRST core-stdlib scalar
+        // module). DISTINCT from `coil`: `coil.sqrt(a)` is an elementwise
+        // BUFFER ufunc (`Buffer -> Buffer`); `math.sqrt(x)` is a SCALAR
+        // `f64 -> f64` op. The `runtime_symbol` is the BARE libm symbol
+        // (NOT a `__cobrust_math_*` shim) — libm is already linked (coil's
+        // Rust kernels + the embedded Rust std pull it), so `math.sqrt(x)`
+        // lowers to a direct `call double @sqrt(double)`. NO new crate, NO
+        // cabi, NO ecosystem archive (ADR-0083 §"Lowering").
+        //
+        // Arg policy (§2.2 no silent coercion): every param is `Ty::Float`.
+        // An `Int` arg (`math.sqrt(2)`) is REJECTED at type-check (Int never
+        // unifies with Float in `unify_call_arg`) — write `math.sqrt(2.0)`.
+        // This MIRRORS coil's scalar-arg convention (`coil.power(a, 0.0)`).
+        //
+        // Tier `Numerical` — libm's transcendentals may differ from CPython
+        // in the last ULP (sqrt is IEEE-correctly-rounded so it is exact;
+        // sin/cos/atan2/... are platform-libm and may vary in the final bit).
+        // DOMAIN divergence: CPython `math.sqrt(-1)` / `math.log(0)` RAISE
+        // `ValueError`; libm returns `NaN` / `-inf`. ADR-0083 chooses the
+        // libm behaviour (the documented Numerical-tier surface) — NO silent
+        // wrong-finite value, NO trap. Recorded in the @py_compat note.
+        //
+        // Single-arg `f64 -> f64` (17 of 18 — `atan2`/`pow`/`hypot` below
+        // take two). Symbols: sqrt/sin/cos/tan/asin/acos/atan/sinh/cosh/
+        // tanh/exp/log/log10/log2/fabs.
+        ("math", "sqrt") => Some(EcoSig::from_values(
+            "sqrt",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "sin") => Some(EcoSig::from_values(
+            "sin",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "cos") => Some(EcoSig::from_values(
+            "cos",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "tan") => Some(EcoSig::from_values(
+            "tan",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "asin") => Some(EcoSig::from_values(
+            "asin",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "acos") => Some(EcoSig::from_values(
+            "acos",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "atan") => Some(EcoSig::from_values(
+            "atan",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "sinh") => Some(EcoSig::from_values(
+            "sinh",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "cosh") => Some(EcoSig::from_values(
+            "cosh",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "tanh") => Some(EcoSig::from_values(
+            "tanh",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "exp") => Some(EcoSig::from_values(
+            "exp",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "log") => Some(EcoSig::from_values(
+            "log",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "log10") => Some(EcoSig::from_values(
+            "log10",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "log2") => Some(EcoSig::from_values(
+            "log2",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "fabs") => Some(EcoSig::from_values(
+            "fabs",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        // Two-arg `(f64, f64) -> f64` — `pow(x, y)`, `atan2(y, x)`,
+        // `hypot(x, y)`. The generic ecosystem-call path lowers two scalar
+        // args identically to one (it iterates `sig.params`); the coil
+        // `(Buffer, f64) -> f64` `percentile` row proves a 2-slot scalar
+        // signature crosses with no MIR change.
+        ("math", "pow") => Some(EcoSig::from_values(
+            "pow",
+            vec![Ty::Float, Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "atan2") => Some(EcoSig::from_values(
+            "atan2",
+            vec![Ty::Float, Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        ("math", "hypot") => Some(EcoSig::from_values(
+            "hypot",
+            vec![Ty::Float, Ty::Float],
+            Ty::Float,
+            PyCompatTier::Numerical,
+        )),
+        _ => None,
+    }
+}
+
+/// ADR-0083 — resolve a `math` module CONSTANT attribute (`math.pi`,
+/// `math.e`, `math.tau`, `math.inf`, `math.nan`) to its `f64` value.
+///
+/// Unlike a function, a constant is a parens-FREE attribute access on the
+/// `math` import alias (`math.pi`, NOT `math.pi()`). The type checker's
+/// `ExprKind::Attr` synth + the MIR `Attr` lowering call this; the value is
+/// emitted as a pure compile-time `Constant::Float` LLVM literal (NO runtime
+/// call — a constant is just a number). This is the math-idiomatic surface
+/// (CPython exposes `math.pi` as a module attribute, never `math.pi()`).
+///
+/// Returns the bit-exact `f64` for the name, or `None` for an unknown
+/// constant (the caller surfaces an `UnknownName` — §2.5 compile-time-catch,
+/// NOT a false-green `fresh_var()`).
+///
+/// `@py_compat`: `pi`/`e`/`tau` match CPython exactly (Rust `std::f64::consts`
+/// are the SAME `f64` rounding of the mathematical constants CPython uses).
+/// Strict-tier exact. NOTE: `math.inf`/`math.nan` are intentionally NOT exposed
+/// here — the lexer tokenizes the bare words `inf`/`nan` as `f64` literals
+/// (M-F.3.3), so `math.inf` fails to PARSE (`.` then a `Float("inf")` token);
+/// the idiomatic Cobrust spelling is the BARE `inf` / `nan`. A `math.`-qualified
+/// form is a deferred parser follow-up (ADR-0083 §Deferred).
+#[must_use]
+pub fn lookup_module_const(module: &str, name: &str) -> Option<f64> {
+    if module != "math" {
+        return None;
+    }
+    match name {
+        "pi" => Some(std::f64::consts::PI),
+        "e" => Some(std::f64::consts::E),
+        "tau" => Some(std::f64::consts::TAU),
         _ => None,
     }
 }
@@ -2832,6 +3004,7 @@ pub fn is_ecosystem_module(name: &str) -> bool {
             | "dora"
             | "fang"
             | "redis"
+            | "math"
     )
 }
 
@@ -2857,6 +3030,95 @@ mod tests {
         assert!(is_ecosystem_handle(DEN_CONNECTION_ADT));
         assert!(is_ecosystem_handle(DEN_CURSOR_ADT));
         assert!(!is_ecosystem_handle(AdtId(7)));
+    }
+
+    // -- ADR-0083 math (scalar stdlib) manifest tests ------------------
+
+    #[test]
+    fn math_is_a_known_ecosystem_module() {
+        assert!(is_ecosystem_module("math"));
+    }
+
+    #[test]
+    fn math_single_arg_fns_are_f64_to_f64_numerical() {
+        // The 15 single-arg `f64 -> f64` rows lower to BARE libm symbols
+        // (NOT `__cobrust_math_*` shims — that is the distinct bare-function
+        // intrinsic path). Numerical tier (libm last-ULP divergence).
+        for name in [
+            "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "exp",
+            "log", "log10", "log2", "fabs",
+        ] {
+            let sig =
+                lookup_module_fn("math", name).unwrap_or_else(|| panic!("math.{name} in manifest"));
+            assert_eq!(
+                sig.runtime_symbol, name,
+                "runtime symbol is the bare libm name"
+            );
+            assert_eq!(
+                value_tys(&sig.params),
+                vec![Ty::Float],
+                "math.{name} arg is Float"
+            );
+            assert_eq!(sig.ret, Ty::Float, "math.{name} returns Float");
+            assert_eq!(sig.tier, PyCompatTier::Numerical);
+        }
+    }
+
+    #[test]
+    fn math_two_arg_fns_are_f64_f64_to_f64() {
+        for name in ["pow", "atan2", "hypot"] {
+            let sig =
+                lookup_module_fn("math", name).unwrap_or_else(|| panic!("math.{name} in manifest"));
+            assert_eq!(sig.runtime_symbol, name);
+            assert_eq!(value_tys(&sig.params), vec![Ty::Float, Ty::Float]);
+            assert_eq!(sig.ret, Ty::Float);
+            assert_eq!(sig.tier, PyCompatTier::Numerical);
+        }
+    }
+
+    #[test]
+    fn math_deferred_fns_are_absent() {
+        // floor/ceil/trunc return INT in CPython (need an fptosi cast) and
+        // factorial/gcd/isqrt are integer ops — all deferred per ADR-0083.
+        for name in ["floor", "ceil", "trunc", "factorial", "gcd", "isqrt"] {
+            assert!(
+                lookup_module_fn("math", name).is_none(),
+                "math.{name} must be deferred (not in the first batch)"
+            );
+        }
+    }
+
+    #[test]
+    fn math_constants_match_cpython_oracle() {
+        // Differential oracle: /opt/homebrew/bin/python3.11 -c
+        //   import math; print(repr(math.pi), repr(math.e), repr(math.tau))
+        // → 3.141592653589793 2.718281828459045 6.283185307179586
+        assert_eq!(
+            lookup_module_const("math", "pi"),
+            Some(std::f64::consts::PI)
+        );
+        assert_eq!(lookup_module_const("math", "e"), Some(std::f64::consts::E));
+        assert_eq!(
+            lookup_module_const("math", "tau"),
+            Some(std::f64::consts::TAU)
+        );
+        // The `Some(consts::X)` equalities above are the bit-exact
+        // differential check: Rust's `std::f64::consts` are the SAME f64
+        // rounding the python3.11 oracle prints (`3.141592653589793`,
+        // `2.718281828459045`, `6.283185307179586`).
+    }
+
+    #[test]
+    fn math_unknown_const_and_other_module_const_are_none() {
+        assert_eq!(lookup_module_const("math", "phi"), None);
+        // `inf`/`nan` are BARE f64 literals (lexer M-F.3.3), NOT `math.`
+        // constants — `math.inf` does not parse, so they resolve to None here
+        // (ADR-0083 §Deferred). Use the bare `inf` / `nan` in `.cb`.
+        assert_eq!(lookup_module_const("math", "inf"), None);
+        assert_eq!(lookup_module_const("math", "nan"), None);
+        // A constant lookup on a non-math module never resolves (the
+        // function is math-only by design).
+        assert_eq!(lookup_module_const("coil", "pi"), None);
     }
 
     #[test]

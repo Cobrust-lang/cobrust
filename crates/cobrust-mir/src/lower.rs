@@ -1563,6 +1563,23 @@ impl<'a> BodyBuilder<'a> {
                     );
                     return Ok(op_out);
                 }
+                // ADR-0083 — `math` module CONSTANT (`math.pi`, `math.e`,
+                // `math.tau`, `math.inf`, `math.nan`): a parens-free attribute
+                // on an ecosystem-module import alias. Emit the value as a
+                // pure compile-time `Constant::Float` (bits via `f64::to_bits`,
+                // the `lit_to_constant` Float convention) — NO runtime call (a
+                // constant is just a number). The type checker already typed
+                // this as `Ty::Float`; `synth_expr_ty`'s Attr arm agrees, so a
+                // `let p: f64 = math.pi` drop schedule + a `print(math.pi)`
+                // float-dispatch both see the right type.
+                if let ExprKind::Name(rn) = &base.kind {
+                    if rn.kind == DefKind::ImportAlias {
+                        if let Some(v) = cobrust_types::lookup_module_const(rn.name.as_str(), name)
+                        {
+                            return Ok(Operand::Constant(Constant::Float(v.to_bits())));
+                        }
+                    }
+                }
                 let base_op = self.lower_expr(base)?;
                 // Materialize base in a temp, project on .field(0) as a
                 // conservative placeholder — M11 stdlib resolves attrs.
@@ -3568,6 +3585,18 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
         // schedule sees the right type (e.g. `a.shape` is an owned
         // `list[i64]` that must drop once at scope exit).
         ExprKind::Attr { base, name } => {
+            // ADR-0083 — a `math` module CONSTANT attribute synthesises
+            // `Ty::Float` (so a `let p: f64 = math.pi` binding + a
+            // `print(math.pi)` float-dispatch resolve correctly). Checked
+            // BEFORE the handle-attr path: the base is a `Name` import alias,
+            // never a Buffer handle, so the two cases never overlap.
+            if let ExprKind::Name(rn) = &base.kind {
+                if rn.kind == DefKind::ImportAlias
+                    && cobrust_types::lookup_module_const(rn.name.as_str(), name).is_some()
+                {
+                    return Ty::Float;
+                }
+            }
             let base_ty = synth_expr_ty(b, base);
             if let Some(sig) = cobrust_types::lookup_handle_attr(&base_ty, name) {
                 return sig.ret;

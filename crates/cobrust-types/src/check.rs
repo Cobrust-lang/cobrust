@@ -1772,6 +1772,42 @@ impl Ctx {
                         }
                     }
                 }
+                // ADR-0083 — `math` module CONSTANT attribute (`math.pi`,
+                // `math.e`, `math.tau`; `inf`/`nan` are BARE literals, not
+                // `math.`-qualified — ADR-0083 §Deferred). A parens-FREE
+                // attribute access whose `base` is a `Name` resolving to an
+                // ecosystem-module import alias. A known constant types as
+                // `Ty::Float`; an UNKNOWN attr on a math alias is a
+                // compile-time `UnknownName` (§2.5 compile-time-catch — NOT a
+                // false-green `fresh_var()` that unifies with anything). The
+                // MIR `Attr` lowering emits the value as a `Constant::Float`
+                // LLVM literal (no runtime call). Function attrs (`math.sqrt`)
+                // are an `ExprKind::Call` with an `Attr` callee — they never
+                // reach this non-call `Attr` synth, so they are unaffected.
+                if let ExprKind::Name(rn) = &base.kind {
+                    if let Some(module) = self.ecosystem_module_defs.get(&rn.def_id).cloned() {
+                        if crate::ecosystem::lookup_module_const(&module, name).is_some() {
+                            return Ok(Ty::Float);
+                        }
+                        // `math` is the only module with attribute constants
+                        // (Q: §2.2). On a math base, an unknown bare attr is a
+                        // hard error (a fn like `math.sqrt` is a Call, handled
+                        // elsewhere); on any other ecosystem module, fall
+                        // through (no module-attr surface there yet).
+                        if module == "math" {
+                            return Err(TypeError::UnknownName {
+                                name: format!("{module}.{name}"),
+                                span,
+                                suggestion: Some(
+                                    "math exposes the constants pi / e / tau; for infinity \
+                                     and not-a-number write the BARE literals `inf` / `nan` \
+                                     (not `math.inf`); scalar functions like sqrt / sin are \
+                                     CALLED (`math.sqrt(2.0)`)",
+                                ),
+                            });
+                        }
+                    }
+                }
                 let _ = name;
                 Ok(self.fresh_var())
             }
