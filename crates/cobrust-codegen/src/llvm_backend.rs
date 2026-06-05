@@ -3353,10 +3353,27 @@ impl<'ctx> LlvmEmitter<'ctx> {
         let coil_ctor_ty = ptr_ty.fn_type(&[i64_ty.into()], false);
         let coil_print_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
         let coil_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        // #numpy core constructor — `coil.array([list])`. The FIRST coil ctor
+        // that CONSUMES a Cobrust `list[T]`: a `(ptr) -> ptr` shape (a borrowed
+        // `*mut u8` list pointer in, a fresh `*mut Buffer` out). NO prior coil
+        // free-function in THIS first block declares a `(ptr) -> ptr` shape
+        // (`coil_ctor_ty` is `(i64) -> ptr`); a dedicated name keeps it self-
+        // contained. The MIR ecosystem-call lowering dispatches the int vs
+        // float shim on the list's ELEMENT type (`__cobrust_coil_array_int` for
+        // `list[int]` → Int64 Buffer; `__cobrust_coil_array_float` for
+        // `list[float]` → Float64 Buffer) — the ADR-0089/0090 dest/element-type
+        // dispatch, immune to the computed-arg miscompile.
+        let coil_listconsume_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_coil_zeros", coil_ctor_ty, 1usize),
             ("__cobrust_coil_ones", coil_ctor_ty, 1),
             ("__cobrust_coil_eye", coil_ctor_ty, 1),
+            // #numpy core constructor — the two `coil.array([list])` list-
+            // consume shims. Both `(ptr) -> ptr` (`coil_listconsume_ty`): the
+            // borrowed list pointer in, a fresh Buffer handle out. The MIR
+            // retarget picks ONE per the list's static element dtype.
+            ("__cobrust_coil_array_int", coil_listconsume_ty, 1),
+            ("__cobrust_coil_array_float", coil_listconsume_ty, 1),
             // #numpy BATCH 20 — `coil.arange(n) -> Buffer`. The FINAL core
             // numpy constructor (LLMs write `np.arange(n)` constantly). The
             // SAME `(i64) -> ptr` extern shape as `zeros`/`ones`/`eye`

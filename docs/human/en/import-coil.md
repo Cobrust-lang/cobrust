@@ -321,6 +321,54 @@ emits an **`int64`** Buffer directly (every other constructor emits
   > start elsewhere or step differently today, build with `arange` + a
   > scalar op (e.g. `coil.arange(5) + 2` for `[2, 3, 4, 5, 6]`).
 
+## From a list — `coil.array([...])`
+
+`coil.array([...])` is the FUNDAMENTAL numpy constructor `np.array([...])`
+— the **bridge from real list data to a Buffer**. It is the first hop of
+the everyday `parse → list → array → stats` pipeline: read some numbers
+into a `list`, lift them into a `Buffer`, then reduce
+(`coil.mean` / `coil.std`).
+
+- **`coil.array(xs: list[int]) -> Buffer`** — an **int64** Buffer
+  (`np.array([1,2,3]).dtype == int64`).
+- **`coil.array(xs: list[float]) -> Buffer`** — a **float64** Buffer
+  (`np.array([1.0,2.5]).dtype == float64`).
+
+  The dtype follows the list's **element type** — an `int` list builds an
+  `int64` Buffer, a `float` list a `float64` Buffer (this is exactly
+  numpy's rule).
+
+  ```python
+  let xs: list[i64] = [1, 2, 3]
+  let a: coil.Buffer = coil.array(xs)              # int64 [1, 2, 3]
+  let _ = coil.print_buffer(a)                     # array([1, 2, 3], dtype=int64)
+
+  let fs: list[f64] = [1.0, 2.5]
+  let b: coil.Buffer = coil.array(fs)              # float64
+  let _ = coil.print_buffer(b)                     # array([1, 2.5], dtype=float64)
+
+  # The payoff — parse → array → stats:
+  let m: f64 = coil.mean(coil.array([1, 2, 3, 4]))  # 2.5
+  print(m)
+  ```
+
+  **Semantics (numpy 2.x):**
+  - `coil.array([])` is an **empty float64** Buffer
+    (`np.array([]).dtype == float64` — the empty-list default is float). An
+    annotated empty `list[i64]` builds an empty **int64** Buffer. Neither
+    is an error — the program exits zero.
+  - The list is **borrowed**, not consumed: you can keep using it after
+    `coil.array(xs)` (e.g. `len(xs)`). It is freed exactly once when its
+    scope ends.
+  - A non-list argument (`coil.array(5)`) or a non-numeric-element list
+    (`coil.array(["a", "b"])`) is a **compile-time** type error — the §2.5
+    compile-time-catch path, caught before the program ever runs.
+
+  > **1-D form only (for now).** The nested 2-D form
+  > `coil.array([[1, 2], [3, 4]])` (a list of lists) is a **documented
+  > deferral** — it needs a recursive list read. This ships the 1-D form;
+  > build 2-D arrays today with `coil.array2x2(...)` / `coil.reshape(...)`.
+
 ## Sorting & search (`sort` / `argsort` / `unique` / `flatnonzero`)
 
 These are the four "flat search & order" ops an LLM reaches for first.

@@ -81,7 +81,7 @@ use crate::array::{Array, astype as coil_astype};
 use crate::broadcast::broadcast_shape;
 use crate::broadcast_extra::broadcast_to_1d;
 use crate::constructors::{
-    arange_int as coil_arange_int, array_f64, diag as coil_diag, eye as coil_eye,
+    arange_int as coil_arange_int, array_f64, array_i64, diag as coil_diag, eye as coil_eye,
     full as coil_full, linspace as coil_linspace, logspace as coil_logspace, ones as coil_ones,
     tril as coil_tril, triu as coil_triu, zeros as coil_zeros,
 };
@@ -125,6 +125,19 @@ unsafe extern "C" {
     fn __cobrust_list_new(elem_size: i64, len: i64) -> *mut u8;
     /// Write `list[i] = v` (out-of-bounds writes are silently dropped).
     fn __cobrust_list_set(list: *mut u8, i: i64, v: i64);
+    /// Element count of a `List<i64>` (a null list reads as `0`). The
+    /// READ half of the list-CONSUME mechanism (ADR-0090): coil's
+    /// `array(xs)` BORROWS the list via this SHARED-reference accessor
+    /// (it NEVER `Box::from_raw` / frees), EXACTLY like `__cobrust_min_int`
+    /// (`cobrust-stdlib/src/reduce.rs`). Resolved from libcobrust_stdlib.a
+    /// (`cobrust-stdlib/src/collections.rs`).
+    fn __cobrust_list_len(list: *mut u8) -> i64;
+    /// Read `list[i]` as a raw `i64` slot (in-bounds per the caller). A
+    /// `list[f64]`'s slots hold the `to_bits()` bit-pattern (the codegen
+    /// materialises a `Constant::Float` as its `to_bits()` i64); the float
+    /// `array` shim reinterprets via `f64::from_bits` (ADR-0090). The
+    /// SHARED-reference read half of the list-CONSUME mechanism.
+    fn __cobrust_list_get(list: *mut u8, i: i64) -> i64;
     /// Abort the process with a UTF-8 diagnostic (ADR-0077 Q4 panic-on-
     /// shape-mismatch — the same `__cobrust_panic` shim the codegen
     /// abort path uses; diverges, never returns).
@@ -382,6 +395,109 @@ pub unsafe extern "C" fn __cobrust_coil_arange(n: i64) -> *mut u8 {
     // `arange_int` is TOTAL (a negative `n` clamps to an empty buffer); no
     // unwrap-or-fallback needed — the kernel never errors.
     let arr = coil_arange_int(n);
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+// =====================================================================
+// #numpy core constructor (2026-06-05) — `coil.array([list])`, the
+// FUNDAMENTAL numpy constructor `np.array([...])`: the BRIDGE from real
+// `.cb` list data to a coil `Buffer` (parse → list → array → stats). The
+// FIRST coil constructor that CONSUMES a Cobrust `list[T]` argument —
+// every prior ctor is all-scalar-arg (`zeros(n)` / `arange(n)`). It
+// REUSES the ADR-0090 list-CONSUME (borrow-read) mechanism: the `.cb`
+// list passes by POINTER (`is_copy_type(Ty::List)` — Copy-at-call, the
+// `.cb` scope retains ownership + drops it ONCE at scope exit), the shim
+// BORROWS it via `__cobrust_list_len` / `__cobrust_list_get` (a SHARED
+// reference, NEVER `Box::from_raw` / free — EXACTLY like
+// `__cobrust_min_int`), reads every i64 slot into a `Vec`, and builds an
+// `Array` via the EXISTING `array_i64` / `array_f64` kernels.
+//
+// TWO shims, ELEMENT-DTYPE dispatch (numpy-exact, ADR-0089/0090 lesson):
+// the MIR ecosystem-call lowering reads the list arg's STATIC element
+// type (`Ty::List(elem)` via `synth_expr_ty` — the resolved type, NOT a
+// fragile arg-temp read) and retargets `coil.array(xs)` onto:
+//   - `__cobrust_coil_array_int`   for `list[int]`   → `Array::Int64`
+//     (`np.array([1,2,3]).dtype == int64`),
+//   - `__cobrust_coil_array_float` for `list[float]` → `Array::Float64`
+//     (`np.array([1.0,2.5]).dtype == float64`).
+// An EMPTY list is valid-empty (NOT a trap): an empty `list[int]` → an
+// empty `Int64` Buffer; an unannotated empty `coil.array([])` routes to
+// the float shim → an empty `Float64` Buffer (`np.array([]).dtype ==
+// float64`). The NESTED 2-D form (`coil.array([[1,2],[3,4]])` from a
+// `list[list[T]]`) is a DOCUMENTED DEFERRAL — it needs a recursive list
+// read; this ships the 1-D form.
+//
+// Both shims return a FRESH `Box::into_raw` `Buffer` handle the `.cb`
+// scope drops ONCE via `__cobrust_coil_buffer_drop`; the input list is
+// BORROWED, so a `coil.array(xs)` then-use-`xs` program drops the list
+// exactly once (NO double-free).
+// =====================================================================
+
+/// `coil.array(xs: list[int]) -> Buffer`. Build an `Int64` 1-D Buffer
+/// from a `.cb` `list[int]` — `np.array([1, 2, 3]) == array([1, 2, 3],
+/// dtype=int64)`. BORROWS the list (reads length + each `i64` slot via
+/// the SHARED-reference accessors; NEVER frees it — the `.cb` scope drops
+/// it once). An EMPTY list → an empty `Int64` Buffer (valid, NOT a trap).
+/// The dtype is `int64` to match numpy's `np.array(<int list>)` dtype.
+///
+/// Returns a freshly-Boxed `Array` handle the `.cb` caller owns; freed
+/// once via `__cobrust_coil_buffer_drop`.
+///
+/// # Safety
+///
+/// `list` must be null or a pointer returned by `__cobrust_list_new` (a
+/// `.cb` `list[int]` local) and not yet dropped (a null list reads as
+/// length 0 → an empty Buffer). The shim only BORROWS it (shared-ref
+/// reads); the `.cb` scope retains ownership.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_array_int(list: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation; `__cobrust_list_len` tolerates null.
+    let n = unsafe { __cobrust_list_len(list) };
+    let len = if n < 0 { 0_usize } else { n as usize };
+    let mut data: Vec<i64> = Vec::with_capacity(len);
+    let mut i = 0_i64;
+    while (i as usize) < len {
+        // SAFETY: 0 <= i < n, in-bounds for `__cobrust_list_get`. The slot
+        // is a raw i64 (int element) — read directly, no bitcast.
+        data.push(unsafe { __cobrust_list_get(list, i) });
+        i += 1;
+    }
+    // `array_i64` is infallible for a 1-D `[len]` shape (values.len() ==
+    // the shape product by construction); fall back to a direct 1-D build
+    // if the (unreachable) shape check ever fires.
+    let arr = array_i64(&data, &[len])
+        .unwrap_or_else(|_| Array::Int64(ndarray::Array1::from_vec(data.clone()).into_dyn()));
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+/// `coil.array(xs: list[float]) -> Buffer`. Build a `Float64` 1-D Buffer
+/// from a `.cb` `list[float]` — `np.array([1.0, 2.5]) == array([1. ,
+/// 2.5], dtype=float64)`. BORROWS the list; each `i64` slot is the stored
+/// `f64` bit-pattern, reinterpreted via `f64::from_bits` (the ADR-0090
+/// float-list read convention). An EMPTY list → an empty `Float64`
+/// Buffer (valid, NOT a trap).
+///
+/// # Safety
+///
+/// `list` must be null or a pointer returned by `__cobrust_list_new` (a
+/// `.cb` `list[float]` local) and not yet dropped. The shim only BORROWS
+/// it; the `.cb` scope retains ownership.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_coil_array_float(list: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation; `__cobrust_list_len` tolerates null.
+    let n = unsafe { __cobrust_list_len(list) };
+    let len = if n < 0 { 0_usize } else { n as usize };
+    let mut data: Vec<f64> = Vec::with_capacity(len);
+    let mut i = 0_i64;
+    while (i as usize) < len {
+        // SAFETY: in-bounds. The slot holds the `to_bits()` f64 pattern of
+        // the float element (ADR-0090) — reinterpret it back.
+        let bits = unsafe { __cobrust_list_get(list, i) } as u64;
+        data.push(f64::from_bits(bits));
+        i += 1;
+    }
+    let arr = array_f64(&data, &[len])
+        .unwrap_or_else(|_| Array::Float64(ndarray::Array1::from_vec(data.clone()).into_dyn()));
     Box::into_raw(Box::new(arr)).cast::<u8>()
 }
 
@@ -4809,6 +4925,183 @@ mod tests {
                 !r.is_null(),
                 "negative arange must yield an empty handle, not null"
             );
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.dtype(), Dtype::Int64);
+            assert_eq!(arr.size(), 0);
+            __cobrust_coil_buffer_drop(r);
+        }
+    }
+
+    // =====================================================================
+    // #numpy core constructor — `coil.array([list])` shim tests.
+    //
+    // The list-CONSUME (borrow-read) mechanism (ADR-0090): the array shims
+    // BORROW the list via the REAL stdlib `__cobrust_list_*` accessors
+    // (linked only at `.cb`-link time, NOT into this lib-test binary), so —
+    // EXACTLY like the `__cobrust_panic` + `__cobrust_str_*` test stubs
+    // above — we provide test-only definitions backed by a `FakeList` (a
+    // heap `Vec<i64>` whose len/slot the stubs return). This lets the
+    // shim's FULL read → build-Array → fresh-Box path run in-process AND
+    // lets the BORROW be checked (the list is reused/read after the shim).
+    // The `.cb` e2e (`coil_array_e2e.rs`) proves the SAME path against the
+    // REAL stdlib list buffer.
+    // =====================================================================
+
+    /// Heap-backed fake Cobrust `List<i64>` for the shim tests. The
+    /// test-only `__cobrust_list_*` stubs read its slots. A `list[f64]` is
+    /// modelled by storing each `f64`'s `to_bits()` (the codegen
+    /// convention). Boxed + leaked-then-reclaimed via [`FakeList::raw`] /
+    /// [`FakeList::free`].
+    struct FakeList {
+        slots: Vec<i64>,
+    }
+    impl FakeList {
+        fn raw(slots: Vec<i64>) -> *mut u8 {
+            Box::into_raw(Box::new(FakeList { slots })).cast::<u8>()
+        }
+        /// SAFETY: `p` must be a pointer from a prior [`FakeList::raw`].
+        unsafe fn free(p: *mut u8) {
+            if !p.is_null() {
+                drop(unsafe { Box::from_raw(p.cast::<FakeList>()) });
+            }
+        }
+    }
+
+    /// Test-only `__cobrust_list_len` — the [`FakeList`]'s slot count (a
+    /// null list reads as 0, mirroring the stdlib accessor).
+    #[unsafe(no_mangle)]
+    extern "C" fn __cobrust_list_len(list: *mut u8) -> i64 {
+        if list.is_null() {
+            return 0;
+        }
+        // SAFETY: shim/test callers pass a `FakeList::raw` pointer.
+        let fl = unsafe { &*list.cast::<FakeList>() };
+        fl.slots.len() as i64
+    }
+
+    /// Test-only `__cobrust_list_get` — the `i`-th raw i64 slot.
+    #[unsafe(no_mangle)]
+    extern "C" fn __cobrust_list_get(list: *mut u8, i: i64) -> i64 {
+        if list.is_null() || i < 0 {
+            return 0;
+        }
+        // SAFETY: shim/test callers pass a `FakeList::raw` pointer; the
+        // shim only reads 0..len.
+        let fl = unsafe { &*list.cast::<FakeList>() };
+        fl.slots.get(i as usize).copied().unwrap_or(0)
+    }
+
+    /// `coil.array([1, 2, 3])` → an `Int64` Buffer `array([1, 2, 3],
+    /// dtype=int64)` (np.array([1,2,3]).dtype == int64). The list is
+    /// BORROWED (read, NOT freed) — it is reused after the shim and freed
+    /// once by the test; only the fresh result Buffer drops via the
+    /// counter.
+    #[test]
+    fn array_int_shim_builds_int64_and_borrows() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = drop_count();
+        unsafe {
+            let xs = FakeList::raw(vec![1, 2, 3]);
+            let r = __cobrust_coil_array_int(xs);
+            assert!(!r.is_null(), "array_int returned null");
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.dtype(), Dtype::Int64);
+            assert_eq!(array_repr(arr), "array([1, 2, 3], dtype=int64)");
+            __cobrust_coil_buffer_drop(r);
+            // BORROW lock: the list is still valid after the shim (the shim
+            // did NOT free it) — its length still reads 3.
+            assert_eq!(
+                __cobrust_list_len(xs),
+                3,
+                "list must be borrowed, not freed"
+            );
+            FakeList::free(xs);
+        }
+        assert_eq!(
+            drop_count() - before,
+            1,
+            "only the fresh result Buffer drops (the list is borrowed)"
+        );
+    }
+
+    /// `coil.array([1.0, 2.5])` → a `Float64` Buffer (np.array([1.0,2.5])
+    /// .dtype == float64). Each slot is the `to_bits()` pattern, read back
+    /// via `f64::from_bits`.
+    #[test]
+    fn array_float_shim_builds_float64() {
+        // Acquire the shared lock (this test calls `buffer_drop`, bumping
+        // the global DROP_COUNT) so a concurrent count-asserting test's
+        // delta stays deterministic.
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let xs = FakeList::raw(vec![1.0_f64.to_bits() as i64, 2.5_f64.to_bits() as i64]);
+            let r = __cobrust_coil_array_float(xs);
+            assert!(!r.is_null(), "array_float returned null");
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.dtype(), Dtype::Float64);
+            assert_eq!(arr.size(), 2);
+            if let Array::Float64(a) = arr {
+                let v: Vec<f64> = a.iter().copied().collect();
+                assert!((v[0] - 1.0).abs() < 1e-12 && (v[1] - 2.5).abs() < 1e-12);
+            } else {
+                panic!("expected Float64");
+            }
+            __cobrust_coil_buffer_drop(r);
+            FakeList::free(xs);
+        }
+    }
+
+    /// `coil.array([])` int path → an EMPTY `Int64` Buffer (an empty
+    /// `list[int]` → empty int64). NOT a trap.
+    #[test]
+    fn array_int_shim_empty_is_empty_int64() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let xs = FakeList::raw(vec![]);
+            let r = __cobrust_coil_array_int(xs);
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.dtype(), Dtype::Int64);
+            assert_eq!(arr.size(), 0);
+            assert_eq!(array_repr(arr), "array([], dtype=int64)");
+            __cobrust_coil_buffer_drop(r);
+            FakeList::free(xs);
+        }
+    }
+
+    /// `coil.array([])` float path → an EMPTY `Float64` Buffer (np.array([])
+    /// .dtype == float64 — the unannotated empty routes to the float shim).
+    #[test]
+    fn array_float_shim_empty_is_empty_float64() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let xs = FakeList::raw(vec![]);
+            let r = __cobrust_coil_array_float(xs);
+            let arr: &Array = &*r.cast::<Array>();
+            assert_eq!(arr.dtype(), Dtype::Float64);
+            assert_eq!(arr.size(), 0);
+            assert_eq!(array_repr(arr), "array([], dtype=float64)");
+            __cobrust_coil_buffer_drop(r);
+            FakeList::free(xs);
+        }
+    }
+
+    /// A null list is the empty-Buffer edge (the shim tolerates null — the
+    /// stdlib `__cobrust_list_len(null) == 0`). Int path → empty Int64.
+    #[test]
+    fn array_int_shim_null_is_empty() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let r = __cobrust_coil_array_int(std::ptr::null_mut());
             let arr: &Array = &*r.cast::<Array>();
             assert_eq!(arr.dtype(), Dtype::Int64);
             assert_eq!(arr.size(), 0);

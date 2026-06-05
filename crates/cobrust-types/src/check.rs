@@ -2724,6 +2724,20 @@ impl Ctx {
         // Case 1: module-level free function (`den.connect`).
         if let ExprKind::Name(rn) = &base.kind {
             if let Some(module) = self.ecosystem_module_defs.get(&rn.def_id).cloned() {
+                // #numpy core constructor — `coil.array([list])` is ELEMENT-
+                // DTYPE-POLYMORPHIC (`list[int]` → int64 Buffer, `list[float]`
+                // → float64 Buffer), which the manifest's concrete-typed
+                // `EcoParam::Value` arg-check cannot express. Special-case it
+                // BEFORE `check_eco_sig` (the SAME shape as ADR-0090's
+                // `try_synth_reduce_builtin`): read the single arg's
+                // `Ty::List(elem)`, validate `elem ∈ {int, float}`, and return
+                // the uniform `coil_buffer_ty()` (the dtype is a RUNTIME Buffer
+                // property; the MIR lowering picks the int vs float shim per
+                // the static element type). See ADR-0091.
+                if module == "coil" && name == "array" {
+                    let ret = self.synth_coil_array(args, span)?;
+                    return Ok(Some(ret));
+                }
                 let Some(sig) = crate::ecosystem::lookup_module_fn(&module, name) else {
                     return Err(TypeError::UnknownName {
                         name: format!("{module}.{name}"),
@@ -2767,6 +2781,98 @@ impl Ctx {
     /// call's positional `args`, returning the signature's return type.
     /// The receiver (for a method) is implicit and not in `sig.params`.
     ///
+    /// #numpy core constructor — `coil.array([list]) -> Buffer`, the
+    /// element-dtype-polymorphic `np.array([...])` bridge (ADR-0091).
+    ///
+    /// `coil.array` is the FIRST coil row whose argument is element-dtype-
+    /// polymorphic: a `list[int]` → an int64 Buffer, a `list[float]` → a
+    /// float64 Buffer (`np.array([1,2,3]).dtype == int64`,
+    /// `np.array([1.0]).dtype == float64`). The manifest's `EcoParam::Value`
+    /// (a CONCRETE arg type) cannot express this, so this special-case reads
+    /// the single arg's `Ty::List(elem)` directly (the SAME shape as
+    /// ADR-0090's `try_synth_reduce_builtin`) and returns the uniform
+    /// [`crate::ecosystem::coil_buffer_ty`] — the dtype is a RUNTIME Buffer
+    /// property, NOT a static type, so the return is shape-uniform; the MIR
+    /// lowering picks the int vs float runtime shim per the static element
+    /// type (the ADR-0089/0090 dest/element-type dispatch).
+    ///
+    /// - **`list[int]`** → `coil.Buffer` (lowered to `__cobrust_coil_array_int`,
+    ///   reading the raw i64 slots → `Array::Int64`).
+    /// - **`list[float]`** → `coil.Buffer` (lowered to
+    ///   `__cobrust_coil_array_float`, `f64::from_bits` each slot →
+    ///   `Array::Float64`).
+    /// - **unresolved elem var** (an un-annotated `coil.array([])`) → anchor
+    ///   the elem to `Float` (numpy's empty-list default dtype is float64 —
+    ///   `np.array([]).dtype == float64`), return `coil.Buffer` (the float
+    ///   shim builds an EMPTY Float64 Buffer).
+    /// - **`list[other]`** (`coil.array(["a"])`) → unify the elem against
+    ///   `Float`, raising the canonical `TypeMismatch` (NO new variant).
+    /// - **non-list arg** (`coil.array(5)`) → the canonical `NotIterable`
+    ///   (an existing variant — no renderer cascade), with a §2.5-B fix
+    ///   suggestion.
+    ///
+    /// The NESTED 2-D form (`coil.array([[1,2],[3,4]])` — a `list[list[T]]`)
+    /// is a documented DEFERRAL: a `Ty::List(Ty::List(_))` elem unifies
+    /// against `Float` here and raises `TypeMismatch` (the 1-D form ships;
+    /// the recursive read is future work). Arity misuse (`coil.array()`,
+    /// `coil.array(a, b)`, or a `dtype=` kwarg) raises `ArityMismatch`
+    /// directly here — this fn owns the whole `coil.array` arg-check, so the
+    /// generic manifest arity/keyword path is never reached.
+    fn synth_coil_array(&mut self, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
+        // Exactly one positional arg (`coil.array(xs)`); the `dtype=` kwarg
+        // and the multi-arg form are deferred → canonical ArityMismatch.
+        let [CallArg::Positional(arg)] = args else {
+            return Err(TypeError::ArityMismatch {
+                expected: 1,
+                actual: args.len(),
+                span,
+                suggestion: Some(
+                    "coil.array takes exactly one list argument — coil.array([1, 2, 3])",
+                ),
+            });
+        };
+        let arg_ty = self.synth_expr(arg)?;
+        let arg_ty = self.subst.apply(&arg_ty);
+        // `Ref(T)` unwraps once so `coil.array(&xs)` (the §2.5-A borrow
+        // shortcut) routes by the inner list type.
+        let resolved = match &arg_ty {
+            Ty::Ref(inner) => (**inner).clone(),
+            other => other.clone(),
+        };
+        match resolved {
+            Ty::List(elem) => {
+                let elem = self.subst.apply(&elem);
+                match elem {
+                    Ty::Int | Ty::Float => Ok(crate::ecosystem::coil_buffer_ty()),
+                    // An unresolved element var (an un-annotated
+                    // `coil.array([])`) anchors to the FLOAT path — numpy's
+                    // empty-list default dtype is float64
+                    // (`np.array([]).dtype == float64`) — so the call has a
+                    // concrete return and the float shim builds an empty
+                    // Float64 Buffer. A list whose element type is neither
+                    // int nor float (`coil.array(["a"])`, OR the DEFERRED
+                    // nested `list[list]`) unifies the elem against `Float`
+                    // here, raising the canonical `TypeMismatch` (no new
+                    // variant).
+                    other => {
+                        unify(&Ty::Float, &other, &mut self.subst, arg.span)?;
+                        Ok(crate::ecosystem::coil_buffer_ty())
+                    }
+                }
+            }
+            // A non-list argument: `coil.array` requires a list. Reuse the
+            // canonical `NotIterable` variant (no new error type), with a
+            // §2.5-B fix suggestion.
+            other => Err(TypeError::NotIterable {
+                actual: other,
+                span,
+                suggestion: Some(
+                    "coil.array takes a single list argument — coil.array([1.0, 2.5])",
+                ),
+            }),
+        }
+    }
+
     /// ADR-0073 §2 D1+D8 — parameter slots are now `EcoParam` (either
     /// `Value(Ty)` — every den/nest/strike/scale/molt row plus the
     /// non-callback pit slots — or `Callback(FnTy)` for the

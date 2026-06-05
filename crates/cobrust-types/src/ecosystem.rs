@@ -729,6 +729,36 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             coil_buffer_ty(),
             PyCompatTier::Semantic,
         )),
+        // #numpy core constructor (2026-06-05) — `coil.array([list]) ->
+        // Buffer`, the FUNDAMENTAL numpy constructor `np.array([...])`: the
+        // BRIDGE from real `.cb` list data to a coil Buffer (parse → list →
+        // array → stats). UNIQUE among coil rows: the arg is ELEMENT-DTYPE-
+        // POLYMORPHIC (`list[int]` → an int64 Buffer, `list[float]` → a
+        // float64 Buffer — `np.array([1,2,3]).dtype == int64`,
+        // `np.array([1.0]).dtype == float64`), which an `EcoParam::Value`
+        // (a CONCRETE arg type) cannot express. So the type-checker
+        // SPECIAL-CASES `("coil","array")` in `try_synth_ecosystem_call`
+        // BEFORE `check_eco_sig` (the SAME shape as ADR-0090's
+        // `try_synth_reduce_builtin` reading `Ty::List(elem)`): it accepts a
+        // `list[int|float]` arg and returns `coil_buffer_ty()` (the dtype is a
+        // RUNTIME property of the Buffer, NOT a static type — so the return is
+        // uniform). The MIR ecosystem-call lowering then picks
+        // `__cobrust_coil_array_int` vs `_float` per the list's STATIC element
+        // type (the ADR-0089/0090 dest/element-type dispatch). This EcoSig
+        // exists ONLY so `lookup_module_fn` returns `Some` (the special-case
+        // reads the real arg); its `runtime_symbol` is the float shim (the MIR
+        // override supplies the int shim) and its `param` is a sentinel
+        // `list[float]` (unused — the special-case intercepts the arg-check).
+        // The NESTED 2-D form (`coil.array([[1,2],[3,4]])` from `list[list]`)
+        // is a documented DEFERRAL (needs a recursive list read; this ships
+        // the 1-D form). Tier `Semantic` (the coil family tier — the values
+        // are numpy-exact; the repr layout differs). See ADR-0091.
+        ("coil", "array") => Some(EcoSig::from_values(
+            "__cobrust_coil_array_float",
+            vec![Ty::List(Box::new(Ty::Float))],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
         ("coil", "split") => Some(EcoSig::from_values(
             "__cobrust_coil_split",
             vec![coil_buffer_ty(), Ty::Int],

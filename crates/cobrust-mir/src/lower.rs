@@ -2277,8 +2277,39 @@ impl<'a> BodyBuilder<'a> {
                 for (a, p) in pos_args.iter().zip(sig.params.iter()) {
                     arg_ops.push(lower_eco_arg(self, a, p)?);
                 }
-                let op =
-                    self.emit_ecosystem_call(sig.runtime_symbol, sig.ret.clone(), arg_ops, span);
+                // #numpy core constructor — `coil.array([list])` ELEMENT-DTYPE
+                // dispatch (ADR-0091). The EcoSig's `runtime_symbol` is the
+                // float shim (the manifest default); but `coil.array` is
+                // element-dtype-polymorphic — a `list[int]` must build an
+                // int64 Buffer (`__cobrust_coil_array_int`, raw i64 slots), a
+                // `list[float]` a float64 Buffer (`__cobrust_coil_array_float`,
+                // `from_bits` slots). We pick the shim from the SINGLE list
+                // arg's STATIC element type (`synth_expr_ty` → `Ty::List(elem)`
+                // — the type-checker's resolved record, NOT the arg's MIR temp:
+                // the ADR-0089/0090 lesson, so a list BUILT then passed
+                // — `coil.array(make_ints())` — routes by its real element
+                // type, immune to the computed-arg miscompile). An empty /
+                // unresolved elem stays on the FLOAT shim (numpy's empty-list
+                // default dtype is float64 — `np.array([]).dtype == float64`),
+                // matching the type-checker's `synth_coil_array` anchor. The
+                // list arg already passes Copy-at-call (`is_copy_type(Ty::List)`
+                // — the shim BORROWS it; the `.cb` scope drops it once).
+                let runtime_symbol = if rn.name.as_str() == "coil" && name == "array" {
+                    let elem_is_int = pos_args.first().is_some_and(|arg| {
+                        matches!(
+                            synth_expr_ty(self, arg),
+                            Ty::List(elem) if matches!(*elem, Ty::Int)
+                        )
+                    });
+                    if elem_is_int {
+                        "__cobrust_coil_array_int"
+                    } else {
+                        "__cobrust_coil_array_float"
+                    }
+                } else {
+                    sig.runtime_symbol
+                };
+                let op = self.emit_ecosystem_call(runtime_symbol, sig.ret.clone(), arg_ops, span);
                 return Ok(Some(op));
             }
         }

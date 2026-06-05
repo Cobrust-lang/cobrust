@@ -3638,6 +3638,117 @@ Float64 result would DIVERGE from numpy).
       (`Cargo.lock` unchanged — F64); pure ndarray + std.
 - [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
 
+## `.cb` `coil.array([list]) -> Buffer` (#numpy core constructor — DONE)
+
+The FUNDAMENTAL numpy constructor `np.array([...])` — the single
+most-reached-for numpy entry point. The BRIDGE from real `.cb` list data
+to a coil `Buffer`: the `parse → list → array → stats` pipeline's missing
+first hop. The FIRST coil constructor that CONSUMES a Cobrust `list[T]`
+argument (every prior ctor — `zeros(n)` / `arange(n)` — is all-scalar-arg).
+See ADR-0091. The `coil_array_e2e` binaries prove it END-TO-END.
+
+### The two reuses (do NOT reinvent)
+
+1. **The ADR-0090 list-consume (borrow-read).** A `.cb` list passes by
+   POINTER (`is_copy_type(Ty::List)` — Copy-at-call; the `.cb` scope drops
+   it ONCE). The shim BORROWS it via the stdlib `__cobrust_list_len` /
+   `__cobrust_list_get` SHARED-reference accessors — NEVER `Box::from_raw`
+   / free, EXACTLY like `__cobrust_min_int` (`cobrust-stdlib/src/
+   reduce.rs`). A `coil.array(xs)` … `len(xs)` program exits 0 (the list
+   dropped exactly once — no double-free).
+2. **The ADR-0089/0090 element-dtype dispatch.** Keyed on the list arg's
+   STATIC element type (`Ty::List(elem)` via `synth_expr_ty` — the
+   resolved type, NOT a fragile arg-temp read), so a list BUILT then passed
+   (`coil.array(make_ints())`) routes by its real element type.
+
+### Semantics (numpy 2.x, oracle `python3.11` numpy)
+
+- `coil.array([1, 2, 3]) == array([1, 2, 3], dtype=int64)`
+  (`np.array([1,2,3]).dtype == int64`).
+- `coil.array([1.0, 2.5])` → a `float64` Buffer (coil prints `array([1,
+  2.5], dtype=float64)`; numpy prints `[1. , 2.5]` — a pre-existing
+  whole-float repr note, ADR-0089). `np.array([1.0,2.5]).dtype ==
+  float64`.
+- `coil.array([]) == array([], dtype=float64)` — numpy's empty-list
+  DEFAULT dtype is **float64** (`np.array([]).dtype == float64`); an
+  annotated empty `list[i64]` → `array([], dtype=int64)`. NOT a trap (the
+  binary exits ZERO).
+- CHAIN: `coil.mean(coil.array([1, 2, 3, 4])) == 2.5` — the produced
+  Buffer flows into coil reductions (the parse → array → stats payoff).
+- **1-D form only.** The NESTED 2-D form `coil.array([[1, 2], [3, 4]])` (a
+  `list[list[T]]`) is a DOCUMENTED DEFERRAL — needs a recursive list read;
+  a `Ty::List(Ty::List(_))` elem raises a compile-time `TypeMismatch`.
+- A non-list arg (`coil.array(5)`) → compile-time `NotIterable`; a
+  non-numeric-element list (`coil.array(["a"])`) → compile-time
+  `TypeMismatch` (the §2.5 compile-time-catch path). NO new error variant.
+
+### Wiring (element-dtype-polymorphic — special-cased, NOT a generic EcoSig)
+
+`coil.array` is element-dtype-polymorphic (`list[int]` → int64 Buffer,
+`list[float]` → float64 Buffer), which a concrete-typed `EcoParam::Value`
+arg cannot express. So it is SPECIAL-CASED (the SAME shape as ADR-0090's
+`min`/`max`/`sum`):
+
+- `cabi.rs`: TWO shims, ONE ABI shape `(list: *mut u8) -> *mut u8` —
+  `__cobrust_coil_array_int` (reads raw i64 slots → `array_i64` →
+  `Array::Int64`) + `__cobrust_coil_array_float` (`f64::from_bits` each
+  slot → `array_f64` → `Array::Float64`). Both BORROW the list (no free);
+  both return one fresh `Box::into_raw` Buffer (scope drops once via
+  `__cobrust_coil_buffer_drop`). Empty / null → an empty Buffer of the
+  shim's dtype (NOT a trap). REUSES the EXISTING `constructors::array_i64`
+  / `array_f64` kernels — ZERO new numerical code.
+- `ecosystem.rs`: `("coil","array")` EcoSig exists ONLY so
+  `lookup_module_fn` returns `Some`; its `runtime_symbol` is the float shim
+  (the MIR override supplies the int shim) + its `param` is a sentinel
+  `list[float]` (unused — the special-case owns the arg-check). Ret
+  `coil_buffer_ty()`, tier `Semantic`.
+- `check.rs`: `synth_coil_array` fires from `try_synth_ecosystem_call`
+  Case 1 BEFORE `check_eco_sig` — reads the single arg's `Ty::List(elem)`,
+  returns `coil_buffer_ty()` for `int`/`float` (the dtype is a RUNTIME
+  Buffer property, NOT a static type — so the return is UNIFORM); an
+  unresolved/empty elem anchors to `Float` (numpy's empty default); a
+  non-numeric elem unifies against `Float` → `TypeMismatch`; a non-list
+  arg → `NotIterable`; a wrong arity → `ArityMismatch`.
+- `lower.rs`: at the Case-1 ecosystem-call site, picks
+  `__cobrust_coil_array_int` vs `_float` from the list arg's element type
+  (`synth_expr_ty`); an empty/unresolved elem stays on the float shim.
+  The list arg passes UNCHANGED (Copy-at-call).
+- Codegen: a NEW `coil_listconsume_ty` `(ptr) -> ptr` fn-type declares both
+  shims (no prior coil free-function in that block has a `(ptr) -> ptr`
+  shape). Symbols ride the `__cobrust_coil_` prefix recognizer.
+
+### Done means (#numpy core constructor — DONE)
+
+- [x] cabi: `__cobrust_coil_array_int` + `_float` (borrow-read the list →
+      build Array → single fresh Box). 5 shim tests (via a `FakeList` test
+      stub for the stdlib list ABI): int → int64 + BORROW-not-free (list
+      reused after, only the result drops), float → float64 (from_bits),
+      empty int → empty int64, empty float → empty float64, null → empty.
+- [x] Manifest: `("coil","array")` sentinel EcoSig (the special-case +
+      MIR override own the real behavior).
+- [x] Typecheck: `synth_coil_array` special-case (element-poly arg →
+      uniform `coil_buffer_ty()`; the ADR-0090 reduce-builtin shape).
+- [x] MIR: element-dtype shim dispatch on the resolved element type (the
+      ADR-0089 computed-arg-miscompile-proof dispatch).
+- [x] Codegen: `coil_listconsume_ty` `(ptr) -> ptr` for both shims.
+- [x] `.cb` E2E `coil_array_e2e.rs` (11 tests): int-list → int64 (binding +
+      inline literal), float-list → float64, COMPUTED-list → int64 (the
+      ADR-0089 proof), empty → float64, empty `list[i64]` → int64, the
+      CHAIN `coil.mean(coil.array(...)) == 2.5` (int + float), the BORROW
+      lock (`len(xs)` after `coil.array(xs)`, exit 0), and the negatives
+      (`coil.array(5)` → `NotIterable`, `coil.array(["a","b"])` →
+      `TypeMismatch`).
+- [x] No regression: full `cobrust-coil` lib suite green (517, +5 from
+      BATCH-20's 512); `coil_array_e2e` (11) + `coil_hello_e2e` (3) +
+      `coil_construct_e2e` (10) + `coil_arange_e2e` (7) + `coil_stats_e2e`
+      (4) green, run ONE `--test` at a time (F73 libcoil.a build-race
+      avoidance); touched crates (`cobrust-coil` + `cobrust-types` +
+      `cobrust-mir` + `cobrust-codegen` + `cobrust-cli`) build + clippy
+      `-D warnings --all-targets` + fmt clean; NO new dep (`Cargo.lock`
+      unchanged — F64); pure ndarray + std.
+- [x] Doc tree (zh/en/agent) updated in the same commit (CLAUDE.md §3.3).
+- [x] ADR-0091 landed (cites ADR-0090's list-consume mechanism).
+
 ## Non-goals
 
 - Not a full numpy reimplementation. Per ADR-0012 §"Backend

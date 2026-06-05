@@ -297,6 +297,50 @@ Buffer 的方式:目前每个 Buffer 构造器都产出 `Float64`,所以 `astype
   > 它不会被伪造。今天若要从别处起始或换步长,用 `arange` 加一个标量运算来构造
   > (例如 `coil.arange(5) + 2` 得到 `[2, 3, 4, 5, 6]`)。
 
+## 从列表构造 —— `coil.array([...])`
+
+`coil.array([...])` 是最根本的 numpy 构造器 `np.array([...])` —— **把真实的
+列表数据桥接成 Buffer**。它是日常 `解析 → 列表 → 数组 → 统计` 流水线的第一跳:
+把一些数字读进一个 `list`,提升成 `Buffer`,再做归约(`coil.mean` / `coil.std`)。
+它是第一个**消费** Cobrust `list[T]` 参数的 coil 构造器(此前每个构造器都是全标量
+参数)。
+
+- **`coil.array(xs: list[int]) -> Buffer`** —— 一个 **int64** Buffer
+  (`np.array([1,2,3]).dtype == int64`)。
+- **`coil.array(xs: list[float]) -> Buffer`** —— 一个 **float64** Buffer
+  (`np.array([1.0,2.5]).dtype == float64`)。
+
+  dtype 跟随列表的**元素类型** —— `int` 列表构造 `int64` Buffer,`float` 列表构造
+  `float64` Buffer(这正是 numpy 的规则)。
+
+  ```python
+  let xs: list[i64] = [1, 2, 3]
+  let a: coil.Buffer = coil.array(xs)              # int64 [1, 2, 3]
+  let _ = coil.print_buffer(a)                     # array([1, 2, 3], dtype=int64)
+
+  let fs: list[f64] = [1.0, 2.5]
+  let b: coil.Buffer = coil.array(fs)              # float64
+  let _ = coil.print_buffer(b)                     # array([1, 2.5], dtype=float64)
+
+  # 收益所在 —— 解析 → 数组 → 统计:
+  let m: f64 = coil.mean(coil.array([1, 2, 3, 4]))  # 2.5
+  print(m)
+  ```
+
+  **语义(numpy 2.x):**
+  - `coil.array([])` 是一个**空 float64** Buffer
+    (`np.array([]).dtype == float64` —— 空列表的默认 dtype 是 float)。一个带标注
+    的空 `list[i64]` 则构造一个空的 **int64** Buffer。两者都不是错误 —— 程序以零
+    退出。
+  - 列表是被**借用**而非消费的:`coil.array(xs)` 之后你仍可继续使用它
+    (例如 `len(xs)`)。它在作用域结束时恰好被释放一次。
+  - 非列表参数(`coil.array(5)`)或元素非数值的列表(`coil.array(["a", "b"])`)
+    是**编译期**类型错误 —— §2.5 的编译期捕获路径,在程序运行之前就被拦下。
+
+  > **目前只有一维形式。** 嵌套二维形式 `coil.array([[1, 2], [3, 4]])`(列表的
+  > 列表)是一个**有记录的延后项** —— 它需要递归读取列表。本次先交付一维形式;
+  > 今天构造二维数组请用 `coil.array2x2(...)` / `coil.reshape(...)`。
+
 ## 排序与搜索(`sort` / `argsort` / `unique` / `flatnonzero`)
 
 这是 LLM 在 numpy 里最先伸手去用的四个「扁平搜索与排序」操作。每个都接收一个
