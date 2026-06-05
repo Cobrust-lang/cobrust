@@ -131,6 +131,12 @@ pub const LIST_GET_RUNTIME_SYMBOL: &str = "__cobrust_list_get";
 /// Wraps `__cobrust_list_len`. ADR-0044 W2 Phase 3.
 pub const LIST_LEN_RUNTIME_SYMBOL: &str = "__cobrust_list_len";
 
+/// Runtime symbol for source-level `len(b: bytes) -> i64`.
+/// Wraps `__cobrust_bytes_len` (cobrust-stdlib::bytes). ADR-0093 — the
+/// `Kind::LenPoly` per-arg-shape dispatch picks this for a `Ty::Bytes`
+/// argument, beside `STR_LEN_RUNTIME_SYMBOL` / `LIST_LEN_RUNTIME_SYMBOL`.
+pub const BYTES_LEN_RUNTIME_SYMBOL: &str = "__cobrust_bytes_len";
+
 /// Runtime symbol for source-level `list_is_empty(lst)`.
 /// Wraps `__cobrust_list_is_empty`. ADR-0050c §F5 / Phase 6 —
 /// §2.2 implicit-truthy ban: returns `bool` at the source level
@@ -1988,6 +1994,9 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     // once so `len(&s)` routes by the inner sized type.
                     let effective_ty: Option<Ty> = match &args[0] {
                         Operand::Constant(Constant::Str(_)) => Some(Ty::Str),
+                        // ADR-0093 — a `b"..."` literal arg (`len(b"abc")`)
+                        // routes by the bytes path.
+                        Operand::Constant(Constant::Bytes(_)) => Some(Ty::Bytes),
                         Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
                             local_ty.get(&p.local.0).map(|t| match t {
                                 Ty::Ref(inner) => (**inner).clone(),
@@ -1998,6 +2007,8 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     };
                     let symbol = match effective_ty {
                         Some(Ty::Str) => STR_LEN_RUNTIME_SYMBOL,
+                        // ADR-0093 — `len(b)` on a `Ty::Bytes` arg.
+                        Some(Ty::Bytes) => BYTES_LEN_RUNTIME_SYMBOL,
                         Some(Ty::List(_)) => LIST_LEN_RUNTIME_SYMBOL,
                         // Dict (or any unresolved/other local) keeps the
                         // historical dict-len symbol — the type-checker

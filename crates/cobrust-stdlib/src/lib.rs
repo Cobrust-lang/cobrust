@@ -111,6 +111,11 @@
 #![allow(clippy::cast_ptr_alignment)]
 
 pub mod array;
+// ADR-0093 — `bytes` runtime + C-ABI (`__cobrust_bytes_*`). An
+// immutable heap byte buffer behind an opaque `*mut u8` handle — the
+// Str machinery (`string` + `fmt`) WITHOUT the UTF-8 invariant.
+// from_raw / len / get / drop / clone; clone-on-read + exactly-once drop.
+pub mod bytes;
 pub mod collections;
 pub mod env;
 pub mod fmt;

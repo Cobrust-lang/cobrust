@@ -1830,6 +1830,34 @@ impl<'a> BodyBuilder<'a> {
                     self.cur_block = Some(next.0 as usize);
                     return Ok(Operand::Copy(Place::local(dest)));
                 }
+                // ADR-0093 — `bytes[i] -> int` index read, beside the
+                // Dict/List/Buffer arms. The base `bytes` handle is BORROWED
+                // (Move → Copy upgrade) so the source local survives + drops
+                // ONCE at scope exit (mirrors the coil.Buffer getitem arm
+                // below + ADR-0072 §5 risk 1). Retargets to
+                // `__cobrust_bytes_get(b, i) -> i64` (the i-th byte as a
+                // 0..255 int; CPython `b"abc"[0] == 97`). The result is a
+                // Copy SCALAR (`Operand::Copy`), so — unlike `list[str][i]`
+                // — no `__cobrust_*_clone` is emitted. NOT the
+                // `Projection::Index` fall-through below (a Wave-1 no-op stub
+                // that would mis-type on an opaque bytes handle).
+                if matches!(&base_ty, Ty::Bytes) {
+                    let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                    let idx_op = self.lower_index(index)?;
+                    let dest = self.declare_local("_bytesidx".to_string(), Ty::Int, e.span, false);
+                    let cur = self.current_block_id();
+                    let next = self.start_new_block();
+                    self.cur_block = Some(cur.0 as usize);
+                    self.terminate(Terminator::Call {
+                        func: Operand::Constant(Constant::Str("__cobrust_bytes_get".to_string())),
+                        args: vec![base_op, idx_op],
+                        destination: Place::local(dest),
+                        target: next,
+                        unwind: None,
+                    });
+                    self.cur_block = Some(next.0 as usize);
+                    return Ok(Operand::Copy(Place::local(dest)));
+                }
                 // ADR-0077 Q2 — `coil.Buffer` index read, beside the
                 // Dict/List arms above. The base handle is BORROWED (Move →
                 // Copy upgrade) so the source local survives + drops once at
@@ -2063,6 +2091,15 @@ impl<'a> BodyBuilder<'a> {
                     | "stderr_write"
             )
         );
+        // ADR-0093 — `len(b)` BORROWS its `bytes` arg (reads the handle
+        // for `__cobrust_bytes_len`, never consumes it), so the source
+        // `b` local stays live for a subsequent `b[i]` read + drops ONCE
+        // at scope exit. A `bytes` value is operand-Move (Str-mirror), so
+        // without this upgrade `len(b); b[0]` would `UseAfterMove`. The
+        // same borrow-not-move discipline `len(list)` enjoys (List is
+        // operand-Copy). Keyed on the prelude `len` name; a user-shadowed
+        // `len` never reaches the sized-arg type-check arm.
+        let is_len_bytes_borrow = callee_name == Some("len");
         // F47 fix (2026-05-25): synthesise the callee's return type so
         // the `_callret` destination carries the correct MIR `Ty` instead
         // of the bug-prone default `Ty::None`. Downstream consumers
@@ -2178,6 +2215,9 @@ impl<'a> BodyBuilder<'a> {
                     // the call (ADR-0050f §"Copy-at-operand" rationale).
                     let op = if is_file_io_borrow {
                         upgrade_move_to_copy_for_str(self, op)
+                    } else if is_len_bytes_borrow {
+                        // ADR-0093 — `len(b)` borrows a `bytes` arg.
+                        upgrade_move_to_copy_for_bytes(self, op)
                     } else {
                         op
                     };
@@ -3571,6 +3611,27 @@ fn upgrade_move_to_copy_for_str(b: &BodyBuilder<'_>, op: Operand) -> Operand {
             // Look up the declared type of the local.
             if let Some(decl) = b.locals.get(p.local.0 as usize) {
                 if matches!(decl.ty, Ty::Str) {
+                    return Operand::Copy(p.clone());
+                }
+            }
+            op
+        }
+        other => other,
+    }
+}
+
+/// ADR-0093 — upgrade a `len(b)` argument operand `Move → Copy` when it
+/// is a `Ty::Bytes` local (a `bytes` value is operand-Move, the
+/// Str-mirror, so the bare read would move-out the local). `len` BORROWS
+/// the handle for `__cobrust_bytes_len`; passing it by Copy keeps the
+/// source `b` local live for a later `b[i]` read AND its single
+/// scope-exit drop. The byte-typed sibling of
+/// [`upgrade_move_to_copy_for_str`].
+fn upgrade_move_to_copy_for_bytes(b: &BodyBuilder<'_>, op: Operand) -> Operand {
+    match op {
+        Operand::Move(ref p) => {
+            if let Some(decl) = b.locals.get(p.local.0 as usize) {
+                if matches!(decl.ty, Ty::Bytes) {
                     return Operand::Copy(p.clone());
                 }
             }

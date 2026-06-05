@@ -166,6 +166,42 @@ pub unsafe extern "C" fn __cobrust_str_ptr(buf: *mut u8) -> *const u8;
 pub unsafe extern "C" fn __cobrust_str_drop(buf: *mut u8);
 ```
 
+### `std.bytes` — `bytes` runtime (ADR-0093)
+
+`bytes` is a first-class RUNTIME value: an immutable heap byte buffer
+behind an opaque `*mut u8` handle — the `__cobrust_str_*` family WITHOUT
+the UTF-8 invariant (so a non-UTF-8 byte `b"\xff"` round-trips
+byte-exact). Lowering map:
+
+- `b"..."` literal → `Constant::Bytes` → codegen `materialize_bytes_buffer`
+  (byte-exact `.rodata` intern via `intern_bytes_payloads`) →
+  `__cobrust_bytes_from_raw(ptr, len)`.
+- `len(b)` → typecheck sized-set (`try_synth_len_builtin` accepts
+  `Ty::Bytes`) → CLI `Kind::LenPoly` picks `__cobrust_bytes_len`. `len`
+  BORROWS its arg (MIR `upgrade_move_to_copy_for_bytes`).
+- `b[i] -> int` (0..255, CPython `b"abc"[0]==97`) → MIR Index arm
+  retargets to `__cobrust_bytes_get(b, i)` (base BORROWED, Move→Copy
+  upgrade; result is a Copy scalar — no clone).
+- Drop: `Ty::Bytes` is drop-eligible (`drop.rs` `is_copy` excludes it);
+  `emit_drop_for_ty` `Ty::Bytes` arm emits `__cobrust_bytes_drop` ONCE
+  at scope exit (operand-Move, the Str discipline).
+
+```rust
+// crates/cobrust-stdlib/src/bytes.rs
+pub unsafe extern "C" fn __cobrust_bytes_from_raw(ptr: *const u8, len: i64) -> *mut u8;
+pub unsafe extern "C" fn __cobrust_bytes_len(b: *mut u8) -> i64;
+pub unsafe extern "C" fn __cobrust_bytes_get(b: *mut u8, i: i64) -> i64; // i-th byte 0..255, -1 OOB
+pub unsafe extern "C" fn __cobrust_bytes_drop(b: *mut u8);
+pub unsafe extern "C" fn __cobrust_bytes_clone(b: *mut u8) -> *mut u8;   // clone-on-read reuse
+```
+
+Symbols live in `libcobrust_stdlib.a` (the shared runtime archive), so a
+future `cobrust-dora` `event.data_bytes()` accessor reuses them without a
+cross-crate cabi feature. **Phase 1 (shipped)**: literal + `len` + index
++ drop. **Phase 2 (deferred, ADR-0093)**: slicing / concat / `.hex()` /
+`.decode()` + the dora `data_bytes()` / `send_output_bytes()` accessor
+(ADR-0076c B-1b).
+
 ### `std.io`
 
 ```rust

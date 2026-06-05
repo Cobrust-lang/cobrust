@@ -132,6 +132,11 @@ pub fn emit(module: &Module, spec: &TargetSpec) -> Result<Artifact, CodegenError
     //     / `materialize_str_buffer` can look up the global pointer for
     //     any payload referenced by an Assign rvalue or Call arg.
     emitter.intern_str_payloads(module);
+    // --- ADR-0093 §"Decision 2": intern Constant::Bytes payloads as
+    //     module-level rodata globals BYTE-EXACTLY (a non-UTF-8 byte
+    //     like `b"\xff"` must round-trip), so `materialize_bytes_buffer`
+    //     can mint a `bytes` handle via `__cobrust_bytes_from_raw`.
+    emitter.intern_bytes_payloads(module);
 
     // --- now define each body --------------------------------------------
     for body in &module.bodies {
@@ -817,6 +822,13 @@ pub struct LlvmEmitter<'ctx> {
     /// `define_body` is invoked per body. Consumed by
     /// `materialize_str_data` / `materialize_str_buffer`.
     str_data_globals: HashMap<String, PointerValue<'ctx>>,
+    /// ADR-0093 §"Decision 2" — module-level BYTE-data interning, the
+    /// byte-exact sibling of `str_data_globals`. Maps each unique
+    /// `Constant::Bytes` payload (keyed by the RAW `Vec<u8>`, NOT a
+    /// lossy-UTF-8 String — so `b"\xff"` round-trips) to its rodata
+    /// `i8*` global pointer. Populated in `intern_bytes_payloads` before
+    /// `define_body`; consumed by `materialize_bytes_buffer`.
+    bytes_data_globals: HashMap<Vec<u8>, PointerValue<'ctx>>,
     /// Cached `i8*` opaque pointer type used for str/list/dict/refs.
     opaque_ptr_ty: inkwell::types::PointerType<'ctx>,
     /// Target-pointer-width integer type — the LLVM lowering of a C
@@ -945,6 +957,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             runtime_helper_decls: HashMap::new(),
             runtime_helper_param_counts: HashMap::new(),
             str_data_globals: HashMap::new(),
+            bytes_data_globals: HashMap::new(),
             opaque_ptr_ty,
             usize_ty,
             di_builder,
@@ -1019,6 +1032,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // (Phase L+ follow-up).
         for (key, name) in [
             ("Str", "cobrust::Str"),
+            // ADR-0093 — `cobrust::Bytes` named DI type, beside `Str`, so
+            // a `Ty::Bytes` local carries a distinct DWARF name (the
+            // opaque-ptr handle storage is shared with Str).
+            ("Bytes", "cobrust::Bytes"),
             ("List", "cobrust::List"),
             ("Dict", "cobrust::Dict"),
             ("Set", "cobrust::Set"),
@@ -1188,6 +1205,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             Ty::Float | Ty::Imag => "Float",
             Ty::Bool => "Bool",
             Ty::Str => "Str",
+            // ADR-0093 — `Ty::Bytes` gets the distinct `cobrust::Bytes` DI name.
+            Ty::Bytes => "Bytes",
             Ty::List(_) => "List",
             Ty::Dict(_, _) => "Dict",
             Ty::Set(_) => "Set",
@@ -1504,6 +1523,68 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_str_push_static", str_push_static);
         self.runtime_helper_param_counts
             .insert("__cobrust_str_push_static", 3);
+
+        // ADR-0093 — the `__cobrust_bytes_*` family. `bytes` is "Str
+        // without UTF-8": an immutable heap byte buffer behind the same
+        // opaque `*mut u8` handle Str uses. These 5 externs back the
+        // `b"..."` literal mint, `len(b)`, `b[i]`, and the exactly-once
+        // scope-exit drop. Symbols live in `libcobrust_stdlib.a` (the
+        // already-linked shared runtime archive).
+        // __cobrust_bytes_from_raw(*const u8, i64) -> *mut Bytes
+        let bytes_from_raw_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let bytes_from_raw = self.module.add_function(
+            "__cobrust_bytes_from_raw",
+            bytes_from_raw_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_bytes_from_raw", bytes_from_raw);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_bytes_from_raw", 2);
+
+        // __cobrust_bytes_len(*mut Bytes) -> i64
+        let bytes_len_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let bytes_len =
+            self.module
+                .add_function("__cobrust_bytes_len", bytes_len_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_bytes_len", bytes_len);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_bytes_len", 1);
+
+        // __cobrust_bytes_get(*mut Bytes, i64) -> i64 (the i-th byte, 0..255)
+        let bytes_get_ty = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let bytes_get =
+            self.module
+                .add_function("__cobrust_bytes_get", bytes_get_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_bytes_get", bytes_get);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_bytes_get", 2);
+
+        // __cobrust_bytes_drop(*mut Bytes) -> void
+        let bytes_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let bytes_drop = self.module.add_function(
+            "__cobrust_bytes_drop",
+            bytes_drop_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_bytes_drop", bytes_drop);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_bytes_drop", 1);
+
+        // __cobrust_bytes_clone(*mut Bytes) -> *mut Bytes (clone-on-read)
+        let bytes_clone_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let bytes_clone = self.module.add_function(
+            "__cobrust_bytes_clone",
+            bytes_clone_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_bytes_clone", bytes_clone);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_bytes_clone", 1);
 
         // Param counts for wave-1 helpers — needed so the extern-name
         // dispatch path in `lower_call` can use a uniform lookup.
@@ -4118,13 +4199,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         if let Operand::Constant(Constant::Str(payload)) = arg {
                             push_unique(payload, &mut payloads);
                         }
-                        if let Operand::Constant(Constant::Bytes(bytes)) = arg {
-                            // Bytes lower through the same str-buffer
-                            // path under wave-2 (lossy UTF-8). Intern.
-                            if let Ok(s) = std::str::from_utf8(bytes) {
-                                push_unique(s, &mut payloads);
-                            }
-                        }
+                        // ADR-0093: `Constant::Bytes` is interned BYTE-EXACTLY
+                        // by `intern_bytes_payloads` (a separate rodata global
+                        // keyed by the raw `Vec<u8>`), NOT here through the
+                        // lossy-UTF-8 str path that corrupted `b"\xff"`.
                     }
                 }
             }
@@ -4160,6 +4238,71 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 Err(_) => global.as_pointer_value(),
             };
             self.str_data_globals.insert(payload, final_ptr);
+        }
+    }
+
+    /// ADR-0093 §"Decision 2" — module-level `Constant::Bytes` interning,
+    /// the BYTE-EXACT sibling of [`Self::intern_str_payloads`]. Emits
+    /// each unique `b"..."` payload as a private `unnamed_addr` rodata
+    /// `[N x i8]` global keyed by the RAW `Vec<u8>` (so a non-UTF-8 byte
+    /// `b"\xff"` round-trips, which the lossy-UTF-8 str path corrupted).
+    /// Populated before `define_body`; consumed by
+    /// [`Self::materialize_bytes_buffer`] to mint a `bytes` handle via
+    /// `__cobrust_bytes_from_raw(ptr, len)`. Walks BOTH Assign rvalues
+    /// (`let b: bytes = b"abc"`) and Call args (`len(b"abc")`).
+    pub fn intern_bytes_payloads(&mut self, module: &Module) {
+        let mut payloads: Vec<Vec<u8>> = Vec::new();
+        let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+        let mut push_unique = |b: &[u8], payloads: &mut Vec<Vec<u8>>| {
+            if seen.insert(b.to_vec()) {
+                payloads.push(b.to_vec());
+            }
+        };
+
+        for body in &module.bodies {
+            for mir_block in &body.blocks {
+                for stmt in &mir_block.statements {
+                    if let StatementKind::Assign { rvalue, .. } = &stmt.kind {
+                        collect_bytes_payloads_from_rvalue(rvalue, &mut |b| {
+                            push_unique(b, &mut payloads);
+                        });
+                    }
+                }
+                if let Terminator::Call { args, .. } = &mir_block.terminator {
+                    for arg in args {
+                        if let Operand::Constant(Constant::Bytes(bytes)) = arg {
+                            push_unique(bytes, &mut payloads);
+                        }
+                    }
+                }
+            }
+        }
+
+        for (idx, payload) in payloads.into_iter().enumerate() {
+            let i8_ty = self.ctx.i8_type();
+            let arr_ty = i8_ty.array_type(payload.len() as u32);
+            let const_arr = i8_ty.const_array(
+                &payload
+                    .iter()
+                    .map(|b| i8_ty.const_int(u64::from(*b), false))
+                    .collect::<Vec<_>>(),
+            );
+            let symbol = format!("__cobrust_bytes_data_{idx}");
+            let global = self.module.add_global(arr_ty, None, &symbol);
+            global.set_initializer(&const_arr);
+            global.set_constant(true);
+            global.set_linkage(Linkage::Private);
+            global.set_unnamed_addr(true);
+            let ptr_val = self.builder.build_pointer_cast(
+                global.as_pointer_value(),
+                self.opaque_ptr_ty,
+                "bytes_data_ptr",
+            );
+            let final_ptr = match ptr_val {
+                Ok(v) => v,
+                Err(_) => global.as_pointer_value(),
+            };
+            self.bytes_data_globals.insert(payload, final_ptr);
         }
     }
 
@@ -4890,6 +5033,73 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         Ok(buf)
     }
 
+    /// ADR-0093 §"Decision 2" — materialise a `b"..."` byte-string
+    /// literal as a heap `bytes` handle. The byte-exact sibling of
+    /// [`Self::materialize_str_buffer`]: read the raw-bytes `.rodata`
+    /// global the dedicated `intern_bytes_payloads` pass interned in
+    /// `bytes_data_globals` (keyed by the RAW `Vec<u8>`, NOT a lossy
+    /// `String` — so it makes no UTF-8 assumption), then mint a fresh
+    /// owned buffer via `__cobrust_bytes_from_raw(ptr, len)`. Unlike the
+    /// old `Constant::Bytes` path (which routed through
+    /// `materialize_str_buffer` under lossy UTF-8 and corrupted a
+    /// non-UTF-8 byte like `b"\xff"`), this preserves every byte. The
+    /// `.cb` scope owns the result + drops it once (`emit_drop_for_ty`
+    /// `Ty::Bytes` arm).
+    fn materialize_bytes_buffer(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let from_raw = *self
+            .emitter
+            .runtime_helper_decls
+            .get("__cobrust_bytes_from_raw")
+            .ok_or_else(|| {
+                CodegenError::Internal(
+                    "__cobrust_bytes_from_raw not declared; declare_runtime_helpers ADR-0093 bug"
+                        .into(),
+                )
+            })?;
+        // Byte-exact `(ptr, len)` from the dedicated bytes-data global
+        // (`intern_bytes_payloads`). An EMPTY `b""` literal has no global
+        // (nothing interned) — pass a null ptr + 0 len; the runtime
+        // `__cobrust_bytes_from_raw` mints a valid empty buffer.
+        let (ptr_val, len_val): (BasicValueEnum<'ctx>, BasicValueEnum<'ctx>) = if payload.is_empty()
+        {
+            (
+                self.emitter.opaque_ptr_ty.const_null().into(),
+                self.emitter.ctx.i64_type().const_zero().into(),
+            )
+        } else {
+            let ptr = self
+                .emitter
+                .bytes_data_globals
+                .get(payload)
+                .copied()
+                .ok_or_else(|| {
+                    CodegenError::Internal(format!(
+                        "bytes payload {payload:?} not interned; intern_bytes_payloads pre-pass bug"
+                    ))
+                })?;
+            let len = self
+                .emitter
+                .ctx
+                .i64_type()
+                .const_int(payload.len() as u64, false);
+            (ptr.into(), len.into())
+        };
+        let args: [BasicMetadataValueEnum<'ctx>; 2] = [ptr_val.into(), len_val.into()];
+        let call = self
+            .emitter
+            .builder
+            .build_call(from_raw, &args, "bytes_from_raw")
+            .map_err(map_builder_err)?;
+        let buf: BasicValueEnum<'ctx> = call
+            .try_as_basic_value()
+            .basic()
+            .unwrap_or_else(|| self.emitter.opaque_ptr_ty.const_null().into());
+        Ok(buf)
+    }
+
     fn lower_terminator(&mut self, term: &Terminator) -> Result<(), CodegenError> {
         match term {
             Terminator::Goto(target) => {
@@ -5234,6 +5444,11 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         //   - other → no-op
         let helper = match ty {
             Ty::Str => Some("__cobrust_str_drop"),
+            // ADR-0093 — a `bytes` value is `.cb`-owned + freed EXACTLY
+            // ONCE at scope exit (the Str discipline). The drop pass
+            // already enumerates `Ty::Bytes` as drop-eligible (`drop.rs`
+            // `is_copy` excludes it); this arm closes the would-be leak.
+            Ty::Bytes => Some("__cobrust_bytes_drop"),
             Ty::List(elem) if matches!(**elem, Ty::Str) => Some("__cobrust_list_drop_elems"),
             Ty::List(_) => Some("__cobrust_list_drop"),
             Ty::Dict(_, _) => Some("__cobrust_dict_drop"),
@@ -5367,11 +5582,11 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 self.materialize_str_buffer(payload)
             }
             Constant::Bytes(payload) => {
-                // ADR-0058f wave-2 surface: bytes share the same
-                // str-buffer path under lossy UTF-8. Wave-3 may
-                // introduce a dedicated `__cobrust_bytes_*` family.
-                let s = std::str::from_utf8(payload).unwrap_or("");
-                self.materialize_str_buffer(s)
+                // ADR-0093 — the `b"..."` literal mints a first-class
+                // `bytes` handle via `__cobrust_bytes_from_raw`, BYTE-EXACT
+                // (a non-UTF-8 byte `b"\xff"` round-trips). Supersedes the
+                // wave-2 lossy str-buffer path that corrupted such bytes.
+                self.materialize_bytes_buffer(payload)
             }
             Constant::FnRef(id) => {
                 // ADR-0073 §2 D3 — materialise the user fn pointer as a
@@ -6538,6 +6753,36 @@ where
 {
     let visit_operand = |op: &Operand, visit: &mut F| {
         if let Operand::Constant(Constant::Str(payload)) = op {
+            visit(payload);
+        }
+    };
+    match rvalue {
+        Rvalue::Use(op) | Rvalue::Cast(_, op, _) | Rvalue::UnaryOp(_, op) => {
+            visit_operand(op, visit);
+        }
+        Rvalue::BinaryOp(_, a, b) => {
+            visit_operand(a, visit);
+            visit_operand(b, visit);
+        }
+        Rvalue::Aggregate(_, ops) => {
+            for op in ops {
+                visit_operand(op, visit);
+            }
+        }
+        Rvalue::Ref(_, _) | Rvalue::Discriminant(_) | Rvalue::Len(_) | Rvalue::NullaryOp(_) => {}
+    }
+}
+
+/// ADR-0093 §"Decision 2" — the byte-exact sibling of
+/// [`collect_str_payloads_from_rvalue`]. Visits each `Constant::Bytes`
+/// payload reachable from an Assign rvalue (so `let b: bytes = b"abc"`
+/// interns its literal), passing the RAW bytes (not a lossy String).
+fn collect_bytes_payloads_from_rvalue<F>(rvalue: &Rvalue, visit: &mut F)
+where
+    F: FnMut(&[u8]),
+{
+    let visit_operand = |op: &Operand, visit: &mut F| {
+        if let Operand::Constant(Constant::Bytes(payload)) = op {
             visit(payload);
         }
     };

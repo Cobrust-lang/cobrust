@@ -3559,12 +3559,15 @@ impl Ctx {
             other => other.clone(),
         };
         match resolved {
-            Ty::Str | Ty::List(_) | Ty::Dict(_, _) => Ok(Some(Ty::Int)),
+            // ADR-0093 — `bytes` joins the sized set; `len(b)` ships
+            // `__cobrust_bytes_len` (the CLI intrinsic-rewrite picks it
+            // per arg-shape, `intrinsics.rs` Kind::LenPoly).
+            Ty::Str | Ty::Bytes | Ty::List(_) | Ty::Dict(_, _) => Ok(Some(Ty::Int)),
             other => Err(TypeError::LenArgNotSized {
                 actual: other,
                 span,
                 suggestion: Some(
-                    "`len` accepts str / list / dict; for a number use a comparison instead",
+                    "`len` accepts str / bytes / list / dict; for a number use a comparison instead",
                 ),
             }),
         }
