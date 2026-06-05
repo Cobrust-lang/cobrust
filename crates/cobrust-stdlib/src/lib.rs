@@ -39,6 +39,10 @@
 //!   upper / format helpers.
 //! - [`math`] — sqrt / pow / sin / cos / abs / floor / ceil / round
 //!   plus PI / E constants.
+//! - [`re`] (ADR-0084) — `sub` / `findall` / `match` / `search`, the
+//!   `regex`-crate-backed stateless subset of Python's `re` module
+//!   (str/list[str]/bool returns; Match-object `.group()` deferred).
+//!   `@py_compat(semantic)`.
 //! - [`json`] (v0.7.0 Z.5) — `dumps` / `loads` Python-`json`-compatible
 //!   encode/decode over `serde_json`. HYBRID surface per the v0.7.0
 //!   network-backend roadmap §4.1; `@py_compat(semantic)`.
@@ -107,6 +111,9 @@ pub mod json;
 pub mod math;
 pub mod panic;
 pub mod prompt;
+// ADR-0084 — `import re` (regular expressions). The `regex`-crate-backed
+// stateless subset: sub / findall / match / search.
+pub mod re;
 pub mod runtime;
 pub mod string;
 pub mod tool;

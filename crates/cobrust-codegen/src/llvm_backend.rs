@@ -3786,6 +3786,46 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, params);
         }
+
+        // -- ADR-0084: `import re` (regular expressions) C-ABI binding -------
+        // The `regex`-crate-backed stateless subset, exported by
+        // `cobrust-stdlib/src/re.rs` (ALWAYS linked — the stdlib staticlib).
+        // Three return shapes, all ALREADY PROVEN by string / redis / math
+        // (NO new MIR arm — the generic ecosystem-call path drives args +
+        // return off the `EcoSig`; codegen only declares the externs):
+        //
+        //   __cobrust_re_sub(pattern, repl, s: *mut Str) -> *mut Str
+        //     — the Str-arg + Str-return shape of `__cobrust_str_replace`
+        //       (3 ptr args -> ptr), `redis_hget_ty` ((ptr,ptr,ptr)->ptr).
+        //   __cobrust_re_findall(pattern, s: *mut Str) -> *mut List
+        //     — the Str-arg + list[str]-return shape of
+        //       `__cobrust_redis_client_smembers` (the `Ty::List(Str)` return
+        //       is a ptr, exactly like `get`'s Str return; the for-loop /
+        //       drop schedule consume it generically), reusing `redis_get_ty`.
+        //   __cobrust_re_match / __cobrust_re_search(pattern, s) -> bool (i1)
+        //     — the Str-arg + bool-return shape; the FIRST `re` `-> bool`
+        //       fns, mirroring `coil.any`/`fang.verify_password`'s
+        //       `bool_type().fn_type(...)`. The i1 lands in the `.cb`
+        //       `_ecoret` Bool local, usable in `if re.search(...):`.
+        //
+        // An invalid runtime pattern traps inside the shim (a clean
+        // `__cobrust_panic`, non-zero exit) — invisible to codegen.
+        let re_sub_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let re_findall_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let re_bool_ty = self
+            .ctx
+            .bool_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        for (sym, ty, params) in [
+            ("__cobrust_re_sub", re_sub_ty, 3usize),
+            ("__cobrust_re_findall", re_findall_ty, 2),
+            ("__cobrust_re_match", re_bool_ty, 2),
+            ("__cobrust_re_search", re_bool_ty, 2),
+        ] {
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, params);
+        }
     }
 
     /// ADR-0058f §3.2 — module-level `Constant::Str` interning.

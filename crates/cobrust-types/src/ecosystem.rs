@@ -2120,6 +2120,67 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Float,
             PyCompatTier::Strict,
         )),
+        // -- ADR-0084: `import re` (regular expressions) ------------------
+        // The clean stateless subset of CPython's `re` — string-in,
+        // str / list[str] / bool out, NO Match-object state (the
+        // `.group()` form is a documented follow-up). Backed by the
+        // `regex` crate (`cobrust-stdlib::re`). Tier `Semantic`: the Rust
+        // regex flavor matches Python `re` for the common patterns
+        // (classes, quantifiers, alternation, anchors, groups) but has NO
+        // backreferences and NO lookaround (the linear-time guarantee) — a
+        // documented divergence, NOT Strict parity.
+        //
+        // Each row reuses a PROVEN return shape (NO new MIR / codegen
+        // mechanism — the generic ecosystem-call path drives args + return
+        // off this `EcoSig`):
+        //   sub      [Str, Str, Str] -> Str  — mirrors `den.connect`'s
+        //     Str arg + the string-shim Str return (`__cobrust_str_replace`).
+        //   findall  [Str, Str]      -> List(Str) — mirrors redis
+        //     `lrange`/`smembers` (Str arg + `Ty::List(Box::new(Ty::Str))`
+        //     return) + `__cobrust_llm_stream`'s list[str] mint.
+        //   match/search [Str, Str]  -> Bool — mirrors `math.isnan`
+        //     (`-> Ty::Bool`, an LLVM `i1`), usable in `if re.search(...):`.
+        //
+        // INVALID PATTERN: a malformed runtime pattern (`"["`) makes the
+        // shim's `regex::Regex::new` return `Err`, which becomes a CLEAN
+        // `__cobrust_panic` trap (non-zero exit), NEVER a silent no-match
+        // (CPython raises `re.error`). A compile-time check for a LITERAL
+        // pattern is a §2.5 follow-up (ADR-0084 §"Deferred").
+        ("re", "sub") => Some(EcoSig::from_values(
+            "__cobrust_re_sub",
+            vec![Ty::Str, Ty::Str, Ty::Str],
+            Ty::Str,
+            PyCompatTier::Semantic,
+        )),
+        // findall returns the FULL matches (the no-group form == CPython
+        // exactly). CPython's group-capture behavior (1 group -> the
+        // group's text; >1 -> tuples) is the documented deferral: a grouped
+        // pattern returns the FULL match here (a Semantic divergence noted
+        // in the ADR + docs).
+        ("re", "findall") => Some(EcoSig::from_values(
+            "__cobrust_re_findall",
+            vec![Ty::Str, Ty::Str],
+            Ty::List(Box::new(Ty::Str)),
+            PyCompatTier::Semantic,
+        )),
+        // match = START-anchored (CPython `re.match`); search = ANYWHERE
+        // (CPython `re.search`). The anchor is the load-bearing
+        // distinction: `re.match("bc", "abc")` is False but
+        // `re.search("bc", "abc")` is True. (CPython returns a Match object
+        // / None; this first cut returns BOOL — the `.group()` form is a
+        // documented follow-up.)
+        ("re", "match") => Some(EcoSig::from_values(
+            "__cobrust_re_match",
+            vec![Ty::Str, Ty::Str],
+            Ty::Bool,
+            PyCompatTier::Semantic,
+        )),
+        ("re", "search") => Some(EcoSig::from_values(
+            "__cobrust_re_search",
+            vec![Ty::Str, Ty::Str],
+            Ty::Bool,
+            PyCompatTier::Semantic,
+        )),
         _ => None,
     }
 }
@@ -3104,6 +3165,7 @@ pub fn is_ecosystem_module(name: &str) -> bool {
             | "fang"
             | "redis"
             | "math"
+            | "re"
     )
 }
 

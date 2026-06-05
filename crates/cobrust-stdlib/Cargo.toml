@@ -38,6 +38,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # ADR-0050d Decision 6A — Wave 3 sub-sprint d Dict storage backing.
 indexmap = { workspace = true }
+# ADR-0084 — `import re` regex engine. Already in the workspace lock via
+# cobrust-types / cobrust-dap (this is only a new dependency EDGE, no new
+# crate download); the regenerated Cargo.lock is staged WITH this Cargo.toml
+# per the F64 lesson (CI `--locked` rejects an unstaged lockfile).
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"
