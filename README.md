@@ -73,15 +73,27 @@ The wedge: **AI translates the existing Python ecosystem into Cobrust automatica
 # Option A (recommended on macOS/Linux) — Via Homebrew tap
 brew tap cobrust-lang/cobrust
 brew install cobrust
-# Installs cobrust + cobrust-lsp + cobrust-dap to $(brew --prefix)/bin (FHS layout per ADR-0069).
+# Installs the single `cobrust` binary; the LSP/DAP servers are the
+# `cobrust lsp` / `cobrust dap` subcommands (the standalone cobrust-lsp /
+# cobrust-dap shim binaries were removed at v0.7.0 — ADR-0070 X.5).
 
-# Option B — Via cargo (Rust toolchain required, 1.94+)
+# Option B — Via cargo (Rust toolchain 1.94+ AND LLVM 18 required)
+#   Since v0.7.0 the codegen backend is LLVM by default (ADR-0070 X.3), so a
+#   from-source build links system LLVM 18 via llvm-sys. Install LLVM 18 +
+#   point llvm-sys at it FIRST:
+#     Ubuntu/Debian: sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+#                    export LLVM_SYS_181_PREFIX=/usr/lib/llvm-18
+#     macOS:         brew install llvm@18
+#                    export LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)
 cargo install --git https://github.com/Cobrust-lang/cobrust cobrust-cli
 
-# Option C — Download a prebuilt wheel (v0.6.2, FHS bin/lib/share layout per ADR-0069)
-# Each tarball extracts to a self-contained cobrust-v0.6.2/ directory.
+# Option C — Download a prebuilt wheel (v0.7.0: x86_64-linux-gnu + aarch64-apple
+# only; FHS bin/lib/share layout per ADR-0069). The Linux glibc wheel
+# dynamically links system LLVM 18 — `sudo apt-get install -y libllvm18` first.
+# Each tarball extracts to a self-contained cobrust-<version>/ directory.
 # Symlink bin/cobrust into your $PATH; the runtime + stdlib stay siblings.
 # Do NOT `cp cobrust /usr/local/bin/` — that breaks the wheel-layout lookup chain.
+# (musl + aarch64-linux wheels are deferred at v0.7.0 — ADR-0070 X.6 / F77.)
 
 # macOS Apple Silicon M1 (tier-1)
 curl -L https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.2/cobrust-v0.6.2-aarch64-apple-darwin-m1.tar.gz | tar xz -C $HOME/.local/ \

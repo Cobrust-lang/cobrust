@@ -6,25 +6,26 @@
 # File naming convention: cobrust-v{version}-{target_triple}-{cpu_level}.tar.gz
 # Binary inside archive: cobrust  (or cobrust.exe on Windows)
 #
-# ADR-0046 tier-1 platform contract (must build, must appear in release notes):
-#   - aarch64-apple-darwin           macOS arm64 (Apple Silicon)
-#   - aarch64-unknown-linux-gnu      Linux arm64 (cross-compiled via `cross`)
+# v0.7.0 tier-1 platform contract (ADR-0070 X.6 — the LLVM-default wheel set;
+# each binary dynamically links system LLVM 18, see the wheel README below):
 #   - x86_64-unknown-linux-gnu       Linux x86_64 (glibc dynamic)
-#   - x86_64-unknown-linux-musl      Linux x86_64 STATIC (musl libc, no glibc)
-#                                    Promoted: Phase K Strand #5 (2026-05-19, ADR-0046 §Amendment)
-#                                    Runs on Alpine, distroless, minimal containers
+#   - aarch64-apple-darwin           macOS arm64 (Apple Silicon)
 #
-# ADR-0065 Tier 3 CPU-level matrix (Phase O wave-1): 9 wheel variants per tag
+# ADR-0065 Tier 3 CPU-level matrix: 5 wheel variants per tag at v0.7.0
 #   x86_64-unknown-linux-gnu:   v1 (baseline) | v3 (haswell / AVX2+FMA) | v4 (skylake-avx512)
-#   x86_64-unknown-linux-musl:  v1 (static baseline) | v3 (static AVX2)
-#   aarch64-unknown-linux-gnu:  neon (all ARMv8-A) | sve (Graviton3 / Altra, experimental)
 #   aarch64-apple-darwin:       m1 (Apple M1/M2 base) | m2 (Apple M2 Pro+ / M3+)
 #
-# Tier-2 (best-effort, may fail without blocking release): (none currently)
+# DEFERRED at v0.7.0 (ADR-0070 X.6 / finding F77): the LLVM-default flip (X.3)
+# + Cranelift-AOT removal (X.4) leave no backend that statically musl-links
+# (apt libLLVM is glibc-dynamic) or cross-compiles aarch64 (the `cross` image
+# lacks a target-arch libLLVM). Restore in v0.7.x (native ubuntu-24.04-arm
+# runner for aarch64-linux; a static-musl libLLVM for musl):
+#   - x86_64-unknown-linux-musl  v1 (static baseline) | v3 (static AVX2)
+#   - aarch64-unknown-linux-gnu  neon (all ARMv8-A) | sve (Graviton3 / Altra)
+#
 # Queued (documented as cargo install --git path, not built):
 #   - x86_64-apple-darwin            macOS x86_64 Intel
 #   - x86_64-pc-windows-msvc         Windows x86_64 MSVC — DEFERRED to ADR-0058b followup
-#                                    (Gate 8 audit ae2316f1c51dbd6be: musl > MSVC priority)
 
 name: Release
 
@@ -40,7 +41,8 @@ env:
 jobs:
   # -------------------------------------------------------------------------
   # Build tier-1 targets — ADR-0065 Tier 3 CPU-level matrix (Phase O wave-1)
-  # 9 wheel variants: each matrix entry has cpu_level + rustflags_extra.
+  # 5 wheel variants at v0.7.0 (ADR-0070 X.6 LLVM-default set; musl + cross
+  # aarch64 deferred per F77): each matrix entry has cpu_level + rustflags_extra.
   # asset_suffix drives the archive name per ADR-0065 §3.2 naming convention.
   # -------------------------------------------------------------------------
   build-tier1:
@@ -75,41 +77,19 @@ jobs:
             cpu_level: v4
             rustflags_extra: "-C target-cpu=skylake-avx512"
             asset_suffix: x86_64-unknown-linux-gnu-v4
-          # ---- x86_64-unknown-linux-musl: v1 / v3 --------------------------
-          # v1: static baseline, Alpine / distroless / minimal containers
-          # ADR-0046 §Amendment: promoted to tier-1 Phase K Strand #5 (2026-05-19)
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            use_cross: false
-            install_musl_tools: true
-            cpu_level: v1
-            rustflags_extra: "-C target-cpu=x86-64"
-            asset_suffix: x86_64-unknown-linux-musl-v1
-          # v3: static AVX2 musl (ADR-0065 §3.1)
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            use_cross: false
-            install_musl_tools: true
-            cpu_level: v3
-            rustflags_extra: "-C target-cpu=haswell"
-            asset_suffix: x86_64-unknown-linux-musl-v3
-          # ---- aarch64-unknown-linux-gnu: neon / sve ------------------------
-          # neon: mandatory ARMv8-A NEON; all AArch64 Linux (cross-compiled)
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: true
-            install_musl_tools: false
-            cpu_level: neon
-            rustflags_extra: ""
-            asset_suffix: aarch64-unknown-linux-gnu-neon
-          # sve: Neoverse-V1 (Graviton3 / Ampere Altra); experimental per ADR-0065 §6.5
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: true
-            install_musl_tools: false
-            cpu_level: sve
-            rustflags_extra: "-C target-cpu=neoverse-v1"
-            asset_suffix: aarch64-unknown-linux-gnu-sve
+          # ---- DEFERRED at v0.7.0 (ADR-0070 X.6 / finding F77) --------------
+          # The x86_64-unknown-linux-musl (v1/v3) + aarch64-unknown-linux-gnu
+          # (neon/sve) wheels are DEFERRED at v0.7.0. The LLVM-default flip
+          # (ADR-0070 X.3) + the Cranelift-AOT removal (X.4) leave NO backend
+          # that (a) statically musl-links — apt `libLLVM` is glibc-dynamic,
+          # incompatible with a fully-static musl binary — or (b) cross-compiles
+          # via `cross`, whose default image lacks a target-arch libLLVM (and
+          # host-arch llvm-sys cannot satisfy an aarch64 link). v0.7.0 ships the
+          # 5 wheels that build with a straightforward system LLVM 18:
+          # x86_64-linux-gnu {v1,v3,v4} + aarch64-apple-darwin {m1,m2}.
+          # Restoring the deferred 4 (native `ubuntu-24.04-arm` runner for
+          # aarch64-linux; a static-musl libLLVM for musl) is v0.7.x work
+          # tracked in docs/agent/findings/f77-llvm-default-blocks-musl-cross-wheels.md.
           # ---- aarch64-apple-darwin: m1 / m2 --------------------------------
           # m1: Apple M1 / M2 base (ADR-0065 §3.1)
           - target: aarch64-apple-darwin
@@ -139,6 +119,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2  # v2.7.8
         with:
           key: ${{ matrix.target }}-${{ matrix.cpu_level }}
+
+      # LLVM 18 is required since ADR-0070 X.3 flipped cobrust-codegen
+      # `default = ["llvm"]`; inkwell `llvm18-1` links system LLVM via
+      # llvm-sys, which reads LLVM_SYS_181_PREFIX (mirrors ci.yml). The
+      # v0.7.0 release matrix ships only targets a straightforward system
+      # LLVM 18 satisfies (x86_64-linux-gnu native + aarch64-apple native);
+      # the musl-static + cross-aarch64 wheels are deferred (matrix comment
+      # + finding F77).
+      - name: Install LLVM 18 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+      - name: Install LLVM 18 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@18 || brew upgrade llvm@18 || true
+          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
 
       - name: Install musl-tools (Linux musl static build)
         if: matrix.install_musl_tools
@@ -333,13 +332,17 @@ jobs:
             curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-aarch64-apple-darwin-m1.tar.gz | tar xz -C $HOME/.local/
             ln -sf $HOME/.local/cobrust-${{ github.ref_name }}/bin/cobrust $HOME/.local/bin/cobrust
 
-            # Linux x86_64 — glibc baseline (tier-1)
+            # Linux x86_64 — glibc baseline (tier-1). REQUIRES system LLVM 18
+            # at runtime (the binary dynamically links libLLVM — ADR-0070 X.3
+            # made LLVM the default backend). Install it first:
+            #   sudo apt-get install -y libllvm18    # (or: llvm-18)
             curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-gnu-v1.tar.gz | tar xz -C $HOME/.local/
             ln -sf $HOME/.local/cobrust-${{ github.ref_name }}/bin/cobrust $HOME/.local/bin/cobrust
 
-            # Linux x86_64 — static musl (Alpine / distroless / minimal containers)
-            curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-musl-v1.tar.gz | tar xz -C $HOME/.local/
-            ln -sf $HOME/.local/cobrust-${{ github.ref_name }}/bin/cobrust $HOME/.local/bin/cobrust
+            # NOTE: the static-musl + aarch64-linux wheels are DEFERRED at
+            # v0.7.0 (ADR-0070 X.6 / finding F77 — LLVM-default blocks
+            # static-musl-link + `cross`). On those targets use Option A
+            # (cargo install) until v0.7.x restores them.
             ```
 
             Each wheel tarball bundles:
@@ -349,12 +352,12 @@ jobs:
 
             ### Option C — Alpine / distroless container (musl static binary)
 
-            ```dockerfile
-            FROM alpine:latest
-            RUN apk add --no-cache curl tar
-            RUN curl -L https://github.com/Cobrust-lang/cobrust/releases/download/${{ github.ref_name }}/cobrust-${{ github.ref_name }}-x86_64-unknown-linux-musl-v1.tar.gz | tar xz -C /opt/ \
-                && ln -s /opt/cobrust-${{ github.ref_name }}/bin/cobrust /usr/local/bin/cobrust
-            ```
+            DEFERRED at v0.7.0: the static-musl wheel is not built (ADR-0070
+            X.6 / finding F77 — LLVM-default blocks a fully-static musl link).
+            On Alpine, build from source (Option A, with `llvm18-dev` from the
+            `community` repo) or use a `glibc`-based image with the
+            `x86_64-unknown-linux-gnu` wheel + `libllvm18`. The musl wheel
+            returns in v0.7.x.
 
             ### Quick start
 
