@@ -5,7 +5,7 @@ title: Validated-body field READ + `json_response(status, body)` — the `.cb` �
 status: accepted
 date: 2026-05-30
 decision_owner: cto
-last_verified_commit: ba8cca6
+last_verified_commit: a7c0436
 relates_to: [adr:0006, adr:0060b, adr:0072, adr:0073, adr:0074, adr:0077, adr:0078, adr:0080, "claude.md:§2.2", "claude.md:§2.5", "claude.md:§5.1", "finding:F64", "feedback:elegant_ecosystem_surface_no_legacy_debt"]
 ---
 
@@ -541,11 +541,67 @@ The §6-Phase-1 handler from ADR-0080, now executing.
   tripwires (the gate is REGISTRATION-driven, not type-driven; §5.2 / §10).
 - **No new dep** (serde_json was already a pit dep); `Cargo.lock` unchanged.
 
-### Phase 3 — list-field reads + `body` as a function argument
+### Phase 3 — list-field reads + `body` as a function argument — **list SHIPPED (this sprint); whole-body-arg DEFERRED**
 
-`body.tags` where `tags: list[str]` (accessor returns a `.cb` list built from the JSON
-array); passing `body` (or a field) to another fn. **Done-means:** a list field reads +
-iterates; the seam still names a symbol + a `Ty`.
+**Status: list-field reads DELIVERED for `list[T]`, T ∈ {str, i64, f64, bool}. Body-as-fn-arg
+SPLIT — a read FIELD VALUE to a fn is DELIVERED; the WHOLE body to a fn is DEFERRED (honest
+`#[ignore]`).** `pit_body_field_read_e2e.rs` extended to 16 tests (15 GREEN + 1 honest-deferred
+ignore); `cabi.rs` gains 4 list-mint unit tests; `ecosystem.rs` gains the list-arm test.
+
+- **List-field reads (the primary, DELIVERED):** a body field whose declared `Ty` is `list[T]`
+  resolves (in `lookup_validated_body_accessor`, `ecosystem.rs`) to ONE accessor per element
+  type — `__cobrust_pit_body_get_list_{str,i64,f64,bool}` (codegen-extern clarity, mirroring the
+  scalar shims; the `(body, name) -> *mut List` ABI is shared, only the slot payload differs). Each
+  accessor (`cabi.rs`) BORROWS the parent body box (shared `&Value`), reads the JSON array, and
+  **MINTS a fresh `.cb` `list[T]`** via the redis-`lrange` / coil-`shape` recipe
+  (`__cobrust_list_new(8, len)` + per-slot `__cobrust_list_set`). Slot conventions match how
+  codegen consumes a `.cb` `list[T]`: a heap-`Str` pointer for `str` (the `alloc_str_buffer` per
+  element), the raw `i64`, `0`/`1` for `bool`, and `f64::to_bits()` for `f64` (the `Constant::Float`
+  slot convention — the `.cb` consumer reinterprets via `from_bits`). The handler READS + ITERATES
+  the minted list (`body.tags.len()`, `for s in body.tags:`), so the wire response reflects the REAL
+  array values (`{"tags":["a","b","c"]}` → the handler concatenates them → `"abc"`;
+  `{"scores":[60,50]}` → summed → `"big"`).
+- **The seam held (§2-Q5):** the MIR `Attr` sub-arm is UNCHANGED — it already names *a symbol + a
+  `Ty`* (`accessor.runtime_symbol` + `accessor.ret`) and types the `_ecoret` temp `Ty::List(elem)`.
+  No `lower.rs` edit was needed (the list arm flows through the SAME registration-gated retarget the
+  scalars use); the only new wiring is the manifest arm + the 4 cabi shims + the 4 codegen externs.
+  The `intrinsics.rs` `__cobrust_pit_` recognizer already covered the new symbols (no edit).
+- **Drop discipline (DELIVERED + proven):** the minted list is `.cb`-OWNED → its `_ecoret` temp's
+  `Ty::List(elem)` drives the codegen drop schedule (`llvm_backend.rs:5223`): `list[str]` →
+  `__cobrust_list_drop_elems(list, __cobrust_str_drop)` (frees each element `Str` then the
+  container), else `__cobrust_list_drop` (container only). The accessor frees NOTHING (no aliasing
+  with the body box — the list is a deep copy). A **200-read hammer-loop e2e**
+  (`test_e2e_body_field_read_list_str_drops_once_under_hammer`) proves the server survives the whole
+  loop + still serves correctly afterwards (no leak, no double-free).
+- **No-UB gate preserved + extended (DELIVERED):** the list accessors are REGISTRATION-gated EXACTLY
+  like the scalar/nested ones (the gate is on `validated_body_of == Some`, NOT the `Ty`). A
+  non-registered `fn helper(b: TagBody): return b.tags.len()` on a `.cb`-constructed instance emits
+  NO accessor symbol — pinned by a new `nm`-on-`.o` codegen-property tripwire
+  (`test_no_ub_non_registered_list_read_does_not_emit_accessor_call`) + a runtime-survival probe; the
+  existing scalar/nested no-UB negatives stay green. A `list[<deferred-elem>]` (list-of-list,
+  `list[<Class>]`) returns `None` (the `Field(0)` stub, never a serde cast).
+- **Element-type VALIDATION already shipped (ADR-0080 Phase-4(c)):** a type-mismatched array
+  (`{"tags":["a",42]}` for a `list[str]` field) is a **422 BEFORE the handler**
+  (`validate_against_schema`, `validation.rs`, `pit_collection_body_e2e.rs`). So the read accessor is
+  a **pure typed read** of an already-validated array (`as_str`/`as_i64`/`as_f64`/`as_bool` per
+  element — §2.2 no coercion); the per-slot `unwrap_or` default is unreachable on the validated path.
+- **Body-as-fn-arg — DELIVERED (field value) / DEFERRED (whole body):**
+  - **DELIVERED:** passing a READ FIELD VALUE (an `i64` / `str` / `list[str]`) to another fn is
+    ordinary value-arg passing — `double(body.rank)` + `first_or_empty(body.tags)` work, the response
+    tracks the real read values through the call (`test_e2e_body_arg_read_field_value_to_fn`).
+  - **DEFERRED (honest `#[ignore]`):** passing the WHOLE validated `body` to another fn
+    (`read_rank(body)`) COMPILES + RUNS CLEAN, but the `b.rank` read INSIDE the callee hits the
+    `Field(0)` stub — the `validated_body_of` mark is set only on the registered handler's body param
+    and does NOT propagate across a call boundary, so the callee's `b` is unmarked. This is a WRONG
+    VALUE, **NOT UB** — the registration gate still holds (the always-on
+    `test_no_ub_whole_body_arg_emits_no_accessor` proves NO accessor symbol is emitted, neither in
+    the caller nor the unmarked callee). Empirically (this sprint) rank=70 and rank=10 BOTH returned
+    `"high"` (the branch did not flip — the callee read is the stub). Delivering it needs deep
+    inter-procedural propagation of the mark (or the §7 native-struct ABI, after which passing a body
+    to a fn is ordinary struct-passing), DEFERRED to Phase-4+. The ignored
+    `test_e2e_body_arg_whole_body_to_fn_deferred` documents the gap with a specific reason string
+    (F37 — an `#[ignore = "..."]` citing the deferral, never a failing un-ignored test).
+- **No new dep** (serde_json + the list machinery were already pit deps); `Cargo.lock` UNCHANGED.
 
 ### Phase 4+ (deferred, §7 sub-ADRs) — the native struct ABI + `.cb`-constructed-class field storage
 

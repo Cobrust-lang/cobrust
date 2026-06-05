@@ -95,6 +95,24 @@ unsafe extern "C" {
     fn __cobrust_str_ptr(buf: *mut u8) -> *const u8;
     /// The buffer's byte length.
     fn __cobrust_str_len(buf: *mut u8) -> i64;
+    // -- Cobrust List ABI (ADR-0081 Phase-3) — resolved from
+    // libcobrust_stdlib.a at link time, NOT a Rust dep (mirrors the Str
+    // block above + coil's `src/cabi.rs` + redis's `src/cabi.rs` list
+    // externs). The `body.<list-field>` accessors mint an owned `List<i64>`
+    // whose i64 slots hold per-element payloads (a heap-`Str` pointer for
+    // `list[str]`, a raw `i64` for `list[i64]`, a `bool`'s `0`/`1` for
+    // `list[bool]`, an `f64::to_bits()` bit-pattern for `list[f64]` — the
+    // SAME slot conventions codegen materialises a `Constant::Float`/`Bool`
+    // with, so a `.cb` `for x in body.tags:` reads each element correctly).
+    // The `.cb` scope owns + drops the minted list once (via the
+    // `Ty::List(Str)` → `__cobrust_list_drop_elems` / `Ty::List(_)` →
+    // `__cobrust_list_drop` schedule, `llvm_backend.rs:5223`), so these
+    // accessors must NOT free it.
+    /// Allocate a `List<i64>` with `len` zeroed slots (`len == cap`).
+    /// `elem_size` is reserved (M12.x fixes the elem width at i64).
+    fn __cobrust_list_new(elem_size: i64, len: i64) -> *mut u8;
+    /// Write `list[i] = v` (out-of-bounds writes are silently dropped).
+    fn __cobrust_list_set(list: *mut u8, i: i64, v: i64);
 }
 
 /// Read a Cobrust `Str` buffer pointer into an owned `String`. Tolerates
@@ -1029,6 +1047,204 @@ pub unsafe extern "C" fn __cobrust_pit_body_get_nested(body: *mut u8, name: *mut
 }
 
 // =====================================================================
+// pit C-ABI surface — validated-body LIST field reads (ADR-0081 Phase-3).
+//
+// A body field whose declared `Ty` is `list[T]` (T ∈ {str, i64, f64, bool})
+// reads the JSON array the validator already accepted (the array's
+// element types were checked BEFORE the handler ran — `validate_against_
+// schema` rejects e.g. `{"tags":["a",42]}` for a `list[str]` field with a
+// 422; ADR-0080 Phase-4(c), `validation.rs`, `pit_collection_body_e2e.rs`),
+// and MINTS a fresh Cobrust `List<i64>` from it — the EXACT recipe redis's
+// `lrange` / coil's `buffer.shape` use (`__cobrust_list_new(8, len)` +
+// per-slot `__cobrust_list_set`). There is ONE accessor per element type
+// (codegen-extern clarity, mirroring the scalar shims): the slot payload
+// differs by element type but the `(body, name) -> *mut List` ABI is shared.
+//
+// LIFETIME / OWNERSHIP (the load-bearing soundness argument): each accessor
+// BORROWS the parent body box (shared `&Value` — reads the array, never
+// reboxes / frees it; the `route_validated` trampoline retains sole
+// ownership and frees the box exactly once after the handler returns,
+// `cabi.rs:530`) and mints a FRESH, INDEPENDENT list. The minted list is
+// `.cb`-OWNED: its scope-exit drop schedule (selected by codegen from the
+// `_ecoret` temp's `Ty::List(elem)` — `list[str]` →
+// `__cobrust_list_drop_elems(list, __cobrust_str_drop)` frees each element
+// `Str` then the container; `list[i64|f64|bool]` → `__cobrust_list_drop`
+// frees just the container) drops it EXACTLY ONCE. The accessor therefore
+// must NOT free it. No aliasing with the body box (the list is a deep copy
+// of the array's scalars / fresh `Str` buffers), so no double-free.
+//
+// SLOT CONVENTIONS (must match how codegen consumes a `.cb` `list[T]`, so
+// `body.tags.len()` / `for s in body.tags:` / `body.tags[i]` read correctly):
+//   * `list[str]`  — each slot holds a fresh heap-`Str` pointer (the redis
+//     `alloc_str_list` recipe). Drop frees each via `__cobrust_str_drop`.
+//   * `list[i64]`  — each slot holds the raw `i64`.
+//   * `list[bool]` — each slot holds `0`/`1` (a `bool` is an `i1` widened to
+//     the i64 slot, the `Constant::Bool` materialisation).
+//   * `list[f64]`  — each slot holds `f64::to_bits() as i64` (the codegen
+//     `Constant::Float` slot convention; the `.cb` consumer reinterprets via
+//     `f64::from_bits`, `llvm_backend.rs:5342` / coil `cabi.rs:136`).
+//
+// EMPTY / FAIL-CLEAN: a null body / a missing key / a non-array value mints
+// a VALID EMPTY list (len 0), NEVER null and NEVER a panic — unreachable on
+// the validated path (validation proved the field is present + a typed
+// array), the list analogue of the scalar shims' `0` / empty-`Str` sentinel.
+// =====================================================================
+
+/// Borrow the parent body box's `<field>` value as a JSON array slice, or
+/// `&[]` for a null body / a missing key / a non-array value (fail-clean,
+/// unreachable on the validated path). Shared decode for the four list
+/// accessors so the borrow + the missing/non-array fallback are written
+/// once (footgun #4 — one decode source).
+///
+/// # Safety
+///
+/// `body` must be null or a valid pointer to the trampoline's boxed
+/// `serde_json::Value`; `name` must be a valid Cobrust `Str` buffer. The
+/// returned slice BORROWS `body`'s interior (the caller must not let it
+/// outlive `body`); the shim allocates nothing here.
+unsafe fn body_field_array<'a>(body: *mut u8, name: *mut u8) -> &'a [serde_json::Value] {
+    if body.is_null() {
+        return &[];
+    }
+    // SAFETY: caller-attestation per `# Safety` — `body` is the trampoline's
+    // boxed Value (or a borrowed interior Value from a nested read). Shared
+    // `&` borrow only; the trampoline keeps ownership + frees it once.
+    let value: &serde_json::Value = unsafe { &*body.cast::<serde_json::Value>() };
+    // SAFETY: `name` per `# Safety`.
+    let name_s = unsafe { read_str_buf(name) };
+    value
+        .get(&name_s)
+        .and_then(serde_json::Value::as_array)
+        .map_or(&[], Vec::as_slice)
+}
+
+/// `body.<list[str]-field>` — read a `list[str]` field off the validated
+/// body. Returns a freshly-minted owned Cobrust `list[str]` (each slot a
+/// fresh `Str` buffer) carrying the JSON array's string elements, or an
+/// EMPTY list on a null body / missing key / non-array (fail-clean).
+///
+/// Each element uses `serde_json::Value::as_str` — the typed read; a
+/// type-mismatched element (`["a",42]`) was already rejected by the
+/// validator (422 before the handler, ADR-0080 Phase-4(c)), so `as_str`
+/// always succeeds on the validated path; an `unwrap_or("")` is a defense
+/// (CLAUDE.md §2.2 — no coercion of a non-string element).
+///
+/// # Safety
+///
+/// As [`__cobrust_pit_body_get_i64`]. The returned pointer is an owned
+/// Cobrust `list[str]` the `.cb` side owns + drops once (via
+/// `__cobrust_list_drop_elems(list, __cobrust_str_drop)`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_body_get_list_str(body: *mut u8, name: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let arr = unsafe { body_field_array(body, name) };
+    // SAFETY: the stdlib list externs are link-resolved from
+    // libcobrust_stdlib.a; `__cobrust_list_new(8, len)` returns `len` zeroed
+    // i64 slots; each slot is set to a fresh `Str` buffer pointer (the redis
+    // `alloc_str_list` recipe), freed by the `Ty::List(Str)` drop schedule.
+    unsafe {
+        let list = __cobrust_list_new(8, arr.len() as i64);
+        for (i, elem) in arr.iter().enumerate() {
+            let s = elem.as_str().unwrap_or("");
+            let buf = alloc_str_buffer(s);
+            __cobrust_list_set(list, i as i64, buf as i64);
+        }
+        list
+    }
+}
+
+/// `body.<list[i64]-field>` — read a `list[i64]` field off the validated
+/// body. Returns a freshly-minted owned Cobrust `list[i64]` (each slot the
+/// raw `i64`), or an EMPTY list on a null body / missing key / non-array.
+///
+/// Each element uses `serde_json::Value::as_i64` — integer-only, NEVER
+/// `as_f64`-then-truncate (footgun #3; CLAUDE.md §2.2). The validator
+/// already rejected a non-integer element, so the `0` per-slot defense is
+/// unreachable on the validated path.
+///
+/// # Safety
+///
+/// As [`__cobrust_pit_body_get_i64`]. The returned pointer is an owned
+/// Cobrust `list[i64]` the `.cb` side owns + drops once (via
+/// `__cobrust_list_drop`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_body_get_list_i64(body: *mut u8, name: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let arr = unsafe { body_field_array(body, name) };
+    // SAFETY: list externs per the str variant above; each slot is the raw
+    // i64 element value (the `Ty::List(i64)` drop frees just the container).
+    unsafe {
+        let list = __cobrust_list_new(8, arr.len() as i64);
+        for (i, elem) in arr.iter().enumerate() {
+            __cobrust_list_set(list, i as i64, elem.as_i64().unwrap_or(0));
+        }
+        list
+    }
+}
+
+/// `body.<list[f64]-field>` — read a `list[f64]` field off the validated
+/// body. Returns a freshly-minted owned Cobrust `list[f64]`, or an EMPTY
+/// list on a null body / missing key / non-array.
+///
+/// Each slot holds `f64::to_bits() as i64` — the EXACT slot convention
+/// codegen materialises a `Constant::Float` with, so the `.cb` consumer
+/// reinterprets via `f64::from_bits` (`llvm_backend.rs:5342`; the coil
+/// `array`/`list[f64]` ABI, `cabi.rs:136`). `serde_json::Value::as_f64`
+/// is the typed read (the validator already proved each element numeric).
+///
+/// # Safety
+///
+/// As [`__cobrust_pit_body_get_i64`]. The returned pointer is an owned
+/// Cobrust `list[f64]` the `.cb` side owns + drops once (via
+/// `__cobrust_list_drop`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_body_get_list_f64(body: *mut u8, name: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let arr = unsafe { body_field_array(body, name) };
+    // SAFETY: list externs per the str variant above; each slot holds the
+    // element's `f64::to_bits()` bit-pattern (the `Constant::Float` slot
+    // convention — the `.cb` consumer `from_bits`-reinterprets it).
+    unsafe {
+        let list = __cobrust_list_new(8, arr.len() as i64);
+        for (i, elem) in arr.iter().enumerate() {
+            let bits = elem.as_f64().unwrap_or(0.0).to_bits();
+            #[allow(clippy::cast_possible_wrap)]
+            __cobrust_list_set(list, i as i64, bits as i64);
+        }
+        list
+    }
+}
+
+/// `body.<list[bool]-field>` — read a `list[bool]` field off the validated
+/// body. Returns a freshly-minted owned Cobrust `list[bool]`, or an EMPTY
+/// list on a null body / missing key / non-array.
+///
+/// Each slot holds `0`/`1` (a `bool` widened to the i64 slot — the
+/// `Constant::Bool` materialisation). `serde_json::Value::as_bool` is
+/// STRICT (a JSON `true`/`false` only, never truthiness; §2.2); the
+/// validator already rejected a non-boolean element.
+///
+/// # Safety
+///
+/// As [`__cobrust_pit_body_get_i64`]. The returned pointer is an owned
+/// Cobrust `list[bool]` the `.cb` side owns + drops once (via
+/// `__cobrust_list_drop`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_pit_body_get_list_bool(body: *mut u8, name: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let arr = unsafe { body_field_array(body, name) };
+    // SAFETY: list externs per the str variant above; each slot holds 0/1
+    // (the `bool` i1 widened to the i64 slot).
+    unsafe {
+        let list = __cobrust_list_new(8, arr.len() as i64);
+        for (i, elem) in arr.iter().enumerate() {
+            __cobrust_list_set(list, i as i64, i64::from(elem.as_bool().unwrap_or(false)));
+        }
+        list
+    }
+}
+
+// =====================================================================
 // pit C-ABI surface — handle drops (mirror strike's _drop pattern).
 // =====================================================================
 
@@ -1382,6 +1598,148 @@ mod tests {
 
             // The parent box is freed EXACTLY ONCE; the nested pointers were
             // borrows of its interior (never separately freed → no double-free).
+            drop(Box::from_raw(body_raw.cast::<serde_json::Value>()));
+        }
+    }
+
+    // -- ADR-0081 Phase-3: validated-body LIST field-read shims -----------
+    //
+    // The list-read ABI (resolved from libcobrust_stdlib.a) used by the
+    // tests to read the minted lists back + drop them via the SAME drop the
+    // codegen `Ty::List(_)` schedule selects (`__cobrust_list_drop_elems`
+    // with `__cobrust_str_drop` for `list[str]`; `__cobrust_list_drop` for
+    // the scalar-element lists) — proving the minted list frees clean.
+    unsafe extern "C" {
+        fn __cobrust_list_len(list: *mut u8) -> i64;
+        fn __cobrust_list_get(list: *mut u8, i: i64) -> i64;
+        fn __cobrust_list_drop(list: *mut u8);
+        fn __cobrust_list_drop_elems(list: *mut u8, elem_drop_fn: unsafe extern "C" fn(*mut u8));
+    }
+
+    /// `__cobrust_pit_body_get_list_str` mints a `.cb` `list[str]` from a JSON
+    /// string array: the right length, each slot a readable `Str` buffer
+    /// carrying the real element, and the whole thing frees clean via the
+    /// `Ty::List(Str)` drop (`__cobrust_list_drop_elems` + `__cobrust_str_drop`).
+    /// A non-array / missing / null mints a valid EMPTY list (fail-clean).
+    #[test]
+    fn body_get_list_str_mints_iterable_list_and_drops_clean() {
+        let body_raw = Box::into_raw(Box::new(serde_json::json!({
+            "tags": ["alpha", "beta", "gamma"],
+            "scalar": 5
+        })))
+        .cast::<u8>();
+        unsafe {
+            let name_tags = alloc_str_buffer("tags");
+            let list = __cobrust_pit_body_get_list_str(body_raw, name_tags);
+            drop_str_for_test(name_tags);
+            assert!(!list.is_null(), "list[str] mint never returns null");
+            assert_eq!(__cobrust_list_len(list), 3, "minted list[str] has len 3");
+            // Each slot holds a Str-buffer pointer carrying the real element.
+            let got: Vec<String> = (0..3)
+                .map(|i| read_str_buf(__cobrust_list_get(list, i) as *mut u8))
+                .collect();
+            assert_eq!(
+                got,
+                vec!["alpha", "beta", "gamma"],
+                "minted list[str] slots carry the REAL JSON array strings"
+            );
+            // Drop via the SAME schedule codegen emits for `Ty::List(Str)`.
+            __cobrust_list_drop_elems(list, __cobrust_str_drop);
+
+            // A non-array field → empty list (fail-clean, unreachable on the
+            // validated path).
+            let name_scalar = alloc_str_buffer("scalar");
+            let empty = __cobrust_pit_body_get_list_str(body_raw, name_scalar);
+            drop_str_for_test(name_scalar);
+            assert!(!empty.is_null(), "non-array mints a valid empty list");
+            assert_eq!(__cobrust_list_len(empty), 0, "non-array list[str] is empty");
+            __cobrust_list_drop_elems(empty, __cobrust_str_drop);
+
+            // Null body → empty list.
+            let name_n = alloc_str_buffer("tags");
+            let null_list = __cobrust_pit_body_get_list_str(std::ptr::null_mut(), name_n);
+            drop_str_for_test(name_n);
+            assert_eq!(
+                __cobrust_list_len(null_list),
+                0,
+                "null body → empty list[str]"
+            );
+            __cobrust_list_drop_elems(null_list, __cobrust_str_drop);
+
+            drop(Box::from_raw(body_raw.cast::<serde_json::Value>()));
+        }
+    }
+
+    /// `__cobrust_pit_body_get_list_i64` mints a `list[i64]` whose slots hold
+    /// the RAW integer values; it frees clean via `__cobrust_list_drop` (the
+    /// `Ty::List(i64)` schedule — no per-element free). Integer-only read
+    /// (`as_i64`, never `as_f64`-truncate, §2.2 footgun #3).
+    #[test]
+    fn body_get_list_i64_mints_raw_int_slots_and_drops_clean() {
+        let body_raw = Box::into_raw(Box::new(serde_json::json!({
+            "scores": [60, 50, 7]
+        })))
+        .cast::<u8>();
+        unsafe {
+            let name = alloc_str_buffer("scores");
+            let list = __cobrust_pit_body_get_list_i64(body_raw, name);
+            drop_str_for_test(name);
+            assert_eq!(__cobrust_list_len(list), 3, "minted list[i64] has len 3");
+            assert_eq!(__cobrust_list_get(list, 0), 60);
+            assert_eq!(__cobrust_list_get(list, 1), 50);
+            assert_eq!(__cobrust_list_get(list, 2), 7);
+            // The slot is the raw i64 (the `.cb` `for v in xs:` reads it
+            // directly — the redis/coil `list[i64]` slot convention).
+            __cobrust_list_drop(list);
+            drop(Box::from_raw(body_raw.cast::<serde_json::Value>()));
+        }
+    }
+
+    /// `__cobrust_pit_body_get_list_f64` mints a `list[f64]` whose slots hold
+    /// the `f64::to_bits()` bit-pattern (the `Constant::Float` slot
+    /// convention — the `.cb` consumer reinterprets via `from_bits`). Frees
+    /// via `__cobrust_list_drop`.
+    #[test]
+    fn body_get_list_f64_mints_to_bits_slots_and_drops_clean() {
+        let body_raw = Box::into_raw(Box::new(serde_json::json!({
+            "weights": [0.5, 1.5, 42.0]
+        })))
+        .cast::<u8>();
+        unsafe {
+            let name = alloc_str_buffer("weights");
+            let list = __cobrust_pit_body_get_list_f64(body_raw, name);
+            drop_str_for_test(name);
+            assert_eq!(__cobrust_list_len(list), 3, "minted list[f64] has len 3");
+            // Each slot is the to_bits() pattern → from_bits recovers the f64.
+            let recovered: Vec<f64> = (0..3)
+                .map(|i| f64::from_bits(__cobrust_list_get(list, i) as u64))
+                .collect();
+            assert!((recovered[0] - 0.5).abs() < f64::EPSILON);
+            assert!((recovered[1] - 1.5).abs() < f64::EPSILON);
+            assert!((recovered[2] - 42.0).abs() < f64::EPSILON);
+            __cobrust_list_drop(list);
+            drop(Box::from_raw(body_raw.cast::<serde_json::Value>()));
+        }
+    }
+
+    /// `__cobrust_pit_body_get_list_bool` mints a `list[bool]` whose slots
+    /// hold `0`/`1` (a `bool` widened to the i64 slot). STRICT `as_bool`
+    /// (no truthiness, §2.2). Frees via `__cobrust_list_drop`.
+    #[test]
+    fn body_get_list_bool_mints_zero_one_slots_and_drops_clean() {
+        let body_raw = Box::into_raw(Box::new(serde_json::json!({
+            "flags": [true, false, true]
+        })))
+        .cast::<u8>();
+        unsafe {
+            let name = alloc_str_buffer("flags");
+            let list = __cobrust_pit_body_get_list_bool(body_raw, name);
+            drop_str_for_test(name);
+            assert_eq!(__cobrust_list_len(list), 3, "minted list[bool] has len 3");
+            assert_eq!(__cobrust_list_get(list, 0), 1, "true → 1");
+            assert_eq!(__cobrust_list_get(list, 1), 0, "false → 0");
+            assert_eq!(__cobrust_list_get(list, 2), 1, "true → 1");
+            __cobrust_list_drop(list);
             drop(Box::from_raw(body_raw.cast::<serde_json::Value>()));
         }
     }

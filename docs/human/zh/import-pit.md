@@ -50,9 +50,10 @@ curl http://127.0.0.1:<port>/ping
   值,所以响应体不可能与已校验的请求体发生漂移。详见下文「带校验的请求体」。
 - **`body.field` 读取**(ADR-0081)—— 在 `route_validated` 的 handler 内部,
   以带类型的属性访问读取已校验请求体的字段(`body.rank` → `i64`,`body.name`
-  → `str`,`body.ratio` → `f64`,`body.active` → `bool`,以及嵌套的
-  `body.inner.x` 递归读取嵌套对象),而不是字符串键。写错的字段是编译错误。
-  详见下文「读取请求体字段」。
+  → `str`,`body.ratio` → `f64`,`body.active` → `bool`,嵌套的
+  `body.inner.x` 递归读取嵌套对象,以及**列表字段** `body.tags` → `list[str]` /
+  `list[i64]` / `list[f64]` / `list[bool]` 读取为可迭代的真实列表),而不是
+  字符串键。写错的字段是编译错误。详见下文「读取请求体字段」。
 - **`App.route(method, path, handler)`** — 将一个顶层 `fn` 注册为
   `method path` 的处理器。handler 必须是顶层
   `fn handler(req: pit.Request) -> pit.Response: …`。返回 `None`;
@@ -220,8 +221,42 @@ fn handler(req: pit.Request, body: Payload) -> pit.Response:
 
 字段读取**只**对你的 handler 从 `route_validated` 收到的请求体参数生效 ——
 手动构造的 `CreateScore()` 值目前还没有字段存储(那是原生结构体的后续工作)。
-编译器会跟踪二者的区别,所以你不会遇到意外。列表字段(`tags: list[str]`)
-属于后续阶段。
+编译器会跟踪二者的区别,所以你不会遇到意外。
+
+#### 列表字段(`tags: list[str]`,ADR-0081 第 3 阶段)
+
+声明为 `list[T]`(`T` 为 `str`、`i64`、`f64` 或 `bool`)的请求体字段会读取为
+一个**真正的 Cobrust 列表**,你可以对它迭代、索引、求长度:
+
+```python
+class TagBody:
+    tags: list[str]
+    scores: list[i64]
+
+fn handler(req: pit.Request, body: TagBody) -> pit.Response:
+    let xs: list[str] = body.tags        # 把已校验的数组读取为 list[str]
+    let n: i64 = xs.len()                # 普通列表操作:.len()、索引、for 循环
+    let acc: str = ""
+    for s in body.tags:                  # 迭代真实的元素字符串
+        acc = acc + s
+    let total: i64 = 0
+    for v in body.scores:                # list[i64] —— 累加真实整数
+        total = total + v
+    return pit.text_response(200, acc)
+```
+
+- 元素类型在 handler 运行**之前**就已校验:`list[str]` 里混入数字
+  (`{"tags":["a",42]}`)直接 **422**,根本进不了 handler。所以读取是纯粹的
+  带类型读取 —— 没有任何隐式转换(§2.2)。
+- 空数组读取为空列表(`.len() == 0`),迭代零次 —— 不会意外、不会崩溃。
+- 读到的列表归你所有:它在离开作用域时**恰好释放一次**,和你自己构造的列表
+  一样。(在紧密循环里读取列表字段不会泄漏。)
+
+**把请求体传给另一个函数。** 把*已读出的字段值*(你已经读到的 `i64`、`str`
+或 `list`)传给另一个函数,和传任何值完全一样 —— `double(body.rank)` 或
+`first_or_empty(body.tags)` 都可行。把*整个* `body` 传给另一个函数目前还不能
+把「已校验读取」的机制带过调用边界(在被调函数里读字段会得到占位值,而不是
+已校验的值)—— 这属于原生结构体的后续工作。
 
 ## 字符串校验:长度 + 模式(ADR-0080 第 2 阶段)
 

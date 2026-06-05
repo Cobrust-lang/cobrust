@@ -3351,6 +3351,39 @@ pub fn lookup_validated_body_accessor(field_ty: &Ty) -> Option<EcoSig> {
         Ty::Adt(id, _) if !is_ecosystem_handle(*id) => {
             ("__cobrust_pit_body_get_nested", field_ty.clone())
         }
+        // ADR-0081 Phase-3 — a `list[T]` field (T ∈ {str, i64, f64, bool}).
+        // The validator ALREADY accepted the array + checked its element
+        // types (ADR-0080 Phase-4(c), `validation.rs`; a type-mismatched
+        // element is a 422 BEFORE the handler), so the accessor is a pure
+        // typed READ: it BORROWS the parent body box, reads the JSON array,
+        // and MINTS a FRESH `.cb` `list[T]` from it (the redis-`lrange` /
+        // coil-`shape` `__cobrust_list_new(8,len)` + per-slot
+        // `__cobrust_list_set` recipe, `cabi.rs`). ONE accessor per element
+        // type (codegen-extern clarity, mirroring the scalar shims) — the
+        // `(body, name) -> *mut List` ABI is shared; only the slot payload
+        // differs (a heap-`Str` pointer for `str`, a raw `i64`, a `0`/`1`
+        // for `bool`, an `f64::to_bits()` for `f64`). The `ret` carries
+        // `Ty::List(elem)` so the `.cb` `_ecoret` temp's codegen drop
+        // schedule selects the right drop (`list[str]` →
+        // `__cobrust_list_drop_elems`, else `__cobrust_list_drop`,
+        // `llvm_backend.rs:5223`) — the minted list drops EXACTLY ONCE,
+        // owned by the `.cb` scope; the shim does NOT free it. A
+        // `list[<deferred-elem>]` (list-of-list, dict, validated-class
+        // element — out of #156 read scope) returns `None` here (the caller
+        // then takes the `Field(0)` stub, NEVER a serde cast on an opaque
+        // ptr — the §5.2 no-UB invariant).
+        Ty::List(elem) => {
+            let symbol = match &**elem {
+                Ty::Str => "__cobrust_pit_body_get_list_str",
+                Ty::Int => "__cobrust_pit_body_get_list_i64",
+                Ty::Float => "__cobrust_pit_body_get_list_f64",
+                Ty::Bool => "__cobrust_pit_body_get_list_bool",
+                // Deferred element forms (list[list[T]], list[dict],
+                // list[Class]) — no accessor; fall to the `Field(0)` stub.
+                _ => return None,
+            };
+            (symbol, field_ty.clone())
+        }
         _ => return None,
     };
     // The accessor's manifest signature carries ONE `Value` param — the
@@ -5196,11 +5229,53 @@ mod tests {
             lookup_validated_body_accessor(&Ty::Adt(COIL_BUFFER_ADT, vec![])).is_none(),
             "coil.Buffer is not a nested validated body"
         );
-        // A field type with no accessor (e.g. a list) → None (the caller
-        // takes the Field(0) stub, never a serde cast).
+        // A DEFERRED list-element form (list-of-list) → None (the caller
+        // takes the Field(0) stub, never a serde cast). The scalar-element
+        // lists (str/i64/f64/bool) DO resolve — see
+        // `validated_body_accessor_list_arms`; only the out-of-#156-scope
+        // element forms stay None here.
         assert!(
-            lookup_validated_body_accessor(&Ty::List(Box::new(Ty::Int))).is_none(),
-            "a list field has no scalar accessor (deferred — not f64/bool/nested)"
+            lookup_validated_body_accessor(&Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))))
+                .is_none(),
+            "a list[list[T]] field has no accessor (deferred element form — Field(0) stub)"
+        );
+    }
+
+    /// ADR-0081 Phase-3: a `list[T]` field (T ∈ str/i64/f64/bool) resolves to
+    /// the per-element-type list accessor, returning the SAME `Ty::List(elem)`
+    /// so the result temp's codegen drop schedule selects the right list drop.
+    #[test]
+    fn validated_body_accessor_list_arms() {
+        for (elem, sym) in [
+            (Ty::Str, "__cobrust_pit_body_get_list_str"),
+            (Ty::Int, "__cobrust_pit_body_get_list_i64"),
+            (Ty::Float, "__cobrust_pit_body_get_list_f64"),
+            (Ty::Bool, "__cobrust_pit_body_get_list_bool"),
+        ] {
+            let list_ty = Ty::List(Box::new(elem.clone()));
+            let a = lookup_validated_body_accessor(&list_ty)
+                .unwrap_or_else(|| panic!("list[{elem:?}] field has an accessor"));
+            assert_eq!(
+                a.runtime_symbol, sym,
+                "list[{elem:?}] resolves to its per-element accessor symbol"
+            );
+            assert_eq!(
+                a.ret, list_ty,
+                "the list accessor returns the SAME Ty::List(elem) (drives the drop schedule)"
+            );
+            assert_eq!(
+                value_tys(&a.params),
+                vec![Ty::Str],
+                "the list accessor takes the compiler-synthesised field-name Str"
+            );
+            assert_eq!(a.tier, PyCompatTier::Semantic);
+        }
+        // A deferred element form (list of a validated class — out of #156
+        // read scope) → None (the Field(0) stub, never a serde cast).
+        assert!(
+            lookup_validated_body_accessor(&Ty::List(Box::new(Ty::Adt(AdtId(68), vec![]))))
+                .is_none(),
+            "list[<Class>] is a deferred read form (the element-class read is not wired)"
         );
     }
 }

@@ -1,11 +1,37 @@
 //! ADR-0081 validated-body `body.field` RUNTIME READ, end-to-end.
 //!
-//! STATUS (Phase-1b SHIPPED + Phase-2 SHIPPED): the runtime read is LIVE.
-//! `body.<i64|str>` (Phase-1b), `body.<f64|bool>` (Phase-2), and the NESTED
-//! chain `body.inner.x` / `body.mid.leaf.v` (Phase-2 nested) all read the
-//! REAL validated value, OBSERVABLE on the wire (the handler RESPONSE flips
-//! with the read value). This corpus, written TEST-FIRST and now GREEN,
-//! pins that behaviour against regression.
+//! STATUS (Phase-1b SHIPPED + Phase-2 SHIPPED + Phase-3 SHIPPED): the runtime
+//! read is LIVE. `body.<i64|str>` (Phase-1b), `body.<f64|bool>` (Phase-2),
+//! the NESTED chain `body.inner.x` / `body.mid.leaf.v` (Phase-2 nested), AND
+//! `body.<list[T]>` for T ∈ {str, i64, f64, bool} (Phase-3) all read the REAL
+//! validated value, OBSERVABLE on the wire (the handler RESPONSE flips with
+//! the read value). This corpus, written TEST-FIRST and now GREEN, pins that
+//! behaviour against regression.
+//!
+//! ## ADR-0081 Phase-3 (list fields + body-as-fn-arg) — what this adds
+//!
+//!   * `body.<list[T]-field>` (T ∈ str/i64/f64/bool) MINTS a fresh `.cb`
+//!     `list[T]` from the validated JSON array via one accessor per element
+//!     type (`__cobrust_pit_body_get_list_{str,i64,f64,bool}`, `cabi.rs`),
+//!     the redis-`lrange` / coil-`shape` `__cobrust_list_new(8,len)` +
+//!     per-slot `__cobrust_list_set` mint recipe. The handler READS + ITERATES
+//!     the real array (`xs.len()`, `for s in body.tags:`), so the response
+//!     reflects the genuine element values. The minted list is `.cb`-owned +
+//!     drops EXACTLY ONCE (`Ty::List(Str)` → `__cobrust_list_drop_elems`, else
+//!     `__cobrust_list_drop`) — pinned by a 200-read hammer-loop that proves
+//!     the server survives (no leak / no double-free). Element-type VALIDATION
+//!     already shipped in ADR-0080 Phase-4(c) (`pit_collection_body_e2e.rs`):
+//!     a type-mismatched array (`{"tags":["a",42]}`) is a 422 BEFORE the
+//!     handler, so the accessor is a pure typed read (§2.2 — no coercion).
+//!   * **body-as-fn-arg**: passing a READ FIELD VALUE (an `i64`/`str`/`list`)
+//!     to another fn is DELIVERED (it is an ordinary value arg — pinned by
+//!     `test_e2e_body_arg_read_field_value_to_fn`). Passing the WHOLE
+//!     validated `body` to another fn is DEFERRED: the `validated_body_of`
+//!     mark does NOT propagate across a call boundary, so a `b.field` read in
+//!     the CALLEE hits the `Field(0)` stub (a wrong value, NOT UB — the
+//!     registration gate still prevents the serde cast). The ignored
+//!     `test_e2e_body_arg_whole_body_to_fn_DEFERRED` documents the gap +
+//!     proves no-UB (no accessor symbol emitted, clean run).
 //!
 //! ## What "real read" means (the load-bearing assertion shape)
 //!
@@ -72,6 +98,11 @@
 
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
+// Long live-server assertion tests (each drives multiple routes + asserts the
+// flip on every read) exceed the pedantic 100-line cap — the established
+// pattern in the sibling pit e2e files (`pit_collection_body_e2e.rs`,
+// `pit_nested_body_e2e.rs`).
+#![allow(clippy::too_many_lines)]
 
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -1143,5 +1174,641 @@ fn test_no_ub_non_registered_nested_read_does_not_emit_accessor_call() {
     assert_no_accessor_symbol(
         NO_UB_NESTED_PROGRAM,
         "test_no_ub_non_registered_nested_read_does_not_emit_accessor_call",
+    );
+}
+
+// =====================================================================
+// (6) ADR-0081 Phase-3 — `body.<list[T]-field>` READ + ITERATE, live.
+//
+// A body field whose declared `Ty` is `list[T]` (T ∈ str/i64/f64/bool). The
+// element-type VALIDATION already shipped (ADR-0080 Phase-4(c),
+// `pit_collection_body_e2e.rs`); Phase-3 adds the READ: the accessor
+// (`__cobrust_pit_body_get_list_{str,i64,f64,bool}`) BORROWS the parent body
+// box, reads the JSON array, and MINTS a fresh `.cb` `list[T]` from it (the
+// redis-`lrange` recipe). The handler then READS + ITERATES the minted list
+// (`xs.len()`, `for s in body.tags:`), so the RESPONSE reflects the REAL
+// element values — a stub-load (empty/garbage list) cannot produce the
+// element-dependent responses below.
+//
+// Same "real read = the response tracks the input" shape as (1):
+//   * list[str] `/join`  — concatenates the tag strings; ["a","b","c"] ->
+//     "abc", ["foo","bar"] -> "foobar" (each STRING element genuinely read).
+//   * list[str] `/count` — `body.tags.len()`; >=3 -> "many", else "few".
+//   * list[i64] `/sum`   — sums the score ints; [60,50] (110) -> "big",
+//     [3,4] (7) -> "small", [] (0) -> "small" (each INT element read).
+// =====================================================================
+
+/// One server. `/join` + `/count` read & iterate the list[str] `body.tags`;
+/// `/sum` reads & iterates the list[i64] `body.scores`. The accumulation is
+/// the canonical Cobrust `let acc = ...` outside + `acc = acc + x` rebind
+/// inside the loop (no `mut` keyword — `builtins_abs_range_e2e.rs` idiom).
+fn list_read_program(port: u16) -> String {
+    format!(
+        concat!(
+            "import pit\n",
+            "\n",
+            "class TagBody:\n",
+            "    tags: list[str]\n",
+            "    scores: list[i64]\n",
+            "\n",
+            // list[str] ITERATE: concatenate the real tag strings. A
+            // stub-load (empty minted list) yields "" regardless of input.
+            "fn join_tags(req: pit.Request, body: TagBody) -> pit.Response:\n",
+            "    let xs: list[str] = body.tags\n",
+            "    let acc: str = \"\"\n",
+            "    for s in xs:\n",
+            "        acc = acc + s\n",
+            "    return pit.text_response(200, acc)\n",
+            "\n",
+            // list[str] LEN: branch on the real element count.
+            "fn count_tags(req: pit.Request, body: TagBody) -> pit.Response:\n",
+            "    let xs: list[str] = body.tags\n",
+            "    let n: i64 = xs.len()\n",
+            "    if n >= 3:\n",
+            "        return pit.text_response(200, \"many\")\n",
+            "    return pit.text_response(200, \"few\")\n",
+            "\n",
+            // list[i64] ITERATE: sum the real score ints + branch on the sum.
+            "fn sum_scores(req: pit.Request, body: TagBody) -> pit.Response:\n",
+            "    let xs: list[i64] = body.scores\n",
+            "    let total: i64 = 0\n",
+            "    for v in xs:\n",
+            "        total = total + v\n",
+            "    if total >= 100:\n",
+            "        return pit.text_response(200, \"big\")\n",
+            "    return pit.text_response(200, \"small\")\n",
+            "\n",
+            "fn main() -> i64:\n",
+            "    let app = pit.App()\n",
+            "    let _ = app.route_validated(\"POST\", \"/join\", join_tags)\n",
+            "    let _ = app.route_validated(\"POST\", \"/count\", count_tags)\n",
+            "    let _ = app.route_validated(\"POST\", \"/sum\", sum_scores)\n",
+            "    let _exit = app.run(\"127.0.0.1\", {port})\n",
+            "    return 0\n",
+        ),
+        port = port,
+    )
+}
+
+#[test]
+fn test_e2e_body_field_read_list_str_and_i64_iterates() {
+    let port = pick_free_port();
+    let source = list_read_program(port);
+    let (_dir, exe) = compile_source(&source);
+
+    let child = Command::new(&exe)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut guard = ChildGuard(child);
+
+    wait_for_port(port, Duration::from_secs(8)).expect("pit list field-read server bind");
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::blocking::Client::new();
+
+    // --- list[str] ITERATE: tags=["a","b","c"] -> "abc". THE PROOF: the
+    // response is the CONCATENATION of the real array elements; a stub-load
+    // (empty minted list) would return "". ---
+    let j1 = client
+        .post(format!("{base}/join"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"tags":["a","b","c"],"scores":[1]}"#)
+        .send()
+        .expect("POST /join tags=[a,b,c]");
+    assert_eq!(j1.status().as_u16(), 200, "list[str] join must be 200");
+    assert_eq!(
+        j1.text().unwrap(),
+        "abc",
+        "body.tags=[\"a\",\"b\",\"c\"] iterated + concatenated must be \"abc\" — PROVES the \
+         list[str] field is READ and ITERATED at runtime (a fresh `.cb` list minted from the \
+         JSON array via `__cobrust_pit_body_get_list_str`, then `for s in xs:`). A stub-load \
+         empty list would return \"\"."
+    );
+
+    // --- list[str] ITERATE, DIFFERENT values: ["foo","bar"] -> "foobar".
+    // The SAME route, only the array differs — the response tracks the real
+    // elements (a constant/stub cannot produce both "abc" and "foobar"). ---
+    let j2 = client
+        .post(format!("{base}/join"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"tags":["foo","bar"],"scores":[1]}"#)
+        .send()
+        .expect("POST /join tags=[foo,bar]");
+    assert_eq!(
+        j2.text().unwrap(),
+        "foobar",
+        "body.tags=[\"foo\",\"bar\"] -> \"foobar\" — the iteration reads the ACTUAL element \
+         strings (the response flips with the array contents)."
+    );
+
+    // --- list[str] LEN: len 3 -> "many", len 1 -> "few". The count tracks
+    // the real array length. ---
+    let c3 = client
+        .post(format!("{base}/count"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"tags":["a","b","c"],"scores":[1]}"#)
+        .send()
+        .expect("POST /count len=3");
+    assert_eq!(
+        c3.text().unwrap(),
+        "many",
+        "body.tags.len()==3 (>=3) -> \"many\" — the minted list's length is the REAL array length"
+    );
+    let c1 = client
+        .post(format!("{base}/count"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"tags":["x"],"scores":[1]}"#)
+        .send()
+        .expect("POST /count len=1");
+    assert_eq!(
+        c1.text().unwrap(),
+        "few",
+        "body.tags.len()==1 (<3) -> \"few\" — PROVES `.len()` reads the real minted-list length \
+         (the branch flips with the array size)."
+    );
+
+    // --- list[i64] ITERATE: scores=[60,50] (sum 110) -> "big". Each INT
+    // element is read and summed. ---
+    let s_big = client
+        .post(format!("{base}/sum"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"tags":["x"],"scores":[60,50]}"#)
+        .send()
+        .expect("POST /sum [60,50]");
+    assert_eq!(
+        s_big.text().unwrap(),
+        "big",
+        "body.scores=[60,50] summed (110 >= 100) -> \"big\" — PROVES the list[i64] field is read \
+         + iterated (each int element genuinely summed via `__cobrust_pit_body_get_list_i64`)."
+    );
+
+    // --- list[i64] ITERATE, smaller: [3,4] (sum 7) -> "small". The branch
+    // flips with the real element values. ---
+    let s_small = client
+        .post(format!("{base}/sum"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"tags":["x"],"scores":[3,4]}"#)
+        .send()
+        .expect("POST /sum [3,4]");
+    assert_eq!(
+        s_small.text().unwrap(),
+        "small",
+        "body.scores=[3,4] summed (7 < 100) -> \"small\" — the sum tracks the ACTUAL int elements."
+    );
+
+    // --- list[i64] EMPTY: [] (sum 0) -> "small". An empty JSON array mints a
+    // valid empty list (the fail-clean shape), iterates zero times. ---
+    let s_empty = client
+        .post(format!("{base}/sum"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"tags":["x"],"scores":[]}"#)
+        .send()
+        .expect("POST /sum []");
+    assert_eq!(
+        s_empty.text().unwrap(),
+        "small",
+        "body.scores=[] (empty array) -> sum 0 -> \"small\" — an EMPTY array mints a valid empty \
+         `.cb` list (len 0), iterates zero times (no panic, no stub garbage)."
+    );
+
+    // --- type-mismatched array still 422 (unchanged from ADR-0080 Phase-4(c)):
+    // the read work adds reads ON TOP, touches neither validator nor 422 path.
+    // A number in a list[str] is rejected BEFORE the handler. ---
+    let bad = client
+        .post(format!("{base}/join"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"tags":["a",42],"scores":[1]}"#)
+        .send()
+        .expect("POST /join tags=[a,42]");
+    assert_eq!(
+        bad.status().as_u16(),
+        422,
+        "a number in a list[str] (`[\"a\",42]`) must still be 422, handler NOT entered \
+         (ADR-0080 Phase-4(c) element validation — the read accessor is a pure typed read of an \
+         ALREADY-validated array, §2.2). got {}",
+        bad.status().as_u16(),
+    );
+
+    drop(guard.0.kill());
+    let _ = guard.0.wait();
+}
+
+// =====================================================================
+// (7) ADR-0081 Phase-3 — the list[str] DROP-DISCIPLINE hammer-loop.
+//
+// Each `body.tags` read MINTS a fresh `.cb` `list[str]` (one `Str` buffer per
+// element + the container) that the handler scope drops EXACTLY ONCE (the
+// `Ty::List(Str)` schedule → `__cobrust_list_drop_elems(list,
+// __cobrust_str_drop)` frees each element `Str` then the container). A leak
+// would balloon RSS; a double-free would crash the server (mimalloc free-list
+// corruption, the ADR-0050c Phase-4 failure mode). We hammer the route 200×
+// and assert every read returns the correct iterated value AND the server is
+// still alive + serving after the loop — the server-survival proof of
+// drop-once for the minted list + its element strings.
+// =====================================================================
+
+#[test]
+fn test_e2e_body_field_read_list_str_drops_once_under_hammer() {
+    let port = pick_free_port();
+    let source = list_read_program(port);
+    let (_dir, exe) = compile_source(&source);
+
+    let child = Command::new(&exe)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut guard = ChildGuard(child);
+
+    wait_for_port(port, Duration::from_secs(8)).expect("pit list hammer server bind");
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::blocking::Client::new();
+
+    // 200 reads of a 3-element list[str] (mint + iterate + drop each time).
+    // Every response must be the correct concatenation; a drop bug surfaces
+    // either as a wrong body or (more likely) a server crash mid-loop (the
+    // next request then fails to connect).
+    for i in 0..200 {
+        let resp = client
+            .post(format!("{base}/join"))
+            .header("Content-Type", "application/json")
+            .body(r#"{"tags":["alpha","beta","gamma"],"scores":[1]}"#)
+            .send()
+            .unwrap_or_else(|e| {
+                panic!(
+                    "POST /join iteration {i} failed to connect — the server likely CRASHED \
+                     (a double-free of the minted list[str] / its element Str buffers): {e}"
+                )
+            });
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "list[str] hammer iteration {i}: status must stay 200 (server alive)"
+        );
+        assert_eq!(
+            resp.text().unwrap(),
+            "alphabetagamma",
+            "list[str] hammer iteration {i}: every read must mint + iterate a FRESH correct list \
+             (no cross-request corruption from a mis-scheduled drop)"
+        );
+    }
+
+    // The server is still alive + serving correctly AFTER 200 mint/drop
+    // cycles — the server-survival proof that the minted list[str] (container
+    // + element Str buffers) drops EXACTLY ONCE per read (no leak, no
+    // double-free).
+    let after = client
+        .post(format!("{base}/join"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"tags":["x","y"],"scores":[1]}"#)
+        .send()
+        .expect("server must still serve after the 200-read hammer (drop-once held)");
+    assert_eq!(
+        after.text().unwrap(),
+        "xy",
+        "after 200 mint/drop cycles the server still mints a correct list[str] — drop-once held \
+         across the whole loop (no accumulated leak, no double-free)"
+    );
+
+    drop(guard.0.kill());
+    let _ = guard.0.wait();
+}
+
+// =====================================================================
+// (8) ADR-0081 Phase-3 — the list-field no-UB CODEGEN-PROPERTY tripwire (the
+// gold-standard gate-kind guard, the sibling of (2b)/(5)). A NON-registered
+// `fn helper(b: <Body>): return b.<list-field>.len()` on a `.cb`-constructed
+// instance must NOT emit a call to ANY `__cobrust_pit_body_get_*` shim — the
+// list accessors are REGISTRATION-gated EXACTLY like the scalar/nested ones
+// (`validated_body_of == Some`), not type-gated. Under the shipped gate the
+// read falls to the `Field(0)` stub (no external call); a type-only-gate
+// regression would emit `bl __cobrust_pit_body_get_list_str` and this goes
+// RED. (Reuses `assert_no_accessor_symbol` from (5).)
+// =====================================================================
+
+/// A non-registered list[str] read. `helper(b: TagBody): return b.tags.len()`.
+const NO_UB_LIST_PROGRAM: &str = concat!(
+    "import pit\n",
+    "\n",
+    "class TagBody:\n",
+    "    tags: list[str]\n",
+    "\n",
+    "fn helper(b: TagBody) -> i64:\n",
+    "    let xs: list[str] = b.tags\n",
+    "    return xs.len()\n",
+    "\n",
+    "fn main() -> i64:\n",
+    // .cb-constructed instance: a null/opaque pointer, NOT a boxed
+    // serde_json::Value -> b.tags must NOT serde-cast it.
+    "    let s = TagBody()\n",
+    "    let v: i64 = helper(s)\n",
+    "    print(v)\n",
+    "    return 0\n",
+);
+
+#[test]
+fn test_no_ub_non_registered_list_read_does_not_emit_accessor_call() {
+    assert_no_accessor_symbol(
+        NO_UB_LIST_PROGRAM,
+        "test_no_ub_non_registered_list_read_does_not_emit_accessor_call",
+    );
+}
+
+/// Runtime-survival companion for the list no-UB negative (the coarse "does
+/// not crash" smoke, the sibling of (2)): a non-registered `helper(b):
+/// b.tags.len()` on a `.cb`-constructed instance builds + runs to a CLEAN
+/// exit. (The gate-KIND discrimination is the disassembly tripwire above;
+/// this only proves the non-registered list-read path does not abort/UB.)
+#[test]
+fn test_no_ub_non_registered_list_read_runs_clean() {
+    let (_dir, exe) = compile_source(NO_UB_LIST_PROGRAM);
+    let out = Command::new(&exe)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run the list no-UB negative exe");
+    assert!(
+        out.status.success(),
+        "the list no-UB negative MUST run to a CLEAN exit — a non-registered \
+         `fn helper(b: TagBody): return b.tags.len()` reading a `.cb`-constructed `TagBody()` \
+         MUST NOT crash/abort (the `Field(0)` stub path, not a serde cast on a null/opaque ptr). \
+         exit={:?}, stdout={:?}, stderr={:?}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+// =====================================================================
+// (9) ADR-0081 Phase-3 — body-as-fn-arg, the DELIVERED half: passing a READ
+// FIELD VALUE (an `i64` / a `list[str]`) to another fn.
+//
+// Once `body.field` is READ into a `.cb` local, that local is an ordinary
+// value — passing it to a fn is plain argument-passing, NO body-machinery
+// involved. This is the trivial-and-must-work case the work order names:
+//   * `double(body.rank)`        — an i64 read passed to a fn.
+//   * `first_or_empty(body.tags)`— a list[str] read passed to a fn that
+//     iterates it.
+// The response tracks the real read values through the call, so the reads
+// genuinely happened before the hand-off.
+// =====================================================================
+
+fn body_arg_fieldval_program(port: u16) -> String {
+    format!(
+        concat!(
+            "import pit\n",
+            "\n",
+            "class TagBody:\n",
+            "    name: str\n",
+            "    tags: list[str]\n",
+            "    rank: i64 where 0 <= self and self <= 100\n",
+            "\n",
+            "fn double(n: i64) -> i64:\n",
+            "    return n + n\n",
+            "\n",
+            // Takes a list[str] VALUE arg (the read field), iterates it.
+            "fn first_or_empty(xs: list[str]) -> str:\n",
+            "    for s in xs:\n",
+            "        return s\n",
+            "    return \"empty\"\n",
+            "\n",
+            "fn handle(req: pit.Request, body: TagBody) -> pit.Response:\n",
+            "    let r: i64 = body.rank\n",
+            "    let doubled: i64 = double(r)\n",
+            "    let tags: list[str] = body.tags\n",
+            "    let first: str = first_or_empty(tags)\n",
+            "    if doubled >= 100:\n",
+            "        return pit.text_response(200, first)\n",
+            "    return pit.text_response(200, \"low\")\n",
+            "\n",
+            "fn main() -> i64:\n",
+            "    let app = pit.App()\n",
+            "    let _ = app.route_validated(\"POST\", \"/h\", handle)\n",
+            "    let _exit = app.run(\"127.0.0.1\", {port})\n",
+            "    return 0\n",
+        ),
+        port = port,
+    )
+}
+
+#[test]
+fn test_e2e_body_arg_read_field_value_to_fn() {
+    let port = pick_free_port();
+    let source = body_arg_fieldval_program(port);
+    let (_dir, exe) = compile_source(&source);
+
+    let child = Command::new(&exe)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut guard = ChildGuard(child);
+
+    wait_for_port(port, Duration::from_secs(8)).expect("pit body-arg field-value server bind");
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::blocking::Client::new();
+
+    // rank=60 -> double(60)=120 (>=100) -> return first_or_empty(tags) =
+    // "zoo". PROVES both: the i64 read flows through `double`, AND the
+    // list[str] read flows through `first_or_empty` (which iterates it).
+    let r1 = client
+        .post(format!("{base}/h"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"name":"n","tags":["zoo","bar"],"rank":60}"#)
+        .send()
+        .expect("POST /h rank=60");
+    assert_eq!(r1.status().as_u16(), 200, "rank=60 must be 200");
+    assert_eq!(
+        r1.text().unwrap(),
+        "zoo",
+        "double(body.rank=60)=120>=100 -> first_or_empty(body.tags)=\"zoo\" — PROVES a READ FIELD \
+         VALUE (both the i64 `rank` and the list[str] `tags`) passes correctly to another fn \
+         (ordinary value-arg passing; the reads happened before the hand-off)."
+    );
+
+    // rank=10 -> double=20 (<100) -> "low". The i64 read flips the branch
+    // through the `double` call.
+    let r2 = client
+        .post(format!("{base}/h"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"name":"n","tags":["zoo"],"rank":10}"#)
+        .send()
+        .expect("POST /h rank=10");
+    assert_eq!(
+        r2.text().unwrap(),
+        "low",
+        "double(body.rank=10)=20<100 -> \"low\" — the i64 read value flips the branch THROUGH the \
+         `double` call (a stub-load constant could not flip here)."
+    );
+
+    drop(guard.0.kill());
+    let _ = guard.0.wait();
+}
+
+// =====================================================================
+// (10) ADR-0081 Phase-3 — body-as-fn-arg, the DEFERRED half: passing the
+// WHOLE validated `body` to another fn.
+//
+// HONEST DEFERRAL (F37 — an `#[ignore]` with a specific reason, NOT a failing
+// un-ignored test). Passing the WHOLE body to `read_rank(body)` COMPILES and
+// RUNS CLEAN, but the `b.rank` read INSIDE the callee hits the `Field(0)`
+// stub — because the `validated_body_of` mark is set ONLY on the registered
+// handler's body param (`lower.rs` `lower_fn`), and it does NOT propagate
+// across the `read_rank(body)` call boundary. So the callee's `b` is unmarked
+// and its `b.rank` is the deferred no-field-storage stub (a WRONG value), NOT
+// a serde cast (NOT UB — the registration gate still holds: see the no-UB
+// proof in the sibling test below).
+//
+// EMPIRICALLY (this agent, build at this HEAD): rank=70 AND rank=10 BOTH
+// returned "high" — the branch did NOT flip, confirming `read_rank`'s
+// `b.rank` is the stub, not the real read. To DELIVER this would require
+// propagating `validated_body_of` (or the boxed Value itself) through the
+// call's arg → the callee's param local — a deep inter-procedural change
+// (the body box is MOVED into the call; the callee would need to know its
+// param IS a validated-body view). That is a Phase-4+ inter-procedural
+// concern (it interacts with the §7 native-struct ABI — once a body is a real
+// struct, passing it to a fn is ordinary), DEFERRED here.
+//
+// This test is `#[ignore]`d (it would FAIL as a flip-asserting test today);
+// the SEPARATE always-on `test_no_ub_whole_body_arg_emits_no_accessor` below
+// PROVES the no-UB invariant holds for this deferred shape.
+// =====================================================================
+
+fn whole_body_arg_program(port: u16) -> String {
+    format!(
+        concat!(
+            "import pit\n",
+            "\n",
+            "class TagBody:\n",
+            "    name: str\n",
+            "    rank: i64 where 0 <= self and self <= 100\n",
+            "\n",
+            // Reads `b.rank` on a param that is the WHOLE forwarded body.
+            "fn read_rank(b: TagBody) -> i64:\n",
+            "    return b.rank\n",
+            "\n",
+            "fn handle(req: pit.Request, body: TagBody) -> pit.Response:\n",
+            "    let r: i64 = read_rank(body)\n",
+            "    if r >= 50:\n",
+            "        return pit.text_response(200, \"high\")\n",
+            "    return pit.text_response(200, \"low\")\n",
+            "\n",
+            "fn main() -> i64:\n",
+            "    let app = pit.App()\n",
+            "    let _ = app.route_validated(\"POST\", \"/h\", handle)\n",
+            "    let _exit = app.run(\"127.0.0.1\", {port})\n",
+            "    return 0\n",
+        ),
+        port = port,
+    )
+}
+
+#[ignore = "ADR-0081 Phase-3 DEFERRED: passing the WHOLE validated body to another fn \
+            does not propagate `validated_body_of` across the call boundary, so the callee's \
+            `b.rank` is the Field(0) stub (a wrong value, NOT UB — the registration gate holds, \
+            see test_no_ub_whole_body_arg_emits_no_accessor). Delivering it needs deep \
+            inter-procedural propagation (or the §7 native-struct ABI); deferred to Phase-4+."]
+#[test]
+fn test_e2e_body_arg_whole_body_to_fn_deferred() {
+    let port = pick_free_port();
+    let source = whole_body_arg_program(port);
+    let (_dir, exe) = compile_source(&source);
+
+    let child = Command::new(&exe)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut guard = ChildGuard(child);
+
+    wait_for_port(port, Duration::from_secs(8)).expect("pit whole-body-arg server bind");
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::blocking::Client::new();
+
+    // THE GAP (would FAIL today, hence #[ignore]): the branch should flip with
+    // the real rank read through `read_rank(body)`, but `read_rank`'s `b.rank`
+    // is the Field(0) stub, so rank=70 and rank=10 both return the same arm.
+    let hi = client
+        .post(format!("{base}/h"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"name":"n","rank":70}"#)
+        .send()
+        .expect("POST /h rank=70");
+    assert_eq!(
+        hi.text().unwrap(),
+        "high",
+        "rank=70 (>=50) should branch \"high\" via read_rank(body).rank"
+    );
+    let lo = client
+        .post(format!("{base}/h"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"name":"n","rank":10}"#)
+        .send()
+        .expect("POST /h rank=10");
+    assert_eq!(
+        lo.text().unwrap(),
+        "low",
+        "rank=10 (<50) should branch \"low\" — THIS is the deferred gap: read_rank's `b.rank` is \
+         the Field(0) stub (the mark does not cross the call boundary), so the branch does NOT \
+         flip and this fails. Deferred to Phase-4+ inter-procedural propagation."
+    );
+
+    drop(guard.0.kill());
+    let _ = guard.0.wait();
+}
+
+/// The ALWAYS-ON no-UB proof for the DEFERRED whole-body-as-arg shape: even
+/// though `read_rank`'s `b.rank` is the (wrong-value) stub, it must NEVER be a
+/// serde cast on the moved body pointer — the registration gate holds across
+/// the call boundary. The codegen-property assertion (sibling of (8)): the
+/// whole-body-forwarding program emits NO `__cobrust_pit_body_get_*` accessor
+/// symbol (neither `handle` — which only MOVES the body into the call, no
+/// field read — nor the unmarked callee `read_rank`). GREEN under the shipped
+/// registration gate; the wrong VALUE is a deferred-feature gap, but the
+/// no-UB invariant is UNCONDITIONAL and pinned here.
+#[test]
+fn test_no_ub_whole_body_arg_emits_no_accessor() {
+    // Reuse the deferred program's source (port is irrelevant for an object
+    // compile — no server is spawned).
+    let program = whole_body_arg_program(0);
+    let Some(nm) = find_nm() else {
+        eprintln!(
+            "SKIP test_no_ub_whole_body_arg_emits_no_accessor: no runnable `nm`/`llvm-nm` \
+             found. The whole-body-as-arg registration-gate codegen property is unverified \
+             on this host."
+        );
+        return;
+    };
+    let (_dir, obj) = compile_object(&program);
+    let nm_out = Command::new(&nm)
+        .arg(&obj)
+        .output()
+        .expect("run nm on the whole-body-arg object");
+    assert!(
+        nm_out.status.success(),
+        "`{nm}` failed on {}: status={:?}, stderr={:?}",
+        obj.display(),
+        nm_out.status,
+        String::from_utf8_lossy(&nm_out.stderr),
+    );
+    let symbols = String::from_utf8_lossy(&nm_out.stdout);
+    let offending: Vec<&str> = symbols
+        .lines()
+        .filter(|l| l.contains("cobrust_pit_body_get_"))
+        .collect();
+    assert!(
+        offending.is_empty(),
+        "REGRESSION (no-UB, whole-body-as-arg): forwarding the WHOLE validated body to \
+         `read_rank(body)` emitted a `__cobrust_pit_body_get_*` accessor on an UNMARKED callee \
+         param (or on the moved body in `handle`). The body read must fire ONLY on a \
+         `validated_body_of`-MARKED local (ADR-0081 §5.2 Q4); the mark does NOT cross a call \
+         boundary, so the callee's `b.rank` is the Field(0) stub (a deferred-feature wrong \
+         value), NEVER a serde cast (UB). Offending `nm` line(s):\n{}\nfull `{nm}` output:\n{symbols}",
+        offending.join("\n"),
     );
 }

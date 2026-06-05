@@ -53,9 +53,10 @@ curl http://127.0.0.1:<port>/ping
 - **`body.field` reads** (ADR-0081) — inside a `route_validated` handler,
   read the validated body's fields by typed attribute access (`body.rank` →
   `i64`, `body.name` → `str`, `body.ratio` → `f64`, `body.active` → `bool`,
-  and nested `body.inner.x` recursing into a nested object), not a
-  stringly-typed key. A typo'd field is a compile error. See "Reading body
-  fields" below.
+  nested `body.inner.x` recursing into a nested object, and **list fields**
+  `body.tags` → `list[str]` / `list[i64]` / `list[f64]` / `list[bool]` read
+  back as real iterable lists), not a stringly-typed key. A typo'd field is a
+  compile error. See "Reading body fields" below.
 - **`App.route(method, path, handler)`** — register a top-level `fn` as
   the handler for `method path`. The handler MUST be a top-level
   `fn handler(req: pit.Request) -> pit.Response: …`. Returns `None`;
@@ -238,8 +239,44 @@ fn handler(req: pit.Request, body: Payload) -> pit.Response:
 Field reads work **only** on a body parameter your handler received from
 `route_validated` — a hand-constructed `CreateScore()` value does not yet
 carry field storage (that is the native-struct follow-up). The compiler
-tracks which is which, so you never get a surprise. List fields
-(`tags: list[str]`) are a later phase.
+tracks which is which, so you never get a surprise.
+
+#### List fields (`tags: list[str]`, ADR-0081 Phase 3)
+
+A body field declared `list[T]` (where `T` is `str`, `i64`, `f64`, or `bool`)
+reads back as a **real Cobrust list** you can iterate, index, and measure:
+
+```python
+class TagBody:
+    tags: list[str]
+    scores: list[i64]
+
+fn handler(req: pit.Request, body: TagBody) -> pit.Response:
+    let xs: list[str] = body.tags        # reads the validated array as a list[str]
+    let n: i64 = xs.len()                # ordinary list ops: .len(), indexing, for-loop
+    let acc: str = ""
+    for s in body.tags:                  # iterate the real element strings
+        acc = acc + s
+    let total: i64 = 0
+    for v in body.scores:                # list[i64] — sum the real ints
+        total = total + v
+    return pit.text_response(200, acc)
+```
+
+- The element types are **already validated** before your handler runs: a
+  number in a `list[str]` (`{"tags":["a",42]}`) is a **422**, never reaches the
+  handler. So the read is a pure, typed read — no coercion (§2.2).
+- An empty array reads back as an empty list (`.len() == 0`), iterates zero
+  times — no surprise, no crash.
+- The list you read is yours: it is freed once when it goes out of scope, just
+  like any list you build. (Reading a list field in a tight loop is leak-free.)
+
+**Passing the body to another function.** Passing a *read field value* (the
+`i64`, `str`, or `list` you already read) to another function works exactly
+like any value — `double(body.rank)` or `first_or_empty(body.tags)`. Passing
+the *whole* `body` to another function does not yet carry the validated-read
+machinery across the call (a field read inside the callee returns a placeholder,
+not the validated value) — that is part of the native-struct follow-up.
 
 ## String refinements: length + pattern (ADR-0080 Phase 2)
 

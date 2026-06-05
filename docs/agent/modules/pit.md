@@ -486,6 +486,72 @@ fn h(req: pit.Request, body: Payload) -> pit.Response:
   `cabi.rs` `#[cfg(test)]` shim unit tests (f64 fractional / bool strict / nested
   borrow recursion) + `ecosystem.rs` accessor-lookup unit tests.
 
+## ADR-0081 Phase-3 — `body.<list[T]>` field reads + body-as-fn-arg
+
+Phase-3 adds LIST-field reads (`T ∈ {str, i64, f64, bool}`) and resolves the
+body-as-fn-arg question. No new `.cb` syntax — `body.tags` is already what the
+type checker accepts (ADR-0080 Phase-4(c) `list[T]` body fields).
+
+```python
+class TagBody:
+    tags: list[str]
+    scores: list[i64]
+fn h(req: pit.Request, body: TagBody) -> pit.Response:
+    let xs: list[str] = body.tags     # __cobrust_pit_body_get_list_str(body, "tags")
+    let n: i64 = xs.len()             # iterate / index / len like any .cb list
+    for s in body.tags:               # the minted list is a real .cb list[str]
+        ...
+    let sum: i64 = 0
+    for v in body.scores:             # __cobrust_pit_body_get_list_i64(body, "scores")
+        sum = sum + v
+    ...
+```
+
+- **List accessors (ONE per element type).** New `Ty::List(elem)` arm in
+  `lookup_validated_body_accessor`: `list[str] → __cobrust_pit_body_get_list_str`,
+  `list[i64] → ..._list_i64`, `list[f64] → ..._list_f64`, `list[bool] →
+  ..._list_bool` (codegen-extern clarity, mirroring the scalar shims). The `ret`
+  carries `Ty::List(elem)` so the result temp's drop schedule selects the right
+  list drop. A `list[<deferred-elem>]` (list-of-list, `list[<Class>]`, out of
+  #156 read scope) returns `None` (the `Field(0)` stub, never a serde cast).
+- **The mint (`cabi.rs`).** Each accessor BORROWS the parent body box
+  (`&serde_json::Value`), reads the JSON array, and MINTS a fresh `.cb` `list[T]`
+  via the redis-`lrange` / coil-`shape` recipe (`__cobrust_list_new(8, len)` +
+  per-slot `__cobrust_list_set`). Slot conventions match how codegen consumes a
+  `.cb` `list[T]`: a heap-`Str` pointer for `str` (one `alloc_str_buffer` per
+  element), the raw `i64`, `0`/`1` for `bool`, and `f64::to_bits()` for `f64`
+  (the `Constant::Float` slot convention — the `.cb` consumer `from_bits`-reads
+  it). Each element uses the typed `as_str`/`as_i64`/`as_f64`/`as_bool` (§2.2 — no
+  coercion; the validator already rejected a type-mismatched array with 422 BEFORE
+  the handler, ADR-0080 Phase-4(c)). An empty / missing / non-array field mints a
+  valid EMPTY list (fail-clean, NEVER null, NEVER a panic).
+- **Codegen externs.** The four `__cobrust_pit_body_get_list_*` shims are
+  `(ptr, ptr) -> ptr` (a list HANDLE is a raw pointer, type-identical to the
+  Str/nested returns). The `__cobrust_pit_*` prefix recognizer covers them for
+  free. **No MIR edit** — the `Attr` sub-arm is type-driven (it already names
+  `accessor.runtime_symbol` + types the `_ecoret` `accessor.ret`), so the list
+  arm flows through the SAME registration-gated retarget the scalars use.
+- **Drop discipline.** The minted list is `.cb`-OWNED → its `_ecoret` temp's
+  `Ty::List(elem)` drives the codegen drop: `list[str]` →
+  `__cobrust_list_drop_elems(list, __cobrust_str_drop)` (frees each element `Str`
+  then the container), else `__cobrust_list_drop` (container only). The accessor
+  frees NOTHING (no aliasing — the list is a deep copy of the array). Proven by a
+  200-read hammer-loop e2e (server survives + still serves correctly afterwards).
+- **No-UB gate.** The list accessors are REGISTRATION-gated EXACTLY like the
+  scalar/nested ones — a non-registered `fn helper(b): b.tags.len()` emits NO
+  accessor symbol (pinned by a new `nm`-on-`.o` tripwire); the existing no-UB
+  negatives stay green.
+- **Body-as-fn-arg.** Passing a READ FIELD VALUE (an `i64`/`str`/`list`) to
+  another fn is DELIVERED — ordinary value-arg passing (`double(body.rank)`,
+  `first_or_empty(body.tags)`). Passing the WHOLE validated `body` to another fn
+  is DEFERRED (an honest `#[ignore]`): the `validated_body_of` mark does NOT cross
+  a call boundary, so a `b.field` read in the CALLEE is the `Field(0)` stub — a
+  WRONG value, NOT UB (the gate holds; an always-on tripwire proves no accessor is
+  emitted). Delivering it needs deep inter-procedural propagation (or the §7
+  native-struct ABI). Tests: `pit_body_field_read_e2e.rs` (16 tests — 15 GREEN + 1
+  honest-deferred ignore) + `cabi.rs` 4 list-mint unit tests + `ecosystem.rs`
+  list-arm test.
+
 ## ADR-0080 Phase-1b-iii — `serve_openapi` (OpenAPI emission, cannot drift)
 
 `app.serve_openapi(doc_path: str) -> None` is the EXPLICIT opt-in that

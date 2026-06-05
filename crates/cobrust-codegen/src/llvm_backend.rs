@@ -3046,6 +3046,14 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // identical to `pit_request_path_param_ty` (the Str-return shape — a
         // raw pointer either way).
         let pit_body_get_nested_ty = pit_request_path_param_ty;
+        // ADR-0081 Phase-3 — `body.<list[T]-field>` MINTS a fresh `.cb`
+        // `list[T]` from the validated JSON array (one accessor per element
+        // type). Each returns the minted `*mut List` handle the `.cb` scope
+        // owns + drops once. Shape is `(ptr, ptr) -> ptr` — type-identical to
+        // `pit_request_path_param_ty` (a list HANDLE is a raw pointer, like
+        // the Str/nested returns; the `_ecoret` temp's `Ty::List(elem)`
+        // drives the drop schedule, not the extern signature).
+        let pit_body_get_list_ty = pit_request_path_param_ty;
         let pit_drop_ty = void_ty.fn_type(&[ptr_ty.into()], false);
         for (sym, ty, params) in [
             ("__cobrust_pit_app_new", pit_app_new_ty, 0usize),
@@ -3082,6 +3090,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_pit_body_get_f64", pit_body_get_f64_ty, 2),
             ("__cobrust_pit_body_get_bool", pit_body_get_bool_ty, 2),
             ("__cobrust_pit_body_get_nested", pit_body_get_nested_ty, 2),
+            ("__cobrust_pit_body_get_list_str", pit_body_get_list_ty, 2),
+            ("__cobrust_pit_body_get_list_i64", pit_body_get_list_ty, 2),
+            ("__cobrust_pit_body_get_list_f64", pit_body_get_list_ty, 2),
+            ("__cobrust_pit_body_get_list_bool", pit_body_get_list_ty, 2),
             ("__cobrust_pit_app_drop", pit_drop_ty, 1),
             ("__cobrust_pit_response_drop", pit_drop_ty, 1),
             ("__cobrust_pit_server_handle_drop", pit_drop_ty, 1),
