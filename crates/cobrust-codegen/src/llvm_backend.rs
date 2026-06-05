@@ -2101,9 +2101,57 @@ impl<'ctx> LlvmEmitter<'ctx> {
             "__cobrust_math_tan",
             "__cobrust_math_log",
             "__cobrust_math_exp",
+            // ADR-0083 PART-2: `math.degrees` / `math.radians` (`f64 -> f64`
+            // angle-conversion shims, same single-arg ABI as the family
+            // above). DISTINCT from the INT-returning `_floor_int` etc.
+            // (declared below) and the BOOL-returning `_isnan` etc.
+            "__cobrust_math_degrees",
+            "__cobrust_math_radians",
         ] {
             let ty = f64_ty.fn_type(&[f64_ty.into()], false);
             let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, 1);
+        }
+
+        // -- ADR-0083 PART-2: INT-returning rounding shims (`(f64) -> i64`)
+        // `math.floor` / `math.ceil` / `math.trunc` return CPython `int`.
+        // These `__cobrust_math_*_int` symbols are DISTINCT from the
+        // f64-returning `__cobrust_math_floor` / `_ceil` above (the
+        // bare-function `floor(x)` PRELUDE path) — same arg, different
+        // RETURN type. The `(ptr_like f64) -> i64` shape mirrors
+        // `coil.argmin`'s `(*Buffer) -> i64`; the i64 lands in the `.cb`
+        // `_ecoret` Int local via the generic ecosystem-call path.
+        let math_f64_i64_ty = i64_ty.fn_type(&[f64_ty.into()], false);
+        for sym in [
+            "__cobrust_math_floor_int",
+            "__cobrust_math_ceil_int",
+            "__cobrust_math_trunc_int",
+        ] {
+            let f = self
+                .module
+                .add_function(sym, math_f64_i64_ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, 1);
+        }
+
+        // -- ADR-0083 PART-2: BOOL-returning classification shims
+        // (`(f64) -> i1`). `math.isnan` / `math.isinf` / `math.isfinite`.
+        // The Rust C-ABI `-> bool` is declared as `bool_type()` (LLVM `i1`),
+        // mirroring `coil.any`/`coil.all` (`__cobrust_coil_any`'s
+        // `bool_type().fn_type(...)`) + `fang.verify_password` EXACTLY; the
+        // i1 lands in the `.cb` `_ecoret` Bool local (`write_place` bridges
+        // any i1/i8 width gap into the alloca), usable directly in an
+        // `if math.isnan(x):` condition.
+        let math_f64_bool_ty = self.ctx.bool_type().fn_type(&[f64_ty.into()], false);
+        for sym in [
+            "__cobrust_math_isnan",
+            "__cobrust_math_isinf",
+            "__cobrust_math_isfinite",
+        ] {
+            let f = self
+                .module
+                .add_function(sym, math_f64_bool_ty, Some(Linkage::External));
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, 1);
         }
@@ -2145,10 +2193,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_decls.insert(sym, f);
             self.runtime_helper_param_counts.insert(sym, 1);
         }
-        // 3 two-arg `(f64, f64) -> f64` — `pow(x,y)`, `atan2(y,x)`,
-        // `hypot(x,y)`.
+        // 5 two-arg `(f64, f64) -> f64` — `pow(x,y)`, `atan2(y,x)`,
+        // `hypot(x,y)`, plus ADR-0083 PART-2's `copysign(x,y)` /
+        // `fmod(x,y)` (also BARE libm two-arg symbols — NO `__cobrust_math_*`
+        // shim, exactly like part-1's `pow`/`atan2`/`hypot`).
         let libm_f64f64_f64_ty = f64_ty.fn_type(&[f64_ty.into(), f64_ty.into()], false);
-        for sym in ["pow", "atan2", "hypot"] {
+        for sym in ["pow", "atan2", "hypot", "copysign", "fmod"] {
             let f = self
                 .module
                 .add_function(sym, libm_f64f64_f64_ty, Some(Linkage::External));

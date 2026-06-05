@@ -29,7 +29,7 @@ cobrust build prog.cb -o prog
 
 ## What you get
 
-### Functions (18)
+### Float functions (18)
 
 - **One argument** (`f64 -> f64`): `math.sqrt`, `math.sin`, `math.cos`,
   `math.tan`, `math.asin`, `math.acos`, `math.atan`, `math.sinh`,
@@ -37,6 +37,62 @@ cobrust build prog.cb -o prog
   `math.log10`, `math.log2`, `math.fabs`.
 - **Two arguments** (`(f64, f64) -> f64`): `math.pow(x, y)`,
   `math.atan2(y, x)`, `math.hypot(x, y)`.
+
+### Rounding to an integer — `floor`, `ceil`, `trunc`
+
+These return an **`i64`** (just like Python, where `math.floor(2.7)` is
+the int `2`, not `2.0`). The three round differently, and they only
+DIFFER on a negative input:
+
+```python
+import math
+
+fn main() -> i64:
+    print(math.floor(-1.5))   # -2   round toward -infinity
+    print(math.ceil(-1.5))    # -1   round toward +infinity
+    print(math.trunc(-1.5))   # -1   round toward zero
+    let n: i64 = math.floor(2.7)   # the result is a real i64
+    print(n + 1)              # 3    — usable in integer arithmetic
+    return 0
+```
+
+> `math.floor` (this module) is different from the bare `floor(x)`
+> built-in. The built-in `floor(x)` returns a float; `math.floor(x)`
+> returns an int. They never clash.
+
+### Testing a number — `isnan`, `isinf`, `isfinite`
+
+These return a **`bool`**, so you use them in a condition:
+
+```python
+import math
+
+fn main() -> i64:
+    let x: f64 = nan
+    if math.isnan(x):
+        print(1)              # taken: nan is not-a-number
+    else:
+        print(0)
+    if math.isfinite(inf):    # False — infinity is not finite
+        print(1)
+    else:
+        print(0)
+    return 0
+```
+
+`math.isnan(nan)` is `True`; `math.isinf(inf)` is `True`;
+`math.isfinite(1.0)` is `True` but `math.isfinite(inf)` and
+`math.isfinite(nan)` are `False`.
+
+### A few more — `degrees`, `radians`, `copysign`, `fmod`
+
+- `math.degrees(x)` / `math.radians(x)` convert between radians and
+  degrees (`f64 -> f64`): `math.degrees(math.pi)` is `180`,
+  `math.radians(180.0)` is `math.pi`.
+- `math.copysign(x, y)` returns `x` with the sign of `y`
+  (`math.copysign(3.0, -1.0)` is `-3`).
+- `math.fmod(x, y)` is the C floating remainder
+  (`math.fmod(7.0, 3.0)` is `1`).
 
 ### Constants (5)
 
@@ -54,9 +110,8 @@ parser follow-up — see ADR-0083.)
 
 ### Not yet (a follow-up)
 
-`math.floor` / `math.ceil` / `math.trunc` (these return an **int** in
-Python, which needs a separate cast) and `math.factorial` / `math.gcd`
-/ `math.isqrt` (integer math) are deferred.
+`math.factorial` / `math.gcd` / `math.isqrt` (integer math, no C-library
+symbol) are still deferred.
 
 ## Two rules to know
 

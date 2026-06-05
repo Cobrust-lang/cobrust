@@ -2021,6 +2021,105 @@ pub fn lookup_module_fn(module: &str, func: &str) -> Option<EcoSig> {
             Ty::Float,
             PyCompatTier::Numerical,
         )),
+        // -- ADR-0083 PART-2: the INT / BOOL / scaling return shapes ----
+        // Deferred from part-1 because they leave the clean `f64 -> f64`
+        // libm batch. Two return shapes are ALREADY PROVEN by `coil` and
+        // mirrored EXACTLY here (NO new MIR arm — the generic
+        // ecosystem-call path drives the return TYPE off the `EcoSig` ret
+        // `Ty`):
+        //   [Float] -> Int  mirrors `coil.argmin` (Buffer -> i64): codegen
+        //     extern `(f64) -> i64`, landing in the `.cb` `_ecoret` Int local.
+        //   [Float] -> Bool mirrors `coil.any` / `coil.all` (Buffer -> bool):
+        //     codegen extern `(f64) -> i1` (the Rust C-ABI `-> bool`), usable
+        //     directly in an `if math.isnan(x):` condition.
+        //
+        // floor / ceil / trunc return CPython `int` and DIVERGE on a
+        // negative input (the load-bearing distinction):
+        //   floor(-1.5) == -2 (toward −∞), ceil(-1.5) == -1 (toward +∞),
+        //   trunc(-1.5) == -1 (toward ZERO).
+        // The `runtime_symbol` is a NEW `cobrust-stdlib` shim
+        // (`__cobrust_math_floor_int`, `as i64`) — DISTINCT from the
+        // f64-returning `__cobrust_math_floor` (the bare-function `floor(x)`
+        // PRELUDE path), which this row does NOT touch. Strict-tier: the
+        // result is an exact integer, no last-ULP question.
+        ("math", "floor") => Some(EcoSig::from_values(
+            "__cobrust_math_floor_int",
+            vec![Ty::Float],
+            Ty::Int,
+            PyCompatTier::Strict,
+        )),
+        ("math", "ceil") => Some(EcoSig::from_values(
+            "__cobrust_math_ceil_int",
+            vec![Ty::Float],
+            Ty::Int,
+            PyCompatTier::Strict,
+        )),
+        ("math", "trunc") => Some(EcoSig::from_values(
+            "__cobrust_math_trunc_int",
+            vec![Ty::Float],
+            Ty::Int,
+            PyCompatTier::Strict,
+        )),
+        // isnan / isinf / isfinite — IEEE-754 classification, `-> bool`.
+        // Strict-tier: the classification of an `f64` is unambiguous +
+        // platform-stable. isnan(nan)=True/isnan(1.0)=False;
+        // isinf(inf)=True; isfinite(1.0)=True / isfinite(inf)=False /
+        // isfinite(nan)=False.
+        ("math", "isnan") => Some(EcoSig::from_values(
+            "__cobrust_math_isnan",
+            vec![Ty::Float],
+            Ty::Bool,
+            PyCompatTier::Strict,
+        )),
+        ("math", "isinf") => Some(EcoSig::from_values(
+            "__cobrust_math_isinf",
+            vec![Ty::Float],
+            Ty::Bool,
+            PyCompatTier::Strict,
+        )),
+        ("math", "isfinite") => Some(EcoSig::from_values(
+            "__cobrust_math_isfinite",
+            vec![Ty::Float],
+            Ty::Bool,
+            PyCompatTier::Strict,
+        )),
+        // degrees / radians — exact `x * 180/π` / `x * π/180` scaling via
+        // the `cobrust-stdlib` `to_degrees`/`to_radians` shims (`f64 -> f64`).
+        // Strict-tier: degrees(pi) == 180.0, radians(180.0) == pi.
+        ("math", "degrees") => Some(EcoSig::from_values(
+            "__cobrust_math_degrees",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Strict,
+        )),
+        ("math", "radians") => Some(EcoSig::from_values(
+            "__cobrust_math_radians",
+            vec![Ty::Float],
+            Ty::Float,
+            PyCompatTier::Strict,
+        )),
+        // copysign(x, y) / fmod(x, y) — BARE libm two-arg symbols (like
+        // part-1's `pow` / `atan2` / `hypot`), NO shim. BOTH Strict (exact):
+        // copysign transplants the sign bit; fmod is the IEEE-754 floating
+        // remainder, computed EXACTLY (no rounding) so bit-identical across
+        // conforming libm — UNLIKE the transcendental pow/atan2/hypot, which
+        // are Numerical/last-ULP. copysign(3.0, -1.0) == -3.0; fmod(7.0, 3.0) == 1.0.
+        ("math", "copysign") => Some(EcoSig::from_values(
+            "copysign",
+            vec![Ty::Float, Ty::Float],
+            Ty::Float,
+            PyCompatTier::Strict,
+        )),
+        // fmod is the IEEE-754 floating remainder — an EXACT operation
+        // (result = x - n*y computed exactly, no rounding), so it is
+        // bit-identical across conforming libm (and to CPython's math.fmod,
+        // also libm). Strict, NOT Numerical (unlike the transcendentals).
+        ("math", "fmod") => Some(EcoSig::from_values(
+            "fmod",
+            vec![Ty::Float, Ty::Float],
+            Ty::Float,
+            PyCompatTier::Strict,
+        )),
         _ => None,
     }
 }
@@ -3078,14 +3177,119 @@ mod tests {
 
     #[test]
     fn math_deferred_fns_are_absent() {
-        // floor/ceil/trunc return INT in CPython (need an fptosi cast) and
-        // factorial/gcd/isqrt are integer ops — all deferred per ADR-0083.
-        for name in ["floor", "ceil", "trunc", "factorial", "gcd", "isqrt"] {
+        // ADR-0083 PART-2 SHIPPED floor/ceil/trunc (INT-returning) — they
+        // are NO LONGER deferred (see `math_part2_*` tests). The remaining
+        // deferred set is the non-libm integer ops factorial/gcd/isqrt.
+        for name in ["factorial", "gcd", "isqrt"] {
             assert!(
                 lookup_module_fn("math", name).is_none(),
-                "math.{name} must be deferred (not in the first batch)"
+                "math.{name} must be deferred (not yet shipped)"
             );
         }
+    }
+
+    // -- ADR-0083 PART-2 math manifest tests --------------------------
+    #[test]
+    fn math_part2_int_return_fns_are_float_to_int_strict() {
+        // floor/ceil/trunc return CPython `int` — `[Float] -> Int`, via a
+        // DISTINCT `__cobrust_math_*_int` shim (NOT the f64-returning
+        // `__cobrust_math_floor`). Strict-tier (exact integer result).
+        for (name, sym) in [
+            ("floor", "__cobrust_math_floor_int"),
+            ("ceil", "__cobrust_math_ceil_int"),
+            ("trunc", "__cobrust_math_trunc_int"),
+        ] {
+            let sig =
+                lookup_module_fn("math", name).unwrap_or_else(|| panic!("math.{name} in manifest"));
+            assert_eq!(sig.runtime_symbol, sym, "math.{name} runtime symbol");
+            assert_eq!(
+                value_tys(&sig.params),
+                vec![Ty::Float],
+                "math.{name} arg is Float"
+            );
+            assert_eq!(sig.ret, Ty::Int, "math.{name} returns Int");
+            assert_eq!(sig.tier, PyCompatTier::Strict, "math.{name} is Strict");
+        }
+    }
+
+    #[test]
+    fn math_part2_int_shims_distinct_from_bare_f64_floor() {
+        // The Python `math.floor` (`int`) symbol must NOT collide with the
+        // bare-function `floor(x)` PRELUDE path's `__cobrust_math_floor`
+        // (`f64 -> f64`). They are different symbols + different return Ty.
+        let floor =
+            lookup_module_fn("math", "floor").unwrap_or_else(|| panic!("math.floor in manifest"));
+        assert_eq!(floor.runtime_symbol, "__cobrust_math_floor_int");
+        assert_ne!(
+            floor.runtime_symbol, "__cobrust_math_floor",
+            "math.floor must be the _int shim, NOT the f64 bare-floor shim"
+        );
+        assert_eq!(floor.ret, Ty::Int);
+    }
+
+    #[test]
+    fn math_part2_bool_return_fns_are_float_to_bool_strict() {
+        // isnan/isinf/isfinite — IEEE-754 classification, `[Float] -> Bool`,
+        // mirroring coil.any/all's bool return. Strict-tier.
+        for (name, sym) in [
+            ("isnan", "__cobrust_math_isnan"),
+            ("isinf", "__cobrust_math_isinf"),
+            ("isfinite", "__cobrust_math_isfinite"),
+        ] {
+            let sig =
+                lookup_module_fn("math", name).unwrap_or_else(|| panic!("math.{name} in manifest"));
+            assert_eq!(sig.runtime_symbol, sym, "math.{name} runtime symbol");
+            assert_eq!(
+                value_tys(&sig.params),
+                vec![Ty::Float],
+                "math.{name} arg is Float"
+            );
+            assert_eq!(sig.ret, Ty::Bool, "math.{name} returns Bool");
+            assert_eq!(sig.tier, PyCompatTier::Strict, "math.{name} is Strict");
+        }
+    }
+
+    #[test]
+    fn math_part2_degrees_radians_are_float_to_float_strict() {
+        // degrees/radians via `cobrust-stdlib` to_degrees/to_radians shims.
+        for (name, sym) in [
+            ("degrees", "__cobrust_math_degrees"),
+            ("radians", "__cobrust_math_radians"),
+        ] {
+            let sig =
+                lookup_module_fn("math", name).unwrap_or_else(|| panic!("math.{name} in manifest"));
+            assert_eq!(sig.runtime_symbol, sym, "math.{name} runtime symbol");
+            assert_eq!(
+                value_tys(&sig.params),
+                vec![Ty::Float],
+                "math.{name} arg is Float"
+            );
+            assert_eq!(sig.ret, Ty::Float, "math.{name} returns Float");
+            assert_eq!(sig.tier, PyCompatTier::Strict, "math.{name} is Strict");
+        }
+    }
+
+    #[test]
+    fn math_part2_copysign_fmod_are_bare_libm_two_arg() {
+        // copysign/fmod — BARE libm two-arg symbols (like pow/atan2/hypot),
+        // NO `__cobrust_math_*` shim. BOTH Strict: copysign is a sign-bit
+        // transplant; fmod is the IEEE-754 floating remainder, an EXACT
+        // operation (no rounding) so it is bit-identical across conforming
+        // libm and to CPython's libm-backed math.fmod (unlike the
+        // transcendental pow/atan2/hypot, which are Numerical/last-ULP).
+        let copysign = lookup_module_fn("math", "copysign")
+            .unwrap_or_else(|| panic!("math.copysign in manifest"));
+        assert_eq!(copysign.runtime_symbol, "copysign");
+        assert_eq!(copysign.params.len(), 2);
+        assert_eq!(copysign.ret, Ty::Float);
+        assert_eq!(copysign.tier, PyCompatTier::Strict);
+
+        let fmod =
+            lookup_module_fn("math", "fmod").unwrap_or_else(|| panic!("math.fmod in manifest"));
+        assert_eq!(fmod.runtime_symbol, "fmod");
+        assert_eq!(fmod.params.len(), 2);
+        assert_eq!(fmod.ret, Ty::Float);
+        assert_eq!(fmod.tier, PyCompatTier::Strict);
     }
 
     #[test]

@@ -28,7 +28,7 @@ cobrust build prog.cb -o prog
 
 ## 你得到了什么
 
-### 函数(18 个)
+### 浮点函数(18 个)
 
 - **单参数**(`f64 -> f64`):`math.sqrt`、`math.sin`、`math.cos`、
   `math.tan`、`math.asin`、`math.acos`、`math.atan`、`math.sinh`、
@@ -36,6 +36,60 @@ cobrust build prog.cb -o prog
   `math.log10`、`math.log2`、`math.fabs`。
 - **双参数**(`(f64, f64) -> f64`):`math.pow(x, y)`、
   `math.atan2(y, x)`、`math.hypot(x, y)`。
+
+### 取整到整数 —— `floor`、`ceil`、`trunc`
+
+它们返回一个 **`i64`**(和 Python 一样,`math.floor(2.7)` 是整数 `2`,而不是
+`2.0`)。三者的取整方向不同,而且只在**负数输入**上才会出现差异:
+
+```python
+import math
+
+fn main() -> i64:
+    print(math.floor(-1.5))   # -2   朝 -∞ 取整
+    print(math.ceil(-1.5))    # -1   朝 +∞ 取整
+    print(math.trunc(-1.5))   # -1   朝零取整
+    let n: i64 = math.floor(2.7)   # 结果是一个真正的 i64
+    print(n + 1)              # 3    —— 可用于整数运算
+    return 0
+```
+
+> `math.floor`(本模块)不同于裸的 `floor(x)` 内建函数。内建的 `floor(x)`
+> 返回浮点数;`math.floor(x)` 返回整数。两者永不冲突。
+
+### 判定一个数 —— `isnan`、`isinf`、`isfinite`
+
+它们返回一个 **`bool`**,所以你把它们用在条件里:
+
+```python
+import math
+
+fn main() -> i64:
+    let x: f64 = nan
+    if math.isnan(x):
+        print(1)              # 命中:nan 不是数
+    else:
+        print(0)
+    if math.isfinite(inf):    # False —— 无穷不是有限的
+        print(1)
+    else:
+        print(0)
+    return 0
+```
+
+`math.isnan(nan)` 为 `True`;`math.isinf(inf)` 为 `True`;
+`math.isfinite(1.0)` 为 `True`,但 `math.isfinite(inf)` 和
+`math.isfinite(nan)` 为 `False`。
+
+### 还有几个 —— `degrees`、`radians`、`copysign`、`fmod`
+
+- `math.degrees(x)` / `math.radians(x)` 在弧度与角度之间转换
+  (`f64 -> f64`):`math.degrees(math.pi)` 是 `180`,
+  `math.radians(180.0)` 是 `math.pi`。
+- `math.copysign(x, y)` 返回带有 `y` 符号的 `x`
+  (`math.copysign(3.0, -1.0)` 是 `-3`)。
+- `math.fmod(x, y)` 是 C 的浮点取余
+  (`math.fmod(7.0, 3.0)` 是 `1`)。
 
 ### 常量(5 个)
 
@@ -52,9 +106,8 @@ ADR-0083。)
 
 ### 暂未支持(后续补充)
 
-`math.floor` / `math.ceil` / `math.trunc`(在 Python 里返回 **int**,需要
-额外的类型转换)以及 `math.factorial` / `math.gcd` / `math.isqrt`(整数
-数学)被推迟到后续。
+`math.factorial` / `math.gcd` / `math.isqrt`(整数数学,没有对应的 C 库
+符号)仍被推迟到后续。
 
 ## 需要记住的两条规则
 

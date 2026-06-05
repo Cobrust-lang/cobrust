@@ -156,6 +156,99 @@ pub extern "C" fn __cobrust_math_exp(x: f64) -> f64 {
     x.exp()
 }
 
+// =====================================================================
+// ADR-0083 PART-2 — INT-returning rounding shims.
+//
+// CPython `math.floor` / `math.ceil` / `math.trunc` return a Python
+// `int` (NOT a float): `math.floor(2.7) == 2` (an int), and on a
+// NEGATIVE input the three DIVERGE — that divergence is load-bearing:
+//
+//   floor → round toward −∞   `floor(-1.5) == -2`
+//   ceil  → round toward +∞    `ceil(-1.5) == -1`
+//   trunc → round toward ZERO  `trunc(-1.5) == -1`, `trunc(1.9) == 1`
+//
+// These are DISTINCT symbols from the f64-returning `__cobrust_math_floor`
+// / `_ceil` above (the bare-function `floor(x)` PRELUDE intrinsic path,
+// `f64 -> f64`): the `_int` suffix marks the Python `math.`-qualified
+// surface that returns `i64`. The `as i64` cast is the `f64::floor`
+// result truncated to integer — exact for all in-`i64`-range inputs
+// (Strict-tier: there is no last-ULP question, the value is an integer).
+// =====================================================================
+
+/// `math.floor(x) -> i64` C-ABI shim — round toward −∞, returning an
+/// integer (CPython `math.floor`). DISTINCT from `__cobrust_math_floor`
+/// (`f64 -> f64`, the bare-function path).
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_floor_int(x: f64) -> i64 {
+    x.floor() as i64
+}
+
+/// `math.ceil(x) -> i64` C-ABI shim — round toward +∞, returning an
+/// integer (CPython `math.ceil`).
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_ceil_int(x: f64) -> i64 {
+    x.ceil() as i64
+}
+
+/// `math.trunc(x) -> i64` C-ABI shim — round toward ZERO, returning an
+/// integer (CPython `math.trunc`). On a negative input this differs from
+/// `floor`: `trunc(-1.5) == -1` whereas `floor(-1.5) == -2`.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_trunc_int(x: f64) -> i64 {
+    x.trunc() as i64
+}
+
+// =====================================================================
+// ADR-0083 PART-2 — BOOL-returning IEEE-754 classification shims.
+//
+// CPython `math.isnan` / `math.isinf` / `math.isfinite` return `bool`.
+// The Rust C-ABI `-> bool` lowers to an LLVM `i1` return, mirroring
+// `coil.any` / `coil.all` (the proven `Buffer -> bool` shape) and
+// `__cobrust_fang_verify_password`. Strict-tier exact — the IEEE-754
+// classification of an `f64` is unambiguous and platform-stable.
+// =====================================================================
+
+/// `math.isnan(x) -> bool` C-ABI shim — `True` iff `x` is NaN.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_isnan(x: f64) -> bool {
+    x.is_nan()
+}
+
+/// `math.isinf(x) -> bool` C-ABI shim — `True` iff `x` is ±∞.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_isinf(x: f64) -> bool {
+    x.is_infinite()
+}
+
+/// `math.isfinite(x) -> bool` C-ABI shim — `True` iff `x` is neither
+/// NaN nor ±∞ (`isfinite(inf) == False`, `isfinite(nan) == False`).
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_isfinite(x: f64) -> bool {
+    x.is_finite()
+}
+
+// =====================================================================
+// ADR-0083 PART-2 — angle-conversion shims (`f64 -> f64`).
+//
+// CPython `math.degrees(pi) == 180.0`, `math.radians(180.0) == pi`.
+// Rust's `f64::to_degrees` / `to_radians` are the EXACT same scaling
+// (`x * 180/π` / `x * π/180`) — Strict-tier exact. `copysign` / `fmod`
+// are NOT here: they are BARE libm two-arg symbols (declared in codegen
+// alongside `pow` / `atan2` / `hypot`), no shim needed.
+// =====================================================================
+
+/// `math.degrees(x) -> f64` C-ABI shim — radians → degrees.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_degrees(x: f64) -> f64 {
+    x.to_degrees()
+}
+
+/// `math.radians(x) -> f64` C-ABI shim — degrees → radians.
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_math_radians(x: f64) -> f64 {
+    x.to_radians()
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -338,5 +431,83 @@ mod tests {
     fn round_three_quarters_up() {
         assert_eq!(round(0.75), 1.0);
         assert_eq!(round(-0.75), -1.0);
+    }
+
+    // -- ADR-0083 PART-2: int-returning rounding shims ------------------
+    // Oracle (/opt/homebrew/bin/python3.11): the THREE diverge on a
+    // negative input — that is the load-bearing distinction.
+
+    #[test]
+    fn floor_int_rounds_toward_neg_inf() {
+        // math.floor(-1.5) == -2, math.floor(2.7) == 2.
+        assert_eq!(__cobrust_math_floor_int(-1.5), -2);
+        assert_eq!(__cobrust_math_floor_int(2.7), 2);
+        assert_eq!(__cobrust_math_floor_int(3.0), 3);
+    }
+
+    #[test]
+    fn ceil_int_rounds_toward_pos_inf() {
+        // math.ceil(-1.5) == -1, math.ceil(2.1) == 3.
+        assert_eq!(__cobrust_math_ceil_int(-1.5), -1);
+        assert_eq!(__cobrust_math_ceil_int(2.1), 3);
+        assert_eq!(__cobrust_math_ceil_int(3.0), 3);
+    }
+
+    #[test]
+    fn trunc_int_rounds_toward_zero() {
+        // math.trunc(-1.5) == -1 (NOT -2, distinguishing it from floor),
+        // math.trunc(1.9) == 1.
+        assert_eq!(__cobrust_math_trunc_int(-1.5), -1);
+        assert_eq!(__cobrust_math_trunc_int(1.9), 1);
+        assert_eq!(__cobrust_math_trunc_int(-1.9), -1);
+    }
+
+    #[test]
+    fn floor_ceil_trunc_diverge_on_negative() {
+        // The whole point of having all three: -1.5 maps differently.
+        assert_eq!(__cobrust_math_floor_int(-1.5), -2);
+        assert_eq!(__cobrust_math_ceil_int(-1.5), -1);
+        assert_eq!(__cobrust_math_trunc_int(-1.5), -1);
+    }
+
+    // -- ADR-0083 PART-2: bool-returning IEEE-754 classification --------
+
+    #[test]
+    fn isnan_truth_table() {
+        assert!(__cobrust_math_isnan(f64::NAN));
+        assert!(!__cobrust_math_isnan(1.0));
+        assert!(!__cobrust_math_isnan(f64::INFINITY));
+    }
+
+    #[test]
+    fn isinf_truth_table() {
+        assert!(__cobrust_math_isinf(f64::INFINITY));
+        assert!(__cobrust_math_isinf(f64::NEG_INFINITY));
+        assert!(!__cobrust_math_isinf(1.0));
+        assert!(!__cobrust_math_isinf(f64::NAN));
+    }
+
+    #[test]
+    fn isfinite_truth_table() {
+        assert!(__cobrust_math_isfinite(1.0));
+        assert!(!__cobrust_math_isfinite(f64::INFINITY));
+        assert!(!__cobrust_math_isfinite(f64::NAN));
+    }
+
+    // -- ADR-0083 PART-2: angle conversion ------------------------------
+
+    #[test]
+    fn degrees_pi_is_180() {
+        assert!((__cobrust_math_degrees(PI) - 180.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn radians_180_is_pi() {
+        assert!((__cobrust_math_radians(180.0) - PI).abs() < 1e-10);
+    }
+
+    #[test]
+    fn degrees_radians_round_trip() {
+        assert!((__cobrust_math_radians(__cobrust_math_degrees(1.0)) - 1.0).abs() < 1e-10);
     }
 }
