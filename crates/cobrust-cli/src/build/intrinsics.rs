@@ -1445,20 +1445,60 @@ fn move_to_copy(op: Operand) -> Operand {
 /// The MIR lowering retargets ecosystem calls onto `Constant::Str`
 /// callees (`__cobrust_den_connect`, …). We scan every `Terminator::Call`
 /// callee symbol and map a recognized `__cobrust_<module>_*` prefix back
-/// to its module name. Returns the deduplicated module-name set.
+/// to its module name.
+///
+/// ADR-0076c REPAIR (BLOCKER A) — a `Call`-only scan is BLIND to
+/// drop-glue. Codegen lowers a `Terminator::Drop` on an ecosystem-handle
+/// place (e.g. a `coil.Buffer` local) to a `handle_drop_symbol(adt)` call
+/// (`__cobrust_coil_buffer_drop`) — NOT a `Constant::Str` callee — and
+/// that symbol lives ONLY in the handle-owning module's archive
+/// (`libcoil.a`). A `.cb` node that obtains a `coil.Buffer` via
+/// `event.data_buffer()` and uses it WITHOUT any explicit `coil.<fn>()`
+/// call (e.g. an echo node: `data_buffer()` → `send_output_buffer()`)
+/// therefore emits ONLY drop-glue for `coil`, no `__cobrust_coil_*` call
+/// — so the old scan never added `coil`, `libcoil.a` was never linked,
+/// and the build failed `ld: ___cobrust_coil_buffer_drop not found`.
+/// `data_buffer()` is the FIRST non-`coil` module to hand out a
+/// `coil.Buffer`, so this drop-glue-blindness was newly exercised by
+/// ADR-0076c. We now ALSO scan every `Terminator::Drop` place: resolve
+/// its local type, and when it is an `Ty::Adt` whose
+/// `handle_drop_symbol` resolves to a recognized ecosystem prefix,
+/// register THAT module too. This mirrors codegen's own
+/// `emit_drop_for_ty` (`Ty::Adt(id, _) => handle_drop_symbol(*id)`) so
+/// the link set is exactly the symbol set the object file references.
+///
+/// Returns the deduplicated module-name set.
 #[must_use]
 pub fn collect_ecosystem_modules(module: &Module) -> std::collections::BTreeSet<String> {
     let mut mods = std::collections::BTreeSet::new();
     for body in &module.bodies {
         for block in &body.blocks {
-            if let Terminator::Call {
-                func: Operand::Constant(Constant::Str(sym)),
-                ..
-            } = &block.terminator
-            {
-                if let Some(m) = ecosystem_module_for_symbol(sym) {
-                    mods.insert(m.to_string());
+            match &block.terminator {
+                // Explicit ecosystem C-ABI call — the retargeted
+                // `Constant::Str` callee symbol carries the module prefix.
+                Terminator::Call {
+                    func: Operand::Constant(Constant::Str(sym)),
+                    ..
+                } => {
+                    if let Some(m) = ecosystem_module_for_symbol(sym) {
+                        mods.insert(m.to_string());
+                    }
                 }
+                // Drop-glue on an ecosystem handle — codegen emits a call
+                // to `handle_drop_symbol(adt)` for an `Ty::Adt` local at
+                // scope exit. Map the dropped place's type back to its
+                // owning module so its archive is on the link line even
+                // when NO explicit `__cobrust_<mod>_*` call appears.
+                Terminator::Drop { place, .. } => {
+                    if let Some(decl) = body.locals.get(place.local.0 as usize)
+                        && let Ty::Adt(adt_id, _) = &decl.ty
+                        && let Some(drop_sym) = cobrust_types::handle_drop_symbol(*adt_id)
+                        && let Some(m) = ecosystem_module_for_symbol(drop_sym)
+                    {
+                        mods.insert(m.to_string());
+                    }
+                }
+                _ => {}
             }
         }
     }

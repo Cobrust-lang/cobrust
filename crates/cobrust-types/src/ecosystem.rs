@@ -2747,6 +2747,43 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             Ty::Int,
             PyCompatTier::Semantic,
         )),
+        // ADR-0076c (D)-B-1a — the typed-numeric Arrow↔coil.Buffer
+        // round-trip. `event.data_buffer() -> coil.Buffer` reads a typed
+        // input payload (the 5 overlapping dtypes Float64/Float32/Int64/
+        // Int32/Bool decode INTO a `coil::Array`; non-numeric/unsupported
+        // dtypes — the named ADR-0076c divergences — yield an empty
+        // Buffer, and `event.data_str()` stays the Utf8 path). REUSES
+        // `coil_buffer_ty()` (L292) VERBATIM — no new ADT, no new `Ty`:
+        // the boxed `coil::Array` IS the `COIL_BUFFER_ADT` handle, so the
+        // returned Buffer is `.cb`-owned + scope-exit-drops via the
+        // EXISTING `__cobrust_coil_buffer_drop` (handle_drop_symbol(
+        // COIL_BUFFER_ADT) at L364 — NO new drop symbol).
+        (DORA_EVENT_ADT, "data_buffer") => Some(EcoSig::from_values(
+            "__cobrust_dora_event_data_buffer",
+            vec![],
+            coil_buffer_ty(),
+            PyCompatTier::Semantic,
+        )),
+        // ADR-0076c (D)-B-1a — `event.send_output_buffer(output_id,
+        // buffer)` emits a typed-numeric Arrow array (bridged from the
+        // `coil.Buffer`) on a DECLARED output port. A DISTINCT method name
+        // (NOT a `send_output` overload) for §2.5 compile-time clarity — an
+        // LLM picks `send_output_buffer` vs `send_output` unambiguously
+        // (ADR-0076c §4.2 U4 + the manifest one-return-type-per-row
+        // constraint ADR-0077 §7 also hit). Args: `Ty::Str` output-id +
+        // `coil_buffer_ty()` Buffer. Returns `Ty::Int` (0 sentinel; -1 on
+        // an UNDECLARED id — the runtime fail-closed backstop). The `buf`
+        // is BORROWED (the cabi shim reads it, never frees it — the `.cb`
+        // scope still drops it once); the receiver Event borrows (the
+        // Move→Copy upgrade in `try_lower_ecosystem_call` Case 2). The
+        // compile-time `DoraUnknownOutputId` reject (check.rs) fires for
+        // THIS method too — a literal typo'd id is caught at `cobrust check`.
+        (DORA_EVENT_ADT, "send_output_buffer") => Some(EcoSig::from_values(
+            "__cobrust_dora_event_send_output_buffer",
+            vec![Ty::Str, coil_buffer_ty()],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
         // ADR-0077 Q5 / Phase 2a — `coil.Buffer` method-form op `a.dot(b)`.
         // The FIRST method-form ecosystem-handle operator (the §10 precedent
         // for any handle wanting `.dot` / `.transpose` / `.matmul`). Reuses

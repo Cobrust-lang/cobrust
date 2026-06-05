@@ -310,9 +310,21 @@ struct DoraEventHandle {
     /// Payload bytes as a UTF-8 string. Synthetic build: the canned
     /// per-input Str. Real build: the decoded Arrow payload (a Utf8
     /// `StringArray` element, or a debug rendering of a non-string array).
-    /// Phase B widens this to a structured Arrow / `coil.Buffer` surface
-    /// (sub-ADR 0076c).
+    /// The `coil.Buffer` numeric surface (ADR-0076c (D)-B-1a) is the
+    /// SIBLING [`Self::data_buffer`] field below — `data_str` stays the
+    /// Utf8 / non-numeric path (the named ADR-0076c divergence).
     data_str: String,
+    /// ADR-0076c (D)-B-1a — the typed-numeric payload decoded as a
+    /// `coil::Array` (the `.cb` `coil.Buffer` payload), when the wire dtype
+    /// is one of the 5 supported primitives (`Float64/Float32/Int64/Int32/
+    /// Bool`). `None` when the payload is non-numeric (Utf8 → use
+    /// `data_str`) / an unsupported dtype (`UInt8`/`Utf8`/n-D — the named
+    /// ADR-0076c divergences). Decoded ONCE at recv time (real build) /
+    /// canned (synthetic) so `event.data_buffer()` is a pure
+    /// borrow-and-clone shim — it never re-reads the wire (mirrors how
+    /// `data_str` is pre-decoded, avoiding an arrow lifetime in this
+    /// `'static` struct).
+    data_buffer: Option<coil::Array>,
 }
 
 // =====================================================================
@@ -499,7 +511,17 @@ unsafe fn run_node_synthetic(node: *mut u8) -> i64 {
 
     // Fire the handler once per canned event.
     for (id, data_str) in events {
-        let event = DoraEventHandle { id, data_str };
+        let event = DoraEventHandle {
+            id,
+            data_str,
+            // ADR-0076c (D)-B-1a — the synthetic build hands a canned
+            // typed Float64 buffer so `event.data_buffer()` resolves the
+            // symbol + the `.cb` build/type-check path runs without a
+            // broker (mirrors how synthetic `data_str` returns a canned
+            // `"frame_001"`). The real build replaces this with the live
+            // Arrow decode.
+            data_buffer: Some(canned_buffer()),
+        };
         // SAFETY: `raw` is a valid handler; the shared dispatcher boxes +
         // frees the Event and aborts on a callback panic per ADR-0073 §3 Q5.
         unsafe { fire_callback(raw, event) };
@@ -567,6 +589,24 @@ fn canned_payload_for(id: &str) -> String {
     } else {
         format!("frame_{id}")
     }
+}
+
+/// The canned typed `coil::Array` the SYNTHETIC build hands from
+/// `event.data_buffer()` (ADR-0076c (D)-B-1a). A 1-D `Float64` `[1.0, 2.0,
+/// 3.0]` — small, exactly-representable, and a Float64 (the dominant
+/// numeric robotics dtype) so the `.cb` build/type-check path runs without
+/// a live broker (the symbol resolves + the chain links). The real build
+/// replaces this with the decode of the live Arrow `ArrayRef`.
+///
+/// Synthetic-build only — the `dora-real` path decodes the REAL Arrow
+/// payload instead (`real::decode_arrow_buffer`), so this canned helper is
+/// `#[cfg]`-gated off there to keep `clippy -D warnings` clean.
+#[cfg(not(feature = "dora-real"))]
+fn canned_buffer() -> coil::Array {
+    // Build via coil's own `array_f64` constructor (re-exported at the
+    // crate root) so this crate needs NO direct `ndarray` dep — the same
+    // 1-D `[len]` Float64 shape coil's `.cb` constructors produce.
+    coil::array_f64(&[1.0_f64, 2.0, 3.0], &[3]).expect("canned [3] Float64 buffer is well-shaped")
 }
 
 /// `node.shutdown() -> i64`. Phase 1: idempotent soft flag (no real
@@ -735,6 +775,160 @@ pub unsafe extern "C" fn __cobrust_dora_event_send_output(
     ret
 }
 
+/// A fresh EMPTY 1-D `Float64` `coil::Array` (`array([], dtype=float64)`).
+/// The well-defined `coil.Buffer` fallback `data_buffer()` returns for a
+/// null event / a non-numeric / unsupported-dtype payload (the named
+/// ADR-0076c divergences) — an empty Buffer is a valid `.cb` handle the
+/// caller still drops ONCE, never a null the drop schedule would mishandle.
+/// Build-agnostic (both the synthetic + real `data_buffer` use it).
+fn empty_buffer() -> coil::Array {
+    coil::array_f64(&[], &[0]).expect("empty [0] Float64 buffer is well-shaped")
+}
+
+/// `event.data_buffer() -> coil.Buffer` (ADR-0076c (D)-B-1a). Returns a
+/// freshly-Boxed `coil::Array` handle carrying the event's typed-numeric
+/// payload — the `.cb` `coil.Buffer` surface for the 5 supported dtypes
+/// (`Float64/Float32/Int64/Int32/Bool`). The handle is `.cb`-OWNED: the
+/// caller's scope-exit drop frees it ONCE via the existing
+/// `__cobrust_coil_buffer_drop` (the manifest `handle_drop_symbol(COIL_BUFFER_ADT)`
+/// resolves it — NO new drop symbol). The Event itself is BORROWED (the
+/// trampoline retains its `Box<Event>` and frees it on callback return per
+/// ADR-0073 §2 D6); only the cloned Buffer is on the `.cb` drop schedule.
+///
+/// The payload was decoded ONCE at recv time (real build) / canned
+/// (synthetic) into the Event's `data_buffer` field; this shim is a pure
+/// borrow-and-clone (it never re-reads the wire — no arrow lifetime crosses
+/// the C ABI). When the payload is non-numeric (Utf8 → use `data_str`) or
+/// an unsupported dtype (`UInt8`/`Utf8`/n-D — the named ADR-0076c
+/// divergences), the field is `None` and this returns an EMPTY Float64
+/// buffer (a well-defined `.cb` Buffer the caller still drops once — never
+/// a null the `.cb` drop schedule would choke on). The dora-real decode
+/// already logged the divergence in that case.
+///
+/// # Safety
+///
+/// `event` must be a valid Event handle the dora trampoline allocated for
+/// the current callback invocation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dora_event_data_buffer(event: *mut u8) -> *mut u8 {
+    if event.is_null() {
+        return Box::into_raw(Box::new(empty_buffer())).cast::<u8>();
+    }
+    // SAFETY: caller per `# Safety`. Borrow-only — the trampoline retains
+    // ownership of the Box and frees it after the callback returns.
+    let event_ref: &DoraEventHandle = unsafe { &*event.cast::<DoraEventHandle>() };
+    // Clone the pre-decoded typed payload (or the empty fallback when the
+    // wire dtype was non-numeric / unsupported). Box it as the
+    // `COIL_BUFFER_ADT` handle the `.cb` scope owns + drops once.
+    let arr = event_ref.data_buffer.clone().unwrap_or_else(empty_buffer);
+    Box::into_raw(Box::new(arr)).cast::<u8>()
+}
+
+/// `event.send_output_buffer(output_id: str, buf: coil.Buffer) -> i64`
+/// (ADR-0076c (D)-B-1a). The handler emits a typed-numeric Arrow array
+/// (bridged from the `coil.Buffer`) on the declared `output_id` port — the
+/// numeric-payload SIBLING of `event.send_output(id, str)`. A DISTINCT
+/// method name (NOT a `send_output` overload) for §2.5 compile-time
+/// clarity — an LLM picks `send_output_buffer` vs `send_output`
+/// unambiguously.
+///
+/// The trampoline (BOTH builds):
+/// 1. VALIDATES `output_id` against [`DECLARED_OUTPUTS`] (the same
+///    fail-closed backstop as `send_output` — an UNDECLARED id is a clear
+///    stderr diagnostic + `-1`, never a silent drop). The compile-time
+///    `DoraUnknownOutputId` check ALSO fires for this method now (check.rs
+///    extends its method match), so a literal typo'd id is caught at
+///    `cobrust check`; this runtime check covers the dynamic-id case.
+/// 2. bumps [`SEND_OUTPUT_COUNT`], then dispatches:
+///    - REAL: bridge the `coil::Array` → a typed Arrow array → publish via
+///      the ambient live `DoraNode`.
+///    - SYNTHETIC: capture a `output[<id>]=buffer[len=<n>]` marker on
+///      stdout (the synthetic E2E asserts it) — no arrow dep referenced.
+///
+/// The `buf` handle is BORROWED (read, never freed) — the `.cb` scope's
+/// drop schedule still owns it and frees it ONCE via
+/// `__cobrust_coil_buffer_drop` at scope exit. Returns 0 on a declared
+/// emission, `-1` on an undeclared output id (the `.cb` `let _ = ...`
+/// discards the sentinel).
+///
+/// # Safety
+///
+/// `event` must be a valid Event handle for the current callback;
+/// `output_id` must be null or a valid Cobrust `Str` buffer; `buf` must be
+/// null or a live `coil.Buffer` handle (a boxed `coil::Array` from a coil
+/// constructor / `__cobrust_dora_event_data_buffer`) that the caller has
+/// NOT yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dora_event_send_output_buffer(
+    event: *mut u8,
+    output_id: *mut u8,
+    buf: *mut u8,
+) -> i64 {
+    // Borrow the Event for symmetry with `send_output` (the synthetic
+    // capture validates against the GLOBAL declared set, not per-event
+    // state; the real broker routes through the originating node).
+    // SAFETY: caller per `# Safety`. Borrow-only; tolerate null.
+    if !event.is_null() {
+        let _event_ref: &DoraEventHandle = unsafe { &*event.cast::<DoraEventHandle>() };
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let id_s = unsafe { read_str_buf(output_id) };
+
+    // Validate against the declared-output set (BOTH builds — the same
+    // fail-closed contract as `send_output`; the §2.5 compile-time
+    // `DoraUnknownOutputId` reject fires for this method too at check time).
+    let declared = DECLARED_OUTPUTS
+        .lock()
+        .map(|set| set.iter().any(|o| o == &id_s))
+        .unwrap_or(false);
+    if !declared {
+        eprintln!(
+            "cobrust-dora: send_output_buffer on UNDECLARED output id {id_s:?} — declare it via \
+             `@dora.node(outputs=[{id_s:?}])` (ADR-0076c). Output dropped."
+        );
+        return -1;
+    }
+
+    // Count the emission on BOTH builds (the cabi unit tests read this).
+    SEND_OUTPUT_COUNT.fetch_add(1, Ordering::SeqCst);
+
+    // REAL build: bridge `coil::Array` → typed Arrow → publish via the
+    // ambient `DoraNode`. SYNTHETIC build: capture a length marker (NO arrow
+    // dep referenced — the synthetic default build has zero arrow). Exactly
+    // one `let ret` active per build → clippy-clean tail.
+    #[cfg(feature = "dora-real")]
+    // SAFETY: caller attests `buf` is null or a live `coil.Buffer` handle.
+    let ret = unsafe { real::send_output_buffer(&id_s, buf) };
+    #[cfg(not(feature = "dora-real"))]
+    // SAFETY: caller attests `buf` is null or a live `coil.Buffer` handle.
+    let ret = unsafe {
+        let n = buffer_len(buf);
+        println!("output[{id_s}]=buffer[len={n}]");
+        0
+    };
+    ret
+}
+
+/// Borrow a `coil.Buffer` handle and read its element count, tolerating
+/// null (→ 0). Used by the SYNTHETIC `send_output_buffer` capture marker
+/// (the real build reads the len through the bridge instead, so this is
+/// `#[cfg]`-gated off there to keep `clippy -D warnings` clean). Borrow-only
+/// — never frees the handle.
+///
+/// # Safety
+///
+/// `buf` must be null or a live `coil.Buffer` handle (a boxed `coil::Array`)
+/// the caller has not dropped.
+#[cfg(not(feature = "dora-real"))]
+unsafe fn buffer_len(buf: *mut u8) -> usize {
+    if buf.is_null() {
+        return 0;
+    }
+    // SAFETY: caller per `# Safety`. Borrow-only.
+    let arr: &coil::Array = unsafe { &*buf.cast::<coil::Array>() };
+    arr.size()
+}
+
 /// Drop an `Event` handle. Phase 1 currently never invoked from the .cb
 /// side (Event is Rust-owned per ADR-0073 §2 D6 — manifest returns None
 /// for DORA_EVENT_ADT's drop symbol). Exported for completeness +
@@ -782,6 +976,18 @@ mod real {
 
     use dora_node_api::dora_core::config::DataId;
     use dora_node_api::{ArrowData, DoraNode, Event, EventStream, IntoArrow, MetadataParameters};
+
+    // ADR-0076c (D)-B-1a — the typed-numeric Arrow↔coil bridge. arrow
+    // reached through dora_node_api's `pub use arrow` re-export (dora-node
+    // -api 0.5.0 lib.rs L89 — NO new Cargo.toml dep). The 5 concrete array
+    // types (each impls `arrow::array::Array`, the `to_data()` bound on
+    // `DoraNode::send_output`'s `data: impl Array` 3rd arg) + `DataType`
+    // (arrow re-exports `arrow_schema::DataType`) for the recv-time dtype
+    // dispatch.
+    use dora_node_api::arrow::array::{
+        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
+    };
+    use dora_node_api::arrow::datatypes::DataType;
 
     /// The live real-dora node state owned by a [`DoraNodeHandle`] under
     /// `feature = "dora-real"`. Holds the `DoraNode` (for `send_output`),
@@ -895,7 +1101,19 @@ mod real {
                 Event::Input { id, data, .. } => {
                     let id_s = id.as_str().to_string();
                     let data_str = decode_arrow_payload(&data);
-                    let ev_handle = DoraEventHandle { id: id_s, data_str };
+                    // ADR-0076c (D)-B-1a — ALSO decode the typed-numeric
+                    // payload into an owned `coil::Array` (a `'static`
+                    // value — no arrow lifetime crosses into the Event
+                    // struct) when the wire dtype is one of the 5
+                    // supported primitives; `None` for Utf8 / unsupported
+                    // (the named divergences). `event.data_buffer()` then
+                    // hands a clone of this.
+                    let data_buffer = decode_arrow_buffer(&data);
+                    let ev_handle = DoraEventHandle {
+                        id: id_s,
+                        data_str,
+                        data_buffer,
+                    };
 
                     // Install the ambient live-node pointer for the callback
                     // window so `event.send_output` can publish, then clear.
@@ -961,6 +1179,197 @@ mod real {
         // (e.g. a numeric array prints its values) so `data_str()` is always
         // well-defined. The array derefs to `arrow::array::ArrayRef`.
         format!("{:?}", **data)
+    }
+
+    /// ADR-0076c (D)-B-1a — decode a real `arrow::array::ArrayRef` payload
+    /// into an owned `coil::Array` (the `.cb` `coil.Buffer`) for the 5
+    /// supported dtypes (`Float64/Float32/Int64/Int32/Boolean`). Returns
+    /// `None` for any other arrow type (`Utf8` → use `data_str`;
+    /// `UInt8`/`Int8`/n-D/nested → the named ADR-0076c divergences, logged
+    /// once here), so `event.data_buffer()` hands the empty-buffer fallback.
+    ///
+    /// NULL BITMAP (ADR-0076c §U2 + REPAIR MAJOR) — `coil::Array` has NO
+    /// null concept (it is a dense `ndarray`), so a null-BEARING arrow array
+    /// CANNOT round-trip faithfully: reading `.values()` / `.value(i)` would
+    /// SILENTLY materialise a null slot as the raw underlying buffer value
+    /// (e.g. `[Some(1.0), None, Some(3.0)]` → `[1.0, 0.0, 3.0]`, a null Bool
+    /// → `false`). That is a silent data alteration on a known-HIGH-risk
+    /// path, so we treat `null_count() > 0` as a NAMED ADR-0076c divergence:
+    /// LOG it (a dropped numeric payload is never silent) and return `None`
+    /// (→ `data_buffer()` hands the empty-buffer fallback, same as the other
+    /// divergences) RATHER than fabricate a value for the null. A NULL-FREE
+    /// array (`null_count() == 0` — the dora numeric-payload common case)
+    /// round-trips bit-faithfully through the dense path below.
+    ///
+    /// The bridge is FLAT 1-D (ADR-0076c §1.3: dora arrays are
+    /// flat-columnar, shape lives in metadata). `data.values()` yields a
+    /// `&ScalarBuffer<T>` that derefs to `&[T]`; we `.to_vec()` it into the
+    /// matching `coil::array_*` constructor with a 1-D `[len]` shape. Bool
+    /// has no `.values() -> &[bool]` (it is a bit-packed `BooleanBuffer`),
+    /// so we materialise it via `.value(i)`. The roundtrip is
+    /// bit-faithful: an `Int64` stays `Int64` (no float up-cast), a
+    /// `Float64` stays `Float64`.
+    pub(super) fn decode_arrow_buffer(data: &ArrowData) -> Option<coil::Array> {
+        // `data` derefs to `arrow::array::ArrayRef` (`Arc<dyn Array>`);
+        // `data.data_type()` + `data.as_any().downcast_ref::<_>()` is the
+        // dora-canonical typed-read idiom (arrow-convert `into_vec`).
+        let len = data.len();
+        // NULL BITMAP guard (REPAIR MAJOR / ADR-0076c §U2 named divergence) —
+        // a null-bearing array would silently fabricate values for its null
+        // slots (coil has no null concept). Reject it as a logged divergence
+        // BEFORE the dense decode so no null is ever silently altered. (This
+        // is checked across ALL dtypes — `Array::null_count()` is on the
+        // `dyn Array` trait, no downcast needed.)
+        if data.null_count() > 0 {
+            eprintln!(
+                "cobrust-dora (dora-real): event.data_buffer() — the input {:?} array carries \
+                 {} null(s); coil.Buffer has no null concept, so a faithful decode is impossible \
+                 (ADR-0076c named divergence: null bitmap). Returning an empty buffer rather than \
+                 silently materialising nulls as 0/false. Use a null-free array (or event.data_str \
+                 for a non-numeric payload).",
+                data.data_type(),
+                data.null_count(),
+            );
+            return None;
+        }
+        match data.data_type() {
+            DataType::Float64 => {
+                let a = data.as_any().downcast_ref::<Float64Array>()?;
+                // `a.values()` is a `&ScalarBuffer<f64>` that derefs to
+                // `&[f64]` — pass it directly (no copy needed before the
+                // constructor's own `to_vec`).
+                coil::array_f64(a.values(), &[len]).ok()
+            }
+            DataType::Float32 => {
+                let a = data.as_any().downcast_ref::<Float32Array>()?;
+                coil::array_f32(a.values(), &[len]).ok()
+            }
+            DataType::Int64 => {
+                let a = data.as_any().downcast_ref::<Int64Array>()?;
+                coil::array_i64(a.values(), &[len]).ok()
+            }
+            DataType::Int32 => {
+                let a = data.as_any().downcast_ref::<Int32Array>()?;
+                coil::array_i32(a.values(), &[len]).ok()
+            }
+            DataType::Boolean => {
+                let a = data.as_any().downcast_ref::<BooleanArray>()?;
+                // BooleanArray is bit-packed: collect via `.value(i)`.
+                let vals: Vec<bool> = (0..a.len()).map(|i| a.value(i)).collect();
+                coil::array_bool(&vals, &[len]).ok()
+            }
+            // Utf8 → `data_str` carries it; everything else is a named
+            // ADR-0076c divergence (`UInt8` images, `Int8`, n-D, nested).
+            // Log ONCE so a dropped numeric payload is never silent.
+            other => {
+                eprintln!(
+                    "cobrust-dora (dora-real): event.data_buffer() — arrow dtype {other:?} is not \
+                     one of the 5 supported coil.Buffer dtypes (Float64/Float32/Int64/Int32/Bool) \
+                     (ADR-0076c divergence: UInt8/Utf8/n-D deferred). Use event.data_str() for a \
+                     Utf8 payload. data_buffer() returns an empty buffer."
+                );
+                None
+            }
+        }
+    }
+
+    /// REAL `event.send_output_buffer(id, buf)` — bridge a borrowed
+    /// `coil::Array` (`coil.Buffer`) into a typed Arrow array and publish it
+    /// on the `id` output port via the ambient live `DoraNode` (ADR-0076c
+    /// (D)-B-1a; the numeric SIBLING of `send_output(id, &str)`). The
+    /// output-id validation against the declared set already happened in the
+    /// calling shim. `buf` is BORROWED (read, never freed — the `.cb` scope
+    /// owns + drops it once via `__cobrust_coil_buffer_drop`).
+    ///
+    /// Each `coil::Array` arm collects its (possibly non-contiguous) elements
+    /// via `.iter().copied()` into a `Vec<T>` — the same flat collection
+    /// `array_repr`/`to_json` use — then builds the matching
+    /// `arrow::array::{Float64Array, ...}` (each impls `arrow::array::Array`,
+    /// so it satisfies `send_output`'s `data: impl Array` bound directly via
+    /// `.to_data()`). Returns 0 on a successful publish, `-1` if no ambient
+    /// node is set (a `send_output_buffer` called outside a `run` callback)
+    /// or the publish errored.
+    ///
+    /// # Safety
+    ///
+    /// `buf` must be null or a live `coil.Buffer` handle (a boxed
+    /// `coil::Array`) the caller has not dropped.
+    pub(super) unsafe fn send_output_buffer(id: &str, buf: *mut u8) -> i64 {
+        let node_ptr = AMBIENT_NODE.with(Cell::get);
+        if node_ptr.is_null() {
+            eprintln!(
+                "cobrust-dora (dora-real): send_output_buffer(\"{id}\", ...) called with no \
+                 ambient node — it must run inside a node.run() callback. Output dropped."
+            );
+            return -1;
+        }
+        if buf.is_null() {
+            eprintln!(
+                "cobrust-dora (dora-real): send_output_buffer(\"{id}\", <null buffer>) — nothing \
+                 to publish. Output dropped."
+            );
+            return -1;
+        }
+        // SAFETY: `run_node` set `AMBIENT_NODE` to a valid `&mut DoraNode`
+        // for the duration of THIS callback and clears it on return; we are
+        // synchronously inside that window, single-threaded, so the pointer
+        // is live and uniquely ours here.
+        let node: &mut DoraNode = unsafe { &mut *node_ptr };
+        // SAFETY: caller attests `buf` is a live `coil.Buffer` handle.
+        // Borrow-only — we read its elements; the `.cb` scope frees it.
+        let arr: &coil::Array = unsafe { &*buf.cast::<coil::Array>() };
+
+        // Bridge `coil::Array` → typed Arrow (the OUT half of the bridge —
+        // single-sourced in `coil_to_arrow` so the hermetic round-trip test
+        // exercises the SAME code) → publish via the ambient node. The
+        // `ArrayRef` (`Arc<dyn Array>`) satisfies `send_output`'s
+        // `data: impl Array` bound (`.to_data()`).
+        let data = coil_to_arrow(arr);
+        match node.send_output(DataId::from(id), MetadataParameters::default(), data) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("cobrust-dora (dora-real): send_output_buffer(\"{id}\") failed: {e:#}");
+                -1
+            }
+        }
+    }
+
+    /// The OUT half of the `ndarray ↔ arrow` bridge (ADR-0076c (D)-B-1a):
+    /// `coil::Array` → a typed `arrow::array::ArrayRef` (`Arc<dyn Array>`)
+    /// for the 5 supported dtypes. Each arm collects the (possibly
+    /// non-contiguous) elements via `.iter().copied()` into a `Vec<T>` — the
+    /// same flat collection `array_repr`/`to_json` use — then builds the
+    /// matching `Float64Array`/.../`BooleanArray` (each impls
+    /// `arrow::array::Array`) and `Arc`s it. Single-sourced so
+    /// `send_output_buffer` AND the hermetic round-trip test share ONE
+    /// bridge (a divergence between "what we publish" and "what we test"
+    /// would otherwise be possible — F36 discipline). DTYPE-FAITHFUL: an
+    /// `Int64` stays `Int64` (no float up-cast), a `Float64` stays `Float64`.
+    pub(super) fn coil_to_arrow(arr: &coil::Array) -> dora_node_api::arrow::array::ArrayRef {
+        use coil::Array as CArr;
+        use std::sync::Arc;
+        match arr {
+            CArr::Float64(a) => {
+                let v: Vec<f64> = a.iter().copied().collect();
+                Arc::new(Float64Array::from(v))
+            }
+            CArr::Float32(a) => {
+                let v: Vec<f32> = a.iter().copied().collect();
+                Arc::new(Float32Array::from(v))
+            }
+            CArr::Int64(a) => {
+                let v: Vec<i64> = a.iter().copied().collect();
+                Arc::new(Int64Array::from(v))
+            }
+            CArr::Int32(a) => {
+                let v: Vec<i32> = a.iter().copied().collect();
+                Arc::new(Int32Array::from(v))
+            }
+            CArr::Bool(a) => {
+                let v: Vec<bool> = a.iter().copied().collect();
+                Arc::new(BooleanArray::from(v))
+            }
+        }
     }
 }
 
@@ -1266,6 +1675,7 @@ mod tests {
             let event = Box::into_raw(Box::new(DoraEventHandle {
                 id: "camera".to_string(),
                 data_str: "frame_001".to_string(),
+                data_buffer: None,
             }))
             .cast::<u8>();
 
@@ -1324,5 +1734,459 @@ mod tests {
             "a port declared twice is stored once"
         );
         reset_dora_globals();
+    }
+
+    // =================================================================
+    // ADR-0076c (D)-B-1a — typed-numeric coil.Buffer round-trip (synthetic
+    // build). The HERMETIC ndarray↔arrow bridge round-trip lives in the
+    // `dora-real` test module below (it needs arrow); these pin the
+    // build-agnostic shim contract on the synthetic default.
+    // =================================================================
+
+    /// Reclaim + drop a `coil.Buffer` handle (boxed `coil::Array`) the
+    /// `data_buffer` shim handed out — the synthetic test stands in for the
+    /// `.cb` scope's `__cobrust_coil_buffer_drop` (cobrust-dora deps coil
+    /// `default-features = false`, so coil's cabi drop symbol is not linked
+    /// into this crate's test build — the Box reclaim frees the same
+    /// allocation the drop shim would).
+    ///
+    /// # Safety
+    /// `buf` must be a non-null `coil.Buffer` handle from
+    /// `__cobrust_dora_event_data_buffer` not yet dropped.
+    unsafe fn drop_coil_buffer(buf: *mut u8) {
+        assert!(!buf.is_null(), "buffer handle must be non-null");
+        // SAFETY: caller attests `buf` is a live boxed coil::Array.
+        drop(unsafe { Box::from_raw(buf.cast::<coil::Array>()) });
+    }
+
+    /// `event.data_buffer()` on the SYNTHETIC build returns the canned
+    /// Float64 `[1.0, 2.0, 3.0]` typed buffer (so the `.cb` build/type-check
+    /// path resolves the symbol without a broker). Asserts the dtype +
+    /// shape + values are the canned numeric payload, then drops it once.
+    #[test]
+    fn data_buffer_returns_canned_float64_payload() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let event = Box::into_raw(Box::new(DoraEventHandle {
+                id: "camera".to_string(),
+                data_str: "frame_001".to_string(),
+                data_buffer: Some(canned_buffer()),
+            }))
+            .cast::<u8>();
+
+            let buf = __cobrust_dora_event_data_buffer(event);
+            assert!(
+                !buf.is_null(),
+                "data_buffer() must return a non-null Buffer"
+            );
+            // Borrow the boxed coil::Array + assert the canned Float64 shape.
+            let arr: &coil::Array = &*buf.cast::<coil::Array>();
+            assert!(
+                matches!(arr, coil::Array::Float64(_)),
+                "canned data_buffer payload must be Float64; got {:?}",
+                arr.dtype()
+            );
+            assert_eq!(arr.shape(), vec![3], "canned payload shape must be [3]");
+            assert_eq!(arr.size(), 3, "canned payload size must be 3");
+            if let coil::Array::Float64(a) = arr {
+                let vals: Vec<f64> = a.iter().copied().collect();
+                assert_eq!(
+                    vals,
+                    vec![1.0_f64, 2.0, 3.0],
+                    "canned values must be [1,2,3] (exactly representable)"
+                );
+            }
+            drop_coil_buffer(buf);
+            drop(Box::from_raw(event.cast::<DoraEventHandle>()));
+        }
+    }
+
+    /// `event.data_buffer()` on a `None`-payload event (a non-numeric / Utf8
+    /// wire payload — the named ADR-0076c divergence) returns a well-defined
+    /// EMPTY Float64 buffer the caller still drops ONCE (never a null the
+    /// `.cb` drop schedule would mishandle). Also covers the null-event
+    /// fallback.
+    #[test]
+    fn data_buffer_none_and_null_return_empty_droppable_buffer() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            // (a) a None-payload event → empty buffer.
+            let event = Box::into_raw(Box::new(DoraEventHandle {
+                id: "cmd".to_string(),
+                data_str: "go".to_string(),
+                data_buffer: None,
+            }))
+            .cast::<u8>();
+            let buf = __cobrust_dora_event_data_buffer(event);
+            assert!(
+                !buf.is_null(),
+                "None payload must still yield a non-null (empty) Buffer"
+            );
+            let arr: &coil::Array = &*buf.cast::<coil::Array>();
+            assert_eq!(
+                arr.size(),
+                0,
+                "the None-payload fallback Buffer must be empty"
+            );
+            assert!(
+                matches!(arr, coil::Array::Float64(_)),
+                "the empty fallback Buffer is Float64"
+            );
+            drop_coil_buffer(buf);
+            drop(Box::from_raw(event.cast::<DoraEventHandle>()));
+
+            // (b) a null event → empty buffer (defense-in-depth, no UB).
+            let buf2 = __cobrust_dora_event_data_buffer(std::ptr::null_mut());
+            assert!(
+                !buf2.is_null(),
+                "null event must yield a non-null (empty) Buffer"
+            );
+            let arr2: &coil::Array = &*buf2.cast::<coil::Array>();
+            assert_eq!(
+                arr2.size(),
+                0,
+                "the null-event fallback Buffer must be empty"
+            );
+            drop_coil_buffer(buf2);
+        }
+    }
+
+    /// `event.send_output_buffer` validates against the declared-output set
+    /// (BOTH builds): a DECLARED id returns 0 + bumps the count; an
+    /// UNDECLARED id fails CLOSED (-1, no count bump) — never a silent drop.
+    /// The `buf` is BORROWED (the test still owns + drops it once after).
+    #[test]
+    fn send_output_buffer_validates_against_declared_outputs() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_dora_globals();
+        let before = send_output_count();
+        unsafe {
+            // Declare one output `reading`.
+            let reading = alloc_str_buffer("reading");
+            assert_eq!(__cobrust_dora_declare_output(reading), 0);
+            __cobrust_str_drop(reading);
+
+            // A canned Event (borrowed) + a Buffer to emit (borrowed by the
+            // shim — the test owns + drops it once at the end).
+            let event = Box::into_raw(Box::new(DoraEventHandle {
+                id: "camera".to_string(),
+                data_str: "frame_001".to_string(),
+                data_buffer: Some(canned_buffer()),
+            }))
+            .cast::<u8>();
+            let buf = Box::into_raw(Box::new(canned_buffer())).cast::<u8>();
+
+            // Declared output ⇒ 0.
+            let oid = alloc_str_buffer("reading");
+            assert_eq!(
+                __cobrust_dora_event_send_output_buffer(event, oid, buf),
+                0,
+                "send_output_buffer on a declared output must return 0"
+            );
+            __cobrust_str_drop(oid);
+
+            // Undeclared output ⇒ -1, fail-closed (no count bump).
+            let bad = alloc_str_buffer("redaing");
+            assert_eq!(
+                __cobrust_dora_event_send_output_buffer(event, bad, buf),
+                -1,
+                "send_output_buffer on an UNDECLARED output must return -1 (fail closed)"
+            );
+            __cobrust_str_drop(bad);
+
+            // The shim BORROWED buf (never freed it) — the test frees it ONCE
+            // here (mirrors the .cb scope's single `__cobrust_coil_buffer_drop`).
+            drop_coil_buffer(buf);
+            drop(Box::from_raw(event.cast::<DoraEventHandle>()));
+        }
+        assert_eq!(
+            send_output_count() - before,
+            1,
+            "only the DECLARED send_output_buffer is captured (undeclared does not bump)"
+        );
+        reset_dora_globals();
+    }
+
+    /// A null `buf` to `send_output_buffer` on a DECLARED output is tolerated
+    /// (the synthetic capture reads len=0; no UB) and still counts as a
+    /// declared emission attempt — the marker just reports an empty buffer.
+    #[test]
+    fn send_output_buffer_tolerates_null_buffer() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_dora_globals();
+        let before = send_output_count();
+        unsafe {
+            let reading = alloc_str_buffer("reading");
+            assert_eq!(__cobrust_dora_declare_output(reading), 0);
+            __cobrust_str_drop(reading);
+            let oid = alloc_str_buffer("reading");
+            // Null event + null buffer: declared id ⇒ 0 (synthetic capture
+            // reads buffer_len(null) = 0).
+            assert_eq!(
+                __cobrust_dora_event_send_output_buffer(
+                    std::ptr::null_mut(),
+                    oid,
+                    std::ptr::null_mut()
+                ),
+                0,
+                "a declared send with a null buffer must still return 0 (no UB)"
+            );
+            __cobrust_str_drop(oid);
+        }
+        assert_eq!(
+            send_output_count() - before,
+            1,
+            "the declared null-buffer send is counted"
+        );
+        reset_dora_globals();
+    }
+}
+
+// =====================================================================
+// ADR-0076c (D)-B-1a — HERMETIC ndarray↔arrow bridge round-trip tests.
+// These are the UNCONDITIONAL correctness proof for the typed-numeric
+// payload bridge (the live `dora_real_node_e2e` Part C is the integration
+// cherry; THIS is the bit-faithfulness gate). Gated `feature = "dora-real"`
+// because the bridge touches the real `arrow` crate (the synthetic default
+// has zero arrow). Each test builds a `coil::Array`, runs it OUT through
+// `real::coil_to_arrow` (the SAME bridge `send_output_buffer` publishes
+// with), wraps the result as the `ArrowData` an `Event::Input` would carry,
+// runs it back IN through `real::decode_arrow_buffer` (the SAME decode
+// `data_buffer()` returns), and asserts the round-trip is bit-identical AND
+// dtype-faithful (Int64 stays Int64, Float64 stays Float64 — no up-cast).
+// =====================================================================
+#[cfg(all(test, feature = "dora-real"))]
+#[allow(clippy::undocumented_unsafe_blocks)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::float_cmp)]
+mod arrow_bridge_tests {
+    use super::*;
+    use dora_node_api::ArrowData;
+
+    /// Wrap a `coil::Array` as the `ArrowData` an `Event::Input { data }`
+    /// would carry: run the OUT bridge (`coil_to_arrow`) then box it in the
+    /// `ArrowData(ArrayRef)` newtype dora hands the recv loop. This is the
+    /// exact wire shape `decode_arrow_buffer` reads on a real input.
+    fn as_arrow_data(arr: &coil::Array) -> ArrowData {
+        ArrowData(real::coil_to_arrow(arr))
+    }
+
+    /// Round-trip a `coil::Array` through OUT→wire→IN and return the decoded
+    /// `coil::Array` (or `None` if the decode rejected the dtype).
+    fn round_trip(arr: &coil::Array) -> Option<coil::Array> {
+        let wire = as_arrow_data(arr);
+        real::decode_arrow_buffer(&wire)
+    }
+
+    /// Float64 `[0.5, 1.5, 2.5]` (exactly-representable — no last-ULP
+    /// platform drift) round-trips bit-identically + stays Float64.
+    #[test]
+    fn round_trip_float64_is_bit_identical() {
+        let orig = coil::array_f64(&[0.5, 1.5, 2.5], &[3]).unwrap();
+        let back = round_trip(&orig).expect("Float64 must decode");
+        assert!(
+            matches!(back, coil::Array::Float64(_)),
+            "dtype must stay Float64"
+        );
+        assert_eq!(
+            back, orig,
+            "Float64 [0.5,1.5,2.5] must round-trip bit-identical"
+        );
+    }
+
+    /// Float32 `[0.5, 2.5]` round-trips bit-identically + stays Float32
+    /// (NOT widened to Float64).
+    #[test]
+    fn round_trip_float32_stays_float32() {
+        let orig = coil::array_f32(&[0.5_f32, 2.5], &[2]).unwrap();
+        let back = round_trip(&orig).expect("Float32 must decode");
+        assert!(
+            matches!(back, coil::Array::Float32(_)),
+            "dtype must stay Float32 (no f64 up-cast)"
+        );
+        assert_eq!(
+            back, orig,
+            "Float32 [0.5,2.5] must round-trip bit-identical"
+        );
+    }
+
+    /// Int64 `[1, 2, 3]` round-trips + stays Int64 (NOT up-cast to a float —
+    /// the ROUND-TRIP FIDELITY contract).
+    #[test]
+    fn round_trip_int64_stays_int64() {
+        let orig = coil::array_i64(&[1, 2, 3], &[3]).unwrap();
+        let back = round_trip(&orig).expect("Int64 must decode");
+        assert!(
+            matches!(back, coil::Array::Int64(_)),
+            "dtype must stay Int64 (NO float up-cast)"
+        );
+        assert_eq!(back, orig, "Int64 [1,2,3] must round-trip identical");
+    }
+
+    /// Int32 `[10, 20, 30]` round-trips + stays Int32.
+    #[test]
+    fn round_trip_int32_stays_int32() {
+        let orig = coil::array_i32(&[10, 20, 30], &[3]).unwrap();
+        let back = round_trip(&orig).expect("Int32 must decode");
+        assert!(
+            matches!(back, coil::Array::Int32(_)),
+            "dtype must stay Int32"
+        );
+        assert_eq!(back, orig, "Int32 [10,20,30] must round-trip identical");
+    }
+
+    /// Bool `[true, false, true, true]` round-trips + stays Bool. Bool is
+    /// the bit-packed case (BooleanArray has no `.values() -> &[bool]`), so
+    /// this proves the `.value(i)` materialisation path.
+    #[test]
+    fn round_trip_bool_is_bit_packed_safe() {
+        let orig = coil::array_bool(&[true, false, true, true], &[4]).unwrap();
+        let back = round_trip(&orig).expect("Bool must decode");
+        assert!(matches!(back, coil::Array::Bool(_)), "dtype must stay Bool");
+        assert_eq!(
+            back, orig,
+            "Bool [t,f,t,t] must round-trip identical (bit-packed safe)"
+        );
+    }
+
+    /// An EMPTY array of EACH dtype round-trips to an empty array of the
+    /// same dtype (the zero-length null-bitmap / buffer edge — a common
+    /// bridge bug).
+    #[test]
+    fn round_trip_empty_arrays_per_dtype() {
+        let f64e = coil::array_f64(&[], &[0]).unwrap();
+        assert_eq!(round_trip(&f64e).unwrap(), f64e, "empty Float64");
+        let f32e = coil::array_f32(&[], &[0]).unwrap();
+        assert_eq!(round_trip(&f32e).unwrap(), f32e, "empty Float32");
+        let i64e = coil::array_i64(&[], &[0]).unwrap();
+        assert_eq!(round_trip(&i64e).unwrap(), i64e, "empty Int64");
+        let i32e = coil::array_i32(&[], &[0]).unwrap();
+        assert_eq!(round_trip(&i32e).unwrap(), i32e, "empty Int32");
+        let boole = coil::array_bool(&[], &[0]).unwrap();
+        assert_eq!(round_trip(&boole).unwrap(), boole, "empty Bool");
+    }
+
+    /// NULL BITMAP (REPAIR MAJOR / ADR-0076c §U2 named divergence) — a
+    /// null-BEARING `Float64Array` (`[Some(1.0), None, Some(3.0)]`,
+    /// `null_count() == 1`) decodes to `None` rather than SILENTLY
+    /// fabricating the null slot as the raw buffer value (`0.0`). coil has
+    /// no null concept, so the only faithful answer is the empty-buffer
+    /// divergence (logged). This is the guard against the silent
+    /// null→0 data-alteration the audit flagged: pre-fix this array decoded
+    /// to `[1.0, 0.0, 3.0]` with no log; now it is a clean rejected
+    /// divergence. (We assert `None`, NOT the fabricated dense values.)
+    #[test]
+    fn null_bearing_float64_decodes_to_none_not_silent_zero() {
+        // `Array` (the trait) is needed in scope for `null_count()` on the
+        // concrete `Float64Array` — in the lib path it resolves via the
+        // `Arc<dyn Array>` trait object; here the value is concretely typed.
+        use dora_node_api::arrow::array::{Array, Float64Array};
+        use std::sync::Arc;
+        // A REAL null-bearing array: null_count() == 1 (the middle slot).
+        let arr = Float64Array::from(vec![Some(1.0_f64), None, Some(3.0)]);
+        assert_eq!(
+            arr.null_count(),
+            1,
+            "the fixture must actually carry a null"
+        );
+        let wire = ArrowData(Arc::new(arr));
+        assert!(
+            real::decode_arrow_buffer(&wire).is_none(),
+            "a null-bearing Float64 array is the named ADR-0076c null-bitmap divergence → decode \
+             None (NOT a silent [1.0, 0.0, 3.0] fabrication of the null as 0.0)"
+        );
+    }
+
+    /// NULL BITMAP (Bool arm) — a null-bearing `BooleanArray`
+    /// (`[Some(true), None, Some(false)]`, `null_count() == 1`) decodes to
+    /// `None` rather than silently fabricating the null as `false` (the
+    /// bit-packed Bool path is the same silent-alteration risk). Asserts the
+    /// divergence, not the fabricated `[true, false, false]`.
+    #[test]
+    fn null_bearing_bool_decodes_to_none_not_silent_false() {
+        use dora_node_api::arrow::array::{Array, BooleanArray};
+        use std::sync::Arc;
+        let arr = BooleanArray::from(vec![Some(true), None, Some(false)]);
+        assert_eq!(
+            arr.null_count(),
+            1,
+            "the fixture must actually carry a null"
+        );
+        let wire = ArrowData(Arc::new(arr));
+        assert!(
+            real::decode_arrow_buffer(&wire).is_none(),
+            "a null-bearing Bool array is the named ADR-0076c null-bitmap divergence → decode \
+             None (NOT a silent [true, false, false] fabrication of the null as false)"
+        );
+    }
+
+    /// CONTROL — a NULL-FREE `Float64Array` built via the
+    /// `Vec<Option<f64>>` constructor with ALL `Some(_)` (so
+    /// `null_count() == 0`) still round-trips bit-faithfully through the
+    /// dense path: the null guard fires ONLY on a real null, never a
+    /// false-positive on a validity-buffer-present-but-all-set array.
+    #[test]
+    fn all_some_float64_round_trips_through_null_guard() {
+        use dora_node_api::arrow::array::{Array, Float64Array};
+        use std::sync::Arc;
+        let arr = Float64Array::from(vec![Some(0.5_f64), Some(1.5), Some(2.5)]);
+        assert_eq!(arr.null_count(), 0, "all-Some fixture must have zero nulls");
+        let wire = ArrowData(Arc::new(arr));
+        let back = real::decode_arrow_buffer(&wire).expect("a null-FREE Float64 must still decode");
+        let expect = coil::array_f64(&[0.5, 1.5, 2.5], &[3]).unwrap();
+        assert_eq!(
+            back, expect,
+            "a null-free (all-Some) Float64 must round-trip bit-identical (no false-positive null \
+             rejection)"
+        );
+    }
+
+    /// A Utf8 `StringArray` (a non-numeric wire payload — the named
+    /// ADR-0076c divergence) decodes to `None` (so `data_buffer()` hands the
+    /// empty-buffer fallback + `data_str()` carries the string). Proves the
+    /// decode does NOT mis-decode / panic on the Utf8 case.
+    #[test]
+    fn utf8_payload_decodes_to_none_divergence() {
+        use dora_node_api::IntoArrow;
+        use std::sync::Arc;
+        // The exact length-1 Utf8 StringArray Phase-A `send_output` publishes.
+        let s = "go".to_string().into_arrow();
+        let wire = ArrowData(Arc::new(s));
+        assert!(
+            real::decode_arrow_buffer(&wire).is_none(),
+            "a Utf8 payload is the named ADR-0076c divergence → decode None (use data_str)"
+        );
+    }
+
+    /// The FULL shim path under a real arrow wire: a 1000-event loop where
+    /// each iteration boxes a fresh decoded Buffer via the SAME boxing
+    /// `data_buffer()` does (`Box::into_raw(coil::Array)`) and drops it via
+    /// the SAME `Box::from_raw` reclaim — asserting balanced drops (no leak,
+    /// no double-free) over many events (ADR-0076c §4.1 / plan §5 Phase-B
+    /// done-means 5: a 1000-event run shows balanced Buffer drops).
+    #[test]
+    fn thousand_event_buffer_drop_balance() {
+        let orig = coil::array_f64(&[0.5, 1.5, 2.5, 3.5], &[4]).unwrap();
+        for i in 0..1000 {
+            // Decode a fresh Buffer from a fresh wire array (what the recv
+            // loop does per Event::Input), box it (what `data_buffer()`
+            // returns), then reclaim+drop it (what the `.cb` scope does once
+            // via `__cobrust_coil_buffer_drop`). A leak or double-free here
+            // would surface under the test allocator / sanitizer.
+            let decoded = round_trip(&orig).expect("Float64 decode");
+            assert_eq!(decoded, orig, "event {i}: round-trip must stay identical");
+            let boxed = Box::into_raw(Box::new(decoded)).cast::<u8>();
+            // SAFETY: just boxed above; reclaim exactly once (the drop shim's
+            // single-free contract).
+            drop(unsafe { Box::from_raw(boxed.cast::<coil::Array>()) });
+        }
     }
 }

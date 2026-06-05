@@ -2,8 +2,8 @@
 doc_kind: module
 module_id: mod:dora
 crate: cobrust-dora
-last_verified_commit: HEAD
-dependencies: [mod:types, mod:mir, mod:codegen, mod:stdlib]
+last_verified_commit: 18e9208
+dependencies: [mod:types, mod:mir, mod:codegen, mod:stdlib, mod:coil]
 ---
 
 # Module: dora
@@ -78,11 +78,36 @@ dora-rs daemon + the CartPole control-loop demo.
   dep). NO new IR field, NO new manifest op — reuses the existing
   `lookup_module_fn("dora","declare_output")` recognition. The Arrow
   payload surface stays a SEPARATE next dispatch.
-- **Phase B / Phase 3 — proposed.** `coil.Buffer ↔ Arrow` array payloads +
-  multi-port routing (Phase B); the real-robotics CartPole simulation demo
-  + cross-machine orchestration (Phase 3).
+- **ADR-0076c (D)-B-1a — typed-numeric Arrow↔coil.Buffer round-trip
+  (delivered).** `event.data_buffer() -> coil.Buffer` reads a typed input
+  payload + `event.send_output_buffer(output_id, buffer)` emits one, for the
+  5 overlapping dtypes `Float64/Float32/Int64/Int32/Bool`, via a
+  hand-written `ndarray ↔ arrow` bridge (REAL build) / canned Float64
+  (synthetic). ONE `.cb` array type (`coil.Buffer`) spans the numeric +
+  robotics pillars (the CTO-confirmed coil-unity trade, reversible at B-2).
+  The `DoraUnknownOutputId` compile-time reject EXTENDS to
+  `send_output_buffer`. `UInt8`/`Utf8`/n-D-shape AND a null-bitmap-bearing
+  array (`null_count() > 0`) stay named divergences (`bytes`/`data_str`
+  fallbacks; the null-bearing decode LOGS + returns an empty Buffer rather
+  than silently fabricating a null as `0`/`false`). DUAL-BUILD: the synthetic
+  default has zero arrow dep; the bridge is real only under
+  `--features dora-real`. NO MIR / codegen design change (the Buffer handle
+  ABI == coil's). TWO link fixes: (1) a cross-crate DUPLICATE-symbol fix —
+  `cobrust-coil`'s `cabi` shim module is now behind a DEFAULT-ON `cabi`
+  feature so `cobrust-dora` (`default-features = false`) pulls the `Array`
+  type WITHOUT the `#[no_mangle]` shims (else a program importing both `dora`
+  + `coil` hits ~125 duplicate symbols); (2) a link-set DROP-GLUE fix —
+  `collect_ecosystem_modules` (the build's archive-selection scan) now also
+  walks `Terminator::Drop` so a `coil.Buffer` owned via `data_buffer()` but
+  used with NO explicit `coil.<fn>()` call (an echo node) still pulls
+  `libcoil.a` from its scope-exit `__cobrust_coil_buffer_drop` (else the
+  link failed `ld: ___cobrust_coil_buffer_drop not found` while `check`
+  passed — the manifest resolved the symbol but the linker did not).
+- **Phase B-1b / Phase 3 — proposed.** the `bytes` accessor +
+  `send_output_bytes` for raw blobs (B-1b); the real-robotics CartPole
+  simulation demo + cross-machine orchestration (Phase 3).
 
-## Public surface (Phase 1 + Phase 2)
+## Public surface (Phase 1 + Phase 2 + ADR-0076c)
 
 C-ABI symbols (`#[no_mangle] extern "C"`) declared in
 `crates/cobrust-dora/src/cabi.rs`:
@@ -103,6 +128,13 @@ __cobrust_dora_declare_output(id: *mut Str) -> i64
 __cobrust_dora_event_send_output(
     event: *mut Event, output_id: *mut Str, payload: *mut Str
 ) -> i64   # 0 = emitted; -1 = undeclared output id (fail-closed)
+# ADR-0076c (D)-B-1a — typed-numeric Arrow↔coil.Buffer round-trip
+__cobrust_dora_event_data_buffer(event: *mut Event) -> *mut Buffer
+    # boxed coil::Array; the .cb scope drops it once via
+    # __cobrust_coil_buffer_drop (handle_drop_symbol(COIL_BUFFER_ADT))
+__cobrust_dora_event_send_output_buffer(
+    event: *mut Event, output_id: *mut Str, buf: *mut Buffer
+) -> i64   # 0 = emitted; -1 = undeclared output id; buf is BORROWED
 ```
 
 Manifest entries (`crates/cobrust-types/src/ecosystem.rs`):
@@ -130,6 +162,26 @@ Manifest entries (`crates/cobrust-types/src/ecosystem.rs`):
   silent drop); captures the emission to stdout as `output[<id>]=<payload>`.
   Hangs off the Event handle (NOT `dora.Node`) because the Event is the
   ONLY handle in the handler's scope.
+- `Event.data_buffer() -> coil.Buffer` (ADR-0076c (D)-B-1a) — read a
+  TYPED-NUMERIC input payload as a `coil.Buffer` (the 5 overlapping dtypes
+  `Float64/Float32/Int64/Int32/Bool` decode INTO a `coil::Array`). REUSES
+  `coil_buffer_ty()` — ONE `.cb` array type spans the numeric + robotics
+  pillars; the returned Buffer is `.cb`-owned + scope-exit-drops via the
+  EXISTING `__cobrust_coil_buffer_drop` (the build's link-set scan pulls
+  `libcoil.a` from THIS drop even when the handler makes no explicit
+  `coil.<fn>()` call — the BLOCKER-A drop-glue fix). A non-numeric (Utf8 →
+  use `data_str`) / unsupported dtype (`UInt8`/n-D) / a NULL-BITMAP-bearing
+  array (`null_count() > 0`) — all named divergences — yields an empty Buffer
+  (+ a logged divergence on the real path; the null-bearing case is rejected
+  BEFORE the dense decode so a null is never silently materialised as
+  `0`/`false`). Synthetic build: a canned Float64 `[1.0, 2.0, 3.0]`.
+- `Event.send_output_buffer(output_id: str, buffer: coil.Buffer) -> i64`
+  (ADR-0076c (D)-B-1a) — emit a typed-numeric Arrow array (bridged from the
+  `coil.Buffer`) on a declared output port. A DISTINCT method name (NOT a
+  `send_output` overload) for §2.5 compile-time clarity. Same fail-closed
+  `output_id` validation as `send_output`; `buffer` is BORROWED (the `.cb`
+  scope still drops it once). The compile-time `DoraUnknownOutputId` reject
+  fires for THIS method too (a literal typo'd id is caught at `cobrust check`).
 
 ADT slot allocation (`DORA_NODE_ADT = AdtId(ECO_ADT_BASE + 0x600)`,
 `DORA_EVENT_ADT = ECO_ADT_BASE + 0x601`) — seventh per-module 256-slot
@@ -258,17 +310,20 @@ NATIVE-ONLY — `tokio-net` hard-fails on wasm32, so the wasm dora story stays
 SYNTHETIC-default (the default `cargo build -p cobrust-dora --target
 wasm32-wasip1` is green; `--features dora-real` is not a wasm target).
 
-## Gates (Phase 1 + Phase 2 — none optional)
+## Gates (Phase 1 + Phase 2 + ADR-0076c — none optional)
 
 | Stage | Gate | Pass criteria | Status |
 |---|---|---|---|
 | L1 | typecheck manifest | `cobrust check` on the dora examples | passes |
 | L2.build | `cargo build -p cobrust-dora` | zero warnings | passes |
-| L2.behavior | in-crate cabi tests | 8/8 — drop-once + null tolerance + trampoline + shutdown + multi-input dispatch + send_output validate + declare idempotent | passes |
+| L2.behavior | in-crate cabi tests (synthetic) | 12/12 — drop-once + null tolerance + trampoline + shutdown + multi-input dispatch + send_output validate + declare idempotent + (ADR-0076c) data_buffer canned-payload + None/null empty-buffer fallback + send_output_buffer validate + null-buffer tolerance | passes |
+| L2.behavior.bridge | in-crate arrow-bridge round-trip (`--features dora-real`) | 11/11 in `cabi::arrow_bridge_tests` — bit-identical + dtype-faithful round-trip per dtype (F64/F32/I64/I32/Bool), empty-per-dtype, Utf8→None divergence, 1000-event balanced-drop, AND (REPAIR) null-bearing F64 + null-bearing Bool → None (no silent 0/false fabrication) + an all-Some null-free control round-trip. The UNCONDITIONAL ndarray↔arrow proof | passes |
 | L3.e2e.p1 | compile + link + run | `cargo test -p cobrust-cli --test dora_hello_e2e` 3/3 + `--test decorator_dora_e2e` 6/6 | passes |
 | L3.e2e.p2 | compile + link + run | `cargo test -p cobrust-cli --test dora_multi_io_e2e` 3/3 (multi-input dispatch + send_output capture + single-input no-regression) | passes |
-| L3.e2e.real | **F36-honest real proof** | `cargo test -p cobrust-cli --test dora_real_node_e2e` 2/2 — Part A: a `--features dora-real` `.cb` binary carries REAL `dora_node_api`+`arrow` symbols (`nm`), proving the real path LINKED (not the trampoline); Part B: a LIVE real `DoraNode`+`EventStream` round-trip via dora's hermetic `integration_testing` mode delivers a unique marker the handler prints (the synthetic trampoline would print canned `frame_tick`). Self-skips clean when the heavy real archive is unavailable; `COBRUST_DORA_REAL_E2E=1` makes a skip a hard failure (the CI real-gate lane). | passes (strict, macOS) |
-| L2.behavior.real | `cargo build/clippy -p cobrust-dora --features dora-real` | zero warnings; the synthetic-contract cabi unit tests are `#[cfg]`-gated to `not(dora-real)` (the real path is E2E-proven) | passes |
+| L3.e2e.buffer | compile + link + run (synthetic) | `cargo test -p cobrust-cli --test dora_buffer_io_e2e` 5/5 — `data_buffer()` → coil math (`print_buffer`/`mean`/`full`) → `send_output_buffer`; the `DoraUnknownOutputId` negative + the non-literal skip; AND (REPAIR BLOCKER-A) the MINIMAL echo node (`data_buffer()` → `send_output_buffer()`, NO explicit `coil.<fn>()` call) that links + runs via the drop-glue-ONLY archive-selection path | passes |
+| L3.e2e.p3.outputid | compile-time output-id reject | `cargo test -p cobrust-cli --test dora_output_id_check_e2e` 5/5 (ADR-0092 — now fires for both `send_output` + `send_output_buffer`) | passes |
+| L3.e2e.real | **F36-honest real proof** | `cargo test -p cobrust-cli --test dora_real_node_e2e` 4/4 — Part A: a `--features dora-real` `.cb` binary carries REAL `dora_node_api`+`arrow` symbols (`nm`), proving the real path LINKED (not the trampoline); Part B: a LIVE real `DoraNode`+`EventStream` round-trip via dora's hermetic `integration_testing` mode delivers a unique marker the handler prints; Part C (ADR-0076c): a LIVE real `Float64Array` delivered on the EventStream → `data_buffer()` decodes it → `send_output_buffer` round-trips it bit-faithfully to the outputs file; Part C-D (REPAIR BLOCKER-A): the MINIMAL echo node (no explicit `coil.<fn>()` call) links `libcoil.a` from the `coil.Buffer` drop alone + round-trips the REAL decoded values. Self-skips clean when the heavy real archive is unavailable; `COBRUST_DORA_REAL_E2E=1` makes a skip a hard failure. | passes (strict, macOS) |
+| L2.behavior.real | `cargo build/clippy -p cobrust-dora --features dora-real --all-targets` | zero warnings; the synthetic-contract cabi unit tests are `#[cfg]`-gated to `not(dora-real)`, the arrow-bridge tests to `dora-real` | passes |
 | wasm | `cargo build -p cobrust-dora --target wasm32-wasip1` (DEFAULT) | synthetic-default cross-compiles to wasm32 (real-dora is native-only) | passes |
 
 ## Done means (Phase 1 — DONE)

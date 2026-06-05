@@ -3089,19 +3089,26 @@ impl Ctx {
                         ),
                     });
                 };
-                // ADR-0092 — `event.send_output("<id>", payload)` output-id
+                // ADR-0092 + ADR-0076c — the `event.send_output("<id>", _)`
+                // / `event.send_output_buffer("<id>", buf)` output-id
                 // compile-time-catch (CLAUDE.md §2.5-A). Intercept BEFORE
                 // the generic `check_eco_sig` (the SAME shape as Case 1's
                 // `coil.array` special-case): when the receiver is a
-                // `dora.Event`, the method is `send_output`, the FIRST arg
-                // is a STRING LITERAL, and the module declares outputs
-                // (`dora_declared_outputs == Some(set)`), reject a literal
-                // id NOT in the set. A non-literal id / a None set skips
-                // this check (falls through to the unchanged `(Str,Str) ->
-                // i64` path) so there is no false-positive on the un-typed
-                // surface; the runtime `cobrust-dora` `-1` backstop covers
-                // the dynamic-id case.
-                if *id == crate::ecosystem::DORA_EVENT_ADT && name == "send_output" {
+                // `dora.Event`, the method is `send_output` OR
+                // `send_output_buffer`, the FIRST arg is a STRING LITERAL,
+                // and the module declares outputs (`dora_declared_outputs ==
+                // Some(set)`), reject a literal id NOT in the set. The
+                // output-id is arg0 for BOTH methods (the payload/buffer is
+                // arg1, unchecked), so the SAME `check_dora_send_output_id`
+                // covers both — else a typo'd id in `send_output_buffer`
+                // would escape the compile-time catch (ADR-0076c §4.2). A
+                // non-literal id / a None set skips this check (falls
+                // through to the unchanged path) so there is no
+                // false-positive; the runtime `cobrust-dora` `-1` backstop
+                // covers the dynamic-id case for both methods.
+                if *id == crate::ecosystem::DORA_EVENT_ADT
+                    && (name == "send_output" || name == "send_output_buffer")
+                {
                     self.check_dora_send_output_id(args)?;
                 }
                 let ret = self.check_eco_sig(&sig, args, span)?;

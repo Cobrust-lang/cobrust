@@ -123,6 +123,73 @@ cobrust build prog.cb -o prog
 > "camera"`? `str`-vs-`str` `==` is a separate language feature; the
 > `str_eq_lit(...)` helper is the proven dispatch form today.
 
+## Typed numeric payloads — `coil.Buffer` in, `coil.Buffer` out
+
+A `str` payload is fine for commands and labels, but a robot's real data
+is **numbers**: a state vector, a sensor tensor, a control command. dora
+moves these as typed [Apache Arrow](https://arrow.apache.org/) arrays — and
+Cobrust hands them to you as a **`coil.Buffer`** (the same array type
+`import coil` gives you for math). One array type spans the numeric pillar
+*and* the dora wire — no second type to learn, no conversion ceremony:
+
+```python
+import dora
+import coil
+
+@dora.node(inputs=["state"], outputs=["action"])
+fn policy(event: dora.Event) -> i64:
+    let obs: coil.Buffer = event.data_buffer()   # a typed numeric input
+    let m: f64 = coil.mean(obs)                   # do real numpy-style math
+    let action: coil.Buffer = coil.full(3, m)     # build a typed output
+    let _ = event.send_output_buffer("action", action)  # emit it
+    return 0
+
+fn main() -> i64:
+    let node = dora.Node("policy_node")
+    let _ = node.run()
+    return 0
+```
+
+- **`event.data_buffer() -> coil.Buffer`** — read a typed-numeric input
+  payload as a `coil.Buffer`. The supported element types are
+  **`float64`, `float32`, `int64`, `int32`, and `bool`** — the dtypes that
+  overlap between Arrow and `coil`. An `int64` array stays `int64` (it is
+  **not** silently turned into a float); a `float64` array stays `float64`.
+  The Buffer is **yours**: it is freed automatically when it goes out of
+  scope (exactly once — no leak, no double-free). On the synthetic default
+  build (no broker) you get a canned `float64 [1.0, 2.0, 3.0]` so the chain
+  runs in tests; under `--features dora-real` you get the real decoded
+  array.
+- **`event.send_output_buffer(output_id, buffer) -> i64`** — emit a
+  `coil.Buffer` as a typed Arrow array on a **declared** output port. It is
+  a **distinct method** from `send_output` (not an overload) so the compiler
+  — and an LLM writing your node — always know which one you mean. The same
+  compile-time output-id check applies: a string-literal typo
+  (`send_output_buffer("acton", ...)` when you declared `action`) is caught
+  at `cobrust check`. The `buffer` you pass is **borrowed**, not consumed —
+  your scope still owns it and drops it once.
+
+> **Why `coil.Buffer` and not a new `pa.array` type?** One array type for
+> both math and the wire is the elegant, one-way-to-do-it choice (ADR-0076c).
+> A robot policy receives a `Buffer`, runs `coil` math on it, and emits a
+> `Buffer` — no `Frame ↔ Buffer` juggling. (This is reversible: a pyarrow-style
+> surface could be added later if it is ever wanted.)
+
+> **Images and text are deferred (on purpose).** Camera frames are `uint8`
+> and commands are `utf8` — neither is one of the 5 numeric dtypes above.
+> For now: use `event.data_str()` for a text payload; a `bytes` accessor for
+> raw image blobs is a near-term follow-up. These are **named, honest gaps**,
+> not silent failures — a non-numeric payload to `data_buffer()` returns an
+> empty Buffer (and logs why on the real build).
+
+> **Arrays with missing values (nulls) are also a named gap.** Arrow arrays
+> can mark some slots as "null" (missing); a `coil.Buffer` is a dense array
+> with no concept of "missing". So a **null-bearing** input array does **not**
+> round-trip — `data_buffer()` returns an empty Buffer and logs why, rather
+> than silently turning a null into `0` / `false` (which would corrupt your
+> data without telling you). Send a null-free array (or use `data_str` for a
+> non-numeric payload).
+
 ## Going real — the `dora-real` feature (#146 Phase A)
 
 The default `cobrust-dora` build is **synthetic** (the `node.run()` loop
@@ -144,9 +211,11 @@ With the feature on, the SAME `.cb` source above becomes a real dora node:
 - `node.run()` drains the **real** `EventStream`, firing your handler once
   per real `Event::Input` and stopping on `Event::Stop`,
 - `event.data_str()` decodes the **real** Apache Arrow payload that arrived
-  on the wire,
-- `event.send_output(id, payload)` publishes a **real** Arrow array on the
-  node's output port (other nodes receive it).
+  on the wire (Utf8 strings); `event.data_buffer()` decodes a **real** typed
+  numeric Arrow array (`Float64Array`/`Int64Array`/…) into a `coil.Buffer`,
+- `event.send_output(id, payload)` publishes a **real** Arrow string array,
+  and `event.send_output_buffer(id, buffer)` publishes a **real** typed Arrow
+  numeric array on the node's output port (other nodes receive it).
 
 **The source you write does not change** — the same `import dora` program is
 synthetic by default and real under the feature. The C-ABI surface, the
@@ -164,15 +233,17 @@ Notes + limits:
 - **Heavy.** The real archive pulls ~100 extra crates; binaries are large
   (~85 MB stripped). This is why the feature is opt-in, not the default
   (mirrors how `coil` gates `faer` behind `coil-faer`).
-- **Phase A payload = scalar / string.** Real array payloads
-  (`coil.Buffer ↔ Arrow`) + multi-port routing are Phase B.
+- **Typed numeric arrays work** (`coil.Buffer ↔ Arrow`, ADR-0076c) for
+  `float64/float32/int64/int32/bool`, on both the synthetic + real builds —
+  see "Typed numeric payloads" above.
 
 ## What you don't get (deferred — honest)
 
-- Arrow array / `RecordBatch` payloads beyond `str`/`i64` scalars — the
-  `coil.Buffer ↔ Arrow` bridge (`pa.array_i64(...)` / `coil.Buffer`) is
-  Phase B (ADR-0076c). (The synthetic default carries `str` only; the
-  `dora-real` Phase-A path carries scalar `str` over real Arrow.)
+- ~~Typed numeric array payloads~~ — **shipped (ADR-0076c)** for the 5
+  dtypes `float64/float32/int64/int32/bool` via `event.data_buffer()` /
+  `event.send_output_buffer(...)`. Still deferred: **`uint8`** (camera
+  images) + **`utf8`** typed arrays + **n-dimensional shape metadata** — use
+  `data_str()` for text and (soon) a `bytes` accessor for raw image blobs.
 - Yaml-loaded dataflows (`dora.run("dataflow.yml")`).
 - ~~Compile-time rejection of an undeclared output id~~ — **shipped
   (ADR-0092).** A **string-literal** undeclared `send_output` id is now a

@@ -2,24 +2,28 @@
 doc_kind: adr
 adr_id: 0076c
 title: dora Arrow payload surface — what `.cb`-visible type a dora Event::Input / send_output carries
-status: proposed
+status: accepted
 date: 2026-06-01
-last_verified_commit: 936f13c
+ratified_date: 2026-06-06
+last_verified_commit: 18e9208
 decision_owner: cto
 supersedes: []
 superseded_by: []
-relates_to: [adr:0072, adr:0073, adr:0076, adr:0077, adr:0078, "strategy:dora-real-integration-plan", "strategy:numpy-translation-architecture", "claude.md:§2.2", "claude.md:§2.5", "claude.md:§5.1", "feedback:elegant_ecosystem_surface_no_legacy_debt"]
+relates_to: [adr:0072, adr:0073, adr:0076, adr:0077, adr:0078, adr:0092, "strategy:dora-real-integration-plan", "strategy:numpy-translation-architecture", "claude.md:§2.2", "claude.md:§2.5", "claude.md:§5.1", "feedback:elegant_ecosystem_surface_no_legacy_debt"]
 ---
 
 # ADR-0076c: dora Arrow payload surface
 
-> **This is a DESIGN PROPOSAL for the CTO / user, NOT a final spec.** It scopes
-> THE most consequential surface choice in the dora-cb pillar (`dora-real-integration-plan`
-> §4.3 / §6 RISK R4) so the future Phase-B impl session can decide + execute
-> without re-discovery. It writes ONLY this doc — no code is touched. The
-> ratifying decision is the impl session's (or a CTO sign-off on the
-> recommendation below). Empirical API facts are cited; anything not directly
-> verified is marked **[UNVERIFIED]**. Status stays `proposed` until ratified.
+> **RATIFIED 2026-06-06 (status: accepted) for the (D)-B-1a numeric round-trip.**
+> The original body below (§1–§8) was the design PROPOSAL; the CTO confirmed the
+> **coil-unity over a `pa`-shim** trade (U9), and the (D)-B-1a increment (the 5
+> overlapping dtypes `Float64/Float32/Int64/Int32/Bool` via the existing
+> `coil.Buffer` handle) is IMPLEMENTED + gated. The `UInt8`/`Utf8`/n-D-shape
+> residual stays explicitly deferred (named divergences, §1.5 + §5). See the new
+> **§9 (Ratification + as-built)** for the verified arrow 54.3.1 API the proposal
+> marked `[UNVERIFIED]` (U2/U3), the as-built surface, and the reversibility
+> note. The proposal's `[UNVERIFIED]` tags in §1–§8 are superseded by §9's
+> verified facts; they are left in place for provenance.
 
 ---
 
@@ -477,7 +481,7 @@ change. (Confirm by grep that `lower.rs` has no dora-specific code — the plan
 | # | Item | Severity | Notes |
 |---|---|---|---|
 | U1 | **`UInt8` (camera images) has NO coil home** — the dominant robotics payload | HIGH | The core §1.5 impedance. B-1 serves it via `bytes` only; typed `UInt8` needs a coil `Dtype::UInt8` widening (the unity path) — confirm the user accepts deferring typed images. |
-| U2 | **The `ndarray ↔ arrow` bridge correctness** — endianness, null bitmap, n-D layout, zero-copy vs copy | HIGH | Plan §5 Phase-B heaviest risk. Needs the differential bit-faithfulness gate (§4.4). **[UNVERIFIED]** exact arrow 54.x constructors. |
+| U2 | **The `ndarray ↔ arrow` bridge correctness** — endianness, null bitmap, n-D layout, zero-copy vs copy | HIGH → **RESOLVED (B-1a + REPAIR)** | The 11 `arrow_bridge_tests` are the differential bit-faithfulness gate (§9.6): per-dtype round-trip + dtype-faithfulness + empty + 1000-event drop balance. **NULL BITMAP (REPAIR MAJOR):** `decode_arrow_buffer` GUARDS on `null_count() > 0` (logs the divergence + returns `None`) so a null is never silently materialised as `0`/`false` — covered by the 3 null-bearing tests. n-D layout stays deferred (flat 1-D by design, §1.3). arrow 54.3.1 constructors now VERIFIED (§9). |
 | U3 | **Exact `dora-arrow-convert` `TryFrom<&ArrowData>` / `IntoArrow` per-type list** | MEDIUM | The `from_impls.rs`/`into_impls.rs` modules — **[UNVERIFIED]**; `into_vec<T: Copy+NumCast>` + `String::try_from` confirmed, the per-`Vec`/per-scalar set is not. Read on dispatch. |
 | U4 | **`send_output` overload vs distinct method name** for the Buffer arg | MEDIUM | Current row is `(Str, Str)` (L1316). §2.5 favors a distinct `send_output_buffer` for compile-time clarity; confirm the manifest supports two rows cleanly (one return type per row — same constraint ADR-0077 §7 hit for coil `dot`). |
 | U5 | **n-D shape side-channel** — dora carries `(H,W,C)` in metadata, coil carries rank in the array | MEDIUM | B-1 is 1-D only. How the `.cb` source sees/sets the shape metadata is unscoped (a `Metadata` accessor surface is a later increment). |
@@ -549,4 +553,234 @@ This is a proposal; it is "done" when:
    **[UNVERIFIED]** arrow/dora APIs (U2/U3) on dispatch eve and pinning
    `dora-node-api = "=0.5.0"` (plan §3.0 F35-sibling).
 
-Until then: `status: proposed`.
+All three are now satisfied — see §9. `status: accepted`.
+
+---
+
+## 9. Ratification + as-built (2026-06-06, HEAD 18e9208 → this change)
+
+This section records the (D)-B-1a numeric round-trip AS BUILT and resolves the
+proposal's `[UNVERIFIED]` arrow/dora API facts (U2/U3) by READING the
+`dora-node-api 0.5.0` + `arrow 54.3.1` source extracted in the cargo registry.
+
+### 9.1 CTO trade confirmation (U9)
+
+**Confirmed: coil-unity over a `pa`-shim.** ONE `.cb` array type (`coil.Buffer`)
+spans the numeric pillar AND the dora wire for the 5 overlapping dtypes. NO new
+`pa`/`dora.Frame` type in v0.7.0. **This is reversible at the (D)-B-2 boundary**
+— nothing in B-1a forecloses a later `pa`-shim if pyarrow-familiarity is later
+preferred over coil-unity; the `data_buffer()` / `send_output_buffer` surface is
+additive (it sits beside the unchanged `data_str` / `send_output` string path).
+
+### 9.2 The verified arrow 54.3.1 / dora 0.5.0 API (resolves U2/U3)
+
+- **arrow re-export:** `dora-node-api 0.5.0` `src/lib.rs` L89 `pub use arrow;` —
+  so arrow is reached as `dora_node_api::arrow::*` with **NO new Cargo.toml dep**
+  (F64-safe). `pub use dora_arrow_convert::*` (L90) re-exports `ArrowData` +
+  `IntoArrow`.
+- **`ArrowData`** = `pub struct ArrowData(pub arrow::array::ArrayRef)` (a newtype
+  over `Arc<dyn Array>`), `Deref<Target = ArrayRef>` (dora-arrow-convert
+  `src/lib.rs`). So `data.data_type()` + `data.as_any().downcast_ref::<T>()` +
+  `data.len()` are the typed-read idiom (the SAME one dora's own `into_vec<T>`
+  uses).
+- **`send_output` 3rd arg:** `DoraNode::send_output(&mut self, output_id: DataId,
+  parameters: MetadataParameters, data: impl Array)` (node/mod.rs L585) — the
+  bound is `arrow::array::Array` (the TRAIT), and it calls `data.to_data()`. A
+  concrete `Float64Array` / `BooleanArray` impls `arrow::array::Array`, so a
+  `Arc::new(Float64Array::from(vec)) as ArrayRef` (which also impls `Array` via
+  the blanket `Arc<dyn Array>` impl) is passed directly. (NOT `ArrowData` — that
+  is the INPUT newtype; the output bound is the array trait.)
+- **Constructors:** `Float64Array::from(Vec<f64>)` / `Int64Array` / `Int32Array`
+  / `Float32Array` — all covered by `def_numeric_from_vec!` (primitive_array.rs
+  L1457-1467). `BooleanArray::from(Vec<bool>)` (boolean_array.rs L355).
+- **Accessors:** `PrimitiveArray::values() -> &ScalarBuffer<T::Native>`
+  (primitive_array.rs L657), and `ScalarBuffer<T>: Deref<Target = [T]>`
+  (arrow-buffer scalar.rs L104) — so `.values()` IS a `&[T]` slice (no copy;
+  passed straight to coil's `array_*` constructor). `BooleanArray` is bit-packed
+  (`.values() -> &BooleanBuffer`, NOT `&[bool]`), so the decode materialises it
+  via `.value(i) -> bool` (boolean_array.rs L190).
+- **`DataType`:** `dora_node_api::arrow::datatypes::DataType` (arrow re-exports
+  `arrow_schema::{DataType, ...}`), matched on `Float64/Float32/Int64/Int32/Boolean`.
+- **Live integration-testing wire (for the Part-C e2e):**
+  `InputData::JsonObject { data: serde_json::Value, data_type: Option<Value> }`
+  (dora-message 0.8.0 `integration_testing_format.rs`) converts a JSON array
+  (`[0.5,1.5,2.5]` + `"Float64"`) to a real `Float64Array`; outputs are written
+  to `DORA_TEST_WRITE_OUTPUTS_TO` as `{ id, data:[...], data_type:"Float64" }`
+  (the `arrow_json::ArrayWriter` rendering). So a LIVE typed round-trip is
+  hermetically testable with NO daemon.
+
+### 9.3 As-built surface (the 5-layer wiring)
+
+1. **cabi** (`cobrust-dora/src/cabi.rs`):
+   `__cobrust_dora_event_data_buffer(event) -> *mut Buffer` (boxed `coil::Array`)
+   + `__cobrust_dora_event_send_output_buffer(event, output_id, buf) -> i64`.
+   Both DUAL-BUILD (mirror `__cobrust_dora_event_send_output`): the
+   `#[unsafe(no_mangle)]` export validates the output id against
+   `DECLARED_OUTPUTS` (fail-closed, both builds), then `#[cfg]`-dispatches to
+   `real::*` (real arrow bridge) or the synthetic arm (canned Float64
+   `[1,2,3]` for `data_buffer`; an `output[id]=buffer[len=n]` marker for
+   `send_output_buffer` — NO arrow referenced). The event retains the decoded
+   payload in a new `DoraEventHandle.data_buffer: Option<coil::Array>` field
+   (decoded once at recv via `real::decode_arrow_buffer`; canned synthetic).
+   The `ndarray↔arrow` bridge: IN = `real::decode_arrow_buffer` (dtype-dispatch
+   → `coil::array_*`); OUT = `real::coil_to_arrow` (`coil::Array` arm
+   `.iter().copied()` → `Float64Array::from` etc.), single-sourced so
+   `send_output_buffer` AND the hermetic round-trip test share ONE bridge.
+2. **manifest** (`cobrust-types/src/ecosystem.rs`): two `DORA_EVENT_ADT` rows —
+   `("data_buffer") -> coil_buffer_ty()` (0 args) +
+   `("send_output_buffer") -> [Ty::Str, coil_buffer_ty()] -> Ty::Int`. REUSE
+   `coil_buffer_ty()` verbatim — NO new ADT / `Ty`. A DISTINCT method name (NOT
+   a `send_output` overload) per §2.5 compile-time clarity (U4 resolved this way).
+3. **MIR:** NO change (confirmed). The Buffer handle ABI (opaque `*mut u8`,
+   `Box` into/from raw) == coil's existing handle; the handle-method call lowers
+   through the existing generic eco path; the returned Buffer is a non-Copy
+   `Ty::Adt` so `drop.rs` schedules its scope-exit drop automatically; the `buf`
+   arg auto-borrows via `lower_eco_arg`'s Value-handle Move→Copy upgrade (so the
+   `.cb` scope still owns + drops it once).
+4. **codegen** (`cobrust-codegen/src/llvm_backend.rs`): two extern decls —
+   `data_buffer` reuses the `(ptr)->ptr` event-id fn type; `send_output_buffer`
+   reuses the `(ptr,ptr,ptr)->i64` send_output fn type.
+5. **drop:** the `data_buffer()` return is `.cb`-owned, freed ONCE via the
+   EXISTING `__cobrust_coil_buffer_drop` (`handle_drop_symbol(COIL_BUFFER_ADT)`)
+   — NO new drop symbol. `send_output_buffer` BORROWS `buf` (reads, never frees).
+   NOTE (REPAIR BLOCKER-A): the drop symbol resolving in the type-checker MANIFEST
+   is NOT the same as it RESOLVING AT LINK TIME — the build's link-set scan also
+   had to learn about drop-glue (see §9.5b) so `libcoil.a` lands on the link line.
+
+### 9.4 The `DoraUnknownOutputId` extension (ADR-0092 interaction)
+
+`check.rs::try_synth_ecosystem_call` now fires `check_dora_send_output_id` for
+`name == "send_output" || name == "send_output_buffer"` — so a literal typo'd
+output id in EITHER method is caught at `cobrust check` (the §2.5-A
+compile-time-catch), not just at the runtime `-1` backstop. The id is arg0 for
+both methods; the buffer is arg1 (unchecked, like the str payload).
+
+### 9.5 The cross-crate link fix (new, load-bearing)
+
+`cobrust-dora` is the FIRST workspace crate to depend on `cobrust-coil` as a
+LIBRARY (for `coil::Array` + the `array_*` constructors — the payload type).
+Because `cobrust-coil`'s `cabi` module emits `#[no_mangle]` `__cobrust_coil_*`
+symbols, a naive dep would embed all of them in `libdora.a` — and a `.cb`
+program importing BOTH `dora` and `coil` (the canonical robot-policy shape)
+would then hit ~125 duplicate-symbol link errors (libcoil.a vs libdora.a).
+**Fix:** gate `coil::cabi` behind a DEFAULT-ON `cabi` feature; `cobrust-dora`
+deps coil with `default-features = false` → it pulls the data type + constructors
+WITHOUT the shim symbols. `import coil` builds (which compile `libcoil.a` via
+`cargo build -p cobrust-coil`, default features) keep the full shim surface
+UNCHANGED. A `#![cfg_attr(not(feature = "cabi"), allow(dead_code))]` in coil's
+lib.rs silences the otherwise-`-D warnings`-fatal dead_code the shim-less build
+leaves (the `*_scalar` aggregates / element-wise helpers the cabi module was the
+sole consumer of); coil's benches + the two `cabi`-touching integration tests
+carry `required-features = ["cabi"]` so `--no-default-features --all-targets`
+skips them. This is the elegant-law mechanism (mirrors coil's `pyo3`/`faer`
+gates) — NOT a behavior change.
+
+### 9.5b The link-set drop-glue scan fix (REPAIR BLOCKER-A)
+
+The §9.5 gate stops the DUPLICATE-symbol clash, but a SECOND, distinct
+link-set bug surfaced after the audit: a `.cb` node that obtains a
+`coil.Buffer` via `event.data_buffer()` and uses it WITHOUT any explicit
+`coil.<fn>()` call (the most natural shape — an ECHO node:
+`data_buffer()` → `send_output_buffer()`) FAILED TO LINK with
+`ld: ___cobrust_coil_buffer_drop not found`, even though `cobrust check`
+PASSED.
+
+**Root cause.** The build's `collect_ecosystem_modules`
+(`cobrust-cli/src/build/intrinsics.rs`) decides which `lib<mod>.a` archives go
+on the link line by scanning the lowered MIR — but it scanned ONLY
+`Terminator::Call { func: Constant::Str(sym) }` callees. The `coil.Buffer`
+owned by the echo node emits NO `__cobrust_coil_*` CALL; its only `coil`
+symbol reference is the scope-exit DROP-GLUE (`__cobrust_coil_buffer_drop`,
+which codegen emits from a `Terminator::Drop` on the `Ty::Adt(COIL_BUFFER_ADT)`
+local via `handle_drop_symbol`). That symbol lives ONLY in `libcoil.a`
+(`nm libcoil.a` has it as `T`; `nm libdora.a` has NO
+`cobrust_coil_buffer_drop`). So the scan never added `coil`, `libcoil.a` was
+never linked, and the build died. `data_buffer()` is the FIRST non-`coil`
+module to hand out a `coil.Buffer`, so this drop-glue-blindness was newly
+exercised by this change (every prior `coil.Buffer` came from an explicit
+`coil.*` constructor call that the `Call` scan already saw).
+
+The original build report conflated the two resolutions: the drop symbol
+resolves in the type-checker MANIFEST (`handle_drop_symbol(COIL_BUFFER_ADT)`)
+but that says NOTHING about whether the LINKER finds it — those are different
+layers.
+
+**Fix.** `collect_ecosystem_modules` now ALSO scans `Terminator::Drop`: it
+resolves the dropped place's local type and, when it is an `Ty::Adt(id, _)`
+whose `handle_drop_symbol(id)` maps to a recognized ecosystem prefix,
+registers THAT module too. This MIRRORS codegen's own
+`emit_drop_for_ty` (`Ty::Adt(id, _) => handle_drop_symbol(*id)`), so the
+link set is exactly the symbol set the object file references — for ANY
+ecosystem handle dropped at scope exit, not just `coil`. This is general (it
+fixes the same latent blindness for any future non-owning module that returns
+another module's handle), additive, and changes no behavior for programs that
+already linked.
+
+**Coverage.** The masking test gap (the audit's F36/F37-class finding) is
+closed: `dora_buffer_io_e2e::test_e2e_dora_echo_buffer_no_explicit_coil_call_links`
+is the synthetic-build echo node (`data_buffer()` → `send_output_buffer()`,
+NO `coil.*` call) — it BUILDS only because the drop-glue scan now pulls
+`libcoil.a`; and `dora_real_node_e2e` Part C-D is the same echo node under the
+REAL archive (links `libcoil.a` from the drop alone + round-trips the real
+decoded values). Both omit ALL explicit `coil.*` calls so they exercise the
+drop-glue-ONLY link path the pre-fix tests incidentally masked.
+
+### 9.6 Verification (this change)
+
+- **Hermetic ndarray↔arrow round-trip** (the UNCONDITIONAL proof,
+  `--features dora-real`): 11 tests in `cabi::arrow_bridge_tests` — bit-identical
+  round-trip per dtype (Float64/Float32/Int64/Int32/Bool), dtype-faithful (Int64
+  stays Int64, no float up-cast), empty-array-per-dtype, the Utf8→None
+  divergence, a 1000-event balanced-drop loop, AND (REPAIR MAJOR) the three
+  null-bitmap tests: a null-bearing `Float64Array` + a null-bearing
+  `BooleanArray` each decode to `None` (the named null-bitmap divergence — NOT a
+  silent `[1.0, 0.0, 3.0]` / `[true, false, false]` fabrication), plus an
+  all-`Some` (null-free) control that still round-trips bit-faithfully (no
+  false-positive null rejection). ALL PASS.
+- **Synthetic cabi shim contract:** 4 new tests in `cabi::tests` (canned-buffer
+  `data_buffer`, None/null empty-buffer fallback, `send_output_buffer`
+  declared/undeclared validation + count, null-buffer tolerance). ALL PASS (12
+  total synthetic lib tests).
+- **`.cb` build e2e** (`dora_buffer_io_e2e.rs`, synthetic build, 5 tests):
+  `data_buffer()` → `coil.print_buffer` / `coil.mean` / `coil.full` →
+  `send_output_buffer`; the `DoraUnknownOutputId` negative + the non-literal
+  skip; AND (REPAIR BLOCKER-A) the MINIMAL echo node
+  (`data_buffer()` → `send_output_buffer()` with NO explicit `coil.<fn>()` call)
+  that exercises the drop-glue-ONLY link path. ALL PASS, exit 0.
+- **LIVE real round-trip** (`dora_real_node_e2e.rs` Part C + the new Part C-D,
+  gated like Parts A/B): Part C — a real `Float64Array` delivered on the live
+  `EventStream` → `data_buffer()` decodes it → `send_output_buffer` publishes it
+  → the output file carries it back bit-faithfully as `Float64` `[0.5,1.5,2.5]`;
+  Part C-D (REPAIR BLOCKER-A) — the drop-glue-ONLY echo node links `libcoil.a`
+  from the `coil.Buffer` DROP alone (no explicit coil call) and round-trips the
+  REAL decoded `[3.5, 4.5]` to the output file. PASS under
+  `COBRUST_DORA_REAL_E2E=1`.
+- **Both feature states** build + clippy clean (synthetic default + dora-real);
+  the wired crates (types/codegen/cli) + coil (default + no-default) clippy
+  clean; fmt clean; `--locked` consistent (Cargo.lock = +1 line
+  `cobrust-coil` under `cobrust-dora`'s deps).
+
+### 9.7 Residual (still deferred, named divergences)
+
+- `UInt8` (camera images) + `Utf8` typed arrays + n-D shape metadata — unchanged
+  from §5: `data_str` carries Utf8; `bytes` (a future B-1b accessor) carries raw
+  blobs; the coil `Dtype::UInt8` widening (the unity path) is the eventual fix.
+  `decode_arrow_buffer` logs a one-line divergence for any non-numeric /
+  unsupported dtype (never a silent drop) and `data_buffer()` returns an empty
+  Buffer in that case.
+- **Null bitmap (NAMED divergence — REPAIR MAJOR, was the U2 silent-alteration
+  risk):** `coil::Array` is a DENSE `ndarray` with NO null concept, so a
+  null-BEARING arrow array (`null_count() > 0`) cannot round-trip faithfully —
+  reading `.values()`/`.value(i)` would silently materialise a null slot as the
+  raw underlying buffer value (a null `f64` → `0.0`, a null `bool` → `false`).
+  `decode_arrow_buffer` now GUARDS on `null_count() > 0` BEFORE the dense decode:
+  it LOGS the divergence (the input dtype + the null count) and returns `None`
+  (→ `data_buffer()` hands the empty-buffer fallback), so a null is NEVER
+  silently fabricated. A null-free array (the dora numeric-payload common case)
+  is unaffected. The eventual unity fix (if null-bearing dora payloads appear) is
+  a coil masked-array type; until then, send a null-free array (or `data_str` for
+  a non-numeric payload).
+- Up-cast-vs-reject (U7): the as-built decode REJECTS-to-`None` (→ empty Buffer +
+  a logged divergence) rather than up-casting `UInt8 → Float64` — the §2.5
+  explicit-error lean. The null-bitmap guard adopts the same reject-don't-fabricate
+  posture.

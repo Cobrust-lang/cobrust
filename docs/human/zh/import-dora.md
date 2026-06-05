@@ -113,6 +113,66 @@ cobrust build prog.cb -o prog
 > "camera"`? `str` 对 `str` 的 `==` 是一个独立的语言特性; `str_eq_lit(...)`
 > 辅助函数是当前已证明的分发形式。
 
+## 带类型的数值载荷 — 收 `coil.Buffer`, 发 `coil.Buffer`
+
+`str` 载荷适合命令和标签, 但机器人的真实数据是**数字**: 状态向量,
+传感器张量, 控制命令。dora 以带类型的 [Apache Arrow](https://arrow.apache.org/)
+数组搬运它们 — Cobrust 则把它们交给你, 成为一个 **`coil.Buffer`**(就是
+`import coil` 给你做数学用的同一种数组类型)。一种数组类型同时横跨数值
+支柱**和** dora 线路 — 无需学第二种类型, 无需转换仪式:
+
+```python
+import dora
+import coil
+
+@dora.node(inputs=["state"], outputs=["action"])
+fn policy(event: dora.Event) -> i64:
+    let obs: coil.Buffer = event.data_buffer()   # 带类型的数值输入
+    let m: f64 = coil.mean(obs)                   # 做真正的 numpy 式数学
+    let action: coil.Buffer = coil.full(3, m)     # 构造带类型的输出
+    let _ = event.send_output_buffer("action", action)  # 发射它
+    return 0
+
+fn main() -> i64:
+    let node = dora.Node("policy_node")
+    let _ = node.run()
+    return 0
+```
+
+- **`event.data_buffer() -> coil.Buffer`** — 把带类型的数值输入载荷读成
+  一个 `coil.Buffer`。支持的元素类型是 **`float64`、`float32`、`int64`、
+  `int32`、`bool`** — Arrow 与 `coil` 重叠的那 5 种 dtype。`int64` 数组保持
+  `int64`(**不会**被悄悄变成浮点); `float64` 数组保持 `float64`。这个
+  Buffer 是**你的**: 离开作用域时自动释放(恰好一次 — 无泄漏, 无双重释放)。
+  在合成默认构建上(无 broker)你得到预设的 `float64 [1.0, 2.0, 3.0]`, 使链路
+  在测试中可运行; 在 `--features dora-real` 下你得到真实解码的数组。
+- **`event.send_output_buffer(output_id, buffer) -> i64`** — 把一个
+  `coil.Buffer` 作为带类型的 Arrow 数组在一个**已声明**的输出端口上发射。
+  它是与 `send_output` **不同的方法**(不是重载), 这样编译器 — 以及为你
+  写节点的 LLM — 总能明确知道你指的是哪一个。同样的编译期输出 id 检查
+  适用: 字符串字面量拼错(声明了 `action` 却写 `send_output_buffer("acton",
+  ...)`)会在 `cobrust check` 阶段被抓住。你传入的 `buffer` 是**借用**而非
+  消耗 — 你的作用域仍然拥有它并只释放一次。
+
+> **为什么用 `coil.Buffer` 而不是新的 `pa.array` 类型?** 数学与线路共用
+> 一种数组类型是优雅的、一件事一种做法的选择(ADR-0076c)。机器人策略
+> 收到一个 `Buffer`, 在其上跑 `coil` 数学, 再发出一个 `Buffer` — 无需
+> `Frame ↔ Buffer` 来回倒腾。(这是可逆的: 若将来真的需要, 可以再加一个
+> pyarrow 风格的表面。)
+
+> **图像与文本被有意推迟。** 相机帧是 `uint8`, 命令是 `utf8` — 都不在
+> 上面那 5 种数值 dtype 里。目前: 文本载荷用 `event.data_str()`; 原始图像
+> 字节块的 `bytes` 访问器是近期跟进项。这些是**有名有姓的、诚实的缺口**,
+> 而非静默失败 — 给 `data_buffer()` 一个非数值载荷会返回一个空 Buffer
+> (并在真实构建上记录原因)。
+
+> **带缺失值(null)的数组同样是有名有姓的缺口。** Arrow 数组可以把某些槽位
+> 标记为 "null"(缺失); 而 `coil.Buffer` 是稠密数组, 没有 "缺失" 这个概念。
+> 所以一个**带 null 的**输入数组**不会**往返 — `data_buffer()` 会返回一个空
+> Buffer 并记录原因, 而不是把 null 静默地变成 `0` / `false`(那会在不告诉你
+> 的情况下污染你的数据)。请发送一个不含 null 的数组(或者非数值载荷用
+> `data_str`)。
+
 ## 走向真实 — `dora-real` 特性 (#146 Phase A)
 
 `cobrust-dora` 的默认构建是**合成的**(`node.run()` 循环注入预设事件,
@@ -132,9 +192,12 @@ cargo build -p cobrust-dora --features dora-real
   `dora start` 数据流 — dora 守护进程派生它并注入配置),
 - `node.run()` 排空**真实的** `EventStream`, 对每个真实的 `Event::Input`
   触发你的处理器一次, 并在 `Event::Stop` 时停止,
-- `event.data_str()` 解码**真实的**到达载荷(Apache Arrow),
-- `event.send_output(id, payload)` 在节点的输出端口上发布**真实的** Arrow
-  数组(其他节点会收到)。
+- `event.data_str()` 解码**真实的**到达载荷(Apache Arrow Utf8 字符串);
+  `event.data_buffer()` 把一个**真实的**带类型数值 Arrow 数组
+  (`Float64Array`/`Int64Array`/…)解码成一个 `coil.Buffer`,
+- `event.send_output(id, payload)` 发布**真实的** Arrow 字符串数组,
+  `event.send_output_buffer(id, buffer)` 在节点的输出端口上发布**真实的**
+  带类型数值 Arrow 数组(其他节点会收到)。
 
 **你写的源码不变** — 同一份 `import dora` 程序默认是合成的, 在特性下是
 真实的。C-ABI 表面, manifest 与 codegen 完全相同; 仅运行时主体被替换
@@ -150,11 +213,17 @@ cargo build -p cobrust-dora --features dora-real
 - **重量级.** 真实归档额外拉取约 100 个 crate; 二进制很大(剥离后约
   85 MB)。这就是该特性是可选而非默认的原因(对照 `coil` 把 `faer` 收在
   `coil-faer` 后面的做法)。
-- **Phase A 载荷 = 标量 / 字符串.** 真实数组载荷(`coil.Buffer ↔ Arrow`)
-  + 多端口路由属 Phase B。
+- **带类型数值数组可用**(`coil.Buffer ↔ Arrow`, ADR-0076c), 覆盖
+  `float64/float32/int64/int32/bool`, 合成与真实构建均可 — 见上文"带类型
+  的数值载荷"。
 
 ## 你不会得到什么 (推迟 — 诚实说明)
 
+- ~~带类型的数值数组载荷~~ — **已交付(ADR-0076c)**, 覆盖 5 种 dtype
+  `float64/float32/int64/int32/bool`, 经由 `event.data_buffer()` /
+  `event.send_output_buffer(...)`。仍推迟: **`uint8`**(相机图像)+
+  **`utf8`** 带类型数组 + **n 维形状元数据** — 文本用 `data_str()`,
+  原始图像字节块(很快)用 `bytes` 访问器。下面这条是历史描述:
 - 超出 `str`/`i64` 标量的 Arrow 数组 / `RecordBatch` 载荷 —
   `coil.Buffer ↔ Arrow` 桥(`pa.array_i64(...)` / `coil.Buffer`)属 Phase B
   (ADR-0076c)。(合成默认仅承载 `str`; `dora-real` 的 Phase-A 路径在真实

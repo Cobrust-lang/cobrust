@@ -22,7 +22,19 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 workspace = true
 
 [features]
-default = []
+# `cabi` (DEFAULT-ON) gates the `.cb`-side `#[no_mangle]` C-ABI shim module
+# (`__cobrust_coil_*` symbols). It is in `default` so `import coil` builds
+# (which compile `libcoil.a` via `cargo build -p cobrust-coil` with default
+# features) keep the full shim surface UNCHANGED. A WORKSPACE crate that
+# depends on `cobrust-coil` only for its `Array` type + Rust constructors
+# (e.g. `cobrust-dora`, ADR-0076c (D)-B-1a, which decodes a dora payload
+# INTO a `coil::Array`) MUST use `default-features = false` to DROP this
+# module — otherwise the `#[no_mangle]` shims get embedded in BOTH that
+# crate's staticlib AND `libcoil.a`, and a `.cb` program importing both
+# modules hits ~125 duplicate-symbol link errors. Gating the shims (NOT the
+# data type) keeps `Array`/constructors available without the symbol surface.
+default = ["cabi"]
+cabi = []
 # Per ADR-0011 §3 + ADR-0013 §"Decision": `--features pyo3` switches in
 # the PyO3 wrapper module so the crate is loadable from Python as a
 # native extension.
@@ -54,6 +66,11 @@ coil-faer = ["dep:faer"]
 [[bench]]
 name = "elementwise_add"
 harness = false
+# Exercises the `coil::cabi` shim surface (`__cobrust_coil_buffer_*`), so it
+# requires the DEFAULT-ON `cabi` feature — `required-features` makes cargo
+# SKIP it under `--no-default-features --all-targets` (the library-only mode
+# `cobrust-dora` uses) instead of failing to compile the `coil::cabi` import.
+required-features = ["cabi"]
 
 # 3-tier matrix-multiply (`a @ b`, f64) benchmark — the SECOND increment of
 # the Cobrust perf-benchmark suite (ADR-0077 §"@-operator"). Same
@@ -64,6 +81,7 @@ harness = false
 [[bench]]
 name = "matmul"
 harness = false
+required-features = ["cabi"]
 
 # 3-tier full-array reduction (`mean`, f64) benchmark — the THIRD increment of
 # the Cobrust perf-benchmark suite (Stream W P0 `coil.mean(a) -> f64`). Same
@@ -76,6 +94,21 @@ harness = false
 [[bench]]
 name = "reduce"
 harness = false
+required-features = ["cabi"]
+
+# Integration tests that drive the `coil::cabi` shim surface directly also
+# require the DEFAULT-ON `cabi` feature — explicit `[[test]]` entries with
+# `required-features` so `--no-default-features --all-targets` (the
+# library-only mode) SKIPS them instead of failing on the `coil::cabi`
+# import. (Pure-Rust corpus tests that never touch `cabi` stay
+# auto-discovered + always build.)
+[[test]]
+name = "div_scalar_elementwise_corpus"
+required-features = ["cabi"]
+
+[[test]]
+name = "broadcast_elementwise_corpus"
+required-features = ["cabi"]
 
 [dependencies]
 serde_json = { workspace = true }

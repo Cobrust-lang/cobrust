@@ -3139,6 +3139,19 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // declared input (falling back to the single canned event when none
         // declared). `event_send_output` validates against the declared
         // outputs + captures the payload for the synthetic-E2E stdout assert.
+        //
+        // ADR-0076c (D)-B-1a — the typed-numeric Arrow↔coil.Buffer
+        // round-trip (numeric SIBLINGS of data_str / send_output):
+        //   __cobrust_dora_event_data_buffer(event: *mut Event) -> *mut Buffer
+        //       (boxed coil::Array — a coil.Buffer the .cb scope owns +
+        //        drops once via __cobrust_coil_buffer_drop)
+        //   __cobrust_dora_event_send_output_buffer(
+        //       event: *mut Event, output_id: *mut Str, buf: *mut Buffer
+        //   ) -> i64   (0 = emitted; -1 = undeclared output id)
+        // `data_buffer` reuses the `dora_event_id_ty` (ptr)->ptr shape (the
+        // Buffer handle ABI == coil's opaque *mut u8); `send_output_buffer`
+        // reuses the `dora_event_send_output_ty` (ptr,ptr,ptr)->i64 shape
+        // (the 3rd ptr is the borrowed Buffer instead of a Str payload).
         let dora_node_new_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
         let dora_node_node_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
         let dora_node_run_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
@@ -3160,6 +3173,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_dora_declare_output", dora_declare_ty, 1),
             (
                 "__cobrust_dora_event_send_output",
+                dora_event_send_output_ty,
+                3,
+            ),
+            // ADR-0076c (D)-B-1a — typed-numeric Buffer round-trip shims.
+            // `data_buffer` is (ptr)->ptr (reuses the event-id fn type);
+            // `send_output_buffer` is (ptr,ptr,ptr)->i64 (reuses the
+            // send_output fn type — 3rd arg is the borrowed Buffer ptr).
+            ("__cobrust_dora_event_data_buffer", dora_event_id_ty, 1),
+            (
+                "__cobrust_dora_event_send_output_buffer",
                 dora_event_send_output_ty,
                 3,
             ),

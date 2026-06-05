@@ -38,6 +38,17 @@ default = []
 dora-real = ["dep:dora-node-api", "dep:tokio"]
 
 [dependencies]
+# ADR-0076c (D)-B-1a — the typed-numeric Arrow↔coil.Buffer round-trip
+# REUSES `coil::Array` as the `.cb`-visible payload type (one `.cb` array
+# type spans the numeric + robotics pillars; ADR-0076c §3). NON-optional:
+# BOTH builds need it — the synthetic default returns a canned `coil::Array`
+# from `event.data_buffer()` (so the `.cb` type-check + build path resolves
+# without a broker), and the `dora-real` build decodes a live Arrow array
+# INTO a `coil::Array`. `default-features = false` keeps it lean (no pyo3 /
+# faer pull). The boxed `coil::Array` IS the `COIL_BUFFER_ADT` handle, so
+# the `.cb` scope drops it via the EXISTING `__cobrust_coil_buffer_drop`
+# (ecosystem.rs handle_drop_symbol) — no new drop symbol here.
+cobrust-coil = { path = "../cobrust-coil", default-features = false }
 # #146 Phase A — the REAL dora-rs node API, behind the OPTIONAL `dora-real`
 # feature (NOT default). Exact-pinned per dora-real-integration-plan §3.0
 # (F35-sibling version discipline: the crate is independently versioned at
