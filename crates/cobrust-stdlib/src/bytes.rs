@@ -160,6 +160,229 @@ pub unsafe extern "C" fn __cobrust_bytes_clone(b: *mut u8) -> *mut u8 {
     Box::into_raw(copy).cast::<u8>()
 }
 
+// =====================================================================
+// ADR-0093 Phase 2 — the byte-buffer surface (slice / concat / encode /
+// decode / hex). EVERY function below MINTS a fresh heap value (a fresh
+// `bytes` or a fresh `str`) that the `.cb` scope owns + drops EXACTLY
+// ONCE; the input handle(s) are BORROWED (read-only) — NEVER freed here.
+// This is the SAME mint-fresh / borrow-inputs discipline `__cobrust_str_
+// concat` / `__cobrust_str_lower` already run (ADR-0050c).
+// =====================================================================
+
+/// Borrow a `bytes` handle as a read-only byte slice. NULL / empty → `&[]`.
+/// The handle is NOT consumed.
+///
+/// # Safety
+///
+/// `b` must be NULL or a pointer returned by [`__cobrust_bytes_from_raw`]
+/// (or [`__cobrust_bytes_clone`]) and not yet dropped.
+unsafe fn bytes_buf_as_slice<'a>(b: *mut u8) -> &'a [u8] {
+    if b.is_null() {
+        return &[];
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let buf = unsafe { &*b.cast::<BytesBuffer>() };
+    buf.bytes.as_slice()
+}
+
+/// Mint a fresh owned `bytes` from a byte slice (the shared tail of
+/// `slice` / `concat` / `from_str`). Always a fresh `Box`, so the result
+/// is `.cb`-owned + dropped once.
+fn mint_bytes(bytes: Vec<u8>) -> *mut u8 {
+    let buf = Box::new(BytesBuffer { bytes });
+    Box::into_raw(buf).cast::<u8>()
+}
+
+/// Slice `b[lo:hi]` into a FRESH owned `bytes` carrying a COPY of the
+/// `[lo, hi)` byte range. The runtime target of the `.cb` `b[lo:hi]`
+/// slice expression (ADR-0093 Phase 2, the `__cobrust_coil_buffer_slice`
+/// mirror — but with **Python clamp** semantics, NOT the buffer's
+/// abort-on-OOB: CPython `b"abcd"[1:99] == b"bcd"` and `b"abcd"[3:1] ==
+/// b""`, never an exception). Bounds are clamped to `[0, len]` and
+/// `hi < lo` yields an empty buffer. NULL handle → empty buffer.
+///
+/// The input `b` is BORROWED (read-only); the caller's drop schedule
+/// still frees it. The returned pointer is a fresh buffer the caller owns
+/// and must free EXACTLY ONCE via [`__cobrust_bytes_drop`].
+///
+/// # Safety
+///
+/// `b` must be NULL or a pointer returned by [`__cobrust_bytes_from_raw`]
+/// (or [`__cobrust_bytes_clone`]) and not yet dropped. The returned
+/// pointer must be passed to [`__cobrust_bytes_drop`] exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_bytes_slice(b: *mut u8, lo: i64, hi: i64) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let src = unsafe { bytes_buf_as_slice(b) };
+    let len = src.len() as i64;
+    // CPython slice clamp: negative is NOT handled here (a `b[-1:]` form
+    // is an ADR-0093 §Phasing deferral, like the buffer slice); a bare
+    // `lo:hi` with non-negative bounds clamps to `[0, len]`.
+    let lo_c = lo.clamp(0, len) as usize;
+    let hi_c = hi.clamp(0, len) as usize;
+    let slice = if hi_c > lo_c {
+        src[lo_c..hi_c].to_vec()
+    } else {
+        Vec::new()
+    };
+    mint_bytes(slice)
+}
+
+/// Concatenate `a + b` into a FRESH owned `bytes` carrying `a`'s bytes
+/// followed by `b`'s bytes. The runtime target of the `.cb` `b1 + b2`
+/// operator (ADR-0093 Phase 2, the `__cobrust_str_concat` mirror). NULL
+/// operands are treated as empty.
+///
+/// Both inputs are BORROWED (read-only); the caller's drop schedule still
+/// frees them. The returned pointer is a fresh buffer the caller owns and
+/// must free EXACTLY ONCE via [`__cobrust_bytes_drop`].
+///
+/// # Safety
+///
+/// `a` and `b` must each be NULL or a pointer returned by
+/// [`__cobrust_bytes_from_raw`] (or [`__cobrust_bytes_clone`]) and not
+/// yet dropped. The returned pointer must be passed to
+/// [`__cobrust_bytes_drop`] exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_bytes_concat(a: *mut u8, b: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let sa = unsafe { bytes_buf_as_slice(a) };
+    // SAFETY: caller-attestation per `# Safety`.
+    let sb = unsafe { bytes_buf_as_slice(b) };
+    let mut bytes = Vec::with_capacity(sa.len() + sb.len());
+    bytes.extend_from_slice(sa);
+    bytes.extend_from_slice(sb);
+    mint_bytes(bytes)
+}
+
+/// Mint a FRESH owned `bytes` from a `str` handle (UTF-8 encode — the
+/// runtime target of `.cb` `s.encode()`, ADR-0093 Phase 2). The `str`'s
+/// stored bytes are ALWAYS valid UTF-8 (the Str buffer invariant), so
+/// encode is total — there is no error path. NULL → empty buffer.
+///
+/// The input `s` is BORROWED (read-only) via the `__cobrust_str_*`
+/// accessors; the caller's Str drop schedule still frees it. The returned
+/// `bytes` pointer is a fresh buffer the caller owns + drops EXACTLY ONCE
+/// via [`__cobrust_bytes_drop`].
+///
+/// # Safety
+///
+/// `s` must be NULL or a pointer returned by the `__cobrust_str_*` family
+/// (a `StringBuffer`) and not yet dropped. The returned pointer must be
+/// passed to [`__cobrust_bytes_drop`] exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_bytes_from_str(s: *mut u8) -> *mut u8 {
+    if s.is_null() {
+        return mint_bytes(Vec::new());
+    }
+    // Borrow the Str buffer's UTF-8 bytes via the fmt-crate C-ABI (no
+    // need to name the private `StringBuffer` — same `(ptr, len)` read
+    // `io.rs::str_buf_as_str_phase3` uses).
+    // SAFETY: `s` is a valid Str pointer per `# Safety`.
+    let len = unsafe { crate::fmt::__cobrust_str_len(s) } as usize;
+    if len == 0 {
+        return mint_bytes(Vec::new());
+    }
+    // SAFETY: `s` is a valid Str pointer; `ptr` is its UTF-8 buffer.
+    let ptr = unsafe { crate::fmt::__cobrust_str_ptr(s) };
+    if ptr.is_null() {
+        return mint_bytes(Vec::new());
+    }
+    // SAFETY: `ptr` points to `len` bytes maintained by the Str write
+    // paths (UTF-8 by the StringBuffer invariant).
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    mint_bytes(slice.to_vec())
+}
+
+/// Decode `bytes` → `str` (UTF-8). The runtime target of `.cb`
+/// `b.decode()` (ADR-0093 Phase 2).
+///
+/// **The §2.2 no-silent-coercion design point.** INVALID UTF-8 is NOT
+/// lossily replaced (no U+FFFD substitution) and NOT silently truncated —
+/// CLAUDE.md §2.2 forbids silent coercion. An invalid byte sequence
+/// **TRAPS**: it writes a structured `bytes.decode: invalid utf-8 at byte
+/// N` diagnostic to stderr and exits the process (the same `std.panic`
+/// trap every other Cobrust domain error surfaces through — exit code 3,
+/// `INTERNAL_PANIC` per ADR-0024 / `runtime.rs`). The byte offset `N` is the first invalid byte (the
+/// LLM/user consumes stderr to locate the bad input). A `Result[str,
+/// DecodeError]` ergonomic surface is the named ADR-0093 §Phasing
+/// follow-up once stdlib-fallible-Result returns are wired (today NO
+/// stdlib op returns a surface `Result`; the trap is the sound v1 — a
+/// decode failure is a precondition violation, "truly unrecoverable" per
+/// §2.2).
+///
+/// On VALID UTF-8 it mints a FRESH owned `str` (a `StringBuffer` copy)
+/// the caller owns + drops EXACTLY ONCE via `__cobrust_str_drop`. The
+/// input `b` is BORROWED (read-only). NULL → empty string.
+///
+/// # Safety
+///
+/// `b` must be NULL or a pointer returned by [`__cobrust_bytes_from_raw`]
+/// (or [`__cobrust_bytes_clone`]) and not yet dropped. The returned
+/// pointer must be passed to `__cobrust_str_drop` exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_bytes_decode(b: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let src = unsafe { bytes_buf_as_slice(b) };
+    match std::str::from_utf8(src) {
+        Ok(_) => {
+            // Valid UTF-8 — mint a fresh Str buffer carrying a COPY.
+            // SAFETY: `__cobrust_str_new` returns a fresh StringBuffer.
+            let out = unsafe { crate::fmt::__cobrust_str_new() };
+            if !src.is_empty() {
+                // SAFETY: `out` is a fresh Str buffer; `src` is a valid
+                // UTF-8 slice (just verified).
+                unsafe {
+                    crate::fmt::__cobrust_str_push_static(out, src.as_ptr(), src.len() as i64);
+                }
+            }
+            out
+        }
+        Err(e) => {
+            // INVALID UTF-8 — TRAP (NEVER lossy / replacement-char per
+            // §2.2). `valid_up_to()` is the byte offset of the first
+            // invalid byte. Sibling of every `std.panic` domain trap.
+            let msg = format!("bytes.decode: invalid utf-8 at byte {}", e.valid_up_to());
+            crate::panic::panic(&msg)
+        }
+    }
+}
+
+/// Lowercase hex-encode `bytes` → `str` (the runtime target of `.cb`
+/// `b.hex()`, ADR-0093 Phase 2). CPython `bytes.hex()`: `b"\xff\x00".hex()
+/// == "ff00"` (lowercase, two chars per byte, no separator). NULL / empty
+/// → empty string.
+///
+/// Mints a FRESH owned `str` the caller owns + drops EXACTLY ONCE via
+/// `__cobrust_str_drop`. The input `b` is BORROWED (read-only).
+///
+/// # Safety
+///
+/// `b` must be NULL or a pointer returned by [`__cobrust_bytes_from_raw`]
+/// (or [`__cobrust_bytes_clone`]) and not yet dropped. The returned
+/// pointer must be passed to `__cobrust_str_drop` exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_bytes_hex(b: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let src = unsafe { bytes_buf_as_slice(b) };
+    // SAFETY: `__cobrust_str_new` returns a fresh StringBuffer.
+    let out = unsafe { crate::fmt::__cobrust_str_new() };
+    if src.is_empty() {
+        return out;
+    }
+    let mut hex = String::with_capacity(src.len() * 2);
+    for &byte in src {
+        use std::fmt::Write as _;
+        // `write!` to a String never fails; lowercase two-digit hex.
+        let _ = write!(hex, "{byte:02x}");
+    }
+    // SAFETY: `out` is a fresh Str buffer; `hex` is ASCII (valid UTF-8).
+    unsafe {
+        crate::fmt::__cobrust_str_push_static(out, hex.as_ptr(), hex.len() as i64);
+    }
+    out
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -293,6 +516,192 @@ mod tests {
                 let c = __cobrust_bytes_clone(b);
                 __cobrust_bytes_drop(b);
                 __cobrust_bytes_drop(c);
+            }
+        }
+    }
+
+    // ----- ADR-0093 Phase 2 — slice / concat / from_str / hex -----
+    // (decode of INVALID UTF-8 traps + exits the process, so it is
+    // verified end-to-end via the `.cb` corpus, not a unit test — a unit
+    // test cannot assert process exit without forking; the VALID-UTF-8
+    // decode path IS unit-tested below.)
+
+    /// Read a fresh Str buffer (minted by from_str / decode / hex) back as
+    /// a `String`, then drop it. SAFETY: `s` is a fresh Str pointer.
+    unsafe fn read_str_and_drop(s: *mut u8) -> String {
+        let len = unsafe { crate::fmt::__cobrust_str_len(s) } as usize;
+        let out = if len == 0 {
+            String::new()
+        } else {
+            let ptr = unsafe { crate::fmt::__cobrust_str_ptr(s) };
+            let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+            String::from_utf8(bytes.to_vec()).unwrap()
+        };
+        unsafe { crate::fmt::__cobrust_str_drop(s) };
+        out
+    }
+
+    #[test]
+    fn slice_basic_and_clamp() {
+        // SAFETY: contract. `b"abcde"[1:4] == b"bcd"`; Python clamp on OOB.
+        unsafe {
+            let raw = b"abcde";
+            let b = __cobrust_bytes_from_raw(raw.as_ptr(), raw.len() as i64);
+            // [1:4] -> "bcd"
+            let s = __cobrust_bytes_slice(b, 1, 4);
+            assert_eq!(__cobrust_bytes_len(s), 3);
+            assert_eq!(__cobrust_bytes_get(s, 0), 98); // 'b'
+            assert_eq!(__cobrust_bytes_get(s, 2), 100); // 'd'
+            __cobrust_bytes_drop(s);
+            // [1:99] clamps to [1:5] -> "bcde" (CPython, NOT an abort)
+            let s2 = __cobrust_bytes_slice(b, 1, 99);
+            assert_eq!(__cobrust_bytes_len(s2), 4);
+            __cobrust_bytes_drop(s2);
+            // [3:1] (hi < lo) -> empty
+            let s3 = __cobrust_bytes_slice(b, 3, 1);
+            assert_eq!(__cobrust_bytes_len(s3), 0);
+            __cobrust_bytes_drop(s3);
+            // The SOURCE survives (borrowed, not consumed) — drops once.
+            assert_eq!(__cobrust_bytes_len(b), 5);
+            __cobrust_bytes_drop(b);
+        }
+    }
+
+    #[test]
+    fn slice_preserves_non_utf8() {
+        // SAFETY: contract. A slice of a non-UTF-8 buffer is byte-exact.
+        unsafe {
+            let raw: [u8; 4] = [0xff, 0x41, 0x00, 0xfe];
+            let b = __cobrust_bytes_from_raw(raw.as_ptr(), raw.len() as i64);
+            let s = __cobrust_bytes_slice(b, 0, 2);
+            assert_eq!(__cobrust_bytes_len(s), 2);
+            assert_eq!(__cobrust_bytes_get(s, 0), 255);
+            assert_eq!(__cobrust_bytes_get(s, 1), 65); // 'A'
+            __cobrust_bytes_drop(s);
+            __cobrust_bytes_drop(b);
+        }
+    }
+
+    #[test]
+    fn concat_basic() {
+        // SAFETY: contract. `b"ab" + b"cd" == b"abcd"`; both inputs
+        // borrowed (survive + drop once).
+        unsafe {
+            let ra = b"ab";
+            let rb = b"cd";
+            let a = __cobrust_bytes_from_raw(ra.as_ptr(), ra.len() as i64);
+            let b = __cobrust_bytes_from_raw(rb.as_ptr(), rb.len() as i64);
+            let c = __cobrust_bytes_concat(a, b);
+            assert_eq!(__cobrust_bytes_len(c), 4);
+            assert_eq!(__cobrust_bytes_get(c, 0), 97); // 'a'
+            assert_eq!(__cobrust_bytes_get(c, 3), 100); // 'd'
+            __cobrust_bytes_drop(c);
+            // Both sources survive (borrowed).
+            assert_eq!(__cobrust_bytes_len(a), 2);
+            assert_eq!(__cobrust_bytes_len(b), 2);
+            __cobrust_bytes_drop(a);
+            __cobrust_bytes_drop(b);
+        }
+    }
+
+    #[test]
+    fn concat_null_operand_is_empty() {
+        // SAFETY: contract. NULL operand treated as empty.
+        unsafe {
+            let ra = b"xy";
+            let a = __cobrust_bytes_from_raw(ra.as_ptr(), ra.len() as i64);
+            let c = __cobrust_bytes_concat(a, std::ptr::null_mut());
+            assert_eq!(__cobrust_bytes_len(c), 2);
+            __cobrust_bytes_drop(c);
+            __cobrust_bytes_drop(a);
+        }
+    }
+
+    #[test]
+    fn encode_then_decode_roundtrip() {
+        // SAFETY: contract. str.encode -> bytes -> .decode == str (the
+        // load-bearing round-trip, on VALID UTF-8).
+        unsafe {
+            let src = "héllo"; // multi-byte UTF-8 (é = 2 bytes)
+            let s = crate::fmt::__cobrust_str_new();
+            crate::fmt::__cobrust_str_push_static(s, src.as_ptr(), src.len() as i64);
+            // encode
+            let b = __cobrust_bytes_from_str(s);
+            assert_eq!(__cobrust_bytes_len(b), src.len() as i64);
+            // decode (valid UTF-8 → fresh str)
+            let back = __cobrust_bytes_decode(b);
+            let back_s = read_str_and_drop(back);
+            assert_eq!(back_s, src);
+            __cobrust_bytes_drop(b);
+            crate::fmt::__cobrust_str_drop(s);
+        }
+    }
+
+    #[test]
+    fn decode_valid_ascii() {
+        // SAFETY: contract. decode of a valid ASCII bytes → str.
+        unsafe {
+            let raw = b"hello";
+            let b = __cobrust_bytes_from_raw(raw.as_ptr(), raw.len() as i64);
+            let s = __cobrust_bytes_decode(b);
+            assert_eq!(read_str_and_drop(s), "hello");
+            // input survives (borrowed).
+            assert_eq!(__cobrust_bytes_len(b), 5);
+            __cobrust_bytes_drop(b);
+        }
+    }
+
+    #[test]
+    fn hex_lowercase() {
+        // SAFETY: contract. `b"\xff\x00\x10".hex() == "ff0010"` (CPython).
+        unsafe {
+            let raw: [u8; 3] = [0xff, 0x00, 0x10];
+            let b = __cobrust_bytes_from_raw(raw.as_ptr(), raw.len() as i64);
+            let s = __cobrust_bytes_hex(b);
+            assert_eq!(read_str_and_drop(s), "ff0010");
+            __cobrust_bytes_drop(b);
+        }
+    }
+
+    #[test]
+    fn hex_empty() {
+        // SAFETY: contract. Empty bytes → empty hex string.
+        unsafe {
+            let b = __cobrust_bytes_from_raw(std::ptr::null(), 0);
+            let s = __cobrust_bytes_hex(b);
+            assert_eq!(read_str_and_drop(s), "");
+            __cobrust_bytes_drop(b);
+        }
+    }
+
+    #[test]
+    fn phase2_hammer_no_leak_or_crash() {
+        // DROP/UB hammer for the Phase-2 minting ops: 1000 cycles each
+        // minting a fresh bytes (slice/concat) + a fresh str (decode/hex)
+        // and dropping all. A double-free / leak crashes or diverges here.
+        // SAFETY: contract.
+        unsafe {
+            for _ in 0..1000u32 {
+                let ra = b"abc";
+                let rb = b"def";
+                let a = __cobrust_bytes_from_raw(ra.as_ptr(), ra.len() as i64);
+                let b = __cobrust_bytes_from_raw(rb.as_ptr(), rb.len() as i64);
+                // slice mints fresh bytes
+                let sl = __cobrust_bytes_slice(a, 0, 2);
+                __cobrust_bytes_drop(sl);
+                // concat mints fresh bytes
+                let cat = __cobrust_bytes_concat(a, b);
+                assert_eq!(__cobrust_bytes_len(cat), 6);
+                // decode mints fresh str
+                let dec = __cobrust_bytes_decode(cat);
+                crate::fmt::__cobrust_str_drop(dec);
+                // hex mints fresh str
+                let hx = __cobrust_bytes_hex(cat);
+                crate::fmt::__cobrust_str_drop(hx);
+                __cobrust_bytes_drop(cat);
+                // inputs (a, b) borrowed throughout — drop once each.
+                __cobrust_bytes_drop(a);
+                __cobrust_bytes_drop(b);
             }
         }
     }

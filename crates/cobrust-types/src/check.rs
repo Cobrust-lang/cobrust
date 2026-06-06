@@ -2275,6 +2275,54 @@ impl Ctx {
                         unify(&Ty::Int, &it, &mut self.subst, e.span)?;
                         Ok(Ty::Float)
                     }
+                    // ADR-0093 Phase 2 — `bytes[lo:hi]` slice yields a
+                    // fresh `bytes` (CPython `b"abcd"[1:3] == b"bc"`, a
+                    // bytes, NOT an int — contrast the scalar `b[i] -> int`
+                    // arm above). The MIR `lower_expr` Index arm retargets
+                    // to `__cobrust_bytes_slice(b, lo, hi) -> bytes`, which
+                    // honours ONLY the contiguous `lo:hi` form with both
+                    // non-negative bounds present and the default step.
+                    //
+                    // ADR-0093 Phase-2 §"Slice-shape soundness" — every
+                    // OTHER shape (open-ended `b[1:]`/`b[:3]`, non-unit step
+                    // `b[0:4:2]`, negative bound `b[1:-1]`) is REJECTED here
+                    // (§2.5-A compile-time-catch) rather than returning
+                    // `Ty::Bytes` and falling through the MIR guard to the
+                    // generic index no-op, which silently evaluated to the
+                    // WHOLE base buffer (the §2.2 silent-coercion hole this
+                    // arm closes). We still type-check each present bound (a
+                    // bound's own type error surfaces) before the shape gate.
+                    (Ty::Bytes, IndexKind::Slice { start, stop, step }) => {
+                        for bound in [start.as_ref(), stop.as_ref(), step.as_ref()]
+                            .into_iter()
+                            .flatten()
+                        {
+                            let bt = self.synth_expr(bound)?;
+                            unify(&Ty::Int, &bt, &mut self.subst, bound.span)?;
+                        }
+                        let lo_neg = start
+                            .as_ref()
+                            .and_then(literal_int_value)
+                            .is_some_and(|v| v < 0);
+                        let hi_neg = stop
+                            .as_ref()
+                            .and_then(literal_int_value)
+                            .is_some_and(|v| v < 0);
+                        if step.is_none() && start.is_some() && stop.is_some() && !lo_neg && !hi_neg
+                        {
+                            Ok(Ty::Bytes)
+                        } else {
+                            Err(TypeError::UnsupportedSliceShape {
+                                span,
+                                suggestion: Some(
+                                    "write both explicit non-negative bounds, \
+                                     e.g. `b[1:len(b)]`; open-ended, stepped, \
+                                     and negative `bytes` slices are not yet \
+                                     supported",
+                                ),
+                            })
+                        }
+                    }
                     (other, IndexKind::Slice { .. }) => Ok(other.clone()),
                     (Ty::Var(_), _) => Ok(self.fresh_var()),
                     (other, _) => Err(TypeError::NotIndexable {
@@ -2692,11 +2740,87 @@ impl Ctx {
                 }
                 Ok(Some(Ty::Str))
             }
+            // ADR-0093 Phase 2 — `s.encode() -> bytes` (UTF-8 encode, the
+            // inverse of `bytes.decode()`). CPython `"abc".encode() ==
+            // b"abc"`. A `str`'s stored bytes are always valid UTF-8, so
+            // encode is total (no error path, unlike decode). The MIR
+            // method-form rewrite routes `encode` -> the `bytes_from_str`
+            // PRELUDE fn -> `__cobrust_bytes_from_str(s) -> bytes`.
+            "encode" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
+                    });
+                }
+                Ok(Some(Ty::Bytes))
+            }
             other => Err(TypeError::UnknownMethod {
                 type_name: "str".to_string(),
                 method_name: other.to_string(),
                 span,
                 suggestion: str_method_suggestion(other),
+            }),
+        }
+    }
+
+    /// ADR-0093 Phase 2 — the `bytes` method table (`.decode()` /
+    /// `.hex()`), the structural twin of [`Self::try_synth_str_method`].
+    /// Both methods take 0 positional args and return a fresh `str`. A
+    /// receiver that is not `Ty::Bytes` returns `Ok(None)` so the caller
+    /// falls through to the other per-type tables; an unknown method on a
+    /// `Ty::Bytes` receiver is an `UnknownMethod` error (a §2.5-B
+    /// fix-printing diagnostic listing the two methods).
+    fn try_synth_bytes_method(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Attr { base, name } = &callee.kind else {
+            return Ok(None);
+        };
+        let base_ty = self.synth_expr(base)?;
+        let base_resolved = self.subst.apply(&base_ty);
+        if !matches!(base_resolved, Ty::Bytes) {
+            return Ok(None);
+        }
+        let pos_args: Vec<&Expr> = args
+            .iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        match name.as_str() {
+            // `b.decode() -> str` (UTF-8). INVALID UTF-8 is a RUNTIME trap
+            // (§2.2 — never lossy), NOT a type error; the type is always
+            // `str`. `b.hex() -> str` (lowercase hex). Both are 0-arg.
+            "decode" | "hex" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                        suggestion: Some(
+                            "check the function signature; pass exactly the declared positional arity",
+                        ),
+                    });
+                }
+                Ok(Some(Ty::Str))
+            }
+            other => Err(TypeError::UnknownMethod {
+                type_name: "bytes".to_string(),
+                method_name: other.to_string(),
+                span,
+                suggestion: Some(
+                    "bytes methods: decode (UTF-8 -> str; traps on invalid UTF-8), \
+                     hex (-> lowercase hex str)",
+                ),
             }),
         }
     }
@@ -2960,6 +3084,12 @@ impl Ctx {
             return Ok(Some(t));
         }
         if let Some(t) = self.try_synth_str_method(callee, args, span)? {
+            return Ok(Some(t));
+        }
+        // ADR-0093 Phase 2 — the `bytes` method table (`.decode()` /
+        // `.hex()`). Guards on a `Ty::Bytes` receiver (returns `Ok(None)`
+        // otherwise), so its order among the tables is irrelevant.
+        if let Some(t) = self.try_synth_bytes_method(callee, args, span)? {
             return Ok(Some(t));
         }
         if let Some(t) = self.try_synth_list_method(callee, args, span)? {
@@ -4180,6 +4310,20 @@ impl Ctx {
                     // ADR-0060a §3.2 unification rule. Codegen lowers
                     // the BinOp at the narrow width directly (LLVM
                     // `build_int_add` is width-polymorphic on iN).
+                    //
+                    // ADR-0093 Phase 2 — `bytes + bytes -> bytes`. Only
+                    // `Add` reaches here with `Ty::Bytes` operands (the
+                    // `unify` above confirmed both are the same type, and
+                    // `bytes` never unifies with a numeric); the MIR
+                    // `lower_bin` Add guard retargets a two-`Ty::Bytes`
+                    // Add to `__cobrust_bytes_concat`. A `bytes` operand
+                    // under any OTHER arithmetic op (`-`/`*`/...) still
+                    // falls to the `other =>` reject below (CPython
+                    // `b"a" - b"b"` is a TypeError too). `op` is
+                    // necessarily `Add` here only because `bytes - bytes`
+                    // would also `unify` then reach this match — so guard
+                    // on `op` for the bytes case to keep `-`/`*` rejected.
+                    Ty::Bytes if matches!(op, BinOp::Add) => Ok(Ty::Bytes),
                     Ty::Int | Ty::Float | Ty::Str | Ty::IntN(_) | Ty::Var(_) => Ok(resolved),
                     other => Err(TypeError::TypeMismatch {
                         expected: Ty::Int,
@@ -4251,6 +4395,41 @@ impl Ctx {
                              require BOTH operands to be a coil.Buffer (yielding a bool-dtype \
                              mask); compare against a same-shape buffer, e.g. `a < b` or \
                              `a < coil.zeros(a.size)`",
+                        ),
+                    });
+                }
+                // ADR-0093 Phase-2 §"bytes comparison" — `bytes cmp bytes`
+                // (and `bytes cmp anything`) is REJECTED here (§2.5-A
+                // compile-time-catch). This MUST run BEFORE the `unify`
+                // below: two `Ty::Bytes` DO unify, so without this guard the
+                // arm returns `Ok(Ty::Bool)` and codegen's comparison path
+                // (`llvm_backend.rs` `lower_binop` → `into_int_value()`)
+                // ICEs on the opaque `bytes` POINTER operand — a raw inkwell
+                // `expected the IntValue variant` panic, NOT a Cobrust
+                // diagnostic (a §2.5 + §5.1 "no panic without rationale"
+                // violation). `bytes` lexicographic comparison is an
+                // ADR-0093 §Phasing deferral (the `__cobrust_bytes_eq`/`cmp`
+                // shim); until then we PRINT THE FIX (§2.5-B) so the LLM
+                // agent rewrites it (compare lengths, or `.decode()` + `==`
+                // on the resulting `str` when both sides are known UTF-8).
+                // The check unwraps a `&`-borrow handle on either side
+                // (mirrors the Buffer guard above).
+                let lt_is_bytes = matches!(&lt_handle, Ty::Bytes);
+                let rt_is_bytes = matches!(&rt_handle, Ty::Bytes);
+                if lt_is_bytes || rt_is_bytes {
+                    return Err(TypeError::TypeMismatch {
+                        expected: Ty::Bytes,
+                        actual: if lt_is_bytes {
+                            rt_handle.clone()
+                        } else {
+                            lt_handle.clone()
+                        },
+                        span,
+                        suggestion: Some(
+                            "comparing `bytes` values with `==`/`!=`/`<`/`<=`/`>`/`>=` is not \
+                             yet supported — compare `len(a)` with `len(b)`, or `a.decode()` \
+                             with `b.decode()` when both sides are known valid UTF-8 (a `bytes` \
+                             equality/ordering shim is an ADR-0093 follow-up)",
                         ),
                     });
                 }

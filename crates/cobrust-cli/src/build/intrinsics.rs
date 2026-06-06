@@ -292,6 +292,20 @@ pub const STR_UPPER_RUNTIME_SYMBOL: &str = "__cobrust_str_upper";
 /// shim already ships at `crates/cobrust-stdlib/src/fmt.rs:306`).
 pub const STR_CLONE_RUNTIME_SYMBOL: &str = "__cobrust_str_clone";
 
+// ---- ADR-0093 Phase 2 bytes methods ---------------------------------
+
+/// ADR-0093 Phase 2 — `s.encode() -> bytes` (UTF-8 encode; the
+/// `bytes_from_str` PRELUDE fn target). Mints a fresh `bytes`; input str
+/// borrowed.
+pub const BYTES_FROM_STR_RUNTIME_SYMBOL: &str = "__cobrust_bytes_from_str";
+/// ADR-0093 Phase 2 — `b.decode() -> str` (UTF-8 decode; the
+/// `bytes_decode` PRELUDE fn target). Mints a fresh `str`; input bytes
+/// borrowed. TRAPS on invalid UTF-8 (§2.2 — never lossy).
+pub const BYTES_DECODE_RUNTIME_SYMBOL: &str = "__cobrust_bytes_decode";
+/// ADR-0093 Phase 2 — `b.hex() -> str` (lowercase hex; the `bytes_hex`
+/// PRELUDE fn target). Mints a fresh `str`; input bytes borrowed.
+pub const BYTES_HEX_RUNTIME_SYMBOL: &str = "__cobrust_bytes_hex";
+
 // ---- M-F.3.6 file IO completion (ADR-0050f) --------------------------
 
 /// M-F.3.6 — `read_file(path: str) -> str`.
@@ -488,6 +502,12 @@ struct IntrinsicDefIds {
     str_upper: HashSet<u32>,
     /// M-F.3.5 — LC-100 honest-debt mitigation.
     str_clone: HashSet<u32>,
+    /// ADR-0093 Phase 2 — `s.encode() -> bytes`.
+    bytes_from_str: HashSet<u32>,
+    /// ADR-0093 Phase 2 — `b.decode() -> str` (traps on invalid UTF-8).
+    bytes_decode: HashSet<u32>,
+    /// ADR-0093 Phase 2 — `b.hex() -> str`.
+    bytes_hex: HashSet<u32>,
     // ---- M-F.3.6 file IO completion (ADR-0050f) ----
     /// M-F.3.6 — `read_file(path: str) -> str`.
     read_file: HashSet<u32>,
@@ -579,6 +599,10 @@ impl IntrinsicDefIds {
         out.extend(&self.str_lower);
         out.extend(&self.str_upper);
         out.extend(&self.str_clone);
+        // ADR-0093 Phase 2 bytes methods.
+        out.extend(&self.bytes_from_str);
+        out.extend(&self.bytes_decode);
+        out.extend(&self.bytes_hex);
         // M-F.3.6 file IO completion.
         out.extend(&self.read_file);
         out.extend(&self.read_file_lines);
@@ -657,6 +681,9 @@ impl IntrinsicDefIds {
             && self.str_lower.is_empty()
             && self.str_upper.is_empty()
             && self.str_clone.is_empty()
+            && self.bytes_from_str.is_empty()
+            && self.bytes_decode.is_empty()
+            && self.bytes_hex.is_empty()
             && self.read_file.is_empty()
             && self.read_file_lines.is_empty()
             && self.write_file.is_empty()
@@ -740,6 +767,10 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         str_lower: HashSet::new(),
         str_upper: HashSet::new(),
         str_clone: HashSet::new(),
+        // ADR-0093 Phase 2 bytes methods.
+        bytes_from_str: HashSet::new(),
+        bytes_decode: HashSet::new(),
+        bytes_hex: HashSet::new(),
         // M-F.3.6 file IO completion.
         read_file: HashSet::new(),
         read_file_lines: HashSet::new(),
@@ -1028,6 +1059,16 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
                     ids.str_clone.insert(body.def_id.0);
                 }
             }
+            // ---- ADR-0093 Phase 2 bytes methods ----
+            "bytes_from_str" => {
+                ids.bytes_from_str.insert(body.def_id.0);
+            }
+            "bytes_decode" => {
+                ids.bytes_decode.insert(body.def_id.0);
+            }
+            "bytes_hex" => {
+                ids.bytes_hex.insert(body.def_id.0);
+            }
             // ---- M-F.3.6 file IO completion (ADR-0050f) ----
             "read_file" => {
                 ids.read_file.insert(body.def_id.0);
@@ -1173,6 +1214,17 @@ enum Kind {
     StrLower,
     StrUpper,
     StrClone,
+    // ---- ADR-0093 Phase 2 bytes methods (str.encode / bytes.decode /
+    // bytes.hex) — each a single-arg pointer→pointer op that MINTS a
+    // fresh heap value (fresh `bytes` / fresh `str`) the `.cb` scope drops
+    // once; the input handle is BORROWED. ----
+    /// `bytes_from_str(s: str) -> bytes` — `s.encode()` (UTF-8).
+    BytesFromStr,
+    /// `bytes_decode(b: bytes) -> str` — `b.decode()` (UTF-8; TRAPS on
+    /// invalid UTF-8 — §2.2, never lossy).
+    BytesDecode,
+    /// `bytes_hex(b: bytes) -> str` — `b.hex()` (lowercase hex).
+    BytesHex,
     // ---- M-F.3.6 file IO completion (ADR-0050f) ----
     ReadFile,
     ReadFileLines,
@@ -1255,6 +1307,10 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "lower" => Some(Kind::StrLower),
         "upper" => Some(Kind::StrUpper),
         "clone" => Some(Kind::StrClone),
+        // ADR-0093 Phase 2 — bytes encode/decode/hex.
+        "bytes_from_str" => Some(Kind::BytesFromStr),
+        "bytes_decode" => Some(Kind::BytesDecode),
+        "bytes_hex" => Some(Kind::BytesHex),
         // M-F.3.6 file IO completion (ADR-0050f).
         "read_file" => Some(Kind::ReadFile),
         "read_file_lines" => Some(Kind::ReadFileLines),
@@ -1396,6 +1452,12 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::StrUpper)
     } else if ids.str_clone.contains(&id) {
         Some(Kind::StrClone)
+    } else if ids.bytes_from_str.contains(&id) {
+        Some(Kind::BytesFromStr)
+    } else if ids.bytes_decode.contains(&id) {
+        Some(Kind::BytesDecode)
+    } else if ids.bytes_hex.contains(&id) {
+        Some(Kind::BytesHex)
     } else if ids.read_file.contains(&id) {
         Some(Kind::ReadFile)
     } else if ids.read_file_lines.contains(&id) {
@@ -2527,17 +2589,27 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     args.push(old);
                     args.push(new_);
                 }
-                // Single-arg Str→Str dispatch (trim / lower / upper / clone).
+                // Single-arg pointer→pointer dispatch. Str→Str (trim /
+                // lower / upper / clone) PLUS the ADR-0093 Phase 2 bytes
+                // methods: str→bytes (encode), bytes→str (decode / hex).
+                // All share the SAME emit shape (one handle arg in, one
+                // freshly-minted handle out); the receiver is borrowed
+                // (the MIR `lower_rewritten_method_call` Move→Copy upgrade),
+                // and the fresh result's `Ty` (on the `_callret` dest from
+                // the PRELUDE fn's return type) drives its scope-exit drop.
                 Kind::StrTrim
                 | Kind::StrLstrip
                 | Kind::StrRstrip
                 | Kind::StrLower
                 | Kind::StrUpper
-                | Kind::StrClone => {
+                | Kind::StrClone
+                | Kind::BytesFromStr
+                | Kind::BytesDecode
+                | Kind::BytesHex => {
                     if args.len() != 1 {
                         return Err(IntrinsicError::PrintArgUnsupported {
                             found: format!(
-                                "M-F.3.5 string single-arg fn: expected 1 arg, got {}",
+                                "single-arg ptr→ptr fn: expected 1 arg, got {}",
                                 args.len()
                             ),
                         });
@@ -2550,6 +2622,10 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         Kind::StrLower => STR_LOWER_RUNTIME_SYMBOL,
                         Kind::StrUpper => STR_UPPER_RUNTIME_SYMBOL,
                         Kind::StrClone => STR_CLONE_RUNTIME_SYMBOL,
+                        // ADR-0093 Phase 2 — encode / decode / hex.
+                        Kind::BytesFromStr => BYTES_FROM_STR_RUNTIME_SYMBOL,
+                        Kind::BytesDecode => BYTES_DECODE_RUNTIME_SYMBOL,
+                        Kind::BytesHex => BYTES_HEX_RUNTIME_SYMBOL,
                         _ => unreachable!(),
                     };
                     *func = Operand::Constant(Constant::Str(sym.to_string()));

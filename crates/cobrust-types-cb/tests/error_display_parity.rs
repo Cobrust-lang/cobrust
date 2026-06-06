@@ -262,6 +262,36 @@ fn test_display_dora_unknown_output_id() {
 }
 
 #[test]
+fn test_display_unsupported_slice_shape() {
+    // Anchor: error_display_parity.rs::test_display_unsupported_slice_shape
+    //
+    // ADR-0093 Phase-2 — an unsupported `bytes` slice shape (open-ended /
+    // stepped / negative bound) is rejected at compile time. The §2.5-B FIX
+    // names the supported `b[lo:hi]` form, and MUST render byte-identically
+    // across the Rust and .cb Display impls (the payload-free, suggestion-
+    // only variant — the simplest mirror, so its Display is the cleanest
+    // byte-parity tripwire).
+    let span = dummy_span();
+    let rust_err = TypeError::UnsupportedSliceShape {
+        span,
+        suggestion: None,
+    };
+    let cb_err = TypeErrorCb::UnsupportedSliceShape {
+        span,
+        suggestion: None,
+    };
+    let rendered = format!("{rust_err}");
+    assert_eq!(
+        rendered,
+        format!("{cb_err}"),
+        "UnsupportedSliceShape Display must be byte-equal"
+    );
+    // The §2.5-B FIX names the supported contiguous form + the deferred shapes.
+    assert!(rendered.contains("unsupported `bytes` slice shape"));
+    assert!(rendered.contains("b[1:len(b)]"));
+}
+
+#[test]
 
 fn test_display_arity_mismatch() {
     let span = dummy_span();
@@ -426,6 +456,7 @@ impl SuggestionText for TypeError {
             TypeError::UnsupportedRefinement { suggestion, .. } => suggestion.as_deref(),
             TypeError::LenArgNotSized { suggestion, .. } => suggestion.as_deref(),
             TypeError::DoraUnknownOutputId { suggestion, .. } => suggestion.as_deref(),
+            TypeError::UnsupportedSliceShape { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }
@@ -464,6 +495,7 @@ impl SuggestionText for TypeErrorCb {
             TypeErrorCb::UnsupportedRefinement { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::LenArgNotSized { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::DoraUnknownOutputId { suggestion, .. } => suggestion.as_deref(),
+            TypeErrorCb::UnsupportedSliceShape { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }

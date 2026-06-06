@@ -452,7 +452,11 @@ impl Canonicalize for TypeError {
             // child keys would over-key on FnTy renderings that
             // legitimately differ across runs).
             | TypeError::CallbackArgMustBeFnName { .. }
-            | TypeError::CallbackSignatureMismatch { .. } => vec![],
+            | TypeError::CallbackSignatureMismatch { .. }
+            // ADR-0093 Phase-2 — unsupported bytes-slice shape; payload-free
+            // (Span + suggestion only). The supported `b[lo:hi]` form lives
+            // in the Display message, not the canonical key.
+            | TypeError::UnsupportedSliceShape { .. } => vec![],
         };
         CanonicalKey::node(variant, children)
     }
@@ -603,6 +607,8 @@ pub fn type_error_variant_name(err: &TypeError) -> &'static str {
         TypeError::LenArgNotSized { .. } => "LenArgNotSized",
         // ADR-0092 — undeclared dora output id.
         TypeError::DoraUnknownOutputId { .. } => "DoraUnknownOutputId",
+        // ADR-0093 Phase-2 — unsupported bytes-slice shape.
+        TypeError::UnsupportedSliceShape { .. } => "UnsupportedSliceShape",
     }
 }
 

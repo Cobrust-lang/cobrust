@@ -1586,6 +1586,71 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_param_counts
             .insert("__cobrust_bytes_clone", 1);
 
+        // ADR-0093 Phase 2 — the byte-buffer surface (slice / concat /
+        // encode / decode / hex). Each MINTS a fresh heap handle (a fresh
+        // `bytes` for slice/concat/from_str, a fresh `str` for
+        // decode/hex) the `.cb` drop schedule frees once; inputs borrowed.
+        // Symbols live in `libcobrust_stdlib.a` (already-linked archive).
+
+        // __cobrust_bytes_slice(*mut Bytes, i64, i64) -> *mut Bytes
+        let bytes_slice_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let bytes_slice = self.module.add_function(
+            "__cobrust_bytes_slice",
+            bytes_slice_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_bytes_slice", bytes_slice);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_bytes_slice", 3);
+
+        // __cobrust_bytes_concat(*mut Bytes, *mut Bytes) -> *mut Bytes
+        let bytes_concat_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let bytes_concat = self.module.add_function(
+            "__cobrust_bytes_concat",
+            bytes_concat_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_bytes_concat", bytes_concat);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_bytes_concat", 2);
+
+        // __cobrust_bytes_from_str(*mut Str) -> *mut Bytes (s.encode())
+        let bytes_from_str_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let bytes_from_str = self.module.add_function(
+            "__cobrust_bytes_from_str",
+            bytes_from_str_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_bytes_from_str", bytes_from_str);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_bytes_from_str", 1);
+
+        // __cobrust_bytes_decode(*mut Bytes) -> *mut Str (b.decode();
+        // TRAPS on invalid UTF-8 — §2.2, never lossy)
+        let bytes_decode_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let bytes_decode = self.module.add_function(
+            "__cobrust_bytes_decode",
+            bytes_decode_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_bytes_decode", bytes_decode);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_bytes_decode", 1);
+
+        // __cobrust_bytes_hex(*mut Bytes) -> *mut Str (b.hex())
+        let bytes_hex_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        let bytes_hex =
+            self.module
+                .add_function("__cobrust_bytes_hex", bytes_hex_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_bytes_hex", bytes_hex);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_bytes_hex", 1);
+
         // Param counts for wave-1 helpers — needed so the extern-name
         // dispatch path in `lower_call` can use a uniform lookup.
         self.runtime_helper_param_counts

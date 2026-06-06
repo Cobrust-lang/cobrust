@@ -188,19 +188,41 @@ byte-exact). Lowering map:
 
 ```rust
 // crates/cobrust-stdlib/src/bytes.rs
+// --- Phase 1 (foundation) ---
 pub unsafe extern "C" fn __cobrust_bytes_from_raw(ptr: *const u8, len: i64) -> *mut u8;
 pub unsafe extern "C" fn __cobrust_bytes_len(b: *mut u8) -> i64;
 pub unsafe extern "C" fn __cobrust_bytes_get(b: *mut u8, i: i64) -> i64; // i-th byte 0..255, -1 OOB
 pub unsafe extern "C" fn __cobrust_bytes_drop(b: *mut u8);
 pub unsafe extern "C" fn __cobrust_bytes_clone(b: *mut u8) -> *mut u8;   // clone-on-read reuse
+// --- Phase 2 (byte-buffer surface) — each MINTS fresh, BORROWS inputs ---
+pub unsafe extern "C" fn __cobrust_bytes_slice(b: *mut u8, lo: i64, hi: i64) -> *mut u8; // b[lo:hi], Python clamp
+pub unsafe extern "C" fn __cobrust_bytes_concat(a: *mut u8, b: *mut u8) -> *mut u8;      // a + b
+pub unsafe extern "C" fn __cobrust_bytes_from_str(s: *mut u8) -> *mut u8;                // s.encode() (str ptr in)
+pub unsafe extern "C" fn __cobrust_bytes_decode(b: *mut u8) -> *mut u8;                  // b.decode() -> str ptr; TRAPS on invalid UTF-8
+pub unsafe extern "C" fn __cobrust_bytes_hex(b: *mut u8) -> *mut u8;                     // b.hex() -> str ptr (lowercase)
 ```
 
 Symbols live in `libcobrust_stdlib.a` (the shared runtime archive), so a
 future `cobrust-dora` `event.data_bytes()` accessor reuses them without a
 cross-crate cabi feature. **Phase 1 (shipped)**: literal + `len` + index
-+ drop. **Phase 2 (deferred, ADR-0093)**: slicing / concat / `.hex()` /
-`.decode()` + the dora `data_bytes()` / `send_output_bytes()` accessor
-(ADR-0076c B-1b).
++ drop. **Phase 2 (shipped, ADR-0093 Phase 2)**: `b[lo:hi]` slice (Python
+clamp; MIR `lower_expr` Index Slice branch, the `coil.Buffer` slice
+mirror) / `b1 + b2` concat (MIR `lower_bin` Add `Ty::Bytes` arm, the
+`str_concat` mirror; `bytes - bytes` still rejects) / `s.encode()` /
+`b.decode()` / `b.hex()` (the 6-layer Str-method path: PRELUDE
+`bytes_from_str`/`bytes_decode`/`bytes_hex` → `try_synth_{str,bytes}_method`
+→ `method_form_rewrite_name` → `lower_rewritten_method_call` borrow-set →
+CLI `Kind::Bytes{FromStr,Decode,Hex}` single-arg emit → codegen externs).
+Each minting op declares its result with the minted `Ty` (slice/concat/
+encode → `Ty::Bytes`, decode/hex → `Ty::Str`), so `drop.rs::is_copy`
+(excludes both) drop-schedules it ONCE; the result is MOVED out, inputs
+BORROWED (Move→Copy). **§2.2 decode design**: invalid UTF-8 TRAPS via
+`std.panic::panic` (`bytes.decode: invalid utf-8 at byte N`, exit 3) —
+NEVER lossy/replacement-char/truncate. **Still deferred**: `bytes ==
+bytes`, negative/open/step slices, a `Result`-returning decode, and the
+dora `data_bytes()` / `send_output_bytes()` accessor (ADR-0076c B-1b).
+Tests: `crates/cobrust-cli/tests/bytes_ops_e2e.rs` (7) +
+`crates/cobrust-stdlib/src/bytes.rs` Phase-2 unit tests.
 
 ### `std.io`
 

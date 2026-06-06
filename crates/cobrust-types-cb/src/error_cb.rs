@@ -330,6 +330,17 @@ pub enum TypeErrorCb {
         suggestion: Option<String>,
     },
 
+    /// ADR-0093 Phase-2 — a `bytes` slice used an unsupported shape (only
+    /// the contiguous `b[lo:hi]` form with both non-negative bounds + the
+    /// default step is supported). Mirrors `TypeError::UnsupportedSliceShape
+    /// { span, suggestion }` — payload-free (Span + suggestion only), no Ty
+    /// to dense-pack; the supported `b[lo:hi]` form renders from the Display
+    /// message byte-identically across the two impls.
+    UnsupportedSliceShape {
+        span: Span,
+        suggestion: Option<String>,
+    },
+
     /// Composite error container — flat list of errors.
     ///
     /// ADR-0055b §3: `Multiple(list[TypeError])` — the only recursive
@@ -638,6 +649,13 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             span: *span,
             suggestion: opt_string(*suggestion),
         },
+        // ADR-0093 Phase-2 mirror — payload-free (Span + suggestion only).
+        TypeError::UnsupportedSliceShape { span, suggestion } => {
+            TypeErrorCb::UnsupportedSliceShape {
+                span: *span,
+                suggestion: opt_string(*suggestion),
+            }
+        }
     }
 }
 
@@ -772,7 +790,10 @@ impl Canonicalize for TypeErrorCb {
             // payload-free canonicalization (FnTy elided per parity
             // §6 risk).
             | TypeErrorCb::CallbackArgMustBeFnName { .. }
-            | TypeErrorCb::CallbackSignatureMismatch { .. } => vec![],
+            | TypeErrorCb::CallbackSignatureMismatch { .. }
+            // ADR-0093 Phase-2 — unsupported bytes-slice shape; payload-free
+            // (mirror of the Rust-side canonicalization).
+            | TypeErrorCb::UnsupportedSliceShape { .. } => vec![],
         };
         CanonicalKey::node(variant, children)
     }
@@ -1032,6 +1053,17 @@ impl std::fmt::Display for TypeErrorCb {
                     declared.join(", ")
                 )
             }
+            // ADR-0093 Phase-2 — byte-identical to the Rust-side
+            // `TypeError::UnsupportedSliceShape` `#[error(...)]` Display
+            // (the parity harness diff-tests the rendered text).
+            TypeErrorCb::UnsupportedSliceShape { span, .. } => write!(
+                f,
+                "unsupported `bytes` slice shape at {span}: only a contiguous \
+                 `b[lo:hi]` slice with both non-negative bounds present and the \
+                 default step is supported (an open-ended `b[1:]`/`b[:3]`, a \
+                 non-unit step `b[0:4:2]`, or a negative bound `b[1:-1]` is not \
+                 yet supported); write both explicit bounds, e.g. `b[1:len(b)]`"
+            ),
         }
     }
 }
@@ -1109,5 +1141,7 @@ pub fn type_error_cb_variant_name(err: &TypeErrorCb) -> &'static str {
         TypeErrorCb::LenArgNotSized { .. } => "LenArgNotSized",
         // ADR-0092 — undeclared dora output id.
         TypeErrorCb::DoraUnknownOutputId { .. } => "DoraUnknownOutputId",
+        // ADR-0093 Phase-2 — unsupported bytes-slice shape.
+        TypeErrorCb::UnsupportedSliceShape { .. } => "UnsupportedSliceShape",
     }
 }

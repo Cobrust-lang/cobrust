@@ -29,18 +29,82 @@ fn main() -> i64:
     return 0
 ```
 
-## What you can do (Phase 1)
+## What you can do
 
-| Form | Result | Notes |
-|---|---|---|
-| `b"..."` | `bytes` | a byte-string literal (any byte, incl. `\xNN` escapes) |
-| `len(b)` | `int` | the number of bytes |
-| `b[i]` | `int` | the `i`-th byte, `0..255` (matches Python's `b"abc"[0] == 97`) |
+| Form | Result | Notes | Phase |
+|---|---|---|---|
+| `b"..."` | `bytes` | a byte-string literal (any byte, incl. `\xNN` escapes) | 1 |
+| `len(b)` | `int` | the number of bytes | 1 |
+| `b[i]` | `int` | the `i`-th byte, `0..255` (matches Python's `b"abc"[0] == 97`) | 1 |
+| `b[lo:hi]` | `bytes` | a slice (a fresh `bytes`); clamps like Python on out-of-range | 2 |
+| `b1 + b2` | `bytes` | concatenation (a fresh `bytes`) | 2 |
+| `s.encode()` | `bytes` | the UTF-8 bytes of a `str` | 2 |
+| `b.decode()` | `str` | decode UTF-8 bytes back to a `str` (see below) | 2 |
+| `b.hex()` | `str` | lowercase hex, e.g. `b"\xff\x00".hex() == "ff00"` | 2 |
 
 A `bytes` value behaves like every other Cobrust heap value: it is owned
 by your `.cb` scope and freed automatically once, when the scope ends.
 You never write a free — and there is no garbage collector. This is the
-same ownership discipline `str` and `list` already use.
+same ownership discipline `str` and `list` already use. Every operation
+above that produces a new `bytes` or `str` (slice / concat / encode /
+decode / hex) gives you a **fresh** value your scope owns; the inputs are
+only read, never consumed.
+
+## Slicing, concatenation, and the `str` bridge (Phase 2)
+
+```cobrust
+fn main() -> i64:
+    let b: bytes = b"hello"
+    print(len(b[1:4]))       # 3   (b"ell")
+    print(len(b + b))        # 10  (b"hellohello")
+
+    # str <-> bytes round-trip
+    let s: str = "world"
+    let encoded: bytes = s.encode()
+    print(len(encoded))      # 5
+    print(encoded.decode())  # world
+
+    print(b.hex())           # 68656c6c6f
+    return 0
+```
+
+Slicing clamps the way Python does — an out-of-range high bound is
+trimmed to the length, and a backwards range yields an empty `bytes`
+(never an error):
+
+```cobrust
+fn main() -> i64:
+    let b: bytes = b"abcd"
+    print(len(b[1:99]))   # 3   (clamped to b"bcd")
+    print(len(b[3:1]))    # 0   (empty)
+    return 0
+```
+
+## Decoding invalid bytes — the no-silent-coercion rule
+
+`b.decode()` reads the bytes as UTF-8. If the bytes are **not** valid
+UTF-8, Cobrust does **not** quietly substitute a replacement character
+and it does **not** silently truncate — that would be exactly the kind of
+silent coercion Cobrust refuses (CLAUDE.md §2.2). Instead it **stops the
+program** with a clear diagnostic that names the first bad byte:
+
+```cobrust
+fn main() -> i64:
+    let b: bytes = b"\xff\xfe"
+    let s: str = b.decode()   # stops here
+    print(s)                  # never runs
+    return 0
+```
+
+```
+cobrust panic: bytes.decode: invalid utf-8 at byte 0
+```
+
+This is the same "stop loudly on a broken precondition" behaviour every
+other unrecoverable error in Cobrust uses. A future release will add a
+recoverable `Result`-returning form once that style is wired across the
+standard library; until then, decoding invalid UTF-8 is a hard stop — but
+it is **never** a silent corruption.
 
 ## Why this design?
 
@@ -59,15 +123,23 @@ same ownership discipline `str` and `list` already use.
 
 ## What is deferred (honest roadmap)
 
-These are **not** in Phase 1 yet (ADR-0093 Phase 2):
+Phase 2 shipped slicing, concatenation, `.encode()` / `.decode()` /
+`.hex()`. These are still **not** here yet — and each one is a **clear
+compile error** that tells you the supported form, never a silent wrong
+answer:
 
-- Slicing `b[lo:hi] -> bytes`
-- Concatenation `b1 + b2` and equality `b1 == b2`
-- Methods `.hex()`, `.decode()` (bytes → str) and `str.encode()` (str → bytes)
-- The dora stream accessor `event.data_bytes()` / `event.send_output_bytes(...)`
-
-You can hold, measure, and index a `bytes` value today; slicing and
-concatenation land in a follow-up.
+- **Comparing two `bytes`** (`b1 == b2`, `<`, `>`, …) is a compile error.
+  The message tells you to compare `len(a)` with `len(b)`, or to compare
+  `a.decode()` with `b.decode()` when both sides are known to be valid
+  UTF-8. (Earlier this crashed the compiler; now it is a clean diagnostic.)
+- **Negative / open-ended / stepped slices** (`b[1:]`, `b[:3]`, `b[0:4:2]`,
+  `b[1:-1]`) are a compile error — only the simple `b[lo:hi]` form (with
+  both non-negative bounds present) is supported. The message tells you to
+  write both bounds, e.g. `b[1:len(b)]`. (Earlier these silently returned
+  the whole buffer; now the compiler stops you with the fix.)
+- A recoverable `Result`-returning `decode()` (today invalid UTF-8 stops
+  the program; see above).
+- The dora stream accessor `event.data_bytes()` / `event.send_output_bytes(...)`.
 
 ## See also
 

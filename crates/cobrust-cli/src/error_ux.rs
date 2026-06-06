@@ -1062,6 +1062,24 @@ impl From<TypeError> for UserError {
                     col,
                 )
             }
+            // ADR-0093 Phase-2 — unsupported `bytes` slice shape. The `msg`
+            // names the supported `b[lo:hi]` form (the §2.5-B FIX the LLM
+            // parses from stderr to rewrite the slice in one step) instead of
+            // the pre-fix silent whole-buffer miscompile (§2.2).
+            E::UnsupportedSliceShape { span, suggestion } => {
+                let (line, col) = span_to_line_col(span);
+                (
+                    "unsupported `bytes` slice shape: only a contiguous `b[lo:hi]` slice \
+                     with both non-negative bounds present and the default step is \
+                     supported (an open-ended `b[1:]`/`b[:3]`, a non-unit step `b[0:4:2]`, \
+                     or a negative bound `b[1:-1]` is not yet supported); write both \
+                     explicit bounds, e.g. `b[1:len(b)]`"
+                        .to_owned(),
+                    suggestion.map(str::to_owned),
+                    line,
+                    col,
+                )
+            }
         };
         Self::Type {
             file: PathBuf::from("<source>"),

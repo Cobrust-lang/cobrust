@@ -1830,33 +1830,112 @@ impl<'a> BodyBuilder<'a> {
                     self.cur_block = Some(next.0 as usize);
                     return Ok(Operand::Copy(Place::local(dest)));
                 }
-                // ADR-0093 — `bytes[i] -> int` index read, beside the
+                // ADR-0093 — `bytes` index read, beside the
                 // Dict/List/Buffer arms. The base `bytes` handle is BORROWED
                 // (Move → Copy upgrade) so the source local survives + drops
-                // ONCE at scope exit (mirrors the coil.Buffer getitem arm
-                // below + ADR-0072 §5 risk 1). Retargets to
-                // `__cobrust_bytes_get(b, i) -> i64` (the i-th byte as a
-                // 0..255 int; CPython `b"abc"[0] == 97`). The result is a
-                // Copy SCALAR (`Operand::Copy`), so — unlike `list[str][i]`
-                // — no `__cobrust_*_clone` is emitted. NOT the
-                // `Projection::Index` fall-through below (a Wave-1 no-op stub
-                // that would mis-type on an opaque bytes handle).
+                // ONCE at scope exit (mirrors the coil.Buffer arm below +
+                // ADR-0072 §5 risk 1). NOT the `Projection::Index`
+                // fall-through below (a Wave-1 no-op stub that would mis-type
+                // on an opaque bytes handle). Two index shapes dispatch here
+                // (the coil.Buffer split, mirrored):
+                //
+                //   - SCALAR `b[i]` (`IndexKind::Expr`, Phase 1) →
+                //     `__cobrust_bytes_get(b, i) -> i64` (the i-th byte as a
+                //     0..255 int; CPython `b"abc"[0] == 97`). The result is a
+                //     Copy SCALAR (`Operand::Copy`), so — unlike
+                //     `list[str][i]` — no `__cobrust_*_clone` is emitted.
+                //   - SLICE `b[lo:hi]` (`IndexKind::Slice`, Phase 2) →
+                //     `__cobrust_bytes_slice(b, lo, hi) -> bytes` (a fresh
+                //     OWNED `bytes` the `.cb` scope drops once — Python clamp
+                //     on OOB, NOT abort). The `lo`/`hi` bounds are lowered
+                //     DIRECTLY here (the generic `lower_index` collapses a
+                //     Slice to `Constant::Int(0)`, so the slice arm must read
+                //     the bounds itself — exactly the coil.Buffer slice
+                //     pattern). Phase 2 is the contiguous `lo:hi` form (both
+                //     bounds present, default step); step / open-ended /
+                //     negative bounds are ADR-0093 §Phasing deferrals.
+                //
+                //     ADR-0093 Phase-2 §"Slice-shape soundness" — an
+                //     unsupported slice shape is REJECTED at the type checker
+                //     (`TypeError::UnsupportedSliceShape`), so MIR never sees
+                //     one on the accepted-program path. The `else` arm below
+                //     is DEFENSE-IN-DEPTH (constitution §6): if a non-`lo:hi`
+                //     shape ever reaches here it emits a hard `MirError`
+                //     rather than falling through to the generic index no-op,
+                //     which would SILENTLY evaluate to the WHOLE base buffer
+                //     (the §2.2 silent-miscompile this replaces). NEVER a
+                //     silent fallthrough.
                 if matches!(&base_ty, Ty::Bytes) {
-                    let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
-                    let idx_op = self.lower_index(index)?;
-                    let dest = self.declare_local("_bytesidx".to_string(), Ty::Int, e.span, false);
-                    let cur = self.current_block_id();
-                    let next = self.start_new_block();
-                    self.cur_block = Some(cur.0 as usize);
-                    self.terminate(Terminator::Call {
-                        func: Operand::Constant(Constant::Str("__cobrust_bytes_get".to_string())),
-                        args: vec![base_op, idx_op],
-                        destination: Place::local(dest),
-                        target: next,
-                        unwind: None,
-                    });
-                    self.cur_block = Some(next.0 as usize);
-                    return Ok(Operand::Copy(Place::local(dest)));
+                    if let IndexKind::Slice { start, stop, step } = index.as_ref() {
+                        if let (None, Some(lo_e), Some(hi_e)) =
+                            (step.as_ref(), start.as_ref(), stop.as_ref())
+                        {
+                            let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                            let lo_op = self.lower_expr(lo_e)?;
+                            let hi_op = self.lower_expr(hi_e)?;
+                            let dest = self.declare_local(
+                                "_bytesslice".to_string(),
+                                Ty::Bytes,
+                                e.span,
+                                true,
+                            );
+                            let cur = self.current_block_id();
+                            let next = self.start_new_block();
+                            self.cur_block = Some(cur.0 as usize);
+                            self.terminate(Terminator::Call {
+                                func: Operand::Constant(Constant::Str(
+                                    "__cobrust_bytes_slice".to_string(),
+                                )),
+                                args: vec![base_op, lo_op, hi_op],
+                                destination: Place::local(dest),
+                                target: next,
+                                unwind: None,
+                            });
+                            self.cur_block = Some(next.0 as usize);
+                            // `_bytesslice` owns a FRESHLY-allocated
+                            // `bytes` buffer (the slice shim's return).
+                            // It MUST be MOVED out so the single owner
+                            // (the consuming binding) drops it ONCE; a
+                            // Copy here would leave BOTH `_bytesslice` +
+                            // the consuming local in the drop schedule →
+                            // a double-free. (Mirror of the coil slice +
+                            // str_concat Move-out discipline.)
+                            return Ok(Operand::Move(Place::local(dest)));
+                        }
+                        // DEFENSE-IN-DEPTH — an unsupported `bytes` slice
+                        // shape (open-ended / stepped / negative) should have
+                        // been rejected by `TypeError::UnsupportedSliceShape`
+                        // upstream. Reaching here means the type checker was
+                        // bypassed; a hard `MirError` is the §2.2-sound
+                        // backstop (NEVER the silent whole-buffer fallthrough
+                        // this replaces).
+                        return Err(MirError::Internal(format!(
+                            "unsupported `bytes` slice shape reached MIR lowering at \
+                             {:?} (only `b[lo:hi]` with both non-negative bounds + \
+                             default step is supported; this must be rejected by \
+                             TypeError::UnsupportedSliceShape upstream)",
+                            e.span
+                        )));
+                    } else {
+                        let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                        let idx_op = self.lower_index(index)?;
+                        let dest =
+                            self.declare_local("_bytesidx".to_string(), Ty::Int, e.span, false);
+                        let cur = self.current_block_id();
+                        let next = self.start_new_block();
+                        self.cur_block = Some(cur.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_bytes_get".to_string(),
+                            )),
+                            args: vec![base_op, idx_op],
+                            destination: Place::local(dest),
+                            target: next,
+                            unwind: None,
+                        });
+                        self.cur_block = Some(next.0 as usize);
+                        return Ok(Operand::Copy(Place::local(dest)));
+                    }
                 }
                 // ADR-0077 Q2 — `coil.Buffer` index read, beside the
                 // Dict/List arms above. The base handle is BORROWED (Move →
@@ -2289,10 +2368,33 @@ impl<'a> BodyBuilder<'a> {
                 | "ends_with"
                 | "lower"
                 | "upper"
+                // ADR-0093 Phase 2 — `s.encode()` reads the receiver Str
+                // pointer (mints a fresh `bytes`) WITHOUT consuming it; the
+                // source `str` local survives + drops once.
+                | "bytes_from_str"
+                // ADR-0093 Phase 2 — `b.decode()` / `b.hex()` read the
+                // receiver `bytes` pointer (mint a fresh `str`) WITHOUT
+                // consuming it; the source `bytes` local survives + drops
+                // once. Same borrow-not-move discipline (the Move→Copy
+                // operand upgrade is type-agnostic — it just flips the
+                // operand variant so the borrow checker does not mark the
+                // receiver consumed).
+                | "bytes_decode"
+                | "bytes_hex"
         );
         let base_op = self.lower_expr(base)?;
         let base_op = if is_str_borrow_target {
-            upgrade_move_to_copy_for_str(self, base_op)
+            // Borrow-not-move the receiver. `upgrade_move_to_copy_for_str`
+            // handles a `Ty::Str` receiver (all the str methods + the
+            // `bytes_from_str` encode receiver); the chained
+            // `upgrade_move_to_copy_for_bytes` handles a `Ty::Bytes`
+            // receiver (the ADR-0093 `bytes_decode` / `bytes_hex`
+            // methods). Each is a no-op on the wrong type, so chaining is
+            // safe — exactly one fires per receiver. (A `bytes` receiver is
+            // operand-Move like Str, so without the bytes upgrade
+            // `b.hex(); len(b)` would `UseAfterMove`.)
+            let after_str = upgrade_move_to_copy_for_str(self, base_op);
+            upgrade_move_to_copy_for_bytes(self, after_str)
         } else {
             base_op
         };
@@ -3004,6 +3106,33 @@ impl<'a> BodyBuilder<'a> {
                 span,
             );
             return Ok(op_out);
+        }
+        // ADR-0093 Phase 2 — `bytes + bytes` via the NATURAL `+` operator
+        // (the `str + str` mirror, placed BEFORE it since both guard on
+        // `op == Add`). Retargets to the always-linked
+        // `__cobrust_bytes_concat(a, b) -> *mut Bytes`, which mints a fresh
+        // `bytes` buffer (freed once by the `Ty::Bytes` drop schedule at
+        // scope exit). Both operands are BORROWED (Move→Copy upgrade —
+        // `__cobrust_bytes_concat` reads but does not consume, so the source
+        // `bytes` locals survive for later uses + drop ONCE at scope exit,
+        // per the `bytes` Move-only / non-Copy discipline). The result is
+        // MOVED out (a Copy would double-free the freshly-minted buffer).
+        if matches!(op, HirBinOp::Add) && matches!(lhs_ty, Ty::Bytes) {
+            let lhs_op = upgrade_move_to_copy_handle(self.lower_expr(lhs)?);
+            let rhs_op = upgrade_move_to_copy_handle(self.lower_expr(rhs)?);
+            let dest = self.declare_local("_bytescat".to_string(), Ty::Bytes, span, false);
+            let cur = self.current_block_id();
+            let next = self.start_new_block();
+            self.cur_block = Some(cur.0 as usize);
+            self.terminate(Terminator::Call {
+                func: Operand::Constant(Constant::Str("__cobrust_bytes_concat".to_string())),
+                args: vec![lhs_op, rhs_op],
+                destination: Place::local(dest),
+                target: next,
+                unwind: None,
+            });
+            self.cur_block = Some(next.0 as usize);
+            return Ok(Operand::Move(Place::local(dest)));
         }
         // ADR-0078 backend Phase 2 (fang JWT E2E sibling-fix) — `str + str`
         // via the NATURAL `+` operator (e.g. the append-tamper `t + "X"`).
@@ -3868,6 +3997,24 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
                         }
                     }
                 }
+                // ADR-0093 Phase 2 — str/bytes method-form call return type
+                // (so a CHAINED `s.encode().decode()` resolves the inner
+                // `.encode()` to `Ty::Bytes`, driving the outer `.decode()`
+                // method dispatch + the let-binding's drop schedule). The
+                // method rewrites to a PRELUDE fn whose return type is the
+                // call's type. Without this, a chained method call's base
+                // synthed to `Ty::None`, so `method_form_rewrite_name` on
+                // the outer call did not match (returned `None`) and the
+                // outer call fell through to the broken generic `Attr` path
+                // (empty / wrong output). Sibling of the `Name`-callee
+                // Fn-return resolution above.
+                if let Some(rewritten) = method_form_rewrite_name(b, base, name.as_str()) {
+                    if let Some(def_id) = b.ctx.lookup_fn_def_id(&rewritten) {
+                        if let Ty::Fn(fn_ty) = b.ctx.lookup_ty(def_id) {
+                            return (*fn_ty.return_ty).clone();
+                        }
+                    }
+                }
             }
             Ty::None
         }
@@ -4052,6 +4199,23 @@ fn method_form_rewrite_name(b: &BodyBuilder<'_>, base: &Expr, method_name: &str)
             "ends_with" | "endswith" => Some("ends_with".to_string()),
             "lower" => Some("lower".to_string()),
             "upper" => Some("upper".to_string()),
+            // ADR-0093 Phase 2 — `s.encode() -> bytes` (UTF-8 encode).
+            // Routes to the `bytes_from_str` PRELUDE fn (whose `-> bytes`
+            // return type drives the `_callret` drop schedule) ->
+            // `__cobrust_bytes_from_str(s)`. The receiver `s` is borrowed
+            // (the shim reads the Str bytes; see the `is_bytes_borrow`
+            // set in `lower_rewritten_method_call`).
+            "encode" => Some("bytes_from_str".to_string()),
+            _ => None,
+        },
+        // ADR-0093 Phase 2 — the `bytes` method table: `.decode() -> str`
+        // (UTF-8; traps on invalid UTF-8 — §2.2) + `.hex() -> str`
+        // (lowercase hex). Both route to PRELUDE fns whose `-> str` return
+        // type drives the `_callret` drop schedule, and whose `bytes`
+        // receiver is borrowed (read-only) by the shim.
+        Ty::Bytes => match method_name {
+            "decode" => Some("bytes_decode".to_string()),
+            "hex" => Some("bytes_hex".to_string()),
             _ => None,
         },
         Ty::List(_) => match method_name {

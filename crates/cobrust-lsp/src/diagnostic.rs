@@ -186,6 +186,10 @@ fn type_error_to_diagnostic_single(err: &TypeError, line_map: &LineMap) -> Diagn
         DoraUnknownOutputId {
             span, suggestion, ..
         } => (*span, *suggestion, "dora-unknown-output-id"),
+        // ADR-0093 Phase-2 — unsupported bytes-slice shape.
+        UnsupportedSliceShape { span, suggestion } => {
+            (*span, *suggestion, "unsupported-slice-shape")
+        }
         Multiple(_) => unreachable!("Multiple flattened by type_error_to_diagnostics"),
     };
     let range = span_to_lsp_range(&span, line_map);

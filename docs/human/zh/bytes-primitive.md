@@ -29,17 +29,76 @@ fn main() -> i64:
     return 0
 ```
 
-## 现在能做什么(第 1 阶段)
+## 现在能做什么
 
-| 形式 | 结果 | 说明 |
-|---|---|---|
-| `b"..."` | `bytes` | 字节串字面量(任意字节,支持 `\xNN` 转义) |
-| `len(b)` | `int` | 字节数 |
-| `b[i]` | `int` | 第 `i` 个字节,范围 `0..255`(与 Python 的 `b"abc"[0] == 97` 一致) |
+| 形式 | 结果 | 说明 | 阶段 |
+|---|---|---|---|
+| `b"..."` | `bytes` | 字节串字面量(任意字节,支持 `\xNN` 转义) | 1 |
+| `len(b)` | `int` | 字节数 | 1 |
+| `b[i]` | `int` | 第 `i` 个字节,范围 `0..255`(与 Python 的 `b"abc"[0] == 97` 一致) | 1 |
+| `b[lo:hi]` | `bytes` | 切片(返回全新的 `bytes`);越界时像 Python 一样夹取 | 2 |
+| `b1 + b2` | `bytes` | 拼接(返回全新的 `bytes`) | 2 |
+| `s.encode()` | `bytes` | `str` 的 UTF-8 字节 | 2 |
+| `b.decode()` | `str` | 把 UTF-8 字节解码回 `str`(见下) | 2 |
+| `b.hex()` | `str` | 小写十六进制,例如 `b"\xff\x00".hex() == "ff00"` | 2 |
 
 `bytes` 值与其他 Cobrust 堆值行为一致:它由你的 `.cb` 作用域拥有,作用域
 结束时自动释放一次。你永远不需要手写释放 —— 也没有垃圾回收器。这与
-`str`、`list` 采用的所有权纪律完全相同。
+`str`、`list` 采用的所有权纪律完全相同。上表中每个产生新 `bytes` 或 `str`
+的操作(切片 / 拼接 / encode / decode / hex)都给你一个由作用域拥有的 **全新**
+值;输入只被读取,绝不会被消耗。
+
+## 切片、拼接与 `str` 桥接(第 2 阶段)
+
+```cobrust
+fn main() -> i64:
+    let b: bytes = b"hello"
+    print(len(b[1:4]))       # 3   (b"ell")
+    print(len(b + b))        # 10  (b"hellohello")
+
+    # str <-> bytes 往返
+    let s: str = "world"
+    let encoded: bytes = s.encode()
+    print(len(encoded))      # 5
+    print(encoded.decode())  # world
+
+    print(b.hex())           # 68656c6c6f
+    return 0
+```
+
+切片采用与 Python 相同的夹取语义 —— 越界的上界会被收窄到长度,反向区间
+得到空 `bytes`(从不报错):
+
+```cobrust
+fn main() -> i64:
+    let b: bytes = b"abcd"
+    print(len(b[1:99]))   # 3   (夹取为 b"bcd")
+    print(len(b[3:1]))    # 0   (空)
+    return 0
+```
+
+## 解码非法字节 —— 不做隐式强制转换
+
+`b.decode()` 把字节按 UTF-8 读取。如果字节 **不是** 合法 UTF-8,Cobrust
+**不会** 悄悄替换成替代字符,也 **不会** 悄悄截断 —— 那正是 Cobrust 拒绝的
+隐式强制转换(CLAUDE.md §2.2)。它会 **停止程序**,并给出明确指出第一个非法
+字节位置的诊断:
+
+```cobrust
+fn main() -> i64:
+    let b: bytes = b"\xff\xfe"
+    let s: str = b.decode()   # 在这里停止
+    print(s)                  # 永不执行
+    return 0
+```
+
+```
+cobrust panic: bytes.decode: invalid utf-8 at byte 0
+```
+
+这与 Cobrust 中其他所有不可恢复错误“在前置条件被破坏时大声停止”的行为一致。
+未来版本会在该风格于标准库铺开后加入可恢复的、返回 `Result` 的形式;在此之前,
+解码非法 UTF-8 是硬停止 —— 但 **绝不** 是悄无声息的损坏。
 
 ## 为什么这样设计?
 
@@ -54,14 +113,20 @@ fn main() -> i64:
 
 ## 已推迟的部分(诚实的路线图)
 
-以下功能 **尚未** 进入第 1 阶段(ADR-0093 第 2 阶段):
+第 2 阶段已落地切片、拼接、`.encode()` / `.decode()` / `.hex()`。以下功能
+仍 **尚未** 进入 —— 每一项都是 **清晰的编译期报错**(会告诉你受支持的写法),
+绝不是悄无声息的错误结果:
 
-- 切片 `b[lo:hi] -> bytes`
-- 拼接 `b1 + b2` 与相等比较 `b1 == b2`
-- 方法 `.hex()`、`.decode()`(bytes → str)与 `str.encode()`(str → bytes)
-- dora 流访问器 `event.data_bytes()` / `event.send_output_bytes(...)`
-
-今天你已经可以持有、测量并索引 `bytes` 值;切片与拼接将在后续增量中落地。
+- **两个 `bytes` 的比较**(`b1 == b2`、`<`、`>` 等)是编译期错误。报错会提示
+  你改用 `len(a)` 与 `len(b)` 比较,或在两侧都确定是合法 UTF-8 时改用
+  `a.decode()` 与 `b.decode()` 比较。(此前这会让编译器崩溃;现在是一条干净的
+  诊断。)
+- **负数 / 开放端 / 带步长的切片**(`b[1:]`、`b[:3]`、`b[0:4:2]`、`b[1:-1]`)
+  是编译期错误 —— 目前只支持简单的 `b[lo:hi]` 形式(两个边界都为非负且都给出)。
+  报错会提示你写出两个边界,例如 `b[1:len(b)]`。(此前这会悄悄返回整个缓冲区;
+  现在编译器会带着修复建议拦下你。)
+- 可恢复的、返回 `Result` 的 `decode()`(今天非法 UTF-8 会停止程序,见上)。
+- dora 流访问器 `event.data_bytes()` / `event.send_output_bytes(...)`。
 
 ## 另见
 

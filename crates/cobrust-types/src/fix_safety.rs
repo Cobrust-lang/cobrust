@@ -185,7 +185,10 @@ pub fn type_error_suggestion_text(err: &TypeError) -> Option<&'static str> {
         // ADR-0092 — undeclared dora output id; the declared-output list
         // + the nearest-match are in the Display message, this is the
         // uniform static hint.
-        | DoraUnknownOutputId { suggestion, .. } => *suggestion,
+        | DoraUnknownOutputId { suggestion, .. }
+        // ADR-0093 Phase-2 — unsupported bytes-slice shape; the supported
+        // `b[lo:hi]` form is in the Display message + this hint.
+        | UnsupportedSliceShape { suggestion, .. } => *suggestion,
         Multiple(_) => None,
     }
 }
@@ -263,6 +266,11 @@ pub fn type_error_fix_safety(err: &TypeError) -> FixSafety {
         // declared id, or add the id to `@dora.node(outputs=[...])`). Both
         // are local edits; no cross-line semantics carry-over.
         DoraUnknownOutputId { .. } => FixSafety::LocalEdit,
+        // ADR-0093 Phase-2 — unsupported bytes-slice shape. Fix is a local
+        // rewrite of the slice expression into the supported `b[lo:hi]`
+        // form (e.g. `b[1:]` → `b[1:len(b)]`). No cross-line semantics
+        // carry-over.
+        UnsupportedSliceShape { .. } => FixSafety::LocalEdit,
         // Multiple — children carry their own tiers; the aggregate has no
         // singular safety classification.
         Multiple(_) => FixSafety::RequiresHumanReview,

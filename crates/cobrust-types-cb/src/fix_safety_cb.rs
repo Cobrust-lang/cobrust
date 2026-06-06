@@ -181,7 +181,11 @@ pub fn type_error_cb_fix_safety(err: &TypeErrorCb) -> FixSafetyCb {
         // ADR-0092 — undeclared dora output id; LocalEdit, mirroring the
         // Rust-side `DoraUnknownOutputId` tier (local rewrite of the id
         // string or the `outputs=[...]` decorator list).
-        | DoraUnknownOutputId { .. } => FixSafetyCb::LocalEdit,
+        | DoraUnknownOutputId { .. }
+        // ADR-0093 Phase-2 — unsupported bytes-slice shape; LocalEdit,
+        // mirroring the Rust-side tier (local rewrite of the slice into the
+        // supported `b[lo:hi]` form).
+        | UnsupportedSliceShape { .. } => FixSafetyCb::LocalEdit,
         ImplicitTruthiness { .. } | MutableDefault { .. } | NotHashable { .. } => {
             FixSafetyCb::BehaviorPreserving
         }

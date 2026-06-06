@@ -382,4 +382,39 @@ pub enum TypeError {
         span: Span,
         suggestion: Option<&'static str>,
     },
+
+    /// ADR-0093 Phase-2 §"Slice-shape soundness" — a `bytes` slice
+    /// expression used a shape the runtime cannot yet honour, so it is
+    /// REJECTED at compile time (§2.5-A) instead of silently miscompiling
+    /// (§2.2). The ONLY supported `bytes` slice form is the contiguous
+    /// `b[lo:hi]` with BOTH non-negative bounds present and the default
+    /// step (`__cobrust_bytes_slice(b, lo, hi)`). An open-ended bound
+    /// (`b[1:]` / `b[:3]` / `b[:]`), a non-unit step (`b[0:4:2]`), or a
+    /// negative bound (`b[1:-1]`) is an ADR-0093 §Phasing deferral.
+    ///
+    /// **Why a hard reject, not a silent fallthrough.** Before this arm,
+    /// every non-`lo:hi` shape type-checked as `Ty::Bytes` then fell
+    /// through the MIR `bytes`-index guard to the generic `Projection::
+    /// Index` path, where the `Slice` collapsed to `Constant::Int(0)` and
+    /// the index projection was a codegen no-op — so the expression
+    /// silently evaluated to the WHOLE base buffer (e.g. `b"hello"[1:]`
+    /// gave `len 5`, not CPython's `4`). That is the exact §2.2
+    /// silent-coercion / §2.5 compile-time-catch-miss the constitution
+    /// most forbids; a wrong answer at exit 0 with no diagnostic.
+    ///
+    /// Per §2.5-B the message PRINTS THE FIX: it names the supported
+    /// `b[lo:hi]` form so the LLM agent rewrites the slice on the next
+    /// turn (e.g. `b[1:]` → `b[1:len(b)]`). `suggestion` carries the
+    /// uniform ADR-0052b static hint.
+    #[error(
+        "unsupported `bytes` slice shape at {span}: only a contiguous \
+         `b[lo:hi]` slice with both non-negative bounds present and the \
+         default step is supported (an open-ended `b[1:]`/`b[:3]`, a \
+         non-unit step `b[0:4:2]`, or a negative bound `b[1:-1]` is not \
+         yet supported); write both explicit bounds, e.g. `b[1:len(b)]`"
+    )]
+    UnsupportedSliceShape {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 }
