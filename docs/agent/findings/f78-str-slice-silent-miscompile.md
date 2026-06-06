@@ -2,13 +2,44 @@
 finding_id: F78
 title: str slicing silently miscompiles — "hello"[1:4] evaluates to the WHOLE string (a §2.2 silent-miscompile in a core op)
 date: 2026-06-06
-status: open
+status: resolved
+resolved_by: adr-0094
+resolution_commit: "(dirty tree — CTO commits; mirrors the bytes Phase-2 slice machinery of ADR-0093 §2)"
 severity: major
-relates_to: [adr:0093, "claude.md:§2.2", "claude.md:§2.5", "finding:f37"]
+relates_to: [adr:0093, adr:0094, "claude.md:§2.2", "claude.md:§2.5", "finding:f37"]
 discovered_by: the bytes Phase 2 (ADR-0093 §2) adversarial audit
 ---
 
 # F78 — str slicing silently miscompiles to the whole string
+
+## RESOLUTION (ADR-0094, 2026-06-06)
+
+RESOLVED by **ADR-0094** — the `str` index OPERATOR runtime, mirroring
+the ADR-0093 §2 `bytes` slice machinery but **codepoint-addressed** (the
+load-bearing str-vs-bytes decision: Python `str[i]`/`str[i:j]` index by
+Unicode scalar, NEVER splitting a multi-byte UTF-8 codepoint — so a slice
+boundary always lands on a `char` boundary and the result is ALWAYS valid
+UTF-8, no snap-or-trap needed). Verified vs CPython 3:
+
+- `"hello"[1:4] == "ell"` (was `hello`) ✓
+- `"hello"[1] == "e"` (the SIBLING scalar bug — `s[i]` was ALSO the whole
+  string; fixed in the same MIR arm for consistency) ✓
+- `len("hello"[1:4]) == 3` (was a use-of-moved compile error) ✓
+- `"héllo"[1:3] == "él"` (the UTF-8 codepoint case) ✓
+- `s[1:]` / `s[:3]` / `s[0:4:2]` / `s[1:-1]` REJECT at `cobrust check`
+  via `TypeError::UnsupportedSliceShape` (the ADR-0093 `bytes` reject
+  EXTENDED to `Ty::Str`, no new cascade — §2.5-A) ✓
+
+Surface: `__cobrust_str_slice` + `__cobrust_str_char_at` (codepoint, mint-
+fresh / borrow-base / drop-once), a `Ty::Str` MIR `Index` arm, a
+`(Ty::Str, IndexKind::Slice)` check.rs arm, two codegen externs. The base
+`str` is BORROWED (Move→Copy upgrade); the slice/scalar mints a fresh str
+dropped once (1000-iter drop-hammer clean). See ADR-0094 for the full
+codepoint rationale + the `UnsupportedSliceShape`-to-str extension.
+
+---
+
+## Original report (preserved)
 
 ## What (verified at HEAD 5248d8f)
 

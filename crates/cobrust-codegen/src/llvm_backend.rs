@@ -2441,6 +2441,36 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_param_counts
             .insert("__cobrust_str_at", 2);
 
+        // ADR-0094 / F78 — the `str[i]` / `str[lo:hi]` index OPERATOR
+        // surface (CODEPOINT-based, the `__cobrust_bytes_*` slice mirror).
+        // Each MINTS a fresh `str` handle the `.cb` drop schedule frees
+        // once; the input `s` is borrowed. Symbols live in
+        // `libcobrust_stdlib.a` (already-linked archive).
+
+        // __cobrust_str_char_at(s: *mut Str, i: i64) -> *mut Str
+        // (the i-th CODEPOINT as a fresh 1-codepoint str; `s[i]` operator)
+        let str_char_at_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let str_char_at_fn = self.module.add_function(
+            "__cobrust_str_char_at",
+            str_char_at_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_char_at", str_char_at_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_char_at", 2);
+
+        // __cobrust_str_slice(s: *mut Str, lo: i64, hi: i64) -> *mut Str
+        // (codepoint range `[lo, hi)` as a fresh str; `s[lo:hi]` operator)
+        let str_slice_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let str_slice_fn =
+            self.module
+                .add_function("__cobrust_str_slice", str_slice_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_slice", str_slice_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_slice", 3);
+
         // __cobrust_str_eq(a: *mut Str, b: *mut Str) -> i64
         let str_eq_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let str_eq_fn =

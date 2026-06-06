@@ -264,6 +264,120 @@ fn alloc_str_buffer_local(s: &str) -> *mut u8 {
     }
 }
 
+// =====================================================================
+// ADR-0094 / F78 — the `str[i]` / `str[lo:hi]` index OPERATOR surface
+// (CODEPOINT-based, mirroring the `bytes` Phase-2 slice machinery of
+// ADR-0093 §2). Each shim MINTS a fresh owned `str` (a fresh
+// StringBuffer) the `.cb` scope drops EXACTLY ONCE via
+// `__cobrust_str_drop`; the input `s` is BORROWED (read-only) — NEVER
+// freed here. Same mint-fresh / borrow-input discipline as
+// `__cobrust_str_concat` / `__cobrust_bytes_slice`.
+//
+// **Codepoint, not byte (the load-bearing str-vs-bytes decision).**
+// Python `str[i]` / `str[i:j]` index by Unicode scalar (a slice NEVER
+// splits a multi-byte UTF-8 codepoint); `bytes` had no such concern
+// (every byte is independent). The `.cb` type contract already declares
+// `str[i] -> str` (a 1-codepoint string, `check.rs`), so both forms
+// walk `char_indices()` and address CODEPOINT offsets. A slice boundary
+// always lands on a `char` boundary by construction, so the result is
+// ALWAYS valid UTF-8 — no mid-codepoint cut, no trap needed (contrast
+// the legacy byte-based `io.rs::__cobrust_str_at` function-form shim,
+// which `s[idx..=idx]`-slices by BYTE and would panic on a multi-byte
+// boundary; this OPERATOR path supersedes it for `s[i]`).
+
+/// Read the `i`-th CODEPOINT of `s` as a fresh 1-codepoint owned `str`.
+/// The runtime target of the `.cb` `s[i]` scalar-index OPERATOR
+/// (ADR-0094 / F78). Python `"héllo"[1] == "é"` — a 1-codepoint `str`,
+/// NOT a byte (contrast `bytes`' `b[i] -> int`).
+///
+/// Out-of-range (`i < 0` or `i >= codepoint-count`) or a NULL handle
+/// returns a FRESH EMPTY `str` (the bounds sentinel; a 1-codepoint hit
+/// is non-empty, so `""` is unambiguous — sibling of `__cobrust_str_at`
+/// / `__cobrust_bytes_get`'s OOB conventions). An explicit bounds-PANIC
+/// is an ADR-0094 §Phasing deferral.
+///
+/// The input `s` is BORROWED (read-only); the caller's Str drop schedule
+/// still frees it. The returned pointer is a fresh buffer the caller
+/// owns + drops EXACTLY ONCE via `__cobrust_str_drop`.
+///
+/// # Safety
+///
+/// `s` must be NULL or a pointer returned by `__cobrust_str_new` (or
+/// `__cobrust_str_clone`) and not yet dropped. The returned pointer must
+/// be passed to `__cobrust_str_drop` exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_char_at(s: *mut u8, i: i64) -> *mut u8 {
+    if s.is_null() || i < 0 {
+        return alloc_str_buffer_local("");
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let src = unsafe { str_buf_as_str_local(s) };
+    match src.chars().nth(i as usize) {
+        Some(c) => {
+            let mut buf = [0u8; 4];
+            alloc_str_buffer_local(c.encode_utf8(&mut buf))
+        }
+        None => alloc_str_buffer_local(""),
+    }
+}
+
+/// Slice `s[lo:hi]` into a FRESH owned `str` carrying a COPY of the
+/// CODEPOINT range `[lo, hi)`. The runtime target of the `.cb` `s[lo:hi]`
+/// slice OPERATOR (ADR-0094 / F78, the `__cobrust_bytes_slice` mirror —
+/// but **codepoint-addressed** + with **Python clamp** on OOB:
+/// CPython `"hello"[1:4] == "ell"`, `"hello"[1:99] == "ello"`,
+/// `"hello"[3:1] == ""`, never an exception).
+///
+/// `lo`/`hi` are CODEPOINT indices (NOT byte offsets); the walk maps
+/// them to byte offsets via `char_indices()`, so a boundary ALWAYS lands
+/// on a `char` boundary — the result is total + always valid UTF-8, no
+/// mid-codepoint cut is representable. Bounds are clamped to
+/// `[0, codepoint-count]` and `hi <= lo` yields an empty string. NULL
+/// handle → empty string.
+///
+/// The input `s` is BORROWED (read-only); the caller's Str drop schedule
+/// still frees it. The returned pointer is a fresh buffer the caller
+/// owns + drops EXACTLY ONCE via `__cobrust_str_drop`.
+///
+/// # Safety
+///
+/// `s` must be NULL or a pointer returned by `__cobrust_str_new` (or
+/// `__cobrust_str_clone`) and not yet dropped. The returned pointer must
+/// be passed to `__cobrust_str_drop` exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_slice(s: *mut u8, lo: i64, hi: i64) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let src = unsafe { str_buf_as_str_local(s) };
+    // CPython slice clamp on CODEPOINT count (negative bounds are an
+    // ADR-0094 §Phasing deferral — rejected upstream by
+    // `TypeError::UnsupportedSliceShape`, so they never reach here on the
+    // accepted-program path). A bare `lo:hi` with non-negative bounds
+    // clamps to `[0, n_chars]`.
+    let n_chars = src.chars().count() as i64;
+    let lo_c = lo.clamp(0, n_chars) as usize;
+    let hi_c = hi.clamp(0, n_chars) as usize;
+    if hi_c <= lo_c {
+        return alloc_str_buffer_local("");
+    }
+    // Map the codepoint range `[lo_c, hi_c)` to byte offsets via
+    // `char_indices()`. `byte_lo` is the start byte of the `lo_c`-th
+    // codepoint; `byte_hi` is the start byte of the `hi_c`-th codepoint
+    // (or `src.len()` when `hi_c == n_chars`). Both are guaranteed
+    // `char` boundaries, so `src[byte_lo..byte_hi]` is valid UTF-8.
+    let mut byte_lo = src.len();
+    let mut byte_hi = src.len();
+    for (cp_idx, (byte_off, _)) in src.char_indices().enumerate() {
+        if cp_idx == lo_c {
+            byte_lo = byte_off;
+        }
+        if cp_idx == hi_c {
+            byte_hi = byte_off;
+            break;
+        }
+    }
+    alloc_str_buffer_local(&src[byte_lo..byte_hi])
+}
+
 /// C-ABI shim for source-level `split(s: str, sep: str) -> list[str]`.
 ///
 /// Materializes a heap `List<i64>` whose i64 slots store owned
@@ -823,5 +937,141 @@ mod tests {
         let r = format("{abc", &[FormatArg::Int(1)]);
         // Implementation chose to emit the '{' verbatim then the body.
         assert!(r.contains('{') || r.contains("abc"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // ADR-0094 / F78 — `__cobrust_str_char_at` / `__cobrust_str_slice`
+    // (CODEPOINT-based). Differential vs CPython 3.
+    // ─────────────────────────────────────────────────────────────────
+
+    /// Mint a Str buffer from `s`, run a closure on the handle, then
+    /// drop it. Used to source a borrowed input for the slice shims.
+    fn with_str_buf<R>(s: &str, f: impl FnOnce(*mut u8) -> R) -> R {
+        // SAFETY: `__cobrust_str_new` + push_static produce a valid Str.
+        let buf = unsafe {
+            let b = crate::fmt::__cobrust_str_new();
+            if !s.is_empty() {
+                crate::fmt::__cobrust_str_push_static(b, s.as_ptr(), s.len() as i64);
+            }
+            b
+        };
+        let out = f(buf);
+        // SAFETY: `buf` is a fresh Str handle, dropped exactly once.
+        unsafe { crate::fmt::__cobrust_str_drop(buf) };
+        out
+    }
+
+    /// Read a freshly-minted Str handle into a `String`, then drop it.
+    /// SAFETY: `s` is a fresh Str pointer the caller transfers ownership
+    /// of.
+    unsafe fn read_str_and_drop(s: *mut u8) -> String {
+        let len = unsafe { crate::fmt::__cobrust_str_len(s) } as usize;
+        let out = if len == 0 {
+            String::new()
+        } else {
+            let ptr = unsafe { crate::fmt::__cobrust_str_ptr(s) };
+            let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+            String::from_utf8(bytes.to_vec()).unwrap()
+        };
+        unsafe { crate::fmt::__cobrust_str_drop(s) };
+        out
+    }
+
+    #[test]
+    fn str_slice_ascii_basic_and_clamp() {
+        // CPython: "hello"[1:4] == "ell"; [1:99] == "ello"; [3:1] == "".
+        with_str_buf("hello", |s| unsafe {
+            assert_eq!(read_str_and_drop(__cobrust_str_slice(s, 1, 4)), "ell");
+            assert_eq!(read_str_and_drop(__cobrust_str_slice(s, 1, 99)), "ello");
+            assert_eq!(read_str_and_drop(__cobrust_str_slice(s, 3, 1)), "");
+            assert_eq!(read_str_and_drop(__cobrust_str_slice(s, 0, 5)), "hello");
+            // The SOURCE survives (borrowed, not consumed).
+            assert_eq!(crate::fmt::__cobrust_str_len(s), 5);
+        });
+    }
+
+    #[test]
+    fn str_slice_codepoint_not_byte() {
+        // CPython: "héllo"[1:3] == "él" (codepoint indices, NOT bytes —
+        // 'é' is 2 UTF-8 bytes, so a byte-slicer would split it / mis-cut).
+        with_str_buf("héllo", |s| unsafe {
+            assert_eq!(read_str_and_drop(__cobrust_str_slice(s, 1, 3)), "él");
+            // CPython: "héllo"[0:2] == "hé"; [2:5] == "llo".
+            assert_eq!(read_str_and_drop(__cobrust_str_slice(s, 0, 2)), "hé");
+            assert_eq!(read_str_and_drop(__cobrust_str_slice(s, 2, 5)), "llo");
+        });
+        // Multi-byte across the board: CPython "你好世界"[1:3] == "好世".
+        with_str_buf("你好世界", |s| unsafe {
+            assert_eq!(read_str_and_drop(__cobrust_str_slice(s, 1, 3)), "好世");
+        });
+    }
+
+    #[test]
+    fn str_slice_never_invalid_utf8() {
+        // A boundary always lands on a char boundary → the result is
+        // ALWAYS valid UTF-8 (no mid-codepoint cut). Every sub-slice of a
+        // 4-byte-codepoint string is well-formed.
+        with_str_buf("😀a😀b", |s| unsafe {
+            for lo in 0..=4 {
+                for hi in 0..=4 {
+                    // `read_str_and_drop` round-trips through
+                    // `String::from_utf8(...).unwrap()`, which PANICS on
+                    // invalid UTF-8 — so a passing run proves validity.
+                    let _ = read_str_and_drop(__cobrust_str_slice(s, lo, hi));
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn str_char_at_codepoint() {
+        // CPython: "héllo"[1] == "é" (a 1-codepoint str, NOT a byte).
+        with_str_buf("héllo", |s| unsafe {
+            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, 0)), "h");
+            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, 1)), "é");
+            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, 4)), "o");
+            // OOB → empty (sentinel, no panic).
+            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, 5)), "");
+            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, -1)), "");
+        });
+    }
+
+    #[test]
+    fn str_slice_null_and_empty() {
+        // NULL handle → fresh empty str (no panic).
+        // SAFETY: NULL is an explicit accepted input per `# Safety`.
+        unsafe {
+            assert_eq!(
+                read_str_and_drop(__cobrust_str_slice(std::ptr::null_mut(), 0, 3)),
+                ""
+            );
+            assert_eq!(
+                read_str_and_drop(__cobrust_str_char_at(std::ptr::null_mut(), 0)),
+                ""
+            );
+        }
+        with_str_buf("", |s| unsafe {
+            assert_eq!(read_str_and_drop(__cobrust_str_slice(s, 0, 3)), "");
+        });
+    }
+
+    #[test]
+    fn str_slice_drop_hammer() {
+        // 1000 iterations, each minting a fresh slice + char_at; a double-
+        // free / leak would crash or diverge. The source is borrowed.
+        with_str_buf("héllo wörld", |s| {
+            let mut acc = 0usize;
+            for _ in 0..1000 {
+                // SAFETY: `s` borrowed; each mint dropped once.
+                let sl = unsafe { __cobrust_str_slice(s, 1, 4) };
+                acc += unsafe { read_str_and_drop(sl) }.len();
+                let c = unsafe { __cobrust_str_char_at(s, 1) };
+                acc += unsafe { read_str_and_drop(c) }.len();
+            }
+            // "héllo wörld"[1:4] == "éll" = 4 bytes (é=2); [1] == "é" = 2.
+            assert_eq!(acc, 1000 * (4 + 2));
+            // Source survives all 1000 iterations (13 bytes: é + ö = +2).
+            assert_eq!(unsafe { crate::fmt::__cobrust_str_len(s) }, 13);
+        });
     }
 }

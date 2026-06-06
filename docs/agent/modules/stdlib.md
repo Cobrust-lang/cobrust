@@ -224,6 +224,56 @@ dora `data_bytes()` / `send_output_bytes()` accessor (ADR-0076c B-1b).
 Tests: `crates/cobrust-cli/tests/bytes_ops_e2e.rs` (7) +
 `crates/cobrust-stdlib/src/bytes.rs` Phase-2 unit tests.
 
+### `std.string` — `str` index OPERATOR (ADR-0094 / F78), CODEPOINT-based
+
+The `str` index OPERATOR `s[i]` / `s[lo:hi]` — the `bytes` Phase-2 slice
+machinery MIRRORED for `str`, but **CODEPOINT-addressed** (the
+load-bearing str-vs-bytes difference). Before ADR-0094 BOTH shapes
+SILENTLY miscompiled to the WHOLE base string (F78, §2.2): the generic
+`ExprKind::Index` lowering fell through to the `Projection::Index`
+codegen no-op for `Ty::Str` (no `__cobrust_str_slice` runtime existed).
+
+**Codepoint, not byte.** Python `str[i]`/`str[i:j]` index by Unicode
+scalar (`"héllo"[1] == "é"`, `"héllo"[1:3] == "él"`); a slice NEVER
+splits a multi-byte codepoint. The type contract already declares
+`str[i] -> str` (a 1-codepoint string). So both forms walk
+`char_indices()` and address CODEPOINT offsets — a boundary ALWAYS lands
+on a `char` boundary, so the result is ALWAYS valid UTF-8 (no snap-or-trap
+needed; contrast `bytes`, byte-addressed because every byte is
+independent). The legacy byte-based `__cobrust_str_at` (`io.rs`, the
+`str_at(s,i)` PRELUDE FUNCTION) is left untouched (its LC-100 ASCII
+callers unaffected); the `s[i]` OPERATOR supersedes it with codepoint
+semantics.
+
+Lowering map (MIR `ExprKind::Index` `Ty::Str` arm, beside the `bytes` arm;
+base BORROWED via Move→Copy, result a fresh `str` MOVED out / dropped
+once):
+
+- `s[i] -> str` (1 codepoint; `"héllo"[1]=="é"`, a `str` NOT a byte —
+  UNLIKE `bytes`' `b[i] -> int`) → `__cobrust_str_char_at(s, i)`.
+- `s[lo:hi] -> str` (codepoint range `[lo,hi)`, Python clamp on OOB) →
+  `__cobrust_str_slice(s, lo, hi)`. Only the contiguous `lo:hi` form (both
+  non-negative bounds, default step); open/stepped/negative REJECT at
+  `check.rs` via `TypeError::UnsupportedSliceShape` (the ADR-0093 `bytes`
+  reject EXTENDED to `Ty::Str` — payload-free variant, NO new cascade; the
+  per-site `suggestion` carries `s[1:len(s)]`). A non-`lo:hi` shape
+  reaching MIR is a hard `MirError` (defense-in-depth, NEVER the silent
+  whole-string fall-through).
+
+```rust
+// crates/cobrust-stdlib/src/string.rs (ADR-0094 / F78) — CODEPOINT-based;
+// each MINTS a fresh `str` (dropped once), BORROWS the input `s`.
+pub unsafe extern "C" fn __cobrust_str_char_at(s: *mut u8, i: i64) -> *mut u8;   // s[i], i-th CODEPOINT, OOB -> ""
+pub unsafe extern "C" fn __cobrust_str_slice(s: *mut u8, lo: i64, hi: i64) -> *mut u8; // s[lo:hi], codepoint range, Python clamp
+```
+
+Verified vs CPython 3: `"hello"[1:4]=="ell"`, `"hello"[1]=="e"`,
+`len("hello"[1:4])==3`, `"héllo"[1:3]=="él"`; `s[1:]`/`s[:3]`/`s[0:4:2]`/
+`s[1:-1]` REJECT. **Deferred** (ADR-0094 §Phasing): open/stepped/negative
+slices, an OOB-PANIC scalar, an ASCII O(1) fast-path / grapheme tier.
+Tests: `crates/cobrust-cli/tests/str_slice_e2e.rs` (6) +
+`crates/cobrust-stdlib/src/string.rs` ADR-0094 unit tests (6).
+
 ### `std.io`
 
 ```rust

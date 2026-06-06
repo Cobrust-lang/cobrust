@@ -2323,6 +2323,55 @@ impl Ctx {
                             })
                         }
                     }
+                    // ADR-0094 / F78 — `str[lo:hi]` slice yields a fresh
+                    // `str` (CPython `"hello"[1:4] == "ell"`, a codepoint-
+                    // addressed substring — contrast the scalar `s[i] -> str`
+                    // arm above, a 1-codepoint str). The MIR `lower_expr`
+                    // Index arm retargets to `__cobrust_str_slice(s, lo, hi)
+                    // -> str`, which honours ONLY the contiguous `lo:hi` form
+                    // with both non-negative bounds present and the default
+                    // step.
+                    //
+                    // ADR-0094 §"Slice-shape soundness" (the ADR-0093 `bytes`
+                    // reject, EXTENDED to `Ty::Str`) — every OTHER shape
+                    // (open-ended `s[1:]`/`s[:3]`, non-unit step `s[0:4:2]`,
+                    // negative bound `s[1:-1]`) is REJECTED here (§2.5-A
+                    // compile-time-catch) rather than returning `Ty::Str` and
+                    // falling through to the generic-index no-op, which
+                    // SILENTLY evaluated to the WHOLE base string (the F78
+                    // §2.2 silent-miscompile this arm closes). We still
+                    // type-check each present bound before the shape gate.
+                    (Ty::Str, IndexKind::Slice { start, stop, step }) => {
+                        for bound in [start.as_ref(), stop.as_ref(), step.as_ref()]
+                            .into_iter()
+                            .flatten()
+                        {
+                            let bt = self.synth_expr(bound)?;
+                            unify(&Ty::Int, &bt, &mut self.subst, bound.span)?;
+                        }
+                        let lo_neg = start
+                            .as_ref()
+                            .and_then(literal_int_value)
+                            .is_some_and(|v| v < 0);
+                        let hi_neg = stop
+                            .as_ref()
+                            .and_then(literal_int_value)
+                            .is_some_and(|v| v < 0);
+                        if step.is_none() && start.is_some() && stop.is_some() && !lo_neg && !hi_neg
+                        {
+                            Ok(Ty::Str)
+                        } else {
+                            Err(TypeError::UnsupportedSliceShape {
+                                span,
+                                suggestion: Some(
+                                    "write both explicit non-negative bounds, \
+                                     e.g. `s[1:len(s)]`; open-ended, stepped, \
+                                     and negative `str` slices are not yet \
+                                     supported",
+                                ),
+                            })
+                        }
+                    }
                     (other, IndexKind::Slice { .. }) => Ok(other.clone()),
                     (Ty::Var(_), _) => Ok(self.fresh_var()),
                     (other, _) => Err(TypeError::NotIndexable {

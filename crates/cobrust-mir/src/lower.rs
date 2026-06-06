@@ -1937,6 +1937,106 @@ impl<'a> BodyBuilder<'a> {
                         return Ok(Operand::Copy(Place::local(dest)));
                     }
                 }
+                // ADR-0094 / F78 — `str` index read, beside the
+                // Dict/List/Bytes arms. The base `str` handle is BORROWED
+                // (Move → Copy upgrade) so the source local survives + drops
+                // ONCE at scope exit (mirrors the `bytes` arm above). NOT the
+                // `Projection::Index` fall-through below — that no-op stub was
+                // the F78 §2.2 SILENT-MISCOMPILE: a `str` index collapsed to
+                // the WHOLE base string (`"hello"[1:4]` printed `hello`, not
+                // `ell`). Two index shapes dispatch here (the `bytes` split,
+                // mirrored — but CODEPOINT-addressed, since `str` indexes by
+                // Unicode scalar where `bytes` indexes by byte):
+                //
+                //   - SCALAR `s[i]` (`IndexKind::Expr`) →
+                //     `__cobrust_str_char_at(s, i) -> str` (the i-th CODEPOINT
+                //     as a fresh 1-codepoint `str`; CPython `"héllo"[1] ==
+                //     "é"`, a `str` NOT a byte). The result is a FRESH OWNED
+                //     `str` (Move-out, dropped once) — UNLIKE the `bytes`
+                //     scalar (`b[i] -> int`, a Copy scalar).
+                //   - SLICE `s[lo:hi]` (`IndexKind::Slice`) →
+                //     `__cobrust_str_slice(s, lo, hi) -> str` (a fresh OWNED
+                //     `str` the `.cb` scope drops once — codepoint range
+                //     `[lo, hi)`, Python clamp on OOB, NEVER a mid-codepoint
+                //     cut). The `lo`/`hi` bounds are lowered DIRECTLY here
+                //     (the generic `lower_index` collapses a Slice to
+                //     `Constant::Int(0)`, so the slice arm must read the
+                //     bounds itself — the `bytes`/coil.Buffer slice pattern).
+                //     Only the contiguous `lo:hi` form (both bounds present,
+                //     default step, non-negative) is supported; step /
+                //     open-ended / negative shapes are REJECTED upstream by
+                //     `TypeError::UnsupportedSliceShape` (ADR-0094 extends the
+                //     `bytes` reject to `Ty::Str`), so MIR never sees one on
+                //     the accepted-program path. The `else` arm is
+                //     DEFENSE-IN-DEPTH: an unsupported shape reaching here
+                //     emits a hard `MirError` rather than the silent
+                //     whole-string fall-through F78 documents.
+                if matches!(&base_ty, Ty::Str) {
+                    if let IndexKind::Slice { start, stop, step } = index.as_ref() {
+                        if let (None, Some(lo_e), Some(hi_e)) =
+                            (step.as_ref(), start.as_ref(), stop.as_ref())
+                        {
+                            let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                            let lo_op = self.lower_expr(lo_e)?;
+                            let hi_op = self.lower_expr(hi_e)?;
+                            let dest =
+                                self.declare_local("_strslice".to_string(), Ty::Str, e.span, true);
+                            let cur = self.current_block_id();
+                            let next = self.start_new_block();
+                            self.cur_block = Some(cur.0 as usize);
+                            self.terminate(Terminator::Call {
+                                func: Operand::Constant(Constant::Str(
+                                    "__cobrust_str_slice".to_string(),
+                                )),
+                                args: vec![base_op, lo_op, hi_op],
+                                destination: Place::local(dest),
+                                target: next,
+                                unwind: None,
+                            });
+                            self.cur_block = Some(next.0 as usize);
+                            // `_strslice` owns a FRESHLY-allocated `str`
+                            // buffer (the slice shim's return). It MUST be
+                            // MOVED out so the single owner (the consuming
+                            // binding) drops it ONCE; a Copy here would leave
+                            // BOTH `_strslice` + the consuming local in the
+                            // drop schedule → a double-free. (Mirror of the
+                            // `bytes` slice + str_concat Move-out discipline.)
+                            return Ok(Operand::Move(Place::local(dest)));
+                        }
+                        // DEFENSE-IN-DEPTH — an unsupported `str` slice shape
+                        // (open-ended / stepped / negative) should have been
+                        // rejected by `TypeError::UnsupportedSliceShape`
+                        // upstream. Reaching here means the type checker was
+                        // bypassed; a hard `MirError` is the §2.2-sound
+                        // backstop (NEVER the silent whole-string fallthrough
+                        // F78 documents).
+                        return Err(MirError::Internal(format!(
+                            "unsupported `str` slice shape reached MIR lowering at \
+                             {:?} (only `s[lo:hi]` with both non-negative bounds + \
+                             default step is supported; this must be rejected by \
+                             TypeError::UnsupportedSliceShape upstream)",
+                            e.span
+                        )));
+                    }
+                    let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                    let idx_op = self.lower_index(index)?;
+                    let dest = self.declare_local("_stridx".to_string(), Ty::Str, e.span, true);
+                    let cur = self.current_block_id();
+                    let next = self.start_new_block();
+                    self.cur_block = Some(cur.0 as usize);
+                    self.terminate(Terminator::Call {
+                        func: Operand::Constant(Constant::Str("__cobrust_str_char_at".to_string())),
+                        args: vec![base_op, idx_op],
+                        destination: Place::local(dest),
+                        target: next,
+                        unwind: None,
+                    });
+                    self.cur_block = Some(next.0 as usize);
+                    // The scalar `s[i]` mints a FRESH 1-codepoint `str`
+                    // (Move-out, dropped once) — like the slice, UNLIKE the
+                    // `bytes` scalar (a Copy `int`).
+                    return Ok(Operand::Move(Place::local(dest)));
+                }
                 // ADR-0077 Q2 — `coil.Buffer` index read, beside the
                 // Dict/List arms above. The base handle is BORROWED (Move →
                 // Copy upgrade) so the source local survives + drops once at

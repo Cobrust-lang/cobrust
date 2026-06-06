@@ -1062,18 +1062,21 @@ impl From<TypeError> for UserError {
                     col,
                 )
             }
-            // ADR-0093 Phase-2 — unsupported `bytes` slice shape. The `msg`
-            // names the supported `b[lo:hi]` form (the §2.5-B FIX the LLM
-            // parses from stderr to rewrite the slice in one step) instead of
-            // the pre-fix silent whole-buffer miscompile (§2.2).
+            // ADR-0093 Phase-2 / ADR-0094 (F78) — unsupported slice shape
+            // (both `bytes` AND `str` route here). The `msg` is shape-
+            // agnostic; the per-site `suggestion` (`hint`) carries the
+            // TYPE-SPECIFIC §2.5-B FIX (`b[1:len(b)]` for `bytes`,
+            // `s[1:len(s)]` for `str`) the LLM parses from stderr to rewrite
+            // the slice in one step — instead of the pre-fix silent
+            // whole-buffer / whole-string miscompile (§2.2).
             E::UnsupportedSliceShape { span, suggestion } => {
                 let (line, col) = span_to_line_col(span);
                 (
-                    "unsupported `bytes` slice shape: only a contiguous `b[lo:hi]` slice \
+                    "unsupported slice shape: only a contiguous `[lo:hi]` slice \
                      with both non-negative bounds present and the default step is \
-                     supported (an open-ended `b[1:]`/`b[:3]`, a non-unit step `b[0:4:2]`, \
-                     or a negative bound `b[1:-1]` is not yet supported); write both \
-                     explicit bounds, e.g. `b[1:len(b)]`"
+                     supported (an open-ended `[1:]`/`[:3]`, a non-unit step `[0:4:2]`, \
+                     or a negative bound `[1:-1]` is not yet supported); write both \
+                     explicit bounds (see the hint for the type-specific form)"
                         .to_owned(),
                     suggestion.map(str::to_owned),
                     line,
