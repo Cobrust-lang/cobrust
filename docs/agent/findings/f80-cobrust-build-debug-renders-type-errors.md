@@ -2,7 +2,9 @@
 finding_id: F80
 title: `cobrust build` Debug-renders type errors (raw struct) instead of routing through error_ux — a §2.5-B UX gap
 date: 2026-06-06
-status: open
+status: resolved
+resolved_date: 2026-06-06
+resolution: "build.rs's TWO type_check sites (lines ~118 + ~1223) changed from `format!(\"type error: {e:?}\")` to `crate::error_ux::UserError::from(e).to_string()` — the SAME error_ux routing the MIR error (F69) + `cobrust check` already use. A `cobrust build` type error now renders `error[Type]: type mismatch: expected i64, found str` + a `hint:` line, NOT the raw Debug struct. Locked by cli_exit_codes::ec_2b_build_type_error_renders_polished_not_debug."
 severity: minor
 relates_to: ["claude.md:§2.5", "claude.md:§5.1", adr:0094, "finding:f79"]
 discovered_by: the F79 scalar-negative-index reject adversarial audit

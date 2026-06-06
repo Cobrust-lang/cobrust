@@ -75,6 +75,46 @@ fn ec_2_type_error() {
     assert_eq!(out.status.code(), Some(2), "expected TYPE_ERROR (2)");
 }
 
+// F80 — `cobrust build` routes type errors through error_ux (the polished
+// `error[Type]:` renderer + a `hint:` line), NOT the raw `{e:?}` Debug
+// struct (`TypeMismatch { span: Span { file: FileId(0), .. } }`). §2.5-B:
+// the LLM/human consuming build stderr gets the readable fix, not internal
+// field names. Locks build.rs against a revert to `{e:?}`.
+#[test]
+fn ec_2b_build_type_error_renders_polished_not_debug() {
+    let bin = cobrust_binary();
+    let dir = tempfile::tempdir().expect("create temp source dir");
+    let bad = dir.path().join("type_err_build.cb");
+    std::fs::write(
+        &bad,
+        "fn main() -> i64:\n    let x: i64 = \"hi\"\n    return 0\n",
+    )
+    .unwrap();
+    let exe = dir.path().join("out");
+    let out = Command::new(&bin)
+        .arg("build")
+        .arg(&bad)
+        .arg("-o")
+        .arg(&exe)
+        .arg("--quiet")
+        .output()
+        .expect("invoke build");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "a type-mismatched build must fail"
+    );
+    assert!(
+        stderr.contains("error[Type]") && stderr.contains("type mismatch"),
+        "build type error must render the polished error_ux form; got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Span { file") && !stderr.contains("TypeMismatch {"),
+        "build type error must NOT leak the raw Debug struct (F80); got:\n{stderr}"
+    );
+}
+
 #[test]
 fn ec_5_fmt_diff_under_check() {
     // Force a diff: write a file with non-canonical formatting.

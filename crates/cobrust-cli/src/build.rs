@@ -115,7 +115,14 @@ pub fn build(
     let mut sess = Session::new();
     let hir = hir_lower(&module, &mut sess)
         .map_err(|e| BuildError::Type(format!("HIR lower error: {e:?}")))?;
-    let typed = type_check(&hir).map_err(|e| BuildError::Type(format!("type error: {e:?}")))?;
+    // F80 / CLAUDE.md §2.5-B — route the type error through `error_ux` (the
+    // same renderer `cobrust check` uses + the MIR error below), NOT the raw
+    // `{e:?}` Debug dump (`TypeMismatch { span: Span { file: FileId(0), .. } }`).
+    // `From<TypeError> for UserError` maps the variant's `suggestion` to the
+    // rendered `hint:` line + a real `line:col`, so an LLM/human consuming
+    // `cobrust build` stderr gets the polished fix, not internal field names.
+    let typed = type_check(&hir)
+        .map_err(|e| BuildError::Type(crate::error_ux::UserError::from(e).to_string()))?;
 
     // F69 / CLAUDE.md §2.5 Direction-B — route the MIR-lowering error
     // (ownership / borrow / drop violations from `borrow_check`) through
@@ -1213,7 +1220,9 @@ pub fn lower_to_mir(file: &Path) -> Result<MirModule, BuildError> {
     let mut sess = Session::new();
     let hir = hir_lower(&module, &mut sess)
         .map_err(|e| BuildError::Type(format!("HIR lower error: {e:?}")))?;
-    let typed = type_check(&hir).map_err(|e| BuildError::Type(format!("type error: {e:?}")))?;
+    // F80 / §2.5-B — route the type error through error_ux (as `build()` above).
+    let typed = type_check(&hir)
+        .map_err(|e| BuildError::Type(crate::error_ux::UserError::from(e).to_string()))?;
     // F69 / §2.5 Direction-B — same error_ux routing as `build()` above so
     // this programmatic-use helper never leaks the raw MirError Debug repr.
     let mut mir = mir_lower(&typed)
