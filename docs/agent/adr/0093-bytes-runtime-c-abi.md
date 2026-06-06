@@ -175,6 +175,20 @@ needs the symbols gets them from the already-linked archive (no
 + the exactly-once drop schedule. A `.cb` program may now bind, measure,
 index, and pass a `bytes` value.
 
+**F79 closure (negative-LITERAL scalar reject — Option A, lockstep with
+ADR-0094)**: a NEGATIVE-INTEGER-LITERAL `bytes` scalar index (`b"abc"[-1]`,
+`b[-2]`) now REJECTS at `cobrust check` (`TypeError::UnsupportedSliceShape`,
+REUSED — no new cascade), MIRRORING the slice path's negative-bound reject
+(`literal_int_value(..) < 0`). The diagnostic prints the §2.5-B fix
+(`b[len(b) - 1]`). This closes the F79 §2.2 silent-miscompile for the
+literal `b[-1]` (was a silent sentinel `-1`; CPython `b"abc"[-1] == 99`,
+the last byte). `bytes_ops_e2e_10` pins it (lockstep twin of
+`str_slice_e2e_06`). **Residual (Option B — still deferred)**: a
+NON-LITERAL runtime-negative index still hits the `__cobrust_bytes_get`
+`i < 0` sentinel; full from-end negative indexing + a scalar OOB-PANIC are
+the larger follow-up (a non-literal `b[i]` STILL type-checks —
+`bytes_ops_e2e_10c` asserts the deferred path is unbroken).
+
 **Deferred (Phase 2 — the byte-buffer surface)**, each with an
 `#[ignore = "ADR-0093 Phase 2: <op>"]` placeholder where a test exists:
 

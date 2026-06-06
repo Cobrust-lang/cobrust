@@ -496,3 +496,70 @@ fn main() -> i64:
         "comparing `bytes` values",
     );
 }
+
+// =====================================================================
+// bytes_ops_e2e_10 — F79 (§2.5-A / ADR-0093 §Phasing Option A), the
+// LOCKSTEP twin of `str_slice_e2e_06`. A NEGATIVE-LITERAL `bytes` SCALAR
+// index (`b"abc"[-1]`) is now REJECTED at COMPILE TIME (the same reused
+// `TypeError::UnsupportedSliceShape` the slice path uses) — NOT the silent
+// sentinel `-1` it was before (the F79 §2.2 silent-miscompile; CPython
+// `b"abc"[-1] == 99`, the last byte). The diagnostic prints the fix
+// (`b[len(b) - 1]`). SCOPE: only the negative LITERAL rejects — a
+// non-literal `b[i]` (Option-B deferral) + a non-negative literal
+// `b[0]`/`b[1]` still type-check (asserted below).
+// =====================================================================
+
+#[test]
+fn bytes_ops_e2e_10_negative_literal_scalar_index_rejects() {
+    // `b"abc"[-1]` — was silent -1 (CPython 99). Now rejects.
+    assert_build_rejects(
+        "bytes_ops_e2e_10a",
+        "\
+fn main() -> i64:
+    let b: bytes = b\"abc\"
+    let x: i64 = b[-1]
+    print(x)
+    return 0
+",
+        "b[len(b) - 1]",
+    );
+    // `b[-2]` — also rejects (the negative-literal detection is general).
+    assert_build_rejects(
+        "bytes_ops_e2e_10b",
+        "\
+fn main() -> i64:
+    let b: bytes = b\"abc\"
+    let x: i64 = b[-2]
+    print(x)
+    return 0
+",
+        "negative `bytes` indices",
+    );
+    // NO FALSE-POSITIVE: a NON-LITERAL index `b[i]` (i a variable) STILL
+    // type-checks + builds + runs (the deferred Option-B runtime path).
+    // i=0 → the first byte, 97 ('a').
+    assert_build_run(
+        "bytes_ops_e2e_10c",
+        "\
+fn main() -> i64:
+    let b: bytes = b\"abc\"
+    let i: i64 = 0
+    print(b[i])
+    return 0
+",
+        "97\n",
+    );
+    // NO FALSE-POSITIVE: a non-negative LITERAL `b[0]`/`b[1]` still works.
+    // CPython b"abc"[0]==97 ('a'), b"abc"[1]==98 ('b').
+    assert_build_run(
+        "bytes_ops_e2e_10d",
+        "\
+fn main() -> i64:
+    let b: bytes = b\"abc\"
+    print(b[0])
+    print(b[1])
+    return 0
+",
+        "97\n98\n",
+    );
+}

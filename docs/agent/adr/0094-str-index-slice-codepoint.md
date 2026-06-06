@@ -215,8 +215,26 @@ Two externs registered beside `__cobrust_str_at`:
   and negative-bound (`s[-1]` / `s[1:-1]`) slices REJECT today. Wiring
   them is a follow-up (the open-end + negative needs a `len`-relative
   lowering; step needs a strided minter).
-- An explicit OOB-PANIC for the scalar `s[i]` (vs. today's empty-string
-  sentinel, matching `str_at` / `bytes_get`) is deferred.
+- **F79 closure (negative-LITERAL scalar reject — Option A, this
+  increment)**: a NEGATIVE-INTEGER-LITERAL scalar index (`s[-1]`,
+  `s[-2]`, including a `Neg(IntLit)` or a folded `-1` `IntLit`) now
+  REJECTS at `cobrust check` (`TypeError::UnsupportedSliceShape`, REUSED
+  — no new cascade), MIRRORING the slice path's `literal_int_value(..) <
+  0` negative-bound reject. The diagnostic prints the §2.5-B fix
+  (`s[len(s) - 1]`). This closes the F79 §2.2 silent-miscompile for the
+  literal `s[-1]` (the #1 Python idiom; was a silent `""`, CPython
+  `"hello"[-1] == "o"`). Applied to `str` + `bytes` in LOCKSTEP (ADR-0093
+  §Phasing carries the twin note). `str_slice_e2e_06` /
+  `bytes_ops_e2e_10` pin it.
+- **Residual (Option B — still deferred)**: a NON-LITERAL runtime-negative
+  index (`s[i]` where `i` carries a negative *value*) cannot be caught
+  statically and still hits the `__cobrust_str_char_at` `i < 0` sentinel
+  (`""`) — Python-style from-end indexing (`s[-1] == s[len-1]`) +
+  an explicit OOB-PANIC for the scalar `s[i]` (vs. today's empty-string
+  sentinel, matching `str_at` / `bytes_get`) are the larger Option-B
+  follow-up (a `len`-relative lowering + a bounds trap). A non-literal
+  index STILL type-checks (the deferred runtime path is intentionally
+  unbroken; `str_slice_e2e_06c` asserts it).
 - An ASCII O(1) fast-path / grapheme-cluster tier is deferred (no
   benchmark demands it yet).
 

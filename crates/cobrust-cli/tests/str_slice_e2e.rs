@@ -319,6 +319,74 @@ fn main() -> i64:
 }
 
 // =====================================================================
+// str_slice_e2e_06 — F79 (§2.5-A / ADR-0094 §Phasing Option A). A
+// NEGATIVE-LITERAL `str` SCALAR index (`"hello"[-1]`, `s[-2]`) is now
+// REJECTED at COMPILE TIME (`TypeError::UnsupportedSliceShape`, the same
+// reused error the slice path uses) — NOT the silent sentinel `""` it was
+// before (the F79 §2.2 silent-miscompile; CPython `"hello"[-1] == "o"`,
+// the last codepoint, the #1 Python indexing idiom). The diagnostic prints
+// the fix (`s[len(s) - 1]`, a non-negative index). SCOPE: only the
+// negative LITERAL rejects — a non-literal `s[i]` (Option-B deferral) +
+// a non-negative literal `s[0]`/`s[1]` still type-check (asserted below).
+// =====================================================================
+
+#[test]
+fn str_slice_e2e_06_negative_literal_scalar_index_rejects() {
+    // `"hello"[-1]` — was silent "" (CPython "o"). Now rejects.
+    assert_build_rejects(
+        "str_slice_e2e_06a",
+        "\
+fn main() -> i64:
+    let s: str = \"hello\"
+    let c: str = s[-1]
+    print(c)
+    return 0
+",
+        "s[len(s) - 1]",
+    );
+    // `s[-2]` (a folded / Neg(IntLit) negative literal) — also rejects.
+    assert_build_rejects(
+        "str_slice_e2e_06b",
+        "\
+fn main() -> i64:
+    let s: str = \"hello\"
+    let c: str = s[-2]
+    print(c)
+    return 0
+",
+        "negative `str` indices",
+    );
+    // NO FALSE-POSITIVE: a NON-LITERAL index `s[i]` (i a variable) STILL
+    // type-checks + builds + runs (the deferred Option-B runtime path). The
+    // runtime value for i=0 is the first codepoint, "h" (the sentinel only
+    // bites a runtime-negative i, which this case is NOT).
+    assert_build_run(
+        "str_slice_e2e_06c",
+        "\
+fn main() -> i64:
+    let s: str = \"hello\"
+    let i: i64 = 0
+    let c: str = s[i]
+    print(c)
+    return 0
+",
+        "h\n",
+    );
+    // NO FALSE-POSITIVE: a non-negative LITERAL `s[0]`/`s[1]` still works.
+    assert_build_run(
+        "str_slice_e2e_06d",
+        "\
+fn main() -> i64:
+    let s: str = \"hello\"
+    print(s[0])
+    print(s[1])
+    return 0
+",
+        "h\ne\n",
+    );
+}
+
+// =====================================================================
 // str_slice_e2e_05 — DROP-HAMMER loop. 200 iterations each minting a
 // fresh slice + a fresh scalar char, accumulating their lengths. A
 // double-free / leak in the mint-once / borrow-base discipline would

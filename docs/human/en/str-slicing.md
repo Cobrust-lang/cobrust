@@ -93,10 +93,33 @@ time" principle, and the diagnostic prints the correct form
 |---|---|
 | `s[1:]` / `s[:3]` / `s[:]` (open-ended) | rejected |
 | `s[0:4:2]` (stepped) | rejected |
-| `s[1:-1]` / `s[-1]` (negative) | rejected |
+| `s[1:-1]` (negative bound) | rejected |
 
 Supporting these is named follow-up work in ADR-0094. Until they land,
 write explicit non-negative bounds.
+
+## Negative scalar index `s[-1]` (rejected at compile time)
+
+A **negative-literal scalar index** — `s[-1]` (the Python "last
+codepoint" idiom), `s[-2]`, etc. — is also **rejected** at `cobrust
+check` (`UnsupportedSliceShape`, the same §2.5-A compile-time-catch the
+slice shapes use), rather than silently returning the empty string `""`
+it produced before (F79). The diagnostic prints the fix: for the last
+codepoint, write `s[len(s) - 1]` (a non-negative index).
+
+```cobrust
+fn main() -> i64:
+    let s: str = "hello"
+    # let c: str = s[-1]      # REJECTED — write s[len(s) - 1] instead
+    print(s[len(s) - 1])      # o   (the last codepoint, the supported form)
+    return 0
+```
+
+Only the **literal** negative index is caught. A non-literal index `s[i]`
+where `i` is a variable still type-checks (a runtime-negative `i` falls
+through to a sentinel — a known divergence). Full Python from-end
+indexing (`s[-1] == s[len-1]`) + an out-of-bounds panic are named
+Option-B follow-up work in ADR-0094 (F79).
 
 ## Design notes
 

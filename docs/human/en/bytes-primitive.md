@@ -137,6 +137,14 @@ answer:
   both non-negative bounds present) is supported. The message tells you to
   write both bounds, e.g. `b[1:len(b)]`. (Earlier these silently returned
   the whole buffer; now the compiler stops you with the fix.)
+- **A negative-literal scalar index** (`b[-1]`, `b[-2]`) is a compile error
+  too — the message tells you that for the last byte you write
+  `b[len(b) - 1]` (a non-negative index). (Earlier `b[-1]` silently
+  returned the sentinel `-1`; CPython `b"abc"[-1] == 99`. This is the F79
+  fix, the lockstep twin of the `str` `s[-1]` reject.) Only the **literal**
+  negative index is caught — a non-literal `b[i]` with a variable `i` still
+  type-checks; full from-end indexing + an out-of-bounds panic are named
+  follow-up work in ADR-0093.
 - A recoverable `Result`-returning `decode()` (today invalid UTF-8 stops
   the program; see above).
 - The dora stream accessor `event.data_bytes()` / `event.send_output_bytes(...)`.
