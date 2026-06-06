@@ -140,8 +140,11 @@ fn test_neg_dora_send_output_undeclared_id_rejected_at_build() {
         "undeclared `send_output` id must be REJECTED at compile time; stderr=\n{stderr}"
     );
     assert!(
-        stderr.contains("DoraUnknownOutputId"),
-        "build stderr must name the `DoraUnknownOutputId` variant; got:\n{stderr}"
+        // F80: `cobrust build` now renders the polished error_ux Display
+        // ("unknown dora output id `...`"), not the raw `DoraUnknownOutputId`
+        // Debug variant name — assert the human message.
+        stderr.contains("error[Type]") && stderr.contains("unknown dora output id"),
+        "build stderr must carry the DoraUnknownOutputId diagnostic (polished); got:\n{stderr}"
     );
     assert!(
         stderr.contains("twist_typo"),

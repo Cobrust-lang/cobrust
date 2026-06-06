@@ -395,7 +395,11 @@ fn test_e2e_list_usable_after_array() {
 // =====================================================================
 
 /// `coil.array(5)` is rejected — `coil.array` needs a list. The canonical
-/// `NotIterable` (no new error variant), caught BEFORE codegen.
+/// `NotIterable` (no new error variant), caught BEFORE codegen. F80: the
+/// `cobrust build` error now renders the polished error_ux message
+/// (`error[Type]: `i64` cannot be used in a `for` loop`), not the raw
+/// `NotIterable` Debug variant name — so the assertion checks the human
+/// message.
 #[test]
 fn test_neg_array_rejects_non_list_arg() {
     let (ok, stderr) = try_build(concat!(
@@ -410,8 +414,8 @@ fn test_neg_array_rejects_non_list_arg() {
         "coil.array(5) must be rejected (a list is required); stderr=\n{stderr}"
     );
     assert!(
-        stderr.contains("NotIterable"),
-        "expected the canonical NotIterable diagnostic; stderr=\n{stderr}"
+        stderr.contains("error[Type]") && stderr.contains("cannot be used in a"),
+        "expected the canonical NotIterable diagnostic (polished error_ux form); stderr=\n{stderr}"
     );
 }
 
@@ -433,7 +437,7 @@ fn test_neg_array_rejects_str_element_list() {
         "coil.array([\"a\", \"b\"]) must be rejected (str is not a numeric element); stderr=\n{stderr}"
     );
     assert!(
-        stderr.contains("TypeMismatch"),
-        "expected the canonical TypeMismatch diagnostic; stderr=\n{stderr}"
+        stderr.contains("error[Type]") && stderr.contains("type mismatch"),
+        "expected the canonical TypeMismatch diagnostic (polished error_ux form, F80); stderr=\n{stderr}"
     );
 }
