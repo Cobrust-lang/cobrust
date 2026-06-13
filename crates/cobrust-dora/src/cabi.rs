@@ -156,6 +156,52 @@ unsafe extern "C" {
     fn __cobrust_str_len(buf: *mut u8) -> i64;
 }
 
+// =====================================================================
+// Cobrust `bytes`-buffer ABI (ADR-0093) — declared here, resolved from
+// libcobrust_stdlib.a at link time (the SAME no-Rust-dep pattern as the
+// Str ABI above). The `data_bytes()` accessor mints a `bytes` via
+// `__cobrust_bytes_from_raw`; `send_output_bytes` reads the borrowed
+// `bytes` payload via `__cobrust_bytes_ptr` + `__cobrust_bytes_len`
+// (an O(1) `&[u8]` read — NOT an O(n) `__cobrust_bytes_get` loop).
+// =====================================================================
+
+unsafe extern "C" {
+    /// Mint a FRESH owned `bytes` from a `(ptr, len)` slice (the
+    /// `.cb`-owned handle the scope drops once via `__cobrust_bytes_drop`).
+    /// NULL ptr / `len <= 0` → a valid EMPTY buffer.
+    fn __cobrust_bytes_from_raw(ptr: *const u8, len: i64) -> *mut u8;
+    /// Borrow a `bytes` handle's raw byte pointer (NULL/empty → null).
+    fn __cobrust_bytes_ptr(b: *mut u8) -> *const u8;
+    /// Borrow a `bytes` handle's byte length (NULL → 0).
+    fn __cobrust_bytes_len(b: *mut u8) -> i64;
+}
+
+/// Borrow a `bytes` handle as a read-only `&[u8]` via the O(1)
+/// `(ptr, len)` ABI. Tolerates null / empty (→ `&[]`). BORROW-only — the
+/// handle is NOT consumed (the `.cb` scope still drops it once). Used by
+/// the real `send_output_bytes` to read the payload into an Arrow
+/// `BinaryArray` blob.
+///
+/// # Safety
+///
+/// `b` must be null or a valid `bytes` handle from
+/// `__cobrust_bytes_from_raw` not yet dropped; the returned slice is
+/// valid only while `b` lives.
+unsafe fn bytes_buf_as_slice<'a>(b: *mut u8) -> &'a [u8] {
+    if b.is_null() {
+        return &[];
+    }
+    // SAFETY: caller attests `b` is a valid `bytes` handle.
+    unsafe {
+        let ptr = __cobrust_bytes_ptr(b);
+        let len = __cobrust_bytes_len(b);
+        if ptr.is_null() || len <= 0 {
+            return &[];
+        }
+        std::slice::from_raw_parts(ptr, len as usize)
+    }
+}
+
 /// Read a Cobrust `Str` buffer pointer into an owned `String`. Tolerates
 /// null / empty.
 ///
@@ -325,6 +371,18 @@ struct DoraEventHandle {
     /// `data_str` is pre-decoded, avoiding an arrow lifetime in this
     /// `'static` struct).
     data_buffer: Option<coil::Array>,
+    /// ADR-0076c (D)-B-1b / ADR-0093 Phase 2 — the RAW byte payload
+    /// decoded as an owned `Vec<u8>` (the `.cb` `bytes` payload), when the
+    /// wire dtype is Arrow `Binary` (a single-row blob) OR `UInt8` (a flat
+    /// byte list — the COMPLEMENT of `data_buffer`, which DEFERS these two
+    /// as a named ADR-0076c divergence). `None` when the payload is a
+    /// numeric `coil.Buffer` dtype / `Utf8` / null-bearing / unexpected —
+    /// `event.data_bytes()` then mints an EMPTY `bytes` (len 0), NEVER a
+    /// silent garbage read (§2.2). Decoded ONCE at recv time (real build) /
+    /// canned (synthetic) so `event.data_bytes()` is a pure
+    /// borrow-and-mint shim. A `0xFF`/`0x00` byte round-trips EXACTLY
+    /// (raw, never UTF-8-lossy).
+    data_bytes: Option<Vec<u8>>,
 }
 
 // =====================================================================
@@ -521,6 +579,13 @@ unsafe fn run_node_synthetic(node: *mut u8) -> i64 {
             // `"frame_001"`). The real build replaces this with the live
             // Arrow decode.
             data_buffer: Some(canned_buffer()),
+            // ADR-0076c (D)-B-1b — the synthetic build hands a canned RAW
+            // `bytes` payload carrying a NON-UTF-8 byte (`b"\x00\xff\x01"`)
+            // so `event.data_bytes()` resolves the symbol AND proves
+            // BYTE-FIDELITY end-to-end (a `\xff` is preserved exactly — the
+            // raw bytes path is never UTF-8-lossy). The real build replaces
+            // this with the live Arrow Binary/UInt8 decode.
+            data_bytes: Some(canned_bytes()),
         };
         // SAFETY: `raw` is a valid handler; the shared dispatcher boxes +
         // frees the Event and aborts on a callback panic per ADR-0073 §3 Q5.
@@ -607,6 +672,23 @@ fn canned_buffer() -> coil::Array {
     // crate root) so this crate needs NO direct `ndarray` dep — the same
     // 1-D `[len]` Float64 shape coil's `.cb` constructors produce.
     coil::array_f64(&[1.0_f64, 2.0, 3.0], &[3]).expect("canned [3] Float64 buffer is well-shaped")
+}
+
+/// The canned RAW `bytes` payload the SYNTHETIC build hands from
+/// `event.data_bytes()` (ADR-0076c (D)-B-1b). A 3-byte sequence carrying
+/// a NON-UTF-8 byte (`0x00, 0xff, 0x01`) so the `.cb` build/type-check
+/// path runs without a live broker AND the BYTE-FIDELITY contract is
+/// proven end-to-end: a `0xff` round-trips EXACTLY (the raw bytes path is
+/// never UTF-8-lossy, unlike the str path that would corrupt `\xff`). The
+/// real build replaces this with the decode of the live Arrow
+/// `Binary`/`UInt8` payload.
+///
+/// Synthetic-build only — the `dora-real` path decodes the REAL Arrow
+/// payload instead (`real::decode_arrow_bytes`), so this canned helper is
+/// `#[cfg]`-gated off there to keep `clippy -D warnings` clean.
+#[cfg(not(feature = "dora-real"))]
+fn canned_bytes() -> Vec<u8> {
+    vec![0x00, 0xff, 0x01]
 }
 
 /// `node.shutdown() -> i64`. Phase 1: idempotent soft flag (no real
@@ -929,6 +1011,133 @@ unsafe fn buffer_len(buf: *mut u8) -> usize {
     arr.size()
 }
 
+/// `event.data_bytes() -> bytes` (ADR-0076c (D)-B-1b / ADR-0093 Phase 2).
+/// The RAW-BYTES sibling of [`__cobrust_dora_event_data_buffer`]: mints a
+/// fresh `.cb` `bytes` value carrying the event's RAW byte payload (Arrow
+/// `Binary`/`UInt8` on the real build; a canned non-UTF-8 `b"\x00\xff\x01"`
+/// on the synthetic build). The decode happened ONCE at recv (the
+/// `data_bytes` field), so this shim is a pure borrow-and-mint — it never
+/// re-reads the wire.
+///
+/// When the payload was non-bytes (a numeric `coil.Buffer` dtype → use
+/// `data_bytes`'s SIBLING `data_buffer`; a `Utf8` string → use `data_str`;
+/// a null-bearing / unexpected array — the named ADR-0076c divergences),
+/// the field is `None` and this mints an EMPTY `bytes` (len 0): a
+/// well-defined `.cb` value the caller still drops once, NEVER a silent
+/// garbage read or UB (§2.2). A null event likewise mints an empty bytes.
+/// BYTE-FIDELITY: a `0xFF`/`0x00` byte round-trips EXACTLY (raw, never
+/// UTF-8-lossy).
+///
+/// The returned `*mut bytes` is `.cb`-owned + scope-exit-drops via the
+/// EXISTING `__cobrust_bytes_drop` (no new drop registration — `bytes` is
+/// a full type whose drop lives in `libcobrust_stdlib.a`, always linked).
+///
+/// # Safety
+///
+/// `event` must be a valid Event handle the dora trampoline allocated for
+/// the current callback invocation, OR null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dora_event_data_bytes(event: *mut u8) -> *mut u8 {
+    // Resolve the decoded payload (or an empty slice for a null event /
+    // non-bytes payload), then MINT a fresh `.cb`-owned bytes carrying a
+    // COPY. `__cobrust_bytes_from_raw` tolerates a null ptr / 0 len → a
+    // valid empty buffer, so every path yields a non-null droppable handle.
+    let empty: &[u8] = &[];
+    let slice: &[u8] = if event.is_null() {
+        empty
+    } else {
+        // SAFETY: caller per `# Safety`. Borrow-only — the trampoline
+        // retains ownership of the Box and frees it after the callback.
+        let event_ref: &DoraEventHandle = unsafe { &*event.cast::<DoraEventHandle>() };
+        event_ref.data_bytes.as_deref().unwrap_or(empty)
+    };
+    // SAFETY: `slice` is a valid `(ptr, len)` (or empty → null ptr / 0
+    // len, which the mint tolerates). The mint copies the bytes into a
+    // fresh heap buffer the `.cb` scope owns.
+    unsafe { __cobrust_bytes_from_raw(slice.as_ptr(), slice.len() as i64) }
+}
+
+/// `event.send_output_bytes(output_id: str, b: bytes) -> i64`
+/// (ADR-0076c (D)-B-1b). The RAW-BYTES sibling of
+/// [`__cobrust_dora_event_send_output_buffer`]: emits a RAW byte payload
+/// (the `.cb` `bytes` → a dora `send_output` of an Arrow `BinaryArray`
+/// blob) on the DECLARED `output_id` port. A DISTINCT method name (NOT a
+/// `send_output` overload) for §2.5 compile-time clarity.
+///
+/// The trampoline (BOTH builds):
+/// 1. VALIDATES `output_id` against [`DECLARED_OUTPUTS`] (the same
+///    fail-closed backstop as `send_output_buffer` — an UNDECLARED id is a
+///    clear stderr diagnostic + `-1`. The compile-time `DoraUnknownOutputId`
+///    check ALSO fires for this method now (check.rs extends its match), so
+///    a literal typo'd id is caught at `cobrust check`; this covers the
+///    dynamic-id case).
+/// 2. bumps [`SEND_OUTPUT_COUNT`], then dispatches:
+///    - REAL: read the borrowed `bytes` → an Arrow `BinaryArray` blob →
+///      publish via the ambient live `DoraNode`.
+///    - SYNTHETIC: capture a `output[<id>]=bytes[len=<n>]` marker on stdout
+///      (the synthetic E2E asserts it) — no arrow dep referenced.
+///
+/// The `b` handle is BORROWED (read via `__cobrust_bytes_ptr`, never
+/// freed) — the `.cb` scope's drop schedule still owns it and frees it
+/// ONCE via `__cobrust_bytes_drop` at scope exit. Returns 0 on a declared
+/// emission, `-1` on an undeclared output id.
+///
+/// # Safety
+///
+/// `event` must be a valid Event handle for the current callback, or null;
+/// `output_id` must be null or a valid Cobrust `Str` buffer; `b` must be
+/// null or a live `bytes` handle (from `__cobrust_bytes_from_raw` /
+/// `event.data_bytes()`) the caller has NOT yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_dora_event_send_output_bytes(
+    event: *mut u8,
+    output_id: *mut u8,
+    b: *mut u8,
+) -> i64 {
+    // Borrow the Event for symmetry with `send_output_buffer` (the
+    // synthetic capture validates against the GLOBAL declared set).
+    // SAFETY: caller per `# Safety`. Borrow-only; tolerate null.
+    if !event.is_null() {
+        let _event_ref: &DoraEventHandle = unsafe { &*event.cast::<DoraEventHandle>() };
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let id_s = unsafe { read_str_buf(output_id) };
+
+    // Validate against the declared-output set (BOTH builds — the same
+    // fail-closed contract as `send_output_buffer`; the §2.5 compile-time
+    // `DoraUnknownOutputId` reject fires for this method too at check time).
+    let declared = DECLARED_OUTPUTS
+        .lock()
+        .map(|set| set.iter().any(|o| o == &id_s))
+        .unwrap_or(false);
+    if !declared {
+        eprintln!(
+            "cobrust-dora: send_output_bytes on UNDECLARED output id {id_s:?} — declare it via \
+             `@dora.node(outputs=[{id_s:?}])` (ADR-0076c). Output dropped."
+        );
+        return -1;
+    }
+
+    // Count the emission on BOTH builds (the cabi unit tests read this).
+    SEND_OUTPUT_COUNT.fetch_add(1, Ordering::SeqCst);
+
+    // REAL build: read the borrowed `bytes` → an Arrow Binary blob →
+    // publish via the ambient node. SYNTHETIC build: capture a length
+    // marker (NO arrow dep referenced). Exactly one `let ret` active per
+    // build → clippy-clean tail.
+    #[cfg(feature = "dora-real")]
+    // SAFETY: caller attests `b` is null or a live `bytes` handle.
+    let ret = unsafe { real::send_output_bytes(&id_s, b) };
+    #[cfg(not(feature = "dora-real"))]
+    // SAFETY: caller attests `b` is null or a live `bytes` handle.
+    let ret = unsafe {
+        let n = bytes_buf_as_slice(b).len();
+        println!("output[{id_s}]=bytes[len={n}]");
+        0
+    };
+    ret
+}
+
 /// Drop an `Event` handle. Phase 1 currently never invoked from the .cb
 /// side (Event is Rust-owned per ADR-0073 §2 D6 — manifest returns None
 /// for DORA_EVENT_ADT's drop symbol). Exported for completeness +
@@ -985,7 +1194,7 @@ mod real {
     // (arrow re-exports `arrow_schema::DataType`) for the recv-time dtype
     // dispatch.
     use dora_node_api::arrow::array::{
-        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
+        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, UInt8Array,
     };
     use dora_node_api::arrow::datatypes::DataType;
 
@@ -1109,10 +1318,17 @@ mod real {
                     // (the named divergences). `event.data_buffer()` then
                     // hands a clone of this.
                     let data_buffer = decode_arrow_buffer(&data);
+                    // ADR-0076c (D)-B-1b — ALSO decode the RAW byte payload
+                    // (Arrow `Binary`/`UInt8` → an owned `Vec<u8>`; `None`
+                    // for the numeric / Utf8 / null-bearing / unexpected
+                    // cases — the COMPLEMENT of `decode_arrow_buffer`).
+                    // `event.data_bytes()` then mints a `bytes` from this.
+                    let data_bytes = decode_arrow_bytes(&data);
                     let ev_handle = DoraEventHandle {
                         id: id_s,
                         data_str,
                         data_buffer,
+                        data_bytes,
                     };
 
                     // Install the ambient live-node pointer for the callback
@@ -1269,6 +1485,124 @@ mod real {
                      Utf8 payload. data_buffer() returns an empty buffer."
                 );
                 None
+            }
+        }
+    }
+
+    /// ADR-0076c (D)-B-1b / ADR-0093 Phase 2 — decode a real
+    /// `arrow::array::ArrayRef` payload into an owned `Vec<u8>` (the `.cb`
+    /// `bytes`) for the RAW-byte dtypes Arrow `Binary` (a single-row blob)
+    /// and `UInt8` (a flat byte list). This is the COMPLEMENT of
+    /// [`decode_arrow_buffer`], which EXPLICITLY DEFERS `Binary`/`UInt8` as
+    /// a named ADR-0076c divergence precisely because THIS accessor owns
+    /// them. Returns `None` for any other arrow type (a numeric
+    /// `coil.Buffer` dtype → use `data_buffer`; `Utf8` → use `data_str`;
+    /// anything else — logged once), so `event.data_bytes()` mints the
+    /// EMPTY-bytes fallback rather than a silent garbage read (§2.2).
+    ///
+    /// NULL BITMAP — a null-bearing array CANNOT round-trip a raw byte
+    /// payload faithfully (a `bytes` has no null concept; reading a null
+    /// slot's underlying buffer value would SILENTLY fabricate a byte). So,
+    /// mirroring `decode_arrow_buffer`'s null handling, `null_count() > 0`
+    /// is a named divergence: LOG it (a dropped payload is never silent) and
+    /// return `None` (→ an EMPTY bytes), NEVER silent corruption.
+    ///
+    /// BYTE-FIDELITY: `Binary`'s `arr.value(0) -> &[u8]` and `UInt8`'s
+    /// `arr.values() -> &[u8]` are copied byte-exact into the `Vec<u8>`,
+    /// so a `0xFF`/`0x00` byte round-trips EXACTLY.
+    pub(super) fn decode_arrow_bytes(data: &ArrowData) -> Option<Vec<u8>> {
+        // NULL BITMAP guard (mirrors `decode_arrow_buffer`) — reject a
+        // null-bearing array as a logged divergence BEFORE the dense read so
+        // no null is ever silently materialised as a byte. (`null_count()`
+        // is on the `dyn Array` trait — no downcast needed.)
+        if data.null_count() > 0 {
+            eprintln!(
+                "cobrust-dora (dora-real): event.data_bytes() — the input {:?} array carries \
+                 {} null(s); a raw `bytes` payload has no null concept, so a faithful decode is \
+                 impossible (ADR-0076c named divergence: null bitmap). Returning an EMPTY bytes \
+                 rather than silently fabricating a byte for the null.",
+                data.data_type(),
+                data.null_count(),
+            );
+            return None;
+        }
+        match data.data_type() {
+            // A `Binary` array carries variable-length byte blobs; the dora
+            // raw-bytes payload is a SINGLE-row blob — read row 0's `&[u8]`.
+            // An empty array (`len() == 0`) → an empty bytes (no row to
+            // read).
+            DataType::Binary => {
+                let a = data.as_any().downcast_ref::<BinaryArray>()?;
+                // `data.is_empty()` (the `dyn Array` trait method) — 0 rows
+                // ⇒ no blob to read ⇒ empty bytes.
+                if data.is_empty() {
+                    Some(Vec::new())
+                } else {
+                    Some(a.value(0).to_vec())
+                }
+            }
+            // A `UInt8` array is a FLAT byte list — `arr.values()` is a
+            // `&ScalarBuffer<u8>` that derefs to `&[u8]`; copy it byte-exact.
+            DataType::UInt8 => {
+                let a = data.as_any().downcast_ref::<UInt8Array>()?;
+                Some(a.values().to_vec())
+            }
+            // A numeric `coil.Buffer` dtype → `data_buffer` carries it; a
+            // `Utf8` string → `data_str`; anything else is unexpected. Log
+            // ONCE so a dropped raw payload is never silent → empty bytes.
+            other => {
+                eprintln!(
+                    "cobrust-dora (dora-real): event.data_bytes() — arrow dtype {other:?} is not a \
+                     raw-bytes dtype (Binary/UInt8). Use event.data_buffer() for a numeric payload \
+                     or event.data_str() for a Utf8 payload. data_bytes() returns an empty bytes."
+                );
+                None
+            }
+        }
+    }
+
+    /// REAL `event.send_output_bytes(id, b)` — read a borrowed `bytes`
+    /// handle as a `&[u8]` (via the `__cobrust_bytes_ptr`/`_len` ABI),
+    /// build a length-1 Arrow `BinaryArray` blob from it, and publish on the
+    /// `id` output port via the ambient live `DoraNode` (ADR-0076c
+    /// (D)-B-1b; the raw-bytes SIBLING of `send_output_buffer`). The
+    /// output-id validation already happened in the calling shim. `b` is
+    /// BORROWED (read, never freed — the `.cb` scope owns + drops it once
+    /// via `__cobrust_bytes_drop`). Returns 0 on a successful publish, `-1`
+    /// if no ambient node is set or the publish errored. A null / empty `b`
+    /// publishes a single-row EMPTY blob (a valid wire payload, NOT an
+    /// error — the symmetric inverse of `data_bytes()`'s empty decode).
+    ///
+    /// # Safety
+    ///
+    /// `b` must be null or a live `bytes` handle (from
+    /// `__cobrust_bytes_from_raw` / `event.data_bytes()`) the caller has not
+    /// dropped.
+    pub(super) unsafe fn send_output_bytes(id: &str, b: *mut u8) -> i64 {
+        let node_ptr = AMBIENT_NODE.with(Cell::get);
+        if node_ptr.is_null() {
+            eprintln!(
+                "cobrust-dora (dora-real): send_output_bytes(\"{id}\", ...) called with no \
+                 ambient node — it must run inside a node.run() callback. Output dropped."
+            );
+            return -1;
+        }
+        // SAFETY: `run_node` set `AMBIENT_NODE` to a valid `&mut DoraNode`
+        // for the duration of THIS callback and clears it on return; we are
+        // synchronously inside that window, single-threaded, so the pointer
+        // is live and uniquely ours here.
+        let node: &mut DoraNode = unsafe { &mut *node_ptr };
+        // SAFETY: caller attests `b` is null or a live `bytes` handle.
+        // Borrow-only — read the bytes; the `.cb` scope frees the handle.
+        let payload: &[u8] = unsafe { super::bytes_buf_as_slice(b) };
+        // A length-1 `BinaryArray` carrying the single byte blob (the wire
+        // shape `data_bytes()` reads back via `BinaryArray::value(0)`).
+        let arr = BinaryArray::from(vec![payload]);
+        match node.send_output(DataId::from(id), MetadataParameters::default(), arr) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("cobrust-dora (dora-real): send_output_bytes(\"{id}\") failed: {e:#}");
+                -1
             }
         }
     }
@@ -1676,6 +2010,7 @@ mod tests {
                 id: "camera".to_string(),
                 data_str: "frame_001".to_string(),
                 data_buffer: None,
+                data_bytes: None,
             }))
             .cast::<u8>();
 
@@ -1773,6 +2108,7 @@ mod tests {
                 id: "camera".to_string(),
                 data_str: "frame_001".to_string(),
                 data_buffer: Some(canned_buffer()),
+                data_bytes: Some(canned_bytes()),
             }))
             .cast::<u8>();
 
@@ -1819,6 +2155,7 @@ mod tests {
                 id: "cmd".to_string(),
                 data_str: "go".to_string(),
                 data_buffer: None,
+                data_bytes: None,
             }))
             .cast::<u8>();
             let buf = __cobrust_dora_event_data_buffer(event);
@@ -1878,6 +2215,7 @@ mod tests {
                 id: "camera".to_string(),
                 data_str: "frame_001".to_string(),
                 data_buffer: Some(canned_buffer()),
+                data_bytes: Some(canned_bytes()),
             }))
             .cast::<u8>();
             let buf = Box::into_raw(Box::new(canned_buffer())).cast::<u8>();
@@ -1948,6 +2286,240 @@ mod tests {
         );
         reset_dora_globals();
     }
+
+    // =================================================================
+    // ADR-0076c (D)-B-1b / ADR-0093 Phase 2 — the RAW-BYTES accessor
+    // (`event.data_bytes()` / `event.send_output_bytes`) synthetic-build
+    // shim contract — the `bytes` siblings of the `data_buffer` tests.
+    // =================================================================
+
+    // The `bytes` ABI from libcobrust_stdlib (mint / borrow / free).
+    unsafe extern "C" {
+        fn __cobrust_bytes_from_raw(ptr: *const u8, len: i64) -> *mut u8;
+        fn __cobrust_bytes_ptr(b: *mut u8) -> *const u8;
+        fn __cobrust_bytes_len(b: *mut u8) -> i64;
+        fn __cobrust_bytes_drop(b: *mut u8);
+    }
+
+    /// Read a minted `bytes` handle back into an owned `Vec<u8>` and DROP
+    /// it (standing in for the `.cb` scope's `__cobrust_bytes_drop`).
+    /// SAFETY: `b` must be a non-null `bytes` handle from
+    /// `__cobrust_dora_event_data_bytes` not yet dropped.
+    unsafe fn read_bytes_and_drop(b: *mut u8) -> Vec<u8> {
+        assert!(!b.is_null(), "bytes handle must be non-null");
+        // SAFETY: caller attests `b` is a live `bytes` handle; borrow then
+        // free exactly once.
+        unsafe {
+            let len = __cobrust_bytes_len(b) as usize;
+            let out = if len == 0 {
+                Vec::new()
+            } else {
+                let ptr = __cobrust_bytes_ptr(b);
+                std::slice::from_raw_parts(ptr, len).to_vec()
+            };
+            __cobrust_bytes_drop(b);
+            out
+        }
+    }
+
+    /// `event.data_bytes()` on the SYNTHETIC build returns the canned RAW
+    /// `b"\x00\xff\x01"` (the BYTE-FIDELITY proof: a `0xff`/`0x00`
+    /// round-trips EXACTLY — the raw bytes path is never UTF-8-lossy),
+    /// then drops it once.
+    #[test]
+    fn data_bytes_returns_canned_non_utf8_payload() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            let event = Box::into_raw(Box::new(DoraEventHandle {
+                id: "camera".to_string(),
+                data_str: "frame_001".to_string(),
+                data_buffer: Some(canned_buffer()),
+                data_bytes: Some(canned_bytes()),
+            }))
+            .cast::<u8>();
+            let b = __cobrust_dora_event_data_bytes(event);
+            let got = read_bytes_and_drop(b);
+            assert_eq!(
+                got,
+                vec![0x00_u8, 0xff, 0x01],
+                "canned data_bytes must round-trip the non-UTF-8 payload byte-exact"
+            );
+            drop(Box::from_raw(event.cast::<DoraEventHandle>()));
+        }
+    }
+
+    /// `event.data_bytes()` on a `None`-payload event (a numeric / Utf8 /
+    /// null-bearing wire payload — the named divergence) returns a
+    /// well-defined EMPTY `bytes` (len 0) the caller still drops ONCE,
+    /// NEVER a silent garbage read (§2.2). Also covers the null-event
+    /// fallback.
+    #[test]
+    fn data_bytes_none_and_null_return_empty_droppable_bytes() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            // (a) a None-bytes event → empty bytes.
+            let event = Box::into_raw(Box::new(DoraEventHandle {
+                id: "cmd".to_string(),
+                data_str: "go".to_string(),
+                data_buffer: None,
+                data_bytes: None,
+            }))
+            .cast::<u8>();
+            let b = __cobrust_dora_event_data_bytes(event);
+            assert!(
+                !b.is_null(),
+                "None payload must yield a non-null empty bytes"
+            );
+            assert_eq!(
+                __cobrust_bytes_len(b),
+                0,
+                "the fallback bytes must be empty"
+            );
+            __cobrust_bytes_drop(b);
+            drop(Box::from_raw(event.cast::<DoraEventHandle>()));
+
+            // (b) a null event → empty bytes (defense-in-depth, no UB).
+            let b2 = __cobrust_dora_event_data_bytes(std::ptr::null_mut());
+            assert!(
+                !b2.is_null(),
+                "null event must yield a non-null empty bytes"
+            );
+            assert_eq!(
+                __cobrust_bytes_len(b2),
+                0,
+                "the null-event bytes must be empty"
+            );
+            __cobrust_bytes_drop(b2);
+        }
+    }
+
+    /// `event.send_output_bytes` validates against the declared-output set
+    /// (BOTH builds): a DECLARED id returns 0 + bumps the count; an
+    /// UNDECLARED id fails CLOSED (-1, no count bump) — never a silent drop.
+    /// The `b` is BORROWED (the test still owns + drops it once after).
+    #[test]
+    fn send_output_bytes_validates_against_declared_outputs() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_dora_globals();
+        let before = send_output_count();
+        unsafe {
+            let reading = alloc_str_buffer("reading");
+            assert_eq!(__cobrust_dora_declare_output(reading), 0);
+            __cobrust_str_drop(reading);
+
+            let event = Box::into_raw(Box::new(DoraEventHandle {
+                id: "camera".to_string(),
+                data_str: "frame_001".to_string(),
+                data_buffer: None,
+                data_bytes: Some(canned_bytes()),
+            }))
+            .cast::<u8>();
+            // A bytes payload to emit (borrowed by the shim — the test owns
+            // + drops it once at the end).
+            let raw: [u8; 3] = [0x00, 0xff, 0x01];
+            let b = __cobrust_bytes_from_raw(raw.as_ptr(), raw.len() as i64);
+
+            // Declared output ⇒ 0.
+            let oid = alloc_str_buffer("reading");
+            assert_eq!(
+                __cobrust_dora_event_send_output_bytes(event, oid, b),
+                0,
+                "send_output_bytes on a declared output must return 0"
+            );
+            __cobrust_str_drop(oid);
+
+            // Undeclared output ⇒ -1, fail-closed (no count bump).
+            let bad = alloc_str_buffer("redaing");
+            assert_eq!(
+                __cobrust_dora_event_send_output_bytes(event, bad, b),
+                -1,
+                "send_output_bytes on an UNDECLARED output must return -1 (fail closed)"
+            );
+            __cobrust_str_drop(bad);
+
+            // The shim BORROWED b (never freed it) — the test frees it ONCE
+            // here (mirrors the .cb scope's single `__cobrust_bytes_drop`).
+            __cobrust_bytes_drop(b);
+            drop(Box::from_raw(event.cast::<DoraEventHandle>()));
+        }
+        assert_eq!(
+            send_output_count() - before,
+            1,
+            "only the DECLARED send_output_bytes is captured (undeclared does not bump)"
+        );
+        reset_dora_globals();
+    }
+
+    /// A null `b` to `send_output_bytes` on a DECLARED output is tolerated
+    /// (the synthetic capture reads len=0; no UB) and still counts as a
+    /// declared emission attempt.
+    #[test]
+    fn send_output_bytes_tolerates_null_bytes() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_dora_globals();
+        let before = send_output_count();
+        unsafe {
+            let reading = alloc_str_buffer("reading");
+            assert_eq!(__cobrust_dora_declare_output(reading), 0);
+            __cobrust_str_drop(reading);
+            let oid = alloc_str_buffer("reading");
+            assert_eq!(
+                __cobrust_dora_event_send_output_bytes(
+                    std::ptr::null_mut(),
+                    oid,
+                    std::ptr::null_mut()
+                ),
+                0,
+                "a declared send with a null bytes must still return 0 (no UB)"
+            );
+            __cobrust_str_drop(oid);
+        }
+        assert_eq!(
+            send_output_count() - before,
+            1,
+            "the declared null-bytes send is counted"
+        );
+        reset_dora_globals();
+    }
+
+    /// DROP BALANCE — 1000 mint→`data_bytes()`→read→drop cycles. A
+    /// double-free / use-after-free would crash here; a leak shows under a
+    /// sanitizer run. Each iteration mints a fresh Event-canned bytes, hands
+    /// it through `data_bytes()` (which mints a FRESH `.cb` bytes), reads it
+    /// byte-exact, and drops it once.
+    #[test]
+    fn thousand_event_bytes_drop_balance() {
+        let _guard = DROP_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            for i in 0..1000u32 {
+                let event = Box::into_raw(Box::new(DoraEventHandle {
+                    id: "camera".to_string(),
+                    data_str: "frame_001".to_string(),
+                    data_buffer: None,
+                    data_bytes: Some(canned_bytes()),
+                }))
+                .cast::<u8>();
+                let b = __cobrust_dora_event_data_bytes(event);
+                let got = read_bytes_and_drop(b);
+                assert_eq!(
+                    got,
+                    vec![0x00_u8, 0xff, 0x01],
+                    "event {i}: data_bytes must stay byte-exact across the drop hammer"
+                );
+                drop(Box::from_raw(event.cast::<DoraEventHandle>()));
+            }
+        }
+    }
 }
 
 // =====================================================================
@@ -1970,6 +2542,15 @@ mod tests {
 mod arrow_bridge_tests {
     use super::*;
     use dora_node_api::ArrowData;
+
+    // ADR-0076c B-1b — the bytes drop-balance test calls the
+    // `__cobrust_bytes_*` family; anchor the stdlib rlib so those
+    // `extern "C"` decls resolve under `cargo test --features dora-real`
+    // (the same dev-dep anchor the synthetic test mod uses for Str).
+    extern crate cobrust_stdlib;
+    #[used]
+    static _STDLIB_LINK_ANCHOR: unsafe extern "C" fn() -> *mut u8 =
+        cobrust_stdlib::fmt::__cobrust_str_new;
 
     /// Wrap a `coil::Array` as the `ArrowData` an `Event::Input { data }`
     /// would carry: run the OUT bridge (`coil_to_arrow`) then box it in the
@@ -2187,6 +2768,141 @@ mod arrow_bridge_tests {
             // SAFETY: just boxed above; reclaim exactly once (the drop shim's
             // single-free contract).
             drop(unsafe { Box::from_raw(boxed.cast::<coil::Array>()) });
+        }
+    }
+
+    // =================================================================
+    // ADR-0076c (D)-B-1b / ADR-0093 Phase 2 — the RAW-BYTES Arrow decode
+    // (`decode_arrow_bytes`): Binary blob + UInt8 flat-list, byte-fidelity
+    // on a non-UTF-8 payload, null-bitmap divergence, empty edge, and the
+    // numeric/Utf8 non-bytes divergence. These are the COMPLEMENT of the
+    // `decode_arrow_buffer` tests (which DEFER Binary/UInt8).
+    // =================================================================
+
+    /// A `Binary` single-row blob carrying a NON-UTF-8 payload
+    /// (`[0x00, 0xff, 0x01]`) decodes byte-EXACT (BYTE-FIDELITY: the raw
+    /// bytes path never UTF-8-corrupts a `0xff`).
+    #[test]
+    fn decode_binary_blob_is_byte_exact() {
+        use dora_node_api::arrow::array::BinaryArray;
+        use std::sync::Arc;
+        let payload: &[u8] = &[0x00, 0xff, 0x01];
+        let arr = BinaryArray::from(vec![payload]);
+        let wire = ArrowData(Arc::new(arr));
+        let got = real::decode_arrow_bytes(&wire).expect("Binary must decode");
+        assert_eq!(
+            got,
+            vec![0x00_u8, 0xff, 0x01],
+            "a Binary blob must round-trip byte-exact (non-UTF-8 safe)"
+        );
+    }
+
+    /// A `UInt8` FLAT list (`[10, 0, 255]`) decodes to the same bytes
+    /// (`arr.values() -> &[u8]`), byte-exact.
+    #[test]
+    fn decode_uint8_flat_list_is_byte_exact() {
+        use dora_node_api::arrow::array::UInt8Array;
+        use std::sync::Arc;
+        let arr = UInt8Array::from(vec![10_u8, 0, 255]);
+        let wire = ArrowData(Arc::new(arr));
+        let got = real::decode_arrow_bytes(&wire).expect("UInt8 must decode");
+        assert_eq!(
+            got,
+            vec![10_u8, 0, 255],
+            "a UInt8 flat list must decode byte-exact"
+        );
+    }
+
+    /// An EMPTY `Binary` array (0 rows) decodes to an EMPTY bytes (no
+    /// blob row to read — never an OOB `value(0)` panic).
+    #[test]
+    fn decode_empty_binary_is_empty_bytes() {
+        use dora_node_api::arrow::array::BinaryArray;
+        use std::sync::Arc;
+        let arr = BinaryArray::from(Vec::<&[u8]>::new());
+        let wire = ArrowData(Arc::new(arr));
+        let got = real::decode_arrow_bytes(&wire).expect("empty Binary decodes to empty bytes");
+        assert!(got.is_empty(), "an empty Binary array → empty bytes");
+    }
+
+    /// NULL BITMAP — a null-bearing `Binary` array decodes to `None`
+    /// (→ an EMPTY bytes via the shim) rather than silently fabricating a
+    /// byte for the null slot (§2.2). Mirrors the `decode_arrow_buffer`
+    /// null guard.
+    #[test]
+    fn null_bearing_binary_decodes_to_none_not_silent() {
+        use dora_node_api::arrow::array::{Array, BinaryArray};
+        use std::sync::Arc;
+        let arr = BinaryArray::from_opt_vec(vec![Some(&[1_u8, 2][..]), None, Some(&[3][..])]);
+        assert_eq!(
+            arr.null_count(),
+            1,
+            "the fixture must actually carry a null"
+        );
+        let wire = ArrowData(Arc::new(arr));
+        assert!(
+            real::decode_arrow_bytes(&wire).is_none(),
+            "a null-bearing Binary array is the named null-bitmap divergence → decode None \
+             (NOT a silent byte fabrication for the null)"
+        );
+    }
+
+    /// A numeric `Float64` payload (a `coil.Buffer` dtype → `data_buffer`'s
+    /// job) decodes to `None` for `data_bytes` (NOT mis-read as raw bytes):
+    /// the two accessors are COMPLEMENTARY, never overlapping.
+    #[test]
+    fn numeric_payload_decodes_to_none_for_bytes() {
+        use dora_node_api::arrow::array::Float64Array;
+        use std::sync::Arc;
+        let arr = Float64Array::from(vec![1.0_f64, 2.0, 3.0]);
+        let wire = ArrowData(Arc::new(arr));
+        assert!(
+            real::decode_arrow_bytes(&wire).is_none(),
+            "a numeric Float64 payload is NOT raw bytes → data_bytes decodes None (use data_buffer)"
+        );
+    }
+
+    /// A `Utf8` string payload decodes to `None` for `data_bytes` (use
+    /// `data_str`) — proving the bytes accessor does not mis-claim the
+    /// string path.
+    #[test]
+    fn utf8_payload_decodes_to_none_for_bytes() {
+        use dora_node_api::IntoArrow;
+        use std::sync::Arc;
+        let s = "go".to_string().into_arrow();
+        let wire = ArrowData(Arc::new(s));
+        assert!(
+            real::decode_arrow_bytes(&wire).is_none(),
+            "a Utf8 payload is NOT raw bytes → data_bytes decodes None (use data_str)"
+        );
+    }
+
+    /// DROP BALANCE — 1000 decode→mint→read→drop cycles through the FULL
+    /// `data_bytes` mint path (`__cobrust_bytes_from_raw` + the stdlib
+    /// `bytes` drop), proving balanced drops over many events.
+    #[test]
+    fn thousand_event_bytes_drop_balance_real() {
+        use dora_node_api::arrow::array::BinaryArray;
+        use std::sync::Arc;
+        unsafe extern "C" {
+            fn __cobrust_bytes_from_raw(ptr: *const u8, len: i64) -> *mut u8;
+            fn __cobrust_bytes_len(b: *mut u8) -> i64;
+            fn __cobrust_bytes_drop(b: *mut u8);
+        }
+        let payload: &[u8] = &[0x00, 0xff, 0x01];
+        for i in 0..1000 {
+            let arr = BinaryArray::from(vec![payload]);
+            let wire = ArrowData(Arc::new(arr));
+            let decoded = real::decode_arrow_bytes(&wire).expect("Binary decode");
+            assert_eq!(decoded, vec![0x00_u8, 0xff, 0x01], "event {i}: byte-exact");
+            // SAFETY: mint a fresh `.cb` bytes (what `data_bytes()` does),
+            // then drop it once (what the `.cb` scope does). A leak /
+            // double-free would surface here.
+            unsafe {
+                let b = __cobrust_bytes_from_raw(decoded.as_ptr(), decoded.len() as i64);
+                assert_eq!(__cobrust_bytes_len(b), 3);
+                __cobrust_bytes_drop(b);
+            }
         }
     }
 }

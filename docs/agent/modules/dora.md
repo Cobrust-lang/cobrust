@@ -103,9 +103,24 @@ dora-rs daemon + the CartPole control-loop demo.
   `libcoil.a` from its scope-exit `__cobrust_coil_buffer_drop` (else the
   link failed `ld: ___cobrust_coil_buffer_drop not found` while `check`
   passed — the manifest resolved the symbol but the linker did not).
-- **Phase B-1b / Phase 3 — proposed.** the `bytes` accessor +
-  `send_output_bytes` for raw blobs (B-1b); the real-robotics CartPole
-  simulation demo + cross-machine orchestration (Phase 3).
+- **ADR-0076c (D)-B-1b — raw-`bytes` Arrow round-trip (delivered).**
+  `event.data_bytes() -> bytes` reads a RAW byte payload (Arrow `Binary`
+  blob OR flat `UInt8` list — the COMPLEMENT of `data_buffer`, which DEFERS
+  these two dtypes) + `event.send_output_bytes(output_id, b)` emits one as a
+  length-1 Arrow `BinaryArray` blob. SIMPLER than B-1a — `bytes` is a raw
+  immutable `Vec<u8>` (NO 5-dtype dispatch, NO ndarray, NO coil dep); its
+  drop is the EXISTING `__cobrust_bytes_drop` (in `libcobrust_stdlib.a`,
+  always linked — NO new drop registration, so the BLOCKER-A drop-glue
+  concern does not apply: a coil-free echo node links via the
+  `__cobrust_dora_event_*_bytes` CALLS pulling `libdora.a`). BYTE-FIDELITY:
+  a `0xFF`/`0x00` non-UTF-8 byte round-trips EXACTLY. The
+  `DoraUnknownOutputId` compile-time reject EXTENDS to `send_output_bytes`.
+  A NULL / null-bearing / non-bytes payload → an EMPTY `bytes` + a recorded
+  divergence (NEVER silent corruption, §2.2). A new `__cobrust_bytes_ptr`
+  O(1) raw-slice accessor (the `__cobrust_str_ptr` mirror) backs the
+  `send_output_bytes` `&[u8]` read.
+- **Phase 3 — proposed.** the real-robotics CartPole simulation demo +
+  cross-machine orchestration.
 
 ## Public surface (Phase 1 + Phase 2 + ADR-0076c)
 
@@ -135,6 +150,14 @@ __cobrust_dora_event_data_buffer(event: *mut Event) -> *mut Buffer
 __cobrust_dora_event_send_output_buffer(
     event: *mut Event, output_id: *mut Str, buf: *mut Buffer
 ) -> i64   # 0 = emitted; -1 = undeclared output id; buf is BORROWED
+# ADR-0076c (D)-B-1b — raw-bytes Arrow round-trip (Binary/UInt8)
+__cobrust_dora_event_data_bytes(event: *mut Event) -> *mut bytes
+    # minted via __cobrust_bytes_from_raw; the .cb scope drops it once via
+    # __cobrust_bytes_drop (Ty::Bytes is a full type — no coil dep)
+__cobrust_dora_event_send_output_bytes(
+    event: *mut Event, output_id: *mut Str, b: *mut bytes
+) -> i64   # 0 = emitted; -1 = undeclared output id; b is BORROWED
+           # (read via __cobrust_bytes_ptr — O(1) &[u8], not an O(n) _get loop)
 ```
 
 Manifest entries (`crates/cobrust-types/src/ecosystem.rs`):
@@ -182,6 +205,24 @@ Manifest entries (`crates/cobrust-types/src/ecosystem.rs`):
   `output_id` validation as `send_output`; `buffer` is BORROWED (the `.cb`
   scope still drops it once). The compile-time `DoraUnknownOutputId` reject
   fires for THIS method too (a literal typo'd id is caught at `cobrust check`).
+- `Event.data_bytes() -> bytes` (ADR-0076c (D)-B-1b) — read a RAW byte
+  payload (Arrow `Binary` blob via `BinaryArray::value(0)` OR flat `UInt8`
+  list via `UInt8Array::values()`) as a `.cb` `bytes`, minted via
+  `__cobrust_bytes_from_raw`. The COMPLEMENT of `data_buffer` (which DEFERS
+  `Binary`/`UInt8`). `Ty::Bytes` is a full type whose drop is the EXISTING
+  `__cobrust_bytes_drop` (always-linked stdlib — NO coil dep, NO new drop).
+  BYTE-FIDELITY: a `0xFF`/`0x00` byte round-trips EXACTLY (raw, never
+  UTF-8-lossy). A numeric (→ `data_buffer`) / Utf8 (→ `data_str`) /
+  null-bearing / unexpected dtype → an EMPTY `bytes` + a logged divergence
+  (NEVER a silent garbage read). Synthetic build: a canned non-UTF-8
+  `b"\x00\xff\x01"`.
+- `Event.send_output_bytes(output_id: str, b: bytes) -> i64`
+  (ADR-0076c (D)-B-1b) — emit a `bytes` as a length-1 Arrow `BinaryArray`
+  blob on a declared output port. A DISTINCT method name (NOT a
+  `send_output` overload) for §2.5 clarity. Same fail-closed `output_id`
+  validation; `b` is BORROWED (read via `__cobrust_bytes_ptr` + `_len`; the
+  `.cb` scope still drops it once). The compile-time `DoraUnknownOutputId`
+  reject fires for THIS method too.
 
 ADT slot allocation (`DORA_NODE_ADT = AdtId(ECO_ADT_BASE + 0x600)`,
 `DORA_EVENT_ADT = ECO_ADT_BASE + 0x601`) — seventh per-module 256-slot
@@ -316,12 +357,13 @@ wasm32-wasip1` is green; `--features dora-real` is not a wasm target).
 |---|---|---|---|
 | L1 | typecheck manifest | `cobrust check` on the dora examples | passes |
 | L2.build | `cargo build -p cobrust-dora` | zero warnings | passes |
-| L2.behavior | in-crate cabi tests (synthetic) | 12/12 — drop-once + null tolerance + trampoline + shutdown + multi-input dispatch + send_output validate + declare idempotent + (ADR-0076c) data_buffer canned-payload + None/null empty-buffer fallback + send_output_buffer validate + null-buffer tolerance | passes |
-| L2.behavior.bridge | in-crate arrow-bridge round-trip (`--features dora-real`) | 11/11 in `cabi::arrow_bridge_tests` — bit-identical + dtype-faithful round-trip per dtype (F64/F32/I64/I32/Bool), empty-per-dtype, Utf8→None divergence, 1000-event balanced-drop, AND (REPAIR) null-bearing F64 + null-bearing Bool → None (no silent 0/false fabrication) + an all-Some null-free control round-trip. The UNCONDITIONAL ndarray↔arrow proof | passes |
+| L2.behavior | in-crate cabi tests (synthetic) | 17/17 — drop-once + null tolerance + trampoline + shutdown + multi-input dispatch + send_output validate + declare idempotent + (ADR-0076c B-1a) data_buffer canned-payload + None/null empty-buffer fallback + send_output_buffer validate + null-buffer tolerance + (B-1b) data_bytes canned non-UTF-8 payload + None/null empty-bytes fallback + send_output_bytes validate + null-bytes tolerance + 1000-event bytes drop-balance | passes |
+| L2.behavior.bridge | in-crate arrow-bridge round-trip (`--features dora-real`) | 18/18 in `cabi::arrow_bridge_tests` — bit-identical + dtype-faithful round-trip per dtype (F64/F32/I64/I32/Bool), empty-per-dtype, Utf8→None divergence, 1000-event balanced-drop, null-bearing F64 + null-bearing Bool → None (no silent 0/false fabrication) + an all-Some null-free control; AND (B-1b) Binary blob + UInt8 flat-list byte-exact decode, empty-Binary → empty-bytes, null-bearing Binary → None, numeric/Utf8 → None (complement divergence), + a 1000-event bytes drop-balance. The UNCONDITIONAL ndarray↔arrow + bytes proof | passes |
 | L3.e2e.p1 | compile + link + run | `cargo test -p cobrust-cli --test dora_hello_e2e` 3/3 + `--test decorator_dora_e2e` 6/6 | passes |
 | L3.e2e.p2 | compile + link + run | `cargo test -p cobrust-cli --test dora_multi_io_e2e` 3/3 (multi-input dispatch + send_output capture + single-input no-regression) | passes |
-| L3.e2e.buffer | compile + link + run (synthetic) | `cargo test -p cobrust-cli --test dora_buffer_io_e2e` 5/5 — `data_buffer()` → coil math (`print_buffer`/`mean`/`full`) → `send_output_buffer`; the `DoraUnknownOutputId` negative + the non-literal skip; AND (REPAIR BLOCKER-A) the MINIMAL echo node (`data_buffer()` → `send_output_buffer()`, NO explicit `coil.<fn>()` call) that links + runs via the drop-glue-ONLY archive-selection path | passes |
-| L3.e2e.p3.outputid | compile-time output-id reject | `cargo test -p cobrust-cli --test dora_output_id_check_e2e` 5/5 (ADR-0092 — now fires for both `send_output` + `send_output_buffer`) | passes |
+| L3.e2e.buffer | compile + link + run (synthetic) | `cargo test -p cobrust-cli --test dora_buffer_io_e2e` 8/8 — `data_buffer()` → coil math (`print_buffer`/`mean`/`full`) → `send_output_buffer`; the `DoraUnknownOutputId` negative + the non-literal skip; the MINIMAL buffer echo node (drop-glue-ONLY archive-selection path); AND (B-1b) `data_bytes()` → `hex()` → `send_output_bytes` round-trip + the `send_output_bytes` `DoraUnknownOutputId` negative + a coil-FREE bytes echo node (no `import coil`) that still LINKS (bytes drop in stdlib, dora pulled by the accessor calls) | passes |
+| L3.e2e.bytes | compile + link + run (synthetic) | `cargo test -p cobrust-cli --test bytes_primitive_e2e` 6/6 — the `bytes` runtime corpus + `bytes_e2e_06_dora_data_bytes_roundtrip` (the dora `data_bytes()`/`send_output_bytes` round-trip, hex `00ff01` proving byte-fidelity + `output[reply]=bytes[len=3]`) | passes |
+| L3.e2e.p3.outputid | compile-time output-id reject | `cargo test -p cobrust-cli --test dora_output_id_check_e2e` 5/5 (ADR-0092 — now fires for `send_output` + `send_output_buffer` + `send_output_bytes`) | passes |
 | L3.e2e.real | **F36-honest real proof** | `cargo test -p cobrust-cli --test dora_real_node_e2e` 4/4 — Part A: a `--features dora-real` `.cb` binary carries REAL `dora_node_api`+`arrow` symbols (`nm`), proving the real path LINKED (not the trampoline); Part B: a LIVE real `DoraNode`+`EventStream` round-trip via dora's hermetic `integration_testing` mode delivers a unique marker the handler prints; Part C (ADR-0076c): a LIVE real `Float64Array` delivered on the EventStream → `data_buffer()` decodes it → `send_output_buffer` round-trips it bit-faithfully to the outputs file; Part C-D (REPAIR BLOCKER-A): the MINIMAL echo node (no explicit `coil.<fn>()` call) links `libcoil.a` from the `coil.Buffer` drop alone + round-trips the REAL decoded values. Self-skips clean when the heavy real archive is unavailable; `COBRUST_DORA_REAL_E2E=1` makes a skip a hard failure. | passes (strict, macOS) |
 | L2.behavior.real | `cargo build/clippy -p cobrust-dora --features dora-real --all-targets` | zero warnings; the synthetic-contract cabi unit tests are `#[cfg]`-gated to `not(dora-real)`, the arrow-bridge tests to `dora-real` | passes |
 | wasm | `cargo build -p cobrust-dora --target wasm32-wasip1` (DEFAULT) | synthetic-default cross-compiles to wasm32 (real-dora is native-only) | passes |

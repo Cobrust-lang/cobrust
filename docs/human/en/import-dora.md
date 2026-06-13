@@ -169,18 +169,56 @@ fn main() -> i64:
   at `cobrust check`. The `buffer` you pass is **borrowed**, not consumed —
   your scope still owns it and drops it once.
 
+### Raw byte payloads — `data_bytes()` / `send_output_bytes()`
+
+For a **raw byte** payload (an image blob, a serialized message, anything
+that is not one of the 5 numeric dtypes), use the `bytes` accessor — the
+raw-bytes sibling of the Buffer pair:
+
+```python
+import dora
+
+@dora.node(inputs=["camera"], outputs=["reply"])
+fn handler(event: dora.Event) -> i64:
+    let raw: bytes = event.data_bytes()       # an Arrow Binary/UInt8 blob
+    print(raw.hex())                           # bytes are first-class
+    let _ = event.send_output_bytes("reply", raw)  # emit it back
+    return 0
+
+fn main() -> i64:
+    let node = dora.Node("bytes_node")
+    let _ = node.run()
+    return 0
+```
+
+- **`event.data_bytes() -> bytes`** — read a raw byte payload (an Arrow
+  `Binary` blob or a flat `UInt8` list) as a first-class `bytes` value. This
+  is the **complement** of `data_buffer()`: `data_buffer()` handles the 5
+  numeric dtypes, `data_bytes()` handles raw bytes — the two never overlap.
+  Every byte is preserved **exactly**: a `0xFF` round-trips unchanged (the
+  raw-bytes path is never UTF-8-lossy, unlike a string). The `bytes` is
+  **yours** — freed once at scope exit. On the synthetic build you get a
+  canned non-UTF-8 `b"\x00\xff\x01"`; under `--features dora-real` you get
+  the real decoded blob. A null-bearing / non-bytes payload returns an
+  **empty** `bytes` (and logs why), never a silent garbage read.
+- **`event.send_output_bytes(output_id, b) -> i64`** — emit a `bytes` value
+  as an Arrow `Binary` blob on a **declared** output port. Same distinct-name
+  + compile-time output-id-typo-catch discipline as `send_output_buffer`. The
+  `b` you pass is **borrowed**, not consumed.
+
 > **Why `coil.Buffer` and not a new `pa.array` type?** One array type for
 > both math and the wire is the elegant, one-way-to-do-it choice (ADR-0076c).
 > A robot policy receives a `Buffer`, runs `coil` math on it, and emits a
 > `Buffer` — no `Frame ↔ Buffer` juggling. (This is reversible: a pyarrow-style
 > surface could be added later if it is ever wanted.)
 
-> **Images and text are deferred (on purpose).** Camera frames are `uint8`
-> and commands are `utf8` — neither is one of the 5 numeric dtypes above.
-> For now: use `event.data_str()` for a text payload; a `bytes` accessor for
-> raw image blobs is a near-term follow-up. These are **named, honest gaps**,
-> not silent failures — a non-numeric payload to `data_buffer()` returns an
-> empty Buffer (and logs why on the real build).
+> **Images and text each have their own accessor.** Camera frames are
+> `uint8`/`Binary` and commands are `utf8` — neither is one of the 5 numeric
+> dtypes above, so `data_buffer()` is not the right tool. Use
+> `event.data_bytes()` for a raw byte / image blob (see above) and
+> `event.data_str()` for a text payload. A non-numeric payload to
+> `data_buffer()` returns an empty Buffer (and logs why on the real build) —
+> a **named, honest gap**, not a silent failure.
 
 > **Arrays with missing values (nulls) are also a named gap.** Arrow arrays
 > can mark some slots as "null" (missing); a `coil.Buffer` is a dense array

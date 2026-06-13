@@ -267,30 +267,38 @@ fn main() -> i64:
 }
 
 // =====================================================================
-// bytes_e2e_06 — ADR-0093 Phase 2 DEFERRAL: the dora bytes accessor
-// `event.data_bytes() -> bytes` (Arrow Binary/UInt8 → bytes) +
-// `event.send_output_bytes(id, b)` (ADR-0076c (D)-B-1b, the named
-// deferral). The bytes RUNTIME FOUNDATION (this increment) is itself a
-// coherent hammer-loop-verified slice; the dora accessor adds a
-// substantial dual-build (`dora-real`) Arrow-decode + ecosystem-row +
-// `check_dora_send_output_id` extension surface that wants its own
-// sound increment (F37 honest-phasing). Ignored until the follow-up
-// lands the `__cobrust_dora_event_data_bytes` shim + the
-// `(DORA_EVENT_ADT, "data_bytes")` / `"send_output_bytes"`
-// `lookup_handle_method` rows (mirroring the `data_buffer` /
-// `send_output_buffer` pattern just shipped).
+// bytes_e2e_06 — ADR-0076c (D)-B-1b / ADR-0093 Phase 2 LANDED: the dora
+// bytes accessor `event.data_bytes() -> bytes` (Arrow Binary/UInt8 →
+// bytes) + `event.send_output_bytes(id, b)`. The raw-bytes sibling of
+// the `data_buffer` / `send_output_buffer` pair (B-1a).
+//
+// A REAL dora node round-trip on the SYNTHETIC build (mirrors
+// `dora_buffer_io_e2e`): the handler reads `event.data_bytes()` (the
+// synthetic canned `b"\x00\xff\x01"`, a NON-UTF-8 payload), prints its
+// `.hex()` (proving BYTE-FIDELITY end-to-end — `\xff` survives, the raw
+// path is never UTF-8-lossy), and emits it back via
+// `event.send_output_bytes("reply", b)` (the synthetic marker
+// `output[reply]=bytes[len=3]`). The program exits 0 (the `bytes` it owns
+// drops exactly once — no leak / double-free).
 #[test]
-#[ignore = "ADR-0093 Phase 2: dora event.data_bytes()/send_output_bytes — deferred to a follow-up (ADR-0076c B-1b)"]
 fn bytes_e2e_06_dora_data_bytes_roundtrip() {
-    // Placeholder asserting the eventual surface shape. When the
-    // follow-up lands the accessor, replace this with a dora node
-    // round-trip (mirror the `data_buffer` dora e2e) and unmark.
     let src = "\
-@dora.node(outputs=[\"reply\"])
+import dora
+
+@dora.node(inputs=[\"camera\"], outputs=[\"reply\"])
 fn handler(event: dora.Event) -> i64:
     let b: bytes = event.data_bytes()
+    print(b.hex())
     let _ = event.send_output_bytes(\"reply\", b)
     return 0
+
+fn main() -> i64:
+    let node = dora.Node(\"bytes_node\")
+    let _ = node.run()
+    return 0
 ";
-    assert_build_run("bytes_e2e_06", src, "");
+    // hex of the canned non-UTF-8 `b"\x00\xff\x01"` is `00ff01` (a `\xff`
+    // round-trips EXACTLY — the raw bytes path never UTF-8-corrupts it),
+    // then the synthetic send_output_bytes capture marker.
+    assert_build_run("bytes_e2e_06", src, "00ff01\noutput[reply]=bytes[len=3]\n");
 }

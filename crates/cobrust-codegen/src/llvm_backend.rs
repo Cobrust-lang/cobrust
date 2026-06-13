@@ -3360,6 +3360,17 @@ impl<'ctx> LlvmEmitter<'ctx> {
         // Buffer handle ABI == coil's opaque *mut u8); `send_output_buffer`
         // reuses the `dora_event_send_output_ty` (ptr,ptr,ptr)->i64 shape
         // (the 3rd ptr is the borrowed Buffer instead of a Str payload).
+        //
+        // ADR-0076c (D)-B-1b / ADR-0093 Phase 2 — the RAW-BYTES siblings:
+        //   __cobrust_dora_event_data_bytes(event: *mut Event) -> *mut bytes
+        //       (a `bytes` handle the .cb scope owns + drops once via
+        //        __cobrust_bytes_drop — Arrow Binary/UInt8 → bytes)
+        //   __cobrust_dora_event_send_output_bytes(
+        //       event: *mut Event, output_id: *mut Str, b: *mut bytes
+        //   ) -> i64   (0 = emitted; -1 = undeclared output id)
+        // Same ABI as the Buffer pair (the `bytes` handle is also an opaque
+        // *mut u8): `data_bytes` reuses `dora_event_id_ty`,
+        // `send_output_bytes` reuses `dora_event_send_output_ty`.
         let dora_node_new_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
         let dora_node_node_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
         let dora_node_run_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
@@ -3391,6 +3402,19 @@ impl<'ctx> LlvmEmitter<'ctx> {
             ("__cobrust_dora_event_data_buffer", dora_event_id_ty, 1),
             (
                 "__cobrust_dora_event_send_output_buffer",
+                dora_event_send_output_ty,
+                3,
+            ),
+            // ADR-0076c (D)-B-1b / ADR-0093 Phase 2 — RAW-BYTES round-trip
+            // shims (the `bytes` siblings of the Buffer pair). Identical
+            // handle-return / 3-arg ABI: `data_bytes` is (ptr)->ptr (the
+            // returned ptr is a `*mut bytes` handle the .cb scope owns +
+            // drops once via `__cobrust_bytes_drop`); `send_output_bytes`
+            // is (ptr,ptr,ptr)->i64 (the 3rd arg is the borrowed `bytes`
+            // ptr instead of a coil.Buffer ptr).
+            ("__cobrust_dora_event_data_bytes", dora_event_id_ty, 1),
+            (
+                "__cobrust_dora_event_send_output_bytes",
                 dora_event_send_output_ty,
                 3,
             ),

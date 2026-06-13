@@ -115,6 +115,37 @@ pub unsafe extern "C" fn __cobrust_bytes_get(b: *mut u8, i: i64) -> i64 {
     }
 }
 
+/// Read the buffer's raw byte pointer without consuming it. Returns
+/// `null` for an empty / NULL buffer. Sibling of `__cobrust_str_ptr`.
+///
+/// The escape hatch for an O(1) `&[u8]` read of a `bytes` value across
+/// the C ABI (the `cobrust-dora` `send_output_bytes` shim reads the
+/// payload via `from_raw_parts(ptr, len)` rather than looping
+/// [`__cobrust_bytes_get`] O(n) times). The handle is BORROWED — the
+/// returned pointer is valid only while the handle lives, and the caller
+/// must NOT free through it (the `.cb` scope's `__cobrust_bytes_drop`
+/// owns the allocation).
+///
+/// # Safety
+///
+/// `b` must be a pointer returned by [`__cobrust_bytes_from_raw`] (or
+/// [`__cobrust_bytes_clone`]) and not yet dropped, OR NULL. The returned
+/// pointer aliases the buffer's heap allocation and is invalidated by a
+/// subsequent [`__cobrust_bytes_drop`] of `b`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_bytes_ptr(b: *mut u8) -> *const u8 {
+    if b.is_null() {
+        return std::ptr::null();
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let buf = unsafe { &*b.cast::<BytesBuffer>() };
+    if buf.bytes.is_empty() {
+        std::ptr::null()
+    } else {
+        buf.bytes.as_ptr()
+    }
+}
+
 /// Free a `bytes` buffer. The runtime target of the scope-exit drop
 /// schedule (`emit_drop_for_ty` `Ty::Bytes` arm). Idempotent on NULL.
 /// Must be called EXACTLY ONCE per owned handle. Sibling of
@@ -434,6 +465,30 @@ mod tests {
             assert_eq!(__cobrust_bytes_get(b, 1), 0);
             assert_eq!(__cobrust_bytes_get(b, 2), 254);
             __cobrust_bytes_drop(b);
+        }
+    }
+
+    #[test]
+    fn ptr_reads_raw_slice_byte_exact() {
+        // SAFETY: contract. `__cobrust_bytes_ptr` + len yields an O(1)
+        // `&[u8]` that round-trips a non-UTF-8 payload byte-exact (the
+        // `send_output_bytes` dora shim's read path). Empty / NULL → null
+        // pointer.
+        unsafe {
+            let raw: [u8; 4] = [0x00, 0xff, 0x01, 0xfe];
+            let b = __cobrust_bytes_from_raw(raw.as_ptr(), raw.len() as i64);
+            let ptr = __cobrust_bytes_ptr(b);
+            let len = __cobrust_bytes_len(b) as usize;
+            assert!(!ptr.is_null());
+            assert_eq!(len, 4);
+            let slice = std::slice::from_raw_parts(ptr, len);
+            assert_eq!(slice, &raw, "raw slice must be byte-exact (non-UTF-8 safe)");
+            __cobrust_bytes_drop(b);
+            // Empty + NULL → null pointer.
+            let e = __cobrust_bytes_from_raw(std::ptr::null(), 0);
+            assert!(__cobrust_bytes_ptr(e).is_null());
+            __cobrust_bytes_drop(e);
+            assert!(__cobrust_bytes_ptr(std::ptr::null_mut()).is_null());
         }
     }
 

@@ -198,17 +198,33 @@ the larger follow-up (a non-literal `b[i]` STILL type-checks —
   `__cobrust_str_concat` mirror) + equality `b1 == b2`.
 - **Methods** `.hex() -> str`, `.decode() -> str` (UTF-8, with an error
   path), and the `str.encode() -> bytes` inverse.
+- ~~Slicing / concat / methods / decode~~ **LANDED** in the Phase-2
+  byte-buffer surface increment (`__cobrust_bytes_slice`,
+  `__cobrust_bytes_concat`, `__cobrust_bytes_hex`,
+  `__cobrust_bytes_decode`, `__cobrust_bytes_from_str` in `bytes.rs`).
+
+**LANDED (Phase 2 — the dora bytes accessor, ADR-0076c (D)-B-1b)**:
+
 - **The dora accessor** `event.data_bytes() -> bytes` (Arrow
-  Binary/UInt8 → `bytes`) + `event.send_output_bytes(id, b)`, the named
-  ADR-0076c (D)-B-1b deferral. It mirrors the `data_buffer` /
-  `send_output_buffer` pattern (`cobrust-dora/src/cabi.rs:813`,
-  `ecosystem.rs:2761`) + extends `check_dora_send_output_id`
-  (`check.rs:3308`) to fire `DoraUnknownOutputId` for `send_output_bytes`
-  too. **Deferred to a follow-up** because the bytes runtime foundation
-  is itself a coherent, hammer-loop-verified increment, and the dora
-  accessor adds a substantial dual-build (`dora-real`) Arrow-decode +
-  ecosystem-row + check-extension surface that wants its own sound slice
-  rather than riding a foundation commit (F37 honest-phasing).
+  Binary/UInt8 → `bytes`) + `event.send_output_bytes(id, b)`. Mirrors the
+  `data_buffer` / `send_output_buffer` pattern VERBATIM, swapping
+  `coil_buffer_ty()` → `Ty::Bytes` (a full type whose drop is the
+  EXISTING `__cobrust_bytes_drop` — NO new drop registration, NO coil
+  dep): two `DORA_EVENT_ADT` rows in `ecosystem.rs` (`("data_bytes") ->
+  Ty::Bytes`, `("send_output_bytes") -> [Str, Bytes] -> Int`); the two
+  codegen externs in `llvm_backend.rs` (same `(ptr)->ptr` /
+  `(ptr,ptr,ptr)->i64` shapes as the Buffer pair); the dual-build cabi
+  shims in `cobrust-dora/src/cabi.rs` (synthetic canned non-UTF-8
+  `b"\x00\xff\x01"` proving byte-fidelity + the `dora-real`
+  `decode_arrow_bytes` for Arrow `Binary`/`UInt8` — the COMPLEMENT of
+  `decode_arrow_buffer`, which DEFERS those two dtypes); a new
+  `__cobrust_bytes_ptr` O(1) raw-slice accessor in `bytes.rs` (the
+  `__cobrust_str_ptr` mirror, for the `send_output_bytes` `&[u8]` read);
+  and `check_dora_send_output_id` extended to fire `DoraUnknownOutputId`
+  for `send_output_bytes` too (the §2.5-A compile-time-catch). A NULL /
+  null-bearing / unexpected-dtype payload decodes to an EMPTY `bytes`
+  (len 0) + a recorded divergence — NEVER a silent garbage read (§2.2),
+  mirroring `data_buffer`'s null handling.
 
 ## Consequences
 
@@ -219,9 +235,12 @@ the larger follow-up (a non-literal `b[i]` STILL type-checks —
   hammer-loop). The Str machinery is UNTOUCHED — `bytes` is a sibling
   module, not an edit to `string.rs` / `fmt.rs`.
 - **Negative / accepted debt**: the byte-buffer surface (slice / concat /
-  methods / decode) + the dora accessor are NOT in this increment — a
-  `.cb` program can hold + measure + index `bytes` but not yet slice or
-  concat it. This is the honest minimal slice; Phase 2 lands the rest.
+  methods / decode) + the dora accessor were NOT in the FOUNDATION
+  increment — a `.cb` program could hold + measure + index `bytes` but
+  not yet slice or concat it. **Phase 2 has since LANDED** both the
+  byte-buffer surface AND the dora `data_bytes()`/`send_output_bytes`
+  accessor (ADR-0076c (D)-B-1b); the only residual debts are from-end
+  negative indexing + a scalar OOB-PANIC (the larger §"Index" follow-up).
 - **Evidence**: `crates/cobrust-cli/tests/bytes_primitive_e2e.rs` —
   `let b: bytes = b"abc"; print(len(b))` → `3`; `print(b[0])` → `97`; a
   1000-iter drop hammer-loop (no leak / crash); +

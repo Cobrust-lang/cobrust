@@ -302,6 +302,161 @@ fn test_neg_dora_send_output_buffer_undeclared_id_rejected() {
     );
 }
 
+// =====================================================================
+// ADR-0076c (D)-B-1b — the RAW-BYTES sibling of the Buffer round-trip:
+// `event.data_bytes() -> bytes` + `event.send_output_bytes(id, b)`.
+//
+// SIMPLER than the Buffer pair: `bytes` is a builtin type (NO `import
+// coil`, NO coil.Buffer drop-glue). The synthetic build hands a canned
+// NON-UTF-8 `b"\x00\xff\x01"` from `data_bytes()`.
+// =====================================================================
+
+/// PRIMARY (bytes) — a node reads `event.data_bytes()`, prints its hex,
+/// and emits it back via `event.send_output_bytes(...)`. The canned
+/// non-UTF-8 `b"\x00\xff\x01"` flows through both shims byte-exact; the
+/// program exits 0 (the `bytes` it owns drops exactly once).
+#[test]
+fn test_e2e_dora_data_bytes_and_send_output_bytes_round_trip() {
+    let source = concat!(
+        "import dora\n",
+        "\n",
+        "@dora.node(inputs=[\"state\"], outputs=[\"action\"])\n",
+        "fn policy(event: dora.Event) -> i64:\n",
+        "    let raw: bytes = event.data_bytes()\n",
+        "    print(raw.hex())\n",
+        "    let _ = event.send_output_bytes(\"action\", raw)\n",
+        "    return 0\n",
+        "\n",
+        "fn main() -> i64:\n",
+        "    let node = dora.Node(\"policy_node\")\n",
+        "    let _ = node.run()\n",
+        "    return 0\n",
+    );
+    let (_dir, exe) = compile_source(source);
+
+    let out = Command::new(&exe)
+        .output()
+        .expect("spawn dora bytes-io node");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    assert!(
+        out.status.success(),
+        "bytes-io node must exit 0; stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+    // BYTE-FIDELITY — the canned `b"\x00\xff\x01"` hex is `00ff01` (a
+    // `\xff` round-trips EXACTLY through `data_bytes()` — never UTF-8-lossy).
+    assert!(
+        stdout.contains("00ff01"),
+        "data_bytes() must yield the canned non-UTF-8 bytes byte-exact (hex 00ff01); \
+         got stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // send_output_bytes captured on the declared `action` port (len=3).
+    assert!(
+        stdout.contains("output[action]=bytes[len=3]"),
+        "send_output_bytes must be captured + surfaced (`output[action]=bytes[len=3]`); \
+         got stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// ECHO (LINK guard, the B-1b sibling of the BLOCKER-A buffer echo) — the
+/// MINIMAL bytes node: `data_bytes()` → `send_output_bytes()` with NO
+/// `import coil` and NO `coil.*` call AT ALL. This is the drop-glue
+/// link-scan case that bit ba8cca6: a node that ONLY uses the dora bytes
+/// accessors must still LINK. Unlike the Buffer echo (which pulls
+/// `libcoil.a` via the `coil.Buffer` drop-glue), the `bytes` drop lives in
+/// `libcobrust_stdlib.a` (always linked) and `libdora.a` is pulled by the
+/// `__cobrust_dora_event_*_bytes` CALLS — so a green build here proves the
+/// link set is exactly the symbol set with no coil dependency leaking in.
+#[test]
+fn test_e2e_dora_echo_bytes_no_coil_import_links() {
+    let source = concat!(
+        "import dora\n",
+        "\n",
+        "@dora.node(inputs=[\"state\"], outputs=[\"action\"])\n",
+        "fn echo(event: dora.Event) -> i64:\n",
+        "    let raw: bytes = event.data_bytes()\n",
+        "    let _ = event.send_output_bytes(\"action\", raw)\n",
+        "    return 0\n",
+        "\n",
+        "fn main() -> i64:\n",
+        "    let node = dora.Node(\"echo_node\")\n",
+        "    let _ = node.run()\n",
+        "    return 0\n",
+    );
+    // `compile_source` asserts the BUILD succeeds (no `import coil`, so
+    // `libcoil.a` must NOT be required — the bytes drop is in stdlib, dora
+    // is pulled by the accessor calls).
+    let (_dir, exe) = compile_source(source);
+
+    let out = Command::new(&exe)
+        .output()
+        .expect("spawn dora bytes echo node");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    assert!(
+        out.status.success(),
+        "bytes echo node must exit 0 (drops the owned bytes exactly once); \
+         stdout=\n{stdout}\nstderr=\n{stderr}",
+    );
+    assert!(
+        stdout.contains("output[action]=bytes[len=3]"),
+        "bytes echo node must emit the data_bytes() payload back on `action`; \
+         got stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// NEGATIVE (bytes) — `event.send_output_bytes("<typo>", b)` on an
+/// UNDECLARED output id is REJECTED at compile time with
+/// `DoraUnknownOutputId` (the §2.5-A compile-time-catch fires for
+/// `send_output_bytes` too — the B-1b sibling of the buffer reject). The
+/// check is on arg0 (the id).
+#[test]
+fn test_neg_dora_send_output_bytes_undeclared_id_rejected() {
+    let source = concat!(
+        "import dora\n",
+        "\n",
+        "@dora.node(inputs=[\"state\"], outputs=[\"action\"])\n",
+        "fn policy(event: dora.Event) -> i64:\n",
+        "    let raw: bytes = event.data_bytes()\n",
+        "    let _ = event.send_output_bytes(\"acton_typo\", raw)\n",
+        "    return 0\n",
+        "\n",
+        "fn main() -> i64:\n",
+        "    let node = dora.Node(\"policy_node\")\n",
+        "    let _ = node.run()\n",
+        "    return 0\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let src_path = dir.path().join("prog.cb");
+    std::fs::write(&src_path, source).unwrap();
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_cobrust"));
+
+    let check = Command::new(&bin)
+        .arg("check")
+        .arg(&src_path)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&check.stderr).into_owned();
+    assert!(
+        !check.status.success(),
+        "an undeclared `send_output_bytes` id must FAIL `cobrust check`; stderr=\n{stderr}"
+    );
+    assert!(
+        stderr.contains("DoraUnknownOutputId") || stderr.contains("unknown dora output id"),
+        "check stderr must name the DoraUnknownOutputId reject; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("acton_typo"),
+        "check stderr must name the offending id `acton_typo`; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("action"),
+        "check stderr must name the declared output `action` (the §2.5-B FIX); got:\n{stderr}"
+    );
+}
+
 /// NON-LITERAL — a computed/variable output id SKIPS the compile-time check
 /// for `send_output_buffer` (cannot prove statically) — proving NO
 /// false-positive (mirrors the `send_output` non-literal skip). The runtime

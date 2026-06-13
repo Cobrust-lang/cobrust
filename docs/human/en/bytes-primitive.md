@@ -147,7 +147,11 @@ answer:
   follow-up work in ADR-0093.
 - A recoverable `Result`-returning `decode()` (today invalid UTF-8 stops
   the program; see above).
-- The dora stream accessor `event.data_bytes()` / `event.send_output_bytes(...)`.
+
+The dora stream accessor `event.data_bytes()` / `event.send_output_bytes(...)`
+has **landed** (ADR-0076c B-1b) — a robotics node can now read an Arrow
+`Binary`/`UInt8` payload as a `bytes` and emit one back, byte-exact. See
+`docs/human/en/import-dora.md` for the surface.
 
 ## See also
 

@@ -154,17 +154,50 @@ fn main() -> i64:
   ...)`)会在 `cobrust check` 阶段被抓住。你传入的 `buffer` 是**借用**而非
   消耗 — 你的作用域仍然拥有它并只释放一次。
 
+### 原始字节载荷 — `data_bytes()` / `send_output_bytes()`
+
+对于**原始字节**载荷(图像块、序列化消息, 或任何不属于那 5 种数值 dtype 的
+东西), 使用 `bytes` 访问器 — Buffer 那一对的原始字节孪生:
+
+```python
+import dora
+
+@dora.node(inputs=["camera"], outputs=["reply"])
+fn handler(event: dora.Event) -> i64:
+    let raw: bytes = event.data_bytes()       # 一个 Arrow Binary/UInt8 块
+    print(raw.hex())                           # bytes 是一等公民
+    let _ = event.send_output_bytes("reply", raw)  # 发回去
+    return 0
+
+fn main() -> i64:
+    let node = dora.Node("bytes_node")
+    let _ = node.run()
+    return 0
+```
+
+- **`event.data_bytes() -> bytes`** — 把原始字节载荷(一个 Arrow `Binary`
+  块或一个扁平 `UInt8` 列表)读成一等的 `bytes` 值。它是 `data_buffer()` 的
+  **互补**: `data_buffer()` 处理 5 种数值 dtype, `data_bytes()` 处理原始字节 —
+  两者从不重叠。每一个字节都被**精确**保留: `0xFF` 原样往返(原始字节路径
+  绝不像字符串那样做有损 UTF-8 转换)。这个 `bytes` 是**你的** — 作用域退出时
+  释放一次。合成构建上你得到预设的非 UTF-8 `b"\x00\xff\x01"`; 在
+  `--features dora-real` 下你得到真实解码的块。一个带 null / 非字节的载荷返回
+  **空** `bytes`(并记录原因), 绝不是静默的垃圾读取。
+- **`event.send_output_bytes(output_id, b) -> i64`** — 把一个 `bytes` 值作为
+  Arrow `Binary` 块在一个**已声明**的输出端口上发射。与 `send_output_buffer`
+  相同的独立命名 + 编译期输出 id 拼写抓取纪律。你传入的 `b` 是**借用**而非消耗。
+
 > **为什么用 `coil.Buffer` 而不是新的 `pa.array` 类型?** 数学与线路共用
 > 一种数组类型是优雅的、一件事一种做法的选择(ADR-0076c)。机器人策略
 > 收到一个 `Buffer`, 在其上跑 `coil` 数学, 再发出一个 `Buffer` — 无需
 > `Frame ↔ Buffer` 来回倒腾。(这是可逆的: 若将来真的需要, 可以再加一个
 > pyarrow 风格的表面。)
 
-> **图像与文本被有意推迟。** 相机帧是 `uint8`, 命令是 `utf8` — 都不在
-> 上面那 5 种数值 dtype 里。目前: 文本载荷用 `event.data_str()`; 原始图像
-> 字节块的 `bytes` 访问器是近期跟进项。这些是**有名有姓的、诚实的缺口**,
-> 而非静默失败 — 给 `data_buffer()` 一个非数值载荷会返回一个空 Buffer
-> (并在真实构建上记录原因)。
+> **图像与文本各有自己的访问器。** 相机帧是 `uint8`/`Binary`, 命令是
+> `utf8` — 都不在上面那 5 种数值 dtype 里, 所以 `data_buffer()` 不是合适的
+> 工具。原始字节 / 图像块用 `event.data_bytes()`(见上), 文本载荷用
+> `event.data_str()`。给 `data_buffer()` 一个非数值载荷会返回一个空 Buffer
+> (并在真实构建上记录原因)— 一个**有名有姓的、诚实的缺口**, 而非静默失败。
 
 > **带缺失值(null)的数组同样是有名有姓的缺口。** Arrow 数组可以把某些槽位
 > 标记为 "null"(缺失); 而 `coil.Buffer` 是稠密数组, 没有 "缺失" 这个概念。

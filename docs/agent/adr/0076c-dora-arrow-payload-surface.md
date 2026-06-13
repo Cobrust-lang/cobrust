@@ -24,6 +24,21 @@ relates_to: [adr:0072, adr:0073, adr:0076, adr:0077, adr:0078, adr:0092, "strate
 > marked `[UNVERIFIED]` (U2/U3), the as-built surface, and the reversibility
 > note. The proposal's `[UNVERIFIED]` tags in §1–§8 are superseded by §9's
 > verified facts; they are left in place for provenance.
+>
+> **(D)-B-1b LANDED (the raw-`bytes` accessor — ADR-0093 Phase 2).** The
+> `UInt8`/`Binary` divergence the B-1a numeric round-trip explicitly DEFERRED is
+> now its COMPLEMENT accessor: `event.data_bytes() -> bytes` decodes Arrow
+> `Binary` (a single-row blob) AND `UInt8` (a flat byte list) to a `.cb` `bytes`
+> via `__cobrust_bytes_from_raw`; `event.send_output_bytes(id, b)` reads the
+> borrowed `bytes` (`__cobrust_bytes_ptr` O(1) `&[u8]`) → a length-1 Arrow
+> `BinaryArray` blob. SIMPLER than B-1a — `bytes` is a raw immutable `Vec<u8>`
+> (NO 5-dtype dispatch, NO ndarray, NO coil dep); its drop is the EXISTING
+> `__cobrust_bytes_drop` (no new registration). BYTE-FIDELITY: a `0xFF`/`0x00`
+> non-UTF-8 byte round-trips EXACTLY. A NULL / null-bearing / non-bytes payload
+> decodes to an EMPTY `bytes` + a recorded divergence (NEVER silent corruption,
+> §2.2), mirroring B-1a's null handling. `check_dora_send_output_id` fires
+> `DoraUnknownOutputId` for `send_output_bytes` too (the §2.5-A compile-time
+> catch, arg0). See §4.1's `bytes accessor` bullet for the as-built shim map.
 
 ---
 
@@ -383,9 +398,18 @@ HEAD `936f13c`.**
   boxed `coil::Array`, runs the bridge, and publishes the typed Arrow array via
   the ambient `DoraNode` (the `AMBIENT_NODE` thread-local already in place,
   ~L804). The string + bytes paths stay.
-- **`bytes` accessor.** Add `__cobrust_dora_event_data_bytes` (Arrow
-  `Binary`/`UInt8` → a `.cb` `bytes`/list-of-u8) + a `send_output_bytes`
-  delegate to the dora `send_output_bytes(id, params, len, &[u8])` API.
+- **`bytes` accessor (LANDED — B-1b).** `__cobrust_dora_event_data_bytes`
+  decodes Arrow `Binary` (`arr.value(0) -> &[u8]`) AND `UInt8`
+  (`arr.values() -> &[u8]`) → a `.cb` `bytes` via `__cobrust_bytes_from_raw`
+  (the recv loop pre-decodes into `DoraEventHandle.data_bytes:
+  Option<Vec<u8>>`, mirroring `data_buffer`; null-bearing / non-bytes →
+  `None` → empty bytes). `__cobrust_dora_event_send_output_bytes` reads the
+  borrowed `bytes` (`__cobrust_bytes_ptr` + `_len` → `&[u8]`, NOT an O(n)
+  `_get` loop) → a length-1 Arrow `BinaryArray` blob → the ambient
+  `DoraNode::send_output`. Synthetic build: a canned non-UTF-8
+  `b"\x00\xff\x01"` from `data_bytes()` + an `output[id]=bytes[len=n]`
+  marker. Both shims reuse the Buffer pair's fn-type ABI (`(ptr)->ptr` /
+  `(ptr,ptr,ptr)->i64`).
 - **Drop discipline:** the returned Buffer is `.cb`-owned → freed once via the
   existing `__cobrust_coil_buffer_drop` (the manifest `handle_drop_symbol(COIL_BUFFER_ADT)`
   already resolves — `ecosystem.rs` L364). No new drop symbol for the reused

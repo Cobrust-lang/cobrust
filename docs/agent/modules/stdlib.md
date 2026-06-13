@@ -194,6 +194,7 @@ pub unsafe extern "C" fn __cobrust_bytes_len(b: *mut u8) -> i64;
 pub unsafe extern "C" fn __cobrust_bytes_get(b: *mut u8, i: i64) -> i64; // i-th byte 0..255, -1 OOB
 pub unsafe extern "C" fn __cobrust_bytes_drop(b: *mut u8);
 pub unsafe extern "C" fn __cobrust_bytes_clone(b: *mut u8) -> *mut u8;   // clone-on-read reuse
+pub unsafe extern "C" fn __cobrust_bytes_ptr(b: *mut u8) -> *const u8;   // O(1) &[u8] read (str_ptr mirror); ADR-0076c B-1b
 // --- Phase 2 (byte-buffer surface) — each MINTS fresh, BORROWS inputs ---
 pub unsafe extern "C" fn __cobrust_bytes_slice(b: *mut u8, lo: i64, hi: i64) -> *mut u8; // b[lo:hi], Python clamp
 pub unsafe extern "C" fn __cobrust_bytes_concat(a: *mut u8, b: *mut u8) -> *mut u8;      // a + b
@@ -218,11 +219,16 @@ encode → `Ty::Bytes`, decode/hex → `Ty::Str`), so `drop.rs::is_copy`
 (excludes both) drop-schedules it ONCE; the result is MOVED out, inputs
 BORROWED (Move→Copy). **§2.2 decode design**: invalid UTF-8 TRAPS via
 `std.panic::panic` (`bytes.decode: invalid utf-8 at byte N`, exit 3) —
-NEVER lossy/replacement-char/truncate. **Still deferred**: `bytes ==
-bytes`, negative/open/step slices, a `Result`-returning decode, and the
-dora `data_bytes()` / `send_output_bytes()` accessor (ADR-0076c B-1b).
-Tests: `crates/cobrust-cli/tests/bytes_ops_e2e.rs` (7) +
-`crates/cobrust-stdlib/src/bytes.rs` Phase-2 unit tests.
+NEVER lossy/replacement-char/truncate. **dora accessor (shipped, ADR-0076c
+B-1b)**: `event.data_bytes()` / `event.send_output_bytes()` reuse these
+symbols (`__cobrust_bytes_from_raw` to mint, `__cobrust_bytes_ptr` + `_len`
+for the O(1) `&[u8]` send-read) WITHOUT a cross-crate cabi feature —
+`__cobrust_bytes_ptr` was added for this (the `__cobrust_str_ptr` mirror).
+**Still deferred**: `bytes == bytes`, negative/open/step slices, a
+`Result`-returning decode. Tests:
+`crates/cobrust-cli/tests/bytes_ops_e2e.rs` (7) +
+`crates/cobrust-stdlib/src/bytes.rs` Phase-2 unit tests (incl
+`ptr_reads_raw_slice_byte_exact`).
 
 ### `std.string` — `str` index OPERATOR (ADR-0094 / F78), CODEPOINT-based
 

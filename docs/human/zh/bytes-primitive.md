@@ -132,7 +132,11 @@ cobrust panic: bytes.decode: invalid utf-8 at byte 0
   非字面量索引 `b[i]` 仍能通过类型检查;完整的从末尾索引与越界 panic 是
   ADR-0093 列出的后续工作。
 - 可恢复的、返回 `Result` 的 `decode()`(今天非法 UTF-8 会停止程序,见上)。
-- dora 流访问器 `event.data_bytes()` / `event.send_output_bytes(...)`。
+
+dora 流访问器 `event.data_bytes()` / `event.send_output_bytes(...)` 已
+**落地**(ADR-0076c B-1b)—— 机器人节点现在可以把一个 Arrow `Binary`/`UInt8`
+载荷读成 `bytes` 并原样发回, 字节精确。表面见
+`docs/human/zh/import-dora.md`。
 
 ## 另见
 

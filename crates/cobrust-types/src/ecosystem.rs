@@ -2784,6 +2784,48 @@ pub fn lookup_handle_method(receiver: &Ty, method: &str) -> Option<EcoSig> {
             Ty::Int,
             PyCompatTier::Semantic,
         )),
+        // ADR-0076c (D)-B-1b / ADR-0093 Phase 2 — the RAW-BYTES sibling of
+        // the `data_buffer` pair. `event.data_bytes() -> bytes` reads a
+        // RAW byte payload (Arrow `Binary` blob OR a flat `UInt8` list —
+        // the COMPLEMENT of `data_buffer`, which EXPLICITLY DEFERS
+        // `UInt8`/`Binary` as a named ADR-0076c divergence precisely
+        // because THIS accessor owns them) and decodes it to a `.cb`
+        // `bytes` value via `__cobrust_bytes_from_raw`. SIMPLER than
+        // `data_buffer`: `bytes` is a raw immutable `Vec<u8>` — NO 5-dtype
+        // dispatch, NO ndarray, NO coil dep. `Ty::Bytes` is a FULL type
+        // (codegen + drop-glue + `b"..."` literal); its drop symbol is the
+        // EXISTING `__cobrust_bytes_drop` (lives in `libcobrust_stdlib.a`,
+        // always linked — NO new drop registration). A NULL / null-bearing
+        // / unexpected-dtype payload decodes to an EMPTY bytes (len 0), a
+        // well-defined `.cb` value the scope still drops once — NEVER a
+        // silent garbage read (§2.2). BYTE-FIDELITY: a `0xFF`/`0x00`
+        // non-UTF-8 byte round-trips EXACTLY (bytes is raw, never
+        // UTF-8-lossy).
+        (DORA_EVENT_ADT, "data_bytes") => Some(EcoSig::from_values(
+            "__cobrust_dora_event_data_bytes",
+            vec![],
+            Ty::Bytes,
+            PyCompatTier::Semantic,
+        )),
+        // ADR-0076c (D)-B-1b — `event.send_output_bytes(output_id, b)`
+        // emits a RAW byte payload (a `.cb` `bytes` → dora `send_output`
+        // of an Arrow `BinaryArray` blob) on a DECLARED output port. The
+        // raw-bytes SIBLING of `send_output_buffer`; a DISTINCT method
+        // name (NOT a `send_output` overload) for §2.5 compile-time
+        // clarity — an LLM picks `send_output_bytes` vs `send_output`
+        // unambiguously. Args: `Ty::Str` output-id + `Ty::Bytes` payload.
+        // Returns `Ty::Int` (0 sentinel; -1 on an UNDECLARED id — the
+        // runtime fail-closed backstop). The `b` is BORROWED (the cabi
+        // shim reads it via `__cobrust_bytes_ptr`, never frees it — the
+        // `.cb` scope still drops it once). The compile-time
+        // `DoraUnknownOutputId` reject (check.rs) fires for THIS method too
+        // — a literal typo'd id is caught at `cobrust check`.
+        (DORA_EVENT_ADT, "send_output_bytes") => Some(EcoSig::from_values(
+            "__cobrust_dora_event_send_output_bytes",
+            vec![Ty::Str, Ty::Bytes],
+            Ty::Int,
+            PyCompatTier::Semantic,
+        )),
         // ADR-0077 Q5 / Phase 2a — `coil.Buffer` method-form op `a.dot(b)`.
         // The FIRST method-form ecosystem-handle operator (the §10 precedent
         // for any handle wanting `.dot` / `.transpose` / `.matmul`). Reuses
