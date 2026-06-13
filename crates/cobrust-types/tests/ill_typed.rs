@@ -232,6 +232,52 @@ fn i08_str_plus_int() {
     );
 }
 
+// F85 §2.5-A / §5.1 — `str <op> str` for a NON-`+` arithmetic op
+// (`-` / `*` / `/` / `%`) must be REJECTED at type-check (a clean
+// `TypeMismatch`), NOT slip through into codegen where it PANICKED the
+// compiler. `Str + Str` (concat) and `Str * Int` (repeat) remain valid
+// (covered by well_typed + str_mul_e2e); these four are the unsupported
+// shapes. CPython 3: all four are `TypeError`s. The §2.5-B fix-printing
+// HINT (the `suggestion`) is asserted at the CLI layer (str_mul_e2e_07),
+// since `TypeError`'s `Display` omits the suggestion (rendered by the
+// CLI's error_ux). Here we pin the type-check REJECT + its category.
+
+#[test]
+fn i08a_str_minus_str() {
+    must_reject(
+        "str-minus-str",
+        "fn f(s: str, t: str) -> str:\n    return (s - t)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i08b_str_times_str() {
+    must_reject(
+        "str-times-str",
+        "fn f(s: str, t: str) -> str:\n    return (s * t)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i08c_str_div_str() {
+    must_reject(
+        "str-div-str",
+        "fn f(s: str, t: str) -> str:\n    return (s / t)\n",
+        Cat::TypeMismatch,
+    );
+}
+
+#[test]
+fn i08d_str_mod_str() {
+    must_reject(
+        "str-mod-str",
+        "fn f(s: str, t: str) -> str:\n    return (s % t)\n",
+        Cat::TypeMismatch,
+    );
+}
+
 #[test]
 fn i09_bool_plus_int() {
     must_reject(

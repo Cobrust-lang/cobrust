@@ -66,6 +66,28 @@ like Python raises a `TypeError`:
 - `"a" * "b"` — `str * str` is a type error (you cannot repeat by a string).
 - `"a" * 1.5` — `str * float` is a type error (the count must be an `int`).
 
+The only arithmetic defined on strings is `+` (concatenation) and `* int`
+(repetition). Every other arithmetic operator is a compile-time type error:
+
+- `"a" - "b"` — `str - str` is not defined.
+- `"a" / "b"` — `str / str` is not defined.
+- `"a" % "b"` — `str % str` is not defined (use an f-string for formatting).
+
+Each prints a clear hint naming the supported forms:
+
+```
+error[Type]: type mismatch: expected `str`, found `str`
+  hint: `str` supports `+` (concatenation) and `* int` (repetition,
+        e.g. `"ab" * 3`); `-`, `str * str`, `/`, and `%` are not
+        defined on strings
+```
+
+> **F85 (ADR-0098)**: before this fix, `"a" - "b"` / `"a" * "b"` /
+> `"a" / "b"` / `"a" % "b"` slipped past the type checker and **crashed
+> the compiler** in codegen (an internal panic, exit 101). They are now
+> caught cleanly at compile time (exit 2) — the §2.5-A compile-time-catch
+> and §5.1 no-panic guarantee.
+
 ## Design notes
 
 - **Additive, not a fix**: before ADR-0097, `"ab" * 3` was a CLEAN reject

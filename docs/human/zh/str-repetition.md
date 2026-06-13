@@ -62,6 +62,28 @@ let line2: str = 40 * "-"       # 左侧是 int,结果相同
 - `"a" * "b"` —— `str * str` 是类型错误(不能用字符串作为次数)。
 - `"a" * 1.5` —— `str * float` 是类型错误(次数必须是 `int`)。
 
+字符串上唯一定义的算术运算是 `+`(拼接)与 `* int`(重复)。其他任何
+算术运算符都是编译期类型错误:
+
+- `"a" - "b"` —— `str - str` 未定义。
+- `"a" / "b"` —— `str / str` 未定义。
+- `"a" % "b"` —— `str % str` 未定义(格式化请用 f-string)。
+
+每一种都会打印清晰的提示,指出受支持的形式:
+
+```
+error[Type]: type mismatch: expected `str`, found `str`
+  hint: `str` supports `+` (concatenation) and `* int` (repetition,
+        e.g. `"ab" * 3`); `-`, `str * str`, `/`, and `%` are not
+        defined on strings
+```
+
+> **F85(ADR-0098)**:在本次修复之前,`"a" - "b"` / `"a" * "b"` /
+> `"a" / "b"` / `"a" % "b"` 会绕过类型检查器,并在代码生成阶段
+> **使编译器崩溃**(内部 panic,退出码 101)。现在它们都在编译期被
+> 干净地捕获(退出码 2)—— 这正是 §2.5-A 的编译期捕获与 §5.1 的
+> 不 panic 保证。
+
 ## 设计说明
 
 - **是新增,不是修复**:在 ADR-0097 之前,`"ab" * 3` 是一个干净的拒绝

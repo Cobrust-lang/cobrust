@@ -4477,7 +4477,39 @@ impl Ctx {
                     // would also `unify` then reach this match — so guard
                     // on `op` for the bytes case to keep `-`/`*` rejected.
                     Ty::Bytes if matches!(op, BinOp::Add) => Ok(Ty::Bytes),
-                    Ty::Int | Ty::Float | Ty::Str | Ty::IntN(_) | Ty::Var(_) => Ok(resolved),
+                    // ADR-0098 / F85 §2.5-A — `str` is in the arithmetic
+                    // accept-set for `+` (concat) ONLY. `str * int` (repeat)
+                    // is special-cased BEFORE `unify` above and returns early,
+                    // so the only `Str`-resolved op reaching here is a
+                    // SAME-type `Str <op> Str`. `Str + Str` is concat (the MIR
+                    // `lower_bin` Add guard retargets two-`Ty::Str` to
+                    // `__cobrust_str_concat`); EVERY other op (`Str - Str`,
+                    // `Str * Str`, `Str / Str`, `Str % Str`) has no codegen
+                    // lowering and previously PANICKED the compiler in
+                    // llvm_backend (F85). Guard on `Add` here — exactly like
+                    // the `Ty::Bytes` arm above — so the unsupported ops fall
+                    // to the `Str`-aware reject below (CPython `"a" - "b"` /
+                    // `"a" * "b"` / `"a" / "b"` / `"a" % "b"` are all
+                    // TypeErrors).
+                    Ty::Str if matches!(op, BinOp::Add) => Ok(resolved),
+                    Ty::Int | Ty::Float | Ty::IntN(_) | Ty::Var(_) => Ok(resolved),
+                    // F85 §2.5-B — a `str` operand under a non-`+` arithmetic
+                    // op gets a clean fix-printing diagnostic naming the only
+                    // supported string arithmetic (`+` concat, `* int`
+                    // repeat), NOT a confusing "expected Int" (which the
+                    // generic reject below would print) and NOT a compiler
+                    // panic. `resolved` is `Ty::Str` here because both operands
+                    // unified to `Str`; surface it as `actual`.
+                    Ty::Str => Err(TypeError::TypeMismatch {
+                        expected: Ty::Str,
+                        actual: Ty::Str,
+                        span,
+                        suggestion: Some(
+                            "`str` supports `+` (concatenation) and `* int` (repetition, \
+                             e.g. `\"ab\" * 3`); `-`, `str * str`, `/`, and `%` are not \
+                             defined on strings",
+                        ),
+                    }),
                     other => Err(TypeError::TypeMismatch {
                         expected: Ty::Int,
                         actual: other,

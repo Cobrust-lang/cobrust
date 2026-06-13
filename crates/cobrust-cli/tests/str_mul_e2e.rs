@@ -143,6 +143,28 @@ fn run_exe(exe: &Path) -> (i32, String, String) {
     )
 }
 
+/// F85 §2.5-A / §5.1 — assert a `.cb` program is REJECTED at COMPILE time
+/// (`cobrust build` exit 2, a Cobrust `error[Type]`) and the diagnostic on
+/// stderr CONTAINS `needle` (the §2.5-B fix-printing substring). This is the
+/// no-panic guard: a clean exit-2 type-error proves the input was caught by
+/// the type checker, NOT a raw inkwell/codegen PANIC (exit 101, the F85 bug)
+/// and NOT a silent exit-0 miscompile.
+fn assert_build_type_rejects(name: &str, src: &str, needle: &str) {
+    let path = write_cb(name, src);
+    let (build_code, _exe, build_stderr) = run_build_exe(&path);
+    assert_eq!(
+        build_code, 2,
+        "{name}: build must REJECT as a TYPE error (exit 2), got {build_code} \
+         (101 = the F85 compiler panic; 0 = silent miscompile); \
+         stderr=\n{build_stderr}\n--- source ---\n{src}"
+    );
+    assert!(
+        build_stderr.contains(needle),
+        "{name}: reject diagnostic must contain {needle:?}; \
+         got stderr=\n{build_stderr}"
+    );
+}
+
 fn assert_build_run(name: &str, src: &str, expected_stdout: &str) {
     let path = write_cb(name, src);
     let (build_code, exe, build_stderr) = run_build_exe(&path);
@@ -277,4 +299,67 @@ fn main() -> i64:
     // `r` is "ababab"; `s` survives the borrow-not-move repeat and is
     // still "ab" (used again on the next line) — both drop once.
     assert_build_run("str_mul_e2e_06", src, "ababab\nab\n");
+}
+
+// =====================================================================
+// str_mul_e2e_07 — F85 §2.5-A / §5.1: the UNSUPPORTED `str <op> str`
+// arithmetic ops MUST be caught at COMPILE time, NOT panic the compiler.
+// BEFORE F85: `"a" - "b"` / `"a" * "b"` / `"a" / "b"` / `"a" % "b"` all
+// type-checked (Str wrongly in the post-`unify` arithmetic accept-set)
+// then PANICKED `cobrust build` in llvm_backend (exit 101, leaking an
+// internal `inkwell` backtrace + source paths). AFTER F85: each is a
+// clean `error[Type]` (exit 2) carrying the §2.5-B fix-printing hint
+// naming the only supported string arithmetic (`+` concat, `* int`
+// repeat). CPython 3: all four are `TypeError`s. This is the LOCKSTEP
+// negative twin of e2e_01–06 (the supported ops stay GREEN above).
+// =====================================================================
+
+#[test]
+fn str_mul_e2e_07_str_str_arithmetic_rejects_not_panic() {
+    // The §2.5-B hint substring every reject below must surface.
+    let hint = "`str` supports `+` (concatenation) and `* int` (repetition";
+
+    // `str - str` — subtraction is not defined on strings.
+    assert_build_type_rejects(
+        "str_mul_e2e_07_sub",
+        "\
+fn main() -> i64:
+    print(\"a\" - \"b\")
+    return 0
+",
+        hint,
+    );
+
+    // `str * str` — repetition needs an `int` count, not another `str`.
+    assert_build_type_rejects(
+        "str_mul_e2e_07_mul",
+        "\
+fn main() -> i64:
+    print(\"a\" * \"b\")
+    return 0
+",
+        hint,
+    );
+
+    // `str / str` — true-division is not defined on strings.
+    assert_build_type_rejects(
+        "str_mul_e2e_07_div",
+        "\
+fn main() -> i64:
+    print(\"a\" / \"b\")
+    return 0
+",
+        hint,
+    );
+
+    // `str % str` — Cobrust has f-strings; printf-`%` is not defined.
+    assert_build_type_rejects(
+        "str_mul_e2e_07_mod",
+        "\
+fn main() -> i64:
+    print(\"a\" % \"b\")
+    return 0
+",
+        hint,
+    );
 }
