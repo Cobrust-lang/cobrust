@@ -292,8 +292,12 @@ fn main() -> i64:
 // =====================================================================
 // tuple_e2e_07 — DROP discipline: a tuple containing an OWNED str. Reading
 // the OTHER (int) field must NOT corrupt / double-free the owned str field;
-// reading the str field repeatedly must not double-free. The tuple drops its
-// fields under the existing tuple discipline (no double-free). CPython 3:
+// reading the str field repeatedly must not double-free. HONEST SCOPE: the
+// tuple drop is currently a codegen NO-OP, so an unread owned field LEAKS
+// (never double-frees) — a memory-safe leak-or-free-once gap documented in
+// ADR-0097 + finding F83 (and the F82-class loop-body debt). This test
+// proves NO double-free + value correctness ONLY; it does NOT verify the
+// field is freed (a leak satisfies exit-0). CPython 3:
 // (s, 99)[1]==99, [0]=="hello"; reading [0] three times prints "hello" each.
 // =====================================================================
 
