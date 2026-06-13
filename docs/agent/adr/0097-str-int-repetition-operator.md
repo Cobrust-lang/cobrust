@@ -66,8 +66,11 @@ mirroring the ADR-0078 `str + str` concat pipeline:
 
 - **check.rs `synth_bin` Mul arm**: BEFORE `unify` (a `Str` never unifies
   with an `Int`), `(Ty::Str, Ty::Int) | (Ty::Int, Ty::Str)` → `Ty::Str`.
-  Any OTHER pairing (`Str * Str`, `Str * Float`, …) falls through to
-  `unify` and rejects as before.
+  A `Str * Float` / `Float * Str` falls through to `unify`, which cleanly
+  rejects it. A `Str * Str`, however, `unify`s OK and is in the post-unify
+  arithmetic accept-set, so it type-checks then COMPILER-PANICS in codegen
+  (pre-existing §2.5-A/§5.1 bug, NOT introduced here; `"a" - "b"` panics
+  identically) — tracked as finding **F85** for a clean compile-time reject.
 - **lower.rs `lower_bin` Mul guard**: `lhs_is_str ^ rhs_is_str` → normalize
   to `(s_op, n_op)`, evaluating LHS-then-RHS to preserve source-order side
   effects regardless of which side is the `str`. The `str` receiver is

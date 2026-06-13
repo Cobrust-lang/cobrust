@@ -4396,10 +4396,17 @@ impl Ctx {
                 // `Str` and one `Int` (Python allows BOTH orders — `s * n`
                 // and `n * s`); the result is a fresh `Ty::Str`. The MIR
                 // `lower_bin` Mul guard retargets the accepted shape to
-                // `__cobrust_str_repeat(s, n)`. A `Str * Str` / `Str *
-                // Float` / `Float * Str` does NOT match here and falls
-                // through to `unify`, which rejects it (CPython `"a" * "b"`
-                // and `"a" * 1.5` are both TypeErrors).
+                // `__cobrust_str_repeat(s, n)`. A `Str * Float` / `Float *
+                // Str` does NOT match here and falls through to `unify`,
+                // which CLEANLY rejects it (`unify(Str, Float)` fails →
+                // `error[Type]: expected str, found f64`). A `Str * Str`,
+                // HOWEVER, `unify`s OK (both `Str`) and `Str` is in the
+                // post-unify arithmetic accept-set below, so it type-checks
+                // then COMPILER-PANICS in codegen (llvm_backend can't `mul`
+                // two Str) — a PRE-EXISTING §2.5-A/§5.1 bug (NOT introduced
+                // here; `"a" - "b"` panics identically), tracked as finding
+                // F85 for a clean compile-time reject. CPython `"a" * "b"`
+                // and `"a" * 1.5` are both TypeErrors.
                 if matches!(op, BinOp::Mul) {
                     let lt_r = self.subst.apply(&lt);
                     let rt_r = self.subst.apply(&rt);
