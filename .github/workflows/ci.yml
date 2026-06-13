@@ -279,7 +279,24 @@ jobs:
         # Cargo.lock lists optional deps so the audit sees them regardless. Same
         # discipline as the paste ignore above (unmaintained != CVE; behind an
         # opt-in feature). Revisit if dora upgrades to bincode 2.x / drops fxhash.
-        run: cargo audit --deny warnings --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2025-0057
+        #
+        # Ignore RUSTSEC-2026-0176 (pyo3 0.24 — OOB read in PyList/PyTuple
+        # iterator `nth`/`nth_back`) + RUSTSEC-2026-0177 (pyo3 0.24 — missing
+        # `Sync` bound on `PyCFunction::new_closure`): INTERIM, pending the
+        # pyo3 0.24 → 0.29 upgrade (the real fix; tracked as a follow-up). Both
+        # are UNREACHABLE in Cobrust's usage (assessed 2026-06-13): the crates
+        # iterate Py sequences only via `for x in list.iter()` (`.next()`) — NO
+        # `.nth()`/`.nth_back()` call (0176's vulnerable methods), and there is
+        # ZERO `PyCFunction::new_closure` usage (0177). pyo3 is also OPTIONAL —
+        # only compiled under each wrapper crate's `--features pyo3`
+        # (extension-module), NOT the default build. Same unreachable-path
+        # discipline as the rsa ignore above. REMOVE both once pyo3 >= 0.29 lands.
+        #
+        # Ignore RUSTSEC-2026-0173 (proc-macro-error2 — UNMAINTAINED, NOT a
+        # vulnerability): a build-time proc-macro with no runtime/security
+        # surface (same class as the paste ignore); pulled transitively. Revisit
+        # if the upstream proc-macro chain drops it.
+        run: cargo audit --deny warnings --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2025-0057 --ignore RUSTSEC-2026-0176 --ignore RUSTSEC-2026-0177 --ignore RUSTSEC-2026-0173
 
   # Code Quality P1: cargo-udeps unused-dependency check.
   # Requires nightly toolchain (uses unstable compiler APIs).
