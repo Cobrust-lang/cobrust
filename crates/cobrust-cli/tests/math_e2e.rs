@@ -386,8 +386,8 @@ fn test_neg_sqrt_rejects_int_arg() {
         "math.sqrt(2) (Int arg) must be REJECTED; stderr=\n{stderr}"
     );
     assert!(
-        stderr.contains("Float") && stderr.contains("Int"),
-        "expected a Float-vs-Int TypeMismatch; got stderr=\n{stderr}",
+        stderr.contains("type mismatch") && stderr.contains("f64") && stderr.contains("i64"),
+        "expected a polished f64-vs-i64 type mismatch (error_ux, F80); got stderr=\n{stderr}",
     );
 }
 
@@ -408,8 +408,8 @@ fn test_neg_sqrt_rejects_str_arg() {
         "math.sqrt(\"x\") (str arg) must be REJECTED; stderr=\n{stderr}"
     );
     assert!(
-        stderr.contains("Float") && stderr.contains("Str"),
-        "expected a Float-vs-Str TypeMismatch; got stderr=\n{stderr}",
+        stderr.contains("type mismatch") && stderr.contains("f64") && stderr.contains("str"),
+        "expected a polished f64-vs-str type mismatch (error_ux, F80); got stderr=\n{stderr}",
     );
 }
 

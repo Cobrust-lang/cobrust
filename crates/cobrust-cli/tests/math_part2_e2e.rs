@@ -462,7 +462,7 @@ fn test_neg_floor_rejects_int_arg() {
         "math.floor(2) (Int arg) must be REJECTED; stderr=\n{stderr}"
     );
     assert!(
-        stderr.contains("Float") && stderr.contains("Int"),
-        "expected a Float-vs-Int TypeMismatch; got stderr=\n{stderr}",
+        stderr.contains("type mismatch") && stderr.contains("f64") && stderr.contains("i64"),
+        "expected a polished f64-vs-i64 type mismatch (error_ux, F80); got stderr=\n{stderr}",
     );
 }
