@@ -2179,86 +2179,6 @@ impl<'a> BodyBuilder<'a> {
                         return Ok(Operand::Copy(Place::local(dest)));
                     }
                 }
-                // F83 / ADR-0097 — `t[i]` read on a TUPLE base. A tuple is a
-                // struct-like aggregate already lowered via
-                // `Projection::Field(idx)` (construction §1457, the lvalue Attr
-                // path, field reads). We mirror that EXISTING projection here
-                // rather than the generic `Projection::Index` fall-through
-                // below, whose `lower_index` returned a `Constant::Int(0)` STUB
-                // — the §2.2 SILENT-0 MISCOMPILE this closes (`(7, "x")[0]`
-                // built OK + ran returning `0`, CPython `7`).
-                //
-                // The type checker (check.rs `(Ty::Tuple, IndexKind::Expr)`)
-                // has ALREADY rejected a NON-CONSTANT index and a constant-OOB
-                // index (`NotIndexable`, §2.5-A compile-time-catch), so on the
-                // accepted-program path the index is ALWAYS a literal int in
-                // range. We re-derive the normalised field offset from that
-                // literal (Python-negative `i<0 -> arity+i` against the static
-                // arity) and read `Projection::Field(off)` as the per-position
-                // element type the checker resolved.
-                //
-                // Drop discipline: the tuple owns its fields and drops them
-                // ONCE at scope exit (the construction arm's `_tuple` local).
-                // Reading a field as an `Operand::Copy` of the `Field`
-                // projection does NOT move-out the field, so a non-Copy field
-                // (e.g. `(s, 1)[0]` with `s: str`) stays owned by the tuple and
-                // is dropped exactly once — no double-free / corruption of a
-                // sibling owned field (mirrors the let-destructure §574 Copy of
-                // `Projection::Field`).
-                if let Ty::Tuple(elem_tys) = &base_ty {
-                    if let IndexKind::Expr(idx_e) = index.as_ref() {
-                        if let Some(lit) = literal_int_value_mir(idx_e) {
-                            let arity = elem_tys.len() as i64;
-                            let normalized = if lit < 0 { lit + arity } else { lit };
-                            // The checker has bounds-checked; this is a
-                            // §6 defense-in-depth clamp guard (an out-of-range
-                            // value reaching here means the checker was
-                            // bypassed — never silently read field 0).
-                            if normalized >= 0 && normalized < arity {
-                                let off = normalized as usize;
-                                let elem_ty = elem_tys[off].clone();
-                                let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
-                                let tup_local = self.declare_local(
-                                    "_tupidxbase".to_string(),
-                                    base_ty.clone(),
-                                    e.span,
-                                    false,
-                                );
-                                self.emit_assign(
-                                    Place::local(tup_local),
-                                    Rvalue::Use(base_op),
-                                    e.span,
-                                );
-                                let dest = self.declare_local(
-                                    "_tupidx".to_string(),
-                                    elem_ty,
-                                    e.span,
-                                    false,
-                                );
-                                let field_place = Place {
-                                    local: tup_local,
-                                    projections: vec![Projection::Field(off)],
-                                };
-                                self.emit_assign(
-                                    Place::local(dest),
-                                    Rvalue::Use(Operand::Copy(field_place)),
-                                    e.span,
-                                );
-                                return Ok(Operand::Copy(Place::local(dest)));
-                            }
-                        }
-                        // DEFENSE-IN-DEPTH — a non-literal / OOB tuple index
-                        // reaching MIR means the checker's `NotIndexable`
-                        // reject was bypassed. A hard `MirError` is the
-                        // §2.2-sound backstop (NEVER the silent `Int(0)` stub).
-                        return Err(MirError::Internal(format!(
-                            "tuple index must be a constant int in range at {:?} \
-                             (this must be rejected by TypeError::NotIndexable \
-                             upstream — F83 / ADR-0097)",
-                            e.span
-                        )));
-                    }
-                }
                 let base_op = self.lower_expr(base)?;
                 let base_local =
                     self.declare_local("_idxbase".to_string(), Ty::None, e.span, false);
@@ -4138,29 +4058,6 @@ fn upgrade_return_to_move(b: &BodyBuilder<'_>, op: Operand) -> Operand {
     op
 }
 
-/// F83 / ADR-0097 — extract a compile-time integer value from an index
-/// expression for a tuple `t[i]` read. Accepts a positive int literal and a
-/// Python-style negated literal (`-1`, `-2`, …). Mirror of the type checker's
-/// `literal_int_value` (check.rs) so the MIR `Projection::Field` offset matches
-/// the element type the checker resolved. Returns `None` for any non-literal
-/// (the checker rejects those with `NotIndexable`; MIR never folds them).
-fn literal_int_value_mir(e: &Expr) -> Option<i64> {
-    match &e.kind {
-        ExprKind::Lit(Lit::Int(s)) => s.parse::<i64>().ok(),
-        ExprKind::Un {
-            op: UnaryOp::Neg,
-            operand,
-        } => {
-            if let ExprKind::Lit(Lit::Int(s)) = &operand.kind {
-                s.parse::<i64>().ok().map(i64::wrapping_neg)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
 fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
     // ADR-0050c Phase 2 — TD-1 closure. We need the element type at
     // Aggregate(List) MIR build time so the codegen `Terminator::Drop`
@@ -4188,12 +4085,6 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
             let elem_ty = items.first().map_or(Ty::None, |it| synth_expr_ty(b, it));
             Ty::List(Box::new(elem_ty))
         }
-        // F83 / ADR-0097 — a tuple literal synthesises `Ty::Tuple` with the
-        // per-position element types, so the `ExprKind::Index` lowering can
-        // route a `t[i]` read to the `Projection::Field` path (NOT the generic
-        // `Projection::Index` stub that returned `Int(0)`). Mirrors the
-        // construction arm above (`elem_tys` per position).
-        ExprKind::Tuple(items) => Ty::Tuple(items.iter().map(|it| synth_expr_ty(b, it)).collect()),
         ExprKind::Index { base, index } => {
             // For `xs[i]`, the result is the element type of xs.
             match synth_expr_ty(b, base) {

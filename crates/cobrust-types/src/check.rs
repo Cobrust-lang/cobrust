@@ -2231,56 +2231,20 @@ impl Ctx {
                         Ok((**elem).clone())
                     }
                     (Ty::Tuple(items), IndexKind::Expr(e)) => {
-                        // ADR-0097 / F83 (§2.5) — `t[i]` scalar index on a TUPLE
-                        // base. A tuple is HETEROGENEOUS: `(i64, str)[0]` is `i64`,
-                        // `[1]` is `str`. The element type is only knowable when the
-                        // index is a COMPILE-TIME CONSTANT, so we require one:
-                        //
-                        //   - LITERAL int index (positive or Python-style negative)
-                        //     → constant-fold to the EXACT per-position element type
-                        //     (`resolve_tuple_index`, normalising `i<0 -> len+i`
-                        //     against the static arity).
-                        //   - LITERAL int index OUT OF BOUNDS → REJECT at check time
-                        //     (`NotIndexable`, §2.5-A compile-time-catch), mirroring
-                        //     the `t.N` tuple-field OOB reject above + the array-OOB
-                        //     literal reject. NEVER the old silent `Ty::Never` fold,
-                        //     which downstream-collapsed to the MIR `Int(0)` stub.
-                        //   - NON-LITERAL index → REJECT (a tuple needs a CONSTANT
-                        //     index; the static element type of a dynamic position
-                        //     is unknown for a heterogeneous tuple). This replaces
-                        //     the prior head-element conservative fallback, which was
-                        //     a §2.2 SILENT MISCOMPILE for a mixed-type tuple
-                        //     (`(1, "a")[i]` typed `int` but position 1 is `str`).
-                        //     §2.5-A: surface it at check time, not at runtime.
-                        if let Some(idx) = literal_int_value(e) {
-                            let it = self.synth_expr(e)?;
-                            unify(&Ty::Int, &it, &mut self.subst, e.span)?;
-                            if let Some(resolved) = resolve_tuple_index(items.as_slice(), idx) {
-                                return Ok(resolved);
-                            }
-                            return Err(TypeError::NotIndexable {
-                                actual: Ty::Tuple(items.clone()),
-                                span: e.span,
-                                suggestion: Some(
-                                    "tuple index out of bounds — use a constant in [0, len-1] \
-                                 (or a Python-negative index in [-len, -1])",
-                                ),
-                            });
-                        }
-                        // Still type-check the index expression (its own type
-                        // error surfaces) before the constant-index gate.
                         let it = self.synth_expr(e)?;
                         unify(&Ty::Int, &it, &mut self.subst, e.span)?;
-                        Err(TypeError::NotIndexable {
-                            actual: Ty::Tuple(items.clone()),
-                            span: e.span,
-                            suggestion: Some(
-                                "a tuple needs a CONSTANT integer index (e.g. `t[0]`, `t[-1]`) — \
-                             its elements have heterogeneous types, so a dynamic index has no \
-                             single static type; use a constant, or convert to a list if you \
-                             need dynamic indexing",
-                            ),
-                        })
+                        // ADR-0041 §H8: when the index is a literal int
+                        // (positive or Python-style negative), constant-
+                        // fold to the exact element type. Otherwise the
+                        // dynamic-index conservative fallback synthesises
+                        // the head element (matches prior M2 behavior;
+                        // future row polymorphism will widen this to a
+                        // union).
+                        if let Some(idx) = literal_int_value(e) {
+                            let resolved = resolve_tuple_index(items.as_slice(), idx);
+                            return Ok(resolved.unwrap_or(Ty::Never));
+                        }
+                        Ok(items.first().cloned().unwrap_or(Ty::Never))
                     }
                     (Ty::Dict(k, v), IndexKind::Expr(e)) => {
                         let it = self.synth_expr(e)?;
