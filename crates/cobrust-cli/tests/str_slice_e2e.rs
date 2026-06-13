@@ -195,10 +195,12 @@ fn assert_build_run_traps(name: &str, src: &str, needle: &str) {
          compile-time); stderr=\n{build_stderr}\n--- source ---\n{src}"
     );
     let (run_code, stdout, run_stderr) = run_exe(&exe);
-    assert_ne!(
-        run_code, 0,
-        "{name}: an out-of-range scalar index MUST trap (non-zero exit), \
-         NOT return a silent sentinel; stdout={stdout:?} stderr={run_stderr:?}"
+    assert_eq!(
+        run_code, 3,
+        "{name}: an out-of-range scalar index MUST trap with exit 3 \
+         (INTERNAL_PANIC via crate::panic::panic) — NOT a silent sentinel, \
+         NOR a raw `assert!` abort (exit 134 + path-leaking backtrace); \
+         stdout={stdout:?} stderr={run_stderr:?}"
     );
     assert_eq!(
         stdout, "",

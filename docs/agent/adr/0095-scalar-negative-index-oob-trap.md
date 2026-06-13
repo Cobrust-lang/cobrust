@@ -54,7 +54,7 @@ time reject:
 ```
 len = <codepoint count for str  |  byte count for bytes>
 idx = if i < 0 { len + i } else { i }   # Python from-end normalization
-assert!(idx >= 0 && idx < len, "<kind> index out of range: i={i} len={len}")
+if idx < 0 || idx >= len { crate::panic::panic("<kind> index out of range: i={i} len={len}") }
 return element at idx
 ```
 
@@ -63,12 +63,16 @@ return element at idx
   `chars().nth(idx)`), so `"héllo"[-1] == "o"` and `"héllo"[-4] == "é"`
   (a byte-indexed impl would cut the 2-byte `é` or land off-by-one).
 - **True OOB** (positive `idx >= len` OR too-negative `i < -len`) TRAPS via
-  `assert!` (panic). The panic crosses the `extern "C"` ABI boundary as a
-  NON-unwinding abort, which the cobrust runtime surfaces as a non-zero
-  exit (std.panic exit 3, INTERNAL_PANIC), mirroring Rust's own `s[i]`
-  slice-OOB panic. The diagnostic NAMES the bad index AND the length
-  (§2.5-B). A NULL handle is treated as empty (`len == 0`), so any index
-  traps.
+  `crate::panic::panic` — the SAME project trap convention
+  `__cobrust_bytes_decode` uses, NOT a raw `assert!`. The runtime surfaces
+  it as **exit 3 (INTERNAL_PANIC)** with a single clean
+  `cobrust panic: <kind> index out of range: i=.. len=..` line — no Rust
+  backtrace, no leaked internal source paths. (A raw `assert!` here would
+  instead abort the `extern "C"` frame as a non-unwinding SIGABRT → exit 134
+  + a ~20-line path-leaking backtrace; the B-1b-style audit caught + fixed
+  that drift.) Mirrors Rust's own `s[i]` slice-OOB trap. The diagnostic
+  NAMES the bad index AND the length (§2.5-B). A NULL handle is treated as
+  empty (`len == 0`), so any index traps.
 - **NO sentinel.** The `if i < 0 { return ""/-1 }` guard AND the
   `None => ""/-1` positive-OOB arm are both DELETED. This is the §2.2 fix:
   an out-of-range scalar read is unrecoverable, not an in-band value.
@@ -101,11 +105,13 @@ follow-up (it needs a `len`-relative slice lowering).
   `__cobrust_str_char_at` / `__cobrust_bytes_get` call; only the runtime
   body + the check.rs gate changed.
 - Unit-test note: the OOB TRAP can NOT be observed by an in-crate
-  `#[should_panic]` test, because the panic crosses the `extern "C"`
-  boundary as a non-unwinding abort (SIGABRT) — it aborts the whole test
-  process rather than unwinding. The TRAP is therefore verified END-TO-END
-  in the cli e2e suites (build a `.cb`, run the exe, assert the non-zero
-  exit + the `… index out of range` stderr diagnostic). The runtime unit
+  `#[should_panic]` test — `crate::panic::panic` terminates the process
+  (exit 3) rather than unwinding a catchable Rust panic, so it would abort
+  the test runner. The TRAP is therefore verified END-TO-END in the cli
+  e2e suites (build a `.cb`, run the exe, assert `exit == 3` + the
+  `… index out of range` stderr diagnostic — the `assert_build_run_traps`
+  helper asserts the EXACT exit 3, so a regression back to a raw-abort
+  exit 134 or a silent sentinel cannot pass). The runtime unit
   tests cover the POSITIVE behaviors (from-end negative read + codepoint
   addressing).
 

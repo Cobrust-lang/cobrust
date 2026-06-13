@@ -332,11 +332,15 @@ pub unsafe extern "C" fn __cobrust_str_char_at(s: *mut u8, i: i64) -> *mut u8 {
     // end (`len + i`); a non-negative `i` is itself.
     let idx = if i < 0 { len + i } else { i };
     // §2.2: TRAP on a true OOB — never an in-band sentinel `""`.
-    // §2.5-B: the diagnostic names the bad index AND the length.
-    assert!(
-        idx >= 0 && idx < len,
-        "str index out of range: i={i} len={len}"
-    );
+    // §2.5-B: the diagnostic names the bad index AND the length. Route
+    // through the project trap convention (`crate::panic::panic`, the same
+    // path `__cobrust_bytes_decode` uses) — NOT a raw `assert!`: across the
+    // `extern "C"` boundary a raw panic aborts (SIGABRT / exit 134) with a
+    // path-leaking Rust backtrace, whereas `panic()` cleanly maps to exit 3
+    // + a one-line `cobrust panic: ...` message (the INTERNAL_PANIC contract).
+    if idx < 0 || idx >= len {
+        crate::panic::panic(&format!("str index out of range: i={i} len={len}"));
+    }
     let c = src
         .chars()
         .nth(idx as usize)

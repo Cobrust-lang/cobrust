@@ -127,11 +127,15 @@ pub unsafe extern "C" fn __cobrust_bytes_get(b: *mut u8, i: i64) -> i64 {
     // end (`len + i`); a non-negative `i` is itself.
     let idx = if i < 0 { len + i } else { i };
     // §2.2: TRAP on a true OOB — never an in-band sentinel `-1`.
-    // §2.5-B: the diagnostic names the bad index AND the length.
-    assert!(
-        idx >= 0 && idx < len,
-        "bytes index out of range: i={i} len={len}"
-    );
+    // §2.5-B: the diagnostic names the bad index AND the length. Route
+    // through the project trap convention (`crate::panic::panic`, the same
+    // path `__cobrust_bytes_decode` uses) — NOT a raw `assert!`: across the
+    // `extern "C"` boundary a raw panic aborts (SIGABRT / exit 134) with a
+    // path-leaking Rust backtrace, whereas `panic()` cleanly maps to exit 3
+    // + a one-line `cobrust panic: ...` message (the INTERNAL_PANIC contract).
+    if idx < 0 || idx >= len {
+        crate::panic::panic(&format!("bytes index out of range: i={i} len={len}"));
+    }
     i64::from(bytes[idx as usize])
 }
 
@@ -578,8 +582,12 @@ mod tests {
             __cobrust_bytes_drop(std::ptr::null_mut());
             assert_eq!(__cobrust_bytes_len(std::ptr::null_mut()), 0);
             assert!(__cobrust_bytes_clone(std::ptr::null_mut()).is_null());
-            // `__cobrust_bytes_get` on NULL traps (len 0, any index OOB) —
-            // covered by `get_null_traps` below, not asserted here.
+            // `__cobrust_bytes_get` on NULL is len-0, so ANY index is OOB and
+            // traps via `crate::panic::panic` (exit 3). That trap can't be
+            // asserted here — it terminates the process, not a catchable
+            // `#[should_panic]` — so it is verified END-TO-END in the cli
+            // `bytes_ops_e2e` OOB-trap suite (asserting exit == 3), not as a
+            // unit test.
         }
     }
 
