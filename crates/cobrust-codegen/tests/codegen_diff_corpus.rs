@@ -710,6 +710,20 @@ fn llvm_operand_10_binop_div_i64() {
     );
 }
 
+#[test]
+fn llvm_operand_10b_binop_floordiv_i64() {
+    // F86: Rvalue::BinaryOp(FloorDiv, i64, i64) lowers to the FLOOR-adjusted
+    // quotient (sdiv + srem + sign-differ trunc→floor correction), distinct
+    // from the truncating `Div` arm above. Compile-OK guard that the split
+    // arm emits a verifiable module (the value-level oracle lives in the CLI
+    // `floor_div_e2e` corpus).
+    #[cfg(feature = "llvm")]
+    llvm_compile_ok(
+        "llvm_op10b",
+        "fn f(a: i64, b: i64) -> i64:\n    return (a // b)\n",
+    );
+}
+
 // =====================================================================
 // TERMINATOR LOWERING — ADR-0058a §6 (5 fixtures)
 // =====================================================================

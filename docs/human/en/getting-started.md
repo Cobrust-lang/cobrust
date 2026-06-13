@@ -121,6 +121,9 @@ fn main() -> i64:
 Key rules:
 - `i64 → f64` requires explicit `(n as f64)`. No implicit promotion.
 - `f64 → i64` truncates toward zero (C semantics, not floor).
+- `//` (floor division) FLOORS toward -∞, Python-style: `-7 // 2 == -4`,
+  `7 // -2 == -4`. `/` on integers TRUNCATES toward zero (`-7 / 2 == -3`).
+  `%` matches `//` so `(a // b) * b + (a % b) == a` for every sign (ADR-0099).
 - `inf / 0.0` is not a trap — IEEE 754 defines float division by zero.
 - `nan != nan` is `true` per IEEE 754.
 - Math functions: `sqrt`, `floor`, `ceil`, `round`, `abs`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`.

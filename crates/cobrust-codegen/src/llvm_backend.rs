@@ -6047,14 +6047,103 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 .build_float_mul(a.into_float_value(), b.into_float_value(), "fmul")
                 .map_err(map_builder_err)?
                 .into(),
-            (BinOp::Div | BinOp::FloorDiv, false) => builder
+            // ADR-0041 §H1 sibling (F86) — `/` on INTEGERS is Cobrust's
+            // C-like TRUNCATING integer division (`7 / 2 == 3`, `-7 / 2 ==
+            // -3`); Python's true/float `/` is NOT Cobrust semantics here
+            // (in Cobrust `int / int -> int`, the type checker resolves both
+            // operands to the same numeric type — see check.rs `synth_bin`).
+            // Only `//` (FloorDiv) FLOORS toward -∞; it is split out below.
+            (BinOp::Div, false) => builder
                 .build_int_signed_div(a.into_int_value(), b.into_int_value(), "sdiv")
                 .map_err(map_builder_err)?
                 .into(),
-            (BinOp::Div | BinOp::FloorDiv, true) => builder
+            (BinOp::FloorDiv, false) => {
+                // ADR-0041 §H1 sibling (F86): Python FLOOR division on
+                // integers — `//` rounds toward -∞, NOT toward zero. LLVM
+                // `sdiv` TRUNCATES toward zero, so apply the standard
+                // trunc→floor correction: when the remainder is non-zero
+                // AND the operand signs differ, the true quotient is
+                // negative-and-fractional and `sdiv` over-rounded by 1, so
+                // subtract 1. This is the SYMMETRIC twin of the `Mod` floor
+                // adjustment below (which adds `b` to `srem` under the same
+                // condition), preserving the invariant
+                // `(a // b) * b + (a % b) == a` for every sign quadrant.
+                // Branchless: compute `q` and `q - 1`, select on the
+                // condition. Division-by-zero stays a trap (the MIR-level
+                // `Assert(rhs != 0)` guard at lower.rs is unchanged).
+                let av = a.into_int_value();
+                let bv = b.into_int_value();
+                let ty = av.get_type();
+                let q = builder
+                    .build_int_signed_div(av, bv, "sdiv")
+                    .map_err(map_builder_err)?;
+                let rem = builder
+                    .build_int_signed_rem(av, bv, "srem")
+                    .map_err(map_builder_err)?;
+                let zero = ty.const_zero();
+                let rem_nonzero = builder
+                    .build_int_compare(IntPredicate::NE, rem, zero, "fd_rem_nonzero")
+                    .map_err(map_builder_err)?;
+                // signs differ ⇔ `a ^ b < 0` (MSB set). Use the operands,
+                // not the remainder: `srem` has the sign of the dividend,
+                // so `rem ^ b` would mis-detect when `a` and `b` share a
+                // sign but `rem` happens to be zero — guarded by
+                // `rem_nonzero` anyway, but `av ^ bv` is the precise test.
+                let signs_xor = builder
+                    .build_xor(av, bv, "fd_signs_xor")
+                    .map_err(map_builder_err)?;
+                let signs_differ = builder
+                    .build_int_compare(IntPredicate::SLT, signs_xor, zero, "fd_signs_differ")
+                    .map_err(map_builder_err)?;
+                let need_adjust = builder
+                    .build_and(rem_nonzero, signs_differ, "fd_need_adjust")
+                    .map_err(map_builder_err)?;
+                let q_minus_1 = builder
+                    .build_int_sub(q, ty.const_int(1, false), "fd_q_minus_1")
+                    .map_err(map_builder_err)?;
+                builder
+                    .build_select(need_adjust, q_minus_1, q, "floordiv_result")
+                    .map_err(map_builder_err)?
+            }
+            (BinOp::Div, true) => builder
                 .build_float_div(a.into_float_value(), b.into_float_value(), "fdiv")
                 .map_err(map_builder_err)?
                 .into(),
+            (BinOp::FloorDiv, true) => {
+                // F86 float `//` — Python `-7.0 // 2.0 == -4.0` FLOORS too.
+                // floor(q) where q = a / b. Reuse the trunc-toward-zero +
+                // adjust identity (same `float_to_signed_int` truncation the
+                // `Mod` float arm above relies on, so the magnitude tradeoff
+                // is identical and consistent): t = (f64)(i64)q; floor(q) =
+                // t - (t > q ? 1 : 0), since truncation only over-rounds
+                // (toward zero) for a negative non-integral q.
+                let av = a.into_float_value();
+                let bv = b.into_float_value();
+                let f_ty = av.get_type();
+                let q = builder
+                    .build_float_div(av, bv, "ffdiv")
+                    .map_err(map_builder_err)?;
+                // trunc toward zero, then back to float.
+                let q_i = builder
+                    .build_float_to_signed_int(q, self.emitter.ctx.i64_type(), "ff2i")
+                    .map_err(map_builder_err)?;
+                let trunc = builder
+                    .build_signed_int_to_float(q_i, f_ty, "fi2f")
+                    .map_err(map_builder_err)?;
+                // floor(q) = trunc(q) - (trunc(q) > q ? 1 : 0). `trunc`
+                // exceeds `q` exactly when `q` is negative and not integral
+                // (truncation rounded UP toward zero), so subtract 1.
+                let trunc_gt_q = builder
+                    .build_float_compare(FloatPredicate::OGT, trunc, q, "ff_trunc_gt_q")
+                    .map_err(map_builder_err)?;
+                let one = f_ty.const_float(1.0);
+                let trunc_minus_1 = builder
+                    .build_float_sub(trunc, one, "ff_trunc_minus_1")
+                    .map_err(map_builder_err)?;
+                builder
+                    .build_select(trunc_gt_q, trunc_minus_1, trunc, "ffloordiv_result")
+                    .map_err(map_builder_err)?
+            }
             (BinOp::Mod, false) => {
                 // ADR-0041 §H1: Python floor-mod, not C remainder.
                 // emit `srem`, then `+ b` when rem != 0 && signs differ.

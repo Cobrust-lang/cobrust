@@ -2,7 +2,8 @@
 finding_id: F86
 title: '`//` integer floor-division TRUNCATES on negatives (should floor toward -∞) — silent miscompile + breaks the div/mod invariant (`%` already floors)
 date: 2026-06-14
-status: open
+status: resolved
+resolved_by: ADR-0099 (2026-06-14)
 severity: major
 discovered_by: verify-the-gap idiom probe (2026-06-14, post-F85)
 relates_to: ["claude.md:§2.2", "claude.md:§2.1"]
@@ -54,3 +55,24 @@ Tests: a div/mod corpus over the sign quadrants (`±a // ±b`, `±a % ±b`)
 asserting BOTH the CPython oracle value AND the invariant
 `(a // b) * b + (a % b) == a`. Verify `cargo test --workspace --locked`
 (F83 blast-radius — this is a codegen/MIR change).
+
+## Resolution (ADR-0099, 2026-06-14)
+
+`FloorDiv` was split out of the shared truncating
+`(BinOp::Div | BinOp::FloorDiv, false)` arm in
+`crates/cobrust-codegen/src/llvm_backend.rs`. Integer `//` now emits the
+FLOOR-adjusted quotient — `q = sdiv(a,b)`; `rem = srem(a,b)`; subtract 1 when
+`(rem != 0) && ((a ^ b) < 0)` (remainder non-zero AND operand signs differ),
+via a branchless `select` — the SYMMETRIC twin of the §H1 `%` floor-mod
+adjustment. Float `//` floors in parallel (`floor(a/b)`). `/` (Div) stays
+C-like TRUNCATING integer division (`-7 / 2 == -3`) — Cobrust's documented
+semantics, NOT Python true/float division; only `//` floors.
+
+Verified vs CPython 3.11 over the full sign quadrant; the div/mod invariant
+`(a // b) * b + (a % b) == a` holds for every quadrant; `%` unchanged;
+div-by-zero still traps (the MIR `Assert(rhs != 0)` guard is untouched).
+There is only ONE integer-division codegen path (LLVM backend) — the JIT
+lowers only Add/Sub/Mul and there is no arithmetic const-fold in HIR/MIR.
+
+Corpus: `crates/cobrust-cli/tests/floor_div_e2e.rs` (7 tests) +
+`codegen_diff_corpus.rs::llvm_operand_10b_binop_floordiv_i64`.
