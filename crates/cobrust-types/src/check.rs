@@ -2251,64 +2251,37 @@ impl Ctx {
                         unify(k, &it, &mut self.subst, e.span)?;
                         Ok((**v).clone())
                     }
-                    // ADR-0094 / F79 (§2.5-A) — `str[i]` scalar index → a
-                    // 1-codepoint `str`. We unify the index with `Int`, then
-                    // REJECT a NEGATIVE-INTEGER-LITERAL index (`s[-1]`,
-                    // `s[-2]`, …) at compile time — MIRRORING the slice path's
-                    // negative-literal reject above (`literal_int_value(..) < 0`
-                    // detects both a folded `-1` `IntLit` and an explicit
-                    // `Neg(IntLit)`). Without this gate `s[-1]` (the #1 Python
-                    // indexing idiom) fell through to the MIR scalar-get guard,
-                    // which clamps `i < 0` to a sentinel `""` (the F79 §2.2
-                    // silent-miscompile + §2.5 first-try trap this arm closes;
-                    // CPython `"hello"[-1] == "o"`). We REUSE
-                    // `UnsupportedSliceShape` (its `error_ux` message is
-                    // shape-agnostic, ADR-0094) to avoid a new error cascade.
+                    // ADR-0095 / F79 (§2.5) — `str[i]` scalar index → a
+                    // 1-codepoint `str`. We unify the index with `Int` and
+                    // ACCEPT EVERY integer index, INCLUDING a NEGATIVE LITERAL
+                    // (`s[-1]`, `s[-2]`, …) — Python-style negative indexing
+                    // (`"hello"[-1] == "o"`, the last codepoint, the #1 Python
+                    // indexing idiom, §2.5 maximize-training-data-overlap).
                     //
-                    // SCOPE (ADR-0094 §Phasing, Option A): only the negative
-                    // LITERAL rejects. A NON-LITERAL index (`s[i]` for a
-                    // variable `i`) STILL type-checks — Python-style negative
-                    // indexing (`s[-1] == last codepoint`) + an OOB-PANIC are
-                    // the larger Option-B follow-up (the runtime sentinel stays
-                    // on that deferred non-literal path).
+                    // ADR-0095 Option B supersedes the ADR-0094 Option-A interim
+                    // reject: now that `__cobrust_str_char_at` is codepoint-
+                    // correct AND normalizes a negative index (`len + i`) +
+                    // TRAPS on a TRUE out-of-range (both directions), the
+                    // compile-time reject is no longer the safe choice — the
+                    // runtime gives the CORRECT codepoint for `s[-1]` and an
+                    // unrecoverable TRAP (panic → exit 3) for a real OOB,
+                    // mirroring Rust's `s[i]` slice-OOB panic. No sentinel.
                     (Ty::Str, IndexKind::Expr(e)) => {
                         let it = self.synth_expr(e)?;
                         unify(&Ty::Int, &it, &mut self.subst, e.span)?;
-                        if literal_int_value(e).is_some_and(|v| v < 0) {
-                            return Err(TypeError::UnsupportedSliceShape {
-                                span,
-                                suggestion: Some(
-                                    "negative `str` indices are not yet supported; \
-                                     for the last codepoint write `s[len(s) - 1]` \
-                                     (a non-negative index)",
-                                ),
-                            });
-                        }
                         Ok(Ty::Str)
                     }
-                    // ADR-0093 Phase 2 / F79 (§2.5-A) — `bytes[i]` scalar index
-                    // → an `int` (the byte value, CPython `b"abc"[0] == 97`).
-                    // LOCKSTEP with the `str` arm above: REJECT a NEGATIVE
-                    // LITERAL index (`b[-1]`) at compile time (same
-                    // `literal_int_value(..) < 0` detection, same reused
-                    // `UnsupportedSliceShape` — no new cascade). Without this
-                    // gate `b[-1]` fell through to the MIR `bytes`-get guard,
-                    // which clamps `i < 0` to a sentinel `-1` (the F79 §2.2
-                    // silent-miscompile; CPython `b"abc"[-1] == 99`). A
-                    // non-literal `b[i]` STILL type-checks (Option-B deferral).
+                    // ADR-0095 / F79 (§2.5) — `bytes[i]` scalar index → an
+                    // `int` (the byte value, CPython `b"abc"[0] == 97`).
+                    // LOCKSTEP with the `str` arm above: ACCEPT every integer
+                    // index, INCLUDING a NEGATIVE LITERAL (`b[-1] == 99`, the
+                    // last byte). `__cobrust_bytes_get` normalizes `len + i`
+                    // for a negative index and TRAPS on a true OOB (both
+                    // directions) — no sentinel `-1` (the ADR-0094 silent §2.2
+                    // hole this Option-B maturation closes).
                     (Ty::Bytes, IndexKind::Expr(e)) => {
                         let it = self.synth_expr(e)?;
                         unify(&Ty::Int, &it, &mut self.subst, e.span)?;
-                        if literal_int_value(e).is_some_and(|v| v < 0) {
-                            return Err(TypeError::UnsupportedSliceShape {
-                                span,
-                                suggestion: Some(
-                                    "negative `bytes` indices are not yet supported; \
-                                     for the last byte write `b[len(b) - 1]` \
-                                     (a non-negative index)",
-                                ),
-                            });
-                        }
                         Ok(Ty::Int)
                     }
                     // ADR-0077 Q2 — `coil.Buffer` scalar index read. `a[i]`

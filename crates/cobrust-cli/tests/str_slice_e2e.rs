@@ -180,6 +180,38 @@ fn assert_build_rejects(name: &str, src: &str, needle: &str) {
     );
 }
 
+/// Assert a `.cb` program BUILDS fine (the trap is RUNTIME, not compile-
+/// time) but TRAPS when run: a non-zero exit (std.panic exit 3,
+/// INTERNAL_PANIC) + a stderr diagnostic CONTAINING `needle`, with NOTHING
+/// on stdout (the trap fires before any output). The ADR-0095 §2.2 guard:
+/// a true out-of-range scalar index is an unrecoverable TRAP, NOT a silent
+/// in-band sentinel.
+fn assert_build_run_traps(name: &str, src: &str, needle: &str) {
+    let path = write_cb(name, src);
+    let (build_code, exe, build_stderr) = run_build_exe(&path);
+    assert_eq!(
+        build_code, 0,
+        "{name}: build must SUCCEED (the OOB trap is RUNTIME, not \
+         compile-time); stderr=\n{build_stderr}\n--- source ---\n{src}"
+    );
+    let (run_code, stdout, run_stderr) = run_exe(&exe);
+    assert_ne!(
+        run_code, 0,
+        "{name}: an out-of-range scalar index MUST trap (non-zero exit), \
+         NOT return a silent sentinel; stdout={stdout:?} stderr={run_stderr:?}"
+    );
+    assert_eq!(
+        stdout, "",
+        "{name}: a trapping program must NOT emit any output before \
+         trapping; got stdout={stdout:?}"
+    );
+    assert!(
+        run_stderr.contains(needle),
+        "{name}: trap diagnostic must contain {needle:?} (§2.5-B names \
+         the bad index + length); got stderr={run_stderr:?}"
+    );
+}
+
 // =====================================================================
 // str_slice_e2e_01 — `s[lo:hi]` slice (THE F78 FIX). CPython 3 oracle:
 //   "hello"[1:4] == "ell"  (len 3)
@@ -319,60 +351,66 @@ fn main() -> i64:
 }
 
 // =====================================================================
-// str_slice_e2e_06 — F79 (§2.5-A / ADR-0094 §Phasing Option A). A
-// NEGATIVE-LITERAL `str` SCALAR index (`"hello"[-1]`, `s[-2]`) is now
-// REJECTED at COMPILE TIME (`TypeError::UnsupportedSliceShape`, the same
-// reused error the slice path uses) — NOT the silent sentinel `""` it was
-// before (the F79 §2.2 silent-miscompile; CPython `"hello"[-1] == "o"`,
-// the last codepoint, the #1 Python indexing idiom). The diagnostic prints
-// the fix (`s[len(s) - 1]`, a non-negative index). SCOPE: only the
-// negative LITERAL rejects — a non-literal `s[i]` (Option-B deferral) +
-// a non-negative literal `s[0]`/`s[1]` still type-check (asserted below).
+// str_slice_e2e_06 — F79 (§2.5 / ADR-0095 Option B, supersedes the
+// ADR-0094 Option-A interim reject). A NEGATIVE `str` SCALAR index
+// (`"hello"[-1]`, `s[-2]`) now RETURNS the codepoint from the END
+// (Python-style: CPython `"hello"[-1] == "o"`, the last codepoint, the #1
+// Python indexing idiom — §2.5 maximize-training-data-overlap). A TRUE
+// out-of-range index (BOTH directions) TRAPS at runtime (std.panic exit
+// 3, INTERNAL_PANIC) with a readable `str index out of range` diagnostic —
+// NEVER the silent `""` sentinel it was before (the F79 §2.2 silent-
+// miscompile + the ADR-0094-interim silent-positive-OOB hole this Option-B
+// maturation BOTH close). Negative indexing is CODEPOINT-addressed: a
+// multi-byte (non-ASCII) string exercises the codepoint-vs-byte
+// distinction.
 // =====================================================================
 
 #[test]
-fn str_slice_e2e_06_negative_literal_scalar_index_rejects() {
-    // `"hello"[-1]` — was silent "" (CPython "o"). Now rejects.
-    assert_build_rejects(
+fn str_slice_e2e_06_negative_scalar_index_from_end() {
+    // `"hello"[-1] == "o"` (last codepoint), `[-2] == "l"`, `[-5] == "h"`.
+    assert_build_run(
         "str_slice_e2e_06a",
         "\
 fn main() -> i64:
     let s: str = \"hello\"
-    let c: str = s[-1]
-    print(c)
+    print(s[-1])
+    print(s[-2])
+    print(s[-5])
     return 0
 ",
-        "s[len(s) - 1]",
+        "o\nl\nh\n",
     );
-    // `s[-2]` (a folded / Neg(IntLit) negative literal) — also rejects.
-    assert_build_rejects(
+    // CODEPOINT-addressed (NOT byte): "héllo" is 6 UTF-8 bytes (é=2) but 5
+    // CODEPOINTS. `s[-1] == "o"`, `s[-4] == "é"` (the 2nd codepoint) — a
+    // byte-indexed impl would cut the multi-byte "é" or land off-by-one.
+    assert_build_run(
         "str_slice_e2e_06b",
         "\
 fn main() -> i64:
-    let s: str = \"hello\"
-    let c: str = s[-2]
-    print(c)
+    let s: str = \"héllo\"
+    print(s[-1])
+    print(s[-4])
+    print(s[-5])
     return 0
 ",
-        "negative `str` indices",
+        "o\né\nh\n",
     );
-    // NO FALSE-POSITIVE: a NON-LITERAL index `s[i]` (i a variable) STILL
-    // type-checks + builds + runs (the deferred Option-B runtime path). The
-    // runtime value for i=0 is the first codepoint, "h" (the sentinel only
-    // bites a runtime-negative i, which this case is NOT).
+    // A NON-LITERAL index `s[i]` (i a variable) still type-checks + runs;
+    // a runtime-negative i now ALSO normalizes from the end (Option B).
     assert_build_run(
         "str_slice_e2e_06c",
         "\
 fn main() -> i64:
     let s: str = \"hello\"
     let i: i64 = 0
-    let c: str = s[i]
-    print(c)
+    print(s[i])
+    let j: i64 = -1
+    print(s[j])
     return 0
 ",
-        "h\n",
+        "h\no\n",
     );
-    // NO FALSE-POSITIVE: a non-negative LITERAL `s[0]`/`s[1]` still works.
+    // A non-negative LITERAL `s[0]`/`s[1]` still works.
     assert_build_run(
         "str_slice_e2e_06d",
         "\
@@ -383,6 +421,40 @@ fn main() -> i64:
     return 0
 ",
         "h\ne\n",
+    );
+}
+
+// str_slice_e2e_06_oob — ADR-0095 §2.2: a TRUE out-of-range scalar index
+// (positive OR too-negative) TRAPS at runtime (the program BUILDS fine;
+// the trap fires at RUN time, std.panic exit 3) with a readable
+// `str index out of range` diagnostic — NEVER the silent `""` sentinel.
+// =====================================================================
+
+#[test]
+fn str_slice_e2e_06_positive_oob_traps() {
+    assert_build_run_traps(
+        "str_slice_e2e_06_oob_pos",
+        "\
+fn main() -> i64:
+    let s: str = \"hello\"
+    print(s[100])
+    return 0
+",
+        "str index out of range",
+    );
+}
+
+#[test]
+fn str_slice_e2e_06_negative_oob_traps() {
+    assert_build_run_traps(
+        "str_slice_e2e_06_oob_neg",
+        "\
+fn main() -> i64:
+    let s: str = \"hello\"
+    print(s[-100])
+    return 0
+",
+        "str index out of range",
     );
 }
 

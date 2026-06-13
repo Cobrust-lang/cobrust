@@ -287,18 +287,30 @@ fn alloc_str_buffer_local(s: &str) -> *mut u8 {
 
 /// Read the `i`-th CODEPOINT of `s` as a fresh 1-codepoint owned `str`.
 /// The runtime target of the `.cb` `s[i]` scalar-index OPERATOR
-/// (ADR-0094 / F78). Python `"héllo"[1] == "é"` — a 1-codepoint `str`,
-/// NOT a byte (contrast `bytes`' `b[i] -> int`).
+/// (ADR-0094 / F78; negative-index + OOB-trap semantics ADR-0095 / F79).
+/// Python `"héllo"[1] == "é"` — a 1-codepoint `str`, NOT a byte (contrast
+/// `bytes`' `b[i] -> int`).
 ///
-/// Out-of-range (`i < 0` or `i >= codepoint-count`) or a NULL handle
-/// returns a FRESH EMPTY `str` (the bounds sentinel; a 1-codepoint hit
-/// is non-empty, so `""` is unambiguous — sibling of `__cobrust_str_at`
-/// / `__cobrust_bytes_get`'s OOB conventions). An explicit bounds-PANIC
-/// is an ADR-0094 §Phasing deferral.
+/// **Negative index** (ADR-0095 Option B): `i` is Python-normalized
+/// against the CODEPOINT count `n` — a negative `i` reads `n + i`, so
+/// `"hello"[-1] == "o"` (the last codepoint, codepoint-addressed, NOT
+/// byte). **Out-of-range** (`i >= n` after normalization, OR `i < -n`):
+/// this TRAPS (panic → the cobrust runtime maps it to exit 3,
+/// INTERNAL_PANIC) with a readable `str index out of range: i=.. len=..`
+/// diagnostic (§2.5-B), mirroring Rust's `s[i]` slice-OOB panic. There is
+/// NO silent `""` sentinel (the ADR-0094-interim §2.2 hole this Option-B
+/// maturation closes — a sentinel `""` is an in-band wrong value §2.2
+/// forbids). A NULL handle is treated as the empty string (`n == 0`), so
+/// ANY index traps.
 ///
 /// The input `s` is BORROWED (read-only); the caller's Str drop schedule
 /// still frees it. The returned pointer is a fresh buffer the caller
 /// owns + drops EXACTLY ONCE via `__cobrust_str_drop`.
+///
+/// # Panics
+///
+/// Panics (the unrecoverable index-out-of-range TRAP) when the normalized
+/// index falls outside `[0, codepoint-count)`.
 ///
 /// # Safety
 ///
@@ -307,18 +319,30 @@ fn alloc_str_buffer_local(s: &str) -> *mut u8 {
 /// be passed to `__cobrust_str_drop` exactly once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_str_char_at(s: *mut u8, i: i64) -> *mut u8 {
-    if s.is_null() || i < 0 {
-        return alloc_str_buffer_local("");
-    }
-    // SAFETY: caller-attestation per `# Safety`.
-    let src = unsafe { str_buf_as_str_local(s) };
-    match src.chars().nth(i as usize) {
-        Some(c) => {
-            let mut buf = [0u8; 4];
-            alloc_str_buffer_local(c.encode_utf8(&mut buf))
-        }
-        None => alloc_str_buffer_local(""),
-    }
+    // A NULL handle is the empty string — `len == 0`, so any index traps.
+    let src = if s.is_null() {
+        ""
+    } else {
+        // SAFETY: caller-attestation per `# Safety`.
+        unsafe { str_buf_as_str_local(s) }
+    };
+    // CODEPOINT count (NOT byte count) — `s[-1]` is the last CODEPOINT.
+    let len = src.chars().count() as i64;
+    // Python negative-index normalization: a negative `i` counts from the
+    // end (`len + i`); a non-negative `i` is itself.
+    let idx = if i < 0 { len + i } else { i };
+    // §2.2: TRAP on a true OOB — never an in-band sentinel `""`.
+    // §2.5-B: the diagnostic names the bad index AND the length.
+    assert!(
+        idx >= 0 && idx < len,
+        "str index out of range: i={i} len={len}"
+    );
+    let c = src
+        .chars()
+        .nth(idx as usize)
+        .expect("idx is in [0, codepoint-count) per the bounds assert above");
+    let mut buf = [0u8; 4];
+    alloc_str_buffer_local(c.encode_utf8(&mut buf))
 }
 
 /// Slice `s[lo:hi]` into a FRESH owned `str` carrying a COPY of the
@@ -1026,27 +1050,47 @@ mod tests {
     #[test]
     fn str_char_at_codepoint() {
         // CPython: "héllo"[1] == "é" (a 1-codepoint str, NOT a byte).
+        // The multi-byte "é" (2 UTF-8 bytes) exercises codepoint-vs-byte
+        // addressing: index 4 is the 5th CODEPOINT 'o' (byte offset 5).
         with_str_buf("héllo", |s| unsafe {
             assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, 0)), "h");
             assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, 1)), "é");
             assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, 4)), "o");
-            // OOB → empty (sentinel, no panic).
-            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, 5)), "");
-            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, -1)), "");
         });
     }
 
     #[test]
+    fn str_char_at_negative_index_codepoint() {
+        // ADR-0095 Option B: `s[-1]` is the LAST CODEPOINT (CPython
+        // "héllo"[-1] == "o"). Negative normalization uses the CODEPOINT
+        // count (5), NOT the byte count (6) — the multi-byte "é" makes the
+        // distinction observable: `s[-4]` is the 2nd codepoint "é", not a
+        // mid-codepoint byte.
+        with_str_buf("héllo", |s| unsafe {
+            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, -1)), "o");
+            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, -2)), "l");
+            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, -4)), "é");
+            assert_eq!(read_str_and_drop(__cobrust_str_char_at(s, -5)), "h");
+        });
+    }
+
+    // NOTE on OOB-trap coverage: `__cobrust_str_char_at` is `extern "C"`, so
+    // a panic crossing that ABI boundary is a NON-unwinding abort (SIGABRT),
+    // NOT a catchable unwind — `#[should_panic]` cannot observe it here (it
+    // aborts the whole test process). The OOB TRAP (§2.2, both index
+    // directions + NULL) is verified END-TO-END in
+    // `cobrust-cli/tests/str_slice_e2e.rs` (build a `.cb`, run the exe,
+    // assert the non-zero `std.panic` exit + the `str index out of range`
+    // diagnostic on stderr), which is the production trap path.
+
+    #[test]
     fn str_slice_null_and_empty() {
-        // NULL handle → fresh empty str (no panic).
+        // NULL handle → fresh empty str (no panic). Slice clamps; only the
+        // scalar `char_at` traps OOB (covered separately below).
         // SAFETY: NULL is an explicit accepted input per `# Safety`.
         unsafe {
             assert_eq!(
                 read_str_and_drop(__cobrust_str_slice(std::ptr::null_mut(), 0, 3)),
-                ""
-            );
-            assert_eq!(
-                read_str_and_drop(__cobrust_str_char_at(std::ptr::null_mut(), 0)),
                 ""
             );
         }

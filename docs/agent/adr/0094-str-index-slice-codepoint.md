@@ -226,15 +226,15 @@ Two externs registered beside `__cobrust_str_at`:
   `"hello"[-1] == "o"`). Applied to `str` + `bytes` in LOCKSTEP (ADR-0093
   §Phasing carries the twin note). `str_slice_e2e_06` /
   `bytes_ops_e2e_10` pin it.
-- **Residual (Option B — still deferred)**: a NON-LITERAL runtime-negative
-  index (`s[i]` where `i` carries a negative *value*) cannot be caught
-  statically and still hits the `__cobrust_str_char_at` `i < 0` sentinel
-  (`""`) — Python-style from-end indexing (`s[-1] == s[len-1]`) +
-  an explicit OOB-PANIC for the scalar `s[i]` (vs. today's empty-string
-  sentinel, matching `str_at` / `bytes_get`) are the larger Option-B
-  follow-up (a `len`-relative lowering + a bounds trap). A non-literal
-  index STILL type-checks (the deferred runtime path is intentionally
-  unbroken; `str_slice_e2e_06c` asserts it).
+- **Residual (Option B — LANDED in ADR-0095, supersedes this bullet)**:
+  full Python-style from-end indexing (`s[-1] == s[len-1]`, codepoint-
+  addressed) + a scalar OOB-TRAP (`s[100]` / `s[-100]` panic → exit 3,
+  NOT a silent `""`/`-1` sentinel) shipped in **ADR-0095**. The Option-A
+  negative-literal compile-time reject above is REMOVED there (`s[-1]` is
+  now a VALID expression that returns the last codepoint). The runtime
+  `__cobrust_str_char_at` / `__cobrust_bytes_get` now normalize a negative
+  index (`len + i`) and TRAP on a true OOB. See ADR-0095 for the A→B
+  transition rationale + the OOB-traps-not-silent §2.2 fix.
 - An ASCII O(1) fast-path / grapheme-cluster tier is deferred (no
   benchmark demands it yet).
 

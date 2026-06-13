@@ -191,7 +191,7 @@ byte-exact). Lowering map:
 // --- Phase 1 (foundation) ---
 pub unsafe extern "C" fn __cobrust_bytes_from_raw(ptr: *const u8, len: i64) -> *mut u8;
 pub unsafe extern "C" fn __cobrust_bytes_len(b: *mut u8) -> i64;
-pub unsafe extern "C" fn __cobrust_bytes_get(b: *mut u8, i: i64) -> i64; // i-th byte 0..255, -1 OOB
+pub unsafe extern "C" fn __cobrust_bytes_get(b: *mut u8, i: i64) -> i64; // i-th byte 0..255; neg i = from-end (len+i); TRUE OOB TRAPS (ADR-0095, no -1 sentinel)
 pub unsafe extern "C" fn __cobrust_bytes_drop(b: *mut u8);
 pub unsafe extern "C" fn __cobrust_bytes_clone(b: *mut u8) -> *mut u8;   // clone-on-read reuse
 pub unsafe extern "C" fn __cobrust_bytes_ptr(b: *mut u8) -> *const u8;   // O(1) &[u8] read (str_ptr mirror); ADR-0076c B-1b
@@ -224,11 +224,19 @@ B-1b)**: `event.data_bytes()` / `event.send_output_bytes()` reuse these
 symbols (`__cobrust_bytes_from_raw` to mint, `__cobrust_bytes_ptr` + `_len`
 for the O(1) `&[u8]` send-read) WITHOUT a cross-crate cabi feature —
 `__cobrust_bytes_ptr` was added for this (the `__cobrust_str_ptr` mirror).
-**Still deferred**: `bytes == bytes`, negative/open/step slices, a
-`Result`-returning decode. Tests:
-`crates/cobrust-cli/tests/bytes_ops_e2e.rs` (7) +
+**Scalar negative index + OOB trap (ADR-0095 / F79 Option B, shipped)**:
+`b[-1]` returns the last byte (Python from-end, `__cobrust_bytes_get`
+normalizes `len + i`); a TRUE OOB (both directions) TRAPS (`assert!` →
+exit 3, `bytes index out of range: i=.. len=..`), NEVER the old `-1`
+sentinel (both the negative AND the pre-existing positive-OOB §2.2 holes
+closed). The `check.rs` `(Ty::Bytes, IndexKind::Expr)` arm accepts every
+integer index (the ADR-0093/0094-interim negative-literal reject REMOVED).
+**Still deferred**: `bytes == bytes`, negative/open/step SLICES (scalar
+negatives now work), a `Result`-returning decode. Tests:
+`crates/cobrust-cli/tests/bytes_ops_e2e.rs` (`bytes_ops_e2e_10` family:
+from-end + positive/negative OOB traps) +
 `crates/cobrust-stdlib/src/bytes.rs` Phase-2 unit tests (incl
-`ptr_reads_raw_slice_byte_exact`).
+`get_negative_index_from_end`, `ptr_reads_raw_slice_byte_exact`).
 
 ### `std.string` — `str` index OPERATOR (ADR-0094 / F78), CODEPOINT-based
 
@@ -269,16 +277,31 @@ once):
 ```rust
 // crates/cobrust-stdlib/src/string.rs (ADR-0094 / F78) — CODEPOINT-based;
 // each MINTS a fresh `str` (dropped once), BORROWS the input `s`.
-pub unsafe extern "C" fn __cobrust_str_char_at(s: *mut u8, i: i64) -> *mut u8;   // s[i], i-th CODEPOINT, OOB -> ""
+pub unsafe extern "C" fn __cobrust_str_char_at(s: *mut u8, i: i64) -> *mut u8;   // s[i], i-th CODEPOINT; neg i = from-end (codepoint len+i); TRUE OOB TRAPS (ADR-0095, no "" sentinel)
 pub unsafe extern "C" fn __cobrust_str_slice(s: *mut u8, lo: i64, hi: i64) -> *mut u8; // s[lo:hi], codepoint range, Python clamp
 ```
 
 Verified vs CPython 3: `"hello"[1:4]=="ell"`, `"hello"[1]=="e"`,
 `len("hello"[1:4])==3`, `"héllo"[1:3]=="él"`; `s[1:]`/`s[:3]`/`s[0:4:2]`/
-`s[1:-1]` REJECT. **Deferred** (ADR-0094 §Phasing): open/stepped/negative
-slices, an OOB-PANIC scalar, an ASCII O(1) fast-path / grapheme tier.
-Tests: `crates/cobrust-cli/tests/str_slice_e2e.rs` (6) +
-`crates/cobrust-stdlib/src/string.rs` ADR-0094 unit tests (6).
+`s[1:-1]` SLICE shapes REJECT.
+
+**Scalar negative index + OOB trap (ADR-0095 / F79 Option B, shipped)**:
+`s[-1]` returns the last CODEPOINT (`"héllo"[-1]=="o"`, `"héllo"[-4]=="é"`
+— `__cobrust_str_char_at` normalizes `len + i` on the CODEPOINT count); a
+TRUE OOB (both directions) TRAPS (`assert!` → exit 3, `str index out of
+range: i=.. len=..`), NEVER the old `""` sentinel (both the negative AND
+the pre-existing positive-OOB §2.2 holes closed). The `check.rs`
+`(Ty::Str, IndexKind::Expr)` arm accepts every integer index (the
+ADR-0094-interim negative-literal reject REMOVED). The OOB trap can NOT be
+a `#[should_panic]` unit test (panic crosses `extern "C"` as a
+non-unwinding abort) — it is pinned end-to-end in `str_slice_e2e`.
+
+**Deferred** (ADR-0095 §Phasing): negative-bound/open/stepped SLICES
+(scalar negatives now work), an ASCII O(1) fast-path / grapheme tier.
+Tests: `crates/cobrust-cli/tests/str_slice_e2e.rs` (`str_slice_e2e_06`
+family: from-end + positive/negative OOB traps) +
+`crates/cobrust-stdlib/src/string.rs` unit tests (incl
+`str_char_at_negative_index_codepoint`).
 
 ### `std.io`
 

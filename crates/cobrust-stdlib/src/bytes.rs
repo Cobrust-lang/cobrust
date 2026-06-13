@@ -92,11 +92,21 @@ pub unsafe extern "C" fn __cobrust_bytes_len(b: *mut u8) -> i64 {
 /// (ADR-0093 §"§2.5 surface decision": `b"abc"[0] == 97`, an `int`, NOT
 /// a 1-byte `bytes` — matches CPython 3 `bytes.__getitem__`).
 ///
-/// An out-of-range index (`i < 0` or `i >= len`) or a NULL handle
-/// returns `-1` (the bounds sentinel; a real byte is always `0..255`,
-/// so `-1` is unambiguous). Sibling of `__cobrust_str_find`'s `-1`
-/// convention. An explicit bounds-PANIC is an ADR-0093 Phase 2
-/// deferral.
+/// **Negative index** (ADR-0095 Option B): `i` is Python-normalized
+/// against the byte length `n` — a negative `i` reads `n + i`, so
+/// `b"\x01\x02\xff"[-1] == 255` (the last byte). **Out-of-range**
+/// (`i >= n` after normalization, OR `i < -n`): this TRAPS (panic → the
+/// cobrust runtime maps it to exit 3, INTERNAL_PANIC) with a readable
+/// `bytes index out of range: i=.. len=..` diagnostic (§2.5-B),
+/// mirroring Rust's slice-OOB panic. There is NO silent `-1` sentinel
+/// (the ADR-0093-interim §2.2 hole this Option-B maturation closes — a
+/// sentinel `-1` is an in-band wrong value §2.2 forbids). A NULL handle
+/// is treated as empty (`n == 0`), so ANY index traps.
+///
+/// # Panics
+///
+/// Panics (the unrecoverable index-out-of-range TRAP) when the normalized
+/// index falls outside `[0, len)`.
 ///
 /// # Safety
 ///
@@ -104,15 +114,25 @@ pub unsafe extern "C" fn __cobrust_bytes_len(b: *mut u8) -> i64 {
 /// [`__cobrust_bytes_clone`]) and not yet dropped, OR NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_bytes_get(b: *mut u8, i: i64) -> i64 {
-    if b.is_null() || i < 0 {
-        return -1;
-    }
-    // SAFETY: caller-attestation per `# Safety`.
-    let buf = unsafe { &*b.cast::<BytesBuffer>() };
-    match buf.bytes.get(i as usize) {
-        Some(&byte) => i64::from(byte),
-        None => -1,
-    }
+    // A NULL handle is empty — `len == 0`, so any index traps.
+    let bytes: &[u8] = if b.is_null() {
+        &[]
+    } else {
+        // SAFETY: caller-attestation per `# Safety`.
+        let buf = unsafe { &*b.cast::<BytesBuffer>() };
+        &buf.bytes
+    };
+    let len = bytes.len() as i64;
+    // Python negative-index normalization: a negative `i` counts from the
+    // end (`len + i`); a non-negative `i` is itself.
+    let idx = if i < 0 { len + i } else { i };
+    // §2.2: TRAP on a true OOB — never an in-band sentinel `-1`.
+    // §2.5-B: the diagnostic names the bad index AND the length.
+    assert!(
+        idx >= 0 && idx < len,
+        "bytes index out of range: i={i} len={len}"
+    );
+    i64::from(bytes[idx as usize])
 }
 
 /// Read the buffer's raw byte pointer without consuming it. Returns
@@ -493,18 +513,28 @@ mod tests {
     }
 
     #[test]
-    fn get_out_of_range_sentinel() {
-        // SAFETY: contract. Out-of-range / negative → -1 (unambiguous;
-        // a real byte is 0..255).
+    fn get_negative_index_from_end() {
+        // ADR-0095 Option B: `b[-1]` is the LAST byte (CPython
+        // b"\x01\x02\xff"[-1] == 255), `b[-2]` the second-to-last, etc.
+        // SAFETY: contract.
         unsafe {
-            let raw = b"ab";
+            let raw: [u8; 3] = [0x01, 0x02, 0xff];
             let b = __cobrust_bytes_from_raw(raw.as_ptr(), raw.len() as i64);
-            assert_eq!(__cobrust_bytes_get(b, 2), -1);
-            assert_eq!(__cobrust_bytes_get(b, 100), -1);
-            assert_eq!(__cobrust_bytes_get(b, -1), -1);
+            assert_eq!(__cobrust_bytes_get(b, -1), 255);
+            assert_eq!(__cobrust_bytes_get(b, -2), 2);
+            assert_eq!(__cobrust_bytes_get(b, -3), 1);
             __cobrust_bytes_drop(b);
         }
     }
+
+    // NOTE on OOB-trap coverage: `__cobrust_bytes_get` is `extern "C"`, so a
+    // panic crossing that ABI boundary is a NON-unwinding abort (SIGABRT),
+    // NOT a catchable unwind — `#[should_panic]` cannot observe it here
+    // (it aborts the whole test process). The OOB TRAP (§2.2, both index
+    // directions + NULL) is verified END-TO-END in
+    // `cobrust-cli/tests/bytes_ops_e2e.rs` (build a `.cb`, run the exe,
+    // assert the non-zero `std.panic` exit + the `bytes index out of range`
+    // diagnostic on stderr), which is the production trap path.
 
     #[test]
     fn empty_from_null_or_zero_len() {
@@ -513,7 +543,6 @@ mod tests {
             let b = __cobrust_bytes_from_raw(std::ptr::null(), 0);
             assert!(!b.is_null());
             assert_eq!(__cobrust_bytes_len(b), 0);
-            assert_eq!(__cobrust_bytes_get(b, 0), -1);
             __cobrust_bytes_drop(b);
 
             let raw = b"x";
@@ -548,8 +577,9 @@ mod tests {
         unsafe {
             __cobrust_bytes_drop(std::ptr::null_mut());
             assert_eq!(__cobrust_bytes_len(std::ptr::null_mut()), 0);
-            assert_eq!(__cobrust_bytes_get(std::ptr::null_mut(), 0), -1);
             assert!(__cobrust_bytes_clone(std::ptr::null_mut()).is_null());
+            // `__cobrust_bytes_get` on NULL traps (len 0, any index OOB) —
+            // covered by `get_null_traps` below, not asserted here.
         }
     }
 

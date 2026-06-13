@@ -35,7 +35,7 @@ fn main() -> i64:
 |---|---|---|---|
 | `b"..."` | `bytes` | a byte-string literal (any byte, incl. `\xNN` escapes) | 1 |
 | `len(b)` | `int` | the number of bytes | 1 |
-| `b[i]` | `int` | the `i`-th byte, `0..255` (matches Python's `b"abc"[0] == 97`) | 1 |
+| `b[i]` | `int` | the `i`-th byte, `0..255` (matches Python's `b"abc"[0] == 97`); a negative `i` counts from the end (`b"abc"[-1] == 99`); a true out-of-range index traps | 1 |
 | `b[lo:hi]` | `bytes` | a slice (a fresh `bytes`); clamps like Python on out-of-range | 2 |
 | `b1 + b2` | `bytes` | concatenation (a fresh `bytes`) | 2 |
 | `s.encode()` | `bytes` | the UTF-8 bytes of a `str` | 2 |
@@ -79,6 +79,29 @@ fn main() -> i64:
     print(len(b[3:1]))    # 0   (empty)
     return 0
 ```
+
+## Scalar index `b[i]` — from-end negatives, OOB traps
+
+A scalar index `b[i]` reads the `i`-th byte as an `int` (`0..255`). A
+**negative** index counts from the end, exactly like Python — `b[-1]` is
+the last byte (ADR-0095, F79 Option B). A **true out-of-range** index, in
+either direction (`b[100]` or `b[-100]`), **traps** at runtime (a clean
+`bytes index out of range: i=.. len=..` message, exit 3), never the silent
+`-1` sentinel it used to return.
+
+```cobrust
+fn main() -> i64:
+    let b: bytes = b"\x01\x02\xff"
+    print(b[-1])     # 255   (last byte)
+    print(b[-3])     # 1     (first byte, from the end)
+    print(b[0])      # 1
+    # print(b[100])  # would TRAP: bytes index out of range: i=100 len=3
+    return 0
+```
+
+> Before ADR-0095, `b[-1]` silently returned `-1` (the F79 §2.2 bug); an
+> interim fix rejected `b[-1]` at compile time. Now it just works, and a
+> real out-of-range read traps loudly instead of returning a wrong value.
 
 ## Decoding invalid bytes — the no-silent-coercion rule
 
@@ -137,14 +160,10 @@ answer:
   both non-negative bounds present) is supported. The message tells you to
   write both bounds, e.g. `b[1:len(b)]`. (Earlier these silently returned
   the whole buffer; now the compiler stops you with the fix.)
-- **A negative-literal scalar index** (`b[-1]`, `b[-2]`) is a compile error
-  too — the message tells you that for the last byte you write
-  `b[len(b) - 1]` (a non-negative index). (Earlier `b[-1]` silently
-  returned the sentinel `-1`; CPython `b"abc"[-1] == 99`. This is the F79
-  fix, the lockstep twin of the `str` `s[-1]` reject.) Only the **literal**
-  negative index is caught — a non-literal `b[i]` with a variable `i` still
-  type-checks; full from-end indexing + an out-of-bounds panic are named
-  follow-up work in ADR-0093.
+- **Negative-bound / open-ended / stepped SLICES** (`b[-2:]`, `b[1:]`,
+  `b[0:4:2]`) stay a compile error — only the simple `b[lo:hi]` scalar-bound
+  slice form is supported. (Negative SCALAR indexing `b[-1]` *is* now
+  supported — see the next item; only the slice forms remain deferred.)
 - A recoverable `Result`-returning `decode()` (today invalid UTF-8 stops
   the program; see above).
 

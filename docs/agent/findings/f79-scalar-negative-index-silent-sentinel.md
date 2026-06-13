@@ -3,10 +3,10 @@ finding_id: F79
 title: scalar negative / OOB index on str + bytes silently returns a sentinel instead of the value or a reject (§2.2 gap)
 date: 2026-06-06
 status: resolved
-resolved_date: 2026-06-06
-resolution: "Option A landed — a NEGATIVE-LITERAL scalar index on str + bytes now REJECTS at cobrust check (TypeError::UnsupportedSliceShape, reused — no new cascade), mirroring the slice path's negative-bound reject. Option B (non-literal-negative + from-end indexing + OOB-panic) named-deferred in ADR-0093/0094 §Phasing."
+resolved_date: 2026-06-13
+resolution: "Option B landed (ADR-0095, the A→B maturation, supersedes the Option-A interim reject) — scalar s[-1]/b[-1] now returns the last element (Python from-end, codepoint-addressed for str) and a TRUE out-of-range scalar index (BOTH directions, INCLUDING the pre-existing positive-OOB hole) TRAPS (panic -> exit 3), never a silent \"\"/-1 sentinel. The Option-A negative-LITERAL compile reject is REMOVED. Both §2.2 holes (negative + positive OOB) closed for the scalar path."
 severity: major
-relates_to: [adr:0093, adr:0094, "claude.md:§2.2", "claude.md:§2.5", "finding:f78"]
+relates_to: [adr:0093, adr:0094, adr:0095, "claude.md:§2.2", "claude.md:§2.5", "finding:f78"]
 discovered_by: the F78 str-index fix (ADR-0094) adversarial audit
 ---
 
@@ -106,3 +106,40 @@ IndexError-style) are named in ADR-0093 §Phasing + ADR-0094 §Phasing. The
 non-literal path is intentionally LEFT type-checking (asserted by
 `str_slice_e2e_06c` / `bytes_ops_e2e_10c`) so this increment does not
 break `s[i]` for a variable `i`.
+
+## Resolution (Option B — 2026-06-13, ADR-0095, the A→B maturation)
+
+Landed **Option B**, the planned full-Python maturation, now that the
+runtime is codepoint-correct (ADR-0094). This SUPERSEDES the Option-A
+interim reject above:
+
+- The runtime `__cobrust_str_char_at` / `__cobrust_bytes_get` now NORMALIZE
+  a negative index Python-style (`idx = if i < 0 { len + i } else { i }`)
+  and `assert!`-TRAP on a true OOB (`idx < 0 || idx >= len`) with a
+  readable `<kind> index out of range: i=.. len=..` diagnostic. `str` len
+  is the CODEPOINT count (`chars().count()`), so `s[-1]` is the last
+  CODEPOINT, NOT byte. Both sentinels (the `i < 0` early-return AND the
+  positive-OOB `None => ""/-1` arm) are DELETED.
+- The two `check.rs` scalar arms now ACCEPT every integer index — the
+  Option-A negative-literal reject is REMOVED. `s[-1]` is a VALID
+  expression.
+
+So, vs. the Option-A row above:
+
+```
+# "hello"[-1]  -> "o"   (last codepoint; was Option-A REJECT, before that silent "")
+# "héllo"[-4]  -> "é"   (codepoint-addressed; a byte-impl would mis-cut)
+# b"abc"[-1]   -> 99    (last byte; was Option-A REJECT, before that silent -1)
+# "hello"[100] -> TRAP  (exit 3; was silent "" — the pre-existing positive-OOB hole, now CLOSED)
+# "hello"[-100]-> TRAP  (exit 3)
+# s[i] (i = -1 at runtime) -> "o"  (from-end normalization on the non-literal path too)
+```
+
+Both §2.2 holes (the negative-index silent value AND the positive-OOB
+silent value) are now closed for the scalar path. **Differential e2e**
+(CPython-3 oracle): `str_slice_e2e_06_negative_scalar_index_from_end` +
+`…_positive_oob_traps` + `…_negative_oob_traps`, and the lockstep `bytes`
+twins `bytes_ops_e2e_10_negative_scalar_index_from_end` +
+`…_positive_oob_traps` + `…_negative_oob_traps`. The OOB-TRAP cannot be a
+`#[should_panic]` unit test (the panic crosses `extern "C"` as a
+non-unwinding abort), so it is pinned end-to-end in the cli suites.

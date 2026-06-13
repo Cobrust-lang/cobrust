@@ -183,6 +183,37 @@ fn assert_build_rejects(name: &str, src: &str, needle: &str) {
     );
 }
 
+/// Assert a `.cb` program BUILDS fine (the trap is RUNTIME, not compile-
+/// time) but TRAPS when run: a non-zero exit (std.panic exit 3,
+/// INTERNAL_PANIC) + a stderr diagnostic CONTAINING `needle`, with NOTHING
+/// on stdout. The ADR-0095 §2.2 guard: a true out-of-range scalar index is
+/// an unrecoverable TRAP, NOT a silent in-band sentinel.
+fn assert_build_run_traps(name: &str, src: &str, needle: &str) {
+    let path = write_cb(name, src);
+    let (build_code, exe, build_stderr) = run_build_exe(&path);
+    assert_eq!(
+        build_code, 0,
+        "{name}: build must SUCCEED (the OOB trap is RUNTIME, not \
+         compile-time); stderr=\n{build_stderr}\n--- source ---\n{src}"
+    );
+    let (run_code, stdout, run_stderr) = run_exe(&exe);
+    assert_ne!(
+        run_code, 0,
+        "{name}: an out-of-range scalar index MUST trap (non-zero exit), \
+         NOT return a silent sentinel; stdout={stdout:?} stderr={run_stderr:?}"
+    );
+    assert_eq!(
+        stdout, "",
+        "{name}: a trapping program must NOT emit any output before \
+         trapping; got stdout={stdout:?}"
+    );
+    assert!(
+        run_stderr.contains(needle),
+        "{name}: trap diagnostic must contain {needle:?} (§2.5-B names \
+         the bad index + length); got stderr={run_stderr:?}"
+    );
+}
+
 // =====================================================================
 // bytes_ops_e2e_01 — `b[lo:hi]` slice. CPython 3 oracle:
 //   b"hello"[1:4] == b"ell"  (len 3; [0] == 101 'e')
@@ -498,61 +529,53 @@ fn main() -> i64:
 }
 
 // =====================================================================
-// bytes_ops_e2e_10 — F79 (§2.5-A / ADR-0093 §Phasing Option A), the
-// LOCKSTEP twin of `str_slice_e2e_06`. A NEGATIVE-LITERAL `bytes` SCALAR
-// index (`b"abc"[-1]`) is now REJECTED at COMPILE TIME (the same reused
-// `TypeError::UnsupportedSliceShape` the slice path uses) — NOT the silent
-// sentinel `-1` it was before (the F79 §2.2 silent-miscompile; CPython
-// `b"abc"[-1] == 99`, the last byte). The diagnostic prints the fix
-// (`b[len(b) - 1]`). SCOPE: only the negative LITERAL rejects — a
-// non-literal `b[i]` (Option-B deferral) + a non-negative literal
-// `b[0]`/`b[1]` still type-check (asserted below).
+// bytes_ops_e2e_10 — F79 (§2.5 / ADR-0095 Option B, supersedes the
+// ADR-0093/0094-interim Option-A reject), the LOCKSTEP twin of
+// `str_slice_e2e_06`. A NEGATIVE `bytes` SCALAR index (`b"abc"[-1]`) now
+// RETURNS the byte from the END (Python-style: CPython `b"abc"[-1] == 99`,
+// the last byte — §2.5 maximize-training-data-overlap). A TRUE
+// out-of-range index (BOTH directions) TRAPS at runtime (std.panic exit 3)
+// with a readable `bytes index out of range` diagnostic — NEVER the silent
+// sentinel `-1` it was before (the F79 §2.2 silent-miscompile + the
+// silent-positive-OOB hole this Option-B maturation BOTH close).
 // =====================================================================
 
 #[test]
-fn bytes_ops_e2e_10_negative_literal_scalar_index_rejects() {
-    // `b"abc"[-1]` — was silent -1 (CPython 99). Now rejects.
-    assert_build_rejects(
+fn bytes_ops_e2e_10_negative_scalar_index_from_end() {
+    // `b"\x01\x02\xff"[-1] == 255` (last byte), `[-2] == 2`, `[-3] == 1`.
+    // A non-ASCII byte (0xff) confirms the value is the raw byte, not a
+    // codepoint.
+    assert_build_run(
         "bytes_ops_e2e_10a",
         "\
 fn main() -> i64:
-    let b: bytes = b\"abc\"
-    let x: i64 = b[-1]
-    print(x)
+    let b: bytes = b\"\\x01\\x02\\xff\"
+    print(b[-1])
+    print(b[-2])
+    print(b[-3])
     return 0
 ",
-        "b[len(b) - 1]",
+        "255\n2\n1\n",
     );
-    // `b[-2]` — also rejects (the negative-literal detection is general).
-    assert_build_rejects(
-        "bytes_ops_e2e_10b",
-        "\
-fn main() -> i64:
-    let b: bytes = b\"abc\"
-    let x: i64 = b[-2]
-    print(x)
-    return 0
-",
-        "negative `bytes` indices",
-    );
-    // NO FALSE-POSITIVE: a NON-LITERAL index `b[i]` (i a variable) STILL
-    // type-checks + builds + runs (the deferred Option-B runtime path).
-    // i=0 → the first byte, 97 ('a').
+    // A NON-LITERAL index `b[i]` (i a variable) still type-checks + runs; a
+    // runtime-negative i now ALSO normalizes from the end (Option B).
+    // CPython b"abc"[0]==97 ('a'), b"abc"[-1]==99 ('c').
     assert_build_run(
-        "bytes_ops_e2e_10c",
+        "bytes_ops_e2e_10b",
         "\
 fn main() -> i64:
     let b: bytes = b\"abc\"
     let i: i64 = 0
     print(b[i])
+    let j: i64 = -1
+    print(b[j])
     return 0
 ",
-        "97\n",
+        "97\n99\n",
     );
-    // NO FALSE-POSITIVE: a non-negative LITERAL `b[0]`/`b[1]` still works.
-    // CPython b"abc"[0]==97 ('a'), b"abc"[1]==98 ('b').
+    // A non-negative LITERAL `b[0]`/`b[1]` still works.
     assert_build_run(
-        "bytes_ops_e2e_10d",
+        "bytes_ops_e2e_10c",
         "\
 fn main() -> i64:
     let b: bytes = b\"abc\"
@@ -561,5 +584,40 @@ fn main() -> i64:
     return 0
 ",
         "97\n98\n",
+    );
+}
+
+// =====================================================================
+// bytes_ops_e2e_10_oob — ADR-0095 §2.2: a TRUE out-of-range `bytes` scalar
+// index (positive OR too-negative) TRAPS at runtime (the program BUILDS
+// fine; the trap fires at RUN time, std.panic exit 3) with a readable
+// `bytes index out of range` diagnostic — NEVER the silent `-1` sentinel.
+// =====================================================================
+
+#[test]
+fn bytes_ops_e2e_10_positive_oob_traps() {
+    assert_build_run_traps(
+        "bytes_ops_e2e_10_oob_pos",
+        "\
+fn main() -> i64:
+    let b: bytes = b\"abc\"
+    print(b[100])
+    return 0
+",
+        "bytes index out of range",
+    );
+}
+
+#[test]
+fn bytes_ops_e2e_10_negative_oob_traps() {
+    assert_build_run_traps(
+        "bytes_ops_e2e_10_oob_neg",
+        "\
+fn main() -> i64:
+    let b: bytes = b\"abc\"
+    print(b[-100])
+    return 0
+",
+        "bytes index out of range",
     );
 }
