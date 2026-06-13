@@ -193,3 +193,68 @@ variant.
   method-form), codegen `llvm_wave3_fmt_iter_math_str` (14, `abs(-7.0)`).
 - Differential oracle: python3.11 `abs(-5)`/`abs(5)`/`abs(-5.0)`/`abs(0)`
   = `5`/`5`/`5.0`/`0`; `sum(range(5))`/`sum(range(2,5))` = `10`/`9`.
+
+## §6 — F87 extension: type the `_bin` temp with the scalar result type (2026-06-14)
+
+### Context
+
+F87 surfaced the SAME class of bug for an INLINE binary-op print arg:
+`print(7.0 / 2.0)` CRASHED `cobrust build` (exit 3, LLVM module-verify
+"Call parameter type does not match function signature"), passing an f64
+binop value to `__cobrust_println_int(i64)`. A DECLARED-f64 var
+(`let x: f64 = 7.0 / 2.0; print(x)`) dispatched correctly.
+
+Root cause, identical to the §5 `_un` / `abs` lesson: `lower_bin` declared
+the `_bin` temp local with `Ty::None`. The print-dispatch monomorphizer
+(`rewrite_print`) maps an unresolved `Ty::None` arg local → `Ty::Int` →
+`__cobrust_println_int`, so the float binop temp misroutes. The declared-var
+case worked only because the var local carries `Ty::Float`.
+
+### Decision
+
+Type the `_bin` temp with the RESOLVED scalar result type instead of
+`Ty::None`, mirroring the §5 `_un` fix exactly (dispatch on the resolved
+DEST type, never a fragile `Ty::None` temp — the snapshot lesson). The
+result type is computed by a new helper `synth_bin_result_ty(op, lt, rt)`
+EXTRACTED from `synth_expr_ty`'s `Bin` arm, so `synth_expr_ty` and
+`lower_bin` share ONE source of truth — an inline binop arg and a
+declared-typed var resolve identically:
+
+- scalar Int/Float arithmetic (`+ - * / // % **`) → Float if either operand
+  is Float else Int;
+- scalar comparisons (`== != < <= > >=`) → Bool;
+- Int-only bit/shift (`& | ^ << >>`) → Int;
+- everything else (non-scalar Buffer/Str/Dict operand pairs) → `Ty::None`.
+
+The non-scalar cases already return earlier in `lower_bin` (Buffer/Str/Dict
+retargets); `synth_bin_result_ty` yielding `Ty::None` for any leftover
+non-scalar pair preserves existing behaviour. The change is conservative:
+only scalar pairs the type-checker already accepted gain a resolved temp
+type.
+
+### Consequences
+
+- **Positive**: `print(7.0 / 2.0)` → `__cobrust_println_float` → `3.5`; the
+  whole `+ - * / //` family + computed-var operands + nested binops dispatch
+  correctly. The §5.1 compiler-crash-on-valid-input is closed.
+- **Negative**: the `_bin` temp type changed module-wide from `Ty::None` to
+  the result type; validated non-regressive across the LC-100 stress corpus
+  + math/floor-div/codegen/mir e2es (all scalar Copy types, no drop-schedule
+  impact — same blast-radius profile as the §5 `_un` change).
+- **Neutral**: integer-valued floats still print WITHOUT `.0`
+  (`9.0` → `9`) per the `__cobrust_println_float` Rust-`{}` repr (the
+  `math_e2e` convention), NOT CPython's `9.0`. A pre-existing float-format
+  difference, unrelated to this fix.
+
+### Evidence
+
+- Finding: `docs/agent/findings/f87-print-inline-float-binop-crashes-build.md`.
+- Corpus: `crates/cobrust-cli/tests/print_float_binop_e2e.rs` (7 tests,
+  REAL compile → link → spawn): `print(7.0/2.0)`→`3.5`, `print(7.0+2.0)`→`9`,
+  `7.0-2.0`→`5`, `2.0*3.0`→`6`, `7.0//2.0`→`3`, `1.0/4.0`→`0.25`,
+  computed `a+b`→`4`, nested `(1.0+2.0)*2.0`→`6`, declared-var unchanged
+  `3.5`; regression int binop `3+4`→`7`/`7//2`→`3`/`2*5`→`10`/`10-3`→`7`,
+  int-var `5`, bool `2<3`→`True`, str `"hi"`→`hi`.
+- Differential oracle: python3.11 `7.0/2.0`=`3.5`, `7.0+2.0`=`9.0`,
+  `1.0/4.0`=`0.25`, `(1.0+2.0)*2.0`=`6.0` (cobrust drops the `.0` on
+  integer-valued results per its float repr).

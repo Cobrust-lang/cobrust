@@ -3476,7 +3476,22 @@ impl<'a> BodyBuilder<'a> {
             });
             self.cur_block = Some(next.0 as usize);
         }
-        let temp = self.declare_local("_bin".to_string(), Ty::None, span, false);
+        // ADR-0089 §6 (F87) — type the `_bin` temp with the RESOLVED scalar
+        // result type instead of the bug-prone `Ty::None`, so a downstream
+        // per-arg-shape dispatch that reads `local_ty[_bin]` (the print
+        // rewrite's `__cobrust_println_int`-vs-`_float` choice) sees `Float`
+        // for `print(7.0 / 2.0)`. Without this the `_bin` temp stays
+        // `Ty::None`, which the print rewrite maps to `Ty::Int` →
+        // `__cobrust_println_int(i64)` is handed the f64 binop value →
+        // LLVM module-verify fail ("Call parameter type does not match
+        // function signature"). Mirrors the `lower_un` `_un` fix exactly,
+        // and shares `synth_bin_result_ty` with `synth_expr_ty`'s `Bin` arm
+        // (one source of truth — an inline binop arg and a declared-typed
+        // var resolve identically). Non-scalar (Buffer/Str/Dict) shapes
+        // already returned earlier; `synth_bin_result_ty` yields `Ty::None`
+        // for any leftover non-scalar pair, preserving existing behaviour.
+        let temp_ty = synth_bin_result_ty(op, &lhs_ty, &synth_expr_ty(self, rhs));
+        let temp = self.declare_local("_bin".to_string(), temp_ty, span, false);
         self.emit_assign(
             Place::local(temp),
             Rvalue::BinaryOp(mir_op, lhs_op, rhs_op),
@@ -4297,45 +4312,59 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
         ExprKind::Bin { op, lhs, rhs } => {
             let lt = synth_expr_ty(b, lhs);
             let rt = synth_expr_ty(b, rhs);
-            let both_scalar =
-                matches!(lt, Ty::Int | Ty::Float) && matches!(rt, Ty::Int | Ty::Float);
-            match op {
-                HirBinOp::Eq
-                | HirBinOp::NotEq
-                | HirBinOp::Lt
-                | HirBinOp::LtEq
-                | HirBinOp::Gt
-                | HirBinOp::GtEq
-                    if both_scalar =>
-                {
-                    Ty::Bool
-                }
-                HirBinOp::Add
-                | HirBinOp::Sub
-                | HirBinOp::Mul
-                | HirBinOp::Div
-                | HirBinOp::FloorDiv
-                | HirBinOp::Mod
-                | HirBinOp::Pow
-                    if both_scalar =>
-                {
-                    if matches!(lt, Ty::Float) || matches!(rt, Ty::Float) {
-                        Ty::Float
-                    } else {
-                        Ty::Int
-                    }
-                }
-                HirBinOp::Shl
-                | HirBinOp::Shr
-                | HirBinOp::BitAnd
-                | HirBinOp::BitOr
-                | HirBinOp::BitXor
-                    if matches!(lt, Ty::Int) && matches!(rt, Ty::Int) =>
-                {
-                    Ty::Int
-                }
-                _ => Ty::None,
+            synth_bin_result_ty(*op, &lt, &rt)
+        }
+        _ => Ty::None,
+    }
+}
+
+/// ADR-0089 §6 (F87 extension) — scalar binary-op result type from the
+/// two operand types. The SINGLE source of truth shared by
+/// `synth_expr_ty`'s `Bin` arm AND `lower_bin`'s `_bin` temp declaration,
+/// so an INLINE binop arg (`print(7.0 / 2.0)`) and a declared-typed var
+/// (`let x: f64 = 7.0 / 2.0; print(x)`) resolve identically — the F87
+/// print-dispatch miscompile fix (a Float `_bin` temp must NOT default to
+/// `Ty::None`, which the print rewrite maps to `Ty::Int` →
+/// `__cobrust_println_int(i64)` fed an f64 → LLVM verify fail).
+///
+/// CONSERVATIVE + Buffer-SAFE: only resolves when BOTH operands already
+/// resolve to a scalar `Int`/`Float` (a `coil.Buffer` operand is a
+/// `Ty::Adt`, so Buffer arithmetic/comparison stays `Ty::None` and is
+/// resolved by the existing Buffer-binop path). Arithmetic → Float if
+/// either operand is Float else Int; scalar comparisons → Bool; bit/shift
+/// → Int; everything else → `Ty::None` (unchanged behaviour).
+fn synth_bin_result_ty(op: HirBinOp, lt: &Ty, rt: &Ty) -> Ty {
+    let both_scalar = matches!(lt, Ty::Int | Ty::Float) && matches!(rt, Ty::Int | Ty::Float);
+    match op {
+        HirBinOp::Eq
+        | HirBinOp::NotEq
+        | HirBinOp::Lt
+        | HirBinOp::LtEq
+        | HirBinOp::Gt
+        | HirBinOp::GtEq
+            if both_scalar =>
+        {
+            Ty::Bool
+        }
+        HirBinOp::Add
+        | HirBinOp::Sub
+        | HirBinOp::Mul
+        | HirBinOp::Div
+        | HirBinOp::FloorDiv
+        | HirBinOp::Mod
+        | HirBinOp::Pow
+            if both_scalar =>
+        {
+            if matches!(lt, Ty::Float) || matches!(rt, Ty::Float) {
+                Ty::Float
+            } else {
+                Ty::Int
             }
+        }
+        HirBinOp::Shl | HirBinOp::Shr | HirBinOp::BitAnd | HirBinOp::BitOr | HirBinOp::BitXor
+            if matches!(lt, Ty::Int) && matches!(rt, Ty::Int) =>
+        {
+            Ty::Int
         }
         _ => Ty::None,
     }

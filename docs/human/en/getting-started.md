@@ -126,6 +126,9 @@ Key rules:
   `%` matches `//` so `(a // b) * b + (a % b) == a` for every sign (ADR-0099).
 - `inf / 0.0` is not a trap — IEEE 754 defines float division by zero.
 - `nan != nan` is `true` per IEEE 754.
+- `print(<float expr>)` works inline: `print(7.0 / 2.0)` prints `3.5`. An
+  integer-valued float prints WITHOUT a trailing `.0` (`print(7.0 + 2.0)` →
+  `9`, not `9.0`) (ADR-0089).
 - Math functions: `sqrt`, `floor`, `ceil`, `round`, `abs`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`.
 - f-string format spec: `{x:.2f}` (fixed), `{x:e}` (scientific), `{x:g}` (general).
 
