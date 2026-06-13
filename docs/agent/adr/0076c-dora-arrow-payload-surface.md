@@ -787,8 +787,9 @@ drop-glue-ONLY link path the pre-fix tests incidentally masked.
 ### 9.7 Residual (still deferred, named divergences)
 
 - `UInt8` (camera images) + `Utf8` typed arrays + n-D shape metadata — unchanged
-  from §5: `data_str` carries Utf8; `bytes` (a future B-1b accessor) carries raw
-  blobs; the coil `Dtype::UInt8` widening (the unity path) is the eventual fix.
+  from §5: `data_str` carries Utf8; `bytes` (the B-1b `data_bytes()` accessor,
+  LANDED — `Binary`/`UInt8` decode to a raw `bytes`) carries raw blobs; the coil
+  `Dtype::UInt8` widening (the unity path) is the eventual numeric-Buffer fix.
   `decode_arrow_buffer` logs a one-line divergence for any non-numeric /
   unsupported dtype (never a silent drop) and `data_buffer()` returns an empty
   Buffer in that case.

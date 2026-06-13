@@ -302,3 +302,37 @@ fn main() -> i64:
     // then the synthetic send_output_bytes capture marker.
     assert_build_run("bytes_e2e_06", src, "00ff01\noutput[reply]=bytes[len=3]\n");
 }
+
+// bytes_e2e_07 — B-1b REPAIR regression (the §2.2 drop-balance + §2.5
+// use-after-move fix). The B-1b adversarial audit proved a LEAK: a `bytes`
+// arg to `send_output_bytes` was operand-Move (NOT upgraded to Copy in the
+// eco-value borrow path — `Ty::Bytes` was missing from
+// `upgrade_move_to_copy_for_eco_value`), so the minted bytes got NO
+// scope-exit `__cobrust_bytes_drop` (leak per call) AND a use-after-send
+// (`send_output_bytes(id, b); b.hex()`) wrongly failed `cobrust build` with
+// `use of moved value`. The one-line fix (add `Ty::Bytes` to the borrow
+// predicate, lower.rs) makes the shim BORROW `b`, so it stays live: this
+// node USES `b` AFTER the send (prints its `.hex()`), which MUST build+run.
+// Drop-balance verified out-of-band by objdump on the terminal-send handler:
+// exactly 1 `send_output_bytes` : 1 `__cobrust_bytes_drop` (was 1:0 = leak).
+#[test]
+fn bytes_e2e_07_use_after_send_output_bytes_no_move_no_leak() {
+    let src = "\
+import dora
+
+@dora.node(inputs=[\"camera\"], outputs=[\"reply\"])
+fn handler(event: dora.Event) -> i64:
+    let b: bytes = event.data_bytes()
+    let _ = event.send_output_bytes(\"reply\", b)
+    print(b.hex())
+    return 0
+
+fn main() -> i64:
+    let node = dora.Node(\"bytes_node\")
+    let _ = node.run()
+    return 0
+";
+    // The send marker prints during send_output_bytes, THEN `b.hex()` reads
+    // the still-live (borrowed, not moved) `b` — proving no move + no leak.
+    assert_build_run("bytes_e2e_07", src, "output[reply]=bytes[len=3]\n00ff01\n");
+}

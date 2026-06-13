@@ -3881,7 +3881,7 @@ fn upgrade_move_to_copy_for_eco_value(b: &BodyBuilder<'_>, op: Operand) -> Opera
     match op {
         Operand::Move(ref p) => {
             if let Some(decl) = b.locals.get(p.local.0 as usize) {
-                let borrow = matches!(decl.ty, Ty::Str)
+                let borrow = matches!(decl.ty, Ty::Str | Ty::Bytes)
                     || matches!(&decl.ty, Ty::Adt(id, _)
                         if cobrust_types::is_ecosystem_handle(*id));
                 if borrow {
