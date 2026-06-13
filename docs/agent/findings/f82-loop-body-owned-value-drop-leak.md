@@ -71,3 +71,48 @@ F81 correctly fixed the two list INDEX/SLICE correctness bugs (xs[-1]
 silent-0; xs[lo:hi] UB-stub). It does NOT fix this loop-drop leak — it
 inherits it, and ADR-0096 + the renamed e2e now say so honestly (no
 drop-balance claim). F82 is the dedicated systemic fix.
+
+## Attempt 1 — BLOCKED, NOT merged (2026-06-13, workflow wwhzqme5u)
+
+A first fix attempt (branch `fix/f82-loop-body-back-edge-drop` @ `5957ef7`,
+preserved local, **NOT on main**) implemented the back-edge drop:
+`lower.rs` records `Body::loop_body_drops` (back-edge block + body-local
+range), `drop.rs` splices a `Drop` chain on the back-edge and excludes
+those locals from the `Return` drop set. The §2.2 adversarial audit
+returned **BLOCK** — the attempt is unmergeable:
+
+1. **NEW use-after-free / value-corruption (regression).** A loop-body
+   owned local that ESCAPES by bare reassign to an OUTER local (`keep = s`)
+   is double-handled: `globally_moved` is populated only from
+   `Operand::Move`, so it misses the reassign-to-outer escape, and the
+   back-edge drops a value the outer local now aliases. Probe `while i<1:
+   let s = xs[1:4]; keep = s` printed `keep = [0,30,40]` (corrupt) vs the
+   correct `[20,30,40]`; multi-iteration amplifies to garbage. **Trading a
+   leak for a UAF is strictly worse (§2.2/§5.1) — this alone blocks merge.**
+2. **Incomplete — leak UNFIXED on non-fall-through loop edges.** Only the
+   single textual fall-through back-edge is instrumented. `continue`
+   (`Goto(header)`), `break` (`Goto(exit)`), and early `return`
+   (`→ Return`) all BYPASS the back-edge drop block, and the body local is
+   already `claimed` (excluded from the `Return` set) → it is NEVER dropped
+   → 322 MB linear leak on the canonical `for x in xs: if c: continue; let
+   y = ...` pattern.
+3. **Overclaim** — the attempt's commit/ADR/finding said "closes the gap
+   for ALL loop-body owned values"; it covers only the fall-through edge.
+
+**The fall-through case DOES work** (RSS flat, the attempt's value table is
+real for straight-line loops) — so the next sprint can build on the branch.
+
+### What the CORRECT fix requires (next sprint)
+
+A loop-body owned local must drop EXACTLY ONCE on EVERY loop-exit edge it is
+still live on, and NOT when it has escaped:
+- drop claimed locals on the `continue` edge (before `Goto(header)`), the
+  `break` edge (before `Goto(exit)`), AND the early-`return` edge — not
+  only the fall-through back-edge.
+- EXCLUDE a local that escapes the body by ANY means (move OR
+  reassign-to-outer OR returned) from the back-edge drop — extend the
+  escape analysis beyond `Operand::Move` (catch `dest = Operand::Copy/Move`
+  where `dest` outlives the body scope).
+This is a multi-edge drop-scheduling change (delicate — double-free risk),
+not a one-shot; the leak stays as honest debt until it lands correctly. A
+pre-existing leak is the safe interim vs. the UAF Attempt-1 introduced.
