@@ -431,23 +431,59 @@ pub unsafe extern "C" fn __cobrust_list_set(list: *mut u8, i: i64, v: i64) {
     }
 }
 
-/// Read `list[i]`. Returns 0 on out-of-bounds (M12.x conservative).
+/// Read `list[i]` (the i-th i64 slot). Python-indexed: a NEGATIVE `i`
+/// counts from the end (`len + i`), so `[10,20,30][-1] == 30` — the #1
+/// Python indexing idiom (§2.5 maximize-training-data-overlap). A TRUE
+/// out-of-range index (`i >= len` after normalization, OR `i < -len`)
+/// TRAPS (panic → the cobrust runtime maps it to exit 3, INTERNAL_PANIC)
+/// with a readable `list index out of range: i=.. len=..` diagnostic
+/// (§2.5-B), mirroring Rust's `v[i]` slice-OOB panic + the F79 scalar
+/// `__cobrust_str_char_at` / `__cobrust_bytes_get` traps.
+///
+/// There is NO silent `0` sentinel (the F81 §2.2 hole this closes — a
+/// sentinel `0` is an in-band wrong value §2.2 forbids: `[10,20,30][-1]`
+/// USED to print `0`). A NULL handle is treated as the empty list
+/// (`len == 0`), so ANY index traps.
+///
+/// NOTE: this is ALSO the for-loop iteration + validated-body read path
+/// (MIR `lower.rs` emits `__cobrust_list_get(xs, k)` for `k in 0..len`),
+/// which iterates strictly IN-BOUNDS — the trap NEVER fires there.
+///
+/// # Panics
+///
+/// Panics (the unrecoverable index-out-of-range TRAP) when the normalized
+/// index falls outside `[0, len)`.
 ///
 /// # Safety
 ///
 /// Same as [`__cobrust_list_set`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cobrust_list_get(list: *mut u8, i: i64) -> i64 {
-    if list.is_null() {
-        return 0;
+    // A NULL handle is the empty list — `len == 0`, so any index traps.
+    let len = if list.is_null() {
+        0
+    } else {
+        // SAFETY: caller-attestation per `# Safety`.
+        unsafe { &*list.cast::<ListI64Layout>() }.len
+    };
+    // Python negative-index normalization: a negative `i` counts from the
+    // end (`len + i`); a non-negative `i` is itself.
+    let idx = if i < 0 { len + i } else { i };
+    // §2.2: TRAP on a true OOB — never an in-band sentinel `0`.
+    // §2.5-B: the diagnostic names the bad index AND the length. Route
+    // through the project trap convention (`crate::panic::panic`, the same
+    // path the F79 str/bytes scalar accessors use) — NOT a raw `assert!`:
+    // across the `extern "C"` boundary a raw panic aborts (SIGABRT / exit
+    // 134) with a path-leaking Rust backtrace, whereas `panic()` cleanly
+    // maps to exit 3 + a one-line `cobrust panic: ...` message.
+    if idx < 0 || idx >= len {
+        crate::panic::panic(&format!("list index out of range: i={i} len={len}"));
     }
-    // SAFETY: caller-attestation per `# Safety`.
+    // SAFETY: `list` is non-null here (len==0 for null would have trapped
+    // above, since any index into an empty list is OOB); bounds-checked.
     let layout = unsafe { &*list.cast::<ListI64Layout>() };
-    if i < 0 || i >= layout.len {
-        return 0;
-    }
-    // SAFETY: bounds-checked above.
-    unsafe { *layout.items.add(i as usize) }
+    // SAFETY: `idx` in `[0, len)`; items is non-null when len>0.
+    unsafe { *layout.items.add(idx as usize) }
 }
 
 /// Read `list.len()`. Returns 0 for null.
@@ -463,6 +499,68 @@ pub unsafe extern "C" fn __cobrust_list_len(list: *mut u8) -> i64 {
     // SAFETY: caller-attestation per `# Safety`.
     let layout = unsafe { &*list.cast::<ListI64Layout>() };
     layout.len
+}
+
+/// Mint a FRESH owned `list[i64]` from the contiguous slot range
+/// `[lo, hi)` of `list` — the runtime target of source-level
+/// `xs[lo:hi]` on a `list` base (F81 / ADR-0096, the
+/// `__cobrust_str_slice` / `__cobrust_bytes_slice` mirror, ELEMENT-
+/// addressed). CPython slice clamp: bounds are clamped to `[0, len]` and
+/// `hi <= lo` yields an empty list (never an exception — `xs[1:99]`
+/// clamps to the end, `xs[3:1]` is `[]`). NULL handle → empty list.
+///
+/// NEGATIVE / OPEN-ENDED / STEPPED bounds never reach here on the
+/// accepted-program path — they are REJECTED upstream by
+/// `TypeError::UnsupportedSliceShape` (check.rs), EXACTLY as the str /
+/// bytes slice shims require. So this only ever sees a bare non-negative
+/// `lo:hi`; the clamp is defense-in-depth.
+///
+/// The input `list` is BORROWED (read-only); the caller's drop schedule
+/// still frees it. The returned pointer is a fresh list the caller owns +
+/// drops EXACTLY ONCE via the EXISTING [`__cobrust_list_drop`] (no new
+/// drop symbol — the element type is i64, a Copy scalar, so a plain
+/// container drop suffices; `list[str]`/`list[list]` slices are a future
+/// extension that would route the element-drop fn through
+/// `__cobrust_list_drop_elems`, like split).
+///
+/// # Safety
+///
+/// `list` must be NULL or a pointer returned by [`__cobrust_list_new`]
+/// and not yet dropped. The returned pointer must be passed to
+/// [`__cobrust_list_drop`] exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_slice(list: *mut u8, lo: i64, hi: i64) -> *mut u8 {
+    // A NULL handle is the empty list.
+    let len = if list.is_null() {
+        0
+    } else {
+        // SAFETY: caller-attestation per `# Safety`.
+        unsafe { &*list.cast::<ListI64Layout>() }.len
+    };
+    // CPython slice clamp on the element count; a bare non-negative
+    // `lo:hi` clamps to `[0, len]`, and `hi <= lo` is an empty list.
+    let lo_c = lo.clamp(0, len);
+    let hi_c = hi.clamp(0, len);
+    let out_len = (hi_c - lo_c).max(0);
+    // SAFETY: list_new returns a valid List<i64> pointer with `out_len`
+    // zeroed slots.
+    let out = unsafe { __cobrust_list_new(8, out_len) };
+    if out_len > 0 {
+        // SAFETY: `list` is non-null when len>0 (out_len>0 ⇒ len>0); `out`
+        // is a fresh `list_new` allocation with `out_len` slots.
+        let src = unsafe { &*list.cast::<ListI64Layout>() };
+        // SAFETY: `out` is non-null + a valid layout from `list_new`.
+        let dst = unsafe { &*out.cast::<ListI64Layout>() };
+        // SAFETY: bounds `[lo_c, hi_c)` ⊆ `[0, len)`; both items non-null.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                src.items.add(lo_c as usize),
+                dst.items,
+                out_len as usize,
+            );
+        }
+    }
+    out
 }
 
 /// Append `v` to `list`, growing capacity if needed (doubling
@@ -1688,25 +1786,95 @@ mod tests {
         }
     }
 
+    // F81 / ADR-0096: `__cobrust_list_get` Python-normalizes a NEGATIVE
+    // index (`len + i`) and TRAPS on a true OOB (no silent `0` sentinel).
     #[test]
-    fn cabi_list_get_out_of_bounds_returns_zero() {
+    fn cabi_list_get_negative_index_from_end() {
         // SAFETY: contract.
         unsafe {
-            let l = __cobrust_list_new(8, 1);
-            __cobrust_list_set(l, 0, 42);
-            assert_eq!(__cobrust_list_get(l, 99), 0);
+            let l = __cobrust_list_new(8, 3);
+            __cobrust_list_set(l, 0, 10);
+            __cobrust_list_set(l, 1, 20);
+            __cobrust_list_set(l, 2, 30);
+            // `[10,20,30][-1] == 30`, `[-2] == 20`, `[-3] == 10` (the #1
+            // Python indexing idiom; USED to silently return `0`).
+            assert_eq!(__cobrust_list_get(l, -1), 30);
+            assert_eq!(__cobrust_list_get(l, -2), 20);
+            assert_eq!(__cobrust_list_get(l, -3), 10);
+            __cobrust_list_drop(l);
+        }
+    }
+
+    // NOTE on OOB-trap coverage: `__cobrust_list_get` routes a TRUE OOB
+    // (`i >= len`, OR `i < -len`) through `crate::panic::panic`, which calls
+    // `std::process::exit(3)` — so an in-process `#[test]` cannot observe it
+    // without killing the test runner. The exit-3 TRAP (both directions) is
+    // asserted by the `list_slice_e2e` `assert_build_run_traps` e2es
+    // (`xs[100]` + `xs[-100]`), mirroring str/bytes char_at/get OOB coverage.
+
+    #[test]
+    fn cabi_list_handles_null() {
+        // SAFETY: documented null-arg path. NOTE: `__cobrust_list_get` on a
+        // NULL handle is the empty list (`len == 0`), so ANY index TRAPS
+        // (exit 3) — it can NOT be exercised in-process here (it would kill
+        // the runner); that path is covered by the e2e trap tests. The
+        // remaining null-arg shims (set/len/drop) are total + tested here.
+        unsafe {
+            __cobrust_list_set(std::ptr::null_mut(), 0, 0);
+            assert_eq!(__cobrust_list_len(std::ptr::null_mut()), 0);
+            __cobrust_list_drop(std::ptr::null_mut());
+        }
+    }
+
+    // F81 / ADR-0096: `__cobrust_list_slice` mints a FRESH `list[i64]` for
+    // the contiguous `[lo, hi)` element range (the str/bytes-slice mirror),
+    // CPython-clamped (`xs[1:99]` → tail, `xs[3:1]` → empty), NULL → empty.
+    #[test]
+    fn cabi_list_slice_basic_and_clamp() {
+        // SAFETY: contract.
+        unsafe {
+            let l = __cobrust_list_new(8, 4);
+            __cobrust_list_set(l, 0, 10);
+            __cobrust_list_set(l, 1, 20);
+            __cobrust_list_set(l, 2, 30);
+            __cobrust_list_set(l, 3, 40);
+
+            // `[10,20,30,40][1:3] == [20,30]` (len 2).
+            let s = __cobrust_list_slice(l, 1, 3);
+            assert_eq!(__cobrust_list_len(s), 2);
+            assert_eq!(__cobrust_list_get(s, 0), 20);
+            assert_eq!(__cobrust_list_get(s, 1), 30);
+            __cobrust_list_drop(s);
+
+            // `[..][1:99]` clamps hi to len → `[20,30,40]`.
+            let s2 = __cobrust_list_slice(l, 1, 99);
+            assert_eq!(__cobrust_list_len(s2), 3);
+            assert_eq!(__cobrust_list_get(s2, 2), 40);
+            __cobrust_list_drop(s2);
+
+            // `[..][3:1]` → empty (hi <= lo).
+            let s3 = __cobrust_list_slice(l, 3, 1);
+            assert_eq!(__cobrust_list_len(s3), 0);
+            __cobrust_list_drop(s3);
+
+            // Full span `[0:4]` is the whole list.
+            let s4 = __cobrust_list_slice(l, 0, 4);
+            assert_eq!(__cobrust_list_len(s4), 4);
+            assert_eq!(__cobrust_list_get(s4, 0), 10);
+            assert_eq!(__cobrust_list_get(s4, 3), 40);
+            __cobrust_list_drop(s4);
+
             __cobrust_list_drop(l);
         }
     }
 
     #[test]
-    fn cabi_list_handles_null() {
-        // SAFETY: documented null-arg path.
+    fn cabi_list_slice_null_is_empty() {
+        // SAFETY: documented null-arg path → empty list.
         unsafe {
-            __cobrust_list_set(std::ptr::null_mut(), 0, 0);
-            assert_eq!(__cobrust_list_get(std::ptr::null_mut(), 0), 0);
-            assert_eq!(__cobrust_list_len(std::ptr::null_mut()), 0);
-            __cobrust_list_drop(std::ptr::null_mut());
+            let s = __cobrust_list_slice(std::ptr::null_mut(), 0, 5);
+            assert_eq!(__cobrust_list_len(s), 0);
+            __cobrust_list_drop(s);
         }
     }
 

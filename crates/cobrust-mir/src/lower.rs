@@ -1759,13 +1759,80 @@ impl<'a> BodyBuilder<'a> {
                     return Ok(Operand::Copy(Place::local(dest)));
                 }
                 if matches!(base_ty, Ty::List(_)) {
-                    let base_op = self.lower_expr(base)?;
-                    let idx_op = self.lower_index(index)?;
                     let elem_ty = if let Ty::List(elem) = &base_ty {
                         (**elem).clone()
                     } else {
                         Ty::None
                     };
+                    // F81 / ADR-0096 — `xs[lo:hi]` slice on a `list` base
+                    // yields a FRESH OWNED `list[T]` (the
+                    // `__cobrust_str_slice`/`__cobrust_bytes_slice` mirror,
+                    // ELEMENT-addressed). The base handle is BORROWED (Move →
+                    // Copy upgrade) so the source local survives + drops once
+                    // at scope exit. The `lo`/`hi` bounds are lowered DIRECTLY
+                    // here (the generic `lower_index` collapses a Slice to
+                    // `Constant::Int(0)` — the F81 BUG-2 UB stub that returned
+                    // an integer 0 used as a list handle → `misaligned pointer
+                    // dereference`). Only the contiguous `lo:hi` form (both
+                    // bounds present, default step, non-negative) is supported;
+                    // step / open-ended / negative shapes are REJECTED upstream
+                    // by `TypeError::UnsupportedSliceShape`, so MIR never sees
+                    // one on the accepted-program path. The `else` arm is
+                    // DEFENSE-IN-DEPTH (constitution §6): an unsupported shape
+                    // reaching here emits a hard `MirError`, NEVER the silent
+                    // `Constant::Int(0)` UB fall-through this replaces.
+                    if let IndexKind::Slice { start, stop, step } = index.as_ref() {
+                        if let (None, Some(lo_e), Some(hi_e)) =
+                            (step.as_ref(), start.as_ref(), stop.as_ref())
+                        {
+                            let base_op = upgrade_move_to_copy_handle(self.lower_expr(base)?);
+                            let lo_op = self.lower_expr(lo_e)?;
+                            let hi_op = self.lower_expr(hi_e)?;
+                            let dest = self.declare_local(
+                                "_listslice".to_string(),
+                                Ty::List(Box::new(elem_ty.clone())),
+                                e.span,
+                                true,
+                            );
+                            let cur = self.current_block_id();
+                            let next = self.start_new_block();
+                            self.cur_block = Some(cur.0 as usize);
+                            self.terminate(Terminator::Call {
+                                func: Operand::Constant(Constant::Str(
+                                    "__cobrust_list_slice".to_string(),
+                                )),
+                                args: vec![base_op, lo_op, hi_op],
+                                destination: Place::local(dest),
+                                target: next,
+                                unwind: None,
+                            });
+                            self.cur_block = Some(next.0 as usize);
+                            // `_listslice` owns a FRESHLY-allocated `list`
+                            // (the slice shim's return). It MUST be MOVED out
+                            // so the single owner (the consuming binding) drops
+                            // it ONCE via `__cobrust_list_drop`; a Copy would
+                            // leave BOTH `_listslice` + the consuming local in
+                            // the drop schedule → a double-free. (Mirror of the
+                            // `str`/`bytes` slice Move-out discipline.)
+                            return Ok(Operand::Move(Place::local(dest)));
+                        }
+                        // DEFENSE-IN-DEPTH — an unsupported `list` slice shape
+                        // (open-ended / stepped / negative) should have been
+                        // rejected by `TypeError::UnsupportedSliceShape`
+                        // upstream. Reaching here means the type checker was
+                        // bypassed; a hard `MirError` is the §2.2-sound
+                        // backstop (NEVER the silent `Constant::Int(0)` UB
+                        // fall-through F81 BUG-2 documents).
+                        return Err(MirError::Internal(format!(
+                            "unsupported `list` slice shape reached MIR lowering at \
+                             {:?} (only `xs[lo:hi]` with both non-negative bounds + \
+                             default step is supported; this must be rejected by \
+                             TypeError::UnsupportedSliceShape upstream)",
+                            e.span
+                        )));
+                    }
+                    let base_op = self.lower_expr(base)?;
+                    let idx_op = self.lower_index(index)?;
                     // ADR-0050c Phase 4 — clone emission for Str-indexed
                     // reads. For `xs[i]` where `xs: list[str]`, the raw
                     // slot pointer aliases the slot owned by `xs`. The

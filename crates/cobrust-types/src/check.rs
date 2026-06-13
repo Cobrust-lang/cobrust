@@ -2395,6 +2395,54 @@ impl Ctx {
                             })
                         }
                     }
+                    // F81 / ADR-0096 — `xs[lo:hi]` slice yields a fresh
+                    // `list[T]` (CPython `[10,20,30][1:3] == [20,30]`, a list
+                    // — contrast a scalar `xs[i] -> T` arm above). The MIR
+                    // `lower_expr` Index arm retargets to
+                    // `__cobrust_list_slice(xs, lo, hi) -> list`, which honours
+                    // ONLY the contiguous `lo:hi` form with both non-negative
+                    // bounds present and the default step.
+                    //
+                    // The `bytes`/`str` slice reject, EXTENDED to `Ty::List` —
+                    // every OTHER shape (open-ended `xs[1:]`/`xs[:3]`, non-unit
+                    // step `xs[0:4:2]`, negative bound `xs[1:-1]`) is REJECTED
+                    // here (§2.5-A compile-time-catch) rather than returning
+                    // `Ty::List` and falling through to the generic-index stub,
+                    // which SILENTLY lowered to `Constant::Int(0)` used as a
+                    // list handle → UB / `misaligned pointer dereference` (the
+                    // F81 BUG-2 this arm closes). We still type-check each
+                    // present bound before the shape gate.
+                    (Ty::List(elem), IndexKind::Slice { start, stop, step }) => {
+                        for bound in [start.as_ref(), stop.as_ref(), step.as_ref()]
+                            .into_iter()
+                            .flatten()
+                        {
+                            let bt = self.synth_expr(bound)?;
+                            unify(&Ty::Int, &bt, &mut self.subst, bound.span)?;
+                        }
+                        let lo_neg = start
+                            .as_ref()
+                            .and_then(literal_int_value)
+                            .is_some_and(|v| v < 0);
+                        let hi_neg = stop
+                            .as_ref()
+                            .and_then(literal_int_value)
+                            .is_some_and(|v| v < 0);
+                        if step.is_none() && start.is_some() && stop.is_some() && !lo_neg && !hi_neg
+                        {
+                            Ok(Ty::List(elem.clone()))
+                        } else {
+                            Err(TypeError::UnsupportedSliceShape {
+                                span,
+                                suggestion: Some(
+                                    "write both explicit non-negative bounds, \
+                                     e.g. `xs[1:len(xs)]`; open-ended, stepped, \
+                                     and negative `list` slices are not yet \
+                                     supported",
+                                ),
+                            })
+                        }
+                    }
                     (other, IndexKind::Slice { .. }) => Ok(other.clone()),
                     (Ty::Var(_), _) => Ok(self.fresh_var()),
                     (other, _) => Err(TypeError::NotIndexable {

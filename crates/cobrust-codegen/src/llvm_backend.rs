@@ -1352,6 +1352,18 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_decls
             .insert("__cobrust_list_append", list_append_fn);
 
+        // F81 / ADR-0096 — __cobrust_list_slice(*mut ListBuffer, i64, i64)
+        // -> *mut ListBuffer. The `__cobrust_{str,bytes}_slice` mirror,
+        // element-addressed: mints a FRESH owned `list[T]` for `xs[lo:hi]`.
+        let list_slice_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        let list_slice_fn = self.module.add_function(
+            "__cobrust_list_slice",
+            list_slice_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_list_slice", list_slice_fn);
+
         // ADR-0060b dynamic-index Array runtime helpers.
         // __cobrust_array_get_i64(*const i64, usize, usize) -> i64
         // F71: len + idx are `usize` (array.rs:42) — pointer-width.
@@ -1687,6 +1699,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_list_is_empty", 1);
         self.runtime_helper_param_counts
             .insert("__cobrust_list_append", 2);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_slice", 3);
 
         // -----------------------------------------------------------------
         // ADR-0058g sub-wave-3 — dict + set + tuple runtime extern hookup.
