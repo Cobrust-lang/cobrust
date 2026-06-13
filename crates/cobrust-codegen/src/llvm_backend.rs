@@ -4495,6 +4495,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
             Ty::IntN(_) => Some(self.ctx.i64_type().as_basic_type_enum()),
             // `Ref(T)` is transparent in `lower_ty`: scalar iff `T` is.
             Ty::Ref(inner) => self.llvm_scalar_ty(inner),
+            // F83 / ADR-0097 — a `Ty::Tuple` lowers to a REAL LLVM struct
+            // VALUE (by-value aggregate, see `lower_ty`). It has a fully
+            // determined LLVM type from its static element types, so it is
+            // NOT an inference candidate — `infer_local_types` must keep its
+            // `lower_ty` struct alloca (NOT the `Rvalue::Aggregate → opaque
+            // ptr` default that made `_tupidxbase` a pointer slot, silently
+            // re-reading field 0 for every `t[i]`). Treating it as a
+            // "scalar" here (well-typed, fixed-layout) routes both the alloca
+            // type and the operand-type fallback to the struct.
+            Ty::Tuple(_) => Some(self.lower_ty(ty)),
             // `Ty::None` (placeholder) + all pointer-lowered indirect
             // types are NOT scalars for inference purposes.
             _ => None,
@@ -4547,6 +4557,26 @@ impl<'ctx> LlvmEmitter<'ctx> {
     ) -> Option<BasicTypeEnum<'ctx>> {
         match op {
             Operand::Copy(p) | Operand::Move(p) => {
+                // F83 / ADR-0097 — a `Field(i)` projection on a TUPLE base
+                // resolves to the i-th FIELD's type, NOT the whole tuple
+                // struct. Without this, `_tupidx = Use(Copy(t.Field(1)))`
+                // inferred the dest (a `Ty::Str` field, a candidate since Str
+                // is non-scalar) as the WHOLE `{i64, ptr}` tuple struct,
+                // producing a struct alloca for a str local + a struct load
+                // passed to `__cobrust_println_str_buf` / `__cobrust_str_drop`
+                // (the LLVM "Call parameter type does not match" verify error).
+                // Read the field type straight from the base local's declared
+                // `Ty::Tuple` (statically known), bypassing the
+                // projection-blind `inferred`/whole-local lookups below.
+                if let [Projection::Field(field_idx)] = p.projections.as_slice() {
+                    if let Some(local) = body.locals.get(p.local.0 as usize) {
+                        if let Ty::Tuple(elems) = &local.ty {
+                            if let Some(field_ty) = elems.get(*field_idx) {
+                                return Some(self.lower_ty(field_ty));
+                            }
+                        }
+                    }
+                }
                 if let Some(ty) = inferred.get(&p.local) {
                     return Some(*ty);
                 }
@@ -4723,9 +4753,26 @@ impl<'ctx> LlvmEmitter<'ctx> {
                     _ => self.opaque_ptr_ty.as_basic_type_enum(),
                 }
             }
-            // Owning + container + reference / tuple / record / ADT all
-            // lower to opaque pointer at wave-1. Element type stays at
-            // MIR level — recovered from per-Place / per-Operand context.
+            // F83 / ADR-0097 — a `Ty::Tuple` lowers to a REAL LLVM struct of
+            // its per-position element types (heterogeneous, fixed-arity). This
+            // replaces the wave-1 opaque-pointer-null stub that made
+            // `(7, "x")[0]` build OK + return `0` (the §2.2 SILENT-0
+            // MISCOMPILE). Construction (`lower_aggregate` Tuple arm) builds the
+            // struct value via `build_insert_value`; a `t[i]` read
+            // (`lower_place_load`, `[Projection::Field(i)]`) extracts via
+            // `build_extract_value` — the safe no-GEP aggregate path the Array
+            // surface already uses (codegen `#![forbid(unsafe_code)]`). A `str`
+            // / `list` element is a pointer field; a tuple's drop is a no-op
+            // (drop.rs no-ops `Ty::Tuple`), so the tuple-by-value Copy of a
+            // field never double-frees a sibling owned field.
+            Ty::Tuple(items) => {
+                let field_tys: Vec<BasicTypeEnum<'ctx>> =
+                    items.iter().map(|t| self.lower_ty(t)).collect();
+                self.ctx.struct_type(&field_tys, false).as_basic_type_enum()
+            }
+            // Owning + container + reference / record / ADT all lower to opaque
+            // pointer at wave-1. Element type stays at MIR level — recovered
+            // from per-Place / per-Operand context.
             _ => self.opaque_ptr_ty.as_basic_type_enum(),
         }
     }
@@ -5780,6 +5827,34 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
                 return Ok(loaded);
             }
             Ok(ptr_val)
+        } else if let [Projection::Field(field_idx)] = place.projections.as_slice() {
+            // F83 / ADR-0097 — `t[i]` read on a TUPLE base lowered to a
+            // `Projection::Field(i)`. Load the whole struct aggregate then
+            // extract field `i` via `build_extract_value` (the safe no-GEP
+            // path the Array index uses; codegen `#![forbid(unsafe_code)]`).
+            // This replaces the wave-1 "stub load" that ignored the projection
+            // and returned the WHOLE tuple as if it were the element (the §2.2
+            // SILENT-0 MISCOMPILE — `(7, "x")[0]` returned `0`). The MIR layer
+            // (lower.rs Tuple Index arm) has bounds-checked the field offset
+            // against the static arity; a non-struct base here (no other
+            // single-Field place reaches a load on the accepted path) falls
+            // through to the bare-local stub load.
+            let agg_val = self
+                .emitter
+                .builder
+                .build_load(ty, alloca, "tuple_agg")
+                .map_err(map_builder_err)?;
+            if let BasicValueEnum::StructValue(sv) = agg_val {
+                if let Ok(field) = self.emitter.builder.build_extract_value(
+                    sv,
+                    u32::try_from(*field_idx).unwrap_or(u32::MAX),
+                    "tuple_field",
+                ) {
+                    return Ok(field);
+                }
+            }
+            // Non-struct base or extract failure — defensive bare-local load.
+            Ok(agg_val)
         } else if let [Projection::Index(idx_op)] = place.projections.as_slice() {
             // ADR-0060b finding-closure 2026-05-19:
             // `finding:adr0060b-array-indexing-mir-projection-debt`.
@@ -6320,18 +6395,98 @@ impl<'a, 'ctx> BodyLowerer<'a, 'ctx> {
         match kind {
             AggregateKind::List => self.lower_aggregate_list(operands),
             AggregateKind::FormatString => self.lower_aggregate_format_string(operands),
+            // F83 / ADR-0097 — a `Tuple` aggregate builds a REAL LLVM struct
+            // VALUE (heterogeneous, by-value), NOT the old `const_null` stub
+            // (the §2.2 SILENT-0 MISCOMPILE source). `lower_ty(Ty::Tuple)`
+            // gives the matching struct type for the dest alloca.
+            AggregateKind::Tuple => self.lower_aggregate_tuple(operands),
             // Wave-1 stub fallthrough for kinds not in F53 §3 scope.
-            // `Dict` / `Set` / `Tuple` / `Record` / `Adt(_, _)` keep
-            // returning `null` until their dedicated sprints land
-            // (still need the `__cobrust_dict_new` / `__cobrust_set_new`
-            // / `__cobrust_tuple_new` typed-shim dispatch tables —
-            // Cranelift's `lower_aggregate_dict_typed` is the reference).
-            AggregateKind::Tuple
-            | AggregateKind::Dict
+            // `Dict` / `Set` / `Record` / `Adt(_, _)` keep returning `null`
+            // until their dedicated sprints land (still need the
+            // `__cobrust_dict_new` / `__cobrust_set_new` typed-shim dispatch
+            // tables).
+            AggregateKind::Dict
             | AggregateKind::Set
             | AggregateKind::Record
             | AggregateKind::Adt(_, _) => Ok(self.emitter.opaque_ptr_ty.const_null().into()),
         }
+    }
+
+    /// F83 / ADR-0097 — build a tuple aggregate as an LLVM struct VALUE.
+    ///
+    /// Each operand is materialised to its field value (a `Constant::Str`
+    /// literal → a fresh heap str-buffer via `materialize_str_buffer`; a
+    /// non-literal `Str`-typed operand → a `__cobrust_str_clone` so the tuple
+    /// owns its own copy, mirroring `lower_aggregate_list`; anything else →
+    /// `lower_operand` direct). The struct type is assembled from the field
+    /// value types (which match `lower_ty(Ty::Tuple)`'s per-position lowering),
+    /// then populated field-by-field with `build_insert_value` — the safe,
+    /// no-GEP aggregate path codegen's `#![forbid(unsafe_code)]` permits (same
+    /// surface as the Array `build_extract_value` read).
+    fn lower_aggregate_tuple(
+        &mut self,
+        operands: &[Operand],
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        // 1. Materialise each field value.
+        let mut field_vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(operands.len());
+        for op in operands {
+            let val: BasicValueEnum<'ctx> = if let Operand::Constant(Constant::Str(payload)) = op {
+                self.materialize_str_buffer(payload)?
+            } else {
+                let is_str_operand = match op {
+                    Operand::Copy(p) | Operand::Move(p) => self
+                        .body
+                        .locals
+                        .get(p.local.0 as usize)
+                        .map(|l| matches!(l.ty, Ty::Str))
+                        .unwrap_or(false),
+                    Operand::Constant(_) => false,
+                };
+                if is_str_operand {
+                    let raw = self.lower_operand(op)?;
+                    if let Some(clone_fr) = self
+                        .emitter
+                        .runtime_helper_decls
+                        .get("__cobrust_str_clone")
+                        .copied()
+                    {
+                        let clone_args: [BasicMetadataValueEnum<'ctx>; 1] = [raw.into()];
+                        let clone_call = self
+                            .emitter
+                            .builder
+                            .build_call(clone_fr, &clone_args, "str_clone_for_tuple")
+                            .map_err(map_builder_err)?;
+                        clone_call.try_as_basic_value().basic().unwrap_or(raw)
+                    } else {
+                        raw
+                    }
+                } else {
+                    self.lower_operand(op)?
+                }
+            };
+            field_vals.push(val);
+        }
+        // 2. Assemble the struct type from the field value types (matches
+        //    `lower_ty(Ty::Tuple)`).
+        let field_tys: Vec<BasicTypeEnum<'ctx>> =
+            field_vals.iter().map(BasicValueEnum::get_type).collect();
+        let struct_ty = self.emitter.ctx.struct_type(&field_tys, false);
+        // 3. Populate field-by-field via `build_insert_value` (no GEP).
+        let mut agg: BasicValueEnum<'ctx> = struct_ty.get_undef().into();
+        for (idx, val) in field_vals.into_iter().enumerate() {
+            let inserted = self
+                .emitter
+                .builder
+                .build_insert_value(
+                    agg.into_struct_value(),
+                    val,
+                    u32::try_from(idx).unwrap_or(u32::MAX),
+                    "tuple_insert",
+                )
+                .map_err(map_builder_err)?;
+            agg = inserted.into_struct_value().into();
+        }
+        Ok(agg)
     }
 
     /// LLVM mirror of `cranelift_backend::lower_aggregate_list`
