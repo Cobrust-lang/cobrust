@@ -4386,6 +4386,27 @@ impl Ctx {
                         });
                     }
                 }
+                // ADR-0097 / §2.5 — `str * int` / `int * str` REPETITION
+                // (`"ab" * 3 == "ababab"`, the Python idiom an LLM writes
+                // constantly; Maximize-training-data-overlap). Runs BEFORE
+                // `unify` for the same reason as the Buffer-scalar guards: a
+                // `Str` never unifies with an `Int`, so `"ab" * 3` would
+                // otherwise fail at `unify` ("expected str, found i64"). The
+                // op MUST be `Mul`, and the two operands MUST be exactly one
+                // `Str` and one `Int` (Python allows BOTH orders — `s * n`
+                // and `n * s`); the result is a fresh `Ty::Str`. The MIR
+                // `lower_bin` Mul guard retargets the accepted shape to
+                // `__cobrust_str_repeat(s, n)`. A `Str * Str` / `Str *
+                // Float` / `Float * Str` does NOT match here and falls
+                // through to `unify`, which rejects it (CPython `"a" * "b"`
+                // and `"a" * 1.5` are both TypeErrors).
+                if matches!(op, BinOp::Mul) {
+                    let lt_r = self.subst.apply(&lt);
+                    let rt_r = self.subst.apply(&rt);
+                    if matches!((&lt_r, &rt_r), (Ty::Str, Ty::Int) | (Ty::Int, Ty::Str)) {
+                        return Ok(Ty::Str);
+                    }
+                }
                 unify(&lt, &rt, &mut self.subst, span)?;
                 let resolved = self.subst.apply(&lt);
                 // ADR-0077 Q1 — `coil.Buffer` operator dispatch (the FIRST

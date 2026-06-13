@@ -303,6 +303,49 @@ family: from-end + positive/negative OOB traps) +
 `crates/cobrust-stdlib/src/string.rs` unit tests (incl
 `str_char_at_negative_index_codepoint`).
 
+### `std.string` — `str * int` REPETITION OPERATOR (ADR-0097), §2.5 additive
+
+The `str * int` / `int * str` REPETITION operator (`"ab" * 3 == "ababab"`).
+PURELY ADDITIVE — NOT a §2.2 silent-miscompile closure: before ADR-0097
+`"ab" * 3` was a CLEAN type-mismatch REJECT (`expected str, found i64`).
+The §2.5 win (Maximize-training-data-overlap): `"sep" * n` is a Python
+idiom an LLM writes constantly (dividers / padding / fixed-width fills);
+make it WORK on the first try. Mirrors the ADR-0078 `str + str` →
+`__cobrust_str_concat` pipeline end-to-end.
+
+**Typecheck** (`check.rs` `synth_bin` `BinOp::Mul` arm, BEFORE `unify` —
+a `Str` never unifies with an `Int`): `(Ty::Str, Ty::Int) | (Ty::Int,
+Ty::Str)` → `Ty::Str`. Python allows BOTH operand orders. Any OTHER pairing
+(`Str * Str`, `Str * Float`, …) falls through to `unify` and rejects (a
+CPython `TypeError` parallel).
+
+**Lowering** (`lower.rs` `lower_bin` `Mul` guard, `lhs_is_str ^
+rhs_is_str`): NORMALIZE both orders to `(s, n)`, evaluating LHS-then-RHS
+(source-order side effects) → `__cobrust_str_repeat(s, n)`. The `str`
+receiver is BORROWED (Move→Copy upgrade — read, not consumed; survives +
+drops once); the `int` count is a Copy scalar lowered directly. Result is
+a fresh owned `str` (Move-out, dropped once) — the `str + str` concat
+discipline.
+
+```rust
+// crates/cobrust-stdlib/src/string.rs (ADR-0097) — MINTS a fresh `str`
+// (dropped once), BORROWS the input `s`. `str::repeat` (one capacity-
+// reserved alloc); Python `n <= 0 -> ""` (NEVER a trap). Codepoint-faithful
+// by construction (repetition concatenates WHOLE strings, never splits a
+// codepoint), so `"é" * 2 == "éé"`.
+pub unsafe extern "C" fn __cobrust_str_repeat(s: *mut u8, n: i64) -> *mut u8; // s * n; n<=0 -> ""
+```
+
+Codegen: extern decl `(ptr, i64) -> ptr` + param-count 2, the
+`__cobrust_str_slice` mirror (`llvm_backend.rs`). Codegen's `BinaryOp` Mul
+arm is never reached for this shape (it assumes integer operands).
+
+Verified vs CPython 3: `"ab"*3=="ababab"`, `3*"ab"=="ababab"`, `"x"*0==""`,
+`"x"*1=="x"`, `"x"*-2==""`, `"é"*2=="éé"`, `len("ab"*3)==6`. NOTE: a LOOP
+minting `"ab"*3` per iteration is the F82 loop-leak debt (NOT closed here;
+single-mint drop-balance only). Tests:
+`crates/cobrust-cli/tests/str_mul_e2e.rs` (6 cases).
+
 ### `std.io`
 
 ```rust

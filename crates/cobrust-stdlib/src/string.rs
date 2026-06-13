@@ -406,6 +406,46 @@ pub unsafe extern "C" fn __cobrust_str_slice(s: *mut u8, lo: i64, hi: i64) -> *m
     alloc_str_buffer_local(&src[byte_lo..byte_hi])
 }
 
+/// Repeat `s` `n` times into a FRESH owned `str` buffer. The runtime
+/// target of the `.cb` `str * int` / `int * str` REPETITION operator
+/// (ADR-0097 / §2.5 — `"ab" * 3 == "ababab"`, the Python idiom an LLM
+/// writes constantly; sibling of `__cobrust_str_concat` for `str + str`).
+///
+/// **Python semantics** (CPython `str.__mul__`):
+///   - `n <= 0` → the EMPTY str (`"x" * 0 == ""`, `"x" * -3 == ""`);
+///   - `n == 1` → a COPY of `s`;
+///   - `n  > 1` → `s` concatenated `n` times (`"ab" * 3 == "ababab"`).
+///
+/// Repetition concatenates WHOLE strings, so it is byte/codepoint-faithful
+/// by construction — a boundary always lands between whole copies of `s`,
+/// never inside a multi-byte UTF-8 codepoint (`"é" * 2 == "éé"`). The
+/// result is built with `str::repeat` (a single capacity-reserved
+/// allocation) then minted via the same `alloc_str_buffer_local` path
+/// `__cobrust_str_slice` / `__cobrust_str_char_at` use.
+///
+/// The input `s` is BORROWED (read-only); the caller's Str drop schedule
+/// still frees it. The returned pointer is a fresh buffer the caller
+/// owns + drops EXACTLY ONCE via `__cobrust_str_drop`.
+///
+/// # Safety
+///
+/// `s` must be NULL or a pointer returned by `__cobrust_str_new` (or
+/// `__cobrust_str_clone`) and not yet dropped. The returned pointer must
+/// be passed to `__cobrust_str_drop` exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_repeat(s: *mut u8, n: i64) -> *mut u8 {
+    // SAFETY: caller-attestation per `# Safety`. A NULL handle reads as
+    // the empty string (any `n` yields `""`).
+    let src = unsafe { str_buf_as_str_local(s) };
+    // Python `n <= 0` → empty str (NEVER a panic / negative-count trap).
+    if n <= 0 {
+        return alloc_str_buffer_local("");
+    }
+    // `n >= 1`: `str::repeat` does a single capacity-reserved allocation;
+    // `n == 1` is a faithful copy. The cast is safe — `n > 0` here.
+    alloc_str_buffer_local(&src.repeat(n as usize))
+}
+
 /// C-ABI shim for source-level `split(s: str, sep: str) -> list[str]`.
 ///
 /// Materializes a heap `List<i64>` whose i64 slots store owned

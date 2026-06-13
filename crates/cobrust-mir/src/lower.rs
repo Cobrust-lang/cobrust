@@ -3301,6 +3301,64 @@ impl<'a> BodyBuilder<'a> {
             self.cur_block = Some(next.0 as usize);
             return Ok(Operand::Move(Place::local(dest)));
         }
+        // ADR-0097 / §2.5 — `str * int` / `int * str` REPETITION via the
+        // NATURAL `*` operator (`"ab" * 3 == "ababab"`, the Python idiom an
+        // LLM writes constantly; Maximize-training-data-overlap). The
+        // typecheck `synth_bin` Mul arm accepted exactly one `Str` + one
+        // `Int` (in EITHER order); retarget to the always-linked
+        // `__cobrust_str_repeat(s: *mut Str, n: i64) -> *mut Str`, which
+        // allocates a fresh Str buffer (freed once by the Str drop schedule
+        // at scope exit). NORMALIZE both operand orders to `(str, int)`: the
+        // `str` operand is the receiver `s`, the `int` operand the count
+        // `n`. The `str` receiver is BORROWED (Move→Copy upgrade —
+        // `__cobrust_str_repeat` reads but does not consume `s`, so the
+        // source `str` local survives + drops ONCE at scope exit, the Str
+        // non-Copy discipline); the `int` count is a Copy scalar lowered
+        // directly (no borrow upgrade). Sibling of the `str + str` concat
+        // arm below (same retarget-to-primitive + Move-out-fresh-buffer
+        // shape). Codegen's `BinaryOp` Mul arm is never reached for this
+        // shape (it assumes integer operands and would crash on the Str
+        // PointerValue).
+        if matches!(op, HirBinOp::Mul) {
+            let rhs_ty = synth_expr_ty(self, rhs);
+            // Determine which side is the `str` and which the `int`.
+            let lhs_is_str = matches!(lhs_ty, Ty::Str);
+            let rhs_is_str = matches!(rhs_ty, Ty::Str);
+            if lhs_is_str ^ rhs_is_str {
+                // Borrow the `str` receiver (Move→Copy); lower the `int`
+                // count directly. Evaluate LHS then RHS to preserve
+                // source-order side effects regardless of which is the str.
+                let (s_op, n_op) = if lhs_is_str {
+                    let s = upgrade_move_to_copy_handle(self.lower_expr(lhs)?);
+                    let n = self.lower_expr(rhs)?;
+                    (s, n)
+                } else {
+                    // `int * str`: evaluate the int LHS first, then the str.
+                    let n = self.lower_expr(lhs)?;
+                    let s = upgrade_move_to_copy_handle(self.lower_expr(rhs)?);
+                    (s, n)
+                };
+                let dest = self.declare_local("_strrep".to_string(), Ty::Str, span, false);
+                let cur = self.current_block_id();
+                let next = self.start_new_block();
+                self.cur_block = Some(cur.0 as usize);
+                self.terminate(Terminator::Call {
+                    func: Operand::Constant(Constant::Str("__cobrust_str_repeat".to_string())),
+                    args: vec![s_op, n_op],
+                    destination: Place::local(dest),
+                    target: next,
+                    unwind: None,
+                });
+                self.cur_block = Some(next.0 as usize);
+                // `_strrep` owns a FRESHLY-allocated Str buffer (the repeat
+                // shim's return). It must be MOVED out so the single owner
+                // (the consuming binding) drops it ONCE; a Copy would leave
+                // BOTH `_strrep` + the consuming local in the drop schedule
+                // → a double-free. (Mirror of the `str + str` concat
+                // Move-out discipline below.)
+                return Ok(Operand::Move(Place::local(dest)));
+            }
+        }
         // ADR-0078 backend Phase 2 (fang JWT E2E sibling-fix) — `str + str`
         // via the NATURAL `+` operator (e.g. the append-tamper `t + "X"`).
         // The codegen `lower_binop` Add arm assumes integer operands

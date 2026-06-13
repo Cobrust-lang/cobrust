@@ -2485,6 +2485,23 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_param_counts
             .insert("__cobrust_str_slice", 3);
 
+        // __cobrust_str_repeat(s: *mut Str, n: i64) -> *mut Str
+        // (the runtime target of the `.cb` `str * int` / `int * str`
+        // REPETITION operator; `"ab" * 3 == "ababab"`. Mirrors
+        // `__cobrust_str_slice`'s (ptr, i64) -> ptr signature. Returns a
+        // freshly-allocated Str buffer freed by the Str drop schedule at
+        // scope exit; `n <= 0` yields the empty str.)
+        let str_repeat_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+        let str_repeat_fn = self.module.add_function(
+            "__cobrust_str_repeat",
+            str_repeat_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_repeat", str_repeat_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_repeat", 2);
+
         // __cobrust_str_eq(a: *mut Str, b: *mut Str) -> i64
         let str_eq_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let str_eq_fn =
