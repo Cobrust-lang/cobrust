@@ -374,15 +374,24 @@ fn main() -> i64:
 }
 
 // =====================================================================
-// list_slice_e2e_06 — DROP-BALANCE: a slice in a loop mints a fresh list
-// each iteration; each must drop exactly once (no leak, no double-free).
-// 1000 iterations each slicing + reading. A double-free would abort; a
-// leak is invisible to exit code but the run must stay clean exit 0. The
-// final print verifies values survive the Move-out drop discipline.
+// list_slice_e2e_06 — NO-DOUBLE-FREE under a loop-scoped slice: 1000
+// iterations each mint a fresh list via __cobrust_list_slice + read it.
+// A double-free (or use-after-free) would ABORT — so a clean exit 0 +
+// correct accumulator proves the slice's Move-out drop discipline is
+// double-free-safe and values survive.
+//
+// HONEST SCOPE (F82): this does NOT verify drop-BALANCE (no leak). The
+// F81 audit measured a real PRE-EXISTING per-iteration LEAK — a loop-body
+// owned local (a slice, a str/bytes slice, OR even a plain list literal)
+// is not dropped each iteration; it accumulates until loop exit (~64 B/
+// iter here). That systemic MIR loop-body-drop gap predates F81 (back to
+// F78 str-slice) and is tracked in finding F82, NOT closed here. This
+// test asserts ONLY no-double-free + value correctness — a leak is
+// invisible to its exit code, so it must NOT be read as drop-balance.
 // =====================================================================
 
 #[test]
-fn list_slice_e2e_06_slice_drop_balance_in_loop() {
+fn list_slice_e2e_06_slice_no_double_free_in_loop() {
     let src = "\
 fn main() -> i64:
     let xs: list[i64] = [10, 20, 30, 40, 50]

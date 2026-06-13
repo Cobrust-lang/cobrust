@@ -133,6 +133,29 @@ correctness bugs.
   e2e, mirroring str/bytes).
 - `list_slice_e2e` (cli, CPython-3 oracle): slice basic+clamp; negative +
   positive scalar; positive-OOB trap (exit 3); negative-OOB trap (exit 3);
-  unsupported-shape reject ×4; slice drop-balance in a 1000-iter loop.
+  unsupported-shape reject ×4; slice NO-DOUBLE-FREE in a 1000-iter loop
+  (asserts no double-free + value correctness — NOT drop-balance; see the
+  loop-leak note below).
 - `leetcode_corpus_e2e` 12/12 (LC-100 in-bounds iteration unbroken);
   types + types-cb + types-parity green; fmt + clippy clean.
+
+### Known debt — loop-body owned-value LEAK (F82, PRE-EXISTING)
+
+The F81 audit measured (RSS on a compiled `.cb`) a real per-iteration
+LEAK: an owned heap value bound to a LOOP-BODY local (a list/str/bytes
+slice, OR even a plain `let s = [1,2,3]` list literal) is NOT dropped each
+iteration — it accumulates until loop exit (~64 B/iter for a list-slice
+loop). This is a SYSTEMIC MIR loop-body drop-scheduling gap that PREDATES
+F81 (back to F78 str-slice + the list-literal machinery) — F81 merely
+inherits it for one more value type. It is NOT a double-free / not UB (the
+loop-06 e2e proves that). Tracked as finding **F82** for a dedicated
+lower.rs fix; F81 does NOT claim drop-balance is verified.
+
+### Runtime-negative slice bound (literal-only reject)
+
+The negative-bound reject at `check` is LITERAL-only (`literal_int_value`).
+A runtime/non-literal negative bound (`let n = 0 - 1; xs[1:n]`) passes
+check and reaches the runtime, where `lo.clamp(0,len)` / `hi.clamp(0,len)`
+yields a SAFE empty/clamped list (no UB) — but this is a clamp, NOT CPython
+from-end semantics. Consistent with how str/bytes handle it. Full from-end
+negative-bound SLICE support is the same follow-up noted under Scope.
