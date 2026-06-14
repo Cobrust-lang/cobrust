@@ -4439,6 +4439,61 @@ impl Ctx {
                         return Ok(Ty::Str);
                     }
                 }
+                // F90 / ADR-0102 (§2.5) — the `**` POWER operator. Python's
+                // `**` mixes operand types freely and its result type
+                // depends on the exponent at RUNTIME (`2 ** 3 == 8` an int,
+                // `2 ** -1 == 0.5` a float). A static type system cannot make
+                // `int ** int` be both, so Cobrust PINS the typed result by
+                // the operand types (ADR-0102):
+                //   - `int ** int -> int` (i64), with a NEGATIVE-LITERAL
+                //     exponent REJECTED at compile time (§2.5-A — a negative
+                //     power is a non-integer; mirrors F79's negative-literal
+                //     scalar-index reject). A runtime-dynamic negative
+                //     exponent TRAPS in `__cobrust_ipow` (exit 3).
+                //   - ANY float operand `-> f64` (`float ** float`,
+                //     `int ** float`, `float ** int`); the MIR `lower_bin`
+                //     Pow guard casts an `int` operand i64→f64 and calls
+                //     `__cobrust_math_pow`.
+                // This runs BEFORE `unify(&lt, &rt)` because that unify would
+                // REJECT the mixed `int ** float` shape (Int does not unify
+                // with Float — Cobrust has NO implicit numeric promotion for
+                // `+`/`-`/`*`/`/`, §2.2). `**` is the ONE arithmetic op that
+                // promotes, and only because the float exponent makes the
+                // result a float unambiguously.
+                if matches!(op, BinOp::Pow) {
+                    let lt_r = self.subst.apply(&lt);
+                    let rt_r = self.subst.apply(&rt);
+                    let lt_is_float = matches!(lt_r, Ty::Float);
+                    let rt_is_float = matches!(rt_r, Ty::Float);
+                    let lt_is_int = matches!(lt_r, Ty::Int | Ty::IntN(_));
+                    let rt_is_int = matches!(rt_r, Ty::Int | Ty::IntN(_));
+                    // Mixed / pure float → f64 result (promote).
+                    if (lt_is_float || lt_is_int) && (rt_is_float || rt_is_int) {
+                        if lt_is_float || rt_is_float {
+                            return Ok(Ty::Float);
+                        }
+                        // Both integer → `int ** int -> int`. Reject a
+                        // negative LITERAL exponent (§2.5-A) before accepting.
+                        if let Some(exp_val) = literal_int_value(rhs) {
+                            if exp_val < 0 {
+                                return Err(TypeError::NegativePowExponent {
+                                    span,
+                                    suggestion: Some(
+                                        "a negative power yields a float; write \
+                                         `float(base) ** exp` or use a float base \
+                                         (e.g. `2.0 ** -1`)",
+                                    ),
+                                });
+                            }
+                        }
+                        return Ok(Ty::Int);
+                    }
+                    // A non-numeric operand (`"a" ** 2`, `b ** 2`) falls
+                    // through to `unify` + the post-unify reject below, which
+                    // surfaces the §2.5-B "str supports + / * int" or generic
+                    // "expected Int" diagnostic (CPython `"a" ** 2` is a
+                    // TypeError too).
+                }
                 unify(&lt, &rt, &mut self.subst, span)?;
                 let resolved = self.subst.apply(&lt);
                 // ADR-0077 Q1 — `coil.Buffer` operator dispatch (the FIRST

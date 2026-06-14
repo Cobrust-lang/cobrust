@@ -128,6 +128,14 @@ Key rules:
 - `//` (floor division) FLOORS toward -∞, Python-style: `-7 // 2 == -4`,
   `7 // -2 == -4`. `/` on integers TRUNCATES toward zero (`-7 / 2 == -3`).
   `%` matches `//` so `(a // b) * b + (a % b) == a` for every sign (ADR-0099).
+- `**` (power) is typed by its operands (ADR-0102): `int ** int -> int`
+  (`2 ** 10 == 1024`, `0 ** 0 == 1`), and ANY float operand promotes to
+  `f64` (`2.0 ** 0.5`, `2 ** 3.0 == 8.0`). `**` is the ONLY arithmetic op
+  that promotes a mixed int/float pair. Two cases cannot be a clean int and
+  are surfaced honestly: a **negative literal exponent** on an int base
+  (`2 ** -1`) is a COMPILE error — use a float base (`2.0 ** -1 == 0.5` or
+  `float(base) ** exp`); integer **overflow** (`2 ** 63`) and a runtime
+  negative exponent **trap** (exit 3) rather than silently wrap or truncate.
 - `inf / 0.0` is not a trap — IEEE 754 defines float division by zero.
 - `nan != nan` is `true` per IEEE 754.
 - `print(<float expr>)` works inline: `print(7.0 / 2.0)` prints `3.5`. An

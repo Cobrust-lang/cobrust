@@ -456,7 +456,11 @@ impl Canonicalize for TypeError {
             // ADR-0093 Phase-2 — unsupported bytes-slice shape; payload-free
             // (Span + suggestion only). The supported `b[lo:hi]` form lives
             // in the Display message, not the canonical key.
-            | TypeError::UnsupportedSliceShape { .. } => vec![],
+            | TypeError::UnsupportedSliceShape { .. }
+            // F90 / ADR-0102 — `int ** int` negative-literal exponent;
+            // payload-free (Span + suggestion only). The FIX (use a float
+            // base) lives in the Display message, not the canonical key.
+            | TypeError::NegativePowExponent { .. } => vec![],
         };
         CanonicalKey::node(variant, children)
     }
@@ -609,6 +613,8 @@ pub fn type_error_variant_name(err: &TypeError) -> &'static str {
         TypeError::DoraUnknownOutputId { .. } => "DoraUnknownOutputId",
         // ADR-0093 Phase-2 — unsupported bytes-slice shape.
         TypeError::UnsupportedSliceShape { .. } => "UnsupportedSliceShape",
+        // F90 / ADR-0102 — `int ** int` negative-literal exponent.
+        TypeError::NegativePowExponent { .. } => "NegativePowExponent",
     }
 }
 

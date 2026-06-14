@@ -109,6 +109,16 @@ in `well_typed.rs:460`) — only codegen errors. This keeps the
 existing test suite green; the new `python_semantics_corpus.rs`
 asserts each of the four emits `UnimplementedBinOp`.
 
+> **UPDATE 2026-06-14 (F90 / ADR-0102): `**` RESOLVED.** The `**` POWER
+> operator is now fully implemented (Option 1 for `**`): `int ** int ->
+> int` via the `__cobrust_ipow` runtime shim, any float operand `-> f64`
+> via libm `pow`, with a compile-time negative-literal-exponent reject and
+> runtime overflow / negative-exponent traps. See **ADR-0102**. The MIR
+> `lower_bin` Pow guard retargets before codegen, so codegen's Pow arm is
+> now only a defensive fallback. `@` / `in` / `not in` remain §H3 deferrals
+> (still emit `UnimplementedBinOp`); `python_semantics_corpus.rs` H3.1 is
+> flipped to assert `**` COMPILES (`h3_1_pow_codegen_compiles`).
+
 ### H4 — walrus operator
 
 1. **Implement** — add `ExprKind::Walrus(DefId, Box<Expr>)` to HIR,

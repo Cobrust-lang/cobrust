@@ -185,7 +185,10 @@ pub fn type_error_cb_fix_safety(err: &TypeErrorCb) -> FixSafetyCb {
         // ADR-0093 Phase-2 — unsupported bytes-slice shape; LocalEdit,
         // mirroring the Rust-side tier (local rewrite of the slice into the
         // supported `b[lo:hi]` form).
-        | UnsupportedSliceShape { .. } => FixSafetyCb::LocalEdit,
+        | UnsupportedSliceShape { .. }
+        // F90 / ADR-0102 — `int ** int` negative-literal exponent; LocalEdit,
+        // mirroring the Rust-side tier (local rewrite to a float base).
+        | NegativePowExponent { .. } => FixSafetyCb::LocalEdit,
         ImplicitTruthiness { .. } | MutableDefault { .. } | NotHashable { .. } => {
             FixSafetyCb::BehaviorPreserving
         }

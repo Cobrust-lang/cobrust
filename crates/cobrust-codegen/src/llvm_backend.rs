@@ -2382,6 +2382,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_param_counts
             .insert("__cobrust_math_pow", 2);
 
+        // F90 / ADR-0102 — `__cobrust_ipow(base: i64, exp: i64) -> i64`,
+        // the runtime target of the `.cb` `int ** int` POWER operator
+        // (the MIR `lower_bin` Pow guard retargets a two-`Ty::Int` `**`
+        // to this symbol). DISTINCT from the f64 `__cobrust_math_pow`
+        // above: integer power preserves the `int` type (Cobrust
+        // `int ** int -> int`, ADR-0102), and the shim TRAPS (exit 3) on
+        // overflow (`checked_pow`) and on a runtime-negative exponent
+        // rather than silently wrapping / returning a wrong-typed float.
+        let ipow_ty = i64_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false);
+        let ipow_fn = self
+            .module
+            .add_function("__cobrust_ipow", ipow_ty, Some(Linkage::External));
+        self.runtime_helper_decls.insert("__cobrust_ipow", ipow_fn);
+        self.runtime_helper_param_counts.insert("__cobrust_ipow", 2);
+
         // -- ADR-0083: `import math` (scalar stdlib) — BARE libm externs ---
         // `math.X` lowers (via the ecosystem-call path → `Terminator::Call`
         // onto a `Constant::Str` runtime symbol) to a DIRECT call into the

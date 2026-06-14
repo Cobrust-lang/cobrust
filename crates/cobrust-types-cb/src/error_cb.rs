@@ -341,6 +341,16 @@ pub enum TypeErrorCb {
         suggestion: Option<String>,
     },
 
+    /// F90 / ADR-0102 — `int ** int` POWER with a negative LITERAL exponent
+    /// (`2 ** -1`). Mirrors `TypeError::NegativePowExponent { span,
+    /// suggestion }` — payload-free (Span + suggestion only); the
+    /// "use a float base" fix renders from the Display message
+    /// byte-identically across the two impls.
+    NegativePowExponent {
+        span: Span,
+        suggestion: Option<String>,
+    },
+
     /// Composite error container — flat list of errors.
     ///
     /// ADR-0055b §3: `Multiple(list[TypeError])` — the only recursive
@@ -656,6 +666,11 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
                 suggestion: opt_string(*suggestion),
             }
         }
+        // F90 / ADR-0102 mirror — payload-free (Span + suggestion only).
+        TypeError::NegativePowExponent { span, suggestion } => TypeErrorCb::NegativePowExponent {
+            span: *span,
+            suggestion: opt_string(*suggestion),
+        },
     }
 }
 
@@ -793,7 +808,10 @@ impl Canonicalize for TypeErrorCb {
             | TypeErrorCb::CallbackSignatureMismatch { .. }
             // ADR-0093 Phase-2 — unsupported bytes-slice shape; payload-free
             // (mirror of the Rust-side canonicalization).
-            | TypeErrorCb::UnsupportedSliceShape { .. } => vec![],
+            | TypeErrorCb::UnsupportedSliceShape { .. }
+            // F90 / ADR-0102 — `int ** int` negative-literal exponent;
+            // payload-free (mirror of the Rust-side canonicalization).
+            | TypeErrorCb::NegativePowExponent { .. } => vec![],
         };
         CanonicalKey::node(variant, children)
     }
@@ -1064,6 +1082,15 @@ impl std::fmt::Display for TypeErrorCb {
                  non-unit step `b[0:4:2]`, or a negative bound `b[1:-1]` is not \
                  yet supported); write both explicit bounds, e.g. `b[1:len(b)]`"
             ),
+            // F90 / ADR-0102 — byte-identical to the Rust-side
+            // `TypeError::NegativePowExponent` `#[error(...)]` Display.
+            TypeErrorCb::NegativePowExponent { span, .. } => write!(
+                f,
+                "`int ** int` with a negative exponent at {span} yields a non-integer \
+                 (e.g. `2 ** -1 == 0.5`), but Cobrust pins `int ** int -> int`; \
+                 use a float base so the result is a float — write `float(base) ** exp` \
+                 or make the base a float literal (e.g. `2.0 ** -1`)"
+            ),
         }
     }
 }
@@ -1143,5 +1170,7 @@ pub fn type_error_cb_variant_name(err: &TypeErrorCb) -> &'static str {
         TypeErrorCb::DoraUnknownOutputId { .. } => "DoraUnknownOutputId",
         // ADR-0093 Phase-2 — unsupported bytes-slice shape.
         TypeErrorCb::UnsupportedSliceShape { .. } => "UnsupportedSliceShape",
+        // F90 / ADR-0102 — `int ** int` negative-literal exponent.
+        TypeErrorCb::NegativePowExponent { .. } => "NegativePowExponent",
     }
 }

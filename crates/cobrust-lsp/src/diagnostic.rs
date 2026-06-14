@@ -190,6 +190,8 @@ fn type_error_to_diagnostic_single(err: &TypeError, line_map: &LineMap) -> Diagn
         UnsupportedSliceShape { span, suggestion } => {
             (*span, *suggestion, "unsupported-slice-shape")
         }
+        // F90 / ADR-0102 — `int ** int` negative-literal exponent.
+        NegativePowExponent { span, suggestion } => (*span, *suggestion, "negative-pow-exponent"),
         Multiple(_) => unreachable!("Multiple flattened by type_error_to_diagnostics"),
     };
     let range = span_to_lsp_range(&span, line_map);

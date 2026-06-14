@@ -3535,6 +3535,75 @@ impl<'a> BodyBuilder<'a> {
             );
             return Ok(Operand::Copy(Place::local(bool_dest)));
         }
+        // F90 / ADR-0102 — the `**` POWER operator. Codegen's `BinOp::Pow`
+        // arm is an "unimplemented" reject (ADR-0041 §H3); we retarget the
+        // accepted shapes to runtime shims here so codegen never reaches it
+        // (sibling of the `str * int` / `str + str` retargets above). The
+        // typecheck `synth_bin` arm already decided the result type:
+        //   - `int ** int -> int`  → `__cobrust_ipow(base: i64, exp: i64)
+        //     -> i64` (checked_pow; TRAPS on overflow / runtime-negative
+        //     exponent — a negative LITERAL exponent was already a §2.5-A
+        //     COMPILE-TIME reject at `synth_bin`).
+        //   - any float operand `-> f64` → `__cobrust_math_pow(base: f64,
+        //     exp: f64) -> f64` (libm `pow`). An `int` operand in the mixed
+        //     `int ** float` / `float ** int` shape is cast i64→f64 via
+        //     `CastKind::IntToFloat` (mirrors the coil buffer-scalar mixed-
+        //     arg path above) so the shim receives genuine f64 values, NOT
+        //     an i64 bit-pattern the f64 arg-coercion would mis-bitcast.
+        if matches!(op, HirBinOp::Pow) {
+            let lhs_num_ty = match &lhs_ty {
+                Ty::Ref(inner) => inner.as_ref().clone(),
+                other => other.clone(),
+            };
+            let rhs_ty = synth_expr_ty(self, rhs);
+            let rhs_num_ty = match &rhs_ty {
+                Ty::Ref(inner) => inner.as_ref().clone(),
+                other => other.clone(),
+            };
+            let is_float_pow = matches!(lhs_num_ty, Ty::Float) || matches!(rhs_num_ty, Ty::Float);
+            if is_float_pow {
+                // float power → libm `pow`. Cast each `int` operand to f64
+                // (narrow `IntN` too — it is `int` per check.rs `synth_bin`).
+                let lhs_op = self.lower_expr(lhs)?;
+                let base_op = if matches!(lhs_num_ty, Ty::Int | Ty::IntN(_)) {
+                    let d = self.declare_local("_powbf".to_string(), Ty::Float, span, false);
+                    self.emit_assign(
+                        Place::local(d),
+                        Rvalue::Cast(CastKind::IntToFloat, lhs_op, Ty::Float),
+                        span,
+                    );
+                    Operand::Copy(Place::local(d))
+                } else {
+                    lhs_op
+                };
+                let rhs_op = self.lower_expr(rhs)?;
+                let exp_op = if matches!(rhs_num_ty, Ty::Int | Ty::IntN(_)) {
+                    let d = self.declare_local("_powef".to_string(), Ty::Float, span, false);
+                    self.emit_assign(
+                        Place::local(d),
+                        Rvalue::Cast(CastKind::IntToFloat, rhs_op, Ty::Float),
+                        span,
+                    );
+                    Operand::Copy(Place::local(d))
+                } else {
+                    rhs_op
+                };
+                let out = self.emit_ecosystem_call(
+                    "__cobrust_math_pow",
+                    Ty::Float,
+                    vec![base_op, exp_op],
+                    span,
+                );
+                return Ok(out);
+            }
+            // integer power → checked `__cobrust_ipow`. Operands are Copy
+            // i64 scalars; no borrow upgrade.
+            let lhs_op = self.lower_expr(lhs)?;
+            let rhs_op = self.lower_expr(rhs)?;
+            let out =
+                self.emit_ecosystem_call("__cobrust_ipow", Ty::Int, vec![lhs_op, rhs_op], span);
+            return Ok(out);
+        }
         let lhs_op = self.lower_expr(lhs)?;
         let rhs_op = self.lower_expr(rhs)?;
         let mir_op = bin_to_mir(op);

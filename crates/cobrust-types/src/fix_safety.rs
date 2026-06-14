@@ -188,7 +188,10 @@ pub fn type_error_suggestion_text(err: &TypeError) -> Option<&'static str> {
         | DoraUnknownOutputId { suggestion, .. }
         // ADR-0093 Phase-2 — unsupported bytes-slice shape; the supported
         // `b[lo:hi]` form is in the Display message + this hint.
-        | UnsupportedSliceShape { suggestion, .. } => *suggestion,
+        | UnsupportedSliceShape { suggestion, .. }
+        // F90 / ADR-0102 — `int ** int` negative-literal exponent; the fix
+        // (use a float base) is in the Display message + this hint.
+        | NegativePowExponent { suggestion, .. } => *suggestion,
         Multiple(_) => None,
     }
 }
@@ -271,6 +274,10 @@ pub fn type_error_fix_safety(err: &TypeError) -> FixSafety {
         // form (e.g. `b[1:]` → `b[1:len(b)]`). No cross-line semantics
         // carry-over.
         UnsupportedSliceShape { .. } => FixSafety::LocalEdit,
+        // F90 / ADR-0102 — `int ** int` negative-literal exponent. Fix is a
+        // local rewrite (use a float base: `float(base) ** exp` or a float
+        // literal). No cross-line semantics carry-over.
+        NegativePowExponent { .. } => FixSafety::LocalEdit,
         // Multiple — children carry their own tiers; the aggregate has no
         // singular safety classification.
         Multiple(_) => FixSafety::RequiresHumanReview,

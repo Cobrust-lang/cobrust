@@ -139,6 +139,54 @@ pub extern "C" fn __cobrust_math_pow(base: f64, exp: f64) -> f64 {
     base.powf(exp)
 }
 
+/// F90 / ADR-0102 — integer power `base ** exp -> i64` C-ABI shim, the
+/// runtime target of the `.cb` `int ** int` operator. Cobrust's static
+/// `int ** int -> int` rule pins an `i64` result (a negative-LITERAL
+/// exponent is a COMPILE-TIME reject at `check.rs` `synth_bin`, §2.5-A);
+/// this shim handles the runtime-dynamic cases the type checker cannot
+/// see at compile time:
+///
+/// - **Negative runtime exponent** (`base ** n` where `n < 0` is NOT a
+///   literal, e.g. a variable) — Python yields a *float* (`2 ** -1 ==
+///   0.5`), but a `Ty::Int`-result shim cannot return a float without
+///   silently changing the value's type (a §2.2 silent-coercion hole).
+///   So we TRAP (panic → exit 3) rather than return a wrong-typed /
+///   truncated value. The compile-time reject already covers the common
+///   literal case with a FIX-printing diagnostic (§2.5-B); this trap is
+///   the safety net for the dynamic case.
+/// - **Overflow** (`2 ** 63` and beyond) — `i64::checked_pow` returns
+///   `None`; we TRAP rather than silently WRAP (Constitution §2.2 forbids
+///   silent overflow). CPython promotes to bignum here; Cobrust's i64 has
+///   no bignum (yet), so a trap is the honest surface.
+///
+/// CPython identities preserved by `checked_pow`: `base ** 0 == 1` for
+/// every base (incl. `0 ** 0 == 1`), `base ** 1 == base`. `exp` is `u32`
+/// for `checked_pow`; a non-negative `exp` beyond `u32::MAX` is
+/// astronomically unreachable for a non-overflowing `i64` base (only
+/// `base ∈ {-1, 0, 1}` survive, and those are handled by the small-exp
+/// fast path mathematically — `checked_pow` still caps the cast), so we
+/// trap on an out-of-`u32`-range exponent too (overflow for `|base| >=
+/// 2`, defensively uniform for the edge bases).
+#[unsafe(no_mangle)]
+pub extern "C" fn __cobrust_ipow(base: i64, exp: i64) -> i64 {
+    if exp < 0 {
+        crate::panic::panic(
+            "integer ** with a negative exponent yields a non-integer (e.g. `2 ** -1 == 0.5`); \
+             a negative power requires a float base — write `float(base) ** exp`",
+        );
+    }
+    let Ok(exp_u32) = u32::try_from(exp) else {
+        crate::panic::panic("integer ** overflow: exponent too large for i64 result");
+    };
+    match base.checked_pow(exp_u32) {
+        Some(v) => v,
+        None => crate::panic::panic(
+            "integer ** overflow: result does not fit in i64 (Cobrust has no bignum; \
+             use a float base, e.g. `float(base) ** exp`)",
+        ),
+    }
+}
+
 /// `sin(x) -> f64` C-ABI shim.
 #[unsafe(no_mangle)]
 pub extern "C" fn __cobrust_math_sin(x: f64) -> f64 {
@@ -335,6 +383,30 @@ mod tests {
     #[test]
     fn pow_fractional_exponent() {
         assert!((pow(4.0, 0.5) - 2.0).abs() < 1e-10);
+    }
+
+    // F90 / ADR-0102 — `__cobrust_ipow` non-trapping integer-power cases.
+    // The TRAP cases (negative exponent, overflow) call `process::exit(3)`
+    // and so cannot be exercised in-process; they are covered end-to-end by
+    // `cobrust-cli/tests/power_e2e.rs` (the built executable's exit code).
+    #[test]
+    fn ipow_basic_and_identities() {
+        assert_eq!(__cobrust_ipow(2, 10), 1024);
+        assert_eq!(__cobrust_ipow(3, 3), 27);
+        assert_eq!(__cobrust_ipow(10, 3), 1000);
+        // `base ** 0 == 1` for every base, incl. `0 ** 0 == 1` (CPython).
+        assert_eq!(__cobrust_ipow(2, 0), 1);
+        assert_eq!(__cobrust_ipow(0, 0), 1);
+        assert_eq!(__cobrust_ipow(7, 0), 1);
+        // `base ** 1 == base`.
+        assert_eq!(__cobrust_ipow(5, 1), 5);
+        assert_eq!(__cobrust_ipow(0, 5), 0);
+        // negative BASE, non-negative exponent stays integer (sign tracks
+        // parity): `(-2) ** 3 == -8`, `(-2) ** 2 == 4`.
+        assert_eq!(__cobrust_ipow(-2, 3), -8);
+        assert_eq!(__cobrust_ipow(-2, 2), 4);
+        // just-below-overflow: `2 ** 62` fits in i64.
+        assert_eq!(__cobrust_ipow(2, 62), 1i64 << 62);
     }
 
     #[test]

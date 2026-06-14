@@ -292,6 +292,34 @@ fn test_display_unsupported_slice_shape() {
 }
 
 #[test]
+fn test_display_negative_pow_exponent() {
+    // Anchor: error_display_parity.rs::test_display_negative_pow_exponent
+    //
+    // F90 / ADR-0102 — `int ** int` with a negative LITERAL exponent is a
+    // compile-time reject. The §2.5-B FIX names the float-base remedy, and
+    // MUST render byte-identically across the Rust and .cb Display impls
+    // (payload-free, suggestion-only — the simplest mirror).
+    let span = dummy_span();
+    let rust_err = TypeError::NegativePowExponent {
+        span,
+        suggestion: None,
+    };
+    let cb_err = TypeErrorCb::NegativePowExponent {
+        span,
+        suggestion: None,
+    };
+    let rendered = format!("{rust_err}");
+    assert_eq!(
+        rendered,
+        format!("{cb_err}"),
+        "NegativePowExponent Display must be byte-equal"
+    );
+    // The §2.5-B FIX names the negative-exponent diagnosis + the float-base fix.
+    assert!(rendered.contains("negative exponent"));
+    assert!(rendered.contains("float(base) ** exp"));
+}
+
+#[test]
 
 fn test_display_arity_mismatch() {
     let span = dummy_span();
@@ -457,6 +485,7 @@ impl SuggestionText for TypeError {
             TypeError::LenArgNotSized { suggestion, .. } => suggestion.as_deref(),
             TypeError::DoraUnknownOutputId { suggestion, .. } => suggestion.as_deref(),
             TypeError::UnsupportedSliceShape { suggestion, .. } => suggestion.as_deref(),
+            TypeError::NegativePowExponent { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }
@@ -496,6 +525,7 @@ impl SuggestionText for TypeErrorCb {
             TypeErrorCb::LenArgNotSized { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::DoraUnknownOutputId { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::UnsupportedSliceShape { suggestion, .. } => suggestion.as_deref(),
+            TypeErrorCb::NegativePowExponent { suggestion, .. } => suggestion.as_deref(),
         }
     }
 }

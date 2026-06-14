@@ -10,8 +10,10 @@
 //!   (the `srem` instruction must be followed by an adjustment).
 //! - **H2** `and` / `or` short-circuit — MIR-level shape probe (a
 //!   `SwitchInt` terminator must straddle the boolean operands).
-//! - **H3** `**` / `@` / `in` / `not in` — codegen-level error
-//!   surfacing (no silent `iconst(I64, 0)`).
+//! - **H3** `@` / `in` / `not in` — codegen-level error surfacing (no
+//!   silent `iconst(I64, 0)`). NOTE: `**` (Pow) is NO LONGER in this set
+//!   — F90 / ADR-0102 wired it through (`int ** int -> int` via the
+//!   `__cobrust_ipow` shim), so H3.1 now asserts it COMPILES.
 //! - **H4** walrus `:=` — parser surfaces explicit
 //!   `DroppedByConstitution` rather than zero-consume.
 //! - **H5** closure capture — HIR `captures` field non-empty when the
@@ -261,20 +263,24 @@ fn h2_3_chained_and_short_circuit() {
 // H3 — `**` / `@` / `in` / `not in` surface CodegenError, not silent zero
 // =====================================================================
 
-/// H3.1 — `**` (Pow) surfaces `CodegenError::UnimplementedBinOp`.
+/// H3.1 — `**` (Pow) now COMPILES (F90 / ADR-0102). Before F90 this
+/// surfaced `CodegenError::UnimplementedBinOp { op: "**" }` (ADR-0041 §H3);
+/// F90 wires `int ** int -> int` through the `__cobrust_ipow` runtime shim
+/// (the MIR `lower_bin` Pow guard retargets it BEFORE codegen's Pow arm),
+/// so emission now SUCCEEDS. The F80-style follow-up: this previously-
+/// negative test is flipped to assert the new positive surface (`**` is no
+/// longer an unimplemented-codegen reject). End-to-end value correctness
+/// (vs the CPython oracle) lives in `cobrust-cli/tests/power_e2e.rs`.
 #[test]
-fn h3_1_pow_codegen_error() {
-    use cobrust_codegen::CodegenError;
+fn h3_1_pow_codegen_compiles() {
     let src = "fn f(a: i64, b: i64) -> i64:\n    return (a ** b)\n";
     let typed = type_check(src).expect("H3.1: type-check accepts ** (numeric arith)");
     let mir = mir_lower(&typed).expect("H3.1: MIR lowering accepts **");
     let (spec, _guard) = host_object_spec("h3_1_pow");
-    let result = emit(&mir, spec);
-    match result {
-        Err(CodegenError::UnimplementedBinOp { op: "**", .. }) => {}
-        Err(other) => panic!("H3.1: expected UnimplementedBinOp(**), got {other:?}"),
-        Ok(_) => panic!("H3.1: ** should NOT compile silently"),
-    }
+    emit(&mir, spec).expect(
+        "H3.1: `int ** int` now compiles (F90 — retargeted to __cobrust_ipow, \
+         no longer an UnimplementedBinOp reject)",
+    );
 }
 
 /// H3.2 — `@` (MatMul) surfaces `CodegenError::UnimplementedBinOp`.

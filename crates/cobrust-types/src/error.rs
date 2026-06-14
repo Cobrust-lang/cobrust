@@ -417,4 +417,29 @@ pub enum TypeError {
         span: Span,
         suggestion: Option<&'static str>,
     },
+
+    /// F90 / ADR-0102 (§2.5-A) — an `int ** int` POWER with a NEGATIVE
+    /// LITERAL exponent (`2 ** -1`, `base ** -3`). Cobrust pins
+    /// `int ** int -> int` (a static `i64` result), but a negative
+    /// exponent yields a non-integer in Python (`2 ** -1 == 0.5`), so an
+    /// `int`-typed result is impossible — this is a COMPILE-TIME reject
+    /// (mirrors F79's negative-literal scalar-index reject), NOT a silent
+    /// wrong value (§2.2). A runtime-DYNAMIC negative exponent (a variable,
+    /// not a literal) TRAPS at runtime via `__cobrust_ipow` (exit 3); only
+    /// the literal case is catchable here.
+    ///
+    /// Per §2.5-B the message PRINTS THE FIX: use a float base so the
+    /// result is a float (`float(base) ** exp`, or write the base as a
+    /// float literal `2.0 ** -1`). `suggestion` carries the uniform static
+    /// hint (ADR-0052b §2).
+    #[error(
+        "`int ** int` with a negative exponent at {span} yields a non-integer \
+         (e.g. `2 ** -1 == 0.5`), but Cobrust pins `int ** int -> int`; \
+         use a float base so the result is a float — write `float(base) ** exp` \
+         or make the base a float literal (e.g. `2.0 ** -1`)"
+    )]
+    NegativePowExponent {
+        span: Span,
+        suggestion: Option<&'static str>,
+    },
 }

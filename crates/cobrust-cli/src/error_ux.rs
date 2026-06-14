@@ -1083,6 +1083,23 @@ impl From<TypeError> for UserError {
                     col,
                 )
             }
+            // F90 / ADR-0102 (§2.5-B) — `int ** int` with a negative literal
+            // exponent. The `msg` names the value-type clash AND the FIX
+            // (use a float base) so the LLM agent rewrites it in one step.
+            E::NegativePowExponent { span, suggestion } => {
+                let (line, col) = span_to_line_col(span);
+                (
+                    "`int ** int` with a negative exponent yields a non-integer \
+                     (e.g. `2 ** -1 == 0.5`), but Cobrust pins `int ** int -> int`; \
+                     use a float base so the result is a float — write \
+                     `float(base) ** exp` or make the base a float literal \
+                     (e.g. `2.0 ** -1`)"
+                        .to_owned(),
+                    suggestion.map(str::to_owned),
+                    line,
+                    col,
+                )
+            }
         };
         Self::Type {
             file: PathBuf::from("<source>"),
