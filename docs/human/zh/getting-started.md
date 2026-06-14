@@ -75,6 +75,10 @@ Phase F.3 提供两参数形式 `range(start, stop)`。三参数 `range(start, s
 - 循环变量每次迭代都是全新绑定；在循环体内创建的闭包，在第 N 次迭代时
   捕获的是第 N 次迭代的值（宪法 §2.2 —— 拒绝 Python 的延迟绑定）。
 - 允许 `for` 嵌套；变量遮蔽遵循 Rust 规则。
+- `break` 提前退出循环；`continue` 跳到下一个元素。在 `for` 循环里，
+  `continue` 会正确推进循环下标，**不会**重复处理当前元素
+  （ADR-0100;此修复消除了 F89 的死循环 —— 此前
+  `for x in xs: if cond: continue` 会无限循环挂死）。
 - 非 `list[T]` 的迭代源（例如 `for x in 42:`）在类型检查阶段就会被拒绝
   （`TypeError::NotIterable`）。
 

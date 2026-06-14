@@ -258,7 +258,16 @@ struct BodyBuilder<'a> {
     /// Currently-being-built block index. `None` means previous block
     /// was terminated and a new one must be opened.
     cur_block: Option<usize>,
-    /// Stack of (header_block, exit_block) for `break` / `continue`.
+    /// Stack of `(continue_target_block, exit_block)` for `continue` / `break`.
+    ///
+    /// F89: `continue` must goto the enclosing loop's *continue target*, NOT
+    /// the loop header directly. For a `while` loop the continue target IS the
+    /// header (the user hand-writes any induction-var bump inside the body).
+    /// For a `for` loop the continue target is a dedicated *increment latch*
+    /// block that performs `__idx += 1` then `Goto(header)` — so the induction
+    /// variable advances on EVERY path that re-enters the loop (body
+    /// fall-through AND `continue` alike). Pointing `continue` at the header
+    /// instead bypasses the increment and spins forever (F89 hang).
     loop_stack: Vec<(BlockId, BlockId)>,
     return_local: LocalId,
     param_count: usize,
@@ -523,9 +532,14 @@ impl<'a> BodyBuilder<'a> {
                 }
             }
             StmtKind::Continue => {
-                if let Some((header, _)) = self.loop_stack.last().copied() {
+                // F89: goto the innermost loop's CONTINUE TARGET, not the
+                // header. For `while` this is the header; for `for` it is the
+                // increment latch that bumps `__idx` before re-entering the
+                // header (so `continue` does not bypass the induction-var
+                // increment and infinite-loop).
+                if let Some((continue_target, _)) = self.loop_stack.last().copied() {
                     self.ensure_open_block();
-                    self.terminate(Terminator::Goto(header));
+                    self.terminate(Terminator::Goto(continue_target));
                     Ok(())
                 } else {
                     Err(MirError::Internal("continue outside loop".to_string()))
@@ -1118,6 +1132,26 @@ impl<'a> BodyBuilder<'a> {
                     otherwise: exit_block,
                 });
 
+                // F89: the increment LATCH. This is the loop's `continue`
+                // target. It bumps `__idx` by 1 then re-enters `header`. BOTH
+                // the body fall-through and any `continue` route through here,
+                // so the induction variable advances on every re-entry path.
+                // (Before F89 the increment lived only in the body
+                // fall-through and `continue` gotoed `header` directly,
+                // bypassing it → infinite loop.)
+                let latch_block = self.start_new_block();
+                self.cur_block = Some(latch_block.0 as usize);
+                self.emit_assign(
+                    Place::local(idx_local),
+                    Rvalue::BinaryOp(
+                        crate::tree::BinOp::Add,
+                        Operand::Copy(Place::local(idx_local)),
+                        Operand::Constant(Constant::Int(1)),
+                    ),
+                    span,
+                );
+                self.terminate(Terminator::Goto(header));
+
                 // Step 6: body — fetch var via __cobrust_list_get, then
                 // lower user body, then bump __idx, then goto header.
                 //
@@ -1136,7 +1170,8 @@ impl<'a> BodyBuilder<'a> {
                 // (no drop schedule), then materialise an owned clone
                 // via `__cobrust_str_clone(raw) -> s`. The slot remains
                 // owned by `xs`; the loop var owns its own fresh copy.
-                self.loop_stack.push((header, exit_block));
+                // F89: `continue` target is the increment latch, NOT `header`.
+                self.loop_stack.push((latch_block, exit_block));
                 self.cur_block = Some(body_block.0 as usize);
                 if let Some(vl) = var_local {
                     let vl_ty = self
@@ -1195,17 +1230,10 @@ impl<'a> BodyBuilder<'a> {
                 }
                 self.lower_block(body)?;
                 if !self.terminated() {
-                    // Bump __idx and loop back to header.
-                    self.emit_assign(
-                        Place::local(idx_local),
-                        Rvalue::BinaryOp(
-                            crate::tree::BinOp::Add,
-                            Operand::Copy(Place::local(idx_local)),
-                            Operand::Constant(Constant::Int(1)),
-                        ),
-                        span,
-                    );
-                    self.terminate(Terminator::Goto(header));
+                    // F89: body fall-through routes through the increment
+                    // latch (which bumps `__idx` then gotos `header`), the
+                    // SAME target as `continue`.
+                    self.terminate(Terminator::Goto(latch_block));
                 }
                 self.loop_stack.pop();
 

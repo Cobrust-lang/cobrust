@@ -2,7 +2,8 @@
 finding_id: F89
 title: '`continue` inside ANY `for` loop HANGS (infinite loop) — the loop-index increment lives in the body fall-through, which `continue` (Goto header) bypasses
 date: 2026-06-14
-status: open
+status: resolved
+resolved_by: ADR-0100 (2026-06-14)
 severity: major
 discovered_by: the F88 (`for c in str`) §2.2 adversarial audit
 relates_to: ["finding:f88", "claude.md:§2.2", "claude.md:§5.1"]
@@ -74,3 +75,27 @@ F88 work is preserved on branch `fix/f88-redo-str-for`; its redo must
 (c) run the FULL `cargo test --workspace --locked` to completion before
 commit (the F88 attempt committed while the workspace test was still
 compiling — the F83 lesson not fully applied).
+
+## Resolution (ADR-0100, 2026-06-14)
+
+Fixed in `cobrust-mir/src/lower.rs`. The `for` loop now emits an increment
+**LATCH** block that performs `__idx += 1` then `Goto(header)`; the
+`loop_stack` entry stores `(continue_target, exit)` and `StmtKind::Continue`
+gotos the `continue_target`. For a `for` loop that target is the latch; for
+a `while` loop it remains the header (unchanged). BOTH the body fall-through
+and `continue` route through the latch, so the induction variable advances
+on every re-entry path — the hang is gone. `break` (→ exit) and plain
+straight-line `for` iteration are unchanged. Nested loops are correct: the
+innermost loop's latch is `loop_stack.last()`.
+
+The str-`for` arm (F88 redo, branch `fix/f88-redo-str-for`) inherits the
+fix for free — it lowers to the same length-bound index iteration and
+reuses the shared continue-target latch.
+
+Regression guard: `crates/cobrust-cli/tests/cli_continue_in_for_e2e.rs`
+(15 cases) — a WATCHDOG-guarded corpus that spawns each exe and KILLS +
+FAILS it if it does not exit within 10 s, so a future regression to the
+hang fails the test instead of stalling CI. Covers skip-filter, first/
+last/every-element `continue`, `continue`+`break`, nested inner/outer/both,
+`range`-backed lists, and plain-`for`/`break` regression guards. Full
+`cargo test --workspace --locked` run to completion before commit.

@@ -77,6 +77,10 @@ Loop semantics:
   the body see the iter-N value when created at iter N (constitution
   §2.2 — no Python-style late-binding).
 - Nested `for` is legal; var shadowing follows Rust rules.
+- `break` exits the loop early; `continue` skips to the next element.
+  Inside a `for` loop, `continue` correctly advances the loop index — it
+  does NOT re-run the current element (ADR-0100; this fixes the F89
+  infinite-loop where `for x in xs: if cond: continue` previously hung).
 - `for x in 42:` and other non-`list[T]` iter sources are rejected at
   type-check (`TypeError::NotIterable`).
 
