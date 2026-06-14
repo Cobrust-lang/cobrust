@@ -283,7 +283,8 @@ let ok = len(xs)        # 3
 ```
 
 The Rust-style method-form `s.len()` / `xs.len()` also works and agrees with
-`len(s)` / `len(xs)` byte-for-byte.
+the free `len(s)` / `len(xs)` exactly — for a `str` both are the Python
+codepoint count (F91 / ADR-0103: `len("é") == 1`, not the UTF-8 byte length).
 
 **Likely fix:** pass a `str` / `list` / `dict` to `len`; for a number, compare
 it directly (`x >= 0`) instead of taking its length.

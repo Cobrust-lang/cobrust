@@ -234,9 +234,11 @@ fn main() -> i64:
     print(len(\"é\" * 2))
     return 0
 ";
-    // "éé" then its byte-length. `len` on a `str` is the BYTE length in
-    // Cobrust (the runtime `__cobrust_str_len`); `"éé"` is 4 bytes.
-    assert_build_run("str_mul_e2e_03", src, "éé\n4\n");
+    // "éé" then its CODEPOINT length. F91 / ADR-0103: `len(str)` is the
+    // Python-canonical codepoint count (`__cobrust_str_char_count`), NOT the
+    // UTF-8 byte length — so `len("éé") == 2` (CPython oracle), agreeing with
+    // `s[i]` indexing (F79) and the `for c in s:` iteration count (F88).
+    assert_build_run("str_mul_e2e_03", src, "éé\n2\n");
 }
 
 // =====================================================================

@@ -16,10 +16,15 @@
 // Surface helpers
 // =====================================================================
 
-/// UTF-8 byte length. Cobrust strings are always UTF-8; this is the
-/// number of bytes, not Unicode code points. For code-point count
-/// users call `s.chars().count()` directly (M11.x will widen with
-/// a `char_count` helper if needed).
+/// UTF-8 byte length of `s` (the Rust-side helper). This is the number
+/// of BYTES, not Unicode code points.
+///
+/// NOTE — the SOURCE-LEVEL `.cb` `len(str)` / `s.len()` surface does NOT
+/// bind here: it is the Python-canonical CODEPOINT count
+/// (`__cobrust_str_char_count` = `chars().count()`) per F91 / ADR-0103,
+/// agreeing with `s[i]` indexing (F79) and `for c in s:` iteration (F88).
+/// This Rust-side `len` is the byte-length primitive used internally by the
+/// codegen / io shims; it is intentionally distinct from the source `len`.
 pub fn len(s: &str) -> usize {
     s.len()
 }
@@ -350,12 +355,15 @@ pub unsafe extern "C" fn __cobrust_str_char_at(s: *mut u8, i: i64) -> *mut u8 {
 }
 
 /// CODEPOINT count of `s` (Python `len(str)` semantics — NOT byte length).
-/// The MIR `for c in <str>:` lowering uses this as the loop bound so a
+/// This is the runtime target of the SOURCE-LEVEL `len(str)` builtin AND the
+/// `s.len()` method form (F91 / ADR-0103 — `len("é") == 1`, CPython-faithful),
+/// as well as the loop bound for the MIR `for c in <str>:` lowering so a
 /// multi-byte char yields exactly ONE iteration (F88 / ADR-0101). It agrees
 /// codepoint-for-codepoint with `__cobrust_str_char_at` (both use
-/// `chars().count()` / `chars().nth()`), so `for c in s:` visits
-/// `[0, char_count)` with no mid-codepoint split. Contrast
-/// `__cobrust_str_len` (BYTE length).
+/// `chars().count()` / `chars().nth()`), so `len(s)` == the `for c in s:`
+/// iteration count == the valid `s[i]` index range, with no mid-codepoint
+/// split. Contrast `__cobrust_str_len` / `__cobrust_str_len_src` (BYTE
+/// length — the `len(bytes)` path, not the `len(str)` path).
 ///
 /// `s` is BORROWED (read-only); the caller's drop schedule still frees it.
 /// A NULL handle is the empty string (`0`).

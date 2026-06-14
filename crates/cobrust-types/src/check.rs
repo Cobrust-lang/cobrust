@@ -1810,6 +1810,16 @@ impl Ctx {
         if allow_str && matches!(resolved, Ty::Str) {
             return Ok(Ty::Str);
         }
+        // §2.5-B fix-naming: the reject hint must not over-promise. `str`
+        // iterates in a `for`-loop (the `allow_str` call site, F88) but is
+        // NOT yet a comprehension / `in` source — so naming `str` as a remedy
+        // is only accurate at the `for`-loop call site. We keep the shared
+        // wording (and so stay in lock-step with the self-host `.cb`
+        // parity-corpus fixture, which carries the identical literal) and
+        // defer a context-split hint to the same change that teaches the
+        // comprehension/`in` MIR paths to iterate `str`. F91 note recorded.
+        let not_iterable_hint: &'static str =
+            "use a list / dict / range / str — primitives cannot iterate";
         match resolved {
             Ty::List(t) => Ok(*t),
             Ty::Set(t) => Ok(*t),
@@ -1819,9 +1829,7 @@ impl Ctx {
                     return Err(TypeError::NotIterable {
                         actual: Ty::Tuple(items),
                         span,
-                        suggestion: Some(
-                            "use a list / dict / range / str — primitives cannot iterate",
-                        ),
+                        suggestion: Some(not_iterable_hint),
                     });
                 }
                 let head = items[0].clone();
@@ -1831,9 +1839,7 @@ impl Ctx {
                         return Err(TypeError::NotIterable {
                             actual: Ty::Tuple(items),
                             span,
-                            suggestion: Some(
-                                "use a list / dict / range / str — primitives cannot iterate",
-                            ),
+                            suggestion: Some(not_iterable_hint),
                         });
                     }
                 }
@@ -1850,7 +1856,7 @@ impl Ctx {
             other => Err(TypeError::NotIterable {
                 actual: other,
                 span,
-                suggestion: Some("use a list / dict / range / str — primitives cannot iterate"),
+                suggestion: Some(not_iterable_hint),
             }),
         }
     }

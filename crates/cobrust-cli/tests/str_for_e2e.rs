@@ -19,9 +19,9 @@
 //! `e07`/`e08` cases prove `continue` over a str loop terminates.
 //!
 //! ORACLE: CPython `for c in s: print(c)` prints one codepoint per line.
-//! Note `len(str)` still returns the BYTE count (a separate pre-existing
-//! divergence, NOT F88's scope) — these tests assert ITERATION COUNT via the
-//! number of printed lines, which IS codepoint-accurate.
+//! These tests assert ITERATION COUNT via the number of printed lines, which
+//! is codepoint-accurate. (`len(str)` is ALSO the codepoint count since F91 /
+//! ADR-0103 — so `len(s)` == this iteration count == the valid index range.)
 //!
 //! 18-lint clippy allow header per `feedback_p9_clippy_stall_pattern.md`.
 

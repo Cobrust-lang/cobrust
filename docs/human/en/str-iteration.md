@@ -52,12 +52,12 @@ fn main() -> i64:
     return 0
 ```
 
-> **Note — `len(str)` still returns the BYTE count.** This is a separate
-> pre-existing divergence from Python (which returns the codepoint count)
-> and is **out of scope** for the iteration feature. The *iteration count*
-> is codepoint-accurate (`"héllo"` runs the body 5 times); `len("héllo")`
-> currently returns 6 (bytes). Don't use `len(s)` to predict the iteration
-> count of a non-ASCII string.
+> **Note — `len(str)` is the CODEPOINT count too (F91 / ADR-0103).** Like
+> Python, `len("héllo") == 5` (not 6 bytes) and `len("é") == 1`. So
+> `len(s)` exactly predicts the iteration count of `for c in s:` and the
+> valid index range of `s[i]` — the whole string surface agrees on
+> codepoints. Need the raw UTF-8 byte length? Encode first: `len(s.encode())`
+> (`bytes` are bytes — `len(b"…")` stays the byte count).
 
 ## `continue` and `break` work
 

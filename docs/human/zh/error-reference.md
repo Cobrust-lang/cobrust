@@ -276,8 +276,9 @@ let xs: list[i64] = [1, 2, 3]
 let ok = len(xs)        # 3
 ```
 
-Rust 风格的方法形式 `s.len()` / `xs.len()` 同样可用,且与 `len(s)` / `len(xs)`
-逐字节一致。
+Rust 风格的方法形式 `s.len()` / `xs.len()` 同样可用,且与自由函数
+`len(s)` / `len(xs)` 完全一致 —— 对 `str` 两者都是 Python 码点数
+(F91 / ADR-0103:`len("é") == 1`,而非 UTF-8 字节长度)。
 
 **可能的修复:** 给 `len` 传一个 `str` / `list` / `dict`;对数字则直接比较
 (`x >= 0`)而非取其长度。

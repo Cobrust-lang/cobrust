@@ -90,7 +90,24 @@ pub const PARSE_INT_RUNTIME_SYMBOL: &str = "__cobrust_parse_int";
 
 /// Runtime symbol for source-level `str_len(s: str) -> i64`.
 /// ADR-0044 W2 Phase 3 — exported by `cobrust-stdlib::io`.
+/// BYTE count. NOT the symbol the Python-canonical `len(str)` / `s.len()`
+/// surface uses — those route through [`STR_CHAR_COUNT_RUNTIME_SYMBOL`]
+/// (codepoint count) per F91 / ADR-0103. Retained: the `__cobrust_str_len_src`
+/// runtime fn + codegen extern still exist as the byte-length primitive a
+/// future explicit byte-len builtin would bind to (and the io/file shims that
+/// read it internally); no source-level `len`/`str_len` path emits it today.
+#[allow(dead_code)]
 pub const STR_LEN_RUNTIME_SYMBOL: &str = "__cobrust_str_len_src";
+
+/// Runtime symbol for the CODEPOINT count of a `str` (Python `len(str)`
+/// semantics — `chars().count()`, NOT the UTF-8 byte length). Exported by
+/// `cobrust-stdlib::string` (added F88 for the `for c in s:` loop bound) and
+/// declared in codegen (`llvm_backend.rs`). F91 / ADR-0103 routes both the
+/// free `len(str)` and the `s.len()` method form here so the str length
+/// agrees codepoint-for-codepoint with `s[i]` indexing (F79) and the
+/// `for c in s:` iteration count (F88). Contrast [`STR_LEN_RUNTIME_SYMBOL`]
+/// (byte count) and [`BYTES_LEN_RUNTIME_SYMBOL`] (bytes ARE bytes).
+pub const STR_CHAR_COUNT_RUNTIME_SYMBOL: &str = "__cobrust_str_char_count";
 
 /// Runtime symbol for source-level `str_at(s: str, i: i64) -> str`.
 /// ADR-0044 W2 Phase 3 — exported by `cobrust-stdlib::io`.
@@ -1849,14 +1866,24 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     args.push(str_arg);
                 }
                 Kind::StrLen => {
-                    // str_len(s: str) -> i64 → __cobrust_str_len_src(buf_ptr)
+                    // str_len(s: str) -> i64 → __cobrust_str_char_count(buf_ptr).
+                    // F91 / ADR-0103: the `str_len` PRELUDE shim — and the
+                    // `s.len()` method form that rewrites to it
+                    // (`method_form_rewrite_name`, mir/lower.rs) — return the
+                    // Python-canonical CODEPOINT count, NOT the UTF-8 byte
+                    // length, so the str length surface agrees with both the
+                    // free `len(str)` builtin (Kind::LenPoly) and `s[i]`
+                    // indexing (F79) / `for c in s:` iteration (F88). The raw
+                    // byte length stays reachable via `len(b"…")` /
+                    // `s.encode()` (the bytes path).
                     if args.len() != 1 {
                         return Err(IntrinsicError::PrintArgUnsupported {
                             found: format!("str_len: expected 1 arg, got {}", args.len()),
                         });
                     }
                     let str_arg = args[0].clone();
-                    *func = Operand::Constant(Constant::Str(STR_LEN_RUNTIME_SYMBOL.to_string()));
+                    *func =
+                        Operand::Constant(Constant::Str(STR_CHAR_COUNT_RUNTIME_SYMBOL.to_string()));
                     args.clear();
                     args.push(str_arg);
                 }
@@ -2035,10 +2062,14 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     // MIR-rewrite time we pick the matching runtime symbol
                     // from the arg's resolved `LocalDecl.ty` (mirrors the
                     // `Kind::Print` monomorphization at line ~1505):
-                    //   Str       → __cobrust_str_len_src  (byte count; the
-                    //               SAME symbol the str method-form `s.len()`
-                    //               rewrites to via `str_len`, so the two
-                    //               agree — ADR-0088 §4).
+                    //   Str       → __cobrust_str_char_count (CODEPOINT count
+                    //               — F91 / ADR-0103, the Python-canonical
+                    //               `len("é") == 1`, NOT the UTF-8 byte length.
+                    //               The SAME symbol the str method-form
+                    //               `s.len()` rewrites to via `str_len`
+                    //               (Kind::StrLen), so the two agree, and both
+                    //               agree with `s[i]` (F79) / `for c in s:`
+                    //               (F88)).
                     //   List[T]   → __cobrust_list_len     (type-erased over T)
                     //   Dict[K,V] → __cobrust_dict_len     (type-erased over
                     //               (K, V); reads `DictLayout.map.len()`).
@@ -2068,7 +2099,12 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         _ => None,
                     };
                     let symbol = match effective_ty {
-                        Some(Ty::Str) => STR_LEN_RUNTIME_SYMBOL,
+                        // F91 / ADR-0103 — Python-canonical CODEPOINT count,
+                        // NOT the UTF-8 byte count. `len("é") == 1` (CPython),
+                        // agreeing with `s[i]` indexing (F79) and the
+                        // `for c in s:` iteration count (F88). The byte count
+                        // remains available via the `str_len` shim.
+                        Some(Ty::Str) => STR_CHAR_COUNT_RUNTIME_SYMBOL,
                         // ADR-0093 — `len(b)` on a `Ty::Bytes` arg.
                         Some(Ty::Bytes) => BYTES_LEN_RUNTIME_SYMBOL,
                         Some(Ty::List(_)) => LIST_LEN_RUNTIME_SYMBOL,

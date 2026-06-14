@@ -349,7 +349,7 @@ constantly, §2.5) accepts ANY SIZED type — `str` / `list[T]` /
 |---|---|---|
 | Sized-type special-case | `types/src/check.rs::try_synth_len_builtin` | runs in `synth_call` AFTER `try_synth_method_call`, BEFORE the generic PRELUDE-stub-unify. Fires only for the bare name `len` whose `DefId` is in `poly_intrinsic_defs` (a user `fn len` is untouched) with one positional arg. Synths + resolves the arg (`subst.apply`, unwraps one `Ref` so `len(&s)` works); `Str`/`List(_)`/`Dict(_,_)` → `Ty::Int` WITHOUT unifying the arg to `Dict`; a non-sized arg → `LenArgNotSized` |
 | `TypeError::LenArgNotSized { actual, span, suggestion }` | `types/src/error.rs` | §2.5-B message NAMES the accepted set (`str`/`list[T]`/`dict[K,V]`); does NOT say "expected Dict" (the pre-ADR-0088 dict-leaking diagnostic) |
-| Per-shape lowering | `cobrust-cli/src/build/intrinsics.rs` `Kind::LenPoly` | picks the runtime symbol from the arg's resolved `LocalDecl.ty`: `Str` → `__cobrust_str_len_src` (byte count, SAME as the `s.len()` method-form via `str_len`), `List` → `__cobrust_list_len`, `Dict`/`_` → `__cobrust_dict_len` |
+| Per-shape lowering | `cobrust-cli/src/build/intrinsics.rs` `Kind::LenPoly` | picks the runtime symbol from the arg's resolved `LocalDecl.ty`: `Str` → `__cobrust_str_char_count` (**CODEPOINT count**, F91 / ADR-0103 — `len("é") == 1`; SAME as the `s.len()` method-form via `str_len`, which `Kind::StrLen` also redirects to char_count), `Bytes` → `__cobrust_bytes_len` (byte count — bytes ARE bytes), `List` → `__cobrust_list_len`, `Dict`/`_` → `__cobrust_dict_len` |
 
 Invariants:
 - The PRELUDE `len` stub stays dict-only (`fn len(d: dict[i64,i64]) ->
@@ -357,8 +357,11 @@ Invariants:
   `instantiate_list_polymorphic` widening (`Dict(_,_) -> Dict[?,?]`)
   rejects `str`/`List`. `prelude.rs` is NOT touched.
 - The method-form `s.len()` / `xs.len()` (`try_synth_*_method`,
-  0-arg → `Int`) is the Rust spelling and is KEPT unchanged; it agrees
-  byte-for-byte with `len(str)` (both → `__cobrust_str_len_src`).
+  0-arg → `Int`) is the Rust spelling and is KEPT unchanged; for `str` it
+  agrees codepoint-for-codepoint with `len(str)` (F91 / ADR-0103 — both →
+  `__cobrust_str_char_count`; the `s.len()` method rewrites to the `str_len`
+  PRELUDE shim whose `Kind::StrLen` dispatch was also redirected to
+  char_count).
 - `Tuple`/`Set` are DEFERRED: `Tuple` has no `len` runtime symbol; `Set`
   has `__cobrust_set_len` but no verified source-level construction path
   yet (an F36 fixture-vs-behaviour risk if shipped without an e2e).
