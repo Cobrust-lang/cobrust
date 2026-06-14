@@ -1,12 +1,45 @@
 ---
 finding_id: F83
-title: tuple `t[i]` constant-index silently miscompiles to 0 (lowering stub) — struct-lowering attempt REVERTED (broke the __cobrust_tuple_* path)
+title: tuple `t[i]` constant-index silently miscompiles to 0 (lowering stub) — RESOLVED by ADR-0106 (REDO; attempt-1 reverted for breaking the __cobrust_tuple_* fixture)
 date: 2026-06-13
-status: open
+resolved_date: 2026-06-15
+status: resolved
 severity: major
 discovered_by: verify-the-gap idiom probe (2026-06-13), the str/bytes/list indexing-arc continuation
-relates_to: ["finding:f81", "finding:f78", adr:0094, adr:0096, "claude.md:§2.2", "claude.md:§5.2"]
+resolved_by: adr:0106
+relates_to: ["finding:f81", "finding:f78", adr:0094, adr:0096, adr:0106, "claude.md:§2.2", "claude.md:§5.2"]
 ---
+
+## RESOLVED (2026-06-15, ADR-0106 — the REDO)
+
+The struct lowering is RE-APPLIED on current main AND the revert cause is
+RECONCILED. `Ty::Tuple` lowers to a real by-value LLVM struct
+(`lower_ty`); construction via `build_insert_value`
+(`lower_aggregate_tuple`); `t[i]` constant-index (Python-negative
+normalised) reads `Projection::Field(off)` via `build_extract_value`
+(`lower_place_load`). The checker rejects a non-literal index AND a
+constant-OOB index (`TypeError::NotIndexable`, §2.5-A). The inference fixes
+(`llvm_scalar_ty(Tuple)` = struct, `llvm_operand_ty` resolving a `Field(i)`
+projection to the i-th FIELD type) keep a str field's dest correctly typed.
+
+**Reconciliation (the load-bearing REDO step):** the obsolete pointer-ABI
+fixture `llvm_emits_tuple_end_to_end`
+(`crates/cobrust-codegen/tests/llvm_wave3_dict_set_tuple.rs`) — which
+hand-built a `Ty::Tuple` local and passed it BY VALUE to ptr-typed
+`__cobrust_tuple_new/set/get/drop` externs, the exact source of the
+attempt-1 LLVM-verify failure — is RETIRED (the `__cobrust_tuple_*` model
+is superseded by the struct model; no real path emits it; the real surface
+is covered by `crates/cobrust-cli/tests/tuple_e2e.rs`). The
+`__cobrust_tuple_*` STDLIB functions + their `collections.rs` unit test
+REMAIN (no longer wired to `Ty::Tuple` codegen). Verified with
+`cargo test -p cobrust-codegen --features llvm` GREEN (the crate that
+reverted attempt-1) AND `cargo test --workspace --locked`.
+
+**Honest-debt carry-over:** a tuple-owned `str`/`list` field still LEAKS on
+tuple drop (codegen no-op; F82-class) — memory-SAFE leak-or-free-once,
+never double-free. The `tuple_e2e_07` test proves NO double-free + value
+correctness only; it does NOT claim drop-balance (documented in ADR-0106
+§Ownership and the test comment).
 
 # F83 — tuple `t[i]` silent-0 miscompile (attempt reverted)
 

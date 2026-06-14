@@ -23,11 +23,23 @@
 //!   - `__cobrust_set_len(*mut) -> i64`
 //!   - `__cobrust_set_drop(*mut) -> void`
 //!
-//! Tuple (4 externs):
-//!   - `__cobrust_tuple_new(i64) -> *mut`
-//!   - `__cobrust_tuple_set(*mut, i64, i64) -> void`
-//!   - `__cobrust_tuple_get(*mut, i64) -> i64`
-//!   - `__cobrust_tuple_drop(*mut, i64) -> void`   (note: arity as 2nd arg)
+//! Tuple — RETIRED (F83 / ADR-0106, 2026-06-15). The pointer-ABI tuple
+//! model (`__cobrust_tuple_new/set/get/drop`, taking a tuple POINTER and
+//! storing i64 slots) is SUPERSEDED by the by-value LLVM-struct tuple
+//! lowering: `Ty::Tuple` now lowers to a real `{T0, T1, …}` struct
+//! (`lower_ty`), constructed via `build_insert_value` and read (`t[i]`) via
+//! `build_extract_value` (`lower_aggregate_tuple` + `lower_place_load`).
+//! No real codegen path emits `__cobrust_tuple_*`; the only caller was the
+//! synthetic `llvm_emits_tuple_end_to_end` fixture below, which hand-built a
+//! `Ty::Tuple` local and passed it BY VALUE to those `ptr`-typed externs —
+//! once `Ty::Tuple` became a by-value struct that produced an LLVM
+//! "Call parameter type does not match" verify failure (the exact conflict
+//! that reverted F83 attempt-1). The fixture is removed; the real tuple
+//! construction + per-position-read surface is now covered by
+//! `crates/cobrust-cli/tests/tuple_e2e.rs` (CPython-3 oracle). The
+//! `__cobrust_tuple_*` stdlib functions remain (a self-contained
+//! pointer-ABI library with its own collections.rs unit test) but are no
+//! longer wired to `Ty::Tuple` codegen.
 //!
 //! Cranelift parity references (ABI verbatim mirror, all confirmed at
 //! `cobrust-codegen/src/cranelift_backend.rs:2684-2758`).
@@ -605,131 +617,13 @@ mod llvm {
     }
 
     // -----------------------------------------------------------------
-    // Fixture E — Tuple end-to-end: new + set + get + drop
+    // Fixture E (Tuple end-to-end) — RETIRED (F83 / ADR-0106, 2026-06-15).
+    // The pointer-ABI `__cobrust_tuple_new/set/get/drop` model is superseded
+    // by the by-value LLVM-struct tuple lowering; passing a now-struct
+    // `Ty::Tuple` by value to those `ptr`-typed externs is an LLVM verify
+    // error. Real tuple construction + per-position read is covered by
+    // `crates/cobrust-cli/tests/tuple_e2e.rs`. See the module header.
     // -----------------------------------------------------------------
-
-    /// Build:
-    ///
-    /// ```text
-    ///   bb0: _t = __cobrust_tuple_new(3);              branch bb1
-    ///   bb1: _ = __cobrust_tuple_set(_t, 0, 100);       branch bb2
-    ///   bb2: _ = __cobrust_tuple_set(_t, 1, 200);       branch bb3
-    ///   bb3: _ = __cobrust_tuple_set(_t, 2, 50);        branch bb4
-    ///   bb4: _v1 = __cobrust_tuple_get(_t, 1);          branch bb5
-    ///   bb5: _v2 = __cobrust_tuple_get(_t, 2);          branch bb6
-    ///   bb6: _ = __cobrust_tuple_drop(_t, 3);           branch bb7
-    ///   bb7: _return = _v1 - _v2;                       return  (200 - 50 = 150)
-    /// ```
-    ///
-    /// Expected post-fix exit: 150. Pre-fix exit: 0.
-    fn build_tuple_end_to_end() -> Module {
-        let span0 = Span::new(FileId::SYNTHETIC, 0, 0);
-        use cobrust_mir::{BinOp, Operand as Op};
-
-        let extra = vec![
-            LocalDecl {
-                id: LocalId(1),
-                name: "_t".to_string(),
-                ty: Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]),
-                mutable: true,
-                span: span0,
-                validated_body_of: None,
-            },
-            LocalDecl {
-                id: LocalId(2),
-                name: "_void".to_string(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-                validated_body_of: None,
-            },
-            LocalDecl {
-                id: LocalId(3),
-                name: "_v1".to_string(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-                validated_body_of: None,
-            },
-            LocalDecl {
-                id: LocalId(4),
-                name: "_v2".to_string(),
-                ty: Ty::Int,
-                mutable: true,
-                span: span0,
-                validated_body_of: None,
-            },
-        ];
-
-        let bb0 = call_block(
-            BlockId(0),
-            "__cobrust_tuple_new",
-            vec![int_op(3)],
-            LocalId(1),
-            BlockId(1),
-        );
-        let bb1 = call_block(
-            BlockId(1),
-            "__cobrust_tuple_set",
-            vec![local_op(LocalId(1)), int_op(0), int_op(100)],
-            LocalId(2),
-            BlockId(2),
-        );
-        let bb2 = call_block(
-            BlockId(2),
-            "__cobrust_tuple_set",
-            vec![local_op(LocalId(1)), int_op(1), int_op(200)],
-            LocalId(2),
-            BlockId(3),
-        );
-        let bb3 = call_block(
-            BlockId(3),
-            "__cobrust_tuple_set",
-            vec![local_op(LocalId(1)), int_op(2), int_op(50)],
-            LocalId(2),
-            BlockId(4),
-        );
-        let bb4 = call_block(
-            BlockId(4),
-            "__cobrust_tuple_get",
-            vec![local_op(LocalId(1)), int_op(1)],
-            LocalId(3),
-            BlockId(5),
-        );
-        let bb5 = call_block(
-            BlockId(5),
-            "__cobrust_tuple_get",
-            vec![local_op(LocalId(1)), int_op(2)],
-            LocalId(4),
-            BlockId(6),
-        );
-        let bb6 = call_block(
-            BlockId(6),
-            "__cobrust_tuple_drop",
-            vec![local_op(LocalId(1)), int_op(3)],
-            LocalId(2),
-            BlockId(7),
-        );
-        // bb7: _return = _v1 - _v2
-        let bb7 = MirBlock {
-            id: BlockId(7),
-            statements: vec![Statement {
-                kind: StatementKind::Assign {
-                    place: Place::local(LocalId(0)),
-                    rvalue: Rvalue::BinaryOp(
-                        BinOp::Sub,
-                        Op::Copy(Place::local(LocalId(3))),
-                        Op::Copy(Place::local(LocalId(4))),
-                    ),
-                },
-                span: span0,
-            }],
-            terminator: Terminator::Return,
-            span: span0,
-        };
-
-        make_main(extra, vec![bb0, bb1, bb2, bb3, bb4, bb5, bb6, bb7])
-    }
 
     // -----------------------------------------------------------------
     // Fixture F — Dict end-to-end capstone: new + set + get + len +
@@ -1045,23 +939,10 @@ mod llvm {
         );
     }
 
-    /// Sub-wave-3 fixture E — tuple new + set × 3 + get × 2 + drop.
-    /// Post-fix exit 150 (200 - 50). Verifies tuple_drop's 2-arg ABI
-    /// (`p, n`) lowers correctly.
-    #[test]
-    fn llvm_emits_tuple_end_to_end() {
-        let Some((status, stdout, stderr)) =
-            link_and_run("tuple_end_to_end", &build_tuple_end_to_end())
-        else {
-            return;
-        };
-        let code = status.code().unwrap_or(-1);
-        assert_eq!(
-            code, 150,
-            "tuple_end_to_end: expected exit 150 (200 - 50), got {code}; \
-             stdout={stdout:?} stderr={stderr:?}"
-        );
-    }
+    // Fixture E (`llvm_emits_tuple_end_to_end`) RETIRED — F83 / ADR-0106.
+    // The pointer-ABI tuple model it exercised is superseded by the by-value
+    // struct tuple lowering; the real surface is covered by
+    // `crates/cobrust-cli/tests/tuple_e2e.rs`. See the module header.
 
     /// Sub-wave-3 capstone — dict end-to-end exercising every untyped +
     /// typed-i64-i64 helper, terminating with `Terminator::Drop` on the
@@ -1110,11 +991,9 @@ fn llvm_emits_set_end_to_end() {
     // Skipped on default build — LLVM backend feature-gated.
 }
 
-#[cfg(not(feature = "llvm"))]
-#[test]
-fn llvm_emits_tuple_end_to_end() {
-    // Skipped on default build — LLVM backend feature-gated.
-}
+// `llvm_emits_tuple_end_to_end` RETIRED — F83 / ADR-0106 (pointer-ABI tuple
+// model superseded by the by-value struct lowering; covered by
+// `crates/cobrust-cli/tests/tuple_e2e.rs`).
 
 #[cfg(not(feature = "llvm"))]
 #[test]
