@@ -2551,6 +2551,23 @@ impl<'a> BodyBuilder<'a> {
         } else {
             None
         };
+        // ADR-0090 + ADR-0107 / F94 — is the callee the LIST-REDUCER
+        // builtin `min`/`max`/`sum` (vs a USER `fn min(a, b)` shadow)? The
+        // PRELUDE reducer stubs declare a `list` FIRST param; a user
+        // scalar-param `min`/`max` is a different function and must NOT be
+        // routed through the reducer return-type override or the ADR-0107
+        // variadic temp-list build. Gate on the resolved callee signature's
+        // first positional being a `list` (mirrors the type-checker's
+        // `reduce_defs` shape gate in `check.rs`).
+        let callee_is_list_reducer = matches!(callee_name, Some("min" | "max" | "sum"))
+            && if let ExprKind::Name(rn) = &callee.kind {
+                matches!(
+                    self.ctx.lookup_ty(rn.def_id),
+                    Ty::Fn(ref ft) if matches!(ft.positional.first(), Some(Ty::List(_)))
+                )
+            } else {
+                false
+            };
         // File-IO fns whose str args are Copy-at-operand (borrow-not-move).
         let is_file_io_borrow = matches!(
             callee_name,
@@ -2647,7 +2664,7 @@ impl<'a> BodyBuilder<'a> {
         // `Float`; otherwise the dest stays `Int` (the existing path).
         // The intrinsic-rewrite `Kind::{Min,Max,Sum}` dispatch reads this
         // SAME dest type as its one source of truth.
-        let callee_return_ty = if matches!(callee_name, Some("min" | "max" | "sum")) {
+        let callee_return_ty = if callee_is_list_reducer {
             if let [CallArg::Positional(arg)] = args {
                 let arg_ty = match synth_expr_ty(self, arg) {
                     Ty::Ref(inner) => *inner,
@@ -2658,6 +2675,26 @@ impl<'a> BodyBuilder<'a> {
                 } else {
                     Ty::Int
                 }
+            } else if matches!(callee_name, Some("min" | "max")) && args.len() >= 2 {
+                // ADR-0107 / F94 — VARIADIC scalar `min`/`max`. The type-
+                // checker promotes the whole call to `Float` if ANY arg
+                // resolves to `Float`, else `Int`. We mirror that here so
+                // the `_callret` alloca matches the runtime shim picked by
+                // the intrinsic-rewrite pass (which reads this dest type).
+                let any_float = args.iter().any(|a| {
+                    if let CallArg::Positional(e) = a {
+                        matches!(
+                            match synth_expr_ty(self, e) {
+                                Ty::Ref(inner) => *inner,
+                                other => other,
+                            },
+                            Ty::Float
+                        )
+                    } else {
+                        false
+                    }
+                });
+                if any_float { Ty::Float } else { Ty::Int }
             } else {
                 callee_return_ty
             }
@@ -2696,6 +2733,83 @@ impl<'a> BodyBuilder<'a> {
                     arg_ops.push(op);
                 }
             }
+        }
+        // ADR-0107 / F94 — VARIADIC scalar `min`/`max` lowering. The
+        // type-checker (`try_synth_reduce_builtin`) accepts the >=2-arg
+        // scalar form (`max(3, 5)` / `min(a, b, c)`) and promotes the call
+        // to `Float` if ANY arg is `Float`, else `Int`. Here we MATERIALISE
+        // a temp `list[T]` from the N scalar operands and replace `arg_ops`
+        // with the single list operand, REUSING the proven ADR-0090 list-
+        // consume path (intrinsic-rewrite → `__cobrust_{min,max}_{int,
+        // float}` shim → once-drop schedule). The scalars are `Int`/`Float`
+        // (Copy) — no element-drop concern; the temp list drops once in its
+        // own scope. When the call promotes to `Float`, any `Int` arg is
+        // cast i64→f64 FIRST so the homogeneous f64-bit list matches the
+        // `*_float` shim (which reads raw f64 bits). The 1-arg form
+        // (`max([list])`) has `args.len() == 1` and is untouched.
+        if callee_is_list_reducer
+            && matches!(callee_name, Some("min" | "max"))
+            && arg_ops.len() >= 2
+        {
+            // Re-derive per-arg promotion: `Float` whole-call iff any arg's
+            // resolved scalar type is `Float` (mirrors the type-checker +
+            // the `callee_return_ty` override above).
+            let elem_is_float = args.iter().any(|a| {
+                if let CallArg::Positional(e) = a {
+                    matches!(
+                        match synth_expr_ty(self, e) {
+                            Ty::Ref(inner) => *inner,
+                            other => other,
+                        },
+                        Ty::Float
+                    )
+                } else {
+                    false
+                }
+            });
+            let elem_ty = if elem_is_float { Ty::Float } else { Ty::Int };
+            // Cast each Int operand to f64 when the call promotes to Float.
+            let mut elem_ops: Vec<Operand> = Vec::with_capacity(arg_ops.len());
+            for (a, op) in args.iter().zip(arg_ops.iter()) {
+                if elem_is_float {
+                    let arg_is_int = if let CallArg::Positional(e) = a {
+                        matches!(
+                            match synth_expr_ty(self, e) {
+                                Ty::Ref(inner) => *inner,
+                                other => other,
+                            },
+                            Ty::Int
+                        )
+                    } else {
+                        false
+                    };
+                    if arg_is_int {
+                        let cdest =
+                            self.declare_local("_minmax_f".to_string(), Ty::Float, span, false);
+                        self.emit_assign(
+                            Place::local(cdest),
+                            Rvalue::Cast(CastKind::IntToFloat, op.clone(), Ty::Float),
+                            span,
+                        );
+                        elem_ops.push(Operand::Copy(Place::local(cdest)));
+                        continue;
+                    }
+                }
+                elem_ops.push(op.clone());
+            }
+            let list_temp = self.declare_local(
+                "_minmax_list".to_string(),
+                Ty::List(Box::new(elem_ty)),
+                span,
+                false,
+            );
+            self.emit_assign(
+                Place::local(list_temp),
+                Rvalue::Aggregate(AggregateKind::List, elem_ops),
+                span,
+            );
+            arg_ops.clear();
+            arg_ops.push(Operand::Move(Place::local(list_temp)));
         }
         // ADR-0089 §4 — Python-canonical 1-arg `range(stop)` lowering.
         // The type-checker (`try_synth_range_builtin`) accepts the 1-arg

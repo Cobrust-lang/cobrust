@@ -553,3 +553,28 @@ Invariants:
 
 Test corpus:
 - `crates/cobrust-cli/tests/pit_body_field_read_e2e.rs` — the observable HTTP read (rank=50→"high", rank=10→"low" proving the branch flips with the value; name echo) + the no-UB negative (a non-registered `helper(b: CreateScore): b.rank` on a `.cb`-constructed instance runs to a CLEAN exit, no serde-cast crash) + a check-only well-defined-ness probe.
+
+## ADR-0090 + ADR-0107 (F94) — `min`/`max`/`sum` reducer lowering
+
+The `min`/`max`/`sum` builtins lower two ways; both reuse ONE runtime
+family (`__cobrust_{min,max,sum}_{int,float}`), the list-consume shims.
+
+| Surface | Anchor | Notes |
+|---|---|---|
+| 1-arg LIST return-type override (ADR-0090) | `lower.rs` `lower_call` `callee_return_ty` (min/max/sum block) | the PRELUDE stub declares `-> i64`; this re-pins the `_callret` alloca to the element type read from the SINGLE list arg (`list[float]` → `Float`, else `Int`). One source of truth for the intrinsic-rewrite shim pick. |
+| VARIADIC return-type override (ADR-0107 / F94) | same block, `args.len() >= 2` branch | `min`/`max` only; `Float` iff ANY scalar arg synths to `Float`, else `Int` — mirrors the type-checker promotion. |
+| VARIADIC temp-list build (ADR-0107 / F94) | `lower.rs` `lower_call` after `arg_ops` built, before the `range` start-injection | for `min`/`max` with `>= 2` lowered operands: MATERIALISE a `list[T]` temp (`Rvalue::Aggregate(AggregateKind::List, elem_ops)`) and REPLACE `arg_ops` with the single `Operand::Move` list operand, REUSING the ADR-0090 list-consume path. When the call promotes to `Float`, each `Int` operand is cast i64→f64 (`CastKind::IntToFloat`) FIRST so the homogeneous f64-bit list matches the `*_float` shim. The scalars are `Int`/`Float` (Copy) — no element-drop concern; the temp list drops once in its own scope. |
+| User-shadow gate (ADR-0107 / F94) | `lower.rs` `lower_call` `callee_is_list_reducer` | the reducer return-type override AND the variadic temp-list build are gated on `callee_is_list_reducer` — `min`/`max`/`sum` whose resolved callee `Ty::Fn` has a `list` FIRST positional. A USER `fn min(a, b)` (scalar params) is NOT a reducer: its valid call runs the user body, NOT the shim (mirrors the typing `reduce_defs` shape gate). |
+| Shim pick (both forms) | `cobrust-cli/src/build/intrinsics.rs` `Kind::Min`/`Max`/`Sum` | unchanged — reads the call DEST type (the override above), picks `*_int` vs `*_float`. The variadic form arrives here already shaped as the 1-arg list call (`args.len() == 1`). |
+
+Invariants:
+- The variadic form adds NO new runtime symbol — it folds into the proven
+  list-consume shims (the temp list is the bridge). The 1-arg list form is
+  untouched (`args.len() == 1` skips the temp-list build).
+- Mixed int/float `max(1, 2.0)` promotes via the explicit per-operand
+  `IntToFloat` cast (NOT a silent f64-arg bitcast — the ADR-0089 abs-
+  miscompile lesson).
+
+Test corpus:
+- `crates/cobrust-cli/tests/minmax_variadic_e2e.rs` — 13 tests (CPython oracle).
+- `crates/cobrust-cli/tests/list_reduce_e2e.rs` — 14 tests (the 1-arg list-form regression).

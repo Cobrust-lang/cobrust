@@ -3515,3 +3515,36 @@ fn w236_reduce_list_reused_after_borrow() {
         ),
     );
 }
+
+#[test]
+fn w237_min_max_variadic_int_args_returns_int() {
+    // ADR-0107 / F94 — the VARIADIC scalar form `max(a, b)` / `min(a, b, c)`
+    // (>= 2 args) returns `int` for all-int args. (Was the DEFERRED
+    // ArityMismatch reject `i177` in ill_typed.rs, now accepted.)
+    must_accept(
+        "minmax-variadic-int",
+        &format!(
+            "{REDUCE_STUB}fn f() -> i64:\n    return max(3, 5) + min(1, 2, 3) + max(2, 8, 4, 1)\n"
+        ),
+    );
+}
+
+#[test]
+fn w238_min_max_variadic_float_args_returns_float() {
+    // ADR-0107 / F94 — all-float variadic args return `float`.
+    must_accept(
+        "minmax-variadic-float",
+        &format!("{REDUCE_STUB}fn f() -> f64:\n    return max(1.5, 2.5)\n"),
+    );
+}
+
+#[test]
+fn w239_min_max_variadic_mixed_promotes_to_float() {
+    // ADR-0107 / F94 — a MIXED int/float variadic call PROMOTES to `float`
+    // (consistent with Cobrust int+float arithmetic; the int arg is cast
+    // at MIR time). `max(1, 2.0)` type-checks as `f64`.
+    must_accept(
+        "minmax-variadic-mixed-promote",
+        &format!("{REDUCE_STUB}fn f() -> f64:\n    return max(1, 2.0)\n"),
+    );
+}

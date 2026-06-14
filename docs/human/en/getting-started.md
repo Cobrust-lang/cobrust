@@ -177,6 +177,49 @@ Key rules (ADR-0105):
   (`[a if c else b for x in xs]`) but a ternary in the `for ... in <iter>`
   or `if <guard>` position must be parenthesised.
 
+## Step 2.6b: `min` / `max` / `sum` builtins (ADR-0090 + ADR-0107)
+
+`min`, `max`, and `sum` work two ways, matching Python:
+
+```cobrust
+fn main() -> i64:
+    # 1-arg LIST form (ADR-0090): reduce an iterable.
+    let xs: list[i64] = [3, 1, 5]
+    print(min(xs))            # 1
+    print(max(xs))            # 5
+    print(sum(xs))            # 9
+
+    # VARIADIC scalar form (ADR-0107): min/max over >= 2 scalar args.
+    print(max(3, 5))          # 5
+    print(min(3, 5, 1))       # 1
+    print(max(2, 8, 4, 1))    # 8
+
+    # The ubiquitous `max(a, b)` / `min(a, b)` idiom over variables:
+    let a: i64 = 7
+    let b: i64 = 4
+    print(max(a, b))          # 7
+
+    # Floats; a MIXED int/float call promotes to float.
+    print(max(1.5, 2.5))      # 2.5
+    print(max(1, 2.0))        # 2  (the float value 2.0; whole floats print without `.0`)
+    return 0
+```
+
+Key rules (ADR-0090 + ADR-0107):
+- The **1-arg form** consumes a `list[T]` and returns the element type `T`
+  (`min`/`max`/`sum` all return an `int` for `list[int]`, a `float` for
+  `list[float]`). `min([])` / `max([])` TRAP at runtime (CPython
+  `ValueError` parity); `sum([]) == 0`.
+- The **variadic scalar form** is `min`/`max` ONLY (NOT `sum` — Python's
+  `sum`'s 2nd positional arg is `start`, not another element). It needs
+  `>= 2` numeric args; every arg must be `int` or `float`.
+- A **mixed** `max(1, 2.0)` PROMOTES to `float` (the same promotion as
+  Cobrust arithmetic — NOT a silent value coercion; the `int` arg is cast
+  to `float` explicitly under the hood).
+- A SINGLE non-list arg (`max(5)`) is a COMPILE error — like Python, where
+  `max(5)` is a `TypeError` (an `int` is not iterable). Use a list
+  (`max([5])`) or `>= 2` args (`max(5, 9)`).
+
 ## Step 2.7: list[str] and Str ownership (M-F.3.2)
 
 Cobrust now ships `list[str]` end-to-end with the Rust-style ownership

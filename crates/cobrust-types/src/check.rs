@@ -1032,9 +1032,24 @@ impl Ctx {
                 // so `try_synth_reduce_builtin` intercepts the bare call
                 // BEFORE the generic stub-unify and resolves the return
                 // type from the `list[T]` arg's ELEMENT type (Python's
-                // `min`/`max` return the element type; `sum` too). A
-                // user-defined `min`/`max`/`sum` shadows the def_id.
-                if matches!(f.name.as_str(), "min" | "max" | "sum") {
+                // `min`/`max` return the element type; `sum` too).
+                //
+                // ADR-0107 / F94 — gate on the REDUCER SHAPE (first
+                // positional param is a `list`), NOT just the name. A USER
+                // who defines `fn min(a: f64, b: f64)` (scalar params) is
+                // NOT the list-reducer builtin and must keep their own
+                // strict signature: without this gate the variadic-scalar
+                // arm (added by ADR-0107) would intercept `min(1.0, 2)` and
+                // promote it instead of rejecting the i64/f64 mismatch
+                // against the user's `(f64, f64)` signature. The PRELUDE
+                // stubs (and the test REDUCE_STUBs) all have a `list` first
+                // param, so they register; a scalar-param shadow does not.
+                if matches!(f.name.as_str(), "min" | "max" | "sum")
+                    && matches!(
+                        &fn_ty,
+                        Ty::Fn(ft) if matches!(ft.positional.first(), Some(Ty::List(_)))
+                    )
+                {
                     self.reduce_defs.insert(f.def_id);
                 }
                 self.record_def(f.def_id, fn_ty);
@@ -4073,11 +4088,67 @@ impl Ctx {
         if !self.reduce_defs.contains(&rn.def_id) {
             return Ok(None);
         }
-        // Only the bare 1-positional-arg list-reducer form. The
-        // multi-scalar-arg form (`min(1, 2, 3)`) and the `key=` /
-        // `default=` kwargs are DEFERRED (ADR-0090 §"Deferred"); they
-        // fall through to the generic path's ArityMismatch / keyword
-        // diagnostic.
+        // ADR-0107 / F94 — VARIADIC scalar form `min(a, b, …)` /
+        // `max(a, b, …)` (>= 2 positional args). Python supports both the
+        // 1-arg iterable form (`max([3,1,5])`) AND the >=2-arg scalar form
+        // (`max(3, 5)`). Only `min`/`max` get the variadic form — Python's
+        // `sum`'s 2nd positional arg is `start`, NOT another element, so
+        // `sum(1, 2)` stays the generic-path diagnostic. Every arg must be
+        // the SAME numeric scalar; a mixed int/float call PROMOTES to
+        // `Float` (matching Cobrust's arithmetic-promotion rule, ADR-0107).
+        // A single non-list arg (`max(5)`) is NOT this arm (Python: `max(5)`
+        // is a TypeError — int not iterable) and falls through to the
+        // 1-arg list form below, which rejects it via `NotIterable`.
+        if args.len() >= 2 && matches!(rn.name.as_str(), "min" | "max") {
+            // All args must be positional (no `key=` / `default=` kwargs in
+            // the variadic form yet — those fall through to the generic
+            // keyword diagnostic).
+            let mut scalars: Vec<&Expr> = Vec::with_capacity(args.len());
+            for a in args {
+                let CallArg::Positional(e) = a else {
+                    return Ok(None);
+                };
+                scalars.push(e);
+            }
+            // Each arg must be a numeric scalar (`Int` or `Float`). A mixed
+            // int/float call PROMOTES to `Float` (ADR-0107 §"Mixed
+            // int/float" — consistent with Cobrust's existing int+float
+            // arithmetic promotion, NOT a silent value coercion: the MIR
+            // layer inserts an explicit i64→f64 `CastKind::IntToFloat` for
+            // each `Int` operand). We do NOT cross-unify the args (that
+            // would reject `max(1, 2.0)` since Cobrust has no implicit
+            // Int≡Float unification, §2.2); instead we VALIDATE each arg is
+            // numeric, then promote. An unresolved arg var anchors to `Int`
+            // (the default numeric type). A non-numeric arg (`max("a",
+            // "b")`) unifies against `i64`, raising the canonical
+            // `TypeMismatch` (no new variant).
+            let mut tys: Vec<Ty> = Vec::with_capacity(scalars.len());
+            for e in &scalars {
+                let t = self.synth_expr(e)?;
+                tys.push(self.subst.apply(&t));
+            }
+            let any_float = tys.iter().any(|t| matches!(t, Ty::Float));
+            for (e, t) in scalars.iter().zip(tys.iter()) {
+                match t {
+                    // Already a numeric scalar — accepted as-is (an `Int`
+                    // arg in a `Float`-promoted call is cast at MIR time).
+                    Ty::Int | Ty::Float => {}
+                    // A non-numeric / unresolved arg: anchor it to the
+                    // target numeric type. When the call is all-int this
+                    // unifies against `i64`; a `str` arg then surfaces the
+                    // canonical `TypeMismatch`. When a `Float` is present,
+                    // anchor non-Float args against `f64`.
+                    other => {
+                        let anchor = if any_float { Ty::Float } else { Ty::Int };
+                        unify(&anchor, other, &mut self.subst, e.span)?;
+                    }
+                }
+            }
+            return Ok(Some(if any_float { Ty::Float } else { Ty::Int }));
+        }
+        // Only the bare 1-positional-arg list-reducer form. The `key=` /
+        // `default=` kwargs are DEFERRED (ADR-0090 §"Deferred"); they fall
+        // through to the generic path's ArityMismatch / keyword diagnostic.
         let [CallArg::Positional(arg)] = args else {
             return Ok(None);
         };

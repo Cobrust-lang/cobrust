@@ -163,6 +163,47 @@ fn main() -> i64:
 - 在推导式中,三元式可作为**元素**(`[a if c else b for x in xs]`),但位于
   `for ... in <iter>` 或 `if <guard>` 位置的三元式必须用括号包裹。
 
+## 第 2.6b 步：`min` / `max` / `sum` 内建函数（ADR-0090 + ADR-0107）
+
+`min`、`max`、`sum` 有两种用法,与 Python 一致:
+
+```cobrust
+fn main() -> i64:
+    # 单参数 LIST 形式（ADR-0090):对可迭代对象归约。
+    let xs: list[i64] = [3, 1, 5]
+    print(min(xs))            # 1
+    print(max(xs))            # 5
+    print(sum(xs))            # 9
+
+    # 变参标量形式（ADR-0107):对 >= 2 个标量参数取 min/max。
+    print(max(3, 5))          # 5
+    print(min(3, 5, 1))       # 1
+    print(max(2, 8, 4, 1))    # 8
+
+    # 极常见的 `max(a, b)` / `min(a, b)` 变量惯用法:
+    let a: i64 = 7
+    let b: i64 = 4
+    print(max(a, b))          # 7
+
+    # 浮点;混合 int/float 调用提升为 float。
+    print(max(1.5, 2.5))      # 2.5
+    print(max(1, 2.0))        # 2 (即浮点值 2.0;整值浮点打印时不带 `.0`)
+    return 0
+```
+
+关键规则(ADR-0090 + ADR-0107):
+- **单参数形式**消费一个 `list[T]` 并返回元素类型 `T`(`list[int]` 三者都
+  返回 `int`,`list[float]` 返回 `float`)。`min([])` / `max([])` 在运行期
+  **陷阱**(对应 CPython 的 `ValueError`);`sum([]) == 0`。
+- **变参标量形式**仅适用于 `min`/`max`(`sum` 不适用——Python 中 `sum`
+  的第二个位置参数是 `start`,而非另一个元素)。需要 `>= 2` 个数值参数;
+  每个参数都必须是 `int` 或 `float`。
+- **混合** `max(1, 2.0)` 提升为 `float`(与 Cobrust 算术提升相同——这不是
+  静默的值强制转换;`int` 参数会被显式转换为 `float`)。
+- 单个非列表参数(`max(5)`)是**编译错误**——与 Python 一致(`max(5)` 是
+  `TypeError`,因为 `int` 不可迭代)。请用列表(`max([5])`)或 `>= 2` 个
+  参数(`max(5, 9)`)。
+
 ## 第 2.7 步：list[str] 与 Str 所有权（M-F.3.2）
 
 Cobrust 现在端到端支持 `list[str]`,且遵循 ADR-0050c 规定的 Rust 风格

@@ -374,6 +374,23 @@ Invariants:
   `LenArgNotSized` arm in `types-cb` / `types-parity` (byte-Display test
   `test_display_len_arg_not_sized`).
 
+### `min` / `max` / `sum` reducer builtins (ADR-0090 + ADR-0107 / F94)
+
+| Feature | Location | Notes |
+|---|---|---|
+| Reducer special-case | `types/src/check.rs::try_synth_reduce_builtin` | runs in `synth_call` AFTER the `range`/`abs`/`len` specials, BEFORE the generic PRELUDE-stub-unify. Fires only for a bare `min`/`max`/`sum` whose `DefId` is in `reduce_defs`. |
+| Reducer-SHAPE registration gate (ADR-0107 / F94) | `types/src/check.rs::prebind_item` | `reduce_defs` records a `min`/`max`/`sum` def ONLY when its first positional param is a `list` (the PRELUDE stubs + test `REDUCE_STUB`s). A USER `fn min(a: f64, b: f64)` (scalar params) is NOT registered → `try_synth_reduce_builtin` returns `Ok(None)` and the user's strict signature drives the call (preserves the `i80` reject for `min(1.0, 2)`). |
+| 1-arg LIST form (ADR-0090) | same | one positional arg → resolve to `list[T]` (unwrap one `Ref` for `min(&xs)`); return the element type `Int`/`Float`. A non-list arg → `NotIterable` (REUSED variant, §2.5-B fix). `min([])` anchors elem to `Int`. |
+| VARIADIC scalar form (ADR-0107 / F94) | same | `>= 2` positional args AND name is `min`/`max` (NOT `sum` — Python `sum`'s 2nd positional is `start`). Each arg must be `Int`/`Float`; any `Float` arg PROMOTES the whole call to `Float`, else `Int`. Args are NOT cross-unified (Cobrust has no implicit Int≡Float unify, §2.2 — that would reject `max(1, 2.0)`); a non-numeric arg unifies against the target numeric type → canonical `TypeMismatch` (no new variant). A SINGLE non-list arg (`max(5)`) is NOT this arm — falls through to the 1-arg list form's `NotIterable` reject (Python: `max(5)` is a `TypeError`). |
+
+Invariants:
+- No new `TypeError` variant: the variadic form reuses `NotIterable`
+  (single non-list arg) and `TypeMismatch` (non-numeric arg). No cascade.
+- Corpus: e2e `minmax_variadic_e2e` (13 tests: 2/3/4-arg int, negative,
+  float, computed vars, mixed-promote, list+variadic coexistence, nested,
+  + 3 reject cases). Regression: the 1-arg list form `list_reduce_e2e`
+  (14 tests) stays green.
+
 ## Phase I ADR-0056b — `TypeCheckCtx` (Clone+Send Arc-COW snapshot)
 
 Per ADR-0056b §3.3 + §5 + §6 (accepted at `b0e1e9e`):

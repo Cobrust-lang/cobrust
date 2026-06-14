@@ -3077,15 +3077,19 @@ fn i176_sum_of_str_rejected_not_iterable() {
 }
 
 #[test]
-fn i177_min_multi_scalar_args_rejected_arity() {
-    // The DEFERRED multi-scalar-arg form `min(1, 2, 3)` is NOT the
-    // list-reducer form; it falls through to the generic path and hits
-    // the canonical `ArityMismatch` (the PRELUDE `min` declares ONE
-    // param). ADR-0090 §"Deferred".
+fn i177_min_multi_nonnumeric_args_rejected_type_mismatch() {
+    // ADR-0107 / F94 FLIP: the multi-scalar-arg form `min(1, 2, 3)` is NOW
+    // ACCEPTED (the variadic scalar form — see well_typed.rs
+    // `w237_min_max_variadic_int_args_returns_int`). What STILL rejects is a
+    // NON-NUMERIC variadic call (`max("a", "b")`): the variadic arm
+    // validates each arg is `Int`/`Float`, unifying a `str` arg against the
+    // numeric target → canonical `TypeMismatch` (NO new variant). This
+    // preserves a negative-corpus entry for the variadic path. (The
+    // single-non-list `min(5)` reject is `i175`.)
     must_reject(
-        "min-multi-scalar-args",
-        &format!("{REDUCE_STUB_REJ}fn f() -> i64:\n    return min(1, 2, 3)\n"),
-        Cat::ArityMismatch,
+        "max-multi-nonnumeric-args",
+        &format!("{REDUCE_STUB_REJ}fn f() -> i64:\n    return max(\"a\", \"b\")\n"),
+        Cat::TypeMismatch,
     );
 }
 
