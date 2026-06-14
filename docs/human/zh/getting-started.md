@@ -134,6 +134,35 @@ fn main() -> i64:
 - 数学函数：`sqrt`、`floor`、`ceil`、`round`、`abs`、`pow`、`sin`、`cos`、`tan`、`log`、`exp`。
 - f-string 格式说明符：`{x:.2f}`（定点）、`{x:e}`（科学计数）、`{x:g}`（通用）。
 
+## 第 2.6a 步：条件表达式(三元)（ADR-0105）
+
+Python 三元式 `<then> if <cond> else <else>` 是一个**表达式**——它会产生
+一个值,因此可用于 let 右值、调用参数、`return`,或嵌套在更大的表达式中:
+
+```cobrust
+fn classify(x: i64) -> i64:
+    return 1 if x < 0 else 2        # 返回值
+
+fn main() -> i64:
+    let a: i64 = 5
+    let y: i64 = 1 if a < 0 else 2  # let 右值            → 2
+    print(1 if a < 0 else 2)        # 调用参数             → 2
+    let s: str = "yes" if a > 0 else "no"                # → yes
+    print(10 if a > 9 else 20 if a > 4 else 30)          # 嵌套 → 20
+    return 0
+```
+
+关键规则（ADR-0105）:
+- 条件**必须**是 `bool`(§2.2——禁止隐式真值性):`1 if 5 else 2` 是
+  **编译错误**(`5` 是 `i64`,不是 `bool`)——应写 `1 if x != 0 else 2`。
+- 两个分支必须是**同一类型**:`1 if c else "x"`(int 与 str)是**编译错误**。
+- 三元式的优先级比所有运算符都**更低**:`a + 1 if c else a - 1` 等价于
+  `(a + 1) if c else (a - 1)`。
+- `else` 分支是**右结合**的:`a if p else b if q else c` 等价于
+  `a if p else (b if q else c)`。
+- 在推导式中,三元式可作为**元素**(`[a if c else b for x in xs]`),但位于
+  `for ... in <iter>` 或 `if <guard>` 位置的三元式必须用括号包裹。
+
 ## 第 2.7 步：list[str] 与 Str 所有权（M-F.3.2）
 
 Cobrust 现在端到端支持 `list[str]`,且遵循 ADR-0050c 规定的 Rust 风格

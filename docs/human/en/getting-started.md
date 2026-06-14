@@ -144,6 +144,39 @@ Key rules:
 - Math functions: `sqrt`, `floor`, `ceil`, `round`, `abs`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`.
 - f-string format spec: `{x:.2f}` (fixed), `{x:e}` (scientific), `{x:g}` (general).
 
+## Step 2.6a: conditional expression (ternary) (ADR-0105)
+
+The Python ternary `<then> if <cond> else <else>` is an EXPRESSION — it
+yields a value, so it works in a let-rhs, a call argument, a `return`, or
+nested inside a larger expression:
+
+```cobrust
+fn classify(x: i64) -> i64:
+    return 1 if x < 0 else 2        # return value
+
+fn main() -> i64:
+    let a: i64 = 5
+    let y: i64 = 1 if a < 0 else 2  # let-rhs            → 2
+    print(1 if a < 0 else 2)        # call argument       → 2
+    let s: str = "yes" if a > 0 else "no"                # → yes
+    print(10 if a > 9 else 20 if a > 4 else 30)          # nested → 20
+    return 0
+```
+
+Key rules (ADR-0105):
+- The condition MUST be a `bool` (§2.2 — no implicit truthiness):
+  `1 if 5 else 2` is a COMPILE error (the `5` is an `i64`, not a `bool`) —
+  write `1 if x != 0 else 2`.
+- Both arms must share a TYPE: `1 if c else "x"` (int vs str) is a COMPILE
+  error.
+- It binds more LOOSELY than every operator: `a + 1 if c else a - 1` is
+  `(a + 1) if c else (a - 1)`.
+- The `else` arm is RIGHT-associative: `a if p else b if q else c` is
+  `a if p else (b if q else c)`.
+- Inside a comprehension, a ternary is allowed as the ELEMENT
+  (`[a if c else b for x in xs]`) but a ternary in the `for ... in <iter>`
+  or `if <guard>` position must be parenthesised.
+
 ## Step 2.7: list[str] and Str ownership (M-F.3.2)
 
 Cobrust now ships `list[str]` end-to-end with the Rust-style ownership

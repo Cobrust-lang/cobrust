@@ -512,6 +512,16 @@ fn refine_expr(out: &mut Vec<RawToken>, expr: &Expr, line_map: &LineMap) {
             refine_expr(out, expr, line_map);
             refine_type(out, target, line_map);
         }
+        // Ternary (F93 / ADR-0105) — refine all three arms.
+        ExprKind::IfExpr {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            refine_expr(out, cond, line_map);
+            refine_expr(out, then_branch, line_map);
+            refine_expr(out, else_branch, line_map);
+        }
         ExprKind::Access(AccessKind::Attribute { base, .. }) => {
             refine_expr(out, base, line_map);
         }

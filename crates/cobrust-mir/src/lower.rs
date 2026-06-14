@@ -2341,6 +2341,63 @@ impl<'a> BodyBuilder<'a> {
                 self.emit_assign(Place::local(dest), Rvalue::Cast(cast_kind, op, ty), e.span);
                 Ok(Operand::Copy(Place::local(dest)))
             }
+            // Python conditional expression (ternary): `<then> if <cond>
+            // else <else>` (F93 / ADR-0105). Lowered as value-producing
+            // control flow that reuses the `if`-statement machinery:
+            //   eval cond in the current block → SwitchInt to then/else
+            //   blocks, each assigning a fresh RESULT local then
+            //   Goto(join). The expression evaluates to that result local.
+            // The result local's type is `then`'s type (the checker has
+            // already unified both arms), so a non-Copy ternary (e.g. a
+            // `str` ternary) participates in drop dispatch correctly.
+            ExprKind::IfExpr {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                let result_ty = synth_expr_ty(self, then_branch);
+                let result = self.declare_local("_tern".to_string(), result_ty, e.span, false);
+
+                // Evaluate the condition in the current block.
+                let (cond_op, cond_end_block) = self.lower_condition(cond)?;
+
+                // then-block: assign `result = <then>`, Goto(join).
+                let then_block = self.start_new_block();
+                let then_op = self.lower_expr(then_branch)?;
+                self.emit_assign(Place::local(result), Rvalue::Use(then_op), e.span);
+                let then_exit = self.current_block_id();
+
+                // else-block: assign `result = <else>`, Goto(join).
+                let else_block = self.start_new_block();
+                let else_op = self.lower_expr(else_branch)?;
+                self.emit_assign(Place::local(result), Rvalue::Use(else_op), e.span);
+                let else_exit = self.current_block_id();
+
+                // join-block: where both arms converge and the value is read.
+                let join_block = self.start_new_block();
+
+                // Wire the two arm exits into the join.
+                self.cur_block = Some(then_exit.0 as usize);
+                if !self.terminated() {
+                    self.terminate(Terminator::Goto(join_block));
+                }
+                self.cur_block = Some(else_exit.0 as usize);
+                if !self.terminated() {
+                    self.terminate(Terminator::Goto(join_block));
+                }
+
+                // Branch from the cond-end block to then/else.
+                self.cur_block = Some(cond_end_block.0 as usize);
+                self.terminate(Terminator::SwitchInt {
+                    operand: cond_op,
+                    cases: vec![(SwitchValue::Bool(true), then_block)],
+                    otherwise: else_block,
+                });
+
+                // Resume in the join block; the ternary's value is `result`.
+                self.cur_block = Some(join_block.0 as usize);
+                Ok(Operand::Copy(Place::local(result)))
+            }
         }
     }
 
@@ -4521,6 +4578,21 @@ fn synth_expr_ty(b: &BodyBuilder<'_>, e: &Expr) -> Ty {
             let lt = synth_expr_ty(b, lhs);
             let rt = synth_expr_ty(b, rhs);
             synth_bin_result_ty(*op, &lt, &rt)
+        }
+        // Ternary (F93 / ADR-0105) — both arms share a type (checker
+        // unified them); the `then` arm's synth type is the result type,
+        // so a `str`/`list` ternary participates in drop dispatch.
+        ExprKind::IfExpr {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let then_ty = synth_expr_ty(b, then_branch);
+            if matches!(then_ty, Ty::None) {
+                synth_expr_ty(b, else_branch)
+            } else {
+                then_ty
+            }
         }
         _ => Ty::None,
     }

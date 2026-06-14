@@ -1024,7 +1024,32 @@ impl<'a> Parser<'a> {
     // -------- expressions: Pratt --------------------------------------
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.parse_pratt(Prec(0))
+        let then_branch = self.parse_pratt(Prec(0))?;
+        // Python conditional expression (ternary): `<then> if <cond> else
+        // <else>` (ADR-0105, F93). Recognised when an `if` follows a
+        // complete expression in EXPRESSION position — never starts a
+        // statement (statement-level `if cond:` is dispatched at
+        // `parse_stmt` before any expression is parsed). Binds more loosely
+        // than every Pratt operator (the `then`/`cond` arms are full Pratt
+        // expressions); the `else` arm recurses through `parse_expr` to make
+        // the chain right-associative: `a if p else b if q else c` parses as
+        // `a if p else (b if q else c)`.
+        if matches!(self.peek_kind(), TokenKind::KwIf) {
+            self.bump(); // consume `if`
+            let cond = self.parse_pratt(Prec(0))?;
+            self.expect(&TokenKind::KwElse)?;
+            let else_branch = self.parse_expr()?;
+            let span = then_branch.span.merge(else_branch.span);
+            return Ok(Expr {
+                kind: ExprKind::IfExpr {
+                    cond: Box::new(cond),
+                    then_branch: Box::new(then_branch),
+                    else_branch: Box::new(else_branch),
+                },
+                span,
+            });
+        }
+        Ok(then_branch)
     }
 
     fn parse_pratt(&mut self, min: Prec) -> Result<Expr, ParseError> {
@@ -1924,12 +1949,16 @@ impl<'a> Parser<'a> {
         while self.eat(&TokenKind::KwFor) {
             let target = self.parse_for_target()?;
             self.expect(&TokenKind::KwIn)?;
-            // Iter must not allow another `for` at same level — parse_expr stops at
-            // `for` because it isn't a binop.
-            let iter = self.parse_expr()?;
+            // Iter and guards are parsed at the Pratt level (Python's
+            // `or_test`), NOT `parse_expr`, so the trailing `if`/`else` is
+            // reserved for the comprehension's own clauses — a ternary in
+            // either position must be parenthesised. Without this,
+            // `[x for x in xs if cond]` would mis-parse `xs if cond …` as a
+            // conditional expression and then fail on the missing `else`.
+            let iter = self.parse_pratt(Prec(0))?;
             let mut guards = Vec::new();
             while self.eat(&TokenKind::KwIf) {
-                guards.push(self.parse_expr()?);
+                guards.push(self.parse_pratt(Prec(0))?);
             }
             clauses.push(ComprehensionClause {
                 target,
@@ -2670,5 +2699,113 @@ mod tests {
         // (((1+2))) — 3 levels of nesting, well within the 1024 limit.
         let m = parse_src("(((1+2)))\n").expect("should parse without depth error");
         assert_eq!(m.items.len(), 1);
+    }
+
+    // ----- F93 / ADR-0105: conditional expression (ternary) ------------
+
+    /// Pull the single `let`-rhs expression out of a one-statement module.
+    fn let_rhs(src: &str) -> Expr {
+        let m = parse_src(src).expect("parse");
+        let StmtKind::Let { value, .. } = &m.items[0].kind else {
+            panic!("expected a `let` statement, got {:?}", m.items[0].kind);
+        };
+        value.clone()
+    }
+
+    #[test]
+    fn ternary_basic_let_rhs() {
+        let e = let_rhs("let y = 1 if x < 0 else 2\n");
+        let ExprKind::IfExpr {
+            cond,
+            then_branch,
+            else_branch,
+        } = &e.kind
+        else {
+            panic!("expected IfExpr, got {:?}", e.kind);
+        };
+        assert!(matches!(
+            then_branch.kind,
+            ExprKind::Literal(Literal::Int(_))
+        ));
+        assert!(matches!(cond.kind, ExprKind::Binary { op: BinOp::Lt, .. }));
+        assert!(matches!(
+            else_branch.kind,
+            ExprKind::Literal(Literal::Int(_))
+        ));
+    }
+
+    #[test]
+    fn ternary_else_is_right_associative() {
+        // `a if p else b if q else c` ⇒ `a if p else (b if q else c)`.
+        let e = let_rhs("let r = a if p else b if q else c\n");
+        let ExprKind::IfExpr { else_branch, .. } = &e.kind else {
+            panic!("expected outer IfExpr, got {:?}", e.kind);
+        };
+        // The else arm must itself be a nested ternary (right-assoc),
+        // NOT a flattened `(a if p else b) if q else c`.
+        assert!(
+            matches!(else_branch.kind, ExprKind::IfExpr { .. }),
+            "else arm should nest, got {:?}",
+            else_branch.kind
+        );
+    }
+
+    #[test]
+    fn ternary_binds_looser_than_or() {
+        // `a or b if c else d` ⇒ `(a or b) if c else d`: the THEN arm is the
+        // whole `a or b`, not just `b`.
+        let e = let_rhs("let r = a or b if c else d\n");
+        let ExprKind::IfExpr { then_branch, .. } = &e.kind else {
+            panic!("expected IfExpr, got {:?}", e.kind);
+        };
+        assert!(
+            matches!(then_branch.kind, ExprKind::Binary { op: BinOp::Or, .. }),
+            "then arm should be the full `a or b`, got {:?}",
+            then_branch.kind
+        );
+    }
+
+    #[test]
+    fn ternary_in_call_arg() {
+        let m = parse_src("print(1 if c else 2)\n").expect("parse");
+        let StmtKind::Expr(e) = &m.items[0].kind else {
+            panic!("expected expr stmt");
+        };
+        let ExprKind::Call { args, .. } = &e.kind else {
+            panic!("expected call");
+        };
+        let CallArg::Positional(arg) = &args[0] else {
+            panic!("expected positional arg");
+        };
+        assert!(matches!(arg.kind, ExprKind::IfExpr { .. }));
+    }
+
+    #[test]
+    fn statement_if_block_unaffected_by_ternary() {
+        // Regression: a statement-level `if cond:` block must NOT be parsed
+        // as a conditional expression.
+        let m = parse_src("if x < 0:\n    y = 1\n").expect("parse");
+        assert!(matches!(m.items[0].kind, StmtKind::If { .. }));
+    }
+
+    #[test]
+    fn comprehension_guard_if_not_eaten_as_ternary() {
+        // Regression: `[x for x in xs if c]` — the clause `if c` is a guard,
+        // not the start of a ternary (which would then demand an `else`).
+        let e = let_rhs("let r = [x for x in xs if c]\n");
+        assert!(matches!(e.kind, ExprKind::Comprehension(_)));
+    }
+
+    #[test]
+    fn comprehension_element_may_be_ternary() {
+        // `[a if c else b for x in xs]` — the element IS a ternary.
+        let e = let_rhs("let r = [a if c else b for x in xs]\n");
+        let ExprKind::Comprehension(comp) = &e.kind else {
+            panic!("expected comprehension");
+        };
+        let ComprehensionElem::Single(elem) = &comp.element else {
+            panic!("expected single element");
+        };
+        assert!(matches!(elem.kind, ExprKind::IfExpr { .. }));
     }
 }

@@ -380,6 +380,17 @@ pub enum ExprKind {
         expr: Box<Expr>,
         target: cobrust_frontend::ast::Type,
     },
+    /// Python conditional expression (ternary): `<then> if <cond> else
+    /// <else>` (F93 / ADR-0105). Mirrors the AST `ExprKind::IfExpr`.
+    /// Type checker requires `cond: bool` (§2.2 — no implicit
+    /// truthiness) and `unify(then, else)`; MIR lowering builds
+    /// then/else blocks that each assign a fresh result local then
+    /// `Goto` a join block (the same machinery as the `if` statement).
+    IfExpr {
+        cond: Box<Expr>,
+        then_branch: Box<Expr>,
+        else_branch: Box<Expr>,
+    },
 }
 
 /// Literal payload — same shape as the AST literal, recapitulated to

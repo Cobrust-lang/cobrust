@@ -1488,6 +1488,17 @@ impl<'s> Lowerer<'s> {
                 expr: Box::new(self.lower_expr(expr)?),
                 target: target.clone(),
             },
+            // Python conditional expression (ternary) — F93 / ADR-0105.
+            // 1:1 AST→HIR mirror; type + MIR work downstream.
+            ast::ExprKind::IfExpr {
+                cond,
+                then_branch,
+                else_branch,
+            } => h::ExprKind::IfExpr {
+                cond: Box::new(self.lower_expr(cond)?),
+                then_branch: Box::new(self.lower_expr(then_branch)?),
+                else_branch: Box::new(self.lower_expr(else_branch)?),
+            },
         };
         Ok(h::Expr { kind, span })
     }
@@ -2030,6 +2041,16 @@ fn walk_expr_for_captures(
         h::ExprKind::YieldFrom(e) => walk_expr_for_captures(e, local_def_id_start, out, seen),
         h::ExprKind::Cast { expr, .. } => {
             walk_expr_for_captures(expr, local_def_id_start, out, seen);
+        }
+        // Ternary — recurse into all three arms for capture tracking.
+        h::ExprKind::IfExpr {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            walk_expr_for_captures(cond, local_def_id_start, out, seen);
+            walk_expr_for_captures(then_branch, local_def_id_start, out, seen);
+            walk_expr_for_captures(else_branch, local_def_id_start, out, seen);
         }
     }
 }

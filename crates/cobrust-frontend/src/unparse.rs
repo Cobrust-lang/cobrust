@@ -565,6 +565,20 @@ impl Writer {
                 self.write_type(target);
                 self.push(")");
             }
+            // Python conditional expression (ternary) — F93 / ADR-0105.
+            ExprKind::IfExpr {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                self.push("(");
+                self.write_expr(then_branch);
+                self.push(" if ");
+                self.write_expr(cond);
+                self.push(" else ");
+                self.write_expr(else_branch);
+                self.push(")");
+            }
         }
     }
 

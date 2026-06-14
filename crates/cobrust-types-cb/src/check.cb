@@ -694,6 +694,20 @@ fn synth_expr(ctx: &mut Ctx, arena: &mut TyArena, e: &Expr) -> Result[i64, TypeE
                 })
             Ok(dst_ty)
 
+        -- ARM 20: IfExpr — Python conditional expression (ternary)
+        -- `<then> if <cond> else <else>` (F93 / ADR-0105). check.rs mirror:
+        -- §2.2 the cond MUST be bool (expect_bool emits the §2.5-B
+        -- ImplicitTruthiness fix); the result type is unify(then, else);
+        -- a branch mismatch reports the canonical TypeMismatch (no new
+        -- variant). Both arms must share a type.
+        ExprKind::IfExpr(cond, then_branch, else_branch):
+            let cond_ty = synth_expr(ctx, arena, cond)?
+            expect_bool(ctx, arena, cond_ty, cond.span)?
+            let then_ty = synth_expr(ctx, arena, then_branch)?
+            let else_ty = synth_expr(ctx, arena, else_branch)?
+            unify(arena, then_ty, else_ty, &mut ctx.subst, e.span)?
+            Ok(subst_apply(&ctx.subst, arena, then_ty))
+
 -- -----------------------------------------------------------------------
 -- synth_bin / synth_un / synth_comp — sub-dispatch helpers
 -- -----------------------------------------------------------------------

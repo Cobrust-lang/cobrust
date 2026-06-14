@@ -387,6 +387,18 @@ pub enum ExprKind {
         expr: Box<Expr>,
         target: Type,
     },
+    /// Python conditional expression (ternary): `<then> if <cond> else
+    /// <else>` (ADR-0105, F93). The EXPRESSION form only — distinct from
+    /// the `if cond:` statement. Binds more loosely than `or`, and the
+    /// `else` arm is right-associative, so `a if p else b if q else c`
+    /// parses as `a if p else (b if q else c)`. The type checker
+    /// (§2.2) requires `cond: bool` (no implicit truthiness) and
+    /// `unify(then_branch, else_branch)` for the result type.
+    IfExpr {
+        cond: Box<Expr>,
+        then_branch: Box<Expr>,
+        else_branch: Box<Expr>,
+    },
 }
 
 /// Literal expression payload (form 21).

@@ -481,6 +481,15 @@ fn norm_expr(e: &Expr) -> Expr {
             expr: Box::new(norm_expr(&expr)),
             target,
         },
+        ast::ExprKind::IfExpr {
+            cond,
+            then_branch,
+            else_branch,
+        } => ast::ExprKind::IfExpr {
+            cond: Box::new(norm_expr(&cond)),
+            then_branch: Box::new(norm_expr(&then_branch)),
+            else_branch: Box::new(norm_expr(&else_branch)),
+        },
     };
     Expr { kind, span: ZERO }
 }

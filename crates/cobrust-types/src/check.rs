@@ -913,6 +913,15 @@ impl Ctx {
                 }
             }
             ExprKind::Cast { expr, .. } => f(expr, st),
+            ExprKind::IfExpr {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                f(cond, st);
+                f(then_branch, st);
+                f(else_branch, st);
+            }
             ExprKind::Tuple(xs) | ExprKind::List(xs) | ExprKind::Set(xs) => {
                 for x in xs {
                     f(x, st);
@@ -2591,6 +2600,25 @@ impl Ctx {
                         ),
                     })
                 }
+            }
+            // Python conditional expression (ternary): `<then> if <cond>
+            // else <else>` (F93 / ADR-0105). §2.2: the condition MUST be
+            // `bool` (no implicit truthiness — `expect_bool` emits the
+            // §2.5-B `ImplicitTruthiness` FIX hint). The result type is
+            // `unify(then, else)`: both arms must share a type, and a
+            // mismatch reports the canonical `TypeMismatch` (no new
+            // variant — keeps the error cascade closed).
+            ExprKind::IfExpr {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                let cond_ty = self.synth_expr(cond)?;
+                self.expect_bool(&cond_ty, cond.span)?;
+                let then_ty = self.synth_expr(then_branch)?;
+                let else_ty = self.synth_expr(else_branch)?;
+                unify(&then_ty, &else_ty, &mut self.subst, span)?;
+                Ok(self.subst.apply(&then_ty))
             }
         }
     }
