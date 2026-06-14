@@ -575,6 +575,43 @@ pub unsafe extern "C" fn __cobrust_str_eq(a: *mut u8, b: *mut u8) -> i64 {
     i64::from(sa == sb)
 }
 
+/// C-ABI shim for source-level `str < str` / `<=` / `>` / `>=` ordering
+/// (F92 / ADR-0104). Returns -1 if `a < b`, 0 if `a == b`, +1 if `a > b`
+/// — the i64 sign of `a.cmp(b)`. Codegen compares this result against 0
+/// with the matching signed `IntPredicate` (Lt→SLT, etc.), exactly as
+/// Python's lexicographic str comparison.
+///
+/// Python compares str by CODEPOINT; Rust `str` `Ord` is BYTE-lexicographic
+/// over the UTF-8 encoding. UTF-8 is order-preserving — for any two valid
+/// UTF-8 strings, byte-lexicographic order equals codepoint-lexicographic
+/// order — so `a.cmp(b)` yields the SAME ordering as CPython. (Confirmed
+/// in ADR-0104 §"Codepoint vs byte order".)
+///
+/// # Safety
+///
+/// Both `a` and `b` must be Str pointers returned by the Str runtime
+/// (`__cobrust_str_at` / `__cobrust_input` / `__cobrust_str_concat` / a
+/// materialised literal). Null → treated as "".
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_cmp(a: *mut u8, b: *mut u8) -> i64 {
+    // SAFETY: null-check happens inline.
+    let sa = if a.is_null() {
+        ""
+    } else {
+        unsafe { str_buf_as_str_phase3(a) }
+    };
+    let sb = if b.is_null() {
+        ""
+    } else {
+        unsafe { str_buf_as_str_phase3(b) }
+    };
+    match sa.cmp(sb) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
 /// C-ABI shim for source-level `str_eq_lit(s: str, lit: str) -> i64`.
 /// Compares a runtime Str buffer (from `str_at`) against a compile-time
 /// static string literal. The second arg arrives as a `(*const u8, len)`

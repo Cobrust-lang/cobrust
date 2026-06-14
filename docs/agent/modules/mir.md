@@ -383,6 +383,34 @@ codepoint index and the loop terminates. NO double-free (source only read
 via `char_at`; loop var owns its own copy); a per-iter LEAK persists under
 the pre-existing F82 loop-body-drop gap (NOT closed by F88).
 
+### F92 / ADR-0104 — `str < str` / `<=` / `>` / `>=` ordering retarget
+
+`lower_bin` retargets the four `str` ORDERING ops, immediately BELOW the
+ADR-0078 `str == str` arm and gated on `matches!(lhs_ty, Ty::Str)`:
+
+```
+if matches!(op, Lt | LtEq | Gt | GtEq) && matches!(lhs_ty, Ty::Str) {
+    _strcmp: Ty::Int  = call __cobrust_str_cmp(lhs, rhs)   // -1 / 0 / +1
+    _strcmpb: Ty::Bool = BinaryOp(bin_to_mir(op), _strcmp, Int(0))  // cmp OP 0
+    return Copy(_strcmpb)
+}
+```
+
+- WHY: the type checker `unify(Str, Str)`-ACCEPTS ordering (returns
+  `Ty::Bool`, same as the working `==`), but codegen's `lower_binop`
+  Lt/LtEq/Gt/GtEq arms `into_int_value()` on the opaque `str` pointer →
+  ICE (build exit 101). Retargeting in MIR keeps codegen unreached for str
+  ordering — the F85/F87/F92 panic-on-type-checked-input class (§5.1).
+- The source ordering `a OP b` equals `cmp(a, b) OP 0`, so the SAME
+  `bin_to_mir(op)` is reused against `Int(0)` — handled by the existing
+  integer `lower_binop` arm (SLT/SLE/SGT/SGE). No new codegen logic.
+- Operands BORROWED via `upgrade_move_to_copy_handle` (`__cobrust_str_cmp`
+  reads, does not consume); the source str locals survive + drop ONCE.
+  Direct sibling of the `str == str` → `__cobrust_str_eq` arm.
+- `bytes` ordering is NOT retargeted here (it `check.rs`-rejects before
+  MIR — ADR-0093 clean reject, not a panic); mixed `str < int` `unify`-
+  rejects at check.
+
 ### Interaction with comprehensions
 
 `lower_comprehension` / `lower_comp_clauses` still emit the ADR-0027

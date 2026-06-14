@@ -2541,6 +2541,20 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_param_counts
             .insert("__cobrust_str_eq", 2);
 
+        // __cobrust_str_cmp(a: *mut Str, b: *mut Str) -> i64  (F92 / ADR-0104)
+        // The runtime target of the `.cb` `str < str` / `<=` / `>` / `>=`
+        // ORDERING operators. Returns -1 / 0 / +1 (sign of `a.cmp(b)`);
+        // codegen compares against 0 with the matching signed predicate.
+        // Sibling of `__cobrust_str_eq` for `str == str`.
+        let str_cmp_ty = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let str_cmp_fn =
+            self.module
+                .add_function("__cobrust_str_cmp", str_cmp_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_str_cmp", str_cmp_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_cmp", 2);
+
         // __cobrust_str_concat(a: *mut Str, b: *mut Str) -> *mut Str
         // The runtime target of the `.cb` `str + str` operator (natural
         // concatenation; sibling of `__cobrust_str_eq` for `str == str`).

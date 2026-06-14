@@ -3535,6 +3535,56 @@ impl<'a> BodyBuilder<'a> {
             );
             return Ok(Operand::Copy(Place::local(bool_dest)));
         }
+        // F92 / ADR-0104 — `str < str` / `<=` / `>` / `>=` ORDERING via the
+        // NATURAL operator (lexicographic, like Python). The codegen
+        // `lower_binop` Lt/LtEq/Gt/GtEq arms assume integer/float operands
+        // (`into_int_value()` / `into_float_value()`), so a bare ordering of
+        // two `Ty::Str` values would crash codegen with "Found PointerValue
+        // but expected IntValue" (the F85/F87/F92 codegen-panic class — the
+        // typechecker ACCEPTS `str < str`, so it type-checks then crashes).
+        // Retarget to the always-linked `__cobrust_str_cmp(a, b) -> i64`
+        // (sign of `a.cmp(b)`: -1 / 0 / +1) then materialise the bool by
+        // comparing that i64 against 0 with the SAME ordering op. Direct
+        // sibling of the `str == str` arm above (call-then-compare shape);
+        // both operands are BORROWED (Move→Copy upgrade — `__cobrust_str_cmp`
+        // reads but does not consume, so the source `str` locals survive for
+        // later uses and drop ONCE at scope exit, per the Str non-Copy
+        // discipline).
+        if matches!(
+            op,
+            HirBinOp::Lt | HirBinOp::LtEq | HirBinOp::Gt | HirBinOp::GtEq
+        ) && matches!(lhs_ty, Ty::Str)
+        {
+            let lhs_op = upgrade_move_to_copy_handle(self.lower_expr(lhs)?);
+            let rhs_op = upgrade_move_to_copy_handle(self.lower_expr(rhs)?);
+            let raw_dest = self.declare_local("_strcmp".to_string(), Ty::Int, span, false);
+            let cur = self.current_block_id();
+            let next = self.start_new_block();
+            self.cur_block = Some(cur.0 as usize);
+            self.terminate(Terminator::Call {
+                func: Operand::Constant(Constant::Str("__cobrust_str_cmp".to_string())),
+                args: vec![lhs_op, rhs_op],
+                destination: Place::local(raw_dest),
+                target: next,
+                unwind: None,
+            });
+            self.cur_block = Some(next.0 as usize);
+            // `__cobrust_str_cmp` returns i64 -1/0/+1. The source ordering
+            // `a OP b` is exactly `cmp(a, b) OP 0` (e.g. `a < b` ⇔ cmp < 0,
+            // `a >= b` ⇔ cmp >= 0), so reuse the SAME comparison op against
+            // the integer constant 0 — the int `lower_binop` arm handles it.
+            let bool_dest = self.declare_local("_strcmpb".to_string(), Ty::Bool, span, false);
+            self.emit_assign(
+                Place::local(bool_dest),
+                Rvalue::BinaryOp(
+                    bin_to_mir(op),
+                    Operand::Copy(Place::local(raw_dest)),
+                    Operand::Constant(Constant::Int(0)),
+                ),
+                span,
+            );
+            return Ok(Operand::Copy(Place::local(bool_dest)));
+        }
         // F90 / ADR-0102 — the `**` POWER operator. Codegen's `BinOp::Pow`
         // arm is an "unimplemented" reject (ADR-0041 §H3); we retarget the
         // accepted shapes to runtime shims here so codegen never reaches it

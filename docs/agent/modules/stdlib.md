@@ -280,6 +280,8 @@ once):
 pub unsafe extern "C" fn __cobrust_str_char_at(s: *mut u8, i: i64) -> *mut u8;   // s[i], i-th CODEPOINT; neg i = from-end (codepoint len+i); TRUE OOB TRAPS (ADR-0095, no "" sentinel)
 pub unsafe extern "C" fn __cobrust_str_slice(s: *mut u8, lo: i64, hi: i64) -> *mut u8; // s[lo:hi], codepoint range, Python clamp
 pub unsafe extern "C" fn __cobrust_str_char_count(s: *mut u8) -> i64;            // F88/ADR-0101 — CODEPOINT count (chars().count()), NOT byte len. Source-level target of `len(str)` AND `s.len()` (F91/ADR-0103 — `len("é")==1`), AND the `for c in <str>:` loop bound. Agrees codepoint-for-codepoint with char_at (`len(s)`==iter-count==valid `s[i]` range). BORROWS s. NULL == 0.
+// crates/cobrust-stdlib/src/io.rs (F92 / ADR-0104) — `str` ORDERING; BORROWS a + b.
+pub unsafe extern "C" fn __cobrust_str_cmp(a: *mut u8, b: *mut u8) -> i64;       // sign of Rust `a.cmp(b)`: -1 / 0 / +1. Source-level target of `str < str` / `<=` / `>` / `>=` (MIR `lower_bin` retargets the four ops, then materialises the bool as `cmp OP 0`; sibling of `__cobrust_str_eq` for `==`). Codepoint-correct: byte-lexicographic `str::cmp` == codepoint order for valid UTF-8 (UTF-8 is order-preserving) → matches CPython. NULL == "".
 ```
 
 Verified vs CPython 3: `"hello"[1:4]=="ell"`, `"hello"[1]=="e"`,
