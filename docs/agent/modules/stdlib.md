@@ -279,6 +279,7 @@ once):
 // each MINTS a fresh `str` (dropped once), BORROWS the input `s`.
 pub unsafe extern "C" fn __cobrust_str_char_at(s: *mut u8, i: i64) -> *mut u8;   // s[i], i-th CODEPOINT; neg i = from-end (codepoint len+i); TRUE OOB TRAPS (ADR-0095, no "" sentinel)
 pub unsafe extern "C" fn __cobrust_str_slice(s: *mut u8, lo: i64, hi: i64) -> *mut u8; // s[lo:hi], codepoint range, Python clamp
+pub unsafe extern "C" fn __cobrust_str_char_count(s: *mut u8) -> i64;            // F88/ADR-0101 — CODEPOINT count (chars().count()), NOT byte len; the `for c in <str>:` loop bound. Agrees codepoint-for-codepoint with char_at. BORROWS s. NULL == 0.
 ```
 
 Verified vs CPython 3: `"hello"[1:4]=="ell"`, `"hello"[1]=="e"`,

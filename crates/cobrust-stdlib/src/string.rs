@@ -349,6 +349,31 @@ pub unsafe extern "C" fn __cobrust_str_char_at(s: *mut u8, i: i64) -> *mut u8 {
     alloc_str_buffer_local(c.encode_utf8(&mut buf))
 }
 
+/// CODEPOINT count of `s` (Python `len(str)` semantics — NOT byte length).
+/// The MIR `for c in <str>:` lowering uses this as the loop bound so a
+/// multi-byte char yields exactly ONE iteration (F88 / ADR-0101). It agrees
+/// codepoint-for-codepoint with `__cobrust_str_char_at` (both use
+/// `chars().count()` / `chars().nth()`), so `for c in s:` visits
+/// `[0, char_count)` with no mid-codepoint split. Contrast
+/// `__cobrust_str_len` (BYTE length).
+///
+/// `s` is BORROWED (read-only); the caller's drop schedule still frees it.
+/// A NULL handle is the empty string (`0`).
+///
+/// # Safety
+///
+/// `s` must be NULL or a pointer returned by `__cobrust_str_new` (or
+/// `__cobrust_str_clone`) and not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_str_char_count(s: *mut u8) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    // SAFETY: caller-attestation per `# Safety`.
+    let src = unsafe { str_buf_as_str_local(s) };
+    src.chars().count() as i64
+}
+
 /// Slice `s[lo:hi]` into a FRESH owned `str` carrying a COPY of the
 /// CODEPOINT range `[lo, hi)`. The runtime target of the `.cb` `s[lo:hi]`
 /// slice OPERATOR (ADR-0094 / F78, the `__cobrust_bytes_slice` mirror —

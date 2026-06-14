@@ -1061,18 +1061,54 @@ impl<'a> BodyBuilder<'a> {
                 // checker dispatches between).
                 self.ensure_open_block();
 
+                // F88 / ADR-0101 — `for c in <str>:` codepoint iteration.
+                // When the iter source is a `str`, the loop is bound by the
+                // CODEPOINT count (`__cobrust_str_char_count`, NOT byte len)
+                // and each iteration mints a fresh 1-codepoint OWNED `str`
+                // via `__cobrust_str_char_at(__iter, __idx)` (the same
+                // codepoint-addressed primitive `s[i]` uses, F79/ADR-0094).
+                // The source `str` is BORROWED (read-only via char_at); its
+                // own drop schedule frees it once at its scope. Everything
+                // else mirrors the list arm 1:1.
+                let iter_is_str = matches!(synth_expr_ty(self, iter), Ty::Str);
+
                 // Step 1: evaluate iter expression → iter_local.
-                let iter_val_op = self.lower_expr(iter)?;
+                //
+                // F88 — a `str` iter source is BORROWED, not consumed:
+                // `__cobrust_str_char_at` only READS it. If the iter is a
+                // bare `Name` (`for c in s:`), read it as `Operand::Copy`
+                // (NOT the default `Move` that `is_copy_type(Ty::Str) ==
+                // false` would produce via `lower_expr`) so the source `s`
+                // stays usable AFTER the loop — mirroring the list/dict
+                // operand-level shared-borrow walk-back. A non-`Name` str
+                // iter (literal / call result) is a fresh temp the loop
+                // owns, so the default `lower_expr` move is correct there.
+                let iter_val_op = if iter_is_str {
+                    if let ExprKind::Name(rn) = &iter.kind {
+                        let local = self.lookup_local_for_resolved(rn, iter.span)?;
+                        Operand::Copy(Place::local(local))
+                    } else {
+                        self.lower_expr(iter)?
+                    }
+                } else {
+                    self.lower_expr(iter)?
+                };
                 let iter_local = self.declare_local("_iter".to_string(), Ty::None, span, true);
                 self.emit_assign(Place::local(iter_local), Rvalue::Use(iter_val_op), span);
 
-                // Step 2: call __cobrust_list_len(iter_local) → len_local.
+                // Step 2: call the length primitive (str: codepoint count;
+                // list: element count) → len_local.
+                let len_symbol = if iter_is_str {
+                    "__cobrust_str_char_count"
+                } else {
+                    "__cobrust_list_len"
+                };
                 let len_local = self.declare_local("_iter_len".to_string(), Ty::Int, span, true);
                 let cur = self.current_block_id();
                 let after_len = self.start_new_block();
                 self.cur_block = Some(cur.0 as usize);
                 self.terminate(Terminator::Call {
-                    func: Operand::Constant(Constant::Str("__cobrust_list_len".to_string())),
+                    func: Operand::Constant(Constant::Str(len_symbol.to_string())),
                     args: vec![Operand::Copy(Place::local(iter_local))],
                     destination: Place::local(len_local),
                     target: after_len,
@@ -1179,7 +1215,32 @@ impl<'a> BodyBuilder<'a> {
                         .get(vl.0 as usize)
                         .map(|d| d.ty.clone())
                         .unwrap_or(Ty::None);
-                    if matches!(vl_ty, Ty::Str) {
+                    if iter_is_str {
+                        // F88 — `for c in <str>:`: fetch the __idx-th CODEPOINT
+                        // as a FRESH owned 1-codepoint str directly into `vl`
+                        // (no list_get→clone two-step; char_at already mints a
+                        // fresh owned handle). `vl: Ty::Str` is drop-eligible →
+                        // dropped each iteration by the scope drop schedule
+                        // (per-iter LEAK under the pre-existing F82 loop-body
+                        // drop gap; this arm guarantees NO double-free — the
+                        // source `__iter` is only READ via char_at, never
+                        // consumed, and `vl` owns its own fresh copy).
+                        let after_get = self.start_new_block();
+                        self.cur_block = Some(body_block.0 as usize);
+                        self.terminate(Terminator::Call {
+                            func: Operand::Constant(Constant::Str(
+                                "__cobrust_str_char_at".to_string(),
+                            )),
+                            args: vec![
+                                Operand::Copy(Place::local(iter_local)),
+                                Operand::Copy(Place::local(idx_local)),
+                            ],
+                            destination: Place::local(vl),
+                            target: after_get,
+                            unwind: None,
+                        });
+                        self.cur_block = Some(after_get.0 as usize);
+                    } else if matches!(vl_ty, Ty::Str) {
                         let raw_local =
                             self.declare_local("_iter_raw".to_string(), Ty::Int, span, false);
                         // body_block → Call(list_get → raw_local) → after_get

@@ -484,17 +484,18 @@ fn f3r27_run_for_iter_int_rejected() {
 }
 
 #[test]
-fn f3r28_run_for_iter_str_rejected_phase_g_deferred() {
-    // String iteration is deferred to Phase G per ADR-0050b
-    // §"Iter source type checking".
-    let src = write_cb(
+fn f3r28_run_for_iter_str_now_accepted_f88() {
+    // F88 / ADR-0101 (§2.5 LLM-first) — `for c in <str>:` codepoint
+    // iteration is NOW ACCEPTED (was Phase-G-deferred per ADR-0050b
+    // §"Iter source type checking", a clean reject — never a silent
+    // miscompile). Each `c` is a fresh 1-codepoint `str`; CPython
+    // `for c in "hello": print(c)` prints one codepoint per line.
+    assert_build_run(
         "f3r28_iter-str",
         "fn main() -> i64:\n    for c in \"hello\":\n        print(c)\n    return 0\n",
-    );
-    let (code, stderr) = run_check(&src);
-    assert_eq!(
-        code, 2,
-        "expected TYPE_ERROR (2) for iter-over-str; got code={code}, stderr={stderr}"
+        &[],
+        b"",
+        "h\ne\nl\nl\no\n",
     );
 }
 

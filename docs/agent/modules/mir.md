@@ -362,6 +362,27 @@ sources) and a generic iter-protocol shape (for arbitrary types
 implementing `__iter__`). The two paths coexist; nothing in M-F.3.1
 needs to be torn out.
 
+### F88 / ADR-0101 — `for c in <str>:` STR arm
+
+When the iter source synthesises to `Ty::Str`, `LoopKind::For` takes a
+STR arm that mirrors the list shape but swaps two primitives:
+
+- **Loop bound**: `__cobrust_str_char_count(iter_local)` (CODEPOINT count,
+  `chars().count()`), NOT `__cobrust_list_len`. A multi-byte char yields
+  exactly ONE iteration — the bound and the value primitive both use
+  `chars()`, so they agree codepoint-for-codepoint (no mid-codepoint split).
+- **Per-iteration value**: `__cobrust_str_char_at(iter_local, idx_local)`
+  written DIRECTLY into the loop var (no `list_get → str_clone` two-step;
+  `char_at` already mints a fresh OWNED 1-codepoint `str`).
+
+The source `str` is BORROWED: a bare-`Name` iter (`for c in s:`) is read as
+`Operand::Copy` (not the default non-Copy `Move`) so `s` stays usable after
+the loop; a literal/call-result iter is a fresh temp the loop owns. The STR
+arm reuses the F89/ADR-0100 increment LATCH, so `continue` advances the
+codepoint index and the loop terminates. NO double-free (source only read
+via `char_at`; loop var owns its own copy); a per-iter LEAK persists under
+the pre-existing F82 loop-body-drop gap (NOT closed by F88).
+
 ### Interaction with comprehensions
 
 `lower_comprehension` / `lower_comp_clauses` still emit the ADR-0027

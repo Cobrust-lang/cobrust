@@ -1769,7 +1769,15 @@ impl Ctx {
                 ..
             } => {
                 let iter_ty = self.synth_expr(iter)?;
-                let elem_ty = self.iter_element(&iter_ty, iter.span)?;
+                // F88 / ADR-0101 — `str` is iterable ONLY in a `for` loop
+                // (the MIR STR arm lowers it codepoint-by-codepoint). It is
+                // NOT yet iterable in a comprehension or an `in` operator
+                // (those MIR paths — `__cobrust_iter_init` / membership —
+                // have no str support and would degrade to a codegen-time
+                // error), so `iter_element_for` passes `allow_str = true`
+                // here and the other two callers keep the clean check-time
+                // reject. §2.5 "catch at compile time".
+                let elem_ty = self.iter_element_for(&iter_ty, iter.span, true)?;
                 self.bind_pattern(pattern, &elem_ty)?;
                 self.loop_depth += 1;
                 let _ = self.check_block(body)?;
@@ -1783,8 +1791,25 @@ impl Ctx {
         }
     }
 
+    /// Element type of an iterable. `for`-loops call `iter_element_for(..,
+    /// allow_str = true)`; comprehensions and the `in` operator call the
+    /// `iter_element` wrapper (`allow_str = false`) so a `str` iter source
+    /// stays a clean check-time `NotIterable` reject there (F88 / ADR-0101
+    /// only wired the MIR `for`-loop STR arm).
     fn iter_element(&mut self, t: &Ty, span: Span) -> Result<Ty, TypeError> {
+        self.iter_element_for(t, span, false)
+    }
+
+    fn iter_element_for(&mut self, t: &Ty, span: Span, allow_str: bool) -> Result<Ty, TypeError> {
         let resolved = self.subst.apply(t);
+        // F88 (§2.5 LLM-first): `for c in <str>:` iterates codepoint-by-
+        // codepoint, each `c` a fresh 1-codepoint owned `str` (CPython
+        // semantics). Additive idiom-overlap win; clean reject before.
+        // ONLY the `for`-loop call site enables this (`allow_str`); the
+        // comprehension + `in` MIR paths have no str support yet.
+        if allow_str && matches!(resolved, Ty::Str) {
+            return Ok(Ty::Str);
+        }
         match resolved {
             Ty::List(t) => Ok(*t),
             Ty::Set(t) => Ok(*t),

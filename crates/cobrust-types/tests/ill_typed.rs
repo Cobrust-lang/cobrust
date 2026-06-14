@@ -756,14 +756,18 @@ fn i54_seq_pattern_arity() {
 // ============================================================
 
 #[test]
-fn i55_for_iter_str_phase_g_deferred() {
-    // str iteration is Phase G alongside iter protocol (ADR-0050b
-    // §"Iter source type checking"); rejected at M-F.3.1.
-    must_reject(
-        "for-iter-str",
-        "fn f() -> i64:\n    for c in \"hello\":\n        return 0\n    return 0\n",
-        Cat::NotIterable,
-    );
+fn i55_for_iter_str_now_accepted_f88() {
+    // F88 / ADR-0101 (§2.5 LLM-first) — `for c in <str>:` codepoint
+    // iteration is NOW ACCEPTED (was Phase-G-deferred per ADR-0050b
+    // §"Iter source type checking", a clean reject — never a silent
+    // miscompile). `iter_element(Ty::Str) -> Ty::Str` binds each `c`
+    // to a fresh 1-codepoint owned `str` (CPython semantics).
+    let src = "fn f() -> i64:\n    for c in \"hello\":\n        return 0\n    return 0\n";
+    let module = parse_str(src, FileId::SYNTHETIC)
+        .unwrap_or_else(|e| panic!("i55: parse failed: {e:?}\n{src}"));
+    let mut sess = Session::new();
+    let hir = lower(&module, &mut sess).expect("i55: lowering must succeed");
+    check(&hir).expect("i55: `for c in <str>:` must now type-check (F88)");
 }
 
 #[test]
@@ -1369,14 +1373,46 @@ fn must_reject_with_parse_ok(name: &str, src: &str, cat: Cat) {
 // ---- Tier B.5: for-loop iteration over non-iter / str-typed iter ----
 
 #[test]
-fn i102_for_over_str_loop_rejected() {
-    // `for c in "hello":` — strings are not iter sources in Phase F.3
-    // (deferred to Phase G per ADR-0050b §"Iter source type checking").
-    // The loop-var would have type str (one-char str) — but the iter
-    // source check rejects str entirely.
+fn i102_for_over_str_loop_now_accepted_f88() {
+    // F88 / ADR-0101 (§2.5 LLM-first) — `for c in "hello":` is NOW
+    // ACCEPTED: the iter-source check binds each `c` to a fresh
+    // 1-codepoint `str` (was Phase-G-deferred per ADR-0050b §"Iter
+    // source type checking", a clean reject — never a silent miscompile).
+    // Body binds `c` (a `str`) to a `str` annotation to PROVE the
+    // loop-var type is `str` — no prelude `print` (this harness lowers
+    // bare modules with no PRELUDE, so a `print` call would fail at
+    // lowering and mask the iter-source acceptance under test).
+    let src = "fn f() -> i64:\n    for c in \"hello\":\n        let ch: str = c\n        let _ = ch\n    return 0\n";
+    let module = parse_str(src, FileId::SYNTHETIC)
+        .unwrap_or_else(|e| panic!("i102: parse failed: {e:?}\n{src}"));
+    let mut sess = Session::new();
+    let hir = lower(&module, &mut sess).expect("i102: lowering must succeed");
+    check(&hir).expect("i102: `for c in <str>:` must now type-check (F88)");
+}
+
+#[test]
+fn i102b_str_comprehension_still_rejected_f88() {
+    // F88 / ADR-0101 wired ONLY the MIR `for`-loop STR arm. A `str` iter
+    // source in a COMPREHENSION is STILL rejected at check (its MIR path
+    // is `__cobrust_iter_init`, which has no str support — accepting it
+    // would degrade to a codegen-time LLVM-verify error, a §2.5 regression
+    // from the clean compile-time reject). Keep it `NotIterable`.
     must_reject(
-        "for-over-str-literal",
-        "fn f() -> i64:\n    for c in \"hello\":\n        let _ = print(c)\n    return 0\n",
+        "str-comprehension",
+        "fn f() -> i64:\n    let xs: list[str] = [c for c in \"hi\"]\n    let _ = xs\n    return 0\n",
+        Cat::NotIterable,
+    );
+}
+
+#[test]
+fn i102c_str_in_operator_still_rejected_f88() {
+    // F88 / ADR-0101 did NOT add `str` membership (`x in <str>`). The `in`
+    // operator's iter-element check stays a clean `NotIterable` reject
+    // (its MIR membership path is unimplemented for str — accepting it
+    // would degrade to a codegen-time error).
+    must_reject(
+        "str-in-operator",
+        "fn f() -> bool:\n    let s: str = \"hi\"\n    return (\"h\" in s)\n",
         Cat::NotIterable,
     );
 }

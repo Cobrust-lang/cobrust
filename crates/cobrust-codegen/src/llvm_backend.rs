@@ -2474,6 +2474,20 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_param_counts
             .insert("__cobrust_str_char_at", 2);
 
+        // __cobrust_str_char_count(s: *mut Str) -> i64
+        // (CODEPOINT count, NOT byte len; the `for c in <str>:` loop bound,
+        // F88 / ADR-0101 — agrees codepoint-for-codepoint with char_at)
+        let str_char_count_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let str_char_count_fn = self.module.add_function(
+            "__cobrust_str_char_count",
+            str_char_count_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_str_char_count", str_char_count_fn);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_str_char_count", 1);
+
         // __cobrust_str_slice(s: *mut Str, lo: i64, hi: i64) -> *mut Str
         // (codepoint range `[lo, hi)` as a fresh str; `s[lo:hi]` operator)
         let str_slice_ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
