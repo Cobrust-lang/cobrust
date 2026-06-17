@@ -87,3 +87,41 @@ value arg (append) / dest type (pop); owned-element §2.5-B reject.
 - Owned-element `list[str]` / `list[list]` append/pop (ownership transfer).
 - `pop(i)` (indexed pop, Python negative-index normalized).
 - `insert(i, v)`, `remove(v)`, `extend(other)`, in-place `list.sort()`.
+
+## Cascade-completion repair (F83/F92-class lesson)
+
+The F96 feature commit (`6a5c20ad`) was SOUND for its feature surface
+(append/pop correct, pop-empty traps exit 3, 5000-iter hammer 0 leaks,
+str/owned cleanly rejected) but it did NOT compile as a workspace: the new
+`TypeError::UnsupportedListMutate` variant was threaded through
+`error_ux.rs`, `fix_safety.rs`, `cobrust-types-parity`, and
+`lsp/diagnostic.rs`, but MISSED the `.cb`-mirror crate `cobrust-types-cb`.
+Its `type_error_cb_from_rust` match is exhaustive with no wildcard, so the
+new variant gave `error[E0004]: non-exhaustive patterns` →
+`cobrust-types-cb` failed to build → the WHOLE workspace failed
+`cargo build --workspace` and `cargo test --workspace` (no tests ran).
+The F96 commit message's `cargo test --workspace --locked exit 0` claim was
+therefore false at that commit — verifying only `-p cobrust-cli` masked it.
+
+The repair completes the `cobrust-types-cb` cascade, mirroring the closest
+sibling (`UnsupportedSliceShape`) but carrying the two owned `String`s
+(`method` + `elem`) cloned from the Rust side per ADR-0055b §6 risk 1:
+
+- `error_cb.rs`: new `TypeErrorCb::UnsupportedListMutate { method, elem,
+  span }` variant; a `type_error_cb_from_rust` arm; a `Display` arm
+  rendering BYTE-IDENTICALLY to the thiserror `#[error(...)]` attribute on
+  the Rust side; payload-free `canonicalize` bucket; variant-name arm.
+- `fix_safety_cb.rs`: `LocalEdit` tier, mirroring Rust `fix_safety.rs`.
+- `tests/error_display_parity.rs`: two `SuggestionText` arms (returns
+  `None` — no `suggestion` field) + a new byte-parity Display test
+  `test_display_unsupported_list_mutate`.
+- `cobrust-types-parity/src/lib.rs`: `#[allow(clippy::too_many_lines)]` on
+  `Canonicalize::canonicalize` — F96's added arm pushed the flat
+  per-variant match to 101 lines (the workspace clippy gate, also unrun for
+  F96, surfaced this).
+
+Lesson (sibling F83/F92): a new `TypeError` variant's error-cascade MUST
+include the `cobrust-types-cb` mirror; the workspace-level
+`cargo build --workspace` + `cargo clippy --workspace` are the only gates
+that catch a missed mirror — a per-crate `-p cobrust-cli` run is green-blind
+to it.

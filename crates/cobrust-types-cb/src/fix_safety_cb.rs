@@ -188,7 +188,11 @@ pub fn type_error_cb_fix_safety(err: &TypeErrorCb) -> FixSafetyCb {
         | UnsupportedSliceShape { .. }
         // F90 / ADR-0102 — `int ** int` negative-literal exponent; LocalEdit,
         // mirroring the Rust-side tier (local rewrite to a float base).
-        | NegativePowExponent { .. } => FixSafetyCb::LocalEdit,
+        | NegativePowExponent { .. }
+        // F96 / ADR-0109 — list mutable method on an owned-element list;
+        // LocalEdit, mirroring the Rust-side `fix_safety.rs` tier (local
+        // rewrite to a Copy-scalar element type or a comprehension rebuild).
+        | UnsupportedListMutate { .. } => FixSafetyCb::LocalEdit,
         ImplicitTruthiness { .. } | MutableDefault { .. } | NotHashable { .. } => {
             FixSafetyCb::BehaviorPreserving
         }

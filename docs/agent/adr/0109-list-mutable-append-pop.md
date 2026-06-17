@@ -127,9 +127,18 @@ element-ownership transfer to get wrong.
 - `xs.append(v)` / `xs.pop()` work end-to-end for `list[int]` / `list[float]`.
 - `list[str]` / owned-element append/pop is a clean exit-2 reject (the
   follow-up is scoped + audited separately).
-- New `TypeError::UnsupportedListMutate` variant (the 4th match site set:
+- New `TypeError::UnsupportedListMutate` variant. Full match-site set:
   `error.rs`, `fix_safety.rs` ×2, `lsp/diagnostic.rs`, `error_ux.rs`,
-  `types-parity/lib.rs` ×2).
+  `types-parity/lib.rs` ×2, AND the `.cb`-mirror crate `cobrust-types-cb`
+  (`error_cb.rs` variant + `from_rust` + `Display` + `canonicalize` +
+  variant-name; `fix_safety_cb.rs`; the `error_display_parity` byte-parity
+  test). The initial F96 commit `6a5c20ad` MISSED the `cobrust-types-cb`
+  mirror, so its exhaustive `type_error_cb_from_rust` match failed to
+  compile (`error[E0004]`) and broke the WHOLE-workspace build/test; the
+  cascade-completion repair (see finding F96) closes it. Lesson
+  (sibling F83/F92): a new `TypeError` variant MUST be mirrored in
+  `cobrust-types-cb`, and only `cargo build/clippy --workspace` catches a
+  missed mirror — `-p cobrust-cli` is green-blind.
 - `pop` on an empty list is a clean exit-3 TRAP (§2.2 — CPython
   `IndexError` parity, never a silent sentinel `0`).
 

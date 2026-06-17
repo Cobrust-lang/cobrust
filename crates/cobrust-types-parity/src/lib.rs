@@ -334,6 +334,12 @@ fn canonicalize_fn(fn_ty: &FnTy, arena: &mut TyArena) -> CanonicalKey {
 /// in order — order is significant (per ADR-0055e §3 traversal-order
 /// determinism).
 impl Canonicalize for TypeError {
+    // F96 / ADR-0109 cascade: the per-variant canonicalization dispatch grew
+    // past the 100-line lint threshold when `UnsupportedListMutate` joined the
+    // payload-free bucket. The function is a flat exhaustive `match` (one arm
+    // per `TypeError` variant) — splitting it would obscure the 1:1 variant
+    // mirror, so allow the line count here.
+    #[allow(clippy::too_many_lines)]
     fn canonicalize(&self, arena: &mut TyArena) -> CanonicalKey {
         let variant = type_error_variant_name(self);
         let children: Vec<CanonicalKey> = match self {

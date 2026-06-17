@@ -351,6 +351,21 @@ pub enum TypeErrorCb {
         suggestion: Option<String>,
     },
 
+    /// F96 / ADR-0109 — a list mutable method (`xs.append(v)` / `xs.pop()`)
+    /// invoked on a list whose element type is NOT a Copy scalar (`int` /
+    /// `float` / `bool`). Mirrors `TypeError::UnsupportedListMutate { method:
+    /// String, elem: String, span }`. Unlike its payload-free siblings
+    /// (`UnsupportedSliceShape` / `NegativePowExponent`), this one carries two
+    /// owned `String`s (the method name + the element-type display) cloned
+    /// from the Rust side per §6 risk 1, so the §2.5-B FIX (name the Copy-
+    /// scalar remedy + the comprehension-rebuild alternative) renders byte-
+    /// identically across the two impls.
+    UnsupportedListMutate {
+        method: String,
+        elem: String,
+        span: Span,
+    },
+
     /// Composite error container — flat list of errors.
     ///
     /// ADR-0055b §3: `Multiple(list[TypeError])` — the only recursive
@@ -671,6 +686,14 @@ pub fn type_error_cb_from_rust(rust: &TypeError, arena: &mut TyArena) -> TypeErr
             span: *span,
             suggestion: opt_string(*suggestion),
         },
+        // F96 / ADR-0109 mirror — two owned Strings (method + elem) + span.
+        TypeError::UnsupportedListMutate { method, elem, span } => {
+            TypeErrorCb::UnsupportedListMutate {
+                method: method.clone(),
+                elem: elem.clone(),
+                span: *span,
+            }
+        }
     }
 }
 
@@ -811,7 +834,12 @@ impl Canonicalize for TypeErrorCb {
             | TypeErrorCb::UnsupportedSliceShape { .. }
             // F90 / ADR-0102 — `int ** int` negative-literal exponent;
             // payload-free (mirror of the Rust-side canonicalization).
-            | TypeErrorCb::NegativePowExponent { .. } => vec![],
+            | TypeErrorCb::NegativePowExponent { .. }
+            // F96 / ADR-0109 — list mutable method on an owned-element list;
+            // payload-free canonicalization (mirror of the Rust-side
+            // `cobrust_types_parity` bucket: method/elem Strings are not
+            // structural canonical keys).
+            | TypeErrorCb::UnsupportedListMutate { .. } => vec![],
         };
         CanonicalKey::node(variant, children)
     }
@@ -1091,6 +1119,19 @@ impl std::fmt::Display for TypeErrorCb {
                  use a float base so the result is a float — write `float(base) ** exp` \
                  or make the base a float literal (e.g. `2.0 ** -1`)"
             ),
+            // F96 / ADR-0109 — byte-identical to the Rust-side
+            // `TypeError::UnsupportedListMutate` `#[error(...)]` Display (the
+            // parity harness diff-tests the rendered text; the `\` line-
+            // continuations collapse to single spaces exactly as thiserror
+            // renders the Rust attribute).
+            TypeErrorCb::UnsupportedListMutate { method, elem, span } => write!(
+                f,
+                "`list.{method}()` on an owned-element list (element type `{elem}`) at {span} \
+                 is not supported yet; F96 ships in-place `append`/`pop` for Copy-scalar \
+                 element lists (`list[int]` / `list[float]` / `list[bool]`) only — \
+                 use one of those element types, or rebuild the list via a comprehension \
+                 (`[f(x) for x in xs]`) instead of mutating it in place"
+            ),
         }
     }
 }
@@ -1172,5 +1213,7 @@ pub fn type_error_cb_variant_name(err: &TypeErrorCb) -> &'static str {
         TypeErrorCb::UnsupportedSliceShape { .. } => "UnsupportedSliceShape",
         // F90 / ADR-0102 — `int ** int` negative-literal exponent.
         TypeErrorCb::NegativePowExponent { .. } => "NegativePowExponent",
+        // F96 / ADR-0109 — list mutable method on an owned-element list.
+        TypeErrorCb::UnsupportedListMutate { .. } => "UnsupportedListMutate",
     }
 }

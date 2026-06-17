@@ -320,6 +320,37 @@ fn test_display_negative_pow_exponent() {
 }
 
 #[test]
+fn test_display_unsupported_list_mutate() {
+    // Anchor: error_display_parity.rs::test_display_unsupported_list_mutate
+    //
+    // F96 / ADR-0109 — a list mutable method (`xs.append`/`xs.pop`) on an
+    // owned-element list is a compile-time reject. Unlike its payload-free
+    // siblings this carries two owned Strings (method + elem); they must thread
+    // through and render byte-identically across the Rust and .cb Display impls.
+    let span = dummy_span();
+    let rust_err = TypeError::UnsupportedListMutate {
+        method: "append".to_string(),
+        elem: "str".to_string(),
+        span,
+    };
+    let cb_err = TypeErrorCb::UnsupportedListMutate {
+        method: "append".to_string(),
+        elem: "str".to_string(),
+        span,
+    };
+    let rendered = format!("{rust_err}");
+    assert_eq!(
+        rendered,
+        format!("{cb_err}"),
+        "UnsupportedListMutate Display must be byte-equal"
+    );
+    // The §2.5-B FIX names the method + element type + the Copy-scalar remedy.
+    assert!(rendered.contains("`list.append()`"));
+    assert!(rendered.contains("element type `str`"));
+    assert!(rendered.contains("rebuild the list via a comprehension"));
+}
+
+#[test]
 
 fn test_display_arity_mismatch() {
     let span = dummy_span();
@@ -486,6 +517,9 @@ impl SuggestionText for TypeError {
             TypeError::DoraUnknownOutputId { suggestion, .. } => suggestion.as_deref(),
             TypeError::UnsupportedSliceShape { suggestion, .. } => suggestion.as_deref(),
             TypeError::NegativePowExponent { suggestion, .. } => suggestion.as_deref(),
+            // F96 / ADR-0109 — no `suggestion` field (the §2.5-B FIX is inline
+            // in the Display message); returns None like `Multiple`.
+            TypeError::UnsupportedListMutate { .. } => None,
         }
     }
 }
@@ -526,6 +560,9 @@ impl SuggestionText for TypeErrorCb {
             TypeErrorCb::DoraUnknownOutputId { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::UnsupportedSliceShape { suggestion, .. } => suggestion.as_deref(),
             TypeErrorCb::NegativePowExponent { suggestion, .. } => suggestion.as_deref(),
+            // F96 / ADR-0109 — no `suggestion` field (mirror of the Rust side);
+            // returns None like `Multiple`.
+            TypeErrorCb::UnsupportedListMutate { .. } => None,
         }
     }
 }
