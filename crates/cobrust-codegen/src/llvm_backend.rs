@@ -2351,6 +2351,28 @@ impl<'ctx> LlvmEmitter<'ctx> {
             self.runtime_helper_param_counts.insert(sym, 1);
         }
 
+        // -- ADR-0108 / F95: `sorted(xs)` builtin. Like the reducers it
+        // BORROWS the source `list[T]` pointer (Copy-at-call; the `.cb`
+        // scope drops the source once) but RETURNS a FRESH ascending-sorted
+        // `list[T]` pointer the dest local owns + drops once (`(ptr) ->
+        // ptr`). Int / float / str variant picked by the intrinsic-rewrite
+        // pass (`Kind::Sorted`) from the dest list's element type. `_str`
+        // is LEXICOGRAPHIC (UTF-8 byte order == codepoint order). The fresh
+        // `list[str]` OWNS deep-copied Str clones; its dest `Ty::List(Str)`
+        // drop schedule routes `__cobrust_list_drop_elems` + str_drop.
+        let sort_ptr_ptr_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
+        for sym in [
+            "__cobrust_list_sort_int",
+            "__cobrust_list_sort_float",
+            "__cobrust_list_sort_str",
+        ] {
+            let f = self
+                .module
+                .add_function(sym, sort_ptr_ptr_ty, Some(Linkage::External));
+            self.runtime_helper_decls.insert(sym, f);
+            self.runtime_helper_param_counts.insert(sym, 1);
+        }
+
         // -- ADR-0083 PART-2: BOOL-returning classification shims
         // (`(f64) -> i1`). `math.isnan` / `math.isinf` / `math.isfinite`.
         // The Rust C-ABI `-> bool` is declared as `bool_type()` (LLVM `i1`),

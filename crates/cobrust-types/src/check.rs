@@ -525,6 +525,16 @@ struct Ctx {
     /// A user-defined `min`/`max`/`sum` shadows the def_id and is left to
     /// the generic path.
     reduce_defs: HashSet<DefId>,
+    /// ADR-0108 — the `DefId` of the PRELUDE `sorted` builtin. A DEDICATED
+    /// slot (NOT `poly_intrinsic_defs`) like `reduce_defs`: the PRELUDE stub
+    /// declares the narrow `sorted(xs: list[i64]) -> list[i64]` shape, but
+    /// `try_synth_sorted_builtin` resolves the call's return type from the
+    /// `list[T]` arg's element type (`sorted(list[str]) -> list[str]`) and
+    /// never relies on the generic stub-unify (which would reject a
+    /// `list[str]`/`list[float]` arg against the `list[i64]` param). A
+    /// user-defined `sorted` shadows the def_id and is left to the generic
+    /// path (gated on the `list`-first-param reducer shape, like reduce).
+    sorted_defs: HashSet<DefId>,
     /// ADR-0072 §2/§3 — ecosystem-module aliases. Maps the `DefId` of
     /// an `import den` alias (a `DefKind::ImportAlias`) to its module
     /// name (`"den"`). Populated during `prebind_item` for `Import`
@@ -1051,6 +1061,18 @@ impl Ctx {
                     )
                 {
                     self.reduce_defs.insert(f.def_id);
+                }
+                // ADR-0108 — `sorted(xs: list[T]) -> list[T]`. Same
+                // first-param-is-`list` shape gate as the reducers: the
+                // PRELUDE stub registers; a user `fn sorted(x: i64)` scalar
+                // shadow does NOT, and keeps its own strict signature.
+                if f.name.as_str() == "sorted"
+                    && matches!(
+                        &fn_ty,
+                        Ty::Fn(ft) if matches!(ft.positional.first(), Some(Ty::List(_)))
+                    )
+                {
+                    self.sorted_defs.insert(f.def_id);
                 }
                 self.record_def(f.def_id, fn_ty);
             }
@@ -4191,6 +4213,75 @@ impl Ctx {
         }
     }
 
+    /// ADR-0108 — Python-canonical `sorted(xs)` builtin. Returns
+    /// `Some(Ty::List(T))` when `callee` is the bare PRELUDE `sorted`
+    /// applied to a single `list[T]` argument (`T ∈ {Int, Float, Str}` —
+    /// the SORTABLE element types). The SOURCE is NOT mutated; the result
+    /// is a NEW sorted list of the SAME type (Python copy semantics — the
+    /// in-place `list.sort()` is a deferred follow-up, as are the
+    /// `reverse=` / `key=` kwargs). A non-list arg REJECTS via the
+    /// canonical `NotIterable`; a list of a non-sortable element type
+    /// unifies the element against `i64`, surfacing the canonical
+    /// `TypeMismatch` (no new error variant). Returns `Ok(None)` for a
+    /// non-`sorted` callee so the generic path runs.
+    fn try_synth_sorted_builtin(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let ExprKind::Name(rn) = &callee.kind else {
+            return Ok(None);
+        };
+        if !self.sorted_defs.contains(&rn.def_id) {
+            return Ok(None);
+        }
+        // Only the bare 1-positional-arg form; `reverse=` / `key=` kwargs
+        // are DEFERRED (ADR-0108 §"Deferred") and fall through to the
+        // generic path's arity / keyword diagnostic.
+        let [CallArg::Positional(arg)] = args else {
+            return Ok(None);
+        };
+        let arg_ty = self.synth_expr(arg)?;
+        let arg_ty = self.subst.apply(&arg_ty);
+        // `Ref(T)` unwraps once so `sorted(&xs)` (the §2.5-A borrow
+        // shortcut) routes by the inner list type.
+        let resolved = match &arg_ty {
+            Ty::Ref(inner) => (**inner).clone(),
+            other => other.clone(),
+        };
+        match resolved {
+            Ty::List(elem) => {
+                let elem = self.subst.apply(&elem);
+                match elem {
+                    // The three sortable element types: numeric (int /
+                    // float) + lexicographic (str). The return is a NEW
+                    // list of the SAME element type.
+                    Ty::Int => Ok(Some(Ty::List(Box::new(Ty::Int)))),
+                    Ty::Float => Ok(Some(Ty::List(Box::new(Ty::Float)))),
+                    Ty::Str => Ok(Some(Ty::List(Box::new(Ty::Str)))),
+                    // An unresolved element var (e.g. an un-annotated
+                    // `sorted([])`) anchors to the int path — the default
+                    // numeric element type — so the call has a concrete
+                    // `list[int]` return type. A list of a non-sortable
+                    // element type (`sorted([[1], [2]])`) unifies the elem
+                    // against `i64`, raising the canonical `TypeMismatch`
+                    // (no new variant).
+                    other => {
+                        unify(&Ty::Int, &other, &mut self.subst, arg.span)?;
+                        Ok(Some(Ty::List(Box::new(Ty::Int))))
+                    }
+                }
+            }
+            // A non-list argument: `sorted` requires an iterable.
+            other => Err(TypeError::NotIterable {
+                actual: other,
+                span,
+                suggestion: Some("`sorted` takes a single list argument"),
+            }),
+        }
+    }
+
     fn synth_call(&mut self, callee: &Expr, args: &[CallArg], span: Span) -> Result<Ty, TypeError> {
         // ADR-0072 §2/§3 — ecosystem-module call dispatch fires first so
         // `den.connect(...)` / `conn.execute(...)` / `cur.fetchall()`
@@ -4260,6 +4351,15 @@ impl Ctx {
         // list-reducer form only; the multi-scalar-arg + `key=` forms are
         // deferred to the generic ArityMismatch path. See ADR-0090.
         if let Some(t) = self.try_synth_reduce_builtin(callee, args, span)? {
+            return Ok(t);
+        }
+        // ADR-0108 — Python-canonical `sorted(xs)`. MUST run BEFORE the
+        // generic path: the PRELUDE stub declares the narrow `list[i64]`
+        // arg, so the generic stub-unify would reject `sorted(["b", "a"])`
+        // (a `list[str]`). Intercepting here resolves the return type from
+        // the `list[T]` arg's element type (`list[T] -> list[T]`); a
+        // non-list arg gets the canonical `NotIterable`. See ADR-0108.
+        if let Some(t) = self.try_synth_sorted_builtin(callee, args, span)? {
             return Ok(t);
         }
         let callee_ty = self.synth_expr(callee)?;

@@ -2701,6 +2701,49 @@ impl<'a> BodyBuilder<'a> {
         } else {
             callee_return_ty
         };
+        // ADR-0108 / F95 — `sorted(xs)` return-type override. The PRELUDE
+        // `sorted` stub declares `-> list[i64]` (a placeholder), but
+        // Python's `sorted` returns a NEW list of the SAME element type:
+        // `sorted(["b", "a"])` is a `list[str]`. The type-checker
+        // (`try_synth_sorted_builtin`) resolved the call to `list[T]`, yet
+        // this MIR layer re-derives the return from the (list[i64]) prelude
+        // sig — so without this override the `_callret` alloca + its DROP
+        // schedule would be `list[i64]` while the arg is `list[str]`,
+        // LEAKING the fresh str clones (a `list[i64]` drop frees the spine
+        // but NOT the element Str buffers `__cobrust_list_sort_str` minted).
+        // We read the SINGLE list arg's element type from the type-checker's
+        // record (`synth_expr_ty`, NOT the arg's MIR temp — the ADR-0089
+        // abs-miscompile lesson). The intrinsic-rewrite `Kind::Sorted`
+        // dispatch reads this SAME dest list element type as its one source
+        // of truth (int / float / str shim selection + drop schedule).
+        let sorted_is_intrinsic = callee_name == Some("sorted")
+            && if let ExprKind::Name(rn) = &callee.kind {
+                matches!(
+                    self.ctx.lookup_ty(rn.def_id),
+                    Ty::Fn(ref ft) if matches!(ft.positional.first(), Some(Ty::List(_)))
+                )
+            } else {
+                false
+            };
+        let callee_return_ty = if sorted_is_intrinsic {
+            if let [CallArg::Positional(arg)] = args {
+                let arg_ty = match synth_expr_ty(self, arg) {
+                    Ty::Ref(inner) => *inner,
+                    other => other,
+                };
+                match arg_ty {
+                    Ty::List(elem) => Ty::List(elem),
+                    // A non-list arg is a type-checker reject; keep the
+                    // prelude return so MIR stays well-formed (unreached
+                    // at codegen).
+                    _ => callee_return_ty,
+                }
+            } else {
+                callee_return_ty
+            }
+        } else {
+            callee_return_ty
+        };
         let callee_op = if let ExprKind::Name(rn) = &callee.kind {
             let ty = self.ctx.lookup_ty(rn.def_id);
             if matches!(ty, Ty::Fn(_)) {

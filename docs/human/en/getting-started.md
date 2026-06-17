@@ -220,6 +220,44 @@ Key rules (ADR-0090 + ADR-0107):
   `max(5)` is a `TypeError` (an `int` is not iterable). Use a list
   (`max([5])`) or `>= 2` args (`max(5, 9)`).
 
+## Step 2.6c: `sorted(xs)` builtin (ADR-0108)
+
+`sorted(xs)` returns a NEW ascending-sorted list and does NOT mutate the
+source — matching Python's copy semantics:
+
+```cobrust
+fn main() -> i64:
+    let xs: list[i64] = [3, 1, 2]
+    let ys: list[i64] = sorted(xs)
+    print(ys[0])              # 1
+    print(ys[1])              # 2
+    print(ys[2])              # 3
+
+    # The SOURCE is unchanged — `sorted` copies, it does not sort in place.
+    print(xs[0])              # 3  (still the original order)
+
+    # Strings sort lexicographically (codepoint order, like Python).
+    let ws: list[str] = ["banana", "apple", "cherry"]
+    let sw: list[str] = sorted(ws)
+    print(sw[0])              # apple
+    print(sw[1])              # banana
+    print(sw[2])              # cherry
+
+    # Floats sort numerically; an empty list yields an empty list.
+    print(len(sorted([])))    # 0
+    return 0
+```
+
+Key rules (ADR-0108):
+- `sorted(list[T]) -> list[T]` returns a NEW list of the SAME element type
+  (`T` is `int`, `float`, or `str`). `int`/`float` sort numerically; `str`
+  sorts LEXICOGRAPHICally (codepoint order == CPython).
+- The SOURCE list is NOT mutated — this is the VALUE form (copy). The
+  in-place `xs.sort()` method, plus the `reverse=` and `key=` keyword
+  arguments, are deferred follow-ups.
+- A non-list argument (`sorted(5)`) is a COMPILE error (an `int` is not a
+  list) — the error message tells you `sorted` takes a single list argument.
+
 ## Step 2.7: list[str] and Str ownership (M-F.3.2)
 
 Cobrust now ships `list[str]` end-to-end with the Rust-style ownership

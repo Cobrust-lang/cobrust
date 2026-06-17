@@ -204,6 +204,43 @@ fn main() -> i64:
   `TypeError`,因为 `int` 不可迭代)。请用列表(`max([5])`)或 `>= 2` 个
   参数(`max(5, 9)`)。
 
+## 第 2.6c 步：`sorted(xs)` 内建函数（ADR-0108）
+
+`sorted(xs)` 返回一个**新的**升序列表,并且**不会修改**源列表——这与
+Python 的复制语义一致:
+
+```cobrust
+fn main() -> i64:
+    let xs: list[i64] = [3, 1, 2]
+    let ys: list[i64] = sorted(xs)
+    print(ys[0])              # 1
+    print(ys[1])              # 2
+    print(ys[2])              # 3
+
+    # 源列表保持不变 —— `sorted` 是复制,不是原地排序。
+    print(xs[0])              # 3 (仍是原始顺序)
+
+    # 字符串按字典序排序(码点顺序,与 Python 一致)。
+    let ws: list[str] = ["banana", "apple", "cherry"]
+    let sw: list[str] = sorted(ws)
+    print(sw[0])              # apple
+    print(sw[1])              # banana
+    print(sw[2])              # cherry
+
+    # 浮点数按数值排序;空列表返回空列表。
+    print(len(sorted([])))    # 0
+    return 0
+```
+
+关键规则(ADR-0108):
+- `sorted(list[T]) -> list[T]` 返回相同元素类型的**新**列表(`T` 为
+  `int`、`float` 或 `str`)。`int`/`float` 按数值排序;`str` 按**字典序**
+  (码点顺序 == CPython)排序。
+- 源列表**不会被修改**——这是值形式(复制)。原地的 `xs.sort()` 方法,以及
+  `reverse=` 和 `key=` 关键字参数,都是后续待实现项。
+- 非列表参数(`sorted(5)`)是**编译错误**(`int` 不是列表)——错误信息会
+  提示 `sorted` 接受单个列表参数。
+
 ## 第 2.7 步：list[str] 与 Str 所有权（M-F.3.2）
 
 Cobrust 现在端到端支持 `list[str]`,且遵循 ADR-0050c 规定的 Rust 风格

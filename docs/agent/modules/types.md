@@ -391,6 +391,22 @@ Invariants:
   + 3 reject cases). Regression: the 1-arg list form `list_reduce_e2e`
   (14 tests) stays green.
 
+### `sorted(xs)` builtin (ADR-0108 / F95)
+
+| Feature | Location | Notes |
+|---|---|---|
+| `sorted` special-case | `types/src/check.rs::try_synth_sorted_builtin` | runs in `synth_call` AFTER the reducer special, BEFORE the generic PRELUDE-stub-unify (the narrow `sorted(xs: list[i64])` stub would reject a `list[str]` arg). Fires only for a bare `sorted` whose `DefId` is in `sorted_defs`. Returns `list[T]` of the SAME element type (`T ∈ {Int, Float, Str}` — the sortable types). |
+| Reducer-SHAPE registration gate | `types/src/check.rs::prebind_item` | `sorted_defs` records a `sorted` def ONLY when its first positional param is a `list`. A USER `fn sorted(x: i64)` scalar shadow is NOT registered → `try_synth_sorted_builtin` returns `Ok(None)` and the user's signature drives the call. |
+| Non-list / non-sortable arg | same | a non-list arg → canonical `NotIterable` (REUSED variant, §2.5-B suggestion `"`sorted` takes a single list argument"`). A list of an unresolved/non-sortable element type unifies the elem against `Int` → canonical `TypeMismatch` (no new variant). An un-annotated `sorted([])` anchors the elem to `Int`. |
+
+Invariants:
+- No new `TypeError` variant (reuses `NotIterable` + `TypeMismatch`).
+- VALUE form (copy); `reverse=`/`key=`/in-place `list.sort()` deferred.
+- Corpus: e2e `sorted_e2e` (8 tests: int var + source-unmutated, literal +
+  duplicates, negatives + singleton, empty, float, str-lexicographic +
+  source-unmutated, reducer regression, non-list reject). Regression:
+  `list_reduce_e2e` (14) + `leetcode_corpus_e2e` (12) stay green.
+
 ## Phase I ADR-0056b — `TypeCheckCtx` (Clone+Send Arc-COW snapshot)
 
 Per ADR-0056b §3.3 + §5 + §6 (accepted at `b0e1e9e`):

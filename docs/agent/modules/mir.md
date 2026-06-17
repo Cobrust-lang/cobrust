@@ -578,3 +578,26 @@ Invariants:
 Test corpus:
 - `crates/cobrust-cli/tests/minmax_variadic_e2e.rs` — 13 tests (CPython oracle).
 - `crates/cobrust-cli/tests/list_reduce_e2e.rs` — 14 tests (the 1-arg list-form regression).
+
+## ADR-0108 (F95) — `sorted(xs)` lowering
+
+`sorted(xs: list[T]) -> list[T]` returns a NEW ascending-sorted list (source
+NOT mutated). It REUSES the ADR-0090 borrow-read discipline but returns a
+FRESH list (a pointer), not a scalar.
+
+| Surface | Anchor | Notes |
+|---|---|---|
+| Return-type override | `lower.rs` `lower_call` `sorted_is_intrinsic` block | the PRELUDE stub declares `-> list[i64]`; this re-pins the `_callret` alloca to `list[T]` derived from the SINGLE list arg's STATIC element type (`synth_expr_ty`, NOT the arg MIR temp — ADR-0089/0090 lesson). LOAD-BEARING for DROP correctness: a `list[str]` dest routes `__cobrust_list_drop_elems` + str_drop over the fresh OWNED clones; a `list[i64]` dest would LEAK them. |
+| Reducer-SHAPE gate | same | `sorted_is_intrinsic` is true only when the callee `Ty::Fn`'s first positional is a `list` — a user `fn sorted(x: i64)` scalar shadow keeps its own return. |
+| Shim pick | `cobrust-cli/src/build/intrinsics.rs` `Kind::Sorted` | reads the DEST list's ELEMENT type (the override above) → `__cobrust_list_sort_{int,float,str}`. The source list operand passes UNCHANGED (Copy-at-call per `is_copy_type(Ty::List)` — the shim BORROWS the source; the `.cb` scope drops the source once). |
+| Codegen externs | `codegen/src/llvm_backend.rs` | the three `__cobrust_list_sort_*` symbols declared as `(ptr) -> ptr`. |
+
+Invariants:
+- VALUE form (copy); the source is never written. `reverse=`/`key=`/
+  in-place `list.sort()` are deferred (ADR-0108 §Deferred).
+- The str shim DEEP-COPIES each slot, so the fresh list + the source own
+  DISJOINT allocations (no double-free, no leak).
+
+Test corpus:
+- `crates/cobrust-cli/tests/sorted_e2e.rs` — 8 tests (CPython oracle).
+- `crates/cobrust-cli/tests/list_reduce_e2e.rs` + `leetcode_corpus_e2e.rs` — regression.

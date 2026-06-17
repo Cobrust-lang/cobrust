@@ -46,7 +46,9 @@
 //! retargets `min` / `max` / `sum` onto, keyed on the call's element /
 //! destination type.
 
-use crate::collections::{__cobrust_list_get, __cobrust_list_len};
+use crate::collections::{
+    __cobrust_list_get, __cobrust_list_len, __cobrust_list_new, __cobrust_list_set,
+};
 
 /// `min(xs: list[int]) -> int` — the smallest element.
 ///
@@ -213,10 +215,146 @@ pub unsafe extern "C" fn __cobrust_sum_float(list: *mut u8) -> f64 {
     acc
 }
 
+// --- `sorted(xs)` (ADR-0108 / F95) ---------------------------------------
+//
+// `sorted(xs: list[T]) -> list[T]` returns a NEW ascending-sorted list;
+// the SOURCE is NOT mutated (Python copy semantics — distinct from
+// `list.sort()` which mutates in place; the in-place form is a deferred
+// follow-up). `reverse=` / `key=` kwargs are OUT OF SCOPE (ascending
+// only — ADR-0108 §"Deferred").
+//
+// Like the `min`/`max`/`sum` reducers above, each shim BORROWS the source
+// list (reads len + each slot via `__cobrust_list_len` / `__cobrust_list_get`,
+// never `Box::from_raw`) and builds a FRESH `list[T]` the `.cb` scope owns
+// and drops EXACTLY ONCE:
+//
+//   - `_int`   : numeric ascending sort of the raw i64 slots.
+//   - `_float` : numeric ascending sort, each i64 slot reinterpreted as the
+//                stored `f64` bit-pattern (`from_bits`); the fresh list's
+//                slots store the SAME `to_bits()` patterns (the codegen
+//                float-list materialisation shape). NaN is out of scope
+//                (ADR-0108 §"NaN") — a `total_cmp` keeps the sort total.
+//   - `_str`   : LEXICOGRAPHIC ascending sort. Each slot is a `*mut u8`
+//                Str-buffer pointer; we sort the slot pointers by
+//                `__cobrust_str_cmp` (UTF-8 byte order == codepoint order ==
+//                CPython, F92 / ADR-0104), then DEEP-COPY each via
+//                `__cobrust_str_clone` into the fresh list. The fresh
+//                `list[str]` OWNS its clones (the codegen drops it via
+//                `__cobrust_list_drop_elems` + `__cobrust_str_drop`); the
+//                SOURCE keeps its own slots (NOT consumed), so a subsequent
+//                read of the source still works and the source drops once.
+//
+// An empty / null source yields a fresh empty list (`sorted([]) == []`).
+
+/// `sorted(xs: list[int]) -> list[int]` — a NEW ascending-sorted list.
+///
+/// Borrow-reads `xs` (never frees it); returns a fresh `list[i64]` the
+/// caller owns + drops EXACTLY ONCE via `__cobrust_list_drop`.
+///
+/// # Safety
+///
+/// `list` must be a pointer returned by `__cobrust_list_new` and not yet
+/// dropped, OR null (a null list yields a fresh empty list).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_sort_int(list: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation; `__cobrust_list_len` tolerates null.
+    let n = unsafe { __cobrust_list_len(list) };
+    let mut buf: Vec<i64> = Vec::with_capacity(n.max(0) as usize);
+    let mut i = 0;
+    while i < n {
+        // SAFETY: 0 <= i < n, in-bounds.
+        buf.push(unsafe { __cobrust_list_get(list, i) });
+        i += 1;
+    }
+    buf.sort_unstable();
+    // SAFETY: fresh list of length `n`; set each slot from the sorted buf.
+    let out = unsafe { __cobrust_list_new(8, buf.len() as i64) };
+    for (k, &v) in buf.iter().enumerate() {
+        // SAFETY: k in [0, len), in-bounds for the fresh `out`.
+        unsafe { __cobrust_list_set(out, k as i64, v) };
+    }
+    out
+}
+
+/// `sorted(xs: list[float]) -> list[float]` — a NEW ascending-sorted
+/// list. Each i64 slot is the stored `f64` bit-pattern. Uses `f64::total_cmp`
+/// so the sort is total (NaN out of scope — ADR-0108). See
+/// [`__cobrust_list_sort_int`].
+///
+/// # Safety
+///
+/// Same as [`__cobrust_list_sort_int`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_sort_float(list: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation; `__cobrust_list_len` tolerates null.
+    let n = unsafe { __cobrust_list_len(list) };
+    let mut buf: Vec<f64> = Vec::with_capacity(n.max(0) as usize);
+    let mut i = 0;
+    while i < n {
+        // SAFETY: in-bounds. The slot is a `to_bits()` f64 pattern.
+        buf.push(f64::from_bits(unsafe { __cobrust_list_get(list, i) } as u64));
+        i += 1;
+    }
+    buf.sort_by(f64::total_cmp);
+    // SAFETY: fresh list of length `n`; store each f64 as its bit-pattern.
+    let out = unsafe { __cobrust_list_new(8, buf.len() as i64) };
+    for (k, &v) in buf.iter().enumerate() {
+        // SAFETY: k in [0, len), in-bounds for the fresh `out`.
+        unsafe { __cobrust_list_set(out, k as i64, v.to_bits() as i64) };
+    }
+    out
+}
+
+/// `sorted(xs: list[str]) -> list[str]` — a NEW LEXICOGRAPHIC ascending-
+/// sorted list. Each slot is a `*mut u8` Str-buffer pointer; the slot
+/// pointers are sorted by `__cobrust_str_cmp` (UTF-8 byte order ==
+/// codepoint order == CPython), then DEEP-COPIED via `__cobrust_str_clone`
+/// into the fresh list — the SOURCE is NOT consumed (Python copy
+/// semantics). See [`__cobrust_list_sort_int`].
+///
+/// # Safety
+///
+/// Same as [`__cobrust_list_sort_int`]. The slot values must be valid Str
+/// pointers (or zero, treated as an empty-string slot).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_sort_str(list: *mut u8) -> *mut u8 {
+    // SAFETY: caller-attestation; `__cobrust_list_len` tolerates null.
+    let n = unsafe { __cobrust_list_len(list) };
+    let mut ptrs: Vec<*mut u8> = Vec::with_capacity(n.max(0) as usize);
+    let mut i = 0;
+    while i < n {
+        // SAFETY: in-bounds. The slot holds a `*mut u8` Str pointer (i64).
+        ptrs.push(unsafe { __cobrust_list_get(list, i) } as *mut u8);
+        i += 1;
+    }
+    // Sort the borrowed slot pointers lexicographically. `__cobrust_str_cmp`
+    // tolerates null (treats it as ""); a non-null slot is a valid Str.
+    ptrs.sort_by(|&a, &b| {
+        // SAFETY: a, b are slot pointers read from a valid list; str_cmp
+        // null-checks each.
+        match unsafe { crate::io::__cobrust_str_cmp(a, b) } {
+            x if x < 0 => std::cmp::Ordering::Less,
+            x if x > 0 => std::cmp::Ordering::Greater,
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
+    // SAFETY: fresh list of length `n`; each slot is a fresh OWNED clone so
+    // the fresh list and the source own disjoint Str allocations.
+    let out = unsafe { __cobrust_list_new(8, ptrs.len() as i64) };
+    for (k, &p) in ptrs.iter().enumerate() {
+        // SAFETY: clone deep-copies the source buffer (null → fresh empty
+        // Str); the fresh list owns the clone.
+        let cloned = unsafe { crate::fmt::__cobrust_str_clone(p) };
+        // SAFETY: k in [0, len), in-bounds for the fresh `out`.
+        unsafe { __cobrust_list_set(out, k as i64, cloned as i64) };
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collections::{__cobrust_list_new, __cobrust_list_set};
+    use crate::collections::{__cobrust_list_drop, __cobrust_list_drop_elems};
 
     /// Build a `list[i64]` from a slice (the storage shape codegen
     /// emits for an int-list literal).
@@ -318,6 +456,171 @@ mod tests {
         unsafe {
             assert_eq!(__cobrust_sum_int(std::ptr::null_mut()), 0);
             assert!(__cobrust_sum_float(std::ptr::null_mut()).abs() < 1e-12);
+        }
+    }
+
+    // --- sorted(xs) (ADR-0108 / F95) -------------------------------------
+
+    /// Allocate a fresh Str buffer holding `s` (mirrors the f-string
+    /// runtime path; the caller owns + drops via `__cobrust_str_drop`).
+    fn build_str(s: &str) -> *mut u8 {
+        // SAFETY: fresh Str alloc + push the static bytes.
+        unsafe {
+            let buf = crate::fmt::__cobrust_str_new();
+            crate::fmt::__cobrust_str_push_static(buf, s.as_ptr(), s.len() as i64);
+            buf
+        }
+    }
+
+    /// Build a `list[str]` whose slots are fresh owned Str pointers.
+    fn build_str_list(items: &[&str]) -> *mut u8 {
+        // SAFETY: fresh list; each slot is a fresh Str pointer (i64).
+        unsafe {
+            let l = __cobrust_list_new(8, items.len() as i64);
+            for (i, &s) in items.iter().enumerate() {
+                __cobrust_list_set(l, i as i64, build_str(s) as i64);
+            }
+            l
+        }
+    }
+
+    /// Read slot `i` of a `list[str]` as a Rust `String`.
+    fn slot_str(list: *mut u8, i: i64) -> String {
+        // SAFETY: in-bounds slot holds a valid Str pointer.
+        unsafe {
+            let p = __cobrust_list_get(list, i) as *mut u8;
+            let len = crate::fmt::__cobrust_str_len(p) as usize;
+            if len == 0 {
+                return String::new();
+            }
+            let ptr = crate::fmt::__cobrust_str_ptr(p);
+            let bytes = std::slice::from_raw_parts(ptr, len);
+            String::from_utf8_lossy(bytes).into_owned()
+        }
+    }
+
+    #[test]
+    fn sort_int_ascending_and_source_unmutated() {
+        let l = build_int_list(&[3, 1, 2]);
+        // SAFETY: valid list — sort BORROWS it.
+        unsafe {
+            let out = __cobrust_list_sort_int(l);
+            assert_eq!(__cobrust_list_len(out), 3);
+            assert_eq!(__cobrust_list_get(out, 0), 1);
+            assert_eq!(__cobrust_list_get(out, 1), 2);
+            assert_eq!(__cobrust_list_get(out, 2), 3);
+            // SOURCE UNMUTATED — original order intact (Python copy).
+            assert_eq!(__cobrust_list_get(l, 0), 3);
+            assert_eq!(__cobrust_list_get(l, 1), 1);
+            assert_eq!(__cobrust_list_get(l, 2), 2);
+            __cobrust_list_drop(out);
+            __cobrust_list_drop(l);
+        }
+    }
+
+    #[test]
+    fn sort_int_duplicates_negatives_singleton_empty() {
+        let dup = build_int_list(&[5, 5, 1, 3]);
+        let neg = build_int_list(&[-1, -9, 4, 0]);
+        let one = build_int_list(&[7]);
+        let empty = build_int_list(&[]);
+        // SAFETY: valid lists.
+        unsafe {
+            let so = __cobrust_list_sort_int(dup);
+            assert_eq!(
+                (0..4)
+                    .map(|i| __cobrust_list_get(so, i))
+                    .collect::<Vec<_>>(),
+                vec![1, 3, 5, 5]
+            );
+            let sn = __cobrust_list_sort_int(neg);
+            assert_eq!(
+                (0..4)
+                    .map(|i| __cobrust_list_get(sn, i))
+                    .collect::<Vec<_>>(),
+                vec![-9, -1, 0, 4]
+            );
+            let s1 = __cobrust_list_sort_int(one);
+            assert_eq!(__cobrust_list_len(s1), 1);
+            assert_eq!(__cobrust_list_get(s1, 0), 7);
+            let se = __cobrust_list_sort_int(empty);
+            assert_eq!(__cobrust_list_len(se), 0);
+            for p in [so, sn, s1, se, dup, neg, one, empty] {
+                __cobrust_list_drop(p);
+            }
+        }
+    }
+
+    #[test]
+    fn sort_float_ascending() {
+        let l = build_float_list(&[3.5, 1.5, 2.0, 1.5]);
+        // SAFETY: valid float list.
+        unsafe {
+            let out = __cobrust_list_sort_float(l);
+            let got: Vec<f64> = (0..4)
+                .map(|i| f64::from_bits(__cobrust_list_get(out, i) as u64))
+                .collect();
+            assert_eq!(got, vec![1.5, 1.5, 2.0, 3.5]);
+            // Source unmutated.
+            assert!((f64::from_bits(__cobrust_list_get(l, 0) as u64) - 3.5).abs() < 1e-12);
+            __cobrust_list_drop(out);
+            __cobrust_list_drop(l);
+        }
+    }
+
+    #[test]
+    fn sort_str_lexicographic_and_source_unmutated() {
+        let l = build_str_list(&["banana", "apple", "cherry"]);
+        // SAFETY: valid list[str]; sort deep-copies each slot.
+        unsafe {
+            let out = __cobrust_list_sort_str(l);
+            assert_eq!(__cobrust_list_len(out), 3);
+            assert_eq!(slot_str(out, 0), "apple");
+            assert_eq!(slot_str(out, 1), "banana");
+            assert_eq!(slot_str(out, 2), "cherry");
+            // SOURCE UNMUTATED — original order + values intact.
+            assert_eq!(slot_str(l, 0), "banana");
+            assert_eq!(slot_str(l, 1), "apple");
+            assert_eq!(slot_str(l, 2), "cherry");
+            // Both lists own DISJOINT Str allocations — drop both cleanly
+            // (no double-free): the fresh list owns its clones, the source
+            // owns its originals.
+            __cobrust_list_drop_elems(out, crate::fmt::__cobrust_str_drop);
+            __cobrust_list_drop_elems(l, crate::fmt::__cobrust_str_drop);
+        }
+    }
+
+    #[test]
+    fn sort_str_empty_and_singleton() {
+        let empty = build_str_list(&[]);
+        let one = build_str_list(&["solo"]);
+        // SAFETY: valid lists.
+        unsafe {
+            let se = __cobrust_list_sort_str(empty);
+            assert_eq!(__cobrust_list_len(se), 0);
+            let s1 = __cobrust_list_sort_str(one);
+            assert_eq!(__cobrust_list_len(s1), 1);
+            assert_eq!(slot_str(s1, 0), "solo");
+            __cobrust_list_drop_elems(se, crate::fmt::__cobrust_str_drop);
+            __cobrust_list_drop_elems(s1, crate::fmt::__cobrust_str_drop);
+            __cobrust_list_drop_elems(empty, crate::fmt::__cobrust_str_drop);
+            __cobrust_list_drop_elems(one, crate::fmt::__cobrust_str_drop);
+        }
+    }
+
+    #[test]
+    fn sort_null_yields_empty() {
+        // SAFETY: null is an accepted input → fresh empty list.
+        unsafe {
+            let si = __cobrust_list_sort_int(std::ptr::null_mut());
+            assert_eq!(__cobrust_list_len(si), 0);
+            let sf = __cobrust_list_sort_float(std::ptr::null_mut());
+            assert_eq!(__cobrust_list_len(sf), 0);
+            let ss = __cobrust_list_sort_str(std::ptr::null_mut());
+            assert_eq!(__cobrust_list_len(ss), 0);
+            __cobrust_list_drop(si);
+            __cobrust_list_drop(sf);
+            __cobrust_list_drop(ss);
         }
     }
 }

@@ -265,6 +265,15 @@ pub const SUM_INT_RUNTIME_SYMBOL: &str = "__cobrust_sum_int";
 pub const MIN_FLOAT_RUNTIME_SYMBOL: &str = "__cobrust_min_float";
 pub const MAX_FLOAT_RUNTIME_SYMBOL: &str = "__cobrust_max_float";
 pub const SUM_FLOAT_RUNTIME_SYMBOL: &str = "__cobrust_sum_float";
+/// ADR-0108 / F95 — `sorted(xs)` builtin. Each takes a `list[T]` pointer,
+/// BORROWS it (reads len + each slot, never frees), and returns a FRESH
+/// ascending-sorted `list[T]` the `.cb` scope owns + drops EXACTLY ONCE.
+/// The int / float / str variant is picked by the call's DEST element type
+/// at MIR-rewrite time. `_str` is LEXICOGRAPHIC (UTF-8 byte order). The
+/// SOURCE is NOT mutated (Python copy semantics).
+pub const LIST_SORT_INT_RUNTIME_SYMBOL: &str = "__cobrust_list_sort_int";
+pub const LIST_SORT_FLOAT_RUNTIME_SYMBOL: &str = "__cobrust_list_sort_float";
+pub const LIST_SORT_STR_RUNTIME_SYMBOL: &str = "__cobrust_list_sort_str";
 /// `pow(base: f64, exp: f64) -> f64` → `__cobrust_math_pow(f64, f64) -> f64`.
 pub const MATH_POW_RUNTIME_SYMBOL: &str = "__cobrust_math_pow";
 /// `sin(x: f64) -> f64` → `__cobrust_math_sin(f64) -> f64`.
@@ -490,6 +499,10 @@ struct IntrinsicDefIds {
     reduce_max: HashSet<u32>,
     /// ADR-0090 — the PRELUDE `sum` stub's `DefId`.
     reduce_sum: HashSet<u32>,
+    /// ADR-0108 / F95 — the PRELUDE `sorted` stub's `DefId` (first-body-
+    /// wins guard for a user-defined `sorted` shadow). The int / float /
+    /// str runtime symbol is picked from the call's DEST element type.
+    sorted: HashSet<u32>,
     // ---- M-F.3.5 string stdlib (ADR-0050e) ----
     /// M-F.3.5.
     str_split: HashSet<u32>,
@@ -601,6 +614,8 @@ impl IntrinsicDefIds {
         out.extend(&self.reduce_min);
         out.extend(&self.reduce_max);
         out.extend(&self.reduce_sum);
+        // ADR-0108 / F95 — sorted builtin.
+        out.extend(&self.sorted);
         // M-F.3.5 string stdlib.
         out.extend(&self.str_split);
         out.extend(&self.str_join);
@@ -684,6 +699,7 @@ impl IntrinsicDefIds {
             && self.reduce_min.is_empty()
             && self.reduce_max.is_empty()
             && self.reduce_sum.is_empty()
+            && self.sorted.is_empty()
             && self.str_split.is_empty()
             && self.str_join.is_empty()
             && self.str_replace.is_empty()
@@ -769,6 +785,8 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         reduce_min: HashSet::new(),
         reduce_max: HashSet::new(),
         reduce_sum: HashSet::new(),
+        // ADR-0108 / F95 — sorted builtin.
+        sorted: HashSet::new(),
         // M-F.3.5 string stdlib.
         str_split: HashSet::new(),
         str_join: HashSet::new(),
@@ -1005,6 +1023,12 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
                     ids.reduce_sum.insert(body.def_id.0);
                 }
             }
+            // ---- ADR-0108 / F95 — sorted builtin ----
+            "sorted" => {
+                if reduce_names_seen.insert("sorted") {
+                    ids.sorted.insert(body.def_id.0);
+                }
+            }
             // ---- M-F.3.5 string stdlib (ADR-0050e) ----
             "split" => {
                 if str_names_seen.insert("split") {
@@ -1213,6 +1237,10 @@ enum Kind {
     /// `sum(xs: list[T]) -> T` — sum of elements (borrow-read;
     /// `sum([]) == 0`).
     Sum,
+    /// ADR-0108 / F95 — `sorted(xs: list[T]) -> list[T]` — a NEW
+    /// ascending-sorted list (borrow-read; source NOT mutated). Int /
+    /// float / str dispatch on the dest element type.
+    Sorted,
     // ---- M-F.3.5 string stdlib (ADR-0050e) ----
     StrSplit,
     StrJoin,
@@ -1309,6 +1337,8 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "min" => Some(Kind::Min),
         "max" => Some(Kind::Max),
         "sum" => Some(Kind::Sum),
+        // ADR-0108 / F95 — sorted builtin.
+        "sorted" => Some(Kind::Sorted),
         // M-F.3.5 string stdlib (ADR-0050e).
         "split" => Some(Kind::StrSplit),
         "join" => Some(Kind::StrJoin),
@@ -1441,6 +1471,8 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::Max)
     } else if ids.reduce_sum.contains(&id) {
         Some(Kind::Sum)
+    } else if ids.sorted.contains(&id) {
+        Some(Kind::Sorted)
     } else if ids.str_split.contains(&id) {
         Some(Kind::StrSplit)
     } else if ids.str_join.contains(&id) {
@@ -2539,6 +2571,52 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                         (Kind::Sum, false) => SUM_INT_RUNTIME_SYMBOL,
                         (Kind::Sum, true) => SUM_FLOAT_RUNTIME_SYMBOL,
                         _ => unreachable!(),
+                    };
+                    let lst = args[0].clone();
+                    *func = Operand::Constant(Constant::Str(sym.to_string()));
+                    args.clear();
+                    args.push(lst);
+                }
+                // ---- ADR-0108 / F95: `sorted(xs)` builtin ----
+                // `sorted(xs: list[T]) -> list[T]` returns a NEW ascending-
+                // sorted list (source NOT mutated — Python copy semantics).
+                // Unlike the reducers (which return a scalar element), the
+                // DEST is a `list[T]`; we dispatch the runtime symbol on the
+                // dest list's ELEMENT type (the ONE source of truth — the
+                // type-checker `try_synth_sorted_builtin` returned `list[T]`
+                // and `lower_call`'s `_callret` override set the dest local
+                // to that `Ty::List(T)`). The list operand passes UNCHANGED
+                // (Copy-at-call per `is_copy_type(Ty::List)` — the shim
+                // BORROWS the source; the `.cb` scope drops the source once;
+                // the fresh sorted list the shim returns is the dest local,
+                // dropped once by the dest's `Ty::List(T)` drop schedule —
+                // a `list[str]` dest routes `__cobrust_list_drop_elems` +
+                // str_drop over the fresh OWNED clones).
+                //   list[int]   → __cobrust_list_sort_int
+                //   list[float] → __cobrust_list_sort_float
+                //   list[str]   → __cobrust_list_sort_str (LEXICOGRAPHIC)
+                Kind::Sorted => {
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("sorted: expected 1 list arg, got {}", args.len()),
+                        });
+                    }
+                    let elem_ty = local_ty.get(&destination.local.0).and_then(|t| {
+                        let t = match t {
+                            Ty::Ref(inner) => (**inner).clone(),
+                            other => other.clone(),
+                        };
+                        match t {
+                            Ty::List(elem) => Some(*elem),
+                            _ => None,
+                        }
+                    });
+                    let sym = match elem_ty {
+                        Some(Ty::Float) => LIST_SORT_FLOAT_RUNTIME_SYMBOL,
+                        Some(Ty::Str) => LIST_SORT_STR_RUNTIME_SYMBOL,
+                        // Int (and any unresolved fallback — the checker
+                        // anchors an un-annotated `sorted([])` to list[int]).
+                        _ => LIST_SORT_INT_RUNTIME_SYMBOL,
                     };
                     let lst = args[0].clone();
                     *func = Operand::Constant(Constant::Str(sym.to_string()));

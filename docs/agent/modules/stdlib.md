@@ -941,6 +941,32 @@ computed args).
 - **Reuse target** — this borrow-read mechanism is what `sorted(xs)` /
   `coil.array` (`np.array`) will consume. See ADR-0090.
 
+## ADR-0108 / F95 — `sorted(xs)` builtin (`reduce.rs`)
+
+`sorted(xs: list[T]) -> list[T]` returns a NEW ascending-sorted list; the
+SOURCE is NOT mutated (Python COPY semantics — distinct from the in-place
+`list.sort()`, a deferred follow-up; `reverse=` / `key=` kwargs are also
+deferred). Like the reducers it BORROWS the source (reads
+`__cobrust_list_len` + `__cobrust_list_get`, never `Box::from_raw`) and
+builds a FRESH `list[T]` the `.cb` scope owns + drops EXACTLY ONCE. The
+int/float/str shim is picked at MIR-rewrite time from the call's DEST list
+ELEMENT type (`Kind::Sorted`).
+
+| Symbol | C ABI | Notes |
+|---|---|---|
+| `__cobrust_list_sort_int(list: *mut u8) -> *mut u8` | `reduce.rs` | fresh `list[i64]`, `sort_unstable` of the raw i64 slots. |
+| `__cobrust_list_sort_float(list: *mut u8) -> *mut u8` | `reduce.rs` | fresh `list[f64]`; each i64 slot `f64::from_bits`, `sort_by(f64::total_cmp)` (NaN out of scope), stored back as `to_bits()`. |
+| `__cobrust_list_sort_str(list: *mut u8) -> *mut u8` | `reduce.rs` | fresh `list[str]`, LEXICOGRAPHIC. Sorts the slot pointers by `__cobrust_str_cmp` (UTF-8 byte order == codepoint order == CPython, F92/ADR-0104), then DEEP-COPIES each via `__cobrust_str_clone`. |
+
+- **Copy, not in-place** — the shim never writes the source; the e2e
+  fixtures sort `xs` then read `xs` in original order to prove it.
+- **Disjoint allocations (str)** — the fresh `list[str]` OWNS its clones;
+  the SOURCE keeps its own slots. Both drop cleanly via
+  `__cobrust_list_drop_elems` + `__cobrust_str_drop` — no double-free, no
+  leak. The DROP correctness depends on the MIR `_callret` dest being typed
+  `list[str]` (the `lower_call` `callee_return_ty` override).
+- **Empty / null** — `sorted([])` yields a fresh empty list.
+
 ## Cross-references
 
 - `mod:codegen` — emits calls into the C ABI symbols this module
