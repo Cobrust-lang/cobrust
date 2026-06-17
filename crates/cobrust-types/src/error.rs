@@ -442,4 +442,30 @@ pub enum TypeError {
         span: Span,
         suggestion: Option<&'static str>,
     },
+
+    /// F96 / ADR-0109 (§2.5-B) — `xs.append(v)` / `xs.pop()` on an
+    /// OWNED-element list (`list[str]`, `list[list]`, `list[dict]`,
+    /// `list[set]`, `list[bytes]`). The F96 increment ships the
+    /// Copy-scalar element types (`list[int]` / `list[float]` /
+    /// `list[bool]`) — for which append/pop need no ownership transfer.
+    /// Owned-element mutation requires getting the ownership-transfer
+    /// discipline exactly right (append MOVES the operand INTO the list's
+    /// `drop_elems`; pop transfers ownership OUT to the receiving binding —
+    /// both must avoid a double-free / leak), and is deferred to a
+    /// follow-up. This is a CLEAN reject (exit 2), NOT a miscompile (§2.2).
+    ///
+    /// Per §2.5-B the message PRINTS THE FIX: use a Copy-scalar element
+    /// list for in-place mutation today, or rebuild via a comprehension.
+    #[error(
+        "`list.{method}()` on an owned-element list (element type `{elem}`) at {span} \
+         is not supported yet; F96 ships in-place `append`/`pop` for Copy-scalar \
+         element lists (`list[int]` / `list[float]` / `list[bool]`) only — \
+         use one of those element types, or rebuild the list via a comprehension \
+         (`[f(x) for x in xs]`) instead of mutating it in place"
+    )]
+    UnsupportedListMutate {
+        method: String,
+        elem: String,
+        span: Span,
+    },
 }

@@ -162,6 +162,19 @@ pub const BYTES_LEN_RUNTIME_SYMBOL: &str = "__cobrust_bytes_len";
 /// ADR-0050d Decision 5 addendum.
 pub const LIST_IS_EMPTY_RUNTIME_SYMBOL: &str = "__cobrust_list_is_empty";
 
+/// F96 / ADR-0109 — `xs.append(v)` runtime symbols. The list C-ABI is
+/// i64-SLOT; the `_float` twin re-encodes a NATIVE `f64` operand to the
+/// slot (the `min`/`sorted` `_int`/`_float` ABI pattern). Picked by the
+/// intrinsic-rewrite pass from the appended value's element type.
+pub const LIST_APPEND_INT_RUNTIME_SYMBOL: &str = "__cobrust_list_append";
+pub const LIST_APPEND_FLOAT_RUNTIME_SYMBOL: &str = "__cobrust_list_append_float";
+
+/// F96 / ADR-0109 — `xs.pop()` runtime symbols (remove + return-last;
+/// TRAP on empty, exit 3). The `_float` twin decodes the slot back to a
+/// NATIVE `f64`. Picked from the call's DEST (element) type.
+pub const LIST_POP_INT_RUNTIME_SYMBOL: &str = "__cobrust_list_pop";
+pub const LIST_POP_FLOAT_RUNTIME_SYMBOL: &str = "__cobrust_list_pop_float";
+
 /// Runtime symbol for source-level `dict_is_empty(d)`.
 /// Wraps `__cobrust_dict_is_empty`. ADR-0050d Decision 5 addendum —
 /// §2.2 implicit-truthy ban: returns `bool` at the source level
@@ -431,6 +444,12 @@ struct IntrinsicDefIds {
     list_len: HashSet<u32>,
     /// ADR-0050c §F5 / Phase 6 — §2.2 implicit-truthy ban for lists.
     list_is_empty: HashSet<u32>,
+    /// F96 / ADR-0109 — `xs.append(v)` in-place grow. Int / float
+    /// runtime symbol picked from the appended-value's element type.
+    list_append: HashSet<u32>,
+    /// F96 / ADR-0109 — `xs.pop()` in-place shrink + return-last. Int /
+    /// float runtime symbol picked from the call's DEST (element) type.
+    list_pop: HashSet<u32>,
     /// ADR-0050d Decision 5 addendum — §2.2 implicit-truthy ban for dicts.
     dict_is_empty: HashSet<u32>,
     /// ADR-0050d Decision 5 — polymorphic `len(d)` builtin for dict.
@@ -582,6 +601,8 @@ impl IntrinsicDefIds {
         out.extend(&self.list_get);
         out.extend(&self.list_len);
         out.extend(&self.list_is_empty);
+        out.extend(&self.list_append);
+        out.extend(&self.list_pop);
         out.extend(&self.dict_is_empty);
         out.extend(&self.len_poly);
         out.extend(&self.list_new);
@@ -668,6 +689,8 @@ impl IntrinsicDefIds {
             && self.list_get.is_empty()
             && self.list_len.is_empty()
             && self.list_is_empty.is_empty()
+            && self.list_append.is_empty()
+            && self.list_pop.is_empty()
             && self.dict_is_empty.is_empty()
             && self.len_poly.is_empty()
             && self.list_new.is_empty()
@@ -753,6 +776,8 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
         list_get: HashSet::new(),
         list_len: HashSet::new(),
         list_is_empty: HashSet::new(),
+        list_append: HashSet::new(),
+        list_pop: HashSet::new(),
         dict_is_empty: HashSet::new(),
         len_poly: HashSet::new(),
         list_new: HashSet::new(),
@@ -891,6 +916,12 @@ fn collect_print_def_ids(module: &Module) -> IntrinsicDefIds {
             }
             "list_is_empty" => {
                 ids.list_is_empty.insert(body.def_id.0);
+            }
+            "list_append" => {
+                ids.list_append.insert(body.def_id.0);
+            }
+            "list_pop" => {
+                ids.list_pop.insert(body.def_id.0);
             }
             "dict_is_empty" => {
                 ids.dict_is_empty.insert(body.def_id.0);
@@ -1198,6 +1229,13 @@ enum Kind {
     ListGet,
     ListLen,
     ListIsEmpty,
+    /// F96 / ADR-0109 — `xs.append(v)` in-place grow (returns None at the
+    /// source surface). Int / float runtime symbol picked from the appended
+    /// value's element type.
+    ListAppend,
+    /// F96 / ADR-0109 — `xs.pop()` in-place shrink + return-last (TRAPs on
+    /// empty). Int / float runtime symbol picked from the call's DEST type.
+    ListPop,
     DictIsEmpty,
     LenPoly,
     ListNew,
@@ -1304,6 +1342,8 @@ fn kind_for_name(name: &str) -> Option<Kind> {
         "list_get" => Some(Kind::ListGet),
         "list_len" => Some(Kind::ListLen),
         "list_is_empty" => Some(Kind::ListIsEmpty),
+        "list_append" => Some(Kind::ListAppend),
+        "list_pop" => Some(Kind::ListPop),
         "dict_is_empty" => Some(Kind::DictIsEmpty),
         "len" => Some(Kind::LenPoly),
         "list_new" => Some(Kind::ListNew),
@@ -1409,6 +1449,10 @@ fn kind_for_def_id(ids: &IntrinsicDefIds, id: u32) -> Option<Kind> {
         Some(Kind::ListLen)
     } else if ids.list_is_empty.contains(&id) {
         Some(Kind::ListIsEmpty)
+    } else if ids.list_append.contains(&id) {
+        Some(Kind::ListAppend)
+    } else if ids.list_pop.contains(&id) {
+        Some(Kind::ListPop)
     } else if ids.dict_is_empty.contains(&id) {
         Some(Kind::DictIsEmpty)
     } else if ids.len_poly.contains(&id) {
@@ -2064,6 +2108,77 @@ pub fn rewrite_print(module: &mut Module) -> Result<(), IntrinsicError> {
                     let lst = args[0].clone();
                     *func =
                         Operand::Constant(Constant::Str(LIST_IS_EMPTY_RUNTIME_SYMBOL.to_string()));
+                    args.clear();
+                    args.push(lst);
+                }
+                // ---- F96 / ADR-0109: `xs.append(v)` in-place grow ----
+                // `xs.append(v)` mutates `xs` IN PLACE (grows by 1). The
+                // list operand (args[0]) is Copy-at-call (`is_copy_type`),
+                // so the receiver `xs` stays the SAME live handle — the
+                // append mutates through the ptr and `xs` still drops once
+                // at scope exit. We pick the runtime symbol from the VALUE
+                // arg's (args[1]) effective element type so a `list[float]`
+                // append re-encodes the NATIVE f64 to the i64 slot via the
+                // `_float` shim (the `min`/`sorted` `_int`/`_float` pattern):
+                //   int (and the unresolved fallback) → __cobrust_list_append
+                //   float                              → __cobrust_list_append_float
+                Kind::ListAppend => {
+                    if args.len() != 2 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("list_append: expected 2 args, got {}", args.len()),
+                        });
+                    }
+                    let val_ty: Option<Ty> = match &args[1] {
+                        Operand::Constant(Constant::Float(_)) => Some(Ty::Float),
+                        Operand::Constant(Constant::Int(_)) => Some(Ty::Int),
+                        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                            local_ty.get(&p.local.0).map(|t| match t {
+                                Ty::Ref(inner) => (**inner).clone(),
+                                other => other.clone(),
+                            })
+                        }
+                        _ => None,
+                    };
+                    let sym = if matches!(val_ty, Some(Ty::Float)) {
+                        LIST_APPEND_FLOAT_RUNTIME_SYMBOL
+                    } else {
+                        LIST_APPEND_INT_RUNTIME_SYMBOL
+                    };
+                    let lst = args[0].clone();
+                    let val = args[1].clone();
+                    *func = Operand::Constant(Constant::Str(sym.to_string()));
+                    args.clear();
+                    args.push(lst);
+                    args.push(val);
+                }
+                // ---- F96 / ADR-0109: `xs.pop()` in-place shrink + return ----
+                // `xs.pop()` removes + RETURNS the last element, mutating
+                // `xs` (shrinks by 1); pop on an EMPTY list TRAPS (exit 3,
+                // §2.2). The list operand is Copy-at-call (the receiver stays
+                // live + drops once). We pick the runtime symbol from the
+                // call's DEST type — the type-checker set the `_callret` dest
+                // to the element type `T` (`try_synth_list_method`'s `pop`
+                // arm returns `elem`), the ONE source of truth (mirrors the
+                // `min`/`max`/`sum` dest-type dispatch):
+                //   int (and the unresolved fallback) → __cobrust_list_pop
+                //   float                              → __cobrust_list_pop_float
+                Kind::ListPop => {
+                    if args.len() != 1 {
+                        return Err(IntrinsicError::PrintArgUnsupported {
+                            found: format!("list_pop: expected 1 arg, got {}", args.len()),
+                        });
+                    }
+                    let dest_ty = local_ty.get(&destination.local.0).map(|t| match t {
+                        Ty::Ref(inner) => (**inner).clone(),
+                        other => other.clone(),
+                    });
+                    let sym = if matches!(dest_ty, Some(Ty::Float)) {
+                        LIST_POP_FLOAT_RUNTIME_SYMBOL
+                    } else {
+                        LIST_POP_INT_RUNTIME_SYMBOL
+                    };
+                    let lst = args[0].clone();
+                    *func = Operand::Constant(Constant::Str(sym.to_string()));
                     args.clear();
                     args.push(lst);
                 }

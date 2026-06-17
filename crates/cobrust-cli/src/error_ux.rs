@@ -1100,6 +1100,26 @@ impl From<TypeError> for UserError {
                     col,
                 )
             }
+            // F96 / ADR-0109 (§2.5-B) — `xs.append(v)` / `xs.pop()` on an
+            // owned-element list. The `msg` names the unsupported element
+            // type AND the FIX (use a Copy-scalar element list, or a
+            // comprehension) so the LLM agent rewrites it in one step.
+            E::UnsupportedListMutate { span, method, elem } => {
+                let (line, col) = span_to_line_col(span);
+                (
+                    format!(
+                        "`list.{method}()` on an owned-element list (element type `{elem}`) \
+                         is not supported yet; F96 ships in-place `append`/`pop` for \
+                         Copy-scalar element lists (`list[int]` / `list[float]` / \
+                         `list[bool]`) only — use one of those element types, or rebuild \
+                         the list via a comprehension (`[f(x) for x in xs]`) instead of \
+                         mutating it in place"
+                    ),
+                    None,
+                    line,
+                    col,
+                )
+            }
         };
         Self::Type {
             file: PathBuf::from("<source>"),

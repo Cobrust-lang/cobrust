@@ -407,6 +407,24 @@ Invariants:
   source-unmutated, reducer regression, non-list reject). Regression:
   `list_reduce_e2e` (14) + `leetcode_corpus_e2e` (12) stay green.
 
+### `xs.append(v)` / `xs.pop()` mutable methods (ADR-0109 / F96)
+
+| Surface | Anchor | Notes |
+|---|---|---|
+| Method arms | `types/src/check.rs::try_synth_list_method` | `append` (arity 1; unifies the arg with the element type `T` — §2.2 no wrong-typed append) → `Ty::None`; `pop` (arity 0) → `elem`. Beside the existing `push`/`get`/`set`/`len`/`is_empty` arms. |
+| Owned-element reject | `types/src/check.rs::reject_owned_elem_mutate` | a `list[str]`/`list[list]`/`list[dict]`/`list[set]`/`list[bytes]` receiver → NEW `TypeError::UnsupportedListMutate { method, elem, span }` (§2.5-B: the Display message PRINTS THE FIX — use a Copy-scalar element list, or rebuild via a comprehension). Copy scalars (`int`/`float`/`bool`) pass through. |
+
+Invariants:
+- NEW `TypeError::UnsupportedListMutate` variant — wired through the 4-site
+  match set: `error.rs`, `fix_safety.rs` (suggestion accessor =None +
+  `LocalEdit` tier), `lsp/diagnostic.rs`, `cli/error_ux.rs`,
+  `types-parity/lib.rs` (key-children + variant-name).
+- `pop` on an empty list TRAPS at runtime (exit 3, §2.2); the wrong-type
+  append is a `TypeMismatch` (no silent coercion).
+- Corpus: e2e `list_mutate_e2e` (12 tests, CPython oracle). Regression:
+  `list_reduce_e2e` (14) + `list_slice_e2e` (31) + `leetcode_corpus_e2e`
+  (12) stay green.
+
 ## Phase I ADR-0056b — `TypeCheckCtx` (Clone+Send Arc-COW snapshot)
 
 Per ADR-0056b §3.3 + §5 + §6 (accepted at `b0e1e9e`):

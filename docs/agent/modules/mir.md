@@ -601,3 +601,27 @@ Invariants:
 Test corpus:
 - `crates/cobrust-cli/tests/sorted_e2e.rs` — 8 tests (CPython oracle).
 - `crates/cobrust-cli/tests/list_reduce_e2e.rs` + `leetcode_corpus_e2e.rs` — regression.
+
+## ADR-0109 (F96) — `xs.append(v)` / `xs.pop()` lowering
+
+In-place list mutation. Scope: Copy-scalar element types
+(`list[int]`/`list[float]`/`list[bool]`); owned-element lists are rejected
+at type-check (`TypeError::UnsupportedListMutate`).
+
+| Surface | Anchor | Notes |
+|---|---|---|
+| Method-form rewrite | `lower.rs` `method_form_rewrite_name` List arm | `append → list_append`, `pop → list_pop` (NEW PRELUDE stubs). |
+| `pop` return-type override | `lower.rs` `lower_rewritten_method_call` | the PRELUDE `list_pop` stub is monomorphic `-> i64`; re-pins the `_callret` dest to the receiver's ELEMENT type (`synth_expr_ty(base)` → `Ty::List(elem)` → `elem`) so `list[float].pop()` produces an f64 dest (else a silent f64-as-i64 decode). The parallel of the `min`/`max`/`sum` reducer override. |
+| Shim pick | `cobrust-cli/src/build/intrinsics.rs` `Kind::ListAppend` / `Kind::ListPop` | append → `_int`/`_float` from the VALUE arg (args[1]) element type; pop → `_int`/`_float` from the call's DEST type. |
+| Receiver | Copy-at-call (`is_copy_type(Ty::List)`) | `xs` is read `Operand::Copy(handle)` — NOT moved — so the mutation persists through the SAME live handle and `xs` drops EXACTLY once at scope exit. |
+| Codegen externs | `codegen/src/llvm_backend.rs` | `__cobrust_list_append_float` `(ptr, f64) -> void`; `__cobrust_list_pop` `(ptr) -> i64`; `__cobrust_list_pop_float` `(ptr) -> f64`. |
+
+Invariants:
+- `append` returns `None` at the source surface; `pop` returns the element
+  type `T`. Empty `pop` TRAPS (exit 3).
+- Copy-scalar elements need NO ownership transfer; owned-element append/pop
+  is the deferred follow-up (ADR-0109 §Follow-ups).
+
+Test corpus:
+- `crates/cobrust-cli/tests/list_mutate_e2e.rs` — 12 tests (CPython oracle).
+- `crates/cobrust-cli/tests/list_reduce_e2e.rs` + `list_slice_e2e.rs` + `leetcode_corpus_e2e.rs` — regression.

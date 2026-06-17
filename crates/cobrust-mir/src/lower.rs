@@ -2971,6 +2971,26 @@ impl<'a> BodyBuilder<'a> {
                 Ty::None
             }
         };
+        // F96 / ADR-0109 — `xs.pop()` return-type override. The PRELUDE
+        // `list_pop` stub is monomorphic `-> i64`, but `pop()` returns the
+        // ELEMENT type `T` (`list[float].pop() -> float`). Declare the
+        // `_callret` dest with the receiver's element type so (a) the
+        // intrinsic-rewrite pass picks the `_float` runtime symbol from the
+        // dest type, and (b) the codegen `_callret` alloca is the right
+        // width (an f64 register, not an i64) — the parallel of the
+        // `min`/`max`/`sum` reducer return-type override in `lower_call`.
+        let callee_return_ty = if rewritten_name == "list_pop" {
+            match synth_expr_ty(self, base) {
+                Ty::Ref(inner) => match *inner {
+                    Ty::List(elem) => *elem,
+                    _ => callee_return_ty,
+                },
+                Ty::List(elem) => *elem,
+                _ => callee_return_ty,
+            }
+        } else {
+            callee_return_ty
+        };
         let dest = self.declare_local("_callret".to_string(), callee_return_ty, span, true);
         let cur = self.current_block_id();
         let target = self.start_new_block();
@@ -5033,6 +5053,12 @@ fn method_form_rewrite_name(b: &BodyBuilder<'_>, base: &Expr, method_name: &str)
             "get" => Some("list_get".to_string()),
             "set" => Some("list_set".to_string()),
             "is_empty" => Some("list_is_empty".to_string()),
+            // F96 / ADR-0109 — `xs.append(v)` / `xs.pop()` route to the
+            // `list_append` / `list_pop` PRELUDE fns, then the intrinsic-
+            // rewrite pass picks the `_int` / `_float` runtime symbol from
+            // the element type (the `min`/`sorted` `_int`/`_float` pattern).
+            "append" => Some("list_append".to_string()),
+            "pop" => Some("list_pop".to_string()),
             _ => None,
         },
         Ty::Float => match method_name {

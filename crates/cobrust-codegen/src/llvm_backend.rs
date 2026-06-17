@@ -1352,6 +1352,37 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.runtime_helper_decls
             .insert("__cobrust_list_append", list_append_fn);
 
+        // F96 / ADR-0109 — `xs.append(v)` / `xs.pop()` list-mutation methods.
+        // The list C-ABI is i64-SLOT; the `_float` twins re-encode/decode the
+        // f64 bit pattern through that slot (the `_float` reducer/sort ABI
+        // mirror), so a `Ty::Float` operand passes as a NATIVE f64 register.
+        //   __cobrust_list_append_float(*mut ListBuffer, f64) -> void
+        let f64_ty_local = self.ctx.f64_type();
+        let list_append_float_ty = void_ty.fn_type(&[ptr_ty.into(), f64_ty_local.into()], false);
+        let list_append_float_fn = self.module.add_function(
+            "__cobrust_list_append_float",
+            list_append_float_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_list_append_float", list_append_float_fn);
+        //   __cobrust_list_pop(*mut ListBuffer) -> i64   (TRAPs on empty)
+        let list_pop_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
+        let list_pop_fn =
+            self.module
+                .add_function("__cobrust_list_pop", list_pop_ty, Some(Linkage::External));
+        self.runtime_helper_decls
+            .insert("__cobrust_list_pop", list_pop_fn);
+        //   __cobrust_list_pop_float(*mut ListBuffer) -> f64   (TRAPs on empty)
+        let list_pop_float_ty = f64_ty_local.fn_type(&[ptr_ty.into()], false);
+        let list_pop_float_fn = self.module.add_function(
+            "__cobrust_list_pop_float",
+            list_pop_float_ty,
+            Some(Linkage::External),
+        );
+        self.runtime_helper_decls
+            .insert("__cobrust_list_pop_float", list_pop_float_fn);
+
         // F81 / ADR-0096 — __cobrust_list_slice(*mut ListBuffer, i64, i64)
         // -> *mut ListBuffer. The `__cobrust_{str,bytes}_slice` mirror,
         // element-addressed: mints a FRESH owned `list[T]` for `xs[lo:hi]`.
@@ -1699,6 +1730,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
             .insert("__cobrust_list_is_empty", 1);
         self.runtime_helper_param_counts
             .insert("__cobrust_list_append", 2);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_append_float", 2);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_pop", 1);
+        self.runtime_helper_param_counts
+            .insert("__cobrust_list_pop_float", 1);
         self.runtime_helper_param_counts
             .insert("__cobrust_list_slice", 3);
 

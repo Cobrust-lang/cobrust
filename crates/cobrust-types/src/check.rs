@@ -3182,6 +3182,48 @@ impl Ctx {
                 }
                 Ok(Some(Ty::Bool))
             }
+            // F96 / ADR-0109 — `xs.append(v)` mutates `xs` IN PLACE (grows
+            // by 1) and returns `None` (the CPython `list.append` signature).
+            // The arg unifies with the element type `T` (§2.2: no appending
+            // a wrong-typed element). F96 ships the Copy-scalar element types
+            // (`list[i64]` / `list[f64]`); owned-element lists (`list[str]` /
+            // `list[list]`) are REJECTED here as honest-debt (§2.5-B) pending
+            // the ownership-transfer follow-up (see `list_owned_elem_reject`).
+            "append" => {
+                if pos_args.len() != 1 {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 1,
+                        actual: pos_args.len(),
+                        span,
+                        suggestion: Some(
+                            "list.append(v) takes exactly one argument: the element to append",
+                        ),
+                    });
+                }
+                let at = self.synth_expr(pos_args[0])?;
+                unify(&elem, &at, &mut self.subst, pos_args[0].span)?;
+                self.reject_owned_elem_mutate(&elem, "append", span)?;
+                Ok(Some(Ty::None))
+            }
+            // F96 / ADR-0109 — `xs.pop()` removes + RETURNS the LAST element
+            // (type `T`), mutating `xs` IN PLACE (shrinks by 1). `pop()` on an
+            // EMPTY list TRAPS (exit 3, §2.2 — not a silent sentinel). No-arg
+            // form only this increment; `pop(i)` is a follow-up. Owned-element
+            // lists are REJECTED as honest-debt (§2.5-B) like `append`.
+            "pop" => {
+                if !pos_args.is_empty() {
+                    return Err(TypeError::ArityMismatch {
+                        expected: 0,
+                        actual: pos_args.len(),
+                        span,
+                        suggestion: Some(
+                            "list.pop() takes no arguments this release; `pop(i)` with an index is a follow-up",
+                        ),
+                    });
+                }
+                self.reject_owned_elem_mutate(&elem, "pop", span)?;
+                Ok(Some(elem))
+            }
             other => Err(TypeError::UnknownMethod {
                 type_name: "list".to_string(),
                 method_name: other.to_string(),
@@ -3189,6 +3231,35 @@ impl Ctx {
                 suggestion: list_method_suggestion(other),
             }),
         }
+    }
+
+    /// F96 / ADR-0109 — REJECT `xs.append(v)` / `xs.pop()` on an
+    /// OWNED-element list (`list[str]` / `list[list]`) with a §2.5-B
+    /// fix-printing honest-debt diagnostic. The ownership-transfer
+    /// discipline (append MOVES the operand INTO the list's `drop_elems`;
+    /// pop transfers ownership OUT to the receiving binding — both must
+    /// avoid a double-free / leak) is deferred to a follow-up. The
+    /// Copy-scalar element types (`int` / `float` / `bool`) pass through
+    /// (no ownership transfer to get wrong).
+    fn reject_owned_elem_mutate(
+        &self,
+        elem: &Ty,
+        method: &str,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let elem_resolved = self.subst.apply(elem);
+        let owned = matches!(
+            elem_resolved,
+            Ty::Str | Ty::Bytes | Ty::List(_) | Ty::Dict(_, _) | Ty::Set(_)
+        );
+        if owned {
+            return Err(TypeError::UnsupportedListMutate {
+                method: method.to_string(),
+                elem: format!("{elem_resolved:?}"),
+                span,
+            });
+        }
+        Ok(())
     }
 
     /// ADR-0052d-prereq §"Surface — method-table contents per type"

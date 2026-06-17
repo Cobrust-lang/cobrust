@@ -258,6 +258,46 @@ Key rules (ADR-0108):
 - A non-list argument (`sorted(5)`) is a COMPILE error (an `int` is not a
   list) — the error message tells you `sorted` takes a single list argument.
 
+## Step 2.6d: `xs.append(v)` / `xs.pop()` — in-place list mutation (ADR-0109)
+
+The two most common Python list mutations now work — `append` grows the
+list in place, `pop` removes and returns the last element:
+
+```cobrust
+fn main() -> i64:
+    let xs: list[i64] = [1, 2, 3]
+    xs.append(4)              # grows xs IN PLACE
+    print(len(xs))            # 4
+    print(xs[3])              # 4
+
+    let last: i64 = xs.pop()  # removes + returns the last element
+    print(last)               # 4
+    print(len(xs))            # 3
+
+    # The canonical accumulate-in-a-loop idiom:
+    let ys: list[i64] = []
+    let i: i64 = 0
+    while i < 5:
+        ys.append(i)
+        i = i + 1
+    print(sum(ys))            # 0+1+2+3+4 = 10
+    return 0
+```
+
+Key rules (ADR-0109):
+- `xs.append(v)` mutates `xs` in place (no copy) and returns nothing;
+  `xs.pop()` returns the element type so `xs.pop() + 1` stays an `int`.
+- `pop()` on an EMPTY list is a clean runtime TRAP (exit 3) — matching
+  Python's `IndexError`, never a silent wrong value.
+- Appending a wrong-typed element (`xs.append(3.5)` to a `list[int]`) is a
+  COMPILE error — no silent coercion.
+- This release ships `append`/`pop` for the scalar element types
+  (`list[int]` / `list[float]` / `list[bool]`). Owned-element lists
+  (`list[str]`, nested lists) are a clean COMPILE reject for now — the
+  error message tells you to use a scalar element list or rebuild via a
+  comprehension. `pop(i)`, `insert`, `remove`, `extend`, and in-place
+  `list.sort()` are deferred follow-ups.
+
 ## Step 2.7: list[str] and Str ownership (M-F.3.2)
 
 Cobrust now ships `list[str]` end-to-end with the Rust-style ownership

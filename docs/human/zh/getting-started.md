@@ -241,6 +241,44 @@ fn main() -> i64:
 - 非列表参数(`sorted(5)`)是**编译错误**(`int` 不是列表)——错误信息会
   提示 `sorted` 接受单个列表参数。
 
+## 第 2.6d 步：`xs.append(v)` / `xs.pop()`——原地修改列表（ADR-0109）
+
+最常用的两个 Python 列表修改操作现已可用——`append` 原地增长列表,`pop`
+移除并返回最后一个元素:
+
+```cobrust
+fn main() -> i64:
+    let xs: list[i64] = [1, 2, 3]
+    xs.append(4)              # 原地增长 xs
+    print(len(xs))            # 4
+    print(xs[3])              # 4
+
+    let last: i64 = xs.pop()  # 移除并返回最后一个元素
+    print(last)               # 4
+    print(len(xs))            # 3
+
+    # 经典的循环累积惯用法:
+    let ys: list[i64] = []
+    let i: i64 = 0
+    while i < 5:
+        ys.append(i)
+        i = i + 1
+    print(sum(ys))            # 0+1+2+3+4 = 10
+    return 0
+```
+
+关键规则(ADR-0109):
+- `xs.append(v)` 原地修改 `xs`(无复制)且不返回值;`xs.pop()` 返回元素类型,
+  因此 `xs.pop() + 1` 仍是 `int`。
+- 对**空列表**调用 `pop()` 是一次干净的运行时陷阱(退出码 3)——对应 Python
+  的 `IndexError`,绝不会返回一个静默的错误值。
+- 向 `list[int]` 追加错误类型的元素(`xs.append(3.5)`)是**编译错误**——
+  没有静默的隐式转换。
+- 本次发布为标量元素类型(`list[int]` / `list[float]` / `list[bool]`)提供
+  `append`/`pop`。持有所有权的元素列表(`list[str]`、嵌套列表)目前是干净的
+  **编译拒绝**——错误信息会提示改用标量元素列表或用推导式重建。`pop(i)`、
+  `insert`、`remove`、`extend` 以及原地 `list.sort()` 都是后续待实现项。
+
 ## 第 2.7 步：list[str] 与 Str 所有权（M-F.3.2）
 
 Cobrust 现在端到端支持 `list[str]`,且遵循 ADR-0050c 规定的 Rust 风格

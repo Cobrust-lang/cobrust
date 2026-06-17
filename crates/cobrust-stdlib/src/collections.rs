@@ -608,6 +608,91 @@ pub unsafe extern "C" fn __cobrust_list_append(list: *mut u8, v: i64) {
     layout.len += 1;
 }
 
+/// Append a `f64` value to `list[f64]` — the float-element twin of
+/// [`__cobrust_list_append`]. The list C-ABI is i64-SLOT (every slot is
+/// an `i64`); a `list[f64]` stores each element as its IEEE-754 BIT
+/// PATTERN (`f64::to_bits`), exactly like `__cobrust_list_set` /
+/// `__cobrust_list_get` for a `list[float]` (the reducer + sort shims
+/// read those bits back via `f64::from_bits`). F96 (ADR-0109): the codegen
+/// passes a `Ty::Float` operand as a NATIVE `f64` register, so a dedicated
+/// `_float` symbol (mirroring `__cobrust_min_float` / `__cobrust_sum_float`)
+/// is the clean ABI — it re-encodes the `f64` to the i64 slot HERE rather
+/// than relying on a codegen-side bitcast.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_list_append`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_append_float(list: *mut u8, v: f64) {
+    // Re-encode the f64 to the i64 slot (bit-preserving), then delegate to
+    // the i64-slot append.
+    // SAFETY: caller-attestation per `# Safety`.
+    unsafe { __cobrust_list_append(list, i64::from_ne_bytes(v.to_ne_bytes())) };
+}
+
+/// Remove and RETURN the LAST element of `list` (the i64-slot value), the
+/// runtime target of source-level `xs.pop()` on a `list[i64]` (F96 /
+/// ADR-0109). Mutates `list` IN PLACE — shrinks `len` by 1 so the popped
+/// slot is no longer reachable by `__cobrust_list_drop` / `_drop_elems`
+/// (the OWNERSHIP-OUT transfer: a popped owned element is now owned by the
+/// receiving binding, not the list — relevant once owned-element pop ships;
+/// the i64/f64 element types this F96 increment supports are Copy scalars,
+/// so there is no transfer to get wrong).
+///
+/// CPython `[].pop()` raises `IndexError`; Cobrust §2.2 maps "pop from an
+/// empty list" to a clean TRAP (exit 3) via the project trap convention
+/// ([`crate::panic::panic`]) with a readable `pop from empty list`
+/// diagnostic — NOT a silent sentinel `0` (an in-band wrong value §2.2
+/// forbids) and NOT a raw `assert!` (which aborts SIGABRT across the
+/// `extern "C"` boundary with a path-leaking backtrace; the F79B/F92
+/// lesson). A NULL handle is the empty list, so it traps too.
+///
+/// # Panics
+///
+/// Panics (the unrecoverable empty-pop TRAP) when `len == 0`.
+///
+/// # Safety
+///
+/// `list` must be NULL or a pointer returned by [`__cobrust_list_new`]
+/// and not yet dropped.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_pop(list: *mut u8) -> i64 {
+    if list.is_null() {
+        crate::panic::panic("pop from empty list");
+    }
+    // SAFETY: caller-attestation per `# Safety`; non-null checked above.
+    let layout = unsafe { &mut *list.cast::<ListI64Layout>() };
+    if layout.len <= 0 {
+        crate::panic::panic("pop from empty list");
+    }
+    let last = layout.len - 1;
+    // SAFETY: `last` in `[0, len)`; items is non-null when len>0.
+    let v = unsafe { *layout.items.add(last as usize) };
+    // Shrink length: the popped slot is now logically removed (excluded
+    // from any subsequent drop_elems / len read). Capacity is retained.
+    layout.len = last;
+    v
+}
+
+/// Remove and RETURN the LAST element of `list[f64]` — the float-element
+/// twin of [`__cobrust_list_pop`]. Decodes the i64 slot back to an
+/// IEEE-754 `f64` (`f64::from_bits`), mirroring `__cobrust_list_append_float`
+/// / the `_float` reducer ABI. Empty-pop TRAPS identically.
+///
+/// # Panics
+///
+/// Panics (the empty-pop TRAP) when `len == 0`.
+///
+/// # Safety
+///
+/// Same as [`__cobrust_list_pop`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __cobrust_list_pop_float(list: *mut u8) -> f64 {
+    // SAFETY: caller-attestation per `# Safety`.
+    let slot = unsafe { __cobrust_list_pop(list) };
+    f64::from_ne_bytes(slot.to_ne_bytes())
+}
+
 /// Drop a list (free items + free the layout box).
 ///
 /// # Safety
@@ -1785,6 +1870,51 @@ mod tests {
             __cobrust_list_drop(l);
         }
     }
+
+    // F96 / ADR-0109: `__cobrust_list_append` grows the list IN PLACE by 1
+    // and `__cobrust_list_pop` removes + RETURNS the last slot, shrinking by
+    // 1. The pair round-trips through the i64 slot for `list[i64]`.
+    #[test]
+    fn cabi_list_append_pop_int() {
+        // SAFETY: contract.
+        unsafe {
+            let l = __cobrust_list_new(8, 0);
+            __cobrust_list_append(l, 1);
+            __cobrust_list_append(l, 2);
+            __cobrust_list_append(l, 3);
+            assert_eq!(__cobrust_list_len(l), 3);
+            assert_eq!(__cobrust_list_get(l, 3 - 1), 3);
+            assert_eq!(__cobrust_list_pop(l), 3);
+            assert_eq!(__cobrust_list_len(l), 2);
+            assert_eq!(__cobrust_list_pop(l), 2);
+            assert_eq!(__cobrust_list_pop(l), 1);
+            assert_eq!(__cobrust_list_len(l), 0);
+            __cobrust_list_drop(l);
+        }
+    }
+
+    // F96 / ADR-0109: the `_float` element twins encode/decode the f64 bit
+    // pattern through the i64 slot (the reducer/sort `_float` ABI mirror).
+    #[test]
+    fn cabi_list_append_pop_float() {
+        // SAFETY: contract.
+        unsafe {
+            let l = __cobrust_list_new(8, 0);
+            __cobrust_list_append_float(l, 1.5);
+            __cobrust_list_append_float(l, -2.25);
+            assert_eq!(__cobrust_list_len(l), 2);
+            assert_eq!(__cobrust_list_pop_float(l), -2.25);
+            assert_eq!(__cobrust_list_pop_float(l), 1.5);
+            assert_eq!(__cobrust_list_len(l), 0);
+            __cobrust_list_drop(l);
+        }
+    }
+
+    // NOTE on empty-pop trap coverage: `__cobrust_list_pop` on an empty (or
+    // NULL) list routes through `crate::panic::panic` → `std::process::exit(3)`,
+    // so an in-process `#[test]` cannot observe it without killing the runner.
+    // The exit-3 TRAP is asserted by the `list_mutate_e2e` `assert_build_run_traps`
+    // e2e, mirroring the `__cobrust_list_get` OOB-trap coverage note above.
 
     // F81 / ADR-0096: `__cobrust_list_get` Python-normalizes a NEGATIVE
     // index (`len + i`) and TRAPS on a true OOB (no silent `0` sentinel).

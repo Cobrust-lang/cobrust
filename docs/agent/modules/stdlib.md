@@ -967,6 +967,27 @@ ELEMENT type (`Kind::Sorted`).
   `list[str]` (the `lower_call` `callee_return_ty` override).
 - **Empty / null** — `sorted([])` yields a fresh empty list.
 
+## ADR-0109 / F96 — `xs.append(v)` / `xs.pop()` (`collections.rs`)
+
+In-place list mutation for the Copy-scalar element types. The list C-ABI
+is i64-SLOT; the `_float` twins re-encode/decode the f64 bit pattern
+through the slot (the `min`/`sort` `_int`/`_float` ABI mirror), so a NATIVE
+f64 operand passes through a real `f64` register.
+
+| Symbol | C ABI | Notes |
+|---|---|---|
+| `__cobrust_list_append(list, v: i64)` | pre-existing | in-place grow (doubling capacity); the i64-slot append. |
+| `__cobrust_list_append_float(list, v: f64)` | NEW | re-encodes `v` to the i64 slot (`to_ne_bytes`) then delegates to `_append`. |
+| `__cobrust_list_pop(list) -> i64` | NEW | reads the last slot, shrinks `len` by 1 (capacity retained), returns the slot. Empty/null TRAPS via `crate::panic::panic("pop from empty list")` → exit 3 (§2.2 IndexError parity; NOT a sentinel `0`, NOT a raw `assert!` SIGABRT — the F79B/F92 lesson). |
+| `__cobrust_list_pop_float(list) -> f64` | NEW | decodes the popped slot back to f64 (`from_ne_bytes`). |
+
+- **Mutation persists** — the codegen passes the receiver by Copy (the
+  handle ptr), so append/pop mutate through the SAME live list and `xs`
+  drops EXACTLY once at scope exit.
+- **Owned-element deferred** — `list[str]`/`list[list]` append/pop
+  (ownership transfer into/out of `drop_elems`) is rejected at type-check;
+  see ADR-0109 §Follow-ups.
+
 ## Cross-references
 
 - `mod:codegen` — emits calls into the C ABI symbols this module

@@ -460,7 +460,11 @@ impl Canonicalize for TypeError {
             // F90 / ADR-0102 — `int ** int` negative-literal exponent;
             // payload-free (Span + suggestion only). The FIX (use a float
             // base) lives in the Display message, not the canonical key.
-            | TypeError::NegativePowExponent { .. } => vec![],
+            | TypeError::NegativePowExponent { .. }
+            // F96 / ADR-0109 — owned-element list mutate reject; the
+            // method/elem payload + the FIX live in the Display message,
+            // not the canonical key.
+            | TypeError::UnsupportedListMutate { .. } => vec![],
         };
         CanonicalKey::node(variant, children)
     }
@@ -615,6 +619,8 @@ pub fn type_error_variant_name(err: &TypeError) -> &'static str {
         TypeError::UnsupportedSliceShape { .. } => "UnsupportedSliceShape",
         // F90 / ADR-0102 — `int ** int` negative-literal exponent.
         TypeError::NegativePowExponent { .. } => "NegativePowExponent",
+        // F96 / ADR-0109 — owned-element list mutate reject.
+        TypeError::UnsupportedListMutate { .. } => "UnsupportedListMutate",
     }
 }
 

@@ -192,7 +192,10 @@ pub fn type_error_suggestion_text(err: &TypeError) -> Option<&'static str> {
         // F90 / ADR-0102 — `int ** int` negative-literal exponent; the fix
         // (use a float base) is in the Display message + this hint.
         | NegativePowExponent { suggestion, .. } => *suggestion,
-        Multiple(_) => None,
+        // F96 / ADR-0109 — owned-element list mutate reject; the fix (use a
+        // Copy-scalar element list, or a comprehension) is in the Display
+        // message. No separate static-hint field.
+        UnsupportedListMutate { .. } | Multiple(_) => None,
     }
 }
 
@@ -278,6 +281,10 @@ pub fn type_error_fix_safety(err: &TypeError) -> FixSafety {
         // local rewrite (use a float base: `float(base) ** exp` or a float
         // literal). No cross-line semantics carry-over.
         NegativePowExponent { .. } => FixSafety::LocalEdit,
+        // F96 / ADR-0109 — owned-element list mutate reject. Fix is a local
+        // rewrite (use a Copy-scalar element list, or rebuild via a
+        // comprehension). No cross-line semantics carry-over.
+        UnsupportedListMutate { .. } => FixSafety::LocalEdit,
         // Multiple — children carry their own tiers; the aggregate has no
         // singular safety classification.
         Multiple(_) => FixSafety::RequiresHumanReview,
